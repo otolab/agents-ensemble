@@ -1,0 +1,28 @@
+{
+  "name": "@agents-ensemble/cli",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "ensemble CLI — Issue-based agent orchestration",
+  "bin": {
+    "ensemble": "./dist/index.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@agents-ensemble/core": "workspace:*",
+    "commander": "14.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.10",
+    "typescript": "5.9.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/otolab/agents-ensemble.git",
+    "directory": "packages/cli"
+  }
+}

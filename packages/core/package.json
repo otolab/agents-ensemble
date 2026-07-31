@@ -1,0 +1,23 @@
+{
+  "name": "@agents-ensemble/core",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Core types and orchestration logic for agents-ensemble",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/otolab/agents-ensemble.git",
+    "directory": "packages/core"
+  }
+}

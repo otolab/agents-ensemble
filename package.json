@@ -1,0 +1,21 @@
+{
+  "name": "agents-ensemble",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Issue-based agent orchestration (ensemble)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/otolab/agents-ensemble.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc --build",
+    "type-check": "tsc --build --emitDeclarationOnly",
+    "ensemble": "node packages/cli/dist/index.js"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.10",
+    "typescript": "5.9.3"
+  }
+}
