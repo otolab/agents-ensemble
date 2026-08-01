@@ -1,23 +1,27 @@
 # 実装方針（検討）
 
-[my-logs#2027](https://github.com/otolab/my-logs/issues/2027) のコメントを要約。未確定。
+技術構成の正本は [architecture.md](architecture.md)。本文は要約とメモ。
 
-## 推奨方向（案）
+[my-logs#2027](https://github.com/otolab/my-logs/issues/2027) のコメントを反映。
 
-**SDK オーケ + ACP worker/reviewer**
+## 推奨方向
 
-| 要素 | 案 |
-|------|-----|
-| オーケ | SDK 長寿命 Agent。実作業ツールは持たない |
+**SDK conductor + ACP worker/reviewer**（詳細は architecture.md）
+
+| 要素 | 方針 |
+|------|------|
+| conductor | SDK 長寿命 Agent。実作業ツールは持たない |
 | worker / reviewer | フェーズごとに ACP 新 session（Skill 鮮度） |
-| 承認 | サブの permission → オーケ →（必要時）人間 |
+| 承認 | サブの permission → conductor →（必要時）人間 |
 | 状態 | Issue / PR + 任意の作業基準文書（スキーマ固定しない） |
 
-## 段階導入（案）
+## 段階導入
+
+architecture.md §10 と同じ。
 
 1. CLI スケルトン + 手動 dispatch 相当
-2. オーケ Agent が `gh` / CI を読み、判断して dispatch
-3. 明確なケースから自動化を広げる（遷移ルールの機械化はしない）
+2. conductor Agent が `gh` / CI を読み、判断して dispatch
+3. 明確なケースから広げる（遷移ルールの機械化はしない）
 
 ## 既存資産との分担
 

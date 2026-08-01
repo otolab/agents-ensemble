@@ -24,10 +24,10 @@
 - フロー / Issue / プロジェクトごとに差し替え
 - Skill（共通）とあわせてオーケの入力になる
 
-## 実装の方向（検討）
+## 実装の方向
 
-- SDK で長寿命のオーケ Agent
-- worker / reviewer は ACP 等でタスク単位の新 session
-- サブの `request_permission` はオーケが受け、必要時に人間へ
+- SDK で長寿命の conductor Agent
+- worker / reviewer は ACP でタスク単位の新 session
+- サブの `request_permission` は conductor が受け、必要時に人間へ
 
-詳細は [implementation.md](implementation.md)。
+技術詳細は [architecture.md](architecture.md)。要約は [implementation.md](implementation.md)。

@@ -4,6 +4,7 @@ agents-ensemble（`ensemble` コマンド）の設計・検討事項。
 
 | 文書 | 内容 |
 |------|------|
+| [architecture.md](architecture.md) | **技術アーキテクチャ**（SDK conductor + ACP worker） |
 | [design.md](design.md) | 大原則・全体像 |
 | [elements.md](elements.md) | 構成要素（skill, worker, issue 等） |
 | [orchestrator.md](orchestrator.md) | オーケストレータの役割 |

@@ -10,7 +10,7 @@ Issue を指定して起動する、エージェントオーケストレーシ�
 
 ## ドキュメント
 
-[docs/](docs/) に設計・検討事項を整理している。
+[docs/](docs/) に設計・検討事項を整理している。技術構成の正本は [docs/architecture.md](docs/architecture.md)（SDK conductor + ACP worker）。
 
 ## 開発
 
