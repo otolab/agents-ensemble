@@ -1,0 +1,54 @@
+{
+  "version": "1.0",
+  "project": {
+    "name": "agents-ensemble",
+    "root": "."
+  },
+  "files": {
+    "sources": [
+      "packages/*/*.md",
+      "*.md",
+      "docs/**"
+    ],
+    "exclude": [
+      "**/node_modules/**",
+      "**/.git/**",
+      "**/.search-docs/**",
+      "**/dist/**",
+      "**/build/**"
+    ],
+    "ignoreGitignore": true
+  },
+  "indexing": {
+    "maxTokensPerSection": 2000,
+    "minTokensForSplit": 100,
+    "maxDepth": 3,
+    "vectorDimension": 256,
+    "embeddingModel": "cl-nagoya/ruri-v3-30m"
+  },
+  "search": {
+    "defaultLimit": 10,
+    "maxLimit": 100,
+    "includeCleanOnly": false
+  },
+  "server": {
+    "host": "localhost",
+    "port": 54127,
+    "protocol": "json-rpc"
+  },
+  "storage": {
+    "documentsPath": ".search-docs/documents",
+    "indexPath": ".search-docs/index",
+    "cachePath": ".search-docs/cache"
+  },
+  "worker": {
+    "enabled": true,
+    "interval": 5000,
+    "maxConcurrent": 3
+  },
+  "watcher": {
+    "enabled": true,
+    "debounceMs": 1000,
+    "awaitWriteFinishMs": 2000
+  }
+}
