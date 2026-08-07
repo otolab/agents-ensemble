@@ -20,6 +20,7 @@ export function buildConductorPrompt(
     '- 次のアクションは文脈から判断する（固定フローにしない）',
     '- worker 起動には `dispatch_worker` ツールを使う',
     '- PR レビューには `dispatch_reviewer` ツールを使う（既存 worktree）',
+    '- 判断不能・マージ判断などは `ask_human` で人間オペレータに確認する',
     '',
     `作業リポジトリ（ローカル）: ${options.repoRoot}`,
     '',

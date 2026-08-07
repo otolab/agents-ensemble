@@ -10,6 +10,7 @@ import {
   PermissionBroker,
   runIssueSession,
 } from '@agents-ensemble/core';
+import { promptHumanInquiry } from './prompt-human-inquiry.js';
 import { promptPermissionDecision } from './prompt-permission.js';
 
 const program = new Command();
@@ -63,7 +64,11 @@ program
           briefing: options.briefing,
           modelId: options.model,
           maxTurns: options.maxTurns,
+          onHumanInquiry: promptHumanInquiry,
           onPermissionAsk: promptPermissionDecision,
+          onEscalated: (record) => {
+            console.error(`[human escalation] ${record.question} → ${record.answer}`);
+          },
           onWorkerDispatched: (dispatch) => {
             console.error(
               `[worker dispatched] ${dispatch.worktree.path} (${dispatch.promptResult.stopReason})`,
@@ -76,7 +81,7 @@ program
           },
           onTurnComplete: (turn) => {
             console.error(
-              `[conductor turn ${turn.turn}] status=${turn.status} worker=${turn.workerDispatches} reviewer=${turn.reviewerDispatches}`,
+              `[conductor turn ${turn.turn}] status=${turn.status} worker=${turn.workerDispatches} reviewer=${turn.reviewerDispatches} escalations=${turn.escalations}`,
             );
           },
         });
@@ -94,6 +99,7 @@ program
               lastError: result.lastError,
               workerDispatchCount: result.workerDispatches.length,
               reviewerDispatchCount: result.reviewerDispatches.length,
+              escalationCount: result.escalations.length,
             },
             null,
             2,

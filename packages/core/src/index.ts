@@ -167,3 +167,36 @@ export {
   parsePermissionRequest,
 } from './permission/permission-request.js';
 export type { PermissionRequest } from './permission/permission-request.js';
+
+export {
+  EscalationUnavailableError,
+} from './escalation/escalation-unavailable-error.js';
+
+export type {
+  HumanInquiryKind,
+  HumanInquiryResponseType,
+  HumanInquiryRequest,
+  HumanInquiryResponse,
+  HumanInquiryHandler,
+  EscalationRecord,
+} from './escalation/human-inquiry.js';
+
+export {
+  ESCALATION_RESPONSE_ENV,
+  readEscalationEnvFallback,
+  parseEnvInquiryResponse,
+  resolveHumanInquiryFromEnv,
+  escalationUnavailableMessage,
+  createEnvFallbackHumanInquiryHandler,
+} from './escalation/resolve-human-inquiry.js';
+
+export { permissionRequestToHumanInquiry } from './escalation/permission-inquiry.js';
+
+export { createPermissionAskHandler } from './escalation/create-permission-ask-handler.js';
+
+export { createAskHumanTool } from './escalation/ask-human-tool.js';
+export type { AskHumanToolOptions } from './escalation/ask-human-tool.js';
+
+export { buildHumanGuidancePrompt } from './escalation/build-human-guidance-prompt.js';
+
+export { buildMaxTurnsEscalationRequest } from './escalation/build-max-turns-escalation.js';

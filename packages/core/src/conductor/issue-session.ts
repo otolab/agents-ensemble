@@ -1,5 +1,14 @@
 import type { ReviewerDispatchResult } from '../dispatch/reviewer-dispatch.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
+import { createAskHumanTool } from '../escalation/ask-human-tool.js';
+import { buildHumanGuidancePrompt } from '../escalation/build-human-guidance-prompt.js';
+import { buildMaxTurnsEscalationRequest } from '../escalation/build-max-turns-escalation.js';
+import { createPermissionAskHandler } from '../escalation/create-permission-ask-handler.js';
+import type {
+  EscalationRecord,
+  HumanInquiryHandler,
+} from '../escalation/human-inquiry.js';
+import { createEnvFallbackHumanInquiryHandler } from '../escalation/resolve-human-inquiry.js';
 import { fetchIssueContext } from '../github/issue-context.js';
 import {
   PermissionBroker,
@@ -30,11 +39,13 @@ export interface RunIssueSessionOptions {
   permissionPolicy?: PermissionPolicyRules;
   permissionBroker?: PermissionBroker;
   onPermissionAsk?: PermissionAskHandler;
+  onHumanInquiry?: HumanInquiryHandler;
+  /** max turns 到達時に人間へ問い合わせ、回答があればボーナスターンを実行する。 */
+  escalateOnMaxTurns?: boolean;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
   onReviewerDispatched?: (result: ReviewerDispatchResult) => void;
   onTurnComplete?: (turn: IssueSessionTurn) => void;
-  /** Stage 4 接続用: max turns 到達時に呼ばれる。 */
-  onMaxTurnsReached?: (result: IssueSessionResult) => void;
+  onEscalated?: (record: EscalationRecord) => void;
 }
 
 export interface IssueSessionTurn {
@@ -45,6 +56,7 @@ export interface IssueSessionTurn {
   error?: ConductorSendResult['error'];
   workerDispatches: number;
   reviewerDispatches: number;
+  escalations: number;
 }
 
 export interface IssueSessionResult {
@@ -59,21 +71,29 @@ export interface IssueSessionResult {
   lastError?: { message: string; code?: string };
   workerDispatches: WorkerDispatchResult[];
   reviewerDispatches: ReviewerDispatchResult[];
+  escalations: EscalationRecord[];
 }
 
 export async function runIssueSession(
   options: RunIssueSessionOptions,
 ): Promise<IssueSessionResult> {
   const maxTurns = options.maxTurns ?? DEFAULT_MAX_ISSUE_TURNS;
+  const escalateOnMaxTurns = options.escalateOnMaxTurns ?? true;
   const workerDispatches: WorkerDispatchResult[] = [];
   const reviewerDispatches: ReviewerDispatchResult[] = [];
+  const escalations: EscalationRecord[] = [];
   const turns: IssueSessionTurn[] = [];
+
+  const onHumanInquiry =
+    options.onHumanInquiry ?? createEnvFallbackHumanInquiryHandler();
+  const onPermissionAsk =
+    options.onPermissionAsk ?? createPermissionAskHandler(onHumanInquiry);
 
   const permissionBroker =
     options.permissionBroker ??
     new PermissionBroker({
       policy: options.permissionPolicy,
-      onAsk: options.onPermissionAsk,
+      onAsk: onPermissionAsk,
     });
   const permissionHandler = permissionBroker.createHandler('conductor-worker');
 
@@ -90,11 +110,19 @@ export async function runIssueSession(
     },
   });
 
+  const escalationTools = createAskHumanTool({
+    onAsk: onHumanInquiry,
+    onEscalated: (record) => {
+      escalations.push(record);
+      options.onEscalated?.(record);
+    },
+  });
+
   const conductorOptions = {
     cwd: options.conductorCwd ?? process.cwd(),
     apiKey: options.apiKey,
     modelId: options.modelId,
-    customTools: dispatchTools,
+    customTools: { ...dispatchTools, ...escalationTools },
   };
 
   const conductor = options.resumeAgentId
@@ -109,49 +137,49 @@ export async function runIssueSession(
 
   try {
     for (let turn = 1; turn <= maxTurns; turn++) {
-      const workersBefore = workerDispatches.length;
-      const reviewersBefore = reviewerDispatches.length;
-
-      const issueContext = await fetchIssueContext(options.issueUrl);
-      const prompt = buildPromptForTurn({
+      lastSendResult = await runConductorTurn({
         turn,
         maxTurns,
-        issueContext,
         options,
+        conductor,
         workerDispatches,
         reviewerDispatches,
+        escalations,
+        turns,
       });
 
-      lastSendResult = await conductor.send(prompt);
-
-      const workerCount = workerDispatches.length - workersBefore;
-      const reviewerCount = reviewerDispatches.length - reviewersBefore;
-      const sessionTurn: IssueSessionTurn = {
-        turn,
-        runId: lastSendResult.runId,
-        status: lastSendResult.status,
-        result: lastSendResult.result,
-        error: lastSendResult.error,
-        workerDispatches: workerCount,
-        reviewerDispatches: reviewerCount,
-      };
-      turns.push(sessionTurn);
-      options.onTurnComplete?.(sessionTurn);
-
+      const sessionTurn = turns[turns.length - 1]!;
       const loopState = {
         turn,
         maxTurns,
         lastStatus: lastSendResult.status,
-        dispatchesThisTurn: workerCount + reviewerCount,
+        dispatchesThisTurn:
+          sessionTurn.workerDispatches + sessionTurn.reviewerDispatches,
       };
 
       stopReason = resolveIssueLoopStopReason(loopState);
 
       if (shouldStopIssueLoop(loopState)) {
-        if (stopReason === 'max_turns') {
-          options.onMaxTurnsReached?.(buildResult());
-        }
         break;
+      }
+    }
+
+    const result = buildResult();
+
+    if (stopReason === 'max_turns' && escalateOnMaxTurns) {
+      const guidance = await maybeEscalateOnMaxTurns(onHumanInquiry, result);
+      if (guidance) {
+        lastSendResult = await runBonusTurn({
+          conductor,
+          prompt: buildHumanGuidancePrompt(guidance),
+          turn: turns.length + 1,
+          workerDispatches,
+          reviewerDispatches,
+          escalations,
+          turns,
+          options,
+        });
+        stopReason = 'completed';
       }
     }
 
@@ -170,11 +198,97 @@ export async function runIssueSession(
         lastError: lastSendResult.error,
         workerDispatches,
         reviewerDispatches,
+        escalations,
       };
     }
   } finally {
     await conductor.close();
   }
+}
+
+async function runConductorTurn(input: {
+  turn: number;
+  maxTurns: number;
+  options: RunIssueSessionOptions;
+  conductor: ConductorAgent;
+  workerDispatches: WorkerDispatchResult[];
+  reviewerDispatches: ReviewerDispatchResult[];
+  escalations: EscalationRecord[];
+  turns: IssueSessionTurn[];
+}): Promise<ConductorSendResult> {
+  const workersBefore = input.workerDispatches.length;
+  const reviewersBefore = input.reviewerDispatches.length;
+  const escalationsBefore = input.escalations.length;
+
+  const issueContext = await fetchIssueContext(input.options.issueUrl);
+  const prompt = buildPromptForTurn({
+    turn: input.turn,
+    maxTurns: input.maxTurns,
+    issueContext,
+    options: input.options,
+    workerDispatches: input.workerDispatches,
+    reviewerDispatches: input.reviewerDispatches,
+    escalations: input.escalations,
+  });
+
+  const sendResult = await input.conductor.send(prompt);
+
+  const sessionTurn: IssueSessionTurn = {
+    turn: input.turn,
+    runId: sendResult.runId,
+    status: sendResult.status,
+    result: sendResult.result,
+    error: sendResult.error,
+    workerDispatches: input.workerDispatches.length - workersBefore,
+    reviewerDispatches: input.reviewerDispatches.length - reviewersBefore,
+    escalations: input.escalations.length - escalationsBefore,
+  };
+  input.turns.push(sessionTurn);
+  input.options.onTurnComplete?.(sessionTurn);
+
+  return sendResult;
+}
+
+async function runBonusTurn(input: {
+  conductor: ConductorAgent;
+  prompt: string;
+  turn: number;
+  workerDispatches: WorkerDispatchResult[];
+  reviewerDispatches: ReviewerDispatchResult[];
+  escalations: EscalationRecord[];
+  turns: IssueSessionTurn[];
+  options: RunIssueSessionOptions;
+}): Promise<ConductorSendResult> {
+  const workersBefore = input.workerDispatches.length;
+  const reviewersBefore = input.reviewerDispatches.length;
+  const escalationsBefore = input.escalations.length;
+
+  const sendResult = await input.conductor.send(input.prompt);
+
+  const sessionTurn: IssueSessionTurn = {
+    turn: input.turn,
+    runId: sendResult.runId,
+    status: sendResult.status,
+    result: sendResult.result,
+    error: sendResult.error,
+    workerDispatches: input.workerDispatches.length - workersBefore,
+    reviewerDispatches: input.reviewerDispatches.length - reviewersBefore,
+    escalations: input.escalations.length - escalationsBefore,
+  };
+  input.turns.push(sessionTurn);
+  input.options.onTurnComplete?.(sessionTurn);
+
+  return sendResult;
+}
+
+async function maybeEscalateOnMaxTurns(
+  onHumanInquiry: HumanInquiryHandler,
+  result: IssueSessionResult,
+): Promise<string | undefined> {
+  const request = buildMaxTurnsEscalationRequest(result);
+  const response = await onHumanInquiry(request);
+  const guidance = response.answer.trim();
+  return guidance || undefined;
 }
 
 function buildPromptForTurn(input: {
@@ -184,9 +298,16 @@ function buildPromptForTurn(input: {
   options: RunIssueSessionOptions;
   workerDispatches: WorkerDispatchResult[];
   reviewerDispatches: ReviewerDispatchResult[];
+  escalations: EscalationRecord[];
 }): string {
-  const { turn, options, issueContext, workerDispatches, reviewerDispatches } =
-    input;
+  const {
+    turn,
+    options,
+    issueContext,
+    workerDispatches,
+    reviewerDispatches,
+    escalations,
+  } = input;
 
   if (turn === 1) {
     return buildConductorPrompt({
@@ -206,5 +327,6 @@ function buildPromptForTurn(input: {
     maxTurns: input.maxTurns,
     workerDispatches,
     reviewerDispatches,
+    escalations,
   });
 }

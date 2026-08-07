@@ -1,5 +1,6 @@
 import type { ReviewerDispatchResult } from '../dispatch/reviewer-dispatch.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
+import type { EscalationRecord } from '../escalation/human-inquiry.js';
 import type { IssueContext } from '../github/issue-context.js';
 import { formatIssueContextForPrompt } from '../github/issue-context.js';
 
@@ -10,6 +11,7 @@ export interface BuildConductorFollowUpPromptOptions {
   maxTurns: number;
   workerDispatches: WorkerDispatchResult[];
   reviewerDispatches: ReviewerDispatchResult[];
+  escalations?: EscalationRecord[];
 }
 
 export function buildConductorFollowUpPrompt(
@@ -29,10 +31,14 @@ export function buildConductorFollowUpPrompt(
       options.reviewerDispatches,
     ),
     '',
+    '## 人間へのエスカレーション',
+    ...formatEscalationSummaries(options.escalations ?? []),
+    '',
     '## 次の判断',
     '- 作業が必要なら `dispatch_worker`',
     '- PR レビューが必要なら `dispatch_reviewer`（既存 worktree を使用）',
-    '- 人間レビュー待ち・判断不能なら Issue に状況を書き、追加 dispatch はせず終了',
+    '- 判断不能・マージ判断などは `ask_human` で人間に確認',
+    '- 人間レビュー待ちなら Issue に状況を書き、追加 dispatch はせず終了',
     '- 完了なら追加 dispatch はせず終了',
   ];
 
@@ -62,4 +68,16 @@ function formatDispatchSummaries(
   }
 
   return lines;
+}
+
+function formatEscalationSummaries(escalations: EscalationRecord[]): string[] {
+  if (escalations.length === 0) {
+    return ['(なし)'];
+  }
+
+  return escalations.map((entry) => {
+    const approved =
+      entry.approved === undefined ? '' : ` approved=${entry.approved}`;
+    return `- Q: ${entry.question} → A: ${entry.answer}${approved}`;
+  });
 }

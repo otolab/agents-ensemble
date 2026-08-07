@@ -106,6 +106,16 @@ ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
 ensemble issue <issue-url> --repo-root <path> [--resume <agentId>] [--model <id>] [--max-turns 5]
 ```
 
+### 人間エスカレーション（非対話環境）
+
+conductor の `ask_human` や worker permission 確認は TTY でプロンプトする。CI 等の非対話環境では `ENSEMBLE_ESCALATION_RESPONSE` を設定する（`yes` / `no` または自由記述）。
+
+```bash
+ENSEMBLE_ESCALATION_RESPONSE=yes ensemble issue ...
+```
+
+未設定の非対話環境では `EscalationUnavailableError` で終了する。
+
 認証の詳細は上記 [認証](#認証) を参照。
 
 ## ライセンス

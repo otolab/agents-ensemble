@@ -22,6 +22,7 @@ description: >-
 |--------|------|
 | `dispatch_worker` | Issue 向け実装 worker（worktree 作成 + ACP） |
 | `dispatch_reviewer` | PR レビュー（既存 worktree、独立 session） |
+| `ask_human` | 判断不能時に人間オペレータへ確認（y/n または自由記述） |
 
 `dispatch_worker` には `issueUrl`, `skillName`, 任意で `repoRoot` を渡す。
 
@@ -29,7 +30,7 @@ description: >-
 
 - 手順が Issue / Skill に書いてある → worker dispatch を検討
 - PR ができた / レビューが必要 → reviewer dispatch（利用可能なら）
-- 曖昧・マージ判断・権限 → 人間へエスカレーション（Issue コメント等）
+- 曖昧・マージ判断・権限 → `ask_human` で人間へエスカレーション
 - PR マージは人間のまま
 
 ## 報告
