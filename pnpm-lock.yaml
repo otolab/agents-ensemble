@@ -27,12 +27,21 @@ importers:
         specifier: 14.0.1
         version: 14.0.1
     devDependencies:
+      '@types/js-yaml':
+        specifier: 4.0.9
+        version: 4.0.9
       '@types/node':
         specifier: 22.18.10
         version: 22.18.10
+      js-yaml:
+        specifier: 4.1.0
+        version: 4.1.0
       typescript:
         specifier: 5.9.3
         version: 5.9.3
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@22.18.10)
 
   packages/core:
     devDependencies:

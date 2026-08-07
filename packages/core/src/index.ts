@@ -65,3 +65,29 @@ export type {
 
 export { createInProcessStreamPair } from './acp/testing/stream-pair.js';
 export type { InProcessStreamPair } from './acp/testing/stream-pair.js';
+
+export { parseIssueUrl, buildIssueUrl } from './issue/issue-ref.js';
+export type { IssueRef } from './issue/issue-ref.js';
+
+export { runGit } from './git/run-git.js';
+
+export {
+  workerBranchName,
+  workerWorktreePath,
+  resolveWorkerWorktree,
+  createWorkerWorktree,
+  listWorktrees,
+} from './worktree/worktree.js';
+export type { WorktreeRef } from './worktree/worktree.js';
+
+export { buildWorkerPrompt, buildReviewerPrompt } from './prompt/build-prompt.js';
+export type {
+  WorkerPromptOptions,
+  ReviewerPromptOptions,
+} from './prompt/build-prompt.js';
+
+export { dispatchWorker } from './dispatch/worker-dispatch.js';
+export type {
+  WorkerDispatchOptions,
+  WorkerDispatchResult,
+} from './dispatch/worker-dispatch.js';

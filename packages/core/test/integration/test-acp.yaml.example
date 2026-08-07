@@ -9,6 +9,7 @@
 # integration テストの cwd
 cwd: /tmp
 
-# e2e 用（Stage 1 #6）
+# e2e: ensemble dispatch worker（Stage 1 #6）
 # issueUrl: https://github.com/org/repo/issues/1
 # skillName: lazy-implementer
+# repoRoot: /path/to/local/clone

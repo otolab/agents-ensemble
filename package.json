@@ -16,7 +16,7 @@
     "test": "pnpm --filter @agents-ensemble/core test",
     "test:run": "pnpm --filter @agents-ensemble/core test:run",
     "test:integration": "pnpm --filter @agents-ensemble/core test:integration",
-    "test:e2e": "pnpm --filter @agents-ensemble/core test:e2e",
+    "test:e2e": "pnpm --filter @agents-ensemble/core test:e2e && pnpm --filter @agents-ensemble/cli test:e2e",
     "test:all": "pnpm test:run && pnpm test:integration && pnpm test:e2e"
   },
   "devDependencies": {

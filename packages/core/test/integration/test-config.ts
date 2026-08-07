@@ -20,6 +20,8 @@ export interface AcpTestConfig {
   issueUrl?: string;
   /** e2e: worker Skill 名 */
   skillName?: string;
+  /** e2e: 作業対象のローカル git clone */
+  repoRoot?: string;
 }
 
 let _config: AcpTestConfig | undefined;
@@ -40,6 +42,11 @@ export function loadAcpTestConfig(): AcpTestConfig | undefined {
 
 export function hasAcpTestConfig(): boolean {
   return loadAcpTestConfig() != null;
+}
+
+export function hasDispatchWorkerE2eConfig(): boolean {
+  const config = loadAcpTestConfig();
+  return Boolean(config?.issueUrl && config?.skillName && config?.repoRoot);
 }
 
 export function getAcpTestConfig(): AcpTestConfig {

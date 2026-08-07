@@ -2,14 +2,15 @@
   "name": "@agents-ensemble/cli",
   "version": "0.0.0",
   "type": "module",
-  "description": "ensemble CLI — Issue-based agent orchestration",
+  "description": "ensemble CLI \u2014 Issue-based agent orchestration",
   "bin": {
     "ensemble": "./dist/index.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc --build"
+    "build": "tsc --build",
+    "test:e2e": "vitest run --config vitest.config.e2e.ts"
   },
   "dependencies": {
     "@agents-ensemble/core": "workspace:*",
@@ -17,7 +18,10 @@
   },
   "devDependencies": {
     "@types/node": "22.18.10",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "@types/js-yaml": "4.0.9",
+    "js-yaml": "4.1.0",
+    "vitest": "3.2.4"
   },
   "license": "MIT",
   "repository": {
