@@ -91,3 +91,31 @@ export type {
   WorkerDispatchOptions,
   WorkerDispatchResult,
 } from './dispatch/worker-dispatch.js';
+
+export { runGh } from './github/run-gh.js';
+export {
+  fetchIssueContext,
+  formatIssueContextForPrompt,
+} from './github/issue-context.js';
+export type {
+  IssueContext,
+  IssueComment,
+} from './github/issue-context.js';
+
+export { ConductorAgent } from './conductor/conductor-agent.js';
+export type {
+  ConductorAgentOptions,
+  ConductorSendResult,
+} from './conductor/conductor-agent.js';
+
+export { createDispatchTools } from './conductor/dispatch-tools.js';
+export type { DispatchToolsOptions } from './conductor/dispatch-tools.js';
+
+export { buildConductorPrompt } from './conductor/build-conductor-prompt.js';
+export type { BuildConductorPromptOptions } from './conductor/build-conductor-prompt.js';
+
+export { runIssueSession } from './conductor/issue-session.js';
+export type {
+  RunIssueSessionOptions,
+  IssueSessionResult,
+} from './conductor/issue-session.js';
