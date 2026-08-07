@@ -1,5 +1,10 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import { fetchIssueContext } from '../github/issue-context.js';
+import {
+  PermissionBroker,
+  type PermissionAskHandler,
+} from '../permission/permission-broker.js';
+import type { PermissionPolicyRules } from '../permission/permission-policy.js';
 import { buildConductorPrompt } from './build-conductor-prompt.js';
 import { ConductorAgent } from './conductor-agent.js';
 import { createDispatchTools } from './dispatch-tools.js';
@@ -12,6 +17,9 @@ export interface RunIssueSessionOptions {
   resumeAgentId?: string;
   apiKey?: string;
   modelId?: string;
+  permissionPolicy?: PermissionPolicyRules;
+  permissionBroker?: PermissionBroker;
+  onPermissionAsk?: PermissionAskHandler;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
 }
 
@@ -30,8 +38,17 @@ export async function runIssueSession(
 ): Promise<IssueSessionResult> {
   const issueContext = await fetchIssueContext(options.issueUrl);
   const workerDispatches: WorkerDispatchResult[] = [];
+  const permissionBroker =
+    options.permissionBroker ??
+    new PermissionBroker({
+      policy: options.permissionPolicy,
+      onAsk: options.onPermissionAsk,
+    });
+  const permissionHandler = permissionBroker.createHandler('conductor-worker');
+
   const dispatchTools = createDispatchTools({
     repoRoot: options.repoRoot,
+    permissionHandler,
     onWorkerDispatched: (result) => {
       workerDispatches.push(result);
       options.onWorkerDispatched?.(result);

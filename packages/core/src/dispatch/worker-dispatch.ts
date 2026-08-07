@@ -1,6 +1,7 @@
 import { AcpBridge } from '../acp/acp-bridge.js';
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
+import type { PermissionHandler } from '../acp/types.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
 import { buildWorkerPrompt } from '../prompt/build-prompt.js';
 import type { PromptResult } from '../acp/types.js';
@@ -14,6 +15,7 @@ export interface WorkerDispatchOptions {
   repoRoot: string;
   spawn?: SpawnAcpProcessOptions;
   onUpdate?: SessionUpdateHandler;
+  permissionHandler?: PermissionHandler;
 }
 
 export interface WorkerDispatchResult {
@@ -36,6 +38,7 @@ export async function dispatchWorker(
 
   const bridge = await AcpBridge.connect({
     cwd: worktree.path,
+    permissionHandler: options.permissionHandler,
     ...options.spawn,
   });
 

@@ -1,9 +1,11 @@
 import type { SDKCustomTool } from '@cursor/sdk';
+import type { PermissionHandler } from '../acp/types.js';
 import { dispatchWorker, type WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 
 export interface DispatchToolsOptions {
   /** Default local clone for worker dispatch. */
   repoRoot: string;
+  permissionHandler?: PermissionHandler;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
 }
 
@@ -42,6 +44,7 @@ export function createDispatchTools(
           issueUrl,
           skillName,
           repoRoot,
+          permissionHandler: options.permissionHandler,
         });
         options.onWorkerDispatched?.(result);
 

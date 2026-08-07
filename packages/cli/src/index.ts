@@ -6,8 +6,10 @@ import {
   dispatchWorker,
   getConductorAuthStatus,
   loginConductor,
+  PermissionBroker,
   runIssueSession,
 } from '@agents-ensemble/core';
+import { promptPermissionDecision } from './prompt-permission.js';
 
 const program = new Command();
 
@@ -52,6 +54,7 @@ program
           resumeAgentId: options.resume,
           briefing: options.briefing,
           modelId: options.model,
+          onPermissionAsk: promptPermissionDecision,
           onWorkerDispatched: (dispatch) => {
             console.error(
               `[worker dispatched] ${dispatch.worktree.path} (${dispatch.promptResult.stopReason})`,
@@ -147,10 +150,14 @@ dispatch
   )
   .action(async (issueUrl: string, options: { skill: string; repoRoot: string }) => {
     try {
+      const permissionBroker = new PermissionBroker({
+        onAsk: promptPermissionDecision,
+      });
       const result = await dispatchWorker({
         issueUrl,
         skillName: options.skill,
         repoRoot: resolve(options.repoRoot),
+        permissionHandler: permissionBroker.createHandler('manual-worker'),
         onUpdate: (update) => {
           const text = update.update?.content?.text;
           if (text) process.stderr.write(text);

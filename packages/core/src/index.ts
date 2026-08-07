@@ -127,3 +127,24 @@ export {
   loginConductor,
   resolveConductorApiKey,
 } from './conductor/conductor-auth.js';
+
+export {
+  PermissionBroker,
+  allowOnce,
+  deny,
+} from './permission/permission-broker.js';
+export type {
+  PermissionAskHandler,
+  PermissionBrokerOptions,
+} from './permission/permission-broker.js';
+export {
+  evaluatePermissionPolicy,
+} from './permission/permission-policy.js';
+export type {
+  PermissionPolicyRules,
+  PermissionVerdict,
+} from './permission/permission-policy.js';
+export {
+  parsePermissionRequest,
+} from './permission/permission-request.js';
+export type { PermissionRequest } from './permission/permission-request.js';
