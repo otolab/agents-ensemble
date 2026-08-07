@@ -1,8 +1,9 @@
 import type { Readable, Writable } from 'node:stream';
 import { NdJsonLineBuffer, parseMessage, serializeMessage } from './json-rpc.js';
-import type { JsonRpcMessage, JsonRpcNotification } from './json-rpc.js';
+import type { JsonRpcMessage, JsonRpcNotification, JsonRpcRequest } from './json-rpc.js';
 
 export type NotificationHandler = (notification: JsonRpcNotification) => void;
+export type RequestHandler = (request: JsonRpcRequest) => void | Promise<void>;
 
 interface PendingRequest {
   resolve: (result: unknown) => void;
@@ -13,6 +14,8 @@ export interface JsonRpcPeerOptions {
   readable: Readable;
   writable: Writable;
   onNotification?: NotificationHandler;
+  /** Agent-initiated requests (e.g. session/request_permission). */
+  onRequest?: RequestHandler;
 }
 
 /**
@@ -90,8 +93,8 @@ export class JsonRpcPeer {
     }
 
     if ('method' in message && 'id' in message) {
-      // Server-side request from agent (e.g. session/request_permission).
-      // Handled by FakeAcpServer on the other end; clients use onNotification + respond.
+      void this.options.onRequest?.(message as JsonRpcRequest);
+      return;
     }
   }
 

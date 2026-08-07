@@ -1,58 +1,48 @@
-import { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { JsonRpcPeer } from '../../src/acp/json-rpc-peer.js';
+import { AcpBridge } from '../../src/acp/acp-bridge.js';
+import { AcpClient } from '../../src/acp/acp-client.js';
+import { createInProcessStreamPair } from '../../src/acp/testing/stream-pair.js';
+import { startFakeAcpServer } from '../../src/acp/testing/fake-acp-server.js';
 import { hasAcpTestConfig, getAcpTestConfig } from './test-config.js';
 
-describe.skipIf(!hasAcpTestConfig())('agent acp integration', () => {
-  it('completes initialize → session/new → session/prompt', async () => {
+describe.skipIf(!hasAcpTestConfig())('AcpBridge integration', () => {
+  it('runs a session against real agent acp', async () => {
     const config = getAcpTestConfig();
-    const command = config.agentCommand ?? 'agent';
-    const args = config.agentArgs ?? ['acp'];
-
-    const child = spawn(command, args, {
-      cwd: config.cwd ?? process.cwd(),
-      stdio: ['pipe', 'pipe', 'inherit'],
-      env: process.env,
-    });
-
-    if (!child.stdin || !child.stdout) {
-      throw new Error('Failed to open stdio pipes for agent acp');
-    }
-
-    const peer = new JsonRpcPeer({
-      readable: child.stdout,
-      writable: child.stdin,
+    const bridge = await AcpBridge.connect({
+      command: config.agentCommand,
+      args: config.agentArgs,
+      cwd: config.cwd,
     });
 
     try {
-      await peer.request('initialize', {
-        protocolVersion: 1,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-        },
-        clientInfo: { name: 'agents-ensemble-test', version: '0.0.0' },
-      });
-
-      await peer.request('authenticate', { methodId: 'cursor_login' });
-
-      const session = (await peer.request('session/new', {
+      const result = await bridge.runSession({
         cwd: config.cwd ?? process.cwd(),
-        mcpServers: [],
-      })) as { sessionId: string };
-
-      expect(session.sessionId).toBeTruthy();
-
-      const result = (await peer.request('session/prompt', {
-        sessionId: session.sessionId,
-        prompt: [{ type: 'text', text: 'Reply with exactly: pong' }],
-      })) as { stopReason: string };
-
+        prompt: 'Reply with exactly: pong',
+      });
       expect(result.stopReason).toBeTruthy();
     } finally {
-      peer.close();
-      child.stdin.end();
-      child.kill();
+      await bridge.close();
     }
   }, 120_000);
+});
+
+describe('AcpBridge in-process', () => {
+  it('runSession via FakeAcpServer', async () => {
+    const streams = createInProcessStreamPair();
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+    });
+
+    const client = AcpClient.create({
+      readable: streams.clientReadable,
+      writable: streams.clientWritable,
+    });
+    await client.connect();
+
+    const sessionId = await client.newSession('/tmp');
+    const result = await client.prompt(sessionId, 'hi');
+    expect(result.stopReason).toBe('end_turn');
+    await client.close();
+  });
 });

@@ -14,6 +14,8 @@ export interface FakeAcpPromptResult {
 export interface FakeAcpServerOptions {
   readable: Readable;
   writable: Writable;
+  /** Emit session/request_permission before responding to session/prompt. */
+  requestPermissionOnPrompt?: boolean;
   /** Called when session/prompt is received. May push session/update via `notify`. */
   onPrompt?: (params: {
     sessionId: string;
@@ -29,7 +31,12 @@ export interface FakeAcpServerOptions {
 export class FakeAcpServer {
   private readonly lineBuffer = new NdJsonLineBuffer();
   private sessionCounter = 0;
+  private permissionRequestCounter = 0;
   private running = false;
+  private readonly pendingPermissionResolvers = new Map<
+    string | number,
+    () => void
+  >();
 
   constructor(private readonly options: FakeAcpServerOptions) {}
 
@@ -52,6 +59,16 @@ export class FakeAcpServer {
 
   private async handleLine(line: string): Promise<void> {
     const message = parseMessage(line);
+
+    if ('id' in message && ('result' in message || 'error' in message)) {
+      const resolvePermission = this.pendingPermissionResolvers.get(message.id);
+      if (resolvePermission) {
+        this.pendingPermissionResolvers.delete(message.id);
+        resolvePermission();
+      }
+      return;
+    }
+
     if (!('method' in message) || !('id' in message)) return;
 
     const { id, method, params } = message;
@@ -82,6 +99,10 @@ export class FakeAcpServer {
           this.notify(notifyMethod, notifyParams);
         };
 
+        if (this.options.requestPermissionOnPrompt) {
+          await this.requestPermissionAndWait(sessionId);
+        }
+
         const result = this.options.onPrompt
           ? await this.options.onPrompt({ sessionId, prompt, notify })
           : { stopReason: 'end_turn', message: 'ok' };
@@ -111,6 +132,19 @@ export class FakeAcpServer {
 
   private notify(method: string, params: unknown): void {
     this.write({ jsonrpc: '2.0', method, params });
+  }
+
+  private requestPermissionAndWait(sessionId: string): Promise<void> {
+    const requestId = `perm-${++this.permissionRequestCounter}`;
+    return new Promise((resolve) => {
+      this.pendingPermissionResolvers.set(requestId, resolve);
+      this.write({
+        jsonrpc: '2.0',
+        id: requestId,
+        method: 'session/request_permission',
+        params: { sessionId, toolName: 'test-tool' },
+      });
+    });
   }
 
   private write(message: JsonRpcMessage): void {

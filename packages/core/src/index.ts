@@ -19,7 +19,43 @@ export type {
 } from './acp/json-rpc.js';
 
 export { JsonRpcPeer } from './acp/json-rpc-peer.js';
-export type { JsonRpcPeerOptions, NotificationHandler } from './acp/json-rpc-peer.js';
+export type {
+  JsonRpcPeerOptions,
+  NotificationHandler,
+  RequestHandler,
+} from './acp/json-rpc-peer.js';
+
+export { AcpClient, terminateChildProcess } from './acp/acp-client.js';
+export type {
+  AcpClientOptions,
+  AcpClientStreams,
+  SessionUpdateHandler,
+} from './acp/acp-client.js';
+
+export { spawnAcpProcess, runAcpSession } from './acp/acp-process.js';
+export type {
+  SpawnAcpProcessOptions,
+  RunAcpSessionOptions,
+  ChildProcess,
+} from './acp/acp-process.js';
+
+export { AcpBridge } from './acp/acp-bridge.js';
+export type {
+  AcpBridgeConnectOptions,
+  AcpBridgeRunSessionOptions,
+} from './acp/acp-bridge.js';
+
+export {
+  DEFAULT_PERMISSION_DECISION,
+} from './acp/types.js';
+export type {
+  AcpPromptBlock,
+  AcpTextPromptBlock,
+  SessionUpdateNotification,
+  PromptResult,
+  PermissionDecision,
+  PermissionHandler,
+} from './acp/types.js';
 
 export { FakeAcpServer, startFakeAcpServer } from './acp/testing/fake-acp-server.js';
 export type {
