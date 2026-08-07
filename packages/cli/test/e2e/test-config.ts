@@ -11,7 +11,7 @@ const CONFIG_PATH = join(
 
 const FIXTURE_CONDUCTOR_CWD = join(
   dirname(fileURLToPath(import.meta.url)),
-  'fixtures/conductor-workspace',
+  '../../../../',
 );
 
 export interface E2eConfig {
