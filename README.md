@@ -103,8 +103,10 @@ ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
 # または --issue-url <url> --repo-root <path> で worktree を解決
 
 # Stage 2: conductor オーケストレーション
-ensemble issue <issue-url> --repo-root <path> [--resume <agentId>] [--model <id>] [--max-turns 5]
+ensemble issue <issue-url> --repo-root <path> [--resume <agentId>] [--model <id>] [--max-turns 5] [--material <path>...]
 ```
+
+`--material` は conductor へ渡す参照文書（PromptModule の `materials`）。プロファイル定義文書の先行利用にも使える。
 
 ### 人間エスカレーション（非対話環境）
 

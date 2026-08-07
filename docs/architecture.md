@@ -46,7 +46,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 │  ・次ロールの判断（LLM。ルール表は固定しない）                │
 │  ・worker / reviewer の dispatch                            │
 │  ・permission の集約 → 必要時に人間へ                         │
-│  ・実作業ツールは hooks / mode で禁止                         │
+│  ・実作業ツールは SDK mode + customTools で制限           │
 └───────────────────────────┬─────────────────────────────────┘
                             │ spawn + JSON-RPC (stdio)
               ┌─────────────┼─────────────┐
@@ -69,7 +69,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 | **Conductor** | `@cursor/sdk` | 判断・dispatch 制御の主体 |
 | **Worker 等** | `agent acp` | Skill に沿った実作業・レビュー |
 | **共有媒体** | GitHub Issue / PR | セッション会話に依存しない状態と履歴 |
-| **手順の正本** | Skill（各作業リポジトリ） | worker / reviewer が読む手順 |
+| **手順の正本** | Skill（dispatch 先の clone / worktree 上） | worker / reviewer が読む手順 |
 
 ---
 
@@ -88,11 +88,12 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 | 手段 | 内容 |
 |------|------|
 | `mode: "plan"` | 計画・調査寄り。実装は worker に委任 |
-| hooks | conductor 側 cwd の `.cursor/hooks.json` で shell / write / edit を deny |
-| customTools | **dispatch 専用**のみ（例: `dispatch_worker`）。built-in 作業ツールに頼らない |
-| プロンプト / Skill | conductor 用 Skill が「委任のみ」を明示 |
+| `customTools` | **dispatch 専用**のみ（例: `dispatch_worker`）。built-in 作業ツールに頼らない |
+| プロンプト / materials | PromptModule と `--material` で委任方針を明示 |
 
 conductor は **理解と dispatch に専念**し、ファイル編集・テスト実行は worker の domain とする。
+
+**agents-ensemble リポジトリに `.cursor/` は置かない。** 開発用 IDE 設定と混同し、hooks がローカル作業を阻害する。conductor / worker のツール方針はコードと起動オプションで与える。
 
 ### SDK の使い方（想定）
 
@@ -102,13 +103,12 @@ await using conductor = await Agent.create({
   model: { id: "composer-2.5" },
   mode: "plan",
   local: {
-    cwd: orchestratorWorkspace,       // agents-ensemble または my-logs
-    settingSources: ["project"],      // conductor 用 Skill
-    // sandbox / autoReview は conductor 側の方針に応じて
+    cwd: orchestratorWorkspace, // agents-ensemble 等。project .cursor は読まない
+    customTools: { dispatch_worker, dispatch_reviewer, ask_human },
   },
 });
 
-// conductor への入力: Issue URL、作業基準文書（任意）、dispatch 結果の要約
+// conductor への入力: Issue URL、materials（任意）、dispatch 結果の要約
 const run = await conductor.send(buildConductorPrompt(context));
 ```
 
@@ -116,7 +116,6 @@ conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.lo
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
 - **resume**: 別プロセスから `Agent.resume(conductorId)` で再開可能
-- **reload**: `.cursor/` 変更時は `conductor.reload()`（subagents 定義等）。worker は別プロセスなので別途 spawn で鮮度を確保
 
 ### conductor が読む入力
 
@@ -146,12 +145,14 @@ conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.lo
 
 各 dispatch で:
 
-1. `spawn("agent", ["acp"], { cwd: targetRepo })`
-2. JSON-RPC: `initialize` → `authenticate` → `session/new`
+1. `spawn("agent", ["acp"], { cwd, env, ... })` — **ツール・環境は起動オプションで明示**
+2. JSON-RPC: `initialize` → `authenticate` → `session/new`（`cwd`, `mcpServers` 等）
 3. `session/prompt` に **ロール別起動プロンプト** + Skill 名 / Issue URL
 4. `session/update` を conductor が購読（進捗）
 5. `session/request_permission` → conductor が応答
 6. 完了後 session 終了（次フェーズは **新 session**）
+
+worker / reviewer は **agents-ensemble の `.cursor/` を読まない**。Skill 名は起動プロンプトで指示し、手順の正本は dispatch 先の worktree（`cwd`）上の Skill ファイルとする。
 
 | ロール | worktree | Skill | 備考 |
 |--------|----------|-------|------|
@@ -163,8 +164,8 @@ conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.lo
 
 ### Worker の前提
 
-- 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）
-- 作業リポジトリの `.cursor/skills/` を ACP 起動時に読む
+- 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— dispatch 先 worktree の `cwd` から解決
+- ツール可否・MCP 等は **`spawn` / `session/new` のオプションで明示**（暗黙の project `.cursor` には依存しない）
 - 成果・経緯は **Issue コメント / PR** に書く（会話は捨ててよい）
 - description 本文は checkbox の check 以外は基本触らない（#2027 運用）
 
@@ -186,7 +187,7 @@ worker (ACP)                    conductor (SDK)              ユーザー
 ```
 
 - **サブ → ユーザー直結はしない**。conductor が ACP クライアントとして必ず仲介する。
-- conductor 側に自動 allow/deny ポリシー（allowlist、hooks 相当）を載せられる。
+- conductor 側に自動 allow/deny ポリシー（`PermissionBroker`）を載せられる。
 - **PR マージ**は引き続き人間（#2027）。
 
 並列 dispatch 時は `sessionId` / ロールで permission 要求をキューイングする。
@@ -258,7 +259,7 @@ ensemble issue https://github.com/org/repo/issues/123
 | CONDUCTOR_MODE | conductor の行動原則の正本 |
 | 秘書スキル（my-logs） | エスカレーション・音声・tasks。**パイプライン本体は ensemble** |
 | periodic-checker | GH 通知のトリガー入力の一つ |
-| 作業 / レビュー Skill（各 repo） | worker / reviewer が実行する手順の正本 |
+| 作業 / レビュー Skill（dispatch 先） | worker / reviewer が実行する手順の正本 |
 | `karte-auto-docs` / search-docs | worker / reviewer / librarian の参照先 |
 
 ---

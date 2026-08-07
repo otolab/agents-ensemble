@@ -48,6 +48,9 @@ importers:
       '@cursor/sdk':
         specifier: 1.0.27
         version: 1.0.27
+      '@modular-prompt/core':
+        specifier: 0.3.0
+        version: 0.3.0
     devDependencies:
       '@types/js-yaml':
         specifier: 4.0.9
@@ -278,6 +281,10 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
+
+  '@modular-prompt/core@0.3.0':
+    resolution: {integrity: sha512-jSY0kPMNo7lVPRAH6OzX1tQGhKWLLcHjKUmQUqNVrlKN8DZ+C1hZxl5yQ8jxaY850XQPo8ZFy27NUHQvUAZ0vA==}
+    engines: {node: '>=18.0.0'}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
@@ -847,6 +854,8 @@ snapshots:
   '@fastify/busboy@2.1.1': {}
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
+
+  '@modular-prompt/core@0.3.0': {}
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true

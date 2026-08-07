@@ -94,7 +94,6 @@ function buildAgentOptions(options: ConductorAgentOptions): AgentOptions {
     mode: 'plan',
     local: {
       cwd: options.cwd,
-      settingSources: ['project'],
       customTools: options.customTools,
     },
   };

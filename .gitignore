@@ -1,4 +1,5 @@
 .DS_Store
+.cursor/
 .ensemble/
 .env
 .env.local
