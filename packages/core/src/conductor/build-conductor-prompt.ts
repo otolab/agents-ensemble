@@ -19,6 +19,7 @@ export function buildConductorPrompt(
     '- 状態の正本は GitHub Issue / PR',
     '- 次のアクションは文脈から判断する（固定フローにしない）',
     '- worker 起動には `dispatch_worker` ツールを使う',
+    '- PR レビューには `dispatch_reviewer` ツールを使う（既存 worktree）',
     '',
     `作業リポジトリ（ローカル）: ${options.repoRoot}`,
     '',

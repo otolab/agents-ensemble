@@ -122,9 +122,22 @@ export type { BuildConductorPromptOptions } from './conductor/build-conductor-pr
 
 export { runIssueSession } from './conductor/issue-session.js';
 export type {
-  RunIssueSessionOptions,
   IssueSessionResult,
+  IssueSessionTurn,
+  RunIssueSessionOptions,
 } from './conductor/issue-session.js';
+
+export {
+  buildConductorFollowUpPrompt,
+} from './conductor/build-conductor-follow-up-prompt.js';
+export type { BuildConductorFollowUpPromptOptions } from './conductor/build-conductor-follow-up-prompt.js';
+
+export {
+  DEFAULT_MAX_ISSUE_TURNS,
+  resolveIssueLoopStopReason,
+  shouldStopIssueLoop,
+} from './conductor/issue-loop.js';
+export type { IssueLoopStopReason } from './conductor/issue-loop.js';
 
 export {
   CONDUCTOR_AUTH_HINT,

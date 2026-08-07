@@ -103,7 +103,7 @@ ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
 # または --issue-url <url> --repo-root <path> で worktree を解決
 
 # Stage 2: conductor オーケストレーション
-ensemble issue <issue-url> --repo-root <path> [--resume <agentId>] [--model <id>]
+ensemble issue <issue-url> --repo-root <path> [--resume <agentId>] [--model <id>] [--max-turns 5]
 ```
 
 認証の詳細は上記 [認証](#認証) を参照。

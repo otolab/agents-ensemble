@@ -36,6 +36,12 @@ program
   .option('--resume <agentId>', 'Resume a previous conductor agent')
   .option('--briefing <text>', 'Optional briefing document for the conductor')
   .option('--model <id>', 'Conductor model id (default: composer-2.5)')
+  .option(
+    '--max-turns <n>',
+    'Maximum conductor turns (default: 5)',
+    (value) => Number.parseInt(value, 10),
+    5,
+  )
   .action(
     async (
       issueUrl: string,
@@ -45,6 +51,7 @@ program
         resume?: string;
         briefing?: string;
         model?: string;
+        maxTurns: number;
       },
     ) => {
       try {
@@ -55,10 +62,21 @@ program
           resumeAgentId: options.resume,
           briefing: options.briefing,
           modelId: options.model,
+          maxTurns: options.maxTurns,
           onPermissionAsk: promptPermissionDecision,
           onWorkerDispatched: (dispatch) => {
             console.error(
               `[worker dispatched] ${dispatch.worktree.path} (${dispatch.promptResult.stopReason})`,
+            );
+          },
+          onReviewerDispatched: (dispatch) => {
+            console.error(
+              `[reviewer dispatched] ${dispatch.worktreePath} (${dispatch.promptResult.stopReason})`,
+            );
+          },
+          onTurnComplete: (turn) => {
+            console.error(
+              `[conductor turn ${turn.turn}] status=${turn.status} worker=${turn.workerDispatches} reviewer=${turn.reviewerDispatches}`,
             );
           },
         });
@@ -69,10 +87,13 @@ program
               agentId: result.agentId,
               issueUrl: result.issueUrl,
               repoRoot: result.repoRoot,
+              turnCount: result.turnCount,
+              stopReason: result.stopReason,
               lastRunStatus: result.lastRunStatus,
               lastResult: result.lastResult,
               lastError: result.lastError,
               workerDispatchCount: result.workerDispatches.length,
+              reviewerDispatchCount: result.reviewerDispatches.length,
             },
             null,
             2,
