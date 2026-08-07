@@ -18,6 +18,11 @@ Issue を指定して起動する、エージェントオーケストレーシ�
 pnpm install
 pnpm build
 pnpm ensemble --help
+
+# テスト（testing-strategy.md 参照）
+pnpm test:run           # unittest（CI 必須）
+pnpm test:integration   # 実 agent acp（test-acp.yaml 要）
+pnpm test:e2e           # CLI 縦切り（#6 以降）
 ```
 
 ## ライセンス

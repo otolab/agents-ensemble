@@ -12,12 +12,21 @@
     }
   },
   "scripts": {
-    "build": "tsc --build"
+    "build": "tsc --build",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:integration": "vitest run --config vitest.config.integration.ts",
+    "test:e2e": "vitest run --config vitest.config.e2e.ts"
   },
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/otolab/agents-ensemble.git",
     "directory": "packages/core"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "4.0.9",
+    "js-yaml": "4.1.0",
+    "vitest": "3.2.4"
   }
 }

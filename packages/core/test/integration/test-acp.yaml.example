@@ -1,0 +1,14 @@
+# integration / e2e 用 ACP 設定（コピーして test-acp.yaml として使う）
+#
+# cp test-acp.yaml.example test-acp.yaml
+
+# agent バイナリ（省略時: PATH の agent）
+# agentCommand: /Users/you/.local/bin/agent
+# agentArgs: ["acp"]
+
+# integration テストの cwd
+cwd: /tmp
+
+# e2e 用（Stage 1 #6）
+# issueUrl: https://github.com/org/repo/issues/1
+# skillName: lazy-implementer
