@@ -123,6 +123,7 @@ export type {
 export {
   CONDUCTOR_AUTH_HINT,
   getConductorAuthStatus,
+  hasConductorAuth,
   loginConductor,
   resolveConductorApiKey,
 } from './conductor/conductor-auth.js';

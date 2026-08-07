@@ -1,8 +1,9 @@
-node_modules/
-.search-docs/
-dist/
-*.tsbuildinfo
 .DS_Store
+.ensemble/
 .env
 .env.local
+.search-docs/
+*.tsbuildinfo
+dist/
+node_modules/
 packages/core/test/integration/test-acp.yaml

@@ -133,7 +133,7 @@ describe.skipIf(!hasAcpTestConfig())('AcpBridge integration', () => { ... });
 | Stage | シナリオ |
 |-------|---------|
 | **1** | `ensemble dispatch worker <issue-url> --skill <name>` — worktree + ACP + プロンプト |
-| **2** | `ensemble issue <url>` — conductor 起動 + 1 回以上 dispatch |
+| **2** | `ensemble issue <url>` — conductor 起動（smoke: dispatch なしで完了） |
 | **3+** | reviewer ループ、permission エスカレーション（別ファイルで追加） |
 
 ### 配置

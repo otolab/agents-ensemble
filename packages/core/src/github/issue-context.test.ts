@@ -31,6 +31,13 @@ describe('fetchIssueContext', () => {
     expect(context.title).toBe('ACP bridge');
     expect(context.labels).toEqual(['enhancement']);
     expect(context.comments).toHaveLength(1);
+    expect(runGhModule.runGh).toHaveBeenCalledWith([
+      'issue',
+      'view',
+      'https://github.com/otolab/agents-ensemble/issues/3',
+      '--json',
+      'title,body,state,labels,comments',
+    ]);
 
     const prompt = formatIssueContextForPrompt(context);
     expect(prompt).toContain('Implement bridge');

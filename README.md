@@ -22,7 +22,13 @@ pnpm ensemble --help
 # テスト（testing-strategy.md 参照）
 pnpm test:run           # unittest（CI 必須）
 pnpm test:integration   # 実 agent acp（test-acp.yaml 要）
-pnpm test:e2e           # CLI 縦切り（#6 / #12、設定時）
+pnpm test:e2e           # CLI 縦切り（test-acp.yaml 要）
+
+# e2e 設定（初回）
+cp packages/core/test/integration/test-acp.yaml.example \
+   packages/core/test/integration/test-acp.yaml
+# issueUrl / skillName: e2e-smoke / repoRoot を編集してから:
+pnpm test:e2e
 
 # Stage 1: 手動 worker dispatch
 ensemble dispatch worker <issue-url> --skill <name> --repo-root <path>

@@ -21,6 +21,7 @@ export interface IssueSessionResult {
   repoRoot: string;
   lastRunStatus: string;
   lastResult?: string;
+  lastError?: { message: string; code?: string };
   workerDispatches: WorkerDispatchResult[];
 }
 
@@ -66,6 +67,7 @@ export async function runIssueSession(
       repoRoot: options.repoRoot,
       lastRunStatus: sendResult.status,
       lastResult: sendResult.result,
+      lastError: sendResult.error,
       workerDispatches,
     };
   } finally {

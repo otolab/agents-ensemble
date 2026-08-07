@@ -31,11 +31,10 @@ interface GhIssueView {
 
 export async function fetchIssueContext(issueUrl: string): Promise<IssueContext> {
   const issue = parseIssueUrl(issueUrl);
-  const ref = `${issue.owner}/${issue.repo}#${issue.number}`;
   const stdout = await runGh([
     'issue',
     'view',
-    ref,
+    issue.url,
     '--json',
     'title,body,state,labels,comments',
   ]);

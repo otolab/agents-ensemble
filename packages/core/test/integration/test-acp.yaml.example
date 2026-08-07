@@ -9,7 +9,9 @@
 # integration テストの cwd
 cwd: /tmp
 
-# e2e: ensemble dispatch worker（Stage 1 #6）
-# issueUrl: https://github.com/org/repo/issues/1
-# skillName: lazy-implementer
-# repoRoot: /path/to/local/clone
+# e2e 共通（dispatch worker / ensemble issue）
+# issueUrl: https://github.com/otolab/agents-ensemble/issues/1
+# skillName: e2e-smoke
+# repoRoot: /path/to/local/agents-ensemble-clone
+# conductorCwd: /path/to/local/agents-ensemble-clone   # issue e2e 用（省略時 fixture）
+# conductorModelId: auto   # team で composer-2.5 がブロックされる場合など

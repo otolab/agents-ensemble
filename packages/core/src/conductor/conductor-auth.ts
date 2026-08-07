@@ -1,4 +1,5 @@
-import { Cursor } from '@cursor/sdk';
+import { existsSync } from 'node:fs';
+import { Cursor, getDefaultSdkAuthPath } from '@cursor/sdk';
 import type { SdkAuthStatus, SdkLoginResult } from '@cursor/sdk';
 
 /**
@@ -19,6 +20,12 @@ export function resolveConductorApiKey(explicit?: string): string | undefined {
     return process.env.CURSOR_API_KEY;
   }
   return undefined;
+}
+
+/** SDK stored login または CURSOR_API_KEY があるか（同期チェック）。 */
+export function hasConductorAuth(): boolean {
+  if (process.env.CURSOR_API_KEY) return true;
+  return existsSync(getDefaultSdkAuthPath());
 }
 
 export async function getConductorAuthStatus(): Promise<SdkAuthStatus> {

@@ -32,6 +32,7 @@ program
   )
   .option('--resume <agentId>', 'Resume a previous conductor agent')
   .option('--briefing <text>', 'Optional briefing document for the conductor')
+  .option('--model <id>', 'Conductor model id (default: composer-2.5)')
   .action(
     async (
       issueUrl: string,
@@ -40,6 +41,7 @@ program
         conductorCwd: string;
         resume?: string;
         briefing?: string;
+        model?: string;
       },
     ) => {
       try {
@@ -49,6 +51,7 @@ program
           conductorCwd: resolve(options.conductorCwd),
           resumeAgentId: options.resume,
           briefing: options.briefing,
+          modelId: options.model,
           onWorkerDispatched: (dispatch) => {
             console.error(
               `[worker dispatched] ${dispatch.worktree.path} (${dispatch.promptResult.stopReason})`,
@@ -63,6 +66,8 @@ program
               issueUrl: result.issueUrl,
               repoRoot: result.repoRoot,
               lastRunStatus: result.lastRunStatus,
+              lastResult: result.lastResult,
+              lastError: result.lastError,
               workerDispatchCount: result.workerDispatches.length,
             },
             null,

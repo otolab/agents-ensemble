@@ -24,6 +24,7 @@ export interface ConductorSendResult {
   runId: string;
   status: RunResult['status'];
   result?: string;
+  error?: RunResult['error'];
 }
 
 export class ConductorAgent {
@@ -60,6 +61,7 @@ export class ConductorAgent {
         runId: run.id,
         status: result.status,
         result: typeof result.result === 'string' ? result.result : undefined,
+        error: result.error,
       };
     } catch (error) {
       if (error instanceof AuthenticationError) {
