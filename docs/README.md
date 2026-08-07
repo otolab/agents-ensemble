@@ -11,5 +11,6 @@ agents-ensemble（`ensemble` コマンド）の設計・検討事項。
 | [pipeline.md](pipeline.md) | 作業フロー（参考） |
 | [prompts.md](prompts.md) | 起動プロンプトのパターン |
 | [implementation.md](implementation.md) | 実装方針の検討 |
+| [testing-strategy.md](testing-strategy.md) | **テスト戦略**（unittest / integration / e2e） |
 
 関連 Issue: [otolab/my-logs#2027](https://github.com/otolab/my-logs/issues/2027)

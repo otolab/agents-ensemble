@@ -23,6 +23,16 @@ architecture.md §10 と同じ。
 2. conductor Agent が `gh` / CI を読み、判断して dispatch
 3. 明確なケースから広げる（遷移ルールの機械化はしない）
 
+## テスト
+
+[testing-strategy.md](testing-strategy.md) を正本とする。
+
+- **unittest**: ACP ブリッジの核（Fake server、transport）。CI 必須
+- **integration**: 実 `agent acp` との session ライフサイクル。設定時のみ
+- **e2e**: `ensemble` CLI 縦切り。Stage 1 完了ゲートは #6
+
+Stage 1 は #3（ACP ブリッジ）を unittest → integration の順で作りきってから #6（e2e）に進む。
+
 ## 既存資産との分担
 
 | 既存 | 役割 |

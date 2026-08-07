@@ -271,6 +271,8 @@ ensemble issue https://github.com/org/repo/issues/123
 | **3** | permission 仲介、reviewer ループ |
 | **4** | 秘書連携エスカレーション、librarian 条件 dispatch |
 
+各段階のテストレベル（unittest / integration / e2e）と完了ゲートは [testing-strategy.md](testing-strategy.md) を正本とする。Stage 1 は ACP ブリッジを unittest で作りきってから integration → e2e（CLI 縦切り）の順。
+
 遷移の **機械ルール表は導入しない**（[design.md](design.md)）。段階は実装の厚みであり、判断ロジックの固定化ではない。
 
 ---
@@ -295,3 +297,4 @@ ensemble issue https://github.com/org/repo/issues/123
 | [pipeline.md](pipeline.md) | フェーズ参考 |
 | [prompts.md](prompts.md) | 起動プロンプト |
 | [implementation.md](implementation.md) | 実装メモ・段階導入の要約 |
+| [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e の分離 |
