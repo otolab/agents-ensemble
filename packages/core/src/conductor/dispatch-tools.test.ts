@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDispatchTools } from './dispatch-tools.js';
+import * as reviewerDispatchModule from '../dispatch/reviewer-dispatch.js';
 import * as workerDispatchModule from '../dispatch/worker-dispatch.js';
 
 describe('createDispatchTools', () => {
@@ -38,11 +39,49 @@ describe('createDispatchTools', () => {
       issueUrl: 'https://github.com/org/repo/issues/1',
       skillName: 'lazy-implementer',
       repoRoot: '/repo',
+      permissionHandler: undefined,
     });
     expect(result).toMatchObject({
       structuredContent: {
         stopReason: 'end_turn',
         worktree: '/tmp/wt',
+      },
+    });
+
+    vi.restoreAllMocks();
+  });
+
+  it('dispatch_reviewer calls dispatchReviewer', async () => {
+    const dispatchSpy = vi.spyOn(reviewerDispatchModule, 'dispatchReviewer').mockResolvedValue({
+      prUrl: 'https://github.com/org/repo/pull/2',
+      worktreePath: '/tmp/wt',
+      prompt: 'review',
+      promptResult: { stopReason: 'end_turn' },
+    });
+
+    const tools = createDispatchTools({ repoRoot: '/repo' });
+    const result = await tools.dispatch_reviewer!.execute!(
+      {
+        prUrl: 'https://github.com/org/repo/pull/2',
+        skillName: 'review-bugbot',
+        worktreePath: '/tmp/wt',
+      },
+      { toolCallId: '2' },
+    );
+
+    expect(dispatchSpy).toHaveBeenCalledWith({
+      prUrl: 'https://github.com/org/repo/pull/2',
+      skillName: 'review-bugbot',
+      worktreePath: '/tmp/wt',
+      issueUrl: undefined,
+      repoRoot: '/repo',
+      permissionHandler: undefined,
+    });
+    expect(result).toMatchObject({
+      structuredContent: {
+        prUrl: 'https://github.com/org/repo/pull/2',
+        worktree: '/tmp/wt',
+        stopReason: 'end_turn',
       },
     });
 

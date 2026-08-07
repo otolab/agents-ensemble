@@ -92,6 +92,12 @@ export type {
   WorkerDispatchResult,
 } from './dispatch/worker-dispatch.js';
 
+export { dispatchReviewer } from './dispatch/reviewer-dispatch.js';
+export type {
+  ReviewerDispatchOptions,
+  ReviewerDispatchResult,
+} from './dispatch/reviewer-dispatch.js';
+
 export { runGh } from './github/run-gh.js';
 export {
   fetchIssueContext,

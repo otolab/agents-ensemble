@@ -21,7 +21,7 @@ description: >-
 | ツール | 用途 |
 |--------|------|
 | `dispatch_worker` | Issue 向け実装 worker（worktree 作成 + ACP） |
-| `dispatch_reviewer` | PR レビュー（Stage 3、未実装の場合あり） |
+| `dispatch_reviewer` | PR レビュー（既存 worktree、独立 session） |
 
 `dispatch_worker` には `issueUrl`, `skillName`, 任意で `repoRoot` を渡す。
 

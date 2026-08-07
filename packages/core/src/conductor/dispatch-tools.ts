@@ -1,5 +1,6 @@
 import type { SDKCustomTool } from '@cursor/sdk';
 import type { PermissionHandler } from '../acp/types.js';
+import { dispatchReviewer, type ReviewerDispatchResult } from '../dispatch/reviewer-dispatch.js';
 import { dispatchWorker, type WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 
 export interface DispatchToolsOptions {
@@ -7,6 +8,7 @@ export interface DispatchToolsOptions {
   repoRoot: string;
   permissionHandler?: PermissionHandler;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
+  onReviewerDispatched?: (result: ReviewerDispatchResult) => void;
 }
 
 export function createDispatchTools(
@@ -76,25 +78,74 @@ export function createDispatchTools(
 
     dispatch_reviewer: {
       description:
-        'Dispatch a reviewer agent for a PR (Stage 3). Skeleton: returns not implemented.',
+        'Dispatch a reviewer agent for a PR. Uses an existing worker worktree (context 0 review session).',
       inputSchema: {
         type: 'object',
         properties: {
-          prUrl: { type: 'string' },
-          skillName: { type: 'string' },
-          worktreePath: { type: 'string' },
+          prUrl: { type: 'string', description: 'GitHub PR URL' },
+          skillName: {
+            type: 'string',
+            description: 'Review Skill name for the reviewer',
+          },
+          worktreePath: {
+            type: 'string',
+            description: 'Existing worker worktree path',
+          },
+          issueUrl: {
+            type: 'string',
+            description:
+              'GitHub Issue URL to resolve worktree when worktreePath is omitted',
+          },
+          repoRoot: {
+            type: 'string',
+            description:
+              'Local git clone root when resolving worktree from issueUrl',
+          },
         },
-        required: ['prUrl', 'skillName', 'worktreePath'],
+        required: ['prUrl', 'skillName'],
       },
-      async execute() {
+      async execute(args) {
+        const prUrl = String(args.prUrl ?? '');
+        const skillName = String(args.skillName ?? '');
+        const worktreePath = args.worktreePath
+          ? String(args.worktreePath)
+          : undefined;
+        const issueUrl = args.issueUrl ? String(args.issueUrl) : undefined;
+        const repoRoot = args.repoRoot
+          ? String(args.repoRoot)
+          : options.repoRoot;
+
+        const result = await dispatchReviewer({
+          prUrl,
+          skillName,
+          worktreePath,
+          issueUrl,
+          repoRoot,
+          permissionHandler: options.permissionHandler,
+        });
+
+        options.onReviewerDispatched?.(result);
+
         return {
           content: [
             {
               type: 'text',
-              text: 'dispatch_reviewer is not implemented yet (Stage 3).',
+              text: JSON.stringify(
+                {
+                  prUrl: result.prUrl,
+                  worktree: result.worktreePath,
+                  stopReason: result.promptResult.stopReason,
+                },
+                null,
+                2,
+              ),
             },
           ],
-          isError: true,
+          structuredContent: {
+            prUrl: result.prUrl,
+            worktree: result.worktreePath,
+            stopReason: result.promptResult.stopReason,
+          },
         };
       },
     },

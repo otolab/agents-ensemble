@@ -98,6 +98,10 @@ pnpm test:e2e
 # Stage 1: 手動 worker dispatch
 ensemble dispatch worker <issue-url> --skill <name> --repo-root <path>
 
+# Stage 3: 手動 reviewer dispatch
+ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
+# または --issue-url <url> --repo-root <path> で worktree を解決
+
 # Stage 2: conductor オーケストレーション
 ensemble issue <issue-url> --repo-root <path> [--resume <agentId>] [--model <id>]
 ```

@@ -3,6 +3,7 @@
 import { resolve } from 'node:path';
 import { Command } from 'commander';
 import {
+  dispatchReviewer,
   dispatchWorker,
   getConductorAuthStatus,
   loginConductor,
@@ -181,5 +182,58 @@ dispatch
       process.exit(1);
     }
   });
+
+dispatch
+  .command('reviewer')
+  .description('Dispatch a reviewer for a PR (Stage 3 manual flow)')
+  .argument('<pr-url>', 'GitHub PR URL')
+  .requiredOption('--skill <name>', 'Review Skill name for the reviewer')
+  .option('--worktree-path <path>', 'Existing worker worktree path')
+  .option('--issue-url <url>', 'Resolve worktree from Issue when path omitted')
+  .option(
+    '--repo-root <path>',
+    'Local git clone root (required with --issue-url)',
+    process.cwd(),
+  )
+  .action(
+    async (
+      prUrl: string,
+      options: {
+        skill: string;
+        worktreePath?: string;
+        issueUrl?: string;
+        repoRoot: string;
+      },
+    ) => {
+      try {
+        const permissionBroker = new PermissionBroker({
+          onAsk: promptPermissionDecision,
+        });
+        const result = await dispatchReviewer({
+          prUrl,
+          skillName: options.skill,
+          worktreePath: options.worktreePath,
+          issueUrl: options.issueUrl,
+          repoRoot: resolve(options.repoRoot),
+          permissionHandler: permissionBroker.createHandler('manual-reviewer'),
+        });
+
+        console.log(
+          JSON.stringify(
+            {
+              prUrl: result.prUrl,
+              worktree: result.worktreePath,
+              stopReason: result.promptResult.stopReason,
+            },
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
 
 program.parse();
