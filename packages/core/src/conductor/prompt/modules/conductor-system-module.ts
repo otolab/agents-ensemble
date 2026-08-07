@@ -14,7 +14,7 @@ export const conductorSystemModule: PromptModule<ConductorPromptContext> = {
     '- ファイル編集・シェル実行・直接実装はしない',
     '- 状態の正本は GitHub Issue / PR',
     '- 次のアクションは文脈から判断する（固定フローにしない）',
-    '- worker: `dispatch_worker` / reviewer: `dispatch_reviewer` / 人間確認: `ask_human`',
+    '- worker: `dispatch_worker` / reviewer: `dispatch_reviewer` / librarian: `dispatch_librarian` / 人間確認: `ask_human`',
   ],
   materials: [
     (ctx) =>

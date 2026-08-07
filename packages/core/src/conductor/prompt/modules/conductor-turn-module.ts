@@ -46,10 +46,13 @@ export const conductorTurnModule: PromptModule<ConductorPromptContext> = {
     (ctx) => {
       const workers = ctx.workerDispatches ?? [];
       const reviewers = ctx.reviewerDispatches ?? [];
-      if (workers.length === 0 && reviewers.length === 0) return null;
+      const librarians = ctx.librarianDispatches ?? [];
+      if (workers.length === 0 && reviewers.length === 0 && librarians.length === 0) {
+        return null;
+      }
       return [
         '直近の dispatch 結果',
-        ...formatDispatchSummaries(workers, reviewers),
+        ...formatDispatchSummaries(workers, reviewers, librarians),
       ].join('\n');
     },
     (ctx) => {

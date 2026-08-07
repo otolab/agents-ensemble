@@ -7,6 +7,7 @@ export function buildMaxTurnsEscalationRequest(
   const dispatchSummary = [
     `worker dispatches: ${result.workerDispatches.length}`,
     `reviewer dispatches: ${result.reviewerDispatches.length}`,
+    `librarian dispatches: ${result.librarianDispatches.length}`,
     `turns completed: ${result.turnCount}`,
   ].join(', ');
 

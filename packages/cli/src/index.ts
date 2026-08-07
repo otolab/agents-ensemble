@@ -5,6 +5,7 @@ import { basename, resolve } from 'node:path';
 import { Command } from 'commander';
 import {
   dispatchReviewer,
+  dispatchLibrarian,
   dispatchWorker,
   getConductorAuthStatus,
   loginConductor,
@@ -95,9 +96,14 @@ program
               `[reviewer dispatched] ${dispatch.worktreePath} (${dispatch.promptResult.stopReason})`,
             );
           },
+          onLibrarianDispatched: (dispatch) => {
+            console.error(
+              `[librarian dispatched] ${dispatch.cwd} (${dispatch.promptResult.stopReason})`,
+            );
+          },
           onTurnComplete: (turn) => {
             console.error(
-              `[conductor turn ${turn.turn}] status=${turn.status} workerStarts=${turn.workerDispatchStarts} workerDone=${turn.workerDispatches} workerFailed=${turn.workerFailures} reviewer=${turn.reviewerDispatches} escalations=${turn.escalations}`,
+              `[conductor turn ${turn.turn}] status=${turn.status} workerStarts=${turn.workerDispatchStarts} workerDone=${turn.workerDispatches} workerFailed=${turn.workerFailures} reviewer=${turn.reviewerDispatches} librarian=${turn.librarianDispatches} escalations=${turn.escalations}`,
             );
           },
         });
@@ -266,6 +272,50 @@ dispatch
             {
               prUrl: result.prUrl,
               worktree: result.worktreePath,
+              stopReason: result.promptResult.stopReason,
+            },
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
+dispatch
+  .command('librarian')
+  .description('Dispatch a librarian for documentation maintenance (Stage 4 manual flow)')
+  .requiredOption('--skill <name>', 'Librarian Skill name')
+  .option('--repo-root <path>', 'Local git clone root', process.cwd())
+  .option('--issue-url <url>', 'Related GitHub Issue URL')
+  .option('--pr-url <url>', 'Related GitHub PR URL')
+  .action(
+    async (options: {
+      skill: string;
+      repoRoot: string;
+      issueUrl?: string;
+      prUrl?: string;
+    }) => {
+      try {
+        const permissionBroker = new PermissionBroker({
+          onAsk: promptPermissionDecision,
+        });
+        const result = await dispatchLibrarian({
+          skillName: options.skill,
+          repoRoot: resolve(options.repoRoot),
+          issueUrl: options.issueUrl,
+          prUrl: options.prUrl,
+          permissionHandler: permissionBroker.createHandler('manual-librarian'),
+        });
+
+        console.log(
+          JSON.stringify(
+            {
+              skillName: result.skillName,
+              cwd: result.cwd,
               stopReason: result.promptResult.stopReason,
             },
             null,

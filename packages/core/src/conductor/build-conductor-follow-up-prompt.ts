@@ -1,3 +1,4 @@
+import type { LibrarianDispatchResult } from '../dispatch/librarian-dispatch.js';
 import type { ReviewerDispatchResult } from '../dispatch/reviewer-dispatch.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { EscalationRecord } from '../escalation/human-inquiry.js';
@@ -13,6 +14,7 @@ export interface BuildConductorFollowUpPromptOptions {
   workerDispatches: WorkerDispatchResult[];
   workerFailures?: WorkerFailureRecord[];
   reviewerDispatches: ReviewerDispatchResult[];
+  librarianDispatches?: LibrarianDispatchResult[];
   escalations?: EscalationRecord[];
   runningWorkers?: WorkerStartedInfo[];
 }
@@ -28,6 +30,7 @@ export function buildConductorFollowUpPrompt(
     workerDispatches: options.workerDispatches,
     workerFailures: options.workerFailures ?? [],
     reviewerDispatches: options.reviewerDispatches,
+    librarianDispatches: options.librarianDispatches ?? [],
     escalations: options.escalations ?? [],
     runningWorkers: options.runningWorkers,
   });

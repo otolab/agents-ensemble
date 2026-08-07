@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createDispatchTools } from './dispatch-tools.js';
+import * as librarianDispatchModule from '../dispatch/librarian-dispatch.js';
 import * as reviewerDispatchModule from '../dispatch/reviewer-dispatch.js';
 import * as workerDispatchModule from '../dispatch/worker-dispatch.js';
 import { ConductorInbox } from '../runtime/conductor-inbox.js';
@@ -141,6 +142,42 @@ describe('createDispatchTools', () => {
       structuredContent: {
         prUrl: 'https://github.com/org/repo/pull/2',
         worktree: '/tmp/wt',
+        stopReason: 'end_turn',
+      },
+    });
+
+    vi.restoreAllMocks();
+  });
+
+  it('dispatch_librarian calls dispatchLibrarian', async () => {
+    const dispatchSpy = vi.spyOn(librarianDispatchModule, 'dispatchLibrarian').mockResolvedValue({
+      skillName: 'librarian',
+      cwd: '/repo',
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      prompt: 'docs',
+      promptResult: { stopReason: 'end_turn' },
+    });
+
+    const tools = createDispatchTools({ repoRoot: '/repo' });
+    const result = await tools.dispatch_librarian!.execute!(
+      {
+        skillName: 'librarian',
+        issueUrl: 'https://github.com/org/repo/issues/1',
+      },
+      { toolCallId: '3' },
+    );
+
+    expect(dispatchSpy).toHaveBeenCalledWith({
+      skillName: 'librarian',
+      repoRoot: '/repo',
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      prUrl: undefined,
+      permissionHandler: undefined,
+    });
+    expect(result).toMatchObject({
+      structuredContent: {
+        skillName: 'librarian',
+        cwd: '/repo',
         stopReason: 'end_turn',
       },
     });

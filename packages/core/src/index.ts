@@ -80,10 +80,11 @@ export {
 } from './worktree/worktree.js';
 export type { WorktreeRef } from './worktree/worktree.js';
 
-export { buildWorkerPrompt, buildReviewerPrompt } from './prompt/build-prompt.js';
+export { buildWorkerPrompt, buildReviewerPrompt, buildLibrarianPrompt } from './prompt/build-prompt.js';
 export type {
   WorkerPromptOptions,
   ReviewerPromptOptions,
+  LibrarianPromptOptions,
 } from './prompt/build-prompt.js';
 
 export { dispatchWorker } from './dispatch/worker-dispatch.js';
@@ -97,6 +98,12 @@ export type {
   ReviewerDispatchOptions,
   ReviewerDispatchResult,
 } from './dispatch/reviewer-dispatch.js';
+
+export { dispatchLibrarian } from './dispatch/librarian-dispatch.js';
+export type {
+  LibrarianDispatchOptions,
+  LibrarianDispatchResult,
+} from './dispatch/librarian-dispatch.js';
 
 export { runGh } from './github/run-gh.js';
 export {

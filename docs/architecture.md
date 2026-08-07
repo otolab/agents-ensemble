@@ -171,7 +171,20 @@ worker / reviewer は **agents-ensemble の `.cursor/` を読まない**。Skill
 
 ---
 
-## 5. 承認フロー
+## 5. 承認フローと非同期 dispatch
+
+### 双方向フロー（worker 非同期化後）
+
+```
+conductor ──dispatch_worker──► WorkerRuntime.start()（即 return）
+worker    ──permission───────► ConductorInbox ──► InboxProcessor ──► PermissionBroker
+worker    ──completed/failed► ConductorInbox ──► issue-session 状態更新
+conductor ◄──prompt 反映──── 次ターン send（runningWorkers / 結果 / 失敗）
+```
+
+reviewer / librarian は現状同期 dispatch（worker と同様の Runtime 化は後続）。
+
+### permission（同期 RPC のまま仲介）
 
 ```
 worker (ACP)                    conductor (SDK)              ユーザー

@@ -1,5 +1,6 @@
 import { compile, merge } from '@modular-prompt/core';
 import { bootstrapModule } from './modules/bootstrap.js';
+import { librarianPromptModule } from './modules/librarian-module.js';
 import { reviewerPromptModule } from './modules/reviewer-module.js';
 import { workerPromptModule } from './modules/worker-module.js';
 import { renderCompiledPrompt } from './render-compiled-prompt.js';
@@ -24,6 +25,19 @@ export interface ReviewerPromptOptions {
 
 export function buildReviewerPrompt(options: ReviewerPromptOptions): string {
   const module = merge(bootstrapModule, reviewerPromptModule);
+  const compiled = compile(module, options);
+  return renderCompiledPrompt(compiled);
+}
+
+export interface LibrarianPromptOptions {
+  skillName: string;
+  repoRoot: string;
+  issueUrl?: string;
+  prUrl?: string;
+}
+
+export function buildLibrarianPrompt(options: LibrarianPromptOptions): string {
+  const module = merge(bootstrapModule, librarianPromptModule);
   const compiled = compile(module, options);
   return renderCompiledPrompt(compiled);
 }

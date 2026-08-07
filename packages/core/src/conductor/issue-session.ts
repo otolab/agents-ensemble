@@ -1,4 +1,5 @@
 import type { ReviewerDispatchResult } from '../dispatch/reviewer-dispatch.js';
+import type { LibrarianDispatchResult } from '../dispatch/librarian-dispatch.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import { createAskHumanTool } from '../escalation/ask-human-tool.js';
 import { buildHumanGuidancePrompt } from '../escalation/build-human-guidance-prompt.js';
@@ -51,6 +52,7 @@ export interface RunIssueSessionOptions {
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
   onWorkerFailed?: (failure: WorkerFailureRecord) => void;
   onReviewerDispatched?: (result: ReviewerDispatchResult) => void;
+  onLibrarianDispatched?: (result: LibrarianDispatchResult) => void;
   onTurnComplete?: (turn: IssueSessionTurn) => void;
   onEscalated?: (record: EscalationRecord) => void;
 }
@@ -68,6 +70,7 @@ export interface IssueSessionTurn {
   /** worker 失敗数（このターン内）。 */
   workerFailures: number;
   reviewerDispatches: number;
+  librarianDispatches: number;
   escalations: number;
 }
 
@@ -84,6 +87,7 @@ export interface IssueSessionResult {
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   reviewerDispatches: ReviewerDispatchResult[];
+  librarianDispatches: LibrarianDispatchResult[];
   escalations: EscalationRecord[];
 }
 
@@ -95,6 +99,7 @@ export async function runIssueSession(
   const workerDispatches: WorkerDispatchResult[] = [];
   const workerFailures: WorkerFailureRecord[] = [];
   const reviewerDispatches: ReviewerDispatchResult[] = [];
+  const librarianDispatches: LibrarianDispatchResult[] = [];
   const escalations: EscalationRecord[] = [];
   const turns: IssueSessionTurn[] = [];
 
@@ -138,6 +143,10 @@ export async function runIssueSession(
       reviewerDispatches.push(result);
       options.onReviewerDispatched?.(result);
     },
+    onLibrarianDispatched: (result) => {
+      librarianDispatches.push(result);
+      options.onLibrarianDispatched?.(result);
+    },
   });
 
   const escalationTools = createAskHumanTool({
@@ -180,6 +189,7 @@ export async function runIssueSession(
         workerDispatches,
         workerFailures,
         reviewerDispatches,
+        librarianDispatches,
         escalations,
         turns,
         turnMetrics,
@@ -194,7 +204,8 @@ export async function runIssueSession(
           sessionTurn.workerDispatchStarts +
           sessionTurn.workerDispatches +
           sessionTurn.workerFailures +
-          sessionTurn.reviewerDispatches,
+          sessionTurn.reviewerDispatches +
+          sessionTurn.librarianDispatches,
         runningWorkers: workerRuntime.runningCount,
       };
 
@@ -224,6 +235,7 @@ export async function runIssueSession(
           workerDispatches,
           workerFailures,
           reviewerDispatches,
+          librarianDispatches,
           escalations,
           turns,
           options,
@@ -249,6 +261,7 @@ export async function runIssueSession(
         workerDispatches,
         workerFailures,
         reviewerDispatches,
+        librarianDispatches,
         escalations,
       };
     }
@@ -268,6 +281,7 @@ async function runConductorTurn(input: {
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   reviewerDispatches: ReviewerDispatchResult[];
+  librarianDispatches: LibrarianDispatchResult[];
   escalations: EscalationRecord[];
   turns: IssueSessionTurn[];
   turnMetrics: { workerDispatchStarts: number };
@@ -275,6 +289,7 @@ async function runConductorTurn(input: {
   const workersBefore = input.workerDispatches.length;
   const failuresBefore = input.workerFailures.length;
   const reviewersBefore = input.reviewerDispatches.length;
+  const librariansBefore = input.librarianDispatches.length;
   const escalationsBefore = input.escalations.length;
   const workerDispatchStartsBefore = input.turnMetrics.workerDispatchStarts;
 
@@ -287,6 +302,7 @@ async function runConductorTurn(input: {
     workerDispatches: input.workerDispatches,
     workerFailures: input.workerFailures,
     reviewerDispatches: input.reviewerDispatches,
+    librarianDispatches: input.librarianDispatches,
     escalations: input.escalations,
     runningWorkers: input.workerRuntime.listRunning(),
   });
@@ -304,6 +320,7 @@ async function runConductorTurn(input: {
     workerDispatches: input.workerDispatches.length - workersBefore,
     workerFailures: input.workerFailures.length - failuresBefore,
     reviewerDispatches: input.reviewerDispatches.length - reviewersBefore,
+    librarianDispatches: input.librarianDispatches.length - librariansBefore,
     escalations: input.escalations.length - escalationsBefore,
   };
   input.turns.push(sessionTurn);
@@ -320,6 +337,7 @@ async function runBonusTurn(input: {
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   reviewerDispatches: ReviewerDispatchResult[];
+  librarianDispatches: LibrarianDispatchResult[];
   escalations: EscalationRecord[];
   turns: IssueSessionTurn[];
   options: RunIssueSessionOptions;
@@ -328,6 +346,7 @@ async function runBonusTurn(input: {
   const workersBefore = input.workerDispatches.length;
   const failuresBefore = input.workerFailures.length;
   const reviewersBefore = input.reviewerDispatches.length;
+  const librariansBefore = input.librarianDispatches.length;
   const escalationsBefore = input.escalations.length;
   const workerDispatchStartsBefore = input.turnMetrics.workerDispatchStarts;
 
@@ -344,6 +363,7 @@ async function runBonusTurn(input: {
     workerDispatches: input.workerDispatches.length - workersBefore,
     workerFailures: input.workerFailures.length - failuresBefore,
     reviewerDispatches: input.reviewerDispatches.length - reviewersBefore,
+    librarianDispatches: input.librarianDispatches.length - librariansBefore,
     escalations: input.escalations.length - escalationsBefore,
   };
   input.turns.push(sessionTurn);
@@ -370,6 +390,7 @@ function buildPromptForTurn(input: {
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   reviewerDispatches: ReviewerDispatchResult[];
+  librarianDispatches: LibrarianDispatchResult[];
   escalations: EscalationRecord[];
   runningWorkers: ReturnType<WorkerRuntime['listRunning']>;
 }): string {
@@ -380,6 +401,7 @@ function buildPromptForTurn(input: {
     workerDispatches,
     workerFailures,
     reviewerDispatches,
+    librarianDispatches,
     escalations,
     runningWorkers,
   } = input;
@@ -407,6 +429,7 @@ function buildPromptForTurn(input: {
     workerDispatches,
     workerFailures,
     reviewerDispatches,
+    librarianDispatches,
     escalations,
     runningWorkers,
   });

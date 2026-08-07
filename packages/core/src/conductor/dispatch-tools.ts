@@ -1,5 +1,6 @@
 import type { SDKCustomTool, SDKCustomToolResult } from '@cursor/sdk';
 import type { PermissionHandler } from '../acp/types.js';
+import { dispatchLibrarian, type LibrarianDispatchResult } from '../dispatch/librarian-dispatch.js';
 import { dispatchReviewer, type ReviewerDispatchResult } from '../dispatch/reviewer-dispatch.js';
 import { dispatchWorker, type WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { WorkerRuntime } from '../runtime/worker-runtime.js';
@@ -13,6 +14,7 @@ export interface DispatchToolsOptions {
   onWorkerStarted?: (info: WorkerStartedInfo) => void;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
   onReviewerDispatched?: (result: ReviewerDispatchResult) => void;
+  onLibrarianDispatched?: (result: LibrarianDispatchResult) => void;
 }
 
 export function createDispatchTools(
@@ -182,6 +184,73 @@ export function createDispatchTools(
           structuredContent: {
             prUrl: result.prUrl,
             worktree: result.worktreePath,
+            stopReason: result.promptResult.stopReason,
+          },
+        };
+      },
+    },
+
+    dispatch_librarian: {
+      description:
+        'Dispatch a librarian agent for documentation maintenance (e.g. auto-docs). Runs in the target repo clone with an independent ACP session.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          skillName: {
+            type: 'string',
+            description: 'Librarian Skill name',
+          },
+          repoRoot: {
+            type: 'string',
+            description: 'Local path to the target git clone',
+          },
+          issueUrl: {
+            type: 'string',
+            description: 'Related GitHub Issue URL (optional context)',
+          },
+          prUrl: {
+            type: 'string',
+            description: 'Related GitHub PR URL (optional context)',
+          },
+        },
+        required: ['skillName'],
+      },
+      async execute(args) {
+        const skillName = String(args.skillName ?? '');
+        const repoRoot = String(args.repoRoot ?? options.repoRoot);
+        const issueUrl = args.issueUrl ? String(args.issueUrl) : undefined;
+        const prUrl = args.prUrl ? String(args.prUrl) : undefined;
+
+        const result = await dispatchLibrarian({
+          skillName,
+          repoRoot,
+          issueUrl,
+          prUrl,
+          permissionHandler: options.permissionHandler,
+        });
+
+        options.onLibrarianDispatched?.(result);
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  skillName: result.skillName,
+                  cwd: result.cwd,
+                  issueUrl: result.issueUrl,
+                  prUrl: result.prUrl,
+                  stopReason: result.promptResult.stopReason,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+          structuredContent: {
+            skillName: result.skillName,
+            cwd: result.cwd,
             stopReason: result.promptResult.stopReason,
           },
         };

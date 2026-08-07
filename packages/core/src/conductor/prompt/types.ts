@@ -1,4 +1,5 @@
 import type { MaterialElement } from '@modular-prompt/core';
+import type { LibrarianDispatchResult } from '../../dispatch/librarian-dispatch.js';
 import type { ReviewerDispatchResult } from '../../dispatch/reviewer-dispatch.js';
 import type { WorkerDispatchResult } from '../../dispatch/worker-dispatch.js';
 import type { EscalationRecord } from '../../escalation/human-inquiry.js';
@@ -21,6 +22,7 @@ export interface ConductorPromptContext {
   maxTurns?: number;
   workerDispatches?: WorkerDispatchResult[];
   reviewerDispatches?: ReviewerDispatchResult[];
+  librarianDispatches?: LibrarianDispatchResult[];
   workerFailures?: WorkerFailureRecord[];
   runningWorkers?: WorkerStartedInfo[];
   escalations?: EscalationRecord[];
