@@ -30,6 +30,7 @@
     "vitest": "3.2.4"
   },
   "dependencies": {
-    "@cursor/sdk": "1.0.27"
+    "@cursor/sdk": "1.0.27",
+    "@modular-prompt/core": "0.3.0"
   }
 }
