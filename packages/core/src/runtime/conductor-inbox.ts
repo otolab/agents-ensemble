@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import { parsePermissionRequest } from '../permission/permission-request.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
-import type { InboxListener, InboxMessage } from './types.js';
+import type { InboxListener, InboxMessage, WorkerStartedInfo } from './types.js';
 
 interface PermissionWaiter {
   resolve: (decision: PermissionDecision) => void;
@@ -59,15 +59,19 @@ export class ConductorInbox {
     this.enqueueNotify({ type: 'worker.completed', workerId, result });
   }
 
-  publishWorkerFailed(workerId: string, error: unknown): void {
+  publishWorkerFailed(started: WorkerStartedInfo, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
-    this.enqueueNotify({ type: 'worker.failed', workerId, error: message });
+    this.enqueueNotify({
+      type: 'worker.failed',
+      workerId: started.workerId,
+      error: message,
+      issueUrl: started.issueUrl,
+      skillName: started.skillName,
+    });
   }
 
   private enqueueNotify(message: InboxMessage): void {
-    this.notifyChain = this.notifyChain
-      .then(() => this.notify(message))
-      .catch(() => undefined);
+    this.notifyChain = this.notifyChain.then(() => this.notify(message));
   }
 
   private async notify(message: InboxMessage): Promise<void> {

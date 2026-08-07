@@ -3,6 +3,7 @@ import { formatIssueContextForPrompt } from '../../../github/issue-context.js';
 import {
   formatDispatchSummaries,
   formatEscalationSummaries,
+  formatWorkerFailureSummaries,
 } from '../format-session-summaries.js';
 import type { ConductorPromptContext } from '../types.js';
 
@@ -49,6 +50,14 @@ export const conductorTurnModule: PromptModule<ConductorPromptContext> = {
       return [
         '直近の dispatch 結果',
         ...formatDispatchSummaries(workers, reviewers),
+      ].join('\n');
+    },
+    (ctx) => {
+      const failures = ctx.workerFailures ?? [];
+      if (failures.length === 0) return null;
+      return [
+        'worker 失敗',
+        ...formatWorkerFailureSummaries(failures),
       ].join('\n');
     },
     (ctx) => {

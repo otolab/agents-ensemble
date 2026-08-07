@@ -85,6 +85,11 @@ program
               `[worker dispatched] ${dispatch.worktree.path} (${dispatch.promptResult.stopReason})`,
             );
           },
+          onWorkerFailed: (failure) => {
+            console.error(
+              `[worker failed] ${failure.workerId} ${failure.issueUrl} (${failure.skillName}): ${failure.error}`,
+            );
+          },
           onReviewerDispatched: (dispatch) => {
             console.error(
               `[reviewer dispatched] ${dispatch.worktreePath} (${dispatch.promptResult.stopReason})`,
@@ -92,7 +97,7 @@ program
           },
           onTurnComplete: (turn) => {
             console.error(
-              `[conductor turn ${turn.turn}] status=${turn.status} workerStarts=${turn.workerDispatchStarts} workerDone=${turn.workerDispatches} reviewer=${turn.reviewerDispatches} escalations=${turn.escalations}`,
+              `[conductor turn ${turn.turn}] status=${turn.status} workerStarts=${turn.workerDispatchStarts} workerDone=${turn.workerDispatches} workerFailed=${turn.workerFailures} reviewer=${turn.reviewerDispatches} escalations=${turn.escalations}`,
             );
           },
         });

@@ -49,13 +49,25 @@ describe('shouldStopIssueLoop', () => {
     ).toBe(true);
   });
 
-  it('continues while workers are still running', () => {
+  it('continues while workers are still running before max turns', () => {
     expect(
       shouldStopIssueLoop({
         turn: 2,
         maxTurns: 5,
         lastStatus: 'finished',
         dispatchesThisTurn: 0,
+        runningWorkers: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('continues at max turns while workers are still running', () => {
+    expect(
+      shouldStopIssueLoop({
+        turn: 5,
+        maxTurns: 5,
+        lastStatus: 'finished',
+        dispatchesThisTurn: 1,
         runningWorkers: 1,
       }),
     ).toBe(false);

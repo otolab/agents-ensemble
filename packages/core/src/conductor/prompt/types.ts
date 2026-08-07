@@ -3,14 +3,13 @@ import type { ReviewerDispatchResult } from '../../dispatch/reviewer-dispatch.js
 import type { WorkerDispatchResult } from '../../dispatch/worker-dispatch.js';
 import type { EscalationRecord } from '../../escalation/human-inquiry.js';
 import type { IssueContext } from '../../github/issue-context.js';
+import type { WorkerFailureRecord, WorkerStartedInfo } from '../../runtime/types.js';
 
 export interface ConductorMaterial {
   id: string;
   title: string;
   content: string;
 }
-
-import type { WorkerStartedInfo } from '../../runtime/types.js';
 
 export interface ConductorPromptContext {
   repoRoot: string;
@@ -22,6 +21,7 @@ export interface ConductorPromptContext {
   maxTurns?: number;
   workerDispatches?: WorkerDispatchResult[];
   reviewerDispatches?: ReviewerDispatchResult[];
+  workerFailures?: WorkerFailureRecord[];
   runningWorkers?: WorkerStartedInfo[];
   escalations?: EscalationRecord[];
   humanGuidance?: string;

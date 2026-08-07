@@ -1,6 +1,7 @@
 import type { PermissionDecision } from '../acp/types.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
+import type { WorkerFailureRecord } from './types.js';
 import { ConductorInbox } from './conductor-inbox.js';
 
 export interface InboxProcessorOptions {
@@ -9,7 +10,7 @@ export interface InboxProcessorOptions {
     workerId: string,
   ) => PermissionDecision | Promise<PermissionDecision>;
   onWorkerCompleted?: (result: WorkerDispatchResult) => void;
-  onWorkerFailed?: (workerId: string, error: string) => void;
+  onWorkerFailed?: (failure: WorkerFailureRecord) => void;
 }
 
 export interface InboxProcessorHandle {
@@ -40,7 +41,12 @@ export function startInboxProcessor(
     }
 
     if (message.type === 'worker.failed') {
-      options.onWorkerFailed?.(message.workerId, message.error);
+      options.onWorkerFailed?.({
+        workerId: message.workerId,
+        error: message.error,
+        issueUrl: message.issueUrl,
+        skillName: message.skillName,
+      });
     }
   });
 

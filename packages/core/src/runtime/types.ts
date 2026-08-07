@@ -11,6 +11,13 @@ export interface WorkerStartedInfo extends WorkerStartParams {
   workerId: string;
 }
 
+export interface WorkerFailureRecord {
+  workerId: string;
+  error: string;
+  issueUrl: string;
+  skillName: string;
+}
+
 export type InboxMessage =
   | {
       type: 'permission.request';
@@ -27,6 +34,8 @@ export type InboxMessage =
       type: 'worker.failed';
       workerId: string;
       error: string;
+      issueUrl: string;
+      skillName: string;
     };
 
 export type InboxListener = (message: InboxMessage) => void | Promise<void>;

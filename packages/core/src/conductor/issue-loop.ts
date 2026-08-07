@@ -11,8 +11,8 @@ export interface IssueLoopStopInput {
 /** Issue session の conductor ループを終了すべきか判定する。 */
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
   if (input.lastStatus === 'error') return true;
-  if (input.turn >= input.maxTurns) return true;
   if ((input.runningWorkers ?? 0) > 0) return false;
+  if (input.turn >= input.maxTurns) return true;
   if (input.dispatchesThisTurn === 0 && input.lastStatus === 'finished') {
     return true;
   }

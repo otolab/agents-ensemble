@@ -18,6 +18,7 @@ import type { PermissionPolicyRules } from '../permission/permission-policy.js';
 import { ConductorInbox } from '../runtime/conductor-inbox.js';
 import { startInboxProcessor } from '../runtime/inbox-processor.js';
 import { WorkerRuntime } from '../runtime/worker-runtime.js';
+import type { WorkerFailureRecord } from '../runtime/types.js';
 import { buildConductorFollowUpPrompt } from './build-conductor-follow-up-prompt.js';
 import { buildConductorPrompt } from './build-conductor-prompt.js';
 import type { ConductorMaterial } from './prompt/types.js';
@@ -48,6 +49,7 @@ export interface RunIssueSessionOptions {
   /** max turns 到達時に人間へ問い合わせ、回答があればボーナスターンを実行する。 */
   escalateOnMaxTurns?: boolean;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
+  onWorkerFailed?: (failure: WorkerFailureRecord) => void;
   onReviewerDispatched?: (result: ReviewerDispatchResult) => void;
   onTurnComplete?: (turn: IssueSessionTurn) => void;
   onEscalated?: (record: EscalationRecord) => void;
@@ -63,6 +65,8 @@ export interface IssueSessionTurn {
   workerDispatchStarts: number;
   /** worker 完了数（このターン内）。 */
   workerDispatches: number;
+  /** worker 失敗数（このターン内）。 */
+  workerFailures: number;
   reviewerDispatches: number;
   escalations: number;
 }
@@ -78,6 +82,7 @@ export interface IssueSessionResult {
   lastResult?: string;
   lastError?: { message: string; code?: string };
   workerDispatches: WorkerDispatchResult[];
+  workerFailures: WorkerFailureRecord[];
   reviewerDispatches: ReviewerDispatchResult[];
   escalations: EscalationRecord[];
 }
@@ -88,6 +93,7 @@ export async function runIssueSession(
   const maxTurns = options.maxTurns ?? DEFAULT_MAX_ISSUE_TURNS;
   const escalateOnMaxTurns = options.escalateOnMaxTurns ?? true;
   const workerDispatches: WorkerDispatchResult[] = [];
+  const workerFailures: WorkerFailureRecord[] = [];
   const reviewerDispatches: ReviewerDispatchResult[] = [];
   const escalations: EscalationRecord[] = [];
   const turns: IssueSessionTurn[] = [];
@@ -111,6 +117,10 @@ export async function runIssueSession(
     onWorkerCompleted: (result) => {
       workerDispatches.push(result);
       options.onWorkerDispatched?.(result);
+    },
+    onWorkerFailed: (failure) => {
+      workerFailures.push(failure);
+      options.onWorkerFailed?.(failure);
     },
   });
   const workerRuntime = new WorkerRuntime({ inbox });
@@ -156,7 +166,9 @@ export async function runIssueSession(
   let stopReason: IssueLoopStopReason = 'completed';
 
   try {
-    for (let turn = 1; turn <= maxTurns; turn++) {
+    let turn = 0;
+    while (true) {
+      turn++;
       turnMetrics.workerDispatchStarts = 0;
 
       lastSendResult = await runConductorTurn({
@@ -166,6 +178,7 @@ export async function runIssueSession(
         conductor,
         workerRuntime,
         workerDispatches,
+        workerFailures,
         reviewerDispatches,
         escalations,
         turns,
@@ -180,6 +193,7 @@ export async function runIssueSession(
         dispatchesThisTurn:
           sessionTurn.workerDispatchStarts +
           sessionTurn.workerDispatches +
+          sessionTurn.workerFailures +
           sessionTurn.reviewerDispatches,
         runningWorkers: workerRuntime.runningCount,
       };
@@ -208,6 +222,7 @@ export async function runIssueSession(
           }),
           turn: turns.length + 1,
           workerDispatches,
+          workerFailures,
           reviewerDispatches,
           escalations,
           turns,
@@ -232,6 +247,7 @@ export async function runIssueSession(
         lastResult: lastSendResult.result,
         lastError: lastSendResult.error,
         workerDispatches,
+        workerFailures,
         reviewerDispatches,
         escalations,
       };
@@ -250,12 +266,14 @@ async function runConductorTurn(input: {
   conductor: ConductorAgent;
   workerRuntime: WorkerRuntime;
   workerDispatches: WorkerDispatchResult[];
+  workerFailures: WorkerFailureRecord[];
   reviewerDispatches: ReviewerDispatchResult[];
   escalations: EscalationRecord[];
   turns: IssueSessionTurn[];
   turnMetrics: { workerDispatchStarts: number };
 }): Promise<ConductorSendResult> {
   const workersBefore = input.workerDispatches.length;
+  const failuresBefore = input.workerFailures.length;
   const reviewersBefore = input.reviewerDispatches.length;
   const escalationsBefore = input.escalations.length;
   const workerDispatchStartsBefore = input.turnMetrics.workerDispatchStarts;
@@ -267,6 +285,7 @@ async function runConductorTurn(input: {
     issueContext,
     options: input.options,
     workerDispatches: input.workerDispatches,
+    workerFailures: input.workerFailures,
     reviewerDispatches: input.reviewerDispatches,
     escalations: input.escalations,
     runningWorkers: input.workerRuntime.listRunning(),
@@ -283,6 +302,7 @@ async function runConductorTurn(input: {
     workerDispatchStarts:
       input.turnMetrics.workerDispatchStarts - workerDispatchStartsBefore,
     workerDispatches: input.workerDispatches.length - workersBefore,
+    workerFailures: input.workerFailures.length - failuresBefore,
     reviewerDispatches: input.reviewerDispatches.length - reviewersBefore,
     escalations: input.escalations.length - escalationsBefore,
   };
@@ -298,6 +318,7 @@ async function runBonusTurn(input: {
   prompt: string;
   turn: number;
   workerDispatches: WorkerDispatchResult[];
+  workerFailures: WorkerFailureRecord[];
   reviewerDispatches: ReviewerDispatchResult[];
   escalations: EscalationRecord[];
   turns: IssueSessionTurn[];
@@ -305,6 +326,7 @@ async function runBonusTurn(input: {
   turnMetrics: { workerDispatchStarts: number };
 }): Promise<ConductorSendResult> {
   const workersBefore = input.workerDispatches.length;
+  const failuresBefore = input.workerFailures.length;
   const reviewersBefore = input.reviewerDispatches.length;
   const escalationsBefore = input.escalations.length;
   const workerDispatchStartsBefore = input.turnMetrics.workerDispatchStarts;
@@ -320,6 +342,7 @@ async function runBonusTurn(input: {
     workerDispatchStarts:
       input.turnMetrics.workerDispatchStarts - workerDispatchStartsBefore,
     workerDispatches: input.workerDispatches.length - workersBefore,
+    workerFailures: input.workerFailures.length - failuresBefore,
     reviewerDispatches: input.reviewerDispatches.length - reviewersBefore,
     escalations: input.escalations.length - escalationsBefore,
   };
@@ -345,6 +368,7 @@ function buildPromptForTurn(input: {
   issueContext: Awaited<ReturnType<typeof fetchIssueContext>>;
   options: RunIssueSessionOptions;
   workerDispatches: WorkerDispatchResult[];
+  workerFailures: WorkerFailureRecord[];
   reviewerDispatches: ReviewerDispatchResult[];
   escalations: EscalationRecord[];
   runningWorkers: ReturnType<WorkerRuntime['listRunning']>;
@@ -354,6 +378,7 @@ function buildPromptForTurn(input: {
     options,
     issueContext,
     workerDispatches,
+    workerFailures,
     reviewerDispatches,
     escalations,
     runningWorkers,
@@ -380,6 +405,7 @@ function buildPromptForTurn(input: {
     turn,
     maxTurns: input.maxTurns,
     workerDispatches,
+    workerFailures,
     reviewerDispatches,
     escalations,
     runningWorkers,

@@ -218,4 +218,5 @@ export type {
   InboxMessage,
   WorkerStartParams,
   WorkerStartedInfo,
+  WorkerFailureRecord,
 } from './runtime/types.js';

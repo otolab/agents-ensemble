@@ -61,4 +61,34 @@ describe('startInboxProcessor', () => {
     await processor.stop();
     expect(onWorkerCompleted).toHaveBeenCalledOnce();
   });
+
+  it('notifies on worker failure', async () => {
+    const inbox = new ConductorInbox();
+    const onWorkerFailed = vi.fn();
+
+    const processor = startInboxProcessor(inbox, {
+      decidePermission: async () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+      onWorkerFailed,
+    });
+
+    inbox.publishWorkerFailed(
+      {
+        workerId: 'worker-1',
+        issueUrl: 'https://github.com/org/repo/issues/1',
+        skillName: 'lazy-implementer',
+        repoRoot: '/repo',
+      },
+      new Error('dispatch failed'),
+    );
+
+    await processor.stop();
+    expect(onWorkerFailed).toHaveBeenCalledWith({
+      workerId: 'worker-1',
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      skillName: 'lazy-implementer',
+      error: 'dispatch failed',
+    });
+  });
 });

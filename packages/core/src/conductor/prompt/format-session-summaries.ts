@@ -1,6 +1,7 @@
 import type { ReviewerDispatchResult } from '../../dispatch/reviewer-dispatch.js';
 import type { WorkerDispatchResult } from '../../dispatch/worker-dispatch.js';
 import type { EscalationRecord } from '../../escalation/human-inquiry.js';
+import type { WorkerFailureRecord } from '../../runtime/types.js';
 
 export function formatDispatchSummaries(
   workers: WorkerDispatchResult[],
@@ -25,6 +26,19 @@ export function formatDispatchSummaries(
   }
 
   return lines;
+}
+
+export function formatWorkerFailureSummaries(
+  failures: WorkerFailureRecord[],
+): string[] {
+  if (failures.length === 0) {
+    return ['(なし)'];
+  }
+
+  return failures.map(
+    (failure) =>
+      `- worker failed: id=${failure.workerId} issue=${failure.issueUrl} skill=${failure.skillName} error=${failure.error}`,
+  );
 }
 
 export function formatEscalationSummaries(escalations: EscalationRecord[]): string[] {

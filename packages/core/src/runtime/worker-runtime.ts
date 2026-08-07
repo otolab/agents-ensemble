@@ -60,7 +60,7 @@ export class WorkerRuntime {
       });
       this.options.inbox.publishWorkerCompleted(started.workerId, result);
     } catch (error) {
-      this.options.inbox.publishWorkerFailed(started.workerId, error);
+      this.options.inbox.publishWorkerFailed(started, error);
     } finally {
       this.running.delete(started.workerId);
       if (this.running.size === 0) {
