@@ -38,11 +38,10 @@ export class JsonRpcPeer {
     }
 
     const id = this.nextId++;
-    const message = { jsonrpc: '2.0' as const, id, method, params };
-    this.options.writable.write(serializeMessage(message));
-
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
+      const message = { jsonrpc: '2.0' as const, id, method, params };
+      this.options.writable.write(serializeMessage(message));
     });
   }
 
