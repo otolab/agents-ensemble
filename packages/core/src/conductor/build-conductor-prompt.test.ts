@@ -28,4 +28,21 @@ describe('buildConductorPrompt', () => {
     expect(prompt).toContain('Do the thing');
     expect(prompt).toContain('/tmp/repo');
   });
+
+  it('renders materials in Prepared Materials section', () => {
+    const prompt = buildConductorPrompt({
+      issueContext: sampleContext,
+      repoRoot: '/tmp/repo',
+      materials: [
+        {
+          id: 'profile',
+          title: 'Workflow Profile',
+          content: 'worker → reviewer → close',
+        },
+      ],
+    });
+
+    expect(prompt).toContain('Workflow Profile');
+    expect(prompt).toContain('worker → reviewer → close');
+  });
 });

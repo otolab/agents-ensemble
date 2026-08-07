@@ -40,6 +40,13 @@ export class PermissionBroker {
       this.enqueue(() => this.handle(params, label));
   }
 
+  decide(
+    params: unknown,
+    sessionLabel?: string,
+  ): Promise<PermissionDecision> {
+    return this.enqueue(() => this.handle(params, sessionLabel));
+  }
+
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
     const run = this.chain.then(task, task);
     this.chain = run.then(

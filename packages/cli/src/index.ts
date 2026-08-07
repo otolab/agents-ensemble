@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { basename, resolve } from 'node:path';
 import { Command } from 'commander';
 import {
   dispatchReviewer,
@@ -9,6 +10,7 @@ import {
   loginConductor,
   PermissionBroker,
   runIssueSession,
+  type ConductorMaterial,
 } from '@agents-ensemble/core';
 import { promptHumanInquiry } from './prompt-human-inquiry.js';
 import { promptPermissionDecision } from './prompt-permission.js';
@@ -36,6 +38,12 @@ program
   )
   .option('--resume <agentId>', 'Resume a previous conductor agent')
   .option('--briefing <text>', 'Optional briefing document for the conductor')
+  .option(
+    '--material <path>',
+    'Reference document passed as material (repeatable)',
+    collectValues,
+    [],
+  )
   .option('--model <id>', 'Conductor model id (default: composer-2.5)')
   .option(
     '--max-turns <n>',
@@ -51,17 +59,20 @@ program
         conductorCwd: string;
         resume?: string;
         briefing?: string;
+        material: string[];
         model?: string;
         maxTurns: number;
       },
     ) => {
       try {
+        const materials = await loadMaterialFiles(options.material);
         const result = await runIssueSession({
           issueUrl,
           repoRoot: resolve(options.repoRoot),
           conductorCwd: resolve(options.conductorCwd),
           resumeAgentId: options.resume,
           briefing: options.briefing,
+          materials,
           modelId: options.model,
           maxTurns: options.maxTurns,
           onHumanInquiry: promptHumanInquiry,
@@ -81,7 +92,7 @@ program
           },
           onTurnComplete: (turn) => {
             console.error(
-              `[conductor turn ${turn.turn}] status=${turn.status} worker=${turn.workerDispatches} reviewer=${turn.reviewerDispatches} escalations=${turn.escalations}`,
+              `[conductor turn ${turn.turn}] status=${turn.status} workerStarts=${turn.workerDispatchStarts} workerDone=${turn.workerDispatches} reviewer=${turn.reviewerDispatches} escalations=${turn.escalations}`,
             );
           },
         });
@@ -264,3 +275,22 @@ dispatch
   );
 
 program.parse();
+
+function collectValues(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+async function loadMaterialFiles(paths: string[]): Promise<ConductorMaterial[]> {
+  return Promise.all(
+    paths.map(async (filePath) => {
+      const absolutePath = resolve(filePath);
+      const content = await readFile(absolutePath, 'utf8');
+      const fileName = basename(absolutePath);
+      return {
+        id: fileName,
+        title: fileName,
+        content,
+      };
+    }),
+  );
+}

@@ -53,7 +53,7 @@ describe('buildConductorFollowUpPrompt', () => {
     });
 
     expect(prompt).toContain('Add feature');
-    expect(prompt).toContain('dispatch_reviewer');
+    expect(prompt).not.toContain('agents-ensemble の conductor');
     expect(prompt).toContain('https://github.com/org/repo/pull/2');
     expect(prompt).toContain('ターン: 2 / 5');
   });

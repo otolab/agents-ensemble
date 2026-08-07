@@ -35,6 +35,12 @@ function renderElement(element: Element): string {
     return `## ${element.title}\n\n${body}`;
   }
 
+  if (element.type === 'material') {
+    const content =
+      typeof element.content === 'string' ? element.content : '';
+    return `### ${element.title}\n\n${content}`;
+  }
+
   if (element.type === 'text') {
     return element.content;
   }

@@ -48,6 +48,18 @@ describe('shouldStopIssueLoop', () => {
       }),
     ).toBe(true);
   });
+
+  it('continues while workers are still running', () => {
+    expect(
+      shouldStopIssueLoop({
+        turn: 2,
+        maxTurns: 5,
+        lastStatus: 'finished',
+        dispatchesThisTurn: 0,
+        runningWorkers: 1,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('resolveIssueLoopStopReason', () => {

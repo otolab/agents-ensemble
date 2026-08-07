@@ -1,14 +1,38 @@
-export function buildHumanGuidancePrompt(guidance: string): string {
-  return [
-    '人間オペレータからの指示を受け取りました。Issue / PR の最新状態を踏まえ、次のアクションを判断してください。',
-    '',
-    '## 人間オペレータからの指示',
-    guidance.trim(),
-    '',
-    '## 次の判断',
-    '- 作業が必要なら `dispatch_worker`',
-    '- PR レビューが必要なら `dispatch_reviewer`（既存 worktree を使用）',
-    '- 追加確認が必要なら `ask_human`',
-    '- 完了なら追加 dispatch はせず終了',
-  ].join('\n');
+import { compileConductorTurnUpdate } from '../conductor/prompt/compile-conductor-prompt.js';
+import type { IssueContext } from '../github/issue-context.js';
+
+export interface BuildHumanGuidancePromptOptions {
+  guidance: string;
+  repoRoot: string;
+  issueContext: IssueContext;
+}
+
+export function buildHumanGuidancePrompt(
+  options: BuildHumanGuidancePromptOptions | string,
+): string {
+  const resolved =
+    typeof options === 'string'
+      ? {
+          guidance: options,
+          repoRoot: '',
+          issueContext: emptyIssueContext(),
+        }
+      : options;
+
+  return compileConductorTurnUpdate({
+    repoRoot: resolved.repoRoot,
+    issueContext: resolved.issueContext,
+    humanGuidance: resolved.guidance.trim(),
+  });
+}
+
+function emptyIssueContext(): IssueContext {
+  return {
+    issue: { owner: '', repo: '', number: 0, url: '' },
+    title: '',
+    body: '',
+    state: '',
+    labels: [],
+    comments: [],
+  };
 }

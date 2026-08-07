@@ -118,7 +118,11 @@ export { createDispatchTools } from './conductor/dispatch-tools.js';
 export type { DispatchToolsOptions } from './conductor/dispatch-tools.js';
 
 export { buildConductorPrompt } from './conductor/build-conductor-prompt.js';
-export type { BuildConductorPromptOptions } from './conductor/build-conductor-prompt.js';
+export type {
+  BuildConductorPromptOptions,
+  ConductorMaterial,
+} from './conductor/build-conductor-prompt.js';
+export { loadConductorMaterialFromFile } from './conductor/prompt/materials.js';
 
 export { runIssueSession } from './conductor/issue-session.js';
 export type {
@@ -200,3 +204,18 @@ export type { AskHumanToolOptions } from './escalation/ask-human-tool.js';
 export { buildHumanGuidancePrompt } from './escalation/build-human-guidance-prompt.js';
 
 export { buildMaxTurnsEscalationRequest } from './escalation/build-max-turns-escalation.js';
+
+export { ConductorInbox } from './runtime/conductor-inbox.js';
+export { startInboxProcessor } from './runtime/inbox-processor.js';
+export type {
+  InboxProcessorHandle,
+  InboxProcessorOptions,
+} from './runtime/inbox-processor.js';
+export { WorkerRuntime } from './runtime/worker-runtime.js';
+export type { WorkerDispatchFn, WorkerRuntimeOptions } from './runtime/worker-runtime.js';
+export type {
+  InboxListener,
+  InboxMessage,
+  WorkerStartParams,
+  WorkerStartedInfo,
+} from './runtime/types.js';

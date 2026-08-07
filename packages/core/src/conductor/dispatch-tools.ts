@@ -1,12 +1,16 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { SDKCustomTool, SDKCustomToolResult } from '@cursor/sdk';
 import type { PermissionHandler } from '../acp/types.js';
 import { dispatchReviewer, type ReviewerDispatchResult } from '../dispatch/reviewer-dispatch.js';
 import { dispatchWorker, type WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
+import type { WorkerRuntime } from '../runtime/worker-runtime.js';
+import type { WorkerStartedInfo } from '../runtime/types.js';
 
 export interface DispatchToolsOptions {
   /** Default local clone for worker dispatch. */
   repoRoot: string;
   permissionHandler?: PermissionHandler;
+  workerRuntime?: WorkerRuntime;
+  onWorkerStarted?: (info: WorkerStartedInfo) => void;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
   onReviewerDispatched?: (result: ReviewerDispatchResult) => void;
 }
@@ -37,10 +41,44 @@ export function createDispatchTools(
         },
         required: ['issueUrl', 'skillName'],
       },
-      async execute(args) {
+      async execute(args): Promise<SDKCustomToolResult> {
         const issueUrl = String(args.issueUrl ?? '');
         const skillName = String(args.skillName ?? '');
         const repoRoot = String(args.repoRoot ?? options.repoRoot);
+
+        if (options.workerRuntime) {
+          const workerId = options.workerRuntime.start({
+            issueUrl,
+            skillName,
+            repoRoot,
+          });
+          const started = { workerId, issueUrl, skillName, repoRoot };
+          options.onWorkerStarted?.(started);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    workerId,
+                    status: 'running',
+                    issueUrl,
+                    skillName,
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+            structuredContent: {
+              workerId,
+              status: 'running',
+              issueUrl,
+              skillName,
+            },
+          };
+        }
 
         const result = await dispatchWorker({
           issueUrl,
