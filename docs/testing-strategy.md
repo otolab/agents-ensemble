@@ -151,7 +151,7 @@ pnpm test:e2e
 
 ### 前提・スキップ
 
-- `CURSOR_API_KEY`（Stage 2 以降の conductor）
+- `CURSOR_API_KEY` または `ensemble auth login` 済み（Stage 2 以降の conductor）
 - `test-acp.yaml` + テスト用 Issue URL（または専用テスト repo）
 - `gh` 認証（実 Issue を触る場合）
 

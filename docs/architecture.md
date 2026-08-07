@@ -97,8 +97,8 @@ conductor は **理解と dispatch に専念**し、ファイル編集・テス�
 ### SDK の使い方（想定）
 
 ```typescript
+// apiKey 省略時は SDK が CURSOR_API_KEY → ~/.cursor/sdk/auth.json の順で解決
 await using conductor = await Agent.create({
-  apiKey: process.env.CURSOR_API_KEY!,
   model: { id: "composer-2.5" },
   mode: "plan",
   local: {
@@ -111,6 +111,8 @@ await using conductor = await Agent.create({
 // conductor への入力: Issue URL、作業基準文書（任意）、dispatch 結果の要約
 const run = await conductor.send(buildConductorPrompt(context));
 ```
+
+conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
 - **resume**: 別プロセスから `Agent.resume(conductorId)` で再開可能

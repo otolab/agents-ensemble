@@ -1,11 +1,16 @@
 import {
   Agent,
+  AuthenticationError,
   CursorAgentError,
   type AgentOptions,
   type RunResult,
   type SDKAgent,
   type SDKCustomTool,
 } from '@cursor/sdk';
+import {
+  CONDUCTOR_AUTH_HINT,
+  resolveConductorApiKey,
+} from './conductor-auth.js';
 
 export interface ConductorAgentOptions {
   cwd: string;
@@ -57,6 +62,9 @@ export class ConductorAgent {
         result: typeof result.result === 'string' ? result.result : undefined,
       };
     } catch (error) {
+      if (error instanceof AuthenticationError) {
+        throw new Error(`${error.message}\n\n${CONDUCTOR_AUTH_HINT}`);
+      }
       if (error instanceof CursorAgentError) {
         throw new Error(
           `Conductor startup failed: ${error.message} (retryable=${error.isRetryable})`,
@@ -76,13 +84,10 @@ export class ConductorAgent {
 }
 
 function buildAgentOptions(options: ConductorAgentOptions): AgentOptions {
-  const apiKey = options.apiKey ?? process.env.CURSOR_API_KEY;
-  if (!apiKey) {
-    throw new Error('CURSOR_API_KEY is required for conductor');
-  }
+  const apiKey = resolveConductorApiKey(options.apiKey);
 
   return {
-    apiKey,
+    ...(apiKey !== undefined ? { apiKey } : {}),
     model: { id: options.modelId ?? 'composer-2.5' },
     mode: 'plan',
     local: {

@@ -119,3 +119,10 @@ export type {
   RunIssueSessionOptions,
   IssueSessionResult,
 } from './conductor/issue-session.js';
+
+export {
+  CONDUCTOR_AUTH_HINT,
+  getConductorAuthStatus,
+  loginConductor,
+  resolveConductorApiKey,
+} from './conductor/conductor-auth.js';

@@ -28,8 +28,19 @@ pnpm test:e2e           # CLI 縦切り（#6 / #12、設定時）
 ensemble dispatch worker <issue-url> --skill <name> --repo-root <path>
 
 # Stage 2: conductor オーケストレーション
+# 初回のみ: conductor 用 SDK ログイン（agent login とは別ストア）
+ensemble auth login
 ensemble issue <issue-url> --repo-root <path> [--resume <agentId>]
 ```
+
+### 認証（SDK + ACP）
+
+| 用途 | 何が効くか |
+|------|-----------|
+| worker（`agent acp`） | `agent login` |
+| conductor（`@cursor/sdk`） | `ensemble auth login` / `CURSOR_API_KEY` / `~/.cursor/sdk/auth.json` |
+
+`agent login` だけでは conductor には渡りません。`ensemble auth login` を一度実行するか `CURSOR_API_KEY` を設定してください。
 
 ## ライセンス
 

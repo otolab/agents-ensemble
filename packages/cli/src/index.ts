@@ -2,7 +2,12 @@
 
 import { resolve } from 'node:path';
 import { Command } from 'commander';
-import { dispatchWorker, runIssueSession } from '@agents-ensemble/core';
+import {
+  dispatchWorker,
+  getConductorAuthStatus,
+  loginConductor,
+  runIssueSession,
+} from '@agents-ensemble/core';
 
 const program = new Command();
 
@@ -74,6 +79,52 @@ program
       }
     },
   );
+
+const auth = program.command('auth').description('Conductor (SDK) authentication');
+
+auth
+  .command('login')
+  .description(
+    'Browser login for conductor. Stores credentials in ~/.cursor/sdk/auth.json',
+  )
+  .action(async () => {
+    try {
+      const result = await loginConductor();
+      const who = result.email ?? 'unknown';
+      console.log(`Logged in as ${who}`);
+      console.log(`API key expires: ${new Date(result.apiKeyExpiresAtMs).toISOString()}`);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+auth
+  .command('status')
+  .description('Show conductor (SDK) authentication status')
+  .action(async () => {
+    try {
+      const status = await getConductorAuthStatus();
+      if (status.status === 'logged-in') {
+        const who = status.email ?? 'unknown';
+        const expires = status.apiKeyExpiresAtMs
+          ? new Date(status.apiKeyExpiresAtMs).toISOString()
+          : 'unknown';
+        console.log(`SDK: logged in as ${who} (expires ${expires})`);
+      } else {
+        console.log('SDK: logged out');
+      }
+
+      if (process.env.CURSOR_API_KEY) {
+        console.log('CURSOR_API_KEY: set');
+      } else {
+        console.log('CURSOR_API_KEY: unset');
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
 
 const dispatch = program
   .command('dispatch')
