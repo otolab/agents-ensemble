@@ -26,7 +26,6 @@ export interface ConductorPromptContext {
   runningWorkers?: WorkerStartedInfo[];
   pendingPermissions?: PendingPermission[];
   escalations?: EscalationRecord[];
-  humanGuidance?: string;
 }
 
 export function toMaterialElement(material: ConductorMaterial): MaterialElement {

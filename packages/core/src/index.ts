@@ -185,11 +185,6 @@ export type {
 } from './conductor/session/session-event.js';
 
 export {
-  buildConductorFollowUpPrompt,
-} from './conductor/build-conductor-follow-up-prompt.js';
-export type { BuildConductorFollowUpPromptOptions } from './conductor/build-conductor-follow-up-prompt.js';
-
-export {
   DEFAULT_MAX_ISSUE_TURNS,
   resolveIssueLoopStopReason,
   shouldStopIssueLoop,
@@ -297,8 +292,6 @@ export type { ApplyOperatorMessageResult } from './escalation/apply-operator-mes
 export { recordOpenQuestionAnswer } from './escalation/record-open-question-answer.js';
 export type { RecordOpenQuestionAnswerInput } from './escalation/record-open-question-answer.js';
 export { openQuestionToEscalationRecord } from './escalation/open-question-to-escalation.js';
-
-export { buildHumanGuidancePrompt } from './escalation/build-human-guidance-prompt.js';
 
 export { ensureMaxTurnsOpenQuestion, MAX_TURNS_OPEN_QUESTION_TEXT } from './escalation/enqueue-max-turns-question.js';
 export type { EnsureMaxTurnsOpenQuestionInput } from './escalation/enqueue-max-turns-question.js';

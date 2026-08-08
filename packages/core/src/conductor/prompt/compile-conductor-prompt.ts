@@ -25,10 +25,3 @@ export function compileConductorInitialMessage(
 ): string {
   return compileConductorSessionStart(context);
 }
-
-/** 2ターン目以降: ターン更新のみ（システムプロンプトは繰り返さない）。 @deprecated ADR 0009 — セッションイベント列へ移行 */
-export function compileConductorTurnUpdate(
-  context: ConductorPromptContext,
-): string {
-  return renderCompiledPrompt(compile(conductorTurnModule, context));
-}
