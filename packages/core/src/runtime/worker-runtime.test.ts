@@ -34,6 +34,8 @@ describe('ConductorInbox', () => {
     });
 
     inbox.publishWorkerCompleted('worker-abc', {
+      name: 'ping-1',
+      kind: 'ping',
       issue: {
         owner: 'org',
         repo: 'repo',
@@ -70,6 +72,8 @@ describe('WorkerRuntime', () => {
     });
 
     const dispatchWorker = vi.fn().mockResolvedValue({
+      name: 'ping-1',
+      kind: 'ping',
       issue: {
         owner: 'org',
         repo: 'repo',
@@ -92,8 +96,10 @@ describe('WorkerRuntime', () => {
 
     const runtime = new WorkerRuntime({ inbox, dispatchWorker });
     const workerId = runtime.start({
+      name: 'ping-1',
       issueUrl: 'https://github.com/org/repo/issues/1',
-      skillName: 'lazy-implementer',
+      kind: 'ping',
+      systemPrompt: 'pong',
       repoRoot: '/repo',
     });
 

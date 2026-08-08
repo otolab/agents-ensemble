@@ -24,7 +24,7 @@ describe('buildConductorPrompt', () => {
     });
 
     expect(prompt).toContain('conductor');
-    expect(prompt).toContain('dispatch_worker');
+    expect(prompt).toContain('プロファイル');
     expect(prompt).toContain('Do the thing');
     expect(prompt).toContain('/tmp/repo');
   });

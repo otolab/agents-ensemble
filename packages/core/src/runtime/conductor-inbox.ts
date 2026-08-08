@@ -64,9 +64,10 @@ export class ConductorInbox {
     this.enqueueNotify({
       type: 'worker.failed',
       workerId: started.workerId,
+      name: started.name,
       error: message,
       issueUrl: started.issueUrl,
-      skillName: started.skillName,
+      kind: started.kind,
     });
   }
 

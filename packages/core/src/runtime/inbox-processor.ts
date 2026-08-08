@@ -4,11 +4,17 @@ import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { WorkerFailureRecord } from './types.js';
 import { ConductorInbox } from './conductor-inbox.js';
 
+export type PermissionDecisionOutcome =
+  | PermissionDecision
+  | null;
+
 export interface InboxProcessorOptions {
+  inbox: ConductorInbox;
   decidePermission: (
     request: PermissionRequest,
     workerId: string,
-  ) => PermissionDecision | Promise<PermissionDecision>;
+    requestId: string,
+  ) => PermissionDecisionOutcome | Promise<PermissionDecisionOutcome>;
   onWorkerCompleted?: (result: WorkerDispatchResult) => void;
   onWorkerFailed?: (failure: WorkerFailureRecord) => void;
 }
@@ -18,17 +24,20 @@ export interface InboxProcessorHandle {
 }
 
 export function startInboxProcessor(
-  inbox: ConductorInbox,
   options: InboxProcessorOptions,
 ): InboxProcessorHandle {
+  const { inbox } = options;
   const unsubscribe = inbox.subscribe(async (message) => {
     if (message.type === 'permission.request') {
       try {
         const decision = await options.decidePermission(
           message.request,
           message.workerId,
+          message.id,
         );
-        inbox.fulfillPermission(message.id, decision);
+        if (decision !== null) {
+          inbox.fulfillPermission(message.id, decision);
+        }
       } catch (error) {
         inbox.rejectPermission(message.id, error);
       }
@@ -43,9 +52,10 @@ export function startInboxProcessor(
     if (message.type === 'worker.failed') {
       options.onWorkerFailed?.({
         workerId: message.workerId,
+        name: message.name,
         error: message.error,
         issueUrl: message.issueUrl,
-        skillName: message.skillName,
+        kind: message.kind,
       });
     }
   });

@@ -91,7 +91,7 @@ function buildAgentOptions(options: ConductorAgentOptions): AgentOptions {
   return {
     ...(apiKey !== undefined ? { apiKey } : {}),
     model: { id: options.modelId ?? 'composer-2.5' },
-    mode: 'plan',
+    mode: 'agent',
     local: {
       cwd: options.cwd,
       customTools: options.customTools,

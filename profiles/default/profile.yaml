@@ -1,0 +1,8 @@
+workers:
+  - name: main
+    kind: worker
+
+materials:
+  - id: team
+    title: 役割分担
+    file: team.md

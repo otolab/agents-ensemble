@@ -6,7 +6,10 @@ import { dispatchWorker } from './worker-dispatch.js';
 describe('dispatchWorker', () => {
   it('creates worktree and runs ACP session', async () => {
     const connectSpy = vi.spyOn(acpBridgeModule.AcpBridge, 'connect').mockResolvedValue({
-      runSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+      runSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'pong',
+      }),
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as acpBridgeModule.AcpBridge);
 
@@ -24,7 +27,9 @@ describe('dispatchWorker', () => {
 
     const result = await dispatchWorker({
       issueUrl: worktree.issue.url,
-      skillName: 'lazy-implementer',
+      name: 'ping-1',
+      kind: 'ping',
+      systemPrompt: 'respond with pong',
       repoRoot: '/repo',
       spawn: {
         command: 'fake-agent',
@@ -32,9 +37,12 @@ describe('dispatchWorker', () => {
       },
     });
 
+    expect(result.name).toBe('ping-1');
+    expect(result.kind).toBe('ping');
     expect(result.worktree).toEqual(worktree);
-    expect(result.prompt).toContain('lazy-implementer');
+    expect(result.prompt).toContain('respond with pong');
     expect(result.promptResult.stopReason).toBe('end_turn');
+    expect(result.promptResult.responseText).toBe('pong');
     expect(connectSpy).toHaveBeenCalledOnce();
 
     connectSpy.mockRestore();

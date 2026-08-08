@@ -12,5 +12,6 @@ agents-ensemble（`ensemble` コマンド）の設計・検討事項。
 | [prompts.md](prompts.md) | 起動プロンプトのパターン |
 | [implementation.md](implementation.md) | 実装方針の検討 |
 | [testing-strategy.md](testing-strategy.md) | **テスト戦略**（unittest / integration / e2e） |
+| [adr/](adr/README.md) | **ADR**（設計判断の履歴） |
 
 関連 Issue: [otolab/my-logs#2027](https://github.com/otolab/my-logs/issues/2027)

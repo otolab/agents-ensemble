@@ -42,19 +42,11 @@ describe('buildConductorFollowUpPrompt', () => {
           promptResult: { stopReason: 'end_turn' },
         },
       ],
-      reviewerDispatches: [
-        {
-          prUrl: 'https://github.com/org/repo/pull/2',
-          worktreePath: '/repo/.ensemble/worktrees/issue-1',
-          prompt: 'review',
-          promptResult: { stopReason: 'end_turn' },
-        },
-      ],
     });
 
     expect(prompt).toContain('Add feature');
     expect(prompt).not.toContain('agents-ensemble の conductor');
-    expect(prompt).toContain('https://github.com/org/repo/pull/2');
+    expect(prompt).toContain('/repo/.ensemble/worktrees/issue-1');
     expect(prompt).toContain('ターン: 2 / 5');
   });
 });

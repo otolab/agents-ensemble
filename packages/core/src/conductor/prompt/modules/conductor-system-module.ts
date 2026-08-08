@@ -8,13 +8,15 @@ import { toMaterialElement } from '../types.js';
  */
 export const conductorSystemModule: PromptModule<ConductorPromptContext> = {
   persona: [
-    'あなたは agents-ensemble の conductor（指揮者）です。実作業は行わず、worker / reviewer へ dispatch します。',
+    'あなたは agents-ensemble の conductor です。実作業は行わず、プロファイルに従って worker を制御します。',
   ],
   guidelines: [
     '- ファイル編集・シェル実行・直接実装はしない',
     '- 状態の正本は GitHub Issue / PR',
-    '- 次のアクションは文脈から判断する（固定フローにしない）',
-    '- worker: `dispatch_worker` / reviewer: `dispatch_reviewer` / 人間確認: `ask_human`',
+    '- 次のアクションは文脈とプロファイルから判断する（固定フローにしない）',
+    '- worker の種別・Skill・起動文書はプロファイルが定義する',
+    '- 人間確認: `ask_human`',
+    '- worker permission 判断待ち: `resolve_permission`（要確認時は先に `ask_human`）',
   ],
   materials: [
     (ctx) =>

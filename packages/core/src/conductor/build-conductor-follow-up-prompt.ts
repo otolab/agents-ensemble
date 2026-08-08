@@ -1,9 +1,9 @@
-import type { ReviewerDispatchResult } from '../dispatch/reviewer-dispatch.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { EscalationRecord } from '../escalation/human-inquiry.js';
 import type { IssueContext } from '../github/issue-context.js';
 import { compileConductorTurnUpdate } from './prompt/compile-conductor-prompt.js';
 import type { WorkerFailureRecord, WorkerStartedInfo } from '../runtime/types.js';
+import type { PendingPermission } from '../permission/pending-permission.js';
 
 export interface BuildConductorFollowUpPromptOptions {
   issueContext: IssueContext;
@@ -12,9 +12,9 @@ export interface BuildConductorFollowUpPromptOptions {
   maxTurns: number;
   workerDispatches: WorkerDispatchResult[];
   workerFailures?: WorkerFailureRecord[];
-  reviewerDispatches: ReviewerDispatchResult[];
   escalations?: EscalationRecord[];
   runningWorkers?: WorkerStartedInfo[];
+  pendingPermissions?: PendingPermission[];
 }
 
 export function buildConductorFollowUpPrompt(
@@ -27,8 +27,8 @@ export function buildConductorFollowUpPrompt(
     maxTurns: options.maxTurns,
     workerDispatches: options.workerDispatches,
     workerFailures: options.workerFailures ?? [],
-    reviewerDispatches: options.reviewerDispatches,
     escalations: options.escalations ?? [],
     runningWorkers: options.runningWorkers,
+    pendingPermissions: options.pendingPermissions,
   });
 }
