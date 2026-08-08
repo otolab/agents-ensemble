@@ -245,7 +245,7 @@ worker (ACP)                    conductor (SDK)              オペレータ
      │                               │                          │
      │ session/request_permission    │                          │
      │ ─────────────────────────────>│  段1: policy 自明 allow/deny → 即応答
-     │                               │  段2: pending → prompt + resolve_permission
+     │                               │  段2: pending → イベント列 + resolve_permission
      │                               │  段3: 要確認 → ask_human（登録のみ・非ブロック）
      │                               │         OpenQuestionRegistry に enqueue
      │                               │  次ターン onOperatorInput ◄──────────────│
@@ -256,7 +256,7 @@ worker (ACP)                    conductor (SDK)              オペレータ
      │ <─────────────────────────────│                          │
 ```
 
-- **worker → ユーザー直結はしない**。人間への出口は conductor 経由のみ（[ADR 0007](adr/0007-permission-pipeline.md)）
+- **worker → ユーザー直結はしない**。人間への出口は conductor 経由のみ（[ADR 0007](adr/0007-permission-pipeline.md)、pending 通知は [ADR 0010](adr/0010-permission-pending-event-delivery.md)）
 - **段1 自明許可** — `PermissionPipeline` + policy（read-only allowlist 等）
 - **段2 conductor** — 非自明は pending。`resolve_permission` で allow/deny
 - **段3 human** — conductor が `ask_human` で **質問を登録**（非ブロッキング）。オペレータ回答は **別ターンのチャット入力**（[ADR 0008](adr/0008-human-dialogue-open-questions.md)）

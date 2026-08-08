@@ -98,6 +98,7 @@ harness ─┘
 - registry / dialogue log 永続化: #27
 - セッション終了条件の見直し（harness 主導）
 - イベントペイロード詳細・優先度 / 割り込み
+- permission pending の届け方（ADR 0007 からの変更）: [ADR 0010](0010-permission-pending-event-delivery.md)
 
 ## 関連
 
