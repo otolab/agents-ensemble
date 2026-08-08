@@ -95,7 +95,7 @@ harness ─┘
 
 - #28: 実装（Phase 1〜4、1 PR）
 - open question / operator integration テスト: #26
-- registry / dialogue log 永続化: #27
+- worker ACP 復元: `session/load`（`session/resume` は Cursor `agent acp` 未対応）。実測は [ADR 0011](0011-session-sidecar-resume.md)
 - セッション終了条件の見直し（harness 主導）
 - イベントペイロード詳細・優先度 / 割り込み
 - permission pending の届け方（ADR 0007 からの変更）: [ADR 0010](0010-permission-pending-event-delivery.md)
