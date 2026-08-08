@@ -105,7 +105,6 @@ export async function runIssueSession(
     workers: profileWorkersToSessionSpecs(options.profile),
     permissionPipeline,
     ...(options.dispatchWorker ? { dispatchWorker: options.dispatchWorker } : {}),
-    ...(options.dispatchWorker ? { dispatchWorker: options.dispatchWorker } : {}),
     onWorkerCompleted: (result) => {
       workerDispatches.push(result);
       options.onWorkerDispatched?.(result);
@@ -231,8 +230,22 @@ export async function runIssueSession(
       };
     }
   } finally {
+    rejectAllPendingPermissions(permissionPipeline, workerSession.inbox);
     await workerSession.stop();
     await conductor.close();
+  }
+}
+
+function rejectAllPendingPermissions(
+  pipeline: PermissionPipeline,
+  inbox: WorkerSession['inbox'],
+): void {
+  for (const pending of [...pipeline.pending.list()]) {
+    try {
+      pipeline.resolveAndFulfill(inbox, pending.id, false);
+    } catch {
+      // already resolved
+    }
   }
 }
 

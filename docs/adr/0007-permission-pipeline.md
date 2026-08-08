@@ -27,3 +27,5 @@ worker の `session/request_permission` を `PermissionBroker` が同期処理�
 - 良い: 許可判断が conductor 経由に統一。human veto を conductor が表現できる
 - 悪い: pending 中 worker はブロック。conductor ターンが増える
 - フォロー: 実 agent acp + conductor LLM による end-to-end は別途 integration で検証
+- **段3はプロトコル** — `ask_human` なしで `resolve_permission` だけ呼ぶこともできる（コードでは強制しない）
+- **セッション終了時** — 未解決 pending は `deny` で worker へ伝播してハングを防ぐ

@@ -3,7 +3,7 @@ import { compileConductorSessionStart } from './prompt/compile-conductor-prompt.
 import { mergeConductorMaterials } from './prompt/materials.js';
 import type { ConductorMaterial } from './prompt/types.js';
 import type { WorkerFailureRecord, WorkerStartedInfo } from '../runtime/types.js';
-import type { PendingPermission } from '../../permission/pending-permission.js';
+import type { PendingPermission } from '../permission/pending-permission.js';
 
 export type { ConductorMaterial } from './prompt/types.js';
 export { loadConductorMaterialFromFile } from './prompt/materials.js';

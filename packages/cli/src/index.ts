@@ -88,7 +88,6 @@ program
           modelId: options.model,
           maxTurns: options.maxTurns,
           onHumanInquiry: promptHumanInquiry,
-          onPermissionAsk: promptPermissionDecision,
           onEscalated: (record) => {
             console.error(`[human escalation] ${record.question} → ${record.answer}`);
           },
