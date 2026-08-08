@@ -36,6 +36,7 @@
 | [0006](0006-conductor-agent-mode.md) | conductor は `mode: agent` | accepted |
 | [0007](0007-permission-pipeline.md) | 許可パイプライン（3段 + 逆順伝播） | accepted |
 | [0008](0008-human-dialogue-open-questions.md) | 人間対話ログと open question 管理 | accepted |
+| [0009](0009-conductor-session-event-queue.md) | ConductorSession とセッションイベント列 | accepted |
 
 ## 追加するとき
 
