@@ -137,13 +137,22 @@ e2e は `agents.ping` + `workers: [ping]` で pong 応答を検証する（`pack
 
 ### 人間エスカレーション（非対話環境）
 
-conductor の `ask_human` は TTY でプロンプトする。worker permission の人間確認も **conductor 経由**（`ask_human` → `resolve_permission`）。CI 等の非対話環境では `ENSEMBLE_ESCALATION_RESPONSE` を設定する（`yes` / `no` または自由記述）。
+conductor の `ask_human` は質問を **open question（TODO リスト）として登録**する（非ブロッキング）。一覧は `list_open_questions`、詳細は `get_open_question`。registry 更新は入力メッセージとして届き、全件を毎ターン prompt に載せない（cache 維持）。
+
+### オペレータ入力と自律ターン予算
+
+- `--max-turns`（デフォルト 5）は **直近のオペレータ入力から conductor が自律的に動けるターン上限**
+- オペレータが入力するとカウンタはリセットされる
+- 上限到達時は orchestrator が open question「次どうする？」（`source: max_turns`）を自動登録し、conductor は送らず待機する
+- オペレータは次ターン開始前に TTY で回答（自由チャット可）
+- チャットですでに答えている場合は conductor が `answer_open_question` で代行記録
+- 回答は `@inq:<id> <回答>` または未回答が 1 件のときはそのまま入力
 
 ```bash
-ENSEMBLE_ESCALATION_RESPONSE=yes ensemble issue ...
+ENSEMBLE_OPERATOR_MESSAGE='@inq:inq-1 yes' ensemble issue ...
 ```
 
-未設定の非対話環境では `EscalationUnavailableError` で終了する。
+非 TTY かつ `ENSEMBLE_OPERATOR_MESSAGE` 未設定のとき、open question 待ちでループが進まない（TTY 待機相当）。
 
 認証の詳細は上記 [認証](#認証) を参照。
 

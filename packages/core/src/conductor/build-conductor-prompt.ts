@@ -15,6 +15,7 @@ export interface BuildConductorPromptOptions {
   briefing?: string;
   followUp?: string;
   turn?: number;
+  autonomousTurns?: number;
   maxTurns?: number;
   runningWorkers?: WorkerStartedInfo[];
   pendingPermissions?: PendingPermission[];
@@ -29,6 +30,7 @@ export function buildConductorPrompt(
     materials: mergeConductorMaterials(options.materials, options.briefing),
     followUp: options.followUp,
     turn: options.turn ?? 1,
+    autonomousTurns: options.autonomousTurns,
     maxTurns: options.maxTurns,
     runningWorkers: options.runningWorkers,
     pendingPermissions: options.pendingPermissions,

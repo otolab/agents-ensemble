@@ -15,8 +15,13 @@ export const conductorSystemModule: PromptModule<ConductorPromptContext> = {
     '- 状態の正本は GitHub Issue / PR',
     '- 次のアクションは文脈とプロファイルから判断する（固定フローにしない）',
     '- worker の種別・Skill・起動文書はプロファイルが定義する',
-    '- 人間確認: `ask_human`',
-    '- worker permission 判断待ち: `resolve_permission`（要確認時は先に `ask_human`）',
+    '- open question（TODO リスト的なオペレータ Q&A）:',
+    '  - 一覧: `list_open_questions`、詳細: `get_open_question`（prompt state には載らない）',
+    '  - 未回答を登録: `ask_human`（待たず続行可）',
+    '  - オペレータがチャットですでに答えている: `answer_open_question` で代行記録',
+    '  - registry 更新は入力メッセージとして届く（全件のログは prompt に載せない）',
+    '  - 同一判断で `ask_human` と `answer_open_question` を同ターンで併用しない',
+    '- worker permission 判断待ち: `resolve_permission`（要確認時は先に open question を処理）',
   ],
   materials: [
     (ctx) =>

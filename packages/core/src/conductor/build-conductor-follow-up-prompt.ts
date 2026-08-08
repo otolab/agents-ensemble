@@ -9,12 +9,14 @@ export interface BuildConductorFollowUpPromptOptions {
   issueContext: IssueContext;
   repoRoot: string;
   turn: number;
+  autonomousTurns?: number;
   maxTurns: number;
   workerDispatches: WorkerDispatchResult[];
   workerFailures?: WorkerFailureRecord[];
   escalations?: EscalationRecord[];
   runningWorkers?: WorkerStartedInfo[];
   pendingPermissions?: PendingPermission[];
+  humanGuidance?: string;
 }
 
 export function buildConductorFollowUpPrompt(
@@ -24,11 +26,13 @@ export function buildConductorFollowUpPrompt(
     repoRoot: options.repoRoot,
     issueContext: options.issueContext,
     turn: options.turn,
+    autonomousTurns: options.autonomousTurns,
     maxTurns: options.maxTurns,
     workerDispatches: options.workerDispatches,
     workerFailures: options.workerFailures ?? [],
     escalations: options.escalations ?? [],
     runningWorkers: options.runningWorkers,
     pendingPermissions: options.pendingPermissions,
+    humanGuidance: options.humanGuidance,
   });
 }

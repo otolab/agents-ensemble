@@ -47,6 +47,7 @@ describe('buildConductorFollowUpPrompt', () => {
     expect(prompt).toContain('Add feature');
     expect(prompt).not.toContain('agents-ensemble の conductor');
     expect(prompt).toContain('/repo/.ensemble/worktrees/issue-1');
-    expect(prompt).toContain('ターン: 2 / 5');
+    expect(prompt).toContain('conductor ターン: 2');
+    expect(prompt).toContain('自律ターン（直近オペレータ入力から）: 0 / 5');
   });
 });

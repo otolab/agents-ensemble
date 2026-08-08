@@ -35,6 +35,7 @@
 | [0005](0005-conductor-is-not-plan-mode.md) | conductor は plan mode ではない | accepted |
 | [0006](0006-conductor-agent-mode.md) | conductor は `mode: agent` | accepted |
 | [0007](0007-permission-pipeline.md) | 許可パイプライン（3段 + 逆順伝播） | accepted |
+| [0008](0008-human-dialogue-open-questions.md) | 人間対話ログと open question 管理 | accepted |
 
 ## 追加するとき
 
