@@ -203,11 +203,11 @@ describe('open question / operator flow integration', () => {
         }),
     });
 
-    expect(
-      mockSend.mock.calls.some((call) =>
-        String(call[0]).includes('permission 判断待ち'),
-      ),
-    ).toBe(true);
+    const messages = mockSend.mock.calls.map((call) => String(call[0]));
+    expect(mockSend).toHaveBeenCalledTimes(3);
+    expect(messages[0]).toContain('Integration open question');
+    expect(messages[1]).toContain('permission 判断待ち');
+    expect(messages[2]).toContain('worker 完了');
     expect(result.workerDispatches).toHaveLength(1);
     expect(result.workerFailures).toHaveLength(0);
     expect(result.stopReason).toBe('completed');

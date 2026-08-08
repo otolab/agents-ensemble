@@ -1,6 +1,6 @@
 import { expect } from 'vitest';
 
-/** conductor 向け YAML ブロックからスカラー値を抜き出す（integration テスト用）。 */
+/** integration 専用。`js-yaml` のスカラー行形式に依存（ネスト・複数行値は非対応）。 */
 export function extractYamlScalar(message: string, key: string): string | undefined {
   const match = message.match(new RegExp(`^${key}: '?([^'\\n]+)'?$`, 'm'));
   return match?.[1]?.trim();
