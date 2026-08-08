@@ -260,6 +260,7 @@ export async function runConductorSession(
 
     lastSendResult = await runInitialConductorSend({
       options,
+      profile: activeProfile,
       conductor,
       workerSession,
       permissionPipeline,
@@ -499,6 +500,7 @@ async function collectOperatorInput(input: {
 
 async function runInitialConductorSend(input: {
   options: RunConductorSessionOptions;
+  profile: Profile;
   conductor: ConductorAgent;
   workerSession: WorkerSession;
   permissionPipeline: PermissionPipeline;
@@ -521,7 +523,7 @@ async function runInitialConductorSend(input: {
     repoRoot: input.options.repoRoot,
     issueContext,
     materials: mergeConductorMaterials(
-      mergeProfileMaterials(input.options.materials, input.options.profile),
+      mergeProfileMaterials(input.options.materials, input.profile),
       input.options.briefing,
     ),
     turn: 1,
