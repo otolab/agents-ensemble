@@ -63,6 +63,7 @@ export function createAskHumanTool(
           responseType,
           context,
           relatedPermissionId,
+          source: 'conductor',
         });
         const report = formatOpenQuestionEnqueuedReport(entry);
         options.dialogueLog.appendRegistryUpdate(report);

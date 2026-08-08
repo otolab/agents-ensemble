@@ -4,11 +4,14 @@ export type OpenQuestionStatus = 'open' | 'answered';
 
 export type OpenQuestionAnsweredBy = 'operator' | 'conductor';
 
+export type OpenQuestionSource = 'conductor' | 'max_turns';
+
 export interface OpenQuestion {
   id: string;
   question: string;
   responseType: HumanInquiryResponseType;
   context?: string;
+  source: OpenQuestionSource;
   status: OpenQuestionStatus;
   askedAt: number;
   answer?: string;
@@ -25,6 +28,7 @@ export interface EnqueueOpenQuestionInput {
   responseType: HumanInquiryResponseType;
   context?: string;
   relatedPermissionId?: string;
+  source?: OpenQuestionSource;
 }
 
 export interface AnswerOpenQuestionInput {
@@ -48,6 +52,7 @@ export class OpenQuestionRegistry {
       responseType: input.responseType,
       context: input.context,
       relatedPermissionId: input.relatedPermissionId,
+      source: input.source ?? 'conductor',
       status: 'open',
       askedAt: Date.now(),
     };

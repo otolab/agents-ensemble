@@ -8,7 +8,7 @@ describe('shouldStopIssueLoop', () => {
   it('stops on error', () => {
     expect(
       shouldStopIssueLoop({
-        turn: 1,
+        autonomousTurns: 1,
         maxTurns: 5,
         lastStatus: 'error',
         dispatchesThisTurn: 0,
@@ -19,7 +19,7 @@ describe('shouldStopIssueLoop', () => {
   it('stops when finished without dispatches', () => {
     expect(
       shouldStopIssueLoop({
-        turn: 1,
+        autonomousTurns: 1,
         maxTurns: 5,
         lastStatus: 'finished',
         dispatchesThisTurn: 0,
@@ -27,10 +27,10 @@ describe('shouldStopIssueLoop', () => {
     ).toBe(true);
   });
 
-  it('continues after a dispatch within max turns', () => {
+  it('continues after a dispatch', () => {
     expect(
       shouldStopIssueLoop({
-        turn: 1,
+        autonomousTurns: 3,
         maxTurns: 5,
         lastStatus: 'finished',
         dispatchesThisTurn: 1,
@@ -38,36 +38,13 @@ describe('shouldStopIssueLoop', () => {
     ).toBe(false);
   });
 
-  it('stops at max turns even after dispatches', () => {
+  it('continues while workers are still running', () => {
     expect(
       shouldStopIssueLoop({
-        turn: 5,
-        maxTurns: 5,
-        lastStatus: 'finished',
-        dispatchesThisTurn: 1,
-      }),
-    ).toBe(true);
-  });
-
-  it('continues while workers are still running before max turns', () => {
-    expect(
-      shouldStopIssueLoop({
-        turn: 2,
+        autonomousTurns: 5,
         maxTurns: 5,
         lastStatus: 'finished',
         dispatchesThisTurn: 0,
-        runningWorkers: 1,
-      }),
-    ).toBe(false);
-  });
-
-  it('continues at max turns while workers are still running', () => {
-    expect(
-      shouldStopIssueLoop({
-        turn: 5,
-        maxTurns: 5,
-        lastStatus: 'finished',
-        dispatchesThisTurn: 1,
         runningWorkers: 1,
       }),
     ).toBe(false);
@@ -76,7 +53,7 @@ describe('shouldStopIssueLoop', () => {
   it('continues while pending permissions await conductor resolution', () => {
     expect(
       shouldStopIssueLoop({
-        turn: 2,
+        autonomousTurns: 5,
         maxTurns: 5,
         lastStatus: 'finished',
         dispatchesThisTurn: 0,
@@ -85,28 +62,27 @@ describe('shouldStopIssueLoop', () => {
     ).toBe(false);
   });
 
-  it('continues while open questions await operator answer', () => {
+  it('does not stop only because autonomous turns reached maxTurns', () => {
     expect(
       shouldStopIssueLoop({
-        turn: 1,
+        autonomousTurns: 5,
         maxTurns: 5,
         lastStatus: 'finished',
-        dispatchesThisTurn: 0,
-        openQuestions: 1,
+        dispatchesThisTurn: 1,
       }),
     ).toBe(false);
   });
 });
 
 describe('resolveIssueLoopStopReason', () => {
-  it('returns max_turns when limit hit after dispatches', () => {
+  it('returns completed for a successful conductor turn', () => {
     expect(
       resolveIssueLoopStopReason({
-        turn: 5,
+        autonomousTurns: 5,
         maxTurns: 5,
         lastStatus: 'finished',
         dispatchesThisTurn: 1,
       }),
-    ).toBe('max_turns');
+    ).toBe('completed');
   });
 });

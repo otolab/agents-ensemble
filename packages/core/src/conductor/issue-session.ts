@@ -3,19 +3,14 @@ import { applyOperatorMessage } from '../escalation/apply-operator-message.js';
 import { createAnswerOpenQuestionTool } from '../escalation/answer-open-question-tool.js';
 import { createAskHumanTool } from '../escalation/ask-human-tool.js';
 import { formatOpenQuestionAnsweredReport, joinOperatorInput } from '../escalation/format-registry-update.js';
+import { ensureMaxTurnsOpenQuestion } from '../escalation/enqueue-max-turns-question.js';
 import { createOpenQuestionListTools } from '../escalation/open-question-list-tools.js';
-import { buildHumanGuidancePrompt } from '../escalation/build-human-guidance-prompt.js';
-import { buildMaxTurnsEscalationRequest } from '../escalation/build-max-turns-escalation.js';
-import type {
-  EscalationRecord,
-  HumanInquiryHandler,
-} from '../escalation/human-inquiry.js';
 import { openQuestionToEscalationRecord } from '../escalation/open-question-to-escalation.js';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import { SessionDialogueLog } from '../escalation/dialogue-log.js';
 import type { DialogueEntry } from '../escalation/dialogue-log.js';
-import { createEnvFallbackHumanInquiryHandler } from '../escalation/resolve-human-inquiry.js';
+import type { EscalationRecord } from '../escalation/human-inquiry.js';
 import { fetchIssueContext } from '../github/issue-context.js';
 import type { PermissionPolicyRules } from '../permission/permission-policy.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
@@ -38,7 +33,10 @@ import {
 } from './issue-loop.js';
 
 export interface OperatorInputContext {
-  turn: number;
+  /** これから実行する conductor ターン番号（1 始まり）。 */
+  conductorTurn: number;
+  autonomousTurns: number;
+  maxTurns: number;
   openQuestions: OpenQuestion[];
 }
 
@@ -57,13 +55,10 @@ export interface RunIssueSessionOptions {
   maxTurns?: number;
   permissionPolicy?: PermissionPolicyRules;
   permissionPipeline?: PermissionPipeline;
-  onHumanInquiry?: HumanInquiryHandler;
-  /** 各ターン開始前のオペレータ入力（open question への回答など）。 */
+  /** 各ループでオペレータ入力を受け取る（open question 待ち・自由チャット）。 */
   onOperatorInput?: (
     context: OperatorInputContext,
   ) => string | Promise<string | undefined> | undefined;
-  /** max turns 到達時に人間へ問い合わせ、回答があればボーナスターンを実行する。 */
-  escalateOnMaxTurns?: boolean;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
   dispatchWorker?: WorkerDispatchFn;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
@@ -107,16 +102,12 @@ export async function runIssueSession(
   options: RunIssueSessionOptions,
 ): Promise<IssueSessionResult> {
   const maxTurns = options.maxTurns ?? DEFAULT_MAX_ISSUE_TURNS;
-  const escalateOnMaxTurns = options.escalateOnMaxTurns ?? true;
   const workerDispatches: WorkerDispatchResult[] = [];
   const workerFailures: WorkerFailureRecord[] = [];
   const escalations: EscalationRecord[] = [];
   const turns: IssueSessionTurn[] = [];
   const openQuestions = new OpenQuestionRegistry();
   const dialogueLog = new SessionDialogueLog();
-
-  const onHumanInquiry =
-    options.onHumanInquiry ?? createEnvFallbackHumanInquiryHandler();
 
   const permissionPipeline =
     options.permissionPipeline ??
@@ -194,66 +185,91 @@ export async function runIssueSession(
   let stopReason: IssueLoopStopReason = 'completed';
 
   try {
-    let turn = 0;
-    while (true) {
-      turn++;
+    let autonomousTurns = 0;
 
-      lastSendResult = await runConductorTurn({
-        turn,
+    while (true) {
+      if (openQuestions.openCount > 0) {
+        const operatorPhase = await collectOperatorInput({
+          conductorTurn: turns.length + 1,
+          autonomousTurns,
+          maxTurns,
+          options,
+          openQuestions,
+          dialogueLog,
+          escalations,
+        });
+        if (!operatorPhase.received) {
+          continue;
+        }
+        autonomousTurns = 0;
+        if (openQuestions.openCount > 0) {
+          continue;
+        }
+      }
+
+      if (autonomousTurns >= maxTurns) {
+        ensureMaxTurnsOpenQuestion(openQuestions, dialogueLog, {
+          issueUrl: options.issueUrl,
+          autonomousTurns,
+          maxTurns,
+          turnCount: turns.length,
+          workerDispatchCount: workerDispatches.length,
+          workerFailureCount: workerFailures.length,
+          lastResult: lastSendResult.result,
+        }, (question) => {
+          options.onOpenQuestionEnqueued?.(question);
+        });
+        continue;
+      }
+
+      let humanGuidance: string | undefined;
+      if (openQuestions.openCount === 0 && options.onOperatorInput) {
+        const operatorPhase = await collectOperatorInput({
+          conductorTurn: turns.length + 1,
+          autonomousTurns,
+          maxTurns,
+          options,
+          openQuestions,
+          dialogueLog,
+          escalations,
+        });
+        if (operatorPhase.received) {
+          autonomousTurns = 0;
+          humanGuidance = operatorPhase.humanGuidance;
+        }
+      }
+
+      lastSendResult = await runConductorSend({
+        conductorTurn: turns.length + 1,
+        autonomousTurns,
         maxTurns,
+        humanGuidance,
         options,
         conductor,
         workerSession,
         permissionPipeline,
-        openQuestions,
-        dialogueLog,
         workerDispatches,
         workerFailures,
         escalations,
         turns,
       });
+      autonomousTurns++;
 
       const sessionTurn = turns[turns.length - 1]!;
       const loopState = {
-        turn,
+        autonomousTurns,
         maxTurns,
         lastStatus: lastSendResult.status,
         dispatchesThisTurn:
           sessionTurn.workerDispatches + sessionTurn.workerFailures,
         runningWorkers: workerSession.runtime.runningCount,
         pendingPermissions: permissionPipeline.pending.size,
-        openQuestions: openQuestions.openCount,
       };
 
       stopReason = resolveIssueLoopStopReason(loopState);
 
       if (shouldStopIssueLoop(loopState)) {
         break;
-      }
-    }
-
-    const result = buildResult();
-
-    if (stopReason === 'max_turns' && escalateOnMaxTurns) {
-      const guidance = await maybeEscalateOnMaxTurns(onHumanInquiry, result);
-      if (guidance) {
-        const issueContext = await fetchIssueContext(options.issueUrl);
-        lastSendResult = await runBonusTurn({
-          conductor,
-          workerSession,
-          prompt: buildHumanGuidancePrompt({
-            guidance,
-            repoRoot: options.repoRoot,
-            issueContext,
-          }),
-          turn: turns.length + 1,
-        workerDispatches,
-        workerFailures,
-        escalations,
-        turns,
-        options,
-      });
-        stopReason = 'completed';
       }
     }
 
@@ -297,15 +313,62 @@ function rejectAllPendingPermissions(
   }
 }
 
-async function runConductorTurn(input: {
-  turn: number;
+async function collectOperatorInput(input: {
+  conductorTurn: number;
+  autonomousTurns: number;
   maxTurns: number;
+  options: RunIssueSessionOptions;
+  openQuestions: OpenQuestionRegistry;
+  dialogueLog: SessionDialogueLog;
+  escalations: EscalationRecord[];
+}): Promise<{ received: boolean; humanGuidance?: string }> {
+  if (!input.options.onOperatorInput) {
+    return { received: false };
+  }
+
+  const operatorMessage = await input.options.onOperatorInput({
+    conductorTurn: input.conductorTurn,
+    autonomousTurns: input.autonomousTurns,
+    maxTurns: input.maxTurns,
+    openQuestions: input.openQuestions.listOpen(),
+  });
+  if (!operatorMessage?.trim()) {
+    return { received: false };
+  }
+
+  input.dialogueLog.appendOperatorMessage(
+    input.conductorTurn,
+    operatorMessage,
+  );
+  const applied = applyOperatorMessage(
+    input.openQuestions,
+    input.dialogueLog,
+    operatorMessage,
+  );
+  const humanGuidance =
+    applied.answered.length > 0
+      ? joinOperatorInput([
+          applied.generalGuidance,
+          ...applied.answered.map(formatOpenQuestionAnsweredReport),
+        ])
+      : joinOperatorInput([applied.generalGuidance ?? operatorMessage.trim()]);
+
+  for (const answered of applied.answered) {
+    recordAnsweredOpenQuestion(input, answered);
+  }
+
+  return { received: true, humanGuidance };
+}
+
+async function runConductorSend(input: {
+  conductorTurn: number;
+  autonomousTurns: number;
+  maxTurns: number;
+  humanGuidance?: string;
   options: RunIssueSessionOptions;
   conductor: ConductorAgent;
   workerSession: WorkerSession;
   permissionPipeline: PermissionPipeline;
-  openQuestions: OpenQuestionRegistry;
-  dialogueLog: SessionDialogueLog;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   escalations: EscalationRecord[];
@@ -315,37 +378,10 @@ async function runConductorTurn(input: {
   const failuresBefore = input.workerFailures.length;
   const escalationsBefore = input.escalations.length;
 
-  let humanGuidance: string | undefined;
-  if (input.turn > 1 && input.options.onOperatorInput) {
-    const operatorMessage = await input.options.onOperatorInput({
-      turn: input.turn,
-      openQuestions: input.openQuestions.listOpen(),
-    });
-    if (operatorMessage?.trim()) {
-      input.dialogueLog.appendOperatorMessage(input.turn, operatorMessage);
-      const applied = applyOperatorMessage(
-        input.openQuestions,
-        input.dialogueLog,
-        operatorMessage,
-      );
-      humanGuidance =
-        applied.answered.length > 0
-          ? joinOperatorInput([
-              applied.generalGuidance,
-              ...applied.answered.map(formatOpenQuestionAnsweredReport),
-            ])
-          : joinOperatorInput([
-              applied.generalGuidance ?? operatorMessage.trim(),
-            ]);
-      for (const answered of applied.answered) {
-        recordAnsweredOpenQuestion(input, answered);
-      }
-    }
-  }
-
   const issueContext = await fetchIssueContext(input.options.issueUrl);
   const prompt = buildPromptForTurn({
-    turn: input.turn,
+    conductorTurn: input.conductorTurn,
+    autonomousTurns: input.autonomousTurns,
     maxTurns: input.maxTurns,
     issueContext,
     options: input.options,
@@ -354,13 +390,13 @@ async function runConductorTurn(input: {
     escalations: input.escalations,
     runningWorkers: input.workerSession.runtime.listRunning(),
     pendingPermissions: input.permissionPipeline.pending.list(),
-    humanGuidance,
+    humanGuidance: input.humanGuidance,
   });
 
   const sendResult = await input.conductor.send(prompt);
 
   const sessionTurn: IssueSessionTurn = {
-    turn: input.turn,
+    turn: input.conductorTurn,
     runId: sendResult.runId,
     status: sendResult.status,
     result: sendResult.result,
@@ -373,53 +409,11 @@ async function runConductorTurn(input: {
   input.options.onTurnComplete?.(sessionTurn);
 
   return sendResult;
-}
-
-async function runBonusTurn(input: {
-  conductor: ConductorAgent;
-  workerSession: WorkerSession;
-  prompt: string;
-  turn: number;
-  workerDispatches: WorkerDispatchResult[];
-  workerFailures: WorkerFailureRecord[];
-  escalations: EscalationRecord[];
-  turns: IssueSessionTurn[];
-  options: RunIssueSessionOptions;
-}): Promise<ConductorSendResult> {
-  const workersBefore = input.workerDispatches.length;
-  const failuresBefore = input.workerFailures.length;
-  const escalationsBefore = input.escalations.length;
-
-  const sendResult = await input.conductor.send(input.prompt);
-
-  const sessionTurn: IssueSessionTurn = {
-    turn: input.turn,
-    runId: sendResult.runId,
-    status: sendResult.status,
-    result: sendResult.result,
-    error: sendResult.error,
-    workerDispatches: input.workerDispatches.length - workersBefore,
-    workerFailures: input.workerFailures.length - failuresBefore,
-    escalations: input.escalations.length - escalationsBefore,
-  };
-  input.turns.push(sessionTurn);
-  input.options.onTurnComplete?.(sessionTurn);
-
-  return sendResult;
-}
-
-async function maybeEscalateOnMaxTurns(
-  onHumanInquiry: HumanInquiryHandler,
-  result: IssueSessionResult,
-): Promise<string | undefined> {
-  const request = buildMaxTurnsEscalationRequest(result);
-  const response = await onHumanInquiry(request);
-  const guidance = response.answer.trim();
-  return guidance || undefined;
 }
 
 function buildPromptForTurn(input: {
-  turn: number;
+  conductorTurn: number;
+  autonomousTurns: number;
   maxTurns: number;
   issueContext: Awaited<ReturnType<typeof fetchIssueContext>>;
   options: RunIssueSessionOptions;
@@ -431,7 +425,8 @@ function buildPromptForTurn(input: {
   humanGuidance?: string;
 }): string {
   const {
-    turn,
+    conductorTurn,
+    autonomousTurns,
     options,
     issueContext,
     workerDispatches,
@@ -442,13 +437,14 @@ function buildPromptForTurn(input: {
     humanGuidance,
   } = input;
 
-  if (turn === 1) {
+  if (conductorTurn === 1) {
     return buildConductorPrompt({
       issueContext,
       repoRoot: options.repoRoot,
       briefing: options.briefing,
       materials: mergeProfileMaterials(options.materials, options.profile),
-      turn: 1,
+      turn: conductorTurn,
+      autonomousTurns,
       maxTurns: input.maxTurns,
       runningWorkers,
       pendingPermissions,
@@ -461,7 +457,8 @@ function buildPromptForTurn(input: {
   return buildConductorFollowUpPrompt({
     issueContext,
     repoRoot: options.repoRoot,
-    turn,
+    turn: conductorTurn,
+    autonomousTurns,
     maxTurns: input.maxTurns,
     workerDispatches,
     workerFailures,

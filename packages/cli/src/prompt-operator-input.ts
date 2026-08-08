@@ -26,6 +26,10 @@ export async function promptOperatorInput(
         output.write(`  ${question.context}\n`);
       }
     }
+  } else {
+    output.write(
+      `\n自律ターン: ${context.autonomousTurns}/${context.maxTurns}（オペレータ入力でリセット）\n`,
+    );
   }
 
   const rl = readline.createInterface({ input, output });

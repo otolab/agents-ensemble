@@ -22,8 +22,11 @@ export const conductorTurnModule: PromptModule<ConductorPromptContext> = {
     },
   ],
   inputs: [
+    (ctx) => (ctx.turn ? `conductor ターン: ${ctx.turn}` : null),
     (ctx) =>
-      ctx.turn && ctx.maxTurns ? `ターン: ${ctx.turn} / ${ctx.maxTurns}` : null,
+      ctx.maxTurns != null
+        ? `自律ターン（直近オペレータ入力から）: ${ctx.autonomousTurns ?? 0} / ${ctx.maxTurns}`
+        : null,
     (ctx) => `対象 clone（ローカル）: ${ctx.repoRoot}`,
     (ctx) => formatIssueContextForPrompt(ctx.issueContext),
     (ctx) => (ctx.followUp ? `追加指示: ${ctx.followUp}` : null),

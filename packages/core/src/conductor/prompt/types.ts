@@ -18,6 +18,8 @@ export interface ConductorPromptContext {
   briefing?: string;
   followUp?: string;
   turn?: number;
+  /** 直近オペレータ入力から消費した conductor 自律ターン数。 */
+  autonomousTurns?: number;
   maxTurns?: number;
   workerDispatches?: WorkerDispatchResult[];
   workerFailures?: WorkerFailureRecord[];

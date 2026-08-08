@@ -61,7 +61,6 @@ describe.skipIf(!hasConductorAuth())('runIssueSession integration', () => {
       profile: SMOKE_PROFILE,
       modelId: getConductorModelId(),
       maxTurns: 5,
-      escalateOnMaxTurns: false,
       dispatchWorker: (options) =>
         dispatchWorker({
           ...options,

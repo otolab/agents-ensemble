@@ -57,6 +57,20 @@ SDK は conductor LLM の multi-turn 文脈は持つが、オーケストレー�
 - **毎ターンの全件投影はしない**（cache 非効率）。
 - 変化があったときの **差分入力** と **tool 読み出し** で足りる。
 
+### issue session ループと `maxTurns`
+
+- `maxTurns` は **直近オペレータ入力からの conductor 自律ターン上限**（オペレータ入力でリセット）。
+- ループ終了条件（`shouldStopIssueLoop`）:
+  - `lastStatus === 'error'` → 終了
+  - 実行中 worker または判断待ち permission あり → 継続
+  - 当ターンの worker dispatch / failure がなく `lastStatus === 'finished'` → 終了
+  - それ以外 → 継続（open question 有無は終了条件に含めない）
+- 自律ターン上限到達時:
+  - orchestrator が open question「次どうする？」（`source: max_turns`）を **自動登録**
+  - conductor には送らず `onOperatorInput` 待ち
+  - 旧 `escalateOnMaxTurns` / ブロッキング `onHumanInquiry` / ボーナスターンは廃止
+- open question が未回答のときは conductor を送らず、先に `onOperatorInput` で回答を集める。
+
 ## Consequences
 
 - 良い: prompt cache を維持しやすい。TODO リスト的に必要時だけ読める。ユーザ判断が worker 生死と独立して残る

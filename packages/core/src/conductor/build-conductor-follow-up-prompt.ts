@@ -9,6 +9,7 @@ export interface BuildConductorFollowUpPromptOptions {
   issueContext: IssueContext;
   repoRoot: string;
   turn: number;
+  autonomousTurns?: number;
   maxTurns: number;
   workerDispatches: WorkerDispatchResult[];
   workerFailures?: WorkerFailureRecord[];
@@ -25,6 +26,7 @@ export function buildConductorFollowUpPrompt(
     repoRoot: options.repoRoot,
     issueContext: options.issueContext,
     turn: options.turn,
+    autonomousTurns: options.autonomousTurns,
     maxTurns: options.maxTurns,
     workerDispatches: options.workerDispatches,
     workerFailures: options.workerFailures ?? [],

@@ -13,7 +13,6 @@ import {
   runIssueSession,
   type ConductorMaterial,
 } from '@agents-ensemble/core';
-import { promptHumanInquiry } from './prompt-human-inquiry.js';
 import { promptOperatorInput } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
 
@@ -88,7 +87,6 @@ program
           profilePath,
           modelId: options.model,
           maxTurns: options.maxTurns,
-          onHumanInquiry: promptHumanInquiry,
           onOperatorInput: promptOperatorInput,
           onOpenQuestionEnqueued: (question) => {
             console.error(

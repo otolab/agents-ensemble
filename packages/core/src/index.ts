@@ -256,6 +256,7 @@ export {
 export type {
   OpenQuestion,
   OpenQuestionStatus,
+  OpenQuestionSource,
   OpenQuestionAnsweredBy,
   EnqueueOpenQuestionInput,
   AnswerOpenQuestionInput,
@@ -279,7 +280,8 @@ export { openQuestionToEscalationRecord } from './escalation/open-question-to-es
 
 export { buildHumanGuidancePrompt } from './escalation/build-human-guidance-prompt.js';
 
-export { buildMaxTurnsEscalationRequest } from './escalation/build-max-turns-escalation.js';
+export { ensureMaxTurnsOpenQuestion, MAX_TURNS_OPEN_QUESTION_TEXT } from './escalation/enqueue-max-turns-question.js';
+export type { EnsureMaxTurnsOpenQuestionInput } from './escalation/enqueue-max-turns-question.js';
 
 export { ConductorInbox } from './runtime/conductor-inbox.js';
 export { startInboxProcessor } from './runtime/inbox-processor.js';
