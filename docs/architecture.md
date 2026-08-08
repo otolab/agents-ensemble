@@ -119,6 +119,16 @@ conductor は **理解と dispatch に専念**し、ファイル編集・テス�
 
 **agents-ensemble リポジトリに `.cursor/` は置かない。** 開発用 IDE 設定と混同し、hooks がローカル作業を阻害する。conductor / worker のツール方針はコードと起動オプションで与える。
 
+### modular-prompt と SDK の分担
+
+| レイヤ | 役割 |
+|--------|------|
+| **modular-prompt** | conductor の **system prompt 文**（persona / guidelines / materials）。`compile` → 初回または reload 時に適用 |
+| **`agent.send(message)`** | 会話への **user ターン 1 本**。オペレータ発話・自律ターンの状態通知 |
+| **SDK 会話** | LLM 会話履歴の正本 |
+
+worker（ACP）は `session/prompt` でターン更新全体を渡す。conductor（SDK）は **`send` = user 行の append** であり、毎ターン CompiledPrompt 相当を渡すモデルではない。
+
 ### SDK の使い方（想定）
 
 ```typescript
@@ -127,22 +137,22 @@ await using conductor = await Agent.create({
   model: { id: "composer-2.5" },
   mode: "agent",
   local: {
-    cwd: orchestratorWorkspace, // agents-ensemble 等。project .cursor は読まない
-    customTools: {
-      ask_human,
-      answer_open_question,
-      list_open_questions,
-      get_open_question,
-      resolve_permission,
-    },
+    cwd: orchestratorWorkspace,
+    customTools: { ask_human, answer_open_question, list_open_questions, get_open_question, resolve_permission },
   },
 });
 
-// conductor への入力: Issue URL、materials（任意）、dispatch 結果の要約、オペレータ入力（humanGuidance）
-const run = await conductor.send(buildConductorPrompt(context));
+// 初回: modular-prompt で組み立てた system prompt + Issue 初回ブリーフィング
+await conductor.send(buildConductorSessionStart(context));
+
+// 以降: オペレータ発話は user ターンとして直接送る
+await conductor.send(operatorMessage);
+
+// 自律ターン: worker 状態など短い user 通知（設計は #28 参照）
+await conductor.send(workerStatusUpdate);
 ```
 
-**SDK にチャット UI はない。** オペレータとの対話は orchestrator（`issue-session`）が `onOperatorInput` で収集し、次ターンの prompt 文字列に載せて `agent.send` する（[ADR 0008](adr/0008-human-dialogue-open-questions.md)）。
+**SDK にチャット UI はない。** CLI の `onOperatorInput` はオペレータ発話を集め、ConductorSession がイベント列経由で `agent.send` に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。
 
 conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。
 
@@ -222,8 +232,8 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 ```
 conductor ──dispatch──────────► WorkerRuntime.start()（即 return）
 worker    ──permission───────► ConductorInbox ──► InboxProcessor ──► PermissionPipeline
-worker    ──completed/failed► ConductorInbox ──► issue-session 状態更新
-conductor ◄──prompt 反映──── 次ターン send（runningWorkers / 結果 / 失敗 / humanGuidance）
+worker    ──completed/failed► ConductorSession イベント列 ──► agent.send
+conductor ◄──agent.send──── オペレータ user ターン / 自律ターンの状態通知
 ```
 
 reviewer 種別は現状同期 dispatch（同様の Runtime 化は後続）。
@@ -254,16 +264,15 @@ worker (ACP)                    conductor (SDK)              オペレータ
 
 ### オペレータ対話（open question）
 
-ユーザとの接点は **conductor のみ**（第二経路なし）。オーケストレーション側の正本は下表。
+ユーザとの接点は **conductor のみ**（第二経路なし）。
 
 | レイヤ | 役割 |
 |--------|------|
-| **オペレータメッセージ** | 人間の発話の正本（CLI TTY / `ENSEMBLE_OPERATOR_MESSAGE`） |
-| **OpenQuestionRegistry** | TODO リスト的な未回答 / 回答済み（`inq-N`） |
-| **registry 更新の入力報告** | 更新時だけ差分を `humanGuidance` として次 `send` に載せる |
-| **list / get tools** | conductor が必要時だけ一覧・詳細を読む（prompt 全件投影はしない） |
-| **SessionDialogueLog** | セッション結果 JSON 用（prompt には載せない） |
-| **SDK 会話** | LLM 文脈用（補助） |
+| **modular-prompt** | system prompt 文（指揮方針・materials） |
+| **オペレータメッセージ** | `agent.send` の user ターン（CLI TTY / `ENSEMBLE_OPERATOR_MESSAGE`） |
+| **OpenQuestionRegistry** | TODO リスト（`inq-N`）。tool で読む |
+| **SessionDialogueLog** | セッション結果 JSON 用の記録 |
+| **SDK 会話** | LLM 会話履歴の正本 |
 
 **ツール使い分け**
 
@@ -274,7 +283,9 @@ worker (ACP)                    conductor (SDK)              オペレータ
 | 一覧・詳細が必要 | `list_open_questions` / `get_open_question` |
 | permission 判断 | `resolve_permission`（要確認時は open question を先に処理） |
 
-**issue-session ループ**
+**ConductorSession ループ**（[ADR 0009](adr/0009-conductor-session-event-queue.md)）
+
+- `WorkerSession` / `ConductorSession` が対。worker 由来・operator 由来のイベントは **1 本の列** に集約し、1 イベント = 1 `agent.send`（初回のみ system + ブリーフィング）
 
 - `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）
 - 未回答 open question あり → conductor を送らず `onOperatorInput` 待ち

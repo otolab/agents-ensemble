@@ -137,7 +137,7 @@ e2e は `agents.ping` + `workers: [ping]` で pong 応答を検証する（`pack
 
 ### 人間エスカレーション（非対話環境）
 
-conductor の `ask_human` は質問を **open question（TODO リスト）として登録**する（非ブロッキング）。一覧は `list_open_questions`、詳細は `get_open_question`。registry 更新は入力メッセージとして届き、全件を毎ターン prompt に載せない（cache 維持）。
+conductor の `ask_human` は質問を **open question（TODO リスト）として登録**する（非ブロッキング）。一覧は `list_open_questions`、詳細は `get_open_question`。オペレータ発話は `agent.send` の user ターンとして届く（system prompt に毎ターン埋め込まない）。
 
 ### オペレータ入力と自律ターン予算
 
