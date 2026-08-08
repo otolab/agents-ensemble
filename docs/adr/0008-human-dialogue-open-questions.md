@@ -64,7 +64,7 @@ SDK は conductor LLM の multi-turn 文脈は持つが、オーケストレー�
   - `lastStatus === 'error'` → 終了
   - 実行中 worker、判断待ち permission、未回答 open question あり → 継続
   - 当ターンの worker dispatch / failure がなく `lastStatus === 'finished'` → 終了
-  - それ以外 → 継続（open question 有無は終了条件に含めない）
+  - それ以外 → 継続
 - 自律ターン上限到達時:
   - orchestrator が open question「次どうする？」（`source: max_turns`）を **自動登録**
   - conductor には送らず `onOperatorInput` 待ち

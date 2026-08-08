@@ -112,7 +112,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 | 手段 | 内容 |
 |------|------|
 | `mode: "agent"` | SDK 実行モード（[adr/0006-conductor-agent-mode.md](adr/0006-conductor-agent-mode.md)）。振る舞いの正本は下記プロンプト / materials |
-| `customTools` | conductor 用は **`ask_human` のみ**（人間エスカレーション）。worker 起動はセッション開始時に行う |
+| `customTools` | conductor 用: `ask_human`, `answer_open_question`, `list_open_questions`, `get_open_question`, `resolve_permission`（[ADR 0007](adr/0007-permission-pipeline.md), [ADR 0008](adr/0008-human-dialogue-open-questions.md)）。worker 起動はセッション開始時 |
 | プロンプト / materials | PromptModule と profile materials で指揮専任・委任方針を明示（conductor の正本） |
 
 conductor は **理解と dispatch に専念**し、ファイル編集・テスト実行は worker の domain とする。
@@ -128,13 +128,21 @@ await using conductor = await Agent.create({
   mode: "agent",
   local: {
     cwd: orchestratorWorkspace, // agents-ensemble 等。project .cursor は読まない
-    customTools: { ask_human },
+    customTools: {
+      ask_human,
+      answer_open_question,
+      list_open_questions,
+      get_open_question,
+      resolve_permission,
+    },
   },
 });
 
-// conductor への入力: Issue URL、materials（任意）、dispatch 結果の要約
+// conductor への入力: Issue URL、materials（任意）、dispatch 結果の要約、オペレータ入力（humanGuidance）
 const run = await conductor.send(buildConductorPrompt(context));
 ```
+
+**SDK にチャット UI はない。** オペレータとの対話は orchestrator（`issue-session`）が `onOperatorInput` で収集し、次ターンの prompt 文字列に載せて `agent.send` する（[ADR 0008](adr/0008-human-dialogue-open-questions.md)）。
 
 conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。
 
@@ -207,40 +215,73 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 
 ---
 
-## 5. 承認フローと worker 制御
+## 5. 承認フロー・worker 制御・オペレータ対話
 
 ### 双方向フロー（implementer の非同期 dispatch 後）
 
 ```
 conductor ──dispatch──────────► WorkerRuntime.start()（即 return）
-worker    ──permission───────► ConductorInbox ──► InboxProcessor ──► PermissionBroker
+worker    ──permission───────► ConductorInbox ──► InboxProcessor ──► PermissionPipeline
 worker    ──completed/failed► ConductorInbox ──► issue-session 状態更新
-conductor ◄──prompt 反映──── 次ターン send（runningWorkers / 結果 / 失敗）
+conductor ◄──prompt 反映──── 次ターン send（runningWorkers / 結果 / 失敗 / humanGuidance）
 ```
 
-reviewer 種別は現状同期 dispatch（同様の Runtime 化は後続 #20）。
+reviewer 種別は現状同期 dispatch（同様の Runtime 化は後続）。
 
 ### permission（conductor 制御）
 
 ```
-worker (ACP)                    conductor (SDK)              ユーザー
+worker (ACP)                    conductor (SDK)              オペレータ
      │                               │                          │
      │ session/request_permission    │                          │
      │ ─────────────────────────────>│  段1: policy 自明 allow/deny → 即応答
      │                               │  段2: pending → prompt + resolve_permission
-     │                               │  段3: 要確認 → ask_human ──────────────>│
-     │                               │                          │ approve/reject
-     │                               │<──────────────────────────│
-     │                               │  逆順伝播（conductor veto 可）           │
+     │                               │  段3: 要確認 → ask_human（登録のみ・非ブロック）
+     │                               │         OpenQuestionRegistry に enqueue
+     │                               │  次ターン onOperatorInput ◄──────────────│
+     │                               │  （@inq:id 回答 or 自由チャット）          │
+     │                               │  answer_open_question（チャット済み代行記録）│
+     │                               │  resolve_permission                      │
      │ permission response           │                          │
      │ <─────────────────────────────│                          │
 ```
 
-- **worker → ユーザー直結はしない**。人間への出口は conductor の `ask_human` のみ（[ADR 0007](adr/0007-permission-pipeline.md)）
+- **worker → ユーザー直結はしない**。人間への出口は conductor 経由のみ（[ADR 0007](adr/0007-permission-pipeline.md)）
 - **段1 自明許可** — `PermissionPipeline` + policy（read-only allowlist 等）
 - **段2 conductor** — 非自明は pending。`resolve_permission` で allow/deny
-- **段3 human** — conductor が `ask_human` で確認後、conductor が `resolve_permission`
+- **段3 human** — conductor が `ask_human` で **質問を登録**（非ブロッキング）。オペレータ回答は **別ターンのチャット入力**（[ADR 0008](adr/0008-human-dialogue-open-questions.md)）
 - 並列 worker 時は request id / workerId で correlation
+
+### オペレータ対話（open question）
+
+ユーザとの接点は **conductor のみ**（第二経路なし）。オーケストレーション側の正本は下表。
+
+| レイヤ | 役割 |
+|--------|------|
+| **オペレータメッセージ** | 人間の発話の正本（CLI TTY / `ENSEMBLE_OPERATOR_MESSAGE`） |
+| **OpenQuestionRegistry** | TODO リスト的な未回答 / 回答済み（`inq-N`） |
+| **registry 更新の入力報告** | 更新時だけ差分を `humanGuidance` として次 `send` に載せる |
+| **list / get tools** | conductor が必要時だけ一覧・詳細を読む（prompt 全件投影はしない） |
+| **SessionDialogueLog** | セッション結果 JSON 用（prompt には載せない） |
+| **SDK 会話** | LLM 文脈用（補助） |
+
+**ツール使い分け**
+
+| 状況 | tool |
+|------|------|
+| まだ答えていない | `ask_human`（登録のみ） |
+| チャットですでに答えている | `answer_open_question` |
+| 一覧・詳細が必要 | `list_open_questions` / `get_open_question` |
+| permission 判断 | `resolve_permission`（要確認時は open question を先に処理） |
+
+**issue-session ループ**
+
+- `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）
+- 未回答 open question あり → conductor を送らず `onOperatorInput` 待ち
+- 自律ターン上限到達 → orchestrator が「次どうする？」（`source: max_turns`）を自動登録して待機
+- 終了条件: error / 実行中 worker / pending permission / **未回答 open question** がある間は継続
+
+CLI: `promptOperatorInput`（TTY）、非 TTY は `ENSEMBLE_OPERATOR_MESSAGE`。詳細は [README](../README.md) と [ADR 0008](adr/0008-human-dialogue-open-questions.md)。
 
 ---
 
@@ -358,3 +399,4 @@ Stage 3 までが初期スコープ。以降（#20 非同期化の完了、プ�
 | [prompts.md](prompts.md) | 起動プロンプト |
 | [implementation.md](implementation.md) | 実装メモ・段階導入の要約 |
 | [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e の分離 |
+| [adr/0008-human-dialogue-open-questions.md](adr/0008-human-dialogue-open-questions.md) | open question / オペレータ対話 |
