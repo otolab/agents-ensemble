@@ -89,6 +89,8 @@ describe('runIssueSession', () => {
 
     expect(operatorCalls).toBeGreaterThanOrEqual(1);
     expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(String(mockSend.mock.calls[0]![0])).toContain('Test');
+    expect(String(mockSend.mock.calls[1]![0])).toContain('continue with tests');
     expect(result.turnCount).toBe(2);
     expect(result.stopReason).toBe('completed');
     expect(result.lastResult).toBe('conductor-ok');
@@ -138,6 +140,9 @@ describe('runIssueSession', () => {
 
     expect(operatorCalls).toBeGreaterThanOrEqual(1);
     expect(mockSend).toHaveBeenCalledTimes(2);
+    const operatorMessage = String(mockSend.mock.calls[1]![0]);
+    expect(operatorMessage).toContain('yes, continue');
+    expect(operatorMessage).not.toMatch(/完了した worker/);
     expect(result.turnCount).toBe(2);
     expect(result.stopReason).toBe('completed');
     expect(
