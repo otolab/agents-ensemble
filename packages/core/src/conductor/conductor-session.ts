@@ -290,7 +290,8 @@ export async function runConductorSession(
           if (shouldStopIssueLoop(loopState)) {
             break;
           }
-          continue;
+          // worker / permission イベントの到着を待つ（空キューでの busy-spin を避ける）
+          event = await eventQueue.waitForEvent();
         }
       } else {
         event = eventQueue.dequeue();
@@ -439,7 +440,7 @@ async function collectOperatorInput(input: {
     input.eventQueue.enqueue({ type: 'operator.message', text });
   }
 
-  return { received: true };
+  return { received: !!text };
 }
 
 async function runInitialConductorSend(input: {

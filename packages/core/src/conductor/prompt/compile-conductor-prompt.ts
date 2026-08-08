@@ -12,13 +12,6 @@ export function compileConductorSessionStart(
   return renderCompiledPrompt(compile(merged, context));
 }
 
-/** system prompt 文のみ（materials 含む）。SDK 専用 API 登場まで初回 send に含める。 */
-export function compileConductorSystemPrompt(
-  context: ConductorPromptContext,
-): string {
-  return renderCompiledPrompt(compile(conductorSystemModule, context));
-}
-
 /** 初回 `agent.send` 用（system + Issue ブリーフィング等）。 */
 export function compileConductorInitialMessage(
   context: ConductorPromptContext,
