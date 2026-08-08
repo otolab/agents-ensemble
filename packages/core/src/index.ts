@@ -156,13 +156,33 @@ export type {
 } from './conductor/build-conductor-prompt.js';
 export { loadConductorMaterialFromFile } from './conductor/prompt/materials.js';
 
+export { runConductorSession } from './conductor/conductor-session.js';
 export { runIssueSession } from './conductor/issue-session.js';
+export type {
+  ConductorSessionResult,
+  ConductorSessionTurn,
+  RunConductorSessionOptions,
+} from './conductor/conductor-session.js';
 export type {
   IssueSessionResult,
   IssueSessionTurn,
-  OperatorInputContext,
   RunIssueSessionOptions,
+  OperatorInputContext,
 } from './conductor/issue-session.js';
+
+export {
+  SessionEventQueue,
+} from './conductor/session/session-event-queue.js';
+export {
+  formatSessionEventForConductor,
+} from './conductor/session/format-session-event.js';
+export type {
+  SessionEvent,
+  OperatorMessageEvent,
+  WorkerCompletedEvent,
+  WorkerFailedEvent,
+  PermissionPendingEvent,
+} from './conductor/session/session-event.js';
 
 export {
   buildConductorFollowUpPrompt,
