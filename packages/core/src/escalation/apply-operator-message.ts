@@ -1,4 +1,3 @@
-import type { SessionDialogueLog } from './dialogue-log.js';
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 import { recordOpenQuestionAnswer } from './record-open-question-answer.js';
 
@@ -13,7 +12,6 @@ export interface ApplyOperatorMessageResult {
 
 export function applyOperatorMessage(
   registry: OpenQuestionRegistry,
-  dialogueLog: SessionDialogueLog,
   message: string,
 ): ApplyOperatorMessageResult {
   const trimmed = message.trim();
@@ -24,7 +22,7 @@ export function applyOperatorMessage(
   const explicit = trimmed.match(INQUIRY_REFERENCE_PATTERN);
   if (explicit) {
     const [, id, answerText] = explicit;
-    const answered = recordOpenQuestionAnswer(registry, dialogueLog, {
+    const answered = recordOpenQuestionAnswer(registry, {
       id: id!,
       answer: answerText.trim(),
       answeredBy: 'operator',
@@ -37,7 +35,7 @@ export function applyOperatorMessage(
 
   const open = registry.listOpen();
   if (open.length === 1) {
-    const answered = recordOpenQuestionAnswer(registry, dialogueLog, {
+    const answered = recordOpenQuestionAnswer(registry, {
       id: open[0]!.id,
       answer: trimmed,
       answeredBy: 'operator',

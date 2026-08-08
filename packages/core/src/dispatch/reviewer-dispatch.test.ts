@@ -6,7 +6,10 @@ import { dispatchReviewer } from './reviewer-dispatch.js';
 describe('dispatchReviewer', () => {
   it('runs ACP session in an existing worktree', async () => {
     const connectSpy = vi.spyOn(acpBridgeModule.AcpBridge, 'connect').mockResolvedValue({
-      runSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+      runSession: vi.fn().mockResolvedValue({
+        sessionId: 'sess-1',
+        promptResult: { stopReason: 'end_turn' },
+      }),
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as acpBridgeModule.AcpBridge);
 
@@ -40,7 +43,10 @@ describe('dispatchReviewer', () => {
 
   it('resolves worktree from issueUrl and repoRoot', async () => {
     vi.spyOn(acpBridgeModule.AcpBridge, 'connect').mockResolvedValue({
-      runSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+      runSession: vi.fn().mockResolvedValue({
+        sessionId: 'sess-1',
+        promptResult: { stopReason: 'end_turn' },
+      }),
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as acpBridgeModule.AcpBridge);
 

@@ -6,8 +6,6 @@ export {
   runConductorSession as runIssueSession,
   type RunConductorSessionOptions,
   type RunConductorSessionOptions as RunIssueSessionOptions,
-  type ConductorSessionTurn,
-  type ConductorSessionTurn as IssueSessionTurn,
   type ConductorSessionResult,
   type ConductorSessionResult as IssueSessionResult,
   type OperatorInputContext,

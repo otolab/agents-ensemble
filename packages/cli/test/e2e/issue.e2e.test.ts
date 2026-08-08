@@ -85,13 +85,13 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
       lastRunStatus: string;
       lastResult?: string;
       stopReason: string;
-      turnCount: number;
+      sendCount: number;
     }>(stdout);
 
     expect(exitCode).toBe(0);
     expect(result.lastRunStatus).toBe('finished');
     expect(result.stopReason).toBe('completed');
-    expect(result.turnCount).toBe(2);
+    expect(result.sendCount).toBe(2);
     expect(result.lastResult).toContain('conductor-ok');
   }, 300_000);
 });

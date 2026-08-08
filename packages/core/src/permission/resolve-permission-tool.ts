@@ -19,7 +19,7 @@ export function createResolvePermissionTool(
   return {
     resolve_permission: {
       description:
-        'Resolve a pending worker permission request. When the operator already answered in dialogue, use answer_open_question first, then call this.',
+        'Resolve a pending worker permission request. When the operator already answered in chat, use answer_open_question first, then call this.',
       inputSchema: {
         type: 'object',
         properties: {

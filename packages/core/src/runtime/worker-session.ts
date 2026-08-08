@@ -15,6 +15,8 @@ export interface WorkerSessionOptions {
   issueUrl: string;
   repoRoot: string;
   workers: SessionWorkerSpec[];
+  /** resume 時に復元する worker 名 → ACP session id。 */
+  restoredWorkerSessions?: Record<string, string>;
   dispatchWorker?: WorkerDispatchFn;
   permissionPipeline?: PermissionPipeline;
   decidePermission?: (
@@ -76,6 +78,8 @@ export class WorkerSession {
         kind: worker.kind,
         systemPrompt: worker.systemPrompt,
         repoRoot: this.options.repoRoot,
+        resumeAcpSessionId:
+          this.options.restoredWorkerSessions?.[worker.name],
       });
       this.startedWorkerIds.push(workerId);
     }

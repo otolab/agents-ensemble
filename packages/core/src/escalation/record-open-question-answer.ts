@@ -1,5 +1,3 @@
-import type { SessionDialogueLog } from './dialogue-log.js';
-import { formatOpenQuestionAnsweredReport } from './format-registry-update.js';
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 
 export interface RecordOpenQuestionAnswerInput {
@@ -13,7 +11,6 @@ export interface RecordOpenQuestionAnswerInput {
 
 export function recordOpenQuestionAnswer(
   registry: OpenQuestionRegistry,
-  dialogueLog: SessionDialogueLog,
   input: RecordOpenQuestionAnswerInput,
 ): OpenQuestion | undefined {
   const entry = registry.get(input.id);
@@ -25,17 +22,11 @@ export function recordOpenQuestionAnswer(
       ? input.answer.trim().toLowerCase().startsWith('y')
       : undefined);
 
-  const answered = registry.answer(input.id, {
+  return registry.answer(input.id, {
     answer: input.answer,
     approved,
     answeredBy: input.answeredBy,
     sourceMessage: input.sourceMessage,
     rationale: input.rationale,
   });
-  if (!answered) return undefined;
-
-  const report = formatOpenQuestionAnsweredReport(answered);
-  dialogueLog.appendRegistryUpdate(report);
-
-  return answered;
 }

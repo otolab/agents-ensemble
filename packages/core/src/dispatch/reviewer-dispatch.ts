@@ -43,7 +43,7 @@ export async function dispatchReviewer(
   });
 
   try {
-    const promptResult = await bridge.runSession({
+    const { promptResult } = await bridge.runSession({
       cwd: worktreePath,
       prompt,
       onUpdate: options.onUpdate,
