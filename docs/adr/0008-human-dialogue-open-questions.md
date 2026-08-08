@@ -62,7 +62,7 @@ SDK は conductor LLM の multi-turn 文脈は持つが、オーケストレー�
 - `maxTurns` は **直近オペレータ入力からの conductor 自律ターン上限**（オペレータ入力でリセット）。
 - ループ終了条件（`shouldStopIssueLoop`）:
   - `lastStatus === 'error'` → 終了
-  - 実行中 worker または判断待ち permission あり → 継続
+  - 実行中 worker、判断待ち permission、未回答 open question あり → 継続
   - 当ターンの worker dispatch / failure がなく `lastStatus === 'finished'` → 終了
   - それ以外 → 継続（open question 有無は終了条件に含めない）
 - 自律ターン上限到達時:

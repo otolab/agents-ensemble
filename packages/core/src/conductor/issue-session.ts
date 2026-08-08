@@ -264,6 +264,7 @@ export async function runIssueSession(
           sessionTurn.workerDispatches + sessionTurn.workerFailures,
         runningWorkers: workerSession.runtime.runningCount,
         pendingPermissions: permissionPipeline.pending.size,
+        openQuestions: openQuestions.openCount,
       };
 
       stopReason = resolveIssueLoopStopReason(loopState);

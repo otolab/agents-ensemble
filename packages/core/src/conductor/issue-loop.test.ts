@@ -62,6 +62,18 @@ describe('shouldStopIssueLoop', () => {
     ).toBe(false);
   });
 
+  it('continues while open questions await operator answer', () => {
+    expect(
+      shouldStopIssueLoop({
+        autonomousTurns: 1,
+        maxTurns: 5,
+        lastStatus: 'finished',
+        dispatchesThisTurn: 0,
+        openQuestions: 1,
+      }),
+    ).toBe(false);
+  });
+
   it('does not stop only because autonomous turns reached maxTurns', () => {
     expect(
       shouldStopIssueLoop({
