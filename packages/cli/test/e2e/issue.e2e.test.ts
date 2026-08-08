@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasIssueE2eConfig, loadIssueE2eConfig } from './test-config.js';
+import { hasIssueE2eConfig, loadIssueE2eConfig, OPERATOR_E2E_PROFILE_PATH } from './test-config.js';
 import { runEnsembleCli, parseCliJson } from './test-helpers.js';
 
 const SMOKE_BRIEFING =
@@ -63,7 +63,7 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
         '--repo-root',
         config.repoRoot,
         '--profile',
-        config.profilePath,
+        OPERATOR_E2E_PROFILE_PATH,
         '--conductor-cwd',
         config.conductorCwd,
         '--model',
@@ -91,7 +91,7 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
     expect(exitCode).toBe(0);
     expect(result.lastRunStatus).toBe('finished');
     expect(result.stopReason).toBe('completed');
-    expect(result.turnCount).toBeGreaterThanOrEqual(2);
+    expect(result.turnCount).toBe(2);
     expect(result.lastResult).toContain('conductor-ok');
   }, 300_000);
 });
