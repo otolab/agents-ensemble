@@ -1,31 +1,26 @@
-import type { ReviewerDispatchResult } from '../../dispatch/reviewer-dispatch.js';
 import type { WorkerDispatchResult } from '../../dispatch/worker-dispatch.js';
 import type { EscalationRecord } from '../../escalation/human-inquiry.js';
 import type { WorkerFailureRecord } from '../../runtime/types.js';
 
 export function formatDispatchSummaries(
   workers: WorkerDispatchResult[],
-  reviewers: ReviewerDispatchResult[],
 ): string[] {
-  if (workers.length === 0 && reviewers.length === 0) {
+  if (workers.length === 0) {
     return ['(なし)'];
   }
 
-  const lines: string[] = [];
+  return workers.map(
+    (worker) =>
+      `- worker: name=${worker.name} kind=${worker.kind} issue=${worker.issue.url} worktree=${worker.worktree.path} stopReason=${worker.promptResult.stopReason}${formatResponseSuffix(worker.promptResult.responseText)}`,
+  );
+}
 
-  for (const worker of workers) {
-    lines.push(
-      `- worker: issue=${worker.issue.url} skill worktree=${worker.worktree.path} stopReason=${worker.promptResult.stopReason}`,
-    );
-  }
-
-  for (const reviewer of reviewers) {
-    lines.push(
-      `- reviewer: pr=${reviewer.prUrl} worktree=${reviewer.worktreePath} stopReason=${reviewer.promptResult.stopReason}`,
-    );
-  }
-
-  return lines;
+function formatResponseSuffix(responseText: string | undefined): string {
+  if (!responseText) return '';
+  const trimmed = responseText.trim();
+  if (!trimmed) return '';
+  const preview = trimmed.length > 200 ? `${trimmed.slice(0, 200)}…` : trimmed;
+  return ` response=${preview}`;
 }
 
 export function formatWorkerFailureSummaries(
@@ -37,7 +32,7 @@ export function formatWorkerFailureSummaries(
 
   return failures.map(
     (failure) =>
-      `- worker failed: id=${failure.workerId} issue=${failure.issueUrl} skill=${failure.skillName} error=${failure.error}`,
+      `- worker failed: id=${failure.workerId} name=${failure.name} issue=${failure.issueUrl} kind=${failure.kind} error=${failure.error}`,
   );
 }
 

@@ -83,6 +83,8 @@ ACP 向けに **FakeAcpServer**（または `TestAcpTransport`）を core に置
 
 | シナリオ | 検証内容 |
 |---------|---------|
+| **dispatchWorker + Fake ACP** | in-process Fake、`responseText`、prompt 組み立て |
+| **WorkerSession + inbox** | bootstrap → 完了コールバックまで（Fake ACP） |
 | **AcpBridge ライフサイクル** | spawn → initialize → authenticate → session/new → session/prompt → update 購読 → 終了 |
 | **プロセス cleanup** | 正常終了・異常終了でゾンビが残らない |
 | **permission 往復** | `session/request_permission` → 応答（Stage 3） |
@@ -133,7 +135,7 @@ describe.skipIf(!hasAcpTestConfig())('AcpBridge integration', () => { ... });
 | Stage | シナリオ |
 |-------|---------|
 | **1** | `ensemble dispatch worker <issue-url> --skill <name>` — worktree + ACP + プロンプト |
-| **2** | `ensemble issue <url>` — conductor 起動（smoke: dispatch なしで完了） |
+| **2** | `ensemble issue <url>` — conductor + worker 連携（ping/pong 等） |
 | **3+** | reviewer ループ、permission エスカレーション（別ファイルで追加） |
 
 ### 配置

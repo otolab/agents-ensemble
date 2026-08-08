@@ -12,7 +12,7 @@
     }
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && node scripts/copy-profiles.mjs",
     "test": "vitest",
     "test:run": "vitest run",
     "test:integration": "vitest run --config vitest.config.integration.ts",

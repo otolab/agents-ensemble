@@ -3,8 +3,16 @@
 ## 何を作るか
 
 - コマンド名: **`ensemble`**
-- 最小ユースケース: Issue を指定して起動 → worker / reviewer を起動して作業
+- 最小ユースケース: Issue を指定して起動 → conductor が worker を起動・制御して作業を進める
 - 権限・方針の問題: Issue に記載して回答を待つ、または CLI でユーザーに最小限問い合わせ
+
+## 構造の前提
+
+1. **スター型** — 複数の agent が **conductor** を中心に接続する。worker 同士は直接つながらない
+2. **worker の自律** — 各 worker は種別（役割）を持ち、独立 session で自律的に動く
+3. **conductor の制御** — 起動・permission（自動許諾を含む）・エスカレーションは conductor が担う
+4. **Issue / PR で共有** — 作業報告と状態は Issue / PR に記録し、worker 間で共有する
+5. **Issue + worktree に紐づく** — 作業とプロセス全体は 1 Issue（とその worktree）に束ねる
 
 ## 原則
 
@@ -20,6 +28,7 @@
 - 内部状態のスキーマ（`WORKFLOW_*.md` のフォーマット固定など）
 - フェーズ遷移のルール表・機械可読トリガー
 - dispatch レジストリの厳密な型
+- worker 種別の固定列挙（プロファイルが定義する）
 
 ## 与えられるもの（入力）
 

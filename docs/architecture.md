@@ -1,8 +1,8 @@
 # アーキテクチャ
 
-`ensemble` の技術構成。前提は **SDK で conductor（指揮者）**、**ACP で worker / reviewer 等（演奏者）**。
+`ensemble` の技術構成。前提は **SDK で conductor**、**ACP で worker**。複数 agent が **conductor を中心とするスター型**で接続する。
 
-設計の大原則（Skill 依存・遷移の非機械化など）は [design.md](design.md) を正本とする。本文はその前提の上に、プロセス分離と通信経路を記述する。
+設計の大原則（スター型・Issue 紐づけ・遷移の非機械化など）は [design.md](design.md) を正本とする。本文はプロセス分離と通信経路を記述する。
 
 関連: [otolab/my-logs#2027](https://github.com/otolab/my-logs/issues/2027)、CONDUCTOR_MODE（`mode-controller` の `conductor` モード）
 
@@ -12,7 +12,7 @@
 
 ### 何をするシステムか
 
-手順が明確な GitHub Issue を起点に、**conductor が演奏せず** worker / reviewer を起動し、作業を進める CLI（`ensemble`）。
+手順が明確な GitHub Issue を起点に、**conductor が演奏せず** worker を起動・制御し、作業を進める CLI（`ensemble`）。作業とプロセスは **1 Issue + worktree** に紐づく。
 
 - **最小ユースケース**: `ensemble issue <url>` → worker 起動 → Issue / PR 上で作業
 - **直近スコープ**: #2027 で整理した「小さな作業単位の Issue ベースフロー」
@@ -24,14 +24,36 @@
 |----------------|-----------------|
 | スコアを深く理解するが演奏しない | conductor プロセスは **実作業ツールを持たない** |
 | 理解・判断・指示・検証 | `gh` / Issue / PR を読み、dispatch・エスカレーション |
-| エージェントへ委任 | ACP で **独立 session** の worker / reviewer |
-| 結果を鵜呑みにしない | reviewer ロール + Issue / PR 上の履歴 |
+| エージェントへ委任 | ACP で **独立 session** の worker |
+| 結果を鵜呑みにしない | reviewer 種別の worker + Issue / PR 上の履歴 |
 
 CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロー専用の強制版**（プロセス・権限で補強）。
 
 ---
 
 ## 2. 全体像
+
+### 構造の前提
+
+- **スター型** — 複数の worker が **conductor 1 点**に接続する。worker 同士は直接つながらない。
+- **worker は役割を持ち自律的に動く** — 各 session は独立プロセス。Skill に沿って作業する。
+- **制御は conductor** — dispatch、permission の自動許諾・拒否・エスカレーションを含め、conductor が worker をコントロールする。
+- **共有は Issue / PR** — 作業報告・状態は Issue と PR に記録し、worker 間で共有される（会話履歴は使わない）。
+- **作業単位は Issue（+ worktree）** — プロセス全体が 1 Issue（とその worktree）に紐づく。
+
+```
+                    worker (implementer)
+                           │
+                           │ ACP
+                           │
+    worker (reviewer) ─────┼───── conductor (SDK)
+                           │         │
+                           │         │ gh / CLI
+                           │         ▼
+    worker (librarian) ────┘    Issue ◄──► PR
+                                     │
+                              worktree（作業ツール）
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -40,25 +62,27 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
-│  conductor (@agents-ensemble/core + Cursor SDK)             │
-│  長寿命 Agent 1 本（または同等の SDK ループ）                 │
-│  ・Issue / PR / CI の読取（gh 等）                          │
-│  ・次ロールの判断（LLM。ルール表は固定しない）                │
-│  ・worker / reviewer の dispatch                            │
-│  ・permission の集約 → 必要時に人間へ                         │
-│  ・実作業ツールは SDK mode + customTools で制限           │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ spawn + JSON-RPC (stdio)
-              ┌─────────────┼─────────────┐
-              ▼             ▼             ▼
-         worker ACP    reviewer ACP   librarian ACP
-         (新 session)  (新 session)   (新 session)
-              │             │             │
-              └─────────────┴─────────────┘
-                            │
-              Issue ◄───────┴───────► PR
-              （共有の正本・履歴）
+│  conductor (@agents-ensemble/core + Cursor SDK)               │
+│  スター型の中心。長寿命 Agent 1 本                              │
+│  ・Issue / PR / CI の読取（gh 等）                            │
+│  ・次の worker 種別の判断（LLM。ルール表は固定しない）          │
+│  ・worker の dispatch・制御（種別・Skill・起動文書）            │
+│  ・permission の集約（自動許諾含む）→ 必要時に人間へ            │
+│  ・実作業ツールは SDK mode + customTools で制限                 │
+└───────┬─────────────────┬─────────────────┬───────────────────┘
+        │ spawn           │ spawn           │ spawn
+        ▼                 ▼                 ▼
+   worker ACP         worker ACP         worker ACP
+   (implementer)      (reviewer)         (librarian) …
+        │                 │                 │
+        └─────────────────┴─────────────────┘
+                          │ read / write
+                          ▼
+              Issue ◄────────────► PR
+              worktree（同一 Issue に紐づく作業ツリー）
 ```
+
+**worker 同士の連携は conductor 経由の dispatch と、Issue / PR 上の記録で行う。**
 
 ### レイヤー
 
@@ -67,9 +91,9 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 | **CLI** | Node.js (`packages/cli`) | コマンド解析、環境、終了処理 |
 | **Core** | TypeScript (`packages/core`) | ACP ブリッジ、dispatch、型の共有 |
 | **Conductor** | `@cursor/sdk` | 判断・dispatch 制御の主体 |
-| **Worker 等** | `agent acp` | Skill に沿った実作業・レビュー |
+| **Worker** | `agent acp` | Skill に沿った実作業（種別ごとに起動文書・Skill が異なる） |
 | **共有媒体** | GitHub Issue / PR | セッション会話に依存しない状態と履歴 |
-| **手順の正本** | Skill（dispatch 先の clone / worktree 上） | worker / reviewer が読む手順 |
+| **手順の正本** | Skill（dispatch 先の clone / worktree 上） | worker が読む手順 |
 
 ---
 
@@ -78,18 +102,18 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 ### 責務
 
 1. **状態把握** — Issue コメント、PR、CI、ラベル等（主に `gh`）
-2. **遷移判断** — 次に worker / reviewer / librarian / 人間か（**機械ルール表に固定しない**）
-3. **dispatch** — 判断に基づき ACP worker 等を起動
-4. **承認集約** — サブの `session/request_permission` を受け、ポリシー or 人間へ
-5. **エスカレーション** — 判断不能・マージ前等をユーザーへ（CLI 問い合わせ or 秘書連携）
+2. **遷移判断** — 次にどの worker 種別を起動するか、人間へ聞くか（**機械ルール表に固定しない**）
+3. **dispatch・制御** — worker を起動し、実行中も permission 応答等で制御する（自動許諾ポリシーを含む）
+4. **承認集約** — 各 worker の `session/request_permission` を conductor が受け、ポリシー or 人間へ
+5. **エスカレーション** — 判断不能・マージ前等をユーザーへ（CLI 問い合わせ）
 
 ### 演奏しないことの担保
 
 | 手段 | 内容 |
 |------|------|
-| `mode: "plan"` | 計画・調査寄り。実装は worker に委任 |
-| `customTools` | **dispatch 専用**のみ（例: `dispatch_worker`）。built-in 作業ツールに頼らない |
-| プロンプト / materials | PromptModule と `--material` で委任方針を明示 |
+| `mode: "agent"` | SDK 実行モード（[adr/0006-conductor-agent-mode.md](adr/0006-conductor-agent-mode.md)）。振る舞いの正本は下記プロンプト / materials |
+| `customTools` | conductor 用は **`ask_human` のみ**（人間エスカレーション）。worker 起動はセッション開始時に行う |
+| プロンプト / materials | PromptModule と profile materials で指揮専任・委任方針を明示（conductor の正本） |
 
 conductor は **理解と dispatch に専念**し、ファイル編集・テスト実行は worker の domain とする。
 
@@ -101,10 +125,10 @@ conductor は **理解と dispatch に専念**し、ファイル編集・テス�
 // apiKey 省略時は SDK が CURSOR_API_KEY → ~/.cursor/sdk/auth.json の順で解決
 await using conductor = await Agent.create({
   model: { id: "composer-2.5" },
-  mode: "plan",
+  mode: "agent",
   local: {
     cwd: orchestratorWorkspace, // agents-ensemble 等。project .cursor は読まない
-    customTools: { dispatch_worker, dispatch_reviewer, ask_human },
+    customTools: { ask_human },
   },
 });
 
@@ -130,7 +154,17 @@ conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.lo
 
 ---
 
-## 4. Worker / Reviewer（ACP）
+## 4. Worker（ACP）
+
+conductor が制御する実行単位。**種別（kind）** によって読む Skill と起動時のシステムプロンプトが変わる。各 worker は **独立 session で自律的に** Skill に沿って動く。プロファイル（未実装）が種別ごとの定義を返す想定。
+
+| 種別（例） | 役割の例 |
+|-----------|---------|
+| **implementer** | 実装・Issue 更新・PR・対応 |
+| **reviewer** | 独立検証（コンテキスト 0） |
+| **librarian** | ドキュメント整備・所在調査 |
+
+種別は固定列挙にしない。プロファイルが **Skill 名** と **worker 用システムプロンプト（起動文書）** を conductor に渡し、dispatch 時に worker へ与える。
 
 ### なぜ ACP か
 
@@ -139,7 +173,7 @@ conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.lo
 | 親会話からの分離 | 弱い | **session 独立** |
 | Skill 追加直後の反映 | `reload` + 再 spawn | **新プロセスで再発見** |
 | permission の仲介 | ほぼ不可 | **conductor がクライアント** |
-| reviewer のコンテキスト 0 | 難しい | 新 session + レビュー Skill のみ |
+| reviewer のコンテキスト 0 | 難しい | 新 session + 種別用起動文書のみ |
 
 ### 起動パターン
 
@@ -147,67 +181,90 @@ conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.lo
 
 1. `spawn("agent", ["acp"], { cwd, env, ... })` — **ツール・環境は起動オプションで明示**
 2. JSON-RPC: `initialize` → `authenticate` → `session/new`（`cwd`, `mcpServers` 等）
-3. `session/prompt` に **ロール別起動プロンプト** + Skill 名 / Issue URL
+3. `session/prompt` に **種別用起動プロンプト** + Skill 名 / Issue URL
 4. `session/update` を conductor が購読（進捗）
 5. `session/request_permission` → conductor が応答
 6. 完了後 session 終了（次フェーズは **新 session**）
 
-worker / reviewer は **agents-ensemble の `.cursor/` を読まない**。Skill 名は起動プロンプトで指示し、手順の正本は dispatch 先の worktree（`cwd`）上の Skill ファイルとする。
+worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起動文書は conductor が与え、手順の正本は dispatch 先の worktree（`cwd`）上の Skill ファイルとする。
 
-| ロール | worktree | Skill | 備考 |
-|--------|----------|-------|------|
-| **worker** | 作成 | 作業 Skill | 実装・Issue 更新・PR・対応 |
-| **reviewer** | 既存に参加 | レビュー Skill | コンテキスト 0、独立検証 |
-| **librarian** | 対象 repo 次第 | librarian Skill | auto-docs 等（条件付き） |
+| 種別 | worktree | 備考 |
+|------|----------|------|
+| **implementer** | 作成 | 実装作業の主役 |
+| **reviewer** | 既存に参加 | レビュー Skill |
+| **librarian** | 対象 repo 次第 | ドキュメント整備等（条件付き） |
 
-起動プロンプトのパターンは [prompts.md](prompts.md)。
+起動プロンプトのパターンは [prompts.md](prompts.md)。**どの種別をいつ dispatch するか、どの Skill・起動文書を渡すかはプロファイルが決める。**
 
 ### Worker の前提
 
-- 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— dispatch 先 worktree の `cwd` から解決
-- ツール可否・MCP 等は **`spawn` / `session/new` のオプションで明示**（暗黙の project `.cursor` には依存しない）
-- 成果・経緯は **Issue コメント / PR** に書く（会話は捨ててよい）
+- **自律実行** — session 内では Skill に沿って自走する。worker 同士は直接通信しない
+- **Issue / PR に報告** — 作業報告・状態は Issue コメント / PR に書き、他 worker が読む
+- **worktree に紐づく** — implementer は worktree を作成し、以降の worker は同じ Issue の worktree を共有する
+- 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— worktree の `cwd` から解決
+- ツール可否・MCP 等は **`spawn` / `session/new` のオプションで明示**
 - description 本文は checkbox の check 以外は基本触らない（#2027 運用）
 
 ---
 
-## 5. 承認フロー
+## 5. 承認フローと worker 制御
+
+### 双方向フロー（implementer の非同期 dispatch 後）
+
+```
+conductor ──dispatch──────────► WorkerRuntime.start()（即 return）
+worker    ──permission───────► ConductorInbox ──► InboxProcessor ──► PermissionBroker
+worker    ──completed/failed► ConductorInbox ──► issue-session 状態更新
+conductor ◄──prompt 反映──── 次ターン send（runningWorkers / 結果 / 失敗）
+```
+
+reviewer 種別は現状同期 dispatch（同様の Runtime 化は後続 #20）。
+
+### permission（conductor 制御）
 
 ```
 worker (ACP)                    conductor (SDK)              ユーザー
      │                               │                          │
      │ session/request_permission    │                          │
-     │ ─────────────────────────────>│  ポリシー判定              │
-     │                               │  ├─ 自動 allow/deny      │
-     │                               │  └─ 判断不能 ────────────>│
-     │                               │                          │ y/n
+     │ ─────────────────────────────>│  段1: policy 自明 allow/deny → 即応答
+     │                               │  段2: pending → prompt + resolve_permission
+     │                               │  段3: 要確認 → ask_human ──────────────>│
+     │                               │                          │ approve/reject
      │                               │<──────────────────────────│
+     │                               │  逆順伝播（conductor veto 可）           │
      │ permission response           │                          │
      │ <─────────────────────────────│                          │
 ```
 
-- **サブ → ユーザー直結はしない**。conductor が ACP クライアントとして必ず仲介する。
-- conductor 側に自動 allow/deny ポリシー（`PermissionBroker`）を載せられる。
-- **PR マージ**は引き続き人間（#2027）。
-
-並列 dispatch 時は `sessionId` / ロールで permission 要求をキューイングする。
+- **worker → ユーザー直結はしない**。人間への出口は conductor の `ask_human` のみ（[ADR 0007](adr/0007-permission-pipeline.md)）
+- **段1 自明許可** — `PermissionPipeline` + policy（read-only allowlist 等）
+- **段2 conductor** — 非自明は pending。`resolve_permission` で allow/deny
+- **段3 human** — conductor が `ask_human` で確認後、conductor が `resolve_permission`
+- 並列 worker 時は request id / workerId で correlation
 
 ---
 
-## 6. 情報の流れ（セッションに依存しない）
+## 6. 情報の流れ（Issue + worktree 中心）
 
 ```
-Skill（手順）          conductor が dispatch 時に指定
-       │
-       ▼
-worker / reviewer ──write──► Issue コメント
-       │                      PR / レビューコメント
-       │                      コード差分（worktree）
-       ▼
-conductor ──read──► 次の dispatch 判断
+Issue URL ──► worktree 作成（implementer dispatch 時）
+     │
+     ├── Skill（手順）     conductor が dispatch 時に指定
+     │
+     ▼
+worker（種別ごと）──write──► Issue コメント
+     │                       PR / レビューコメント
+     │                       コード差分（worktree）
+     ▼
+他 worker ──read──► Issue / PR から状態を復元
+     │
+     ▼
+conductor ──read──► 次の worker 種別の判断
 ```
 
-**会話履歴は共有媒体にしない。** conductor は dispatch 結果の要約と Issue / PR を読んで次を決める。
+- **会話履歴は共有媒体にしない** — worker session の会話は捨ててよい
+- **Issue / PR が worker 間の共有バス** — 報告・状態の正本
+- **worktree が作業の物理的な紐づけ** — 1 Issue あたり 1 worktree（規約）
 
 ---
 
@@ -239,15 +296,15 @@ CLI は薄く、オーケストレーション本体は core に集約する。
 ensemble issue https://github.com/org/repo/issues/123
   → conductor 起動（SDK）
   → Issue / Skill を読む
-  → dispatch worker（ACP, worktree 作成）
-  → worker: 実装 → Issue 更新 → PR 作成
+  → dispatch implementer（ACP, worktree 作成）
+  → implementer: 実装 → Issue 更新 → PR 作成
   → conductor: PR / CI を読む
   → dispatch reviewer（ACP, 既存 worktree）
-  → reviewer: PR コメント
-  → （ループ）dispatch worker（レビュー対応）
-  → dispatch worker（人間レビュー依頼）
+  → reviewer: PR コメント（Issue / PR に記録）
+  → （ループ）dispatch implementer（レビュー対応）
+  → dispatch implementer（人間レビュー依頼）
   → 人間: マージ
-  → dispatch worker（Issue クローズ・報告）
+  → dispatch implementer（Issue クローズ・報告）
 ```
 
 ---
@@ -257,10 +314,9 @@ ensemble issue https://github.com/org/repo/issues/123
 | 資産 | agents-ensemble との関係 |
 |------|---------------------------|
 | CONDUCTOR_MODE | conductor の行動原則の正本 |
-| 秘書スキル（my-logs） | エスカレーション・音声・tasks。**パイプライン本体は ensemble** |
 | periodic-checker | GH 通知のトリガー入力の一つ |
-| 作業 / レビュー Skill（dispatch 先） | worker / reviewer が実行する手順の正本 |
-| `karte-auto-docs` / search-docs | worker / reviewer / librarian の参照先 |
+| 作業 / レビュー Skill（dispatch 先） | worker が実行する手順の正本 |
+| `karte-auto-docs` / search-docs | worker（特に librarian 種別）の参照先 |
 
 ---
 
@@ -271,8 +327,9 @@ ensemble issue https://github.com/org/repo/issues/123
 | **0** | 本アーキテクチャ + CLI スケルトン（現状） |
 | **1** | ACP ブリッジ + 手動 dispatch 相当（固定プロンプトで worker 1 回） |
 | **2** | SDK conductor が Issue を読み、判断して dispatch |
-| **3** | permission 仲介、reviewer ループ |
-| **4** | 秘書連携エスカレーション、librarian 条件 dispatch |
+| **3** | permission 仲介、reviewer ループ、CLI 人間エスカレーション |
+
+Stage 3 までが初期スコープ。以降（#20 非同期化の完了、プロファイルなど）は別 Issue で追う。
 
 各段階のテストレベル（unittest / integration / e2e）と完了ゲートは [testing-strategy.md](testing-strategy.md) を正本とする。Stage 1 は ACP ブリッジを unittest で作りきってから integration → e2e（CLI 縦切り）の順。
 

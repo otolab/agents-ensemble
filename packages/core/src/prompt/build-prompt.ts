@@ -1,17 +1,18 @@
 import { compile, merge } from '@modular-prompt/core';
 import { bootstrapModule } from './modules/bootstrap.js';
+import { defaultAgentModule } from './modules/default-agent-module.js';
 import { reviewerPromptModule } from './modules/reviewer-module.js';
-import { workerPromptModule } from './modules/worker-module.js';
 import { renderCompiledPrompt } from './render-compiled-prompt.js';
 
 export interface WorkerPromptOptions {
   issueUrl: string;
-  skillName: string;
+  kind: string;
+  systemPrompt?: string;
   worktreePath?: string;
 }
 
 export function buildWorkerPrompt(options: WorkerPromptOptions): string {
-  const module = merge(bootstrapModule, workerPromptModule);
+  const module = merge(bootstrapModule, defaultAgentModule);
   const compiled = compile(module, options);
   return renderCompiledPrompt(compiled);
 }

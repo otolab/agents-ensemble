@@ -14,15 +14,23 @@ const FIXTURE_CONDUCTOR_CWD = join(
   '../../../../',
 );
 
+const SMOKE_PROFILE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'fixtures/e2e-smoke/profile.yaml',
+);
+
 export interface E2eConfig {
   agentCommand?: string;
   agentArgs?: string[];
   cwd?: string;
   issueUrl: string;
-  skillName: string;
   repoRoot: string;
+  name?: string;
+  kind?: string;
+  systemPrompt?: string;
   conductorCwd?: string;
   conductorModelId?: string;
+  profilePath?: string;
 }
 
 interface RawE2eConfig {
@@ -30,10 +38,13 @@ interface RawE2eConfig {
   agentArgs?: string[];
   cwd?: string;
   issueUrl?: string;
-  skillName?: string;
+  name?: string;
+  kind?: string;
+  systemPrompt?: string;
   repoRoot?: string;
   conductorCwd?: string;
   conductorModelId?: string;
+  profilePath?: string;
 }
 
 function loadRawE2eConfig(): RawE2eConfig | undefined {
@@ -43,7 +54,7 @@ function loadRawE2eConfig(): RawE2eConfig | undefined {
 
 export function loadDispatchWorkerE2eConfig(): E2eConfig | undefined {
   const config = loadRawE2eConfig();
-  if (!config?.issueUrl || !config.skillName || !config.repoRoot) {
+  if (!config?.issueUrl || !config.repoRoot) {
     return undefined;
   }
 
@@ -52,7 +63,9 @@ export function loadDispatchWorkerE2eConfig(): E2eConfig | undefined {
     agentArgs: config.agentArgs,
     cwd: config.cwd,
     issueUrl: config.issueUrl,
-    skillName: config.skillName,
+    kind: config.kind,
+    systemPrompt: config.systemPrompt,
+    name: config.name,
     repoRoot: config.repoRoot,
     conductorCwd: config.conductorCwd,
     conductorModelId: config.conductorModelId,
@@ -68,6 +81,7 @@ export interface IssueE2eConfig {
   repoRoot: string;
   conductorCwd: string;
   conductorModelId: string;
+  profilePath: string;
 }
 
 export function loadIssueE2eConfig(): IssueE2eConfig | undefined {
@@ -82,6 +96,7 @@ export function loadIssueE2eConfig(): IssueE2eConfig | undefined {
       config.conductorModelId ??
       process.env.CONDUCTOR_MODEL_ID ??
       'auto',
+    profilePath: config.profilePath ?? SMOKE_PROFILE_PATH,
   };
 }
 

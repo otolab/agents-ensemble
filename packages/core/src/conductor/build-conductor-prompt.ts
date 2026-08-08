@@ -2,7 +2,8 @@ import type { IssueContext } from '../github/issue-context.js';
 import { compileConductorSessionStart } from './prompt/compile-conductor-prompt.js';
 import { mergeConductorMaterials } from './prompt/materials.js';
 import type { ConductorMaterial } from './prompt/types.js';
-import type { WorkerStartedInfo } from '../runtime/types.js';
+import type { WorkerFailureRecord, WorkerStartedInfo } from '../runtime/types.js';
+import type { PendingPermission } from '../../permission/pending-permission.js';
 
 export type { ConductorMaterial } from './prompt/types.js';
 export { loadConductorMaterialFromFile } from './prompt/materials.js';
@@ -16,6 +17,7 @@ export interface BuildConductorPromptOptions {
   turn?: number;
   maxTurns?: number;
   runningWorkers?: WorkerStartedInfo[];
+  pendingPermissions?: PendingPermission[];
 }
 
 export function buildConductorPrompt(
@@ -29,5 +31,6 @@ export function buildConductorPrompt(
     turn: options.turn ?? 1,
     maxTurns: options.maxTurns,
     runningWorkers: options.runningWorkers,
+    pendingPermissions: options.pendingPermissions,
   });
 }

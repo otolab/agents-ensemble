@@ -1,0 +1,14 @@
+agents:
+  ping:
+    systemPrompt: |
+      これは接続テストです。調査・編集はせず、応答に pong とだけ含めて終了してください。
+
+workers:
+  - name: ping-1
+    kind: ping
+
+materials:
+  - id: e2e
+    title: E2E
+    content: |
+      worker ping-1 の応答に pong が含まれることを確認したら、conductor-ok を含めて終了すること。

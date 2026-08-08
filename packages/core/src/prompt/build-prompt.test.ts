@@ -2,29 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { buildReviewerPrompt, buildWorkerPrompt } from './build-prompt.js';
 
 describe('buildWorkerPrompt', () => {
-  it('includes issue URL, skill, and worktree path', () => {
+  it('includes issue URL, kind, and agent system prompt', () => {
     const prompt = buildWorkerPrompt({
       issueUrl: 'https://github.com/org/repo/issues/1',
-      skillName: 'lazy-implementer',
-      worktreePath: '/repo/.ensemble/worktrees/issue-1',
+      kind: 'ping',
+      systemPrompt: 'respond with pong',
+      worktreePath: '/tmp/wt',
     });
 
     expect(prompt).toContain('https://github.com/org/repo/issues/1');
-    expect(prompt).toContain('lazy-implementer');
-    expect(prompt).toContain('/repo/.ensemble/worktrees/issue-1');
-    expect(prompt).toContain('personaとfoundationモード');
+    expect(prompt).toContain('agent kind: ping');
+    expect(prompt).toContain('respond with pong');
+    expect(prompt).not.toContain('Skill:');
   });
 });
 
 describe('buildReviewerPrompt', () => {
-  it('includes PR URL and worktree', () => {
+  it('includes review skill name', () => {
     const prompt = buildReviewerPrompt({
-      prUrl: 'https://github.com/org/repo/pull/2',
+      prUrl: 'https://github.com/org/repo/pull/1',
       skillName: 'review-bugbot',
-      worktreePath: '/repo/.ensemble/worktrees/issue-1',
+      worktreePath: '/tmp/wt',
     });
 
-    expect(prompt).toContain('https://github.com/org/repo/pull/2');
     expect(prompt).toContain('review-bugbot');
   });
 });

@@ -3,10 +3,10 @@ import { hasIssueE2eConfig, loadIssueE2eConfig } from './test-config.js';
 import { runEnsembleCli, parseCliJson } from './test-helpers.js';
 
 const SMOKE_BRIEFING =
-  'E2E smoke test. dispatch_worker は呼ばないこと。Issue を読んだうえで、応答に conductor-ok を含めて終了すること。';
+  'E2E smoke test. worker の pong 確認後、応答に conductor-ok を含めて終了すること。';
 
 describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
-  it('starts conductor and completes without dispatching a worker', async () => {
+  it('starts workers and verifies conductor sees pong', async () => {
     const config = loadIssueE2eConfig()!;
 
     const { stdout, exitCode } = await runEnsembleCli(
@@ -15,6 +15,8 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
         config.issueUrl,
         '--repo-root',
         config.repoRoot,
+        '--profile',
+        config.profilePath,
         '--conductor-cwd',
         config.conductorCwd,
         '--model',
@@ -30,7 +32,10 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
       issueUrl: string;
       repoRoot: string;
       lastRunStatus: string;
+      lastResult?: string;
       workerDispatchCount: number;
+      workerFailureCount: number;
+      workerResponses?: Array<{ kind: string; responseText?: string }>;
       lastError?: { message: string };
     }>(stdout);
 
@@ -38,7 +43,12 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
     expect(result.issueUrl).toBe(config.issueUrl);
     expect(result.repoRoot).toBe(config.repoRoot);
     expect(result.lastRunStatus).toBe('finished');
-    expect(result.workerDispatchCount).toBe(0);
+    expect(result.workerDispatchCount).toBeGreaterThanOrEqual(1);
+    expect(result.workerFailureCount).toBe(0);
+    expect(
+      result.workerResponses?.some((entry) => entry.responseText?.includes('pong')),
+    ).toBe(true);
+    expect(result.lastResult).toContain('conductor-ok');
     expect(exitCode).toBe(0);
     expect(result.lastError).toBeUndefined();
   }, 300_000);

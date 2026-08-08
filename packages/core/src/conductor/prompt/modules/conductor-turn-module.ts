@@ -5,19 +5,20 @@ import {
   formatEscalationSummaries,
   formatWorkerFailureSummaries,
 } from '../format-session-summaries.js';
+import { formatPendingPermissionSummaries } from '../../../permission/format-pending-permissions.js';
 import type { ConductorPromptContext } from '../types.js';
 
-/** ターンごとの更新（Issue 再読・dispatch 結果など）。 */
+/** ターンごとの更新（Issue 再読・worker 状態など）。 */
 export const conductorTurnModule: PromptModule<ConductorPromptContext> = {
   objective: [
     (ctx) => {
       if (ctx.humanGuidance) {
-        return '人間オペレータからの指示を踏まえ、次の dispatch を判断する。';
+        return '人間オペレータからの指示を踏まえ、Issue / PR と worker の状態を確認する。';
       }
       if (ctx.turn && ctx.turn > 1) {
-        return '前ターンの結果を踏まえ、Issue / PR を再読して次の dispatch を判断する。';
+        return '前ターンの結果を踏まえ、Issue / PR と worker の状態を確認する。';
       }
-      return 'Issue / PR を読み、次に必要な dispatch を判断する。';
+      return 'Issue / PR を読み、worker の状態を確認する。';
     },
   ],
   inputs: [
@@ -39,17 +40,24 @@ export const conductorTurnModule: PromptModule<ConductorPromptContext> = {
         '実行中の worker',
         ...running.map(
           (worker) =>
-            `- ${worker.workerId}: issue=${worker.issueUrl} skill=${worker.skillName}`,
+            `- ${worker.name} (${worker.kind}): id=${worker.workerId} issue=${worker.issueUrl}`,
         ),
       ].join('\n');
     },
     (ctx) => {
-      const workers = ctx.workerDispatches ?? [];
-      const reviewers = ctx.reviewerDispatches ?? [];
-      if (workers.length === 0 && reviewers.length === 0) return null;
+      const pending = ctx.pendingPermissions ?? [];
+      if (pending.length === 0) return null;
       return [
-        '直近の dispatch 結果',
-        ...formatDispatchSummaries(workers, reviewers),
+        '判断待ちの worker permission（resolve_permission で allow/deny。要確認時は ask_human）',
+        ...formatPendingPermissionSummaries(pending),
+      ].join('\n');
+    },
+    (ctx) => {
+      const workers = ctx.workerDispatches ?? [];
+      if (workers.length === 0) return null;
+      return [
+        '完了した worker',
+        ...formatDispatchSummaries(workers),
       ].join('\n');
     },
     (ctx) => {

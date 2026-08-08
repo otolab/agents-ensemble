@@ -2,8 +2,10 @@ import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
 
 export interface WorkerStartParams {
+  name: string;
+  kind: string;
+  systemPrompt: string;
   issueUrl: string;
-  skillName: string;
   repoRoot: string;
 }
 
@@ -13,9 +15,10 @@ export interface WorkerStartedInfo extends WorkerStartParams {
 
 export interface WorkerFailureRecord {
   workerId: string;
+  name: string;
   error: string;
   issueUrl: string;
-  skillName: string;
+  kind: string;
 }
 
 export type InboxMessage =
@@ -33,9 +36,10 @@ export type InboxMessage =
   | {
       type: 'worker.failed';
       workerId: string;
+      name: string;
       error: string;
       issueUrl: string;
-      skillName: string;
+      kind: string;
     };
 
 export type InboxListener = (message: InboxMessage) => void | Promise<void>;

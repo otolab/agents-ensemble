@@ -114,8 +114,40 @@ export type {
   ConductorSendResult,
 } from './conductor/conductor-agent.js';
 
-export { createDispatchTools } from './conductor/dispatch-tools.js';
-export type { DispatchToolsOptions } from './conductor/dispatch-tools.js';
+export {
+  loadProfile,
+  loadProfileFromFile,
+  parseProfile,
+  resolveProfilePath,
+  resolveProfile,
+  resolveProfileFilePath,
+  resolveDefaultProfilePath,
+  profileDirectoryPath,
+  corePackageRoot,
+  bundledProfilesRoot,
+  bundledProfilePath,
+  bundledDefaultProfilePath,
+  PROFILES_DIR,
+  PROFILE_FILE,
+  DEFAULT_PROFILE_NAME,
+} from './profile/load-profile.js';
+export type {
+  Profile,
+  ProfileMaterial,
+  AgentDefinition,
+  ProfileWorkerEntry,
+  ProfileWorkerRef,
+  SessionWorkerSpec,
+} from './profile/types.js';
+export {
+  profileWorkersToSessionSpecs,
+  resolveAgentSystemPrompt,
+  normalizeProfileWorker,
+  normalizeProfileWorkers,
+} from './profile/types.js';
+
+export { WorkerSession } from './runtime/worker-session.js';
+export type { WorkerSessionOptions } from './runtime/worker-session.js';
 
 export { buildConductorPrompt } from './conductor/build-conductor-prompt.js';
 export type {
@@ -171,6 +203,19 @@ export {
   parsePermissionRequest,
 } from './permission/permission-request.js';
 export type { PermissionRequest } from './permission/permission-request.js';
+
+export { PermissionPipeline } from './permission/permission-pipeline.js';
+export type {
+  PermissionPipelineOptions,
+  PermissionPipelineOutcome,
+} from './permission/permission-pipeline.js';
+export {
+  PendingPermissionRegistry,
+} from './permission/pending-permission.js';
+export type { PendingPermission } from './permission/pending-permission.js';
+export { createResolvePermissionTool } from './permission/resolve-permission-tool.js';
+export type { ResolvePermissionToolOptions } from './permission/resolve-permission-tool.js';
+export { formatPendingPermissionSummaries } from './permission/format-pending-permissions.js';
 
 export {
   EscalationUnavailableError,

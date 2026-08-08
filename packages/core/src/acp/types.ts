@@ -17,6 +17,8 @@ export interface SessionUpdateNotification {
 
 export interface PromptResult {
   stopReason: string;
+  /** session/update から集約した agent 応答テキスト。 */
+  responseText?: string;
 }
 
 export interface PermissionDecision {

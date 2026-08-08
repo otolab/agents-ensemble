@@ -72,6 +72,18 @@ describe('shouldStopIssueLoop', () => {
       }),
     ).toBe(false);
   });
+
+  it('continues while pending permissions await conductor resolution', () => {
+    expect(
+      shouldStopIssueLoop({
+        turn: 2,
+        maxTurns: 5,
+        lastStatus: 'finished',
+        dispatchesThisTurn: 0,
+        pendingPermissions: 1,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('resolveIssueLoopStopReason', () => {

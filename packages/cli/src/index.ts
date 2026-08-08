@@ -7,6 +7,7 @@ import {
   dispatchReviewer,
   dispatchWorker,
   getConductorAuthStatus,
+  loadProfile,
   loginConductor,
   PermissionBroker,
   runIssueSession,
@@ -44,6 +45,10 @@ program
     collectValues,
     [],
   )
+  .option(
+    '--profile <name>',
+    'Profile name or path (default: bundled default; name resolves bundled then cwd profiles/<name>/)',
+  )
   .option('--model <id>', 'Conductor model id (default: composer-2.5)')
   .option(
     '--max-turns <n>',
@@ -60,12 +65,17 @@ program
         resume?: string;
         briefing?: string;
         material: string[];
+        profile?: string;
         model?: string;
         maxTurns: number;
       },
     ) => {
       try {
         const materials = await loadMaterialFiles(options.material);
+        const { profile, profilePath } = await loadProfile({
+          profile: options.profile,
+          cwd: resolve(options.repoRoot),
+        });
         const result = await runIssueSession({
           issueUrl,
           repoRoot: resolve(options.repoRoot),
@@ -73,6 +83,8 @@ program
           resumeAgentId: options.resume,
           briefing: options.briefing,
           materials,
+          profile,
+          profilePath,
           modelId: options.model,
           maxTurns: options.maxTurns,
           onHumanInquiry: promptHumanInquiry,
@@ -82,22 +94,17 @@ program
           },
           onWorkerDispatched: (dispatch) => {
             console.error(
-              `[worker dispatched] ${dispatch.worktree.path} (${dispatch.promptResult.stopReason})`,
+              `[worker completed] ${dispatch.worktree.path} (${dispatch.promptResult.stopReason})`,
             );
           },
           onWorkerFailed: (failure) => {
             console.error(
-              `[worker failed] ${failure.workerId} ${failure.issueUrl} (${failure.skillName}): ${failure.error}`,
-            );
-          },
-          onReviewerDispatched: (dispatch) => {
-            console.error(
-              `[reviewer dispatched] ${dispatch.worktreePath} (${dispatch.promptResult.stopReason})`,
+              `[worker failed] ${failure.name} (${failure.kind}) ${failure.issueUrl}: ${failure.error}`,
             );
           },
           onTurnComplete: (turn) => {
             console.error(
-              `[conductor turn ${turn.turn}] status=${turn.status} workerStarts=${turn.workerDispatchStarts} workerDone=${turn.workerDispatches} workerFailed=${turn.workerFailures} reviewer=${turn.reviewerDispatches} escalations=${turn.escalations}`,
+              `[conductor turn ${turn.turn}] status=${turn.status} workerDone=${turn.workerDispatches} workerFailed=${turn.workerFailures} escalations=${turn.escalations}`,
             );
           },
         });
@@ -114,8 +121,14 @@ program
               lastResult: result.lastResult,
               lastError: result.lastError,
               workerDispatchCount: result.workerDispatches.length,
-              reviewerDispatchCount: result.reviewerDispatches.length,
+              workerFailureCount: result.workerFailures.length,
               escalationCount: result.escalations.length,
+              workerResponses: result.workerDispatches.map((dispatch) => ({
+                name: dispatch.name,
+                kind: dispatch.kind,
+                responseText: dispatch.promptResult.responseText,
+                stopReason: dispatch.promptResult.stopReason,
+              })),
             },
             null,
             2,
@@ -186,20 +199,28 @@ dispatch
   .command('worker')
   .description('Dispatch a worker for a GitHub Issue (Stage 1 manual flow)')
   .argument('<issue-url>', 'GitHub Issue URL')
-  .requiredOption('--skill <name>', 'Skill name for the worker')
+  .option('--name <name>', 'Worker name in the session', 'worker')
+  .option('--kind <name>', 'Agent kind for the worker prompt', 'worker')
+  .option('--system-prompt <text>', 'Optional agent system prompt override')
   .option(
     '--repo-root <path>',
     'Path to the local git clone to work in',
     process.cwd(),
   )
-  .action(async (issueUrl: string, options: { skill: string; repoRoot: string }) => {
+  .action(
+    async (
+      issueUrl: string,
+      options: { name: string; kind: string; systemPrompt?: string; repoRoot: string },
+    ) => {
     try {
       const permissionBroker = new PermissionBroker({
         onAsk: promptPermissionDecision,
       });
       const result = await dispatchWorker({
         issueUrl,
-        skillName: options.skill,
+        name: options.name,
+        kind: options.kind,
+        systemPrompt: options.systemPrompt,
         repoRoot: resolve(options.repoRoot),
         permissionHandler: permissionBroker.createHandler('manual-worker'),
         onUpdate: (update) => {
@@ -214,7 +235,10 @@ dispatch
             issue: result.issue.url,
             worktree: result.worktree.path,
             branch: result.worktree.branch,
+            kind: result.kind,
+            name: result.name,
             stopReason: result.promptResult.stopReason,
+            responseText: result.promptResult.responseText,
           },
           null,
           2,

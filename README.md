@@ -2,7 +2,7 @@
 
 Issue を指定して起動する、エージェントオーケストレーション CLI。
 
-`ensemble` がオーケストレータ（指揮者）として worker / reviewer 等を起動し、作業を進める。権限や方針の問題は Issue に記載して回答を待つか、CLI からユーザーに最小限問い合わせる。
+`ensemble` がオーケストレータ（conductor）として worker を制御し、作業を進める。worker はセッション開始時に起動し、conductor とは inbox 経由で接続する。
 
 ## ステータス
 
@@ -92,7 +92,7 @@ pnpm test:e2e           # CLI 縦切り（test-acp.yaml 要）
 # e2e 設定（初回）
 cp packages/core/test/integration/test-acp.yaml.example \
    packages/core/test/integration/test-acp.yaml
-# issueUrl / skillName: e2e-smoke / repoRoot を編集してから:
+# issueUrl / repoRoot を編集してから:
 pnpm test:e2e
 
 # Stage 1: 手動 worker dispatch
@@ -103,14 +103,41 @@ ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
 # または --issue-url <url> --repo-root <path> で worktree を解決
 
 # Stage 2: conductor オーケストレーション
-ensemble issue <issue-url> --repo-root <path> [--resume <agentId>] [--model <id>] [--max-turns 5] [--material <path>...]
+ensemble issue <issue-url> --repo-root <path> [--profile <name>] ...
 ```
 
-`--material` は conductor へ渡す参照文書（PromptModule の `materials`）。プロファイル定義文書の先行利用にも使える。
+### プロファイル
+
+同梱プロファイルは `profiles/` に置き、`build` 時に `dist/profiles/` へコピーされる（詳細は [docs/elements.md](docs/elements.md)）。
+
+```bash
+# 省略時 → 同梱 default
+ensemble issue <url> --repo-root .
+
+# カスタム（同梱に無い名前は <cwd>/profiles/<name>/ を参照）
+ensemble issue <url> --repo-root . --profile custom
+
+# ファイル直接指定
+ensemble issue <url> --repo-root . --profile ./my-profile.yaml
+```
+
+同梱 `default` の例 (`profiles/default/profile.yaml`):
+
+```yaml
+workers:
+  - name: main
+    kind: worker
+materials:
+  - id: team
+    title: 役割分担
+    file: team.md
+```
+
+e2e は `agents.ping` + `workers: [ping]` で pong 応答を検証する（`packages/cli/test/e2e/fixtures/e2e-smoke/profile.yaml`）。
 
 ### 人間エスカレーション（非対話環境）
 
-conductor の `ask_human` や worker permission 確認は TTY でプロンプトする。CI 等の非対話環境では `ENSEMBLE_ESCALATION_RESPONSE` を設定する（`yes` / `no` または自由記述）。
+conductor の `ask_human` は TTY でプロンプトする。worker permission の人間確認も **conductor 経由**（`ask_human` → `resolve_permission`）。CI 等の非対話環境では `ENSEMBLE_ESCALATION_RESPONSE` を設定する（`yes` / `no` または自由記述）。
 
 ```bash
 ENSEMBLE_ESCALATION_RESPONSE=yes ensemble issue ...

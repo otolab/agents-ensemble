@@ -51,8 +51,10 @@ export class WorkerRuntime {
   private async run(started: WorkerStartedInfo): Promise<void> {
     try {
       const result = await this.dispatchWorkerFn({
+        name: started.name,
         issueUrl: started.issueUrl,
-        skillName: started.skillName,
+        kind: started.kind,
+        systemPrompt: started.systemPrompt,
         repoRoot: started.repoRoot,
         permissionHandler: this.options.inbox.createPermissionHandler(
           started.workerId,

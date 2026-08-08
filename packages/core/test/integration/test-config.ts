@@ -22,6 +22,8 @@ export interface AcpTestConfig {
   skillName?: string;
   /** e2e: 作業対象のローカル git clone */
   repoRoot?: string;
+  /** conductor SDK の model id（省略時: auto） */
+  conductorModelId?: string;
 }
 
 let _config: AcpTestConfig | undefined;
@@ -46,7 +48,7 @@ export function hasAcpTestConfig(): boolean {
 
 export function hasDispatchWorkerE2eConfig(): boolean {
   const config = loadAcpTestConfig();
-  return Boolean(config?.issueUrl && config?.skillName && config?.repoRoot);
+  return Boolean(config?.issueUrl && config?.repoRoot);
 }
 
 export function getAcpTestConfig(): AcpTestConfig {
@@ -57,4 +59,13 @@ export function getAcpTestConfig(): AcpTestConfig {
     );
   }
   return config;
+}
+
+/** conductor integration / e2e 用モデル ID。 */
+export function getConductorModelId(): string {
+  return (
+    loadAcpTestConfig()?.conductorModelId ??
+    process.env.CONDUCTOR_MODEL_ID ??
+    'auto'
+  );
 }

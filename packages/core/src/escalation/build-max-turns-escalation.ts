@@ -5,8 +5,8 @@ export function buildMaxTurnsEscalationRequest(
   result: IssueSessionResult,
 ): HumanInquiryRequest {
   const dispatchSummary = [
-    `worker dispatches: ${result.workerDispatches.length}`,
-    `reviewer dispatches: ${result.reviewerDispatches.length}`,
+    `worker 完了: ${result.workerDispatches.length}`,
+    `worker 失敗: ${result.workerFailures.length}`,
     `turns completed: ${result.turnCount}`,
   ].join(', ');
 

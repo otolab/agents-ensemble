@@ -33,6 +33,7 @@ export interface AcpClientStreams {
 export class AcpClient {
   readonly peer: JsonRpcPeer;
   private promptUpdateHandler?: SessionUpdateHandler;
+  private permissionHandlerOverride?: PermissionHandler;
 
   private constructor(
     peer: JsonRpcPeer,
@@ -98,15 +99,29 @@ export class AcpClient {
     prompt: string | AcpPromptBlock[],
     onUpdate?: SessionUpdateHandler,
   ): Promise<PromptResult> {
-    this.promptUpdateHandler = onUpdate;
+    const responseChunks: string[] = [];
+    const wrappedOnUpdate: SessionUpdateHandler = (update) => {
+      const text = update.update?.content?.text;
+      if (typeof text === 'string' && text.length > 0) {
+        responseChunks.push(text);
+      }
+      onUpdate?.(update);
+    };
+
+    this.promptUpdateHandler = wrappedOnUpdate;
     try {
       const blocks = typeof prompt === 'string'
         ? [{ type: 'text' as const, text: prompt }]
         : prompt;
-      return (await this.peer.request('session/prompt', {
+      const result = (await this.peer.request('session/prompt', {
         sessionId,
         prompt: blocks,
       })) as PromptResult;
+      const responseText = responseChunks.join('');
+      return {
+        ...result,
+        responseText: responseText || undefined,
+      };
     } finally {
       this.promptUpdateHandler = undefined;
     }
@@ -119,6 +134,17 @@ export class AcpClient {
     }
   }
 
+  withPermissionHandler<T>(
+    handler: PermissionHandler,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.permissionHandlerOverride;
+    this.permissionHandlerOverride = handler;
+    return fn().finally(() => {
+      this.permissionHandlerOverride = previous;
+    });
+  }
+
   handleNotification(notification: JsonRpcNotification): void {
     if (notification.method !== 'session/update') return;
     this.promptUpdateHandler?.(
@@ -128,7 +154,10 @@ export class AcpClient {
 
   async handleRequest(request: JsonRpcRequest): Promise<void> {
     if (request.method !== 'session/request_permission') return;
-    const handler = this.options.permissionHandler ?? defaultPermissionHandler;
+    const handler =
+      this.permissionHandlerOverride ??
+      this.options.permissionHandler ??
+      defaultPermissionHandler;
     const decision = await handler(request.params);
     this.peer.respond(request.id, decision);
   }
