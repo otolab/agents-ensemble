@@ -12,9 +12,6 @@ import type { ConductorPromptContext } from '../types.js';
 export const conductorTurnModule: PromptModule<ConductorPromptContext> = {
   objective: [
     (ctx) => {
-      if (ctx.humanGuidance) {
-        return '人間オペレータからの指示を踏まえ、Issue / PR と worker の状態を確認する。';
-      }
       if (ctx.turn && ctx.turn > 1) {
         return '前ターンの結果を踏まえ、Issue / PR と worker の状態を確認する。';
       }
@@ -30,10 +27,6 @@ export const conductorTurnModule: PromptModule<ConductorPromptContext> = {
     (ctx) => `対象 clone（ローカル）: ${ctx.repoRoot}`,
     (ctx) => formatIssueContextForPrompt(ctx.issueContext),
     (ctx) => (ctx.followUp ? `追加指示: ${ctx.followUp}` : null),
-    (ctx) =>
-      ctx.humanGuidance
-        ? `人間オペレータからの入力:\n${ctx.humanGuidance}`
-        : null,
   ],
   state: [
     (ctx) => {

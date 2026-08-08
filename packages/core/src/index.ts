@@ -156,18 +156,33 @@ export type {
 } from './conductor/build-conductor-prompt.js';
 export { loadConductorMaterialFromFile } from './conductor/prompt/materials.js';
 
+export { runConductorSession } from './conductor/conductor-session.js';
 export { runIssueSession } from './conductor/issue-session.js';
+export type {
+  ConductorSessionResult,
+  ConductorSessionTurn,
+  RunConductorSessionOptions,
+} from './conductor/conductor-session.js';
 export type {
   IssueSessionResult,
   IssueSessionTurn,
-  OperatorInputContext,
   RunIssueSessionOptions,
+  OperatorInputContext,
 } from './conductor/issue-session.js';
 
 export {
-  buildConductorFollowUpPrompt,
-} from './conductor/build-conductor-follow-up-prompt.js';
-export type { BuildConductorFollowUpPromptOptions } from './conductor/build-conductor-follow-up-prompt.js';
+  SessionEventQueue,
+} from './conductor/session/session-event-queue.js';
+export {
+  formatSessionEventForConductor,
+} from './conductor/session/format-session-event.js';
+export type {
+  SessionEvent,
+  OperatorMessageEvent,
+  WorkerCompletedEvent,
+  WorkerFailedEvent,
+  PermissionPendingEvent,
+} from './conductor/session/session-event.js';
 
 export {
   DEFAULT_MAX_ISSUE_TURNS,
@@ -277,8 +292,6 @@ export type { ApplyOperatorMessageResult } from './escalation/apply-operator-mes
 export { recordOpenQuestionAnswer } from './escalation/record-open-question-answer.js';
 export type { RecordOpenQuestionAnswerInput } from './escalation/record-open-question-answer.js';
 export { openQuestionToEscalationRecord } from './escalation/open-question-to-escalation.js';
-
-export { buildHumanGuidancePrompt } from './escalation/build-human-guidance-prompt.js';
 
 export { ensureMaxTurnsOpenQuestion, MAX_TURNS_OPEN_QUESTION_TEXT } from './escalation/enqueue-max-turns-question.js';
 export type { EnsureMaxTurnsOpenQuestionInput } from './escalation/enqueue-max-turns-question.js';

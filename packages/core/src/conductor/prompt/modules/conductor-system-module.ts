@@ -19,7 +19,7 @@ export const conductorSystemModule: PromptModule<ConductorPromptContext> = {
     '  - 一覧: `list_open_questions`、詳細: `get_open_question`（prompt state には載らない）',
     '  - 未回答を登録: `ask_human`（待たず続行可）',
     '  - オペレータがチャットですでに答えている: `answer_open_question` で代行記録',
-    '  - registry 更新は入力メッセージとして届く（全件のログは prompt に載せない）',
+    '  - registry 更新は ConductorSession イベント列経由で `agent.send` に届く',
     '  - 同一判断で `ask_human` と `answer_open_question` を同ターンで併用しない',
     '- worker permission 判断待ち: `resolve_permission`（要確認時は先に open question を処理）',
   ],

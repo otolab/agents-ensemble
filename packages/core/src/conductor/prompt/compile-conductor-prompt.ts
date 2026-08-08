@@ -12,9 +12,9 @@ export function compileConductorSessionStart(
   return renderCompiledPrompt(compile(merged, context));
 }
 
-/** 2ターン目以降: ターン更新のみ（システムプロンプトは繰り返さない）。 */
-export function compileConductorTurnUpdate(
+/** 初回 `agent.send` 用（system + Issue ブリーフィング等）。 */
+export function compileConductorInitialMessage(
   context: ConductorPromptContext,
 ): string {
-  return renderCompiledPrompt(compile(conductorTurnModule, context));
+  return compileConductorSessionStart(context);
 }

@@ -7,7 +7,7 @@ const INQUIRY_REFERENCE_PATTERN = /^@inq:([^\s]+)\s+([\s\S]+)$/u;
 export interface ApplyOperatorMessageResult {
   /** オペレータメッセージで回答が確定した質問。 */
   answered: OpenQuestion[];
-  /** 質問 id に紐づかなかった一般指示（そのまま humanGuidance に載せる）。 */
+  /** 質問 id に紐づかなかった一般指示（イベント列の operator.message に載せる）。 */
   generalGuidance?: string;
 }
 

@@ -13,22 +13,36 @@
 1. **ユーザは conductor だけと話す** — オペレータの判断は次のオペレータ入力（メッセージ）として届く。tool 戻り値を正本にしない。
 2. **`ask_human` は質問の登録のみ** — conductor は回答を待たず続行できる。
 3. **汎用 Q&A** — permission 専用キューではなく、TODO リストに近い open question。worker が落ちてもユーザ判断は残る。
-4. **prompt cache を壊さない** — open question 一覧や対話ログ全件を毎ターン prompt `state` に載せない（キャッシュが効かなくなる）。
-
-SDK は conductor LLM の multi-turn 文脈は持つが、オーケストレーション対話の正本は ensemble 側が持つ（[architecture.md](../architecture.md) の worker 会話破棄方針と整合）。
+4. **prompt cache を壊さない** — open question 一覧を毎ターン system prompt に載せない（キャッシュが効かなくなる）。
 
 ## Decision
 
-### レイヤー分担
+### Conductor の prompt 配信（modular-prompt と `agent.send`）
+
+**意図した分担**（[architecture.md](../architecture.md) §3）:
+
+| レイヤ | 役割 | 備考 |
+|--------|------|------|
+| **modular-prompt (`@modular-prompt/core`)** | conductor の **system prompt 文**を組み立てる | instructions / persona / guidelines / materials。`compile` の対象はここまで |
+| **`agent.send(message)`** | 会話への **user ターン 1 本**を追加して run する | オペレータ発話・自律ターンの状態通知など。引数は user メッセージであり CompiledPrompt 全体ではない |
+| **SDK 会話** | LLM から見た **会話履歴の正本** | assistant / tool 結果も含む |
+
+**やってはいけないこと**（現実装の負債）:
+
+- 毎ターン `buildConductorFollowUpPrompt` で Issue / worker 状態 / オペレータ入力をまとめて compile し、1 本の文字列として `agent.send` する
+- オペレータ発話を modular-prompt の `inputs` に載せる（会話は `messages` / `agent.send` の関心事）
+
+worker（ACP）とは別モデル。worker は `session/prompt` でターン更新全体を渡す。conductor（SDK）は **`send` = user 行の append**。
+
+### レイヤー分担（open question・オペレータ）
 
 | レイヤ | 役割 |
 |--------|------|
-| **オペレータメッセージ** | 人間の発話の正本（ACP `session/prompt` / 次 `agent.send` 相当） |
-| **OpenQuestionRegistry** | TODO リスト的な未回答 / 回答済み状態 |
-| **dialogue log** | セッション結果用の時系列（prompt には載せない） |
-| **registry 更新の入力報告** | 更新が起きたときだけ、その差分を「入力内容」として届ける |
-| **list / get tools** | conductor が必要なときだけ一覧・詳細を読む |
-| **SDK 会話** | LLM 文脈用（補助） |
+| **オペレータメッセージ** | `agent.send` に載る user ターン（CLI / `onOperatorInput` 経由） |
+| **OpenQuestionRegistry** | TODO リスト的な未回答 / 回答済み状態（tool で読む） |
+| **dialogue log** | セッション結果 JSON 用の記録（prompt / SDK 会話の正本ではない） |
+| **list / get tools** | conductor が必要なときだけ open question を読む |
+| **SDK 会話** | LLM 会話履歴の正本 |
 
 ### open question（TODO リストモデル）
 
@@ -49,13 +63,14 @@ SDK は conductor LLM の multi-turn 文脈は持つが、オーケストレー�
 ### オペレータ回答（チャット）
 
 - 別ターンの `onOperatorInput` で受け取る。
-- registry 更新時は **更新内容を入力メッセージとして報告**（例: `【open question 回答】inq-1: …`）。
+- `applyOperatorMessage` で registry を更新したあと、**その内容を `agent.send` の user メッセージとして送る**（例: 生文、または `【open question 回答】inq-1: …`）。
 - 自由チャットのみ、registry の質問への回答のみ、どちらも可。
 
-### prompt への載せ方
+### system prompt と会話の載せ方
 
-- **毎ターンの全件投影はしない**（cache 非効率）。
-- 変化があったときの **差分入力** と **tool 読み出し** で足りる。
+- **system prompt**（modular-prompt）: セッション開始時（または明示的 reload 時）に compile。指揮方針・materials・Issue の読み方。
+- **会話**（`agent.send`）: オペレータ発話・自律ターンの短い通知。open question 一覧の毎ターン全件投影はしない。
+- 変化の多い状態（worker 完了、pending permission）は **自律ターンの user メッセージ** または tool 結果として届ける（詳細は実装 Issue で設計）。
 
 ### issue session ループと `maxTurns`
 
@@ -75,4 +90,4 @@ SDK は conductor LLM の multi-turn 文脈は持つが、オーケストレー�
 
 - 良い: prompt cache を維持しやすい。TODO リスト的に必要時だけ読める。ユーザ判断が worker 生死と独立して残る
 - 悪い: conductor が `list_open_questions` を呼ばないと未回答を見落としうる（guidelines で矯正）
-- フォロー: 外向き `ensemble acp`、dialogue log 永続化、SDK user turn 直送は別フェーズ
+- フォロー: 外向きオペレータ UI、dialogue log / registry の resume 永続化（#27）、**ConductorSession イベント列と prompt 配信**（#28、[ADR 0009](0009-conductor-session-event-queue.md)）
