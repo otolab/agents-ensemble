@@ -275,10 +275,6 @@ export { applyOperatorMessage } from './escalation/apply-operator-message.js';
 export type { ApplyOperatorMessageResult } from './escalation/apply-operator-message.js';
 export { recordOpenQuestionAnswer } from './escalation/record-open-question-answer.js';
 export type { RecordOpenQuestionAnswerInput } from './escalation/record-open-question-answer.js';
-export {
-  formatOpenQuestionSummaries,
-  formatAnsweredOpenQuestionSummaries,
-} from './escalation/format-open-questions.js';
 export { openQuestionToEscalationRecord } from './escalation/open-question-to-escalation.js';
 
 export { buildHumanGuidancePrompt } from './escalation/build-human-guidance-prompt.js';

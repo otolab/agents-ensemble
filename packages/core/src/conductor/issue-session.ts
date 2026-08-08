@@ -222,6 +222,7 @@ export async function runIssueSession(
           sessionTurn.workerDispatches + sessionTurn.workerFailures,
         runningWorkers: workerSession.runtime.runningCount,
         pendingPermissions: permissionPipeline.pending.size,
+        openQuestions: openQuestions.openCount,
       };
 
       stopReason = resolveIssueLoopStopReason(loopState);
@@ -327,10 +328,15 @@ async function runConductorTurn(input: {
         input.dialogueLog,
         operatorMessage,
       );
-      humanGuidance = joinOperatorInput([
-        applied.generalGuidance ?? operatorMessage.trim(),
-        ...applied.answered.map(formatOpenQuestionAnsweredReport),
-      ]);
+      humanGuidance =
+        applied.answered.length > 0
+          ? joinOperatorInput([
+              applied.generalGuidance,
+              ...applied.answered.map(formatOpenQuestionAnsweredReport),
+            ])
+          : joinOperatorInput([
+              applied.generalGuidance ?? operatorMessage.trim(),
+            ]);
       for (const answered of applied.answered) {
         recordAnsweredOpenQuestion(input, answered);
       }

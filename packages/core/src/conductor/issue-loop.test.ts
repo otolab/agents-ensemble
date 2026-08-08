@@ -84,6 +84,18 @@ describe('shouldStopIssueLoop', () => {
       }),
     ).toBe(false);
   });
+
+  it('continues while open questions await operator answer', () => {
+    expect(
+      shouldStopIssueLoop({
+        turn: 1,
+        maxTurns: 5,
+        lastStatus: 'finished',
+        dispatchesThisTurn: 0,
+        openQuestions: 1,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('resolveIssueLoopStopReason', () => {
