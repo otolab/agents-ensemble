@@ -19,6 +19,11 @@ const SMOKE_PROFILE_PATH = join(
   'fixtures/e2e-smoke/profile.yaml',
 );
 
+export const OPERATOR_E2E_PROFILE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'fixtures/e2e-operator/profile.yaml',
+);
+
 export interface E2eConfig {
   agentCommand?: string;
   agentArgs?: string[];

@@ -12,14 +12,14 @@ export const CLI_ENTRY = join(
 
 export async function runEnsembleCli(
   args: string[],
-  options: { timeoutMs?: number } = {},
+  options: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
     const { stdout, stderr } = await execFileAsync(
       process.execPath,
       [CLI_ENTRY, ...args],
       {
-        env: process.env,
+        env: { ...process.env, ...options.env },
         maxBuffer: 10 * 1024 * 1024,
         timeout: options.timeoutMs,
       },
