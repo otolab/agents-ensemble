@@ -14,6 +14,7 @@ import {
   type ConductorMaterial,
 } from '@agents-ensemble/core';
 import { promptHumanInquiry } from './prompt-human-inquiry.js';
+import { promptOperatorInput } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
 
 const program = new Command();
@@ -88,8 +89,14 @@ program
           modelId: options.model,
           maxTurns: options.maxTurns,
           onHumanInquiry: promptHumanInquiry,
+          onOperatorInput: promptOperatorInput,
+          onOpenQuestionEnqueued: (question) => {
+            console.error(
+              `[open question] ${question.id} [${question.responseType}] ${question.question}`,
+            );
+          },
           onEscalated: (record) => {
-            console.error(`[human escalation] ${record.question} → ${record.answer}`);
+            console.error(`[operator answer] ${record.question} → ${record.answer}`);
           },
           onWorkerDispatched: (dispatch) => {
             console.error(
@@ -122,6 +129,7 @@ program
               workerDispatchCount: result.workerDispatches.length,
               workerFailureCount: result.workerFailures.length,
               escalationCount: result.escalations.length,
+              openQuestionCount: result.openQuestions.length,
               workerResponses: result.workerDispatches.map((dispatch) => ({
                 name: dispatch.name,
                 kind: dispatch.kind,

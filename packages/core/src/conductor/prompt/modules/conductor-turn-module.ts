@@ -29,7 +29,7 @@ export const conductorTurnModule: PromptModule<ConductorPromptContext> = {
     (ctx) => (ctx.followUp ? `追加指示: ${ctx.followUp}` : null),
     (ctx) =>
       ctx.humanGuidance
-        ? `人間オペレータからの指示:\n${ctx.humanGuidance}`
+        ? `人間オペレータからの入力:\n${ctx.humanGuidance}`
         : null,
   ],
   state: [

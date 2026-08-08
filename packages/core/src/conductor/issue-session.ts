@@ -1,11 +1,20 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
+import { applyOperatorMessage } from '../escalation/apply-operator-message.js';
+import { createAnswerOpenQuestionTool } from '../escalation/answer-open-question-tool.js';
 import { createAskHumanTool } from '../escalation/ask-human-tool.js';
+import { formatOpenQuestionAnsweredReport, joinOperatorInput } from '../escalation/format-registry-update.js';
+import { createOpenQuestionListTools } from '../escalation/open-question-list-tools.js';
 import { buildHumanGuidancePrompt } from '../escalation/build-human-guidance-prompt.js';
 import { buildMaxTurnsEscalationRequest } from '../escalation/build-max-turns-escalation.js';
 import type {
   EscalationRecord,
   HumanInquiryHandler,
 } from '../escalation/human-inquiry.js';
+import { openQuestionToEscalationRecord } from '../escalation/open-question-to-escalation.js';
+import type { OpenQuestion } from '../escalation/open-question.js';
+import { OpenQuestionRegistry } from '../escalation/open-question.js';
+import { SessionDialogueLog } from '../escalation/dialogue-log.js';
+import type { DialogueEntry } from '../escalation/dialogue-log.js';
 import { createEnvFallbackHumanInquiryHandler } from '../escalation/resolve-human-inquiry.js';
 import { fetchIssueContext } from '../github/issue-context.js';
 import type { PermissionPolicyRules } from '../permission/permission-policy.js';
@@ -28,6 +37,11 @@ import {
   type IssueLoopStopReason,
 } from './issue-loop.js';
 
+export interface OperatorInputContext {
+  turn: number;
+  openQuestions: OpenQuestion[];
+}
+
 export interface RunIssueSessionOptions {
   issueUrl: string;
   repoRoot: string;
@@ -44,6 +58,10 @@ export interface RunIssueSessionOptions {
   permissionPolicy?: PermissionPolicyRules;
   permissionPipeline?: PermissionPipeline;
   onHumanInquiry?: HumanInquiryHandler;
+  /** 各ターン開始前のオペレータ入力（open question への回答など）。 */
+  onOperatorInput?: (
+    context: OperatorInputContext,
+  ) => string | Promise<string | undefined> | undefined;
   /** max turns 到達時に人間へ問い合わせ、回答があればボーナスターンを実行する。 */
   escalateOnMaxTurns?: boolean;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
@@ -52,6 +70,7 @@ export interface RunIssueSessionOptions {
   onWorkerFailed?: (failure: WorkerFailureRecord) => void;
   onTurnComplete?: (turn: IssueSessionTurn) => void;
   onEscalated?: (record: EscalationRecord) => void;
+  onOpenQuestionEnqueued?: (question: OpenQuestion) => void;
 }
 
 export interface IssueSessionTurn {
@@ -80,6 +99,8 @@ export interface IssueSessionResult {
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   escalations: EscalationRecord[];
+  openQuestions: OpenQuestion[];
+  dialogueLog: DialogueEntry[];
 }
 
 export async function runIssueSession(
@@ -91,6 +112,8 @@ export async function runIssueSession(
   const workerFailures: WorkerFailureRecord[] = [];
   const escalations: EscalationRecord[] = [];
   const turns: IssueSessionTurn[] = [];
+  const openQuestions = new OpenQuestionRegistry();
+  const dialogueLog = new SessionDialogueLog();
 
   const onHumanInquiry =
     options.onHumanInquiry ?? createEnvFallbackHumanInquiryHandler();
@@ -117,12 +140,30 @@ export async function runIssueSession(
 
   workerSession.bootstrap();
 
-  const askHumanTools = createAskHumanTool({
-    onAsk: onHumanInquiry,
-    onEscalated: (record) => {
+  const recordAnsweredQuestion = (answered: OpenQuestion) => {
+    const record = openQuestionToEscalationRecord(answered);
+    if (record) {
       escalations.push(record);
       options.onEscalated?.(record);
+    }
+  };
+
+  const askHumanTools = createAskHumanTool({
+    registry: openQuestions,
+    dialogueLog,
+    onEnqueued: (question) => {
+      options.onOpenQuestionEnqueued?.(question);
     },
+  });
+
+  const answerOpenQuestionTools = createAnswerOpenQuestionTool({
+    registry: openQuestions,
+    dialogueLog,
+    onAnswered: recordAnsweredQuestion,
+  });
+
+  const openQuestionListTools = createOpenQuestionListTools({
+    registry: openQuestions,
   });
 
   const resolvePermissionTools = createResolvePermissionTool({
@@ -136,6 +177,8 @@ export async function runIssueSession(
     modelId: options.modelId,
     customTools: {
       ...askHumanTools,
+      ...answerOpenQuestionTools,
+      ...openQuestionListTools,
       ...resolvePermissionTools,
     },
   };
@@ -162,6 +205,8 @@ export async function runIssueSession(
         conductor,
         workerSession,
         permissionPipeline,
+        openQuestions,
+        dialogueLog,
         workerDispatches,
         workerFailures,
         escalations,
@@ -201,12 +246,12 @@ export async function runIssueSession(
             issueContext,
           }),
           turn: turns.length + 1,
-          workerDispatches,
-          workerFailures,
-          escalations,
-          turns,
-          options,
-        });
+        workerDispatches,
+        workerFailures,
+        escalations,
+        turns,
+        options,
+      });
         stopReason = 'completed';
       }
     }
@@ -227,6 +272,8 @@ export async function runIssueSession(
         workerDispatches,
         workerFailures,
         escalations,
+        openQuestions: openQuestions.list(),
+        dialogueLog: dialogueLog.list(),
       };
     }
   } finally {
@@ -256,6 +303,8 @@ async function runConductorTurn(input: {
   conductor: ConductorAgent;
   workerSession: WorkerSession;
   permissionPipeline: PermissionPipeline;
+  openQuestions: OpenQuestionRegistry;
+  dialogueLog: SessionDialogueLog;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   escalations: EscalationRecord[];
@@ -264,6 +313,29 @@ async function runConductorTurn(input: {
   const workersBefore = input.workerDispatches.length;
   const failuresBefore = input.workerFailures.length;
   const escalationsBefore = input.escalations.length;
+
+  let humanGuidance: string | undefined;
+  if (input.turn > 1 && input.options.onOperatorInput) {
+    const operatorMessage = await input.options.onOperatorInput({
+      turn: input.turn,
+      openQuestions: input.openQuestions.listOpen(),
+    });
+    if (operatorMessage?.trim()) {
+      input.dialogueLog.appendOperatorMessage(input.turn, operatorMessage);
+      const applied = applyOperatorMessage(
+        input.openQuestions,
+        input.dialogueLog,
+        operatorMessage,
+      );
+      humanGuidance = joinOperatorInput([
+        applied.generalGuidance ?? operatorMessage.trim(),
+        ...applied.answered.map(formatOpenQuestionAnsweredReport),
+      ]);
+      for (const answered of applied.answered) {
+        recordAnsweredOpenQuestion(input, answered);
+      }
+    }
+  }
 
   const issueContext = await fetchIssueContext(input.options.issueUrl);
   const prompt = buildPromptForTurn({
@@ -276,6 +348,7 @@ async function runConductorTurn(input: {
     escalations: input.escalations,
     runningWorkers: input.workerSession.runtime.listRunning(),
     pendingPermissions: input.permissionPipeline.pending.list(),
+    humanGuidance,
   });
 
   const sendResult = await input.conductor.send(prompt);
@@ -349,6 +422,7 @@ function buildPromptForTurn(input: {
   escalations: EscalationRecord[];
   runningWorkers: ReturnType<WorkerSession['runtime']['listRunning']>;
   pendingPermissions: ReturnType<PermissionPipeline['pending']['list']>;
+  humanGuidance?: string;
 }): string {
   const {
     turn,
@@ -359,6 +433,7 @@ function buildPromptForTurn(input: {
     escalations,
     runningWorkers,
     pendingPermissions,
+    humanGuidance,
   } = input;
 
   if (turn === 1) {
@@ -387,7 +462,22 @@ function buildPromptForTurn(input: {
     escalations,
     runningWorkers,
     pendingPermissions,
+    humanGuidance,
   });
+}
+
+function recordAnsweredOpenQuestion(
+  input: {
+    escalations: EscalationRecord[];
+    options: RunIssueSessionOptions;
+  },
+  answered: OpenQuestion,
+): void {
+  const record = openQuestionToEscalationRecord(answered);
+  if (record) {
+    input.escalations.push(record);
+    input.options.onEscalated?.(record);
+  }
 }
 
 function mergeProfileMaterials(

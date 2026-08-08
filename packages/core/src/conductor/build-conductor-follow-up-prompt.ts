@@ -15,6 +15,7 @@ export interface BuildConductorFollowUpPromptOptions {
   escalations?: EscalationRecord[];
   runningWorkers?: WorkerStartedInfo[];
   pendingPermissions?: PendingPermission[];
+  humanGuidance?: string;
 }
 
 export function buildConductorFollowUpPrompt(
@@ -30,5 +31,6 @@ export function buildConductorFollowUpPrompt(
     escalations: options.escalations ?? [],
     runningWorkers: options.runningWorkers,
     pendingPermissions: options.pendingPermissions,
+    humanGuidance: options.humanGuidance,
   });
 }

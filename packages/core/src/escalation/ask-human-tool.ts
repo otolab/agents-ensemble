@@ -1,25 +1,27 @@
 import type { SDKCustomTool } from '@cursor/sdk';
-import type {
-  EscalationRecord,
-  HumanInquiryHandler,
-  HumanInquiryResponseType,
-} from './human-inquiry.js';
-import { createEnvFallbackHumanInquiryHandler } from './resolve-human-inquiry.js';
+import type { SessionDialogueLog } from './dialogue-log.js';
+import { formatOpenQuestionEnqueuedReport } from './format-registry-update.js';
+import type { HumanInquiryResponseType } from './human-inquiry.js';
+import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 
 export interface AskHumanToolOptions {
-  onAsk?: HumanInquiryHandler;
-  onEscalated?: (record: EscalationRecord) => void;
+  registry: OpenQuestionRegistry;
+  dialogueLog: SessionDialogueLog;
+  onEnqueued?: (question: OpenQuestion) => void;
 }
 
 export function createAskHumanTool(
-  options: AskHumanToolOptions = {},
+  options: AskHumanToolOptions,
 ): Record<string, SDKCustomTool> {
-  const onAsk = options.onAsk ?? createEnvFallbackHumanInquiryHandler();
-
   return {
     ask_human: {
-      description:
-        'Ask the human operator a question when you cannot decide the next action. Use yes_no for binary choices or text for open guidance.',
+      description: [
+        'Register a question for the human operator when they have NOT answered yet.',
+        'The operator answers in chat on a later turn; you can continue without waiting.',
+        'DO NOT use if the operator already answered in the dialogue log — use answer_open_question to record their answer instead.',
+        'DO NOT use answer_open_question and ask_human for the same decision in one turn.',
+        'Use yes_no for binary choices or text for open guidance.',
+      ].join(' '),
       inputSchema: {
         type: 'object',
         properties: {
@@ -36,6 +38,11 @@ export function createAskHumanTool(
             type: 'string',
             description: 'Optional background shown before the question',
           },
+          relatedPermissionId: {
+            type: 'string',
+            description:
+              'Optional pending permission id when this question is about a worker permission',
+          },
         },
         required: ['question'],
       },
@@ -47,29 +54,19 @@ export function createAskHumanTool(
 
         const responseType = parseResponseType(args.responseType);
         const context = args.context ? String(args.context) : undefined;
+        const relatedPermissionId = args.relatedPermissionId
+          ? String(args.relatedPermissionId)
+          : undefined;
 
-        const response = await onAsk({
-          kind: 'escalation',
+        const entry = options.registry.enqueue({
           question,
           responseType,
           context,
+          relatedPermissionId,
         });
-
-        const record: EscalationRecord = {
-          question,
-          responseType,
-          context,
-          answer: response.answer,
-          approved: response.approved,
-        };
-        options.onEscalated?.(record);
-
-        const structuredContent: Record<string, string | boolean> = {
-          answer: response.answer,
-        };
-        if (response.approved !== undefined) {
-          structuredContent.approved = response.approved;
-        }
+        const report = formatOpenQuestionEnqueuedReport(entry);
+        options.dialogueLog.appendRegistryUpdate(report);
+        options.onEnqueued?.(entry);
 
         return {
           content: [
@@ -77,17 +74,21 @@ export function createAskHumanTool(
               type: 'text',
               text: JSON.stringify(
                 {
-                  answer: response.answer,
-                  ...(response.approved !== undefined
-                    ? { approved: response.approved }
-                    : {}),
+                  id: entry.id,
+                  status: entry.status,
+                  report,
+                  message:
+                    'Question recorded. Operator will answer in chat on a later turn. If they already answered, use answer_open_question. Use list_open_questions / get_open_question to inspect items.',
                 },
                 null,
                 2,
               ),
             },
           ],
-          structuredContent,
+          structuredContent: {
+            id: entry.id,
+            status: entry.status,
+          },
         };
       },
     },

@@ -160,6 +160,7 @@ export { runIssueSession } from './conductor/issue-session.js';
 export type {
   IssueSessionResult,
   IssueSessionTurn,
+  OperatorInputContext,
   RunIssueSessionOptions,
 } from './conductor/issue-session.js';
 
@@ -245,6 +246,40 @@ export { createPermissionAskHandler } from './escalation/create-permission-ask-h
 
 export { createAskHumanTool } from './escalation/ask-human-tool.js';
 export type { AskHumanToolOptions } from './escalation/ask-human-tool.js';
+
+export { createAnswerOpenQuestionTool } from './escalation/answer-open-question-tool.js';
+export type { AnswerOpenQuestionToolOptions } from './escalation/answer-open-question-tool.js';
+
+export {
+  OpenQuestionRegistry,
+} from './escalation/open-question.js';
+export type {
+  OpenQuestion,
+  OpenQuestionStatus,
+  OpenQuestionAnsweredBy,
+  EnqueueOpenQuestionInput,
+  AnswerOpenQuestionInput,
+} from './escalation/open-question.js';
+export {
+  SessionDialogueLog,
+} from './escalation/dialogue-log.js';
+export type { DialogueEntry, DialogueEntryKind } from './escalation/dialogue-log.js';
+export {
+  formatOpenQuestionEnqueuedReport,
+  formatOpenQuestionAnsweredReport,
+  joinOperatorInput,
+} from './escalation/format-registry-update.js';
+export { createOpenQuestionListTools } from './escalation/open-question-list-tools.js';
+export type { OpenQuestionListToolsOptions } from './escalation/open-question-list-tools.js';
+export { applyOperatorMessage } from './escalation/apply-operator-message.js';
+export type { ApplyOperatorMessageResult } from './escalation/apply-operator-message.js';
+export { recordOpenQuestionAnswer } from './escalation/record-open-question-answer.js';
+export type { RecordOpenQuestionAnswerInput } from './escalation/record-open-question-answer.js';
+export {
+  formatOpenQuestionSummaries,
+  formatAnsweredOpenQuestionSummaries,
+} from './escalation/format-open-questions.js';
+export { openQuestionToEscalationRecord } from './escalation/open-question-to-escalation.js';
 
 export { buildHumanGuidancePrompt } from './escalation/build-human-guidance-prompt.js';
 
