@@ -160,12 +160,10 @@ export { runConductorSession } from './conductor/conductor-session.js';
 export { runIssueSession } from './conductor/issue-session.js';
 export type {
   ConductorSessionResult,
-  ConductorSessionTurn,
   RunConductorSessionOptions,
 } from './conductor/conductor-session.js';
 export type {
   IssueSessionResult,
-  IssueSessionTurn,
   RunIssueSessionOptions,
   OperatorInputContext,
 } from './conductor/issue-session.js';
@@ -275,11 +273,26 @@ export type {
   OpenQuestionAnsweredBy,
   EnqueueOpenQuestionInput,
   AnswerOpenQuestionInput,
+  OpenQuestionRegistrySnapshot,
 } from './escalation/open-question.js';
+
 export {
-  SessionDialogueLog,
-} from './escalation/dialogue-log.js';
-export type { DialogueEntry, DialogueEntryKind } from './escalation/dialogue-log.js';
+  SESSION_SIDECAR_VERSION,
+  assertSessionSidecarMatches,
+  findLatestSessionSidecarForIssue,
+  listSessionSidecars,
+  loadSessionSidecar,
+  requireSessionSidecarForResume,
+  saveSessionSidecar,
+  sessionSidecarDir,
+  sessionSidecarPath,
+  SessionSidecarNotFoundError,
+} from './session/session-sidecar.js';
+export type {
+  FindLatestSessionSidecarInput,
+  SessionSidecar,
+  WorkerSessionSidecar,
+} from './session/session-sidecar.js';
 export {
   formatOpenQuestionEnqueuedReport,
   formatOpenQuestionAnsweredReport,

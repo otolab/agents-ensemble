@@ -40,9 +40,8 @@ worker（ACP）とは別モデル。worker は `session/prompt` でターン更�
 |--------|------|
 | **オペレータメッセージ** | `agent.send` に載る user ターン（CLI / `onOperatorInput` 経由） |
 | **OpenQuestionRegistry** | TODO リスト的な未回答 / 回答済み状態（tool で読む） |
-| **dialogue log** | セッション結果 JSON 用の記録（prompt / SDK 会話の正本ではない） |
 | **list / get tools** | conductor が必要なときだけ open question を読む |
-| **SDK 会話** | LLM 会話履歴の正本 |
+| **SDK 会話** | LLM 会話履歴の正本（オペレータ発話・tool 結果を含む） |
 
 ### open question（TODO リストモデル）
 
@@ -90,4 +89,4 @@ worker（ACP）とは別モデル。worker は `session/prompt` でターン更�
 
 - 良い: prompt cache を維持しやすい。TODO リスト的に必要時だけ読める。ユーザ判断が worker 生死と独立して残る
 - 悪い: conductor が `list_open_questions` を呼ばないと未回答を見落としうる（guidelines で矯正）
-- フォロー: 外向きオペレータ UI、dialogue log / registry の resume 永続化（#27）、**ConductorSession イベント列と prompt 配信**（#28、[ADR 0009](0009-conductor-session-event-queue.md)）
+- フォロー: 外向きオペレータ UI、open question registry の resume 永続化（#27）、**ConductorSession イベント列と prompt 配信**（#28、[ADR 0009](0009-conductor-session-event-queue.md)）

@@ -1,12 +1,10 @@
 import type { SDKCustomTool } from '@cursor/sdk';
-import type { SessionDialogueLog } from './dialogue-log.js';
 import { formatOpenQuestionEnqueuedReport } from './format-registry-update.js';
 import type { HumanInquiryResponseType } from './human-inquiry.js';
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 
 export interface AskHumanToolOptions {
   registry: OpenQuestionRegistry;
-  dialogueLog: SessionDialogueLog;
   onEnqueued?: (question: OpenQuestion) => void;
 }
 
@@ -18,7 +16,7 @@ export function createAskHumanTool(
       description: [
         'Register a question for the human operator when they have NOT answered yet.',
         'The operator answers in chat on a later turn; you can continue without waiting.',
-        'DO NOT use if the operator already answered in the dialogue log — use answer_open_question to record their answer instead.',
+        'DO NOT use if the operator already answered in chat — use answer_open_question to record their answer instead.',
         'DO NOT use answer_open_question and ask_human for the same decision in one turn.',
         'Use yes_no for binary choices or text for open guidance.',
       ].join(' '),
@@ -66,7 +64,6 @@ export function createAskHumanTool(
           source: 'conductor',
         });
         const report = formatOpenQuestionEnqueuedReport(entry);
-        options.dialogueLog.appendRegistryUpdate(report);
         options.onEnqueued?.(entry);
 
         return {

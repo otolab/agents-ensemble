@@ -7,6 +7,7 @@ export interface WorkerStartParams {
   systemPrompt: string;
   issueUrl: string;
   repoRoot: string;
+  resumeAcpSessionId?: string;
 }
 
 export interface WorkerStartedInfo extends WorkerStartParams {

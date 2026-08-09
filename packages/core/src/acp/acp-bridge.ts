@@ -7,9 +7,16 @@ export interface AcpBridgeConnectOptions extends SpawnAcpProcessOptions {}
 export interface AcpBridgeRunSessionOptions {
   cwd: string;
   prompt: string;
+  /** 指定時は `session/load` で復元してから prompt する。失敗時は新規 session。 */
+  resumeSessionId?: string;
   onUpdate?: SessionUpdateHandler;
   /** 注入 bridge 利用時も worker ごとの handler を渡せる。 */
   permissionHandler?: PermissionHandler;
+}
+
+export interface AcpBridgeRunSessionResult {
+  sessionId: string;
+  promptResult: PromptResult;
 }
 
 /**
@@ -35,6 +42,10 @@ export class AcpBridge {
     return this.client.newSession(cwd);
   }
 
+  async loadSession(sessionId: string, cwd: string): Promise<void> {
+    return this.client.loadSession(sessionId, cwd);
+  }
+
   async prompt(
     sessionId: string,
     prompt: string,
@@ -44,14 +55,39 @@ export class AcpBridge {
   }
 
   /** Create session and run a single prompt (typical worker dispatch). */
-  async runSession(options: AcpBridgeRunSessionOptions): Promise<PromptResult> {
-    const sessionId = await this.newSession(options.cwd);
-    if (options.permissionHandler) {
-      return this.client.withPermissionHandler(options.permissionHandler, () =>
-        this.prompt(sessionId, options.prompt, options.onUpdate),
-      );
+  async runSession(
+    options: AcpBridgeRunSessionOptions,
+  ): Promise<AcpBridgeRunSessionResult> {
+    const runPrompt = async (sessionId: string) =>
+      this.prompt(sessionId, options.prompt, options.onUpdate);
+
+    let sessionId = options.resumeSessionId;
+    if (sessionId) {
+      try {
+        if (options.permissionHandler) {
+          await this.client.withPermissionHandler(
+            options.permissionHandler,
+            () => this.loadSession(sessionId!, options.cwd),
+          );
+        } else {
+          await this.loadSession(sessionId, options.cwd);
+        }
+      } catch {
+        sessionId = undefined;
+      }
     }
-    return this.prompt(sessionId, options.prompt, options.onUpdate);
+
+    if (!sessionId) {
+      sessionId = await this.newSession(options.cwd);
+    }
+
+    const promptResult = options.permissionHandler
+      ? await this.client.withPermissionHandler(options.permissionHandler, () =>
+          runPrompt(sessionId!),
+        )
+      : await runPrompt(sessionId);
+
+    return { sessionId, promptResult };
   }
 
   async close(): Promise<void> {

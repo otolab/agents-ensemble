@@ -103,8 +103,57 @@ ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
 # または --issue-url <url> --repo-root <path> で worktree を解決
 
 # Stage 2: conductor オーケストレーション
-ensemble issue <issue-url> --repo-root <path> [--profile <name>] ...
+ensemble issue <issue-url> --repo-root <path> [--profile <name>] [--resume <agentId>] ...
 ```
+
+### セッションの停止と再開
+
+`ensemble issue` は harness 状態を **sidecar JSON** に永続化する。正常終了・エラー・`Ctrl+C`（SIGINT）/ `SIGTERM` いずれでも best-effort で flush する（状態変化時の増分 flush あり）。
+
+**sidecar の場所**
+
+```
+{repoRoot}/.ensemble/sessions/{conductorAgentId}.json
+```
+
+**永続化されるもの**
+
+| 項目 | 内容 |
+|------|------|
+| open question registry | 未回答・回答済みの質問一覧と `sequence` |
+| worker `acpSessionId` | worker 名をキーに ACP `session/load` 用 ID |
+| `profile` | セッション開始時のスナップショット（resume 時は CLI `--profile` より sidecar を優先） |
+| `updatedAt` | 最終 flush 時刻（`--continue` で最新セッション選択に使用、#31） |
+
+**載せないもの**: `worktreePath`（`issueUrl` + `repoRoot` から導出）、SDK 会話本文（SDK store が正本）
+
+**新規セッション**
+
+```bash
+ensemble issue https://github.com/org/repo/issues/1 --repo-root .
+# JSON 出力の agentId を控える（例: agent-abc123）
+```
+
+**再開（同一 Issue の続き）**
+
+```bash
+ensemble issue https://github.com/org/repo/issues/1 \
+  --repo-root . \
+  --resume agent-abc123
+```
+
+`--resume` 指定時に sidecar が無い場合は **起動失敗**（`SessionSidecarNotFoundError`）。SDK だけ復元して harness 状態を失う半端 resume はしない。
+
+conductor は SDK `Agent.resume`、worker は ACP `session/load` で復元する（詳細は [ADR 0011](docs/adr/0011-session-sidecar-resume.md)）。
+
+**CLI JSON 出力（破壊的変更）**
+
+| 旧 | 新 |
+|----|-----|
+| `turnCount` | `sendCount`（完了した `agent.send` 回数） |
+| `onTurnComplete`（ライブラリ） | `onSendComplete` |
+
+`stopReason` に `interrupted`（SIGINT/SIGTERM による graceful shutdown）が追加される。
 
 ### プロファイル
 

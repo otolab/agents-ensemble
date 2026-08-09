@@ -19,7 +19,7 @@ describe.skipIf(!hasAcpTestConfig())('AcpBridge integration', () => {
         cwd: config.cwd ?? process.cwd(),
         prompt: 'Reply with exactly: pong',
       });
-      expect(result.stopReason).toBeTruthy();
+      expect(result.promptResult.stopReason).toBeTruthy();
     } finally {
       await bridge.close();
     }

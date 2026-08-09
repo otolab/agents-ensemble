@@ -1,12 +1,10 @@
 import type { SDKCustomTool } from '@cursor/sdk';
-import type { SessionDialogueLog } from './dialogue-log.js';
 import { formatOpenQuestionAnsweredReport } from './format-registry-update.js';
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 import { recordOpenQuestionAnswer } from './record-open-question-answer.js';
 
 export interface AnswerOpenQuestionToolOptions {
   registry: OpenQuestionRegistry;
-  dialogueLog: SessionDialogueLog;
   onAnswered?: (question: OpenQuestion) => void;
 }
 
@@ -17,7 +15,7 @@ export function createAnswerOpenQuestionTool(
     answer_open_question: {
       description: [
         'Record an answer to an open question on the operator behalf.',
-        'USE when the operator already answered in chat (see dialogue log / operator messages) and you must close the open question before resolve_permission or the next action.',
+        'USE when the operator already answered in chat and you must close the open question before resolve_permission or the next action.',
         'USE when you are faithfully recording the operator stated intent from session context.',
         'DO NOT use when the operator has not provided guidance yet — use ask_human instead.',
         'DO NOT call ask_human and answer_open_question for the same decision in one turn.',
@@ -60,17 +58,13 @@ export function createAnswerOpenQuestionTool(
           args.approved === undefined ? undefined : Boolean(args.approved);
         const rationale = args.rationale ? String(args.rationale) : undefined;
 
-        const recorded = recordOpenQuestionAnswer(
-          options.registry,
-          options.dialogueLog,
-          {
-            id: questionId,
-            answer,
-            approved,
-            answeredBy: 'conductor',
-            rationale,
-          },
-        );
+        const recorded = recordOpenQuestionAnswer(options.registry, {
+          id: questionId,
+          answer,
+          approved,
+          answeredBy: 'conductor',
+          rationale,
+        });
         if (!recorded) {
           throw new Error(
             `answer_open_question: question not found or already answered: ${questionId}`,

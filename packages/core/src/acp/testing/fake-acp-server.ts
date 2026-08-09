@@ -31,6 +31,7 @@ export interface FakeAcpServerOptions {
 export class FakeAcpServer {
   private readonly lineBuffer = new NdJsonLineBuffer();
   private sessionCounter = 0;
+  private readonly sessions = new Set<string>();
   private permissionRequestCounter = 0;
   private running = false;
   private readonly pendingPermissionResolvers = new Map<
@@ -88,7 +89,27 @@ export class FakeAcpServer {
 
       case 'session/new': {
         this.sessionCounter += 1;
-        this.respond(id, { sessionId: `fake-session-${this.sessionCounter}` });
+        const sessionId = `fake-session-${this.sessionCounter}`;
+        this.sessions.add(sessionId);
+        this.respond(id, { sessionId });
+        break;
+      }
+
+      case 'session/load': {
+        const sessionId = (params as { sessionId?: string })?.sessionId ?? '';
+        if (!this.sessions.has(sessionId)) {
+          this.respondError(id, {
+            code: -32603,
+            message: `Session ${sessionId} not found`,
+          });
+          break;
+        }
+        this.respond(id, {
+          modes: {
+            currentModeId: 'agent',
+            availableModes: [{ id: 'agent', name: 'Agent' }],
+          },
+        });
         break;
       }
 
@@ -128,6 +149,13 @@ export class FakeAcpServer {
 
   private respond(id: number | string, result: unknown): void {
     this.write({ jsonrpc: '2.0', id, result });
+  }
+
+  private respondError(
+    id: number | string,
+    error: { code: number; message: string },
+  ): void {
+    this.write({ jsonrpc: '2.0', id, error });
   }
 
   private notify(method: string, params: unknown): void {

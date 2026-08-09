@@ -94,6 +94,18 @@ export class AcpClient {
     return result.sessionId;
   }
 
+  async loadSession(
+    sessionId: string,
+    cwd: string,
+    mcpServers: unknown[] = [],
+  ): Promise<void> {
+    await this.peer.request('session/load', {
+      sessionId,
+      cwd,
+      mcpServers,
+    });
+  }
+
   async prompt(
     sessionId: string,
     prompt: string | AcpPromptBlock[],

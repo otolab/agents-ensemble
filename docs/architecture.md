@@ -157,7 +157,7 @@ await conductor.send(workerStatusUpdate);
 conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
-- **resume**: 別プロセスから `Agent.resume(conductorId)` で再開可能
+- **resume**: 別プロセスから `Agent.resume(conductorId)` で再開可能。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）に open question・profile・worker `acpSessionId` を保存（[ADR 0011](adr/0011-session-sidecar-resume.md)）
 
 ### conductor が読む入力
 
@@ -271,8 +271,7 @@ worker (ACP)                    conductor (SDK)              オペレータ
 | **modular-prompt** | system prompt 文（指揮方針・materials） |
 | **オペレータメッセージ** | `agent.send` の user ターン（CLI TTY / `ENSEMBLE_OPERATOR_MESSAGE`） |
 | **OpenQuestionRegistry** | TODO リスト（`inq-N`）。tool で読む |
-| **SessionDialogueLog** | セッション結果 JSON 用の記録 |
-| **SDK 会話** | LLM 会話履歴の正本 |
+| **SDK 会話** | LLM 会話履歴の正本（オペレータ発話・tool 結果を含む） |
 
 **ツール使い分け**
 
@@ -314,8 +313,7 @@ worker（種別ごと）──write──► Issue コメント
 conductor ──read──► 次の worker 種別の判断
 ```
 
-- **会話履歴は共有媒体にしない** — worker session の会話は捨ててよい
-- **Issue / PR が worker 間の共有バス** — 報告・状態の正本
+- **会話の resume** — worker ACP は `session/load` + sidecar の `acpSessionId`（[ADR 0011](adr/0011-session-sidecar-resume.md)）。Issue / PR は作業報告の共有バスとして引き続き正本
 - **worktree が作業の物理的な紐づけ** — 1 Issue あたり 1 worktree（規約）
 
 ---

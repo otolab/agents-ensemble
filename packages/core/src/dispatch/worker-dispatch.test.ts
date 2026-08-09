@@ -7,8 +7,11 @@ describe('dispatchWorker', () => {
   it('creates worktree and runs ACP session', async () => {
     const connectSpy = vi.spyOn(acpBridgeModule.AcpBridge, 'connect').mockResolvedValue({
       runSession: vi.fn().mockResolvedValue({
-        stopReason: 'end_turn',
-        responseText: 'pong',
+        sessionId: 'sess-1',
+        promptResult: {
+          stopReason: 'end_turn',
+          responseText: 'pong',
+        },
       }),
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as acpBridgeModule.AcpBridge);
@@ -42,7 +45,7 @@ describe('dispatchWorker', () => {
     expect(result.worktree).toEqual(worktree);
     expect(result.prompt).toContain('respond with pong');
     expect(result.promptResult.stopReason).toBe('end_turn');
-    expect(result.promptResult.responseText).toBe('pong');
+    expect(result.acpSessionId).toBe('sess-1');
     expect(connectSpy).toHaveBeenCalledOnce();
 
     connectSpy.mockRestore();

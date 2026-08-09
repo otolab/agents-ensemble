@@ -1,5 +1,3 @@
-import type { SessionDialogueLog } from './dialogue-log.js';
-import { formatOpenQuestionEnqueuedReport } from './format-registry-update.js';
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 
 export const MAX_TURNS_OPEN_QUESTION_TEXT = '次どうする？';
@@ -17,7 +15,6 @@ export interface EnsureMaxTurnsOpenQuestionInput {
 /** 自律ターン上限到達時に orchestrator が登録する open question。 */
 export function ensureMaxTurnsOpenQuestion(
   registry: OpenQuestionRegistry,
-  dialogueLog: SessionDialogueLog,
   input: EnsureMaxTurnsOpenQuestionInput,
   onEnqueued?: (question: OpenQuestion) => void,
 ): OpenQuestion {
@@ -44,7 +41,6 @@ export function ensureMaxTurnsOpenQuestion(
     context,
     source: 'max_turns',
   });
-  dialogueLog.appendRegistryUpdate(formatOpenQuestionEnqueuedReport(entry));
   onEnqueued?.(entry);
   return entry;
 }

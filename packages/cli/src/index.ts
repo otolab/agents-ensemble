@@ -106,9 +106,9 @@ program
               `[worker failed] ${failure.name} (${failure.kind}) ${failure.issueUrl}: ${failure.error}`,
             );
           },
-          onTurnComplete: (turn) => {
+          onSendComplete: (send) => {
             console.error(
-              `[conductor turn ${turn.turn}] status=${turn.status} workerDone=${turn.workerDispatches} workerFailed=${turn.workerFailures} escalations=${turn.escalations}`,
+              `[conductor send ${send.sendCount}] status=${send.status} workerDone=${send.workerDispatches} workerFailed=${send.workerFailures}`,
             );
           },
         });
@@ -119,7 +119,7 @@ program
               agentId: result.agentId,
               issueUrl: result.issueUrl,
               repoRoot: result.repoRoot,
-              turnCount: result.turnCount,
+              sendCount: result.sendCount,
               stopReason: result.stopReason,
               lastRunStatus: result.lastRunStatus,
               lastResult: result.lastResult,

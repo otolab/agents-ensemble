@@ -97,4 +97,24 @@ export class OpenQuestionRegistry {
   get openCount(): number {
     return this.listOpen().length;
   }
+
+  snapshot(): OpenQuestionRegistrySnapshot {
+    return {
+      sequence: this.sequence,
+      openQuestions: this.list(),
+    };
+  }
+
+  restore(snapshot: OpenQuestionRegistrySnapshot): void {
+    this.sequence = snapshot.sequence;
+    this.entries.clear();
+    for (const entry of snapshot.openQuestions) {
+      this.entries.set(entry.id, entry);
+    }
+  }
+}
+
+export interface OpenQuestionRegistrySnapshot {
+  sequence: number;
+  openQuestions: OpenQuestion[];
 }

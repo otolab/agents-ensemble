@@ -26,13 +26,32 @@ export class SessionEventQueue {
     return this.queue.shift();
   }
 
-  async waitForEvent(): Promise<SessionEvent> {
+  async waitForEvent(signal?: AbortSignal): Promise<SessionEvent> {
     const pending = this.dequeue();
     if (pending) {
       return pending;
     }
-    return new Promise((resolve) => {
-      this.waiters.push(resolve);
+    if (signal?.aborted) {
+      throw new DOMException('Session event wait aborted', 'AbortError');
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        cleanup();
+        reject(new DOMException('Session event wait aborted', 'AbortError'));
+      };
+      const waiter = (event: SessionEvent) => {
+        cleanup();
+        resolve(event);
+      };
+      const cleanup = () => {
+        signal?.removeEventListener('abort', onAbort);
+        const index = this.waiters.indexOf(waiter);
+        if (index >= 0) {
+          this.waiters.splice(index, 1);
+        }
+      };
+      signal?.addEventListener('abort', onAbort);
+      this.waiters.push(waiter);
     });
   }
 }

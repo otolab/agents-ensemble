@@ -15,6 +15,8 @@ export interface WorkerDispatchOptions {
   kind: string;
   systemPrompt?: string;
   repoRoot: string;
+  /** sidecar から復元する ACP session id。 */
+  resumeAcpSessionId?: string;
   spawn?: SpawnAcpProcessOptions;
   /** integration 用: 接続済み bridge を注入（未指定時は spawn して接続）。 */
   bridge?: AcpBridge;
@@ -29,19 +31,25 @@ export interface WorkerDispatchResult {
   worktree: WorktreeRef;
   prompt: string;
   promptResult: PromptResult;
+  acpSessionId: string;
 }
+
+const WORKER_RESUME_PROMPT =
+  '前回の続きです。Issue / worktree の最新状態を踏まえ、中断していた作業を再開してください。';
 
 export async function dispatchWorker(
   options: WorkerDispatchOptions,
 ): Promise<WorkerDispatchResult> {
   const issue = parseIssueUrl(options.issueUrl);
   const worktree = await createWorkerWorktree(options.repoRoot, issue);
-  const prompt = buildWorkerPrompt({
-    issueUrl: issue.url,
-    kind: options.kind,
-    systemPrompt: options.systemPrompt,
-    worktreePath: worktree.path,
-  });
+  const prompt = options.resumeAcpSessionId
+    ? WORKER_RESUME_PROMPT
+    : buildWorkerPrompt({
+        issueUrl: issue.url,
+        kind: options.kind,
+        systemPrompt: options.systemPrompt,
+        worktreePath: worktree.path,
+      });
 
   const bridge =
     options.bridge ??
@@ -54,9 +62,10 @@ export async function dispatchWorker(
   const ownsBridge = !options.bridge;
 
   try {
-    const promptResult = await bridge.runSession({
+    const { sessionId, promptResult } = await bridge.runSession({
       cwd: worktree.path,
       prompt,
+      resumeSessionId: options.resumeAcpSessionId,
       onUpdate: options.onUpdate,
       permissionHandler: options.permissionHandler,
     });
@@ -68,6 +77,7 @@ export async function dispatchWorker(
       worktree,
       prompt,
       promptResult,
+      acpSessionId: sessionId,
     };
   } finally {
     if (ownsBridge) {
