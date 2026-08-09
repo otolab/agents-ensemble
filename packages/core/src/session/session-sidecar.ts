@@ -5,6 +5,20 @@ import type { Profile } from '../profile/types.js';
 
 export const SESSION_SIDECAR_VERSION = 1;
 
+export class SessionSidecarNotFoundError extends Error {
+  readonly code = 'SESSION_SIDECAR_NOT_FOUND';
+
+  constructor(
+    public readonly conductorAgentId: string,
+    public readonly path: string,
+  ) {
+    super(
+      `Session sidecar not found for resume (agentId=${conductorAgentId}, path=${path})`,
+    );
+    this.name = 'SessionSidecarNotFoundError';
+  }
+}
+
 export interface WorkerSessionSidecar {
   acpSessionId: string;
 }
@@ -51,6 +65,19 @@ export async function loadSessionSidecar(
     if (isEnoent(error)) return undefined;
     throw error;
   }
+}
+
+/** `resumeAgentId` 指定時に sidecar が無い場合は起動失敗とする。 */
+export async function requireSessionSidecarForResume(input: {
+  repoRoot: string;
+  conductorAgentId: string;
+}): Promise<SessionSidecar> {
+  const path = sessionSidecarPath(input);
+  const sidecar = await loadSessionSidecar(path);
+  if (!sidecar) {
+    throw new SessionSidecarNotFoundError(input.conductorAgentId, path);
+  }
+  return sidecar;
 }
 
 export async function saveSessionSidecar(

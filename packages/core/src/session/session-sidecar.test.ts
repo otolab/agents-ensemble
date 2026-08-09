@@ -6,10 +6,12 @@ import {
   assertSessionSidecarMatches,
   findLatestSessionSidecarForIssue,
   loadSessionSidecar,
+  requireSessionSidecarForResume,
   saveSessionSidecar,
   SESSION_SIDECAR_VERSION,
   sessionSidecarDir,
   sessionSidecarPath,
+  SessionSidecarNotFoundError,
   type SessionSidecar,
 } from './session-sidecar.js';
 
@@ -81,6 +83,17 @@ describe('session sidecar', () => {
         repoRoot: '/repo',
       }),
     ).toThrow(/issueUrl mismatch/);
+  });
+
+  it('throws SessionSidecarNotFoundError when resume sidecar is missing', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-sidecar-'));
+
+    await expect(
+      requireSessionSidecarForResume({
+        repoRoot: tempDir,
+        conductorAgentId: 'missing-agent',
+      }),
+    ).rejects.toThrow(SessionSidecarNotFoundError);
   });
 
   it('finds the latest sidecar for an issue by updatedAt', async () => {

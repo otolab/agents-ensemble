@@ -22,4 +22,13 @@ describe('SessionEventQueue', () => {
       text: 'later',
     });
   });
+
+  it('rejects waitForEvent when the abort signal fires', async () => {
+    const queue = new SessionEventQueue();
+    const controller = new AbortController();
+    const pending = queue.waitForEvent(controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
 });

@@ -282,9 +282,11 @@ export {
   findLatestSessionSidecarForIssue,
   listSessionSidecars,
   loadSessionSidecar,
+  requireSessionSidecarForResume,
   saveSessionSidecar,
   sessionSidecarDir,
   sessionSidecarPath,
+  SessionSidecarNotFoundError,
 } from './session/session-sidecar.js';
 export type {
   FindLatestSessionSidecarInput,

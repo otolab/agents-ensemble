@@ -53,8 +53,9 @@
 }
 ```
 
-- flush: `runConductorSession` の `finally`（正常終了・エラー・未処理例外を問わず best-effort）。`updatedAt` は save 時に自動付与
-- load: `resumeAgentId` 指定時。`issueUrl` / `repoRoot` が一致しない場合はエラー
+- flush: `runConductorSession` の `finally`（正常終了・エラー・未処理例外を問わず best-effort）。状態変化時（send 完了・worker 完了・open question 変更）にも増分 flush する
+- SIGINT / SIGTERM: 内部 `AbortController` でイベント待ちを中断し、`stopReason: interrupted` で graceful shutdown + flush
+- load: `resumeAgentId` 指定時。sidecar が無い場合は `SessionSidecarNotFoundError` で起動失敗。`issueUrl` / `repoRoot` が一致しない場合もエラー
 - `--continue`（#31）: `findLatestSessionSidecarForIssue` で同一 Issue の最新 `updatedAt` を選ぶ
 
 ### worker resume
@@ -68,9 +69,22 @@
 - `SessionDialogueLog` — 削除済み（SDK 会話が正本）
 - `turns` 配列 — 削除済み（`sendCount` のみ）
 - `worktreePath` — sidecar に載せない
+- `PermissionPipeline.pending` — **v1 では sidecar に載せない**（accepted risk、下記）
+
+### Accepted risk: pending permission 非永続
+
+v1 の sidecar には permission 待ち状態を保存しない。
+
+| シナリオ | 挙動 |
+|----------|------|
+| 正常終了（`finally`） | 未解決の pending permission は **deny** して worker に返す（既存の `rejectAllPendingPermissions`） |
+| 異常終了 + resume | sidecar に pending が無いため、中断直前の permission 待ちは **復元されない**。worker は deny またはタイムアウト相当になりうる。オペレータは再判断が必要 |
+| resume 後の新規 permission | 通常どおり `permission.pending` イベントで conductor に届く |
+
+permission 待ちの永続化は別 Issue で検討する。
 
 ## Consequences
 
 - 良い: conductor + registry + worker 会話を一貫して resume できる経路ができる
 - 悪い: sidecar と SDK store の二重管理。`session/load` 失敗時は worker 文脈がリセットされる
-- フォロー: SIGINT 時の flush 品質、sidecar の gitignore 方針、複数マシン間 resume
+- フォロー: sidecar の gitignore 方針、複数マシン間 resume

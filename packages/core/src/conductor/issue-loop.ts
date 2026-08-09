@@ -1,4 +1,8 @@
-export type IssueLoopStopReason = 'completed' | 'error' | 'max_turns';
+export type IssueLoopStopReason =
+  | 'completed'
+  | 'error'
+  | 'max_turns'
+  | 'interrupted';
 
 export interface IssueLoopStopInput {
   /** 直近のオペレータ入力から消費した conductor 自律ターン数。 */

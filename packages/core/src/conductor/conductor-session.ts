@@ -35,7 +35,7 @@ import {
 } from './issue-loop.js';
 import {
   assertSessionSidecarMatches,
-  loadSessionSidecar,
+  requireSessionSidecarForResume,
   saveSessionSidecar,
   SESSION_SIDECAR_VERSION,
   sessionSidecarPath,
@@ -85,6 +85,10 @@ export interface RunConductorSessionOptions {
   }) => void;
   onEscalated?: (record: EscalationRecord) => void;
   onOpenQuestionEnqueued?: (question: OpenQuestion) => void;
+  /** テスト用。未指定時は内部 AbortController に SIGINT/SIGTERM を結線する。 */
+  shutdownSignal?: AbortSignal;
+  /** デフォルト true。`shutdownSignal` 未指定時のみ有効。 */
+  registerProcessSignalHandlers?: boolean;
 }
 
 export interface ConductorSessionResult {
@@ -116,32 +120,50 @@ export async function runConductorSession(
   const workerSessions = new Map<string, string>();
 
   if (options.resumeAgentId) {
-    const sidecar = await loadSessionSidecar(
-      sessionSidecarPath({
-        repoRoot: options.repoRoot,
-        conductorAgentId: options.resumeAgentId,
-      }),
-    );
-    if (sidecar) {
-      assertSessionSidecarMatches(sidecar, {
-        conductorAgentId: options.resumeAgentId,
-        issueUrl: options.issueUrl,
-        repoRoot: options.repoRoot,
-      });
-      openQuestions.restore({
-        sequence: sidecar.sequence,
-        openQuestions: sidecar.openQuestions,
-      });
-      activeProfile = sidecar.profile;
-      for (const [name, worker] of Object.entries(sidecar.workers)) {
-        workerSessions.set(name, worker.acpSessionId);
-      }
+    const sidecar = await requireSessionSidecarForResume({
+      repoRoot: options.repoRoot,
+      conductorAgentId: options.resumeAgentId,
+    });
+    assertSessionSidecarMatches(sidecar, {
+      conductorAgentId: options.resumeAgentId,
+      issueUrl: options.issueUrl,
+      repoRoot: options.repoRoot,
+    });
+    openQuestions.restore({
+      sequence: sidecar.sequence,
+      openQuestions: sidecar.openQuestions,
+    });
+    activeProfile = sidecar.profile;
+    for (const [name, worker] of Object.entries(sidecar.workers)) {
+      workerSessions.set(name, worker.acpSessionId);
     }
+  }
+
+  const ownsShutdownController = !options.shutdownSignal;
+  const shutdownController = ownsShutdownController
+    ? new AbortController()
+    : undefined;
+  const shutdownSignal =
+    options.shutdownSignal ?? shutdownController!.signal;
+  let unregisterProcessSignalHandlers = () => {};
+  if (
+    ownsShutdownController &&
+    options.registerProcessSignalHandlers !== false
+  ) {
+    const onSignal = () => shutdownController!.abort();
+    process.once('SIGINT', onSignal);
+    process.once('SIGTERM', onSignal);
+    unregisterProcessSignalHandlers = () => {
+      process.off('SIGINT', onSignal);
+      process.off('SIGTERM', onSignal);
+    };
   }
 
   const permissionPipeline =
     options.permissionPipeline ??
     new PermissionPipeline({ policy: options.permissionPolicy });
+
+  let scheduleSidecarFlush = () => {};
 
   const workerSession = new WorkerSession({
     issueUrl: options.issueUrl,
@@ -166,6 +188,7 @@ export async function runConductorSession(
       workerSessions.set(result.name, result.acpSessionId);
       eventQueue.enqueue({ type: 'worker.completed', result });
       options.onWorkerDispatched?.(result);
+      scheduleSidecarFlush();
     },
     onWorkerFailed: (failure) => {
       workerFailures.push(failure);
@@ -182,12 +205,14 @@ export async function runConductorSession(
       escalations.push(record);
       options.onEscalated?.(record);
     }
+    scheduleSidecarFlush();
   };
 
   const askHumanTools = createAskHumanTool({
     registry: openQuestions,
     onEnqueued: (question) => {
       options.onOpenQuestionEnqueued?.(question);
+      scheduleSidecarFlush();
     },
   });
 
@@ -221,7 +246,8 @@ export async function runConductorSession(
     ? await ConductorAgent.resume(options.resumeAgentId, conductorOptions)
     : await ConductorAgent.create(conductorOptions);
 
-  const flushSidecar = async (): Promise<void> => {
+  let flushSidecar: () => Promise<void> = async () => {};
+  flushSidecar = async (): Promise<void> => {
     const workers: SessionSidecar['workers'] = {};
     for (const [name, acpSessionId] of workerSessions) {
       workers[name] = { acpSessionId };
@@ -245,6 +271,11 @@ export async function runConductorSession(
       }),
       sidecar,
     );
+  };
+  scheduleSidecarFlush = () => {
+    void flushSidecar().catch(() => {
+      // best-effort persistence
+    });
   };
 
   let lastSendResult: ConductorSendResult = {
@@ -325,7 +356,7 @@ export async function runConductorSession(
       let event: SessionEvent | undefined;
       if (eventQueue.isEmpty()) {
         if (workerSession.runtime.runningCount > 0) {
-          event = await eventQueue.waitForEvent();
+          event = await waitForSessionEvent(eventQueue, shutdownSignal);
         } else {
           const loopState = buildLoopState({
             autonomousTurns,
@@ -341,10 +372,15 @@ export async function runConductorSession(
             break;
           }
           // worker / permission イベントの到着を待つ（空キューでの busy-spin を避ける）
-          event = await eventQueue.waitForEvent();
+          event = await waitForSessionEvent(eventQueue, shutdownSignal);
         }
       } else {
         event = eventQueue.dequeue();
+      }
+
+      if (!event && shutdownSignal.aborted) {
+        stopReason = 'interrupted';
+        break;
       }
 
       if (!event || !isConductorSendEvent(event)) {
@@ -392,6 +428,7 @@ export async function runConductorSession(
       lastDispatchesThisTurn =
         info.workerDispatches + info.workerFailures;
       options.onSendComplete?.(info);
+      scheduleSidecarFlush();
     }
 
     function buildResult(): ConductorSessionResult {
@@ -411,6 +448,7 @@ export async function runConductorSession(
       };
     }
   } finally {
+    unregisterProcessSignalHandlers();
     try {
       await flushSidecar();
     } catch {
@@ -611,4 +649,28 @@ function mergeProfileMaterials(
 
   const merged = [...(materials ?? []), ...fromProfile];
   return merged.length > 0 ? merged : undefined;
+}
+
+async function waitForSessionEvent(
+  eventQueue: SessionEventQueue,
+  signal: AbortSignal,
+): Promise<SessionEvent | undefined> {
+  try {
+    return await eventQueue.waitForEvent(signal);
+  } catch (error) {
+    if (isAbortError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === 'AbortError') ||
+    (typeof error === 'object' &&
+      error !== null &&
+      'name' in error &&
+      (error as { name: string }).name === 'AbortError')
+  );
 }
