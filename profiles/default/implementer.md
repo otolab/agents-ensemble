@@ -8,7 +8,7 @@
 - その他の章 — 相手（conductor / reviewer）への期待として読む
 - §1 全員の前提、§6 連携 — 全員共通のルール
 
-`team.md` 全文は conductor の materials にも載る。手順の細部の正本は **Skill（指示があれば）と Issue / PR**。
+手順の細部の正本は **Skill（指示があれば）と Issue / PR**。
 
 ## 起動時の立場
 

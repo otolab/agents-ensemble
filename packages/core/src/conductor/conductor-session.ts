@@ -14,7 +14,7 @@ import type { PermissionPolicyRules } from '../permission/permission-policy.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { createResolvePermissionTool } from '../permission/resolve-permission-tool.js';
 import type { Profile } from '../profile/types.js';
-import { profileWorkersToSessionSpecs } from '../profile/types.js';
+import { profileWorkersToSessionSpecs, resolveAgentSystemPrompt } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import type { WorkerDispatchFn } from '../runtime/worker-runtime.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
@@ -560,6 +560,7 @@ async function runInitialConductorSend(input: {
   const message = compileConductorInitialMessage({
     repoRoot: input.options.repoRoot,
     issueContext,
+    roleSystemPrompt: resolveAgentSystemPrompt('conductor', input.profile.agents),
     materials: mergeConductorMaterials(
       mergeProfileMaterials(input.options.materials, input.profile),
       input.options.briefing,

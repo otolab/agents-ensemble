@@ -6,9 +6,12 @@ import { toMaterialElement } from '../types.js';
  * conductor のシステムプロンプト相当。
  * セッション開始時に一度渡す基本指示と参照ドキュメント（materials）。
  */
+const DEFAULT_CONDUCTOR_PERSONA =
+  'あなたは agents-ensemble の conductor です。実作業は行わず、プロファイルに従って worker を制御します。';
+
 export const conductorSystemModule: PromptModule<ConductorPromptContext> = {
   persona: [
-    'あなたは agents-ensemble の conductor です。実作業は行わず、プロファイルに従って worker を制御します。',
+    (ctx) => ctx.roleSystemPrompt?.trim() || DEFAULT_CONDUCTOR_PERSONA,
   ],
   guidelines: [
     '- ファイル編集・シェル実行・直接実装はしない',

@@ -1,4 +1,4 @@
-/** kind ごとの agent 定義（system prompt）。未指定時はコード内デフォルトにフォールバック。 */
+/** kind ごとの agent 定義（system prompt）。`conductor` は暗黙起動の SDK agent、他は worker bootstrap 用。 */
 export interface AgentDefinition {
   systemPrompt?: string;
   /** プロファイルディレクトリ基準のファイルパス。`systemPrompt` と排他。 */

@@ -14,6 +14,8 @@ export interface ConductorMaterial {
 export interface ConductorPromptContext {
   repoRoot: string;
   issueContext: IssueContext;
+  /** profile の `agents.conductor.systemPromptFile` から解決した起動文書。 */
+  roleSystemPrompt?: string;
   materials?: ConductorMaterial[];
   briefing?: string;
   followUp?: string;

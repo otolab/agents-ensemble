@@ -17,7 +17,7 @@ const sampleContext: IssueContext = {
 };
 
 describe('buildConductorPrompt', () => {
-  it('includes issue context and dispatch guidance', () => {
+  it('includes issue context and default persona when no role prompt', () => {
     const prompt = buildConductorPrompt({
       issueContext: sampleContext,
       repoRoot: '/tmp/repo',
@@ -27,6 +27,17 @@ describe('buildConductorPrompt', () => {
     expect(prompt).toContain('プロファイル');
     expect(prompt).toContain('Do the thing');
     expect(prompt).toContain('/tmp/repo');
+  });
+
+  it('uses profile role system prompt when provided', () => {
+    const prompt = buildConductorPrompt({
+      issueContext: sampleContext,
+      repoRoot: '/tmp/repo',
+      roleSystemPrompt: 'あなたは **conductor** です。カスタム起動文書。',
+    });
+
+    expect(prompt).toContain('カスタム起動文書');
+    expect(prompt).not.toContain('実作業は行わず、プロファイルに従って worker を制御します');
   });
 
   it('renders materials in Prepared Materials section', () => {

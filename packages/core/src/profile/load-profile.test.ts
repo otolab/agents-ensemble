@@ -208,6 +208,7 @@ describe('loadProfile', () => {
 
     expect(profilePath).toBe(bundledDefaultProfilePath());
     expect(profile.workers.length).toBeGreaterThan(0);
+    expect(resolveAgentSystemPrompt('conductor', profile.agents)).toContain('conductor');
   });
 
   it('loads project-local profile when name is not bundled', async () => {

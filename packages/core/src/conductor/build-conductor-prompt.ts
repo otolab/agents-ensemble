@@ -11,6 +11,8 @@ export { loadConductorMaterialFromFile } from './prompt/materials.js';
 export interface BuildConductorPromptOptions {
   issueContext: IssueContext;
   repoRoot: string;
+  /** profile の `agents.conductor` から解決した起動文書。 */
+  roleSystemPrompt?: string;
   materials?: ConductorMaterial[];
   briefing?: string;
   followUp?: string;
@@ -27,6 +29,7 @@ export function buildConductorPrompt(
   return compileConductorSessionStart({
     repoRoot: options.repoRoot,
     issueContext: options.issueContext,
+    roleSystemPrompt: options.roleSystemPrompt,
     materials: mergeConductorMaterials(options.materials, options.briefing),
     followUp: options.followUp,
     turn: options.turn ?? 1,
