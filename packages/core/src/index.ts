@@ -150,6 +150,10 @@ export { WorkerSession } from './runtime/worker-session.js';
 export type { WorkerSessionOptions } from './runtime/worker-session.js';
 
 export { runConductorSession } from './conductor/conductor-session.js';
+export {
+  ensureCursorSdkRipgrepPath,
+  resolveBundledSdkRipgrepPath,
+} from './conductor/configure-cursor-sdk-env.js';
 export { runIssueSession } from './conductor/issue-session.js';
 export type {
   ConductorSessionResult,

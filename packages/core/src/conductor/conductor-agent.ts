@@ -7,6 +7,7 @@ import {
   type SDKAgent,
   type SDKCustomTool,
 } from '@cursor/sdk';
+import { ensureCursorSdkRipgrepPath } from './configure-cursor-sdk-env.js';
 import {
   CONDUCTOR_AUTH_HINT,
   resolveConductorApiKey,
@@ -35,6 +36,7 @@ export class ConductorAgent {
   }
 
   static async create(options: ConductorAgentOptions): Promise<ConductorAgent> {
+    ensureCursorSdkEnv();
     const agent = await Agent.create(buildAgentOptions(options));
     return new ConductorAgent(agent);
   }
@@ -43,6 +45,7 @@ export class ConductorAgent {
     agentId: string,
     options: ConductorAgentOptions,
   ): Promise<ConductorAgent> {
+    ensureCursorSdkEnv();
     const agent = await Agent.resume(agentId, buildAgentOptions(options));
     return new ConductorAgent(agent);
   }
@@ -83,6 +86,16 @@ export class ConductorAgent {
   async close(): Promise<void> {
     await this.agent[Symbol.asyncDispose]();
   }
+}
+
+let cursorSdkEnvReady = false;
+
+function ensureCursorSdkEnv(): void {
+  if (cursorSdkEnvReady) {
+    return;
+  }
+  cursorSdkEnvReady = true;
+  ensureCursorSdkRipgrepPath();
 }
 
 function buildAgentOptions(options: ConductorAgentOptions): AgentOptions {
