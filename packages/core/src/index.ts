@@ -170,6 +170,10 @@ export type {
 } from './conductor/issue-session.js';
 
 export {
+  canDispatchConductorSend,
+  autonomousTurnsAfterConductorSend,
+} from './conductor/conductor-session-loop.js';
+export {
   SessionEventQueue,
 } from './conductor/session/session-event-queue.js';
 export {
@@ -204,6 +208,7 @@ export {
   getConductorAuthStatus,
   hasConductorAuth,
   loginConductor,
+  logoutConductor,
   resolveConductorApiKey,
 } from './conductor/conductor-auth.js';
 
