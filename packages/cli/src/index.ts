@@ -5,12 +5,14 @@ import { Command } from 'commander';
 import {
   dispatchWorker,
   getConductorAuthStatus,
+  listConductorModels,
   loadProfile,
   loginConductor,
   PermissionBroker,
   runIssueSession,
   SessionLogger,
 } from '@agents-ensemble/core';
+import { formatModelsListJson, formatModelsListText } from './format-models-list.js';
 import { formatIssueSessionSummaryJson } from './format-session-summary.js';
 import { isOperatorInputInteractive, promptOperatorInput } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
@@ -165,6 +167,31 @@ auth
       } else {
         console.log('CURSOR_API_KEY: unset');
       }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+const models = program
+  .command('models')
+  .description('Conductor (SDK) model catalog');
+
+models
+  .command('list')
+  .description('List models available to the authenticated conductor account')
+  .option('--json', 'Output JSON')
+  .action(async (options: { json?: boolean }) => {
+    try {
+      const catalog = await listConductorModels();
+      if (options.json) {
+        console.log(formatModelsListJson(catalog));
+        return;
+      }
+      console.log(formatModelsListText(catalog));
+      console.error(
+        '\n注: 一覧は API カタログです。team 設定で実行時にブロックされる場合があります。',
+      );
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
       process.exit(1);
