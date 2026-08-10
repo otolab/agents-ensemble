@@ -16,7 +16,9 @@ import { createResolvePermissionTool } from '../permission/resolve-permission-to
 import type { Profile } from '../profile/types.js';
 import { profileWorkersToSessionSpecs, resolveAgentSystemPrompt, sessionStateFromProfile } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
+import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
+import { WorkerOutboundQueue } from '../runtime/worker-outbound-queue.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import { ConductorAgent } from './conductor-agent.js';
@@ -234,6 +236,15 @@ export async function runConductorSession(
     inbox: workerSession.inbox,
   });
 
+  const workerOutboundQueue = new WorkerOutboundQueue((worker, instruction) =>
+    workerSession.sendWorkerMessage(worker, instruction),
+  );
+
+  const promptWorkerTools = createPromptWorkerTool({
+    outboundQueue: workerOutboundQueue,
+    workerNames: activeProfile.workers.map((worker) => worker.name),
+  });
+
   const conductorOptions = {
     cwd: options.conductorCwd ?? process.cwd(),
     apiKey: options.apiKey,
@@ -243,6 +254,7 @@ export async function runConductorSession(
       ...answerOpenQuestionTools,
       ...openQuestionListTools,
       ...resolvePermissionTools,
+      ...promptWorkerTools,
     },
   };
 
@@ -267,6 +279,7 @@ export async function runConductorSession(
       openQuestions: snapshot.openQuestions,
       sequence: snapshot.sequence,
       workers,
+      updatedAt: Date.now(),
     };
     await saveSessionSidecar(
       sessionSidecarPath({
