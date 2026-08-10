@@ -3,7 +3,8 @@ import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionHandler } from '../acp/types.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
-import { buildWorkerPrompt } from '../prompt/build-prompt.js';
+import type { EnsembleSessionState } from '../profile/types.js';
+import { buildWorkerPrompt } from '../prompt/build-worker-prompt.js';
 import type { PromptResult } from '../acp/types.js';
 import type { IssueRef } from '../issue/issue-ref.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
@@ -14,6 +15,7 @@ export interface WorkerDispatchOptions {
   issueUrl: string;
   kind: string;
   systemPrompt?: string;
+  sessionState: EnsembleSessionState;
   repoRoot: string;
   /** sidecar から復元する ACP session id。 */
   resumeAcpSessionId?: string;
@@ -49,6 +51,7 @@ export async function dispatchWorker(
         kind: options.kind,
         systemPrompt: options.systemPrompt,
         worktreePath: worktree.path,
+        sessionState: options.sessionState,
       });
 
   const bridge =

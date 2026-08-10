@@ -89,7 +89,7 @@ describe('runIssueSession', () => {
 
     expect(operatorCalls).toBeGreaterThanOrEqual(1);
     expect(mockSend).toHaveBeenCalledTimes(2);
-    expect(String(mockSend.mock.calls[0]![0])).toContain('Test');
+    expect(String(mockSend.mock.calls[0]![0])).toContain('作業フローの連鎖');
     expect(String(mockSend.mock.calls[1]![0])).toContain('continue with tests');
     expect(result.sendCount).toBe(2);
     expect(result.stopReason).toBe('completed');

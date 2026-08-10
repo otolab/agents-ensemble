@@ -28,6 +28,10 @@ describe('WorkerSession', () => {
       issueUrl: 'https://github.com/org/repo/issues/1',
       repoRoot: '/repo',
       workers: [{ name: 'ping-1', kind: 'ping', systemPrompt: 'pong only' }],
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
       dispatchWorker,
       decidePermission: () => ({
         outcome: { outcome: 'selected', optionId: 'allow-once' },

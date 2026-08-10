@@ -80,23 +80,14 @@ export {
 } from './worktree/worktree.js';
 export type { WorktreeRef } from './worktree/worktree.js';
 
-export { buildWorkerPrompt, buildReviewerPrompt } from './prompt/build-prompt.js';
-export type {
-  WorkerPromptOptions,
-  ReviewerPromptOptions,
-} from './prompt/build-prompt.js';
+export { buildWorkerPrompt } from './prompt/build-worker-prompt.js';
+export type { WorkerPromptOptions } from './prompt/build-worker-prompt.js';
 
 export { dispatchWorker } from './dispatch/worker-dispatch.js';
 export type {
   WorkerDispatchOptions,
   WorkerDispatchResult,
 } from './dispatch/worker-dispatch.js';
-
-export { dispatchReviewer } from './dispatch/reviewer-dispatch.js';
-export type {
-  ReviewerDispatchOptions,
-  ReviewerDispatchResult,
-} from './dispatch/reviewer-dispatch.js';
 
 export { runGh } from './github/run-gh.js';
 export {
@@ -138,23 +129,18 @@ export type {
   ProfileWorkerEntry,
   ProfileWorkerRef,
   SessionWorkerSpec,
+  EnsembleSessionState,
 } from './profile/types.js';
 export {
   profileWorkersToSessionSpecs,
   resolveAgentSystemPrompt,
   normalizeProfileWorker,
   normalizeProfileWorkers,
+  sessionStateFromProfile,
 } from './profile/types.js';
 
 export { WorkerSession } from './runtime/worker-session.js';
 export type { WorkerSessionOptions } from './runtime/worker-session.js';
-
-export { buildConductorPrompt } from './conductor/build-conductor-prompt.js';
-export type {
-  BuildConductorPromptOptions,
-  ConductorMaterial,
-} from './conductor/build-conductor-prompt.js';
-export { loadConductorMaterialFromFile } from './conductor/prompt/materials.js';
 
 export { runConductorSession } from './conductor/conductor-session.js';
 export { runIssueSession } from './conductor/issue-session.js';

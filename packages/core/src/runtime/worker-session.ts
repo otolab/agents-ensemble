@@ -7,7 +7,10 @@ import { startInboxProcessor } from './inbox-processor.js';
 import type { WorkerFailureRecord } from './types.js';
 import type { WorkerDispatchFn } from './worker-runtime.js';
 import { WorkerRuntime } from './worker-runtime.js';
-import type { SessionWorkerSpec } from '../profile/types.js';
+import type {
+  EnsembleSessionState,
+  SessionWorkerSpec,
+} from '../profile/types.js';
 
 export type { SessionWorkerSpec };
 
@@ -15,6 +18,7 @@ export interface WorkerSessionOptions {
   issueUrl: string;
   repoRoot: string;
   workers: SessionWorkerSpec[];
+  sessionState: EnsembleSessionState;
   /** resume 時に復元する worker 名 → ACP session id。 */
   restoredWorkerSessions?: Record<string, string>;
   dispatchWorker?: WorkerDispatchFn;
@@ -78,6 +82,7 @@ export class WorkerSession {
         kind: worker.kind,
         systemPrompt: worker.systemPrompt,
         repoRoot: this.options.repoRoot,
+        sessionState: this.options.sessionState,
         resumeAcpSessionId:
           this.options.restoredWorkerSessions?.[worker.name],
       });

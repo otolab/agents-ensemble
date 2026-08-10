@@ -10,6 +10,7 @@ agents-ensemble（`ensemble` コマンド）の設計・検討事項。
 | [orchestrator.md](orchestrator.md) | オーケストレータの役割 |
 | [pipeline.md](pipeline.md) | 作業フロー（参考） |
 | [prompts.md](prompts.md) | 起動プロンプトのパターン |
+| [modular-prompt.md](modular-prompt.md) | **modular-prompt の書き方**（セクション分担・アンチパターン） |
 | [implementation.md](implementation.md) | 実装方針の検討 |
 | [testing-strategy.md](testing-strategy.md) | **テスト戦略**（unittest / integration / e2e） |
 | [adr/](adr/README.md) | **ADR**（設計判断の履歴） |

@@ -101,6 +101,10 @@ describe('WorkerRuntime', () => {
       kind: 'ping',
       systemPrompt: 'pong',
       repoRoot: '/repo',
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
     });
 
     expect(workerId).toBeTruthy();

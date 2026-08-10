@@ -56,6 +56,7 @@ export class WorkerRuntime {
         kind: started.kind,
         systemPrompt: started.systemPrompt,
         repoRoot: started.repoRoot,
+        sessionState: started.sessionState,
         resumeAcpSessionId: started.resumeAcpSessionId,
         permissionHandler: this.options.inbox.createPermissionHandler(
           started.workerId,

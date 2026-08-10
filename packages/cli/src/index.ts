@@ -1,17 +1,14 @@
 #!/usr/bin/env node
 
-import { readFile } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { Command } from 'commander';
 import {
-  dispatchReviewer,
   dispatchWorker,
   getConductorAuthStatus,
   loadProfile,
   loginConductor,
   PermissionBroker,
   runIssueSession,
-  type ConductorMaterial,
 } from '@agents-ensemble/core';
 import { promptOperatorInput } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
@@ -38,13 +35,6 @@ program
     process.cwd(),
   )
   .option('--resume <agentId>', 'Resume a previous conductor agent')
-  .option('--briefing <text>', 'Optional briefing document for the conductor')
-  .option(
-    '--material <path>',
-    'Reference document passed as material (repeatable)',
-    collectValues,
-    [],
-  )
   .option(
     '--profile <name>',
     'Profile name or path (default: bundled default; name resolves bundled then cwd profiles/<name>/)',
@@ -63,15 +53,12 @@ program
         repoRoot: string;
         conductorCwd: string;
         resume?: string;
-        briefing?: string;
-        material: string[];
         profile?: string;
         model?: string;
         maxTurns: number;
       },
     ) => {
       try {
-        const materials = await loadMaterialFiles(options.material);
         const { profile, profilePath } = await loadProfile({
           profile: options.profile,
           cwd: resolve(options.repoRoot),
@@ -81,8 +68,6 @@ program
           repoRoot: resolve(options.repoRoot),
           conductorCwd: resolve(options.conductorCwd),
           resumeAgentId: options.resume,
-          briefing: options.briefing,
-          materials,
           profile,
           profilePath,
           modelId: options.model,
@@ -198,7 +183,7 @@ auth
 
 const dispatch = program
   .command('dispatch')
-  .description('Dispatch a worker or reviewer without conductor');
+  .description('Dispatch a worker without conductor');
 
 dispatch
   .command('worker')
@@ -255,76 +240,4 @@ dispatch
     }
   });
 
-dispatch
-  .command('reviewer')
-  .description('Dispatch a reviewer for a PR (Stage 3 manual flow)')
-  .argument('<pr-url>', 'GitHub PR URL')
-  .requiredOption('--skill <name>', 'Review Skill name for the reviewer')
-  .option('--worktree-path <path>', 'Existing worker worktree path')
-  .option('--issue-url <url>', 'Resolve worktree from Issue when path omitted')
-  .option(
-    '--repo-root <path>',
-    'Local git clone root (required with --issue-url)',
-    process.cwd(),
-  )
-  .action(
-    async (
-      prUrl: string,
-      options: {
-        skill: string;
-        worktreePath?: string;
-        issueUrl?: string;
-        repoRoot: string;
-      },
-    ) => {
-      try {
-        const permissionBroker = new PermissionBroker({
-          onAsk: promptPermissionDecision,
-        });
-        const result = await dispatchReviewer({
-          prUrl,
-          skillName: options.skill,
-          worktreePath: options.worktreePath,
-          issueUrl: options.issueUrl,
-          repoRoot: resolve(options.repoRoot),
-          permissionHandler: permissionBroker.createHandler('manual-reviewer'),
-        });
-
-        console.log(
-          JSON.stringify(
-            {
-              prUrl: result.prUrl,
-              worktree: result.worktreePath,
-              stopReason: result.promptResult.stopReason,
-            },
-            null,
-            2,
-          ),
-        );
-      } catch (error) {
-        console.error(error instanceof Error ? error.message : error);
-        process.exit(1);
-      }
-    },
-  );
-
 program.parse();
-
-function collectValues(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
-
-async function loadMaterialFiles(paths: string[]): Promise<ConductorMaterial[]> {
-  return Promise.all(
-    paths.map(async (filePath) => {
-      const absolutePath = resolve(filePath);
-      const content = await readFile(absolutePath, 'utf8');
-      const fileName = basename(absolutePath);
-      return {
-        id: fileName,
-        title: fileName,
-        content,
-      };
-    }),
-  );
-}

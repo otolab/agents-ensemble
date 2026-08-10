@@ -1,4 +1,4 @@
-/** kind ごとの agent 定義（system prompt）。未指定時はコード内デフォルトにフォールバック。 */
+/** kind ごとの agent 定義（system prompt）。`conductor` は暗黙起動の SDK agent、他は worker bootstrap 用。 */
 export interface AgentDefinition {
   systemPrompt?: string;
   /** プロファイルディレクトリ基準のファイルパス。`systemPrompt` と排他。 */
@@ -29,7 +29,7 @@ export interface Profile {
   agents?: Record<string, AgentDefinition>;
   /** セッション開始時に起動する worker（name + kind）。 */
   workers: ProfileWorkerEntry[];
-  /** conductor の PromptModule materials に載せる文書。 */
+  /** profile 付属文書（team.md 等）。compile 時に Prepared Materials へ載せる。 */
   materials?: ProfileMaterial[];
 }
 
@@ -40,6 +40,13 @@ export interface ProfileMaterial {
   content?: string;
   /** `content` の代わりに、プロファイルディレクトリ基準のファイルパス。 */
   file?: string;
+}
+
+/** load 後: materials の本文が解決済み。 */
+export interface ResolvedProfileMaterial {
+  id: string;
+  title: string;
+  content: string;
 }
 
 /** load 後: agent 定義の systemPrompt が解決済み。 */
@@ -55,6 +62,41 @@ export interface SessionWorkerSpec {
   name: string;
   kind: string;
   systemPrompt: string;
+}
+
+/** compile 時に state へ載せる worker 構成と kind 一覧。 */
+export interface EnsembleSessionState {
+  workers: Array<Pick<ProfileWorkerEntry, 'name' | 'kind'>>;
+  kinds: string[];
+  materials?: ResolvedProfileMaterial[];
+}
+
+export function resolvedProfileMaterials(
+  materials?: ProfileMaterial[],
+): ResolvedProfileMaterial[] | undefined {
+  const resolved = (materials ?? []).flatMap((material, index) => {
+    const content = material.content?.trim();
+    if (!content) return [];
+
+    const id = material.id ?? `material-${index + 1}`;
+    const title = material.title ?? material.id ?? `Material ${index + 1}`;
+    return [{ id, title, content }];
+  });
+
+  return resolved.length > 0 ? resolved : undefined;
+}
+
+export function sessionStateFromProfile(
+  profile: Pick<Profile, 'workers' | 'agents' | 'materials'>,
+): EnsembleSessionState {
+  return {
+    workers: profile.workers.map((worker) => ({
+      name: worker.name,
+      kind: worker.kind,
+    })),
+    kinds: Object.keys(profile.agents ?? {}).sort(),
+    materials: resolvedProfileMaterials(profile.materials),
+  };
 }
 
 export function normalizeProfileWorker(

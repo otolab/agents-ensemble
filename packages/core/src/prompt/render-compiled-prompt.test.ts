@@ -1,23 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { merge, compile } from '@modular-prompt/core';
-import { bootstrapModule } from './modules/bootstrap.js';
-import { defaultAgentModule } from './modules/default-agent-module.js';
+import { compile } from '@modular-prompt/core';
+import { ensembleContext } from './contexts/kind.js';
+import { workerEnsembleModule } from './modules/ensemble/index.js';
 import { renderCompiledPrompt } from './render-compiled-prompt.js';
+import { TEST_SESSION_STATE } from './testing/test-profile.js';
 
 describe('renderCompiledPrompt', () => {
-  it('renders default agent prompt without skill name', () => {
-    const module = merge(bootstrapModule, defaultAgentModule);
-    const compiled = compile(module, {
-      issueUrl: 'https://github.com/org/repo/issues/1',
-      kind: 'ping',
-      systemPrompt: 'respond with pong',
-      worktreePath: '/tmp/wt',
-    });
-    const prompt = renderCompiledPrompt(compiled);
+  it('renders worker ensemble system prompt with kind context', () => {
+    const prompt = renderCompiledPrompt(
+      compile(
+        workerEnsembleModule,
+        ensembleContext(
+          'implementer',
+          'https://github.com/org/repo/issues/1',
+          TEST_SESSION_STATE,
+        ),
+      ),
+    );
 
-    expect(prompt).toContain('https://github.com/org/repo/issues/1');
-    expect(prompt).toContain('agent kind: ping');
-    expect(prompt).toContain('respond with pong');
-    expect(prompt).not.toContain('lazy-implementer');
+    expect(prompt).toContain('**implementer**');
+    expect(prompt).toContain('Issue #1');
+    expect(prompt).toContain('Issue / PR');
   });
 });
