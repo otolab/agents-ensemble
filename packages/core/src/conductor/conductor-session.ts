@@ -38,6 +38,7 @@ import {
   shouldStopIssueLoop,
   type IssueLoopStopReason,
 } from './issue-loop.js';
+import { canDispatchConductorSend } from './conductor-session-loop.js';
 import {
   assertSessionSidecarMatches,
   requireSessionSidecarForResume,
@@ -401,6 +402,20 @@ export async function runConductorSession(
     autonomousTurns++;
 
     while (true) {
+      if (autonomousTurns >= maxTurns) {
+        ensureMaxTurnsOpenQuestion(openQuestions, {
+          issueUrl: options.issueUrl,
+          autonomousTurns,
+          maxTurns,
+          turnCount: sendCount,
+          workerDispatchCount: sessionLogger.workerDispatches.length,
+          workerFailureCount: sessionLogger.workerFailures.length,
+          lastResult: lastSendResult.result,
+        }, (question) => {
+          options.onOpenQuestionEnqueued?.(question);
+        });
+      }
+
       if (!options.bindOperatorInput && options.onOperatorInput) {
         if (openQuestions.openCount > 0) {
           const operatorPhase = await collectOperatorInput({
@@ -436,57 +451,47 @@ export async function runConductorSession(
         }
       }
 
-      if (autonomousTurns >= maxTurns) {
-        ensureMaxTurnsOpenQuestion(openQuestions, {
-          issueUrl: options.issueUrl,
+      if (eventQueue.isEmpty() && workerSession.runtime.runningCount === 0) {
+        const loopState = buildLoopState({
           autonomousTurns,
           maxTurns,
-          turnCount: sendCount,
-          workerDispatchCount: sessionLogger.workerDispatches.length,
-          workerFailureCount: sessionLogger.workerFailures.length,
-          lastResult: lastSendResult.result,
-        }, (question) => {
-          options.onOpenQuestionEnqueued?.(question);
+          lastSendResult,
+          dispatchesThisTurn: lastDispatchesThisTurn,
+          workerSession,
+          permissionPipeline,
+          openQuestions,
+          continueOnConductorError,
         });
-        continue;
+        stopReason = resolveIssueLoopStopReason(loopState);
+        if (shouldStopIssueLoop(loopState)) {
+          break;
+        }
+        if (continueOnConductorError && lastSendResult.status === 'error') {
+          continue;
+        }
       }
 
       let event: SessionEvent | undefined;
-      if (eventQueue.isEmpty()) {
-        if (workerSession.runtime.runningCount > 0) {
-          event = await waitForSessionEvent(eventQueue, shutdownSignal);
-        } else {
-          const loopState = buildLoopState({
-            autonomousTurns,
-            maxTurns,
-            lastSendResult,
-            dispatchesThisTurn: lastDispatchesThisTurn,
-            workerSession,
-            permissionPipeline,
-            openQuestions,
-            continueOnConductorError,
-          });
-          stopReason = resolveIssueLoopStopReason(loopState);
-          if (shouldStopIssueLoop(loopState)) {
-            break;
-          }
-          if (continueOnConductorError && lastSendResult.status === 'error') {
-            continue;
-          }
-          // worker / permission イベントの到着を待つ（空キューでの busy-spin を避ける）
-          event = await waitForSessionEvent(eventQueue, shutdownSignal);
+      try {
+        event = await eventQueue.waitForSendEvent({
+          signal: shutdownSignal,
+          accept: (candidate) =>
+            canDispatchConductorSend(candidate, autonomousTurns, maxTurns),
+        });
+      } catch (error) {
+        if (isAbortError(error)) {
+          stopReason = 'interrupted';
+          break;
         }
-      } else {
-        event = eventQueue.dequeue();
-      }
-
-      if (!event && shutdownSignal.aborted) {
-        stopReason = 'interrupted';
-        break;
+        throw error;
       }
 
       if (!event || !isConductorSendEvent(event)) {
         continue;
+      }
+
+      if (event.type === 'operator.message') {
+        autonomousTurns = 0;
       }
 
       lastSendResult = await runEventConductorSend({
@@ -497,7 +502,9 @@ export async function runConductorSession(
         sendCount,
         onSendComplete: recordSendComplete,
       });
-      autonomousTurns++;
+      if (event.type !== 'operator.message') {
+        autonomousTurns++;
+      }
 
       const loopState = buildLoopState({
         autonomousTurns,
@@ -745,20 +752,6 @@ async function runEventConductorSend(input: {
   });
 
   return sendResult;
-}
-
-async function waitForSessionEvent(
-  eventQueue: SessionEventQueue,
-  signal: AbortSignal,
-): Promise<SessionEvent | undefined> {
-  try {
-    return await eventQueue.waitForEvent(signal);
-  } catch (error) {
-    if (isAbortError(error)) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 function isAbortError(error: unknown): boolean {

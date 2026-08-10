@@ -274,4 +274,47 @@ describe('runIssueSession', () => {
       ),
     ).toBe(true);
   });
+
+  it('bindOperatorInput resumes after max-turns with async submit', async () => {
+    mockSend
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'running',
+        result: 'still working',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'conductor-ok',
+      });
+
+    let bindingApi: OperatorInputBindingApi | undefined;
+    const sessionPromise = runIssueSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: '/repo',
+      profile: { workers: [] },
+      maxTurns: 1,
+      permissionPipeline: new PermissionPipeline({}),
+      bindOperatorInput: (api) => {
+        bindingApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+    expect(bindingApi).toBeDefined();
+    expect(bindingApi!.submit('continue with tests')).toBe(true);
+
+    const result = await sessionPromise;
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(String(mockSend.mock.calls[1]![0])).toContain('continue with tests');
+    expect(result.stopReason).toBe('completed');
+    expect(
+      result.openQuestions.some(
+        (question) =>
+          question.source === 'max_turns' &&
+          question.question === MAX_TURNS_OPEN_QUESTION_TEXT &&
+          question.status === 'answered',
+      ),
+    ).toBe(true);
+  });
 });

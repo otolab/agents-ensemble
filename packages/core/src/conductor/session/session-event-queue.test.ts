@@ -31,4 +31,29 @@ describe('SessionEventQueue', () => {
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   });
+
+  it('waitForSendEvent skips blocked events until operator.message arrives', async () => {
+    const queue = new SessionEventQueue();
+    queue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'worker',
+        acpSessionId: 'sess-1',
+        status: 'finished',
+        result: 'ok',
+      },
+    });
+
+    const pending = queue.waitForSendEvent({
+      accept: (event) => event.type === 'operator.message',
+    });
+
+    queue.enqueue({ type: 'operator.message', text: 'continue' });
+
+    await expect(pending).resolves.toEqual({
+      type: 'operator.message',
+      text: 'continue',
+    });
+    expect(queue.dequeue()?.type).toBe('worker.completed');
+  });
 });
