@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { canDispatchConductorSend } from './conductor-session-loop.js';
+import {
+  autonomousTurnsAfterConductorSend,
+  canDispatchConductorSend,
+} from './conductor-session-loop.js';
 
 describe('canDispatchConductorSend', () => {
   it('allows operator.message at max turns', () => {
@@ -46,5 +49,33 @@ describe('canDispatchConductorSend', () => {
         5,
       ),
     ).toBe(true);
+  });
+});
+
+describe('autonomousTurnsAfterConductorSend', () => {
+  it('resets on operator.message', () => {
+    expect(
+      autonomousTurnsAfterConductorSend(
+        { type: 'operator.message', text: 'go' },
+        5,
+      ),
+    ).toBe(0);
+  });
+
+  it('increments on worker.completed', () => {
+    expect(
+      autonomousTurnsAfterConductorSend(
+        {
+          type: 'worker.completed',
+          result: {
+            name: 'worker',
+            acpSessionId: 'sess-1',
+            status: 'finished',
+            result: 'ok',
+          },
+        },
+        2,
+      ),
+    ).toBe(3);
   });
 });

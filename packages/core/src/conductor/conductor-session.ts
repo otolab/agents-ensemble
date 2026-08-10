@@ -38,7 +38,7 @@ import {
   shouldStopIssueLoop,
   type IssueLoopStopReason,
 } from './issue-loop.js';
-import { canDispatchConductorSend } from './conductor-session-loop.js';
+import { canDispatchConductorSend, autonomousTurnsAfterConductorSend } from './conductor-session-loop.js';
 import {
   assertSessionSidecarMatches,
   requireSessionSidecarForResume,
@@ -367,9 +367,6 @@ export async function runConductorSession(
           onEscalated: (record) => options.onEscalated?.(record),
         });
         if (received) {
-          autonomousTurns = 0;
-        }
-        if (received) {
           scheduleSidecarFlush();
         }
         return received;
@@ -428,14 +425,11 @@ export async function runConductorSession(
             eventQueue,
             sessionLogger,
           });
-          if (operatorPhase.received) {
-            autonomousTurns = 0;
-          }
           if (openQuestions.openCount > 0) {
             continue;
           }
         } else {
-          const operatorPhase = await collectOperatorInput({
+          await collectOperatorInput({
             conductorTurn: sendCount + 1,
             autonomousTurns,
             maxTurns,
@@ -445,9 +439,6 @@ export async function runConductorSession(
             eventQueue,
             sessionLogger,
           });
-          if (operatorPhase.received) {
-            autonomousTurns = 0;
-          }
         }
       }
 
@@ -490,10 +481,6 @@ export async function runConductorSession(
         continue;
       }
 
-      if (event.type === 'operator.message') {
-        autonomousTurns = 0;
-      }
-
       lastSendResult = await runEventConductorSend({
         message: formatSessionEventForConductor(event),
         conductor,
@@ -502,9 +489,7 @@ export async function runConductorSession(
         sendCount,
         onSendComplete: recordSendComplete,
       });
-      if (event.type !== 'operator.message') {
-        autonomousTurns++;
-      }
+      autonomousTurns = autonomousTurnsAfterConductorSend(event, autonomousTurns);
 
       const loopState = buildLoopState({
         autonomousTurns,

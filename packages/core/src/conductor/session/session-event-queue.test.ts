@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { canDispatchConductorSend } from '../conductor-session-loop.js';
 import { SessionEventQueue } from './session-event-queue.js';
 
 describe('SessionEventQueue', () => {
@@ -45,7 +46,7 @@ describe('SessionEventQueue', () => {
     });
 
     const pending = queue.waitForSendEvent({
-      accept: (event) => event.type === 'operator.message',
+      accept: (event) => canDispatchConductorSend(event, 5, 5),
     });
 
     queue.enqueue({ type: 'operator.message', text: 'continue' });
