@@ -86,6 +86,13 @@ ensemble models list --json
 ensemble issue <issue-url> --repo-root <path> --model auto
 ```
 
+`<issue-url>` にはフル GitHub Issue URL のほか、`--repo-root` の `origin` から解決する **Issue 番号**（`31` や `#31`）も指定できます。
+
+```bash
+ensemble issue 31 --repo-root .
+ensemble issue #31 --repo-root .
+```
+
 e2e では `test-acp.yaml` の `conductorModelId`（未指定時 `auto`）を使います。
 
 ## 開発
@@ -108,6 +115,7 @@ pnpm test:e2e
 
 # Stage 1: 手動 worker dispatch
 ensemble dispatch worker <issue-url> --skill <name> --repo-root <path>
+# <issue-url> はフル URL または 31 / #31 等の番号 shorthand 可
 
 # Stage 3: 手動 reviewer dispatch
 ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
@@ -115,6 +123,7 @@ ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
 
 # Stage 2: conductor オーケストレーション
 ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--profile <name>] [--resume <agentId>] ...
+# <issue-url> はフル URL または 31 / #31 等の番号 shorthand 可
 ```
 
 **worker 作業ディレクトリ**（`--worktree`）は Conductor セッション開始時に **1 回だけ** resolve し、profile の全 worker が共有する。
@@ -157,6 +166,8 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 **新規セッション**
 
 ```bash
+ensemble issue 31 --repo-root .
+# またはフル URL:
 ensemble issue https://github.com/org/repo/issues/1 --repo-root .
 # JSON 出力の agentId を控える（例: agent-abc123）
 ```
