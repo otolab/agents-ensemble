@@ -78,9 +78,11 @@ worker は `spawn('agent', ['acp'])` で起動し、**子プロセスの `agent`
 
 ### モデル指定
 
-conductor のデフォルトモデルは `composer-2.5`。team 設定でブロックされる場合は `--model` で変更します。
+conductor のデフォルトモデルは `composer-2.5`。team 設定でブロックされる場合は `--model` で変更します。利用可能な id は `ensemble models list` で確認できます（API カタログ。実行時の team ブロックとは一致しない場合あり）。
 
 ```bash
+ensemble models list
+ensemble models list --json
 ensemble issue <issue-url> --repo-root <path> --model auto
 ```
 

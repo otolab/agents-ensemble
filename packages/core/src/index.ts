@@ -203,6 +203,9 @@ export {
   resolveConductorApiKey,
 } from './conductor/conductor-auth.js';
 
+export { listConductorModels } from './conductor/list-conductor-models.js';
+export type { ListConductorModelsOptions } from './conductor/list-conductor-models.js';
+
 export {
   PermissionBroker,
   allowOnce,
