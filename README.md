@@ -86,11 +86,11 @@ ensemble models list --json
 ensemble issue <issue-url> --repo-root <path> --model auto
 ```
 
-`<issue-url>` にはフル GitHub Issue URL のほか、`--repo-root` の `origin` から解決する **Issue 番号**（`31` や `#31`）も指定できます。
+`<issue-url>` にはフル GitHub Issue URL のほか、`--repo-root` の `origin` から解決する **Issue 番号**（`31` や `#31`）も指定できます。bash/zsh では `#` 以降がコメントになるため、`#31` は **クォート**してください。
 
 ```bash
 ensemble issue 31 --repo-root .
-ensemble issue #31 --repo-root .
+ensemble issue '#31' --repo-root .
 ```
 
 e2e では `test-acp.yaml` の `conductorModelId`（未指定時 `auto`）を使います。
@@ -115,7 +115,7 @@ pnpm test:e2e
 
 # Stage 1: 手動 worker dispatch
 ensemble dispatch worker <issue-url> --skill <name> --repo-root <path>
-# <issue-url> はフル URL または 31 / #31 等の番号 shorthand 可
+# <issue-url> はフル URL または 31 / '#31' 等の番号 shorthand 可（# はクォート）
 
 # Stage 3: 手動 reviewer dispatch
 ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
@@ -123,7 +123,7 @@ ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
 
 # Stage 2: conductor オーケストレーション
 ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--profile <name>] [--resume <agentId>] ...
-# <issue-url> はフル URL または 31 / #31 等の番号 shorthand 可
+# <issue-url> はフル URL または 31 / '#31' 等の番号 shorthand 可（# はクォート）
 ```
 
 **worker 作業ディレクトリ**（`--worktree`）は Conductor セッション開始時に **1 回だけ** resolve し、profile の全 worker が共有する。
