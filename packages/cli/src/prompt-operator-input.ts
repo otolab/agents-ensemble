@@ -4,6 +4,14 @@ import type { OperatorInputContext } from '@agents-ensemble/core';
 
 const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
 
+/** TTY または `ENSEMBLE_OPERATOR_MESSAGE` でオペレータ入力が実際に届く環境か。 */
+export function isOperatorInputInteractive(): boolean {
+  if (process.env[OPERATOR_MESSAGE_ENV]?.trim()) {
+    return true;
+  }
+  return process.stdin.isTTY ?? false;
+}
+
 export async function promptOperatorInput(
   context: OperatorInputContext,
 ): Promise<string | undefined> {

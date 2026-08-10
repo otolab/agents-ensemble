@@ -18,6 +18,12 @@ import { profileWorkersToSessionSpecs, resolveAgentSystemPrompt, sessionStateFro
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
+import { parseIssueUrl } from '../issue/issue-ref.js';
+import {
+  resolveWorkerWorkspace,
+  type WorkerWorktreeMode,
+  type WorktreeRef,
+} from '../worktree/worktree.js';
 import { WorkerOutboundQueue } from '../runtime/worker-outbound-queue.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
@@ -67,8 +73,20 @@ export interface RunConductorSessionOptions {
   onOperatorInput?: (
     context: OperatorInputContext,
   ) => string | Promise<string | undefined> | undefined;
+  /**
+   * conductor `agent.send` が error でもループを継続する（TTY 等でオペレータが再試行できるとき）。
+   * `onOperatorInput` の有無とは独立。非 TTY / CI では false のままにすること。
+   */
+  continueOnConductorError?: boolean;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
   connectAcp?: ConnectWorkerAcpFn;
+  /**
+   * Conductor が worker 向け作業ディレクトリをどう用意するか。
+   * セッション開始時に 1 回だけ resolve し、全 worker が共有する。
+   */
+  workerWorktreeMode?: WorkerWorktreeMode;
+  /** テスト用。未指定時は `workerWorktreeMode` から resolve する。 */
+  workerWorktree?: WorktreeRef;
   /** integration の共有 bridge 注入時は false。 */
   ownsWorkerAcpConnections?: boolean;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
@@ -167,10 +185,22 @@ export async function runConductorSession(
 
   const sessionState = sessionStateFromProfile(activeProfile);
 
+  const issue = parseIssueUrl(options.issueUrl);
+  const workers = profileWorkersToSessionSpecs(activeProfile);
+  const workerWorktree =
+    options.workerWorktree ??
+    (workers.length > 0
+      ? await resolveWorkerWorkspace(
+          options.repoRoot,
+          issue,
+          options.workerWorktreeMode ?? 'isolated',
+        )
+      : undefined);
+
   const workerSession = new WorkerSession({
     issueUrl: options.issueUrl,
-    repoRoot: options.repoRoot,
-    workers: profileWorkersToSessionSpecs(activeProfile),
+    ...(workerWorktree ? { worktree: workerWorktree } : {}),
+    workers,
     sessionState,
     restoredWorkerSessions: Object.fromEntries(workerSessions),
     permissionPipeline,
@@ -302,6 +332,7 @@ export async function runConductorSession(
   let sendCount = 0;
   let lastDispatchesThisTurn = 0;
   let stopReason: IssueLoopStopReason = 'completed';
+  const continueOnConductorError = options.continueOnConductorError ?? false;
 
   try {
     let autonomousTurns = 0;
@@ -383,10 +414,14 @@ export async function runConductorSession(
             workerSession,
             permissionPipeline,
             openQuestions,
+            continueOnConductorError,
           });
           stopReason = resolveIssueLoopStopReason(loopState);
           if (shouldStopIssueLoop(loopState)) {
             break;
+          }
+          if (continueOnConductorError && lastSendResult.status === 'error') {
+            continue;
           }
           // worker / permission イベントの到着を待つ（空キューでの busy-spin を避ける）
           event = await waitForSessionEvent(eventQueue, shutdownSignal);
@@ -422,6 +457,7 @@ export async function runConductorSession(
         workerSession,
         permissionPipeline,
         openQuestions,
+        continueOnConductorError,
       });
       stopReason = resolveIssueLoopStopReason(loopState);
 
@@ -485,6 +521,7 @@ function buildLoopState(input: {
   workerSession: WorkerSession;
   permissionPipeline: PermissionPipeline;
   openQuestions: OpenQuestionRegistry;
+  continueOnConductorError: boolean;
 }) {
   return {
     autonomousTurns: input.autonomousTurns,
@@ -494,6 +531,7 @@ function buildLoopState(input: {
     runningWorkers: input.workerSession.runtime.runningCount,
     pendingPermissions: input.permissionPipeline.pending.size,
     openQuestions: input.openQuestions.openCount,
+    continueOnConductorError: input.continueOnConductorError,
   };
 }
 

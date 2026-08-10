@@ -13,11 +13,15 @@ export interface IssueLoopStopInput {
   runningWorkers?: number;
   pendingPermissions?: number;
   openQuestions?: number;
+  /** TTY 等でオペレータ入力があるとき、conductor error でもループを継続する。 */
+  continueOnConductorError?: boolean;
 }
 
 /** Issue session の conductor ループを終了すべきか判定する。 */
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
-  if (input.lastStatus === 'error') return true;
+  if (input.lastStatus === 'error') {
+    return !input.continueOnConductorError;
+  }
   if ((input.runningWorkers ?? 0) > 0) return false;
   if ((input.pendingPermissions ?? 0) > 0) return false;
   if ((input.openQuestions ?? 0) > 0) return false;

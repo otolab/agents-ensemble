@@ -4,6 +4,11 @@ import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionHandler } from '../acp/types.js';
 import type { EnsembleSessionState } from '../profile/types.js';
 import { buildWorkerPrompt } from '../prompt/build-worker-prompt.js';
+import { parseIssueUrl } from '../issue/issue-ref.js';
+import {
+  resolveWorkerWorkspace,
+  type WorkerWorktreeMode,
+} from '../worktree/worktree.js';
 import {
   closeWorkerAcpSession,
   openWorkerAcpSession,
@@ -19,6 +24,7 @@ export interface WorkerDispatchOptions {
   repoRoot: string;
   /** sidecar から復元する ACP session id。 */
   resumeAcpSessionId?: string;
+  worktreeMode?: WorkerWorktreeMode;
   spawn?: SpawnAcpProcessOptions;
   /** integration 用: 接続済み bridge を注入（未指定時は spawn して接続）。 */
   bridge?: AcpBridge;
@@ -43,9 +49,15 @@ const WORKER_RESUME_PROMPT =
 export async function dispatchWorker(
   options: WorkerDispatchOptions,
 ): Promise<WorkerDispatchResult> {
+  const issue = parseIssueUrl(options.issueUrl);
+  const worktree = await resolveWorkerWorkspace(
+    options.repoRoot,
+    issue,
+    options.worktreeMode,
+  );
   const session = await openWorkerAcpSession({
     issueUrl: options.issueUrl,
-    repoRoot: options.repoRoot,
+    worktree,
     resumeAcpSessionId: options.resumeAcpSessionId,
     bridge: options.bridge,
     spawn: options.spawn,

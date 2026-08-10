@@ -63,7 +63,7 @@ describe('prompt_worker roundtrip integration', () => {
       labels: [],
       comments: [],
     });
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue(TEST_WORKTREE);
+    vi.spyOn(worktreeModule, 'resolveWorkerWorkspace').mockResolvedValue(TEST_WORKTREE);
 
     mockSend.mockReset();
     mockClose.mockClear();

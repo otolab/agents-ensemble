@@ -11,13 +11,19 @@ export interface WorkerAttachPromptOptions {
   issueUrl: string;
   kind: string;
   worktreePath?: string;
+  worktreeInRepo?: boolean;
   sessionState: EnsembleSessionState;
   systemPrompt?: string;
 }
 
 const workerAttachModule: PromptModule<WorkerDispatchContext> = {
   instructions: [
-    (ctx) => (ctx.worktreePath ? `作業 worktree: ${ctx.worktreePath}` : null),
+    (ctx) =>
+      ctx.worktreeInRepo
+        ? '⚠️ 特別モード: メイン worktree（リポジトリルート）で直接作業する。通常の isolated worktree は使わない。'
+        : ctx.worktreePath
+          ? `作業 worktree: ${ctx.worktreePath}`
+          : null,
     '- セッションに attach 済み。conductor からの作業指示（次の session/prompt）を待つ',
     '- 本 prompt は attach 用。実作業の開始は conductor の指示が届いてから',
   ],
@@ -36,6 +42,7 @@ export function buildWorkerAttachPrompt(
     compile(module, {
       ...ensembleContext(options.kind, options.issueUrl, options.sessionState),
       worktreePath: options.worktreePath,
+      worktreeInRepo: options.worktreeInRepo,
     }),
   );
 }

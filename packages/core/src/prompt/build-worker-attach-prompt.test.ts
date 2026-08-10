@@ -20,4 +20,20 @@ describe('buildWorkerAttachPrompt', () => {
     expect(prompt).toContain('作業指示を待つ');
     expect(prompt).toContain('profile bootstrap');
   });
+
+  it('marks in-repo mode as a special case in the prompt', () => {
+    const prompt = buildWorkerAttachPrompt({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      kind: 'implementer',
+      worktreePath: '/repo',
+      worktreeInRepo: true,
+      sessionState: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+        kinds: ['implementer'],
+      },
+    });
+
+    expect(prompt).toContain('特別モード');
+    expect(prompt).not.toContain('作業 worktree:');
+  });
 });

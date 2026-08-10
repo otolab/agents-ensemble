@@ -27,7 +27,7 @@ describe('dispatchWorker', () => {
         url: 'https://github.com/org/repo/issues/1',
       },
     };
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue(worktree);
+    vi.spyOn(worktreeModule, 'resolveWorkerWorkspace').mockResolvedValue(worktree);
 
     const result = await dispatchWorker({
       issueUrl: worktree.issue.url,

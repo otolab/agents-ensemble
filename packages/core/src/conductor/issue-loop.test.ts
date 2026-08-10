@@ -16,6 +16,18 @@ describe('shouldStopIssueLoop', () => {
     ).toBe(true);
   });
 
+  it('continues on error when continueOnConductorError is set', () => {
+    expect(
+      shouldStopIssueLoop({
+        autonomousTurns: 1,
+        maxTurns: 5,
+        lastStatus: 'error',
+        dispatchesThisTurn: 0,
+        continueOnConductorError: true,
+      }),
+    ).toBe(false);
+  });
+
   it('stops when finished without dispatches', () => {
     expect(
       shouldStopIssueLoop({

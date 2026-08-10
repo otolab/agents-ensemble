@@ -59,7 +59,7 @@ describe('session resume integration', () => {
       labels: [],
       comments: [],
     });
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue({
+    vi.spyOn(worktreeModule, 'resolveWorkerWorkspace').mockResolvedValue({
       ...TEST_WORKTREE,
       path: join(repoRoot, 'worktree'),
     });

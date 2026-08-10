@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AcpBridge } from '../acp/acp-bridge.js';
-import * as worktreeModule from '../worktree/worktree.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import { WorkerRuntime } from './worker-runtime.js';
+
+const TEST_WORKTREE = {
+  path: '/tmp/wt',
+  branch: 'ensemble/issue-1',
+  issue: {
+    owner: 'org',
+    repo: 'repo',
+    number: 1,
+    url: 'https://github.com/org/repo/issues/1',
+  },
+};
 
 describe('ConductorInbox', () => {
   it('fulfills permission requests via inbox listener', async () => {
@@ -38,22 +48,8 @@ describe('ConductorInbox', () => {
     inbox.publishWorkerCompleted('worker-abc', {
       name: 'ping-1',
       kind: 'ping',
-      issue: {
-        owner: 'org',
-        repo: 'repo',
-        number: 1,
-        url: 'https://github.com/org/repo/issues/1',
-      },
-      worktree: {
-        path: '/tmp/wt',
-        branch: 'ensemble/issue-1',
-        issue: {
-          owner: 'org',
-          repo: 'repo',
-          number: 1,
-          url: 'https://github.com/org/repo/issues/1',
-        },
-      },
+      issue: TEST_WORKTREE.issue,
+      worktree: TEST_WORKTREE,
       prompt: 'done',
       promptResult: { stopReason: 'end_turn' },
       acpSessionId: 'sess-1',
@@ -78,17 +74,6 @@ function createMockBridge(close = vi.fn()): AcpBridge {
 
 describe('WorkerRuntime', () => {
   it('attaches workers and reports bootstrap completion via inbox', async () => {
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue({
-      path: '/tmp/wt',
-      branch: 'ensemble/issue-1',
-      issue: {
-        owner: 'org',
-        repo: 'repo',
-        number: 1,
-        url: 'https://github.com/org/repo/issues/1',
-      },
-    });
-
     const inbox = new ConductorInbox();
     const completed: string[] = [];
     inbox.subscribe((message) => {
@@ -104,10 +89,10 @@ describe('WorkerRuntime', () => {
     });
     const workerId = runtime.start({
       name: 'ping-1',
-      issueUrl: 'https://github.com/org/repo/issues/1',
+      issueUrl: TEST_WORKTREE.issue.url,
       kind: 'ping',
       systemPrompt: 'pong',
-      repoRoot: '/repo',
+      worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'ping-1', kind: 'ping' }],
         kinds: ['ping'],
@@ -127,22 +112,9 @@ describe('WorkerRuntime', () => {
     await runtime.shutdown();
     expect(close).toHaveBeenCalledOnce();
     expect(runtime.attachedCount).toBe(0);
-
-    vi.restoreAllMocks();
   });
 
   it('queues sendWorkerMessage while prompting and drains after round completes', async () => {
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue({
-      path: '/tmp/wt',
-      branch: 'ensemble/issue-1',
-      issue: {
-        owner: 'org',
-        repo: 'repo',
-        number: 1,
-        url: 'https://github.com/org/repo/issues/1',
-      },
-    });
-
     const inbox = new ConductorInbox();
     const prompts: string[] = [];
     let resolveFirst: (() => void) | undefined;
@@ -171,10 +143,10 @@ describe('WorkerRuntime', () => {
 
     runtime.start({
       name: 'ping-1',
-      issueUrl: 'https://github.com/org/repo/issues/1',
+      issueUrl: TEST_WORKTREE.issue.url,
       kind: 'ping',
       systemPrompt: 'pong',
-      repoRoot: '/repo',
+      worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'ping-1', kind: 'ping' }],
         kinds: ['ping'],
@@ -201,21 +173,9 @@ describe('WorkerRuntime', () => {
     expect(runtime.attachedCount).toBe(1);
 
     await runtime.shutdown();
-    vi.restoreAllMocks();
   });
 
   it('preempts in-flight prompt and runs the new instruction', async () => {
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue({
-      path: '/tmp/wt',
-      branch: 'ensemble/issue-1',
-      issue: {
-        owner: 'org',
-        repo: 'repo',
-        number: 1,
-        url: 'https://github.com/org/repo/issues/1',
-      },
-    });
-
     const inbox = new ConductorInbox();
     const completed: string[] = [];
     inbox.subscribe((message) => {
@@ -259,10 +219,10 @@ describe('WorkerRuntime', () => {
 
     runtime.start({
       name: 'ping-1',
-      issueUrl: 'https://github.com/org/repo/issues/1',
+      issueUrl: TEST_WORKTREE.issue.url,
       kind: 'ping',
       systemPrompt: 'pong',
-      repoRoot: '/repo',
+      worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'ping-1', kind: 'ping' }],
         kinds: ['ping'],
@@ -288,6 +248,5 @@ describe('WorkerRuntime', () => {
     expect(completed).toHaveLength(1);
 
     await runtime.shutdown();
-    vi.restoreAllMocks();
   });
 });
