@@ -9,4 +9,6 @@ export {
   type ConductorSessionResult,
   type ConductorSessionResult as IssueSessionResult,
   type OperatorInputContext,
+  type OperatorInputBinding,
+  type OperatorInputBindingApi,
 } from './conductor-session.js';

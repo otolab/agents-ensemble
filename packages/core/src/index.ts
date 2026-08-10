@@ -158,11 +158,15 @@ export { runIssueSession } from './conductor/issue-session.js';
 export type {
   ConductorSessionResult,
   RunConductorSessionOptions,
+  OperatorInputBinding,
+  OperatorInputBindingApi,
+  OperatorInputContext,
 } from './conductor/conductor-session.js';
+export { submitOperatorInput } from './conductor/submit-operator-input.js';
+export type { SubmitOperatorInputInput } from './conductor/submit-operator-input.js';
 export type {
   IssueSessionResult,
   RunIssueSessionOptions,
-  OperatorInputContext,
 } from './conductor/issue-session.js';
 
 export {

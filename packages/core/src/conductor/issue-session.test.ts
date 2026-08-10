@@ -3,6 +3,7 @@ import type { SDKCustomTool } from '@cursor/sdk';
 import * as issueContextModule from '../github/issue-context.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../escalation/enqueue-max-turns-question.js';
+import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import { runIssueSession } from './issue-session.js';
 
 const TEST_ISSUE = {
@@ -224,5 +225,53 @@ describe('runIssueSession', () => {
 
     expect(mockSend).toHaveBeenCalledTimes(1);
     expect(result.stopReason).toBe('error');
+  });
+
+  it('bindOperatorInput resumes after async submit without blocking the loop', async () => {
+    mockSend
+      .mockImplementationOnce(async () => {
+        await conductorTools.ask_human!.execute({
+          question: 'Should we continue?',
+        });
+        return {
+          runId: 'run-1',
+          status: 'finished',
+          result: 'waiting for operator',
+        };
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'conductor-ok',
+      });
+
+    let bindingApi: OperatorInputBindingApi | undefined;
+    const sessionPromise = runIssueSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: '/repo',
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      bindOperatorInput: (api) => {
+        bindingApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+    expect(bindingApi).toBeDefined();
+    expect(bindingApi!.submit('yes, continue')).toBe(true);
+
+    const result = await sessionPromise;
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(String(mockSend.mock.calls[1]![0])).toContain('yes, continue');
+    expect(result.stopReason).toBe('completed');
+    expect(
+      result.openQuestions.some(
+        (question) =>
+          question.id === 'inq-1' &&
+          question.status === 'answered' &&
+          question.answer === 'yes, continue',
+      ),
+    ).toBe(true);
   });
 });
