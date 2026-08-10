@@ -39,6 +39,15 @@ gh auth login
 
 `agent login` だけでは **conductor には渡りません**。`ensemble issue` を使う場合は `ensemble auth login` を別途一度実行してください。
 
+### conductor（SDK）の ripgrep
+
+local agent は workspace scan（`.gitignore` / `.cursorignore`）に **ripgrep** を使う（[SDK ドキュメント](https://cursor.com/docs/sdk/typescript)）。`ensemble` は起動時に `@cursor/sdk-<platform>-<arch>` 同梱の `rg` を `CURSOR_RIPGREP_PATH` に設定する。同梱が無い場合は PATH の `rg` にフォールバックする。どちらも無いと stderr に `Ripgrep path not configured` が出る（ignore マッピングが効かない）。
+
+```bash
+# 手動で指定する場合
+export CURSOR_RIPGREP_PATH="$(command -v rg)"
+```
+
 ### conductor（SDK）の認証解決順
 
 `@cursor/sdk` は次の順で API key を探します（`ConductorAgent` も同じ）。
