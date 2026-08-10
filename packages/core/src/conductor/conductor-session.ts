@@ -1,8 +1,6 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
-import { applyOperatorMessage } from '../escalation/apply-operator-message.js';
 import { createAnswerOpenQuestionTool } from '../escalation/answer-open-question-tool.js';
 import { createAskHumanTool } from '../escalation/ask-human-tool.js';
-import { formatOpenQuestionAnsweredReport, joinOperatorInput } from '../escalation/format-registry-update.js';
 import { ensureMaxTurnsOpenQuestion } from '../escalation/enqueue-max-turns-question.js';
 import { createOpenQuestionListTools } from '../escalation/open-question-list-tools.js';
 import { openQuestionToEscalationRecord } from '../escalation/open-question-to-escalation.js';
@@ -48,14 +46,14 @@ import {
   sessionSidecarPath,
   type SessionSidecar,
 } from '../session/session-sidecar.js';
+import type { OperatorInputBinding, OperatorInputContext } from './operator-input-binding.js';
+import { submitOperatorInput } from './submit-operator-input.js';
 
-export interface OperatorInputContext {
-  /** これから実行する conductor send 番号（1 始まり）。 */
-  conductorTurn: number;
-  autonomousTurns: number;
-  maxTurns: number;
-  openQuestions: OpenQuestion[];
-}
+export type { OperatorInputContext } from './operator-input-binding.js';
+export type {
+  OperatorInputBinding,
+  OperatorInputBindingApi,
+} from './operator-input-binding.js';
 
 export interface RunConductorSessionOptions {
   issueUrl: string;
@@ -70,10 +68,14 @@ export interface RunConductorSessionOptions {
   maxTurns?: number;
   permissionPolicy?: PermissionPolicyRules;
   permissionPipeline?: PermissionPipeline;
-  /** 各ループでオペレータ入力を受け取る（open question 待ち・自由チャット）。 */
+  /** 各ループでオペレータ入力を受け取る（テスト向け・同期）。`bindOperatorInput` 指定時は未使用。 */
   onOperatorInput?: (
     context: OperatorInputContext,
   ) => string | Promise<string | undefined> | undefined;
+  /**
+   * 非ブロッキングのオペレータ入力。指定時はループをブロックせず `operator.message` をキューへ積む。
+   */
+  bindOperatorInput?: OperatorInputBinding;
   /**
    * conductor `agent.send` が error でもループを継続する（TTY 等でオペレータが再試行できるとき）。
    * `onOperatorInput` の有無とは独立。非 TTY / CI では false のままにすること。
@@ -348,10 +350,42 @@ export async function runConductorSession(
   let lastDispatchesThisTurn = 0;
   let stopReason: IssueLoopStopReason = 'completed';
   const continueOnConductorError = options.continueOnConductorError ?? false;
+  let autonomousTurns = 0;
+  let disposeOperatorInput: (() => void) | undefined;
+
+  if (options.bindOperatorInput) {
+    const bindingDispose = options.bindOperatorInput({
+      submit: (message) => {
+        const received = submitOperatorInput({
+          message,
+          conductorTurn: sendCount + 1,
+          openQuestions,
+          escalations,
+          eventQueue,
+          sessionLogger,
+          onEscalated: (record) => options.onEscalated?.(record),
+        });
+        if (received) {
+          autonomousTurns = 0;
+        }
+        if (received) {
+          scheduleSidecarFlush();
+        }
+        return received;
+      },
+      getContext: () => ({
+        conductorTurn: sendCount + 1,
+        autonomousTurns,
+        maxTurns,
+        openQuestions: openQuestions.listOpen(),
+      }),
+    });
+    if (typeof bindingDispose === 'function') {
+      disposeOperatorInput = bindingDispose;
+    }
+  }
 
   try {
-    let autonomousTurns = 0;
-
     lastSendResult = await runInitialConductorSend({
       options,
       profile: activeProfile,
@@ -367,23 +401,38 @@ export async function runConductorSession(
     autonomousTurns++;
 
     while (true) {
-      if (openQuestions.openCount > 0) {
-        const operatorPhase = await collectOperatorInput({
-          conductorTurn: sendCount + 1,
-          autonomousTurns,
-          maxTurns,
-          options,
-          openQuestions,
-          escalations,
-          eventQueue,
-          sessionLogger,
-        });
-        if (!operatorPhase.received) {
-          continue;
-        }
-        autonomousTurns = 0;
+      if (!options.bindOperatorInput && options.onOperatorInput) {
         if (openQuestions.openCount > 0) {
-          continue;
+          const operatorPhase = await collectOperatorInput({
+            conductorTurn: sendCount + 1,
+            autonomousTurns,
+            maxTurns,
+            options,
+            openQuestions,
+            escalations,
+            eventQueue,
+            sessionLogger,
+          });
+          if (operatorPhase.received) {
+            autonomousTurns = 0;
+          }
+          if (openQuestions.openCount > 0) {
+            continue;
+          }
+        } else {
+          const operatorPhase = await collectOperatorInput({
+            conductorTurn: sendCount + 1,
+            autonomousTurns,
+            maxTurns,
+            options,
+            openQuestions,
+            escalations,
+            eventQueue,
+            sessionLogger,
+          });
+          if (operatorPhase.received) {
+            autonomousTurns = 0;
+          }
         }
       }
 
@@ -400,22 +449,6 @@ export async function runConductorSession(
           options.onOpenQuestionEnqueued?.(question);
         });
         continue;
-      }
-
-      if (openQuestions.openCount === 0 && options.onOperatorInput) {
-        const operatorPhase = await collectOperatorInput({
-          conductorTurn: sendCount + 1,
-          autonomousTurns,
-          maxTurns,
-          options,
-          openQuestions,
-          escalations,
-          eventQueue,
-          sessionLogger,
-        });
-        if (operatorPhase.received) {
-          autonomousTurns = 0;
-        }
       }
 
       let event: SessionEvent | undefined;
@@ -519,6 +552,7 @@ export async function runConductorSession(
       });
     }
   } finally {
+    disposeOperatorInput?.();
     unregisterProcessSignalHandlers();
     try {
       await flushSidecar();
@@ -625,29 +659,17 @@ async function collectOperatorInput(input: {
     return { received: false };
   }
 
-  const applied = applyOperatorMessage(input.openQuestions, operatorMessage);
-  const text =
-    applied.answered.length > 0
-      ? joinOperatorInput([
-          applied.generalGuidance,
-          ...applied.answered.map(formatOpenQuestionAnsweredReport),
-        ])
-      : joinOperatorInput([applied.generalGuidance ?? operatorMessage.trim()]);
+  const received = submitOperatorInput({
+    message: operatorMessage,
+    conductorTurn: input.conductorTurn,
+    openQuestions: input.openQuestions,
+    escalations: input.escalations,
+    eventQueue: input.eventQueue,
+    sessionLogger: input.sessionLogger,
+    onEscalated: (record) => input.options.onEscalated?.(record),
+  });
 
-  for (const answered of applied.answered) {
-    recordAnsweredOpenQuestion(input, answered);
-  }
-
-  if (text) {
-    input.sessionLogger.emit({
-      type: 'operator.input',
-      conductorTurn: input.conductorTurn,
-      text,
-    });
-    input.eventQueue.enqueue({ type: 'operator.message', text });
-  }
-
-  return { received: !!text };
+  return { received };
 }
 
 async function runInitialConductorSend(input: {
@@ -723,20 +745,6 @@ async function runEventConductorSend(input: {
   });
 
   return sendResult;
-}
-
-function recordAnsweredOpenQuestion(
-  input: {
-    escalations: EscalationRecord[];
-    options: RunConductorSessionOptions;
-  },
-  answered: OpenQuestion,
-): void {
-  const record = openQuestionToEscalationRecord(answered);
-  if (record) {
-    input.escalations.push(record);
-    input.options.onEscalated?.(record);
-  }
 }
 
 async function waitForSessionEvent(
