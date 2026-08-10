@@ -227,16 +227,22 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 
 ## 5. 承認フロー・worker 制御・オペレータ対話
 
-### 双方向フロー（implementer の非同期 dispatch 後）
+### 双方向フロー（常駐 worker・数往復）
+
+[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md) を参照。
 
 ```
-conductor ──dispatch──────────► WorkerRuntime.start()（即 return）
-worker    ──permission───────► ConductorInbox ──► InboxProcessor ──► PermissionPipeline
-worker    ──completed/failed► ConductorSession イベント列 ──► agent.send
-conductor ◄──agent.send──── オペレータ user ターン / 自律ターンの状態通知
+セッション開始 ──bootstrap（待機 prompt）──► worker 常駐（ACP session 確立）
+conductor ──prompt_worker───────────────► WorkerSession.promptWorker()（即 return）
+              session/load + session/prompt
+worker    ──permission───────────────► ConductorInbox ──► PermissionPipeline
+worker    ──Issue / PR 報告──────────► （非同期正本。harness 非経由）
+worker    ──prompt ラウンド終了──────► worker.completed ──► イベント列 ──► agent.send
+conductor ◄──agent.send──────────── オペレータ user ターン / イベント通知
 ```
 
-reviewer 種別は現状同期 dispatch（同様の Runtime 化は後続）。
+- **`worker.completed` は 1 ラウンドの終了**であり、タスク全体の完了ではない。進捗の正本は Issue / PR。
+- bootstrap 後も `acpSessionId` を保持し、`prompt_worker` で 2 回目以降の `session/prompt` を送る（#36）。
 
 ### permission（conductor 制御）
 
