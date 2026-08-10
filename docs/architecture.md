@@ -227,16 +227,23 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 
 ## 5. 承認フロー・worker 制御・オペレータ対話
 
-### 双方向フロー（implementer の非同期 dispatch 後）
+### 双方向フロー（常駐 worker・数往復）
+
+[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md) を参照。
 
 ```
-conductor ──dispatch──────────► WorkerRuntime.start()（即 return）
-worker    ──permission───────► ConductorInbox ──► InboxProcessor ──► PermissionPipeline
-worker    ──completed/failed► ConductorSession イベント列 ──► agent.send
-conductor ◄──agent.send──── オペレータ user ターン / 自律ターンの状態通知
+セッション開始 ──attach（待機 prompt）──► worker 常駐（agent acp プロセス + ACP session）
+conductor ──prompt_worker──► WorkerOutboundQueue ──sendWorkerMessage──► session/prompt
+worker    ──permission──────► ConductorInbox ──► SessionEventQueue ──► agent.send
+worker    ──Issue / PR 報告──► （非同期正本。harness 非経由）
+worker    ──ラウンド終了──────► worker.completed ──► SessionEventQueue ──► agent.send
+ensemble 終了 ──stop────────► 全 worker bridge close
 ```
 
-reviewer 種別は現状同期 dispatch（同様の Runtime 化は後続）。
+- **常駐** = ensemble 中 `agent acp` プロセスを殺さない（bootstrap 後も bridge 保持）。
+- **sendWorkerMessage** = 既存 session への `session/prompt`（dispatch ではない）。
+- 同一 worker は ACP 制約により prompt **直列**（per-worker キュー）。worker 間は並行可。
+- **`worker.completed` は 1 ラウンドの終了**。進捗の正本は Issue / PR。
 
 ### permission（conductor 制御）
 

@@ -1,5 +1,6 @@
 import type { PromptModule } from '@modular-prompt/core';
 import type { EnsembleContext } from '../../contexts/kind.js';
+import type { SessionWorkerSpec } from '../../../profile/types.js';
 
 /**
  * agents-ensemble 全体の共通前提（conductor と worker 全員）。
@@ -45,7 +46,6 @@ export const baseModule: PromptModule<EnsembleContext> = {
     '- 作業の実行は worker、方針・許否・調整は conductor',
     '- 判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する',
     '- 大目標とマージはオペレータが決める・行う。方向転換は conductor 経由でオペレータへ',
-    // FIXME(#36): `prompt_worker` 未実装。実装後に methodology と突き合わせる。
     '- conductor は `prompt_worker` で worker に作業指示を送る',
   ],
   instructions: [
@@ -61,14 +61,17 @@ export const baseModule: PromptModule<EnsembleContext> = {
       items: [
         (ctx) =>
           ctx.workers
-            .map((worker) => `- **${worker.name}**: \`${worker.kind}\``)
+            .map(
+              (worker: SessionWorkerSpec) =>
+                `- **${worker.name}**: \`${worker.kind}\``,
+            )
             .join('\n'),
       ],
     },
     {
       type: 'subsection',
       title: 'kinds',
-      items: [(ctx) => ctx.kinds.map((kind) => `- \`${kind}\``).join('\n')],
+      items: [(ctx) => ctx.kinds.map((kind: string) => `- \`${kind}\``).join('\n')],
     },
   ],
 };

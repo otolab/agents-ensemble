@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { hasIssueE2eConfig, loadIssueE2eConfig, OPERATOR_E2E_PROFILE_PATH } from './test-config.js';
-import { runEnsembleCli, parseCliJson } from './test-helpers.js';
+import { hasIssueE2eConfig, loadIssueE2eConfig, OPERATOR_E2E_PROFILE_PATH, ROUNDTRIP_E2E_PROFILE_PATH } from './test-config.js';
 
-const SMOKE_BRIEFING =
-  'E2E smoke test. worker の pong 確認後、応答に conductor-ok を含めて終了すること。';
+import { runEnsembleCli, parseCliJson } from './test-helpers.js';
 
 describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
   it('starts workers and verifies conductor sees pong', async () => {
@@ -21,8 +19,6 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
         config.conductorCwd,
         '--model',
         config.conductorModelId,
-        '--briefing',
-        SMOKE_BRIEFING,
       ],
       { timeoutMs: 300_000 },
     );
@@ -70,8 +66,6 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
         config.conductorModelId,
         '--max-turns',
         '1',
-        '--briefing',
-        'E2E operator env test。自律ターン上限後にオペレータが continue e2e と答える想定。応答に conductor-ok を含めて終了すること。',
       ],
       {
         timeoutMs: 300_000,
@@ -93,5 +87,49 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
     expect(result.stopReason).toBe('completed');
     expect(result.sendCount).toBe(2);
     expect(result.lastResult).toContain('conductor-ok');
+  }, 300_000);
+
+  it('runs prompt_worker twice before finishing (conductor-worker roundtrip)', async () => {
+    const config = loadIssueE2eConfig()!;
+
+    const { stdout, exitCode } = await runEnsembleCli(
+      [
+        'issue',
+        config.issueUrl,
+        '--repo-root',
+        config.repoRoot,
+        '--profile',
+        ROUNDTRIP_E2E_PROFILE_PATH,
+        '--conductor-cwd',
+        config.conductorCwd,
+        '--model',
+        config.conductorModelId,
+        '--max-turns',
+        '8',
+      ],
+      { timeoutMs: 300_000 },
+    );
+
+    const result = parseCliJson<{
+      lastRunStatus: string;
+      lastResult?: string;
+      workerDispatchCount: number;
+      workerFailureCount: number;
+      workerResponses?: Array<{ name: string; responseText?: string }>;
+      lastError?: { message: string };
+    }>(stdout);
+
+    expect(exitCode).toBe(0);
+    expect(result.lastRunStatus).toBe('finished');
+    expect(result.workerFailureCount).toBe(0);
+    expect(result.workerDispatchCount).toBeGreaterThanOrEqual(3);
+    expect(result.workerResponses?.length).toBeGreaterThanOrEqual(3);
+    expect(
+      result.workerResponses?.filter((entry) =>
+        entry.responseText?.includes('pong'),
+      ).length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(result.lastResult).toContain('conductor-ok');
+    expect(result.lastError).toBeUndefined();
   }, 300_000);
 });

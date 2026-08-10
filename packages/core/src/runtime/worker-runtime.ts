@@ -1,56 +1,146 @@
 import { randomUUID } from 'node:crypto';
+import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import {
-  dispatchWorker,
-  type WorkerDispatchOptions,
-  type WorkerDispatchResult,
-} from '../dispatch/worker-dispatch.js';
+  attachWorker,
+  buildWorkerAttachPrompt,
+  runAttachedWorkerPrompt,
+  type AttachedWorker,
+} from '../dispatch/attach-worker.js';
+import {
+  cancelWorkerAcpPrompt,
+  closeWorkerAcpSession,
+  type ConnectWorkerAcpFn,
+} from '../dispatch/worker-acp-session.js';
 import { ConductorInbox } from './conductor-inbox.js';
+import type {
+  SendWorkerMessageOptions,
+  SendWorkerMessageResult,
+} from './send-worker-message.js';
 import type { WorkerStartedInfo, WorkerStartParams } from './types.js';
-
-export type WorkerDispatchFn = (
-  options: WorkerDispatchOptions,
-) => Promise<WorkerDispatchResult>;
 
 export interface WorkerRuntimeOptions {
   inbox: ConductorInbox;
-  dispatchWorker?: WorkerDispatchFn;
+  connectAcp?: ConnectWorkerAcpFn;
+  spawn?: SpawnAcpProcessOptions;
+  /** integration の共有 bridge 注入時は false。 */
+  ownsWorkerAcpConnections?: boolean;
+}
+
+interface ResidentWorker {
+  workerId: string;
+  started: WorkerStartedInfo;
+  attached: AttachedWorker;
+  state: 'idle' | 'prompting';
+  queue: string[];
+  /** `session/cancel` 応答待ちの新指示。 */
+  preemptInstruction?: string;
+  cancelInFlight: boolean;
 }
 
 export class WorkerRuntime {
-  private readonly running = new Map<string, WorkerStartedInfo>();
+  private readonly prompting = new Map<string, WorkerStartedInfo>();
+  private readonly residents = new Map<string, ResidentWorker>();
   private readonly idleResolvers = new Set<() => void>();
-  private readonly dispatchWorkerFn: WorkerDispatchFn;
+  private bootstrapInFlight = 0;
 
-  constructor(private readonly options: WorkerRuntimeOptions) {
-    this.dispatchWorkerFn = options.dispatchWorker ?? dispatchWorker;
+  constructor(private readonly options: WorkerRuntimeOptions) {}
+
+  /** 進行中の prompt ラウンド数 + bootstrap 中（conductor ループ用）。 */
+  get runningCount(): number {
+    return this.prompting.size + this.bootstrapInFlight;
   }
 
-  get runningCount(): number {
-    return this.running.size;
+  /** attach 済み worker 数。 */
+  get attachedCount(): number {
+    return this.residents.size;
+  }
+
+  listAttached(): AttachedWorker[] {
+    return [...this.residents.values()].map((resident) => resident.attached);
+  }
+
+  getAttached(name: string): AttachedWorker | undefined {
+    return this.residents.get(name)?.attached;
   }
 
   listRunning(): WorkerStartedInfo[] {
-    return [...this.running.values()];
+    return [...this.prompting.values()];
   }
 
   start(params: WorkerStartParams): string {
     const workerId = randomUUID();
     const started: WorkerStartedInfo = { workerId, ...params };
-    this.running.set(workerId, started);
-    void this.run(started);
+    void this.bootstrap(started);
     return workerId;
   }
 
+  /** 常駐 worker へ user メッセージ（ACP `session/prompt`）を送る。busy 時はキュー、preempt 時は割り込み。 */
+  sendWorkerMessage(
+    name: string,
+    instruction: string,
+    options?: SendWorkerMessageOptions,
+  ): SendWorkerMessageResult {
+    const text = instruction.trim();
+    if (!text) {
+      return {
+        status: 'error',
+        worker: name,
+        message: 'instruction must not be empty',
+      };
+    }
+
+    const resident = this.residents.get(name);
+    if (!resident) {
+      return {
+        status: 'error',
+        worker: name,
+        message: `Worker "${name}" is not attached`,
+      };
+    }
+
+    if (resident.state === 'prompting') {
+      if (options?.preempt) {
+        resident.queue.length = 0;
+        resident.preemptInstruction = text;
+        if (!resident.cancelInFlight) {
+          resident.cancelInFlight = true;
+          cancelWorkerAcpPrompt(resident.attached.session);
+        }
+        return { status: 'preempted', worker: name };
+      }
+
+      resident.queue.push(text);
+      return {
+        status: 'queued',
+        worker: name,
+        position: resident.queue.length,
+      };
+    }
+
+    void this.executeRound(resident, text);
+    return { status: 'sent', worker: name };
+  }
+
   async waitForIdle(): Promise<void> {
-    if (this.running.size === 0) return;
+    if (this.prompting.size === 0 && this.bootstrapInFlight === 0) return;
     await new Promise<void>((resolve) => {
       this.idleResolvers.add(resolve);
     });
   }
 
-  private async run(started: WorkerStartedInfo): Promise<void> {
+  /** ensemble 終了時に全 resident の ACP 接続を閉じる。 */
+  async shutdown(): Promise<void> {
+    await this.waitForIdle();
+    for (const resident of this.residents.values()) {
+      await closeWorkerAcpSession(resident.attached.session);
+    }
+    this.residents.clear();
+  }
+
+  private async bootstrap(started: WorkerStartedInfo): Promise<void> {
+    this.bootstrapInFlight++;
     try {
-      const result = await this.dispatchWorkerFn({
+      const attached = await attachWorker({
         name: started.name,
         issueUrl: started.issueUrl,
         kind: started.kind,
@@ -58,21 +148,99 @@ export class WorkerRuntime {
         repoRoot: started.repoRoot,
         sessionState: started.sessionState,
         resumeAcpSessionId: started.resumeAcpSessionId,
+        connectAcp: this.options.connectAcp,
+        spawn: this.options.spawn,
+        ownsBridge: this.options.ownsWorkerAcpConnections,
         permissionHandler: this.options.inbox.createPermissionHandler(
           started.workerId,
         ),
       });
-      this.options.inbox.publishWorkerCompleted(started.workerId, result);
+
+      const resident: ResidentWorker = {
+        workerId: started.workerId,
+        started,
+        attached,
+        state: 'idle',
+        queue: [],
+        cancelInFlight: false,
+      };
+      this.residents.set(started.name, resident);
+
+      const prompt = buildWorkerAttachPrompt(
+        {
+          name: started.name,
+          issueUrl: started.issueUrl,
+          kind: started.kind,
+          systemPrompt: started.systemPrompt,
+          sessionState: started.sessionState,
+          repoRoot: started.repoRoot,
+          resumeAcpSessionId: started.resumeAcpSessionId,
+        },
+        attached.session,
+      );
+
+      await this.executeRound(resident, prompt);
     } catch (error) {
+      this.residents.delete(started.name);
       this.options.inbox.publishWorkerFailed(started, error);
     } finally {
-      this.running.delete(started.workerId);
-      if (this.running.size === 0) {
-        for (const resolve of this.idleResolvers) {
-          resolve();
-        }
-        this.idleResolvers.clear();
+      this.bootstrapInFlight--;
+      this.resolveIdleIfReady();
+    }
+  }
+
+  private async executeRound(
+    resident: ResidentWorker,
+    prompt: string,
+  ): Promise<void> {
+    resident.state = 'prompting';
+    resident.cancelInFlight = false;
+    this.prompting.set(resident.workerId, resident.started);
+    let skipCompletion = false;
+    try {
+      const result = await runAttachedWorkerPrompt(
+        resident.attached,
+        prompt,
+        this.options.inbox.createPermissionHandler(resident.workerId),
+      );
+      skipCompletion =
+        result.promptResult.stopReason === 'cancelled' &&
+        resident.preemptInstruction !== undefined;
+      if (!skipCompletion) {
+        this.options.inbox.publishWorkerCompleted(resident.workerId, result);
       }
+    } catch (error) {
+      if (!resident.preemptInstruction) {
+        this.options.inbox.publishWorkerFailed(resident.started, error);
+      }
+    } finally {
+      this.finishPromptRound(resident.workerId);
+      const preempt = resident.preemptInstruction;
+      if (preempt) {
+        resident.preemptInstruction = undefined;
+        await this.executeRound(resident, preempt);
+      } else {
+        const next = resident.queue.shift();
+        if (next) {
+          await this.executeRound(resident, next);
+        } else {
+          resident.state = 'idle';
+        }
+      }
+    }
+  }
+
+  private finishPromptRound(workerId: string): void {
+    this.prompting.delete(workerId);
+    this.resolveIdleIfReady();
+  }
+
+  private resolveIdleIfReady(): void {
+    if (this.prompting.size === 0 && this.bootstrapInFlight === 0) {
+      for (const resolve of this.idleResolvers) {
+        resolve();
+      }
+      this.idleResolvers.clear();
     }
   }
 }

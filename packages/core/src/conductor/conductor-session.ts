@@ -16,7 +16,9 @@ import { createResolvePermissionTool } from '../permission/resolve-permission-to
 import type { Profile } from '../profile/types.js';
 import { profileWorkersToSessionSpecs, resolveAgentSystemPrompt, sessionStateFromProfile } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
-import type { WorkerDispatchFn } from '../runtime/worker-runtime.js';
+import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
+import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
+import { WorkerOutboundQueue } from '../runtime/worker-outbound-queue.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import { ConductorAgent } from './conductor-agent.js';
@@ -66,7 +68,9 @@ export interface RunConductorSessionOptions {
     context: OperatorInputContext,
   ) => string | Promise<string | undefined> | undefined;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
-  dispatchWorker?: WorkerDispatchFn;
+  connectAcp?: ConnectWorkerAcpFn;
+  /** integration の共有 bridge 注入時は false。 */
+  ownsWorkerAcpConnections?: boolean;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
   onWorkerFailed?: (failure: WorkerFailureRecord) => void;
   /** `agent.send` 完了ごと（CLI 進捗ログ等）。 */
@@ -170,7 +174,10 @@ export async function runConductorSession(
     sessionState,
     restoredWorkerSessions: Object.fromEntries(workerSessions),
     permissionPipeline,
-    ...(options.dispatchWorker ? { dispatchWorker: options.dispatchWorker } : {}),
+    ...(options.connectAcp ? { connectAcp: options.connectAcp } : {}),
+    ...(options.ownsWorkerAcpConnections !== undefined
+      ? { ownsWorkerAcpConnections: options.ownsWorkerAcpConnections }
+      : {}),
     decidePermission: (request, workerId, requestId) => {
       const outcome = permissionPipeline.evaluate(requestId, workerId, request);
       if (outcome.status === 'resolved') {
@@ -229,6 +236,15 @@ export async function runConductorSession(
     inbox: workerSession.inbox,
   });
 
+  const workerOutboundQueue = new WorkerOutboundQueue((worker, instruction, options) =>
+    workerSession.sendWorkerMessage(worker, instruction, options),
+  );
+
+  const promptWorkerTools = createPromptWorkerTool({
+    outboundQueue: workerOutboundQueue,
+    workerNames: activeProfile.workers.map((worker) => worker.name),
+  });
+
   const conductorOptions = {
     cwd: options.conductorCwd ?? process.cwd(),
     apiKey: options.apiKey,
@@ -238,6 +254,7 @@ export async function runConductorSession(
       ...answerOpenQuestionTools,
       ...openQuestionListTools,
       ...resolvePermissionTools,
+      ...promptWorkerTools,
     },
   };
 
@@ -262,6 +279,7 @@ export async function runConductorSession(
       openQuestions: snapshot.openQuestions,
       sequence: snapshot.sequence,
       workers,
+      updatedAt: Date.now(),
     };
     await saveSessionSidecar(
       sessionSidecarPath({

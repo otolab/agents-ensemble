@@ -4,14 +4,10 @@ import type { EnsembleContext } from '../../contexts/kind.js';
 /**
  * conductor（conductor–worker モデル）の ensemble 基底。
  * baseModule と merge し、起動文書の instructions が追記される。
- *
- * FIXME(#36): `prompt_worker` と harness 側の session/prompt 経路は未実装。
- * プロンプト文言は目標仕様の仮置き。実装後に突き合わせて修正する。
  */
 export const conductorBaseModule: PromptModule<EnsembleContext> = {
   objective: [
     '作業フローの連鎖（Issue の明確さ → worker の自律実行 → オペレータのゲート）が途切れないよう調整する。',
-    // FIXME(#36): `prompt_worker` 未実装。目標仕様の仮置き。
     'Issue / PR を正本とし、`prompt_worker` で常駐 worker に作業を指示する。',
   ],
   terms: [
@@ -20,7 +16,6 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
   ],
   instructions: [
     '- 演奏しない（ファイル編集・シェル実行・直接実装はしない）',
-    // FIXME(#36): `prompt_worker` 未実装。文言は harness 実装後に修正する。
     {
       type: 'subsection',
       title: 'prompt_worker',
@@ -29,6 +24,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- worker はセッション開始時に起動済み。実行中の worker を新たに起動しない',
         '- 指示文には Issue / PR を正本としたゴール・スコープ・観点を書く',
         '- Issue / PR に書いただけでは worker は動かない。作業開始のトリガーは `prompt_worker`',
+        '- 進行中の worker を優先割り込みする: `prompt_worker` の `preempt: true`（既定は busy 時キュー）',
         '- worker からの返答はセッションイベント（permission 待ち・完了・失敗）として届く',
       ],
     },

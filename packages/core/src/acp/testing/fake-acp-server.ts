@@ -32,6 +32,7 @@ export class FakeAcpServer {
   private readonly lineBuffer = new NdJsonLineBuffer();
   private sessionCounter = 0;
   private readonly sessions = new Set<string>();
+  private readonly pendingCancels = new Map<string, () => void>();
   private permissionRequestCounter = 0;
   private running = false;
   private readonly pendingPermissionResolvers = new Map<
@@ -66,6 +67,15 @@ export class FakeAcpServer {
       if (resolvePermission) {
         this.pendingPermissionResolvers.delete(message.id);
         resolvePermission();
+      }
+      return;
+    }
+
+    if ('method' in message && !('id' in message)) {
+      if (message.method === 'session/cancel') {
+        const sessionId =
+          (message.params as { sessionId?: string })?.sessionId ?? '';
+        this.pendingCancels.get(sessionId)?.();
       }
       return;
     }
@@ -124,9 +134,18 @@ export class FakeAcpServer {
           await this.requestPermissionAndWait(sessionId);
         }
 
-        const result = this.options.onPrompt
-          ? await this.options.onPrompt({ sessionId, prompt, notify })
-          : { stopReason: 'end_turn', message: 'ok' };
+        const cancelPromise = new Promise<FakeAcpPromptResult>((resolve) => {
+          this.pendingCancels.set(sessionId, () => {
+            resolve({ stopReason: 'cancelled' });
+          });
+        });
+
+        const promptPromise = this.options.onPrompt
+          ? this.options.onPrompt({ sessionId, prompt, notify })
+          : Promise.resolve({ stopReason: 'end_turn', message: 'ok' });
+
+        const result = await Promise.race([promptPromise, cancelPromise]);
+        this.pendingCancels.delete(sessionId);
 
         if (!this.options.onPrompt && result.message) {
           notify('session/update', {

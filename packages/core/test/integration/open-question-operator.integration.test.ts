@@ -3,7 +3,6 @@ import type { SDKCustomTool } from '@cursor/sdk';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
-import { dispatchWorker } from '../../src/dispatch/worker-dispatch.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../../src/escalation/enqueue-max-turns-question.js';
@@ -107,7 +106,7 @@ describe('open question / operator flow integration', () => {
     });
 
     expect(mockSend).toHaveBeenCalledTimes(2);
-    expect(String(mockSend.mock.calls[0]![0])).toContain('Integration open question');
+    expect(String(mockSend.mock.calls[0]![0])).toContain('Issue #1');
     const operatorMessage = String(mockSend.mock.calls[1]![0]);
     expect(operatorMessage).toContain('yes, deploy');
     expectNotLegacyFollowUpPrompt(operatorMessage);
@@ -195,17 +194,13 @@ describe('open question / operator flow integration', () => {
       permissionPipeline: new PermissionPipeline({
         policy: { allowTools: [], allowReadOnlyTools: false },
       }),
-      dispatchWorker: (options) =>
-        dispatchWorker({
-          ...options,
-          name: 'ping-1',
-          bridge,
-        }),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
     });
 
     const messages = mockSend.mock.calls.map((call) => String(call[0]));
     expect(mockSend).toHaveBeenCalledTimes(3);
-    expect(messages[0]).toContain('Integration open question');
+    expect(messages[0]).toContain('Issue #1');
     expect(messages[1]).toContain('permission 判断待ち');
     expect(messages[2]).toContain('worker 完了');
     expect(result.workerDispatches).toHaveLength(1);

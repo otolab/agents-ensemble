@@ -39,6 +39,7 @@
 | [0009](0009-conductor-session-event-queue.md) | ConductorSession とセッションイベント列 | accepted |
 | [0010](0010-permission-pending-event-delivery.md) | permission pending の conductor 通知（0007 からの方針変更） | accepted |
 | [0011](0011-session-sidecar-resume.md) | セッション sidecar と resume | accepted |
+| [0012](0012-conductor-worker-prompt-roundtrip.md) | conductor – worker メッセージング（常駐 ACP / sendWorkerMessage） | accepted |
 
 ## 追加するとき
 

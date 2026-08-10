@@ -33,7 +33,7 @@ describe('dispatchWorker integration', () => {
     expect(result.name).toBe('ping-1');
     expect(result.kind).toBe('ping');
     expect(result.prompt).toContain(PING_SYSTEM_PROMPT);
-    expect(result.prompt).toContain('agent kind: ping');
+    expect(result.prompt).toContain('**ping**');
     expect(result.promptResult.stopReason).toBe('end_turn');
     expect(result.promptResult.responseText).toBe('pong');
   });

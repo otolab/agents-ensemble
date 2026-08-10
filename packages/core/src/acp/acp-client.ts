@@ -106,6 +106,11 @@ export class AcpClient {
     });
   }
 
+  /** 進行中の `session/prompt` を中止する（ACP `session/cancel` notification）。 */
+  cancelSession(sessionId: string): void {
+    this.peer.notify('session/cancel', { sessionId });
+  }
+
   async prompt(
     sessionId: string,
     prompt: string | AcpPromptBlock[],
