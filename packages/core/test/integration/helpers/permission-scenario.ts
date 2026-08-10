@@ -1,6 +1,5 @@
 import { vi } from 'vitest';
 import type { PermissionDecision } from '../../../src/acp/types.js';
-import { dispatchWorker } from '../../../src/dispatch/worker-dispatch.js';
 import type { WorkerDispatchResult } from '../../../src/dispatch/worker-dispatch.js';
 import { PermissionPipeline } from '../../../src/permission/permission-pipeline.js';
 import { WorkerSession } from '../../../src/runtime/worker-session.js';
@@ -78,12 +77,8 @@ export async function runPermissionWorkerSession(
       kinds: ['ping'],
     },
     permissionPipeline: pipeline,
-    dispatchWorker: (dispatchOptions) =>
-      dispatchWorker({
-        ...dispatchOptions,
-        name: 'ping-1',
-        bridge,
-      }),
+    connectAcp: async () => bridge,
+    ownsWorkerAcpConnections: false,
     decidePermission: async (request, workerId, requestId) => {
       const outcome = pipeline.evaluate(requestId, workerId, request);
       if (outcome.status === 'resolved') {

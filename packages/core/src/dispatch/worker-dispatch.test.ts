@@ -1,20 +1,21 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AcpBridge } from '../acp/acp-bridge.js';
 import * as acpBridgeModule from '../acp/acp-bridge.js';
 import * as worktreeModule from '../worktree/worktree.js';
 import { dispatchWorker } from './worker-dispatch.js';
 
 describe('dispatchWorker', () => {
   it('creates worktree and runs ACP session', async () => {
+    const promptSession = vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      responseText: 'pong',
+    });
     const connectSpy = vi.spyOn(acpBridgeModule.AcpBridge, 'connect').mockResolvedValue({
-      runSession: vi.fn().mockResolvedValue({
-        sessionId: 'sess-1',
-        promptResult: {
-          stopReason: 'end_turn',
-          responseText: 'pong',
-        },
-      }),
+      newSession: vi.fn().mockResolvedValue('sess-1'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession,
       close: vi.fn().mockResolvedValue(undefined),
-    } as unknown as acpBridgeModule.AcpBridge);
+    } as unknown as AcpBridge);
 
     const worktree = {
       path: '/tmp/issue-1',
@@ -51,6 +52,7 @@ describe('dispatchWorker', () => {
     expect(result.promptResult.stopReason).toBe('end_turn');
     expect(result.acpSessionId).toBe('sess-1');
     expect(connectSpy).toHaveBeenCalledOnce();
+    expect(promptSession).toHaveBeenCalledOnce();
 
     connectSpy.mockRestore();
     vi.restoreAllMocks();

@@ -1,11 +1,12 @@
+import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionDecision } from '../acp/types.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
+import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
 import type { PermissionPipeline } from '../permission/permission-pipeline.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import { startInboxProcessor } from './inbox-processor.js';
 import type { WorkerFailureRecord } from './types.js';
-import type { WorkerDispatchFn } from './worker-runtime.js';
 import { WorkerRuntime } from './worker-runtime.js';
 import type {
   EnsembleSessionState,
@@ -21,7 +22,10 @@ export interface WorkerSessionOptions {
   sessionState: EnsembleSessionState;
   /** resume 時に復元する worker 名 → ACP session id。 */
   restoredWorkerSessions?: Record<string, string>;
-  dispatchWorker?: WorkerDispatchFn;
+  connectAcp?: ConnectWorkerAcpFn;
+  spawn?: SpawnAcpProcessOptions;
+  /** integration の共有 bridge 注入時は false（既定 true）。 */
+  ownsWorkerAcpConnections?: boolean;
   permissionPipeline?: PermissionPipeline;
   decidePermission?: (
     request: PermissionRequest,
@@ -34,7 +38,7 @@ export interface WorkerSessionOptions {
 
 /**
  * 1 Issue セッションの worker 群。
- * conductor とは inbox 経由で接続し、セッション開始時に worker を起動する。
+ * conductor とは inbox 経由で接続し、セッション開始時に worker を attach する。
  */
 export class WorkerSession {
   readonly inbox = new ConductorInbox();
@@ -63,7 +67,11 @@ export class WorkerSession {
 
     this.runtime = new WorkerRuntime({
       inbox: this.inbox,
-      dispatchWorker: options.dispatchWorker,
+      ...(options.connectAcp ? { connectAcp: options.connectAcp } : {}),
+      ...(options.spawn ? { spawn: options.spawn } : {}),
+      ...(options.ownsWorkerAcpConnections !== undefined
+        ? { ownsWorkerAcpConnections: options.ownsWorkerAcpConnections }
+        : {}),
     });
     this.processor = startInboxProcessor({
       inbox: this.inbox,
@@ -73,7 +81,7 @@ export class WorkerSession {
     });
   }
 
-  /** プロファイルで指定された worker を起動する。 */
+  /** プロファイルで指定された worker を attach する。 */
   bootstrap(): void {
     for (const worker of this.options.workers) {
       const workerId = this.runtime.start({
@@ -91,7 +99,7 @@ export class WorkerSession {
   }
 
   async stop(): Promise<void> {
-    await this.runtime.waitForIdle();
+    await this.runtime.shutdown();
     await this.processor.stop();
   }
 }

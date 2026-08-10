@@ -80,7 +80,8 @@ describe('session resume integration', () => {
 
   it('restores sidecar profile, open questions, and worker session/load on resume', async () => {
     const bridge = await createInProcessAcpBridge();
-    const runSessionSpy = vi.spyOn(bridge, 'runSession');
+    const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
+    const promptSessionSpy = vi.spyOn(bridge, 'promptSession');
 
     const firstDispatch = await dispatchWorker({
       issueUrl: TEST_ISSUE.url,
@@ -94,7 +95,8 @@ describe('session resume integration', () => {
       repoRoot,
       bridge,
     });
-    runSessionSpy.mockClear();
+    loadSessionSpy.mockClear();
+    promptSessionSpy.mockClear();
 
     const sidecarProfile: Profile = {
       ...PING_PROFILE_BASE,
@@ -169,26 +171,25 @@ describe('session resume integration', () => {
         );
         return question ? 'yes, continue' : undefined;
       },
-      dispatchWorker: (options) =>
-        dispatchWorker({
-          ...options,
-          name: 'ping-1',
-          bridge,
-        }),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
     });
 
     expect(mockCreate).toHaveBeenCalledOnce();
-    expect(runSessionSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resumeSessionId: firstDispatch.acpSessionId,
-        prompt: expect.stringContaining('前回の続き'),
-      }),
+    expect(loadSessionSpy).toHaveBeenCalledWith(
+      firstDispatch.acpSessionId,
+      expect.any(String),
+      expect.any(Function),
+    );
+    expect(promptSessionSpy).toHaveBeenCalledWith(
+      firstDispatch.acpSessionId,
+      expect.stringContaining('前回の続き'),
+      expect.objectContaining({ permissionHandler: expect.any(Function) }),
     );
 
     const initialMessage = String(mockSend.mock.calls[0]![0]);
     expect(initialMessage).toContain(SIDECAR_MATERIAL_MARKER);
     expect(initialMessage).not.toContain(CLI_MATERIAL_MARKER);
-    expect(initialMessage).toContain('前回の続きです');
 
     expect(
       result.openQuestions.find((question) => question.id === 'inq-resume-1')

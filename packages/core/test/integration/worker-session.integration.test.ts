@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { dispatchWorker } from '../../src/dispatch/worker-dispatch.js';
-import { WorkerSession } from '../../src/runtime/worker-session.js';
 import type { WorkerDispatchResult } from '../../src/dispatch/worker-dispatch.js';
+import { WorkerSession } from '../../src/runtime/worker-session.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
   createInProcessAcpBridge,
@@ -15,7 +14,7 @@ describe('WorkerSession integration', () => {
     vi.restoreAllMocks();
   });
 
-  it('bootstraps worker, completes via inbox, and surfaces pong to callback', async () => {
+  it('attaches worker, completes bootstrap via inbox, and stays resident until stop', async () => {
     vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue(TEST_WORKTREE);
 
     const bridge = await createInProcessAcpBridge();
@@ -35,12 +34,8 @@ describe('WorkerSession integration', () => {
         workers: [{ name: 'ping-1', kind: 'ping' }],
         kinds: ['ping'],
       },
-      dispatchWorker: (options) =>
-        dispatchWorker({
-          ...options,
-          name: 'ping-1',
-          bridge,
-        }),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
       decidePermission: () => ({
         outcome: { outcome: 'selected', optionId: 'allow-once' },
       }),
@@ -50,11 +45,17 @@ describe('WorkerSession integration', () => {
     });
 
     session.bootstrap();
-    await session.stop();
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
 
     expect(session.startedWorkerIds).toHaveLength(1);
     expect(completed).toHaveLength(1);
     expect(completed[0]?.name).toBe('ping-1');
     expect(completed[0]?.promptResult.responseText).toBe('pong');
+    expect(session.runtime.attachedCount).toBe(1);
+    expect(session.runtime.getAttached('ping-1')?.session.sessionId).toBeTruthy();
+
+    await session.stop();
+    expect(session.runtime.attachedCount).toBe(0);
   });
 });

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AcpBridge } from '../acp/acp-bridge.js';
+import * as worktreeModule from '../worktree/worktree.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import { WorkerRuntime } from './worker-runtime.js';
 
@@ -54,6 +56,7 @@ describe('ConductorInbox', () => {
       },
       prompt: 'done',
       promptResult: { stopReason: 'end_turn' },
+      acpSessionId: 'sess-1',
     });
 
     await inbox.drain();
@@ -61,8 +64,31 @@ describe('ConductorInbox', () => {
   });
 });
 
+function createMockBridge(close = vi.fn()): AcpBridge {
+  return {
+    newSession: vi.fn().mockResolvedValue('sess-1'),
+    loadSession: vi.fn().mockResolvedValue(undefined),
+    promptSession: vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      responseText: 'pong',
+    }),
+    close,
+  } as unknown as AcpBridge;
+}
+
 describe('WorkerRuntime', () => {
-  it('starts workers in the background and reports completion via inbox', async () => {
+  it('attaches workers and reports bootstrap completion via inbox', async () => {
+    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue({
+      path: '/tmp/wt',
+      branch: 'ensemble/issue-1',
+      issue: {
+        owner: 'org',
+        repo: 'repo',
+        number: 1,
+        url: 'https://github.com/org/repo/issues/1',
+      },
+    });
+
     const inbox = new ConductorInbox();
     const completed: string[] = [];
     inbox.subscribe((message) => {
@@ -71,30 +97,11 @@ describe('WorkerRuntime', () => {
       }
     });
 
-    const dispatchWorker = vi.fn().mockResolvedValue({
-      name: 'ping-1',
-      kind: 'ping',
-      issue: {
-        owner: 'org',
-        repo: 'repo',
-        number: 1,
-        url: 'https://github.com/org/repo/issues/1',
-      },
-      worktree: {
-        path: '/tmp/wt',
-        branch: 'ensemble/issue-1',
-        issue: {
-          owner: 'org',
-          repo: 'repo',
-          number: 1,
-          url: 'https://github.com/org/repo/issues/1',
-        },
-      },
-      prompt: 'done',
-      promptResult: { stopReason: 'end_turn' },
+    const close = vi.fn().mockResolvedValue(undefined);
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp: async () => createMockBridge(close),
     });
-
-    const runtime = new WorkerRuntime({ inbox, dispatchWorker });
     const workerId = runtime.start({
       name: 'ping-1',
       issueUrl: 'https://github.com/org/repo/issues/1',
@@ -114,7 +121,14 @@ describe('WorkerRuntime', () => {
     await inbox.drain();
 
     expect(runtime.runningCount).toBe(0);
-    expect(dispatchWorker).toHaveBeenCalledOnce();
+    expect(runtime.attachedCount).toBe(1);
     expect(completed).toEqual([workerId]);
+    expect(close).not.toHaveBeenCalled();
+
+    await runtime.shutdown();
+    expect(close).toHaveBeenCalledOnce();
+    expect(runtime.attachedCount).toBe(0);
+
+    vi.restoreAllMocks();
   });
 });

@@ -42,7 +42,16 @@ export class AcpBridge {
     return this.client.newSession(cwd);
   }
 
-  async loadSession(sessionId: string, cwd: string): Promise<void> {
+  async loadSession(
+    sessionId: string,
+    cwd: string,
+    permissionHandler?: PermissionHandler,
+  ): Promise<void> {
+    if (permissionHandler) {
+      return this.client.withPermissionHandler(permissionHandler, () =>
+        this.client.loadSession(sessionId, cwd),
+      );
+    }
     return this.client.loadSession(sessionId, cwd);
   }
 
@@ -51,7 +60,22 @@ export class AcpBridge {
     prompt: string,
     onUpdate?: SessionUpdateHandler,
   ): Promise<PromptResult> {
-    return this.client.prompt(sessionId, prompt, onUpdate);
+    return this.promptSession(sessionId, prompt, { onUpdate });
+  }
+
+  async promptSession(
+    sessionId: string,
+    prompt: string,
+    options?: {
+      permissionHandler?: PermissionHandler;
+      onUpdate?: SessionUpdateHandler;
+    },
+  ): Promise<PromptResult> {
+    const run = () => this.client.prompt(sessionId, prompt, options?.onUpdate);
+    if (options?.permissionHandler) {
+      return this.client.withPermissionHandler(options.permissionHandler, run);
+    }
+    return run();
   }
 
   /** Create session and run a single prompt (typical worker dispatch). */

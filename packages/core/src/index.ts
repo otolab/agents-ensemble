@@ -83,7 +83,12 @@ export type { WorktreeRef } from './worktree/worktree.js';
 export { buildWorkerPrompt } from './prompt/build-worker-prompt.js';
 export type { WorkerPromptOptions } from './prompt/build-worker-prompt.js';
 
-export { dispatchWorker } from './dispatch/worker-dispatch.js';
+export { dispatchWorker, buildWorkerDispatchResult } from './dispatch/worker-dispatch.js';
+export { attachWorker } from './dispatch/attach-worker.js';
+export type {
+  ConnectWorkerAcpFn,
+  WorkerAcpSession,
+} from './dispatch/worker-acp-session.js';
 export type {
   WorkerDispatchOptions,
   WorkerDispatchResult,
@@ -302,7 +307,7 @@ export type {
   InboxProcessorOptions,
 } from './runtime/inbox-processor.js';
 export { WorkerRuntime } from './runtime/worker-runtime.js';
-export type { WorkerDispatchFn, WorkerRuntimeOptions } from './runtime/worker-runtime.js';
+export type { WorkerRuntimeOptions } from './runtime/worker-runtime.js';
 export type {
   InboxListener,
   InboxMessage,

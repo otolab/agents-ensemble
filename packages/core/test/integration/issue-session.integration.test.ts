@@ -3,7 +3,6 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hasConductorAuth } from '../../src/conductor/conductor-auth.js';
 import { runIssueSession } from '../../src/conductor/issue-session.js';
-import { dispatchWorker } from '../../src/dispatch/worker-dispatch.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import type { Profile } from '../../src/profile/types.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
@@ -60,12 +59,8 @@ describe.skipIf(!hasConductorAuth())('runIssueSession integration', () => {
       profile: SMOKE_PROFILE,
       modelId: getConductorModelId(),
       maxTurns: 5,
-      dispatchWorker: (options) =>
-        dispatchWorker({
-          ...options,
-          name: 'ping-1',
-          bridge,
-        }),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
     });
 
     expect(result.lastRunStatus).toBe('finished');

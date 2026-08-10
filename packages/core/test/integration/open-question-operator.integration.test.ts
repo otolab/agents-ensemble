@@ -3,7 +3,6 @@ import type { SDKCustomTool } from '@cursor/sdk';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
-import { dispatchWorker } from '../../src/dispatch/worker-dispatch.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../../src/escalation/enqueue-max-turns-question.js';
@@ -195,12 +194,8 @@ describe('open question / operator flow integration', () => {
       permissionPipeline: new PermissionPipeline({
         policy: { allowTools: [], allowReadOnlyTools: false },
       }),
-      dispatchWorker: (options) =>
-        dispatchWorker({
-          ...options,
-          name: 'ping-1',
-          bridge,
-        }),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
     });
 
     const messages = mockSend.mock.calls.map((call) => String(call[0]));
