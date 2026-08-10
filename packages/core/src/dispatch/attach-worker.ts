@@ -1,7 +1,7 @@
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionHandler } from '../acp/types.js';
 import type { EnsembleSessionState } from '../profile/types.js';
-import { buildWorkerPrompt } from '../prompt/build-worker-prompt.js';
+import { buildWorkerAttachPrompt as compileWorkerAttachPrompt } from '../prompt/build-worker-attach-prompt.js';
 import {
   openWorkerAcpSession,
   runWorkerAcpPrompt,
@@ -57,14 +57,14 @@ export async function attachWorker(
   };
 }
 
-export function buildBootstrapWorkerPrompt(
+export function buildWorkerAttachPrompt(
   options: AttachWorkerOptions,
   session: WorkerAcpSession,
 ): string {
   if (options.resumeAcpSessionId) {
     return WORKER_RESUME_PROMPT;
   }
-  return buildWorkerPrompt({
+  return compileWorkerAttachPrompt({
     issueUrl: session.issue.url,
     kind: options.kind,
     systemPrompt: options.systemPrompt,
@@ -72,6 +72,9 @@ export function buildBootstrapWorkerPrompt(
     sessionState: options.sessionState,
   });
 }
+
+/** @deprecated 互換名。`buildWorkerAttachPrompt` を使う。 */
+export const buildBootstrapWorkerPrompt = buildWorkerAttachPrompt;
 
 export async function runAttachedWorkerPrompt(
   attached: AttachedWorker,

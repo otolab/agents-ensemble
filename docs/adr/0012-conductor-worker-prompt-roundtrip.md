@@ -164,7 +164,7 @@ harness は **初版では `session/cancel` 未実装**。優先指示で旧タ�
 ### フォロー
 
 - [architecture.md](../architecture.md) §5
-- modular-prompt の `FIXME(#36)` は Phase 3 で削除
+- modular-prompt の `FIXME(#36)` は Phase 3 で削除済み
 - `session/cancel`（preempt）、prompt 失敗時の再 attach — 必要になったら本 ADR 追記 or 別 ADR
 
 ## 実装フェーズ

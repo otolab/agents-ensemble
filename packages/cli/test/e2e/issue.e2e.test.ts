@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hasIssueE2eConfig, loadIssueE2eConfig, OPERATOR_E2E_PROFILE_PATH } from './test-config.js';
-import { runEnsembleCli, parseCliJson } from './test-helpers.js';
 
-const SMOKE_BRIEFING =
-  'E2E smoke test. worker の pong 確認後、応答に conductor-ok を含めて終了すること。';
+import { runEnsembleCli, parseCliJson } from './test-helpers.js';
 
 describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
   it('starts workers and verifies conductor sees pong', async () => {
@@ -21,8 +19,6 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
         config.conductorCwd,
         '--model',
         config.conductorModelId,
-        '--briefing',
-        SMOKE_BRIEFING,
       ],
       { timeoutMs: 300_000 },
     );
@@ -70,8 +66,6 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
         config.conductorModelId,
         '--max-turns',
         '1',
-        '--briefing',
-        'E2E operator env test。自律ターン上限後にオペレータが continue e2e と答える想定。応答に conductor-ok を含めて終了すること。',
       ],
       {
         timeoutMs: 300_000,

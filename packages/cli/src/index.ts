@@ -212,6 +212,10 @@ dispatch
         kind: options.kind,
         systemPrompt: options.systemPrompt,
         repoRoot: resolve(options.repoRoot),
+        sessionState: {
+          workers: [{ name: options.name, kind: options.kind }],
+          kinds: [options.kind],
+        },
         permissionHandler: permissionBroker.createHandler('manual-worker'),
         onUpdate: (update) => {
           const text = update.update?.content?.text;

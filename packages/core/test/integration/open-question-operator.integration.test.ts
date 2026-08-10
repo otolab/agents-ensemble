@@ -106,7 +106,7 @@ describe('open question / operator flow integration', () => {
     });
 
     expect(mockSend).toHaveBeenCalledTimes(2);
-    expect(String(mockSend.mock.calls[0]![0])).toContain('Integration open question');
+    expect(String(mockSend.mock.calls[0]![0])).toContain('Issue #1');
     const operatorMessage = String(mockSend.mock.calls[1]![0]);
     expect(operatorMessage).toContain('yes, deploy');
     expectNotLegacyFollowUpPrompt(operatorMessage);
@@ -200,7 +200,7 @@ describe('open question / operator flow integration', () => {
 
     const messages = mockSend.mock.calls.map((call) => String(call[0]));
     expect(mockSend).toHaveBeenCalledTimes(3);
-    expect(messages[0]).toContain('Integration open question');
+    expect(messages[0]).toContain('Issue #1');
     expect(messages[1]).toContain('permission 判断待ち');
     expect(messages[2]).toContain('worker 完了');
     expect(result.workerDispatches).toHaveLength(1);

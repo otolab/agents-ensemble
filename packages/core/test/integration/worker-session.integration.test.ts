@@ -58,4 +58,51 @@ describe('WorkerSession integration', () => {
     await session.stop();
     expect(session.runtime.attachedCount).toBe(0);
   });
+
+  it('accepts follow-up instructions via sendWorkerMessage', async () => {
+    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue(TEST_WORKTREE);
+
+    const bridge = await createInProcessAcpBridge();
+    const completed: WorkerDispatchResult[] = [];
+
+    const session = new WorkerSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: '/repo',
+      workers: [
+        {
+          name: 'ping-1',
+          kind: 'ping',
+          systemPrompt: PING_SYSTEM_PROMPT,
+        },
+      ],
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+      onWorkerCompleted: (result) => {
+        completed.push(result);
+      },
+    });
+
+    session.bootstrap();
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    const sent = session.sendWorkerMessage('ping-1', 'second round task');
+    expect(sent).toEqual({ status: 'sent', worker: 'ping-1' });
+
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    expect(completed).toHaveLength(2);
+    expect(completed[1]?.prompt).toBe('second round task');
+    expect(completed[1]?.promptResult.responseText).toBe('pong');
+
+    await session.stop();
+  });
 });

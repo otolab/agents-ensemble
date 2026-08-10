@@ -1,5 +1,5 @@
 import { compile } from '@modular-prompt/core';
-import type { Profile } from '../../profile/types.js';
+import type { Profile } from '../profile/types.js';
 import { ensembleContext } from './contexts/kind.js';
 import { sessionStateFromProfile } from '../profile/types.js';
 import { renderCompiledPrompt } from './render-compiled-prompt.js';
