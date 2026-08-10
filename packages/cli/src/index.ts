@@ -10,7 +10,7 @@ import {
   PermissionBroker,
   runIssueSession,
 } from '@agents-ensemble/core';
-import { promptOperatorInput } from './prompt-operator-input.js';
+import { isOperatorInputInteractive, promptOperatorInput } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
 
@@ -86,7 +86,12 @@ program
           modelId: options.model,
           maxTurns: options.maxTurns,
           workerWorktreeMode,
-          onOperatorInput: promptOperatorInput,
+          ...(isOperatorInputInteractive()
+            ? {
+                onOperatorInput: promptOperatorInput,
+                continueOnConductorError: true,
+              }
+            : {}),
           onOpenQuestionEnqueued: (question) => {
             console.error(
               `[open question] ${question.id} [${question.responseType}] ${question.question}`,

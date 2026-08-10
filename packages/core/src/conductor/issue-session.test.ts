@@ -193,6 +193,7 @@ describe('runIssueSession', () => {
       repoRoot: '/repo',
       profile: { workers: [] },
       permissionPipeline: new PermissionPipeline({}),
+      continueOnConductorError: true,
       onOperatorInput: () => {
         operatorCalls++;
         return operatorCalls === 1 ? 'retry with another model' : undefined;
@@ -204,5 +205,24 @@ describe('runIssueSession', () => {
     expect(String(mockSend.mock.calls[1]![0])).toContain('retry with another model');
     expect(result.stopReason).toBe('completed');
     expect(result.lastResult).toBe('recovered');
+  });
+
+  it('stops on conductor error when onOperatorInput exists but continueOnConductorError is false', async () => {
+    mockSend.mockResolvedValueOnce({
+      runId: 'run-1',
+      status: 'error',
+      error: { message: 'Model Blocked' },
+    });
+
+    const result = await runIssueSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: '/repo',
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      onOperatorInput: async () => undefined,
+    });
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(result.stopReason).toBe('error');
   });
 });

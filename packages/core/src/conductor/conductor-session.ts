@@ -73,6 +73,11 @@ export interface RunConductorSessionOptions {
   onOperatorInput?: (
     context: OperatorInputContext,
   ) => string | Promise<string | undefined> | undefined;
+  /**
+   * conductor `agent.send` が error でもループを継続する（TTY 等でオペレータが再試行できるとき）。
+   * `onOperatorInput` の有無とは独立。非 TTY / CI では false のままにすること。
+   */
+  continueOnConductorError?: boolean;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
   connectAcp?: ConnectWorkerAcpFn;
   /**
@@ -327,7 +332,7 @@ export async function runConductorSession(
   let sendCount = 0;
   let lastDispatchesThisTurn = 0;
   let stopReason: IssueLoopStopReason = 'completed';
-  const continueOnConductorError = !!options.onOperatorInput;
+  const continueOnConductorError = options.continueOnConductorError ?? false;
 
   try {
     let autonomousTurns = 0;
