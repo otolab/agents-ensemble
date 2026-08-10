@@ -1,5 +1,6 @@
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionDecision } from '../acp/types.js';
+import type { WorktreeRef } from '../worktree/worktree.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
 import type { SendWorkerMessageOptions, SendWorkerMessageResult } from './send-worker-message.js';
@@ -18,7 +19,8 @@ export type { SessionWorkerSpec };
 
 export interface WorkerSessionOptions {
   issueUrl: string;
-  repoRoot: string;
+  /** Conductor が bootstrap 前に resolve した作業ディレクトリ（worker ありのとき必須）。 */
+  worktree?: WorktreeRef;
   workers: SessionWorkerSpec[];
   sessionState: EnsembleSessionState;
   /** resume 時に復元する worker 名 → ACP session id。 */
@@ -84,13 +86,16 @@ export class WorkerSession {
 
   /** プロファイルで指定された worker を attach する。 */
   bootstrap(): void {
+    if (this.options.workers.length > 0 && !this.options.worktree) {
+      throw new Error('WorkerSession requires worktree when workers are configured');
+    }
     for (const worker of this.options.workers) {
       const workerId = this.runtime.start({
         name: worker.name,
         issueUrl: this.options.issueUrl,
         kind: worker.kind,
         systemPrompt: worker.systemPrompt,
-        repoRoot: this.options.repoRoot,
+        worktree: this.options.worktree!,
         sessionState: this.options.sessionState,
         resumeAcpSessionId:
           this.options.restoredWorkerSessions?.[worker.name],

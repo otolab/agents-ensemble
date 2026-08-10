@@ -1,3 +1,4 @@
+import type { WorktreeRef } from '../worktree/worktree.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
 
@@ -8,7 +9,7 @@ export interface WorkerStartParams {
   kind: string;
   systemPrompt: string;
   issueUrl: string;
-  repoRoot: string;
+  worktree: WorktreeRef;
   sessionState: EnsembleSessionState;
   resumeAcpSessionId?: string;
 }

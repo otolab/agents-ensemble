@@ -12,6 +12,7 @@ import {
 } from '@agents-ensemble/core';
 import { promptOperatorInput } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
+import { parseWorktreeMode } from './parse-worktree-mode.js';
 
 const program = new Command();
 
@@ -46,6 +47,11 @@ program
     (value) => Number.parseInt(value, 10),
     5,
   )
+  .option(
+    '--worktree <mode>',
+    'Worker workspace: isolated (default, per-issue worktree) or in-repo (main worktree)',
+    'isolated',
+  )
   .action(
     async (
       issueUrl: string,
@@ -56,9 +62,16 @@ program
         profile?: string;
         model?: string;
         maxTurns: number;
+        worktree: string;
       },
     ) => {
       try {
+        const workerWorktreeMode = parseWorktreeMode(options.worktree);
+        if (workerWorktreeMode === 'in_repo') {
+          console.error(
+            '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
+          );
+        }
         const { profile, profilePath } = await loadProfile({
           profile: options.profile,
           cwd: resolve(options.repoRoot),
@@ -72,6 +85,7 @@ program
           profilePath,
           modelId: options.model,
           maxTurns: options.maxTurns,
+          workerWorktreeMode,
           onOperatorInput: promptOperatorInput,
           onOpenQuestionEnqueued: (question) => {
             console.error(
@@ -95,6 +109,9 @@ program
             console.error(
               `[conductor send ${send.sendCount}] status=${send.status} workerDone=${send.workerDispatches} workerFailed=${send.workerFailures}`,
             );
+            if (send.status === 'error' && send.error) {
+              console.error(`[conductor error] ${send.error.message}`);
+            }
           },
         });
 
@@ -125,7 +142,7 @@ program
           ),
         );
 
-        if (result.lastRunStatus === 'error') {
+        if (result.stopReason === 'error') {
           process.exit(2);
         }
       } catch (error) {
@@ -197,12 +214,29 @@ dispatch
     'Path to the local git clone to work in',
     process.cwd(),
   )
+  .option(
+    '--worktree <mode>',
+    'Worker workspace: isolated (default) or in-repo (main worktree)',
+    'isolated',
+  )
   .action(
     async (
       issueUrl: string,
-      options: { name: string; kind: string; systemPrompt?: string; repoRoot: string },
+      options: {
+        name: string;
+        kind: string;
+        systemPrompt?: string;
+        repoRoot: string;
+        worktree: string;
+      },
     ) => {
     try {
+      const worktreeMode = parseWorktreeMode(options.worktree);
+      if (worktreeMode === 'in_repo') {
+        console.error(
+          '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
+        );
+      }
       const permissionBroker = new PermissionBroker({
         onAsk: promptPermissionDecision,
       });
@@ -212,6 +246,7 @@ dispatch
         kind: options.kind,
         systemPrompt: options.systemPrompt,
         repoRoot: resolve(options.repoRoot),
+        worktreeMode,
         sessionState: {
           workers: [{ name: options.name, kind: options.kind }],
           kinds: [options.kind],

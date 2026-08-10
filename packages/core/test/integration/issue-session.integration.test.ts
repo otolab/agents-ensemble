@@ -48,7 +48,7 @@ describe.skipIf(!hasConductorAuth())('runIssueSession integration', () => {
       labels: [],
       comments: [],
     });
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue(TEST_WORKTREE);
+    vi.spyOn(worktreeModule, 'resolveWorkerWorkspace').mockResolvedValue(TEST_WORKTREE);
 
     const bridge = await createInProcessAcpBridge();
 

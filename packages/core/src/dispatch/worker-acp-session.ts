@@ -2,9 +2,8 @@ import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import { AcpBridge } from '../acp/acp-bridge.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionHandler } from '../acp/types.js';
-import { parseIssueUrl } from '../issue/issue-ref.js';
 import type { IssueRef } from '../issue/issue-ref.js';
-import { createWorkerWorktree, type WorktreeRef } from '../worktree/worktree.js';
+import type { WorktreeRef } from '../worktree/worktree.js';
 
 export interface ConnectWorkerAcpOptions {
   cwd: string;
@@ -18,7 +17,8 @@ export type ConnectWorkerAcpFn = (
 
 export interface OpenWorkerAcpSessionOptions {
   issueUrl: string;
-  repoRoot: string;
+  /** Conductor（または one-shot dispatch）が事前に resolve した作業ディレクトリ。 */
+  worktree: WorktreeRef;
   resumeAcpSessionId?: string;
   bridge?: AcpBridge;
   connectAcp?: ConnectWorkerAcpFn;
@@ -40,8 +40,8 @@ export interface WorkerAcpSession {
 export async function openWorkerAcpSession(
   options: OpenWorkerAcpSessionOptions,
 ): Promise<WorkerAcpSession> {
-  const issue = parseIssueUrl(options.issueUrl);
-  const worktree = await createWorkerWorktree(options.repoRoot, issue);
+  const worktree = options.worktree;
+  const issue = worktree.issue;
 
   let ownsBridge = false;
   let bridge = options.bridge;

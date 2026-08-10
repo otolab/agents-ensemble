@@ -103,8 +103,15 @@ ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
 # または --issue-url <url> --repo-root <path> で worktree を解決
 
 # Stage 2: conductor オーケストレーション
-ensemble issue <issue-url> --repo-root <path> [--profile <name>] [--resume <agentId>] ...
+ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--profile <name>] [--resume <agentId>] ...
 ```
+
+**worker 作業ディレクトリ**（`--worktree`）は Conductor セッション開始時に **1 回だけ** resolve し、profile の全 worker が共有する。
+
+| 値 | 意味 |
+|----|------|
+| `isolated`（既定） | Issue 専用 worktree（`.ensemble/worktrees/issue-N`） |
+| `in-repo` | メイン worktree で直接作業する **特別モード** |
 
 ### セッションの停止と再開
 

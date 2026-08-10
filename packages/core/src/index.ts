@@ -75,10 +75,12 @@ export {
   workerBranchName,
   workerWorktreePath,
   resolveWorkerWorktree,
+  resolveWorkerWorkspace,
+  resolveInRepoWorkspace,
   createWorkerWorktree,
   listWorktrees,
 } from './worktree/worktree.js';
-export type { WorktreeRef } from './worktree/worktree.js';
+export type { WorktreeRef, WorkerWorktreeMode } from './worktree/worktree.js';
 
 export { buildWorkerPrompt } from './prompt/build-worker-prompt.js';
 export type { WorkerPromptOptions } from './prompt/build-worker-prompt.js';

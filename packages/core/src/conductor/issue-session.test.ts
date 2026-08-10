@@ -154,4 +154,55 @@ describe('runIssueSession', () => {
       ),
     ).toBe(true);
   });
+
+  it('stops on conductor error without operator input', async () => {
+    mockSend.mockResolvedValueOnce({
+      runId: 'run-1',
+      status: 'error',
+      error: { message: 'Model Blocked' },
+    });
+
+    const result = await runIssueSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: '/repo',
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+    });
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(result.stopReason).toBe('error');
+    expect(result.lastError?.message).toBe('Model Blocked');
+  });
+
+  it('continues after conductor error when operator input is available', async () => {
+    mockSend
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'error',
+        error: { message: 'Model Blocked' },
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'recovered',
+      });
+
+    let operatorCalls = 0;
+    const result = await runIssueSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: '/repo',
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      onOperatorInput: () => {
+        operatorCalls++;
+        return operatorCalls === 1 ? 'retry with another model' : undefined;
+      },
+    });
+
+    expect(operatorCalls).toBeGreaterThanOrEqual(1);
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(String(mockSend.mock.calls[1]![0])).toContain('retry with another model');
+    expect(result.stopReason).toBe('completed');
+    expect(result.lastResult).toBe('recovered');
+  });
 });

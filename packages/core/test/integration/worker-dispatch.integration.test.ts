@@ -14,7 +14,7 @@ describe('dispatchWorker integration', () => {
   });
 
   it('runs in-process Fake ACP and returns pong in responseText', async () => {
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue(TEST_WORKTREE);
+    vi.spyOn(worktreeModule, 'resolveWorkerWorkspace').mockResolvedValue(TEST_WORKTREE);
 
     const bridge = await createInProcessAcpBridge();
     const result = await dispatchWorker({

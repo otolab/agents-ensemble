@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkerDispatchResult } from '../../src/dispatch/worker-dispatch.js';
 import { WorkerSession } from '../../src/runtime/worker-session.js';
-import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
   createInProcessAcpBridge,
   PING_SYSTEM_PROMPT,
@@ -15,14 +14,12 @@ describe('WorkerSession integration', () => {
   });
 
   it('attaches worker, completes bootstrap via inbox, and stays resident until stop', async () => {
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue(TEST_WORKTREE);
-
     const bridge = await createInProcessAcpBridge();
     const completed: WorkerDispatchResult[] = [];
 
     const session = new WorkerSession({
       issueUrl: TEST_ISSUE.url,
-      repoRoot: '/repo',
+      worktree: TEST_WORKTREE,
       workers: [
         {
           name: 'ping-1',
@@ -60,14 +57,12 @@ describe('WorkerSession integration', () => {
   });
 
   it('accepts follow-up instructions via sendWorkerMessage', async () => {
-    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue(TEST_WORKTREE);
-
     const bridge = await createInProcessAcpBridge();
     const completed: WorkerDispatchResult[] = [];
 
     const session = new WorkerSession({
       issueUrl: TEST_ISSUE.url,
-      repoRoot: '/repo',
+      worktree: TEST_WORKTREE,
       workers: [
         {
           name: 'ping-1',

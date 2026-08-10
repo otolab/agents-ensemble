@@ -2,6 +2,7 @@ import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionHandler } from '../acp/types.js';
 import type { EnsembleSessionState } from '../profile/types.js';
 import { buildWorkerAttachPrompt as compileWorkerAttachPrompt } from '../prompt/build-worker-attach-prompt.js';
+import type { WorktreeRef } from '../worktree/worktree.js';
 import {
   openWorkerAcpSession,
   runWorkerAcpPrompt,
@@ -22,7 +23,7 @@ export interface AttachWorkerOptions {
   kind: string;
   systemPrompt?: string;
   sessionState: EnsembleSessionState;
-  repoRoot: string;
+  worktree: WorktreeRef;
   resumeAcpSessionId?: string;
   spawn?: SpawnAcpProcessOptions;
   connectAcp?: ConnectWorkerAcpFn;
@@ -42,7 +43,7 @@ export async function attachWorker(
 ): Promise<AttachedWorker> {
   const session = await openWorkerAcpSession({
     issueUrl: options.issueUrl,
-    repoRoot: options.repoRoot,
+    worktree: options.worktree,
     resumeAcpSessionId: options.resumeAcpSessionId,
     connectAcp: options.connectAcp,
     spawn: options.spawn,
@@ -69,6 +70,7 @@ export function buildWorkerAttachPrompt(
     kind: options.kind,
     systemPrompt: options.systemPrompt,
     worktreePath: session.worktree.path,
+    worktreeInRepo: session.worktree.inRepo,
     sessionState: options.sessionState,
   });
 }

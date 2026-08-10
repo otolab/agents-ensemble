@@ -4,10 +4,15 @@ import { join, resolve } from 'node:path';
 import type { IssueRef } from '../issue/issue-ref.js';
 import { runGit } from '../git/run-git.js';
 
+/** `isolated`: Issue 専用 worktree（既定）。`in_repo`: メイン worktree で直接作業する特別モード。 */
+export type WorkerWorktreeMode = 'isolated' | 'in_repo';
+
 export interface WorktreeRef {
   path: string;
   branch: string;
   issue: IssueRef;
+  /** メイン worktree での直接作業（isolated worktree を使わない）。 */
+  inRepo?: boolean;
 }
 
 export function workerBranchName(issue: Pick<IssueRef, 'number'>): string {
@@ -35,6 +40,28 @@ export async function resolveWorkerWorktree(
   return undefined;
 }
 
+/** Conductor / one-shot dispatch が Issue 向け作業ディレクトリを 1 回だけ決める。 */
+export async function resolveWorkerWorkspace(
+  repoRoot: string,
+  issue: IssueRef,
+  mode: WorkerWorktreeMode = 'isolated',
+): Promise<WorktreeRef> {
+  if (mode === 'in_repo') {
+    return resolveInRepoWorkspace(repoRoot, issue);
+  }
+  return createWorkerWorktree(repoRoot, issue);
+}
+
+/** メイン worktree（repo root）で直接作業する。通常の isolated worktree は作らない。 */
+export async function resolveInRepoWorkspace(
+  repoRoot: string,
+  issue: IssueRef,
+): Promise<WorktreeRef> {
+  const path = resolve(await realpathSafe(repoRoot));
+  const branch = await currentBranch(repoRoot);
+  return { path, branch, issue, inRepo: true };
+}
+
 export async function createWorkerWorktree(
   repoRoot: string,
   issue: IssueRef,
@@ -47,10 +74,29 @@ export async function createWorkerWorktree(
   await mkdir(join(repoRoot, '.ensemble', 'worktrees'), { recursive: true });
 
   const branchExists = await gitBranchExists(repoRoot, branch);
-  if (branchExists) {
-    await runGit(['worktree', 'add', path, branch], repoRoot);
-  } else {
-    await runGit(['worktree', 'add', '-b', branch, path], repoRoot);
+  try {
+    if (branchExists) {
+      await runGit(['worktree', 'add', path, branch], repoRoot);
+    } else {
+      await runGit(['worktree', 'add', '-b', branch, path], repoRoot);
+    }
+  } catch (error) {
+    const recovered = await resolveWorkerWorktree(repoRoot, issue);
+    if (recovered) return recovered;
+
+    const branchNowExists = await gitBranchExists(repoRoot, branch);
+    if (!branchExists && branchNowExists) {
+      try {
+        await runGit(['worktree', 'add', path, branch], repoRoot);
+        return { path, branch, issue };
+      } catch (retryError) {
+        const recoveredAfterRetry = await resolveWorkerWorktree(repoRoot, issue);
+        if (recoveredAfterRetry) return recoveredAfterRetry;
+        throw retryError;
+      }
+    }
+
+    throw error;
   }
 
   return { path, branch, issue };
@@ -90,6 +136,11 @@ export async function listWorktrees(repoRoot: string): Promise<ListedWorktree[]>
 
   flush();
   return entries;
+}
+
+async function currentBranch(repoRoot: string): Promise<string> {
+  const { stdout } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+  return stdout.trim();
 }
 
 async function gitBranchExists(repoRoot: string, branch: string): Promise<boolean> {

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import { runGit } from '../git/run-git.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
 import {
   createWorkerWorktree,
+  resolveInRepoWorkspace,
   resolveWorkerWorktree,
   workerBranchName,
   workerWorktreePath,
@@ -53,5 +54,21 @@ describe('createWorkerWorktree', () => {
     await createWorkerWorktree(repoRoot, issue);
     const resolved = await resolveWorkerWorktree(repoRoot, issue);
     expect(resolved?.path).toBe(resolve(workerWorktreePath(repoRoot, issue)));
+  });
+
+  it('attaches worktree when branch already exists', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/10');
+    await runGit(['branch', workerBranchName(issue)], repoRoot);
+    const worktree = await createWorkerWorktree(repoRoot, issue);
+    expect(worktree.path).toBe(resolve(workerWorktreePath(repoRoot, issue)));
+  });
+
+  it('uses repo root in in_repo mode', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/11');
+    const { stdout } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+    const worktree = await resolveInRepoWorkspace(repoRoot, issue);
+    expect(worktree.path).toBe(await realpath(repoRoot));
+    expect(worktree.inRepo).toBe(true);
+    expect(worktree.branch).toBe(stdout.trim());
   });
 });

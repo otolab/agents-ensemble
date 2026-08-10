@@ -4,7 +4,6 @@ import type { WorkerDispatchResult } from '../../../src/dispatch/worker-dispatch
 import { PermissionPipeline } from '../../../src/permission/permission-pipeline.js';
 import { WorkerSession } from '../../../src/runtime/worker-session.js';
 import type { WorkerFailureRecord } from '../../../src/runtime/types.js';
-import * as worktreeModule from '../../../src/worktree/worktree.js';
 import {
   createInProcessAcpBridge,
   PING_SYSTEM_PROMPT,
@@ -52,8 +51,6 @@ async function waitForPending(
 export async function runPermissionWorkerSession(
   options: PermissionScenarioOptions = {},
 ): Promise<PermissionScenarioResult> {
-  vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue(TEST_WORKTREE);
-
   const permissionDecisions: PermissionDecision[] = [];
   const completed: WorkerDispatchResult[] = [];
   const failures: WorkerFailureRecord[] = [];
@@ -64,7 +61,7 @@ export async function runPermissionWorkerSession(
 
   const session = new WorkerSession({
     issueUrl: TEST_ISSUE.url,
-    repoRoot: '/repo',
+    worktree: TEST_WORKTREE,
     workers: [
       {
         name: 'ping-1',

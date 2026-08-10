@@ -11,6 +11,7 @@ export interface EnsembleContext extends EnsembleSessionState {
 /** worker dispatch 時に instructions へ載せる実行時データ。 */
 export type WorkerDispatchContext = EnsembleContext & {
   worktreePath?: string;
+  worktreeInRepo?: boolean;
 };
 
 export function ensembleContext(
