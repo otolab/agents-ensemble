@@ -152,7 +152,7 @@ await conductor.send(operatorMessage);
 await conductor.send(workerStatusUpdate);
 ```
 
-**SDK にチャット UI はない。** CLI の `onOperatorInput` はオペレータ発話を集め、ConductorSession がイベント列経由で `agent.send` に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
+**SDK にチャット UI はない。** CLI（TTY）では `bindAsyncOperatorInput` が readline を非ブロッキングで購読し、`submitOperatorInput` 経由で `operator.message` をキューへ積む。テスト向けの同期 `onOperatorInput` も残す。ConductorSession がイベント列経由で `agent.send` に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
 
 conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。
 
@@ -256,7 +256,7 @@ worker (ACP)                    conductor (SDK)              オペレータ
      │                               │  段2: pending → イベント列 + resolve_permission
      │                               │  段3: 要確認 → ask_human（登録のみ・非ブロック）
      │                               │         OpenQuestionRegistry に enqueue
-     │                               │  次ターン onOperatorInput ◄──────────────│
+     │                               │  operator.message（任意タイミング）◄──────│
      │                               │  （@inq:id 回答 or 自由チャット）          │
      │                               │  answer_open_question（チャット済み代行記録）│
      │                               │  resolve_permission                      │
@@ -295,11 +295,12 @@ worker (ACP)                    conductor (SDK)              オペレータ
 - `WorkerSession` / `ConductorSession` が対。worker 由来・operator 由来のイベントは **1 本の列** に集約し、1 イベント = 1 `agent.send`（初回のみ system + ブリーフィング）
 
 - `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）
-- 未回答 open question あり → conductor を送らず `onOperatorInput` 待ち
+- **TTY（本番 CLI）**: `bindOperatorInput` 使用時はループをブロックせず、未回答 open question があっても worker イベント等を処理し続ける。オペレータ入力は `operator.message` としてキューに載る
+- **同期 `onOperatorInput`（テスト）**: 未回答 open question あり → `collectOperatorInput` で待ち、回答後に conductor を再開
 - 自律ターン上限到達 → orchestrator が「次どうする？」（`source: max_turns`）を自動登録して待機
 - 終了条件: error / 実行中 worker / pending permission / **未回答 open question** がある間は継続
 
-CLI: `promptOperatorInput`（TTY）、非 TTY は `ENSEMBLE_OPERATOR_MESSAGE`。ログ・表示の正本は [session-logging.md](session-logging.md)。対話モデルは [ADR 0008](adr/0008-human-dialogue-open-questions.md)。
+CLI: `bindAsyncOperatorInput`（TTY・非ブロッキング）、非 TTY は `ENSEMBLE_OPERATOR_MESSAGE`。ログ・表示の正本は [session-logging.md](session-logging.md)。対話モデルは [ADR 0008](adr/0008-human-dialogue-open-questions.md)。
 
 ---
 
