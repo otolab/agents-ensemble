@@ -12,7 +12,7 @@ import {
   runIssueSession,
   SessionLogger,
 } from '@agents-ensemble/core';
-import { bindAsyncOperatorInput } from './async-operator-input.js';
+import { bindAsyncOperatorInput, notifyOperatorInputReprompt } from './async-operator-input.js';
 import { formatModelsListJson, formatModelsListText } from './format-models-list.js';
 import { formatIssueSessionSummaryJson } from './format-session-summary.js';
 import { isOperatorInputInteractive } from './prompt-operator-input.js';
@@ -110,6 +110,7 @@ program
             console.error(
               `[open question] ${question.id} [${question.responseType}] ${question.question}`,
             );
+            notifyOperatorInputReprompt();
           },
           onEscalated: (record) => {
             console.error(`[operator answer] ${record.question} → ${record.answer}`);

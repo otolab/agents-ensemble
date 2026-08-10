@@ -4,12 +4,20 @@ import type { OperatorInputBindingApi, OperatorInputContext } from '@agents-ense
 
 const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
 
-function writeOpenQuestionHint(context: OperatorInputContext): void {
+let activeReprompt: (() => void) | undefined;
+
+/** open question 追加時に TTY プロンプト直前の案内を更新する。 */
+export function notifyOperatorInputReprompt(): void {
+  activeReprompt?.();
+}
+
+function writeBeforePrompt(context: OperatorInputContext): void {
   const { openQuestions } = context;
   if (openQuestions.length === 0) {
     return;
   }
-  stderr.write('\n未回答のオペレータ質問:\n');
+  stderr.write('\nオペレータの入力が必要です（@inq:<id> <回答>）:\n');
+  stderr.write('未回答のオペレータ質問:\n');
   for (const question of openQuestions) {
     stderr.write(
       `- ${question.id} [${question.responseType}] ${question.question}\n`,
@@ -33,26 +41,33 @@ export function bindAsyncOperatorInput(api: OperatorInputBindingApi): () => void
   }
 
   stderr.write(
-    '\nオペレータ入力: 任意のタイミングで入力して Enter（@inq:<id> <回答>）。conductor は継続します。\n',
+    '\nオペレータ入力: 任意のタイミングで入力して Enter。conductor は継続します。\n',
   );
-  writeOpenQuestionHint(api.getContext());
 
   const rl = readline.createInterface({ input, output, terminal: true });
   rl.setPrompt('operator> ');
+
+  const showPrompt = () => {
+    writeBeforePrompt(api.getContext());
+    rl.prompt();
+  };
 
   const onLine = (line: string) => {
     const trimmed = line.trim();
     if (trimmed) {
       api.submit(trimmed);
-      writeOpenQuestionHint(api.getContext());
     }
-    rl.prompt();
+    showPrompt();
   };
 
   rl.on('line', onLine);
-  rl.prompt();
+  activeReprompt = showPrompt;
+  showPrompt();
 
   return () => {
+    if (activeReprompt === showPrompt) {
+      activeReprompt = undefined;
+    }
     rl.off('line', onLine);
     rl.close();
   };
