@@ -30,6 +30,7 @@ import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js
 import { ConductorAgent } from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
 import { formatSessionEventForConductor } from './session/format-session-event.js';
+import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import type { SessionEvent } from './session/session-event.js';
 import { isConductorSendEvent } from './session/session-event.js';
@@ -103,6 +104,8 @@ export interface RunConductorSessionOptions {
   }) => void;
   onEscalated?: (record: EscalationRecord) => void;
   onOpenQuestionEnqueued?: (question: OpenQuestion) => void;
+  /** テスト用。未指定時は内部で生成する。 */
+  sessionLogger?: SessionLogger;
   /** テスト用。未指定時は内部 AbortController に SIGINT/SIGTERM を結線する。 */
   shutdownSignal?: AbortSignal;
   /** デフォルト true。`shutdownSignal` 未指定時のみ有効。 */
@@ -129,8 +132,13 @@ export async function runConductorSession(
   options: RunConductorSessionOptions,
 ): Promise<ConductorSessionResult> {
   const maxTurns = options.maxTurns ?? DEFAULT_MAX_ISSUE_TURNS;
-  const workerDispatches: WorkerDispatchResult[] = [];
-  const workerFailures: WorkerFailureRecord[] = [];
+  const sessionLogger =
+    options.sessionLogger ??
+    new SessionLogger({
+      issueUrl: options.issueUrl,
+      repoRoot: options.repoRoot,
+    });
+  attachLegacySessionCallbacks(sessionLogger, options);
   const escalations: EscalationRecord[] = [];
   const openQuestions = new OpenQuestionRegistry();
   const eventQueue = new SessionEventQueue();
@@ -197,6 +205,15 @@ export async function runConductorSession(
         )
       : undefined);
 
+  if (workerWorktree) {
+    sessionLogger.emit({
+      type: 'harness.worktree',
+      path: workerWorktree.path,
+      branch: workerWorktree.branch,
+      mode: options.workerWorktreeMode ?? 'isolated',
+    });
+  }
+
   const workerSession = new WorkerSession({
     issueUrl: options.issueUrl,
     ...(workerWorktree ? { worktree: workerWorktree } : {}),
@@ -220,16 +237,14 @@ export async function runConductorSession(
       return null;
     },
     onWorkerCompleted: (result) => {
-      workerDispatches.push(result);
+      sessionLogger.emit({ type: 'worker.round', dispatch: result });
       workerSessions.set(result.name, result.acpSessionId);
       eventQueue.enqueue({ type: 'worker.completed', result });
-      options.onWorkerDispatched?.(result);
       scheduleSidecarFlush();
     },
     onWorkerFailed: (failure) => {
-      workerFailures.push(failure);
+      sessionLogger.emit({ type: 'worker.failed', failure });
       eventQueue.enqueue({ type: 'worker.failed', failure });
-      options.onWorkerFailed?.(failure);
     },
   });
 
@@ -343,8 +358,8 @@ export async function runConductorSession(
       conductor,
       workerSession,
       permissionPipeline,
-      workerDispatches,
-      workerFailures,
+      workerDispatches: sessionLogger.workerDispatches,
+      workerFailures: sessionLogger.workerFailures,
       autonomousTurns,
       maxTurns,
       onSendComplete: recordSendComplete,
@@ -361,6 +376,7 @@ export async function runConductorSession(
           openQuestions,
           escalations,
           eventQueue,
+          sessionLogger,
         });
         if (!operatorPhase.received) {
           continue;
@@ -377,8 +393,8 @@ export async function runConductorSession(
           autonomousTurns,
           maxTurns,
           turnCount: sendCount,
-          workerDispatchCount: workerDispatches.length,
-          workerFailureCount: workerFailures.length,
+          workerDispatchCount: sessionLogger.workerDispatches.length,
+          workerFailureCount: sessionLogger.workerFailures.length,
           lastResult: lastSendResult.result,
         }, (question) => {
           options.onOpenQuestionEnqueued?.(question);
@@ -395,6 +411,7 @@ export async function runConductorSession(
           openQuestions,
           escalations,
           eventQueue,
+          sessionLogger,
         });
         if (operatorPhase.received) {
           autonomousTurns = 0;
@@ -442,8 +459,8 @@ export async function runConductorSession(
       lastSendResult = await runEventConductorSend({
         message: formatSessionEventForConductor(event),
         conductor,
-        workerDispatches,
-        workerFailures,
+        workerDispatches: sessionLogger.workerDispatches,
+        workerFailures: sessionLogger.workerFailures,
         sendCount,
         onSendComplete: recordSendComplete,
       });
@@ -480,25 +497,26 @@ export async function runConductorSession(
       sendCount = info.sendCount;
       lastDispatchesThisTurn =
         info.workerDispatches + info.workerFailures;
-      options.onSendComplete?.(info);
+      sessionLogger.emit({
+        type: 'conductor.send',
+        sendCount: info.sendCount,
+        runId: info.runId,
+        status: info.status,
+        result: info.result,
+        error: info.error,
+        workerDispatches: info.workerDispatches,
+        workerFailures: info.workerFailures,
+      });
       scheduleSidecarFlush();
     }
 
     function buildResult(): ConductorSessionResult {
-      return {
+      sessionLogger.finish(stopReason);
+      return sessionLogger.snapshot({
         agentId: conductor.agentId,
-        issueUrl: options.issueUrl,
-        repoRoot: options.repoRoot,
-        sendCount,
-        stopReason,
-        lastRunStatus: lastSendResult.status,
-        lastResult: lastSendResult.result,
-        lastError: lastSendResult.error,
-        workerDispatches,
-        workerFailures,
         escalations,
         openQuestions: openQuestions.list(),
-      };
+      });
     }
   } finally {
     unregisterProcessSignalHandlers();
@@ -548,6 +566,41 @@ function rejectAllPendingPermissions(
   }
 }
 
+function attachLegacySessionCallbacks(
+  logger: SessionLogger,
+  options: RunConductorSessionOptions,
+): void {
+  if (
+    !options.onSendComplete &&
+    !options.onWorkerDispatched &&
+    !options.onWorkerFailed
+  ) {
+    return;
+  }
+
+  logger.subscribe((event) => {
+    switch (event.type) {
+      case 'conductor.send':
+        options.onSendComplete?.({
+          sendCount: event.sendCount,
+          runId: event.runId,
+          status: event.status as ConductorSendResult['status'],
+          result: event.result,
+          error: event.error,
+          workerDispatches: event.workerDispatches,
+          workerFailures: event.workerFailures,
+        });
+        break;
+      case 'worker.round':
+        options.onWorkerDispatched?.(event.dispatch);
+        break;
+      case 'worker.failed':
+        options.onWorkerFailed?.(event.failure);
+        break;
+    }
+  });
+}
+
 async function collectOperatorInput(input: {
   conductorTurn: number;
   autonomousTurns: number;
@@ -556,6 +609,7 @@ async function collectOperatorInput(input: {
   openQuestions: OpenQuestionRegistry;
   escalations: EscalationRecord[];
   eventQueue: SessionEventQueue;
+  sessionLogger: SessionLogger;
 }): Promise<{ received: boolean }> {
   if (!input.options.onOperatorInput) {
     return { received: false };
@@ -585,6 +639,11 @@ async function collectOperatorInput(input: {
   }
 
   if (text) {
+    input.sessionLogger.emit({
+      type: 'operator.input',
+      conductorTurn: input.conductorTurn,
+      text,
+    });
     input.eventQueue.enqueue({ type: 'operator.message', text });
   }
 

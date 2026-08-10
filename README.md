@@ -113,6 +113,15 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 | `isolated`（既定） | Issue 専用 worktree（`.ensemble/worktrees/issue-N`） |
 | `in-repo` | メイン worktree で直接作業する **特別モード** |
 
+**CLI 出力（TTY 時）**
+
+| 出力先 | 内容 |
+|--------|------|
+| **stdout** | 終了時の **SessionSummary** JSON（e2e / スクリプト向け）。TTY では `operator>` / `conductor>` の対話もここに出る |
+| **stderr** | harness テレメトリ（`[harness]` / `[open question]` 等）。開発者向け |
+
+終了 JSON は会話ログではなく exit report（`sendCount`・`stopReason`・`workerResponses` 等の混合物）。resume の正本は sidecar。
+
 ### セッションの停止と再開
 
 `ensemble issue` は harness 状態を **sidecar JSON** に永続化する。正常終了・エラー・`Ctrl+C`（SIGINT）/ `SIGTERM` いずれでも best-effort で flush する（状態変化時の増分 flush あり）。
