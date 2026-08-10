@@ -167,6 +167,15 @@ export {
 export {
   formatSessionEventForConductor,
 } from './conductor/session/format-session-event.js';
+export {
+  SessionLogger,
+} from './conductor/session/session-logger.js';
+export type {
+  SessionSummary,
+  SessionLogEvent,
+  SessionLogSink,
+  SessionLoggerOptions,
+} from './conductor/session/session-logger.js';
 export type {
   SessionEvent,
   OperatorMessageEvent,

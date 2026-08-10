@@ -2,7 +2,7 @@
 
 このリポジトリで作業・レビューするエージェント（および人間）向けの共通指針。
 
-技術構成の正本は [docs/architecture.md](docs/architecture.md)。設計判断の履歴は [docs/adr/](docs/adr/README.md)。
+技術構成の正本は [docs/architecture.md](docs/architecture.md)。セッションのログ・表示は [docs/session-logging.md](docs/session-logging.md)。設計判断の履歴は [docs/adr/](docs/adr/README.md)。
 
 ## レビュー方針
 

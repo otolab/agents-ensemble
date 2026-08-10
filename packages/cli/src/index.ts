@@ -9,10 +9,13 @@ import {
   loginConductor,
   PermissionBroker,
   runIssueSession,
+  SessionLogger,
 } from '@agents-ensemble/core';
+import { formatIssueSessionSummaryJson } from './format-session-summary.js';
 import { isOperatorInputInteractive, promptOperatorInput } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
+import { createDialogueSink, createHarnessSink } from './session-sinks.js';
 
 const program = new Command();
 
@@ -76,9 +79,16 @@ program
           profile: options.profile,
           cwd: resolve(options.repoRoot),
         });
+        const repoRoot = resolve(options.repoRoot);
+        const sessionLogger = new SessionLogger({ issueUrl, repoRoot });
+        sessionLogger.subscribe(createHarnessSink());
+        const interactive = isOperatorInputInteractive();
+        if (interactive) {
+          sessionLogger.subscribe(createDialogueSink());
+        }
         const result = await runIssueSession({
           issueUrl,
-          repoRoot: resolve(options.repoRoot),
+          repoRoot,
           conductorCwd: resolve(options.conductorCwd),
           resumeAgentId: options.resume,
           profile,
@@ -86,7 +96,8 @@ program
           modelId: options.model,
           maxTurns: options.maxTurns,
           workerWorktreeMode,
-          ...(isOperatorInputInteractive()
+          sessionLogger,
+          ...(interactive
             ? {
                 onOperatorInput: promptOperatorInput,
                 continueOnConductorError: true,
@@ -100,52 +111,9 @@ program
           onEscalated: (record) => {
             console.error(`[operator answer] ${record.question} → ${record.answer}`);
           },
-          onWorkerDispatched: (dispatch) => {
-            console.error(
-              `[worker completed] ${dispatch.worktree.path} (${dispatch.promptResult.stopReason})`,
-            );
-          },
-          onWorkerFailed: (failure) => {
-            console.error(
-              `[worker failed] ${failure.name} (${failure.kind}) ${failure.issueUrl}: ${failure.error}`,
-            );
-          },
-          onSendComplete: (send) => {
-            console.error(
-              `[conductor send ${send.sendCount}] status=${send.status} workerDone=${send.workerDispatches} workerFailed=${send.workerFailures}`,
-            );
-            if (send.status === 'error' && send.error) {
-              console.error(`[conductor error] ${send.error.message}`);
-            }
-          },
         });
 
-        console.log(
-          JSON.stringify(
-            {
-              agentId: result.agentId,
-              issueUrl: result.issueUrl,
-              repoRoot: result.repoRoot,
-              sendCount: result.sendCount,
-              stopReason: result.stopReason,
-              lastRunStatus: result.lastRunStatus,
-              lastResult: result.lastResult,
-              lastError: result.lastError,
-              workerDispatchCount: result.workerDispatches.length,
-              workerFailureCount: result.workerFailures.length,
-              escalationCount: result.escalations.length,
-              openQuestionCount: result.openQuestions.length,
-              workerResponses: result.workerDispatches.map((dispatch) => ({
-                name: dispatch.name,
-                kind: dispatch.kind,
-                responseText: dispatch.promptResult.responseText,
-                stopReason: dispatch.promptResult.stopReason,
-              })),
-            },
-            null,
-            2,
-          ),
-        );
+        console.log(formatIssueSessionSummaryJson(result));
 
         if (result.stopReason === 'error') {
           process.exit(2);
