@@ -1,4 +1,4 @@
-# ADR 0012: conductor → worker 作業指示（`prompt_worker` / ACP 往復）
+# ADR 0012: conductor – worker メッセージング（常駐 ACP / sendWorkerMessage）
 
 - Status: proposed
 - Date: 2026-08-10
@@ -19,27 +19,34 @@
 
 複数 worker が **非同期・並行**で上記を **数往復**する。
 
+### 用語（`dispatch` ではない）
+
+| 避ける語 | 採用する語 | 意味 |
+|----------|-----------|------|
+| dispatch（常駐 worker 文脈） | **attach** / **startWorker** | ensemble 開始時に `agent acp` を起動し session を確立 |
+| dispatch（指示） | **sendWorkerMessage** | 既存 worker session へ user メッセージ（ACP `session/prompt`）を送る |
+| — | **roundCompleted** | 1 回の `session/prompt` が終了（`worker.completed` イベント） |
+
+conductor 側の SDK ツール名はプロンプト都合で **`prompt_worker`** のままにしてよい。harness 内部 API は **`sendWorkerMessage`** とする。
+
+CLI の `ensemble dispatch worker`（one-shot）は **`runOneShotWorker`** 相当として **常駐モデルとは別経路**のまま残す。
+
 ### 現状ギャップ（#36）
 
-| 経路 | 状態 |
+| 問題 | 詳細 |
 |------|------|
-| worker → conductor（permission） | 実装済み |
-| worker → conductor（`worker.completed` / `failed`） | 実装済み（ACP prompt 終了通知） |
-| conductor → worker（bootstrap 初回 prompt） | 実装済み（harness 固定文） |
-| conductor → worker（**判断後の作業指示**） | **未実装** |
-| worker の作業報告 | Issue / PR（harness 外・設計どおり） |
-| conductor の進捗確認 | Issue 閲覧（SDK ツール依存）+ `worker.completed` YAML |
-
-bootstrap 後は ACP bridge が閉じ、`acpSessionId` は sidecar にあるが **2 回目の `session/prompt` 経路がない**。
+| **プロセス非常駐** | bootstrap の 1 `session/prompt` 終了後、`bridge.close()` で **`agent acp` 子プロセスが kill される**。ensemble 存続中に worker 実体がいない |
+| **再送経路なし** | `acpSessionId` は sidecar にあるが、2 回目の `session/prompt` を送る harness API がない |
+| **用語のずれ** | `dispatch` は one-shot 起動のイメージ。ユースケースは **sendMessage**（会話への user ターン追加）に近い |
 
 ### 検討した選択肢
 
 | 案 | 概要 | 不採用理由 |
 |----|------|------------|
-| A. Issue 更新をトリガーに worker を動かす | Issue webhook / ポーリング | Issue は正本でありトリガーではない（team.md）。harness が複雑化 |
-| B. conductor が worker ACP を直接握る | SDK から ACP RPC | 二系統の責務が conductor LLM に漏れる |
-| **C. harness API + conductor custom tool（採用）** | `prompt_worker` → `WorkerSession.promptWorker` → `session/prompt` | ADR 0002 のスター型・0009 のイベント列と整合 |
-| D. bootstrap 1 本で走り切り | 現状に近い | 常駐 worker + 数往復のユースケースを満たせない |
+| A. Issue 更新をトリガー | webhook / ポーリング | Issue は正本でありトリガーではない |
+| B. prompt ごとに connect → close（論理常駐） | `session/load` のみ再利用 | 待機中に worker プロセスが存在しない。team.md の「常駐」と不一致 |
+| **C. プロセス常駐 + sendWorkerMessage（採用）** | ensemble 中 `agent acp` を維持。`session/prompt` で往復 | ユースケース・ACP モデルと整合 |
+| D. bootstrap 1 本で走り切り | 現状 | 数往復できない |
 
 ## Decision
 
@@ -47,82 +54,128 @@ bootstrap 後は ACP bridge が閉じ、`acpSessionId` は sidecar にあるが 
 
 | 層 | 用途 | 実装 |
 |----|------|------|
-| **同期（harness）** | 動かす・許可する・ラウンド終了を知る | ACP `session/prompt`, `session/request_permission`, inbox → イベント列 |
+| **同期（harness）** | 動かす・許可する・ラウンド終了を知る | ACP `session/prompt`, `session/request_permission`, inbox / outbound キュー |
 | **非同期（Issue / PR）** | 作業内容・進捗・論点の正本 | worker / conductor が GitHub ツールで読み書き。harness は仲介しない |
 
-**Issue に書いただけでは worker は動かない。** 作業のトリガーは harness 同期経路（`prompt_worker`）のみ。
+**Issue に書いただけでは worker は動かない。** トリガーは harness 同期経路（`sendWorkerMessage`）のみ。
 
-### conductor → worker: `prompt_worker`
+### harness の二つのキュー（1 対多）
 
-1. conductor LLM が SDK custom tool **`prompt_worker`** を呼ぶ
-   - 引数: `worker`（profile の `workers[].name`）, `instruction`（作業指示文・Markdown 可）
-2. harness **`WorkerSession.promptWorker({ name, instruction })`** が処理する
-3. sidecar / ランタイムが保持する **`acpSessionId`** で ACP に接続
-   - [ADR 0011](0011-session-sidecar-resume.md): プロセス再起動後は `session/load` が必須
-4. 既存 session へ **`session/prompt`**（`instruction`）を送る
-5. tool は **非ブロック**で返す（bootstrap と同型）
-   - 戻り値: 受付成功 / エラー（worker 名不明、load 失敗等）
-   - **完了は `worker.completed` イベント**で conductor に届く（[ADR 0009](0009-conductor-session-event-queue.md)）
+conductor は **1、worker は多**。harness は inbound / outbound で対称にキューを持つ。
 
-`prompt_worker` の tool 結果は SDK 会話に載る。**セッションイベント列には積まない**（permission / worker 完了と同じ分離）。
+```
+                    ┌── SessionEventQueue（inbound・既存）
+worker / operator ──┤   permission.pending, worker.completed, operator.message
+                    │         → agent.send
+                    │
+conductor tool ─────┤── WorkerOutboundQueue（新設）
+  prompt_worker     │   sendWorkerMessage { name, text }
+                    │         → per-worker 配送
+                    └──► implementer / reviewer / …
+```
+
+| キュー | 方向 | 役割 |
+|--------|------|------|
+| **SessionEventQueue** | → conductor | [ADR 0009](0009-conductor-session-event-queue.md) どおり。1 イベント = 1 `agent.send` |
+| **WorkerOutboundQueue** | conductor → workers | tool 呼び出しを worker 名でルーティング。per-worker に直列化 |
+
+### worker プロセス常駐
+
+| 項目 | 方針 |
+|------|------|
+| **寿命** | ensemble 開始（`WorkerSession.bootstrap`）〜終了（`WorkerSession.stop`）まで **`agent acp` プロセスを維持** |
+| **接続** | worker ごとに `AcpBridge` を `WorkerSession` が保持。bootstrap 後も **close しない** |
+| **session** | worker 名 → `{ bridge, acpSessionId, worktree, state }` のレジストリ |
+| **終了** | `ConductorSession` の shutdown / SIGINT 時に全 bridge を close |
+| **resume** | harness 再起動時は [ADR 0011](0011-session-sidecar-resume.md): 新プロセスで `session/load` してから常駐を再開 |
+
+### sendWorkerMessage（conductor → worker）
+
+1. conductor LLM が SDK custom tool **`prompt_worker`** を呼ぶ（引数: `worker`, `instruction`）
+2. harness が **WorkerOutboundQueue** に積み、対象 worker へ配送
+3. 対象 worker が **idle** なら、保持中の bridge へ **`session/prompt`**（= user メッセージ 1 ターン）
+4. tool は **非ブロック**で返す（受付成功 / エラー）。**完了は `worker.completed` イベント**（[ADR 0009](0009-conductor-session-event-queue.md)）
+
+`prompt_worker` の tool 結果は SDK 会話に載る。**セッションイベント列には積まない**。
+
+### per-worker 状態と busy 時の扱い
+
+ACP v1 では **1 session あたり同時に走れる prompt ターンは 1 本**（[Prompt Turn](https://agentclientprotocol.com/protocol/v1/prompt-turn)）。途中に user メッセージを挿入する API はない。
+
+| worker 状態 | 意味 |
+|-------------|------|
+| **idle** | prompt ターンなし。次の `sendWorkerMessage` を受け付け可能 |
+| **prompting** | `session/prompt` 応答待ち（LLM / tool 実行中） |
+
+**初版（本 ADR の基本実装）**: `prompting` 中の同一 worker への送信は **per-worker キューに積む**。ラウンド完了後に FIFO で次を `session/prompt` する。
+
+| 方針 | 挙動 | フェーズ |
+|------|------|----------|
+| **キュー（採用・初版）** | busy → enqueue → round 完了後に配送 | Phase 1–2 |
+| **拒否** | busy → tool エラー | テスト簡略用に併用可 |
+| **割り込み（preempt）** | `session/cancel` → `stopReason: cancelled` 確認 → 新 prompt | フォロー（Phase 5 以降） |
+
+**worker 間**（implementer / reviewer）は session が別なので **並行**に `session/prompt` 可能。
+
+### 割り込みと ACP `session/cancel`
+
+割り込みは **会話への追記ではなく、進行中ターンの中止**。
+
+- Client が `session/cancel` notification を送る
+- Agent は LLM / tool を止め、進行中の `session/prompt` を `stopReason: cancelled` で返す
+- その後、新しい `session/prompt` を送れる
+
+harness は **初版では `session/cancel` 未実装**。優先指示で旧ターンを捨てたい場合に後から足す。
 
 ### worker → conductor（変更なし）
 
 | 意味 | 経路 |
 |------|------|
 | 操作許可 | ACP permission → inbox → `resolve_permission` or 即決 |
-| **ラウンド完了** | ACP prompt 終了 → `worker.completed` → イベント列 → `agent.send` |
-| **作業報告・論点** | **Issue / PR への投稿**（worker が書く。conductor は読む） |
+| **ラウンド完了** | ACP prompt 終了 → `worker.completed` → SessionEventQueue → `agent.send` |
+| **作業報告** | Issue / PR（harness 外） |
 
-`worker.completed` は **「タスク全体の完了」ではなく「1 回の `session/prompt` ラウンドの終了」** と解釈する。conductor は Issue を読んで進捗を判断する。
+`worker.completed` = **1 ラウンド終了**。タスク完了の意味ではない。conductor は Issue を読んで進捗判断する。
 
-### bootstrap の役割変更
+### bootstrap の役割
 
 | 項目 | 現状 | 本 ADR 後 |
 |------|------|-----------|
-| bootstrap prompt | 起動文書 + ensemble（作業待ちの文言はあるが実質 1 本で走る） | **待機・役割・permission のみ**の最小 prompt。実作業の開始は conductor の `prompt_worker` |
-| ACP 接続 | `dispatchWorker` 完了後に bridge close | **初回も close 可**。`prompt_worker` ごとに connect → load → prompt → close（0011 と同型） |
-| `acpSessionId` | bootstrap 結果を sidecar へ | 維持。各 `prompt_worker` で load に使用 |
-
-### 並行・数往復
-
-- worker ごとに **独立した ACP session**（name → `acpSessionId`）
-- `WorkerRuntime` は **worker 単位で running 状態**を持つ。同一 worker への `prompt_worker` は **前ラウンド完了まで拒否**（またはキューイングはフォロー Issue。初版は拒否でよい）
-- 異なる worker への `prompt_worker` は **並行**可能（implementer と reviewer 同時稼働）
-- conductor ループは **running worker ありならイベント待ち**（現行 [ConductorSession](packages/core/src/conductor/conductor-session.ts) の挙動を維持）
-
-### 初回 Issue コンテキスト
-
-conductor の初回 `agent.send` に Issue 本文を載せるかは **本 ADR の必須範囲外**（別 PR 可）。conductor は SDK 経由で `gh` 等を使って Issue を読む前提は変えない。
+| 目的 | one-shot 作業開始に近い | **attach + 待機 prompt**（役割・permission・team.md） |
+| プロセス | prompt 後に kill | **ensemble 終了まで生存** |
+| 実作業の開始 | bootstrap prompt 内 | conductor の **`sendWorkerMessage`** |
 
 ## Consequences
 
 ### 良い点
 
-- ユースケース（判断 → 指示 → 作業 → 報告 → 再指示）がスター型トポロジのまま実現できる
-- ADR 0009 の「1 イベント = 1 send」と矛盾しない（worker 完了は従来どおりイベント）
-- ADR 0011 の `session/load` + `acpSessionId` をそのまま再利用できる
-- Issue = 正本 / harness = トリガー の分担が明確
+- team.md の「常駐 worker」がプロセスレベルで成立する
+- conductor `agent.send` と worker `session/prompt` が対称な「メッセージ送信」モデルになる
+- inbound キュー（0009）と outbound キューで 1 対多が明示される
+- ACP の prompt ターン制約（1 session 1 本）を per-worker キューで自然に満たせる
 
 ### 悪い点・リスク
 
-- bootstrap と「常駐」の意味が変わる（integration テスト・Fake ACP の更新が必要）
-- `prompt_worker` ごとの connect / load / close はオーバーヘッドがある（初版は単純さ優先）
-- conductor が Issue を読まず `worker.completed` だけで進捗判断すると誤動作する → prompt / team.md で Issue 正本を強調
+- `WorkerSession` / `WorkerRuntime` の責務が増える（接続プール・キュー・状態機械）
+- プロセス常駐はリソース消費・クラッシュ復旧が必要（再 attach / load）
+- `session/cancel` 未実装の間は「優先割り込み」はキュー待ちのみ
+- 用語・ディレクトリ（`dispatch/`）の整理は別 PR でもよい
 
 ### フォロー
 
-- [architecture.md](../architecture.md) §5 の双方向フロー図を更新
-- modular-prompt の `FIXME(#36)` を実装後に削除
-- 同一 worker への指示キュー、prompt 失敗時の再 bootstrap — 必要になったら別 ADR / Issue
+- [architecture.md](../architecture.md) §5
+- modular-prompt の `FIXME(#36)` は Phase 3 で削除
+- `session/cancel`（preempt）、prompt 失敗時の再 attach — 必要になったら本 ADR 追記 or 別 ADR
 
-## 実装フェーズ（案）
+## 実装フェーズ
 
 | Phase | 内容 | 受け入れ |
 |-------|------|----------|
-| **1** | `WorkerSession` / `WorkerRuntime`: name → session レジストリ、`promptWorker()`、running ガード | unit + fake ACP: 同一 session で 2 回 `session/prompt` |
-| **2** | `prompt_worker` custom tool、`ConductorSession` 配線 | integration: tool 呼び出し → 2 回目 prompt 受信 |
-| **3** | bootstrap prompt を待機中心に調整、プロンプト `FIXME` 削除 | ensemble / profile テスト更新 |
-| **4**（任意） | 初回 conductor send へ `formatIssueContextForPrompt` 注入 | issue-session integration |
+| **0** | **worker プロセス常駐**: attach 時に bridge 保持、ensemble 終了まで close しない | bootstrap 後も `agent acp` が生存（fake / integration） |
+| **1** | **sendWorkerMessage** + per-worker レジストリ + **per-worker キュー** + idle/prompting 状態 | 同一 session で 2 回 `session/prompt`、busy 時はキュー |
+| **2** | **`prompt_worker` tool** + WorkerOutboundQueue + `ConductorSession` 配線 | tool → 2 回目 prompt 受信 |
+| **3** | bootstrap を待機中心に変更、プロンプト `FIXME` 削除 | ensemble / profile テスト |
+| **4**（任意） | 初回 conductor send へ Issue 本文注入 | issue-session integration |
+| **5**（フォロー） | `session/cancel` + preempt ポリシー | 進行中ターンの中止 → 新指示 |
 
-Phase 1–2 で #36 の受け入れ条件を満たす。Phase 3 はユースケース整合。Phase 4 は別 Issue でも可。
+Phase 0–2 が #36 の基本通信機構。Phase 3 はプロンプト整合。Phase 5 は割り込み。

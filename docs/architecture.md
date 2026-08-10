@@ -232,17 +232,18 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 [ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md) を参照。
 
 ```
-セッション開始 ──bootstrap（待機 prompt）──► worker 常駐（ACP session 確立）
-conductor ──prompt_worker───────────────► WorkerSession.promptWorker()（即 return）
-              session/load + session/prompt
-worker    ──permission───────────────► ConductorInbox ──► PermissionPipeline
-worker    ──Issue / PR 報告──────────► （非同期正本。harness 非経由）
-worker    ──prompt ラウンド終了──────► worker.completed ──► イベント列 ──► agent.send
-conductor ◄──agent.send──────────── オペレータ user ターン / イベント通知
+セッション開始 ──attach（待機 prompt）──► worker 常駐（agent acp プロセス + ACP session）
+conductor ──prompt_worker──► WorkerOutboundQueue ──sendWorkerMessage──► session/prompt
+worker    ──permission──────► ConductorInbox ──► SessionEventQueue ──► agent.send
+worker    ──Issue / PR 報告──► （非同期正本。harness 非経由）
+worker    ──ラウンド終了──────► worker.completed ──► SessionEventQueue ──► agent.send
+ensemble 終了 ──stop────────► 全 worker bridge close
 ```
 
-- **`worker.completed` は 1 ラウンドの終了**であり、タスク全体の完了ではない。進捗の正本は Issue / PR。
-- bootstrap 後も `acpSessionId` を保持し、`prompt_worker` で 2 回目以降の `session/prompt` を送る（#36）。
+- **常駐** = ensemble 中 `agent acp` プロセスを殺さない（bootstrap 後も bridge 保持）。
+- **sendWorkerMessage** = 既存 session への `session/prompt`（dispatch ではない）。
+- 同一 worker は ACP 制約により prompt **直列**（per-worker キュー）。worker 間は並行可。
+- **`worker.completed` は 1 ラウンドの終了**。進捗の正本は Issue / PR。
 
 ### permission（conductor 制御）
 
