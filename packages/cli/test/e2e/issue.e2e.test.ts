@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasIssueE2eConfig, loadIssueE2eConfig, OPERATOR_E2E_PROFILE_PATH } from './test-config.js';
+import { hasIssueE2eConfig, loadIssueE2eConfig, OPERATOR_E2E_PROFILE_PATH, ROUNDTRIP_E2E_PROFILE_PATH } from './test-config.js';
 
 import { runEnsembleCli, parseCliJson } from './test-helpers.js';
 
@@ -87,5 +87,49 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
     expect(result.stopReason).toBe('completed');
     expect(result.sendCount).toBe(2);
     expect(result.lastResult).toContain('conductor-ok');
+  }, 300_000);
+
+  it('runs prompt_worker twice before finishing (conductor-worker roundtrip)', async () => {
+    const config = loadIssueE2eConfig()!;
+
+    const { stdout, exitCode } = await runEnsembleCli(
+      [
+        'issue',
+        config.issueUrl,
+        '--repo-root',
+        config.repoRoot,
+        '--profile',
+        ROUNDTRIP_E2E_PROFILE_PATH,
+        '--conductor-cwd',
+        config.conductorCwd,
+        '--model',
+        config.conductorModelId,
+        '--max-turns',
+        '8',
+      ],
+      { timeoutMs: 300_000 },
+    );
+
+    const result = parseCliJson<{
+      lastRunStatus: string;
+      lastResult?: string;
+      workerDispatchCount: number;
+      workerFailureCount: number;
+      workerResponses?: Array<{ name: string; responseText?: string }>;
+      lastError?: { message: string };
+    }>(stdout);
+
+    expect(exitCode).toBe(0);
+    expect(result.lastRunStatus).toBe('finished');
+    expect(result.workerFailureCount).toBe(0);
+    expect(result.workerDispatchCount).toBeGreaterThanOrEqual(3);
+    expect(result.workerResponses?.length).toBeGreaterThanOrEqual(3);
+    expect(
+      result.workerResponses?.filter((entry) =>
+        entry.responseText?.includes('pong'),
+      ).length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(result.lastResult).toContain('conductor-ok');
+    expect(result.lastError).toBeUndefined();
   }, 300_000);
 });

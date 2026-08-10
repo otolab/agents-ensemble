@@ -1,0 +1,19 @@
+agents:
+  ping:
+    systemPrompt: |
+      これは接続テストです。調査・編集はせず、応答に pong とだけ含めて終了してください。
+
+workers:
+  - name: ping-1
+    kind: ping
+
+materials:
+  - id: e2e-roundtrip
+    title: E2E roundtrip
+    content: |
+      conductor → worker の往復 smoke（prompt_worker を 2 回使う）:
+      1. ping-1 に `prompt_worker` で接続確認（応答に pong）
+      2. 同じ ping-1 に `prompt_worker` で 2 回目の指示を送る（完了イベントを待つ）
+      3. 上記 2 ラウンドが終わったら、応答に conductor-ok を含めて終了すること
+
+      bootstrap 完了だけで終了しないこと。必ず prompt_worker を 2 回呼ぶこと。
