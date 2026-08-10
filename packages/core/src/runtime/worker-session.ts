@@ -2,6 +2,7 @@ import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionDecision } from '../acp/types.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
+import type { SendWorkerMessageResult } from './send-worker-message.js';
 import type { PermissionPipeline } from '../permission/permission-pipeline.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
 import { ConductorInbox } from './conductor-inbox.js';
@@ -96,6 +97,14 @@ export class WorkerSession {
       });
       this.startedWorkerIds.push(workerId);
     }
+  }
+
+  /** 常駐 worker へ作業指示を送る（`session/prompt`）。 */
+  sendWorkerMessage(
+    name: string,
+    instruction: string,
+  ): SendWorkerMessageResult {
+    return this.runtime.sendWorkerMessage(name, instruction);
   }
 
   async stop(): Promise<void> {

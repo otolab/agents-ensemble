@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import {
   attachWorker,
-  buildBootstrapWorkerPrompt,
+  buildWorkerAttachPrompt,
   runAttachedWorkerPrompt,
   type AttachedWorker,
 } from '../dispatch/attach-worker.js';
@@ -12,6 +12,7 @@ import {
 } from '../dispatch/worker-acp-session.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import { ConductorInbox } from './conductor-inbox.js';
+import type { SendWorkerMessageResult } from './send-worker-message.js';
 import type { WorkerStartedInfo, WorkerStartParams } from './types.js';
 
 export interface WorkerRuntimeOptions {
@@ -26,18 +27,21 @@ interface ResidentWorker {
   workerId: string;
   started: WorkerStartedInfo;
   attached: AttachedWorker;
+  state: 'idle' | 'prompting';
+  queue: string[];
 }
 
 export class WorkerRuntime {
   private readonly prompting = new Map<string, WorkerStartedInfo>();
   private readonly residents = new Map<string, ResidentWorker>();
   private readonly idleResolvers = new Set<() => void>();
+  private bootstrapInFlight = 0;
 
   constructor(private readonly options: WorkerRuntimeOptions) {}
 
-  /** 進行中の prompt ラウンド数（conductor ループ用）。 */
+  /** 進行中の prompt ラウンド数 + bootstrap 中（conductor ループ用）。 */
   get runningCount(): number {
-    return this.prompting.size;
+    return this.prompting.size + this.bootstrapInFlight;
   }
 
   /** attach 済み worker 数。 */
@@ -60,13 +64,48 @@ export class WorkerRuntime {
   start(params: WorkerStartParams): string {
     const workerId = randomUUID();
     const started: WorkerStartedInfo = { workerId, ...params };
-    this.prompting.set(workerId, started);
     void this.bootstrap(started);
     return workerId;
   }
 
+  /** 常駐 worker へ user メッセージ（ACP `session/prompt`）を送る。busy 時は per-worker キューへ。 */
+  sendWorkerMessage(
+    name: string,
+    instruction: string,
+  ): SendWorkerMessageResult {
+    const text = instruction.trim();
+    if (!text) {
+      return {
+        status: 'error',
+        worker: name,
+        message: 'instruction must not be empty',
+      };
+    }
+
+    const resident = this.residents.get(name);
+    if (!resident) {
+      return {
+        status: 'error',
+        worker: name,
+        message: `Worker "${name}" is not attached`,
+      };
+    }
+
+    if (resident.state === 'prompting') {
+      resident.queue.push(text);
+      return {
+        status: 'queued',
+        worker: name,
+        position: resident.queue.length,
+      };
+    }
+
+    void this.executeRound(resident, text);
+    return { status: 'sent', worker: name };
+  }
+
   async waitForIdle(): Promise<void> {
-    if (this.prompting.size === 0) return;
+    if (this.prompting.size === 0 && this.bootstrapInFlight === 0) return;
     await new Promise<void>((resolve) => {
       this.idleResolvers.add(resolve);
     });
@@ -82,6 +121,7 @@ export class WorkerRuntime {
   }
 
   private async bootstrap(started: WorkerStartedInfo): Promise<void> {
+    this.bootstrapInFlight++;
     try {
       const attached = await attachWorker({
         name: started.name,
@@ -99,9 +139,16 @@ export class WorkerRuntime {
         ),
       });
 
-      this.residents.set(started.name, { workerId: started.workerId, started, attached });
+      const resident: ResidentWorker = {
+        workerId: started.workerId,
+        started,
+        attached,
+        state: 'idle',
+        queue: [],
+      };
+      this.residents.set(started.name, resident);
 
-      const prompt = buildBootstrapWorkerPrompt(
+      const prompt = buildWorkerAttachPrompt(
         {
           name: started.name,
           issueUrl: started.issueUrl,
@@ -114,31 +161,49 @@ export class WorkerRuntime {
         attached.session,
       );
 
-      const result = await this.runPromptRound(attached, prompt, started.workerId);
-      this.options.inbox.publishWorkerCompleted(started.workerId, result);
+      await this.executeRound(resident, prompt);
     } catch (error) {
       this.residents.delete(started.name);
       this.options.inbox.publishWorkerFailed(started, error);
     } finally {
-      this.finishPromptRound(started.workerId);
+      this.bootstrapInFlight--;
+      this.resolveIdleIfReady();
     }
   }
 
-  private async runPromptRound(
-    attached: AttachedWorker,
+  private async executeRound(
+    resident: ResidentWorker,
     prompt: string,
-    workerId: string,
-  ): Promise<WorkerDispatchResult> {
-    return runAttachedWorkerPrompt(
-      attached,
-      prompt,
-      this.options.inbox.createPermissionHandler(workerId),
-    );
+  ): Promise<void> {
+    resident.state = 'prompting';
+    this.prompting.set(resident.workerId, resident.started);
+    try {
+      const result = await runAttachedWorkerPrompt(
+        resident.attached,
+        prompt,
+        this.options.inbox.createPermissionHandler(resident.workerId),
+      );
+      this.options.inbox.publishWorkerCompleted(resident.workerId, result);
+    } catch (error) {
+      this.options.inbox.publishWorkerFailed(resident.started, error);
+    } finally {
+      this.finishPromptRound(resident.workerId);
+      const next = resident.queue.shift();
+      if (next) {
+        await this.executeRound(resident, next);
+      } else {
+        resident.state = 'idle';
+      }
+    }
   }
 
   private finishPromptRound(workerId: string): void {
     this.prompting.delete(workerId);
-    if (this.prompting.size === 0) {
+    this.resolveIdleIfReady();
+  }
+
+  private resolveIdleIfReady(): void {
+    if (this.prompting.size === 0 && this.bootstrapInFlight === 0) {
       for (const resolve of this.idleResolvers) {
         resolve();
       }

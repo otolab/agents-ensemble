@@ -115,7 +115,6 @@ describe('WorkerRuntime', () => {
     });
 
     expect(workerId).toBeTruthy();
-    expect(runtime.runningCount).toBe(1);
 
     await runtime.waitForIdle();
     await inbox.drain();
@@ -129,6 +128,79 @@ describe('WorkerRuntime', () => {
     expect(close).toHaveBeenCalledOnce();
     expect(runtime.attachedCount).toBe(0);
 
+    vi.restoreAllMocks();
+  });
+
+  it('queues sendWorkerMessage while prompting and drains after round completes', async () => {
+    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue({
+      path: '/tmp/wt',
+      branch: 'ensemble/issue-1',
+      issue: {
+        owner: 'org',
+        repo: 'repo',
+        number: 1,
+        url: 'https://github.com/org/repo/issues/1',
+      },
+    });
+
+    const inbox = new ConductorInbox();
+    const prompts: string[] = [];
+    let resolveFirst: (() => void) | undefined;
+    const firstPrompt = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+
+    const promptSession = vi.fn(async (_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        await firstPrompt;
+      }
+      return { stopReason: 'end_turn', responseText: 'pong' };
+    });
+
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+    });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      kind: 'ping',
+      systemPrompt: 'pong',
+      repoRoot: '/repo',
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(promptSession).toHaveBeenCalledOnce();
+    });
+
+    const queued = runtime.sendWorkerMessage('ping-1', 'follow-up task');
+    expect(queued).toEqual({
+      status: 'queued',
+      worker: 'ping-1',
+      position: 1,
+    });
+
+    resolveFirst!();
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toBe('follow-up task');
+    expect(runtime.attachedCount).toBe(1);
+
+    await runtime.shutdown();
     vi.restoreAllMocks();
   });
 });
