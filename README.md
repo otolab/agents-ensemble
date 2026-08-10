@@ -113,14 +113,14 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 | `isolated`（既定） | Issue 専用 worktree（`.ensemble/worktrees/issue-N`） |
 | `in-repo` | メイン worktree で直接作業する **特別モード** |
 
-**CLI 出力（TTY 時）**
+**CLI 出力（TTY 時）** — 詳細は [docs/session-logging.md](docs/session-logging.md)。
 
 | 出力先 | 内容 |
 |--------|------|
-| **stdout** | 終了時の **SessionSummary** JSON（e2e / スクリプト向け）。TTY では `operator>` / `conductor>` の対話もここに出る |
-| **stderr** | harness テレメトリ（`[harness]` / `[open question]` 等）。開発者向け |
+| **stdout** | 終了時の **SessionSummary** JSON。TTY では `operator>` / `conductor>` の対話もここ |
+| **stderr** | harness テレメトリ（`[harness]` / `[open question]` 等） |
 
-終了 JSON は会話ログではなく exit report（`sendCount`・`stopReason`・`workerResponses` 等の混合物）。resume の正本は sidecar。
+終了 JSON は exit report（会話ログではない）。resume の正本は sidecar。
 
 ### セッションの停止と再開
 
