@@ -14,13 +14,11 @@ import type { PermissionPolicyRules } from '../permission/permission-policy.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { createResolvePermissionTool } from '../permission/resolve-permission-tool.js';
 import type { Profile } from '../profile/types.js';
-import { profileWorkersToSessionSpecs, resolveAgentSystemPrompt } from '../profile/types.js';
+import { profileWorkersToSessionSpecs, resolveAgentSystemPrompt, sessionStateFromProfile } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import type { WorkerDispatchFn } from '../runtime/worker-runtime.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
-import { compileConductorInitialMessage } from './prompt/compile-conductor-prompt.js';
-import { mergeConductorMaterials } from './prompt/materials.js';
-import type { ConductorMaterial } from './prompt/types.js';
+import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import { ConductorAgent } from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
 import { formatSessionEventForConductor } from './session/format-session-event.js';
@@ -54,8 +52,6 @@ export interface RunConductorSessionOptions {
   issueUrl: string;
   repoRoot: string;
   conductorCwd?: string;
-  briefing?: string;
-  materials?: ConductorMaterial[];
   /** 作業手順・worker 定義。未指定時は loadProfile でデフォルトを解決する。 */
   profile: Profile;
   profilePath?: string;
@@ -165,10 +161,13 @@ export async function runConductorSession(
 
   let scheduleSidecarFlush = () => {};
 
+  const sessionState = sessionStateFromProfile(activeProfile);
+
   const workerSession = new WorkerSession({
     issueUrl: options.issueUrl,
     repoRoot: options.repoRoot,
     workers: profileWorkersToSessionSpecs(activeProfile),
+    sessionState,
     restoredWorkerSessions: Object.fromEntries(workerSessions),
     permissionPipeline,
     ...(options.dispatchWorker ? { dispatchWorker: options.dispatchWorker } : {}),
@@ -556,23 +555,11 @@ async function runInitialConductorSend(input: {
     workerFailures: number;
   }) => void;
 }): Promise<ConductorSendResult> {
-  const issueContext = await fetchIssueContext(input.options.issueUrl);
-  const message = compileConductorInitialMessage({
-    repoRoot: input.options.repoRoot,
-    issueContext,
-    roleSystemPrompt: resolveAgentSystemPrompt('conductor', input.profile.agents),
-    materials: mergeConductorMaterials(
-      mergeProfileMaterials(input.options.materials, input.profile),
-      input.options.briefing,
-    ),
-    turn: 1,
-    autonomousTurns: input.autonomousTurns,
-    maxTurns: input.maxTurns,
-    runningWorkers: input.workerSession.runtime.listRunning(),
-    pendingPermissions: input.permissionPipeline.pending.list(),
-    followUp: input.options.resumeAgentId
-      ? '前回の続きです。Issue / PR の最新状態を踏まえ、次に必要な判断を行ってください。'
-      : undefined,
+  await fetchIssueContext(input.options.issueUrl);
+  const message = compileConductorSystemPrompt({
+    issueUrl: input.options.issueUrl,
+    profile: input.profile,
+    roleBootstrap: resolveAgentSystemPrompt('conductor', input.profile.agents),
   });
 
   return runEventConductorSend({
@@ -635,21 +622,6 @@ function recordAnsweredOpenQuestion(
     input.escalations.push(record);
     input.options.onEscalated?.(record);
   }
-}
-
-function mergeProfileMaterials(
-  materials: ConductorMaterial[] | undefined,
-  profile: Profile | undefined,
-): ConductorMaterial[] | undefined {
-  const fromProfile =
-    profile?.materials?.map((material, index) => ({
-      id: material.id ?? `profile-material-${index + 1}`,
-      title: material.title ?? material.id ?? `profile-material-${index + 1}`,
-      content: material.content!,
-    })) ?? [];
-
-  const merged = [...(materials ?? []), ...fromProfile];
-  return merged.length > 0 ? merged : undefined;
 }
 
 async function waitForSessionEvent(

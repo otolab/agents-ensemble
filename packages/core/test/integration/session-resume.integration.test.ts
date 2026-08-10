@@ -87,6 +87,10 @@ describe('session resume integration', () => {
       name: 'ping-1',
       kind: 'ping',
       systemPrompt: PING_SYSTEM_PROMPT,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
       repoRoot,
       bridge,
     });

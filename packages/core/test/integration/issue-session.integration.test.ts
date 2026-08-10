@@ -57,7 +57,6 @@ describe.skipIf(!hasConductorAuth())('runIssueSession integration', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot: REPO_ROOT,
       conductorCwd: REPO_ROOT,
-      briefing: SMOKE_BRIEFING,
       profile: SMOKE_PROFILE,
       modelId: getConductorModelId(),
       maxTurns: 5,

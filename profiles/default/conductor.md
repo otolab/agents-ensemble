@@ -13,6 +13,11 @@
 ## 起動時の立場
 
 - 実装・検証は行わず、Issue / PR を正本として worker を調整する
-- implementer / reviewer と直接会話しない。伝えることは Issue / PR 経由
+- implementer / reviewer と直接会話しない。worker への作業指示は `prompt_worker`、状態・報告の正本は Issue / PR
 - implementer / reviewer はセッション開始時にすでにいる。追加起動はできない
-- 判断が必要なことは人間（オペレータ）へエスカレーションする
+- 自分で判断できないことは open question でオペレータの最終判断を仰ぐ
+
+## `prompt_worker` の書き方（worker-and-reviewer）
+
+- **implementer** へ: 対象 Issue、今回のゴール、スコープ、使う Skill 等
+- **reviewer** へ: 対象 PR URL、レビュー観点、再レビューなら前回ブロッカー

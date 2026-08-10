@@ -1,12 +1,15 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
 
+import type { EnsembleSessionState } from '../profile/types.js';
+
 export interface WorkerStartParams {
   name: string;
   kind: string;
   systemPrompt: string;
   issueUrl: string;
   repoRoot: string;
+  sessionState: EnsembleSessionState;
   resumeAcpSessionId?: string;
 }
 

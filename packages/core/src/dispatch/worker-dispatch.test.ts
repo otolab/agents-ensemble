@@ -33,6 +33,10 @@ describe('dispatchWorker', () => {
       name: 'ping-1',
       kind: 'ping',
       systemPrompt: 'respond with pong',
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
       repoRoot: '/repo',
       spawn: {
         command: 'fake-agent',

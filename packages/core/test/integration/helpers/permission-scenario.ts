@@ -73,6 +73,10 @@ export async function runPermissionWorkerSession(
         systemPrompt: PING_SYSTEM_PROMPT,
       },
     ],
+    sessionState: {
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      kinds: ['ping'],
+    },
     permissionPipeline: pipeline,
     dispatchWorker: (dispatchOptions) =>
       dispatchWorker({

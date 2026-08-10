@@ -31,6 +31,10 @@ describe('WorkerSession integration', () => {
           systemPrompt: PING_SYSTEM_PROMPT,
         },
       ],
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
       dispatchWorker: (options) =>
         dispatchWorker({
           ...options,
