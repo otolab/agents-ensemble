@@ -1,6 +1,6 @@
 # ADR 0012: conductor – worker メッセージング（常駐 ACP / sendWorkerMessage）
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-10
 - Related: Issue #36, [ADR 0002](0002-star-topology-sdk-conductor-acp-worker.md), [ADR 0009](0009-conductor-session-event-queue.md), [ADR 0011](0011-session-sidecar-resume.md)
 

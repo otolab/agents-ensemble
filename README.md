@@ -2,7 +2,7 @@
 
 Issue を指定して起動する、エージェントオーケストレーション CLI。
 
-`ensemble` がオーケストレータ（conductor）として worker を制御し、作業を進める。worker はセッション開始時に起動し、conductor とは inbox 経由で接続する。
+`ensemble` がオーケストレータ（conductor）として worker を制御し、作業を進める。worker は **セッション開始時に attach され ensemble 終了まで常駐**する。conductor からの作業指示は harness 内の `prompt_worker`（ACP `session/prompt`）で届く。
 
 ## ステータス
 
@@ -19,7 +19,7 @@ agents-ensemble は **SDK（conductor）** と **ACP（worker）** の2系統を
 | 経路 | 技術 | 何に使うか | ローカル開発 | CI / 自動化 |
 |------|------|-----------|-------------|------------|
 | **conductor** | `@cursor/sdk` | `ensemble issue` | `ensemble auth login` | `CURSOR_API_KEY` |
-| **worker** | `agent acp` | `ensemble dispatch worker`、conductor からの dispatch | `agent login` | `CURSOR_API_KEY`（子プロセスへ継承） |
+| **worker** | `agent acp` | `ensemble dispatch worker`（one-shot）、`ensemble issue` の常駐 worker | `agent login` | `CURSOR_API_KEY`（子プロセスへ継承） |
 | **Issue 取得** | `gh` CLI | conductor が Issue 本文・コメントを読む | `gh auth login` | `GH_TOKEN` 等 |
 
 ### 初回セットアップ（ローカル）
@@ -155,6 +155,19 @@ conductor は SDK `Agent.resume`、worker は ACP `session/load` で復元する
 
 `stopReason` に `interrupted`（SIGINT/SIGTERM による graceful shutdown）が追加される。
 
+### conductor → worker（常駐）
+
+`ensemble issue` では profile の `workers` で指定した worker が **セッション開始時に attach** され、**終了（または `--resume` 再開）まで `agent acp` プロセスを維持**する。
+
+| 経路 | 用途 |
+|------|------|
+| **bootstrap（attach）** | 役割・permission・待機 prompt。実作業の開始トリガーではない |
+| **`prompt_worker`（conductor SDK tool）** | 常駐 worker へ作業指示（`session/prompt`）。busy 時は per-worker キュー、`preempt: true` で割り込み |
+| **`worker.completed` イベント** | 1 ラウンド完了を conductor へ通知（タスク完了の意味ではない） |
+| **`ensemble dispatch worker`** | CLI one-shot（常駐モデルとは別経路。検証・手動用） |
+
+**Issue / PR に書いただけでは worker は動かない。** トリガーは conductor の `prompt_worker` のみ（詳細は [ADR 0012](docs/adr/0012-conductor-worker-prompt-roundtrip.md)、[architecture.md §5](docs/architecture.md)）。
+
 ### プロファイル
 
 同梱プロファイルは `profiles/` に置き、`build` 時に `dist/profiles/` へコピーされる（詳細は [docs/elements.md](docs/elements.md)）。
@@ -182,7 +195,7 @@ materials:
     file: team.md
 ```
 
-e2e は `agents.ping` + `workers: [ping]` で pong 応答を検証する（`packages/cli/test/e2e/fixtures/e2e-smoke/profile.yaml`）。
+e2e は `agents.ping` + `workers: [ping]` で pong 応答を検証する（`packages/cli/test/e2e/fixtures/e2e-smoke/profile.yaml`）。`prompt_worker` 往復 smoke は `fixtures/e2e-roundtrip/profile.yaml`。
 
 ### 人間エスカレーション（非対話環境）
 
