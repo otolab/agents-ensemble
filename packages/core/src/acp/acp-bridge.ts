@@ -78,6 +78,11 @@ export class AcpBridge {
     return run();
   }
 
+  /** 進行中の prompt ターンを中止する。 */
+  cancelSession(sessionId: string): void {
+    this.client.cancelSession(sessionId);
+  }
+
   /** Create session and run a single prompt (typical worker dispatch). */
   async runSession(
     options: AcpBridgeRunSessionOptions,

@@ -24,6 +24,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- worker はセッション開始時に起動済み。実行中の worker を新たに起動しない',
         '- 指示文には Issue / PR を正本としたゴール・スコープ・観点を書く',
         '- Issue / PR に書いただけでは worker は動かない。作業開始のトリガーは `prompt_worker`',
+        '- 進行中の worker を優先割り込みする: `prompt_worker` の `preempt: true`（既定は busy 時キュー）',
         '- worker からの返答はセッションイベント（permission 待ち・完了・失敗）として届く',
       ],
     },

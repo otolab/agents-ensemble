@@ -113,7 +113,7 @@ ACP v1 では **1 session あたり同時に走れる prompt ターンは 1 本*
 |------|------|----------|
 | **キュー（採用・初版）** | busy → enqueue → round 完了後に配送 | Phase 1–2 |
 | **拒否** | busy → tool エラー | テスト簡略用に併用可 |
-| **割り込み（preempt）** | `session/cancel` → `stopReason: cancelled` 確認 → 新 prompt | フォロー（Phase 5 以降） |
+| **割り込み（preempt）** | `session/cancel` → `stopReason: cancelled` 確認 → 新 prompt | Phase 5（`prompt_worker` の `preempt: true`） |
 
 **worker 間**（implementer / reviewer）は session が別なので **並行**に `session/prompt` 可能。
 
@@ -125,7 +125,7 @@ ACP v1 では **1 session あたり同時に走れる prompt ターンは 1 本*
 - Agent は LLM / tool を止め、進行中の `session/prompt` を `stopReason: cancelled` で返す
 - その後、新しい `session/prompt` を送れる
 
-harness は **初版では `session/cancel` 未実装**。優先指示で旧ターンを捨てたい場合に後から足す。
+harness は **`prompt_worker` の `preempt: true`** で `session/cancel` を送り、キャンセル確認後に新 prompt を実行する。未指定時は busy 時キュー。
 
 ### worker → conductor（変更なし）
 
@@ -158,14 +158,15 @@ harness は **初版では `session/cancel` 未実装**。優先指示で旧タ�
 
 - `WorkerSession` / `WorkerRuntime` の責務が増える（接続プール・キュー・状態機械）
 - プロセス常駐はリソース消費・クラッシュ復旧が必要（再 attach / load）
-- `session/cancel` 未実装の間は「優先割り込み」はキュー待ちのみ
+- `session/cancel` 未実装の間は「優先割り込み」はキュー待ちのみ — **Phase 5 で解消**
 - 用語・ディレクトリ（`dispatch/`）の整理は別 PR でもよい
 
 ### フォロー
 
 - [architecture.md](../architecture.md) §5
 - modular-prompt の `FIXME(#36)` は Phase 3 で削除済み
-- `session/cancel`（preempt）、prompt 失敗時の再 attach — 必要になったら本 ADR 追記 or 別 ADR
+- `session/cancel`（preempt）— Phase 5 実装済み。prompt 失敗時の再 attach — 必要になったら本 ADR 追記 or 別 ADR
+- Phase 4（Issue 本文注入）— [#37](https://github.com/otolab/agents-ensemble/issues/37)
 
 ## 実装フェーズ
 
@@ -175,7 +176,7 @@ harness は **初版では `session/cancel` 未実装**。優先指示で旧タ�
 | **1** | **sendWorkerMessage** + per-worker レジストリ + **per-worker キュー** + idle/prompting 状態 | 同一 session で 2 回 `session/prompt`、busy 時はキュー |
 | **2** | **`prompt_worker` tool** + WorkerOutboundQueue + `ConductorSession` 配線 | tool → 2 回目 prompt 受信 |
 | **3** | bootstrap を待機中心に変更、プロンプト `FIXME` 削除 | ensemble / profile テスト |
-| **4**（任意） | 初回 conductor send へ Issue 本文注入 | issue-session integration |
-| **5**（フォロー） | `session/cancel` + preempt ポリシー | 進行中ターンの中止 → 新指示 |
+| **4**（任意） | 初回 conductor send へ Issue 本文注入 | [#37](https://github.com/otolab/agents-ensemble/issues/37) |
+| **5** | `session/cancel` + preempt ポリシー | 進行中ターンの中止 → 新指示 |
 
 Phase 0–2 が #36 の基本通信機構。Phase 3 はプロンプト整合。Phase 5 は割り込み。

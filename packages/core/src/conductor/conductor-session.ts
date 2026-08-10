@@ -236,8 +236,8 @@ export async function runConductorSession(
     inbox: workerSession.inbox,
   });
 
-  const workerOutboundQueue = new WorkerOutboundQueue((worker, instruction) =>
-    workerSession.sendWorkerMessage(worker, instruction),
+  const workerOutboundQueue = new WorkerOutboundQueue((worker, instruction, options) =>
+    workerSession.sendWorkerMessage(worker, instruction, options),
   );
 
   const promptWorkerTools = createPromptWorkerTool({

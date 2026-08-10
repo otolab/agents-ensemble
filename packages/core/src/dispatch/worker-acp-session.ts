@@ -99,6 +99,11 @@ export async function runWorkerAcpPrompt(
   return session.bridge.promptSession(session.sessionId, prompt, options);
 }
 
+/** 進行中の prompt ターンを `session/cancel` で中止する。 */
+export function cancelWorkerAcpPrompt(session: WorkerAcpSession): void {
+  session.bridge.cancelSession(session.sessionId);
+}
+
 export async function closeWorkerAcpSession(
   session: WorkerAcpSession,
 ): Promise<void> {

@@ -7,12 +7,15 @@ import {
   type AttachedWorker,
 } from '../dispatch/attach-worker.js';
 import {
+  cancelWorkerAcpPrompt,
   closeWorkerAcpSession,
   type ConnectWorkerAcpFn,
 } from '../dispatch/worker-acp-session.js';
-import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import { ConductorInbox } from './conductor-inbox.js';
-import type { SendWorkerMessageResult } from './send-worker-message.js';
+import type {
+  SendWorkerMessageOptions,
+  SendWorkerMessageResult,
+} from './send-worker-message.js';
 import type { WorkerStartedInfo, WorkerStartParams } from './types.js';
 
 export interface WorkerRuntimeOptions {
@@ -29,6 +32,9 @@ interface ResidentWorker {
   attached: AttachedWorker;
   state: 'idle' | 'prompting';
   queue: string[];
+  /** `session/cancel` 応答待ちの新指示。 */
+  preemptInstruction?: string;
+  cancelInFlight: boolean;
 }
 
 export class WorkerRuntime {
@@ -68,10 +74,11 @@ export class WorkerRuntime {
     return workerId;
   }
 
-  /** 常駐 worker へ user メッセージ（ACP `session/prompt`）を送る。busy 時は per-worker キューへ。 */
+  /** 常駐 worker へ user メッセージ（ACP `session/prompt`）を送る。busy 時はキュー、preempt 時は割り込み。 */
   sendWorkerMessage(
     name: string,
     instruction: string,
+    options?: SendWorkerMessageOptions,
   ): SendWorkerMessageResult {
     const text = instruction.trim();
     if (!text) {
@@ -92,6 +99,16 @@ export class WorkerRuntime {
     }
 
     if (resident.state === 'prompting') {
+      if (options?.preempt) {
+        resident.queue.length = 0;
+        resident.preemptInstruction = text;
+        if (!resident.cancelInFlight) {
+          resident.cancelInFlight = true;
+          cancelWorkerAcpPrompt(resident.attached.session);
+        }
+        return { status: 'preempted', worker: name };
+      }
+
       resident.queue.push(text);
       return {
         status: 'queued',
@@ -145,6 +162,7 @@ export class WorkerRuntime {
         attached,
         state: 'idle',
         queue: [],
+        cancelInFlight: false,
       };
       this.residents.set(started.name, resident);
 
@@ -176,23 +194,38 @@ export class WorkerRuntime {
     prompt: string,
   ): Promise<void> {
     resident.state = 'prompting';
+    resident.cancelInFlight = false;
     this.prompting.set(resident.workerId, resident.started);
+    let skipCompletion = false;
     try {
       const result = await runAttachedWorkerPrompt(
         resident.attached,
         prompt,
         this.options.inbox.createPermissionHandler(resident.workerId),
       );
-      this.options.inbox.publishWorkerCompleted(resident.workerId, result);
+      skipCompletion =
+        result.promptResult.stopReason === 'cancelled' &&
+        resident.preemptInstruction !== undefined;
+      if (!skipCompletion) {
+        this.options.inbox.publishWorkerCompleted(resident.workerId, result);
+      }
     } catch (error) {
-      this.options.inbox.publishWorkerFailed(resident.started, error);
+      if (!resident.preemptInstruction) {
+        this.options.inbox.publishWorkerFailed(resident.started, error);
+      }
     } finally {
       this.finishPromptRound(resident.workerId);
-      const next = resident.queue.shift();
-      if (next) {
-        await this.executeRound(resident, next);
+      const preempt = resident.preemptInstruction;
+      if (preempt) {
+        resident.preemptInstruction = undefined;
+        await this.executeRound(resident, preempt);
       } else {
-        resident.state = 'idle';
+        const next = resident.queue.shift();
+        if (next) {
+          await this.executeRound(resident, next);
+        } else {
+          resident.state = 'idle';
+        }
       }
     }
   }

@@ -69,4 +69,36 @@ describe('AcpClient', () => {
 
     await client.close();
   });
+
+  it('cancels an in-flight prompt via session/cancel', async () => {
+    const streams = createInProcessStreamPair();
+    let releasePrompt: (() => void) | undefined;
+
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      onPrompt: () =>
+        new Promise((resolve) => {
+          releasePrompt = () => resolve({ stopReason: 'end_turn' });
+        }),
+    });
+
+    const client = AcpClient.create({
+      readable: streams.clientReadable,
+      writable: streams.clientWritable,
+    });
+
+    await client.connect();
+    const sessionId = await client.newSession('/tmp');
+
+    const promptPromise = client.prompt(sessionId, 'slow task');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    client.cancelSession(sessionId);
+
+    const result = await promptPromise;
+    expect(result.stopReason).toBe('cancelled');
+    expect(releasePrompt).toBeDefined();
+
+    await client.close();
+  });
 });

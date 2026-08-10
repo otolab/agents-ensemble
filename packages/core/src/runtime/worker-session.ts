@@ -2,7 +2,7 @@ import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionDecision } from '../acp/types.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
-import type { SendWorkerMessageResult } from './send-worker-message.js';
+import type { SendWorkerMessageOptions, SendWorkerMessageResult } from './send-worker-message.js';
 import type { PermissionPipeline } from '../permission/permission-pipeline.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
 import { ConductorInbox } from './conductor-inbox.js';
@@ -103,8 +103,9 @@ export class WorkerSession {
   sendWorkerMessage(
     name: string,
     instruction: string,
+    options?: SendWorkerMessageOptions,
   ): SendWorkerMessageResult {
-    return this.runtime.sendWorkerMessage(name, instruction);
+    return this.runtime.sendWorkerMessage(name, instruction, options);
   }
 
   async stop(): Promise<void> {

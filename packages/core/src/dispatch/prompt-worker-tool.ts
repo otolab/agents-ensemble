@@ -28,12 +28,18 @@ export function createPromptWorkerTool(
             type: 'string',
             description: 'Work instruction for this round (Markdown allowed)',
           },
+          preempt: {
+            type: 'boolean',
+            description:
+              'If true, cancel the in-progress prompt turn and send this instruction immediately (default: queue when busy)',
+          },
         },
         required: ['worker', 'instruction'],
       },
       async execute(args) {
         const worker = String(args.worker ?? '').trim();
         const instruction = String(args.instruction ?? '').trim();
+        const preempt = args.preempt === true;
         if (!worker) {
           throw new Error('prompt_worker requires worker');
         }
@@ -41,7 +47,11 @@ export function createPromptWorkerTool(
           throw new Error('prompt_worker requires instruction');
         }
 
-        const result = options.outboundQueue.enqueue(worker, instruction);
+        const result = options.outboundQueue.enqueue(
+          worker,
+          instruction,
+          preempt ? { preempt: true } : undefined,
+        );
         if (result.status === 'error') {
           throw new Error(result.message ?? `prompt_worker failed for ${worker}`);
         }
@@ -60,6 +70,7 @@ export function createPromptWorkerTool(
               ? { position: result.position }
               : {}),
             ...(result.message !== undefined ? { message: result.message } : {}),
+            ...(preempt ? { preempt: true } : {}),
           },
         };
       },

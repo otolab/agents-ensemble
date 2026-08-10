@@ -203,4 +203,91 @@ describe('WorkerRuntime', () => {
     await runtime.shutdown();
     vi.restoreAllMocks();
   });
+
+  it('preempts in-flight prompt and runs the new instruction', async () => {
+    vi.spyOn(worktreeModule, 'createWorkerWorktree').mockResolvedValue({
+      path: '/tmp/wt',
+      branch: 'ensemble/issue-1',
+      issue: {
+        owner: 'org',
+        repo: 'repo',
+        number: 1,
+        url: 'https://github.com/org/repo/issues/1',
+      },
+    });
+
+    const inbox = new ConductorInbox();
+    const completed: string[] = [];
+    inbox.subscribe((message) => {
+      if (message.type === 'worker.completed') {
+        completed.push(message.workerId);
+      }
+    });
+
+    const prompts: string[] = [];
+    let cancelFirst: (() => void) | undefined;
+    const cancelSession = vi.fn(() => {
+      cancelFirst?.();
+    });
+
+    const promptSession = vi.fn((_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        return new Promise<{ stopReason: string; responseText?: string }>(
+          (resolve) => {
+            cancelFirst = () => resolve({ stopReason: 'cancelled' });
+          },
+        );
+      }
+      return Promise.resolve({
+        stopReason: 'end_turn',
+        responseText: 'pong',
+      });
+    });
+
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          cancelSession,
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+    });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      kind: 'ping',
+      systemPrompt: 'pong',
+      repoRoot: '/repo',
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(promptSession).toHaveBeenCalledOnce();
+    });
+
+    const preempted = runtime.sendWorkerMessage('ping-1', 'urgent task', {
+      preempt: true,
+    });
+    expect(preempted).toEqual({ status: 'preempted', worker: 'ping-1' });
+    expect(cancelSession).toHaveBeenCalledOnce();
+
+    cancelFirst!();
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toBe('urgent task');
+    expect(completed).toHaveLength(1);
+
+    await runtime.shutdown();
+    vi.restoreAllMocks();
+  });
 });
