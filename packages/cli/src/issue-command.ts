@@ -6,7 +6,7 @@ import {
   type ConductorSessionResult,
 } from '@agents-ensemble/core';
 import { bindAsyncOperatorInput, notifyOperatorInputReprompt } from './async-operator-input.js';
-import { isOperatorInputInteractive } from './prompt-operator-input.js';
+import { isOperatorInputInteractive, isOperatorInputTty } from './prompt-operator-input.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
 import { resolveCliMaxTurns } from './resolve-cli-max-turns.js';
 import { createDialogueSink, createHarnessSink } from './session-sinks.js';
@@ -25,6 +25,7 @@ export interface IssueCommandOptions {
 
 export interface IssueCommandDeps {
   isOperatorInputInteractive?: typeof isOperatorInputInteractive;
+  isOperatorInputTty?: typeof isOperatorInputTty;
   runIssueSession?: typeof runIssueSession;
   loadProfile?: typeof loadProfile;
   SessionLogger?: typeof SessionLogger;
@@ -49,6 +50,7 @@ export async function executeIssueCommand(
 ): Promise<ConductorSessionResult> {
   const isInteractive =
     deps.isOperatorInputInteractive ?? isOperatorInputInteractive;
+  const isTty = deps.isOperatorInputTty ?? isOperatorInputTty;
   const runSession = deps.runIssueSession ?? runIssueSession;
   const loadProfileFn = deps.loadProfile ?? loadProfile;
   const SessionLoggerCtor = deps.SessionLogger ?? SessionLogger;
@@ -90,12 +92,16 @@ export async function executeIssueCommand(
       ? {
           bindOperatorInput: bindAsyncOperatorInput,
           continueOnConductorError: true,
-          waitForOperatorExit: !options.noWait,
-          onPostLoopWait: () => {
-            console.error(
-              '\n自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。\n',
-            );
-          },
+          ...(isTty() && !options.noWait
+            ? {
+                waitForOperatorExit: true,
+                onPostLoopWait: () => {
+                  console.error(
+                    '\n自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。\n',
+                  );
+                },
+              }
+            : {}),
         }
       : {}),
     onOpenQuestionEnqueued: (question) => {

@@ -12,6 +12,11 @@ export function isOperatorInputInteractive(): boolean {
   return process.stdin.isTTY ?? false;
 }
 
+/** post-loop 待機を有効にできる TTY 入力か（`ENSEMBLE_OPERATOR_MESSAGE` 単発注入は除外）。 */
+export function isOperatorInputTty(): boolean {
+  return process.stdin.isTTY ?? false;
+}
+
 function formatMaxTurnsLabel(maxTurns: number | null): string {
   return maxTurns === null ? '∞' : String(maxTurns);
 }

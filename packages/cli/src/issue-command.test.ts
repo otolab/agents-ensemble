@@ -121,7 +121,7 @@ describe('executeIssueCommand maxTurns wiring', () => {
     );
   });
 
-  it('enables waitForOperatorExit when interactive without --no-wait', async () => {
+  it('enables waitForOperatorExit when interactive TTY without --no-wait', async () => {
     const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
     const loadProfile = vi.fn().mockResolvedValue({
       profile: { workers: [] },
@@ -133,6 +133,7 @@ describe('executeIssueCommand maxTurns wiring', () => {
 
     await executeIssueCommand('https://github.com/org/repo/issues/1', baseOptions, {
       isOperatorInputInteractive: () => true,
+      isOperatorInputTty: () => true,
       runIssueSession,
       loadProfile,
       SessionLogger,
@@ -146,7 +147,38 @@ describe('executeIssueCommand maxTurns wiring', () => {
     );
   });
 
-  it('disables waitForOperatorExit when interactive with --no-wait', async () => {
+  it('does not enable waitForOperatorExit when interactive via env but non-TTY', async () => {
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand('https://github.com/org/repo/issues/1', baseOptions, {
+      isOperatorInputInteractive: () => true,
+      isOperatorInputTty: () => false,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bindOperatorInput: expect.any(Function),
+        continueOnConductorError: true,
+      }),
+    );
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        waitForOperatorExit: true,
+      }),
+    );
+  });
+
+  it('disables waitForOperatorExit when interactive TTY with --no-wait', async () => {
     const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
     const loadProfile = vi.fn().mockResolvedValue({
       profile: { workers: [] },
@@ -161,6 +193,7 @@ describe('executeIssueCommand maxTurns wiring', () => {
       { ...baseOptions, noWait: true },
       {
         isOperatorInputInteractive: () => true,
+        isOperatorInputTty: () => true,
         runIssueSession,
         loadProfile,
         SessionLogger,
