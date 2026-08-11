@@ -9,6 +9,7 @@
     "url": "git+https://github.com/otolab/agents-ensemble.git"
   },
   "license": "MIT",
+  "packageManager": "pnpm@10.33.4",
   "scripts": {
     "build": "tsc --build",
     "type-check": "tsc --build --emitDeclarationOnly",

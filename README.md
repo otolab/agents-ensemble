@@ -97,11 +97,33 @@ e2e では `test-acp.yaml` の `conductorModelId`（未指定時 `auto`）を使
 
 ## 開発
 
+**前提**: Node.js 22、pnpm 10.12.1 以上（`package.json` の `packageManager` に合わせる。Corepack 利用可）。
+
 ```bash
+corepack enable   # 初回のみ（任意）
 pnpm install
 pnpm build
 pnpm ensemble --help
+```
 
+### git worktree と依存インストール
+
+`ensemble issue` の isolated モードは Issue ごとに `.ensemble/worktrees/issue-N` を切る。各 worktree は独自の `node_modules` が必要。
+
+本リポジトリは pnpm の **global virtual store**（`enableGlobalVirtualStore`）を有効にしている。メイン worktree で一度 `pnpm install` すると、同一マシン上の **2 本目以降の worktree** では install がほぼ symlink 張り替えのみになる（[pnpm: Git Worktrees](https://pnpm.io/git-worktrees)）。
+
+```bash
+# メイン worktree で warm-up（初回 or lockfile 更新後）
+pnpm install
+
+# worktree 作成後（ensemble が切った .ensemble/worktrees/issue-N など）
+cd .ensemble/worktrees/issue-42
+pnpm install --frozen-lockfile
+```
+
+CI では global virtual store は自動無効（cold cache のため）。
+
+```bash
 # テスト（testing-strategy.md 参照）
 pnpm test:run           # unittest（CI 必須）
 pnpm test:integration   # 実 agent acp（test-acp.yaml 要）
