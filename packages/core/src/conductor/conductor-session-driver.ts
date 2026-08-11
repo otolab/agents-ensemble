@@ -23,6 +23,17 @@ import {
   type IssueLoopStopReason,
 } from './session-policy.js';
 
+export interface ConductorSendCompleteInfo {
+  sendCount: number;
+  runId: string;
+  status: ConductorSendResult['status'];
+  result?: string;
+  error?: ConductorSendResult['error'];
+  workerDispatches: number;
+  workerFailures: number;
+  autonomousTurns: number;
+}
+
 export interface ConductorSessionDriverOptions {
   issueUrl: string;
   profile: Profile;
@@ -36,15 +47,7 @@ export interface ConductorSessionDriverOptions {
   continueOnConductorError: boolean;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
-  onSendComplete: (info: {
-    sendCount: number;
-    runId: string;
-    status: ConductorSendResult['status'];
-    result?: string;
-    error?: ConductorSendResult['error'];
-    workerDispatches: number;
-    workerFailures: number;
-  }) => void;
+  onSendComplete: (info: ConductorSendCompleteInfo) => void;
   onOpenQuestionEnqueued?: (question: OpenQuestion) => void;
 }
 
@@ -53,7 +56,6 @@ export interface ConductorSessionDriverResult {
   sendCount: number;
   lastSendResult: ConductorSendResult;
   autonomousTurns: number;
-  lastDispatchesThisTurn: number;
 }
 
 /**
@@ -81,10 +83,10 @@ export async function runConductorSessionDriver(
     onSendComplete: (info) => {
       sendCount = info.sendCount;
       lastDispatchesThisTurn = info.workerDispatches + info.workerFailures;
+      autonomousTurns = info.autonomousTurns;
       options.onSendComplete(info);
     },
   });
-  autonomousTurns++;
 
   while (true) {
     if (autonomousTurns >= options.maxTurns) {
@@ -142,19 +144,24 @@ export async function runConductorSessionDriver(
       continue;
     }
 
+    const autonomousTurnsAfter = autonomousTurnsAfterConductorSend(
+      event,
+      autonomousTurns,
+    );
     lastSendResult = await runEventConductorSend({
       message: formatSessionEventForConductor(event),
       conductor: options.conductor,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
       sendCount,
+      autonomousTurns: autonomousTurnsAfter,
       onSendComplete: (info) => {
         sendCount = info.sendCount;
         lastDispatchesThisTurn = info.workerDispatches + info.workerFailures;
+        autonomousTurns = info.autonomousTurns;
         options.onSendComplete(info);
       },
     });
-    autonomousTurns = autonomousTurnsAfterConductorSend(event, autonomousTurns);
 
     const loopState = buildIssueLoopStopInput({
       autonomousTurns,
@@ -178,7 +185,6 @@ export async function runConductorSessionDriver(
     sendCount,
     lastSendResult,
     autonomousTurns,
-    lastDispatchesThisTurn,
   };
 }
 
@@ -188,15 +194,7 @@ async function runInitialConductorSend(input: {
   conductor: ConductorAgent;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
-  onSendComplete: (info: {
-    sendCount: number;
-    runId: string;
-    status: ConductorSendResult['status'];
-    result?: string;
-    error?: ConductorSendResult['error'];
-    workerDispatches: number;
-    workerFailures: number;
-  }) => void;
+  onSendComplete: (info: ConductorSendCompleteInfo) => void;
 }): Promise<ConductorSendResult> {
   await fetchIssueContext(input.issueUrl);
   const message = compileConductorSystemPrompt({
@@ -211,6 +209,7 @@ async function runInitialConductorSend(input: {
     workerDispatches: input.workerDispatches,
     workerFailures: input.workerFailures,
     sendCount: 0,
+    autonomousTurns: 1,
     onSendComplete: input.onSendComplete,
   });
 }
@@ -221,15 +220,8 @@ async function runEventConductorSend(input: {
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   sendCount: number;
-  onSendComplete: (info: {
-    sendCount: number;
-    runId: string;
-    status: ConductorSendResult['status'];
-    result?: string;
-    error?: ConductorSendResult['error'];
-    workerDispatches: number;
-    workerFailures: number;
-  }) => void;
+  autonomousTurns: number;
+  onSendComplete: (info: ConductorSendCompleteInfo) => void;
 }): Promise<ConductorSendResult> {
   const workersBefore = input.workerDispatches.length;
   const failuresBefore = input.workerFailures.length;
@@ -248,6 +240,7 @@ async function runEventConductorSend(input: {
     error: sendResult.error,
     workerDispatches,
     workerFailures,
+    autonomousTurns: input.autonomousTurns,
   });
 
   return sendResult;

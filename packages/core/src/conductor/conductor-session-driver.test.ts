@@ -135,6 +135,99 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('completed');
   });
 
+  it('reports autonomousTurns on each send complete', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'running',
+        result: 'working',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'done',
+      });
+
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const autonomousTurnsTrace: number[] = [];
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor, maxTurns: 5 }),
+      onSendComplete: (info) => {
+        autonomousTurnsTrace.push(info.autonomousTurns);
+      },
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'continue',
+    });
+
+    await driverPromise;
+
+    expect(autonomousTurnsTrace).toEqual([1, 0]);
+  });
+
+  it('blocks worker.completed at max turns until operator.message', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'running',
+        result: 'working',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'operator resumed',
+      });
+
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const openQuestions = new OpenQuestionRegistry();
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor, openQuestions, maxTurns: 1 }),
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+
+    eventQueue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'worker',
+        acpSessionId: 'sess-1',
+        status: 'finished',
+        result: 'late worker',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(send).toHaveBeenCalledTimes(1);
+
+    const maxTurnsQuestion = openQuestions.listOpen().find(
+      (question) => question.source === 'max_turns',
+    );
+    openQuestions.answer(maxTurnsQuestion!.id, {
+      answer: 'go ahead',
+      answeredBy: 'operator',
+    });
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'go ahead',
+    });
+
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(String(send.mock.calls[1]![0])).toContain('go ahead');
+    expect(result.autonomousTurns).toBe(0);
+    expect(result.stopReason).toBe('completed');
+  });
+
   it('dispatches operator.message at max turns after registering max-turns question', async () => {
     const send = vi
       .fn()

@@ -141,6 +141,24 @@ describe('canDispatchConductorSend', () => {
       ),
     ).toBe(false);
   });
+
+  it('allows worker.completed below max turns', () => {
+    expect(
+      canDispatchConductorSend(
+        {
+          type: 'worker.completed',
+          result: {
+            name: 'worker',
+            acpSessionId: 'sess-1',
+            status: 'finished',
+            result: 'ok',
+          },
+        },
+        4,
+        5,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('autonomousTurnsAfterConductorSend', () => {
@@ -151,5 +169,22 @@ describe('autonomousTurnsAfterConductorSend', () => {
         5,
       ),
     ).toBe(0);
+  });
+
+  it('increments on worker.completed', () => {
+    expect(
+      autonomousTurnsAfterConductorSend(
+        {
+          type: 'worker.completed',
+          result: {
+            name: 'worker',
+            acpSessionId: 'sess-1',
+            status: 'finished',
+            result: 'ok',
+          },
+        },
+        2,
+      ),
+    ).toBe(3);
   });
 });

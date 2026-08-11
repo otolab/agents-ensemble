@@ -158,10 +158,12 @@ export { runIssueSession } from './conductor/issue-session.js';
 export type {
   ConductorSessionResult,
   RunConductorSessionOptions,
+} from './conductor/conductor-session.js';
+export type {
   OperatorInputBinding,
   OperatorInputBindingApi,
   OperatorInputContext,
-} from './conductor/conductor-session.js';
+} from './conductor/operator-input-binding.js';
 export { submitOperatorInput } from './conductor/submit-operator-input.js';
 export type { SubmitOperatorInputInput } from './conductor/submit-operator-input.js';
 export type {
@@ -184,6 +186,7 @@ export { runConductorSessionDriver } from './conductor/conductor-session-driver.
 export type {
   ConductorSessionDriverOptions,
   ConductorSessionDriverResult,
+  ConductorSendCompleteInfo,
 } from './conductor/conductor-session-driver.js';
 export { createTestOperatorInputBinding } from './conductor/testing/test-operator-input-binding.js';
 export type { TestOperatorInputBinding } from './conductor/testing/test-operator-input-binding.js';

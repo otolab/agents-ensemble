@@ -332,7 +332,6 @@ export async function runConductorSession(
   };
 
   let sendCount = 0;
-  let lastDispatchesThisTurn = 0;
   let stopReason: IssueLoopStopReason = 'completed';
   const continueOnConductorError = options.continueOnConductorError ?? false;
   let autonomousTurns = 0;
@@ -387,7 +386,6 @@ export async function runConductorSession(
     stopReason = driverResult.stopReason;
     sendCount = driverResult.sendCount;
     autonomousTurns = driverResult.autonomousTurns;
-    lastDispatchesThisTurn = driverResult.lastDispatchesThisTurn;
 
     return buildResult();
 
@@ -399,10 +397,10 @@ export async function runConductorSession(
       error?: ConductorSendResult['error'];
       workerDispatches: number;
       workerFailures: number;
+      autonomousTurns: number;
     }): void {
       sendCount = info.sendCount;
-      lastDispatchesThisTurn =
-        info.workerDispatches + info.workerFailures;
+      autonomousTurns = info.autonomousTurns;
       sessionLogger.emit({
         type: 'conductor.send',
         sendCount: info.sendCount,

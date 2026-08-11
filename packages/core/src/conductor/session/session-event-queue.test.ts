@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canDispatchConductorSend } from '../conductor-session-loop.js';
+import { canDispatchConductorSend } from '../session-policy.js';
 import { SessionEventQueue } from './session-event-queue.js';
 
 describe('SessionEventQueue', () => {
