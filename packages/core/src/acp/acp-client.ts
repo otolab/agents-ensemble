@@ -16,6 +16,8 @@ export interface AcpClientOptions {
   clientVersion?: string;
   /** Set when backed by a child process (for cleanup). */
   childProcess?: ChildProcess;
+  /** 子プロセス stderr capture の drain（close 時に呼ぶ）。 */
+  drainChildStderr?: () => Promise<void>;
 }
 
 export type SessionUpdateHandler = (
@@ -146,6 +148,10 @@ export class AcpClient {
 
   async close(): Promise<void> {
     this.peer.close();
+    this.options.childProcess?.stdin?.end();
+    if (this.options.drainChildStderr) {
+      await this.options.drainChildStderr();
+    }
     if (this.options.childProcess) {
       await terminateChildProcess(this.options.childProcess);
     }

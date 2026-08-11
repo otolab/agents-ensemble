@@ -1,5 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import { AcpClient, type AcpClientOptions } from './acp-client.js';
+import {
+  attachChildProcessStderrCapture,
+  type WorkerProcessStdioLine,
+  type WorkerProcessStdioLineHandler,
+} from './process-stream-capture.js';
 import type { PermissionHandler, PromptResult } from './types.js';
 import type { SessionUpdateHandler } from './acp-client.js';
 
@@ -8,7 +14,13 @@ export interface SpawnAcpProcessOptions extends AcpClientOptions {
   args?: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  /** worker attach 時に設定。子プロセス stdio capture のラベル用。 */
+  workerName?: string;
+  /** stderr 行を harness へ渡す（SessionLogger 等）。 */
+  onProcessStdioLine?: WorkerProcessStdioLineHandler;
 }
+
+export type { WorkerProcessStdioLine, WorkerProcessStdioLineHandler };
 
 export interface RunAcpSessionOptions {
   cwd: string;
@@ -29,18 +41,33 @@ export async function spawnAcpProcess(
 
   const child = spawn(command, args, {
     cwd: options.cwd ?? process.cwd(),
-    stdio: ['pipe', 'pipe', 'inherit'],
+    stdio: ['pipe', 'pipe', 'pipe'],
     env: options.env ?? process.env,
   });
 
-  if (!child.stdin || !child.stdout) {
+  if (!child.stdin || !child.stdout || !child.stderr) {
     child.kill();
     throw new Error(`Failed to open stdio for ${command} ${args.join(' ')}`);
   }
 
+  const { drainStderr } = attachChildProcessStderrCapture(child.stderr, {
+    workerName: options.workerName,
+    onLine: options.onProcessStdioLine,
+  });
+
+  const drainChildStderr = async (): Promise<void> => {
+    if (!child.stderr.readableEnded) {
+      await Promise.race([
+        once(child.stderr, 'end'),
+        once(child, 'exit'),
+      ]);
+    }
+    await drainStderr();
+  };
+
   return AcpClient.create(
     { readable: child.stdout, writable: child.stdin },
-    { ...options, childProcess: child },
+    { ...options, childProcess: child, drainChildStderr },
   );
 }
 
