@@ -218,6 +218,45 @@ describe('WorkerRuntime', () => {
     expect(runtime.attachedCount).toBe(0);
   });
 
+  it('emits bootstrap.failed telemetry when bootstrap prompt fails', async () => {
+    const inbox = new ConductorInbox();
+    const bootstrapTelemetry: Array<{ phase: string; error?: string }> = [];
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession: vi.fn().mockRejectedValue(new Error('prompt failed')),
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+      onBootstrapTelemetry: (event) => {
+        bootstrapTelemetry.push({ phase: event.phase, error: event.error });
+      },
+    });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      systemPrompt: 'pong',
+      worktree: TEST_WORKTREE,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+    });
+
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    expect(bootstrapTelemetry).toEqual([
+      { phase: 'started' },
+      { phase: 'failed', error: 'prompt failed' },
+    ]);
+    expect(runtime.attachedCount).toBe(1);
+  });
+
   it('preempts in-flight prompt and runs the new instruction', async () => {
     const inbox = new ConductorInbox();
     const completed: string[] = [];
