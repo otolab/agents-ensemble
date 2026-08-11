@@ -42,6 +42,10 @@ program
   )
   .option('--resume <agentId>', 'Resume a previous conductor agent')
   .option(
+    '--continue',
+    'Resume the latest session for this issue (uses sidecar with newest updatedAt)',
+  )
+  .option(
     '--profile <name>',
     'Profile name or path (default: bundled default; name resolves bundled then cwd profiles/<name>/)',
   )
@@ -68,6 +72,7 @@ program
         repoRoot: string;
         conductorCwd: string;
         resume?: string;
+        continue?: boolean;
         profile?: string;
         model?: string;
         maxTurns?: number;
