@@ -172,7 +172,19 @@ export type {
 export {
   canDispatchConductorSend,
   autonomousTurnsAfterConductorSend,
-} from './conductor/conductor-session-loop.js';
+  shouldStopIssueLoop,
+  resolveIssueLoopStopReason,
+  DEFAULT_MAX_ISSUE_TURNS,
+} from './conductor/session-policy.js';
+export type {
+  IssueLoopStopInput,
+  IssueLoopStopReason,
+} from './conductor/session-policy.js';
+export { runConductorSessionDriver } from './conductor/conductor-session-driver.js';
+export type {
+  ConductorSessionDriverOptions,
+  ConductorSessionDriverResult,
+} from './conductor/conductor-session-driver.js';
 export { createTestOperatorInputBinding } from './conductor/testing/test-operator-input-binding.js';
 export type { TestOperatorInputBinding } from './conductor/testing/test-operator-input-binding.js';
 export {
@@ -197,13 +209,6 @@ export type {
   WorkerFailedEvent,
   PermissionPendingEvent,
 } from './conductor/session/session-event.js';
-
-export {
-  DEFAULT_MAX_ISSUE_TURNS,
-  resolveIssueLoopStopReason,
-  shouldStopIssueLoop,
-} from './conductor/issue-loop.js';
-export type { IssueLoopStopReason } from './conductor/issue-loop.js';
 
 export {
   CONDUCTOR_AUTH_HINT,

@@ -1,41 +1,10 @@
-export type IssueLoopStopReason =
-  | 'completed'
-  | 'error'
-  | 'max_turns'
-  | 'interrupted';
-
-export interface IssueLoopStopInput {
-  /** 直近のオペレータ入力から消費した conductor 自律ターン数。 */
-  autonomousTurns: number;
-  maxTurns: number;
-  lastStatus: string;
-  dispatchesThisTurn: number;
-  runningWorkers?: number;
-  pendingPermissions?: number;
-  openQuestions?: number;
-  /** TTY 等でオペレータ入力があるとき、conductor error でもループを継続する。 */
-  continueOnConductorError?: boolean;
-}
-
-/** Issue session の conductor ループを終了すべきか判定する。 */
-export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
-  if (input.lastStatus === 'error') {
-    return !input.continueOnConductorError;
-  }
-  if ((input.runningWorkers ?? 0) > 0) return false;
-  if ((input.pendingPermissions ?? 0) > 0) return false;
-  if ((input.openQuestions ?? 0) > 0) return false;
-  if (input.dispatchesThisTurn === 0 && input.lastStatus === 'finished') {
-    return true;
-  }
-  return false;
-}
-
-export function resolveIssueLoopStopReason(
-  input: IssueLoopStopInput,
-): IssueLoopStopReason {
-  if (input.lastStatus === 'error') return 'error';
-  return 'completed';
-}
-
-export const DEFAULT_MAX_ISSUE_TURNS = 5;
+/**
+ * @deprecated import from `./session-policy.js` instead.
+ * 後方互換のため stop ポリシーのみ再 export する。
+ */
+export {
+  DEFAULT_MAX_ISSUE_TURNS,
+  resolveIssueLoopStopReason,
+  shouldStopIssueLoop,
+} from './session-policy.js';
+export type { IssueLoopStopInput, IssueLoopStopReason } from './session-policy.js';

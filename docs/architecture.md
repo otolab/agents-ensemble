@@ -292,6 +292,26 @@ worker (ACP)                    conductor (SDK)              オペレータ
 
 **ConductorSession ループ**（[ADR 0009](adr/0009-conductor-session-event-queue.md)）
 
+Driver / Policy / View の 3 層（Issue #62）:
+
+| 層 | 責務 | モジュール |
+|----|------|------------|
+| **SessionPolicy** | `canDispatchConductorSend`, `shouldStopIssueLoop`, `autonomousTurnsAfterConductorSend` | `session-policy.ts` |
+| **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` 呼び出し | `conductor-session-driver.ts` |
+| **SessionView** | TTY readline / `ENSEMBLE_OPERATOR_MESSAGE` / 将来 TUI | CLI `bindAsyncOperatorInput`（[operator-input.md](operator-input.md)） |
+
+```
+operator (View) ──submit──► operator.message ──► SessionEventQueue
+                                                      │
+worker / harness ──enqueue──►─────────────────────────┤
+                                                      ▼
+                                            SessionDriver (ループ)
+                                                      │
+                                            SessionPolicy (dispatch / stop)
+                                                      ▼
+                                              conductor.agent.send
+```
+
 - `WorkerSession` / `ConductorSession` が対。worker 由来・operator 由来のイベントは **1 本の列** に集約し、1 イベント = 1 `agent.send`（初回のみ system + ブリーフィング）
 
 - `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）

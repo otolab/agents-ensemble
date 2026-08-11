@@ -1,18 +1,16 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import { createAnswerOpenQuestionTool } from '../escalation/answer-open-question-tool.js';
 import { createAskHumanTool } from '../escalation/ask-human-tool.js';
-import { ensureMaxTurnsOpenQuestion } from '../escalation/enqueue-max-turns-question.js';
 import { createOpenQuestionListTools } from '../escalation/open-question-list-tools.js';
 import { openQuestionToEscalationRecord } from '../escalation/open-question-to-escalation.js';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import type { EscalationRecord } from '../escalation/human-inquiry.js';
-import { fetchIssueContext } from '../github/issue-context.js';
 import type { PermissionPolicyRules } from '../permission/permission-policy.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { createResolvePermissionTool } from '../permission/resolve-permission-tool.js';
 import type { Profile } from '../profile/types.js';
-import { profileWorkersToSessionSpecs, resolveAgentSystemPrompt, sessionStateFromProfile } from '../profile/types.js';
+import { profileWorkersToSessionSpecs, sessionStateFromProfile } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
@@ -24,21 +22,15 @@ import {
 } from '../worktree/worktree.js';
 import { WorkerOutboundQueue } from '../runtime/worker-outbound-queue.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
-import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import { ConductorAgent } from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
-import { formatSessionEventForConductor } from './session/format-session-event.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
-import type { SessionEvent } from './session/session-event.js';
-import { isConductorSendEvent } from './session/session-event.js';
 import {
   DEFAULT_MAX_ISSUE_TURNS,
-  resolveIssueLoopStopReason,
-  shouldStopIssueLoop,
   type IssueLoopStopReason,
-} from './issue-loop.js';
-import { canDispatchConductorSend, autonomousTurnsAfterConductorSend } from './conductor-session-loop.js';
+} from './session-policy.js';
+import { runConductorSessionDriver } from './conductor-session-driver.js';
 import {
   assertSessionSidecarMatches,
   requireSessionSidecarForResume,
@@ -339,10 +331,6 @@ export async function runConductorSession(
     });
   };
 
-  let lastSendResult: ConductorSendResult = {
-    runId: '',
-    status: 'finished',
-  };
   let sendCount = 0;
   let lastDispatchesThisTurn = 0;
   let stopReason: IssueLoopStopReason = 'completed';
@@ -380,97 +368,26 @@ export async function runConductorSession(
   }
 
   try {
-    lastSendResult = await runInitialConductorSend({
-      options,
+    const driverResult = await runConductorSessionDriver({
+      issueUrl: options.issueUrl,
       profile: activeProfile,
       conductor,
+      eventQueue,
       workerSession,
       permissionPipeline,
+      openQuestions,
+      shutdownSignal,
+      maxTurns,
+      continueOnConductorError,
       workerDispatches: sessionLogger.workerDispatches,
       workerFailures: sessionLogger.workerFailures,
-      autonomousTurns,
-      maxTurns,
       onSendComplete: recordSendComplete,
+      onOpenQuestionEnqueued: (question) => options.onOpenQuestionEnqueued?.(question),
     });
-    autonomousTurns++;
-
-    while (true) {
-      if (autonomousTurns >= maxTurns) {
-        ensureMaxTurnsOpenQuestion(openQuestions, {
-          issueUrl: options.issueUrl,
-          autonomousTurns,
-          maxTurns,
-          turnCount: sendCount,
-          workerDispatchCount: sessionLogger.workerDispatches.length,
-          workerFailureCount: sessionLogger.workerFailures.length,
-          lastResult: lastSendResult.result,
-        }, (question) => {
-          options.onOpenQuestionEnqueued?.(question);
-        });
-      }
-
-      if (eventQueue.isEmpty() && workerSession.runtime.runningCount === 0) {
-        const loopState = buildLoopState({
-          autonomousTurns,
-          maxTurns,
-          lastSendResult,
-          dispatchesThisTurn: lastDispatchesThisTurn,
-          workerSession,
-          permissionPipeline,
-          openQuestions,
-          continueOnConductorError,
-        });
-        stopReason = resolveIssueLoopStopReason(loopState);
-        if (shouldStopIssueLoop(loopState)) {
-          break;
-        }
-      }
-
-      let event: SessionEvent | undefined;
-      try {
-        event = await eventQueue.waitForSendEvent({
-          signal: shutdownSignal,
-          accept: (candidate) =>
-            canDispatchConductorSend(candidate, autonomousTurns, maxTurns),
-        });
-      } catch (error) {
-        if (isAbortError(error)) {
-          stopReason = 'interrupted';
-          break;
-        }
-        throw error;
-      }
-
-      if (!event || !isConductorSendEvent(event)) {
-        continue;
-      }
-
-      lastSendResult = await runEventConductorSend({
-        message: formatSessionEventForConductor(event),
-        conductor,
-        workerDispatches: sessionLogger.workerDispatches,
-        workerFailures: sessionLogger.workerFailures,
-        sendCount,
-        onSendComplete: recordSendComplete,
-      });
-      autonomousTurns = autonomousTurnsAfterConductorSend(event, autonomousTurns);
-
-      const loopState = buildLoopState({
-        autonomousTurns,
-        maxTurns,
-        lastSendResult,
-        dispatchesThisTurn: lastDispatchesThisTurn,
-        workerSession,
-        permissionPipeline,
-        openQuestions,
-        continueOnConductorError,
-      });
-      stopReason = resolveIssueLoopStopReason(loopState);
-
-      if (shouldStopIssueLoop(loopState)) {
-        break;
-      }
-    }
+    stopReason = driverResult.stopReason;
+    sendCount = driverResult.sendCount;
+    autonomousTurns = driverResult.autonomousTurns;
+    lastDispatchesThisTurn = driverResult.lastDispatchesThisTurn;
 
     return buildResult();
 
@@ -521,28 +438,6 @@ export async function runConductorSession(
   }
 }
 
-function buildLoopState(input: {
-  autonomousTurns: number;
-  maxTurns: number;
-  lastSendResult: ConductorSendResult;
-  dispatchesThisTurn: number;
-  workerSession: WorkerSession;
-  permissionPipeline: PermissionPipeline;
-  openQuestions: OpenQuestionRegistry;
-  continueOnConductorError: boolean;
-}) {
-  return {
-    autonomousTurns: input.autonomousTurns,
-    maxTurns: input.maxTurns,
-    lastStatus: input.lastSendResult.status,
-    dispatchesThisTurn: input.dispatchesThisTurn,
-    runningWorkers: input.workerSession.runtime.runningCount,
-    pendingPermissions: input.permissionPipeline.pending.size,
-    openQuestions: input.openQuestions.openCount,
-    continueOnConductorError: input.continueOnConductorError,
-  };
-}
-
 function rejectAllPendingPermissions(
   pipeline: PermissionPipeline,
   inbox: WorkerSession['inbox'],
@@ -589,89 +484,4 @@ function attachLegacySessionCallbacks(
         break;
     }
   });
-}
-
-async function runInitialConductorSend(input: {
-  options: RunConductorSessionOptions;
-  profile: Profile;
-  conductor: ConductorAgent;
-  workerSession: WorkerSession;
-  permissionPipeline: PermissionPipeline;
-  workerDispatches: WorkerDispatchResult[];
-  workerFailures: WorkerFailureRecord[];
-  autonomousTurns: number;
-  maxTurns: number;
-  onSendComplete: (info: {
-    sendCount: number;
-    runId: string;
-    status: ConductorSendResult['status'];
-    result?: string;
-    error?: ConductorSendResult['error'];
-    workerDispatches: number;
-    workerFailures: number;
-  }) => void;
-}): Promise<ConductorSendResult> {
-  await fetchIssueContext(input.options.issueUrl);
-  const message = compileConductorSystemPrompt({
-    issueUrl: input.options.issueUrl,
-    profile: input.profile,
-    roleBootstrap: resolveAgentSystemPrompt('conductor', input.profile.agents),
-  });
-
-  return runEventConductorSend({
-    message,
-    conductor: input.conductor,
-    workerDispatches: input.workerDispatches,
-    workerFailures: input.workerFailures,
-    sendCount: 0,
-    onSendComplete: input.onSendComplete,
-  });
-}
-
-async function runEventConductorSend(input: {
-  message: string;
-  conductor: ConductorAgent;
-  workerDispatches: WorkerDispatchResult[];
-  workerFailures: WorkerFailureRecord[];
-  sendCount: number;
-  onSendComplete: (info: {
-    sendCount: number;
-    runId: string;
-    status: ConductorSendResult['status'];
-    result?: string;
-    error?: ConductorSendResult['error'];
-    workerDispatches: number;
-    workerFailures: number;
-  }) => void;
-}): Promise<ConductorSendResult> {
-  const workersBefore = input.workerDispatches.length;
-  const failuresBefore = input.workerFailures.length;
-
-  const sendResult = await input.conductor.send(input.message);
-
-  const workerDispatches = input.workerDispatches.length - workersBefore;
-  const workerFailures = input.workerFailures.length - failuresBefore;
-  const sendCount = input.sendCount + 1;
-
-  input.onSendComplete({
-    sendCount,
-    runId: sendResult.runId,
-    status: sendResult.status,
-    result: sendResult.result,
-    error: sendResult.error,
-    workerDispatches,
-    workerFailures,
-  });
-
-  return sendResult;
-}
-
-function isAbortError(error: unknown): boolean {
-  return (
-    (error instanceof DOMException && error.name === 'AbortError') ||
-    (typeof error === 'object' &&
-      error !== null &&
-      'name' in error &&
-      (error as { name: string }).name === 'AbortError')
-  );
 }
