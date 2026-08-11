@@ -261,6 +261,36 @@ export async function runConductorSession(
       sessionLogger.emit({ type: 'worker.failed', failure });
       eventQueue.enqueue({ type: 'worker.failed', failure });
     },
+    onBootstrapTelemetry: (event) => {
+      switch (event.phase) {
+        case 'started':
+          sessionLogger.emit({
+            type: 'harness.worker.bootstrap.started',
+            name: event.name,
+            kind: event.kind,
+            workerId: event.workerId,
+          });
+          break;
+        case 'completed':
+          sessionLogger.emit({
+            type: 'harness.worker.bootstrap.completed',
+            name: event.name,
+            kind: event.kind,
+            workerId: event.workerId,
+            stopReason: event.stopReason!,
+          });
+          break;
+        case 'failed':
+          sessionLogger.emit({
+            type: 'harness.worker.bootstrap.failed',
+            name: event.name,
+            kind: event.kind,
+            workerId: event.workerId,
+            error: event.error!,
+          });
+          break;
+      }
+    },
   });
 
   workerSession.bootstrap();

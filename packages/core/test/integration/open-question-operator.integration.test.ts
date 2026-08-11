@@ -17,6 +17,7 @@ import {
 import {
   expectNotLegacyFollowUpPrompt,
   extractYamlScalar,
+  isWorkerCompletedConductorMessage,
 } from './helpers/conductor-session-assertions.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
 
@@ -187,7 +188,7 @@ describe('open question / operator flow integration', () => {
         });
         return { runId: 'run-2', status: 'finished', result: 'permission resolved' };
       }
-      if (message.includes('worker 完了')) {
+      if (isWorkerCompletedConductorMessage(message)) {
         return { runId: 'run-3', status: 'finished', result: 'conductor-ok' };
       }
       return { runId: `run-${sendCount}`, status: 'finished', result: 'ok' };
@@ -209,7 +210,8 @@ describe('open question / operator flow integration', () => {
     expect(mockSend).toHaveBeenCalledTimes(3);
     expect(messages[0]).toContain('Issue #1');
     expect(messages[1]).toContain('permission 判断待ち');
-    expect(messages[2]).toContain('worker 完了');
+    expect(messages[2]).toContain('```yaml\n# worker.completed');
+    expect(messages[2]).toContain('## worker bootstrap 完了');
     expect(result.workerDispatches).toHaveLength(1);
     expect(result.workerFailures).toHaveLength(0);
     expect(result.stopReason).toBe('completed');

@@ -6,12 +6,13 @@ export function formatSessionEventForConductor(event: SessionEvent): string {
   switch (event.type) {
     case 'operator.message':
       return event.text.trim();
-    case 'worker.completed':
-      return [
-        '## worker 完了',
-        '',
-        fencedYaml('worker.completed', event.result),
-      ].join('\n');
+    case 'worker.completed': {
+      const heading =
+        event.result.roundKind === 'bootstrap'
+          ? '## worker bootstrap 完了'
+          : '## worker 作業ラウンド完了';
+      return [heading, '', fencedYaml('worker.completed', event.result)].join('\n');
+    }
     case 'worker.failed':
       return [
         '## worker 失敗',

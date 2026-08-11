@@ -17,6 +17,26 @@ export type SessionLogEvent =
       mode: WorkerWorktreeMode;
     }
   | {
+      type: 'harness.worker.bootstrap.started';
+      name: string;
+      kind: string;
+      workerId: string;
+    }
+  | {
+      type: 'harness.worker.bootstrap.completed';
+      name: string;
+      kind: string;
+      workerId: string;
+      stopReason: string;
+    }
+  | {
+      type: 'harness.worker.bootstrap.failed';
+      name: string;
+      kind: string;
+      workerId: string;
+      error: string;
+    }
+  | {
       type: 'operator.input';
       conductorTurn: number;
       text: string;
@@ -96,6 +116,9 @@ export class SessionLogger {
         this.stopReason = event.stopReason;
         break;
       case 'harness.worktree':
+      case 'harness.worker.bootstrap.started':
+      case 'harness.worker.bootstrap.completed':
+      case 'harness.worker.bootstrap.failed':
       case 'operator.input':
       case 'worker.process.stderr':
         break;

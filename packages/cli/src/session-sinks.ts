@@ -10,6 +10,21 @@ export function createHarnessSink(): SessionLogSink {
           `[harness] worktree path=${event.path} branch=${event.branch} mode=${event.mode}`,
         );
         break;
+      case 'harness.worker.bootstrap.started':
+        console.error(
+          `[harness] worker.bootstrap.started name=${event.name} kind=${event.kind}`,
+        );
+        break;
+      case 'harness.worker.bootstrap.completed':
+        console.error(
+          `[harness] worker.bootstrap.completed name=${event.name} kind=${event.kind} stopReason=${event.stopReason}`,
+        );
+        break;
+      case 'harness.worker.bootstrap.failed':
+        console.error(
+          `[harness] worker.bootstrap.failed name=${event.name} kind=${event.kind} error=${event.error}`,
+        );
+        break;
       case 'operator.input':
         console.error(
           `[harness] operator.input turn=${event.conductorTurn} bytes=${event.text.length}`,
@@ -25,7 +40,7 @@ export function createHarnessSink(): SessionLogSink {
         break;
       case 'worker.round':
         console.error(
-          `[harness] worker.round name=${event.dispatch.name} kind=${event.dispatch.kind} stopReason=${event.dispatch.promptResult.stopReason} path=${event.dispatch.worktree.path}`,
+          `[harness] worker.round name=${event.dispatch.name} kind=${event.dispatch.kind} roundKind=${event.dispatch.roundKind ?? 'instruction'} stopReason=${event.dispatch.promptResult.stopReason} path=${event.dispatch.worktree.path}`,
         );
         break;
       case 'worker.failed':
@@ -63,6 +78,9 @@ export function createDialogueSink(): SessionLogSink {
         }
         break;
       case 'harness.worktree':
+      case 'harness.worker.bootstrap.started':
+      case 'harness.worker.bootstrap.completed':
+      case 'harness.worker.bootstrap.failed':
       case 'worker.round':
       case 'worker.failed':
       case 'worker.process.stderr':

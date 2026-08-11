@@ -33,6 +33,9 @@ export interface WorkerDispatchOptions {
   permissionHandler?: PermissionHandler;
 }
 
+/** harness 自動 bootstrap か、conductor 指示の作業ラウンドか。 */
+export type WorkerRoundKind = 'bootstrap' | 'instruction';
+
 export interface WorkerDispatchResult {
   name: string;
   kind: string;
@@ -41,6 +44,7 @@ export interface WorkerDispatchResult {
   prompt: string;
   promptResult: import('../acp/types.js').PromptResult;
   acpSessionId: string;
+  roundKind?: WorkerRoundKind;
 }
 
 const WORKER_RESUME_PROMPT =
@@ -98,6 +102,7 @@ export function buildWorkerDispatchResult(input: {
   session: import('./worker-acp-session.js').WorkerAcpSession;
   prompt: string;
   promptResult: import('../acp/types.js').PromptResult;
+  roundKind?: WorkerRoundKind;
 }): WorkerDispatchResult {
   return {
     name: input.name,
@@ -107,6 +112,7 @@ export function buildWorkerDispatchResult(input: {
     prompt: input.prompt,
     promptResult: input.promptResult,
     acpSessionId: input.session.sessionId,
+    ...(input.roundKind ? { roundKind: input.roundKind } : {}),
   };
 }
 

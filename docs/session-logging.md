@@ -4,6 +4,8 @@
 
 関連 Issue: [#44](https://github.com/otolab/agents-ensemble/issues/44)
 
+イベント型の一覧・SessionEvent との対応・bootstrap 方針は [harness-events.md](harness-events.md) を正本とする。
+
 ---
 
 ## 1. なぜ分けるか
@@ -97,12 +99,15 @@ await runIssueSession({ sessionLogger: logger, ... });
 
 ### SessionLogEvent 一覧
 
+[harness-events.md](harness-events.md) に全イベント・SessionEvent 対応・bootstrap 方針を記載。概要:
+
 | type | 発火タイミング | snapshot への影響 |
 |------|----------------|-------------------|
 | `harness.worktree` | worktree resolve 直後 | なし（sink のみ） |
+| `harness.worker.bootstrap.*` | worker bootstrap 開始 / 完了 / 失敗 | なし（sink のみ） |
 | `operator.input` | オペレータ発話をキューに載せる直前 | なし（sink のみ） |
 | `conductor.send` | 各 `agent.send` 完了後 | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` を更新 |
-| `worker.round` | worker 1 ラウンド完了 | `workerDispatches` に追記 |
+| `worker.round` | worker 1 ラウンド完了（bootstrap 含む） | `workerDispatches` に追記 |
 | `worker.failed` | worker 失敗 | `workerFailures` に追記 |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | なし（sink のみ） |
 | `session.stop` | セッション終了直前 | `stopReason` を確定 |

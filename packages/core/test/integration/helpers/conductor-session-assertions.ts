@@ -1,5 +1,14 @@
 import { expect } from 'vitest';
 
+/** conductor へ届く worker.completed イベントメッセージか（system prompt 内の説明文と区別）。 */
+export function isWorkerCompletedConductorMessage(message: string): boolean {
+  return (
+    message.includes('```yaml\n# worker.completed') &&
+    (message.includes('## worker bootstrap 完了') ||
+      message.includes('## worker 作業ラウンド完了'))
+  );
+}
+
 /** integration 専用。`js-yaml` のスカラー行形式に依存（ネスト・複数行値は非対応）。 */
 export function extractYamlScalar(message: string, key: string): string | undefined {
   const match = message.match(new RegExp(`^${key}: '?([^'\\n]+)'?$`, 'm'));

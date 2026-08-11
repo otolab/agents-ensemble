@@ -11,12 +11,13 @@ import {
   closeWorkerAcpSession,
   type ConnectWorkerAcpFn,
 } from '../dispatch/worker-acp-session.js';
+import type { WorkerRoundKind } from '../dispatch/worker-dispatch.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import type {
   SendWorkerMessageOptions,
   SendWorkerMessageResult,
 } from './send-worker-message.js';
-import type { WorkerStartedInfo, WorkerStartParams } from './types.js';
+import type { WorkerBootstrapTelemetry, WorkerStartedInfo, WorkerStartParams } from './types.js';
 
 export interface WorkerRuntimeOptions {
   inbox: ConductorInbox;
@@ -24,6 +25,7 @@ export interface WorkerRuntimeOptions {
   spawn?: SpawnAcpProcessOptions;
   /** integration の共有 bridge 注入時は false。 */
   ownsWorkerAcpConnections?: boolean;
+  onBootstrapTelemetry?: (event: WorkerBootstrapTelemetry) => void;
 }
 
 interface ResidentWorker {
@@ -139,6 +141,12 @@ export class WorkerRuntime {
 
   private async bootstrap(started: WorkerStartedInfo): Promise<void> {
     this.bootstrapInFlight++;
+    this.options.onBootstrapTelemetry?.({
+      phase: 'started',
+      workerId: started.workerId,
+      name: started.name,
+      kind: started.kind,
+    });
     try {
       const attached = await attachWorker({
         name: started.name,
@@ -179,9 +187,16 @@ export class WorkerRuntime {
         attached.session,
       );
 
-      await this.executeRound(resident, prompt);
+      await this.executeRound(resident, prompt, 'bootstrap');
     } catch (error) {
       this.residents.delete(started.name);
+      this.options.onBootstrapTelemetry?.({
+        phase: 'failed',
+        workerId: started.workerId,
+        name: started.name,
+        kind: started.kind,
+        error: error instanceof Error ? error.message : String(error),
+      });
       this.options.inbox.publishWorkerFailed(started, error);
     } finally {
       this.bootstrapInFlight--;
@@ -192,6 +207,7 @@ export class WorkerRuntime {
   private async executeRound(
     resident: ResidentWorker,
     prompt: string,
+    roundKind: WorkerRoundKind = 'instruction',
   ): Promise<void> {
     resident.state = 'prompting';
     resident.cancelInFlight = false;
@@ -203,11 +219,21 @@ export class WorkerRuntime {
         prompt,
         this.options.inbox.createPermissionHandler(resident.workerId),
       );
+      const dispatch = { ...result, roundKind };
       skipCompletion =
         result.promptResult.stopReason === 'cancelled' &&
         resident.preemptInstruction !== undefined;
       if (!skipCompletion) {
-        this.options.inbox.publishWorkerCompleted(resident.workerId, result);
+        if (roundKind === 'bootstrap') {
+          this.options.onBootstrapTelemetry?.({
+            phase: 'completed',
+            workerId: resident.workerId,
+            name: resident.started.name,
+            kind: resident.started.kind,
+            stopReason: result.promptResult.stopReason,
+          });
+        }
+        this.options.inbox.publishWorkerCompleted(resident.workerId, dispatch);
       }
     } catch (error) {
       if (!resident.preemptInstruction) {

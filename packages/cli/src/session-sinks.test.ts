@@ -2,6 +2,44 @@ import { describe, expect, it, vi } from 'vitest';
 import { createDialogueSink, createHarnessSink } from './session-sinks.js';
 
 describe('session sinks', () => {
+  it('formats bootstrap harness events on stderr', () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const sink = createHarnessSink();
+    sink({
+      type: 'harness.worker.bootstrap.started',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+    });
+    sink({
+      type: 'harness.worker.bootstrap.completed',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      stopReason: 'end_turn',
+    });
+    sink({
+      type: 'harness.worker.bootstrap.failed',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      error: 'attach failed',
+    });
+
+    expect(stderr).toHaveBeenCalledWith(
+      '[harness] worker.bootstrap.started name=implementer kind=implementer',
+    );
+    expect(stderr).toHaveBeenCalledWith(
+      '[harness] worker.bootstrap.completed name=implementer kind=implementer stopReason=end_turn',
+    );
+    expect(stderr).toHaveBeenCalledWith(
+      '[harness] worker.bootstrap.failed name=implementer kind=implementer error=attach failed',
+    );
+
+    stderr.mockRestore();
+  });
+
   it('formats harness events on stderr', () => {
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
 

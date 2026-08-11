@@ -48,3 +48,12 @@ export type InboxMessage =
     };
 
 export type InboxListener = (message: InboxMessage) => void | Promise<void>;
+
+export interface WorkerBootstrapTelemetry {
+  phase: 'started' | 'completed' | 'failed';
+  workerId: string;
+  name: string;
+  kind: string;
+  stopReason?: string;
+  error?: string;
+}
