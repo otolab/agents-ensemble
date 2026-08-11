@@ -42,7 +42,7 @@ describe('promptOperatorInput', () => {
         promptOperatorInput({
           conductorTurn: 1,
           autonomousTurns: 0,
-          maxTurns: 5,
+          maxTurns: null,
           openQuestions: [],
         }),
       ).resolves.toBe('from-env');

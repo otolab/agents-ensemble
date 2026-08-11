@@ -2,9 +2,46 @@ import { describe, expect, it } from 'vitest';
 import {
   autonomousTurnsAfterConductorSend,
   canDispatchConductorSend,
+  isMaxTurnsLimited,
+  operatorInputMaxTurns,
   resolveIssueLoopStopReason,
+  resolveMaxTurns,
   shouldStopIssueLoop,
 } from './session-policy.js';
+
+describe('resolveMaxTurns', () => {
+  it('returns default when undefined', () => {
+    expect(resolveMaxTurns()).toBe(5);
+  });
+
+  it('returns explicit value including unlimited', () => {
+    expect(resolveMaxTurns(10)).toBe(10);
+    expect(resolveMaxTurns(0)).toBe(0);
+    expect(resolveMaxTurns(-1)).toBe(-1);
+  });
+});
+
+describe('isMaxTurnsLimited', () => {
+  it('is false for zero or negative', () => {
+    expect(isMaxTurnsLimited(0)).toBe(false);
+    expect(isMaxTurnsLimited(-1)).toBe(false);
+  });
+
+  it('is true for positive', () => {
+    expect(isMaxTurnsLimited(1)).toBe(true);
+    expect(isMaxTurnsLimited(5)).toBe(true);
+  });
+});
+
+describe('operatorInputMaxTurns', () => {
+  it('returns null when unlimited', () => {
+    expect(operatorInputMaxTurns(0)).toBeNull();
+  });
+
+  it('returns value when limited', () => {
+    expect(operatorInputMaxTurns(5)).toBe(5);
+  });
+});
 
 describe('shouldStopIssueLoop', () => {
   it('stops on error', () => {
@@ -156,6 +193,24 @@ describe('canDispatchConductorSend', () => {
         },
         4,
         5,
+      ),
+    ).toBe(true);
+  });
+
+  it('allows worker.completed at max turns when unlimited', () => {
+    expect(
+      canDispatchConductorSend(
+        {
+          type: 'worker.completed',
+          result: {
+            name: 'worker',
+            acpSessionId: 'sess-1',
+            status: 'finished',
+            result: 'ok',
+          },
+        },
+        100,
+        0,
       ),
     ).toBe(true);
   });

@@ -26,6 +26,24 @@ export interface IssueLoopStopInput {
 
 export const DEFAULT_MAX_ISSUE_TURNS = 5;
 
+/** `maxTurns` 未指定時はデフォルト、それ以外はそのまま（`<= 0` は無制限）。 */
+export function resolveMaxTurns(maxTurns?: number): number {
+  if (maxTurns === undefined) {
+    return DEFAULT_MAX_ISSUE_TURNS;
+  }
+  return maxTurns;
+}
+
+/** 自律ターン上限が有効か（`maxTurns > 0`）。 */
+export function isMaxTurnsLimited(maxTurns: number): boolean {
+  return maxTurns > 0;
+}
+
+/** View 向けの `maxTurns`（無制限時は `null`）。 */
+export function operatorInputMaxTurns(maxTurns: number): number | null {
+  return isMaxTurnsLimited(maxTurns) ? maxTurns : null;
+}
+
 /** Issue session の conductor ループを終了すべきか判定する。 */
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
   if (input.lastStatus === 'error') {
@@ -57,6 +75,9 @@ export function canDispatchConductorSend(
     return false;
   }
   if (event.type === 'operator.message' || event.type === 'permission.pending') {
+    return true;
+  }
+  if (!isMaxTurnsLimited(maxTurns)) {
     return true;
   }
   return autonomousTurns < maxTurns;

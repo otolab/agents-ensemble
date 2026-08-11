@@ -22,7 +22,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 interface OperatorInputContext {
   conductorTurn: number;      // 次の send 番号（1 始まり）
   autonomousTurns: number;
-  maxTurns: number;
+  maxTurns: number | null;    // 無制限時は null（表示は ∞）
   openQuestions: OpenQuestion[];
 }
 
@@ -76,8 +76,25 @@ runConductorSession({
 
 View が決めないこと（SessionPolicy / Driver の責務）:
 
-- max-turns 到達後に worker イベントを送るか
+- max-turns 到達後に worker イベントを送るか（`maxTurns <= 0` のときは常に可）
 - 未回答 open question があるときの dispatch 優先度
 - ループ終了条件
+
+## CLI: 自律ターン上限
+
+| 条件 | デフォルト |
+|------|-----------|
+| TTY または `ENSEMBLE_OPERATOR_MESSAGE` あり | 無制限 |
+| 非 TTY / CI | 5 |
+
+明示指定:
+
+```bash
+ensemble issue <url> --max-turns 10   # 上限 10
+ensemble issue <url> --max-turns 0    # 無制限
+ensemble issue <url> --no-max-turns   # 無制限
+```
+
+無制限時は `OperatorInputContext.maxTurns` が `null` となり、TTY 表示は `自律ターン: N/∞` となる。
 
 View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver が Policy を参照して行う。

@@ -27,7 +27,8 @@ import type { ConductorSendResult } from './conductor-agent.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import {
-  DEFAULT_MAX_ISSUE_TURNS,
+  operatorInputMaxTurns,
+  resolveMaxTurns,
   type IssueLoopStopReason,
 } from './session-policy.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
@@ -122,7 +123,7 @@ export interface ConductorSessionResult {
 export async function runConductorSession(
   options: RunConductorSessionOptions,
 ): Promise<ConductorSessionResult> {
-  const maxTurns = options.maxTurns ?? DEFAULT_MAX_ISSUE_TURNS;
+  const maxTurns = resolveMaxTurns(options.maxTurns);
   const sessionLogger =
     options.sessionLogger ??
     new SessionLogger({
@@ -357,7 +358,7 @@ export async function runConductorSession(
       getContext: () => ({
         conductorTurn: sendCount + 1,
         autonomousTurns,
-        maxTurns,
+        maxTurns: operatorInputMaxTurns(maxTurns),
         openQuestions: openQuestions.listOpen(),
       }),
     });

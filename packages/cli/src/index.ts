@@ -6,20 +6,15 @@ import {
   dispatchWorker,
   getConductorAuthStatus,
   listConductorModels,
-  loadProfile,
   loginConductor,
   PermissionBroker,
   resolveIssueUrl,
-  runIssueSession,
-  SessionLogger,
 } from '@agents-ensemble/core';
-import { bindAsyncOperatorInput, notifyOperatorInputReprompt } from './async-operator-input.js';
+import { executeIssueCommand } from './issue-command.js';
 import { formatModelsListJson, formatModelsListText } from './format-models-list.js';
 import { formatIssueSessionSummaryJson } from './format-session-summary.js';
-import { isOperatorInputInteractive } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
-import { createDialogueSink, createHarnessSink } from './session-sinks.js';
 
 const program = new Command();
 
@@ -53,10 +48,10 @@ program
   .option('--model <id>', 'Conductor model id (default: composer-2.5)')
   .option(
     '--max-turns <n>',
-    'Maximum conductor turns (default: 5)',
+    'Maximum conductor autonomous turns (0 = unlimited; default: unlimited on TTY, 5 otherwise)',
     (value) => Number.parseInt(value, 10),
-    5,
   )
+  .option('--no-max-turns', 'Disable autonomous turn limit')
   .option(
     '--worktree <mode>',
     'Worker workspace: isolated (default, per-issue worktree) or in-repo (main worktree)',
@@ -71,56 +66,15 @@ program
         resume?: string;
         profile?: string;
         model?: string;
-        maxTurns: number;
+        maxTurns?: number;
+        noMaxTurns?: boolean;
         worktree: string;
       },
     ) => {
       try {
-        const workerWorktreeMode = parseWorktreeMode(options.worktree);
-        if (workerWorktreeMode === 'in_repo') {
-          console.error(
-            '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
-          );
-        }
         const repoRoot = resolve(options.repoRoot);
         const issueUrl = await resolveIssueUrl(issueRef, repoRoot);
-        const { profile, profilePath } = await loadProfile({
-          profile: options.profile,
-          cwd: repoRoot,
-        });
-        const sessionLogger = new SessionLogger({ issueUrl, repoRoot });
-        sessionLogger.subscribe(createHarnessSink());
-        const interactive = isOperatorInputInteractive();
-        if (interactive) {
-          sessionLogger.subscribe(createDialogueSink());
-        }
-        const result = await runIssueSession({
-          issueUrl,
-          repoRoot,
-          conductorCwd: resolve(options.conductorCwd),
-          resumeAgentId: options.resume,
-          profile,
-          profilePath,
-          modelId: options.model,
-          maxTurns: options.maxTurns,
-          workerWorktreeMode,
-          sessionLogger,
-          ...(interactive
-            ? {
-                bindOperatorInput: bindAsyncOperatorInput,
-                continueOnConductorError: true,
-              }
-            : {}),
-          onOpenQuestionEnqueued: (question) => {
-            console.error(
-              `[open question] ${question.id} [${question.responseType}] ${question.question}`,
-            );
-            notifyOperatorInputReprompt();
-          },
-          onEscalated: (record) => {
-            console.error(`[operator answer] ${record.question} → ${record.answer}`);
-          },
-        });
+        const result = await executeIssueCommand(issueUrl, options);
 
         console.log(formatIssueSessionSummaryJson(result));
 

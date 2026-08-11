@@ -301,4 +301,54 @@ describe('runConductorSessionDriver', () => {
     const result = await driverPromise;
     expect(result.stopReason).toBe('interrupted');
   });
+
+  it('dispatches worker.completed without limit when maxTurns is unlimited', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'running',
+        result: 'working',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'done',
+      });
+
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const openQuestions = new OpenQuestionRegistry();
+    const onOpenQuestionEnqueued = vi.fn();
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue,
+        conductor,
+        openQuestions,
+        maxTurns: 0,
+      }),
+      onOpenQuestionEnqueued,
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+
+    eventQueue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'worker',
+        acpSessionId: 'sess-1',
+        status: 'finished',
+        result: 'ok',
+      },
+    });
+
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(onOpenQuestionEnqueued).not.toHaveBeenCalled();
+    expect(openQuestions.listOpen()).toEqual([]);
+    expect(result.autonomousTurns).toBe(2);
+    expect(result.stopReason).toBe('completed');
+  });
 });

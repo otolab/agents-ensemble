@@ -4,7 +4,8 @@ export interface OperatorInputContext {
   /** これから実行する conductor send 番号（1 始まり）。 */
   conductorTurn: number;
   autonomousTurns: number;
-  maxTurns: number;
+  /** 無制限時は `null`。 */
+  maxTurns: number | null;
   openQuestions: OpenQuestion[];
 }
 
