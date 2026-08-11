@@ -12,6 +12,10 @@ export function isOperatorInputInteractive(): boolean {
   return process.stdin.isTTY ?? false;
 }
 
+function formatMaxTurnsLabel(maxTurns: number | null): string {
+  return maxTurns === null ? '∞' : String(maxTurns);
+}
+
 export async function promptOperatorInput(
   context: OperatorInputContext,
 ): Promise<string | undefined> {
@@ -36,7 +40,7 @@ export async function promptOperatorInput(
     }
   } else {
     output.write(
-      `\n自律ターン: ${context.autonomousTurns}/${context.maxTurns}（オペレータ入力でリセット）\n`,
+      `\n自律ターン: ${context.autonomousTurns}/${formatMaxTurnsLabel(context.maxTurns)}（オペレータ入力でリセット）\n`,
     );
   }
 

@@ -176,6 +176,9 @@ export {
   autonomousTurnsAfterConductorSend,
   shouldStopIssueLoop,
   resolveIssueLoopStopReason,
+  resolveMaxTurns,
+  isMaxTurnsLimited,
+  operatorInputMaxTurns,
   DEFAULT_MAX_ISSUE_TURNS,
 } from './conductor/session-policy.js';
 export type {

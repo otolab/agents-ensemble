@@ -230,9 +230,12 @@ conductor の `ask_human` は質問を **open question（TODO リスト）とし
 
 ### オペレータ入力と自律ターン予算
 
-- `--max-turns`（デフォルト 5）は **直近のオペレータ入力から conductor が自律的に動けるターン上限**
+- **TTY / `ENSEMBLE_OPERATOR_MESSAGE` あり**: デフォルトは **無制限**（`--no-max-turns` / `--max-turns 0` と同等）
+- **非 TTY / CI**: デフォルトは **5**（暴走防止）
+- `--max-turns <n>` で上限を明示指定できる（`0` は無制限）
+- `--no-max-turns` でリミットを無効化できる
 - オペレータが入力するとカウンタはリセットされる
-- 上限到達時は orchestrator が open question「次どうする？」（`source: max_turns`）を自動登録し、conductor は送らず待機する
+- 上限到達時（リミット有効時のみ）は orchestrator が open question「次どうする？」（`source: max_turns`）を自動登録し、conductor は送らず待機する
 - オペレータは次ターン開始前に TTY で回答（自由チャット可）
 - チャットですでに答えている場合は conductor が `answer_open_question` で代行記録
 - 回答は `@inq:<id> <回答>` または未回答が 1 件のときはそのまま入力

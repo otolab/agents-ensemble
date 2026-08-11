@@ -18,6 +18,7 @@ import {
   autonomousTurnsAfterConductorSend,
   buildIssueLoopStopInput,
   canDispatchConductorSend,
+  isMaxTurnsLimited,
   resolveIssueLoopStopReason,
   shouldStopIssueLoop,
   type IssueLoopStopReason,
@@ -89,7 +90,10 @@ export async function runConductorSessionDriver(
   });
 
   while (true) {
-    if (autonomousTurns >= options.maxTurns) {
+    if (
+      isMaxTurnsLimited(options.maxTurns) &&
+      autonomousTurns >= options.maxTurns
+    ) {
       ensureMaxTurnsOpenQuestion(options.openQuestions, {
         issueUrl: options.issueUrl,
         autonomousTurns,

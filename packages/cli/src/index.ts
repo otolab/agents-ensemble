@@ -19,6 +19,7 @@ import { isOperatorInputInteractive } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
 import { createDialogueSink, createHarnessSink } from './session-sinks.js';
+import { resolveCliMaxTurns } from './resolve-cli-max-turns.js';
 
 const program = new Command();
 
@@ -49,10 +50,10 @@ program
   .option('--model <id>', 'Conductor model id (default: composer-2.5)')
   .option(
     '--max-turns <n>',
-    'Maximum conductor turns (default: 5)',
+    'Maximum conductor autonomous turns (0 = unlimited; default: unlimited on TTY, 5 otherwise)',
     (value) => Number.parseInt(value, 10),
-    5,
   )
+  .option('--no-max-turns', 'Disable autonomous turn limit')
   .option(
     '--worktree <mode>',
     'Worker workspace: isolated (default, per-issue worktree) or in-repo (main worktree)',
@@ -67,7 +68,8 @@ program
         resume?: string;
         profile?: string;
         model?: string;
-        maxTurns: number;
+        maxTurns?: number;
+        noMaxTurns?: boolean;
         worktree: string;
       },
     ) => {
@@ -86,6 +88,11 @@ program
         const sessionLogger = new SessionLogger({ issueUrl, repoRoot });
         sessionLogger.subscribe(createHarnessSink());
         const interactive = isOperatorInputInteractive();
+        const maxTurns = resolveCliMaxTurns({
+          interactive,
+          noMaxTurns: options.noMaxTurns,
+          maxTurns: options.maxTurns,
+        });
         if (interactive) {
           sessionLogger.subscribe(createDialogueSink());
         }

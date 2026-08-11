@@ -314,7 +314,8 @@ worker / harness ──enqueue──►─────────────�
 
 - `WorkerSession` / `ConductorSession` が対。worker 由来・operator 由来のイベントは **1 本の列** に集約し、1 イベント = 1 `agent.send`（初回のみ system + ブリーフィング）
 
-- `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）
+- `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）。`maxTurns <= 0` または CLI `--no-max-turns` で無制限（上限チェック・max-turns open question 登録なし）
+- **CLI デフォルト**: TTY / `ENSEMBLE_OPERATOR_MESSAGE` あり → 無制限。非 TTY / CI → 5（暴走防止）
 - **TTY（本番 CLI）**: `bindOperatorInput` 使用時はループをブロックせず、未回答 open question があっても worker イベント等を処理し続ける。オペレータ入力は `operator.message` としてキューに載る
 - 自律ターン上限到達 → orchestrator が「次どうする？」（`source: max_turns`）を自動登録。オペレータは `bindOperatorInput` 経由で回答
 - 終了条件: error / 実行中 worker / pending permission / **未回答 open question** がある間は継続
