@@ -104,6 +104,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `conductor.send` | 各 `agent.send` 完了後 | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` を更新 |
 | `worker.round` | worker 1 ラウンド完了 | `workerDispatches` に追記 |
 | `worker.failed` | worker 失敗 | `workerFailures` に追記 |
+| `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | なし（sink のみ） |
 | `session.stop` | セッション終了直前 | `stopReason` を確定 |
 
 ### 組み込み sink（CLI）
@@ -140,6 +141,22 @@ DialogueSink は `conductor.send` で `status === 'error'` のとき、応答テ
 
 オペレータが読むべき conductor 発話は DialogueSink 経由。worker の `responseText` は終了 JSON の `workerResponses` に載るが、TTY セッション中の会話 UI には混ぜない。
 
+### worker 子プロセスの stdio
+
+`spawnAcpProcess`（`packages/core/src/acp/acp-process.ts`）は worker の `agent acp` を子プロセスとして起動する。
+
+| fd | 扱い | 理由 |
+|----|------|------|
+| stdin | pipe → ACP プロトコル | harness が JSON-RPC を書き込む |
+| stdout | pipe → AcpClient / JsonRpcPeer | ACP プロトコル専用。対話 stdout には出さない |
+| stderr | **pipe → capture** | 子の警告（例: `shell-parser`）を TTY の `operator>` 行に混ぜない |
+
+stderr は行バッファで読み、`SessionLogger` の `worker.process.stderr` として sink へ配信する。CLI の HarnessSink は `[harness] worker.stderr name=…` を **stderr** に出す（DialogueSink / stdout には出さない）。
+
+stdout へのプロトコル外出力は JsonRpc 層でパース失敗として検知される。現状は stderr capture を優先し、stdout 漏れの二重読みは行わない。
+
+conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（follow-up）。
+
 ---
 
 ## 6. カスタム sink
@@ -169,9 +186,10 @@ DialogueSink は `conductor.send` で `status === 'error'` のとき、応答テ
 | パス | 内容 |
 |------|------|
 | `packages/core/src/conductor/session/session-logger.ts` | `SessionLogger`, 型定義 |
+| `packages/core/src/acp/acp-process.ts` | worker 子プロセス spawn・stderr capture |
 | `packages/core/src/conductor/conductor-session.ts` | `emit` 配線、`snapshot()` で終了 |
 | `packages/cli/src/session-sinks.ts` | Harness / Dialogue sink |
 | `packages/cli/src/format-session-summary.ts` | 終了 JSON 整形 |
 | `packages/cli/src/index.ts` | sink 購読と interactive 判定 |
 
-テスト: `session-logger.test.ts`, `session-sinks.test.ts`
+テスト: `session-logger.test.ts`, `session-sinks.test.ts`, `acp-process.test.ts`

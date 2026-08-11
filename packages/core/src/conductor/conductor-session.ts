@@ -224,6 +224,17 @@ export async function runConductorSession(
     workers,
     sessionState,
     restoredWorkerSessions: Object.fromEntries(workerSessions),
+    spawn: {
+      onProcessStdioLine: ({ stream, line, workerName }) => {
+        if (stream !== 'stderr') return;
+        sessionLogger.emit({
+          type: 'worker.process.stderr',
+          line,
+          stream: 'stderr',
+          workerName,
+        });
+      },
+    },
     permissionPipeline,
     ...(options.connectAcp ? { connectAcp: options.connectAcp } : {}),
     ...(options.ownsWorkerAcpConnections !== undefined

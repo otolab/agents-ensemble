@@ -8,6 +8,7 @@ import {
   runWorkerAcpPrompt,
   type ConnectWorkerAcpFn,
   type WorkerAcpSession,
+  mergeWorkerSpawn,
 } from './worker-acp-session.js';
 import {
   buildWorkerDispatchResult,
@@ -46,7 +47,7 @@ export async function attachWorker(
     worktree: options.worktree,
     resumeAcpSessionId: options.resumeAcpSessionId,
     connectAcp: options.connectAcp,
-    spawn: options.spawn,
+    spawn: mergeWorkerSpawn(options.spawn, options.name),
     permissionHandler: options.permissionHandler,
     ownsBridge: options.ownsBridge,
   });

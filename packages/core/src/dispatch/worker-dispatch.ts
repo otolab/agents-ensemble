@@ -13,6 +13,7 @@ import {
   closeWorkerAcpSession,
   openWorkerAcpSession,
   runWorkerAcpPrompt,
+  mergeWorkerSpawn,
 } from './worker-acp-session.js';
 
 export interface WorkerDispatchOptions {
@@ -60,7 +61,7 @@ export async function dispatchWorker(
     worktree,
     resumeAcpSessionId: options.resumeAcpSessionId,
     bridge: options.bridge,
-    spawn: options.spawn,
+    spawn: mergeWorkerSpawn(options.spawn, options.name),
     permissionHandler: options.permissionHandler,
   });
 

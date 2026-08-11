@@ -40,6 +40,12 @@ export type SessionLogEvent =
       failure: WorkerFailureRecord;
     }
   | {
+      type: 'worker.process.stderr';
+      line: string;
+      stream: 'stderr';
+      workerName?: string;
+    }
+  | {
       type: 'session.stop';
       stopReason: IssueLoopStopReason;
     };
@@ -91,6 +97,7 @@ export class SessionLogger {
         break;
       case 'harness.worktree':
       case 'operator.input':
+      case 'worker.process.stderr':
         break;
     }
 

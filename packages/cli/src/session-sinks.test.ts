@@ -70,4 +70,21 @@ describe('session sinks', () => {
 
     write.mockRestore();
   });
+
+  it('formats worker stderr on harness stderr', () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    createHarnessSink()({
+      type: 'worker.process.stderr',
+      line: 'shell-parser: tree-sitter natives are unavailable',
+      stream: 'stderr',
+      workerName: 'implementer',
+    });
+
+    expect(stderr).toHaveBeenCalledWith(
+      '[harness] worker.stderr name=implementer shell-parser: tree-sitter natives are unavailable',
+    );
+
+    stderr.mockRestore();
+  });
 });

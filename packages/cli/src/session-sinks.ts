@@ -33,6 +33,11 @@ export function createHarnessSink(): SessionLogSink {
           `[harness] worker.failed name=${event.failure.name} kind=${event.failure.kind} error=${event.failure.error}`,
         );
         break;
+      case 'worker.process.stderr': {
+        const name = event.workerName ? ` name=${event.workerName}` : '';
+        console.error(`[harness] worker.stderr${name} ${event.line}`);
+        break;
+      }
       case 'session.stop':
         console.error(`[harness] session.stop reason=${event.stopReason}`);
         break;
@@ -60,6 +65,7 @@ export function createDialogueSink(): SessionLogSink {
       case 'harness.worktree':
       case 'worker.round':
       case 'worker.failed':
+      case 'worker.process.stderr':
       case 'session.stop':
         break;
     }

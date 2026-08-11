@@ -5,6 +5,17 @@ import type { PermissionHandler } from '../acp/types.js';
 import type { IssueRef } from '../issue/issue-ref.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
 
+/** attach / dispatch 時に worker 名を spawn オプションへマージする。 */
+export function mergeWorkerSpawn(
+  spawn: SpawnAcpProcessOptions | undefined,
+  workerName: string,
+): SpawnAcpProcessOptions {
+  return {
+    ...spawn,
+    workerName,
+  };
+}
+
 export interface ConnectWorkerAcpOptions {
   cwd: string;
   spawn?: SpawnAcpProcessOptions;
