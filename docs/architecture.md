@@ -220,6 +220,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 - **自律実行** — session 内では Skill に沿って自走する。worker 同士は直接通信しない
 - **Issue / PR に報告** — 作業報告・状態は Issue コメント / PR に書き、他 worker が読む
 - **worktree に紐づく** — implementer は worktree を作成し、以降の worker は同じ Issue の worktree を共有する
+- **新規 worktree のベース** — 可能なら `git fetch` 後の `origin` デフォルトブランチ（`origin/HEAD` または `main`）から `ensemble/issue-N` を切る。remote なし・fetch 失敗時はローカル HEAD にフォールバック
 - 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— worktree の `cwd` から解決
 - ツール可否・MCP 等は **`spawn` / `session/new` のオプションで明示**
 - description 本文は checkbox の check 以外は基本触らない（#2027 運用）

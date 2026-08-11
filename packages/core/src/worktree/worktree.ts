@@ -74,9 +74,14 @@ export async function createWorkerWorktree(
   await mkdir(join(repoRoot, '.ensemble', 'worktrees'), { recursive: true });
 
   const branchExists = await gitBranchExists(repoRoot, branch);
+  const startPoint = branchExists
+    ? undefined
+    : await resolveNewBranchStartPoint(repoRoot);
   try {
     if (branchExists) {
       await runGit(['worktree', 'add', path, branch], repoRoot);
+    } else if (startPoint) {
+      await runGit(['worktree', 'add', '-b', branch, path, startPoint], repoRoot);
     } else {
       await runGit(['worktree', 'add', '-b', branch, path], repoRoot);
     }
@@ -141,6 +146,63 @@ export async function listWorktrees(repoRoot: string): Promise<ListedWorktree[]>
 async function currentBranch(repoRoot: string): Promise<string> {
   const { stdout } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
   return stdout.trim();
+}
+
+/** 新規ブランチ用の start-point。取得できなければ undefined（ローカル HEAD にフォールバック）。 */
+async function resolveNewBranchStartPoint(
+  repoRoot: string,
+): Promise<string | undefined> {
+  const defaultBranch = await resolveOriginDefaultBranch(repoRoot);
+  if (!defaultBranch) return undefined;
+
+  try {
+    await runGit(['fetch', 'origin', defaultBranch], repoRoot);
+    await runGit(
+      ['rev-parse', '--verify', `refs/remotes/origin/${defaultBranch}`],
+      repoRoot,
+    );
+    return `origin/${defaultBranch}`;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[worktree] origin/${defaultBranch} の同期に失敗しました。ローカル HEAD からブランチを切ります: ${detail}`,
+    );
+    return undefined;
+  }
+}
+
+async function resolveOriginDefaultBranch(
+  repoRoot: string,
+): Promise<string | undefined> {
+  try {
+    await runGit(['remote', 'get-url', 'origin'], repoRoot);
+  } catch {
+    return undefined;
+  }
+
+  try {
+    const { stdout } = await runGit(
+      ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+      repoRoot,
+    );
+    const match = stdout.trim().match(/^refs\/remotes\/origin\/(.+)$/);
+    if (match?.[1]) return match[1];
+  } catch {
+    // fall through
+  }
+
+  try {
+    const { stdout } = await runGit(
+      ['config', '--get', 'init.defaultBranch'],
+      repoRoot,
+    );
+    const configured = stdout.trim();
+    if (configured) return configured;
+  } catch {
+    // fall through
+  }
+
+  return 'main';
 }
 
 async function gitBranchExists(repoRoot: string, branch: string): Promise<boolean> {
