@@ -297,7 +297,7 @@ Driver / Policy / View の 3 層（Issue #62）:
 
 | 層 | 責務 | モジュール |
 |----|------|------------|
-| **SessionPolicy** | `canDispatchConductorSend`, `shouldStopIssueLoop`, `autonomousTurnsAfterConductorSend` | `session-policy.ts` |
+| **SessionPolicy** | `canDispatchConductorSend`, `shouldStopIssueLoop`, `autonomousTurnsAfterConductorSend` / `autonomousTurnsAfterConductorBatch` | `session-policy.ts` |
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` 呼び出し | `conductor-session-driver.ts` |
 | **SessionView** | TTY readline / `ENSEMBLE_OPERATOR_MESSAGE` / 将来 TUI | CLI `bindAsyncOperatorInput`（[operator-input.md](operator-input.md)） |
 

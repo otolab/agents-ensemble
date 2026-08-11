@@ -62,6 +62,8 @@ export class SessionEventQueue {
   /**
    * `accept` に合う send イベントが来るまで待つ。
    * 合わないイベントはキュー末尾へ戻し、到着順を壊さない。
+   *
+   * @deprecated 本番 Driver は `waitForDispatchBatch`（ADR 0014）を使用。単体テスト用 legacy API。
    */
   async waitForSendEvent(input: {
     accept: (event: SessionEvent) => boolean;

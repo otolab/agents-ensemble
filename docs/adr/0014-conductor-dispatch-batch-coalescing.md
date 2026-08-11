@@ -75,6 +75,14 @@ dispatch 完了後、Driver は `lastDispatchedSourceKey` を束の key にセ�
 
 **ターン完了後のスナップショット**（キューに溜まった到着済みイベントをまとめる）。短い coalesce ウィンドウ（N ms）は本 ADR の非スコープ。
 
+### `SessionEventQueue` API
+
+| API | 用途 |
+|-----|------|
+| `snapshot` / `replaceQueue` | Driver が `selectDispatchBatch` の結果でキューを更新 |
+| `waitForEvent` + `prependSilent` | 待機中に届いたイベントを到着順どおりキューへ戻す（waiter 直受けの取りこぼし防止） |
+| `waitForSendEvent` | **legacy**（単体テストのみ）。本番 Driver は未使用。将来削除候補 |
+
 ## Consequences
 
 ### 良い点
@@ -91,9 +99,9 @@ dispatch 完了後、Driver は `lastDispatchedSourceKey` を束の key にセ�
 
 ### フォロー
 
-- オペレータ割り込み + 進行中 `run.cancel()` — 別 Issue
+- オペレータ割り込み + 進行中 `run.cancel()` — [#86](https://github.com/otolab/agents-ensemble/issues/86)
 - `--coalesce-ms` 等の時間窓バッチ — 任意（別 PR）
-- [architecture.md](../architecture.md) のイベント dispatch 記述を更新
+- [architecture.md](../architecture.md) / [operator-input.md](../operator-input.md) の dispatch 記述 — 本 ADR に合わせて更新済み
 
 ## 参照
 
