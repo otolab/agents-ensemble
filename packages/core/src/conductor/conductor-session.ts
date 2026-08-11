@@ -31,7 +31,10 @@ import {
   resolveMaxTurns,
   type IssueLoopStopReason,
 } from './session-policy.js';
-import { runConductorSessionDriver } from './conductor-session-driver.js';
+import {
+  runConductorSessionDriver,
+  type ConductorSessionDriverResult,
+} from './conductor-session-driver.js';
 import { isOperatorExitCommand } from './operator-exit.js';
 import { createOperatorPostLoopGate } from './operator-post-loop-gate.js';
 import {
@@ -437,7 +440,7 @@ export async function runConductorSession(
       options.onPostLoopWait?.();
       const postLoopAction = await postLoopGate.wait(shutdownSignal);
       if (postLoopAction === 'exit' || shutdownSignal.aborted) {
-        if (shutdownSignal.aborted && stopReason !== 'interrupted') {
+        if (shutdownSignal.aborted) {
           stopReason = 'interrupted';
         }
         break;
