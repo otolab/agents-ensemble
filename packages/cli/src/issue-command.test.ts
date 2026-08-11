@@ -120,4 +120,81 @@ describe('executeIssueCommand maxTurns wiring', () => {
       expect.objectContaining({ maxTurns: 10 }),
     );
   });
+
+  it('enables waitForOperatorExit when interactive without --no-wait', async () => {
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand('https://github.com/org/repo/issues/1', baseOptions, {
+      isOperatorInputInteractive: () => true,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        waitForOperatorExit: true,
+        onPostLoopWait: expect.any(Function),
+      }),
+    );
+  });
+
+  it('disables waitForOperatorExit when interactive with --no-wait', async () => {
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand(
+      'https://github.com/org/repo/issues/1',
+      { ...baseOptions, noWait: true },
+      {
+        isOperatorInputInteractive: () => true,
+        runIssueSession,
+        loadProfile,
+        SessionLogger,
+      },
+    );
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        waitForOperatorExit: true,
+      }),
+    );
+  });
+
+  it('does not pass waitForOperatorExit when non-interactive', async () => {
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand('https://github.com/org/repo/issues/1', baseOptions, {
+      isOperatorInputInteractive: () => false,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        waitForOperatorExit: true,
+      }),
+    );
+  });
 });

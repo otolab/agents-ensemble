@@ -41,7 +41,7 @@ export function bindAsyncOperatorInput(api: OperatorInputBindingApi): () => void
   }
 
   stderr.write(
-    '\nオペレータ入力: 任意のタイミングで入力して Enter。conductor は継続します。\n',
+    '\nオペレータ入力: 任意のタイミングで入力して Enter。conductor は継続します（/exit で終了）。\n',
   );
 
   const rl = readline.createInterface({ input, output, terminal: true });

@@ -19,6 +19,7 @@ export interface IssueCommandOptions {
   model?: string;
   maxTurns?: number;
   noMaxTurns?: boolean;
+  noWait?: boolean;
   worktree: string;
 }
 
@@ -89,6 +90,12 @@ export async function executeIssueCommand(
       ? {
           bindOperatorInput: bindAsyncOperatorInput,
           continueOnConductorError: true,
+          waitForOperatorExit: !options.noWait,
+          onPostLoopWait: () => {
+            console.error(
+              '\n自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。\n',
+            );
+          },
         }
       : {}),
     onOpenQuestionEnqueued: (question) => {

@@ -32,6 +32,8 @@ import {
   type IssueLoopStopReason,
 } from './session-policy.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
+import { isOperatorExitCommand } from './operator-exit.js';
+import { createOperatorPostLoopGate } from './operator-post-loop-gate.js';
 import {
   assertSessionSidecarMatches,
   requireSessionSidecarForResume,
@@ -71,6 +73,13 @@ export interface RunConductorSessionOptions {
    * 非 TTY / CI では false のままにすること。
    */
   continueOnConductorError?: boolean;
+  /**
+   * 自律ループ停止後も harness を維持し、オペレータの `/exit` または追加指示を待つ。
+   * CLI の TTY デフォルト。非 TTY / CI では false。
+   */
+  waitForOperatorExit?: boolean;
+  /** `waitForOperatorExit` 時、自律ループ停止直後に呼ぶ（CLI の案内表示等）。 */
+  onPostLoopWait?: () => void;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
   connectAcp?: ConnectWorkerAcpFn;
   /**
@@ -335,12 +344,22 @@ export async function runConductorSession(
   let sendCount = 0;
   let stopReason: IssueLoopStopReason = 'completed';
   const continueOnConductorError = options.continueOnConductorError ?? false;
+  const waitForOperatorExit = options.waitForOperatorExit ?? false;
   let autonomousTurns = 0;
   let disposeOperatorInput: (() => void) | undefined;
+  const postLoopGate = createOperatorPostLoopGate();
 
   if (options.bindOperatorInput) {
     const bindingDispose = options.bindOperatorInput({
       submit: (message) => {
+        if (isOperatorExitCommand(message)) {
+          if (postLoopGate.isWaiting()) {
+            postLoopGate.notifyExit();
+          } else if (shutdownController) {
+            shutdownController.abort();
+          }
+          return false;
+        }
         const received = submitOperatorInput({
           message,
           conductorTurn: sendCount + 1,
@@ -352,6 +371,9 @@ export async function runConductorSession(
         });
         if (received) {
           scheduleSidecarFlush();
+          if (postLoopGate.isWaiting()) {
+            postLoopGate.notifyResume();
+          }
         }
         return received;
       },
@@ -368,25 +390,59 @@ export async function runConductorSession(
   }
 
   try {
-    const driverResult = await runConductorSessionDriver({
-      issueUrl: options.issueUrl,
-      profile: activeProfile,
-      conductor,
-      eventQueue,
-      workerSession,
-      permissionPipeline,
-      openQuestions,
-      shutdownSignal,
-      maxTurns,
-      continueOnConductorError,
-      workerDispatches: sessionLogger.workerDispatches,
-      workerFailures: sessionLogger.workerFailures,
-      onSendComplete: recordSendComplete,
-      onOpenQuestionEnqueued: (question) => options.onOpenQuestionEnqueued?.(question),
-    });
-    stopReason = driverResult.stopReason;
-    sendCount = driverResult.sendCount;
-    autonomousTurns = driverResult.autonomousTurns;
+    let driverResumeState:
+      | (Pick<ConductorSessionDriverResult, 'sendCount' | 'autonomousTurns' | 'lastSendResult'> & {
+          lastDispatchesThisTurn: number;
+        })
+      | undefined;
+
+    while (true) {
+      const driverResult = await runConductorSessionDriver({
+        issueUrl: options.issueUrl,
+        profile: activeProfile,
+        conductor,
+        eventQueue,
+        workerSession,
+        permissionPipeline,
+        openQuestions,
+        shutdownSignal,
+        maxTurns,
+        continueOnConductorError,
+        workerDispatches: sessionLogger.workerDispatches,
+        workerFailures: sessionLogger.workerFailures,
+        onSendComplete: recordSendComplete,
+        onOpenQuestionEnqueued: (question) =>
+          options.onOpenQuestionEnqueued?.(question),
+        ...(driverResumeState
+          ? {
+              skipInitialSend: true,
+              resumeState: driverResumeState,
+            }
+          : {}),
+      });
+      stopReason = driverResult.stopReason;
+      sendCount = driverResult.sendCount;
+      autonomousTurns = driverResult.autonomousTurns;
+      driverResumeState = {
+        sendCount: driverResult.sendCount,
+        autonomousTurns: driverResult.autonomousTurns,
+        lastSendResult: driverResult.lastSendResult,
+        lastDispatchesThisTurn: driverResult.lastDispatchesThisTurn,
+      };
+
+      if (!waitForOperatorExit || stopReason === 'interrupted') {
+        break;
+      }
+
+      options.onPostLoopWait?.();
+      const postLoopAction = await postLoopGate.wait(shutdownSignal);
+      if (postLoopAction === 'exit' || shutdownSignal.aborted) {
+        if (shutdownSignal.aborted && stopReason !== 'interrupted') {
+          stopReason = 'interrupted';
+        }
+        break;
+      }
+    }
 
     return buildResult();
 

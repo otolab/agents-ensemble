@@ -98,3 +98,16 @@ ensemble issue <url> --no-max-turns   # 無制限
 無制限時は `OperatorInputContext.maxTurns` が `null` となり、TTY 表示は `自律ターン: N/∞` となる。
 
 View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver が Policy を参照して行う。
+
+## post-loop 待機（プロセス維持）
+
+自律ループ停止後、CLI TTY デフォルトでは harness が **post-loop 待機** に入る（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。
+
+| 条件 | 動作 |
+|------|------|
+| TTY + デフォルト | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
+| `--no-wait` | 自律ループ停止後に即終了（従来動作） |
+| 非 TTY / CI | `waitForOperatorExit` なし → 即終了 |
+| post-loop 中の追加入力 | `operator.message` としてキューに積み、SessionDriver を再実行 |
+
+終了 JSON はプロセス終了時のみ stdout（変更なし）。

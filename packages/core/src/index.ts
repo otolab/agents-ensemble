@@ -170,6 +170,14 @@ export type {
 } from './conductor/operator-input-binding.js';
 export { submitOperatorInput } from './conductor/submit-operator-input.js';
 export type { SubmitOperatorInputInput } from './conductor/submit-operator-input.js';
+export { isOperatorExitCommand } from './conductor/operator-exit.js';
+export {
+  createOperatorPostLoopGate,
+} from './conductor/operator-post-loop-gate.js';
+export type {
+  OperatorPostLoopAction,
+  OperatorPostLoopGate,
+} from './conductor/operator-post-loop-gate.js';
 export type {
   IssueSessionResult,
   RunIssueSessionOptions,

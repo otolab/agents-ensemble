@@ -44,7 +44,7 @@ export function operatorInputMaxTurns(maxTurns: number): number | null {
   return isMaxTurnsLimited(maxTurns) ? maxTurns : null;
 }
 
-/** Issue session の conductor ループを終了すべきか判定する。 */
+/** Issue session の conductor 自律ループを終了すべきか判定する（プロセス終了ではない）。 */
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
   if (input.lastStatus === 'error') {
     return !input.continueOnConductorError;
