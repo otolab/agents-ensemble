@@ -18,6 +18,7 @@ import {
   expectNotLegacyFollowUpPrompt,
   extractYamlScalar,
 } from './helpers/conductor-session-assertions.js';
+import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
@@ -91,18 +92,21 @@ describe('open question / operator flow integration', () => {
         result: 'conductor-ok',
       });
 
+    const operator = createTestOperatorInputBinding((context) => {
+      if (context.openQuestions.some((question) => question.id === 'inq-1')) {
+        return 'yes, deploy';
+      }
+      return undefined;
+    });
+
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: REPO_ROOT,
       profile: { workers: [] },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
-      onOperatorInput: (context) => {
-        if (context.openQuestions.some((question) => question.id === 'inq-1')) {
-          return 'yes, deploy';
-        }
-        return undefined;
-      },
+      bindOperatorInput: operator.bindOperatorInput,
+      onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
     });
 
     expect(mockSend).toHaveBeenCalledTimes(2);
@@ -130,20 +134,23 @@ describe('open question / operator flow integration', () => {
         result: 'conductor-ok',
       });
 
+    const operator = createTestOperatorInputBinding((context) => {
+      if (
+        context.openQuestions.some((question) => question.source === 'max_turns')
+      ) {
+        return 'continue with tests';
+      }
+      return undefined;
+    });
+
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: REPO_ROOT,
       profile: { workers: [] },
       maxTurns: 1,
       permissionPipeline: new PermissionPipeline({}),
-      onOperatorInput: (context) => {
-        if (
-          context.openQuestions.some((question) => question.source === 'max_turns')
-        ) {
-          return 'continue with tests';
-        }
-        return undefined;
-      },
+      bindOperatorInput: operator.bindOperatorInput,
+      onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
     });
 
     expect(mockSend).toHaveBeenCalledTimes(2);

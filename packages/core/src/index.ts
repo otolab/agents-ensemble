@@ -173,6 +173,8 @@ export {
   canDispatchConductorSend,
   autonomousTurnsAfterConductorSend,
 } from './conductor/conductor-session-loop.js';
+export { createTestOperatorInputBinding } from './conductor/testing/test-operator-input-binding.js';
+export type { TestOperatorInputBinding } from './conductor/testing/test-operator-input-binding.js';
 export {
   SessionEventQueue,
 } from './conductor/session/session-event-queue.js';
@@ -208,7 +210,6 @@ export {
   getConductorAuthStatus,
   hasConductorAuth,
   loginConductor,
-  logoutConductor,
   resolveConductorApiKey,
 } from './conductor/conductor-auth.js';
 

@@ -19,6 +19,7 @@ import {
   TEST_ISSUE,
   TEST_WORKTREE,
 } from './helpers/in-process-acp-bridge.js';
+import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
 
 const SIDECAR_MATERIAL_MARKER = 'SIDECAR_PROFILE_MATERIAL_UNIQUE';
 const CLI_MATERIAL_MARKER = 'CLI_PROFILE_MATERIAL_UNIQUE';
@@ -135,8 +136,8 @@ describe('session resume integration', () => {
             id: 'inq-resume-1',
             status: 'open',
             question: 'Continue after restart?',
-            responseType: 'free_text',
-            source: 'ask_human',
+            responseType: 'text',
+            source: 'conductor',
             askedAt: Date.now(),
           },
         ],
@@ -158,6 +159,13 @@ describe('session resume integration', () => {
       };
     });
 
+    const operator = createTestOperatorInputBinding((context) => {
+      const question = context.openQuestions.find(
+        (entry) => entry.id === 'inq-resume-1',
+      );
+      return question ? 'yes, continue' : undefined;
+    });
+
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
@@ -165,12 +173,8 @@ describe('session resume integration', () => {
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
-      onOperatorInput: (context) => {
-        const question = context.openQuestions.find(
-          (entry) => entry.id === 'inq-resume-1',
-        );
-        return question ? 'yes, continue' : undefined;
-      },
+      bindOperatorInput: operator.bindOperatorInput,
+      onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
       connectAcp: async () => bridge,
       ownsWorkerAcpConnections: false,
     });

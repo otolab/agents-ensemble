@@ -69,17 +69,13 @@ export interface RunConductorSessionOptions {
   maxTurns?: number;
   permissionPolicy?: PermissionPolicyRules;
   permissionPipeline?: PermissionPipeline;
-  /** 各ループでオペレータ入力を受け取る（テスト向け・同期）。`bindOperatorInput` 指定時は未使用。 */
-  onOperatorInput?: (
-    context: OperatorInputContext,
-  ) => string | Promise<string | undefined> | undefined;
   /**
-   * 非ブロッキングのオペレータ入力。指定時はループをブロックせず `operator.message` をキューへ積む。
+   * 非ブロッキングのオペレータ入力。`submit` で `operator.message` をキューへ積む。
    */
   bindOperatorInput?: OperatorInputBinding;
   /**
    * conductor `agent.send` が error でもループを継続する（TTY 等でオペレータが再試行できるとき）。
-   * `onOperatorInput` の有無とは独立。非 TTY / CI では false のままにすること。
+   * 非 TTY / CI では false のままにすること。
    */
   continueOnConductorError?: boolean;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
@@ -413,35 +409,6 @@ export async function runConductorSession(
         });
       }
 
-      if (!options.bindOperatorInput && options.onOperatorInput) {
-        if (openQuestions.openCount > 0) {
-          const operatorPhase = await collectOperatorInput({
-            conductorTurn: sendCount + 1,
-            autonomousTurns,
-            maxTurns,
-            options,
-            openQuestions,
-            escalations,
-            eventQueue,
-            sessionLogger,
-          });
-          if (openQuestions.openCount > 0) {
-            continue;
-          }
-        } else {
-          await collectOperatorInput({
-            conductorTurn: sendCount + 1,
-            autonomousTurns,
-            maxTurns,
-            options,
-            openQuestions,
-            escalations,
-            eventQueue,
-            sessionLogger,
-          });
-        }
-      }
-
       if (eventQueue.isEmpty() && workerSession.runtime.runningCount === 0) {
         const loopState = buildLoopState({
           autonomousTurns,
@@ -456,9 +423,6 @@ export async function runConductorSession(
         stopReason = resolveIssueLoopStopReason(loopState);
         if (shouldStopIssueLoop(loopState)) {
           break;
-        }
-        if (continueOnConductorError && lastSendResult.status === 'error') {
-          continue;
         }
       }
 
@@ -625,43 +589,6 @@ function attachLegacySessionCallbacks(
         break;
     }
   });
-}
-
-async function collectOperatorInput(input: {
-  conductorTurn: number;
-  autonomousTurns: number;
-  maxTurns: number;
-  options: RunConductorSessionOptions;
-  openQuestions: OpenQuestionRegistry;
-  escalations: EscalationRecord[];
-  eventQueue: SessionEventQueue;
-  sessionLogger: SessionLogger;
-}): Promise<{ received: boolean }> {
-  if (!input.options.onOperatorInput) {
-    return { received: false };
-  }
-
-  const operatorMessage = await input.options.onOperatorInput({
-    conductorTurn: input.conductorTurn,
-    autonomousTurns: input.autonomousTurns,
-    maxTurns: input.maxTurns,
-    openQuestions: input.openQuestions.listOpen(),
-  });
-  if (!operatorMessage?.trim()) {
-    return { received: false };
-  }
-
-  const received = submitOperatorInput({
-    message: operatorMessage,
-    conductorTurn: input.conductorTurn,
-    openQuestions: input.openQuestions,
-    escalations: input.escalations,
-    eventQueue: input.eventQueue,
-    sessionLogger: input.sessionLogger,
-    onEscalated: (record) => input.options.onEscalated?.(record),
-  });
-
-  return { received };
 }
 
 async function runInitialConductorSend(input: {

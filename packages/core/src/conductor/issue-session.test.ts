@@ -4,6 +4,7 @@ import * as issueContextModule from '../github/issue-context.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../escalation/enqueue-max-turns-question.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
+import { createTestOperatorInputBinding } from './testing/test-operator-input-binding.js';
 import { runIssueSession } from './issue-session.js';
 
 const TEST_ISSUE = {
@@ -69,26 +70,23 @@ describe('runIssueSession', () => {
         result: 'conductor-ok',
       });
 
-    let operatorCalls = 0;
+    const operator = createTestOperatorInputBinding((context) => {
+      const maxTurnsQuestion = context.openQuestions.find(
+        (question) => question.source === 'max_turns',
+      );
+      return maxTurnsQuestion ? 'continue with tests' : undefined;
+    });
+
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
       profile: { workers: [] },
       maxTurns: 1,
       permissionPipeline: new PermissionPipeline({}),
-      onOperatorInput: (context) => {
-        operatorCalls++;
-        const maxTurnsQuestion = context.openQuestions.find(
-          (question) => question.source === 'max_turns',
-        );
-        if (maxTurnsQuestion) {
-          return 'continue with tests';
-        }
-        return undefined;
-      },
+      bindOperatorInput: operator.bindOperatorInput,
+      onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
     });
 
-    expect(operatorCalls).toBeGreaterThanOrEqual(1);
     expect(mockSend).toHaveBeenCalledTimes(2);
     expect(String(mockSend.mock.calls[0]![0])).toContain('作業フローの連鎖');
     expect(String(mockSend.mock.calls[1]![0])).toContain('continue with tests');
@@ -123,23 +121,23 @@ describe('runIssueSession', () => {
         result: 'conductor-ok',
       });
 
-    let operatorCalls = 0;
+    const operator = createTestOperatorInputBinding((context) => {
+      if (context.openQuestions.some((question) => question.id === 'inq-1')) {
+        return 'yes, continue';
+      }
+      return undefined;
+    });
+
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
       profile: { workers: [] },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
-      onOperatorInput: (context) => {
-        operatorCalls++;
-        if (context.openQuestions.some((question) => question.id === 'inq-1')) {
-          return 'yes, continue';
-        }
-        return undefined;
-      },
+      bindOperatorInput: operator.bindOperatorInput,
+      onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
     });
 
-    expect(operatorCalls).toBeGreaterThanOrEqual(1);
     expect(mockSend).toHaveBeenCalledTimes(2);
     const operatorMessage = String(mockSend.mock.calls[1]![0]);
     expect(operatorMessage).toContain('yes, continue');
@@ -188,39 +186,43 @@ describe('runIssueSession', () => {
         result: 'recovered',
       });
 
-    let operatorCalls = 0;
-    const result = await runIssueSession({
+    const operator = createTestOperatorInputBinding(
+      () => 'retry with another model',
+      { submitOnBind: false },
+    );
+    const sessionPromise = runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
       profile: { workers: [] },
       permissionPipeline: new PermissionPipeline({}),
       continueOnConductorError: true,
-      onOperatorInput: () => {
-        operatorCalls++;
-        return operatorCalls === 1 ? 'retry with another model' : undefined;
-      },
+      bindOperatorInput: operator.bindOperatorInput,
     });
 
-    expect(operatorCalls).toBeGreaterThanOrEqual(1);
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+    expect(operator.trySubmit()).toBe(true);
+
+    const result = await sessionPromise;
     expect(mockSend).toHaveBeenCalledTimes(2);
     expect(String(mockSend.mock.calls[1]![0])).toContain('retry with another model');
     expect(result.stopReason).toBe('completed');
     expect(result.lastResult).toBe('recovered');
   });
 
-  it('stops on conductor error when onOperatorInput exists but continueOnConductorError is false', async () => {
+  it('stops on conductor error when continueOnConductorError is false', async () => {
     mockSend.mockResolvedValueOnce({
       runId: 'run-1',
       status: 'error',
       error: { message: 'Model Blocked' },
     });
 
+    const operator = createTestOperatorInputBinding(() => undefined);
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
       profile: { workers: [] },
       permissionPipeline: new PermissionPipeline({}),
-      onOperatorInput: async () => undefined,
+      bindOperatorInput: operator.bindOperatorInput,
     });
 
     expect(mockSend).toHaveBeenCalledTimes(1);

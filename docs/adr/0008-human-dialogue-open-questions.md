@@ -38,7 +38,7 @@ worker（ACP）とは別モデル。worker は `session/prompt` でターン更�
 
 | レイヤ | 役割 |
 |--------|------|
-| **オペレータメッセージ** | `agent.send` に載る user ターン（CLI / `onOperatorInput` 経由） |
+| **オペレータメッセージ** | `agent.send` に載る user ターン（CLI `bindOperatorInput` / `operator.message` キュー経由） |
 | **OpenQuestionRegistry** | TODO リスト的な未回答 / 回答済み状態（tool で読む） |
 | **list / get tools** | conductor が必要なときだけ open question を読む |
 | **SDK 会話** | LLM 会話履歴の正本（オペレータ発話・tool 結果を含む） |
@@ -61,7 +61,7 @@ worker（ACP）とは別モデル。worker は `session/prompt` でターン更�
 
 ### オペレータ回答（チャット）
 
-- 別ターンの `onOperatorInput` で受け取る。
+- オペレータ回答は `bindOperatorInput` で `submitOperatorInput` し、`operator.message` としてキューへ積む。
 - `applyOperatorMessage` で registry を更新したあと、**その内容を `agent.send` の user メッセージとして送る**（例: 生文、または `【open question 回答】inq-1: …`）。
 - 自由チャットのみ、registry の質問への回答のみ、どちらも可。
 
@@ -81,9 +81,9 @@ worker（ACP）とは別モデル。worker は `session/prompt` でターン更�
   - それ以外 → 継続
 - 自律ターン上限到達時:
   - orchestrator が open question「次どうする？」（`source: max_turns`）を **自動登録**
-  - conductor には送らず `onOperatorInput` 待ち
+  - オペレータは `bindOperatorInput` 経由で回答（`operator.message`）
   - 旧 `escalateOnMaxTurns` / ブロッキング `onHumanInquiry` / ボーナスターンは廃止
-- open question が未回答のときは conductor を送らず、先に `onOperatorInput` で回答を集める。
+- open question が未回答のときは自律 worker イベントを抑止し、`operator.message` を優先 dispatch（[ADR 0009](0009-conductor-session-event-queue.md)、`canDispatchConductorSend`）
 
 ## Consequences
 

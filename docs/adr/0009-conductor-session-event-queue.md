@@ -8,7 +8,7 @@
 conductor への入力経路が整理されていなかった。
 
 - worker 完了 / 失敗は `ConductorInbox` 経由
-- オペレータ発話は `onOperatorInput` 経由
+- オペレータ発話は `bindOperatorInput` → `submitOperatorInput` → `operator.message` 経由
 - 自律ターン更新は毎ループ `buildConductorFollowUpPrompt` で Issue / worker 状態を **丸ごと投影** して `agent.send`
 
 これは ACP worker 向け「毎ターン full state を prompt で送る」パターンの名残であり、SDK conductor の意図（`agent.send` = user ターン 1 本の append）と合わない。Queue がないため「なんとなく send」し、フル state dump で穴を塞いでいた（#28）。
