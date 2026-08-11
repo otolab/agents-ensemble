@@ -100,6 +100,10 @@ harness ─┘
 - イベントペイロード詳細・優先度 / 割り込み
 - permission pending の届け方（ADR 0007 からの変更）: [ADR 0010](0010-permission-pending-event-delivery.md)
 
+## 追記（2026-08-11, Issue #61）
+
+Context の「オペレータ発話は `onOperatorInput` 経由」は、当時の整理時点の記述。現行実装では ~~`onOperatorInput`~~ **`bindOperatorInput` → `submitOperatorInput` → `operator.message`** に統一した（PR #63）。ループ内の同期入力フェーズは廃止。詳細は [ADR 0008 追記](0008-human-dialogue-open-questions.md#追記2026-08-11-issue-61) と [architecture.md](../architecture.md)。
+
 ## 関連
 
 - [ADR 0008](0008-human-dialogue-open-questions.md) — open question・operator

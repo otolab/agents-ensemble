@@ -85,6 +85,19 @@ worker（ACP）とは別モデル。worker は `session/prompt` でターン更�
   - 旧 `escalateOnMaxTurns` / ブロッキング `onHumanInquiry` / ボーナスターンは廃止
 - open question が未回答のときは conductor を送らず、先に `onOperatorInput` で回答を集める。
 
+## 追記（2026-08-11, Issue #61）
+
+オペレータ入力は **同期 `onOperatorInput` ポーリングを廃止**し、すべて `bindOperatorInput` → `submitOperatorInput` → `operator.message` キュー経由に統一した（PR #63）。当時の Decision 本文は履歴として残し、現行は下表のとおり。
+
+| 項目 | 当時（上記 Decision） | 現在 |
+|------|----------------------|------|
+| オペレータメッセージ | ~~CLI / `onOperatorInput` 経由~~ | CLI `bindOperatorInput` / `operator.message` キュー経由 |
+| オペレータ回答の受け取り | ~~別ターンの `onOperatorInput` で受け取る~~ | `bindOperatorInput` で `submitOperatorInput` し、キューへ積む |
+| 自律ターン上限到達後 | ~~`onOperatorInput` 待ち~~ | `bindOperatorInput` 経由で `operator.message` を待つ（`canDispatchConductorSend`） |
+| 未回答 open question あり | ~~先に `onOperatorInput` で回答を集める~~ | 自律 worker イベントを抑止し、`operator.message` を優先 dispatch |
+
+正本の現行記述は [architecture.md](../architecture.md)。
+
 ## Consequences
 
 - 良い: prompt cache を維持しやすい。TODO リスト的に必要時だけ読める。ユーザ判断が worker 生死と独立して残る
