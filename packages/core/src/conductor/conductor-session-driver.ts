@@ -50,6 +50,13 @@ export interface ConductorSessionDriverOptions {
   workerFailures: WorkerFailureRecord[];
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
   onOpenQuestionEnqueued?: (question: OpenQuestion) => void;
+  /** post-loop 再開時は初回 `agent.send`（system + ブリーフィング）を省略する。 */
+  skipInitialSend?: boolean;
+  /** `skipInitialSend` 時に引き継ぐ Driver 状態。 */
+  resumeState?: Pick<
+    ConductorSessionDriverResult,
+    'sendCount' | 'autonomousTurns' | 'lastSendResult'
+  > & { lastDispatchesThisTurn: number };
 }
 
 export interface ConductorSessionDriverResult {
@@ -57,6 +64,7 @@ export interface ConductorSessionDriverResult {
   sendCount: number;
   lastSendResult: ConductorSendResult;
   autonomousTurns: number;
+  lastDispatchesThisTurn: number;
 }
 
 /**
@@ -66,28 +74,30 @@ export interface ConductorSessionDriverResult {
 export async function runConductorSessionDriver(
   options: ConductorSessionDriverOptions,
 ): Promise<ConductorSessionDriverResult> {
-  let sendCount = 0;
-  let lastDispatchesThisTurn = 0;
-  let autonomousTurns = 0;
+  let sendCount = options.resumeState?.sendCount ?? 0;
+  let lastDispatchesThisTurn = options.resumeState?.lastDispatchesThisTurn ?? 0;
+  let autonomousTurns = options.resumeState?.autonomousTurns ?? 0;
   let stopReason: IssueLoopStopReason = 'completed';
-  let lastSendResult: ConductorSendResult = {
+  let lastSendResult: ConductorSendResult = options.resumeState?.lastSendResult ?? {
     runId: '',
     status: 'finished',
   };
 
-  lastSendResult = await runInitialConductorSend({
-    issueUrl: options.issueUrl,
-    profile: options.profile,
-    conductor: options.conductor,
-    workerDispatches: options.workerDispatches,
-    workerFailures: options.workerFailures,
-    onSendComplete: (info) => {
-      sendCount = info.sendCount;
-      lastDispatchesThisTurn = info.workerDispatches + info.workerFailures;
-      autonomousTurns = info.autonomousTurns;
-      options.onSendComplete(info);
-    },
-  });
+  if (!options.skipInitialSend) {
+    lastSendResult = await runInitialConductorSend({
+      issueUrl: options.issueUrl,
+      profile: options.profile,
+      conductor: options.conductor,
+      workerDispatches: options.workerDispatches,
+      workerFailures: options.workerFailures,
+      onSendComplete: (info) => {
+        sendCount = info.sendCount;
+        lastDispatchesThisTurn = info.workerDispatches + info.workerFailures;
+        autonomousTurns = info.autonomousTurns;
+        options.onSendComplete(info);
+      },
+    });
+  }
 
   while (true) {
     if (
@@ -189,6 +199,7 @@ export async function runConductorSessionDriver(
     sendCount,
     lastSendResult,
     autonomousTurns,
+    lastDispatchesThisTurn,
   };
 }
 

@@ -53,6 +53,10 @@ program
   )
   .option('--no-max-turns', 'Disable autonomous turn limit')
   .option(
+    '--no-wait',
+    'Exit immediately when the autonomous loop completes (TTY default: wait for /exit)',
+  )
+  .option(
     '--worktree <mode>',
     'Worker workspace: isolated (default, per-issue worktree) or in-repo (main worktree)',
     'isolated',
@@ -68,6 +72,7 @@ program
         model?: string;
         maxTurns?: number;
         noMaxTurns?: boolean;
+        noWait?: boolean;
         worktree: string;
       },
     ) => {

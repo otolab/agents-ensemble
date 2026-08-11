@@ -257,6 +257,15 @@ ENSEMBLE_OPERATOR_MESSAGE='@inq:inq-1 yes' ensemble issue ...
 
 非 TTY かつ `ENSEMBLE_OPERATOR_MESSAGE` 未設定のとき、open question 待ちでループが進まない（TTY 待機相当）。
 
+### プロセス待機（post-loop）
+
+TTY 実行時、自律作業が一段落（conductor `finished` + 待ち事項なし）しても **デフォルトではプロセスを維持**する。追加指示を入力するか、`/exit`（または `exit`）で終了する。終了 JSON はプロセス終了時に stdout へ出力（従来どおり）。
+
+- `--no-wait`: 自律ループ停止後に即終了（従来動作）
+- 非 TTY / CI: 従来どおり自動終了
+
+詳細は [docs/adr/0013-process-lifecycle-vs-autonomous-loop.md](docs/adr/0013-process-lifecycle-vs-autonomous-loop.md)。
+
 認証の詳細は上記 [認証](#認証) を参照。
 
 ## ライセンス
