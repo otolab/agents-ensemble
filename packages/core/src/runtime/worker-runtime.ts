@@ -237,6 +237,15 @@ export class WorkerRuntime {
       }
     } catch (error) {
       if (!resident.preemptInstruction) {
+        if (roundKind === 'bootstrap') {
+          this.options.onBootstrapTelemetry?.({
+            phase: 'failed',
+            workerId: resident.workerId,
+            name: resident.started.name,
+            kind: resident.started.kind,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         this.options.inbox.publishWorkerFailed(resident.started, error);
       }
     } finally {
