@@ -37,6 +37,7 @@ export interface WorkerSessionOptions {
   ) => PermissionDecision | null | Promise<PermissionDecision | null>;
   onWorkerCompleted?: (result: WorkerDispatchResult) => void;
   onWorkerFailed?: (failure: WorkerFailureRecord) => void;
+  onBootstrapTelemetry?: (event: import('./types.js').WorkerBootstrapTelemetry) => void;
 }
 
 /**
@@ -74,6 +75,9 @@ export class WorkerSession {
       ...(options.spawn ? { spawn: options.spawn } : {}),
       ...(options.ownsWorkerAcpConnections !== undefined
         ? { ownsWorkerAcpConnections: options.ownsWorkerAcpConnections }
+        : {}),
+      ...(options.onBootstrapTelemetry
+        ? { onBootstrapTelemetry: options.onBootstrapTelemetry }
         : {}),
     });
     this.processor = startInboxProcessor({

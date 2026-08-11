@@ -8,6 +8,9 @@ import { PermissionPipeline } from '../../src/permission/permission-pipeline.js'
 import type { Profile } from '../../src/profile/types.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
+  isWorkerCompletedConductorMessage,
+} from './helpers/conductor-session-assertions.js';
+import {
   createInProcessAcpBridge,
   PING_SYSTEM_PROMPT,
   TEST_ISSUE,
@@ -98,7 +101,7 @@ describe('prompt_worker roundtrip integration', () => {
 
     let workerCompletedEvents = 0;
     mockSend.mockImplementation(async (message: string) => {
-      if (!message.includes('## worker 完了')) {
+      if (!isWorkerCompletedConductorMessage(message)) {
         return { runId: 'run-init', status: 'finished', result: 'init' };
       }
 
@@ -146,6 +149,17 @@ describe('prompt_worker roundtrip integration', () => {
     ).toEqual(['pong', 'pong', 'round2']);
 
     const messages = mockSend.mock.calls.map((call) => String(call[0]));
-    expect(messages.filter((message) => message.includes('## worker 完了'))).toHaveLength(3);
+    const workerCompletedMessages = messages.filter(isWorkerCompletedConductorMessage);
+    expect(workerCompletedMessages).toHaveLength(3);
+    expect(
+      workerCompletedMessages.filter((message) =>
+        message.includes('## worker bootstrap 完了'),
+      ),
+    ).toHaveLength(1);
+    expect(
+      workerCompletedMessages.filter((message) =>
+        message.includes('## worker 作業ラウンド完了'),
+      ),
+    ).toHaveLength(2);
   });
 });

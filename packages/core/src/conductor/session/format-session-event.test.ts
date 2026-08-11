@@ -23,7 +23,7 @@ describe('formatSessionEventForConductor', () => {
     ).toBe('continue please');
   });
 
-  it('formats worker.completed with YAML block', () => {
+  it('formats worker.completed with YAML block for instruction rounds', () => {
     const message = formatSessionEventForConductor({
       type: 'worker.completed',
       result: {
@@ -36,14 +36,36 @@ describe('formatSessionEventForConductor', () => {
           stopReason: 'end_turn',
           responseText: 'pong',
         },
+        roundKind: 'instruction',
       },
     });
 
-    expect(message).toContain('## worker 完了');
+    expect(message).toContain('## worker 作業ラウンド完了');
     expect(message).toContain('```yaml');
     expect(message).toContain('name: ping-1');
     expect(message).toContain('stopReason: end_turn');
     expect(message).toContain('pong');
+  });
+
+  it('formats worker.completed bootstrap with distinct heading', () => {
+    const message = formatSessionEventForConductor({
+      type: 'worker.completed',
+      result: {
+        name: 'ping-1',
+        kind: 'ping',
+        issue: TEST_ISSUE,
+        worktree: TEST_WORKTREE,
+        prompt: 'attach',
+        promptResult: {
+          stopReason: 'end_turn',
+          responseText: 'ready',
+        },
+        roundKind: 'bootstrap',
+      },
+    });
+
+    expect(message).toContain('## worker bootstrap 完了');
+    expect(message).toContain('roundKind: bootstrap');
   });
 
   it('formats permission.pending with YAML block', () => {

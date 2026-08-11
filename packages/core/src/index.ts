@@ -98,6 +98,7 @@ export type {
 export type {
   WorkerDispatchOptions,
   WorkerDispatchResult,
+  WorkerRoundKind,
 } from './dispatch/worker-dispatch.js';
 
 export { runGh } from './github/run-gh.js';

@@ -25,6 +25,18 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- harnessからのイベントの多くは機械的な状態変化の通知です',
         '  - 作業のきっかけというより、状況の把握として扱えば十分な場合が多いです',
         '  - 例えば、workerからの作業報告が後で通知として届くことがあります',
+        '- `## worker bootstrap 完了` — harness が attach + 待機 prompt を自動送信しただけ。実作業開始ではない',
+        '- `## worker 作業ラウンド完了` — 自分が `prompt_worker` した 1 ラウンドの終了。タスク完了の意味ではない',
+        '- `## permission 判断待ち` — worker の操作許可が保留中',
+      ],
+    },
+    {
+      type: 'subsection',
+      title: 'メトリクス（オペレータへの状態説明用）',
+      items: [
+        '- `sendCount` — 完了した conductor ターン数（`agent.send` 回数）',
+        '- `workerDispatches` / `workerFailures` — 完了・失敗した worker ラウンド数（bootstrap 含む）',
+        '- `autonomousTurns` / `maxTurns` — 自律ループのターン制限',
       ],
     },
     {

@@ -75,10 +75,14 @@ function createMockBridge(close = vi.fn()): AcpBridge {
 describe('WorkerRuntime', () => {
   it('attaches workers and reports bootstrap completion via inbox', async () => {
     const inbox = new ConductorInbox();
-    const completed: string[] = [];
+    const completed: Array<{ workerId: string; roundKind?: string }> = [];
+    const bootstrapTelemetry: string[] = [];
     inbox.subscribe((message) => {
       if (message.type === 'worker.completed') {
-        completed.push(message.workerId);
+        completed.push({
+          workerId: message.workerId,
+          roundKind: message.result.roundKind,
+        });
       }
     });
 
@@ -86,6 +90,9 @@ describe('WorkerRuntime', () => {
     const runtime = new WorkerRuntime({
       inbox,
       connectAcp: async () => createMockBridge(close),
+      onBootstrapTelemetry: (event) => {
+        bootstrapTelemetry.push(event.phase);
+      },
     });
     const workerId = runtime.start({
       name: 'ping-1',
@@ -106,7 +113,8 @@ describe('WorkerRuntime', () => {
 
     expect(runtime.runningCount).toBe(0);
     expect(runtime.attachedCount).toBe(1);
-    expect(completed).toEqual([workerId]);
+    expect(completed).toEqual([{ workerId, roundKind: 'bootstrap' }]);
+    expect(bootstrapTelemetry).toEqual(['started', 'completed']);
     expect(close).not.toHaveBeenCalled();
 
     await runtime.shutdown();
@@ -173,6 +181,41 @@ describe('WorkerRuntime', () => {
     expect(runtime.attachedCount).toBe(1);
 
     await runtime.shutdown();
+  });
+
+  it('emits bootstrap.failed telemetry when attach fails', async () => {
+    const inbox = new ConductorInbox();
+    const bootstrapTelemetry: Array<{ phase: string; error?: string }> = [];
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp: async () => {
+        throw new Error('attach failed');
+      },
+      onBootstrapTelemetry: (event) => {
+        bootstrapTelemetry.push({ phase: event.phase, error: event.error });
+      },
+    });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      systemPrompt: 'pong',
+      worktree: TEST_WORKTREE,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+    });
+
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    expect(bootstrapTelemetry).toEqual([
+      { phase: 'started' },
+      { phase: 'failed', error: 'attach failed' },
+    ]);
+    expect(runtime.attachedCount).toBe(0);
   });
 
   it('preempts in-flight prompt and runs the new instruction', async () => {
