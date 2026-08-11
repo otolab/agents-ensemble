@@ -9,6 +9,7 @@ import {
   loadProfile,
   loginConductor,
   PermissionBroker,
+  resolveIssueUrl,
   runIssueSession,
   SessionLogger,
 } from '@agents-ensemble/core';
@@ -30,7 +31,10 @@ program
 program
   .command('issue')
   .description('Start conductor orchestration for a GitHub Issue')
-  .argument('<issue-url>', 'GitHub Issue URL')
+  .argument(
+    '<issue-url>',
+    'GitHub Issue URL or number (e.g. 31, #31)',
+  )
   .option(
     '--repo-root <path>',
     'Path to the local git clone for worker worktrees',
@@ -60,7 +64,7 @@ program
   )
   .action(
     async (
-      issueUrl: string,
+      issueRef: string,
       options: {
         repoRoot: string;
         conductorCwd: string;
@@ -78,11 +82,12 @@ program
             '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
           );
         }
+        const repoRoot = resolve(options.repoRoot);
+        const issueUrl = await resolveIssueUrl(issueRef, repoRoot);
         const { profile, profilePath } = await loadProfile({
           profile: options.profile,
-          cwd: resolve(options.repoRoot),
+          cwd: repoRoot,
         });
-        const repoRoot = resolve(options.repoRoot);
         const sessionLogger = new SessionLogger({ issueUrl, repoRoot });
         sessionLogger.subscribe(createHarnessSink());
         const interactive = isOperatorInputInteractive();
@@ -207,7 +212,10 @@ const dispatch = program
 dispatch
   .command('worker')
   .description('Dispatch a worker for a GitHub Issue (Stage 1 manual flow)')
-  .argument('<issue-url>', 'GitHub Issue URL')
+  .argument(
+    '<issue-url>',
+    'GitHub Issue URL or number (e.g. 31, #31)',
+  )
   .option('--name <name>', 'Worker name in the session', 'worker')
   .option('--kind <name>', 'Agent kind for the worker prompt', 'worker')
   .option('--system-prompt <text>', 'Optional agent system prompt override')
@@ -223,7 +231,7 @@ dispatch
   )
   .action(
     async (
-      issueUrl: string,
+      issueRef: string,
       options: {
         name: string;
         kind: string;
@@ -239,6 +247,8 @@ dispatch
           '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
         );
       }
+      const repoRoot = resolve(options.repoRoot);
+      const issueUrl = await resolveIssueUrl(issueRef, repoRoot);
       const permissionBroker = new PermissionBroker({
         onAsk: promptPermissionDecision,
       });
@@ -247,7 +257,7 @@ dispatch
         name: options.name,
         kind: options.kind,
         systemPrompt: options.systemPrompt,
-        repoRoot: resolve(options.repoRoot),
+        repoRoot,
         worktreeMode,
         sessionState: {
           workers: [{ name: options.name, kind: options.kind }],

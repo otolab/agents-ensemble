@@ -68,6 +68,10 @@ export type { InProcessStreamPair } from './acp/testing/stream-pair.js';
 
 export { parseIssueUrl, buildIssueUrl } from './issue/issue-ref.js';
 export type { IssueRef } from './issue/issue-ref.js';
+export {
+  resolveIssueUrl,
+  parseGitHubRemoteUrl,
+} from './issue/resolve-issue-url.js';
 
 export { runGit } from './git/run-git.js';
 
