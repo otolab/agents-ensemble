@@ -38,7 +38,7 @@ worker（ACP）とは別モデル。worker は `session/prompt` でターン更�
 
 | レイヤ | 役割 |
 |--------|------|
-| **オペレータメッセージ** | `agent.send` に載る user ターン（CLI `bindOperatorInput` / `operator.message` キュー経由） |
+| **オペレータメッセージ** | `agent.send` に載る user ターン（CLI / `onOperatorInput` 経由） |
 | **OpenQuestionRegistry** | TODO リスト的な未回答 / 回答済み状態（tool で読む） |
 | **list / get tools** | conductor が必要なときだけ open question を読む |
 | **SDK 会話** | LLM 会話履歴の正本（オペレータ発話・tool 結果を含む） |
@@ -61,7 +61,7 @@ worker（ACP）とは別モデル。worker は `session/prompt` でターン更�
 
 ### オペレータ回答（チャット）
 
-- オペレータ回答は `bindOperatorInput` で `submitOperatorInput` し、`operator.message` としてキューへ積む。
+- 別ターンの `onOperatorInput` で受け取る。
 - `applyOperatorMessage` で registry を更新したあと、**その内容を `agent.send` の user メッセージとして送る**（例: 生文、または `【open question 回答】inq-1: …`）。
 - 自由チャットのみ、registry の質問への回答のみ、どちらも可。
 
@@ -81,9 +81,22 @@ worker（ACP）とは別モデル。worker は `session/prompt` でターン更�
   - それ以外 → 継続
 - 自律ターン上限到達時:
   - orchestrator が open question「次どうする？」（`source: max_turns`）を **自動登録**
-  - オペレータは `bindOperatorInput` 経由で回答（`operator.message`）
+  - conductor には送らず `onOperatorInput` 待ち
   - 旧 `escalateOnMaxTurns` / ブロッキング `onHumanInquiry` / ボーナスターンは廃止
-- open question が未回答のときは自律 worker イベントを抑止し、`operator.message` を優先 dispatch（[ADR 0009](0009-conductor-session-event-queue.md)、`canDispatchConductorSend`）
+- open question が未回答のときは conductor を送らず、先に `onOperatorInput` で回答を集める。
+
+## 追記（2026-08-11, Issue #61）
+
+オペレータ入力は **同期 `onOperatorInput` ポーリングを廃止**し、すべて `bindOperatorInput` → `submitOperatorInput` → `operator.message` キュー経由に統一した（PR #63）。当時の Decision 本文は履歴として残し、現行は下表のとおり。
+
+| 項目 | 当時（上記 Decision） | 現在 |
+|------|----------------------|------|
+| オペレータメッセージ | ~~CLI / `onOperatorInput` 経由~~ | CLI `bindOperatorInput` / `operator.message` キュー経由 |
+| オペレータ回答の受け取り | ~~別ターンの `onOperatorInput` で受け取る~~ | `bindOperatorInput` で `submitOperatorInput` し、キューへ積む |
+| 自律ターン上限到達後 | ~~`onOperatorInput` 待ち~~ | `bindOperatorInput` 経由で `operator.message` を待つ（`canDispatchConductorSend`） |
+| 未回答 open question あり | ~~先に `onOperatorInput` で回答を集める~~ | 自律 worker イベントを抑止し、`operator.message` を優先 dispatch |
+
+正本の現行記述は [architecture.md](../architecture.md)。
 
 ## Consequences
 

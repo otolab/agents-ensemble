@@ -8,7 +8,7 @@
 conductor への入力経路が整理されていなかった。
 
 - worker 完了 / 失敗は `ConductorInbox` 経由
-- オペレータ発話は `bindOperatorInput` → `submitOperatorInput` → `operator.message` 経由
+- オペレータ発話は `onOperatorInput` 経由
 - 自律ターン更新は毎ループ `buildConductorFollowUpPrompt` で Issue / worker 状態を **丸ごと投影** して `agent.send`
 
 これは ACP worker 向け「毎ターン full state を prompt で送る」パターンの名残であり、SDK conductor の意図（`agent.send` = user ターン 1 本の append）と合わない。Queue がないため「なんとなく send」し、フル state dump で穴を塞いでいた（#28）。
@@ -99,6 +99,10 @@ harness ─┘
 - セッション終了条件の見直し（harness 主導）
 - イベントペイロード詳細・優先度 / 割り込み
 - permission pending の届け方（ADR 0007 からの変更）: [ADR 0010](0010-permission-pending-event-delivery.md)
+
+## 追記（2026-08-11, Issue #61）
+
+Context の「オペレータ発話は `onOperatorInput` 経由」は、当時の整理時点の記述。現行実装では ~~`onOperatorInput`~~ **`bindOperatorInput` → `submitOperatorInput` → `operator.message`** に統一した（PR #63）。ループ内の同期入力フェーズは廃止。詳細は [ADR 0008 追記](0008-human-dialogue-open-questions.md#追記2026-08-11-issue-61) と [architecture.md](../architecture.md)。
 
 ## 関連
 
