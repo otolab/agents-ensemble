@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { formatSessionEventForConductor } from './format-session-event.js';
+import {
+  formatSessionEventForConductor,
+  formatSessionEventsForConductor,
+} from './format-session-event.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -86,5 +89,28 @@ describe('formatSessionEventForConductor', () => {
     expect(message).toContain('```yaml');
     expect(message).toContain('id: perm-1');
     expect(message).toContain('toolName: shell');
+  });
+
+  it('formats multiple operator messages with numbered sections', () => {
+    const message = formatSessionEventsForConductor([
+      { type: 'operator.message', text: 'first' },
+      { type: 'operator.message', text: 'second' },
+    ]);
+
+    expect(message).toContain('## オペレータ入力（2 件）');
+    expect(message).toContain('### 1/2');
+    expect(message).toContain('first');
+    expect(message).toContain('### 2/2');
+    expect(message).toContain('second');
+  });
+
+  it('keeps single-event formatting identical for batch size 1', () => {
+    const event = {
+      type: 'operator.message' as const,
+      text: 'only one',
+    };
+    expect(formatSessionEventsForConductor([event])).toBe(
+      formatSessionEventForConductor(event),
+    );
   });
 });

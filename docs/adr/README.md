@@ -83,6 +83,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0011](0011-session-sidecar-resume.md) | セッション sidecar と resume | accepted |
 | [0012](0012-conductor-worker-prompt-roundtrip.md) | conductor – worker メッセージング（常駐 ACP / sendWorkerMessage） | accepted |
 | [0013](0013-process-lifecycle-vs-autonomous-loop.md) | プロセスライフサイクルと自律ループ停止の分離 | accepted |
+| [0014](0014-conductor-dispatch-batch-coalescing.md) | conductor イベント dispatch のバッチ化と優先度 | accepted |
 
 ## 追加するとき
 

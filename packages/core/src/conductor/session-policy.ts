@@ -94,6 +94,17 @@ export function autonomousTurnsAfterConductorSend(
   return autonomousTurns + 1;
 }
 
+/** 束 dispatch 後の `autonomousTurns`（束に operator が含まれればリセット）。 */
+export function autonomousTurnsAfterConductorBatch(
+  events: SessionEvent[],
+  autonomousTurns: number,
+): number {
+  if (events.some((event) => event.type === 'operator.message')) {
+    return 0;
+  }
+  return autonomousTurns + 1;
+}
+
 export function buildIssueLoopStopInput(input: {
   autonomousTurns: number;
   maxTurns: number;

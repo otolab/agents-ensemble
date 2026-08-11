@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   autonomousTurnsAfterConductorSend,
+  autonomousTurnsAfterConductorBatch,
   canDispatchConductorSend,
   isMaxTurnsLimited,
   operatorInputMaxTurns,
@@ -213,6 +214,39 @@ describe('canDispatchConductorSend', () => {
         0,
       ),
     ).toBe(true);
+  });
+});
+
+describe('autonomousTurnsAfterConductorBatch', () => {
+  it('resets when batch includes operator.message', () => {
+    expect(
+      autonomousTurnsAfterConductorBatch(
+        [
+          { type: 'operator.message', text: 'a' },
+          { type: 'operator.message', text: 'b' },
+        ],
+        5,
+      ),
+    ).toBe(0);
+  });
+
+  it('increments once per batch without operator', () => {
+    expect(
+      autonomousTurnsAfterConductorBatch(
+        [
+          {
+            type: 'worker.completed',
+            result: {
+              name: 'worker',
+              acpSessionId: 'sess-1',
+              status: 'finished',
+              result: 'ok',
+            },
+          },
+        ],
+        2,
+      ),
+    ).toBe(3);
   });
 });
 

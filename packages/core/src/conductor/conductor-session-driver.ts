@@ -10,14 +10,19 @@ import type { WorkerFailureRecord } from '../runtime/types.js';
 import type { WorkerSession } from '../runtime/worker-session.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import type { ConductorAgent, ConductorSendResult } from './conductor-agent.js';
-import { formatSessionEventForConductor } from './session/format-session-event.js';
+import { formatSessionEventsForConductor } from './session/format-session-event.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import type { SessionEvent } from './session/session-event.js';
-import { isConductorSendEvent } from './session/session-event.js';
 import {
-  autonomousTurnsAfterConductorSend,
+  countWorkerOutcomesInBatch,
+  dispatchBatchStateAfterSend,
+  markContinuationConsumed,
+  selectDispatchBatch,
+  type DispatchBatchState,
+} from './session/select-dispatch-batch.js';
+import {
+  autonomousTurnsAfterConductorBatch,
   buildIssueLoopStopInput,
-  canDispatchConductorSend,
   isMaxTurnsLimited,
   resolveIssueLoopStopReason,
   shouldStopIssueLoop,
@@ -30,8 +35,11 @@ export interface ConductorSendCompleteInfo {
   status: ConductorSendResult['status'];
   result?: string;
   error?: ConductorSendResult['error'];
+  /** 束内の worker 完了 / 失敗件数（harness 向け）。 */
   workerDispatches: number;
   workerFailures: number;
+  /** conductor がこの send で新規 dispatch した worker 件数（ループ停止判定向け）。 */
+  conductorDispatchesThisTurn: number;
   autonomousTurns: number;
 }
 
@@ -77,6 +85,7 @@ export async function runConductorSessionDriver(
   let sendCount = options.resumeState?.sendCount ?? 0;
   let lastDispatchesThisTurn = options.resumeState?.lastDispatchesThisTurn ?? 0;
   let autonomousTurns = options.resumeState?.autonomousTurns ?? 0;
+  let dispatchBatchState: DispatchBatchState = {};
   let stopReason: IssueLoopStopReason = 'completed';
   let lastSendResult: ConductorSendResult = options.resumeState?.lastSendResult ?? {
     runId: '',
@@ -92,7 +101,7 @@ export async function runConductorSessionDriver(
       workerFailures: options.workerFailures,
       onSendComplete: (info) => {
         sendCount = info.sendCount;
-        lastDispatchesThisTurn = info.workerDispatches + info.workerFailures;
+        lastDispatchesThisTurn = info.conductorDispatchesThisTurn;
         autonomousTurns = info.autonomousTurns;
         options.onSendComplete(info);
       },
@@ -135,16 +144,14 @@ export async function runConductorSessionDriver(
       }
     }
 
-    let event: SessionEvent | undefined;
+    let dispatchResult: DispatchBatchResult | undefined;
     try {
-      event = await options.eventQueue.waitForSendEvent({
+      dispatchResult = await waitForDispatchBatch({
+        eventQueue: options.eventQueue,
+        dispatchBatchState,
+        autonomousTurns,
+        maxTurns: options.maxTurns,
         signal: options.shutdownSignal,
-        accept: (candidate) =>
-          canDispatchConductorSend(
-            candidate,
-            autonomousTurns,
-            options.maxTurns,
-          ),
       });
     } catch (error) {
       if (isAbortError(error)) {
@@ -154,28 +161,35 @@ export async function runConductorSessionDriver(
       throw error;
     }
 
-    if (!event || !isConductorSendEvent(event)) {
+    if (!dispatchResult) {
       continue;
     }
 
-    const autonomousTurnsAfter = autonomousTurnsAfterConductorSend(
-      event,
+    const { events: batch, selected } = dispatchResult;
+    dispatchBatchState = markContinuationConsumed(dispatchBatchState, selected);
+
+    const autonomousTurnsAfter = autonomousTurnsAfterConductorBatch(
+      batch,
       autonomousTurns,
     );
+    const { workerDispatches, workerFailures } = countWorkerOutcomesInBatch(batch);
     lastSendResult = await runEventConductorSend({
-      message: formatSessionEventForConductor(event),
+      message: formatSessionEventsForConductor(batch),
       conductor: options.conductor,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
       sendCount,
       autonomousTurns: autonomousTurnsAfter,
+      workerOutcomeDispatches: workerDispatches,
+      workerOutcomeFailures: workerFailures,
       onSendComplete: (info) => {
         sendCount = info.sendCount;
-        lastDispatchesThisTurn = info.workerDispatches + info.workerFailures;
+        lastDispatchesThisTurn = info.conductorDispatchesThisTurn;
         autonomousTurns = info.autonomousTurns;
         options.onSendComplete(info);
       },
     });
+    dispatchBatchState = dispatchBatchStateAfterSend(selected.batch.sourceKey);
 
     const loopState = buildIssueLoopStopInput({
       autonomousTurns,
@@ -236,16 +250,17 @@ async function runEventConductorSend(input: {
   workerFailures: WorkerFailureRecord[];
   sendCount: number;
   autonomousTurns: number;
+  workerOutcomeDispatches?: number;
+  workerOutcomeFailures?: number;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
 }): Promise<ConductorSendResult> {
   const workersBefore = input.workerDispatches.length;
   const failuresBefore = input.workerFailures.length;
 
   const sendResult = await input.conductor.send(input.message);
-
-  const workerDispatches = input.workerDispatches.length - workersBefore;
-  const workerFailures = input.workerFailures.length - failuresBefore;
   const sendCount = input.sendCount + 1;
+  const conductorDispatches = input.workerDispatches.length - workersBefore;
+  const conductorFailures = input.workerFailures.length - failuresBefore;
 
   input.onSendComplete({
     sendCount,
@@ -253,12 +268,51 @@ async function runEventConductorSend(input: {
     status: sendResult.status,
     result: sendResult.result,
     error: sendResult.error,
-    workerDispatches,
-    workerFailures,
+    workerDispatches: input.workerOutcomeDispatches ?? conductorDispatches,
+    workerFailures: input.workerOutcomeFailures ?? conductorFailures,
+    conductorDispatchesThisTurn: conductorDispatches + conductorFailures,
     autonomousTurns: input.autonomousTurns,
   });
 
   return sendResult;
+}
+
+interface DispatchBatchResult {
+  events: SessionEvent[];
+  sourceKey: string;
+  selected: NonNullable<ReturnType<typeof selectDispatchBatch>>;
+}
+
+async function waitForDispatchBatch(input: {
+  eventQueue: SessionEventQueue;
+  dispatchBatchState: DispatchBatchState;
+  autonomousTurns: number;
+  maxTurns: number;
+  signal?: AbortSignal;
+}): Promise<DispatchBatchResult | undefined> {
+  for (;;) {
+    const selected = selectDispatchBatch({
+      queue: input.eventQueue.snapshot(),
+      state: input.dispatchBatchState,
+      autonomousTurns: input.autonomousTurns,
+      maxTurns: input.maxTurns,
+    });
+    if (selected) {
+      input.eventQueue.replaceQueue(selected.remainingQueue);
+      return {
+        events: selected.batch.events,
+        sourceKey: selected.batch.sourceKey,
+        selected,
+      };
+    }
+
+    const hadQueued = input.eventQueue.size > 0;
+    const incoming = await input.eventQueue.waitForEvent(input.signal, {
+      onlyNew: hadQueued,
+    });
+    // waiter 経由のイベントは queue に載らない。到着順を保つため先頭へ戻す。
+    input.eventQueue.prependSilent(incoming);
+  }
 }
 
 function isAbortError(error: unknown): boolean {

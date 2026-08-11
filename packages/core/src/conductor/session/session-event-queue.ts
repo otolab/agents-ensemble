@@ -27,6 +27,25 @@ export class SessionEventQueue {
     return this.queue.shift();
   }
 
+  /** キュー内容のスナップショット（到着順）。 */
+  snapshot(): SessionEvent[] {
+    return [...this.queue];
+  }
+
+  /** キュー全体を置き換える（dispatch 束の除去後など）。 */
+  replaceQueue(next: SessionEvent[]): void {
+    this.queue.length = 0;
+    this.queue.push(...next);
+  }
+
+  /**
+   * 先頭に挿入する（waiter 経由で取り出したイベントを到着順どおり戻すとき用）。
+   * 新しい waiter は起こさない。
+   */
+  prependSilent(event: SessionEvent): void {
+    this.queue.unshift(event);
+  }
+
   /** 述語に合う最初の send イベントを取り出す（キュー順は維持）。 */
   findSendEvent(
     accept: (event: SessionEvent) => boolean,
