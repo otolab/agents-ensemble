@@ -58,3 +58,16 @@ GitHub 上のレビューコメントは冒頭に `*🤖 by Cursor*` を付け�
 4. テストが主ユースケースを担保しているか（ユニットだけで縦切りが抜けていないか）
 5. README / ADR / architecture のどれが利用者向け正本か確認し、矛盾がないか見る
 6. 「次の Issue」に逃がす項目は、Issue 番号とスキップ理由が PR / ADR にあるか
+
+## 作業環境（git worktree）
+
+`ensemble issue` の isolated モードでは Issue ごとに **git worktree**（`.ensemble/worktrees/issue-N`）で作業する。各 worktree は独自の `node_modules` が必要。
+
+本リポジトリは pnpm の **global virtual store**（`enableGlobalVirtualStore`）を有効にしている。メイン worktree で一度 `pnpm install` 済みなら、**2 本目以降の worktree では `pnpm install` がほぼ即時**（symlink 張り替え中心）になる。install を省略しないこと。
+
+```bash
+cd .ensemble/worktrees/issue-42
+pnpm install --frozen-lockfile
+```
+
+詳細は [README.md — git worktree と依存インストール](README.md#git-worktree-と依存インストール)。
