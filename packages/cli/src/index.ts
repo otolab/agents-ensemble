@@ -6,20 +6,14 @@ import {
   dispatchWorker,
   getConductorAuthStatus,
   listConductorModels,
-  loadProfile,
   loginConductor,
   PermissionBroker,
-  runIssueSession,
-  SessionLogger,
 } from '@agents-ensemble/core';
-import { bindAsyncOperatorInput, notifyOperatorInputReprompt } from './async-operator-input.js';
+import { executeIssueCommand } from './issue-command.js';
 import { formatModelsListJson, formatModelsListText } from './format-models-list.js';
 import { formatIssueSessionSummaryJson } from './format-session-summary.js';
-import { isOperatorInputInteractive } from './prompt-operator-input.js';
 import { promptPermissionDecision } from './prompt-permission.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
-import { createDialogueSink, createHarnessSink } from './session-sinks.js';
-import { resolveCliMaxTurns } from './resolve-cli-max-turns.js';
 
 const program = new Command();
 
@@ -74,55 +68,7 @@ program
       },
     ) => {
       try {
-        const workerWorktreeMode = parseWorktreeMode(options.worktree);
-        if (workerWorktreeMode === 'in_repo') {
-          console.error(
-            '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
-          );
-        }
-        const { profile, profilePath } = await loadProfile({
-          profile: options.profile,
-          cwd: resolve(options.repoRoot),
-        });
-        const repoRoot = resolve(options.repoRoot);
-        const sessionLogger = new SessionLogger({ issueUrl, repoRoot });
-        sessionLogger.subscribe(createHarnessSink());
-        const interactive = isOperatorInputInteractive();
-        const maxTurns = resolveCliMaxTurns({
-          interactive,
-          noMaxTurns: options.noMaxTurns,
-          maxTurns: options.maxTurns,
-        });
-        if (interactive) {
-          sessionLogger.subscribe(createDialogueSink());
-        }
-        const result = await runIssueSession({
-          issueUrl,
-          repoRoot,
-          conductorCwd: resolve(options.conductorCwd),
-          resumeAgentId: options.resume,
-          profile,
-          profilePath,
-          modelId: options.model,
-          maxTurns: options.maxTurns,
-          workerWorktreeMode,
-          sessionLogger,
-          ...(interactive
-            ? {
-                bindOperatorInput: bindAsyncOperatorInput,
-                continueOnConductorError: true,
-              }
-            : {}),
-          onOpenQuestionEnqueued: (question) => {
-            console.error(
-              `[open question] ${question.id} [${question.responseType}] ${question.question}`,
-            );
-            notifyOperatorInputReprompt();
-          },
-          onEscalated: (record) => {
-            console.error(`[operator answer] ${record.question} → ${record.answer}`);
-          },
-        });
+        const result = await executeIssueCommand(issueUrl, options);
 
         console.log(formatIssueSessionSummaryJson(result));
 
