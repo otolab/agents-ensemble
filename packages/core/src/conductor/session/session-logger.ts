@@ -3,7 +3,7 @@ import type { EscalationRecord } from '../../escalation/human-inquiry.js';
 import type { OpenQuestion } from '../../escalation/open-question.js';
 import type { WorkerFailureRecord } from '../../runtime/types.js';
 import type { WorkerWorktreeMode } from '../../worktree/worktree.js';
-import type { IssueLoopStopReason } from '../issue-loop.js';
+import type { IssueLoopStopReason } from '../session-policy.js';
 import type { ConductorSessionResult } from '../conductor-session.js';
 
 /** セッション終了時の exit report（`ConductorSessionResult` の別名）。 */
