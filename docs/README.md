@@ -15,7 +15,7 @@ agents-ensemble（`ensemble` コマンド）の設計・検討事項。
 | [modular-prompt.md](modular-prompt.md) | **modular-prompt の書き方**（セクション分担・アンチパターン） |
 | [implementation.md](implementation.md) | 実装方針の検討 |
 | [testing-strategy.md](testing-strategy.md) | **テスト戦略**（unittest / integration / e2e） |
-| [adr/](adr/README.md) | **ADR**（設計判断の履歴） |
+| [adr/](adr/README.md) | **ADR**（設計判断の履歴・[不変性ルール](adr/README.md#不変性と方針変更)） |
 | [../AGENTS.md](../AGENTS.md) | **エージェント向け指針**（レビュー方針含む） |
 
 関連 Issue: [otolab/my-logs#2027](https://github.com/otolab/my-logs/issues/2027)
