@@ -9,8 +9,13 @@ export interface OperatorInputContext {
   openQuestions: OpenQuestion[];
 }
 
+export interface OperatorInputSubmitOptions {
+  /** TUI で選択中の open question への回答先。未指定時は従来どおり件数で解釈。 */
+  targetOpenQuestionId?: string;
+}
+
 export interface OperatorInputBindingApi {
-  submit: (message: string) => boolean;
+  submit: (message: string, options?: OperatorInputSubmitOptions) => boolean;
   getContext: () => OperatorInputContext;
 }
 

@@ -9,6 +9,7 @@ import type { SessionEventQueue } from './session/session-event-queue.js';
 
 export interface SubmitOperatorInputInput {
   message: string;
+  targetOpenQuestionId?: string;
   conductorTurn: number;
   openQuestions: OpenQuestionRegistry;
   escalations: EscalationRecord[];
@@ -24,7 +25,9 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
     return false;
   }
 
-  const applied = applyOperatorMessage(input.openQuestions, trimmed);
+  const applied = applyOperatorMessage(input.openQuestions, trimmed, {
+    targetQuestionId: input.targetOpenQuestionId,
+  });
   const text =
     applied.answered.length > 0
       ? joinOperatorInput([

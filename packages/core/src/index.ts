@@ -176,6 +176,7 @@ export type {
   OperatorInputBinding,
   OperatorInputBindingApi,
   OperatorInputContext,
+  OperatorInputSubmitOptions,
 } from './conductor/operator-input-binding.js';
 export { submitOperatorInput } from './conductor/submit-operator-input.js';
 export type { SubmitOperatorInputInput } from './conductor/submit-operator-input.js';

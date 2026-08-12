@@ -1,7 +1,10 @@
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 import { recordOpenQuestionAnswer } from './record-open-question-answer.js';
 
-const INQUIRY_REFERENCE_PATTERN = /^@inq:([^\s]+)\s+([\s\S]+)$/u;
+export interface ApplyOperatorMessageOptions {
+  /** 回答先の open question id（TUI 選択など）。 */
+  targetQuestionId?: string;
+}
 
 export interface ApplyOperatorMessageResult {
   /** オペレータメッセージで回答が確定した質問。 */
@@ -13,18 +16,17 @@ export interface ApplyOperatorMessageResult {
 export function applyOperatorMessage(
   registry: OpenQuestionRegistry,
   message: string,
+  options?: ApplyOperatorMessageOptions,
 ): ApplyOperatorMessageResult {
   const trimmed = message.trim();
   if (!trimmed) {
     return { answered: [] };
   }
 
-  const explicit = trimmed.match(INQUIRY_REFERENCE_PATTERN);
-  if (explicit) {
-    const [, id, answerText] = explicit;
+  if (options?.targetQuestionId) {
     const answered = recordOpenQuestionAnswer(registry, {
-      id: id!,
-      answer: answerText.trim(),
+      id: options.targetQuestionId,
+      answer: trimmed,
       answeredBy: 'operator',
       sourceMessage: trimmed,
     });

@@ -7,6 +7,7 @@ import { buildActivityLogDisplayLines } from './activity-log.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import { extractOrchestrationPaneFrameStats } from './orchestration-pane-frame.js';
+import { resolveOpenQuestionsPaneLayout } from './open-questions-pane.js';
 import {
   computeActivityLogLineCapacity,
   computeActivityPaneHeight,
@@ -15,7 +16,14 @@ import {
   computeOperatorInputLineIndex,
 } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
-import { MAIN_PANE_TITLE, OPERATOR_INPUT_CURSOR_Y_OFFSET, PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
+import {
+  MAIN_PANE_TITLE,
+  OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+  OPERATOR_INPUT_CURSOR_Y_OFFSET,
+  PANE_PADDING_X,
+  ROUND_BORDER_WIDTH,
+} from './tui-layout-constants.js';
+import type { OpenQuestion } from '@agents-ensemble/core';
 
 function findOperatorInputLine(lines: string[]): { lineIndex: number; inputStartX: number } {
   const operatorLineIndices = lines
@@ -44,6 +52,35 @@ function fillScrollableHarnessLog(viewModel: ReturnType<typeof createTuiViewMode
 }
 
 const SCROLL_HINT = 'PgUp/PgDn でスクロール';
+
+function createOpenQuestion(
+  overrides: Partial<OpenQuestion> & Pick<OpenQuestion, 'id' | 'question'>,
+): OpenQuestion {
+  return {
+    responseType: 'text',
+    source: 'conductor',
+    status: 'open',
+    askedAt: 1,
+    ...overrides,
+  };
+}
+
+function resolveOpenQuestionsPaneHeight(
+  openQuestions: OpenQuestion[],
+  terminalRows = 24,
+  terminalColumns = 80,
+): number {
+  return resolveOpenQuestionsPaneLayout({
+    openQuestions,
+    selectedIndex: 0,
+    contentWidth: getPaneContentWidth({
+      columns: terminalColumns,
+      paddingX: PANE_PADDING_X,
+      borderWidth: ROUND_BORDER_WIDTH,
+    }),
+    terminalRows,
+  }).paneHeight;
+}
 
 describe('IssueSessionTui', () => {
   beforeEach(() => {
@@ -95,6 +132,8 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('[conductor] conductor says hi');
     expect(frame).toContain('Open questions');
     expect(frame).toContain('inq-1');
+    expect(frame).toContain('1/1');
+    expect(frame).toContain('Shift+↑↓で選択');
     expect(frame).toContain('operator>');
   });
 
@@ -136,7 +175,12 @@ describe('IssueSessionTui', () => {
     });
     const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-    const expectedInputLineIndex = computeOperatorInputLineIndex({ terminalRows, hintLineCount });
+    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
+    const expectedInputLineIndex = computeOperatorInputLineIndex({
+      terminalRows,
+      hintLineCount,
+      openQuestionsPaneHeight,
+    });
     const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
     const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
 
@@ -180,7 +224,12 @@ describe('IssueSessionTui', () => {
     });
     const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-    const expectedInputLineIndex = computeOperatorInputLineIndex({ terminalRows, hintLineCount });
+    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
+    const expectedInputLineIndex = computeOperatorInputLineIndex({
+      terminalRows,
+      hintLineCount,
+      openQuestionsPaneHeight,
+    });
     const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
     const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
 
@@ -312,7 +361,11 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
 
     const capacity = computeOrchestrationLogVisibleLineCount(
-      computeActivityPaneHeight({ terminalRows: 24, hintLineCount: 1 }),
+      computeActivityPaneHeight({
+        terminalRows: 24,
+        hintLineCount: 1,
+        openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      }),
       wrapTextToWidth(
         `${MAIN_PANE_TITLE} (PgUp/PgDn でスクロール · 最新へは End · 入力中は Ctrl+PgUp/PgDn)`,
         getPaneContentWidth({
@@ -348,6 +401,7 @@ describe('IssueSessionTui', () => {
       const capacity = computeActivityLogLineCapacity({
         terminalRows,
         hintLineCount: 1,
+        openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
       });
       const stats = extractOrchestrationPaneFrameStats(lastFrame() ?? '');
 
@@ -432,6 +486,115 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('[operator]');
     expect(frame).toContain('first line');
     expect(frame).toContain('second line');
+  });
+
+  describe('open questions selection (stdin integration)', () => {
+    it('cycles selection with Shift+arrow keys', async () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          createOpenQuestion({ id: 'inq-1', question: 'First question' }),
+          createOpenQuestion({ id: 'inq-2', question: 'Second question' }),
+        ],
+      });
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      expect(lastFrame() ?? '').toContain('▸ inq-1');
+
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
+      await flushInkStdin();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('2/2');
+      expect(frame).toContain('▸ inq-2');
+    });
+
+    it('does not change selection on plain arrow keys', async () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          createOpenQuestion({ id: 'inq-1', question: 'First question' }),
+          createOpenQuestion({ id: 'inq-2', question: 'Second question' }),
+        ],
+      });
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      stdin.write(INK_TEST_KEYS.downArrow);
+      await flushInkStdin();
+
+      expect(lastFrame() ?? '').toContain('▸ inq-1');
+      expect(lastFrame() ?? '').not.toContain('2/2');
+    });
+
+    it('submits selected question answer with targetOpenQuestionId', async () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          createOpenQuestion({ id: 'inq-1', question: 'First' }),
+          createOpenQuestion({ id: 'inq-2', question: 'Second' }),
+        ],
+      });
+      let submitted = '';
+      let submitOptions: { targetOpenQuestionId?: string } | undefined;
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui
+          viewModel={viewModel}
+          onSubmit={(text, options) => {
+            submitted = text;
+            submitOptions = options;
+          }}
+        />,
+      );
+
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('▸ inq-2');
+
+      stdin.write('approved');
+      await flushInkStdin();
+      stdin.write('\r');
+      await flushInkStdin();
+
+      expect(submitted).toBe('approved');
+      expect(submitOptions).toEqual({ targetOpenQuestionId: 'inq-2' });
+    });
+
+    it('grows open questions pane for long selected question text', () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          createOpenQuestion({
+            id: 'inq-long',
+            question: 'word '.repeat(30),
+            context: 'context '.repeat(10),
+          }),
+        ],
+      });
+
+      const { lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      const paneHeight = resolveOpenQuestionsPaneHeight(
+        viewModel.getSnapshot().displayState.openQuestions,
+      );
+      expect(paneHeight).toBeGreaterThan(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
+      expect(lastFrame() ?? '').toContain('context context');
+    });
   });
 
   describe('orchestration pane scroll (stdin integration)', () => {

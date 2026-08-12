@@ -40,7 +40,8 @@ type OperatorInputBinding = (
 
 - 空文字は無視（`false` を返す）
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
-- open question への `@inq:<id> <回答>` 形式も `submitOperatorInput` が解釈する
+- TTY（Ink TUI）では選択中の open question への回答として `submit` する（`targetOpenQuestionId` オプション）
+- 非 TTY では未回答 1 件のときはプレーンテキストをその open question への回答として解釈する
 
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 

@@ -2,6 +2,7 @@ import { render } from 'ink';
 import type {
   OperatorInputBinding,
   OperatorInputBindingApi,
+  OperatorInputSubmitOptions,
   SessionLogSink,
 } from '@agents-ensemble/core';
 import type { SessionLogEvent } from '@agents-ensemble/core';
@@ -45,7 +46,9 @@ function createInkDisplayBackend(
 
 function createBindTuiOperatorInput(
   viewModel: ReturnType<typeof createTuiViewModel>,
-  onSubmitRef: { current: ((text: string) => void) | undefined },
+  onSubmitRef: {
+    current: ((text: string, options?: OperatorInputSubmitOptions) => void) | undefined;
+  },
   apiRef: { current: OperatorInputBindingApi | undefined },
 ): OperatorInputBinding {
   return (api: OperatorInputBindingApi) => {
@@ -60,10 +63,10 @@ function createBindTuiOperatorInput(
     }
 
     apiRef.current = api;
-    onSubmitRef.current = (text: string) => {
+    onSubmitRef.current = (text: string, options?: OperatorInputSubmitOptions) => {
       const trimmed = trimBlankLinesOnly(text);
       if (trimmed) {
-        api.submit(trimmed);
+        api.submit(trimmed, options);
       }
     };
 
@@ -82,7 +85,9 @@ function createBindTuiOperatorInput(
 /** TTY 向け Ink TUI を起動し、表示 backend とオペレータ入力 binding を返す。 */
 export function createIssueSessionTuiHost(): IssueSessionTuiHost {
   const viewModel = createTuiViewModel();
-  const onSubmitRef: { current: ((text: string) => void) | undefined } = {
+  const onSubmitRef: {
+    current: ((text: string, options?: OperatorInputSubmitOptions) => void) | undefined;
+  } = {
     current: undefined,
   };
   const apiRef: { current: OperatorInputBindingApi | undefined } = {
@@ -92,8 +97,8 @@ export function createIssueSessionTuiHost(): IssueSessionTuiHost {
   const ink = render(
     <IssueSessionTui
       viewModel={viewModel}
-      onSubmit={(text) => {
-        onSubmitRef.current?.(text);
+      onSubmit={(text, options) => {
+        onSubmitRef.current?.(text, options);
       }}
     />,
   );

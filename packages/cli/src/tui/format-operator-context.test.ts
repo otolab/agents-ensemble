@@ -6,9 +6,9 @@ describe('formatOperatorContextHint', () => {
     expect(formatOperatorContextHint(undefined)).toBe('operator> ');
   });
 
-  it('highlights open questions', () => {
-    expect(
-      formatOperatorContextHint({
+  it('highlights open questions with selection context', () => {
+    const hint = formatOperatorContextHint(
+      {
         conductorTurn: 2,
         autonomousTurns: 1,
         maxTurns: 5,
@@ -22,8 +22,12 @@ describe('formatOperatorContextHint', () => {
             askedAt: 1,
           },
         ],
-      }),
-    ).toContain('open question');
+      },
+      { id: 'inq-1', index: 0, total: 1 },
+    );
+
+    expect(hint).toContain('inq-1 (1/1)');
+    expect(hint).toContain('Shift+↑↓で選択');
   });
 
   it('shows autonomous turn progress', () => {

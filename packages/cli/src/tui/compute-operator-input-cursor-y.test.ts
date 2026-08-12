@@ -11,7 +11,7 @@ import {
 import {
   INPUT_PANE_BORDER_ROWS,
   INPUT_PANE_LEFT_COLUMNS,
-  OPEN_QUESTIONS_PANE_HEIGHT,
+  OPEN_QUESTIONS_PANE_MIN_HEIGHT,
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
@@ -33,11 +33,29 @@ describe('computeActivityPaneHeight', () => {
   it('fills remaining rows after fixed panes and input pane', () => {
     const terminalRows = 24;
     const hintLineCount = 1;
+    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
     const inputPaneHeight = computeInputPaneHeight({ hintLineCount });
 
     expect(
-      computeActivityPaneHeight({ terminalRows, hintLineCount }),
-    ).toBe(terminalRows - WORKER_PANE_HEIGHT - OPEN_QUESTIONS_PANE_HEIGHT - inputPaneHeight);
+      computeActivityPaneHeight({ terminalRows, hintLineCount, openQuestionsPaneHeight }),
+    ).toBe(terminalRows - WORKER_PANE_HEIGHT - openQuestionsPaneHeight - inputPaneHeight);
+  });
+
+  it('shrinks orchestration when open questions pane grows', () => {
+    const terminalRows = 24;
+    const hintLineCount = 1;
+    const small = computeActivityPaneHeight({
+      terminalRows,
+      hintLineCount,
+      openQuestionsPaneHeight: 4,
+    });
+    const large = computeActivityPaneHeight({
+      terminalRows,
+      hintLineCount,
+      openQuestionsPaneHeight: 10,
+    });
+
+    expect(large).toBeLessThan(small);
   });
 });
 
@@ -55,11 +73,16 @@ describe('computeActivityLogLineCapacity', () => {
   it('reserves title and border rows inside the activity pane', () => {
     const terminalRows = 24;
     const hintLineCount = 1;
-    const activityPaneHeight = computeActivityPaneHeight({ terminalRows, hintLineCount });
+    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
+    const activityPaneHeight = computeActivityPaneHeight({
+      terminalRows,
+      hintLineCount,
+      openQuestionsPaneHeight,
+    });
 
-    expect(computeActivityLogLineCapacity({ terminalRows, hintLineCount })).toBe(
-      computeOrchestrationLogVisibleLineCount(activityPaneHeight),
-    );
+    expect(
+      computeActivityLogLineCapacity({ terminalRows, hintLineCount, openQuestionsPaneHeight }),
+    ).toBe(computeOrchestrationLogVisibleLineCount(activityPaneHeight));
   });
 });
 
@@ -76,27 +99,42 @@ describe('computeOperatorInputCursorY', () => {
   it('offsets rendered input line index for Ink useCursor', () => {
     const terminalRows = 24;
     const hintLineCount = 1;
-    const inputLineIndex = computeOperatorInputLineIndex({ terminalRows, hintLineCount });
+    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
+    const inputLineIndex = computeOperatorInputLineIndex({
+      terminalRows,
+      hintLineCount,
+      openQuestionsPaneHeight,
+    });
 
     expect(
       computeOperatorInputCursorY({
         terminalRows,
         hintLineCount,
+        openQuestionsPaneHeight,
       }),
     ).toBe(inputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET);
   });
 
   it('keeps useCursor Y stable when hint wraps (activity pane shrinks)', () => {
+    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
     const yOneHintLine = computeOperatorInputCursorY({
       terminalRows: 24,
       hintLineCount: 1,
+      openQuestionsPaneHeight,
     });
     const yTwoHintLines = computeOperatorInputCursorY({
       terminalRows: 24,
       hintLineCount: 2,
+      openQuestionsPaneHeight,
     });
 
     expect(yOneHintLine).toBe(yTwoHintLines);
-    expect(computeOperatorInputLineIndex({ terminalRows: 24, hintLineCount: 1 })).toBe(22);
+    expect(
+      computeOperatorInputLineIndex({
+        terminalRows: 24,
+        hintLineCount: 1,
+        openQuestionsPaneHeight,
+      }),
+    ).toBe(22);
   });
 });

@@ -2,7 +2,6 @@ import stringWidth from 'string-width';
 import {
   INPUT_PANE_BORDER_ROWS,
   INPUT_PANE_LEFT_COLUMNS,
-  OPEN_QUESTIONS_PANE_HEIGHT,
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
   ORCHESTRATION_PANE_TITLE_ROWS,
   PANE_BORDER_ROWS,
@@ -23,11 +22,12 @@ export function computeActivityPaneHeight(params: {
   terminalRows: number;
   hintLineCount: number;
   inputDisplayLineCount?: number;
+  openQuestionsPaneHeight: number;
 }): number {
   return (
     params.terminalRows -
     WORKER_PANE_HEIGHT -
-    OPEN_QUESTIONS_PANE_HEIGHT -
+    params.openQuestionsPaneHeight -
     computeInputPaneHeight({
       hintLineCount: params.hintLineCount,
       inputDisplayLineCount: params.inputDisplayLineCount,
@@ -48,6 +48,7 @@ export function computeActivityLogLineCapacity(params: {
   terminalRows: number;
   hintLineCount: number;
   inputDisplayLineCount?: number;
+  openQuestionsPaneHeight: number;
 }): number {
   const activityPaneHeight = computeActivityPaneHeight(params);
   return computeOrchestrationLogVisibleLineCount(activityPaneHeight);
@@ -71,12 +72,13 @@ export function computeOperatorInputCursorY(params: {
   terminalRows: number;
   hintLineCount: number;
   inputDisplayLineCount?: number;
+  openQuestionsPaneHeight: number;
   cursorLineOffset?: number;
 }): number {
   const panesAboveInput =
     WORKER_PANE_HEIGHT +
     computeActivityPaneHeight(params) +
-    OPEN_QUESTIONS_PANE_HEIGHT;
+    params.openQuestionsPaneHeight;
 
   const cursorLineOffset = params.cursorLineOffset ?? 0;
   const inputLineIndex =
@@ -90,6 +92,7 @@ export function computeOperatorInputLineIndex(params: {
   terminalRows: number;
   hintLineCount: number;
   inputDisplayLineCount?: number;
+  openQuestionsPaneHeight: number;
   cursorLineOffset?: number;
 }): number {
   return computeOperatorInputCursorY(params) - OPERATOR_INPUT_CURSOR_Y_OFFSET;

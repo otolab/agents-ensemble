@@ -15,8 +15,20 @@ export const MAIN_PANE_TITLE = 'Orchestration';
 /** Worker 状態ペインの固定高さ（枠線込み。タイトル + サマリ 3 行）。 */
 export const WORKER_PANE_HEIGHT = 6;
 
-/** Open questions ペインの固定高さ（枠線込み。タイトル + 1 行サマリ）。 */
-export const OPEN_QUESTIONS_PANE_HEIGHT = 4;
+/**
+ * Open questions ペインの最小高さ（枠線込み。タイトル + 本文 1 行）。
+ * 未回答 0 件時や本文が短いときの下限。
+ */
+export const OPEN_QUESTIONS_PANE_MIN_HEIGHT = 4;
+
+/** Open questions ペイン本文の表示行数上限（端末行数に対する比率）。 */
+export const OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO = 0.35;
+
+/** Open questions ペイン本文の表示行数の絶対上限。 */
+export const OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES = 8;
+
+/** Open questions ペインタイトルに付与する選択操作ヒント。 */
+export const OPEN_QUESTIONS_SELECTION_HINT = ' — Shift+↑↓で選択';
 
 /** 入力ペインの枠線（上下）行数。`PANE_BORDER_ROWS` と同値。 */
 export const INPUT_PANE_BORDER_ROWS = PANE_BORDER_ROWS;
