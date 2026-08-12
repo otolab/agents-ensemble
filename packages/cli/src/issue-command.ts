@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import {
+  findLatestSessionSidecarForIssue,
   loadProfile,
   runIssueSession,
   SessionLogger,
@@ -15,6 +16,7 @@ export interface IssueCommandOptions {
   repoRoot: string;
   conductorCwd: string;
   resume?: string;
+  continue?: boolean;
   profile?: string;
   model?: string;
   maxTurns?: number;
@@ -29,6 +31,41 @@ export interface IssueCommandDeps {
   runIssueSession?: typeof runIssueSession;
   loadProfile?: typeof loadProfile;
   SessionLogger?: typeof SessionLogger;
+  findLatestSessionSidecarForIssue?: typeof findLatestSessionSidecarForIssue;
+}
+
+/** `--resume` / `--continue` から `runIssueSession` に渡す `resumeAgentId` を解決する。 */
+export async function resolveResumeAgentIdFromOptions(
+  options: Pick<IssueCommandOptions, 'resume' | 'continue'>,
+  context: { issueUrl: string; repoRoot: string },
+  deps: Pick<IssueCommandDeps, 'findLatestSessionSidecarForIssue'> = {},
+): Promise<string | undefined> {
+  if (options.resume && options.continue) {
+    throw new Error('Cannot use --continue and --resume together');
+  }
+  if (options.resume) {
+    return options.resume;
+  }
+  if (!options.continue) {
+    return undefined;
+  }
+
+  const findLatest =
+    deps.findLatestSessionSidecarForIssue ?? findLatestSessionSidecarForIssue;
+  const sidecar = await findLatest({
+    repoRoot: context.repoRoot,
+    issueUrl: context.issueUrl,
+  });
+  if (!sidecar) {
+    throw new Error(
+      `No session sidecar found for issue ${context.issueUrl}. Start a new session without --continue.`,
+    );
+  }
+
+  console.error(
+    `[continue] resuming session: conductorAgentId=${sidecar.conductorAgentId}`,
+  );
+  return sidecar.conductorAgentId;
 }
 
 /** `ensemble issue` の CLI オプションから `runIssueSession` に渡す `maxTurns` を決定する。 */
@@ -67,6 +104,11 @@ export async function executeIssueCommand(
     cwd: resolve(options.repoRoot),
   });
   const repoRoot = resolve(options.repoRoot);
+  const resumeAgentId = await resolveResumeAgentIdFromOptions(
+    options,
+    { issueUrl, repoRoot },
+    deps,
+  );
   const sessionLogger = new SessionLoggerCtor({ issueUrl, repoRoot });
   sessionLogger.subscribe(createHarnessSink());
 
@@ -81,7 +123,7 @@ export async function executeIssueCommand(
     issueUrl,
     repoRoot,
     conductorCwd: resolve(options.conductorCwd),
-    resumeAgentId: options.resume,
+    resumeAgentId,
     profile,
     profilePath,
     modelId: options.model,

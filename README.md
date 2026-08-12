@@ -144,7 +144,7 @@ ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
 # または --issue-url <url> --repo-root <path> で worktree を解決
 
 # Stage 2: conductor オーケストレーション
-ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--profile <name>] [--resume <agentId>] ...
+ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--profile <name>] [--resume <agentId>] [--continue] ...
 # <issue-url> はフル URL または 31 / '#31' 等の番号 shorthand 可（# はクォート）
 ```
 
@@ -196,6 +196,18 @@ ensemble issue https://github.com/org/repo/issues/1 --repo-root .
 
 **再開（同一 Issue の続き）**
 
+`--continue` は同一 `issueUrl` + `repoRoot` の sidecar のうち `updatedAt` が最新のものを自動選択する（`--resume` と排他）。
+
+```bash
+ensemble issue https://github.com/org/repo/issues/1 \
+  --repo-root . \
+  --continue
+```
+
+stderr に選んだ `conductorAgentId` が `[continue] resuming session: conductorAgentId=...` として出る。sidecar が無い場合は明確なエラーで終了（新規開始なら `--continue` なし）。
+
+`conductorAgentId` を直接指定する場合:
+
 ```bash
 ensemble issue https://github.com/org/repo/issues/1 \
   --repo-root . \
@@ -217,7 +229,7 @@ conductor は SDK `Agent.resume`、worker は ACP `session/load` で復元する
 
 ### conductor → worker（常駐）
 
-`ensemble issue` では profile の `workers` で指定した worker が **セッション開始時に attach** され、**終了（または `--resume` 再開）まで `agent acp` プロセスを維持**する。
+`ensemble issue` では profile の `workers` で指定した worker が **セッション開始時に attach** され、**終了（または `--resume` / `--continue` 再開）まで `agent acp` プロセスを維持**する。
 
 | 経路 | 用途 |
 |------|------|
