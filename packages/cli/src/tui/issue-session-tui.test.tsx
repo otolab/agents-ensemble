@@ -6,13 +6,16 @@ import { createTuiViewModel } from './tui-view-model.js';
 import { buildActivityLogDisplayLines } from './activity-log.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
+import { extractOrchestrationPaneFrameStats } from './orchestration-pane-frame.js';
 import {
   computeActivityLogLineCapacity,
+  computeActivityPaneHeight,
+  computeOrchestrationLogVisibleLineCount,
   computeOperatorInputCursorX,
   computeOperatorInputLineIndex,
 } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
-import { OPERATOR_INPUT_CURSOR_Y_OFFSET, PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
+import { MAIN_PANE_TITLE, OPERATOR_INPUT_CURSOR_Y_OFFSET, PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
 
 function findOperatorInputLine(lines: string[]): { lineIndex: number; inputStartX: number } {
   const operatorLineIndices = lines
@@ -277,13 +280,83 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('[conductor] cond');
   });
 
-  it('allocates more rows to orchestration pane than auxiliary panes', () => {
-    const capacity = computeActivityLogLineCapacity({
-      terminalRows: 24,
-      hintLineCount: 1,
+  it('keeps orchestration title visible when log pane is full', () => {
+    const viewModel = createTuiViewModel();
+    fillScrollableHarnessLog(viewModel, 100);
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    expect(lastFrame() ?? '').toContain('Orchestration');
+  });
+
+  it('fills orchestration pane when scroll hint wraps the title', async () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 40,
+    });
+    Object.defineProperty(process.stdout, 'rows', {
+      configurable: true,
+      value: 24,
     });
 
-    expect(capacity).toBeGreaterThanOrEqual(7);
+    const viewModel = createTuiViewModel();
+    fillScrollableHarnessLog(viewModel, 50);
+
+    const { stdin, lastFrame, unmount } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    stdin.write(INK_TEST_KEYS.pageUp);
+    await flushInkStdin();
+
+    const capacity = computeOrchestrationLogVisibleLineCount(
+      computeActivityPaneHeight({ terminalRows: 24, hintLineCount: 1 }),
+      wrapTextToWidth(
+        `${MAIN_PANE_TITLE} (PgUp/PgDn でスクロール · 最新へは End · 入力中は Ctrl+PgUp/PgDn)`,
+        getPaneContentWidth({
+          columns: 40,
+          paddingX: PANE_PADDING_X,
+          borderWidth: ROUND_BORDER_WIDTH,
+        }),
+      ).length,
+    );
+    const stats = extractOrchestrationPaneFrameStats(lastFrame() ?? '');
+
+    expect(lastFrame() ?? '').toContain(SCROLL_HINT);
+    expect(stats.logRows.length).toBeGreaterThanOrEqual(capacity);
+    expect(stats.blankRows).toHaveLength(0);
+
+    unmount();
+  });
+
+  it('fills orchestration pane log rows without unused inner blank lines', () => {
+    for (const terminalRows of [24, 40, 50] as const) {
+      Object.defineProperty(process.stdout, 'rows', {
+        configurable: true,
+        value: terminalRows,
+      });
+
+      const viewModel = createTuiViewModel();
+      fillScrollableHarnessLog(viewModel, 100);
+
+      const { lastFrame, unmount } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      const capacity = computeActivityLogLineCapacity({
+        terminalRows,
+        hintLineCount: 1,
+      });
+      const stats = extractOrchestrationPaneFrameStats(lastFrame() ?? '');
+
+      expect(capacity).toBeGreaterThan(0);
+      expect(stats.logRows.length).toBeGreaterThanOrEqual(capacity);
+      expect(stats.blankRows).toHaveLength(0);
+
+      unmount();
+    }
   });
 
   it('windowing hides older log lines when orchestration pane is full', () => {

@@ -38,3 +38,6 @@ export const INPUT_PANE_LEFT_COLUMNS = INPUT_PANE_LEFT_BORDER_COLUMNS + PANE_PAD
  * 実カーソルが入力行より 1 行上にずれる（オペレータ手動確認 iTerm2+tmux）。
  */
 export const OPERATOR_INPUT_CURSOR_Y_OFFSET = 1;
+
+/** Orchestration ペインのタイトル行数（`MAIN_PANE_TITLE` 単独行。hint は呼び出し側で加算）。 */
+export const ORCHESTRATION_PANE_TITLE_ROWS = 1;
