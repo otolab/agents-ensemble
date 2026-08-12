@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
-import { dispatchWorker } from '../../src/dispatch/worker-dispatch.js';
+import {
+  attachWorker,
+  buildWorkerAttachPrompt,
+  runAttachedWorkerPrompt,
+} from '../../src/dispatch/attach-worker.js';
+import { closeWorkerAcpSession } from '../../src/dispatch/worker-acp-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import type { Profile } from '../../src/profile/types.js';
@@ -84,18 +89,30 @@ describe('session resume integration', () => {
     const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
     const promptSessionSpy = vi.spyOn(bridge, 'promptSession');
 
-    const firstDispatch = await dispatchWorker({
+    const worktree = {
+      ...TEST_WORKTREE,
+      path: join(repoRoot, 'worktree'),
+    };
+    const sessionState = {
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      kinds: ['ping'],
+    };
+    const attachOptions = {
       issueUrl: TEST_ISSUE.url,
       name: 'ping-1',
       kind: 'ping',
       systemPrompt: PING_SYSTEM_PROMPT,
-      sessionState: {
-        workers: [{ name: 'ping-1', kind: 'ping' }],
-        kinds: ['ping'],
-      },
-      repoRoot,
-      bridge,
+      sessionState,
+      worktree,
+    };
+    const attached = await attachWorker({
+      ...attachOptions,
+      connectAcp: async () => bridge,
+      ownsBridge: false,
     });
+    const prompt = buildWorkerAttachPrompt(attachOptions, attached.session);
+    const firstDispatch = await runAttachedWorkerPrompt(attached, prompt);
+    await closeWorkerAcpSession(attached.session);
     loadSessionSpy.mockClear();
     promptSessionSpy.mockClear();
 

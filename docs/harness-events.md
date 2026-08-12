@@ -181,7 +181,7 @@ bootstrap 専用イベントは **exit JSON には載せない**（時系列テ�
 |--------|-----------------|------|
 | `[open question]` | `open.question.enqueued` | |
 | `[operator answer]` | `escalation.recorded` | |
-| `[worktree]` | `session.worktree.notice` | `dispatch worker` 経路は未移行（follow-up） |
+| `[worktree]` | `session.worktree.notice` | |
 | `[continue]` | `session.continue` | |
 | （post-loop メッセージ） | `session.post_loop_wait` | |
 

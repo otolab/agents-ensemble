@@ -29,28 +29,11 @@ export const ROUNDTRIP_E2E_PROFILE_PATH = join(
   'fixtures/e2e-roundtrip/profile.yaml',
 );
 
-export interface E2eConfig {
-  agentCommand?: string;
-  agentArgs?: string[];
-  cwd?: string;
-  issueUrl: string;
-  repoRoot: string;
-  name?: string;
-  kind?: string;
-  systemPrompt?: string;
-  conductorCwd?: string;
-  conductorModelId?: string;
-  profilePath?: string;
-}
-
 interface RawE2eConfig {
   agentCommand?: string;
   agentArgs?: string[];
   cwd?: string;
   issueUrl?: string;
-  name?: string;
-  kind?: string;
-  systemPrompt?: string;
   repoRoot?: string;
   conductorCwd?: string;
   conductorModelId?: string;
@@ -60,30 +43,6 @@ interface RawE2eConfig {
 function loadRawE2eConfig(): RawE2eConfig | undefined {
   if (!existsSync(CONFIG_PATH)) return undefined;
   return yaml.load(readFileSync(CONFIG_PATH, 'utf-8')) as RawE2eConfig;
-}
-
-export function loadDispatchWorkerE2eConfig(): E2eConfig | undefined {
-  const config = loadRawE2eConfig();
-  if (!config?.issueUrl || !config.repoRoot) {
-    return undefined;
-  }
-
-  return {
-    agentCommand: config.agentCommand,
-    agentArgs: config.agentArgs,
-    cwd: config.cwd,
-    issueUrl: config.issueUrl,
-    kind: config.kind,
-    systemPrompt: config.systemPrompt,
-    name: config.name,
-    repoRoot: config.repoRoot,
-    conductorCwd: config.conductorCwd,
-    conductorModelId: config.conductorModelId,
-  };
-}
-
-export function hasDispatchWorkerE2eConfig(): boolean {
-  return loadDispatchWorkerE2eConfig() != null;
 }
 
 export interface IssueE2eConfig {

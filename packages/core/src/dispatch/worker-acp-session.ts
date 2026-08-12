@@ -28,7 +28,7 @@ export type ConnectWorkerAcpFn = (
 
 export interface OpenWorkerAcpSessionOptions {
   issueUrl: string;
-  /** Conductor（または one-shot dispatch）が事前に resolve した作業ディレクトリ。 */
+  /** Conductor が事前に resolve した作業ディレクトリ。 */
   worktree: WorktreeRef;
   resumeAcpSessionId?: string;
   bridge?: AcpBridge;
