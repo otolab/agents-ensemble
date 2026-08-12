@@ -28,6 +28,9 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | type | 発火タイミング | stderr 例 | snapshot への影響 |
 |------|----------------|-----------|-------------------|
 | `harness.worktree` | worktree resolve 直後（セッション開始、worker あり） | `[harness] worktree path=... branch=... mode=...` | なし |
+| `harness.worktree.removed` | post-loop `/exit` 後、isolated worktree 削除成功 | `[harness] worktree.removed path=... branch=...` | なし |
+| `harness.worktree.remove_skipped` | 未コミット変更あり等で削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` | なし |
+| `harness.worktree.remove_failed` | `git worktree remove` 失敗（best-effort） | `[harness] worktree.remove_failed path=... branch=... error=...` | なし |
 | `operator.input` | オペレータ発話をキューに載せる直前 | `[harness] operator.input turn=N bytes=...` | なし |
 | `conductor.send` | 各 `agent.send` 完了後 | `[harness] conductor.send n=N status=... workerDone=... workerFailed=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` |
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（bootstrap 含む） | `[harness] worker.round name=... kind=... roundKind=... stopReason=... path=...` | `workerDispatches` に追記 |

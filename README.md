@@ -110,6 +110,8 @@ pnpm ensemble --help
 
 `ensemble issue` の isolated モードは Issue ごとに `.ensemble/worktrees/issue-N` を切る。各 worktree は独自の `node_modules` が必要。
 
+TTY + post-loop で `/exit` して正常終了したとき、**isolated worktree は自動削除**される（未コミット変更がある場合は削除せず stderr に警告）。`--worktree in-repo` では削除しない。ローカルブランチ `ensemble/issue-N` は残る。`--continue` で再開するときは worktree が無ければ再作成される。
+
 本リポジトリは pnpm の **global virtual store**（`enableGlobalVirtualStore`）を有効にしている。メイン worktree で一度 `pnpm install` すると、同一マシン上の **2 本目以降の worktree** では install がほぼ symlink 張り替えのみになる（[pnpm: Git Worktrees](https://pnpm.io/git-worktrees)）。
 
 ```bash
@@ -294,6 +296,8 @@ ENSEMBLE_OPERATOR_MESSAGE='@inq:inq-1 yes' ensemble issue ...
 ### プロセス待機（post-loop）
 
 TTY 実行時、自律作業が一段落（conductor `finished` + 待ち事項なし）しても **デフォルトではプロセスを維持**する。追加指示を入力するか、`/exit`（または `exit`）で終了する。終了 JSON はプロセス終了時に stdout へ出力（従来どおり）。
+
+`/exit` 終了時（isolated モード）は当該 Issue の worktree を削除する（[git worktree と依存インストール](#git-worktree-と依存インストール)）。
 
 - `--no-wait`: 自律ループ停止後に即終了（従来動作）
 - 非 TTY / CI: 従来どおり自動終了

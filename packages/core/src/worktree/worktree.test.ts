@@ -6,6 +6,8 @@ import { runGit } from '../git/run-git.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
 import {
   createWorkerWorktree,
+  listWorktrees,
+  removeWorkerWorktree,
   resolveInRepoWorkspace,
   resolveWorkerWorktree,
   workerBranchName,
@@ -146,5 +148,67 @@ describe('createWorkerWorktree', () => {
     );
 
     warnSpy.mockRestore();
+  });
+});
+
+describe('removeWorkerWorktree', () => {
+  let repoRoot = '';
+
+  beforeEach(async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-worktree-remove-'));
+    await runGit(['init'], repoRoot);
+    await runGit(['config', 'user.email', 'test@example.com'], repoRoot);
+    await runGit(['config', 'user.name', 'test'], repoRoot);
+    await runGit(['commit', '--allow-empty', '-m', 'init'], repoRoot);
+  });
+
+  afterEach(async () => {
+    if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it('removes an existing isolated worktree', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/20');
+    const worktree = await createWorkerWorktree(repoRoot, issue);
+
+    const result = await removeWorkerWorktree(repoRoot, issue);
+    expect(result).toEqual({
+      status: 'removed',
+      path: worktree.path,
+      branch: worktree.branch,
+    });
+
+    const listed = await listWorktrees(repoRoot);
+    expect(listed.some((entry) => entry.path === worktree.path)).toBe(false);
+    expect(await resolveWorkerWorktree(repoRoot, issue)).toBeUndefined();
+  });
+
+  it('is a no-op when worktree does not exist', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/21');
+    const result = await removeWorkerWorktree(repoRoot, issue);
+    expect(result).toEqual({ status: 'not_found' });
+  });
+
+  it('skips removal when worktree has uncommitted changes', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/22');
+    const worktree = await createWorkerWorktree(repoRoot, issue);
+    await writeFile(join(worktree.path, 'dirty.txt'), 'dirty\n');
+
+    const result = await removeWorkerWorktree(repoRoot, issue);
+    expect(result).toEqual({
+      status: 'skipped_dirty',
+      path: worktree.path,
+      branch: worktree.branch,
+    });
+    expect(await resolveWorkerWorktree(repoRoot, issue)).toBeDefined();
+  });
+
+  it('round-trips create and remove', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/23');
+    await createWorkerWorktree(repoRoot, issue);
+    await removeWorkerWorktree(repoRoot, issue);
+
+    const recreated = await createWorkerWorktree(repoRoot, issue);
+    expect(recreated.path).toBe(resolve(workerWorktreePath(repoRoot, issue)));
+    expect(await resolveWorkerWorktree(repoRoot, issue)).toBeDefined();
   });
 });

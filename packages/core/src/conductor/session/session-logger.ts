@@ -17,6 +17,23 @@ export type SessionLogEvent =
       mode: WorkerWorktreeMode;
     }
   | {
+      type: 'harness.worktree.removed';
+      path: string;
+      branch: string;
+    }
+  | {
+      type: 'harness.worktree.remove_skipped';
+      path: string;
+      branch: string;
+      reason: 'dirty';
+    }
+  | {
+      type: 'harness.worktree.remove_failed';
+      path: string;
+      branch: string;
+      error: string;
+    }
+  | {
       type: 'harness.worker.bootstrap.started';
       name: string;
       kind: string;
@@ -135,6 +152,9 @@ export class SessionLogger {
         this.stopReason = event.stopReason;
         break;
       case 'harness.worktree':
+      case 'harness.worktree.removed':
+      case 'harness.worktree.remove_skipped':
+      case 'harness.worktree.remove_failed':
       case 'harness.worker.bootstrap.started':
       case 'harness.worker.bootstrap.completed':
       case 'harness.worker.bootstrap.failed':
