@@ -144,6 +144,10 @@ export type SessionLogEvent =
   | {
       type: 'harness.github.monitor_error';
       message: string;
+    }
+  | {
+      type: 'harness.warning';
+      message: string;
     };
 
 export type SessionLogSink = (event: SessionLogEvent) => void;
@@ -212,6 +216,7 @@ export class SessionLogger {
       case 'conductor.auth.reconnect':
       case 'harness.github.update':
       case 'harness.github.monitor_error':
+      case 'harness.warning':
         break;
     }
 

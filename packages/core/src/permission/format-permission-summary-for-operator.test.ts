@@ -92,4 +92,17 @@ describe('extractPermissionOperationSummary', () => {
       ),
     ).toEqual({ field: 'path', value: 'packages/core/src/index.ts' });
   });
+
+  it('reads Write path from toolCall args', () => {
+    expect(
+      extractPermissionOperationSummary(
+        parsePermissionRequest({
+          toolCall: {
+            type: 'write',
+            args: { path: 'packages/core/src/index.ts' },
+          },
+        }),
+      ),
+    ).toEqual({ field: 'path', value: 'packages/core/src/index.ts' });
+  });
 });
