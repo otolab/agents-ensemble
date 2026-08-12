@@ -126,8 +126,8 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `createHarnessSink()` | `packages/cli/src/session-sinks.ts` | stderr `[harness]`（state 外） |
 | `createObservationSink()` | 同上 | stderr `[open question]` 等のセッション観測 |
 | `createSessionDisplaySink()` | `packages/cli/src/display/` | `SessionLogEvent` → reducer → `SessionDisplayBackend` |
-| `selectSessionDisplayBackend()` | 同上 | interactive 時は string backend（現行 Dialogue 相当）、非 interactive は noop |
-| `createDialogueSink()` | `session-sinks.ts` | 低レベル stdout 整形（string backend 内部で利用可） |
+| `selectSessionDisplayBackend()` | 同上 | interactive 時は string backend、非 interactive は noop |
+| `createDialogueSink()` | `session-sinks.ts` | 低レベル stdout 整形（string backend が `operator.input` / `conductor.send` で利用） |
 
 表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question を保持する。#54 TUI（Ink）は後続 Issue で同じ reducer / backend 契約に載せる。
 
@@ -152,9 +152,9 @@ await runIssueSession({ sessionLogger: logger, ... });
 | 主体 | 正本 | harness が載せるもの |
 |------|------|---------------------|
 | conductor（SDK） | SDK store（`agentId`） | `conductor.send` の status / 末尾 result のみ |
-| worker（ACP） | ACP セッション | `worker.round` のメタデータ（name, stopReason, path）。**応答全文は Dialogue に出さない** |
+| worker（ACP） | ACP セッション | `worker.round` のメタデータ（name, stopReason, path）。**応答全文は対話 stdout に出さない** |
 
-オペレータが読むべき conductor 発話は DialogueSink 経由。worker の `responseText` は終了 JSON の `workerResponses` に載るが、TTY セッション中の会話 UI には混ぜない。
+オペレータが読むべき conductor 発話は DisplaySink → string backend（内部で `createDialogueSink`）経由。worker の `responseText` は終了 JSON の `workerResponses` に載るが、TTY セッション中の会話 UI には混ぜない。
 
 ### worker 子プロセスの stdio
 
@@ -166,7 +166,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 | stdout | pipe → AcpClient / JsonRpcPeer | ACP プロトコル専用。対話 stdout には出さない |
 | stderr | **pipe → capture** | 子の警告（例: `shell-parser`）を TTY の `operator>` 行に混ぜない |
 
-stderr は行バッファで読み、`SessionLogger` の `worker.process.stderr` として sink へ配信する。CLI の HarnessSink は `[harness] worker.stderr name=…` を **stderr** に出す（DialogueSink / stdout には出さない）。
+stderr は行バッファで読み、`SessionLogger` の `worker.process.stderr` として sink へ配信する。CLI の HarnessSink は `[harness] worker.stderr name=…` を **stderr** に出す（対話 stdout には出さない）。
 
 stdout へのプロトコル外出力は JsonRpc 層でパース失敗として検知される。現状は stderr capture を優先し、stdout 漏れの二重読みは行わない。
 
@@ -207,4 +207,4 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 | `packages/cli/src/format-session-summary.ts` | 終了 JSON 整形 |
 | `packages/cli/src/issue-command.ts` | sink 購読と interactive 判定 |
 
-テスト: `session-logger.test.ts`, `session-sinks.test.ts`, `session-display-reducer.test.ts`, `acp-process.test.ts`
+テスト: `session-logger.test.ts`, `session-sinks.test.ts`, `session-display-reducer.test.ts`, `select-session-display-backend.test.ts`, `acp-process.test.ts`

@@ -127,7 +127,7 @@ prompt_worker / sendWorkerMessage
 
 | 見えるもの | 見えないもの |
 |------------|--------------|
-| `operator>` / `conductor>`（stdout、DialogueSink） | worker 応答全文（会話 UI に混ぜない） |
+| `operator>` / `conductor>`（stdout、DisplaySink → string backend） | worker 応答全文（会話 UI に混ぜない） |
 | `[harness]` テレメトリ（stderr） | SessionEvent の YAML 本文（conductor 向け） |
 | `[open question]` 等（ObservationSink、stderr） | |
 
@@ -170,7 +170,9 @@ bootstrap 専用イベントは **exit JSON には載せない**（時系列テ�
 
 ## 5. injectable sink（#92）
 
-`createHarnessSink` / `createDialogueSink` / `createObservationSink` は書き込み先を注入可能（デフォルトは `console.error` / `process.stdout.write`）。TUI 導入時は sink を画面 state へ差し替える。
+`createHarnessSink` / `createDialogueSink` / `createObservationSink` は書き込み先を注入可能（デフォルトは `console.error` / `process.stdout.write`）。
+
+対話 stdout は `createSessionDisplaySink` → reducer → `SessionDisplayBackend` 経由（#93）。interactive 時の string backend は内部で `createDialogueSink` を呼ぶ。Ink TUI（後続 Issue）は同じ reducer / backend 契約に載せ、stdout 直書きを置き換える。
 
 | prefix | SessionLogEvent | 備考 |
 |--------|-----------------|------|
@@ -206,5 +208,6 @@ worker 状態照会 tool（#70）は本 Issue の非スコープ。ただし boo
 | `packages/core/src/conductor/conductor-session.ts` | emit / enqueue 配線 |
 | `packages/core/src/runtime/worker-runtime.ts` | bootstrap ライフサイクル |
 | `packages/cli/src/session-sinks.ts` | HarnessSink / DialogueSink / ObservationSink |
+| `packages/cli/src/display/` | 表示 state・DisplaySink・string backend |
 | `docs/session-logging.md` | 観測の役割分担 |
 | `docs/adr/0012-conductor-worker-prompt-roundtrip.md` | bootstrap の設計意図 |
