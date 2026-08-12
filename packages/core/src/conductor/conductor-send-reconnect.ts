@@ -1,6 +1,7 @@
 import {
   ConductorAgent,
   type ConductorAgentOptions,
+  type ConductorSendCallbacks,
   type ConductorSendResult,
 } from './conductor-agent.js';
 import { isConductorSendAuthError } from './conductor-auth.js';
@@ -22,9 +23,12 @@ export interface ConductorSendReconnectOptions {
 export async function sendConductorWithReconnect(
   handle: ConductorAgentHandle,
   message: string,
-  options: ConductorSendReconnectOptions,
+  options: ConductorSendReconnectOptions & ConductorSendCallbacks,
 ): Promise<ConductorSendResult> {
-  const result = await handle.conductor.send(message);
+  const sendCallbacks: ConductorSendCallbacks = {
+    onToolCallStarted: options.onToolCallStarted,
+  };
+  const result = await handle.conductor.send(message, sendCallbacks);
   if (!isConductorSendAuthError(result)) {
     return result;
   }
@@ -33,5 +37,5 @@ export async function sendConductorWithReconnect(
   options.onReconnectAttempt?.({ agentId });
   await handle.conductor.close();
   handle.conductor = await ConductorAgent.resume(agentId, options.conductorOptions);
-  return handle.conductor.send(message);
+  return handle.conductor.send(message, sendCallbacks);
 }

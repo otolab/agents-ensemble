@@ -10,6 +10,7 @@ import {
 } from '@cursor/sdk';
 import { ensureCursorSdkRipgrepPath } from './configure-cursor-sdk-env.js';
 import { CONDUCTOR_AUTH_HINT, resolveConductorApiKey } from './conductor-auth.js';
+import { formatConductorToolName } from './conductor-tool-name.js';
 import { resolveConductorModelId } from './resolve-conductor-model-id.js';
 
 export interface ConductorAgentOptions {
@@ -27,6 +28,16 @@ export interface ConductorSendResult {
   error?: RunResult['error'];
   usage?: TokenUsage;
   modelId?: string;
+}
+
+export interface ConductorToolCallStartedInfo {
+  runId: string;
+  tool: string;
+  callId: string;
+}
+
+export interface ConductorSendCallbacks {
+  onToolCallStarted?: (info: ConductorToolCallStartedInfo) => void;
 }
 
 export class ConductorAgent {
@@ -51,15 +62,24 @@ export class ConductorAgent {
     return new ConductorAgent(agent);
   }
 
-  async send(prompt: string): Promise<ConductorSendResult> {
+  async send(
+    prompt: string,
+    callbacks?: ConductorSendCallbacks,
+  ): Promise<ConductorSendResult> {
     try {
+      const pendingRunId = { value: '' };
       const run = await this.agent.send(prompt, {
         onDelta: ({ update }) => {
-          if (update.type === 'text-delta') {
-            // streaming handled by caller if needed
+          if (update.type === 'tool-call-started') {
+            callbacks?.onToolCallStarted?.({
+              runId: pendingRunId.value,
+              tool: formatConductorToolName(update.toolCall),
+              callId: update.callId,
+            });
           }
         },
       });
+      pendingRunId.value = run.id;
       const result = await run.wait();
       return {
         runId: run.id,

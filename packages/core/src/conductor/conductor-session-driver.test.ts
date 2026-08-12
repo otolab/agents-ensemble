@@ -398,4 +398,119 @@ describe('runConductorSessionDriver', () => {
     expect(result.autonomousTurns).toBe(2);
     expect(result.stopReason).toBe('completed');
   });
+
+  it('emits started → progress → completed in order', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'running',
+        result: 'working',
+      })
+      .mockImplementationOnce(async (_message, callbacks) => {
+        callbacks?.onToolCallStarted?.({
+          runId: 'run-2',
+          tool: 'shell',
+          callId: 'call-1',
+        });
+        return {
+          runId: 'run-2',
+          status: 'finished',
+          result: 'done',
+        };
+      });
+
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const lifecycle: string[] = [];
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor, maxTurns: 5 }),
+      onSendStarted: () => {
+        lifecycle.push('started');
+      },
+      onSendProgress: () => {
+        lifecycle.push('progress');
+      },
+      onSendComplete: () => {
+        lifecycle.push('completed');
+      },
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    lifecycle.push('after-initial-started');
+
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'continue',
+    });
+
+    await driverPromise;
+
+    expect(lifecycle).toEqual([
+      'started',
+      'completed',
+      'after-initial-started',
+      'started',
+      'progress',
+      'completed',
+    ]);
+  });
+
+  it('does not start a second dispatch while conductor send is in-flight', async () => {
+    let resolveSecondSend!: (value: {
+      runId: string;
+      status: string;
+      result: string;
+    }) => void;
+    const secondSendPromise = new Promise<{
+      runId: string;
+      status: string;
+      result: string;
+    }>((resolve) => {
+      resolveSecondSend = resolve;
+    });
+
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'running',
+        result: 'working',
+      })
+      .mockReturnValueOnce(secondSendPromise)
+      .mockResolvedValueOnce({
+        runId: 'run-3',
+        status: 'finished',
+        result: 'done',
+      });
+
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+
+    const driverPromise = runConductorSessionDriver(
+      createDriverOptions({ eventQueue, conductor, maxTurns: 5 }),
+    );
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+
+    eventQueue.enqueue({ type: 'operator.message', text: 'first while in-flight' });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(send).toHaveBeenCalledTimes(2);
+
+    eventQueue.enqueue({ type: 'operator.message', text: 'second after first completes' });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(send).toHaveBeenCalledTimes(2);
+
+    resolveSecondSend({
+      runId: 'run-2',
+      status: 'running',
+      result: 'still working',
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
+    await driverPromise;
+  });
 });

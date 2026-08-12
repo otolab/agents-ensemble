@@ -37,6 +37,17 @@ describe('session-log-lines', () => {
     ).toBe('conductor.send.started n=2 source=operator');
   });
 
+  it('formats conductor.send.progress harness body', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'conductor.send.progress',
+        sendCount: 2,
+        runId: 'run-abc',
+        tool: 'shell',
+      }),
+    ).toBe('conductor.send.progress n=2 runId=run-abc tool=shell');
+  });
+
   it('formats harness bodies', () => {
     expect(
       formatHarnessLogBody({
