@@ -6,6 +6,7 @@ import {
   type ActivityLogEntry,
   type ActivityLogLabel,
 } from './activity-log.js';
+import { trimBlankLinesOnly } from './operator-input-layout.js';
 
 export interface TuiViewSnapshot {
   displayState: SessionDisplayState;
@@ -68,7 +69,7 @@ export function createTuiViewModel(): TuiViewModel {
       notify();
     },
     appendActivityLog(label, text) {
-      const trimmed = text.trim();
+      const trimmed = trimBlankLinesOnly(text);
       if (!trimmed) {
         return;
       }
