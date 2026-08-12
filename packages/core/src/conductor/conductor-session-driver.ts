@@ -9,7 +9,9 @@ import { resolveAgentSystemPrompt } from '../profile/types.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import type { WorkerSession } from '../runtime/worker-session.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
-import type { ConductorAgent, ConductorSendResult } from './conductor-agent.js';
+import type { ConductorSendResult } from './conductor-agent.js';
+import type { ConductorAgentHandle, ConductorSendReconnectOptions } from './conductor-send-reconnect.js';
+import { sendConductorWithReconnect } from './conductor-send-reconnect.js';
 import { formatSessionEventsForConductor } from './session/format-session-event.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import type { SessionEvent } from './session/session-event.js';
@@ -48,7 +50,8 @@ export interface ConductorSendCompleteInfo {
 export interface ConductorSessionDriverOptions {
   issueUrl: string;
   profile: Profile;
-  conductor: ConductorAgent;
+  conductorHandle: ConductorAgentHandle;
+  sendReconnect: ConductorSendReconnectOptions;
   eventQueue: SessionEventQueue;
   workerSession: WorkerSession;
   permissionPipeline: PermissionPipeline;
@@ -98,7 +101,8 @@ export async function runConductorSessionDriver(
     lastSendResult = await runInitialConductorSend({
       issueUrl: options.issueUrl,
       profile: options.profile,
-      conductor: options.conductor,
+      conductorHandle: options.conductorHandle,
+      sendReconnect: options.sendReconnect,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
       onSendComplete: (info) => {
@@ -177,7 +181,8 @@ export async function runConductorSessionDriver(
     const { workerDispatches, workerFailures } = countWorkerOutcomesInBatch(batch);
     lastSendResult = await runEventConductorSend({
       message: formatSessionEventsForConductor(batch),
-      conductor: options.conductor,
+      conductorHandle: options.conductorHandle,
+      sendReconnect: options.sendReconnect,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
       sendCount,
@@ -222,7 +227,8 @@ export async function runConductorSessionDriver(
 async function runInitialConductorSend(input: {
   issueUrl: string;
   profile: Profile;
-  conductor: ConductorAgent;
+  conductorHandle: ConductorAgentHandle;
+  sendReconnect: ConductorSendReconnectOptions;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
@@ -237,7 +243,8 @@ async function runInitialConductorSend(input: {
 
   return runEventConductorSend({
     message,
-    conductor: input.conductor,
+    conductorHandle: input.conductorHandle,
+    sendReconnect: input.sendReconnect,
     workerDispatches: input.workerDispatches,
     workerFailures: input.workerFailures,
     sendCount: 0,
@@ -248,7 +255,8 @@ async function runInitialConductorSend(input: {
 
 async function runEventConductorSend(input: {
   message: string;
-  conductor: ConductorAgent;
+  conductorHandle: ConductorAgentHandle;
+  sendReconnect: ConductorSendReconnectOptions;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   sendCount: number;
@@ -260,7 +268,11 @@ async function runEventConductorSend(input: {
   const workersBefore = input.workerDispatches.length;
   const failuresBefore = input.workerFailures.length;
 
-  const sendResult = await input.conductor.send(input.message);
+  const sendResult = await sendConductorWithReconnect(
+    input.conductorHandle,
+    input.message,
+    input.sendReconnect,
+  );
   const sendCount = input.sendCount + 1;
   const conductorDispatches = input.workerDispatches.length - workersBefore;
   const conductorFailures = input.workerFailures.length - failuresBefore;

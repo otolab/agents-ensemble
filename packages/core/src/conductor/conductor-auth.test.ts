@@ -15,7 +15,9 @@ vi.mock('@cursor/sdk', () => ({
 
 import {
   formatConductorAuthRecoveryHint,
+  isBareConductorSendAuthError,
   isConductorAuthError,
+  isConductorSendAuthError,
   logoutConductor,
 } from './conductor-auth.js';
 
@@ -30,6 +32,48 @@ describe('isConductorAuthError', () => {
 
   it('returns false for unrelated errors', () => {
     expect(isConductorAuthError('Model Blocked')).toBe(false);
+  });
+});
+
+describe('isBareConductorSendAuthError', () => {
+  it('detects bare status error without message', () => {
+    expect(
+      isBareConductorSendAuthError({
+        runId: 'run-1',
+        status: 'error',
+      }),
+    ).toBe(true);
+  });
+
+  it('returns false when error message is present', () => {
+    expect(
+      isBareConductorSendAuthError({
+        runId: 'run-1',
+        status: 'error',
+        error: { message: 'Model Blocked' },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('isConductorSendAuthError', () => {
+  it('detects explicit auth message', () => {
+    expect(
+      isConductorSendAuthError({
+        runId: 'run-1',
+        status: 'error',
+        error: { message: 'Authentication error' },
+      }),
+    ).toBe(true);
+  });
+
+  it('detects bare auth-like error', () => {
+    expect(
+      isConductorSendAuthError({
+        runId: 'run-1',
+        status: 'error',
+      }),
+    ).toBe(true);
   });
 });
 

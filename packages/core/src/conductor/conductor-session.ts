@@ -29,8 +29,9 @@ import { ConductorAgent } from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
 import {
   formatConductorAuthRecoveryHint,
-  isConductorAuthError,
+  isConductorSendAuthError,
 } from './conductor-auth.js';
+import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import {
@@ -397,6 +398,16 @@ export async function runConductorSession(
   const conductor = options.resumeAgentId
     ? await ConductorAgent.resume(options.resumeAgentId, conductorOptions)
     : await ConductorAgent.create(conductorOptions);
+  const conductorHandle: ConductorAgentHandle = { conductor };
+  const sendReconnect = {
+    conductorOptions,
+    onReconnectAttempt: ({ agentId }: { agentId: string }) => {
+      sessionLogger.emit({
+        type: 'conductor.auth.reconnect',
+        agentId,
+      });
+    },
+  };
 
   let flushSidecar: () => Promise<void> = async () => {};
   flushSidecar = async (): Promise<void> => {
@@ -407,7 +418,7 @@ export async function runConductorSession(
     const snapshot = openQuestions.snapshot();
     const sidecar: SessionSidecar = {
       version: SESSION_SIDECAR_VERSION,
-      conductorAgentId: conductor.agentId,
+      conductorAgentId: conductorHandle.conductor.agentId,
       issueUrl: options.issueUrl,
       repoRoot: options.repoRoot,
       profile: structuredClone(activeProfile),
@@ -420,7 +431,7 @@ export async function runConductorSession(
     await saveSessionSidecar(
       sessionSidecarPath({
         repoRoot: options.repoRoot,
-        conductorAgentId: conductor.agentId,
+        conductorAgentId: conductorHandle.conductor.agentId,
       }),
       sidecar,
     );
@@ -492,7 +503,8 @@ export async function runConductorSession(
       const driverResult = await runConductorSessionDriver({
         issueUrl: options.issueUrl,
         profile: activeProfile,
-        conductor,
+        conductorHandle,
+        sendReconnect,
         eventQueue,
         workerSession,
         permissionPipeline,
@@ -574,11 +586,18 @@ export async function runConductorSession(
         workerDispatches: info.workerDispatches,
         workerFailures: info.workerFailures,
       });
-      if (info.status === 'error' && isConductorAuthError(info.error?.message ?? '')) {
+      if (
+        isConductorSendAuthError({
+          runId: info.runId,
+          status: info.status,
+          error: info.error,
+          result: info.result,
+        })
+      ) {
         sessionLogger.emit({
           type: 'conductor.auth.recovery',
-          agentId: conductor.agentId,
-          hint: formatConductorAuthRecoveryHint(conductor.agentId),
+          agentId: conductorHandle.conductor.agentId,
+          hint: formatConductorAuthRecoveryHint(conductorHandle.conductor.agentId),
         });
       }
       scheduleSidecarFlush();
@@ -588,7 +607,7 @@ export async function runConductorSession(
       sessionLogger.finish(stopReason);
       const sessionUsage = sessionUsageTracker.getSessionSummary();
       return sessionLogger.snapshot({
-        agentId: conductor.agentId,
+        agentId: conductorHandle.conductor.agentId,
         escalations,
         openQuestions: openQuestions.list(),
         sessionUsage:
@@ -605,7 +624,7 @@ export async function runConductorSession(
     }
     rejectAllPendingPermissions(permissionPipeline, workerSession.inbox);
     await workerSession.stop();
-    await conductor.close();
+    await conductorHandle.conductor.close();
     if (
       operatorRequestedExit &&
       stopReason !== 'interrupted' &&

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { Cursor, getDefaultSdkAuthPath } from '@cursor/sdk';
 import type { SdkAuthStatus, SdkLoginResult } from '@cursor/sdk';
+import type { ConductorSendResult } from './conductor-agent.js';
 
 /**
  * SDK の認証解決順に沿ったヒント。
@@ -15,6 +16,38 @@ export function isConductorAuthError(message: string): boolean {
   return /authentication error|not logged in|invalid api key|unauthenticated|try logging out/i.test(
     message,
   );
+}
+
+/**
+ * SDK idle / stale 接続で message 欠落の bare `status: "error"` が返る既知ケース。
+ * 誤検知を避けるため、明示的な error message / result が無いときのみ true。
+ */
+export function isBareConductorSendAuthError(result: ConductorSendResult): boolean {
+  if (result.status !== 'error') {
+    return false;
+  }
+  if (result.error?.message?.trim()) {
+    return false;
+  }
+  if (result.result?.trim()) {
+    return false;
+  }
+  const code = result.error?.code?.trim();
+  if (code && !/unauthenticated|auth/i.test(code)) {
+    return false;
+  }
+  return true;
+}
+
+/** send 結果が auth-like（明示 message または保守的 bare error）か。 */
+export function isConductorSendAuthError(result: ConductorSendResult): boolean {
+  if (result.status !== 'error') {
+    return false;
+  }
+  if (isConductorAuthError(result.error?.message ?? '')) {
+    return true;
+  }
+  return isBareConductorSendAuthError(result);
 }
 
 /** auth エラー時に stderr へ出す短い復旧手順。 */

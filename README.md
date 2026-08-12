@@ -66,14 +66,26 @@ Dashboard からキーを発行する場合: [Cursor Dashboard → API Keys](htt
 
 `ensemble auth logout` は stored login（`~/.cursor/sdk/auth.json`）のみを削除します。`CURSOR_API_KEY` には影響しません。
 
-conductor send が認証エラーを返したとき、stderr に `[auth]` 付きの復旧手順が出ます。典型:
+### conductor send の認証エラーと in-process 再接続
+
+長時間アイドルや PC の sleep/wakeup 後、SDK の gRPC 接続が stale になり `Authentication error` や message 欠落の `status: "error"` が返ることがあります（同一 API key は有効なまま）。`ensemble issue` は **同一 `agentId` を維持したまま** `close` → `Agent.resume(sameId)` → 失敗していた send を 1 回再試行します。
+
+ACP worker は別プロセスのため、この間も生存します。自動再接続でも復旧できない場合（真の key 失効など）は、従来どおり stderr の `[auth]` 手順（手動 `logout` → `login` → `--resume` / `--continue`）が表示されます。
+
+- **非 TTY / CI**: 上記 in-process `resume` のみ（`CURSOR_API_KEY` の挙動変更なし）
+- **`agent.reload()`**: filesystem config 再読込用で、接続復旧には使いません
+- **起動時** `Agent.create` / `Agent.resume` の auth 失敗: 本 Issue スコープ外（別 Issue 候補）
+
+詳細: [docs/conductor-auth-reconnect.md](docs/conductor-auth-reconnect.md)
+
+conductor send が認証エラーを返し、上記の自動再接続でも復旧できないとき、stderr に `[auth]` 付きの復旧手順が出ます。典型:
 
 ```bash
 ensemble auth logout && ensemble auth login
 ensemble issue <issue-url> --repo-root <path> --resume <agentId>   # または --continue
 ```
 
-`agentId` は終了時 stdout JSON の `agentId` を参照。SDK 側に adapter refresh / 自動再接続の公開 API は現状ない（upstream 待ち）。
+`agentId` は終了時 stdout JSON の `agentId` を参照。SDK 側の transparent reconnect は upstream 改善待ち（forum 上で確認済み）。harness は `Agent.resume(sameId)` による in-process 再接続を実装済み。
 
 ### worker（ACP）の認証
 

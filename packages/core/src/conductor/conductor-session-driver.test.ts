@@ -4,6 +4,7 @@ import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../escalation/enqueue-max-turns-question.js';
 import type { ConductorAgent } from './conductor-agent.js';
+import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 
@@ -30,11 +31,15 @@ function createDriverOptions(input: {
   const workerDispatches: never[] = [];
   const workerFailures: never[] = [];
   const openQuestions = input.openQuestions ?? new OpenQuestionRegistry();
+  const conductorHandle: ConductorAgentHandle = { conductor: input.conductor };
 
   return {
     issueUrl: TEST_ISSUE.url,
     profile: { workers: [] },
-    conductor: input.conductor,
+    conductorHandle,
+    sendReconnect: {
+      conductorOptions: { cwd: '/repo' },
+    },
     eventQueue: input.eventQueue,
     workerSession: createWorkerSessionStub(input.runningCount ?? 0),
     permissionPipeline: new PermissionPipeline({}),

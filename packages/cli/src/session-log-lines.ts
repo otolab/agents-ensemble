@@ -63,6 +63,8 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
       return '自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。';
     case 'conductor.auth.recovery':
       return event.hint;
+    case 'conductor.auth.reconnect':
+      return `[auth] conductor 再接続を試行 agentId=${event.agentId}`;
     default:
       return undefined;
   }
@@ -70,8 +72,9 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
 
 /** 非 TTY observation sink 向けの stderr 1 行（prefix 付き。auth recovery は hint をそのまま）。 */
 export function formatObservationStderrLine(event: SessionLogEvent): string | undefined {
-  if (event.type === 'conductor.auth.recovery') {
-    return event.hint;
+  if (event.type === 'conductor.auth.recovery' || event.type === 'conductor.auth.reconnect') {
+    const body = formatObservationLogBody(event);
+    return body;
   }
 
   const body = formatObservationLogBody(event);

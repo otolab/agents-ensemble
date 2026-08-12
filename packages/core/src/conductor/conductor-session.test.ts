@@ -88,7 +88,7 @@ describe('runConductorSession resume / shutdown', () => {
       emitted.push(event);
     });
 
-    mockSend.mockResolvedValueOnce({
+    mockSend.mockResolvedValue({
       runId: 'run-1',
       status: 'error',
       error: {
@@ -106,11 +106,75 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     expect(result.stopReason).toBe('error');
+    expect(mockClose).toHaveBeenCalled();
+    expect(
+      emitted.some(
+        (event) => event.type === 'conductor.auth.reconnect',
+      ),
+    ).toBe(true);
     expect(
       emitted.some(
         (event) =>
           event.type === 'conductor.auth.recovery' &&
           event.hint.includes('ensemble auth logout'),
+      ),
+    ).toBe(true);
+  });
+
+  it('recovers in-process via resume without auth recovery hint', async () => {
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+    });
+    const shutdown = new AbortController();
+    const mockSendAfterResume = vi.fn().mockResolvedValue({
+      runId: 'run-2',
+      status: 'running',
+      result: 'recovered',
+    });
+
+    mockSend.mockResolvedValueOnce({
+      runId: 'run-1',
+      status: 'error',
+      error: { message: 'Authentication error' },
+    });
+    mockCreate
+      .mockImplementationOnce(async () => ({
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+      }))
+      .mockImplementation(async () => ({
+        agentId: 'agent-test',
+        send: mockSendAfterResume,
+        close: mockClose,
+      }));
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+    });
+
+    await vi.waitFor(() => expect(mockSendAfterResume).toHaveBeenCalled());
+    shutdown.abort();
+    await sessionPromise;
+
+    expect(
+      emitted.some((event) => event.type === 'conductor.auth.recovery'),
+    ).toBe(false);
+    expect(
+      emitted.some(
+        (event) => event.type === 'conductor.auth.reconnect',
       ),
     ).toBe(true);
   });
