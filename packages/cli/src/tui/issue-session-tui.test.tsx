@@ -3,7 +3,10 @@ import React from 'react';
 import { render } from 'ink-testing-library';
 import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
-import { INITIAL_SESSION_DISPLAY_STATE } from '../display/session-display-state.js';
+import { computeOperatorInputCursorY } from './compute-operator-input-cursor-y.js';
+import { formatOperatorContextHint } from './format-operator-context.js';
+import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
+import { PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
 
 describe('IssueSessionTui', () => {
   afterEach(() => {
@@ -55,6 +58,91 @@ describe('IssueSessionTui', () => {
     );
 
     expect(lastFrame() ?? '').toContain('post-loop 待機中');
+  });
+
+  it('aligns IME cursor Y with the rendered operator input line', () => {
+    const terminalRows = 24;
+    const terminalColumns = 80;
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      get: () => terminalColumns,
+    });
+    Object.defineProperty(process.stdout, 'rows', {
+      configurable: true,
+      get: () => terminalRows,
+    });
+
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 0,
+      maxTurns: null,
+      openQuestions: [],
+    });
+    const contentWidth = getPaneContentWidth({
+      columns: terminalColumns,
+      paddingX: PANE_PADDING_X,
+      borderWidth: ROUND_BORDER_WIDTH,
+    });
+    const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
+    const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
+    const inputCursorY = computeOperatorInputCursorY({ terminalRows, hintLineCount });
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const lines = (lastFrame() ?? '').split('\n');
+    const operatorLineIndices = lines
+      .map((line, index) => (line.includes('operator>') ? index : -1))
+      .filter((index) => index >= 0);
+    const operatorLineIndex = operatorLineIndices.at(-1) ?? -1;
+    expect(operatorLineIndex).toBeGreaterThanOrEqual(0);
+    expect(inputCursorY).toBe(operatorLineIndex);
+    expect(lines).toHaveLength(terminalRows);
+  });
+
+  it('aligns IME cursor Y when context hint wraps on a narrow terminal', () => {
+    const terminalRows = 24;
+    const terminalColumns = 40;
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      get: () => terminalColumns,
+    });
+    Object.defineProperty(process.stdout, 'rows', {
+      configurable: true,
+      get: () => terminalRows,
+    });
+
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 0,
+      maxTurns: null,
+      openQuestions: [],
+    });
+    const contentWidth = getPaneContentWidth({
+      columns: terminalColumns,
+      paddingX: PANE_PADDING_X,
+      borderWidth: ROUND_BORDER_WIDTH,
+    });
+    const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
+    const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
+    const inputCursorY = computeOperatorInputCursorY({ terminalRows, hintLineCount });
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const lines = (lastFrame() ?? '').split('\n');
+    const operatorLineIndices = lines
+      .map((line, index) => (line.includes('operator>') ? index : -1))
+      .filter((index) => index >= 0);
+    const operatorLineIndex = operatorLineIndices.at(-1) ?? -1;
+    expect(hintLineCount).toBeGreaterThan(1);
+    expect(operatorLineIndex).toBeGreaterThanOrEqual(0);
+    expect(inputCursorY).toBe(operatorLineIndex);
+    expect(lines).toHaveLength(terminalRows);
   });
 
   it('shows empty-state placeholders when no session activity yet', () => {

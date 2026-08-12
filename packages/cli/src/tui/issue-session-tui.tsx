@@ -5,14 +5,16 @@ import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import { formatActivityLogLine } from './activity-log.js';
 import {
-  INPUT_PANE_BORDER_ROWS,
   OPEN_QUESTIONS_PANE_HEIGHT,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
   WORKER_PANE_HEIGHT,
 } from './tui-layout-constants.js';
 import { ImeTextInput } from './ime-text-input.js';
-import { computeOperatorInputCursorY } from './compute-operator-input-cursor-y.js';
+import {
+  computeInputPaneHeight,
+  computeOperatorInputCursorY,
+} from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 export interface IssueSessionTuiProps {
@@ -28,12 +30,20 @@ function usePaneContentWidth(): number {
   });
 }
 
-function WrappedTextLines({ text, width }: { text: string; width: number }) {
+function WrappedTextLines({
+  text,
+  width,
+  dimColor = false,
+}: {
+  text: string;
+  width: number;
+  dimColor?: boolean;
+}) {
   const lines = wrapTextToWidth(text, width);
   return (
     <>
       {lines.map((line, index) => (
-        <Text key={`${index}-${line}`} wrap="wrap">
+        <Text key={`${index}-${line}`} dimColor={dimColor}>
           {line}
         </Text>
       ))}
@@ -134,9 +144,8 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   const contextHint = snapshot.postLoopWaiting
     ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
     : formatOperatorContextHint(snapshot.operatorContext);
-  // IME カーソル Y 算出用。表示は Ink の wrap="wrap"（折り返し幅が wrapTextToWidth と微妙に異なる可能性あり）
   const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-  const inputPaneHeight = INPUT_PANE_BORDER_ROWS + hintLineCount + 1;
+  const inputPaneHeight = computeInputPaneHeight(hintLineCount);
   const inputCursorY = computeOperatorInputCursorY({
     terminalRows,
     hintLineCount,
@@ -166,9 +175,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         paddingX={1}
         height={inputPaneHeight}
       >
-        <Text dimColor wrap="wrap">
-          {contextHint}
-        </Text>
+        <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
         <Text>
           {operatorPrompt}
           <ImeTextInput
