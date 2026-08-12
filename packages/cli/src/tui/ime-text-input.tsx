@@ -147,7 +147,13 @@ export function ImeTextInput({
 
   useInput(
     (input, key) => {
-      if ((key.ctrl && input === 'c') || key.tab || (key.shift && key.tab)) {
+      if (
+        key.pageUp ||
+        key.pageDown ||
+        (key.ctrl && input === 'c') ||
+        key.tab ||
+        (key.shift && key.tab)
+      ) {
         return;
       }
       if (key.return && !key.shift) {

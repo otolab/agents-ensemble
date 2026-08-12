@@ -5,7 +5,7 @@ import {
 } from '../session-log-lines.js';
 import type { TuiViewModel } from './tui-view-model.js';
 
-/** TTY Ink 時: harness / observation を stderr ではなく活動ログへ送る sink。 */
+/** TTY Ink 時: harness / observation を stderr ではなく Orchestration メインペインへ送る sink。 */
 export function createTuiTelemetrySink(viewModel: TuiViewModel): SessionLogSink {
   return (event) => {
     const harnessBody = formatHarnessLogBody(event);

@@ -121,9 +121,13 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 - Ink 7 の React 19 peer と monorepo 全体の React バージョン方針の確認（#54 着手時）
 - #104: CJK IME 入力欄 — `ImeTextInput` + `tui-layout-constants`（ペイン高さとカーソル Y の一元化）
 
+### #108 以降のペイン構成（意図的な差分）
+
+本 ADR 起草時の最小 UI 表（§Context）では **conductor 出力**を独立ペインとしていた。#94 以降は operator / conductor / harness / observation を **Orchestration メインペイン**（旧ラベル `Session`）に統合し、オペレータが対話とオーケストレーション状況を一つの流れで追えるようにした（#108）。Workers / Open questions はサマリ用の補助ペインのまま。harness を stderr に戻す案は採用しない。
+
 ## 関連
 
-- Issue #54, #89, #104
+- Issue #54, #89, #104, #108
 - [session-logging.md](../session-logging.md)
 - [operator-input.md](../operator-input.md)
 - [ADR 0013](0013-process-lifecycle-vs-autonomous-loop.md) — post-loop 待機と非 TTY 終了

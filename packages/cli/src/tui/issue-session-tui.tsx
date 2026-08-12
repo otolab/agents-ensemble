@@ -1,18 +1,21 @@
-import { Box, Text, useInput } from 'ink';
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { Box, Text, useBoxMetrics, useInput } from 'ink';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import {
   ACTIVITY_LOG_LABEL_COLORS,
+  advanceActivityLogScrollOffset,
   buildActivityLogDisplayLines,
   sliceActivityLogDisplayLines,
   type ActivityLogDisplayLine,
   type ActivityLogEntry,
   type ActivityLogLabel,
+  type ActivityLogScrollAction,
 } from './activity-log.js';
 import {
+  MAIN_PANE_TITLE,
   OPEN_QUESTIONS_PANE_HEIGHT,
-  PANE_BORDER_ROWS,
+  ORCHESTRATION_PANE_TITLE_ROWS,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
   WORKER_PANE_HEIGHT,
@@ -23,13 +26,13 @@ import {
   computeInputPaneHeight,
   computeOperatorInputCursorX,
   computeOperatorInputCursorY,
+  computeOrchestrationLogVisibleLineCount,
 } from './compute-operator-input-cursor-y.js';
 import {
   computeMaxInputDisplayLines,
   trimBlankLinesOnly,
 } from './operator-input-layout.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
-import stringWidth from 'string-width';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
@@ -42,10 +45,6 @@ function usePaneContentWidth(): number {
     paddingX: PANE_PADDING_X,
     borderWidth: ROUND_BORDER_WIDTH,
   });
-}
-
-function getActivityLogVisibleLineCount(paneHeight: number): number {
-  return Math.max(1, paneHeight - PANE_BORDER_ROWS - 1);
 }
 
 function WrappedTextLines({
@@ -139,7 +138,14 @@ function WorkerStatusPane({
   );
 }
 
-function ActivityLogPane({
+function getOrchestrationTitleLineCount(
+  scrollHint: string,
+  contentWidth: number,
+): number {
+  return wrapTextToWidth(`${MAIN_PANE_TITLE}${scrollHint}`, contentWidth).length;
+}
+
+function OrchestrationPane({
   activityLog,
   contentWidth,
   paneHeight,
@@ -150,17 +156,30 @@ function ActivityLogPane({
   paneHeight: number;
   linesFromBottom: number;
 }) {
+  const logAreaRef = useRef(null);
+  const { height: measuredLogAreaHeight, hasMeasured } = useBoxMetrics(logAreaRef);
+  const pinnedToBottom = linesFromBottom === 0;
+  const scrollHint = pinnedToBottom
+    ? ''
+    : ' (PgUp/PgDn でスクロール · 最新へは End · 入力中は Ctrl+PgUp/PgDn)';
+  const titleLineCount = getOrchestrationTitleLineCount(scrollHint, contentWidth);
+  const estimatedLogLineCount = computeOrchestrationLogVisibleLineCount(
+    paneHeight,
+    titleLineCount,
+  );
+  const visibleCount =
+    hasMeasured && measuredLogAreaHeight > 0
+      ? Math.max(1, Math.floor(measuredLogAreaHeight))
+      : estimatedLogLineCount;
   const displayLines = useMemo(
     () => buildActivityLogDisplayLines(activityLog, contentWidth),
     [activityLog, contentWidth],
   );
-  const visibleCount = getActivityLogVisibleLineCount(paneHeight);
   const visibleLines = sliceActivityLogDisplayLines(
     displayLines,
     visibleCount,
     linesFromBottom,
   );
-  const pinnedToBottom = linesFromBottom === 0;
 
   return (
     <Box
@@ -172,16 +191,18 @@ function ActivityLogPane({
       overflow="hidden"
     >
       <Text bold>
-        Session
-        {!pinnedToBottom ? ' (PgUp/PgDn でスクロール · 最新へは End)' : ''}
+        {MAIN_PANE_TITLE}
+        {scrollHint}
       </Text>
-      {activityLog.length === 0 ? (
-        <Text dimColor>(活動ログなし)</Text>
-      ) : (
-        visibleLines.map((line, index) => (
-          <ActivityLogDisplayLineRow key={`log-line-${index}`} line={line} />
-        ))
-      )}
+      <Box ref={logAreaRef} flexGrow={1} flexDirection="column" overflow="hidden">
+        {activityLog.length === 0 ? (
+          <Text dimColor>(活動ログなし)</Text>
+        ) : (
+          visibleLines.map((line, index) => (
+            <ActivityLogDisplayLineRow key={`log-line-${index}`} line={line} />
+          ))
+        )}
+      </Box>
     </Box>
   );
 }
@@ -234,7 +255,6 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   const contentWidth = usePaneContentWidth();
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
-  const promptWidth = stringWidth(operatorPrompt);
   const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
   const contextHint = snapshot.postLoopWaiting
     ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
@@ -250,7 +270,10 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     hintLineCount,
     inputDisplayLineCount: visibleInputDisplayLineCount,
   });
-  const visibleLineCount = getActivityLogVisibleLineCount(activityPaneHeight);
+  const visibleLineCount = computeOrchestrationLogVisibleLineCount(
+    activityPaneHeight,
+    ORCHESTRATION_PANE_TITLE_ROWS,
+  );
   const displayLineCount = useMemo(
     () => buildActivityLogDisplayLines(snapshot.activityLog, contentWidth).length,
     [snapshot.activityLog, contentWidth],
@@ -273,24 +296,38 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     setLinesFromBottom((current) => Math.min(current, maxLinesFromBottom));
   }, [maxLinesFromBottom]);
 
+  const applyScrollAction = (action: ActivityLogScrollAction) => {
+    setLinesFromBottom((current) =>
+      advanceActivityLogScrollOffset(
+        current,
+        action,
+        visibleLineCount,
+        maxLinesFromBottom,
+      ),
+    );
+  };
+
   useInput((_input, key) => {
-    if (inputValue.length > 0) {
+    const scrollWithModifier = key.ctrl;
+    const scrollWithoutModifier = inputValue.length === 0;
+    if (!scrollWithModifier && !scrollWithoutModifier) {
       return;
     }
+
     if (key.pageUp) {
-      setLinesFromBottom((current) => Math.min(current + visibleLineCount, maxLinesFromBottom));
+      applyScrollAction('pageUp');
       return;
     }
     if (key.pageDown) {
-      setLinesFromBottom((current) => Math.max(0, current - visibleLineCount));
+      applyScrollAction('pageDown');
       return;
     }
     if (key.home) {
-      setLinesFromBottom(maxLinesFromBottom);
+      applyScrollAction('home');
       return;
     }
     if (key.end) {
-      setLinesFromBottom(0);
+      applyScrollAction('end');
     }
   });
 
@@ -307,7 +344,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   return (
     <Box flexDirection="column" height={terminalRows}>
       <WorkerStatusPane workers={snapshot.displayState.workers} />
-      <ActivityLogPane
+      <OrchestrationPane
         activityLog={snapshot.activityLog}
         contentWidth={contentWidth}
         paneHeight={activityPaneHeight}

@@ -4,6 +4,7 @@ import {
   INPUT_PANE_LEFT_COLUMNS,
   OPEN_QUESTIONS_PANE_HEIGHT,
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
+  ORCHESTRATION_PANE_TITLE_ROWS,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
 } from './tui-layout-constants.js';
@@ -17,7 +18,7 @@ export function computeInputPaneHeight(params: {
   return INPUT_PANE_BORDER_ROWS + params.hintLineCount + inputDisplayLineCount;
 }
 
-/** Session ペイン（flexGrow）の行数。全ペイン高さの合計が端末行数と一致するよう逆算。 */
+/** Orchestration メインペインの行数。全ペイン高さの合計が端末行数と一致するよう逆算。 */
 export function computeActivityPaneHeight(params: {
   terminalRows: number;
   hintLineCount: number;
@@ -34,14 +35,22 @@ export function computeActivityPaneHeight(params: {
   );
 }
 
-/** Session ペイン内に表示できる活動ログ行数（タイトル行・枠線を除く）。 */
+/** Orchestration ペイン内に表示できる活動ログ行数。 */
+export function computeOrchestrationLogVisibleLineCount(
+  paneHeight: number,
+  titleLineCount: number = ORCHESTRATION_PANE_TITLE_ROWS,
+): number {
+  return Math.max(1, paneHeight - PANE_BORDER_ROWS - titleLineCount);
+}
+
+/** 端末行数から Orchestration ペインの活動ログ行キャパシティ（タイトル 1 行想定）。 */
 export function computeActivityLogLineCapacity(params: {
   terminalRows: number;
   hintLineCount: number;
   inputDisplayLineCount?: number;
 }): number {
   const activityPaneHeight = computeActivityPaneHeight(params);
-  return Math.max(0, activityPaneHeight - PANE_BORDER_ROWS - 1);
+  return computeOrchestrationLogVisibleLineCount(activityPaneHeight);
 }
 
 /**
