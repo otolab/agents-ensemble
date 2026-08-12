@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import {
   findLatestSessionSidecarForIssue,
   loadProfile,
+  resolveConductorModelId,
   runIssueSession,
   SessionLogger,
   type ConductorSessionResult,
@@ -150,7 +151,7 @@ export async function executeIssueCommand(
       resumeAgentId,
       profile,
       profilePath,
-      modelId: options.model,
+      modelId: resolveConductorModelId(options.model),
       maxTurns,
       workerWorktreeMode,
       sessionLogger,

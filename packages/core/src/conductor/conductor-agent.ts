@@ -10,6 +10,7 @@ import {
 } from '@cursor/sdk';
 import { ensureCursorSdkRipgrepPath } from './configure-cursor-sdk-env.js';
 import { CONDUCTOR_AUTH_HINT, resolveConductorApiKey } from './conductor-auth.js';
+import { resolveConductorModelId } from './resolve-conductor-model-id.js';
 
 export interface ConductorAgentOptions {
   cwd: string;
@@ -109,7 +110,7 @@ function buildAgentOptions(options: ConductorAgentOptions): AgentOptions {
 
   return {
     ...(apiKey !== undefined ? { apiKey } : {}),
-    model: { id: options.modelId ?? 'composer-2.5' },
+    model: { id: resolveConductorModelId(options.modelId) },
     mode: 'agent',
     local: {
       cwd: options.cwd,

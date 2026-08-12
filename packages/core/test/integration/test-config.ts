@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
+import { resolveConductorModelId } from '../../src/conductor/resolve-conductor-model-id.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(__dirname, 'test-acp.yaml');
@@ -58,9 +59,5 @@ export function getAcpTestConfig(): AcpTestConfig {
 
 /** conductor integration / e2e 用モデル ID。 */
 export function getConductorModelId(): string {
-  return (
-    loadAcpTestConfig()?.conductorModelId ??
-    process.env.CONDUCTOR_MODEL_ID ??
-    'auto'
-  );
+  return resolveConductorModelId(loadAcpTestConfig()?.conductorModelId);
 }

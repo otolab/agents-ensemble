@@ -101,12 +101,15 @@ worker は `spawn('agent', ['acp'])` で起動し、**子プロセスの `agent`
 
 ### モデル指定
 
-conductor のデフォルトモデルは `composer-2.5`。team 設定でブロックされる場合は `--model` で変更します。利用可能な id は `ensemble models list` で確認できます（API カタログ。実行時の team ブロックとは一致しない場合あり）。
+conductor のデフォルトモデルは `default`（`ensemble models list` 上の Auto。`auto` エイリアスも同義）。`--model` で別 id を指定できます。利用可能な id は `ensemble models list` で確認できます（API カタログ。実行時の team ブロックとは一致しない場合あり）。
+
+環境変数 `CONDUCTOR_MODEL_ID` でも上書きできます（integration / e2e の `test-acp.yaml` の `conductorModelId` と同じ優先順位: CLI `--model` > 環境変数 > `default`）。
 
 ```bash
 ensemble models list
 ensemble models list --json
-ensemble issue <issue-url> --repo-root <path> --model auto
+ensemble issue <issue-url> --repo-root <path>              # default（Auto）
+ensemble issue <issue-url> --repo-root <path> --model auto # default と同義
 ```
 
 `<issue-url>` にはフル GitHub Issue URL のほか、`--repo-root` の `origin` から解決する **Issue 番号**（`31` や `#31`）も指定できます。bash/zsh では `#` 以降がコメントになるため、`#31` は **クォート**してください。
