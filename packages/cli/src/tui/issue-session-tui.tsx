@@ -8,6 +8,7 @@ import {
   sliceActivityLogDisplayLines,
   type ActivityLogDisplayLine,
   type ActivityLogEntry,
+  type ActivityLogLabel,
 } from './activity-log.js';
 import {
   OPEN_QUESTIONS_PANE_HEIGHT,
@@ -63,7 +64,7 @@ function WrappedTextLines({
   );
 }
 
-function renderActivityLogLabel(label: ActivityLogDisplayLine['label']): ReactNode {
+function renderActivityLogLabel(label: ActivityLogLabel): ReactNode {
   if (label === 'harness') {
     return (
       <Text color="yellow" dimColor>
@@ -86,7 +87,14 @@ function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
   }
 
   if (line.layout === 'label-row') {
+    if (line.label === 'separator') {
+      return <Text> </Text>;
+    }
     return <Text>{renderActivityLogLabel(line.label)}</Text>;
+  }
+
+  if (line.label === 'separator') {
+    return <Text> </Text>;
   }
 
   return (
