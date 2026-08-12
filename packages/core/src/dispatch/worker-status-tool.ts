@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { SDKCustomTool, SDKJsonValue } from '@cursor/sdk';
 import yaml from 'js-yaml';
 import type { WorkerRuntime } from '../runtime/worker-runtime.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
@@ -93,6 +93,10 @@ function yamlToolResult(label: string, data: unknown) {
 
   return {
     content: [{ type: 'text' as const, text }],
-    structuredContent: data as Record<string, unknown>,
+    structuredContent: toStructuredContent(data),
   };
+}
+
+function toStructuredContent(data: unknown): Record<string, SDKJsonValue> {
+  return JSON.parse(JSON.stringify(data)) as Record<string, SDKJsonValue>;
 }
