@@ -53,6 +53,15 @@ open question・エスカレーション・CLI 通知。stderr の prefix は従
 
 CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）。
 
+### 2.5 GitHub 監視イベント（#39 で追加）
+
+| type | 発火タイミング | stderr 例 | snapshot への影響 |
+|------|----------------|-----------|-------------------|
+| `harness.github.update` | debounce 後に `github.update` をキューへ載せる直前 | `[harness] github.update items=N` | なし |
+| `harness.github.monitor_error` | `gh` poll 失敗（best-effort。監視は継続） | `[harness] github.monitor_error ...` | なし |
+
+監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
+
 ### 2.2 bootstrap 専用イベント（#74 で追加）
 
 harness が **conductor の指示なしに** 行う worker attach + 待機 prompt のライフサイクル。
@@ -89,6 +98,7 @@ instruction ラウンド（`prompt_worker` / `sendWorkerMessage`）では bootst
 | `worker.completed` | worker 1 ラウンド完了 | `## worker bootstrap 完了` または `## worker 作業ラウンド完了` | `result.roundKind` で見出しを分岐 |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / bootstrap / instruction いずれも |
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | `resolve_permission` 待ち |
+| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | 状況把握のみ。**自動 `prompt_worker` はしない**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)） |
 
 ### 3.1 SessionLogEvent との対応
 
@@ -124,6 +134,10 @@ prompt_worker / sendWorkerMessage
 各 agent.send 完了
   conductor.send ───────────────────────────► stderr + snapshot（末尾更新）+ TUI（conductor: idle）
 
+GitHub monitor（セッション中は常時。`--no-github-monitor` で無効化可）
+  harness.github.update ──────────────────────► stderr
+  github.update ──────────────────────────────► SessionEventQueue ► agent.send
+
 セッション終了
   session.stop ─────────────────────────────► stderr + snapshot
 ```
@@ -156,6 +170,7 @@ bootstrap 把握の目安:
 | `## worker 作業ラウンド完了` | 自分が `prompt_worker` した 1 ラウンドの終了 | Issue / PR を読んで進捗判断。タスク完了の意味ではない |
 | `## worker 失敗` | attach / prompt 失敗 | 再試行・エスカレーションを検討 |
 | `## permission 判断待ち` | worker の操作許可が保留（**bootstrap ラウンド中もありうる**） | `resolve_permission` またはオペレータへ。**bootstrap 完了を待たない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)） |
+| `## GitHub 更新` | Issue コメント / PR レビュー / CI 完了等 | 状況把握。**自動 `prompt_worker` はしない** |
 
 conductor は `list_workers` の `bootstrapInFlight` 等を **ポーリング・`Await` で待ってはならない**。状態変化は本表の SessionEvent のみが通知する。
 
@@ -219,6 +234,8 @@ worker 状態照会 tool（#70）は本 Issue の非スコープ。ただし boo
 | `packages/core/src/conductor/session/session-event.ts` | `SessionEvent` |
 | `packages/core/src/conductor/session/format-session-event.ts` | conductor 向け見出し |
 | `packages/core/src/conductor/conductor-session.ts` | emit / enqueue 配線 |
+| `packages/core/src/github/github-monitor.ts` | Issue / PR 更新監視 |
+| `packages/core/src/github/fetch-github-updates.ts` | `gh` ベース差分取得 |
 | `packages/core/src/runtime/worker-runtime.ts` | bootstrap ライフサイクル |
 | `packages/cli/src/session-sinks.ts` | HarnessSink / DialogueSink / ObservationSink |
 | `packages/cli/src/display/` | 表示 state・DisplaySink・string backend |

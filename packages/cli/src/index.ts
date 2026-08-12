@@ -62,6 +62,15 @@ program
     'Worker workspace: isolated (default, per-issue worktree) or in-repo (main worktree)',
     'isolated',
   )
+  .option(
+    '--no-github-monitor',
+    'Disable GitHub Issue / PR update monitoring',
+  )
+  .option(
+    '--github-monitor-debounce-ms <n>',
+    'Debounce interval for GitHub update notifications (default: 30000)',
+    (value) => Number.parseInt(value, 10),
+  )
   .action(
     async (
       issueRef: string,
@@ -76,6 +85,8 @@ program
         noMaxTurns?: boolean;
         noWait?: boolean;
         worktree: string;
+        githubMonitor?: boolean;
+        githubMonitorDebounceMs?: number;
       },
     ) => {
       try {

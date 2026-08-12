@@ -118,6 +118,31 @@ export type {
   IssueContext,
   IssueComment,
 } from './github/issue-context.js';
+export {
+  createGitHubMonitor,
+  DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS,
+  DEFAULT_GITHUB_MONITOR_POLL_INTERVAL_MS,
+  DEFAULT_GITHUB_MONITOR_ACTIVE_POLL_INTERVAL_MS,
+} from './github/github-monitor.js';
+export type { GitHubMonitor, GitHubMonitorOptions } from './github/github-monitor.js';
+export {
+  emptyGitHubMonitorCursor,
+  normalizeGitHubMonitorCursor,
+} from './github/github-monitor-cursor.js';
+export type {
+  GitHubMonitorCursor,
+  PullRequestMonitorCursor,
+} from './github/github-monitor-cursor.js';
+export type {
+  GitHubUpdateItem,
+  GitHubUpdateKind,
+  GitHubUpdatePayload,
+} from './github/github-update-types.js';
+export { fetchGitHubUpdates } from './github/fetch-github-updates.js';
+export type {
+  FetchGitHubUpdatesInput,
+  FetchGitHubUpdatesResult,
+} from './github/fetch-github-updates.js';
 
 export { ConductorAgent } from './conductor/conductor-agent.js';
 export type {
@@ -251,6 +276,7 @@ export type {
   WorkerCompletedEvent,
   WorkerFailedEvent,
   PermissionPendingEvent,
+  GitHubUpdateEvent,
 } from './conductor/session/session-event.js';
 
 export {

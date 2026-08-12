@@ -1,6 +1,7 @@
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
+import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import type { Profile } from '../profile/types.js';
 
 export const SESSION_SIDECAR_VERSION = 1;
@@ -33,6 +34,8 @@ export interface SessionSidecar {
   openQuestions: OpenQuestion[];
   sequence: number;
   workers: Record<string, WorkerSessionSidecar>;
+  /** GitHub 監視カーソル（#39）。 */
+  githubMonitor?: GitHubMonitorCursor;
   /** flush 時刻（Unix ms）。`--continue` で最新セッションを選ぶために使う。 */
   updatedAt: number;
 }
@@ -184,6 +187,11 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
   const updatedAt =
     typeof record.updatedAt === 'number' ? record.updatedAt : 0;
 
+  let githubMonitor: GitHubMonitorCursor | undefined;
+  if (record.githubMonitor && typeof record.githubMonitor === 'object') {
+    githubMonitor = record.githubMonitor as GitHubMonitorCursor;
+  }
+
   const workers: Record<string, WorkerSessionSidecar> = {};
   for (const [name, entry] of Object.entries(
     record.workers as Record<string, unknown>,
@@ -210,6 +218,7 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     openQuestions: record.openQuestions as OpenQuestion[],
     sequence: record.sequence,
     workers,
+    ...(githubMonitor ? { githubMonitor } : {}),
     updatedAt,
   };
 }

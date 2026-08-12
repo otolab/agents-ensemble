@@ -50,6 +50,10 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
     }
     case 'session.stop':
       return `session.stop reason=${event.stopReason}`;
+    case 'harness.github.update':
+      return `github.update items=${event.itemCount}`;
+    case 'harness.github.monitor_error':
+      return `github.monitor_error ${event.message}`;
     default:
       return undefined;
   }

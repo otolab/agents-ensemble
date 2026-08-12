@@ -48,6 +48,17 @@ function permission(id: string): SessionEvent {
   };
 }
 
+function githubUpdate(count: number): SessionEvent {
+  return {
+    type: 'github.update',
+    items: Array.from({ length: count }, (_, index) => ({
+      id: `item-${index}`,
+      kind: 'issue.comment' as const,
+      summary: `comment ${index}`,
+    })),
+  };
+}
+
 describe('eventSourceKey', () => {
   it('maps event types to member keys', () => {
     expect(eventSourceKey(operator('hi'))).toBe('operator');
@@ -260,6 +271,32 @@ describe('selectDispatchBatch', () => {
     });
 
     expect(result?.batch.events).toHaveLength(1);
+  });
+
+  it('dispatches worker events before github.update', () => {
+    const queue = [githubUpdate(1), workerCompleted('implementer')];
+    const result = selectDispatchBatch({
+      queue,
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('worker:implementer');
+    expect(result?.remainingQueue).toEqual([githubUpdate(1)]);
+  });
+
+  it('batches consecutive github.update events', () => {
+    const queue = [githubUpdate(1), githubUpdate(2)];
+    const result = selectDispatchBatch({
+      queue,
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('github');
+    expect(result?.batch.events).toHaveLength(2);
   });
 });
 
