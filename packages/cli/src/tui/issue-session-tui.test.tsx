@@ -16,6 +16,7 @@ import {
 } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 import { MAIN_PANE_TITLE, OPERATOR_INPUT_CURSOR_Y_OFFSET, PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
+import type { OpenQuestion } from '@agents-ensemble/core';
 
 function findOperatorInputLine(lines: string[]): { lineIndex: number; inputStartX: number } {
   const operatorLineIndices = lines
@@ -44,6 +45,34 @@ function fillScrollableHarnessLog(viewModel: ReturnType<typeof createTuiViewMode
 }
 
 const SCROLL_HINT = 'PgUp/PgDn でスクロール';
+const OPEN_QUESTIONS_SCROLL_HINT_SNIPPET = 'Alt+PgUp/PgDn でスクロール';
+
+function createOpenQuestion(overrides: Partial<OpenQuestion> & Pick<OpenQuestion, 'id' | 'question'>): OpenQuestion {
+  return {
+    responseType: 'text',
+    source: 'conductor',
+    status: 'open',
+    askedAt: 1,
+    ...overrides,
+  };
+}
+
+function fillScrollableOpenQuestions(
+  viewModel: ReturnType<typeof createTuiViewModel>,
+  count = 6,
+): void {
+  viewModel.setDisplayState({
+    workers: {},
+    conductorOutput: null,
+    openQuestions: Array.from({ length: count }, (_, index) =>
+      createOpenQuestion({
+        id: `inq-${index + 1}`,
+        question: `Question number ${index + 1} with enough text to occupy a line`,
+        context: index % 2 === 0 ? `Context for question ${index + 1}` : undefined,
+      }),
+    ),
+  });
+}
 
 describe('IssueSessionTui', () => {
   beforeEach(() => {
@@ -418,6 +447,99 @@ describe('IssueSessionTui', () => {
     render(<IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />);
 
     expect(expectedLines).toBeGreaterThan(1);
+  });
+
+  describe('open questions pane scroll (stdin integration)', () => {
+    it('scrolls down with Alt+PgDown and shows scroll hint', async () => {
+      const viewModel = createTuiViewModel();
+      fillScrollableOpenQuestions(viewModel, 8);
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      const initialFrame = lastFrame() ?? '';
+      expect(initialFrame).toContain('inq-1');
+      expect(initialFrame).not.toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+
+      stdin.write(INK_TEST_KEYS.altPageDown);
+      await flushInkStdin();
+
+      const scrolledFrame = lastFrame() ?? '';
+      expect(scrolledFrame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+      expect(scrolledFrame).not.toContain('- inq-1 [text]');
+    });
+
+    it('reaches the last question with Alt+End and returns to top with Alt+Home', async () => {
+      const viewModel = createTuiViewModel();
+      fillScrollableOpenQuestions(viewModel, 8);
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      stdin.write(INK_TEST_KEYS.altEnd);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+      expect(lastFrame() ?? '').toContain('inq-8');
+
+      stdin.write(INK_TEST_KEYS.altHome);
+      await flushInkStdin();
+
+      const restoredFrame = lastFrame() ?? '';
+      expect(restoredFrame).toContain('inq-1');
+      expect(restoredFrame).not.toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+    });
+
+    it('scrolls open questions while typing without affecting orchestration scroll keys', async () => {
+      const viewModel = createTuiViewModel();
+      fillScrollableOpenQuestions(viewModel, 8);
+      fillScrollableHarnessLog(viewModel, 30);
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      stdin.write('typed');
+      await flushInkStdin();
+
+      stdin.write(INK_TEST_KEYS.altEnd);
+      await flushInkStdin();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('typed');
+      expect(frame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+      expect(frame).toContain('inq-8');
+      expect(frame).not.toContain('最新へは End');
+    });
+
+    it('renders long question text and context without clipping when scrolled to end', async () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          createOpenQuestion({
+            id: 'inq-long',
+            question: 'word '.repeat(40),
+            context: 'context '.repeat(20),
+          }),
+        ],
+      });
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      const initialFrame = lastFrame() ?? '';
+      expect(initialFrame).toContain('inq-long');
+      expect(initialFrame).not.toContain('context context');
+
+      stdin.write(INK_TEST_KEYS.altEnd);
+      await flushInkStdin();
+
+      expect(lastFrame() ?? '').toContain('context context');
+    });
   });
 
   describe('orchestration pane scroll (stdin integration)', () => {

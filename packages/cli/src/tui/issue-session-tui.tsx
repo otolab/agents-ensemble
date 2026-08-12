@@ -13,8 +13,16 @@ import {
   type ActivityLogScrollAction,
 } from './activity-log.js';
 import {
+  advanceOpenQuestionsScrollOffset,
+  buildOpenQuestionDisplayLines,
+  computeOpenQuestionsContentLineCount,
+  sliceOpenQuestionDisplayLines,
+  type OpenQuestionsScrollAction,
+} from './open-questions-pane.js';
+import {
   MAIN_PANE_TITLE,
   OPEN_QUESTIONS_PANE_HEIGHT,
+  OPEN_QUESTIONS_SCROLL_HINT,
   ORCHESTRATION_PANE_TITLE_ROWS,
   PANE_BORDER_ROWS,
   PANE_PADDING_X,
@@ -204,13 +212,45 @@ function OrchestrationPane({
   );
 }
 
+function getOpenQuestionsTitleLineCount(
+  scrollHint: string,
+  contentWidth: number,
+): number {
+  return wrapTextToWidth(`Open questions${scrollHint}`, contentWidth).length;
+}
+
 function OpenQuestionsPane({
   openQuestions,
   contentWidth,
+  linesFromTop,
 }: {
   openQuestions: TuiViewSnapshot['displayState']['openQuestions'];
   contentWidth: number;
+  linesFromTop: number;
 }) {
+  const contentAreaRef = useRef(null);
+  const { height: measuredContentHeight, hasMeasured } = useBoxMetrics(contentAreaRef);
+  const pinnedToTop = linesFromTop === 0;
+  const scrollHint = pinnedToTop ? '' : OPEN_QUESTIONS_SCROLL_HINT;
+  const titleLineCount = getOpenQuestionsTitleLineCount(scrollHint, contentWidth);
+  const estimatedContentLineCount = computeOpenQuestionsContentLineCount(
+    OPEN_QUESTIONS_PANE_HEIGHT,
+    titleLineCount,
+  );
+  const visibleCount =
+    hasMeasured && measuredContentHeight > 0
+      ? Math.max(1, Math.floor(measuredContentHeight))
+      : estimatedContentLineCount;
+  const displayLines = useMemo(
+    () => buildOpenQuestionDisplayLines(openQuestions, contentWidth),
+    [openQuestions, contentWidth],
+  );
+  const visibleLines = sliceOpenQuestionDisplayLines(
+    displayLines,
+    visibleCount,
+    linesFromTop,
+  );
+
   return (
     <Box
       flexDirection="column"
@@ -220,22 +260,19 @@ function OpenQuestionsPane({
       height={OPEN_QUESTIONS_PANE_HEIGHT}
       overflow="hidden"
     >
-      <Text bold>Open questions</Text>
-      {openQuestions.length === 0 ? (
-        <Text dimColor>(未回答なし)</Text>
-      ) : (
-        openQuestions.map((question) => (
-          <Box key={question.id} flexDirection="column">
-            <WrappedTextLines
-              text={`- ${question.id} [${question.responseType}] ${question.question}`}
-              width={contentWidth}
-            />
-            {question.context ? (
-              <WrappedTextLines text={`  ${question.context}`} width={contentWidth} />
-            ) : null}
-          </Box>
-        ))
-      )}
+      <Text bold>
+        Open questions
+        {scrollHint}
+      </Text>
+      <Box ref={contentAreaRef} flexGrow={1} flexDirection="column" overflow="hidden">
+        {openQuestions.length === 0 ? (
+          <Text dimColor>(未回答なし)</Text>
+        ) : (
+          visibleLines.map((line, index) => (
+            <Text key={`open-question-line-${index}`}>{line}</Text>
+          ))
+        )}
+      </Box>
     </Box>
   );
 }
@@ -248,6 +285,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   );
   const [inputValue, setInputValue] = useState('');
   const [linesFromBottom, setLinesFromBottom] = useState(0);
+  const [openQuestionsLinesFromTop, setOpenQuestionsLinesFromTop] = useState(0);
   const contentWidth = usePaneContentWidth();
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
@@ -266,6 +304,22 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     [snapshot.activityLog, contentWidth],
   );
   const maxLinesFromBottom = Math.max(0, displayLineCount - visibleLineCount);
+  const openQuestionsDisplayLineCount = useMemo(
+    () => buildOpenQuestionDisplayLines(snapshot.displayState.openQuestions, contentWidth).length,
+    [snapshot.displayState.openQuestions, contentWidth],
+  );
+  const openQuestionsTitleLineCount = getOpenQuestionsTitleLineCount(
+    openQuestionsLinesFromTop > 0 ? OPEN_QUESTIONS_SCROLL_HINT : '',
+    contentWidth,
+  );
+  const openQuestionsVisibleLineCount = computeOpenQuestionsContentLineCount(
+    OPEN_QUESTIONS_PANE_HEIGHT,
+    openQuestionsTitleLineCount,
+  );
+  const maxOpenQuestionsLinesFromTop = Math.max(
+    0,
+    openQuestionsDisplayLineCount - openQuestionsVisibleLineCount,
+  );
   const cursorStart = {
     x: computeOperatorInputCursorX(operatorPrompt),
     y: computeOperatorInputCursorY({
@@ -278,6 +332,12 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     setLinesFromBottom((current) => Math.min(current, maxLinesFromBottom));
   }, [maxLinesFromBottom]);
 
+  useEffect(() => {
+    setOpenQuestionsLinesFromTop((current) =>
+      Math.min(current, maxOpenQuestionsLinesFromTop),
+    );
+  }, [maxOpenQuestionsLinesFromTop]);
+
   const applyScrollAction = (action: ActivityLogScrollAction) => {
     setLinesFromBottom((current) =>
       advanceActivityLogScrollOffset(
@@ -289,7 +349,37 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     );
   };
 
+  const applyOpenQuestionsScrollAction = (action: OpenQuestionsScrollAction) => {
+    setOpenQuestionsLinesFromTop((current) =>
+      advanceOpenQuestionsScrollOffset(
+        current,
+        action,
+        openQuestionsVisibleLineCount,
+        maxOpenQuestionsLinesFromTop,
+      ),
+    );
+  };
+
   useInput((_input, key) => {
+    if (key.meta) {
+      if (key.pageUp) {
+        applyOpenQuestionsScrollAction('pageUp');
+        return;
+      }
+      if (key.pageDown) {
+        applyOpenQuestionsScrollAction('pageDown');
+        return;
+      }
+      if (key.home) {
+        applyOpenQuestionsScrollAction('home');
+        return;
+      }
+      if (key.end) {
+        applyOpenQuestionsScrollAction('end');
+        return;
+      }
+    }
+
     const scrollWithModifier = key.ctrl;
     const scrollWithoutModifier = inputValue.length === 0;
     if (!scrollWithModifier && !scrollWithoutModifier) {
@@ -334,6 +424,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
       <OpenQuestionsPane
         openQuestions={snapshot.displayState.openQuestions}
         contentWidth={contentWidth}
+        linesFromTop={openQuestionsLinesFromTop}
       />
       <Box
         flexDirection="column"

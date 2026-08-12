@@ -15,8 +15,18 @@ export const MAIN_PANE_TITLE = 'Orchestration';
 /** Worker 状態ペインの固定高さ（枠線込み。タイトル + サマリ 3 行）。 */
 export const WORKER_PANE_HEIGHT = 6;
 
-/** Open questions ペインの固定高さ（枠線込み。タイトル + 1 行サマリ）。 */
+/**
+ * Open questions ペインの高さ（枠線込み。最小 4 行 = タイトル + 本文 1 行）。
+ * 本文が溢れる場合はペイン内スクロール（Alt+PgUp/PgDn）で閲覧する。
+ */
 export const OPEN_QUESTIONS_PANE_HEIGHT = 4;
+
+/** Open questions ペインのタイトル行数（`Open questions` 単独行。hint は呼び出し側で加算）。 */
+export const OPEN_QUESTIONS_PANE_TITLE_ROWS = 1;
+
+/** ペイン内スクロール中にタイトルへ付与するヒント（Orchestration とキーが衝突しないよう Alt 修飾）。 */
+export const OPEN_QUESTIONS_SCROLL_HINT =
+  ' (Alt+PgUp/PgDn でスクロール · 先頭へは Alt+Home · 末尾へは Alt+End)';
 
 /** 入力ペインの枠線（上下）行数。`PANE_BORDER_ROWS` と同値。 */
 export const INPUT_PANE_BORDER_ROWS = PANE_BORDER_ROWS;
