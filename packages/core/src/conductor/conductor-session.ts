@@ -57,6 +57,12 @@ import type { SessionUsageSummary } from '../usage/types.js';
 import { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 import type { OperatorInputBinding } from './operator-input-binding.js';
 import { submitOperatorInput } from './submit-operator-input.js';
+import {
+  createGitHubMonitor,
+  DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS,
+  type GitHubMonitor,
+} from '../github/github-monitor.js';
+import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -126,6 +132,14 @@ export interface RunConductorSessionOptions {
   shutdownSignal?: AbortSignal;
   /** デフォルト true。`shutdownSignal` 未指定時のみ有効。 */
   registerProcessSignalHandlers?: boolean;
+  /** GitHub Issue / PR 監視を無効化する。 */
+  disableGitHubMonitor?: boolean;
+  /** GitHub 更新通知の debounce（ms）。デフォルト 30s。 */
+  githubMonitorDebounceMs?: number;
+  /** GitHub 監視の通常 poll 間隔（ms）。デフォルト 60s。 */
+  githubMonitorPollIntervalMs?: number;
+  /** CI pending 時の poll 間隔（ms）。デフォルト 15s。 */
+  githubMonitorActivePollIntervalMs?: number;
 }
 
 export interface ConductorSessionResult {
@@ -162,6 +176,7 @@ export async function runConductorSession(
   const eventQueue = new SessionEventQueue();
   let activeProfile = options.profile;
   const workerSessions = new Map<string, string>();
+  let githubMonitorCursor: GitHubMonitorCursor | undefined;
 
   if (options.resumeAgentId) {
     const sidecar = await requireSessionSidecarForResume({
@@ -178,6 +193,7 @@ export async function runConductorSession(
       openQuestions: sidecar.openQuestions,
     });
     activeProfile = sidecar.profile;
+    githubMonitorCursor = sidecar.githubMonitor;
     for (const [name, worker] of Object.entries(sidecar.workers)) {
       workerSessions.set(name, worker.acpSessionId);
     }
@@ -426,6 +442,7 @@ export async function runConductorSession(
       openQuestions: snapshot.openQuestions,
       sequence: snapshot.sequence,
       workers,
+      ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
       updatedAt: Date.now(),
     };
     await saveSessionSidecar(
@@ -441,6 +458,41 @@ export async function runConductorSession(
       // best-effort persistence
     });
   };
+
+  let githubMonitor: GitHubMonitor | undefined;
+  if (!options.disableGitHubMonitor) {
+    githubMonitor = createGitHubMonitor({
+      issueUrl: options.issueUrl,
+      cwd: options.repoRoot,
+      cursor: githubMonitorCursor,
+      debounceMs:
+        options.githubMonitorDebounceMs ?? DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS,
+      pollIntervalMs: options.githubMonitorPollIntervalMs,
+      activePollIntervalMs: options.githubMonitorActivePollIntervalMs,
+      shutdownSignal,
+      onCursorChange: (cursor) => {
+        githubMonitorCursor = cursor;
+        scheduleSidecarFlush();
+      },
+      onUpdate: (payload) => {
+        sessionLogger.emit({
+          type: 'harness.github.update',
+          itemCount: payload.items.length,
+        });
+        eventQueue.enqueue({
+          type: 'github.update',
+          items: payload.items,
+        });
+      },
+      onPollError: (error) => {
+        sessionLogger.emit({
+          type: 'harness.github.monitor_error',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      },
+    });
+    githubMonitor.start();
+  }
 
   let sendCount = 0;
   let stopReason: IssueLoopStopReason = 'completed';
@@ -624,6 +676,11 @@ export async function runConductorSession(
   } finally {
     disposeOperatorInput?.();
     unregisterProcessSignalHandlers();
+    if (githubMonitor) {
+      githubMonitor.flush();
+      await githubMonitor.stop();
+      githubMonitorCursor = githubMonitor.getCursor();
+    }
     try {
       await flushSidecar();
     } catch {

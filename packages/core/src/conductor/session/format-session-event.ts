@@ -40,6 +40,12 @@ function formatSingleSessionEventForConductor(event: SessionEvent): string {
         '',
         formatEventBodyForConductor(event),
       ].join('\n');
+    case 'github.update':
+      return [
+        '## GitHub 更新',
+        '',
+        formatEventBodyForConductor(event),
+      ].join('\n');
     default: {
       const _exhaustive: never = event;
       return String(_exhaustive);
@@ -57,6 +63,8 @@ function formatEventBodyForConductor(event: SessionEvent): string {
       return fencedYaml('worker.failed', event.failure);
     case 'permission.pending':
       return fencedYaml('permission.pending', event.permission);
+    case 'github.update':
+      return fencedYaml('github.update', event.items);
     default: {
       const _exhaustive: never = event;
       return String(_exhaustive);
@@ -80,6 +88,9 @@ function batchHeadingForEvents(events: SessionEvent[]): string {
   }
   if (events.every((event) => event.type === 'permission.pending')) {
     return `## permission 判断待ち（${count} 件）`;
+  }
+  if (events.every((event) => event.type === 'github.update')) {
+    return `## GitHub 更新（${count} 件）`;
   }
 
   const workerEvents = events.filter(

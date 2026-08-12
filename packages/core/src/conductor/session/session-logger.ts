@@ -127,6 +127,14 @@ export type SessionLogEvent =
   | {
       type: 'conductor.auth.reconnect';
       agentId: string;
+    }
+  | {
+      type: 'harness.github.update';
+      itemCount: number;
+    }
+  | {
+      type: 'harness.github.monitor_error';
+      message: string;
     };
 
 export type SessionLogSink = (event: SessionLogEvent) => void;
@@ -192,6 +200,8 @@ export class SessionLogger {
       case 'session.post_loop_wait':
       case 'conductor.auth.recovery':
       case 'conductor.auth.reconnect':
+      case 'harness.github.update':
+      case 'harness.github.monitor_error':
         break;
     }
 

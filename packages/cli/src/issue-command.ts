@@ -27,6 +27,9 @@ export interface IssueCommandOptions {
   noMaxTurns?: boolean;
   noWait?: boolean;
   worktree: string;
+  /** commander の `--no-github-monitor` 用。false で監視無効。 */
+  githubMonitor?: boolean;
+  githubMonitorDebounceMs?: number;
 }
 
 export interface IssueCommandDeps {
@@ -155,6 +158,12 @@ export async function executeIssueCommand(
       maxTurns,
       workerWorktreeMode,
       sessionLogger,
+      ...(options.githubMonitor === false
+        ? { disableGitHubMonitor: true }
+        : {}),
+      ...(options.githubMonitorDebounceMs !== undefined
+        ? { githubMonitorDebounceMs: options.githubMonitorDebounceMs }
+        : {}),
       ...(interactive
         ? {
             bindOperatorInput: tuiHost?.bindOperatorInput ?? bindAsyncOperatorInput,

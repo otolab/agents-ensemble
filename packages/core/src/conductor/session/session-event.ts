@@ -1,4 +1,5 @@
 import type { WorkerDispatchResult } from '../../dispatch/worker-dispatch.js';
+import type { GitHubUpdateItem } from '../../github/github-update-types.js';
 import type { WorkerFailureRecord } from '../../runtime/types.js';
 import type { PendingPermission } from '../../permission/pending-permission.js';
 
@@ -7,7 +8,8 @@ export type SessionEvent =
   | OperatorMessageEvent
   | WorkerCompletedEvent
   | WorkerFailedEvent
-  | PermissionPendingEvent;
+  | PermissionPendingEvent
+  | GitHubUpdateEvent;
 
 export interface OperatorMessageEvent {
   type: 'operator.message';
@@ -29,13 +31,24 @@ export interface PermissionPendingEvent {
   permission: PendingPermission;
 }
 
+export interface GitHubUpdateEvent {
+  type: 'github.update';
+  items: GitHubUpdateItem[];
+}
+
 export function isConductorSendEvent(
   event: SessionEvent,
-): event is OperatorMessageEvent | WorkerCompletedEvent | WorkerFailedEvent | PermissionPendingEvent {
+): event is
+  | OperatorMessageEvent
+  | WorkerCompletedEvent
+  | WorkerFailedEvent
+  | PermissionPendingEvent
+  | GitHubUpdateEvent {
   return (
     event.type === 'operator.message' ||
     event.type === 'worker.completed' ||
     event.type === 'worker.failed' ||
-    event.type === 'permission.pending'
+    event.type === 'permission.pending' ||
+    event.type === 'github.update'
   );
 }

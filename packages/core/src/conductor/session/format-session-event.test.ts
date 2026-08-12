@@ -113,4 +113,22 @@ describe('formatSessionEventForConductor', () => {
       formatSessionEventForConductor(event),
     );
   });
+
+  it('formats github.update with YAML block', () => {
+    const message = formatSessionEventForConductor({
+      type: 'github.update',
+      items: [
+        {
+          id: 'issue-comment:1',
+          kind: 'issue.comment',
+          summary: 'Issue コメント（@alice）',
+          author: 'alice',
+        },
+      ],
+    });
+
+    expect(message).toContain('## GitHub 更新');
+    expect(message).toContain('```yaml');
+    expect(message).toContain('issue-comment:1');
+  });
 });
