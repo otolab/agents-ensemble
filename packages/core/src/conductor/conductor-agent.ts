@@ -8,10 +8,7 @@ import {
   type SDKCustomTool,
 } from '@cursor/sdk';
 import { ensureCursorSdkRipgrepPath } from './configure-cursor-sdk-env.js';
-import {
-  CONDUCTOR_AUTH_HINT,
-  resolveConductorApiKey,
-} from './conductor-auth.js';
+import { CONDUCTOR_AUTH_HINT, resolveConductorApiKey } from './conductor-auth.js';
 
 export interface ConductorAgentOptions {
   cwd: string;
@@ -68,7 +65,11 @@ export class ConductorAgent {
       };
     } catch (error) {
       if (error instanceof AuthenticationError) {
-        throw new Error(`${error.message}\n\n${CONDUCTOR_AUTH_HINT}`);
+        return {
+          runId: '',
+          status: 'error',
+          error: { message: error.message, code: error.code },
+        };
       }
       if (error instanceof CursorAgentError) {
         throw new Error(

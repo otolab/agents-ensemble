@@ -104,6 +104,11 @@ export type SessionLogEvent =
     }
   | {
       type: 'session.post_loop_wait';
+    }
+  | {
+      type: 'conductor.auth.recovery';
+      agentId: string;
+      hint: string;
     };
 
 export type SessionLogSink = (event: SessionLogEvent) => void;
@@ -165,6 +170,7 @@ export class SessionLogger {
       case 'session.worktree.notice':
       case 'session.continue':
       case 'session.post_loop_wait':
+      case 'conductor.auth.recovery':
         break;
     }
 

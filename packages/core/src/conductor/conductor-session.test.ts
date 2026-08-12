@@ -9,6 +9,7 @@ import {
   SessionSidecarNotFoundError,
   sessionSidecarPath,
 } from '../session/session-sidecar.js';
+import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
 import { runConductorSession } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import * as worktreeModule from '../worktree/worktree.js';
@@ -75,6 +76,43 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow(SessionSidecarNotFoundError);
 
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('emits auth recovery hint when conductor send returns auth error', async () => {
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+    });
+
+    mockSend.mockResolvedValueOnce({
+      runId: 'run-1',
+      status: 'error',
+      error: {
+        message: 'Authentication error If you are logged in, try logging out and back in.',
+      },
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+    });
+
+    expect(result.stopReason).toBe('error');
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'conductor.auth.recovery' &&
+          event.hint.includes('ensemble auth logout'),
+      ),
+    ).toBe(true);
   });
 
   it('flushes sidecar on shutdown signal while waiting for events', async () => {
