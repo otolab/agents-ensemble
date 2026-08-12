@@ -121,6 +121,26 @@ ensemble issue '#31' --repo-root .
 
 e2e では `test-acp.yaml` の `conductorModelId`（未指定時 `auto`）を使います。
 
+## インストール
+
+npm から CLI をグローバルインストールできます（Node.js 22 以上）。
+
+```bash
+npm install -g @agents-ensemble/cli
+# または
+pnpm add -g @agents-ensemble/cli
+
+ensemble --help
+```
+
+ライブラリとして `@agents-ensemble/core` を使う場合:
+
+```bash
+pnpm add @agents-ensemble/core
+```
+
+リリース手順は [docs/RELEASE_GUIDE.md](docs/RELEASE_GUIDE.md) を参照。
+
 ## 開発
 
 **前提**: Node.js 22、pnpm 10.12.1 以上（`package.json` の `packageManager` に合わせる。Corepack 利用可）。

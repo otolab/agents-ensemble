@@ -16,7 +16,8 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:integration": "vitest run --config vitest.config.integration.ts",
-    "test:e2e": "vitest run --config vitest.config.e2e.ts"
+    "test:e2e": "vitest run --config vitest.config.e2e.ts",
+    "prepublishOnly": "pnpm run build"
   },
   "license": "MIT",
   "repository": {
@@ -32,5 +33,15 @@
   "dependencies": {
     "@cursor/sdk": "1.0.27",
     "@modular-prompt/core": "0.3.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }

@@ -18,11 +18,18 @@
     "test:run": "pnpm --filter @agents-ensemble/core test:run",
     "test:integration": "pnpm --filter @agents-ensemble/core test:integration",
     "test:e2e": "pnpm --filter @agents-ensemble/core test:e2e && pnpm --filter @agents-ensemble/cli test:e2e",
-    "test:all": "pnpm test:run && pnpm test:integration && pnpm test:e2e"
+    "test:all": "pnpm test:run && pnpm test:integration && pnpm test:e2e",
+    "changeset": "changeset"
   },
   "devDependencies": {
     "@types/node": "22.18.10",
     "typescript": "5.9.3",
-    "vitest": "3.2.4"
+    "vitest": "3.2.4",
+    "@changesets/cli": "2.29.8",
+    "semver": "7.7.3"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.12.1"
   }
 }
