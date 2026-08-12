@@ -64,7 +64,7 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
     case 'conductor.auth.recovery':
       return event.hint;
     case 'conductor.auth.reconnect':
-      return `[auth] conductor 再接続を試行 (${event.phase}) agentId=${event.agentId}`;
+      return `[auth] conductor 再接続を試行 agentId=${event.agentId}`;
     default:
       return undefined;
   }

@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { mockSend, mockClose, mockResume, mockLogout, mockLogin } = vi.hoisted(() => ({
-  mockSend: vi.fn(),
+const { mockClose, mockResume } = vi.hoisted(() => ({
   mockClose: vi.fn().mockResolvedValue(undefined),
   mockResume: vi.fn(),
-  mockLogout: vi.fn(),
-  mockLogin: vi.fn(),
 }));
 
 vi.mock('./conductor-agent.js', () => ({
@@ -14,21 +11,12 @@ vi.mock('./conductor-agent.js', () => ({
   },
 }));
 
-vi.mock('./conductor-auth.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./conductor-auth.js')>();
-  return {
-    ...actual,
-    logoutConductor: mockLogout,
-    loginConductor: mockLogin,
-  };
-});
-
 import {
   sendConductorWithReconnect,
   type ConductorAgentHandle,
 } from './conductor-send-reconnect.js';
 
-function createHandle(send: typeof mockSend): ConductorAgentHandle {
+function createHandle(send: ReturnType<typeof vi.fn>): ConductorAgentHandle {
   return {
     conductor: {
       agentId: 'agent-1',
@@ -40,24 +28,20 @@ function createHandle(send: typeof mockSend): ConductorAgentHandle {
 
 describe('sendConductorWithReconnect', () => {
   afterEach(() => {
-    mockSend.mockReset();
     mockClose.mockClear();
     mockResume.mockReset();
-    mockLogout.mockReset();
-    mockLogin.mockReset();
   });
 
   it('returns first send result when not auth-like', async () => {
-    mockSend.mockResolvedValue({
+    const send = vi.fn().mockResolvedValue({
       runId: 'run-1',
       status: 'finished',
       result: 'ok',
     });
-    const handle = createHandle(mockSend);
+    const handle = createHandle(send);
 
     const result = await sendConductorWithReconnect(handle, 'hello', {
       conductorOptions: { cwd: '/repo' },
-      enableTtyReauth: false,
     });
 
     expect(result.status).toBe('finished');
@@ -85,7 +69,6 @@ describe('sendConductorWithReconnect', () => {
     const onReconnectAttempt = vi.fn();
     const result = await sendConductorWithReconnect(handle, 'hello', {
       conductorOptions: { cwd: '/repo', modelId: 'composer-2.5' },
-      enableTtyReauth: false,
       onReconnectAttempt,
     });
 
@@ -95,15 +78,12 @@ describe('sendConductorWithReconnect', () => {
       modelId: 'composer-2.5',
     });
     expect(secondSend).toHaveBeenCalledWith('hello');
-    expect(onReconnectAttempt).toHaveBeenCalledWith({
-      phase: 'resume',
-      agentId: 'agent-1',
-    });
+    expect(onReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
     expect(result.status).toBe('finished');
     expect(handle.conductor.send).toBe(secondSend);
   });
 
-  it('attempts tty reauth when resume retry still fails', async () => {
+  it('returns auth error after resume retry fails', async () => {
     const failingSend = vi.fn().mockResolvedValue({
       runId: '',
       status: 'error',
@@ -115,46 +95,12 @@ describe('sendConductorWithReconnect', () => {
       send: failingSend,
       close: mockClose,
     }));
-    mockLogout.mockResolvedValue(undefined);
-    mockLogin.mockResolvedValue({ apiKey: 'new-key' });
 
-    const onReconnectAttempt = vi.fn();
     const result = await sendConductorWithReconnect(handle, 'hello', {
       conductorOptions: { cwd: '/repo' },
-      enableTtyReauth: true,
-      onReconnectAttempt,
     });
 
-    expect(mockLogout).toHaveBeenCalledOnce();
-    expect(mockLogin).toHaveBeenCalledOnce();
-    expect(mockResume).toHaveBeenCalledTimes(2);
-    expect(onReconnectAttempt).toHaveBeenCalledWith({
-      phase: 'reauth',
-      agentId: 'agent-1',
-    });
-    expect(result.status).toBe('error');
-  });
-
-  it('does not attempt tty reauth when disabled', async () => {
-    const failingSend = vi.fn().mockResolvedValue({
-      runId: '',
-      status: 'error',
-      error: { message: 'not logged in' },
-    });
-    const handle = createHandle(failingSend);
-    mockResume.mockImplementation(async () => ({
-      agentId: 'agent-1',
-      send: failingSend,
-      close: mockClose,
-    }));
-
-    await sendConductorWithReconnect(handle, 'hello', {
-      conductorOptions: { cwd: '/repo' },
-      enableTtyReauth: false,
-    });
-
-    expect(mockLogout).not.toHaveBeenCalled();
-    expect(mockLogin).not.toHaveBeenCalled();
     expect(mockResume).toHaveBeenCalledOnce();
+    expect(result.status).toBe('error');
   });
 });

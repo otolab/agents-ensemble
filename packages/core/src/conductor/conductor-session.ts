@@ -401,18 +401,10 @@ export async function runConductorSession(
   const conductorHandle: ConductorAgentHandle = { conductor };
   const sendReconnect = {
     conductorOptions,
-    enableTtyReauth: options.bindOperatorInput !== undefined,
-    onReconnectAttempt: ({
-      phase,
-      agentId,
-    }: {
-      phase: 'resume' | 'reauth';
-      agentId: string;
-    }) => {
+    onReconnectAttempt: ({ agentId }: { agentId: string }) => {
       sessionLogger.emit({
         type: 'conductor.auth.reconnect',
         agentId,
-        phase,
       });
     },
   };

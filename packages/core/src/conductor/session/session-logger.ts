@@ -120,7 +120,6 @@ export type SessionLogEvent =
   | {
       type: 'conductor.auth.reconnect';
       agentId: string;
-      phase: 'resume' | 'reauth';
     };
 
 export type SessionLogSink = (event: SessionLogEvent) => void;

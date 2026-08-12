@@ -39,7 +39,6 @@ function createDriverOptions(input: {
     conductorHandle,
     sendReconnect: {
       conductorOptions: { cwd: '/repo' },
-      enableTtyReauth: false,
     },
     eventQueue: input.eventQueue,
     workerSession: createWorkerSessionStub(input.runningCount ?? 0),

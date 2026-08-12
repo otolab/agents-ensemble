@@ -74,9 +74,8 @@ describe('session-log-lines', () => {
       formatObservationStderrLine({
         type: 'conductor.auth.reconnect',
         agentId: 'agent-1',
-        phase: 'resume',
       }),
-    ).toBe('[auth] conductor 再接続を試行 (resume) agentId=agent-1');
+    ).toBe('[auth] conductor 再接続を試行 agentId=agent-1');
   });
 
   it('formats conductor activity bodies', () => {

@@ -10,10 +10,11 @@ agents-ensemble の conductor は長寿命 `ConductorAgent` 1 本を保持する
 
 ## 採用方式
 
-| 優先 | 処理 | 条件 |
-|------|------|------|
-| 1 | `close` → `ConductorAgent.resume(sameId)` → send 再試行（1 回） | send が auth-like error |
-| 2 | `logoutConductor` → `loginConductor` → `resume(sameId)` → 再試行（1 回） | 方式 1 後も auth-like error **かつ TTY**（`bindOperatorInput` あり） |
+send が auth-like error のとき:
+
+`close` → `ConductorAgent.resume(sameId)` → send 再試行（1 回）
+
+まだ失敗する場合は PR #99 互換の `[auth]` ヒント（手動 `logout` → `login` → `--resume` / `--continue`）へフォールバックする。in-process での自動 `login` は行わない（オペレータ方針）。
 
 **非採用**
 
@@ -33,15 +34,14 @@ agents-ensemble の conductor は長寿命 `ConductorAgent` 1 本を保持する
 
 | イベント | タイミング |
 |----------|------------|
-| `conductor.auth.reconnect` | resume / reauth 試行時（phase 付き） |
-| `conductor.auth.recovery` | 全自動復旧失敗後（PR #99 互換の `[auth]` hint） |
+| `conductor.auth.reconnect` | `resume(sameId)` 試行時 |
+| `conductor.auth.recovery` | 自動再接続失敗後（PR #99 互換の `[auth]` hint） |
 
 ## 制限
 
 | 経路 | 挙動 |
 |------|------|
-| TTY `ensemble issue` | 方式 1 + 方式 2 |
-| 非 TTY / CI | 方式 1 のみ。login 自動化なし |
+| TTY / 非 TTY | いずれも in-process `resume` + 1 回再試行のみ |
 | `CURSOR_API_KEY` | 環境変数モードの挙動は変更しない（#58）。hint は key ローテーション案内 |
 | 起動時 `create` / `resume` auth 失敗 | スコープ外（別 Issue 候補） |
 | worker `agent login` | スコープ外 |

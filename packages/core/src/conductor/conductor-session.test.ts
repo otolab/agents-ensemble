@@ -109,8 +109,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockClose).toHaveBeenCalled();
     expect(
       emitted.some(
-        (event) =>
-          event.type === 'conductor.auth.reconnect' && event.phase === 'resume',
+        (event) => event.type === 'conductor.auth.reconnect',
       ),
     ).toBe(true);
     expect(
@@ -175,8 +174,7 @@ describe('runConductorSession resume / shutdown', () => {
     ).toBe(false);
     expect(
       emitted.some(
-        (event) =>
-          event.type === 'conductor.auth.reconnect' && event.phase === 'resume',
+        (event) => event.type === 'conductor.auth.reconnect',
       ),
     ).toBe(true);
   });
