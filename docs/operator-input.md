@@ -77,7 +77,7 @@ runConductorSession({
 View が決めないこと（SessionPolicy / Driver の責務）:
 
 - max-turns 到達後に worker イベントを送るか（`maxTurns <= 0` のときは常に可）
-- 次に送るイベント束の選び方（`operator.message` 最優先、直前メンバー 1 回優先、静的優先度 — ADR 0014）
+- 次に送るイベント束の選び方（`operator.message` 最優先 → `permission` → worker continuation 1 回 → 静的優先度 — [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md)）
 - 未回答 open question があるときのループ継続（open question がある間は停止しない）
 - ループ終了条件
 

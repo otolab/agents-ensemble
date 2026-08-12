@@ -177,6 +177,35 @@ describe('selectDispatchBatch', () => {
     expect(result?.remainingQueue).toEqual([workerCompleted('implementer')]);
   });
 
+  it('prefers permission over worker continuation', () => {
+    const queue = [
+      permission('perm-1'),
+      workerCompleted('implementer'),
+    ];
+    const result = selectDispatchBatch({
+      queue,
+      state: dispatchBatchStateAfterSend('worker:implementer'),
+      autonomousTurns: 1,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('permission');
+    expect(result?.remainingQueue).toEqual([workerCompleted('implementer')]);
+  });
+
+  it('does not apply continuation after non-worker dispatch', () => {
+    const queue = [workerCompleted('implementer'), workerCompleted('reviewer')];
+    const result = selectDispatchBatch({
+      queue,
+      state: dispatchBatchStateAfterSend('permission'),
+      autonomousTurns: 1,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('worker:implementer');
+    expect(result?.remainingQueue).toEqual([workerCompleted('reviewer')]);
+  });
+
   it('batches worker.failed and worker.completed from the same worker', () => {
     const queue = [workerCompleted('implementer'), workerFailed('implementer')];
     const result = selectDispatchBatch({

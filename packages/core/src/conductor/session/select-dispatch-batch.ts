@@ -114,6 +114,22 @@ function pickStaticSourceKey(
   return chosenKey ?? eventSourceKey(eligible[0]!);
 }
 
+function isWorkerSourceKey(key: DispatchSourceKey): boolean {
+  return key.startsWith('worker:');
+}
+
+function canUseWorkerContinuation(
+  state: DispatchBatchState,
+  eligibleKeys: ReadonlySet<DispatchSourceKey>,
+): boolean {
+  return (
+    state.lastDispatchedSourceKey !== undefined &&
+    isWorkerSourceKey(state.lastDispatchedSourceKey) &&
+    !state.continuationConsumed &&
+    eligibleKeys.has(state.lastDispatchedSourceKey)
+  );
+}
+
 /**
  * キューから次に dispatch するイベント束を選ぶ（純関数）。
  * dispatch 可能なイベントが無ければ undefined。
@@ -134,12 +150,10 @@ export function selectDispatchBatch(
 
   if (eligibleKeys.has('operator')) {
     chosenKey = 'operator';
-  } else if (
-    state.lastDispatchedSourceKey &&
-    !state.continuationConsumed &&
-    eligibleKeys.has(state.lastDispatchedSourceKey)
-  ) {
-    chosenKey = state.lastDispatchedSourceKey;
+  } else if (eligibleKeys.has('permission')) {
+    chosenKey = 'permission';
+  } else if (canUseWorkerContinuation(state, eligibleKeys)) {
+    chosenKey = state.lastDispatchedSourceKey!;
   } else {
     chosenKey = pickStaticSourceKey(queue, eligible);
   }
@@ -174,8 +188,10 @@ export function markContinuationConsumed(
   selected: SelectDispatchBatchResult,
 ): DispatchBatchState {
   if (
-    state.lastDispatchedSourceKey &&
-    !state.continuationConsumed &&
+    canUseWorkerContinuation(
+      state,
+      new Set([selected.batch.sourceKey]),
+    ) &&
     selected.batch.sourceKey === state.lastDispatchedSourceKey
   ) {
     return { ...state, continuationConsumed: true };

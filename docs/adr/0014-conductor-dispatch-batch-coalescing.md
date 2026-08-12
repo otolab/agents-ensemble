@@ -50,12 +50,15 @@ SessionEventQueue
 dispatch 可能なイベント（`canDispatchConductorSend` を満たすもの）だけを対象に、次の順で **source key を 1 つ**選ぶ。
 
 1. `operator` が 1 件でもあれば `operator`
-2. そうでなく、`DispatchBatchState.continuationSourceKey` がセットされ、かつその key の dispatch 可能イベントがあれば **その key を 1 回だけ**使う（消費後クリア）
-3. そうでなく、静的優先度で選ぶ: `permission` > `worker.failed` > `worker.completed`。同順位はキュー内の **最初の出現**が早い key
+2. そうでなく、`permission` が 1 件でもあれば `permission`（**continuation より上**）
+3. そうでなく、直前 dispatch が `worker:*` であり、`lastDispatchedSourceKey` の dispatch 可能イベントがあれば **その worker を 1 回だけ**優先（`continuationConsumed` で消費）
+4. そうでなく、静的優先度で選ぶ: `worker.failed` > `worker.completed`。同順位はキュー内の **最初の出現**が早い key
 
-選んだ key に属する **dispatch 可能なイベントをキュー内の到着順のまますべて** 1 束にする（他 key のイベントはキューに残す）。
+**「優先」の意味**: 上記は **次に dispatch する束の選択順** である。進行中 conductor ターンの割り込み cancel は [#86](https://github.com/otolab/agents-ensemble/issues/86) のスコープ。
 
-dispatch 完了後、Driver は `lastDispatchedSourceKey` を束の key にセットし `continuationConsumed = false` にする。**次の 1 回の select だけ**その key を優先する。select で continuation を使ったら `continuationConsumed = true` にし、以降は静的優先度に戻る（連続優先はしない）。
+選んだ key に属する **dispatch 可能なイベントをキュー内の到着順のまますべて** 1 束にする（他 key のイベントはキューに残す）。これが Issue #67 ルール 4 の「まとめ方」であり、continuation とは別概念。
+
+dispatch 完了後、Driver は `lastDispatchedSourceKey` を束の key にセットし `continuationConsumed = false` にする。continuation は **`worker:*` dispatch の直後のみ** arm され、次の 1 回の select で worker key が選ばれたとき `continuationConsumed = true` になる。permission / operator dispatch 後は worker continuation は適用しない。
 
 ### フォーマット
 
