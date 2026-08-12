@@ -32,10 +32,11 @@ conductor セッションには性質の異なる出力が混在する。
 │  ConductorSession                                           │
 │    emit(SessionLogEvent) ──► SessionLogger                  │
 │                                  │                          │
-│                    ┌─────────────┼─────────────┐            │
-│                    ▼             ▼             ▼            │
-│              HarnessSink   DialogueSink   ObservationSink   │
-│              (stderr)      (stdout, TTY)  (stderr)          │
+│         ┌────────────────────────┼────────────────────┐   │
+│         ▼                        ▼                    ▼   │
+│   HarnessSink            DisplaySink          ObservationSink│
+│   (stderr)          reducer → backend         (stderr)    │
+│                     (stdout dialogue, TTY)                  │
 │                                  │                          │
 │                                  └────► snapshot()          │
 │                                        → 終了 JSON          │
@@ -52,7 +53,7 @@ conductor セッションには性質の異なる出力が混在する。
 | `operator> …` / `conductor> …` | TTY（または `ENSEMBLE_OPERATOR_MESSAGE` で interactive 判定） |
 | **SessionSummary** JSON | セッション終了時（常に 1 行 JSON） |
 
-非 TTY では DialogueSink を付けない。stdout は **終了 JSON のみ**（e2e / パイプ向け）。
+非 TTY では DisplaySink の dialogue 出力は無効（noop backend）。stdout は **終了 JSON のみ**（e2e / パイプ向け）。
 
 ### stderr
 
@@ -93,7 +94,10 @@ CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（
 ```typescript
 const logger = new SessionLogger({ issueUrl, repoRoot });
 logger.subscribe(createHarnessSink());
-logger.subscribe(createDialogueSink()); // TTY のみ
+logger.subscribe(createObservationSink());
+logger.subscribe(createSessionDisplaySink({
+  backend: selectSessionDisplayBackend({ interactive }),
+}));
 
 await runIssueSession({ sessionLogger: logger, ... });
 ```
@@ -119,11 +123,13 @@ await runIssueSession({ sessionLogger: logger, ... });
 
 | 関数 | ファイル | 役割 |
 |------|----------|------|
-| `createHarnessSink()` | `packages/cli/src/session-sinks.ts` | stderr `[harness]` |
-| `createDialogueSink()` | 同上 | stdout `operator>` / `conductor>` |
+| `createHarnessSink()` | `packages/cli/src/session-sinks.ts` | stderr `[harness]`（state 外） |
 | `createObservationSink()` | 同上 | stderr `[open question]` 等のセッション観測 |
+| `createSessionDisplaySink()` | `packages/cli/src/display/` | `SessionLogEvent` → reducer → `SessionDisplayBackend` |
+| `selectSessionDisplayBackend()` | 同上 | interactive 時は string backend（現行 Dialogue 相当）、非 interactive は noop |
+| `createDialogueSink()` | `session-sinks.ts` | 低レベル stdout 整形（string backend 内部で利用可） |
 
-DialogueSink は `conductor.send` で `status === 'error'` のとき、応答テキストの代わりに再入力を促すメッセージを出す（model blocked 等）。
+表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question を保持する。#54 TUI（Ink）は後続 Issue で同じ reducer / backend 契約に載せる。
 
 ---
 
@@ -196,8 +202,9 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 | `packages/core/src/conductor/session/session-logger.ts` | `SessionLogger`, 型定義 |
 | `packages/core/src/acp/acp-process.ts` | worker 子プロセス spawn・stderr capture |
 | `packages/core/src/conductor/conductor-session.ts` | `emit` 配線、`snapshot()` で終了 |
-| `packages/cli/src/session-sinks.ts` | Harness / Dialogue sink |
+| `packages/cli/src/session-sinks.ts` | Harness / Observation / Dialogue sink |
+| `packages/cli/src/display/` | 表示 state・reducer・DisplaySink |
 | `packages/cli/src/format-session-summary.ts` | 終了 JSON 整形 |
-| `packages/cli/src/index.ts` | sink 購読と interactive 判定 |
+| `packages/cli/src/issue-command.ts` | sink 購読と interactive 判定 |
 
-テスト: `session-logger.test.ts`, `session-sinks.test.ts`, `acp-process.test.ts`
+テスト: `session-logger.test.ts`, `session-sinks.test.ts`, `session-display-reducer.test.ts`, `acp-process.test.ts`
