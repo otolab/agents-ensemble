@@ -38,11 +38,21 @@ describe('createIssueSessionTuiHost', () => {
     }
   });
 
-  it('starts Ink render and exposes display backend', () => {
+  it('starts Ink render and exposes display backend with activity log', () => {
     const host = createIssueSessionTuiHost();
 
     expect(mockRender).toHaveBeenCalledTimes(1);
+    expect(host.telemetrySink).toBeTypeOf('function');
 
+    host.displayBackend.render(
+      INITIAL_SESSION_DISPLAY_STATE,
+      INITIAL_SESSION_DISPLAY_STATE,
+      {
+        type: 'operator.input',
+        conductorTurn: 1,
+        text: 'hello',
+      },
+    );
     host.displayBackend.render(
       {
         ...INITIAL_SESSION_DISPLAY_STATE,
@@ -59,6 +69,13 @@ describe('createIssueSessionTuiHost', () => {
         workerFailures: 0,
       },
     );
+
+    host.telemetrySink({
+      type: 'harness.worker.bootstrap.started',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'worker-1',
+    });
 
     host.dispose();
     expect(mockUnmount).toHaveBeenCalledTimes(1);

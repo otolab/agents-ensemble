@@ -3,6 +3,7 @@ import TextInput from 'ink-text-input';
 import { useSyncExternalStore, useState } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
+import { formatActivityLogLine } from './activity-log.js';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
@@ -31,22 +32,21 @@ function WorkerStatusPane({
   );
 }
 
-function ConductorPane({
-  conductorOutput,
-  operatorLines,
+function ActivityLogPane({
+  activityLog,
 }: {
-  conductorOutput: string | null;
-  operatorLines: string[];
+  activityLog: TuiViewSnapshot['activityLog'];
 }) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={1} flexGrow={1}>
-      <Text bold>Conductor</Text>
-      {operatorLines.map((line, index) => (
-        <Text key={`op-${index}`} color="yellow">
-          operator&gt; {line}
-        </Text>
-      ))}
-      <Text>{conductorOutput ?? '(応答待ち)'}</Text>
+      <Text bold>Session</Text>
+      {activityLog.length === 0 ? (
+        <Text dimColor>(活動ログなし)</Text>
+      ) : (
+        activityLog.map((entry, index) => (
+          <Text key={`log-${index}`}>{formatActivityLogLine(entry)}</Text>
+        ))
+      )}
     </Box>
   );
 }
@@ -94,19 +94,15 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
 
   return (
     <Box flexDirection="column" height={process.stdout.rows ?? 24}>
-      {snapshot.postLoopWaiting ? (
-        <Text color="blueBright">
-          自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。
-        </Text>
-      ) : null}
       <WorkerStatusPane workers={snapshot.displayState.workers} />
-      <ConductorPane
-        conductorOutput={snapshot.displayState.conductorOutput}
-        operatorLines={snapshot.operatorLines}
-      />
+      <ActivityLogPane activityLog={snapshot.activityLog} />
       <OpenQuestionsPane openQuestions={snapshot.displayState.openQuestions} />
       <Box flexDirection="column" borderStyle="single" borderColor="white" paddingX={1}>
-        <Text dimColor>{formatOperatorContextHint(snapshot.operatorContext)}</Text>
+        <Text dimColor>
+          {snapshot.postLoopWaiting
+            ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
+            : formatOperatorContextHint(snapshot.operatorContext)}
+        </Text>
         <Text>
           operator&gt;{' '}
           <TextInput value={inputValue} onChange={setInputValue} onSubmit={handleSubmit} />

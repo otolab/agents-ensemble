@@ -115,8 +115,12 @@ export async function executeIssueCommand(
   const useTui = interactive && isTty();
   const tuiHost = useTui ? createIssueSessionTuiHost() : undefined;
   const sessionLogger = new SessionLoggerCtor({ issueUrl, repoRoot });
-  sessionLogger.subscribe(createHarnessSink());
-  sessionLogger.subscribe(createObservationSink());
+  if (useTui) {
+    sessionLogger.subscribe(tuiHost!.telemetrySink);
+  } else {
+    sessionLogger.subscribe(createHarnessSink());
+    sessionLogger.subscribe(createObservationSink());
+  }
   sessionLogger.subscribe(
     createSessionDisplaySink({
       backend:

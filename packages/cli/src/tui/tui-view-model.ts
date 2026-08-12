@@ -1,10 +1,15 @@
 import type { OperatorInputContext } from '@agents-ensemble/core';
 import type { SessionDisplayState } from '../display/session-display-state.js';
 import { INITIAL_SESSION_DISPLAY_STATE } from '../display/session-display-state.js';
+import {
+  appendActivityLogEntry,
+  type ActivityLogEntry,
+  type ActivityLogLabel,
+} from './activity-log.js';
 
 export interface TuiViewSnapshot {
   displayState: SessionDisplayState;
-  operatorLines: string[];
+  activityLog: ActivityLogEntry[];
   postLoopWaiting: boolean;
   operatorContext: OperatorInputContext | undefined;
 }
@@ -13,19 +18,19 @@ export interface TuiViewModel {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => TuiViewSnapshot;
   setDisplayState: (state: SessionDisplayState) => void;
-  appendOperatorLine: (text: string) => void;
+  appendActivityLog: (label: ActivityLogLabel, text: string) => void;
   setPostLoopWaiting: (waiting: boolean) => void;
   setOperatorContext: (context: OperatorInputContext | undefined) => void;
 }
 
 export function createTuiViewModel(): TuiViewModel {
   let displayState = INITIAL_SESSION_DISPLAY_STATE;
-  let operatorLines: string[] = [];
+  let activityLog: ActivityLogEntry[] = [];
   let postLoopWaiting = false;
   let operatorContext: OperatorInputContext | undefined;
   let snapshot: TuiViewSnapshot = {
     displayState,
-    operatorLines,
+    activityLog,
     postLoopWaiting,
     operatorContext,
   };
@@ -34,7 +39,7 @@ export function createTuiViewModel(): TuiViewModel {
   const rebuildSnapshot = () => {
     snapshot = {
       displayState,
-      operatorLines,
+      activityLog,
       postLoopWaiting,
       operatorContext,
     };
@@ -61,8 +66,12 @@ export function createTuiViewModel(): TuiViewModel {
       displayState = state;
       notify();
     },
-    appendOperatorLine(text) {
-      operatorLines = [...operatorLines, text];
+    appendActivityLog(label, text) {
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return;
+      }
+      activityLog = appendActivityLogEntry(activityLog, { label, text: trimmed });
       notify();
     },
     setPostLoopWaiting(waiting) {

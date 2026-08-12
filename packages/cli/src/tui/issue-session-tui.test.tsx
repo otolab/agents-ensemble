@@ -10,13 +10,13 @@ describe('IssueSessionTui', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders four panes with worker, conductor, open questions, and input', () => {
+  it('renders four panes with worker, session log, open questions, and input', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({
       workers: {
         implementer: { kind: 'implementer', status: 'running' },
       },
-      conductorOutput: 'conductor says hi',
+      conductorOutput: null,
       openQuestions: [
         {
           id: 'inq-1',
@@ -28,7 +28,8 @@ describe('IssueSessionTui', () => {
         },
       ],
     });
-    viewModel.appendOperatorLine('operator ping');
+    viewModel.appendActivityLog('operator', 'operator ping');
+    viewModel.appendActivityLog('conductor', 'conductor says hi');
 
     const { lastFrame } = render(
       <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
@@ -37,17 +38,15 @@ describe('IssueSessionTui', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Workers');
     expect(frame).toContain('implementer');
-    expect(frame).toContain('running');
-    expect(frame).toContain('Conductor');
-    expect(frame).toContain('conductor says hi');
-    expect(frame).toContain('operator ping');
+    expect(frame).toContain('Session');
+    expect(frame).toContain('[operator] operator ping');
+    expect(frame).toContain('[conductor] conductor says hi');
     expect(frame).toContain('Open questions');
     expect(frame).toContain('inq-1');
-    expect(frame).toContain('Approve?');
     expect(frame).toContain('operator>');
   });
 
-  it('shows post-loop waiting banner', () => {
+  it('shows post-loop hint in input area', () => {
     const viewModel = createTuiViewModel();
     viewModel.setPostLoopWaiting(true);
 
@@ -55,7 +54,7 @@ describe('IssueSessionTui', () => {
       <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
     );
 
-    expect(lastFrame() ?? '').toContain('自律作業が一段落しました');
+    expect(lastFrame() ?? '').toContain('post-loop 待機中');
   });
 
   it('shows empty-state placeholders when no session activity yet', () => {
@@ -67,7 +66,7 @@ describe('IssueSessionTui', () => {
 
     const frame = lastFrame() ?? '';
     expect(frame).toContain('(待機中)');
-    expect(frame).toContain('(応答待ち)');
+    expect(frame).toContain('(活動ログなし)');
     expect(frame).toContain('(未回答なし)');
   });
 });

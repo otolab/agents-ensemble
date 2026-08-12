@@ -1,14 +1,21 @@
 import { render } from 'ink';
-import type { OperatorInputBinding, OperatorInputBindingApi } from '@agents-ensemble/core';
+import type {
+  OperatorInputBinding,
+  OperatorInputBindingApi,
+  SessionLogSink,
+} from '@agents-ensemble/core';
 import type { SessionLogEvent } from '@agents-ensemble/core';
 import type { SessionDisplayBackend } from '../display/session-display-backend.js';
+import { formatConductorActivityBody } from '../session-log-lines.js';
 import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
+import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 
 const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
 
 export interface IssueSessionTuiHost {
   displayBackend: SessionDisplayBackend;
+  telemetrySink: SessionLogSink;
   bindOperatorInput: OperatorInputBinding;
   notifyReprompt: () => void;
   dispose: () => void;
@@ -22,10 +29,12 @@ function createInkDisplayBackend(
       viewModel.setDisplayState(state);
 
       if (event.type === 'operator.input') {
-        viewModel.appendOperatorLine(event.text);
+        viewModel.appendActivityLog('operator', event.text);
       }
-      if (event.type === 'session.post_loop_wait') {
-        viewModel.setPostLoopWaiting(true);
+
+      const conductorBody = formatConductorActivityBody(event);
+      if (conductorBody) {
+        viewModel.appendActivityLog('conductor', conductorBody);
       }
     },
   };
@@ -88,6 +97,7 @@ export function createIssueSessionTuiHost(): IssueSessionTuiHost {
 
   const inkDisplayBackend = createInkDisplayBackend(viewModel);
   const bindOperatorInput = createBindTuiOperatorInput(viewModel, onSubmitRef, apiRef);
+  const telemetrySink = createTuiTelemetrySink(viewModel);
 
   return {
     displayBackend: {
@@ -98,6 +108,7 @@ export function createIssueSessionTuiHost(): IssueSessionTuiHost {
         }
       },
     },
+    telemetrySink,
     bindOperatorInput,
     notifyReprompt: () => {
       if (apiRef.current) {

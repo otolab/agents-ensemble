@@ -37,6 +37,8 @@ conductor セッションには性質の異なる出力が混在する。
 │   HarnessSink            DisplaySink          ObservationSink│
 │   (stderr)          reducer → backend         (stderr)    │
 │                     (Ink TUI or stdout)                   │
+│   TTY 時は Harness/Observation を stderr に出さず、      │
+│   TuiTelemetrySink → 活動ログ（Session ペイン）へ       │
 │                                  │                          │
 │                                  └────► snapshot()          │
 │                                        → 終了 JSON          │
@@ -57,15 +59,15 @@ conductor セッションには性質の異なる出力が混在する。
 
 ### stderr
 
-| prefix | 内容 |
-|--------|------|
-| `[harness]` | `SessionLogger` → HarnessSink（worktree / send / worker round 等） |
-| `[open question]` | `open.question.enqueued` → ObservationSink |
-| `[operator answer]` | `escalation.recorded` → ObservationSink |
-| `[worktree]` | `session.worktree.notice` → ObservationSink（`--worktree in-repo`） |
-| `[continue]` | `session.continue` → ObservationSink（`--continue` 再開時） |
+| prefix | 内容 | 条件 |
+|--------|------|------|
+| `[harness]` | `SessionLogger` → HarnessSink（worktree / send / worker round 等） | **非 TTY のみ**（TTY + Ink 時は活動ログへ） |
+| `[open question]` | `open.question.enqueued` → ObservationSink | **非 TTY のみ** |
+| `[operator answer]` | `escalation.recorded` → ObservationSink | **非 TTY のみ** |
+| `[worktree]` | `session.worktree.notice` → ObservationSink | **非 TTY のみ** |
+| `[continue]` | `session.continue` → ObservationSink | **非 TTY のみ** |
 
-harness は **開発者向け**。オペレータの会話 UI には出さない。
+TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の Session ペイン（活動ログ）に `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor 応答は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同ペインに追記する（末尾 100 行 windowing）。
 
 ### 終了 JSON（SessionSummary）
 
@@ -123,8 +125,9 @@ await runIssueSession({ sessionLogger: logger, ... });
 
 | 関数 | ファイル | 役割 |
 |------|----------|------|
-| `createHarnessSink()` | `packages/cli/src/session-sinks.ts` | stderr `[harness]`（state 外） |
-| `createObservationSink()` | 同上 | stderr `[open question]` 等のセッション観測 |
+| `createHarnessSink()` | `packages/cli/src/session-sinks.ts` | stderr `[harness]`（非 TTY） |
+| `createObservationSink()` | 同上 | stderr 観測（非 TTY） |
+| `createTuiTelemetrySink()` | `packages/cli/src/tui/` | TTY Ink 活動ログ（harness + observation） |
 | `createSessionDisplaySink()` | `packages/cli/src/display/` | `SessionLogEvent` → reducer → `SessionDisplayBackend` |
 | `selectSessionDisplayBackend()` | 同上 | interactive かつ非 TTY 時は string backend、TTY は Ink host、非 interactive は noop |
 | `createDialogueSink()` | `session-sinks.ts` | 低レベル stdout 整形（string backend が `operator.input` / `conductor.send` で利用） |

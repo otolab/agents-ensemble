@@ -3,16 +3,19 @@ import { describe, expect, it, vi } from 'vitest';
 const mockTuiHost = vi.hoisted(() => {
   const bindOperatorInput = vi.fn(() => () => {});
   const displayBackend = { render: vi.fn() };
+  const telemetrySink = vi.fn();
   const notifyReprompt = vi.fn();
   const dispose = vi.fn();
   return {
     bindOperatorInput,
     displayBackend,
+    telemetrySink,
     notifyReprompt,
     dispose,
     createIssueSessionTuiHost: vi.fn(() => ({
       bindOperatorInput,
       displayBackend,
+      telemetrySink,
       notifyReprompt,
       dispose,
     })),
@@ -283,6 +286,65 @@ describe('executeIssueCommand maxTurns wiring', () => {
       expect.not.objectContaining({
         onPostLoopWait: expect.any(Function),
       }),
+    );
+  });
+
+  it('subscribes TUI telemetry sink instead of stderr harness/observation when TTY', async () => {
+    mockTuiHost.createIssueSessionTuiHost.mockClear();
+    const subscribe = vi.fn();
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe,
+      emit: vi.fn(),
+    }));
+
+    await executeIssueCommand('https://github.com/org/repo/issues/1', baseOptions, {
+      isOperatorInputInteractive: () => true,
+      isOperatorInputTty: () => true,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(subscribe).toHaveBeenCalledWith(mockTuiHost.telemetrySink);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(
+      subscribe.mock.calls.every(
+        (call) =>
+          call[0] === mockTuiHost.telemetrySink || typeof call[0] === 'function',
+      ),
+    ).toBe(true);
+  });
+
+  it('subscribes stderr harness and observation sinks when non-TTY interactive', async () => {
+    mockTuiHost.createIssueSessionTuiHost.mockClear();
+    const subscribe = vi.fn();
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe,
+      emit: vi.fn(),
+    }));
+
+    await executeIssueCommand('https://github.com/org/repo/issues/1', baseOptions, {
+      isOperatorInputInteractive: () => true,
+      isOperatorInputTty: () => false,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(mockTuiHost.createIssueSessionTuiHost).not.toHaveBeenCalled();
+    expect(subscribe).toHaveBeenCalledTimes(3);
+    expect(subscribe.mock.calls.some((call) => call[0] === mockTuiHost.telemetrySink)).toBe(
+      false,
     );
   });
 
