@@ -264,6 +264,13 @@ export async function runConductorSession(
       }
       const pending = permissionPipeline.pending.get(requestId);
       if (pending) {
+        const workerLabel =
+          workerSession.runtime.resolveWorkerLabel(workerId) ?? workerId;
+        sessionLogger.emit({
+          type: 'permission.pending',
+          permission: pending,
+          workerLabel,
+        });
         eventQueue.enqueue({ type: 'permission.pending', permission: pending });
       }
       return null;

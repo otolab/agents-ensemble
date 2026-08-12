@@ -1,4 +1,7 @@
-import type { SessionLogEvent } from '@agents-ensemble/core';
+import {
+  formatPermissionSummaryForOperator,
+  type SessionLogEvent,
+} from '@agents-ensemble/core';
 
 /** harness sink と TUI 活動ログで共有する行本文（prefix なし）。 */
 export function formatHarnessLogBody(event: SessionLogEvent): string | undefined {
@@ -19,6 +22,10 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return `worker.bootstrap.failed name=${event.name} kind=${event.kind} error=${event.error}`;
     case 'operator.input':
       return `operator.input turn=${event.conductorTurn} bytes=${event.text.length}`;
+    case 'permission.pending':
+      return formatPermissionSummaryForOperator(event.permission, {
+        workerLabel: event.workerLabel,
+      });
     case 'conductor.send': {
       let line = `conductor.send n=${event.sendCount} status=${event.status} workerDone=${event.workerDispatches} workerFailed=${event.workerFailures}`;
       if (event.status === 'error' && event.error) {
