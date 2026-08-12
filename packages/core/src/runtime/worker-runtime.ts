@@ -11,14 +11,14 @@ import {
   closeWorkerAcpSession,
   type ConnectWorkerAcpFn,
 } from '../dispatch/worker-acp-session.js';
-import type { WorkerRoundKind } from '../dispatch/worker-dispatch.js';
+import type { WorkerPromptSource } from '../dispatch/worker-dispatch.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import type {
   SendWorkerMessageOptions,
   SendWorkerMessageResult,
 } from './send-worker-message.js';
 import type {
-  WorkerBootstrapTelemetry,
+  WorkerPromptTelemetry,
   WorkerStartedInfo,
   WorkerStartParams,
 } from './types.js';
@@ -33,21 +33,21 @@ export interface WorkerRuntimeOptions {
   spawn?: SpawnAcpProcessOptions;
   /** integration の共有 bridge 注入時は false。 */
   ownsWorkerAcpConnections?: boolean;
-  onBootstrapTelemetry?: (event: WorkerBootstrapTelemetry) => void;
+  onPromptTelemetry?: (event: WorkerPromptTelemetry) => void;
 }
 
 interface ResidentWorker {
   workerId: string;
   started: WorkerStartedInfo;
   attached: AttachedWorker;
-  state: 'idle' | 'prompting';
+  state: 'idle' | 'processing';
   queue: string[];
   /** `session/cancel` 応答待ちの新指示。 */
   preemptInstruction?: string;
   cancelInFlight: boolean;
 }
 
-interface BootstrappingWorker {
+interface AttachingWorker {
   workerId: string;
   name: string;
   kind: string;
@@ -61,18 +61,18 @@ interface FailedWorker {
 }
 
 export class WorkerRuntime {
-  private readonly prompting = new Map<string, WorkerStartedInfo>();
+  private readonly processing = new Map<string, WorkerStartedInfo>();
   private readonly residents = new Map<string, ResidentWorker>();
-  private readonly bootstrapping = new Map<string, BootstrappingWorker>();
+  private readonly attaching = new Map<string, AttachingWorker>();
   private readonly failedWorkers = new Map<string, FailedWorker>();
   private readonly idleResolvers = new Set<() => void>();
-  private bootstrapInFlight = 0;
+  private attachInFlight = 0;
 
   constructor(private readonly options: WorkerRuntimeOptions) {}
 
-  /** 進行中の prompt ラウンド数 + bootstrap 中（conductor ループ用）。 */
+  /** 進行中の prompt ラウンド数 + attach 中（conductor ループ用）。 */
   get runningCount(): number {
-    return this.prompting.size + this.bootstrapInFlight;
+    return this.processing.size + this.attachInFlight;
   }
 
   /** attach 済み worker 数。 */
@@ -80,9 +80,9 @@ export class WorkerRuntime {
     return this.residents.size;
   }
 
-  /** bootstrap 中（attach または bootstrap prompt 実行中を含む）の worker 数。 */
-  get bootstrapInFlightCount(): number {
-    return this.bootstrapInFlight;
+  /** ACP attach 中（init prompt 前の接続フェーズ）の worker 数。 */
+  get attachInFlightCount(): number {
+    return this.attachInFlight;
   }
 
   listAttached(): AttachedWorker[] {
@@ -94,14 +94,14 @@ export class WorkerRuntime {
   }
 
   listRunning(): WorkerStartedInfo[] {
-    return [...this.prompting.values()];
+    return [...this.processing.values()];
   }
 
-  /** attach 済み・bootstrap 中・失敗済み worker の harness 状態一覧。 */
+  /** attach 済み・attach 中・失敗済み worker の harness 状態一覧。 */
   listWorkerStatuses(): WorkerStatusSummary[] {
     const names = new Set<string>([
       ...this.residents.keys(),
-      ...this.bootstrapping.keys(),
+      ...this.attaching.keys(),
       ...this.failedWorkers.keys(),
     ]);
     return [...names].map((name) => this.summarizeWorkerStatus(name));
@@ -116,9 +116,9 @@ export class WorkerRuntime {
       }
     }
 
-    for (const bootstrapping of this.bootstrapping.values()) {
-      if (bootstrapping.workerId === workerId) {
-        return bootstrapping.kind;
+    for (const attaching of this.attaching.values()) {
+      if (attaching.workerId === workerId) {
+        return attaching.kind;
       }
     }
 
@@ -128,7 +128,7 @@ export class WorkerRuntime {
       }
     }
 
-    for (const started of this.prompting.values()) {
+    for (const started of this.processing.values()) {
       if (started.workerId === workerId) {
         return started.kind;
       }
@@ -140,7 +140,7 @@ export class WorkerRuntime {
   getWorkerStatus(name: string): WorkerStatusDetail | undefined {
     if (
       !this.residents.has(name) &&
-      !this.bootstrapping.has(name) &&
+      !this.attaching.has(name) &&
       !this.failedWorkers.has(name)
     ) {
       return undefined;
@@ -152,7 +152,7 @@ export class WorkerRuntime {
       return {
         ...summary,
         workerId:
-          this.bootstrapping.get(name)?.workerId ??
+          this.attaching.get(name)?.workerId ??
           this.failedWorkers.get(name)?.workerId,
         queuePreview: [],
         preemptPending: false,
@@ -172,7 +172,7 @@ export class WorkerRuntime {
   start(params: WorkerStartParams): string {
     const workerId = randomUUID();
     const started: WorkerStartedInfo = { workerId, ...params };
-    void this.bootstrap(started);
+    void this.attachAndInit(started);
     return workerId;
   }
 
@@ -200,7 +200,7 @@ export class WorkerRuntime {
       };
     }
 
-    if (resident.state === 'prompting') {
+    if (resident.state === 'processing') {
       if (options?.preempt) {
         resident.queue.length = 0;
         resident.preemptInstruction = text;
@@ -219,12 +219,12 @@ export class WorkerRuntime {
       };
     }
 
-    void this.executeRound(resident, text);
+    void this.executeRound(resident, text, 'conductor');
     return { status: 'sent', worker: name };
   }
 
   async waitForIdle(): Promise<void> {
-    if (this.prompting.size === 0 && this.bootstrapInFlight === 0) return;
+    if (this.processing.size === 0 && this.attachInFlight === 0) return;
     await new Promise<void>((resolve) => {
       this.idleResolvers.add(resolve);
     });
@@ -251,12 +251,12 @@ export class WorkerRuntime {
       };
     }
 
-    const bootstrapping = this.bootstrapping.get(name);
-    if (bootstrapping) {
+    const attaching = this.attaching.get(name);
+    if (attaching) {
       return {
-        name: bootstrapping.name,
-        kind: bootstrapping.kind,
-        state: 'bootstrapping',
+        name: attaching.name,
+        kind: attaching.kind,
+        state: 'attaching',
         queueDepth: 0,
       };
     }
@@ -269,22 +269,27 @@ export class WorkerRuntime {
     return {
       name: resident.attached.name,
       kind: resident.attached.kind,
-      state: resident.state,
+      state: resident.state === 'processing' ? 'processing' : 'idle',
       queueDepth: resident.queue.length,
       worktreePath: resident.started.worktree.path,
       acpSessionId: resident.attached.session.sessionId,
     };
   }
 
-  private async bootstrap(started: WorkerStartedInfo): Promise<void> {
-    this.bootstrapInFlight++;
-    this.bootstrapping.set(started.name, {
+  private emitPromptTelemetry(event: WorkerPromptTelemetry): void {
+    this.options.onPromptTelemetry?.(event);
+  }
+
+  private async attachAndInit(started: WorkerStartedInfo): Promise<void> {
+    this.attachInFlight++;
+    this.attaching.set(started.name, {
       workerId: started.workerId,
       name: started.name,
       kind: started.kind,
     });
-    this.options.onBootstrapTelemetry?.({
+    this.emitPromptTelemetry({
       phase: 'started',
+      source: 'harness',
       workerId: started.workerId,
       name: started.name,
       kind: started.kind,
@@ -315,7 +320,7 @@ export class WorkerRuntime {
         cancelInFlight: false,
       };
       this.residents.set(started.name, resident);
-      this.bootstrapping.delete(started.name);
+      this.attaching.delete(started.name);
 
       const prompt = buildWorkerAttachPrompt(
         {
@@ -330,10 +335,10 @@ export class WorkerRuntime {
         attached.session,
       );
 
-      await this.executeRound(resident, prompt, 'bootstrap');
+      await this.executeRound(resident, prompt, 'harness');
     } catch (error) {
       this.residents.delete(started.name);
-      this.bootstrapping.delete(started.name);
+      this.attaching.delete(started.name);
       const message = error instanceof Error ? error.message : String(error);
       this.failedWorkers.set(started.name, {
         workerId: started.workerId,
@@ -341,8 +346,9 @@ export class WorkerRuntime {
         kind: started.kind,
         error: message,
       });
-      this.options.onBootstrapTelemetry?.({
+      this.emitPromptTelemetry({
         phase: 'failed',
+        source: 'harness',
         workerId: started.workerId,
         name: started.name,
         kind: started.kind,
@@ -350,7 +356,7 @@ export class WorkerRuntime {
       });
       this.options.inbox.publishWorkerFailed(started, error);
     } finally {
-      this.bootstrapInFlight--;
+      this.attachInFlight--;
       this.resolveIdleIfReady();
     }
   }
@@ -358,11 +364,20 @@ export class WorkerRuntime {
   private async executeRound(
     resident: ResidentWorker,
     prompt: string,
-    roundKind: WorkerRoundKind = 'instruction',
+    source: WorkerPromptSource,
   ): Promise<void> {
-    resident.state = 'prompting';
+    resident.state = 'processing';
     resident.cancelInFlight = false;
-    this.prompting.set(resident.workerId, resident.started);
+    this.processing.set(resident.workerId, resident.started);
+    if (source === 'conductor') {
+      this.emitPromptTelemetry({
+        phase: 'started',
+        source,
+        workerId: resident.workerId,
+        name: resident.started.name,
+        kind: resident.started.kind,
+      });
+    }
     let skipCompletion = false;
     try {
       const result = await runAttachedWorkerPrompt(
@@ -370,33 +385,32 @@ export class WorkerRuntime {
         prompt,
         this.options.inbox.createPermissionHandler(resident.workerId),
       );
-      const dispatch = { ...result, roundKind };
+      const dispatch = { ...result, source };
       skipCompletion =
         result.promptResult.stopReason === 'cancelled' &&
         resident.preemptInstruction !== undefined;
       if (!skipCompletion) {
-        if (roundKind === 'bootstrap') {
-          this.options.onBootstrapTelemetry?.({
-            phase: 'completed',
-            workerId: resident.workerId,
-            name: resident.started.name,
-            kind: resident.started.kind,
-            stopReason: result.promptResult.stopReason,
-          });
-        }
+        this.emitPromptTelemetry({
+          phase: 'completed',
+          source,
+          workerId: resident.workerId,
+          name: resident.started.name,
+          kind: resident.started.kind,
+          stopReason: result.promptResult.stopReason,
+        });
         this.options.inbox.publishWorkerCompleted(resident.workerId, dispatch);
       }
     } catch (error) {
       if (!resident.preemptInstruction) {
-        if (roundKind === 'bootstrap') {
-          this.options.onBootstrapTelemetry?.({
-            phase: 'failed',
-            workerId: resident.workerId,
-            name: resident.started.name,
-            kind: resident.started.kind,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        const message = error instanceof Error ? error.message : String(error);
+        this.emitPromptTelemetry({
+          phase: 'failed',
+          source,
+          workerId: resident.workerId,
+          name: resident.started.name,
+          kind: resident.started.kind,
+          error: message,
+        });
         this.options.inbox.publishWorkerFailed(resident.started, error);
       }
     } finally {
@@ -404,11 +418,11 @@ export class WorkerRuntime {
       const preempt = resident.preemptInstruction;
       if (preempt) {
         resident.preemptInstruction = undefined;
-        await this.executeRound(resident, preempt);
+        await this.executeRound(resident, preempt, 'conductor');
       } else {
         const next = resident.queue.shift();
         if (next) {
-          await this.executeRound(resident, next);
+          await this.executeRound(resident, next, 'conductor');
         } else {
           resident.state = 'idle';
         }
@@ -417,12 +431,12 @@ export class WorkerRuntime {
   }
 
   private finishPromptRound(workerId: string): void {
-    this.prompting.delete(workerId);
+    this.processing.delete(workerId);
     this.resolveIdleIfReady();
   }
 
   private resolveIdleIfReady(): void {
-    if (this.prompting.size === 0 && this.bootstrapInFlight === 0) {
+    if (this.processing.size === 0 && this.attachInFlight === 0) {
       for (const resolve of this.idleResolvers) {
         resolve();
       }

@@ -26,7 +26,7 @@ describe('formatSessionEventForConductor', () => {
     ).toBe('continue please');
   });
 
-  it('formats worker.completed with YAML block for instruction rounds', () => {
+  it('formats worker.completed with unified heading for conductor-sourced rounds', () => {
     const message = formatSessionEventForConductor({
       type: 'worker.completed',
       result: {
@@ -39,18 +39,19 @@ describe('formatSessionEventForConductor', () => {
           stopReason: 'end_turn',
           responseText: 'pong',
         },
-        roundKind: 'instruction',
+        source: 'conductor',
       },
     });
 
-    expect(message).toContain('## worker 作業ラウンド完了');
+    expect(message).toContain('## worker ラウンド完了');
+    expect(message).not.toContain('作業ラウンド');
     expect(message).toContain('```yaml');
     expect(message).toContain('name: ping-1');
     expect(message).toContain('stopReason: end_turn');
     expect(message).toContain('pong');
   });
 
-  it('formats worker.completed bootstrap with distinct heading', () => {
+  it('formats worker.completed harness init prompt with same heading and source in YAML', () => {
     const message = formatSessionEventForConductor({
       type: 'worker.completed',
       result: {
@@ -63,12 +64,13 @@ describe('formatSessionEventForConductor', () => {
           stopReason: 'end_turn',
           responseText: 'ready',
         },
-        roundKind: 'bootstrap',
+        source: 'harness',
       },
     });
 
-    expect(message).toContain('## worker bootstrap 完了');
-    expect(message).toContain('roundKind: bootstrap');
+    expect(message).toContain('## worker ラウンド完了');
+    expect(message).not.toContain('bootstrap');
+    expect(message).toContain('source: harness');
   });
 
   it('formats permission.pending with YAML block', () => {

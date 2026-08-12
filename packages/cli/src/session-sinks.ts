@@ -57,9 +57,9 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
       case 'harness.worktree.removed':
       case 'harness.worktree.remove_skipped':
       case 'harness.worktree.remove_failed':
-      case 'harness.worker.bootstrap.started':
-      case 'harness.worker.bootstrap.completed':
-      case 'harness.worker.bootstrap.failed':
+      case 'harness.worker.prompt.started':
+      case 'harness.worker.prompt.completed':
+      case 'harness.worker.prompt.failed':
       case 'worker.round':
       case 'worker.failed':
       case 'worker.process.stderr':

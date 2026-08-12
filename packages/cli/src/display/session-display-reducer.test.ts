@@ -38,14 +38,15 @@ const OPEN_QUESTION = {
 };
 
 describe('reduceDisplayState', () => {
-  it('tracks worker bootstrap lifecycle as running then idle', () => {
+  it('tracks worker prompt lifecycle as running then idle', () => {
     let state = INITIAL_SESSION_DISPLAY_STATE;
 
     state = reduceDisplayState(state, {
-      type: 'harness.worker.bootstrap.started',
+      type: 'harness.worker.prompt.started',
       name: 'implementer',
       kind: 'implementer',
       workerId: 'w-1',
+      source: 'harness',
     });
     expect(state.workers.implementer).toEqual({
       kind: 'implementer',
@@ -53,10 +54,11 @@ describe('reduceDisplayState', () => {
     });
 
     state = reduceDisplayState(state, {
-      type: 'harness.worker.bootstrap.completed',
+      type: 'harness.worker.prompt.completed',
       name: 'implementer',
       kind: 'implementer',
       workerId: 'w-1',
+      source: 'harness',
       stopReason: 'end_turn',
     });
     expect(state.workers.implementer).toEqual({
@@ -65,12 +67,13 @@ describe('reduceDisplayState', () => {
     });
   });
 
-  it('marks worker failed on bootstrap failure', () => {
+  it('marks worker failed on prompt failure', () => {
     const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
-      type: 'harness.worker.bootstrap.failed',
+      type: 'harness.worker.prompt.failed',
       name: 'reviewer',
       kind: 'reviewer',
       workerId: 'w-2',
+      source: 'harness',
       error: 'attach failed',
     });
 
@@ -80,10 +83,36 @@ describe('reduceDisplayState', () => {
     });
   });
 
-  it('sets worker idle after instruction round without running state', () => {
+  it('tracks conductor-sourced prompt as running then idle', () => {
+    let state = INITIAL_SESSION_DISPLAY_STATE;
+
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.prompt.started',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      source: 'conductor',
+    });
+    expect(state.workers.implementer?.status).toBe('running');
+
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.prompt.completed',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      source: 'conductor',
+      stopReason: 'end_turn',
+    });
+    expect(state.workers.implementer).toEqual({
+      kind: 'implementer',
+      status: 'idle',
+    });
+  });
+
+  it('sets worker idle after instruction round via worker.round fallback', () => {
     const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'worker.round',
-      dispatch: { ...TEST_DISPATCH, roundKind: 'instruction' },
+      dispatch: { ...TEST_DISPATCH, source: 'conductor' },
     });
 
     expect(state.workers.implementer).toEqual({
@@ -238,16 +267,18 @@ describe('reduceDisplayState', () => {
     let state = INITIAL_SESSION_DISPLAY_STATE;
 
     state = reduceDisplayState(state, {
-      type: 'harness.worker.bootstrap.started',
+      type: 'harness.worker.prompt.started',
       name: 'implementer',
       kind: 'implementer',
       workerId: 'w-1',
+      source: 'harness',
     });
     state = reduceDisplayState(state, {
-      type: 'harness.worker.bootstrap.completed',
+      type: 'harness.worker.prompt.completed',
       name: 'implementer',
       kind: 'implementer',
       workerId: 'w-1',
+      source: 'harness',
       stopReason: 'end_turn',
     });
     state = reduceDisplayState(state, {

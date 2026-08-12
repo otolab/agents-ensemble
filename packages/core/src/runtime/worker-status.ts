@@ -1,9 +1,9 @@
 /** harness 上の worker 状態（conductor 向け読み取り専用照会）。 */
 
 export type WorkerHarnessState =
-  | 'bootstrapping'
+  | 'attaching'
   | 'idle'
-  | 'prompting'
+  | 'processing'
   | 'failed';
 
 export interface WorkerStatusSummary {
@@ -27,7 +27,8 @@ export interface WorkerStatusDetail extends WorkerStatusSummary {
 export interface WorkerSessionStatusSummary {
   runningCount: number;
   attachedCount: number;
-  bootstrapInFlight: number;
+  /** ACP attach 中の worker 数（init prompt 前の接続フェーズ）。 */
+  attachInFlight: number;
   workerFailureCount: number;
   workers: WorkerStatusSummary[];
 }

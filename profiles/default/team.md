@@ -65,9 +65,9 @@ conductor の仕事は、この連鎖が途切れないようにすること。�
 1. **着手前に、Issue と作業環境を把握する**
    - この Issue で何を達成するのか（受け入れ条件、背景、決まっている方針）
    - 使えるもの: 作業 / レビュー Skill、作業対象リポジトリの規約・設計文書、前例となる PR
-   - worker の bootstrap（attach）完了を含め、**いま全員が指示待ちになっているか**を確認する
+   - `list_workers` で worker の状態（idle / processing / attaching / failed）を確認する。**待機ゲートではない**（変化は SessionEvent で届く）
    - 把握したものを implementer / reviewer に渡す。**Skill を見つけるのは conductor の仕事**
-2. **implementer に今回のゴールを指示する** — 対象 Issue、スコープ、使う Skill（implementer はすでにいる。**bootstrap 完了だけでは着手しない。初回の作業指示は conductor が出す**）
+2. **implementer に今回のゴールを指示する** — 対象 Issue、スコープ、使う Skill（implementer はすでにいる。**init prompt 完了だけでは着手しない。初回の作業指示は conductor が出す**）
 3. **進捗を確かめ、PR まで持っていく** — 適切な進捗度に達したら PR 作成を依頼する
 4. **reviewer に検証を指示し、観点を注入する** — 対象 PR、見てほしい観点（ライフサイクル、利用者向け文書など）を明示する（reviewer はすでにいる。PR ができるまで待機していてよい）
 5. **レビュー水準を合わせる** — 甘い判定なら観点を足して再判定させる（やり方は後述の照合）
@@ -96,7 +96,7 @@ worker は、スコープ外・破壊的・環境に触る操作の許可を con
 - **判定できるなら判定する** — Issue のスコープ内で、作業に必要で、影響が worktree に収まるもの
 - **把握できなければ人間に渡す** — スコープ外、リポジトリ外への影響、取り消しにくい操作、判断材料が足りないもの
 - 材料が足りないまま許諾しない
-- **bootstrap（attach）ラウンド中でも同様**。bootstrap 完了を待ってから permission を見ない（[ADR 0016](../../docs/adr/0016-bootstrap-permission-conductor-wait.md)）
+- **init prompt（attach）ラウンド中でも同様**。init prompt 完了を待ってから permission を見ない（[ADR 0016](../../docs/adr/0016-bootstrap-permission-conductor-wait.md)）
 
 ### 人間へのエスカレーション
 
@@ -150,7 +150,7 @@ worker は、スコープ外・破壊的・環境に触る操作の許可を con
 |---|---|
 | 手順の正本 | 指示された Skill があればそれ。無ければ Issue と作業対象リポジトリの規約・設計文書 |
 | worktree | 1 Issue 1 worktree。作業ブランチを切る（既にあればそこに入る） |
-| 着手のタイミング | **conductor の初回作業指示を待つ**（bootstrap 完了は着手ではない） |
+| 着手のタイミング | **conductor の初回作業指示を待つ**（init prompt 完了は着手ではない） |
 | Issue に報告するタイミング | 方針を決めたとき / 想定と違ったとき / 詰まったとき。**着手前でよい**。1 コメント 1 話題で小さく |
 | テストの深さ | 主ユースケース（正常系だけでなく停止・再開・失敗系）が縦に通るか |
 | スコープ超過を見つけた | 自分で広げない。**判断を conductor に返す** |
@@ -263,14 +263,14 @@ Issue の起票と方針決定は conductor 側に寄せる。ただし**気づ�
 
 ### 参考フロー（固定ではない）
 
-**運用ループの起点は conductor。** セッション開始時に implementer / reviewer は常駐するが、bootstrap（attach）直後は全員指示待ち。**最初の状態確認と着手指示は conductor が出す。** implementer が自発的に実作業を始める想定ではない。
+**運用ループの起点は conductor。** セッション開始時に implementer / reviewer は常駐するが、init prompt（attach）直後は全員指示待ち。**最初の状態確認と着手指示は conductor が出す。** implementer が自発的に実作業を始める想定ではない。
 
 ```
 [セッション開始]
-  harness: worker bootstrap（attach + 待機 prompt）— 実作業ではない
+  harness: worker init prompt（attach + 待機 prompt）— 実作業ではない
   implementer / reviewer: 常駐・指示待ち
                                                     │
-conductor   : Issue / 作業環境の把握 ──► bootstrap 完了の確認
+conductor   : Issue / 作業環境の把握 ──► list_workers で状態確認（待機ゲートではない）
             : implementer に初回指示（ゴール・Skill・スコープ）
                                                     │
 implementer : 指示に従い実装・テスト・文書 → Issue 報告 → PR 作成

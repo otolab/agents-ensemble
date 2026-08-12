@@ -73,15 +73,15 @@ function createMockBridge(close = vi.fn()): AcpBridge {
 }
 
 describe('WorkerRuntime', () => {
-  it('attaches workers and reports bootstrap completion via inbox', async () => {
+  it('attaches workers and reports harness init prompt completion via inbox', async () => {
     const inbox = new ConductorInbox();
-    const completed: Array<{ workerId: string; roundKind?: string }> = [];
-    const bootstrapTelemetry: string[] = [];
+    const completed: Array<{ workerId: string; source?: string }> = [];
+    const promptTelemetry: string[] = [];
     inbox.subscribe((message) => {
       if (message.type === 'worker.completed') {
         completed.push({
           workerId: message.workerId,
-          roundKind: message.result.roundKind,
+          source: message.result.source,
         });
       }
     });
@@ -90,8 +90,8 @@ describe('WorkerRuntime', () => {
     const runtime = new WorkerRuntime({
       inbox,
       connectAcp: async () => createMockBridge(close),
-      onBootstrapTelemetry: (event) => {
-        bootstrapTelemetry.push(event.phase);
+      onPromptTelemetry: (event) => {
+        promptTelemetry.push(event.phase);
       },
     });
     const workerId = runtime.start({
@@ -113,8 +113,8 @@ describe('WorkerRuntime', () => {
 
     expect(runtime.runningCount).toBe(0);
     expect(runtime.attachedCount).toBe(1);
-    expect(completed).toEqual([{ workerId, roundKind: 'bootstrap' }]);
-    expect(bootstrapTelemetry).toEqual(['started', 'completed']);
+    expect(completed).toEqual([{ workerId, source: 'harness' }]);
+    expect(promptTelemetry).toEqual(['started', 'completed']);
     expect(close).not.toHaveBeenCalled();
 
     await runtime.shutdown();
@@ -122,7 +122,7 @@ describe('WorkerRuntime', () => {
     expect(runtime.attachedCount).toBe(0);
   });
 
-  it('queues sendWorkerMessage while prompting and drains after round completes', async () => {
+  it('queues sendWorkerMessage while processing and drains after round completes', async () => {
     const inbox = new ConductorInbox();
     const prompts: string[] = [];
     let resolveFirst: (() => void) | undefined;
@@ -183,16 +183,16 @@ describe('WorkerRuntime', () => {
     await runtime.shutdown();
   });
 
-  it('emits bootstrap.failed telemetry when attach fails', async () => {
+  it('emits prompt.failed telemetry when attach fails', async () => {
     const inbox = new ConductorInbox();
-    const bootstrapTelemetry: Array<{ phase: string; error?: string }> = [];
+    const promptTelemetry: Array<{ phase: string; error?: string }> = [];
     const runtime = new WorkerRuntime({
       inbox,
       connectAcp: async () => {
         throw new Error('attach failed');
       },
-      onBootstrapTelemetry: (event) => {
-        bootstrapTelemetry.push({ phase: event.phase, error: event.error });
+      onPromptTelemetry: (event) => {
+        promptTelemetry.push({ phase: event.phase, error: event.error });
       },
     });
 
@@ -211,7 +211,7 @@ describe('WorkerRuntime', () => {
     await runtime.waitForIdle();
     await inbox.drain();
 
-    expect(bootstrapTelemetry).toEqual([
+    expect(promptTelemetry).toEqual([
       { phase: 'started' },
       { phase: 'failed', error: 'attach failed' },
     ]);
@@ -225,9 +225,9 @@ describe('WorkerRuntime', () => {
     ]);
   });
 
-  it('emits bootstrap.failed telemetry when bootstrap prompt fails', async () => {
+  it('emits prompt.failed telemetry when init prompt fails', async () => {
     const inbox = new ConductorInbox();
-    const bootstrapTelemetry: Array<{ phase: string; error?: string }> = [];
+    const promptTelemetry: Array<{ phase: string; error?: string }> = [];
     const runtime = new WorkerRuntime({
       inbox,
       connectAcp: async () =>
@@ -237,8 +237,8 @@ describe('WorkerRuntime', () => {
           promptSession: vi.fn().mockRejectedValue(new Error('prompt failed')),
           close: vi.fn().mockResolvedValue(undefined),
         }) as unknown as AcpBridge,
-      onBootstrapTelemetry: (event) => {
-        bootstrapTelemetry.push({ phase: event.phase, error: event.error });
+      onPromptTelemetry: (event) => {
+        promptTelemetry.push({ phase: event.phase, error: event.error });
       },
     });
 
@@ -257,7 +257,7 @@ describe('WorkerRuntime', () => {
     await runtime.waitForIdle();
     await inbox.drain();
 
-    expect(bootstrapTelemetry).toEqual([
+    expect(promptTelemetry).toEqual([
       { phase: 'started' },
       { phase: 'failed', error: 'prompt failed' },
     ]);

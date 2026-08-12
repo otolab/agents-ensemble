@@ -19,7 +19,7 @@ export function formatIssueSessionSummaryJson(summary: SessionSummary): string {
       workerResponses: summary.workerDispatches.map((dispatch) => ({
         name: dispatch.name,
         kind: dispatch.kind,
-        roundKind: dispatch.roundKind ?? 'instruction',
+        source: dispatch.source ?? 'conductor',
         responseText: dispatch.promptResult.responseText,
         stopReason: dispatch.promptResult.stopReason,
       })),

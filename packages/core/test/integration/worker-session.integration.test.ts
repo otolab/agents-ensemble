@@ -48,7 +48,7 @@ describe('WorkerSession integration', () => {
     expect(session.startedWorkerIds).toHaveLength(1);
     expect(completed).toHaveLength(1);
     expect(completed[0]?.name).toBe('ping-1');
-    expect(completed[0]?.roundKind).toBe('bootstrap');
+    expect(completed[0]?.source).toBe('harness');
     expect(completed[0]?.promptResult.responseText).toBe('pong');
     expect(session.runtime.attachedCount).toBe(1);
     expect(session.runtime.getAttached('ping-1')?.session.sessionId).toBeTruthy();
@@ -96,9 +96,9 @@ describe('WorkerSession integration', () => {
     await session.inbox.drain();
 
     expect(completed).toHaveLength(2);
-    expect(completed[0]?.roundKind).toBe('bootstrap');
+    expect(completed[0]?.source).toBe('harness');
     expect(completed[1]?.prompt).toBe('second round task');
-    expect(completed[1]?.roundKind).toBe('instruction');
+    expect(completed[1]?.source).toBe('conductor');
     expect(completed[1]?.promptResult.responseText).toBe('pong');
 
     await session.stop();

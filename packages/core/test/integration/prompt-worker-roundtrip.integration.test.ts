@@ -9,6 +9,7 @@ import type { Profile } from '../../src/profile/types.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
   isWorkerCompletedConductorMessage,
+  extractWorkerCompletedSource,
 } from './helpers/conductor-session-assertions.js';
 import {
   createInProcessAcpBridge,
@@ -152,13 +153,13 @@ describe('prompt_worker roundtrip integration', () => {
     const workerCompletedMessages = messages.filter(isWorkerCompletedConductorMessage);
     expect(workerCompletedMessages).toHaveLength(3);
     expect(
-      workerCompletedMessages.filter((message) =>
-        message.includes('## worker bootstrap 完了'),
+      workerCompletedMessages.filter(
+        (message) => extractWorkerCompletedSource(message) === 'harness',
       ),
     ).toHaveLength(1);
     expect(
-      workerCompletedMessages.filter((message) =>
-        message.includes('## worker 作業ラウンド完了'),
+      workerCompletedMessages.filter(
+        (message) => extractWorkerCompletedSource(message) === 'conductor',
       ),
     ).toHaveLength(2);
   });

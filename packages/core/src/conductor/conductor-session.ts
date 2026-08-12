@@ -296,7 +296,7 @@ export async function runConductorSession(
       sessionUsageTracker.recordWorkerRound({
         name: result.name,
         kind: result.kind,
-        roundKind: result.roundKind,
+        source: result.source,
         prompt: result.prompt,
         promptResult: result.promptResult,
       });
@@ -309,31 +309,34 @@ export async function runConductorSession(
       sessionLogger.emit({ type: 'worker.failed', failure });
       eventQueue.enqueue({ type: 'worker.failed', failure });
     },
-    onBootstrapTelemetry: (event) => {
+    onPromptTelemetry: (event) => {
       switch (event.phase) {
         case 'started':
           sessionLogger.emit({
-            type: 'harness.worker.bootstrap.started',
+            type: 'harness.worker.prompt.started',
             name: event.name,
             kind: event.kind,
             workerId: event.workerId,
+            source: event.source,
           });
           break;
         case 'completed':
           sessionLogger.emit({
-            type: 'harness.worker.bootstrap.completed',
+            type: 'harness.worker.prompt.completed',
             name: event.name,
             kind: event.kind,
             workerId: event.workerId,
+            source: event.source,
             stopReason: event.stopReason!,
           });
           break;
         case 'failed':
           sessionLogger.emit({
-            type: 'harness.worker.bootstrap.failed',
+            type: 'harness.worker.prompt.failed',
             name: event.name,
             kind: event.kind,
             workerId: event.workerId,
+            source: event.source,
             error: event.error!,
           });
           break;

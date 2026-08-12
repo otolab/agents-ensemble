@@ -22,7 +22,7 @@ export function createWorkerStatusTools(
   return {
     list_workers: {
       description:
-        'List attached workers and harness summary (idle/prompting/bootstrapping/failed, queue depth, runningCount). Use for operator status questions — do not prompt_worker for status checks.',
+        'List attached workers and harness summary (idle/processing/attaching/failed, queue depth, runningCount). Use for operator status questions — do not prompt_worker for status checks.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -77,7 +77,7 @@ function buildSessionSummary(
   return {
     runningCount: options.runtime.runningCount,
     attachedCount: options.runtime.attachedCount,
-    bootstrapInFlight: options.runtime.bootstrapInFlightCount,
+    attachInFlight: options.runtime.attachInFlightCount,
     workerFailureCount: failures.length,
     workers: options.runtime.listWorkerStatuses(),
   };

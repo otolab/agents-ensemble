@@ -59,7 +59,7 @@ function formatUsageRound(round: SessionUsageRound) {
     agentKind: round.agentKind,
     agentName: round.agentName ?? null,
     workerKind: round.workerKind ?? null,
-    roundKind: round.roundKind ?? null,
+    source: round.source ?? null,
     runId: round.runId ?? null,
     modelId: round.modelId ?? null,
     stopReason: round.stopReason ?? null,

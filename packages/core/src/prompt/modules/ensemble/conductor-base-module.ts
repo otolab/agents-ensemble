@@ -26,8 +26,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- harnessからのイベントの多くは機械的な状態変化の通知です',
         '  - 作業のきっかけというより、状況の把握として扱えば十分な場合が多いです',
         '  - 例えば、workerからの作業報告が後で通知として届くことがあります',
-        '- `## worker bootstrap 完了` — harness が attach + 待機 prompt を自動送信しただけ。実作業開始ではない',
-        '- `## worker 作業ラウンド完了` — 自分が `prompt_worker` した 1 ラウンドの終了。タスク完了の意味ではない',
+        '- `## worker ラウンド完了` — worker の 1 `session/prompt` ラウンド終了。`source: harness` は init prompt（作業開始ではない）、`source: conductor` は自分が `prompt_worker` したラウンド。タスク完了の意味ではない',
         '- `## permission 判断待ち` — worker の操作許可が保留中',
       ],
     },
@@ -36,7 +35,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
       title: 'メトリクス（オペレータへの状態説明用）',
       items: [
         '- `sendCount` — 完了した conductor ターン数（`agent.send` 回数）',
-        '- `workerDispatches` / `workerFailures` — 完了・失敗した worker ラウンド数（bootstrap 含む）',
+        '- `workerDispatches` / `workerFailures` — 完了・失敗した worker ラウンド数（init prompt 含む）',
         '- `autonomousTurns` / `maxTurns` — 自律ループのターン制限',
         '- LLM トークン累計・利用率 — `get_session_usage`（harness 集計。SDK / ACP 未報告の worker ラウンドは推定値）',
       ],
@@ -68,7 +67,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
       title: 'worker 状態照会',
       items: [
         '- オペレータの「起動状況」「誰が動いているか」等は **作業指示ではない**。`list_workers` / `get_worker_status` で harness 状態を読む',
-        '- 一覧: `list_workers`（attach 済み・bootstrap 中・失敗、キュー深さ、`runningCount`、失敗件数）',
+        '- 一覧: `list_workers`（attach 済み・attach 中・失敗、キュー深さ、`runningCount`、失敗件数）',
         '- 詳細: `get_worker_status`（1 worker のキュー要約、preempt/cancel 中か）',
         '- 状態照会に `prompt_worker` を使わない。Issue / PR を読まず tool 結果で答える',
       ],
