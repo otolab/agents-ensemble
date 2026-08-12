@@ -37,6 +37,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- `sendCount` — 完了した conductor ターン数（`agent.send` 回数）',
         '- `workerDispatches` / `workerFailures` — 完了・失敗した worker ラウンド数（bootstrap 含む）',
         '- `autonomousTurns` / `maxTurns` — 自律ループのターン制限',
+        '- LLM トークン累計・利用率 — `get_session_usage`（harness 集計。SDK / ACP 未報告の worker ラウンドは推定値）',
       ],
     },
     {
@@ -49,6 +50,16 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- 進行中の worker を優先割り込みする: `prompt_worker` の `preempt: true`（既定は busy 時キュー）',
         '- worker はセッション開始時に起動済み。追加の worker を起動する方法は用意されていない',
         '- worker からの返答はメッセージとして届く',
+      ],
+    },
+    {
+      type: 'subsection',
+      title: 'LLM トークン使用量照会',
+      items: [
+        '- オペレータの「トークン量」「コンテキスト上限の xx%」等は **作業指示ではない**。`get_session_usage` / `get_usage` で harness 集計を読む',
+        '- セッション累計: `get_session_usage`（input/output 累計、agent 別内訳、limit 既知時の利用率）',
+        '- 直近ラウンド: `get_usage`（省略時は直近、または `agent: conductor` / worker 名）',
+        '- 状態照会に `prompt_worker` を使わない。Issue / PR を読まず tool 結果で答える',
       ],
     },
     {

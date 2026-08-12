@@ -14,6 +14,7 @@ import { profileWorkersToSessionSpecs, sessionStateFromProfile } from '../profil
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
+import { createSessionUsageTools } from '../dispatch/session-usage-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
 import { parseIssueUrl, type IssueRef } from '../issue/issue-ref.js';
 import {
@@ -51,7 +52,9 @@ import {
   sessionSidecarPath,
   type SessionSidecar,
 } from '../session/session-sidecar.js';
-import type { OperatorInputBinding, OperatorInputContext } from './operator-input-binding.js';
+import type { SessionUsageSummary } from '../usage/types.js';
+import { SessionUsageTracker } from '../usage/session-usage-tracker.js';
+import type { OperatorInputBinding } from './operator-input-binding.js';
 import { submitOperatorInput } from './submit-operator-input.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
@@ -100,6 +103,8 @@ export interface RunConductorSessionOptions {
   workerWorktree?: WorktreeRef;
   /** integration の共有 bridge 注入時は false。 */
   ownsWorkerAcpConnections?: boolean;
+  /** テスト用。SDK が返さない context limit の代替（利用率算出用）。 */
+  contextLimitTokens?: number;
   onWorkerDispatched?: (result: WorkerDispatchResult) => void;
   onWorkerFailed?: (failure: WorkerFailureRecord) => void;
   /** `agent.send` 完了ごと（CLI 進捗ログ等）。 */
@@ -136,6 +141,8 @@ export interface ConductorSessionResult {
   workerFailures: WorkerFailureRecord[];
   escalations: EscalationRecord[];
   openQuestions: OpenQuestion[];
+  /** harness が蓄積した LLM usage サマリ（ラウンド無しのときは省略）。 */
+  sessionUsage?: SessionUsageSummary;
 }
 
 export async function runConductorSession(
@@ -224,6 +231,10 @@ export async function runConductorSession(
     });
   }
 
+  const sessionUsageTracker = new SessionUsageTracker({
+    contextLimitTokens: options.contextLimitTokens,
+  });
+
   const workerSession = new WorkerSession({
     issueUrl: options.issueUrl,
     ...(workerWorktree ? { worktree: workerWorktree } : {}),
@@ -258,6 +269,13 @@ export async function runConductorSession(
       return null;
     },
     onWorkerCompleted: (result) => {
+      sessionUsageTracker.recordWorkerRound({
+        name: result.name,
+        kind: result.kind,
+        roundKind: result.roundKind,
+        prompt: result.prompt,
+        promptResult: result.promptResult,
+      });
       sessionLogger.emit({ type: 'worker.round', dispatch: result });
       workerSessions.set(result.name, result.acpSessionId);
       eventQueue.enqueue({ type: 'worker.completed', result });
@@ -349,6 +367,11 @@ export async function runConductorSession(
     getWorkerFailures: () => sessionLogger.workerFailures,
   });
 
+  const sessionUsageTools = createSessionUsageTools({
+    tracker: sessionUsageTracker,
+    workerNames: activeProfile.workers.map((worker) => worker.name),
+  });
+
   const conductorOptions = {
     cwd: options.conductorCwd ?? process.cwd(),
     apiKey: options.apiKey,
@@ -360,6 +383,7 @@ export async function runConductorSession(
       ...resolvePermissionTools,
       ...promptWorkerTools,
       ...workerStatusTools,
+      ...sessionUsageTools,
     },
   };
 
@@ -518,12 +542,20 @@ export async function runConductorSession(
       status: ConductorSendResult['status'];
       result?: string;
       error?: ConductorSendResult['error'];
+      usage?: ConductorSendResult['usage'];
+      modelId?: string;
       workerDispatches: number;
       workerFailures: number;
       autonomousTurns: number;
     }): void {
       sendCount = info.sendCount;
       autonomousTurns = info.autonomousTurns;
+      sessionUsageTracker.recordConductorRound({
+        runId: info.runId,
+        status: info.status,
+        usage: info.usage,
+        modelId: info.modelId,
+      });
       sessionLogger.emit({
         type: 'conductor.send',
         sendCount: info.sendCount,
@@ -546,10 +578,13 @@ export async function runConductorSession(
 
     function buildResult(): ConductorSessionResult {
       sessionLogger.finish(stopReason);
+      const sessionUsage = sessionUsageTracker.getSessionSummary();
       return sessionLogger.snapshot({
         agentId: conductor.agentId,
         escalations,
         openQuestions: openQuestions.list(),
+        sessionUsage:
+          sessionUsage.totals.rounds > 0 ? sessionUsage : undefined,
       });
     }
   } finally {

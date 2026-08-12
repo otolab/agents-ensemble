@@ -238,6 +238,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 セッション開始 ──attach（待機 prompt）──► worker 常駐（agent acp プロセス + ACP session）
 conductor ──prompt_worker──► WorkerOutboundQueue ──sendWorkerMessage──► session/prompt
 conductor ──list_workers / get_worker_status──► WorkerRuntime（読み取り専用・イベント列に積まない）
+conductor ──get_session_usage / get_usage──────► SessionUsageTracker（読み取り専用・イベント列に積まない）
 worker    ──permission──────► ConductorInbox ──► SessionEventQueue ──► agent.send
 worker    ──Issue / PR 報告──► （非同期正本。harness 非経由）
 worker    ──ラウンド終了──────► worker.completed ──► SessionEventQueue ──► agent.send
@@ -247,6 +248,7 @@ ensemble 終了 ──stop────────► 全 worker bridge close
 - **常駐** = ensemble 中 `agent acp` プロセスを殺さない（bootstrap 後も bridge 保持）。
 - **sendWorkerMessage** = 既存 session への `session/prompt`（dispatch ではない）。
 - **`list_workers` / `get_worker_status`** = harness 上の worker 状態照会（読み取り専用）。`prompt_worker` は作業指示専用。オペレータの状態質問には状態照会ツールを使い、Issue / PR を読まず tool 結果で答える。返却は YAML。セッションイベント列には積まない（[Issue #70](https://github.com/otolab/agents-ensemble/issues/70)）。
+- **`get_session_usage` / `get_usage`** = harness が蓄積した LLM トークン使用量照会（読み取り専用）。conductor 各 `agent.send` は `@cursor/sdk` の `RunResult.usage`、worker 各 prompt は ACP 応答の `usage`（無い場合は prompt/response から推定、`source: estimated`）。コンテキスト上限は SDK 1.0.27 時点で取得不可のため既定は `limit: null`（[Issue #102](https://github.com/otolab/agents-ensemble/issues/102)）。返却は YAML。イベント列には積まない。
 - 同一 worker は ACP 制約により prompt **直列**（per-worker キュー）。worker 間は並行可。
 - **`worker.completed` は 1 ラウンドの終了**。進捗の正本は Issue / PR。
 

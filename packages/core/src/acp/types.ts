@@ -15,10 +15,21 @@ export interface SessionUpdateNotification {
   };
 }
 
+export interface LlmUsageSnapshot {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens?: number;
+  reasoningTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
 export interface PromptResult {
   stopReason: string;
   /** session/update から集約した agent 応答テキスト。 */
   responseText?: string;
+  /** ACP `session/prompt` 応答に含まれる場合のみ。 */
+  usage?: LlmUsageSnapshot;
 }
 
 export interface PermissionDecision {

@@ -6,9 +6,12 @@ import {
   type JsonRpcMessage,
 } from '../json-rpc.js';
 
+import type { LlmUsageSnapshot } from '../types.js';
+
 export interface FakeAcpPromptResult {
   stopReason: string;
   message?: string;
+  usage?: LlmUsageSnapshot;
 }
 
 export interface FakeAcpServerOptions {
@@ -157,7 +160,10 @@ export class FakeAcpServer {
           });
         }
 
-        this.respond(id, { stopReason: result.stopReason });
+        this.respond(id, {
+          stopReason: result.stopReason,
+          ...('usage' in result && result.usage ? { usage: result.usage } : {}),
+        });
         break;
       }
 

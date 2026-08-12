@@ -6,6 +6,7 @@ import {
   type RunResult,
   type SDKAgent,
   type SDKCustomTool,
+  type TokenUsage,
 } from '@cursor/sdk';
 import { ensureCursorSdkRipgrepPath } from './configure-cursor-sdk-env.js';
 import { CONDUCTOR_AUTH_HINT, resolveConductorApiKey } from './conductor-auth.js';
@@ -23,6 +24,8 @@ export interface ConductorSendResult {
   status: RunResult['status'];
   result?: string;
   error?: RunResult['error'];
+  usage?: TokenUsage;
+  modelId?: string;
 }
 
 export class ConductorAgent {
@@ -62,6 +65,8 @@ export class ConductorAgent {
         status: result.status,
         result: typeof result.result === 'string' ? result.result : undefined,
         error: result.error,
+        usage: result.usage ?? run.usage,
+        modelId: result.model?.id,
       };
     } catch (error) {
       if (error instanceof AuthenticationError) {
