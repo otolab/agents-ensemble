@@ -63,6 +63,49 @@ describe('ConductorAgent.send', () => {
     }
   });
 
+  it('forwards tool-call-started to callbacks', async () => {
+    const onToolCallStarted = vi.fn();
+    mockCreate.mockResolvedValue({
+      agentId: 'agent-1',
+      send: mockSend,
+      [Symbol.asyncDispose]: vi.fn(),
+    });
+    mockSend.mockImplementation(async (_prompt, options) => {
+      mockWait.mockImplementation(async () => {
+        options?.onDelta?.({
+          update: {
+            type: 'tool-call-started',
+            callId: 'call-1',
+            toolCall: { type: 'shell', args: { command: 'ls' } },
+          },
+        });
+        return {
+          status: 'finished',
+          result: 'done',
+        };
+      });
+      return { id: 'run-1', wait: mockWait };
+    });
+    mockWait.mockResolvedValue({
+      status: 'finished',
+      result: 'done',
+    });
+
+    const conductor = await ConductorAgent.create({ cwd: '/repo' });
+
+    try {
+      await conductor.send('hello', { onToolCallStarted });
+
+      expect(onToolCallStarted).toHaveBeenCalledWith({
+        runId: 'run-1',
+        tool: 'shell',
+        callId: 'call-1',
+      });
+    } finally {
+      await conductor.close();
+    }
+  });
+
   it('returns error result instead of throwing on AuthenticationError', async () => {
     mockCreate.mockResolvedValue({
       agentId: 'agent-1',

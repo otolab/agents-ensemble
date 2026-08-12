@@ -576,6 +576,14 @@ export async function runConductorSession(
             dispatchSource: info.dispatchSource,
           });
         },
+        onSendProgress: (info) => {
+          sessionLogger.emit({
+            type: 'conductor.send.progress',
+            sendCount: info.sendCount,
+            runId: info.runId,
+            tool: info.tool,
+          });
+        },
         onSendComplete: recordSendComplete,
         onOpenQuestionEnqueued: (question) => {
           sessionLogger.emit({ type: 'open.question.enqueued', question });

@@ -70,6 +70,12 @@ export type SessionLogEvent =
       dispatchSource?: string;
     }
   | {
+      type: 'conductor.send.progress';
+      sendCount: number;
+      runId: string;
+      tool: string;
+    }
+  | {
       type: 'conductor.send';
       sendCount: number;
       runId: string;
@@ -194,6 +200,7 @@ export class SessionLogger {
       case 'harness.worker.prompt.failed':
       case 'operator.input':
       case 'conductor.send.started':
+      case 'conductor.send.progress':
       case 'permission.pending':
       case 'worker.process.stderr':
       case 'open.question.enqueued':

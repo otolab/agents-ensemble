@@ -77,7 +77,7 @@ describe('sendConductorWithReconnect', () => {
       cwd: '/repo',
       modelId: 'composer-2.5',
     });
-    expect(secondSend).toHaveBeenCalledWith('hello');
+    expect(secondSend).toHaveBeenCalledWith('hello', expect.any(Object));
     expect(onReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
     expect(result.status).toBe('finished');
     expect(handle.conductor.send).toBe(secondSend);

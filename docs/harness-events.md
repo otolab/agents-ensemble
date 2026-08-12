@@ -33,6 +33,7 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `harness.worktree.remove_failed` | `git worktree remove` 失敗（best-effort） | `[harness] worktree.remove_failed path=... branch=... error=...` | なし |
 | `operator.input` | オペレータ発話をキューに載せる直前 | `[harness] operator.input turn=N bytes=...` | なし |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
+| `conductor.send.progress` | conductor ターン中の SDK ツール開始 | `[harness] conductor.send.progress n=N runId=... tool=...` | なし |
 | `conductor.send` | 各 `agent.send` 完了後 | `[harness] conductor.send n=N status=... workerDone=... workerFailed=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
@@ -148,6 +149,9 @@ prompt_worker / sendWorkerMessage
 各 agent.send 開始
   conductor.send.started ───────────────────► stderr + TUI（conductor: thinking）
 
+各 agent.send 進行中（ツール開始）
+  conductor.send.progress ──────────────────► stderr
+
 各 agent.send 完了
   conductor.send ───────────────────────────► stderr + snapshot（末尾更新）+ TUI（conductor: idle）
 
@@ -194,7 +198,7 @@ conductor は `list_workers` の `attachInFlight` / `state: processing` 等を *
 
 | 名前 | 意味 |
 |------|------|
-| `sendCount` | 完了した `agent.send` 回数（conductor ターン数） |
+| `sendCount` | 完了した `agent.send` 回数（conductor ターン数）。`started` / `progress` の `n=` は同じ通し番号だが snapshot 更新は **完了時のみ** |
 | `workerDispatches` | 完了した worker ラウンド数（init prompt 含む） |
 | `workerFailures` | worker 失敗回数 |
 | `autonomousTurns` / `maxTurns` | 自律ループのターン制限（session-policy。詳細は architecture.md） |
@@ -203,7 +207,7 @@ conductor は `list_workers` の `attachInFlight` / `state: processing` 等を *
 
 | フィールド | harness イベントとの関係 |
 |------------|-------------------------|
-| `sendCount` | `conductor.send` の最終値 |
+| `sendCount` | `conductor.send` の最終値（`started` / `progress` では増えない） |
 | `workerDispatches` / CLI の `workerResponses` | 各 `worker.round` の要約（`source` 含む） |
 | `workerFailures` | 各 `worker.failed` |
 | `stopReason` | `session.stop` |

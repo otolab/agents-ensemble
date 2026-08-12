@@ -86,6 +86,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0014](0014-conductor-dispatch-batch-coalescing.md) | conductor イベント dispatch のバッチ化と優先度 | accepted |
 | [0015](0015-cli-tui-library.md) | CLI TUI ライブラリ選定（Ink） | accepted |
 | [0016](0016-bootstrap-permission-conductor-wait.md) | bootstrap 中 permission と conductor 自律待機のデッドロック | accepted |
+| [0017](0017-conductor-send-lifecycle-events.md) | conductor send ライフサイクルイベントと Driver 非同期化 | accepted |
 
 ## 追加するとき
 

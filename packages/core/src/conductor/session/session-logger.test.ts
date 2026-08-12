@@ -110,6 +110,52 @@ describe('SessionLogger', () => {
     expect(summary.stopReason).toBe('error');
   });
 
+  it('preserves started → progress → completed event order without snapshot side effects', () => {
+    const logger = new SessionLogger({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      repoRoot: '/repo',
+    });
+    const events: string[] = [];
+    logger.subscribe((event) => {
+      events.push(event.type);
+    });
+
+    logger.emit({
+      type: 'conductor.send.started',
+      sendCount: 1,
+      dispatchSource: 'operator',
+    });
+    logger.emit({
+      type: 'conductor.send.progress',
+      sendCount: 1,
+      runId: 'run-1',
+      tool: 'shell',
+    });
+    logger.emit({
+      type: 'conductor.send',
+      sendCount: 1,
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+      workerDispatches: 0,
+      workerFailures: 0,
+    });
+
+    expect(events).toEqual([
+      'conductor.send.started',
+      'conductor.send.progress',
+      'conductor.send',
+    ]);
+
+    const summary = logger.snapshot({
+      agentId: 'agent-1',
+      escalations: [],
+      openQuestions: [],
+    });
+    expect(summary.sendCount).toBe(1);
+    expect(summary.lastResult).toBe('done');
+  });
+
   it('unsubscribes sinks', () => {
     const logger = new SessionLogger({
       issueUrl: 'https://github.com/org/repo/issues/1',

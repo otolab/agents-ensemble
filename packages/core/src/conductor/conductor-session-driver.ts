@@ -38,6 +38,12 @@ export interface ConductorSendStartedInfo {
   dispatchSource?: string;
 }
 
+export interface ConductorSendProgressInfo {
+  sendCount: number;
+  runId: string;
+  tool: string;
+}
+
 export interface ConductorSendCompleteInfo {
   sendCount: number;
   runId: string;
@@ -69,6 +75,7 @@ export interface ConductorSessionDriverOptions {
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
+  onSendProgress?: (info: ConductorSendProgressInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
   onOpenQuestionEnqueued?: (question: OpenQuestion) => void;
   /** post-loop 再開時は初回 `agent.send`（system + ブリーフィング）を省略する。 */
@@ -104,16 +111,23 @@ export async function runConductorSessionDriver(
     runId: '',
     status: 'finished',
   };
+  let inFlightSend: Promise<ConductorSendResult> | undefined;
 
   if (!options.skipInitialSend) {
-    lastSendResult = await runInitialConductorSend({
-      issueUrl: options.issueUrl,
-      profile: options.profile,
+    lastSendResult = await runEventConductorSend({
+      message: await buildInitialConductorMessage({
+        issueUrl: options.issueUrl,
+        profile: options.profile,
+      }),
       conductorHandle: options.conductorHandle,
       sendReconnect: options.sendReconnect,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
+      sendCount: 0,
+      autonomousTurns: 1,
+      dispatchSource: 'initial',
       onSendStarted: options.onSendStarted,
+      onSendProgress: options.onSendProgress,
       onSendComplete: (info) => {
         sendCount = info.sendCount;
         lastDispatchesThisTurn = info.conductorDispatchesThisTurn;
@@ -125,6 +139,7 @@ export async function runConductorSessionDriver(
 
   while (true) {
     if (
+      !inFlightSend &&
       isMaxTurnsLimited(options.maxTurns) &&
       autonomousTurns >= options.maxTurns
     ) {
@@ -137,6 +152,27 @@ export async function runConductorSessionDriver(
         workerFailureCount: options.workerFailures.length,
         lastResult: lastSendResult.result,
       }, options.onOpenQuestionEnqueued);
+    }
+
+    if (inFlightSend) {
+      lastSendResult = await inFlightSend;
+      inFlightSend = undefined;
+
+      const loopState = buildIssueLoopStopInput({
+        autonomousTurns,
+        maxTurns: options.maxTurns,
+        lastSendResult,
+        dispatchesThisTurn: lastDispatchesThisTurn,
+        workerSession: options.workerSession,
+        permissionPipeline: options.permissionPipeline,
+        openQuestions: options.openQuestions,
+        continueOnConductorError: options.continueOnConductorError,
+      });
+      stopReason = resolveIssueLoopStopReason(loopState);
+      if (shouldStopIssueLoop(loopState)) {
+        break;
+      }
+      continue;
     }
 
     if (
@@ -188,7 +224,7 @@ export async function runConductorSessionDriver(
       autonomousTurns,
     );
     const { workerDispatches, workerFailures } = countWorkerOutcomesInBatch(batch);
-    lastSendResult = await runEventConductorSend({
+    inFlightSend = runEventConductorSend({
       message: formatSessionEventsForConductor(batch),
       conductorHandle: options.conductorHandle,
       sendReconnect: options.sendReconnect,
@@ -200,6 +236,7 @@ export async function runConductorSessionDriver(
       workerOutcomeDispatches: workerDispatches,
       workerOutcomeFailures: workerFailures,
       onSendStarted: options.onSendStarted,
+      onSendProgress: options.onSendProgress,
       onSendComplete: (info) => {
         sendCount = info.sendCount;
         lastDispatchesThisTurn = info.conductorDispatchesThisTurn;
@@ -208,22 +245,10 @@ export async function runConductorSessionDriver(
       },
     });
     dispatchBatchState = dispatchBatchStateAfterSend(selected.batch.sourceKey);
+  }
 
-    const loopState = buildIssueLoopStopInput({
-      autonomousTurns,
-      maxTurns: options.maxTurns,
-      lastSendResult,
-      dispatchesThisTurn: lastDispatchesThisTurn,
-      workerSession: options.workerSession,
-      permissionPipeline: options.permissionPipeline,
-      openQuestions: options.openQuestions,
-      continueOnConductorError: options.continueOnConductorError,
-    });
-    stopReason = resolveIssueLoopStopReason(loopState);
-
-    if (shouldStopIssueLoop(loopState)) {
-      break;
-    }
+  if (inFlightSend) {
+    lastSendResult = await inFlightSend;
   }
 
   return {
@@ -235,39 +260,20 @@ export async function runConductorSessionDriver(
   };
 }
 
-async function runInitialConductorSend(input: {
+async function buildInitialConductorMessage(input: {
   issueUrl: string;
   profile: Profile;
-  conductorHandle: ConductorAgentHandle;
-  sendReconnect: ConductorSendReconnectOptions;
-  workerDispatches: WorkerDispatchResult[];
-  workerFailures: WorkerFailureRecord[];
-  onSendStarted?: (info: ConductorSendStartedInfo) => void;
-  onSendComplete: (info: ConductorSendCompleteInfo) => void;
-}): Promise<ConductorSendResult> {
+}): Promise<string> {
   const issueContext = await fetchIssueContext(input.issueUrl);
-  const message = compileConductorSystemPrompt({
+  return compileConductorSystemPrompt({
     issueUrl: input.issueUrl,
     profile: input.profile,
     roleBootstrap: resolveAgentSystemPrompt('conductor', input.profile.agents),
     issueContext,
   });
-
-  return runEventConductorSend({
-    message,
-    conductorHandle: input.conductorHandle,
-    sendReconnect: input.sendReconnect,
-    workerDispatches: input.workerDispatches,
-    workerFailures: input.workerFailures,
-    sendCount: 0,
-    autonomousTurns: 1,
-    dispatchSource: 'initial',
-    onSendStarted: input.onSendStarted,
-    onSendComplete: input.onSendComplete,
-  });
 }
 
-async function runEventConductorSend(input: {
+function runEventConductorSend(input: {
   message: string;
   conductorHandle: ConductorAgentHandle;
   sendReconnect: ConductorSendReconnectOptions;
@@ -279,40 +285,51 @@ async function runEventConductorSend(input: {
   workerOutcomeDispatches?: number;
   workerOutcomeFailures?: number;
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
+  onSendProgress?: (info: ConductorSendProgressInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
 }): Promise<ConductorSendResult> {
   const workersBefore = input.workerDispatches.length;
   const failuresBefore = input.workerFailures.length;
+  const nextSendCount = input.sendCount + 1;
 
   input.onSendStarted?.({
-    sendCount: input.sendCount + 1,
+    sendCount: nextSendCount,
     dispatchSource: input.dispatchSource,
   });
 
-  const sendResult = await sendConductorWithReconnect(
+  return sendConductorWithReconnect(
     input.conductorHandle,
     input.message,
-    input.sendReconnect,
-  );
-  const sendCount = input.sendCount + 1;
-  const conductorDispatches = input.workerDispatches.length - workersBefore;
-  const conductorFailures = input.workerFailures.length - failuresBefore;
+    {
+      ...input.sendReconnect,
+      onToolCallStarted: (info) => {
+        input.onSendProgress?.({
+          sendCount: nextSendCount,
+          runId: info.runId,
+          tool: info.tool,
+        });
+      },
+    },
+  ).then((sendResult) => {
+    const conductorDispatches = input.workerDispatches.length - workersBefore;
+    const conductorFailures = input.workerFailures.length - failuresBefore;
 
-  input.onSendComplete({
-    sendCount,
-    runId: sendResult.runId,
-    status: sendResult.status,
-    result: sendResult.result,
-    error: sendResult.error,
-    usage: sendResult.usage,
-    modelId: sendResult.modelId,
-    workerDispatches: input.workerOutcomeDispatches ?? conductorDispatches,
-    workerFailures: input.workerOutcomeFailures ?? conductorFailures,
-    conductorDispatchesThisTurn: conductorDispatches + conductorFailures,
-    autonomousTurns: input.autonomousTurns,
+    input.onSendComplete({
+      sendCount: nextSendCount,
+      runId: sendResult.runId,
+      status: sendResult.status,
+      result: sendResult.result,
+      error: sendResult.error,
+      usage: sendResult.usage,
+      modelId: sendResult.modelId,
+      workerDispatches: input.workerOutcomeDispatches ?? conductorDispatches,
+      workerFailures: input.workerOutcomeFailures ?? conductorFailures,
+      conductorDispatchesThisTurn: conductorDispatches + conductorFailures,
+      autonomousTurns: input.autonomousTurns,
+    });
+
+    return sendResult;
   });
-
-  return sendResult;
 }
 
 interface DispatchBatchResult {
