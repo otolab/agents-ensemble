@@ -1,7 +1,7 @@
-/** Worker 状態ペインの固定高さ。 */
+/** Worker 状態ペインの固定高さ（`issue-session-tui` と `computeOperatorInputCursorY` で共有）。 */
 export const WORKER_PANE_HEIGHT = 6;
 
-/** Open questions ペインの固定高さ。 */
+/** Open questions ペインの固定高さ（同上）。 */
 export const OPEN_QUESTIONS_PANE_HEIGHT = 4;
 
 /** 入力ペインの枠線（上下）行数。 */

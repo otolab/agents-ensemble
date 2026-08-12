@@ -28,20 +28,12 @@ function usePaneContentWidth(): number {
   });
 }
 
-function WrappedTextLines({
-  text,
-  width,
-  dimColor = false,
-}: {
-  text: string;
-  width: number;
-  dimColor?: boolean;
-}) {
+function WrappedTextLines({ text, width }: { text: string; width: number }) {
   const lines = wrapTextToWidth(text, width);
   return (
     <>
       {lines.map((line, index) => (
-        <Text key={`${index}-${line}`} wrap="wrap" dimColor={dimColor}>
+        <Text key={`${index}-${line}`} wrap="wrap">
           {line}
         </Text>
       ))}
@@ -142,6 +134,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   const contextHint = snapshot.postLoopWaiting
     ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
     : formatOperatorContextHint(snapshot.operatorContext);
+  // IME カーソル Y 算出用。表示は Ink の wrap="wrap"（折り返し幅が wrapTextToWidth と微妙に異なる可能性あり）
   const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
   const inputPaneHeight = INPUT_PANE_BORDER_ROWS + hintLineCount + 1;
   const inputCursorY = computeOperatorInputCursorY({
@@ -173,7 +166,9 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         paddingX={1}
         height={inputPaneHeight}
       >
-        <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
+        <Text dimColor wrap="wrap">
+          {contextHint}
+        </Text>
         <Text>
           {operatorPrompt}
           <ImeTextInput
