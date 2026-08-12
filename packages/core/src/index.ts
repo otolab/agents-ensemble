@@ -83,8 +83,13 @@ export {
   resolveInRepoWorkspace,
   createWorkerWorktree,
   listWorktrees,
+  removeWorkerWorktree,
 } from './worktree/worktree.js';
-export type { WorktreeRef, WorkerWorktreeMode } from './worktree/worktree.js';
+export type {
+  RemoveWorkerWorktreeResult,
+  WorktreeRef,
+  WorkerWorktreeMode,
+} from './worktree/worktree.js';
 
 export { buildWorkerPrompt } from './prompt/build-worker-prompt.js';
 export type { WorkerPromptOptions } from './prompt/build-worker-prompt.js';

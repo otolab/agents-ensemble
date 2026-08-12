@@ -17,6 +17,21 @@ export function createHarnessSink(options: HarnessSinkOptions = {}): SessionLogS
           `[harness] worktree path=${event.path} branch=${event.branch} mode=${event.mode}`,
         );
         break;
+      case 'harness.worktree.removed':
+        writeStderr(
+          `[harness] worktree.removed path=${event.path} branch=${event.branch}`,
+        );
+        break;
+      case 'harness.worktree.remove_skipped':
+        writeStderr(
+          `[harness] worktree.remove_skipped path=${event.path} branch=${event.branch} reason=${event.reason}`,
+        );
+        break;
+      case 'harness.worktree.remove_failed':
+        writeStderr(
+          `[harness] worktree.remove_failed path=${event.path} branch=${event.branch} error=${event.error}`,
+        );
+        break;
       case 'harness.worker.bootstrap.started':
         writeStderr(
           `[harness] worker.bootstrap.started name=${event.name} kind=${event.kind}`,
@@ -98,6 +113,9 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
         }
         break;
       case 'harness.worktree':
+      case 'harness.worktree.removed':
+      case 'harness.worktree.remove_skipped':
+      case 'harness.worktree.remove_failed':
       case 'harness.worker.bootstrap.started':
       case 'harness.worker.bootstrap.completed':
       case 'harness.worker.bootstrap.failed':
@@ -154,6 +172,9 @@ export function createObservationSink(
         );
         break;
       case 'harness.worktree':
+      case 'harness.worktree.removed':
+      case 'harness.worktree.remove_skipped':
+      case 'harness.worktree.remove_failed':
       case 'harness.worker.bootstrap.started':
       case 'harness.worker.bootstrap.completed':
       case 'harness.worker.bootstrap.failed':

@@ -107,6 +107,52 @@ export async function createWorkerWorktree(
   return { path, branch, issue };
 }
 
+export type RemoveWorkerWorktreeResult =
+  | { status: 'removed'; path: string; branch: string }
+  | { status: 'not_found' }
+  | { status: 'skipped_dirty'; path: string; branch: string }
+  | { status: 'failed'; path: string; branch: string; error: string };
+
+/**
+ * isolated worktree を削除する。存在しない場合は no-op。
+ * 未コミット変更がある場合は削除せず `skipped_dirty` を返す（`--force` は使わない）。
+ */
+export async function removeWorkerWorktree(
+  repoRoot: string,
+  issue: IssueRef,
+): Promise<RemoveWorkerWorktreeResult> {
+  const existing = await resolveWorkerWorktree(repoRoot, issue);
+  if (!existing) {
+    return { status: 'not_found' };
+  }
+
+  const dirty = await isWorktreeDirty(existing.path);
+  if (dirty) {
+    return {
+      status: 'skipped_dirty',
+      path: existing.path,
+      branch: existing.branch,
+    };
+  }
+
+  try {
+    await runGit(['worktree', 'remove', existing.path], repoRoot);
+    return {
+      status: 'removed',
+      path: existing.path,
+      branch: existing.branch,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      status: 'failed',
+      path: existing.path,
+      branch: existing.branch,
+      error: message,
+    };
+  }
+}
+
 interface ListedWorktree {
   path: string;
   branch: string;
@@ -203,6 +249,11 @@ async function resolveOriginDefaultBranch(
   }
 
   return 'main';
+}
+
+async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
+  const { stdout } = await runGit(['status', '--porcelain'], worktreePath);
+  return stdout.trim().length > 0;
 }
 
 async function gitBranchExists(repoRoot: string, branch: string): Promise<boolean> {

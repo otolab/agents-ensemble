@@ -14,9 +14,10 @@ import { profileWorkersToSessionSpecs, sessionStateFromProfile } from '../profil
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
-import { parseIssueUrl } from '../issue/issue-ref.js';
+import { parseIssueUrl, type IssueRef } from '../issue/issue-ref.js';
 import {
   resolveWorkerWorkspace,
+  removeWorkerWorktree,
   type WorkerWorktreeMode,
   type WorktreeRef,
 } from '../worktree/worktree.js';
@@ -392,6 +393,7 @@ export async function runConductorSession(
   const continueOnConductorError = options.continueOnConductorError ?? false;
   const waitForOperatorExit = options.waitForOperatorExit ?? false;
   let autonomousTurns = 0;
+  let operatorRequestedExit = false;
   let disposeOperatorInput: (() => void) | undefined;
   const postLoopGate = createOperatorPostLoopGate();
 
@@ -486,6 +488,9 @@ export async function runConductorSession(
       sessionLogger.emit({ type: 'session.post_loop_wait' });
       const postLoopAction = await postLoopGate.wait(shutdownSignal);
       if (postLoopAction === 'exit' || shutdownSignal.aborted) {
+        if (postLoopAction === 'exit' && !shutdownSignal.aborted) {
+          operatorRequestedExit = true;
+        }
         if (shutdownSignal.aborted) {
           stopReason = 'interrupted';
         }
@@ -539,6 +544,49 @@ export async function runConductorSession(
     rejectAllPendingPermissions(permissionPipeline, workerSession.inbox);
     await workerSession.stop();
     await conductor.close();
+    if (
+      operatorRequestedExit &&
+      stopReason !== 'interrupted' &&
+      workerWorktree &&
+      !workerWorktree.inRepo
+    ) {
+      await emitWorktreeRemoval(sessionLogger, options.repoRoot, issue);
+    }
+  }
+}
+
+async function emitWorktreeRemoval(
+  sessionLogger: SessionLogger,
+  repoRoot: string,
+  issue: IssueRef,
+): Promise<void> {
+  const result = await removeWorkerWorktree(repoRoot, issue);
+  switch (result.status) {
+    case 'removed':
+      sessionLogger.emit({
+        type: 'harness.worktree.removed',
+        path: result.path,
+        branch: result.branch,
+      });
+      break;
+    case 'skipped_dirty':
+      sessionLogger.emit({
+        type: 'harness.worktree.remove_skipped',
+        path: result.path,
+        branch: result.branch,
+        reason: 'dirty',
+      });
+      break;
+    case 'failed':
+      sessionLogger.emit({
+        type: 'harness.worktree.remove_failed',
+        path: result.path,
+        branch: result.branch,
+        error: result.error,
+      });
+      break;
+    case 'not_found':
+      break;
   }
 }
 

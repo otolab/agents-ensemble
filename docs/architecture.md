@@ -220,6 +220,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 - **自律実行** — session 内では Skill に沿って自走する。worker 同士は直接通信しない
 - **Issue / PR に報告** — 作業報告・状態は Issue コメント / PR に書き、他 worker が読む
 - **worktree に紐づく** — implementer は worktree を作成し、以降の worker は同じ Issue の worktree を共有する
+- **worktree のライフサイクル** — isolated モードではセッション開始時に `.ensemble/worktrees/issue-N` を作成（既存なら再利用）。TTY + post-loop で `/exit` 正常終了時に削除（未コミット変更がある場合は削除拒否）。`in-repo` では削除しない。ローカルブランチ `ensemble/issue-N` は残す
 - **新規 worktree のベース** — 可能なら `git fetch` 後の `origin` デフォルトブランチ（`origin/HEAD` または `main`）から `ensemble/issue-N` を切る。remote なし・fetch 失敗時はローカル HEAD にフォールバック
 - 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— worktree の `cwd` から解決
 - ツール可否・MCP 等は **`spawn` / `session/new` のオプションで明示**
@@ -320,7 +321,7 @@ worker / harness ──enqueue──►─────────────�
 - **TTY（本番 CLI）**: `bindOperatorInput` 使用時はループをブロックせず、未回答 open question があっても worker イベント等を処理し続ける。オペレータ入力は `operator.message` としてキューに載る
 - 自律ターン上限到達（**リミット有効時のみ**）→ orchestrator が「次どうする？」（`source: max_turns`）を自動登録。オペレータは `bindOperatorInput` 経由で回答
 - 終了条件: error / 実行中 worker / pending permission / **未回答 open question** がある間は継続
-- **自律ループ停止**（`shouldStopIssueLoop`）と **プロセス終了** は別概念（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。TTY デフォルトでは自律ループ停止後も post-loop 待機し、`/exit` までプロセス維持。`--no-wait` で従来の即終了に戻せる
+- **自律ループ停止**（`shouldStopIssueLoop`）と **プロセス終了** は別概念（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。TTY デフォルトでは自律ループ停止後も post-loop 待機し、`/exit` までプロセス維持。`/exit` 正常終了時は isolated worktree を削除（未コミット変更がある場合は拒否）。`--no-wait` で従来の即終了に戻せる
 
 CLI: `bindAsyncOperatorInput`（TTY・非ブロッキング）、非 TTY は `ENSEMBLE_OPERATOR_MESSAGE`。ログ・表示の正本は [session-logging.md](session-logging.md)。対話モデルは [ADR 0008](adr/0008-human-dialogue-open-questions.md)。
 
