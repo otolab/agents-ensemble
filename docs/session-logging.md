@@ -38,7 +38,7 @@ conductor セッションには性質の異なる出力が混在する。
 │   (stderr)          reducer → backend         (stderr)    │
 │                     (Ink TUI or stdout)                   │
 │   TTY 時は Harness/Observation を stderr に出さず、      │
-│   TuiTelemetrySink → 活動ログ（Session ペイン）へ       │
+│   TuiTelemetrySink → 活動ログ（Orchestration メインペイン）へ       │
 │                                  │                          │
 │                                  └────► snapshot()          │
 │                                        → 終了 JSON          │
@@ -67,7 +67,7 @@ conductor セッションには性質の異なる出力が混在する。
 | `[worktree]` | `session.worktree.notice` → ObservationSink | **非 TTY のみ** |
 | `[continue]` | `session.continue` → ObservationSink | **非 TTY のみ** |
 
-TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の Session ペイン（活動ログ）に `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor 応答は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同ペインに追記する（末尾 100 行 windowing）。
+TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の **Orchestration** メインペイン（活動ログ）に `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor 応答は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同ペインに追記する（末尾 300 エントリ windowing。#108）。
 
 ### 終了 JSON（SessionSummary）
 

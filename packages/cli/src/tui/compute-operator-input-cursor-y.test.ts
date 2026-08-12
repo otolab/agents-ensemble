@@ -6,6 +6,7 @@ import {
   computeOperatorInputCursorX,
   computeOperatorInputCursorY,
   computeOperatorInputLineIndex,
+  computeOrchestrationLogVisibleLineCount,
 } from './compute-operator-input-cursor-y.js';
 import {
   INPUT_PANE_BORDER_ROWS,
@@ -34,6 +35,16 @@ describe('computeActivityPaneHeight', () => {
   });
 });
 
+describe('computeOrchestrationLogVisibleLineCount', () => {
+  it('reserves border and title rows inside the pane height', () => {
+    expect(computeOrchestrationLogVisibleLineCount(10, 1)).toBe(7);
+  });
+
+  it('reduces log rows when scroll hint wraps the title', () => {
+    expect(computeOrchestrationLogVisibleLineCount(10, 2)).toBe(6);
+  });
+});
+
 describe('computeActivityLogLineCapacity', () => {
   it('reserves title and border rows inside the activity pane', () => {
     const terminalRows = 24;
@@ -41,7 +52,7 @@ describe('computeActivityLogLineCapacity', () => {
     const activityPaneHeight = computeActivityPaneHeight({ terminalRows, hintLineCount });
 
     expect(computeActivityLogLineCapacity({ terminalRows, hintLineCount })).toBe(
-      activityPaneHeight - PANE_BORDER_ROWS - 1,
+      computeOrchestrationLogVisibleLineCount(activityPaneHeight),
     );
   });
 });
