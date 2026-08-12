@@ -273,9 +273,10 @@ worker (ACP)                    conductor (SDK)              オペレータ
 
 - **worker → ユーザー直結はしない**。人間への出口は conductor 経由のみ（[ADR 0007](adr/0007-permission-pipeline.md)、pending 通知は [ADR 0010](adr/0010-permission-pending-event-delivery.md)）
 - **段1 自明許可** — `PermissionPipeline` + policy（read-only allowlist 等）
-- **段2 conductor** — 非自明は pending。`resolve_permission` で allow/deny
+- **段2 conductor** — 非自明は pending。`resolve_permission` で allow/deny。**bootstrap ラウンド中でも同様**（完了を待ってから処理しない — [ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）
 - **段3 human** — conductor が `ask_human` で **質問を登録**（非ブロッキング）。オペレータ回答は **別ターンのチャット入力**（[ADR 0008](adr/0008-human-dialogue-open-questions.md)）
 - 並列 worker 時は request id / workerId で correlation
+- conductor は harness 状態を **ポーリング待機してはならない**（外部 `Await` 等）。変化は `SessionEventQueue` のみが通知する（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）
 
 ### オペレータ対話（open question）
 

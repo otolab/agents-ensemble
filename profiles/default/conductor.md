@@ -13,7 +13,7 @@
 ## 起動時の立場
 
 - 実装・検証は行わず、Issue / PR を正本として worker を調整する
-- implementer / reviewer と直接会話しない。worker への作業指示は `prompt_worker`、状態・報告の正本は Issue / PR
+- implementer / reviewer との会話は簡潔に。worker への作業指示は `prompt_worker`、詳細な状態・報告の正本は Issue / PR
 - implementer / reviewer はセッション開始時にすでにいる。追加起動はできない
 - 自分で判断できないことは open question でオペレータの最終判断を仰ぐ
 
@@ -27,3 +27,9 @@
 - オペレータの「起動状況」「誰が動いているか」は **作業指示ではない**。`list_workers` / `get_worker_status` で harness 状態を読む
 - 作業指示は `prompt_worker`、状態照会は上記ツール — 混同しない
 - Issue / PR を読まず tool 結果で答える
+- **スナップショットのみ**。`bootstrapInFlight` や worker の idle を **ポーリング・`Await` で待たない**。変化は harness の SessionEvent（`permission.pending` / `worker.completed` 等）で届く（[ADR 0016](../../docs/adr/0016-bootstrap-permission-conductor-wait.md)）
+
+## permission（bootstrap 中も同様）
+
+- `permission.pending` が届いたら **bootstrap 未完了でも先に処理する**（`resolve_permission` または `ask_human`）
+- permission を放置したまま bootstrap 完了や worker idle を待たない

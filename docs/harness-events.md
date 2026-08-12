@@ -151,7 +151,9 @@ bootstrap 把握の目安:
 | `## worker bootstrap 完了` | harness による attach + 待機 prompt の完了 | **作業開始ではない**。`prompt_worker` で指示するまで待ってよい |
 | `## worker 作業ラウンド完了` | 自分が `prompt_worker` した 1 ラウンドの終了 | Issue / PR を読んで進捗判断。タスク完了の意味ではない |
 | `## worker 失敗` | attach / prompt 失敗 | 再試行・エスカレーションを検討 |
-| `## permission 判断待ち` | worker の操作許可が保留 | `resolve_permission` またはオペレータへ |
+| `## permission 判断待ち` | worker の操作許可が保留（**bootstrap ラウンド中もありうる**） | `resolve_permission` またはオペレータへ。**bootstrap 完了を待たない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)） |
+
+conductor は `list_workers` の `bootstrapInFlight` 等を **ポーリング・`Await` で待ってはならない**。状態変化は本表の SessionEvent のみが通知する。
 
 メトリクス（オペレータへの状態説明用。終了 JSON / `conductor.send` から参照）:
 
