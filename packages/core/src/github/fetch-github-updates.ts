@@ -9,7 +9,7 @@ const BODY_PREVIEW_MAX = 280;
 export interface FetchGitHubUpdatesInput {
   issueUrl: string;
   cursor: GitHubMonitorCursor;
-  /** true のときカーソルのみ進め、更新は返さない（初回 bootstrap / resume 直後）。 */
+  /** true のときカーソルのみ進め、更新は返さない（カーソル空の新規セッション初回 poll のみ）。 */
   bootstrapOnly?: boolean;
   cwd?: string;
   runGhFn?: typeof runGh;
@@ -55,15 +55,12 @@ interface GhReviewComment {
   created_at: string;
 }
 
-interface GhCheckContext {
-  context: string;
-  state: string;
-  targetUrl?: string;
-}
-
-interface GhStatusCheckRollup {
-  state: string;
-  contexts: GhCheckContext[];
+interface GhCheckRun {
+  __typename?: string;
+  name: string;
+  status: string;
+  conclusion?: string | null;
+  detailsUrl?: string;
 }
 
 export async function fetchGitHubUpdates(
@@ -167,20 +164,26 @@ async function fetchLinkedPullRequests(
   issue: ReturnType<typeof parseIssueUrl>,
   cwd?: string,
 ): Promise<GhPullRequestRef[]> {
-  const stdout = await gh(
-    [
-      'search',
-      'prs',
-      `repo:${issue.owner}/${issue.repo} type:pr ${issue.number}`,
-      '--json',
-      'number,title,url,state',
-      '--limit',
-      '20',
-    ],
-    { cwd },
-  );
-  const results = JSON.parse(stdout) as GhPullRequestRef[];
-  return results.filter((pr) => pr.state === 'OPEN' || pr.state === 'open');
+  try {
+    const stdout = await gh(
+      [
+        'search',
+        'prs',
+        String(issue.number),
+        '--repo',
+        `${issue.owner}/${issue.repo}`,
+        '--json',
+        'number,title,url,state',
+        '--limit',
+        '20',
+      ],
+      { cwd },
+    );
+    const results = JSON.parse(stdout) as GhPullRequestRef[];
+    return results.filter((pr) => pr.state === 'OPEN' || pr.state === 'open');
+  } catch {
+    return [];
+  }
 }
 
 async function fetchPullRequestUpdates(input: {
@@ -232,14 +235,14 @@ async function fetchPullRequestUpdates(input: {
     cursor.lastReviewCommentId = reviewCommentResult.lastId;
   }
 
-  const checkRollup = await fetchStatusCheckRollup(
+  const checkRuns = await fetchStatusCheckRollup(
     input.gh,
     input.issue,
     input.pr.number,
     input.cwd,
   );
   const ciResult = collectCiUpdates({
-    contexts: checkRollup.contexts,
+    checkRuns,
     pendingCheckNames: cursor.pendingCheckNames ?? [],
     notifiedCheckNames: cursor.notifiedCheckNames ?? [],
     bootstrapOnly: input.bootstrapOnly,
@@ -295,7 +298,7 @@ async function fetchStatusCheckRollup(
   issue: ReturnType<typeof parseIssueUrl>,
   prNumber: number,
   cwd?: string,
-): Promise<GhStatusCheckRollup> {
+): Promise<GhCheckRun[]> {
   const stdout = await gh(
     [
       'pr',
@@ -308,8 +311,12 @@ async function fetchStatusCheckRollup(
     ],
     { cwd },
   );
-  const data = JSON.parse(stdout) as { statusCheckRollup: GhStatusCheckRollup };
-  return data.statusCheckRollup ?? { state: 'UNKNOWN', contexts: [] };
+  const data = JSON.parse(stdout) as { statusCheckRollup?: unknown };
+  const rollup = data.statusCheckRollup;
+  if (Array.isArray(rollup)) {
+    return rollup as GhCheckRun[];
+  }
+  return [];
 }
 
 function collectReviewUpdates(
@@ -386,7 +393,7 @@ function collectReviewCommentUpdates(
 }
 
 function collectCiUpdates(input: {
-  contexts: GhCheckContext[];
+  checkRuns: GhCheckRun[];
   pendingCheckNames: string[];
   notifiedCheckNames: string[];
   bootstrapOnly: boolean;
@@ -403,16 +410,17 @@ function collectCiUpdates(input: {
   const notified = new Set(input.notifiedCheckNames);
   const hadPreviousSnapshot = previousPending.size > 0;
 
-  for (const check of input.contexts) {
-    const name = check.context;
-    const state = check.state.toUpperCase();
-    if (isPendingCheckState(state)) {
+  for (const check of input.checkRuns) {
+    const name = check.name;
+    const status = check.status.toUpperCase();
+    if (isPendingCheckStatus(status)) {
       pendingNow.add(name);
       continue;
     }
-    if (!isTerminalCheckState(state)) {
+    if (status !== 'COMPLETED') {
       continue;
     }
+    const conclusion = (check.conclusion ?? 'UNKNOWN').toUpperCase();
     if (!hadPreviousSnapshot || !previousPending.has(name)) {
       continue;
     }
@@ -424,13 +432,13 @@ function collectCiUpdates(input: {
       continue;
     }
     updates.push({
-      id: `ci:${input.prNumber}:${name}:${state}`,
+      id: `ci:${input.prNumber}:${name}:${conclusion}`,
       kind: 'ci.completed',
-      summary: `PR #${input.prNumber} CI 完了（${name}・${state}）`,
-      url: check.targetUrl,
+      summary: `PR #${input.prNumber} CI 完了（${name}・${conclusion}）`,
+      url: check.detailsUrl,
       prNumber: input.prNumber,
       checkName: name,
-      checkConclusion: state,
+      checkConclusion: conclusion,
     });
     notified.add(name);
   }
@@ -443,12 +451,13 @@ function collectCiUpdates(input: {
   };
 }
 
-function isPendingCheckState(state: string): boolean {
-  return state === 'PENDING' || state === 'EXPECTED' || state === 'IN_PROGRESS';
-}
-
-function isTerminalCheckState(state: string): boolean {
-  return state === 'SUCCESS' || state === 'FAILURE' || state === 'ERROR';
+function isPendingCheckStatus(status: string): boolean {
+  return (
+    status === 'QUEUED' ||
+    status === 'IN_PROGRESS' ||
+    status === 'PENDING' ||
+    status === 'WAITING'
+  );
 }
 
 function previewBody(body: string): string {
