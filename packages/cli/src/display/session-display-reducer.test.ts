@@ -122,6 +122,10 @@ describe('reduceDisplayState', () => {
     });
 
     expect(state.conductorOutput).toBe('hello conductor');
+    expect(state.workers.conductor).toEqual({
+      kind: 'conductor',
+      status: 'idle',
+    });
   });
 
   it('updates conductorOutput on error conductor.send', () => {
@@ -138,6 +142,58 @@ describe('reduceDisplayState', () => {
     expect(state.conductorOutput).toBe(
       '応答を生成できませんでした（Model Blocked）。\n別の聞き方で再入力してください。',
     );
+    expect(state.workers.conductor).toEqual({
+      kind: 'conductor',
+      status: 'idle',
+    });
+  });
+
+  it('tracks conductor in-flight lifecycle as running then idle', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'conductor.send.started',
+      sendCount: 1,
+      dispatchSource: 'operator',
+    });
+    expect(state.workers.conductor).toEqual({
+      kind: 'conductor',
+      status: 'running',
+    });
+
+    state = reduceDisplayState(state, {
+      type: 'conductor.send',
+      sendCount: 1,
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+      workerDispatches: 0,
+      workerFailures: 0,
+    });
+    expect(state.workers.conductor).toEqual({
+      kind: 'conductor',
+      status: 'idle',
+    });
+  });
+
+  it('clears conductor in-flight on cancelled conductor.send', () => {
+    const inFlight = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'conductor.send.started',
+      sendCount: 2,
+      dispatchSource: 'worker:implementer',
+    });
+
+    const state = reduceDisplayState(inFlight, {
+      type: 'conductor.send',
+      sendCount: 2,
+      runId: 'run-2',
+      status: 'cancelled',
+      workerDispatches: 0,
+      workerFailures: 0,
+    });
+
+    expect(state.workers.conductor).toEqual({
+      kind: 'conductor',
+      status: 'idle',
+    });
   });
 
   it('tracks open questions via open.question.enqueued', () => {

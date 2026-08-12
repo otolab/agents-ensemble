@@ -247,6 +247,39 @@ describe('IssueSessionTui', () => {
     expect(lines).toHaveLength(terminalRows);
   });
 
+  it('shows conductor thinking during in-flight send then idle on completion', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {
+        conductor: { kind: 'conductor', status: 'running' },
+        implementer: { kind: 'implementer', status: 'idle' },
+      },
+      conductorOutput: null,
+      openQuestions: [],
+    });
+
+    const { lastFrame: thinkingFrame, unmount: unmountThinking } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+    expect(thinkingFrame() ?? '').toContain('conductor: thinking');
+    unmountThinking();
+
+    viewModel.setDisplayState({
+      workers: {
+        conductor: { kind: 'conductor', status: 'idle' },
+        implementer: { kind: 'implementer', status: 'idle' },
+      },
+      conductorOutput: 'done',
+      openQuestions: [],
+    });
+
+    const { lastFrame: idleFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+    expect(idleFrame() ?? '').toContain('conductor: idle');
+    expect(idleFrame() ?? '').not.toContain('conductor: thinking');
+  });
+
   it('does not bleed activity log text onto pane border lines', () => {
     const terminalRows = 24;
     const terminalColumns = 80;

@@ -514,6 +514,13 @@ export async function runConductorSession(
         continueOnConductorError,
         workerDispatches: sessionLogger.workerDispatches,
         workerFailures: sessionLogger.workerFailures,
+        onSendStarted: (info) => {
+          sessionLogger.emit({
+            type: 'conductor.send.started',
+            sendCount: info.sendCount,
+            dispatchSource: info.dispatchSource,
+          });
+        },
         onSendComplete: recordSendComplete,
         onOpenQuestionEnqueued: (question) => {
           sessionLogger.emit({ type: 'open.question.enqueued', question });

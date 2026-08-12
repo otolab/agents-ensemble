@@ -31,6 +31,13 @@ import {
   type IssueLoopStopReason,
 } from './session-policy.js';
 
+export interface ConductorSendStartedInfo {
+  /** これから実行する send の通し番号（1 始まり）。 */
+  sendCount: number;
+  /** dispatch 束の source key（`operator` / `permission` / `worker:*` / `initial`）。 */
+  dispatchSource?: string;
+}
+
 export interface ConductorSendCompleteInfo {
   sendCount: number;
   runId: string;
@@ -61,6 +68,7 @@ export interface ConductorSessionDriverOptions {
   continueOnConductorError: boolean;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
+  onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
   onOpenQuestionEnqueued?: (question: OpenQuestion) => void;
   /** post-loop 再開時は初回 `agent.send`（system + ブリーフィング）を省略する。 */
@@ -105,6 +113,7 @@ export async function runConductorSessionDriver(
       sendReconnect: options.sendReconnect,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
+      onSendStarted: options.onSendStarted,
       onSendComplete: (info) => {
         sendCount = info.sendCount;
         lastDispatchesThisTurn = info.conductorDispatchesThisTurn;
@@ -187,8 +196,10 @@ export async function runConductorSessionDriver(
       workerFailures: options.workerFailures,
       sendCount,
       autonomousTurns: autonomousTurnsAfter,
+      dispatchSource: selected.batch.sourceKey,
       workerOutcomeDispatches: workerDispatches,
       workerOutcomeFailures: workerFailures,
+      onSendStarted: options.onSendStarted,
       onSendComplete: (info) => {
         sendCount = info.sendCount;
         lastDispatchesThisTurn = info.conductorDispatchesThisTurn;
@@ -231,6 +242,7 @@ async function runInitialConductorSend(input: {
   sendReconnect: ConductorSendReconnectOptions;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
+  onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
 }): Promise<ConductorSendResult> {
   const issueContext = await fetchIssueContext(input.issueUrl);
@@ -249,6 +261,8 @@ async function runInitialConductorSend(input: {
     workerFailures: input.workerFailures,
     sendCount: 0,
     autonomousTurns: 1,
+    dispatchSource: 'initial',
+    onSendStarted: input.onSendStarted,
     onSendComplete: input.onSendComplete,
   });
 }
@@ -261,12 +275,19 @@ async function runEventConductorSend(input: {
   workerFailures: WorkerFailureRecord[];
   sendCount: number;
   autonomousTurns: number;
+  dispatchSource?: string;
   workerOutcomeDispatches?: number;
   workerOutcomeFailures?: number;
+  onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
 }): Promise<ConductorSendResult> {
   const workersBefore = input.workerDispatches.length;
   const failuresBefore = input.workerFailures.length;
+
+  input.onSendStarted?.({
+    sendCount: input.sendCount + 1,
+    dispatchSource: input.dispatchSource,
+  });
 
   const sendResult = await sendConductorWithReconnect(
     input.conductorHandle,

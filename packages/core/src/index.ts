@@ -213,6 +213,7 @@ export type {
   ConductorSessionDriverOptions,
   ConductorSessionDriverResult,
   ConductorSendCompleteInfo,
+  ConductorSendStartedInfo,
 } from './conductor/conductor-session-driver.js';
 export { createTestOperatorInputBinding } from './conductor/testing/test-operator-input-binding.js';
 export type { TestOperatorInputBinding } from './conductor/testing/test-operator-input-binding.js';

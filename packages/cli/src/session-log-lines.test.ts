@@ -27,6 +27,16 @@ describe('session-log-lines', () => {
     );
   });
 
+  it('formats conductor.send.started harness body', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'conductor.send.started',
+        sendCount: 2,
+        dispatchSource: 'operator',
+      }),
+    ).toBe('conductor.send.started n=2 source=operator');
+  });
+
   it('formats harness bodies', () => {
     expect(
       formatHarnessLogBody({
