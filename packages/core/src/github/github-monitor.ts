@@ -5,6 +5,7 @@ import {
 } from './fetch-github-updates.js';
 import {
   emptyGitHubMonitorCursor,
+  isEmptyGitHubMonitorCursor,
   normalizeGitHubMonitorCursor,
   type GitHubMonitorCursor,
 } from './github-monitor-cursor.js';
@@ -51,7 +52,7 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let pollInFlight = false;
   let hasPendingCi = false;
-  let bootstrapDone = false;
+  let needsBootstrapPoll = isEmptyGitHubMonitorCursor(cursor);
 
   const buffer = new DebounceBuffer<GitHubUpdateItem>({
     debounceMs,
@@ -82,12 +83,12 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
         cursor,
         cwd: options.cwd,
         runGhFn: options.runGhFn,
-        bootstrapOnly: !bootstrapDone,
+        bootstrapOnly: needsBootstrapPoll,
       };
       const result = await fetchGitHubUpdates(input);
       cursor = result.cursor;
       options.onCursorChange?.(cursor);
-      bootstrapDone = true;
+      needsBootstrapPoll = false;
       hasPendingCi = result.hasPendingCi;
       if (result.updates.length > 0) {
         buffer.pushMany(result.updates);

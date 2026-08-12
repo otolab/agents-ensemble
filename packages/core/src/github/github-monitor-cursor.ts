@@ -28,3 +28,21 @@ export function normalizeGitHubMonitorCursor(
     pullRequests: { ...(cursor?.pullRequests ?? {}) },
   };
 }
+
+/** 新規セッション初回 poll の bootstrap 対象か（sidecar 復元済みなら false）。 */
+export function isEmptyGitHubMonitorCursor(cursor: GitHubMonitorCursor): boolean {
+  if (cursor.lastIssueCommentId) {
+    return false;
+  }
+  for (const pr of Object.values(cursor.pullRequests ?? {})) {
+    if (
+      pr.lastReviewId ||
+      pr.lastReviewCommentId ||
+      (pr.pendingCheckNames?.length ?? 0) > 0 ||
+      (pr.notifiedCheckNames?.length ?? 0) > 0
+    ) {
+      return false;
+    }
+  }
+  return true;
+}

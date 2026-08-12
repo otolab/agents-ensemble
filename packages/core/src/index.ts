@@ -127,6 +127,7 @@ export {
 export type { GitHubMonitor, GitHubMonitorOptions } from './github/github-monitor.js';
 export {
   emptyGitHubMonitorCursor,
+  isEmptyGitHubMonitorCursor,
   normalizeGitHubMonitorCursor,
 } from './github/github-monitor-cursor.js';
 export type {

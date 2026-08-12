@@ -136,4 +136,54 @@ describe('createGitHubMonitor', () => {
     await monitor.stop();
     expect(onUpdate).toHaveBeenCalledTimes(1);
   });
+
+  it('notifies offline diffs on first poll when sidecar cursor is restored', async () => {
+    const runGhFn = vi.fn(async (args: string[]) => {
+      if (args[0] === 'api' && args[1]?.includes('/comments')) {
+        return JSON.stringify([
+          {
+            id: 100,
+            body: 'seen before stop',
+            html_url: 'https://github.com/org/repo/issues/39#issuecomment-100',
+            user: { login: 'op' },
+            created_at: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 101,
+            body: 'arrived while session was down',
+            html_url: 'https://github.com/org/repo/issues/39#issuecomment-101',
+            user: { login: 'op' },
+            created_at: '2026-01-02T00:00:00Z',
+          },
+        ]);
+      }
+      if (args[0] === 'search') {
+        return '[]';
+      }
+      throw new Error(`unexpected: ${args.join(' ')}`);
+    });
+
+    const onUpdate = vi.fn();
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      cursor: { lastIssueCommentId: '100', pullRequests: {} },
+      debounceMs: 100,
+      pollIntervalMs: 60_000,
+      runGhFn,
+      onUpdate,
+    });
+
+    monitor.start();
+    await drainAsync();
+    expect(runGhFn).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onUpdate.mock.calls[0]![0].items[0]).toMatchObject({
+      id: 'issue-comment:101',
+      kind: 'issue.comment',
+    });
+
+    await monitor.stop();
+  });
 });
