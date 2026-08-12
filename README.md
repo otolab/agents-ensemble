@@ -32,6 +32,7 @@ agent status
 # conductor 用（SDK）
 pnpm ensemble auth login
 pnpm ensemble auth status
+pnpm ensemble auth logout
 
 # Issue 取得用
 gh auth login
@@ -62,6 +63,17 @@ export CURSOR_API_KEY="cursor_..."
 ```
 
 Dashboard からキーを発行する場合: [Cursor Dashboard → API Keys](https://cursor.com/dashboard/api)
+
+`ensemble auth logout` は stored login（`~/.cursor/sdk/auth.json`）のみを削除します。`CURSOR_API_KEY` には影響しません。
+
+conductor send が認証エラーを返したとき、stderr に `[auth]` 付きの復旧手順が出ます。典型:
+
+```bash
+ensemble auth logout && ensemble auth login
+ensemble issue <issue-url> --repo-root <path> --resume <agentId>   # または --continue
+```
+
+`agentId` は終了時 stdout JSON の `agentId` を参照。SDK 側に adapter refresh / 自動再接続の公開 API は現状ない（upstream 待ち）。
 
 ### worker（ACP）の認証
 

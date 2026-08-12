@@ -113,6 +113,40 @@ describe('session sinks', () => {
     write.mockRestore();
   });
 
+  it('shows auth-specific dialogue message on auth conductor error', () => {
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    createDialogueSink()({
+      type: 'conductor.send',
+      sendCount: 1,
+      runId: 'run-1',
+      status: 'error',
+      error: {
+        message: 'Authentication error If you are logged in, try logging out and back in.',
+      },
+      workerDispatches: 0,
+      workerFailures: 0,
+    });
+
+    expect(write).toHaveBeenCalledWith(
+      '\nconductor> 認証エラーが発生しました。stderr の [auth] 手順に従って再認証してください。\n',
+    );
+
+    write.mockRestore();
+  });
+
+  it('prints auth recovery hint from observation sink', () => {
+    const writeStderr = vi.fn();
+
+    createObservationSink({ writeStderr })({
+      type: 'conductor.auth.recovery',
+      agentId: 'agent-1',
+      hint: '[auth] test recovery hint',
+    });
+
+    expect(writeStderr).toHaveBeenCalledWith('[auth] test recovery hint');
+  });
+
   it('formats worker stderr on harness stderr', () => {
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
 

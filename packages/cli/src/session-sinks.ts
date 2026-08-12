@@ -1,4 +1,5 @@
 import type { SessionLogEvent, SessionLogSink } from '@agents-ensemble/core';
+import { isConductorAuthError } from '@agents-ensemble/core';
 import { stdout } from 'node:process';
 
 export interface HarnessSinkOptions {
@@ -83,6 +84,7 @@ export function createHarnessSink(options: HarnessSinkOptions = {}): SessionLogS
       case 'session.worktree.notice':
       case 'session.continue':
       case 'session.post_loop_wait':
+      case 'conductor.auth.recovery':
         break;
     }
   };
@@ -107,9 +109,15 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
           writeStdout(`\nconductor> ${event.result.trim()}\n`);
         } else if (event.status === 'error') {
           const detail = event.error?.message ?? 'unknown error';
-          writeStdout(
-            `\nconductor> 応答を生成できませんでした（${detail}）。\n別の聞き方で再入力してください。\n`,
-          );
+          if (isConductorAuthError(detail)) {
+            writeStdout(
+              '\nconductor> 認証エラーが発生しました。stderr の [auth] 手順に従って再認証してください。\n',
+            );
+          } else {
+            writeStdout(
+              `\nconductor> 応答を生成できませんでした（${detail}）。\n別の聞き方で再入力してください。\n`,
+            );
+          }
         }
         break;
       case 'harness.worktree':
@@ -128,6 +136,7 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
       case 'session.worktree.notice':
       case 'session.continue':
       case 'session.post_loop_wait':
+      case 'conductor.auth.recovery':
         break;
     }
   };
@@ -170,6 +179,9 @@ export function createObservationSink(
         writeStderr(
           '\n自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。\n',
         );
+        break;
+      case 'conductor.auth.recovery':
+        writeStderr(event.hint);
         break;
       case 'harness.worktree':
       case 'harness.worktree.removed':
