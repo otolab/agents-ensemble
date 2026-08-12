@@ -1,6 +1,9 @@
 import type { OpenQuestion } from '@agents-ensemble/core';
 import { wrapTextToWidth } from './wrap-text-to-width.js';
-import { PANE_BORDER_ROWS } from './tui-layout-constants.js';
+import {
+  OPEN_QUESTIONS_SCROLL_HINT,
+  PANE_BORDER_ROWS,
+} from './tui-layout-constants.js';
 
 export type OpenQuestionsScrollAction = 'pageUp' | 'pageDown' | 'home' | 'end';
 
@@ -66,4 +69,52 @@ export function computeOpenQuestionsContentLineCount(
   titleLineCount: number,
 ): number {
   return Math.max(1, paneHeight - PANE_BORDER_ROWS - titleLineCount);
+}
+
+export function getOpenQuestionsTitleLineCount(
+  scrollHint: string,
+  contentWidth: number,
+): number {
+  return wrapTextToWidth(`Open questions${scrollHint}`, contentWidth).length;
+}
+
+/** 溢れ時は初回表示からスクロールヒント付きタイトルを返す。 */
+export function resolveOpenQuestionsScrollLayout(params: {
+  displayLineCount: number;
+  paneHeight: number;
+  contentWidth: number;
+}): {
+  scrollHint: string;
+  titleLineCount: number;
+  visibleLineCount: number;
+  isScrollable: boolean;
+} {
+  const titleLineCountWithoutHint = getOpenQuestionsTitleLineCount('', params.contentWidth);
+  const visibleLineCountWithoutHint = computeOpenQuestionsContentLineCount(
+    params.paneHeight,
+    titleLineCountWithoutHint,
+  );
+
+  if (params.displayLineCount <= visibleLineCountWithoutHint) {
+    return {
+      scrollHint: '',
+      titleLineCount: titleLineCountWithoutHint,
+      visibleLineCount: visibleLineCountWithoutHint,
+      isScrollable: false,
+    };
+  }
+
+  const scrollHint = OPEN_QUESTIONS_SCROLL_HINT;
+  const titleLineCount = getOpenQuestionsTitleLineCount(scrollHint, params.contentWidth);
+  const visibleLineCount = computeOpenQuestionsContentLineCount(
+    params.paneHeight,
+    titleLineCount,
+  );
+
+  return {
+    scrollHint,
+    titleLineCount,
+    visibleLineCount,
+    isScrollable: params.displayLineCount > visibleLineCount,
+  };
 }

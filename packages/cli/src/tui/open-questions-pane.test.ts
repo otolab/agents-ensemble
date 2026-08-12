@@ -4,8 +4,10 @@ import {
   advanceOpenQuestionsScrollOffset,
   buildOpenQuestionDisplayLines,
   computeOpenQuestionsContentLineCount,
+  resolveOpenQuestionsScrollLayout,
   sliceOpenQuestionDisplayLines,
 } from './open-questions-pane.js';
+import { OPEN_QUESTIONS_PANE_HEIGHT } from './tui-layout-constants.js';
 
 const SAMPLE_QUESTION: OpenQuestion = {
   id: 'inq-1',
@@ -57,5 +59,29 @@ describe('computeOpenQuestionsContentLineCount', () => {
   it('reserves border and title rows inside the pane height', () => {
     expect(computeOpenQuestionsContentLineCount(4, 1)).toBe(1);
     expect(computeOpenQuestionsContentLineCount(6, 1)).toBe(3);
+  });
+});
+
+describe('resolveOpenQuestionsScrollLayout', () => {
+  it('shows scroll hint from the first frame when content overflows', () => {
+    const layout = resolveOpenQuestionsScrollLayout({
+      displayLineCount: 5,
+      paneHeight: OPEN_QUESTIONS_PANE_HEIGHT,
+      contentWidth: 80,
+    });
+
+    expect(layout.isScrollable).toBe(true);
+    expect(layout.scrollHint).toContain('Alt+PgUp/PgDn');
+  });
+
+  it('omits scroll hint when all lines fit', () => {
+    const layout = resolveOpenQuestionsScrollLayout({
+      displayLineCount: 1,
+      paneHeight: OPEN_QUESTIONS_PANE_HEIGHT,
+      contentWidth: 80,
+    });
+
+    expect(layout.isScrollable).toBe(false);
+    expect(layout.scrollHint).toBe('');
   });
 });

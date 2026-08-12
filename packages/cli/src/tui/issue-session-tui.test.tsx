@@ -450,7 +450,40 @@ describe('IssueSessionTui', () => {
   });
 
   describe('open questions pane scroll (stdin integration)', () => {
-    it('scrolls down with Alt+PgDown and shows scroll hint', async () => {
+    it('shows scroll hint before scrolling when content overflows', () => {
+      const viewModel = createTuiViewModel();
+      fillScrollableOpenQuestions(viewModel, 8);
+
+      const { lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('inq-1');
+      expect(frame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+    });
+
+    it('does not show scroll hint when all questions fit in the pane', () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          createOpenQuestion({
+            id: 'inq-1',
+            question: 'Short?',
+          }),
+        ],
+      });
+
+      const { lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      expect(lastFrame() ?? '').not.toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+    });
+
+    it('scrolls down with Alt+PgDown when content overflows', async () => {
       const viewModel = createTuiViewModel();
       fillScrollableOpenQuestions(viewModel, 8);
 
@@ -459,8 +492,8 @@ describe('IssueSessionTui', () => {
       );
 
       const initialFrame = lastFrame() ?? '';
-      expect(initialFrame).toContain('inq-1');
-      expect(initialFrame).not.toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+      expect(initialFrame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+      expect(initialFrame).toContain('- inq-1 [text]');
 
       stdin.write(INK_TEST_KEYS.altPageDown);
       await flushInkStdin();
@@ -470,7 +503,7 @@ describe('IssueSessionTui', () => {
       expect(scrolledFrame).not.toContain('- inq-1 [text]');
     });
 
-    it('reaches the last question with Alt+End and returns to top with Alt+Home', async () => {
+    it('reaches the last question with Alt+End and keeps hint at top with Alt+Home', async () => {
       const viewModel = createTuiViewModel();
       fillScrollableOpenQuestions(viewModel, 8);
 
@@ -488,7 +521,7 @@ describe('IssueSessionTui', () => {
 
       const restoredFrame = lastFrame() ?? '';
       expect(restoredFrame).toContain('inq-1');
-      expect(restoredFrame).not.toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
+      expect(restoredFrame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
     });
 
     it('scrolls open questions while typing without affecting orchestration scroll keys', async () => {
@@ -533,6 +566,7 @@ describe('IssueSessionTui', () => {
 
       const initialFrame = lastFrame() ?? '';
       expect(initialFrame).toContain('inq-long');
+      expect(initialFrame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
       expect(initialFrame).not.toContain('context context');
 
       stdin.write(INK_TEST_KEYS.altEnd);

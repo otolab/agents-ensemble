@@ -15,14 +15,13 @@ import {
 import {
   advanceOpenQuestionsScrollOffset,
   buildOpenQuestionDisplayLines,
-  computeOpenQuestionsContentLineCount,
+  resolveOpenQuestionsScrollLayout,
   sliceOpenQuestionDisplayLines,
   type OpenQuestionsScrollAction,
 } from './open-questions-pane.js';
 import {
   MAIN_PANE_TITLE,
   OPEN_QUESTIONS_PANE_HEIGHT,
-  OPEN_QUESTIONS_SCROLL_HINT,
   ORCHESTRATION_PANE_TITLE_ROWS,
   PANE_BORDER_ROWS,
   PANE_PADDING_X,
@@ -212,13 +211,6 @@ function OrchestrationPane({
   );
 }
 
-function getOpenQuestionsTitleLineCount(
-  scrollHint: string,
-  contentWidth: number,
-): number {
-  return wrapTextToWidth(`Open questions${scrollHint}`, contentWidth).length;
-}
-
 function OpenQuestionsPane({
   openQuestions,
   contentWidth,
@@ -230,21 +222,24 @@ function OpenQuestionsPane({
 }) {
   const contentAreaRef = useRef(null);
   const { height: measuredContentHeight, hasMeasured } = useBoxMetrics(contentAreaRef);
-  const pinnedToTop = linesFromTop === 0;
-  const scrollHint = pinnedToTop ? '' : OPEN_QUESTIONS_SCROLL_HINT;
-  const titleLineCount = getOpenQuestionsTitleLineCount(scrollHint, contentWidth);
-  const estimatedContentLineCount = computeOpenQuestionsContentLineCount(
-    OPEN_QUESTIONS_PANE_HEIGHT,
-    titleLineCount,
-  );
-  const visibleCount =
-    hasMeasured && measuredContentHeight > 0
-      ? Math.max(1, Math.floor(measuredContentHeight))
-      : estimatedContentLineCount;
   const displayLines = useMemo(
     () => buildOpenQuestionDisplayLines(openQuestions, contentWidth),
     [openQuestions, contentWidth],
   );
+  const scrollLayout = useMemo(
+    () =>
+      resolveOpenQuestionsScrollLayout({
+        displayLineCount: displayLines.length,
+        paneHeight: OPEN_QUESTIONS_PANE_HEIGHT,
+        contentWidth,
+      }),
+    [displayLines.length, contentWidth],
+  );
+  const scrollHint = scrollLayout.scrollHint;
+  const visibleCount =
+    hasMeasured && measuredContentHeight > 0
+      ? Math.max(1, Math.floor(measuredContentHeight))
+      : scrollLayout.visibleLineCount;
   const visibleLines = sliceOpenQuestionDisplayLines(
     displayLines,
     visibleCount,
@@ -308,14 +303,16 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     () => buildOpenQuestionDisplayLines(snapshot.displayState.openQuestions, contentWidth).length,
     [snapshot.displayState.openQuestions, contentWidth],
   );
-  const openQuestionsTitleLineCount = getOpenQuestionsTitleLineCount(
-    openQuestionsLinesFromTop > 0 ? OPEN_QUESTIONS_SCROLL_HINT : '',
-    contentWidth,
+  const openQuestionsScrollLayout = useMemo(
+    () =>
+      resolveOpenQuestionsScrollLayout({
+        displayLineCount: openQuestionsDisplayLineCount,
+        paneHeight: OPEN_QUESTIONS_PANE_HEIGHT,
+        contentWidth,
+      }),
+    [openQuestionsDisplayLineCount, contentWidth],
   );
-  const openQuestionsVisibleLineCount = computeOpenQuestionsContentLineCount(
-    OPEN_QUESTIONS_PANE_HEIGHT,
-    openQuestionsTitleLineCount,
-  );
+  const openQuestionsVisibleLineCount = openQuestionsScrollLayout.visibleLineCount;
   const maxOpenQuestionsLinesFromTop = Math.max(
     0,
     openQuestionsDisplayLineCount - openQuestionsVisibleLineCount,
