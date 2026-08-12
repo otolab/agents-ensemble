@@ -4,6 +4,12 @@ export const INK_TEST_KEYS = {
   pageDown: '\u001B[6~',
   end: '\u001B[F',
   home: '\u001B[H',
+  leftArrow: '\u001B[D',
+  rightArrow: '\u001B[C',
+  upArrow: '\u001B[A',
+  downArrow: '\u001B[B',
+  /** Kitty keyboard protocol: Shift+Enter */
+  shiftEnter: '\u001B[13;2u',
   /** xterm: Ctrl+PageUp */
   ctrlPageUp: '\u001B[5;5~',
 } as const;
