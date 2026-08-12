@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ACTIVITY_LOG_LABEL_COLORS,
   ACTIVITY_LOG_WINDOW_SIZE,
+  advanceActivityLogScrollOffset,
   appendActivityLogEntry,
   buildActivityLogDisplayLines,
   formatActivityLogLabelPrefix,
@@ -33,7 +34,7 @@ describe('activity-log', () => {
       { label: 'harness', text: 'b' },
       { label: 'harness', text: 'c' },
     ]);
-    expect(ACTIVITY_LOG_WINDOW_SIZE).toBe(100);
+    expect(ACTIVITY_LOG_WINDOW_SIZE).toBe(300);
   });
 
   it('uses inline layout for a single wrapped body line', () => {
@@ -114,5 +115,13 @@ describe('activity-log', () => {
 
     expect(sliceActivityLogDisplayLines(lines, 2, 0)).toEqual(lines.slice(-2));
     expect(sliceActivityLogDisplayLines(lines, 2, 1)).toEqual(lines.slice(0, 2));
+  });
+
+  it('advances scroll offset for page and edge keys', () => {
+    expect(advanceActivityLogScrollOffset(0, 'pageUp', 5, 20)).toBe(5);
+    expect(advanceActivityLogScrollOffset(8, 'pageDown', 5, 20)).toBe(3);
+    expect(advanceActivityLogScrollOffset(3, 'home', 5, 20)).toBe(20);
+    expect(advanceActivityLogScrollOffset(12, 'end', 5, 20)).toBe(0);
+    expect(advanceActivityLogScrollOffset(18, 'pageUp', 5, 20)).toBe(20);
   });
 });

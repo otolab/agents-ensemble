@@ -42,7 +42,29 @@ export function formatActivityLogLabelPrefix(label: ActivityLogLabel): string {
   return `[${label}] `;
 }
 
-export const ACTIVITY_LOG_WINDOW_SIZE = 100;
+/** メインペインのスクロール遡り用。表示行は `buildActivityLogDisplayLines` で別途展開。 */
+export const ACTIVITY_LOG_WINDOW_SIZE = 300;
+
+export type ActivityLogScrollAction = 'pageUp' | 'pageDown' | 'home' | 'end';
+
+/** `linesFromBottom=0` が最新追従。PgUp で増加（過去へ）、End で 0 に復帰。 */
+export function advanceActivityLogScrollOffset(
+  linesFromBottom: number,
+  action: ActivityLogScrollAction,
+  pageSize: number,
+  maxLinesFromBottom: number,
+): number {
+  switch (action) {
+    case 'pageUp':
+      return Math.min(linesFromBottom + pageSize, maxLinesFromBottom);
+    case 'pageDown':
+      return Math.max(0, linesFromBottom - pageSize);
+    case 'home':
+      return maxLinesFromBottom;
+    case 'end':
+      return 0;
+  }
+}
 
 export function appendActivityLogEntry(
   entries: ActivityLogEntry[],

@@ -4,13 +4,16 @@ import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import {
   ACTIVITY_LOG_LABEL_COLORS,
+  advanceActivityLogScrollOffset,
   buildActivityLogDisplayLines,
   sliceActivityLogDisplayLines,
   type ActivityLogDisplayLine,
   type ActivityLogEntry,
   type ActivityLogLabel,
+  type ActivityLogScrollAction,
 } from './activity-log.js';
 import {
+  MAIN_PANE_TITLE,
   OPEN_QUESTIONS_PANE_HEIGHT,
   PANE_BORDER_ROWS,
   PANE_PADDING_X,
@@ -134,7 +137,7 @@ function WorkerStatusPane({
   );
 }
 
-function ActivityLogPane({
+function OrchestrationPane({
   activityLog,
   contentWidth,
   paneHeight,
@@ -156,6 +159,9 @@ function ActivityLogPane({
     linesFromBottom,
   );
   const pinnedToBottom = linesFromBottom === 0;
+  const scrollHint = pinnedToBottom
+    ? ''
+    : ' (PgUp/PgDn でスクロール · 最新へは End · 入力中は Ctrl+PgUp/PgDn)';
 
   return (
     <Box
@@ -167,8 +173,8 @@ function ActivityLogPane({
       overflow="hidden"
     >
       <Text bold>
-        Session
-        {!pinnedToBottom ? ' (PgUp/PgDn でスクロール · 最新へは End)' : ''}
+        {MAIN_PANE_TITLE}
+        {scrollHint}
       </Text>
       {activityLog.length === 0 ? (
         <Text dimColor>(活動ログなし)</Text>
@@ -252,21 +258,38 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     setLinesFromBottom((current) => Math.min(current, maxLinesFromBottom));
   }, [maxLinesFromBottom]);
 
+  const applyScrollAction = (action: ActivityLogScrollAction) => {
+    setLinesFromBottom((current) =>
+      advanceActivityLogScrollOffset(
+        current,
+        action,
+        visibleLineCount,
+        maxLinesFromBottom,
+      ),
+    );
+  };
+
   useInput((_input, key) => {
+    const scrollWithModifier = key.ctrl;
+    const scrollWithoutModifier = inputValue.length === 0;
+    if (!scrollWithModifier && !scrollWithoutModifier) {
+      return;
+    }
+
     if (key.pageUp) {
-      setLinesFromBottom((current) => Math.min(current + visibleLineCount, maxLinesFromBottom));
+      applyScrollAction('pageUp');
       return;
     }
     if (key.pageDown) {
-      setLinesFromBottom((current) => Math.max(0, current - visibleLineCount));
+      applyScrollAction('pageDown');
       return;
     }
     if (key.home) {
-      setLinesFromBottom(maxLinesFromBottom);
+      applyScrollAction('home');
       return;
     }
     if (key.end) {
-      setLinesFromBottom(0);
+      applyScrollAction('end');
     }
   });
 
@@ -282,7 +305,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   return (
     <Box flexDirection="column" height={terminalRows}>
       <WorkerStatusPane workers={snapshot.displayState.workers} />
-      <ActivityLogPane
+      <OrchestrationPane
         activityLog={snapshot.activityLog}
         contentWidth={contentWidth}
         paneHeight={activityPaneHeight}

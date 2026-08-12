@@ -13,7 +13,7 @@ export function computeInputPaneHeight(hintLineCount: number): number {
   return INPUT_PANE_BORDER_ROWS + hintLineCount + 1;
 }
 
-/** Session ペイン（flexGrow）の行数。全ペイン高さの合計が端末行数と一致するよう逆算。 */
+/** Orchestration メインペインの行数。全ペイン高さの合計が端末行数と一致するよう逆算。 */
 export function computeActivityPaneHeight(params: {
   terminalRows: number;
   hintLineCount: number;
@@ -26,7 +26,7 @@ export function computeActivityPaneHeight(params: {
   );
 }
 
-/** Session ペイン内に表示できる活動ログ行数（タイトル行・枠線を除く）。 */
+/** Orchestration ペイン内に表示できる活動ログ行数（タイトル行・枠線を除く）。 */
 export function computeActivityLogLineCapacity(params: {
   terminalRows: number;
   hintLineCount: number;

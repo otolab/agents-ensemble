@@ -97,6 +97,10 @@ export function ImeTextInput({
       if (
         key.upArrow ||
         key.downArrow ||
+        key.pageUp ||
+        key.pageDown ||
+        key.home ||
+        key.end ||
         (key.ctrl && input === 'c') ||
         key.tab ||
         (key.shift && key.tab)

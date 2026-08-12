@@ -6,6 +6,7 @@ import { createTuiViewModel } from './tui-view-model.js';
 import { buildActivityLogDisplayLines } from './activity-log.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import {
+  computeActivityLogLineCapacity,
   computeOperatorInputCursorX,
   computeOperatorInputLineIndex,
 } from './compute-operator-input-cursor-y.js';
@@ -76,7 +77,7 @@ describe('IssueSessionTui', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Workers');
     expect(frame).toContain('implementer');
-    expect(frame).toContain('Session');
+    expect(frame).toContain('Orchestration');
     expect(frame).toContain('[operator] operator ping');
     expect(frame).toContain('[conductor] conductor says hi');
     expect(frame).toContain('Open questions');
@@ -266,7 +267,16 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('[conductor] cond');
   });
 
-  it('windowing hides older log lines when session pane is full', () => {
+  it('allocates more rows to orchestration pane than auxiliary panes', () => {
+    const capacity = computeActivityLogLineCapacity({
+      terminalRows: 24,
+      hintLineCount: 1,
+    });
+
+    expect(capacity).toBeGreaterThanOrEqual(7);
+  });
+
+  it('windowing hides older log lines when orchestration pane is full', () => {
     const viewModel = createTuiViewModel();
     for (let index = 0; index < 30; index++) {
       viewModel.appendActivityLog('harness', `line-${index}`);

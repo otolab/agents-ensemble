@@ -9,10 +9,13 @@ export const PANE_BORDER_ROWS = 2;
 /** round 枠線の表示幅（左右各 1 列）。 */
 export const ROUND_BORDER_WIDTH = 2;
 
-/** Worker 状態ペインの固定高さ（枠線込み。タイトル + worker 3 行分）。 */
-export const WORKER_PANE_HEIGHT = 7;
+/** メインペイン（Orchestration）の UI ラベル。conductor 対話とオーケストレーション状況の統合表示。 */
+export const MAIN_PANE_TITLE = 'Orchestration';
 
-/** Open questions ペインの固定高さ（枠線込み。同上）。 */
+/** Worker 状態ペインの固定高さ（枠線込み。タイトル + サマリ 3 行）。 */
+export const WORKER_PANE_HEIGHT = 6;
+
+/** Open questions ペインの固定高さ（枠線込み。タイトル + 1 行サマリ）。 */
 export const OPEN_QUESTIONS_PANE_HEIGHT = 4;
 
 /** 入力ペインの枠線（上下）行数。`PANE_BORDER_ROWS` と同値。 */
