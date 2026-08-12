@@ -22,11 +22,15 @@ const mockTuiHost = vi.hoisted(() => {
   };
 });
 
-vi.mock('@agents-ensemble/core', () => ({
-  loadProfile: vi.fn(),
-  runIssueSession: vi.fn(),
-  SessionLogger: vi.fn(),
-}));
+vi.mock('@agents-ensemble/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agents-ensemble/core')>();
+  return {
+    ...actual,
+    loadProfile: vi.fn(),
+    runIssueSession: vi.fn(),
+    SessionLogger: vi.fn(),
+  };
+});
 
 vi.mock('./tui/create-issue-session-tui-host.js', () => ({
   createIssueSessionTuiHost: mockTuiHost.createIssueSessionTuiHost,

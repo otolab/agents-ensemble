@@ -263,6 +263,13 @@ export {
   resolveConductorApiKey,
 } from './conductor/conductor-auth.js';
 
+export {
+  CONDUCTOR_MODEL_ID_ENV,
+  DEFAULT_CONDUCTOR_MODEL_ID,
+  normalizeConductorModelId,
+  resolveConductorModelId,
+} from './conductor/resolve-conductor-model-id.js';
+
 export { listConductorModels } from './conductor/list-conductor-models.js';
 export type { ListConductorModelsOptions } from './conductor/list-conductor-models.js';
 

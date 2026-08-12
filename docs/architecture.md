@@ -133,8 +133,9 @@ worker（ACP）は `session/prompt` でターン更新全体を渡す。conducto
 
 ```typescript
 // apiKey 省略時は SDK が CURSOR_API_KEY → ~/.cursor/sdk/auth.json の順で解決
+// model 省略時は resolveConductorModelId() → default（Auto）
 await using conductor = await Agent.create({
-  model: { id: "composer-2.5" },
+  model: { id: "default" },
   mode: "agent",
   local: {
     cwd: orchestratorWorkspace,

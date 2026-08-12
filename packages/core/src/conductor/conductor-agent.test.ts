@@ -43,6 +43,26 @@ describe('ConductorAgent.send', () => {
     mockResume.mockReset();
   });
 
+  it('uses default model id when modelId is omitted', async () => {
+    mockCreate.mockResolvedValue({
+      agentId: 'agent-1',
+      send: mockSend,
+      [Symbol.asyncDispose]: vi.fn(),
+    });
+
+    const conductor = await ConductorAgent.create({ cwd: '/repo' });
+
+    try {
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: { id: 'default' },
+        }),
+      );
+    } finally {
+      await conductor.close();
+    }
+  });
+
   it('returns error result instead of throwing on AuthenticationError', async () => {
     mockCreate.mockResolvedValue({
       agentId: 'agent-1',

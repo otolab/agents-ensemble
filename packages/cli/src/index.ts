@@ -46,7 +46,7 @@ program
     '--profile <name>',
     'Profile name or path (default: bundled default; name resolves bundled then cwd profiles/<name>/)',
   )
-  .option('--model <id>', 'Conductor model id (default: composer-2.5)')
+  .option('--model <id>', 'Conductor model id (default: default)')
   .option(
     '--max-turns <n>',
     'Maximum conductor autonomous turns (0 = unlimited; default: unlimited on TTY, 5 otherwise)',
