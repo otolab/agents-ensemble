@@ -75,3 +75,20 @@ describe('sliceVisibleInputDisplayLines', () => {
     expect(visibleLines).toEqual(['c', 'd', 'e']);
   });
 });
+
+describe('sliceVisibleInputDisplayLines with cursor', () => {
+  it('follows cursor line when it is above the tail window', () => {
+    const displayLines = ['a', 'b', 'c', 'd', 'e'];
+    const { visibleLines, scrollOffset } = sliceVisibleInputDisplayLines(displayLines, 3, 1);
+    expect(scrollOffset).toBe(0);
+    expect(visibleLines).toEqual(['a', 'b', 'c']);
+  });
+
+  it('uses tail follow when cursor is in the tail window', () => {
+    const displayLines = ['a', 'b', 'c', 'd', 'e'];
+    const { visibleLines, scrollOffset } = sliceVisibleInputDisplayLines(displayLines, 3, 4);
+    expect(scrollOffset).toBe(2);
+    expect(visibleLines).toEqual(['c', 'd', 'e']);
+  });
+});
+

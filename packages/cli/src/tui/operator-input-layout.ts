@@ -161,17 +161,27 @@ export function mapDisplayPositionToCursorOffset(
   return lineStart + lineText.length;
 }
 
-/** 末尾追従用に表示する行スライスを返す。 */
+/** 末尾追従用に表示する行スライスを返す。カーソル行が常に可視範囲に入るよう scrollOffset を調整する。 */
 export function sliceVisibleInputDisplayLines(
   displayLines: string[],
   maxVisibleLines: number,
+  cursorDisplayLineIndex?: number,
 ): { visibleLines: string[]; scrollOffset: number } {
   if (displayLines.length <= maxVisibleLines) {
     return { visibleLines: displayLines, scrollOffset: 0 };
   }
-  const scrollOffset = displayLines.length - maxVisibleLines;
+
+  const maxScrollOffset = displayLines.length - maxVisibleLines;
+  const scrollOffset =
+    cursorDisplayLineIndex === undefined
+      ? maxScrollOffset
+      : Math.min(
+          Math.max(0, cursorDisplayLineIndex - maxVisibleLines + 1),
+          maxScrollOffset,
+        );
+
   return {
-    visibleLines: displayLines.slice(scrollOffset),
+    visibleLines: displayLines.slice(scrollOffset, scrollOffset + maxVisibleLines),
     scrollOffset,
   };
 }
