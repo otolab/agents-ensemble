@@ -35,3 +35,12 @@ export const INPUT_PANE_LEFT_COLUMNS = INPUT_PANE_LEFT_BORDER_COLUMNS + PANE_PAD
  * 実カーソルが入力行より 1 行上にずれる（オペレータ手動確認 iTerm2+tmux）。
  */
 export const OPERATOR_INPUT_CURSOR_Y_OFFSET = 1;
+
+/** 入力ペインの表示行数上限（端末行数に対する比率）。 */
+export const INPUT_PANE_MAX_HEIGHT_RATIO = 0.35;
+
+/** 入力ペインの表示行数の絶対上限。 */
+export const INPUT_PANE_MAX_DISPLAY_LINES = 10;
+
+/** 入力ペインの最小表示行数（空入力時）。 */
+export const INPUT_PANE_MIN_DISPLAY_LINES = 1;

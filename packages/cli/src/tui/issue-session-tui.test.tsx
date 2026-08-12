@@ -326,4 +326,18 @@ describe('IssueSessionTui', () => {
 
     expect(expectedLines).toBeGreaterThan(1);
   });
+
+  it('renders multi-line operator input in activity log', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('operator', 'first line\nsecond line');
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[operator]');
+    expect(frame).toContain('first line');
+    expect(frame).toContain('second line');
+  });
 });

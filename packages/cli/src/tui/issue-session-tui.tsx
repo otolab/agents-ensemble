@@ -1,5 +1,5 @@
 import { Box, Text, useInput } from 'ink';
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import {
@@ -24,7 +24,12 @@ import {
   computeOperatorInputCursorX,
   computeOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
+import {
+  computeMaxInputDisplayLines,
+  trimBlankLinesOnly,
+} from './operator-input-layout.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
+import stringWidth from 'string-width';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
@@ -224,16 +229,27 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     viewModel.getSnapshot,
   );
   const [inputValue, setInputValue] = useState('');
+  const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
   const contentWidth = usePaneContentWidth();
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
+  const promptWidth = stringWidth(operatorPrompt);
+  const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
   const contextHint = snapshot.postLoopWaiting
     ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
     : formatOperatorContextHint(snapshot.operatorContext);
   const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-  const inputPaneHeight = computeInputPaneHeight(hintLineCount);
-  const activityPaneHeight = computeActivityPaneHeight({ terminalRows, hintLineCount });
+  const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
+  const inputPaneHeight = computeInputPaneHeight({
+    hintLineCount,
+    inputDisplayLineCount: visibleInputDisplayLineCount,
+  });
+  const activityPaneHeight = computeActivityPaneHeight({
+    terminalRows,
+    hintLineCount,
+    inputDisplayLineCount: visibleInputDisplayLineCount,
+  });
   const visibleLineCount = getActivityLogVisibleLineCount(activityPaneHeight);
   const displayLineCount = useMemo(
     () => buildActivityLogDisplayLines(snapshot.activityLog, contentWidth).length,
@@ -245,14 +261,22 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     y: computeOperatorInputCursorY({
       terminalRows,
       hintLineCount,
+      inputDisplayLineCount: visibleInputDisplayLineCount,
+      cursorLineOffset: 0,
     }),
   };
+  const handleDisplayLineCountChange = useCallback((lineCount: number) => {
+    setInputDisplayLineCount(Math.max(1, lineCount));
+  }, []);
 
   useEffect(() => {
     setLinesFromBottom((current) => Math.min(current, maxLinesFromBottom));
   }, [maxLinesFromBottom]);
 
   useInput((_input, key) => {
+    if (inputValue.length > 0) {
+      return;
+    }
     if (key.pageUp) {
       setLinesFromBottom((current) => Math.min(current + visibleLineCount, maxLinesFromBottom));
       return;
@@ -271,12 +295,13 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   });
 
   const handleSubmit = (value: string) => {
-    const trimmed = value.trim();
+    const trimmed = trimBlankLinesOnly(value);
     if (!trimmed) {
       return;
     }
     onSubmit(trimmed);
     setInputValue('');
+    setInputDisplayLineCount(1);
   };
 
   return (
@@ -301,15 +326,16 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         overflow="hidden"
       >
         <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
-        <Text>
-          {operatorPrompt}
-          <ImeTextInput
-            value={inputValue}
-            onChange={setInputValue}
-            onSubmit={handleSubmit}
-            cursorStart={cursorStart}
-          />
-        </Text>
+        <ImeTextInput
+          value={inputValue}
+          onChange={setInputValue}
+          onSubmit={handleSubmit}
+          contentWidth={contentWidth}
+          promptPrefix={operatorPrompt}
+          maxDisplayLines={maxInputDisplayLines}
+          onDisplayLineCountChange={handleDisplayLineCountChange}
+          cursorStart={cursorStart}
+        />
       </Box>
     </Box>
   );
