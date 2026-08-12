@@ -5,9 +5,9 @@ import stringWidth from 'string-width';
 import {
   computeOperatorInputLayout,
   mapCursorOffsetToDisplayPosition,
-  mapDisplayPositionToCursorOffset,
   sliceVisibleInputDisplayLines,
 } from './operator-input-layout.js';
+import { reduceOperatorInputKeyPress } from './operator-input-key-reducer.js';
 
 export interface ImeTextInputProps {
   readonly value: string;
@@ -99,9 +99,26 @@ export function ImeTextInput({
     () => computeOperatorInputLayout(originalValue, contentWidth, promptWidth),
     [originalValue, contentWidth, promptWidth],
   );
+
+  const cursorPosition = useMemo(
+    () =>
+      mapCursorOffsetToDisplayPosition(
+        originalValue,
+        cursorOffset,
+        contentWidth,
+        promptWidth,
+      ),
+    [originalValue, cursorOffset, contentWidth, promptWidth],
+  );
+
   const { visibleLines, scrollOffset } = useMemo(
-    () => sliceVisibleInputDisplayLines(layout.displayLines, maxDisplayLines),
-    [layout.displayLines, maxDisplayLines],
+    () =>
+      sliceVisibleInputDisplayLines(
+        layout.displayLines,
+        maxDisplayLines,
+        cursorPosition.displayLineIndex,
+      ),
+    [layout.displayLines, maxDisplayLines, cursorPosition.displayLineIndex],
   );
 
   useEffect(() => {
@@ -124,12 +141,6 @@ export function ImeTextInput({
     });
   }, [originalValue, focus, showCursor]);
 
-  const cursorPosition = mapCursorOffsetToDisplayPosition(
-    originalValue,
-    cursorOffset,
-    contentWidth,
-    promptWidth,
-  );
   const visibleCursorLineIndex = cursorPosition.displayLineIndex - scrollOffset;
   const cursorColumnInVisibleLine = cursorPosition.columnInLine;
 
@@ -147,114 +158,34 @@ export function ImeTextInput({
 
   useInput(
     (input, key) => {
-      if (
-        key.pageUp ||
-        key.pageDown ||
-        (key.ctrl && input === 'c') ||
-        key.tab ||
-        (key.shift && key.tab)
-      ) {
-        return;
-      }
-      if (key.return && !key.shift) {
-        if (onSubmit) {
-          onSubmit(originalValue);
-        }
-        return;
-      }
-      if (key.return && key.shift) {
-        const nextValue =
-          originalValue.slice(0, cursorOffset) + '\n' + originalValue.slice(cursorOffset);
-        setState({ cursorOffset: cursorOffset + 1, cursorWidth: 0 });
-        onChange(nextValue);
+      const action = reduceOperatorInputKeyPress(
+        originalValue,
+        { cursorOffset, cursorWidth },
+        { input, key },
+        { contentWidth, promptWidth, showCursor },
+      );
+
+      if (action.type === 'ignore') {
         return;
       }
 
-      let nextCursorOffset = cursorOffset;
-      let nextValue = originalValue;
-      let nextCursorWidth = 0;
-
-      if (key.upArrow) {
-        if (showCursor && cursorPosition.displayLineIndex > 0) {
-          nextCursorOffset = mapDisplayPositionToCursorOffset(
-            originalValue,
-            cursorPosition.displayLineIndex - 1,
-            cursorPosition.columnInLine,
-            contentWidth,
-            promptWidth,
-          );
-        }
-      } else if (key.downArrow) {
-        if (showCursor && cursorPosition.displayLineIndex < layout.displayLines.length - 1) {
-          nextCursorOffset = mapDisplayPositionToCursorOffset(
-            originalValue,
-            cursorPosition.displayLineIndex + 1,
-            cursorPosition.columnInLine,
-            contentWidth,
-            promptWidth,
-          );
-        }
-      } else if (key.home) {
-        if (showCursor) {
-          nextCursorOffset = mapDisplayPositionToCursorOffset(
-            originalValue,
-            cursorPosition.displayLineIndex,
-            0,
-            contentWidth,
-            promptWidth,
-          );
-        }
-      } else if (key.end) {
-        if (showCursor) {
-          const lineText = layout.displayLines[cursorPosition.displayLineIndex] ?? '';
-          nextCursorOffset = mapDisplayPositionToCursorOffset(
-            originalValue,
-            cursorPosition.displayLineIndex,
-            stringWidth(lineText),
-            contentWidth,
-            promptWidth,
-          );
-        }
-      } else if (key.leftArrow) {
-        if (showCursor) {
-          nextCursorOffset--;
-        }
-      } else if (key.rightArrow) {
-        if (showCursor) {
-          nextCursorOffset++;
-        }
-      } else if (key.backspace || key.delete) {
-        if (cursorOffset > 0) {
-          nextValue =
-            originalValue.slice(0, cursorOffset - 1) +
-            originalValue.slice(cursorOffset, originalValue.length);
-          nextCursorOffset--;
-        }
-      } else if (input) {
-        nextValue =
-          originalValue.slice(0, cursorOffset) +
-          input +
-          originalValue.slice(cursorOffset, originalValue.length);
-        nextCursorOffset += input.length;
-        if (input.length > 1) {
-          nextCursorWidth = input.length;
-        }
+      if (action.type === 'submit') {
+        onSubmit?.(originalValue);
+        return;
       }
 
-      if (nextCursorOffset < 0) {
-        nextCursorOffset = 0;
-      }
-      if (nextCursorOffset > nextValue.length) {
-        nextCursorOffset = nextValue.length;
-      }
+      const nextCursorOffset = Math.max(
+        0,
+        Math.min(action.cursorOffset ?? cursorOffset, (action.value ?? originalValue).length),
+      );
 
       setState({
         cursorOffset: nextCursorOffset,
-        cursorWidth: nextCursorWidth,
+        cursorWidth: action.cursorWidth ?? 0,
       });
 
-      if (nextValue !== originalValue) {
-        onChange(nextValue);
+      if (action.value !== undefined && action.value !== originalValue) {
+        onChange(action.value);
       }
     },
     { isActive: focus },
