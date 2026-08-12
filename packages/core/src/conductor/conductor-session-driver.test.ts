@@ -53,7 +53,7 @@ describe('runConductorSessionDriver', () => {
     vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
       issue: TEST_ISSUE,
       title: 'Test',
-      body: 'body',
+      body: 'Test issue body for conductor.',
       state: 'OPEN',
       labels: [],
       comments: [],
@@ -79,6 +79,7 @@ describe('runConductorSessionDriver', () => {
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(String(send.mock.calls[0]![0])).toContain('作業フローの連鎖');
+    expect(String(send.mock.calls[0]![0])).toContain('Test issue body for conductor.');
     expect(result.sendCount).toBe(1);
     expect(result.stopReason).toBe('completed');
   });
