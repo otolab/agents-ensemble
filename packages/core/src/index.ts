@@ -187,6 +187,7 @@ export type {
 export {
   canDispatchConductorSend,
   autonomousTurnsAfterConductorSend,
+  autonomousTurnsAfterConductorBatch,
   shouldStopIssueLoop,
   resolveIssueLoopStopReason,
   resolveMaxTurns,
@@ -211,7 +212,20 @@ export {
 } from './conductor/session/session-event-queue.js';
 export {
   formatSessionEventForConductor,
+  formatSessionEventsForConductor,
 } from './conductor/session/format-session-event.js';
+export {
+  dispatchBatchStateAfterSend,
+  eventSourceKey,
+  markContinuationConsumed,
+  selectDispatchBatch,
+  countWorkerOutcomesInBatch,
+} from './conductor/session/select-dispatch-batch.js';
+export type {
+  DispatchBatch,
+  DispatchBatchState,
+  DispatchSourceKey,
+} from './conductor/session/select-dispatch-batch.js';
 export {
   SessionLogger,
 } from './conductor/session/session-logger.js';

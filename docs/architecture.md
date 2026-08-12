@@ -297,7 +297,7 @@ Driver / Policy / View の 3 層（Issue #62）:
 
 | 層 | 責務 | モジュール |
 |----|------|------------|
-| **SessionPolicy** | `canDispatchConductorSend`, `shouldStopIssueLoop`, `autonomousTurnsAfterConductorSend` | `session-policy.ts` |
+| **SessionPolicy** | `canDispatchConductorSend`, `shouldStopIssueLoop`, `autonomousTurnsAfterConductorSend` / `autonomousTurnsAfterConductorBatch` | `session-policy.ts` |
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` 呼び出し | `conductor-session-driver.ts` |
 | **SessionView** | TTY readline / `ENSEMBLE_OPERATOR_MESSAGE` / 将来 TUI | CLI `bindAsyncOperatorInput`（[operator-input.md](operator-input.md)） |
 
@@ -313,7 +313,7 @@ worker / harness ──enqueue──►─────────────�
                                               conductor.agent.send
 ```
 
-- `WorkerSession` / `ConductorSession` が対。worker 由来・operator 由来のイベントは **1 本の列** に集約し、1 イベント = 1 `agent.send`（初回のみ system + ブリーフィング）
+- `WorkerSession` / `ConductorSession` が対。worker 由来・operator 由来のイベントは **1 本の列** に集約し、[ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い **1 束 = 1 `agent.send`**（束は 1 件のこともある。初回のみ system + ブリーフィング）
 
 - `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）。`maxTurns <= 0` または CLI `--no-max-turns` で無制限（上限チェック・max-turns open question 登録なし）
 - **CLI デフォルト**: TTY / `ENSEMBLE_OPERATOR_MESSAGE` あり → 無制限。非 TTY / CI → 5（暴走防止）

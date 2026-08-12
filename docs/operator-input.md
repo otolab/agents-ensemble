@@ -2,7 +2,7 @@
 
 ConductorSession の **View 層**契約。入力・表示はここに閉じ、オーケストレーション（Driver）とは `bindOperatorInput` で接続する。
 
-関連: [architecture.md](architecture.md) §5、[ADR 0009](adr/0009-conductor-session-event-queue.md)、Issue #54（TUI）
+関連: [architecture.md](architecture.md) §5、[ADR 0009](adr/0009-conductor-session-event-queue.md)、[ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md)、Issue #54（TUI）
 
 ## 3 層の分担
 
@@ -42,7 +42,7 @@ type OperatorInputBinding = (
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
 - open question への `@inq:<id> <回答>` 形式も `submitOperatorInput` が解釈する
 
-View は **ブロックしない**。ループの待機は Driver が `waitForSendEvent` で行う。
+View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 
 ### `getContext()`
 
@@ -77,7 +77,8 @@ runConductorSession({
 View が決めないこと（SessionPolicy / Driver の責務）:
 
 - max-turns 到達後に worker イベントを送るか（`maxTurns <= 0` のときは常に可）
-- 未回答 open question があるときの dispatch 優先度
+- 次に送るイベント束の選び方（`operator.message` 最優先 → `permission` → worker continuation 1 回 → 静的優先度 — [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md)）
+- 未回答 open question があるときのループ継続（open question がある間は停止しない）
 - ループ終了条件
 
 ## CLI: 自律ターン上限

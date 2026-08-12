@@ -83,7 +83,7 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('completed');
   });
 
-  it('dispatches worker.completed then operator.message in queue order', async () => {
+  it('dispatches operator.message before worker.completed when both are queued', async () => {
     const send = vi
       .fn()
       .mockResolvedValueOnce({
@@ -94,12 +94,12 @@ describe('runConductorSessionDriver', () => {
       .mockResolvedValueOnce({
         runId: 'run-2',
         status: 'running',
-        result: 'worker done',
+        result: 'operator done',
       })
       .mockResolvedValueOnce({
         runId: 'run-3',
         status: 'finished',
-        result: 'operator done',
+        result: 'worker done',
       });
 
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
@@ -128,11 +128,46 @@ describe('runConductorSessionDriver', () => {
     const result = await driverPromise;
 
     expect(send).toHaveBeenCalledTimes(3);
-    expect(String(send.mock.calls[1]![0])).toContain('worker.completed');
-    expect(String(send.mock.calls[2]![0])).toContain('continue please');
+    expect(String(send.mock.calls[1]![0])).toContain('continue please');
+    expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
     expect(result.sendCount).toBe(3);
-    expect(result.autonomousTurns).toBe(0);
+    expect(result.autonomousTurns).toBe(1);
     expect(result.stopReason).toBe('completed');
+  });
+
+  it('batches multiple operator messages into one conductor send', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'running',
+        result: 'working',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'operator done',
+      });
+
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+
+    const driverPromise = runConductorSessionDriver(
+      createDriverOptions({ eventQueue, conductor, maxTurns: 5 }),
+    );
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+
+    eventQueue.enqueue({ type: 'operator.message', text: 'line one' });
+    eventQueue.enqueue({ type: 'operator.message', text: 'line two' });
+
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(String(send.mock.calls[1]![0])).toContain('## オペレータ入力（2 件）');
+    expect(String(send.mock.calls[1]![0])).toContain('line one');
+    expect(String(send.mock.calls[1]![0])).toContain('line two');
+    expect(result.sendCount).toBe(2);
   });
 
   it('reports autonomousTurns on each send complete', async () => {
