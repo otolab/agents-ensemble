@@ -11,6 +11,7 @@ import {
 } from '../session/session-sidecar.js';
 import { runConductorSession } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
+import * as worktreeModule from '../worktree/worktree.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -210,5 +211,85 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(result.stopReason).toBe('completed');
     expect(mockSend).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes isolated worktree after post-loop /exit', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const removeSpy = vi
+      .spyOn(worktreeModule, 'removeWorkerWorktree')
+      .mockResolvedValue({ status: 'not_found' });
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      workerWorktree: {
+        path: join(repoRoot, '.ensemble', 'worktrees', 'issue-1'),
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
+    operatorApi!.submit('/exit');
+    await sessionPromise;
+
+    expect(removeSpy).toHaveBeenCalledOnce();
+    expect(removeSpy).toHaveBeenCalledWith(repoRoot, TEST_ISSUE);
+  });
+
+  it('does not remove worktree when post-loop wait is interrupted', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const removeSpy = vi
+      .spyOn(worktreeModule, 'removeWorkerWorktree')
+      .mockResolvedValue({ status: 'not_found' });
+
+    const shutdown = new AbortController();
+    const onPostLoopWait = vi.fn();
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      shutdownSignal: shutdown.signal,
+      onPostLoopWait,
+      workerWorktree: {
+        path: join(repoRoot, '.ensemble', 'worktrees', 'issue-1'),
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
+    shutdown.abort();
+
+    const result = await sessionPromise;
+    expect(result.stopReason).toBe('interrupted');
+    expect(removeSpy).not.toHaveBeenCalled();
   });
 });

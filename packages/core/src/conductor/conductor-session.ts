@@ -488,7 +488,7 @@ export async function runConductorSession(
       sessionLogger.emit({ type: 'session.post_loop_wait' });
       const postLoopAction = await postLoopGate.wait(shutdownSignal);
       if (postLoopAction === 'exit' || shutdownSignal.aborted) {
-        if (postLoopAction === 'exit') {
+        if (postLoopAction === 'exit' && !shutdownSignal.aborted) {
           operatorRequestedExit = true;
         }
         if (shutdownSignal.aborted) {
@@ -546,6 +546,7 @@ export async function runConductorSession(
     await conductor.close();
     if (
       operatorRequestedExit &&
+      stopReason !== 'interrupted' &&
       workerWorktree &&
       !workerWorktree.inRepo
     ) {
