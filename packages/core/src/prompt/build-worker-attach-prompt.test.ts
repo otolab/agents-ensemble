@@ -16,8 +16,9 @@ describe('buildWorkerAttachPrompt', () => {
 
     expect(prompt).toContain('**implementer**');
     expect(prompt).toContain('作業 worktree: /tmp/wt');
-    expect(prompt).toContain('SystemPrompt');
-    expect(prompt).toContain('待機してください');
+    expect(prompt).toContain('init prompt');
+    expect(prompt).toContain('attach 済み');
+    expect(prompt).toContain('作業指示を待つ');
     expect(prompt).toContain('profile bootstrap');
   });
 
