@@ -334,7 +334,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   };
 
   useInput((_input, key) => {
-    if (openQuestions.length > 0 && inputValue.length === 0) {
+    if (openQuestions.length > 0 && key.shift) {
       if (key.upArrow) {
         setSelectedQuestionIndex((current) =>
           advanceOpenQuestionSelection(current, 'up', openQuestions.length),

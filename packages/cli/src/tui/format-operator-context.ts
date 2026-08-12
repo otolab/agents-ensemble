@@ -21,9 +21,9 @@ export function formatOperatorContextHint(
 
   if (context.openQuestions.length > 0) {
     if (selection) {
-      return `${selection.id} (${selection.index + 1}/${selection.total}) への回答 — ↑↓で選択 · Enter で送信`;
+      return `${selection.id} (${selection.index + 1}/${selection.total}) への回答 — Shift+↑↓で選択 · Enter で送信`;
     }
-    return 'open question あり — ↑↓で選択して回答';
+    return 'open question あり — Shift+↑↓で選択して回答';
   }
 
   return `自律ターン ${context.autonomousTurns}/${formatMaxTurnsLabel(context.maxTurns)} — 任意のタイミングで入力（/exit で終了）`;

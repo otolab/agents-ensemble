@@ -133,7 +133,7 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('Open questions');
     expect(frame).toContain('inq-1');
     expect(frame).toContain('1/1');
-    expect(frame).toContain('↑↓で選択');
+    expect(frame).toContain('Shift+↑↓で選択');
     expect(frame).toContain('operator>');
   });
 
@@ -489,7 +489,7 @@ describe('IssueSessionTui', () => {
   });
 
   describe('open questions selection (stdin integration)', () => {
-    it('cycles selection with arrow keys when input is empty', async () => {
+    it('cycles selection with Shift+arrow keys', async () => {
       const viewModel = createTuiViewModel();
       viewModel.setDisplayState({
         workers: {},
@@ -506,12 +506,34 @@ describe('IssueSessionTui', () => {
 
       expect(lastFrame() ?? '').toContain('▸ inq-1');
 
-      stdin.write(INK_TEST_KEYS.downArrow);
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
       await flushInkStdin();
 
       const frame = lastFrame() ?? '';
       expect(frame).toContain('2/2');
       expect(frame).toContain('▸ inq-2');
+    });
+
+    it('does not change selection on plain arrow keys', async () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          createOpenQuestion({ id: 'inq-1', question: 'First question' }),
+          createOpenQuestion({ id: 'inq-2', question: 'Second question' }),
+        ],
+      });
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      stdin.write(INK_TEST_KEYS.downArrow);
+      await flushInkStdin();
+
+      expect(lastFrame() ?? '').toContain('▸ inq-1');
+      expect(lastFrame() ?? '').not.toContain('2/2');
     });
 
     it('submits selected question answer with targetOpenQuestionId', async () => {
@@ -536,7 +558,7 @@ describe('IssueSessionTui', () => {
         />,
       );
 
-      stdin.write(INK_TEST_KEYS.downArrow);
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
       await flushInkStdin();
       expect(lastFrame() ?? '').toContain('▸ inq-2');
 

@@ -287,7 +287,7 @@ conductor の `ask_human` は質問を **open question（TODO リスト）とし
 - 上限到達時（リミット有効時のみ）は orchestrator が open question「次どうする？」（`source: max_turns`）を自動登録し、conductor は送らず待機する
 - オペレータは次ターン開始前に TTY で回答（自由チャット可）
 - チャットですでに答えている場合は conductor が `answer_open_question` で代行記録
-- TTY（Ink TUI）では **↑/↓ で open question を選択**し、入力欄から回答を送信する
+- TTY（Ink TUI）では **Shift+↑/↓ で open question を選択**し、入力欄から回答を送信する（↑/↓ は複数行入力のカーソル移動）
 - 非 TTY では未回答が 1 件のときはそのまま入力で回答、複数件のときは自由な指示として扱う
 
 ```bash

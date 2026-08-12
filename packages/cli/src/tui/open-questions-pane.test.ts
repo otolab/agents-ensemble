@@ -89,6 +89,6 @@ describe('resolveOpenQuestionsPaneLayout', () => {
 
     expect(layout.paneHeight).toBeGreaterThan(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
     expect(layout.titleText).toContain('1/1');
-    expect(layout.titleText).toContain('↑↓で選択');
+    expect(layout.titleText).toContain('Shift+↑↓で選択');
   });
 });

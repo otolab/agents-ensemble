@@ -28,7 +28,7 @@ export const OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO = 0.35;
 export const OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES = 8;
 
 /** Open questions ペインタイトルに付与する選択操作ヒント。 */
-export const OPEN_QUESTIONS_SELECTION_HINT = ' — ↑↓で選択';
+export const OPEN_QUESTIONS_SELECTION_HINT = ' — Shift+↑↓で選択';
 
 /** 入力ペインの枠線（上下）行数。`PANE_BORDER_ROWS` と同値。 */
 export const INPUT_PANE_BORDER_ROWS = PANE_BORDER_ROWS;
