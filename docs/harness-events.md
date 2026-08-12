@@ -32,7 +32,8 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `harness.worktree.remove_skipped` | 未コミット変更あり等で削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` | なし |
 | `harness.worktree.remove_failed` | `git worktree remove` 失敗（best-effort） | `[harness] worktree.remove_failed path=... branch=... error=...` | なし |
 | `operator.input` | オペレータ発話をキューに載せる直前 | `[harness] operator.input turn=N bytes=...` | なし |
-| `conductor.send` | 各 `agent.send` 完了後 | `[harness] conductor.send n=N status=... workerDone=... workerFailed=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` |
+| `conductor.send.started` | 各 `agent.send` 開始直前 | `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
+| `conductor.send` | 各 `agent.send` 完了後 | `[harness] conductor.send n=N status=... workerDone=... workerFailed=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（bootstrap 含む） | `[harness] worker.round name=... kind=... roundKind=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
@@ -117,8 +118,11 @@ prompt_worker / sendWorkerMessage
        │
        └─ 失敗 ─► worker.failed ───────────────────────► stderr + snapshot + SessionEventQueue
 
+各 agent.send 開始
+  conductor.send.started ───────────────────► stderr + TUI（conductor: thinking）
+
 各 agent.send 完了
-  conductor.send ───────────────────────────► stderr + snapshot（末尾更新）
+  conductor.send ───────────────────────────► stderr + snapshot（末尾更新）+ TUI（conductor: idle）
 
 セッション終了
   session.stop ─────────────────────────────► stderr + snapshot

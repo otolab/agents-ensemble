@@ -1,6 +1,7 @@
 import { Box, Text, useBoxMetrics, useInput } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
+import type { WorkerDisplayStatus } from '../display/session-display-state.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import {
   ACTIVITY_LOG_LABEL_COLORS,
@@ -115,12 +116,37 @@ function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
   );
 }
 
+function formatConductorWorkerStatusLine(
+  name: string,
+  worker: { kind: string; status: WorkerDisplayStatus },
+): string {
+  if (worker.kind === 'conductor') {
+    const label = worker.status === 'running' ? 'thinking' : worker.status;
+    return `conductor: ${label}`;
+  }
+  return `${name} (${worker.kind}): ${worker.status}`;
+}
+
+function sortWorkerEntries(
+  entries: [string, { kind: string; status: WorkerDisplayStatus }][],
+): [string, { kind: string; status: WorkerDisplayStatus }][] {
+  return [...entries].sort(([nameA], [nameB]) => {
+    if (nameA === 'conductor') {
+      return -1;
+    }
+    if (nameB === 'conductor') {
+      return 1;
+    }
+    return nameA.localeCompare(nameB);
+  });
+}
+
 function WorkerStatusPane({
   workers,
 }: {
   workers: TuiViewSnapshot['displayState']['workers'];
 }) {
-  const entries = Object.entries(workers);
+  const entries = sortWorkerEntries(Object.entries(workers));
   return (
     <Box
       flexDirection="column"
@@ -135,9 +161,7 @@ function WorkerStatusPane({
         <Text dimColor>(待機中)</Text>
       ) : (
         entries.map(([name, worker]) => (
-          <Text key={name}>
-            {name} ({worker.kind}): {worker.status}
-          </Text>
+          <Text key={name}>{formatConductorWorkerStatusLine(name, worker)}</Text>
         ))
       )}
     </Box>

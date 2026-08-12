@@ -60,6 +60,13 @@ export type SessionLogEvent =
       text: string;
     }
   | {
+      type: 'conductor.send.started';
+      /** これから実行する send の通し番号（1 始まり）。 */
+      sendCount: number;
+      /** dispatch 束の source key（`operator` / `permission` / `worker:*` / `initial`）。 */
+      dispatchSource?: string;
+    }
+  | {
       type: 'conductor.send';
       sendCount: number;
       runId: string;
@@ -175,6 +182,7 @@ export class SessionLogger {
       case 'harness.worker.bootstrap.completed':
       case 'harness.worker.bootstrap.failed':
       case 'operator.input':
+      case 'conductor.send.started':
       case 'permission.pending':
       case 'worker.process.stderr':
       case 'open.question.enqueued':

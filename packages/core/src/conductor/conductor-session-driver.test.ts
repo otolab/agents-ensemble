@@ -70,6 +70,7 @@ describe('runConductorSessionDriver', () => {
   });
 
   it('runs initial send then stops when conductor finishes', async () => {
+    const onSendStarted = vi.fn();
     const send = vi.fn().mockResolvedValue({
       runId: 'run-1',
       status: 'finished',
@@ -78,10 +79,15 @@ describe('runConductorSessionDriver', () => {
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
     const eventQueue = new SessionEventQueue();
 
-    const result = await runConductorSessionDriver(
-      createDriverOptions({ eventQueue, conductor }),
-    );
+    const result = await runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      onSendStarted,
+    });
 
+    expect(onSendStarted).toHaveBeenCalledWith({
+      sendCount: 1,
+      dispatchSource: 'initial',
+    });
     expect(send).toHaveBeenCalledTimes(1);
     expect(String(send.mock.calls[0]![0])).toContain('作業フローの連鎖');
     expect(String(send.mock.calls[0]![0])).toContain('Test issue body for conductor.');

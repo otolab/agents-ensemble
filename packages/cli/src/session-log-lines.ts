@@ -22,6 +22,13 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return `worker.bootstrap.failed name=${event.name} kind=${event.kind} error=${event.error}`;
     case 'operator.input':
       return `operator.input turn=${event.conductorTurn} bytes=${event.text.length}`;
+    case 'conductor.send.started': {
+      let line = `conductor.send.started n=${event.sendCount}`;
+      if (event.dispatchSource) {
+        line += ` source=${event.dispatchSource}`;
+      }
+      return line;
+    }
     case 'permission.pending':
       return formatPermissionSummaryForOperator(event.permission, {
         workerLabel: event.workerLabel,

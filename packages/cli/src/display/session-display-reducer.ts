@@ -41,6 +41,8 @@ export function reduceDisplayState(
       return setWorkerStatus(state, event.name, event.kind, 'idle');
     case 'harness.worker.bootstrap.failed':
       return setWorkerStatus(state, event.name, event.kind, 'failed');
+    case 'conductor.send.started':
+      return setWorkerStatus(state, 'conductor', 'conductor', 'running');
     case 'worker.round':
       return setWorkerStatus(
         state,
@@ -56,22 +58,23 @@ export function reduceDisplayState(
         'failed',
       );
     case 'conductor.send': {
+      let nextState = setWorkerStatus(state, 'conductor', 'conductor', 'idle');
       if (event.status === 'finished' && event.result?.trim()) {
         const output = event.result.trim();
-        if (state.conductorOutput === output) {
-          return state;
+        if (nextState.conductorOutput === output) {
+          return nextState;
         }
-        return { ...state, conductorOutput: output };
+        return { ...nextState, conductorOutput: output };
       }
       if (event.status === 'error') {
         const detail = event.error?.message ?? 'unknown error';
         const output = formatConductorErrorMessage(detail);
-        if (state.conductorOutput === output) {
-          return state;
+        if (nextState.conductorOutput === output) {
+          return nextState;
         }
-        return { ...state, conductorOutput: output };
+        return { ...nextState, conductorOutput: output };
       }
-      return state;
+      return nextState;
     }
     case 'open.question.enqueued': {
       if (event.question.status !== 'open') {
