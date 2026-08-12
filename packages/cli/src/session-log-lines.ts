@@ -14,12 +14,12 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return `worktree.remove_skipped path=${event.path} branch=${event.branch} reason=${event.reason}`;
     case 'harness.worktree.remove_failed':
       return `worktree.remove_failed path=${event.path} branch=${event.branch} error=${event.error}`;
-    case 'harness.worker.bootstrap.started':
-      return `worker.bootstrap.started name=${event.name} kind=${event.kind}`;
-    case 'harness.worker.bootstrap.completed':
-      return `worker.bootstrap.completed name=${event.name} kind=${event.kind} stopReason=${event.stopReason}`;
-    case 'harness.worker.bootstrap.failed':
-      return `worker.bootstrap.failed name=${event.name} kind=${event.kind} error=${event.error}`;
+    case 'harness.worker.prompt.started':
+      return `worker.prompt.started name=${event.name} kind=${event.kind} source=${event.source}`;
+    case 'harness.worker.prompt.completed':
+      return `worker.prompt.completed name=${event.name} kind=${event.kind} source=${event.source} stopReason=${event.stopReason}`;
+    case 'harness.worker.prompt.failed':
+      return `worker.prompt.failed name=${event.name} kind=${event.kind} source=${event.source} error=${event.error}`;
     case 'operator.input':
       return `operator.input turn=${event.conductorTurn} bytes=${event.text.length}`;
     case 'conductor.send.started': {
@@ -41,7 +41,7 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return line;
     }
     case 'worker.round':
-      return `worker.round name=${event.dispatch.name} kind=${event.dispatch.kind} roundKind=${event.dispatch.roundKind ?? 'instruction'} stopReason=${event.dispatch.promptResult.stopReason} path=${event.dispatch.worktree.path}`;
+      return `worker.round name=${event.dispatch.name} kind=${event.dispatch.kind} source=${event.dispatch.source ?? 'conductor'} stopReason=${event.dispatch.promptResult.stopReason} path=${event.dispatch.worktree.path}`;
     case 'worker.failed':
       return `worker.failed name=${event.failure.name} kind=${event.failure.kind} error=${event.failure.error}`;
     case 'worker.process.stderr': {

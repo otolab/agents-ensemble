@@ -1,7 +1,7 @@
 /** harness が worker ラウンド完了時に保持する結果型。 */
 
-/** harness 自動 bootstrap か、conductor 指示の作業ラウンドか。 */
-export type WorkerRoundKind = 'bootstrap' | 'instruction';
+/** harness 起因の init prompt か、conductor 指示の prompt か。 */
+export type WorkerPromptSource = 'harness' | 'conductor';
 
 export interface WorkerDispatchResult {
   name: string;
@@ -11,7 +11,7 @@ export interface WorkerDispatchResult {
   prompt: string;
   promptResult: import('../acp/types.js').PromptResult;
   acpSessionId: string;
-  roundKind?: WorkerRoundKind;
+  source?: WorkerPromptSource;
 }
 
 export function buildWorkerDispatchResult(input: {
@@ -20,7 +20,7 @@ export function buildWorkerDispatchResult(input: {
   session: import('./worker-acp-session.js').WorkerAcpSession;
   prompt: string;
   promptResult: import('../acp/types.js').PromptResult;
-  roundKind?: WorkerRoundKind;
+  source?: WorkerPromptSource;
 }): WorkerDispatchResult {
   return {
     name: input.name,
@@ -30,7 +30,7 @@ export function buildWorkerDispatchResult(input: {
     prompt: input.prompt,
     promptResult: input.promptResult,
     acpSessionId: input.session.sessionId,
-    ...(input.roundKind ? { roundKind: input.roundKind } : {}),
+    ...(input.source ? { source: input.source } : {}),
   };
 }
 

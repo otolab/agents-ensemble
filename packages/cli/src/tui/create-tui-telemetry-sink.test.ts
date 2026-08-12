@@ -8,10 +8,11 @@ describe('createTuiTelemetrySink', () => {
     const sink = createTuiTelemetrySink(viewModel);
 
     sink({
-      type: 'harness.worker.bootstrap.started',
+      type: 'harness.worker.prompt.started',
       name: 'implementer',
       kind: 'implementer',
       workerId: 'worker-1',
+      source: 'harness',
     });
     sink({
       type: 'open.question.enqueued',
@@ -30,7 +31,7 @@ describe('createTuiTelemetrySink', () => {
     expect(snapshot.activityLog).toEqual([
       {
         label: 'harness',
-        text: 'worker.bootstrap.started name=implementer kind=implementer',
+        text: 'worker.prompt.started name=implementer kind=implementer source=harness',
       },
       {
         label: 'observation',

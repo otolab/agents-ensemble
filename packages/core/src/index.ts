@@ -103,7 +103,7 @@ export type {
 } from './dispatch/worker-acp-session.js';
 export type {
   WorkerDispatchResult,
-  WorkerRoundKind,
+  WorkerPromptSource,
 } from './dispatch/worker-dispatch.js';
 
 export { runGh } from './github/run-gh.js';

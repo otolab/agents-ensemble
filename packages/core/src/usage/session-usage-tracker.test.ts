@@ -28,7 +28,7 @@ describe('SessionUsageTracker', () => {
     tracker.recordWorkerRound({
       name: 'implementer',
       kind: 'implementer',
-      roundKind: 'bootstrap',
+      source: 'harness',
       prompt: 'hello world',
       promptResult: {
         stopReason: 'end_turn',

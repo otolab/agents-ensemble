@@ -27,9 +27,9 @@
 - オペレータの「起動状況」「誰が動いているか」は **作業指示ではない**。`list_workers` / `get_worker_status` で harness 状態を読む
 - 作業指示は `prompt_worker`、状態照会は上記ツール — 混同しない
 - Issue / PR を読まず tool 結果で答える
-- **スナップショットのみ**。`bootstrapInFlight` や worker の idle を **ポーリング・`Await` で待たない**。変化は harness の SessionEvent（`permission.pending` / `worker.completed` 等）で届く（[ADR 0016](../../docs/adr/0016-bootstrap-permission-conductor-wait.md)）
+- **スナップショットのみ**。`attachInFlight` や worker の idle / processing を **ポーリング・`Await` で待たない**。変化は harness の SessionEvent（`permission.pending` / `worker.completed` 等）で届く（[ADR 0016](../../docs/adr/0016-bootstrap-permission-conductor-wait.md)）
 
-## permission（bootstrap 中も同様）
+## permission（init prompt 中も同様）
 
-- `permission.pending` が届いたら **bootstrap 未完了でも先に処理する**（`resolve_permission` または `ask_human`）
-- permission を放置したまま bootstrap 完了や worker idle を待たない
+- `permission.pending` が届いたら **init prompt 未完了・worker が processing 中でも先に処理する**（`resolve_permission` または `ask_human`）
+- permission を放置したまま worker の idle を待たない

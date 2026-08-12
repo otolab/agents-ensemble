@@ -48,7 +48,7 @@ export class SessionUsageTracker {
   recordWorkerRound(input: {
     name: string;
     kind: string;
-    roundKind?: 'bootstrap' | 'instruction';
+    source?: 'harness' | 'conductor';
     prompt: string;
     promptResult: PromptResult;
   }): SessionUsageRound {
@@ -65,7 +65,7 @@ export class SessionUsageTracker {
       agentKind: 'worker',
       agentName: input.name,
       workerKind: input.kind,
-      roundKind: input.roundKind,
+      source: input.source,
       stopReason: input.promptResult.stopReason,
       usage,
       recordedAt: Date.now(),

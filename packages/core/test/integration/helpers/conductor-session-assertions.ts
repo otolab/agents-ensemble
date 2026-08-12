@@ -4,8 +4,7 @@ import { expect } from 'vitest';
 export function isWorkerCompletedConductorMessage(message: string): boolean {
   return (
     message.includes('```yaml\n# worker.completed') &&
-    (message.includes('## worker bootstrap 完了') ||
-      message.includes('## worker 作業ラウンド完了'))
+    message.includes('## worker ラウンド完了')
   );
 }
 
@@ -13,6 +12,10 @@ export function isWorkerCompletedConductorMessage(message: string): boolean {
 export function extractYamlScalar(message: string, key: string): string | undefined {
   const match = message.match(new RegExp(`^${key}: '?([^'\\n]+)'?$`, 'm'));
   return match?.[1]?.trim();
+}
+
+export function extractWorkerCompletedSource(message: string): string | undefined {
+  return extractYamlScalar(message, 'source');
 }
 
 /** 旧 follow-up prompt（毎ターン full state 投影）の名残がないこと。 */

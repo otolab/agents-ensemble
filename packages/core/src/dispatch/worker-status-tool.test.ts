@@ -128,7 +128,7 @@ describe('createWorkerStatusTools', () => {
     });
 
     const busy = await tools.get_worker_status.execute({ worker: 'implementer' });
-    expect(toolText(busy)).toContain('state: prompting');
+    expect(toolText(busy)).toContain('state: processing');
     expect(toolText(busy)).toContain('queueDepth: 1');
     expect(toolText(busy)).toContain('queued task one');
 

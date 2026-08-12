@@ -22,7 +22,7 @@ export interface SessionUsageRound {
   /** worker 名。conductor のときは省略。 */
   agentName?: string;
   workerKind?: string;
-  roundKind?: 'bootstrap' | 'instruction';
+  source?: 'harness' | 'conductor';
   runId?: string;
   modelId?: string;
   stopReason?: string;

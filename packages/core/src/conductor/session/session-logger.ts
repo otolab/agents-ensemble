@@ -35,23 +35,26 @@ export type SessionLogEvent =
       error: string;
     }
   | {
-      type: 'harness.worker.bootstrap.started';
+      type: 'harness.worker.prompt.started';
       name: string;
       kind: string;
       workerId: string;
+      source: 'harness' | 'conductor';
     }
   | {
-      type: 'harness.worker.bootstrap.completed';
+      type: 'harness.worker.prompt.completed';
       name: string;
       kind: string;
       workerId: string;
+      source: 'harness' | 'conductor';
       stopReason: string;
     }
   | {
-      type: 'harness.worker.bootstrap.failed';
+      type: 'harness.worker.prompt.failed';
       name: string;
       kind: string;
       workerId: string;
+      source: 'harness' | 'conductor';
       error: string;
     }
   | {
@@ -186,9 +189,9 @@ export class SessionLogger {
       case 'harness.worktree.removed':
       case 'harness.worktree.remove_skipped':
       case 'harness.worktree.remove_failed':
-      case 'harness.worker.bootstrap.started':
-      case 'harness.worker.bootstrap.completed':
-      case 'harness.worker.bootstrap.failed':
+      case 'harness.worker.prompt.started':
+      case 'harness.worker.prompt.completed':
+      case 'harness.worker.prompt.failed':
       case 'operator.input':
       case 'conductor.send.started':
       case 'permission.pending':

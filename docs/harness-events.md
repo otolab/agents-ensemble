@@ -34,7 +34,7 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `operator.input` | オペレータ発話をキューに載せる直前 | `[harness] operator.input turn=N bytes=...` | なし |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
 | `conductor.send` | 各 `agent.send` 完了後 | `[harness] conductor.send n=N status=... workerDone=... workerFailed=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
-| `worker.round` | worker の 1 `session/prompt` ラウンド完了（bootstrap 含む） | `[harness] worker.round name=... kind=... roundKind=... stopReason=... path=...` | `workerDispatches` に追記 |
+| `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
@@ -74,28 +74,30 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | CI wakeup | `gh pr view --json statusCheckRollup` の **CheckRun 配列**。前回 poll で pending だった check が `COMPLETED` + `conclusion` になったときのみ通知 |
 | CLI | `--no-github-monitor` で無効化。`--github-monitor-debounce-ms` で debounce 変更 |
 
-### 2.2 bootstrap 専用イベント（#74 で追加）
+### 2.2 worker prompt ライフサイクルイベント（#133 で統一）
 
-harness が **conductor の指示なしに** 行う worker attach + 待機 prompt のライフサイクル。
+init prompt（harness 起因）と instruction（conductor 起因）を **対称**に扱う。旧 `harness.worker.bootstrap.*` は廃止。
 
 | type | 発火タイミング | stderr 例 | snapshot への影響 |
 |------|----------------|-----------|-------------------|
-| `harness.worker.bootstrap.started` | attach 開始直前（`WorkerRuntime.bootstrap`） | `[harness] worker.bootstrap.started name=... kind=...` | なし |
-| `harness.worker.bootstrap.completed` | bootstrap ラウンドの ACP prompt 完了直後 | `[harness] worker.bootstrap.completed name=... kind=... stopReason=...` | なし |
-| `harness.worker.bootstrap.failed` | attach または bootstrap prompt 失敗 | `[harness] worker.bootstrap.failed name=... kind=... error=...` | なし |
+| `harness.worker.prompt.started` | `session/prompt` ラウンド開始（init / instruction 共通） | `[harness] worker.prompt.started name=... kind=... source=harness\|conductor` | なし（TUI: running） |
+| `harness.worker.prompt.completed` | ラウンド ACP prompt 完了直後 | `[harness] worker.prompt.completed name=... kind=... source=... stopReason=...` | なし（TUI: idle） |
+| `harness.worker.prompt.failed` | attach または prompt 失敗 | `[harness] worker.prompt.failed name=... kind=... source=... error=...` | なし（TUI: failed） |
 
-### 2.3 bootstrap 時の `worker.round` との関係（方針）
+init prompt（`source: harness`）では attach 開始時に `started` を出し、init ラウンド完了時に `completed` を出す。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。
+
+### 2.3 `worker.round` との関係（方針）
 
 **両方出す。**
 
 | 観点 | 方針 |
 |------|------|
-| **bootstrap 専用イベント** | 開始・完了・失敗を **harness テレメトリだけで即座に区別** できるようにする（オペレータの stderr 向け） |
-| **`worker.round`** | bootstrap ラウンドも **従来どおり 1 ラウンドとして記録** する。終了 JSON の `workerDispatches` / `workerResponses` 整合を維持 |
-| **区別用メタデータ** | `worker.round` の `dispatch.roundKind`（`bootstrap` \| `instruction`）でラウンド種別を示す |
-| **`worker.failed`** | bootstrap 失敗時も従来どおり発火。**加えて** `harness.worker.bootstrap.failed` を出し、失敗が bootstrap 段階であることを明示 |
+| **prompt ライフサイクルイベント** | 開始・完了・失敗を **TUI / stderr テレメトリで即座に区別**（init / instruction 対称） |
+| **`worker.round`** | すべてのラウンドを **従来どおり 1 ラウンドとして記録**。終了 JSON の `workerDispatches` / `workerResponses` 整合を維持 |
+| **区別用メタデータ** | `worker.round` の `dispatch.source`（`harness` \| `conductor`）でラウンド起因を示す |
+| **`worker.failed`** | 失敗時も従来どおり発火。**加えて** `harness.worker.prompt.failed` を出す |
 
-instruction ラウンド（`prompt_worker` / `sendWorkerMessage`）では bootstrap 専用イベントは出さない。`worker.round` の `roundKind` は `instruction`。
+`source: harness` のラウンド完了は **作業報告ではない**（conductor 向け `worker.completed` の見出しも instruction と同型）。
 
 ---
 
@@ -107,8 +109,8 @@ instruction ラウンド（`prompt_worker` / `sendWorkerMessage`）では bootst
 | type | 発火タイミング | conductor への見出し（例） | 備考 |
 |------|----------------|---------------------------|------|
 | `operator.message` | オペレータが `submit` / TTY 入力 | （プレーンテキスト） | max-turns ゲートの対象 |
-| `worker.completed` | worker 1 ラウンド完了 | `## worker bootstrap 完了` または `## worker 作業ラウンド完了` | `result.roundKind` で見出しを分岐 |
-| `worker.failed` | worker 失敗 | `## worker 失敗` | attach / bootstrap / instruction いずれも |
+| `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
+| `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | `resolve_permission` 待ち |
 | `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | 状況把握のみ。**自動 `prompt_worker` はしない**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)） |
 
@@ -118,27 +120,30 @@ instruction ラウンド（`prompt_worker` / `sendWorkerMessage`）では bootst
 セッション開始
   harness.worktree ─────────────────────────► stderr のみ
 
-WorkerSession.bootstrap()（worker ごと）
-  harness.worker.bootstrap.started ─────────► stderr
+WorkerSession.bootstrap()（worker ごと。attach + init prompt）
+  harness.worker.prompt.started (source=harness) ───► stderr + TUI running
        │
        ├─ attach + buildWorkerAttachPrompt + session/prompt
        │
-       ├─ 成功 ─► harness.worker.bootstrap.completed ─► stderr
-       │          worker.round (roundKind=bootstrap) ──► stderr + snapshot
-       │          worker.completed (roundKind=bootstrap) ► SessionEventQueue ► agent.send
+       ├─ 成功 ─► harness.worker.prompt.completed (source=harness) ► stderr + TUI idle
+       │          worker.round (source=harness) ───────► stderr + snapshot
+       │          worker.completed (source=harness) ───► SessionEventQueue ► agent.send
        │
-       └─ 失敗 ─► harness.worker.bootstrap.failed ────► stderr
-                  worker.failed ───────────────────────► stderr + snapshot + SessionEventQueue
+       └─ 失敗 ─► harness.worker.prompt.failed (source=harness) ► stderr + TUI failed
+                  worker.failed ─────────────────────────► stderr + snapshot + SessionEventQueue
 
 prompt_worker / sendWorkerMessage
        │
+       ├─ harness.worker.prompt.started (source=conductor) ► stderr + TUI running
        ├─ permission 保留 ─► permission.pending ───────► stderr / TUI 活動ログ（即時）
        │                     SessionEvent permission.pending ► SessionEventQueue ► agent.send
        │
-       ├─ 成功 ─► worker.round (roundKind=instruction) ─► stderr + snapshot
-       │          worker.completed (roundKind=instruction) ► SessionEventQueue ► agent.send
+       ├─ 成功 ─► harness.worker.prompt.completed (source=conductor) ► stderr + TUI idle
+       │          worker.round (source=conductor) ───────► stderr + snapshot
+       │          worker.completed (source=conductor) ───► SessionEventQueue ► agent.send
        │
-       └─ 失敗 ─► worker.failed ───────────────────────► stderr + snapshot + SessionEventQueue
+       └─ 失敗 ─► harness.worker.prompt.failed (source=conductor) ► stderr + TUI failed
+                  worker.failed ─────────────────────────► stderr + snapshot + SessionEventQueue
 
 各 agent.send 開始
   conductor.send.started ───────────────────► stderr + TUI（conductor: thinking）
@@ -154,7 +159,7 @@ GitHub monitor（セッション中は常時。`--no-github-monitor` で無効�
   session.stop ─────────────────────────────► stderr + snapshot
 ```
 
-**重要**: `worker.completed` は bootstrap でも instruction でも **同じイベント型**。conductor は `roundKind` と見出しで「自分が指示していない自動処理」かどうかを判別する。
+**重要**: `worker.completed` は init prompt でも instruction でも **同じイベント型・同じ見出し**。conductor は YAML 内の `source` で「自分が指示していない harness 起因の自動処理」かどうかを判別する。`source: harness` は作業開始ではない。
 
 ---
 
@@ -168,30 +173,29 @@ GitHub monitor（セッション中は常時。`--no-github-monitor` で無効�
 | `[harness]` テレメトリ（stderr） | SessionEvent の YAML 本文（conductor 向け） |
 | `[open question]` 等（ObservationSink、stderr） | |
 
-bootstrap 把握の目安:
+init prompt 把握の目安:
 
-1. `worker.bootstrap.started` → harness が attach を開始した
-2. `worker.bootstrap.completed` → 待機 prompt まで終わった（**まだ実作業ではない**）
-3. `worker.round ... roundKind=bootstrap` → 終了 JSON にも載るラウンド記録
+1. `worker.prompt.started source=harness` → harness が attach / init prompt を開始した
+2. `worker.prompt.completed source=harness` → 待機 prompt まで終わった（**まだ実作業ではない**）
+3. `worker.round ... source=harness` → 終了 JSON にも載るラウンド記録
 
 ### 4.2 conductor（SessionEvent → agent.send）
 
 | イベント | 意味 | 取るべき行動 |
 |----------|------|--------------|
-| `## worker bootstrap 完了` | harness による attach + 待機 prompt の完了 | **作業開始ではない**。`prompt_worker` で指示するまで待ってよい |
-| `## worker 作業ラウンド完了` | 自分が `prompt_worker` した 1 ラウンドの終了 | Issue / PR を読んで進捗判断。タスク完了の意味ではない |
+| `## worker ラウンド完了` | worker の 1 `session/prompt` 終了 | `source: harness` なら **作業開始ではない**（init prompt 完了）。`source: conductor` なら自分が `prompt_worker` したラウンド。Issue / PR を読んで進捗判断 |
 | `## worker 失敗` | attach / prompt 失敗 | 再試行・エスカレーションを検討 |
-| `## permission 判断待ち` | worker の操作許可が保留（**bootstrap ラウンド中もありうる**） | `resolve_permission` またはオペレータへ。**bootstrap 完了を待たない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)） |
+| `## permission 判断待ち` | worker の操作許可が保留（**init prompt ラウンド中もありうる**） | `resolve_permission` またはオペレータへ。**init prompt 完了を待たない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)） |
 | `## GitHub 更新` | Issue コメント / PR レビュー / CI 完了等 | 状況把握。**自動 `prompt_worker` はしない** |
 
-conductor は `list_workers` の `bootstrapInFlight` 等を **ポーリング・`Await` で待ってはならない**。状態変化は本表の SessionEvent のみが通知する。
+conductor は `list_workers` の `attachInFlight` / `state: processing` 等を **ポーリング・`Await` で待ってはならない**。状態変化は本表の SessionEvent のみが通知する。
 
 メトリクス（オペレータへの状態説明用。終了 JSON / `conductor.send` から参照）:
 
 | 名前 | 意味 |
 |------|------|
 | `sendCount` | 完了した `agent.send` 回数（conductor ターン数） |
-| `workerDispatches` | 完了した worker ラウンド数（bootstrap 含む） |
+| `workerDispatches` | 完了した worker ラウンド数（init prompt 含む） |
 | `workerFailures` | worker 失敗回数 |
 | `autonomousTurns` / `maxTurns` | 自律ループのターン制限（session-policy。詳細は architecture.md） |
 
@@ -200,11 +204,11 @@ conductor は `list_workers` の `bootstrapInFlight` 等を **ポーリング・
 | フィールド | harness イベントとの関係 |
 |------------|-------------------------|
 | `sendCount` | `conductor.send` の最終値 |
-| `workerDispatches` / CLI の `workerResponses` | 各 `worker.round` の要約（`roundKind` 含む） |
+| `workerDispatches` / CLI の `workerResponses` | 各 `worker.round` の要約（`source` 含む） |
 | `workerFailures` | 各 `worker.failed` |
 | `stopReason` | `session.stop` |
 
-bootstrap 専用イベントは **exit JSON には載せない**（時系列テレメトリのみ）。ラウンド自体は `workerDispatches` に残る。
+prompt ライフサイクルイベントは **exit JSON には載せない**（時系列テレメトリのみ）。ラウンド自体は `workerDispatches` に残る。
 
 ---
 
@@ -224,19 +228,27 @@ bootstrap 専用イベントは **exit JSON には載せない**（時系列テ�
 
 ---
 
-## 6. 将来拡張（#70 連携）
+## 6. worker 状態と #125 デッドロック検知（#133 以降）
 
-worker 状態照会 tool（#70）は本 Issue の非スコープ。ただし bootstrap 状態は次の値で表現可能にしておく:
+`list_workers` が返す harness 状態（[worker-status-tool.ts](../../packages/core/src/dispatch/worker-status-tool.ts)）:
 
-| 状態 | 根拠 |
+| 状態 | 意味 |
 |------|------|
-| `bootstrapping` | `harness.worker.bootstrap.started` 後、対応する `completed` / `failed` 前 |
-| `ready` | bootstrap 完了後、prompt 中でない（`WorkerRuntime` の idle） |
-| `failed` | 直近の bootstrap が `harness.worker.bootstrap.failed` |
+| `attaching` | ACP attach 中（init prompt 前） |
+| `processing` | `session/prompt` 実行中（init / instruction 共通） |
+| `idle` | prompt 中でない。次の `sendWorkerMessage` を受け付け可能 |
+| `failed` | attach または prompt 失敗 |
 
-#70 実装時は `WorkerRuntime` / `WorkerSession` の内部状態を tool 返却に載せる想定。
+`attachInFlight` は attach フェーズのみのカウンタ。`runningCount` は `processing` ラウンド数 + `attachInFlight`。**いずれも「0 になるまで待て」というシグナルではない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）。
 
----
+[#125](https://github.com/otolab/agents-ensemble/issues/125) §1 デッドロック検知の置き換え条件（`bootstrapInFlight` 廃止後）:
+
+| 旧（#125 起票時） | 新（#133 後） |
+|-------------------|---------------|
+| `bootstrapInFlight > 0` | `attachInFlight > 0` **または** いずれか worker の `state === 'processing'` |
+| pending permission 継続 | 変更なし（`permission.pending`） |
+
+検知の意図: harness 起因の init prompt または conductor 指示の prompt が permission で止まり、conductor がイベント駆動で解消しないまま N 秒経過した状態をテレメトリする。
 
 ## 7. 関連コード
 
@@ -248,8 +260,8 @@ worker 状態照会 tool（#70）は本 Issue の非スコープ。ただし boo
 | `packages/core/src/conductor/conductor-session.ts` | emit / enqueue 配線 |
 | `packages/core/src/github/github-monitor.ts` | Issue / PR 更新監視 |
 | `packages/core/src/github/fetch-github-updates.ts` | `gh` ベース差分取得 |
-| `packages/core/src/runtime/worker-runtime.ts` | bootstrap ライフサイクル |
+| `packages/core/src/runtime/worker-runtime.ts` | worker prompt ライフサイクル（init / instruction 対称） |
 | `packages/cli/src/session-sinks.ts` | HarnessSink / DialogueSink / ObservationSink |
 | `packages/cli/src/display/` | 表示 state・DisplaySink・string backend |
 | `docs/session-logging.md` | 観測の役割分担 |
-| `docs/adr/0012-conductor-worker-prompt-roundtrip.md` | bootstrap の設計意図 |
+| `docs/adr/0012-conductor-worker-prompt-roundtrip.md` | attach / init prompt の設計意図 |

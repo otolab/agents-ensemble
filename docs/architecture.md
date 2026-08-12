@@ -246,7 +246,7 @@ worker    ──ラウンド終了──────► worker.completed ──�
 ensemble 終了 ──stop────────► 全 worker bridge close
 ```
 
-- **常駐** = ensemble 中 `agent acp` プロセスを殺さない（bootstrap 後も bridge 保持）。
+- **常駐** = ensemble 中 `agent acp` プロセスを殺さない（attach / init prompt 後も bridge 保持）。
 - **sendWorkerMessage** = 既存 session への `session/prompt`（dispatch ではない）。
 - **`list_workers` / `get_worker_status`** = harness 上の worker 状態照会（読み取り専用）。`prompt_worker` は作業指示専用。オペレータの状態質問には状態照会ツールを使い、Issue / PR を読まず tool 結果で答える。返却は YAML。セッションイベント列には積まない（[Issue #70](https://github.com/otolab/agents-ensemble/issues/70)）。
 - **`get_session_usage` / `get_usage`** = harness が蓄積した LLM トークン使用量照会（読み取り専用）。conductor 各 `agent.send` は `@cursor/sdk` の `RunResult.usage`、worker 各 prompt は ACP 応答の `usage`（無い場合は prompt/response から推定、`source: estimated`）。コンテキスト上限は SDK 1.0.27 時点で取得不可のため既定は `limit: null`（[Issue #102](https://github.com/otolab/agents-ensemble/issues/102)）。返却は YAML。イベント列には積まない。
@@ -273,10 +273,10 @@ worker (ACP)                    conductor (SDK)              オペレータ
 
 - **worker → ユーザー直結はしない**。人間への出口は conductor 経由のみ（[ADR 0007](adr/0007-permission-pipeline.md)、pending 通知は [ADR 0010](adr/0010-permission-pending-event-delivery.md)）
 - **段1 自明許可** — `PermissionPipeline` + policy（read-only allowlist 等）
-- **段2 conductor** — 非自明は pending。`resolve_permission` で allow/deny。**bootstrap ラウンド中でも同様**（完了を待ってから処理しない — [ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）
+- **段2 conductor** — 非自明は pending。`resolve_permission` で allow/deny。**init prompt ラウンド中でも同様**（完了を待ってから処理しない — [ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）
 - **段3 human** — conductor が `ask_human` で **質問を登録**（非ブロッキング）。オペレータ回答は **別ターンのチャット入力**（[ADR 0008](adr/0008-human-dialogue-open-questions.md)）
 - 並列 worker 時は request id / workerId で correlation
-- conductor は harness 状態を **ポーリング待機してはならない**（外部 `Await` 等）。変化は `SessionEventQueue` のみが通知する（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）
+- conductor は harness 状態を **ポーリング待機してはならない**（外部 `Await` 等）。変化は `SessionEventQueue` のみが通知する（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）。worker prompt ライフサイクルは [harness-events.md](harness-events.md) §2.2（#133: bootstrap 廃止・`source` 統一）
 
 ### オペレータ対話（open question）
 

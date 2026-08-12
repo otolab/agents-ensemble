@@ -6,39 +6,42 @@ import {
 } from './session-sinks.js';
 
 describe('session sinks', () => {
-  it('formats bootstrap harness events on stderr', () => {
+  it('formats worker prompt harness events on stderr', () => {
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const sink = createHarnessSink();
     sink({
-      type: 'harness.worker.bootstrap.started',
+      type: 'harness.worker.prompt.started',
       name: 'implementer',
       kind: 'implementer',
       workerId: 'w-1',
+      source: 'harness',
     });
     sink({
-      type: 'harness.worker.bootstrap.completed',
+      type: 'harness.worker.prompt.completed',
       name: 'implementer',
       kind: 'implementer',
       workerId: 'w-1',
+      source: 'harness',
       stopReason: 'end_turn',
     });
     sink({
-      type: 'harness.worker.bootstrap.failed',
+      type: 'harness.worker.prompt.failed',
       name: 'implementer',
       kind: 'implementer',
       workerId: 'w-1',
+      source: 'harness',
       error: 'attach failed',
     });
 
     expect(stderr).toHaveBeenCalledWith(
-      '[harness] worker.bootstrap.started name=implementer kind=implementer',
+      '[harness] worker.prompt.started name=implementer kind=implementer source=harness',
     );
     expect(stderr).toHaveBeenCalledWith(
-      '[harness] worker.bootstrap.completed name=implementer kind=implementer stopReason=end_turn',
+      '[harness] worker.prompt.completed name=implementer kind=implementer source=harness stopReason=end_turn',
     );
     expect(stderr).toHaveBeenCalledWith(
-      '[harness] worker.bootstrap.failed name=implementer kind=implementer error=attach failed',
+      '[harness] worker.prompt.failed name=implementer kind=implementer source=harness error=attach failed',
     );
 
     stderr.mockRestore();

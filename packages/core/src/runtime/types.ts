@@ -49,8 +49,9 @@ export type InboxMessage =
 
 export type InboxListener = (message: InboxMessage) => void | Promise<void>;
 
-export interface WorkerBootstrapTelemetry {
+export interface WorkerPromptTelemetry {
   phase: 'started' | 'completed' | 'failed';
+  source: import('../dispatch/worker-dispatch.js').WorkerPromptSource;
   workerId: string;
   name: string;
   kind: string;

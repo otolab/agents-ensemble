@@ -35,11 +35,11 @@ export function reduceDisplayState(
   event: SessionLogEvent,
 ): SessionDisplayState {
   switch (event.type) {
-    case 'harness.worker.bootstrap.started':
+    case 'harness.worker.prompt.started':
       return setWorkerStatus(state, event.name, event.kind, 'running');
-    case 'harness.worker.bootstrap.completed':
+    case 'harness.worker.prompt.completed':
       return setWorkerStatus(state, event.name, event.kind, 'idle');
-    case 'harness.worker.bootstrap.failed':
+    case 'harness.worker.prompt.failed':
       return setWorkerStatus(state, event.name, event.kind, 'failed');
     case 'conductor.send.started':
       return setWorkerStatus(state, 'conductor', 'conductor', 'running');

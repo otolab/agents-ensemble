@@ -73,10 +73,11 @@ describe('createIssueSessionTuiHost', () => {
     );
 
     host.telemetrySink({
-      type: 'harness.worker.bootstrap.started',
+      type: 'harness.worker.prompt.started',
       name: 'implementer',
       kind: 'implementer',
       workerId: 'worker-1',
+      source: 'harness',
     });
 
     host.dispose();

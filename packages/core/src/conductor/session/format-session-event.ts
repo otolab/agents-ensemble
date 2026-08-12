@@ -21,17 +21,8 @@ function formatSingleSessionEventForConductor(event: SessionEvent): string {
   switch (event.type) {
     case 'operator.message':
       return event.text.trim();
-    case 'worker.completed': {
-      const heading =
-        event.result.roundKind === 'bootstrap'
-          ? '## worker bootstrap 完了'
-          : '## worker 作業ラウンド完了';
-      return [
-        heading,
-        '',
-        formatEventBodyForConductor(event),
-      ].join('\n');
-    }
+    case 'worker.completed':
+      return ['## worker ラウンド完了', '', formatEventBodyForConductor(event)].join('\n');
     case 'worker.failed':
       return ['## worker 失敗', '', formatEventBodyForConductor(event)].join('\n');
     case 'permission.pending':
@@ -113,15 +104,7 @@ function batchHeadingForEvents(events: SessionEvent[]): string {
     if (failedCount === count) {
       return `## worker 失敗（${name}・${count} 件）`;
     }
-    const bootstrapCount = workerEvents.filter(
-      (event) =>
-        event.type === 'worker.completed' &&
-        event.result.roundKind === 'bootstrap',
-    ).length;
-    if (bootstrapCount === completedCount) {
-      return `## worker bootstrap 完了（${name}・${count} 件）`;
-    }
-    return `## worker 作業ラウンド完了（${name}・${count} 件）`;
+    return `## worker ラウンド完了（${name}・${count} 件）`;
   }
 
   return `## セッションイベント（${count} 件）`;
