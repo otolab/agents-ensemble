@@ -19,7 +19,13 @@ import {
 
 describe('computeInputPaneHeight', () => {
   it('includes border rows, hint lines, and the input row', () => {
-    expect(computeInputPaneHeight(2)).toBe(INPUT_PANE_BORDER_ROWS + 2 + 1);
+    expect(computeInputPaneHeight({ hintLineCount: 2 })).toBe(INPUT_PANE_BORDER_ROWS + 2 + 1);
+  });
+
+  it('supports multiple input display lines', () => {
+    expect(
+      computeInputPaneHeight({ hintLineCount: 1, inputDisplayLineCount: 4 }),
+    ).toBe(INPUT_PANE_BORDER_ROWS + 1 + 4);
   });
 });
 
@@ -27,7 +33,7 @@ describe('computeActivityPaneHeight', () => {
   it('fills remaining rows after fixed panes and input pane', () => {
     const terminalRows = 24;
     const hintLineCount = 1;
-    const inputPaneHeight = computeInputPaneHeight(hintLineCount);
+    const inputPaneHeight = computeInputPaneHeight({ hintLineCount });
 
     expect(
       computeActivityPaneHeight({ terminalRows, hintLineCount }),

@@ -1,5 +1,5 @@
 import { Box, Text, useBoxMetrics, useInput } from 'ink';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import {
@@ -16,7 +16,6 @@ import {
   MAIN_PANE_TITLE,
   OPEN_QUESTIONS_PANE_HEIGHT,
   ORCHESTRATION_PANE_TITLE_ROWS,
-  PANE_BORDER_ROWS,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
   WORKER_PANE_HEIGHT,
@@ -29,6 +28,10 @@ import {
   computeOperatorInputCursorY,
   computeOrchestrationLogVisibleLineCount,
 } from './compute-operator-input-cursor-y.js';
+import {
+  computeMaxInputDisplayLines,
+  trimBlankLinesOnly,
+} from './operator-input-layout.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 export interface IssueSessionTuiProps {
@@ -247,16 +250,26 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     viewModel.getSnapshot,
   );
   const [inputValue, setInputValue] = useState('');
+  const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
   const contentWidth = usePaneContentWidth();
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
+  const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
   const contextHint = snapshot.postLoopWaiting
     ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
     : formatOperatorContextHint(snapshot.operatorContext);
   const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-  const inputPaneHeight = computeInputPaneHeight(hintLineCount);
-  const activityPaneHeight = computeActivityPaneHeight({ terminalRows, hintLineCount });
+  const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
+  const inputPaneHeight = computeInputPaneHeight({
+    hintLineCount,
+    inputDisplayLineCount: visibleInputDisplayLineCount,
+  });
+  const activityPaneHeight = computeActivityPaneHeight({
+    terminalRows,
+    hintLineCount,
+    inputDisplayLineCount: visibleInputDisplayLineCount,
+  });
   const visibleLineCount = computeOrchestrationLogVisibleLineCount(
     activityPaneHeight,
     ORCHESTRATION_PANE_TITLE_ROWS,
@@ -271,8 +284,13 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     y: computeOperatorInputCursorY({
       terminalRows,
       hintLineCount,
+      inputDisplayLineCount: visibleInputDisplayLineCount,
+      cursorLineOffset: 0,
     }),
   };
+  const handleDisplayLineCountChange = useCallback((lineCount: number) => {
+    setInputDisplayLineCount(Math.max(1, lineCount));
+  }, []);
 
   useEffect(() => {
     setLinesFromBottom((current) => Math.min(current, maxLinesFromBottom));
@@ -314,12 +332,13 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   });
 
   const handleSubmit = (value: string) => {
-    const trimmed = value.trim();
+    const trimmed = trimBlankLinesOnly(value);
     if (!trimmed) {
       return;
     }
     onSubmit(trimmed);
     setInputValue('');
+    setInputDisplayLineCount(1);
   };
 
   return (
@@ -344,15 +363,16 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         overflow="hidden"
       >
         <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
-        <Text>
-          {operatorPrompt}
-          <ImeTextInput
-            value={inputValue}
-            onChange={setInputValue}
-            onSubmit={handleSubmit}
-            cursorStart={cursorStart}
-          />
-        </Text>
+        <ImeTextInput
+          value={inputValue}
+          onChange={setInputValue}
+          onSubmit={handleSubmit}
+          contentWidth={contentWidth}
+          promptPrefix={operatorPrompt}
+          maxDisplayLines={maxInputDisplayLines}
+          onDisplayLineCountChange={handleDisplayLineCountChange}
+          cursorStart={cursorStart}
+        />
       </Box>
     </Box>
   );
