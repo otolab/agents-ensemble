@@ -18,6 +18,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
   instructions: [
     '- conductorは演奏しない（ファイル編集・シェル実行・直接実装はしない）',
     '- チーム全体を統合し、issue解決を目指してください',
+    '- チーム内の出来事を非同期で処理する必要があります。Awaitツールは使わないようにしてください',
     {
       type: 'subsection',
       title: 'harnessからのイベント',
