@@ -4,10 +4,35 @@ import { useSyncExternalStore, useState } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import { formatActivityLogLine } from './activity-log.js';
+import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string) => void;
+}
+
+const ROUND_BORDER_WIDTH = 2;
+const PANE_PADDING_X = 1;
+
+function usePaneContentWidth(): number {
+  return getPaneContentWidth({
+    columns: process.stdout.columns ?? 80,
+    paddingX: PANE_PADDING_X,
+    borderWidth: ROUND_BORDER_WIDTH,
+  });
+}
+
+function WrappedTextLines({ text, width }: { text: string; width: number }) {
+  const lines = wrapTextToWidth(text, width);
+  return (
+    <>
+      {lines.map((line, index) => (
+        <Text key={`${index}-${line}`} wrap="wrap">
+          {line}
+        </Text>
+      ))}
+    </>
+  );
 }
 
 function WorkerStatusPane({
@@ -34,17 +59,21 @@ function WorkerStatusPane({
 
 function ActivityLogPane({
   activityLog,
+  contentWidth,
 }: {
   activityLog: TuiViewSnapshot['activityLog'];
+  contentWidth: number;
 }) {
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={1} flexGrow={1}>
+    <Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={PANE_PADDING_X} flexGrow={1}>
       <Text bold>Session</Text>
       {activityLog.length === 0 ? (
         <Text dimColor>(活動ログなし)</Text>
       ) : (
         activityLog.map((entry, index) => (
-          <Text key={`log-${index}`}>{formatActivityLogLine(entry)}</Text>
+          <Box key={`log-${index}`} flexDirection="column">
+            <WrappedTextLines text={formatActivityLogLine(entry)} width={contentWidth} />
+          </Box>
         ))
       )}
     </Box>
@@ -53,21 +82,32 @@ function ActivityLogPane({
 
 function OpenQuestionsPane({
   openQuestions,
+  contentWidth,
 }: {
   openQuestions: TuiViewSnapshot['displayState']['openQuestions'];
+  contentWidth: number;
 }) {
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} minHeight={4}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="magenta"
+      paddingX={PANE_PADDING_X}
+      minHeight={4}
+    >
       <Text bold>Open questions</Text>
       {openQuestions.length === 0 ? (
         <Text dimColor>(未回答なし)</Text>
       ) : (
         openQuestions.map((question) => (
           <Box key={question.id} flexDirection="column">
-            <Text>
-              - {question.id} [{question.responseType}] {question.question}
-            </Text>
-            {question.context ? <Text dimColor>  {question.context}</Text> : null}
+            <WrappedTextLines
+              text={`- ${question.id} [${question.responseType}] ${question.question}`}
+              width={contentWidth}
+            />
+            {question.context ? (
+              <WrappedTextLines text={`  ${question.context}`} width={contentWidth} />
+            ) : null}
           </Box>
         ))
       )}
@@ -82,6 +122,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     viewModel.getSnapshot,
   );
   const [inputValue, setInputValue] = useState('');
+  const contentWidth = usePaneContentWidth();
 
   const handleSubmit = (value: string) => {
     const trimmed = value.trim();
@@ -95,10 +136,13 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   return (
     <Box flexDirection="column" height={process.stdout.rows ?? 24}>
       <WorkerStatusPane workers={snapshot.displayState.workers} />
-      <ActivityLogPane activityLog={snapshot.activityLog} />
-      <OpenQuestionsPane openQuestions={snapshot.displayState.openQuestions} />
+      <ActivityLogPane activityLog={snapshot.activityLog} contentWidth={contentWidth} />
+      <OpenQuestionsPane
+        openQuestions={snapshot.displayState.openQuestions}
+        contentWidth={contentWidth}
+      />
       <Box flexDirection="column" borderStyle="single" borderColor="white" paddingX={1}>
-        <Text dimColor>
+        <Text dimColor wrap="wrap">
           {snapshot.postLoopWaiting
             ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
             : formatOperatorContextHint(snapshot.operatorContext)}
