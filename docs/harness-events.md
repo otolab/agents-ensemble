@@ -35,6 +35,7 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `conductor.send` | 各 `agent.send` 完了後 | `[harness] conductor.send n=N status=... workerDone=... workerFailed=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` |
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（bootstrap 含む） | `[harness] worker.round name=... kind=... roundKind=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
+| `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
 
 ### 2.4 セッション観測イベント（#92 で追加）
@@ -107,6 +108,9 @@ WorkerSession.bootstrap()（worker ごと）
                   worker.failed ───────────────────────► stderr + snapshot + SessionEventQueue
 
 prompt_worker / sendWorkerMessage
+       │
+       ├─ permission 保留 ─► permission.pending ───────► stderr / TUI 活動ログ（即時）
+       │                     SessionEvent permission.pending ► SessionEventQueue ► agent.send
        │
        ├─ 成功 ─► worker.round (roundKind=instruction) ─► stderr + snapshot
        │          worker.completed (roundKind=instruction) ► SessionEventQueue ► agent.send

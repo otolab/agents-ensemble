@@ -298,6 +298,12 @@ export type { PendingPermission } from './permission/pending-permission.js';
 export { createResolvePermissionTool } from './permission/resolve-permission-tool.js';
 export type { ResolvePermissionToolOptions } from './permission/resolve-permission-tool.js';
 export { formatPendingPermissionSummaries } from './permission/format-pending-permissions.js';
+export {
+  extractPermissionOperationSummary,
+  formatPermissionSummaryForOperator,
+} from './permission/format-permission-summary-for-operator.js';
+export type { FormatPermissionSummaryForOperatorOptions } from './permission/format-permission-summary-for-operator.js';
+export type { PermissionOperationSummary } from './permission/format-permission-summary-for-operator.js';
 
 export {
   SessionUsageTracker,

@@ -1,6 +1,7 @@
 import type { WorkerDispatchResult } from '../../dispatch/worker-dispatch.js';
 import type { EscalationRecord } from '../../escalation/human-inquiry.js';
 import type { OpenQuestion } from '../../escalation/open-question.js';
+import type { PendingPermission } from '../../permission/pending-permission.js';
 import type { WorkerFailureRecord } from '../../runtime/types.js';
 import type { WorkerWorktreeMode } from '../../worktree/worktree.js';
 import type { IssueLoopStopReason } from '../session-policy.js';
@@ -67,6 +68,12 @@ export type SessionLogEvent =
       error?: { message: string; code?: string };
       workerDispatches: number;
       workerFailures: number;
+    }
+  | {
+      type: 'permission.pending';
+      permission: PendingPermission;
+      /** worker kind など、オペレータ向けの短いラベル。 */
+      workerLabel: string;
     }
   | {
       type: 'worker.round';
@@ -164,6 +171,7 @@ export class SessionLogger {
       case 'harness.worker.bootstrap.completed':
       case 'harness.worker.bootstrap.failed':
       case 'operator.input':
+      case 'permission.pending':
       case 'worker.process.stderr':
       case 'open.question.enqueued':
       case 'escalation.recorded':

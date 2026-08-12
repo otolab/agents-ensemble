@@ -108,6 +108,35 @@ export class WorkerRuntime {
   }
 
   /** 1 worker の harness 状態詳細。未登録なら undefined。 */
+  /** worker UUID から kind（なければ name）を返す。 */
+  resolveWorkerLabel(workerId: string): string | undefined {
+    for (const resident of this.residents.values()) {
+      if (resident.workerId === workerId) {
+        return resident.started.kind;
+      }
+    }
+
+    for (const bootstrapping of this.bootstrapping.values()) {
+      if (bootstrapping.workerId === workerId) {
+        return bootstrapping.kind;
+      }
+    }
+
+    for (const failed of this.failedWorkers.values()) {
+      if (failed.workerId === workerId) {
+        return failed.kind;
+      }
+    }
+
+    for (const started of this.prompting.values()) {
+      if (started.workerId === workerId) {
+        return started.kind;
+      }
+    }
+
+    return undefined;
+  }
+
   getWorkerStatus(name: string): WorkerStatusDetail | undefined {
     if (
       !this.residents.has(name) &&

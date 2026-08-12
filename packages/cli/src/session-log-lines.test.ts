@@ -7,6 +7,26 @@ import {
 } from './session-log-lines.js';
 
 describe('session-log-lines', () => {
+  it('formats permission.pending harness body', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'permission.pending',
+        workerLabel: 'implementer',
+        permission: {
+          id: 'perm-3',
+          workerId: 'worker-uuid',
+          createdAt: 0,
+          request: {
+            toolName: 'Shell',
+            raw: { toolName: 'Shell', input: { command: 'npm test' } },
+          },
+        },
+      }),
+    ).toBe(
+      'permission.pending worker=implementer tool=Shell cmd="npm test" id=perm-3',
+    );
+  });
+
   it('formats harness bodies', () => {
     expect(
       formatHarnessLogBody({
