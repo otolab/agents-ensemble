@@ -442,7 +442,7 @@ export async function runConductorSession(
 
   if (options.bindOperatorInput) {
     const bindingDispose = options.bindOperatorInput({
-      submit: (message) => {
+      submit: (message, submitOptions) => {
         if (isOperatorExitCommand(message)) {
           if (postLoopGate.isWaiting()) {
             postLoopGate.notifyExit();
@@ -453,6 +453,7 @@ export async function runConductorSession(
         }
         const received = submitOperatorInput({
           message,
+          targetOpenQuestionId: submitOptions?.targetOpenQuestionId,
           conductorTurn: sendCount + 1,
           openQuestions,
           escalations,

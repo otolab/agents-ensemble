@@ -16,7 +16,7 @@ function writeBeforePrompt(context: OperatorInputContext): void {
   if (openQuestions.length === 0) {
     return;
   }
-  stderr.write('\nオペレータの入力が必要です（@inq:<id> <回答>）:\n');
+  stderr.write('\nオペレータの入力が必要です:\n');
   stderr.write('未回答のオペレータ質問:\n');
   for (const question of openQuestions) {
     stderr.write(

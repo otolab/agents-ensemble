@@ -514,7 +514,7 @@ describe('IssueSessionTui', () => {
       expect(frame).toContain('▸ inq-2');
     });
 
-    it('submits selected question answer as @inq:id message', async () => {
+    it('submits selected question answer with targetOpenQuestionId', async () => {
       const viewModel = createTuiViewModel();
       viewModel.setDisplayState({
         workers: {},
@@ -525,11 +525,13 @@ describe('IssueSessionTui', () => {
         ],
       });
       let submitted = '';
+      let submitOptions: { targetOpenQuestionId?: string } | undefined;
       const { stdin, lastFrame } = render(
         <IssueSessionTui
           viewModel={viewModel}
-          onSubmit={(text) => {
+          onSubmit={(text, options) => {
             submitted = text;
+            submitOptions = options;
           }}
         />,
       );
@@ -543,7 +545,8 @@ describe('IssueSessionTui', () => {
       stdin.write('\r');
       await flushInkStdin();
 
-      expect(submitted).toBe('@inq:inq-2 approved');
+      expect(submitted).toBe('approved');
+      expect(submitOptions).toEqual({ targetOpenQuestionId: 'inq-2' });
     });
 
     it('grows open questions pane for long selected question text', () => {

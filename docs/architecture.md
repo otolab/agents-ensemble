@@ -263,7 +263,7 @@ worker (ACP)                    conductor (SDK)              オペレータ
      │                               │  段3: 要確認 → ask_human（登録のみ・非ブロック）
      │                               │         OpenQuestionRegistry に enqueue
      │                               │  operator.message（任意タイミング）◄──────│
-     │                               │  （@inq:id 回答 or 自由チャット）          │
+     │                               │  （選択中への回答 or 自由チャット）          │
      │                               │  answer_open_question（チャット済み代行記録）│
      │                               │  resolve_permission                      │
      │ permission response           │                          │

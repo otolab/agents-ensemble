@@ -12,10 +12,10 @@ import {
   type ActivityLogLabel,
   type ActivityLogScrollAction,
 } from './activity-log.js';
+import type { OperatorInputSubmitOptions } from '@agents-ensemble/core';
 import {
   advanceOpenQuestionSelection,
   clampOpenQuestionSelectionIndex,
-  formatSelectedOpenQuestionAnswer,
   resolveOpenQuestionsPaneLayout,
   type OpenQuestionsPaneLayout,
 } from './open-questions-pane.js';
@@ -42,10 +42,8 @@ import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string, options?: OperatorInputSubmitOptions) => void;
 }
-
-const INQUIRY_REFERENCE_PATTERN = /^@inq:[^\s]+\s/u;
 
 function usePaneContentWidth(): number {
   return getPaneContentWidth({
@@ -380,16 +378,12 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
       return;
     }
 
-    let message = trimmed;
-    if (
-      openQuestions.length > 0 &&
-      selectedQuestion &&
-      !INQUIRY_REFERENCE_PATTERN.test(trimmed)
-    ) {
-      message = formatSelectedOpenQuestionAnswer(trimmed, selectedQuestion.id);
-    }
-
-    onSubmit(message);
+    onSubmit(
+      trimmed,
+      selectedQuestion && openQuestions.length > 0
+        ? { targetOpenQuestionId: selectedQuestion.id }
+        : undefined,
+    );
     setInputValue('');
     setInputDisplayLineCount(1);
   };

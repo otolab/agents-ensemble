@@ -4,7 +4,6 @@ import {
   advanceOpenQuestionSelection,
   buildOpenQuestionListItems,
   clampOpenQuestionSelectionIndex,
-  formatSelectedOpenQuestionAnswer,
   resolveOpenQuestionsPaneLayout,
 } from './open-questions-pane.js';
 import { OPEN_QUESTIONS_PANE_MIN_HEIGHT } from './tui-layout-constants.js';
@@ -58,12 +57,6 @@ describe('clampOpenQuestionSelectionIndex', () => {
   it('clamps to available questions', () => {
     expect(clampOpenQuestionSelectionIndex(5, 2)).toBe(1);
     expect(clampOpenQuestionSelectionIndex(0, 0)).toBe(0);
-  });
-});
-
-describe('formatSelectedOpenQuestionAnswer', () => {
-  it('prefixes @inq for the selected question', () => {
-    expect(formatSelectedOpenQuestionAnswer('yes', 'inq-2')).toBe('@inq:inq-2 yes');
   });
 });
 

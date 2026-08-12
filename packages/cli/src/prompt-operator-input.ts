@@ -53,7 +53,7 @@ export async function promptOperatorInput(
   try {
     const prompt =
       context.openQuestions.length > 0
-        ? '\nオペレータ入力（空でスキップ、@inq:<id> <回答> で特定）:\n> '
+        ? '\nオペレータ入力（空でスキップ。未回答 1 件ならそのまま回答）:\n> '
         : '\nオペレータ入力（空でスキップ。自由な指示も可）:\n> ';
     const answer = await rl.question(prompt);
     const trimmed = answer.trim();

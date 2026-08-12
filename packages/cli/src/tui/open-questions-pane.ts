@@ -172,11 +172,3 @@ export function advanceOpenQuestionSelection(
   }
   return selectedIndex >= questionCount - 1 ? 0 : selectedIndex + 1;
 }
-
-/** 選択中の open question への回答として送信するメッセージを組み立てる。 */
-export function formatSelectedOpenQuestionAnswer(
-  answer: string,
-  questionId: string,
-): string {
-  return `@inq:${questionId} ${answer}`;
-}
