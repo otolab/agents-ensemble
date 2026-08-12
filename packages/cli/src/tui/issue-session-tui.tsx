@@ -1,17 +1,25 @@
-import { Box, Text } from 'ink';
-import { useSyncExternalStore, useState } from 'react';
+import { Box, Text, useInput } from 'ink';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
-import { formatActivityLogLine } from './activity-log.js';
+import {
+  ACTIVITY_LOG_LABEL_COLORS,
+  buildActivityLogDisplayLines,
+  formatActivityLogLabelPrefix,
+  sliceActivityLogDisplayLines,
+  type ActivityLogDisplayLine,
+  type ActivityLogEntry,
+} from './activity-log.js';
 import {
   OPEN_QUESTIONS_PANE_HEIGHT,
+  PANE_BORDER_ROWS,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
   WORKER_PANE_HEIGHT,
 } from './tui-layout-constants.js';
 import { ImeTextInput } from './ime-text-input.js';
 import {
-  computeActivityLogLineCapacity,
+  computeActivityPaneHeight,
   computeInputPaneHeight,
   computeOperatorInputCursorX,
   computeOperatorInputCursorY,
@@ -29,6 +37,10 @@ function usePaneContentWidth(): number {
     paddingX: PANE_PADDING_X,
     borderWidth: ROUND_BORDER_WIDTH,
   });
+}
+
+function getActivityLogVisibleLineCount(paneHeight: number): number {
+  return Math.max(1, paneHeight - PANE_BORDER_ROWS - 1);
 }
 
 function WrappedTextLines({
@@ -49,6 +61,43 @@ function WrappedTextLines({
         </Text>
       ))}
     </>
+  );
+}
+
+function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
+  if (line.label === 'separator') {
+    return <Text> </Text>;
+  }
+
+  const color = ACTIVITY_LOG_LABEL_COLORS[line.label];
+  const prefix = formatActivityLogLabelPrefix(line.label);
+  const indent = ' '.repeat(prefix.length);
+
+  if (line.isContinuation) {
+    return (
+      <Text>
+        {indent}
+        {line.text}
+      </Text>
+    );
+  }
+
+  if (line.label === 'harness') {
+    return (
+      <Text>
+        <Text color="yellow" dimColor>
+          [{line.label}]
+        </Text>
+        <Text> {line.text}</Text>
+      </Text>
+    );
+  }
+
+  return (
+    <Text>
+      {color ? <Text color={color}>[{line.label}]</Text> : <Text>[{line.label}]</Text>}
+      <Text> {line.text}</Text>
+    </Text>
   );
 }
 
@@ -84,14 +133,25 @@ function WorkerStatusPane({
 function ActivityLogPane({
   activityLog,
   contentWidth,
-  maxLogLines,
+  paneHeight,
+  linesFromBottom,
 }: {
-  activityLog: TuiViewSnapshot['activityLog'];
+  activityLog: ActivityLogEntry[];
   contentWidth: number;
-  maxLogLines: number;
+  paneHeight: number;
+  linesFromBottom: number;
 }) {
-  const visibleLog =
-    maxLogLines > 0 ? activityLog.slice(-maxLogLines) : activityLog.slice(0, 0);
+  const displayLines = useMemo(
+    () => buildActivityLogDisplayLines(activityLog, contentWidth),
+    [activityLog, contentWidth],
+  );
+  const visibleCount = getActivityLogVisibleLineCount(paneHeight);
+  const visibleLines = sliceActivityLogDisplayLines(
+    displayLines,
+    visibleCount,
+    linesFromBottom,
+  );
+  const pinnedToBottom = linesFromBottom === 0;
 
   return (
     <Box
@@ -99,17 +159,18 @@ function ActivityLogPane({
       borderStyle="round"
       borderColor="green"
       paddingX={PANE_PADDING_X}
-      flexGrow={1}
+      height={paneHeight}
       overflow="hidden"
     >
-      <Text bold>Session</Text>
-      {visibleLog.length === 0 ? (
+      <Text bold>
+        Session
+        {!pinnedToBottom ? ' (PgUp/PgDn でスクロール · 最新へは End)' : ''}
+      </Text>
+      {activityLog.length === 0 ? (
         <Text dimColor>(活動ログなし)</Text>
       ) : (
-        visibleLog.map((entry, index) => (
-          <Box key={`log-${index}`} flexDirection="column">
-            <WrappedTextLines text={formatActivityLogLine(entry)} width={contentWidth} />
-          </Box>
+        visibleLines.map((line, index) => (
+          <ActivityLogDisplayLineRow key={`log-line-${index}`} line={line} />
         ))
       )}
     </Box>
@@ -159,6 +220,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     viewModel.getSnapshot,
   );
   const [inputValue, setInputValue] = useState('');
+  const [linesFromBottom, setLinesFromBottom] = useState(0);
   const contentWidth = usePaneContentWidth();
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
@@ -167,10 +229,13 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     : formatOperatorContextHint(snapshot.operatorContext);
   const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
   const inputPaneHeight = computeInputPaneHeight(hintLineCount);
-  const activityLogCapacity = computeActivityLogLineCapacity({
-    terminalRows,
-    hintLineCount,
-  });
+  const activityPaneHeight = computeActivityPaneHeight({ terminalRows, hintLineCount });
+  const visibleLineCount = getActivityLogVisibleLineCount(activityPaneHeight);
+  const displayLineCount = useMemo(
+    () => buildActivityLogDisplayLines(snapshot.activityLog, contentWidth).length,
+    [snapshot.activityLog, contentWidth],
+  );
+  const maxLinesFromBottom = Math.max(0, displayLineCount - visibleLineCount);
   const cursorStart = {
     x: computeOperatorInputCursorX(operatorPrompt),
     y: computeOperatorInputCursorY({
@@ -178,6 +243,28 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
       hintLineCount,
     }),
   };
+
+  useEffect(() => {
+    setLinesFromBottom((current) => Math.min(current, maxLinesFromBottom));
+  }, [maxLinesFromBottom]);
+
+  useInput((_input, key) => {
+    if (key.pageUp) {
+      setLinesFromBottom((current) => Math.min(current + visibleLineCount, maxLinesFromBottom));
+      return;
+    }
+    if (key.pageDown) {
+      setLinesFromBottom((current) => Math.max(0, current - visibleLineCount));
+      return;
+    }
+    if (key.home) {
+      setLinesFromBottom(maxLinesFromBottom);
+      return;
+    }
+    if (key.end) {
+      setLinesFromBottom(0);
+    }
+  });
 
   const handleSubmit = (value: string) => {
     const trimmed = value.trim();
@@ -194,7 +281,8 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
       <ActivityLogPane
         activityLog={snapshot.activityLog}
         contentWidth={contentWidth}
-        maxLogLines={activityLogCapacity}
+        paneHeight={activityPaneHeight}
+        linesFromBottom={linesFromBottom}
       />
       <OpenQuestionsPane
         openQuestions={snapshot.displayState.openQuestions}

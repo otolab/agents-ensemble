@@ -19,6 +19,7 @@ export interface TuiViewModel {
   getSnapshot: () => TuiViewSnapshot;
   setDisplayState: (state: SessionDisplayState) => void;
   appendActivityLog: (label: ActivityLogLabel, text: string) => void;
+  appendActivityLogSeparator: () => void;
   setPostLoopWaiting: (waiting: boolean) => void;
   setOperatorContext: (context: OperatorInputContext | undefined) => void;
 }
@@ -72,6 +73,10 @@ export function createTuiViewModel(): TuiViewModel {
         return;
       }
       activityLog = appendActivityLogEntry(activityLog, { label, text: trimmed });
+      notify();
+    },
+    appendActivityLogSeparator() {
+      activityLog = appendActivityLogEntry(activityLog, { label: 'separator', text: '' });
       notify();
     },
     setPostLoopWaiting(waiting) {

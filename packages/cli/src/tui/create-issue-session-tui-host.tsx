@@ -34,7 +34,9 @@ function createInkDisplayBackend(
 
       const conductorBody = formatConductorActivityBody(event);
       if (conductorBody) {
+        viewModel.appendActivityLogSeparator();
         viewModel.appendActivityLog('conductor', conductorBody);
+        viewModel.appendActivityLogSeparator();
       }
     },
   };
