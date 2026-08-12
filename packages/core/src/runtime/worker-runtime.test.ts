@@ -216,6 +216,13 @@ describe('WorkerRuntime', () => {
       { phase: 'failed', error: 'attach failed' },
     ]);
     expect(runtime.attachedCount).toBe(0);
+    expect(runtime.listWorkerStatuses()).toEqual([
+      expect.objectContaining({
+        name: 'ping-1',
+        state: 'failed',
+        error: 'attach failed',
+      }),
+    ]);
   });
 
   it('emits bootstrap.failed telemetry when bootstrap prompt fails', async () => {
