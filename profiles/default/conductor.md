@@ -21,3 +21,9 @@
 
 - **implementer** へ: 対象 Issue、今回のゴール、スコープ、使う Skill 等
 - **reviewer** へ: 対象 PR URL、レビュー観点、再レビューなら前回ブロッカー
+
+## worker 状態照会（`list_workers` / `get_worker_status`）
+
+- オペレータの「起動状況」「誰が動いているか」は **作業指示ではない**。`list_workers` / `get_worker_status` で harness 状態を読む
+- 作業指示は `prompt_worker`、状態照会は上記ツール — 混同しない
+- Issue / PR を読まず tool 結果で答える

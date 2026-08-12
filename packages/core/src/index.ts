@@ -253,9 +253,12 @@ export type {
 
 export {
   CONDUCTOR_AUTH_HINT,
+  formatConductorAuthRecoveryHint,
   getConductorAuthStatus,
   hasConductorAuth,
+  isConductorAuthError,
   loginConductor,
+  logoutConductor,
   resolveConductorApiKey,
 } from './conductor/conductor-auth.js';
 

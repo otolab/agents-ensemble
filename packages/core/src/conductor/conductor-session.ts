@@ -13,6 +13,7 @@ import type { Profile } from '../profile/types.js';
 import { profileWorkersToSessionSpecs, sessionStateFromProfile } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
+import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
 import { parseIssueUrl, type IssueRef } from '../issue/issue-ref.js';
 import {
@@ -25,6 +26,10 @@ import { WorkerOutboundQueue } from '../runtime/worker-outbound-queue.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import { ConductorAgent } from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
+import {
+  formatConductorAuthRecoveryHint,
+  isConductorAuthError,
+} from './conductor-auth.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import {
@@ -338,6 +343,12 @@ export async function runConductorSession(
     workerNames: activeProfile.workers.map((worker) => worker.name),
   });
 
+  const workerStatusTools = createWorkerStatusTools({
+    runtime: workerSession.runtime,
+    workerNames: activeProfile.workers.map((worker) => worker.name),
+    getWorkerFailures: () => sessionLogger.workerFailures,
+  });
+
   const conductorOptions = {
     cwd: options.conductorCwd ?? process.cwd(),
     apiKey: options.apiKey,
@@ -348,6 +359,7 @@ export async function runConductorSession(
       ...openQuestionListTools,
       ...resolvePermissionTools,
       ...promptWorkerTools,
+      ...workerStatusTools,
     },
   };
 
@@ -522,6 +534,13 @@ export async function runConductorSession(
         workerDispatches: info.workerDispatches,
         workerFailures: info.workerFailures,
       });
+      if (info.status === 'error' && isConductorAuthError(info.error?.message ?? '')) {
+        sessionLogger.emit({
+          type: 'conductor.auth.recovery',
+          agentId: conductor.agentId,
+          hint: formatConductorAuthRecoveryHint(conductor.agentId),
+        });
+      }
       scheduleSidecarFlush();
     }
 

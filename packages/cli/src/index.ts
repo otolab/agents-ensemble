@@ -7,6 +7,7 @@ import {
   getConductorAuthStatus,
   listConductorModels,
   loginConductor,
+  logoutConductor,
   PermissionBroker,
   resolveIssueUrl,
 } from '@agents-ensemble/core';
@@ -111,6 +112,21 @@ auth
       const who = result.email ?? 'unknown';
       console.log(`Logged in as ${who}`);
       console.log(`API key expires: ${new Date(result.apiKeyExpiresAtMs).toISOString()}`);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+auth
+  .command('logout')
+  .description(
+    'Clear stored conductor (SDK) credentials from ~/.cursor/sdk/auth.json',
+  )
+  .action(async () => {
+    try {
+      await logoutConductor();
+      console.log('SDK: logged out');
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
       process.exit(1);

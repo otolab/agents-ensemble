@@ -3,6 +3,7 @@ import {
   formatConductorActivityBody,
   formatHarnessLogBody,
   formatObservationLogBody,
+  formatObservationStderrLine,
 } from './session-log-lines.js';
 
 describe('session-log-lines', () => {
@@ -26,6 +27,26 @@ describe('session-log-lines', () => {
         type: 'session.post_loop_wait',
       }),
     ).toContain('自律作業が一段落しました');
+  });
+
+  it('formats conductor.auth.recovery hint for TUI activity log', () => {
+    expect(
+      formatObservationLogBody({
+        type: 'conductor.auth.recovery',
+        agentId: 'agent-1',
+        hint: '[auth] run cursor login',
+      }),
+    ).toBe('[auth] run cursor login');
+  });
+
+  it('formats conductor.auth.recovery hint for observation stderr', () => {
+    expect(
+      formatObservationStderrLine({
+        type: 'conductor.auth.recovery',
+        agentId: 'agent-1',
+        hint: '[auth] test recovery hint',
+      }),
+    ).toBe('[auth] test recovery hint');
   });
 
   it('formats conductor activity bodies', () => {

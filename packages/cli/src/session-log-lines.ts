@@ -54,6 +54,35 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
       return `resuming session: conductorAgentId=${event.conductorAgentId}`;
     case 'session.post_loop_wait':
       return '自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。';
+    case 'conductor.auth.recovery':
+      return event.hint;
+    default:
+      return undefined;
+  }
+}
+
+/** 非 TTY observation sink 向けの stderr 1 行（prefix 付き。auth recovery は hint をそのまま）。 */
+export function formatObservationStderrLine(event: SessionLogEvent): string | undefined {
+  if (event.type === 'conductor.auth.recovery') {
+    return event.hint;
+  }
+
+  const body = formatObservationLogBody(event);
+  if (!body) {
+    return undefined;
+  }
+
+  switch (event.type) {
+    case 'open.question.enqueued':
+      return `[open question] ${body}`;
+    case 'escalation.recorded':
+      return `[operator answer] ${body}`;
+    case 'session.worktree.notice':
+      return `[worktree] ${body}`;
+    case 'session.continue':
+      return `[continue] ${body}`;
+    case 'session.post_loop_wait':
+      return `\n${body}\n`;
     default:
       return undefined;
   }

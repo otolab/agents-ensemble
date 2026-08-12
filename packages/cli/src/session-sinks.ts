@@ -1,6 +1,10 @@
-import type { SessionLogEvent, SessionLogSink } from '@agents-ensemble/core';
+import type { SessionLogSink } from '@agents-ensemble/core';
+import { isConductorAuthError } from '@agents-ensemble/core';
 import { stdout } from 'node:process';
-import { formatHarnessLogBody } from './session-log-lines.js';
+import {
+  formatHarnessLogBody,
+  formatObservationStderrLine,
+} from './session-log-lines.js';
 
 export interface HarnessSinkOptions {
   /** デフォルト: `console.error` */
@@ -38,9 +42,15 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
           writeStdout(`\nconductor> ${event.result.trim()}\n`);
         } else if (event.status === 'error') {
           const detail = event.error?.message ?? 'unknown error';
-          writeStdout(
-            `\nconductor> 応答を生成できませんでした（${detail}）。\n別の聞き方で再入力してください。\n`,
-          );
+          if (isConductorAuthError(detail)) {
+            writeStdout(
+              '\nconductor> 認証エラーが発生しました。stderr の [auth] 手順に従って再認証してください。\n',
+            );
+          } else {
+            writeStdout(
+              `\nconductor> 応答を生成できませんでした（${detail}）。\n別の聞き方で再入力してください。\n`,
+            );
+          }
         }
         break;
       case 'harness.worktree':
@@ -59,6 +69,7 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
       case 'session.worktree.notice':
       case 'session.continue':
       case 'session.post_loop_wait':
+      case 'conductor.auth.recovery':
         break;
     }
   };
@@ -76,46 +87,9 @@ export function createObservationSink(
   const writeStderr = options.writeStderr ?? ((message) => console.error(message));
 
   return (event) => {
-    switch (event.type) {
-      case 'open.question.enqueued':
-        writeStderr(
-          `[open question] ${event.question.id} [${event.question.responseType}] ${event.question.question}`,
-        );
-        break;
-      case 'escalation.recorded':
-        writeStderr(
-          `[operator answer] ${event.record.question} → ${event.record.answer}`,
-        );
-        break;
-      case 'session.worktree.notice':
-        writeStderr(
-          '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
-        );
-        break;
-      case 'session.continue':
-        writeStderr(
-          `[continue] resuming session: conductorAgentId=${event.conductorAgentId}`,
-        );
-        break;
-      case 'session.post_loop_wait':
-        writeStderr(
-          '\n自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。\n',
-        );
-        break;
-      case 'harness.worktree':
-      case 'harness.worktree.removed':
-      case 'harness.worktree.remove_skipped':
-      case 'harness.worktree.remove_failed':
-      case 'harness.worker.bootstrap.started':
-      case 'harness.worker.bootstrap.completed':
-      case 'harness.worker.bootstrap.failed':
-      case 'operator.input':
-      case 'conductor.send':
-      case 'worker.round':
-      case 'worker.failed':
-      case 'worker.process.stderr':
-      case 'session.stop':
-        break;
+    const line = formatObservationStderrLine(event);
+    if (line) {
+      writeStderr(line);
     }
   };
 }

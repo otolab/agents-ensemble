@@ -43,4 +43,22 @@ describe('createTuiTelemetrySink', () => {
     ]);
     expect(snapshot.postLoopWaiting).toBe(true);
   });
+
+  it('appends conductor.auth.recovery to observation activity log', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({
+      type: 'conductor.auth.recovery',
+      agentId: 'agent-1',
+      hint: '[auth] re-login required',
+    });
+
+    expect(viewModel.getSnapshot().activityLog).toEqual([
+      {
+        label: 'observation',
+        text: '[auth] re-login required',
+      },
+    ]);
+  });
 });
