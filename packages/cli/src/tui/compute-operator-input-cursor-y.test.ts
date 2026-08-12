@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { computeOperatorInputCursorY } from './compute-operator-input-cursor-y.js';
 import {
   INPUT_PANE_BORDER_ROWS,
   OPEN_QUESTIONS_PANE_HEIGHT,
   WORKER_PANE_HEIGHT,
-  computeOperatorInputCursorY,
-} from './compute-operator-input-cursor-y.js';
+} from './tui-layout-constants.js';
 
 describe('computeOperatorInputCursorY', () => {
   it('places cursor on input line below hint and fixed panes', () => {

@@ -6,18 +6,19 @@ import { formatOperatorContextHint } from './format-operator-context.js';
 import { formatActivityLogLine } from './activity-log.js';
 import {
   INPUT_PANE_BORDER_ROWS,
-  computeOperatorInputCursorY,
-} from './compute-operator-input-cursor-y.js';
+  OPEN_QUESTIONS_PANE_HEIGHT,
+  PANE_PADDING_X,
+  ROUND_BORDER_WIDTH,
+  WORKER_PANE_HEIGHT,
+} from './tui-layout-constants.js';
 import { ImeTextInput } from './ime-text-input.js';
+import { computeOperatorInputCursorY } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string) => void;
 }
-
-const ROUND_BORDER_WIDTH = 2;
-const PANE_PADDING_X = 1;
 
 function usePaneContentWidth(): number {
   return getPaneContentWidth({
@@ -27,12 +28,20 @@ function usePaneContentWidth(): number {
   });
 }
 
-function WrappedTextLines({ text, width }: { text: string; width: number }) {
+function WrappedTextLines({
+  text,
+  width,
+  dimColor = false,
+}: {
+  text: string;
+  width: number;
+  dimColor?: boolean;
+}) {
   const lines = wrapTextToWidth(text, width);
   return (
     <>
       {lines.map((line, index) => (
-        <Text key={`${index}-${line}`} wrap="wrap">
+        <Text key={`${index}-${line}`} wrap="wrap" dimColor={dimColor}>
           {line}
         </Text>
       ))}
@@ -47,7 +56,7 @@ function WorkerStatusPane({
 }) {
   const entries = Object.entries(workers);
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} height={6}>
+    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} height={WORKER_PANE_HEIGHT}>
       <Text bold>Workers</Text>
       {entries.length === 0 ? (
         <Text dimColor>(待機中)</Text>
@@ -98,7 +107,7 @@ function OpenQuestionsPane({
       borderStyle="round"
       borderColor="magenta"
       paddingX={PANE_PADDING_X}
-      height={4}
+      height={OPEN_QUESTIONS_PANE_HEIGHT}
     >
       <Text bold>Open questions</Text>
       {openQuestions.length === 0 ? (
@@ -164,9 +173,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         paddingX={1}
         height={inputPaneHeight}
       >
-        <Text dimColor wrap="wrap">
-          {contextHint}
-        </Text>
+        <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
         <Text>
           {operatorPrompt}
           <ImeTextInput
