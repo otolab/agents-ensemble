@@ -116,6 +116,11 @@ export type SessionLogEvent =
       type: 'conductor.auth.recovery';
       agentId: string;
       hint: string;
+    }
+  | {
+      type: 'conductor.auth.reconnect';
+      agentId: string;
+      phase: 'resume' | 'reauth';
     };
 
 export type SessionLogSink = (event: SessionLogEvent) => void;
@@ -179,6 +184,7 @@ export class SessionLogger {
       case 'session.continue':
       case 'session.post_loop_wait':
       case 'conductor.auth.recovery':
+      case 'conductor.auth.reconnect':
         break;
     }
 

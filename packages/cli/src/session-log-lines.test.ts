@@ -69,6 +69,16 @@ describe('session-log-lines', () => {
     ).toBe('[auth] test recovery hint');
   });
 
+  it('formats conductor.auth.reconnect for observation stderr', () => {
+    expect(
+      formatObservationStderrLine({
+        type: 'conductor.auth.reconnect',
+        agentId: 'agent-1',
+        phase: 'resume',
+      }),
+    ).toBe('[auth] conductor 再接続を試行 (resume) agentId=agent-1');
+  });
+
   it('formats conductor activity bodies', () => {
     expect(
       formatConductorActivityBody({
