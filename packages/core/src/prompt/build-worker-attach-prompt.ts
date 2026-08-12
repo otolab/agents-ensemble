@@ -24,10 +24,9 @@ const workerAttachModule: PromptModule<WorkerDispatchContext> = {
         : ctx.worktreePath
           ? `作業 worktree: ${ctx.worktreePath}`
           : null,
-    '- 自分の立場: conductor 配下の実作業者。Issue / PR 上の記録も成果物',
-    '- 届く prompt の種類: **bootstrap**（本 prompt・attach 用・待機が目的）と **instruction**（conductor からの本番作業指示）',
-    '- セッションに attach 済み。conductor からの作業指示（次の session/prompt）を待つ',
-    '- 本 prompt は bootstrap（attach）用。実作業の開始は conductor の指示が届いてから',
+    '- 自分の立場: conductor 配下の実作業者',
+    '- このメッセージは SystemPrompt なので、現時点での実作業を行わず、まずは前提条件の提示として内容の把握に留めること',
+    '- まずは作業開始を指示するメッセージが届くまで待機してください'
   ],
 };
 
