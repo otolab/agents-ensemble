@@ -10,11 +10,9 @@ import { bindAsyncOperatorInput, notifyOperatorInputReprompt } from './async-ope
 import { isOperatorInputInteractive, isOperatorInputTty } from './prompt-operator-input.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
 import { resolveCliMaxTurns } from './resolve-cli-max-turns.js';
-import {
-  createDialogueSink,
-  createHarnessSink,
-  createObservationSink,
-} from './session-sinks.js';
+import { createSessionDisplaySink } from './display/create-session-display-sink.js';
+import { selectSessionDisplayBackend } from './display/select-session-display-backend.js';
+import { createHarnessSink, createObservationSink } from './session-sinks.js';
 
 export interface IssueCommandOptions {
   repoRoot: string;
@@ -112,14 +110,16 @@ export async function executeIssueCommand(
     { issueUrl, repoRoot },
     deps,
   );
+  const interactive = isInteractive();
   const sessionLogger = new SessionLoggerCtor({ issueUrl, repoRoot });
   sessionLogger.subscribe(createHarnessSink());
   sessionLogger.subscribe(createObservationSink());
-  sessionLogger.subscribe((event) => {
-    if (event.type === 'open.question.enqueued') {
-      notifyOperatorInputReprompt();
-    }
-  });
+  sessionLogger.subscribe(
+    createSessionDisplaySink({
+      backend: selectSessionDisplayBackend({ interactive }),
+      onOpenQuestionEnqueued: notifyOperatorInputReprompt,
+    }),
+  );
 
   if (workerWorktreeMode === 'in_repo') {
     sessionLogger.emit({ type: 'session.worktree.notice', mode: workerWorktreeMode });
@@ -131,12 +131,7 @@ export async function executeIssueCommand(
     });
   }
 
-  const interactive = isInteractive();
   const maxTurns = resolveIssueSessionMaxTurns(options, interactive);
-
-  if (interactive) {
-    sessionLogger.subscribe(createDialogueSink());
-  }
 
   return runSession({
     issueUrl,
