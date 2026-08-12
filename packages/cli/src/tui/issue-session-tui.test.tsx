@@ -6,10 +6,10 @@ import { createTuiViewModel } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import {
   computeOperatorInputCursorX,
-  computeOperatorInputCursorY,
+  computeOperatorInputLineIndex,
 } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
-import { PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
+import { OPERATOR_INPUT_CURSOR_Y_OFFSET, PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
 
 function findOperatorInputLine(lines: string[]): { lineIndex: number; inputStartX: number } {
   const operatorLineIndices = lines
@@ -110,8 +110,9 @@ describe('IssueSessionTui', () => {
     });
     const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-    const expectedCursorY = computeOperatorInputCursorY({ terminalRows, hintLineCount });
+    const expectedInputLineIndex = computeOperatorInputLineIndex({ terminalRows, hintLineCount });
     const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
+    const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
 
     const { lastFrame } = render(
       <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
@@ -121,7 +122,8 @@ describe('IssueSessionTui', () => {
     const { lineIndex, inputStartX } = findOperatorInputLine(lines);
     expect(lineIndex).toBeGreaterThanOrEqual(0);
     expect(inputStartX).toBe(expectedCursorX);
-    expect(lineIndex).toBe(expectedCursorY);
+    expect(lineIndex).toBe(expectedInputLineIndex);
+    expect(expectedCursorY).toBe(lineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET);
     expect(lines).toHaveLength(terminalRows);
   });
 
@@ -152,8 +154,9 @@ describe('IssueSessionTui', () => {
     });
     const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-    const expectedCursorY = computeOperatorInputCursorY({ terminalRows, hintLineCount });
+    const expectedInputLineIndex = computeOperatorInputLineIndex({ terminalRows, hintLineCount });
     const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
+    const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
 
     const { lastFrame } = render(
       <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
@@ -164,7 +167,8 @@ describe('IssueSessionTui', () => {
     expect(hintLineCount).toBeGreaterThan(1);
     expect(lineIndex).toBeGreaterThanOrEqual(0);
     expect(inputStartX).toBe(expectedCursorX);
-    expect(lineIndex).toBe(expectedCursorY);
+    expect(lineIndex).toBe(expectedInputLineIndex);
+    expect(expectedCursorY).toBe(lineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET);
     expect(lines).toHaveLength(terminalRows);
   });
 

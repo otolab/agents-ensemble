@@ -6,9 +6,6 @@
 /** 枠線ありペインの上下枠線行数（`borderStyle` 指定時）。 */
 export const PANE_BORDER_ROWS = 2;
 
-/** round / single 枠線の左（または右）列幅。 */
-export const SINGLE_BORDER_WIDTH = 1;
-
 /** round 枠線の表示幅（左右各 1 列）。 */
 export const ROUND_BORDER_WIDTH = 2;
 
@@ -25,10 +22,16 @@ export const INPUT_PANE_BORDER_ROWS = PANE_BORDER_ROWS;
 export const PANE_PADDING_X = 1;
 
 /** 入力ペイン左枠線の列幅（`borderStyle="single"` の左 `│`）。 */
-export const INPUT_PANE_LEFT_BORDER_COLUMNS = SINGLE_BORDER_WIDTH;
+export const INPUT_PANE_LEFT_BORDER_COLUMNS = 1;
 
 /**
  * 入力ペイン左端からテキストコンテンツ開始までの列数（左枠線 + `paddingX`）。
  * `useCursor` の X は Ink 出力原点からの絶対列であり、このオフセットを含める。
  */
 export const INPUT_PANE_LEFT_COLUMNS = INPUT_PANE_LEFT_BORDER_COLUMNS + PANE_PADDING_X;
+
+/**
+ * Ink `useCursor` の Y 補正。`log-update` の `visibleLineCount` が描画行数より 1 大きい場合、
+ * 実カーソルが入力行より 1 行上にずれる（オペレータ手動確認 iTerm2+tmux）。
+ */
+export const OPERATOR_INPUT_CURSOR_Y_OFFSET = 1;

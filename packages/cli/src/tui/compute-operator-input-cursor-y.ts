@@ -3,6 +3,7 @@ import {
   INPUT_PANE_BORDER_ROWS,
   INPUT_PANE_LEFT_COLUMNS,
   OPEN_QUESTIONS_PANE_HEIGHT,
+  OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
 } from './tui-layout-constants.js';
@@ -25,22 +26,28 @@ export function computeActivityPaneHeight(params: {
   );
 }
 
-/** Session ペインに収まる活動ログ行数（タイトル行・枠線を除く）。 */
+/** Session ペイン内に表示できる活動ログ行数（タイトル行・枠線を除く）。 */
 export function computeActivityLogLineCapacity(params: {
   terminalRows: number;
   hintLineCount: number;
 }): number {
-  return Math.max(0, computeActivityPaneHeight(params) - PANE_BORDER_ROWS - 1);
+  const activityPaneHeight = computeActivityPaneHeight(params);
+  return Math.max(0, activityPaneHeight - PANE_BORDER_ROWS - 1);
 }
 
-/** 入力行先頭（`operator> ` の直後）の X 座標。左枠線 + padding + プロンプト幅。 */
+/**
+ * オペレータ入力カーソルの X 座標（Ink 出力原点から 0 始まり、カーソル offset 0）。
+ * 入力ペインの左枠線・padding とプロンプト幅を含む。
+ */
 export function computeOperatorInputCursorX(operatorPrompt: string): number {
   return INPUT_PANE_LEFT_COLUMNS + stringWidth(operatorPrompt);
 }
 
 /**
- * オペレータ入力行の Y 座標（Ink 出力原点から 0 始まり）。
- * 本番は `useBoxMetrics` で実測する。ユニットテスト用の式。
+ * オペレータ入力行の Y 座標（Ink `useCursor` 向け。Ink 出力原点から 0 始まり）。
+ *
+ * 描画フレーム上の入力行インデックスに {@link OPERATOR_INPUT_CURSOR_Y_OFFSET} を加算する。
+ * Ink `log-update` の `visibleLineCount` と実入力行の差を補正（オペレータ手動確認 iTerm2+tmux）。
  */
 export function computeOperatorInputCursorY(params: {
   terminalRows: number;
@@ -51,5 +58,16 @@ export function computeOperatorInputCursorY(params: {
     computeActivityPaneHeight(params) +
     OPEN_QUESTIONS_PANE_HEIGHT;
 
-  return panesAboveInput + PANE_BORDER_ROWS / 2 + params.hintLineCount;
+  const inputLineIndex =
+    panesAboveInput + PANE_BORDER_ROWS / 2 + params.hintLineCount;
+
+  return inputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
+}
+
+/** 描画フレーム上のオペレータ入力行インデックス（`useCursor` の Y 補正前）。 */
+export function computeOperatorInputLineIndex(params: {
+  terminalRows: number;
+  hintLineCount: number;
+}): number {
+  return computeOperatorInputCursorY(params) - OPERATOR_INPUT_CURSOR_Y_OFFSET;
 }

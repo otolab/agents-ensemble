@@ -1,6 +1,5 @@
-import { Box, Text, useBoxMetrics, type DOMElement } from 'ink';
-import stringWidth from 'string-width';
-import { useRef, useSyncExternalStore, useState } from 'react';
+import { Box, Text } from 'ink';
+import { useSyncExternalStore, useState } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import { formatActivityLogLine } from './activity-log.js';
@@ -14,6 +13,8 @@ import { ImeTextInput } from './ime-text-input.js';
 import {
   computeActivityLogLineCapacity,
   computeInputPaneHeight,
+  computeOperatorInputCursorX,
+  computeOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
@@ -158,8 +159,6 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     viewModel.getSnapshot,
   );
   const [inputValue, setInputValue] = useState('');
-  const inputRowRef = useRef<DOMElement>(null);
-  const inputRowMetrics = useBoxMetrics(inputRowRef);
   const contentWidth = usePaneContentWidth();
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
@@ -172,12 +171,13 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     terminalRows,
     hintLineCount,
   });
-  const cursorStart = inputRowMetrics.hasMeasured
-    ? {
-        x: inputRowMetrics.left + stringWidth(operatorPrompt),
-        y: inputRowMetrics.top,
-      }
-    : undefined;
+  const cursorStart = {
+    x: computeOperatorInputCursorX(operatorPrompt),
+    y: computeOperatorInputCursorY({
+      terminalRows,
+      hintLineCount,
+    }),
+  };
 
   const handleSubmit = (value: string) => {
     const trimmed = value.trim();
@@ -209,17 +209,15 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         overflow="hidden"
       >
         <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
-        <Box ref={inputRowRef}>
-          <Text>
-            {operatorPrompt}
-            <ImeTextInput
-              value={inputValue}
-              onChange={setInputValue}
-              onSubmit={handleSubmit}
-              cursorStart={cursorStart}
-            />
-          </Text>
-        </Box>
+        <Text>
+          {operatorPrompt}
+          <ImeTextInput
+            value={inputValue}
+            onChange={setInputValue}
+            onSubmit={handleSubmit}
+            cursorStart={cursorStart}
+          />
+        </Text>
       </Box>
     </Box>
   );
