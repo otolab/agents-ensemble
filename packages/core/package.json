@@ -17,7 +17,7 @@
     "test:run": "vitest run",
     "test:integration": "vitest run --config vitest.config.integration.ts",
     "test:e2e": "vitest run --config vitest.config.e2e.ts",
-    "prepublishOnly": "pnpm run build"
+    "prepublishOnly": "pnpm exec tsc --build --force && node scripts/copy-profiles.mjs"
   },
   "license": "MIT",
   "repository": {

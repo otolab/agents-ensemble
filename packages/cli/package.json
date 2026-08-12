@@ -13,7 +13,7 @@
     "test:e2e": "vitest run --config vitest.config.e2e.ts",
     "test": "vitest",
     "test:run": "vitest run",
-    "prepublishOnly": "rm -rf dist && pnpm run build"
+    "prepublishOnly": "rm -rf dist && pnpm exec tsc --build --force"
   },
   "dependencies": {
     "@agents-ensemble/core": "workspace:*",
