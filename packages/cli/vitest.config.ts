@@ -7,6 +7,6 @@ export default defineConfig({
     testTimeout: 10_000,
   },
   ssr: {
-    noExternal: ['ink', 'ink-text-input', 'ink-testing-library'],
+    noExternal: ['ink', 'ink-testing-library'],
   },
 });
