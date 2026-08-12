@@ -331,6 +331,18 @@ export type {
   PermissionPipelineOutcome,
 } from './permission/permission-pipeline.js';
 export {
+  createPermissionDeadlockMonitor,
+  DEFAULT_PERMISSION_DEADLOCK_POLL_MS,
+  DEFAULT_PERMISSION_DEADLOCK_STALL_MS,
+  formatPermissionDeadlockWarningMessage,
+  isPermissionDeadlockRisk,
+} from './permission/permission-deadlock-monitor.js';
+export type {
+  PermissionDeadlockActivitySnapshot,
+  PermissionDeadlockMonitor,
+  PermissionDeadlockMonitorOptions,
+} from './permission/permission-deadlock-monitor.js';
+export {
   PendingPermissionRegistry,
 } from './permission/pending-permission.js';
 export type { PendingPermission } from './permission/pending-permission.js';

@@ -38,6 +38,7 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
+| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続） | `[harness] warning: init prompt / prompt 実行中の permission が未解消のまま 30s 以上継続...` | なし |
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
 
 ### 2.4 セッション観測イベント（#92 で追加）
@@ -254,6 +255,14 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 
 検知の意図: harness 起因の init prompt または conductor 指示の prompt が permission で止まり、conductor がイベント駆動で解消しないまま N 秒経過した状態をテレメトリする。
 
+| 項目 | 初期値 |
+|------|--------|
+| 停滞閾値 | **30s**（`permissionDeadlockStallMs`） |
+| poll 間隔 | **5s**（`permissionDeadlockPollMs`） |
+| 警告回数 | 同一停滞エピソードで **1 回**。pending 解消後に再発した場合のみ再警告 |
+
+実装: `packages/core/src/permission/permission-deadlock-monitor.ts`。`runConductorSession` 起動時に自動開始（`disablePermissionDeadlockMonitor` で無効化可）。
+
 ## 7. 関連コード
 
 | パス | 内容 |
@@ -265,6 +274,7 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 | `packages/core/src/github/github-monitor.ts` | Issue / PR 更新監視 |
 | `packages/core/src/github/fetch-github-updates.ts` | `gh` ベース差分取得 |
 | `packages/core/src/runtime/worker-runtime.ts` | worker prompt ライフサイクル（init / instruction 対称） |
+| `packages/core/src/permission/permission-deadlock-monitor.ts` | #125 デッドロック検知 |
 | `packages/cli/src/session-sinks.ts` | HarnessSink / DialogueSink / ObservationSink |
 | `packages/cli/src/display/` | 表示 state・DisplaySink・string backend |
 | `docs/session-logging.md` | 観測の役割分担 |

@@ -27,6 +27,15 @@ describe('session-log-lines', () => {
     );
   });
 
+  it('formats harness.warning body', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'harness.warning',
+        message: 'test warning',
+      }),
+    ).toBe('warning: test warning');
+  });
+
   it('formats conductor.send.started harness body', () => {
     expect(
       formatHarnessLogBody({

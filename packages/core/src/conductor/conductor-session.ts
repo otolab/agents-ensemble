@@ -8,6 +8,10 @@ import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import type { EscalationRecord } from '../escalation/human-inquiry.js';
 import type { PermissionPolicyRules } from '../permission/permission-policy.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
+import {
+  createPermissionDeadlockMonitor,
+  type PermissionDeadlockMonitor,
+} from '../permission/permission-deadlock-monitor.js';
 import { createResolvePermissionTool } from '../permission/resolve-permission-tool.js';
 import type { Profile } from '../profile/types.js';
 import { profileWorkersToSessionSpecs, sessionStateFromProfile } from '../profile/types.js';
@@ -140,6 +144,12 @@ export interface RunConductorSessionOptions {
   githubMonitorPollIntervalMs?: number;
   /** CI pending 時の poll 間隔（ms）。デフォルト 15s。 */
   githubMonitorActivePollIntervalMs?: number;
+  /** permission デッドロック検知を無効化する。 */
+  disablePermissionDeadlockMonitor?: boolean;
+  /** pending permission 継続とみなす閾値（ms）。デフォルト 30s。 */
+  permissionDeadlockStallMs?: number;
+  /** デッドロック検知の poll 間隔（ms）。デフォルト 5s。 */
+  permissionDeadlockPollMs?: number;
 }
 
 export interface ConductorSessionResult {
@@ -497,6 +507,26 @@ export async function runConductorSession(
     githubMonitor.start();
   }
 
+  let permissionDeadlockMonitor: PermissionDeadlockMonitor | undefined;
+  if (!options.disablePermissionDeadlockMonitor) {
+    permissionDeadlockMonitor = createPermissionDeadlockMonitor({
+      pipeline: permissionPipeline,
+      getActivitySnapshot: () => ({
+        attachInFlight: workerSession.runtime.attachInFlightCount,
+        hasProcessingWorker: workerSession.runtime
+          .listWorkerStatuses()
+          .some((worker) => worker.state === 'processing'),
+      }),
+      onWarning: (message) => {
+        sessionLogger.emit({ type: 'harness.warning', message });
+      },
+      stallThresholdMs: options.permissionDeadlockStallMs,
+      pollIntervalMs: options.permissionDeadlockPollMs,
+      shutdownSignal,
+    });
+    permissionDeadlockMonitor.start();
+  }
+
   let sendCount = 0;
   let stopReason: IssueLoopStopReason = 'completed';
   const continueOnConductorError = options.continueOnConductorError ?? false;
@@ -691,6 +721,9 @@ export async function runConductorSession(
       githubMonitor.flush();
       await githubMonitor.stop();
       githubMonitorCursor = githubMonitor.getCursor();
+    }
+    if (permissionDeadlockMonitor) {
+      permissionDeadlockMonitor.stop();
     }
     try {
       await flushSidecar();

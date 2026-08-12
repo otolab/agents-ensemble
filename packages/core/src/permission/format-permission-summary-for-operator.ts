@@ -40,7 +40,13 @@ export function extractPermissionOperationSummary(
   request: PermissionRequest,
 ): PermissionOperationSummary | undefined {
   const raw = asRecord(request.raw) ?? {};
-  const input = asRecord(raw.input) ?? asRecord(raw.arguments) ?? raw;
+  const toolCall = asRecord(raw.toolCall) ?? asRecord(raw.tool_call);
+  const toolCallArgs = toolCall ? asRecord(toolCall.args) : undefined;
+  const input =
+    asRecord(raw.input) ??
+    asRecord(raw.arguments) ??
+    toolCallArgs ??
+    raw;
   const tool = request.toolName.trim().toLowerCase();
 
   if (tool === 'shell' || tool === 'bash') {

@@ -56,6 +56,8 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return `github.update items=${event.itemCount}`;
     case 'harness.github.monitor_error':
       return `github.monitor_error ${event.message}`;
+    case 'harness.warning':
+      return `warning: ${event.message}`;
     default:
       return undefined;
   }
