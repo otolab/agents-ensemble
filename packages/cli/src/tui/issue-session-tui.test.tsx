@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
-import { render } from 'ink-testing-library';
+import { cleanup, render } from 'ink-testing-library';
 import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { buildActivityLogDisplayLines } from './activity-log.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
+import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import {
   computeActivityLogLineCapacity,
   computeOperatorInputCursorX,
@@ -33,6 +34,14 @@ function expectNoContentOnBorderLines(frame: string): void {
   }
 }
 
+function fillScrollableHarnessLog(viewModel: ReturnType<typeof createTuiViewModel>, count = 30): void {
+  for (let index = 0; index < count; index++) {
+    viewModel.appendActivityLog('harness', `line-${index}`);
+  }
+}
+
+const SCROLL_HINT = 'PgUp/PgDn でスクロール';
+
 describe('IssueSessionTui', () => {
   beforeEach(() => {
     Object.defineProperty(process.stdout, 'rows', {
@@ -46,6 +55,7 @@ describe('IssueSessionTui', () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -335,5 +345,83 @@ describe('IssueSessionTui', () => {
     render(<IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />);
 
     expect(expectedLines).toBeGreaterThan(1);
+  });
+
+  describe('orchestration pane scroll (stdin integration)', () => {
+    it('scrolls to older lines on PgUp when input is empty and shows scroll hint', async () => {
+      const viewModel = createTuiViewModel();
+      fillScrollableHarnessLog(viewModel);
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      const pinnedFrame = lastFrame() ?? '';
+      expect(pinnedFrame).toContain('[harness] line-29');
+      expect(pinnedFrame).not.toContain('[harness] line-16');
+      expect(pinnedFrame).not.toContain(SCROLL_HINT);
+
+      stdin.write(INK_TEST_KEYS.pageUp);
+      await flushInkStdin();
+
+      const scrolledFrame = lastFrame() ?? '';
+      expect(scrolledFrame).toContain(SCROLL_HINT);
+      expect(scrolledFrame).toContain('[harness] line-16');
+      expect(scrolledFrame).not.toContain('[harness] line-29');
+    });
+
+    it('returns to latest lines on End and clears scroll hint', async () => {
+      const viewModel = createTuiViewModel();
+      fillScrollableHarnessLog(viewModel);
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      stdin.write(INK_TEST_KEYS.pageUp);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain(SCROLL_HINT);
+
+      stdin.write(INK_TEST_KEYS.end);
+      await flushInkStdin();
+
+      const restoredFrame = lastFrame() ?? '';
+      expect(restoredFrame).toContain('[harness] line-29');
+      expect(restoredFrame).not.toContain(SCROLL_HINT);
+    });
+
+    it('does not scroll on plain PgUp when input has text; Ctrl+PgUp scrolls without changing input', async () => {
+      const viewModel = createTuiViewModel();
+      fillScrollableHarnessLog(viewModel);
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      stdin.write('typed');
+      await flushInkStdin();
+
+      const typedFrame = lastFrame() ?? '';
+      expect(typedFrame).toContain('typed');
+      expect(typedFrame).toContain('[harness] line-29');
+      expect(typedFrame).not.toContain(SCROLL_HINT);
+
+      stdin.write(INK_TEST_KEYS.pageUp);
+      await flushInkStdin();
+
+      const plainPageUpFrame = lastFrame() ?? '';
+      expect(plainPageUpFrame).toContain('typed');
+      expect(plainPageUpFrame).toContain('[harness] line-29');
+      expect(plainPageUpFrame).not.toContain(SCROLL_HINT);
+
+      stdin.write(INK_TEST_KEYS.ctrlPageUp);
+      await flushInkStdin();
+
+      const ctrlPageUpFrame = lastFrame() ?? '';
+      expect(ctrlPageUpFrame).toContain('typed');
+      expect(ctrlPageUpFrame).toContain(SCROLL_HINT);
+      expect(ctrlPageUpFrame).toContain('[harness] line-16');
+      expect(ctrlPageUpFrame).not.toContain('[harness] line-29');
+    });
   });
 });
