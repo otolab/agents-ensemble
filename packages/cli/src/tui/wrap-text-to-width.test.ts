@@ -21,6 +21,10 @@ describe('wrapTextToWidth', () => {
   it('handles empty string', () => {
     expect(wrapTextToWidth('', 10)).toEqual(['']);
   });
+
+  it('wraps CJK characters by display width', () => {
+    expect(wrapTextToWidth('あいうえ', 4)).toEqual(['あい', 'うえ']);
+  });
 });
 
 describe('getPaneContentWidth', () => {

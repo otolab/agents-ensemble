@@ -1,18 +1,27 @@
 import { Box, Text } from 'ink';
-import TextInput from 'ink-text-input';
 import { useSyncExternalStore, useState } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import { formatActivityLogLine } from './activity-log.js';
+import {
+  OPEN_QUESTIONS_PANE_HEIGHT,
+  PANE_PADDING_X,
+  ROUND_BORDER_WIDTH,
+  WORKER_PANE_HEIGHT,
+} from './tui-layout-constants.js';
+import { ImeTextInput } from './ime-text-input.js';
+import {
+  computeActivityLogLineCapacity,
+  computeInputPaneHeight,
+  computeOperatorInputCursorX,
+  computeOperatorInputCursorY,
+} from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string) => void;
 }
-
-const ROUND_BORDER_WIDTH = 2;
-const PANE_PADDING_X = 1;
 
 function usePaneContentWidth(): number {
   return getPaneContentWidth({
@@ -22,12 +31,20 @@ function usePaneContentWidth(): number {
   });
 }
 
-function WrappedTextLines({ text, width }: { text: string; width: number }) {
+function WrappedTextLines({
+  text,
+  width,
+  dimColor = false,
+}: {
+  text: string;
+  width: number;
+  dimColor?: boolean;
+}) {
   const lines = wrapTextToWidth(text, width);
   return (
     <>
       {lines.map((line, index) => (
-        <Text key={`${index}-${line}`} wrap="wrap">
+        <Text key={`${index}-${line}`} dimColor={dimColor}>
           {line}
         </Text>
       ))}
@@ -42,7 +59,14 @@ function WorkerStatusPane({
 }) {
   const entries = Object.entries(workers);
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} height={6}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="cyan"
+      paddingX={1}
+      height={WORKER_PANE_HEIGHT}
+      overflow="hidden"
+    >
       <Text bold>Workers</Text>
       {entries.length === 0 ? (
         <Text dimColor>(待機中)</Text>
@@ -60,17 +84,29 @@ function WorkerStatusPane({
 function ActivityLogPane({
   activityLog,
   contentWidth,
+  maxLogLines,
 }: {
   activityLog: TuiViewSnapshot['activityLog'];
   contentWidth: number;
+  maxLogLines: number;
 }) {
+  const visibleLog =
+    maxLogLines > 0 ? activityLog.slice(-maxLogLines) : activityLog.slice(0, 0);
+
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={PANE_PADDING_X} flexGrow={1}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="green"
+      paddingX={PANE_PADDING_X}
+      flexGrow={1}
+      overflow="hidden"
+    >
       <Text bold>Session</Text>
-      {activityLog.length === 0 ? (
+      {visibleLog.length === 0 ? (
         <Text dimColor>(活動ログなし)</Text>
       ) : (
-        activityLog.map((entry, index) => (
+        visibleLog.map((entry, index) => (
           <Box key={`log-${index}`} flexDirection="column">
             <WrappedTextLines text={formatActivityLogLine(entry)} width={contentWidth} />
           </Box>
@@ -93,7 +129,8 @@ function OpenQuestionsPane({
       borderStyle="round"
       borderColor="magenta"
       paddingX={PANE_PADDING_X}
-      minHeight={4}
+      height={OPEN_QUESTIONS_PANE_HEIGHT}
+      overflow="hidden"
     >
       <Text bold>Open questions</Text>
       {openQuestions.length === 0 ? (
@@ -123,6 +160,24 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   );
   const [inputValue, setInputValue] = useState('');
   const contentWidth = usePaneContentWidth();
+  const terminalRows = process.stdout.rows ?? 24;
+  const operatorPrompt = 'operator> ';
+  const contextHint = snapshot.postLoopWaiting
+    ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
+    : formatOperatorContextHint(snapshot.operatorContext);
+  const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
+  const inputPaneHeight = computeInputPaneHeight(hintLineCount);
+  const activityLogCapacity = computeActivityLogLineCapacity({
+    terminalRows,
+    hintLineCount,
+  });
+  const cursorStart = {
+    x: computeOperatorInputCursorX(operatorPrompt),
+    y: computeOperatorInputCursorY({
+      terminalRows,
+      hintLineCount,
+    }),
+  };
 
   const handleSubmit = (value: string) => {
     const trimmed = value.trim();
@@ -134,22 +189,34 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   };
 
   return (
-    <Box flexDirection="column" height={process.stdout.rows ?? 24}>
+    <Box flexDirection="column" height={terminalRows}>
       <WorkerStatusPane workers={snapshot.displayState.workers} />
-      <ActivityLogPane activityLog={snapshot.activityLog} contentWidth={contentWidth} />
+      <ActivityLogPane
+        activityLog={snapshot.activityLog}
+        contentWidth={contentWidth}
+        maxLogLines={activityLogCapacity}
+      />
       <OpenQuestionsPane
         openQuestions={snapshot.displayState.openQuestions}
         contentWidth={contentWidth}
       />
-      <Box flexDirection="column" borderStyle="single" borderColor="white" paddingX={1}>
-        <Text dimColor wrap="wrap">
-          {snapshot.postLoopWaiting
-            ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
-            : formatOperatorContextHint(snapshot.operatorContext)}
-        </Text>
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor="white"
+        paddingX={1}
+        height={inputPaneHeight}
+        overflow="hidden"
+      >
+        <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
         <Text>
-          operator&gt;{' '}
-          <TextInput value={inputValue} onChange={setInputValue} onSubmit={handleSubmit} />
+          {operatorPrompt}
+          <ImeTextInput
+            value={inputValue}
+            onChange={setInputValue}
+            onSubmit={handleSubmit}
+            cursorStart={cursorStart}
+          />
         </Text>
       </Box>
     </Box>
