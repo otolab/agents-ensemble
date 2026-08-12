@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as compileModule from '../../src/prompt/compile-system-prompt.js';
 import { hasConductorAuth } from '../../src/conductor/conductor-auth.js';
 import { runIssueSession } from '../../src/conductor/issue-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
@@ -51,6 +52,7 @@ describe.skipIf(!hasConductorAuth())('runIssueSession integration', () => {
     vi.spyOn(worktreeModule, 'resolveWorkerWorkspace').mockResolvedValue(TEST_WORKTREE);
 
     const bridge = await createInProcessAcpBridge();
+    const compileSpy = vi.spyOn(compileModule, 'compileConductorSystemPrompt');
 
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
@@ -65,6 +67,14 @@ describe.skipIf(!hasConductorAuth())('runIssueSession integration', () => {
 
     expect(result.lastRunStatus).toBe('finished');
     expect(result.stopReason).toBe('completed');
+    expect(compileSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        issueContext: expect.objectContaining({
+          title: 'Integration smoke',
+          body: SMOKE_BRIEFING,
+        }),
+      }),
+    );
     expect(result.workerFailures).toHaveLength(0);
     expect(
       result.workerDispatches.some((entry) =>

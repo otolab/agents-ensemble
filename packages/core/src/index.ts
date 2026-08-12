@@ -104,8 +104,11 @@ export type {
 export { runGh } from './github/run-gh.js';
 export {
   fetchIssueContext,
-  formatIssueContextForPrompt,
 } from './github/issue-context.js';
+export {
+  formatIssueContextForPrompt,
+  formatIssueContextYaml,
+} from './github/format-issue-context-prompt.js';
 export type {
   IssueContext,
   IssueComment,

@@ -54,30 +54,3 @@ export async function fetchIssueContext(issueUrl: string): Promise<IssueContext>
   };
 }
 
-export function formatIssueContextForPrompt(context: IssueContext): string {
-  const lines = [
-    `# Issue #${context.issue.number}: ${context.title}`,
-    '',
-    `URL: ${context.issue.url}`,
-    `State: ${context.state}`,
-  ];
-
-  if (context.labels.length > 0) {
-    lines.push(`Labels: ${context.labels.join(', ')}`);
-  }
-
-  lines.push('', '## Description', context.body || '(empty)');
-
-  if (context.comments.length > 0) {
-    lines.push('', '## Comments');
-    for (const comment of context.comments) {
-      lines.push(
-        '',
-        `### @${comment.author} (${comment.createdAt})`,
-        comment.body,
-      );
-    }
-  }
-
-  return lines.join('\n');
-}

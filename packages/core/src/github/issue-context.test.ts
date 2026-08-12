@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  fetchIssueContext,
-  formatIssueContextForPrompt,
-} from './issue-context.js';
+import { fetchIssueContext } from './issue-context.js';
 import * as runGhModule from './run-gh.js';
 
 describe('fetchIssueContext', () => {
@@ -38,10 +35,6 @@ describe('fetchIssueContext', () => {
       '--json',
       'title,body,state,labels,comments',
     ]);
-
-    const prompt = formatIssueContextForPrompt(context);
-    expect(prompt).toContain('Implement bridge');
-    expect(prompt).toContain('progress update');
 
     vi.restoreAllMocks();
   });

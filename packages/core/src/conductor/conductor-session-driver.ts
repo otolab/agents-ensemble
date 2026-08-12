@@ -225,11 +225,12 @@ async function runInitialConductorSend(input: {
   workerFailures: WorkerFailureRecord[];
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
 }): Promise<ConductorSendResult> {
-  await fetchIssueContext(input.issueUrl);
+  const issueContext = await fetchIssueContext(input.issueUrl);
   const message = compileConductorSystemPrompt({
     issueUrl: input.issueUrl,
     profile: input.profile,
     roleBootstrap: resolveAgentSystemPrompt('conductor', input.profile.agents),
+    issueContext,
   });
 
   return runEventConductorSend({
