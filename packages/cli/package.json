@@ -2,7 +2,7 @@
   "name": "@agents-ensemble/cli",
   "version": "0.0.0",
   "type": "module",
-  "description": "ensemble CLI — Issue-based agent orchestration",
+  "description": "ensemble CLI \u2014 Issue-based agent orchestration",
   "bin": {
     "ensemble": "./dist/index.js"
   },
@@ -12,7 +12,8 @@
     "build": "tsc --build",
     "test:e2e": "vitest run --config vitest.config.e2e.ts",
     "test": "vitest",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "prepublishOnly": "rm -rf dist && pnpm run build"
   },
   "dependencies": {
     "@agents-ensemble/core": "workspace:*",
@@ -36,5 +37,15 @@
     "type": "git",
     "url": "git+https://github.com/otolab/agents-ensemble.git",
     "directory": "packages/cli"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }

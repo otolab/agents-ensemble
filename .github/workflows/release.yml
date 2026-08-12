@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - uses: pnpm/action-setup@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Upgrade npm for Trusted Publisher
+      run: npm install -g npm@^11.5.1
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+
+    - name: Build all packages
+      run: pnpm build
+
+    - name: Run tests
+      run: pnpm test:run
+
+    - name: Run type check
+      run: pnpm type-check
+
+    - name: Extract version from package.json
+      id: version
+      run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+    - name: Extract release notes
+      id: release_notes
+      run: |
+        VERSION=${{ steps.version.outputs.VERSION }}
+        if [ -f packages/cli/CHANGELOG.md ]; then
+          NOTES=$(awk "/^## ${VERSION}$/,/^## /" packages/cli/CHANGELOG.md | sed '$d' | tail -n +2)
+          if [ -z "$NOTES" ]; then
+            NOTES="リリース v${VERSION}"
+          fi
+        else
+          NOTES="リリース v${VERSION}"
+        fi
+        echo "NOTES<<EOF" >> $GITHUB_OUTPUT
+        echo "$NOTES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Publish changed packages to npm
+      run: |
+        for dir in packages/*; do
+          if [ -d "$dir" ]; then
+            cd "$dir"
+            PACKAGE_NAME=$(node -p "require('./package.json').name")
+            PACKAGE_VERSION=$(node -p "require('./package.json').version")
+            IS_PRIVATE=$(node -p "require('./package.json').private || false")
+
+            if [ "$IS_PRIVATE" = "false" ]; then
+              PUBLISHED_VERSION=$(pnpm view "$PACKAGE_NAME" version 2>/dev/null || echo "0.0.0")
+
+              if [ "$PACKAGE_VERSION" != "$PUBLISHED_VERSION" ]; then
+                echo "Publishing $PACKAGE_NAME@$PACKAGE_VERSION (previous: $PUBLISHED_VERSION)"
+                pnpm publish --no-git-checks --provenance --access public
+              else
+                echo "Skipping $PACKAGE_NAME@$PACKAGE_VERSION (already published)"
+              fi
+            else
+              echo "Skipping $PACKAGE_NAME (private package)"
+            fi
+
+            cd ../..
+          fi
+        done
+
+    - name: Create git tag
+      run: |
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --global user.name "github-actions[bot]"
+        git tag -a "v${{ steps.version.outputs.VERSION }}" -m "Release v${{ steps.version.outputs.VERSION }}"
+        git push origin "v${{ steps.version.outputs.VERSION }}"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ steps.version.outputs.VERSION }}
+        name: v${{ steps.version.outputs.VERSION }}
+        body: ${{ steps.release_notes.outputs.NOTES }}
+        draft: false
+        prerelease: ${{ contains(steps.version.outputs.VERSION, 'alpha') || contains(steps.version.outputs.VERSION, 'beta') }}
