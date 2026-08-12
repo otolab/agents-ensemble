@@ -1,5 +1,4 @@
 import { Box, Text, useInput } from 'ink';
-import TextInput from 'ink-text-input';
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
@@ -11,21 +10,26 @@ import {
   type ActivityLogDisplayLine,
   type ActivityLogEntry,
 } from './activity-log.js';
+import {
+  OPEN_QUESTIONS_PANE_HEIGHT,
+  PANE_BORDER_ROWS,
+  PANE_PADDING_X,
+  ROUND_BORDER_WIDTH,
+  WORKER_PANE_HEIGHT,
+} from './tui-layout-constants.js';
+import { ImeTextInput } from './ime-text-input.js';
+import {
+  computeActivityPaneHeight,
+  computeInputPaneHeight,
+  computeOperatorInputCursorX,
+  computeOperatorInputCursorY,
+} from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string) => void;
 }
-
-const ROUND_BORDER_WIDTH = 2;
-const PANE_PADDING_X = 1;
-const WORKER_PANE_HEIGHT = 6;
-const INPUT_PANE_HEIGHT = 4;
-const OPEN_QUESTIONS_MIN_HEIGHT = 4;
-const OPEN_QUESTIONS_MAX_HEIGHT = 10;
-const SESSION_PANE_MIN_HEIGHT = 6;
-const SESSION_HEADER_LINES = 1;
 
 function usePaneContentWidth(): number {
   return getPaneContentWidth({
@@ -35,54 +39,26 @@ function usePaneContentWidth(): number {
   });
 }
 
-function countWrappedLines(text: string, width: number): number {
-  return wrapTextToWidth(text, width).length;
-}
-
-function estimateOpenQuestionsPaneHeight(
-  openQuestions: TuiViewSnapshot['displayState']['openQuestions'],
-  contentWidth: number,
-): number {
-  if (openQuestions.length === 0) {
-    return OPEN_QUESTIONS_MIN_HEIGHT;
-  }
-
-  let contentLines = 1;
-  for (const question of openQuestions) {
-    contentLines += countWrappedLines(
-      `- ${question.id} [${question.responseType}] ${question.question}`,
-      contentWidth,
-    );
-    if (question.context) {
-      contentLines += countWrappedLines(`  ${question.context}`, contentWidth);
-    }
-  }
-
-  const withChrome = contentLines + 2;
-  return Math.min(
-    OPEN_QUESTIONS_MAX_HEIGHT,
-    Math.max(OPEN_QUESTIONS_MIN_HEIGHT, withChrome),
-  );
-}
-
-function computeSessionPaneHeight(
-  totalRows: number,
-  openQuestionsHeight: number,
-): number {
-  const used = WORKER_PANE_HEIGHT + openQuestionsHeight + INPUT_PANE_HEIGHT;
-  return Math.max(SESSION_PANE_MIN_HEIGHT, totalRows - used);
-}
-
 function getActivityLogVisibleLineCount(paneHeight: number): number {
-  return Math.max(1, paneHeight - SESSION_HEADER_LINES - 2);
+  return Math.max(1, paneHeight - PANE_BORDER_ROWS - 1);
 }
 
-function WrappedTextLines({ text, width }: { text: string; width: number }) {
+function WrappedTextLines({
+  text,
+  width,
+  dimColor = false,
+}: {
+  text: string;
+  width: number;
+  dimColor?: boolean;
+}) {
   const lines = wrapTextToWidth(text, width);
   return (
     <>
       {lines.map((line, index) => (
-        <Text key={`${index}-${line}`}>{line}</Text>
+        <Text key={`${index}-${line}`} dimColor={dimColor}>
+          {line}
+        </Text>
       ))}
     </>
   );
@@ -132,7 +108,14 @@ function WorkerStatusPane({
 }) {
   const entries = Object.entries(workers);
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} height={WORKER_PANE_HEIGHT}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="cyan"
+      paddingX={1}
+      height={WORKER_PANE_HEIGHT}
+      overflow="hidden"
+    >
       <Text bold>Workers</Text>
       {entries.length === 0 ? (
         <Text dimColor>(待機中)</Text>
@@ -197,11 +180,9 @@ function ActivityLogPane({
 function OpenQuestionsPane({
   openQuestions,
   contentWidth,
-  paneHeight,
 }: {
   openQuestions: TuiViewSnapshot['displayState']['openQuestions'];
   contentWidth: number;
-  paneHeight: number;
 }) {
   return (
     <Box
@@ -209,7 +190,7 @@ function OpenQuestionsPane({
       borderStyle="round"
       borderColor="magenta"
       paddingX={PANE_PADDING_X}
-      height={paneHeight}
+      height={OPEN_QUESTIONS_PANE_HEIGHT}
       overflow="hidden"
     >
       <Text bold>Open questions</Text>
@@ -241,18 +222,27 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   const [inputValue, setInputValue] = useState('');
   const [linesFromBottom, setLinesFromBottom] = useState(0);
   const contentWidth = usePaneContentWidth();
-  const totalRows = process.stdout.rows ?? 24;
-  const openQuestionsHeight = estimateOpenQuestionsPaneHeight(
-    snapshot.displayState.openQuestions,
-    contentWidth,
-  );
-  const sessionPaneHeight = computeSessionPaneHeight(totalRows, openQuestionsHeight);
-  const visibleLineCount = getActivityLogVisibleLineCount(sessionPaneHeight);
+  const terminalRows = process.stdout.rows ?? 24;
+  const operatorPrompt = 'operator> ';
+  const contextHint = snapshot.postLoopWaiting
+    ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
+    : formatOperatorContextHint(snapshot.operatorContext);
+  const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
+  const inputPaneHeight = computeInputPaneHeight(hintLineCount);
+  const activityPaneHeight = computeActivityPaneHeight({ terminalRows, hintLineCount });
+  const visibleLineCount = getActivityLogVisibleLineCount(activityPaneHeight);
   const displayLineCount = useMemo(
     () => buildActivityLogDisplayLines(snapshot.activityLog, contentWidth).length,
     [snapshot.activityLog, contentWidth],
   );
   const maxLinesFromBottom = Math.max(0, displayLineCount - visibleLineCount);
+  const cursorStart = {
+    x: computeOperatorInputCursorX(operatorPrompt),
+    y: computeOperatorInputCursorY({
+      terminalRows,
+      hintLineCount,
+    }),
+  };
 
   useEffect(() => {
     setLinesFromBottom((current) => Math.min(current, maxLinesFromBottom));
@@ -286,28 +276,35 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   };
 
   return (
-    <Box flexDirection="column" height={totalRows}>
+    <Box flexDirection="column" height={terminalRows}>
       <WorkerStatusPane workers={snapshot.displayState.workers} />
       <ActivityLogPane
         activityLog={snapshot.activityLog}
         contentWidth={contentWidth}
-        paneHeight={sessionPaneHeight}
+        paneHeight={activityPaneHeight}
         linesFromBottom={linesFromBottom}
       />
       <OpenQuestionsPane
         openQuestions={snapshot.displayState.openQuestions}
         contentWidth={contentWidth}
-        paneHeight={openQuestionsHeight}
       />
-      <Box flexDirection="column" borderStyle="single" borderColor="white" paddingX={1} height={INPUT_PANE_HEIGHT}>
-        <Text dimColor wrap="wrap">
-          {snapshot.postLoopWaiting
-            ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
-            : formatOperatorContextHint(snapshot.operatorContext)}
-        </Text>
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor="white"
+        paddingX={1}
+        height={inputPaneHeight}
+        overflow="hidden"
+      >
+        <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
         <Text>
-          operator&gt;{' '}
-          <TextInput value={inputValue} onChange={setInputValue} onSubmit={handleSubmit} />
+          {operatorPrompt}
+          <ImeTextInput
+            value={inputValue}
+            onChange={setInputValue}
+            onSubmit={handleSubmit}
+            cursorStart={cursorStart}
+          />
         </Text>
       </Box>
     </Box>

@@ -10,10 +10,12 @@ vi.mock('ink', () => ({
   render: mockRender,
   Box: ({ children }: { children: React.ReactNode }) => children,
   Text: ({ children }: { children: React.ReactNode }) => children,
+  useCursor: () => ({ setCursorPosition: vi.fn() }),
+  useInput: vi.fn(),
 }));
 
-vi.mock('ink-text-input', () => ({
-  default: () => null,
+vi.mock('./ime-text-input.js', () => ({
+  ImeTextInput: () => null,
 }));
 
 import { createIssueSessionTuiHost } from './create-issue-session-tui-host.js';
