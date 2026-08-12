@@ -17,7 +17,15 @@ import type {
   SendWorkerMessageOptions,
   SendWorkerMessageResult,
 } from './send-worker-message.js';
-import type { WorkerBootstrapTelemetry, WorkerStartedInfo, WorkerStartParams } from './types.js';
+import type {
+  WorkerBootstrapTelemetry,
+  WorkerStartedInfo,
+  WorkerStartParams,
+} from './types.js';
+import type {
+  WorkerStatusDetail,
+  WorkerStatusSummary,
+} from './worker-status.js';
 
 export interface WorkerRuntimeOptions {
   inbox: ConductorInbox;
@@ -39,9 +47,24 @@ interface ResidentWorker {
   cancelInFlight: boolean;
 }
 
+interface BootstrappingWorker {
+  workerId: string;
+  name: string;
+  kind: string;
+}
+
+interface FailedWorker {
+  workerId: string;
+  name: string;
+  kind: string;
+  error: string;
+}
+
 export class WorkerRuntime {
   private readonly prompting = new Map<string, WorkerStartedInfo>();
   private readonly residents = new Map<string, ResidentWorker>();
+  private readonly bootstrapping = new Map<string, BootstrappingWorker>();
+  private readonly failedWorkers = new Map<string, FailedWorker>();
   private readonly idleResolvers = new Set<() => void>();
   private bootstrapInFlight = 0;
 
@@ -57,6 +80,11 @@ export class WorkerRuntime {
     return this.residents.size;
   }
 
+  /** bootstrap 中（attach または bootstrap prompt 実行中を含む）の worker 数。 */
+  get bootstrapInFlightCount(): number {
+    return this.bootstrapInFlight;
+  }
+
   listAttached(): AttachedWorker[] {
     return [...this.residents.values()].map((resident) => resident.attached);
   }
@@ -67,6 +95,49 @@ export class WorkerRuntime {
 
   listRunning(): WorkerStartedInfo[] {
     return [...this.prompting.values()];
+  }
+
+  /** attach 済み・bootstrap 中・失敗済み worker の harness 状態一覧。 */
+  listWorkerStatuses(): WorkerStatusSummary[] {
+    const names = new Set<string>([
+      ...this.residents.keys(),
+      ...this.bootstrapping.keys(),
+      ...this.failedWorkers.keys(),
+    ]);
+    return [...names].map((name) => this.summarizeWorkerStatus(name));
+  }
+
+  /** 1 worker の harness 状態詳細。未登録なら undefined。 */
+  getWorkerStatus(name: string): WorkerStatusDetail | undefined {
+    if (
+      !this.residents.has(name) &&
+      !this.bootstrapping.has(name) &&
+      !this.failedWorkers.has(name)
+    ) {
+      return undefined;
+    }
+
+    const summary = this.summarizeWorkerStatus(name);
+    const resident = this.residents.get(name);
+    if (!resident) {
+      return {
+        ...summary,
+        workerId:
+          this.bootstrapping.get(name)?.workerId ??
+          this.failedWorkers.get(name)?.workerId,
+        queuePreview: [],
+        preemptPending: false,
+        cancelInFlight: false,
+      };
+    }
+
+    return {
+      ...summary,
+      workerId: resident.workerId,
+      queuePreview: resident.queue.map((instruction) => summarizeInstruction(instruction)),
+      preemptPending: resident.preemptInstruction !== undefined,
+      cancelInFlight: resident.cancelInFlight,
+    };
   }
 
   start(params: WorkerStartParams): string {
@@ -139,8 +210,50 @@ export class WorkerRuntime {
     this.residents.clear();
   }
 
+  private summarizeWorkerStatus(name: string): WorkerStatusSummary {
+    const failed = this.failedWorkers.get(name);
+    if (failed) {
+      return {
+        name: failed.name,
+        kind: failed.kind,
+        state: 'failed',
+        queueDepth: 0,
+        error: failed.error,
+      };
+    }
+
+    const bootstrapping = this.bootstrapping.get(name);
+    if (bootstrapping) {
+      return {
+        name: bootstrapping.name,
+        kind: bootstrapping.kind,
+        state: 'bootstrapping',
+        queueDepth: 0,
+      };
+    }
+
+    const resident = this.residents.get(name);
+    if (!resident) {
+      throw new Error(`summarizeWorkerStatus: unknown worker ${name}`);
+    }
+
+    return {
+      name: resident.attached.name,
+      kind: resident.attached.kind,
+      state: resident.state,
+      queueDepth: resident.queue.length,
+      worktreePath: resident.started.worktree.path,
+      acpSessionId: resident.attached.session.sessionId,
+    };
+  }
+
   private async bootstrap(started: WorkerStartedInfo): Promise<void> {
     this.bootstrapInFlight++;
+    this.bootstrapping.set(started.name, {
+      workerId: started.workerId,
+      name: started.name,
+      kind: started.kind,
+    });
     this.options.onBootstrapTelemetry?.({
       phase: 'started',
       workerId: started.workerId,
@@ -173,6 +286,7 @@ export class WorkerRuntime {
         cancelInFlight: false,
       };
       this.residents.set(started.name, resident);
+      this.bootstrapping.delete(started.name);
 
       const prompt = buildWorkerAttachPrompt(
         {
@@ -190,12 +304,20 @@ export class WorkerRuntime {
       await this.executeRound(resident, prompt, 'bootstrap');
     } catch (error) {
       this.residents.delete(started.name);
+      this.bootstrapping.delete(started.name);
+      const message = error instanceof Error ? error.message : String(error);
+      this.failedWorkers.set(started.name, {
+        workerId: started.workerId,
+        name: started.name,
+        kind: started.kind,
+        error: message,
+      });
       this.options.onBootstrapTelemetry?.({
         phase: 'failed',
         workerId: started.workerId,
         name: started.name,
         kind: started.kind,
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
       });
       this.options.inbox.publishWorkerFailed(started, error);
     } finally {
@@ -278,4 +400,12 @@ export class WorkerRuntime {
       this.idleResolvers.clear();
     }
   }
+}
+
+function summarizeInstruction(instruction: string): string {
+  const normalized = instruction.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= 120) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 117)}...`;
 }

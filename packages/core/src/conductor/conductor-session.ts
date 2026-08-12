@@ -13,6 +13,7 @@ import type { Profile } from '../profile/types.js';
 import { profileWorkersToSessionSpecs, sessionStateFromProfile } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
+import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
 import { parseIssueUrl, type IssueRef } from '../issue/issue-ref.js';
 import {
@@ -342,6 +343,12 @@ export async function runConductorSession(
     workerNames: activeProfile.workers.map((worker) => worker.name),
   });
 
+  const workerStatusTools = createWorkerStatusTools({
+    runtime: workerSession.runtime,
+    workerNames: activeProfile.workers.map((worker) => worker.name),
+    getWorkerFailures: () => sessionLogger.workerFailures,
+  });
+
   const conductorOptions = {
     cwd: options.conductorCwd ?? process.cwd(),
     apiKey: options.apiKey,
@@ -352,6 +359,7 @@ export async function runConductorSession(
       ...openQuestionListTools,
       ...resolvePermissionTools,
       ...promptWorkerTools,
+      ...workerStatusTools,
     },
   };
 

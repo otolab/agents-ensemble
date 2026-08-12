@@ -68,6 +68,7 @@ modular-prompt の標準セクションのうち、ensemble で主に使うも�
 - 自分で決められないときは `ask_human` する（conductor への命令）
 - Issue / PR に書く、permission を要求する（手順・振る舞い）
 - `prompt_worker` の使い方（ツール）
+- `list_workers` / `get_worker_status` の使い方（状態照会ツール）
 
 **見分け:** methodology は三人称・システムの話。instructions は読者への指示。
 
@@ -76,7 +77,7 @@ modular-prompt の標準セクションのうち、ensemble で主に使うも�
 - **そのロールの**具体的振る舞い（「〜しろ」「〜するな」「〜に返す」）
 - 禁止事項（conductor: 演奏しない、など）
 - 連携の手順（いつ・何を・どう送るか）
-- ツール名ごとの使い方（`### prompt_worker`, `### open question`）
+- ツール名ごとの使い方（`### prompt_worker`, `### worker 状態照会`, `### open question`）
 
 ## subsection のルール
 
