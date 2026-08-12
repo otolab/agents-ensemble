@@ -1,5 +1,13 @@
 # @agents-ensemble/cli
 
+## 0.1.1
+
+### Patch Changes
+
+- 9d2863c: `js-yaml` を core の runtime dependencies に移し、グローバル install 後の `ensemble` 起動を修正
+- Updated dependencies [9d2863c]
+  - @agents-ensemble/core@0.1.1
+
 ## 0.1.0
 
 ### Minor Changes
