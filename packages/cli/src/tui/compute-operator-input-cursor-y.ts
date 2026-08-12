@@ -1,5 +1,7 @@
+import stringWidth from 'string-width';
 import {
   INPUT_PANE_BORDER_ROWS,
+  INPUT_PANE_LEFT_COLUMNS,
   OPEN_QUESTIONS_PANE_HEIGHT,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
@@ -23,11 +25,22 @@ export function computeActivityPaneHeight(params: {
   );
 }
 
+/** Session ペインに収まる活動ログ行数（タイトル行・枠線を除く）。 */
+export function computeActivityLogLineCapacity(params: {
+  terminalRows: number;
+  hintLineCount: number;
+}): number {
+  return Math.max(0, computeActivityPaneHeight(params) - PANE_BORDER_ROWS - 1);
+}
+
+/** 入力行先頭（`operator> ` の直後）の X 座標。左枠線 + padding + プロンプト幅。 */
+export function computeOperatorInputCursorX(operatorPrompt: string): number {
+  return INPUT_PANE_LEFT_COLUMNS + stringWidth(operatorPrompt);
+}
+
 /**
  * オペレータ入力行の Y 座標（Ink 出力原点から 0 始まり）。
- *
- * 各 `height` は枠線込み（Yoga border-box）。入力ペイン内では
- * 上枠 1 行 → ヒント `hintLineCount` 行 → 入力行 の順。
+ * 本番は `useBoxMetrics` で実測する。ユニットテスト用の式。
  */
 export function computeOperatorInputCursorY(params: {
   terminalRows: number;

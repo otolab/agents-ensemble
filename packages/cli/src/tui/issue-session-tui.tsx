@@ -1,6 +1,6 @@
-import { Box, Text } from 'ink';
+import { Box, Text, useBoxMetrics, type DOMElement } from 'ink';
 import stringWidth from 'string-width';
-import { useSyncExternalStore, useState } from 'react';
+import { useRef, useSyncExternalStore, useState } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import { formatActivityLogLine } from './activity-log.js';
@@ -12,8 +12,8 @@ import {
 } from './tui-layout-constants.js';
 import { ImeTextInput } from './ime-text-input.js';
 import {
+  computeActivityLogLineCapacity,
   computeInputPaneHeight,
-  computeOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
@@ -58,7 +58,14 @@ function WorkerStatusPane({
 }) {
   const entries = Object.entries(workers);
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} height={WORKER_PANE_HEIGHT}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="cyan"
+      paddingX={1}
+      height={WORKER_PANE_HEIGHT}
+      overflow="hidden"
+    >
       <Text bold>Workers</Text>
       {entries.length === 0 ? (
         <Text dimColor>(待機中)</Text>
@@ -76,17 +83,29 @@ function WorkerStatusPane({
 function ActivityLogPane({
   activityLog,
   contentWidth,
+  maxLogLines,
 }: {
   activityLog: TuiViewSnapshot['activityLog'];
   contentWidth: number;
+  maxLogLines: number;
 }) {
+  const visibleLog =
+    maxLogLines > 0 ? activityLog.slice(-maxLogLines) : activityLog.slice(0, 0);
+
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="green" paddingX={PANE_PADDING_X} flexGrow={1}>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="green"
+      paddingX={PANE_PADDING_X}
+      flexGrow={1}
+      overflow="hidden"
+    >
       <Text bold>Session</Text>
-      {activityLog.length === 0 ? (
+      {visibleLog.length === 0 ? (
         <Text dimColor>(活動ログなし)</Text>
       ) : (
-        activityLog.map((entry, index) => (
+        visibleLog.map((entry, index) => (
           <Box key={`log-${index}`} flexDirection="column">
             <WrappedTextLines text={formatActivityLogLine(entry)} width={contentWidth} />
           </Box>
@@ -110,6 +129,7 @@ function OpenQuestionsPane({
       borderColor="magenta"
       paddingX={PANE_PADDING_X}
       height={OPEN_QUESTIONS_PANE_HEIGHT}
+      overflow="hidden"
     >
       <Text bold>Open questions</Text>
       {openQuestions.length === 0 ? (
@@ -138,6 +158,8 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     viewModel.getSnapshot,
   );
   const [inputValue, setInputValue] = useState('');
+  const inputRowRef = useRef<DOMElement>(null);
+  const inputRowMetrics = useBoxMetrics(inputRowRef);
   const contentWidth = usePaneContentWidth();
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
@@ -146,10 +168,16 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     : formatOperatorContextHint(snapshot.operatorContext);
   const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
   const inputPaneHeight = computeInputPaneHeight(hintLineCount);
-  const inputCursorY = computeOperatorInputCursorY({
+  const activityLogCapacity = computeActivityLogLineCapacity({
     terminalRows,
     hintLineCount,
   });
+  const cursorStart = inputRowMetrics.hasMeasured
+    ? {
+        x: inputRowMetrics.left + stringWidth(operatorPrompt),
+        y: inputRowMetrics.top,
+      }
+    : undefined;
 
   const handleSubmit = (value: string) => {
     const trimmed = value.trim();
@@ -163,7 +191,11 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   return (
     <Box flexDirection="column" height={terminalRows}>
       <WorkerStatusPane workers={snapshot.displayState.workers} />
-      <ActivityLogPane activityLog={snapshot.activityLog} contentWidth={contentWidth} />
+      <ActivityLogPane
+        activityLog={snapshot.activityLog}
+        contentWidth={contentWidth}
+        maxLogLines={activityLogCapacity}
+      />
       <OpenQuestionsPane
         openQuestions={snapshot.displayState.openQuestions}
         contentWidth={contentWidth}
@@ -174,20 +206,20 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         borderColor="white"
         paddingX={1}
         height={inputPaneHeight}
+        overflow="hidden"
       >
         <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
-        <Text>
-          {operatorPrompt}
-          <ImeTextInput
-            value={inputValue}
-            onChange={setInputValue}
-            onSubmit={handleSubmit}
-            cursorStart={{
-              x: stringWidth(operatorPrompt),
-              y: inputCursorY,
-            }}
-          />
-        </Text>
+        <Box ref={inputRowRef}>
+          <Text>
+            {operatorPrompt}
+            <ImeTextInput
+              value={inputValue}
+              onChange={setInputValue}
+              onSubmit={handleSubmit}
+              cursorStart={cursorStart}
+            />
+          </Text>
+        </Box>
       </Box>
     </Box>
   );

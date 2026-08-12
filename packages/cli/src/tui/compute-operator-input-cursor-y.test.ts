@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  computeActivityLogLineCapacity,
   computeActivityPaneHeight,
   computeInputPaneHeight,
+  computeOperatorInputCursorX,
   computeOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
 import {
   INPUT_PANE_BORDER_ROWS,
+  INPUT_PANE_LEFT_COLUMNS,
   OPEN_QUESTIONS_PANE_HEIGHT,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
@@ -26,6 +29,24 @@ describe('computeActivityPaneHeight', () => {
     expect(
       computeActivityPaneHeight({ terminalRows, hintLineCount }),
     ).toBe(terminalRows - WORKER_PANE_HEIGHT - OPEN_QUESTIONS_PANE_HEIGHT - inputPaneHeight);
+  });
+});
+
+describe('computeActivityLogLineCapacity', () => {
+  it('reserves title and border rows inside the activity pane', () => {
+    const terminalRows = 24;
+    const hintLineCount = 1;
+    const activityPaneHeight = computeActivityPaneHeight({ terminalRows, hintLineCount });
+
+    expect(computeActivityLogLineCapacity({ terminalRows, hintLineCount })).toBe(
+      activityPaneHeight - PANE_BORDER_ROWS - 1,
+    );
+  });
+});
+
+describe('computeOperatorInputCursorX', () => {
+  it('includes left border, padding, and prompt width', () => {
+    expect(computeOperatorInputCursorX('operator> ')).toBe(INPUT_PANE_LEFT_COLUMNS + 10);
   });
 });
 
