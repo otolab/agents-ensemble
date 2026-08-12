@@ -9,6 +9,7 @@ import type { SessionDisplayBackend } from '../display/session-display-backend.j
 import { formatConductorActivityBody } from '../session-log-lines.js';
 import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
+import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { trimBlankLinesOnly } from './operator-input-layout.js';
 
 const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
