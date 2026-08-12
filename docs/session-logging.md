@@ -34,12 +34,14 @@ conductor セッションには性質の異なる出力が混在する。
 │                                  │                          │
 │                    ┌─────────────┼─────────────┐            │
 │                    ▼             ▼             ▼            │
-│              HarnessSink   DialogueSink   snapshot()        │
-│              (stderr)      (stdout, TTY)   → 終了 JSON      │
+│              HarnessSink   DialogueSink   ObservationSink   │
+│              (stderr)      (stdout, TTY)  (stderr)          │
+│                                  │                          │
+│                                  └────► snapshot()          │
+│                                        → 終了 JSON          │
 └─────────────────────────────────────────────────────────────┘
 
   別経路（SessionLogger 外）:
-    open question / escalation → stderr（`[open question]` 等）
     sidecar flush → {repoRoot}/.ensemble/sessions/{agentId}.json
 ```
 
@@ -57,9 +59,10 @@ conductor セッションには性質の異なる出力が混在する。
 | prefix | 内容 |
 |--------|------|
 | `[harness]` | `SessionLogger` → HarnessSink（worktree / send / worker round 等） |
-| `[open question]` | open question 登録（`onOpenQuestionEnqueued`） |
-| `[operator answer]` | open question 回答のエスカレーション記録 |
-| `[worktree]` | `--worktree in-repo` 特別モードの注意 |
+| `[open question]` | `open.question.enqueued` → ObservationSink |
+| `[operator answer]` | `escalation.recorded` → ObservationSink |
+| `[worktree]` | `session.worktree.notice` → ObservationSink（`--worktree in-repo`） |
+| `[continue]` | `session.continue` → ObservationSink（`--continue` 再開時） |
 
 harness は **開発者向け**。オペレータの会話 UI には出さない。
 
@@ -118,6 +121,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 |------|----------|------|
 | `createHarnessSink()` | `packages/cli/src/session-sinks.ts` | stderr `[harness]` |
 | `createDialogueSink()` | 同上 | stdout `operator>` / `conductor>` |
+| `createObservationSink()` | 同上 | stderr `[open question]` 等のセッション観測 |
 
 DialogueSink は `conductor.send` で `status === 'error'` のとき、応答テキストの代わりに再入力を促すメッセージを出す（model blocked 等）。
 
@@ -182,7 +186,6 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 
 - 終了 JSON の薄型化（メトリクス中心、`workerResponses` をオプトイン）
 - `conductorSends[]` 履歴（現状は末尾の `lastResult` / `lastError` のみ）
-- open question 登録の `SessionLogEvent` 化（現状は CLI callback 直書き）
 
 ---
 

@@ -22,7 +22,7 @@ describe('resolveResumeAgentIdFromOptions', () => {
       { resume: 'agent-explicit' },
       { issueUrl, repoRoot: '/tmp/repo' },
     );
-    expect(result).toBe('agent-explicit');
+    expect(result).toEqual({ resumeAgentId: 'agent-explicit' });
   });
 
   it('throws when --continue and --resume are both set', async () => {
@@ -53,11 +53,10 @@ describe('resolveResumeAgentIdFromOptions', () => {
     });
   });
 
-  it('returns conductorAgentId from latest sidecar and logs to stderr', async () => {
+  it('returns conductorAgentId from latest sidecar when --continue is set', async () => {
     const findLatestSessionSidecarForIssue = vi.fn().mockResolvedValue({
       conductorAgentId: 'agent-latest',
     });
-    const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await resolveResumeAgentIdFromOptions(
       { continue: true },
@@ -65,11 +64,14 @@ describe('resolveResumeAgentIdFromOptions', () => {
       { findLatestSessionSidecarForIssue },
     );
 
-    expect(result).toBe('agent-latest');
-    expect(stderrSpy).toHaveBeenCalledWith(
-      '[continue] resuming session: conductorAgentId=agent-latest',
-    );
-    stderrSpy.mockRestore();
+    expect(result).toEqual({
+      resumeAgentId: 'agent-latest',
+      continuedFromSidecar: 'agent-latest',
+    });
+    expect(findLatestSessionSidecarForIssue).toHaveBeenCalledWith({
+      repoRoot: '/tmp/repo',
+      issueUrl,
+    });
   });
 
   it('returns undefined when neither --resume nor --continue is set', async () => {
@@ -77,7 +79,7 @@ describe('resolveResumeAgentIdFromOptions', () => {
       {},
       { issueUrl, repoRoot: '/tmp/repo' },
     );
-    expect(result).toBeUndefined();
+    expect(result).toEqual({});
   });
 });
 
@@ -88,13 +90,14 @@ describe('executeIssueCommand --continue wiring', () => {
       profile: { workers: [] },
       profilePath: '/tmp/profile.yaml',
     });
+    const emit = vi.fn();
     const SessionLogger = vi.fn().mockImplementation(() => ({
       subscribe: vi.fn(),
+      emit,
     }));
     const findLatestSessionSidecarForIssue = vi.fn().mockResolvedValue({
       conductorAgentId: 'agent-from-continue',
     });
-    const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await executeIssueCommand(
       issueUrl,
@@ -111,7 +114,10 @@ describe('executeIssueCommand --continue wiring', () => {
     expect(runIssueSession).toHaveBeenCalledWith(
       expect.objectContaining({ resumeAgentId: 'agent-from-continue' }),
     );
-    stderrSpy.mockRestore();
+    expect(emit).toHaveBeenCalledWith({
+      type: 'session.continue',
+      conductorAgentId: 'agent-from-continue',
+    });
   });
 });
 
@@ -230,6 +236,7 @@ describe('executeIssueCommand maxTurns wiring', () => {
     });
     const SessionLogger = vi.fn().mockImplementation(() => ({
       subscribe: vi.fn(),
+      emit: vi.fn(),
     }));
 
     await executeIssueCommand('https://github.com/org/repo/issues/1', baseOptions, {
@@ -243,6 +250,10 @@ describe('executeIssueCommand maxTurns wiring', () => {
     expect(runIssueSession).toHaveBeenCalledWith(
       expect.objectContaining({
         waitForOperatorExit: true,
+      }),
+    );
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({
         onPostLoopWait: expect.any(Function),
       }),
     );

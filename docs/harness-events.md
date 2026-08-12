@@ -34,6 +34,20 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
 
+### 2.4 セッション観測イベント（#92 で追加）
+
+open question・エスカレーション・CLI 通知。stderr の prefix は従来どおり（TUI 導入前の観測互換）。
+
+| type | 発火タイミング | stderr 例 | snapshot への影響 |
+|------|----------------|-----------|-------------------|
+| `open.question.enqueued` | open question 登録（`ask_human` / max-turns） | `[open question] inq-N [yes_no] ...` | なし |
+| `escalation.recorded` | open question 回答のエスカレーション記録 | `[operator answer] ... → ...` | なし |
+| `session.worktree.notice` | `--worktree in-repo` 開始時 | `[worktree] 特別モード: ...` | なし |
+| `session.continue` | `--continue` で sidecar から再開時 | `[continue] resuming session: conductorAgentId=...` | なし |
+| `session.post_loop_wait` | 自律ループ完了後の post-loop 待機開始 | （post-loop 待機メッセージ） | なし |
+
+CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）。
+
 ### 2.2 bootstrap 専用イベント（#74 で追加）
 
 harness が **conductor の指示なしに** 行う worker attach + 待機 prompt のライフサイクル。
@@ -115,7 +129,7 @@ prompt_worker / sendWorkerMessage
 |------------|--------------|
 | `operator>` / `conductor>`（stdout、DialogueSink） | worker 応答全文（会話 UI に混ぜない） |
 | `[harness]` テレメトリ（stderr） | SessionEvent の YAML 本文（conductor 向け） |
-| `[open question]` 等（SessionLogger 外） | |
+| `[open question]` 等（ObservationSink、stderr） | |
 
 bootstrap 把握の目安:
 
@@ -154,13 +168,17 @@ bootstrap 専用イベントは **exit JSON には載せない**（時系列テ�
 
 ---
 
-## 5. SessionLogger 外の stderr
+## 5. injectable sink（#92）
 
-| prefix | 発火元 | 備考 |
-|--------|--------|------|
-| `[open question]` | open question 登録 | 将来 SessionLogEvent 化の候補（session-logging.md §7） |
-| `[operator answer]` | open question 回答のエスカレーション記録 | |
-| `[worktree]` | `--worktree in-repo` 特別モードの注意 | |
+`createHarnessSink` / `createDialogueSink` / `createObservationSink` は書き込み先を注入可能（デフォルトは `console.error` / `process.stdout.write`）。TUI 導入時は sink を画面 state へ差し替える。
+
+| prefix | SessionLogEvent | 備考 |
+|--------|-----------------|------|
+| `[open question]` | `open.question.enqueued` | |
+| `[operator answer]` | `escalation.recorded` | |
+| `[worktree]` | `session.worktree.notice` | `dispatch worker` 経路は未移行（follow-up） |
+| `[continue]` | `session.continue` | |
+| （post-loop メッセージ） | `session.post_loop_wait` | |
 
 ---
 
@@ -187,6 +205,6 @@ worker 状態照会 tool（#70）は本 Issue の非スコープ。ただし boo
 | `packages/core/src/conductor/session/format-session-event.ts` | conductor 向け見出し |
 | `packages/core/src/conductor/conductor-session.ts` | emit / enqueue 配線 |
 | `packages/core/src/runtime/worker-runtime.ts` | bootstrap ライフサイクル |
-| `packages/cli/src/session-sinks.ts` | HarnessSink |
+| `packages/cli/src/session-sinks.ts` | HarnessSink / DialogueSink / ObservationSink |
 | `docs/session-logging.md` | 観測の役割分担 |
 | `docs/adr/0012-conductor-worker-prompt-roundtrip.md` | bootstrap の設計意図 |

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createDialogueSink, createHarnessSink } from './session-sinks.js';
+import {
+  createDialogueSink,
+  createHarnessSink,
+  createObservationSink,
+} from './session-sinks.js';
 
 describe('session sinks', () => {
   it('formats bootstrap harness events on stderr', () => {
@@ -124,5 +128,72 @@ describe('session sinks', () => {
     );
 
     stderr.mockRestore();
+  });
+
+  it('uses injected stderr writer for harness sink', () => {
+    const writeStderr = vi.fn();
+
+    createHarnessSink({ writeStderr })({
+      type: 'session.stop',
+      stopReason: 'completed',
+    });
+
+    expect(writeStderr).toHaveBeenCalledWith('[harness] session.stop reason=completed');
+  });
+
+  it('uses injected stdout writer for dialogue sink', () => {
+    const writeStdout = vi.fn();
+
+    createDialogueSink({ writeStdout })({
+      type: 'operator.input',
+      conductorTurn: 1,
+      text: 'hello',
+    });
+
+    expect(writeStdout).toHaveBeenCalledWith('\noperator> hello\n');
+  });
+
+  it('formats observation events on stderr', () => {
+    const writeStderr = vi.fn();
+    const sink = createObservationSink({ writeStderr });
+
+    sink({
+      type: 'open.question.enqueued',
+      question: {
+        id: 'inq-1',
+        question: 'approve merge?',
+        responseType: 'yes_no',
+        source: 'conductor',
+        status: 'open',
+        askedAt: 1,
+      },
+    });
+    sink({
+      type: 'escalation.recorded',
+      record: {
+        question: 'approve merge?',
+        responseType: 'yes_no',
+        answer: 'yes',
+      },
+    });
+    sink({ type: 'session.worktree.notice', mode: 'in_repo' });
+    sink({ type: 'session.continue', conductorAgentId: 'agent-1' });
+    sink({ type: 'session.post_loop_wait' });
+
+    expect(writeStderr).toHaveBeenCalledWith(
+      '[open question] inq-1 [yes_no] approve merge?',
+    );
+    expect(writeStderr).toHaveBeenCalledWith(
+      '[operator answer] approve merge? → yes',
+    );
+    expect(writeStderr).toHaveBeenCalledWith(
+      '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
+    );
+    expect(writeStderr).toHaveBeenCalledWith(
+      '[continue] resuming session: conductorAgentId=agent-1',
+    );
+    expect(writeStderr).toHaveBeenCalledWith(
+      '\n自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。\n',
+    );
   });
 });
