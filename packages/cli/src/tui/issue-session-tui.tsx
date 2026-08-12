@@ -1,11 +1,10 @@
 import { Box, Text, useInput } from 'ink';
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import {
   ACTIVITY_LOG_LABEL_COLORS,
   buildActivityLogDisplayLines,
-  formatActivityLogLabelPrefix,
   sliceActivityLogDisplayLines,
   type ActivityLogDisplayLine,
   type ActivityLogEntry,
@@ -64,38 +63,35 @@ function WrappedTextLines({
   );
 }
 
+function renderActivityLogLabel(label: ActivityLogDisplayLine['label']): ReactNode {
+  if (label === 'harness') {
+    return (
+      <Text color="yellow" dimColor>
+        [{label}]
+      </Text>
+    );
+  }
+
+  const color = ACTIVITY_LOG_LABEL_COLORS[label];
+  return color ? <Text color={color}>[{label}]</Text> : <Text>[{label}]</Text>;
+}
+
 function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
-  if (line.label === 'separator') {
+  if (line.layout === 'separator') {
     return <Text> </Text>;
   }
 
-  const color = ACTIVITY_LOG_LABEL_COLORS[line.label];
-  const prefix = formatActivityLogLabelPrefix(line.label);
-  const indent = ' '.repeat(prefix.length);
-
-  if (line.isContinuation) {
-    return (
-      <Text>
-        {indent}
-        {line.text}
-      </Text>
-    );
+  if (line.layout === 'body-row') {
+    return <Text>{line.text}</Text>;
   }
 
-  if (line.label === 'harness') {
-    return (
-      <Text>
-        <Text color="yellow" dimColor>
-          [{line.label}]
-        </Text>
-        <Text> {line.text}</Text>
-      </Text>
-    );
+  if (line.layout === 'label-row') {
+    return <Text>{renderActivityLogLabel(line.label)}</Text>;
   }
 
   return (
     <Text>
-      {color ? <Text color={color}>[{line.label}]</Text> : <Text>[{line.label}]</Text>}
+      {renderActivityLogLabel(line.label)}
       <Text> {line.text}</Text>
     </Text>
   );
