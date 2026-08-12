@@ -1,7 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Text, useCursor, useInput } from 'ink';
 import chalk from 'chalk';
 import stringWidth from 'string-width';
+import {
+  computeOperatorInputLayout,
+  mapCursorOffsetToDisplayPosition,
+  mapDisplayPositionToCursorOffset,
+  sliceVisibleInputDisplayLines,
+} from './operator-input-layout.js';
 
 export interface ImeTextInputProps {
   readonly value: string;
@@ -12,11 +18,53 @@ export interface ImeTextInputProps {
   readonly showCursor?: boolean;
   readonly onChange: (value: string) => void;
   readonly onSubmit?: (value: string) => void;
+  /** ペイン内コンテンツ幅（折り返し計算用）。 */
+  readonly contentWidth: number;
+  /** 1 行目先頭のプロンプト（例: `operator> `）。 */
+  readonly promptPrefix?: string;
+  /** 入力欄に表示できる最大行数（末尾追従）。 */
+  readonly maxDisplayLines: number;
+  readonly onDisplayLineCountChange?: (lineCount: number) => void;
   /**
    * Ink 出力原点からの入力テキスト開始位置。IME 変換窓を実カーソルに合わせる。
-   * `x` は同一行上のラベル幅（例: `operator> `）、`y` は入力テキスト行。
+   * `x` は同一行上のラベル幅（例: `operator> `）、`y` は入力テキスト 1 行目。
    */
   readonly cursorStart?: { readonly x?: number; readonly y: number };
+}
+
+function renderInputLine(
+  lineText: string,
+  cursorOffsetInLine: number,
+  showCursor: boolean,
+  focus: boolean,
+  mask: string | undefined,
+  highlightPastedText: boolean,
+  cursorWidth: number,
+): string {
+  const value = mask ? mask.repeat(lineText.length) : lineText;
+  const cursorActualWidth = highlightPastedText ? cursorWidth : 0;
+
+  if (!showCursor || !focus) {
+    return value;
+  }
+
+  if (value.length === 0) {
+    return chalk.inverse(' ');
+  }
+
+  let renderedValue = '';
+  let index = 0;
+  for (const char of value) {
+    renderedValue +=
+      index >= cursorOffsetInLine - cursorActualWidth && index <= cursorOffsetInLine
+        ? chalk.inverse(char)
+        : char;
+    index++;
+  }
+  if (cursorOffsetInLine === value.length) {
+    renderedValue += chalk.inverse(' ');
+  }
+  return renderedValue;
 }
 
 /**
@@ -32,6 +80,10 @@ export function ImeTextInput({
   showCursor = true,
   onChange,
   onSubmit,
+  contentWidth,
+  promptPrefix = '',
+  maxDisplayLines,
+  onDisplayLineCountChange,
   cursorStart,
 }: ImeTextInputProps) {
   const [state, setState] = useState({
@@ -41,6 +93,20 @@ export function ImeTextInput({
 
   const { cursorOffset, cursorWidth } = state;
   const { setCursorPosition } = useCursor();
+  const promptWidth = stringWidth(promptPrefix);
+
+  const layout = useMemo(
+    () => computeOperatorInputLayout(originalValue, contentWidth, promptWidth),
+    [originalValue, contentWidth, promptWidth],
+  );
+  const { visibleLines, scrollOffset } = useMemo(
+    () => sliceVisibleInputDisplayLines(layout.displayLines, maxDisplayLines),
+    [layout.displayLines, maxDisplayLines],
+  );
+
+  useEffect(() => {
+    onDisplayLineCountChange?.(layout.displayLines.length);
+  }, [layout.displayLines.length, onDisplayLineCountChange]);
 
   useEffect(() => {
     setState((previousState) => {
@@ -48,7 +114,7 @@ export function ImeTextInput({
         return previousState;
       }
       const newValue = originalValue || '';
-      if (previousState.cursorOffset > newValue.length - 1) {
+      if (previousState.cursorOffset > newValue.length) {
         return {
           cursorOffset: newValue.length,
           cursorWidth: 0,
@@ -58,36 +124,23 @@ export function ImeTextInput({
     });
   }, [originalValue, focus, showCursor]);
 
-  const cursorActualWidth = highlightPastedText ? cursorWidth : 0;
-  const value = mask ? mask.repeat(originalValue.length) : originalValue;
-  let renderedValue = value;
-  let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined;
+  const cursorPosition = mapCursorOffsetToDisplayPosition(
+    originalValue,
+    cursorOffset,
+    contentWidth,
+    promptWidth,
+  );
+  const visibleCursorLineIndex = cursorPosition.displayLineIndex - scrollOffset;
+  const cursorColumnInVisibleLine = cursorPosition.columnInLine;
 
-  if (showCursor && focus) {
-    renderedPlaceholder =
-      placeholder.length > 0
-        ? chalk.inverse(placeholder[0]) + chalk.grey(placeholder.slice(1))
-        : chalk.inverse(' ');
-    renderedValue = value.length > 0 ? '' : chalk.inverse(' ');
-    let i = 0;
-    for (const char of value) {
-      renderedValue +=
-        i >= cursorOffset - cursorActualWidth && i <= cursorOffset
-          ? chalk.inverse(char)
-          : char;
-      i++;
-    }
-    if (value.length > 0 && cursorOffset === value.length) {
-      renderedValue += chalk.inverse(' ');
-    }
-
-    if (cursorStart !== undefined) {
-      const textBeforeCursor = value.slice(0, cursorOffset);
-      setCursorPosition({
-        x: (cursorStart.x ?? 0) + stringWidth(textBeforeCursor),
-        y: cursorStart.y,
-      });
-    }
+  if (showCursor && focus && cursorStart !== undefined && visibleCursorLineIndex >= 0) {
+    const contentStartX = (cursorStart.x ?? 0) - promptWidth;
+    const lineStartX =
+      visibleCursorLineIndex === 0 && scrollOffset === 0 ? (cursorStart.x ?? 0) : contentStartX;
+    setCursorPosition({
+      x: lineStartX + cursorColumnInVisibleLine,
+      y: cursorStart.y + visibleCursorLineIndex,
+    });
   } else {
     setCursorPosition(undefined);
   }
@@ -95,22 +148,25 @@ export function ImeTextInput({
   useInput(
     (input, key) => {
       if (
-        key.upArrow ||
-        key.downArrow ||
         key.pageUp ||
         key.pageDown ||
-        key.home ||
-        key.end ||
         (key.ctrl && input === 'c') ||
         key.tab ||
         (key.shift && key.tab)
       ) {
         return;
       }
-      if (key.return) {
+      if (key.return && !key.shift) {
         if (onSubmit) {
           onSubmit(originalValue);
         }
+        return;
+      }
+      if (key.return && key.shift) {
+        const nextValue =
+          originalValue.slice(0, cursorOffset) + '\n' + originalValue.slice(cursorOffset);
+        setState({ cursorOffset: cursorOffset + 1, cursorWidth: 0 });
+        onChange(nextValue);
         return;
       }
 
@@ -118,7 +174,48 @@ export function ImeTextInput({
       let nextValue = originalValue;
       let nextCursorWidth = 0;
 
-      if (key.leftArrow) {
+      if (key.upArrow) {
+        if (showCursor && cursorPosition.displayLineIndex > 0) {
+          nextCursorOffset = mapDisplayPositionToCursorOffset(
+            originalValue,
+            cursorPosition.displayLineIndex - 1,
+            cursorPosition.columnInLine,
+            contentWidth,
+            promptWidth,
+          );
+        }
+      } else if (key.downArrow) {
+        if (showCursor && cursorPosition.displayLineIndex < layout.displayLines.length - 1) {
+          nextCursorOffset = mapDisplayPositionToCursorOffset(
+            originalValue,
+            cursorPosition.displayLineIndex + 1,
+            cursorPosition.columnInLine,
+            contentWidth,
+            promptWidth,
+          );
+        }
+      } else if (key.home) {
+        if (showCursor) {
+          nextCursorOffset = mapDisplayPositionToCursorOffset(
+            originalValue,
+            cursorPosition.displayLineIndex,
+            0,
+            contentWidth,
+            promptWidth,
+          );
+        }
+      } else if (key.end) {
+        if (showCursor) {
+          const lineText = layout.displayLines[cursorPosition.displayLineIndex] ?? '';
+          nextCursorOffset = mapDisplayPositionToCursorOffset(
+            originalValue,
+            cursorPosition.displayLineIndex,
+            stringWidth(lineText),
+            contentWidth,
+            promptWidth,
+          );
+        }
+      } else if (key.leftArrow) {
         if (showCursor) {
           nextCursorOffset--;
         }
@@ -133,7 +230,7 @@ export function ImeTextInput({
             originalValue.slice(cursorOffset, originalValue.length);
           nextCursorOffset--;
         }
-      } else {
+      } else if (input) {
         nextValue =
           originalValue.slice(0, cursorOffset) +
           input +
@@ -144,11 +241,11 @@ export function ImeTextInput({
         }
       }
 
-      if (cursorOffset < 0) {
+      if (nextCursorOffset < 0) {
         nextCursorOffset = 0;
       }
-      if (cursorOffset > originalValue.length) {
-        nextCursorOffset = originalValue.length;
+      if (nextCursorOffset > nextValue.length) {
+        nextCursorOffset = nextValue.length;
       }
 
       setState({
@@ -163,13 +260,44 @@ export function ImeTextInput({
     { isActive: focus },
   );
 
+  if (originalValue.length === 0 && placeholder && !focus) {
+    return <Text>{chalk.grey(placeholder)}</Text>;
+  }
+
+  if (originalValue.length === 0 && placeholder && focus && showCursor) {
+    return (
+      <Text>
+        {chalk.inverse(placeholder[0] ?? ' ')}
+        {chalk.grey(placeholder.slice(1))}
+      </Text>
+    );
+  }
+
   return (
-    <Text>
-      {placeholder
-        ? value.length > 0
-          ? renderedValue
-          : renderedPlaceholder
-        : renderedValue}
-    </Text>
+    <>
+      {visibleLines.map((lineText, index) => {
+        const absoluteLineIndex = scrollOffset + index;
+        const isCursorLine = absoluteLineIndex === cursorPosition.displayLineIndex;
+        const cursorOffsetInLine = isCursorLine
+          ? cursorPosition.columnInLine
+          : 0;
+        const renderedLine = renderInputLine(
+          lineText,
+          isCursorLine ? cursorOffsetInLine : 0,
+          showCursor,
+          focus,
+          mask,
+          highlightPastedText,
+          isCursorLine ? cursorWidth : 0,
+        );
+
+        return (
+          <Text key={`input-line-${absoluteLineIndex}`}>
+            {index === 0 && scrollOffset === 0 ? promptPrefix : ''}
+            {renderedLine}
+          </Text>
+        );
+      })}
+    </>
   );
 }

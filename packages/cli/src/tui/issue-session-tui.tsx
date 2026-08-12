@@ -1,5 +1,5 @@
 import { Box, Text, useBoxMetrics, useInput } from 'ink';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import {
@@ -13,17 +13,15 @@ import {
   type ActivityLogScrollAction,
 } from './activity-log.js';
 import {
-  advanceOpenQuestionsScrollOffset,
-  buildOpenQuestionDisplayLines,
-  resolveOpenQuestionsScrollLayout,
-  sliceOpenQuestionDisplayLines,
-  type OpenQuestionsScrollAction,
+  advanceOpenQuestionSelection,
+  clampOpenQuestionSelectionIndex,
+  formatSelectedOpenQuestionAnswer,
+  resolveOpenQuestionsPaneLayout,
+  type OpenQuestionsPaneLayout,
 } from './open-questions-pane.js';
 import {
   MAIN_PANE_TITLE,
-  OPEN_QUESTIONS_PANE_HEIGHT,
   ORCHESTRATION_PANE_TITLE_ROWS,
-  PANE_BORDER_ROWS,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
   WORKER_PANE_HEIGHT,
@@ -36,12 +34,18 @@ import {
   computeOperatorInputCursorY,
   computeOrchestrationLogVisibleLineCount,
 } from './compute-operator-input-cursor-y.js';
+import {
+  computeMaxInputDisplayLines,
+  trimBlankLinesOnly,
+} from './operator-input-layout.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string) => void;
 }
+
+const INQUIRY_REFERENCE_PATTERN = /^@inq:[^\s]+\s/u;
 
 function usePaneContentWidth(): number {
   return getPaneContentWidth({
@@ -211,63 +215,28 @@ function OrchestrationPane({
   );
 }
 
-function OpenQuestionsPane({
-  openQuestions,
-  contentWidth,
-  linesFromTop,
-}: {
-  openQuestions: TuiViewSnapshot['displayState']['openQuestions'];
-  contentWidth: number;
-  linesFromTop: number;
-}) {
-  const contentAreaRef = useRef(null);
-  const { height: measuredContentHeight, hasMeasured } = useBoxMetrics(contentAreaRef);
-  const displayLines = useMemo(
-    () => buildOpenQuestionDisplayLines(openQuestions, contentWidth),
-    [openQuestions, contentWidth],
-  );
-  const scrollLayout = useMemo(
-    () =>
-      resolveOpenQuestionsScrollLayout({
-        displayLineCount: displayLines.length,
-        paneHeight: OPEN_QUESTIONS_PANE_HEIGHT,
-        contentWidth,
-      }),
-    [displayLines.length, contentWidth],
-  );
-  const scrollHint = scrollLayout.scrollHint;
-  const visibleCount =
-    hasMeasured && measuredContentHeight > 0
-      ? Math.max(1, Math.floor(measuredContentHeight))
-      : scrollLayout.visibleLineCount;
-  const visibleLines = sliceOpenQuestionDisplayLines(
-    displayLines,
-    visibleCount,
-    linesFromTop,
-  );
-
+function OpenQuestionsPane({ layout }: { layout: OpenQuestionsPaneLayout }) {
   return (
     <Box
       flexDirection="column"
       borderStyle="round"
       borderColor="magenta"
       paddingX={PANE_PADDING_X}
-      height={OPEN_QUESTIONS_PANE_HEIGHT}
+      height={layout.paneHeight}
       overflow="hidden"
     >
-      <Text bold>
-        Open questions
-        {scrollHint}
-      </Text>
-      <Box ref={contentAreaRef} flexGrow={1} flexDirection="column" overflow="hidden">
-        {openQuestions.length === 0 ? (
-          <Text dimColor>(未回答なし)</Text>
-        ) : (
-          visibleLines.map((line, index) => (
-            <Text key={`open-question-line-${index}`}>{line}</Text>
-          ))
-        )}
-      </Box>
+      <Text bold>{layout.titleText}</Text>
+      {layout.items.length === 0 ? (
+        <Text dimColor>(未回答なし)</Text>
+      ) : (
+        layout.items.flatMap((item) =>
+          item.lines.map((line, lineIndex) => (
+            <Text key={`${item.id}-${lineIndex}`} dimColor={item.compact && !item.isSelected}>
+              {line}
+            </Text>
+          )),
+        )
+      )}
     </Box>
   );
 }
@@ -279,17 +248,49 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     viewModel.getSnapshot,
   );
   const [inputValue, setInputValue] = useState('');
+  const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
-  const [openQuestionsLinesFromTop, setOpenQuestionsLinesFromTop] = useState(0);
+  const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
   const contentWidth = usePaneContentWidth();
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
+  const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
+  const openQuestions = snapshot.displayState.openQuestions;
+  const openQuestionsLayout = useMemo(
+    () =>
+      resolveOpenQuestionsPaneLayout({
+        openQuestions,
+        selectedIndex: selectedQuestionIndex,
+        contentWidth,
+        terminalRows,
+      }),
+    [openQuestions, selectedQuestionIndex, contentWidth, terminalRows],
+  );
+  const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
   const contextHint = snapshot.postLoopWaiting
     ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
-    : formatOperatorContextHint(snapshot.operatorContext);
+    : formatOperatorContextHint(
+        snapshot.operatorContext,
+        selectedQuestion
+          ? {
+              id: selectedQuestion.id,
+              index: openQuestionsLayout.selectedIndex,
+              total: openQuestions.length,
+            }
+          : undefined,
+      );
   const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-  const inputPaneHeight = computeInputPaneHeight(hintLineCount);
-  const activityPaneHeight = computeActivityPaneHeight({ terminalRows, hintLineCount });
+  const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
+  const inputPaneHeight = computeInputPaneHeight({
+    hintLineCount,
+    inputDisplayLineCount: visibleInputDisplayLineCount,
+  });
+  const activityPaneHeight = computeActivityPaneHeight({
+    terminalRows,
+    hintLineCount,
+    inputDisplayLineCount: visibleInputDisplayLineCount,
+    openQuestionsPaneHeight: openQuestionsLayout.paneHeight,
+  });
   const visibleLineCount = computeOrchestrationLogVisibleLineCount(
     activityPaneHeight,
     ORCHESTRATION_PANE_TITLE_ROWS,
@@ -299,41 +300,29 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     [snapshot.activityLog, contentWidth],
   );
   const maxLinesFromBottom = Math.max(0, displayLineCount - visibleLineCount);
-  const openQuestionsDisplayLineCount = useMemo(
-    () => buildOpenQuestionDisplayLines(snapshot.displayState.openQuestions, contentWidth).length,
-    [snapshot.displayState.openQuestions, contentWidth],
-  );
-  const openQuestionsScrollLayout = useMemo(
-    () =>
-      resolveOpenQuestionsScrollLayout({
-        displayLineCount: openQuestionsDisplayLineCount,
-        paneHeight: OPEN_QUESTIONS_PANE_HEIGHT,
-        contentWidth,
-      }),
-    [openQuestionsDisplayLineCount, contentWidth],
-  );
-  const openQuestionsVisibleLineCount = openQuestionsScrollLayout.visibleLineCount;
-  const maxOpenQuestionsLinesFromTop = Math.max(
-    0,
-    openQuestionsDisplayLineCount - openQuestionsVisibleLineCount,
-  );
   const cursorStart = {
     x: computeOperatorInputCursorX(operatorPrompt),
     y: computeOperatorInputCursorY({
       terminalRows,
       hintLineCount,
+      inputDisplayLineCount: visibleInputDisplayLineCount,
+      openQuestionsPaneHeight: openQuestionsLayout.paneHeight,
+      cursorLineOffset: 0,
     }),
   };
+  const handleDisplayLineCountChange = useCallback((lineCount: number) => {
+    setInputDisplayLineCount(Math.max(1, lineCount));
+  }, []);
 
   useEffect(() => {
     setLinesFromBottom((current) => Math.min(current, maxLinesFromBottom));
   }, [maxLinesFromBottom]);
 
   useEffect(() => {
-    setOpenQuestionsLinesFromTop((current) =>
-      Math.min(current, maxOpenQuestionsLinesFromTop),
+    setSelectedQuestionIndex((current) =>
+      clampOpenQuestionSelectionIndex(current, openQuestions.length),
     );
-  }, [maxOpenQuestionsLinesFromTop]);
+  }, [openQuestions]);
 
   const applyScrollAction = (action: ActivityLogScrollAction) => {
     setLinesFromBottom((current) =>
@@ -346,33 +335,18 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     );
   };
 
-  const applyOpenQuestionsScrollAction = (action: OpenQuestionsScrollAction) => {
-    setOpenQuestionsLinesFromTop((current) =>
-      advanceOpenQuestionsScrollOffset(
-        current,
-        action,
-        openQuestionsVisibleLineCount,
-        maxOpenQuestionsLinesFromTop,
-      ),
-    );
-  };
-
   useInput((_input, key) => {
-    if (key.meta) {
-      if (key.pageUp) {
-        applyOpenQuestionsScrollAction('pageUp');
+    if (openQuestions.length > 0 && inputValue.length === 0) {
+      if (key.upArrow) {
+        setSelectedQuestionIndex((current) =>
+          advanceOpenQuestionSelection(current, 'up', openQuestions.length),
+        );
         return;
       }
-      if (key.pageDown) {
-        applyOpenQuestionsScrollAction('pageDown');
-        return;
-      }
-      if (key.home) {
-        applyOpenQuestionsScrollAction('home');
-        return;
-      }
-      if (key.end) {
-        applyOpenQuestionsScrollAction('end');
+      if (key.downArrow) {
+        setSelectedQuestionIndex((current) =>
+          advanceOpenQuestionSelection(current, 'down', openQuestions.length),
+        );
         return;
       }
     }
@@ -401,12 +375,23 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   });
 
   const handleSubmit = (value: string) => {
-    const trimmed = value.trim();
+    const trimmed = trimBlankLinesOnly(value);
     if (!trimmed) {
       return;
     }
-    onSubmit(trimmed);
+
+    let message = trimmed;
+    if (
+      openQuestions.length > 0 &&
+      selectedQuestion &&
+      !INQUIRY_REFERENCE_PATTERN.test(trimmed)
+    ) {
+      message = formatSelectedOpenQuestionAnswer(trimmed, selectedQuestion.id);
+    }
+
+    onSubmit(message);
     setInputValue('');
+    setInputDisplayLineCount(1);
   };
 
   return (
@@ -418,11 +403,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         paneHeight={activityPaneHeight}
         linesFromBottom={linesFromBottom}
       />
-      <OpenQuestionsPane
-        openQuestions={snapshot.displayState.openQuestions}
-        contentWidth={contentWidth}
-        linesFromTop={openQuestionsLinesFromTop}
-      />
+      <OpenQuestionsPane layout={openQuestionsLayout} />
       <Box
         flexDirection="column"
         borderStyle="single"
@@ -432,15 +413,16 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         overflow="hidden"
       >
         <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
-        <Text>
-          {operatorPrompt}
-          <ImeTextInput
-            value={inputValue}
-            onChange={setInputValue}
-            onSubmit={handleSubmit}
-            cursorStart={cursorStart}
-          />
-        </Text>
+        <ImeTextInput
+          value={inputValue}
+          onChange={setInputValue}
+          onSubmit={handleSubmit}
+          contentWidth={contentWidth}
+          promptPrefix={operatorPrompt}
+          maxDisplayLines={maxInputDisplayLines}
+          onDisplayLineCountChange={handleDisplayLineCountChange}
+          cursorStart={cursorStart}
+        />
       </Box>
     </Box>
   );

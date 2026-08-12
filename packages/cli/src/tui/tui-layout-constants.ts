@@ -16,17 +16,19 @@ export const MAIN_PANE_TITLE = 'Orchestration';
 export const WORKER_PANE_HEIGHT = 6;
 
 /**
- * Open questions ペインの高さ（枠線込み。最小 4 行 = タイトル + 本文 1 行）。
- * 本文が溢れる場合はペイン内スクロール（Alt+PgUp/PgDn）で閲覧する。
+ * Open questions ペインの最小高さ（枠線込み。タイトル + 本文 1 行）。
+ * 未回答 0 件時や本文が短いときの下限。
  */
-export const OPEN_QUESTIONS_PANE_HEIGHT = 4;
+export const OPEN_QUESTIONS_PANE_MIN_HEIGHT = 4;
 
-/** Open questions ペインのタイトル行数（`Open questions` 単独行。hint は呼び出し側で加算）。 */
-export const OPEN_QUESTIONS_PANE_TITLE_ROWS = 1;
+/** Open questions ペイン本文の表示行数上限（端末行数に対する比率）。 */
+export const OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO = 0.35;
 
-/** ペイン内スクロール中にタイトルへ付与するヒント（Orchestration とキーが衝突しないよう Alt 修飾）。 */
-export const OPEN_QUESTIONS_SCROLL_HINT =
-  ' (Alt+PgUp/PgDn でスクロール · 先頭へは Alt+Home · 末尾へは Alt+End)';
+/** Open questions ペイン本文の表示行数の絶対上限。 */
+export const OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES = 8;
+
+/** Open questions ペインタイトルに付与する選択操作ヒント。 */
+export const OPEN_QUESTIONS_SELECTION_HINT = ' — ↑↓で選択';
 
 /** 入力ペインの枠線（上下）行数。`PANE_BORDER_ROWS` と同値。 */
 export const INPUT_PANE_BORDER_ROWS = PANE_BORDER_ROWS;
@@ -48,6 +50,15 @@ export const INPUT_PANE_LEFT_COLUMNS = INPUT_PANE_LEFT_BORDER_COLUMNS + PANE_PAD
  * 実カーソルが入力行より 1 行上にずれる（オペレータ手動確認 iTerm2+tmux）。
  */
 export const OPERATOR_INPUT_CURSOR_Y_OFFSET = 1;
+
+/** 入力ペインの表示行数上限（端末行数に対する比率）。 */
+export const INPUT_PANE_MAX_HEIGHT_RATIO = 0.35;
+
+/** 入力ペインの表示行数の絶対上限。 */
+export const INPUT_PANE_MAX_DISPLAY_LINES = 10;
+
+/** 入力ペインの最小表示行数（空入力時）。 */
+export const INPUT_PANE_MIN_DISPLAY_LINES = 1;
 
 /** Orchestration ペインのタイトル行数（`MAIN_PANE_TITLE` 単独行。hint は呼び出し側で加算）。 */
 export const ORCHESTRATION_PANE_TITLE_ROWS = 1;

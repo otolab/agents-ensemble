@@ -1,120 +1,182 @@
 import type { OpenQuestion } from '@agents-ensemble/core';
 import { wrapTextToWidth } from './wrap-text-to-width.js';
 import {
-  OPEN_QUESTIONS_SCROLL_HINT,
+  OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES,
+  OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO,
+  OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+  OPEN_QUESTIONS_SELECTION_HINT,
   PANE_BORDER_ROWS,
 } from './tui-layout-constants.js';
 
-export type OpenQuestionsScrollAction = 'pageUp' | 'pageDown' | 'home' | 'end';
-
-/** `linesFromTop=0` が先頭表示。PgDn で増加（下へ）、Home で 0 に復帰。 */
-export function advanceOpenQuestionsScrollOffset(
-  linesFromTop: number,
-  action: OpenQuestionsScrollAction,
-  pageSize: number,
-  maxLinesFromTop: number,
-): number {
-  switch (action) {
-    case 'pageUp':
-      return Math.max(0, linesFromTop - pageSize);
-    case 'pageDown':
-      return Math.min(linesFromTop + pageSize, maxLinesFromTop);
-    case 'home':
-      return 0;
-    case 'end':
-      return maxLinesFromTop;
-  }
+export interface OpenQuestionListItemRender {
+  id: string;
+  lines: string[];
+  isSelected: boolean;
+  compact: boolean;
 }
 
-/** Open question 1 件ずつ折り返し済みの表示行に展開。 */
-export function buildOpenQuestionDisplayLines(
-  openQuestions: OpenQuestion[],
-  contentWidth: number,
-): string[] {
-  const lines: string[] = [];
-
-  for (const question of openQuestions) {
-    lines.push(
-      ...wrapTextToWidth(
-        `- ${question.id} [${question.responseType}] ${question.question}`,
-        contentWidth,
-      ),
-    );
-    if (question.context) {
-      lines.push(...wrapTextToWidth(`  ${question.context}`, contentWidth));
-    }
-  }
-
-  return lines;
-}
-
-/** 表示行配列から可視範囲を切り出す。`linesFromTop=0` が先頭表示。 */
-export function sliceOpenQuestionDisplayLines(
-  lines: string[],
-  visibleCount: number,
-  linesFromTop: number,
-): string[] {
-  if (lines.length === 0 || visibleCount < 1) {
-    return [];
-  }
-
-  const maxOffset = Math.max(0, lines.length - visibleCount);
-  const offset = Math.min(Math.max(0, linesFromTop), maxOffset);
-  return lines.slice(offset, offset + visibleCount);
-}
-
-/** Open questions ペイン内に表示できる本文行数。 */
-export function computeOpenQuestionsContentLineCount(
-  paneHeight: number,
-  titleLineCount: number,
-): number {
-  return Math.max(1, paneHeight - PANE_BORDER_ROWS - titleLineCount);
-}
-
-export function getOpenQuestionsTitleLineCount(
-  scrollHint: string,
-  contentWidth: number,
-): number {
-  return wrapTextToWidth(`Open questions${scrollHint}`, contentWidth).length;
-}
-
-/** 溢れ時は初回表示からスクロールヒント付きタイトルを返す。 */
-export function resolveOpenQuestionsScrollLayout(params: {
-  displayLineCount: number;
+export interface OpenQuestionsPaneLayout {
   paneHeight: number;
-  contentWidth: number;
-}): {
-  scrollHint: string;
   titleLineCount: number;
-  visibleLineCount: number;
-  isScrollable: boolean;
-} {
-  const titleLineCountWithoutHint = getOpenQuestionsTitleLineCount('', params.contentWidth);
-  const visibleLineCountWithoutHint = computeOpenQuestionsContentLineCount(
-    params.paneHeight,
-    titleLineCountWithoutHint,
+  titleText: string;
+  contentLineCount: number;
+  items: OpenQuestionListItemRender[];
+  selectedIndex: number;
+}
+
+/** 端末行数から Open questions 本文の最大表示行数を算出する。 */
+export function computeMaxOpenQuestionsDisplayLines(terminalRows: number): number {
+  const ratioCap = Math.floor(terminalRows * OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO);
+  return Math.max(1, Math.min(OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES, ratioCap));
+}
+
+export function formatOpenQuestionsPaneTitle(
+  selectedIndex: number,
+  totalCount: number,
+  contentWidth: number,
+): { titleText: string; titleLineCount: number } {
+  if (totalCount === 0) {
+    return { titleText: 'Open questions', titleLineCount: 1 };
+  }
+
+  const titleText = `Open questions (${selectedIndex + 1}/${totalCount}${OPEN_QUESTIONS_SELECTION_HINT})`;
+  return {
+    titleText,
+    titleLineCount: wrapTextToWidth(titleText, contentWidth).length,
+  };
+}
+
+function buildSelectedQuestionItem(
+  question: OpenQuestion,
+  contentWidth: number,
+): OpenQuestionListItemRender {
+  const header = `▸ ${question.id} [${question.responseType}] ${question.question}`;
+  const lines = [...wrapTextToWidth(header, contentWidth)];
+  if (question.context) {
+    lines.push(...wrapTextToWidth(`    ${question.context}`, contentWidth));
+  }
+  return {
+    id: question.id,
+    lines,
+    isSelected: true,
+    compact: false,
+  };
+}
+
+export function buildOpenQuestionListItems(
+  openQuestions: OpenQuestion[],
+  selectedIndex: number,
+  contentWidth: number,
+): OpenQuestionListItemRender[] {
+  return openQuestions.map((question, index) => {
+    if (index === selectedIndex) {
+      return buildSelectedQuestionItem(question, contentWidth);
+    }
+
+    const header = `  ${question.id} [${question.responseType}] ${question.question}`;
+    return {
+      id: question.id,
+      lines: [wrapTextToWidth(header, contentWidth)[0] ?? header],
+      isSelected: false,
+      compact: true,
+    };
+  });
+}
+
+export function countOpenQuestionsDisplayLines(items: OpenQuestionListItemRender[]): number {
+  return items.reduce((sum, item) => sum + item.lines.length, 0);
+}
+
+export function resolveOpenQuestionsPaneLayout(params: {
+  openQuestions: OpenQuestion[];
+  selectedIndex: number;
+  contentWidth: number;
+  terminalRows: number;
+}): OpenQuestionsPaneLayout {
+  const totalCount = params.openQuestions.length;
+  const selectedIndex = clampOpenQuestionSelectionIndex(params.selectedIndex, totalCount);
+  const { titleText, titleLineCount } = formatOpenQuestionsPaneTitle(
+    selectedIndex,
+    totalCount,
+    params.contentWidth,
   );
 
-  if (params.displayLineCount <= visibleLineCountWithoutHint) {
+  if (totalCount === 0) {
     return {
-      scrollHint: '',
-      titleLineCount: titleLineCountWithoutHint,
-      visibleLineCount: visibleLineCountWithoutHint,
-      isScrollable: false,
+      paneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      titleLineCount,
+      titleText,
+      contentLineCount: 1,
+      items: [],
+      selectedIndex: 0,
     };
   }
 
-  const scrollHint = OPEN_QUESTIONS_SCROLL_HINT;
-  const titleLineCount = getOpenQuestionsTitleLineCount(scrollHint, params.contentWidth);
-  const visibleLineCount = computeOpenQuestionsContentLineCount(
-    params.paneHeight,
-    titleLineCount,
+  const maxContentLines = computeMaxOpenQuestionsDisplayLines(params.terminalRows);
+  const fullItems = buildOpenQuestionListItems(
+    params.openQuestions,
+    selectedIndex,
+    params.contentWidth,
+  );
+  let items = fullItems;
+  let contentLineCount = Math.max(1, countOpenQuestionsDisplayLines(fullItems));
+
+  if (contentLineCount > maxContentLines) {
+    const selectedQuestion = params.openQuestions[selectedIndex];
+    if (selectedQuestion) {
+      items = [buildSelectedQuestionItem(selectedQuestion, params.contentWidth)];
+      contentLineCount = Math.min(
+        maxContentLines,
+        Math.max(1, countOpenQuestionsDisplayLines(items)),
+      );
+    } else {
+      contentLineCount = maxContentLines;
+    }
+  }
+
+  const paneHeight = Math.max(
+    OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+    PANE_BORDER_ROWS + titleLineCount + contentLineCount,
   );
 
   return {
-    scrollHint,
+    paneHeight,
     titleLineCount,
-    visibleLineCount,
-    isScrollable: params.displayLineCount > visibleLineCount,
+    titleText,
+    contentLineCount,
+    items,
+    selectedIndex,
   };
+}
+
+export function clampOpenQuestionSelectionIndex(
+  selectedIndex: number,
+  questionCount: number,
+): number {
+  if (questionCount <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(selectedIndex, questionCount - 1));
+}
+
+export function advanceOpenQuestionSelection(
+  selectedIndex: number,
+  direction: 'up' | 'down',
+  questionCount: number,
+): number {
+  if (questionCount <= 0) {
+    return 0;
+  }
+  if (direction === 'up') {
+    return selectedIndex <= 0 ? questionCount - 1 : selectedIndex - 1;
+  }
+  return selectedIndex >= questionCount - 1 ? 0 : selectedIndex + 1;
+}
+
+/** 選択中の open question への回答として送信するメッセージを組み立てる。 */
+export function formatSelectedOpenQuestionAnswer(
+  answer: string,
+  questionId: string,
+): string {
+  return `@inq:${questionId} ${answer}`;
 }

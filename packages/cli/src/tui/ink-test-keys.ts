@@ -6,14 +6,8 @@ export const INK_TEST_KEYS = {
   home: '\u001B[H',
   /** xterm: Ctrl+PageUp */
   ctrlPageUp: '\u001B[5;5~',
-  /** xterm: Alt+PageUp */
-  altPageUp: '\u001B[5;3~',
-  /** xterm: Alt+PageDown */
-  altPageDown: '\u001B[6;3~',
-  /** xterm: Alt+End */
-  altEnd: '\u001B[1;3F',
-  /** xterm: Alt+Home */
-  altHome: '\u001B[1;3H',
+  upArrow: '\u001B[A',
+  downArrow: '\u001B[B',
 } as const;
 
 /** `stdin.write` 後に Ink の readable → useInput まで進める。 */

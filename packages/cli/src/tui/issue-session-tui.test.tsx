@@ -7,6 +7,7 @@ import { buildActivityLogDisplayLines } from './activity-log.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import { extractOrchestrationPaneFrameStats } from './orchestration-pane-frame.js';
+import { resolveOpenQuestionsPaneLayout } from './open-questions-pane.js';
 import {
   computeActivityLogLineCapacity,
   computeActivityPaneHeight,
@@ -15,7 +16,13 @@ import {
   computeOperatorInputLineIndex,
 } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
-import { MAIN_PANE_TITLE, OPERATOR_INPUT_CURSOR_Y_OFFSET, PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
+import {
+  MAIN_PANE_TITLE,
+  OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+  OPERATOR_INPUT_CURSOR_Y_OFFSET,
+  PANE_PADDING_X,
+  ROUND_BORDER_WIDTH,
+} from './tui-layout-constants.js';
 import type { OpenQuestion } from '@agents-ensemble/core';
 
 function findOperatorInputLine(lines: string[]): { lineIndex: number; inputStartX: number } {
@@ -45,9 +52,10 @@ function fillScrollableHarnessLog(viewModel: ReturnType<typeof createTuiViewMode
 }
 
 const SCROLL_HINT = 'PgUp/PgDn でスクロール';
-const OPEN_QUESTIONS_SCROLL_HINT_SNIPPET = 'Alt+PgUp/PgDn でスクロール';
 
-function createOpenQuestion(overrides: Partial<OpenQuestion> & Pick<OpenQuestion, 'id' | 'question'>): OpenQuestion {
+function createOpenQuestion(
+  overrides: Partial<OpenQuestion> & Pick<OpenQuestion, 'id' | 'question'>,
+): OpenQuestion {
   return {
     responseType: 'text',
     source: 'conductor',
@@ -57,21 +65,21 @@ function createOpenQuestion(overrides: Partial<OpenQuestion> & Pick<OpenQuestion
   };
 }
 
-function fillScrollableOpenQuestions(
-  viewModel: ReturnType<typeof createTuiViewModel>,
-  count = 6,
-): void {
-  viewModel.setDisplayState({
-    workers: {},
-    conductorOutput: null,
-    openQuestions: Array.from({ length: count }, (_, index) =>
-      createOpenQuestion({
-        id: `inq-${index + 1}`,
-        question: `Question number ${index + 1} with enough text to occupy a line`,
-        context: index % 2 === 0 ? `Context for question ${index + 1}` : undefined,
-      }),
-    ),
-  });
+function resolveOpenQuestionsPaneHeight(
+  openQuestions: OpenQuestion[],
+  terminalRows = 24,
+  terminalColumns = 80,
+): number {
+  return resolveOpenQuestionsPaneLayout({
+    openQuestions,
+    selectedIndex: 0,
+    contentWidth: getPaneContentWidth({
+      columns: terminalColumns,
+      paddingX: PANE_PADDING_X,
+      borderWidth: ROUND_BORDER_WIDTH,
+    }),
+    terminalRows,
+  }).paneHeight;
 }
 
 describe('IssueSessionTui', () => {
@@ -124,6 +132,8 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('[conductor] conductor says hi');
     expect(frame).toContain('Open questions');
     expect(frame).toContain('inq-1');
+    expect(frame).toContain('1/1');
+    expect(frame).toContain('↑↓で選択');
     expect(frame).toContain('operator>');
   });
 
@@ -165,7 +175,12 @@ describe('IssueSessionTui', () => {
     });
     const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-    const expectedInputLineIndex = computeOperatorInputLineIndex({ terminalRows, hintLineCount });
+    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
+    const expectedInputLineIndex = computeOperatorInputLineIndex({
+      terminalRows,
+      hintLineCount,
+      openQuestionsPaneHeight,
+    });
     const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
     const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
 
@@ -209,7 +224,12 @@ describe('IssueSessionTui', () => {
     });
     const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-    const expectedInputLineIndex = computeOperatorInputLineIndex({ terminalRows, hintLineCount });
+    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
+    const expectedInputLineIndex = computeOperatorInputLineIndex({
+      terminalRows,
+      hintLineCount,
+      openQuestionsPaneHeight,
+    });
     const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
     const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
 
@@ -341,7 +361,11 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
 
     const capacity = computeOrchestrationLogVisibleLineCount(
-      computeActivityPaneHeight({ terminalRows: 24, hintLineCount: 1 }),
+      computeActivityPaneHeight({
+        terminalRows: 24,
+        hintLineCount: 1,
+        openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      }),
       wrapTextToWidth(
         `${MAIN_PANE_TITLE} (PgUp/PgDn でスクロール · 最新へは End · 入力中は Ctrl+PgUp/PgDn)`,
         getPaneContentWidth({
@@ -377,6 +401,7 @@ describe('IssueSessionTui', () => {
       const capacity = computeActivityLogLineCapacity({
         terminalRows,
         hintLineCount: 1,
+        openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
       });
       const stats = extractOrchestrationPaneFrameStats(lastFrame() ?? '');
 
@@ -449,104 +474,79 @@ describe('IssueSessionTui', () => {
     expect(expectedLines).toBeGreaterThan(1);
   });
 
-  describe('open questions pane scroll (stdin integration)', () => {
-    it('shows scroll hint before scrolling when content overflows', () => {
-      const viewModel = createTuiViewModel();
-      fillScrollableOpenQuestions(viewModel, 8);
+  it('renders multi-line operator input in activity log', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('operator', 'first line\nsecond line');
 
-      const { lastFrame } = render(
-        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
-      );
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
 
-      const frame = lastFrame() ?? '';
-      expect(frame).toContain('inq-1');
-      expect(frame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
-    });
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[operator]');
+    expect(frame).toContain('first line');
+    expect(frame).toContain('second line');
+  });
 
-    it('does not show scroll hint when all questions fit in the pane', () => {
+  describe('open questions selection (stdin integration)', () => {
+    it('cycles selection with arrow keys when input is empty', async () => {
       const viewModel = createTuiViewModel();
       viewModel.setDisplayState({
         workers: {},
         conductorOutput: null,
         openQuestions: [
-          createOpenQuestion({
-            id: 'inq-1',
-            question: 'Short?',
-          }),
+          createOpenQuestion({ id: 'inq-1', question: 'First question' }),
+          createOpenQuestion({ id: 'inq-2', question: 'Second question' }),
         ],
       });
 
-      const { lastFrame } = render(
-        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
-      );
-
-      expect(lastFrame() ?? '').not.toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
-    });
-
-    it('scrolls down with Alt+PgDown when content overflows', async () => {
-      const viewModel = createTuiViewModel();
-      fillScrollableOpenQuestions(viewModel, 8);
-
       const { stdin, lastFrame } = render(
         <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
       );
 
-      const initialFrame = lastFrame() ?? '';
-      expect(initialFrame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
-      expect(initialFrame).toContain('- inq-1 [text]');
+      expect(lastFrame() ?? '').toContain('▸ inq-1');
 
-      stdin.write(INK_TEST_KEYS.altPageDown);
-      await flushInkStdin();
-
-      const scrolledFrame = lastFrame() ?? '';
-      expect(scrolledFrame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
-      expect(scrolledFrame).not.toContain('- inq-1 [text]');
-    });
-
-    it('reaches the last question with Alt+End and keeps hint at top with Alt+Home', async () => {
-      const viewModel = createTuiViewModel();
-      fillScrollableOpenQuestions(viewModel, 8);
-
-      const { stdin, lastFrame } = render(
-        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
-      );
-
-      stdin.write(INK_TEST_KEYS.altEnd);
-      await flushInkStdin();
-      expect(lastFrame() ?? '').toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
-      expect(lastFrame() ?? '').toContain('inq-8');
-
-      stdin.write(INK_TEST_KEYS.altHome);
-      await flushInkStdin();
-
-      const restoredFrame = lastFrame() ?? '';
-      expect(restoredFrame).toContain('inq-1');
-      expect(restoredFrame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
-    });
-
-    it('scrolls open questions while typing without affecting orchestration scroll keys', async () => {
-      const viewModel = createTuiViewModel();
-      fillScrollableOpenQuestions(viewModel, 8);
-      fillScrollableHarnessLog(viewModel, 30);
-
-      const { stdin, lastFrame } = render(
-        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
-      );
-
-      stdin.write('typed');
-      await flushInkStdin();
-
-      stdin.write(INK_TEST_KEYS.altEnd);
+      stdin.write(INK_TEST_KEYS.downArrow);
       await flushInkStdin();
 
       const frame = lastFrame() ?? '';
-      expect(frame).toContain('typed');
-      expect(frame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
-      expect(frame).toContain('inq-8');
-      expect(frame).not.toContain('最新へは End');
+      expect(frame).toContain('2/2');
+      expect(frame).toContain('▸ inq-2');
     });
 
-    it('renders long question text and context without clipping when scrolled to end', async () => {
+    it('submits selected question answer as @inq:id message', async () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          createOpenQuestion({ id: 'inq-1', question: 'First' }),
+          createOpenQuestion({ id: 'inq-2', question: 'Second' }),
+        ],
+      });
+      let submitted = '';
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui
+          viewModel={viewModel}
+          onSubmit={(text) => {
+            submitted = text;
+          }}
+        />,
+      );
+
+      stdin.write(INK_TEST_KEYS.downArrow);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('▸ inq-2');
+
+      stdin.write('approved');
+      await flushInkStdin();
+      stdin.write('\r');
+      await flushInkStdin();
+
+      expect(submitted).toBe('@inq:inq-2 approved');
+    });
+
+    it('grows open questions pane for long selected question text', () => {
       const viewModel = createTuiViewModel();
       viewModel.setDisplayState({
         workers: {},
@@ -554,24 +554,20 @@ describe('IssueSessionTui', () => {
         openQuestions: [
           createOpenQuestion({
             id: 'inq-long',
-            question: 'word '.repeat(40),
-            context: 'context '.repeat(20),
+            question: 'word '.repeat(30),
+            context: 'context '.repeat(10),
           }),
         ],
       });
 
-      const { stdin, lastFrame } = render(
+      const { lastFrame } = render(
         <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
       );
 
-      const initialFrame = lastFrame() ?? '';
-      expect(initialFrame).toContain('inq-long');
-      expect(initialFrame).toContain(OPEN_QUESTIONS_SCROLL_HINT_SNIPPET);
-      expect(initialFrame).not.toContain('context context');
-
-      stdin.write(INK_TEST_KEYS.altEnd);
-      await flushInkStdin();
-
+      const paneHeight = resolveOpenQuestionsPaneHeight(
+        viewModel.getSnapshot().displayState.openQuestions,
+      );
+      expect(paneHeight).toBeGreaterThan(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
       expect(lastFrame() ?? '').toContain('context context');
     });
   });

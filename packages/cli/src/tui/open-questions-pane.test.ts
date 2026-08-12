@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { OpenQuestion } from '@agents-ensemble/core';
 import {
-  advanceOpenQuestionsScrollOffset,
-  buildOpenQuestionDisplayLines,
-  computeOpenQuestionsContentLineCount,
-  resolveOpenQuestionsScrollLayout,
-  sliceOpenQuestionDisplayLines,
+  advanceOpenQuestionSelection,
+  buildOpenQuestionListItems,
+  clampOpenQuestionSelectionIndex,
+  formatSelectedOpenQuestionAnswer,
+  resolveOpenQuestionsPaneLayout,
 } from './open-questions-pane.js';
-import { OPEN_QUESTIONS_PANE_HEIGHT } from './tui-layout-constants.js';
+import { OPEN_QUESTIONS_PANE_MIN_HEIGHT } from './tui-layout-constants.js';
 
 const SAMPLE_QUESTION: OpenQuestion = {
   id: 'inq-1',
@@ -18,70 +18,84 @@ const SAMPLE_QUESTION: OpenQuestion = {
   askedAt: 1,
 };
 
-describe('buildOpenQuestionDisplayLines', () => {
-  it('expands question and context with wrapping', () => {
-    const lines = buildOpenQuestionDisplayLines(
+function createQuestion(
+  overrides: Partial<OpenQuestion> & Pick<OpenQuestion, 'id' | 'question'>,
+): OpenQuestion {
+  return {
+    responseType: 'text',
+    source: 'conductor',
+    status: 'open',
+    askedAt: 1,
+    ...overrides,
+  };
+}
+
+describe('buildOpenQuestionListItems', () => {
+  it('expands the selected question and compacts others', () => {
+    const items = buildOpenQuestionListItems(
       [
-        {
-          ...SAMPLE_QUESTION,
-          question: 'alpha beta gamma delta',
-          context: 'extra context here',
-        },
+        createQuestion({ id: 'inq-1', question: 'First' }),
+        createQuestion({ id: 'inq-2', question: 'Second', context: 'more detail' }),
       ],
-      10,
+      1,
+      80,
     );
 
-    expect(lines.length).toBeGreaterThan(2);
-    expect(lines[0]).toContain('inq-1');
-    expect(lines.some((line) => line.startsWith('  '))).toBe(true);
+    expect(items[0]?.compact).toBe(true);
+    expect(items[1]?.isSelected).toBe(true);
+    expect(items[1]?.lines.some((line) => line.includes('more detail'))).toBe(true);
   });
 });
 
-describe('sliceOpenQuestionDisplayLines', () => {
-  it('shows from top by default and scrolls down with linesFromTop', () => {
-    const lines = ['a', 'b', 'c', 'd', 'e'];
-    expect(sliceOpenQuestionDisplayLines(lines, 2, 0)).toEqual(['a', 'b']);
-    expect(sliceOpenQuestionDisplayLines(lines, 2, 2)).toEqual(['c', 'd']);
-    expect(sliceOpenQuestionDisplayLines(lines, 2, 10)).toEqual(['d', 'e']);
+describe('advanceOpenQuestionSelection', () => {
+  it('wraps at both ends', () => {
+    expect(advanceOpenQuestionSelection(0, 'up', 3)).toBe(2);
+    expect(advanceOpenQuestionSelection(2, 'down', 3)).toBe(0);
   });
 });
 
-describe('advanceOpenQuestionsScrollOffset', () => {
-  it('moves from top toward bottom and back', () => {
-    expect(advanceOpenQuestionsScrollOffset(0, 'pageDown', 2, 6)).toBe(2);
-    expect(advanceOpenQuestionsScrollOffset(4, 'pageUp', 2, 6)).toBe(2);
-    expect(advanceOpenQuestionsScrollOffset(3, 'home', 2, 6)).toBe(0);
-    expect(advanceOpenQuestionsScrollOffset(1, 'end', 2, 6)).toBe(6);
+describe('clampOpenQuestionSelectionIndex', () => {
+  it('clamps to available questions', () => {
+    expect(clampOpenQuestionSelectionIndex(5, 2)).toBe(1);
+    expect(clampOpenQuestionSelectionIndex(0, 0)).toBe(0);
   });
 });
 
-describe('computeOpenQuestionsContentLineCount', () => {
-  it('reserves border and title rows inside the pane height', () => {
-    expect(computeOpenQuestionsContentLineCount(4, 1)).toBe(1);
-    expect(computeOpenQuestionsContentLineCount(6, 1)).toBe(3);
+describe('formatSelectedOpenQuestionAnswer', () => {
+  it('prefixes @inq for the selected question', () => {
+    expect(formatSelectedOpenQuestionAnswer('yes', 'inq-2')).toBe('@inq:inq-2 yes');
   });
 });
 
-describe('resolveOpenQuestionsScrollLayout', () => {
-  it('shows scroll hint from the first frame when content overflows', () => {
-    const layout = resolveOpenQuestionsScrollLayout({
-      displayLineCount: 5,
-      paneHeight: OPEN_QUESTIONS_PANE_HEIGHT,
+describe('resolveOpenQuestionsPaneLayout', () => {
+  it('uses minimum height when there are no open questions', () => {
+    const layout = resolveOpenQuestionsPaneLayout({
+      openQuestions: [],
+      selectedIndex: 0,
       contentWidth: 80,
+      terminalRows: 24,
     });
 
-    expect(layout.isScrollable).toBe(true);
-    expect(layout.scrollHint).toContain('Alt+PgUp/PgDn');
+    expect(layout.paneHeight).toBe(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
+    expect(layout.titleText).toBe('Open questions');
   });
 
-  it('omits scroll hint when all lines fit', () => {
-    const layout = resolveOpenQuestionsScrollLayout({
-      displayLineCount: 1,
-      paneHeight: OPEN_QUESTIONS_PANE_HEIGHT,
-      contentWidth: 80,
+  it('grows with selected question detail and shows selection hint', () => {
+    const layout = resolveOpenQuestionsPaneLayout({
+      openQuestions: [
+        {
+          ...SAMPLE_QUESTION,
+          question: 'word '.repeat(30),
+          context: 'context '.repeat(10),
+        },
+      ],
+      selectedIndex: 0,
+      contentWidth: 40,
+      terminalRows: 24,
     });
 
-    expect(layout.isScrollable).toBe(false);
-    expect(layout.scrollHint).toBe('');
+    expect(layout.paneHeight).toBeGreaterThan(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
+    expect(layout.titleText).toContain('1/1');
+    expect(layout.titleText).toContain('↑↓で選択');
   });
 });

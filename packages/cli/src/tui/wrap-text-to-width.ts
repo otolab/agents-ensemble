@@ -27,7 +27,7 @@ export function wrapTextToWidth(text: string, width: number): string[] {
   for (const paragraph of text.split('\n')) {
     let remaining = paragraph;
     while (stringWidth(remaining) > width) {
-      const breakAt = findBreakIndex(remaining, width);
+      const breakAt = findWrapBreakIndex(remaining, width);
       lines.push(remaining.slice(0, breakAt));
       remaining = remaining.slice(breakAt).trimStart();
     }
@@ -36,7 +36,8 @@ export function wrapTextToWidth(text: string, width: number): string[] {
   return lines;
 }
 
-function findBreakIndex(text: string, width: number): number {
+/** {@link wrapTextToWidth} と同じ折り返し位置を返す（テスト・カーソル計算用）。 */
+export function findWrapBreakIndex(text: string, width: number): number {
   if (stringWidth(text) <= width) {
     return text.length;
   }

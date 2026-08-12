@@ -6,24 +6,27 @@ describe('formatOperatorContextHint', () => {
     expect(formatOperatorContextHint(undefined)).toBe('operator> ');
   });
 
-  it('highlights open questions', () => {
+  it('highlights open questions with selection context', () => {
     expect(
-      formatOperatorContextHint({
-        conductorTurn: 2,
-        autonomousTurns: 1,
-        maxTurns: 5,
-        openQuestions: [
-          {
-            id: 'inq-1',
-            question: 'Continue?',
-            responseType: 'text',
-            source: 'conductor',
-            status: 'open',
-            askedAt: 1,
-          },
-        ],
-      }),
-    ).toContain('open question');
+      formatOperatorContextHint(
+        {
+          conductorTurn: 2,
+          autonomousTurns: 1,
+          maxTurns: 5,
+          openQuestions: [
+            {
+              id: 'inq-1',
+              question: 'Continue?',
+              responseType: 'text',
+              source: 'conductor',
+              status: 'open',
+              askedAt: 1,
+            },
+          ],
+        },
+        { id: 'inq-1', index: 0, total: 1 },
+      ),
+    ).toContain('inq-1 (1/1)');
   });
 
   it('shows autonomous turn progress', () => {
