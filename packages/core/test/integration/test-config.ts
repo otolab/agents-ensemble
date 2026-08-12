@@ -46,11 +46,6 @@ export function hasAcpTestConfig(): boolean {
   return loadAcpTestConfig() != null;
 }
 
-export function hasDispatchWorkerE2eConfig(): boolean {
-  const config = loadAcpTestConfig();
-  return Boolean(config?.issueUrl && config?.repoRoot);
-}
-
 export function getAcpTestConfig(): AcpTestConfig {
   const config = loadAcpTestConfig();
   if (!config) {

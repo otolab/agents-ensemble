@@ -9,15 +9,9 @@
 # integration テストの cwd
 cwd: /tmp
 
-# e2e 共通（dispatch worker / ensemble issue）
+# e2e 共通（ensemble issue）
 # issueUrl: https://github.com/otolab/agents-ensemble/issues/1
 # repoRoot: /path/to/local/agents-ensemble-clone
 # conductorCwd: /path/to/local/agents-ensemble-clone   # issue e2e 用（省略時 fixture）
 # conductorModelId: auto   # team で composer-2.5 がブロックされる場合など
 # profilePath: /absolute/path/to/e2e-smoke/profile.yaml  # issue e2e（省略時 smoke fixture）
-#
-# dispatch worker e2e 用（任意。未指定時は ping / pong プロンプト）
-# name: ping-1
-# kind: ping
-# systemPrompt: |
-#   これは接続テストです。調査・編集はせず、応答に pong とだけ含めて終了してください。

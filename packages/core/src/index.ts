@@ -95,14 +95,13 @@ export type {
 export { buildWorkerPrompt } from './prompt/build-worker-prompt.js';
 export type { WorkerPromptOptions } from './prompt/build-worker-prompt.js';
 
-export { dispatchWorker, buildWorkerDispatchResult } from './dispatch/worker-dispatch.js';
+export { buildWorkerDispatchResult } from './dispatch/worker-dispatch.js';
 export { attachWorker } from './dispatch/attach-worker.js';
 export type {
   ConnectWorkerAcpFn,
   WorkerAcpSession,
 } from './dispatch/worker-acp-session.js';
 export type {
-  WorkerDispatchOptions,
   WorkerDispatchResult,
   WorkerRoundKind,
 } from './dispatch/worker-dispatch.js';

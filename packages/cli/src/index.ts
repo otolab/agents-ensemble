@@ -3,19 +3,15 @@
 import { resolve } from 'node:path';
 import { Command } from 'commander';
 import {
-  dispatchWorker,
   getConductorAuthStatus,
   listConductorModels,
   loginConductor,
   logoutConductor,
-  PermissionBroker,
   resolveIssueUrl,
 } from '@agents-ensemble/core';
 import { executeIssueCommand } from './issue-command.js';
 import { formatModelsListJson, formatModelsListText } from './format-models-list.js';
 import { formatIssueSessionSummaryJson } from './format-session-summary.js';
-import { promptPermissionDecision } from './prompt-permission.js';
-import { parseWorktreeMode } from './parse-worktree-mode.js';
 
 const program = new Command();
 
@@ -178,92 +174,6 @@ models
       console.log(formatModelsListText(catalog));
       console.error(
         '\n注: 一覧は API カタログです。team 設定で実行時にブロックされる場合があります。',
-      );
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : error);
-      process.exit(1);
-    }
-  });
-
-const dispatch = program
-  .command('dispatch')
-  .description('Dispatch a worker without conductor');
-
-dispatch
-  .command('worker')
-  .description('Dispatch a worker for a GitHub Issue (Stage 1 manual flow)')
-  .argument(
-    '<issue-url>',
-    'GitHub Issue URL or number (e.g. 31, #31)',
-  )
-  .option('--name <name>', 'Worker name in the session', 'worker')
-  .option('--kind <name>', 'Agent kind for the worker prompt', 'worker')
-  .option('--system-prompt <text>', 'Optional agent system prompt override')
-  .option(
-    '--repo-root <path>',
-    'Path to the local git clone to work in',
-    process.cwd(),
-  )
-  .option(
-    '--worktree <mode>',
-    'Worker workspace: isolated (default) or in-repo (main worktree)',
-    'isolated',
-  )
-  .action(
-    async (
-      issueRef: string,
-      options: {
-        name: string;
-        kind: string;
-        systemPrompt?: string;
-        repoRoot: string;
-        worktree: string;
-      },
-    ) => {
-    try {
-      const worktreeMode = parseWorktreeMode(options.worktree);
-      if (worktreeMode === 'in_repo') {
-        console.error(
-          '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
-        );
-      }
-      const repoRoot = resolve(options.repoRoot);
-      const issueUrl = await resolveIssueUrl(issueRef, repoRoot);
-      const permissionBroker = new PermissionBroker({
-        onAsk: promptPermissionDecision,
-      });
-      const result = await dispatchWorker({
-        issueUrl,
-        name: options.name,
-        kind: options.kind,
-        systemPrompt: options.systemPrompt,
-        repoRoot,
-        worktreeMode,
-        sessionState: {
-          workers: [{ name: options.name, kind: options.kind }],
-          kinds: [options.kind],
-        },
-        permissionHandler: permissionBroker.createHandler('manual-worker'),
-        onUpdate: (update) => {
-          const text = update.update?.content?.text;
-          if (text) process.stderr.write(text);
-        },
-      });
-
-      console.log(
-        JSON.stringify(
-          {
-            issue: result.issue.url,
-            worktree: result.worktree.path,
-            branch: result.worktree.branch,
-            kind: result.kind,
-            name: result.name,
-            stopReason: result.promptResult.stopReason,
-            responseText: result.promptResult.responseText,
-          },
-          null,
-          2,
-        ),
       );
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);

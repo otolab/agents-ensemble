@@ -16,7 +16,7 @@
 |--------|-----------------|-----------|
 | **unittest** | JSON-RPC transport、AcpClient、Fake ACP server、型、プロンプトビルダー | #3 ACP ブリッジの「作りきり」 |
 | **integration** | 実 `agent acp` との stdio 通信、session ライフサイクル、プロセス cleanup | #3 受け入れの一部 |
-| **e2e** | `ensemble dispatch worker` CLI 縦切り | #6 Stage 1 完了 |
+| **e2e** | `ensemble issue` CLI 縦切り | Stage 2 完了 |
 
 Stage 2 以降は conductor（SDK）・`gh`・permission 仲介が integration / e2e の対象に追加される。
 
@@ -83,7 +83,7 @@ ACP 向けに **FakeAcpServer**（または `TestAcpTransport`）を core に置
 
 | シナリオ | 検証内容 |
 |---------|---------|
-| **dispatchWorker + Fake ACP** | in-process Fake、`responseText`、prompt 組み立て |
+| **attachWorker + Fake ACP** | in-process Fake、`responseText`、prompt 組み立て |
 | **WorkerSession + inbox** | bootstrap → 完了コールバックまで（Fake ACP） |
 | **AcpBridge ライフサイクル** | spawn → initialize → authenticate → session/new → session/prompt → update 購読 → 終了 |
 | **プロセス cleanup** | 正常終了・異常終了でゾンビが残らない |
@@ -134,7 +134,6 @@ describe.skipIf(!hasAcpTestConfig())('AcpBridge integration', () => { ... });
 
 | Stage | シナリオ |
 |-------|---------|
-| **1** | `ensemble dispatch worker <issue-url> --skill <name>` — worktree + ACP + プロンプト |
 | **2** | `ensemble issue <url>` — conductor + worker 連携（ping/pong 等） |
 | **3+** | reviewer ループ、permission エスカレーション（別ファイルで追加） |
 
@@ -198,7 +197,7 @@ pnpm test:all           # 全レベル（ローカル用）
 3. AcpClient / SessionRunner の unittest  ← #3 の核
 4. integration: 実 agent acp
 5. worktree / prompt（unittest）
-6. e2e: ensemble dispatch worker          ← #6
+6. e2e: ensemble issue          ← Stage 2
 ```
 
 ## 関連 Issue

@@ -19,7 +19,7 @@ agents-ensemble は **SDK（conductor）** と **ACP（worker）** の2系統を
 | 経路 | 技術 | 何に使うか | ローカル開発 | CI / 自動化 |
 |------|------|-----------|-------------|------------|
 | **conductor** | `@cursor/sdk` | `ensemble issue` | `ensemble auth login` | `CURSOR_API_KEY` |
-| **worker** | `agent acp` | `ensemble dispatch worker`（one-shot）、`ensemble issue` の常駐 worker | `agent login` | `CURSOR_API_KEY`（子プロセスへ継承） |
+| **worker** | `agent acp` | `ensemble issue` の常駐 worker | `agent login` | `CURSOR_API_KEY`（子プロセスへ継承） |
 | **Issue 取得** | `gh` CLI | conductor が Issue 本文・コメントを読む | `gh auth login` | `GH_TOKEN` 等 |
 
 ### 初回セットアップ（ローカル）
@@ -83,8 +83,7 @@ worker は `spawn('agent', ['acp'])` で起動し、**子プロセスの `agent`
 
 | コマンド | 必要な認証 |
 |---------|-----------|
-| `ensemble dispatch worker` | `agent login` または `CURSOR_API_KEY` |
-| `ensemble issue` | 上記 + `ensemble auth login`（または `CURSOR_API_KEY`）+ `gh auth login` |
+| `ensemble issue` | `agent login`（または `CURSOR_API_KEY`）+ `ensemble auth login`（または `CURSOR_API_KEY`）+ `gh auth login` |
 | `pnpm test:integration` | `agent login` + `test-acp.yaml` |
 | `pnpm test:e2e` | 上記 + `ensemble auth login` + `gh` + `test-acp.yaml`（`issueUrl` 等） |
 
@@ -148,14 +147,6 @@ cp packages/core/test/integration/test-acp.yaml.example \
    packages/core/test/integration/test-acp.yaml
 # issueUrl / repoRoot を編集してから:
 pnpm test:e2e
-
-# Stage 1: 手動 worker dispatch
-ensemble dispatch worker <issue-url> --skill <name> --repo-root <path>
-# <issue-url> はフル URL または 31 / '#31' 等の番号 shorthand 可（# はクォート）
-
-# Stage 3: 手動 reviewer dispatch
-ensemble dispatch reviewer <pr-url> --skill <name> --worktree-path <path>
-# または --issue-url <url> --repo-root <path> で worktree を解決
 
 # Stage 2: conductor オーケストレーション
 ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--profile <name>] [--resume <agentId>] [--continue] ...
@@ -250,7 +241,6 @@ conductor は SDK `Agent.resume`、worker は ACP `session/load` で復元する
 | **bootstrap（attach）** | 役割・permission・待機 prompt。実作業の開始トリガーではない |
 | **`prompt_worker`（conductor SDK tool）** | 常駐 worker へ作業指示（`session/prompt`）。busy 時は per-worker キュー、`preempt: true` で割り込み |
 | **`worker.completed` イベント** | 1 ラウンド完了を conductor へ通知（タスク完了の意味ではない） |
-| **`ensemble dispatch worker`** | CLI one-shot（常駐モデルとは別経路。検証・手動用） |
 
 **Issue / PR に書いただけでは worker は動かない。** トリガーは conductor の `prompt_worker` のみ（詳細は [ADR 0012](docs/adr/0012-conductor-worker-prompt-roundtrip.md)、[architecture.md §5](docs/architecture.md)）。
 
