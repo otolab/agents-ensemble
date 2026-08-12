@@ -11,8 +11,7 @@ export const workerBaseModule: PromptModule<EnsembleContext> = {
   ],
   instructions: [
     '- 作業指示が届いたら Issue / PR を正本として動く',
-    '- 起動後は作業指示が来るまで待機してよい',
-    '- conductor との直接会話経路はない（作業指示と permission 以外）',
+    '- 起動後はconductorからの明示的な作業指示のメッセージが来るまで待機すること',
     '- 気づき・違和感・未解決は解決できなくても Issue に残す',
     '- 操作の許可が必要なときは harness 経由で permission を要求する',
     '- 手順の細部は Skill（指示があれば）と Issue / PR を正本にする',
