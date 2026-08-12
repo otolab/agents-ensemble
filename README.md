@@ -164,9 +164,16 @@ cp packages/core/test/integration/test-acp.yaml.example \
 pnpm test:e2e
 
 # Stage 2: conductor オーケストレーション
-ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--profile <name>] [--resume <agentId>] [--continue] ...
+ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--profile <name>] [--resume <agentId>] [--continue] [--no-github-monitor] [--github-monitor-debounce-ms <n>] ...
 # <issue-url> はフル URL または 31 / '#31' 等の番号 shorthand 可（# はクォート）
 ```
+
+**GitHub 監視**（既定で有効）: セッション中に Issue コメント・関連 PR のレビュー / CI 完了を `gh` で poll し、debounce 後に conductor へ `## GitHub 更新` を届ける（自動 `prompt_worker` なし）。詳細は [docs/harness-events.md](docs/harness-events.md) §2.5。
+
+| フラグ | 意味 |
+|--------|------|
+| `--no-github-monitor` | GitHub 更新監視を無効化 |
+| `--github-monitor-debounce-ms <n>` | 更新通知の debounce（ms）。デフォルト 30000 |
 
 **worker 作業ディレクトリ**（`--worktree`）は Conductor セッション開始時に **1 回だけ** resolve し、profile の全 worker が共有する。
 

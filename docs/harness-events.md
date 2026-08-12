@@ -62,6 +62,18 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 
 監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
 
+**運用制限（#39）**
+
+| 項目 | 内容 |
+|------|------|
+| poll 間隔 | 通常 **60s**。いずれかの関連 PR で CI が pending（`QUEUED` / `IN_PROGRESS` 等）なら **15s** |
+| debounce | デフォルト **30s**（`--github-monitor-debounce-ms`）。連続インラインコメント等を 1 通知にまとめる |
+| 初回 bootstrap | **カーソル空の新規セッション**の初回 poll のみ。既存 Issue コメントは通知せずカーソルを進める |
+| `--continue` 再開 | sidecar カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
+| PR 紐づけ | `gh search prs <issueNumber> --repo owner/repo`。失敗時は PR 監視をスキップし **Issue コメント監視は継続** |
+| CI wakeup | `gh pr view --json statusCheckRollup` の **CheckRun 配列**。前回 poll で pending だった check が `COMPLETED` + `conclusion` になったときのみ通知 |
+| CLI | `--no-github-monitor` で無効化。`--github-monitor-debounce-ms` で debounce 変更 |
+
 ### 2.2 bootstrap 専用イベント（#74 で追加）
 
 harness が **conductor の指示なしに** 行う worker attach + 待機 prompt のライフサイクル。
