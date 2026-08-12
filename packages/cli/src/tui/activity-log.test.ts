@@ -36,18 +36,53 @@ describe('activity-log', () => {
     expect(ACTIVITY_LOG_WINDOW_SIZE).toBe(100);
   });
 
-  it('builds wrapped display lines with continuation indent width', () => {
+  it('uses inline layout for a single wrapped body line', () => {
+    const lines = buildActivityLogDisplayLines(
+      [{ label: 'conductor', text: 'short reply' }],
+      40,
+    );
+
+    expect(lines).toEqual([
+      { label: 'conductor', text: 'short reply', layout: 'inline' },
+    ]);
+  });
+
+  it('uses label-row and full-width body-row when body wraps to multiple lines', () => {
     const lines = buildActivityLogDisplayLines(
       [{ label: 'conductor', text: 'abcdefghij' }],
       4,
     );
 
     expect(lines).toEqual([
-      { label: 'conductor', text: 'abcd', isContinuation: false },
-      { label: 'conductor', text: 'efgh', isContinuation: true },
-      { label: 'conductor', text: 'ij', isContinuation: true },
+      { label: 'conductor', text: '', layout: 'label-row' },
+      { label: 'conductor', text: 'abcd', layout: 'body-row' },
+      { label: 'conductor', text: 'efgh', layout: 'body-row' },
+      { label: 'conductor', text: 'ij', layout: 'body-row' },
     ]);
     expect(formatActivityLogLabelPrefix('conductor')).toBe('[conductor] ');
+  });
+
+  it('applies multi-line layout to all label kinds consistently', () => {
+    const lines = buildActivityLogDisplayLines(
+      [
+        { label: 'operator', text: 'aa bb' },
+        { label: 'harness', text: 'cc dd' },
+        { label: 'observation', text: 'ee ff' },
+      ],
+      2,
+    );
+
+    expect(lines).toEqual([
+      { label: 'operator', text: '', layout: 'label-row' },
+      { label: 'operator', text: 'aa', layout: 'body-row' },
+      { label: 'operator', text: 'bb', layout: 'body-row' },
+      { label: 'harness', text: '', layout: 'label-row' },
+      { label: 'harness', text: 'cc', layout: 'body-row' },
+      { label: 'harness', text: 'dd', layout: 'body-row' },
+      { label: 'observation', text: '', layout: 'label-row' },
+      { label: 'observation', text: 'ee', layout: 'body-row' },
+      { label: 'observation', text: 'ff', layout: 'body-row' },
+    ]);
   });
 
   it('includes separator blank lines in display lines', () => {
@@ -61,9 +96,9 @@ describe('activity-log', () => {
     );
 
     expect(lines).toEqual([
-      { label: 'harness', text: 'telemetry', isContinuation: false },
-      { label: 'separator', text: '', isContinuation: false },
-      { label: 'conductor', text: 'reply', isContinuation: false },
+      { label: 'harness', text: 'telemetry', layout: 'inline' },
+      { label: 'separator', text: '', layout: 'separator' },
+      { label: 'conductor', text: 'reply', layout: 'inline' },
     ]);
   });
 

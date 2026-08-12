@@ -25,10 +25,17 @@ export const ACTIVITY_LOG_LABEL_COLORS: Record<
   observation: 'magenta',
 };
 
+/** 活動ログ 1 行の表示型。折り返し 1 行は inline、2 行以上は label-row + body-row。 */
+export type ActivityLogDisplayLineLayout =
+  | 'separator'
+  | 'inline'
+  | 'label-row'
+  | 'body-row';
+
 export interface ActivityLogDisplayLine {
   label: ActivityLogEntryLabel;
   text: string;
-  isContinuation: boolean;
+  layout: ActivityLogDisplayLineLayout;
 }
 
 export function formatActivityLogLabelPrefix(label: ActivityLogLabel): string {
@@ -56,7 +63,7 @@ export function formatActivityLogLine(entry: ActivityLogEntry): string {
   return `[${entry.label}] ${entry.text}`;
 }
 
-/** 折り返し済みの表示行に展開（ラベルは先頭行のみ）。 */
+/** 折り返し済みの表示行に展開。1 行なら `[label] 本文`、2 行以上なら `[label]` 単独行 + 本文左端。 */
 export function buildActivityLogDisplayLines(
   entries: ActivityLogEntry[],
   contentWidth: number,
@@ -65,16 +72,26 @@ export function buildActivityLogDisplayLines(
 
   for (const entry of entries) {
     if (entry.label === 'separator') {
-      lines.push({ label: 'separator', text: '', isContinuation: false });
+      lines.push({ label: 'separator', text: '', layout: 'separator' });
       continue;
     }
 
     const bodyLines = wrapTextToWidth(entry.text, contentWidth);
-    for (let index = 0; index < bodyLines.length; index++) {
+    if (bodyLines.length <= 1) {
       lines.push({
         label: entry.label,
-        text: bodyLines[index] ?? '',
-        isContinuation: index > 0,
+        text: bodyLines[0] ?? '',
+        layout: 'inline',
+      });
+      continue;
+    }
+
+    lines.push({ label: entry.label, text: '', layout: 'label-row' });
+    for (const bodyLine of bodyLines) {
+      lines.push({
+        label: entry.label,
+        text: bodyLine,
+        layout: 'body-row',
       });
     }
   }

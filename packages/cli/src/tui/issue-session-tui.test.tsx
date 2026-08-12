@@ -281,6 +281,37 @@ describe('IssueSessionTui', () => {
     expect(frame).not.toContain('[harness] line-0');
   });
 
+  it('renders multi-line activity body at full width without label-column indent', () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 30,
+    });
+
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('conductor', 'alpha beta gamma');
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? '';
+    const continuationIndent = ' '.repeat('[conductor] '.length);
+    expect(frame).toContain('[conductor]');
+    expect(frame).not.toContain(`${continuationIndent}alpha`);
+    expect(frame).not.toContain(`${continuationIndent}beta`);
+  });
+
+  it('keeps one-line entries as inline label and body', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('operator', 'ping');
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    expect(lastFrame() ?? '').toContain('[operator] ping');
+  });
+
   it('uses manual wrap only (display line count matches wrap helper)', () => {
     const viewModel = createTuiViewModel();
     viewModel.appendActivityLog('conductor', 'word '.repeat(30));
