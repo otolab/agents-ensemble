@@ -10,7 +10,11 @@ import { bindAsyncOperatorInput, notifyOperatorInputReprompt } from './async-ope
 import { isOperatorInputInteractive, isOperatorInputTty } from './prompt-operator-input.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
 import { resolveCliMaxTurns } from './resolve-cli-max-turns.js';
-import { createDialogueSink, createHarnessSink } from './session-sinks.js';
+import {
+  createDialogueSink,
+  createHarnessSink,
+  createObservationSink,
+} from './session-sinks.js';
 
 export interface IssueCommandOptions {
   repoRoot: string;
@@ -34,20 +38,25 @@ export interface IssueCommandDeps {
   findLatestSessionSidecarForIssue?: typeof findLatestSessionSidecarForIssue;
 }
 
+export interface ResolveResumeAgentIdResult {
+  resumeAgentId?: string;
+  continuedFromSidecar?: string;
+}
+
 /** `--resume` / `--continue` から `runIssueSession` に渡す `resumeAgentId` を解決する。 */
 export async function resolveResumeAgentIdFromOptions(
   options: Pick<IssueCommandOptions, 'resume' | 'continue'>,
   context: { issueUrl: string; repoRoot: string },
   deps: Pick<IssueCommandDeps, 'findLatestSessionSidecarForIssue'> = {},
-): Promise<string | undefined> {
+): Promise<ResolveResumeAgentIdResult> {
   if (options.resume && options.continue) {
     throw new Error('Cannot use --continue and --resume together');
   }
   if (options.resume) {
-    return options.resume;
+    return { resumeAgentId: options.resume };
   }
   if (!options.continue) {
-    return undefined;
+    return {};
   }
 
   const findLatest =
@@ -62,10 +71,10 @@ export async function resolveResumeAgentIdFromOptions(
     );
   }
 
-  console.error(
-    `[continue] resuming session: conductorAgentId=${sidecar.conductorAgentId}`,
-  );
-  return sidecar.conductorAgentId;
+  return {
+    resumeAgentId: sidecar.conductorAgentId,
+    continuedFromSidecar: sidecar.conductorAgentId,
+  };
 }
 
 /** `ensemble issue` の CLI オプションから `runIssueSession` に渡す `maxTurns` を決定する。 */
@@ -93,24 +102,34 @@ export async function executeIssueCommand(
   const SessionLoggerCtor = deps.SessionLogger ?? SessionLogger;
 
   const workerWorktreeMode = parseWorktreeMode(options.worktree);
-  if (workerWorktreeMode === 'in_repo') {
-    console.error(
-      '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',
-    );
-  }
-
   const { profile, profilePath } = await loadProfileFn({
     profile: options.profile,
     cwd: resolve(options.repoRoot),
   });
   const repoRoot = resolve(options.repoRoot);
-  const resumeAgentId = await resolveResumeAgentIdFromOptions(
+  const { resumeAgentId, continuedFromSidecar } = await resolveResumeAgentIdFromOptions(
     options,
     { issueUrl, repoRoot },
     deps,
   );
   const sessionLogger = new SessionLoggerCtor({ issueUrl, repoRoot });
   sessionLogger.subscribe(createHarnessSink());
+  sessionLogger.subscribe(createObservationSink());
+  sessionLogger.subscribe((event) => {
+    if (event.type === 'open.question.enqueued') {
+      notifyOperatorInputReprompt();
+    }
+  });
+
+  if (workerWorktreeMode === 'in_repo') {
+    sessionLogger.emit({ type: 'session.worktree.notice', mode: workerWorktreeMode });
+  }
+  if (continuedFromSidecar) {
+    sessionLogger.emit({
+      type: 'session.continue',
+      conductorAgentId: continuedFromSidecar,
+    });
+  }
 
   const interactive = isInteractive();
   const maxTurns = resolveIssueSessionMaxTurns(options, interactive);
@@ -137,23 +156,9 @@ export async function executeIssueCommand(
           ...(isTty() && !options.noWait
             ? {
                 waitForOperatorExit: true,
-                onPostLoopWait: () => {
-                  console.error(
-                    '\n自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。\n',
-                  );
-                },
               }
             : {}),
         }
       : {}),
-    onOpenQuestionEnqueued: (question) => {
-      console.error(
-        `[open question] ${question.id} [${question.responseType}] ${question.question}`,
-      );
-      notifyOperatorInputReprompt();
-    },
-    onEscalated: (record) => {
-      console.error(`[operator answer] ${record.question} → ${record.answer}`);
-    },
   });
 }

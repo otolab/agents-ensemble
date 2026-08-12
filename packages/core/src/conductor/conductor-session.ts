@@ -299,6 +299,7 @@ export async function runConductorSession(
     const record = openQuestionToEscalationRecord(answered);
     if (record) {
       escalations.push(record);
+      sessionLogger.emit({ type: 'escalation.recorded', record });
       options.onEscalated?.(record);
     }
     scheduleSidecarFlush();
@@ -307,6 +308,7 @@ export async function runConductorSession(
   const askHumanTools = createAskHumanTool({
     registry: openQuestions,
     onEnqueued: (question) => {
+      sessionLogger.emit({ type: 'open.question.enqueued', question });
       options.onOpenQuestionEnqueued?.(question);
       scheduleSidecarFlush();
     },
@@ -455,8 +457,10 @@ export async function runConductorSession(
         workerDispatches: sessionLogger.workerDispatches,
         workerFailures: sessionLogger.workerFailures,
         onSendComplete: recordSendComplete,
-        onOpenQuestionEnqueued: (question) =>
-          options.onOpenQuestionEnqueued?.(question),
+        onOpenQuestionEnqueued: (question) => {
+          sessionLogger.emit({ type: 'open.question.enqueued', question });
+          options.onOpenQuestionEnqueued?.(question);
+        },
         ...(driverResumeState
           ? {
               skipInitialSend: true,
@@ -479,6 +483,7 @@ export async function runConductorSession(
       }
 
       options.onPostLoopWait?.();
+      sessionLogger.emit({ type: 'session.post_loop_wait' });
       const postLoopAction = await postLoopGate.wait(shutdownSignal);
       if (postLoopAction === 'exit' || shutdownSignal.aborted) {
         if (shutdownSignal.aborted) {

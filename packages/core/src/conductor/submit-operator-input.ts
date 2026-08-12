@@ -37,6 +37,7 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
     const record = openQuestionToEscalationRecord(answered);
     if (record) {
       input.escalations.push(record);
+      input.sessionLogger.emit({ type: 'escalation.recorded', record });
       input.onEscalated?.(record);
     }
   }

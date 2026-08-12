@@ -68,6 +68,25 @@ export type SessionLogEvent =
   | {
       type: 'session.stop';
       stopReason: IssueLoopStopReason;
+    }
+  | {
+      type: 'open.question.enqueued';
+      question: OpenQuestion;
+    }
+  | {
+      type: 'escalation.recorded';
+      record: EscalationRecord;
+    }
+  | {
+      type: 'session.worktree.notice';
+      mode: WorkerWorktreeMode;
+    }
+  | {
+      type: 'session.continue';
+      conductorAgentId: string;
+    }
+  | {
+      type: 'session.post_loop_wait';
     };
 
 export type SessionLogSink = (event: SessionLogEvent) => void;
@@ -121,6 +140,11 @@ export class SessionLogger {
       case 'harness.worker.bootstrap.failed':
       case 'operator.input':
       case 'worker.process.stderr':
+      case 'open.question.enqueued':
+      case 'escalation.recorded':
+      case 'session.worktree.notice':
+      case 'session.continue':
+      case 'session.post_loop_wait':
         break;
     }
 
