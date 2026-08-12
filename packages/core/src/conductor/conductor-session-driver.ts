@@ -35,6 +35,8 @@ export interface ConductorSendCompleteInfo {
   status: ConductorSendResult['status'];
   result?: string;
   error?: ConductorSendResult['error'];
+  usage?: ConductorSendResult['usage'];
+  modelId?: string;
   /** 束内の worker 完了 / 失敗件数（harness 向け）。 */
   workerDispatches: number;
   workerFailures: number;
@@ -269,6 +271,8 @@ async function runEventConductorSend(input: {
     status: sendResult.status,
     result: sendResult.result,
     error: sendResult.error,
+    usage: sendResult.usage,
+    modelId: sendResult.modelId,
     workerDispatches: input.workerOutcomeDispatches ?? conductorDispatches,
     workerFailures: input.workerOutcomeFailures ?? conductorFailures,
     conductorDispatchesThisTurn: conductorDispatches + conductorFailures,

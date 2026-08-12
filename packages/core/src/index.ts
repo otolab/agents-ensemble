@@ -53,6 +53,7 @@ export type {
   AcpTextPromptBlock,
   SessionUpdateNotification,
   PromptResult,
+  LlmUsageSnapshot,
   PermissionDecision,
   PermissionHandler,
 } from './acp/types.js';
@@ -298,6 +299,25 @@ export type { PendingPermission } from './permission/pending-permission.js';
 export { createResolvePermissionTool } from './permission/resolve-permission-tool.js';
 export type { ResolvePermissionToolOptions } from './permission/resolve-permission-tool.js';
 export { formatPendingPermissionSummaries } from './permission/format-pending-permissions.js';
+
+export {
+  SessionUsageTracker,
+  resetSessionUsageRoundCounter,
+} from './usage/session-usage-tracker.js';
+export type { SessionUsageTrackerOptions } from './usage/session-usage-tracker.js';
+export { estimateTokenUsageFromText } from './usage/estimate-token-usage.js';
+export type {
+  LlmTokenCounts,
+  LlmUsageRecord,
+  LlmUsageSource,
+  SessionContextUtilization,
+  SessionUsageAgentKind,
+  SessionUsageAgentTotals,
+  SessionUsageRound,
+  SessionUsageSummary,
+} from './usage/types.js';
+export { createSessionUsageTools } from './dispatch/session-usage-tool.js';
+export type { SessionUsageToolOptions } from './dispatch/session-usage-tool.js';
 
 export {
   EscalationUnavailableError,

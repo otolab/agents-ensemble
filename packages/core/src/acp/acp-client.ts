@@ -140,6 +140,7 @@ export class AcpClient {
       return {
         ...result,
         responseText: responseText || undefined,
+        usage: result.usage,
       };
     } finally {
       this.promptUpdateHandler = undefined;
