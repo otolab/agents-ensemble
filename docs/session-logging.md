@@ -36,7 +36,7 @@ conductor セッションには性質の異なる出力が混在する。
 │         ▼                        ▼                    ▼   │
 │   HarnessSink            DisplaySink          ObservationSink│
 │   (stderr)          reducer → backend         (stderr)    │
-│                     (stdout dialogue, TTY)                  │
+│                     (Ink TUI or stdout)                   │
 │                                  │                          │
 │                                  └────► snapshot()          │
 │                                        → 終了 JSON          │
@@ -50,10 +50,10 @@ conductor セッションには性質の異なる出力が混在する。
 
 | 内容 | 条件 |
 |------|------|
-| `operator> …` / `conductor> …` | TTY（または `ENSEMBLE_OPERATOR_MESSAGE` で interactive 判定） |
+| `operator> …` / `conductor> …` | TTY: Ink TUI ペイン。非 TTY + env: string backend（`bindAsyncOperatorInput` 経路） |
 | **SessionSummary** JSON | セッション終了時（常に 1 行 JSON） |
 
-非 TTY では DisplaySink の dialogue 出力は無効（noop backend）。stdout は **終了 JSON のみ**（e2e / パイプ向け）。
+非 TTY では DisplaySink は noop backend（または env 時のみ string backend）。stdout は **終了 JSON のみ**（e2e / パイプ向け）。TTY では Ink TUI が対話を表示し、stdout への逐次 `write` は行わない。
 
 ### stderr
 
@@ -126,10 +126,10 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `createHarnessSink()` | `packages/cli/src/session-sinks.ts` | stderr `[harness]`（state 外） |
 | `createObservationSink()` | 同上 | stderr `[open question]` 等のセッション観測 |
 | `createSessionDisplaySink()` | `packages/cli/src/display/` | `SessionLogEvent` → reducer → `SessionDisplayBackend` |
-| `selectSessionDisplayBackend()` | 同上 | interactive 時は string backend、非 interactive は noop |
+| `selectSessionDisplayBackend()` | 同上 | interactive かつ非 TTY 時は string backend、TTY は Ink host、非 interactive は noop |
 | `createDialogueSink()` | `session-sinks.ts` | 低レベル stdout 整形（string backend が `operator.input` / `conductor.send` で利用） |
 
-表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question を保持する。#54 TUI（Ink）は後続 Issue で同じ reducer / backend 契約に載せる。
+表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question を保持する。TTY では Ink TUI（`packages/cli/src/tui/`）が同じ reducer / backend 契約で 4 ペイン表示する（#94）。
 
 ---
 

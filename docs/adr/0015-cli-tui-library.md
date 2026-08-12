@@ -1,6 +1,6 @@
 # ADR 0015: CLI TUI ライブラリ選定
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-12
 
 ## Context
@@ -73,7 +73,7 @@ Ink で 4 ペイン + 非ブロッキング入力を実現する根拠:
 
 ## Decision
 
-**CLI TUI ライブラリとして [Ink](https://github.com/vadimdemedes/ink)（v7 系）を採用する**（Status: `proposed`。#54 実装着手時に `accepted` へ昇格を想定）。
+**CLI TUI ライブラリとして [Ink](https://github.com/vadimdemedes/ink)（v7 系）を採用する**（Status: `accepted`。#94 で実装）。
 
 ### 非 TTY / CI フォールバック方針
 

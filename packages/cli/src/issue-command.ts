@@ -13,6 +13,7 @@ import { resolveCliMaxTurns } from './resolve-cli-max-turns.js';
 import { createSessionDisplaySink } from './display/create-session-display-sink.js';
 import { selectSessionDisplayBackend } from './display/select-session-display-backend.js';
 import { createHarnessSink, createObservationSink } from './session-sinks.js';
+import { createIssueSessionTuiHost } from './tui/create-issue-session-tui-host.js';
 
 export interface IssueCommandOptions {
   repoRoot: string;
@@ -111,13 +112,17 @@ export async function executeIssueCommand(
     deps,
   );
   const interactive = isInteractive();
+  const useTui = interactive && isTty();
+  const tuiHost = useTui ? createIssueSessionTuiHost() : undefined;
   const sessionLogger = new SessionLoggerCtor({ issueUrl, repoRoot });
   sessionLogger.subscribe(createHarnessSink());
   sessionLogger.subscribe(createObservationSink());
   sessionLogger.subscribe(
     createSessionDisplaySink({
-      backend: selectSessionDisplayBackend({ interactive }),
-      onOpenQuestionEnqueued: notifyOperatorInputReprompt,
+      backend:
+        tuiHost?.displayBackend ??
+        selectSessionDisplayBackend({ interactive: interactive && !useTui }),
+      onOpenQuestionEnqueued: tuiHost?.notifyReprompt ?? notifyOperatorInputReprompt,
     }),
   );
 
@@ -133,27 +138,31 @@ export async function executeIssueCommand(
 
   const maxTurns = resolveIssueSessionMaxTurns(options, interactive);
 
-  return runSession({
-    issueUrl,
-    repoRoot,
-    conductorCwd: resolve(options.conductorCwd),
-    resumeAgentId,
-    profile,
-    profilePath,
-    modelId: options.model,
-    maxTurns,
-    workerWorktreeMode,
-    sessionLogger,
-    ...(interactive
-      ? {
-          bindOperatorInput: bindAsyncOperatorInput,
-          continueOnConductorError: true,
-          ...(isTty() && !options.noWait
-            ? {
-                waitForOperatorExit: true,
-              }
-            : {}),
-        }
-      : {}),
-  });
+  try {
+    return await runSession({
+      issueUrl,
+      repoRoot,
+      conductorCwd: resolve(options.conductorCwd),
+      resumeAgentId,
+      profile,
+      profilePath,
+      modelId: options.model,
+      maxTurns,
+      workerWorktreeMode,
+      sessionLogger,
+      ...(interactive
+        ? {
+            bindOperatorInput: tuiHost?.bindOperatorInput ?? bindAsyncOperatorInput,
+            continueOnConductorError: true,
+            ...(isTty() && !options.noWait
+              ? {
+                  waitForOperatorExit: true,
+                }
+              : {}),
+          }
+        : {}),
+    });
+  } finally {
+    tuiHost?.dispose();
+  }
 }

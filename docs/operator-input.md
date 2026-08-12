@@ -10,7 +10,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 |----|------|----------------|
 | **SessionPolicy** | dispatch 可否・ループ終了・自律ターン数 | `session-policy.ts` |
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
-| **SessionView** | TTY / env / 将来 TUI からのオペレータ入力 | CLI `bindAsyncOperatorInput` 等 |
+| **SessionView** | TTY Ink TUI / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
 データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。View は `submit` で `operator.message` をキューへ積むだけ。
 
@@ -56,10 +56,9 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 | 環境 | 実装 | ファイル |
 |------|------|----------|
-| TTY（本番 CLI） | `bindAsyncOperatorInput` | `packages/cli/src/async-operator-input.ts` |
-| 非 TTY / CI | `ENSEMBLE_OPERATOR_MESSAGE` env を 1 回 submit | 同上 |
+| TTY（本番 CLI） | `createIssueSessionTuiHost`（Ink 4 ペイン + 入力欄） | `packages/cli/src/tui/create-issue-session-tui-host.tsx` |
+| 非 TTY + `ENSEMBLE_OPERATOR_MESSAGE` | `bindAsyncOperatorInput`（env を 1 回 submit） | `packages/cli/src/async-operator-input.ts` |
 | テスト | `createTestOperatorInputBinding` | `packages/core/src/conductor/testing/test-operator-input-binding.ts` |
-| 将来 TUI (#54) | 同じ `OperatorInputBinding` を実装 | — |
 
 ## `runConductorSession` への接続
 
