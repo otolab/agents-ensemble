@@ -58,9 +58,9 @@ describe('session sinks', () => {
     });
 
     expect(stderr).toHaveBeenCalledWith(
-      '[harness] conductor.send n=2 status=error workerDone=0 workerFailed=0',
+      '[harness] conductor.send n=2 status=error workerDone=0 workerFailed=0 error=Model Blocked',
     );
-    expect(stderr).toHaveBeenCalledWith('[harness] conductor.error Model Blocked');
+    expect(stderr).toHaveBeenCalledTimes(1);
 
     stderr.mockRestore();
   });

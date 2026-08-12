@@ -10,18 +10,25 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc --build",
-    "test:e2e": "vitest run --config vitest.config.e2e.ts"
+    "test:e2e": "vitest run --config vitest.config.e2e.ts",
+    "test": "vitest",
+    "test:run": "vitest run"
   },
   "dependencies": {
     "@agents-ensemble/core": "workspace:*",
-    "commander": "14.0.1"
+    "commander": "14.0.1",
+    "ink": "7.1.1",
+    "ink-text-input": "6.0.0",
+    "react": "19.2.0"
   },
   "devDependencies": {
     "@types/node": "22.18.10",
     "typescript": "5.9.3",
     "@types/js-yaml": "4.0.9",
     "js-yaml": "4.1.0",
-    "vitest": "3.2.4"
+    "vitest": "3.2.4",
+    "@types/react": "19.2.2",
+    "ink-testing-library": "4.0.0"
   },
   "license": "MIT",
   "repository": {

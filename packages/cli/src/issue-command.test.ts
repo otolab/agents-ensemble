@@ -1,9 +1,35 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const mockTuiHost = vi.hoisted(() => {
+  const bindOperatorInput = vi.fn(() => () => {});
+  const displayBackend = { render: vi.fn() };
+  const telemetrySink = vi.fn();
+  const notifyReprompt = vi.fn();
+  const dispose = vi.fn();
+  return {
+    bindOperatorInput,
+    displayBackend,
+    telemetrySink,
+    notifyReprompt,
+    dispose,
+    createIssueSessionTuiHost: vi.fn(() => ({
+      bindOperatorInput,
+      displayBackend,
+      telemetrySink,
+      notifyReprompt,
+      dispose,
+    })),
+  };
+});
+
 vi.mock('@agents-ensemble/core', () => ({
   loadProfile: vi.fn(),
   runIssueSession: vi.fn(),
   SessionLogger: vi.fn(),
+}));
+
+vi.mock('./tui/create-issue-session-tui-host.js', () => ({
+  createIssueSessionTuiHost: mockTuiHost.createIssueSessionTuiHost,
 }));
 
 import { executeIssueCommand, resolveIssueSessionMaxTurns, resolveResumeAgentIdFromOptions } from './issue-command.js';
@@ -229,6 +255,7 @@ describe('executeIssueCommand maxTurns wiring', () => {
   });
 
   it('enables waitForOperatorExit when interactive TTY without --no-wait', async () => {
+    mockTuiHost.createIssueSessionTuiHost.mockClear();
     const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
     const loadProfile = vi.fn().mockResolvedValue({
       profile: { workers: [] },
@@ -250,8 +277,11 @@ describe('executeIssueCommand maxTurns wiring', () => {
     expect(runIssueSession).toHaveBeenCalledWith(
       expect.objectContaining({
         waitForOperatorExit: true,
+        bindOperatorInput: mockTuiHost.bindOperatorInput,
       }),
     );
+    expect(mockTuiHost.createIssueSessionTuiHost).toHaveBeenCalledTimes(1);
+    expect(mockTuiHost.dispose).toHaveBeenCalledTimes(1);
     expect(runIssueSession).toHaveBeenCalledWith(
       expect.not.objectContaining({
         onPostLoopWait: expect.any(Function),
@@ -259,7 +289,67 @@ describe('executeIssueCommand maxTurns wiring', () => {
     );
   });
 
+  it('subscribes TUI telemetry sink instead of stderr harness/observation when TTY', async () => {
+    mockTuiHost.createIssueSessionTuiHost.mockClear();
+    const subscribe = vi.fn();
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe,
+      emit: vi.fn(),
+    }));
+
+    await executeIssueCommand('https://github.com/org/repo/issues/1', baseOptions, {
+      isOperatorInputInteractive: () => true,
+      isOperatorInputTty: () => true,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(subscribe).toHaveBeenCalledWith(mockTuiHost.telemetrySink);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    expect(
+      subscribe.mock.calls.every(
+        (call) =>
+          call[0] === mockTuiHost.telemetrySink || typeof call[0] === 'function',
+      ),
+    ).toBe(true);
+  });
+
+  it('subscribes stderr harness and observation sinks when non-TTY interactive', async () => {
+    mockTuiHost.createIssueSessionTuiHost.mockClear();
+    const subscribe = vi.fn();
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe,
+      emit: vi.fn(),
+    }));
+
+    await executeIssueCommand('https://github.com/org/repo/issues/1', baseOptions, {
+      isOperatorInputInteractive: () => true,
+      isOperatorInputTty: () => false,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(mockTuiHost.createIssueSessionTuiHost).not.toHaveBeenCalled();
+    expect(subscribe).toHaveBeenCalledTimes(3);
+    expect(subscribe.mock.calls.some((call) => call[0] === mockTuiHost.telemetrySink)).toBe(
+      false,
+    );
+  });
+
   it('does not enable waitForOperatorExit when interactive via env but non-TTY', async () => {
+    mockTuiHost.createIssueSessionTuiHost.mockClear();
     const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
     const loadProfile = vi.fn().mockResolvedValue({
       profile: { workers: [] },
@@ -288,6 +378,7 @@ describe('executeIssueCommand maxTurns wiring', () => {
         waitForOperatorExit: true,
       }),
     );
+    expect(mockTuiHost.createIssueSessionTuiHost).not.toHaveBeenCalled();
   });
 
   it('disables waitForOperatorExit when interactive TTY with --no-wait', async () => {

@@ -175,7 +175,7 @@ bootstrap 専用イベントは **exit JSON には載せない**（時系列テ�
 
 `createHarnessSink` / `createDialogueSink` / `createObservationSink` は書き込み先を注入可能（デフォルトは `console.error` / `process.stdout.write`）。
 
-対話 stdout は `createSessionDisplaySink` → reducer → `SessionDisplayBackend` 経由（#93）。interactive 時の string backend は内部で `createDialogueSink` を呼ぶ。Ink TUI（後続 Issue）は同じ reducer / backend 契約に載せ、stdout 直書きを置き換える。
+対話 stdout は `createSessionDisplaySink` → reducer → `SessionDisplayBackend` 経由（#93）。interactive かつ非 TTY 時の string backend は内部で `createDialogueSink` を呼ぶ。TTY では Ink TUI（#94、`packages/cli/src/tui/`）が同じ reducer / backend 契約で 4 ペイン表示し、stdout への逐次直書きを置き換える。
 
 | prefix | SessionLogEvent | 備考 |
 |--------|-----------------|------|
