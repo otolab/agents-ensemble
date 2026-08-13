@@ -109,6 +109,16 @@ View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver
 | TTY + デフォルト | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
 | `--no-wait` | 自律ループ停止後に即終了（従来動作） |
 | 非 TTY / CI | `waitForOperatorExit` なし → 即終了 |
-| post-loop 中の追加入力 | `operator.message` としてキューに積み、SessionDriver を再実行 |
+| post-loop 中の TTY 追加入力 | `operator.message` としてキューに積み、SessionDriver を再実行 |
+| post-loop 中の Issue コメント | GitHub 監視が `issue.comment` を検知すると `github.update` を enqueue し、**自律ターンが残っているとき** SessionDriver を再実行（[harness-events.md](harness-events.md) §3） |
+
+**再開トリガの差（post-loop 待機中のみ）**
+
+| 経路 | `notifyResume` | max-turns 到達時 |
+|------|----------------|------------------|
+| `operator.message`（TTY `operator>` 等） | 常に再開 | `enqueue` のみ（`canDispatchConductorSend` で `operator.message` は通すが、ターン回復はしない） |
+| `issue.comment`（GitHub 監視） | `autonomousTurns < maxTurns`（または無制限）のときのみ再開 | `enqueue` のみで停止維持（`notifyResume` しない） |
+
+自律ループ稼働中（post-loop 前）に Issue コメントが来た場合は、既存のイベント束に任せ、追加の `notifyResume` はしない（#160）。
 
 終了 JSON はプロセス終了時のみ stdout（変更なし）。

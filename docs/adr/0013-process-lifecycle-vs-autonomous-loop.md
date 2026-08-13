@@ -15,7 +15,7 @@ Issue #65。マージ完了・Issue 作業の一区切り（conductor `finished`
 |------|------|
 | **自律ループ停止** | SessionDriver が `shouldStopIssueLoop` でイベント消費ループを抜けること。作業報告の一区切り |
 | **プロセス終了** | CLI harness が worker / conductor を片付け、終了 JSON を stdout に出し、プロセスが exit すること |
-| **post-loop 待機** | 自律ループ停止後、harness がオペレータの `/exit` または追加指示を待つフェーズ |
+| **post-loop 待機** | 自律ループ停止後、harness がオペレータの `/exit`、TTY 追加入力、または Issue コメント（条件付き）を待つフェーズ |
 
 ### 制約
 
@@ -35,9 +35,11 @@ Issue #65。マージ完了・Issue 作業の一区切り（conductor `finished`
 
 1. worker / conductor / operator input binding は **維持**
 2. `onPostLoopWait` で案内（CLI は stderr）
-3. `OperatorPostLoopGate` で `/exit` または追加 `operator.message` を待つ
-4. `/exit`（または `exit`）→ harness 終了へ
-5. 追加指示 → SessionDriver を **再実行**（イベントキューに積まれた `operator.message` を処理）
+3. `OperatorPostLoopGate` で次を待つ:
+   - `/exit`（または `exit`）→ harness 終了へ
+   - 追加 `operator.message`（TTY `operator>` 等）→ **無条件** `notifyResume` → SessionDriver 再実行
+   - `issue.comment` を含む `github.update`（GitHub 監視）→ **`autonomousTurns < maxTurns`（または無制限）のときのみ** `notifyResume` → SessionDriver 再実行（#160）。max-turns 到達時は `enqueue` のみで停止維持（ターン回復しない）
+4. 再実行時はイベントキューに積まれた `operator.message` または `github.update` を処理
 
 `waitForOperatorExit` のデフォルトは **API では false**（ライブラリ利用者が明示）。CLI TTY では **true**（`--no-wait` で無効化）。
 

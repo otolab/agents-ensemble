@@ -13,6 +13,7 @@ import { SessionLogger, type SessionLogEvent } from './session/session-logger.js
 import { runConductorSession } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import * as worktreeModule from '../worktree/worktree.js';
+import type { GitHubUpdatePayload } from '../github/github-update-types.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -35,6 +36,32 @@ vi.mock('./conductor-agent.js', () => ({
   },
 }));
 
+const { mockCreateGitHubMonitor } = vi.hoisted(() => {
+  const mockCreateGitHubMonitor = vi.fn();
+  return { mockCreateGitHubMonitor };
+});
+
+vi.mock('../github/github-monitor.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../github/github-monitor.js')>();
+  return {
+    ...original,
+    createGitHubMonitor: mockCreateGitHubMonitor,
+  };
+});
+
+function issueCommentUpdate(body: string): GitHubUpdatePayload {
+  return {
+    items: [
+      {
+        id: 'issue-comment:99',
+        kind: 'issue.comment',
+        summary: body,
+        bodyPreview: body,
+      },
+    ],
+  };
+}
+
 describe('runConductorSession resume / shutdown', () => {
   let repoRoot = '';
 
@@ -56,6 +83,14 @@ describe('runConductorSession resume / shutdown', () => {
       agentId: 'agent-test',
       send: mockSend,
       close: mockClose,
+    }));
+    mockCreateGitHubMonitor.mockReset();
+    mockCreateGitHubMonitor.mockImplementation((options) => ({
+      start: vi.fn(),
+      stop: vi.fn().mockResolvedValue(undefined),
+      flush: vi.fn(),
+      getCursor: vi.fn().mockReturnValue({ lastIssueCommentId: undefined, pullRequests: {} }),
+      onUpdate: options.onUpdate,
     }));
   });
 
@@ -393,5 +428,167 @@ describe('runConductorSession resume / shutdown', () => {
     const result = await sessionPromise;
     expect(result.stopReason).toBe('interrupted');
     expect(removeSpy).not.toHaveBeenCalled();
+  });
+
+  it('resumes autonomous loop when issue.comment arrives during post-loop wait', async () => {
+    mockSend
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'from github',
+      });
+
+    let githubOnUpdate: ((payload: GitHubUpdatePayload) => void) | undefined;
+    mockCreateGitHubMonitor.mockImplementation((options) => {
+      githubOnUpdate = options.onUpdate;
+      return {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn(),
+        getCursor: vi.fn().mockReturnValue({ lastIssueCommentId: undefined, pullRequests: {} }),
+      };
+    });
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+    expect(githubOnUpdate).toBeDefined();
+    githubOnUpdate!(issueCommentUpdate('operator question on issue'));
+
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledTimes(2));
+
+    operatorApi!.submit('/exit');
+    const result = await sessionPromise;
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockSend).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not resume post-loop for non-comment github updates', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    let githubOnUpdate: ((payload: GitHubUpdatePayload) => void) | undefined;
+    mockCreateGitHubMonitor.mockImplementation((options) => {
+      githubOnUpdate = options.onUpdate;
+      return {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn(),
+        getCursor: vi.fn().mockReturnValue({ lastIssueCommentId: undefined, pullRequests: {} }),
+      };
+    });
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+    githubOnUpdate!({
+      items: [
+        {
+          id: 'ci:1',
+          kind: 'ci.completed',
+          summary: 'build passed',
+        },
+      ],
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+    expect(mockSend).toHaveBeenCalledOnce();
+
+    operatorApi!.submit('/exit');
+    await sessionPromise;
+  });
+
+  it('does not resume post-loop when max-turns is reached', async () => {
+    mockSend
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'from github',
+      });
+
+    let githubOnUpdate: ((payload: GitHubUpdatePayload) => void) | undefined;
+    mockCreateGitHubMonitor.mockImplementation((options) => {
+      githubOnUpdate = options.onUpdate;
+      return {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn(),
+        getCursor: vi.fn().mockReturnValue({ lastIssueCommentId: undefined, pullRequests: {} }),
+      };
+    });
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 2,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+    githubOnUpdate!(issueCommentUpdate('first comment'));
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledTimes(2));
+
+    githubOnUpdate!(issueCommentUpdate('second comment after max-turns'));
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledTimes(2));
+    expect(mockSend).toHaveBeenCalledTimes(2);
+
+    operatorApi!.submit('/exit');
+    await sessionPromise;
   });
 });
