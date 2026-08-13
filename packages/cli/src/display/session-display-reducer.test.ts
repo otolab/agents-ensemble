@@ -83,6 +83,65 @@ describe('reduceDisplayState', () => {
     });
   });
 
+  it('returns to idle after round failure when harness.worker.state idle follows prompt.failed', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [{ name: 'implementer', kind: 'implementer' }],
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.state',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      state: 'processing',
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.prompt.failed',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      source: 'conductor',
+      error: 'prompt failed',
+    });
+    expect(state.workers.implementer?.status).toBe('failed');
+
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.state',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      state: 'idle',
+    });
+    expect(state.workers.implementer?.status).toBe('idle');
+  });
+
+  it('keeps failed on attach fatal failure via harness.worker.state failed', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [{ name: 'reviewer', kind: 'reviewer' }],
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.prompt.failed',
+      name: 'reviewer',
+      kind: 'reviewer',
+      workerId: 'w-2',
+      source: 'harness',
+      error: 'attach failed',
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.state',
+      name: 'reviewer',
+      kind: 'reviewer',
+      workerId: 'w-2',
+      state: 'failed',
+    });
+
+    expect(state.workers.reviewer).toEqual({
+      kind: 'reviewer',
+      status: 'failed',
+    });
+  });
+
   it('tracks conductor-sourced prompt as running then idle', () => {
     let state = INITIAL_SESSION_DISPLAY_STATE;
 
