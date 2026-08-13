@@ -3,6 +3,7 @@ import type { EscalationRecord } from '../../escalation/human-inquiry.js';
 import type { OpenQuestion } from '../../escalation/open-question.js';
 import type { PendingPermission } from '../../permission/pending-permission.js';
 import type { WorkerFailureRecord } from '../../runtime/types.js';
+import type { WorkerHarnessState } from '../../runtime/worker-status.js';
 import type { WorkerWorktreeMode } from '../../worktree/worktree.js';
 import type { IssueLoopStopReason } from '../session-policy.js';
 import type { ConductorSessionResult } from '../conductor-session.js';
@@ -64,6 +65,17 @@ export type SessionLogEvent =
       workerId: string;
       sessionUpdate: string;
       sessionId?: string;
+    }
+  | {
+      type: 'harness.worker.state';
+      name: string;
+      kind: string;
+      workerId: string;
+      state: WorkerHarnessState;
+    }
+  | {
+      type: 'harness.session.workers';
+      workers: Array<{ name: string; kind: string }>;
     }
   | {
       type: 'operator.input';
@@ -211,6 +223,8 @@ export class SessionLogger {
       case 'harness.worker.prompt.completed':
       case 'harness.worker.prompt.failed':
       case 'harness.worker.acp.update':
+      case 'harness.worker.state':
+      case 'harness.session.workers':
       case 'operator.input':
       case 'conductor.send.started':
       case 'conductor.send.progress':

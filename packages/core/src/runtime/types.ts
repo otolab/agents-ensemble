@@ -66,3 +66,10 @@ export interface WorkerAcpUpdateTelemetry {
   sessionUpdate: string;
   sessionId?: string;
 }
+
+export interface WorkerStateTelemetry {
+  workerId: string;
+  name: string;
+  kind: string;
+  state: import('./worker-status.js').WorkerHarnessState;
+}

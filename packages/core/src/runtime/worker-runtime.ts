@@ -20,9 +20,11 @@ import type {
 import type {
   WorkerPromptTelemetry,
   WorkerAcpUpdateTelemetry,
+  WorkerStateTelemetry,
   WorkerStartedInfo,
   WorkerStartParams,
 } from './types.js';
+import type { WorkerHarnessState } from './worker-status.js';
 import type {
   WorkerStatusDetail,
   WorkerStatusSummary,
@@ -36,6 +38,7 @@ export interface WorkerRuntimeOptions {
   ownsWorkerAcpConnections?: boolean;
   onPromptTelemetry?: (event: WorkerPromptTelemetry) => void;
   onAcpUpdate?: (event: WorkerAcpUpdateTelemetry) => void;
+  onWorkerState?: (event: WorkerStateTelemetry) => void;
 }
 
 interface ResidentWorker {
@@ -282,6 +285,15 @@ export class WorkerRuntime {
     this.options.onPromptTelemetry?.(event);
   }
 
+  private emitWorkerState(
+    workerId: string,
+    name: string,
+    kind: string,
+    state: WorkerHarnessState,
+  ): void {
+    this.options.onWorkerState?.({ workerId, name, kind, state });
+  }
+
   private emitAcpUpdate(
     resident: ResidentWorker,
     sessionUpdate: string,
@@ -303,6 +315,12 @@ export class WorkerRuntime {
       name: started.name,
       kind: started.kind,
     });
+    this.emitWorkerState(
+      started.workerId,
+      started.name,
+      started.kind,
+      'attaching',
+    );
     this.emitPromptTelemetry({
       phase: 'started',
       source: 'harness',
@@ -362,6 +380,12 @@ export class WorkerRuntime {
         kind: started.kind,
         error: message,
       });
+      this.emitWorkerState(
+        started.workerId,
+        started.name,
+        started.kind,
+        'failed',
+      );
       this.emitPromptTelemetry({
         phase: 'failed',
         source: 'harness',
@@ -385,6 +409,12 @@ export class WorkerRuntime {
     resident.state = 'processing';
     resident.cancelInFlight = false;
     this.processing.set(resident.workerId, resident.started);
+    this.emitWorkerState(
+      resident.workerId,
+      resident.started.name,
+      resident.started.kind,
+      'processing',
+    );
     if (source === 'conductor') {
       this.emitPromptTelemetry({
         phase: 'started',
@@ -455,6 +485,12 @@ export class WorkerRuntime {
           await this.executeRound(resident, next, 'conductor');
         } else {
           resident.state = 'idle';
+          this.emitWorkerState(
+            resident.workerId,
+            resident.started.name,
+            resident.started.kind,
+            'idle',
+          );
         }
       }
     }

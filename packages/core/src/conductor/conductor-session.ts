@@ -258,6 +258,16 @@ export async function runConductorSession(
     });
   }
 
+  if (workers.length > 0) {
+    sessionLogger.emit({
+      type: 'harness.session.workers',
+      workers: workers.map((worker) => ({
+        name: worker.name,
+        kind: worker.kind,
+      })),
+    });
+  }
+
   const sessionUsageTracker = new SessionUsageTracker({
     contextLimitTokens: options.contextLimitTokens,
   });
@@ -360,6 +370,15 @@ export async function runConductorSession(
         workerId: event.workerId,
         sessionUpdate: event.sessionUpdate,
         sessionId: event.sessionId,
+      });
+    },
+    onWorkerState: (event) => {
+      sessionLogger.emit({
+        type: 'harness.worker.state',
+        name: event.name,
+        kind: event.kind,
+        workerId: event.workerId,
+        state: event.state,
       });
     },
   });

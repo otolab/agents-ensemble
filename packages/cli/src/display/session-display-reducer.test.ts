@@ -109,6 +109,110 @@ describe('reduceDisplayState', () => {
     });
   });
 
+  it('seeds profile workers as idle on harness.session.workers', () => {
+    const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [
+        { name: 'implementer', kind: 'implementer' },
+        { name: 'reviewer', kind: 'reviewer' },
+      ],
+    });
+
+    expect(state.workers.implementer).toEqual({
+      kind: 'implementer',
+      status: 'idle',
+    });
+    expect(state.workers.reviewer).toEqual({
+      kind: 'reviewer',
+      status: 'idle',
+    });
+  });
+
+  it('maps harness.worker.state attaching and processing to running', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [{ name: 'implementer', kind: 'implementer' }],
+    });
+
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.state',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      state: 'attaching',
+    });
+    expect(state.workers.implementer?.status).toBe('running');
+
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.state',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      state: 'processing',
+    });
+    expect(state.workers.implementer?.status).toBe('running');
+
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.state',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      state: 'idle',
+    });
+    expect(state.workers.implementer?.status).toBe('idle');
+  });
+
+  it('does not force idle on harness worker.round when worker is not running', () => {
+    const seeded = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [{ name: 'implementer', kind: 'implementer' }],
+    });
+    const processing = reduceDisplayState(seeded, {
+      type: 'harness.worker.state',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      state: 'processing',
+    });
+
+    const state = reduceDisplayState(processing, {
+      type: 'worker.round',
+      dispatch: { ...TEST_DISPATCH, source: 'harness' },
+    });
+
+    expect(state.workers.implementer?.status).toBe('running');
+  });
+
+  it('keeps running across preempt cancel without completed', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [{ name: 'implementer', kind: 'implementer' }],
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.prompt.started',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      source: 'conductor',
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.state',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      state: 'processing',
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.prompt.started',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      source: 'conductor',
+    });
+
+    expect(state.workers.implementer?.status).toBe('running');
+  });
+
   it('sets worker idle after instruction round via worker.round fallback', () => {
     const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'worker.round',

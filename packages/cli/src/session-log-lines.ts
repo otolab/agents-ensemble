@@ -22,6 +22,10 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return `worker.prompt.failed name=${event.name} kind=${event.kind} source=${event.source} error=${event.error}`;
     case 'harness.worker.acp.update':
       return `worker.acp.update name=${event.name} kind=${event.kind} sessionUpdate=${event.sessionUpdate}`;
+    case 'harness.worker.state':
+      return `worker.state name=${event.name} kind=${event.kind} state=${event.state}`;
+    case 'harness.session.workers':
+      return `session.workers count=${event.workers.length} names=${event.workers.map((worker) => worker.name).join(',')}`;
     case 'operator.input':
       return `operator.input turn=${event.conductorTurn} bytes=${event.text.length}`;
     case 'conductor.send.started': {
