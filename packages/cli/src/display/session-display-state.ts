@@ -1,6 +1,6 @@
-import type { OpenQuestion } from '@agents-ensemble/core';
+import type { OpenQuestion, WorkerDisplayStatus } from '@agents-ensemble/core';
 
-export type WorkerDisplayStatus = 'idle' | 'running' | 'failed';
+export type { WorkerDisplayStatus };
 
 export interface WorkerDisplayState {
   kind: string;

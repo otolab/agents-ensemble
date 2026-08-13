@@ -259,7 +259,10 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 
 ## 6. worker 状態と #125 デッドロック検知（#133 以降）
 
-`list_workers` が返す harness 状態（[worker-status-tool.ts](../../packages/core/src/dispatch/worker-status-tool.ts)）:
+### 6.1 runtime 語彙（`list_workers` / `get_worker_status`）
+
+正本型: `WorkerLifecycleState`（`packages/core/src/runtime/worker-lifecycle-state.ts`）。  
+`WorkerHarnessState` は後方互換 alias（deprecated）。
 
 | 状態 | 意味 |
 |------|------|
@@ -267,6 +270,24 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 | `processing` | `session/prompt` 実行中（init / instruction 共通） |
 | `idle` | prompt 中でない。次の `sendWorkerMessage` を受け付け可能 |
 | `failed` | attach または prompt 失敗 |
+
+### 6.2 TUI 表示語彙（`WorkerDisplayStatus`）
+
+正本型: `packages/core/src/runtime/worker-display-state.ts`（`idle` / `running` / `failed`）。
+
+| WorkerLifecycleState（runtime / tool） | WorkerDisplayStatus（TUI / reducer） | 備考 |
+|--------------------------------------|-------------------------------------|------|
+| `attaching` | `running` | `mapHarnessToDisplayStatus` で明示変換（#146 PR2） |
+| `processing` | `running` | prompt ライフサイクルイベントでも同様 |
+| `idle` | `idle` | |
+| `failed` | `failed` | |
+
+変換関数: `mapHarnessToDisplayStatus`（`packages/core/src/runtime/map-worker-lifecycle.ts`）。  
+TUI reducer はイベント駆動のため lifecycle を直接読まないが、worker 向け表示更新はこの関数経由の定数を使用する。
+
+### 6.3 デッドロック検知とメトリクス
+
+`list_workers` が返す harness 状態の実装: [worker-status-tool.ts](../../packages/core/src/dispatch/worker-status-tool.ts)
 
 `attachInFlight` は attach フェーズのみのカウンタ。`runningCount` は `processing` ラウンド数 + `attachInFlight`。**いずれも「0 になるまで待て」というシグナルではない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）。
 
@@ -299,7 +320,10 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 | `packages/core/src/conductor/conductor-session.ts` | emit / enqueue 配線 |
 | `packages/core/src/github/github-monitor.ts` | Issue / PR 更新監視 |
 | `packages/core/src/github/fetch-github-updates.ts` | `gh` ベース差分取得 |
-| `packages/core/src/runtime/worker-runtime.ts` | worker prompt ライフサイクル（init / instruction 対称） |
+| `packages/core/src/runtime/worker-lifecycle-state.ts` | `WorkerLifecycleState`（runtime / tool 正本語彙） |
+| `packages/core/src/runtime/worker-display-state.ts` | `WorkerDisplayStatus`（TUI 語彙） |
+| `packages/core/src/runtime/map-worker-lifecycle.ts` | `mapHarnessToDisplayStatus` |
+| `packages/core/src/runtime/worker-status.ts` | `WorkerStatusSummary` 等（`state` フィールド） |
 | `packages/core/src/permission/permission-deadlock-monitor.ts` | #125 デッドロック検知 |
 | `packages/cli/src/session-sinks.ts` | HarnessSink / DialogueSink / ObservationSink |
 | `packages/cli/src/display/` | 表示 state・DisplaySink・string backend |

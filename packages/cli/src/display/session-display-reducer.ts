@@ -1,9 +1,16 @@
-import type { SessionLogEvent } from '@agents-ensemble/core';
+import {
+  mapHarnessToDisplayStatus,
+  type SessionLogEvent,
+} from '@agents-ensemble/core';
 import {
   INITIAL_SESSION_DISPLAY_STATE,
   type SessionDisplayState,
   type WorkerDisplayStatus,
 } from './session-display-state.js';
+
+const WORKER_RUNNING = mapHarnessToDisplayStatus('processing');
+const WORKER_IDLE = mapHarnessToDisplayStatus('idle');
+const WORKER_FAILED = mapHarnessToDisplayStatus('failed');
 
 function setWorkerStatus(
   state: SessionDisplayState,
@@ -36,13 +43,13 @@ export function reduceDisplayState(
 ): SessionDisplayState {
   switch (event.type) {
     case 'harness.worker.prompt.started':
-      return setWorkerStatus(state, event.name, event.kind, 'running');
+      return setWorkerStatus(state, event.name, event.kind, WORKER_RUNNING);
     case 'harness.worker.prompt.completed':
-      return setWorkerStatus(state, event.name, event.kind, 'idle');
+      return setWorkerStatus(state, event.name, event.kind, WORKER_IDLE);
     case 'harness.worker.prompt.failed':
-      return setWorkerStatus(state, event.name, event.kind, 'failed');
+      return setWorkerStatus(state, event.name, event.kind, WORKER_FAILED);
     case 'harness.worker.acp.update':
-      return setWorkerStatus(state, event.name, event.kind, 'running');
+      return setWorkerStatus(state, event.name, event.kind, WORKER_RUNNING);
     case 'conductor.send.started':
       return setWorkerStatus(state, 'conductor', 'conductor', 'running');
     case 'worker.round':
@@ -50,14 +57,14 @@ export function reduceDisplayState(
         state,
         event.dispatch.name,
         event.dispatch.kind,
-        'idle',
+        WORKER_IDLE,
       );
     case 'worker.failed':
       return setWorkerStatus(
         state,
         event.failure.name,
         event.failure.kind,
-        'failed',
+        WORKER_FAILED,
       );
     case 'conductor.send': {
       let nextState = setWorkerStatus(state, 'conductor', 'conductor', 'idle');

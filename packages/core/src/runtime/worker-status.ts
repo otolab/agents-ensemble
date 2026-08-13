@@ -1,15 +1,12 @@
-/** harness 上の worker 状態（conductor 向け読み取り専用照会）。 */
+import type { WorkerLifecycleState } from './worker-lifecycle-state.js';
 
-export type WorkerHarnessState =
-  | 'attaching'
-  | 'idle'
-  | 'processing'
-  | 'failed';
+/** @deprecated Use {@link WorkerLifecycleState}. */
+export type WorkerHarnessState = WorkerLifecycleState;
 
 export interface WorkerStatusSummary {
   name: string;
   kind: string;
-  state: WorkerHarnessState;
+  state: WorkerLifecycleState;
   queueDepth: number;
   worktreePath?: string;
   acpSessionId?: string;
