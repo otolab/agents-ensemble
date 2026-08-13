@@ -11,6 +11,7 @@ import type {
   ResolvedAgentDefinition,
   ResolvedProfile,
 } from './types.js';
+import { resolveWorkerWorkspacePath } from './resolve-worker-workspace.js';
 import { normalizeProfileWorkers } from './types.js';
 
 export const PROFILES_DIR = 'profiles';
@@ -114,10 +115,30 @@ async function resolveMaterial(
   };
 }
 
+function resolveProfileWorkers(
+  workers: Profile['workers'],
+  profileDir: string,
+  repoRoot: string,
+): Profile['workers'] {
+  return workers.map((worker) => ({
+    ...worker,
+    ...(worker.workspace
+      ? {
+          resolvedWorkspacePath: resolveWorkerWorkspacePath(
+            worker.workspace,
+            profileDir,
+            repoRoot,
+          ),
+        }
+      : {}),
+  }));
+}
+
 /** `file` / `promptFile` を読み込み、インラインに解決する。 */
 export async function resolveProfile(
   profile: Profile,
   profileDir: string,
+  repoRoot: string,
 ): Promise<ResolvedProfile> {
   const label = join(profileDir, PROFILE_FILE);
 
@@ -127,7 +148,7 @@ export async function resolveProfile(
   }
 
   return {
-    workers: profile.workers,
+    workers: resolveProfileWorkers(profile.workers, profileDir, repoRoot),
     agents: Object.keys(agents).length > 0 ? agents : undefined,
     materials: await Promise.all(
       (profile.materials ?? []).map((material) =>
@@ -137,11 +158,16 @@ export async function resolveProfile(
   };
 }
 
-export async function loadProfileFromFile(filePath: string): Promise<ResolvedProfile> {
+export async function loadProfileFromFile(
+  filePath: string,
+  options?: { repoRoot?: string },
+): Promise<ResolvedProfile> {
+  const profileDir = dirname(filePath);
+  const repoRoot = options?.repoRoot ?? profileDir;
   const raw = await readFile(filePath, 'utf8');
   const parsed = yaml.load(raw);
   const profile = parseProfile(parsed, filePath);
-  return resolveProfile(profile, dirname(filePath));
+  return resolveProfile(profile, profileDir, repoRoot);
 }
 
 /** `@agents-ensemble/core` パッケージルート（`src/profile` または `dist/profile` から算出）。 */
@@ -208,6 +234,6 @@ export async function loadProfile(options: {
   const profilePath = options.profile
     ? resolveProfilePath(options.profile, cwd)
     : resolveDefaultProfilePath();
-  const profile = await loadProfileFromFile(profilePath);
+  const profile = await loadProfileFromFile(profilePath, { repoRoot: cwd });
   return { profile, profilePath };
 }

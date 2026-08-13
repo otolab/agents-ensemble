@@ -25,7 +25,7 @@ import type {
   WorkerStartedInfo,
   WorkerStartParams,
 } from './types.js';
-import type { WorkerHarnessState } from './worker-status.js';
+import { summarizeWorkspacePath } from '../profile/resolve-worker-workspace.js';
 import type {
   WorkerStatusDetail,
   WorkerStatusSummary,
@@ -33,6 +33,8 @@ import type {
 
 export interface WorkerRuntimeOptions {
   inbox: ConductorInbox;
+  /** harness 表示で workspace パスを repo 相対に要約する際の基準。 */
+  repoRoot?: string;
   connectAcp?: ConnectWorkerAcpFn;
   spawn?: SpawnAcpProcessOptions;
   /** integration の共有 bridge 注入時は false。 */
@@ -278,8 +280,16 @@ export class WorkerRuntime {
       state: resident.state === 'processing' ? 'processing' : 'idle',
       queueDepth: resident.queue.length,
       worktreePath: resident.started.worktree.path,
+      workspacePath: this.summarizeAcpCwd(resident.attached.session.acpCwd),
       acpSessionId: resident.attached.session.sessionId,
     };
+  }
+
+  private summarizeAcpCwd(acpCwd: string): string {
+    if (this.options.repoRoot) {
+      return summarizeWorkspacePath(acpCwd, this.options.repoRoot);
+    }
+    return acpCwd;
   }
 
   private emitPromptTelemetry(event: WorkerPromptTelemetry): void {
@@ -339,6 +349,8 @@ export class WorkerRuntime {
         prompt: started.prompt,
         worktree: started.worktree,
         sessionState: started.sessionState,
+        resolvedWorkspacePath: started.resolvedWorkspacePath,
+        expectedResumeAcpCwd: started.expectedResumeAcpCwd,
         resumeAcpSessionId: started.resumeAcpSessionId,
         connectAcp: this.options.connectAcp,
         spawn: this.options.spawn,
@@ -367,6 +379,8 @@ export class WorkerRuntime {
           prompt: started.prompt,
           worktree: started.worktree,
           sessionState: started.sessionState,
+          resolvedWorkspacePath: started.resolvedWorkspacePath,
+          expectedResumeAcpCwd: started.expectedResumeAcpCwd,
           resumeAcpSessionId: started.resumeAcpSessionId,
         },
         attached.session,

@@ -21,10 +21,14 @@ export interface WorkerSessionOptions {
   issueUrl: string;
   /** Conductor が worker 起動前に resolve した作業ディレクトリ（worker ありのとき必須）。 */
   worktree?: WorktreeRef;
+  repoRoot?: string;
   workers: SessionWorkerSpec[];
   sessionState: EnsembleSessionState;
-  /** resume 時に復元する worker 名 → ACP session id。 */
-  restoredWorkerSessions?: Record<string, string>;
+  /** resume 時に復元する worker 名 → ACP session 情報。 */
+  restoredWorkerSessions?: Record<
+    string,
+    string | { acpSessionId: string; acpCwd?: string }
+  >;
   connectAcp?: ConnectWorkerAcpFn;
   spawn?: SpawnAcpProcessOptions;
   /** integration の共有 bridge 注入時は false（既定 true）。 */
@@ -73,6 +77,7 @@ export class WorkerSession {
 
     this.runtime = new WorkerRuntime({
       inbox: this.inbox,
+      ...(options.repoRoot ? { repoRoot: options.repoRoot } : {}),
       ...(options.connectAcp ? { connectAcp: options.connectAcp } : {}),
       ...(options.spawn ? { spawn: options.spawn } : {}),
       ...(options.ownsWorkerAcpConnections !== undefined
@@ -98,6 +103,11 @@ export class WorkerSession {
       throw new Error('WorkerSession requires worktree when workers are configured');
     }
     for (const worker of this.options.workers) {
+      const restored = this.options.restoredWorkerSessions?.[worker.name];
+      const resumeAcpSessionId =
+        typeof restored === 'string' ? restored : restored?.acpSessionId;
+      const expectedResumeAcpCwd =
+        typeof restored === 'string' ? undefined : restored?.acpCwd;
       const workerId = this.runtime.start({
         name: worker.name,
         issueUrl: this.options.issueUrl,
@@ -105,8 +115,9 @@ export class WorkerSession {
         prompt: worker.prompt,
         worktree: this.options.worktree!,
         sessionState: this.options.sessionState,
-        resumeAcpSessionId:
-          this.options.restoredWorkerSessions?.[worker.name],
+        resolvedWorkspacePath: worker.resolvedWorkspacePath,
+        expectedResumeAcpCwd,
+        resumeAcpSessionId,
       });
       this.startedWorkerIds.push(workerId);
     }

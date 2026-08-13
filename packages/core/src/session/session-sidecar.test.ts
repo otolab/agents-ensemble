@@ -52,7 +52,7 @@ describe('session sidecar', () => {
       },
       sequence: 2,
       workers: {
-        implementer: { acpSessionId: 'sess-1' },
+        implementer: { acpSessionId: 'sess-1', acpCwd: '/repo/docs' },
       },
     });
 

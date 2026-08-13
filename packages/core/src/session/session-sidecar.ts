@@ -22,6 +22,8 @@ export class SessionSidecarNotFoundError extends Error {
 
 export interface WorkerSessionSidecar {
   acpSessionId: string;
+  /** ACP `session/new` / `session/load` に渡した cwd（resume 検証用）。 */
+  acpCwd?: string;
 }
 
 export interface SessionSidecar {
@@ -203,7 +205,10 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     if (typeof worker.acpSessionId !== 'string') {
       throw new Error(`Invalid session sidecar worker acpSessionId: ${name}`);
     }
-    workers[name] = { acpSessionId: worker.acpSessionId };
+    workers[name] = {
+      acpSessionId: worker.acpSessionId,
+      ...(typeof worker.acpCwd === 'string' ? { acpCwd: worker.acpCwd } : {}),
+    };
   }
 
   return {

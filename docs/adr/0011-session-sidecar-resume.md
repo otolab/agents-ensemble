@@ -47,7 +47,7 @@
   "openQuestions": [ ],
   "sequence": 3,
   "workers": {
-    "implementer": { "acpSessionId": "..." }
+    "implementer": { "acpSessionId": "...", "acpCwd": "/abs/path/to/cwd" }
   },
   "updatedAt": 1735689600000
 }
@@ -61,7 +61,8 @@
 ### worker resume
 
 - bootstrap / dispatch 時に `acpSessionId` を結果として記録し sidecar に反映
-- resume 時は profile の worker `name` をキーに `session/load`（cwd は worktree 絶対パス）
+- resume 時は profile の worker `name` をキーに `session/load`（cwd は worker ごとの ACP cwd — 未指定なら worktree 絶対パス）
+- sidecar の worker エントリに `acpCwd` を保存し、resume 時に profile から解決した cwd と一致することを検証（不一致時は attach 失敗）
 - `session/resume` は使わない（Cursor `agent acp` 未対応）
 
 ### 廃止・非永続

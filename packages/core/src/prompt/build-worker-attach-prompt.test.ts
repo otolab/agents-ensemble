@@ -39,4 +39,24 @@ describe('buildWorkerAttachPrompt', () => {
     expect(prompt).toContain('特別モード');
     expect(prompt).not.toContain('作業 worktree:');
   });
+
+  it('shows custom workspace directory when different from issue worktree', () => {
+    const prompt = buildWorkerAttachPrompt({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      kind: 'librarian',
+      worktreePath: '/repo/.ensemble/worktrees/issue-1',
+      workspacePath: '/other/docs-repo',
+      sessionState: {
+        workers: [
+          { name: 'implementer', kind: 'implementer' },
+          { name: 'librarian', kind: 'librarian' },
+        ],
+        kinds: ['implementer', 'librarian'],
+      },
+    });
+
+    expect(prompt).toContain('作業ディレクトリ: /other/docs-repo');
+    expect(prompt).toContain('Issue worktree とは別');
+    expect(prompt).not.toContain('作業 worktree:');
+  });
 });
