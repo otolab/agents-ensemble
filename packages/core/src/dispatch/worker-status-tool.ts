@@ -22,7 +22,7 @@ export function createWorkerStatusTools(
   return {
     list_workers: {
       description:
-        'List attached workers and harness summary (idle/processing/attaching/failed, queue depth, runningCount). Use for operator status questions — do not prompt_worker for status checks.',
+        'List attached workers and harness summary. Worker `state` uses lifecycle vocabulary (attaching/idle/processing/failed). TUI maps attaching|processing to display `running` (see mapHarnessToDisplayStatus). Includes queue depth and runningCount. Use for operator status questions — do not prompt_worker for status checks.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -34,7 +34,7 @@ export function createWorkerStatusTools(
     },
     get_worker_status: {
       description:
-        'Read one worker harness status in detail (queue preview, preempt/cancel flags). Use after list_workers when you need depth on a single worker.',
+        'Read one worker harness status in detail (`state` is lifecycle vocabulary: attaching/idle/processing/failed). Use after list_workers when you need queue preview or preempt/cancel flags.',
       inputSchema: {
         type: 'object',
         properties: {

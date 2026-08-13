@@ -22,8 +22,8 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 const TWO_WORKER_PROFILE: Profile = {
   agents: {
-    ping: { systemPrompt: PING_SYSTEM_PROMPT },
-    fail: { systemPrompt: 'fail agent' },
+    ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
+    fail: { prompt: { instructions: ['fail agent'] } },
   },
   workers: [
     { name: 'ping-1', kind: 'ping' },

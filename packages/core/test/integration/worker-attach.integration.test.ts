@@ -30,7 +30,7 @@ describe('attachWorker integration', () => {
       issueUrl: TEST_ISSUE.url,
       name: 'ping-1',
       kind: 'ping',
-      systemPrompt: PING_SYSTEM_PROMPT,
+      prompt: { instructions: [PING_SYSTEM_PROMPT] },
       sessionState,
       worktree: TEST_WORKTREE,
     };

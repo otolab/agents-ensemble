@@ -1,3 +1,4 @@
+import type { PromptModule } from '@modular-prompt/core';
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionHandler } from '../acp/types.js';
@@ -23,7 +24,7 @@ export interface AttachWorkerOptions {
   name: string;
   issueUrl: string;
   kind: string;
-  systemPrompt?: string;
+  prompt?: PromptModule;
   sessionState: EnsembleSessionState;
   worktree: WorktreeRef;
   resumeAcpSessionId?: string;
@@ -70,7 +71,7 @@ export function buildWorkerAttachPrompt(
   return compileWorkerAttachPrompt({
     issueUrl: session.issue.url,
     kind: options.kind,
-    systemPrompt: options.systemPrompt,
+    agentModule: options.prompt,
     worktreePath: session.worktree.path,
     worktreeInRepo: session.worktree.inRepo,
     sessionState: options.sessionState,

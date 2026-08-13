@@ -1,7 +1,8 @@
 agents:
   ping:
-    systemPrompt: |
-      これは接続テストです。調査・編集はせず、応答に pong とだけ含めて終了してください。
+    prompt:
+      instructions:
+        - これは接続テストです。調査・編集はせず、応答に pong とだけ含めて終了してください。
 
 workers:
   - name: ping-1

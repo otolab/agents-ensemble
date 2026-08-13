@@ -4,8 +4,8 @@ import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OpenQuestionRegistry } from '../escalation/open-question.js';
 import { fetchIssueContext } from '../github/issue-context.js';
 import type { PermissionPipeline } from '../permission/permission-pipeline.js';
-import type { Profile } from '../profile/types.js';
-import { resolveAgentSystemPrompt } from '../profile/types.js';
+import type { ResolvedProfile } from '../profile/types.js';
+import { resolveAgentPromptModule } from '../profile/types.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import type { WorkerSession } from '../runtime/worker-session.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
@@ -62,7 +62,7 @@ export interface ConductorSendCompleteInfo {
 
 export interface ConductorSessionDriverOptions {
   issueUrl: string;
-  profile: Profile;
+  profile: ResolvedProfile;
   conductorHandle: ConductorAgentHandle;
   sendReconnect: ConductorSendReconnectOptions;
   eventQueue: SessionEventQueue;
@@ -262,13 +262,13 @@ export async function runConductorSessionDriver(
 
 async function buildInitialConductorMessage(input: {
   issueUrl: string;
-  profile: Profile;
+  profile: ResolvedProfile;
 }): Promise<string> {
   const issueContext = await fetchIssueContext(input.issueUrl);
   return compileConductorSystemPrompt({
     issueUrl: input.issueUrl,
     profile: input.profile,
-    roleBootstrap: resolveAgentSystemPrompt('conductor', input.profile.agents),
+    agentModule: resolveAgentPromptModule('conductor', input.profile.agents),
     issueContext,
   });
 }

@@ -24,7 +24,7 @@ describe('WorkerSession integration', () => {
         {
           name: 'ping-1',
           kind: 'ping',
-          systemPrompt: PING_SYSTEM_PROMPT,
+          prompt: { instructions: [PING_SYSTEM_PROMPT] },
         },
       ],
       sessionState: {
@@ -68,7 +68,7 @@ describe('WorkerSession integration', () => {
         {
           name: 'ping-1',
           kind: 'ping',
-          systemPrompt: PING_SYSTEM_PROMPT,
+          prompt: { instructions: [PING_SYSTEM_PROMPT] },
         },
       ],
       sessionState: {

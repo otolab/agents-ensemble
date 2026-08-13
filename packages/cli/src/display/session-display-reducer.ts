@@ -1,9 +1,16 @@
-import type { SessionLogEvent } from '@agents-ensemble/core';
+import {
+  mapHarnessToDisplayStatus,
+  type SessionLogEvent,
+} from '@agents-ensemble/core';
 import {
   INITIAL_SESSION_DISPLAY_STATE,
   type SessionDisplayState,
   type WorkerDisplayStatus,
 } from './session-display-state.js';
+
+const WORKER_RUNNING = mapHarnessToDisplayStatus('processing');
+const WORKER_IDLE = mapHarnessToDisplayStatus('idle');
+const WORKER_FAILED = mapHarnessToDisplayStatus('failed');
 
 function setWorkerStatus(
   state: SessionDisplayState,
@@ -29,20 +36,6 @@ function formatConductorErrorMessage(message: string): string {
   return `応答を生成できませんでした（${message}）。\n別の聞き方で再入力してください。`;
 }
 
-function harnessStateToDisplayStatus(
-  state: 'attaching' | 'processing' | 'idle' | 'failed',
-): WorkerDisplayStatus {
-  switch (state) {
-    case 'attaching':
-    case 'processing':
-      return 'running';
-    case 'idle':
-      return 'idle';
-    case 'failed':
-      return 'failed';
-  }
-}
-
 function seedSessionWorkers(
   state: SessionDisplayState,
   workers: Array<{ name: string; kind: string }>,
@@ -52,7 +45,7 @@ function seedSessionWorkers(
     if (next.workers[worker.name]) {
       continue;
     }
-    next = setWorkerStatus(next, worker.name, worker.kind, 'idle');
+    next = setWorkerStatus(next, worker.name, worker.kind, WORKER_IDLE);
   }
   return next;
 }
@@ -70,16 +63,16 @@ export function reduceDisplayState(
         state,
         event.name,
         event.kind,
-        harnessStateToDisplayStatus(event.state),
+        mapHarnessToDisplayStatus(event.state),
       );
     case 'harness.worker.prompt.started':
-      return setWorkerStatus(state, event.name, event.kind, 'running');
+      return setWorkerStatus(state, event.name, event.kind, WORKER_RUNNING);
     case 'harness.worker.prompt.completed':
-      return setWorkerStatus(state, event.name, event.kind, 'idle');
+      return setWorkerStatus(state, event.name, event.kind, WORKER_IDLE);
     case 'harness.worker.prompt.failed':
-      return setWorkerStatus(state, event.name, event.kind, 'failed');
+      return setWorkerStatus(state, event.name, event.kind, WORKER_FAILED);
     case 'harness.worker.acp.update':
-      return setWorkerStatus(state, event.name, event.kind, 'running');
+      return setWorkerStatus(state, event.name, event.kind, WORKER_RUNNING);
     case 'conductor.send.started':
       return setWorkerStatus(state, 'conductor', 'conductor', 'running');
     case 'worker.round': {
@@ -89,10 +82,10 @@ export function reduceDisplayState(
         return state;
       }
       if (current?.status === 'running') {
-        return setWorkerStatus(state, name, kind, 'idle');
+        return setWorkerStatus(state, name, kind, WORKER_IDLE);
       }
       if (!current && source === 'conductor') {
-        return setWorkerStatus(state, name, kind, 'idle');
+        return setWorkerStatus(state, name, kind, WORKER_IDLE);
       }
       return state;
     }
@@ -101,7 +94,7 @@ export function reduceDisplayState(
         state,
         event.failure.name,
         event.failure.kind,
-        'failed',
+        WORKER_FAILED,
       );
     case 'conductor.send': {
       let nextState = setWorkerStatus(state, 'conductor', 'conductor', 'idle');
