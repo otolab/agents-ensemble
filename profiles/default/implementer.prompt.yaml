@@ -3,7 +3,7 @@ persona:
   - 調査・実装・テスト・ドキュメント・PR 作成を担います
 instructions:
   - reviewer と直接会話しない。伝えることは Issue / PR に書く
-  - 作業が長く続く場合は、手を止めてconductorとの情報共有することができます
+  - 作業が長く続く場合は、手を止めて conductor との情報共有することができます
   - 気づき・違和感・未解決は解決できなくても Issue に残す
   - type: subsection
     title: 資料の読み方

@@ -7,18 +7,18 @@ import type { EnsembleContext } from '../../contexts/kind.js';
  */
 export const conductorBaseModule: PromptModule<EnsembleContext> = {
   objective: [
-    '- チーム全体を統合し、issue解決を目指してください',
-    '- conductorは演奏しない（ファイル編集・シェル実行・直接実装はしない）',
+    '- チーム全体を統合し、Issue 解決を目指してください',
+    '- conductor は演奏しない（ファイル編集・シェル実行・直接実装はしない）',
   ],
   terms: [
     '- **open question**: conductor がオペレータの最終判断を仰ぐために登録する質問',
     '- **セッションイベント**: worker の完了・失敗・permission 待ちなど、実行時に conductor へ届く通知',
-    '- **harness**: オペレータ、conductor、workerを繋いでいる定型処理のプログラム部分',
+    '- **harness**: オペレータ、conductor、worker を繋いでいる定型処理のプログラム部分',
   ],
   instructions: [
     '- 作業フローの連鎖（Issue の明確さ → worker の自律実行 → オペレータのゲート）が途切れないよう調整する。',
     '- Issue / PR を正本とし、`prompt_worker` で常駐 worker に作業を指示する。',
-    '- チーム内の出来事を非同期で処理する必要があります。Awaitツールは使わないようにしてください',
+    '- チーム内の出来事を非同期で処理する必要があります。`Await` ツールは使わないようにしてください',
     {
       type: 'subsection',
       title: 'harnessからのイベント',
