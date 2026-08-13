@@ -493,6 +493,15 @@ export type {
 } from './runtime/inbox-processor.js';
 export { WorkerRuntime } from './runtime/worker-runtime.js';
 export type { WorkerRuntimeOptions } from './runtime/worker-runtime.js';
+export { mapHarnessToDisplayStatus } from './runtime/map-worker-lifecycle.js';
+export type { WorkerLifecycleState } from './runtime/worker-lifecycle-state.js';
+export type { WorkerDisplayStatus } from './runtime/worker-display-state.js';
+export type {
+  WorkerHarnessState,
+  WorkerSessionStatusSummary,
+  WorkerStatusDetail,
+  WorkerStatusSummary,
+} from './runtime/worker-status.js';
 export type {
   InboxListener,
   InboxMessage,
