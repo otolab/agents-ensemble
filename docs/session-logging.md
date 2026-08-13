@@ -114,6 +114,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 |------|----------------|-------------------|
 | `harness.worktree` | worktree resolve 直後 | なし（sink のみ） |
 | `harness.worker.prompt.*` | worker prompt 開始 / 完了 / 失敗（init / instruction 対称） | なし（sink のみ） |
+| `harness.worker.state` / `harness.session.workers` | worker harness 状態遷移 / セッション開始時 seed（#147） | なし（sink のみ） |
 | `operator.input` | オペレータ発話をキューに載せる直前 | なし（sink のみ） |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | なし（sink のみ） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | なし（sink のみ） |

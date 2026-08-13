@@ -1,5 +1,6 @@
 import type { EscalationRecord } from '../../../escalation/human-inquiry.js';
 import type { OpenQuestion } from '../../../escalation/open-question.js';
+import type { WorkerHarnessState } from '../../../runtime/worker-status.js';
 import type { WorkerWorktreeMode } from '../../../worktree/worktree.js';
 import type { IssueLoopStopReason } from '../../session-policy.js';
 import type { PermissionPendingHarnessPayload } from './shared/permission-pending.js';
@@ -69,6 +70,19 @@ export interface HarnessWorkerAcpUpdateEvent {
   workerId: string;
   sessionUpdate: string;
   sessionId?: string;
+}
+
+export interface HarnessWorkerStateEvent {
+  type: 'harness.worker.state';
+  name: string;
+  kind: string;
+  workerId: string;
+  state: WorkerHarnessState;
+}
+
+export interface HarnessSessionWorkersEvent {
+  type: 'harness.session.workers';
+  workers: Array<{ name: string; kind: string }>;
 }
 
 export interface OperatorInputEvent {
@@ -189,6 +203,8 @@ export type SessionLogEvent =
   | HarnessWorkerPromptCompletedEvent
   | HarnessWorkerPromptFailedEvent
   | HarnessWorkerAcpUpdateEvent
+  | HarnessWorkerStateEvent
+  | HarnessSessionWorkersEvent
   | OperatorInputEvent
   | ConductorSendStartedEvent
   | ConductorSendProgressEvent

@@ -16,6 +16,8 @@ function shouldRender(event: SessionLogEvent): boolean {
     event.type === 'harness.worker.prompt.started' ||
     event.type === 'harness.worker.prompt.completed' ||
     event.type === 'harness.worker.prompt.failed' ||
+    event.type === 'harness.worker.state' ||
+    event.type === 'harness.session.workers' ||
     event.type === 'worker.round' ||
     event.type === 'worker.failed' ||
     event.type === 'open.question.enqueued' ||

@@ -18,6 +18,8 @@ export type {
   HarnessWorkerPromptCompletedEvent,
   HarnessWorkerPromptFailedEvent,
   HarnessWorkerAcpUpdateEvent,
+  HarnessWorkerStateEvent,
+  HarnessSessionWorkersEvent,
   OperatorInputEvent,
   ConductorSendStartedEvent,
   ConductorSendProgressEvent,

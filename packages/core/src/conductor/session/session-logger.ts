@@ -67,6 +67,8 @@ export class SessionLogger {
       case 'harness.worker.prompt.completed':
       case 'harness.worker.prompt.failed':
       case 'harness.worker.acp.update':
+      case 'harness.worker.state':
+      case 'harness.session.workers':
       case 'operator.input':
       case 'conductor.send.started':
       case 'conductor.send.progress':

@@ -77,6 +77,7 @@ describe('WorkerRuntime', () => {
     const inbox = new ConductorInbox();
     const completed: Array<{ workerId: string; source?: string }> = [];
     const promptTelemetry: string[] = [];
+    const workerStates: string[] = [];
     inbox.subscribe((message) => {
       if (message.type === 'worker.completed') {
         completed.push({
@@ -92,6 +93,9 @@ describe('WorkerRuntime', () => {
       connectAcp: async () => createMockBridge(close),
       onPromptTelemetry: (event) => {
         promptTelemetry.push(event.phase);
+      },
+      onWorkerState: (event) => {
+        workerStates.push(event.state);
       },
     });
     const workerId = runtime.start({
@@ -115,6 +119,7 @@ describe('WorkerRuntime', () => {
     expect(runtime.attachedCount).toBe(1);
     expect(completed).toEqual([{ workerId, source: 'harness' }]);
     expect(promptTelemetry).toEqual(['started', 'completed']);
+    expect(workerStates).toEqual(['attaching', 'processing', 'idle']);
     expect(close).not.toHaveBeenCalled();
 
     await runtime.shutdown();

@@ -17,7 +17,7 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(27);
+    expect(types.size).toBe(29);
   });
 
   it('lists every SessionEvent type exactly once', () => {
@@ -108,6 +108,19 @@ describe('session event type groups', () => {
             kind: 'implementer',
             workerId: 'wid',
             sessionUpdate: 'agent_message_chunk',
+          };
+        case 'harness.worker.state':
+          return {
+            type,
+            name: 'implementer',
+            kind: 'implementer',
+            workerId: 'wid',
+            state: 'processing',
+          };
+        case 'harness.session.workers':
+          return {
+            type,
+            workers: [{ name: 'implementer', kind: 'implementer' }],
           };
         case 'operator.input':
           return { type, conductorTurn: 1, text: 'hi' };

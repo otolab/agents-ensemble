@@ -106,10 +106,32 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 |------|----------------|-----------|-------------------|
 | `harness.worker.prompt.started` | `session/prompt` ラウンド開始（init / instruction 共通） | `[harness] worker.prompt.started name=... kind=... source=harness\|conductor` | なし（TUI: running） |
 | `harness.worker.prompt.completed` | ラウンド ACP prompt 完了直後 | `[harness] worker.prompt.completed name=... kind=... source=... stopReason=...` | なし（TUI: idle） |
-| `harness.worker.prompt.failed` | attach または prompt 失敗 | `[harness] worker.prompt.failed name=... kind=... source=... error=...` | なし（TUI: failed） |
+| `harness.worker.prompt.failed` | attach 致命失敗、または `executeRound` 内の prompt 失敗 | `[harness] worker.prompt.failed name=... kind=... source=... error=...` | なし（TUI: 一時 `failed`。resident 維持時は直後の `harness.worker.state idle` で **idle** に戻る） |
 | `harness.worker.acp.update` | `session/prompt` 中の ACP `session/update`（#148） | `[harness] worker.acp.update name=... kind=... sessionUpdate=...` | なし（TUI: running） |
+| `harness.worker.state` | `WorkerRuntime` の harness 状態遷移（#147） | `[harness] worker.state name=... kind=... state=attaching\|processing\|idle\|failed` | なし（TUI: 下表） |
+| `harness.session.workers` | セッション開始時、profile の worker 一覧確定直後 | `[harness] session.workers count=N names=...` | なし（TUI: 全員 idle で seed） |
 
-init prompt（`source: harness`）では attach 開始時に `started` を出し、init ラウンド完了時に `completed` を出す。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。
+**TUI `WorkerDisplayStatus` と harness 状態の対応（#147）**
+
+| `list_workers` / `harness.worker.state` | TUI Workers ペイン |
+|----------------------------------------|-------------------|
+| `attaching` | `running` |
+| `processing` | `running` |
+| `idle` | `idle` |
+| `failed` | `failed`（**attach 致命失敗のみ**。`failedWorkers` 登録・resident なし） |
+
+`harness.worker.prompt.*` / `harness.worker.acp.update` も従来どおり TUI を更新する。**Workers ペインの最終表示は `harness.worker.state` を正本とする**（`prompt.failed` は stderr / 活動ログ向けテレメトリ。resident 維持のラウンド失敗では直後の `state idle` が上書きする）。
+
+`permission.pending` は **Workers ペインを更新しない**（活動ログのみ）。permission 待ち中の worker は `harness.worker.state` / `prompt.*` が `processing` / `running` のまま維持される想定。
+
+**失敗経路の分岐（#147）**
+
+| 経路 | runtime / `list_workers` | 発火イベント（順） | TUI Workers 最終 |
+|------|--------------------------|-------------------|------------------|
+| **attach 致命失敗**（`attachAndInit` の catch。resident 未成立） | `failed`（`failedWorkers`） | `prompt.failed` → `state failed` → `worker.failed` | `failed` |
+| **ラウンド失敗**（`executeRound` の catch。resident 維持） | `idle`（resident 存続） | `prompt.failed` → `worker.failed` → `finally` で `state idle` | `idle`（`state idle` が `prompt.failed` を上書き） |
+
+init prompt（`source: harness`）では attach 開始時に `started` を出し、init ラウンド完了時に `completed` を出す。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。正常系は `harness.worker.state` で `attaching` → `processing` → `idle` を併記する。
 
 ### 2.3 `worker.round` との関係（方針）
 
@@ -118,7 +140,7 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 | 観点 | 方針 |
 |------|------|
 | **prompt ライフサイクルイベント** | 開始・完了・失敗を **TUI / stderr テレメトリで即座に区別**（init / instruction 対称） |
-| **`worker.round`** | すべてのラウンドを **従来どおり 1 ラウンドとして記録**。終了 JSON の `workerDispatches` / `workerResponses` 整合を維持 |
+| **`worker.round`** | すべてのラウンドを **従来どおり 1 ラウンドとして記録**。終了 JSON の `workerDispatches` / `workerResponses` 整合を維持。**TUI では** worker が `running` のときのみ `idle` へ遷移（`source: conductor` かつ未登録 worker は fallback で `idle` 登録） |
 | **区別用メタデータ** | `worker.round` の `dispatch.source`（`harness` \| `conductor`）でラウンド起因を示す |
 | **`worker.failed`** | 失敗時も従来どおり発火。**加えて** `harness.worker.prompt.failed` を出す |
 
@@ -144,32 +166,45 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 ```
 セッション開始
   harness.worktree ─────────────────────────► stderr のみ
+  harness.session.workers ──────────────────► stderr + TUI seed（全 worker idle）
 
 WorkerSession.startWorkers()（worker ごと。attach + init prompt）
   harness.worker.prompt.started (source=harness) ───► stderr + TUI running
        │
        ├─ attach + buildWorkerAttachPrompt + session/prompt
+       │    harness.worker.state processing ─► stderr + TUI running
        │
        ├─ 成功 ─► harness.worker.prompt.completed (source=harness) ► stderr + TUI idle
-       │          worker.round (source=harness) ───────► stderr + snapshot
+       │          harness.worker.state idle ────────────────► stderr + TUI idle
+       │          worker.round (source=harness) ───────► stderr + snapshot（TUI: 変更なし）
        │          worker.completed (source=harness) ───► SessionEventQueue ► agent.send
        │
-       └─ 失敗 ─► harness.worker.prompt.failed (source=harness) ► stderr + TUI failed
-                  worker.failed ─────────────────────────► stderr + snapshot + SessionEventQueue
+       ├─ attach 致命失敗 ─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
+       │                    harness.worker.state failed ──► stderr + TUI failed（最終）
+       │                    worker.failed ────────────────► stderr + snapshot + SessionEventQueue
+       │
+       └─ init ラウンド失敗（resident 維持）─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
+                              worker.failed ────────────────► stderr + snapshot + SessionEventQueue
+                              harness.worker.state idle ────► stderr + TUI idle（最終。list_workers と一致）
 
 prompt_worker / sendWorkerMessage
        │
        ├─ harness.worker.prompt.started (source=conductor) ► stderr + TUI running
+       ├─ harness.worker.state processing ───────────────► stderr + TUI running
        ├─ harness.worker.acp.update (session/prompt 中) ► stderr + TUI running
-       ├─ permission 保留 ─► permission.pending ───────► stderr / TUI 活動ログ（即時）
+       ├─ permission 保留 ─► permission.pending ───────► stderr / TUI 活動ログ（即時。Workers 欄は更新しない）
        │                     SessionEvent permission.pending ► SessionEventQueue ► agent.send
        │
        ├─ 成功 ─► harness.worker.prompt.completed (source=conductor) ► stderr + TUI idle
-       │          worker.round (source=conductor) ───────► stderr + snapshot
+       │          harness.worker.state idle ────────────────► stderr + TUI idle
+       │          worker.round (source=conductor) ───────► stderr + snapshot（TUI: running 中のみ idle）
        │          worker.completed (source=conductor) ───► SessionEventQueue ► agent.send
        │
-       └─ 失敗 ─► harness.worker.prompt.failed (source=conductor) ► stderr + TUI failed
-                  worker.failed ─────────────────────────► stderr + snapshot + SessionEventQueue
+       └─ ラウンド失敗（resident 維持）─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
+                              worker.failed ────────────────► stderr + snapshot + SessionEventQueue
+                              harness.worker.state idle ────► stderr + TUI idle（最終。list_workers と一致）
+
+preempt（stopReason=cancelled）: `prompt.completed` / `worker.round` をスキップし、次ラウンドの `started` + `state processing` で running 維持
 
 各 agent.send 開始
   conductor.send.started ───────────────────► stderr + TUI（conductor: thinking）
