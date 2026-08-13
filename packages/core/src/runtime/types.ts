@@ -1,5 +1,6 @@
 import type { WorktreeRef } from '../worktree/worktree.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
+import type { WorkerPromptSource } from '../dispatch/worker-dispatch.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
 
 import type { EnsembleSessionState } from '../profile/types.js';
@@ -51,7 +52,7 @@ export type InboxListener = (message: InboxMessage) => void | Promise<void>;
 
 export interface WorkerPromptTelemetry {
   phase: 'started' | 'completed' | 'failed';
-  source: import('../dispatch/worker-dispatch.js').WorkerPromptSource;
+  source: WorkerPromptSource;
   workerId: string;
   name: string;
   kind: string;

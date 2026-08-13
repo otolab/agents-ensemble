@@ -1,5 +1,4 @@
 import type { SessionEvent } from './session-event.js';
-import { isConductorSendEvent } from './session-event.js';
 
 /** ConductorSession の単一イベント列（旧 inbox + conductor Queue の統合）。 */
 export class SessionEventQueue {
@@ -50,9 +49,7 @@ export class SessionEventQueue {
   findSendEvent(
     accept: (event: SessionEvent) => boolean,
   ): SessionEvent | undefined {
-    const index = this.queue.findIndex(
-      (event) => isConductorSendEvent(event) && accept(event),
-    );
+    const index = this.queue.findIndex((event) => accept(event));
     if (index < 0) {
       return undefined;
     }
@@ -78,7 +75,7 @@ export class SessionEventQueue {
       const incoming = await this.waitForEvent(input.signal, {
         onlyNew: this.queue.length > 0,
       });
-      if (isConductorSendEvent(incoming) && input.accept(incoming)) {
+      if (input.accept(incoming)) {
         return incoming;
       }
       this.queue.push(incoming);
