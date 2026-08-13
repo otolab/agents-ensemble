@@ -95,7 +95,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | 初回カーソル poll | **カーソル空の新規セッション**の初回 poll のみ（`initialCursorPoll`）。既存 Issue コメントは通知せずカーソルを進める。worker の init prompt（`startWorkers`）とは無関係 |
 | `--continue` 再開 | sidecar カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
 | PR 紐づけ | `gh search prs <issueNumber> --repo owner/repo`。失敗時は PR 監視をスキップし **Issue コメント監視は継続** |
-| CI wakeup | `gh pr view --json statusCheckRollup` の **CheckRun 配列**。前回 poll で pending だった check が `COMPLETED` + `conclusion` になったときのみ通知 |
+| CI wakeup | `gh pr view --json statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）。前回 poll で pending だった check が `COMPLETED` + `conclusion` になったときのみ通知 |
 | CLI | `--no-github-monitor` で無効化。`--github-monitor-debounce-ms` で debounce 変更 |
 
 ### 2.2 worker prompt ライフサイクルイベント（#133 で統一）
