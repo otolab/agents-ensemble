@@ -12,8 +12,8 @@ export interface WorkerPromptOptions {
   kind: string;
   worktreePath?: string;
   sessionState: EnsembleSessionState;
-  /** profile の `agents.<kind>.systemPromptFile` 本文。 */
-  systemPrompt?: string;
+  /** profile の `agents.<kind>` から構築した PromptModule。 */
+  agentModule?: PromptModule;
 }
 
 const workerDispatchModule: PromptModule<WorkerDispatchContext> = {
@@ -24,7 +24,7 @@ const workerDispatchModule: PromptModule<WorkerDispatchContext> = {
 
 export function buildWorkerPrompt(options: WorkerPromptOptions): string {
   const profileModule = profilePromptModule({
-    roleBootstrap: options.systemPrompt,
+    agentModule: options.agentModule,
     materials: options.sessionState.materials,
   });
   const module = merge(mergeWorkerSystemPrompt(profileModule), workerDispatchModule);

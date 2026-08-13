@@ -13,7 +13,7 @@ import {
   type PermissionDeadlockMonitor,
 } from '../permission/permission-deadlock-monitor.js';
 import { createResolvePermissionTool } from '../permission/resolve-permission-tool.js';
-import type { Profile } from '../profile/types.js';
+import type { Profile, ResolvedProfile } from '../profile/types.js';
 import { profileWorkersToSessionSpecs, sessionStateFromProfile } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
@@ -79,7 +79,7 @@ export interface RunConductorSessionOptions {
   repoRoot: string;
   conductorCwd?: string;
   /** 作業手順・worker 定義。未指定時は loadProfile でデフォルトを解決する。 */
-  profile: Profile;
+  profile: ResolvedProfile;
   profilePath?: string;
   resumeAgentId?: string;
   apiKey?: string;

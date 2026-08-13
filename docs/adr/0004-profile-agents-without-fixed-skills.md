@@ -20,8 +20,9 @@ worker はフルセットの Cursor CLI 上で動き、**環境の Skill にア�
 ```yaml
 agents:
   ping:
-    systemPrompt: |
-      応答に pong とだけ含めて終了してください。
+    prompt:
+      instructions:
+        - 応答に pong とだけ含めて終了してください。
 
 workers:
   - name: ping-1    # セッション内の識別名（一意）
@@ -34,7 +35,7 @@ materials:
 ```
 
 - **`skill` フィールドは profile に置かない**。必要なら materials で「〜 Skill に基づいて作業せよ」と書く。worker が読み込む
-- **`kind`**: agent 定義（system prompt）の選択子。将来 modular-prompt 構造の YAML 化（Phase B）
+- **`kind`**: agent 定義（modular-prompt YAML）の選択子
 - **`name`**: セッション内の worker 識別。ログ・materials・conductor サマリで参照
 - 同梱プロファイルの正本: リポジトリ直下 `profiles/`。`build` で `packages/core/dist/profiles/` にコピー
 
@@ -45,5 +46,5 @@ materials:
 - 良い: 本番（Skill あり）とテスト（Skill なし ping/pong）を同じ枠組みで扱える
 - 悪い: Skill の所在は実行環境依存。materials だけでは読み忘れうる
 - フォロー:
-  - Phase B: `agents.<kind>` を modular-prompt 構造で記述
   - integration: `dispatchWorker` / `WorkerSession` + Fake ACP（[testing-strategy.md](../testing-strategy.md)）
+- Phase B（`agents.<kind>` modular-prompt YAML 化）は [#150](https://github.com/otolab/agents-ensemble/issues/150) で完了

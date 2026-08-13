@@ -30,7 +30,7 @@
 同梱プロファイルはリポジトリ直下の `profiles/` に置く。`@agents-ensemble/core` の `build` 時に `dist/profiles/` へコピーされ、実行時はそこ（未ビルド時はソースの `profiles/`）を参照する。
 
 - `--profile` 省略時: 同梱 `default`（implementer + 役割分担 materials）
-- `agents.<kind>` … agent の system prompt（`systemPrompt` / `systemPromptFile`）。未指定時はコード内デフォルト
+- `agents.<kind>` … agent の modular-prompt 拡張（`prompt` インライン / `promptFile` 外部 YAML）。未指定時は ensemble base のみ
 - `workers` … 起動する worker（`name` + `kind`）。`- ping` は name=kind の省略形
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む
 

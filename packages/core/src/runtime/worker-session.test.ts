@@ -28,7 +28,7 @@ describe('WorkerSession', () => {
     const session = new WorkerSession({
       issueUrl: TEST_WORKTREE.issue.url,
       worktree: TEST_WORKTREE,
-      workers: [{ name: 'ping-1', kind: 'ping', systemPrompt: 'pong only' }],
+      workers: [{ name: 'ping-1', kind: 'ping', prompt: { instructions: ['pong only'] } }],
       sessionState: {
         workers: [{ name: 'ping-1', kind: 'ping' }],
         kinds: ['ping'],

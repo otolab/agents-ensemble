@@ -39,7 +39,7 @@ describe('createWorkerStatusTools', () => {
       name: 'implementer',
       issueUrl: TEST_WORKTREE.issue.url,
       kind: 'implementer',
-      systemPrompt: 'work',
+      prompt: { instructions: ['work'] },
       worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'implementer', kind: 'implementer' }],
@@ -104,7 +104,7 @@ describe('createWorkerStatusTools', () => {
       name: 'implementer',
       issueUrl: TEST_WORKTREE.issue.url,
       kind: 'implementer',
-      systemPrompt: 'work',
+      prompt: { instructions: ['work'] },
       worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'implementer', kind: 'implementer' }],
@@ -160,7 +160,7 @@ describe('createWorkerStatusTools', () => {
       name: 'reviewer',
       issueUrl: TEST_WORKTREE.issue.url,
       kind: 'reviewer',
-      systemPrompt: 'review',
+      prompt: { instructions: ['review'] },
       worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'reviewer', kind: 'reviewer' }],

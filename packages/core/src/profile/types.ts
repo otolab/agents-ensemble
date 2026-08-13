@@ -1,8 +1,11 @@
-/** kind ごとの agent 定義（system prompt）。`conductor` は暗黙起動の SDK agent、他は worker bootstrap 用。 */
+import type { PromptModule } from '@modular-prompt/core';
+
+/** kind ごとの agent 定義（modular-prompt 拡張）。`conductor` は暗黙起動の SDK agent、他は worker bootstrap 用。 */
 export interface AgentDefinition {
-  systemPrompt?: string;
-  /** プロファイルディレクトリ基準のファイルパス。`systemPrompt` と排他。 */
-  systemPromptFile?: string;
+  /** インライン modular-prompt YAML。`promptFile` と排他。 */
+  prompt?: Record<string, unknown>;
+  /** プロファイルディレクトリ基準の YAML ファイル。`prompt` と排他。 */
+  promptFile?: string;
 }
 
 /** プロファイル YAML の worker エントリ（文字列は name=kind のショートハンド）。 */
@@ -49,19 +52,19 @@ export interface ResolvedProfileMaterial {
   content: string;
 }
 
-/** load 後: agent 定義の systemPrompt が解決済み。 */
+/** load 後: agent 定義の prompt が解決済み。 */
 export interface ResolvedAgentDefinition {
-  systemPrompt?: string;
+  prompt?: PromptModule;
 }
 
-export interface ResolvedProfile extends Profile {
+export interface ResolvedProfile extends Omit<Profile, 'agents'> {
   agents?: Record<string, ResolvedAgentDefinition>;
 }
 
 export interface SessionWorkerSpec {
   name: string;
   kind: string;
-  systemPrompt: string;
+  prompt?: PromptModule;
 }
 
 /** compile 時に state へ載せる worker 構成と kind 一覧。 */
@@ -87,7 +90,7 @@ export function resolvedProfileMaterials(
 }
 
 export function sessionStateFromProfile(
-  profile: Pick<Profile, 'workers' | 'agents' | 'materials'>,
+  profile: Pick<ResolvedProfile, 'workers' | 'agents' | 'materials'>,
 ): EnsembleSessionState {
   return {
     workers: profile.workers.map((worker) => ({
@@ -145,19 +148,19 @@ export function normalizeProfileWorkers(
   return normalized;
 }
 
-export function profileWorkersToSessionSpecs(profile: Profile): SessionWorkerSpec[] {
+export function profileWorkersToSessionSpecs(profile: ResolvedProfile): SessionWorkerSpec[] {
   return profile.workers.map((worker) => ({
     name: worker.name,
     kind: worker.kind,
-    systemPrompt: resolveAgentSystemPrompt(worker.kind, profile.agents),
+    prompt: resolveAgentPromptModule(worker.kind, profile.agents),
   }));
 }
 
-/** kind に対応する system prompt。agents[kind] → agents.default → 空（コード側デフォルトのみ）。 */
-export function resolveAgentSystemPrompt(
+/** kind に対応する profile agent module。agents[kind] → agents.default → undefined。 */
+export function resolveAgentPromptModule(
   kind: string,
   agents: Record<string, ResolvedAgentDefinition> | undefined,
-): string {
+): PromptModule | undefined {
   const agent = agents?.[kind] ?? agents?.default;
-  return agent?.systemPrompt ?? '';
+  return agent?.prompt;
 }

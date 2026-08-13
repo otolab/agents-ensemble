@@ -11,12 +11,12 @@
 | `baseModule` | conductor + worker 全員 | 常に先頭 |
 | `conductorBaseModule` | conductor のみ | `base` の後 |
 | `workerBaseModule` | worker のみ | `base` の後 |
-| profile 起動文書（`*.md`） | 役割ごと | 最後に追記（`instructions`） |
+| profile 起動文書（`agents.<kind>.prompt` / `promptFile`） | 役割ごと | merge で追記（セクション分担） |
 | profile materials（`team.md` 等） | 全員共通 | 最後に追記（`materials` → Prepared Materials） |
 
 compile 時の context は `EnsembleContext`（`kind`, `issueUrl`, `issueNumber`, `workers`, `kinds`）。`ensembleContext(kind, issueUrl, sessionState)` で組み立てる。`sessionState` は `sessionStateFromProfile(profile)` で profile から取る。base の **objective** は Issue 解決目標、**state** は workers 構成と kind 一覧。
 
-profile 起動文書は **instructions 相当の追記**として載る。profile materials は **Prepared Materials** に載せ、materials があるときは instructions に「行動時の定義として読む」旨を1行追記する。ensemble 側に書くべき共通前提を profile に重複させない。
+profile 起動文書は **PromptModule として merge** される（persona / instructions 等のセクション分担）。profile materials は **Prepared Materials** に載せ、materials があるときは instructions に「行動時の定義として読む」旨を1行追記する。ensemble 側に書くべき共通前提を profile に重複させない。
 
 ## セクションの分担
 
@@ -161,7 +161,7 @@ compile 後は `### {title}` になる。**タイトルがマージ後の見出�
 
 - プロンプトに書くことは **いま動く経路**か、FIXME 付きの **目標仕様**のどちらか
 - 「Issue / PR に書けば worker が動く」は誤り（正本 ≠ トリガー）— [#36](https://github.com/otolab/agents-ensemble/issues/36)
-- profile 起動文書（`profiles/default/*.md`）も merge される。ensemble と矛盾させない
+- profile 起動文書（`profiles/default/*.prompt.yaml` 等）も merge される。ensemble と矛盾させない
 
 ## 確認手順
 

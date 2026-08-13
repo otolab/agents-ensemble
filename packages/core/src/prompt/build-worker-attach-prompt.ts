@@ -13,7 +13,7 @@ export interface WorkerAttachPromptOptions {
   worktreePath?: string;
   worktreeInRepo?: boolean;
   sessionState: EnsembleSessionState;
-  systemPrompt?: string;
+  agentModule?: PromptModule;
 }
 
 const workerAttachModule: PromptModule<WorkerDispatchContext> = {
@@ -36,7 +36,7 @@ export function buildWorkerAttachPrompt(
   options: WorkerAttachPromptOptions,
 ): string {
   const profileModule = profilePromptModule({
-    roleBootstrap: options.systemPrompt,
+    agentModule: options.agentModule,
     materials: options.sessionState.materials,
   });
   const module = merge(mergeWorkerSystemPrompt(profileModule), workerAttachModule);

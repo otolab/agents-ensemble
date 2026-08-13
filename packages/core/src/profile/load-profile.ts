@@ -3,11 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
+import { parsePromptModuleFromYaml } from './parse-prompt-module.js';
 import type {
   AgentDefinition,
   Profile,
   ProfileMaterial,
   ResolvedAgentDefinition,
+  ResolvedProfile,
 } from './types.js';
 import { normalizeProfileWorkers } from './types.js';
 
@@ -29,9 +31,15 @@ export function parseProfile(source: unknown, label: string): Profile {
     if (!agent || typeof agent !== 'object') {
       throw new Error(`Invalid profile agent "${name}" in ${label}`);
     }
-    if (agent.systemPrompt && agent.systemPromptFile) {
+    const legacy = agent as Record<string, unknown>;
+    if ('systemPrompt' in legacy || 'systemPromptFile' in legacy) {
       throw new Error(
-        `Invalid profile agent "${name}" in ${label}: use either systemPrompt or systemPromptFile`,
+        `Invalid profile agent "${name}" in ${label}: systemPrompt / systemPromptFile are removed; use prompt / promptFile`,
+      );
+    }
+    if (agent.prompt && agent.promptFile) {
+      throw new Error(
+        `Invalid profile agent "${name}" in ${label}: use either prompt or promptFile`,
       );
     }
   }
@@ -70,12 +78,20 @@ async function resolveAgent(
   profileDir: string,
   label: string,
 ): Promise<ResolvedAgentDefinition> {
-  if (!agent.systemPromptFile) {
-    return { systemPrompt: agent.systemPrompt };
+  if (!agent.prompt && !agent.promptFile) {
+    return {};
   }
 
-  const systemPrompt = await readProfileFile(profileDir, agent.systemPromptFile);
-  return { systemPrompt };
+  if (agent.promptFile) {
+    const raw = yaml.load(await readProfileFile(profileDir, agent.promptFile));
+    return {
+      prompt: parsePromptModuleFromYaml(raw, `${label} (${agent.promptFile})`),
+    };
+  }
+
+  return {
+    prompt: parsePromptModuleFromYaml(agent.prompt, `${label} (agents.${name}.prompt)`),
+  };
 }
 
 async function resolveMaterial(
@@ -98,11 +114,11 @@ async function resolveMaterial(
   };
 }
 
-/** `file` / `systemPromptFile` を読み込み、インラインに解決する。 */
+/** `file` / `promptFile` を読み込み、インラインに解決する。 */
 export async function resolveProfile(
   profile: Profile,
   profileDir: string,
-): Promise<Profile> {
+): Promise<ResolvedProfile> {
   const label = join(profileDir, PROFILE_FILE);
 
   const agents: Record<string, ResolvedAgentDefinition> = {};
@@ -121,7 +137,7 @@ export async function resolveProfile(
   };
 }
 
-export async function loadProfileFromFile(filePath: string): Promise<Profile> {
+export async function loadProfileFromFile(filePath: string): Promise<ResolvedProfile> {
   const raw = await readFile(filePath, 'utf8');
   const parsed = yaml.load(raw);
   const profile = parseProfile(parsed, filePath);
@@ -187,7 +203,7 @@ export function resolveDefaultProfilePath(): string {
 export async function loadProfile(options: {
   profile?: string;
   cwd?: string;
-}): Promise<{ profile: Profile; profilePath: string }> {
+}): Promise<{ profile: ResolvedProfile; profilePath: string }> {
   const cwd = options.cwd ?? process.cwd();
   const profilePath = options.profile
     ? resolveProfilePath(options.profile, cwd)

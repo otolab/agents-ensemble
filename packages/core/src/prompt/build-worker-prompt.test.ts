@@ -10,7 +10,9 @@ describe('buildWorkerPrompt', () => {
         workers: [{ name: 'ping-1', kind: 'ping' }],
         kinds: ['ping'],
       },
-      systemPrompt: 'profile 固有: respond with pong',
+      agentModule: {
+        instructions: ['profile 固有: respond with pong'],
+      },
       worktreePath: '/tmp/wt',
     });
 

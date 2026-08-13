@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
-import type { Profile } from '../profile/types.js';
+import type { ResolvedProfile } from '../profile/types.js';
 
 export const SESSION_SIDECAR_VERSION = 1;
 
@@ -29,7 +29,7 @@ export interface SessionSidecar {
   conductorAgentId: string;
   issueUrl: string;
   repoRoot: string;
-  profile: Profile;
+  profile: ResolvedProfile;
   profilePath?: string;
   openQuestions: OpenQuestion[];
   sequence: number;
@@ -211,7 +211,7 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     conductorAgentId: record.conductorAgentId,
     issueUrl: record.issueUrl,
     repoRoot: record.repoRoot,
-    profile: record.profile as Profile,
+    profile: record.profile as ResolvedProfile,
     ...(typeof record.profilePath === 'string'
       ? { profilePath: record.profilePath }
       : {}),
