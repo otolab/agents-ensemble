@@ -280,7 +280,7 @@ conductor は SDK `Agent.resume`、worker は ACP `session/load` で復元する
 
 | 経路 | 用途 |
 |------|------|
-| **bootstrap（attach）** | 役割・permission・待機 prompt。実作業の開始トリガーではない |
+| **startWorkers（attach + init prompt）** | 役割・permission・待機 prompt。実作業の開始トリガーではない。API: `WorkerSession.startWorkers()`（`bootstrap()` は deprecated） |
 | **`prompt_worker`（conductor SDK tool）** | 常駐 worker へ作業指示（`session/prompt`）。busy 時は per-worker キュー、`preempt: true` で割り込み |
 | **`worker.completed` イベント** | 1 ラウンド完了を conductor へ通知（タスク完了の意味ではない） |
 

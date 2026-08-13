@@ -14,7 +14,7 @@ const TEST_WORKTREE = {
 };
 
 describe('WorkerSession', () => {
-  it('attaches workers at bootstrap and closes on stop', async () => {
+  it('attaches workers at startWorkers and closes on stop', async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     const connectAcp = vi.fn(async () =>
       ({
@@ -39,12 +39,42 @@ describe('WorkerSession', () => {
       }),
     });
 
-    session.bootstrap();
+    session.startWorkers();
     await session.stop();
 
     expect(session.startedWorkerIds).toHaveLength(1);
     expect(connectAcp).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(session.runtime.attachedCount).toBe(0);
+  });
+
+  it('bootstrap() delegates to startWorkers()', async () => {
+    const connectAcp = vi.fn(async () =>
+      ({
+        newSession: vi.fn().mockResolvedValue('sess-1'),
+        loadSession: vi.fn().mockResolvedValue(undefined),
+        promptSession: vi.fn().mockResolvedValue({ stopReason: 'end_turn' }),
+        close: vi.fn().mockResolvedValue(undefined),
+      }) as unknown as AcpBridge,
+    );
+
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping', prompt: { instructions: ['pong only'] } }],
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+    });
+
+    session.bootstrap();
+
+    expect(session.startedWorkerIds).toHaveLength(1);
+    expect(connectAcp).toHaveBeenCalledOnce();
   });
 });

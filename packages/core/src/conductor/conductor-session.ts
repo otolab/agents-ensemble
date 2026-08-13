@@ -364,7 +364,7 @@ export async function runConductorSession(
     },
   });
 
-  workerSession.bootstrap();
+  workerSession.startWorkers();
 
   const recordAnsweredQuestion = (answered: OpenQuestion) => {
     const record = openQuestionToEscalationRecord(answered);

@@ -29,7 +29,7 @@ export function normalizeGitHubMonitorCursor(
   };
 }
 
-/** 新規セッション初回 poll の bootstrap 対象か（sidecar 復元済みなら false）。 */
+/** 新規セッション初回 poll のカーソル初期化のみか（sidecar 復元済みなら false）。worker の init prompt とは無関係。 */
 export function isEmptyGitHubMonitorCursor(cursor: GitHubMonitorCursor): boolean {
   if (cursor.lastIssueCommentId) {
     return false;

@@ -92,7 +92,7 @@ export async function runPermissionWorkerSession(
     },
   });
 
-  session.bootstrap();
+  session.startWorkers();
 
   if (options.resolvePending) {
     const pendingId = await waitForPending(pipeline, session.inbox);

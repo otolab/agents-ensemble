@@ -1,11 +1,11 @@
-import type { SDKCustomTool, SDKJsonValue } from '@cursor/sdk';
-import yaml from 'js-yaml';
+import type { SDKCustomTool } from '@cursor/sdk';
 import type { WorkerRuntime } from '../runtime/worker-runtime.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import type {
   WorkerSessionStatusSummary,
   WorkerStatusDetail,
 } from '../runtime/worker-status.js';
+import { yamlToolResult } from './yaml-tool-result.js';
 
 export interface WorkerStatusToolOptions {
   runtime: WorkerRuntime;
@@ -81,22 +81,4 @@ function buildSessionSummary(
     workerFailureCount: failures.length,
     workers: options.runtime.listWorkerStatuses(),
   };
-}
-
-function yamlToolResult(label: string, data: unknown) {
-  const text = [
-    '```yaml',
-    `# ${label}`,
-    yaml.dump(data, { lineWidth: 120 }).trimEnd(),
-    '```',
-  ].join('\n');
-
-  return {
-    content: [{ type: 'text' as const, text }],
-    structuredContent: toStructuredContent(data),
-  };
-}
-
-function toStructuredContent(data: unknown): Record<string, SDKJsonValue> {
-  return JSON.parse(JSON.stringify(data)) as Record<string, SDKJsonValue>;
 }

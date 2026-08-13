@@ -1,6 +1,6 @@
 import type { PromptModule } from '@modular-prompt/core';
 
-/** kind ごとの agent 定義（modular-prompt 拡張）。`conductor` は暗黙起動の SDK agent、他は worker bootstrap 用。 */
+/** kind ごとの agent 定義（modular-prompt 拡張）。`conductor` は暗黙起動の SDK agent、他は worker init prompt 用。 */
 export interface AgentDefinition {
   /** インライン modular-prompt YAML。`promptFile` と排他。 */
   prompt?: Record<string, unknown>;
