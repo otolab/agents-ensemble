@@ -24,7 +24,6 @@ export function createTuiTelemetrySink(viewModel: TuiViewModel): SessionLogSink 
 
     if (event.type === 'session.operator_exit') {
       viewModel.setShuttingDown(true);
-      viewModel.appendActivityLog('harness', '終了しています…');
     }
   };
 }

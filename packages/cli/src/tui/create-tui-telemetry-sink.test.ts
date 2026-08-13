@@ -55,7 +55,7 @@ describe('createTuiTelemetrySink', () => {
     expect(snapshot.shuttingDown).toBe(true);
     expect(snapshot.activityLog).toEqual([
       {
-        label: 'harness',
+        label: 'observation',
         text: '終了しています…',
       },
     ]);
