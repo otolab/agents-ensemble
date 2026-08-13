@@ -76,7 +76,7 @@ describe('ensemble prompt modules', () => {
     const objectiveIndex = prompt.indexOf('Objective and Role');
     const teamObjective = prompt.indexOf('チームで Issue #42', objectiveIndex);
     const ensembleObjective = prompt.indexOf(
-      '作業フローの連鎖',
+      'チーム全体を統合',
       objectiveIndex,
     );
     const profileObjective = prompt.indexOf('起動文書固有の objective');

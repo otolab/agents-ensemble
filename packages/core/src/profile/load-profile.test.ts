@@ -335,8 +335,8 @@ describe('default profile compile equivalence', () => {
 
     expect(prompt).toContain('**conductor**');
     expect(prompt).toContain('§3 conductor');
-    expect(prompt).toContain('prompt_worker（worker-and-reviewer）');
+    expect(prompt).toContain('指示の典型的な内容');
     expect(prompt).toContain('permission.pending');
-    expect(prompt).toContain('スナップショットのみ');
+    expect(prompt).toContain('resolve_permission');
   });
 });
