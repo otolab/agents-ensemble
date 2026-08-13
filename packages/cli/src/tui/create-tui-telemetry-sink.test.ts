@@ -45,6 +45,21 @@ describe('createTuiTelemetrySink', () => {
     expect(snapshot.postLoopWaiting).toBe(true);
   });
 
+  it('does not append harness.worker.acp.update to activity log', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({
+      type: 'harness.worker.acp.update',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'worker-1',
+      sessionUpdate: 'agent_message_chunk',
+    });
+
+    expect(viewModel.getSnapshot().activityLog).toEqual([]);
+  });
+
   it('appends conductor.auth.recovery to observation activity log', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);

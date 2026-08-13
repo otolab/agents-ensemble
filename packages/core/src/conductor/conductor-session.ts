@@ -370,6 +370,7 @@ export async function runConductorSession(
         workerId: event.workerId,
         sessionUpdate: event.sessionUpdate,
         sessionId: event.sessionId,
+        ...(event.toolName ? { toolName: event.toolName } : {}),
       });
     },
     onWorkerState: (event) => {

@@ -7,6 +7,7 @@ import {
   type SessionDisplayState,
   type WorkerDisplayStatus,
 } from './session-display-state.js';
+import { workerActivityFromAcpUpdate } from './worker-activity-from-acp-update.js';
 
 const WORKER_RUNNING = mapHarnessToDisplayStatus('processing');
 const WORKER_IDLE = mapHarnessToDisplayStatus('idle');
@@ -17,17 +18,25 @@ function setWorkerStatus(
   name: string,
   kind: string,
   status: WorkerDisplayStatus,
+  activity?: string,
 ): SessionDisplayState {
+  const nextActivity = status === 'running' ? activity : undefined;
   const current = state.workers[name];
-  if (current?.kind === kind && current.status === status) {
+  if (
+    current?.kind === kind &&
+    current.status === status &&
+    current.activity === nextActivity
+  ) {
     return state;
   }
+
+  const worker = { kind, status, ...(nextActivity ? { activity: nextActivity } : {}) };
 
   return {
     ...state,
     workers: {
       ...state.workers,
-      [name]: { kind, status },
+      [name]: worker,
     },
   };
 }
@@ -71,8 +80,16 @@ export function reduceDisplayState(
       return setWorkerStatus(state, event.name, event.kind, WORKER_IDLE);
     case 'harness.worker.prompt.failed':
       return setWorkerStatus(state, event.name, event.kind, WORKER_FAILED);
-    case 'harness.worker.acp.update':
-      return setWorkerStatus(state, event.name, event.kind, WORKER_RUNNING);
+    case 'harness.worker.acp.update': {
+      const activity = workerActivityFromAcpUpdate(
+        event.sessionUpdate,
+        event.toolName,
+      );
+      if (!activity) {
+        return state;
+      }
+      return setWorkerStatus(state, event.name, event.kind, WORKER_RUNNING, activity);
+    }
     case 'conductor.send.started':
       return setWorkerStatus(state, 'conductor', 'conductor', 'running');
     case 'worker.round': {

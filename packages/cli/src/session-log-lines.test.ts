@@ -108,6 +108,18 @@ describe('session-log-lines', () => {
     ).toBe('[auth] conductor 再接続を試行 agentId=agent-1');
   });
 
+  it('suppresses harness.worker.acp.update from harness log body', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'harness.worker.acp.update',
+        name: 'implementer',
+        kind: 'implementer',
+        workerId: 'w-1',
+        sessionUpdate: 'agent_message_chunk',
+      }),
+    ).toBeUndefined();
+  });
+
   it('formats conductor activity bodies', () => {
     expect(
       formatConductorActivityBody({

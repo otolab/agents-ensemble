@@ -21,7 +21,7 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
     case 'harness.worker.prompt.failed':
       return `worker.prompt.failed name=${event.name} kind=${event.kind} source=${event.source} error=${event.error}`;
     case 'harness.worker.acp.update':
-      return `worker.acp.update name=${event.name} kind=${event.kind} sessionUpdate=${event.sessionUpdate}`;
+      return undefined;
     case 'harness.worker.state':
       return `worker.state name=${event.name} kind=${event.kind} state=${event.state}`;
     case 'harness.session.workers':

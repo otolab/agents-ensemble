@@ -77,7 +77,7 @@ describe('createSessionDisplaySink', () => {
     expect(stub.getState().workers.implementer?.status).toBe('running');
   });
 
-  it('renders when harness.worker.acp.update moves worker idle to running', () => {
+  it('renders when harness.worker.acp.update changes activity hint', () => {
     const stub = createStubSessionDisplayBackend();
     const sink = createSessionDisplaySink({ backend: stub.backend });
 
@@ -93,6 +93,7 @@ describe('createSessionDisplaySink', () => {
     expect(stub.getState().workers.implementer).toEqual({
       kind: 'implementer',
       status: 'running',
+      activity: 'thinking',
     });
     expect(stub.getRenders()).toHaveLength(1);
     expect(stub.getRenders()[0]?.event.type).toBe('harness.worker.acp.update');

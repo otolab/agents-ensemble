@@ -297,7 +297,50 @@ describe('reduceDisplayState', () => {
     expect(state.workers.implementer).toEqual({
       kind: 'implementer',
       status: 'running',
+      activity: 'thinking',
     });
+  });
+
+  it('ignores unclassified harness.worker.acp.update chunks', () => {
+    const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.worker.acp.update',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      sessionUpdate: 'session_info_update',
+    });
+
+    expect(state.workers.implementer).toBeUndefined();
+  });
+
+  it('updates activity hint only when phase changes', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.worker.acp.update',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      sessionUpdate: 'agent_thought_chunk',
+    });
+    const afterThinking = state;
+
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.acp.update',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      sessionUpdate: 'agent_thought_chunk',
+    });
+    expect(state).toBe(afterThinking);
+
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.acp.update',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      sessionUpdate: 'tool_call',
+      toolName: 'Shell',
+    });
+    expect(state.workers.implementer?.activity).toBe('calling: Shell');
   });
 
   it('tracks running via acp update then idle after round completion', () => {
@@ -307,8 +350,10 @@ describe('reduceDisplayState', () => {
       kind: 'implementer',
       workerId: 'w-1',
       sessionUpdate: 'tool_call_update',
+      toolName: 'Edit',
     });
     expect(state.workers.implementer?.status).toBe('running');
+    expect(state.workers.implementer?.activity).toBe('editing: Edit');
 
     state = reduceDisplayState(state, {
       type: 'worker.round',
