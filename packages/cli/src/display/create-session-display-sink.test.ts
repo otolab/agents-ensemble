@@ -41,6 +41,30 @@ describe('createSessionDisplaySink', () => {
 
     expect(stub.getRenders()).toHaveLength(0);
   });
+
+  it('renders when harness.worker.acp.update moves worker idle to running', () => {
+    const stub = createStubSessionDisplayBackend();
+    const sink = createSessionDisplaySink({ backend: stub.backend });
+
+    sink({
+      type: 'harness.worker.acp.update',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      sessionUpdate: 'agent_thought_chunk',
+      sessionId: 'sess-1',
+    });
+
+    expect(stub.getState().workers.implementer).toEqual({
+      kind: 'implementer',
+      status: 'running',
+    });
+    expect(stub.getRenders()).toHaveLength(1);
+    expect(stub.getRenders()[0]?.event.type).toBe('harness.worker.acp.update');
+    expect(stub.getRenders()[0]?.state.workers.implementer?.status).toBe(
+      'running',
+    );
+  });
 });
 
 describe('createStringSessionDisplayBackend', () => {
