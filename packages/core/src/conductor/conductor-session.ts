@@ -67,6 +67,10 @@ import {
   type GitHubMonitor,
 } from '../github/github-monitor.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
+import {
+  canResumePostLoopForTurns,
+  hasActionableIssueComment,
+} from '../github/github-post-loop-resume.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -501,6 +505,10 @@ export async function runConductorSession(
     });
   };
 
+  let sendCount = 0;
+  let autonomousTurns = 0;
+  const postLoopGate = createOperatorPostLoopGate();
+
   let githubMonitor: GitHubMonitor | undefined;
   if (!options.disableGitHubMonitor) {
     githubMonitor = createGitHubMonitor({
@@ -525,6 +533,13 @@ export async function runConductorSession(
           type: 'github.update',
           items: payload.items,
         });
+        if (
+          postLoopGate.isWaiting() &&
+          hasActionableIssueComment(payload.items) &&
+          canResumePostLoopForTurns(autonomousTurns, maxTurns)
+        ) {
+          postLoopGate.notifyResume();
+        }
       },
       onPollError: (error) => {
         sessionLogger.emit({
@@ -556,14 +571,11 @@ export async function runConductorSession(
     permissionDeadlockMonitor.start();
   }
 
-  let sendCount = 0;
   let stopReason: IssueLoopStopReason = 'completed';
   const continueOnConductorError = options.continueOnConductorError ?? false;
   const waitForOperatorExit = options.waitForOperatorExit ?? false;
-  let autonomousTurns = 0;
   let operatorRequestedExit = false;
   let disposeOperatorInput: (() => void) | undefined;
-  const postLoopGate = createOperatorPostLoopGate();
 
   if (options.bindOperatorInput) {
     const bindingDispose = options.bindOperatorInput({
