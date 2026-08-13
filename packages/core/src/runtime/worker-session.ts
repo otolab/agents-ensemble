@@ -38,6 +38,7 @@ export interface WorkerSessionOptions {
   onWorkerCompleted?: (result: WorkerDispatchResult) => void;
   onWorkerFailed?: (failure: WorkerFailureRecord) => void;
   onPromptTelemetry?: (event: import('./types.js').WorkerPromptTelemetry) => void;
+  onAcpUpdate?: (event: import('./types.js').WorkerAcpUpdateTelemetry) => void;
 }
 
 /**
@@ -79,6 +80,7 @@ export class WorkerSession {
       ...(options.onPromptTelemetry
         ? { onPromptTelemetry: options.onPromptTelemetry }
         : {}),
+      ...(options.onAcpUpdate ? { onAcpUpdate: options.onAcpUpdate } : {}),
     });
     this.processor = startInboxProcessor({
       inbox: this.inbox,

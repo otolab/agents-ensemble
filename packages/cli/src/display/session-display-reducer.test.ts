@@ -121,6 +121,39 @@ describe('reduceDisplayState', () => {
     });
   });
 
+  it('sets worker running on harness.worker.acp.update during prompt', () => {
+    const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.worker.acp.update',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      sessionUpdate: 'agent_thought_chunk',
+      sessionId: 'sess-1',
+    });
+
+    expect(state.workers.implementer).toEqual({
+      kind: 'implementer',
+      status: 'running',
+    });
+  });
+
+  it('tracks running via acp update then idle after round completion', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.worker.acp.update',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      sessionUpdate: 'tool_call_update',
+    });
+    expect(state.workers.implementer?.status).toBe('running');
+
+    state = reduceDisplayState(state, {
+      type: 'worker.round',
+      dispatch: { ...TEST_DISPATCH, source: 'conductor' },
+    });
+    expect(state.workers.implementer?.status).toBe('idle');
+  });
+
   it('marks worker failed on worker.failed', () => {
     const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'worker.failed',

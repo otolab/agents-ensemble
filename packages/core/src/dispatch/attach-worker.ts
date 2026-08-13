@@ -1,3 +1,4 @@
+import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionHandler } from '../acp/types.js';
 import type { EnsembleSessionState } from '../profile/types.js';
@@ -82,10 +83,14 @@ export const buildBootstrapWorkerPrompt = buildWorkerAttachPrompt;
 export async function runAttachedWorkerPrompt(
   attached: AttachedWorker,
   prompt: string,
-  permissionHandler?: PermissionHandler,
+  options?: {
+    permissionHandler?: PermissionHandler;
+    onUpdate?: SessionUpdateHandler;
+  },
 ): Promise<WorkerDispatchResult> {
   const promptResult = await runWorkerAcpPrompt(attached.session, prompt, {
-    permissionHandler,
+    permissionHandler: options?.permissionHandler,
+    onUpdate: options?.onUpdate,
   });
   return buildWorkerDispatchResult({
     name: attached.name,
