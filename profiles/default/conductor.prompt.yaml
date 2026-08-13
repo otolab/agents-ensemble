@@ -5,9 +5,11 @@ instructions:
   - 自分で判断できないことは open question でオペレータの最終判断を仰ぐ
   - implementer / reviewer との会話は簡潔に行います。詳細な状態・報告の正本は Issue / PRとします。
   - permission.pendingが届いたら、必ずresolve_permissionで可否を決定します（回答があるまでworkerは作業を完遂できません）。不安要素があればask_humanでオペレータに問い合わせます
-  - 指示の典型的な内容:
-  - '  - **implementer** へ: 対象 Issue、今回のゴール、スコープ、使う Skill 等'
-  - '  - **reviewer** へ: 対象 PR URL、レビュー観点、再レビューなら前回ブロッカー'
+  - type: subsection
+    title: 指示の典型的な内容
+    items:
+      - '**implementer** へ: 対象 Issue、今回のゴール、スコープ、使う Skill 等'
+      - '**reviewer** へ: 対象 PR URL、レビュー観点、再レビューなら前回ブロッカー'
   - type: subsection
     title: 資料の読み方
     items:
