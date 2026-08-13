@@ -298,6 +298,24 @@ describe('selectDispatchBatch', () => {
     expect(result?.batch.sourceKey).toBe('github');
     expect(result?.batch.events).toHaveLength(2);
   });
+
+  it('ignores inform-mode SessionEvent until a trigger event arrives', () => {
+    const informCompleted: SessionEvent = {
+      ...workerCompleted('implementer'),
+      dispatchMode: 'inform',
+    };
+    const queue = [informCompleted, operator('hi')];
+    const result = selectDispatchBatch({
+      queue,
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('operator');
+    expect(result?.batch.events).toEqual([operator('hi')]);
+    expect(result?.remainingQueue).toEqual([informCompleted]);
+  });
 });
 
 describe('countWorkerOutcomesInBatch', () => {

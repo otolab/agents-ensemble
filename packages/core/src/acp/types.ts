@@ -1,5 +1,7 @@
 /** ACP session / prompt types (minimal set for Stage 1). */
 
+import type { AcpSessionUpdateKind } from './session-update-kinds.js';
+
 export interface AcpTextPromptBlock {
   type: 'text';
   text: string;
@@ -10,8 +12,9 @@ export type AcpPromptBlock = AcpTextPromptBlock;
 export interface SessionUpdateNotification {
   sessionId?: string;
   update?: {
-    sessionUpdate?: string;
+    sessionUpdate?: AcpSessionUpdateKind;
     content?: { type?: string; text?: string };
+    [key: string]: unknown;
   };
 }
 

@@ -58,6 +58,14 @@ export type SessionLogEvent =
       error: string;
     }
   | {
+      type: 'harness.worker.acp.update';
+      name: string;
+      kind: string;
+      workerId: string;
+      sessionUpdate: string;
+      sessionId?: string;
+    }
+  | {
       type: 'operator.input';
       conductorTurn: number;
       text: string;
@@ -202,6 +210,7 @@ export class SessionLogger {
       case 'harness.worker.prompt.started':
       case 'harness.worker.prompt.completed':
       case 'harness.worker.prompt.failed':
+      case 'harness.worker.acp.update':
       case 'operator.input':
       case 'conductor.send.started':
       case 'conductor.send.progress':
