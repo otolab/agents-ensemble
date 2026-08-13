@@ -1,5 +1,15 @@
 # @agents-ensemble/cli
 
+## 0.2.1
+
+### Patch Changes
+
+- 2bde484: ACP `session/update` の `harness.worker.acp.update` と `conductor.send.progress` を活動ログ / stderr から除外し、Workers ペインにフェーズ変化時のみ活動ヒントを表示（#161）
+- Updated dependencies [2bde484]
+- Updated dependencies [4a8088f]
+- Updated dependencies [0c366f6]
+  - @agents-ensemble/core@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

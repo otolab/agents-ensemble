@@ -1,5 +1,13 @@
 # @agents-ensemble/core
 
+## 0.2.1
+
+### Patch Changes
+
+- 2bde484: ACP `session/update` の `harness.worker.acp.update` と `conductor.send.progress` を活動ログ / stderr から除外し、Workers ペインにフェーズ変化時のみ活動ヒントを表示（#161）
+- 4a8088f: post-loop 待機中に GitHub Issue コメント（`issue.comment`）で SessionDriver を再開し、conductor ターンを起動できるようにする
+- 0c366f6: `gh pr view` の `statusCheckRollup` に含まれる `StatusContext` を正規化し、CI 監視 poll の `monitor_error`（`toUpperCase`）を修正
+
 ## 0.2.0
 
 ### Minor Changes
