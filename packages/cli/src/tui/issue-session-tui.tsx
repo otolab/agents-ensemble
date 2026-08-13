@@ -118,11 +118,17 @@ function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
 
 function formatConductorWorkerStatusLine(
   name: string,
-  worker: { kind: string; status: WorkerDisplayStatus },
+  worker: { kind: string; status: WorkerDisplayStatus; activity?: string },
 ): string {
   if (worker.kind === 'conductor') {
-    const label = worker.status === 'running' ? 'thinking' : worker.status;
-    return `conductor: ${label}`;
+    if (worker.status === 'running') {
+      const label = worker.activity ?? 'thinking';
+      return `conductor: ${label}`;
+    }
+    return `conductor: ${worker.status}`;
+  }
+  if (worker.status === 'running' && worker.activity) {
+    return `${name} (${worker.kind}): running (${worker.activity})`;
   }
   return `${name} (${worker.kind}): ${worker.status}`;
 }

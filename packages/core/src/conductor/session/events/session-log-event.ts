@@ -70,6 +70,8 @@ export interface HarnessWorkerAcpUpdateEvent {
   workerId: string;
   sessionUpdate: string;
   sessionId?: string;
+  /** `tool_call` / `tool_call_update` 時の tool 名（あれば）。 */
+  toolName?: string;
 }
 
 export interface HarnessWorkerStateEvent {

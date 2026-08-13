@@ -44,6 +44,7 @@ export type {
 export {
   DEFAULT_PERMISSION_DECISION,
 } from './types.js';
+export { extractAcpToolName } from './extract-acp-tool-name.js';
 export type {
   AcpPromptBlock,
   AcpTextPromptBlock,

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { extractAcpToolName } from '../acp/extract-acp-tool-name.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import {
   attachWorker,
@@ -298,6 +299,7 @@ export class WorkerRuntime {
     resident: ResidentWorker,
     sessionUpdate: string,
     sessionId?: string,
+    toolName?: string,
   ): void {
     this.options.onAcpUpdate?.({
       workerId: resident.workerId,
@@ -305,6 +307,7 @@ export class WorkerRuntime {
       kind: resident.started.kind,
       sessionUpdate,
       sessionId,
+      ...(toolName ? { toolName } : {}),
     });
   }
 
@@ -436,10 +439,12 @@ export class WorkerRuntime {
           onUpdate: (update) => {
             const sessionUpdate = update.update?.sessionUpdate;
             if (typeof sessionUpdate === 'string' && sessionUpdate.length > 0) {
+              const toolName = extractAcpToolName(update.update);
               this.emitAcpUpdate(
                 resident,
                 sessionUpdate,
                 update.sessionId,
+                toolName,
               );
             }
           },

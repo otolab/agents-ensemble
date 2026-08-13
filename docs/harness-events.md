@@ -52,7 +52,7 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `harness.worktree.remove_failed` | `git worktree remove` 失敗（best-effort） | `[harness] worktree.remove_failed path=... branch=... error=...` | なし |
 | `operator.input` | オペレータ発話をキューに載せる直前 | `[harness] operator.input turn=N bytes=...` | なし |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
-| `conductor.send.progress` | conductor ターン中の SDK ツール開始 | `[harness] conductor.send.progress n=N runId=... tool=...` | なし |
+| `conductor.send.progress` | conductor ターン中の SDK ツール開始 | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。例: `conductor: reading`） |
 | `conductor.send` | 各 `agent.send` 完了後 | `[harness] conductor.send n=N status=... workerDone=... workerFailed=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
@@ -107,7 +107,7 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 | `harness.worker.prompt.started` | `session/prompt` ラウンド開始（init / instruction 共通） | `[harness] worker.prompt.started name=... kind=... source=harness\|conductor` | なし（TUI: running） |
 | `harness.worker.prompt.completed` | ラウンド ACP prompt 完了直後 | `[harness] worker.prompt.completed name=... kind=... source=... stopReason=...` | なし（TUI: idle） |
 | `harness.worker.prompt.failed` | attach 致命失敗、または `executeRound` 内の prompt 失敗 | `[harness] worker.prompt.failed name=... kind=... source=... error=...` | なし（TUI: 一時 `failed`。resident 維持時は直後の `harness.worker.state idle` で **idle** に戻る） |
-| `harness.worker.acp.update` | `session/prompt` 中の ACP `session/update`（#148） | `[harness] worker.acp.update name=... kind=... sessionUpdate=...` | なし（TUI: running） |
+| `harness.worker.acp.update` | `session/prompt` 中の ACP `session/update`（#148） | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。`running` 正本は `harness.worker.state`） |
 | `harness.worker.state` | `WorkerRuntime` の harness 状態遷移（#147） | `[harness] worker.state name=... kind=... state=attaching\|processing\|idle\|failed` | なし（TUI: 下表） |
 | `harness.session.workers` | セッション開始時、profile の worker 一覧確定直後 | `[harness] session.workers count=N names=...` | なし（TUI: 全員 idle で seed） |
 
@@ -120,7 +120,7 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 | `idle` | `idle` |
 | `failed` | `failed`（**attach 致命失敗のみ**。`failedWorkers` 登録・resident なし） |
 
-`harness.worker.prompt.*` / `harness.worker.acp.update` も従来どおり TUI を更新する。**Workers ペインの最終表示は `harness.worker.state` を正本とする**（`prompt.failed` は stderr / 活動ログ向けテレメトリ。resident 維持のラウンド失敗では直後の `state idle` が上書きする）。
+`harness.worker.prompt.*` / `harness.worker.acp.update` も TUI を更新する。**Workers ペインの `running` / `idle` 正本は `harness.worker.state`**（および `prompt.started` / `prompt.completed`）。`harness.worker.acp.update` は **活動ヒント**（例: `running (calling: Shell)`）の更新にのみ使い、chunk 単位では stderr / 活動ログに出さない（#161）。
 
 `permission.pending` は **Workers ペインを更新しない**（活動ログのみ）。permission 待ち中の worker は `harness.worker.state` / `prompt.*` が `processing` / `running` のまま維持される想定。
 
@@ -191,7 +191,7 @@ prompt_worker / sendWorkerMessage
        │
        ├─ harness.worker.prompt.started (source=conductor) ► stderr + TUI running
        ├─ harness.worker.state processing ───────────────► stderr + TUI running
-       ├─ harness.worker.acp.update (session/prompt 中) ► stderr + TUI running
+       ├─ harness.worker.acp.update (session/prompt 中) ► TUI 活動ヒントのみ（stderr / 活動ログには出さない #161）
        ├─ permission 保留 ─► permission.pending ───────► stderr / TUI 活動ログ（即時。Workers 欄は更新しない）
        │                     SessionEvent permission.pending ► SessionEventQueue ► agent.send
        │
@@ -210,7 +210,7 @@ preempt（stopReason=cancelled）: `prompt.completed` / `worker.round` をスキ
   conductor.send.started ───────────────────► stderr + TUI（conductor: thinking）
 
 各 agent.send 進行中（ツール開始）
-  conductor.send.progress ──────────────────► stderr
+  conductor.send.progress ──────────────────► TUI 活動ヒントのみ（stderr / 活動ログには出さない #161）
 
 各 agent.send 完了
   conductor.send ───────────────────────────► stderr + snapshot（末尾更新）+ TUI（conductor: idle）

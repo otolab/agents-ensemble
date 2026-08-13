@@ -21,7 +21,7 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
     case 'harness.worker.prompt.failed':
       return `worker.prompt.failed name=${event.name} kind=${event.kind} source=${event.source} error=${event.error}`;
     case 'harness.worker.acp.update':
-      return `worker.acp.update name=${event.name} kind=${event.kind} sessionUpdate=${event.sessionUpdate}`;
+      return undefined;
     case 'harness.worker.state':
       return `worker.state name=${event.name} kind=${event.kind} state=${event.state}`;
     case 'harness.session.workers':
@@ -36,7 +36,7 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return line;
     }
     case 'conductor.send.progress':
-      return `conductor.send.progress n=${event.sendCount} runId=${event.runId} tool=${event.tool}`;
+      return undefined;
     case 'permission.pending':
       return formatPermissionSummaryForOperator(event.permission, {
         workerLabel: event.workerLabel,

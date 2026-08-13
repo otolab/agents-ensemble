@@ -5,6 +5,8 @@ export type { WorkerDisplayStatus };
 export interface WorkerDisplayState {
   kind: string;
   status: WorkerDisplayStatus;
+  /** processing 中の活動ヒント（例: `calling: Shell`）。 */
+  activity?: string;
 }
 
 /** #54 最小 UI の表示ペイン用 state（入力欄は含めない）。 */
