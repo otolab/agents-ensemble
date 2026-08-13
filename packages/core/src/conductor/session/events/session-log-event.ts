@@ -169,6 +169,17 @@ export interface SessionPostLoopWaitEvent {
   type: 'session.post_loop_wait';
 }
 
+export interface SessionOperatorExitEvent {
+  type: 'session.operator_exit';
+}
+
+export interface HarnessTeardownSummaryEvent {
+  type: 'harness.teardown';
+  force: boolean;
+  durationMs: number;
+  phases: Record<string, number>;
+}
+
 export interface ConductorAuthRecoveryEvent {
   type: 'conductor.auth.recovery';
   agentId: string;
@@ -221,6 +232,8 @@ export type SessionLogEvent =
   | SessionWorktreeNoticeEvent
   | SessionContinueEvent
   | SessionPostLoopWaitEvent
+  | SessionOperatorExitEvent
+  | HarnessTeardownSummaryEvent
   | ConductorAuthRecoveryEvent
   | ConductorAuthReconnectEvent
   | HarnessGitHubUpdateEvent

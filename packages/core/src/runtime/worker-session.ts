@@ -139,8 +139,8 @@ export class WorkerSession {
     return this.runtime.sendWorkerMessage(name, instruction, options);
   }
 
-  async stop(): Promise<void> {
-    await this.runtime.shutdown();
+  async stop(options?: { force?: boolean }): Promise<void> {
+    await this.runtime.shutdown(options);
     await this.processor.stop();
   }
 }

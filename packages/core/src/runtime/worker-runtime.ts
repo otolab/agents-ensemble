@@ -239,13 +239,41 @@ export class WorkerRuntime {
     });
   }
 
+  /** 進行中の全 resident prompt を `session/cancel` する（明示 exit 用）。 */
+  cancelAllActivePrompts(): void {
+    for (const resident of this.residents.values()) {
+      if (resident.state === 'processing' && !resident.cancelInFlight) {
+        resident.cancelInFlight = true;
+        cancelWorkerAcpPrompt(resident.attached.session);
+      }
+    }
+  }
+
   /** ensemble 終了時に全 resident の ACP 接続を閉じる。 */
-  async shutdown(): Promise<void> {
+  async shutdown(options?: { force?: boolean }): Promise<void> {
+    if (options?.force) {
+      this.cancelAllActivePrompts();
+      const residents = [...this.residents.values()];
+      await Promise.all(
+        residents.map((resident) => closeWorkerAcpSession(resident.attached.session)),
+      );
+      this.residents.clear();
+      this.resolveIdleWaiters();
+      return;
+    }
+
     await this.waitForIdle();
     for (const resident of this.residents.values()) {
       await closeWorkerAcpSession(resident.attached.session);
     }
     this.residents.clear();
+  }
+
+  private resolveIdleWaiters(): void {
+    for (const resolve of this.idleResolvers) {
+      resolve();
+    }
+    this.idleResolvers.clear();
   }
 
   private summarizeWorkerStatus(name: string): WorkerStatusSummary {
@@ -523,10 +551,7 @@ export class WorkerRuntime {
 
   private resolveIdleIfReady(): void {
     if (this.processing.size === 0 && this.attachInFlight === 0) {
-      for (const resolve of this.idleResolvers) {
-        resolve();
-      }
-      this.idleResolvers.clear();
+      this.resolveIdleWaiters();
     }
   }
 }
