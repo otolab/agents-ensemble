@@ -56,7 +56,6 @@ interface GhReviewComment {
 }
 
 interface GhCheckRun {
-  __typename?: string;
   name: string;
   status: string;
   conclusion?: string | null;
@@ -312,11 +311,68 @@ async function fetchStatusCheckRollup(
     { cwd },
   );
   const data = JSON.parse(stdout) as { statusCheckRollup?: unknown };
-  const rollup = data.statusCheckRollup;
-  if (Array.isArray(rollup)) {
-    return rollup as GhCheckRun[];
+  return normalizeStatusCheckRollup(data.statusCheckRollup);
+}
+
+/** `gh pr view --json statusCheckRollup` の CheckRun / StatusContext を共通形に正規化する。 */
+function normalizeStatusCheckRollup(rollup: unknown): GhCheckRun[] {
+  if (!Array.isArray(rollup)) {
+    return [];
   }
-  return [];
+
+  const normalized: GhCheckRun[] = [];
+  for (const item of rollup) {
+    const check = normalizeRollupItem(item);
+    if (check) {
+      normalized.push(check);
+    }
+  }
+  return normalized;
+}
+
+function normalizeRollupItem(item: unknown): GhCheckRun | undefined {
+  if (!item || typeof item !== 'object') {
+    return undefined;
+  }
+
+  const row = item as Record<string, unknown>;
+  if (row.__typename === 'StatusContext') {
+    return normalizeStatusContext(row);
+  }
+
+  const name = typeof row.name === 'string' ? row.name : undefined;
+  const status = typeof row.status === 'string' ? row.status : undefined;
+  if (!name || !status) {
+    return undefined;
+  }
+
+  return {
+    name,
+    status,
+    conclusion: typeof row.conclusion === 'string' ? row.conclusion : null,
+    detailsUrl: typeof row.detailsUrl === 'string' ? row.detailsUrl : undefined,
+  };
+}
+
+function normalizeStatusContext(row: Record<string, unknown>): GhCheckRun | undefined {
+  const name = typeof row.context === 'string' ? row.context : undefined;
+  const state = typeof row.state === 'string' ? row.state.toUpperCase() : undefined;
+  if (!name || !state) {
+    return undefined;
+  }
+
+  const detailsUrl = typeof row.targetUrl === 'string' ? row.targetUrl : undefined;
+  if (state === 'PENDING' || state === 'EXPECTED') {
+    return { name, status: 'IN_PROGRESS', conclusion: null, detailsUrl };
+  }
+  if (state === 'SUCCESS') {
+    return { name, status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl };
+  }
+  if (state === 'FAILURE' || state === 'ERROR') {
+    return { name, status: 'COMPLETED', conclusion: state, detailsUrl };
+  }
+
+  return { name, status: 'COMPLETED', conclusion: state, detailsUrl };
 }
 
 function collectReviewUpdates(
@@ -412,7 +468,10 @@ function collectCiUpdates(input: {
 
   for (const check of input.checkRuns) {
     const name = check.name;
-    const status = check.status.toUpperCase();
+    const status = check.status?.toUpperCase();
+    if (!name || !status) {
+      continue;
+    }
     if (isPendingCheckStatus(status)) {
       pendingNow.add(name);
       continue;

@@ -19,6 +19,25 @@ export const GH_STATUS_CHECK_ROLLUP_IN_PROGRESS = [
   },
 ] as const;
 
+/** レガシー commit status（`status` ではなく `state` / `context`）。 */
+export const GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_PENDING = [
+  {
+    __typename: 'StatusContext',
+    context: 'ci/legacy',
+    state: 'PENDING',
+    targetUrl: 'https://github.com/org/repo/actions/runs/2',
+  },
+] as const;
+
+export const GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_SUCCESS = [
+  {
+    __typename: 'StatusContext',
+    context: 'ci/legacy',
+    state: 'SUCCESS',
+    targetUrl: 'https://github.com/org/repo/actions/runs/2',
+  },
+] as const;
+
 export function ghPrViewStatusCheckRollupJson(checkRuns: readonly object[]): string {
   return JSON.stringify({ statusCheckRollup: checkRuns });
 }

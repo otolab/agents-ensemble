@@ -4,6 +4,8 @@ import { emptyGitHubMonitorCursor } from './github-monitor-cursor.js';
 import {
   GH_STATUS_CHECK_ROLLUP_COMPLETED_SUCCESS,
   GH_STATUS_CHECK_ROLLUP_IN_PROGRESS,
+  GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_PENDING,
+  GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_SUCCESS,
   ghPrViewStatusCheckRollupJson,
 } from './github-test-fixtures.js';
 
@@ -196,6 +198,68 @@ describe('fetchGitHubUpdates', () => {
     expect(withPending.updates[0]).toMatchObject({
       kind: 'ci.completed',
       checkName: 'ci/test',
+      checkConclusion: 'SUCCESS',
+    });
+  });
+
+  it('handles StatusContext entries in statusCheckRollup without throwing', async () => {
+    const prSearch = JSON.stringify([
+      {
+        number: 42,
+        title: 'feat',
+        url: 'https://github.com/org/repo/pull/42',
+        state: 'OPEN',
+      },
+    ]);
+
+    const bootstrapGh = mockGh({
+      'api repos/org/repo/issues/39/comments --paginate': '[]',
+      [SEARCH_PRS_KEY]: prSearch,
+      'api repos/org/repo/pulls/42/reviews --paginate': '[]',
+      'api repos/org/repo/pulls/42/comments --paginate': '[]',
+      'pr view 42 --repo org/repo --json statusCheckRollup':
+        ghPrViewStatusCheckRollupJson(GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_PENDING),
+    });
+
+    const bootstrap = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: emptyGitHubMonitorCursor(),
+      initialCursorPoll: true,
+      runGhFn: bootstrapGh,
+    });
+
+    expect(bootstrap.updates).toEqual([]);
+    expect(bootstrap.cursor.pullRequests?.['42']?.pendingCheckNames).toEqual([
+      'ci/legacy',
+    ]);
+
+    const completedGh = mockGh({
+      'api repos/org/repo/issues/39/comments --paginate': '[]',
+      [SEARCH_PRS_KEY]: prSearch,
+      'api repos/org/repo/pulls/42/reviews --paginate': '[]',
+      'api repos/org/repo/pulls/42/comments --paginate': '[]',
+      'pr view 42 --repo org/repo --json statusCheckRollup':
+        ghPrViewStatusCheckRollupJson(GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_SUCCESS),
+    });
+
+    const withPending = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: {
+        ...bootstrap.cursor,
+        pullRequests: {
+          '42': {
+            ...bootstrap.cursor.pullRequests!['42']!,
+            pendingCheckNames: ['ci/legacy'],
+          },
+        },
+      },
+      runGhFn: completedGh,
+    });
+
+    expect(withPending.updates).toHaveLength(1);
+    expect(withPending.updates[0]).toMatchObject({
+      kind: 'ci.completed',
+      checkName: 'ci/legacy',
       checkConclusion: 'SUCCESS',
     });
   });
