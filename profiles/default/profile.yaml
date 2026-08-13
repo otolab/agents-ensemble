@@ -1,14 +1,14 @@
 # デフォルト動作モード: worker-and-reviewer
 # conductor は SDK 経由で暗黙起動、worker は profile 定義どおりセッション開始時に bootstrap する。
-# 詳細は team.md（3者共通）。役割別の起動文書は agents.<kind>.systemPromptFile。
+# 詳細は team.md（3者共通）。役割別の起動文書は agents.<kind>.prompt / promptFile。
 
 agents:
   conductor:
-    systemPromptFile: conductor.md
+    promptFile: conductor.prompt.yaml
   implementer:
-    systemPromptFile: implementer.md
+    promptFile: implementer.prompt.yaml
   reviewer:
-    systemPromptFile: reviewer.md
+    promptFile: reviewer.prompt.yaml
 
 workers:
   - name: implementer

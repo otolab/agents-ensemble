@@ -171,6 +171,7 @@ export {
 export type {
   Profile,
   ProfileMaterial,
+  ResolvedProfile,
   AgentDefinition,
   ProfileWorkerEntry,
   ProfileWorkerRef,
@@ -179,7 +180,7 @@ export type {
 } from './profile/types.js';
 export {
   profileWorkersToSessionSpecs,
-  resolveAgentSystemPrompt,
+  resolveAgentPromptModule,
   normalizeProfileWorker,
   normalizeProfileWorkers,
   sessionStateFromProfile,

@@ -109,7 +109,7 @@ describe('startInboxProcessor', () => {
         name: 'ping-1',
         issueUrl: 'https://github.com/org/repo/issues/1',
         kind: 'ping',
-        systemPrompt: 'pong',
+        prompt: { instructions: ['pong'] },
         repoRoot: '/repo',
       },
       new Error('dispatch failed'),

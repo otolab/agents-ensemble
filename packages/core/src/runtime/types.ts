@@ -1,3 +1,4 @@
+import type { PromptModule } from '@modular-prompt/core';
 import type { WorktreeRef } from '../worktree/worktree.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
@@ -7,7 +8,7 @@ import type { EnsembleSessionState } from '../profile/types.js';
 export interface WorkerStartParams {
   name: string;
   kind: string;
-  systemPrompt: string;
+  prompt?: PromptModule;
   issueUrl: string;
   worktree: WorktreeRef;
   sessionState: EnsembleSessionState;

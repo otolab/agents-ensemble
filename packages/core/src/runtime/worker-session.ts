@@ -98,7 +98,7 @@ export class WorkerSession {
         name: worker.name,
         issueUrl: this.options.issueUrl,
         kind: worker.kind,
-        systemPrompt: worker.systemPrompt,
+        prompt: worker.prompt,
         worktree: this.options.worktree!,
         sessionState: this.options.sessionState,
         resumeAcpSessionId:

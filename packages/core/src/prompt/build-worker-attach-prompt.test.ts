@@ -11,7 +11,9 @@ describe('buildWorkerAttachPrompt', () => {
         workers: [{ name: 'implementer', kind: 'implementer' }],
         kinds: ['implementer'],
       },
-      systemPrompt: 'profile bootstrap',
+      agentModule: {
+        instructions: ['profile bootstrap'],
+      },
     });
 
     expect(prompt).toContain('**implementer**');

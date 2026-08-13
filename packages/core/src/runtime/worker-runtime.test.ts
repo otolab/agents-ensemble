@@ -98,7 +98,7 @@ describe('WorkerRuntime', () => {
       name: 'ping-1',
       issueUrl: TEST_WORKTREE.issue.url,
       kind: 'ping',
-      systemPrompt: 'pong',
+      prompt: { instructions: ['pong'] },
       worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'ping-1', kind: 'ping' }],
@@ -153,7 +153,7 @@ describe('WorkerRuntime', () => {
       name: 'ping-1',
       issueUrl: TEST_WORKTREE.issue.url,
       kind: 'ping',
-      systemPrompt: 'pong',
+      prompt: { instructions: ['pong'] },
       worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'ping-1', kind: 'ping' }],
@@ -200,7 +200,7 @@ describe('WorkerRuntime', () => {
       name: 'ping-1',
       issueUrl: TEST_WORKTREE.issue.url,
       kind: 'ping',
-      systemPrompt: 'pong',
+      prompt: { instructions: ['pong'] },
       worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'ping-1', kind: 'ping' }],
@@ -246,7 +246,7 @@ describe('WorkerRuntime', () => {
       name: 'ping-1',
       issueUrl: TEST_WORKTREE.issue.url,
       kind: 'ping',
-      systemPrompt: 'pong',
+      prompt: { instructions: ['pong'] },
       worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'ping-1', kind: 'ping' }],
@@ -310,7 +310,7 @@ describe('WorkerRuntime', () => {
       name: 'ping-1',
       issueUrl: TEST_WORKTREE.issue.url,
       kind: 'ping',
-      systemPrompt: 'pong',
+      prompt: { instructions: ['pong'] },
       worktree: TEST_WORKTREE,
       sessionState: {
         workers: [{ name: 'ping-1', kind: 'ping' }],

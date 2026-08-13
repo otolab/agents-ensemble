@@ -25,7 +25,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 const PING_PROFILE: Profile = {
   agents: {
-    ping: { systemPrompt: PING_SYSTEM_PROMPT },
+    ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },
   workers: [{ name: 'ping-1', kind: 'ping' }],
 };

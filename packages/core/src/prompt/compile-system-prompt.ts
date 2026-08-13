@@ -1,4 +1,5 @@
 import { compile } from '@modular-prompt/core';
+import type { PromptModule } from '@modular-prompt/core';
 import type { IssueContext } from '../github/issue-context.js';
 import type { Profile } from '../profile/types.js';
 import { ensembleContext } from './contexts/kind.js';
@@ -11,7 +12,7 @@ import { issueContextMaterial } from './issue-context-material.js';
 export interface CompileConductorSystemPromptOptions {
   issueUrl: string;
   profile: Pick<Profile, 'workers' | 'agents' | 'materials'>;
-  roleBootstrap?: string;
+  agentModule?: PromptModule;
   /** 初回 send 用。Prepared Materials の Issue context として載せる。 */
   issueContext?: IssueContext;
 }
@@ -26,7 +27,7 @@ export function compileConductorSystemPrompt(
     ? [issueContextMaterial(options.issueContext), ...profileMaterials]
     : profileMaterials;
   const profileModule = profilePromptModule({
-    roleBootstrap: options.roleBootstrap,
+    agentModule: options.agentModule,
     materials,
   });
   return renderCompiledPrompt(

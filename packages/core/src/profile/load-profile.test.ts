@@ -14,8 +14,9 @@ import {
 import {
   normalizeProfileWorker,
   profileWorkersToSessionSpecs,
-  resolveAgentSystemPrompt,
+  resolveAgentPromptModule,
 } from './types.js';
+import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 
 describe('normalizeProfileWorker', () => {
   it('expands kind string to name=kind', () => {
@@ -60,7 +61,9 @@ describe('loadProfileFromFile', () => {
     kind: ping
 agents:
   ping:
-    systemPrompt: pong only
+    prompt:
+      instructions:
+        - pong only
 materials:
   - id: flow
     title: Flow
@@ -71,7 +74,7 @@ materials:
     const profile = await loadProfileFromFile(path);
 
     expect(profile.workers).toEqual([{ name: 'ping-1', kind: 'ping' }]);
-    expect(profile.agents?.ping?.systemPrompt).toBe('pong only');
+    expect(profile.agents?.ping?.prompt?.instructions).toEqual(['pong only']);
     expect(profile.materials?.[0]?.content).toBe('step 1');
   });
 
@@ -117,24 +120,43 @@ materials:
     expect(profile.materials?.[0]?.content).toBe('from file\n');
   });
 
-  it('loads agent systemPrompt from systemPromptFile', async () => {
+  it('loads agent prompt from promptFile', async () => {
     const profileDir = join(dir, 'profiles', 'worker');
     await mkdir(profileDir, { recursive: true });
-    await writeFile(join(profileDir, 'prompt.md'), 'worker prompt\n');
+    await writeFile(
+      join(profileDir, 'prompt.yaml'),
+      `instructions:
+  - worker prompt
+`,
+    );
     await writeFile(
       join(profileDir, 'profile.yaml'),
       `workers:
   - main
 agents:
   worker:
-    systemPromptFile: prompt.md
+    promptFile: prompt.yaml
 `,
     );
 
     const profile = await loadProfileFromFile(join(profileDir, 'profile.yaml'));
 
-    expect(profile.agents?.worker?.systemPrompt).toBe('worker prompt\n');
+    expect(profile.agents?.worker?.prompt?.instructions).toEqual(['worker prompt']);
     expect(profile.workers).toEqual([{ name: 'main', kind: 'main' }]);
+  });
+
+  it('rejects legacy systemPrompt fields', async () => {
+    const path = join(dir, 'profile.yaml');
+    await writeFile(
+      path,
+      `workers: []
+agents:
+  ping:
+    systemPrompt: legacy
+`,
+    );
+
+    await expect(loadProfileFromFile(path)).rejects.toThrow(/systemPrompt/);
   });
 
   it('rejects material with both content and file', async () => {
@@ -153,26 +175,26 @@ materials:
 });
 
 describe('profileWorkersToSessionSpecs', () => {
-  it('resolves agent system prompts by kind', () => {
+  it('resolves agent prompt modules by kind', () => {
     const specs = profileWorkersToSessionSpecs({
       workers: [
         { name: 'ping-1', kind: 'ping' },
         { name: 'main', kind: 'other' },
       ],
       agents: {
-        ping: { systemPrompt: 'pong' },
-        default: { systemPrompt: 'fallback' },
+        ping: { prompt: { instructions: ['pong'] } },
+        default: { prompt: { instructions: ['fallback'] } },
       },
     });
 
     expect(specs).toEqual([
-      { name: 'ping-1', kind: 'ping', systemPrompt: 'pong' },
-      { name: 'main', kind: 'other', systemPrompt: 'fallback' },
+      { name: 'ping-1', kind: 'ping', prompt: { instructions: ['pong'] } },
+      { name: 'main', kind: 'other', prompt: { instructions: ['fallback'] } },
     ]);
   });
 
-  it('uses empty prompt when no agent definition exists', () => {
-    expect(resolveAgentSystemPrompt('worker', undefined)).toBe('');
+  it('uses undefined prompt when no agent definition exists', () => {
+    expect(resolveAgentPromptModule('worker', undefined)).toBeUndefined();
   });
 });
 
@@ -208,7 +230,9 @@ describe('loadProfile', () => {
 
     expect(profilePath).toBe(bundledDefaultProfilePath());
     expect(profile.workers.length).toBeGreaterThan(0);
-    expect(resolveAgentSystemPrompt('conductor', profile.agents)).toContain('conductor');
+    expect(resolveAgentPromptModule('conductor', profile.agents)?.persona?.[0]).toContain(
+      'conductor',
+    );
   });
 
   it('loads project-local profile when name is not bundled', async () => {
@@ -230,5 +254,22 @@ describe('loadProfile', () => {
 
     expect(profilePath).toBe(profileDirectoryPath(dir, 'custom'));
     expect(profile.workers).toEqual([{ name: 'main', kind: 'worker' }]);
+  });
+});
+
+describe('default profile compile equivalence', () => {
+  it('preserves key conductor profile phrases after modular-prompt migration', async () => {
+    const { profile } = await loadProfile({ cwd: '/no-such-cwd' });
+    const prompt = compileConductorSystemPrompt({
+      issueUrl: 'https://github.com/org/repo/issues/150',
+      profile,
+      agentModule: resolveAgentPromptModule('conductor', profile.agents),
+    });
+
+    expect(prompt).toContain('**conductor**');
+    expect(prompt).toContain('§3 conductor');
+    expect(prompt).toContain('prompt_worker（worker-and-reviewer）');
+    expect(prompt).toContain('permission.pending');
+    expect(prompt).toContain('スナップショットのみ');
   });
 });

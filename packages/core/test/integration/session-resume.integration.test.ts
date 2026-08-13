@@ -32,7 +32,7 @@ const RESUME_AGENT_ID = 'agent-resume-test';
 
 const PING_PROFILE_BASE: Profile = {
   agents: {
-    ping: { systemPrompt: PING_SYSTEM_PROMPT },
+    ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },
   workers: [{ name: 'ping-1', kind: 'ping' }],
 };
@@ -101,7 +101,7 @@ describe('session resume integration', () => {
       issueUrl: TEST_ISSUE.url,
       name: 'ping-1',
       kind: 'ping',
-      systemPrompt: PING_SYSTEM_PROMPT,
+      prompt: { instructions: [PING_SYSTEM_PROMPT] },
       sessionState,
       worktree,
     };

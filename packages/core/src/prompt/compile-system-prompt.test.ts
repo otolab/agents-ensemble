@@ -41,11 +41,13 @@ describe('compileConductorSystemPrompt', () => {
     expect(prompt).toContain('resolve_permission');
   });
 
-  it('merges profile role bootstrap after ensemble instructions', () => {
+  it('merges profile agent module after ensemble instructions', () => {
     const prompt = compileConductorSystemPrompt({
       issueUrl: TEST_ISSUE_URL,
       profile: TEST_PROFILE,
-      roleBootstrap: '# conductor 起動文書\n\nprofile 固有の指示。',
+      agentModule: {
+        instructions: ['profile 固有の指示。'],
+      },
     });
 
     expect(prompt).toContain('profile 固有の指示');
