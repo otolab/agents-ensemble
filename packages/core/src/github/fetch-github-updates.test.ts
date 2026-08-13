@@ -43,7 +43,7 @@ describe('fetchGitHubUpdates', () => {
     const result = await fetchGitHubUpdates({
       issueUrl: ISSUE_URL,
       cursor: emptyGitHubMonitorCursor(),
-      bootstrapOnly: true,
+      initialCursorPoll: true,
       runGhFn,
     });
 
@@ -159,7 +159,7 @@ describe('fetchGitHubUpdates', () => {
     const bootstrap = await fetchGitHubUpdates({
       issueUrl: ISSUE_URL,
       cursor: emptyGitHubMonitorCursor(),
-      bootstrapOnly: true,
+      initialCursorPoll: true,
       runGhFn: bootstrapGh,
     });
 

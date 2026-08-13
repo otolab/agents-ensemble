@@ -83,7 +83,7 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
         cursor,
         cwd: options.cwd,
         runGhFn: options.runGhFn,
-        bootstrapOnly: needsBootstrapPoll,
+        initialCursorPoll: needsBootstrapPoll,
       };
       const result = await fetchGitHubUpdates(input);
       cursor = result.cursor;

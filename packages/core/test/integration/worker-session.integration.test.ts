@@ -41,7 +41,7 @@ describe('WorkerSession integration', () => {
       },
     });
 
-    session.bootstrap();
+    session.startWorkers();
     await session.runtime.waitForIdle();
     await session.inbox.drain();
 
@@ -85,7 +85,7 @@ describe('WorkerSession integration', () => {
       },
     });
 
-    session.bootstrap();
+    session.startWorkers();
     await session.runtime.waitForIdle();
     await session.inbox.drain();
 

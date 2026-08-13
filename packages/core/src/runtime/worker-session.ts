@@ -19,7 +19,7 @@ export type { SessionWorkerSpec };
 
 export interface WorkerSessionOptions {
   issueUrl: string;
-  /** Conductor が bootstrap 前に resolve した作業ディレクトリ（worker ありのとき必須）。 */
+  /** Conductor が worker 起動前に resolve した作業ディレクトリ（worker ありのとき必須）。 */
   worktree?: WorktreeRef;
   workers: SessionWorkerSpec[];
   sessionState: EnsembleSessionState;
@@ -90,8 +90,8 @@ export class WorkerSession {
     });
   }
 
-  /** プロファイルで指定された worker を attach する。 */
-  bootstrap(): void {
+  /** プロファイルで指定された worker を attach し init prompt ラウンドを開始する。 */
+  startWorkers(): void {
     if (this.options.workers.length > 0 && !this.options.worktree) {
       throw new Error('WorkerSession requires worktree when workers are configured');
     }
@@ -108,6 +108,13 @@ export class WorkerSession {
       });
       this.startedWorkerIds.push(workerId);
     }
+  }
+
+  /**
+   * @deprecated Use {@link WorkerSession.startWorkers}.
+   */
+  bootstrap(): void {
+    this.startWorkers();
   }
 
   /** 常駐 worker へ作業指示を送る（`session/prompt`）。 */
