@@ -1,164 +1,18 @@
-import type { WorkerDispatchResult } from '../../dispatch/worker-dispatch.js';
 import type { EscalationRecord } from '../../escalation/human-inquiry.js';
 import type { OpenQuestion } from '../../escalation/open-question.js';
-import type { PendingPermission } from '../../permission/pending-permission.js';
+import type { WorkerDispatchResult } from '../../dispatch/worker-dispatch.js';
 import type { WorkerFailureRecord } from '../../runtime/types.js';
-import type { WorkerWorktreeMode } from '../../worktree/worktree.js';
 import type { IssueLoopStopReason } from '../session-policy.js';
 import type { ConductorSessionResult } from '../conductor-session.js';
+import type { SessionLogEvent } from './events/session-log-event.js';
+
+export type {
+  SessionLogEvent,
+  SessionLogSink,
+} from './events/session-log-event.js';
 
 /** セッション終了時の exit report（`ConductorSessionResult` の別名）。 */
 export type SessionSummary = ConductorSessionResult;
-
-export type SessionLogEvent =
-  | {
-      type: 'harness.worktree';
-      path: string;
-      branch: string;
-      mode: WorkerWorktreeMode;
-    }
-  | {
-      type: 'harness.worktree.removed';
-      path: string;
-      branch: string;
-    }
-  | {
-      type: 'harness.worktree.remove_skipped';
-      path: string;
-      branch: string;
-      reason: 'dirty';
-    }
-  | {
-      type: 'harness.worktree.remove_failed';
-      path: string;
-      branch: string;
-      error: string;
-    }
-  | {
-      type: 'harness.worker.prompt.started';
-      name: string;
-      kind: string;
-      workerId: string;
-      source: 'harness' | 'conductor';
-    }
-  | {
-      type: 'harness.worker.prompt.completed';
-      name: string;
-      kind: string;
-      workerId: string;
-      source: 'harness' | 'conductor';
-      stopReason: string;
-    }
-  | {
-      type: 'harness.worker.prompt.failed';
-      name: string;
-      kind: string;
-      workerId: string;
-      source: 'harness' | 'conductor';
-      error: string;
-    }
-  | {
-      type: 'harness.worker.acp.update';
-      name: string;
-      kind: string;
-      workerId: string;
-      sessionUpdate: string;
-      sessionId?: string;
-    }
-  | {
-      type: 'operator.input';
-      conductorTurn: number;
-      text: string;
-    }
-  | {
-      type: 'conductor.send.started';
-      /** これから実行する send の通し番号（1 始まり）。 */
-      sendCount: number;
-      /** dispatch 束の source key（`operator` / `permission` / `worker:*` / `initial`）。 */
-      dispatchSource?: string;
-    }
-  | {
-      type: 'conductor.send.progress';
-      sendCount: number;
-      runId: string;
-      tool: string;
-    }
-  | {
-      type: 'conductor.send';
-      sendCount: number;
-      runId: string;
-      status: string;
-      result?: string;
-      error?: { message: string; code?: string };
-      workerDispatches: number;
-      workerFailures: number;
-    }
-  | {
-      type: 'permission.pending';
-      permission: PendingPermission;
-      /** worker kind など、オペレータ向けの短いラベル。 */
-      workerLabel: string;
-    }
-  | {
-      type: 'worker.round';
-      dispatch: WorkerDispatchResult;
-    }
-  | {
-      type: 'worker.failed';
-      failure: WorkerFailureRecord;
-    }
-  | {
-      type: 'worker.process.stderr';
-      line: string;
-      stream: 'stderr';
-      workerName?: string;
-    }
-  | {
-      type: 'session.stop';
-      stopReason: IssueLoopStopReason;
-    }
-  | {
-      type: 'open.question.enqueued';
-      question: OpenQuestion;
-    }
-  | {
-      type: 'escalation.recorded';
-      record: EscalationRecord;
-    }
-  | {
-      type: 'session.worktree.notice';
-      mode: WorkerWorktreeMode;
-    }
-  | {
-      type: 'session.continue';
-      conductorAgentId: string;
-    }
-  | {
-      type: 'session.post_loop_wait';
-    }
-  | {
-      type: 'conductor.auth.recovery';
-      agentId: string;
-      hint: string;
-    }
-  | {
-      type: 'conductor.auth.reconnect';
-      agentId: string;
-    }
-  | {
-      type: 'harness.github.update';
-      itemCount: number;
-    }
-  | {
-      type: 'harness.github.monitor_error';
-      message: string;
-    }
-  | {
-      type: 'harness.warning';
-      message: string;
-    };
-
-export type SessionLogSink = (event: SessionLogEvent) => void;
 
 export interface SessionLoggerOptions {
   issueUrl: string;
@@ -170,7 +24,9 @@ export class SessionLogger {
   readonly workerDispatches: WorkerDispatchResult[] = [];
   readonly workerFailures: WorkerFailureRecord[] = [];
 
-  private readonly sinks = new Set<SessionLogSink>();
+  private readonly sinks = new Set<
+    (event: SessionLogEvent) => void
+  >();
   private sendCount = 0;
   private lastRunStatus = 'finished';
   private lastResult?: string;
@@ -179,7 +35,7 @@ export class SessionLogger {
 
   constructor(private readonly options: SessionLoggerOptions) {}
 
-  subscribe(sink: SessionLogSink): () => void {
+  subscribe(sink: (event: SessionLogEvent) => void): () => void {
     this.sinks.add(sink);
     return () => {
       this.sinks.delete(sink);

@@ -295,6 +295,22 @@ export type {
   GitHubUpdateEvent,
   SessionEventDispatchFields,
 } from './conductor/session/session-event.js';
+export {
+  ALL_SESSION_LOG_EVENT_TYPES,
+  HARNESS_TELEMETRY_EVENT_TYPES,
+  SESSION_AUXILIARY_EVENT_TYPES,
+  SESSION_EVENT_TYPES,
+  SESSION_OBSERVATION_EVENT_TYPES,
+} from './conductor/session/events/index.js';
+export type {
+  SessionEventType,
+  SessionLogEventType,
+  WorkerRoundOutcome,
+  WorkerFailureOutcome,
+  PermissionPendingConductorPayload,
+  PermissionPendingHarnessPayload,
+  WorkerPromptLifecycleSource,
+} from './conductor/session/events/index.js';
 
 export {
   CONDUCTOR_AUTH_HINT,
