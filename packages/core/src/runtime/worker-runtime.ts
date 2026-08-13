@@ -19,6 +19,7 @@ import type {
 } from './send-worker-message.js';
 import type {
   WorkerPromptTelemetry,
+  WorkerAcpUpdateTelemetry,
   WorkerStartedInfo,
   WorkerStartParams,
 } from './types.js';
@@ -34,6 +35,7 @@ export interface WorkerRuntimeOptions {
   /** integration の共有 bridge 注入時は false。 */
   ownsWorkerAcpConnections?: boolean;
   onPromptTelemetry?: (event: WorkerPromptTelemetry) => void;
+  onAcpUpdate?: (event: WorkerAcpUpdateTelemetry) => void;
 }
 
 interface ResidentWorker {
@@ -280,6 +282,20 @@ export class WorkerRuntime {
     this.options.onPromptTelemetry?.(event);
   }
 
+  private emitAcpUpdate(
+    resident: ResidentWorker,
+    sessionUpdate: string,
+    sessionId?: string,
+  ): void {
+    this.options.onAcpUpdate?.({
+      workerId: resident.workerId,
+      name: resident.started.name,
+      kind: resident.started.kind,
+      sessionUpdate,
+      sessionId,
+    });
+  }
+
   private async attachAndInit(started: WorkerStartedInfo): Promise<void> {
     this.attachInFlight++;
     this.attaching.set(started.name, {
@@ -383,7 +399,21 @@ export class WorkerRuntime {
       const result = await runAttachedWorkerPrompt(
         resident.attached,
         prompt,
-        this.options.inbox.createPermissionHandler(resident.workerId),
+        {
+          permissionHandler: this.options.inbox.createPermissionHandler(
+            resident.workerId,
+          ),
+          onUpdate: (update) => {
+            const sessionUpdate = update.update?.sessionUpdate;
+            if (typeof sessionUpdate === 'string' && sessionUpdate.length > 0) {
+              this.emitAcpUpdate(
+                resident,
+                sessionUpdate,
+                update.sessionId,
+              );
+            }
+          },
+        },
       );
       const dispatch = { ...result, source };
       skipCompletion =

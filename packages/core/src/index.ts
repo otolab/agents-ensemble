@@ -57,6 +57,13 @@ export type {
   PermissionDecision,
   PermissionHandler,
 } from './acp/types.js';
+export {
+  KNOWN_ACP_SESSION_UPDATE_KINDS,
+} from './acp/session-update-kinds.js';
+export type {
+  AcpSessionUpdateKind,
+  KnownAcpSessionUpdateKind,
+} from './acp/session-update-kinds.js';
 
 export { FakeAcpServer, startFakeAcpServer } from './acp/testing/fake-acp-server.js';
 export type {
@@ -265,6 +272,13 @@ export type {
   DispatchSourceKey,
 } from './conductor/session/select-dispatch-batch.js';
 export {
+  canTriggerConductorDispatch,
+  isTriggerSessionEvent,
+  sessionEventDispatchMode,
+  DEFAULT_SESSION_EVENT_DISPATCH_MODE,
+} from './conductor/session/dispatch-mode.js';
+export type { DispatchMode } from './conductor/session/dispatch-mode.js';
+export {
   SessionLogger,
 } from './conductor/session/session-logger.js';
 export type {
@@ -280,6 +294,7 @@ export type {
   WorkerFailedEvent,
   PermissionPendingEvent,
   GitHubUpdateEvent,
+  SessionEventDispatchFields,
 } from './conductor/session/session-event.js';
 
 export {

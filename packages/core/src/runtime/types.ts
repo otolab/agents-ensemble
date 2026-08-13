@@ -59,3 +59,11 @@ export interface WorkerPromptTelemetry {
   stopReason?: string;
   error?: string;
 }
+
+export interface WorkerAcpUpdateTelemetry {
+  workerId: string;
+  name: string;
+  kind: string;
+  sessionUpdate: string;
+  sessionId?: string;
+}

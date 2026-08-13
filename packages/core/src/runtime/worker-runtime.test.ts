@@ -122,6 +122,55 @@ describe('WorkerRuntime', () => {
     expect(runtime.attachedCount).toBe(0);
   });
 
+  it('forwards ACP session/update to onAcpUpdate during prompt', async () => {
+    const inbox = new ConductorInbox();
+    const acpUpdates: string[] = [];
+
+    const promptSession = vi.fn(
+      async (
+        _sessionId: string,
+        _prompt: string,
+        options?: { onUpdate?: (update: unknown) => void },
+      ) => {
+        options?.onUpdate?.({
+          sessionId: 'sess-1',
+          update: { sessionUpdate: 'agent_thought_chunk' },
+        });
+        return { stopReason: 'end_turn', responseText: 'pong' };
+      },
+    );
+
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+      onAcpUpdate: (event) => {
+        acpUpdates.push(event.sessionUpdate);
+      },
+    });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      systemPrompt: 'pong',
+      worktree: TEST_WORKTREE,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+    });
+
+    await runtime.waitForIdle();
+    expect(acpUpdates).toContain('agent_thought_chunk');
+    await runtime.shutdown();
+  });
+
   it('queues sendWorkerMessage while processing and drains after round completes', async () => {
     const inbox = new ConductorInbox();
     const prompts: string[] = [];

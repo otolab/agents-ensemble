@@ -41,6 +41,8 @@ export function reduceDisplayState(
       return setWorkerStatus(state, event.name, event.kind, 'idle');
     case 'harness.worker.prompt.failed':
       return setWorkerStatus(state, event.name, event.kind, 'failed');
+    case 'harness.worker.acp.update':
+      return setWorkerStatus(state, event.name, event.kind, 'running');
     case 'conductor.send.started':
       return setWorkerStatus(state, 'conductor', 'conductor', 'running');
     case 'worker.round':

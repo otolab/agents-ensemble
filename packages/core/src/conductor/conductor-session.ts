@@ -352,6 +352,16 @@ export async function runConductorSession(
           break;
       }
     },
+    onAcpUpdate: (event) => {
+      sessionLogger.emit({
+        type: 'harness.worker.acp.update',
+        name: event.name,
+        kind: event.kind,
+        workerId: event.workerId,
+        sessionUpdate: event.sessionUpdate,
+        sessionId: event.sessionId,
+      });
+    },
   });
 
   workerSession.bootstrap();

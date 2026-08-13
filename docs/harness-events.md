@@ -85,6 +85,7 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 | `harness.worker.prompt.started` | `session/prompt` ラウンド開始（init / instruction 共通） | `[harness] worker.prompt.started name=... kind=... source=harness\|conductor` | なし（TUI: running） |
 | `harness.worker.prompt.completed` | ラウンド ACP prompt 完了直後 | `[harness] worker.prompt.completed name=... kind=... source=... stopReason=...` | なし（TUI: idle） |
 | `harness.worker.prompt.failed` | attach または prompt 失敗 | `[harness] worker.prompt.failed name=... kind=... source=... error=...` | なし（TUI: failed） |
+| `harness.worker.acp.update` | `session/prompt` 中の ACP `session/update`（#148） | `[harness] worker.acp.update name=... kind=... sessionUpdate=...` | なし（TUI: running） |
 
 init prompt（`source: harness`）では attach 開始時に `started` を出し、init ラウンド完了時に `completed` を出す。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。
 
@@ -137,6 +138,7 @@ WorkerSession.bootstrap()（worker ごと。attach + init prompt）
 prompt_worker / sendWorkerMessage
        │
        ├─ harness.worker.prompt.started (source=conductor) ► stderr + TUI running
+       ├─ harness.worker.acp.update (session/prompt 中) ► stderr + TUI running
        ├─ permission 保留 ─► permission.pending ───────► stderr / TUI 活動ログ（即時）
        │                     SessionEvent permission.pending ► SessionEventQueue ► agent.send
        │
