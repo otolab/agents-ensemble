@@ -29,6 +29,7 @@ import { summarizeWorkspacePath } from '../profile/resolve-worker-workspace.js';
 import type {
   WorkerStatusDetail,
   WorkerStatusSummary,
+  WorkerHarnessState,
 } from './worker-status.js';
 
 export interface WorkerRuntimeOptions {
