@@ -3,6 +3,7 @@ import { AcpBridge } from '../acp/acp-bridge.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionHandler, PromptResult } from '../acp/types.js';
 import type { IssueRef } from '../issue/issue-ref.js';
+import { assertWorkerWorkspaceDirectory } from '../profile/resolve-worker-workspace.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
 
 /** attach / dispatch 時に worker 名を spawn オプションへマージする。 */
@@ -28,8 +29,13 @@ export type ConnectWorkerAcpFn = (
 
 export interface OpenWorkerAcpSessionOptions {
   issueUrl: string;
-  /** Conductor が事前に resolve した作業ディレクトリ。 */
+  /** Conductor が事前に resolve した作業ディレクトリ（Issue worktree）。 */
   worktree: WorktreeRef;
+  /** ACP spawn / session cwd。未指定時は `worktree.path`。 */
+  acpCwd?: string;
+  workerName?: string;
+  /** resume 時に sidecar が記録した cwd。不一致なら attach 失敗。 */
+  expectedResumeAcpCwd?: string;
   resumeAcpSessionId?: string;
   bridge?: AcpBridge;
   connectAcp?: ConnectWorkerAcpFn;
@@ -46,6 +52,8 @@ export interface WorkerAcpSession {
   sessionId: string;
   worktree: WorktreeRef;
   issue: IssueRef;
+  /** 実際に ACP に渡した cwd（`session/new` / `session/load`）。 */
+  acpCwd: string;
 }
 
 export async function openWorkerAcpSession(
@@ -53,20 +61,35 @@ export async function openWorkerAcpSession(
 ): Promise<WorkerAcpSession> {
   const worktree = options.worktree;
   const issue = worktree.issue;
+  const acpCwd = options.acpCwd ?? worktree.path;
+
+  if (
+    options.expectedResumeAcpCwd &&
+    options.expectedResumeAcpCwd !== acpCwd
+  ) {
+    const label = options.workerName ? `Worker "${options.workerName}"` : 'Worker';
+    throw new Error(
+      `${label} resume cwd mismatch: sidecar has ${options.expectedResumeAcpCwd}, current profile resolves to ${acpCwd}`,
+    );
+  }
+
+  if (options.acpCwd !== undefined) {
+    assertWorkerWorkspaceDirectory(acpCwd, options.workerName);
+  }
 
   let ownsBridge = false;
   let bridge = options.bridge;
   if (!bridge) {
     if (options.connectAcp) {
       bridge = await options.connectAcp({
-        cwd: worktree.path,
+        cwd: acpCwd,
         spawn: options.spawn,
         permissionHandler: options.permissionHandler,
       });
       ownsBridge = options.ownsBridge ?? true;
     } else {
       bridge = await AcpBridge.connect({
-        cwd: worktree.path,
+        cwd: acpCwd,
         permissionHandler: options.permissionHandler,
         ...options.spawn,
       });
@@ -79,7 +102,7 @@ export async function openWorkerAcpSession(
     try {
       await bridge.loadSession(
         sessionId,
-        worktree.path,
+        acpCwd,
         options.permissionHandler,
       );
     } catch {
@@ -87,7 +110,7 @@ export async function openWorkerAcpSession(
     }
   }
   if (!sessionId) {
-    sessionId = await bridge.newSession(worktree.path);
+    sessionId = await bridge.newSession(acpCwd);
   }
 
   return {
@@ -96,6 +119,7 @@ export async function openWorkerAcpSession(
     sessionId,
     worktree,
     issue,
+    acpCwd,
   };
 }
 

@@ -9,6 +9,8 @@ export interface WorkerStatusSummary {
   state: WorkerLifecycleState;
   queueDepth: number;
   worktreePath?: string;
+  /** ACP 起動 cwd（要約）。profile `workspace` 指定時は Issue worktree と異なることがある。 */
+  workspacePath?: string;
   acpSessionId?: string;
   /** attach 失敗時のみ */
   error?: string;

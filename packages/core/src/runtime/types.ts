@@ -13,6 +13,8 @@ export interface WorkerStartParams {
   issueUrl: string;
   worktree: WorktreeRef;
   sessionState: EnsembleSessionState;
+  resolvedWorkspacePath?: string;
+  expectedResumeAcpCwd?: string;
   resumeAcpSessionId?: string;
 }
 

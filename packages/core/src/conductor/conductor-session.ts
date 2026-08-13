@@ -189,7 +189,10 @@ export async function runConductorSession(
   const openQuestions = new OpenQuestionRegistry();
   const eventQueue = new SessionEventQueue();
   let activeProfile = options.profile;
-  const workerSessions = new Map<string, string>();
+  const workerSessions = new Map<
+    string,
+    { acpSessionId: string; acpCwd?: string }
+  >();
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
 
   if (options.resumeAgentId) {
@@ -209,7 +212,10 @@ export async function runConductorSession(
     activeProfile = sidecar.profile;
     githubMonitorCursor = sidecar.githubMonitor;
     for (const [name, worker] of Object.entries(sidecar.workers)) {
-      workerSessions.set(name, worker.acpSessionId);
+      workerSessions.set(name, {
+        acpSessionId: worker.acpSessionId,
+        ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
+      });
     }
   }
 
@@ -278,6 +284,7 @@ export async function runConductorSession(
 
   const workerSession = new WorkerSession({
     issueUrl: options.issueUrl,
+    repoRoot: options.repoRoot,
     ...(workerWorktree ? { worktree: workerWorktree } : {}),
     workers,
     sessionState,
@@ -325,7 +332,11 @@ export async function runConductorSession(
         promptResult: result.promptResult,
       });
       sessionLogger.emit({ type: 'worker.round', dispatch: result });
-      workerSessions.set(result.name, result.acpSessionId);
+      const attached = workerSession.runtime.getAttached(result.name);
+      workerSessions.set(result.name, {
+        acpSessionId: result.acpSessionId,
+        acpCwd: attached?.session.acpCwd ?? workerWorktree?.path,
+      });
       eventQueue.enqueue({ type: 'worker.completed', result });
       scheduleSidecarFlush();
     },
@@ -475,8 +486,11 @@ export async function runConductorSession(
   let flushSidecar: () => Promise<void> = async () => {};
   flushSidecar = async (): Promise<void> => {
     const workers: SessionSidecar['workers'] = {};
-    for (const [name, acpSessionId] of workerSessions) {
-      workers[name] = { acpSessionId };
+    for (const [name, worker] of workerSessions) {
+      workers[name] = {
+        acpSessionId: worker.acpSessionId,
+        ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
+      };
     }
     const snapshot = openQuestions.snapshot();
     const sidecar: SessionSidecar = {

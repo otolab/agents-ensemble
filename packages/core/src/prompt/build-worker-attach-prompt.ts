@@ -11,6 +11,7 @@ export interface WorkerAttachPromptOptions {
   issueUrl: string;
   kind: string;
   worktreePath?: string;
+  workspacePath?: string;
   worktreeInRepo?: boolean;
   sessionState: EnsembleSessionState;
   agentModule?: PromptModule;
@@ -21,9 +22,11 @@ const workerAttachModule: PromptModule<WorkerDispatchContext> = {
     (ctx) =>
       ctx.worktreeInRepo
         ? '⚠️ 特別モード: メイン worktree（リポジトリルート）で直接作業する。通常の isolated worktree は使わない。'
-        : ctx.worktreePath
-          ? `作業 worktree: ${ctx.worktreePath}`
-          : null,
+        : ctx.workspacePath && ctx.workspacePath !== ctx.worktreePath
+          ? `作業ディレクトリ: ${ctx.workspacePath}（Issue worktree とは別の ACP cwd）`
+          : ctx.worktreePath
+            ? `作業 worktree: ${ctx.worktreePath}`
+            : null,
     '- 自分の立場: conductor 配下の実作業者。Issue / PR 上の記録も成果物',
     '- 届く prompt の種類: **init prompt**（本 prompt・attach 用・待機が目的）と **instruction**（conductor からの本番作業指示）',
     '- セッションに attach 済み。conductor からの作業指示（次の session/prompt）を待つ',
@@ -44,6 +47,7 @@ export function buildWorkerAttachPrompt(
     compile(module, {
       ...ensembleContext(options.kind, options.issueUrl, options.sessionState),
       worktreePath: options.worktreePath,
+      workspacePath: options.workspacePath,
       worktreeInRepo: options.worktreeInRepo,
     }),
   );

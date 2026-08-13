@@ -19,9 +19,9 @@
 
 | 種別（例） | 役割 | worktree |
 |-----------|------|----------|
-| implementer | 実装・Issue・PR・対応・依頼・クローズ | 作成 |
+| implementer | 実装・Issue・PR・対応・依頼・クローズ | Issue worktree（既定） |
 | reviewer | 独立検証 | 既存に入る |
-| librarian | ドキュメント整備・所在調査 | 対象 repo 次第 |
+| librarian | ドキュメント整備・所在調査 | profile の `workspace` で別 cwd 可 |
 
 種別はプロファイルで定義する。Skill と worker 用システムプロンプトを返す。
 
@@ -32,6 +32,7 @@
 - `--profile` 省略時: 同梱 `default`（implementer + 役割分担 materials）
 - `agents.<kind>` … agent の modular-prompt 拡張（`prompt` インライン / `promptFile` 外部 YAML）。未指定時は ensemble base のみ
 - `workers` … 起動する worker（`name` + `kind`）。`- ping` は name=kind の省略形
+- `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む
 
 ## issue

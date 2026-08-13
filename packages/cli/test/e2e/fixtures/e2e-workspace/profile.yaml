@@ -1,0 +1,19 @@
+agents:
+  ping:
+    prompt:
+      instructions:
+        - これは接続テストです。調査・編集はせず、応答に pong とだけ含めて終了してください。
+
+workers:
+  - name: ping-default
+    kind: ping
+  - name: ping-workspace
+    kind: ping
+    workspace: workspace-target
+
+materials:
+  - id: e2e
+    title: E2E workspace
+    content: |
+      ping-workspace は profile の workspace ディレクトリで ACP が起動すること。
+      ping-default は Issue worktree を使うこと。

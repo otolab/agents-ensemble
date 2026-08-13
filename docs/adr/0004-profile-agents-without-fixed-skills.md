@@ -28,6 +28,9 @@ workers:
   - name: ping-1    # セッション内の識別名（一意）
     kind: ping      # agents.<kind> を参照
   - ping            # 省略: name=kind=ping
+  - name: librarian
+    kind: librarian
+    workspace: ../docs-repo   # 任意: この worker だけ別 ACP cwd（Issue worktree とは別）
 
 materials:
   - id: team
@@ -37,6 +40,7 @@ materials:
 - **`skill` フィールドは profile に置かない**。必要なら materials で「〜 Skill に基づいて作業せよ」と書く。worker が読み込む
 - **`kind`**: agent 定義（modular-prompt YAML）の選択子
 - **`name`**: セッション内の worker 識別。ログ・materials・conductor サマリで参照
+- **`workspace`**: 任意。worker ごとの ACP 起動 cwd。省略時はセッション共通 Issue worktree。Issue / sidecar の `repoRoot` や GitHub 監視の対象は変わらない（[#167](https://github.com/otolab/agents-ensemble/issues/167)）
 - 同梱プロファイルの正本: リポジトリ直下 `profiles/`。`build` で `packages/core/dist/profiles/` にコピー
 
 コード側フォールバック: `agents.<kind>` 未指定時は `agents.default` → 組み込み `defaultAgentModule`（Skill 名の埋め込みなし）。

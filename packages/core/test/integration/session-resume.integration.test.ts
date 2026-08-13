@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +25,7 @@ import {
   TEST_WORKTREE,
 } from './helpers/in-process-acp-bridge.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
+import { isWorkerCompletedConductorMessage } from './helpers/conductor-session-assertions.js';
 
 const SIDECAR_MATERIAL_MARKER = 'SIDECAR_PROFILE_MATERIAL_UNIQUE';
 const CLI_MATERIAL_MARKER = 'CLI_PROFILE_MATERIAL_UNIQUE';
@@ -220,5 +221,201 @@ describe('session resume integration', () => {
     expect(result.workerDispatches[0]?.acpSessionId).toBe(
       firstDispatch.acpSessionId,
     );
+  });
+
+  it('restores worker session/load with custom workspace acpCwd on resume', async () => {
+    const docsDir = join(repoRoot, 'docs-repo');
+    await mkdir(docsDir, { recursive: true });
+    const bridge = await createInProcessAcpBridge();
+    const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
+
+    const worktree = {
+      ...TEST_WORKTREE,
+      path: join(repoRoot, 'worktree'),
+    };
+    const workspaceProfile: Profile = {
+      agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
+      workers: [
+        {
+          name: 'librarian',
+          kind: 'ping',
+          workspace: 'docs-repo',
+          resolvedWorkspacePath: docsDir,
+        },
+      ],
+    };
+    const sessionState = {
+      workers: [{ name: 'librarian', kind: 'ping' }],
+      kinds: ['ping'],
+    };
+    const attachOptions = {
+      issueUrl: TEST_ISSUE.url,
+      name: 'librarian',
+      kind: 'ping',
+      prompt: { instructions: [PING_SYSTEM_PROMPT] },
+      sessionState,
+      worktree,
+      resolvedWorkspacePath: docsDir,
+    };
+    const attached = await attachWorker({
+      ...attachOptions,
+      connectAcp: async () => bridge,
+      ownsBridge: false,
+    });
+    const prompt = buildWorkerAttachPrompt(attachOptions, attached.session);
+    const firstDispatch = await runAttachedWorkerPrompt(attached, prompt);
+    await closeWorkerAcpSession(attached.session);
+    loadSessionSpy.mockClear();
+
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: RESUME_AGENT_ID,
+      }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: RESUME_AGENT_ID,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: workspaceProfile,
+        openQuestions: [],
+        sequence: 0,
+        workers: {
+          librarian: {
+            acpSessionId: firstDispatch.acpSessionId,
+            acpCwd: docsDir,
+          },
+        },
+        updatedAt: Date.now(),
+      },
+    );
+
+    mockSend.mockImplementation(async (message: string) => {
+      if (isWorkerCompletedConductorMessage(message)) {
+        return {
+          runId: 'run-workspace-resume',
+          status: 'finished',
+          result: 'conductor-ok',
+        };
+      }
+      return {
+        runId: 'run-workspace-resume-progress',
+        status: 'finished',
+        result: 'ack',
+      };
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: workspaceProfile,
+      resumeAgentId: RESUME_AGENT_ID,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+    });
+
+    expect(loadSessionSpy).toHaveBeenCalledWith(
+      firstDispatch.acpSessionId,
+      docsDir,
+      expect.any(Function),
+    );
+  });
+
+  it('fails worker attach on resume when sidecar acpCwd mismatches profile', async () => {
+    const docsDir = join(repoRoot, 'docs-repo');
+    await mkdir(docsDir, { recursive: true });
+    const bridge = await createInProcessAcpBridge();
+
+    const worktree = {
+      ...TEST_WORKTREE,
+      path: join(repoRoot, 'worktree'),
+    };
+    const workspaceProfile: Profile = {
+      agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
+      workers: [
+        {
+          name: 'librarian',
+          kind: 'ping',
+          workspace: 'docs-repo',
+          resolvedWorkspacePath: docsDir,
+        },
+      ],
+    };
+    const sessionState = {
+      workers: [{ name: 'librarian', kind: 'ping' }],
+      kinds: ['ping'],
+    };
+    const attachOptions = {
+      issueUrl: TEST_ISSUE.url,
+      name: 'librarian',
+      kind: 'ping',
+      prompt: { instructions: [PING_SYSTEM_PROMPT] },
+      sessionState,
+      worktree,
+      resolvedWorkspacePath: docsDir,
+    };
+    const attached = await attachWorker({
+      ...attachOptions,
+      connectAcp: async () => bridge,
+      ownsBridge: false,
+    });
+    const prompt = buildWorkerAttachPrompt(attachOptions, attached.session);
+    const firstDispatch = await runAttachedWorkerPrompt(attached, prompt);
+    await closeWorkerAcpSession(attached.session);
+
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: RESUME_AGENT_ID,
+      }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: RESUME_AGENT_ID,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: workspaceProfile,
+        openQuestions: [],
+        sequence: 0,
+        workers: {
+          librarian: {
+            acpSessionId: firstDispatch.acpSessionId,
+            acpCwd: join(repoRoot, 'stale-workspace'),
+          },
+        },
+        updatedAt: Date.now(),
+      },
+    );
+
+    mockSend.mockImplementation(async (message: string) => {
+      if (message.includes('## worker 失敗')) {
+        return {
+          runId: 'run-workspace-mismatch',
+          status: 'finished',
+          result: 'conductor-ok',
+        };
+      }
+      return {
+        runId: 'run-workspace-mismatch-progress',
+        status: 'finished',
+        result: 'ack',
+      };
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: workspaceProfile,
+      resumeAgentId: RESUME_AGENT_ID,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+    });
+
+    expect(result.workerFailures).toHaveLength(1);
+    expect(result.workerFailures[0]?.name).toBe('librarian');
+    expect(result.workerFailures[0]?.error).toMatch(/resume cwd mismatch/);
   });
 });

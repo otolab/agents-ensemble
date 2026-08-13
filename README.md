@@ -195,12 +195,14 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 | `--no-github-monitor` | GitHub 更新監視を無効化 |
 | `--github-monitor-debounce-ms <n>` | 更新通知の debounce（ms）。デフォルト 30000 |
 
-**worker 作業ディレクトリ**（`--worktree`）は Conductor セッション開始時に **1 回だけ** resolve し、profile の全 worker が共有する。
+**Issue worktree**（`--worktree`）は Conductor セッション開始時に **1 回だけ** resolve し、**未指定の worker** が ACP 上で作業するディレクトリになる（Issue 用 git worktree の規約）。
 
 | 値 | 意味 |
 |----|------|
 | `isolated`（既定） | Issue 専用 worktree（`.ensemble/worktrees/issue-N`） |
 | `in-repo` | メイン worktree で直接作業する **特別モード** |
+
+**per-worker ACP cwd**（profile の `workers[].workspace`）は Issue worktree **とは別概念**。指定した worker だけ別ディレクトリで `agent acp` を起動する（例: Issue はコード repo、librarian は docs repo）。省略時は上記 Issue worktree を使う。詳細は [docs/elements.md](docs/elements.md)。
 
 **CLI 出力（TTY 時）** — 詳細は [docs/session-logging.md](docs/session-logging.md)。
 
@@ -227,6 +229,7 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 |------|------|
 | open question registry | 未回答・回答済みの質問一覧と `sequence` |
 | worker `acpSessionId` | worker 名をキーに ACP `session/load` 用 ID |
+| worker `acpCwd` | 上記 session を load するときの cwd（profile `workspace` 解決後の絶対パス。resume 時に profile と照合） |
 | `profile` | セッション開始時のスナップショット（resume 時は CLI `--profile` より sidecar を優先） |
 | `updatedAt` | 最終 flush 時刻（`--continue` で最新セッション選択に使用、#31） |
 
@@ -307,13 +310,16 @@ ensemble issue <url> --repo-root . --profile ./my-profile.yaml
 workers:
   - name: main
     kind: worker
+  - name: librarian
+    kind: librarian
+    workspace: ../docs-repo   # 任意: この worker だけ別 ACP cwd
 materials:
   - id: team
     title: 役割分担
     file: team.md
 ```
 
-e2e は `agents.ping` + `workers: [ping]` で pong 応答を検証する（`packages/cli/test/e2e/fixtures/e2e-smoke/profile.yaml`）。`prompt_worker` 往復 smoke は `fixtures/e2e-roundtrip/profile.yaml`。
+e2e は `agents.ping` + `workers: [ping]` で pong 応答を検証する（`packages/cli/test/e2e/fixtures/e2e-smoke/profile.yaml`）。`prompt_worker` 往復 smoke は `fixtures/e2e-roundtrip/profile.yaml`。per-worker workspace 用 fixture は `fixtures/e2e-workspace/profile.yaml`（本 PR では e2e 未実行。integration で fake ACP 上の cwd を検証済み）。
 
 ### 人間エスカレーション（非対話環境）
 

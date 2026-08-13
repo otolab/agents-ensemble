@@ -27,6 +27,8 @@ export interface AttachWorkerOptions {
   prompt?: PromptModule;
   sessionState: EnsembleSessionState;
   worktree: WorktreeRef;
+  resolvedWorkspacePath?: string;
+  expectedResumeAcpCwd?: string;
   resumeAcpSessionId?: string;
   spawn?: SpawnAcpProcessOptions;
   connectAcp?: ConnectWorkerAcpFn;
@@ -47,6 +49,9 @@ export async function attachWorker(
   const session = await openWorkerAcpSession({
     issueUrl: options.issueUrl,
     worktree: options.worktree,
+    acpCwd: options.resolvedWorkspacePath,
+    workerName: options.name,
+    expectedResumeAcpCwd: options.expectedResumeAcpCwd,
     resumeAcpSessionId: options.resumeAcpSessionId,
     connectAcp: options.connectAcp,
     spawn: mergeWorkerSpawn(options.spawn, options.name),
@@ -73,6 +78,7 @@ export function buildWorkerAttachPrompt(
     kind: options.kind,
     agentModule: options.prompt,
     worktreePath: session.worktree.path,
+    workspacePath: session.acpCwd,
     worktreeInRepo: session.worktree.inRepo,
     sessionState: options.sessionState,
   });

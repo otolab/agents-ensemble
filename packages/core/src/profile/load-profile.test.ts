@@ -87,6 +87,38 @@ materials:
     expect(profile.workers).toEqual([{ name: 'ping', kind: 'ping' }]);
   });
 
+  it('resolves worker workspace paths from profile and repo root', async () => {
+    const repoRoot = join(dir, 'repo');
+    const profileDir = join(repoRoot, 'profiles', 'team');
+    const docsDir = join(repoRoot, 'docs-repo');
+    await mkdir(docsDir, { recursive: true });
+    await mkdir(profileDir, { recursive: true });
+    await writeFile(
+      join(profileDir, 'profile.yaml'),
+      `workers:
+  - name: implementer
+    kind: implementer
+  - name: librarian
+    kind: librarian
+    workspace: docs-repo
+  - name: local
+    kind: librarian
+    workspace: ../../docs-repo
+`,
+    );
+
+    const profile = await loadProfileFromFile(join(profileDir, 'profile.yaml'), {
+      repoRoot,
+    });
+
+    expect(profile.workers[0]).toEqual({
+      name: 'implementer',
+      kind: 'implementer',
+    });
+    expect(profile.workers[1]?.resolvedWorkspacePath).toBe(docsDir);
+    expect(profile.workers[2]?.resolvedWorkspacePath).toBe(docsDir);
+  });
+
   it('rejects duplicate worker names', async () => {
     const path = join(dir, 'profile.yaml');
     await writeFile(

@@ -15,12 +15,21 @@ export interface ProfileWorkerRefObject {
   /** セッション内の識別名（一意）。省略時は kind と同じ。 */
   name?: string;
   kind: string;
+  /**
+   * その worker の ACP 起動 cwd（Issue worktree とは別概念）。
+   * profile ディレクトリまたは repo-root 基準の相対パス、または絶対パス。
+   */
+  workspace?: string;
 }
 
 /** parse 後の worker 定義。 */
 export interface ProfileWorkerEntry {
   name: string;
   kind: string;
+  /** profile YAML の raw 値。 */
+  workspace?: string;
+  /** `loadProfile` 後に解決された絶対パス。 */
+  resolvedWorkspacePath?: string;
 }
 
 /**
@@ -65,6 +74,7 @@ export interface SessionWorkerSpec {
   name: string;
   kind: string;
   prompt?: PromptModule;
+  resolvedWorkspacePath?: string;
 }
 
 /** compile 時に state へ載せる worker 構成と kind 一覧。 */
@@ -119,11 +129,17 @@ export function normalizeProfileWorker(
     if (!worker.kind) {
       throw new Error(`Invalid profile worker[${index}] in ${label}: needs "kind"`);
     }
-    return { name: worker.name ?? worker.kind, kind: worker.kind };
+    return {
+      name: worker.name ?? worker.kind,
+      kind: worker.kind,
+      ...(typeof worker.workspace === 'string' && worker.workspace.length > 0
+        ? { workspace: worker.workspace }
+        : {}),
+    };
   }
 
   throw new Error(
-    `Invalid profile worker[${index}] in ${label}: expected kind string or { name?, kind }`,
+    `Invalid profile worker[${index}] in ${label}: expected kind string or { name?, kind, workspace? }`,
   );
 }
 
@@ -153,6 +169,9 @@ export function profileWorkersToSessionSpecs(profile: ResolvedProfile): SessionW
     name: worker.name,
     kind: worker.kind,
     prompt: resolveAgentPromptModule(worker.kind, profile.agents),
+    ...(worker.resolvedWorkspacePath
+      ? { resolvedWorkspacePath: worker.resolvedWorkspacePath }
+      : {}),
   }));
 }
 

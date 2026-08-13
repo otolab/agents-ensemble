@@ -208,19 +208,20 @@ conductor が制御する実行単位。**種別（kind）** によって読む 
 
 worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起動文書は conductor が与え、手順の正本は dispatch 先の worktree（`cwd`）上の Skill ファイルとする。
 
-| 種別 | worktree | 備考 |
-|------|----------|------|
-| **implementer** | 作成 | 実装作業の主役 |
-| **reviewer** | 既存に参加 | レビュー Skill |
-| **librarian** | 対象 repo 次第 | ドキュメント整備等（条件付き） |
+| 種別 | Issue worktree | ACP cwd（`workers[].workspace`） | 備考 |
+|------|----------------|----------------------------------|------|
+| **implementer** | 作成・共有（規約） | 省略時は Issue worktree | 実装作業の主役 |
+| **reviewer** | 既存に参加 | 省略時は Issue worktree | レビュー Skill |
+| **librarian** | Issue worktree（正本は Issue） | 別 repo を指定可 | ドキュメント整備等 |
 
-起動プロンプトのパターンは [prompts.md](prompts.md)。**どの種別をいつ dispatch するか、どの Skill・起動文書を渡すかはプロファイルが決める。**
+起動プロンプトのパターンは [prompts.md](prompts.md)。**どの種別をいつ dispatch するか、どの Skill・起動文書を渡すかはプロファイルが決める。** profile の `workers[].workspace` で worker ごとに ACP cwd を上書きできる（[#167](https://github.com/otolab/agents-ensemble/issues/167)、[elements.md](elements.md)）。
 
 ### Worker の前提
 
 - **自律実行** — session 内では Skill に沿って自走する。worker 同士は直接通信しない
 - **Issue / PR に報告** — 作業報告・状態は Issue コメント / PR に書き、他 worker が読む
-- **worktree に紐づく** — implementer は worktree を作成し、以降の worker は同じ Issue の worktree を共有する
+- **Issue worktree に紐づく** — implementer は worktree を作成し、**未指定 worker** は同じ Issue worktree を ACP cwd として共有する（規約）
+- **per-worker ACP cwd** — profile の `workers[].workspace` で worker ごとに `agent acp` の cwd を上書き可能（Issue worktree とは別。外部 repo では isolated worktree を自動作成しない）
 - **worktree のライフサイクル** — isolated モードではセッション開始時に `.ensemble/worktrees/issue-N` を作成（既存なら再利用）。TTY + post-loop で `/exit` 正常終了時に削除（未コミット変更がある場合は削除拒否）。`in-repo` では削除しない。ローカルブランチ `ensemble/issue-N` は残す
 - **新規 worktree のベース** — 可能なら `git fetch` 後の `origin` デフォルトブランチ（`origin/HEAD` または `main`）から `ensemble/issue-N` を切る。remote なし・fetch 失敗時はローカル HEAD にフォールバック
 - 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— worktree の `cwd` から解決
@@ -351,8 +352,8 @@ worker（種別ごと）──write──► Issue コメント
 conductor ──read──► 次の worker 種別の判断
 ```
 
-- **会話の resume** — worker ACP は `session/load` + sidecar の `acpSessionId`（[ADR 0011](adr/0011-session-sidecar-resume.md)）。Issue / PR は作業報告の共有バスとして引き続き正本
-- **worktree が作業の物理的な紐づけ** — 1 Issue あたり 1 worktree（規約）
+- **会話の resume** — worker ACP は `session/load` + sidecar の `acpSessionId` と `acpCwd`（[ADR 0011](adr/0011-session-sidecar-resume.md)）。Issue / PR は作業報告の共有バスとして引き続き正本
+- **Issue worktree** — 1 Issue あたり 1 つを規約（`--worktree`）。worker ごとの ACP cwd は profile `workspace` で別指定可
 
 ---
 
