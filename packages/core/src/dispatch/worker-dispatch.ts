@@ -1,15 +1,20 @@
 /** harness が worker ラウンド完了時に保持する結果型。 */
 
+import type { PromptResult } from '../acp/types.js';
+import type { IssueRef } from '../issue/issue-ref.js';
+import type { WorktreeRef } from '../worktree/worktree.js';
+import type { WorkerAcpSession } from './worker-acp-session.js';
+
 /** harness 起因の init prompt か、conductor 指示の prompt か。 */
 export type WorkerPromptSource = 'harness' | 'conductor';
 
 export interface WorkerDispatchResult {
   name: string;
   kind: string;
-  issue: import('../issue/issue-ref.js').IssueRef;
-  worktree: import('../worktree/worktree.js').WorktreeRef;
+  issue: IssueRef;
+  worktree: WorktreeRef;
   prompt: string;
-  promptResult: import('../acp/types.js').PromptResult;
+  promptResult: PromptResult;
   acpSessionId: string;
   source?: WorkerPromptSource;
 }
@@ -17,9 +22,9 @@ export interface WorkerDispatchResult {
 export function buildWorkerDispatchResult(input: {
   name: string;
   kind: string;
-  session: import('./worker-acp-session.js').WorkerAcpSession;
+  session: WorkerAcpSession;
   prompt: string;
-  promptResult: import('../acp/types.js').PromptResult;
+  promptResult: PromptResult;
   source?: WorkerPromptSource;
 }): WorkerDispatchResult {
   return {

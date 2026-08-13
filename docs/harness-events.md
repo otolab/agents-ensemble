@@ -16,11 +16,30 @@
 
 これらは **別チャネル**。混ぜない（会話 UI に harness を出さない等の原則は session-logging.md §1）。
 
+### 1.1 イベント分類ルール（どの union に足すか）
+
+| 追加する概念 | 載せる union | 判断基準 |
+|-------------|-------------|---------|
+| conductor が `agent.send` すべき判断材料 | **`SessionEvent`** | `format-session-event.ts` で YAML 化され、`SessionEventQueue` に載る |
+| 時系列テレメトリ・TUI・snapshot 更新 | **`SessionLogEvent`** | `SessionLogger.emit()` 経由。stderr / reducer / exit JSON の元データ |
+| 両方必要 | **両方**（type 名が異なる場合あり） | 発火箇所でペア emit。共有 payload は `events/shared/` を参照 |
+| exit JSON フィールドのみ | どちらでもない | 例: `worker.round` が `workerDispatches` に集約される |
+
+**意図的な別名（変更しない）**
+
+| 概念 | SessionLogEvent | SessionEvent |
+|------|-----------------|--------------|
+| worker ラウンド完了 | `worker.round`（field: `dispatch`） | `worker.completed`（field: `result`） |
+| オペレータ発話 | `operator.input` | `operator.message` |
+| GitHub 更新 | `harness.github.update`（件数のみ） | `github.update`（items 全文） |
+
+実装の型グループ定数: `packages/core/src/conductor/session/events/session-log-event-groups.ts`（`ALL_SESSION_LOG_EVENT_TYPES` / `SESSION_EVENT_TYPES`）。
+
 ---
 
 ## 2. SessionLogEvent 一覧
 
-実装の正本: `packages/core/src/conductor/session/session-logger.ts`  
+実装の正本: `packages/core/src/conductor/session/events/session-log-event.ts`（`SessionLogger` は `session-logger.ts`）  
 stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 
 ### 2.1 既存イベント
@@ -39,6 +58,9 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続） | `[harness] warning: init prompt / prompt 実行中の permission が未解消のまま 30s 以上継続...` | なし |
+| `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
+| `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
+| `conductor.auth.recovery` | 自動再接続失敗後の復旧ヒント | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
 
 ### 2.4 セッション観測イベント（#92 で追加）
@@ -106,7 +128,7 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 
 ## 3. SessionEvent 一覧（conductor 向け）
 
-実装の正本: `packages/core/src/conductor/session/session-event.ts`  
+実装の正本: `packages/core/src/conductor/session/events/session-event.ts`  
 フォーマット: `packages/core/src/conductor/session/format-session-event.ts`
 
 | type | 発火タイミング | conductor への見出し（例） | 備考 |
@@ -123,7 +145,7 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 セッション開始
   harness.worktree ─────────────────────────► stderr のみ
 
-WorkerSession.bootstrap()（worker ごと。attach + init prompt）
+WorkerSession 起動（worker ごと。attach + init prompt。API は現状 `bootstrap()`、#133 後の用語は init prompt）
   harness.worker.prompt.started (source=harness) ───► stderr + TUI running
        │
        ├─ attach + buildWorkerAttachPrompt + session/prompt
@@ -269,8 +291,10 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 
 | パス | 内容 |
 |------|------|
-| `packages/core/src/conductor/session/session-logger.ts` | `SessionLogEvent`, `SessionLogger` |
-| `packages/core/src/conductor/session/session-event.ts` | `SessionEvent` |
+| `packages/core/src/conductor/session/events/session-log-event.ts` | `SessionLogEvent` union |
+| `packages/core/src/conductor/session/events/session-event.ts` | `SessionEvent` union |
+| `packages/core/src/conductor/session/events/session-log-event-groups.ts` | 型グループ定数（doc 対応） |
+| `packages/core/src/conductor/session/session-logger.ts` | `SessionLogger` |
 | `packages/core/src/conductor/session/format-session-event.ts` | conductor 向け見出し |
 | `packages/core/src/conductor/conductor-session.ts` | emit / enqueue 配線 |
 | `packages/core/src/github/github-monitor.ts` | Issue / PR 更新監視 |

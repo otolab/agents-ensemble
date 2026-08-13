@@ -1,5 +1,4 @@
 import type { SessionEvent } from './session-event.js';
-import { isConductorSendEvent } from './session-event.js';
 import { canDispatchConductorSend } from '../session-policy.js';
 import { isTriggerSessionEvent } from './dispatch-mode.js';
 
@@ -81,7 +80,6 @@ function isDispatchable(
   maxTurns: number,
 ): boolean {
   return (
-    isConductorSendEvent(event) &&
     isTriggerSessionEvent(event) &&
     canDispatchConductorSend(event, autonomousTurns, maxTurns)
   );

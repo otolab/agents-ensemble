@@ -1,7 +1,7 @@
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import { AcpBridge } from '../acp/acp-bridge.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
-import type { PermissionHandler } from '../acp/types.js';
+import type { PermissionHandler, PromptResult } from '../acp/types.js';
 import type { IssueRef } from '../issue/issue-ref.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
 
@@ -106,7 +106,7 @@ export async function runWorkerAcpPrompt(
     permissionHandler?: PermissionHandler;
     onUpdate?: SessionUpdateHandler;
   },
-): Promise<import('../acp/types.js').PromptResult> {
+): Promise<PromptResult> {
   return session.bridge.promptSession(session.sessionId, prompt, options);
 }
 

@@ -1,6 +1,5 @@
 import type { ConductorSendResult } from './conductor-agent.js';
 import type { SessionEvent } from './session/session-event.js';
-import { isConductorSendEvent } from './session/session-event.js';
 import type { OpenQuestionRegistry } from '../escalation/open-question.js';
 import type { PermissionPipeline } from '../permission/permission-pipeline.js';
 import type { WorkerSession } from '../runtime/worker-session.js';
@@ -71,9 +70,6 @@ export function canDispatchConductorSend(
   autonomousTurns: number,
   maxTurns: number,
 ): boolean {
-  if (!isConductorSendEvent(event)) {
-    return false;
-  }
   if (event.type === 'operator.message' || event.type === 'permission.pending') {
     return true;
   }
