@@ -159,6 +159,41 @@ agents:
     await expect(loadProfileFromFile(path)).rejects.toThrow(/systemPrompt/);
   });
 
+  it('rejects legacy systemPromptFile fields', async () => {
+    const profileDir = join(dir, 'profiles', 'legacy-file');
+    await mkdir(profileDir, { recursive: true });
+    await writeFile(join(profileDir, 'prompt.md'), 'legacy\n');
+    await writeFile(
+      join(profileDir, 'profile.yaml'),
+      `workers: []
+agents:
+  worker:
+    systemPromptFile: prompt.md
+`,
+    );
+
+    await expect(loadProfileFromFile(join(profileDir, 'profile.yaml'))).rejects.toThrow(
+      /systemPrompt/,
+    );
+  });
+
+  it('rejects agent with both prompt and promptFile', async () => {
+    const path = join(dir, 'profile.yaml');
+    await writeFile(
+      path,
+      `workers: []
+agents:
+  ping:
+    prompt:
+      instructions:
+        - pong
+    promptFile: prompt.yaml
+`,
+    );
+
+    await expect(loadProfileFromFile(path)).rejects.toThrow(/prompt or promptFile/);
+  });
+
   it('rejects material with both content and file', async () => {
     const path = join(dir, 'bad.yaml');
     await writeFile(

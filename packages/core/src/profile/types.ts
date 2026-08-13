@@ -90,7 +90,7 @@ export function resolvedProfileMaterials(
 }
 
 export function sessionStateFromProfile(
-  profile: Pick<Profile, 'workers' | 'agents' | 'materials'>,
+  profile: Pick<ResolvedProfile, 'workers' | 'agents' | 'materials'>,
 ): EnsembleSessionState {
   return {
     workers: profile.workers.map((worker) => ({
@@ -148,7 +148,7 @@ export function normalizeProfileWorkers(
   return normalized;
 }
 
-export function profileWorkersToSessionSpecs(profile: Profile): SessionWorkerSpec[] {
+export function profileWorkersToSessionSpecs(profile: ResolvedProfile): SessionWorkerSpec[] {
   return profile.workers.map((worker) => ({
     name: worker.name,
     kind: worker.kind,
