@@ -591,4 +591,55 @@ describe('runConductorSession resume / shutdown', () => {
     operatorApi!.submit('/exit');
     await sessionPromise;
   });
+
+  it('emits session.operator_exit and force teardown on post-loop /exit', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+    });
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      sessionLogger,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(operatorApi).toBeDefined());
+    operatorApi!.submit('/exit');
+    await sessionPromise;
+
+    expect(
+      emitted.some((event) => event.type === 'session.operator_exit'),
+    ).toBe(true);
+    expect(
+      emitted.some(
+        (event) => event.type === 'harness.teardown' && event.force === true,
+      ),
+    ).toBe(true);
+    expect(resultStopReason(emitted)).toBe('completed');
+  });
 });
+
+function resultStopReason(events: SessionLogEvent[]): string | undefined {
+  return events.find((event) => event.type === 'session.stop')?.stopReason;
+}

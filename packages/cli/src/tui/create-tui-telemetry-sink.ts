@@ -21,5 +21,9 @@ export function createTuiTelemetrySink(viewModel: TuiViewModel): SessionLogSink 
     if (event.type === 'session.post_loop_wait') {
       viewModel.setPostLoopWaiting(true);
     }
+
+    if (event.type === 'session.operator_exit') {
+      viewModel.setShuttingDown(true);
+    }
   };
 }

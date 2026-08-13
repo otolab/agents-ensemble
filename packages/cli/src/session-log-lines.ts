@@ -64,6 +64,15 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return `github.monitor_error ${event.message}`;
     case 'harness.warning':
       return `warning: ${event.message}`;
+    case 'harness.teardown': {
+      if (!event.force && event.durationMs < 1000) {
+        return undefined;
+      }
+      const phases = Object.entries(event.phases)
+        .map(([name, ms]) => `${name}=${ms}ms`)
+        .join(' ');
+      return `teardown force=${event.force} total=${event.durationMs}ms${phases ? ` ${phases}` : ''}`;
+    }
     default:
       return undefined;
   }
@@ -82,6 +91,8 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
       return `resuming session: conductorAgentId=${event.conductorAgentId}`;
     case 'session.post_loop_wait':
       return '自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。';
+    case 'session.operator_exit':
+      return '終了しています…';
     case 'conductor.auth.recovery':
       return event.hint;
     case 'conductor.auth.reconnect':
@@ -113,6 +124,8 @@ export function formatObservationStderrLine(event: SessionLogEvent): string | un
     case 'session.continue':
       return `[continue] ${body}`;
     case 'session.post_loop_wait':
+      return `\n${body}\n`;
+    case 'session.operator_exit':
       return `\n${body}\n`;
     default:
       return undefined;

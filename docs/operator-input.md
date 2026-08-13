@@ -121,4 +121,15 @@ View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver
 
 自律ループ稼働中（post-loop 前）に Issue コメントが来た場合は、既存のイベント束に任せ、追加の `notifyResume` はしない（#160）。
 
+### `/exit` の即時フィードバック（#170）
+
+`/exit` または `exit`（大文字小文字無視・前後空白トリム）を受け付けた直後、harness は `session.operator_exit` を **同期** emit する。
+
+| 表示経路 | 内容 |
+|----------|------|
+| TTY（Ink） | 活動ログに「終了しています…」（`session.post_loop_wait` と同様 observation ラベル）。入力欄のヒントも同文になり、二重 submit を防ぐため入力は無効化 |
+| 非 TTY interactive | stderr に `\n終了しています…\n`（`createObservationSink`） |
+
+その後、worker へ `session/cancel`、明示 exit 時は fast path teardown（`waitForIdle` スキップ・並列 close）が走る。詳細は [harness-events.md](harness-events.md) の `harness.teardown`。
+
 終了 JSON はプロセス終了時のみ stdout（変更なし）。

@@ -62,6 +62,7 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
 | `conductor.auth.recovery` | 自動再接続失敗後の復旧ヒント | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
+| `harness.teardown` | `runConductorSession` の `finally` 完了時（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
 
 ### 2.4 セッション観測イベント（#92 で追加）
 
@@ -74,6 +75,7 @@ open question・エスカレーション・CLI 通知。stderr の prefix は従
 | `session.worktree.notice` | `--worktree in-repo` 開始時 | `[worktree] 特別モード: ...` | なし |
 | `session.continue` | `--continue` で sidecar から再開時 | `[continue] resuming session: conductorAgentId=...` | なし |
 | `session.post_loop_wait` | 自律ループ完了後の post-loop 待機開始 | （post-loop 待機メッセージ） | なし |
+| `session.operator_exit` | オペレータが `/exit` / `exit` を入力した直後（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | （終了フィードバックメッセージ） | なし |
 
 CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）。
 
@@ -290,6 +292,7 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 | `[worktree]` | `session.worktree.notice` | |
 | `[continue]` | `session.continue` | |
 | （post-loop メッセージ） | `session.post_loop_wait` | |
+| （終了フィードバック） | `session.operator_exit` | TTY では入力欄も無効化（`shuttingDown`） |
 
 ---
 

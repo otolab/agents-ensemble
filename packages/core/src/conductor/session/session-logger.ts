@@ -79,6 +79,8 @@ export class SessionLogger {
       case 'session.worktree.notice':
       case 'session.continue':
       case 'session.post_loop_wait':
+      case 'session.operator_exit':
+      case 'harness.teardown':
       case 'conductor.auth.recovery':
       case 'conductor.auth.reconnect':
       case 'harness.github.update':

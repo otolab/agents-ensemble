@@ -596,6 +596,8 @@ export async function runConductorSession(
     const bindingDispose = options.bindOperatorInput({
       submit: (message, submitOptions) => {
         if (isOperatorExitCommand(message)) {
+          sessionLogger.emit({ type: 'session.operator_exit' });
+          workerSession.runtime.cancelAllActivePrompts();
           if (postLoopGate.isWaiting()) {
             postLoopGate.notifyExit();
           } else if (shutdownController) {
@@ -771,24 +773,68 @@ export async function runConductorSession(
       });
     }
   } finally {
+    const forceShutdown = operatorRequestedExit || shutdownSignal.aborted;
+    const teardownStartedAt = Date.now();
+    const teardownPhases: Record<string, number> = {};
+
     disposeOperatorInput?.();
     unregisterProcessSignalHandlers();
-    if (githubMonitor) {
-      githubMonitor.flush();
-      await githubMonitor.stop();
-      githubMonitorCursor = githubMonitor.getCursor();
-    }
     if (permissionDeadlockMonitor) {
       permissionDeadlockMonitor.stop();
     }
+    if (githubMonitor) {
+      githubMonitor.flush();
+    }
+    rejectAllPendingPermissions(permissionPipeline, workerSession.inbox);
     try {
+      const phaseStart = Date.now();
       await flushSidecar();
+      teardownPhases.flushSidecar = Date.now() - phaseStart;
     } catch {
       // best-effort persistence
     }
-    rejectAllPendingPermissions(permissionPipeline, workerSession.inbox);
-    await workerSession.stop();
-    await conductorHandle.conductor.close();
+
+    const runGithubMonitorStop = async (): Promise<void> => {
+      if (!githubMonitor) {
+        return;
+      }
+      const phaseStart = Date.now();
+      await githubMonitor.stop();
+      githubMonitorCursor = githubMonitor.getCursor();
+      teardownPhases.githubMonitor = Date.now() - phaseStart;
+    };
+
+    const runWorkerStop = async (): Promise<void> => {
+      const phaseStart = Date.now();
+      await workerSession.stop({ force: forceShutdown });
+      teardownPhases.workers = Date.now() - phaseStart;
+    };
+
+    const runConductorClose = async (): Promise<void> => {
+      const phaseStart = Date.now();
+      await conductorHandle.conductor.close();
+      teardownPhases.conductor = Date.now() - phaseStart;
+    };
+
+    if (forceShutdown) {
+      await Promise.all([
+        runGithubMonitorStop(),
+        runWorkerStop(),
+        runConductorClose(),
+      ]);
+    } else {
+      await runGithubMonitorStop();
+      await runWorkerStop();
+      await runConductorClose();
+    }
+
+    sessionLogger.emit({
+      type: 'harness.teardown',
+      force: forceShutdown,
+      durationMs: Date.now() - teardownStartedAt,
+      phases: teardownPhases,
+    });
+
     if (
       operatorRequestedExit &&
       stopReason !== 'interrupted' &&

@@ -295,7 +295,9 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     [openQuestions, selectedQuestionIndex, contentWidth, terminalRows],
   );
   const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
-  const contextHint = snapshot.postLoopWaiting
+  const contextHint = snapshot.shuttingDown
+    ? '終了しています…'
+    : snapshot.postLoopWaiting
     ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
     : formatOperatorContextHint(
         snapshot.operatorContext,
@@ -403,6 +405,10 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   });
 
   const handleSubmit = (value: string) => {
+    if (snapshot.shuttingDown) {
+      return;
+    }
+
     const trimmed = trimBlankLinesOnly(value);
     if (!trimmed) {
       return;
@@ -441,6 +447,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
           value={inputValue}
           onChange={setInputValue}
           onSubmit={handleSubmit}
+          focus={!snapshot.shuttingDown}
           contentWidth={contentWidth}
           promptPrefix={operatorPrompt}
           maxDisplayLines={maxInputDisplayLines}

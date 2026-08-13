@@ -392,4 +392,56 @@ describe('WorkerRuntime', () => {
 
     await runtime.shutdown();
   });
+
+  it('force shutdown cancels in-flight prompts without waiting for idle', async () => {
+    const inbox = new ConductorInbox();
+    const cancelSession = vi.fn();
+    let resolvePrompt: (() => void) | undefined;
+    const close = vi.fn().mockResolvedValue(undefined);
+
+    const promptSession = vi.fn(
+      () =>
+        new Promise<{ stopReason: string }>((resolve) => {
+          resolvePrompt = () => resolve({ stopReason: 'cancelled' });
+        }),
+    );
+
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          cancelSession,
+          close,
+        }) as unknown as AcpBridge,
+    });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      prompt: { instructions: ['pong'] },
+      worktree: TEST_WORKTREE,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(promptSession).toHaveBeenCalledOnce();
+      expect(runtime.listWorkerStatuses()[0]?.state).toBe('processing');
+    });
+
+    const shutdownPromise = runtime.shutdown({ force: true });
+    await expect(shutdownPromise).resolves.toBeUndefined();
+    expect(cancelSession).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(runtime.attachedCount).toBe(0);
+
+    resolvePrompt?.();
+    await runtime.waitForIdle();
+  });
 });

@@ -34,6 +34,8 @@ export type {
   SessionWorktreeNoticeEvent,
   SessionContinueEvent,
   SessionPostLoopWaitEvent,
+  SessionOperatorExitEvent,
+  HarnessTeardownSummaryEvent,
   ConductorAuthRecoveryEvent,
   ConductorAuthReconnectEvent,
   HarnessGitHubUpdateEvent,

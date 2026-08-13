@@ -12,6 +12,7 @@ export interface TuiViewSnapshot {
   displayState: SessionDisplayState;
   activityLog: ActivityLogEntry[];
   postLoopWaiting: boolean;
+  shuttingDown: boolean;
   operatorContext: OperatorInputContext | undefined;
 }
 
@@ -22,6 +23,7 @@ export interface TuiViewModel {
   appendActivityLog: (label: ActivityLogLabel, text: string) => void;
   appendActivityLogSeparator: () => void;
   setPostLoopWaiting: (waiting: boolean) => void;
+  setShuttingDown: (shuttingDown: boolean) => void;
   setOperatorContext: (context: OperatorInputContext | undefined) => void;
 }
 
@@ -29,11 +31,13 @@ export function createTuiViewModel(): TuiViewModel {
   let displayState = INITIAL_SESSION_DISPLAY_STATE;
   let activityLog: ActivityLogEntry[] = [];
   let postLoopWaiting = false;
+  let shuttingDown = false;
   let operatorContext: OperatorInputContext | undefined;
   let snapshot: TuiViewSnapshot = {
     displayState,
     activityLog,
     postLoopWaiting,
+    shuttingDown,
     operatorContext,
   };
   const listeners = new Set<() => void>();
@@ -43,6 +47,7 @@ export function createTuiViewModel(): TuiViewModel {
       displayState,
       activityLog,
       postLoopWaiting,
+      shuttingDown,
       operatorContext,
     };
   };
@@ -85,6 +90,13 @@ export function createTuiViewModel(): TuiViewModel {
         return;
       }
       postLoopWaiting = waiting;
+      notify();
+    },
+    setShuttingDown(next) {
+      if (shuttingDown === next) {
+        return;
+      }
+      shuttingDown = next;
       notify();
     },
     setOperatorContext(context) {

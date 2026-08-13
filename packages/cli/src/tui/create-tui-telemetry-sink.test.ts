@@ -45,6 +45,22 @@ describe('createTuiTelemetrySink', () => {
     expect(snapshot.postLoopWaiting).toBe(true);
   });
 
+  it('marks shutting down and appends exit feedback on session.operator_exit', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({ type: 'session.operator_exit' });
+
+    const snapshot = viewModel.getSnapshot();
+    expect(snapshot.shuttingDown).toBe(true);
+    expect(snapshot.activityLog).toEqual([
+      {
+        label: 'observation',
+        text: '終了しています…',
+      },
+    ]);
+  });
+
   it('does not append conductor.send.progress to activity log', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);
