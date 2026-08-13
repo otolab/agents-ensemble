@@ -9,6 +9,7 @@ import {
   logoutConductor,
   resolveIssueUrl,
 } from '@agents-ensemble/core';
+import { readCliPackageVersion } from './cli-version.js';
 import { executeIssueCommand } from './issue-command.js';
 import { formatModelsListJson, formatModelsListText } from './format-models-list.js';
 import { formatIssueSessionSummaryJson } from './format-session-summary.js';
@@ -18,7 +19,7 @@ const program = new Command();
 program
   .name('ensemble')
   .description('Issue-based agent orchestration')
-  .version('0.0.0');
+  .version(readCliPackageVersion());
 
 program
   .command('issue')
