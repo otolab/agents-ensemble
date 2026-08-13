@@ -46,7 +46,7 @@ describe('session-log-lines', () => {
     ).toBe('conductor.send.started n=2 source=operator');
   });
 
-  it('formats conductor.send.progress harness body', () => {
+  it('suppresses conductor.send.progress from harness log body', () => {
     expect(
       formatHarnessLogBody({
         type: 'conductor.send.progress',
@@ -54,7 +54,7 @@ describe('session-log-lines', () => {
         runId: 'run-abc',
         tool: 'shell',
       }),
-    ).toBe('conductor.send.progress n=2 runId=run-abc tool=shell');
+    ).toBeUndefined();
   });
 
   it('formats harness bodies', () => {

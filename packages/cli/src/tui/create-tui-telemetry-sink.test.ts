@@ -45,6 +45,20 @@ describe('createTuiTelemetrySink', () => {
     expect(snapshot.postLoopWaiting).toBe(true);
   });
 
+  it('does not append conductor.send.progress to activity log', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({
+      type: 'conductor.send.progress',
+      sendCount: 1,
+      runId: 'run-1',
+      tool: 'grep',
+    });
+
+    expect(viewModel.getSnapshot().activityLog).toEqual([]);
+  });
+
   it('does not append harness.worker.acp.update to activity log', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);

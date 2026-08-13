@@ -36,7 +36,7 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return line;
     }
     case 'conductor.send.progress':
-      return `conductor.send.progress n=${event.sendCount} runId=${event.runId} tool=${event.tool}`;
+      return undefined;
     case 'permission.pending':
       return formatPermissionSummaryForOperator(event.permission, {
         workerLabel: event.workerLabel,

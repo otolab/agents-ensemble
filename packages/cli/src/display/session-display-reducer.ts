@@ -7,6 +7,7 @@ import {
   type SessionDisplayState,
   type WorkerDisplayStatus,
 } from './session-display-state.js';
+import { conductorActivityFromSendProgress } from './conductor-activity-from-send-progress.js';
 import { workerActivityFromAcpUpdate } from './worker-activity-from-acp-update.js';
 
 const WORKER_RUNNING = mapHarnessToDisplayStatus('processing');
@@ -92,6 +93,10 @@ export function reduceDisplayState(
     }
     case 'conductor.send.started':
       return setWorkerStatus(state, 'conductor', 'conductor', 'running');
+    case 'conductor.send.progress': {
+      const activity = conductorActivityFromSendProgress(event.tool);
+      return setWorkerStatus(state, 'conductor', 'conductor', 'running', activity);
+    }
     case 'worker.round': {
       const { name, kind, source } = event.dispatch;
       const current = state.workers[name];

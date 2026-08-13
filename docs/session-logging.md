@@ -117,7 +117,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `harness.worker.state` / `harness.session.workers` | worker harness 状態遷移 / セッション開始時 seed（#147） | なし（sink のみ） |
 | `operator.input` | オペレータ発話をキューに載せる直前 | なし（sink のみ） |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | なし（sink のみ） |
-| `conductor.send.progress` | conductor ターン中の SDK ツール開始 | なし（sink のみ） |
+| `conductor.send.progress` | conductor ターン中の SDK ツール開始 | なし（log 相当。活動ログ / stderr には出さない。Workers ペイン活動ヒントのみ #161） |
 | `conductor.send` | 各 `agent.send` 完了後 | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` を更新 |
 | `worker.round` | worker 1 ラウンド完了（init prompt 含む） | `workerDispatches` に追記 |
 | `worker.failed` | worker 失敗 | `workerFailures` に追記 |

@@ -444,6 +444,41 @@ describe('reduceDisplayState', () => {
     });
   });
 
+  it('updates conductor activity hint on send.progress', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'conductor.send.started',
+      sendCount: 1,
+    });
+    state = reduceDisplayState(state, {
+      type: 'conductor.send.progress',
+      sendCount: 1,
+      runId: 'run-1',
+      tool: 'read',
+    });
+    expect(state.workers.conductor).toEqual({
+      kind: 'conductor',
+      status: 'running',
+      activity: 'reading',
+    });
+
+    const afterReading = state;
+    state = reduceDisplayState(state, {
+      type: 'conductor.send.progress',
+      sendCount: 1,
+      runId: 'run-1',
+      tool: 'read',
+    });
+    expect(state).toBe(afterReading);
+
+    state = reduceDisplayState(state, {
+      type: 'conductor.send.progress',
+      sendCount: 1,
+      runId: 'run-1',
+      tool: 'shell',
+    });
+    expect(state.workers.conductor?.activity).toBe('calling: Shell');
+  });
+
   it('clears conductor in-flight on cancelled conductor.send', () => {
     const inFlight = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'conductor.send.started',
