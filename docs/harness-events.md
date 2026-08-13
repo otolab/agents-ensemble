@@ -92,7 +92,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 |------|------|
 | poll 間隔 | 通常 **60s**。いずれかの関連 PR で CI が pending（`QUEUED` / `IN_PROGRESS` 等）なら **15s** |
 | debounce | デフォルト **30s**（`--github-monitor-debounce-ms`）。連続インラインコメント等を 1 通知にまとめる |
-| 初回 bootstrap | **カーソル空の新規セッション**の初回 poll のみ。既存 Issue コメントは通知せずカーソルを進める |
+| 初回カーソル poll | **カーソル空の新規セッション**の初回 poll のみ（`initialCursorPoll`）。既存 Issue コメントは通知せずカーソルを進める。worker の init prompt（`startWorkers`）とは無関係 |
 | `--continue` 再開 | sidecar カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
 | PR 紐づけ | `gh search prs <issueNumber> --repo owner/repo`。失敗時は PR 監視をスキップし **Issue コメント監視は継続** |
 | CI wakeup | `gh pr view --json statusCheckRollup` の **CheckRun 配列**。前回 poll で pending だった check が `COMPLETED` + `conclusion` になったときのみ通知 |
@@ -168,8 +168,7 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
   harness.worktree ─────────────────────────► stderr のみ
   harness.session.workers ──────────────────► stderr + TUI seed（全 worker idle）
 
-WorkerSession 起動（worker ごと。attach + init prompt。API は現状 `bootstrap()`、#133 後の用語は init prompt）
-  harness.worker.state attaching ───────────► stderr + TUI running
+WorkerSession.startWorkers()（worker ごと。attach + init prompt）
   harness.worker.prompt.started (source=harness) ───► stderr + TUI running
        │
        ├─ attach + buildWorkerAttachPrompt + session/prompt

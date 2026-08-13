@@ -71,7 +71,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 
 ### 終了 JSON（SessionSummary）
 
-型名は互換のため `ConductorSessionResult` と同一（`SessionSummary` は別名）。
+型名は互換のため `ConductorSessionResult` と同一（`SessionSummary` は deprecated alias）。
 
 **会話ログではない。** exit report として次を載せる。
 

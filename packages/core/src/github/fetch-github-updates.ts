@@ -10,7 +10,7 @@ export interface FetchGitHubUpdatesInput {
   issueUrl: string;
   cursor: GitHubMonitorCursor;
   /** true のときカーソルのみ進め、更新は返さない（カーソル空の新規セッション初回 poll のみ）。 */
-  bootstrapOnly?: boolean;
+  initialCursorPoll?: boolean;
   cwd?: string;
   runGhFn?: typeof runGh;
 }
@@ -76,7 +76,7 @@ export async function fetchGitHubUpdates(
   const { updates: commentUpdates, lastId } = collectIssueCommentUpdates(
     issueComments,
     cursor.lastIssueCommentId,
-    input.bootstrapOnly ?? false,
+    input.initialCursorPoll ?? false,
   );
   updates.push(...commentUpdates);
   if (lastId !== undefined) {
@@ -96,7 +96,7 @@ export async function fetchGitHubUpdates(
       issue,
       pr,
       prCursor,
-      bootstrapOnly: input.bootstrapOnly ?? false,
+      initialCursorPoll: input.initialCursorPoll ?? false,
       cwd: input.cwd,
     });
     updates.push(...prResult.updates);
@@ -128,7 +128,7 @@ async function fetchIssueComments(
 function collectIssueCommentUpdates(
   comments: GhIssueComment[],
   lastSeenId: string | undefined,
-  bootstrapOnly: boolean,
+  initialCursorPoll: boolean,
 ): { updates: GitHubUpdateItem[]; lastId?: string } {
   if (comments.length === 0) {
     return { updates: [], lastId: lastSeenId };
@@ -142,7 +142,7 @@ function collectIssueCommentUpdates(
       : sorted.filter((comment) => comment.id > lastNumeric);
 
   const lastId = String(sorted[sorted.length - 1]!.id);
-  if (bootstrapOnly || newComments.length === 0) {
+  if (initialCursorPoll || newComments.length === 0) {
     return { updates: [], lastId };
   }
 
@@ -191,7 +191,7 @@ async function fetchPullRequestUpdates(input: {
   issue: ReturnType<typeof parseIssueUrl>;
   pr: GhPullRequestRef;
   prCursor: PullRequestMonitorCursor;
-  bootstrapOnly: boolean;
+  initialCursorPoll: boolean;
   cwd?: string;
 }): Promise<{
   updates: GitHubUpdateItem[];
@@ -210,7 +210,7 @@ async function fetchPullRequestUpdates(input: {
   const reviewResult = collectReviewUpdates(
     reviews,
     cursor.lastReviewId,
-    input.bootstrapOnly,
+    input.initialCursorPoll,
     input.pr.number,
   );
   updates.push(...reviewResult.updates);
@@ -227,7 +227,7 @@ async function fetchPullRequestUpdates(input: {
   const reviewCommentResult = collectReviewCommentUpdates(
     reviewComments,
     cursor.lastReviewCommentId,
-    input.bootstrapOnly,
+    input.initialCursorPoll,
     input.pr.number,
   );
   updates.push(...reviewCommentResult.updates);
@@ -245,7 +245,7 @@ async function fetchPullRequestUpdates(input: {
     checkRuns,
     pendingCheckNames: cursor.pendingCheckNames ?? [],
     notifiedCheckNames: cursor.notifiedCheckNames ?? [],
-    bootstrapOnly: input.bootstrapOnly,
+    initialCursorPoll: input.initialCursorPoll,
     prNumber: input.pr.number,
   });
   updates.push(...ciResult.updates);
@@ -322,7 +322,7 @@ async function fetchStatusCheckRollup(
 function collectReviewUpdates(
   reviews: GhReview[],
   lastSeenId: string | undefined,
-  bootstrapOnly: boolean,
+  initialCursorPoll: boolean,
   prNumber: number,
 ): { updates: GitHubUpdateItem[]; lastId?: string } {
   const submitted = reviews.filter((review) => review.submitted_at);
@@ -338,7 +338,7 @@ function collectReviewUpdates(
       : sorted.filter((review) => review.id > lastNumeric);
 
   const lastId = String(sorted[sorted.length - 1]!.id);
-  if (bootstrapOnly || newReviews.length === 0) {
+  if (initialCursorPoll || newReviews.length === 0) {
     return { updates: [], lastId };
   }
 
@@ -359,7 +359,7 @@ function collectReviewUpdates(
 function collectReviewCommentUpdates(
   comments: GhReviewComment[],
   lastSeenId: string | undefined,
-  bootstrapOnly: boolean,
+  initialCursorPoll: boolean,
   prNumber: number,
 ): { updates: GitHubUpdateItem[]; lastId?: string } {
   if (comments.length === 0) {
@@ -374,7 +374,7 @@ function collectReviewCommentUpdates(
       : sorted.filter((comment) => comment.id > lastNumeric);
 
   const lastId = String(sorted[sorted.length - 1]!.id);
-  if (bootstrapOnly || newComments.length === 0) {
+  if (initialCursorPoll || newComments.length === 0) {
     return { updates: [], lastId };
   }
 
@@ -396,7 +396,7 @@ function collectCiUpdates(input: {
   checkRuns: GhCheckRun[];
   pendingCheckNames: string[];
   notifiedCheckNames: string[];
-  bootstrapOnly: boolean;
+  initialCursorPoll: boolean;
   prNumber: number;
 }): {
   updates: GitHubUpdateItem[];
@@ -427,7 +427,7 @@ function collectCiUpdates(input: {
     if (notified.has(name)) {
       continue;
     }
-    if (input.bootstrapOnly) {
+    if (input.initialCursorPoll) {
       notified.add(name);
       continue;
     }

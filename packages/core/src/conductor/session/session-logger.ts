@@ -11,7 +11,7 @@ export type {
   SessionLogSink,
 } from './events/session-log-event.js';
 
-/** セッション終了時の exit report（`ConductorSessionResult` の別名）。 */
+/** @deprecated Use {@link ConductorSessionResult}. */
 export type SessionSummary = ConductorSessionResult;
 
 export interface SessionLoggerOptions {

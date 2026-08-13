@@ -1,7 +1,7 @@
-import type { SDKCustomTool, SDKJsonValue } from '@cursor/sdk';
-import yaml from 'js-yaml';
+import type { SDKCustomTool } from '@cursor/sdk';
 import type { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 import type { SessionUsageRound } from '../usage/types.js';
+import { yamlToolResult } from './yaml-tool-result.js';
 
 export interface SessionUsageToolOptions {
   tracker: SessionUsageTracker;
@@ -66,22 +66,4 @@ function formatUsageRound(round: SessionUsageRound) {
     usage: round.usage,
     recordedAt: round.recordedAt,
   };
-}
-
-function yamlToolResult(label: string, data: unknown) {
-  const text = [
-    '```yaml',
-    `# ${label}`,
-    yaml.dump(data, { lineWidth: 120 }).trimEnd(),
-    '```',
-  ].join('\n');
-
-  return {
-    content: [{ type: 'text' as const, text }],
-    structuredContent: toStructuredContent(data),
-  };
-}
-
-function toStructuredContent(data: unknown): Record<string, SDKJsonValue> {
-  return JSON.parse(JSON.stringify(data)) as Record<string, SDKJsonValue>;
 }
