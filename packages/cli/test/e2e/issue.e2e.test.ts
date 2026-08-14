@@ -31,7 +31,7 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
       lastResult?: string;
       workerDispatchCount: number;
       workerFailureCount: number;
-      workerResponses?: Array<{ kind: string; responseText?: string }>;
+      workerResponses?: Array<{ kind: string; responsePreview?: string }>;
       lastError?: { message: string };
     }>(stdout);
 
@@ -42,7 +42,7 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
     expect(result.workerDispatchCount).toBeGreaterThanOrEqual(1);
     expect(result.workerFailureCount).toBe(0);
     expect(
-      result.workerResponses?.some((entry) => entry.responseText?.includes('pong')),
+      result.workerResponses?.some((entry) => entry.responsePreview?.includes('pong')),
     ).toBe(true);
     expect(result.lastResult).toContain('conductor-ok');
     expect(exitCode).toBe(0);
@@ -115,7 +115,7 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
       lastResult?: string;
       workerDispatchCount: number;
       workerFailureCount: number;
-      workerResponses?: Array<{ name: string; responseText?: string }>;
+      workerResponses?: Array<{ name: string; responsePreview?: string }>;
       lastError?: { message: string };
     }>(stdout);
 
@@ -126,7 +126,7 @@ describe.skipIf(!hasIssueE2eConfig())('ensemble issue e2e', () => {
     expect(result.workerResponses?.length).toBeGreaterThanOrEqual(3);
     expect(
       result.workerResponses?.filter((entry) =>
-        entry.responseText?.includes('pong'),
+        entry.responsePreview?.includes('pong'),
       ).length,
     ).toBeGreaterThanOrEqual(1);
     expect(result.lastResult).toContain('conductor-ok');

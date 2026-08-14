@@ -14,6 +14,7 @@ import {
   TEST_ISSUE,
   TEST_WORKTREE,
 } from './helpers/in-process-acp-bridge.js';
+import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
 import {
   isWorkerCompletedConductorMessage,
 } from './helpers/conductor-session-assertions.js';
@@ -76,6 +77,7 @@ describe('worker status operator integration', () => {
         agentId: 'agent-test',
         send: mockSend,
         close: mockClose,
+        getUsage: createMockConductorGetUsage(),
       };
     });
   });

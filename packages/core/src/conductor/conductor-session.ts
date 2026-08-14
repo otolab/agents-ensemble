@@ -58,6 +58,7 @@ import {
   type SessionSidecar,
 } from '../session/session-sidecar.js';
 import type { SessionUsageSummary } from '../usage/types.js';
+import { enrichSessionUsageWithCost } from '../usage/enrich-session-usage-cost.js';
 import { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 import type { OperatorInputBinding } from './operator-input-binding.js';
 import { submitOperatorInput } from './submit-operator-input.js';
@@ -449,9 +450,15 @@ export async function runConductorSession(
     getWorkerFailures: () => sessionLogger.workerFailures,
   });
 
+  let conductorAgent!: ConductorAgent;
+
   const sessionUsageTools = createSessionUsageTools({
     tracker: sessionUsageTracker,
     workerNames: activeProfile.workers.map((worker) => worker.name),
+    getConductorUsageCost: async () => {
+      const usage = await conductorAgent.getUsage();
+      return usage.cost;
+    },
   });
 
   const conductorOptions = {
@@ -469,10 +476,10 @@ export async function runConductorSession(
     },
   };
 
-  const conductor = options.resumeAgentId
+  conductorAgent = options.resumeAgentId
     ? await ConductorAgent.resume(options.resumeAgentId, conductorOptions)
     : await ConductorAgent.create(conductorOptions);
-  const conductorHandle: ConductorAgentHandle = { conductor };
+  const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
   const sendReconnect = {
     conductorOptions,
     onReconnectAttempt: ({ agentId }: { agentId: string }) => {
@@ -712,7 +719,7 @@ export async function runConductorSession(
       }
     }
 
-    return buildResult();
+    return await buildResult();
 
     function recordSendComplete(info: {
       sendCount: number;
@@ -761,15 +768,23 @@ export async function runConductorSession(
       scheduleSidecarFlush();
     }
 
-    function buildResult(): ConductorSessionResult {
+    async function buildResult(): Promise<ConductorSessionResult> {
       sessionLogger.finish(stopReason);
-      const sessionUsage = sessionUsageTracker.getSessionSummary();
+      const sessionUsage = await enrichSessionUsageWithCost(
+        sessionUsageTracker.getSessionSummary(),
+        async () => {
+          const usage = await conductorAgent.getUsage();
+          return usage.cost;
+        },
+      );
       return sessionLogger.snapshot({
         agentId: conductorHandle.conductor.agentId,
         escalations,
         openQuestions: openQuestions.list(),
         sessionUsage:
-          sessionUsage.totals.rounds > 0 ? sessionUsage : undefined,
+          sessionUsage.totals.rounds > 0 || sessionUsage.cost != null
+            ? sessionUsage
+            : undefined,
       });
     }
   } finally {

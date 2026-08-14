@@ -17,6 +17,7 @@ import {
   TEST_ISSUE,
   TEST_WORKTREE,
 } from './helpers/in-process-acp-bridge.js';
+import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
@@ -78,6 +79,7 @@ describe('prompt_worker roundtrip integration', () => {
         agentId: 'agent-test',
         send: mockSend,
         close: mockClose,
+        getUsage: createMockConductorGetUsage(),
       };
     });
   });

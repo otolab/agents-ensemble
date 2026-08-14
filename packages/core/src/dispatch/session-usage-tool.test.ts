@@ -41,6 +41,35 @@ describe('createSessionUsageTools', () => {
     });
   });
 
+  it('get_session_usage merges conductor cost when provided', async () => {
+    const tracker = new SessionUsageTracker();
+    tracker.recordConductorRound({
+      runId: 'run-1',
+      status: 'finished',
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 15,
+      },
+    });
+
+    const tools = createSessionUsageTools({
+      tracker,
+      workerNames: [],
+      getConductorUsageCost: async () => ({
+        rawCostCents: 12,
+        chargedCents: 10,
+      }),
+    });
+
+    const result = await tools.get_session_usage!.execute({});
+    expect(result.structuredContent).toMatchObject({
+      cost: { rawCostCents: 12, chargedCents: 10 },
+    });
+  });
+
   it('get_usage returns latest round for a worker', async () => {
     const tracker = new SessionUsageTracker();
     tracker.recordWorkerRound({

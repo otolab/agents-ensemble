@@ -3,6 +3,8 @@ import {
   AuthenticationError,
   CursorAgentError,
   type AgentOptions,
+  type AgentUsage,
+  type GetUsageOptions,
   type RunResult,
   type SDKAgent,
   type SDKCustomTool,
@@ -108,6 +110,10 @@ export class ConductorAgent {
 
   async reload(): Promise<void> {
     await this.agent.reload();
+  }
+
+  async getUsage(options?: GetUsageOptions): Promise<AgentUsage> {
+    return this.agent.getUsage(options);
   }
 
   async close(): Promise<void> {

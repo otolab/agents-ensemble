@@ -6,6 +6,7 @@ import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../escalation/enqueue-max-turns-qu
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import { createTestOperatorInputBinding } from './testing/test-operator-input-binding.js';
 import { runIssueSession } from './issue-session.js';
+import { createMockConductorGetUsage } from '../testing/mock-conductor-get-usage.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -49,6 +50,7 @@ describe('runIssueSession', () => {
         agentId: 'agent-test',
         send: mockSend,
         close: mockClose,
+        getUsage: createMockConductorGetUsage(),
       };
     });
   });

@@ -208,10 +208,10 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 
 | 出力先 | 内容 |
 |--------|------|
-| **stdout** | 終了時の **SessionSummary** JSON。TTY では `operator>` / `conductor>` の対話もここ |
-| **stderr** | harness テレメトリ（`[harness]` / `[open question]` 等） |
+| **stdout** | 非 TTY 終了時の **SessionSummary** JSON（`--summary-format auto` 既定） |
+| **stderr** | TTY 終了時のテキストサマリ。非 TTY では harness テレメトリ（`[harness]` / `[open question]` 等） |
 
-終了 JSON は exit report（会話ログではない）。resume の正本は sidecar。
+終了サマリは exit report（会話ログではない）。`--summary-format json|text`・`--include-full-response-text` で制御。フィールド一覧は [docs/session-metrics.md](docs/session-metrics.md)。resume の正本は sidecar。
 
 ### セッションの停止と再開
 
@@ -346,7 +346,7 @@ ENSEMBLE_OPERATOR_MESSAGE='yes, continue' ensemble issue ...
 
 ### プロセス待機（post-loop）
 
-TTY 実行時、自律作業が一段落（conductor `finished` + 待ち事項なし）しても **デフォルトではプロセスを維持**する。追加指示を入力するか、`/exit`（または `exit`）で終了する。終了 JSON はプロセス終了時に stdout へ出力（従来どおり）。
+TTY 実行時、自律作業が一段落（conductor `finished` + 待ち事項なし）しても **デフォルトではプロセスを維持**する。追加指示を入力するか、`/exit`（または `exit`）で終了する。終了時は **テキストサマリを stderr** に出力（`--summary-format json` で stdout JSON に切替可）。
 
 `/exit` 終了時（isolated モード）は当該 Issue の worktree を削除する（[git worktree と依存インストール](#git-worktree-と依存インストール)）。
 

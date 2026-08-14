@@ -1,3 +1,5 @@
+import type { UsageCost } from '@cursor/sdk';
+
 /** Token counts for one LLM round or an aggregate. */
 export interface LlmTokenCounts {
   inputTokens: number;
@@ -56,4 +58,6 @@ export interface SessionUsageSummary {
   };
   context: SessionContextUtilization;
   latestRound: SessionUsageRound | null;
+  /** conductor `getUsage().cost`（セッション累計。未取得時は省略）。 */
+  cost?: UsageCost;
 }

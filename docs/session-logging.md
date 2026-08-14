@@ -4,7 +4,7 @@
 
 関連 Issue: [#44](https://github.com/otolab/agents-ensemble/issues/44)
 
-イベント型の一覧・SessionEvent との対応・init prompt 方針は [harness-events.md](harness-events.md) を正本とする。
+イベント型の一覧・SessionEvent との対応・init prompt 方針は [harness-events.md](harness-events.md) を正本とする。利用可能な統計・トークン・コスト・worker 状態のフィールド一覧は [session-metrics.md](session-metrics.md) を正本とする。
 
 ---
 
@@ -53,9 +53,9 @@ conductor セッションには性質の異なる出力が混在する。
 | 内容 | 条件 |
 |------|------|
 | `operator> …` / `conductor> …` | TTY: Ink TUI ペイン。非 TTY + env: string backend（`bindAsyncOperatorInput` 経路） |
-| **SessionSummary** JSON | セッション終了時（常に 1 行 JSON） |
+| **SessionSummary** JSON | 非 TTY 終了時（`--summary-format auto` 既定）。e2e / パイプ向け |
 
-非 TTY では DisplaySink は noop backend（または env 時のみ string backend）。stdout は **終了 JSON のみ**（e2e / パイプ向け）。TTY では Ink TUI が対話を表示し、stdout への逐次 `write` は行わない。
+非 TTY では DisplaySink は noop backend（または env 時のみ string backend）。stdout は **終了サマリ JSON**（`--summary-format auto` 既定）。TTY では Ink TUI が対話を表示する（stdout への逐次 `write` は行わない）。
 
 ### stderr
 
@@ -66,6 +66,7 @@ conductor セッションには性質の異なる出力が混在する。
 | `[operator answer]` | `escalation.recorded` → ObservationSink | **非 TTY のみ** |
 | `[worktree]` | `session.worktree.notice` → ObservationSink | **非 TTY のみ** |
 | `[continue]` | `session.continue` → ObservationSink | **非 TTY のみ** |
+| （終了サマリ） | `formatIssueSessionSummaryText`（`writeIssueSessionSummary`） | **TTY のみ**（`--summary-format auto` または `text`）。Ink unmount 後 |
 
 TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の **Orchestration** メインペイン（活動ログ）に `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor 応答は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同ペインに追記する（末尾 300 エントリ windowing。#108）。
 
@@ -82,10 +83,14 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 | 蓄積（全履歴） | `workerDispatches` / CLI 出力では `workerResponses` に要約 |
 | harness 参照用 | `agentId`, `issueUrl`, `repoRoot` |
 | 終了時スナップショット | `escalations`, `openQuestions` |
+| LLM usage | `sessionUsage`（`get_session_usage` と同型。cost は conductor `getUsage()` からマージ） |
+| worker 応答要約 | `workerResponses[].responsePreview`（全文は `--include-full-response-text`） |
+
+フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
 
 resume の正本は **sidecar**。終了 JSON の `agentId` は参照用コピー。
 
-CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（e2e 互換）。
+CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（e2e 互換）。`--summary-format` / `--include-full-response-text` で終了出力を制御する。
 
 ---
 
@@ -196,7 +201,9 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 
 ## 7. 今後の拡張（未実装）
 
-- 終了 JSON の薄型化（メトリクス中心、`workerResponses` をオプトイン）
+- 終了 JSON への `startedAt` / `durationMs`（セッション経過時間）
+- exit JSON への `autonomousTurns` / `maxTurns` 配線
+- GitHub 監視累計カウンタ
 - `conductorSends[]` 履歴（現状は末尾の `lastResult` / `lastError` のみ）
 
 ---
@@ -210,7 +217,8 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 | `packages/core/src/conductor/conductor-session.ts` | `emit` 配線、`snapshot()` で終了 |
 | `packages/cli/src/session-sinks.ts` | Harness / Observation / Dialogue sink |
 | `packages/cli/src/display/` | 表示 state・reducer・DisplaySink |
-| `packages/cli/src/format-session-summary.ts` | 終了 JSON 整形 |
+| `packages/cli/src/format-session-summary.ts` | 終了 JSON / テキスト整形 |
+| `packages/cli/src/resolve-summary-format.ts` | `--summary-format` 解決 |
 | `packages/cli/src/issue-command.ts` | sink 購読と interactive 判定 |
 
 テスト: `session-logger.test.ts`, `session-sinks.test.ts`, `session-display-reducer.test.ts`, `select-session-display-backend.test.ts`, `acp-process.test.ts`
