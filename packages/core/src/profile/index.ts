@@ -14,10 +14,19 @@ export {
   PROFILES_DIR,
   PROFILE_FILE,
   DEFAULT_PROFILE_NAME,
+  DEFAULT_PROFILE_ALIAS,
+  ENSEMBLE_DIR,
+  TEAMS_DIR,
+  teamProfileRoots,
+  resolveTeamProfilePath,
+  listTeamProfiles,
+  normalizeTeamProfileName,
+  teamProfileId,
 } from './load-profile.js';
 export type {
   Profile,
   ProfileMaterial,
+  ProfileMeta,
   ResolvedProfile,
   AgentDefinition,
   ProfileWorkerEntry,
@@ -25,6 +34,13 @@ export type {
   SessionWorkerSpec,
   EnsembleSessionState,
 } from './types.js';
+export type {
+  TeamProfileSource,
+  TeamProfileMeta,
+  TeamProfileListEntry,
+  TeamProfileRoot,
+  TeamProfileResolutionOptions,
+} from './team-profile-resolution.js';
 export {
   profileWorkersToSessionSpecs,
   resolveAgentPromptModule,

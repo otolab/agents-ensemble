@@ -266,6 +266,13 @@ describe('profileWorkersToSessionSpecs', () => {
 });
 
 describe('resolveProfilePath', () => {
+  it('resolves default alias to bundled implementer-and-reviewer profile', () => {
+    expect(resolveProfilePath('default', '/repo')).toBe(bundledDefaultProfilePath());
+    expect(resolveProfilePath('implementer-and-reviewer', '/repo')).toBe(
+      bundledDefaultProfilePath(),
+    );
+  });
+
   it('resolves profile name to bundled profiles/<name>/profile.yaml', () => {
     expect(resolveProfilePath('default', '/repo')).toBe(bundledProfilePath('default'));
   });
