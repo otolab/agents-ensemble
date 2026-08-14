@@ -4,7 +4,7 @@
 
 関連 Issue: [#44](https://github.com/otolab/agents-ensemble/issues/44)
 
-イベント型の一覧・SessionEvent との対応・init prompt 方針は [harness-events.md](harness-events.md) を正本とする。
+イベント型の一覧・SessionEvent との対応・init prompt 方針は [harness-events.md](harness-events.md) を正本とする。利用可能な統計・トークン・コスト・worker 状態のフィールド一覧は [session-metrics.md](session-metrics.md) を正本とする。
 
 ---
 
@@ -82,10 +82,13 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 | 蓄積（全履歴） | `workerDispatches` / CLI 出力では `workerResponses` に要約 |
 | harness 参照用 | `agentId`, `issueUrl`, `repoRoot` |
 | 終了時スナップショット | `escalations`, `openQuestions` |
+| LLM usage（core のみ・CLI 未出力） | `sessionUsage` — [#172](https://github.com/otolab/agents-ensemble/issues/172) で終了 JSON / TTY へ |
+
+フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
 
 resume の正本は **sidecar**。終了 JSON の `agentId` は参照用コピー。
 
-CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（e2e 互換）。
+CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（e2e 互換）。[#172](https://github.com/otolab/agents-ensemble/issues/172) で `sessionUsage` 追加・`responsePreview` 化・TTY テキストサマリを予定。
 
 ---
 
