@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -25,6 +25,22 @@ describe('resolveWorkerWorkspacePath', () => {
     expect(
       resolveWorkerWorkspacePath('docs-repo', '/repo/profiles/implementer-and-reviewer', '/repo'),
     ).toBe('/repo/docs-repo');
+  });
+
+  it('expands ~ to homedir', () => {
+    expect(resolveWorkerWorkspacePath('~', '/profile', '/repo')).toBe(homedir());
+  });
+
+  it('expands ~/ paths under homedir', () => {
+    expect(resolveWorkerWorkspacePath('~/Develop/sub', '/profile', '/repo')).toBe(
+      join(homedir(), 'Develop/sub'),
+    );
+  });
+
+  it('expands ~\\ paths under homedir', () => {
+    expect(resolveWorkerWorkspacePath('~\\Develop\\sub', '/profile', '/repo')).toBe(
+      join(homedir(), 'Develop\\sub'),
+    );
   });
 });
 
