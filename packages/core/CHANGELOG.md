@@ -1,5 +1,19 @@
 # @agents-ensemble/core
 
+## 0.3.0
+
+### Minor Changes
+
+- febd6b9: `--profile` 未指定時に環境変数 `ENSEMBLE_DEFAULT_PROFILE` でデフォルト team profile（名前またはパス）を指定できる。CLI `--profile` が環境変数より優先される。
+- 1ca6c84: team-profile の 4 層名前解決を追加（project `.ensemble/teams/` > user `~/.ensemble/teams/` > bundled > legacy）。`listTeamProfiles` / `resolveTeamProfilePath` API、組み込み default の内部名 `implementer-and-reviewer`（`default` エイリアス維持）、CLI `ensemble profiles list` を追加。
+- aebe79e: profile の `workers[]` に optional な `workspace` を追加し、worker ごとの ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）を指定可能にした。未指定時は従来どおりセッション共通の Issue worktree を使用する。
+
+### Patch Changes
+
+- 61e2aa4: default プロフィールと ensemble base モジュールのプロンプト分担を調整（persona / objective / instructions の整理）
+- 2089a6a: `/exit` 入力後の応答性を改善（fast path teardown・即時 UI フィードバック・worker cancel）
+- ddbd826: セッション終了サマリを統計中心に変更。TTY はテキスト（stderr）、非 TTY は JSON（stdout）。`sessionUsage`・`responsePreview`・`--summary-format` / `--include-full-response-text` を追加。conductor `getUsage().cost` は取得時のみ `sessionUsage` にマージ。
+
 ## 0.2.1
 
 ### Patch Changes
