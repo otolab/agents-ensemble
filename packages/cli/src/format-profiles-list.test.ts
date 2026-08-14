@@ -31,7 +31,7 @@ describe('formatProfilesListJson', () => {
         id: 'default@bundled',
         name: 'implementer-and-reviewer',
         source: 'bundled',
-        path: '/profiles/default/profile.yaml',
+        path: '/profiles/implementer-and-reviewer/profile.yaml',
         workersPreview: ['implementer'],
       },
     ]);

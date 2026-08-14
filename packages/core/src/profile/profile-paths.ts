@@ -24,21 +24,15 @@ export function corePackageRoot(): string {
 export function bundledProfilesRoot(): string {
   const packageRoot = corePackageRoot();
   const distProfiles = join(packageRoot, 'dist/profiles');
-  if (existsSync(join(distProfiles, DEFAULT_PROFILE_ALIAS, PROFILE_FILE))) {
+  if (existsSync(join(distProfiles, DEFAULT_PROFILE_NAME, PROFILE_FILE))) {
     return distProfiles;
   }
   return join(packageRoot, '../../profiles');
 }
 
-function bundledProfileDirName(name: string): string {
-  if (name === DEFAULT_PROFILE_NAME || name === DEFAULT_PROFILE_ALIAS) {
-    return DEFAULT_PROFILE_ALIAS;
-  }
-  return name;
-}
-
 export function bundledProfilePath(name: string): string {
-  return join(bundledProfilesRoot(), bundledProfileDirName(name), PROFILE_FILE);
+  const dirName = name === DEFAULT_PROFILE_ALIAS ? DEFAULT_PROFILE_NAME : name;
+  return join(bundledProfilesRoot(), dirName, PROFILE_FILE);
 }
 
 export function bundledDefaultProfilePath(): string {

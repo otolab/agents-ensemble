@@ -99,13 +99,6 @@ function listTeamDirs(root: string): string[] {
     .sort();
 }
 
-function bundledListName(dirName: string): string {
-  if (dirName === DEFAULT_PROFILE_ALIAS) {
-    return DEFAULT_PROFILE_NAME;
-  }
-  return dirName;
-}
-
 function resolveBundledProfilePath(name: string): string {
   return bundledProfilePath(name);
 }
@@ -254,7 +247,7 @@ export async function listTeamProfiles(
   entries.push(
     ...(await listProfilesInRoot('project', projectTeamsRoot(repoRoot))),
     ...(await listProfilesInRoot('user', userTeamsRoot(options))),
-    ...(await listProfilesInRoot('bundled', bundledProfilesRoot(), bundledListName)),
+    ...(await listProfilesInRoot('bundled', bundledProfilesRoot())),
     ...(await listProfilesInRoot('legacy', legacyProfilesRoot(repoRoot))),
   );
 

@@ -37,7 +37,7 @@ Skill との概念対応: **Skill = 作業手順の正本**、**team-profile = �
 ### 組み込み default
 
 - 内部名: `implementer-and-reviewer`
-- CLI / API エイリアス: `default`（同梱ディレクトリ名 `profiles/default/` は維持）
+- CLI / API エイリアス: `default`（`--profile default` は同梱 `profiles/implementer-and-reviewer/` を解決）
 - 一覧 API の `id`: `implementer-and-reviewer@bundled`
 
 ### core API

@@ -34,7 +34,7 @@ worker permission 保留
 
 bootstrap ラウンド（attach + 待機 prompt）でも `session/prompt` は通常ラウンドと同様に permission を発生しうる（[ADR 0012](0012-conductor-worker-prompt-roundtrip.md) Phase 3）。**bootstrap 完了を待ってから permission を見る順序は想定していない。**
 
-[team.md](../../profiles/default/team.md) も「bootstrap 完了は着手ではない」「permission は判定できるなら判定」と書く。状態の変化待ちは harness のイベント列に委ねる。
+[team.md](../../profiles/implementer-and-reviewer/team.md) も「bootstrap 完了は着手ではない」「permission は判定できるなら判定」と書く。状態の変化待ちは harness のイベント列に委ねる。
 
 ### `Await` は harness 機能ではない
 
@@ -106,8 +106,8 @@ harness は **待機用 custom tool を追加しない**。変化通知は既存
 
 | 対象 | 追記方針 |
 |------|----------|
-| `profiles/default/conductor.md` | permission 優先・ポーリング待機禁止・`list_workers` はスナップショットのみ |
-| `profiles/default/team.md` §3 permission | bootstrap 中でも permission 判定は止めない |
+| `profiles/implementer-and-reviewer/conductor.prompt.yaml` | permission 優先・ポーリング待機禁止・`list_workers` はスナップショットのみ |
+| `profiles/implementer-and-reviewer/team.md` §3 permission | bootstrap 中でも permission 判定は止めない |
 | `docs/harness-events.md` §4.2 | conductor の禁止事項として明記 |
 
 ## Consequences

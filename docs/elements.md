@@ -40,7 +40,7 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 
 `--profile <name>` の名前解決は上記優先順。パス指定（`.yaml` / `/` / 絶対パス）は従来どおり。
 
-- `--profile` 省略時: 同梱 `implementer-and-reviewer`（`default` エイリアス）
+- `--profile` 省略時: 同梱 `profiles/implementer-and-reviewer/`（`default` エイリアス）
 - 一覧: `ensemble profiles list`（`id` は `name@source` 形式）
 - ユーザ層の規約: [user-teams.md](user-teams.md)
 - 設計判断: [ADR 0018](adr/0018-team-profile-four-layer-resolution.md)
