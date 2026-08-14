@@ -1,9 +1,21 @@
 import { statSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { isAbsolute, join, resolve } from 'node:path';
+
+function expandTilde(path: string): string {
+  if (path === '~') {
+    return homedir();
+  }
+  if (path.startsWith('~/') || path.startsWith('~\\')) {
+    return join(homedir(), path.slice(2));
+  }
+  return path;
+}
 
 /**
  * profile の `workspace` を絶対パスへ解決する。
  * - 絶対パスはそのまま
+ * - `~` / `~/` / `~\` は homedir() で展開
  * - `./` / `../` で始まる相対パスは profile ディレクトリ基準
  * - それ以外の相対パスは repo-root（`loadProfile` の cwd）基準
  */
@@ -12,13 +24,14 @@ export function resolveWorkerWorkspacePath(
   profileDir: string,
   repoRoot: string,
 ): string {
-  if (isAbsolute(workspace)) {
-    return workspace;
+  const expanded = expandTilde(workspace);
+  if (isAbsolute(expanded)) {
+    return expanded;
   }
-  if (workspace.startsWith('.')) {
-    return resolve(profileDir, workspace);
+  if (expanded.startsWith('.')) {
+    return resolve(profileDir, expanded);
   }
-  return resolve(repoRoot, workspace);
+  return resolve(repoRoot, expanded);
 }
 
 /** worker ACP cwd が存在するディレクトリであることを検証する。 */
