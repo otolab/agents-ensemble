@@ -40,7 +40,15 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 
 `--profile <name>` の名前解決は上記優先順。パス指定（`.yaml` / `/` / 絶対パス）は従来どおり。
 
-- `--profile` 省略時: 同梱 `profiles/implementer-and-reviewer/`（`default` エイリアス）
+デフォルト profile の優先順位:
+
+| 順 | ソース |
+|----|--------|
+| 1 | CLI `--profile <ref>` |
+| 2 | 環境変数 `ENSEMBLE_DEFAULT_PROFILE`（空文字は未設定扱い） |
+| 3 | 同梱 `profiles/implementer-and-reviewer/`（`default` エイリアス） |
+
+`ENSEMBLE_DEFAULT_PROFILE` の値は `--profile` と同じ解釈（名前またはパス）。
 - 一覧: `ensemble profiles list`（`id` は `name@source` 形式）
 - ユーザ層の規約: [user-teams.md](user-teams.md)
 - 設計判断: [ADR 0018](adr/0018-team-profile-four-layer-resolution.md)
