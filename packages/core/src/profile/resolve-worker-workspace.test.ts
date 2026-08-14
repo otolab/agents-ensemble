@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -27,9 +27,20 @@ describe('resolveWorkerWorkspacePath', () => {
     ).toBe('/repo/docs-repo');
   });
 
-  it('expands tilde-prefixed paths', () => {
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? '/tmp';
-    expect(resolveWorkerWorkspacePath('~/docs', '/profile', '/repo')).toBe(`${home}/docs`);
+  it('expands ~ to homedir', () => {
+    expect(resolveWorkerWorkspacePath('~', '/profile', '/repo')).toBe(homedir());
+  });
+
+  it('expands ~/ paths under homedir', () => {
+    expect(resolveWorkerWorkspacePath('~/Develop/sub', '/profile', '/repo')).toBe(
+      join(homedir(), 'Develop/sub'),
+    );
+  });
+
+  it('expands ~\\ paths under homedir', () => {
+    expect(resolveWorkerWorkspacePath('~\\Develop\\sub', '/profile', '/repo')).toBe(
+      join(homedir(), 'Develop\\sub'),
+    );
   });
 });
 

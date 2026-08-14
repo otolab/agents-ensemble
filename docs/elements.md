@@ -58,7 +58,7 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 - `meta` … 任意。一覧・選択 UI 向け（`id` / `title` / `summary`）。未指定時はディレクトリ名等でフォールバック
 - `agents.<kind>` … agent の modular-prompt 拡張（`prompt` インライン / `promptFile` 外部 YAML）。未指定時は ensemble base のみ
 - `workers` … 起動する worker（`name` + `kind`）。`- ping` は name=kind の省略形
-- `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準
+- `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。`~` / `~/...` は homedir() で展開。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む
 
 ## issue
