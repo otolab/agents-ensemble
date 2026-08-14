@@ -55,7 +55,7 @@ ensemble profiles list
 ensemble profiles list --json
 ```
 
-各エントリの `id` は `name@source` 形式（例: `my-pair@user`）です。
+各エントリの `id` は `name@source` 形式（例: `my-pair@user`）です。`workers[].workspace` が存在しない（またはディレクトリでない）profile は `availability: unusable` として表示され、`--profile` では起動できません。
 
 ## worker の workspace
 

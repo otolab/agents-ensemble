@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import yaml from 'js-yaml';
 import {
   bundledProfilePath,
@@ -15,6 +15,14 @@ import {
   TEAMS_DIR,
 } from './profile-paths.js';
 import type { Profile } from './types.js';
+import { normalizeProfileWorkers } from './types.js';
+import {
+  validateTeamProfileWorkspaces,
+  type TeamProfileAvailability,
+  type TeamProfileValidationIssue,
+} from './validate-team-profile-workspaces.js';
+
+export type { TeamProfileAvailability, TeamProfileValidationIssue } from './validate-team-profile-workspaces.js';
 
 export type TeamProfileSource = 'project' | 'user' | 'bundled' | 'legacy';
 
@@ -35,6 +43,8 @@ export interface TeamProfileListEntry {
   meta?: TeamProfileMeta;
   /** Worker kind or name preview for catalog display. */
   workersPreview: string[];
+  availability: TeamProfileAvailability;
+  issues?: TeamProfileValidationIssue[];
 }
 
 export interface TeamProfileRoot {
@@ -208,9 +218,27 @@ async function readTeamProfileMeta(
   }
 }
 
+async function readTeamProfileWorkspaceValidation(
+  filePath: string,
+  repoRoot: string,
+): Promise<Pick<TeamProfileListEntry, 'availability' | 'issues'>> {
+  try {
+    const profileDir = dirname(filePath);
+    const raw = yaml.load(await readFile(filePath, 'utf8')) as Profile | undefined;
+    if (!raw || !Array.isArray(raw.workers)) {
+      return { availability: 'available' };
+    }
+    const workers = normalizeProfileWorkers(raw.workers, filePath);
+    return validateTeamProfileWorkspaces({ workers }, profileDir, repoRoot);
+  } catch {
+    return { availability: 'available' };
+  }
+}
+
 async function listProfilesInRoot(
   source: TeamProfileSource,
   root: string,
+  repoRoot: string,
   nameMapper?: (dirName: string) => string,
 ): Promise<TeamProfileListEntry[]> {
   const entries: TeamProfileListEntry[] = [];
@@ -223,6 +251,7 @@ async function listProfilesInRoot(
 
     const name = nameMapper ? nameMapper(dirName) : dirName;
     const { meta, workersPreview } = await readTeamProfileMeta(filePath, name);
+    const validation = await readTeamProfileWorkspaceValidation(filePath, repoRoot);
 
     entries.push({
       id: teamProfileId(name, source),
@@ -231,6 +260,8 @@ async function listProfilesInRoot(
       path: filePath,
       meta,
       workersPreview,
+      availability: validation.availability,
+      ...(validation.issues ? { issues: validation.issues } : {}),
     });
   }
 
@@ -245,10 +276,10 @@ export async function listTeamProfiles(
   const entries: TeamProfileListEntry[] = [];
 
   entries.push(
-    ...(await listProfilesInRoot('project', projectTeamsRoot(repoRoot))),
-    ...(await listProfilesInRoot('user', userTeamsRoot(options))),
-    ...(await listProfilesInRoot('bundled', bundledProfilesRoot())),
-    ...(await listProfilesInRoot('legacy', legacyProfilesRoot(repoRoot))),
+    ...(await listProfilesInRoot('project', projectTeamsRoot(repoRoot), repoRoot)),
+    ...(await listProfilesInRoot('user', userTeamsRoot(options), repoRoot)),
+    ...(await listProfilesInRoot('bundled', bundledProfilesRoot(), repoRoot)),
+    ...(await listProfilesInRoot('legacy', legacyProfilesRoot(repoRoot), repoRoot)),
   );
 
   return entries;
