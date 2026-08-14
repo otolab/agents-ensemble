@@ -25,11 +25,29 @@
 
 種別はプロファイルで定義する。Skill と worker 用システムプロンプトを返す。
 
-## プロファイル
+## プロファイル（team-profile）
 
-同梱プロファイルはリポジトリ直下の `profiles/` に置く。`@agents-ensemble/core` の `build` 時に `dist/profiles/` へコピーされ、実行時はそこ（未ビルド時はソースの `profiles/`）を参照する。
+team-profile は **チーム体制・役割分担・起動文書**の正本（Skill の `skills/` に相当する概念は `teams/`）。スキーマは現行 `Profile`（`workers` / `agents` / `materials` / 任意 `meta`）をそのまま使う。
 
-- `--profile` 省略時: 同梱 `default`（implementer + 役割分担 materials）
+### 4 層の配置
+
+| 層 | パス | 優先度 |
+|----|------|--------|
+| プロジェクト | `<repo>/.ensemble/teams/<name>/profile.yaml` | 最高 |
+| ユーザ | `~/.ensemble/teams/<name>/profile.yaml` | ↑ |
+| 同梱 | `profiles/<name>/profile.yaml`（`build` で `dist/profiles/` にコピー） | ↑ |
+| レガシー | `<repo>/profiles/<name>/profile.yaml`（非推奨） | 最低 |
+
+`--profile <name>` の名前解決は上記優先順。パス指定（`.yaml` / `/` / 絶対パス）は従来どおり。
+
+- `--profile` 省略時: 同梱 `profiles/implementer-and-reviewer/`（`default` エイリアス）
+- 一覧: `ensemble profiles list`（`id` は `name@source` 形式）
+- ユーザ層の規約: [user-teams.md](user-teams.md)
+- 設計判断: [ADR 0018](adr/0018-team-profile-four-layer-resolution.md)
+
+### フィールド
+
+- `meta` … 任意。一覧・選択 UI 向け（`id` / `title` / `summary`）。未指定時はディレクトリ名等でフォールバック
 - `agents.<kind>` … agent の modular-prompt 拡張（`prompt` インライン / `promptFile` 外部 YAML）。未指定時は ensemble base のみ
 - `workers` … 起動する worker（`name` + `kind`）。`- ping` は name=kind の省略形
 - `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準

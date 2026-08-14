@@ -15,6 +15,7 @@ import { formatModelsListJson, formatModelsListText } from './format-models-list
 import { isOperatorInputTty } from './prompt-operator-input.js';
 import { resolveIssueSummaryFormat } from './resolve-summary-format.js';
 import { writeIssueSessionSummary } from './write-issue-session-summary.js';
+import { formatProfilesListJson, formatProfilesListText } from './format-profiles-list.js';
 
 const program = new Command();
 
@@ -47,7 +48,7 @@ program
   )
   .option(
     '--profile <name>',
-    'Profile name or path (default: bundled default; name resolves bundled then cwd profiles/<name>/)',
+    'Team profile name or path (default: bundled implementer-and-reviewer). Name resolves: project .ensemble/teams/ > ~/.ensemble/teams/ > bundled > legacy profiles/',
   )
   .option('--model <id>', 'Conductor model id (default: default)')
   .option(
@@ -208,6 +209,28 @@ models
       console.error(
         '\n注: 一覧は API カタログです。team 設定で実行時にブロックされる場合があります。',
       );
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+const profiles = program.command('profiles').description('Team profile catalog');
+
+profiles
+  .command('list')
+  .description('List team profiles from project, user, bundled, and legacy layers')
+  .option('--repo-root <path>', 'Repository root for project and legacy profile discovery', process.cwd())
+  .option('--json', 'Output JSON')
+  .action(async (options: { repoRoot: string; json?: boolean }) => {
+    try {
+      const { listTeamProfiles } = await import('@agents-ensemble/core');
+      const entries = await listTeamProfiles({ repoRoot: resolve(options.repoRoot) });
+      if (options.json) {
+        console.log(formatProfilesListJson(entries));
+        return;
+      }
+      console.log(formatProfilesListText(entries));
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
       process.exit(1);

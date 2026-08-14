@@ -17,13 +17,13 @@ describe('resolveWorkerWorkspacePath', () => {
 
   it('resolves profile-relative paths', () => {
     expect(
-      resolveWorkerWorkspacePath('../sibling', '/repo/profiles/default', '/repo'),
+      resolveWorkerWorkspacePath('../sibling', '/repo/profiles/implementer-and-reviewer', '/repo'),
     ).toBe('/repo/profiles/sibling');
   });
 
   it('resolves repo-root-relative paths', () => {
     expect(
-      resolveWorkerWorkspacePath('docs-repo', '/repo/profiles/default', '/repo'),
+      resolveWorkerWorkspacePath('docs-repo', '/repo/profiles/implementer-and-reviewer', '/repo'),
     ).toBe('/repo/docs-repo');
   });
 });

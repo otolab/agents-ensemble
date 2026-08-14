@@ -304,7 +304,7 @@ ensemble issue <url> --repo-root . --profile custom
 ensemble issue <url> --repo-root . --profile ./my-profile.yaml
 ```
 
-同梱 `default` の例 (`profiles/default/profile.yaml`):
+同梱 `implementer-and-reviewer` の例 (`profiles/implementer-and-reviewer/profile.yaml`)。`--profile default` は同じプロファイルのエイリアス:
 
 ```yaml
 workers:

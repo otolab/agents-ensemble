@@ -87,6 +87,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0015](0015-cli-tui-library.md) | CLI TUI ライブラリ選定（Ink） | accepted |
 | [0016](0016-bootstrap-permission-conductor-wait.md) | bootstrap 中 permission と conductor 自律待機のデッドロック | accepted |
 | [0017](0017-conductor-send-lifecycle-events.md) | conductor send ライフサイクルイベントと Driver 非同期化 | accepted |
+| [0018](0018-team-profile-four-layer-resolution.md) | team-profile の 4 層配置と名前解決 | accepted |
 
 ## 追加するとき
 

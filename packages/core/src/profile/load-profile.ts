@@ -1,7 +1,5 @@
-import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import { parsePromptModuleFromYaml } from './parse-prompt-module.js';
 import type {
@@ -13,10 +11,35 @@ import type {
 } from './types.js';
 import { resolveWorkerWorkspacePath } from './resolve-worker-workspace.js';
 import { normalizeProfileWorkers } from './types.js';
+import { resolveTeamProfilePath } from './team-profile-resolution.js';
+import {
+  bundledDefaultProfilePath,
+  DEFAULT_PROFILE_ALIAS,
+  DEFAULT_PROFILE_NAME,
+  PROFILE_FILE,
+  profileDirectoryPath,
+} from './profile-paths.js';
 
-export const PROFILES_DIR = 'profiles';
-export const PROFILE_FILE = 'profile.yaml';
-export const DEFAULT_PROFILE_NAME = 'default';
+export {
+  bundledDefaultProfilePath,
+  bundledProfilePath,
+  bundledProfilesRoot,
+  corePackageRoot,
+  DEFAULT_PROFILE_ALIAS,
+  DEFAULT_PROFILE_NAME,
+  ENSEMBLE_DIR,
+  PROFILE_FILE,
+  profileDirectoryPath,
+  PROFILES_DIR,
+  TEAMS_DIR,
+} from './profile-paths.js';
+export {
+  teamProfileRoots,
+  resolveTeamProfilePath,
+  listTeamProfiles,
+  normalizeTeamProfileName,
+  teamProfileId,
+} from './team-profile-resolution.js';
 
 export function parseProfile(source: unknown, label: string): Profile {
   if (!source || typeof source !== 'object' || !Array.isArray((source as Profile).workers)) {
@@ -170,55 +193,13 @@ export async function loadProfileFromFile(
   return resolveProfile(profile, profileDir, repoRoot);
 }
 
-/** `@agents-ensemble/core` パッケージルート（`src/profile` または `dist/profile` から算出）。 */
-export function corePackageRoot(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), '../..');
-}
-
-/**
- * 同梱プロファイルのルート。
- * 正本はリポジトリ直下の `profiles/`。`build` で `dist/profiles/` にコピー済みなら dist を使う。
- */
-export function bundledProfilesRoot(): string {
-  const packageRoot = corePackageRoot();
-  const distProfiles = join(packageRoot, 'dist/profiles');
-  if (existsSync(join(distProfiles, DEFAULT_PROFILE_NAME, PROFILE_FILE))) {
-    return distProfiles;
-  }
-  return join(packageRoot, '../../profiles');
-}
-
-export function bundledProfilePath(name: string): string {
-  return join(bundledProfilesRoot(), name, PROFILE_FILE);
-}
-
-export function bundledDefaultProfilePath(): string {
-  return bundledProfilePath(DEFAULT_PROFILE_NAME);
-}
-
-export function profileDirectoryPath(cwd: string, name: string): string {
-  return join(cwd, PROFILES_DIR, name, PROFILE_FILE);
-}
-
 /**
  * プロファイル参照をファイルパスに解決する。
- * - `default` などの名前 → 同梱 `profiles/<name>/profile.yaml`（無ければ `<cwd>/profiles/<name>/profile.yaml`）
- * - `profiles/foo/profile.yaml` や絶対パスは cwd 基準でそのまま
+ * - 名前のみ → project `.ensemble/teams/` > user `~/.ensemble/teams/` > bundled > legacy
+ * - `profiles/foo/profile.yaml` や絶対パスは repoRoot 基準でそのまま
  */
-export function resolveProfilePath(ref: string, cwd: string): string {
-  if (isAbsolute(ref)) {
-    return ref;
-  }
-  if (ref.endsWith('.yaml') || ref.endsWith('.yml') || ref.includes('/')) {
-    return join(cwd, ref);
-  }
-
-  const bundled = bundledProfilePath(ref);
-  if (existsSync(bundled)) {
-    return bundled;
-  }
-
-  return profileDirectoryPath(cwd, ref);
+export function resolveProfilePath(ref: string, repoRoot: string): string {
+  return resolveTeamProfilePath(ref, { repoRoot });
 }
 
 /** --profile 未指定時は同梱 default。 */

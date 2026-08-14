@@ -161,7 +161,7 @@ compile 後は `### {title}` になる。**タイトルがマージ後の見出�
 
 - プロンプトに書くことは **いま動く経路**か、FIXME 付きの **目標仕様**のどちらか
 - 「Issue / PR に書けば worker が動く」は誤り（正本 ≠ トリガー）— [#36](https://github.com/otolab/agents-ensemble/issues/36)
-- profile 起動文書（`profiles/default/*.prompt.yaml` 等）も merge される。ensemble と矛盾させない
+- profile 起動文書（`profiles/implementer-and-reviewer/*.prompt.yaml` 等）も merge される。ensemble と矛盾させない
 
 ## 確認手順
 

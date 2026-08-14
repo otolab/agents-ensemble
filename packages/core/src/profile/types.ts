@@ -32,11 +32,20 @@ export interface ProfileWorkerEntry {
   resolvedWorkspacePath?: string;
 }
 
+/** team-profile 選択・一覧用メタデータ（[#176](https://github.com/otolab/agents-ensemble/issues/176)）。 */
+export interface ProfileMeta {
+  id?: string;
+  title?: string;
+  summary?: string;
+}
+
 /**
  * 作業手順・役割分担の定義。
  * agent 定義と、セッション開始時に起動する worker の一覧を返す。
  */
 export interface Profile {
+  /** 一覧・選択 UI 向けメタデータ。未指定時はディレクトリ名等でフォールバック。 */
+  meta?: ProfileMeta;
   /** kind 名 → agent 定義。`default` はフォールバック用。 */
   agents?: Record<string, AgentDefinition>;
   /** セッション開始時に起動する worker（name + kind）。 */
