@@ -129,19 +129,42 @@ describe('listTeamProfiles', () => {
       name: 'proj',
       source: 'project',
       workersPreview: ['implementer'],
+      availability: 'available',
       meta: { id: 'proj', title: 'Project team' },
     });
     expect(byId['user-team@user']).toMatchObject({
       source: 'user',
       workersPreview: ['reviewer'],
+      availability: 'available',
     });
     expect(byId['legacy@legacy']).toMatchObject({
       source: 'legacy',
       workersPreview: ['legacy'],
+      availability: 'available',
     });
     expect(byId['implementer-and-reviewer@bundled']).toMatchObject({
       source: 'bundled',
       name: 'implementer-and-reviewer',
+      availability: 'available',
+    });
+  });
+
+  it('marks profile unusable when workspace is missing', async () => {
+    await writeTeamProfile(
+      join(repoRoot, '.ensemble', 'teams', 'broken'),
+      '  - name: librarian\n    kind: librarian\n    workspace: missing-docs\n',
+    );
+
+    const entries = await listTeamProfiles({ repoRoot, userEnsembleRoot });
+    const broken = entries.find((entry) => entry.id === 'broken@project');
+
+    expect(broken).toMatchObject({
+      availability: 'unusable',
+    });
+    expect(broken?.issues?.[0]).toMatchObject({
+      worker: 'librarian',
+      kind: 'librarian',
+      reason: 'missing',
     });
   });
 });

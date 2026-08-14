@@ -42,7 +42,15 @@ export type {
   TeamProfileListEntry,
   TeamProfileRoot,
   TeamProfileResolutionOptions,
+  TeamProfileAvailability,
+  TeamProfileValidationIssue,
 } from './team-profile-resolution.js';
+export {
+  validateTeamProfileWorkspaces,
+  assertTeamProfileWorkspacesAvailable,
+  formatTeamProfileActivationError,
+} from './validate-team-profile-workspaces.js';
+export type { TeamProfileWorkspaceValidation } from './validate-team-profile-workspaces.js';
 export {
   profileWorkersToSessionSpecs,
   resolveAgentPromptModule,

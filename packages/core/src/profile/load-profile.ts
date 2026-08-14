@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import yaml from 'js-yaml';
 import { parsePromptModuleFromYaml } from './parse-prompt-module.js';
 import type {
@@ -10,8 +10,12 @@ import type {
   ResolvedProfile,
 } from './types.js';
 import { resolveWorkerWorkspacePath } from './resolve-worker-workspace.js';
+import { assertTeamProfileWorkspacesAvailable } from './validate-team-profile-workspaces.js';
 import { normalizeProfileWorkers } from './types.js';
-import { resolveTeamProfilePath } from './team-profile-resolution.js';
+import {
+  normalizeTeamProfileName,
+  resolveTeamProfilePath,
+} from './team-profile-resolution.js';
 import {
   bundledDefaultProfilePath,
   DEFAULT_PROFILE_ALIAS,
@@ -40,6 +44,29 @@ export {
   normalizeTeamProfileName,
   teamProfileId,
 } from './team-profile-resolution.js';
+export {
+  validateTeamProfileWorkspaces,
+  assertTeamProfileWorkspacesAvailable,
+  formatTeamProfileActivationError,
+} from './validate-team-profile-workspaces.js';
+export type {
+  TeamProfileAvailability,
+  TeamProfileValidationIssue,
+  TeamProfileWorkspaceValidation,
+} from './validate-team-profile-workspaces.js';
+
+function teamProfileRefFromLoad(
+  profilePath: string,
+  profileRef?: string,
+): string {
+  if (profileRef?.trim()) {
+    const trimmed = profileRef.trim();
+    if (!trimmed.includes('/') && !trimmed.endsWith('.yaml') && !trimmed.endsWith('.yml')) {
+      return normalizeTeamProfileName(trimmed);
+    }
+  }
+  return basename(dirname(profilePath));
+}
 
 export function parseProfile(source: unknown, label: string): Profile {
   if (!source || typeof source !== 'object' || !Array.isArray((source as Profile).workers)) {
@@ -236,5 +263,11 @@ export async function loadProfile(options: {
     ? resolveProfilePath(ref, cwd)
     : resolveDefaultProfilePath();
   const profile = await loadProfileFromFile(profilePath, { repoRoot: cwd });
+  assertTeamProfileWorkspacesAvailable(
+    profile,
+    dirname(profilePath),
+    cwd,
+    teamProfileRefFromLoad(profilePath, ref),
+  );
   return { profile, profilePath };
 }

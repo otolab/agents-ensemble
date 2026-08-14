@@ -26,6 +26,11 @@ describe('resolveWorkerWorkspacePath', () => {
       resolveWorkerWorkspacePath('docs-repo', '/repo/profiles/implementer-and-reviewer', '/repo'),
     ).toBe('/repo/docs-repo');
   });
+
+  it('expands tilde-prefixed paths', () => {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? '/tmp';
+    expect(resolveWorkerWorkspacePath('~/docs', '/profile', '/repo')).toBe(`${home}/docs`);
+  });
 });
 
 describe('assertWorkerWorkspaceDirectory', () => {
