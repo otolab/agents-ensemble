@@ -20,6 +20,7 @@ import {
   isWorkerCompletedConductorMessage,
 } from './helpers/conductor-session-assertions.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
+import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
@@ -67,6 +68,7 @@ describe('open question / operator flow integration', () => {
         agentId: 'agent-test',
         send: mockSend,
         close: mockClose,
+        getUsage: createMockConductorGetUsage(),
       };
     });
   });

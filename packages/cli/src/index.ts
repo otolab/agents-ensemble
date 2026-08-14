@@ -12,7 +12,9 @@ import {
 import { readCliPackageVersion } from './cli-version.js';
 import { executeIssueCommand } from './issue-command.js';
 import { formatModelsListJson, formatModelsListText } from './format-models-list.js';
-import { formatIssueSessionSummaryJson } from './format-session-summary.js';
+import { isOperatorInputTty } from './prompt-operator-input.js';
+import { resolveIssueSummaryFormat } from './resolve-summary-format.js';
+import { writeIssueSessionSummary } from './write-issue-session-summary.js';
 
 const program = new Command();
 
@@ -72,6 +74,15 @@ program
     'Debounce interval for GitHub update notifications (default: 30000)',
     (value) => Number.parseInt(value, 10),
   )
+  .option(
+    '--summary-format <format>',
+    'Exit summary format: auto (TTY=text, non-TTY=json), json, or text',
+    'auto',
+  )
+  .option(
+    '--include-full-response-text',
+    'Include full worker responseText in JSON exit summary (default: responsePreview only)',
+  )
   .action(
     async (
       issueRef: string,
@@ -88,6 +99,8 @@ program
         worktree: string;
         githubMonitor?: boolean;
         githubMonitorDebounceMs?: number;
+        summaryFormat?: string;
+        includeFullResponseText?: boolean;
       },
     ) => {
       try {
@@ -95,7 +108,15 @@ program
         const issueUrl = await resolveIssueUrl(issueRef, repoRoot);
         const result = await executeIssueCommand(issueUrl, options);
 
-        console.log(formatIssueSessionSummaryJson(result));
+        writeIssueSessionSummary(result, {
+          format: resolveIssueSummaryFormat({
+            summaryFormat: options.summaryFormat,
+            isTty: isOperatorInputTty(),
+          }),
+          jsonOptions: {
+            includeFullResponseText: options.includeFullResponseText,
+          },
+        });
 
         if (result.stopReason === 'error') {
           process.exit(2);

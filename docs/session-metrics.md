@@ -75,8 +75,8 @@
 | `kind` | `string` | profile kind | ○ | ○ | — |
 | `source` | `'harness' \| 'conductor'` | init / instruction 区別 | ○ | ○ | 既定 `'conductor'` |
 | `stopReason` | `string` | ACP `session/prompt` | ○ | ○ | — |
-| `responseText` | `string?` | ACP 応答全文 | ○ **全文** | **省略**（`responsePreview` に置換予定） | 省略 |
-| `responsePreview` | `string?` | `responseText` 先頭 N 文字 | — | ○（#172） | 省略 |
+| `responseText` | `string?` | ACP 応答全文 | — | `--include-full-response-text` 時のみ | 省略 |
+| `responsePreview` | `string?` | `responseText` 先頭 N 文字 | — | ○（既定） | 省略 |
 
 ### 2.3 オペレータ対話・エスカレーション
 

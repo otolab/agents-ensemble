@@ -274,7 +274,7 @@ conductor は `list_workers` の `attachInFlight` / `state: processing` 等を *
 | `workerDispatches` / CLI の `workerResponses` | 各 `worker.round` の要約（`source` 含む） |
 | `workerFailures` | 各 `worker.failed` |
 | `stopReason` | `session.stop` |
-| `sessionUsage` | `SessionUsageTracker`（`get_session_usage` と同型。[#172](https://github.com/otolab/agents-ensemble/issues/172) で CLI 終了 JSON へ） |
+| `sessionUsage` | `SessionUsageTracker`（`get_session_usage` と同型。cost は `getUsage()` マージ） |
 
 フィールドの型・出力先（TTY / JSON / ツール）・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
 

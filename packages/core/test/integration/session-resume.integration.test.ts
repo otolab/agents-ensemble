@@ -26,6 +26,7 @@ import {
 } from './helpers/in-process-acp-bridge.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
 import { isWorkerCompletedConductorMessage } from './helpers/conductor-session-assertions.js';
+import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
 
 const SIDECAR_MATERIAL_MARKER = 'SIDECAR_PROFILE_MATERIAL_UNIQUE';
 const CLI_MATERIAL_MARKER = 'CLI_PROFILE_MATERIAL_UNIQUE';
@@ -78,6 +79,7 @@ describe('session resume integration', () => {
       agentId: RESUME_AGENT_ID,
       send: mockSend,
       close: mockClose,
+      getUsage: createMockConductorGetUsage(),
     }));
   });
 

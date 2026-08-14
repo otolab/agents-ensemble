@@ -14,6 +14,7 @@ import { runConductorSession } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import * as worktreeModule from '../worktree/worktree.js';
 import type { GitHubUpdatePayload } from '../github/github-update-types.js';
+import { createMockConductorGetUsage } from '../testing/mock-conductor-get-usage.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -83,6 +84,7 @@ describe('runConductorSession resume / shutdown', () => {
       agentId: 'agent-test',
       send: mockSend,
       close: mockClose,
+      getUsage: createMockConductorGetUsage(),
     }));
     mockCreateGitHubMonitor.mockReset();
     mockCreateGitHubMonitor.mockImplementation((options) => ({
@@ -182,11 +184,13 @@ describe('runConductorSession resume / shutdown', () => {
         agentId: 'agent-test',
         send: mockSend,
         close: mockClose,
+        getUsage: createMockConductorGetUsage(),
       }))
       .mockImplementation(async () => ({
         agentId: 'agent-test',
         send: mockSendAfterResume,
         close: mockClose,
+        getUsage: createMockConductorGetUsage(),
       }));
 
     const sessionPromise = runConductorSession({

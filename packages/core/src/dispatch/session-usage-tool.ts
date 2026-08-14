@@ -1,4 +1,8 @@
 import type { SDKCustomTool } from '@cursor/sdk';
+import {
+  enrichSessionUsageWithCost,
+  type GetConductorUsageCost,
+} from '../usage/enrich-session-usage-cost.js';
 import type { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 import type { SessionUsageRound } from '../usage/types.js';
 import { yamlToolResult } from './yaml-tool-result.js';
@@ -6,6 +10,7 @@ import { yamlToolResult } from './yaml-tool-result.js';
 export interface SessionUsageToolOptions {
   tracker: SessionUsageTracker;
   workerNames: string[];
+  getConductorUsageCost?: GetConductorUsageCost;
 }
 
 export function createSessionUsageTools(
@@ -22,7 +27,11 @@ export function createSessionUsageTools(
         properties: {},
       },
       async execute() {
-        return yamlToolResult('get_session_usage', options.tracker.getSessionSummary());
+        const summary = await enrichSessionUsageWithCost(
+          options.tracker.getSessionSummary(),
+          options.getConductorUsageCost,
+        );
+        return yamlToolResult('get_session_usage', summary);
       },
     },
     get_usage: {

@@ -53,9 +53,10 @@ conductor セッションには性質の異なる出力が混在する。
 | 内容 | 条件 |
 |------|------|
 | `operator> …` / `conductor> …` | TTY: Ink TUI ペイン。非 TTY + env: string backend（`bindAsyncOperatorInput` 経路） |
-| **SessionSummary** JSON | セッション終了時（常に 1 行 JSON） |
+| **SessionSummary** JSON | 非 TTY 終了時（`--summary-format auto` 既定）。e2e / パイプ向け |
+| **SessionSummary** テキスト | TTY 終了時（stderr）。`--summary-format json` で TTY でも JSON を stdout に出せる |
 
-非 TTY では DisplaySink は noop backend（または env 時のみ string backend）。stdout は **終了 JSON のみ**（e2e / パイプ向け）。TTY では Ink TUI が対話を表示し、stdout への逐次 `write` は行わない。
+非 TTY では DisplaySink は noop backend（または env 時のみ string backend）。stdout は **終了サマリ JSON**（`--summary-format auto` 既定）。TTY では Ink TUI が対話を表示し、終了時は **テキストサマリを stderr** に出す（JSON は `--summary-format json`）。
 
 ### stderr
 
@@ -82,13 +83,14 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 | 蓄積（全履歴） | `workerDispatches` / CLI 出力では `workerResponses` に要約 |
 | harness 参照用 | `agentId`, `issueUrl`, `repoRoot` |
 | 終了時スナップショット | `escalations`, `openQuestions` |
-| LLM usage（core のみ・CLI 未出力） | `sessionUsage` — [#172](https://github.com/otolab/agents-ensemble/issues/172) で終了 JSON / TTY へ |
+| LLM usage | `sessionUsage`（`get_session_usage` と同型。cost は conductor `getUsage()` からマージ） |
+| worker 応答要約 | `workerResponses[].responsePreview`（全文は `--include-full-response-text`） |
 
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
 
 resume の正本は **sidecar**。終了 JSON の `agentId` は参照用コピー。
 
-CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（e2e 互換）。[#172](https://github.com/otolab/agents-ensemble/issues/172) で `sessionUsage` 追加・`responsePreview` 化・TTY テキストサマリを予定。
+CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（e2e 互換）。`--summary-format` / `--include-full-response-text` で終了出力を制御する。
 
 ---
 
@@ -199,7 +201,9 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 
 ## 7. 今後の拡張（未実装）
 
-- 終了 JSON の薄型化（メトリクス中心、`workerResponses` をオプトイン）
+- 終了 JSON への `startedAt` / `durationMs`（セッション経過時間）
+- exit JSON への `autonomousTurns` / `maxTurns` 配線
+- GitHub 監視累計カウンタ
 - `conductorSends[]` 履歴（現状は末尾の `lastResult` / `lastError` のみ）
 
 ---
@@ -213,7 +217,8 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 | `packages/core/src/conductor/conductor-session.ts` | `emit` 配線、`snapshot()` で終了 |
 | `packages/cli/src/session-sinks.ts` | Harness / Observation / Dialogue sink |
 | `packages/cli/src/display/` | 表示 state・reducer・DisplaySink |
-| `packages/cli/src/format-session-summary.ts` | 終了 JSON 整形 |
+| `packages/cli/src/format-session-summary.ts` | 終了 JSON / テキスト整形 |
+| `packages/cli/src/resolve-summary-format.ts` | `--summary-format` 解決 |
 | `packages/cli/src/issue-command.ts` | sink 購読と interactive 判定 |
 
 テスト: `session-logger.test.ts`, `session-sinks.test.ts`, `session-display-reducer.test.ts`, `select-session-display-backend.test.ts`, `acp-process.test.ts`
