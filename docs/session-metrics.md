@@ -28,8 +28,8 @@
 
 | 略称 | 意味 |
 |------|------|
-| **TTY テキスト** | セッション終了時の人間向けサマリ（[#172](https://github.com/otolab/agents-ensemble/issues/172) で追加予定。Orchestration ペインまたは stderr） |
-| **終了 JSON** | プロセス終了時 stdout の 1 行 JSON（非 TTY / e2e 既定。`formatIssueSessionSummaryJson`） |
+| **TTY テキスト** | セッション終了時の人間向けサマリ（`formatIssueSessionSummaryText` → **stderr**。`--summary-format auto` で TTY 時に選択） |
+| **終了 JSON** | プロセス終了時 **stdout** の JSON（非 TTY / `--summary-format auto` 既定。`formatIssueSessionSummaryJson`） |
 | **`get_session_usage`** | conductor ツール（YAML 返却。`SessionUsageTracker.getSessionSummary()` と同型） |
 | **`get_usage`** | conductor ツール（YAML。直近 1 ラウンド） |
 | **`list_workers`** | conductor ツール（YAML。セッション worker 状態サマリ） |
@@ -37,13 +37,19 @@
 | **活動ログ** | TTY Ink Orchestration ペイン（`[harness]` / `[observation]` 等） |
 | **sidecar** | `{repoRoot}/.ensemble/sessions/{agentId}.json`（resume 正本。exit report ではない） |
 
-**未取得時** 列: フィールド省略・`null`・エラー・推定のいずれか。実装時は **終了 JSON と `get_session_usage` の cost / tokens を一致**させる（[#172](https://github.com/otolab/agents-ensemble/issues/172) 受け入れ条件）。
+**未取得時** 列: フィールド省略・`null`・エラー・推定のいずれか。終了 JSON と `get_session_usage` の cost / tokens は **同一マージ経路**（`enrichSessionUsageWithCost`）で一致させる。
 
 ---
 
 ## 2. 終了レポート（`ConductorSessionResult`）
 
-`SessionLogger.snapshot()` → `runConductorSession` の戻り値。CLI はこれを整形して stdout に出す。
+`SessionLogger.snapshot()` → `runConductorSession` の戻り値。CLI（`writeIssueSessionSummary`）は `--summary-format` に従い整形する。
+
+| `--summary-format` | TTY | 非 TTY |
+|--------------------|-----|--------|
+| `auto`（既定） | テキスト → **stderr** | JSON → **stdout** |
+| `text` | テキスト → stderr | テキスト → stderr |
+| `json` | JSON → stdout | JSON → stdout |
 
 ### 2.1 識別・セッション結果
 
@@ -69,14 +75,14 @@
 
 `WorkerDispatchResult` の主フィールド（終了 JSON `workerResponses` 要素）:
 
-| フィールド | 型 | ソース | 終了 JSON（現状） | 終了 JSON（#172 後） | 未取得時 |
-|-----------|-----|--------|-------------------|----------------------|----------|
-| `name` | `string` | profile worker 名 | ○ | ○ | — |
-| `kind` | `string` | profile kind | ○ | ○ | — |
-| `source` | `'harness' \| 'conductor'` | init / instruction 区別 | ○ | ○ | 既定 `'conductor'` |
-| `stopReason` | `string` | ACP `session/prompt` | ○ | ○ | — |
-| `responseText` | `string?` | ACP 応答全文 | — | `--include-full-response-text` 時のみ | 省略 |
-| `responsePreview` | `string?` | `responseText` 先頭 N 文字 | — | ○（既定） | 省略 |
+| フィールド | 型 | ソース | 終了 JSON | 未取得時 |
+|-----------|-----|--------|-----------|----------|
+| `name` | `string` | profile worker 名 | ○ | — |
+| `kind` | `string` | profile kind | ○ | — |
+| `source` | `'harness' \| 'conductor'` | init / instruction 区別 | ○ | 既定 `'conductor'` |
+| `stopReason` | `string` | ACP `session/prompt` | ○ | — |
+| `responseText` | `string?` | ACP 応答全文 | `--include-full-response-text` 時のみ | 省略 |
+| `responsePreview` | `string?` | `responseText` 先頭 N 文字（既定 240） | ○（既定） | 省略 |
 
 ### 2.3 オペレータ対話・エスカレーション
 
@@ -84,8 +90,8 @@
 |-----------|-----|--------|--------|----------|
 | `escalations` | `EscalationRecord[]` | `escalation.recorded` 蓄積 | 終了 JSON の `escalationCount` のみ | `[]` |
 | `openQuestions` | `OpenQuestion[]` | `OpenQuestionRegistry` 終了スナップショット | 終了 JSON の `openQuestionCount` のみ | `[]` |
-| `escalationCount` | `number` | CLI 導出 | 終了 JSON・TTY テキスト（#172） | `0` |
-| `openQuestionCount` | `number` | CLI 導出（未回答は別途フィルタ可） | 終了 JSON・TTY テキスト（#172） | `0` |
+| `escalationCount` | `number` | CLI 導出 | 終了 JSON・TTY テキスト | `0` |
+| `openQuestionCount` | `number` | CLI 導出（未回答は別途フィルタ可） | 終了 JSON・TTY テキスト | `0` |
 
 ### 2.4 セッション時間（#172 候補・未実装）
 
@@ -103,13 +109,13 @@
 
 ### 3.1 セッションサマリ（`SessionUsageSummary`）
 
-`get_session_usage` と `ConductorSessionResult.sessionUsage` は **同一オブジェクト**（ラウンド 0 件のとき `sessionUsage` 自体を省略）。
+`get_session_usage` と `ConductorSessionResult.sessionUsage` は **同一形状**（`enrichSessionUsageWithCost` 適用後）。`buildResult` では **`totals.rounds > 0` または `cost != null` のときのみ** `sessionUsage` を載せる（それ以外はフィールド自体を省略）。
 
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
-| `totals.rounds` | `number` | 記録ラウンド総数 | `get_session_usage`・終了 JSON（#172） | `0` |
+| `totals.rounds` | `number` | 記録ラウンド総数 | `get_session_usage`・終了 JSON | `0` |
 | `totals.roundsWithUsage` | `number` | `usage != null` のラウンド数 | 同上 | `0` |
-| `totals.tokens` | `LlmTokenCounts \| null` | 全ラウンド合算 | 同上・TTY テキスト（#172） | `null` |
+| `totals.tokens` | `LlmTokenCounts \| null` | 全ラウンド合算 | 同上・TTY テキスト | `null` |
 | `byAgent.conductor` | `SessionUsageAgentTotals` | conductor ラウンドのみ | 同上 | rounds `0`, tokens `null` |
 | `byAgent.workers` | `Record<string, SessionUsageAgentTotals>` | worker 名別 | 同上 | `{}` |
 | `context` | `SessionContextUtilization` | 下表 | 同上・TTY（limit 既知時） | 下表 |
@@ -158,12 +164,12 @@
 | `acp` | ACP `session/prompt` の `usage` | worker で ACP が usage を返した |
 | `estimated` | `estimateTokenUsageFromText` | worker で ACP usage 無し |
 
-### 3.3 課金コスト（SDK・#172 で終了出力へ）
+### 3.3 課金コスト（SDK）
 
-**現状 harness 未利用。** `@cursor/sdk` 1.0.27 の `agent.getUsage()` → `AgentUsage`。
+`ConductorAgent.getUsage()` → `AgentUsage.cost`。終了時と `get_session_usage` は `enrichSessionUsageWithCost` でマージ。
 
-| フィールド | 型 | ソース | 出力先（#172 後） | 未取得時 |
-|-----------|-----|--------|-------------------|----------|
+| フィールド | 型 | ソース | 出力先 | 未取得時 |
+|-----------|-----|--------|--------|----------|
 | `cost.rawCostCents` | `number` | `AgentUsage.cost`（セッション累計） | `sessionUsage.cost`・TTY テキスト | **フィールド省略**（エラーにしない） |
 | `cost.chargedCents` | `number` | 同上（割引・Cursor Token Fee 込み実課金） | 同上 | 同上 |
 | `runs[].cost` | `UsageCost?` | run 単位（`getUsage({ runId })`） | `get_usage` 拡張候補 | 省略 |
@@ -247,16 +253,16 @@ TUI 表示語彙 `WorkerDisplayStatus`（`idle` / `running` / `failed`）は **�
 
 ---
 
-## 8. #172 実装との対応（フェーズ 2 用メモ）
+## 8. #172 実装対応（完了）
 
 | 変更 | メトリクス節 |
 |------|-------------|
 | 終了 JSON に `sessionUsage` 追加 | §3.1（`get_session_usage` と一致） |
 | `responseText` → `responsePreview` | §2.2 |
-| TTY `formatIssueSessionSummaryText` | §2.1–2.3, §3.1 tokens, §3.3 cost |
+| TTY `formatIssueSessionSummaryText` | §1, §2.1–2.3, §3.1 tokens, §3.3 cost |
 | `getUsage().cost` マージ | §3.3 |
-| `--summary-format` 等 | §1 出力先の分岐 |
-| `startedAt` / `durationMs` | §2.4（実装する場合は本表を更新） |
+| `--summary-format` / `--include-full-response-text` | §2 冒頭表 |
+| `startedAt` / `durationMs` | §2.4（**未実装**） |
 
 ---
 
@@ -269,4 +275,5 @@ TUI 表示語彙 `WorkerDisplayStatus`（`idle` / `running` / `failed`）は **�
 | `packages/core/src/dispatch/worker-status-tool.ts` | `list_workers` / `get_worker_status` |
 | `packages/core/src/conductor/conductor-session.ts` | `sessionUsage` を `buildResult` に載せる |
 | `packages/core/src/conductor/session/session-logger.ts` | exit report 蓄積 |
-| `packages/cli/src/format-session-summary.ts` | 終了 JSON 整形（#172 で拡張） |
+| `packages/cli/src/format-session-summary.ts` | 終了 JSON / テキスト整形 |
+| `packages/cli/src/write-issue-session-summary.ts` | stdout / stderr への書き込み |

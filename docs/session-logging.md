@@ -54,9 +54,8 @@ conductor セッションには性質の異なる出力が混在する。
 |------|------|
 | `operator> …` / `conductor> …` | TTY: Ink TUI ペイン。非 TTY + env: string backend（`bindAsyncOperatorInput` 経路） |
 | **SessionSummary** JSON | 非 TTY 終了時（`--summary-format auto` 既定）。e2e / パイプ向け |
-| **SessionSummary** テキスト | TTY 終了時（stderr）。`--summary-format json` で TTY でも JSON を stdout に出せる |
 
-非 TTY では DisplaySink は noop backend（または env 時のみ string backend）。stdout は **終了サマリ JSON**（`--summary-format auto` 既定）。TTY では Ink TUI が対話を表示し、終了時は **テキストサマリを stderr** に出す（JSON は `--summary-format json`）。
+非 TTY では DisplaySink は noop backend（または env 時のみ string backend）。stdout は **終了サマリ JSON**（`--summary-format auto` 既定）。TTY では Ink TUI が対話を表示する（stdout への逐次 `write` は行わない）。
 
 ### stderr
 
@@ -67,6 +66,7 @@ conductor セッションには性質の異なる出力が混在する。
 | `[operator answer]` | `escalation.recorded` → ObservationSink | **非 TTY のみ** |
 | `[worktree]` | `session.worktree.notice` → ObservationSink | **非 TTY のみ** |
 | `[continue]` | `session.continue` → ObservationSink | **非 TTY のみ** |
+| （終了サマリ） | `formatIssueSessionSummaryText`（`writeIssueSessionSummary`） | **TTY のみ**（`--summary-format auto` または `text`）。Ink unmount 後 |
 
 TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の **Orchestration** メインペイン（活動ログ）に `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor 応答は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同ペインに追記する（末尾 300 エントリ windowing。#108）。
 
