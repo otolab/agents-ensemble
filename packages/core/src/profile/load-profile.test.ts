@@ -1,15 +1,17 @@
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bundledDefaultProfilePath,
   bundledProfilePath,
+  ENSEMBLE_DEFAULT_PROFILE_ENV,
   loadProfile,
   loadProfileFromFile,
   profileDirectoryPath,
   resolveDefaultProfilePath,
   resolveProfilePath,
+  resolveProfileRef,
 } from './load-profile.js';
 import {
   normalizeProfileWorker,
@@ -290,6 +292,46 @@ describe('resolveProfilePath', () => {
   });
 });
 
+describe('resolveProfileRef', () => {
+  it('prefers CLI profile over env', () => {
+    expect(
+      resolveProfileRef({
+        profile: 'cli-profile',
+        env: { [ENSEMBLE_DEFAULT_PROFILE_ENV]: 'env-profile' },
+      }),
+    ).toBe('cli-profile');
+  });
+
+  it('uses env when CLI profile is omitted', () => {
+    expect(
+      resolveProfileRef({
+        env: { [ENSEMBLE_DEFAULT_PROFILE_ENV]: 'env-profile' },
+      }),
+    ).toBe('env-profile');
+  });
+
+  it('treats empty env as unset', () => {
+    expect(
+      resolveProfileRef({
+        env: { [ENSEMBLE_DEFAULT_PROFILE_ENV]: '   ' },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('trims whitespace from profile and env values', () => {
+    expect(
+      resolveProfileRef({
+        profile: '  custom  ',
+      }),
+    ).toBe('custom');
+    expect(
+      resolveProfileRef({
+        env: { [ENSEMBLE_DEFAULT_PROFILE_ENV]: '  my-team  ' },
+      }),
+    ).toBe('my-team');
+  });
+});
+
 describe('resolveDefaultProfilePath', () => {
   it('returns bundled default profile', () => {
     expect(resolveDefaultProfilePath()).toBe(bundledDefaultProfilePath());
@@ -297,9 +339,14 @@ describe('resolveDefaultProfilePath', () => {
 });
 
 describe('loadProfile', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('loads bundled default when profile is omitted', async () => {
     const { profile, profilePath } = await loadProfile({
       cwd: '/no-such-cwd',
+      env: {},
     });
 
     expect(profilePath).toBe(bundledDefaultProfilePath());
@@ -328,6 +375,89 @@ describe('loadProfile', () => {
 
     expect(profilePath).toBe(profileDirectoryPath(dir, 'custom'));
     expect(profile.workers).toEqual([{ name: 'main', kind: 'worker' }]);
+  });
+
+  it('loads profile from ENSEMBLE_DEFAULT_PROFILE when CLI profile is omitted', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ensemble-profile-env-'));
+    const profileDir = join(dir, 'profiles', 'env-team');
+    await mkdir(profileDir, { recursive: true });
+    await writeFile(
+      join(profileDir, 'profile.yaml'),
+      `workers:
+  - name: env-worker
+    kind: worker
+`,
+    );
+
+    const { profile, profilePath } = await loadProfile({
+      cwd: dir,
+      env: { [ENSEMBLE_DEFAULT_PROFILE_ENV]: 'env-team' },
+    });
+
+    expect(profilePath).toBe(profileDirectoryPath(dir, 'env-team'));
+    expect(profile.workers).toEqual([{ name: 'env-worker', kind: 'worker' }]);
+  });
+
+  it('prefers CLI profile over ENSEMBLE_DEFAULT_PROFILE', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ensemble-profile-env-cli-'));
+    const cliDir = join(dir, 'profiles', 'cli-team');
+    const envDir = join(dir, 'profiles', 'env-team');
+    await mkdir(cliDir, { recursive: true });
+    await mkdir(envDir, { recursive: true });
+    await writeFile(
+      join(cliDir, 'profile.yaml'),
+      `workers:
+  - name: cli-worker
+    kind: worker
+`,
+    );
+    await writeFile(
+      join(envDir, 'profile.yaml'),
+      `workers:
+  - name: env-worker
+    kind: worker
+`,
+    );
+
+    const { profile, profilePath } = await loadProfile({
+      profile: 'cli-team',
+      cwd: dir,
+      env: { [ENSEMBLE_DEFAULT_PROFILE_ENV]: 'env-team' },
+    });
+
+    expect(profilePath).toBe(profileDirectoryPath(dir, 'cli-team'));
+    expect(profile.workers).toEqual([{ name: 'cli-worker', kind: 'worker' }]);
+  });
+
+  it('loads profile from ENSEMBLE_DEFAULT_PROFILE path ref', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ensemble-profile-env-path-'));
+    const profileDir = join(dir, 'profiles', 'path-team');
+    await mkdir(profileDir, { recursive: true });
+    await writeFile(
+      join(profileDir, 'profile.yaml'),
+      `workers:
+  - name: path-worker
+    kind: worker
+`,
+    );
+
+    const { profile, profilePath } = await loadProfile({
+      cwd: dir,
+      env: { [ENSEMBLE_DEFAULT_PROFILE_ENV]: 'profiles/path-team/profile.yaml' },
+    });
+
+    expect(profilePath).toBe(join(dir, 'profiles/path-team/profile.yaml'));
+    expect(profile.workers).toEqual([{ name: 'path-worker', kind: 'worker' }]);
+  });
+
+  it('falls back to bundled default when ENSEMBLE_DEFAULT_PROFILE is empty', async () => {
+    const { profile, profilePath } = await loadProfile({
+      cwd: '/no-such-cwd',
+      env: { [ENSEMBLE_DEFAULT_PROFILE_ENV]: '' },
+    });
+
+    expect(profilePath).toBe(bundledDefaultProfilePath());
+    expect(profile.workers.length).toBeGreaterThan(0);
   });
 });
 

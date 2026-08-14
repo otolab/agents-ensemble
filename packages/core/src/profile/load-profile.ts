@@ -202,7 +202,22 @@ export function resolveProfilePath(ref: string, repoRoot: string): string {
   return resolveTeamProfilePath(ref, { repoRoot });
 }
 
-/** --profile 未指定時は同梱 default。 */
+/** `--profile` 未指定時のデフォルト team profile（`--profile` と同じ解釈）。 */
+export const ENSEMBLE_DEFAULT_PROFILE_ENV = 'ENSEMBLE_DEFAULT_PROFILE';
+
+/** CLI `--profile` > `ENSEMBLE_DEFAULT_PROFILE` > bundled default のうち、先に有効な参照を返す。 */
+export function resolveProfileRef(options: {
+  profile?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  if (options.profile?.trim()) {
+    return options.profile.trim();
+  }
+  const fromEnv = options.env?.[ENSEMBLE_DEFAULT_PROFILE_ENV]?.trim();
+  return fromEnv || undefined;
+}
+
+/** `--profile` / env も未指定時は同梱 default。 */
 export function resolveDefaultProfilePath(): string {
   return bundledDefaultProfilePath();
 }
@@ -210,10 +225,15 @@ export function resolveDefaultProfilePath(): string {
 export async function loadProfile(options: {
   profile?: string;
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<{ profile: ResolvedProfile; profilePath: string }> {
   const cwd = options.cwd ?? process.cwd();
-  const profilePath = options.profile
-    ? resolveProfilePath(options.profile, cwd)
+  const ref = resolveProfileRef({
+    profile: options.profile,
+    env: options.env ?? process.env,
+  });
+  const profilePath = ref
+    ? resolveProfilePath(ref, cwd)
     : resolveDefaultProfilePath();
   const profile = await loadProfileFromFile(profilePath, { repoRoot: cwd });
   return { profile, profilePath };
