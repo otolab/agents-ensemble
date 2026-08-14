@@ -346,6 +346,7 @@ describe('loadProfile', () => {
   it('loads bundled default when profile is omitted', async () => {
     const { profile, profilePath } = await loadProfile({
       cwd: '/no-such-cwd',
+      env: {},
     });
 
     expect(profilePath).toBe(bundledDefaultProfilePath());

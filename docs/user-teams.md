@@ -59,6 +59,6 @@ ensemble profiles list --json
 
 ## 組み込み default
 
-同梱の標準 team は `profiles/implementer-and-reviewer/`（内部名 `implementer-and-reviewer`）です。`--profile` 省略時および `--profile default` は同じプロファイルを指します。
+同梱の標準 team は `profiles/implementer-and-reviewer/`（内部名 `implementer-and-reviewer`）です。`--profile` 省略時および `--profile default` は同じプロファイルを指します。シェル全体のデフォルトにする場合は `export ENSEMBLE_DEFAULT_PROFILE=<name>` を使えます（CLI `--profile` が優先）。
 
 詳細は [elements.md](elements.md) § プロファイル と [ADR 0018](adr/0018-team-profile-four-layer-resolution.md) を参照してください。
