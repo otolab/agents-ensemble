@@ -4,9 +4,11 @@ import stringWidth from 'string-width';
 import { TextArea, type TLinePrefixProps } from 'react-ink-textarea';
 import {
   computeOperatorInputLayout,
+  logicalPositionToOffset,
   mapCursorOffsetToDisplayPosition,
   sliceVisibleInputDisplayLines,
 } from './operator-input-layout.js';
+import { computeImeCursorScreenPosition } from './compute-ime-cursor-screen-position.js';
 
 export interface OperatorTextAreaProps {
   readonly value: string;
@@ -25,15 +27,6 @@ export interface OperatorTextAreaProps {
    * `x` は同一行上のラベル幅（例: `operator> `）、`y` は入力テキスト 1 行目。
    */
   readonly cursorStart?: { readonly x?: number; readonly y: number };
-}
-
-function logicalPositionToOffset(value: string, line: number, column: number): number {
-  const lines = value.split('\n');
-  let offset = 0;
-  for (let index = 0; index < line; index++) {
-    offset += (lines[index]?.length ?? 0) + 1;
-  }
-  return offset + column;
 }
 
 /**
@@ -89,17 +82,16 @@ export function OperatorTextArea({
   const cursorColumnInVisibleLine = cursorPosition.columnInLine;
 
   useLayoutEffect(() => {
-    if (!focus || cursorStart === undefined || visibleCursorLineIndex < 0) {
-      setCursorPosition(undefined);
-      return;
-    }
-    const contentStartX = (cursorStart.x ?? 0) - promptWidth;
-    const lineStartX =
-      visibleCursorLineIndex === 0 && scrollOffset === 0 ? (cursorStart.x ?? 0) : contentStartX;
-    setCursorPosition({
-      x: lineStartX + cursorColumnInVisibleLine,
-      y: cursorStart.y + visibleCursorLineIndex,
-    });
+    setCursorPosition(
+      computeImeCursorScreenPosition({
+        focus,
+        cursorStart,
+        promptWidth,
+        scrollOffset,
+        visibleCursorLineIndex,
+        cursorColumnInVisibleLine,
+      }),
+    );
   }, [
     focus,
     cursorStart,
