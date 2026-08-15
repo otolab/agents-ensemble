@@ -55,7 +55,11 @@ ensemble profiles list
 ensemble profiles list --json
 ```
 
-各エントリの `id` は `name@source` 形式（例: `my-pair@user`）です。
+各エントリの `id` は `name@source` 形式（例: `my-pair@user`）です。`workers[].workspace` が存在しない（またはディレクトリでない）profile は `availability: unusable` として表示され、`--profile` では起動できません。
+
+## worker の workspace
+
+別リポジトリやホーム配下のディレクトリを ACP cwd にしたいとき、`workers[].workspace` に `~/Develop/my-repo` のように `~` を使えます（シェルと同様に homedir() で展開）。詳細は [elements.md](elements.md) § プロファイル を参照。
 
 ## 組み込み default
 

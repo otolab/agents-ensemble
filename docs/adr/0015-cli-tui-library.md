@@ -47,7 +47,7 @@ Issue #54（非同期オーケストレーション向け TUI）の実装に入�
 | **TypeScript** | ◎ 本体が TS、型定義同梱 | △ JS 起源、型は `@types` または自前 | △ JS 起源、型は限定的 | ◎ TS ファースト |
 | **依存の重さ** | 中（`react` peer 必須） | 大（~16k 行のレガシー実装） | 大（機能豊富） | 大（ネイティブバイナリ + オプショナル FFI） |
 | **複数ペイン** | ○ `Box` Flexbox で 4 分割。スクロールは自前 windowing | ◎ `layout` / `box` ウィジェットが本命 | ◎ Document モデルの `Layout` | ○ `BoxRenderable` 等 |
-| **非ブロッキング入力** | ◎ `useInput` / 自前 `ImeTextInput`（`ink-text-input` 相当 + `useCursor` IME 対応）が stdin をイベント駆動で処理。Node イベントループを塞がない | ○ `textbox` がフォーカス管理。画面全体を blessed が握る | ○ `EditableTextBox` + `grabInput`。Document モデルでフォーカス循環 | ○ `InputRenderable` + レンダラの入力ループ |
+| **非ブロッキング入力** | ◎ `useInput` / `react-ink-textarea`（`OperatorTextArea` + `useCursor` IME 対応）が stdin をイベント駆動で処理。Node イベントループを塞がない | ○ `textbox` がフォーカス管理。画面全体を blessed が握る | ○ `EditableTextBox` + `grabInput`。Document モデルでフォーカス循環 | ○ `InputRenderable` + レンダラの入力ループ |
 | **イベント駆動更新** | ◎ React state ← sink 購読で再描画。宣言的 | △ ウィジェットへ `setContent` 等の命令的更新 | △ Document ウィジェットの命令的更新 | ○ レンダラツリー更新 |
 | **非 TTY フォールバック** | ◎ TUI 初期化を TTY 分岐の内側に置けば、現行 sink 経路をそのまま維持可能 | ○ 同様（ただし API 呼び出し自体を分岐要） | ○ 同様 | △ レンダラ生成に TTY 前提。分岐は可能だが FFI 起動コスト |
 | **monorepo / Node 互換** | ◎ 純 JS、ESM 可、追加ネイティブ依存なし | ○ 純 JS | ○ 純 JS、ncurses 非依存 | △ Node 26.4+ で `--experimental-ffi` がレンダラ生成に必要（Bun 向けが主） |
@@ -109,9 +109,9 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
    - `packages/cli/src/tui/issue-session-tui.tsx` — 4 ペイン Root コンポーネント
    - `packages/cli/src/tui/bind-tui-operator-input.tsx` — `OperatorInputBinding` 実装
    - `packages/cli/src/tui/create-tui-sink.ts` — `SessionLogSink` → state updater
-   - `packages/cli/src/tui/ime-text-input.tsx` — 入力欄（#104: `ink-text-input` 未マージのため自前。`useCursor` + `string-width` で CJK IME 対応）
+   - `packages/cli/src/tui/operator-text-area.tsx` — 入力欄（#186: `react-ink-textarea` + `useCursor` + `string-width` で CJK IME 対応）
 2. **起動**: TTY かつ interactive のとき `render(<IssueSessionTui ... />)` を `executeIssueCommand` 内で行い、既存 `createDialogueSink` / `bindAsyncOperatorInput` の代わりに TUI 版を接続
-3. **依存追加（#54 / #104）**: `ink`, `react`, `chalk`, `string-width`（入力欄は `ImeTextInput` 自前実装）。dev: `@types/react`, `ink-testing-library`
+3. **依存追加（#54 / #104 / #186）**: `ink`, `react`, `chalk`, `string-width`, `react-ink-textarea`（入力欄は `OperatorTextArea`）。dev: `@types/react`, `ink-testing-library`
 4. **harness ペイン**: 最小 UI では #54 合意どおり harness は別ペインに含めないが、開発時参照用に折りたたみまたは別モードで `HarnessSink` 相当を表示する余地を残す（詳細デザインは #54）
 5. **終了 JSON**: TUI 終了時に Ink を unmount してから `stdout` に SessionSummary を 1 行出力（[ADR 0013](0013-process-lifecycle-vs-autonomous-loop.md) 維持）
 
@@ -119,7 +119,34 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 
 - #54: 本 ADR に基づく TUI 実装と `console.xxx` 排除
 - Ink 7 の React 19 peer と monorepo 全体の React バージョン方針の確認（#54 着手時）
-- #104: CJK IME 入力欄 — `ImeTextInput` + `tui-layout-constants`（ペイン高さとカーソル Y の一元化）
+- #104: CJK IME 入力欄 — `OperatorTextArea`（`react-ink-textarea`）+ `tui-layout-constants`（ペイン高さとカーソル Y の一元化）
+
+### #186 オペレータ入力欄（`react-ink-textarea`）— accepted risk: 二重折り返し
+
+`OperatorTextArea` は **表示**（`react-ink-textarea` の visual row）と **IME 物理カーソル**（`operator-input-layout` + Ink `useCursor`）を別ソースで計算する。
+
+| 項目 | 表示（TextArea） | IME カーソル（layout） |
+|------|------------------|------------------------|
+| 折り返し | 書記素幅ベース・硬折り | `string-width` + 単語境界優先（`findWrapBreakIndex`） |
+| スクロール | `viewportLines` 仮想化 | `sliceVisibleInputDisplayLines`（ペイン高さ連動） |
+
+**意図**: CJK 入力の主経路では両者の折り返し行が一致することを `operator-textarea-wrap-consistency.test.ts` で検証。英単語境界を含む ASCII 混在文では行分割がずれる可能性がある（IME 窓の X ずれ）。
+
+**失敗モード**
+
+- 空白区切り英語を幅いっぱいに入力したとき、表示カーソルと IME 変換窓の水平位置がずれる
+- 長文で TextArea の viewport スクロールと layout 側 `scrollOffset` がずれたとき、IME 窓の垂直位置がずれる
+
+**運用制限（現時点）**
+
+- オペレータ入力は日本語/CJK 中心の想定。英語長文の word-wrap 境界での IME 精度は保証しない
+- TTY 実機での IME 目視確認はマージ前ゲート（Issue #186 受け入れ条件）
+
+**テスト**
+
+- 本番 `OperatorTextArea` + `measureElement` mock: `operator-text-area.test.tsx`
+- 折り返し一致: `operator-textarea-wrap-consistency.test.ts`
+- Issue セッション縦切り: `issue-session-tui.test.tsx` は ink-testing-library 上で TextArea の per-line measure が不安定なため `operator-text-area.test-double.tsx` を使用（契約のみ再現）
 
 ### #108 以降のペイン構成（意図的な差分）
 

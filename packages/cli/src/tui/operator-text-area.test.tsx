@@ -1,10 +1,19 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('react-ink-textarea', async () => {
+  const { TestTextArea } = await import('./operator-text-area.test-stub.js');
+  return { TextArea: TestTextArea };
+});
+
 import React, { useState } from 'react';
 import { cleanup, render } from 'ink-testing-library';
-import { ImeTextInput } from './ime-text-input.js';
+import { OperatorTextArea } from './operator-text-area.js';
+import { textAreaSpy } from './operator-text-area.test-stub.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import {
   computeOperatorInputLayout,
+  logicalPositionToOffset,
+  mapCursorOffsetToDisplayPosition,
   sliceVisibleInputDisplayLines,
 } from './operator-input-layout.js';
 
@@ -12,31 +21,64 @@ function ControlledInput({
   initialValue,
   contentWidth = 30,
   maxDisplayLines = 5,
+  promptPrefix = '',
   onValueChange,
 }: {
   readonly initialValue: string;
   readonly contentWidth?: number;
   readonly maxDisplayLines?: number;
+  readonly promptPrefix?: string;
   readonly onValueChange?: (value: string) => void;
 }) {
   const [value, setValue] = useState(initialValue);
   return (
-    <ImeTextInput
+    <OperatorTextArea
       value={value}
       onChange={(nextValue) => {
         setValue(nextValue);
         onValueChange?.(nextValue);
       }}
       contentWidth={contentWidth}
-      promptPrefix=""
+      promptPrefix={promptPrefix}
       maxDisplayLines={maxDisplayLines}
     />
   );
 }
 
-describe('ImeTextInput', () => {
+describe('OperatorTextArea (production wrapper)', () => {
+  beforeEach(() => {
+    textAreaSpy.mockClear();
+  });
+
   afterEach(() => {
     cleanup();
+  });
+
+  it('passes react-ink-textarea props for prompt, viewport, and handlers', () => {
+    const onChange = vi.fn();
+    const onSubmit = vi.fn();
+
+    render(
+      <OperatorTextArea
+        value="hello"
+        onChange={onChange}
+        onSubmit={onSubmit}
+        contentWidth={40}
+        promptPrefix="operator> "
+        maxDisplayLines={4}
+      />,
+    );
+
+    expect(textAreaSpy).toHaveBeenCalled();
+    const props = textAreaSpy.mock.calls.at(-1)?.[0];
+    expect(props?.viewportLines).toBe(4);
+    expect(props?.initialLineCount).toBe(1);
+    expect(props?.linePrefix).toBeTypeOf('function');
+    expect(props?.onChange).toBe(onChange);
+    expect(props?.onSubmit).toBeTypeOf('function');
+    props?.onSubmit?.('hello');
+    expect(onSubmit).toHaveBeenCalledWith('hello');
+    expect(props?.onCursorChange).toBeTypeOf('function');
   });
 
   it('moves cursor up across explicit newlines via arrow keys', async () => {
@@ -60,25 +102,21 @@ describe('ImeTextInput', () => {
     expect(latestValue).toBe('Xhello\nworld');
   });
 
-  it('inserts newline with shift+enter', async () => {
-    let latestValue = 'helloworld';
-    const { stdin } = render(
-      <ControlledInput
-        initialValue={latestValue}
-        onValueChange={(value) => {
-          latestValue = value;
-        }}
+  it('forwards TextArea onChange for explicit newline insertion', () => {
+    const onChange = vi.fn();
+    render(
+      <OperatorTextArea
+        value="helloworld"
+        onChange={onChange}
+        contentWidth={30}
+        maxDisplayLines={5}
       />,
     );
 
-    for (let index = 0; index < 5; index++) {
-      stdin.write(INK_TEST_KEYS.leftArrow);
-      await flushInkStdin();
-    }
-    stdin.write(INK_TEST_KEYS.shiftEnter);
-    await flushInkStdin();
+    const props = textAreaSpy.mock.calls.at(-1)?.[0];
+    props?.onChange?.('hello\nworld');
 
-    expect(latestValue).toBe('hello\nworld');
+    expect(onChange).toHaveBeenCalledWith('hello\nworld');
   });
 
   it('keeps cursor line visible when scrolling past maxDisplayLines', async () => {
@@ -113,5 +151,22 @@ describe('ImeTextInput', () => {
       0,
     );
     expect(topScroll).toBe(0);
+  });
+
+  it('maps logical cursor position to display coordinates for wrapped input', () => {
+    const value = 'hello\nworld';
+    const contentWidth = 30;
+    const promptWidth = 0;
+    const cursorOffset = logicalPositionToOffset(value, 1, 2);
+    const position = mapCursorOffsetToDisplayPosition(
+      value,
+      cursorOffset,
+      contentWidth,
+      promptWidth,
+    );
+
+    expect(cursorOffset).toBe(8);
+    expect(position.displayLineIndex).toBe(1);
+    expect(position.columnInLine).toBe(2);
   });
 });

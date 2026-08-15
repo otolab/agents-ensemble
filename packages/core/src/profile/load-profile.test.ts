@@ -459,6 +459,27 @@ describe('loadProfile', () => {
     expect(profilePath).toBe(bundledDefaultProfilePath());
     expect(profile.workers.length).toBeGreaterThan(0);
   });
+
+  it('rejects profile with missing workspace before session start', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ensemble-profile-unusable-'));
+    const profileDir = join(dir, 'profiles', 'broken-team');
+    await mkdir(profileDir, { recursive: true });
+    await writeFile(
+      join(profileDir, 'profile.yaml'),
+      `workers:
+  - name: librarian
+    kind: librarian
+    workspace: missing-docs
+`,
+    );
+
+    await expect(
+      loadProfile({
+        profile: 'broken-team',
+        cwd: dir,
+      }),
+    ).rejects.toThrow(/Cannot use team profile "broken-team": worker "librarian" workspace does not exist/);
+  });
 });
 
 describe('default profile compile equivalence', () => {
