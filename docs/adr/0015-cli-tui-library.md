@@ -121,6 +121,33 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 - Ink 7 の React 19 peer と monorepo 全体の React バージョン方針の確認（#54 着手時）
 - #104: CJK IME 入力欄 — `OperatorTextArea`（`react-ink-textarea`）+ `tui-layout-constants`（ペイン高さとカーソル Y の一元化）
 
+### #186 オペレータ入力欄（`react-ink-textarea`）— accepted risk: 二重折り返し
+
+`OperatorTextArea` は **表示**（`react-ink-textarea` の visual row）と **IME 物理カーソル**（`operator-input-layout` + Ink `useCursor`）を別ソースで計算する。
+
+| 項目 | 表示（TextArea） | IME カーソル（layout） |
+|------|------------------|------------------------|
+| 折り返し | 書記素幅ベース・硬折り | `string-width` + 単語境界優先（`findWrapBreakIndex`） |
+| スクロール | `viewportLines` 仮想化 | `sliceVisibleInputDisplayLines`（ペイン高さ連動） |
+
+**意図**: CJK 入力の主経路では両者の折り返し行が一致することを `operator-textarea-wrap-consistency.test.ts` で検証。英単語境界を含む ASCII 混在文では行分割がずれる可能性がある（IME 窓の X ずれ）。
+
+**失敗モード**
+
+- 空白区切り英語を幅いっぱいに入力したとき、表示カーソルと IME 変換窓の水平位置がずれる
+- 長文で TextArea の viewport スクロールと layout 側 `scrollOffset` がずれたとき、IME 窓の垂直位置がずれる
+
+**運用制限（現時点）**
+
+- オペレータ入力は日本語/CJK 中心の想定。英語長文の word-wrap 境界での IME 精度は保証しない
+- TTY 実機での IME 目視確認はマージ前ゲート（Issue #186 受け入れ条件）
+
+**テスト**
+
+- 本番 `OperatorTextArea` + `measureElement` mock: `operator-text-area.test.tsx`
+- 折り返し一致: `operator-textarea-wrap-consistency.test.ts`
+- Issue セッション縦切り: `issue-session-tui.test.tsx` は ink-testing-library 上で TextArea の per-line measure が不安定なため `operator-text-area.test-double.tsx` を使用（契約のみ再現）
+
 ### #108 以降のペイン構成（意図的な差分）
 
 本 ADR 起草時の最小 UI 表（§Context）では **conductor 出力**を独立ペインとしていた。#94 以降は operator / conductor / harness / observation を **Orchestration メインペイン**（旧ラベル `Session`）に統合し、オペレータが対話とオーケストレーション状況を一つの流れで追えるようにした（#108）。Workers / Open questions はサマリ用の補助ペインのまま。harness を stderr に戻す案は採用しない。
