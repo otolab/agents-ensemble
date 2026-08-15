@@ -90,7 +90,7 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
     case 'session.continue':
       return `resuming session: conductorAgentId=${event.conductorAgentId}`;
     case 'session.post_loop_wait':
-      return '自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。';
+      return '自律作業が一段落しました。';
     case 'session.operator_exit':
       return '終了しています…';
     case 'conductor.auth.recovery':
