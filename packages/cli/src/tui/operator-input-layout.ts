@@ -16,6 +16,16 @@ export interface OperatorInputLayout {
   readonly lineStartOffsets: number[];
 }
 
+/** `react-ink-textarea` の onCursorChange（論理行・列）から value 内 offset へ変換する。 */
+export function logicalPositionToOffset(value: string, line: number, column: number): number {
+  const lines = value.split('\n');
+  let offset = 0;
+  for (let index = 0; index < line; index++) {
+    offset += (lines[index]?.length ?? 0) + 1;
+  }
+  return offset + column;
+}
+
 /** 先頭・末尾の空白行のみ除去。行内空白と本文中の改行は保持する。 */
 export function trimBlankLinesOnly(text: string): string {
   const lines = text.split('\n');
