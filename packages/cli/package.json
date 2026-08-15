@@ -21,7 +21,7 @@
     "commander": "14.0.1",
     "ink": "7.1.1",
     "react": "19.2.0",
-    "react-ink-textarea": "0.4.0",
+    "react-ink-textarea": "github:otolab/react-ink-textarea#8ee4590d0da0466f84f4adf8086051c54a3acbbd",
     "string-width": "8.1.0"
   },
   "devDependencies": {

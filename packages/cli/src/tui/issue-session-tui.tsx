@@ -281,7 +281,6 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
   const contentWidth = usePaneContentWidth();
   const terminalRows = process.stdout.rows ?? 24;
-  const operatorPrompt = 'operator> ';
   const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
   const openQuestions = snapshot.displayState.openQuestions;
   const openQuestionsLayout = useMemo(
@@ -331,7 +330,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
   );
   const maxLinesFromBottom = Math.max(0, displayLineCount - visibleLineCount);
   const cursorStart = {
-    x: computeOperatorInputCursorX(operatorPrompt),
+    x: computeOperatorInputCursorX(''),
     y: computeOperatorInputCursorY({
       terminalRows,
       hintLineCount,
@@ -449,7 +448,6 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
           onSubmit={handleSubmit}
           focus={!snapshot.shuttingDown}
           contentWidth={contentWidth}
-          promptPrefix={operatorPrompt}
           maxDisplayLines={maxInputDisplayLines}
           onDisplayLineCountChange={handleDisplayLineCountChange}
           cursorStart={cursorStart}

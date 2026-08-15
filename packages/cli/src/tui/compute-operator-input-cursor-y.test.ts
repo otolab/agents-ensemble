@@ -87,11 +87,8 @@ describe('computeActivityLogLineCapacity', () => {
 });
 
 describe('computeOperatorInputCursorX', () => {
-  it('includes left border, padding, and prompt width', () => {
-    const operatorPrompt = 'operator> ';
-    expect(computeOperatorInputCursorX(operatorPrompt)).toBe(
-      INPUT_PANE_LEFT_COLUMNS + operatorPrompt.length,
-    );
+  it('includes left border and padding when prompt is empty', () => {
+    expect(computeOperatorInputCursorX('')).toBe(INPUT_PANE_LEFT_COLUMNS);
   });
 });
 

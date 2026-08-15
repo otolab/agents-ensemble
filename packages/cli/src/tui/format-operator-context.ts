@@ -16,7 +16,7 @@ export function formatOperatorContextHint(
   selection?: OpenQuestionSelectionContext,
 ): string {
   if (!context) {
-    return 'operator> ';
+    return '';
   }
 
   if (context.openQuestions.length > 0) {

@@ -3,7 +3,7 @@ import { formatOperatorContextHint } from './format-operator-context.js';
 
 describe('formatOperatorContextHint', () => {
   it('returns default prompt when context is undefined', () => {
-    expect(formatOperatorContextHint(undefined)).toBe('operator> ');
+    expect(formatOperatorContextHint(undefined)).toBe('');
   });
 
   it('highlights open questions with selection context', () => {

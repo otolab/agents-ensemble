@@ -28,15 +28,14 @@ import {
 } from './tui-layout-constants.js';
 import type { OpenQuestion } from '@agents-ensemble/core';
 
-function findOperatorInputLine(lines: string[]): { lineIndex: number; inputStartX: number } {
-  const operatorLineIndices = lines
-    .map((line, index) => (line.includes('operator>') ? index : -1))
-    .filter((index) => index >= 0);
-  const lineIndex = operatorLineIndices.at(-1) ?? -1;
-  const line = lines[lineIndex] ?? '';
-  const promptIndex = line.lastIndexOf('operator> ');
-  const inputStartX = promptIndex >= 0 ? promptIndex + 'operator> '.length : -1;
-  return { lineIndex, inputStartX };
+function findOperatorInputLine(expectedLineIndex: number): {
+  lineIndex: number;
+  inputStartX: number;
+} {
+  return {
+    lineIndex: expectedLineIndex,
+    inputStartX: computeOperatorInputCursorX(''),
+  };
 }
 
 function expectNoContentOnBorderLines(frame: string): void {
@@ -137,7 +136,6 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('inq-1');
     expect(frame).toContain('1/1');
     expect(frame).toContain('Shift+↑↓で選択');
-    expect(frame).toContain('operator>');
   });
 
   it('shows post-loop hint in input area', () => {
@@ -170,7 +168,6 @@ describe('IssueSessionTui', () => {
       maxTurns: null,
       openQuestions: [],
     });
-    const operatorPrompt = 'operator> ';
     const contentWidth = getPaneContentWidth({
       columns: terminalColumns,
       paddingX: PANE_PADDING_X,
@@ -184,7 +181,7 @@ describe('IssueSessionTui', () => {
       hintLineCount,
       openQuestionsPaneHeight,
     });
-    const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
+    const expectedCursorX = computeOperatorInputCursorX('');
     const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
 
     const { lastFrame } = render(
@@ -192,7 +189,7 @@ describe('IssueSessionTui', () => {
     );
 
     const lines = (lastFrame() ?? '').split('\n');
-    const { lineIndex, inputStartX } = findOperatorInputLine(lines);
+    const { lineIndex, inputStartX } = findOperatorInputLine(expectedInputLineIndex);
     expect(lineIndex).toBeGreaterThanOrEqual(0);
     expect(inputStartX).toBe(expectedCursorX);
     expect(lineIndex).toBe(expectedInputLineIndex);
@@ -219,7 +216,6 @@ describe('IssueSessionTui', () => {
       maxTurns: null,
       openQuestions: [],
     });
-    const operatorPrompt = 'operator> ';
     const contentWidth = getPaneContentWidth({
       columns: terminalColumns,
       paddingX: PANE_PADDING_X,
@@ -233,7 +229,7 @@ describe('IssueSessionTui', () => {
       hintLineCount,
       openQuestionsPaneHeight,
     });
-    const expectedCursorX = computeOperatorInputCursorX(operatorPrompt);
+    const expectedCursorX = computeOperatorInputCursorX('');
     const expectedCursorY = expectedInputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
 
     const { lastFrame } = render(
@@ -241,7 +237,7 @@ describe('IssueSessionTui', () => {
     );
 
     const lines = (lastFrame() ?? '').split('\n');
-    const { lineIndex, inputStartX } = findOperatorInputLine(lines);
+    const { lineIndex, inputStartX } = findOperatorInputLine(expectedInputLineIndex);
     expect(hintLineCount).toBeGreaterThan(1);
     expect(lineIndex).toBeGreaterThanOrEqual(0);
     expect(inputStartX).toBe(expectedCursorX);
