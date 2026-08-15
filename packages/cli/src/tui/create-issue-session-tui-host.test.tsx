@@ -14,8 +14,8 @@ vi.mock('ink', () => ({
   useInput: vi.fn(),
 }));
 
-vi.mock('./ime-text-input.js', () => ({
-  ImeTextInput: () => null,
+vi.mock('./operator-text-area.js', () => ({
+  OperatorTextArea: () => null,
 }));
 
 import { createIssueSessionTuiHost } from './create-issue-session-tui-host.js';

@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('./operator-text-area.js', () => import('./operator-text-area.test-double.js'));
+
 import React from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import { IssueSessionTui } from './issue-session-tui.js';

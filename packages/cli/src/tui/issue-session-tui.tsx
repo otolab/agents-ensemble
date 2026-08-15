@@ -27,7 +27,7 @@ import {
   ROUND_BORDER_WIDTH,
   WORKER_PANE_HEIGHT,
 } from './tui-layout-constants.js';
-import { ImeTextInput } from './ime-text-input.js';
+import { OperatorTextArea } from './operator-text-area.js';
 import {
   computeActivityPaneHeight,
   computeInputPaneHeight,
@@ -443,7 +443,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         overflow="hidden"
       >
         <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
-        <ImeTextInput
+        <OperatorTextArea
           value={inputValue}
           onChange={setInputValue}
           onSubmit={handleSubmit}
