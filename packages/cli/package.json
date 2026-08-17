@@ -2,7 +2,7 @@
   "name": "@agents-ensemble/cli",
   "version": "0.3.1",
   "type": "module",
-  "description": "ensemble CLI — Issue-based agent orchestration",
+  "description": "ensemble CLI \u2014 Issue-based agent orchestration",
   "bin": {
     "ensemble": "./dist/index.js"
   },
@@ -23,7 +23,7 @@
     "commander": "14.0.1",
     "ink": "7.1.1",
     "react": "19.2.0",
-    "react-ink-textarea": "github:otolab/react-ink-textarea#8ee4590d0da0466f84f4adf8086051c54a3acbbd",
+    "react-ink-textarea": "npm:@otolab/react-ink-textarea@0.4.1-otolab.0",
     "string-width": "8.1.0"
   },
   "devDependencies": {
