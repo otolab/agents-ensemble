@@ -155,7 +155,12 @@ export async function runConductorSessionDriver(
     }
 
     if (inFlightSend) {
-      lastSendResult = await inFlightSend;
+      const awaited = await awaitWithAbort(inFlightSend, options.shutdownSignal);
+      if (awaited.aborted) {
+        stopReason = 'interrupted';
+        break;
+      }
+      lastSendResult = awaited.value!;
       inFlightSend = undefined;
 
       const loopState = buildIssueLoopStopInput({
@@ -247,7 +252,7 @@ export async function runConductorSessionDriver(
     dispatchBatchState = dispatchBatchStateAfterSend(selected.batch.sourceKey);
   }
 
-  if (inFlightSend) {
+  if (inFlightSend && stopReason !== 'interrupted') {
     lastSendResult = await inFlightSend;
   }
 
@@ -378,4 +383,36 @@ function isAbortError(error: unknown): boolean {
       'name' in error &&
       (error as { name: string }).name === 'AbortError')
   );
+}
+
+async function awaitWithAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal,
+): Promise<{ value?: T; aborted: boolean }> {
+  if (signal.aborted) {
+    return { aborted: true };
+  }
+
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      cleanup();
+      resolve({ aborted: true });
+    };
+
+    const cleanup = () => {
+      signal.removeEventListener('abort', onAbort);
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        cleanup();
+        resolve({ value, aborted: false });
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }

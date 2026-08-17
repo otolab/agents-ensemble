@@ -132,4 +132,19 @@ View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver
 
 その後、worker へ `session/cancel`、明示 exit 時は fast path teardown（`waitForIdle` スキップ・並列 close）が走る。詳細は [harness-events.md](harness-events.md) の `harness.teardown`。
 
+#### post-loop 開始直後の `/exit`（#200）
+
+`session.post_loop_wait` emit と `OperatorPostLoopGate.wait()` の間は、従来 `notifyExit` が届かず `postLoopGate.wait` が永久待ちになるレースがあった。harness は emit 直前に `prepareForWait()` し、この窓でも `/exit` を受け付ける。
+
+#### teardown が長引く場合（#200）
+
+| 段階 | 通常の挙動 | 利用者への表示 |
+|------|------------|----------------|
+| `/exit` 直後 | `session.operator_exit` で TUI は「終了しています…」・入力無効化 | 活動ログ / 入力ヒント |
+| `buildResult` | 明示 exit / interrupt 時は `getUsage().cost` 取得をスキップ（SDK 応答待ちで固まらない） | なし |
+| `finally` teardown | force 時は worker / conductor / GitHub 監視を並列停止。子プロセスは SIGTERM 後最大 5s、残存時 SIGKILL | `harness.teardown` が 1s 超または force 時に `[harness] teardown force=... phases=...` |
+| isolated worktree 削除 | `/exit` 正常終了後のみ（未コミット変更時はスキップ） | `harness.worktree.*` イベント |
+
+自律ループ実行中の `/exit` は `shutdownSignal` abort で driver を抜ける。conductor `send` 進行中でも abort を優先し、完了待ちで固まらない（#200）。
+
 終了 JSON はプロセス終了時のみ stdout（変更なし）。

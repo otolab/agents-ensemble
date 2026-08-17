@@ -642,6 +642,54 @@ describe('runConductorSession resume / shutdown', () => {
     ).toBe(true);
     expect(resultStopReason(emitted)).toBe('completed');
   });
+
+  it('exits when /exit arrives synchronously on session.post_loop_wait emit', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    let operatorApi: OperatorInputBindingApi | undefined;
+
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+      if (event.type === 'session.post_loop_wait') {
+        operatorApi!.submit('/exit');
+      }
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      sessionLogger,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await sessionPromise;
+
+    expect(
+      emitted.some((event) => event.type === 'session.operator_exit'),
+    ).toBe(true);
+    expect(
+      emitted.some(
+        (event) => event.type === 'harness.teardown' && event.force === true,
+      ),
+    ).toBe(true);
+    expect(resultStopReason(emitted)).toBe('completed');
+  });
 });
 
 function resultStopReason(events: SessionLogEvent[]): string | undefined {

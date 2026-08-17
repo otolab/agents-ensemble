@@ -34,4 +34,23 @@ describe('createOperatorPostLoopGate', () => {
     controller.abort();
     await expect(waitPromise).resolves.toBe('exit');
   });
+
+  it('resolves exit when notified after prepareForWait and before wait', async () => {
+    const gate = createOperatorPostLoopGate();
+    const controller = new AbortController();
+    gate.prepareForWait();
+    expect(gate.isPreparedForWait()).toBe(true);
+    gate.notifyExit();
+    expect(gate.isPreparedForWait()).toBe(true);
+    await expect(gate.wait(controller.signal)).resolves.toBe('exit');
+    expect(gate.isPreparedForWait()).toBe(false);
+  });
+
+  it('resolves resume when notified after prepareForWait and before wait', async () => {
+    const gate = createOperatorPostLoopGate();
+    const controller = new AbortController();
+    gate.prepareForWait();
+    gate.notifyResume();
+    await expect(gate.wait(controller.signal)).resolves.toBe('resume');
+  });
 });
