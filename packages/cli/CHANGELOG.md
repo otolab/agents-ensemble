@@ -1,5 +1,14 @@
 # @agents-ensemble/cli
 
+## 0.3.1
+
+### Patch Changes
+
+- c9baa35: workspace が存在しない（またはディレクトリでない）team profile を `unusable` として一覧表示し、`loadProfile` / `--profile` 起動前に拒否する。`ensemble profiles list` は `[unusable]` と issues を表示し、`--json` に `availability` / `issues` を含める。
+- Updated dependencies [c9baa35]
+- Updated dependencies [08fba5f]
+  - @agents-ensemble/core@0.3.1
+
 ## 0.3.0
 
 ### Minor Changes

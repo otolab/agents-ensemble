@@ -29,6 +29,9 @@ importers:
       '@agents-ensemble/core':
         specifier: workspace:*
         version: link:../core
+      ansi-styles:
+        specifier: 6.2.3
+        version: 6.2.3
       chalk:
         specifier: 5.3.0
         version: 5.3.0
@@ -41,6 +44,9 @@ importers:
       react:
         specifier: 19.2.0
         version: 19.2.0
+      react-ink-textarea:
+        specifier: npm:@otolab/react-ink-textarea@0.4.1-otolab.0
+        version: '@otolab/react-ink-textarea@0.4.1-otolab.0(ink@7.1.1(@types/react@19.2.2)(react@19.2.0))(react@19.2.0)'
       string-width:
         specifier: 8.1.0
         version: 8.1.0
@@ -406,6 +412,12 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@otolab/react-ink-textarea@0.4.1-otolab.0':
+    resolution: {integrity: sha512-Rw10eFi27eKGn5nW6uGnCjKteKjkiG7stXj/ZZrKgl2i35HdUJjRzph6uFUmcaxbdw3csfLYOT4mUcS/O6Or4g==}
+    peerDependencies:
+      ink: ^7.0.0
+      react: ^18.0.0 || ^19.0.0
 
   '@rollup/rollup-android-arm-eabi@4.62.4':
     resolution: {integrity: sha512-RrPokAb7dmbxFoeO3TloqHyOjgye8RkBhSqmp4aJMIex4c9r46ZstPnleDQOq1t46VOVjwIuwNogIqbodV1Vvg==}
@@ -1630,6 +1642,13 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
+
+  '@otolab/react-ink-textarea@0.4.1-otolab.0(ink@7.1.1(@types/react@19.2.2)(react@19.2.0))(react@19.2.0)':
+    dependencies:
+      ansi-styles: 6.2.3
+      ink: 7.1.1(@types/react@19.2.2)(react@19.2.0)
+      react: 19.2.0
+      string-width: 8.2.2
 
   '@rollup/rollup-android-arm-eabi@4.62.4':
     optional: true

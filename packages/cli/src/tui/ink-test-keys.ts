@@ -8,8 +8,8 @@ export const INK_TEST_KEYS = {
   rightArrow: '\u001B[C',
   upArrow: '\u001B[A',
   downArrow: '\u001B[B',
-  /** Kitty keyboard protocol: Shift+Enter */
-  shiftEnter: '\u001B[13;2u',
+  /** xterm modifyOtherKeys: Shift+Enter */
+  shiftEnter: '\x1b[27;2;13~',
   /** xterm: Ctrl+PageUp */
   ctrlPageUp: '\u001B[5;5~',
   /** xterm: Shift+Up */
