@@ -13,6 +13,7 @@ export function TestTextArea(props: {
   readonly linePrefix?: unknown;
   readonly viewportLines?: number;
   readonly initialLineCount?: number;
+  readonly cursorStart?: { readonly x?: number; readonly y: number };
 }) {
   const [cursorOffset, setCursorOffset] = useState(props.value.length);
 

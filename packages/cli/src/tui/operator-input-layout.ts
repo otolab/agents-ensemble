@@ -16,7 +16,7 @@ export interface OperatorInputLayout {
   readonly lineStartOffsets: number[];
 }
 
-/** `react-ink-textarea` の onCursorChange（論理行・列）から value 内 offset へ変換する。 */
+/** 論理行・列から value 内 offset へ変換する（テスト・test-double 用）。 */
 export function logicalPositionToOffset(value: string, line: number, column: number): number {
   const lines = value.split('\n');
   let offset = 0;

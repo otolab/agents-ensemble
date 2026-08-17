@@ -5,7 +5,7 @@ vi.mock('react-ink-textarea', async () => {
   return { TextArea: TestTextArea };
 });
 
-import React, { useState } from 'react';
+import React, { isValidElement, useState } from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import { OperatorTextArea } from './operator-text-area.js';
 import { textAreaSpy } from './operator-text-area.test-stub.js';
@@ -54,7 +54,7 @@ describe('OperatorTextArea (production wrapper)', () => {
     cleanup();
   });
 
-  it('passes react-ink-textarea props for prompt, viewport, and handlers', () => {
+  it('passes react-ink-textarea props for viewport and handlers', () => {
     const onChange = vi.fn();
     const onSubmit = vi.fn();
 
@@ -64,7 +64,6 @@ describe('OperatorTextArea (production wrapper)', () => {
         onChange={onChange}
         onSubmit={onSubmit}
         contentWidth={40}
-        promptPrefix="operator> "
         maxDisplayLines={4}
       />,
     );
@@ -73,12 +72,40 @@ describe('OperatorTextArea (production wrapper)', () => {
     const props = textAreaSpy.mock.calls.at(-1)?.[0];
     expect(props?.viewportLines).toBe(4);
     expect(props?.initialLineCount).toBe(1);
-    expect(props?.linePrefix).toBeTypeOf('function');
+    expect(props?.linePrefix).toBeUndefined();
     expect(props?.onChange).toBe(onChange);
     expect(props?.onSubmit).toBeTypeOf('function');
     props?.onSubmit?.('hello');
     expect(onSubmit).toHaveBeenCalledWith('hello');
-    expect(props?.onCursorChange).toBeTypeOf('function');
+    expect(props?.cursorStart).toBeUndefined();
+  });
+
+  it('forwards cursorStart to TextArea when promptPrefix is set', () => {
+    render(
+      <OperatorTextArea
+        value=""
+        onChange={() => {}}
+        contentWidth={40}
+        promptPrefix="> "
+        maxDisplayLines={4}
+        cursorStart={{ x: 5, y: 20 }}
+      />,
+    );
+
+    const props = textAreaSpy.mock.calls.at(-1)?.[0];
+    expect(props?.cursorStart).toEqual({ x: 3, y: 20 });
+    expect(props?.linePrefix).toBeTypeOf('function');
+
+    const prefixNode = props?.linePrefix?.({
+      lineNumber: 0,
+      totalLines: 1,
+      isActiveLine: true,
+      isVirtualLine: false,
+      isContinuationLine: false,
+      continuationIndex: 0,
+      isLastChunkOfLine: true,
+    });
+    expect(isValidElement(prefixNode)).toBe(true);
   });
 
   it('moves cursor up across explicit newlines via arrow keys', async () => {

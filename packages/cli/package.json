@@ -13,15 +13,17 @@
     "test:e2e": "vitest run --config vitest.config.e2e.ts",
     "test": "vitest",
     "test:run": "vitest run",
-    "prepublishOnly": "rm -rf dist && pnpm exec tsc --build --force"
+    "prepublishOnly": "rm -rf dist && pnpm exec tsc --build --force",
+    "postinstall": "test -f node_modules/react-ink-textarea/dist/index.js || pnpm exec tsc -p node_modules/react-ink-textarea/tsconfig.json"
   },
   "dependencies": {
     "@agents-ensemble/core": "workspace:*",
+    "ansi-styles": "6.2.3",
     "chalk": "5.3.0",
     "commander": "14.0.1",
     "ink": "7.1.1",
     "react": "19.2.0",
-    "react-ink-textarea": "0.4.0",
+    "react-ink-textarea": "github:otolab/react-ink-textarea#8ee4590d0da0466f84f4adf8086051c54a3acbbd",
     "string-width": "8.1.0"
   },
   "devDependencies": {
