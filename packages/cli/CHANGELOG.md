@@ -1,5 +1,16 @@
 # @agents-ensemble/cli
 
+## 0.3.2
+
+### Patch Changes
+
+- e6f8dbc: 同梱 team profile（implementer-and-reviewer）の conductor プロンプトを更新。人間へのエスカレーション表にシステム外境界の行を追加し、終了判断と引き継ぎ手順を明確化する。
+- c163a10: post-loop 待機時の observation 文言を「自律作業が一段落しました。」に短縮する（`/exit` 案内は入力欄ヒント等に委譲）。
+- 5a23c1d: `react-ink-textarea` を otolab フォーク（commit pin）へ切り替え、IME 物理カーソルをフォーク `TextArea` の `cursorStart` に委譲した（#196）。GitHub 依存は `dist` 未同梱のため `postinstall` でビルドする。
+- Updated dependencies [e6f8dbc]
+- Updated dependencies [c163a10]
+  - @agents-ensemble/core@0.3.2
+
 ## 0.3.1
 
 ### Patch Changes

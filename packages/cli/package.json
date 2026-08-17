@@ -1,8 +1,8 @@
 {
   "name": "@agents-ensemble/cli",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
-  "description": "ensemble CLI \u2014 Issue-based agent orchestration",
+  "description": "ensemble CLI — Issue-based agent orchestration",
   "bin": {
     "ensemble": "./dist/index.js"
   },
