@@ -39,7 +39,7 @@ describe('createTuiTelemetrySink', () => {
       },
       {
         label: 'observation',
-        text: '自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。',
+        text: '自律作業が一段落しました。',
       },
     ]);
     expect(snapshot.postLoopWaiting).toBe(true);

@@ -230,7 +230,7 @@ describe('session sinks', () => {
       '[continue] resuming session: conductorAgentId=agent-1',
     );
     expect(writeStderr).toHaveBeenCalledWith(
-      '\n自律作業が一段落しました。追加の指示を入力するか、/exit で終了してください。\n',
+      '\n自律作業が一段落しました。\n',
     );
   });
 });

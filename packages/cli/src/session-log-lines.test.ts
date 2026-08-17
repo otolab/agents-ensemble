@@ -76,7 +76,7 @@ describe('session-log-lines', () => {
       formatObservationLogBody({
         type: 'session.post_loop_wait',
       }),
-    ).toContain('自律作業が一段落しました');
+    ).toBe('自律作業が一段落しました。');
   });
 
   it('formats conductor.auth.recovery hint for TUI activity log', () => {
