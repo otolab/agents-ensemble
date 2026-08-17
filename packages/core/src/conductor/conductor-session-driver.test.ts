@@ -349,6 +349,56 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('interrupted');
   });
 
+  it('stops with interrupted when shutdown aborts during in-flight conductor send', async () => {
+    let resolveSlowSend!: (value: {
+      runId: string;
+      status: string;
+      result: string;
+    }) => void;
+    const slowSend = new Promise<{
+      runId: string;
+      status: string;
+      result: string;
+    }>((resolve) => {
+      resolveSlowSend = resolve;
+    });
+
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      })
+      .mockReturnValueOnce(slowSend);
+
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'continue',
+    });
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      shutdownSignal: shutdown.signal,
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    shutdown.abort();
+
+    const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
+
+    resolveSlowSend({
+      runId: 'run-2',
+      status: 'finished',
+      result: 'late',
+    });
+  });
+
   it('dispatches worker.completed without limit when maxTurns is unlimited', async () => {
     const send = vi
       .fn()

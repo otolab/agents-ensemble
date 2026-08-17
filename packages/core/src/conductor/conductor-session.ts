@@ -605,7 +605,7 @@ export async function runConductorSession(
         if (isOperatorExitCommand(message)) {
           sessionLogger.emit({ type: 'session.operator_exit' });
           workerSession.runtime.cancelAllActivePrompts();
-          if (postLoopGate.isWaiting()) {
+          if (postLoopGate.isWaiting() || postLoopGate.isPreparedForWait()) {
             postLoopGate.notifyExit();
           } else if (shutdownController) {
             shutdownController.abort();
@@ -624,7 +624,7 @@ export async function runConductorSession(
         });
         if (received) {
           scheduleSidecarFlush();
-          if (postLoopGate.isWaiting()) {
+          if (postLoopGate.isWaiting() || postLoopGate.isPreparedForWait()) {
             postLoopGate.notifyResume();
           }
         }
@@ -705,6 +705,7 @@ export async function runConductorSession(
         break;
       }
 
+      postLoopGate.prepareForWait();
       options.onPostLoopWait?.();
       sessionLogger.emit({ type: 'session.post_loop_wait' });
       const postLoopAction = await postLoopGate.wait(shutdownSignal);
@@ -770,12 +771,16 @@ export async function runConductorSession(
 
     async function buildResult(): Promise<ConductorSessionResult> {
       sessionLogger.finish(stopReason);
+      const skipUsageCostFetch =
+        operatorRequestedExit || shutdownSignal.aborted;
       const sessionUsage = await enrichSessionUsageWithCost(
         sessionUsageTracker.getSessionSummary(),
-        async () => {
-          const usage = await conductorAgent.getUsage();
-          return usage.cost;
-        },
+        skipUsageCostFetch
+          ? undefined
+          : async () => {
+              const usage = await conductorAgent.getUsage();
+              return usage.cost;
+            },
       );
       return sessionLogger.snapshot({
         agentId: conductorHandle.conductor.agentId,
