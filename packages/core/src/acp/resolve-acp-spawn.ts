@@ -2,7 +2,7 @@ import type { SpawnAcpProcessOptions } from './acp-process.js';
 import type { Profile, ProfileAcpConfig } from '../profile/types.js';
 
 /** Built-in ACP preset id（Phase 1）。拡張時は adapter / capability を別途追加可能。 */
-export type BuiltinAcpPresetId = 'cursor' | 'claude' | 'codex';
+export type BuiltinAcpPresetId = 'cursor' | 'claude' | 'codex' | 'pi';
 
 export type AcpPresetId = BuiltinAcpPresetId | 'custom';
 
@@ -46,10 +46,14 @@ const BUILTIN_PRESETS: Record<BuiltinAcpPresetId, Omit<ResolvedAcpSpawn, 'preset
     command: 'npx',
     args: ['-y', '@agentclientprotocol/codex-acp'],
   },
+  pi: {
+    command: 'npx',
+    args: ['-y', 'pi-acp'],
+  },
 };
 
 export function listBuiltinAcpPresetIds(): BuiltinAcpPresetId[] {
-  return ['cursor', 'claude', 'codex'];
+  return ['cursor', 'claude', 'codex', 'pi'];
 }
 
 export function isBuiltinAcpPresetId(value: string): value is BuiltinAcpPresetId {

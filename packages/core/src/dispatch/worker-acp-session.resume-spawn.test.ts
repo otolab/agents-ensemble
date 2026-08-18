@@ -32,4 +32,35 @@ describe('openWorkerAcpSession resume spawn validation', () => {
       }),
     ).rejects.toThrow(/resume ACP spawn mismatch/);
   });
+
+  it('fails attach when sidecar pi acpSpawn mismatches current profile', async () => {
+    await expect(
+      openWorkerAcpSession({
+        issueUrl: 'https://github.com/org/repo/issues/1',
+        worktree: {
+          path: '/tmp/worktree',
+          branch: 'ensemble/issue-1',
+          issue: {
+            owner: 'org',
+            repo: 'repo',
+            number: 1,
+            url: 'https://github.com/org/repo/issues/1',
+          },
+          inRepo: false,
+        },
+        workerName: 'implementer',
+        resumeAcpSessionId: 'session-1',
+        expectedResumeAcpSpawn: {
+          preset: 'pi',
+          command: 'npx',
+          args: ['-y', 'pi-acp'],
+        },
+        currentAcpSpawn: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['acp'],
+        },
+      }),
+    ).rejects.toThrow(/resume ACP spawn mismatch/);
+  });
 });

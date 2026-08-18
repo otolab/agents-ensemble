@@ -37,6 +37,30 @@ describe('resolveDefaultAcpSpawn', () => {
     ).toMatchObject({ preset: 'codex' });
   });
 
+  it('resolves pi preset via CLI', () => {
+    expect(
+      resolveDefaultAcpSpawn({
+        defaultAcpCli: 'pi',
+      }),
+    ).toEqual({
+      preset: 'pi',
+      command: 'npx',
+      args: ['-y', 'pi-acp'],
+    });
+  });
+
+  it('resolves pi preset via env', () => {
+    expect(
+      resolveDefaultAcpSpawn({
+        env: { [ENSEMBLE_DEFAULT_ACP_CLI_ENV]: 'pi' },
+      }),
+    ).toMatchObject({
+      preset: 'pi',
+      command: 'npx',
+      args: ['-y', 'pi-acp'],
+    });
+  });
+
   it('supports custom command + args from CLI', () => {
     expect(
       resolveDefaultAcpSpawn({
@@ -137,6 +161,21 @@ describe('assertAcpSpawnMatchesResume', () => {
         workerName: 'implementer',
       }),
     ).toThrow(/resume ACP spawn mismatch/);
+  });
+
+  it('accepts matching pi preset during resume', () => {
+    const piSpawn = {
+      preset: 'pi' as const,
+      command: 'npx',
+      args: ['-y', 'pi-acp'],
+    };
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: piSpawn,
+        actual: piSpawn,
+        workerName: 'implementer',
+      }),
+    ).not.toThrow();
   });
 
   it('skips when expected fingerprint is absent (legacy sidecar)', () => {

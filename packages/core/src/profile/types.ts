@@ -13,7 +13,7 @@ import {
 
 /** profile / worker の ACP spawn 定義。 */
 export interface ProfileAcpConfig {
-  /** built-in: `cursor` | `claude` | `codex`。`command` 明示時は `custom`。 */
+  /** built-in: `cursor` | `claude` | `codex` | `pi`。`command` 明示時は `custom`。 */
   preset?: string;
   command?: string;
   args?: string[];

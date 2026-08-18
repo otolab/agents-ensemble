@@ -208,14 +208,14 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 
 | ソース | 例 |
 |--------|-----|
-| profile `workers[].acp` | `preset: claude` |
+| profile `workers[].acp` | `preset: claude` または `preset: pi` |
 | profile `acp` | 全 worker 共通デフォルト |
-| CLI `--default-acp-cli` | `ensemble issue 42 --default-acp-cli codex` |
+| CLI `--default-acp-cli` | `ensemble issue 42 --default-acp-cli codex` または `--default-acp-cli pi` |
 | CLI custom | `--default-acp-command my-agent --default-acp-arg acp` |
 | 環境変数 | `ENSEMBLE_DEFAULT_ACP_CLI=claude` |
 | システムデフォルト | `cursor`（= `agent acp`） |
 
-Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md) を参照。
+Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md) を参照。`pi` preset は `pi` CLI（`@earendil-works/pi-coding-agent`）とコミュニティ adapter `pi-acp` が必要。認証は Cursor worker とは別経路（ADR 参照）。
 
 **CLI 出力（TTY 時）** — 詳細は [docs/session-logging.md](docs/session-logging.md)。
 

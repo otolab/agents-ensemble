@@ -68,7 +68,7 @@ program
   )
   .option(
     '--default-acp-cli <preset>',
-    'Default ACP CLI preset for workers without profile acp (cursor | claude | codex)',
+    'Default ACP CLI preset for workers without profile acp (cursor | claude | codex | pi)',
   )
   .option(
     '--default-acp-command <cmd>',
