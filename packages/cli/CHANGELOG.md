@@ -1,5 +1,20 @@
 # @agents-ensemble/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- f730b16: worker ACP built-in preset に `pi`（`npx -y pi-acp`）を追加。profile / `--default-acp-cli` / `ENSEMBLE_DEFAULT_ACP_CLI` から選択可能。制限事項は ADR 0019 参照。
+- d467dc9: worker ACP spawn を profile / CLI / 環境変数で切り替え可能にした。built-in preset（cursor / claude / codex）、custom command、resume 時の spawn 不一致検知を追加。
+
+### Patch Changes
+
+- 942274f: Issue セッション TUI の 4 ペイン（Orchestration / Workers / Open questions / Operator input）タイトルを上枠線に埋め込み、内側タイトル専用行を廃止して表示行数を節約する。
+- Updated dependencies [d263bf4]
+- Updated dependencies [f730b16]
+- Updated dependencies [d467dc9]
+  - @agents-ensemble/core@0.4.0
+
 ## 0.3.2
 
 ### Patch Changes
