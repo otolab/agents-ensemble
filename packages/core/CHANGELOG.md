@@ -1,5 +1,16 @@
 # @agents-ensemble/core
 
+## 0.4.0
+
+### Minor Changes
+
+- f730b16: worker ACP built-in preset に `pi`（`npx -y pi-acp`）を追加。profile / `--default-acp-cli` / `ENSEMBLE_DEFAULT_ACP_CLI` から選択可能。制限事項は ADR 0019 参照。
+- d467dc9: worker ACP spawn を profile / CLI / 環境変数で切り替え可能にした。built-in preset（cursor / claude / codex）、custom command、resume 時の spawn 不一致検知を追加。
+
+### Patch Changes
+
+- d263bf4: `/exit` 後にプロセスが固まる問題を修正。post-loop 開始直後の `/exit` レース、自律ループ中の in-flight conductor send 待ち、明示終了時の `getUsage` 待ちを解消。
+
 ## 0.3.2
 
 ### Patch Changes
