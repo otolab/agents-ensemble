@@ -60,12 +60,12 @@ describe('computeActivityPaneHeight', () => {
 });
 
 describe('computeOrchestrationLogVisibleLineCount', () => {
-  it('reserves border and title rows inside the pane height', () => {
-    expect(computeOrchestrationLogVisibleLineCount(10, 1)).toBe(7);
+  it('reserves border rows inside the pane height when title is on the border', () => {
+    expect(computeOrchestrationLogVisibleLineCount(10)).toBe(8);
   });
 
-  it('reduces log rows when scroll hint wraps the title', () => {
-    expect(computeOrchestrationLogVisibleLineCount(10, 2)).toBe(6);
+  it('supports legacy inner title rows when passed explicitly', () => {
+    expect(computeOrchestrationLogVisibleLineCount(10, 1)).toBe(7);
   });
 });
 

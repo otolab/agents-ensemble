@@ -21,13 +21,15 @@ import {
   type OpenQuestionsPaneLayout,
 } from './open-questions-pane.js';
 import {
+  INPUT_PANE_TITLE,
   MAIN_PANE_TITLE,
-  ORCHESTRATION_PANE_TITLE_ROWS,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
   WORKER_PANE_HEIGHT,
+  WORKER_PANE_TITLE,
 } from './tui-layout-constants.js';
 import { OperatorTextArea } from './operator-text-area.js';
+import { TitledBorderPane } from './titled-border-pane.js';
 import {
   computeActivityPaneHeight,
   computeInputPaneHeight,
@@ -154,15 +156,13 @@ function WorkerStatusPane({
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
   return (
-    <Box
-      flexDirection="column"
+    <TitledBorderPane
+      title={WORKER_PANE_TITLE}
       borderStyle="round"
       borderColor="cyan"
-      paddingX={1}
+      paddingX={PANE_PADDING_X}
       height={WORKER_PANE_HEIGHT}
-      overflow="hidden"
     >
-      <Text bold>Workers</Text>
       {entries.length === 0 ? (
         <Text dimColor>(待機中)</Text>
       ) : (
@@ -170,15 +170,8 @@ function WorkerStatusPane({
           <Text key={name}>{formatConductorWorkerStatusLine(name, worker)}</Text>
         ))
       )}
-    </Box>
+    </TitledBorderPane>
   );
-}
-
-function getOrchestrationTitleLineCount(
-  scrollHint: string,
-  contentWidth: number,
-): number {
-  return wrapTextToWidth(`${MAIN_PANE_TITLE}${scrollHint}`, contentWidth).length;
 }
 
 function OrchestrationPane({
@@ -196,13 +189,9 @@ function OrchestrationPane({
   const { height: measuredLogAreaHeight, hasMeasured } = useBoxMetrics(logAreaRef);
   const pinnedToBottom = linesFromBottom === 0;
   const scrollHint = pinnedToBottom
-    ? ''
+    ? undefined
     : ' (PgUp/PgDn でスクロール · 最新へは End · 入力中は Ctrl+PgUp/PgDn)';
-  const titleLineCount = getOrchestrationTitleLineCount(scrollHint, contentWidth);
-  const estimatedLogLineCount = computeOrchestrationLogVisibleLineCount(
-    paneHeight,
-    titleLineCount,
-  );
+  const estimatedLogLineCount = computeOrchestrationLogVisibleLineCount(paneHeight);
   const visibleCount =
     hasMeasured && measuredLogAreaHeight > 0
       ? Math.max(1, Math.floor(measuredLogAreaHeight))
@@ -218,18 +207,14 @@ function OrchestrationPane({
   );
 
   return (
-    <Box
-      flexDirection="column"
+    <TitledBorderPane
+      title={MAIN_PANE_TITLE}
+      titleSuffix={scrollHint}
       borderStyle="round"
       borderColor="green"
       paddingX={PANE_PADDING_X}
       height={paneHeight}
-      overflow="hidden"
     >
-      <Text bold>
-        {MAIN_PANE_TITLE}
-        {scrollHint}
-      </Text>
       <Box ref={logAreaRef} flexGrow={1} flexDirection="column" overflow="hidden">
         {activityLog.length === 0 ? (
           <Text dimColor>(活動ログなし)</Text>
@@ -239,21 +224,20 @@ function OrchestrationPane({
           ))
         )}
       </Box>
-    </Box>
+    </TitledBorderPane>
   );
 }
 
 function OpenQuestionsPane({ layout }: { layout: OpenQuestionsPaneLayout }) {
   return (
-    <Box
-      flexDirection="column"
+    <TitledBorderPane
+      title={layout.titleText}
       borderStyle="round"
       borderColor="magenta"
       paddingX={PANE_PADDING_X}
       height={layout.paneHeight}
-      overflow="hidden"
+      titleBold={false}
     >
-      <Text bold>{layout.titleText}</Text>
       {layout.items.length === 0 ? (
         <Text dimColor>(未回答なし)</Text>
       ) : (
@@ -265,7 +249,7 @@ function OpenQuestionsPane({ layout }: { layout: OpenQuestionsPaneLayout }) {
           )),
         )
       )}
-    </Box>
+    </TitledBorderPane>
   );
 }
 
@@ -321,10 +305,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
     inputDisplayLineCount: visibleInputDisplayLineCount,
     openQuestionsPaneHeight: openQuestionsLayout.paneHeight,
   });
-  const visibleLineCount = computeOrchestrationLogVisibleLineCount(
-    activityPaneHeight,
-    ORCHESTRATION_PANE_TITLE_ROWS,
-  );
+  const visibleLineCount = computeOrchestrationLogVisibleLineCount(activityPaneHeight);
   const displayLineCount = useMemo(
     () => buildActivityLogDisplayLines(snapshot.activityLog, contentWidth).length,
     [snapshot.activityLog, contentWidth],
@@ -434,13 +415,12 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         linesFromBottom={linesFromBottom}
       />
       <OpenQuestionsPane layout={openQuestionsLayout} />
-      <Box
-        flexDirection="column"
+      <TitledBorderPane
+        title={INPUT_PANE_TITLE}
         borderStyle="single"
         borderColor="white"
-        paddingX={1}
+        paddingX={PANE_PADDING_X}
         height={inputPaneHeight}
-        overflow="hidden"
       >
         <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
         <OperatorTextArea
@@ -454,7 +434,7 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
           onDisplayLineCountChange={handleDisplayLineCountChange}
           cursorStart={cursorStart}
         />
-      </Box>
+      </TitledBorderPane>
     </Box>
   );
 }

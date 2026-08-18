@@ -151,6 +151,10 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 
 本 ADR 起草時の最小 UI 表（§Context）では **conductor 出力**を独立ペインとしていた。#94 以降は operator / conductor / harness / observation を **Orchestration メインペイン**（旧ラベル `Session`）に統合し、オペレータが対話とオーケストレーション状況を一つの流れで追えるようにした（#108）。Workers / Open questions はサマリ用の補助ペインのまま。harness を stderr に戻す案は採用しない。
 
+### #206 以降のペインタイトル（上枠線埋め込み）
+
+4 ペイン（Orchestration / Workers / Open questions / Operator input）のタイトルは **内側専用行を持たず**、上枠線に `╭─ Title ─` 形式で埋め込む（`TitledBorderPane` + `titled-border-line`）。Orchestration のスクロールヒントは枠線上に付与し、幅不足時は suffix から省略する。レイアウト定数（`OPEN_QUESTIONS_PANE_MIN_HEIGHT` 等）は内側タイトル行 0 を前提に再計算する。
+
 ## 関連
 
 - Issue #54, #89, #104, #108

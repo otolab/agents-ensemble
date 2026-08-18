@@ -9,7 +9,7 @@ import { createTuiViewModel } from './tui-view-model.js';
 import { buildActivityLogDisplayLines } from './activity-log.js';
 import { formatOperatorContextHint } from './format-operator-context.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
-import { extractOrchestrationPaneFrameStats } from './orchestration-pane-frame.js';
+import { extractOrchestrationPaneFrameStats, extractTuiPaneFrameStats } from './orchestration-pane-frame.js';
 import { resolveOpenQuestionsPaneLayout } from './open-questions-pane.js';
 import {
   computeActivityLogLineCapacity,
@@ -20,11 +20,13 @@ import {
 } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 import {
+  INPUT_PANE_TITLE,
   MAIN_PANE_TITLE,
   OPEN_QUESTIONS_PANE_MIN_HEIGHT,
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
+  WORKER_PANE_TITLE,
 } from './tui-layout-constants.js';
 import type { OpenQuestion } from '@agents-ensemble/core';
 
@@ -128,9 +130,9 @@ describe('IssueSessionTui', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('Workers');
+    expect(frame).toContain(WORKER_PANE_TITLE);
     expect(frame).toContain('implementer');
-    expect(frame).toContain('Orchestration');
+    expect(frame).toContain(MAIN_PANE_TITLE);
     expect(frame).toContain('[operator] operator ping');
     expect(frame).toContain('[conductor] conductor says hi');
     expect(frame).toContain('Open questions');
@@ -138,6 +140,7 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('1/1');
     expect(frame).toContain('Shift+↑↓で選択');
     expect(frame).toContain('operator>');
+    expect(frame).toContain(INPUT_PANE_TITLE);
   });
 
   it('shows post-loop hint in input area', () => {
@@ -329,7 +332,7 @@ describe('IssueSessionTui', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('Workers');
+    expect(frame).toContain(WORKER_PANE_TITLE);
     expectNoContentOnBorderLines(frame);
     expect(frame.split('\n')).toHaveLength(terminalRows);
   });
@@ -365,6 +368,22 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('[conductor] cond');
   });
 
+  it('embeds pane titles on top borders without inner title rows', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('operator', 'ping');
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? '';
+    for (const title of [WORKER_PANE_TITLE, MAIN_PANE_TITLE, 'Open questions', INPUT_PANE_TITLE]) {
+      const stats = extractTuiPaneFrameStats(frame, title);
+      expect(stats.titleOnBorder).toBe(true);
+      expect(stats.innerRows.some((line) => line.includes(title))).toBe(false);
+    }
+  });
+
   it('keeps orchestration title visible when log pane is full', () => {
     const viewModel = createTuiViewModel();
     fillScrollableHarnessLog(viewModel, 100);
@@ -376,7 +395,7 @@ describe('IssueSessionTui', () => {
     expect(lastFrame() ?? '').toContain('Orchestration');
   });
 
-  it('fills orchestration pane when scroll hint wraps the title', async () => {
+  it('fills orchestration pane when scroll hint is shown on the top border', async () => {
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,
       value: 40,
@@ -402,18 +421,11 @@ describe('IssueSessionTui', () => {
         hintLineCount: 1,
         openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
       }),
-      wrapTextToWidth(
-        `${MAIN_PANE_TITLE} (PgUp/PgDn でスクロール · 最新へは End · 入力中は Ctrl+PgUp/PgDn)`,
-        getPaneContentWidth({
-          columns: 40,
-          paddingX: PANE_PADDING_X,
-          borderWidth: ROUND_BORDER_WIDTH,
-        }),
-      ).length,
     );
     const stats = extractOrchestrationPaneFrameStats(lastFrame() ?? '');
 
-    expect(lastFrame() ?? '').toContain(SCROLL_HINT);
+    expect(lastFrame() ?? '').toContain('PgUp/PgDn');
+    expect(stats.titleRows).toHaveLength(0);
     expect(stats.logRows.length).toBeGreaterThanOrEqual(capacity);
     expect(stats.blankRows).toHaveLength(0);
 

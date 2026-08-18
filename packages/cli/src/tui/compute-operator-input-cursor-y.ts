@@ -3,7 +3,6 @@ import {
   INPUT_PANE_BORDER_ROWS,
   INPUT_PANE_LEFT_COLUMNS,
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
-  ORCHESTRATION_PANE_TITLE_ROWS,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
 } from './tui-layout-constants.js';
@@ -35,15 +34,15 @@ export function computeActivityPaneHeight(params: {
   );
 }
 
-/** Orchestration ペイン内に表示できる活動ログ行数。 */
+/** Orchestration ペイン内に表示できる活動ログ行数（タイトルは上枠線埋め込みのため内側行を消費しない）。 */
 export function computeOrchestrationLogVisibleLineCount(
   paneHeight: number,
-  titleLineCount: number = ORCHESTRATION_PANE_TITLE_ROWS,
+  innerTitleLineCount: number = 0,
 ): number {
-  return Math.max(1, paneHeight - PANE_BORDER_ROWS - titleLineCount);
+  return Math.max(1, paneHeight - PANE_BORDER_ROWS - innerTitleLineCount);
 }
 
-/** 端末行数から Orchestration ペインの活動ログ行キャパシティ（タイトル 1 行想定）。 */
+/** 端末行数から Orchestration ペインの活動ログ行キャパシティ。 */
 export function computeActivityLogLineCapacity(params: {
   terminalRows: number;
   hintLineCount: number;
