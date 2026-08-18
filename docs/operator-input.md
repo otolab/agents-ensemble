@@ -2,7 +2,7 @@
 
 ConductorSession の **View 層**契約。入力・表示はここに閉じ、オーケストレーション（Driver）とは `bindOperatorInput` で接続する。
 
-関連: [architecture.md](architecture.md) §5、[ADR 0009](adr/0009-conductor-session-event-queue.md)、[ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md)、Issue #54（TUI）
+関連: [architecture.md](architecture.md) §5、[ADR 0009](adr/0009-conductor-session-event-queue.md)、[ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md)、[cli-text-input-keybindings.md](cli-text-input-keybindings.md)（Emacs 風ショートカットの実装階層）、Issue #54（TUI）
 
 ## 3 層の分担
 
