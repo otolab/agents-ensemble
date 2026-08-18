@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
+import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import type { ResolvedProfile } from '../profile/types.js';
 
 export const SESSION_SIDECAR_VERSION = 1;
@@ -24,6 +25,8 @@ export interface WorkerSessionSidecar {
   acpSessionId: string;
   /** ACP `session/new` / `session/load` に渡した cwd（resume 検証用）。 */
   acpCwd?: string;
+  /** resume 時の ACP spawn フィンガープリント（preset + command + args）。 */
+  acpSpawn?: AcpSpawnFingerprint;
 }
 
 export interface SessionSidecar {
@@ -208,6 +211,9 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     workers[name] = {
       acpSessionId: worker.acpSessionId,
       ...(typeof worker.acpCwd === 'string' ? { acpCwd: worker.acpCwd } : {}),
+      ...(parseAcpSpawnFingerprint(worker.acpSpawn, name)
+        ? { acpSpawn: parseAcpSpawnFingerprint(worker.acpSpawn, name) }
+        : {}),
     };
   }
 
@@ -235,4 +241,26 @@ function isEnoent(error: unknown): boolean {
     'code' in error &&
     (error as NodeJS.ErrnoException).code === 'ENOENT'
   );
+}
+
+function parseAcpSpawnFingerprint(
+  raw: unknown,
+  workerName: string,
+): AcpSpawnFingerprint | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Invalid session sidecar worker acpSpawn: ${workerName}`);
+  }
+  const record = raw as Record<string, unknown>;
+  if (typeof record.preset !== 'string' || typeof record.command !== 'string') {
+    throw new Error(`Invalid session sidecar worker acpSpawn: ${workerName}`);
+  }
+  if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== 'string')) {
+    throw new Error(`Invalid session sidecar worker acpSpawn args: ${workerName}`);
+  }
+  return {
+    preset: record.preset as AcpSpawnFingerprint['preset'],
+    command: record.command,
+    args: record.args,
+  };
 }

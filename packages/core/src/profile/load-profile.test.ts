@@ -257,8 +257,20 @@ describe('profileWorkersToSessionSpecs', () => {
     });
 
     expect(specs).toEqual([
-      { name: 'ping-1', kind: 'ping', prompt: { instructions: ['pong'] } },
-      { name: 'main', kind: 'other', prompt: { instructions: ['fallback'] } },
+      {
+        name: 'ping-1',
+        kind: 'ping',
+        prompt: { instructions: ['pong'] },
+        spawn: { command: 'agent', args: ['acp'] },
+        acpFingerprint: { preset: 'cursor', command: 'agent', args: ['acp'] },
+      },
+      {
+        name: 'main',
+        kind: 'other',
+        prompt: { instructions: ['fallback'] },
+        spawn: { command: 'agent', args: ['acp'] },
+        acpFingerprint: { preset: 'cursor', command: 'agent', args: ['acp'] },
+      },
     ]);
   });
 

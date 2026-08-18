@@ -380,9 +380,14 @@ export class WorkerRuntime {
         sessionState: started.sessionState,
         resolvedWorkspacePath: started.resolvedWorkspacePath,
         expectedResumeAcpCwd: started.expectedResumeAcpCwd,
+        expectedResumeAcpSpawn: started.expectedResumeAcpSpawn,
+        currentAcpSpawn: started.acpFingerprint,
         resumeAcpSessionId: started.resumeAcpSessionId,
         connectAcp: this.options.connectAcp,
-        spawn: this.options.spawn,
+        spawn: {
+          ...this.options.spawn,
+          ...started.spawn,
+        },
         ownsBridge: this.options.ownsWorkerAcpConnections,
         permissionHandler: this.options.inbox.createPermissionHandler(
           started.workerId,

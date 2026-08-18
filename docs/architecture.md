@@ -199,7 +199,7 @@ conductor が制御する実行単位。**種別（kind）** によって読む 
 
 各 dispatch で:
 
-1. `spawn("agent", ["acp"], { cwd, env, ... })` — **ツール・環境は起動オプションで明示**
+1. `spawn(command, args, { cwd, env, ... })` — **ツール・環境は起動オプションで明示**（既定は `agent acp` = preset `cursor`）
 2. JSON-RPC: `initialize` → `authenticate` → `session/new`（`cwd`, `mcpServers` 等）
 3. `session/prompt` に **種別用起動プロンプト** + Skill 名 / Issue URL
 4. `session/update` を conductor が購読（進捗）
@@ -221,7 +221,8 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 - **自律実行** — session 内では Skill に沿って自走する。worker 同士は直接通信しない
 - **Issue / PR に報告** — 作業報告・状態は Issue コメント / PR に書き、他 worker が読む
 - **Issue worktree に紐づく** — implementer は worktree を作成し、**未指定 worker** は同じ Issue worktree を ACP cwd として共有する（規約）
-- **per-worker ACP cwd** — profile の `workers[].workspace` で worker ごとに `agent acp` の cwd を上書き可能（Issue worktree とは別。外部 repo では isolated worktree を自動作成しない）
+- **per-worker ACP cwd** — profile の `workers[].workspace` で worker ごとに ACP の cwd を上書き可能（Issue worktree とは別。外部 repo では isolated worktree を自動作成しない）
+- **per-worker ACP CLI** — profile の `acp` / `workers[].acp` で preset（`cursor` | `claude` | `codex` | `custom`）または `command` / `args` / `env` を指定。profile 未指定 worker のみ CLI `--default-acp-*` / `ENSEMBLE_DEFAULT_ACP_CLI` が効く（[ADR 0019](adr/0019-worker-acp-cli-presets.md)）
 - **worktree のライフサイクル** — isolated モードではセッション開始時に `.ensemble/worktrees/issue-N` を作成（既存なら再利用）。TTY + post-loop で `/exit` 正常終了時に削除（未コミット変更がある場合は削除拒否）。`in-repo` では削除しない。ローカルブランチ `ensemble/issue-N` は残す
 - **新規 worktree のベース** — 可能なら `git fetch` 後の `origin` デフォルトブランチ（`origin/HEAD` または `main`）から `ensemble/issue-N` を切る。remote なし・fetch 失敗時はローカル HEAD にフォールバック
 - 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— worktree の `cwd` から解決

@@ -1,6 +1,7 @@
 import type { PromptModule } from '@modular-prompt/core';
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
+import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import type { PermissionHandler } from '../acp/types.js';
 import type { EnsembleSessionState } from '../profile/types.js';
 import { buildWorkerAttachPrompt as compileWorkerAttachPrompt } from '../prompt/build-worker-attach-prompt.js';
@@ -29,6 +30,8 @@ export interface AttachWorkerOptions {
   worktree: WorktreeRef;
   resolvedWorkspacePath?: string;
   expectedResumeAcpCwd?: string;
+  expectedResumeAcpSpawn?: AcpSpawnFingerprint;
+  currentAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
   spawn?: SpawnAcpProcessOptions;
   connectAcp?: ConnectWorkerAcpFn;
@@ -52,6 +55,8 @@ export async function attachWorker(
     acpCwd: options.resolvedWorkspacePath,
     workerName: options.name,
     expectedResumeAcpCwd: options.expectedResumeAcpCwd,
+    expectedResumeAcpSpawn: options.expectedResumeAcpSpawn,
+    currentAcpSpawn: options.currentAcpSpawn,
     resumeAcpSessionId: options.resumeAcpSessionId,
     connectAcp: options.connectAcp,
     spawn: mergeWorkerSpawn(options.spawn, options.name),

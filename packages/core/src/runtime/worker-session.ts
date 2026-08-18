@@ -1,4 +1,5 @@
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
+import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import type { PermissionDecision } from '../acp/types.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
@@ -27,7 +28,12 @@ export interface WorkerSessionOptions {
   /** resume 時に復元する worker 名 → ACP session 情報。 */
   restoredWorkerSessions?: Record<
     string,
-    string | { acpSessionId: string; acpCwd?: string }
+    | string
+    | {
+        acpSessionId: string;
+        acpCwd?: string;
+        acpSpawn?: AcpSpawnFingerprint;
+      }
   >;
   connectAcp?: ConnectWorkerAcpFn;
   spawn?: SpawnAcpProcessOptions;
@@ -108,6 +114,8 @@ export class WorkerSession {
         typeof restored === 'string' ? restored : restored?.acpSessionId;
       const expectedResumeAcpCwd =
         typeof restored === 'string' ? undefined : restored?.acpCwd;
+      const expectedResumeAcpSpawn =
+        typeof restored === 'string' ? undefined : restored?.acpSpawn;
       const workerId = this.runtime.start({
         name: worker.name,
         issueUrl: this.options.issueUrl,
@@ -117,7 +125,10 @@ export class WorkerSession {
         sessionState: this.options.sessionState,
         resolvedWorkspacePath: worker.resolvedWorkspacePath,
         expectedResumeAcpCwd,
+        expectedResumeAcpSpawn,
         resumeAcpSessionId,
+        spawn: worker.spawn,
+        acpFingerprint: worker.acpFingerprint,
       });
       this.startedWorkerIds.push(workerId);
     }

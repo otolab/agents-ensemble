@@ -202,7 +202,20 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 | `isolated`（既定） | Issue 専用 worktree（`.ensemble/worktrees/issue-N`） |
 | `in-repo` | メイン worktree で直接作業する **特別モード** |
 
-**per-worker ACP cwd**（profile の `workers[].workspace`）は Issue worktree **とは別概念**。指定した worker だけ別ディレクトリで `agent acp` を起動する（例: Issue はコード repo、librarian は docs repo）。省略時は上記 Issue worktree を使う。詳細は [docs/elements.md](docs/elements.md)。
+**per-worker ACP cwd**（profile の `workers[].workspace`）は Issue worktree **とは別概念**。指定した worker だけ別ディレクトリで ACP を起動する（例: Issue はコード repo、librarian は docs repo）。省略時は上記 Issue worktree を使う。詳細は [docs/elements.md](docs/elements.md)。
+
+**per-worker ACP CLI**（profile の `acp` / `workers[].acp`、またはデフォルト解決）で worker が起動する ACP サーバを選べる。profile に ACP 指定がある worker は CLI / 環境変数で上書きされない。
+
+| ソース | 例 |
+|--------|-----|
+| profile `workers[].acp` | `preset: claude` |
+| profile `acp` | 全 worker 共通デフォルト |
+| CLI `--default-acp-cli` | `ensemble issue 42 --default-acp-cli codex` |
+| CLI custom | `--default-acp-command my-agent --default-acp-arg acp` |
+| 環境変数 | `ENSEMBLE_DEFAULT_ACP_CLI=claude` |
+| システムデフォルト | `cursor`（= `agent acp`） |
+
+Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md) を参照。
 
 **CLI 出力（TTY 時）** — 詳細は [docs/session-logging.md](docs/session-logging.md)。
 

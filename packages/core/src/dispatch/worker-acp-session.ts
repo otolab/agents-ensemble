@@ -1,6 +1,10 @@
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import { AcpBridge } from '../acp/acp-bridge.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
+import {
+  assertAcpSpawnMatchesResume,
+  type AcpSpawnFingerprint,
+} from '../acp/resolve-acp-spawn.js';
 import type { PermissionHandler, PromptResult } from '../acp/types.js';
 import type { IssueRef } from '../issue/issue-ref.js';
 import { assertWorkerWorkspaceDirectory } from '../profile/resolve-worker-workspace.js';
@@ -36,6 +40,10 @@ export interface OpenWorkerAcpSessionOptions {
   workerName?: string;
   /** resume 時に sidecar が記録した cwd。不一致なら attach 失敗。 */
   expectedResumeAcpCwd?: string;
+  /** resume 時に sidecar が記録した ACP spawn。不一致なら attach 失敗。 */
+  expectedResumeAcpSpawn?: AcpSpawnFingerprint;
+  /** 現在の profile / CLI から解決した ACP spawn（resume 検証用）。 */
+  currentAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
   bridge?: AcpBridge;
   connectAcp?: ConnectWorkerAcpFn;
@@ -71,6 +79,14 @@ export async function openWorkerAcpSession(
     throw new Error(
       `${label} resume cwd mismatch: sidecar has ${options.expectedResumeAcpCwd}, current profile resolves to ${acpCwd}`,
     );
+  }
+
+  if (options.resumeAcpSessionId && options.currentAcpSpawn) {
+    assertAcpSpawnMatchesResume({
+      expected: options.expectedResumeAcpSpawn,
+      actual: options.currentAcpSpawn,
+      workerName: options.workerName,
+    });
   }
 
   if (options.acpCwd !== undefined) {

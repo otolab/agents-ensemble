@@ -14,6 +14,8 @@ import {
 } from '../permission/permission-deadlock-monitor.js';
 import { createResolvePermissionTool } from '../permission/resolve-permission-tool.js';
 import type { Profile, ResolvedProfile } from '../profile/types.js';
+import type { DefaultAcpResolutionOptions, AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
+import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import { profileWorkersToSessionSpecs, sessionStateFromProfile } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
@@ -110,6 +112,8 @@ export interface RunConductorSessionOptions {
   onPostLoopWait?: () => void;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
   connectAcp?: ConnectWorkerAcpFn;
+  /** profile / worker に ACP 未指定時のデフォルト解決（CLI > env > cursor）。 */
+  defaultAcp?: DefaultAcpResolutionOptions;
   /**
    * Conductor が worker 向け作業ディレクトリをどう用意するか。
    * セッション開始時に 1 回だけ resolve し、全 worker が共有する。
@@ -192,7 +196,7 @@ export async function runConductorSession(
   let activeProfile = options.profile;
   const workerSessions = new Map<
     string,
-    { acpSessionId: string; acpCwd?: string }
+    { acpSessionId: string; acpCwd?: string; acpSpawn?: AcpSpawnFingerprint }
   >();
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
 
@@ -216,6 +220,7 @@ export async function runConductorSession(
       workerSessions.set(name, {
         acpSessionId: worker.acpSessionId,
         ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
+        ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
       });
     }
   }
@@ -249,7 +254,24 @@ export async function runConductorSession(
   const sessionState = sessionStateFromProfile(activeProfile);
 
   const issue = parseIssueUrl(options.issueUrl);
-  const workers = profileWorkersToSessionSpecs(activeProfile);
+  const spawnBase: SpawnAcpProcessOptions = {
+    onProcessStdioLine: ({ stream, line, workerName }) => {
+      if (stream !== 'stderr') return;
+      sessionLogger.emit({
+        type: 'worker.process.stderr',
+        line,
+        stream: 'stderr',
+        workerName,
+      });
+    },
+  };
+  const workers = profileWorkersToSessionSpecs(activeProfile, {
+    defaultAcp: options.defaultAcp,
+    spawnBase,
+  });
+  const workerAcpFingerprints = new Map(
+    workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
+  );
   const workerWorktree =
     options.workerWorktree ??
     (workers.length > 0
@@ -290,17 +312,6 @@ export async function runConductorSession(
     workers,
     sessionState,
     restoredWorkerSessions: Object.fromEntries(workerSessions),
-    spawn: {
-      onProcessStdioLine: ({ stream, line, workerName }) => {
-        if (stream !== 'stderr') return;
-        sessionLogger.emit({
-          type: 'worker.process.stderr',
-          line,
-          stream: 'stderr',
-          workerName,
-        });
-      },
-    },
     permissionPipeline,
     ...(options.connectAcp ? { connectAcp: options.connectAcp } : {}),
     ...(options.ownsWorkerAcpConnections !== undefined
@@ -337,6 +348,9 @@ export async function runConductorSession(
       workerSessions.set(result.name, {
         acpSessionId: result.acpSessionId,
         acpCwd: attached?.session.acpCwd ?? workerWorktree?.path,
+        ...(workerAcpFingerprints.get(result.name)
+          ? { acpSpawn: workerAcpFingerprints.get(result.name) }
+          : {}),
       });
       eventQueue.enqueue({ type: 'worker.completed', result });
       scheduleSidecarFlush();

@@ -1,4 +1,6 @@
 import type { PromptModule } from '@modular-prompt/core';
+import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
+import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { WorkerPromptSource } from '../dispatch/worker-dispatch.js';
@@ -15,7 +17,10 @@ export interface WorkerStartParams {
   sessionState: EnsembleSessionState;
   resolvedWorkspacePath?: string;
   expectedResumeAcpCwd?: string;
+  expectedResumeAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
+  spawn?: SpawnAcpProcessOptions;
+  acpFingerprint?: AcpSpawnFingerprint;
 }
 
 export interface WorkerStartedInfo extends WorkerStartParams {
