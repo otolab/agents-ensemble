@@ -33,6 +33,7 @@ export type {
   AgentDefinition,
   ProfileWorkerEntry,
   ProfileWorkerRef,
+  ProfileAcpConfig,
   SessionWorkerSpec,
   EnsembleSessionState,
 } from './types.js';

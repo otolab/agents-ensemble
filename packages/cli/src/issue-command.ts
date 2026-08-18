@@ -27,6 +27,9 @@ export interface IssueCommandOptions {
   noMaxTurns?: boolean;
   noWait?: boolean;
   worktree: string;
+  defaultAcpCli?: string;
+  defaultAcpCommand?: string;
+  defaultAcpArgs?: string[];
   /** commander の `--no-github-monitor` 用。false で監視無効。 */
   githubMonitor?: boolean;
   githubMonitorDebounceMs?: number;
@@ -146,6 +149,21 @@ export async function executeIssueCommand(
 
   const maxTurns = resolveIssueSessionMaxTurns(options, interactive);
 
+  const defaultAcp =
+    options.defaultAcpCli ||
+    options.defaultAcpCommand ||
+    (options.defaultAcpArgs && options.defaultAcpArgs.length > 0)
+      ? {
+          ...(options.defaultAcpCli ? { defaultAcpCli: options.defaultAcpCli } : {}),
+          ...(options.defaultAcpCommand
+            ? { defaultAcpCommand: options.defaultAcpCommand }
+            : {}),
+          ...(options.defaultAcpArgs && options.defaultAcpArgs.length > 0
+            ? { defaultAcpArgs: options.defaultAcpArgs }
+            : {}),
+        }
+      : undefined;
+
   try {
     return await runSession({
       issueUrl,
@@ -164,6 +182,7 @@ export async function executeIssueCommand(
       ...(options.githubMonitorDebounceMs !== undefined
         ? { githubMonitorDebounceMs: options.githubMonitorDebounceMs }
         : {}),
+      ...(defaultAcp ? { defaultAcp } : {}),
       ...(interactive
         ? {
             bindOperatorInput: tuiHost?.bindOperatorInput ?? bindAsyncOperatorInput,

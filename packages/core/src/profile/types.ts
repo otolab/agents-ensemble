@@ -1,4 +1,24 @@
 import type { PromptModule } from '@modular-prompt/core';
+import { parseProfileAcpConfig } from '../acp/resolve-acp-spawn.js';
+import type {
+  AcpSpawnFingerprint,
+  DefaultAcpResolutionOptions,
+} from '../acp/resolve-acp-spawn.js';
+import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
+import {
+  acpSpawnFingerprint,
+  resolveWorkerAcpSpawn,
+  resolvedAcpSpawnToOptions,
+} from '../acp/resolve-acp-spawn.js';
+
+/** profile / worker の ACP spawn 定義。 */
+export interface ProfileAcpConfig {
+  /** built-in: `cursor` | `claude` | `codex`。`command` 明示時は `custom`。 */
+  preset?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
 
 /** kind ごとの agent 定義（modular-prompt 拡張）。`conductor` は暗黙起動の SDK agent、他は worker init prompt 用。 */
 export interface AgentDefinition {
@@ -20,6 +40,8 @@ export interface ProfileWorkerRefObject {
    * profile ディレクトリまたは repo-root 基準の相対パス、または絶対パス。
    */
   workspace?: string;
+  /** worker 単位の ACP spawn 設定（profile 全体 `acp` より優先）。 */
+  acp?: ProfileAcpConfig;
 }
 
 /** parse 後の worker 定義。 */
@@ -28,6 +50,7 @@ export interface ProfileWorkerEntry {
   kind: string;
   /** profile YAML の raw 値。 */
   workspace?: string;
+  acp?: ProfileAcpConfig;
   /** `loadProfile` 後に解決された絶対パス。 */
   resolvedWorkspacePath?: string;
 }
@@ -50,6 +73,8 @@ export interface Profile {
   agents?: Record<string, AgentDefinition>;
   /** セッション開始時に起動する worker（name + kind）。 */
   workers: ProfileWorkerEntry[];
+  /** profile 全体の ACP spawn デフォルト（worker 未指定時に継承）。 */
+  acp?: ProfileAcpConfig;
   /** profile 付属文書（team.md 等）。compile 時に Prepared Materials へ載せる。 */
   materials?: ProfileMaterial[];
 }
@@ -84,6 +109,10 @@ export interface SessionWorkerSpec {
   kind: string;
   prompt?: PromptModule;
   resolvedWorkspacePath?: string;
+  /** worker attach 時の ACP spawn オプション（command/args/env）。 */
+  spawn?: SpawnAcpProcessOptions;
+  /** resume 検証用フィンガープリント。 */
+  acpFingerprint?: AcpSpawnFingerprint;
 }
 
 /** compile 時に state へ載せる worker 構成と kind 一覧。 */
@@ -144,6 +173,9 @@ export function normalizeProfileWorker(
       ...(typeof worker.workspace === 'string' && worker.workspace.length > 0
         ? { workspace: worker.workspace }
         : {}),
+      ...(worker.acp !== undefined
+        ? { acp: parseProfileAcpConfig(worker.acp, `${label} workers[${index}]`) }
+        : {}),
     };
   }
 
@@ -173,15 +205,30 @@ export function normalizeProfileWorkers(
   return normalized;
 }
 
-export function profileWorkersToSessionSpecs(profile: ResolvedProfile): SessionWorkerSpec[] {
-  return profile.workers.map((worker) => ({
-    name: worker.name,
-    kind: worker.kind,
-    prompt: resolveAgentPromptModule(worker.kind, profile.agents),
-    ...(worker.resolvedWorkspacePath
-      ? { resolvedWorkspacePath: worker.resolvedWorkspacePath }
-      : {}),
-  }));
+export function profileWorkersToSessionSpecs(
+  profile: ResolvedProfile,
+  options?: {
+    defaultAcp?: DefaultAcpResolutionOptions;
+    spawnBase?: SpawnAcpProcessOptions;
+  },
+): SessionWorkerSpec[] {
+  return profile.workers.map((worker) => {
+    const resolved = resolveWorkerAcpSpawn({
+      profileAcp: profile.acp,
+      workerAcp: worker.acp,
+      defaultOptions: options?.defaultAcp,
+    });
+    return {
+      name: worker.name,
+      kind: worker.kind,
+      prompt: resolveAgentPromptModule(worker.kind, profile.agents),
+      ...(worker.resolvedWorkspacePath
+        ? { resolvedWorkspacePath: worker.resolvedWorkspacePath }
+        : {}),
+      spawn: resolvedAcpSpawnToOptions(resolved, options?.spawnBase),
+      acpFingerprint: acpSpawnFingerprint(resolved),
+    };
+  });
 }
 
 /** kind に対応する profile agent module。agents[kind] → agents.default → undefined。 */

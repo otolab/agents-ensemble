@@ -67,6 +67,19 @@ program
     'isolated',
   )
   .option(
+    '--default-acp-cli <preset>',
+    'Default ACP CLI preset for workers without profile acp (cursor | claude | codex)',
+  )
+  .option(
+    '--default-acp-command <cmd>',
+    'Default custom ACP command (profile acp unset workers only; overrides --default-acp-cli)',
+  )
+  .option(
+    '--default-acp-arg <arg>',
+    'Additional arg for --default-acp-command (repeatable)',
+    (value: string, previous: string[] | undefined) => [...(previous ?? []), value],
+  )
+  .option(
     '--no-github-monitor',
     'Disable GitHub Issue / PR update monitoring',
   )
@@ -98,6 +111,9 @@ program
         noMaxTurns?: boolean;
         noWait?: boolean;
         worktree: string;
+        defaultAcpCli?: string;
+        defaultAcpCommand?: string;
+        defaultAcpArg?: string[];
         githubMonitor?: boolean;
         githubMonitorDebounceMs?: number;
         summaryFormat?: string;
@@ -107,7 +123,10 @@ program
       try {
         const repoRoot = resolve(options.repoRoot);
         const issueUrl = await resolveIssueUrl(issueRef, repoRoot);
-        const result = await executeIssueCommand(issueUrl, options);
+        const result = await executeIssueCommand(issueUrl, {
+          ...options,
+          defaultAcpArgs: options.defaultAcpArg,
+        });
 
         writeIssueSessionSummary(result, {
           format: resolveIssueSummaryFormat({

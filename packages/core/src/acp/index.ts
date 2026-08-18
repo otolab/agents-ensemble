@@ -28,7 +28,31 @@ export type {
   SessionUpdateHandler,
 } from './acp-client.js';
 
-export { spawnAcpProcess, runAcpSession } from './acp-process.js';
+export {
+  spawnAcpProcess,
+  runAcpSession,
+} from './acp-process.js';
+export {
+  ENSEMBLE_DEFAULT_ACP_CLI_ENV,
+  resolveBuiltinAcpPreset,
+  resolveDefaultAcpSpawn,
+  resolveWorkerAcpSpawn,
+  resolveWorkerAcpSpawns,
+  resolveAcpConfig,
+  parseProfileAcpConfig,
+  acpSpawnFingerprint,
+  assertAcpSpawnMatchesResume,
+  resolvedAcpSpawnToOptions,
+  listBuiltinAcpPresetIds,
+  isBuiltinAcpPresetId,
+} from './resolve-acp-spawn.js';
+export type {
+  BuiltinAcpPresetId,
+  AcpPresetId,
+  ResolvedAcpSpawn,
+  AcpSpawnFingerprint,
+  DefaultAcpResolutionOptions,
+} from './resolve-acp-spawn.js';
 export type {
   SpawnAcpProcessOptions,
   RunAcpSessionOptions,

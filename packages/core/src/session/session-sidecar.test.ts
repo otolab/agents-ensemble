@@ -70,6 +70,38 @@ describe('session sidecar', () => {
     );
   });
 
+  it('round-trips worker acpSpawn through save and load', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-sidecar-'));
+    const path = sessionSidecarPath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-acp-spawn',
+    });
+    const sidecar = baseSidecar({
+      conductorAgentId: 'agent-acp-spawn',
+      repoRoot: tempDir,
+      workers: {
+        implementer: {
+          acpSessionId: 'sess-1',
+          acpCwd: '/repo/worktree',
+          acpSpawn: {
+            preset: 'claude',
+            command: 'npx',
+            args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+          },
+        },
+      },
+    });
+
+    await saveSessionSidecar(path, sidecar);
+    const loaded = await loadSessionSidecar(path);
+
+    expect(loaded?.workers.implementer?.acpSpawn).toEqual({
+      preset: 'claude',
+      command: 'npx',
+      args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+    });
+  });
+
   it('rejects mismatched issueUrl on assert', () => {
     const sidecar = baseSidecar({
       conductorAgentId: 'agent-1',

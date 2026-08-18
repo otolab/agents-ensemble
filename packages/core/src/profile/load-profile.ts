@@ -12,6 +12,7 @@ import type {
 import { resolveWorkerWorkspacePath } from './resolve-worker-workspace.js';
 import { assertTeamProfileWorkspacesAvailable } from './validate-team-profile-workspaces.js';
 import { normalizeProfileWorkers } from './types.js';
+import { parseProfileAcpConfig } from '../acp/resolve-acp-spawn.js';
 import {
   normalizeTeamProfileName,
   resolveTeamProfilePath,
@@ -76,7 +77,13 @@ export function parseProfile(source: unknown, label: string): Profile {
   const raw = source as { workers: unknown[] } & Omit<Profile, 'workers'>;
   const workers = normalizeProfileWorkers(raw.workers, label);
 
-  const profile: Profile = { ...raw, workers };
+  const profile: Profile = {
+    ...raw,
+    workers,
+    ...(raw.acp !== undefined
+      ? { acp: parseProfileAcpConfig(raw.acp, `${label} acp`) }
+      : {}),
+  };
 
   for (const [name, agent] of Object.entries(profile.agents ?? {})) {
     if (!agent || typeof agent !== 'object') {
@@ -199,6 +206,7 @@ export async function resolveProfile(
 
   return {
     workers: resolveProfileWorkers(profile.workers, profileDir, repoRoot),
+    ...(profile.acp ? { acp: profile.acp } : {}),
     agents: Object.keys(agents).length > 0 ? agents : undefined,
     materials: await Promise.all(
       (profile.materials ?? []).map((material) =>
