@@ -86,6 +86,20 @@ describe('activity-log', () => {
     ]);
   });
 
+  it('preserves blank body lines from paragraph breaks in display lines', () => {
+    const lines = buildActivityLogDisplayLines(
+      [{ label: 'operator', text: '段落1\n\n段落2' }],
+      40,
+    );
+
+    expect(lines).toEqual([
+      { label: 'operator', text: '', layout: 'label-row' },
+      { label: 'operator', text: '段落1', layout: 'body-row' },
+      { label: 'operator', text: '', layout: 'body-row' },
+      { label: 'operator', text: '段落2', layout: 'body-row' },
+    ]);
+  });
+
   it('includes separator blank lines in display lines', () => {
     const lines = buildActivityLogDisplayLines(
       [

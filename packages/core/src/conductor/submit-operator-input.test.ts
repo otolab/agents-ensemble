@@ -80,6 +80,35 @@ describe('submitOperatorInput', () => {
     expect(escalations[0]?.answer).toBe('approved');
   });
 
+  it('preserves blank lines in operator.input and operator.message text', () => {
+    const eventQueue = new SessionEventQueue();
+    const sessionLogger = new SessionLogger({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      repoRoot: '/repo',
+    });
+    const emitSpy = vi.spyOn(sessionLogger, 'emit');
+
+    const received = submitOperatorInput({
+      message: '段落1\n\n段落2',
+      conductorTurn: 1,
+      openQuestions: new OpenQuestionRegistry(),
+      escalations: [],
+      eventQueue,
+      sessionLogger,
+    });
+
+    expect(received).toBe(true);
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'operator.input',
+      conductorTurn: 1,
+      text: '段落1\n\n段落2',
+    });
+    expect(eventQueue.dequeue()).toEqual({
+      type: 'operator.message',
+      text: '段落1\n\n段落2',
+    });
+  });
+
   it('returns false for blank input', () => {
     const eventQueue = new SessionEventQueue();
     const sessionLogger = new SessionLogger({
