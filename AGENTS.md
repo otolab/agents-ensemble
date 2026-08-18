@@ -59,6 +59,23 @@ GitHub 上のレビューコメントは冒頭に `*🤖 by Cursor*` を付け�
 5. README / ADR / architecture のどれが利用者向け正本か確認し、矛盾がないか見る
 6. 「次の Issue」に逃がす項目は、Issue 番号とスキップ理由が PR / ADR にあるか
 
+## リリース・ブランチ
+
+手順の正本は [docs/RELEASE_GUIDE.md](docs/RELEASE_GUIDE.md)。
+
+| 種類 | マージ先 | 備考 |
+|------|----------|------|
+| **通常の PR**（機能・修正・docs・changeset 追加） | **main** | パッケージ変更時は changeset 必須（[.changeset/README.md](.changeset/README.md)） |
+| **Release PR**（CI 自動生成） | **main** | `release/X.Y.Z` → main。マージで npm 公開・GitHub Release |
+
+**リリースの流れ（人間が実行）**: main に changeset が蓄積 → main から `release/X.Y.Z` を作成して push → version-update CI が Release PR を作成 → レビュー・マージ → publish。
+
+**エージェントがしてはいけないこと**:
+
+- 通常 PR の base を `release/*` にする（changeset の正本は main）
+- **main への merge・push**（利用者が明示したときのみ）
+- Release PR のマージ（リリース判断は人間）
+
 ## 作業環境（git worktree）
 
 `ensemble issue` の isolated モードでは Issue ごとに **git worktree**（`.ensemble/worktrees/issue-N`）で作業する。各 worktree は独自の `node_modules` が必要。
