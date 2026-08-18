@@ -511,6 +511,7 @@ export async function runConductorSession(
       workers[name] = {
         acpSessionId: worker.acpSessionId,
         ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
+        ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
       };
     }
     const snapshot = openQuestions.snapshot();
