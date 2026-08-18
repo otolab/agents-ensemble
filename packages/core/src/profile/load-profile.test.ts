@@ -89,6 +89,34 @@ materials:
     expect(profile.workers).toEqual([{ name: 'ping', kind: 'ping' }]);
   });
 
+  it('preserves profile acp through resolveProfile and resolves worker spawn', async () => {
+    const path = join(dir, 'profile.yaml');
+    await writeFile(
+      path,
+      `acp:
+  preset: claude
+workers:
+  - name: implementer
+    kind: implementer
+agents:
+  implementer:
+    prompt:
+      instructions:
+        - work
+`,
+    );
+
+    const profile = await loadProfileFromFile(path);
+
+    expect(profile.acp).toEqual({ preset: 'claude' });
+    const specs = profileWorkersToSessionSpecs(profile);
+    expect(specs[0]?.spawn).toMatchObject({
+      command: 'npx',
+      args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+    });
+    expect(specs[0]?.acpFingerprint?.preset).toBe('claude');
+  });
+
   it('resolves worker workspace paths from profile and repo root', async () => {
     const repoRoot = join(dir, 'repo');
     const profileDir = join(repoRoot, 'profiles', 'team');
