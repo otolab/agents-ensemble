@@ -60,7 +60,7 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 - `workers` … 起動する worker（`name` + `kind`）。`- ping` は name=kind の省略形
 - `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。`~` / `~/...` は homedir() で展開。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準
 - `acp` … **任意**。profile 全体の ACP spawn デフォルト（worker 未指定時に継承）。`workers[].acp` がある worker は CLI / `ENSEMBLE_DEFAULT_ACP_CLI` で上書きされない
-- `workers[].acp` … **任意**。worker 単位の ACP spawn（profile `acp` より優先）。`preset`（`cursor` | `claude` | `codex` | `custom`）または `command` / `args` / `env` を指定。built-in preset への追加 `args` は preset 既定 args の後ろに連結
+- `workers[].acp` … **任意**。worker 単位の ACP spawn（profile `acp` より優先）。`preset`（`cursor` | `claude` | `codex` | `pi` | `custom`）または `command` / `args` / `env` を指定。built-in preset への追加 `args` は preset 既定 args の後ろに連結
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む
 
 ## issue

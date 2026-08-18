@@ -41,8 +41,22 @@ worker の `acp` は profile `acp` とシャローマージ（`args` は連結�
 | `cursor` | `agent` | `acp` |
 | `claude` | `npx` | `-y`, `@agentclientprotocol/claude-agent-acp` |
 | `codex` | `npx` | `-y`, `@agentclientprotocol/codex-acp` |
+| `pi` | `npx` | `-y`, `pi-acp` |
 
 `custom`: profile または CLI で `command` 明示。`args` / `env` 任意。
+
+### `pi` preset の accepted limitation（#203）
+
+コミュニティ adapter [`pi-acp`](https://www.npmjs.com/package/pi-acp)（`pi --mode rpc` へのブリッジ）を利用する。
+
+| 項目 | 内容 |
+|------|------|
+| 前提 | `pi` CLI（`@earendil-works/pi-coding-agent` v0.80.4+）が PATH にあること。モデル/API key は `pi` 側で別途設定 |
+| 認証 | Cursor `agent login` / `CURSOR_API_KEY` とは無関係。Terminal Auth（`pi-acp --terminal-login`）または `pi` 直接設定 |
+| 初回起動 | `npx` 経由のためネットワーク依存（`claude` / `codex` と同趣旨） |
+| ACP 非対応 | filesystem delegation（`fs/*`）、terminal delegation（`terminal/*`）は未実装（pi がローカル実行） |
+| MCP | ACP params の MCP は adapter 内で pi へ未配線（[pi-acp Limitations](https://github.com/svkozak/pi-acp#limitations)） |
+| resume | `session/load` は pi-acp の session-map 経由で pi セッションに再アタッチ。sidecar `acpSpawn` 不一致時は他 preset と同様に attach 失敗 |
 
 ### resume 時の spawn 不一致
 
@@ -53,11 +67,10 @@ sidecar worker エントリに `acpSpawn`（preset + command + args）を保存�
 ### スコープ外（Phase 1）
 
 - conductor（SDK）側の CLI 切り替え
-- `pi` preset（#203）
 - preset ごとの capability / adapter フラグ（拡張点は型コメントで余地を残す）
 
 ## Consequences
 
-- 良い: profile / CLI / env で worker ACP を切り替え可能。後方互換（未指定 = `agent acp`）
-- 悪い: `npx` 経由 preset は初回起動が遅い・ネットワーク依存。各 CLI の ACP 互換は未検証
-- フォロー: #203 `pi` preset、実 CLI integration test、capability フラグ
+- 良い: profile / CLI / env で worker ACP を切り替え可能。後方互換（未指定 = `agent acp`）。`pi` preset 追加（#203）
+- 悪い: `npx` 経由 preset は初回起動が遅い・ネットワーク依存。各 CLI の ACP 互換は未検証。`pi` はコミュニティ adapter 依存
+- フォロー: 実 CLI integration test、capability フラグ

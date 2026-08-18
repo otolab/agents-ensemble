@@ -222,7 +222,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 - **Issue / PR に報告** — 作業報告・状態は Issue コメント / PR に書き、他 worker が読む
 - **Issue worktree に紐づく** — implementer は worktree を作成し、**未指定 worker** は同じ Issue worktree を ACP cwd として共有する（規約）
 - **per-worker ACP cwd** — profile の `workers[].workspace` で worker ごとに ACP の cwd を上書き可能（Issue worktree とは別。外部 repo では isolated worktree を自動作成しない）
-- **per-worker ACP CLI** — profile の `acp` / `workers[].acp` で preset（`cursor` | `claude` | `codex` | `custom`）または `command` / `args` / `env` を指定。profile 未指定 worker のみ CLI `--default-acp-*` / `ENSEMBLE_DEFAULT_ACP_CLI` が効く（[ADR 0019](adr/0019-worker-acp-cli-presets.md)）
+- **per-worker ACP CLI** — profile の `acp` / `workers[].acp` で preset（`cursor` | `claude` | `codex` | `pi` | `custom`）または `command` / `args` / `env` を指定。profile 未指定 worker のみ CLI `--default-acp-*` / `ENSEMBLE_DEFAULT_ACP_CLI` が効く（[ADR 0019](adr/0019-worker-acp-cli-presets.md)）
 - **worktree のライフサイクル** — isolated モードではセッション開始時に `.ensemble/worktrees/issue-N` を作成（既存なら再利用）。TTY + post-loop で `/exit` 正常終了時に削除（未コミット変更がある場合は削除拒否）。`in-repo` では削除しない。ローカルブランチ `ensemble/issue-N` は残す
 - **新規 worktree のベース** — 可能なら `git fetch` 後の `origin` デフォルトブランチ（`origin/HEAD` または `main`）から `ensemble/issue-N` を切る。remote なし・fetch 失敗時はローカル HEAD にフォールバック
 - 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— worktree の `cwd` から解決
