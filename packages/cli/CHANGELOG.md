@@ -1,5 +1,12 @@
 # @agents-ensemble/cli
 
+## 0.4.1
+
+### Patch Changes
+
+- cf34088: CLI/TUI 標準ショートカット（Emacs 風）のサポート階層と実装方針を `docs/cli-text-input-keybindings.md` に追加する（#210）。
+  - @agents-ensemble/core@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
