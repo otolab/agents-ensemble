@@ -8,6 +8,7 @@ agents-ensemble（`ensemble` コマンド）の設計・検討事項。
 | [session-logging.md](session-logging.md) | **セッションロギング**（stdout/stderr 分離・SessionLogger・終了 JSON） |
 | [session-metrics.md](session-metrics.md) | **セッションメトリクス**（終了サマリ・`get_session_usage`・ツール返却のフィールド一覧） |
 | [operator-input.md](operator-input.md) | **オペレータ入力**（SessionView 契約・3 層分担） |
+| [cli-text-input-keybindings.md](cli-text-input-keybindings.md) | **CLI/TUI 標準ショートカット**（Emacs 風キーの階層と実装方針） |
 | [design.md](design.md) | 大原則・全体像 |
 | [elements.md](elements.md) | 構成要素（skill, worker, issue 等） |
 | [orchestrator.md](orchestrator.md) | オーケストレータの役割 |
