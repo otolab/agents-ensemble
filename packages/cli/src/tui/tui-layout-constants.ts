@@ -12,14 +12,23 @@ export const ROUND_BORDER_WIDTH = 2;
 /** メインペイン（Orchestration）の UI ラベル。conductor 対話とオーケストレーション状況の統合表示。 */
 export const MAIN_PANE_TITLE = 'Orchestration';
 
-/** Worker 状態ペインの固定高さ（枠線込み。タイトル + サマリ 3 行）。 */
+/** Workers ペインの UI ラベル。 */
+export const WORKER_PANE_TITLE = 'Workers';
+
+/** Open questions ペインの UI ラベル（件数・選択ヒントは呼び出し側で付与）。 */
+export const OPEN_QUESTIONS_PANE_TITLE = 'Open questions';
+
+/** Operator input ペインの UI ラベル。 */
+export const INPUT_PANE_TITLE = 'Operator input';
+
+/** Worker 状態ペインの固定高さ（枠線込み。タイトルは上枠線埋め込み + サマリ 4 行）。 */
 export const WORKER_PANE_HEIGHT = 6;
 
 /**
- * Open questions ペインの最小高さ（枠線込み。タイトル + 本文 1 行）。
+ * Open questions ペインの最小高さ（枠線込み。タイトルは上枠線埋め込み + 本文 1 行）。
  * 未回答 0 件時や本文が短いときの下限。
  */
-export const OPEN_QUESTIONS_PANE_MIN_HEIGHT = 4;
+export const OPEN_QUESTIONS_PANE_MIN_HEIGHT = 3;
 
 /** Open questions ペイン本文の表示行数上限（端末行数に対する比率）。 */
 export const OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO = 0.35;
@@ -59,6 +68,3 @@ export const INPUT_PANE_MAX_DISPLAY_LINES = 10;
 
 /** 入力ペインの最小表示行数（空入力時）。 */
 export const INPUT_PANE_MIN_DISPLAY_LINES = 1;
-
-/** Orchestration ペインのタイトル行数（`MAIN_PANE_TITLE` 単独行。hint は呼び出し側で加算）。 */
-export const ORCHESTRATION_PANE_TITLE_ROWS = 1;

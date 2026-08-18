@@ -4,6 +4,7 @@ import {
   OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES,
   OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO,
   OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+  OPEN_QUESTIONS_PANE_TITLE,
   OPEN_QUESTIONS_SELECTION_HINT,
   PANE_BORDER_ROWS,
 } from './tui-layout-constants.js';
@@ -17,7 +18,6 @@ export interface OpenQuestionListItemRender {
 
 export interface OpenQuestionsPaneLayout {
   paneHeight: number;
-  titleLineCount: number;
   titleText: string;
   contentLineCount: number;
   items: OpenQuestionListItemRender[];
@@ -33,17 +33,13 @@ export function computeMaxOpenQuestionsDisplayLines(terminalRows: number): numbe
 export function formatOpenQuestionsPaneTitle(
   selectedIndex: number,
   totalCount: number,
-  contentWidth: number,
-): { titleText: string; titleLineCount: number } {
+): { titleText: string } {
   if (totalCount === 0) {
-    return { titleText: 'Open questions', titleLineCount: 1 };
+    return { titleText: OPEN_QUESTIONS_PANE_TITLE };
   }
 
-  const titleText = `Open questions (${selectedIndex + 1}/${totalCount}${OPEN_QUESTIONS_SELECTION_HINT})`;
-  return {
-    titleText,
-    titleLineCount: wrapTextToWidth(titleText, contentWidth).length,
-  };
+  const titleText = `${OPEN_QUESTIONS_PANE_TITLE} (${selectedIndex + 1}/${totalCount}${OPEN_QUESTIONS_SELECTION_HINT})`;
+  return { titleText };
 }
 
 function buildSelectedQuestionItem(
@@ -95,16 +91,11 @@ export function resolveOpenQuestionsPaneLayout(params: {
 }): OpenQuestionsPaneLayout {
   const totalCount = params.openQuestions.length;
   const selectedIndex = clampOpenQuestionSelectionIndex(params.selectedIndex, totalCount);
-  const { titleText, titleLineCount } = formatOpenQuestionsPaneTitle(
-    selectedIndex,
-    totalCount,
-    params.contentWidth,
-  );
+  const { titleText } = formatOpenQuestionsPaneTitle(selectedIndex, totalCount);
 
   if (totalCount === 0) {
     return {
       paneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
-      titleLineCount,
       titleText,
       contentLineCount: 1,
       items: [],
@@ -136,12 +127,11 @@ export function resolveOpenQuestionsPaneLayout(params: {
 
   const paneHeight = Math.max(
     OPEN_QUESTIONS_PANE_MIN_HEIGHT,
-    PANE_BORDER_ROWS + titleLineCount + contentLineCount,
+    PANE_BORDER_ROWS + contentLineCount,
   );
 
   return {
     paneHeight,
-    titleLineCount,
     titleText,
     contentLineCount,
     items,
