@@ -536,6 +536,21 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('second line');
   });
 
+  it('renders blank lines between paragraphs in operator activity log', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('operator', '段落1\n\n段落2');
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frameLines = (lastFrame() ?? '').split('\n');
+    const firstIndex = frameLines.findIndex((line) => line.includes('段落1'));
+    const secondIndex = frameLines.findIndex((line) => line.includes('段落2'));
+    expect(firstIndex).toBeGreaterThanOrEqual(0);
+    expect(secondIndex).toBeGreaterThan(firstIndex + 1);
+  });
+
   describe('open questions selection (stdin integration)', () => {
     it('cycles selection with Shift+arrow keys', async () => {
       const viewModel = createTuiViewModel();

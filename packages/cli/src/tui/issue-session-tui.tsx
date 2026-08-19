@@ -96,7 +96,8 @@ function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
   }
 
   if (line.layout === 'body-row') {
-    return <Text>{line.text}</Text>;
+    // Ink は空 <Text> の行高 0 になる。separator と同様スペース 1 文字で可視の空行にする。
+    return line.text === '' ? <Text> </Text> : <Text>{line.text}</Text>;
   }
 
   if (line.layout === 'label-row') {
