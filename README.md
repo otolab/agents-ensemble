@@ -367,6 +367,13 @@ ENSEMBLE_OPERATOR_MESSAGE='yes, continue' ensemble issue ...
 
 非 TTY かつ `ENSEMBLE_OPERATOR_MESSAGE` 未設定のとき、open question 待ちでループが進まない（TTY 待機相当）。
 
+
+### TTY と IDE 内ターミナル
+
+Ink TUI のオペレータ入力欄は Emacs 風ショートカット（`Ctrl+a` / `Ctrl+k` + `Ctrl+y` 等）をサポートする。macOS では **Option を Meta（+Esc）** に設定しないと `Alt+b` / `Alt+f` が特殊文字入力になり効かない（iTerm2: Profiles → Keys、Terminal.app: Use Option as Meta key）。Cursor 等の **IDE 内ターミナル** では、IDE が `Ctrl+k` 等を先取りすることがある — ターミナルにフォーカスがあることと IDE のキーバインド設定を確認する。
+
+詳細: [docs/cli-text-input-keybindings.md](docs/cli-text-input-keybindings.md)
+
 ### プロセス待機（post-loop）
 
 TTY 実行時、自律作業が一段落（conductor `finished` + 待ち事項なし）しても **デフォルトではプロセスを維持**する。追加指示を入力するか、`/exit`（または `exit`）で終了する。終了時は **テキストサマリを stderr** に出力（`--summary-format json` で stdout JSON に切替可）。
