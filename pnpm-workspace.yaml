@@ -5,3 +5,5 @@ packages:
 # 2 本目以降の worktree で install を高速化する（pnpm 10.12.1+、CI では自動無効）。
 # https://pnpm.io/git-worktrees
 enableGlobalVirtualStore: true
+patchedDependencies:
+  '@otolab/react-ink-textarea@0.4.1-otolab.0': patches/@otolab__react-ink-textarea@0.4.1-otolab.0.patch

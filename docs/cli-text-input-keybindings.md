@@ -164,21 +164,26 @@ Emacs 風を **自前実装** する場合の最小ループ:
 
 | 経路 | 入力実装 | Emacs 風 |
 |------|----------|----------|
-| TTY + Ink TUI | `OperatorTextArea` → フォーク `react-ink-textarea` | **ライブラリ内蔵**（行移動・キル等）。履歴（`Ctrl+p/n`）はプロンプト用途では通常不要 |
-| TTY スクロール | `issue-session-tui.tsx` の `useInput` | `PgUp/PgDn` / `Home`/`End`（入力空時 or Ctrl 修飾）— **編集ショートカットとは別レイヤ** |
+| TTY + Ink TUI | `OperatorTextArea` → フォーク `react-ink-textarea`（`pnpm` patch でキルリング / Readline 整合） | **ライブラリ内蔵**。`Ctrl+a/e/f/b`、`Ctrl+k/u/w/y`、`Alt+b/f/y` をサポート。`Ctrl+p/n/r`（履歴）は **非対応**（プロンプト用途では不要） |
+| TTY スクロール | `issue-session-tui.tsx` の `useInput` | `PgUp/PgDn` / `Home`/`End`（入力空時 or Ctrl 修飾）— **編集ショートカットとは別レイヤ**（競合なし） |
 | 非 TTY | `readline` / `ENSEMBLE_OPERATOR_MESSAGE` | OS・Node readline 依存 |
+
+**`useInput` と TextArea の関係**: 活動ログスクロール用 `useInput` は `Home`/`End`/`PgUp`/`PgDn` のみ。行編集系（`Ctrl+a` 等）は TextArea 内 `useKeyboardInput` が処理。入力欄に文字があるときはスクロール系は `Ctrl` 修飾時のみ有効。
+
+**テスト**: `packages/cli/src/tui/operator-text-area-emacs-keys.test.tsx` でフォークキーマップ監査と `useKillRing` 挙動を CI 担保。`ink-testing-library` では実 `TextArea` の stdin 縦切りが不安定なため、TTY + 日本語 IME はマージ前の実機ゲート（#186 / #196）。
 
 **やるべきでないこと**
 
 - `~/.inputrc` を TUI 入力欄に効かせようとすること（プロセスが Raw で Readline を使っていない）
-- Ink ペイン全体の `useInput` と TextArea 内部キー処理の **二重バインド**（フォーカス・修飾キー競合）
+- Ink ペイン全体の `useInput` に行編集ショートカットを足すこと（TextArea と二重バインドになる）
+
+**IDE 内ターミナル（Cursor 等）**: macOS では **Option を Meta（+Esc）** に設定しないと `Alt+b` / `Alt+f` が効かない（特殊文字入力になる）。IDE が `Ctrl+k` 等を先取りする場合は、フォーカスがターミナルにあること・IDE キーバインド設定を確認する。詳細は [README.md](../README.md#tty-と-ide-内ターミナル) を参照。
 
 **今後 Emacs 風を拡張する場合**
 
-1. まず **フォーク `react-ink-textarea` のキーマップ** を確認・拡張（単一ソース）
+1. まず **フォーク `react-ink-textarea` のキーマップ** を確認・拡張（単一ソース）。上流還流は #195
 2. Vi モードが必要ならライブラリ / ADR で明示（デフォルトは Emacs 維持が業界標準）
 3. CJK ではキー処理より **IME 物理カーソル** を優先（表示カーソルと OS IME 窓の一致）
-4. IDE 内ターミナル利用者向けに、Option→Meta 設定と IDE キーバインド競合を README または本 doc に追記
 
 ---
 
