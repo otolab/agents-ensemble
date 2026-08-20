@@ -22,6 +22,8 @@ agents-ensemble は **SDK（conductor）** と **ACP（worker）** の2系統を
 | **worker** | `agent acp` | `ensemble issue` の常駐 worker | `agent login` | `CURSOR_API_KEY`（子プロセスへ継承） |
 | **Issue 取得** | `gh` CLI | conductor が Issue 本文・コメントを読む | `gh auth login` | `GH_TOKEN` 等 |
 
+GitHub トークンの解決順（環境変数は config より優先）と `gh auth token` フォールバックの可否は [docs/config.md](docs/config.md) を参照。テンプレはリポジトリ直下の [`config.example.yaml`](config.example.yaml)。
+
 ### 初回セットアップ（ローカル）
 
 ```bash

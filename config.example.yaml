@@ -1,0 +1,13 @@
+# ensemble 共通設定の例（config.example.yaml）
+#
+# 使い方:
+#   cp config.example.yaml .ensemble/config.yaml
+#   または cp config.example.yaml ~/.ensemble/config.yaml
+#
+# 実運用の config は gitignore 対象。token 等の秘密情報は書かないこと。
+# 詳細: docs/config.md
+
+github:
+  auth:
+    # GITHUB_TOKEN / GH_TOKEN が無いとき gh auth token を試すか（既定: true）
+    allowGhAuthTokenFallback: true
