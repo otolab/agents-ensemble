@@ -143,17 +143,17 @@ View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver
 | `/exit` 直後 | `session.operator_exit` で TUI は「終了しています…」・入力無効化 | 活動ログ / 入力ヒント |
 | `buildResult` | 明示 exit / interrupt 時は `getUsage().cost` 取得をスキップ（SDK 応答待ちで固まらない） | なし |
 | `finally` teardown | force 時は worker / conductor / GitHub 監視を並列停止。子プロセスは SIGTERM 後最大 5s、残存時 SIGKILL | `harness.teardown.phase` で段階表示。完了時 `harness.teardown`（1s 超または force 時） |
-| GitHub monitor `stop`（accepted risk） | 監視有効時、`gh` poll 実行中（`pollInFlight`）に `/exit` すると `stop()` が poll 完了までブロックしうる | 最大 5s 待機後に poll を abort して teardown 継続（#209）。`harness.teardown.phase` で段階表示 |
+| GitHub monitor `stop`（accepted risk） | 監視有効時、GitHub API poll 実行中（`pollInFlight`）に `/exit` すると `stop()` が poll 完了までブロックしうる | 最大 5s 待機後に poll を abort して teardown 継続（#209）。`harness.teardown.phase` で段階表示 |
 | isolated worktree 削除 | `/exit` 正常終了後のみ（未コミット変更時はスキップ） | `harness.worktree.*` イベント |
 
 **GitHub monitor poll ハング（accepted risk, #200）**
 
 | 項目 | 内容 |
 |------|------|
-| 発生条件 | GitHub 監視が有効（デフォルト）で、`gh` による poll が進行中に `/exit` |
+| 発生条件 | GitHub 監視が有効（デフォルト）で、GitHub API による poll が進行中に `/exit` |
 | 症状 | UI は即「終了しています…」になるが、teardown が `githubMonitor.stop()` で `pollInFlight` 待ちになりプロセスが長時間残る（5s 超は abort） |
 | 回避策 | `--no-github-monitor` で監視を無効化（[README.md](../README.md)・[harness-events.md](harness-events.md)） |
-| 実装 | poll / `stop()` のタイムアウト 5s（#209）。超過時は進行中 `gh` を SIGTERM して teardown 継続 |
+| 実装 | poll / `stop()` のタイムアウト 5s（#209）。超過時は進行中 API リクエストを abort して teardown 継続 |
 
 自律ループ実行中の `/exit` は `shutdownSignal` abort で driver を抜ける。conductor `send` 進行中でも abort を優先し、完了待ちで固まらない（#200）。
 

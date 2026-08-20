@@ -1,8 +1,10 @@
+import type { EnsembleConfig } from '../config/types.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import { ensureMaxTurnsOpenQuestion } from '../escalation/enqueue-max-turns-question.js';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OpenQuestionRegistry } from '../escalation/open-question.js';
 import { fetchIssueContext } from '../github/issue-context.js';
+import { formatGitHubErrorMessage } from '../github/github-auth.js';
 import type { PermissionPipeline } from '../permission/permission-pipeline.js';
 import type { ResolvedProfile } from '../profile/types.js';
 import { resolveAgentPromptModule } from '../profile/types.js';
@@ -63,6 +65,7 @@ export interface ConductorSendCompleteInfo {
 export interface ConductorSessionDriverOptions {
   issueUrl: string;
   profile: ResolvedProfile;
+  ensembleConfig: EnsembleConfig;
   conductorHandle: ConductorAgentHandle;
   sendReconnect: ConductorSendReconnectOptions;
   eventQueue: SessionEventQueue;
@@ -118,6 +121,7 @@ export async function runConductorSessionDriver(
       message: await buildInitialConductorMessage({
         issueUrl: options.issueUrl,
         profile: options.profile,
+        ensembleConfig: options.ensembleConfig,
       }),
       conductorHandle: options.conductorHandle,
       sendReconnect: options.sendReconnect,
@@ -268,14 +272,21 @@ export async function runConductorSessionDriver(
 async function buildInitialConductorMessage(input: {
   issueUrl: string;
   profile: ResolvedProfile;
+  ensembleConfig: EnsembleConfig;
 }): Promise<string> {
-  const issueContext = await fetchIssueContext(input.issueUrl);
-  return compileConductorSystemPrompt({
-    issueUrl: input.issueUrl,
-    profile: input.profile,
-    agentModule: resolveAgentPromptModule('conductor', input.profile.agents),
-    issueContext,
-  });
+  try {
+    const issueContext = await fetchIssueContext(input.issueUrl, {
+      ensembleConfig: input.ensembleConfig,
+    });
+    return compileConductorSystemPrompt({
+      issueUrl: input.issueUrl,
+      profile: input.profile,
+      agentModule: resolveAgentPromptModule('conductor', input.profile.agents),
+      issueContext,
+    });
+  } catch (error) {
+    throw new Error(formatGitHubErrorMessage(error, input.ensembleConfig));
+  }
 }
 
 function runEventConductorSend(input: {

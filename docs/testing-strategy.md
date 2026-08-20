@@ -7,7 +7,7 @@
 
 1. **下位レイヤから積む** — ACP ブリッジの unittest を先に固め、integration → e2e の順で厚くする
 2. **CI は unittest 必須** — integration / e2e は設定・環境が揃う場合のみ（未設定なら `skip`）
-3. **外部依存は境界で切る** — `agent acp` / `gh` / `@cursor/sdk` は unittest ではモック or Fake
+3. **外部依存は境界で切る** — `agent acp` / GitHub API / `@cursor/sdk` は unittest ではモック or Fake
 4. **Stage ごとの完了ゲートをテストレベルで定義する**（下表）
 
 ## テストレベルと Stage の対応
@@ -18,7 +18,7 @@
 | **integration** | 実 `agent acp` との stdio 通信、session ライフサイクル、プロセス cleanup | #3 受け入れの一部 |
 | **e2e** | `ensemble issue` CLI 縦切り | Stage 2 完了 |
 
-Stage 2 以降は conductor（SDK）・`gh`・permission 仲介が integration / e2e の対象に追加される。
+Stage 2 以降は conductor（SDK）・GitHub API・permission 仲介が integration / e2e の対象に追加される。
 
 ---
 
@@ -69,7 +69,7 @@ ACP 向けに **FakeAcpServer**（または `TestAcpTransport`）を core に置
 | integration | 実プロセス | 実 stdio |
 | e2e | 実プロセス（CLI 経由） | 実 stdio |
 
-**モックすべきもの（unittest）**: 子プロセス、`agent` バイナリ、ネットワーク、`gh`、SDK Agent
+**モックすべきもの（unittest）**: 子プロセス、`agent` バイナリ、ネットワーク、GitHub API クライアント、SDK Agent
 
 **実装を直接テストすべきもの（unittest）**: パース、状態遷移、エラーメッセージ、プロンプト文字列
 
@@ -88,7 +88,7 @@ ACP 向けに **FakeAcpServer**（または `TestAcpTransport`）を core に置
 | **AcpBridge ライフサイクル** | spawn → initialize → authenticate → session/new → session/prompt → update 購読 → 終了 |
 | **プロセス cleanup** | 正常終了・異常終了でゾンビが残らない |
 | **permission 往復** | `session/request_permission` → 応答（Stage 3） |
-| **gh ラッパー** | 実 `gh` で Issue 取得（Stage 2、設定あり時のみ） |
+| **GitHub API クライアント** | 実 GitHub API で Issue 取得（Stage 2、トークン設定時のみ） |
 
 ### 配置
 
@@ -154,7 +154,7 @@ pnpm test:e2e
 
 - `CURSOR_API_KEY` または `ensemble auth login` 済み（Stage 2 以降の conductor）
 - `test-acp.yaml` + テスト用 Issue URL（または専用テスト repo）
-- `gh` 認証（実 Issue を触る場合）
+- GitHub API トークン（`GITHUB_TOKEN` / `GH_TOKEN`。実 Issue を触る場合）
 
 未設定時は skip。手動スモーク用のドキュメントを README に記載。
 

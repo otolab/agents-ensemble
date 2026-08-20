@@ -1,8 +1,10 @@
+import type { EnsembleConfig } from '../config/types.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
+import type { GitHubClient } from './github-client.js';
+import { createGitHubClient } from './github-client.js';
 import type { GitHubMonitorCursor, PullRequestMonitorCursor } from './github-monitor-cursor.js';
 import { normalizeGitHubMonitorCursor } from './github-monitor-cursor.js';
 import type { GitHubUpdateItem } from './github-update-types.js';
-import { runGh } from './run-gh.js';
 
 const BODY_PREVIEW_MAX = 280;
 
@@ -11,8 +13,8 @@ export interface FetchGitHubUpdatesInput {
   cursor: GitHubMonitorCursor;
   /** true のときカーソルのみ進め、更新は返さない（カーソル空の新規セッション初回 poll のみ）。 */
   initialCursorPoll?: boolean;
-  cwd?: string;
-  runGhFn?: typeof runGh;
+  ensembleConfig: EnsembleConfig;
+  githubClient?: GitHubClient;
   abortSignal?: AbortSignal;
 }
 
@@ -66,18 +68,22 @@ interface GhCheckRun {
 export async function fetchGitHubUpdates(
   input: FetchGitHubUpdatesInput,
 ): Promise<FetchGitHubUpdatesResult> {
-  const baseGh = input.runGhFn ?? runGh;
-  const gh: typeof runGh = (args, options = {}) =>
-    baseGh(args, {
-      ...options,
-      ...(input.abortSignal ? { signal: input.abortSignal } : {}),
-    });
+  const client =
+    input.githubClient ??
+    (await createGitHubClient({
+      config: input.ensembleConfig,
+      signal: input.abortSignal,
+    }));
   const issue = parseIssueUrl(input.issueUrl);
   const cursor = normalizeGitHubMonitorCursor(input.cursor);
   const updates: GitHubUpdateItem[] = [];
   let hasPendingCi = false;
 
-  const issueComments = await fetchIssueComments(gh, issue, input.cwd);
+  const issueComments = await client.listIssueComments(
+    issue.owner,
+    issue.repo,
+    issue.number,
+  );
   const { updates: commentUpdates, lastId } = collectIssueCommentUpdates(
     issueComments,
     cursor.lastIssueCommentId,
@@ -88,7 +94,16 @@ export async function fetchGitHubUpdates(
     cursor.lastIssueCommentId = lastId;
   }
 
-  const pullRequests = await fetchLinkedPullRequests(gh, issue, input.cwd);
+  let pullRequests: GhPullRequestRef[];
+  try {
+    pullRequests = await client.searchLinkedPullRequests(
+      issue.owner,
+      issue.repo,
+      issue.number,
+    );
+  } catch {
+    pullRequests = [];
+  }
   if (!cursor.pullRequests) {
     cursor.pullRequests = {};
   }
@@ -97,12 +112,11 @@ export async function fetchGitHubUpdates(
     const prKey = String(pr.number);
     const prCursor = cursor.pullRequests[prKey] ?? {};
     const prResult = await fetchPullRequestUpdates({
-      gh,
+      client,
       issue,
       pr,
       prCursor,
       initialCursorPoll: input.initialCursorPoll ?? false,
-      cwd: input.cwd,
     });
     updates.push(...prResult.updates);
     cursor.pullRequests[prKey] = prResult.cursor;
@@ -112,22 +126,6 @@ export async function fetchGitHubUpdates(
   }
 
   return { updates, cursor, hasPendingCi };
-}
-
-async function fetchIssueComments(
-  gh: typeof runGh,
-  issue: ReturnType<typeof parseIssueUrl>,
-  cwd?: string,
-): Promise<GhIssueComment[]> {
-  const stdout = await gh(
-    [
-      'api',
-      `repos/${issue.owner}/${issue.repo}/issues/${issue.number}/comments`,
-      '--paginate',
-    ],
-    { cwd },
-  );
-  return JSON.parse(stdout) as GhIssueComment[];
 }
 
 function collectIssueCommentUpdates(
@@ -164,40 +162,12 @@ function collectIssueCommentUpdates(
   };
 }
 
-async function fetchLinkedPullRequests(
-  gh: typeof runGh,
-  issue: ReturnType<typeof parseIssueUrl>,
-  cwd?: string,
-): Promise<GhPullRequestRef[]> {
-  try {
-    const stdout = await gh(
-      [
-        'search',
-        'prs',
-        String(issue.number),
-        '--repo',
-        `${issue.owner}/${issue.repo}`,
-        '--json',
-        'number,title,url,state',
-        '--limit',
-        '20',
-      ],
-      { cwd },
-    );
-    const results = JSON.parse(stdout) as GhPullRequestRef[];
-    return results.filter((pr) => pr.state === 'OPEN' || pr.state === 'open');
-  } catch {
-    return [];
-  }
-}
-
 async function fetchPullRequestUpdates(input: {
-  gh: typeof runGh;
+  client: GitHubClient;
   issue: ReturnType<typeof parseIssueUrl>;
   pr: GhPullRequestRef;
   prCursor: PullRequestMonitorCursor;
   initialCursorPoll: boolean;
-  cwd?: string;
 }): Promise<{
   updates: GitHubUpdateItem[];
   cursor: PullRequestMonitorCursor;
@@ -211,7 +181,11 @@ async function fetchPullRequestUpdates(input: {
     notifiedCheckNames: [...(input.prCursor.notifiedCheckNames ?? [])],
   };
 
-  const reviews = await fetchReviews(input.gh, input.issue, input.pr.number, input.cwd);
+  const reviews = await input.client.listPullRequestReviews(
+    input.issue.owner,
+    input.issue.repo,
+    input.pr.number,
+  );
   const reviewResult = collectReviewUpdates(
     reviews,
     cursor.lastReviewId,
@@ -223,11 +197,10 @@ async function fetchPullRequestUpdates(input: {
     cursor.lastReviewId = reviewResult.lastId;
   }
 
-  const reviewComments = await fetchReviewComments(
-    input.gh,
-    input.issue,
+  const reviewComments = await input.client.listPullRequestReviewComments(
+    input.issue.owner,
+    input.issue.repo,
     input.pr.number,
-    input.cwd,
   );
   const reviewCommentResult = collectReviewCommentUpdates(
     reviewComments,
@@ -240,11 +213,12 @@ async function fetchPullRequestUpdates(input: {
     cursor.lastReviewCommentId = reviewCommentResult.lastId;
   }
 
-  const checkRuns = await fetchStatusCheckRollup(
-    input.gh,
-    input.issue,
-    input.pr.number,
-    input.cwd,
+  const checkRuns = normalizeStatusCheckRollup(
+    await input.client.getStatusCheckRollup(
+      input.issue.owner,
+      input.issue.repo,
+      input.pr.number,
+    ),
   );
   const ciResult = collectCiUpdates({
     checkRuns,
@@ -264,63 +238,7 @@ async function fetchPullRequestUpdates(input: {
   };
 }
 
-async function fetchReviews(
-  gh: typeof runGh,
-  issue: ReturnType<typeof parseIssueUrl>,
-  prNumber: number,
-  cwd?: string,
-): Promise<GhReview[]> {
-  const stdout = await gh(
-    [
-      'api',
-      `repos/${issue.owner}/${issue.repo}/pulls/${prNumber}/reviews`,
-      '--paginate',
-    ],
-    { cwd },
-  );
-  return JSON.parse(stdout) as GhReview[];
-}
-
-async function fetchReviewComments(
-  gh: typeof runGh,
-  issue: ReturnType<typeof parseIssueUrl>,
-  prNumber: number,
-  cwd?: string,
-): Promise<GhReviewComment[]> {
-  const stdout = await gh(
-    [
-      'api',
-      `repos/${issue.owner}/${issue.repo}/pulls/${prNumber}/comments`,
-      '--paginate',
-    ],
-    { cwd },
-  );
-  return JSON.parse(stdout) as GhReviewComment[];
-}
-
-async function fetchStatusCheckRollup(
-  gh: typeof runGh,
-  issue: ReturnType<typeof parseIssueUrl>,
-  prNumber: number,
-  cwd?: string,
-): Promise<GhCheckRun[]> {
-  const stdout = await gh(
-    [
-      'pr',
-      'view',
-      String(prNumber),
-      '--repo',
-      `${issue.owner}/${issue.repo}`,
-      '--json',
-      'statusCheckRollup',
-    ],
-    { cwd },
-  );
-  const data = JSON.parse(stdout) as { statusCheckRollup?: unknown };
-  return normalizeStatusCheckRollup(data.statusCheckRollup);
-}
-
-/** `gh pr view --json statusCheckRollup` の CheckRun / StatusContext を共通形に正規化する。 */
+/** GraphQL `statusCheckRollup` の CheckRun / StatusContext を共通形に正規化する。 */
 function normalizeStatusCheckRollup(rollup: unknown): GhCheckRun[] {
   if (!Array.isArray(rollup)) {
     return [];

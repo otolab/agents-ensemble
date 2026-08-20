@@ -6,8 +6,31 @@ export type {
   ResolveGitHubAuthTokenResult,
 } from './resolve-github-auth-token.js';
 export {
+  buildGitHubClient,
+  createGitHubClient,
+  GitHubApiError,
+} from './github-client.js';
+export type {
+  CreateGitHubClientOptions,
+  GitHubClient,
+  GitHubClientOptions,
+  GitHubIssueComment,
+  GitHubPullRequestRef,
+  GitHubPullRequestReview,
+  GitHubPullRequestReviewComment,
+  GitHubRestIssue,
+} from './github-client.js';
+export {
+  formatGitHubAuthRecoveryHint,
+  formatGitHubErrorMessage,
+  GITHUB_AUTH_HINT,
+  hasGitHubAuth,
+  isGitHubAuthError,
+} from './github-auth.js';
+export {
   fetchIssueContext,
 } from './issue-context.js';
+export type { FetchIssueContextOptions } from './issue-context.js';
 export {
   formatIssueContextForPrompt,
   formatIssueContextYaml,

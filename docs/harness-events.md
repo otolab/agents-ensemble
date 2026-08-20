@@ -57,7 +57,7 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
-| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続） | `[harness] warning: init prompt / prompt 実行中の permission が未解消のまま 30s 以上継続...` | なし |
+| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続）。GitHub 認証トークン未解決時（#222） | `[harness] warning: ...`（permission デッドロック / GitHub 認証不足） | なし |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
 | `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
 | `conductor.auth.recovery` | 自動再接続失敗後の復旧ヒント | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
@@ -85,7 +85,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | type | 発火タイミング | stderr 例 | snapshot への影響 |
 |------|----------------|-----------|-------------------|
 | `harness.github.update` | debounce 後に `github.update` をキューへ載せる直前 | `[harness] github.update items=N` | なし |
-| `harness.github.monitor_error` | `gh` poll 失敗（best-effort。監視は継続） | `[harness] github.monitor_error ...` | なし |
+| `harness.github.monitor_error` | GitHub API poll 失敗（best-effort。監視は継続。認証失敗時は `[github-auth]` ヒント付き） | `[harness] github.monitor_error ...` | なし |
 
 監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
 
@@ -97,8 +97,8 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | debounce | デフォルト **30s**（`--github-monitor-debounce-ms`）。連続インラインコメント等を 1 通知にまとめる |
 | 初回カーソル poll | **カーソル空の新規セッション**の初回 poll のみ（`initialCursorPoll`）。既存 Issue コメントは通知せずカーソルを進める。worker の init prompt（`startWorkers`）とは無関係 |
 | `--continue` 再開 | sidecar カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
-| PR 紐づけ | `gh search prs <issueNumber> --repo owner/repo`。失敗時は PR 監視をスキップし **Issue コメント監視は継続** |
-| CI wakeup | `gh pr view --json statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）。前回 poll で pending だった check が `COMPLETED` + `conclusion` になったときのみ通知 |
+| PR 紐づけ | GitHub Search API（`type:pr repo:owner/repo <issueNumber>` 相当）。失敗時は PR 監視をスキップし **Issue コメント監視は継続** |
+| CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）。前回 poll で pending だった check が `COMPLETED` + `conclusion` になったときのみ通知 |
 | CLI | `--no-github-monitor` で無効化。`--github-monitor-debounce-ms` で debounce 変更 |
 
 ### 2.2 worker prompt ライフサイクルイベント（#133 で統一）
@@ -362,7 +362,8 @@ TUI reducer はイベント駆動のため lifecycle を直接読まないが、
 | `packages/core/src/conductor/session/format-session-event.ts` | conductor 向け見出し |
 | `packages/core/src/conductor/conductor-session.ts` | emit / enqueue 配線 |
 | `packages/core/src/github/github-monitor.ts` | Issue / PR 更新監視 |
-| `packages/core/src/github/fetch-github-updates.ts` | `gh` ベース差分取得 |
+| `packages/core/src/github/fetch-github-updates.ts` | GitHub REST / GraphQL ベース差分取得 |
+| `packages/core/src/github/github-client.ts` | fetch ベース GitHub API クライアント |
 | `packages/core/src/runtime/worker-lifecycle-state.ts` | `WorkerLifecycleState`（runtime / tool 正本語彙） |
 | `packages/core/src/runtime/worker-display-state.ts` | `WorkerDisplayStatus`（TUI 語彙） |
 | `packages/core/src/runtime/map-worker-lifecycle.ts` | `mapHarnessToDisplayStatus` |
