@@ -1,4 +1,10 @@
 export { runGh } from './run-gh.js';
+export { resolveGitHubAuthToken } from './resolve-github-auth-token.js';
+export type {
+  GitHubAuthTokenSource,
+  ResolveGitHubAuthTokenOptions,
+  ResolveGitHubAuthTokenResult,
+} from './resolve-github-auth-token.js';
 export {
   fetchIssueContext,
 } from './issue-context.js';

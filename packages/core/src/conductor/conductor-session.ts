@@ -1,4 +1,8 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
+import {
+  loadEnsembleConfig,
+} from '../config/load-ensemble-config.js';
+import type { EnsembleConfig } from '../config/types.js';
 import { createAnswerOpenQuestionTool } from '../escalation/answer-open-question-tool.js';
 import { createAskHumanTool } from '../escalation/ask-human-tool.js';
 import { createOpenQuestionListTools } from '../escalation/open-question-list-tools.js';
@@ -85,6 +89,8 @@ export interface RunConductorSessionOptions {
   issueUrl: string;
   repoRoot: string;
   conductorCwd?: string;
+  /** テスト用。未指定時は loadEnsembleConfig(repoRoot) で解決する。 */
+  ensembleConfig?: EnsembleConfig;
   /** 作業手順・worker 定義。未指定時は loadProfile でデフォルトを解決する。 */
   profile: ResolvedProfile;
   profilePath?: string;
@@ -182,6 +188,8 @@ export interface ConductorSessionResult {
 export async function runConductorSession(
   options: RunConductorSessionOptions,
 ): Promise<ConductorSessionResult> {
+  const ensembleConfig =
+    options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
   const maxTurns = resolveMaxTurns(options.maxTurns);
   const sessionLogger =
     options.sessionLogger ??
@@ -551,6 +559,7 @@ export async function runConductorSession(
     githubMonitor = createGitHubMonitor({
       issueUrl: options.issueUrl,
       cwd: options.repoRoot,
+      ensembleConfig,
       cursor: githubMonitorCursor,
       debounceMs:
         options.githubMonitorDebounceMs ?? DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS,

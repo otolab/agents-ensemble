@@ -53,6 +53,10 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 - ユーザ層の規約: [user-teams.md](user-teams.md)
 - 設計判断: [ADR 0018](adr/0018-team-profile-four-layer-resolution.md)
 
+### ensemble 共通設定（config.yaml）
+
+harness 横断設定（GitHub 認証フォールバック等）の正本。team-profile とは別ファイル。詳細は [config.md](config.md)。
+
 ### フィールド
 
 - `meta` … 任意。一覧・選択 UI 向け（`id` / `title` / `summary`）。未指定時はディレクトリ名等でフォールバック

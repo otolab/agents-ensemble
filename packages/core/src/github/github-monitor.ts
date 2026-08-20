@@ -1,3 +1,4 @@
+import type { EnsembleConfig } from '../config/types.js';
 import { DebounceBuffer } from './debounce-buffer.js';
 import {
   fetchGitHubUpdates,
@@ -21,6 +22,8 @@ export const DEFAULT_GITHUB_MONITOR_STOP_POLL_WAIT_MS = 5_000;
 export interface GitHubMonitorOptions {
   issueUrl: string;
   cwd?: string;
+  /** harness 設定。GitHub 認証解決（#222）で参照する。 */
+  ensembleConfig?: EnsembleConfig;
   cursor?: GitHubMonitorCursor;
   debounceMs?: number;
   pollIntervalMs?: number;
