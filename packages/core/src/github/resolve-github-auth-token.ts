@@ -38,10 +38,13 @@ export async function resolveGitHubAuthToken(
   }
 
   const runGhFn = options.runGhFn ?? runGh;
-  const token = (await runGhFn(['auth', 'token'])).trim();
-  if (!token) {
+  try {
+    const token = (await runGhFn(['auth', 'token'])).trim();
+    if (!token) {
+      return {};
+    }
+    return { token, source: 'gh_auth_token' };
+  } catch {
     return {};
   }
-
-  return { token, source: 'gh_auth_token' };
 }

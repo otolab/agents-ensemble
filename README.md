@@ -99,9 +99,9 @@ worker は `spawn('agent', ['acp'])` で起動し、**子プロセスの `agent`
 
 | コマンド | 必要な認証 |
 |---------|-----------|
-| `ensemble issue` | `agent login`（または `CURSOR_API_KEY`）+ `ensemble auth login`（または `CURSOR_API_KEY`）+ `gh auth login` |
+| `ensemble issue` | `agent login`（または `CURSOR_API_KEY`）+ `ensemble auth login`（または `CURSOR_API_KEY`）+ `GITHUB_TOKEN` / `GH_TOKEN` または `gh auth login`（config で gh フォールバック有効時） |
 | `pnpm test:integration` | `agent login` + `test-acp.yaml` |
-| `pnpm test:e2e` | 上記 + `ensemble auth login` + `gh` + `test-acp.yaml`（`issueUrl` 等） |
+| `pnpm test:e2e` | 上記 + `ensemble auth login` + GitHub API トークン + `test-acp.yaml`（`issueUrl` 等） |
 
 ### モデル指定
 

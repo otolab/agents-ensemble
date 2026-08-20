@@ -47,6 +47,18 @@ describe('resolveGitHubAuthToken', () => {
     expect(runGhFn).toHaveBeenCalledWith(['auth', 'token']);
   });
 
+
+  it('returns empty result when gh auth token fails (best-effort fallback)', async () => {
+    const runGhFn = vi.fn().mockRejectedValue(new Error('gh auth token failed'));
+
+    const result = await resolveGitHubAuthToken({
+      config: DEFAULT_ENSEMBLE_CONFIG,
+      env: {},
+      runGhFn,
+    });
+
+    expect(result).toEqual({});
+  });
   it('does not call gh auth token when allowGhAuthTokenFallback is false', async () => {
     const runGhFn = vi.fn();
 

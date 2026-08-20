@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as issueContextModule from '../github/issue-context.js';
+import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import {
   loadSessionSidecar,
@@ -76,6 +77,10 @@ describe('runConductorSession resume / shutdown', () => {
       state: 'OPEN',
       labels: [],
       comments: [],
+    });
+    vi.spyOn(resolveGitHubAuthTokenModule, 'resolveGitHubAuthToken').mockResolvedValue({
+      token: 'test-github-token',
+      source: 'GITHUB_TOKEN',
     });
     mockSend.mockReset();
     mockClose.mockClear();
