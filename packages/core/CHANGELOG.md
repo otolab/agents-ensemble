@@ -1,5 +1,12 @@
 # @agents-ensemble/core
 
+## 0.4.1
+
+### Patch Changes
+
+- e57a7a5: `/exit` 後のプロセス残留を解消（GitHub monitor poll タイムアウト・teardown 段階表示・Ctrl+C ガイダンス）
+- 778f4a4: 同梱 team profile（implementer-and-reviewer）の conductor / implementer プロンプトを更新。マージ可否判断・未解決問題のエスカレーション・人間への引き渡し手順を明確化し、implementer に「手順の正本」への疑念の報告指針を追加する。
+
 ## 0.4.0
 
 ### Minor Changes
