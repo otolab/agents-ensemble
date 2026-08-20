@@ -229,15 +229,11 @@ export function buildGitHubClient(options: GitHubClientOptions): GitHubClient {
     },
 
     async searchLinkedPullRequests(owner, repo, issueNumber) {
-      try {
-        const query = encodeURIComponent(`${issueNumber} repo:${owner}/${repo} type:pr`);
-        const data = await restRequest<{ items: GitHubPullRequestRef[] }>(
-          `/search/issues?q=${query}&per_page=20`,
-        );
-        return data.items.filter((pr) => pr.state === 'OPEN' || pr.state === 'open');
-      } catch {
-        return [];
-      }
+      const query = encodeURIComponent(`${issueNumber} repo:${owner}/${repo} type:pr`);
+      const data = await restRequest<{ items: GitHubPullRequestRef[] }>(
+        `/search/issues?q=${query}&per_page=20`,
+      );
+      return data.items.filter((pr) => pr.state === 'OPEN' || pr.state === 'open');
     },
 
     async listPullRequestReviews(owner, repo, prNumber) {

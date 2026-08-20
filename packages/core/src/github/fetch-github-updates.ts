@@ -4,6 +4,11 @@ import type { GitHubClient } from './github-client.js';
 import { createGitHubClient } from './github-client.js';
 import type { GitHubMonitorCursor, PullRequestMonitorCursor } from './github-monitor-cursor.js';
 import { normalizeGitHubMonitorCursor } from './github-monitor-cursor.js';
+import {
+  createGitHubMonitorPhaseError,
+  safeUpperString,
+  type GitHubMonitorPhaseError,
+} from './github-monitor-error.js';
 import type { GitHubUpdateItem } from './github-update-types.js';
 
 const BODY_PREVIEW_MAX = 280;
@@ -23,6 +28,8 @@ export interface FetchGitHubUpdatesResult {
   cursor: GitHubMonitorCursor;
   /** いずれかの PR で CI が pending。poll 間隔短縮の判断材料。 */
   hasPendingCi: boolean;
+  /** フェーズ単位で捕捉したエラー（poll 全体は継続）。 */
+  errors: GitHubMonitorPhaseError[];
 }
 
 interface GhIssueComment {
@@ -77,21 +84,26 @@ export async function fetchGitHubUpdates(
   const issue = parseIssueUrl(input.issueUrl);
   const cursor = normalizeGitHubMonitorCursor(input.cursor);
   const updates: GitHubUpdateItem[] = [];
+  const errors: GitHubMonitorPhaseError[] = [];
   let hasPendingCi = false;
 
-  const issueComments = await client.listIssueComments(
-    issue.owner,
-    issue.repo,
-    issue.number,
-  );
-  const { updates: commentUpdates, lastId } = collectIssueCommentUpdates(
-    issueComments,
-    cursor.lastIssueCommentId,
-    input.initialCursorPoll ?? false,
-  );
-  updates.push(...commentUpdates);
-  if (lastId !== undefined) {
-    cursor.lastIssueCommentId = lastId;
+  try {
+    const issueComments = await client.listIssueComments(
+      issue.owner,
+      issue.repo,
+      issue.number,
+    );
+    const { updates: commentUpdates, lastId } = collectIssueCommentUpdates(
+      issueComments,
+      cursor.lastIssueCommentId,
+      input.initialCursorPoll ?? false,
+    );
+    updates.push(...commentUpdates);
+    if (lastId !== undefined) {
+      cursor.lastIssueCommentId = lastId;
+    }
+  } catch (error) {
+    errors.push(createGitHubMonitorPhaseError('issue_comments', error));
   }
 
   let pullRequests: GhPullRequestRef[];
@@ -101,7 +113,8 @@ export async function fetchGitHubUpdates(
       issue.repo,
       issue.number,
     );
-  } catch {
+  } catch (error) {
+    errors.push(createGitHubMonitorPhaseError('pr_search', error));
     pullRequests = [];
   }
   if (!cursor.pullRequests) {
@@ -120,12 +133,13 @@ export async function fetchGitHubUpdates(
     });
     updates.push(...prResult.updates);
     cursor.pullRequests[prKey] = prResult.cursor;
+    errors.push(...prResult.errors);
     if (prResult.hasPendingCi) {
       hasPendingCi = true;
     }
   }
 
-  return { updates, cursor, hasPendingCi };
+  return { updates, cursor, hasPendingCi, errors };
 }
 
 function collectIssueCommentUpdates(
@@ -172,74 +186,97 @@ async function fetchPullRequestUpdates(input: {
   updates: GitHubUpdateItem[];
   cursor: PullRequestMonitorCursor;
   hasPendingCi: boolean;
+  errors: GitHubMonitorPhaseError[];
 }> {
   const updates: GitHubUpdateItem[] = [];
+  const errors: GitHubMonitorPhaseError[] = [];
   const cursor: PullRequestMonitorCursor = {
     lastReviewId: input.prCursor.lastReviewId,
     lastReviewCommentId: input.prCursor.lastReviewCommentId,
     pendingCheckNames: [...(input.prCursor.pendingCheckNames ?? [])],
     notifiedCheckNames: [...(input.prCursor.notifiedCheckNames ?? [])],
   };
+  let hasPendingCi = false;
 
-  const reviews = await input.client.listPullRequestReviews(
-    input.issue.owner,
-    input.issue.repo,
-    input.pr.number,
-  );
-  const reviewResult = collectReviewUpdates(
-    reviews,
-    cursor.lastReviewId,
-    input.initialCursorPoll,
-    input.pr.number,
-  );
-  updates.push(...reviewResult.updates);
-  if (reviewResult.lastId !== undefined) {
-    cursor.lastReviewId = reviewResult.lastId;
-  }
-
-  const reviewComments = await input.client.listPullRequestReviewComments(
-    input.issue.owner,
-    input.issue.repo,
-    input.pr.number,
-  );
-  const reviewCommentResult = collectReviewCommentUpdates(
-    reviewComments,
-    cursor.lastReviewCommentId,
-    input.initialCursorPoll,
-    input.pr.number,
-  );
-  updates.push(...reviewCommentResult.updates);
-  if (reviewCommentResult.lastId !== undefined) {
-    cursor.lastReviewCommentId = reviewCommentResult.lastId;
-  }
-
-  const checkRuns = normalizeStatusCheckRollup(
-    await input.client.getStatusCheckRollup(
+  try {
+    const reviews = await input.client.listPullRequestReviews(
       input.issue.owner,
       input.issue.repo,
       input.pr.number,
-    ),
-  );
-  const ciResult = collectCiUpdates({
-    checkRuns,
-    pendingCheckNames: cursor.pendingCheckNames ?? [],
-    notifiedCheckNames: cursor.notifiedCheckNames ?? [],
-    initialCursorPoll: input.initialCursorPoll,
-    prNumber: input.pr.number,
-  });
-  updates.push(...ciResult.updates);
-  cursor.pendingCheckNames = ciResult.pendingCheckNames;
-  cursor.notifiedCheckNames = ciResult.notifiedCheckNames;
+    );
+    const reviewResult = collectReviewUpdates(
+      reviews,
+      cursor.lastReviewId,
+      input.initialCursorPoll,
+      input.pr.number,
+    );
+    updates.push(...reviewResult.updates);
+    if (reviewResult.lastId !== undefined) {
+      cursor.lastReviewId = reviewResult.lastId;
+    }
+  } catch (error) {
+    errors.push(
+      createGitHubMonitorPhaseError('pr_reviews', error, input.pr.number),
+    );
+  }
+
+  try {
+    const reviewComments = await input.client.listPullRequestReviewComments(
+      input.issue.owner,
+      input.issue.repo,
+      input.pr.number,
+    );
+    const reviewCommentResult = collectReviewCommentUpdates(
+      reviewComments,
+      cursor.lastReviewCommentId,
+      input.initialCursorPoll,
+      input.pr.number,
+    );
+    updates.push(...reviewCommentResult.updates);
+    if (reviewCommentResult.lastId !== undefined) {
+      cursor.lastReviewCommentId = reviewCommentResult.lastId;
+    }
+  } catch (error) {
+    errors.push(
+      createGitHubMonitorPhaseError('pr_review_comments', error, input.pr.number),
+    );
+  }
+
+  try {
+    const checkRuns = normalizeStatusCheckRollup(
+      await input.client.getStatusCheckRollup(
+        input.issue.owner,
+        input.issue.repo,
+        input.pr.number,
+      ),
+    );
+    const ciResult = collectCiUpdates({
+      checkRuns,
+      pendingCheckNames: cursor.pendingCheckNames ?? [],
+      notifiedCheckNames: cursor.notifiedCheckNames ?? [],
+      initialCursorPoll: input.initialCursorPoll,
+      prNumber: input.pr.number,
+    });
+    updates.push(...ciResult.updates);
+    cursor.pendingCheckNames = ciResult.pendingCheckNames;
+    cursor.notifiedCheckNames = ciResult.notifiedCheckNames;
+    hasPendingCi = ciResult.hasPendingCi;
+  } catch (error) {
+    errors.push(
+      createGitHubMonitorPhaseError('pr_status_checks', error, input.pr.number),
+    );
+  }
 
   return {
     updates,
     cursor,
-    hasPendingCi: ciResult.hasPendingCi,
+    hasPendingCi,
+    errors,
   };
 }
 
 /** GraphQL `statusCheckRollup` の CheckRun / StatusContext を共通形に正規化する。 */
-function normalizeStatusCheckRollup(rollup: unknown): GhCheckRun[] {
+export function normalizeStatusCheckRollup(rollup: unknown): GhCheckRun[] {
   if (!Array.isArray(rollup)) {
     return [];
   }
@@ -260,12 +297,40 @@ function normalizeRollupItem(item: unknown): GhCheckRun | undefined {
   }
 
   const row = item as Record<string, unknown>;
-  if (row.__typename === 'StatusContext') {
+  const typename = row.__typename;
+
+  if (typename === 'StatusContext' || isStatusContextShape(row)) {
     return normalizeStatusContext(row);
   }
 
+  if (typename === 'CheckRun' || (typename === undefined && isCheckRunShape(row))) {
+    return normalizeCheckRun(row);
+  }
+
+  if (typeof typename === 'string') {
+    // WorkflowRun 等の未知型は skip（throw しない）
+    return undefined;
+  }
+
+  return normalizeCheckRun(row);
+}
+
+function isStatusContextShape(row: Record<string, unknown>): boolean {
+  return (
+    typeof row.context === 'string' &&
+    row.state !== undefined &&
+    row.name === undefined &&
+    row.status === undefined
+  );
+}
+
+function isCheckRunShape(row: Record<string, unknown>): boolean {
+  return typeof row.name === 'string' && typeof row.status === 'string';
+}
+
+function normalizeCheckRun(row: Record<string, unknown>): GhCheckRun | undefined {
   const name = typeof row.name === 'string' ? row.name : undefined;
-  const status = typeof row.status === 'string' ? row.status : undefined;
+  const status = safeUpperString(row.status, '');
   if (!name || !status) {
     return undefined;
   }
@@ -280,7 +345,7 @@ function normalizeRollupItem(item: unknown): GhCheckRun | undefined {
 
 function normalizeStatusContext(row: Record<string, unknown>): GhCheckRun | undefined {
   const name = typeof row.context === 'string' ? row.context : undefined;
-  const state = typeof row.state === 'string' ? row.state.toUpperCase() : undefined;
+  const state = safeUpperString(row.state, '');
   if (!name || !state) {
     return undefined;
   }
@@ -392,7 +457,7 @@ function collectCiUpdates(input: {
 
   for (const check of input.checkRuns) {
     const name = check.name;
-    const status = check.status?.toUpperCase();
+    const status = safeUpperString(check.status, '');
     if (!name || !status) {
       continue;
     }
@@ -403,7 +468,7 @@ function collectCiUpdates(input: {
     if (status !== 'COMPLETED') {
       continue;
     }
-    const conclusion = (check.conclusion ?? 'UNKNOWN').toUpperCase();
+    const conclusion = safeUpperString(check.conclusion, 'UNKNOWN');
     if (!hadPreviousSnapshot || !previousPending.has(name)) {
       continue;
     }

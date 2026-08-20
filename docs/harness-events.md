@@ -85,7 +85,17 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | type | 発火タイミング | stderr 例 | snapshot への影響 |
 |------|----------------|-----------|-------------------|
 | `harness.github.update` | debounce 後に `github.update` をキューへ載せる直前 | `[harness] github.update items=N` | なし |
-| `harness.github.monitor_error` | GitHub API poll 失敗（best-effort。監視は継続。認証失敗時は `[github-auth]` ヒント付き） | `[harness] github.monitor_error ...` | なし |
+| `harness.github.monitor_error` | GitHub API poll 失敗（best-effort。監視は継続。認証失敗時は `[github-auth]` ヒント付き） | `[harness] github.monitor_error ...`（後方互換 1 行。構造化フィールドはイベント型に保持） | なし |
+
+`harness.github.monitor_error` の構造化フィールド（[#185](https://github.com/otolab/agents-ensemble/issues/185)）:
+
+| フィールド | 型 | 意味 |
+|-----------|-----|------|
+| `message` | `string` | 人間向けエラー文（stderr 1 行の本文） |
+| `phase` | `issue_comments` \| `pr_search` \| `pr_reviews` \| `pr_review_comments` \| `pr_status_checks` | 失敗フェーズ |
+| `prNumber` | `number`（任意） | 関連 PR 番号 |
+| `cause` | `parse` \| `gh_cli` \| `auth` \| `unknown` | 失敗原因の分類 |
+| `retryable` | `boolean`（任意） | rate limit / 5xx 等で再試行が有効なとき `true` |
 
 監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
 

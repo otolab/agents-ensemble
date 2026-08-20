@@ -234,7 +234,7 @@ TUI 表示語彙 `WorkerDisplayStatus`（`idle` / `running` / `failed`）は **�
 | 名前 | 型 | ソース | 終了 JSON | 活動ログ / イベント | 備考 |
 |------|-----|--------|-----------|---------------------|------|
 | `harness.github.update` | `itemCount: number` | poll 差分件数 | **未集計** | SessionEvent・活動ログ | セッション累計カウンタ **無し** |
-| `harness.github.monitor_error` | `message: string` | API 失敗 | **未集計** | 同上 | 同上 |
+| `harness.github.monitor_error` | `message: string`, `phase?`, `prNumber?`, `cause?`, `retryable?` | API 失敗（フェーズ単位） | **未集計** | 同上 | stderr は `message` のみ 1 行（後方互換） |
 | `githubMonitor` cursor | `GitHubMonitorCursor` | sidecar のみ | — | — | exit report 対象外 |
 
 終了サマリへの「GitHub 監視 N 件」は **現状取れない**。必要なら tracker 追加が別 Issue。

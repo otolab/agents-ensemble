@@ -5,6 +5,7 @@ import {
   type FetchGitHubUpdatesInput,
 } from './fetch-github-updates.js';
 import { formatGitHubErrorMessage } from './github-auth.js';
+import { GitHubMonitorError } from './github-monitor-error.js';
 import type { GitHubClient } from './github-client.js';
 import {
   emptyGitHubMonitorCursor,
@@ -104,6 +105,18 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       hasPendingCi = result.hasPendingCi;
       if (result.updates.length > 0) {
         buffer.pushMany(result.updates);
+      }
+      for (const phaseError of result.errors) {
+        const source = phaseError.sourceError ?? new Error(phaseError.message);
+        options.onPollError?.(
+          new GitHubMonitorError({
+            phase: phaseError.phase,
+            prNumber: phaseError.prNumber,
+            cause: phaseError.cause,
+            retryable: phaseError.retryable,
+            message: formatGitHubErrorMessage(source, options.ensembleConfig),
+          }),
+        );
       }
     } catch (error) {
       if (!isAbortError(error)) {

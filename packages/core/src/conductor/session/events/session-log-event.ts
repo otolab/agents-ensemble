@@ -204,6 +204,10 @@ export interface HarnessGitHubUpdateEvent {
 export interface HarnessGitHubMonitorErrorEvent {
   type: 'harness.github.monitor_error';
   message: string;
+  phase?: 'issue_comments' | 'pr_search' | 'pr_reviews' | 'pr_review_comments' | 'pr_status_checks';
+  prNumber?: number;
+  retryable?: boolean;
+  cause?: 'parse' | 'gh_cli' | 'auth' | 'unknown';
 }
 
 export interface HarnessWarningEvent {

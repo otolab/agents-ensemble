@@ -1,4 +1,5 @@
-export { runGh } from './run-gh.js';
+export { runGh, RunGhError } from './run-gh.js';
+export type { RunGhErrorCause } from './run-gh.js';
 export { resolveGitHubAuthToken } from './resolve-github-auth-token.js';
 export type {
   GitHubAuthTokenSource,
@@ -60,8 +61,19 @@ export type {
   GitHubUpdateKind,
   GitHubUpdatePayload,
 } from './github-update-types.js';
-export { fetchGitHubUpdates } from './fetch-github-updates.js';
+export { fetchGitHubUpdates, normalizeStatusCheckRollup } from './fetch-github-updates.js';
 export type {
   FetchGitHubUpdatesInput,
   FetchGitHubUpdatesResult,
 } from './fetch-github-updates.js';
+export {
+  GitHubMonitorError,
+  safeUpperString,
+  classifyGitHubMonitorError,
+  createGitHubMonitorPhaseError,
+} from './github-monitor-error.js';
+export type {
+  GitHubMonitorErrorPhase,
+  GitHubMonitorErrorCause,
+  GitHubMonitorPhaseError,
+} from './github-monitor-error.js';
