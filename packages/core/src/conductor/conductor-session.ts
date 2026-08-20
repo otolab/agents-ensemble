@@ -73,6 +73,7 @@ import {
   DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS,
   type GitHubMonitor,
 } from '../github/github-monitor.js';
+import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import { GITHUB_AUTH_HINT } from '../github/github-auth.js';
 import { resolveGitHubAuthToken } from '../github/resolve-github-auth-token.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
@@ -596,9 +597,24 @@ export async function runConductorSession(
         }
       },
       onPollError: (error) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : String(error);
+        if (error instanceof GitHubMonitorError) {
+          sessionLogger.emit({
+            type: 'harness.github.monitor_error',
+            message,
+            phase: error.phase,
+            prNumber: error.prNumber,
+            cause: error.cause,
+            retryable: error.retryable,
+          });
+          return;
+        }
         sessionLogger.emit({
           type: 'harness.github.monitor_error',
-          message: error instanceof Error ? error.message : String(error),
+          message,
         });
       },
     });

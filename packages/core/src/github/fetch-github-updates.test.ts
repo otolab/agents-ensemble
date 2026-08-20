@@ -1,13 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
-import { fetchGitHubUpdates } from './fetch-github-updates.js';
+import {
+  fetchGitHubUpdates,
+  normalizeStatusCheckRollup,
+} from './fetch-github-updates.js';
 import { emptyGitHubMonitorCursor } from './github-monitor-cursor.js';
 import type { GitHubClient } from './github-client.js';
 import {
   GH_STATUS_CHECK_ROLLUP_COMPLETED_SUCCESS,
   GH_STATUS_CHECK_ROLLUP_IN_PROGRESS,
+  GH_STATUS_CHECK_ROLLUP_MIXED_ISSUE_185,
+  GH_STATUS_CHECK_ROLLUP_NON_STRING_CONCLUSION,
+  GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_NO_TYPENAME,
   GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_PENDING,
   GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_SUCCESS,
+  GH_STATUS_CHECK_ROLLUP_WORKFLOW_RUN,
 } from './github-test-fixtures.js';
 
 const ISSUE_URL = 'https://github.com/org/repo/issues/39';
@@ -247,5 +254,121 @@ describe('fetchGitHubUpdates', () => {
       checkName: 'ci/legacy',
       checkConclusion: 'SUCCESS',
     });
+  });
+
+  it('handles Issue #185 rollup fixtures without throwing (toUpperCase regression)', async () => {
+    expect(() => normalizeStatusCheckRollup([...GH_STATUS_CHECK_ROLLUP_MIXED_ISSUE_185])).not.toThrow();
+    const normalized = normalizeStatusCheckRollup([...GH_STATUS_CHECK_ROLLUP_MIXED_ISSUE_185]);
+    expect(normalized).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'ci/legacy-no-typename', status: 'IN_PROGRESS' }),
+        expect.objectContaining({ name: 'ci/broken-conclusion', status: 'COMPLETED', conclusion: null }),
+        expect.objectContaining({ name: 'ci/test', status: 'COMPLETED', conclusion: 'SUCCESS' }),
+      ]),
+    );
+    expect(normalized.find((check) => check.name === 'ci/workflow')).toBeUndefined();
+  });
+
+  it('continues issue comment monitoring when one PR statusCheckRollup fails', async () => {
+    const pr42 = {
+      number: 42,
+      title: 'feat',
+      url: 'https://github.com/org/repo/pull/42',
+      state: 'OPEN',
+    };
+    const pr43 = {
+      number: 43,
+      title: 'fix',
+      url: 'https://github.com/org/repo/pull/43',
+      state: 'OPEN',
+    };
+
+    const githubClient = createMockClient({
+      listIssueComments: vi.fn().mockResolvedValue([
+        {
+          id: 101,
+          body: 'new comment',
+          html_url: 'https://github.com/org/repo/issues/39#issuecomment-101',
+          user: { login: 'bob' },
+          created_at: '2026-01-02T00:00:00Z',
+        },
+      ]),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([pr42, pr43]),
+      getStatusCheckRollup: vi.fn(async (_owner, _repo, prNumber) => {
+        if (prNumber === 42) {
+          throw new TypeError("Cannot read properties of undefined (reading 'toUpperCase')");
+        }
+        return [...GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_PENDING];
+      }),
+    });
+
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: { lastIssueCommentId: '100', pullRequests: {} },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+
+    expect(result.updates).toHaveLength(1);
+    expect(result.updates[0]?.kind).toBe('issue.comment');
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({
+      phase: 'pr_status_checks',
+      prNumber: 42,
+      cause: 'parse',
+    });
+    expect(result.cursor.pullRequests?.['43']?.pendingCheckNames).toEqual(['ci/legacy']);
+  });
+
+  it('reports pr_search errors while continuing issue comment monitoring', async () => {
+    const githubClient = createMockClient({
+      listIssueComments: vi.fn().mockResolvedValue([
+        {
+          id: 101,
+          body: 'new comment',
+          html_url: 'https://github.com/org/repo/issues/39#issuecomment-101',
+          user: { login: 'bob' },
+          created_at: '2026-01-02T00:00:00Z',
+        },
+      ]),
+      searchLinkedPullRequests: vi.fn().mockRejectedValue(new Error('Invalid search query')),
+    });
+
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: { lastIssueCommentId: '100', pullRequests: {} },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+
+    expect(result.updates).toHaveLength(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({
+      phase: 'pr_search',
+      cause: 'unknown',
+    });
+  });
+
+  it('normalizes StatusContext without __typename and non-string conclusion', () => {
+    const normalized = normalizeStatusCheckRollup([
+      ...GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_NO_TYPENAME,
+      ...GH_STATUS_CHECK_ROLLUP_NON_STRING_CONCLUSION,
+      ...GH_STATUS_CHECK_ROLLUP_WORKFLOW_RUN,
+    ]);
+
+    expect(normalized).toEqual([
+      {
+        name: 'ci/legacy-no-typename',
+        status: 'IN_PROGRESS',
+        conclusion: null,
+        detailsUrl: 'https://github.com/org/repo/actions/runs/3',
+      },
+      {
+        name: 'ci/broken-conclusion',
+        status: 'COMPLETED',
+        conclusion: null,
+        detailsUrl: 'https://github.com/org/repo/actions/runs/4',
+      },
+    ]);
   });
 });

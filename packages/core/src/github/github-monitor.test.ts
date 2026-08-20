@@ -214,4 +214,45 @@ describe('createGitHubMonitor', () => {
     await drainAsync();
     vi.useFakeTimers();
   });
+
+  it('emits structured monitor_error for phase failures', async () => {
+    vi.useRealTimers();
+    const onPollError = vi.fn();
+    const githubClient: GitHubClient = {
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn().mockResolvedValue([]),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([
+        {
+          number: 42,
+          title: 'feat',
+          url: 'https://github.com/org/repo/pull/42',
+          state: 'OPEN',
+        },
+      ]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([]),
+      listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+      getStatusCheckRollup: vi.fn().mockRejectedValue(new TypeError('parse failed')),
+    };
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      cursor: { lastIssueCommentId: '1', pullRequests: {} },
+      debounceMs: 60_000,
+      pollIntervalMs: 60_000,
+      githubClient,
+      onUpdate: vi.fn(),
+      onPollError,
+    });
+
+    monitor.start();
+    await vi.waitFor(() => expect(onPollError).toHaveBeenCalled());
+
+    const error = onPollError.mock.calls[0]![0];
+    expect(error.phase).toBe('pr_status_checks');
+    expect(error.prNumber).toBe(42);
+    expect(error.cause).toBe('parse');
+
+    await monitor.stop();
+    vi.useFakeTimers();
+  });
 });

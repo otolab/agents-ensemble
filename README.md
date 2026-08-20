@@ -199,6 +199,8 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 | `--no-github-monitor` | GitHub 更新監視を無効化 |
 | `--github-monitor-debounce-ms <n>` | 更新通知の debounce（ms）。デフォルト 30000 |
 
+`monitor_error` で `toUpperCase` 系エラーが出る場合は `@agents-ensemble/core` **0.2.1 以降**を使用しているか確認してください（`pnpm why @agents-ensemble/core` または `ensemble --version`）。[#158](https://github.com/otolab/agents-ensemble/issues/158) / [#185](https://github.com/otolab/agents-ensemble/issues/185) 参照。
+
 **Issue worktree**（`--worktree`）は Conductor セッション開始時に **1 回だけ** resolve し、**未指定の worker** が ACP 上で作業するディレクトリになる（Issue 用 git worktree の規約）。
 
 | 値 | 意味 |
