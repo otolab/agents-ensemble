@@ -63,6 +63,7 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `conductor.auth.recovery` | 自動再接続失敗後の復旧ヒント | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
 | `harness.teardown` | `runConductorSession` の `finally` 完了時（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
+| `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | `[harness] teardown.phase <name>` | なし |
 
 ### 2.4 セッション観測イベント（#92 で追加）
 

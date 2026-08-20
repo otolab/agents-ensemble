@@ -13,6 +13,7 @@ export interface FetchGitHubUpdatesInput {
   initialCursorPoll?: boolean;
   cwd?: string;
   runGhFn?: typeof runGh;
+  abortSignal?: AbortSignal;
 }
 
 export interface FetchGitHubUpdatesResult {
@@ -65,7 +66,12 @@ interface GhCheckRun {
 export async function fetchGitHubUpdates(
   input: FetchGitHubUpdatesInput,
 ): Promise<FetchGitHubUpdatesResult> {
-  const gh = input.runGhFn ?? runGh;
+  const baseGh = input.runGhFn ?? runGh;
+  const gh: typeof runGh = (args, options = {}) =>
+    baseGh(args, {
+      ...options,
+      ...(input.abortSignal ? { signal: input.abortSignal } : {}),
+    });
   const issue = parseIssueUrl(input.issueUrl);
   const cursor = normalizeGitHubMonitorCursor(input.cursor);
   const updates: GitHubUpdateItem[] = [];

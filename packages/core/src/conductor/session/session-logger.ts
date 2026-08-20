@@ -81,6 +81,7 @@ export class SessionLogger {
       case 'session.post_loop_wait':
       case 'session.operator_exit':
       case 'harness.teardown':
+      case 'harness.teardown.phase':
       case 'conductor.auth.recovery':
       case 'conductor.auth.reconnect':
       case 'harness.github.update':

@@ -180,6 +180,11 @@ export interface HarnessTeardownSummaryEvent {
   phases: Record<string, number>;
 }
 
+export interface HarnessTeardownPhaseEvent {
+  type: 'harness.teardown.phase';
+  phase: string;
+}
+
 export interface ConductorAuthRecoveryEvent {
   type: 'conductor.auth.recovery';
   agentId: string;
@@ -234,6 +239,7 @@ export type SessionLogEvent =
   | SessionPostLoopWaitEvent
   | SessionOperatorExitEvent
   | HarnessTeardownSummaryEvent
+  | HarnessTeardownPhaseEvent
   | ConductorAuthRecoveryEvent
   | ConductorAuthReconnectEvent
   | HarnessGitHubUpdateEvent

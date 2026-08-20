@@ -186,4 +186,37 @@ describe('createGitHubMonitor', () => {
 
     await monitor.stop();
   });
+
+  it('aborts in-flight poll when stop exceeds stopPollWaitMs', async () => {
+    vi.useRealTimers();
+    let pollResolve: (() => void) | undefined;
+    const runGhFn = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          pollResolve = () => resolve('[]');
+        }),
+    );
+
+    const onUpdate = vi.fn();
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      debounceMs: 60_000,
+      pollIntervalMs: 60_000,
+      stopPollWaitMs: 50,
+      runGhFn,
+      onUpdate,
+    });
+
+    monitor.start();
+    await drainAsync();
+    expect(runGhFn).toHaveBeenCalledTimes(1);
+
+    const stopPromise = monitor.stop();
+    await stopPromise;
+
+    expect(runGhFn).toHaveBeenCalledTimes(1);
+    pollResolve?.();
+    await drainAsync();
+    vi.useFakeTimers();
+  });
 });

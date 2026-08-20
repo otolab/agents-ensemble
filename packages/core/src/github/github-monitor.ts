@@ -15,6 +15,8 @@ import { runGh } from './run-gh.js';
 export const DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS = 30_000;
 export const DEFAULT_GITHUB_MONITOR_POLL_INTERVAL_MS = 60_000;
 export const DEFAULT_GITHUB_MONITOR_ACTIVE_POLL_INTERVAL_MS = 15_000;
+/** `stop()` が進行中 poll の完了を待つ上限（ms）。超過時は poll を abort する（#209）。 */
+export const DEFAULT_GITHUB_MONITOR_STOP_POLL_WAIT_MS = 5_000;
 
 export interface GitHubMonitorOptions {
   issueUrl: string;
@@ -23,6 +25,8 @@ export interface GitHubMonitorOptions {
   debounceMs?: number;
   pollIntervalMs?: number;
   activePollIntervalMs?: number;
+  /** `stop()` が `pollInFlight` を待つ上限（ms）。デフォルト 5s。 */
+  stopPollWaitMs?: number;
   onUpdate: (payload: GitHubUpdatePayload) => void;
   onCursorChange?: (cursor: GitHubMonitorCursor) => void;
   onPollError?: (error: unknown) => void;
@@ -43,6 +47,8 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
     options.pollIntervalMs ?? DEFAULT_GITHUB_MONITOR_POLL_INTERVAL_MS;
   const activePollIntervalMs =
     options.activePollIntervalMs ?? DEFAULT_GITHUB_MONITOR_ACTIVE_POLL_INTERVAL_MS;
+  const stopPollWaitMs =
+    options.stopPollWaitMs ?? DEFAULT_GITHUB_MONITOR_STOP_POLL_WAIT_MS;
 
   let cursor = normalizeGitHubMonitorCursor(
     options.cursor ?? emptyGitHubMonitorCursor(),
@@ -51,6 +57,7 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
   let stopped = false;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let pollInFlight = false;
+  let pollAbortController: AbortController | undefined;
   let hasPendingCi = false;
   let needsBootstrapPoll = isEmptyGitHubMonitorCursor(cursor);
 
@@ -77,6 +84,7 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
   const pollOnce = async (): Promise<void> => {
     if (stopped || pollInFlight) return;
     pollInFlight = true;
+    pollAbortController = new AbortController();
     try {
       const input: FetchGitHubUpdatesInput = {
         issueUrl: options.issueUrl,
@@ -84,6 +92,7 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
         cwd: options.cwd,
         runGhFn: options.runGhFn,
         initialCursorPoll: needsBootstrapPoll,
+        abortSignal: pollAbortController.signal,
       };
       const result = await fetchGitHubUpdates(input);
       cursor = result.cursor;
@@ -94,14 +103,21 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
         buffer.pushMany(result.updates);
       }
     } catch (error) {
-      options.onPollError?.(error);
+      if (!isAbortError(error)) {
+        options.onPollError?.(error);
+      }
     } finally {
+      pollAbortController = undefined;
       pollInFlight = false;
       if (!stopped && started) {
         const nextDelay = hasPendingCi ? activePollIntervalMs : pollIntervalMs;
         schedulePoll(nextDelay);
       }
     }
+  };
+
+  const abortInFlightPoll = () => {
+    pollAbortController?.abort();
   };
 
   return {
@@ -119,8 +135,19 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
         pollTimer = undefined;
       }
       buffer.stop();
+      const deadline = Date.now() + stopPollWaitMs;
       while (pollInFlight) {
+        if (Date.now() >= deadline) {
+          abortInFlightPoll();
+          break;
+        }
         await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      if (pollInFlight) {
+        const graceDeadline = Date.now() + 500;
+        while (pollInFlight && Date.now() < graceDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
       }
     },
 
@@ -132,4 +159,8 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       return normalizeGitHubMonitorCursor(cursor);
     },
   };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
 }
