@@ -17,7 +17,7 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(31);
+    expect(types.size).toBe(32);
   });
 
   it('lists every SessionEvent type exactly once', () => {
@@ -178,6 +178,8 @@ describe('session event type groups', () => {
           return { type };
         case 'harness.teardown':
           return { type, force: true, durationMs: 1, phases: { workers: 1 } };
+        case 'harness.teardown.phase':
+          return { type, phase: 'workers' };
         case 'conductor.auth.recovery':
           return { type, agentId: 'aid', hint: 'login' };
         case 'conductor.auth.reconnect':

@@ -21,6 +21,7 @@ export const HARNESS_TELEMETRY_EVENT_TYPES = [
   'harness.github.update',
   'harness.github.monitor_error',
   'harness.warning',
+  'harness.teardown.phase',
 ] as const;
 
 /** harness-events.md §2.4 セッション観測イベント。 */

@@ -812,71 +812,104 @@ export async function runConductorSession(
     const teardownStartedAt = Date.now();
     const teardownPhases: Record<string, number> = {};
 
-    disposeOperatorInput?.();
     unregisterProcessSignalHandlers();
-    if (permissionDeadlockMonitor) {
-      permissionDeadlockMonitor.stop();
-    }
-    if (githubMonitor) {
-      githubMonitor.flush();
-    }
-    rejectAllPendingPermissions(permissionPipeline, workerSession.inbox);
-    try {
-      const phaseStart = Date.now();
-      await flushSidecar();
-      teardownPhases.flushSidecar = Date.now() - phaseStart;
-    } catch {
-      // best-effort persistence
-    }
 
-    const runGithubMonitorStop = async (): Promise<void> => {
-      if (!githubMonitor) {
-        return;
+    let teardownSignalCount = 0;
+    const onTeardownSignal = () => {
+      teardownSignalCount += 1;
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message:
+          teardownSignalCount >= 2
+            ? '強制終了します…'
+            : '終了処理中です。もう一度 Ctrl+C で強制終了できます。',
+      });
+      if (teardownSignalCount >= 2) {
+        process.exit(130);
       }
-      const phaseStart = Date.now();
-      await githubMonitor.stop();
-      githubMonitorCursor = githubMonitor.getCursor();
-      teardownPhases.githubMonitor = Date.now() - phaseStart;
+    };
+    process.on('SIGINT', onTeardownSignal);
+    process.on('SIGTERM', onTeardownSignal);
+
+    const emitTeardownPhase = (phase: string) => {
+      sessionLogger.emit({ type: 'harness.teardown.phase', phase });
     };
 
-    const runWorkerStop = async (): Promise<void> => {
-      const phaseStart = Date.now();
-      await workerSession.stop({ force: forceShutdown });
-      teardownPhases.workers = Date.now() - phaseStart;
-    };
+    try {
+      disposeOperatorInput?.();
+      if (permissionDeadlockMonitor) {
+        emitTeardownPhase('permissionDeadlockMonitor');
+        permissionDeadlockMonitor.stop();
+      }
+      if (githubMonitor) {
+        githubMonitor.flush();
+      }
+      rejectAllPendingPermissions(permissionPipeline, workerSession.inbox);
+      try {
+        emitTeardownPhase('flushSidecar');
+        const phaseStart = Date.now();
+        await flushSidecar();
+        teardownPhases.flushSidecar = Date.now() - phaseStart;
+      } catch {
+        // best-effort persistence
+      }
 
-    const runConductorClose = async (): Promise<void> => {
-      const phaseStart = Date.now();
-      await conductorHandle.conductor.close();
-      teardownPhases.conductor = Date.now() - phaseStart;
-    };
+      const runGithubMonitorStop = async (): Promise<void> => {
+        if (!githubMonitor) {
+          return;
+        }
+        emitTeardownPhase('githubMonitor');
+        const phaseStart = Date.now();
+        await githubMonitor.stop();
+        githubMonitorCursor = githubMonitor.getCursor();
+        teardownPhases.githubMonitor = Date.now() - phaseStart;
+      };
 
-    if (forceShutdown) {
-      await Promise.all([
-        runGithubMonitorStop(),
-        runWorkerStop(),
-        runConductorClose(),
-      ]);
-    } else {
-      await runGithubMonitorStop();
-      await runWorkerStop();
-      await runConductorClose();
-    }
+      const runWorkerStop = async (): Promise<void> => {
+        emitTeardownPhase('workers');
+        const phaseStart = Date.now();
+        await workerSession.stop({ force: forceShutdown });
+        teardownPhases.workers = Date.now() - phaseStart;
+      };
 
-    sessionLogger.emit({
-      type: 'harness.teardown',
-      force: forceShutdown,
-      durationMs: Date.now() - teardownStartedAt,
-      phases: teardownPhases,
-    });
+      const runConductorClose = async (): Promise<void> => {
+        emitTeardownPhase('conductor');
+        const phaseStart = Date.now();
+        await conductorHandle.conductor.close();
+        teardownPhases.conductor = Date.now() - phaseStart;
+      };
 
-    if (
-      operatorRequestedExit &&
-      stopReason !== 'interrupted' &&
-      workerWorktree &&
-      !workerWorktree.inRepo
-    ) {
-      await emitWorktreeRemoval(sessionLogger, options.repoRoot, issue);
+      if (forceShutdown) {
+        await Promise.all([
+          runGithubMonitorStop(),
+          runWorkerStop(),
+          runConductorClose(),
+        ]);
+      } else {
+        await runGithubMonitorStop();
+        await runWorkerStop();
+        await runConductorClose();
+      }
+
+      sessionLogger.emit({
+        type: 'harness.teardown',
+        force: forceShutdown,
+        durationMs: Date.now() - teardownStartedAt,
+        phases: teardownPhases,
+      });
+
+      if (
+        operatorRequestedExit &&
+        stopReason !== 'interrupted' &&
+        workerWorktree &&
+        !workerWorktree.inRepo
+      ) {
+        emitTeardownPhase('worktree');
+        await emitWorktreeRemoval(sessionLogger, options.repoRoot, issue);
+      }
+    } finally {
+      process.off('SIGINT', onTeardownSignal);
+      process.off('SIGTERM', onTeardownSignal);
     }
   }
 }

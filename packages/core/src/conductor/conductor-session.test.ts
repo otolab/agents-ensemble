@@ -640,6 +640,12 @@ describe('runConductorSession resume / shutdown', () => {
         (event) => event.type === 'harness.teardown' && event.force === true,
       ),
     ).toBe(true);
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.teardown.phase' && event.phase === 'conductor',
+      ),
+    ).toBe(true);
     expect(resultStopReason(emitted)).toBe('completed');
   });
 

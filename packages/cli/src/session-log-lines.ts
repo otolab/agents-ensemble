@@ -73,6 +73,8 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
         .join(' ');
       return `teardown force=${event.force} total=${event.durationMs}ms${phases ? ` ${phases}` : ''}`;
     }
+    case 'harness.teardown.phase':
+      return `teardown.phase ${event.phase}`;
     default:
       return undefined;
   }
