@@ -1,5 +1,19 @@
 # @agents-ensemble/cli
 
+## 0.4.1
+
+### Patch Changes
+
+- 913e629: AGENTS.md にリリース・ブランチ運用（通常 PR は main、release/\* への直接マージ禁止、main merge/push は明示指示時のみ）を追記する。
+- c29f893: Orchestration ペインでオペレータ入力の段落間空行が潰れないよう活動ログの空 body 行を可視化する
+- ae34447: CLI/TUI 標準ショートカット（Emacs 風）のサポート階層と実装方針を `docs/cli-text-input-keybindings.md` に追加する（#210）。
+- e57a7a5: `/exit` 後のプロセス残留を解消（GitHub monitor poll タイムアウト・teardown 段階表示・Ctrl+C ガイダンス）
+- 6b6d1fb: オペレータ入力欄の Emacs 風ショートカットを Readline デファクトに整合（`@otolab/react-ink-textarea` パッチ: キルリング、`Ctrl+f/b`、`Ctrl+y` ヤンク、`Alt+y`）。CI 向けキーマップ監査テストを追加。
+- 778f4a4: 同梱 team profile（implementer-and-reviewer）の conductor / implementer プロンプトを更新。マージ可否判断・未解決問題のエスカレーション・人間への引き渡し手順を明確化し、implementer に「手順の正本」への疑念の報告指針を追加する。
+- Updated dependencies [e57a7a5]
+- Updated dependencies [778f4a4]
+  - @agents-ensemble/core@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
