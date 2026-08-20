@@ -23,7 +23,7 @@
 | CONDUCTOR_MODE | agents-ensemble |
 |----------------|-----------------|
 | スコアを深く理解するが演奏しない | conductor プロセスは **実作業ツールを持たない** |
-| 理解・判断・指示・検証 | `gh` / Issue / PR を読み、dispatch・エスカレーション |
+| 理解・判断・指示・検証 | GitHub API / Issue / PR を読み、dispatch・エスカレーション |
 | エージェントへ委任 | ACP で **独立 session** の worker |
 | 結果を鵜呑みにしない | reviewer 種別の worker + Issue / PR 上の履歴 |
 
@@ -48,7 +48,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
                            │
     worker (reviewer) ─────┼───── conductor (SDK)
                            │         │
-                           │         │ gh / CLI
+                           │         │ GitHub API
                            │         ▼
     worker (librarian) ────┘    Issue ◄──► PR
                                      │
@@ -64,7 +64,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 ┌───────────────────────────▼─────────────────────────────────┐
 │  conductor (@agents-ensemble/core + Cursor SDK)               │
 │  スター型の中心。長寿命 Agent 1 本                              │
-│  ・Issue / PR / CI の読取（gh 等）                            │
+│  ・Issue / PR / CI の読取（GitHub REST / GraphQL）              │
 │  ・次の worker 種別の判断（LLM。ルール表は固定しない）          │
 │  ・worker の dispatch・制御（種別・Skill・起動文書）            │
 │  ・permission の集約（自動許諾含む）→ 必要時に人間へ            │
@@ -101,7 +101,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 
 ### 責務
 
-1. **状態把握** — Issue コメント、PR、CI、ラベル等（主に `gh`）
+1. **状態把握** — Issue コメント、PR、CI、ラベル等（GitHub REST / GraphQL API）
 2. **遷移判断** — 次にどの worker 種別を起動するか、人間へ聞くか（**機械ルール表に固定しない**）
 3. **dispatch・制御** — worker を起動し、実行中も permission 応答等で制御する（自動許諾ポリシーを含む）
 4. **承認集約** — 各 worker の `session/request_permission` を conductor が受け、ポリシー or 人間へ

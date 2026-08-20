@@ -1,9 +1,61 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import { createGitHubMonitor } from './github-monitor.js';
+import type { GitHubClient } from './github-client.js';
 
 async function drainAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function createCommentPollingClient(): {
+  client: GitHubClient;
+  getCommentPolls: () => number;
+} {
+  let commentPolls = 0;
+  const client: GitHubClient = {
+    getIssue: vi.fn(),
+    listIssueComments: vi.fn(async () => {
+      commentPolls++;
+      const comments =
+        commentPolls === 1
+          ? [
+              {
+                id: 1,
+                body: 'baseline',
+                html_url: 'https://github.com/org/repo/issues/39#issuecomment-1',
+                user: { login: 'op' },
+                created_at: '2026-01-01T00:00:00Z',
+              },
+            ]
+          : [
+              {
+                id: 1,
+                body: 'baseline',
+                html_url: 'https://github.com/org/repo/issues/39#issuecomment-1',
+                user: { login: 'op' },
+                created_at: '2026-01-01T00:00:00Z',
+              },
+              {
+                id: 2,
+                body: commentPolls === 2 ? 'hello' : 'second',
+                html_url: 'https://github.com/org/repo/issues/39#issuecomment-2',
+                user: { login: 'op' },
+                created_at: '2026-01-02T00:00:00Z',
+              },
+            ];
+      return comments;
+    }),
+    searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+    listPullRequestReviews: vi.fn().mockResolvedValue([]),
+    listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+    getStatusCheckRollup: vi.fn().mockResolvedValue([]),
+  };
+
+  return {
+    client,
+    getCommentPolls: () => commentPolls,
+  };
 }
 
 describe('createGitHubMonitor', () => {
@@ -16,61 +68,24 @@ describe('createGitHubMonitor', () => {
   });
 
   it('debounces updates before notifying conductor', async () => {
-    let commentPolls = 0;
-    const runGhFn = vi.fn(async (args: string[]) => {
-      if (args[0] === 'api' && args[1]?.includes('/comments')) {
-        commentPolls++;
-        const comments =
-          commentPolls === 1
-            ? [
-                {
-                  id: 1,
-                  body: 'baseline',
-                  html_url: 'https://github.com/org/repo/issues/39#issuecomment-1',
-                  user: { login: 'op' },
-                  created_at: '2026-01-01T00:00:00Z',
-                },
-              ]
-            : [
-                {
-                  id: 1,
-                  body: 'baseline',
-                  html_url: 'https://github.com/org/repo/issues/39#issuecomment-1',
-                  user: { login: 'op' },
-                  created_at: '2026-01-01T00:00:00Z',
-                },
-                {
-                  id: 2,
-                  body: 'hello',
-                  html_url: 'https://github.com/org/repo/issues/39#issuecomment-2',
-                  user: { login: 'op' },
-                  created_at: '2026-01-02T00:00:00Z',
-                },
-              ];
-        return JSON.stringify(comments);
-      }
-      if (args[0] === 'search') {
-        return '[]';
-      }
-      throw new Error(`unexpected: ${args.join(' ')}`);
-    });
-
+    const { client, getCommentPolls } = createCommentPollingClient();
     const onUpdate = vi.fn();
     const monitor = createGitHubMonitor({
       issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
       debounceMs: 5000,
       pollIntervalMs: 1000,
-      runGhFn,
+      githubClient: client,
       onUpdate,
     });
 
     monitor.start();
     await drainAsync();
-    expect(commentPolls).toBe(1);
+    expect(getCommentPolls()).toBe(1);
 
     await vi.advanceTimersByTimeAsync(1000);
     await drainAsync();
-    expect(commentPolls).toBe(2);
+    expect(getCommentPolls()).toBe(2);
     expect(onUpdate).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(5000);
@@ -81,51 +96,14 @@ describe('createGitHubMonitor', () => {
   });
 
   it('flushes pending updates on stop', async () => {
-    let commentPolls = 0;
-    const runGhFn = vi.fn(async (args: string[]) => {
-      if (args[0] === 'api' && args[1]?.includes('/comments')) {
-        commentPolls++;
-        const comments =
-          commentPolls === 1
-            ? [
-                {
-                  id: 1,
-                  body: 'baseline',
-                  html_url: 'https://github.com/org/repo/issues/39#issuecomment-1',
-                  user: { login: 'op' },
-                  created_at: '2026-01-01T00:00:00Z',
-                },
-              ]
-            : [
-                {
-                  id: 1,
-                  body: 'baseline',
-                  html_url: 'https://github.com/org/repo/issues/39#issuecomment-1',
-                  user: { login: 'op' },
-                  created_at: '2026-01-01T00:00:00Z',
-                },
-                {
-                  id: 2,
-                  body: 'second',
-                  html_url: 'https://github.com/org/repo/issues/39#issuecomment-2',
-                  user: { login: 'op' },
-                  created_at: '2026-01-02T00:00:00Z',
-                },
-              ];
-        return JSON.stringify(comments);
-      }
-      if (args[0] === 'search') {
-        return '[]';
-      }
-      throw new Error(`unexpected: ${args.join(' ')}`);
-    });
-
+    const { client } = createCommentPollingClient();
     const onUpdate = vi.fn();
     const monitor = createGitHubMonitor({
       issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
       debounceMs: 60_000,
       pollIntervalMs: 1000,
-      runGhFn,
+      githubClient: client,
       onUpdate,
     });
 
@@ -138,44 +116,44 @@ describe('createGitHubMonitor', () => {
   });
 
   it('notifies offline diffs on first poll when sidecar cursor is restored', async () => {
-    const runGhFn = vi.fn(async (args: string[]) => {
-      if (args[0] === 'api' && args[1]?.includes('/comments')) {
-        return JSON.stringify([
-          {
-            id: 100,
-            body: 'seen before stop',
-            html_url: 'https://github.com/org/repo/issues/39#issuecomment-100',
-            user: { login: 'op' },
-            created_at: '2026-01-01T00:00:00Z',
-          },
-          {
-            id: 101,
-            body: 'arrived while session was down',
-            html_url: 'https://github.com/org/repo/issues/39#issuecomment-101',
-            user: { login: 'op' },
-            created_at: '2026-01-02T00:00:00Z',
-          },
-        ]);
-      }
-      if (args[0] === 'search') {
-        return '[]';
-      }
-      throw new Error(`unexpected: ${args.join(' ')}`);
-    });
+    const client: GitHubClient = {
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn().mockResolvedValue([
+        {
+          id: 100,
+          body: 'seen before stop',
+          html_url: 'https://github.com/org/repo/issues/39#issuecomment-100',
+          user: { login: 'op' },
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 101,
+          body: 'arrived while session was down',
+          html_url: 'https://github.com/org/repo/issues/39#issuecomment-101',
+          user: { login: 'op' },
+          created_at: '2026-01-02T00:00:00Z',
+        },
+      ]),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([]),
+      listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+      getStatusCheckRollup: vi.fn().mockResolvedValue([]),
+    };
 
     const onUpdate = vi.fn();
     const monitor = createGitHubMonitor({
       issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
       cursor: { lastIssueCommentId: '100', pullRequests: {} },
       debounceMs: 100,
       pollIntervalMs: 60_000,
-      runGhFn,
+      githubClient: client,
       onUpdate,
     });
 
     monitor.start();
     await drainAsync();
-    expect(runGhFn).toHaveBeenCalledTimes(2);
+    expect(client.listIssueComments).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(100);
     expect(onUpdate).toHaveBeenCalledTimes(1);
@@ -190,31 +168,48 @@ describe('createGitHubMonitor', () => {
   it('aborts in-flight poll when stop exceeds stopPollWaitMs', async () => {
     vi.useRealTimers();
     let pollResolve: (() => void) | undefined;
-    const runGhFn = vi.fn(
-      () =>
-        new Promise<string>((resolve) => {
-          pollResolve = () => resolve('[]');
-        }),
-    );
+    const client: GitHubClient = {
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            pollResolve = () =>
+              resolve([
+                {
+                  id: 1,
+                  body: 'baseline',
+                  html_url: 'https://github.com/org/repo/issues/39#issuecomment-1',
+                  user: { login: 'op' },
+                  created_at: '2026-01-01T00:00:00Z',
+                },
+              ]);
+          }),
+      ),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([]),
+      listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+      getStatusCheckRollup: vi.fn().mockResolvedValue([]),
+    };
 
     const onUpdate = vi.fn();
     const monitor = createGitHubMonitor({
       issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
       debounceMs: 60_000,
       pollIntervalMs: 60_000,
       stopPollWaitMs: 50,
-      runGhFn,
+      githubClient: client,
       onUpdate,
     });
 
     monitor.start();
     await drainAsync();
-    expect(runGhFn).toHaveBeenCalledTimes(1);
+    expect(client.listIssueComments).toHaveBeenCalledTimes(1);
 
     const stopPromise = monitor.stop();
     await stopPromise;
 
-    expect(runGhFn).toHaveBeenCalledTimes(1);
+    expect(client.listIssueComments).toHaveBeenCalledTimes(1);
     pollResolve?.();
     await drainAsync();
     vi.useFakeTimers();

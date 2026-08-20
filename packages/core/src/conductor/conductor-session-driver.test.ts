@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import * as issueContextModule from '../github/issue-context.js';
 import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
@@ -36,6 +37,7 @@ function createDriverOptions(input: {
   return {
     issueUrl: TEST_ISSUE.url,
     profile: { workers: [] },
+    ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
     conductorHandle,
     sendReconnect: {
       conductorOptions: { cwd: '/repo' },

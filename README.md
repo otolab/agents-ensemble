@@ -20,7 +20,7 @@ agents-ensemble は **SDK（conductor）** と **ACP（worker）** の2系統を
 |------|------|-----------|-------------|------------|
 | **conductor** | `@cursor/sdk` | `ensemble issue` | `ensemble auth login` | `CURSOR_API_KEY` |
 | **worker** | `agent acp` | `ensemble issue` の常駐 worker | `agent login` | `CURSOR_API_KEY`（子プロセスへ継承） |
-| **Issue 取得** | `gh` CLI | conductor が Issue 本文・コメントを読む | `gh auth login` | `GH_TOKEN` 等 |
+| **Issue 取得** | GitHub REST / GraphQL API | conductor が Issue 本文・コメントを読む・GitHub 監視 | `gh auth login` または `export GITHUB_TOKEN=...` | `GITHUB_TOKEN` / `GH_TOKEN` |
 
 GitHub トークンの解決順（環境変数は config より優先）と `gh auth token` フォールバックの可否は [docs/config.md](docs/config.md) を参照。テンプレはリポジトリ直下の [`config.example.yaml`](config.example.yaml)。
 
@@ -36,7 +36,9 @@ pnpm ensemble auth login
 pnpm ensemble auth status
 pnpm ensemble auth logout
 
-# Issue 取得用
+# Issue 取得用（GitHub API トークン。情報取得に gh CLI は不要）
+export GITHUB_TOKEN="ghp_..."
+# または gh auth login（config で gh auth token フォールバックが有効な場合）
 gh auth login
 ```
 

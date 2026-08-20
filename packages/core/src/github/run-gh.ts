@@ -1,10 +1,18 @@
 import { execFile, type ChildProcess } from 'node:child_process';
 
+/**
+ * @deprecated GitHub 情報取得には `GitHubClient` を使用する。
+ * `resolveGitHubAuthToken` の `gh auth token` フォールバックのみが残存利用者。
+ */
 export interface RunGhOptions {
   cwd?: string;
   signal?: AbortSignal;
 }
 
+/**
+ * @deprecated GitHub 情報取得には `GitHubClient` を使用する。
+ * `resolveGitHubAuthToken` の `gh auth token` フォールバックのみが残存利用者。
+ */
 export async function runGh(
   args: string[],
   options: RunGhOptions = {},

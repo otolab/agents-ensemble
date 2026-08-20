@@ -1,6 +1,11 @@
+import type { EnsembleConfig } from '../config/types.js';
 import type { IssueRef } from '../issue/issue-ref.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
-import { runGh } from './run-gh.js';
+import {
+  createGitHubClient,
+  type GitHubClient,
+  type CreateGitHubClientOptions,
+} from './github-client.js';
 
 export interface IssueComment {
   author: string;
@@ -17,28 +22,28 @@ export interface IssueContext {
   comments: IssueComment[];
 }
 
-interface GhIssueView {
-  title: string;
-  body: string;
-  state: string;
-  labels?: Array<{ name: string }>;
-  comments?: Array<{
-    author: { login: string };
-    body: string;
-    createdAt: string;
-  }>;
+export interface FetchIssueContextOptions {
+  ensembleConfig: EnsembleConfig;
+  githubClient?: GitHubClient;
+  createClientOptions?: Omit<CreateGitHubClientOptions, 'config'>;
 }
 
-export async function fetchIssueContext(issueUrl: string): Promise<IssueContext> {
+export async function fetchIssueContext(
+  issueUrl: string,
+  options: FetchIssueContextOptions,
+): Promise<IssueContext> {
   const issue = parseIssueUrl(issueUrl);
-  const stdout = await runGh([
-    'issue',
-    'view',
-    issue.url,
-    '--json',
-    'title,body,state,labels,comments',
+  const client =
+    options.githubClient ??
+    (await createGitHubClient({
+      config: options.ensembleConfig,
+      ...options.createClientOptions,
+    }));
+
+  const [data, comments] = await Promise.all([
+    client.getIssue(issue.owner, issue.repo, issue.number),
+    client.listIssueComments(issue.owner, issue.repo, issue.number),
   ]);
-  const data = JSON.parse(stdout) as GhIssueView;
 
   return {
     issue,
@@ -46,11 +51,10 @@ export async function fetchIssueContext(issueUrl: string): Promise<IssueContext>
     body: data.body ?? '',
     state: data.state,
     labels: (data.labels ?? []).map((label) => label.name),
-    comments: (data.comments ?? []).map((comment) => ({
-      author: comment.author.login,
+    comments: comments.map((comment) => ({
+      author: comment.user.login,
       body: comment.body,
-      createdAt: comment.createdAt,
+      createdAt: comment.created_at,
     })),
   };
 }
-

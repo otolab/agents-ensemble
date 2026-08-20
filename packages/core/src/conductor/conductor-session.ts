@@ -73,6 +73,8 @@ import {
   DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS,
   type GitHubMonitor,
 } from '../github/github-monitor.js';
+import { GITHUB_AUTH_HINT } from '../github/github-auth.js';
+import { resolveGitHubAuthToken } from '../github/resolve-github-auth-token.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import {
   canResumePostLoopForTurns,
@@ -190,6 +192,7 @@ export async function runConductorSession(
 ): Promise<ConductorSessionResult> {
   const ensembleConfig =
     options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
+  const githubAuth = await resolveGitHubAuthToken({ config: ensembleConfig });
   const maxTurns = resolveMaxTurns(options.maxTurns);
   const sessionLogger =
     options.sessionLogger ??
@@ -197,6 +200,12 @@ export async function runConductorSession(
       issueUrl: options.issueUrl,
       repoRoot: options.repoRoot,
     });
+  if (!githubAuth.token) {
+    sessionLogger.emit({
+      type: 'harness.warning',
+      message: GITHUB_AUTH_HINT,
+    });
+  }
   attachLegacySessionCallbacks(sessionLogger, options);
   const escalations: EscalationRecord[] = [];
   const openQuestions = new OpenQuestionRegistry();
@@ -558,7 +567,6 @@ export async function runConductorSession(
   if (!options.disableGitHubMonitor) {
     githubMonitor = createGitHubMonitor({
       issueUrl: options.issueUrl,
-      cwd: options.repoRoot,
       ensembleConfig,
       cursor: githubMonitorCursor,
       debounceMs:
@@ -677,6 +685,7 @@ export async function runConductorSession(
       const driverResult = await runConductorSessionDriver({
         issueUrl: options.issueUrl,
         profile: activeProfile,
+        ensembleConfig,
         conductorHandle,
         sendReconnect,
         eventQueue,

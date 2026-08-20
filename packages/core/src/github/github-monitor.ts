@@ -4,6 +4,8 @@ import {
   fetchGitHubUpdates,
   type FetchGitHubUpdatesInput,
 } from './fetch-github-updates.js';
+import { formatGitHubErrorMessage } from './github-auth.js';
+import type { GitHubClient } from './github-client.js';
 import {
   emptyGitHubMonitorCursor,
   isEmptyGitHubMonitorCursor,
@@ -11,7 +13,6 @@ import {
   type GitHubMonitorCursor,
 } from './github-monitor-cursor.js';
 import type { GitHubUpdateItem, GitHubUpdatePayload } from './github-update-types.js';
-import { runGh } from './run-gh.js';
 
 export const DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS = 30_000;
 export const DEFAULT_GITHUB_MONITOR_POLL_INTERVAL_MS = 60_000;
@@ -21,9 +22,8 @@ export const DEFAULT_GITHUB_MONITOR_STOP_POLL_WAIT_MS = 5_000;
 
 export interface GitHubMonitorOptions {
   issueUrl: string;
-  cwd?: string;
-  /** harness 設定。GitHub 認証解決（#222）で参照する。 */
-  ensembleConfig?: EnsembleConfig;
+  /** harness 設定。GitHub API 認証解決で参照する。 */
+  ensembleConfig: EnsembleConfig;
   cursor?: GitHubMonitorCursor;
   debounceMs?: number;
   pollIntervalMs?: number;
@@ -34,7 +34,7 @@ export interface GitHubMonitorOptions {
   onCursorChange?: (cursor: GitHubMonitorCursor) => void;
   onPollError?: (error: unknown) => void;
   shutdownSignal?: AbortSignal;
-  runGhFn?: typeof runGh;
+  githubClient?: GitHubClient;
 }
 
 export interface GitHubMonitor {
@@ -92,8 +92,8 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       const input: FetchGitHubUpdatesInput = {
         issueUrl: options.issueUrl,
         cursor,
-        cwd: options.cwd,
-        runGhFn: options.runGhFn,
+        ensembleConfig: options.ensembleConfig,
+        githubClient: options.githubClient,
         initialCursorPoll: needsBootstrapPoll,
         abortSignal: pollAbortController.signal,
       };
@@ -107,7 +107,9 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       }
     } catch (error) {
       if (!isAbortError(error)) {
-        options.onPollError?.(error);
+        options.onPollError?.(
+          new Error(formatGitHubErrorMessage(error, options.ensembleConfig)),
+        );
       }
     } finally {
       pollAbortController = undefined;
