@@ -66,6 +66,18 @@ spawn **前**に外部 CLI の存在も検証する（`ensemble issue` 起動経
 | `codex` | （adapter 内で Codex 認証） | optional 再 install 手順 |
 | `pi` | **`pi`**（`@earendil-works/pi-coding-agent`） | `pi` install を別メッセージで促す |
 
+### ACP `authenticate`（worker attach 時）
+
+ensemble は spawn 解決後、`initialize` の直後に preset ごとの authenticate を行う（`resolveAcpAuthenticateStrategy`）。
+
+| preset | authenticate | 前提 |
+|--------|--------------|------|
+| `cursor` | `cursor_login` | `agent login` / `CURSOR_API_KEY`（子プロセス env 継承） |
+| `codex` | `chat-gpt` | **`codex login` 済み**（Codex CLI と同じ ChatGPT セッションを再利用） |
+| `claude` | **skip** | **Claude Code CLI ログイン済み**（`claude-agent-acp` は terminal/gateway 以外の authenticate 未実装） |
+| `pi` | **skip** | **`pi` 側のモデル/API key 設定済み**（`pi-acp` の authenticate は no-op） |
+| `custom` | `agent acp` なら `cursor_login`、それ以外 skip | adapter 次第 |
+
 `custom`: profile または CLI で `command` 明示。`args` / `env` 任意。spawn 前に `command` が PATH にあるかのみチェック。
 
 ### `pi` preset の accepted limitation（#203）

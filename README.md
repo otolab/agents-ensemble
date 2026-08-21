@@ -93,7 +93,16 @@ ensemble issue <issue-url> --repo-root <path> --resume <agentId>   # または -
 
 ### worker（ACP）の認証
 
-worker は `spawn('agent', ['acp'])` で起動し、**子プロセスの `agent` が自分で認証**します。親（ensemble）は API key を渡しません。子プロセスは `process.env` を継承するため、`CURSOR_API_KEY` を設定していればそれも使えます。
+worker は preset ごとに別プロセスの ACP adapter を spawn する。**親（ensemble）は API key を渡さない**。子プロセスは `process.env` を継承する。
+
+| preset | 認証の前提 |
+|--------|-----------|
+| `cursor`（既定） | `agent login` または `CURSOR_API_KEY`（ACP `cursor_login`） |
+| `codex` | **`codex login` 済み**（ensemble は `chat-gpt` authenticate で Codex CLI と同じセッションを再利用） |
+| `claude` | **Claude Code CLI ログイン済み**（ensemble は ACP authenticate を skip） |
+| `pi` | **`pi` 側のモデル/API key 設定**（ensemble は authenticate skip。Cursor 認証とは無関係） |
+
+詳細は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md)。
 
 ### コマンド別の前提
 
@@ -223,7 +232,9 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 
 Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md) を参照。`claude` / `codex` / `pi` は `@agents-ensemble/core` の **optionalDependencies** 同梱 bin（→ PATH）を spawn し、**`npx` は使わない**（#229）。optional が欠落し PATH にも無い場合、spawn 前に install 手順付きで失敗する。
 
-`pi` preset は `pi` CLI（`@earendil-works/pi-coding-agent`）と adapter `pi-acp` の両方が必要。`pi-acp` があっても `pi` 不在なら別メッセージで促す。認証は Cursor worker とは別経路（ADR 参照）。
+**attach 時の認証**: `cursor` は `cursor_login`。`codex` は **`codex login` 済み**前提で `chat-gpt`（Codex CLI セッション再利用）。`claude` / `pi` は ACP authenticate を skip し、各 CLI の既存ログイン/設定を利用（上記 worker 認証表・ADR 0019）。
+
+`pi` preset は `pi` CLI（`@earendil-works/pi-coding-agent`）と adapter `pi-acp` の両方が必要。`pi-acp` があっても `pi` 不在なら別メッセージで促す。
 
 **optionalDependencies と `--no-optional`**
 

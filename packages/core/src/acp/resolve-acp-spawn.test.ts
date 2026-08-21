@@ -167,10 +167,12 @@ describe('profileWorkersToSessionSpecs', () => {
     expect(specs[0]?.spawn).toMatchObject({
       command: 'claude-agent-acp',
       args: [],
+      authenticate: { kind: 'skip' },
     });
     expect(specs[1]?.spawn).toMatchObject({
       command: 'codex-acp',
       args: [],
+      authenticate: { kind: 'method', methodId: 'chat-gpt' },
     });
     expect(specs[0]?.acpFingerprint?.preset).toBe('claude');
     expect(specs[1]?.acpFingerprint?.preset).toBe('codex');

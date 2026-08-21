@@ -52,6 +52,11 @@ export {
   validateWorkerAcpPrerequisites,
 } from './validate-acp-preset-prerequisites.js';
 export {
+  resolveAcpAuthenticateStrategy,
+  resolveBuiltinAcpAuthenticateStrategy,
+} from './resolve-acp-auth.js';
+export type { AcpAuthenticateStrategy } from './resolve-acp-auth.js';
+export {
   ENSEMBLE_DEFAULT_ACP_CLI_ENV,
   resolveBuiltinAcpPreset,
   resolveDefaultAcpSpawn,
