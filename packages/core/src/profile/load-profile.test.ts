@@ -113,6 +113,7 @@ agents:
     expect(specs[0]?.spawn).toMatchObject({
       command: 'claude-agent-acp',
       args: [],
+      authenticate: { kind: 'skip' },
     });
     expect(specs[0]?.acpFingerprint?.preset).toBe('claude');
   });
@@ -289,14 +290,22 @@ describe('profileWorkersToSessionSpecs', () => {
         name: 'ping-1',
         kind: 'ping',
         prompt: { instructions: ['pong'] },
-        spawn: { command: 'agent', args: ['acp'] },
+        spawn: {
+          command: 'agent',
+          args: ['acp'],
+          authenticate: { kind: 'method', methodId: 'cursor_login' },
+        },
         acpFingerprint: { preset: 'cursor', command: 'agent', args: ['acp'] },
       },
       {
         name: 'main',
         kind: 'other',
         prompt: { instructions: ['fallback'] },
-        spawn: { command: 'agent', args: ['acp'] },
+        spawn: {
+          command: 'agent',
+          args: ['acp'],
+          authenticate: { kind: 'method', methodId: 'cursor_login' },
+        },
         acpFingerprint: { preset: 'cursor', command: 'agent', args: ['acp'] },
       },
     ]);
