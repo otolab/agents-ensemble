@@ -1,5 +1,22 @@
 # @agents-ensemble/cli
 
+## 0.5.0
+
+### Minor Changes
+
+- 1c2df6e: `.ensemble/config.yaml` を Phase 1 キー（profile / conductor / acp / session / github.monitor）まで拡張し、解決順 `CLI > env > project config > user config > コード default` を `resolve*Setting` とテストで統一。`ensemble issue` が config 既定を参照する。ドキュメント・ADR 0020 追加。
+- 825ddb6: GitHub 情報取得を `gh` CLI から REST / GraphQL API 直接呼び出しへ移行。`GITHUB_TOKEN` / `GH_TOKEN` 設定時は `gh` 未インストールでも Issue 取得・GitHub 監視が動作する。認証フォールバックとして `gh auth token` のみ残す。GitHub 認証失敗時は conductor 認証と区別された `[github-auth]` 復旧ヒントを表示する。
+
+### Patch Changes
+
+- 07ce6c8: built-in ACP preset（`claude` / `codex` / `pi`）の `npx` 起動を廃止し、`optionalDependencies` 同梱 bin → PATH → 明示エラーの順で spawn する。spawn 前に外部 CLI（`agent` / `pi` 等）の存在チェックと install 手順付き fail fast を追加。
+- Updated dependencies [07ce6c8]
+- Updated dependencies [1c2df6e]
+- Updated dependencies [8b8fbaf]
+- Updated dependencies [825ddb6]
+- Updated dependencies [c90fe10]
+  - @agents-ensemble/core@0.5.0
+
 ## 0.4.1
 
 ### Patch Changes
