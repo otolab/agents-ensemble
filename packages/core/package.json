@@ -38,6 +38,11 @@
     "@modular-prompt/core": "0.3.0",
     "js-yaml": "4.1.0"
   },
+  "optionalDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.70.0",
+    "@agentclientprotocol/codex-acp": "1.6.2",
+    "pi-acp": "0.0.33"
+  },
   "files": [
     "dist"
   ],

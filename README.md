@@ -221,7 +221,13 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 | 環境変数 | `ENSEMBLE_DEFAULT_ACP_CLI=claude` |
 | システムデフォルト | `cursor`（= `agent acp`） |
 
-Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md) を参照。`pi` preset は `pi` CLI（`@earendil-works/pi-coding-agent`）とコミュニティ adapter `pi-acp` が必要。認証は Cursor worker とは別経路（ADR 参照）。
+Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md) を参照。`claude` / `codex` / `pi` は `@agents-ensemble/core` の **optionalDependencies** 同梱 bin（→ PATH）を spawn し、**`npx` は使わない**（#229）。optional が欠落し PATH にも無い場合、spawn 前に install 手順付きで失敗する。
+
+`pi` preset は `pi` CLI（`@earendil-works/pi-coding-agent`）と adapter `pi-acp` の両方が必要。`pi-acp` があっても `pi` 不在なら別メッセージで促す。認証は Cursor worker とは別経路（ADR 参照）。
+
+**optionalDependencies と `--no-optional`**
+
+通常の `pnpm install` / `npm i -g @agents-ensemble/cli` では optional パッケージ（`@agentclientprotocol/codex-acp` 等）の install が試行される。`pnpm install --no-optional` や optional install 失敗時は bundled bin が入らない。PATH 上に同名 bin（例: `npm i -g @agentclientprotocol/codex-acp`）が無ければ、`ensemble issue` 起動前（worker attach 前）に `[acp]` 付きエラーと install 手順が stderr に出る。
 
 **CLI 出力（TTY 時）** — 詳細は [docs/session-logging.md](docs/session-logging.md)。
 

@@ -39,16 +39,16 @@ const BUILTIN_PRESETS: Record<BuiltinAcpPresetId, Omit<ResolvedAcpSpawn, 'preset
     args: ['acp'],
   },
   claude: {
-    command: 'npx',
-    args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+    command: 'claude-agent-acp',
+    args: [],
   },
   codex: {
-    command: 'npx',
-    args: ['-y', '@agentclientprotocol/codex-acp'],
+    command: 'codex-acp',
+    args: [],
   },
   pi: {
-    command: 'npx',
-    args: ['-y', 'pi-acp'],
+    command: 'pi-acp',
+    args: [],
   },
 };
 
