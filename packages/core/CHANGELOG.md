@@ -1,5 +1,11 @@
 # @agents-ensemble/core
 
+## 0.5.1
+
+### Patch Changes
+
+- 54540a6: worker ACP attach 時の `authenticate` を preset 別に解決する。`codex` は `chat-gpt` で Codex CLI ログインを再利用、`claude` / `pi` は skip、`cursor` は `cursor_login` 維持。
+
 ## 0.5.0
 
 ### Minor Changes
