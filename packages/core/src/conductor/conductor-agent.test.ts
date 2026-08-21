@@ -44,6 +44,8 @@ describe('ConductorAgent.send', () => {
   });
 
   it('uses default model id when modelId is omitted', async () => {
+    const original = process.env.CONDUCTOR_MODEL_ID;
+    delete process.env.CONDUCTOR_MODEL_ID;
     mockCreate.mockResolvedValue({
       agentId: 'agent-1',
       send: mockSend,
@@ -60,6 +62,11 @@ describe('ConductorAgent.send', () => {
       );
     } finally {
       await conductor.close();
+      if (original === undefined) {
+        delete process.env.CONDUCTOR_MODEL_ID;
+      } else {
+        process.env.CONDUCTOR_MODEL_ID = original;
+      }
     }
   });
 

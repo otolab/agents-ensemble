@@ -1,5 +1,6 @@
 import type { SpawnAcpProcessOptions } from './acp-process.js';
 import type { Profile, ProfileAcpConfig } from '../profile/types.js';
+import type { EnsembleConfig } from '../config/types.js';
 
 /** Built-in ACP preset id（Phase 1）。拡張時は adapter / capability を別途追加可能。 */
 export type BuiltinAcpPresetId = 'cursor' | 'claude' | 'codex' | 'pi';
@@ -31,6 +32,7 @@ export interface DefaultAcpResolutionOptions {
   /** CLI `--default-acp-arg`（repeatable、custom 用） */
   defaultAcpArgs?: string[];
   env?: NodeJS.ProcessEnv;
+  config?: EnsembleConfig;
 }
 
 const BUILTIN_PRESETS: Record<BuiltinAcpPresetId, Omit<ResolvedAcpSpawn, 'preset'>> = {
@@ -220,6 +222,11 @@ export function resolveDefaultAcpSpawn(
       );
     }
     return resolveBuiltinAcpPreset(envPreset);
+  }
+
+  const configPreset = options.config?.acp.defaultPreset;
+  if (configPreset) {
+    return resolveBuiltinAcpPreset(configPreset);
   }
 
   return resolveBuiltinAcpPreset('cursor');

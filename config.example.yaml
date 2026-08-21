@@ -7,7 +7,34 @@
 # 実運用の config は gitignore 対象。token 等の秘密情報は書かないこと。
 # 詳細: docs/config.md
 
+profile:
+  # --profile 未指定時の team profile（名前またはパス）
+  default: implementer-and-reviewer
+
+conductor:
+  # conductor モデル id（CLI --model / CONDUCTOR_MODEL_ID より優先度低）
+  model: default
+
+acp:
+  # profile / worker に acp 未指定時の built-in preset
+  defaultPreset: cursor
+
+session:
+  # isolated: Issue 専用 worktree（既定） / in-repo: メイン worktree で直接作業
+  worktree: isolated
+  maxTurns:
+    tty: 0       # 0 = 無制限
+    nonTty: 5
+  postLoop:
+    wait: true   # TTY 時、自律ループ停止後に /exit まで待つ（--no-wait で上書き）
+
 github:
   auth:
     # GITHUB_TOKEN / GH_TOKEN が無いとき gh auth token を試すか（既定: true）
     allowGhAuthTokenFallback: true
+  monitor:
+    enabled: true
+    debounceMs: 30000
+    pollIntervalMs: 60000
+    activePollIntervalMs: 15000
+    stopPollWaitMs: 5000

@@ -89,6 +89,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0017](0017-conductor-send-lifecycle-events.md) | conductor send ライフサイクルイベントと Driver 非同期化 | accepted |
 | [0018](0018-team-profile-four-layer-resolution.md) | team-profile の 4 層配置と名前解決 | accepted |
 | [0019](0019-worker-acp-cli-presets.md) | Worker ACP CLI preset とデフォルト解決 | accepted |
+| [0020](0020-ensemble-config-setting-resolution.md) | ensemble config.yaml の設定解決順（Phase 1） | accepted |
 
 ## 追加するとき
 

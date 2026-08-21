@@ -38,6 +38,28 @@ describe('resolveDefaultAcpSpawn', () => {
     ).toMatchObject({ preset: 'codex', command: 'codex-acp', args: [] });
   });
 
+  it('prefers env over config when CLI is unset', () => {
+    expect(
+      resolveDefaultAcpSpawn({
+        env: { [ENSEMBLE_DEFAULT_ACP_CLI_ENV]: 'codex' },
+        config: {
+          acp: { defaultPreset: 'claude' },
+        } as import('../config/types.js').EnsembleConfig,
+      }),
+    ).toMatchObject({ preset: 'codex' });
+  });
+
+  it('uses config preset when CLI and env are unset', () => {
+    expect(
+      resolveDefaultAcpSpawn({
+        env: {},
+        config: {
+          acp: { defaultPreset: 'claude' },
+        } as import('../config/types.js').EnsembleConfig,
+      }),
+    ).toMatchObject({ preset: 'claude' });
+  });
+
   it('resolves pi preset via CLI', () => {
     expect(
       resolveDefaultAcpSpawn({

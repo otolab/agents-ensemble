@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockTuiHost = vi.hoisted(() => {
   const bindOperatorInput = vi.fn(() => () => {});
@@ -26,6 +26,7 @@ vi.mock('@agents-ensemble/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agents-ensemble/core')>();
   return {
     ...actual,
+    loadEnsembleConfig: vi.fn(async () => actual.DEFAULT_ENSEMBLE_CONFIG),
     loadProfile: vi.fn(),
     runIssueSession: vi.fn(),
     SessionLogger: vi.fn(),
@@ -435,6 +436,68 @@ describe('executeIssueCommand maxTurns wiring', () => {
       expect.not.objectContaining({
         waitForOperatorExit: true,
       }),
+    );
+  });
+});
+
+describe('executeIssueCommand conductor model wiring', () => {
+  const originalConductorModelId = process.env.CONDUCTOR_MODEL_ID;
+
+  afterEach(() => {
+    if (originalConductorModelId === undefined) {
+      delete process.env.CONDUCTOR_MODEL_ID;
+    } else {
+      process.env.CONDUCTOR_MODEL_ID = originalConductorModelId;
+    }
+  });
+
+  it('passes CONDUCTOR_MODEL_ID to runIssueSession when --model is omitted', async () => {
+    process.env.CONDUCTOR_MODEL_ID = 'legacy-model';
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand(issueUrl, baseOptions, {
+      isOperatorInputInteractive: () => false,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: 'legacy-model' }),
+    );
+  });
+
+  it('prefers CLI --model over CONDUCTOR_MODEL_ID', async () => {
+    process.env.CONDUCTOR_MODEL_ID = 'legacy-model';
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand(
+      issueUrl,
+      { ...baseOptions, model: 'cli-model' },
+      {
+        isOperatorInputInteractive: () => false,
+        runIssueSession,
+        loadProfile,
+        SessionLogger,
+      },
+    );
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: 'cli-model' }),
     );
   });
 });

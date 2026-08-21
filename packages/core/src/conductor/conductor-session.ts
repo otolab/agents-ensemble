@@ -83,9 +83,9 @@ import type { OperatorInputBinding } from './operator-input-binding.js';
 import { submitOperatorInput } from './submit-operator-input.js';
 import {
   createGitHubMonitor,
-  DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS,
   type GitHubMonitor,
 } from '../github/github-monitor.js';
+import { resolveGitHubMonitorEnabled } from '../config/resolve-settings.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import { GITHUB_AUTH_HINT } from '../github/github-auth.js';
 import { resolveGitHubAuthToken } from '../github/resolve-github-auth-token.js';
@@ -590,15 +590,24 @@ export async function runConductorSession(
   const postLoopGate = createOperatorPostLoopGate();
 
   let githubMonitor: GitHubMonitor | undefined;
-  if (!options.disableGitHubMonitor) {
+  const monitorDefaults = ensembleConfig.github.monitor;
+  if (
+    resolveGitHubMonitorEnabled({
+      cliDisabled: options.disableGitHubMonitor,
+      config: ensembleConfig,
+    })
+  ) {
     githubMonitor = createGitHubMonitor({
       issueUrl: options.issueUrl,
       ensembleConfig,
       cursor: githubMonitorCursor,
-      debounceMs:
-        options.githubMonitorDebounceMs ?? DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS,
-      pollIntervalMs: options.githubMonitorPollIntervalMs,
-      activePollIntervalMs: options.githubMonitorActivePollIntervalMs,
+      debounceMs: options.githubMonitorDebounceMs ?? monitorDefaults.debounceMs,
+      pollIntervalMs:
+        options.githubMonitorPollIntervalMs ?? monitorDefaults.pollIntervalMs,
+      activePollIntervalMs:
+        options.githubMonitorActivePollIntervalMs ??
+        monitorDefaults.activePollIntervalMs,
+      stopPollWaitMs: monitorDefaults.stopPollWaitMs,
       shutdownSignal,
       onCursorChange: (cursor) => {
         githubMonitorCursor = cursor;

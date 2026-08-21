@@ -1,16 +1,22 @@
 import { resolve } from 'node:path';
 import {
   findLatestSessionSidecarForIssue,
+  loadEnsembleConfig,
   loadProfile,
   resolveConductorModelId,
+  resolveGitHubMonitorDebounceMs,
+  resolveGitHubMonitorEnabled,
+  resolveSessionMaxTurns,
+  resolveSessionPostLoopWait,
+  resolveSessionWorktreeMode,
   runIssueSession,
   SessionLogger,
   type ConductorSessionResult,
+  type EnsembleConfig,
 } from '@agents-ensemble/core';
 import { bindAsyncOperatorInput, notifyOperatorInputReprompt } from './async-operator-input.js';
 import { isOperatorInputInteractive, isOperatorInputTty } from './prompt-operator-input.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
-import { resolveCliMaxTurns } from './resolve-cli-max-turns.js';
 import { createSessionDisplaySink } from './display/create-session-display-sink.js';
 import { selectSessionDisplayBackend } from './display/select-session-display-backend.js';
 import { createHarnessSink, createObservationSink } from './session-sinks.js';
@@ -26,7 +32,7 @@ export interface IssueCommandOptions {
   maxTurns?: number;
   noMaxTurns?: boolean;
   noWait?: boolean;
-  worktree: string;
+  worktree?: string;
   defaultAcpCli?: string;
   defaultAcpCommand?: string;
   defaultAcpArgs?: string[];
@@ -40,6 +46,7 @@ export interface IssueCommandDeps {
   isOperatorInputTty?: typeof isOperatorInputTty;
   runIssueSession?: typeof runIssueSession;
   loadProfile?: typeof loadProfile;
+  loadEnsembleConfig?: typeof loadEnsembleConfig;
   SessionLogger?: typeof SessionLogger;
   findLatestSessionSidecarForIssue?: typeof findLatestSessionSidecarForIssue;
 }
@@ -87,11 +94,13 @@ export async function resolveResumeAgentIdFromOptions(
 export function resolveIssueSessionMaxTurns(
   options: Pick<IssueCommandOptions, 'maxTurns' | 'noMaxTurns'>,
   interactive: boolean,
+  config?: EnsembleConfig,
 ): number {
-  return resolveCliMaxTurns({
+  return resolveSessionMaxTurns({
     interactive,
-    noMaxTurns: options.noMaxTurns,
-    maxTurns: options.maxTurns,
+    cliNoMaxTurns: options.noMaxTurns,
+    cliMaxTurns: options.maxTurns,
+    config,
   });
 }
 
@@ -105,14 +114,22 @@ export async function executeIssueCommand(
   const isTty = deps.isOperatorInputTty ?? isOperatorInputTty;
   const runSession = deps.runIssueSession ?? runIssueSession;
   const loadProfileFn = deps.loadProfile ?? loadProfile;
+  const loadConfig = deps.loadEnsembleConfig ?? loadEnsembleConfig;
   const SessionLoggerCtor = deps.SessionLogger ?? SessionLogger;
 
-  const workerWorktreeMode = parseWorktreeMode(options.worktree);
+  const repoRoot = resolve(options.repoRoot);
+  const ensembleConfig = await loadConfig(repoRoot);
+  const workerWorktreeMode = parseWorktreeMode(
+    resolveSessionWorktreeMode({
+      cliWorktree: options.worktree,
+      config: ensembleConfig,
+    }),
+  );
   const { profile, profilePath } = await loadProfileFn({
     profile: options.profile,
-    cwd: resolve(options.repoRoot),
+    cwd: repoRoot,
+    config: ensembleConfig,
   });
-  const repoRoot = resolve(options.repoRoot);
   const { resumeAgentId, continuedFromSidecar } = await resolveResumeAgentIdFromOptions(
     options,
     { issueUrl, repoRoot },
@@ -147,7 +164,19 @@ export async function executeIssueCommand(
     });
   }
 
-  const maxTurns = resolveIssueSessionMaxTurns(options, interactive);
+  const maxTurns = resolveIssueSessionMaxTurns(options, interactive, ensembleConfig);
+  const postLoopWait = resolveSessionPostLoopWait({
+    cliNoWait: options.noWait,
+    config: ensembleConfig,
+  });
+  const githubMonitorEnabled = resolveGitHubMonitorEnabled({
+    cliDisabled: options.githubMonitor === false,
+    config: ensembleConfig,
+  });
+  const githubMonitorDebounceMs = resolveGitHubMonitorDebounceMs({
+    cliDebounceMs: options.githubMonitorDebounceMs,
+    config: ensembleConfig,
+  });
 
   const defaultAcp =
     options.defaultAcpCli ||
@@ -172,22 +201,18 @@ export async function executeIssueCommand(
       resumeAgentId,
       profile,
       profilePath,
-      modelId: resolveConductorModelId(options.model),
+      modelId: resolveConductorModelId(options.model, { config: ensembleConfig }),
       maxTurns,
       workerWorktreeMode,
       sessionLogger,
-      ...(options.githubMonitor === false
-        ? { disableGitHubMonitor: true }
-        : {}),
-      ...(options.githubMonitorDebounceMs !== undefined
-        ? { githubMonitorDebounceMs: options.githubMonitorDebounceMs }
-        : {}),
-      ...(defaultAcp ? { defaultAcp } : {}),
+      ...(githubMonitorEnabled ? {} : { disableGitHubMonitor: true }),
+      githubMonitorDebounceMs,
+      ...(defaultAcp ? { defaultAcp: { ...defaultAcp, config: ensembleConfig } } : { defaultAcp: { config: ensembleConfig } }),
       ...(interactive
         ? {
             bindOperatorInput: tuiHost?.bindOperatorInput ?? bindAsyncOperatorInput,
             continueOnConductorError: true,
-            ...(isTty() && !options.noWait
+            ...(isTty() && postLoopWait
               ? {
                   waitForOperatorExit: true,
                 }

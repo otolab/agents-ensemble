@@ -350,6 +350,27 @@ describe('resolveProfileRef', () => {
     ).toBe('env-profile');
   });
 
+  it('prefers env over config when CLI is omitted', () => {
+    expect(
+      resolveProfileRef({
+        env: { [ENSEMBLE_DEFAULT_PROFILE_ENV]: 'env-profile' },
+        config: {
+          profile: { default: 'config-profile' },
+        } as import('../config/types.js').EnsembleConfig,
+      }),
+    ).toBe('env-profile');
+  });
+
+  it('uses config when CLI and env are omitted', () => {
+    expect(
+      resolveProfileRef({
+        config: {
+          profile: { default: 'config-profile' },
+        } as import('../config/types.js').EnsembleConfig,
+      }),
+    ).toBe('config-profile');
+  });
+
   it('treats empty env as unset', () => {
     expect(
       resolveProfileRef({
