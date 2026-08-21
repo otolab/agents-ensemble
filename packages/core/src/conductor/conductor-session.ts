@@ -19,8 +19,21 @@ import {
 import { createResolvePermissionTool } from '../permission/resolve-permission-tool.js';
 import type { Profile, ResolvedProfile } from '../profile/types.js';
 import type { DefaultAcpResolutionOptions, AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
+import {
+  acpSpawnFingerprint,
+  resolveWorkerAcpSpawn,
+  resolvedAcpSpawnToOptions,
+} from '../acp/resolve-acp-spawn.js';
+import {
+  finalizeResolvedAcpSpawn,
+  validateWorkerAcpPrerequisites,
+} from '../acp/validate-acp-preset-prerequisites.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
-import { profileWorkersToSessionSpecs, sessionStateFromProfile } from '../profile/types.js';
+import {
+  profileWorkersToSessionSpecs,
+  sessionStateFromProfile,
+  type SessionWorkerSpec,
+} from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
@@ -287,6 +300,18 @@ export async function runConductorSession(
     defaultAcp: options.defaultAcp,
     spawnBase,
   });
+  if (workers.length > 0) {
+    validateWorkerAcpPrerequisites(
+      workers.map((worker) =>
+        resolveWorkerAcpSpawn({
+          profileAcp: activeProfile.acp,
+          workerAcp: activeProfile.workers.find((w) => w.name === worker.name)?.acp,
+          defaultOptions: options.defaultAcp,
+        }),
+      ),
+    );
+    finalizeSessionWorkerSpecs(workers, activeProfile, options.defaultAcp);
+  }
   const workerAcpFingerprints = new Map(
     workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
   );
@@ -1029,4 +1054,22 @@ function attachLegacySessionCallbacks(
         break;
     }
   });
+}
+
+function finalizeSessionWorkerSpecs(
+  workers: SessionWorkerSpec[],
+  profile: ResolvedProfile,
+  defaultAcp?: DefaultAcpResolutionOptions,
+): void {
+  for (const worker of workers) {
+    const profileWorker = profile.workers.find((entry) => entry.name === worker.name);
+    const resolved = resolveWorkerAcpSpawn({
+      profileAcp: profile.acp,
+      workerAcp: profileWorker?.acp,
+      defaultOptions: defaultAcp,
+    });
+    const finalized = finalizeResolvedAcpSpawn(resolved);
+    worker.spawn = resolvedAcpSpawnToOptions(finalized, worker.spawn);
+    worker.acpFingerprint = acpSpawnFingerprint(finalized);
+  }
 }

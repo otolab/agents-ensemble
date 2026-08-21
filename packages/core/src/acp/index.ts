@@ -33,6 +33,25 @@ export {
   runAcpSession,
 } from './acp-process.js';
 export {
+  ACP_PRESET_BIN_NAMES,
+  ACP_PRESET_EXTERNAL_CLI,
+  ACP_PRESET_OPTIONAL_PACKAGES,
+} from './acp-preset-bins.js';
+export {
+  resolveAcpBin,
+  resolveAcpBinFromPath,
+  resolveBundledAcpBin,
+} from './resolve-bundled-acp-bin.js';
+export {
+  AcpPresetPrerequisiteError,
+  finalizeResolvedAcpSpawn,
+  formatAcpExternalCliInstallHint,
+  formatAcpPresetInstallHint,
+  resolveAcpSpawnExecutable,
+  validateAcpPresetPrerequisites,
+  validateWorkerAcpPrerequisites,
+} from './validate-acp-preset-prerequisites.js';
+export {
   ENSEMBLE_DEFAULT_ACP_CLI_ENV,
   resolveBuiltinAcpPreset,
   resolveDefaultAcpSpawn,

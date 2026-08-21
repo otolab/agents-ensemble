@@ -26,8 +26,8 @@ describe('openWorkerAcpSession resume spawn validation', () => {
         },
         currentAcpSpawn: {
           preset: 'claude',
-          command: 'npx',
-          args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+          command: 'claude-agent-acp',
+          args: [],
         },
       }),
     ).rejects.toThrow(/resume ACP spawn mismatch/);
@@ -52,8 +52,8 @@ describe('openWorkerAcpSession resume spawn validation', () => {
         resumeAcpSessionId: 'session-1',
         expectedResumeAcpSpawn: {
           preset: 'pi',
-          command: 'npx',
-          args: ['-y', 'pi-acp'],
+          command: 'pi-acp',
+          args: [],
         },
         currentAcpSpawn: {
           preset: 'cursor',

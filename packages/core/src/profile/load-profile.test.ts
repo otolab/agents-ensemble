@@ -111,8 +111,8 @@ agents:
     expect(profile.acp).toEqual({ preset: 'claude' });
     const specs = profileWorkersToSessionSpecs(profile);
     expect(specs[0]?.spawn).toMatchObject({
-      command: 'npx',
-      args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+      command: 'claude-agent-acp',
+      args: [],
     });
     expect(specs[0]?.acpFingerprint?.preset).toBe('claude');
   });

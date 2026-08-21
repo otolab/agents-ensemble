@@ -4,6 +4,7 @@ import {
   acpSpawnFingerprint,
   assertAcpSpawnMatchesResume,
   resolveAcpConfig,
+  resolveBuiltinAcpPreset,
   resolveDefaultAcpSpawn,
   resolveWorkerAcpSpawn,
   resolveWorkerAcpSpawns,
@@ -26,7 +27,7 @@ describe('resolveDefaultAcpSpawn', () => {
         defaultAcpCli: 'claude',
         env: { [ENSEMBLE_DEFAULT_ACP_CLI_ENV]: 'codex' },
       }),
-    ).toMatchObject({ preset: 'claude', command: 'npx' });
+    ).toMatchObject({ preset: 'claude', command: 'claude-agent-acp', args: [] });
   });
 
   it('uses env when CLI is unset', () => {
@@ -34,7 +35,7 @@ describe('resolveDefaultAcpSpawn', () => {
       resolveDefaultAcpSpawn({
         env: { [ENSEMBLE_DEFAULT_ACP_CLI_ENV]: 'codex' },
       }),
-    ).toMatchObject({ preset: 'codex' });
+    ).toMatchObject({ preset: 'codex', command: 'codex-acp', args: [] });
   });
 
   it('resolves pi preset via CLI', () => {
@@ -44,8 +45,8 @@ describe('resolveDefaultAcpSpawn', () => {
       }),
     ).toEqual({
       preset: 'pi',
-      command: 'npx',
-      args: ['-y', 'pi-acp'],
+      command: 'pi-acp',
+      args: [],
     });
   });
 
@@ -56,8 +57,8 @@ describe('resolveDefaultAcpSpawn', () => {
       }),
     ).toMatchObject({
       preset: 'pi',
-      command: 'npx',
-      args: ['-y', 'pi-acp'],
+      command: 'pi-acp',
+      args: [],
     });
   });
 
@@ -75,6 +76,16 @@ describe('resolveDefaultAcpSpawn', () => {
   });
 });
 
+describe('resolveBuiltinAcpPreset', () => {
+  it('does not use npx for built-in presets', () => {
+    for (const preset of ['claude', 'codex', 'pi'] as const) {
+      const resolved = resolveBuiltinAcpPreset(preset);
+      expect(resolved.command).not.toBe('npx');
+      expect(resolved.args).not.toContain('-y');
+    }
+  });
+});
+
 describe('resolveWorkerAcpSpawn', () => {
   it('uses profile worker acp over profile default and CLI', () => {
     expect(
@@ -83,7 +94,7 @@ describe('resolveWorkerAcpSpawn', () => {
         workerAcp: { preset: 'claude' },
         defaultOptions: { defaultAcpCli: 'cursor' },
       }),
-    ).toMatchObject({ preset: 'claude' });
+    ).toMatchObject({ preset: 'claude', command: 'claude-agent-acp' });
   });
 
   it('inherits profile acp when worker has no acp block', () => {
@@ -92,7 +103,7 @@ describe('resolveWorkerAcpSpawn', () => {
         profileAcp: { preset: 'codex' },
         defaultOptions: { defaultAcpCli: 'cursor' },
       }),
-    ).toMatchObject({ preset: 'codex' });
+    ).toMatchObject({ preset: 'codex', command: 'codex-acp' });
   });
 
   it('merges profile and worker args for built-in preset', () => {
@@ -108,7 +119,7 @@ describe('resolveWorkerAcpSpawn', () => {
       resolveWorkerAcpSpawn({
         defaultOptions: { defaultAcpCli: 'claude' },
       }),
-    ).toMatchObject({ preset: 'claude' });
+    ).toMatchObject({ preset: 'claude', command: 'claude-agent-acp' });
   });
 });
 
@@ -132,12 +143,12 @@ describe('profileWorkersToSessionSpecs', () => {
       defaultAcp: { defaultAcpCli: 'cursor' },
     });
     expect(specs[0]?.spawn).toMatchObject({
-      command: 'npx',
-      args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+      command: 'claude-agent-acp',
+      args: [],
     });
     expect(specs[1]?.spawn).toMatchObject({
-      command: 'npx',
-      args: ['-y', '@agentclientprotocol/codex-acp'],
+      command: 'codex-acp',
+      args: [],
     });
     expect(specs[0]?.acpFingerprint?.preset).toBe('claude');
     expect(specs[1]?.acpFingerprint?.preset).toBe('codex');
@@ -155,8 +166,8 @@ describe('assertAcpSpawnMatchesResume', () => {
         }),
         actual: {
           preset: 'claude',
-          command: 'npx',
-          args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+          command: 'claude-agent-acp',
+          args: [],
         },
         workerName: 'implementer',
       }),
@@ -166,8 +177,8 @@ describe('assertAcpSpawnMatchesResume', () => {
   it('accepts matching pi preset during resume', () => {
     const piSpawn = {
       preset: 'pi' as const,
-      command: 'npx',
-      args: ['-y', 'pi-acp'],
+      command: 'pi-acp',
+      args: [],
     };
     expect(() =>
       assertAcpSpawnMatchesResume({

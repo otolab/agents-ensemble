@@ -39,11 +39,34 @@ worker の `acp` は profile `acp` とシャローマージ（`args` は連結�
 | preset | command | args |
 |--------|---------|------|
 | `cursor` | `agent` | `acp` |
-| `claude` | `npx` | `-y`, `@agentclientprotocol/claude-agent-acp` |
-| `codex` | `npx` | `-y`, `@agentclientprotocol/codex-acp` |
-| `pi` | `npx` | `-y`, `pi-acp` |
+| `claude` | `claude-agent-acp` | （なし） |
+| `codex` | `codex-acp` | （なし） |
+| `pi` | `pi-acp` | （なし） |
 
-`custom`: profile または CLI で `command` 明示。`args` / `env` 任意。
+`claude` / `codex` / `pi` は **`npx` を使わない**（#229）。spawn 前に bin を次の順で解決する。
+
+1. `@agents-ensemble/core` の `optionalDependencies` 同梱 bin（ensemble install ルートから `createRequire` + `accessSync`）
+2. PATH 上の同名 bin（利用者が global install した場合）
+3. 明示エラー + install 手順（spawn 前 fail fast。**npx フォールバックなし**）
+
+| preset | optional パッケージ | bin |
+|--------|-------------------|-----|
+| `claude` | `@agentclientprotocol/claude-agent-acp` | `claude-agent-acp` |
+| `codex` | `@agentclientprotocol/codex-acp` | `codex-acp` |
+| `pi` | `pi-acp` | `pi-acp` |
+
+`pnpm install --no-optional` や optional install 失敗時は bundled bin が欠落する。PATH に同名 bin が無ければ spawn 前に install 手順付きで失敗する（README 参照）。
+
+spawn **前**に外部 CLI の存在も検証する（`ensemble issue` 起動経路、worker attach 前）。
+
+| preset | 外部 CLI（PATH） | 欠落時 |
+|--------|-----------------|--------|
+| `cursor` | `agent` | Cursor Agent CLI install / `agent login` を促す |
+| `claude` | （adapter 内で Claude Code 前提） | optional 再 install 手順 |
+| `codex` | （adapter 内で Codex 認証） | optional 再 install 手順 |
+| `pi` | **`pi`**（`@earendil-works/pi-coding-agent`） | `pi` install を別メッセージで促す |
+
+`custom`: profile または CLI で `command` 明示。`args` / `env` 任意。spawn 前に `command` が PATH にあるかのみチェック。
 
 ### `pi` preset の accepted limitation（#203）
 
@@ -53,7 +76,8 @@ worker の `acp` は profile `acp` とシャローマージ（`args` は連結�
 |------|------|
 | 前提 | `pi` CLI（`@earendil-works/pi-coding-agent` v0.80.4+）が PATH にあること。モデル/API key は `pi` 側で別途設定 |
 | 認証 | Cursor `agent login` / `CURSOR_API_KEY` とは無関係。Terminal Auth（`pi-acp --terminal-login`）または `pi` 直接設定 |
-| 初回起動 | `npx` 経由のためネットワーク依存（`claude` / `codex` と同趣旨） |
+| ACP adapter | `pi-acp` は core の optionalDependencies 同梱 bin → PATH の順で解決（`npx` 不使用） |
+| spawn 前検証 | `pi-acp` があっても `pi` 不在なら別メッセージで fail fast |
 | ACP 非対応 | filesystem delegation（`fs/*`）、terminal delegation（`terminal/*`）は未実装（pi がローカル実行） |
 | MCP | ACP params の MCP は adapter 内で pi へ未配線（[pi-acp Limitations](https://github.com/svkozak/pi-acp#limitations)） |
 | resume | `session/load` は pi-acp の session-map 経由で pi セッションに再アタッチ。sidecar `acpSpawn` 不一致時は他 preset と同様に attach 失敗 |
@@ -71,6 +95,6 @@ sidecar worker エントリに `acpSpawn`（preset + command + args）を保存�
 
 ## Consequences
 
-- 良い: profile / CLI / env で worker ACP を切り替え可能。後方互換（未指定 = `agent acp`）。`pi` preset 追加（#203）
-- 悪い: `npx` 経由 preset は初回起動が遅い・ネットワーク依存。各 CLI の ACP 互換は未検証。`pi` はコミュニティ adapter 依存
-- フォロー: 実 CLI integration test、capability フラグ
+- 良い: profile / CLI / env で worker ACP を切り替え可能。後方互換（未指定 = `agent acp`）。`pi` preset 追加（#203）。`npx` 廃止で worktree `.npmrc` 由来の npm 警告を回避（#229）
+- 悪い: optional install 失敗時は bundled bin が欠落する（`--no-optional` 時も同様）。各 CLI の ACP 互換は未検証。`pi` はコミュニティ adapter 依存
+- フォロー: 実 CLI integration test、capability フラグ、optional の選択的 install UI

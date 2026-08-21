@@ -85,8 +85,8 @@ describe('session sidecar', () => {
           acpCwd: '/repo/worktree',
           acpSpawn: {
             preset: 'claude',
-            command: 'npx',
-            args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+            command: 'claude-agent-acp',
+            args: [],
           },
         },
       },
@@ -97,8 +97,8 @@ describe('session sidecar', () => {
 
     expect(loaded?.workers.implementer?.acpSpawn).toEqual({
       preset: 'claude',
-      command: 'npx',
-      args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+      command: 'claude-agent-acp',
+      args: [],
     });
   });
 
