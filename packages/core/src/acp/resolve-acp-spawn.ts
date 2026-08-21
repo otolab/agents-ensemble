@@ -1,4 +1,5 @@
 import type { SpawnAcpProcessOptions } from './acp-process.js';
+import { resolveAcpAuthenticateStrategy } from './resolve-acp-auth.js';
 import type { Profile, ProfileAcpConfig } from '../profile/types.js';
 import type { EnsembleConfig } from '../config/types.js';
 
@@ -304,6 +305,7 @@ export function resolvedAcpSpawnToOptions(
     ...base,
     command: spawn.command,
     args: [...spawn.args],
+    authenticate: resolveAcpAuthenticateStrategy(spawn),
     ...(spawn.env
       ? {
           env: {

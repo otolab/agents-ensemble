@@ -40,6 +40,56 @@ describe('AcpClient', () => {
     await client.close();
   });
 
+  it('skips authenticate when strategy is skip', async () => {
+    const streams = createInProcessStreamPair();
+    const authenticateSpy = vi.fn();
+
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      onAuthenticate: authenticateSpy,
+    });
+
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      { authenticate: { kind: 'skip' } },
+    );
+
+    await client.connect();
+    const sessionId = await client.newSession('/tmp');
+    expect(sessionId).toMatch(/^fake-session-/);
+    expect(authenticateSpy).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
+  it('uses preset-specific authenticate methodId', async () => {
+    const streams = createInProcessStreamPair();
+    const authenticateSpy = vi.fn();
+
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      onAuthenticate: authenticateSpy,
+    });
+
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      { authenticate: { kind: 'method', methodId: 'chat-gpt' } },
+    );
+
+    await client.connect();
+    expect(authenticateSpy).toHaveBeenCalledWith('chat-gpt');
+
+    await client.close();
+  });
+
   it('responds to session/request_permission', async () => {
     const streams = createInProcessStreamPair();
     const permissionHandler = vi.fn().mockResolvedValue({

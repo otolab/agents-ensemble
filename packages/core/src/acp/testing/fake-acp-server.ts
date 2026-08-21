@@ -17,6 +17,8 @@ export interface FakeAcpPromptResult {
 export interface FakeAcpServerOptions {
   readable: Readable;
   writable: Writable;
+  /** Called when authenticate is received. */
+  onAuthenticate?: (methodId: string) => void;
   /** Emit session/request_permission before responding to session/prompt. */
   requestPermissionOnPrompt?: boolean;
   /** Called when session/prompt is received. May push session/update via `notify`. */
@@ -96,9 +98,12 @@ export class FakeAcpServer {
         });
         break;
 
-      case 'authenticate':
+      case 'authenticate': {
+        const methodId = (params as { methodId?: string })?.methodId ?? '';
+        this.options.onAuthenticate?.(methodId);
         this.respond(id, {});
         break;
+      }
 
       case 'session/new': {
         this.sessionCounter += 1;

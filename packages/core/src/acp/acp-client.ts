@@ -2,6 +2,7 @@ import type { ChildProcess } from 'node:child_process';
 import type { Readable, Writable } from 'node:stream';
 import { JsonRpcPeer } from './json-rpc-peer.js';
 import type { JsonRpcNotification, JsonRpcRequest } from './json-rpc.js';
+import type { AcpAuthenticateStrategy } from './resolve-acp-auth.js';
 import {
   DEFAULT_PERMISSION_DECISION,
   type AcpPromptBlock,
@@ -14,6 +15,8 @@ export interface AcpClientOptions {
   permissionHandler?: PermissionHandler;
   clientName?: string;
   clientVersion?: string;
+  /** preset 解決結果。未指定時は Cursor 互換の `cursor_login`。 */
+  authenticate?: AcpAuthenticateStrategy;
   /** Set when backed by a child process (for cleanup). */
   childProcess?: ChildProcess;
   /** 子プロセス stderr capture の drain（close 時に呼ぶ）。 */
@@ -85,7 +88,13 @@ export class AcpClient {
 
   async connect(): Promise<void> {
     await this.initialize();
-    await this.authenticate();
+    const auth = this.options.authenticate ?? {
+      kind: 'method',
+      methodId: 'cursor_login',
+    };
+    if (auth.kind === 'method') {
+      await this.authenticate(auth.methodId);
+    }
   }
 
   async newSession(cwd: string, mcpServers: unknown[] = []): Promise<string> {

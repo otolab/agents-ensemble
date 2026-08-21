@@ -33,7 +33,7 @@ export function formatAcpPresetInstallHint(preset: AcpPresetId): string {
         '  開発: リポジトリルートで `pnpm install`（optional 再試行）\n' +
         `  利用者: \`npm i -g ${packageName}\`\n` +
         `  または PATH 上に \`${binName}\` を配置してください。\n` +
-        '  Claude Code の認証は adapter 側で別途必要です（ADR 0019 参照）。'
+        '  Claude Code の認証: 先に `claude` / Claude Code でログインしてください（ensemble は ACP authenticate を skip し CLI セッションを利用）。'
       );
     }
     case 'codex': {
@@ -43,7 +43,7 @@ export function formatAcpPresetInstallHint(preset: AcpPresetId): string {
         '  開発: リポジトリルートで `pnpm install`（optional 再試行）\n' +
         `  利用者: \`npm i -g ${packageName}\`\n` +
         `  または PATH 上に \`${binName}\` を配置してください。\n` +
-        '  Codex の認証は adapter 側で別途必要です（ADR 0019 参照）。'
+        '  Codex の認証: 先に `codex login` 等で Codex CLI と同じログイン状態にしてください（ensemble は `chat-gpt` authenticate で再利用）。'
       );
     }
     case 'pi': {
