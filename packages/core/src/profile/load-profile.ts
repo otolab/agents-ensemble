@@ -13,6 +13,8 @@ import { resolveWorkerWorkspacePath } from './resolve-worker-workspace.js';
 import { assertTeamProfileWorkspacesAvailable } from './validate-team-profile-workspaces.js';
 import { normalizeProfileWorkers } from './types.js';
 import { parseProfileAcpConfig } from '../acp/resolve-acp-spawn.js';
+import { resolveProfileDefaultRef } from '../config/resolve-settings.js';
+import type { EnsembleConfig } from '../config/types.js';
 import {
   normalizeTeamProfileName,
   resolveTeamProfilePath,
@@ -238,18 +240,19 @@ export function resolveProfilePath(ref: string, repoRoot: string): string {
 }
 
 /** `--profile` 未指定時のデフォルト team profile（`--profile` と同じ解釈）。 */
-export const ENSEMBLE_DEFAULT_PROFILE_ENV = 'ENSEMBLE_DEFAULT_PROFILE';
+export { ENSEMBLE_DEFAULT_PROFILE_ENV } from '../config/resolve-settings.js';
 
-/** CLI `--profile` > `ENSEMBLE_DEFAULT_PROFILE` > bundled default のうち、先に有効な参照を返す。 */
+/** CLI `--profile` > `ENSEMBLE_DEFAULT_PROFILE` > config > bundled default のうち、先に有効な参照を返す。 */
 export function resolveProfileRef(options: {
   profile?: string;
   env?: NodeJS.ProcessEnv;
+  config?: EnsembleConfig;
 }): string | undefined {
-  if (options.profile?.trim()) {
-    return options.profile.trim();
-  }
-  const fromEnv = options.env?.[ENSEMBLE_DEFAULT_PROFILE_ENV]?.trim();
-  return fromEnv || undefined;
+  return resolveProfileDefaultRef({
+    cliProfile: options.profile,
+    env: options.env ?? process.env,
+    config: options.config,
+  });
 }
 
 /** `--profile` / env も未指定時は同梱 default。 */
@@ -261,11 +264,13 @@ export async function loadProfile(options: {
   profile?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  config?: EnsembleConfig;
 }): Promise<{ profile: ResolvedProfile; profilePath: string }> {
   const cwd = options.cwd ?? process.cwd();
   const ref = resolveProfileRef({
     profile: options.profile,
     env: options.env ?? process.env,
+    config: options.config,
   });
   const profilePath = ref
     ? resolveProfilePath(ref, cwd)

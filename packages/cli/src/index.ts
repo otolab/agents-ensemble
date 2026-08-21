@@ -48,9 +48,9 @@ program
   )
   .option(
     '--profile <name>',
-    'Team profile name or path (default: ENSEMBLE_DEFAULT_PROFILE env, else bundled implementer-and-reviewer). Name resolves: project .ensemble/teams/ > ~/.ensemble/teams/ > bundled > legacy profiles/',
+    'Team profile name or path (default: config profile.default, ENSEMBLE_DEFAULT_PROFILE env, else bundled implementer-and-reviewer). Name resolves: project .ensemble/teams/ > ~/.ensemble/teams/ > bundled > legacy profiles/',
   )
-  .option('--model <id>', 'Conductor model id (default: default)')
+  .option('--model <id>', 'Conductor model id (default: config conductor.model, else default)')
   .option(
     '--max-turns <n>',
     'Maximum conductor autonomous turns (0 = unlimited; default: unlimited on TTY, 5 otherwise)',
@@ -63,8 +63,7 @@ program
   )
   .option(
     '--worktree <mode>',
-    'Worker workspace: isolated (default, per-issue worktree) or in-repo (main worktree)',
-    'isolated',
+    'Worker workspace: isolated (default via config) or in-repo (main worktree)',
   )
   .option(
     '--default-acp-cli <preset>',
@@ -85,7 +84,7 @@ program
   )
   .option(
     '--github-monitor-debounce-ms <n>',
-    'Debounce interval for GitHub update notifications (default: 30000)',
+    'Debounce interval for GitHub update notifications (default: config github.monitor.debounceMs, else 30000)',
     (value) => Number.parseInt(value, 10),
   )
   .option(

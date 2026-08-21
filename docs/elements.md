@@ -46,7 +46,8 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 |----|--------|
 | 1 | CLI `--profile <ref>` |
 | 2 | 環境変数 `ENSEMBLE_DEFAULT_PROFILE`（空文字は未設定扱い） |
-| 3 | 同梱 `profiles/implementer-and-reviewer/`（`default` エイリアス） |
+| 3 | `.ensemble/config.yaml` の `profile.default`（project > user merge） |
+| 4 | 同梱 `profiles/implementer-and-reviewer/`（`default` エイリアス） |
 
 `ENSEMBLE_DEFAULT_PROFILE` の値は `--profile` と同じ解釈（名前またはパス）。
 - 一覧: `ensemble profiles list`（`id` は `name@source` 形式。workspace 欠損の profile は `unusable`）
@@ -55,7 +56,7 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 
 ### ensemble 共通設定（config.yaml）
 
-harness 横断設定（GitHub 認証フォールバック等）の正本。team-profile とは別ファイル。詳細は [config.md](config.md)。
+harness 横断設定（profile 既定・session 既定・GitHub 認証 / monitor 等）の正本。team-profile とは別ファイル。解決順と全キー: [config.md](config.md)、設計判断: [ADR 0020](adr/0020-ensemble-config-setting-resolution.md)。
 
 ### フィールド
 

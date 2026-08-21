@@ -107,7 +107,7 @@ worker は `spawn('agent', ['acp'])` で起動し、**子プロセスの `agent`
 
 conductor のデフォルトモデルは `default`（`ensemble models list` 上の Auto。`auto` エイリアスも同義）。`--model` で別 id を指定できます。利用可能な id は `ensemble models list` で確認できます（API カタログ。実行時の team ブロックとは一致しない場合あり）。
 
-環境変数 `CONDUCTOR_MODEL_ID` でも上書きできます（integration / e2e の `test-acp.yaml` の `conductorModelId` と同じ優先順位: CLI `--model` > 環境変数 > `default`）。
+既定値の解決順（Phase 1 共通）: **CLI `--model` > 環境変数 `CONDUCTOR_MODEL_ID` > `.ensemble/config.yaml` の `conductor.model` > コード内 `default`**。詳細は [docs/config.md](docs/config.md)。
 
 ```bash
 ensemble models list
@@ -313,12 +313,13 @@ conductor は SDK `Agent.resume`、worker は ACP `session/load` で復元する
 同梱プロファイルは `profiles/` に置き、`build` 時に `dist/profiles/` へコピーされる（詳細は [docs/elements.md](docs/elements.md)）。
 
 ```bash
-# 省略時 → ENSEMBLE_DEFAULT_PROFILE または同梱 default
+# 省略時 → config profile.default / ENSEMBLE_DEFAULT_PROFILE / 同梱 default
 ensemble issue <url> --repo-root .
 
-# 環境変数でデフォルト指定（--profile 未指定時）
+# config または環境変数でデフォルト指定（--profile 未指定時）
 export ENSEMBLE_DEFAULT_PROFILE=my-team
 ensemble issue <url> --repo-root .
+# または .ensemble/config.yaml に profile.default: my-team
 
 # カスタム（同梱に無い名前は <cwd>/profiles/<name>/ を参照）
 ensemble issue <url> --repo-root . --profile custom
@@ -327,11 +328,14 @@ ensemble issue <url> --repo-root . --profile custom
 ensemble issue <url> --repo-root . --profile ./my-profile.yaml
 ```
 
-| 環境変数 | 意味 | 優先順位 |
-|----------|------|----------|
-| `ENSEMBLE_DEFAULT_PROFILE` | `--profile` 未指定時の team profile（名前またはパス） | CLI `--profile` > 本変数 > 同梱 default |
-| `ENSEMBLE_OPERATOR_MESSAGE` | 非 TTY 向けオペレータ入力の 1 回注入 | — |
-| `CONDUCTOR_MODEL_ID` | conductor モデル id | CLI `--model` > 本変数 > `default` |
+| 設定 | config キー（推奨） | 環境変数（上書き用） | 優先順位（Phase 1 共通） |
+|------|----------------------|----------------------|--------------------------|
+| 既定 team profile | `profile.default` | `ENSEMBLE_DEFAULT_PROFILE` | CLI `--profile` > env > project config > user config > 同梱 default |
+| conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | CLI `--model` > env > config > `default` |
+| worker ACP preset（profile 未指定 worker） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | profile/worker `acp` > CLI `--default-acp-*` > env > config > `cursor` |
+| オペレータ 1 回注入 | — | `ENSEMBLE_OPERATOR_MESSAGE` | — |
+
+横断設定の正本・全キー一覧: [docs/config.md](docs/config.md)。**token 等の秘密情報は config に書かない。**
 
 同梱 `implementer-and-reviewer` の例 (`profiles/implementer-and-reviewer/profile.yaml`)。`--profile default` は同じプロファイルのエイリアス:
 

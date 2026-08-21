@@ -26,6 +26,7 @@ vi.mock('@agents-ensemble/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agents-ensemble/core')>();
   return {
     ...actual,
+    loadEnsembleConfig: vi.fn(async () => actual.DEFAULT_ENSEMBLE_CONFIG),
     loadProfile: vi.fn(),
     runIssueSession: vi.fn(),
     SessionLogger: vi.fn(),
