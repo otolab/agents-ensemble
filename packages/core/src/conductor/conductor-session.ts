@@ -3,6 +3,7 @@ import {
   loadEnsembleConfig,
 } from '../config/load-ensemble-config.js';
 import type { EnsembleConfig } from '../config/types.js';
+import { resolveMcpServersForSdk } from '../mcp/load-mcp-config.js';
 import { createAnswerOpenQuestionTool } from '../escalation/answer-open-question-tool.js';
 import { createAskHumanTool } from '../escalation/ask-human-tool.js';
 import { createOpenQuestionListTools } from '../escalation/open-question-list-tools.js';
@@ -48,7 +49,7 @@ import {
 } from '../worktree/worktree.js';
 import { WorkerOutboundQueue } from '../runtime/worker-outbound-queue.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
-import { ConductorAgent } from './conductor-agent.js';
+import { ConductorAgent, type ConductorAgentOptions } from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
 import {
   formatConductorAuthRecoveryHint,
@@ -518,10 +519,13 @@ export async function runConductorSession(
     },
   });
 
-  const conductorOptions = {
-    cwd: options.conductorCwd ?? process.cwd(),
+  const conductorCwd = options.conductorCwd ?? process.cwd();
+  const mcpServers = await resolveMcpServersForSdk(options.repoRoot);
+  const conductorOptions: ConductorAgentOptions = {
+    cwd: conductorCwd,
     apiKey: options.apiKey,
     modelId: options.modelId,
+    ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     customTools: {
       ...askHumanTools,
       ...answerOpenQuestionTools,

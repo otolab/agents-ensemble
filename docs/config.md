@@ -2,6 +2,8 @@
 
 `.ensemble/config.yaml` は harness 横断の設定の正本。team-profile（`profile.yaml`）や conductor SDK 認証とは別系統。
 
+conductor（Cursor SDK）に渡す MCP 設定もこの config.yaml とは別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定mcpjson) を参照）。
+
 ## 配置と解決順
 
 | 層 | パス | 優先度 |
@@ -108,6 +110,38 @@ profile / worker に `acp` がある worker は `--default-acp-*` / config `acp.
 | monitor 各種定数 | `github.monitor.*` | |
 
 **config 未作成時**は従来どおり env とコード default のみが効く（後方互換）。
+
+## Conductor MCP 設定（mcp.json）
+
+MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単位でマージする。
+
+| 層 | パス | 優先度 |
+|----|------|--------|
+| プロジェクト | `<repoRoot>/.agents/mcp.json` | 高（同名を上書き） |
+| ユーザ | `~/.ensemble/mcp.json` | 低（既定） |
+
+プロジェクト設定が同名サーバーを定義した場合は、ユーザ設定の定義全体を置き換える。片方だけ存在する場合はその設定を使い、両方とも無い場合は MCP なしで起動する。
+
+ファイル形式は Cursor SDK の `mcp.json` 形式（`mcpServers` オブジェクト）を使う。
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "some-mcp-server"],
+      "env": {
+        "API_KEY": "${env:API_KEY}"
+      }
+    }
+  }
+}
+```
+
+この MVP では解決済み設定を conductor の Cursor SDK `Agent.create` / `Agent.resume` に inline MCP として渡す。`Agent.resume` と認証エラーからの in-process reconnect の両方で同じ設定を再注入する。設定値の `${env:...}` や `${workspaceFolder}` などの展開は SDK に任せる。`.cursor/mcp.json` へのコピー・symlink は行わず、ACP worker にはこの設定を渡さない。
+
+JSON が不正、または `mcpServers` / サーバー定義の形式が不正な場合は、そのファイルを `[mcp]` 警告とともにスキップする。もう一方の層が有効ならそちらは引き続き読み込み、両方をスキップした場合は MCP なしで起動する。MCP のホットリロードは行わないため、変更後は新しいセッションを開始する。
 
 ## 秘密情報を config に書かない
 

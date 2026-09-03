@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,7 +7,9 @@ import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-tok
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import {
   loadSessionSidecar,
+  saveSessionSidecar,
   SessionSidecarNotFoundError,
+  SESSION_SIDECAR_VERSION,
   sessionSidecarPath,
 } from '../session/session-sidecar.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
@@ -24,17 +26,18 @@ const TEST_ISSUE = {
   url: 'https://github.com/org/repo/issues/1',
 };
 
-const { mockSend, mockClose, mockCreate } = vi.hoisted(() => {
+const { mockSend, mockClose, mockCreate, mockResume } = vi.hoisted(() => {
   const mockSend = vi.fn();
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
-  return { mockSend, mockClose, mockCreate };
+  const mockResume = vi.fn();
+  return { mockSend, mockClose, mockCreate, mockResume };
 });
 
 vi.mock('./conductor-agent.js', () => ({
   ConductorAgent: {
     create: mockCreate,
-    resume: mockCreate,
+    resume: mockResume,
   },
 }));
 
@@ -85,7 +88,14 @@ describe('runConductorSession resume / shutdown', () => {
     mockSend.mockReset();
     mockClose.mockClear();
     mockCreate.mockReset();
+    mockResume.mockReset();
     mockCreate.mockImplementation(async () => ({
+      agentId: 'agent-test',
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+    mockResume.mockImplementation(async () => ({
       agentId: 'agent-test',
       send: mockSend,
       close: mockClose,
@@ -118,6 +128,108 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow(SessionSidecarNotFoundError);
 
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes resolved MCP configuration to ConductorAgent.resume for explicit resume', async () => {
+    const agentId = 'resume-agent';
+    const projectMcpRoot = join(repoRoot, '.agents');
+    await mkdir(projectMcpRoot, { recursive: true });
+    await writeFile(
+      join(projectMcpRoot, 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          projectDocs: {
+            type: 'http',
+            url: 'https://example.test/mcp',
+          },
+        },
+      }),
+    );
+    await saveSessionSidecar(
+      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        updatedAt: 0,
+      },
+    );
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: agentId,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockResume).toHaveBeenCalledWith(
+      agentId,
+      expect.objectContaining({
+        mcpServers: {
+          projectDocs: {
+            type: 'http',
+            url: 'https://example.test/mcp',
+          },
+        },
+      }),
+    );
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes project MCP configuration to the conductor options', async () => {
+    const projectMcpRoot = join(repoRoot, '.agents');
+    await mkdir(projectMcpRoot, { recursive: true });
+    await writeFile(
+      join(projectMcpRoot, 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          projectDocs: {
+            type: 'http',
+            url: 'https://example.test/mcp',
+          },
+        },
+      }),
+    );
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mcpServers: expect.objectContaining({
+          projectDocs: {
+            type: 'http',
+            url: 'https://example.test/mcp',
+          },
+        }),
+      }),
+    );
   });
 
   it('emits auth recovery hint when conductor send returns auth error', async () => {
@@ -164,6 +276,19 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it('recovers in-process via resume without auth recovery hint', async () => {
+    const projectMcpRoot = join(repoRoot, '.agents');
+    await mkdir(projectMcpRoot, { recursive: true });
+    await writeFile(
+      join(projectMcpRoot, 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          projectDocs: {
+            type: 'http',
+            url: 'https://example.test/mcp',
+          },
+        },
+      }),
+    );
     const emitted: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({
       issueUrl: TEST_ISSUE.url,
@@ -184,19 +309,18 @@ describe('runConductorSession resume / shutdown', () => {
       status: 'error',
       error: { message: 'Authentication error' },
     });
-    mockCreate
-      .mockImplementationOnce(async () => ({
-        agentId: 'agent-test',
-        send: mockSend,
-        close: mockClose,
-        getUsage: createMockConductorGetUsage(),
-      }))
-      .mockImplementation(async () => ({
-        agentId: 'agent-test',
-        send: mockSendAfterResume,
-        close: mockClose,
-        getUsage: createMockConductorGetUsage(),
-      }));
+    mockCreate.mockImplementationOnce(async () => ({
+      agentId: 'agent-test',
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+    mockResume.mockImplementation(async () => ({
+      agentId: 'agent-test',
+      send: mockSendAfterResume,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
 
     const sessionPromise = runConductorSession({
       issueUrl: TEST_ISSUE.url,
@@ -221,6 +345,17 @@ describe('runConductorSession resume / shutdown', () => {
         (event) => event.type === 'conductor.auth.reconnect',
       ),
     ).toBe(true);
+    expect(mockResume).toHaveBeenCalledWith(
+      'agent-test',
+      expect.objectContaining({
+        mcpServers: {
+          projectDocs: {
+            type: 'http',
+            url: 'https://example.test/mcp',
+          },
+        },
+      }),
+    );
   });
 
   it('flushes sidecar on shutdown signal while waiting for events', async () => {

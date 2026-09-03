@@ -70,6 +70,61 @@ describe('ConductorAgent.send', () => {
     }
   });
 
+  it('forwards inline MCP servers to Agent.create', async () => {
+    const mcpServers = {
+      docs: {
+        type: 'http' as const,
+        url: 'https://example.test/mcp',
+      },
+    };
+    mockCreate.mockResolvedValue({
+      agentId: 'agent-1',
+      send: mockSend,
+      [Symbol.asyncDispose]: vi.fn(),
+    });
+
+    const conductor = await ConductorAgent.create({
+      cwd: '/repo',
+      mcpServers,
+    });
+
+    try {
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ mcpServers }),
+      );
+    } finally {
+      await conductor.close();
+    }
+  });
+
+  it('forwards inline MCP servers to Agent.resume', async () => {
+    const mcpServers = {
+      shell: {
+        type: 'stdio' as const,
+        command: 'mcp-server',
+      },
+    };
+    mockResume.mockResolvedValue({
+      agentId: 'agent-1',
+      send: mockSend,
+      [Symbol.asyncDispose]: vi.fn(),
+    });
+
+    const conductor = await ConductorAgent.resume('agent-1', {
+      cwd: '/repo',
+      mcpServers,
+    });
+
+    try {
+      expect(mockResume).toHaveBeenCalledWith(
+        'agent-1',
+        expect.objectContaining({ mcpServers }),
+      );
+    } finally {
+      await conductor.close();
+    }
+  });
+
   it('forwards tool-call-started to callbacks', async () => {
     const onToolCallStarted = vi.fn();
     mockCreate.mockResolvedValue({
