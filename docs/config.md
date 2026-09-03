@@ -2,7 +2,7 @@
 
 `.ensemble/config.yaml` は harness 横断の設定の正本。team-profile（`profile.yaml`）や conductor SDK 認証とは別系統。
 
-conductor（Cursor SDK）に渡す MCP 設定もこの config.yaml とは別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定) を参照）。
+conductor（Cursor SDK）に渡す MCP 設定もこの config.yaml とは別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定mcpjson) を参照）。
 
 ## 配置と解決順
 
