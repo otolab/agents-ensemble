@@ -68,7 +68,13 @@ describe('sendConductorWithReconnect', () => {
 
     const onReconnectAttempt = vi.fn();
     const result = await sendConductorWithReconnect(handle, 'hello', {
-      conductorOptions: { cwd: '/repo', modelId: 'composer-2.5' },
+      conductorOptions: {
+        cwd: '/repo',
+        modelId: 'composer-2.5',
+        mcpServers: {
+          docs: { type: 'http', url: 'https://example.test/mcp' },
+        },
+      },
       onReconnectAttempt,
     });
 
@@ -76,6 +82,9 @@ describe('sendConductorWithReconnect', () => {
     expect(mockResume).toHaveBeenCalledWith('agent-1', {
       cwd: '/repo',
       modelId: 'composer-2.5',
+      mcpServers: {
+        docs: { type: 'http', url: 'https://example.test/mcp' },
+      },
     });
     expect(secondSend).toHaveBeenCalledWith('hello', expect.any(Object));
     expect(onReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });

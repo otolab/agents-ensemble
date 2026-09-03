@@ -90,6 +90,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0018](0018-team-profile-four-layer-resolution.md) | team-profile の 4 層配置と名前解決 | accepted |
 | [0019](0019-worker-acp-cli-presets.md) | Worker ACP CLI preset とデフォルト解決 | accepted |
 | [0020](0020-ensemble-config-setting-resolution.md) | ensemble config.yaml の設定解決順（Phase 1） | accepted |
+| [0021](0021-conductor-mcp-config-resolution.md) | conductor MCP 設定の 2 層解決と inline 配線 | accepted |
 
 ## 追加するとき
 

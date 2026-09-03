@@ -153,6 +153,8 @@ await conductor.send(operatorMessage);
 await conductor.send(workerStatusUpdate);
 ```
 
+`runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、結果を `Agent.create` / `Agent.resume` のトップレベル `mcpServers`（inline MCP）へ渡す。`local.settingSources` は使わず、設定値の変数展開は SDK に任せる。inline 設定は resume で永続化されないため、認証エラーからの in-process reconnect を含めて resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。
+
 **SDK にチャット UI はない。** CLI（TTY）では Ink TUI（`createIssueSessionTuiHost`）が非ブロッキング入力と 4 ペイン表示を担い、`submitOperatorInput` 経由で `operator.message` をキューへ積む。非 TTY は `bindAsyncOperatorInput` / `ENSEMBLE_OPERATOR_MESSAGE`。ConductorSession はキューから dispatch するだけ。テストは `bindOperatorInput` にフェイクを渡す（`createTestOperatorInputBinding`）。ConductorSession がイベント列経由で `agent.send` に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（TUI / stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
 
 conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。

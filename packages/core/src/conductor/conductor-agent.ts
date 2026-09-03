@@ -5,6 +5,7 @@ import {
   type AgentOptions,
   type AgentUsage,
   type GetUsageOptions,
+  type McpServerConfig,
   type RunResult,
   type SDKAgent,
   type SDKCustomTool,
@@ -19,6 +20,7 @@ export interface ConductorAgentOptions {
   cwd: string;
   apiKey?: string;
   modelId?: string;
+  mcpServers?: Record<string, McpServerConfig>;
   customTools?: Record<string, SDKCustomTool>;
   onStreamText?: (text: string) => void;
 }
@@ -138,6 +140,9 @@ function buildAgentOptions(options: ConductorAgentOptions): AgentOptions {
     ...(apiKey !== undefined ? { apiKey } : {}),
     model: { id: resolveConductorModelId(options.modelId) },
     mode: 'agent',
+    ...(options.mcpServers !== undefined
+      ? { mcpServers: options.mcpServers }
+      : {}),
     local: {
       cwd: options.cwd,
       customTools: options.customTools,

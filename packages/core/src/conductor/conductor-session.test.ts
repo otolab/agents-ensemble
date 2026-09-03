@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -118,6 +118,48 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow(SessionSidecarNotFoundError);
 
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('passes project MCP configuration to the conductor options', async () => {
+    const projectMcpRoot = join(repoRoot, '.agents');
+    await mkdir(projectMcpRoot, { recursive: true });
+    await writeFile(
+      join(projectMcpRoot, 'mcp.json'),
+      JSON.stringify({
+        mcpServers: {
+          projectDocs: {
+            type: 'http',
+            url: 'https://example.test/mcp',
+          },
+        },
+      }),
+    );
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mcpServers: expect.objectContaining({
+          projectDocs: {
+            type: 'http',
+            url: 'https://example.test/mcp',
+          },
+        }),
+      }),
+    );
   });
 
   it('emits auth recovery hint when conductor send returns auth error', async () => {
