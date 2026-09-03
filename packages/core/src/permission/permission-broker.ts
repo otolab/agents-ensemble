@@ -16,7 +16,7 @@ export type PermissionAskHandler = (
 
 export interface PermissionBrokerOptions {
   policy?: PermissionPolicyRules;
-  /** Called when policy verdict is `ask`. Defaults to allow-once. */
+  /** Called when policy verdict is `ask`. Defaults to the backend's allow-once option. */
   onAsk?: PermissionAskHandler;
   /** Label for logs (e.g. worker session id). */
   sessionLabel?: string;
@@ -72,10 +72,10 @@ export class PermissionBroker {
     sessionLabel?: string,
   ): Promise<PermissionDecision> {
     if (verdict === 'allow') {
-      return allowOnce();
+      return allowOnce(request);
     }
     if (verdict === 'deny') {
-      return deny();
+      return deny(request);
     }
 
     const onAsk = this.options.onAsk ?? defaultAllowOnceAskHandler;
@@ -86,16 +86,53 @@ export class PermissionBroker {
   }
 }
 
-export function allowOnce(): PermissionDecision {
-  return DEFAULT_PERMISSION_DECISION;
+export function allowOnce(
+  request?: Pick<PermissionRequest, 'options'>,
+): PermissionDecision {
+  const optionId = selectPermissionOptionId(request, 'allow');
+  if (!optionId) {
+    return DEFAULT_PERMISSION_DECISION;
+  }
+
+  return {
+    outcome: { outcome: 'selected', optionId },
+  };
 }
 
-export function deny(): PermissionDecision {
+export function deny(
+  request?: Pick<PermissionRequest, 'options'>,
+): PermissionDecision {
+  const optionId = selectPermissionOptionId(request, 'deny');
+  if (optionId) {
+    return {
+      outcome: { outcome: 'selected', optionId },
+    };
+  }
+
   return {
     outcome: { outcome: 'selected', optionId: 'deny' },
   };
 }
 
-function defaultAllowOnceAskHandler(): PermissionDecision {
-  return allowOnce();
+function selectPermissionOptionId(
+  request: Pick<PermissionRequest, 'options'> | undefined,
+  intent: 'allow' | 'deny',
+): string | undefined {
+  const preferredKinds =
+    intent === 'allow'
+      ? ['allow_once', 'allow_always']
+      : ['reject_once', 'reject_always'];
+
+  for (const kind of preferredKinds) {
+    const option = request?.options?.find((candidate) => candidate.kind === kind);
+    if (option) {
+      return option.optionId;
+    }
+  }
+
+  return undefined;
+}
+
+function defaultAllowOnceAskHandler(request: PermissionRequest): PermissionDecision {
+  return allowOnce(request);
 }

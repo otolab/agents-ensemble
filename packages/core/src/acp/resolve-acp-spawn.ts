@@ -48,6 +48,8 @@ const BUILTIN_PRESETS: Record<BuiltinAcpPresetId, Omit<ResolvedAcpSpawn, 'preset
   codex: {
     command: 'codex-acp',
     args: [],
+    // Codex ACP's normal Agent mode is workspace-write + on-request approval.
+    env: { INITIAL_AGENT_MODE: 'agent' },
   },
   pi: {
     command: 'pi-acp',

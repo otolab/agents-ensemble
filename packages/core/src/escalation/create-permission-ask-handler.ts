@@ -8,6 +8,6 @@ export function createPermissionAskHandler(
   return async (request) => {
     const inquiry = permissionRequestToHumanInquiry(request);
     const response = await onHumanInquiry(inquiry);
-    return response.approved ? allowOnce() : deny();
+    return response.approved ? allowOnce(request) : deny(request);
   };
 }

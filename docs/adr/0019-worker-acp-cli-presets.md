@@ -78,6 +78,14 @@ ensemble は spawn 解決後、`initialize` の直後に preset ごとの authen
 | `pi` | **skip** | **`pi` 側のモデル/API key 設定済み**（`pi-acp` の authenticate は no-op） |
 | `custom` | `agent acp` なら `cursor_login`、それ以外 skip | adapter 次第 |
 
+### Codex worker の実行 mode と permission option
+
+`codex` preset は spawn 時の `INITIAL_AGENT_MODE=agent` を明示する。これは Codex ACP の通常の Agent mode（`workspace-write` + `on-request` approval）であり、`agent-full-access` / `danger-full-access` を既定にはしない。
+
+`session/request_permission` の応答は固定文字列ではなく、request の `options` から `kind` が `allow_once`（なければ `allow_always`）または `reject_once`（なければ `reject_always`）の option の `optionId` を選ぶ。options が無い、または既知の kind が無い ACP backend では、既存の `allow-once` / `deny` を fallback として使う。
+
+linked worktree の共通 `.git` や `.git/worktrees/<id>` は worker の writable root に追加しない。ACP の permission approval は sandbox のファイルシステム境界を拡張しないため、承認後も Git metadata への書き込みが拒否され得る（#236）。host-side Git 操作や汎用 broker は別判断とする。
+
 `custom`: profile または CLI で `command` 明示。`args` / `env` 任意。spawn 前に `command` が PATH にあるかのみチェック。
 
 ### `pi` preset の accepted limitation（#203）
@@ -107,6 +115,6 @@ sidecar worker エントリに `acpSpawn`（preset + command + args）を保存�
 
 ## Consequences
 
-- 良い: profile / CLI / env で worker ACP を切り替え可能。後方互換（未指定 = `agent acp`）。`pi` preset 追加（#203）。`npx` 廃止で worktree `.npmrc` 由来の npm 警告を回避（#229）
-- 悪い: optional install 失敗時は bundled bin が欠落する（`--no-optional` 時も同様）。各 CLI の ACP 互換は未検証。`pi` はコミュニティ adapter 依存
+- 良い: profile / CLI / env で worker ACP を切り替え可能。後方互換（未指定 = `agent acp`）。Codex は通常 Agent mode で起動し、backend 固有の permission option id に追従する。`pi` preset 追加（#203）。`npx` 廃止で worktree `.npmrc` 由来の npm 警告を回避（#229）
+- 悪い: optional install 失敗時は bundled bin が欠落する（`--no-optional` 時も同様）。各 CLI の ACP 互換は未検証。`pi` はコミュニティ adapter 依存。ACP approval だけでは linked worktree の共有 Git metadata 書き込みを許可できない
 - フォロー: 実 CLI integration test、capability フラグ、optional の選択的 install UI

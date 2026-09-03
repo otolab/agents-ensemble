@@ -17,7 +17,10 @@ export type {
 export {
   parsePermissionRequest,
 } from './permission-request.js';
-export type { PermissionRequest } from './permission-request.js';
+export type {
+  PermissionOption,
+  PermissionRequest,
+} from './permission-request.js';
 
 export { PermissionPipeline } from './permission-pipeline.js';
 export type {
