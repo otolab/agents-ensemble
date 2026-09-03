@@ -84,7 +84,7 @@ ensemble は spawn 解決後、`initialize` の直後に preset ごとの authen
 
 `session/request_permission` の応答は固定文字列ではなく、request の `options` から `kind` が `allow_once`（なければ `allow_always`）または `reject_once`（なければ `reject_always`）の option の `optionId` を選ぶ。options が無い、または既知の kind が無い ACP backend では、既存の `allow-once` / `deny` を fallback として使う。
 
-linked worktree の共通 `.git` や `.git/worktrees/<id>` は worker の writable root に追加しない。ACP の permission approval は sandbox のファイルシステム境界を拡張しないため、承認後も Git metadata への書き込みが拒否される場合は、worker stderr と解決済み Git パスを診断記録に残す。host-side Git 操作や汎用 broker は別判断とする。
+linked worktree の共通 `.git` や `.git/worktrees/<id>` は worker の writable root に追加しない。ACP の permission approval は sandbox のファイルシステム境界を拡張しないため、承認後も Git metadata への書き込みが拒否され得る（#236）。host-side Git 操作や汎用 broker は別判断とする。
 
 `custom`: profile または CLI で `command` 明示。`args` / `env` 任意。spawn 前に `command` が PATH にあるかのみチェック。
 
