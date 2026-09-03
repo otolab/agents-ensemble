@@ -53,6 +53,11 @@ describe('linked worktree Git diagnostics', () => {
         "fatal: Unable to create '.git/worktrees/linked/index.lock': Operation not permitted",
       ),
     ).toBe(true);
+    expect(
+      isGitSandboxPermissionError(
+        "error: cannot lock ref 'refs/heads/feature': Permission denied",
+      ),
+    ).toBe(true);
     expect(isGitSandboxPermissionError('permission denied reading a document')).toBe(false);
   });
 });

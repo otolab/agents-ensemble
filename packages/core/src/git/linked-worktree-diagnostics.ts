@@ -71,7 +71,9 @@ export async function diagnoseLinkedWorktreeGitFailure(input: {
 export function isGitSandboxPermissionError(line: string): boolean {
   return (
     /(operation not permitted|permission denied|read-only file system)/i.test(line) &&
-    /(\bgit\b|\.git(?:[/\\]|$)|index\.lock|lock file)/i.test(line)
+    /(\bgit\b|\.git(?:[/\\]|$)|index\.lock|lock file|(?:cannot|failed to|unable to)\s+lock ref\b)/i.test(
+      line,
+    )
   );
 }
 

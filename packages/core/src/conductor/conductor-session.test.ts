@@ -417,6 +417,82 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockClose).toHaveBeenCalled();
   });
 
+  it('delivers child Git denial diagnostics before the session returns', async () => {
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+    });
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const childScriptPath = join(repoRoot, 'diagnostic-child.mjs');
+    await writeFile(
+      childScriptPath,
+      [
+        'import { createInterface } from "node:readline";',
+        'console.error("fatal: Unable to create \'.git/worktrees/issue-236/index.lock\': Operation not permitted");',
+        'const input = createInterface({ input: process.stdin });',
+        'input.on("line", (line) => {',
+        '  const request = JSON.parse(line);',
+        '  let result = {};',
+        '  if (request.method === "initialize") {',
+        '    result = { protocolVersion: 1, agentCapabilities: { session: {} }, agentInfo: { name: "diagnostic-child", version: "1" } };',
+        '  } else if (request.method === "session/new") {',
+        '    result = { sessionId: "child-session" };',
+        '  } else if (request.method === "session/prompt") {',
+        '    result = { stopReason: "end_turn" };',
+        '  }',
+        '  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + String.fromCharCode(10));',
+        '});',
+      ].join('\n'),
+    );
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        workers: [
+          {
+            name: 'implementer',
+            kind: 'implementer',
+            acp: {
+              preset: 'custom',
+              command: process.execPath,
+              args: [childScriptPath],
+            },
+          },
+        ],
+      },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'main',
+        issue: TEST_ISSUE,
+      },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+    });
+    await sessionPromise;
+
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes('"type":"linked-worktree-git-sandbox"'),
+      ),
+    ).toBe(true);
+  });
+
   it('waits for /exit after autonomous loop when waitForOperatorExit is true', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-1',

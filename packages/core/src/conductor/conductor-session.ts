@@ -292,6 +292,7 @@ export async function runConductorSession(
 
   const issue = parseIssueUrl(options.issueUrl);
   const reportedGitSandboxDiagnostics = new Set<string>();
+  const pendingGitSandboxDiagnostics: Promise<void>[] = [];
   const spawnBase: SpawnAcpProcessOptions = {
     onProcessStdioLine: ({ stream, line, workerName, cwd }) => {
       if (stream !== 'stderr') return;
@@ -307,7 +308,7 @@ export async function runConductorSession(
       if (reportedGitSandboxDiagnostics.has(diagnosticKey)) return;
       reportedGitSandboxDiagnostics.add(diagnosticKey);
 
-      void diagnoseLinkedWorktreeGitFailure({ cwd, error: line })
+      const diagnosticPromise = diagnoseLinkedWorktreeGitFailure({ cwd, error: line })
         .then((diagnostic) => {
           sessionLogger.emit({
             type: 'harness.warning',
@@ -321,6 +322,7 @@ export async function runConductorSession(
             message: `linked-worktree Git sandbox diagnosis failed: ${message}`,
           });
         });
+      pendingGitSandboxDiagnostics.push(diagnosticPromise);
     },
   };
   const workers = profileWorkersToSessionSpecs(activeProfile, {
@@ -966,8 +968,14 @@ export async function runConductorSession(
       const runWorkerStop = async (): Promise<void> => {
         emitTeardownPhase('workers');
         const phaseStart = Date.now();
-        await workerSession.stop({ force: forceShutdown });
-        teardownPhases.workers = Date.now() - phaseStart;
+        try {
+          await workerSession.stop({ force: forceShutdown });
+        } finally {
+          // Worker stderr is drained by workerSession.stop(). Wait for all
+          // diagnostics triggered by those lines before teardown can finish.
+          await Promise.all(pendingGitSandboxDiagnostics);
+          teardownPhases.workers = Date.now() - phaseStart;
+        }
       };
 
       const runConductorClose = async (): Promise<void> => {
