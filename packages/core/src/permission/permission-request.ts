@@ -2,9 +2,19 @@ import type { ToolCall } from '@cursor/sdk';
 import { formatConductorToolName } from '../conductor/conductor-tool-name.js';
 
 /** Parsed `session/request_permission` params from ACP. */
+export interface PermissionOption {
+  /** Backend-defined identifier returned in the ACP response. */
+  optionId: string;
+  /** ACP semantic kind (for example `allow_once` or `reject_once`). */
+  kind: string;
+  name?: string;
+}
+
 export interface PermissionRequest {
   sessionId?: string;
   toolName: string;
+  /** Options advertised by the ACP backend, when they are well-formed. */
+  options?: PermissionOption[];
   raw: unknown;
 }
 
@@ -21,6 +31,7 @@ export function parsePermissionRequest(params: unknown): PermissionRequest {
     readNonEmptyString(record.toolName) ?? readNonEmptyString(record.tool_name);
 
   const toolName = explicitTool ?? toolFromCall ?? 'unknown';
+  const options = parsePermissionOptions(record.options);
 
   return {
     sessionId:
@@ -30,8 +41,33 @@ export function parsePermissionRequest(params: unknown): PermissionRequest {
           ? record.session_id
           : undefined,
     toolName,
+    ...(options ? { options } : {}),
     raw: params,
   };
+}
+
+function parsePermissionOptions(value: unknown): PermissionOption[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const options = value.flatMap((candidate): PermissionOption[] => {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+      return [];
+    }
+
+    const option = candidate as Record<string, unknown>;
+    const optionId = readNonEmptyString(option.optionId);
+    const kind = readNonEmptyString(option.kind);
+    if (!optionId || !kind) {
+      return [];
+    }
+
+    const name = readNonEmptyString(option.name);
+    return [{ optionId, kind, ...(name ? { name } : {}) }];
+  });
+
+  return options.length > 0 ? options : undefined;
 }
 
 function readToolCallRecord(

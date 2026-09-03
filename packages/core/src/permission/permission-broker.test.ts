@@ -9,6 +9,94 @@ import {
 } from './permission-broker.js';
 
 describe('PermissionBroker', () => {
+  it('bridges backend option ids through an ACP permission request', async () => {
+    const streams = createInProcessStreamPair();
+    const broker = new PermissionBroker({
+      policy: { allowTools: ['test-tool'] },
+    });
+    let response: unknown;
+
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      requestPermissionOnPrompt: true,
+      permissionOptions: [
+        { optionId: 'codex-allow', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'codex-reject', name: 'Reject', kind: 'reject_once' },
+      ],
+      onPermissionResponse: (decision) => {
+        response = decision;
+      },
+    });
+
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      { permissionHandler: broker.createHandler() },
+    );
+
+    await client.connect();
+    const sessionId = await client.newSession('/tmp');
+    await client.prompt(sessionId, 'run');
+
+    expect(response).toEqual({
+      outcome: { outcome: 'selected', optionId: 'codex-allow' },
+    });
+
+    await client.close();
+  });
+
+  it('returns backend option ids for allow and deny decisions', async () => {
+    const allowBroker = new PermissionBroker({
+      policy: { allowTools: ['shell'] },
+    });
+    const denyBroker = new PermissionBroker({
+      policy: { denyTools: ['shell'] },
+    });
+    const options = [
+      { optionId: 'backend-allow', kind: 'allow_once' },
+      { optionId: 'backend-allow-always', kind: 'allow_always' },
+      { optionId: 'backend-deny', kind: 'reject_once' },
+    ];
+
+    await expect(
+      allowBroker.decide({ toolName: 'Shell', options }),
+    ).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'backend-allow' },
+    });
+    await expect(
+      denyBroker.decide({ toolName: 'Shell', options }),
+    ).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'backend-deny' },
+    });
+  });
+
+  it('keeps legacy fallback ids when backend options are absent or unknown', async () => {
+    const broker = new PermissionBroker({
+      policy: { allowTools: ['shell'] },
+    });
+    const denyBroker = new PermissionBroker({
+      policy: { denyTools: ['shell'] },
+    });
+    const handler = broker.createHandler();
+
+    await expect(handler({ toolName: 'Shell' })).resolves.toEqual(allowOnce());
+    await expect(
+      handler({
+        toolName: 'Shell',
+        options: [{ optionId: 'backend-other', kind: 'unknown' }],
+      }),
+    ).resolves.toEqual(allowOnce());
+    await expect(
+      denyBroker.decide({
+        toolName: 'Shell',
+        options: [{ optionId: 'backend-other', kind: 'unknown' }],
+      }),
+    ).resolves.toEqual(deny());
+  });
+
   it('auto-allows read-only tools via policy', async () => {
     const broker = new PermissionBroker({
       policy: { allowReadOnlyTools: true },
