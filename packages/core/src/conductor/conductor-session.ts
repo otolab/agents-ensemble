@@ -95,6 +95,11 @@ import {
   canResumePostLoopForTurns,
   hasActionableIssueComment,
 } from '../github/github-post-loop-resume.js';
+import {
+  diagnoseLinkedWorktreeGitFailure,
+  formatLinkedWorktreeGitDiagnostic,
+  isGitSandboxPermissionError,
+} from '../git/linked-worktree-diagnostics.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -286,8 +291,9 @@ export async function runConductorSession(
   const sessionState = sessionStateFromProfile(activeProfile);
 
   const issue = parseIssueUrl(options.issueUrl);
+  const reportedGitSandboxDiagnostics = new Set<string>();
   const spawnBase: SpawnAcpProcessOptions = {
-    onProcessStdioLine: ({ stream, line, workerName }) => {
+    onProcessStdioLine: ({ stream, line, workerName, cwd }) => {
       if (stream !== 'stderr') return;
       sessionLogger.emit({
         type: 'worker.process.stderr',
@@ -295,6 +301,26 @@ export async function runConductorSession(
         stream: 'stderr',
         workerName,
       });
+
+      if (!cwd || !isGitSandboxPermissionError(line)) return;
+      const diagnosticKey = `${workerName ?? ''}\0${cwd}`;
+      if (reportedGitSandboxDiagnostics.has(diagnosticKey)) return;
+      reportedGitSandboxDiagnostics.add(diagnosticKey);
+
+      void diagnoseLinkedWorktreeGitFailure({ cwd, error: line })
+        .then((diagnostic) => {
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message: formatLinkedWorktreeGitDiagnostic(diagnostic),
+          });
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message: `linked-worktree Git sandbox diagnosis failed: ${message}`,
+          });
+        });
     },
   };
   const workers = profileWorkersToSessionSpecs(activeProfile, {

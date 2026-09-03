@@ -106,6 +106,14 @@ describe('resolveBuiltinAcpPreset', () => {
       expect(resolved.args).not.toContain('-y');
     }
   });
+
+  it('starts Codex ACP in the normal Agent mode', () => {
+    expect(resolveBuiltinAcpPreset('codex')).toMatchObject({
+      command: 'codex-acp',
+      args: [],
+      env: { INITIAL_AGENT_MODE: 'agent' },
+    });
+  });
 });
 
 describe('resolveWorkerAcpSpawn', () => {
@@ -173,6 +181,7 @@ describe('profileWorkersToSessionSpecs', () => {
       command: 'codex-acp',
       args: [],
       authenticate: { kind: 'method', methodId: 'chat-gpt' },
+      env: { INITIAL_AGENT_MODE: 'agent' },
     });
     expect(specs[0]?.acpFingerprint?.preset).toBe('claude');
     expect(specs[1]?.acpFingerprint?.preset).toBe('codex');

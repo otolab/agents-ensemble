@@ -5,12 +5,14 @@ export interface WorkerProcessStdioLine {
   stream: 'stderr' | 'stdout';
   line: string;
   workerName?: string;
+  cwd?: string;
 }
 
 export type WorkerProcessStdioLineHandler = (event: WorkerProcessStdioLine) => void;
 
 export interface AttachChildProcessStreamCaptureOptions {
   workerName?: string;
+  cwd?: string;
   onLine?: WorkerProcessStdioLineHandler;
 }
 
@@ -33,6 +35,7 @@ export function attachChildProcessStderrCapture(
         stream: 'stderr',
         line,
         workerName: options.workerName,
+        cwd: options.cwd,
       });
     }
   };

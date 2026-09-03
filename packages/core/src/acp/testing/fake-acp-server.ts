@@ -7,6 +7,7 @@ import {
 } from '../json-rpc.js';
 
 import type { LlmUsageSnapshot } from '../types.js';
+import type { PermissionOption } from '../../permission/permission-request.js';
 
 export interface FakeAcpPromptResult {
   stopReason: string;
@@ -21,6 +22,10 @@ export interface FakeAcpServerOptions {
   onAuthenticate?: (methodId: string) => void;
   /** Emit session/request_permission before responding to session/prompt. */
   requestPermissionOnPrompt?: boolean;
+  /** Options to advertise in a fake session/request_permission request. */
+  permissionOptions?: PermissionOption[];
+  /** Called with the selected decision sent by the client. */
+  onPermissionResponse?: (decision: unknown) => void;
   /** Called when session/prompt is received. May push session/update via `notify`. */
   onPrompt?: (params: {
     sessionId: string;
@@ -71,6 +76,9 @@ export class FakeAcpServer {
       const resolvePermission = this.pendingPermissionResolvers.get(message.id);
       if (resolvePermission) {
         this.pendingPermissionResolvers.delete(message.id);
+        if ('result' in message) {
+          this.options.onPermissionResponse?.(message.result);
+        }
         resolvePermission();
       }
       return;
@@ -200,7 +208,13 @@ export class FakeAcpServer {
         jsonrpc: '2.0',
         id: requestId,
         method: 'session/request_permission',
-        params: { sessionId, toolName: 'test-tool' },
+        params: {
+          sessionId,
+          toolName: 'test-tool',
+          ...(this.options.permissionOptions
+            ? { options: this.options.permissionOptions }
+            : {}),
+        },
       });
     });
   }

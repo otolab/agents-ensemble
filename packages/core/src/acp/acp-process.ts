@@ -38,9 +38,10 @@ export async function spawnAcpProcess(
 ): Promise<AcpClient> {
   const command = options.command ?? 'agent';
   const args = options.args ?? ['acp'];
+  const cwd = options.cwd ?? process.cwd();
 
   const child = spawn(command, args, {
-    cwd: options.cwd ?? process.cwd(),
+    cwd,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: options.env ?? process.env,
   });
@@ -52,6 +53,7 @@ export async function spawnAcpProcess(
 
   const { drainStderr } = attachChildProcessStderrCapture(child.stderr, {
     workerName: options.workerName,
+    cwd,
     onLine: options.onProcessStdioLine,
   });
 

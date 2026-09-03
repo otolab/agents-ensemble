@@ -11,6 +11,24 @@ describe('parsePermissionRequest', () => {
     expect(parsePermissionRequest({ toolName: 'Shell' }).toolName).toBe('Shell');
   });
 
+  it('preserves well-formed ACP permission options', () => {
+    const request = parsePermissionRequest({
+      toolName: 'Shell',
+      options: [
+        { optionId: 'codex-allow', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'codex-reject', name: 'Reject', kind: 'reject_once' },
+        { optionId: '', kind: 'allow_once' },
+        { optionId: 'missing-kind' },
+        'malformed',
+      ],
+    });
+
+    expect(request.options).toEqual([
+      { optionId: 'codex-allow', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'codex-reject', name: 'Reject', kind: 'reject_once' },
+    ]);
+  });
+
   it('reads tool name from ACP toolCall (shell)', () => {
     const request = parsePermissionRequest({
       sessionId: 'sess-1',

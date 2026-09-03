@@ -127,6 +127,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `worker.round` | worker 1 ラウンド完了（init prompt 含む） | `workerDispatches` に追記 |
 | `worker.failed` | worker 失敗 | `workerFailures` に追記 |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | なし（sink のみ） |
+| `harness.warning` | worker stderr の Git＋permission 拒否を検出したとき、read-only に解決した linked worktree の Git パスを JSON で記録 | なし（sink のみ） |
 | `session.stop` | セッション終了直前 | `stopReason` を確定 |
 
 ### 組み込み sink（CLI）
@@ -178,6 +179,8 @@ await runIssueSession({ sessionLogger: logger, ... });
 | stderr | **pipe → capture** | 子の警告（例: `shell-parser`）を TTY の `operator>` 行に混ぜない |
 
 stderr は行バッファで読み、`SessionLogger` の `worker.process.stderr` として sink へ配信する。CLI の HarnessSink は `[harness] worker.stderr name=…` を **stderr** に出す（対話 stdout には出さない）。
+
+worker stderr に Git metadata の permission 拒否（`Operation not permitted` / `Permission denied` 等）が出た場合は、同じ worker cwd で `git rev-parse` を read-only 実行し、`harness.warning` に `linked-worktree-git-sandbox` JSON（`cwd`、`gitPaths`、worker cwd 外のパス、元エラー）を追加する。これは診断専用であり、共有 `.git` を writable root に追加しない。
 
 stdout へのプロトコル外出力は JsonRpc 層でパース失敗として検知される。現状は stderr capture を優先し、stdout 漏れの二重読みは行わない。
 

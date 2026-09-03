@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { ConductorInbox } from '../runtime/conductor-inbox.js';
 import { startInboxProcessor } from '../runtime/inbox-processor.js';
 import { PermissionPipeline } from './permission-pipeline.js';
-import { allowOnce, deny } from './permission-broker.js';
 import { createResolvePermissionTool } from './resolve-permission-tool.js';
 
 describe('PermissionPipeline', () => {
@@ -13,15 +12,23 @@ describe('PermissionPipeline', () => {
 
     const allow = pipeline.evaluate('req-1', 'worker-1', {
       toolName: 'read',
+      options: [{ optionId: 'backend-allow', kind: 'allow_once' }],
       raw: {},
     });
-    expect(allow).toEqual({ status: 'resolved', decision: allowOnce() });
+    expect(allow).toEqual({
+      status: 'resolved',
+      decision: { outcome: { outcome: 'selected', optionId: 'backend-allow' } },
+    });
 
     const denied = pipeline.evaluate('req-2', 'worker-1', {
       toolName: 'shell',
+      options: [{ optionId: 'backend-deny', kind: 'reject_once' }],
       raw: {},
     });
-    expect(denied).toEqual({ status: 'resolved', decision: deny() });
+    expect(denied).toEqual({
+      status: 'resolved',
+      decision: { outcome: { outcome: 'selected', optionId: 'backend-deny' } },
+    });
     expect(pipeline.pending.size).toBe(0);
   });
 
@@ -53,12 +60,18 @@ describe('PermissionPipeline', () => {
     });
 
     const handler = inbox.createPermissionHandler('worker-1');
-    const decisionPromise = handler({ toolName: 'Shell', raw: {} });
+    const decisionPromise = handler({
+      toolName: 'Shell',
+      options: [{ optionId: 'backend-deny', kind: 'reject_once' }],
+      raw: {},
+    });
     await inbox.drain();
     const pendingId = pipeline.pending.list()[0]!.id;
 
     pipeline.resolveAndFulfill(inbox, pendingId, false);
-    await expect(decisionPromise).resolves.toEqual(deny());
+    await expect(decisionPromise).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'backend-deny' },
+    });
     await processor.stop();
   });
 });
@@ -80,7 +93,11 @@ describe('createResolvePermissionTool', () => {
     });
 
     const handler = inbox.createPermissionHandler('worker-1');
-    const decisionPromise = handler({ toolName: 'Shell', raw: {} });
+    const decisionPromise = handler({
+      toolName: 'Shell',
+      options: [{ optionId: 'backend-allow', kind: 'allow_once' }],
+      raw: {},
+    });
     await inbox.drain();
     const pendingId = pipeline.pending.list()[0]!.id;
 
@@ -90,7 +107,9 @@ describe('createResolvePermissionTool', () => {
       reason: 'smoke test',
     });
 
-    await expect(decisionPromise).resolves.toEqual(allowOnce());
+    await expect(decisionPromise).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'backend-allow' },
+    });
     expect(result.structuredContent).toMatchObject({
       requestId: pendingId,
       decision: 'allow',

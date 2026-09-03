@@ -10,14 +10,22 @@ describe('createPermissionAskHandler', () => {
 
     const handler = createPermissionAskHandler(onHumanInquiry);
 
-    const allow = await handler({ toolName: 'Shell', raw: {} });
+    const allow = await handler({
+      toolName: 'Shell',
+      raw: {},
+      options: [{ optionId: 'backend-allow', kind: 'allow_once' }],
+    });
     expect(allow.outcome.outcome).toBe('selected');
-    expect(allow.outcome).toMatchObject({ optionId: 'allow-once' });
+    expect(allow.outcome).toMatchObject({ optionId: 'backend-allow' });
 
-    const denyResult = await handler({ toolName: 'Shell', raw: {} });
+    const denyResult = await handler({
+      toolName: 'Shell',
+      raw: {},
+      options: [{ optionId: 'backend-deny', kind: 'reject_once' }],
+    });
     expect(denyResult.outcome).toMatchObject({
       outcome: 'selected',
-      optionId: 'deny',
+      optionId: 'backend-deny',
     });
   });
 });

@@ -102,6 +102,8 @@ worker は preset ごとに別プロセスの ACP adapter を spawn する。**�
 | `claude` | **Claude Code CLI ログイン済み**（ensemble は ACP authenticate を skip） |
 | `pi` | **`pi` 側のモデル/API key 設定**（ensemble は authenticate skip。Cursor 認証とは無関係） |
 
+`codex` preset は子プロセス env に `INITIAL_AGENT_MODE=agent` を設定し、通常の Agent mode（`workspace-write` + `on-request` approval）で起動します。`agent-full-access` / `danger-full-access` は既定で有効になりません。ACP permission request に backend の options がある場合、ensemble は `allow_once` / `reject_once` などの kind に対応する実際の `optionId` を返します。options が無い backend では従来の fallback を使います。
+
 詳細は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md)。
 
 ### コマンド別の前提

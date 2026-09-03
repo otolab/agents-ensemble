@@ -42,10 +42,10 @@ export class PermissionPipeline {
     const verdict = evaluatePermissionPolicy(request, this.options.policy);
 
     if (verdict === 'allow') {
-      return { status: 'resolved', decision: allowOnce() };
+      return { status: 'resolved', decision: allowOnce(request) };
     }
     if (verdict === 'deny') {
-      return { status: 'resolved', decision: deny() };
+      return { status: 'resolved', decision: deny(request) };
     }
 
     this.pending.add({
@@ -67,7 +67,10 @@ export class PermissionPipeline {
     if (!entry) {
       throw new Error(`Unknown pending permission: ${requestId}`);
     }
-    inbox.fulfillPermission(requestId, approved ? allowOnce() : deny());
+    inbox.fulfillPermission(
+      requestId,
+      approved ? allowOnce(entry.request) : deny(entry.request),
+    );
     return entry;
   }
 }
