@@ -63,12 +63,8 @@ import {
   resolveMaxTurns,
   type IssueLoopStopReason,
 } from './session-policy.js';
-import {
-  runConductorSessionDriver,
-  type ConductorSessionDriverResult,
-} from './conductor-session-driver.js';
+import { runConductorSessionDriver } from './conductor-session-driver.js';
 import { isOperatorExitCommand } from './operator-exit.js';
-import { createOperatorPostLoopGate } from './operator-post-loop-gate.js';
 import {
   assertSessionSidecarMatches,
   requireSessionSidecarForResume,
@@ -91,10 +87,6 @@ import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import { GITHUB_AUTH_HINT } from '../github/github-auth.js';
 import { resolveGitHubAuthToken } from '../github/resolve-github-auth-token.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
-import {
-  canResumePostLoopForTurns,
-  hasActionableIssueComment,
-} from '../github/github-post-loop-resume.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -263,6 +255,11 @@ export async function runConductorSession(
     : undefined;
   const shutdownSignal =
     options.shutdownSignal ?? shutdownController!.signal;
+  const operatorExitController = new AbortController();
+  const driverShutdownSignal = AbortSignal.any([
+    shutdownSignal,
+    operatorExitController.signal,
+  ]);
   let unregisterProcessSignalHandlers = () => {};
   if (
     ownsShutdownController &&
@@ -591,7 +588,6 @@ export async function runConductorSession(
 
   let sendCount = 0;
   let autonomousTurns = 0;
-  const postLoopGate = createOperatorPostLoopGate();
 
   let githubMonitor: GitHubMonitor | undefined;
   const monitorDefaults = ensembleConfig.github.monitor;
@@ -626,13 +622,6 @@ export async function runConductorSession(
           type: 'github.update',
           items: payload.items,
         });
-        if (
-          postLoopGate.isWaiting() &&
-          hasActionableIssueComment(payload.items) &&
-          canResumePostLoopForTurns(autonomousTurns, maxTurns)
-        ) {
-          postLoopGate.notifyResume();
-        }
       },
       onPollError: (error) => {
         const message =
@@ -691,11 +680,8 @@ export async function runConductorSession(
         if (isOperatorExitCommand(message)) {
           sessionLogger.emit({ type: 'session.operator_exit' });
           workerSession.runtime.cancelAllActivePrompts();
-          if (postLoopGate.isWaiting() || postLoopGate.isPreparedForWait()) {
-            postLoopGate.notifyExit();
-          } else if (shutdownController) {
-            shutdownController.abort();
-          }
+          operatorRequestedExit = true;
+          operatorExitController.abort();
           return false;
         }
         const received = submitOperatorInput({
@@ -710,9 +696,6 @@ export async function runConductorSession(
         });
         if (received) {
           scheduleSidecarFlush();
-          if (postLoopGate.isWaiting() || postLoopGate.isPreparedForWait()) {
-            postLoopGate.notifyResume();
-          }
         }
         return received;
       },
@@ -729,82 +712,54 @@ export async function runConductorSession(
   }
 
   try {
-    let driverResumeState:
-      | (Pick<ConductorSessionDriverResult, 'sendCount' | 'autonomousTurns' | 'lastSendResult'> & {
-          lastDispatchesThisTurn: number;
-        })
-      | undefined;
-
-    while (true) {
-      const driverResult = await runConductorSessionDriver({
-        issueUrl: options.issueUrl,
-        profile: activeProfile,
-        ensembleConfig,
-        conductorHandle,
-        sendReconnect,
-        eventQueue,
-        workerSession,
-        permissionPipeline,
-        openQuestions,
-        shutdownSignal,
-        maxTurns,
-        continueOnConductorError,
-        workerDispatches: sessionLogger.workerDispatches,
-        workerFailures: sessionLogger.workerFailures,
-        onSendStarted: (info) => {
-          sessionLogger.emit({
-            type: 'conductor.send.started',
-            sendCount: info.sendCount,
-            dispatchSource: info.dispatchSource,
-          });
-        },
-        onSendProgress: (info) => {
-          sessionLogger.emit({
-            type: 'conductor.send.progress',
-            sendCount: info.sendCount,
-            runId: info.runId,
-            tool: info.tool,
-          });
-        },
-        onSendComplete: recordSendComplete,
-        onOpenQuestionEnqueued: (question) => {
-          sessionLogger.emit({ type: 'open.question.enqueued', question });
-          options.onOpenQuestionEnqueued?.(question);
-        },
-        ...(driverResumeState
-          ? {
-              skipInitialSend: true,
-              resumeState: driverResumeState,
-            }
-          : {}),
-      });
-      stopReason = driverResult.stopReason;
-      sendCount = driverResult.sendCount;
-      autonomousTurns = driverResult.autonomousTurns;
-      driverResumeState = {
-        sendCount: driverResult.sendCount,
-        autonomousTurns: driverResult.autonomousTurns,
-        lastSendResult: driverResult.lastSendResult,
-        lastDispatchesThisTurn: driverResult.lastDispatchesThisTurn,
-      };
-
-      if (!waitForOperatorExit || stopReason === 'interrupted') {
-        break;
-      }
-
-      postLoopGate.prepareForWait();
-      options.onPostLoopWait?.();
-      sessionLogger.emit({ type: 'session.post_loop_wait' });
-      const postLoopAction = await postLoopGate.wait(shutdownSignal);
-      if (postLoopAction === 'exit' || shutdownSignal.aborted) {
-        if (postLoopAction === 'exit' && !shutdownSignal.aborted) {
-          operatorRequestedExit = true;
-        }
-        if (shutdownSignal.aborted) {
-          stopReason = 'interrupted';
-        }
-        break;
-      }
+    const driverResult = await runConductorSessionDriver({
+      issueUrl: options.issueUrl,
+      profile: activeProfile,
+      ensembleConfig,
+      conductorHandle,
+      sendReconnect,
+      eventQueue,
+      workerSession,
+      permissionPipeline,
+      openQuestions,
+      shutdownSignal: driverShutdownSignal,
+      maxTurns,
+      continueOnConductorError,
+      continueAfterIssueLoopStop: waitForOperatorExit,
+      onIssueLoopStop: waitForOperatorExit
+        ? () => {
+            options.onPostLoopWait?.();
+            sessionLogger.emit({ type: 'session.post_loop_wait' });
+          }
+        : undefined,
+      workerDispatches: sessionLogger.workerDispatches,
+      workerFailures: sessionLogger.workerFailures,
+      onSendStarted: (info) => {
+        sessionLogger.emit({
+          type: 'conductor.send.started',
+          sendCount: info.sendCount,
+          dispatchSource: info.dispatchSource,
+        });
+      },
+      onSendProgress: (info) => {
+        sessionLogger.emit({
+          type: 'conductor.send.progress',
+          sendCount: info.sendCount,
+          runId: info.runId,
+          tool: info.tool,
+        });
+      },
+      onSendComplete: recordSendComplete,
+      onOpenQuestionEnqueued: (question) => {
+        sessionLogger.emit({ type: 'open.question.enqueued', question });
+        options.onOpenQuestionEnqueued?.(question);
+      },
+    });
+    stopReason = driverResult.stopReason;
+    sendCount = driverResult.sendCount;
+    autonomousTurns = driverResult.autonomousTurns;
+    if (operatorRequestedExit && stopReason === 'interrupted') {
+      stopReason = 'completed';
     }
 
     return await buildResult();

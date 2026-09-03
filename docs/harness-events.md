@@ -75,7 +75,7 @@ open question・エスカレーション・CLI 通知。stderr の prefix は従
 | `escalation.recorded` | open question 回答のエスカレーション記録 | `[operator answer] ... → ...` | なし |
 | `session.worktree.notice` | `--worktree in-repo` 開始時 | `[worktree] 特別モード: ...` | なし |
 | `session.continue` | `--continue` で sidecar から再開時 | `[continue] resuming session: conductorAgentId=...` | なし |
-| `session.post_loop_wait` | 自律ループ完了後の post-loop 待機開始 | （post-loop 待機メッセージ） | なし |
+| `session.post_loop_wait` | 自律的な連続処理が不要になり、TTY post-loop のイベント待機を開始したとき | （post-loop 待機メッセージ） | なし |
 | `session.operator_exit` | オペレータが `/exit` / `exit` を入力した直後（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | （終了フィードバックメッセージ） | なし |
 
 CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）。
@@ -172,7 +172,7 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | `resolve_permission` 待ち |
-| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。post-loop 待機中かつ `items` に `issue.comment` が含まれるときは `notifyResume` で SessionDriver を再開（`autonomousTurns < maxTurns` のときのみ。上限到達時は `enqueue` のみ）。`operator.message` との差: operator は無条件 resume、issue.comment はターン残あり時のみ |
+| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` のみ dispatch 可） |
 
 ### 3.1 SessionLogEvent との対応
 
@@ -231,7 +231,7 @@ preempt（stopReason=cancelled）: `prompt.completed` / `worker.round` をスキ
 GitHub monitor（セッション中は常時。`--no-github-monitor` で無効化可）
   harness.github.update ──────────────────────► stderr
   github.update ──────────────────────────────► SessionEventQueue ► agent.send
-       │                                        （post-loop 待機中 + issue.comment + ターン残あり → notifyResume で Driver 再実行）
+       │                                        （自律中・post-loop 待機中とも同じ Driver が消費）
 
 セッション終了
   session.stop ─────────────────────────────► stderr + snapshot
@@ -264,7 +264,7 @@ init prompt 把握の目安:
 | `## worker ラウンド完了` | worker の 1 `session/prompt` 終了 | `source: harness` なら **作業開始ではない**（init prompt 完了）。`source: conductor` なら自分が `prompt_worker` したラウンド。Issue / PR を読んで進捗判断 |
 | `## worker 失敗` | attach / prompt 失敗 | 再試行・エスカレーションを検討 |
 | `## permission 判断待ち` | worker の操作許可が保留（**init prompt ラウンド中もありうる**） | `resolve_permission` またはオペレータへ。**init prompt 完了を待たない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)） |
-| `## GitHub 更新` | Issue コメント / PR レビュー / CI 完了等 | 状況把握。**自動 `prompt_worker` はしない**。post-loop 中の `issue.comment` は SessionDriver 再開トリガにもなる（ターン残あり時のみ） |
+| `## GitHub 更新` | Issue コメント / PR レビュー / CI 完了等 | 状況把握。**自動 `prompt_worker` はしない**。自律中・post-loop 中とも SessionDriver が処理する。ターン残ありなら dispatch して 1 ターン消費し、max-turns 到達後は `operator.message` / `permission.pending` 以外を dispatch しない |
 
 conductor は `list_workers` の `attachInFlight` / `state: processing` 等を **ポーリング・`Await` で待ってはならない**。状態変化は本表の SessionEvent のみが通知する。
 

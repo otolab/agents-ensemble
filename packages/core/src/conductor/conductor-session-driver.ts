@@ -81,6 +81,10 @@ export interface ConductorSessionDriverOptions {
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
   onOpenQuestionEnqueued?: (question: OpenQuestion) => void;
+  /** `true` のときは自律ループ停止後もイベントを待ち続ける（TTY post-loop 用）。 */
+  continueAfterIssueLoopStop?: boolean;
+  /** 自律ループ停止相当の状態へ入ったときに post-loop UX を通知する。 */
+  onIssueLoopStop?: () => void;
   /** post-loop 再開時は初回 `agent.send`（system + ブリーフィング）を省略する。 */
   skipInitialSend?: boolean;
   /** `skipInitialSend` 時に引き継ぐ Driver 状態。 */
@@ -115,6 +119,25 @@ export async function runConductorSessionDriver(
     status: 'finished',
   };
   let inFlightSend: Promise<ConductorSendResult> | undefined;
+  let postLoopWaiting = false;
+
+  const shouldBreakAfterLoopState = (
+    loopState: Parameters<typeof shouldStopIssueLoop>[0],
+  ): boolean => {
+    stopReason = resolveIssueLoopStopReason(loopState);
+    if (!shouldStopIssueLoop(loopState)) {
+      postLoopWaiting = false;
+      return false;
+    }
+    if (!options.continueAfterIssueLoopStop) {
+      return true;
+    }
+    if (!postLoopWaiting) {
+      postLoopWaiting = true;
+      options.onIssueLoopStop?.();
+    }
+    return false;
+  };
 
   if (!options.skipInitialSend) {
     lastSendResult = await runEventConductorSend({
@@ -177,8 +200,7 @@ export async function runConductorSessionDriver(
         openQuestions: options.openQuestions,
         continueOnConductorError: options.continueOnConductorError,
       });
-      stopReason = resolveIssueLoopStopReason(loopState);
-      if (shouldStopIssueLoop(loopState)) {
+      if (shouldBreakAfterLoopState(loopState)) {
         break;
       }
       continue;
@@ -198,8 +220,7 @@ export async function runConductorSessionDriver(
         openQuestions: options.openQuestions,
         continueOnConductorError: options.continueOnConductorError,
       });
-      stopReason = resolveIssueLoopStopReason(loopState);
-      if (shouldStopIssueLoop(loopState)) {
+      if (shouldBreakAfterLoopState(loopState)) {
         break;
       }
     }
@@ -226,6 +247,7 @@ export async function runConductorSessionDriver(
     }
 
     const { events: batch, selected } = dispatchResult;
+    postLoopWaiting = false;
     dispatchBatchState = markContinuationConsumed(dispatchBatchState, selected);
 
     const autonomousTurnsAfter = autonomousTurnsAfterConductorBatch(
