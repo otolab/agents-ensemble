@@ -328,10 +328,11 @@ worker / harness ──enqueue──►─────────────�
 
 - `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）。`maxTurns <= 0` または CLI `--no-max-turns` で無制限（上限チェック・max-turns open question 登録なし）
 - **CLI デフォルト**: TTY / `ENSEMBLE_OPERATOR_MESSAGE` あり → 無制限。非 TTY / CI → 5（暴走防止）
-- **TTY（本番 CLI）**: `bindOperatorInput` 使用時はループをブロックせず、未回答 open question があっても worker イベント等を処理し続ける。オペレータ入力は `operator.message` としてキューに載る
+- **TTY（本番 CLI）**: `bindOperatorInput` 使用時はループをブロックせず、未回答 open question があっても worker イベント等を処理し続ける。オペレータ入力は `operator.message` としてキューに載る。自律ループ停止後の post-loop 待機でも SessionDriver は停止せず、同じキューを消費する
 - 自律ターン上限到達（**リミット有効時のみ**）→ orchestrator が「次どうする？」（`source: max_turns`）を自動登録。オペレータは `bindOperatorInput` 経由で回答
+- **GitHub 更新**（`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed`）は自律中・post-loop 中とも `github.update` として同じ経路で処理する。ターン残ありなら通常 dispatch して状況把握ターンを 1 消費し、max-turns 到達後は `operator.message` / `permission.pending` のみ dispatch する
 - 終了条件: error / 実行中 worker / pending permission / **未回答 open question** がある間は継続
-- **自律ループ停止**（`shouldStopIssueLoop`）と **プロセス終了** は別概念（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。TTY デフォルトでは自律ループ停止後も post-loop 待機し、`/exit` までプロセス維持。`/exit` 正常終了時は isolated worktree を削除（未コミット変更がある場合は拒否）。`--no-wait` で従来の即終了に戻せる
+- **自律ループ停止**（`shouldStopIssueLoop`）と **プロセス終了** は別概念（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。TTY デフォルトでは停止判定後も SessionDriver が post-loop のイベント待機を続け、`/exit` までプロセスを維持する。`/exit` 正常終了時は isolated worktree を削除（未コミット変更がある場合は拒否）。`--no-wait` で従来の即終了に戻せる
 
 CLI: TTY は Ink TUI（非ブロッキング入力 + 4 ペイン）、非 TTY は `ENSEMBLE_OPERATOR_MESSAGE` / `bindAsyncOperatorInput`。ログ・表示の正本は [session-logging.md](session-logging.md)。対話モデルは [ADR 0008](adr/0008-human-dialogue-open-questions.md)。
 

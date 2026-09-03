@@ -97,6 +97,53 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('completed');
   });
 
+  it('continues consuming events after the issue loop stops when configured', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'github update handled',
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const onIssueLoopStop = vi.fn();
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      shutdownSignal: shutdown.signal,
+      continueAfterIssueLoopStop: true,
+      onIssueLoopStop,
+    });
+
+    await vi.waitFor(() => expect(onIssueLoopStop).toHaveBeenCalledOnce());
+    eventQueue.enqueue({
+      type: 'github.update',
+      items: [
+        {
+          id: 'ci:1',
+          kind: 'ci.completed',
+          summary: 'build passed',
+        },
+      ],
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(onIssueLoopStop).toHaveBeenCalledTimes(2));
+    expect(String(send.mock.calls[1]![0])).toContain('## GitHub 更新');
+    expect(String(send.mock.calls[1]![0])).toContain('build passed');
+
+    shutdown.abort();
+    const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
+  });
+
   it('dispatches operator.message before worker.completed when both are queued', async () => {
     const send = vi
       .fn()

@@ -102,24 +102,25 @@ View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver
 
 ## post-loop 待機（プロセス維持）
 
-自律ループ停止後、CLI TTY デフォルトでは harness が **post-loop 待機** に入る（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。
+自律ループ停止後、CLI TTY デフォルトでは harness が **post-loop 待機** に入る（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。この間も SessionDriver は停止せず、イベントキューで次の dispatch を待つ。`session.post_loop_wait` は待機 UX の開始通知であり、イベント配送を止める合図ではない。
 
 | 条件 | 動作 |
 |------|------|
 | TTY + デフォルト | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
 | `--no-wait` | 自律ループ停止後に即終了（従来動作） |
 | 非 TTY / CI | `waitForOperatorExit` なし → 即終了 |
-| post-loop 中の TTY 追加入力 | `operator.message` としてキューに積み、SessionDriver を再実行 |
-| post-loop 中の Issue コメント | GitHub 監視が `issue.comment` を検知すると `github.update` を enqueue し、**自律ターンが残っているとき** SessionDriver を再実行（[harness-events.md](harness-events.md) §3） |
+| post-loop 中の TTY 追加入力 | `operator.message` としてキューに積み、継続中の SessionDriver が処理 |
+| post-loop 中の GitHub 更新 | `issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` を `github.update` として enqueue し、継続中の SessionDriver が処理（[harness-events.md](harness-events.md) §3） |
 
-**再開トリガの差（post-loop 待機中のみ）**
+**post-loop 中の dispatch と max-turns**
 
-| 経路 | `notifyResume` | max-turns 到達時 |
-|------|----------------|------------------|
-| `operator.message`（TTY `operator>` 等） | 常に再開 | `enqueue` のみ（`canDispatchConductorSend` で `operator.message` は通すが、ターン回復はしない） |
-| `issue.comment`（GitHub 監視） | `autonomousTurns < maxTurns`（または無制限）のときのみ再開 | `enqueue` のみで停止維持（`notifyResume` しない） |
+| イベント | ターン残あり | max-turns 到達後 |
+|----------|------------|----------------|
+| `operator.message` | dispatch。オペレータ入力として自律ターン数をリセット | dispatch（`operator.message` は常に許可） |
+| `permission.pending` | dispatch | dispatch（permission 判断を優先） |
+| `github.update` | dispatch。状況把握ターンとして自律ターンを 1 消費 | enqueue のみ。dispatch しない |
 
-自律ループ稼働中（post-loop 前）に Issue コメントが来た場合は、既存のイベント束に任せ、追加の `notifyResume` はしない（#160）。
+自律ループ稼働中（post-loop 前）も同じ経路で処理する。GitHub 更新の種類による `notifyResume` 条件分岐は持たない（#160）。
 
 ### `/exit` の即時フィードバック（#170）
 
@@ -134,7 +135,7 @@ View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver
 
 #### post-loop 開始直後の `/exit`（#200）
 
-`session.post_loop_wait` emit と `OperatorPostLoopGate.wait()` の間は、従来 `notifyExit` が届かず `postLoopGate.wait` が永久待ちになるレースがあった。harness は emit 直前に `prepareForWait()` し、この窓でも `/exit` を受け付ける。
+`session.post_loop_wait` の通知後も SessionDriver がイベント待機を継続する。`/exit` は専用の終了 signal で Driver の待機を中断するため、通知と待機 API の間に `/exit` が失われるレースはない。
 
 #### teardown が長引く場合（#200）
 

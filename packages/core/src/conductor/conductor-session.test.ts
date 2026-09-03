@@ -16,7 +16,10 @@ import { SessionLogger, type SessionLogEvent } from './session/session-logger.js
 import { runConductorSession } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import * as worktreeModule from '../worktree/worktree.js';
-import type { GitHubUpdatePayload } from '../github/github-update-types.js';
+import type {
+  GitHubUpdateKind,
+  GitHubUpdatePayload,
+} from '../github/github-update-types.js';
 import { createMockConductorGetUsage } from '../testing/mock-conductor-get-usage.js';
 
 const TEST_ISSUE = {
@@ -62,6 +65,18 @@ function issueCommentUpdate(body: string): GitHubUpdatePayload {
         kind: 'issue.comment',
         summary: body,
         bodyPreview: body,
+      },
+    ],
+  };
+}
+
+function githubUpdate(kind: GitHubUpdateKind): GitHubUpdatePayload {
+  return {
+    items: [
+      {
+        id: `${kind}:99`,
+        kind,
+        summary: `${kind} update`,
       },
     ],
   };
@@ -574,7 +589,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(removeSpy).not.toHaveBeenCalled();
   });
 
-  it('resumes autonomous loop when issue.comment arrives during post-loop wait', async () => {
+  it('dispatches issue.comment during post-loop wait', async () => {
     mockSend
       .mockResolvedValueOnce({
         runId: 'run-1',
@@ -629,7 +644,11 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
-  it('does not resume post-loop for non-comment github updates', async () => {
+  it.each<Exclude<GitHubUpdateKind, 'issue.comment'>>([
+    'ci.completed',
+    'pr.review',
+    'pr.review_comment',
+  ])('dispatches post-loop %s updates to the conductor', async (kind) => {
     mockSend.mockResolvedValue({
       runId: 'run-1',
       status: 'finished',
@@ -665,24 +684,24 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
-    githubOnUpdate!({
-      items: [
-        {
-          id: 'ci:1',
-          kind: 'ci.completed',
-          summary: 'build passed',
-        },
-      ],
-    });
+    githubOnUpdate!(githubUpdate(kind));
 
-    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
-    expect(mockSend).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledTimes(2));
+    expect(String(mockSend.mock.calls[1]![0])).toContain('## GitHub 更新');
+    expect(String(mockSend.mock.calls[1]![0])).toContain(`${kind} update`);
 
     operatorApi!.submit('/exit');
-    await sessionPromise;
+    const result = await sessionPromise;
+    expect(result.stopReason).toBe('completed');
   });
 
-  it('does not resume post-loop when max-turns is reached', async () => {
+  it.each<GitHubUpdateKind>([
+    'issue.comment',
+    'ci.completed',
+    'pr.review',
+    'pr.review_comment',
+  ])('does not dispatch post-loop %s updates after max-turns', async (kind) => {
     mockSend
       .mockResolvedValueOnce({
         runId: 'run-1',
@@ -724,11 +743,11 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
-    githubOnUpdate!(issueCommentUpdate('first comment'));
+    githubOnUpdate!(githubUpdate(kind));
     await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledTimes(2));
 
-    githubOnUpdate!(issueCommentUpdate('second comment after max-turns'));
+    githubOnUpdate!(githubUpdate(kind));
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledTimes(2));
     expect(mockSend).toHaveBeenCalledTimes(2);
 
