@@ -31,6 +31,9 @@ jobs:
       - name: Unit tests
         run: pnpm test:run
 
+      - name: CLI TUI keyboard behavior tests
+        run: pnpm --dir packages/cli exec vitest run src/tui/operator-text-area-emacs-keys.test.tsx
+
   changeset-check:
     if: >-
       github.event_name == 'pull_request'

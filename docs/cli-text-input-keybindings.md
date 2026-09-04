@@ -68,6 +68,7 @@ Readline Emacs モードを事実上の共通仕様とみなす。
 | `Ctrl+a` | 行頭 | `beginning-of-line` |
 | `Ctrl+e` | 行末 | `end-of-line` |
 | `Ctrl+f` / `Ctrl+b` | 1 文字進む / 戻る | `forward-char` / `backward-char` |
+| `Ctrl+d` | カーソル位置の 1 文字を削除 | `delete-char` |
 | `Alt+f` / `Alt+b` | 1 単語進む / 戻る | `forward-word` / `backward-word` |
 | `Ctrl+k` | カーソル〜行末をキル | `kill-line` |
 | `Ctrl+u` | カーソル〜行頭をキル | `unix-line-discard` |
@@ -76,6 +77,8 @@ Readline Emacs モードを事実上の共通仕様とみなす。
 | `Alt+y` | キルリングを循環 | `yank-pop` |
 | `Ctrl+p` / `Ctrl+n` | 履歴 前 / 次 | `previous-history` / `next-history` |
 | `Ctrl+r` | 履歴逆検索 | `reverse-search-history` |
+
+※ ここでの `Ctrl+p/n` は **Readline の 1 行入力における履歴操作**の意味。agents-ensemble の TTY textarea では §6 のとおり、同じキーを履歴ではなく visual row の上下移動に割り当てる（履歴は別経路）。
 
 **キルリング**: 削除した文字列をクリップボードとは別スタックに保持し `Ctrl+y` で復元。連続 `Ctrl+k` はエントリ結合（Emacs / macOS Cocoa Text System と同型）。
 
@@ -164,13 +167,13 @@ Emacs 風を **自前実装** する場合の最小ループ:
 
 | 経路 | 入力実装 | Emacs 風 |
 |------|----------|----------|
-| TTY + Ink TUI | `OperatorTextArea` → フォーク `react-ink-textarea`（`pnpm` patch でキルリング / Readline 整合） | **ライブラリ内蔵**。`Ctrl+a/e/f/b`、`Ctrl+k/u/w/y`、`Alt+b/f/y` をサポート。`Ctrl+p/n/r`（履歴）は **非対応**（プロンプト用途では不要） |
+| TTY + Ink TUI | `OperatorTextArea` → フォーク `react-ink-textarea`（`pnpm` patch でキルリング / Readline 整合） | **ライブラリ内蔵**。`Ctrl+a/e/f/b/d`（`Ctrl+d` はカーソル位置の 1 文字削除）、`Ctrl+p/n`（visual row の上 / 下移動、上端 / 下端は no-op）、`Ctrl+k/u/w/y`、`Alt+b/f/y` をサポート。`Ctrl+r`（履歴逆検索）は **非対応**。 |
 | TTY スクロール | `issue-session-tui.tsx` の `useInput` | `PgUp/PgDn` / `Home`/`End`（入力空時 or Ctrl 修飾）— **編集ショートカットとは別レイヤ**（競合なし） |
 | 非 TTY | `readline` / `ENSEMBLE_OPERATOR_MESSAGE` | OS・Node readline 依存 |
 
-**`useInput` と TextArea の関係**: 活動ログスクロール用 `useInput` は `Home`/`End`/`PgUp`/`PgDn` のみ。行編集系（`Ctrl+a` 等）は TextArea 内 `useKeyboardInput` が処理。入力欄に文字があるときはスクロール系は `Ctrl` 修飾時のみ有効。
+**`useInput` と TextArea の関係**: 活動ログスクロール用 `useInput` は `Home`/`End`/`PgUp`/`PgDn` のみ。行編集・textarea 内移動（`Ctrl+a/e/f/b/d/p/n` 等）は TextArea 内 `useKeyboardInput` が処理。入力欄に文字があるときはスクロール系は `Ctrl` 修飾時のみ有効。
 
-**テスト**: `packages/cli/src/tui/operator-text-area-emacs-keys.test.tsx` でフォークキーマップ監査と `useKillRing` 挙動を CI 担保。`ink-testing-library` では実 `TextArea` の stdin 縦切りが不安定なため、TTY + 日本語 IME はマージ前の実機ゲート（#186 / #196）。
+**テスト**: `packages/cli/src/tui/operator-text-area-emacs-keys.test.tsx` でフォークキーマップ監査と `useKillRing` 挙動に加え、`operator-text-area-keyboard-harness.tsx` を介した実キー列（`Ctrl+a/e/f/b/d`、`Ctrl+p/n`、`Ctrl+k` + `Ctrl+y`、`Alt+b/f`）を CI で担保する。`Ctrl+p/n` はフォークの `buildVisualRows` を使った multiline 入力で visual row 移動と上下端 no-op を検証する。`ink-testing-library` では実 `TextArea` の measureElement 連鎖が stdin の縦切りを不安定にするため、TextArea 内部の `useKeyboardInput` 配線を再現した React ハーネスで検証する。TTY + 日本語 IME はマージ前の実機ゲート（#186 / #196）。
 
 **やるべきでないこと**
 
