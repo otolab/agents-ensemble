@@ -1,5 +1,14 @@
 # @agents-ensemble/core
 
+## 0.5.2
+
+### Patch Changes
+
+- ced9195: conductor（Cursor SDK）向け MCP 設定の user / project 読み込みと inline 配線を追加。
+- 299fce5: Use Codex ACP's normal Agent mode by default, preserve backend permission options, and return their semantic allow/deny option IDs.
+- a231f12: post-loop 待機中も GitHub 更新を conductor へ配送し、状況把握ターンとして処理できるようにする。
+- 04625ce: 同梱 team profile（implementer-and-reviewer）の conductor 向けに、引き渡し時の心得を追加。Issue / PR を conductor の成果物として扱い、達成不可と判明したときのオペレータへの説明責務を明記する。
+
 ## 0.5.1
 
 ### Patch Changes
