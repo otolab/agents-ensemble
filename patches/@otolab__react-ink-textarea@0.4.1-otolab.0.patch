@@ -80,13 +80,15 @@ diff --git a/dist/constants.js b/dist/constants.js
 index 107ac15b333773e3df798fbad973dc02bc79c47d..8aa9729a43592150aa1a6dc694d95fb5ec338e82 100644
 --- a/dist/constants.js
 +++ b/dist/constants.js
-@@ -19,6 +19,9 @@ export const DEFAULT_KEYBINDINGS = {
+@@ -19,6 +19,11 @@ export const DEFAULT_KEYBINDINGS = {
      "Alt+F": true,
      "Ctrl+A": true,
      "Ctrl+E": true,
 +    "Ctrl+F": true,
 +    "Ctrl+B": true,
 +    "Ctrl+D": true,
++    "Ctrl+P": true,
++    "Ctrl+N": true,
      "Ctrl+W": true,
      "Ctrl+U": true,
      "Ctrl+K": true,
@@ -98,12 +100,14 @@ index 107ac15b333773e3df798fbad973dc02bc79c47d..8aa9729a43592150aa1a6dc694d95fb5
  };
  export const NAV_KEYBINDINGS = [
      "Up",
-@@ -37,5 +40,7 @@ export const NAV_KEYBINDINGS = [
+@@ -37,5 +40,9 @@ export const NAV_KEYBINDINGS = [
      "Alt+F",
      "Ctrl+A",
      "Ctrl+E",
 +    "Ctrl+F",
 +    "Ctrl+B",
++    "Ctrl+P",
++    "Ctrl+N",
  ];
 -//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoiY29uc3RhbnRzLmpzIiwic291cmNlUm9vdCI6IiIsInNvdXJjZXMiOlsiLi4vc3JjL2NvbnN0YW50cy50cyJdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiQUFFQSxNQUFNLENBQUMsTUFBTSx1QkFBdUIsR0FBRyxHQUFHLENBQUM7QUFDM0MsTUFBTSxDQUFDLE1BQU0sb0JBQW9CLEdBQUcsR0FBRyxDQUFDO0FBQ3hDLE1BQU0sQ0FBQyxNQUFNLGdCQUFnQixHQUFHLEdBQUcsQ0FBQztBQUNwQyxNQUFNLENBQUMsTUFBTSx3QkFBd0IsR0FBRyxHQUFHLENBQUM7QUFDNUMsTUFBTSxDQUFDLE1BQU0sMkJBQTJCLEdBQUcsQ0FBQyxDQUFDO0FBQzdDLE1BQU0sQ0FBQyxNQUFNLDBCQUEwQixHQUFHLENBQUMsQ0FBQztBQUM1QyxNQUFNLENBQUMsTUFBTSxpQkFBaUIsR0FBRyxDQUFDLENBQUM7QUFFbkMsTUFBTSxDQUFDLE1BQU0sbUJBQW1CLEdBQTJDO0lBQ3pFLEtBQUssRUFBRSxJQUFJO0lBQ1gsUUFBUSxFQUFFLElBQUk7SUFDZCxZQUFZLEVBQUUsSUFBSTtJQUNsQixhQUFhLEVBQUUsSUFBSTtJQUNuQixXQUFXLEVBQUUsSUFBSTtJQUNqQixFQUFFLEVBQUUsSUFBSTtJQUNSLElBQUksRUFBRSxJQUFJO0lBQ1YsSUFBSSxFQUFFLElBQUk7SUFDVixLQUFLLEVBQUUsSUFBSTtJQUNYLE9BQU8sRUFBRSxJQUFJO0lBQ2IsT0FBTyxFQUFFLElBQUk7SUFDYixRQUFRLEVBQUUsSUFBSTtJQUNkLFFBQVEsRUFBRSxJQUFJO0lBQ2QsUUFBUSxFQUFFLElBQUk7SUFDZCxRQUFRLEVBQUUsSUFBSTtJQUNkLFFBQVEsRUFBRSxJQUFJO0lBQ2QsU0FBUyxFQUFFLElBQUk7SUFDZixNQUFNLEVBQUUsSUFBSTtJQUNaLGVBQWUsRUFBRSxJQUFJO0lBQ3JCLFFBQVEsRUFBRSxJQUFJO0lBQ2QsUUFBUSxFQUFFLElBQUk7Q0FDZixDQUFDO0FBRUYsTUFBTSxDQUFDLE1BQU0sZUFBZSxHQUEyQjtJQUNyRCxJQUFJO0lBQ0osTUFBTTtJQUNOLE1BQU07SUFDTixPQUFPO0lBQ1AsT0FBTztJQUNQLE9BQU87SUFDUCxRQUFRO0lBQ1IsUUFBUTtDQUNULENBQUMiLCJzb3VyY2VzQ29udGVudCI6WyJpbXBvcnQgdHlwZSB7IFRLZXliaW5kaW5nIH0gZnJvbSBcIi4vdHlwZXMuanNcIjtcblxuZXhwb3J0IGNvbnN0IERFRkFVTFRfQ1VSU09SX0lOVEVSVkFMID0gNTAwO1xuZXhwb3J0IGNvbnN0IERFRkFVTFRfVFlQSU5HX1BBVVNFID0gNDUwO1xuZXhwb3J0IGNvbnN0IERFRkFVTFRfTUFYX1VORE8gPSAxMjg7XG5leHBvcnQgY29uc3QgREVGQVVMVF9VTkRPX0dST1VQX0RFTEFZID0gNzUwO1xuZXhwb3J0IGNvbnN0IERFRkFVTFRfQVVUT19ORVdfTElORV9MSU1JVCA9IDM7XG5leHBvcnQgY29uc3QgREVGQVVMVF9JTklUSUFMX0xJTkVfQ09VTlQgPSAyO1xuZXhwb3J0IGNvbnN0IERFRkFVTFRfVEFCX1dJRFRIID0gNDtcblxuZXhwb3J0IGNvbnN0IERFRkFVTFRfS0VZQklORElOR1M6IFJlYWRvbmx5PFJlY29yZDxUS2V5YmluZGluZywgYm9vbGVhbj4+ID0ge1xuICBFbnRlcjogdHJ1ZSxcbiAgXCJDdHJsK0pcIjogdHJ1ZSxcbiAgXCJDdHJsK0VudGVyXCI6IHRydWUsXG4gIFwiU2hpZnQrRW50ZXJcIjogdHJ1ZSxcbiAgXCJBbHQrRW50ZXJcIjogdHJ1ZSxcbiAgVXA6IHRydWUsXG4gIERvd246IHRydWUsXG4gIExlZnQ6IHRydWUsXG4gIFJpZ2h0OiB0cnVlLFxuICBcIkFsdCtCXCI6IHRydWUsXG4gIFwiQWx0K0ZcIjogdHJ1ZSxcbiAgXCJDdHJsK0FcIjogdHJ1ZSxcbiAgXCJDdHJsK0VcIjogdHJ1ZSxcbiAgXCJDdHJsK1dcIjogdHJ1ZSxcbiAgXCJDdHJsK1VcIjogdHJ1ZSxcbiAgXCJDdHJsK0tcIjogdHJ1ZSxcbiAgQmFja3NwYWNlOiB0cnVlLFxuICBEZWxldGU6IHRydWUsXG4gIFwiQWx0K0JhY2tzcGFjZVwiOiB0cnVlLFxuICBcIkN0cmwrWlwiOiB0cnVlLFxuICBcIkN0cmwrWVwiOiB0cnVlLFxufTtcblxuZXhwb3J0IGNvbnN0IE5BVl9LRVlCSU5ESU5HUzogcmVhZG9ubHkgVEtleWJpbmRpbmdbXSA9IFtcbiAgXCJVcFwiLFxuICBcIkRvd25cIixcbiAgXCJMZWZ0XCIsXG4gIFwiUmlnaHRcIixcbiAgXCJBbHQrQlwiLFxuICBcIkFsdCtGXCIsXG4gIFwiQ3RybCtBXCIsXG4gIFwiQ3RybCtFXCIsXG5dO1xuIl19
 \ No newline at end of file
@@ -158,7 +162,7 @@ index 692d987ced4469ad328f6a40cd734da640e7c200..de1fa5992ecc6c7af3763623ffea12c4
      usePaste((text) => {
          const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
          if (!normalized)
-@@ -188,12 +188,53 @@ export const useKeyboardInput = ({ isActive, value, cursor, keybindings, autoNew
+@@ -188,12 +188,80 @@ export const useKeyboardInput = ({ isActive, value, cursor, keybindings, autoNew
              setCursor((c) => findLineEnd(value, c));
              return;
          }
@@ -198,6 +202,33 @@ index 692d987ced4469ad328f6a40cd734da640e7c200..de1fa5992ecc6c7af3763623ffea12c4
 +            setValue(newValue);
 +            setCursor(cursor, newValue);
 +            resetMutationTracking();
++            return;
++        }
++        if (key.ctrl && input === "p") {
++            if (!keybindings["Ctrl+P"])
++                return;
++            const effectiveLineWidth = lineWidth > 0 ? lineWidth : Number.MAX_SAFE_INTEGER;
++            if (lineWidth > 0 && visualRows.length > 0) {
++                const { line, column } = getCursorLineAndColumn(value, cursor);
++                if (visualRowForCursor(visualRows, line, column, lineWidth) <= 0)
++                    return;
++            }
++            else if (getCursorLineAndColumn(value, cursor).line === 0) {
++                return;
++            }
++            resetBlink();
++            setCursor((c) => computeVisualUpCursor(value, c, effectiveLineWidth, visualRows));
++            return;
++        }
++        if (key.ctrl && input === "n") {
++            if (!keybindings["Ctrl+N"])
++                return;
++            const effectiveLineWidth = lineWidth > 0 ? lineWidth : Number.MAX_SAFE_INTEGER;
++            const newPos = computeVisualDownCursor(value, cursor, effectiveLineWidth, visualRows);
++            if (newPos === null)
++                return;
++            resetBlink();
++            setCursor(newPos);
 +            return;
 +        }
          if (key.ctrl && input === "w") {
@@ -406,7 +437,7 @@ index 88a1a0084db5c159d2b608ce629858e7d27123af..42297159fa1d7628a620b93d703aa490
  };
  export type TLabels = readonly TLabelRule[];
 -export type TKeybinding = "Enter" | "Ctrl+J" | "Ctrl+Enter" | "Shift+Enter" | "Alt+Enter" | "Up" | "Down" | "Left" | "Right" | "Alt+B" | "Alt+F" | "Ctrl+A" | "Ctrl+E" | "Ctrl+W" | "Ctrl+U" | "Ctrl+K" | "Backspace" | "Delete" | "Alt+Backspace" | "Ctrl+Z" | "Ctrl+Y";
-+export type TKeybinding = "Enter" | "Ctrl+J" | "Ctrl+Enter" | "Shift+Enter" | "Alt+Enter" | "Up" | "Down" | "Left" | "Right" | "Alt+B" | "Alt+F" | "Ctrl+A" | "Ctrl+E" | "Ctrl+F" | "Ctrl+B" | "Ctrl+D" | "Ctrl+W" | "Ctrl+U" | "Ctrl+K" | "Backspace" | "Delete" | "Alt+Backspace" | "Ctrl+Z" | "Ctrl+Y" | "Alt+Y";
++export type TKeybinding = "Enter" | "Ctrl+J" | "Ctrl+Enter" | "Shift+Enter" | "Alt+Enter" | "Up" | "Down" | "Left" | "Right" | "Alt+B" | "Alt+F" | "Ctrl+A" | "Ctrl+E" | "Ctrl+F" | "Ctrl+B" | "Ctrl+D" | "Ctrl+P" | "Ctrl+N" | "Ctrl+W" | "Ctrl+U" | "Ctrl+K" | "Backspace" | "Delete" | "Alt+Backspace" | "Ctrl+Z" | "Ctrl+Y" | "Alt+Y";
  export type TKeybindings = Partial<Readonly<Record<TKeybinding, boolean>>>;
  export type TextAreaHandle = {
      readonly insert: (text: string) => void;

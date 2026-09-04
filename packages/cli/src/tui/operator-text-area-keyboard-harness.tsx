@@ -69,6 +69,18 @@ export type ForkKeyboardModules = {
     ) => { value: string; cursor: number } | undefined;
     resetMutationTracking: () => void;
   };
+  readonly getCursorLineAndColumn: (
+    value: string,
+    cursor: number,
+  ) => { line: number; column: number };
+  readonly buildVisualRows: (
+    lines: readonly string[],
+    lineWidthAt: number | ((lineIdx: number, chunkIdx: number) => number),
+    cursorLine: number,
+    cursorColumn: number,
+    initialLineCount: number,
+    tabWidth?: number,
+  ) => readonly unknown[];
   readonly DEFAULT_KEYBINDINGS: Readonly<Record<string, boolean>>;
 };
 
@@ -80,10 +92,13 @@ export async function loadForkKeyboardModules(): Promise<ForkKeyboardModules> {
     import(pathToFileURL(path.join(packageRoot, 'dist/hooks/useKillRing.js')).href),
     import(pathToFileURL(path.join(packageRoot, 'dist/hooks/useUndo.js')).href),
     import(pathToFileURL(path.join(packageRoot, 'dist/constants.js')).href),
-  ]).then(([keyboard, killRing, undo, constants]) => ({
+    import(pathToFileURL(path.join(packageRoot, 'dist/textUtils.js')).href),
+  ]).then(([keyboard, killRing, undo, constants, textUtils]) => ({
     useKeyboardInput: keyboard.useKeyboardInput as ForkKeyboardModules['useKeyboardInput'],
     useKillRing: killRing.useKillRing as ForkKeyboardModules['useKillRing'],
     useUndo: undo.useUndo as ForkKeyboardModules['useUndo'],
+    getCursorLineAndColumn: textUtils.getCursorLineAndColumn as ForkKeyboardModules['getCursorLineAndColumn'],
+    buildVisualRows: textUtils.buildVisualRows as ForkKeyboardModules['buildVisualRows'],
     DEFAULT_KEYBINDINGS: constants.DEFAULT_KEYBINDINGS as ForkKeyboardModules['DEFAULT_KEYBINDINGS'],
   }));
   return forkModulesPromise;
@@ -93,12 +108,15 @@ export type KeyboardHarnessProps = {
   readonly modules: ForkKeyboardModules;
   readonly onValueChange?: (value: string) => void;
   readonly onCursorPosition?: (position: readonly [line: number, column: number]) => void;
+  /** Width used to exercise the fork's visual-row cursor path. Zero uses the logical fallback. */
+  readonly lineWidth?: number;
 };
 
 export function OperatorTextAreaKeyboardHarness({
   modules,
   onValueChange,
   onCursorPosition,
+  lineWidth = 0,
 }: KeyboardHarnessProps) {
   const { useKeyboardInput, useKillRing, useUndo, DEFAULT_KEYBINDINGS } = modules;
   const [value, setValue] = useState('');
@@ -108,6 +126,11 @@ export function OperatorTextAreaKeyboardHarness({
     undoGroupDelay: 750,
   });
   const killRing = useKillRing();
+  const { line: cursorLine, column: cursorColumn } = modules.getCursorLineAndColumn(value, cursor);
+  const visualRows =
+    lineWidth > 0
+      ? modules.buildVisualRows(value.split('\n'), lineWidth, cursorLine, cursorColumn, 2)
+      : [];
 
   usePaste(() => {}, { isActive: true });
 
@@ -150,8 +173,8 @@ export function OperatorTextAreaKeyboardHarness({
     resetYankState: killRing.resetYankState,
     resetMutationTracking,
     resetBlink: () => {},
-    lineWidth: 0,
-    visualRows: [],
+    lineWidth,
+    visualRows,
   });
 
   return <Text>{value}</Text>;

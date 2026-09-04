@@ -28,6 +28,8 @@ describe('react-ink-textarea keymap audit (patched fork)', () => {
       'input === "f"',
       'input === "b"',
       'input === "d"',
+      'input === "p"',
+      'input === "n"',
       'input === "k"',
       'input === "u"',
       'input === "w"',
@@ -44,11 +46,11 @@ describe('react-ink-textarea keymap audit (patched fork)', () => {
     expect(source).not.toMatch(/const entry = redo\(/);
   });
 
-  it('documents Ctrl+p/n/r as intentionally unsupported in constants', () => {
+  it('enables Ctrl+p/n visual row motion and leaves Ctrl+r history unsupported', () => {
     const constantsPath = path.join(packageRoot, 'dist/constants.js');
     const source = readFileSync(constantsPath, 'utf8');
-    expect(source).not.toContain('Ctrl+P');
-    expect(source).not.toContain('Ctrl+N');
+    expect(source).toContain('Ctrl+P');
+    expect(source).toContain('Ctrl+N');
     expect(source).not.toContain('Ctrl+R');
   });
 });
@@ -128,6 +130,8 @@ describe('ink-test-keys Emacs sequences', () => {
   it('maps Readline control bytes', () => {
     expect(INK_TEST_KEYS.ctrlA).toBe('\x01');
     expect(INK_TEST_KEYS.ctrlD).toBe('\x04');
+    expect(INK_TEST_KEYS.ctrlP).toBe('\x10');
+    expect(INK_TEST_KEYS.ctrlN).toBe('\x0e');
     expect(INK_TEST_KEYS.ctrlK).toBe('\x0b');
     expect(INK_TEST_KEYS.ctrlY).toBe('\x19');
     expect(INK_TEST_KEYS.altF).toBe('\x1bf');
@@ -166,6 +170,7 @@ describe('TextArea keyboard path Emacs keys (ink stdin integration)', () => {
   function renderHarness(options: {
     readonly onValueChange?: (value: string) => void;
     readonly onCursorPosition?: (position: CursorPosition) => void;
+    readonly lineWidth?: number;
   }) {
     return render(<OperatorTextAreaKeyboardHarness modules={harnessModules} {...options} />);
   }
@@ -198,6 +203,28 @@ describe('TextArea keyboard path Emacs keys (ink stdin integration)', () => {
 
     await typeAndKeys(stdin, 'abc', INK_TEST_KEYS.ctrlA, INK_TEST_KEYS.ctrlD);
     expect(onValueChange).toHaveBeenLastCalledWith('bc');
+  });
+
+  it('Ctrl+p/n move by visual row and are no-ops at the textarea boundaries', async () => {
+    const onCursorPosition = vi.fn();
+    const { stdin } = renderHarness({ onCursorPosition, lineWidth: 80 });
+
+    await typeAndKeys(stdin, 'one\ntwo\nsix', INK_TEST_KEYS.ctrlP);
+    expect(lastCursorPosition(onCursorPosition)).toEqual([1, 3]);
+
+    await typeAndKeys(stdin, INK_TEST_KEYS.ctrlP);
+    expect(lastCursorPosition(onCursorPosition)).toEqual([0, 3]);
+    const atTop = lastCursorPosition(onCursorPosition);
+    await typeAndKeys(stdin, INK_TEST_KEYS.ctrlP);
+    expect(lastCursorPosition(onCursorPosition)).toEqual(atTop);
+
+    await typeAndKeys(stdin, INK_TEST_KEYS.ctrlN);
+    expect(lastCursorPosition(onCursorPosition)).toEqual([1, 3]);
+    await typeAndKeys(stdin, INK_TEST_KEYS.ctrlN);
+    expect(lastCursorPosition(onCursorPosition)).toEqual([2, 3]);
+    const atBottom = lastCursorPosition(onCursorPosition);
+    await typeAndKeys(stdin, INK_TEST_KEYS.ctrlN);
+    expect(lastCursorPosition(onCursorPosition)).toEqual(atBottom);
   });
 
   it('Ctrl+k then Ctrl+y yanks the killed line via kill ring', async () => {

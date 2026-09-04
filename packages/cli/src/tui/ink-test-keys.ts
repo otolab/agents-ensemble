@@ -10,6 +10,10 @@ export const INK_TEST_KEYS = {
   ctrlB: '\x02',
   /** Readline Emacs: delete-char */
   ctrlD: '\x04',
+  /** Textarea visual row up (same direction as Up) */
+  ctrlP: '\x10',
+  /** Textarea visual row down (same direction as Down) */
+  ctrlN: '\x0e',
   /** Readline Emacs: kill-line */
   ctrlK: '\x0b',
   /** Readline Emacs: unix-line-discard */

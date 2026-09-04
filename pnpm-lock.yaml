@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@otolab/react-ink-textarea@0.4.1-otolab.0':
-    hash: ef24f43159737dfbf5c8f08166e8817b35a976327c565349337071cde3e70c44
+    hash: 797945b94a469220a14a5e3eac7b91fbcd309ff1a0c5fe3ebd7e8a4d95221ded
     path: patches/@otolab__react-ink-textarea@0.4.1-otolab.0.patch
 
 importers:
@@ -51,7 +51,7 @@ importers:
         version: 19.2.0
       react-ink-textarea:
         specifier: npm:@otolab/react-ink-textarea@0.4.1-otolab.0
-        version: '@otolab/react-ink-textarea@0.4.1-otolab.0(patch_hash=ef24f43159737dfbf5c8f08166e8817b35a976327c565349337071cde3e70c44)(ink@7.1.1(@types/react@19.2.2)(react@19.2.0))(react@19.2.0)'
+        version: '@otolab/react-ink-textarea@0.4.1-otolab.0(patch_hash=797945b94a469220a14a5e3eac7b91fbcd309ff1a0c5fe3ebd7e8a4d95221ded)(ink@7.1.1(@types/react@19.2.2)(react@19.2.0))(react@19.2.0)'
       string-width:
         specifier: 8.1.0
         version: 8.1.0
@@ -2333,7 +2333,7 @@ snapshots:
   '@openai/codex@0.148.0-win32-x64':
     optional: true
 
-  '@otolab/react-ink-textarea@0.4.1-otolab.0(patch_hash=ef24f43159737dfbf5c8f08166e8817b35a976327c565349337071cde3e70c44)(ink@7.1.1(@types/react@19.2.2)(react@19.2.0))(react@19.2.0)':
+  '@otolab/react-ink-textarea@0.4.1-otolab.0(patch_hash=797945b94a469220a14a5e3eac7b91fbcd309ff1a0c5fe3ebd7e8a4d95221ded)(ink@7.1.1(@types/react@19.2.2)(react@19.2.0))(react@19.2.0)':
     dependencies:
       ansi-styles: 6.2.3
       ink: 7.1.1(@types/react@19.2.2)(react@19.2.0)
