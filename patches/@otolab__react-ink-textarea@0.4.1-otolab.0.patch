@@ -80,12 +80,13 @@ diff --git a/dist/constants.js b/dist/constants.js
 index 107ac15b333773e3df798fbad973dc02bc79c47d..8aa9729a43592150aa1a6dc694d95fb5ec338e82 100644
 --- a/dist/constants.js
 +++ b/dist/constants.js
-@@ -19,6 +19,8 @@ export const DEFAULT_KEYBINDINGS = {
+@@ -19,6 +19,9 @@ export const DEFAULT_KEYBINDINGS = {
      "Alt+F": true,
      "Ctrl+A": true,
      "Ctrl+E": true,
 +    "Ctrl+F": true,
 +    "Ctrl+B": true,
++    "Ctrl+D": true,
      "Ctrl+W": true,
      "Ctrl+U": true,
      "Ctrl+K": true,
@@ -157,7 +158,7 @@ index 692d987ced4469ad328f6a40cd734da640e7c200..de1fa5992ecc6c7af3763623ffea12c4
      usePaste((text) => {
          const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
          if (!normalized)
-@@ -188,12 +188,39 @@ export const useKeyboardInput = ({ isActive, value, cursor, keybindings, autoNew
+@@ -188,12 +188,53 @@ export const useKeyboardInput = ({ isActive, value, cursor, keybindings, autoNew
              setCursor((c) => findLineEnd(value, c));
              return;
          }
@@ -183,6 +184,20 @@ index 692d987ced4469ad328f6a40cd734da640e7c200..de1fa5992ecc6c7af3763623ffea12c4
 +            }
 +            resetBlink();
 +            setCursor((c) => prevGraphemeOffset(value, c));
++            return;
++        }
++        if (key.ctrl && input === "d") {
++            if (!keybindings["Ctrl+D"])
++                return;
++            if (cursor === value.length)
++                return;
++            resetBlink();
++            pushUndo("delete", value, cursor);
++            const target = nextGraphemeOffset(value, cursor);
++            const newValue = value.slice(0, cursor) + value.slice(target);
++            setValue(newValue);
++            setCursor(cursor, newValue);
++            resetMutationTracking();
 +            return;
 +        }
          if (key.ctrl && input === "w") {
@@ -391,7 +406,7 @@ index 88a1a0084db5c159d2b608ce629858e7d27123af..42297159fa1d7628a620b93d703aa490
  };
  export type TLabels = readonly TLabelRule[];
 -export type TKeybinding = "Enter" | "Ctrl+J" | "Ctrl+Enter" | "Shift+Enter" | "Alt+Enter" | "Up" | "Down" | "Left" | "Right" | "Alt+B" | "Alt+F" | "Ctrl+A" | "Ctrl+E" | "Ctrl+W" | "Ctrl+U" | "Ctrl+K" | "Backspace" | "Delete" | "Alt+Backspace" | "Ctrl+Z" | "Ctrl+Y";
-+export type TKeybinding = "Enter" | "Ctrl+J" | "Ctrl+Enter" | "Shift+Enter" | "Alt+Enter" | "Up" | "Down" | "Left" | "Right" | "Alt+B" | "Alt+F" | "Ctrl+A" | "Ctrl+E" | "Ctrl+F" | "Ctrl+B" | "Ctrl+W" | "Ctrl+U" | "Ctrl+K" | "Backspace" | "Delete" | "Alt+Backspace" | "Ctrl+Z" | "Ctrl+Y" | "Alt+Y";
++export type TKeybinding = "Enter" | "Ctrl+J" | "Ctrl+Enter" | "Shift+Enter" | "Alt+Enter" | "Up" | "Down" | "Left" | "Right" | "Alt+B" | "Alt+F" | "Ctrl+A" | "Ctrl+E" | "Ctrl+F" | "Ctrl+B" | "Ctrl+D" | "Ctrl+W" | "Ctrl+U" | "Ctrl+K" | "Backspace" | "Delete" | "Alt+Backspace" | "Ctrl+Z" | "Ctrl+Y" | "Alt+Y";
  export type TKeybindings = Partial<Readonly<Record<TKeybinding, boolean>>>;
  export type TextAreaHandle = {
      readonly insert: (text: string) => void;

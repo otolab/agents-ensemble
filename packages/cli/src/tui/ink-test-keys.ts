@@ -8,6 +8,8 @@ export const INK_TEST_KEYS = {
   ctrlF: '\x06',
   /** Readline Emacs: backward-char */
   ctrlB: '\x02',
+  /** Readline Emacs: delete-char */
+  ctrlD: '\x04',
   /** Readline Emacs: kill-line */
   ctrlK: '\x0b',
   /** Readline Emacs: unix-line-discard */
