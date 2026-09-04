@@ -1,5 +1,14 @@
 # @agents-ensemble/cli
 
+## 0.5.2
+
+### Patch Changes
+
+- Updated dependencies [ced9195]
+- Updated dependencies [299fce5]
+- Updated dependencies [a231f12]
+  - @agents-ensemble/core@0.5.2
+
 ## 0.5.1
 
 ### Patch Changes
