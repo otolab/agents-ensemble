@@ -1,6 +1,7 @@
 import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import type { OperatorInputContext } from '@agents-ensemble/core';
+import { formatIssueReference } from './tui/format-operator-context.js';
 
 const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
 
@@ -23,6 +24,7 @@ function formatMaxTurnsLabel(maxTurns: number | null): string {
 
 export async function promptOperatorInput(
   context: OperatorInputContext,
+  issueUrl?: string,
 ): Promise<string | undefined> {
   const fromEnv = process.env[OPERATOR_MESSAGE_ENV]?.trim();
   if (fromEnv) {
@@ -31,6 +33,10 @@ export async function promptOperatorInput(
 
   if (!input.isTTY) {
     return undefined;
+  }
+
+  if (issueUrl) {
+    output.write(`\nIssue: ${formatIssueReference(issueUrl, 'url')}\n`);
   }
 
   if (context.openQuestions.length > 0) {

@@ -286,6 +286,9 @@ describe('executeIssueCommand maxTurns wiring', () => {
       }),
     );
     expect(mockTuiHost.createIssueSessionTuiHost).toHaveBeenCalledTimes(1);
+    expect(mockTuiHost.createIssueSessionTuiHost).toHaveBeenCalledWith(
+      'https://github.com/org/repo/issues/1',
+    );
     expect(mockTuiHost.dispose).toHaveBeenCalledTimes(1);
     expect(runIssueSession).toHaveBeenCalledWith(
       expect.not.objectContaining({

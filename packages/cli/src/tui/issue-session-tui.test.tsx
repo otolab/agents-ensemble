@@ -57,6 +57,7 @@ function fillScrollableHarnessLog(viewModel: ReturnType<typeof createTuiViewMode
 }
 
 const SCROLL_HINT = 'PgUp/PgDn でスクロール';
+const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/249';
 
 function createOpenQuestion(
   overrides: Partial<OpenQuestion> & Pick<OpenQuestion, 'id' | 'question'>,
@@ -152,6 +153,106 @@ describe('IssueSessionTui', () => {
     );
 
     expect(lastFrame() ?? '').toContain('post-loop 待機中');
+  });
+
+  it('keeps the current issue link across context hint lifecycle states', async () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 2,
+      maxTurns: null,
+      openQuestions: [],
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        issueUrl={ISSUE_URL}
+        onSubmit={() => {}}
+      />,
+    );
+
+    const issueLabel = 'otolab/agents-ensemble#249';
+    const osc8Open = `\u001b]8;;${ISSUE_URL}\u0007`;
+    expect(lastFrame() ?? '').toContain(issueLabel);
+    expect(lastFrame() ?? '').toContain(osc8Open);
+    expect(lastFrame() ?? '').toContain('自律ターン 2/∞');
+
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Continue?' })],
+    });
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 2,
+      maxTurns: null,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Continue?' })],
+    });
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(issueLabel);
+    expect(lastFrame() ?? '').toContain('— inq-1');
+
+    viewModel.setPostLoopWaiting(true);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(issueLabel);
+    expect(lastFrame() ?? '').toContain('— post-loop 待機中');
+
+    viewModel.setShuttingDown(true);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(issueLabel);
+    expect(lastFrame() ?? '').toContain('— 終了しています…');
+  });
+
+  it('renders only the issue label when OSC 8 is unavailable', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 0,
+      maxTurns: null,
+      openQuestions: [],
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        issueUrl={ISSUE_URL}
+        issueLinkMode="label"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('otolab/agents-ensemble#249');
+    expect(frame).not.toContain('\u001b]8;;');
+  });
+
+  it('does not split an OSC 8 sequence when the issue label cannot fit', () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 20,
+    });
+
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 0,
+      maxTurns: null,
+      openQuestions: [],
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        issueUrl={ISSUE_URL}
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('otolab/agents-en');
+    expect(frame).toContain('semble#249');
+    expect(frame).not.toContain('\u001b]8;;');
   });
 
   it('aligns IME cursor coordinates with the rendered operator input line', () => {
