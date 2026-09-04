@@ -1,5 +1,13 @@
 # @agents-ensemble/cli
 
+## 0.5.3
+
+### Patch Changes
+
+- 9c2f97e: TTY オペレータ入力欄の Emacs 風 `Ctrl+f/b` の実キー経路を CI で検証し、`Ctrl+d` の 1 文字削除を追加。
+- 26f4dd9: TTY の Issue コンテキスト表示に OSC 8 リンクと非対応端末向けフォールバックを追加。
+  - @agents-ensemble/core@0.5.3
+
 ## 0.5.2
 
 ### Patch Changes
