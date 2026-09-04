@@ -2,7 +2,13 @@ import { Box, Text, useBoxMetrics, useInput } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
 import type { WorkerDisplayStatus } from '../display/session-display-state.js';
-import { formatOperatorContextHint } from './format-operator-context.js';
+import {
+  formatIssueLabel,
+  formatIssueReference,
+  formatOperatorContextHint,
+  prependIssueReference,
+  type IssueLinkMode,
+} from './format-operator-context.js';
 import {
   ACTIVITY_LOG_LABEL_COLORS,
   advanceActivityLogScrollOffset,
@@ -46,6 +52,8 @@ import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string, options?: OperatorInputSubmitOptions) => void;
+  issueUrl?: string;
+  issueLinkMode?: IssueLinkMode;
 }
 
 function usePaneContentWidth(): number {
@@ -60,17 +68,33 @@ function WrappedTextLines({
   text,
   width,
   dimColor = false,
+  issueUrl,
+  issueLinkMode = 'label',
 }: {
   text: string;
   width: number;
   dimColor?: boolean;
+  issueUrl?: string;
+  issueLinkMode?: IssueLinkMode;
 }) {
   const lines = wrapTextToWidth(text, width);
+  const issueLabel = issueUrl ? formatIssueLabel(issueUrl) : undefined;
+  const issueLink =
+    issueUrl && issueLabel && issueLinkMode === 'osc8'
+      ? formatIssueReference(issueUrl, 'osc8')
+      : undefined;
   return (
     <>
       {lines.map((line, index) => (
         <Text key={`${index}-${line}`} dimColor={dimColor}>
-          {line}
+          {index === 0 && issueLink && issueLabel && line.startsWith(issueLabel) ? (
+            <>
+              <Text>{issueLink}</Text>
+              <Text>{line.slice(issueLabel.length)}</Text>
+            </>
+          ) : (
+            line
+          )}
         </Text>
       ))}
     </>
@@ -254,7 +278,12 @@ function OpenQuestionsPane({ layout }: { layout: OpenQuestionsPaneLayout }) {
   );
 }
 
-export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
+export function IssueSessionTui({
+  viewModel,
+  onSubmit,
+  issueUrl,
+  issueLinkMode = 'osc8',
+}: IssueSessionTuiProps) {
   const snapshot = useSyncExternalStore(
     viewModel.subscribe,
     viewModel.getSnapshot,
@@ -294,7 +323,12 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
             }
           : undefined,
       );
-  const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
+  const contextHintText = prependIssueReference(
+    issueUrl,
+    contextHint,
+    issueLinkMode === 'url' ? 'url' : 'label',
+  );
+  const hintLineCount = wrapTextToWidth(contextHintText, contentWidth).length;
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const inputPaneHeight = computeInputPaneHeight({
     hintLineCount,
@@ -423,7 +457,13 @@ export function IssueSessionTui({ viewModel, onSubmit }: IssueSessionTuiProps) {
         paddingX={PANE_PADDING_X}
         height={inputPaneHeight}
       >
-        <WrappedTextLines text={contextHint} width={contentWidth} dimColor />
+        <WrappedTextLines
+          text={contextHintText}
+          width={contentWidth}
+          dimColor
+          issueUrl={issueUrl}
+          issueLinkMode={issueLinkMode}
+        />
         <OperatorTextArea
           value={inputValue}
           onChange={setInputValue}

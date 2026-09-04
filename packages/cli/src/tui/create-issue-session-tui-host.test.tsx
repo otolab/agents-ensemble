@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockUnmount, mockRender } = vi.hoisted(() => {
   const mockUnmount = vi.fn();
-  const mockRender = vi.fn(() => ({ unmount: mockUnmount }));
+  const mockRender = vi.fn((_element: unknown) => ({ unmount: mockUnmount }));
   return { mockUnmount, mockRender };
 });
 
@@ -38,6 +38,17 @@ describe('createIssueSessionTuiHost', () => {
     if (previous !== undefined) {
       process.env.ENSEMBLE_OPERATOR_MESSAGE = previous;
     }
+  });
+
+  it('passes the current issue URL to the TUI view', () => {
+    const issueUrl = 'https://github.com/org/repo/issues/1';
+    const host = createIssueSessionTuiHost(issueUrl);
+    const renderedElement = mockRender.mock.calls[0]?.[0] as {
+      props: { issueUrl?: string };
+    };
+
+    expect(renderedElement.props.issueUrl).toBe(issueUrl);
+    host.dispose();
   });
 
   it('starts Ink render and exposes display backend with activity log', () => {

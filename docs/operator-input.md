@@ -100,6 +100,14 @@ ensemble issue <url> --no-max-turns   # 無制限
 
 View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver が Policy を参照して行う。
 
+### Issue リンク
+
+TTY の Ink TUI では、入力欄直上のコンテキスト行の先頭に作業中 Issue の
+`owner/repo#number` を表示する。対応端末では OSC 8 リンクとして表示され、Cmd+クリック
+（または端末の同等操作）で `issueUrl` をブラウザで開ける。Issue 参照は open question
+選択中、post-loop 待機中、終了中も表示する。未対応または未知の TTY ではラベルのみ、
+非 TTY では既存のフォールバック出力を維持し、OSC 8 制御文字を出力しない。
+
 ## post-loop 待機（プロセス維持）
 
 自律ループ停止後、CLI TTY デフォルトでは harness が **post-loop 待機** に入る（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。この間も SessionDriver は停止せず、イベントキューで次の dispatch を待つ。`session.post_loop_wait` は待機 UX の開始通知であり、イベント配送を止める合図ではない。

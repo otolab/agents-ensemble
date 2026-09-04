@@ -1,17 +1,26 @@
 import * as readline from 'node:readline/promises';
 import { stdin as input, stderr, stdout as output } from 'node:process';
 import type { OperatorInputBindingApi, OperatorInputContext } from '@agents-ensemble/core';
+import { formatIssueReference } from './tui/format-operator-context.js';
 
 const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
 
 let activeReprompt: (() => void) | undefined;
+
+export interface AsyncOperatorInputOptions {
+  issueUrl?: string;
+}
 
 /** open question 追加時に TTY プロンプト直前の案内を更新する。 */
 export function notifyOperatorInputReprompt(): void {
   activeReprompt?.();
 }
 
-function writeBeforePrompt(context: OperatorInputContext): void {
+function writeBeforePrompt(context: OperatorInputContext, issueUrl?: string): void {
+  if (issueUrl) {
+    stderr.write(`\nIssue: ${formatIssueReference(issueUrl, 'url')}\n`);
+  }
+
   const { openQuestions } = context;
   if (openQuestions.length === 0) {
     return;
@@ -29,7 +38,10 @@ function writeBeforePrompt(context: OperatorInputContext): void {
 }
 
 /** TTY 向け: 行入力を非ブロッキングで `submit` へ渡す。 */
-export function bindAsyncOperatorInput(api: OperatorInputBindingApi): () => void {
+export function bindAsyncOperatorInput(
+  api: OperatorInputBindingApi,
+  options: AsyncOperatorInputOptions = {},
+): () => void {
   const fromEnv = process.env[OPERATOR_MESSAGE_ENV]?.trim();
   if (fromEnv) {
     api.submit(fromEnv);
@@ -48,7 +60,7 @@ export function bindAsyncOperatorInput(api: OperatorInputBindingApi): () => void
   rl.setPrompt('operator> ');
 
   const showPrompt = () => {
-    writeBeforePrompt(api.getContext());
+    writeBeforePrompt(api.getContext(), options.issueUrl);
     rl.prompt();
   };
 

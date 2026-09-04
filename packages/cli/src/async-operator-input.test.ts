@@ -162,6 +162,33 @@ describe('bindAsyncOperatorInput', () => {
     dispose();
   });
 
+  it('writes a plain issue URL before the readline prompt', () => {
+    delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+
+    Object.defineProperty(process.stdin, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+
+    const dispose = bindAsyncOperatorInput(
+      {
+        submit: vi.fn(() => true),
+        getContext: () => ({
+          conductorTurn: 1,
+          autonomousTurns: 0,
+          maxTurns: 5,
+          openQuestions: [],
+        }),
+      },
+      { issueUrl: 'https://github.com/org/repo/issues/1' },
+    );
+
+    expect(stderrWrites.join('')).toContain('Issue: https://github.com/org/repo/issues/1');
+    expect(stderrWrites.join('')).not.toContain('\u001b]8;;');
+
+    dispose();
+  });
+
   it('refreshes prompt when notifyOperatorInputReprompt is called', () => {
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
 

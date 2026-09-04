@@ -137,7 +137,7 @@ export async function executeIssueCommand(
   );
   const interactive = isInteractive();
   const useTui = interactive && isTty();
-  const tuiHost = useTui ? createIssueSessionTuiHost() : undefined;
+  const tuiHost = useTui ? createIssueSessionTuiHost(issueUrl) : undefined;
   const sessionLogger = new SessionLoggerCtor({ issueUrl, repoRoot });
   if (useTui) {
     sessionLogger.subscribe(tuiHost!.telemetrySink);
@@ -210,7 +210,8 @@ export async function executeIssueCommand(
       ...(defaultAcp ? { defaultAcp: { ...defaultAcp, config: ensembleConfig } } : { defaultAcp: { config: ensembleConfig } }),
       ...(interactive
         ? {
-            bindOperatorInput: tuiHost?.bindOperatorInput ?? bindAsyncOperatorInput,
+            bindOperatorInput:
+              tuiHost?.bindOperatorInput ?? ((api) => bindAsyncOperatorInput(api, { issueUrl })),
             continueOnConductorError: true,
             ...(isTty() && postLoopWait
               ? {

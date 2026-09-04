@@ -12,6 +12,7 @@ import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { trimBlankLinesOnly } from './operator-input-layout.js';
+import { supportsOsc8Hyperlinks } from './format-operator-context.js';
 
 const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
 
@@ -83,7 +84,7 @@ function createBindTuiOperatorInput(
 }
 
 /** TTY 向け Ink TUI を起動し、表示 backend とオペレータ入力 binding を返す。 */
-export function createIssueSessionTuiHost(): IssueSessionTuiHost {
+export function createIssueSessionTuiHost(issueUrl?: string): IssueSessionTuiHost {
   const viewModel = createTuiViewModel();
   const onSubmitRef: {
     current: ((text: string, options?: OperatorInputSubmitOptions) => void) | undefined;
@@ -97,6 +98,8 @@ export function createIssueSessionTuiHost(): IssueSessionTuiHost {
   const ink = render(
     <IssueSessionTui
       viewModel={viewModel}
+      issueUrl={issueUrl}
+      issueLinkMode={supportsOsc8Hyperlinks() ? 'osc8' : 'label'}
       onSubmit={(text, options) => {
         onSubmitRef.current?.(text, options);
       }}
