@@ -80,13 +80,14 @@ describe('IssueSessionTuiStream', () => {
 
     const frame = lastFrame() ?? '';
     const operatorInputIndex = frame.indexOf('Operator input');
-    const openQuestionsIndex = frame.indexOf('Open questions');
+    const emptyStateIndex = frame.indexOf('(未回答なし)');
     const hintIndex = frame.indexOf('post-loop 待機中');
     const workersIndex = frame.indexOf('Workers');
 
     expect(operatorInputIndex).toBeGreaterThanOrEqual(0);
-    expect(openQuestionsIndex).toBeGreaterThan(operatorInputIndex);
-    expect(hintIndex).toBeGreaterThan(openQuestionsIndex);
+    expect(frame).not.toContain('Open questions');
+    expect(emptyStateIndex).toBeGreaterThan(operatorInputIndex);
+    expect(hintIndex).toBeGreaterThan(emptyStateIndex);
     expect(workersIndex).toBeGreaterThan(operatorInputIndex);
     expect(frame).toContain('(未回答なし)');
     expect(frame).toContain(

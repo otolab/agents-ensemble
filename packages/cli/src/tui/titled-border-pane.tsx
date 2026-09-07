@@ -11,8 +11,6 @@ export interface TitledBorderPaneProps {
   borderStyle: TuiBorderStyle;
   borderColor?: BoxProps['borderColor'];
   height: number;
-  /** 親ペインへネストするときの総幅。省略時は端末幅を使う。 */
-  width?: number;
   paddingX?: number;
   titleBold?: boolean;
   children: ReactNode;
@@ -25,12 +23,11 @@ export function TitledBorderPane({
   borderStyle,
   borderColor,
   height,
-  width,
   paddingX = 1,
   titleBold = true,
   children,
 }: TitledBorderPaneProps) {
-  const totalWidth = width ?? process.stdout.columns ?? 80;
+  const totalWidth = process.stdout.columns ?? 80;
   const parts = buildTitledTopBorderParts({
     title,
     suffix: titleSuffix,
@@ -40,7 +37,7 @@ export function TitledBorderPane({
   const bodyHeight = Math.max(1, height - 1);
 
   return (
-    <Box flexDirection="column" width={width} height={height} overflow="hidden">
+    <Box flexDirection="column" height={height} overflow="hidden">
       <Text>
         <Text color={borderColor}>{parts.left}</Text>
         {titleBold ? (

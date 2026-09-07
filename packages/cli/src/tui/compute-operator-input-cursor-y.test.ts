@@ -159,8 +159,7 @@ describe('computeStreamOperatorInputCursorY', () => {
     ).toBe(
       OPEN_QUESTIONS_PANE_MIN_HEIGHT +
         PANE_BORDER_ROWS / 2 +
-        1 +
-        OPERATOR_INPUT_CURSOR_Y_OFFSET,
+        1,
     );
   });
 
@@ -177,10 +176,10 @@ describe('computeStreamOperatorInputCursorY', () => {
     expect(twoLines).toBe(oneLine + 1);
   });
 
-  it('includes a nested empty-state pane before the hint', () => {
+  it('includes a nested empty-state row before the hint', () => {
     const nested = computeStreamOperatorInputCursorY({
       openQuestionsPaneHeight: 0,
-      nestedOpenQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      nestedOpenQuestionsStateHeight: 1,
       hintLineCount: 1,
     });
     const flat = computeStreamOperatorInputCursorY({
@@ -188,6 +187,6 @@ describe('computeStreamOperatorInputCursorY', () => {
       hintLineCount: 1,
     });
 
-    expect(nested).toBe(flat + OPEN_QUESTIONS_PANE_MIN_HEIGHT);
+    expect(nested).toBe(flat + 1);
   });
 });

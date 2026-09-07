@@ -19,9 +19,6 @@ import {
   computeOperatorInputCursorX,
   computeStreamOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
-import {
-  OPEN_QUESTIONS_PANE_MIN_HEIGHT,
-} from './tui-layout-constants.js';
 
 describe('IssueSessionTuiStream IME cursor contract', () => {
   beforeEach(() => {
@@ -50,11 +47,15 @@ describe('IssueSessionTuiStream IME cursor contract', () => {
     };
     expect(props.cursorStart).toEqual({
       x: computeOperatorInputCursorX('operator> '),
-      y: computeStreamOperatorInputCursorY({
+      // live frame: input title (1) + empty-state row (1) + hint (1)
+      y: 3,
+    });
+    expect(props.cursorStart?.y).toBe(
+      computeStreamOperatorInputCursorY({
         openQuestionsPaneHeight: 0,
-        nestedOpenQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+        nestedOpenQuestionsStateHeight: 1,
         hintLineCount: 1,
       }),
-    });
+    );
   });
 });

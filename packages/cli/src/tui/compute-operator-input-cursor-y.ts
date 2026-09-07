@@ -98,27 +98,29 @@ export function computeOperatorInputCursorY(params: {
  *
  * Static 出力は Ink の dynamic output の外側へ追記されるため、stream の
  * `cursorStart` は端末全体ではなく live frame 内の行として計算する。
- * Open questions は入力欄の上に表示し、空状態では入力ペイン内にネストする。
+ * Open questions は入力欄の上に表示し、空状態では入力ペイン内に本文行を置く。
+ * Stream の dynamic root は pane の log-update 補正を持たないため、
+ * `OPERATOR_INPUT_CURSOR_Y_OFFSET` は加算しない。
  */
 export function computeStreamOperatorInputCursorY(params: {
   openQuestionsPaneHeight: number;
-  nestedOpenQuestionsPaneHeight?: number;
+  nestedOpenQuestionsStateHeight?: number;
   hintLineCount: number;
   cursorLineOffset?: number;
 }): number {
-  const nestedOpenQuestionsPaneHeight = Math.max(
+  const nestedOpenQuestionsStateHeight = Math.max(
     0,
-    params.nestedOpenQuestionsPaneHeight ?? 0,
+    params.nestedOpenQuestionsStateHeight ?? 0,
   );
   const cursorLineOffset = params.cursorLineOffset ?? 0;
   const inputLineIndex =
     params.openQuestionsPaneHeight +
     PANE_BORDER_ROWS / 2 +
-    nestedOpenQuestionsPaneHeight +
+    nestedOpenQuestionsStateHeight +
     params.hintLineCount +
     cursorLineOffset;
 
-  return inputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
+  return inputLineIndex;
 }
 
 /** 描画フレーム上のオペレータ入力行インデックス（`useCursor` の Y 補正前）。 */

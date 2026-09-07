@@ -1,4 +1,4 @@
-import { Box, Static, useInput } from 'ink';
+import { Box, Static, Text, useInput } from 'ink';
 import {
   useCallback,
   useEffect,
@@ -47,6 +47,9 @@ export interface IssueSessionTuiStreamProps {
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
 }
+
+/** 空の open question 状態を入力ペイン内へ表示する本文行。独立枠は描画しない。 */
+const EMPTY_OPEN_QUESTIONS_STATE_HEIGHT = 1;
 
 function useStreamContentWidth(): number {
   return getPaneContentWidth({
@@ -127,13 +130,15 @@ export function IssueSessionTuiStream({
       )
     : '';
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
-  const nestedOpenQuestionsPaneHeight = hasOpenQuestions ? 0 : openQuestionsLayout.paneHeight;
+  const nestedOpenQuestionsStateHeight = hasOpenQuestions
+    ? 0
+    : EMPTY_OPEN_QUESTIONS_STATE_HEIGHT;
   const hintLineCount = contextHintText
     ? wrapTextToWidth(contextHintText, contentWidth).length
     : 0;
   const desiredInputPaneHeight = computeInputPaneHeight({
     hintLineCount,
-    nestedContentHeight: nestedOpenQuestionsPaneHeight,
+    nestedContentHeight: nestedOpenQuestionsStateHeight,
     inputDisplayLineCount: visibleInputDisplayLineCount,
   });
   const openQuestionsPaneHeight = hasOpenQuestions ? openQuestionsLayout.paneHeight : 0;
@@ -150,7 +155,7 @@ export function IssueSessionTuiStream({
     x: computeOperatorInputCursorX(operatorPrompt),
     y: computeStreamOperatorInputCursorY({
       openQuestionsPaneHeight: streamPaneHeights.openQuestionsPaneHeight,
-      nestedOpenQuestionsPaneHeight,
+      nestedOpenQuestionsStateHeight,
       hintLineCount,
     }),
   };
@@ -232,12 +237,7 @@ export function IssueSessionTuiStream({
           paddingX={PANE_PADDING_X}
           height={streamPaneHeights.inputPaneHeight}
         >
-          {nestedOpenQuestionsPaneHeight > 0 ? (
-            <OpenQuestionsPane
-              layout={streamOpenQuestionsLayout}
-              width={contentWidth}
-            />
-          ) : null}
+          {!hasOpenQuestions ? <Text dimColor>(未回答なし)</Text> : null}
           {contextHintText ? (
             <WrappedTextLines
               text={contextHintText}
