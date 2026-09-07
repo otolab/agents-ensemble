@@ -100,6 +100,7 @@ export function IssueSessionTuiStream({
   const operatorPrompt = 'operator> ';
   const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
   const openQuestions = snapshot.displayState.openQuestions;
+  const hasOpenQuestions = openQuestions.length > 0;
   const openQuestionsLayout = useMemo(
     () =>
       resolveOpenQuestionsPaneLayout({
@@ -111,54 +112,56 @@ export function IssueSessionTuiStream({
     [openQuestions, selectedQuestionIndex, contentWidth, terminalRows],
   );
   const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
-  const contextHint = snapshot.shuttingDown
-    ? '終了しています…'
-    : snapshot.postLoopWaiting
-      ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
-      : formatOperatorContextHint(
-          snapshot.operatorContext,
-          selectedQuestion
-            ? {
-                id: selectedQuestion.id,
-                index: openQuestionsLayout.selectedIndex,
-                total: openQuestions.length,
-              }
-            : undefined,
-        );
-  const contextHintText = prependIssueReference(
-    issueUrl,
-    contextHint,
-    issueLinkMode === 'url' ? 'url' : 'label',
-  );
+  const contextHint = hasOpenQuestions
+    ? ''
+    : snapshot.shuttingDown
+      ? '終了しています…'
+      : snapshot.postLoopWaiting
+        ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
+        : formatOperatorContextHint(snapshot.operatorContext);
+  const contextHintText = contextHint
+    ? prependIssueReference(
+        issueUrl,
+        contextHint,
+        issueLinkMode === 'url' ? 'url' : 'label',
+      )
+    : '';
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
-  const hintLineCount = wrapTextToWidth(contextHintText, contentWidth).length;
+  const nestedOpenQuestionsPaneHeight = hasOpenQuestions ? 0 : openQuestionsLayout.paneHeight;
+  const hintLineCount = contextHintText
+    ? wrapTextToWidth(contextHintText, contentWidth).length
+    : 0;
   const desiredInputPaneHeight = computeInputPaneHeight({
     hintLineCount,
+    nestedContentHeight: nestedOpenQuestionsPaneHeight,
     inputDisplayLineCount: visibleInputDisplayLineCount,
   });
+  const openQuestionsPaneHeight = hasOpenQuestions ? openQuestionsLayout.paneHeight : 0;
   const streamPaneHeights = useMemo(
     () =>
       resolveStreamPaneHeights({
         terminalRows,
-        openQuestionsPaneHeight: openQuestionsLayout.paneHeight,
+        openQuestionsPaneHeight,
         inputPaneHeight: desiredInputPaneHeight,
-    }),
-    [terminalRows, openQuestionsLayout.paneHeight, desiredInputPaneHeight],
+      }),
+    [terminalRows, openQuestionsPaneHeight, desiredInputPaneHeight],
   );
   const cursorStart = {
     x: computeOperatorInputCursorX(operatorPrompt),
     y: computeStreamOperatorInputCursorY({
-      workerPaneHeight: streamPaneHeights.workerPaneHeight,
       openQuestionsPaneHeight: streamPaneHeights.openQuestionsPaneHeight,
+      nestedOpenQuestionsPaneHeight,
       hintLineCount,
     }),
   };
   const streamOpenQuestionsLayout = useMemo(
     () => ({
       ...openQuestionsLayout,
-      paneHeight: streamPaneHeights.openQuestionsPaneHeight,
+      paneHeight: hasOpenQuestions
+        ? streamPaneHeights.openQuestionsPaneHeight
+        : openQuestionsLayout.paneHeight,
     }),
-    [openQuestionsLayout, streamPaneHeights.openQuestionsPaneHeight],
+    [hasOpenQuestions, openQuestionsLayout, streamPaneHeights.openQuestionsPaneHeight],
   );
   const handleDisplayLineCountChange = useCallback((lineCount: number) => {
     setInputDisplayLineCount(Math.max(1, lineCount));
@@ -217,14 +220,11 @@ export function IssueSessionTuiStream({
       />
       <Box
         flexDirection="column"
+        width={process.stdout.columns ?? 80}
         height={streamPaneHeights.dynamicFrameHeight}
         overflow="hidden"
       >
-        <WorkerStatusPane
-          workers={snapshot.displayState.workers}
-          height={streamPaneHeights.workerPaneHeight}
-        />
-        <OpenQuestionsPane layout={streamOpenQuestionsLayout} />
+        {hasOpenQuestions ? <OpenQuestionsPane layout={streamOpenQuestionsLayout} /> : null}
         <TitledBorderPane
           title={INPUT_PANE_TITLE}
           borderStyle="single"
@@ -232,13 +232,21 @@ export function IssueSessionTuiStream({
           paddingX={PANE_PADDING_X}
           height={streamPaneHeights.inputPaneHeight}
         >
-          <WrappedTextLines
-            text={contextHintText}
-            width={contentWidth}
-            dimColor
-            issueUrl={issueUrl}
-            issueLinkMode={issueLinkMode}
-          />
+          {nestedOpenQuestionsPaneHeight > 0 ? (
+            <OpenQuestionsPane
+              layout={streamOpenQuestionsLayout}
+              width={contentWidth}
+            />
+          ) : null}
+          {contextHintText ? (
+            <WrappedTextLines
+              text={contextHintText}
+              width={contentWidth}
+              dimColor
+              issueUrl={issueUrl}
+              issueLinkMode={issueLinkMode}
+            />
+          ) : null}
           <OperatorTextArea
             value={inputValue}
             onChange={setInputValue}
@@ -251,6 +259,10 @@ export function IssueSessionTuiStream({
             cursorStart={cursorStart}
           />
         </TitledBorderPane>
+        <WorkerStatusPane
+          workers={snapshot.displayState.workers}
+          height={streamPaneHeights.workerPaneHeight}
+        />
       </Box>
     </>
   );

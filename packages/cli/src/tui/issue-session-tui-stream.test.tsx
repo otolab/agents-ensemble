@@ -61,6 +61,39 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).toContain('Open questions');
     expect(frame).toContain('Operator input');
     expect(frame).not.toContain('Orchestration');
+    expect(frame.indexOf('Open questions')).toBeLessThan(frame.indexOf('Operator input'));
+    expect(frame.indexOf('Operator input')).toBeLessThan(frame.indexOf('Workers'));
+  });
+
+  it('nests the empty open-question state in input and shows the no-question hint', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setPostLoopWaiting(true);
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueUrl="https://github.com/otolab/agents-ensemble/issues/261"
+        issueLinkMode="label"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    const operatorInputIndex = frame.indexOf('Operator input');
+    const openQuestionsIndex = frame.indexOf('Open questions');
+    const hintIndex = frame.indexOf('post-loop 待機中');
+    const workersIndex = frame.indexOf('Workers');
+
+    expect(operatorInputIndex).toBeGreaterThanOrEqual(0);
+    expect(openQuestionsIndex).toBeGreaterThan(operatorInputIndex);
+    expect(hintIndex).toBeGreaterThan(openQuestionsIndex);
+    expect(workersIndex).toBeGreaterThan(operatorInputIndex);
+    expect(frame).toContain('(未回答なし)');
+    expect(frame).toContain(
+      'otolab/agents-ensemble#261 — post-loop 待機中 — 追加指示を入力するか /exit',
+    );
+    expect(frame).toContain('で終了');
+    expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(80);
   });
 
   it('appends a later activity entry without replacing the earlier static entry', async () => {

@@ -255,7 +255,13 @@ function OrchestrationPane({
   );
 }
 
-export function OpenQuestionsPane({ layout }: { layout: OpenQuestionsPaneLayout }) {
+export function OpenQuestionsPane({
+  layout,
+  width,
+}: {
+  layout: OpenQuestionsPaneLayout;
+  width?: number;
+}) {
   return (
     <TitledBorderPane
       title={layout.titleText}
@@ -263,6 +269,7 @@ export function OpenQuestionsPane({ layout }: { layout: OpenQuestionsPaneLayout 
       borderColor="magenta"
       paddingX={PANE_PADDING_X}
       height={layout.paneHeight}
+      width={width}
       titleBold={false}
     >
       {layout.items.length === 0 ? (

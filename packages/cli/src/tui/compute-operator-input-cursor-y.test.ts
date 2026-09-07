@@ -28,6 +28,15 @@ describe('computeInputPaneHeight', () => {
       computeInputPaneHeight({ hintLineCount: 1, inputDisplayLineCount: 4 }),
     ).toBe(INPUT_PANE_BORDER_ROWS + 1 + 4);
   });
+
+  it('includes nested stream content inside the input pane', () => {
+    expect(
+      computeInputPaneHeight({
+        hintLineCount: 1,
+        nestedContentHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      }),
+    ).toBe(INPUT_PANE_BORDER_ROWS + OPEN_QUESTIONS_PANE_MIN_HEIGHT + 1 + 1);
+  });
 });
 
 describe('computeActivityPaneHeight', () => {
@@ -144,13 +153,11 @@ describe('computeStreamOperatorInputCursorY', () => {
   it('anchors the IME cursor to the stream live frame', () => {
     expect(
       computeStreamOperatorInputCursorY({
-        workerPaneHeight: WORKER_PANE_HEIGHT,
         openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
         hintLineCount: 1,
       }),
     ).toBe(
-      WORKER_PANE_HEIGHT +
-        OPEN_QUESTIONS_PANE_MIN_HEIGHT +
+      OPEN_QUESTIONS_PANE_MIN_HEIGHT +
         PANE_BORDER_ROWS / 2 +
         1 +
         OPERATOR_INPUT_CURSOR_Y_OFFSET,
@@ -159,16 +166,28 @@ describe('computeStreamOperatorInputCursorY', () => {
 
   it('moves the first input row when the context hint wraps', () => {
     const oneLine = computeStreamOperatorInputCursorY({
-      workerPaneHeight: WORKER_PANE_HEIGHT,
       openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
       hintLineCount: 1,
     });
     const twoLines = computeStreamOperatorInputCursorY({
-      workerPaneHeight: WORKER_PANE_HEIGHT,
       openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
       hintLineCount: 2,
     });
 
     expect(twoLines).toBe(oneLine + 1);
+  });
+
+  it('includes a nested empty-state pane before the hint', () => {
+    const nested = computeStreamOperatorInputCursorY({
+      openQuestionsPaneHeight: 0,
+      nestedOpenQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      hintLineCount: 1,
+    });
+    const flat = computeStreamOperatorInputCursorY({
+      openQuestionsPaneHeight: 0,
+      hintLineCount: 1,
+    });
+
+    expect(nested).toBe(flat + OPEN_QUESTIONS_PANE_MIN_HEIGHT);
   });
 });

@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { resolveStreamPaneHeights } from './stream-layout.js';
 
 describe('resolveStreamPaneHeights', () => {
+  it('omits the independent open-questions pane when its height is zero', () => {
+    const heights = resolveStreamPaneHeights({
+      terminalRows: 24,
+      openQuestionsPaneHeight: 0,
+      inputPaneHeight: 7,
+    });
+
+    expect(heights.openQuestionsPaneHeight).toBe(0);
+    expect(heights.dynamicFrameHeight).toBe(
+      heights.workerPaneHeight + heights.inputPaneHeight,
+    );
+    expect(heights.dynamicFrameHeight).toBeLessThan(24);
+  });
+
   it('keeps the live frame below the terminal height', () => {
     const heights = resolveStreamPaneHeights({
       terminalRows: 24,

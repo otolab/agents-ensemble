@@ -157,7 +157,7 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 
 ### #257 の stream レイアウト
 
-既定の `pane` レイアウトを維持したまま、`ENSEMBLE_TUI_LAYOUT=stream` を指定した TTY では活動ログを Ink の `<Static>` で枠なし追記し、Workers / Open questions / Operator input を下部の枠付き live UI として表示する。`alternateScreen` は使わず、過去ログは端末 scrollback を正本とする。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使うが、`cursorStart` の Y 座標は Static 領域ではなく下部 live frame を原点に計算する。Static の append-only 要件に合わせ、stream の活動ログは表示中のプロセス内で保持するが、セッション sidecar や活動ログファイルには永続化しない。端末幅変更時の既追記行の再折り返し、および scrollback 閲覧中の新着ログによる末尾復帰は運用上の制限として README / operator-input.md に記録する。
+既定の `pane` レイアウトを維持したまま、`ENSEMBLE_TUI_LAYOUT=stream` を指定した TTY では活動ログを Ink の `<Static>` で枠なし追記し、下部の live UI を **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に表示する。未回答の open question がないときは空状態の Open questions UI を Operator input 内へネストし、post-loop 待機などの入力ヒントもこの場合だけ入力ペイン内に表示する。`alternateScreen` は使わず、過去ログは端末 scrollback を正本とする。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使うが、`cursorStart` の Y 座標は Static 領域ではなく下部 live frame を原点に計算する。Static の append-only 要件に合わせ、stream の活動ログは表示中のプロセス内で保持するが、セッション sidecar や活動ログファイルには永続化しない。端末幅変更時の既追記行の再折り返し、および scrollback 閲覧中の新着ログによる末尾復帰は運用上の制限として README / operator-input.md に記録する。
 
 ## 関連
 
