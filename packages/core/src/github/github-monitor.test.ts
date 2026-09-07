@@ -115,6 +115,56 @@ describe('createGitHubMonitor', () => {
     expect(onUpdate).toHaveBeenCalledTimes(1);
   });
 
+  it('polls a runtime-registered PR on the next cycle', async () => {
+    const listPullRequestReviews = vi.fn().mockResolvedValue([]);
+    const listPullRequestReviewComments = vi.fn().mockResolvedValue([]);
+    const getStatusCheckRollup = vi.fn().mockResolvedValue([]);
+    const client: GitHubClient = {
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn().mockResolvedValue([]),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews,
+      listPullRequestReviewComments,
+      getStatusCheckRollup,
+    };
+    const onCursorChange = vi.fn();
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      pollIntervalMs: 1000,
+      githubClient: client,
+      onCursorChange,
+      onUpdate: vi.fn(),
+    });
+
+    monitor.start();
+    await drainAsync();
+    expect(listPullRequestReviews).not.toHaveBeenCalled();
+
+    monitor.registerPullRequest({
+      prNumber: 354,
+      registeredAt: '2026-09-07T05:00:00.000Z',
+      kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+    });
+    expect(monitor.getCursor().explicitPullRequests?.['354']).toMatchObject({
+      registeredAt: '2026-09-07T05:00:00.000Z',
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await drainAsync();
+
+    expect(listPullRequestReviews).toHaveBeenCalledWith('org', 'repo', 354);
+    expect(listPullRequestReviewComments).toHaveBeenCalledWith(
+      'org',
+      'repo',
+      354,
+    );
+    expect(getStatusCheckRollup).toHaveBeenCalledWith('org', 'repo', 354);
+    expect(onCursorChange).toHaveBeenCalled();
+
+    await monitor.stop();
+  });
+
   it('notifies offline diffs on first poll when sidecar cursor is restored', async () => {
     const client: GitHubClient = {
       getIssue: vi.fn(),

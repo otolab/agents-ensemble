@@ -53,9 +53,20 @@ export {
   normalizeGitHubMonitorCursor,
 } from './github-monitor-cursor.js';
 export type {
+  ExplicitPullRequestWatch,
   GitHubMonitorCursor,
   PullRequestMonitorCursor,
 } from './github-monitor-cursor.js';
+export {
+  DEFAULT_GITHUB_WATCH_KINDS,
+} from './github-monitor-cursor.js';
+export {
+  createRegisterGitHubWatchTool,
+} from './register-github-watch-tool.js';
+export type {
+  GitHubWatchRegistration,
+  RegisterGitHubWatchToolOptions,
+} from './register-github-watch-tool.js';
 export type {
   GitHubUpdateItem,
   GitHubUpdateKind,

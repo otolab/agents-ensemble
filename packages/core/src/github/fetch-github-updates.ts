@@ -2,14 +2,19 @@ import type { EnsembleConfig } from '../config/types.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
 import type { GitHubClient } from './github-client.js';
 import { createGitHubClient } from './github-client.js';
-import type { GitHubMonitorCursor, PullRequestMonitorCursor } from './github-monitor-cursor.js';
-import { normalizeGitHubMonitorCursor } from './github-monitor-cursor.js';
+import {
+  DEFAULT_GITHUB_WATCH_KINDS,
+  normalizeGitHubMonitorCursor,
+  type ExplicitPullRequestWatch,
+  type GitHubMonitorCursor,
+  type PullRequestMonitorCursor,
+} from './github-monitor-cursor.js';
 import {
   createGitHubMonitorPhaseError,
   safeUpperString,
   type GitHubMonitorPhaseError,
 } from './github-monitor-error.js';
-import type { GitHubUpdateItem } from './github-update-types.js';
+import type { GitHubUpdateItem, GitHubUpdateKind } from './github-update-types.js';
 
 const BODY_PREVIEW_MAX = 280;
 
@@ -106,30 +111,62 @@ export async function fetchGitHubUpdates(
     errors.push(createGitHubMonitorPhaseError('issue_comments', error));
   }
 
-  let pullRequests: GhPullRequestRef[];
+  let linkedPullRequests: GhPullRequestRef[];
   try {
-    pullRequests = await client.searchLinkedPullRequests(
+    linkedPullRequests = await client.searchLinkedPullRequests(
       issue.owner,
       issue.repo,
       issue.number,
     );
   } catch (error) {
     errors.push(createGitHubMonitorPhaseError('pr_search', error));
-    pullRequests = [];
+    linkedPullRequests = [];
   }
   if (!cursor.pullRequests) {
     cursor.pullRequests = {};
   }
 
+  const explicitPullRequests = new Map<number, ExplicitPullRequestWatch>();
+  for (const [key, watch] of Object.entries(cursor.explicitPullRequests ?? {})) {
+    const prNumber = parsePullRequestNumberKey(key);
+    if (prNumber !== undefined) {
+      explicitPullRequests.set(prNumber, watch);
+    }
+  }
+
+  const pullRequestsByNumber = new Map<number, GhPullRequestRef>();
+  for (const pr of linkedPullRequests) {
+    pullRequestsByNumber.set(pr.number, pr);
+  }
+  for (const prNumber of explicitPullRequests.keys()) {
+    if (!pullRequestsByNumber.has(prNumber)) {
+      pullRequestsByNumber.set(prNumber, {
+        number: prNumber,
+        title: '',
+        url: `https://github.com/${issue.owner}/${issue.repo}/pull/${prNumber}`,
+        state: 'OPEN',
+      });
+    }
+  }
+
+  const pullRequests = [...pullRequestsByNumber.values()];
   for (const pr of pullRequests) {
     const prKey = String(pr.number);
     const prCursor = cursor.pullRequests[prKey] ?? {};
+    const explicitWatch = explicitPullRequests.get(pr.number);
+    const hasPullRequestCursor = Object.prototype.hasOwnProperty.call(
+      cursor.pullRequests,
+      prKey,
+    );
     const prResult = await fetchPullRequestUpdates({
       client,
       issue,
       pr,
       prCursor,
-      initialCursorPoll: input.initialCursorPoll ?? false,
+      initialCursorPoll:
+        (input.initialCursorPoll ?? false) ||
+        (explicitWatch !== undefined && !hasPullRequestCursor),
+      watchKinds: resolveWatchKinds(explicitWatch?.kinds),
     });
     updates.push(...prResult.updates);
     cursor.pullRequests[prKey] = prResult.cursor;
@@ -182,6 +219,7 @@ async function fetchPullRequestUpdates(input: {
   pr: GhPullRequestRef;
   prCursor: PullRequestMonitorCursor;
   initialCursorPoll: boolean;
+  watchKinds: GitHubUpdateKind[];
 }): Promise<{
   updates: GitHubUpdateItem[];
   cursor: PullRequestMonitorCursor;
@@ -198,73 +236,79 @@ async function fetchPullRequestUpdates(input: {
   };
   let hasPendingCi = false;
 
-  try {
-    const reviews = await input.client.listPullRequestReviews(
-      input.issue.owner,
-      input.issue.repo,
-      input.pr.number,
-    );
-    const reviewResult = collectReviewUpdates(
-      reviews,
-      cursor.lastReviewId,
-      input.initialCursorPoll,
-      input.pr.number,
-    );
-    updates.push(...reviewResult.updates);
-    if (reviewResult.lastId !== undefined) {
-      cursor.lastReviewId = reviewResult.lastId;
-    }
-  } catch (error) {
-    errors.push(
-      createGitHubMonitorPhaseError('pr_reviews', error, input.pr.number),
-    );
-  }
-
-  try {
-    const reviewComments = await input.client.listPullRequestReviewComments(
-      input.issue.owner,
-      input.issue.repo,
-      input.pr.number,
-    );
-    const reviewCommentResult = collectReviewCommentUpdates(
-      reviewComments,
-      cursor.lastReviewCommentId,
-      input.initialCursorPoll,
-      input.pr.number,
-    );
-    updates.push(...reviewCommentResult.updates);
-    if (reviewCommentResult.lastId !== undefined) {
-      cursor.lastReviewCommentId = reviewCommentResult.lastId;
-    }
-  } catch (error) {
-    errors.push(
-      createGitHubMonitorPhaseError('pr_review_comments', error, input.pr.number),
-    );
-  }
-
-  try {
-    const checkRuns = normalizeStatusCheckRollup(
-      await input.client.getStatusCheckRollup(
+  if (input.watchKinds.includes('pr.review')) {
+    try {
+      const reviews = await input.client.listPullRequestReviews(
         input.issue.owner,
         input.issue.repo,
         input.pr.number,
-      ),
-    );
-    const ciResult = collectCiUpdates({
-      checkRuns,
-      pendingCheckNames: cursor.pendingCheckNames ?? [],
-      notifiedCheckNames: cursor.notifiedCheckNames ?? [],
-      initialCursorPoll: input.initialCursorPoll,
-      prNumber: input.pr.number,
-    });
-    updates.push(...ciResult.updates);
-    cursor.pendingCheckNames = ciResult.pendingCheckNames;
-    cursor.notifiedCheckNames = ciResult.notifiedCheckNames;
-    hasPendingCi = ciResult.hasPendingCi;
-  } catch (error) {
-    errors.push(
-      createGitHubMonitorPhaseError('pr_status_checks', error, input.pr.number),
-    );
+      );
+      const reviewResult = collectReviewUpdates(
+        reviews,
+        cursor.lastReviewId,
+        input.initialCursorPoll,
+        input.pr.number,
+      );
+      updates.push(...reviewResult.updates);
+      if (reviewResult.lastId !== undefined) {
+        cursor.lastReviewId = reviewResult.lastId;
+      }
+    } catch (error) {
+      errors.push(
+        createGitHubMonitorPhaseError('pr_reviews', error, input.pr.number),
+      );
+    }
+  }
+
+  if (input.watchKinds.includes('pr.review_comment')) {
+    try {
+      const reviewComments = await input.client.listPullRequestReviewComments(
+        input.issue.owner,
+        input.issue.repo,
+        input.pr.number,
+      );
+      const reviewCommentResult = collectReviewCommentUpdates(
+        reviewComments,
+        cursor.lastReviewCommentId,
+        input.initialCursorPoll,
+        input.pr.number,
+      );
+      updates.push(...reviewCommentResult.updates);
+      if (reviewCommentResult.lastId !== undefined) {
+        cursor.lastReviewCommentId = reviewCommentResult.lastId;
+      }
+    } catch (error) {
+      errors.push(
+        createGitHubMonitorPhaseError('pr_review_comments', error, input.pr.number),
+      );
+    }
+  }
+
+  if (input.watchKinds.includes('ci.completed')) {
+    try {
+      const checkRuns = normalizeStatusCheckRollup(
+        await input.client.getStatusCheckRollup(
+          input.issue.owner,
+          input.issue.repo,
+          input.pr.number,
+        ),
+      );
+      const ciResult = collectCiUpdates({
+        checkRuns,
+        pendingCheckNames: cursor.pendingCheckNames ?? [],
+        notifiedCheckNames: cursor.notifiedCheckNames ?? [],
+        initialCursorPoll: input.initialCursorPoll,
+        prNumber: input.pr.number,
+      });
+      updates.push(...ciResult.updates);
+      cursor.pendingCheckNames = ciResult.pendingCheckNames;
+      cursor.notifiedCheckNames = ciResult.notifiedCheckNames;
+      hasPendingCi = ciResult.hasPendingCi;
+    } catch (error) {
+      errors.push(
+        createGitHubMonitorPhaseError('pr_status_checks', error, input.pr.number),
+      );
+    }
   }
 
   return {
@@ -273,6 +317,24 @@ async function fetchPullRequestUpdates(input: {
     hasPendingCi,
     errors,
   };
+}
+
+function parsePullRequestNumberKey(key: string): number | undefined {
+  if (!/^\d+$/.test(key)) return undefined;
+  const number = Number(key);
+  return Number.isSafeInteger(number) && number > 0 ? number : undefined;
+}
+
+function resolveWatchKinds(
+  kinds: GitHubUpdateKind[] | undefined,
+): GitHubUpdateKind[] {
+  if (!kinds) return [...DEFAULT_GITHUB_WATCH_KINDS];
+  return kinds.filter(
+    (kind): kind is Exclude<GitHubUpdateKind, 'issue.comment'> =>
+      kind === 'pr.review' ||
+      kind === 'pr.review_comment' ||
+      kind === 'ci.completed',
+  );
 }
 
 /** GraphQL `statusCheckRollup` の CheckRun / StatusContext を共通形に正規化する。 */

@@ -86,7 +86,11 @@ import { resolveGitHubMonitorEnabled } from '../config/resolve-settings.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import { GITHUB_AUTH_HINT } from '../github/github-auth.js';
 import { resolveGitHubAuthToken } from '../github/resolve-github-auth-token.js';
-import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
+import {
+  emptyGitHubMonitorCursor,
+  type GitHubMonitorCursor,
+} from '../github/github-monitor-cursor.js';
+import { createRegisterGitHubWatchTool } from '../github/register-github-watch-tool.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -223,6 +227,7 @@ export async function runConductorSession(
     { acpSessionId: string; acpCwd?: string; acpSpawn?: AcpSpawnFingerprint }
   >();
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
+  let githubMonitor: GitHubMonitor | undefined;
 
   if (options.resumeAgentId) {
     const sidecar = await requireSessionSidecarForResume({
@@ -505,6 +510,18 @@ export async function runConductorSession(
     getWorkerFailures: () => sessionLogger.workerFailures,
   });
 
+  const registerGitHubWatchTools = createRegisterGitHubWatchTool({
+    issueUrl: options.issueUrl,
+    getCursor: () => {
+      githubMonitorCursor ??= emptyGitHubMonitorCursor();
+      return githubMonitorCursor;
+    },
+    onRegistered: (registration) => {
+      githubMonitor?.registerPullRequest?.(registration);
+      scheduleSidecarFlush();
+    },
+  });
+
   let conductorAgent!: ConductorAgent;
 
   const sessionUsageTools = createSessionUsageTools({
@@ -530,6 +547,7 @@ export async function runConductorSession(
       ...resolvePermissionTools,
       ...promptWorkerTools,
       ...workerStatusTools,
+      ...registerGitHubWatchTools,
       ...sessionUsageTools,
     },
   };
@@ -548,37 +566,42 @@ export async function runConductorSession(
     },
   };
 
+  let sidecarFlushQueue: Promise<void> = Promise.resolve();
   let flushSidecar: () => Promise<void> = async () => {};
-  flushSidecar = async (): Promise<void> => {
-    const workers: SessionSidecar['workers'] = {};
-    for (const [name, worker] of workerSessions) {
-      workers[name] = {
-        acpSessionId: worker.acpSessionId,
-        ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
-        ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
-      };
-    }
-    const snapshot = openQuestions.snapshot();
-    const sidecar: SessionSidecar = {
-      version: SESSION_SIDECAR_VERSION,
-      conductorAgentId: conductorHandle.conductor.agentId,
-      issueUrl: options.issueUrl,
-      repoRoot: options.repoRoot,
-      profile: structuredClone(activeProfile),
-      ...(options.profilePath ? { profilePath: options.profilePath } : {}),
-      openQuestions: snapshot.openQuestions,
-      sequence: snapshot.sequence,
-      workers,
-      ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
-      updatedAt: Date.now(),
-    };
-    await saveSessionSidecar(
-      sessionSidecarPath({
-        repoRoot: options.repoRoot,
+  flushSidecar = (): Promise<void> => {
+    const nextFlush = sidecarFlushQueue.then(async () => {
+      const workers: SessionSidecar['workers'] = {};
+      for (const [name, worker] of workerSessions) {
+        workers[name] = {
+          acpSessionId: worker.acpSessionId,
+          ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
+          ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
+        };
+      }
+      const snapshot = openQuestions.snapshot();
+      const sidecar: SessionSidecar = {
+        version: SESSION_SIDECAR_VERSION,
         conductorAgentId: conductorHandle.conductor.agentId,
-      }),
-      sidecar,
-    );
+        issueUrl: options.issueUrl,
+        repoRoot: options.repoRoot,
+        profile: structuredClone(activeProfile),
+        ...(options.profilePath ? { profilePath: options.profilePath } : {}),
+        openQuestions: snapshot.openQuestions,
+        sequence: snapshot.sequence,
+        workers,
+        ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
+        updatedAt: Date.now(),
+      };
+      await saveSessionSidecar(
+        sessionSidecarPath({
+          repoRoot: options.repoRoot,
+          conductorAgentId: conductorHandle.conductor.agentId,
+        }),
+        sidecar,
+      );
+    });
+    sidecarFlushQueue = nextFlush.catch(() => {});
+    return nextFlush;
   };
   scheduleSidecarFlush = () => {
     void flushSidecar().catch(() => {
@@ -589,7 +612,6 @@ export async function runConductorSession(
   let sendCount = 0;
   let autonomousTurns = 0;
 
-  let githubMonitor: GitHubMonitor | undefined;
   const monitorDefaults = ensembleConfig.github.monitor;
   if (
     resolveGitHubMonitorEnabled({

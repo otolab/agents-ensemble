@@ -54,6 +54,15 @@ describe('session sidecar', () => {
       workers: {
         implementer: { acpSessionId: 'sess-1', acpCwd: '/repo/docs' },
       },
+      githubMonitor: {
+        pullRequests: {},
+        explicitPullRequests: {
+          '354': {
+            registeredAt: '2026-09-07T05:00:00.000Z',
+            kinds: ['pr.review', 'ci.completed'],
+          },
+        },
+      },
     });
 
     const before = Date.now();
@@ -64,6 +73,12 @@ describe('session sidecar', () => {
     expect(loaded).toMatchObject({
       ...sidecar,
       updatedAt: expect.any(Number),
+    });
+    expect(loaded?.githubMonitor?.explicitPullRequests).toEqual({
+      '354': {
+        registeredAt: '2026-09-07T05:00:00.000Z',
+        kinds: ['pr.review', 'ci.completed'],
+      },
     });
     expect(JSON.parse(await readFile(path, 'utf8')).updatedAt).toEqual(
       loaded?.updatedAt,

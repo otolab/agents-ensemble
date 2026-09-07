@@ -74,6 +74,15 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
     },
     {
       type: 'subsection',
+      title: 'GitHub 監視',
+      items: [
+        '- implementer から PR 作成の報告を受けたら、GitHub Search の反映を待たず `register_github_watch` で監視登録する',
+        '- `register_github_watch` には `prNumber` または `prUrl` を渡す。同じリポジトリの PR だけを登録する',
+        '- `kinds` を省略すると PR review / review comment / CI 完了を監視する。登録済み PR の再登録は不要',
+      ],
+    },
+    {
+      type: 'subsection',
       title: 'permission',
       items: [
         '- workerのツール実行にはconductorの明示的な許可が必要になる場合があります',

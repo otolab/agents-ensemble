@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   emptyGitHubMonitorCursor,
   isEmptyGitHubMonitorCursor,
+  normalizeGitHubMonitorCursor,
 } from './github-monitor-cursor.js';
 
 describe('isEmptyGitHubMonitorCursor', () => {
@@ -26,5 +27,23 @@ describe('isEmptyGitHubMonitorCursor', () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it('preserves explicit pull request watches when normalized', () => {
+    const cursor = normalizeGitHubMonitorCursor({
+      explicitPullRequests: {
+        '354': {
+          registeredAt: '2026-09-07T05:00:00.000Z',
+          kinds: ['pr.review', 'ci.completed'],
+        },
+      },
+    });
+
+    expect(cursor.explicitPullRequests).toEqual({
+      '354': {
+        registeredAt: '2026-09-07T05:00:00.000Z',
+        kinds: ['pr.review', 'ci.completed'],
+      },
+    });
   });
 });

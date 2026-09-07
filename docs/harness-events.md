@@ -122,7 +122,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | `cause` | `parse` \| `gh_cli` \| `auth` \| `unknown` | 失敗原因の分類 |
 | `retryable` | `boolean`（任意） | rate limit / 5xx 等で再試行が有効なとき `true` |
 
-監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
+監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。関連 PR は GitHub Search で自動検出するほか、conductor の `register_github_watch` で明示登録できる。明示登録した PR は Search に未反映でも次の poll から監視される。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
 
 **運用制限（#39）**
 
@@ -132,7 +132,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | debounce | デフォルト **30s**（`--github-monitor-debounce-ms`）。連続インラインコメント等を 1 通知にまとめる |
 | 初回カーソル poll | **カーソル空の新規セッション**の初回 poll のみ（`initialCursorPoll`）。既存 Issue コメントは通知せずカーソルを進める。worker の init prompt（`startWorkers`）とは無関係 |
 | `--continue` 再開 | sidecar カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
-| PR 紐づけ | GitHub Search API（`type:pr repo:owner/repo <issueNumber>` 相当）。失敗時は PR 監視をスキップし **Issue コメント監視は継続** |
+| PR 紐づけ | GitHub Search API（`type:pr repo:owner/repo <issueNumber>` 相当）または conductor の `register_github_watch`。Search 失敗時も明示登録済み PR は監視し、**Issue コメント監視も継続** |
 | CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）。前回 poll で pending だった check が `COMPLETED` + `conclusion` になったときのみ通知 |
 | CLI | `--no-github-monitor` で無効化。`--github-monitor-debounce-ms` で debounce 変更 |
 
