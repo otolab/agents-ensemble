@@ -40,7 +40,7 @@
 ## 2. SessionLogEvent 一覧
 
 実装の正本: `packages/core/src/conductor/session/events/session-log-event.ts`（`SessionLogger` は `session-logger.ts`）  
-stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
+stderr 整形: core の SessionLogEvent representation（`packages/core/src/representation/`）を CLI の `createHarnessSink` が利用
 
 ### 2.1 既存イベント
 
@@ -64,6 +64,31 @@ stderr 整形: `packages/cli/src/session-sinks.ts`（`createHarnessSink`）
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
 | `harness.teardown` | `runConductorSession` の `finally` 完了時（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
 | `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | `[harness] teardown.phase <name>` | なし |
+
+### 2.1.1 オペレータ向け representation
+
+`SessionLogEvent` は構造化されたテレメトリの正本であり、stderr と TUI 活動ログの
+人間向け 1 行は core の `renderSessionLogEvent()`（実装:
+`packages/core/src/representation/session-log-representation.ts`）で共有する。
+イベント型ごとの renderer は `SessionLogRepresentation.register()` で追加できる。
+未登録イベントは `undefined` になり、CLI の既存 formatter が保持している診断用の
+表現へフォールバックする。このため、全イベントを一度に移行する必要はない。
+
+現在の組み込み renderer は `permission.pending` である。permission の表示は次の
+優先順位で ACP の variant を best-effort に解釈する。
+
+1. 明示された tool 名、legacy `toolCall.type/args`、ACP の `kind` / `toolCallId`
+2. `command` / `path` / `locations` などの構造化された操作概要
+3. `toolCallId` や `title` の短い補助情報
+4. 読めるフィールドがない場合だけ raw JSON の短縮表示
+
+したがって `toolCall.type` が欠落した `execute` payload や `exec-...` ID でも、
+`tool=Shell cmd="…"` のように表示する。raw JSON fallback は未知 payload の診断用に
+残す。
+
+`worker.round` の長い worktree path、`worker.failed` / `worker.process.stderr` の
+診断文字列、`conductor.send` の status/count は調査に必要な情報を含むため、現時点
+では短縮 renderer を追加しない。候補を検討したうえで既存の 1 行表現を維持する。
 
 ### 2.4 セッション観測イベント（#92 で追加）
 

@@ -1,5 +1,5 @@
 import {
-  formatPermissionSummaryForOperator,
+  renderSessionLogEvent,
   type SessionLogEvent,
 } from '@agents-ensemble/core';
 
@@ -38,9 +38,7 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
     case 'conductor.send.progress':
       return undefined;
     case 'permission.pending':
-      return formatPermissionSummaryForOperator(event.permission, {
-        workerLabel: event.workerLabel,
-      });
+      return renderSessionLogEvent(event);
     case 'conductor.send': {
       let line = `conductor.send n=${event.sendCount} status=${event.status} workerDone=${event.workerDispatches} workerFailed=${event.workerFailures}`;
       if (event.status === 'error' && event.error) {

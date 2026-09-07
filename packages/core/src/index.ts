@@ -12,6 +12,7 @@ export * from './dispatch/index.js';
 export * from './github/index.js';
 export * from './conductor/index.js';
 export * from './permission/index.js';
+export * from './representation/index.js';
 export * from './usage/index.js';
 export * from './escalation/index.js';
 export * from './session/index.js';
