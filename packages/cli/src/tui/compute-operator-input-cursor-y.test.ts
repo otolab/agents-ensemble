@@ -29,14 +29,6 @@ describe('computeInputPaneHeight', () => {
     ).toBe(INPUT_PANE_BORDER_ROWS + 1 + 4);
   });
 
-  it('includes nested stream content inside the input pane', () => {
-    expect(
-      computeInputPaneHeight({
-        hintLineCount: 1,
-        nestedContentHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
-      }),
-    ).toBe(INPUT_PANE_BORDER_ROWS + OPEN_QUESTIONS_PANE_MIN_HEIGHT + 1 + 1);
-  });
 });
 
 describe('computeActivityPaneHeight', () => {
@@ -176,17 +168,10 @@ describe('computeStreamOperatorInputCursorY', () => {
     expect(twoLines).toBe(oneLine + 1);
   });
 
-  it('includes a nested empty-state row before the hint', () => {
-    const nested = computeStreamOperatorInputCursorY({
-      openQuestionsPaneHeight: 0,
-      nestedOpenQuestionsStateHeight: 1,
-      hintLineCount: 1,
-    });
-    const flat = computeStreamOperatorInputCursorY({
+  it('does not reserve a row for an empty open-question state', () => {
+    expect(computeStreamOperatorInputCursorY({
       openQuestionsPaneHeight: 0,
       hintLineCount: 1,
-    });
-
-    expect(nested).toBe(flat + 1);
+    })).toBe(PANE_BORDER_ROWS / 2 + 1);
   });
 });

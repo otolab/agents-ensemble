@@ -11,16 +11,9 @@ import {
 export function computeInputPaneHeight(params: {
   hintLineCount: number;
   inputDisplayLineCount?: number;
-  nestedContentHeight?: number;
 }): number {
   const inputDisplayLineCount = Math.max(1, params.inputDisplayLineCount ?? 1);
-  const nestedContentHeight = Math.max(0, params.nestedContentHeight ?? 0);
-  return (
-    INPUT_PANE_BORDER_ROWS +
-    nestedContentHeight +
-    params.hintLineCount +
-    inputDisplayLineCount
-  );
+  return INPUT_PANE_BORDER_ROWS + params.hintLineCount + inputDisplayLineCount;
 }
 
 /** Orchestration メインペインの行数。全ペイン高さの合計が端末行数と一致するよう逆算。 */
@@ -98,25 +91,19 @@ export function computeOperatorInputCursorY(params: {
  *
  * Static 出力は Ink の dynamic output の外側へ追記されるため、stream の
  * `cursorStart` は端末全体ではなく live frame 内の行として計算する。
- * Open questions は入力欄の上に表示し、空状態では入力ペイン内に本文行を置く。
+ * Open questions は入力欄の上に表示する。空状態では追加の本文行を持たない。
  * Stream の dynamic root は pane の log-update 補正を持たないため、
  * `OPERATOR_INPUT_CURSOR_Y_OFFSET` は加算しない。
  */
 export function computeStreamOperatorInputCursorY(params: {
   openQuestionsPaneHeight: number;
-  nestedOpenQuestionsStateHeight?: number;
   hintLineCount: number;
   cursorLineOffset?: number;
 }): number {
-  const nestedOpenQuestionsStateHeight = Math.max(
-    0,
-    params.nestedOpenQuestionsStateHeight ?? 0,
-  );
   const cursorLineOffset = params.cursorLineOffset ?? 0;
   const inputLineIndex =
     params.openQuestionsPaneHeight +
     PANE_BORDER_ROWS / 2 +
-    nestedOpenQuestionsStateHeight +
     params.hintLineCount +
     cursorLineOffset;
 

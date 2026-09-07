@@ -57,7 +57,7 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 TTY の既定は `pane` レイアウトです。Workers / Orchestration / Open questions / Operator input の 4 ペインを表示し、Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。
 
-`ENSEMBLE_TUI_LAYOUT=stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠を描画せず、(未回答なし) の空状態表示だけを Operator input 内へネストし、post-loop 待機などの入力ヒントもこの場合だけ入力ペイン内に表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
+`ENSEMBLE_TUI_LAYOUT=stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は1行目にIssue参照なしの「追加指示を入力するか /exit で終了」、2行目に「owner/repo#number — post-loop 待機中」を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
 
 scrollback を実行中に上へ移動しているときに新着ログが追記されると、端末依存で表示が末尾へ戻ることがあります。端末幅を変更しても、既に Static として追記された行は再折り返しされません。
 

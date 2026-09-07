@@ -261,7 +261,7 @@ TTY の既定レイアウトは `pane` です。既存の Workers / Orchestratio
 ENSEMBLE_TUI_LAYOUT=stream ensemble issue <url>
 ```
 
-`stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順で固定されます。未回答の open question がないときは独立枠を描画せず、(未回答なし) の空状態表示だけを Operator input 内へネストします。post-loop 待機などの入力ヒントもこの場合だけ入力ペイン内に表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、下部 live frame を基準に変換窓の位置を計算します。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
+`stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順で固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は1行目にIssue参照なしの「追加指示を入力するか /exit で終了」、2行目に「owner/repo#number — post-loop 待機中」を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、下部 live frame を基準に変換窓の位置を計算します。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
 
 scrollback を実行中に上へ移動している間に新しい活動ログが到着すると、端末の実装によっては末尾へ戻されることがあります。また、端末幅を変更しても既に追記されたログ行は再折り返しされません。
 

@@ -1,4 +1,4 @@
-import { Box, Static, Text, useInput } from 'ink';
+import { Box, Static, useInput } from 'ink';
 import {
   useCallback,
   useEffect,
@@ -32,6 +32,7 @@ import {
 } from './compute-operator-input-cursor-y.js';
 import { computeMaxInputDisplayLines, trimBlankLinesOnly } from './operator-input-layout.js';
 import {
+  formatIssueLabel,
   formatOperatorContextHint,
   prependIssueReference,
   type IssueLinkMode,
@@ -47,9 +48,6 @@ export interface IssueSessionTuiStreamProps {
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
 }
-
-/** 空の open question 状態を入力ペイン内へ表示する本文行。独立枠は描画しない。 */
-const EMPTY_OPEN_QUESTIONS_STATE_HEIGHT = 1;
 
 function useStreamContentWidth(): number {
   return getPaneContentWidth({
@@ -115,12 +113,14 @@ export function IssueSessionTuiStream({
     [openQuestions, selectedQuestionIndex, contentWidth, terminalRows],
   );
   const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
+  const isPostLoopWaitingHint =
+    !hasOpenQuestions && snapshot.postLoopWaiting && !snapshot.shuttingDown;
   const contextHint = hasOpenQuestions
     ? ''
     : snapshot.shuttingDown
       ? '終了しています…'
-      : snapshot.postLoopWaiting
-        ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
+      : isPostLoopWaitingHint
+        ? ''
         : formatOperatorContextHint(snapshot.operatorContext);
   const contextHintText = contextHint
     ? prependIssueReference(
@@ -129,16 +129,28 @@ export function IssueSessionTuiStream({
         issueLinkMode === 'url' ? 'url' : 'label',
       )
     : '';
+  const postLoopIssueReference = issueUrl?.trim()
+    ? issueLinkMode === 'url'
+      ? issueUrl.trim()
+      : formatIssueLabel(issueUrl)
+    : undefined;
+  const contextHintLines = isPostLoopWaitingHint
+    ? [
+        '追加指示を入力するか /exit で終了',
+        postLoopIssueReference
+          ? `${postLoopIssueReference} — post-loop 待機中`
+          : 'post-loop 待機中',
+      ]
+    : contextHintText
+      ? [contextHintText]
+      : [];
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
-  const nestedOpenQuestionsStateHeight = hasOpenQuestions
-    ? 0
-    : EMPTY_OPEN_QUESTIONS_STATE_HEIGHT;
-  const hintLineCount = contextHintText
-    ? wrapTextToWidth(contextHintText, contentWidth).length
-    : 0;
+  const hintLineCount = contextHintLines.reduce(
+    (lineCount, line) => lineCount + wrapTextToWidth(line, contentWidth).length,
+    0,
+  );
   const desiredInputPaneHeight = computeInputPaneHeight({
     hintLineCount,
-    nestedContentHeight: nestedOpenQuestionsStateHeight,
     inputDisplayLineCount: visibleInputDisplayLineCount,
   });
   const openQuestionsPaneHeight = hasOpenQuestions ? openQuestionsLayout.paneHeight : 0;
@@ -155,18 +167,15 @@ export function IssueSessionTuiStream({
     x: computeOperatorInputCursorX(operatorPrompt),
     y: computeStreamOperatorInputCursorY({
       openQuestionsPaneHeight: streamPaneHeights.openQuestionsPaneHeight,
-      nestedOpenQuestionsStateHeight,
       hintLineCount,
     }),
   };
   const streamOpenQuestionsLayout = useMemo(
     () => ({
       ...openQuestionsLayout,
-      paneHeight: hasOpenQuestions
-        ? streamPaneHeights.openQuestionsPaneHeight
-        : openQuestionsLayout.paneHeight,
+      paneHeight: streamPaneHeights.openQuestionsPaneHeight,
     }),
-    [hasOpenQuestions, openQuestionsLayout, streamPaneHeights.openQuestionsPaneHeight],
+    [openQuestionsLayout, streamPaneHeights.openQuestionsPaneHeight],
   );
   const handleDisplayLineCountChange = useCallback((lineCount: number) => {
     setInputDisplayLineCount(Math.max(1, lineCount));
@@ -237,16 +246,16 @@ export function IssueSessionTuiStream({
           paddingX={PANE_PADDING_X}
           height={streamPaneHeights.inputPaneHeight}
         >
-          {!hasOpenQuestions ? <Text dimColor>(未回答なし)</Text> : null}
-          {contextHintText ? (
+          {contextHintLines.map((line, index) => (
             <WrappedTextLines
-              text={contextHintText}
+              key={`context-hint-${index}`}
+              text={line}
               width={contentWidth}
               dimColor
-              issueUrl={issueUrl}
+              issueUrl={isPostLoopWaitingHint && index === 0 ? undefined : issueUrl}
               issueLinkMode={issueLinkMode}
             />
-          ) : null}
+          ))}
           <OperatorTextArea
             value={inputValue}
             onChange={setInputValue}
