@@ -17,7 +17,7 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(32);
+    expect(types.size).toBe(33);
   });
 
   it('lists every SessionEvent type exactly once', () => {
@@ -136,6 +136,13 @@ describe('session event type groups', () => {
             status: 'finished',
             workerDispatches: 0,
             workerFailures: 0,
+          };
+        case 'conductor.dispatch_hold':
+          return {
+            type,
+            status: 'enabled',
+            hold: true,
+            heldEventCount: 0,
           };
         case 'permission.pending':
           return { type, ...permissionHarness };

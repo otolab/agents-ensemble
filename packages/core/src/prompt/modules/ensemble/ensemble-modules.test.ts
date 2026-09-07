@@ -41,6 +41,8 @@ describe('ensemble prompt modules', () => {
     expect(prompt).toContain('参加者');
     expect(prompt).toContain('prompt_worker');
     expect(prompt).toContain('resolve_permission');
+    expect(prompt).toContain('set_dispatch_hold');
+    expect(prompt).toContain('operator.message');
     expect(prompt).toContain('conductor が決められないことはオペレータが最終判断する');
     expect(prompt).not.toContain('permission を要求する');
   });

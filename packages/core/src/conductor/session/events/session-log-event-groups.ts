@@ -33,6 +33,7 @@ export const SESSION_OBSERVATION_EVENT_TYPES = [
   'session.post_loop_wait',
   'session.operator_exit',
   'harness.teardown',
+  'conductor.dispatch_hold',
 ] as const;
 
 /** session-logging.md / conductor-auth-reconnect.md の補助テレメトリ。 */

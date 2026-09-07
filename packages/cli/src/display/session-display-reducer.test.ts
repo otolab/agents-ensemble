@@ -398,6 +398,32 @@ describe('reduceDisplayState', () => {
     });
   });
 
+  it('tracks dispatch hold state and buffered trigger count', () => {
+    const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'conductor.dispatch_hold',
+      status: 'updated',
+      hold: true,
+      heldEventCount: 3,
+    });
+
+    expect(state.dispatchHold).toEqual({
+      hold: true,
+      heldEventCount: 3,
+    });
+
+    const released = reduceDisplayState(state, {
+      type: 'conductor.dispatch_hold',
+      status: 'released',
+      hold: false,
+      heldEventCount: 0,
+      flushedEventCount: 3,
+    });
+    expect(released.dispatchHold).toEqual({
+      hold: false,
+      heldEventCount: 0,
+    });
+  });
+
   it('updates conductorOutput on error conductor.send', () => {
     const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'conductor.send',

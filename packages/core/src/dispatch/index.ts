@@ -16,3 +16,9 @@ export { createSessionUsageTools } from './session-usage-tool.js';
 export type { SessionUsageToolOptions } from './session-usage-tool.js';
 
 export { yamlToolResult, toStructuredContent } from './yaml-tool-result.js';
+export {
+  createSetDispatchHoldTool,
+} from './set-dispatch-hold-tool.js';
+export type {
+  SetDispatchHoldToolOptions,
+} from './set-dispatch-hold-tool.js';

@@ -77,6 +77,12 @@ export type {
   DispatchBatchState,
   DispatchSourceKey,
 } from './session/select-dispatch-batch.js';
+export { createDispatchHoldState } from './session/dispatch-hold.js';
+export type {
+  DispatchHoldChange,
+  DispatchHoldChangeStatus,
+  DispatchHoldState,
+} from './session/dispatch-hold.js';
 export {
   canTriggerConductorDispatch,
   isTriggerSessionEvent,
