@@ -2,8 +2,13 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
+import type {
+  GitHubClient,
+  GitHubPullRequestRef,
+} from '../github/github-client.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import {
   loadSessionSidecar,
@@ -80,6 +85,22 @@ function githubUpdate(kind: GitHubUpdateKind): GitHubUpdatePayload {
       },
     ],
   };
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function drainAsync(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe('runConductorSession resume / shutdown', () => {
@@ -285,6 +306,254 @@ describe('runConductorSession resume / shutdown', () => {
       registeredAt: expect.any(String),
       kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
     });
+  });
+
+  it('delivers a runtime-registered PR update through the live monitor', async () => {
+    vi.useFakeTimers();
+    const shutdown = new AbortController();
+    const firstSearch = createDeferred<GitHubPullRequestRef[]>();
+    const firstSearchStarted = createDeferred<void>();
+    const registrationCompleted = createDeferred<void>();
+    const firstPollCompleted = createDeferred<void>();
+    const bootstrapPollCompleted = createDeferred<void>();
+    const githubUpdateMessage = createDeferred<string>();
+    let searchPolls = 0;
+    let cursorChanges = 0;
+    let firstSearchResolved = false;
+    let registeredDuringFirstPoll = false;
+    const monitorUpdates: GitHubUpdatePayload[] = [];
+    let liveMonitor: ReturnType<
+      typeof import('../github/github-monitor.js').createGitHubMonitor
+    > | undefined;
+
+    const baselineReview = {
+      id: 1,
+      body: 'baseline review',
+      html_url: 'https://github.com/org/repo/pull/354#review-1',
+      user: { login: 'reviewer' },
+      state: 'APPROVED',
+      submitted_at: '2026-09-07T05:00:00Z',
+    };
+    const newReview = {
+      ...baselineReview,
+      id: 2,
+      body: 'new review',
+      html_url: 'https://github.com/org/repo/pull/354#review-2',
+      submitted_at: '2026-09-07T05:01:00Z',
+    };
+    const baselineReviewComment = {
+      id: 1,
+      body: 'baseline comment',
+      html_url: 'https://github.com/org/repo/pull/354#discussion_r1',
+      user: { login: 'reviewer' },
+      path: 'src/example.ts',
+      created_at: '2026-09-07T05:00:00Z',
+    };
+    const newReviewComment = {
+      ...baselineReviewComment,
+      id: 2,
+      body: 'new comment',
+      html_url: 'https://github.com/org/repo/pull/354#discussion_r2',
+      created_at: '2026-09-07T05:01:00Z',
+    };
+    const listPullRequestReviews = vi.fn(async () =>
+      searchPolls <= 2 ? [baselineReview] : [baselineReview, newReview],
+    );
+    const listPullRequestReviewComments = vi.fn(async () =>
+      searchPolls <= 2
+        ? [baselineReviewComment]
+        : [baselineReviewComment, newReviewComment],
+    );
+    const getStatusCheckRollup = vi.fn(async () =>
+      searchPolls <= 2
+        ? [{ name: 'build', status: 'IN_PROGRESS', conclusion: null }]
+        : [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    );
+    const githubClient: GitHubClient = {
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn().mockResolvedValue([]),
+      searchLinkedPullRequests: vi.fn(async () => {
+        searchPolls += 1;
+        if (searchPolls === 1) {
+          firstSearchStarted.resolve();
+          return firstSearch.promise;
+        }
+        return [];
+      }),
+      listPullRequestReviews,
+      listPullRequestReviewComments,
+      getStatusCheckRollup,
+    };
+
+    const { createGitHubMonitor: createRealGitHubMonitor } =
+      await vi.importActual<typeof import('../github/github-monitor.js')>(
+        '../github/github-monitor.js',
+      );
+    mockCreateGitHubMonitor.mockImplementation((monitorOptions) => {
+      const originalOnCursorChange = monitorOptions.onCursorChange;
+      const originalOnUpdate = monitorOptions.onUpdate;
+      const monitor = createRealGitHubMonitor({
+        ...monitorOptions,
+        githubClient,
+        onUpdate: (payload) => {
+          monitorUpdates.push(payload);
+          originalOnUpdate(payload);
+        },
+        onCursorChange: (cursor) => {
+          originalOnCursorChange?.(cursor);
+          cursorChanges += 1;
+          if (cursorChanges === 2) {
+            firstPollCompleted.resolve();
+          }
+          if (cursorChanges === 3) {
+            bootstrapPollCompleted.resolve();
+          }
+        },
+      });
+      const originalRegisterPullRequest = monitor.registerPullRequest.bind(monitor);
+      monitor.registerPullRequest = vi.fn((registration) => {
+        registeredDuringFirstPoll ||= !firstSearchResolved;
+        originalRegisterPullRequest(registration);
+        registrationCompleted.resolve();
+      });
+      liveMonitor = monitor;
+      return monitor;
+    });
+
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    let sendCount = 0;
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        await conductorTools!.register_github_watch!.execute({ prNumber: 354 });
+        return {
+          runId: 'run-1',
+          status: 'finished',
+          result: 'registered',
+        };
+      }
+      if (sendCount === 2) {
+        githubUpdateMessage.resolve(message);
+      }
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'handled',
+      };
+    });
+
+    let sessionPromise: ReturnType<typeof runConductorSession> | undefined;
+    try {
+      sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        ensembleConfig: {
+          ...DEFAULT_ENSEMBLE_CONFIG,
+          github: {
+            ...DEFAULT_ENSEMBLE_CONFIG.github,
+            monitor: {
+              ...DEFAULT_ENSEMBLE_CONFIG.github.monitor,
+              debounceMs: 0,
+              pollIntervalMs: 1000,
+              activePollIntervalMs: 1000,
+            },
+          },
+        },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        shutdownSignal: shutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+      });
+
+      await firstSearchStarted.promise;
+      await drainAsync();
+      await registrationCompleted.promise;
+      expect(registeredDuringFirstPoll).toBe(true);
+      expect(liveMonitor?.registerPullRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ prNumber: 354 }),
+      );
+
+      firstSearchResolved = true;
+      firstSearch.resolve([]);
+      await firstPollCompleted.promise;
+      await drainAsync();
+
+      // The first poll after registration bootstraps the explicit PR cursor;
+      // the following Search-empty poll delivers only new updates.
+      await vi.advanceTimersByTimeAsync(1000);
+      await drainAsync();
+      await bootstrapPollCompleted.promise;
+      await drainAsync();
+      await vi.advanceTimersByTimeAsync(1000);
+      await drainAsync();
+      await vi.advanceTimersByTimeAsync(1);
+      await drainAsync();
+      const updateMessage = await githubUpdateMessage.promise;
+
+      expect(searchPolls).toBe(3);
+      expect(githubClient.searchLinkedPullRequests).toHaveBeenCalledTimes(3);
+      expect(listPullRequestReviews).toHaveBeenLastCalledWith('org', 'repo', 354);
+      expect(listPullRequestReviewComments).toHaveBeenLastCalledWith(
+        'org',
+        'repo',
+        354,
+      );
+      expect(getStatusCheckRollup).toHaveBeenLastCalledWith('org', 'repo', 354);
+      expect(monitorUpdates).toHaveLength(1);
+      expect(monitorUpdates[0]?.items.map((item) => item.kind)).toEqual(
+        expect.arrayContaining(['pr.review', 'pr.review_comment', 'ci.completed']),
+      );
+      expect(updateMessage).toContain('## GitHub 更新');
+      expect(updateMessage).toContain('kind: pr.review');
+      expect(updateMessage).toContain('kind: pr.review_comment');
+      expect(updateMessage).toContain('kind: ci.completed');
+
+      const cursor = liveMonitor!.getCursor();
+      expect(cursor.explicitPullRequests?.['354']).toMatchObject({
+        registeredAt: expect.any(String),
+        kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+      });
+      expect(cursor.pullRequests?.['354']).toMatchObject({
+        lastReviewId: '2',
+        lastReviewCommentId: '2',
+        pendingCheckNames: [],
+      });
+
+      shutdown.abort();
+      await sessionPromise;
+
+      const sidecar = await loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      );
+      expect(sidecar?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+        registeredAt: expect.any(String),
+        kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+      });
+      expect(sidecar?.githubMonitor?.pullRequests?.['354']).toMatchObject({
+        lastReviewId: '2',
+        lastReviewCommentId: '2',
+        pendingCheckNames: [],
+      });
+    } finally {
+      firstSearchResolved = true;
+      firstSearch.resolve([]);
+      shutdown.abort();
+      if (sessionPromise) {
+        await sessionPromise.catch(() => undefined);
+      }
+      vi.useRealTimers();
+    }
   });
 
   it('emits auth recovery hint when conductor send returns auth error', async () => {
