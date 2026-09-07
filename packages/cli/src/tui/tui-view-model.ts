@@ -17,6 +17,19 @@ export interface TuiViewSnapshot {
   operatorContext: OperatorInputContext | undefined;
 }
 
+/**
+ * TUI が使う未回答 open question の正本を解決する。
+ *
+ * `operatorContext` は `OpenQuestionRegistry.listOpen()` のスナップショットで、
+ * resume 時にも binding の初期化で設定される。binding 前の描画だけは、イベント
+ * reducer が保持する display state をフォールバックとして使う。
+ */
+export function getTuiOpenQuestions(
+  snapshot: TuiViewSnapshot,
+): TuiViewSnapshot['displayState']['openQuestions'] {
+  return snapshot.operatorContext?.openQuestions ?? snapshot.displayState.openQuestions;
+}
+
 export interface TuiViewModel {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => TuiViewSnapshot;

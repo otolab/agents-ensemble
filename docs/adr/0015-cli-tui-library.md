@@ -17,7 +17,7 @@ Issue #54（非同期オーケストレーション向け TUI）の実装に入�
 |--------|------|----------------|
 | worker 状態 | 各 worker の run / pend | `worker.round`, `worker.failed`, `harness.worker.bootstrap.*` |
 | conductor 出力 | 対話テキスト | `conductor.send`（DialogueSink 相当） |
-| open question | 未回答一覧 | `getContext().openQuestions` + open question 登録 callback |
+| open question | 未回答一覧 | `OperatorInputBindingApi.getContext().openQuestions`（`OpenQuestionRegistry.listOpen()` のスナップショット） + open question 登録 callback |
 | 入力欄 | オペレータ入力 | `OperatorInputBinding.submit` |
 
 ### 制約（評価軸）
@@ -59,7 +59,7 @@ Ink で 4 ペイン + 非ブロッキング入力を実現する根拠:
 
 1. **レイアウト**: 縦方向に conductor + worker + open question、最下段に入力欄 — `Box` の `flexDirection="column"` と固定高さ子要素で構成する（Yoga Flexbox）。
 2. **非ブロッキング入力**: `OperatorInputBinding` と同型の `bindTuiOperatorInput` を、入力コンポーネントの `onSubmit` で `api.submit(message)` を呼ぶ形で実装。`useInput` は stdin をリスンしつつ Driver の `waitForDispatchBatch` をブロックしない（現行 `bindAsyncOperatorInput` と同じイベントループ上の非同期モデル）。
-3. **open question 表示**: `getContext().openQuestions` を React state に反映し、未回答時だけ Open questions を表示する。登録時は既存の `notifyOperatorInputReprompt` と同様に TUI 側へ再描画トリガを渡す。
+3. **open question 表示**: `OperatorInputBindingApi.getContext().openQuestions`（`OpenQuestionRegistry.listOpen()` のスナップショット）を TUI view model に反映し、未回答時だけ Open questions を表示する。登録時は既存の `notifyOperatorInputReprompt` と同様に TUI 側へ再描画トリガを渡す。binding 前の初回描画では、SessionLogEvent reducer の state をフォールバックに使う。
 4. **worker run / pend**: `worker.round` / `worker.failed` / `harness.worker.bootstrap.*` を sink で受け、worker 名 → 状態（running / idle / failed）のマップを state 化。
 5. **イベント駆動更新**: `SessionLogger.subscribe(createTuiSink(setState))` で各 `SessionLogEvent` をペイン state にマージ。Ink は差分再描画するため、高頻度の harness イベントでも terminal のフルクリアを避けやすい。
 
@@ -161,7 +161,7 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 
 ### #263 の Operator input 2 モード
 
-Open questions の有無で Operator input を `withQuestions` / `noQuestions` の2モードに分ける。未回答時だけ Open questions ペインを描画し、空状態では高さ 0 とする。question 回答 hint には Issue 参照と自律ターン数を含めず、通常の no-question hint には Issue 参照と `/exit` 案内を含める。post-loop 待機中は no-question hint を2行へ上書きし、shutting down は「終了しています…」を維持する。pane と stream は共通の表示モード resolver と高さ計算を使う。詳細な利用者向けルールは [operator-input.md](../operator-input.md) に記載する。
+Open questions の有無で Operator input を `withQuestions` / `noQuestions` の2モードに分ける。未回答一覧の正本は `OperatorInputBindingApi.getContext().openQuestions`、すなわち resume 時にも復元される `OpenQuestionRegistry.listOpen()` とする。未回答時だけ Open questions ペインを描画し、空状態では高さ 0 とする。question 回答 hint には Issue 参照と自律ターン数を含めず、通常の no-question hint には Issue 参照と `/exit` 案内を含める。post-loop 待機中は no-question hint を2行へ上書きし、shutting down は「終了しています…」を維持する。pane と stream は共通の表示モード resolver と高さ計算を使う。詳細な利用者向けルールは [operator-input.md](../operator-input.md) に記載する。
 
 ## 関連
 

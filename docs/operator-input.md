@@ -12,7 +12,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
 | **SessionView** | TTY Ink TUI / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
-データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。View は `submit` で `operator.message` をキューへ積むだけ。
+データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。View は `submit` で `operator.message` をキューへ積むだけ。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
 
 ## View 契約: `OperatorInputBinding`
 
@@ -65,8 +65,10 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 
 | モード | 条件 | 表示と入力 |
 |--------|------|------------|
-| **A: question あり** | `openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の hint を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
-| **B: question なし** | `openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input の hint は `任意のタイミングで入力 · /exit で終了` とし、通常時は先頭に `owner/repo#number` の Issue 参照を付ける。submit は通常の operator メッセージとして送信する。 |
+| **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の hint を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
+| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input の hint は `任意のタイミングで入力 · /exit で終了` とし、通常時は先頭に `owner/repo#number` の Issue 参照を付ける。submit は通常の operator メッセージとして送信する。 |
+
+resume で sidecar の未回答 question を復元した場合も、`getContext()` が同じ Registry から一覧を返すため、binding 後の pane / stream はモード A として表示する。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使う。
 
 post-loop 待機中はモード B の hint を2行に上書きし、1行目に `追加指示を入力するか /exit で終了`、2行目に `owner/repo#number — post-loop 待機中` を表示します。終了中は現行どおり `終了しています…` を表示して入力を無効化します。
 

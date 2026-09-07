@@ -7,7 +7,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import type { OperatorInputSubmitOptions } from '@agents-ensemble/core';
-import type { TuiViewModel } from './tui-view-model.js';
+import { getTuiOpenQuestions, type TuiViewModel } from './tui-view-model.js';
 import {
   advanceOpenQuestionSelection,
   clampOpenQuestionSelectionIndex,
@@ -100,7 +100,7 @@ export function IssueSessionTuiStream({
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
   const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
-  const openQuestions = snapshot.displayState.openQuestions;
+  const openQuestions = getTuiOpenQuestions(snapshot);
   const openQuestionsLayout = useMemo(
     () =>
       resolveOpenQuestionsPaneLayout({

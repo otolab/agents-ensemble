@@ -198,6 +198,12 @@ describe('IssueSessionTui', () => {
       conductorOutput: null,
       openQuestions: [],
     });
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 2,
+      maxTurns: null,
+      openQuestions: [],
+    });
     viewModel.setPostLoopWaiting(true);
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain(issueLabel);
@@ -482,6 +488,76 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
     expect(lastFrame() ?? '').not.toContain('Open questions');
     expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+  });
+
+  it.each([
+    [
+      'one restored question',
+      [createOpenQuestion({ id: 'inq-resumed-1', question: 'Resume one?' })],
+    ],
+    [
+      'multiple restored questions',
+      [
+        createOpenQuestion({ id: 'inq-resumed-1', question: 'Resume first?' }),
+        createOpenQuestion({ id: 'inq-resumed-2', question: 'Resume second?' }),
+      ],
+    ],
+  ])('renders %s from the resumed operator context', async (_name, restoredQuestions) => {
+    const viewModel = createTuiViewModel();
+    const setOperatorQuestions = (openQuestions: OpenQuestion[]) => {
+      viewModel.setOperatorContext({
+        conductorTurn: 2,
+        autonomousTurns: 1,
+        maxTurns: null,
+        openQuestions,
+      });
+    };
+    setOperatorQuestions(restoredQuestions);
+    const selectedIndex = restoredQuestions.length > 1 ? 1 : 0;
+    let submittedOptions: { targetOpenQuestionId?: string } | undefined;
+
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        onSubmit={(_text, options) => {
+          setOperatorQuestions(
+            restoredQuestions.filter((_question, index) => index !== selectedIndex),
+          );
+          submittedOptions = options;
+        }}
+      />,
+    );
+
+    const initialFrame = lastFrame() ?? '';
+    expect(initialFrame).toContain('Open questions');
+    expect(initialFrame).toContain('inq-resumed-1');
+    expect(initialFrame).not.toContain('任意のタイミングで入力 · /exit で終了');
+
+    if (selectedIndex === 1) {
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
+      await flushInkStdin();
+    }
+    stdin.write('answer');
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+
+    expect(submittedOptions).toEqual({
+      targetOpenQuestionId: restoredQuestions[selectedIndex]?.id,
+    });
+    if (restoredQuestions.length === 1) {
+      expect(lastFrame() ?? '').not.toContain('Open questions');
+      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+    } else {
+      expect(lastFrame() ?? '').toContain('Open questions');
+      expect(lastFrame() ?? '').toContain('inq-resumed-1');
+      expect(lastFrame() ?? '').not.toContain('任意のタイミングで入力 · /exit で終了');
+
+      setOperatorQuestions([]);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').not.toContain('Open questions');
+      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+    }
   });
 
   it('renders all activity log label kinds with distinct markers', () => {

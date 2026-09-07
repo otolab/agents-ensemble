@@ -1,6 +1,10 @@
 import { Box, Text, useBoxMetrics, useInput } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
+import {
+  getTuiOpenQuestions,
+  type TuiViewModel,
+  type TuiViewSnapshot,
+} from './tui-view-model.js';
 import type { WorkerDisplayStatus } from '../display/session-display-state.js';
 import {
   formatIssueLabel,
@@ -307,7 +311,7 @@ export function IssueSessionTui({
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
   const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
-  const openQuestions = snapshot.displayState.openQuestions;
+  const openQuestions = getTuiOpenQuestions(snapshot);
   const openQuestionsLayout = useMemo(
     () =>
       resolveOpenQuestionsPaneLayout({
