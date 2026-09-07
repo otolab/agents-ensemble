@@ -25,7 +25,11 @@ import {
   WorkerStatusPane,
   WrappedTextLines,
 } from './issue-session-tui.js';
-import { computeInputPaneHeight } from './compute-operator-input-cursor-y.js';
+import {
+  computeInputPaneHeight,
+  computeOperatorInputCursorX,
+  computeStreamOperatorInputCursorY,
+} from './compute-operator-input-cursor-y.js';
 import { computeMaxInputDisplayLines, trimBlankLinesOnly } from './operator-input-layout.js';
 import {
   formatOperatorContextHint,
@@ -127,8 +131,9 @@ export function IssueSessionTuiStream({
     issueLinkMode === 'url' ? 'url' : 'label',
   );
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
+  const hintLineCount = wrapTextToWidth(contextHintText, contentWidth).length;
   const desiredInputPaneHeight = computeInputPaneHeight({
-    hintLineCount: wrapTextToWidth(contextHintText, contentWidth).length,
+    hintLineCount,
     inputDisplayLineCount: visibleInputDisplayLineCount,
   });
   const streamPaneHeights = useMemo(
@@ -137,9 +142,17 @@ export function IssueSessionTuiStream({
         terminalRows,
         openQuestionsPaneHeight: openQuestionsLayout.paneHeight,
         inputPaneHeight: desiredInputPaneHeight,
-      }),
+    }),
     [terminalRows, openQuestionsLayout.paneHeight, desiredInputPaneHeight],
   );
+  const cursorStart = {
+    x: computeOperatorInputCursorX(operatorPrompt),
+    y: computeStreamOperatorInputCursorY({
+      workerPaneHeight: streamPaneHeights.workerPaneHeight,
+      openQuestionsPaneHeight: streamPaneHeights.openQuestionsPaneHeight,
+      hintLineCount,
+    }),
+  };
   const streamOpenQuestionsLayout = useMemo(
     () => ({
       ...openQuestionsLayout,
@@ -235,6 +248,7 @@ export function IssueSessionTuiStream({
             promptPrefix={operatorPrompt}
             maxDisplayLines={maxInputDisplayLines}
             onDisplayLineCountChange={handleDisplayLineCountChange}
+            cursorStart={cursorStart}
           />
         </TitledBorderPane>
       </Box>

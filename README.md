@@ -261,7 +261,7 @@ TTY の既定レイアウトは `pane` です。既存の Workers / Orchestratio
 ENSEMBLE_TUI_LAYOUT=stream ensemble issue <url>
 ```
 
-`stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、Workers / Open questions / Operator input が下部の枠付き live UI として固定されます。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
+`stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、Workers / Open questions / Operator input が下部の枠付き live UI として固定されます。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、下部 live frame を基準に変換窓の位置を計算します。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
 
 scrollback を実行中に上へ移動している間に新しい活動ログが到着すると、端末の実装によっては末尾へ戻されることがあります。また、端末幅を変更しても既に追記されたログ行は再折り返しされません。
 

@@ -7,6 +7,7 @@ import {
   computeOperatorInputCursorY,
   computeOperatorInputLineIndex,
   computeOrchestrationLogVisibleLineCount,
+  computeStreamOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
 import {
   INPUT_PANE_BORDER_ROWS,
@@ -136,5 +137,38 @@ describe('computeOperatorInputCursorY', () => {
         openQuestionsPaneHeight,
       }),
     ).toBe(22);
+  });
+});
+
+describe('computeStreamOperatorInputCursorY', () => {
+  it('anchors the IME cursor to the stream live frame', () => {
+    expect(
+      computeStreamOperatorInputCursorY({
+        workerPaneHeight: WORKER_PANE_HEIGHT,
+        openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+        hintLineCount: 1,
+      }),
+    ).toBe(
+      WORKER_PANE_HEIGHT +
+        OPEN_QUESTIONS_PANE_MIN_HEIGHT +
+        PANE_BORDER_ROWS / 2 +
+        1 +
+        OPERATOR_INPUT_CURSOR_Y_OFFSET,
+    );
+  });
+
+  it('moves the first input row when the context hint wraps', () => {
+    const oneLine = computeStreamOperatorInputCursorY({
+      workerPaneHeight: WORKER_PANE_HEIGHT,
+      openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      hintLineCount: 1,
+    });
+    const twoLines = computeStreamOperatorInputCursorY({
+      workerPaneHeight: WORKER_PANE_HEIGHT,
+      openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      hintLineCount: 2,
+    });
+
+    expect(twoLines).toBe(oneLine + 1);
   });
 });
