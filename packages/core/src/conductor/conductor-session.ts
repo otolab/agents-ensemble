@@ -60,6 +60,7 @@ import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import {
+  bufferDispatchHoldEvents,
   createDispatchHoldState,
   type DispatchHoldChange,
 } from './session/dispatch-hold.js';
@@ -553,6 +554,13 @@ export async function runConductorSession(
   const dispatchHoldTools = createSetDispatchHoldTool({
     state: dispatchHoldState,
     onChanged: onDispatchHoldChanged,
+    onBeforeRelease: () => {
+      bufferDispatchHoldEvents({
+        state: dispatchHoldState,
+        eventQueue,
+        onChanged: onDispatchHoldChanged,
+      });
+    },
   });
 
   const conductorCwd = options.conductorCwd ?? process.cwd();

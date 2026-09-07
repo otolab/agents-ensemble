@@ -113,7 +113,13 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 |------|------------|--------------------|
 | オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。worker の活動は通常どおり表示される |
 | conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger は OFF 後に 1 回の `agent.send` へ合成される。operator/permission は保留されない |
-| 運用・resume | 保留は Driver メモリだけ | sidecar に保留状態・held buffer は保存しない。resume は保留 OFF で開始する |
+| 運用・resume | 保留は Driver メモリだけ | sidecar に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
+
+保留は一時的な運用モードであり、teardown flush や crash recovery は提供しない。`/exit`、
+SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが `hold: false` より先に
+起きた場合、Driver 内の held buffer と queue に残る hold 対象 trigger は dispatch / sidecar
+保存されず失われる。operator は終了前に `set_dispatch_hold({ hold: false })` を呼び、release
+完了を確認する必要がある。resume は空の hold（`dispatchHold: false`）で始まる。
 
 ### 2.5 GitHub 監視イベント（#39 で追加）
 

@@ -91,6 +91,18 @@ Driver 状態であり sidecar には保存しないため、resume は常に `d
 batch と同じ規則で集計し、max-turns で送れない場合は operator/permission を先に処理してから
 flush する。
 
+#### 非永続 buffer の終了時リスク
+
+held buffer と、release 前に queue に残る hold 対象 trigger は Driver メモリだけに存在し、
+sidecar へ保存しない。このため hold を解除する前に正常 exit（`/exit`）、SIGINT/SIGTERM、
+conductor send failure が起きた場合、またはプロセスが crash した場合は、未 flush のイベントが
+dispatch も復元もされず失われる。これは一時的な dispatch hold を sidecar の永続状態にしない
+ことを優先した accepted risk である。
+
+運用上は、hold 中にセッションを終了せず、作業を再開する前に `set_dispatch_hold({ hold: false })`
+を呼ぶ。resume は sidecar から hold を復元せず、空の buffer と `dispatchHold: false` で開始する。
+終了時の teardown flush は実装しない。
+
 ### `SessionEventQueue` API
 
 | API | 用途 |

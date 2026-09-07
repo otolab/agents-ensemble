@@ -9,6 +9,7 @@ import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
 import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js';
 import {
+  bufferDispatchHoldEvents,
   createDispatchHoldState,
   type DispatchHoldChange,
 } from './session/dispatch-hold.js';
@@ -239,6 +240,7 @@ describe('runConductorSessionDriver', () => {
   it('holds trigger events and flushes them as one mixed batch after release', async () => {
     const holdState = createDispatchHoldState();
     const onSendComplete = vi.fn();
+    const eventQueue = new SessionEventQueue();
     const holdChanges: Array<{ status: string; hold: boolean; count: number }> = [];
     const recordHoldChange = (change: DispatchHoldChange) => {
       holdChanges.push({
@@ -250,6 +252,12 @@ describe('runConductorSessionDriver', () => {
     const holdTool = createSetDispatchHoldTool({
       state: holdState,
       onChanged: recordHoldChange,
+      onBeforeRelease: () =>
+        bufferDispatchHoldEvents({
+          state: holdState,
+          eventQueue,
+          onChanged: recordHoldChange,
+        }),
     });
     const send = vi
       .fn()
@@ -277,7 +285,6 @@ describe('runConductorSessionDriver', () => {
       });
 
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
-    const eventQueue = new SessionEventQueue();
     const driverPromise = runConductorSessionDriver({
       ...createDriverOptions({ eventQueue, conductor, maxTurns: 5 }),
       dispatchHoldState: holdState,
@@ -332,6 +339,94 @@ describe('runConductorSessionDriver', () => {
       workerFailures: 1,
     });
     expect(result.autonomousTurns).toBe(1);
+  });
+
+  it('collects queued triggers before an in-flight release and flushes one mixed batch', async () => {
+    const holdState = createDispatchHoldState();
+    const eventQueue = new SessionEventQueue();
+    const holdChanges: DispatchHoldChange[] = [];
+    let releaseResult: { structuredContent?: unknown } | undefined;
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onChanged: (change) => holdChanges.push(change),
+      onBeforeRelease: () =>
+        bufferDispatchHoldEvents({
+          state: holdState,
+          eventQueue,
+          onChanged: (change) => holdChanges.push(change),
+        }),
+    });
+    const onSendComplete = vi.fn();
+    const send = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await holdTool.set_dispatch_hold!.execute({ hold: true });
+        eventQueue.enqueue({
+          type: 'worker.completed',
+          result: {
+            name: 'implementer',
+            acpSessionId: 'sess-1',
+            status: 'finished',
+            result: 'done',
+          },
+        });
+        eventQueue.enqueue({
+          type: 'worker.failed',
+          failure: {
+            name: 'reviewer',
+            kind: 'reviewer',
+            error: 'failed',
+          },
+        });
+        releaseResult = await holdTool.set_dispatch_hold!.execute({ hold: false });
+        return {
+          runId: 'run-1',
+          status: 'running',
+          result: 'holding and releasing',
+        };
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'flushed',
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor, maxTurns: 5 }),
+      dispatchHoldState: holdState,
+      onDispatchHoldChanged: (change) => holdChanges.push(change),
+      onSendComplete,
+    });
+
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(String(send.mock.calls[1]![0])).toContain('## worker 通知（implementer・2 件）');
+    expect(String(send.mock.calls[1]![0])).toContain('worker.completed');
+    expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
+    expect(releaseResult?.structuredContent).toEqual({
+      dispatchHold: false,
+      flushedEventCount: 2,
+      sendScheduled: true,
+    });
+    expect(holdChanges).toEqual([
+      { status: 'enabled', hold: true, heldEventCount: 0 },
+      { status: 'updated', hold: true, heldEventCount: 2 },
+      {
+        status: 'released',
+        hold: false,
+        heldEventCount: 0,
+        flushedEventCount: 2,
+      },
+    ]);
+    expect(onSendComplete.mock.calls.map(([info]) => info.autonomousTurns)).toEqual([1, 2]);
+    expect(onSendComplete.mock.calls[1]?.[0]).toMatchObject({
+      workerDispatches: 1,
+      workerFailures: 1,
+    });
+    expect(result.autonomousTurns).toBe(2);
+    expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
   });
 
   it('dispatches permission.pending immediately while trigger events are held', async () => {

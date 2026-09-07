@@ -18,6 +18,7 @@ import { formatSessionEventsForConductor } from './session/format-session-event.
 import { SessionEventQueue } from './session/session-event-queue.js';
 import type { SessionEvent } from './session/session-event.js';
 import {
+  bufferDispatchHoldEvents,
   createDispatchHoldState,
   type DispatchHoldChange,
   type DispatchHoldState,
@@ -29,7 +30,6 @@ import {
   selectDispatchBatch,
   type DispatchBatchState,
 } from './session/select-dispatch-batch.js';
-import { isTriggerSessionEvent } from './session/dispatch-mode.js';
 import {
   autonomousTurnsAfterConductorBatch,
   buildIssueLoopStopInput,
@@ -409,7 +409,11 @@ async function waitForDispatchBatch(input: {
 }): Promise<DispatchBatchResult | undefined> {
   for (;;) {
     if (input.dispatchHoldState.dispatchHold) {
-      bufferHoldableTriggerEvents(input);
+      bufferDispatchHoldEvents({
+        state: input.dispatchHoldState,
+        eventQueue: input.eventQueue,
+        onChanged: input.onDispatchHoldChanged,
+      });
     }
 
     const selected = selectDispatchBatch({
@@ -463,35 +467,6 @@ async function waitForDispatchBatch(input: {
 
 function isImmediateDispatchSource(sourceKey: string): boolean {
   return sourceKey === 'operator' || sourceKey === 'permission';
-}
-
-function isHoldableTriggerEvent(event: SessionEvent): boolean {
-  return (
-    isTriggerSessionEvent(event) &&
-    event.type !== 'operator.message' &&
-    event.type !== 'permission.pending'
-  );
-}
-
-function bufferHoldableTriggerEvents(input: {
-  eventQueue: SessionEventQueue;
-  dispatchHoldState: DispatchHoldState;
-  onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
-}): void {
-  const queue = input.eventQueue.snapshot();
-  const held = queue.filter(isHoldableTriggerEvent);
-  if (held.length === 0) {
-    return;
-  }
-
-  const heldSet = new Set(held);
-  input.dispatchHoldState.heldEvents.push(...held);
-  input.eventQueue.replaceQueue(queue.filter((event) => !heldSet.has(event)));
-  input.onDispatchHoldChanged?.({
-    status: 'updated',
-    hold: true,
-    heldEventCount: input.dispatchHoldState.heldEvents.length,
-  });
 }
 
 function isAbortError(error: unknown): boolean {

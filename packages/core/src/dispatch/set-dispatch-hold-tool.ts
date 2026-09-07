@@ -8,6 +8,8 @@ import { yamlToolResult } from './yaml-tool-result.js';
 export interface SetDispatchHoldToolOptions {
   state: DispatchHoldState;
   onChanged?: (change: DispatchHoldChange) => void;
+  /** OFF 時、state を false にする前に queue の hold 対象を回収する。 */
+  onBeforeRelease?: () => void;
 }
 
 /** conductor が harness → conductor の trigger dispatch を一時停止する tool。 */
@@ -20,6 +22,7 @@ export function createSetDispatchHoldTool(
         'Temporarily hold trigger SessionEvents before dispatching them to the conductor.',
         '`hold: true` is useful while reading an Issue/PR or coordinating several workers; held events are kept in arrival order.',
         '`operator.message` and `permission.pending` always bypass the hold.',
+        'Events already queued before release are collected before the flush count is returned.',
         '`hold: false` releases the held trigger events as one combined conductor send.',
       ].join(' '),
       inputSchema: {
@@ -54,6 +57,7 @@ export function createSetDispatchHoldTool(
           });
         }
 
+        options.onBeforeRelease?.();
         const flushedEventCount = options.state.heldEvents.length;
         options.state.dispatchHold = false;
         options.onChanged?.({
