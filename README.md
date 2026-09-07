@@ -255,7 +255,7 @@ Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-pre
 
 ### TTY TUI のレイアウト
 
-TTY の既定レイアウトは `pane` です。既存の Workers / Orchestration / Open questions / Operator input の 4 ペインを使い、Orchestration は `PgUp` / `PgDn` / `End` でペイン内をスクロールします。
+TTY の既定レイアウトは `pane` です。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインを追加します。Orchestration は `PgUp` / `PgDn` / `End` でペイン内をスクロールします。
 
 活動ログを端末の scrollback に残す `stream` レイアウトは、次の環境変数で選択できます。
 
@@ -264,6 +264,8 @@ ENSEMBLE_TUI_LAYOUT=stream ensemble issue <url>
 ```
 
 `stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順で固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は1行目にIssue参照なしの「追加指示を入力するか /exit で終了」、2行目に「owner/repo#number — post-loop 待機中」を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、下部 live frame を基準に変換窓の位置を計算します。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
+
+Operator input は open question の有無で2モードに分かれます。question がある場合は回答 hint と `Shift+↑↓` / Enter を表示し、Issue 参照と自律ターン数は表示しません。question がない場合は Open questions ペインを省略し、`任意のタイミングで入力 · /exit で終了` と Issue 参照を表示します。post-loop 待機中は操作案内と `owner/repo#number — post-loop 待機中` の2行に上書きされます。詳細は [docs/operator-input.md](docs/operator-input.md) を参照してください。
 
 scrollback を実行中に上へ移動している間に新しい活動ログが到着すると、端末の実装によっては末尾へ戻されることがあります。また、端末幅を変更しても既に追記されたログ行は再折り返しされません。
 

@@ -22,7 +22,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 interface OperatorInputContext {
   conductorTurn: number;      // 次の send 番号（1 始まり）
   autonomousTurns: number;
-  maxTurns: number | null;    // 無制限時は null（表示は ∞）
+  maxTurns: number | null;    // 無制限時は null
   openQuestions: OpenQuestion[];
 }
 
@@ -55,9 +55,20 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 ## TTY TUI レイアウト
 
-TTY の既定は `pane` レイアウトです。Workers / Orchestration / Open questions / Operator input の 4 ペインを表示し、Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。
+TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。
 
 `ENSEMBLE_TUI_LAYOUT=stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は1行目にIssue参照なしの「追加指示を入力するか /exit で終了」、2行目に「owner/repo#number — post-loop 待機中」を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
+
+### Operator input の2モード
+
+pane / stream とも、下部の表示は open question の有無で次の2モードに解決されます。
+
+| モード | 条件 | 表示と入力 |
+|--------|------|------------|
+| **A: question あり** | `openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の hint を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
+| **B: question なし** | `openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input の hint は `任意のタイミングで入力 · /exit で終了` とし、通常時は先頭に `owner/repo#number` の Issue 参照を付ける。submit は通常の operator メッセージとして送信する。 |
+
+post-loop 待機中はモード B の hint を2行に上書きし、1行目に `追加指示を入力するか /exit で終了`、2行目に `owner/repo#number — post-loop 待機中` を表示します。終了中は現行どおり `終了しています…` を表示して入力を無効化します。
 
 scrollback を実行中に上へ移動しているときに新着ログが追記されると、端末依存で表示が末尾へ戻ることがあります。端末幅を変更しても、既に Static として追記された行は再折り返しされません。
 
@@ -104,17 +115,18 @@ ensemble issue <url> --max-turns 0    # 無制限
 ensemble issue <url> --no-max-turns   # 無制限
 ```
 
-無制限時は `OperatorInputContext.maxTurns` が `null` となり、TTY 表示は `自律ターン: N/∞` となる。
+無制限時は `OperatorInputContext.maxTurns` が `null` となります。`autonomousTurns` / `maxTurns` は View がコンテキストとして受け取りますが、現在の Operator input hint には自律ターン数を表示しません。
 
 View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver が Policy を参照して行う。
 
 ### Issue リンク
 
-TTY の Ink TUI では、入力欄直上のコンテキスト行の先頭に作業中 Issue の
+TTY の Ink TUI では、モード B の通常 hint の先頭に作業中 Issue の
 `owner/repo#number` を表示する。対応端末では OSC 8 リンクとして表示され、Cmd+クリック
-（または端末の同等操作）で `issueUrl` をブラウザで開ける。Issue 参照は open question
-選択中、post-loop 待機中、終了中も表示する。未対応または未知の TTY ではラベルのみ、
-非 TTY では既存のフォールバック出力を維持し、OSC 8 制御文字を出力しない。
+（または端末の同等操作）で `issueUrl` をブラウザで開ける。モード A の回答 hint には
+Issue 参照を表示しない。post-loop 待機中は2行目に Issue 参照を表示し、終了中は現行の
+終了 hint と Issue 参照を維持する。未対応または未知の TTY ではラベルのみ、非 TTY では
+既存のフォールバック出力を維持し、OSC 8 制御文字を出力しない。
 
 ## post-loop 待機（プロセス維持）
 

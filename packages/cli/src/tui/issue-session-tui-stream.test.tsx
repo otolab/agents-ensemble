@@ -63,7 +63,8 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('Orchestration');
     expect(frame.indexOf('Open questions')).toBeLessThan(frame.indexOf('Operator input'));
     expect(frame.indexOf('Operator input')).toBeLessThan(frame.indexOf('Workers'));
-    expect(frame).toContain('任意のタイミングで入力（/exit で');
+    expect(frame).toContain('inq-1 (1/1) への回答');
+    expect(frame).not.toContain('任意のタイミングで入力 · /exit で終了');
   });
 
   it('shows the two-line post-loop hint without an empty open-question state', () => {
@@ -101,7 +102,7 @@ describe('IssueSessionTuiStream', () => {
     expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(80);
   });
 
-  it('does not show a placeholder context hint before operator context binds', () => {
+  it('shows the no-question hint before operator context binds', () => {
     const viewModel = createTuiViewModel();
 
     const { lastFrame } = render(
@@ -114,8 +115,31 @@ describe('IssueSessionTuiStream', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).not.toContain('— operator>');
+    expect(frame).toContain('任意のタイミングで入力 · /exit で終了');
     expect(frame).not.toContain('自律ターン');
+  });
+
+  it('omits the open-question pane and keeps ordinary input available', async () => {
+    const viewModel = createTuiViewModel();
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueUrl="https://github.com/otolab/agents-ensemble/issues/263"
+        issueLinkMode="label"
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(lastFrame() ?? '').not.toContain('Open questions');
+    expect(lastFrame() ?? '').toContain('otolab/agents-ensemble#263 — 任意のタイミングで入力 · /exit で終了');
+
+    stdin.write('follow-up');
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+
+    expect(onSubmit).toHaveBeenCalledWith('follow-up', undefined);
   });
 
   it('appends a later activity entry without replacing the earlier static entry', async () => {

@@ -1,10 +1,6 @@
-import type { OperatorInputContext } from '@agents-ensemble/core';
+import type { OpenQuestion, OperatorInputContext } from '@agents-ensemble/core';
 import { parseIssueUrl } from '@agents-ensemble/core';
-import { OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT } from './tui-layout-constants.js';
-
-function formatMaxTurnsLabel(maxTurns: number | null): string {
-  return maxTurns === null ? '∞' : String(maxTurns);
-}
+import { OPERATOR_INPUT_DISCRETIONARY_HINT } from './tui-layout-constants.js';
 
 export type IssueLinkMode = 'osc8' | 'label' | 'url';
 
@@ -119,6 +115,74 @@ export interface OpenQuestionSelectionContext {
   total: number;
 }
 
+export type OperatorInputDisplayMode = 'withQuestions' | 'noQuestions';
+
+export interface OperatorInputDisplayResolution {
+  mode: OperatorInputDisplayMode;
+  hintLines: string[];
+}
+
+function formatIssueHint(
+  issueUrl: string | undefined,
+  hint: string,
+  issueLinkMode: IssueLinkMode | undefined,
+): string {
+  // WrappedTextLines applies OSC 8 to a leading compact label. Keep the
+  // existing label/url rendering path while keeping question mode unlinked.
+  return prependIssueReference(
+    issueUrl,
+    hint,
+    issueLinkMode === 'url' ? 'url' : 'label',
+  );
+}
+
+/**
+ * Operator input の表示モードと hint 行を解決する。
+ *
+ * 表示モード自体は open question の有無による2値だけとし、終了中と
+ * post-loop 待機中の文言はこの関数内で優先して上書きする。
+ */
+export function resolveOperatorInputDisplayMode(params: {
+  openQuestions: readonly OpenQuestion[];
+  selection?: OpenQuestionSelectionContext;
+  postLoopWaiting?: boolean;
+  shuttingDown?: boolean;
+  issueUrl?: string;
+  issueLinkMode?: IssueLinkMode;
+}): OperatorInputDisplayResolution {
+  const mode: OperatorInputDisplayMode =
+    params.openQuestions.length > 0 ? 'withQuestions' : 'noQuestions';
+
+  if (params.shuttingDown) {
+    return {
+      mode,
+      hintLines: [formatIssueHint(params.issueUrl, '終了しています…', params.issueLinkMode)],
+    };
+  }
+
+  if (params.postLoopWaiting && mode === 'noQuestions') {
+    return {
+      mode,
+      hintLines: [
+        '追加指示を入力するか /exit で終了',
+        formatIssueHint(params.issueUrl, 'post-loop 待機中', params.issueLinkMode),
+      ],
+    };
+  }
+
+  if (mode === 'withQuestions') {
+    const questionHint = params.selection
+      ? `${params.selection.id} (${params.selection.index + 1}/${params.selection.total}) への回答 — Shift+↑↓で選択 · Enter で送信`
+      : 'open question あり — Shift+↑↓で選択して回答';
+    return { mode, hintLines: [questionHint] };
+  }
+
+  return {
+    mode,
+    hintLines: [formatIssueHint(params.issueUrl, OPERATOR_INPUT_DISCRETIONARY_HINT, params.issueLinkMode)],
+  };
+}
+
 /** 入力欄直上に表示するオペレータ向けコンテキスト行。 */
 export function formatOperatorContextHint(
   context: OperatorInputContext | undefined,
@@ -129,24 +193,12 @@ export function formatOperatorContextHint(
     return prependIssueReference(options.issueUrl, 'operator> ', options.issueLinkMode);
   }
 
-  if (context.openQuestions.length > 0) {
-    if (selection) {
-      return prependIssueReference(
-        options.issueUrl,
-        `${selection.id} (${selection.index + 1}/${selection.total}) への回答 — Shift+↑↓で選択 · Enter で送信`,
-        options.issueLinkMode,
-      );
-    }
-    return prependIssueReference(
-      options.issueUrl,
-      'open question あり — Shift+↑↓で選択して回答',
-      options.issueLinkMode,
-    );
-  }
-
-  return prependIssueReference(
-    options.issueUrl,
-    `自律ターン ${context.autonomousTurns}/${formatMaxTurnsLabel(context.maxTurns)}${OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT}`,
-    options.issueLinkMode,
-  );
+  const resolution = resolveOperatorInputDisplayMode({
+    openQuestions: context.openQuestions,
+    selection,
+  });
+  const hint = resolution.hintLines[0] ?? 'operator> ';
+  return resolution.mode === 'noQuestions'
+    ? prependIssueReference(options.issueUrl, hint, options.issueLinkMode)
+    : hint;
 }

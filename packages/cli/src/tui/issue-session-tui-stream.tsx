@@ -34,9 +34,7 @@ import {
 } from './compute-operator-input-cursor-y.js';
 import { computeMaxInputDisplayLines, trimBlankLinesOnly } from './operator-input-layout.js';
 import {
-  formatIssueLabel,
-  formatOperatorContextHint,
-  prependIssueReference,
+  resolveOperatorInputDisplayMode,
   type IssueLinkMode,
 } from './format-operator-context.js';
 import { buildActivityLogDisplayLines, type ActivityLogEntry } from './activity-log.js';
@@ -103,7 +101,6 @@ export function IssueSessionTuiStream({
   const operatorPrompt = 'operator> ';
   const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
   const openQuestions = snapshot.displayState.openQuestions;
-  const hasOpenQuestions = openQuestions.length > 0;
   const openQuestionsLayout = useMemo(
     () =>
       resolveOpenQuestionsPaneLayout({
@@ -111,44 +108,25 @@ export function IssueSessionTuiStream({
         selectedIndex: selectedQuestionIndex,
         contentWidth,
         terminalRows,
-        includeDiscretionaryInputHint: true,
       }),
     [openQuestions, selectedQuestionIndex, contentWidth, terminalRows],
   );
   const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
-  const isPostLoopWaitingHint =
-    !hasOpenQuestions && snapshot.postLoopWaiting && !snapshot.shuttingDown;
-  const contextHint = hasOpenQuestions
-    ? ''
-    : snapshot.shuttingDown
-      ? '終了しています…'
-      : isPostLoopWaitingHint
-        ? ''
-        : snapshot.operatorContext
-          ? formatOperatorContextHint(snapshot.operatorContext)
-          : '';
-  const contextHintText = contextHint
-    ? prependIssueReference(
-        issueUrl,
-        contextHint,
-        issueLinkMode === 'url' ? 'url' : 'label',
-      )
-    : '';
-  const postLoopIssueReference = issueUrl?.trim()
-    ? issueLinkMode === 'url'
-      ? issueUrl.trim()
-      : formatIssueLabel(issueUrl)
-    : undefined;
-  const contextHintLines = isPostLoopWaitingHint
-    ? [
-        '追加指示を入力するか /exit で終了',
-        postLoopIssueReference
-          ? `${postLoopIssueReference} — post-loop 待機中`
-          : 'post-loop 待機中',
-      ]
-    : contextHintText
-      ? [contextHintText]
-      : [];
+  const operatorInputDisplay = resolveOperatorInputDisplayMode({
+    openQuestions,
+    selection: selectedQuestion
+      ? {
+          id: selectedQuestion.id,
+          index: openQuestionsLayout.selectedIndex,
+          total: openQuestions.length,
+        }
+      : undefined,
+    postLoopWaiting: snapshot.postLoopWaiting,
+    shuttingDown: snapshot.shuttingDown,
+    issueUrl,
+    issueLinkMode,
+  });
+  const contextHintLines = operatorInputDisplay.hintLines;
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const hintLineCount = contextHintLines.reduce(
     (lineCount, line) => lineCount + wrapTextToWidth(line, contentWidth).length,
@@ -158,7 +136,8 @@ export function IssueSessionTuiStream({
     hintLineCount,
     inputDisplayLineCount: visibleInputDisplayLineCount,
   });
-  const openQuestionsPaneHeight = hasOpenQuestions ? openQuestionsLayout.paneHeight : 0;
+  const openQuestionsPaneHeight =
+    operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
   const streamPaneHeights = useMemo(
     () =>
       resolveStreamPaneHeights({
@@ -243,7 +222,9 @@ export function IssueSessionTuiStream({
         height={streamPaneHeights.dynamicFrameHeight}
         overflow="hidden"
       >
-        {hasOpenQuestions ? <OpenQuestionsPane layout={streamOpenQuestionsLayout} /> : null}
+        {operatorInputDisplay.mode === 'withQuestions' ? (
+          <OpenQuestionsPane layout={streamOpenQuestionsLayout} />
+        ) : null}
         <TitledBorderPane
           title={INPUT_PANE_TITLE}
           borderStyle="single"
@@ -257,7 +238,7 @@ export function IssueSessionTuiStream({
               text={line}
               width={contentWidth}
               color={INPUT_PANE_HINT_COLOR}
-              issueUrl={isPostLoopWaitingHint && index === 0 ? undefined : issueUrl}
+              issueUrl={issueUrl}
               issueLinkMode={issueLinkMode}
             />
           ))}

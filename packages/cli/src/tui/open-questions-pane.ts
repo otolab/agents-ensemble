@@ -5,7 +5,6 @@ import {
   OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO,
   OPEN_QUESTIONS_PANE_MIN_HEIGHT,
   OPEN_QUESTIONS_PANE_TITLE,
-  OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT,
   OPEN_QUESTIONS_SELECTION_HINT,
   PANE_BORDER_ROWS,
 } from './tui-layout-constants.js';
@@ -35,19 +34,13 @@ export function computeMaxOpenQuestionsDisplayLines(terminalRows: number): numbe
 export function formatOpenQuestionsPaneTitle(
   selectedIndex: number,
   totalCount: number,
-  options: { includeDiscretionaryInputHint?: boolean } = {},
 ): { titleText: string; titleSuffix?: string } {
   if (totalCount === 0) {
     return { titleText: OPEN_QUESTIONS_PANE_TITLE };
   }
 
   const titleText = `${OPEN_QUESTIONS_PANE_TITLE} (${selectedIndex + 1}/${totalCount}${OPEN_QUESTIONS_SELECTION_HINT})`;
-  return {
-    titleText,
-    titleSuffix: options.includeDiscretionaryInputHint
-      ? OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT
-      : undefined,
-  };
+  return { titleText };
 }
 
 function buildSelectedQuestionItem(
@@ -96,20 +89,17 @@ export function resolveOpenQuestionsPaneLayout(params: {
   selectedIndex: number;
   contentWidth: number;
   terminalRows: number;
-  includeDiscretionaryInputHint?: boolean;
 }): OpenQuestionsPaneLayout {
   const totalCount = params.openQuestions.length;
   const selectedIndex = clampOpenQuestionSelectionIndex(params.selectedIndex, totalCount);
-  const { titleText, titleSuffix } = formatOpenQuestionsPaneTitle(selectedIndex, totalCount, {
-    includeDiscretionaryInputHint: params.includeDiscretionaryInputHint,
-  });
+  const { titleText, titleSuffix } = formatOpenQuestionsPaneTitle(selectedIndex, totalCount);
 
   if (totalCount === 0) {
     return {
-      paneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      paneHeight: 0,
       titleText,
       titleSuffix,
-      contentLineCount: 1,
+      contentLineCount: 0,
       items: [],
       selectedIndex: 0,
     };
