@@ -11,6 +11,7 @@ import {
   mapCursorOffsetToDisplayPosition,
   sliceVisibleInputDisplayLines,
 } from './operator-input-layout.js';
+import { INPUT_PANE_PROMPT_COLOR } from './tui-layout-constants.js';
 
 export function OperatorTextArea({
   value,
@@ -113,7 +114,9 @@ export function OperatorTextArea({
         const absoluteLineIndex = scrollOffset + index;
         return (
           <Text key={`input-line-${absoluteLineIndex}`}>
-            {index === 0 && scrollOffset === 0 ? promptPrefix : ''}
+            {index === 0 && scrollOffset === 0 ? (
+              <Text color={INPUT_PANE_PROMPT_COLOR}>{promptPrefix}</Text>
+            ) : null}
             {lineText}
           </Text>
         );

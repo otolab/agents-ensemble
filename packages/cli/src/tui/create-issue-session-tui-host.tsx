@@ -9,10 +9,12 @@ import type { SessionLogEvent } from '@agents-ensemble/core';
 import type { SessionDisplayBackend } from '../display/session-display-backend.js';
 import { formatConductorActivityBody } from '../session-log-lines.js';
 import { IssueSessionTui } from './issue-session-tui.js';
+import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { trimBlankLinesOnly } from './operator-input-layout.js';
 import { supportsOsc8Hyperlinks } from './format-operator-context.js';
+import { resolveTuiLayoutMode } from './tui-layout-mode.js';
 
 const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
 
@@ -85,7 +87,12 @@ function createBindTuiOperatorInput(
 
 /** TTY 向け Ink TUI を起動し、表示 backend とオペレータ入力 binding を返す。 */
 export function createIssueSessionTuiHost(issueUrl?: string): IssueSessionTuiHost {
-  const viewModel = createTuiViewModel();
+  const layoutMode = resolveTuiLayoutMode({ isTty: process.stdin.isTTY === true });
+  const viewModel = createTuiViewModel({
+    // Ink's Static requires an append-only item array. Pane mode keeps the
+    // existing bounded in-memory window; stream mode retains the scrollback.
+    activityLogWindowSize: layoutMode === 'stream' ? null : undefined,
+  });
   const onSubmitRef: {
     current: ((text: string, options?: OperatorInputSubmitOptions) => void) | undefined;
   } = {
@@ -95,15 +102,21 @@ export function createIssueSessionTuiHost(issueUrl?: string): IssueSessionTuiHos
     current: undefined,
   };
 
+  const commonProps = {
+    viewModel,
+    issueUrl,
+    issueLinkMode: supportsOsc8Hyperlinks() ? ('osc8' as const) : ('label' as const),
+    onSubmit: (text: string, options?: OperatorInputSubmitOptions) => {
+      onSubmitRef.current?.(text, options);
+    },
+  };
   const ink = render(
-    <IssueSessionTui
-      viewModel={viewModel}
-      issueUrl={issueUrl}
-      issueLinkMode={supportsOsc8Hyperlinks() ? 'osc8' : 'label'}
-      onSubmit={(text, options) => {
-        onSubmitRef.current?.(text, options);
-      }}
-    />,
+    layoutMode === 'stream' ? (
+      <IssueSessionTuiStream {...commonProps} />
+    ) : (
+      <IssueSessionTui {...commonProps} />
+    ),
+    { alternateScreen: false },
   );
 
   const inkDisplayBackend = createInkDisplayBackend(viewModel);

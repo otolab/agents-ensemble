@@ -45,6 +45,23 @@ describe('createTuiTelemetrySink', () => {
     expect(snapshot.postLoopWaiting).toBe(true);
   });
 
+  it('sets postLoopWaiting before appending the post-loop observation', () => {
+    const viewModel = createTuiViewModel();
+    const snapshots: ReturnType<typeof viewModel.getSnapshot>[] = [];
+    viewModel.subscribe(() => {
+      snapshots.push(viewModel.getSnapshot());
+    });
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({ type: 'session.post_loop_wait' });
+
+    const withPostLoopObservation = snapshots.filter((snapshot) =>
+      snapshot.activityLog.some((entry) => entry.text === '自律作業が一段落しました。'),
+    );
+    expect(withPostLoopObservation.length).toBeGreaterThan(0);
+    expect(withPostLoopObservation.every((snapshot) => snapshot.postLoopWaiting)).toBe(true);
+  });
+
   it('marks shutting down and appends exit feedback on session.operator_exit', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);

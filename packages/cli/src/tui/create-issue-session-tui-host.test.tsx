@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockUnmount, mockRender } = vi.hoisted(() => {
   const mockUnmount = vi.fn();
-  const mockRender = vi.fn((_element: unknown) => ({ unmount: mockUnmount }));
+  const mockRender = vi.fn((_element: unknown, _options?: unknown) => ({ unmount: mockUnmount }));
   return { mockUnmount, mockRender };
 });
 
@@ -34,9 +34,14 @@ describe('createIssueSessionTuiHost', () => {
 
   afterEach(() => {
     const previous = process.env.ENSEMBLE_OPERATOR_MESSAGE;
+    const previousLayout = process.env.ENSEMBLE_TUI_LAYOUT;
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+    delete process.env.ENSEMBLE_TUI_LAYOUT;
     if (previous !== undefined) {
       process.env.ENSEMBLE_OPERATOR_MESSAGE = previous;
+    }
+    if (previousLayout !== undefined) {
+      process.env.ENSEMBLE_TUI_LAYOUT = previousLayout;
     }
   });
 
@@ -93,6 +98,19 @@ describe('createIssueSessionTuiHost', () => {
 
     host.dispose();
     expect(mockUnmount).toHaveBeenCalledTimes(1);
+  });
+
+  it('selects stream layout from ENSEMBLE_TUI_LAYOUT and disables alternate screen', () => {
+    process.env.ENSEMBLE_TUI_LAYOUT = 'stream';
+
+    const host = createIssueSessionTuiHost();
+    const renderedElement = mockRender.mock.calls[0]?.[0] as {
+      type: { name?: string };
+    };
+
+    expect(renderedElement.type.name).toBe('IssueSessionTuiStream');
+    expect(mockRender.mock.calls[0]?.[1]).toEqual({ alternateScreen: false });
+    host.dispose();
   });
 
   it('bindOperatorInput submits via Ink host without blocking', () => {

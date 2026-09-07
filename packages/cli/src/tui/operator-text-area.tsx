@@ -3,6 +3,7 @@ import { Box, Text } from 'ink';
 import stringWidth from 'string-width';
 import { TextArea, type TLinePrefixProps } from 'react-ink-textarea';
 import { computeOperatorInputLayout } from './operator-input-layout.js';
+import { INPUT_PANE_PROMPT_COLOR } from './tui-layout-constants.js';
 
 export interface OperatorTextAreaProps {
   readonly value: string;
@@ -52,7 +53,7 @@ export function OperatorTextArea({
   const linePrefix = useCallback(
     ({ lineNumber, isContinuationLine }: TLinePrefixProps) => {
       if (lineNumber === 0 && !isContinuationLine && promptPrefix.length > 0) {
-        return <Text>{promptPrefix}</Text>;
+        return <Text color={INPUT_PANE_PROMPT_COLOR}>{promptPrefix}</Text>;
       }
       return null;
     },

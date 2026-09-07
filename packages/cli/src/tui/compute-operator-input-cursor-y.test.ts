@@ -7,6 +7,7 @@ import {
   computeOperatorInputCursorY,
   computeOperatorInputLineIndex,
   computeOrchestrationLogVisibleLineCount,
+  computeStreamOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
 import {
   INPUT_PANE_BORDER_ROWS,
@@ -27,6 +28,7 @@ describe('computeInputPaneHeight', () => {
       computeInputPaneHeight({ hintLineCount: 1, inputDisplayLineCount: 4 }),
     ).toBe(INPUT_PANE_BORDER_ROWS + 1 + 4);
   });
+
 });
 
 describe('computeActivityPaneHeight', () => {
@@ -136,5 +138,40 @@ describe('computeOperatorInputCursorY', () => {
         openQuestionsPaneHeight,
       }),
     ).toBe(22);
+  });
+});
+
+describe('computeStreamOperatorInputCursorY', () => {
+  it('anchors the IME cursor to the stream live frame', () => {
+    expect(
+      computeStreamOperatorInputCursorY({
+        openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+        hintLineCount: 1,
+      }),
+    ).toBe(
+      OPEN_QUESTIONS_PANE_MIN_HEIGHT +
+        PANE_BORDER_ROWS / 2 +
+        1,
+    );
+  });
+
+  it('moves the first input row when the context hint wraps', () => {
+    const oneLine = computeStreamOperatorInputCursorY({
+      openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      hintLineCount: 1,
+    });
+    const twoLines = computeStreamOperatorInputCursorY({
+      openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+      hintLineCount: 2,
+    });
+
+    expect(twoLines).toBe(oneLine + 1);
+  });
+
+  it('does not reserve a row for an empty open-question state', () => {
+    expect(computeStreamOperatorInputCursorY({
+      openQuestionsPaneHeight: 0,
+      hintLineCount: 1,
+    })).toBe(PANE_BORDER_ROWS / 2 + 1);
   });
 });

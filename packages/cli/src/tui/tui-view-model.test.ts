@@ -32,4 +32,32 @@ describe('createTuiViewModel activity log', () => {
       { label: 'separator', text: '' },
     ]);
   });
+
+  it('keeps the activity log append-only for Ink Static when requested', () => {
+    const model = createTuiViewModel({ activityLogWindowSize: null });
+
+    for (let index = 0; index < 301; index++) {
+      model.appendActivityLog('harness', `line-${index}`);
+    }
+
+    expect(model.getSnapshot().activityLog).toHaveLength(301);
+    expect(model.getSnapshot().activityLog[0]).toEqual({
+      label: 'harness',
+      text: 'line-0',
+    });
+  });
+
+  it('keeps the existing bounded activity window by default', () => {
+    const model = createTuiViewModel();
+
+    for (let index = 0; index < 301; index++) {
+      model.appendActivityLog('harness', `line-${index}`);
+    }
+
+    expect(model.getSnapshot().activityLog).toHaveLength(300);
+    expect(model.getSnapshot().activityLog[0]).toEqual({
+      label: 'harness',
+      text: 'line-1',
+    });
+  });
 });

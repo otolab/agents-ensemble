@@ -21,6 +21,15 @@ export const OPEN_QUESTIONS_PANE_TITLE = 'Open questions';
 /** Operator input ペインの UI ラベル。 */
 export const INPUT_PANE_TITLE = 'Operator input';
 
+/** Operator input ペイン枠線・タイトル色（他ペインと区別し視認性を確保）。 */
+export const INPUT_PANE_BORDER_COLOR = 'blue';
+
+/** Operator input コンテキストヒント行の色。 */
+export const INPUT_PANE_HINT_COLOR = 'blue';
+
+/** Operator input プロンプト（`operator> `）の色。 */
+export const INPUT_PANE_PROMPT_COLOR = 'blue';
+
 /** Worker 状態ペインの固定高さ（枠線込み。タイトルは上枠線埋め込み + サマリ 4 行）。 */
 export const WORKER_PANE_HEIGHT = 6;
 
@@ -38,6 +47,10 @@ export const OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES = 8;
 
 /** Open questions ペインタイトルに付与する選択操作ヒント。 */
 export const OPEN_QUESTIONS_SELECTION_HINT = ' — Shift+↑↓で選択';
+
+/** Open questions 表示中にタイトルへ付与する任意入力ヒント。 */
+export const OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT =
+  ' — 任意のタイミングで入力（/exit で終了）';
 
 /** 入力ペインの枠線（上下）行数。`PANE_BORDER_ROWS` と同値。 */
 export const INPUT_PANE_BORDER_ROWS = PANE_BORDER_ROWS;

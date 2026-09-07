@@ -86,6 +86,30 @@ export function computeOperatorInputCursorY(params: {
   return inputLineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET;
 }
 
+/**
+ * Stream レイアウトの入力欄の Y 座標。
+ *
+ * Static 出力は Ink の dynamic output の外側へ追記されるため、stream の
+ * `cursorStart` は端末全体ではなく live frame 内の行として計算する。
+ * Open questions は入力欄の上に表示する。空状態では追加の本文行を持たない。
+ * Stream の dynamic root は pane の log-update 補正を持たないため、
+ * `OPERATOR_INPUT_CURSOR_Y_OFFSET` は加算しない。
+ */
+export function computeStreamOperatorInputCursorY(params: {
+  openQuestionsPaneHeight: number;
+  hintLineCount: number;
+  cursorLineOffset?: number;
+}): number {
+  const cursorLineOffset = params.cursorLineOffset ?? 0;
+  const inputLineIndex =
+    params.openQuestionsPaneHeight +
+    PANE_BORDER_ROWS / 2 +
+    params.hintLineCount +
+    cursorLineOffset;
+
+  return inputLineIndex;
+}
+
 /** 描画フレーム上のオペレータ入力行インデックス（`useCursor` の Y 補正前）。 */
 export function computeOperatorInputLineIndex(params: {
   terminalRows: number;

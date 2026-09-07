@@ -1,5 +1,6 @@
 import type { OperatorInputContext } from '@agents-ensemble/core';
 import { parseIssueUrl } from '@agents-ensemble/core';
+import { OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT } from './tui-layout-constants.js';
 
 function formatMaxTurnsLabel(maxTurns: number | null): string {
   return maxTurns === null ? '∞' : String(maxTurns);
@@ -145,7 +146,7 @@ export function formatOperatorContextHint(
 
   return prependIssueReference(
     options.issueUrl,
-    `自律ターン ${context.autonomousTurns}/${formatMaxTurnsLabel(context.maxTurns)} — 任意のタイミングで入力（/exit で終了）`,
+    `自律ターン ${context.autonomousTurns}/${formatMaxTurnsLabel(context.maxTurns)}${OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT}`,
     options.issueLinkMode,
   );
 }

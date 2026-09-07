@@ -99,7 +99,7 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 ### 悪い点・リスク
 
 - `react` peer 依存が `packages/cli` に追加される（バンドルサイズ・バージョン管理）
-- 長文スクロールは Ink に自動 overflow がないため、各ペインで windowing（末尾 N 行）を自前実装する必要がある
+- 長文スクロールは Ink に自動 overflow がないため、`pane` では各ペインで windowing（末尾 N 行）を自前実装する必要がある。`stream` では Ink の `Static` と端末 scrollback を使う
 - Ink はターミナル全体を占有する。TUI 起動中は `console.error` による harness 直書きと競合するため、#54 で sink 一本化が必須
 - React コンポーネントのテストは `ink-testing-library` 等の追加が必要
 
@@ -154,6 +154,10 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 ### #206 以降のペインタイトル（上枠線埋め込み）
 
 4 ペイン（Orchestration / Workers / Open questions / Operator input）のタイトルは **内側専用行を持たず**、上枠線に `╭─ Title ─` 形式で埋め込む（`TitledBorderPane` + `titled-border-line`）。Orchestration のスクロールヒントは枠線上に付与し、幅不足時は suffix から省略する。レイアウト定数（`OPEN_QUESTIONS_PANE_MIN_HEIGHT` 等）は内側タイトル行 0 を前提に再計算する。
+
+### #257 の stream レイアウト
+
+既定の `pane` レイアウトを維持したまま、`ENSEMBLE_TUI_LAYOUT=stream` を指定した TTY では活動ログを Ink の `<Static>` で枠なし追記し、下部の live UI を **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に表示する。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は1行目にIssue参照なしの「追加指示を入力するか /exit で終了」、2行目に「owner/repo#number — post-loop 待機中」を表示する。`alternateScreen` は使わず、過去ログは端末 scrollback を正本とする。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使うが、`cursorStart` の Y 座標は Static 領域ではなく下部 live frame を原点に計算する。Static の append-only 要件に合わせ、stream の活動ログは表示中のプロセス内で保持するが、セッション sidecar や活動ログファイルには永続化しない。端末幅変更時の既追記行の再折り返し、および scrollback 閲覧中の新着ログによる末尾復帰は運用上の制限として README / operator-input.md に記録する。
 
 ## 関連
 

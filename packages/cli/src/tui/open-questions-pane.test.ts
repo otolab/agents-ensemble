@@ -91,4 +91,16 @@ describe('resolveOpenQuestionsPaneLayout', () => {
     expect(layout.titleText).toContain('1/1');
     expect(layout.titleText).toContain('Shift+↑↓で選択');
   });
+
+  it('can append the discretionary input hint to the title', () => {
+    const layout = resolveOpenQuestionsPaneLayout({
+      openQuestions: [SAMPLE_QUESTION],
+      selectedIndex: 0,
+      contentWidth: 80,
+      terminalRows: 24,
+      includeDiscretionaryInputHint: true,
+    });
+
+    expect(layout.titleSuffix).toBe(' — 任意のタイミングで入力（/exit で終了）');
+  });
 });

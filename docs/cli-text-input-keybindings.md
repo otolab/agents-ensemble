@@ -49,7 +49,7 @@ Emacs 風ショートカットは **OS の共通機能ではない**。利用者
 | **カノニカル（Cooked）** | 改行まで行単位 | OS は不可。Readline 等が Raw に切り替えて自前実装 |
 | **非カノニカル（Raw）** | 1 キーずつ即時 | アプリが `termios` で ICANON/ECHO を off にし、全キーを解釈 |
 
-リッチ TUI（4 ペイン + 非同期 harness 更新 + マルチライン入力）は **Raw モードが前提**。Ink も `react-ink-textarea` も内部で stdin を Raw 扱いする。
+リッチ TUI（`pane` / `stream` レイアウト、非同期 harness 更新、マルチライン入力）は **Raw モードが前提**。Ink も `react-ink-textarea` も内部で stdin を Raw 扱いする。
 
 ### 2.2 ターミナルエミュレータの役割
 
