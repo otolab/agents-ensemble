@@ -251,6 +251,20 @@ Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-pre
 
 終了サマリは exit report（会話ログではない）。`--summary-format json|text`・`--include-full-response-text` で制御。フィールド一覧は [docs/session-metrics.md](docs/session-metrics.md)。resume の正本は sidecar。
 
+### TTY TUI のレイアウト
+
+TTY の既定レイアウトは `pane` です。既存の Workers / Orchestration / Open questions / Operator input の 4 ペインを使い、Orchestration は `PgUp` / `PgDn` / `End` でペイン内をスクロールします。
+
+活動ログを端末の scrollback に残す `stream` レイアウトは、次の環境変数で選択できます。
+
+```bash
+ENSEMBLE_TUI_LAYOUT=stream ensemble issue <url>
+```
+
+`stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、Workers / Open questions / Operator input が下部の枠付き live UI として固定されます。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
+
+scrollback を実行中に上へ移動している間に新しい活動ログが到着すると、端末の実装によっては末尾へ戻されることがあります。また、端末幅を変更しても既に追記されたログ行は再折り返しされません。
+
 ### セッションの停止と再開
 
 `ensemble issue` は harness 状態を **sidecar JSON** に永続化する。正常終了・エラー・`Ctrl+C`（SIGINT）/ `SIGTERM` いずれでも best-effort で flush する（状態変化時の増分 flush あり）。

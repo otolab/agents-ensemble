@@ -2,6 +2,7 @@ import type { OperatorInputContext } from '@agents-ensemble/core';
 import type { SessionDisplayState } from '../display/session-display-state.js';
 import { INITIAL_SESSION_DISPLAY_STATE } from '../display/session-display-state.js';
 import {
+  ACTIVITY_LOG_WINDOW_SIZE,
   appendActivityLogEntry,
   type ActivityLogEntry,
   type ActivityLogLabel,
@@ -27,7 +28,14 @@ export interface TuiViewModel {
   setOperatorContext: (context: OperatorInputContext | undefined) => void;
 }
 
-export function createTuiViewModel(): TuiViewModel {
+export function createTuiViewModel(options: {
+  /** `null` keeps every entry so Ink's `<Static>` can append monotonically. */
+  activityLogWindowSize?: number | null;
+} = {}): TuiViewModel {
+  const activityLogWindowSize =
+    options.activityLogWindowSize === undefined
+      ? ACTIVITY_LOG_WINDOW_SIZE
+      : options.activityLogWindowSize;
   let displayState = INITIAL_SESSION_DISPLAY_STATE;
   let activityLog: ActivityLogEntry[] = [];
   let postLoopWaiting = false;
@@ -78,11 +86,19 @@ export function createTuiViewModel(): TuiViewModel {
       if (!trimmed) {
         return;
       }
-      activityLog = appendActivityLogEntry(activityLog, { label, text: trimmed });
+      const entry = { label, text: trimmed } satisfies ActivityLogEntry;
+      activityLog =
+        activityLogWindowSize === null
+          ? [...activityLog, entry]
+          : appendActivityLogEntry(activityLog, entry, activityLogWindowSize);
       notify();
     },
     appendActivityLogSeparator() {
-      activityLog = appendActivityLogEntry(activityLog, { label: 'separator', text: '' });
+      const entry = { label: 'separator', text: '' } satisfies ActivityLogEntry;
+      activityLog =
+        activityLogWindowSize === null
+          ? [...activityLog, entry]
+          : appendActivityLogEntry(activityLog, entry, activityLogWindowSize);
       notify();
     },
     setPostLoopWaiting(waiting) {

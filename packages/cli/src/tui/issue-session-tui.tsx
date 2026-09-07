@@ -64,7 +64,7 @@ function usePaneContentWidth(): number {
   });
 }
 
-function WrappedTextLines({
+export function WrappedTextLines({
   text,
   width,
   dimColor = false,
@@ -114,7 +114,7 @@ function renderActivityLogLabel(label: ActivityLogLabel): ReactNode {
   return color ? <Text color={color}>[{label}]</Text> : <Text>[{label}]</Text>;
 }
 
-function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
+export function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
   if (line.layout === 'separator') {
     return <Text> </Text>;
   }
@@ -174,10 +174,12 @@ function sortWorkerEntries(
   });
 }
 
-function WorkerStatusPane({
+export function WorkerStatusPane({
   workers,
+  height = WORKER_PANE_HEIGHT,
 }: {
   workers: TuiViewSnapshot['displayState']['workers'];
+  height?: number;
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
   return (
@@ -186,7 +188,7 @@ function WorkerStatusPane({
       borderStyle="round"
       borderColor="cyan"
       paddingX={PANE_PADDING_X}
-      height={WORKER_PANE_HEIGHT}
+      height={height}
     >
       {entries.length === 0 ? (
         <Text dimColor>(待機中)</Text>
@@ -253,7 +255,7 @@ function OrchestrationPane({
   );
 }
 
-function OpenQuestionsPane({ layout }: { layout: OpenQuestionsPaneLayout }) {
+export function OpenQuestionsPane({ layout }: { layout: OpenQuestionsPaneLayout }) {
   return (
     <TitledBorderPane
       title={layout.titleText}

@@ -38,7 +38,7 @@ conductor セッションには性質の異なる出力が混在する。
 │   (stderr)          reducer → backend         (stderr)    │
 │                     (Ink TUI or stdout)                   │
 │   TTY 時は Harness/Observation を stderr に出さず、      │
-│   TuiTelemetrySink → 活動ログ（Orchestration メインペイン）へ       │
+│   TuiTelemetrySink → 活動ログ（pane / stream）へ         │
 │                                  │                          │
 │                                  └────► snapshot()          │
 │                                        → 終了 JSON          │
@@ -68,7 +68,7 @@ conductor セッションには性質の異なる出力が混在する。
 | `[continue]` | `session.continue` → ObservationSink | **非 TTY のみ** |
 | （終了サマリ） | `formatIssueSessionSummaryText`（`writeIssueSessionSummary`） | **TTY のみ**（`--summary-format auto` または `text`）。Ink unmount 後 |
 
-TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の **Orchestration** メインペイン（活動ログ）に `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor 応答は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同ペインに追記する（末尾 300 エントリ windowing。#108）。
+TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor 応答は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。既定の `pane` レイアウトでは Orchestration ペイン内の windowing、`ENSEMBLE_TUI_LAYOUT=stream` では `<Static>` と端末 scrollback を使う。stream の活動ログは端末表示用で、セッション sidecar や活動ログファイルには永続化しない。stream は実行中の端末スクロール中に新着ログで末尾へ戻ることがあり、既に追記された行は端末幅変更で再折り返しされない。
 
 ### 終了 JSON（SessionSummary）
 
@@ -147,7 +147,7 @@ CLI の `formatHarnessLogBody()` はこの representation の thin wrapper で�
 CLI formatter で診断情報を保つ。permission の ACP variant と抽出優先順位は
 [harness-events.md §2.1.1](harness-events.md#211-オペレータ向け-representation) を参照。
 
-表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question を保持する。TTY では Ink TUI（`packages/cli/src/tui/`）が同じ reducer / backend 契約で 4 ペイン表示する（#94）。
+表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question を保持する。TTY では Ink TUI（`packages/cli/src/tui/`）が同じ reducer / backend 契約で `pane` または `stream` の live UI を表示する（#94、#257）。
 
 ---
 
