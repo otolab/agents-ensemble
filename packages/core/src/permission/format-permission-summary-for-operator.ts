@@ -35,38 +35,72 @@ export interface PermissionOperationSummary {
   value: string;
 }
 
-/** ツール名に応じて raw から操作概要を抜き出す。 */
+/** ACP payload の構造化フィールドから、ツールに依存しない操作概要を抜き出す。 */
 export function extractPermissionOperationSummary(
   request: PermissionRequest,
 ): PermissionOperationSummary | undefined {
   const raw = asRecord(request.raw) ?? {};
-  const toolCall = asRecord(raw.toolCall) ?? asRecord(raw.tool_call);
-  const toolCallArgs = toolCall ? asRecord(toolCall.args) : undefined;
-  const input =
-    asRecord(raw.input) ??
-    asRecord(raw.arguments) ??
-    toolCallArgs ??
-    raw;
-  const tool = request.toolName.trim().toLowerCase();
+  const toolCall =
+    asRecordOrJson(raw.toolCall) ?? asRecordOrJson(raw.tool_call);
+  const inputs = [
+    asRecordOrJson(raw.input),
+    asRecordOrJson(raw.arguments),
+    asRecordOrJson(raw.rawInput),
+    asRecordOrJson(raw.raw_input),
+    asRecordOrJson(toolCall?.args),
+    asRecordOrJson(toolCall?.rawInput),
+    asRecordOrJson(toolCall?.raw_input),
+    raw,
+  ].filter((input): input is Record<string, unknown> => input !== undefined);
 
+  const command = inputs
+    .map((input) =>
+      readString(input, 'command', 'cmd', 'commandLine', 'shellCommand', 'script'),
+    )
+    .find((value): value is string => value !== undefined);
+  if (command) {
+    return { field: 'cmd', value: sanitizeSummaryValue(command) };
+  }
+
+  const tool = request.toolName.trim().toLowerCase();
   if (tool === 'shell' || tool === 'bash') {
-    const command =
-      readString(input, 'command', 'cmd') ??
-      readString(raw, 'command', 'cmd') ??
-      readString(input, 'description', 'working_directory') ??
-      readString(raw, 'description');
-    if (command) {
-      return { field: 'cmd', value: sanitizeSummaryValue(command) };
+    const description = inputs
+      .map((input) => readString(input, 'description', 'working_directory'))
+      .find((value): value is string => value !== undefined);
+    if (description) {
+      return { field: 'cmd', value: sanitizeSummaryValue(description) };
+    }
+
+    const rawInputText = readString(toolCall, 'rawInput', 'raw_input');
+    if (rawInputText && !asRecordOrJson(rawInputText)) {
+      return { field: 'cmd', value: sanitizeSummaryValue(rawInputText) };
     }
   }
 
-  if (tool === 'write' || tool === 'delete' || tool === 'read' || tool === 'edit') {
-    const path =
-      readString(input, 'path', 'file_path', 'filePath', 'target_file') ??
-      readString(raw, 'path', 'file_path', 'filePath', 'target_file');
-    if (path) {
-      return { field: 'path', value: sanitizeSummaryValue(path) };
-    }
+  const path = inputs
+    .map((input) =>
+      readString(input, 'path', 'file_path', 'filePath', 'target_file', 'filename'),
+    )
+    .find((value): value is string => value !== undefined);
+  if (path) {
+    return { field: 'path', value: sanitizeSummaryValue(path) };
+  }
+
+  const locationPath = readLocationPath(raw, toolCall);
+  if (locationPath) {
+    return { field: 'path', value: sanitizeSummaryValue(locationPath) };
+  }
+
+  const toolCallId =
+    readString(toolCall, 'toolCallId', 'tool_call_id') ??
+    readString(raw, 'toolCallId', 'tool_call_id');
+  if (toolCallId) {
+    return { field: 'toolCallId', value: sanitizeSummaryValue(toolCallId) };
+  }
+
+  const title = readString(toolCall, 'title', 'description');
+  if (title) {
+    return { field: 'detail', value: sanitizeSummaryValue(title) };
   }
 
   const fallback = sanitizeSummaryValue(safeShortenRaw(request.raw));
@@ -89,6 +123,44 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function asRecordOrJson(value: unknown): Record<string, unknown> | undefined {
+  const record = asRecord(value);
+  if (record) {
+    return record;
+  }
+
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  try {
+    return asRecord(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+}
+
+function readLocationPath(
+  raw: Record<string, unknown>,
+  toolCall: Record<string, unknown> | undefined,
+): string | undefined {
+  for (const candidate of [raw.locations, toolCall?.locations]) {
+    if (!Array.isArray(candidate)) {
+      continue;
+    }
+
+    for (const location of candidate) {
+      const record = asRecord(location);
+      const path = readString(record, 'path', 'file_path', 'filePath', 'uri');
+      if (path) {
+        return path;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 function readString(

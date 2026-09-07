@@ -140,6 +140,13 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `selectSessionDisplayBackend()` | 同上 | interactive かつ非 TTY 時は string backend、TTY は Ink host、非 interactive は noop |
 | `createDialogueSink()` | `session-sinks.ts` | 低レベル stdout 整形（string backend が `operator.input` / `conductor.send` で利用） |
 
+Harness の human-readable な 1 行表現は、出力先ごとに重複させず core の
+`renderSessionLogEvent()`（`packages/core/src/representation/`）を共有する。
+CLI の `formatHarnessLogBody()` はこの representation の thin wrapper であり、
+現在は `permission.pending` renderer が登録されている。未登録イベントは既存の
+CLI formatter で診断情報を保つ。permission の ACP variant と抽出優先順位は
+[harness-events.md §2.1.1](harness-events.md#211-オペレータ向け-representation) を参照。
+
 表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question を保持する。TTY では Ink TUI（`packages/cli/src/tui/`）が同じ reducer / backend 契約で 4 ペイン表示する（#94）。
 
 ---
@@ -213,6 +220,7 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 | パス | 内容 |
 |------|------|
 | `packages/core/src/conductor/session/session-logger.ts` | `SessionLogger`, 型定義 |
+| `packages/core/src/representation/session-log-representation.ts` | operator 向け SessionLogEvent renderer registry |
 | `packages/core/src/acp/acp-process.ts` | worker 子プロセス spawn・stderr capture |
 | `packages/core/src/conductor/conductor-session.ts` | `emit` 配線、`snapshot()` で終了 |
 | `packages/cli/src/session-sinks.ts` | Harness / Observation / Dialogue sink |

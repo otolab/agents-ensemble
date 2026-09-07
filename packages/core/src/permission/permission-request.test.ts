@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { permissionRequestFixtures } from '../../test/fixtures/permission-request-fixtures.js';
 import {
   extractPermissionOperationSummary,
   formatPermissionSummaryForOperator,
@@ -102,5 +103,71 @@ describe('parsePermissionRequest', () => {
         },
       }).toolName,
     ).toBe('mcp:prompt_worker/dispatch');
+  });
+
+  it.each([
+    ['dogfooding execute payload', permissionRequestFixtures.dogfoodingExecute, 'Shell'],
+    [
+      'execute payload with JSON rawInput',
+      permissionRequestFixtures.executeWithJsonRawInput,
+      'Shell',
+    ],
+    ['read payload', permissionRequestFixtures.readPath, 'Read'],
+    ['edit payload with snake_case fields', permissionRequestFixtures.editPath, 'Edit'],
+    ['execute id-only payload', permissionRequestFixtures.executeIdOnly, 'Shell'],
+  ])('infers tool name from %s', (_name, payload, expectedTool) => {
+    expect(parsePermissionRequest(payload).toolName).toBe(expectedTool);
+  });
+
+  it('does not keep an explicit unknown tool when ACP metadata identifies it', () => {
+    expect(
+      parsePermissionRequest({
+        toolName: 'unknown',
+        ...permissionRequestFixtures.dogfoodingExecute,
+      }).toolName,
+    ).toBe('Shell');
+  });
+});
+
+describe('ACP permission request fixtures', () => {
+  it.each([
+    [permissionRequestFixtures.dogfoodingExecute, { field: 'cmd', value: 'pnpm test' }],
+    [
+      permissionRequestFixtures.executeWithJsonRawInput,
+      { field: 'cmd', value: 'pnpm test --filter=core' },
+    ],
+    [
+      permissionRequestFixtures.readPath,
+      { field: 'path', value: 'packages/core/src/index.ts' },
+    ],
+    [
+      permissionRequestFixtures.editPath,
+      { field: 'path', value: 'packages/cli/src/session-log-lines.ts' },
+    ],
+    [
+      permissionRequestFixtures.executeIdOnly,
+      { field: 'toolCallId', value: 'exec-id-only-1' },
+    ],
+  ])('extracts a readable operation summary from %j', (payload, expected) => {
+    expect(
+      extractPermissionOperationSummary(parsePermissionRequest(payload)),
+    ).toEqual(expected);
+  });
+
+  it('prefers a command over toolCallId and raw JSON fallback', () => {
+    const request = parsePermissionRequest(permissionRequestFixtures.dogfoodingExecute);
+
+    expect(extractPermissionOperationSummary(request)).toEqual({
+      field: 'cmd',
+      value: 'pnpm test',
+    });
+    expect(formatPermissionSummaryForOperator({
+      id: '4bf9479c-7f7f-4f1f-8a08-123456789abc',
+      workerId: 'worker-uuid',
+      createdAt: 0,
+      request,
+    }, { workerLabel: 'implementer' })).toBe(
+      'permission.pending worker=implementer tool=Shell cmd="pnpm test" id=4bf9479c...',
+    );
   });
 });

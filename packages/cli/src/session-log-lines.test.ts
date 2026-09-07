@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parsePermissionRequest } from '@agents-ensemble/core';
 import {
   formatConductorActivityBody,
   formatHarnessLogBody,
@@ -24,6 +25,29 @@ describe('session-log-lines', () => {
       }),
     ).toBe(
       'permission.pending worker=implementer tool=Shell cmd="npm test" id=perm-3',
+    );
+  });
+
+  it('renders the dogfooding ACP permission payload as a readable line', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'permission.pending',
+        workerLabel: 'implementer',
+        permission: {
+          id: '4bf9479c-7f7f-4f1f-8a08-123456789abc',
+          workerId: 'worker-uuid',
+          createdAt: 0,
+          request: parsePermissionRequest({
+            sessionId: '01a07a33-d3c1-7ff2-a36a-0f43c2486e45',
+            toolCall: {
+              toolCallId: 'exec-c7c466aa-8399-4554-89c8-c56a81033df9',
+              rawInput: { command: 'pnpm test' },
+            },
+          }),
+        },
+      }),
+    ).toBe(
+      'permission.pending worker=implementer tool=Shell cmd="pnpm test" id=4bf9479c...',
     );
   });
 
