@@ -203,7 +203,9 @@ ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--p
 # <issue-url> はフル URL または 31 / '#31' 等の番号 shorthand 可（# はクォート）
 ```
 
-**GitHub 監視**（既定で有効）: セッション中に Issue コメント・関連 PR のレビュー / CI 完了を `gh` で poll し、debounce 後に conductor へ `## GitHub 更新` を届ける（自動 `prompt_worker` なし）。詳細は [docs/harness-events.md](docs/harness-events.md) §2.5。
+**GitHub 監視**（既定で有効）: セッション中に Issue コメント・関連 PR のレビュー / CI 完了を `gh` で poll し、debounce 後に conductor へ `## GitHub 更新` を届ける（自動 `prompt_worker` なし）。PR 作成直後は conductor の `register_github_watch` tool に `prNumber` または `prUrl` を渡すと、GitHub Search にまだ反映されていない PR も監視対象になる。詳細は [docs/harness-events.md](docs/harness-events.md) §2.5。
+
+`register_github_watch` の `kinds` は任意です。省略時は `pr.review`、`pr.review_comment`、`ci.completed` を監視し、同じ PR の再登録は no-op になります。セッション Issue と異なるリポジトリの PR URL は登録できません。
 
 | フラグ | 意味 |
 |--------|------|
@@ -323,6 +325,7 @@ conductor は SDK `Agent.resume`、worker は ACP `session/load` で復元する
 |------|------|
 | **startWorkers（attach + init prompt）** | 役割・permission・待機 prompt。実作業の開始トリガーではない。API: `WorkerSession.startWorkers()`（`bootstrap()` は deprecated） |
 | **`prompt_worker`（conductor SDK tool）** | 常駐 worker へ作業指示（`session/prompt`）。busy 時は per-worker キュー、`preempt: true` で割り込み |
+| **`register_github_watch`（conductor SDK tool）** | PR 番号または URL を GitHub 監視へ明示登録。`kinds` 省略時は review / review comment / CI 完了を監視 |
 | **`worker.completed` イベント** | 1 ラウンド完了を conductor へ通知（タスク完了の意味ではない） |
 
 **Issue / PR に書いただけでは worker は動かない。** トリガーは conductor の `prompt_worker` のみ（詳細は [ADR 0012](docs/adr/0012-conductor-worker-prompt-roundtrip.md)、[architecture.md §5](docs/architecture.md)）。

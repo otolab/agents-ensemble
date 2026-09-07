@@ -86,7 +86,11 @@ import { resolveGitHubMonitorEnabled } from '../config/resolve-settings.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import { GITHUB_AUTH_HINT } from '../github/github-auth.js';
 import { resolveGitHubAuthToken } from '../github/resolve-github-auth-token.js';
-import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
+import {
+  emptyGitHubMonitorCursor,
+  type GitHubMonitorCursor,
+} from '../github/github-monitor-cursor.js';
+import { createRegisterGitHubWatchTool } from '../github/register-github-watch-tool.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -223,6 +227,7 @@ export async function runConductorSession(
     { acpSessionId: string; acpCwd?: string; acpSpawn?: AcpSpawnFingerprint }
   >();
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
+  let githubMonitor: GitHubMonitor | undefined;
 
   if (options.resumeAgentId) {
     const sidecar = await requireSessionSidecarForResume({
@@ -505,6 +510,18 @@ export async function runConductorSession(
     getWorkerFailures: () => sessionLogger.workerFailures,
   });
 
+  const registerGitHubWatchTools = createRegisterGitHubWatchTool({
+    issueUrl: options.issueUrl,
+    getCursor: () => {
+      githubMonitorCursor ??= emptyGitHubMonitorCursor();
+      return githubMonitorCursor;
+    },
+    onRegistered: (registration) => {
+      githubMonitor?.registerPullRequest?.(registration);
+      scheduleSidecarFlush();
+    },
+  });
+
   let conductorAgent!: ConductorAgent;
 
   const sessionUsageTools = createSessionUsageTools({
@@ -530,6 +547,7 @@ export async function runConductorSession(
       ...resolvePermissionTools,
       ...promptWorkerTools,
       ...workerStatusTools,
+      ...registerGitHubWatchTools,
       ...sessionUsageTools,
     },
   };
@@ -589,7 +607,6 @@ export async function runConductorSession(
   let sendCount = 0;
   let autonomousTurns = 0;
 
-  let githubMonitor: GitHubMonitor | undefined;
   const monitorDefaults = ensembleConfig.github.monitor;
   if (
     resolveGitHubMonitorEnabled({

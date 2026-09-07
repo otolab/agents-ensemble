@@ -67,6 +67,166 @@ describe('fetchGitHubUpdates', () => {
     expect(githubClient.searchLinkedPullRequests).toHaveBeenCalledWith('org', 'repo', 39);
   });
 
+  it('polls explicitly registered PRs even when linked PR search is empty', async () => {
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+    });
+
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: {
+        ...emptyGitHubMonitorCursor(),
+        explicitPullRequests: {
+          '354': { registeredAt: '2026-09-07T05:00:00.000Z' },
+        },
+      },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+
+    expect(githubClient.listPullRequestReviews).toHaveBeenCalledWith(
+      'org',
+      'repo',
+      354,
+    );
+    expect(githubClient.listPullRequestReviewComments).toHaveBeenCalledWith(
+      'org',
+      'repo',
+      354,
+    );
+    expect(githubClient.getStatusCheckRollup).toHaveBeenCalledWith(
+      'org',
+      'repo',
+      354,
+    );
+    expect(result.cursor.pullRequests?.['354']).toMatchObject({
+      pendingCheckNames: [],
+      notifiedCheckNames: [],
+    });
+  });
+
+  it('bootstraps a newly registered PR before notifying its existing updates', async () => {
+    const reviews = [
+      {
+        id: 10,
+        body: 'existing review',
+        html_url: 'https://github.com/org/repo/pull/354#pullrequestreview-10',
+        user: { login: 'reviewer' },
+        state: 'APPROVED',
+        submitted_at: '2026-09-07T05:00:00.000Z',
+      },
+    ];
+    const reviewComments = [
+      {
+        id: 20,
+        body: 'existing comment',
+        html_url: 'https://github.com/org/repo/pull/354#discussion_r20',
+        user: { login: 'reviewer' },
+        path: 'src/index.ts',
+        created_at: '2026-09-07T05:00:00.000Z',
+      },
+    ];
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews: vi.fn().mockResolvedValue(reviews),
+      listPullRequestReviewComments: vi.fn().mockResolvedValue(reviewComments),
+    });
+
+    const bootstrap = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: {
+        ...emptyGitHubMonitorCursor(),
+        explicitPullRequests: {
+          '354': { registeredAt: '2026-09-07T05:00:00.000Z' },
+        },
+      },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+
+    expect(bootstrap.updates).toEqual([]);
+    expect(bootstrap.cursor.pullRequests?.['354']).toMatchObject({
+      lastReviewId: '10',
+      lastReviewCommentId: '20',
+    });
+
+    const nextPoll = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: bootstrap.cursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient: createMockClient({
+        searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+        listPullRequestReviews: vi.fn().mockResolvedValue([
+          ...reviews,
+          {
+            ...reviews[0]!,
+            id: 11,
+            body: 'new review',
+          },
+        ]),
+        listPullRequestReviewComments: vi.fn().mockResolvedValue([
+          ...reviewComments,
+          {
+            ...reviewComments[0]!,
+            id: 21,
+            body: 'new comment',
+          },
+        ]),
+      }),
+    });
+
+    expect(nextPoll.updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'pr-review:11', kind: 'pr.review' }),
+        expect.objectContaining({
+          id: 'pr-review-comment:21',
+          kind: 'pr.review_comment',
+        }),
+      ]),
+    );
+  });
+
+  it('limits explicit PR polling to its configured kinds', async () => {
+    const listPullRequestReviewComments = vi.fn().mockResolvedValue([]);
+    const getStatusCheckRollup = vi.fn().mockResolvedValue([]);
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([
+        {
+          id: 11,
+          body: 'new review',
+          html_url: 'https://github.com/org/repo/pull/354#pullrequestreview-11',
+          user: { login: 'reviewer' },
+          state: 'APPROVED',
+          submitted_at: '2026-09-07T05:00:00.000Z',
+        },
+      ]),
+      listPullRequestReviewComments,
+      getStatusCheckRollup,
+    });
+
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: {
+        pullRequests: { '354': { lastReviewId: '10' } },
+        explicitPullRequests: {
+          '354': {
+            registeredAt: '2026-09-07T05:00:00.000Z',
+            kinds: ['pr.review'],
+          },
+        },
+      },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+
+    expect(result.updates).toMatchObject([
+      expect.objectContaining({ id: 'pr-review:11', kind: 'pr.review' }),
+    ]);
+    expect(listPullRequestReviewComments).not.toHaveBeenCalled();
+    expect(getStatusCheckRollup).not.toHaveBeenCalled();
+  });
+
   it('detects new issue comments after cursor (resume / offline diff)', async () => {
     const githubClient = createMockClient({
       listIssueComments: vi.fn().mockResolvedValue([

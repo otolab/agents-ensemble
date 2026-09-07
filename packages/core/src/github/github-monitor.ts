@@ -14,6 +14,7 @@ import {
   type GitHubMonitorCursor,
 } from './github-monitor-cursor.js';
 import type { GitHubUpdateItem, GitHubUpdatePayload } from './github-update-types.js';
+import type { GitHubUpdateKind } from './github-update-types.js';
 
 export const DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS = 30_000;
 export const DEFAULT_GITHUB_MONITOR_POLL_INTERVAL_MS = 60_000;
@@ -43,6 +44,12 @@ export interface GitHubMonitor {
   stop(): Promise<void>;
   flush(): void;
   getCursor(): GitHubMonitorCursor;
+  /** Add a runtime PR watch without waiting for GitHub Search to find it. */
+  registerPullRequest(registration: {
+    prNumber: number;
+    registeredAt: string;
+    kinds?: GitHubUpdateKind[];
+  }): void;
 }
 
 export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonitor {
@@ -64,6 +71,10 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
   let pollAbortController: AbortController | undefined;
   let hasPendingCi = false;
   let needsBootstrapPoll = isEmptyGitHubMonitorCursor(cursor);
+  const pendingRegistrations = new Map<
+    string,
+    { registeredAt: string; kinds?: GitHubUpdateKind[] }
+  >();
 
   const buffer = new DebounceBuffer<GitHubUpdateItem>({
     debounceMs,
@@ -99,7 +110,8 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
         abortSignal: pollAbortController.signal,
       };
       const result = await fetchGitHubUpdates(input);
-      cursor = result.cursor;
+      cursor = mergePendingRegistrations(result.cursor, pendingRegistrations);
+      pendingRegistrations.clear();
       options.onCursorChange?.(cursor);
       needsBootstrapPoll = false;
       hasPendingCi = result.hasPendingCi;
@@ -176,7 +188,40 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
     getCursor() {
       return normalizeGitHubMonitorCursor(cursor);
     },
+
+    registerPullRequest(registration) {
+      const key = String(registration.prNumber);
+      cursor.explicitPullRequests ??= {};
+      const watch = cursor.explicitPullRequests[key] ?? {
+        registeredAt: registration.registeredAt,
+        ...(registration.kinds ? { kinds: [...registration.kinds] } : {}),
+      };
+      cursor.explicitPullRequests[key] ??= watch;
+      pendingRegistrations.set(key, watch);
+      options.onCursorChange?.(cursor);
+    },
   };
+}
+
+function mergePendingRegistrations(
+  cursor: GitHubMonitorCursor,
+  pendingRegistrations: Map<
+    string,
+    { registeredAt: string; kinds?: GitHubUpdateKind[] }
+  >,
+): GitHubMonitorCursor {
+  if (pendingRegistrations.size === 0) {
+    return cursor;
+  }
+
+  cursor.explicitPullRequests ??= {};
+  for (const [key, watch] of pendingRegistrations) {
+    cursor.explicitPullRequests[key] ??= {
+      registeredAt: watch.registeredAt,
+      ...(watch.kinds ? { kinds: [...watch.kinds] } : {}),
+    };
+  }
+  return cursor;
 }
 
 function isAbortError(error: unknown): boolean {

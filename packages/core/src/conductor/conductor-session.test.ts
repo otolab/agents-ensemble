@@ -247,6 +247,46 @@ describe('runConductorSession resume / shutdown', () => {
     );
   });
 
+  it('registers the GitHub watch tool and persists a tool registration', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => {
+      await conductorTools!.register_github_watch!.execute({ prNumber: 354 });
+      return {
+        runId: 'run-1',
+        status: 'finished',
+        result: 'registered',
+      };
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(conductorTools?.register_github_watch).toBeDefined();
+    const sidecar = await loadSessionSidecar(
+      sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+    );
+    expect(sidecar?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+      registeredAt: expect.any(String),
+      kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+    });
+  });
+
   it('emits auth recovery hint when conductor send returns auth error', async () => {
     const emitted: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({
