@@ -566,37 +566,42 @@ export async function runConductorSession(
     },
   };
 
+  let sidecarFlushQueue: Promise<void> = Promise.resolve();
   let flushSidecar: () => Promise<void> = async () => {};
-  flushSidecar = async (): Promise<void> => {
-    const workers: SessionSidecar['workers'] = {};
-    for (const [name, worker] of workerSessions) {
-      workers[name] = {
-        acpSessionId: worker.acpSessionId,
-        ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
-        ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
-      };
-    }
-    const snapshot = openQuestions.snapshot();
-    const sidecar: SessionSidecar = {
-      version: SESSION_SIDECAR_VERSION,
-      conductorAgentId: conductorHandle.conductor.agentId,
-      issueUrl: options.issueUrl,
-      repoRoot: options.repoRoot,
-      profile: structuredClone(activeProfile),
-      ...(options.profilePath ? { profilePath: options.profilePath } : {}),
-      openQuestions: snapshot.openQuestions,
-      sequence: snapshot.sequence,
-      workers,
-      ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
-      updatedAt: Date.now(),
-    };
-    await saveSessionSidecar(
-      sessionSidecarPath({
-        repoRoot: options.repoRoot,
+  flushSidecar = (): Promise<void> => {
+    const nextFlush = sidecarFlushQueue.then(async () => {
+      const workers: SessionSidecar['workers'] = {};
+      for (const [name, worker] of workerSessions) {
+        workers[name] = {
+          acpSessionId: worker.acpSessionId,
+          ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
+          ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
+        };
+      }
+      const snapshot = openQuestions.snapshot();
+      const sidecar: SessionSidecar = {
+        version: SESSION_SIDECAR_VERSION,
         conductorAgentId: conductorHandle.conductor.agentId,
-      }),
-      sidecar,
-    );
+        issueUrl: options.issueUrl,
+        repoRoot: options.repoRoot,
+        profile: structuredClone(activeProfile),
+        ...(options.profilePath ? { profilePath: options.profilePath } : {}),
+        openQuestions: snapshot.openQuestions,
+        sequence: snapshot.sequence,
+        workers,
+        ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
+        updatedAt: Date.now(),
+      };
+      await saveSessionSidecar(
+        sessionSidecarPath({
+          repoRoot: options.repoRoot,
+          conductorAgentId: conductorHandle.conductor.agentId,
+        }),
+        sidecar,
+      );
+    });
+    sidecarFlushQueue = nextFlush.catch(() => {});
+    return nextFlush;
   };
   scheduleSidecarFlush = () => {
     void flushSidecar().catch(() => {
