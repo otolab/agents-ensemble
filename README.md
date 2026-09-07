@@ -271,6 +271,7 @@ Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-pre
 | worker `acpSessionId` | worker 名をキーに ACP `session/load` 用 ID |
 | worker `acpCwd` | 上記 session を load するときの cwd（profile `workspace` 解決後の絶対パス。resume 時に profile と照合） |
 | `profile` | セッション開始時のスナップショット（resume 時は CLI `--profile` より sidecar を優先） |
+| `githubMonitor.explicitPullRequests` | `register_github_watch` で明示登録した PR の番号・登録時刻・監視種別。resume 後も Search に依存せず監視を継続 |
 | `updatedAt` | 最終 flush 時刻（`--continue` で最新セッション選択に使用、#31） |
 
 **載せないもの**: `worktreePath`（`issueUrl` + `repoRoot` から導出）、SDK 会話本文（SDK store が正本）
@@ -307,6 +308,8 @@ ensemble issue https://github.com/org/repo/issues/1 \
 `--resume` 指定時に sidecar が無い場合は **起動失敗**（`SessionSidecarNotFoundError`）。SDK だけ復元して harness 状態を失う半端 resume はしない。
 
 conductor は SDK `Agent.resume`、worker は ACP `session/load` で復元する（詳細は [ADR 0011](docs/adr/0011-session-sidecar-resume.md)）。
+
+sidecar に保存された `githubMonitor.explicitPullRequests` も resume 時に monitor へ引き継がれるため、登録済み PR は Search の再検出を待たずに監視が継続される。
 
 **CLI JSON 出力（破壊的変更）**
 
