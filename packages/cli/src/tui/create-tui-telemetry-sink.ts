@@ -13,17 +13,17 @@ export function createTuiTelemetrySink(viewModel: TuiViewModel): SessionLogSink 
       viewModel.appendActivityLog('harness', harnessBody);
     }
 
-    const observationBody = formatObservationLogBody(event);
-    if (observationBody) {
-      viewModel.appendActivityLog('observation', observationBody);
-    }
-
     if (event.type === 'session.post_loop_wait') {
       viewModel.setPostLoopWaiting(true);
     }
 
     if (event.type === 'session.operator_exit') {
       viewModel.setShuttingDown(true);
+    }
+
+    const observationBody = formatObservationLogBody(event);
+    if (observationBody) {
+      viewModel.appendActivityLog('observation', observationBody);
     }
   };
 }

@@ -28,6 +28,8 @@ import {
 } from './open-questions-pane.js';
 import {
   INPUT_PANE_TITLE,
+  INPUT_PANE_BORDER_COLOR,
+  INPUT_PANE_HINT_COLOR,
   MAIN_PANE_TITLE,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
@@ -68,12 +70,14 @@ export function WrappedTextLines({
   text,
   width,
   dimColor = false,
+  color,
   issueUrl,
   issueLinkMode = 'label',
 }: {
   text: string;
   width: number;
   dimColor?: boolean;
+  color?: string;
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
 }) {
@@ -86,7 +90,7 @@ export function WrappedTextLines({
   return (
     <>
       {lines.map((line, index) => (
-        <Text key={`${index}-${line}`} dimColor={dimColor}>
+        <Text key={`${index}-${line}`} color={color} dimColor={dimColor}>
           {index === 0 && issueLink && issueLabel && line.startsWith(issueLabel) ? (
             <>
               <Text>{issueLink}</Text>
@@ -460,14 +464,14 @@ export function IssueSessionTui({
       <TitledBorderPane
         title={INPUT_PANE_TITLE}
         borderStyle="single"
-        borderColor="white"
+        borderColor={INPUT_PANE_BORDER_COLOR}
         paddingX={PANE_PADDING_X}
         height={inputPaneHeight}
       >
         <WrappedTextLines
           text={contextHintText}
           width={contentWidth}
-          dimColor
+          color={INPUT_PANE_HINT_COLOR}
           issueUrl={issueUrl}
           issueLinkMode={issueLinkMode}
         />

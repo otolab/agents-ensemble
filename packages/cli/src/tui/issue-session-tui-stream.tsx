@@ -15,6 +15,8 @@ import {
 } from './open-questions-pane.js';
 import {
   INPUT_PANE_TITLE,
+  INPUT_PANE_BORDER_COLOR,
+  INPUT_PANE_HINT_COLOR,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
 } from './tui-layout-constants.js';
@@ -245,7 +247,7 @@ export function IssueSessionTuiStream({
         <TitledBorderPane
           title={INPUT_PANE_TITLE}
           borderStyle="single"
-          borderColor="white"
+          borderColor={INPUT_PANE_BORDER_COLOR}
           paddingX={PANE_PADDING_X}
           height={streamPaneHeights.inputPaneHeight}
         >
@@ -254,7 +256,7 @@ export function IssueSessionTuiStream({
               key={`context-hint-${index}`}
               text={line}
               width={contentWidth}
-              dimColor
+              color={INPUT_PANE_HINT_COLOR}
               issueUrl={isPostLoopWaitingHint && index === 0 ? undefined : issueUrl}
               issueLinkMode={issueLinkMode}
             />
