@@ -122,7 +122,9 @@ export function IssueSessionTuiStream({
       ? '終了しています…'
       : isPostLoopWaitingHint
         ? ''
-        : formatOperatorContextHint(snapshot.operatorContext);
+        : snapshot.operatorContext
+          ? formatOperatorContextHint(snapshot.operatorContext)
+          : '';
   const contextHintText = contextHint
     ? prependIssueReference(
         issueUrl,

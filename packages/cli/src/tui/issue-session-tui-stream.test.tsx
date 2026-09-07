@@ -101,6 +101,23 @@ describe('IssueSessionTuiStream', () => {
     expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(80);
   });
 
+  it('does not show a placeholder context hint before operator context binds', () => {
+    const viewModel = createTuiViewModel();
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueUrl="https://github.com/otolab/agents-ensemble/issues/261"
+        issueLinkMode="label"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('— operator>');
+    expect(frame).not.toContain('自律ターン');
+  });
+
   it('appends a later activity entry without replacing the earlier static entry', async () => {
     const viewModel = createTuiViewModel();
     viewModel.appendActivityLog('harness', 'first');
