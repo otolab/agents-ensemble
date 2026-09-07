@@ -109,6 +109,7 @@ export function IssueSessionTuiStream({
         selectedIndex: selectedQuestionIndex,
         contentWidth,
         terminalRows,
+        includeDiscretionaryInputHint: true,
       }),
     [openQuestions, selectedQuestionIndex, contentWidth, terminalRows],
   );

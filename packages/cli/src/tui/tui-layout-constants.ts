@@ -39,6 +39,10 @@ export const OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES = 8;
 /** Open questions ペインタイトルに付与する選択操作ヒント。 */
 export const OPEN_QUESTIONS_SELECTION_HINT = ' — Shift+↑↓で選択';
 
+/** Open questions 表示中にタイトルへ付与する任意入力ヒント。 */
+export const OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT =
+  ' — 任意のタイミングで入力（/exit で終了）';
+
 /** 入力ペインの枠線（上下）行数。`PANE_BORDER_ROWS` と同値。 */
 export const INPUT_PANE_BORDER_ROWS = PANE_BORDER_ROWS;
 

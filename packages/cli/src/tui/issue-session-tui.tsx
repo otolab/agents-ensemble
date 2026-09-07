@@ -263,6 +263,7 @@ export function OpenQuestionsPane({
   return (
     <TitledBorderPane
       title={layout.titleText}
+      titleSuffix={layout.titleSuffix}
       borderStyle="round"
       borderColor="magenta"
       paddingX={PANE_PADDING_X}

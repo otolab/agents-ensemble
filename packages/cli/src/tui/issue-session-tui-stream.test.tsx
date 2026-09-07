@@ -63,6 +63,7 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('Orchestration');
     expect(frame.indexOf('Open questions')).toBeLessThan(frame.indexOf('Operator input'));
     expect(frame.indexOf('Operator input')).toBeLessThan(frame.indexOf('Workers'));
+    expect(frame).toContain('任意のタイミングで入力（/exit で');
   });
 
   it('shows the two-line post-loop hint without an empty open-question state', () => {
