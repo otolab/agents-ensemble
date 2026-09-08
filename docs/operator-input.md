@@ -57,7 +57,7 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。
 
-`ENSEMBLE_TUI_LAYOUT=stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は1行目にIssue参照なしの「追加指示を入力するか /exit で終了」、2行目に「owner/repo#number — post-loop 待機中」を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
+`ENSEMBLE_TUI_LAYOUT=stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /exit で終了` の prompt のみを表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
 
 ### Operator input の2モード
 
@@ -65,12 +65,12 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 
 | モード | 条件 | 表示と入力 |
 |--------|------|------------|
-| **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の hint を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
-| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input の hint は `任意のタイミングで入力 · /exit で終了` とし、通常時は先頭に `owner/repo#number` の Issue 参照を付ける。submit は通常の operator メッセージとして送信する。 |
+| **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の prompt を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
+| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input には `任意のタイミングで入力 · /exit で終了` の prompt のみを表示する。submit は通常の operator メッセージとして送信する。 |
 
 resume で sidecar の未回答 question を復元した場合も、`getContext()` が同じ Registry から一覧を返すため、binding 後の pane / stream はモード A として表示する。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使う。
 
-post-loop 待機中はモード B の hint を2行に上書きし、1行目に `追加指示を入力するか /exit で終了`、2行目に `owner/repo#number — post-loop 待機中` を表示します。終了中は現行どおり `終了しています…` を表示して入力を無効化します。
+post-loop 待機中はモード B の prompt を `追加指示を入力するか /exit で終了` に上書きします。終了中は `終了しています…` を表示して入力を無効化します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
 
 scrollback を実行中に上へ移動しているときに新着ログが追記されると、端末依存で表示が末尾へ戻ることがあります。端末幅を変更しても、既に Static として追記された行は再折り返しされません。
 
@@ -123,11 +123,10 @@ View は `getContext()` で状態を**読む**だけ。dispatch 判断は Driver
 
 ### Issue リンク
 
-TTY の Ink TUI では、モード B の通常 hint の先頭に作業中 Issue の
+TTY の Ink TUI では、Workers ペイン上枠の右端に作業中 Issue の
 `owner/repo#number` を表示する。対応端末では OSC 8 リンクとして表示され、Cmd+クリック
-（または端末の同等操作）で `issueUrl` をブラウザで開ける。モード A の回答 hint には
-Issue 参照を表示しない。post-loop 待機中は2行目に Issue 参照を表示し、終了中は現行の
-終了 hint と Issue 参照を維持する。未対応または未知の TTY ではラベルのみ、非 TTY では
+（または端末の同等操作）で `issueUrl` をブラウザで開ける。Operator input の prompt には
+Issue 参照を載せない。未対応または未知の TTY ではラベルのみ、非 TTY では
 既存のフォールバック出力を維持し、OSC 8 制御文字を出力しない。
 
 ## post-loop 待機（プロセス維持）

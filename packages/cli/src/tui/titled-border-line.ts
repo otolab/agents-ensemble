@@ -20,50 +20,74 @@ export function getTuiBorderChars(style: TuiBorderStyle): TuiBorderChars {
 export interface TitledTopBorderParts {
   left: string;
   title: string;
+  titleRight?: string;
   right: string;
 }
 
 /**
  * 上枠線にタイトルを埋め込んだ行を組み立てる。
  * 形式: `╭─ Title ─────────────╮`（タイトル前後に隙間）。
- * suffix はタイトル直後に付与し、幅不足時は suffix から省略する。
+ * suffix はタイトル直後に付与し、titleRight は右寄せで閉じ角直前に配置する。
+ * 幅不足時は titleRight → suffix → title の順で省略する。
  */
 export function buildTitledTopBorderParts(params: {
   title: string;
   suffix?: string;
+  titleRight?: string;
   totalWidth: number;
   borderStyle: TuiBorderStyle;
 }): TitledTopBorderParts {
   const { title, borderStyle } = params;
   const suffix = params.suffix ?? '';
+  const titleRight = params.titleRight ?? '';
   const chars = getTuiBorderChars(borderStyle);
   const totalWidth = Math.max(4, params.totalWidth);
 
-  const buildLine = (label: string): TitledTopBorderParts | null => {
+  const buildLine = (label: string, rightLabel: string): TitledTopBorderParts | null => {
     const left = `${chars.tl}${chars.h} `;
-    const separator = ` ${chars.h}`;
-    const labelWidth = stringWidth(label);
+    const titleSeparator = ` ${chars.h}`;
+    const rightSegment = rightLabel.length > 0 ? ` ${rightLabel}` : '';
+    const closing = `${chars.h}${chars.tr}`;
     const fixedWidth =
-      stringWidth(left) + labelWidth + stringWidth(separator) + stringWidth(chars.tr);
+      stringWidth(left) +
+      stringWidth(label) +
+      stringWidth(titleSeparator) +
+      stringWidth(rightSegment) +
+      stringWidth(closing);
     if (fixedWidth > totalWidth) {
       return null;
     }
 
     const fillCount = totalWidth - fixedWidth;
-    const right = `${separator}${chars.h.repeat(Math.max(0, fillCount))}${chars.tr}`;
-    return { left, title: label, right };
+    const right = `${titleSeparator}${chars.h.repeat(Math.max(0, fillCount))}${rightSegment}${closing}`;
+    return {
+      left,
+      title: label,
+      titleRight: rightLabel.length > 0 ? rightLabel : undefined,
+      right,
+    };
   };
 
   const fullLabel = `${title}${suffix}`;
-  const full = buildLine(fullLabel);
+  const full = buildLine(fullLabel, titleRight);
   if (full) {
     return full;
+  }
+
+  if (titleRight.length > 0) {
+    for (let length = titleRight.length; length > 0; length--) {
+      const truncatedRight = length < titleRight.length ? `${titleRight.slice(0, length - 1)}…` : titleRight;
+      const partial = buildLine(fullLabel, truncatedRight);
+      if (partial) {
+        return partial;
+      }
+    }
   }
 
   if (suffix.length > 0) {
     for (let length = suffix.length; length > 0; length--) {
       const truncatedSuffix = `${suffix.slice(0, length - 1)}…`;
-      const partial = buildLine(`${title}${truncatedSuffix}`);
+      const partial = buildLine(`${title}${truncatedSuffix}`, titleRight);
       if (partial) {
         return partial;
       }
@@ -72,7 +96,7 @@ export function buildTitledTopBorderParts(params: {
 
   for (let length = title.length; length > 0; length--) {
     const truncatedTitle = length < title.length ? `${title.slice(0, length - 1)}…` : title;
-    const minimal = buildLine(truncatedTitle);
+    const minimal = buildLine(truncatedTitle, titleRight);
     if (minimal) {
       return minimal;
     }
@@ -90,6 +114,7 @@ export function buildTitledTopBorderParts(params: {
 export function buildTitledTopBorderLine(params: {
   title: string;
   suffix?: string;
+  titleRight?: string;
   totalWidth: number;
   borderStyle: TuiBorderStyle;
 }): string {

@@ -123,8 +123,6 @@ export function IssueSessionTuiStream({
       : undefined,
     postLoopWaiting: snapshot.postLoopWaiting,
     shuttingDown: snapshot.shuttingDown,
-    issueUrl,
-    issueLinkMode,
   });
   const contextHintLines = operatorInputDisplay.hintLines;
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
@@ -238,8 +236,6 @@ export function IssueSessionTuiStream({
               text={line}
               width={contentWidth}
               color={INPUT_PANE_HINT_COLOR}
-              issueUrl={issueUrl}
-              issueLinkMode={issueLinkMode}
             />
           ))}
           <OperatorTextArea
@@ -257,6 +253,8 @@ export function IssueSessionTuiStream({
         <WorkerStatusPane
           workers={snapshot.displayState.workers}
           height={streamPaneHeights.workerPaneHeight}
+          issueUrl={issueUrl}
+          issueLinkMode={issueLinkMode}
         />
       </Box>
     </>

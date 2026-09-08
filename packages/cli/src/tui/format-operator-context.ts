@@ -1,6 +1,10 @@
 import type { OpenQuestion, OperatorInputContext } from '@agents-ensemble/core';
 import { parseIssueUrl } from '@agents-ensemble/core';
-import { OPERATOR_INPUT_DISCRETIONARY_HINT } from './tui-layout-constants.js';
+import {
+  OPERATOR_INPUT_DISCRETIONARY_HINT,
+  OPERATOR_INPUT_POST_LOOP_HINT,
+  OPERATOR_INPUT_SHUTTING_DOWN_HINT,
+} from './tui-layout-constants.js';
 
 export type IssueLinkMode = 'osc8' | 'label' | 'url';
 
@@ -122,33 +126,17 @@ export interface OperatorInputDisplayResolution {
   hintLines: string[];
 }
 
-function formatIssueHint(
-  issueUrl: string | undefined,
-  hint: string,
-  issueLinkMode: IssueLinkMode | undefined,
-): string {
-  // WrappedTextLines applies OSC 8 to a leading compact label. Keep the
-  // existing label/url rendering path while keeping question mode unlinked.
-  return prependIssueReference(
-    issueUrl,
-    hint,
-    issueLinkMode === 'url' ? 'url' : 'label',
-  );
-}
-
 /**
- * Operator input の表示モードと hint 行を解決する。
+ * Operator input の表示モードと prompt 行を解決する。
  *
- * 表示モード自体は open question の有無による2値だけとし、終了中と
- * post-loop 待機中の文言はこの関数内で優先して上書きする。
+ * 表示モード自体は open question の有無による2値だけとし、Operator input には
+ * 入力を促す行のみを載せる（Issue 参照や post-loop 待機などの status は載せない）。
  */
 export function resolveOperatorInputDisplayMode(params: {
   openQuestions: readonly OpenQuestion[];
   selection?: OpenQuestionSelectionContext;
   postLoopWaiting?: boolean;
   shuttingDown?: boolean;
-  issueUrl?: string;
-  issueLinkMode?: IssueLinkMode;
 }): OperatorInputDisplayResolution {
   const mode: OperatorInputDisplayMode =
     params.openQuestions.length > 0 ? 'withQuestions' : 'noQuestions';
@@ -156,17 +144,14 @@ export function resolveOperatorInputDisplayMode(params: {
   if (params.shuttingDown) {
     return {
       mode,
-      hintLines: [formatIssueHint(params.issueUrl, '終了しています…', params.issueLinkMode)],
+      hintLines: [OPERATOR_INPUT_SHUTTING_DOWN_HINT],
     };
   }
 
   if (params.postLoopWaiting && mode === 'noQuestions') {
     return {
       mode,
-      hintLines: [
-        '追加指示を入力するか /exit で終了',
-        formatIssueHint(params.issueUrl, 'post-loop 待機中', params.issueLinkMode),
-      ],
+      hintLines: [OPERATOR_INPUT_POST_LOOP_HINT],
     };
   }
 
@@ -179,26 +164,22 @@ export function resolveOperatorInputDisplayMode(params: {
 
   return {
     mode,
-    hintLines: [formatIssueHint(params.issueUrl, OPERATOR_INPUT_DISCRETIONARY_HINT, params.issueLinkMode)],
+    hintLines: [OPERATOR_INPUT_DISCRETIONARY_HINT],
   };
 }
 
-/** 入力欄直上に表示するオペレータ向けコンテキスト行。 */
+/** 入力欄直上に表示するオペレータ向け prompt 行。 */
 export function formatOperatorContextHint(
   context: OperatorInputContext | undefined,
   selection?: OpenQuestionSelectionContext,
-  options: OperatorContextHintOptions = {},
 ): string {
   if (!context) {
-    return prependIssueReference(options.issueUrl, 'operator> ', options.issueLinkMode);
+    return 'operator> ';
   }
 
   const resolution = resolveOperatorInputDisplayMode({
     openQuestions: context.openQuestions,
     selection,
   });
-  const hint = resolution.hintLines[0] ?? 'operator> ';
-  return resolution.mode === 'noQuestions'
-    ? prependIssueReference(options.issueUrl, hint, options.issueLinkMode)
-    : hint;
+  return resolution.hintLines[0] ?? 'operator> ';
 }

@@ -157,11 +157,11 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 
 ### #257 の stream レイアウト
 
-既定の `pane` レイアウトを維持したまま、`ENSEMBLE_TUI_LAYOUT=stream` を指定した TTY では活動ログを Ink の `<Static>` で枠なし追記し、下部の live UI を **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に表示する。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は1行目にIssue参照なしの「追加指示を入力するか /exit で終了」、2行目に「owner/repo#number — post-loop 待機中」を表示する。`alternateScreen` は使わず、過去ログは端末 scrollback を正本とする。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使うが、`cursorStart` の Y 座標は Static 領域ではなく下部 live frame を原点に計算する。Static の append-only 要件に合わせ、stream の活動ログは表示中のプロセス内で保持するが、セッション sidecar や活動ログファイルには永続化しない。端末幅変更時の既追記行の再折り返し、および scrollback 閲覧中の新着ログによる末尾復帰は運用上の制限として README / operator-input.md に記録する。
+既定の `pane` レイアウトを維持したまま、`ENSEMBLE_TUI_LAYOUT=stream` を指定した TTY では活動ログを Ink の `<Static>` で枠なし追記し、下部の live UI を **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に表示する。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /exit で終了` の prompt のみを表示する。`alternateScreen` は使わず、過去ログは端末 scrollback を正本とする。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使うが、`cursorStart` の Y 座標は Static 領域ではなく下部 live frame を原点に計算する。Static の append-only 要件に合わせ、stream の活動ログは表示中のプロセス内で保持するが、セッション sidecar や活動ログファイルには永続化しない。端末幅変更時の既追記行の再折り返し、および scrollback 閲覧中の新着ログによる末尾復帰は運用上の制限として README / operator-input.md に記録する。
 
 ### #263 の Operator input 2 モード
 
-Open questions の有無で Operator input を `withQuestions` / `noQuestions` の2モードに分ける。未回答一覧の正本は `OperatorInputBindingApi.getContext().openQuestions`、すなわち resume 時にも復元される `OpenQuestionRegistry.listOpen()` とする。未回答時だけ Open questions ペインを描画し、空状態では高さ 0 とする。question 回答 hint には Issue 参照と自律ターン数を含めず、通常の no-question hint には Issue 参照と `/exit` 案内を含める。post-loop 待機中は no-question hint を2行へ上書きし、shutting down は「終了しています…」を維持する。pane と stream は共通の表示モード resolver と高さ計算を使う。詳細な利用者向けルールは [operator-input.md](../operator-input.md) に記載する。
+Open questions の有無で Operator input を `withQuestions` / `noQuestions` の2モードに分ける。未回答一覧の正本は `OperatorInputBindingApi.getContext().openQuestions`、すなわち resume 時にも復元される `OpenQuestionRegistry.listOpen()` とする。未回答時だけ Open questions ペインを描画し、空状態では高さ 0 とする。Operator input には入力を促す prompt のみを載せ、Issue 参照や post-loop 待機などの status は載せない。Workers ペイン上枠の右端に Issue リンクを表示する。post-loop 待機中は no-question prompt を `追加指示を入力するか /exit で終了` に上書きし、shutting down は `終了しています…` を維持する。pane と stream は共通の表示モード resolver と高さ計算を使う。詳細な利用者向けルールは [operator-input.md](../operator-input.md) に記載する。
 
 ## 関連
 

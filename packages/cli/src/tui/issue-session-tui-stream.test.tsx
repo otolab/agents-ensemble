@@ -67,7 +67,7 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('任意のタイミングで入力 · /exit で終了');
   });
 
-  it('shows the two-line post-loop hint without an empty open-question state', () => {
+  it('shows the single-line post-loop prompt without waiting status', () => {
     const viewModel = createTuiViewModel();
     viewModel.setPostLoopWaiting(true);
 
@@ -83,22 +83,16 @@ describe('IssueSessionTuiStream', () => {
     const frame = lastFrame() ?? '';
     const operatorInputIndex = frame.indexOf('Operator input');
     const instructionHintIndex = frame.indexOf('追加指示を入力するか /exit で終了');
-    const postLoopHintIndex = frame.indexOf(
-      'otolab/agents-ensemble#261 — post-loop 待機中',
-    );
-    const instructionHintLine =
-      frame.split('\n').find((line) => line.includes('追加指示を入力するか /exit で終了')) ?? '';
     const workersIndex = frame.indexOf('Workers');
 
     expect(operatorInputIndex).toBeGreaterThanOrEqual(0);
     expect(frame).not.toContain('Open questions');
     expect(frame).not.toContain('(未回答なし)');
     expect(instructionHintIndex).toBeGreaterThan(operatorInputIndex);
-    expect(postLoopHintIndex).toBeGreaterThan(instructionHintIndex);
-    expect(instructionHintLine).not.toContain('otolab/agents-ensemble#261');
     expect(workersIndex).toBeGreaterThan(operatorInputIndex);
     expect(frame).toContain('追加指示を入力するか /exit で終了');
-    expect(frame).toContain('otolab/agents-ensemble#261 — post-loop 待機中');
+    expect(frame).toContain('otolab/agents-ensemble#261');
+    expect(frame).not.toContain('post-loop 待機中');
     expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(80);
   });
 
@@ -132,7 +126,9 @@ describe('IssueSessionTuiStream', () => {
     );
 
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('otolab/agents-ensemble#263 — 任意のタイミングで入力 · /exit で終了');
+    expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+    expect(lastFrame() ?? '').toContain('otolab/agents-ensemble#263');
+    expect(lastFrame() ?? '').not.toContain('otolab/agents-ensemble#263 — 任意のタイミングで入力 · /exit で終了');
 
     stdin.write('follow-up');
     await flushInkStdin();

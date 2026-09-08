@@ -2,4 +2,4 @@
 "@agents-ensemble/cli": patch
 ---
 
-Simplify the TTY operator input UI into question and no-question modes, including conditional Open questions panes and post-loop hints.
+Separate operator input prompts from session status: show Issue links in the Workers pane header and keep Operator input prompt-only across pane and stream layouts.

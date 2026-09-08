@@ -184,14 +184,22 @@ function sortWorkerEntries(
 export function WorkerStatusPane({
   workers,
   height = WORKER_PANE_HEIGHT,
+  issueUrl,
+  issueLinkMode = 'label',
 }: {
   workers: TuiViewSnapshot['displayState']['workers'];
   height?: number;
+  issueUrl?: string;
+  issueLinkMode?: IssueLinkMode;
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
+  const issueTitleRight = issueUrl ? formatIssueLabel(issueUrl) : undefined;
   return (
     <TitledBorderPane
       title={WORKER_PANE_TITLE}
+      titleRight={issueTitleRight}
+      titleRightIssueUrl={issueUrl}
+      titleRightLinkMode={issueLinkMode}
       borderStyle="round"
       borderColor="cyan"
       paddingX={PANE_PADDING_X}
@@ -334,8 +342,6 @@ export function IssueSessionTui({
       : undefined,
     postLoopWaiting: snapshot.postLoopWaiting,
     shuttingDown: snapshot.shuttingDown,
-    issueUrl,
-    issueLinkMode,
   });
   const openQuestionsPaneHeight =
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
@@ -456,7 +462,11 @@ export function IssueSessionTui({
 
   return (
     <Box flexDirection="column" height={terminalRows}>
-      <WorkerStatusPane workers={snapshot.displayState.workers} />
+      <WorkerStatusPane
+        workers={snapshot.displayState.workers}
+        issueUrl={issueUrl}
+        issueLinkMode={issueLinkMode}
+      />
       <OrchestrationPane
         activityLog={snapshot.activityLog}
         contentWidth={contentWidth}
@@ -479,8 +489,6 @@ export function IssueSessionTui({
             text={hintLine}
             width={contentWidth}
             color={INPUT_PANE_HINT_COLOR}
-            issueUrl={issueUrl}
-            issueLinkMode={issueLinkMode}
           />
         ))}
         <OperatorTextArea

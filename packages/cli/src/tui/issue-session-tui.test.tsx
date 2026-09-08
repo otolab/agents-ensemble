@@ -144,7 +144,7 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain(INPUT_PANE_TITLE);
   });
 
-  it('shows post-loop hint in input area', () => {
+  it('shows post-loop prompt in input area without waiting status', () => {
     const viewModel = createTuiViewModel();
     viewModel.setPostLoopWaiting(true);
 
@@ -152,10 +152,12 @@ describe('IssueSessionTui', () => {
       <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
     );
 
-    expect(lastFrame() ?? '').toContain('post-loop 待機中');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('追加指示を入力するか /exit で終了');
+    expect(frame).not.toContain('post-loop 待機中');
   });
 
-  it('keeps the current issue link across context hint lifecycle states', async () => {
+  it('shows the issue link in the workers pane header and prompt-only operator input', async () => {
     const viewModel = createTuiViewModel();
     viewModel.setOperatorContext({
       conductorTurn: 1,
@@ -174,9 +176,11 @@ describe('IssueSessionTui', () => {
 
     const issueLabel = 'otolab/agents-ensemble#249';
     const osc8Open = `\u001b]8;;${ISSUE_URL}\u0007`;
-    expect(lastFrame() ?? '').toContain(issueLabel);
-    expect(lastFrame() ?? '').toContain(osc8Open);
-    expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain(issueLabel);
+    expect(frame).toContain(osc8Open);
+    expect(frame).toContain('任意のタイミングで入力 · /exit で終了');
+    expect(frame).not.toContain(`${issueLabel} — 任意のタイミングで入力 · /exit で終了`);
 
     viewModel.setDisplayState({
       workers: {},
@@ -190,7 +194,7 @@ describe('IssueSessionTui', () => {
       openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Continue?' })],
     });
     await flushInkStdin();
-    expect(lastFrame() ?? '').not.toContain(issueLabel);
+    expect(lastFrame() ?? '').toContain(issueLabel);
     expect(lastFrame() ?? '').toContain('inq-1 (1/1) への回答');
 
     viewModel.setDisplayState({
@@ -208,15 +212,16 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain(issueLabel);
     expect(lastFrame() ?? '').toContain('追加指示を入力するか /exit で終了');
-    expect(lastFrame() ?? '').toContain('— post-loop 待機中');
+    expect(lastFrame() ?? '').not.toContain('post-loop 待機中');
 
     viewModel.setShuttingDown(true);
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain(issueLabel);
-    expect(lastFrame() ?? '').toContain('— 終了しています…');
+    expect(lastFrame() ?? '').toContain('終了しています…');
+    expect(lastFrame() ?? '').not.toContain(`${issueLabel} — 終了しています…`);
   });
 
-  it('renders only the issue label when OSC 8 is unavailable', () => {
+  it('renders only the issue label in the workers header when OSC 8 is unavailable', () => {
     const viewModel = createTuiViewModel();
     viewModel.setOperatorContext({
       conductorTurn: 1,
@@ -239,10 +244,10 @@ describe('IssueSessionTui', () => {
     expect(frame).not.toContain('\u001b]8;;');
   });
 
-  it('does not split an OSC 8 sequence when the issue label cannot fit', () => {
+  it('truncates the issue label in the workers header on a narrow terminal', () => {
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,
-      value: 20,
+      value: 24,
     });
 
     const viewModel = createTuiViewModel();
@@ -257,13 +262,15 @@ describe('IssueSessionTui', () => {
       <IssueSessionTui
         viewModel={viewModel}
         issueUrl={ISSUE_URL}
+        issueLinkMode="label"
         onSubmit={() => {}}
       />,
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('otolab/agents-en');
-    expect(frame).toContain('semble#249');
+    const workersBorderLine = frame.split('\n')[0] ?? '';
+    expect(workersBorderLine).toContain('Workers');
+    expect(workersBorderLine).toContain('…');
     expect(frame).not.toContain('\u001b]8;;');
   });
 

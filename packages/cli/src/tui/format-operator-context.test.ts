@@ -8,6 +8,11 @@ import {
   resolveOperatorInputDisplayMode,
   supportsOsc8Hyperlinks,
 } from './format-operator-context.js';
+import {
+  OPERATOR_INPUT_DISCRETIONARY_HINT,
+  OPERATOR_INPUT_POST_LOOP_HINT,
+  OPERATOR_INPUT_SHUTTING_DOWN_HINT,
+} from './tui-layout-constants.js';
 
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/249';
 const OPEN_QUESTION: OpenQuestion = {
@@ -48,7 +53,7 @@ describe('formatOperatorContextHint', () => {
     expect(hint).toContain('Shift+↑↓で選択');
   });
 
-  it('shows the discretionary no-question hint without autonomous turn progress', () => {
+  it('shows the discretionary no-question prompt without autonomous turn progress', () => {
     expect(
       formatOperatorContextHint({
         conductorTurn: 1,
@@ -56,10 +61,10 @@ describe('formatOperatorContextHint', () => {
         maxTurns: null,
         openQuestions: [],
       }),
-    ).toBe('任意のタイミングで入力 · /exit で終了');
+    ).toBe(OPERATOR_INPUT_DISCRETIONARY_HINT);
   });
 
-  it('prepends the current issue reference without changing the existing hint', () => {
+  it('does not prepend the issue reference to operator input prompts', () => {
     const hint = formatOperatorContextHint(
       {
         conductorTurn: 1,
@@ -68,10 +73,9 @@ describe('formatOperatorContextHint', () => {
         openQuestions: [],
       },
       undefined,
-      { issueUrl: ISSUE_URL, issueLinkMode: 'label' },
     );
 
-    expect(hint).toBe('otolab/agents-ensemble#249 — 任意のタイミングで入力 · /exit で終了');
+    expect(hint).toBe(OPERATOR_INPUT_DISCRETIONARY_HINT);
   });
 
   it('does not add the issue reference when an open question is selected', () => {
@@ -92,7 +96,6 @@ describe('formatOperatorContextHint', () => {
         ],
       },
       { id: 'inq-1', index: 0, total: 1 },
-      { issueUrl: ISSUE_URL, issueLinkMode: 'label' },
     );
 
     expect(hint).toBe('inq-1 (1/1) への回答 — Shift+↑↓で選択 · Enter で送信');
@@ -112,39 +115,32 @@ describe('resolveOperatorInputDisplayMode', () => {
     });
     expect(noQuestions).toEqual({
       mode: 'noQuestions',
-      hintLines: ['任意のタイミングで入力 · /exit で終了'],
+      hintLines: [OPERATOR_INPUT_DISCRETIONARY_HINT],
     });
   });
 
-  it('overrides the no-question hint with the two post-loop lines', () => {
+  it('overrides the no-question prompt during post-loop wait', () => {
     expect(
       resolveOperatorInputDisplayMode({
         openQuestions: [],
         postLoopWaiting: true,
-        issueUrl: ISSUE_URL,
-        issueLinkMode: 'label',
       }),
     ).toEqual({
       mode: 'noQuestions',
-      hintLines: [
-        '追加指示を入力するか /exit で終了',
-        'otolab/agents-ensemble#249 — post-loop 待機中',
-      ],
+      hintLines: [OPERATOR_INPUT_POST_LOOP_HINT],
     });
   });
 
-  it('keeps shutdown as the highest-priority hint override', () => {
+  it('keeps shutdown as the highest-priority prompt override', () => {
     expect(
       resolveOperatorInputDisplayMode({
         openQuestions: [],
         postLoopWaiting: true,
         shuttingDown: true,
-        issueUrl: ISSUE_URL,
-        issueLinkMode: 'label',
       }),
     ).toEqual({
       mode: 'noQuestions',
-      hintLines: ['otolab/agents-ensemble#249 — 終了しています…'],
+      hintLines: [OPERATOR_INPUT_SHUTTING_DOWN_HINT],
     });
   });
 });
