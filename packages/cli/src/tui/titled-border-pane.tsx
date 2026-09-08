@@ -1,6 +1,10 @@
 import { Box, Text, type BoxProps } from 'ink';
 import type { ReactNode } from 'react';
 import {
+  formatIssueReference,
+  type IssueLinkMode,
+} from './format-operator-context.js';
+import {
   buildTitledTopBorderParts,
   type TuiBorderStyle,
 } from './titled-border-line.js';
@@ -8,6 +12,9 @@ import {
 export interface TitledBorderPaneProps {
   title: string;
   titleSuffix?: string;
+  titleRight?: string;
+  titleRightIssueUrl?: string;
+  titleRightLinkMode?: IssueLinkMode;
   borderStyle: TuiBorderStyle;
   borderColor?: BoxProps['borderColor'];
   height: number;
@@ -16,10 +23,31 @@ export interface TitledBorderPaneProps {
   children: ReactNode;
 }
 
+function renderTitleRight(params: {
+  titleRight?: string;
+  titleRightIssueUrl?: string;
+  titleRightLinkMode?: IssueLinkMode;
+  borderColor?: BoxProps['borderColor'];
+}): ReactNode {
+  const { titleRight, titleRightIssueUrl, titleRightLinkMode, borderColor } = params;
+  if (!titleRight) {
+    return null;
+  }
+
+  if (titleRightIssueUrl && titleRightLinkMode === 'osc8') {
+    return <Text>{formatIssueReference(titleRightIssueUrl, 'osc8')}</Text>;
+  }
+
+  return <Text color={borderColor}>{titleRight}</Text>;
+}
+
 /** 上枠線にタイトルを埋め込んだ Ink ペイン。内側タイトル行は持たない。 */
 export function TitledBorderPane({
   title,
   titleSuffix,
+  titleRight,
+  titleRightIssueUrl,
+  titleRightLinkMode = 'label',
   borderStyle,
   borderColor,
   height,
@@ -31,10 +59,17 @@ export function TitledBorderPane({
   const parts = buildTitledTopBorderParts({
     title,
     suffix: titleSuffix,
+    titleRight,
     totalWidth,
     borderStyle,
   });
   const bodyHeight = Math.max(1, height - 1);
+  const titleRightPrefix = parts.titleRight ? ` ${parts.titleRight}` : '';
+  const titleRightIndex = titleRightPrefix.length > 0 ? parts.right.lastIndexOf(titleRightPrefix) : -1;
+  const rightBeforeTitleRight =
+    titleRightIndex >= 0 ? parts.right.slice(0, titleRightIndex) : parts.right;
+  const rightAfterTitleRight =
+    titleRightIndex >= 0 ? parts.right.slice(titleRightIndex + titleRightPrefix.length) : '';
 
   return (
     <Box flexDirection="column" height={height} overflow="hidden">
@@ -47,7 +82,14 @@ export function TitledBorderPane({
         ) : (
           <Text color={borderColor}>{parts.title}</Text>
         )}
-        <Text color={borderColor}>{parts.right}</Text>
+        <Text color={borderColor}>{rightBeforeTitleRight}</Text>
+        {renderTitleRight({
+          titleRight: parts.titleRight,
+          titleRightIssueUrl,
+          titleRightLinkMode,
+          borderColor,
+        })}
+        <Text color={borderColor}>{rightAfterTitleRight}</Text>
       </Text>
       <Box
         flexGrow={1}

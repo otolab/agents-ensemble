@@ -161,7 +161,7 @@ describe('IssueSessionTui', () => {
     expect(lastFrame() ?? '').toContain('conductor dispatch 保留中（3 件）');
   });
 
-  it('shows post-loop hint in input area', () => {
+  it('shows post-loop prompt in input area without waiting status', () => {
     const viewModel = createTuiViewModel();
     viewModel.setPostLoopWaiting(true);
 
@@ -169,10 +169,12 @@ describe('IssueSessionTui', () => {
       <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
     );
 
-    expect(lastFrame() ?? '').toContain('post-loop 待機中');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('追加指示を入力するか /exit で終了');
+    expect(frame).not.toContain('post-loop 待機中');
   });
 
-  it('keeps the current issue link across context hint lifecycle states', async () => {
+  it('shows the issue link in the workers pane header and prompt-only operator input', async () => {
     const viewModel = createTuiViewModel();
     viewModel.setOperatorContext({
       conductorTurn: 1,
@@ -191,9 +193,11 @@ describe('IssueSessionTui', () => {
 
     const issueLabel = 'otolab/agents-ensemble#249';
     const osc8Open = `\u001b]8;;${ISSUE_URL}\u0007`;
-    expect(lastFrame() ?? '').toContain(issueLabel);
-    expect(lastFrame() ?? '').toContain(osc8Open);
-    expect(lastFrame() ?? '').toContain('自律ターン 2/∞');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain(issueLabel);
+    expect(frame).toContain(osc8Open);
+    expect(frame).toContain('任意のタイミングで入力 · /exit で終了');
+    expect(frame).not.toContain(`${issueLabel} — 任意のタイミングで入力 · /exit で終了`);
 
     viewModel.setDisplayState({
       workers: {},
@@ -209,20 +213,34 @@ describe('IssueSessionTui', () => {
     });
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain(issueLabel);
-    expect(lastFrame() ?? '').toContain('— inq-1');
+    expect(lastFrame() ?? '').toContain('inq-1 (1/1) への回答');
 
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 2,
+      maxTurns: null,
+      openQuestions: [],
+    });
     viewModel.setPostLoopWaiting(true);
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain(issueLabel);
-    expect(lastFrame() ?? '').toContain('— post-loop 待機中');
+    expect(lastFrame() ?? '').toContain('追加指示を入力するか /exit で終了');
+    expect(lastFrame() ?? '').not.toContain('post-loop 待機中');
 
     viewModel.setShuttingDown(true);
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain(issueLabel);
-    expect(lastFrame() ?? '').toContain('— 終了しています…');
+    expect(lastFrame() ?? '').toContain('終了しています…');
+    expect(lastFrame() ?? '').not.toContain(`${issueLabel} — 終了しています…`);
   });
 
-  it('renders only the issue label when OSC 8 is unavailable', () => {
+  it('renders only the issue label in the workers header when OSC 8 is unavailable', () => {
     const viewModel = createTuiViewModel();
     viewModel.setOperatorContext({
       conductorTurn: 1,
@@ -245,10 +263,10 @@ describe('IssueSessionTui', () => {
     expect(frame).not.toContain('\u001b]8;;');
   });
 
-  it('does not split an OSC 8 sequence when the issue label cannot fit', () => {
+  it('truncates the issue label in the workers header on a narrow terminal', () => {
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,
-      value: 20,
+      value: 24,
     });
 
     const viewModel = createTuiViewModel();
@@ -263,13 +281,15 @@ describe('IssueSessionTui', () => {
       <IssueSessionTui
         viewModel={viewModel}
         issueUrl={ISSUE_URL}
+        issueLinkMode="label"
         onSubmit={() => {}}
       />,
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('otolab/agents-en');
-    expect(frame).toContain('semble#249');
+    const workersBorderLine = frame.split('\n')[0] ?? '';
+    expect(workersBorderLine).toContain('Workers');
+    expect(workersBorderLine).toContain('…');
     expect(frame).not.toContain('\u001b]8;;');
   });
 
@@ -300,7 +320,7 @@ describe('IssueSessionTui', () => {
     });
     const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
+    const openQuestionsPaneHeight = 0;
     const expectedInputLineIndex = computeOperatorInputLineIndex({
       terminalRows,
       hintLineCount,
@@ -349,7 +369,7 @@ describe('IssueSessionTui', () => {
     });
     const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
-    const openQuestionsPaneHeight = OPEN_QUESTIONS_PANE_MIN_HEIGHT;
+    const openQuestionsPaneHeight = 0;
     const expectedInputLineIndex = computeOperatorInputLineIndex({
       terminalRows,
       hintLineCount,
@@ -459,7 +479,7 @@ describe('IssueSessionTui', () => {
     expect(frame.split('\n')).toHaveLength(terminalRows);
   });
 
-  it('shows empty-state placeholders when no session activity yet', () => {
+  it('shows the no-question input mode when no session activity yet', () => {
     const viewModel = createTuiViewModel();
 
     const { lastFrame } = render(
@@ -469,7 +489,110 @@ describe('IssueSessionTui', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('(待機中)');
     expect(frame).toContain('(活動ログなし)');
-    expect(frame).toContain('(未回答なし)');
+    expect(frame).not.toContain('Open questions');
+    expect(frame).not.toContain('(未回答なし)');
+    expect(frame).toContain('任意のタイミングで入力 · /exit で終了');
+  });
+
+  it('switches the lower UI between no-question and question modes', async () => {
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    expect(lastFrame() ?? '').not.toContain('Open questions');
+    expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Answer?' })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('Open questions');
+    expect(lastFrame() ?? '').toContain('inq-1 (1/1) への回答');
+    expect(lastFrame() ?? '').not.toContain('任意のタイミングで入力 · /exit で終了');
+
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    await flushInkStdin();
+    expect(lastFrame() ?? '').not.toContain('Open questions');
+    expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+  });
+
+  it.each([
+    [
+      'one restored question',
+      [createOpenQuestion({ id: 'inq-resumed-1', question: 'Resume one?' })],
+    ],
+    [
+      'multiple restored questions',
+      [
+        createOpenQuestion({ id: 'inq-resumed-1', question: 'Resume first?' }),
+        createOpenQuestion({ id: 'inq-resumed-2', question: 'Resume second?' }),
+      ],
+    ],
+  ])('renders %s from the resumed operator context', async (_name, restoredQuestions) => {
+    const viewModel = createTuiViewModel();
+    const setOperatorQuestions = (openQuestions: OpenQuestion[]) => {
+      viewModel.setOperatorContext({
+        conductorTurn: 2,
+        autonomousTurns: 1,
+        maxTurns: null,
+        openQuestions,
+      });
+    };
+    setOperatorQuestions(restoredQuestions);
+    const selectedIndex = restoredQuestions.length > 1 ? 1 : 0;
+    let submittedOptions: { targetOpenQuestionId?: string } | undefined;
+
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        onSubmit={(_text, options) => {
+          setOperatorQuestions(
+            restoredQuestions.filter((_question, index) => index !== selectedIndex),
+          );
+          submittedOptions = options;
+        }}
+      />,
+    );
+
+    const initialFrame = lastFrame() ?? '';
+    expect(initialFrame).toContain('Open questions');
+    expect(initialFrame).toContain('inq-resumed-1');
+    expect(initialFrame).not.toContain('任意のタイミングで入力 · /exit で終了');
+
+    if (selectedIndex === 1) {
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
+      await flushInkStdin();
+    }
+    stdin.write('answer');
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+
+    expect(submittedOptions).toEqual({
+      targetOpenQuestionId: restoredQuestions[selectedIndex]?.id,
+    });
+    if (restoredQuestions.length === 1) {
+      expect(lastFrame() ?? '').not.toContain('Open questions');
+      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+    } else {
+      expect(lastFrame() ?? '').toContain('Open questions');
+      expect(lastFrame() ?? '').toContain('inq-resumed-1');
+      expect(lastFrame() ?? '').not.toContain('任意のタイミングで入力 · /exit で終了');
+
+      setOperatorQuestions([]);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').not.toContain('Open questions');
+      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+    }
   });
 
   it('renders all activity log label kinds with distinct markers', () => {
@@ -492,6 +615,12 @@ describe('IssueSessionTui', () => {
 
   it('embeds pane titles on top borders without inner title rows', () => {
     const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Answer?' })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
     viewModel.appendActivityLog('operator', 'ping');
 
     const { lastFrame } = render(
@@ -540,8 +669,8 @@ describe('IssueSessionTui', () => {
     const capacity = computeOrchestrationLogVisibleLineCount(
       computeActivityPaneHeight({
         terminalRows: 24,
-        hintLineCount: 1,
-        openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+        hintLineCount: 2,
+        openQuestionsPaneHeight: 0,
       }),
     );
     const stats = extractOrchestrationPaneFrameStats(lastFrame() ?? '');
@@ -571,7 +700,7 @@ describe('IssueSessionTui', () => {
       const capacity = computeActivityLogLineCapacity({
         terminalRows,
         hintLineCount: 1,
-        openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+        openQuestionsPaneHeight: 0,
       });
       const stats = extractOrchestrationPaneFrameStats(lastFrame() ?? '');
 
@@ -757,6 +886,27 @@ describe('IssueSessionTui', () => {
 
       expect(submitted).toBe('approved');
       expect(submitOptions).toEqual({ targetOpenQuestionId: 'inq-2' });
+    });
+
+    it('submits ordinary input without an open-question target', async () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+      const onSubmit = vi.fn();
+      const { stdin } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />,
+      );
+
+      stdin.write('follow-up');
+      await flushInkStdin();
+      stdin.write('\r');
+      await flushInkStdin();
+
+      expect(onSubmit).toHaveBeenCalledWith('follow-up', undefined);
     });
 
     it('grows open questions pane for long selected question text', () => {

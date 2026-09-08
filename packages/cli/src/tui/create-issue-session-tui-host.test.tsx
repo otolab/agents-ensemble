@@ -192,4 +192,41 @@ describe('createIssueSessionTuiHost', () => {
     dispose?.();
     host.dispose();
   });
+
+  it('seeds the TUI view model from restored open questions at binding time', () => {
+    delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+    const host = createIssueSessionTuiHost();
+    const restoredQuestion: OpenQuestion = {
+      id: 'inq-resumed',
+      question: 'Resume this question?',
+      responseType: 'text',
+      source: 'conductor',
+      status: 'open',
+      askedAt: 1,
+    };
+    const getContext = vi.fn(() => ({
+      conductorTurn: 2,
+      autonomousTurns: 1,
+      maxTurns: null,
+      openQuestions: [restoredQuestion],
+    }));
+    const renderedElement = mockRender.mock.calls[0]?.[0] as {
+      props: {
+        viewModel: {
+          getSnapshot: () => { operatorContext: { openQuestions: OpenQuestion[] } | undefined };
+        };
+      };
+    };
+
+    const dispose = host.bindOperatorInput({
+      submit: vi.fn(() => true),
+      getContext,
+    });
+
+    expect(renderedElement.props.viewModel.getSnapshot().operatorContext?.openQuestions).toEqual([
+      restoredQuestion,
+    ]);
+    dispose?.();
+    host.dispose();
+  });
 });

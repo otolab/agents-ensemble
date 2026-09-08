@@ -1,5 +1,53 @@
 import { describe, expect, it } from 'vitest';
-import { createTuiViewModel } from './tui-view-model.js';
+import { createTuiViewModel, getTuiOpenQuestions } from './tui-view-model.js';
+
+const RESTORED_QUESTION = {
+  id: 'inq-resumed',
+  question: 'Continue after resume?',
+  responseType: 'text' as const,
+  source: 'conductor' as const,
+  status: 'open' as const,
+  askedAt: 1,
+};
+
+describe('getTuiOpenQuestions', () => {
+  it('uses the operator context registry snapshot after resume', () => {
+    const snapshot = {
+      displayState: {
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [],
+      },
+      activityLog: [],
+      postLoopWaiting: false,
+      shuttingDown: false,
+      operatorContext: {
+        conductorTurn: 1,
+        autonomousTurns: 0,
+        maxTurns: null,
+        openQuestions: [RESTORED_QUESTION],
+      },
+    } satisfies Parameters<typeof getTuiOpenQuestions>[0];
+
+    expect(getTuiOpenQuestions(snapshot)).toEqual([RESTORED_QUESTION]);
+  });
+
+  it('falls back to display events before the operator binding is ready', () => {
+    const snapshot = {
+      displayState: {
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [RESTORED_QUESTION],
+      },
+      activityLog: [],
+      postLoopWaiting: false,
+      shuttingDown: false,
+      operatorContext: undefined,
+    } satisfies Parameters<typeof getTuiOpenQuestions>[0];
+
+    expect(getTuiOpenQuestions(snapshot)).toEqual([RESTORED_QUESTION]);
+  });
+});
 
 describe('createTuiViewModel activity log', () => {
   it('appends labeled activity log entries', () => {

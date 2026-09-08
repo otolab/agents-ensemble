@@ -59,6 +59,21 @@ describe('computeActivityPaneHeight', () => {
 
     expect(large).toBeLessThan(small);
   });
+
+  it('returns the rows reclaimed by omitting the open-questions pane', () => {
+    const withPane = computeActivityPaneHeight({
+      terminalRows: 24,
+      hintLineCount: 1,
+      openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+    });
+    const withoutPane = computeActivityPaneHeight({
+      terminalRows: 24,
+      hintLineCount: 1,
+      openQuestionsPaneHeight: 0,
+    });
+
+    expect(withoutPane).toBe(withPane + OPEN_QUESTIONS_PANE_MIN_HEIGHT);
+  });
 });
 
 describe('computeOrchestrationLogVisibleLineCount', () => {
@@ -138,6 +153,21 @@ describe('computeOperatorInputCursorY', () => {
         openQuestionsPaneHeight,
       }),
     ).toBe(22);
+  });
+
+  it('keeps the cursor anchored when the open-questions pane is omitted', () => {
+    const withPane = computeOperatorInputCursorY({
+      terminalRows: 24,
+      hintLineCount: 1,
+      openQuestionsPaneHeight: OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+    });
+    const withoutPane = computeOperatorInputCursorY({
+      terminalRows: 24,
+      hintLineCount: 1,
+      openQuestionsPaneHeight: 0,
+    });
+
+    expect(withoutPane).toBe(withPane);
   });
 });
 

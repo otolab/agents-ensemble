@@ -48,9 +48,14 @@ export const OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES = 8;
 /** Open questions ペインタイトルに付与する選択操作ヒント。 */
 export const OPEN_QUESTIONS_SELECTION_HINT = ' — Shift+↑↓で選択';
 
-/** Open questions 表示中にタイトルへ付与する任意入力ヒント。 */
-export const OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT =
-  ' — 任意のタイミングで入力（/exit で終了）';
+/** Open questions がないときに Operator input へ表示する任意入力 prompt。 */
+export const OPERATOR_INPUT_DISCRETIONARY_HINT = '任意のタイミングで入力 · /exit で終了';
+
+/** post-loop 待機中に Operator input へ表示する追加入力 prompt。 */
+export const OPERATOR_INPUT_POST_LOOP_HINT = '追加指示を入力するか /exit で終了';
+
+/** 終了処理中に Operator input へ表示する prompt。 */
+export const OPERATOR_INPUT_SHUTTING_DOWN_HINT = '終了しています…';
 
 /** 入力ペインの枠線（上下）行数。`PANE_BORDER_ROWS` と同値。 */
 export const INPUT_PANE_BORDER_ROWS = PANE_BORDER_ROWS;

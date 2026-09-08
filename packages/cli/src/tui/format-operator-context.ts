@@ -1,10 +1,10 @@
-import type { OperatorInputContext } from '@agents-ensemble/core';
+import type { OpenQuestion, OperatorInputContext } from '@agents-ensemble/core';
 import { parseIssueUrl } from '@agents-ensemble/core';
-import { OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT } from './tui-layout-constants.js';
-
-function formatMaxTurnsLabel(maxTurns: number | null): string {
-  return maxTurns === null ? '∞' : String(maxTurns);
-}
+import {
+  OPERATOR_INPUT_DISCRETIONARY_HINT,
+  OPERATOR_INPUT_POST_LOOP_HINT,
+  OPERATOR_INPUT_SHUTTING_DOWN_HINT,
+} from './tui-layout-constants.js';
 
 export type IssueLinkMode = 'osc8' | 'label' | 'url';
 
@@ -119,34 +119,67 @@ export interface OpenQuestionSelectionContext {
   total: number;
 }
 
-/** 入力欄直上に表示するオペレータ向けコンテキスト行。 */
+export type OperatorInputDisplayMode = 'withQuestions' | 'noQuestions';
+
+export interface OperatorInputDisplayResolution {
+  mode: OperatorInputDisplayMode;
+  hintLines: string[];
+}
+
+/**
+ * Operator input の表示モードと prompt 行を解決する。
+ *
+ * 表示モード自体は open question の有無による2値だけとし、Operator input には
+ * 入力を促す行のみを載せる（Issue 参照や post-loop 待機などの status は載せない）。
+ */
+export function resolveOperatorInputDisplayMode(params: {
+  openQuestions: readonly OpenQuestion[];
+  selection?: OpenQuestionSelectionContext;
+  postLoopWaiting?: boolean;
+  shuttingDown?: boolean;
+}): OperatorInputDisplayResolution {
+  const mode: OperatorInputDisplayMode =
+    params.openQuestions.length > 0 ? 'withQuestions' : 'noQuestions';
+
+  if (params.shuttingDown) {
+    return {
+      mode,
+      hintLines: [OPERATOR_INPUT_SHUTTING_DOWN_HINT],
+    };
+  }
+
+  if (params.postLoopWaiting && mode === 'noQuestions') {
+    return {
+      mode,
+      hintLines: [OPERATOR_INPUT_POST_LOOP_HINT],
+    };
+  }
+
+  if (mode === 'withQuestions') {
+    const questionHint = params.selection
+      ? `${params.selection.id} (${params.selection.index + 1}/${params.selection.total}) への回答 — Shift+↑↓で選択 · Enter で送信`
+      : 'open question あり — Shift+↑↓で選択して回答';
+    return { mode, hintLines: [questionHint] };
+  }
+
+  return {
+    mode,
+    hintLines: [OPERATOR_INPUT_DISCRETIONARY_HINT],
+  };
+}
+
+/** 入力欄直上に表示するオペレータ向け prompt 行。 */
 export function formatOperatorContextHint(
   context: OperatorInputContext | undefined,
   selection?: OpenQuestionSelectionContext,
-  options: OperatorContextHintOptions = {},
 ): string {
   if (!context) {
-    return prependIssueReference(options.issueUrl, 'operator> ', options.issueLinkMode);
+    return 'operator> ';
   }
 
-  if (context.openQuestions.length > 0) {
-    if (selection) {
-      return prependIssueReference(
-        options.issueUrl,
-        `${selection.id} (${selection.index + 1}/${selection.total}) への回答 — Shift+↑↓で選択 · Enter で送信`,
-        options.issueLinkMode,
-      );
-    }
-    return prependIssueReference(
-      options.issueUrl,
-      'open question あり — Shift+↑↓で選択して回答',
-      options.issueLinkMode,
-    );
-  }
-
-  return prependIssueReference(
-    options.issueUrl,
-    `自律ターン ${context.autonomousTurns}/${formatMaxTurnsLabel(context.maxTurns)}${OPEN_QUESTIONS_DISCRETIONARY_INPUT_HINT}`,
-    options.issueLinkMode,
-  );
+  const resolution = resolveOperatorInputDisplayMode({
+    openQuestions: context.openQuestions,
+    selection,
+  });
+  return resolution.hintLines[0] ?? 'operator> ';
 }

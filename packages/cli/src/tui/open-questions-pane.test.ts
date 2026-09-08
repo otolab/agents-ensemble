@@ -61,7 +61,7 @@ describe('clampOpenQuestionSelectionIndex', () => {
 });
 
 describe('resolveOpenQuestionsPaneLayout', () => {
-  it('uses minimum height when there are no open questions', () => {
+  it('uses zero height when there are no open questions', () => {
     const layout = resolveOpenQuestionsPaneLayout({
       openQuestions: [],
       selectedIndex: 0,
@@ -69,7 +69,7 @@ describe('resolveOpenQuestionsPaneLayout', () => {
       terminalRows: 24,
     });
 
-    expect(layout.paneHeight).toBe(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
+    expect(layout.paneHeight).toBe(0);
     expect(layout.titleText).toBe('Open questions');
   });
 
@@ -92,15 +92,14 @@ describe('resolveOpenQuestionsPaneLayout', () => {
     expect(layout.titleText).toContain('Shift+↑↓で選択');
   });
 
-  it('can append the discretionary input hint to the title', () => {
+  it('does not append the discretionary input hint to the title', () => {
     const layout = resolveOpenQuestionsPaneLayout({
       openQuestions: [SAMPLE_QUESTION],
       selectedIndex: 0,
       contentWidth: 80,
       terminalRows: 24,
-      includeDiscretionaryInputHint: true,
     });
 
-    expect(layout.titleSuffix).toBe(' — 任意のタイミングで入力（/exit で終了）');
+    expect(layout.titleSuffix).toBeUndefined();
   });
 });

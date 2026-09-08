@@ -255,7 +255,7 @@ Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-pre
 
 ### TTY TUI のレイアウト
 
-TTY の既定レイアウトは `pane` です。既存の Workers / Orchestration / Open questions / Operator input の 4 ペインを使い、Orchestration は `PgUp` / `PgDn` / `End` でペイン内をスクロールします。
+TTY の既定レイアウトは `pane` です。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインを追加します。Orchestration は `PgUp` / `PgDn` / `End` でペイン内をスクロールします。
 
 活動ログを端末の scrollback に残す `stream` レイアウトは、次の環境変数で選択できます。
 
@@ -263,7 +263,9 @@ TTY の既定レイアウトは `pane` です。既存の Workers / Orchestratio
 ENSEMBLE_TUI_LAYOUT=stream ensemble issue <url>
 ```
 
-`stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順で固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は1行目にIssue参照なしの「追加指示を入力するか /exit で終了」、2行目に「owner/repo#number — post-loop 待機中」を表示します。dispatch 保留中は pane / stream とも Workers 枠のタイトルに `conductor dispatch 保留中（N 件）` を表示し、保留解除時は observation に flush 件数を出します。`[harness]` 活動ログは保留中も抑制しません。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、下部 live frame を基準に変換窓の位置を計算します。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
+`stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順で固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /exit で終了` の prompt のみを表示します。dispatch 保留中は pane / stream とも Workers 枠のタイトルに `conductor dispatch 保留中（N 件）` を表示し、保留解除時は observation に flush 件数を出します。`[harness]` 活動ログは保留中も抑制しません。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、下部 live frame を基準に変換窓の位置を計算します。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
+
+Operator input は open question の有無で2モードに分かれます。question がある場合は回答 prompt と `Shift+↑↓` / Enter を表示し、Issue 参照と自律ターン数は表示しません。question がない場合は Open questions ペインを省略し、`任意のタイミングで入力 · /exit で終了` の prompt のみを表示します。post-loop 待機中は `追加指示を入力するか /exit で終了` に上書きします。Issue リンクは Workers ペイン上枠の右端に表示します。詳細は [docs/operator-input.md](docs/operator-input.md) を参照してください。
 
 dispatch 保留は Driver メモリだけの一時状態です。`/exit`、Ctrl+C（SIGINT）、SIGTERM、send failure、
 プロセス crash の前に `set_dispatch_hold({ hold: false })` で解除しないと、未 flush events は保存・復元

@@ -1,13 +1,28 @@
 import { describe, expect, it } from 'vitest';
+import type { OpenQuestion } from '@agents-ensemble/core';
 import {
   formatIssueLabel,
   formatIssueReference,
   formatOperatorContextHint,
   formatOsc8Link,
+  resolveOperatorInputDisplayMode,
   supportsOsc8Hyperlinks,
 } from './format-operator-context.js';
+import {
+  OPERATOR_INPUT_DISCRETIONARY_HINT,
+  OPERATOR_INPUT_POST_LOOP_HINT,
+  OPERATOR_INPUT_SHUTTING_DOWN_HINT,
+} from './tui-layout-constants.js';
 
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/249';
+const OPEN_QUESTION: OpenQuestion = {
+  id: 'inq-1',
+  question: 'Continue?',
+  responseType: 'text',
+  source: 'conductor',
+  status: 'open',
+  askedAt: 1,
+};
 
 describe('formatOperatorContextHint', () => {
   it('returns default prompt when context is undefined', () => {
@@ -38,7 +53,7 @@ describe('formatOperatorContextHint', () => {
     expect(hint).toContain('Shift+↑↓で選択');
   });
 
-  it('shows autonomous turn progress', () => {
+  it('shows the discretionary no-question prompt without autonomous turn progress', () => {
     expect(
       formatOperatorContextHint({
         conductorTurn: 1,
@@ -46,10 +61,10 @@ describe('formatOperatorContextHint', () => {
         maxTurns: null,
         openQuestions: [],
       }),
-    ).toContain('2/∞');
+    ).toBe(OPERATOR_INPUT_DISCRETIONARY_HINT);
   });
 
-  it('prepends the current issue reference without changing the existing hint', () => {
+  it('does not prepend the issue reference to operator input prompts', () => {
     const hint = formatOperatorContextHint(
       {
         conductorTurn: 1,
@@ -58,15 +73,12 @@ describe('formatOperatorContextHint', () => {
         openQuestions: [],
       },
       undefined,
-      { issueUrl: ISSUE_URL, issueLinkMode: 'label' },
     );
 
-    expect(hint).toBe(
-      'otolab/agents-ensemble#249 — 自律ターン 2/∞ — 任意のタイミングで入力（/exit で終了）',
-    );
+    expect(hint).toBe(OPERATOR_INPUT_DISCRETIONARY_HINT);
   });
 
-  it('keeps the issue reference when an open question is selected', () => {
+  it('does not add the issue reference when an open question is selected', () => {
     const hint = formatOperatorContextHint(
       {
         conductorTurn: 2,
@@ -84,10 +96,52 @@ describe('formatOperatorContextHint', () => {
         ],
       },
       { id: 'inq-1', index: 0, total: 1 },
-      { issueUrl: ISSUE_URL, issueLinkMode: 'label' },
     );
 
-    expect(hint).toContain('otolab/agents-ensemble#249 — inq-1 (1/1)');
+    expect(hint).toBe('inq-1 (1/1) への回答 — Shift+↑↓で選択 · Enter で送信');
+  });
+});
+
+describe('resolveOperatorInputDisplayMode', () => {
+  it('resolves the two display modes from open-question presence', () => {
+    const withQuestions = resolveOperatorInputDisplayMode({
+      openQuestions: [OPEN_QUESTION],
+    });
+    const noQuestions = resolveOperatorInputDisplayMode({ openQuestions: [] });
+
+    expect(withQuestions).toEqual({
+      mode: 'withQuestions',
+      hintLines: ['open question あり — Shift+↑↓で選択して回答'],
+    });
+    expect(noQuestions).toEqual({
+      mode: 'noQuestions',
+      hintLines: [OPERATOR_INPUT_DISCRETIONARY_HINT],
+    });
+  });
+
+  it('overrides the no-question prompt during post-loop wait', () => {
+    expect(
+      resolveOperatorInputDisplayMode({
+        openQuestions: [],
+        postLoopWaiting: true,
+      }),
+    ).toEqual({
+      mode: 'noQuestions',
+      hintLines: [OPERATOR_INPUT_POST_LOOP_HINT],
+    });
+  });
+
+  it('keeps shutdown as the highest-priority prompt override', () => {
+    expect(
+      resolveOperatorInputDisplayMode({
+        openQuestions: [],
+        postLoopWaiting: true,
+        shuttingDown: true,
+      }),
+    ).toEqual({
+      mode: 'noQuestions',
+      hintLines: [OPERATOR_INPUT_SHUTTING_DOWN_HINT],
+    });
   });
 });
 

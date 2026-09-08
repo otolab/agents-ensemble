@@ -31,6 +31,21 @@ describe('buildTitledTopBorderLine', () => {
     expect(stringWidth(line)).toBe(50);
   });
 
+  it('right-aligns titleRight before the closing corner', () => {
+    const line = buildTitledTopBorderLine({
+      title: 'Workers',
+      titleRight: 'otolab/repo#263',
+      totalWidth: 50,
+      borderStyle: 'round',
+    });
+
+    expect(line.startsWith('╭─ Workers ─')).toBe(true);
+    expect(line).toContain('otolab/repo#263');
+    expect(line.endsWith('╮')).toBe(true);
+    expect(stringWidth(line)).toBe(50);
+    expect(line.indexOf('otolab/repo#263')).toBeGreaterThan(line.indexOf('Workers'));
+  });
+
   it('uses single border characters when requested', () => {
     const line = buildTitledTopBorderLine({
       title: 'Operator input',

@@ -148,7 +148,7 @@ CLI の `formatHarnessLogBody()` はこの representation の thin wrapper で�
 CLI formatter で診断情報を保つ。permission の ACP variant と抽出優先順位は
 [harness-events.md §2.1.1](harness-events.md#211-オペレータ向け-representation) を参照。
 
-表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question・dispatch 保留状態を保持する。TTY では Ink TUI（`packages/cli/src/tui/`）が同じ reducer / backend 契約で `pane` または `stream` の live UI を表示する（#94、#257）。
+表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question・dispatch 保留状態のイベント投影を保持する。TTY の Ink TUI（`packages/cli/src/tui/`）は `pane` / `stream` とも、operator binding 後は `getContext().openQuestions`（`OpenQuestionRegistry` の `listOpen()` スナップショット）を未回答一覧の正本として使い、binding 前だけ display state をフォールバックにする。これにより sidecar resume 後も復元済み question を表示できる（#94、#257、#263）。
 
 ---
 

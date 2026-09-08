@@ -226,6 +226,68 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
+  it('exposes restored open questions through the operator context on resume', async () => {
+    const agentId = 'resume-agent-with-questions';
+    const restoredQuestions = [
+      {
+        id: 'inq-1',
+        question: 'Resume first?',
+        responseType: 'text' as const,
+        source: 'conductor' as const,
+        status: 'open' as const,
+        askedAt: 1,
+      },
+      {
+        id: 'inq-2',
+        question: 'Resume second?',
+        responseType: 'yes_no' as const,
+        source: 'conductor' as const,
+        status: 'open' as const,
+        askedAt: 2,
+      },
+    ];
+    await saveSessionSidecar(
+      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: restoredQuestions,
+        sequence: restoredQuestions.length,
+        workers: {},
+        updatedAt: 0,
+      },
+    );
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    let operatorContext: ReturnType<OperatorInputBindingApi['getContext']> | undefined;
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: agentId,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      bindOperatorInput: (api) => {
+        operatorContext = api.getContext();
+        for (const question of restoredQuestions) {
+          api.submit('answer', { targetOpenQuestionId: question.id });
+        }
+        return () => {};
+      },
+    });
+
+    expect(operatorContext?.openQuestions).toEqual(restoredQuestions);
+  });
+
   it('passes project MCP configuration to the conductor options', async () => {
     const projectMcpRoot = join(repoRoot, '.agents');
     await mkdir(projectMcpRoot, { recursive: true });

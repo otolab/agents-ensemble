@@ -1,12 +1,15 @@
 import { Box, Text, useBoxMetrics, useInput } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import type { TuiViewModel, TuiViewSnapshot } from './tui-view-model.js';
+import {
+  getTuiOpenQuestions,
+  type TuiViewModel,
+  type TuiViewSnapshot,
+} from './tui-view-model.js';
 import type { WorkerDisplayStatus } from '../display/session-display-state.js';
 import {
   formatIssueLabel,
   formatIssueReference,
-  formatOperatorContextHint,
-  prependIssueReference,
+  resolveOperatorInputDisplayMode,
   type IssueLinkMode,
 } from './format-operator-context.js';
 import {
@@ -182,12 +185,17 @@ export function WorkerStatusPane({
   workers,
   dispatchHold,
   height = WORKER_PANE_HEIGHT,
+  issueUrl,
+  issueLinkMode = 'label',
 }: {
   workers: TuiViewSnapshot['displayState']['workers'];
   dispatchHold?: TuiViewSnapshot['displayState']['dispatchHold'];
   height?: number;
+  issueUrl?: string;
+  issueLinkMode?: IssueLinkMode;
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
+  const issueTitleRight = issueUrl ? formatIssueLabel(issueUrl) : undefined;
   const dispatchHoldSuffix = dispatchHold?.hold
     ? ` — conductor dispatch 保留中（${dispatchHold.heldEventCount} 件）`
     : undefined;
@@ -195,6 +203,9 @@ export function WorkerStatusPane({
     <TitledBorderPane
       title={WORKER_PANE_TITLE}
       titleSuffix={dispatchHoldSuffix}
+      titleRight={issueTitleRight}
+      titleRightIssueUrl={issueUrl}
+      titleRightLinkMode={issueLinkMode}
       borderStyle="round"
       borderColor="cyan"
       paddingX={PANE_PADDING_X}
@@ -270,6 +281,10 @@ export function OpenQuestionsPane({
 }: {
   layout: OpenQuestionsPaneLayout;
 }) {
+  if (layout.paneHeight === 0 || layout.items.length === 0) {
+    return null;
+  }
+
   return (
     <TitledBorderPane
       title={layout.titleText}
@@ -280,16 +295,12 @@ export function OpenQuestionsPane({
       height={layout.paneHeight}
       titleBold={false}
     >
-      {layout.items.length === 0 ? (
-        <Text dimColor>(未回答なし)</Text>
-      ) : (
-        layout.items.flatMap((item) =>
-          item.lines.map((line, lineIndex) => (
-            <Text key={`${item.id}-${lineIndex}`} dimColor={item.compact && !item.isSelected}>
-              {line}
-            </Text>
-          )),
-        )
+      {layout.items.flatMap((item) =>
+        item.lines.map((line, lineIndex) => (
+          <Text key={`${item.id}-${lineIndex}`} dimColor={item.compact && !item.isSelected}>
+            {line}
+          </Text>
+        )),
       )}
     </TitledBorderPane>
   );
@@ -314,7 +325,7 @@ export function IssueSessionTui({
   const terminalRows = process.stdout.rows ?? 24;
   const operatorPrompt = 'operator> ';
   const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
-  const openQuestions = snapshot.displayState.openQuestions;
+  const openQuestions = getTuiOpenQuestions(snapshot);
   const openQuestionsLayout = useMemo(
     () =>
       resolveOpenQuestionsPaneLayout({
@@ -326,26 +337,24 @@ export function IssueSessionTui({
     [openQuestions, selectedQuestionIndex, contentWidth, terminalRows],
   );
   const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
-  const contextHint = snapshot.shuttingDown
-    ? '終了しています…'
-    : snapshot.postLoopWaiting
-    ? 'post-loop 待機中 — 追加指示を入力するか /exit で終了'
-    : formatOperatorContextHint(
-        snapshot.operatorContext,
-        selectedQuestion
-          ? {
-              id: selectedQuestion.id,
-              index: openQuestionsLayout.selectedIndex,
-              total: openQuestions.length,
-            }
-          : undefined,
-      );
-  const contextHintText = prependIssueReference(
-    issueUrl,
-    contextHint,
-    issueLinkMode === 'url' ? 'url' : 'label',
+  const operatorInputDisplay = resolveOperatorInputDisplayMode({
+    openQuestions,
+    selection: selectedQuestion
+      ? {
+          id: selectedQuestion.id,
+          index: openQuestionsLayout.selectedIndex,
+          total: openQuestions.length,
+        }
+      : undefined,
+    postLoopWaiting: snapshot.postLoopWaiting,
+    shuttingDown: snapshot.shuttingDown,
+  });
+  const openQuestionsPaneHeight =
+    operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
+  const hintLineCount = operatorInputDisplay.hintLines.reduce(
+    (lineCount, hintLine) => lineCount + wrapTextToWidth(hintLine, contentWidth).length,
+    0,
   );
-  const hintLineCount = wrapTextToWidth(contextHintText, contentWidth).length;
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const inputPaneHeight = computeInputPaneHeight({
     hintLineCount,
@@ -355,7 +364,7 @@ export function IssueSessionTui({
     terminalRows,
     hintLineCount,
     inputDisplayLineCount: visibleInputDisplayLineCount,
-    openQuestionsPaneHeight: openQuestionsLayout.paneHeight,
+    openQuestionsPaneHeight,
   });
   const visibleLineCount = computeOrchestrationLogVisibleLineCount(activityPaneHeight);
   const displayLineCount = useMemo(
@@ -369,7 +378,7 @@ export function IssueSessionTui({
       terminalRows,
       hintLineCount,
       inputDisplayLineCount: visibleInputDisplayLineCount,
-      openQuestionsPaneHeight: openQuestionsLayout.paneHeight,
+      openQuestionsPaneHeight,
       cursorLineOffset: 0,
     }),
   };
@@ -462,6 +471,8 @@ export function IssueSessionTui({
       <WorkerStatusPane
         workers={snapshot.displayState.workers}
         dispatchHold={snapshot.displayState.dispatchHold}
+        issueUrl={issueUrl}
+        issueLinkMode={issueLinkMode}
       />
       <OrchestrationPane
         activityLog={snapshot.activityLog}
@@ -469,7 +480,9 @@ export function IssueSessionTui({
         paneHeight={activityPaneHeight}
         linesFromBottom={linesFromBottom}
       />
-      <OpenQuestionsPane layout={openQuestionsLayout} />
+      {operatorInputDisplay.mode === 'withQuestions' ? (
+        <OpenQuestionsPane layout={openQuestionsLayout} />
+      ) : null}
       <TitledBorderPane
         title={INPUT_PANE_TITLE}
         borderStyle="single"
@@ -477,13 +490,14 @@ export function IssueSessionTui({
         paddingX={PANE_PADDING_X}
         height={inputPaneHeight}
       >
-        <WrappedTextLines
-          text={contextHintText}
-          width={contentWidth}
-          color={INPUT_PANE_HINT_COLOR}
-          issueUrl={issueUrl}
-          issueLinkMode={issueLinkMode}
-        />
+        {operatorInputDisplay.hintLines.map((hintLine, index) => (
+          <WrappedTextLines
+            key={`context-hint-${index}`}
+            text={hintLine}
+            width={contentWidth}
+            color={INPUT_PANE_HINT_COLOR}
+          />
+        ))}
         <OperatorTextArea
           value={inputValue}
           onChange={setInputValue}
