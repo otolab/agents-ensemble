@@ -3,7 +3,10 @@ import {
   loadEnsembleConfig,
 } from '../config/load-ensemble-config.js';
 import type { EnsembleConfig } from '../config/types.js';
-import { resolveMcpServersForSdk } from '../mcp/load-mcp-config.js';
+import {
+  resolveMcpServersForSdk,
+  type LoadMcpConfigOptions,
+} from '../mcp/load-mcp-config.js';
 import { createAnswerOpenQuestionTool } from '../escalation/answer-open-question-tool.js';
 import { createAskHumanTool } from '../escalation/ask-human-tool.js';
 import { createOpenQuestionListTools } from '../escalation/open-question-list-tools.js';
@@ -110,6 +113,8 @@ export interface RunConductorSessionOptions {
   conductorCwd?: string;
   /** テスト用。未指定時は loadEnsembleConfig(repoRoot) で解決する。 */
   ensembleConfig?: EnsembleConfig;
+  /** MCP 設定の解決オプション。未指定時は `~/.ensemble` を参照する。 */
+  mcpConfigOptions?: LoadMcpConfigOptions;
   /** 作業手順・worker 定義。未指定時は loadProfile でデフォルトを解決する。 */
   profile: ResolvedProfile;
   profilePath?: string;
@@ -564,7 +569,10 @@ export async function runConductorSession(
   });
 
   const conductorCwd = options.conductorCwd ?? process.cwd();
-  const mcpServers = await resolveMcpServersForSdk(options.repoRoot);
+  const mcpServers = await resolveMcpServersForSdk(
+    options.repoRoot,
+    options.mcpConfigOptions,
+  );
   const conductorOptions: ConductorAgentOptions = {
     cwd: conductorCwd,
     apiKey: options.apiKey,

@@ -18,7 +18,7 @@ import {
   sessionSidecarPath,
 } from '../session/session-sidecar.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
-import { runConductorSession } from './conductor-session.js';
+import { runConductorSession as runConductorSessionImpl } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import * as worktreeModule from '../worktree/worktree.js';
 import type {
@@ -105,9 +105,11 @@ async function drainAsync(): Promise<void> {
 
 describe('runConductorSession resume / shutdown', () => {
   let repoRoot = '';
+  let userEnsembleRoot = '';
 
   beforeEach(async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-conductor-'));
+    userEnsembleRoot = await mkdtemp(join(tmpdir(), 'ensemble-conductor-user-'));
 
     vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
       issue: TEST_ISSUE,
@@ -150,6 +152,18 @@ describe('runConductorSession resume / shutdown', () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  function runConductorSession(
+    options: Parameters<typeof runConductorSessionImpl>[0],
+  ) {
+    return runConductorSessionImpl({
+      ...options,
+      mcpConfigOptions: {
+        ...options.mcpConfigOptions,
+        userEnsembleRoot,
+      },
+    });
+  }
 
   it('fails fast when resumeAgentId is set but sidecar is missing', async () => {
     await expect(
