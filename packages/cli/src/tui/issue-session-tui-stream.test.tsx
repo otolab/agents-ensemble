@@ -21,6 +21,9 @@ function createOpenQuestion(
   };
 }
 
+const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/261';
+const NON_CANONICAL_ISSUE_URL = 'http://github.com/otolab/agents-ensemble/issues/261/';
+
 describe('IssueSessionTuiStream', () => {
   beforeEach(() => {
     Object.defineProperty(process.stdout, 'rows', {
@@ -111,6 +114,82 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).toContain('otolab/agents-ensemble#261');
     expect(frame).not.toContain('post-loop 待機中');
     expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(80);
+  });
+
+  it('uses the canonical Issue URL for the Workers header OSC 8 target', () => {
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueUrl={NON_CANONICAL_ISSUE_URL}
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('otolab/agents-ensemble#261');
+    expect(frame).toContain(`\u001b]8;;${ISSUE_URL}\u0007`);
+    expect(frame).not.toContain(`\u001b]8;;${NON_CANONICAL_ISSUE_URL}\u0007`);
+  });
+
+  it('keeps the canonical Issue URL across stream context lifecycle states', async () => {
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueUrl={NON_CANONICAL_ISSUE_URL}
+        onSubmit={() => {}}
+      />,
+    );
+    const canonicalOsc8Open = `\u001b]8;;${ISSUE_URL}\u0007`;
+    const nonCanonicalOsc8Open = `\u001b]8;;${NON_CANONICAL_ISSUE_URL}\u0007`;
+
+    const expectCanonicalIssueLink = () => {
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain(canonicalOsc8Open);
+      expect(frame).not.toContain(nonCanonicalOsc8Open);
+    };
+
+    expectCanonicalIssueLink();
+
+    const question = createOpenQuestion({ id: 'inq-1', question: 'Continue?' });
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [question],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 0,
+      maxTurns: null,
+      openQuestions: [question],
+    });
+    await flushInkStdin();
+    expectCanonicalIssueLink();
+    expect(lastFrame() ?? '').toContain('inq-1 (1/1) への回答');
+
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 0,
+      maxTurns: null,
+      openQuestions: [],
+    });
+    viewModel.setPostLoopWaiting(true);
+    await flushInkStdin();
+    expectCanonicalIssueLink();
+    expect(lastFrame() ?? '').toContain('追加指示を入力するか /exit で終了');
+
+    viewModel.setShuttingDown(true);
+    await flushInkStdin();
+    expectCanonicalIssueLink();
+    expect(lastFrame() ?? '').toContain('終了しています…');
   });
 
   it('shows the no-question hint before operator context binds', () => {

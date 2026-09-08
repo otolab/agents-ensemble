@@ -46,6 +46,18 @@ describe('buildTitledTopBorderLine', () => {
     expect(line.indexOf('otolab/repo#263')).toBeGreaterThan(line.indexOf('Workers'));
   });
 
+  it('truncates titleRight to the available visible width', () => {
+    const parts = buildTitledTopBorderParts({
+      title: 'Workers',
+      titleRight: 'otolab/agents-ensemble#249',
+      totalWidth: 24,
+      borderStyle: 'round',
+    });
+
+    expect(parts.titleRight).toBe('otolab/a…');
+    expect(stringWidth(`${parts.left}${parts.title}${parts.right}`)).toBe(24);
+  });
+
   it('uses single border characters when requested', () => {
     const line = buildTitledTopBorderLine({
       title: 'Operator input',

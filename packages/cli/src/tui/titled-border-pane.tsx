@@ -1,7 +1,7 @@
 import { Box, Text, type BoxProps } from 'ink';
 import type { ReactNode } from 'react';
 import {
-  formatIssueReference,
+  formatOsc8Link,
   type IssueLinkMode,
 } from './format-operator-context.js';
 import {
@@ -35,7 +35,7 @@ function renderTitleRight(params: {
   }
 
   if (titleRightIssueUrl && titleRightLinkMode === 'osc8') {
-    return <Text>{formatIssueReference(titleRightIssueUrl, 'osc8')}</Text>;
+    return <Text>{formatOsc8Link(titleRight, titleRightIssueUrl)}</Text>;
   }
 
   return <Text color={borderColor}>{titleRight}</Text>;

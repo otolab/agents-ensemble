@@ -1,5 +1,5 @@
 import type { OpenQuestion, OperatorInputContext } from '@agents-ensemble/core';
-import { parseIssueUrl } from '@agents-ensemble/core';
+import { buildIssueUrl, parseIssueUrl } from '@agents-ensemble/core';
 import {
   OPERATOR_INPUT_DISCRETIONARY_HINT,
   OPERATOR_INPUT_POST_LOOP_HINT,
@@ -11,6 +11,19 @@ export type IssueLinkMode = 'osc8' | 'label' | 'url';
 export interface OperatorContextHintOptions {
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
+}
+
+/** OSC 8 のリンク先に使う GitHub Issue URL を正規化する。 */
+function resolveIssueLinkTarget(issueUrl: string): string {
+  const normalizedUrl = issueUrl.trim();
+  try {
+    const { owner, repo, number } = parseIssueUrl(normalizedUrl);
+    return buildIssueUrl({ owner, repo, number });
+  } catch {
+    // Keep the existing display fallback for malformed input. Valid Issue
+    // references always use the canonical target built above.
+    return issueUrl;
+  }
 }
 
 /** Issue URL をコンテキスト行で使う短い識別子へ変換する。 */
@@ -34,7 +47,8 @@ function escapeOsc8Url(issueUrl: string): string {
 export function formatOsc8Link(label: string, issueUrl: string): string {
   const osc8 = '\u001b]8;;';
   const bell = '\u0007';
-  return `${osc8}${escapeOsc8Url(issueUrl)}${bell}${label}${osc8}${bell}`;
+  const target = resolveIssueLinkTarget(issueUrl);
+  return `${osc8}${escapeOsc8Url(target)}${bell}${label}${osc8}${bell}`;
 }
 
 /** Issue の表示を端末互換性に応じて選ぶ。 */
@@ -42,7 +56,7 @@ export function formatIssueReference(
   issueUrl: string,
   mode: IssueLinkMode = 'osc8',
 ): string {
-  const normalizedUrl = issueUrl.trim();
+  const normalizedUrl = resolveIssueLinkTarget(issueUrl.trim());
   if (mode === 'url') {
     return normalizedUrl;
   }

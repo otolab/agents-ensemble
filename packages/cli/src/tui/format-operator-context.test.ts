@@ -15,6 +15,7 @@ import {
 } from './tui-layout-constants.js';
 
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/249';
+const NON_CANONICAL_ISSUE_URL = 'http://github.com/otolab/agents-ensemble/issues/249/';
 const OPEN_QUESTION: OpenQuestion = {
   id: 'inq-1',
   question: 'Continue?',
@@ -156,6 +157,19 @@ describe('Issue reference formatting', () => {
     );
     expect(formatIssueReference(ISSUE_URL, 'label')).toBe('otolab/agents-ensemble#249');
     expect(formatIssueReference(ISSUE_URL, 'url')).toBe(ISSUE_URL);
+  });
+
+  it('normalizes OSC 8 and URL targets to the canonical GitHub Issue URL', () => {
+    const canonicalOsc8Open = `\u001b]8;;${ISSUE_URL}\u0007`;
+
+    expect(formatOsc8Link('otolab/agents-ensemble#249', NON_CANONICAL_ISSUE_URL)).toContain(
+      canonicalOsc8Open,
+    );
+    expect(formatOsc8Link('otolab/agents-ensemble#249', NON_CANONICAL_ISSUE_URL)).not.toContain(
+      `\u001b]8;;${NON_CANONICAL_ISSUE_URL}\u0007`,
+    );
+    expect(formatIssueReference(NON_CANONICAL_ISSUE_URL, 'osc8')).toContain(canonicalOsc8Open);
+    expect(formatIssueReference(NON_CANONICAL_ISSUE_URL, 'url')).toBe(ISSUE_URL);
   });
 
   it('escapes OSC 8 control characters in the target URL', () => {
