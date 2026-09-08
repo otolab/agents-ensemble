@@ -38,7 +38,8 @@ describe('TitledBorderPane', () => {
       value: 10,
     });
 
-    const issueUrl = 'https://github.com/otolab/agents-ensemble/issues/249';
+    const issueUrl = 'http://github.com/otolab/agents-ensemble/issues/249/';
+    const canonicalIssueUrl = 'https://github.com/otolab/agents-ensemble/issues/249';
     const fullIssueLabel = 'otolab/agents-ensemble#249';
     const truncatedIssueLabel = 'otolab/a…';
     const { lastFrame } = render(
@@ -55,10 +56,25 @@ describe('TitledBorderPane', () => {
     );
 
     const topBorderLine = (lastFrame() ?? '').split('\n')[0] ?? '';
-    expect(topBorderLine).toContain(
-      `\u001b]8;;${issueUrl}\u0007${truncatedIssueLabel}\u001b]8;;\u0007`,
+    const osc8Open = `\u001b]8;;${canonicalIssueUrl}\u0007`;
+    const osc8Close = '\u001b]8;;\u0007';
+    const linkOpenIndex = topBorderLine.indexOf(osc8Open);
+    const linkCloseIndex = topBorderLine.indexOf(
+      osc8Close,
+      linkOpenIndex + osc8Open.length,
     );
+    const closingBorderIndex = topBorderLine.lastIndexOf('─╮');
+
+    expect(topBorderLine).toContain(
+      `${osc8Open}${truncatedIssueLabel}${osc8Close}`,
+    );
+    expect(topBorderLine).not.toContain(`\u001b]8;;${issueUrl}\u0007`);
     expect(topBorderLine).not.toContain(fullIssueLabel);
-    expect(stringWidth(topBorderLine)).toBeLessThanOrEqual(24);
+    expect(stringWidth(topBorderLine)).toBe(24);
+    expect(linkOpenIndex).toBeGreaterThanOrEqual(0);
+    expect(linkCloseIndex).toBeGreaterThan(linkOpenIndex + osc8Open.length);
+    expect(linkCloseIndex).toBeLessThan(closingBorderIndex);
+    expect(topBorderLine.slice(closingBorderIndex)).not.toContain(osc8Close);
+    expect(topBorderLine.match(/\u001b\]8;;/g)).toHaveLength(2);
   });
 });
