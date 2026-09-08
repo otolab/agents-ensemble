@@ -219,6 +219,7 @@ describe('IssueSessionTui', () => {
       workers: {},
       conductorOutput: null,
       openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
     viewModel.setOperatorContext({
       conductorTurn: 1,
@@ -506,13 +507,19 @@ describe('IssueSessionTui', () => {
       workers: {},
       conductorOutput: null,
       openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Answer?' })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain('Open questions');
     expect(lastFrame() ?? '').toContain('inq-1 (1/1) への回答');
     expect(lastFrame() ?? '').not.toContain('任意のタイミングで入力 · /exit で終了');
 
-    viewModel.setDisplayState({ workers: {}, conductorOutput: null, openQuestions: [] });
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
     await flushInkStdin();
     expect(lastFrame() ?? '').not.toContain('Open questions');
     expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
@@ -612,6 +619,7 @@ describe('IssueSessionTui', () => {
       workers: {},
       conductorOutput: null,
       openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Answer?' })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
     viewModel.appendActivityLog('operator', 'ping');
 
@@ -882,7 +890,12 @@ describe('IssueSessionTui', () => {
 
     it('submits ordinary input without an open-question target', async () => {
       const viewModel = createTuiViewModel();
-      viewModel.setDisplayState({ workers: {}, conductorOutput: null, openQuestions: [] });
+      viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
       const onSubmit = vi.fn();
       const { stdin } = render(
         <IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />,
