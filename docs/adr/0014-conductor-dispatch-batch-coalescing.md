@@ -78,6 +78,31 @@ dispatch 完了後、Driver は `lastDispatchedSourceKey` を束の key にセ�
 
 **ターン完了後のスナップショット**（キューに溜まった到着済みイベントをまとめる）。短い coalesce ウィンドウ（N ms）は本 ADR の非スコープ。
 
+### dispatch 保留（#265）
+
+conductor が `set_dispatch_hold({ hold: true })` を呼ぶと、worker 完了・失敗や GitHub 更新などの
+trigger `SessionEvent` は Driver メモリ内の held buffer に到着順で積まれる。保留は一時的な
+Driver 状態であり sidecar には保存しないため、resume は常に `dispatchHold: false` から始まる。
+
+`operator.message` と `permission.pending` は保留を貫通する。オペレータ入力と permission の
+判断を、保留解除まで待たせないためである。`hold: false` では held buffer 全体を
+`formatSessionEventsForConductor(events[])` で 1 本の user メッセージへ合成し、1 回の
+`agent.send` として dispatch する。束内の worker outcome 件数と `autonomousTurns` は通常の
+batch と同じ規則で集計し、max-turns で送れない場合は operator/permission を先に処理してから
+flush する。
+
+#### 非永続 buffer の終了時リスク
+
+held buffer と、release 前に queue に残る hold 対象 trigger は Driver メモリだけに存在し、
+sidecar へ保存しない。このため hold を解除する前に正常 exit（`/exit`）、SIGINT/SIGTERM、
+conductor send failure が起きた場合、またはプロセスが crash した場合は、未 flush のイベントが
+dispatch も復元もされず失われる。これは一時的な dispatch hold を sidecar の永続状態にしない
+ことを優先した accepted risk である。
+
+運用上は、hold 中にセッションを終了せず、作業を再開する前に `set_dispatch_hold({ hold: false })`
+を呼ぶ。resume は sidecar から hold を復元せず、空の buffer と `dispatchHold: false` で開始する。
+終了時の teardown flush は実装しない。
+
 ### `SessionEventQueue` API
 
 | API | 用途 |
@@ -104,10 +129,12 @@ dispatch 完了後、Driver は `lastDispatchedSourceKey` を束の key にセ�
 
 - オペレータ割り込み + 進行中 `run.cancel()` — [#86](https://github.com/otolab/agents-ensemble/issues/86)
 - `--coalesce-ms` 等の時間窓バッチ — 任意（別 PR）
+- dispatch 保留の CLI 切替 — conductor tool のみ（Issue #265）
 - [architecture.md](../architecture.md) / [operator-input.md](../operator-input.md) の dispatch 記述 — 本 ADR に合わせて更新済み
 
 ## 参照
 
 - #67
 - [ADR 0009](0009-conductor-session-event-queue.md)
+- [Issue #265](https://github.com/otolab/agents-ensemble/issues/265)
 - [Cursor SDK TypeScript](https://cursor.com/docs/sdk/typescript) — `agent.send(message: string | SDKUserMessage)`

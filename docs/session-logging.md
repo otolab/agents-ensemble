@@ -124,6 +124,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `conductor.send.started` | 各 `agent.send` 開始直前 | なし（sink のみ） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | なし（log 相当。活動ログ / stderr には出さない。Workers ペイン活動ヒントのみ #161） |
 | `conductor.send` | 各 `agent.send` 完了後 | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` を更新 |
+| `conductor.dispatch_hold` | `set_dispatch_hold` の切替、または held trigger 件数の変化 | なし（TUI の保留表示と observation のみ） |
 | `worker.round` | worker 1 ラウンド完了（init prompt 含む） | `workerDispatches` に追記 |
 | `worker.failed` | worker 失敗 | `workerFailures` に追記 |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | なし（sink のみ） |
@@ -147,7 +148,7 @@ CLI の `formatHarnessLogBody()` はこの representation の thin wrapper で�
 CLI formatter で診断情報を保つ。permission の ACP variant と抽出優先順位は
 [harness-events.md §2.1.1](harness-events.md#211-オペレータ向け-representation) を参照。
 
-表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question のイベント投影を保持する。TTY の Ink TUI（`packages/cli/src/tui/`）は `pane` / `stream` とも、operator binding 後は `getContext().openQuestions`（`OpenQuestionRegistry` の `listOpen()` スナップショット）を未回答一覧の正本として使い、binding 前だけ display state をフォールバックにする。これにより sidecar resume 後も復元済み question を表示できる（#94、#257、#263）。
+表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question・dispatch 保留状態のイベント投影を保持する。TTY の Ink TUI（`packages/cli/src/tui/`）は `pane` / `stream` とも、operator binding 後は `getContext().openQuestions`（`OpenQuestionRegistry` の `listOpen()` スナップショット）を未回答一覧の正本として使い、binding 前だけ display state をフォールバックにする。これにより sidecar resume 後も復元済み question を表示できる（#94、#257、#263）。
 
 ---
 

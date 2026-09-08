@@ -103,6 +103,26 @@ describe('session-log-lines', () => {
     ).toBe('自律作業が一段落しました。');
   });
 
+  it('formats dispatch hold observations', () => {
+    expect(
+      formatObservationLogBody({
+        type: 'conductor.dispatch_hold',
+        status: 'enabled',
+        hold: true,
+        heldEventCount: 0,
+      }),
+    ).toBe('dispatch hold enabled');
+    expect(
+      formatObservationStderrLine({
+        type: 'conductor.dispatch_hold',
+        status: 'released',
+        hold: false,
+        heldEventCount: 0,
+        flushedEventCount: 3,
+      }),
+    ).toBe('[observation] released (flushed 3 events)');
+  });
+
   it('formats conductor.auth.recovery hint for TUI activity log', () => {
     expect(
       formatObservationLogBody({

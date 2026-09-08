@@ -252,6 +252,7 @@ export function IssueSessionTuiStream({
         </TitledBorderPane>
         <WorkerStatusPane
           workers={snapshot.displayState.workers}
+          dispatchHold={snapshot.displayState.dispatchHold}
           height={streamPaneHeights.workerPaneHeight}
           issueUrl={issueUrl}
           issueLinkMode={issueLinkMode}

@@ -72,6 +72,7 @@ export class SessionLogger {
       case 'operator.input':
       case 'conductor.send.started':
       case 'conductor.send.progress':
+      case 'conductor.dispatch_hold':
       case 'permission.pending':
       case 'worker.process.stderr':
       case 'open.question.enqueued':

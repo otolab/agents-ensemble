@@ -39,6 +39,7 @@ import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
 import { createSessionUsageTools } from '../dispatch/session-usage-tool.js';
+import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
 import { parseIssueUrl, type IssueRef } from '../issue/issue-ref.js';
 import {
@@ -58,6 +59,11 @@ import {
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
+import {
+  bufferDispatchHoldEvents,
+  createDispatchHoldState,
+  type DispatchHoldChange,
+} from './session/dispatch-hold.js';
 import {
   operatorInputMaxTurns,
   resolveMaxTurns,
@@ -221,6 +227,18 @@ export async function runConductorSession(
   const escalations: EscalationRecord[] = [];
   const openQuestions = new OpenQuestionRegistry();
   const eventQueue = new SessionEventQueue();
+  const dispatchHoldState = createDispatchHoldState();
+  const onDispatchHoldChanged = (change: DispatchHoldChange): void => {
+    sessionLogger.emit({
+      type: 'conductor.dispatch_hold',
+      status: change.status,
+      hold: change.hold,
+      heldEventCount: change.heldEventCount,
+      ...(change.flushedEventCount !== undefined
+        ? { flushedEventCount: change.flushedEventCount }
+        : {}),
+    });
+  };
   let activeProfile = options.profile;
   const workerSessions = new Map<
     string,
@@ -533,6 +551,18 @@ export async function runConductorSession(
     },
   });
 
+  const dispatchHoldTools = createSetDispatchHoldTool({
+    state: dispatchHoldState,
+    onChanged: onDispatchHoldChanged,
+    onBeforeRelease: () => {
+      bufferDispatchHoldEvents({
+        state: dispatchHoldState,
+        eventQueue,
+        onChanged: onDispatchHoldChanged,
+      });
+    },
+  });
+
   const conductorCwd = options.conductorCwd ?? process.cwd();
   const mcpServers = await resolveMcpServersForSdk(options.repoRoot);
   const conductorOptions: ConductorAgentOptions = {
@@ -549,6 +579,7 @@ export async function runConductorSession(
       ...workerStatusTools,
       ...registerGitHubWatchTools,
       ...sessionUsageTools,
+      ...dispatchHoldTools,
     },
   };
 
@@ -741,6 +772,8 @@ export async function runConductorSession(
       conductorHandle,
       sendReconnect,
       eventQueue,
+      dispatchHoldState,
+      onDispatchHoldChanged,
       workerSession,
       permissionPipeline,
       openQuestions,

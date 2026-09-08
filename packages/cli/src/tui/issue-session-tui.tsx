@@ -183,20 +183,26 @@ function sortWorkerEntries(
 
 export function WorkerStatusPane({
   workers,
+  dispatchHold,
   height = WORKER_PANE_HEIGHT,
   issueUrl,
   issueLinkMode = 'label',
 }: {
   workers: TuiViewSnapshot['displayState']['workers'];
+  dispatchHold?: TuiViewSnapshot['displayState']['dispatchHold'];
   height?: number;
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
   const issueTitleRight = issueUrl ? formatIssueLabel(issueUrl) : undefined;
+  const dispatchHoldSuffix = dispatchHold?.hold
+    ? ` — conductor dispatch 保留中（${dispatchHold.heldEventCount} 件）`
+    : undefined;
   return (
     <TitledBorderPane
       title={WORKER_PANE_TITLE}
+      titleSuffix={dispatchHoldSuffix}
       titleRight={issueTitleRight}
       titleRightIssueUrl={issueUrl}
       titleRightLinkMode={issueLinkMode}
@@ -464,6 +470,7 @@ export function IssueSessionTui({
     <Box flexDirection="column" height={terminalRows}>
       <WorkerStatusPane
         workers={snapshot.displayState.workers}
+        dispatchHold={snapshot.displayState.dispatchHold}
         issueUrl={issueUrl}
         issueLinkMode={issueLinkMode}
       />

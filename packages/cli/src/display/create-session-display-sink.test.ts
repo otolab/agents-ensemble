@@ -109,13 +109,33 @@ describe('createStringSessionDisplayBackend', () => {
     const backend = createStringSessionDisplayBackend({ writeStdout });
 
     backend.render(
-      { workers: {}, conductorOutput: null, openQuestions: [] },
-      { workers: {}, conductorOutput: null, openQuestions: [] },
+      {
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [],
+        dispatchHold: { hold: false, heldEventCount: 0 },
+      },
+      {
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [],
+        dispatchHold: { hold: false, heldEventCount: 0 },
+      },
       { type: 'operator.input', conductorTurn: 1, text: 'hello' },
     );
     backend.render(
-      { workers: {}, conductorOutput: 'ok', openQuestions: [] },
-      { workers: {}, conductorOutput: null, openQuestions: [] },
+      {
+        workers: {},
+        conductorOutput: 'ok',
+        openQuestions: [],
+        dispatchHold: { hold: false, heldEventCount: 0 },
+      },
+      {
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [],
+        dispatchHold: { hold: false, heldEventCount: 0 },
+      },
       {
         type: 'conductor.send',
         sendCount: 1,
