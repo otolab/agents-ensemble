@@ -93,6 +93,14 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
       return '自律作業が一段落しました。';
     case 'session.operator_exit':
       return '終了しています…';
+    case 'conductor.dispatch_hold':
+      if (event.status === 'enabled') {
+        return 'dispatch hold enabled';
+      }
+      if (event.status === 'released') {
+        return `released (flushed ${event.flushedEventCount ?? 0} events)`;
+      }
+      return undefined;
     case 'conductor.auth.recovery':
       return event.hint;
     case 'conductor.auth.reconnect':
@@ -127,6 +135,8 @@ export function formatObservationStderrLine(event: SessionLogEvent): string | un
       return `\n${body}\n`;
     case 'session.operator_exit':
       return `\n${body}\n`;
+    case 'conductor.dispatch_hold':
+      return `[observation] ${body}`;
     default:
       return undefined;
   }

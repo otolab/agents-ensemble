@@ -124,4 +124,62 @@ describe('createTuiTelemetrySink', () => {
       },
     ]);
   });
+
+  it('shows dispatch hold transitions as observations', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({
+      type: 'conductor.dispatch_hold',
+      status: 'enabled',
+      hold: true,
+      heldEventCount: 0,
+    });
+    sink({
+      type: 'conductor.dispatch_hold',
+      status: 'updated',
+      hold: true,
+      heldEventCount: 2,
+    });
+    sink({
+      type: 'conductor.dispatch_hold',
+      status: 'released',
+      hold: false,
+      heldEventCount: 0,
+      flushedEventCount: 2,
+    });
+
+    expect(viewModel.getSnapshot().activityLog).toEqual([
+      { label: 'observation', text: 'dispatch hold enabled' },
+      { label: 'observation', text: 'released (flushed 2 events)' },
+    ]);
+  });
+
+  it('keeps harness activity visible while dispatch hold is enabled', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({
+      type: 'conductor.dispatch_hold',
+      status: 'enabled',
+      hold: true,
+      heldEventCount: 0,
+    });
+    sink({
+      type: 'harness.worker.prompt.completed',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'worker-1',
+      source: 'harness',
+      stopReason: 'end_turn',
+    });
+
+    expect(viewModel.getSnapshot().activityLog).toEqual([
+      { label: 'observation', text: 'dispatch hold enabled' },
+      {
+        label: 'harness',
+        text: 'worker.prompt.completed name=implementer kind=implementer source=harness stopReason=end_turn',
+      },
+    ]);
+  });
 });

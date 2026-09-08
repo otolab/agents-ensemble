@@ -137,6 +137,19 @@ export function reduceDisplayState(
       }
       return nextState;
     }
+    case 'conductor.dispatch_hold': {
+      const dispatchHold = {
+        hold: event.hold,
+        heldEventCount: event.heldEventCount,
+      };
+      if (
+        state.dispatchHold.hold === dispatchHold.hold &&
+        state.dispatchHold.heldEventCount === dispatchHold.heldEventCount
+      ) {
+        return state;
+      }
+      return { ...state, dispatchHold };
+    }
     case 'open.question.enqueued': {
       if (event.question.status !== 'open') {
         return state;

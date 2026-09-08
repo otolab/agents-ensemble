@@ -71,6 +71,7 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
       case 'session.worktree.notice':
       case 'session.continue':
       case 'session.post_loop_wait':
+      case 'conductor.dispatch_hold':
       case 'conductor.auth.recovery':
         break;
     }

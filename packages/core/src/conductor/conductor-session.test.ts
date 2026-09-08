@@ -308,6 +308,64 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
+  it('registers set_dispatch_hold and records hold transitions without sidecar state', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    const events: SessionLogEvent[] = [];
+    sessionLogger.subscribe((event) => events.push(event));
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => {
+      await conductorTools!.set_dispatch_hold!.execute({ hold: true });
+      await conductorTools!.set_dispatch_hold!.execute({ hold: false });
+      return {
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      };
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(conductorTools?.set_dispatch_hold).toBeDefined();
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          type: 'conductor.dispatch_hold',
+          status: 'enabled',
+          hold: true,
+          heldEventCount: 0,
+        },
+        {
+          type: 'conductor.dispatch_hold',
+          status: 'released',
+          hold: false,
+          heldEventCount: 0,
+          flushedEventCount: 0,
+        },
+      ]),
+    );
+  });
+
   it('delivers a runtime-registered PR update through the live monitor', async () => {
     vi.useFakeTimers();
     const shutdown = new AbortController();

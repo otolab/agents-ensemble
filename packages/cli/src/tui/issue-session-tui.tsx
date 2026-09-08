@@ -180,15 +180,21 @@ function sortWorkerEntries(
 
 export function WorkerStatusPane({
   workers,
+  dispatchHold,
   height = WORKER_PANE_HEIGHT,
 }: {
   workers: TuiViewSnapshot['displayState']['workers'];
+  dispatchHold?: TuiViewSnapshot['displayState']['dispatchHold'];
   height?: number;
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
+  const dispatchHoldSuffix = dispatchHold?.hold
+    ? ` — conductor dispatch 保留中（${dispatchHold.heldEventCount} 件）`
+    : undefined;
   return (
     <TitledBorderPane
       title={WORKER_PANE_TITLE}
+      titleSuffix={dispatchHoldSuffix}
       borderStyle="round"
       borderColor="cyan"
       paddingX={PANE_PADDING_X}
@@ -453,7 +459,10 @@ export function IssueSessionTui({
 
   return (
     <Box flexDirection="column" height={terminalRows}>
-      <WorkerStatusPane workers={snapshot.displayState.workers} />
+      <WorkerStatusPane
+        workers={snapshot.displayState.workers}
+        dispatchHold={snapshot.displayState.dispatchHold}
+      />
       <OrchestrationPane
         activityLog={snapshot.activityLog}
         contentWidth={contentWidth}

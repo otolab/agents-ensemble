@@ -18,6 +18,12 @@ import { formatSessionEventsForConductor } from './session/format-session-event.
 import { SessionEventQueue } from './session/session-event-queue.js';
 import type { SessionEvent } from './session/session-event.js';
 import {
+  bufferDispatchHoldEvents,
+  createDispatchHoldState,
+  type DispatchHoldChange,
+  type DispatchHoldState,
+} from './session/dispatch-hold.js';
+import {
   countWorkerOutcomesInBatch,
   dispatchBatchStateAfterSend,
   markContinuationConsumed,
@@ -27,6 +33,7 @@ import {
 import {
   autonomousTurnsAfterConductorBatch,
   buildIssueLoopStopInput,
+  canDispatchConductorSend,
   isMaxTurnsLimited,
   resolveIssueLoopStopReason,
   shouldStopIssueLoop,
@@ -92,6 +99,10 @@ export interface ConductorSessionDriverOptions {
     ConductorSessionDriverResult,
     'sendCount' | 'autonomousTurns' | 'lastSendResult'
   > & { lastDispatchesThisTurn: number };
+  /** conductor send 中だけ有効な dispatch 保留状態。sidecar には保存しない。 */
+  dispatchHoldState?: DispatchHoldState;
+  /** dispatch 保留の切替・件数変化を TUI/観測へ通知する。 */
+  onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
 }
 
 export interface ConductorSessionDriverResult {
@@ -120,11 +131,17 @@ export async function runConductorSessionDriver(
   };
   let inFlightSend: Promise<ConductorSendResult> | undefined;
   let postLoopWaiting = false;
+  const dispatchHoldState =
+    options.dispatchHoldState ?? createDispatchHoldState();
 
   const shouldBreakAfterLoopState = (
     loopState: Parameters<typeof shouldStopIssueLoop>[0],
   ): boolean => {
     stopReason = resolveIssueLoopStopReason(loopState);
+    if (loopState.lastStatus !== 'error' && dispatchHoldState.heldEvents.length > 0) {
+      postLoopWaiting = false;
+      return false;
+    }
     if (!shouldStopIssueLoop(loopState)) {
       postLoopWaiting = false;
       return false;
@@ -208,7 +225,8 @@ export async function runConductorSessionDriver(
 
     if (
       options.eventQueue.isEmpty() &&
-      options.workerSession.runtime.runningCount === 0
+      options.workerSession.runtime.runningCount === 0 &&
+      dispatchHoldState.heldEvents.length === 0
     ) {
       const loopState = buildIssueLoopStopInput({
         autonomousTurns,
@@ -233,6 +251,8 @@ export async function runConductorSessionDriver(
         autonomousTurns,
         maxTurns: options.maxTurns,
         signal: options.shutdownSignal,
+        dispatchHoldState,
+        onDispatchHoldChanged: options.onDispatchHoldChanged,
       });
     } catch (error) {
       if (isAbortError(error)) {
@@ -248,7 +268,9 @@ export async function runConductorSessionDriver(
 
     const { events: batch, selected } = dispatchResult;
     postLoopWaiting = false;
-    dispatchBatchState = markContinuationConsumed(dispatchBatchState, selected);
+    if (selected) {
+      dispatchBatchState = markContinuationConsumed(dispatchBatchState, selected);
+    }
 
     const autonomousTurnsAfter = autonomousTurnsAfterConductorBatch(
       batch,
@@ -263,7 +285,7 @@ export async function runConductorSessionDriver(
       workerFailures: options.workerFailures,
       sendCount,
       autonomousTurns: autonomousTurnsAfter,
-      dispatchSource: selected.batch.sourceKey,
+      dispatchSource: dispatchResult.sourceKey,
       workerOutcomeDispatches: workerDispatches,
       workerOutcomeFailures: workerFailures,
       onSendStarted: options.onSendStarted,
@@ -275,7 +297,7 @@ export async function runConductorSessionDriver(
         options.onSendComplete(info);
       },
     });
-    dispatchBatchState = dispatchBatchStateAfterSend(selected.batch.sourceKey);
+    dispatchBatchState = dispatchBatchStateAfterSend(dispatchResult.sourceKey);
   }
 
   if (inFlightSend && stopReason !== 'interrupted') {
@@ -373,7 +395,7 @@ function runEventConductorSend(input: {
 interface DispatchBatchResult {
   events: SessionEvent[];
   sourceKey: string;
-  selected: NonNullable<ReturnType<typeof selectDispatchBatch>>;
+  selected?: NonNullable<ReturnType<typeof selectDispatchBatch>>;
 }
 
 async function waitForDispatchBatch(input: {
@@ -382,14 +404,49 @@ async function waitForDispatchBatch(input: {
   autonomousTurns: number;
   maxTurns: number;
   signal?: AbortSignal;
+  dispatchHoldState: DispatchHoldState;
+  onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
 }): Promise<DispatchBatchResult | undefined> {
   for (;;) {
+    if (input.dispatchHoldState.dispatchHold) {
+      bufferDispatchHoldEvents({
+        state: input.dispatchHoldState,
+        eventQueue: input.eventQueue,
+        onChanged: input.onDispatchHoldChanged,
+      });
+    }
+
     const selected = selectDispatchBatch({
       queue: input.eventQueue.snapshot(),
       state: input.dispatchBatchState,
       autonomousTurns: input.autonomousTurns,
       maxTurns: input.maxTurns,
     });
+
+    // operator / permission は hold 中も、また release 後の flush よりも先に通す。
+    if (selected && isImmediateDispatchSource(selected.batch.sourceKey)) {
+      input.eventQueue.replaceQueue(selected.remainingQueue);
+      return {
+        events: selected.batch.events,
+        sourceKey: selected.batch.sourceKey,
+        selected,
+      };
+    }
+
+    if (
+      !input.dispatchHoldState.dispatchHold &&
+      input.dispatchHoldState.heldEvents.length > 0 &&
+      input.dispatchHoldState.heldEvents.every((event) =>
+        canDispatchConductorSend(event, input.autonomousTurns, input.maxTurns),
+      )
+    ) {
+      const events = input.dispatchHoldState.heldEvents.splice(0);
+      return {
+        events,
+        sourceKey: 'dispatch-hold',
+      };
+    }
+
     if (selected) {
       input.eventQueue.replaceQueue(selected.remainingQueue);
       return {
@@ -406,6 +463,10 @@ async function waitForDispatchBatch(input: {
     // waiter 経由のイベントは queue に載らない。到着順を保つため先頭へ戻す。
     input.eventQueue.prependSilent(incoming);
   }
+}
+
+function isImmediateDispatchSource(sourceKey: string): boolean {
+  return sourceKey === 'operator' || sourceKey === 'permission';
 }
 
 function isAbortError(error: unknown): boolean {

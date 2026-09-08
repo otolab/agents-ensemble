@@ -122,6 +122,7 @@ describe('IssueSessionTui', () => {
           askedAt: 1,
         },
       ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
     viewModel.appendActivityLog('operator', 'operator ping');
     viewModel.appendActivityLog('conductor', 'conductor says hi');
@@ -142,6 +143,22 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('Shift+↑↓で選択');
     expect(frame).toContain('operator>');
     expect(frame).toContain(INPUT_PANE_TITLE);
+  });
+
+  it('shows dispatch hold count in the Workers pane title', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: true, heldEventCount: 3 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    expect(lastFrame() ?? '').toContain('conductor dispatch 保留中（3 件）');
   });
 
   it('shows post-loop hint in input area', () => {
@@ -182,6 +199,7 @@ describe('IssueSessionTui', () => {
       workers: {},
       conductorOutput: null,
       openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Continue?' })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
     viewModel.setOperatorContext({
       conductorTurn: 1,
@@ -363,6 +381,7 @@ describe('IssueSessionTui', () => {
       },
       conductorOutput: null,
       openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
 
     const { lastFrame: thinkingFrame, unmount: unmountThinking } = render(
@@ -378,6 +397,7 @@ describe('IssueSessionTui', () => {
       },
       conductorOutput: 'done',
       openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
 
     const { lastFrame: idleFrame } = render(
@@ -417,6 +437,7 @@ describe('IssueSessionTui', () => {
           askedAt: 1,
         },
       ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
     viewModel.setOperatorContext({
       conductorTurn: 1,
@@ -662,6 +683,7 @@ describe('IssueSessionTui', () => {
           createOpenQuestion({ id: 'inq-1', question: 'First question' }),
           createOpenQuestion({ id: 'inq-2', question: 'Second question' }),
         ],
+        dispatchHold: { hold: false, heldEventCount: 0 },
       });
 
       const { stdin, lastFrame } = render(
@@ -687,6 +709,7 @@ describe('IssueSessionTui', () => {
           createOpenQuestion({ id: 'inq-1', question: 'First question' }),
           createOpenQuestion({ id: 'inq-2', question: 'Second question' }),
         ],
+        dispatchHold: { hold: false, heldEventCount: 0 },
       });
 
       const { stdin, lastFrame } = render(
@@ -709,6 +732,7 @@ describe('IssueSessionTui', () => {
           createOpenQuestion({ id: 'inq-1', question: 'First' }),
           createOpenQuestion({ id: 'inq-2', question: 'Second' }),
         ],
+        dispatchHold: { hold: false, heldEventCount: 0 },
       });
       let submitted = '';
       let submitOptions: { targetOpenQuestionId?: string } | undefined;
@@ -747,6 +771,7 @@ describe('IssueSessionTui', () => {
             context: 'context '.repeat(10),
           }),
         ],
+        dispatchHold: { hold: false, heldEventCount: 0 },
       });
 
       const { lastFrame } = render(

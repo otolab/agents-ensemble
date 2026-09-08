@@ -119,6 +119,14 @@ export interface ConductorSendEvent {
   workerFailures: number;
 }
 
+export interface ConductorDispatchHoldEvent {
+  type: 'conductor.dispatch_hold';
+  status: 'enabled' | 'updated' | 'released';
+  hold: boolean;
+  heldEventCount: number;
+  flushedEventCount?: number;
+}
+
 export interface PermissionPendingLogEvent extends PermissionPendingHarnessPayload {
   type: 'permission.pending';
 }
@@ -231,6 +239,7 @@ export type SessionLogEvent =
   | ConductorSendStartedEvent
   | ConductorSendProgressEvent
   | ConductorSendEvent
+  | ConductorDispatchHoldEvent
   | PermissionPendingLogEvent
   | WorkerRoundLogEvent
   | WorkerFailedLogEvent

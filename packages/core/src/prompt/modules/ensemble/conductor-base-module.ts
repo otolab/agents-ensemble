@@ -32,6 +32,16 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
     },
     {
       type: 'subsection',
+      title: 'dispatch 保留',
+      items: [
+        '- 複数 worker の完了をまとめて読みたいとき、Issue / PR を集中して読んでいるときは `set_dispatch_hold({ hold: true })` を使う',
+        '- 保留中も `operator.message` と `permission.pending` は即時に届く。permission の判断を保留モードで止めない',
+        '- 作業状況をまとめて判断できる状態になったら `set_dispatch_hold({ hold: false })` を使う。保留中の trigger イベントは到着順の 1 束として 1 回の通知に合成される',
+        '- 保留は一時的な Driver 状態で、セッション再開時には解除されている',
+      ],
+    },
+    {
+      type: 'subsection',
       title: 'メトリクス（オペレータへの状態説明用）',
       items: [
         '- `sendCount` — 完了した conductor ターン数（`agent.send` 回数）',

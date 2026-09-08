@@ -46,6 +46,7 @@ describe('IssueSessionTuiStream', () => {
       },
       conductorOutput: null,
       openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Approve?' })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
     viewModel.appendActivityLog('operator', 'operator ping');
     viewModel.appendActivityLog('conductor', 'conductor says hi');
@@ -64,6 +65,22 @@ describe('IssueSessionTuiStream', () => {
     expect(frame.indexOf('Open questions')).toBeLessThan(frame.indexOf('Operator input'));
     expect(frame.indexOf('Operator input')).toBeLessThan(frame.indexOf('Workers'));
     expect(frame).toContain('任意のタイミングで入力（/exit で');
+  });
+
+  it('shows dispatch hold count in the Workers pane title', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: true, heldEventCount: 4 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    expect(lastFrame() ?? '').toContain('conductor dispatch 保留中（4 件）');
   });
 
   it('shows the two-line post-loop hint without an empty open-question state', () => {
@@ -141,6 +158,7 @@ describe('IssueSessionTuiStream', () => {
       workers: {},
       conductorOutput: null,
       openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Need input' })],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
     const onSubmit = vi.fn();
 
@@ -167,6 +185,7 @@ describe('IssueSessionTuiStream', () => {
         createOpenQuestion({ id: 'inq-1', question: 'First' }),
         createOpenQuestion({ id: 'inq-2', question: 'Second' }),
       ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
     });
 
     const { stdin, lastFrame } = render(
