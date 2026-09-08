@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { Text } from 'ink';
 import { render } from 'ink-testing-library';
+import stringWidth from 'string-width';
 import { TitledBorderPane } from './titled-border-pane.js';
 
 describe('TitledBorderPane', () => {
@@ -25,5 +26,39 @@ describe('TitledBorderPane', () => {
     expect(frame).toContain('Workers');
     expect(frame).toContain('hello');
     expect(frame).not.toMatch(/^│ Workers/m);
+  });
+
+  it('keeps a truncated Issue titleRight and OSC 8 target within a narrow width', () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 24,
+    });
+    Object.defineProperty(process.stdout, 'rows', {
+      configurable: true,
+      value: 10,
+    });
+
+    const issueUrl = 'https://github.com/otolab/agents-ensemble/issues/249';
+    const fullIssueLabel = 'otolab/agents-ensemble#249';
+    const truncatedIssueLabel = 'otolab/a…';
+    const { lastFrame } = render(
+      <TitledBorderPane
+        title="Workers"
+        titleRight={fullIssueLabel}
+        titleRightIssueUrl={issueUrl}
+        titleRightLinkMode="osc8"
+        borderStyle="round"
+        height={5}
+      >
+        <Text>hello</Text>
+      </TitledBorderPane>,
+    );
+
+    const topBorderLine = (lastFrame() ?? '').split('\n')[0] ?? '';
+    expect(topBorderLine).toContain(
+      `\u001b]8;;${issueUrl}\u0007${truncatedIssueLabel}\u001b]8;;\u0007`,
+    );
+    expect(topBorderLine).not.toContain(fullIssueLabel);
+    expect(stringWidth(topBorderLine)).toBeLessThanOrEqual(24);
   });
 });
