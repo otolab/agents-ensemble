@@ -218,7 +218,8 @@ export function IssueSessionTuiStream({
         flexDirection="column"
         width={process.stdout.columns ?? 80}
         height={streamPaneHeights.dynamicFrameHeight}
-        overflow="hidden"
+        overflowX="visible"
+        overflowY="hidden"
       >
         {operatorInputDisplay.mode === 'withQuestions' ? (
           <OpenQuestionsPane layout={streamOpenQuestionsLayout} />

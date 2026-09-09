@@ -128,7 +128,8 @@ TTY の Ink TUI では、Workers ペイン上枠の右端に作業中 Issue の
 （または端末の同等操作）で canonical な `https://github.com/{owner}/{repo}/issues/{number}`
 をブラウザで開ける。Operator input の prompt には Issue 参照を載せない。OSC 8 が
 非対応・無効、または端末を判定できない場合は、`owner/repo#number` を端末の自動リンクに
-誤認識させないため canonical URL 全文を表示する（OSC 8 制御文字は出力しない）。
+誤認識させないため canonical URL 全文を省略せず表示する（OSC 8 制御文字は出力しない）。
+URL が端末幅を超える場合も URL は省略せず、上枠の title / suffix を先に省略する。
 `TERM_PROGRAM=vscode` は統合端末ごとの挙動差があるため自動的には OSC 8 対応とみなさず、
 必要な場合だけ `FORCE_HYPERLINK=1` で明示的に有効化できる。非 TTY では既存の
 フォールバック出力を維持する。

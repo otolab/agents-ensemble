@@ -149,6 +149,125 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('\u001b]8;;');
   });
 
+  it('keeps the canonical Issue URL in URL fallback at a narrow width', () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 24,
+    });
+
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueUrl={NON_CANONICAL_ISSUE_URL}
+        issueLinkMode="url"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const workersBorderLine =
+      (lastFrame() ?? '').split('\n').find((line) => line.includes('Workers')) ?? '';
+    expect(workersBorderLine).toContain(ISSUE_URL);
+    expect(workersBorderLine).toContain(`${ISSUE_URL} ─╮`);
+    expect(workersBorderLine).not.toContain('https:/…');
+    expect(workersBorderLine).not.toContain('\u001b]8;;');
+  });
+
+  it('keeps the canonical Issue URL in URL fallback across context lifecycle states', async () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 24,
+    });
+
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueUrl={NON_CANONICAL_ISSUE_URL}
+        issueLinkMode="url"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const expectCanonicalIssueUrl = () => {
+      const workersBorderLine =
+        (lastFrame() ?? '').split('\n').find((line) => line.includes('Workers')) ?? '';
+      expect(workersBorderLine).toContain(ISSUE_URL);
+      expect(workersBorderLine).toContain(`${ISSUE_URL} ─╮`);
+      expect(workersBorderLine).not.toContain('https:/…');
+      expect(workersBorderLine).not.toContain('\u001b]8;;');
+    };
+
+    expectCanonicalIssueUrl();
+
+    const question = createOpenQuestion({ id: 'inq-1', question: 'Continue?' });
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [question],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 0,
+      maxTurns: null,
+      openQuestions: [question],
+    });
+    await flushInkStdin();
+    expectCanonicalIssueUrl();
+    expect(lastFrame() ?? '').toContain('inq-1 (1/1)');
+    expect(lastFrame() ?? '').toContain('への回答');
+
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.setOperatorContext({
+      conductorTurn: 1,
+      autonomousTurns: 0,
+      maxTurns: null,
+      openQuestions: [],
+    });
+    viewModel.setPostLoopWaiting(true);
+    await flushInkStdin();
+    expectCanonicalIssueUrl();
+    expect(lastFrame() ?? '').toContain('追加指示を入力するか');
+    expect(lastFrame() ?? '').toContain('/exit で終了');
+
+    viewModel.setShuttingDown(true);
+    await flushInkStdin();
+    expectCanonicalIssueUrl();
+    expect(lastFrame() ?? '').toContain('終了しています…');
+  });
+
+  it('preserves the canonical Issue URL when dispatch hold adds a title suffix', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: true, heldEventCount: 4 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueUrl={NON_CANONICAL_ISSUE_URL}
+        issueLinkMode="url"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const workersBorderLine =
+      (lastFrame() ?? '').split('\n').find((line) => line.includes('Workers')) ?? '';
+    expect(workersBorderLine).toContain(ISSUE_URL);
+    expect(workersBorderLine).toContain(`${ISSUE_URL} ─╮`);
+    expect(workersBorderLine).not.toContain('https://github.com/otolab/a…');
+    expect(workersBorderLine).not.toContain('\u001b]8;;');
+  });
+
   it('closes the narrow Workers header Issue hyperlink before the border', () => {
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,

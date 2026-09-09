@@ -30,12 +30,14 @@ export interface TitledTopBorderParts {
  * suffix はタイトル直後に付与し、titleRight は右寄せで閉じ角直前に配置する。
  * titleRightGap は右側ラベルと閉じ枠の間に追加する表示上の区切りである。
  * 幅不足時は titleRight → suffix → title の順で省略する。
+ * preserveTitleRight が有効な場合は titleRight を省略せず、suffix と title を先に省略する。
  */
 export function buildTitledTopBorderParts(params: {
   title: string;
   suffix?: string;
   titleRight?: string;
   titleRightGap?: string;
+  preserveTitleRight?: boolean;
   totalWidth: number;
   borderStyle: TuiBorderStyle;
 }): TitledTopBorderParts {
@@ -43,10 +45,15 @@ export function buildTitledTopBorderParts(params: {
   const suffix = params.suffix ?? '';
   const titleRight = params.titleRight ?? '';
   const titleRightGap = params.titleRightGap ?? '';
+  const preserveTitleRight = params.preserveTitleRight ?? false;
   const chars = getTuiBorderChars(borderStyle);
   const totalWidth = Math.max(4, params.totalWidth);
 
-  const buildLine = (label: string, rightLabel: string): TitledTopBorderParts | null => {
+  const buildLine = (
+    label: string,
+    rightLabel: string,
+    allowRightOverflow = false,
+  ): TitledTopBorderParts | null => {
     const left = `${chars.tl}${chars.h} `;
     const titleSeparator = ` ${chars.h}`;
     const rightSegment = rightLabel.length > 0 ? ` ${rightLabel}${titleRightGap}` : '';
@@ -57,11 +64,11 @@ export function buildTitledTopBorderParts(params: {
       stringWidth(titleSeparator) +
       stringWidth(rightSegment) +
       stringWidth(closing);
-    if (fixedWidth > totalWidth) {
+    if (fixedWidth > totalWidth && !allowRightOverflow) {
       return null;
     }
 
-    const fillCount = totalWidth - fixedWidth;
+    const fillCount = Math.max(0, totalWidth - fixedWidth);
     const right = `${titleSeparator}${chars.h.repeat(Math.max(0, fillCount))}${rightSegment}${closing}`;
     return {
       left,
@@ -75,6 +82,35 @@ export function buildTitledTopBorderParts(params: {
   const full = buildLine(fullLabel, titleRight);
   if (full) {
     return full;
+  }
+
+  if (preserveTitleRight && titleRight.length > 0) {
+    if (suffix.length > 0) {
+      for (let length = suffix.length; length > 0; length--) {
+        const truncatedSuffix = `${suffix.slice(0, length - 1)}…`;
+        const partial = buildLine(`${title}${truncatedSuffix}`, titleRight);
+        if (partial) {
+          return partial;
+        }
+      }
+    }
+
+    const withoutSuffix = buildLine(title, titleRight);
+    if (withoutSuffix) {
+      return withoutSuffix;
+    }
+
+    for (let length = title.length; length > 0; length--) {
+      const truncatedTitle = length < title.length ? `${title.slice(0, length - 1)}…` : title;
+      const partial = buildLine(truncatedTitle, titleRight);
+      if (partial) {
+        return partial;
+      }
+    }
+
+    // Even the URL alone may be wider than the terminal. Keep it intact so a
+    // terminal's URL detector can still see the canonical target.
+    return buildLine(title, titleRight, true)!;
   }
 
   if (titleRight.length > 0) {
