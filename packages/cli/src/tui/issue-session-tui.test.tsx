@@ -302,6 +302,44 @@ describe('IssueSessionTui', () => {
     expect(frame).not.toContain('\u001b]8;;');
   });
 
+  it('closes the narrow Workers header Issue hyperlink before the border', () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 24,
+    });
+
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        issueUrl={NON_CANONICAL_ISSUE_URL}
+        onSubmit={() => {}}
+      />,
+    );
+
+    const workersBorderLine =
+      (lastFrame() ?? '').split('\n').find((line) => line.includes('Workers')) ?? '';
+    const canonicalOsc8Open = `\u001b]8;;${ISSUE_URL}\u0007`;
+    const osc8Close = '\u001b]8;;\u0007';
+    const linkOpenIndex = workersBorderLine.indexOf(canonicalOsc8Open);
+    const linkCloseIndex = workersBorderLine.indexOf(
+      osc8Close,
+      linkOpenIndex + canonicalOsc8Open.length,
+    );
+    const closingBorderIndex = workersBorderLine.lastIndexOf('─╮');
+
+    expect(workersBorderLine).toContain(
+      `${canonicalOsc8Open}otolab/a…${osc8Close}`,
+    );
+    expect(workersBorderLine).not.toContain(
+      `\u001b]8;;${NON_CANONICAL_ISSUE_URL}\u0007`,
+    );
+    expect(linkCloseIndex).toBeGreaterThan(linkOpenIndex);
+    expect(linkCloseIndex).toBeLessThan(closingBorderIndex);
+    expect(workersBorderLine.slice(closingBorderIndex)).not.toContain(osc8Close);
+    expect(workersBorderLine.match(/\u001b\]8;;/g)).toHaveLength(2);
+  });
+
   it('aligns IME cursor coordinates with the rendered operator input line', () => {
     const terminalRows = 24;
     const terminalColumns = 80;

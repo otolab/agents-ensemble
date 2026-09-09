@@ -67,13 +67,19 @@ export function TitledBorderPane({
   const titleRightPrefix = parts.titleRight ? ` ${parts.titleRight}` : '';
   const titleRightIndex = titleRightPrefix.length > 0 ? parts.right.lastIndexOf(titleRightPrefix) : -1;
   const rightBeforeTitleRight =
-    titleRightIndex >= 0 ? parts.right.slice(0, titleRightIndex) : parts.right;
+    titleRightIndex >= 0 ? parts.right.slice(0, titleRightIndex + 1) : parts.right;
   const rightAfterTitleRight =
     titleRightIndex >= 0 ? parts.right.slice(titleRightIndex + titleRightPrefix.length) : '';
 
   return (
     <Box flexDirection="column" height={height} overflow="hidden">
-      <Text>
+      {/*
+       * Keep the linked label and the surrounding border in sibling Text nodes.
+       * Ink re-serializes ANSI text per cell; when the OSC 8 close sequence and
+       * the following border share one Text node, the close can be carried to
+       * the border cells and emitted again at the end of the line.
+       */}
+      <Box flexDirection="row">
         <Text color={borderColor}>{parts.left}</Text>
         {titleBold ? (
           <Text bold color={borderColor}>
@@ -90,7 +96,7 @@ export function TitledBorderPane({
           borderColor,
         })}
         <Text color={borderColor}>{rightAfterTitleRight}</Text>
-      </Text>
+      </Box>
       <Box
         flexGrow={1}
         flexDirection="column"
