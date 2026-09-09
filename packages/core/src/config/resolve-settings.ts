@@ -1,13 +1,19 @@
 import { ENSEMBLE_DEFAULT_ACP_CLI_ENV } from '../acp/resolve-acp-spawn.js';
 import type { WorkerWorktreeMode } from '../worktree/worktree.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
-import type { EnsembleConfig } from './types.js';
+import type { EnsembleConfig, TuiForceHyperlinkMode, TuiLayoutMode } from './types.js';
 
 /** `--profile` 未指定時の team profile（`load-profile` と共有）。 */
 export const ENSEMBLE_DEFAULT_PROFILE_ENV = 'ENSEMBLE_DEFAULT_PROFILE';
 
 /** conductor モデル id（`resolve-conductor-model-id` と共有）。 */
 export const CONDUCTOR_MODEL_ID_ENV = 'CONDUCTOR_MODEL_ID';
+
+/** TTY レイアウト（`resolveTuiLayoutSetting` と共有）。 */
+export const TUI_LAYOUT_ENV = 'ENSEMBLE_TUI_LAYOUT';
+
+/** OSC 8 ハイパーリンク強制 on/off（`resolveForceHyperlinkSetting` と共有）。 */
+export const FORCE_HYPERLINK_ENV = 'FORCE_HYPERLINK';
 
 function normalizeConductorModelId(modelId: string): string {
   return modelId === 'auto' ? 'default' : modelId;
@@ -217,4 +223,54 @@ export function resolveGitHubMonitorStopPollWaitMs(options: {
     config: options.config?.github.monitor.stopPollWaitMs,
     defaultValue: DEFAULT_ENSEMBLE_CONFIG.github.monitor.stopPollWaitMs,
   });
+}
+
+function parseTuiLayoutEnv(value: string | undefined): TuiLayoutMode | undefined {
+  if (value === 'stream') {
+    return 'stream';
+  }
+  if (value !== undefined) {
+    return 'pane';
+  }
+  return undefined;
+}
+
+function parseForceHyperlinkEnv(value: string | undefined): TuiForceHyperlinkMode | undefined {
+  if (value === '1') {
+    return 'on';
+  }
+  if (value === '0') {
+    return 'off';
+  }
+  return undefined;
+}
+
+export function resolveTuiLayoutSetting(options: {
+  env?: NodeJS.ProcessEnv;
+  config?: EnsembleConfig;
+}): TuiLayoutMode {
+  const fromEnv = parseTuiLayoutEnv(trimString(options.env?.[TUI_LAYOUT_ENV]));
+  if (fromEnv !== undefined) {
+    return fromEnv;
+  }
+  const fromConfig = options.config?.tui.layout;
+  if (fromConfig !== undefined) {
+    return fromConfig;
+  }
+  return DEFAULT_ENSEMBLE_CONFIG.tui.layout;
+}
+
+export function resolveForceHyperlinkSetting(options: {
+  env?: NodeJS.ProcessEnv;
+  config?: EnsembleConfig;
+}): TuiForceHyperlinkMode {
+  const fromEnv = parseForceHyperlinkEnv(trimString(options.env?.[FORCE_HYPERLINK_ENV]));
+  if (fromEnv !== undefined) {
+    return fromEnv;
+  }
+  const fromConfig = options.config?.tui.forceHyperlink;
+  if (fromConfig !== undefined) {
+    return fromConfig;
+  }
+  return DEFAULT_ENSEMBLE_CONFIG.tui.forceHyperlink;
 }

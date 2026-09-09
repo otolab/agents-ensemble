@@ -96,6 +96,10 @@ describe('parseEnsembleConfig', () => {
             debounceMs: 10_000,
           },
         },
+        tui: {
+          layout: 'stream',
+          forceHyperlink: 'on',
+        },
       }),
     ).toEqual({
       profile: { default: 'my-team' },
@@ -112,7 +116,22 @@ describe('parseEnsembleConfig', () => {
           debounceMs: 10_000,
         },
       },
+      tui: {
+        layout: 'stream',
+        forceHyperlink: 'on',
+      },
     });
+  });
+
+  it('ignores invalid tui values', () => {
+    expect(
+      parseEnsembleConfig({
+        tui: {
+          layout: 'grid',
+          forceHyperlink: 'maybe',
+        },
+      }),
+    ).toEqual({});
   });
 });
 

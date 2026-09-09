@@ -11,7 +11,8 @@ agents-ensemble（`ensemble` コマンド）の設計・検討事項。
 | [cli-text-input-keybindings.md](cli-text-input-keybindings.md) | **CLI/TUI 標準ショートカット**（Emacs 風キーの階層と実装方針） |
 | [design.md](design.md) | 大原則・全体像 |
 | [elements.md](elements.md) | 構成要素（skill, worker, issue 等） |
-| [config.md](config.md) | **ensemble 共通設定**（`.ensemble/config.yaml`） |
+| [settings.md](settings.md) | **設定値リファレンス**（CLI / env / config / profile / 解決順の正本） |
+| [config.md](config.md) | **ensemble 共通設定**（`.ensemble/config.yaml` スキーマ詳細） |
 | [orchestrator.md](orchestrator.md) | オーケストレータの役割 |
 | [pipeline.md](pipeline.md) | 作業フロー（参考） |
 | [prompts.md](prompts.md) | 起動プロンプトのパターン |

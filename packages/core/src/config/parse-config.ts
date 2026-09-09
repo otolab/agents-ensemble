@@ -14,6 +14,9 @@ import type {
   EnsembleSessionConfig,
   EnsembleSessionMaxTurnsConfig,
   EnsembleSessionPostLoopConfig,
+  EnsembleTuiConfig,
+  TuiForceHyperlinkMode,
+  TuiLayoutMode,
 } from './types.js';
 
 function readBoolean(value: unknown): boolean | undefined {
@@ -177,6 +180,41 @@ function parseGitHubConfig(raw: unknown): EnsembleGitHubConfig | undefined {
   } as EnsembleGitHubConfig;
 }
 
+function parseTuiLayoutMode(value: unknown): TuiLayoutMode | undefined {
+  const raw = readString(value);
+  if (raw === 'stream') {
+    return 'stream';
+  }
+  if (raw === 'pane') {
+    return 'pane';
+  }
+  return undefined;
+}
+
+function parseTuiForceHyperlinkMode(value: unknown): TuiForceHyperlinkMode | undefined {
+  const raw = readString(value);
+  if (raw === 'auto' || raw === 'on' || raw === 'off') {
+    return raw;
+  }
+  return undefined;
+}
+
+function parseTuiConfig(raw: unknown): EnsembleTuiConfig | undefined {
+  const obj = readObject(raw);
+  if (!obj) {
+    return undefined;
+  }
+  const layout = parseTuiLayoutMode(obj.layout);
+  const forceHyperlink = parseTuiForceHyperlinkMode(obj.forceHyperlink);
+  if (layout === undefined && forceHyperlink === undefined) {
+    return undefined;
+  }
+  return {
+    ...(layout !== undefined ? { layout } : {}),
+    ...(forceHyperlink !== undefined ? { forceHyperlink } : {}),
+  } as EnsembleTuiConfig;
+}
+
 /**
  * YAML から既知スキーマのみ抽出する。未知キーは無視（将来拡張用）。
  * 無効な型の既知キーは無視し、下位層 / デフォルトにフォールバックする。
@@ -212,6 +250,11 @@ export function parseEnsembleConfig(raw: unknown): Partial<EnsembleConfig> {
   const github = parseGitHubConfig(root.github);
   if (github !== undefined) {
     result.github = github;
+  }
+
+  const tui = parseTuiConfig(root.tui);
+  if (tui !== undefined) {
+    result.tui = tui;
   }
 
   return result;
