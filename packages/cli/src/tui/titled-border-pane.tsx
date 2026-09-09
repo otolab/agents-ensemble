@@ -1,6 +1,8 @@
 import { Box, Text, type BoxProps } from 'ink';
 import type { ReactNode } from 'react';
+import stringWidth from 'string-width';
 import {
+  formatIssueReference,
   formatOsc8Link,
   type IssueLinkMode,
 } from './format-operator-context.js';
@@ -56,10 +58,17 @@ export function TitledBorderPane({
   children,
 }: TitledBorderPaneProps) {
   const totalWidth = process.stdout.columns ?? 80;
+  const titleRightText =
+    titleRightIssueUrl && titleRightLinkMode === 'url'
+      ? formatIssueReference(titleRightIssueUrl, 'url')
+      : titleRight;
   const parts = buildTitledTopBorderParts({
     title,
     suffix: titleSuffix,
-    titleRight,
+    titleRight: titleRightText,
+    titleRightGap:
+      titleRightIssueUrl && titleRightLinkMode === 'url' ? ' ' : undefined,
+    preserveTitleRight: Boolean(titleRightIssueUrl && titleRightLinkMode === 'url'),
     totalWidth,
     borderStyle,
   });
@@ -70,32 +79,42 @@ export function TitledBorderPane({
     titleRightIndex >= 0 ? parts.right.slice(0, titleRightIndex + 1) : parts.right;
   const rightAfterTitleRight =
     titleRightIndex >= 0 ? parts.right.slice(titleRightIndex + titleRightPrefix.length) : '';
+  const topBorderLine = `${parts.left}${parts.title}${parts.right}`;
+  const preserveUrlFallback = Boolean(titleRightIssueUrl && titleRightLinkMode === 'url');
 
   return (
-    <Box flexDirection="column" height={height} overflow="hidden">
+    <Box flexDirection="column" height={height} overflowX="visible" overflowY="hidden">
       {/*
        * Keep the linked label and the surrounding border in sibling Text nodes.
        * Ink re-serializes ANSI text per cell; when the OSC 8 close sequence and
        * the following border share one Text node, the close can be carried to
        * the border cells and emitted again at the end of the line.
-       */}
-      <Box flexDirection="row">
-        <Text color={borderColor}>{parts.left}</Text>
-        {titleBold ? (
-          <Text bold color={borderColor}>
-            {parts.title}
-          </Text>
+      */}
+      <Box flexDirection="row" overflow="visible">
+        {preserveUrlFallback ? (
+          <Box flexShrink={0} width={stringWidth(topBorderLine)} overflow="visible">
+            <Text color={borderColor}>{topBorderLine}</Text>
+          </Box>
         ) : (
-          <Text color={borderColor}>{parts.title}</Text>
+          <>
+            <Text color={borderColor}>{parts.left}</Text>
+            {titleBold ? (
+              <Text bold color={borderColor}>
+                {parts.title}
+              </Text>
+            ) : (
+              <Text color={borderColor}>{parts.title}</Text>
+            )}
+            <Text color={borderColor}>{rightBeforeTitleRight}</Text>
+            {renderTitleRight({
+              titleRight: parts.titleRight,
+              titleRightIssueUrl,
+              titleRightLinkMode,
+              borderColor,
+            })}
+            <Text color={borderColor}>{rightAfterTitleRight}</Text>
+          </>
         )}
-        <Text color={borderColor}>{rightBeforeTitleRight}</Text>
-        {renderTitleRight({
-          titleRight: parts.titleRight,
-          titleRightIssueUrl,
-          titleRightLinkMode,
-          borderColor,
-        })}
-        <Text color={borderColor}>{rightAfterTitleRight}</Text>
       </Box>
       <Box
         flexGrow={1}

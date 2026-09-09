@@ -77,4 +77,69 @@ describe('TitledBorderPane', () => {
     expect(topBorderLine.slice(closingBorderIndex)).not.toContain(osc8Close);
     expect(topBorderLine.match(/\u001b\]8;;/g)).toHaveLength(2);
   });
+
+  it('renders the canonical Issue URL with a plain separator in URL fallback mode', () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 80,
+    });
+    Object.defineProperty(process.stdout, 'rows', {
+      configurable: true,
+      value: 10,
+    });
+
+    const issueUrl = 'http://github.com/otolab/agents-ensemble/issues/249/';
+    const canonicalIssueUrl = 'https://github.com/otolab/agents-ensemble/issues/249';
+    const { lastFrame } = render(
+      <TitledBorderPane
+        title="Workers"
+        titleRight="otolab/agents-ensemble#249"
+        titleRightIssueUrl={issueUrl}
+        titleRightLinkMode="url"
+        borderStyle="round"
+        height={5}
+      >
+        <Text>hello</Text>
+      </TitledBorderPane>,
+    );
+
+    const topBorderLine = (lastFrame() ?? '').split('\n')[0] ?? '';
+    expect(topBorderLine).toContain(`${canonicalIssueUrl} ─╮`);
+    expect(topBorderLine).not.toContain('otolab/agents-ensemble#249');
+    expect(topBorderLine).not.toContain('\u001b]8;;');
+    expect(stringWidth(topBorderLine)).toBe(80);
+  });
+
+  it('preserves the canonical Issue URL in URL fallback mode at a narrow width', () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 24,
+    });
+    Object.defineProperty(process.stdout, 'rows', {
+      configurable: true,
+      value: 10,
+    });
+
+    const issueUrl = 'http://github.com/otolab/agents-ensemble/issues/249/';
+    const canonicalIssueUrl = 'https://github.com/otolab/agents-ensemble/issues/249';
+    const { lastFrame } = render(
+      <TitledBorderPane
+        title="Workers"
+        titleSuffix=" — conductor dispatch 保留中（3 件）"
+        titleRight="otolab/agents-ensemble#249"
+        titleRightIssueUrl={issueUrl}
+        titleRightLinkMode="url"
+        borderStyle="round"
+        height={5}
+      >
+        <Text>hello</Text>
+      </TitledBorderPane>,
+    );
+
+    const topBorderLine = (lastFrame() ?? '').split('\n')[0] ?? '';
+    expect(topBorderLine).toContain(canonicalIssueUrl);
+    expect(topBorderLine).toContain(`${canonicalIssueUrl} ─╮`);
+    expect(topBorderLine).not.toContain('https:/…');
+    expect(topBorderLine).not.toContain('\u001b]8;;');
+  });
 });

@@ -90,7 +90,7 @@ interface TerminalEnvironment {
   WT_SESSION?: string;
 }
 
-/** 既知の OSC 8 対応端末を判定する（未知の端末はラベルのみ）。 */
+/** 既知の OSC 8 対応端末を判定する（未知の端末は URL 表示へフォールバックする）。 */
 export function supportsOsc8Hyperlinks(
   environment: TerminalEnvironment = process.env,
 ): boolean {
@@ -117,8 +117,7 @@ export function supportsOsc8Hyperlinks(
     environment.TERM_PROGRAM === 'Apple_Terminal' ||
     environment.TERM_PROGRAM === 'Hyper' ||
     environment.TERM_PROGRAM === 'WezTerm' ||
-    environment.TERM_PROGRAM === 'iTerm.app' ||
-    environment.TERM_PROGRAM === 'vscode'
+    environment.TERM_PROGRAM === 'iTerm.app'
   ) {
     return true;
   }

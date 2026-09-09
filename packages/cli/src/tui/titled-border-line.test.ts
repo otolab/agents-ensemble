@@ -58,6 +58,23 @@ describe('buildTitledTopBorderLine', () => {
     expect(stringWidth(`${parts.left}${parts.title}${parts.right}`)).toBe(24);
   });
 
+  it('preserves a URL titleRight when truncation would change the target', () => {
+    const canonicalIssueUrl = 'https://github.com/otolab/agents-ensemble/issues/249';
+    const parts = buildTitledTopBorderParts({
+      title: 'Workers',
+      suffix: ' — conductor dispatch 保留中（3 件）',
+      titleRight: canonicalIssueUrl,
+      titleRightGap: ' ',
+      preserveTitleRight: true,
+      totalWidth: 24,
+      borderStyle: 'round',
+    });
+
+    expect(parts.titleRight).toBe(canonicalIssueUrl);
+    expect(`${parts.left}${parts.title}${parts.right}`).toContain(canonicalIssueUrl);
+    expect(`${parts.left}${parts.title}${parts.right}`).not.toContain('https:/…');
+  });
+
   it('uses single border characters when requested', () => {
     const line = buildTitledTopBorderLine({
       title: 'Operator input',
