@@ -56,6 +56,41 @@ describe('createIssueSessionTuiHost', () => {
     host.dispose();
   });
 
+  it('uses the URL fallback for vscode terminals unless hyperlinks are forced', () => {
+    const previousTermProgram = process.env.TERM_PROGRAM;
+    const previousForceHyperlink = process.env.FORCE_HYPERLINK;
+    const previousCi = process.env.CI;
+    process.env.TERM_PROGRAM = 'vscode';
+    delete process.env.FORCE_HYPERLINK;
+    delete process.env.CI;
+
+    try {
+      const host = createIssueSessionTuiHost('https://github.com/org/repo/issues/1');
+      const renderedElement = mockRender.mock.calls[0]?.[0] as {
+        props: { issueLinkMode?: string };
+      };
+
+      expect(renderedElement.props.issueLinkMode).toBe('url');
+      host.dispose();
+    } finally {
+      if (previousTermProgram === undefined) {
+        delete process.env.TERM_PROGRAM;
+      } else {
+        process.env.TERM_PROGRAM = previousTermProgram;
+      }
+      if (previousForceHyperlink === undefined) {
+        delete process.env.FORCE_HYPERLINK;
+      } else {
+        process.env.FORCE_HYPERLINK = previousForceHyperlink;
+      }
+      if (previousCi === undefined) {
+        delete process.env.CI;
+      } else {
+        process.env.CI = previousCi;
+      }
+    }
+  });
+
   it('starts Ink render and exposes display backend with activity log', () => {
     const host = createIssueSessionTuiHost();
 

@@ -1,6 +1,7 @@
 import { Box, Text, type BoxProps } from 'ink';
 import type { ReactNode } from 'react';
 import {
+  formatIssueReference,
   formatOsc8Link,
   type IssueLinkMode,
 } from './format-operator-context.js';
@@ -56,10 +57,16 @@ export function TitledBorderPane({
   children,
 }: TitledBorderPaneProps) {
   const totalWidth = process.stdout.columns ?? 80;
+  const titleRightText =
+    titleRightIssueUrl && titleRightLinkMode === 'url'
+      ? formatIssueReference(titleRightIssueUrl, 'url')
+      : titleRight;
   const parts = buildTitledTopBorderParts({
     title,
     suffix: titleSuffix,
-    titleRight,
+    titleRight: titleRightText,
+    titleRightGap:
+      titleRightIssueUrl && titleRightLinkMode === 'url' ? ' ' : undefined,
     totalWidth,
     borderStyle,
   });

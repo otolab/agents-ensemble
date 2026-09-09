@@ -181,6 +181,8 @@ describe('Issue reference formatting', () => {
   it('recognizes known OSC 8 terminals and rejects unsafe environments', () => {
     expect(supportsOsc8Hyperlinks({ TERM_PROGRAM: 'iTerm.app' })).toBe(true);
     expect(supportsOsc8Hyperlinks({ WT_SESSION: '1' })).toBe(true);
+    expect(supportsOsc8Hyperlinks({ TERM_PROGRAM: 'vscode' })).toBe(false);
+    expect(supportsOsc8Hyperlinks({ TERM_PROGRAM: 'vscode', FORCE_HYPERLINK: '1' })).toBe(true);
     expect(supportsOsc8Hyperlinks({ TERM: 'dumb' })).toBe(false);
     expect(supportsOsc8Hyperlinks({ TERM_PROGRAM: 'unknown' })).toBe(false);
   });

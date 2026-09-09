@@ -272,6 +272,23 @@ describe('IssueSessionTui', () => {
     expect(frame).not.toContain('\u001b]8;;');
   });
 
+  it('renders the canonical Issue URL in the workers header with URL fallback', () => {
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        issueUrl={NON_CANONICAL_ISSUE_URL}
+        issueLinkMode="url"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain(`${ISSUE_URL} ─╮`);
+    expect(frame).not.toContain('otolab/agents-ensemble#249');
+    expect(frame).not.toContain('\u001b]8;;');
+  });
+
   it('truncates the issue label in the workers header on a narrow terminal', () => {
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,

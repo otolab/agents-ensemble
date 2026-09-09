@@ -28,25 +28,28 @@ export interface TitledTopBorderParts {
  * 上枠線にタイトルを埋め込んだ行を組み立てる。
  * 形式: `╭─ Title ─────────────╮`（タイトル前後に隙間）。
  * suffix はタイトル直後に付与し、titleRight は右寄せで閉じ角直前に配置する。
+ * titleRightGap は右側ラベルと閉じ枠の間に追加する表示上の区切りである。
  * 幅不足時は titleRight → suffix → title の順で省略する。
  */
 export function buildTitledTopBorderParts(params: {
   title: string;
   suffix?: string;
   titleRight?: string;
+  titleRightGap?: string;
   totalWidth: number;
   borderStyle: TuiBorderStyle;
 }): TitledTopBorderParts {
   const { title, borderStyle } = params;
   const suffix = params.suffix ?? '';
   const titleRight = params.titleRight ?? '';
+  const titleRightGap = params.titleRightGap ?? '';
   const chars = getTuiBorderChars(borderStyle);
   const totalWidth = Math.max(4, params.totalWidth);
 
   const buildLine = (label: string, rightLabel: string): TitledTopBorderParts | null => {
     const left = `${chars.tl}${chars.h} `;
     const titleSeparator = ` ${chars.h}`;
-    const rightSegment = rightLabel.length > 0 ? ` ${rightLabel}` : '';
+    const rightSegment = rightLabel.length > 0 ? ` ${rightLabel}${titleRightGap}` : '';
     const closing = `${chars.h}${chars.tr}`;
     const fixedWidth =
       stringWidth(left) +
@@ -115,6 +118,7 @@ export function buildTitledTopBorderLine(params: {
   title: string;
   suffix?: string;
   titleRight?: string;
+  titleRightGap?: string;
   totalWidth: number;
   borderStyle: TuiBorderStyle;
 }): string {

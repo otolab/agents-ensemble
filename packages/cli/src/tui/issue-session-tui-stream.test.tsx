@@ -132,6 +132,23 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain(`\u001b]8;;${NON_CANONICAL_ISSUE_URL}\u0007`);
   });
 
+  it('renders the canonical Issue URL in the Workers header with URL fallback', () => {
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueUrl={NON_CANONICAL_ISSUE_URL}
+        issueLinkMode="url"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain(`${ISSUE_URL} ─╮`);
+    expect(frame).not.toContain('otolab/agents-ensemble#261');
+    expect(frame).not.toContain('\u001b]8;;');
+  });
+
   it('closes the narrow Workers header Issue hyperlink before the border', () => {
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,

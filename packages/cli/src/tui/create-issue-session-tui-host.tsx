@@ -105,7 +105,7 @@ export function createIssueSessionTuiHost(issueUrl?: string): IssueSessionTuiHos
   const commonProps = {
     viewModel,
     issueUrl,
-    issueLinkMode: supportsOsc8Hyperlinks() ? ('osc8' as const) : ('label' as const),
+    issueLinkMode: supportsOsc8Hyperlinks() ? ('osc8' as const) : ('url' as const),
     onSubmit: (text: string, options?: OperatorInputSubmitOptions) => {
       onSubmitRef.current?.(text, options);
     },
