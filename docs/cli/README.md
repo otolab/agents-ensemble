@@ -20,6 +20,8 @@ ensemble --help
 
 初回だけ、worker・conductor・GitHub API の認証を準備します。
 
+既定の `cursor` preset は、npm パッケージに含まれない Cursor Agent CLI の `agent` コマンドを使用します。先に [Cursor Agent CLI の公式インストール手順](https://cursor.com/docs/cli) に従ってインストールしてください。
+
 ```bash
 # worker（既定の Cursor ACP）
 agent login
