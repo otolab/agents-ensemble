@@ -17,45 +17,48 @@ const packageRoot = path.resolve(
   '../../node_modules/react-ink-textarea',
 );
 const keyboardInputPath = path.join(packageRoot, 'dist/hooks/useKeyboardInput.js');
+const constantsModulePath = path.join(packageRoot, 'dist/constants.js');
 const killRingModulePath = path.join(packageRoot, 'dist/hooks/useKillRing.js');
 
-describe('react-ink-textarea keymap audit (patched fork)', () => {
-  it('implements required Emacs chords in useKeyboardInput', () => {
+describe('react-ink-textarea keymap audit (published fork)', () => {
+  it('publishes required Emacs chord actions', async () => {
+    const { DEFAULT_KEY_ACTIONS } = await import(pathToFileURL(constantsModulePath).href);
+    expect(DEFAULT_KEY_ACTIONS).toMatchObject({
+      'Ctrl+A': 'lineStart',
+      'Ctrl+E': 'lineEnd',
+      'Ctrl+F': 'cursorForwardChar',
+      'Ctrl+B': 'cursorBackwardChar',
+      'Ctrl+D': 'deleteNextGrapheme',
+      'Ctrl+P': 'cursorUpVisualRow',
+      'Ctrl+N': 'cursorDownVisualRow',
+      'Ctrl+K': 'killToLineEnd',
+      'Ctrl+U': 'killToLineStart',
+      'Ctrl+W': 'deletePrevWord',
+      'Ctrl+Y': 'yank',
+      'Alt+Y': 'yankPop',
+      'Alt+B': 'prevWord',
+      'Alt+F': 'nextWord',
+    });
+    expect(DEFAULT_KEY_ACTIONS).not.toHaveProperty('Ctrl+R');
+  });
+
+  it('dispatches Emacs actions through the keyActions API', () => {
     const source = readFileSync(keyboardInputPath, 'utf8');
     for (const snippet of [
-      'input === "a"',
-      'input === "e"',
-      'input === "f"',
-      'input === "b"',
-      'input === "d"',
-      'input === "p"',
-      'input === "n"',
-      'input === "k"',
-      'input === "u"',
-      'input === "w"',
-      'input === "y"',
-      'meta && input === "b"',
-      'meta && input === "f"',
-      'meta && input === "y"',
+      'keyActions[chord]',
+      'deleteNextGrapheme',
+      'cursorUpVisualRow',
+      'cursorDownVisualRow',
       'pushKill',
       'yank()',
       'yankPop()',
     ]) {
       expect(source, `missing ${snippet}`).toContain(snippet);
     }
-    expect(source).not.toMatch(/const entry = redo\(/);
-  });
-
-  it('enables Ctrl+p/n visual row motion and leaves Ctrl+r history unsupported', () => {
-    const constantsPath = path.join(packageRoot, 'dist/constants.js');
-    const source = readFileSync(constantsPath, 'utf8');
-    expect(source).toContain('Ctrl+P');
-    expect(source).toContain('Ctrl+N');
-    expect(source).not.toContain('Ctrl+R');
   });
 });
 
-describe('useKillRing (patched fork)', () => {
+describe('useKillRing (published fork)', () => {
   afterEach(() => {
     cleanup();
   });
