@@ -162,7 +162,7 @@ conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.lo
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
 - **resume**: 別プロセスから `Agent.resume(conductorId)` で再開可能。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）に open question・profile・worker `acpSessionId` を保存（[ADR 0011](adr/0011-session-sidecar-resume.md)）
 - **ripgrep**: local agent の ignore scan 用。`ConductorAgent` 起動前に `ensureCursorSdkRipgrepPath()` が `@cursor/sdk-<platform>-<arch>/bin/rg` または PATH の `rg` を `CURSOR_RIPGREP_PATH` に設定する（[#43](https://github.com/otolab/agents-ensemble/issues/43)）。詳細は [README の ripgrep 節](../README.md#conductorsdk-の-ripgrep)
-- **proxy**: `ConductorAgent` 起動前に `ensureCursorSdkProxy()` が Cursor の `settings.json` を読み、`http.proxy` / `http.noProxy` を `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` へ不足分だけ反映する。解決順は既存の環境変数 → Cursor settings → 未設定で、標準パスは macOS / Linux / Windows ごとに異なる。`cursor.general.disableHttp2: true` は SDK の `local.useHttp1ForAgent: true` に変換する。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK に対応する公開設定がなく未対応。詳細は [README の proxy 節](../README.md#conductorsdk-の-proxy)
+- **proxy**: `ConductorAgent` 起動前に `ensureCursorSdkProxy()` が Cursor の `settings.json` を読み、フラット形式の `http.proxy` / `http.noProxy` を `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` へ不足分だけ反映する。ネスト形式も互換入力として扱うが、両方に同じ設定がある場合はフラット形式を優先する。解決順は既存の環境変数 → Cursor settings → 未設定で、標準パスは macOS / Linux / Windows ごとに異なる。`cursor.general.disableHttp2: true` は SDK の `local.useHttp1ForAgent: true` に変換する。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK に対応する公開設定がなく未対応。詳細は [README の proxy 節](../README.md#conductorsdk-の-proxy)
 
 ### conductor が読む入力
 

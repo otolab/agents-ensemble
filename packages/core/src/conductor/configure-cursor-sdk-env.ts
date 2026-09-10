@@ -11,6 +11,9 @@ const HTTPS_PROXY_ENV = 'HTTPS_PROXY';
 const NO_PROXY_ENV = 'NO_PROXY';
 
 export interface CursorSettings {
+  'cursor.general.disableHttp2'?: unknown;
+  'http.noProxy'?: unknown;
+  'http.proxy'?: unknown;
   http?: {
     noProxy?: unknown;
     proxy?: unknown;
@@ -264,6 +267,16 @@ function resolveSettingString(value: unknown): string | undefined {
   return undefined;
 }
 
+function resolveCursorSetting(
+  settings: CursorSettings,
+  flatKey: keyof CursorSettings,
+  nestedValue: unknown,
+): unknown {
+  return Object.prototype.hasOwnProperty.call(settings, flatKey)
+    ? settings[flatKey]
+    : nestedValue;
+}
+
 /** Cursor settings の proxy 関連設定を SDK の起動環境へ反映する。 */
 export function ensureCursorSdkProxy(
   options: CursorSdkEnvOptions = {},
@@ -279,16 +292,26 @@ export function ensureCursorSdkProxy(
     return;
   }
 
-  const proxy = resolveSettingString(settings.http?.proxy);
+  const proxy = resolveSettingString(
+    resolveCursorSetting(settings, 'http.proxy', settings.http?.proxy),
+  );
   setEnvironmentValueIfUnset(env, HTTP_PROXY_ENV, proxy);
   setEnvironmentValueIfUnset(env, HTTPS_PROXY_ENV, proxy);
   setEnvironmentValueIfUnset(
     env,
     NO_PROXY_ENV,
-    resolveSettingString(settings.http?.noProxy),
+    resolveSettingString(
+      resolveCursorSetting(settings, 'http.noProxy', settings.http?.noProxy),
+    ),
   );
 
-  if (settings.cursor?.general?.disableHttp2 === true) {
+  if (
+    resolveCursorSetting(
+      settings,
+      'cursor.general.disableHttp2',
+      settings.cursor?.general?.disableHttp2,
+    ) === true
+  ) {
     configureCursorSdk({ local: { useHttp1ForAgent: true } });
   }
 }

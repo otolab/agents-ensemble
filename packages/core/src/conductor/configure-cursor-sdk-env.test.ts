@@ -117,42 +117,29 @@ describe('configure-cursor-sdk-env', () => {
   it('reads JSONC Cursor settings', () => {
     const settingsPath = createSettingsFile(`
       {
-        // Cursor settings allow comments and trailing commas.
-        "http": {
-          "proxy": "http://proxy.example:8080",
-          "noProxy": ["localhost", "127.0.0.1"],
-        },
-        "cursor": {
-          "general": {
-            "disableHttp2": true,
-          },
-        },
+        // Cursor writes setting IDs as flat keys.
+        "http.proxy": "http://proxy.example:8080",
+        "http.noProxy": ["localhost", "127.0.0.1"],
+        "cursor.general.disableHttp2": true,
       }
     `);
 
     expect(readCursorSettings(settingsPath)).toEqual({
-      http: {
-        proxy: 'http://proxy.example:8080',
-        noProxy: ['localhost', '127.0.0.1'],
-      },
-      cursor: {
-        general: {
-          disableHttp2: true,
-        },
-      },
+      'http.proxy': 'http://proxy.example:8080',
+      'http.noProxy': ['localhost', '127.0.0.1'],
+      'cursor.general.disableHttp2': true,
     });
   });
 
   it('maps Cursor proxy settings and disables HTTP/2 when requested', () => {
-    const settingsPath = createSettingsFile(
-      JSON.stringify({
-        http: {
-          proxy: 'http://proxy.example:8080',
-          noProxy: 'localhost,127.0.0.1',
-        },
-        cursor: { general: { disableHttp2: true } },
-      }),
-    );
+    const settingsPath = createSettingsFile(`
+      {
+        // Keep this fixture in the format written by Cursor / VS Code.
+        "http.proxy": "http://proxy.example:8080",
+        "http.noProxy": "localhost,127.0.0.1",
+        "cursor.general.disableHttp2": true,
+      }
+    `);
     const env = {} as NodeJS.ProcessEnv;
 
     ensureCursorSdkProxy({ env, settingsPath });
@@ -187,6 +174,29 @@ describe('configure-cursor-sdk-env', () => {
     expect(env.HTTP_PROXY).toBe('http://shell-proxy.example:8080');
     expect(env.HTTPS_PROXY).toBe('http://shell-secure-proxy.example:8080');
     expect(env.NO_PROXY).toBe('shell.example');
+    expect(mockConfigureCursorSdk).not.toHaveBeenCalled();
+  });
+
+  it('prefers flat setting IDs over the nested compatibility shape', () => {
+    const settingsPath = createSettingsFile(
+      JSON.stringify({
+        'http.proxy': 'http://flat-proxy.example:8080',
+        'http.noProxy': 'flat.example',
+        'cursor.general.disableHttp2': false,
+        http: {
+          proxy: 'http://nested-proxy.example:8080',
+          noProxy: 'nested.example',
+        },
+        cursor: { general: { disableHttp2: true } },
+      }),
+    );
+    const env = {} as NodeJS.ProcessEnv;
+
+    ensureCursorSdkProxy({ env, settingsPath });
+
+    expect(env.HTTP_PROXY).toBe('http://flat-proxy.example:8080');
+    expect(env.HTTPS_PROXY).toBe('http://flat-proxy.example:8080');
+    expect(env.NO_PROXY).toBe('flat.example');
     expect(mockConfigureCursorSdk).not.toHaveBeenCalled();
   });
 
