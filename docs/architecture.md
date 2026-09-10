@@ -1,5 +1,7 @@
 # アーキテクチャ
 
+> **正本:** `ensemble` の現行技術構成（SDK conductor + ACP worker）。利用者向け CLI の入口は [cli/README.md](cli/README.md)、設定の正本は [settings.md](settings.md) と [config.md](config.md) です。
+
 `ensemble` の技術構成。前提は **SDK で conductor**、**ACP で worker**。複数 agent が **conductor を中心とするスター型**で接続する。
 
 設計の大原則（スター型・Issue 紐づけ・遷移の非機械化など）は [design.md](design.md) を正本とする。本文はプロセス分離と通信経路を記述する。
@@ -161,8 +163,8 @@ conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.lo
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
 - **resume**: 別プロセスから `Agent.resume(conductorId)` で再開可能。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）に open question・profile・worker `acpSessionId` を保存（[ADR 0011](adr/0011-session-sidecar-resume.md)）
-- **ripgrep**: local agent の ignore scan 用。`ConductorAgent` 起動前に `ensureCursorSdkRipgrepPath()` が `@cursor/sdk-<platform>-<arch>/bin/rg` または PATH の `rg` を `CURSOR_RIPGREP_PATH` に設定する（[#43](https://github.com/otolab/agents-ensemble/issues/43)）。詳細は [README の ripgrep 節](../README.md#conductorsdk-の-ripgrep)
-- **proxy**: `ConductorAgent` 起動前に `ensureCursorSdkProxy()` が Cursor の `settings.json` を読み、フラット形式の `http.proxy` / `http.noProxy` を `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` へ不足分だけ反映する。ネスト形式も互換入力として扱うが、両方に同じ設定がある場合はフラット形式を優先する。解決順は既存の環境変数 → Cursor settings → 未設定で、標準パスは macOS / Linux / Windows ごとに異なる。`cursor.general.disableHttp2: true` は SDK の `local.useHttp1ForAgent: true` に変換する。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK に対応する公開設定がなく未対応。詳細は [README の proxy 節](../README.md#conductorsdk-の-proxy)
+- **ripgrep**: local agent の ignore scan 用。`ConductorAgent` 起動前に `ensureCursorSdkRipgrepPath()` が `@cursor/sdk-<platform>-<arch>/bin/rg` または PATH の `rg` を `CURSOR_RIPGREP_PATH` に設定する（[#43](https://github.com/otolab/agents-ensemble/issues/43)）。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
+- **proxy**: `ConductorAgent` 起動前に `ensureCursorSdkProxy()` が Cursor の `settings.json` を読み、フラット形式の `http.proxy` / `http.noProxy` を `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` へ不足分だけ反映する。ネスト形式も互換入力として扱うが、両方に同じ設定がある場合はフラット形式を優先する。解決順は既存の環境変数 → Cursor settings → 未設定で、標準パスは macOS / Linux / Windows ごとに異なる。`cursor.general.disableHttp2: true` は SDK の `local.useHttp1ForAgent: true` に変換する。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK に対応する公開設定がなく未対応。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 
 ### conductor が読む入力
 
@@ -225,7 +227,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 - **Issue / PR に報告** — 作業報告・状態は Issue コメント / PR に書き、他 worker が読む
 - **Issue worktree に紐づく** — implementer は worktree を作成し、**未指定 worker** は同じ Issue worktree を ACP cwd として共有する（規約）
 - **per-worker ACP cwd** — profile の `workers[].workspace` で worker ごとに ACP の cwd を上書き可能（Issue worktree とは別。外部 repo では isolated worktree を自動作成しない）
-- **per-worker ACP CLI** — profile の `acp` / `workers[].acp` で preset（`cursor` | `claude` | `codex` | `pi` | `custom`）または `command` / `args` / `env` を指定。profile 未指定 worker のみ CLI `--default-acp-*` / `ENSEMBLE_DEFAULT_ACP_CLI` が効く（[ADR 0019](adr/0019-worker-acp-cli-presets.md)）
+- **per-worker ACP CLI** — profile の `acp` / `workers[].acp` で preset（`cursor` | `claude` | `codex` | `pi` | `custom`）または `command` / `args` / `env` を指定。profile 未指定 worker のみ CLI `--default-acp-*` / `ENSEMBLE_DEFAULT_ACP_CLI` / config `acp.defaultPreset` が効く（[settings.md](settings.md)、[ADR 0019](adr/0019-worker-acp-cli-presets.md)）
 - **worktree のライフサイクル** — isolated モードではセッション開始時に `.ensemble/worktrees/issue-N` を作成（既存なら再利用）。TTY + post-loop で `/exit` 正常終了時に削除（未コミット変更がある場合は削除拒否）。`in-repo` では削除しない。ローカルブランチ `ensemble/issue-N` は残す
 - **新規 worktree のベース** — 可能なら `git fetch` 後の `origin` デフォルトブランチ（`origin/HEAD` または `main`）から `ensemble/issue-N` を切る。remote なし・fetch 失敗時はローカル HEAD にフォールバック
 - 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— worktree の `cwd` から解決

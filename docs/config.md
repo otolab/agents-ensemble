@@ -1,6 +1,6 @@
 # ensemble 共通設定（config.yaml）
 
-**設定全体の一覧・解決パターン**: [settings.md](settings.md)（CLI / env / config / profile / TUI の正本）。
+> **正本:** `.ensemble/config.yaml` の配置・書き方・スキーマと conductor MCP 設定。本書以外の設定層の一覧・解決パターンは [settings.md](settings.md) を参照します。
 
 `.ensemble/config.yaml` は harness 横断の設定の正本。team-profile（`profile.yaml`）や conductor SDK 認証とは別系統。
 
@@ -164,7 +164,7 @@ YAML に未知のキーがあっても **無視する**（警告なし）。将�
 ## 関連
 
 - [settings.md](settings.md) — 全設定層の一覧・解決パターン（本書は config.yaml 詳細）
-- [ADR 0020](adr/0020-ensemble-config-setting-resolution.md) — 解決順の設計判断
-- [ADR 0018](adr/0018-team-profile-four-layer-resolution.md) — `.ensemble/` 配下の規約（team-profile）
+- [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) — 解決順の設計判断
+- [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) — `.ensemble/` 配下の規約（team-profile）
 - [#223](https://github.com/otolab/agents-ensemble/issues/223) — config 基盤
 - [#228](https://github.com/otolab/agents-ensemble/issues/228) — Phase 1 拡張

@@ -1,5 +1,7 @@
 # 設計の大原則
 
+> **参照:** Issue ベースのエージェントシステムに関する大原則と制約。現行の技術構成の正本は [architecture.md](architecture.md) です。
+
 ## 何を作るか
 
 - コマンド名: **`ensemble`**

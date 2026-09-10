@@ -1,5 +1,7 @@
 # harness イベント一覧
 
+> **正本:** harness の SessionLogEvent / SessionEvent の型・発火条件・読者別の意味。出力チャネルの説明は [session-logging.md](session-logging.md)、TUI の利用者向け挙動は [operator-input.md](operator-input.md) を参照します。
+
 `ensemble issue` セッション中に harness が発生させるイベントの整理。観測の役割分担の背景は [session-logging.md](session-logging.md) を参照。
 
 関連 Issue: [#74](https://github.com/otolab/agents-ensemble/issues/74)
@@ -389,7 +391,7 @@ TUI reducer はイベント駆動のため lifecycle を直接読まないが、
 
 ### 6.3 デッドロック検知とメトリクス
 
-`list_workers` が返す harness 状態の実装: [worker-status-tool.ts](../../packages/core/src/dispatch/worker-status-tool.ts)
+`list_workers` が返す harness 状態の実装: [worker-status-tool.ts](../packages/core/src/dispatch/worker-status-tool.ts)
 
 `attachInFlight` は attach フェーズのみのカウンタ。`runningCount` は `processing` ラウンド数 + `attachInFlight`。**いずれも「0 になるまで待て」というシグナルではない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）。
 

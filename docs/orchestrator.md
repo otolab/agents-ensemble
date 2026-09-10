@@ -1,5 +1,7 @@
 # オーケストレータ（ensemble）
 
+> **参照:** conductor / orchestrator の責務を運用寄りに整理した文書。現行の技術構成の正本は [architecture.md](architecture.md) です。
+
 ## 位置づけ
 
 - **スター型の中心** — 複数の worker agent を接続・制御する

@@ -1,6 +1,8 @@
 # conductor send 経路の in-process 再接続
 
-Issue #101 の設計メモ。利用者向け概要は [README.md](../README.md#conductor-send-の認証エラーと-in-process-再接続) を正本とする。
+> **正本:** conductor send の認証エラー時に行う in-process 再接続の設計。認証情報・トークンの解決は [settings.md](settings.md) と [config.md](config.md)、CLI の入口は [cli/README.md](cli/README.md) を参照します。
+
+Issue #101 の設計メモ。
 
 ## 背景
 

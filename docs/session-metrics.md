@@ -1,5 +1,7 @@
 # セッションメトリクス
 
+> **正本:** `ensemble issue` の終了サマリ、usage、worker 状態などのメトリクス項目。出力チャネルは [session-logging.md](session-logging.md)、イベント型は [harness-events.md](harness-events.md) を参照します。
+
 `ensemble issue` セッションで harness が収集・照会できる **統計・状態の正本一覧**。[#172](https://github.com/otolab/agents-ensemble/issues/172)（終了サマリ）・[#173](https://github.com/otolab/agents-ensemble/issues/173)（TUI テンプレート）・オペレータ向けツールが同じ語彙を参照する。
 
 **関連文書**

@@ -1,5 +1,7 @@
 # CLI / TUI における標準ショートカットキー（Emacs 風）の実装
 
+> **参照:** TUI 入力ショートカットの実装階層・対応状況。本書は実装者向けの参照であり、利用者向け TUI の挙動の正本は [operator-input.md](operator-input.md)、設定の正本は [settings.md](settings.md) です。
+
 オペレータ入力欄や AI CLI プロンプトで期待される **Emacs 風ショートカット**（`Ctrl+a` 行頭、`Ctrl+e` 行末、`Ctrl+k` キル、`Ctrl+y` ヤンク等）が、**どの層で誰が実装するか**、および **リッチ TUI でどう組み込むか** をまとめる。
 
 参考（外部調査メモ）:
@@ -180,7 +182,7 @@ Emacs 風を **自前実装** する場合の最小ループ:
 - `~/.inputrc` を TUI 入力欄に効かせようとすること（プロセスが Raw で Readline を使っていない）
 - Ink ペイン全体の `useInput` に行編集ショートカットを足すこと（TextArea と二重バインドになる）
 
-**IDE 内ターミナル（Cursor 等）**: macOS では **Option を Meta（+Esc）** に設定しないと `Alt+b` / `Alt+f` が効かない（特殊文字入力になる）。IDE が `Ctrl+k` 等を先取りする場合は、フォーカスがターミナルにあること・IDE キーバインド設定を確認する。詳細は [README.md](../README.md#tty-と-ide-内ターミナル) を参照。
+**IDE 内ターミナル（Cursor 等）**: macOS では **Option を Meta（+Esc）** に設定しないと `Alt+b` / `Alt+f` が効かない（特殊文字入力になる）。IDE が `Ctrl+k` 等を先取りする場合は、フォーカスがターミナルにあること・IDE キーバインド設定を確認する。TUI の利用者向け挙動は [operator-input.md](operator-input.md) を参照。
 
 **今後 Emacs 風を拡張する場合**
 

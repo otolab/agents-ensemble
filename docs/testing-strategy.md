@@ -1,5 +1,7 @@
 # テスト戦略
 
+> **正本:** agents-ensemble の unittest / integration / e2e の分類・配置・実行方針。実装ごとの受け入れ条件は対象 Issue / PR を参照します。
+
 [architecture.md](architecture.md) に基づく agents-ensemble のテスト分類・配置・実行方針。
 [modular-prompt の TESTING_STRATEGY.md](https://github.com/otolab/modular-prompt/blob/main/docs/TESTING_STRATEGY.md) を参考に、**unittest / integration test / e2e test を明示的に分離**する。
 

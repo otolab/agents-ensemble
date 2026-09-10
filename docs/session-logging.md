@@ -1,5 +1,7 @@
 # セッションロギング
 
+> **正本:** `ensemble issue` の出力チャネル、SessionLogger、終了 JSON の役割分担。イベント型・発火条件の正本は [harness-events.md](harness-events.md)、メトリクスの正本は [session-metrics.md](session-metrics.md) です。
+
 `ensemble issue` における **観測（ログ）** と **永続化**、**対話表示** の役割分担。実装の正本は `SessionLogger`（`packages/core/src/conductor/session/session-logger.ts`）。
 
 関連 Issue: [#44](https://github.com/otolab/agents-ensemble/issues/44)
@@ -162,7 +164,7 @@ CLI formatter で診断情報を保つ。permission の ACP variant と抽出優
 | **open question** | 終了時の一覧スナップショット | 正本（registry 全体） |
 | **worker session** | 載せない | `acpSessionId` を保持 |
 
-詳細は [ADR 0011](adr/0011-session-sidecar-resume.md) と [README のセッション再開](../README.md#セッションの停止と再開)。
+詳細は [ADR 0011](adr/0011-session-sidecar-resume.md) と [operator-input.md](operator-input.md) の post-loop / 終了動作を参照してください。
 
 ---
 
