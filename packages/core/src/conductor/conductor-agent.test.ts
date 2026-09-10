@@ -29,6 +29,7 @@ vi.mock('@cursor/sdk', () => ({
 }));
 
 vi.mock('./configure-cursor-sdk-env.js', () => ({
+  ensureCursorSdkProxy: vi.fn(),
   ensureCursorSdkRipgrepPath: vi.fn(),
 }));
 

@@ -110,6 +110,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 |------|------|
 | `TERM_PROGRAM` / `TERM` / `CI` / `WT_SESSION` 等 | OSC 8 対応端末判定（`supportsOsc8Hyperlinks`） |
 | `CURSOR_RIPGREP_PATH` | SDK 起動時に ripgrep パスを設定（内部） |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | conductor の proxy。既存値を優先し、未設定時は Cursor settings から補完 |
 
 ## どこに書くべきか
 

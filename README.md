@@ -53,6 +53,14 @@ local agent は workspace scan（`.gitignore` / `.cursorignore`）に **ripgrep*
 export CURSOR_RIPGREP_PATH="$(command -v rg)"
 ```
 
+### conductor（SDK）の proxy
+
+`ensemble issue` の conductor（`@cursor/sdk` local agent）は、Cursor IDE の `settings.json` にある `http.proxy` / `http.noProxy` を起動前に読み込みます。標準の読込先は macOS の `~/Library/Application Support/Cursor/User/settings.json`、Linux の `~/.config/Cursor/User/settings.json`、Windows の `%APPDATA%\Cursor\User\settings.json` です。JSONC（コメント・末尾カンマ）も読み込めます。
+
+解決順は環境変数（`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`。小文字の同名も既存値として扱います）→ Cursor settings → 未設定です。既存の環境変数は値を変えず、必要な場合だけ大文字名へ引き継ぎます。`http.proxy` は不足している `HTTP_PROXY` と `HTTPS_PROXY` に、`http.noProxy` は不足している `NO_PROXY` に設定します。proxy URL は認証情報を含めてそのまま下流へ渡しますが、ログには出しません。現在の SDK / CLI 経路が `ALL_PROXY` を参照しないため、`ALL_PROXY` は自動設定しません。
+
+`cursor.general.disableHttp2` が `true` の場合は、SDK の `local.useHttp1ForAgent` を有効にして HTTP/1.1（SSE）を使用します。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK の公開設定に対応する項目がないため反映されず、VS Code の proxy 解決・override 挙動も完全には再現しません。この設定は conductor のみが対象で、worker（ACP）には適用されません。
+
 ### conductor（SDK）の認証解決順
 
 `@cursor/sdk` は次の順で API key を探します（`ConductorAgent` も同じ）。
