@@ -1,5 +1,7 @@
 # ensemble 共通設定（config.yaml）
 
+**設定全体の一覧・解決パターン**: [settings.md](settings.md)（CLI / env / config / profile / TUI の正本）。
+
 `.ensemble/config.yaml` は harness 横断の設定の正本。team-profile（`profile.yaml`）や conductor SDK 認証とは別系統。
 
 conductor（Cursor SDK）に渡す MCP 設定もこの config.yaml とは別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定mcpjson) を参照）。
@@ -68,6 +70,10 @@ github:
     pollIntervalMs: 60000
     activePollIntervalMs: 15000
     stopPollWaitMs: 5000
+
+tui:
+  layout: pane                        # ENSEMBLE_TUI_LAYOUT 相当
+  forceHyperlink: auto                # FORCE_HYPERLINK 相当（auto | on | off）
 ```
 
 ### キー一覧
@@ -80,6 +86,8 @@ github:
 | `session.worktree` | worker workspace モード | `--worktree` | — |
 | `session.maxTurns.tty` / `nonTty` | 自律ターン上限 | `--max-turns` / `--no-max-turns` | — |
 | `session.postLoop.wait` | post-loop 待機（TTY） | `--no-wait` | — |
+| `tui.layout` | TTY レイアウト（`pane` / `stream`） | — | `ENSEMBLE_TUI_LAYOUT` |
+| `tui.forceHyperlink` | Issue リンク OSC 8（`auto` / `on` / `off`） | — | `FORCE_HYPERLINK`（`1`/`0`） |
 | `github.auth.allowGhAuthTokenFallback` | `gh auth token` フォールバック | — | — |
 | `github.monitor.enabled` | Issue / PR 監視 | `--no-github-monitor` | — |
 | `github.monitor.debounceMs` | 更新 debounce | `--github-monitor-debounce-ms` | — |
@@ -108,6 +116,8 @@ profile / worker に `acp` がある worker は `--default-acp-*` / config `acp.
 | TTY 無制限 / 非 TTY 5 | `session.maxTurns.tty` / `nonTty` | |
 | TTY post-loop 待機 ON | `session.postLoop.wait` | |
 | monitor 各種定数 | `github.monitor.*` | |
+| `ENSEMBLE_TUI_LAYOUT` | `tui.layout` | env は invocation 上書き用として維持 |
+| `FORCE_HYPERLINK` | `tui.forceHyperlink` | `1`/`0` ↔ `on`/`off`。未設定 ↔ `auto` |
 
 **config 未作成時**は従来どおり env とコード default のみが効く（後方互換）。
 
@@ -153,6 +163,7 @@ YAML に未知のキーがあっても **無視する**（警告なし）。将�
 
 ## 関連
 
+- [settings.md](settings.md) — 全設定層の一覧・解決パターン（本書は config.yaml 詳細）
 - [ADR 0020](adr/0020-ensemble-config-setting-resolution.md) — 解決順の設計判断
 - [ADR 0018](adr/0018-team-profile-four-layer-resolution.md) — `.ensemble/` 配下の規約（team-profile）
 - [#223](https://github.com/otolab/agents-ensemble/issues/223) — config 基盤

@@ -57,7 +57,7 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。
 
-`ENSEMBLE_TUI_LAYOUT=stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /exit で終了` の prompt のみを表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
+`ENSEMBLE_TUI_LAYOUT=stream` または `.ensemble/config.yaml` の `tui.layout: stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。環境変数は config より優先されます（[settings.md](settings.md)）。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /exit で終了` の prompt のみを表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
 
 ### Operator input の2モード
 
@@ -131,7 +131,7 @@ TTY の Ink TUI では、Workers ペイン上枠の右端に作業中 Issue の
 誤認識させないため canonical URL 全文を省略せず表示する（OSC 8 制御文字は出力しない）。
 URL が端末幅を超える場合も URL は省略せず、上枠の title / suffix を先に省略する。
 `TERM_PROGRAM=vscode` は統合端末ごとの挙動差があるため自動的には OSC 8 対応とみなさず、
-必要な場合だけ `FORCE_HYPERLINK=1` で明示的に有効化できる。非 TTY では既存の
+必要な場合は `FORCE_HYPERLINK=1` または config の `tui.forceHyperlink: on` で明示的に有効化できる（tmux 経由で `TERM_PROGRAM=tmux` になる場合も同様）。非 TTY では既存の
 フォールバック出力を維持する。
 
 ## post-loop 待機（プロセス維持）

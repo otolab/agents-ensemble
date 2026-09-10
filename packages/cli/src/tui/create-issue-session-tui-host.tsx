@@ -1,5 +1,6 @@
 import { render } from 'ink';
 import type {
+  EnsembleConfig,
   OperatorInputBinding,
   OperatorInputBindingApi,
   OperatorInputSubmitOptions,
@@ -13,10 +14,15 @@ import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { trimBlankLinesOnly } from './operator-input-layout.js';
-import { supportsOsc8Hyperlinks } from './format-operator-context.js';
+import { resolveTuiIssueLinkMode } from './format-operator-context.js';
 import { resolveTuiLayoutMode } from './tui-layout-mode.js';
 
 const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
+
+export interface CreateIssueSessionTuiHostOptions {
+  config?: EnsembleConfig;
+  env?: NodeJS.ProcessEnv;
+}
 
 export interface IssueSessionTuiHost {
   displayBackend: SessionDisplayBackend;
@@ -86,8 +92,16 @@ function createBindTuiOperatorInput(
 }
 
 /** TTY 向け Ink TUI を起動し、表示 backend とオペレータ入力 binding を返す。 */
-export function createIssueSessionTuiHost(issueUrl?: string): IssueSessionTuiHost {
-  const layoutMode = resolveTuiLayoutMode({ isTty: process.stdin.isTTY === true });
+export function createIssueSessionTuiHost(
+  issueUrl?: string,
+  options: CreateIssueSessionTuiHostOptions = {},
+): IssueSessionTuiHost {
+  const env = options.env ?? process.env;
+  const layoutMode = resolveTuiLayoutMode({
+    env,
+    config: options.config,
+    isTty: process.stdin.isTTY === true,
+  });
   const viewModel = createTuiViewModel({
     // Ink's Static requires an append-only item array. Pane mode keeps the
     // existing bounded in-memory window; stream mode retains the scrollback.
@@ -105,7 +119,7 @@ export function createIssueSessionTuiHost(issueUrl?: string): IssueSessionTuiHos
   const commonProps = {
     viewModel,
     issueUrl,
-    issueLinkMode: supportsOsc8Hyperlinks() ? ('osc8' as const) : ('url' as const),
+    issueLinkMode: resolveTuiIssueLinkMode({ env, config: options.config }),
     onSubmit: (text: string, options?: OperatorInputSubmitOptions) => {
       onSubmitRef.current?.(text, options);
     },

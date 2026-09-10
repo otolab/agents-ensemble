@@ -6,6 +6,7 @@ import {
   formatOperatorContextHint,
   formatOsc8Link,
   resolveOperatorInputDisplayMode,
+  resolveTuiIssueLinkMode,
   supportsOsc8Hyperlinks,
 } from './format-operator-context.js';
 import {
@@ -185,5 +186,65 @@ describe('Issue reference formatting', () => {
     expect(supportsOsc8Hyperlinks({ TERM_PROGRAM: 'vscode', FORCE_HYPERLINK: '1' })).toBe(true);
     expect(supportsOsc8Hyperlinks({ TERM: 'dumb' })).toBe(false);
     expect(supportsOsc8Hyperlinks({ TERM_PROGRAM: 'unknown' })).toBe(false);
+  });
+});
+
+describe('resolveTuiIssueLinkMode', () => {
+  it('forces osc8 from config when terminal detection would fail', () => {
+    expect(
+      resolveTuiIssueLinkMode({
+        env: { TERM_PROGRAM: 'tmux' } as NodeJS.ProcessEnv,
+        config: {
+          profile: {},
+          conductor: { model: 'default' },
+          acp: { defaultPreset: 'cursor' },
+          session: {
+            worktree: 'isolated',
+            maxTurns: { tty: 0, nonTty: 5 },
+            postLoop: { wait: true },
+          },
+          github: {
+            auth: { allowGhAuthTokenFallback: true },
+            monitor: {
+              enabled: true,
+              debounceMs: 30_000,
+              pollIntervalMs: 60_000,
+              activePollIntervalMs: 15_000,
+              stopPollWaitMs: 5_000,
+            },
+          },
+          tui: { layout: 'pane', forceHyperlink: 'on' },
+        },
+      }),
+    ).toBe('osc8');
+  });
+
+  it('prefers env FORCE_HYPERLINK over config', () => {
+    expect(
+      resolveTuiIssueLinkMode({
+        env: { FORCE_HYPERLINK: '0', TERM_PROGRAM: 'iTerm.app' } as NodeJS.ProcessEnv,
+        config: {
+          profile: {},
+          conductor: { model: 'default' },
+          acp: { defaultPreset: 'cursor' },
+          session: {
+            worktree: 'isolated',
+            maxTurns: { tty: 0, nonTty: 5 },
+            postLoop: { wait: true },
+          },
+          github: {
+            auth: { allowGhAuthTokenFallback: true },
+            monitor: {
+              enabled: true,
+              debounceMs: 30_000,
+              pollIntervalMs: 60_000,
+              activePollIntervalMs: 15_000,
+              stopPollWaitMs: 5_000,
+            },
+          },
+          tui: { layout: 'pane', forceHyperlink: 'on' },
+        },
+      }),
+    ).toBe('url');
   });
 });

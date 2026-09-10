@@ -137,7 +137,9 @@ export async function executeIssueCommand(
   );
   const interactive = isInteractive();
   const useTui = interactive && isTty();
-  const tuiHost = useTui ? createIssueSessionTuiHost(issueUrl) : undefined;
+  const tuiHost = useTui
+    ? createIssueSessionTuiHost(issueUrl, { config: ensembleConfig })
+    : undefined;
   const sessionLogger = new SessionLoggerCtor({ issueUrl, repoRoot });
   if (useTui) {
     sessionLogger.subscribe(tuiHost!.telemetrySink);

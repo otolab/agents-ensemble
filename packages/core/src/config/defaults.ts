@@ -39,4 +39,8 @@ export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = {
       stopPollWaitMs: DEFAULT_GITHUB_MONITOR_STOP_POLL_WAIT_MS,
     },
   },
+  tui: {
+    layout: 'pane',
+    forceHyperlink: 'auto',
+  },
 };

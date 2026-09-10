@@ -20,4 +20,33 @@ describe('resolveTuiLayoutMode', () => {
       resolveTuiLayoutMode({ env: { [TUI_LAYOUT_ENV]: 'stream' }, isTty: false }),
     ).toBe('pane');
   });
+
+  it('uses config layout when env is omitted', () => {
+    expect(
+      resolveTuiLayoutMode({
+        config: {
+          profile: {},
+          conductor: { model: 'default' },
+          acp: { defaultPreset: 'cursor' },
+          session: {
+            worktree: 'isolated',
+            maxTurns: { tty: 0, nonTty: 5 },
+            postLoop: { wait: true },
+          },
+          github: {
+            auth: { allowGhAuthTokenFallback: true },
+            monitor: {
+              enabled: true,
+              debounceMs: 30_000,
+              pollIntervalMs: 60_000,
+              activePollIntervalMs: 15_000,
+              stopPollWaitMs: 5_000,
+            },
+          },
+          tui: { layout: 'stream', forceHyperlink: 'auto' },
+        },
+        isTty: true,
+      }),
+    ).toBe('stream');
+  });
 });

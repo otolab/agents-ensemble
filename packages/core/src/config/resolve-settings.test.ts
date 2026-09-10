@@ -4,9 +4,11 @@ import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
 import {
   CONDUCTOR_MODEL_ID_ENV,
   ENSEMBLE_DEFAULT_PROFILE_ENV,
+  FORCE_HYPERLINK_ENV,
   resolveBooleanSetting,
   resolveConductorModelSetting,
   resolveDefaultAcpPresetSetting,
+  resolveForceHyperlinkSetting,
   resolveGitHubMonitorDebounceMs,
   resolveGitHubMonitorEnabled,
   resolveNumberSetting,
@@ -15,6 +17,8 @@ import {
   resolveSessionPostLoopWait,
   resolveSessionWorktreeMode,
   resolveStringSetting,
+  TUI_LAYOUT_ENV,
+  resolveTuiLayoutSetting,
 } from './resolve-settings.js';
 import type { EnsembleConfig } from './types.js';
 
@@ -307,5 +311,61 @@ describe('backward compatibility without config', () => {
     expect(resolveProfileDefaultRef({ env })).toBe('legacy-profile');
     expect(resolveConductorModelSetting({ env })).toBe('legacy-model');
     expect(resolveDefaultAcpPresetSetting({ env })).toBe('pi');
+  });
+});
+
+describe('resolveTuiLayoutSetting', () => {
+  it('prefers env over config', () => {
+    expect(
+      resolveTuiLayoutSetting({
+        env: { [TUI_LAYOUT_ENV]: 'pane' } as NodeJS.ProcessEnv,
+        config: { ...projectConfig, tui: { layout: 'stream', forceHyperlink: 'auto' } },
+      }),
+    ).toBe('pane');
+    expect(
+      resolveTuiLayoutSetting({
+        env: { [TUI_LAYOUT_ENV]: 'stream' } as NodeJS.ProcessEnv,
+        config: projectConfig,
+      }),
+    ).toBe('stream');
+  });
+
+  it('uses config when env is omitted and treats unknown env values as pane', () => {
+    expect(
+      resolveTuiLayoutSetting({
+        config: { ...projectConfig, tui: { layout: 'stream', forceHyperlink: 'auto' } },
+      }),
+    ).toBe('stream');
+    expect(
+      resolveTuiLayoutSetting({
+        env: { [TUI_LAYOUT_ENV]: 'unknown' } as NodeJS.ProcessEnv,
+      }),
+    ).toBe('pane');
+  });
+});
+
+describe('resolveForceHyperlinkSetting', () => {
+  it('prefers env over config', () => {
+    expect(
+      resolveForceHyperlinkSetting({
+        env: { [FORCE_HYPERLINK_ENV]: '0' } as NodeJS.ProcessEnv,
+        config: { ...projectConfig, tui: { layout: 'pane', forceHyperlink: 'on' } },
+      }),
+    ).toBe('off');
+    expect(
+      resolveForceHyperlinkSetting({
+        env: { [FORCE_HYPERLINK_ENV]: '1' } as NodeJS.ProcessEnv,
+        config: projectConfig,
+      }),
+    ).toBe('on');
+  });
+
+  it('uses config when env is omitted and defaults to auto', () => {
+    expect(
+      resolveForceHyperlinkSetting({
+        config: { ...projectConfig, tui: { layout: 'pane', forceHyperlink: 'on' } },
+      }),
+    ).toBe('on');
+    expect(resolveForceHyperlinkSetting({})).toBe('auto');
   });
 });

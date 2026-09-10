@@ -21,6 +21,7 @@ vi.mock('./operator-text-area.js', () => ({
 import { createIssueSessionTuiHost } from './create-issue-session-tui-host.js';
 import { INITIAL_SESSION_DISPLAY_STATE } from '../display/session-display-state.js';
 import type { OpenQuestion } from '@agents-ensemble/core';
+import { DEFAULT_ENSEMBLE_CONFIG } from '@agents-ensemble/core';
 
 describe('createIssueSessionTuiHost', () => {
   beforeEach(() => {
@@ -146,6 +147,63 @@ describe('createIssueSessionTuiHost', () => {
     expect(renderedElement.type.name).toBe('IssueSessionTuiStream');
     expect(mockRender.mock.calls[0]?.[1]).toEqual({ alternateScreen: false });
     host.dispose();
+  });
+
+  it('selects stream layout from config when env is omitted', () => {
+    const host = createIssueSessionTuiHost(undefined, {
+      config: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        tui: { layout: 'stream', forceHyperlink: 'auto' },
+      },
+    });
+    const renderedElement = mockRender.mock.calls[0]?.[0] as {
+      type: { name?: string };
+    };
+
+    expect(renderedElement.type.name).toBe('IssueSessionTuiStream');
+    host.dispose();
+  });
+
+  it('prefers env layout over config', () => {
+    const host = createIssueSessionTuiHost(undefined, {
+      env: { ENSEMBLE_TUI_LAYOUT: 'pane' } as NodeJS.ProcessEnv,
+      config: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        tui: { layout: 'stream', forceHyperlink: 'auto' },
+      },
+    });
+    const renderedElement = mockRender.mock.calls[0]?.[0] as {
+      type: { name?: string };
+    };
+
+    expect(renderedElement.type.name).toBe('IssueSessionTui');
+    host.dispose();
+  });
+
+  it('uses osc8 link mode from config forceHyperlink on tmux-like terminals', () => {
+    const previousTermProgram = process.env.TERM_PROGRAM;
+    process.env.TERM_PROGRAM = 'tmux';
+
+    try {
+      const host = createIssueSessionTuiHost('https://github.com/org/repo/issues/1', {
+        config: {
+          ...DEFAULT_ENSEMBLE_CONFIG,
+          tui: { layout: 'pane', forceHyperlink: 'on' },
+        },
+      });
+      const renderedElement = mockRender.mock.calls[0]?.[0] as {
+        props: { issueLinkMode?: string };
+      };
+
+      expect(renderedElement.props.issueLinkMode).toBe('osc8');
+      host.dispose();
+    } finally {
+      if (previousTermProgram === undefined) {
+        delete process.env.TERM_PROGRAM;
+      } else {
+        process.env.TERM_PROGRAM = previousTermProgram;
+      }
+    }
   });
 
   it('bindOperatorInput submits via Ink host without blocking', () => {

@@ -1,5 +1,5 @@
-import type { OpenQuestion, OperatorInputContext } from '@agents-ensemble/core';
-import { buildIssueUrl, parseIssueUrl } from '@agents-ensemble/core';
+import type { EnsembleConfig, OpenQuestion, OperatorInputContext } from '@agents-ensemble/core';
+import { buildIssueUrl, parseIssueUrl, resolveForceHyperlinkSetting } from '@agents-ensemble/core';
 import {
   OPERATOR_INPUT_DISCRETIONARY_HINT,
   OPERATOR_INPUT_POST_LOOP_HINT,
@@ -124,6 +124,25 @@ export function supportsOsc8Hyperlinks(
 
   const vteVersion = Number.parseInt(environment.VTE_VERSION ?? '', 10);
   return Number.isFinite(vteVersion) && vteVersion >= 5000;
+}
+
+/** config / env 解決結果から TUI Issue リンクの表示モードを決める。 */
+export function resolveTuiIssueLinkMode(options: {
+  env?: NodeJS.ProcessEnv;
+  config?: EnsembleConfig;
+} = {}): IssueLinkMode {
+  const environment = options.env ?? process.env;
+  const forceHyperlink = resolveForceHyperlinkSetting({
+    env: environment,
+    config: options.config,
+  });
+  if (forceHyperlink === 'on') {
+    return 'osc8';
+  }
+  if (forceHyperlink === 'off') {
+    return 'url';
+  }
+  return supportsOsc8Hyperlinks(environment) ? 'osc8' : 'url';
 }
 
 export interface OpenQuestionSelectionContext {

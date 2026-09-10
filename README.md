@@ -118,7 +118,7 @@ worker は preset ごとに別プロセスの ACP adapter を spawn する。**�
 
 conductor のデフォルトモデルは `default`（`ensemble models list` 上の Auto。`auto` エイリアスも同義）。`--model` で別 id を指定できます。利用可能な id は `ensemble models list` で確認できます（API カタログ。実行時の team ブロックとは一致しない場合あり）。
 
-既定値の解決順（Phase 1 共通）: **CLI `--model` > 環境変数 `CONDUCTOR_MODEL_ID` > `.ensemble/config.yaml` の `conductor.model` > コード内 `default`**。詳細は [docs/config.md](docs/config.md)。
+既定値の解決順（Phase 1 共通）: **CLI `--model` > 環境変数 `CONDUCTOR_MODEL_ID` > `.ensemble/config.yaml` の `conductor.model` > コード内 `default`**。全設定の一覧・解決順は [docs/settings.md](docs/settings.md)、config スキーマ詳細は [docs/config.md](docs/config.md)。
 
 ```bash
 ensemble models list
@@ -265,7 +265,7 @@ ENSEMBLE_TUI_LAYOUT=stream ensemble issue <url>
 
 `stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順で固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /exit で終了` の prompt のみを表示します。dispatch 保留中は pane / stream とも Workers 枠のタイトルに `conductor dispatch 保留中（N 件）` を表示し、保留解除時は observation に flush 件数を出します。`[harness]` 活動ログは保留中も抑制しません。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、下部 live frame を基準に変換窓の位置を計算します。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
 
-Operator input は open question の有無で2モードに分かれます。question がある場合は回答 prompt と `Shift+↑↓` / Enter を表示し、Issue 参照と自律ターン数は表示しません。question がない場合は Open questions ペインを省略し、`任意のタイミングで入力 · /exit で終了` の prompt のみを表示します。post-loop 待機中は `追加指示を入力するか /exit で終了` に上書きします。Issue リンクは Workers ペイン上枠の右端に表示します。OSC 8 対応端末では `owner/repo#number` の表示文字列から canonical な GitHub Issue URL へリンクし、非対応・未知の端末では自動リンクの誤検出を避けるため canonical URL 全文を省略せず表示します。URL が端末幅を超える場合も URL は省略せず、上枠の他のタイトル要素を先に省略します。対応判定を明示的に上書きする場合は `FORCE_HYPERLINK=1` を指定できます。詳細は [docs/operator-input.md](docs/operator-input.md) を参照してください。
+Operator input は open question の有無で2モードに分かれます。question がある場合は回答 prompt と `Shift+↑↓` / Enter を表示し、Issue 参照と自律ターン数は表示しません。question がない場合は Open questions ペインを省略し、`任意のタイミングで入力 · /exit で終了` の prompt のみを表示します。post-loop 待機中は `追加指示を入力するか /exit で終了` に上書きします。Issue リンクは Workers ペイン上枠の右端に表示します。OSC 8 対応端末では `owner/repo#number` の表示文字列から canonical な GitHub Issue URL へリンクし、非対応・未知の端末では自動リンクの誤検出を避けるため canonical URL 全文を省略せず表示します。URL が端末幅を超える場合も URL は省略せず、上枠の他のタイトル要素を先に省略します。対応判定を明示的に上書きする場合は `FORCE_HYPERLINK=1` を指定するか、`.ensemble/config.yaml` の `tui.forceHyperlink: on` を使えます。レイアウトは `ENSEMBLE_TUI_LAYOUT=stream` または `tui.layout: stream` です。詳細は [docs/operator-input.md](docs/operator-input.md) と [docs/settings.md](docs/settings.md) を参照してください。
 
 dispatch 保留は Driver メモリだけの一時状態です。`/exit`、Ctrl+C（SIGINT）、SIGTERM、send failure、
 プロセス crash の前に `set_dispatch_hold({ hold: false })` で解除しないと、未 flush events は保存・復元
@@ -380,7 +380,7 @@ ensemble issue <url> --repo-root . --profile ./my-profile.yaml
 | worker ACP preset（profile 未指定 worker） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | profile/worker `acp` > CLI `--default-acp-*` > env > config > `cursor` |
 | オペレータ 1 回注入 | — | `ENSEMBLE_OPERATOR_MESSAGE` | — |
 
-横断設定の正本・全キー一覧: [docs/config.md](docs/config.md)。**token 等の秘密情報は config に書かない。**
+横断設定の正本: [docs/settings.md](docs/settings.md)（全設定の解決順・一覧）。`config.yaml` スキーマ: [docs/config.md](docs/config.md)。**token 等の秘密情報は config に書かない。**
 
 同梱 `implementer-and-reviewer` の例 (`profiles/implementer-and-reviewer/profile.yaml`)。`--profile default` は同じプロファイルのエイリアス:
 

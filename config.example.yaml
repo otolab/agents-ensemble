@@ -38,3 +38,9 @@ github:
     pollIntervalMs: 60000
     activePollIntervalMs: 15000
     stopPollWaitMs: 5000
+
+tui:
+  # TTY レイアウト（非 TTY では pane）。env ENSEMBLE_TUI_LAYOUT より優先度低
+  layout: pane   # pane | stream
+  # Issue リンクの OSC 8 強制 on/off / 自動。env FORCE_HYPERLINK より優先度低
+  forceHyperlink: auto   # auto | on | off

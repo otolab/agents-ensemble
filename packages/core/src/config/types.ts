@@ -52,10 +52,24 @@ export interface EnsembleGitHubConfig {
   monitor: EnsembleGitHubMonitorConfig;
 }
 
+/** TTY レイアウト（`pane` = 4 ペイン windowing、`stream` = Static + scrollback）。 */
+export type TuiLayoutMode = 'pane' | 'stream';
+
+/** OSC 8 ハイパーリンク判定の上書き（`auto` = 端末自動判定）。 */
+export type TuiForceHyperlinkMode = 'auto' | 'on' | 'off';
+
+export interface EnsembleTuiConfig {
+  /** TTY レイアウト（非 TTY では `pane` にフォールバック）。 */
+  layout: TuiLayoutMode;
+  /** Issue リンクの OSC 8 強制 on/off / 自動。 */
+  forceHyperlink: TuiForceHyperlinkMode;
+}
+
 export interface EnsembleConfig {
   profile: EnsembleProfileConfig;
   conductor: EnsembleConductorConfig;
   acp: EnsembleAcpConfig;
   session: EnsembleSessionConfig;
   github: EnsembleGitHubConfig;
+  tui: EnsembleTuiConfig;
 }

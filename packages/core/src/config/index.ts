@@ -12,6 +12,8 @@ export {
   resolveDefaultAcpPresetSetting,
   CONDUCTOR_MODEL_ID_ENV,
   ENSEMBLE_DEFAULT_PROFILE_ENV,
+  FORCE_HYPERLINK_ENV,
+  resolveForceHyperlinkSetting,
   resolveGitHubMonitorActivePollIntervalMs,
   resolveGitHubMonitorDebounceMs,
   resolveGitHubMonitorEnabled,
@@ -23,6 +25,8 @@ export {
   resolveSessionPostLoopWait,
   resolveSessionWorktreeMode,
   resolveStringSetting,
+  TUI_LAYOUT_ENV,
+  resolveTuiLayoutSetting,
 } from './resolve-settings.js';
 export type {
   ResolveBooleanSettingOptions,
@@ -40,4 +44,7 @@ export type {
   EnsembleSessionConfig,
   EnsembleSessionMaxTurnsConfig,
   EnsembleSessionPostLoopConfig,
+  EnsembleTuiConfig,
+  TuiForceHyperlinkMode,
+  TuiLayoutMode,
 } from './types.js';
