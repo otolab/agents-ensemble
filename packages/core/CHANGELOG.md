@@ -1,5 +1,18 @@
 # @agents-ensemble/core
 
+## 0.6.0
+
+### Minor Changes
+
+- 966e3c6: Add the `register_github_watch` conductor tool for explicitly monitoring pull requests that GitHub Search has not indexed yet.
+- 9aef597: Add the conductor `set_dispatch_hold` tool to batch trigger events while keeping operator and permission dispatch immediate, with TUI visibility in both layouts.
+
+### Patch Changes
+
+- aac4ba4: Improve operator-facing `permission.pending` representations for ACP payload variants and share the renderer through core between CLI output paths.
+- 7f8aa67: Allow conductor sessions to receive MCP config options for test isolation.
+- 41ba1f2: Add `tui.layout` and `tui.forceHyperlink` to `.ensemble/config.yaml`, resolved with the same env-over-config precedence as other Phase 1 settings.
+
 ## 0.5.3
 
 ## 0.5.2

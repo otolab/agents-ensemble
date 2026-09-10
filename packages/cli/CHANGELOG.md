@@ -1,5 +1,24 @@
 # @agents-ensemble/cli
 
+## 0.6.0
+
+### Patch Changes
+
+- aac4ba4: Improve operator-facing `permission.pending` representations for ACP payload variants and share the renderer through core between CLI output paths.
+- 16c8871: Normalize TUI Issue hyperlinks to canonical GitHub Issue URLs in pane and stream layouts.
+- 9aef597: Add the conductor `set_dispatch_hold` tool to batch trigger events while keeping operator and permission dispatch immediate, with TUI visibility in both layouts.
+- 2c77f65: Use canonical Issue URLs when the terminal does not support OSC 8 hyperlinks.
+- 4162269: Keep truncated TUI Issue hyperlinks closed before the surrounding border is rendered.
+- b9a34dc: Add an opt-in `stream` TTY layout with scrollback activity logs via `ENSEMBLE_TUI_LAYOUT=stream` while keeping the existing `pane` layout as the default.
+- 400afca: Separate operator input prompts from session status: show Issue links in the Workers pane header and keep Operator input prompt-only across pane and stream layouts.
+- 41ba1f2: Add `tui.layout` and `tui.forceHyperlink` to `.ensemble/config.yaml`, resolved with the same env-over-config precedence as other Phase 1 settings.
+- Updated dependencies [aac4ba4]
+- Updated dependencies [966e3c6]
+- Updated dependencies [9aef597]
+- Updated dependencies [7f8aa67]
+- Updated dependencies [41ba1f2]
+  - @agents-ensemble/core@0.6.0
+
 ## 0.5.3
 
 ### Patch Changes
