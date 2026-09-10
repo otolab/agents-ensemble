@@ -11,7 +11,10 @@ import {
   type SDKCustomTool,
   type TokenUsage,
 } from '@cursor/sdk';
-import { ensureCursorSdkRipgrepPath } from './configure-cursor-sdk-env.js';
+import {
+  ensureCursorSdkProxy,
+  ensureCursorSdkRipgrepPath,
+} from './configure-cursor-sdk-env.js';
 import { CONDUCTOR_AUTH_HINT, resolveConductorApiKey } from './conductor-auth.js';
 import { formatConductorToolName } from './conductor-tool-name.js';
 import { resolveConductorModelId } from './resolve-conductor-model-id.js';
@@ -130,6 +133,7 @@ function ensureCursorSdkEnv(): void {
     return;
   }
   cursorSdkEnvReady = true;
+  ensureCursorSdkProxy();
   ensureCursorSdkRipgrepPath();
 }
 

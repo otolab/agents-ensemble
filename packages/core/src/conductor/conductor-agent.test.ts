@@ -1,10 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { mockSend, mockWait, mockCreate, mockResume } = vi.hoisted(() => ({
+const {
+  mockSend,
+  mockWait,
+  mockCreate,
+  mockResume,
+  mockEnsureCursorSdkProxy,
+  mockEnsureCursorSdkRipgrepPath,
+} = vi.hoisted(() => ({
   mockSend: vi.fn(),
   mockWait: vi.fn(),
   mockCreate: vi.fn(),
   mockResume: vi.fn(),
+  mockEnsureCursorSdkProxy: vi.fn(),
+  mockEnsureCursorSdkRipgrepPath: vi.fn(),
 }));
 
 vi.mock('@cursor/sdk', () => ({
@@ -29,7 +38,8 @@ vi.mock('@cursor/sdk', () => ({
 }));
 
 vi.mock('./configure-cursor-sdk-env.js', () => ({
-  ensureCursorSdkRipgrepPath: vi.fn(),
+  ensureCursorSdkProxy: mockEnsureCursorSdkProxy,
+  ensureCursorSdkRipgrepPath: mockEnsureCursorSdkRipgrepPath,
 }));
 
 import { AuthenticationError } from '@cursor/sdk';
@@ -41,6 +51,8 @@ describe('ConductorAgent.send', () => {
     mockWait.mockReset();
     mockCreate.mockReset();
     mockResume.mockReset();
+    mockEnsureCursorSdkProxy.mockReset();
+    mockEnsureCursorSdkRipgrepPath.mockReset();
   });
 
   it('uses default model id when modelId is omitted', async () => {
@@ -60,6 +72,12 @@ describe('ConductorAgent.send', () => {
           model: { id: 'default' },
         }),
       );
+      expect(mockEnsureCursorSdkProxy.mock.invocationCallOrder[0]).toBeLessThan(
+        mockCreate.mock.invocationCallOrder[0],
+      );
+      expect(
+        mockEnsureCursorSdkRipgrepPath.mock.invocationCallOrder[0],
+      ).toBeLessThan(mockCreate.mock.invocationCallOrder[0]);
     } finally {
       await conductor.close();
       if (original === undefined) {
@@ -183,6 +201,33 @@ describe('ConductorAgent.send', () => {
 
       expect(result.status).toBe('error');
       expect(result.error?.message).toBe('not logged in');
+    } finally {
+      await conductor.close();
+    }
+  });
+
+  it('initializes the SDK environment before Agent.resume', async () => {
+    vi.resetModules();
+    mockResume.mockResolvedValue({
+      agentId: 'agent-1',
+      send: mockSend,
+      [Symbol.asyncDispose]: vi.fn(),
+    });
+    const { ConductorAgent: IsolatedConductorAgent } = await import(
+      './conductor-agent.js'
+    );
+
+    const conductor = await IsolatedConductorAgent.resume('agent-1', {
+      cwd: '/repo',
+    });
+
+    try {
+      expect(
+        mockEnsureCursorSdkProxy.mock.invocationCallOrder[0],
+      ).toBeLessThan(mockResume.mock.invocationCallOrder[0]);
+      expect(
+        mockEnsureCursorSdkRipgrepPath.mock.invocationCallOrder[0],
+      ).toBeLessThan(mockResume.mock.invocationCallOrder[0]);
     } finally {
       await conductor.close();
     }

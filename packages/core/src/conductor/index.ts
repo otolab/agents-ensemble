@@ -6,8 +6,11 @@ export type {
 
 export { runConductorSession } from './conductor-session.js';
 export {
+  ensureCursorSdkProxy,
   ensureCursorSdkRipgrepPath,
+  readCursorSettings,
   resolveBundledSdkRipgrepPath,
+  resolveCursorSettingsPath,
 } from './configure-cursor-sdk-env.js';
 export { runIssueSession } from './issue-session.js';
 export type {
