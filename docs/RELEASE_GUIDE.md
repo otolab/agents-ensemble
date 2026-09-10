@@ -1,5 +1,7 @@
 # リリースガイド
 
+> **正本:** `@agents-ensemble/core` と `@agents-ensemble/cli` の changeset・Release PR・npm 公開手順。現在の開発フローは本書を参照します。
+
 `@agents-ensemble/core` と `@agents-ensemble/cli` のリリース手順。フローは [modular-prompt](https://github.com/otolab/modular-prompt) を踏襲する。
 
 ## 自動リリースフロー概要

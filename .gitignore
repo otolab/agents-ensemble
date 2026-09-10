@@ -8,3 +8,6 @@
 dist/
 node_modules/
 packages/core/test/integration/test-acp.yaml
+/packages/cli/README.md
+/packages/cli/docs/
+/packages/cli/config.example.yaml

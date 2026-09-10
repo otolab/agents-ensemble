@@ -1,5 +1,7 @@
 # Architecture Decision Records (ADR)
 
+> **参照:** 設計判断の履歴と不変性ルール。現行の構成・API の正本は [architecture.md](../architecture.md) 等にあります。
+
 個別の**設計判断**（なぜそうしたか、何を犠牲にしたか）を短く残す。  
 現状の構成・API の正本は [architecture.md](../architecture.md)。ADR は判断の履歴。
 

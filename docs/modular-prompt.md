@@ -1,5 +1,7 @@
 # modular-prompt の書き方（agents-ensemble）
 
+> **正本:** agents-ensemble の modular-prompt におけるセクション分担・読者分離・実装一致の指針です。
+
 `@modular-prompt/core` で system prompt を組み立てるときの指針。実装は `packages/core/src/prompt/modules/`。
 
 **常にマージ後の1枚**（`renderCompiledPrompt(compile(...))` の出力）を頭に置いて書く。モジュール分割は実装の都合であり、エージェントが読むのは結合後のドキュメントである。

@@ -1,5 +1,7 @@
 # オペレータ入力（SessionView）
 
+> **正本:** TUI とオペレータ入力の利用者向け挙動および SessionView 契約。入力ショートカットの実装詳細は [cli-text-input-keybindings.md](cli-text-input-keybindings.md)、設定の正本は [settings.md](settings.md) です。
+
 ConductorSession の **View 層**契約。入力・表示はここに閉じ、オーケストレーション（Driver）とは `bindOperatorInput` で接続する。
 
 関連: [architecture.md](architecture.md) §5、[ADR 0009](adr/0009-conductor-session-event-queue.md)、[ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md)、[cli-text-input-keybindings.md](cli-text-input-keybindings.md)（Emacs 風ショートカットの実装階層）、Issue #54（TUI）
@@ -187,7 +189,7 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 |------|------|
 | 発生条件 | GitHub 監視が有効（デフォルト）で、GitHub API による poll が進行中に `/exit` |
 | 症状 | UI は即「終了しています…」になるが、teardown が `githubMonitor.stop()` で `pollInFlight` 待ちになりプロセスが長時間残る（5s 超は abort） |
-| 回避策 | `--no-github-monitor` で監視を無効化（[README.md](../README.md)・[harness-events.md](harness-events.md)） |
+| 回避策 | `--no-github-monitor` で監視を無効化（[cli/README.md](cli/README.md)・[harness-events.md](harness-events.md)） |
 | 実装 | poll / `stop()` のタイムアウト 5s（#209）。超過時は進行中 API リクエストを abort して teardown 継続 |
 
 自律ループ実行中の `/exit` は `shutdownSignal` abort で driver を抜ける。conductor `send` 進行中でも abort を優先し、完了待ちで固まらない（#200）。

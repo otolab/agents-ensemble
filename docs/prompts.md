@@ -1,5 +1,7 @@
 # 起動プロンプト
 
+> **参照:** worker 起動プロンプトのパターン。実際の役割定義・作業指示の正本は、対象 Issue と profile / team materials です。
+
 自然言語ベース。conductor が dispatch 時に worker へ渡す起動文書。種別ごとに Skill 名・Issue / PR URL を差し替える。
 
 プロファイル（未実装）が種別ごとの **Skill 名** と **worker 用システムプロンプト** を返す想定。

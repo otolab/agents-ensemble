@@ -1,6 +1,6 @@
 # 設定値リファレンス
 
-`ensemble` の利用者向け設定を **どこに書くか・どの順で効くか** を一覧する正本。横断設定のファイル形式と Phase 1 スキーマの詳細は [config.md](config.md) を参照。
+> **正本:** `ensemble` の CLI / 環境変数 / config / profile / TUI 設定の対応表と解決順。本書の `config.yaml` スキーマ詳細は [config.md](config.md) を参照します。
 
 ## 設定の層
 
@@ -10,7 +10,7 @@
 | **環境変数** | シェル / CI | 一時上書き・秘密情報・自動化注入 |
 | **project config** | `<repoRoot>/.ensemble/config.yaml` | リポジトリ単位の既定 |
 | **user config** | `~/.ensemble/config.yaml` | マシン全体の既定 |
-| **team profile** | `profile.yaml`（[elements.md](elements.md)） | worker 構成・per-worker ACP / workspace |
+| **team profile** | `profile.yaml`（[elements.md](https://github.com/otolab/agents-ensemble/blob/main/docs/elements.md)） | worker 構成・per-worker ACP / workspace |
 | **MCP** | `.agents/mcp.json` / `~/.ensemble/mcp.json` | conductor 向け MCP（[config.md § MCP](config.md#conductor-mcp-設定mcpjson)） |
 | **コード default** | `packages/core/src/config/defaults.ts` 等 | config 未作成時のフォールバック |
 
@@ -26,7 +26,7 @@ project / user config は **deep merge**（project が user を上書き）。�
 CLI > 環境変数 > project config > user config > コード default
 ```
 
-`profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](adr/0020-ensemble-config-setting-resolution.md)。
+`profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
 ### パターン B — Phase 1 横断（env なし）
 
@@ -38,7 +38,7 @@ CLI > project config > user config > コード default
 
 ### パターン C — profile / worker 優先
 
-worker spawn 時の ACP 解決（[ADR 0019](adr/0019-worker-acp-cli-presets.md)）:
+worker spawn 時の ACP 解決（[ADR 0019](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0019-worker-acp-cli-presets.md)）:
 
 ```
 profile.workers[].acp > profile.acp > CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
@@ -82,7 +82,7 @@ config キーなし。CI・スクリプト・端末検出向け。
 | OSC 8 ハイパーリンク | `FORCE_HYPERLINK`（`1`/`0`） | `tui.forceHyperlink`（`auto`/`on`/`off`） | — | `auto` | A |
 | オペレータ 1 回注入 | `ENSEMBLE_OPERATOR_MESSAGE` | — | — | — | D |
 
-TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡して解決する。Issue リンク表示の詳細は [operator-input.md](operator-input.md)。
+TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡して解決する。Issue リンク表示の詳細は [operator-input.md](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md)。
 
 ## 一覧 — 自動化・非 TTY
 
@@ -102,7 +102,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | 設定 | ファイル | 解決順 |
 |------|----------|--------|
 | conductor MCP | `.agents/mcp.json` / `~/.ensemble/mcp.json` | project > user（サーバー名単位 merge） |
-| team profile | `.ensemble/profiles/…` / `--profile` パス | [ADR 0018](adr/0018-team-profile-four-layer-resolution.md) |
+| team profile | `.ensemble/profiles/…` / `--profile` パス | [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) |
 
 ## 一覧 — ランタイム（利用者が「設定」しない）
 
@@ -124,16 +124,32 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | worker ごとの ACP / cwd | `profile.yaml` |
 | conductor の MCP | `mcp.json` |
 
+## env-only の棚卸し
+
+次の値は config 化済みの設定を重複して説明するものではなく、用途上 config キーを持たない、または秘密情報・実行環境に依存するため env-only としています。
+
+| env-only | 理由 |
+|----------|------|
+| `ENSEMBLE_OPERATOR_MESSAGE` | 非 TTY で 1 回だけオペレータ入力を注入する自動化用値。永続設定にはしない |
+| `ENSEMBLE_ESCALATION_RESPONSE` | 非 TTY で `ask_human` への回答を 1 回注入する自動化用値。永続設定にはしない |
+| `CURSOR_API_KEY` | conductor の秘密情報。config に平文保存しない |
+| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub API の秘密情報。config では token 本体を管理しない |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | SDK 起動時のプロセス環境・既存環境を優先する proxy 設定 |
+| `TERM` / `TERM_PROGRAM` / `CI` 等 | TTY / CI の実行環境を検出する値 |
+| `CURSOR_RIPGREP_PATH` | SDK 起動時に利用する内部ツールの明示指定 |
+
+`profile.default`、`conductor.model`、`acp.defaultPreset`、`session.*`、`github.monitor.*`、`tui.*` のように config キーがある設定は、上の env-only 表ではなく本書の設定一覧と [config.md](config.md) に記載しています。env は invocation 単位の上書きとして残る場合があります。
+
 ## 既知のギャップ
 
 | 項目 | 状態 |
 |------|------|
 | `resolveDefaultAcpPresetSetting` と `resolveDefaultAcpSpawn` の二重実装 | 挙動は一致。将来 refactor 可 |
-| Phase 2（`acp.defaultCommand` 等） | [ADR 0020 フォローアップ](adr/0020-ensemble-config-setting-resolution.md) |
+| Phase 2（`acp.defaultCommand` 等） | [ADR 0020 フォローアップ](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) |
 
 ## 関連
 
 - [config.md](config.md) — `config.yaml` スキーマ・MCP・移行表
-- [operator-input.md](operator-input.md) — TUI レイアウト・Issue リンク
-- [README.md § 設定](../README.md) — 利用者向け要約
-- [ADR 0020](adr/0020-ensemble-config-setting-resolution.md) — Phase 1 解決順
+- [CLI README](https://github.com/otolab/agents-ensemble/blob/main/docs/cli/README.md) — CLI のインストール・最小クイックスタート
+- [operator-input.md](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) — TUI レイアウト・Issue リンク
+- [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) — Phase 1 解決順

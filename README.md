@@ -1,185 +1,36 @@
 # agents-ensemble
 
-Issue を指定して起動する、エージェントオーケストレーション CLI。
+GitHub Issue を起点に、conductor が worker を起動・制御して作業を進めるエージェントオーケストレーション CLI です。
 
-`ensemble` がオーケストレータ（conductor）として worker を制御し、作業を進める。worker は **セッション開始時に attach され ensemble 終了まで常駐**する。conductor からの作業指示は harness 内の `prompt_worker`（ACP `session/prompt`）で届く。
+`ensemble` は SDK conductor と ACP worker を使うスター型の構成です。現行の技術構成は [docs/architecture.md](docs/architecture.md) を参照してください。
 
 ## ステータス
 
-Stage 2 まで実装済み（SDK conductor + ACP worker + e2e smoke）。詳細は [docs/](docs/) と GitHub Issues を参照。
+Stage 2 まで実装済み（SDK conductor + ACP worker + e2e smoke）。実装状況と設計判断は [docs/](docs/) と GitHub Issues に記録しています。
+
+## 利用者向け CLI
+
+npm パッケージのインストールから最初の `ensemble issue` までの手順は [docs/cli/README.md](docs/cli/README.md) を参照してください。
+
+設定の全体一覧・環境変数・解決順は [docs/settings.md](docs/settings.md)、`config.yaml` の書き方は [docs/config.md](docs/config.md)、TUI とオペレータ入力の挙動は [docs/operator-input.md](docs/operator-input.md) が正本です。
 
 ## ドキュメント
 
-[docs/](docs/) に設計・検討事項を整理している。技術構成の正本は [docs/architecture.md](docs/architecture.md)（SDK conductor + ACP worker）。
+文書は読者別に [docs/README.md](docs/README.md) へ整理しています。
 
-## 認証
+開発時に特に参照する文書:
 
-agents-ensemble は **SDK（conductor）** と **ACP（worker）** の2系統を使う。認証ストアは共有されない。
+| 文書 | 内容 |
+|------|------|
+| [docs/architecture.md](docs/architecture.md) | 現行の技術構成・プロセス分離・通信経路 |
+| [docs/testing-strategy.md](docs/testing-strategy.md) | unittest / integration / e2e の分類と実行方針 |
+| [docs/RELEASE_GUIDE.md](docs/RELEASE_GUIDE.md) | changeset・Release PR・npm 公開手順 |
+| [docs/adr/](docs/adr/README.md) | 設計判断の履歴 |
+| [AGENTS.md](AGENTS.md) | エージェント・人間共通の作業とレビュー指針 |
 
-| 経路 | 技術 | 何に使うか | ローカル開発 | CI / 自動化 |
-|------|------|-----------|-------------|------------|
-| **conductor** | `@cursor/sdk` | `ensemble issue` | `ensemble auth login` | `CURSOR_API_KEY` |
-| **worker** | `agent acp` | `ensemble issue` の常駐 worker | `agent login` | `CURSOR_API_KEY`（子プロセスへ継承） |
-| **Issue 取得** | GitHub REST / GraphQL API | conductor が Issue 本文・コメントを読む・GitHub 監視 | `gh auth login` または `export GITHUB_TOKEN=...` | `GITHUB_TOKEN` / `GH_TOKEN` |
+## 開発環境
 
-GitHub トークンの解決順（環境変数は config より優先）と `gh auth token` フォールバックの可否は [docs/config.md](docs/config.md) を参照。テンプレはリポジトリ直下の [`config.example.yaml`](config.example.yaml)。
-
-### 初回セットアップ（ローカル）
-
-```bash
-# worker 用（agent CLI）
-agent login
-agent status
-
-# conductor 用（SDK）
-pnpm ensemble auth login
-pnpm ensemble auth status
-pnpm ensemble auth logout
-
-# Issue 取得用（GitHub API トークン。情報取得に gh CLI は不要）
-export GITHUB_TOKEN="ghp_..."
-# または gh auth login（config で gh auth token フォールバックが有効な場合）
-gh auth login
-```
-
-`agent login` だけでは **conductor には渡りません**。`ensemble issue` を使う場合は `ensemble auth login` を別途一度実行してください。
-
-### conductor（SDK）の ripgrep
-
-local agent は workspace scan（`.gitignore` / `.cursorignore`）に **ripgrep** を使う（[SDK ドキュメント](https://cursor.com/docs/sdk/typescript)）。`ensemble` は起動時に `@cursor/sdk-<platform>-<arch>` 同梱の `rg` を `CURSOR_RIPGREP_PATH` に設定する。同梱が無い場合は PATH の `rg` にフォールバックする。どちらも無いと stderr に `Ripgrep path not configured` が出る（ignore マッピングが効かない）。
-
-```bash
-# 手動で指定する場合
-export CURSOR_RIPGREP_PATH="$(command -v rg)"
-```
-
-### conductor（SDK）の proxy
-
-`ensemble issue` の conductor（`@cursor/sdk` local agent）は、Cursor IDE の `settings.json` にある `http.proxy` / `http.noProxy` を起動前に読み込みます。標準の読込先は macOS の `~/Library/Application Support/Cursor/User/settings.json`、Linux の `~/.config/Cursor/User/settings.json`、Windows の `%APPDATA%\Cursor\User\settings.json` です。JSONC（コメント・末尾カンマ）も読み込めます。
-
-Cursor / VS Code が保存する設定 ID はフラットキー形式です。
-
-```jsonc
-{
-  // Proxy used by the conductor's local agent.
-  "http.proxy": "http://proxy.example:8080",
-  "http.noProxy": "localhost,127.0.0.1",
-  "cursor.general.disableHttp2": true,
-}
-```
-
-互換性のためネスト形式も読み込みますが、フラットキーとネスト形式の両方がある場合はフラットキーを優先します。
-
-解決順は環境変数（`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`。小文字の同名も既存値として扱います）→ Cursor settings → 未設定です。既存の環境変数は値を変えず、必要な場合だけ大文字名へ引き継ぎます。`http.proxy` は不足している `HTTP_PROXY` と `HTTPS_PROXY` に、`http.noProxy` は不足している `NO_PROXY` に設定します。proxy URL は認証情報を含めてそのまま下流へ渡しますが、ログには出しません。現在の SDK / CLI 経路が `ALL_PROXY` を参照しないため、`ALL_PROXY` は自動設定しません。
-
-`cursor.general.disableHttp2` が `true` の場合は、SDK の `local.useHttp1ForAgent` を有効にして HTTP/1.1（SSE）を使用します。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK の公開設定に対応する項目がないため反映されず、VS Code の proxy 解決・override 挙動も完全には再現しません。この設定は conductor のみが対象で、worker（ACP）には適用されません。
-
-### conductor（SDK）の認証解決順
-
-`@cursor/sdk` は次の順で API key を探します（`ConductorAgent` も同じ）。
-
-1. `apiKey` オプション（明示指定）
-2. 環境変数 `CURSOR_API_KEY`
-3. `ensemble auth login` で保存したキー（`~/.cursor/sdk/auth.json`）
-
-```bash
-# CI やスクリプト向け（ローカル stored login の代わり）
-export CURSOR_API_KEY="cursor_..."
-```
-
-Dashboard からキーを発行する場合: [Cursor Dashboard → API Keys](https://cursor.com/dashboard/api)
-
-`ensemble auth logout` は stored login（`~/.cursor/sdk/auth.json`）のみを削除します。`CURSOR_API_KEY` には影響しません。
-
-### conductor send の認証エラーと in-process 再接続
-
-長時間アイドルや PC の sleep/wakeup 後、SDK の gRPC 接続が stale になり `Authentication error` や message 欠落の `status: "error"` が返ることがあります（同一 API key は有効なまま）。`ensemble issue` は **同一 `agentId` を維持したまま** `close` → `Agent.resume(sameId)` → 失敗していた send を 1 回再試行します。
-
-ACP worker は別プロセスのため、この間も生存します。自動再接続でも復旧できない場合（真の key 失効など）は、従来どおり stderr の `[auth]` 手順（手動 `logout` → `login` → `--resume` / `--continue`）が表示されます。
-
-- **非 TTY / CI**: 上記 in-process `resume` のみ（`CURSOR_API_KEY` の挙動変更なし）
-- **`agent.reload()`**: filesystem config 再読込用で、接続復旧には使いません
-- **起動時** `Agent.create` / `Agent.resume` の auth 失敗: 本 Issue スコープ外（別 Issue 候補）
-
-詳細: [docs/conductor-auth-reconnect.md](docs/conductor-auth-reconnect.md)
-
-conductor send が認証エラーを返し、上記の自動再接続でも復旧できないとき、stderr に `[auth]` 付きの復旧手順が出ます。典型:
-
-```bash
-ensemble auth logout && ensemble auth login
-ensemble issue <issue-url> --repo-root <path> --resume <agentId>   # または --continue
-```
-
-`agentId` は終了時 stdout JSON の `agentId` を参照。SDK 側の transparent reconnect は upstream 改善待ち（forum 上で確認済み）。harness は `Agent.resume(sameId)` による in-process 再接続を実装済み。
-
-### worker（ACP）の認証
-
-worker は preset ごとに別プロセスの ACP adapter を spawn する。**親（ensemble）は API key を渡さない**。子プロセスは `process.env` を継承する。
-
-| preset | 認証の前提 |
-|--------|-----------|
-| `cursor`（既定） | `agent login` または `CURSOR_API_KEY`（ACP `cursor_login`） |
-| `codex` | **`codex login` 済み**（ensemble は `chat-gpt` authenticate で Codex CLI と同じセッションを再利用） |
-| `claude` | **Claude Code CLI ログイン済み**（ensemble は ACP authenticate を skip） |
-| `pi` | **`pi` 側のモデル/API key 設定**（ensemble は authenticate skip。Cursor 認証とは無関係） |
-
-`codex` preset は子プロセス env に `INITIAL_AGENT_MODE=agent` を設定し、通常の Agent mode（`workspace-write` + `on-request` approval）で起動します。`agent-full-access` / `danger-full-access` は既定で有効になりません。ACP permission request に backend の options がある場合、ensemble は `allow_once` / `reject_once` などの kind に対応する実際の `optionId` を返します。options が無い backend では従来の fallback を使います。
-
-詳細は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md)。
-
-### コマンド別の前提
-
-| コマンド | 必要な認証 |
-|---------|-----------|
-| `ensemble issue` | `agent login`（または `CURSOR_API_KEY`）+ `ensemble auth login`（または `CURSOR_API_KEY`）+ `GITHUB_TOKEN` / `GH_TOKEN` または `gh auth login`（config で gh フォールバック有効時） |
-| `pnpm test:integration` | `agent login` + `test-acp.yaml` |
-| `pnpm test:e2e` | 上記 + `ensemble auth login` + GitHub API トークン + `test-acp.yaml`（`issueUrl` 等） |
-
-### モデル指定
-
-conductor のデフォルトモデルは `default`（`ensemble models list` 上の Auto。`auto` エイリアスも同義）。`--model` で別 id を指定できます。利用可能な id は `ensemble models list` で確認できます（API カタログ。実行時の team ブロックとは一致しない場合あり）。
-
-既定値の解決順（Phase 1 共通）: **CLI `--model` > 環境変数 `CONDUCTOR_MODEL_ID` > `.ensemble/config.yaml` の `conductor.model` > コード内 `default`**。全設定の一覧・解決順は [docs/settings.md](docs/settings.md)、config スキーマ詳細は [docs/config.md](docs/config.md)。
-
-```bash
-ensemble models list
-ensemble models list --json
-ensemble issue <issue-url> --repo-root <path>              # default（Auto）
-ensemble issue <issue-url> --repo-root <path> --model auto # default と同義
-```
-
-`<issue-url>` にはフル GitHub Issue URL のほか、`--repo-root` の `origin` から解決する **Issue 番号**（`31` や `#31`）も指定できます。bash/zsh では `#` 以降がコメントになるため、`#31` は **クォート**してください。
-
-```bash
-ensemble issue 31 --repo-root .
-ensemble issue '#31' --repo-root .
-```
-
-e2e では `test-acp.yaml` の `conductorModelId`（未指定時 `auto`）を使います。
-
-## インストール
-
-npm から CLI をグローバルインストールできます（Node.js 22 以上）。
-
-```bash
-npm install -g @agents-ensemble/cli
-# または
-pnpm add -g @agents-ensemble/cli
-
-ensemble --help
-```
-
-ライブラリとして `@agents-ensemble/core` を使う場合:
-
-```bash
-pnpm add @agents-ensemble/core
-```
-
-リリース手順は [docs/RELEASE_GUIDE.md](docs/RELEASE_GUIDE.md) を参照。
-
-## 開発
-
-**前提**: Node.js 22、pnpm 10.12.1 以上（`package.json` の `packageManager` に合わせる。Corepack 利用可）。
+Node.js 22 と、ルート `package.json` の `packageManager` に指定された pnpm を使用します。Corepack も利用できます。
 
 ```bash
 corepack enable   # 初回のみ（任意）
@@ -188,280 +39,62 @@ pnpm build
 pnpm ensemble --help
 ```
 
-### git worktree と依存インストール
-
-`ensemble issue` の isolated モードは Issue ごとに `.ensemble/worktrees/issue-N` を切る。各 worktree は独自の `node_modules` が必要。
-
-TTY + post-loop で `/exit` して正常終了したとき、**isolated worktree は自動削除**される（未コミット変更がある場合は削除せず stderr に警告）。`--worktree in-repo` では削除しない。ローカルブランチ `ensemble/issue-N` は残る。`--continue` で再開するときは worktree が無ければ再作成される。
-
-本リポジトリは pnpm の **global virtual store**（`enableGlobalVirtualStore`）を有効にしている。メイン worktree で一度 `pnpm install` すると、同一マシン上の **2 本目以降の worktree** では install がほぼ symlink 張り替えのみになる（[pnpm: Git Worktrees](https://pnpm.io/git-worktrees)）。
+`@agents-ensemble/core` をライブラリとして利用する場合:
 
 ```bash
-# メイン worktree で warm-up（初回 or lockfile 更新後）
+pnpm add @agents-ensemble/core
+```
+
+## git worktree と依存インストール
+
+`ensemble issue` の isolated モードは Issue ごとに `.ensemble/worktrees/issue-N` を切ります。各 worktree は独自の `node_modules` が必要です。
+
+このリポジトリは pnpm の **global virtual store**（`enableGlobalVirtualStore`）を有効にしています。メイン worktree で一度 install した後は、同一マシン上の 2 本目以降の worktree で install がほぼ symlink の張り替えだけになります（[pnpm: Git Worktrees](https://pnpm.io/git-worktrees)）。
+
+```bash
+# メイン worktree（初回または lockfile 更新後）
 pnpm install
 
-# worktree 作成後（ensemble が切った .ensemble/worktrees/issue-N など）
+# Issue worktree など、別 worktree に入った後
 cd .ensemble/worktrees/issue-42
 pnpm install --frozen-lockfile
 ```
 
-CI では global virtual store は自動無効（cold cache のため）。
+正常終了した isolated session の worktree は自動削除されます。未コミット変更がある場合は削除されず、ローカルブランチ `ensemble/issue-N` は残ります。
+
+## テスト
+
+テストレベルの定義と使い分けは [docs/testing-strategy.md](docs/testing-strategy.md) を参照してください。
 
 ```bash
-# テスト（testing-strategy.md 参照）
-pnpm test:run           # unittest（CI 必須）
-pnpm test:integration   # 実 agent acp（test-acp.yaml 要）
-pnpm test:e2e           # CLI 縦切り（test-acp.yaml 要）
+# unittest（CI 必須）
+pnpm test:run
 
-# e2e 設定（初回）
+# 実 agent acp を使う integration test（test-acp.yaml が必要）
+pnpm test:integration
+
+# CLI 縦切りの e2e test（test-acp.yaml が必要）
+pnpm test:e2e
+```
+
+integration / e2e の設定を初めて作る場合:
+
+```bash
 cp packages/core/test/integration/test-acp.yaml.example \
    packages/core/test/integration/test-acp.yaml
-# issueUrl / repoRoot を編集してから:
-pnpm test:e2e
-
-# Stage 2: conductor オーケストレーション
-ensemble issue <issue-url> --repo-root <path> [--worktree isolated|in-repo] [--profile <name>] [--resume <agentId>] [--continue] [--no-github-monitor] [--github-monitor-debounce-ms <n>] ...
-# <issue-url> はフル URL または 31 / '#31' 等の番号 shorthand 可（# はクォート）
 ```
 
-**GitHub 監視**（既定で有効）: セッション中に Issue コメント・関連 PR のレビュー / CI 完了を `gh` で poll し、debounce 後に conductor へ `## GitHub 更新` を届ける（自動 `prompt_worker` なし）。PR 作成直後は conductor の `register_github_watch` tool に `prNumber` または `prUrl` を渡すと、GitHub Search にまだ反映されていない PR も監視対象になる。詳細は [docs/harness-events.md](docs/harness-events.md) §2.5。
+`test-acp.yaml` の `issueUrl` / `repoRoot` などを環境に合わせて編集してからテストを実行します。認証や外部サービスを含む前提は [docs/testing-strategy.md](docs/testing-strategy.md) に記載しています。
 
-`register_github_watch` の `kinds` は任意です。省略時は `pr.review`、`pr.review_comment`、`ci.completed` を監視し、同じ PR の再登録は no-op になります。セッション Issue と異なるリポジトリの PR URL は登録できません。
-
-| フラグ | 意味 |
-|--------|------|
-| `--no-github-monitor` | GitHub 更新監視を無効化 |
-| `--github-monitor-debounce-ms <n>` | 更新通知の debounce（ms）。デフォルト 30000 |
-
-`monitor_error` で `toUpperCase` 系エラーが出る場合は `@agents-ensemble/core` **0.2.1 以降**を使用しているか確認してください（`pnpm why @agents-ensemble/core` または `ensemble --version`）。[#158](https://github.com/otolab/agents-ensemble/issues/158) / [#185](https://github.com/otolab/agents-ensemble/issues/185) 参照。
-
-**Issue worktree**（`--worktree`）は Conductor セッション開始時に **1 回だけ** resolve し、**未指定の worker** が ACP 上で作業するディレクトリになる（Issue 用 git worktree の規約）。
-
-| 値 | 意味 |
-|----|------|
-| `isolated`（既定） | Issue 専用 worktree（`.ensemble/worktrees/issue-N`） |
-| `in-repo` | メイン worktree で直接作業する **特別モード** |
-
-**per-worker ACP cwd**（profile の `workers[].workspace`）は Issue worktree **とは別概念**。指定した worker だけ別ディレクトリで ACP を起動する（例: Issue はコード repo、librarian は docs repo）。省略時は上記 Issue worktree を使う。詳細は [docs/elements.md](docs/elements.md)。
-
-**per-worker ACP CLI**（profile の `acp` / `workers[].acp`、またはデフォルト解決）で worker が起動する ACP サーバを選べる。profile に ACP 指定がある worker は CLI / 環境変数で上書きされない。
-
-| ソース | 例 |
-|--------|-----|
-| profile `workers[].acp` | `preset: claude` または `preset: pi` |
-| profile `acp` | 全 worker 共通デフォルト |
-| CLI `--default-acp-cli` | `ensemble issue 42 --default-acp-cli codex` または `--default-acp-cli pi` |
-| CLI custom | `--default-acp-command my-agent --default-acp-arg acp` |
-| 環境変数 | `ENSEMBLE_DEFAULT_ACP_CLI=claude` |
-| システムデフォルト | `cursor`（= `agent acp`） |
-
-Built-in preset の command/args は [ADR 0019](docs/adr/0019-worker-acp-cli-presets.md) を参照。`claude` / `codex` / `pi` は `@agents-ensemble/core` の **optionalDependencies** 同梱 bin（→ PATH）を spawn し、**`npx` は使わない**（#229）。optional が欠落し PATH にも無い場合、spawn 前に install 手順付きで失敗する。
-
-**attach 時の認証**: `cursor` は `cursor_login`。`codex` は **`codex login` 済み**前提で `chat-gpt`（Codex CLI セッション再利用）。`claude` / `pi` は ACP authenticate を skip し、各 CLI の既存ログイン/設定を利用（上記 worker 認証表・ADR 0019）。
-
-`pi` preset は `pi` CLI（`@earendil-works/pi-coding-agent`）と adapter `pi-acp` の両方が必要。`pi-acp` があっても `pi` 不在なら別メッセージで促す。
-
-**optionalDependencies と `--no-optional`**
-
-通常の `pnpm install` / `npm i -g @agents-ensemble/cli` では optional パッケージ（`@agentclientprotocol/codex-acp` 等）の install が試行される。`pnpm install --no-optional` や optional install 失敗時は bundled bin が入らない。PATH 上に同名 bin（例: `npm i -g @agentclientprotocol/codex-acp`）が無ければ、`ensemble issue` 起動前（worker attach 前）に `[acp]` 付きエラーと install 手順が stderr に出る。
-
-**CLI 出力（TTY 時）** — 詳細は [docs/session-logging.md](docs/session-logging.md)。
-
-| 出力先 | 内容 |
-|--------|------|
-| **stdout** | 非 TTY 終了時の **SessionSummary** JSON（`--summary-format auto` 既定） |
-| **stderr** | TTY 終了時のテキストサマリ。非 TTY では harness テレメトリ（`[harness]` / `[open question]` 等） |
-
-終了サマリは exit report（会話ログではない）。`--summary-format json|text`・`--include-full-response-text` で制御。フィールド一覧は [docs/session-metrics.md](docs/session-metrics.md)。resume の正本は sidecar。
-
-### TTY TUI のレイアウト
-
-TTY の既定レイアウトは `pane` です。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインを追加します。Orchestration は `PgUp` / `PgDn` / `End` でペイン内をスクロールします。
-
-活動ログを端末の scrollback に残す `stream` レイアウトは、次の環境変数で選択できます。
+ローカルの Stage 2 セッションを確認する場合は、ビルド後に次を実行します。詳細なオプションや利用者向け手順は [docs/cli/README.md](docs/cli/README.md) を参照してください。
 
 ```bash
-ENSEMBLE_TUI_LAYOUT=stream ensemble issue <url>
+ensemble issue <issue-url> --repo-root <path>
 ```
 
-`stream` では活動ログ（operator / conductor / harness / observation）が枠なしで上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順で固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /exit で終了` の prompt のみを表示します。dispatch 保留中は pane / stream とも Workers 枠のタイトルに `conductor dispatch 保留中（N 件）` を表示し、保留解除時は observation に flush 件数を出します。`[harness]` 活動ログは保留中も抑制しません。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、下部 live frame を基準に変換窓の位置を計算します。アプリ内の活動ログ用 PgUp / PgDn はなく、過去ログは端末の scrollback で確認します。活動ログはセッション sidecar や活動ログファイルには保存されません。`alternateScreen` は使いません。非 TTY では環境変数に関係なく従来の `pane` 経路を維持します。
+## リリース
 
-Operator input は open question の有無で2モードに分かれます。question がある場合は回答 prompt と `Shift+↑↓` / Enter を表示し、Issue 参照と自律ターン数は表示しません。question がない場合は Open questions ペインを省略し、`任意のタイミングで入力 · /exit で終了` の prompt のみを表示します。post-loop 待機中は `追加指示を入力するか /exit で終了` に上書きします。Issue リンクは Workers ペイン上枠の右端に表示します。OSC 8 対応端末では `owner/repo#number` の表示文字列から canonical な GitHub Issue URL へリンクし、非対応・未知の端末では自動リンクの誤検出を避けるため canonical URL 全文を省略せず表示します。URL が端末幅を超える場合も URL は省略せず、上枠の他のタイトル要素を先に省略します。対応判定を明示的に上書きする場合は `FORCE_HYPERLINK=1` を指定するか、`.ensemble/config.yaml` の `tui.forceHyperlink: on` を使えます。レイアウトは `ENSEMBLE_TUI_LAYOUT=stream` または `tui.layout: stream` です。詳細は [docs/operator-input.md](docs/operator-input.md) と [docs/settings.md](docs/settings.md) を参照してください。
-
-dispatch 保留は Driver メモリだけの一時状態です。`/exit`、Ctrl+C（SIGINT）、SIGTERM、send failure、
-プロセス crash の前に `set_dispatch_hold({ hold: false })` で解除しないと、未 flush events は保存・復元
-されません。resume は空の保留状態（`dispatchHold: false`）で開始します。
-
-scrollback を実行中に上へ移動している間に新しい活動ログが到着すると、端末の実装によっては末尾へ戻されることがあります。また、端末幅を変更しても既に追記されたログ行は再折り返しされません。
-
-### セッションの停止と再開
-
-`ensemble issue` は harness 状態を **sidecar JSON** に永続化する。正常終了・エラー・`Ctrl+C`（SIGINT）/ `SIGTERM` いずれでも best-effort で flush する（状態変化時の増分 flush あり）。
-
-**sidecar の場所**
-
-```
-{repoRoot}/.ensemble/sessions/{conductorAgentId}.json
-```
-
-**永続化されるもの**
-
-| 項目 | 内容 |
-|------|------|
-| open question registry | 未回答・回答済みの質問一覧と `sequence` |
-| worker `acpSessionId` | worker 名をキーに ACP `session/load` 用 ID |
-| worker `acpCwd` | 上記 session を load するときの cwd（profile `workspace` 解決後の絶対パス。resume 時に profile と照合） |
-| `profile` | セッション開始時のスナップショット（resume 時は CLI `--profile` より sidecar を優先） |
-| `githubMonitor.explicitPullRequests` | `register_github_watch` で明示登録した PR の番号・登録時刻・監視種別。resume 後も Search に依存せず監視を継続 |
-| `updatedAt` | 最終 flush 時刻（`--continue` で最新セッション選択に使用、#31） |
-
-**載せないもの**: `worktreePath`（`issueUrl` + `repoRoot` から導出）、SDK 会話本文（SDK store が正本）
-
-**新規セッション**
-
-```bash
-ensemble issue 31 --repo-root .
-# またはフル URL:
-ensemble issue https://github.com/org/repo/issues/1 --repo-root .
-# JSON 出力の agentId を控える（例: agent-abc123）
-```
-
-**再開（同一 Issue の続き）**
-
-`--continue` は同一 `issueUrl` + `repoRoot` の sidecar のうち `updatedAt` が最新のものを自動選択する（`--resume` と排他）。
-
-```bash
-ensemble issue https://github.com/org/repo/issues/1 \
-  --repo-root . \
-  --continue
-```
-
-stderr に選んだ `conductorAgentId` が `[continue] resuming session: conductorAgentId=...` として出る。sidecar が無い場合は明確なエラーで終了（新規開始なら `--continue` なし）。
-
-`conductorAgentId` を直接指定する場合:
-
-```bash
-ensemble issue https://github.com/org/repo/issues/1 \
-  --repo-root . \
-  --resume agent-abc123
-```
-
-`--resume` 指定時に sidecar が無い場合は **起動失敗**（`SessionSidecarNotFoundError`）。SDK だけ復元して harness 状態を失う半端 resume はしない。
-
-conductor は SDK `Agent.resume`、worker は ACP `session/load` で復元する（詳細は [ADR 0011](docs/adr/0011-session-sidecar-resume.md)）。
-
-sidecar に保存された `githubMonitor.explicitPullRequests` も resume 時に monitor へ引き継がれるため、登録済み PR は Search の再検出を待たずに監視が継続される。
-
-**CLI JSON 出力（破壊的変更）**
-
-| 旧 | 新 |
-|----|-----|
-| `turnCount` | `sendCount`（完了した `agent.send` 回数） |
-| `onTurnComplete`（ライブラリ） | `onSendComplete` |
-
-`stopReason` に `interrupted`（SIGINT/SIGTERM による graceful shutdown）が追加される。
-
-### conductor → worker（常駐）
-
-`ensemble issue` では profile の `workers` で指定した worker が **セッション開始時に attach** され、**終了（または `--resume` / `--continue` 再開）まで `agent acp` プロセスを維持**する。
-
-| 経路 | 用途 |
-|------|------|
-| **startWorkers（attach + init prompt）** | 役割・permission・待機 prompt。実作業の開始トリガーではない。API: `WorkerSession.startWorkers()`（`bootstrap()` は deprecated） |
-| **`prompt_worker`（conductor SDK tool）** | 常駐 worker へ作業指示（`session/prompt`）。busy 時は per-worker キュー、`preempt: true` で割り込み |
-| **`register_github_watch`（conductor SDK tool）** | PR 番号または URL を GitHub 監視へ明示登録。`kinds` 省略時は review / review comment / CI 完了を監視 |
-| **`worker.completed` イベント** | 1 ラウンド完了を conductor へ通知（タスク完了の意味ではない） |
-
-**Issue / PR に書いただけでは worker は動かない。** トリガーは conductor の `prompt_worker` のみ（詳細は [ADR 0012](docs/adr/0012-conductor-worker-prompt-roundtrip.md)、[architecture.md §5](docs/architecture.md)）。
-
-### プロファイル
-
-同梱プロファイルは `profiles/` に置き、`build` 時に `dist/profiles/` へコピーされる（詳細は [docs/elements.md](docs/elements.md)）。
-
-```bash
-# 省略時 → config profile.default / ENSEMBLE_DEFAULT_PROFILE / 同梱 default
-ensemble issue <url> --repo-root .
-
-# config または環境変数でデフォルト指定（--profile 未指定時）
-export ENSEMBLE_DEFAULT_PROFILE=my-team
-ensemble issue <url> --repo-root .
-# または .ensemble/config.yaml に profile.default: my-team
-
-# カスタム（同梱に無い名前は <cwd>/profiles/<name>/ を参照）
-ensemble issue <url> --repo-root . --profile custom
-
-# ファイル直接指定
-ensemble issue <url> --repo-root . --profile ./my-profile.yaml
-```
-
-| 設定 | config キー（推奨） | 環境変数（上書き用） | 優先順位（Phase 1 共通） |
-|------|----------------------|----------------------|--------------------------|
-| 既定 team profile | `profile.default` | `ENSEMBLE_DEFAULT_PROFILE` | CLI `--profile` > env > project config > user config > 同梱 default |
-| conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | CLI `--model` > env > config > `default` |
-| worker ACP preset（profile 未指定 worker） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | profile/worker `acp` > CLI `--default-acp-*` > env > config > `cursor` |
-| オペレータ 1 回注入 | — | `ENSEMBLE_OPERATOR_MESSAGE` | — |
-
-横断設定の正本: [docs/settings.md](docs/settings.md)（全設定の解決順・一覧）。`config.yaml` スキーマ: [docs/config.md](docs/config.md)。**token 等の秘密情報は config に書かない。**
-
-同梱 `implementer-and-reviewer` の例 (`profiles/implementer-and-reviewer/profile.yaml`)。`--profile default` は同じプロファイルのエイリアス:
-
-```yaml
-workers:
-  - name: main
-    kind: worker
-  - name: librarian
-    kind: librarian
-    workspace: ../docs-repo   # 任意: この worker だけ別 ACP cwd
-materials:
-  - id: team
-    title: 役割分担
-    file: team.md
-```
-
-e2e は `agents.ping` + `workers: [ping]` で pong 応答を検証する（`packages/cli/test/e2e/fixtures/e2e-smoke/profile.yaml`）。`prompt_worker` 往復 smoke は `fixtures/e2e-roundtrip/profile.yaml`。per-worker workspace 用 fixture は `fixtures/e2e-workspace/profile.yaml`（本 PR では e2e 未実行。integration で fake ACP 上の cwd を検証済み）。
-
-### 人間エスカレーション（非対話環境）
-
-conductor の `ask_human` は質問を **open question（TODO リスト）として登録**する（非ブロッキング）。一覧は `list_open_questions`、詳細は `get_open_question`。オペレータ発話は `agent.send` の user ターンとして届く（system prompt に毎ターン埋め込まない）。
-
-### オペレータ入力と自律ターン予算
-
-- **TTY / `ENSEMBLE_OPERATOR_MESSAGE` あり**: デフォルトは **無制限**（`--no-max-turns` / `--max-turns 0` と同等）
-- **非 TTY / CI**: デフォルトは **5**（暴走防止）
-- `--max-turns <n>` で上限を明示指定できる（`0` は無制限）
-- `--no-max-turns` でリミットを無効化できる
-- オペレータが入力するとカウンタはリセットされる
-- 上限到達時（リミット有効時のみ）は orchestrator が open question「次どうする？」（`source: max_turns`）を自動登録し、conductor は送らず待機する
-- オペレータは次ターン開始前に TTY で回答（自由チャット可）
-- チャットですでに答えている場合は conductor が `answer_open_question` で代行記録
-- TTY（Ink TUI）では **Shift+↑/↓ で open question を選択**し、入力欄から回答を送信する（↑/↓ は複数行入力のカーソル移動）
-- 非 TTY では未回答が 1 件のときはそのまま入力で回答、複数件のときは自由な指示として扱う
-
-```bash
-ENSEMBLE_OPERATOR_MESSAGE='yes, continue' ensemble issue ...
-```
-
-非 TTY かつ `ENSEMBLE_OPERATOR_MESSAGE` 未設定のとき、open question 待ちでループが進まない（TTY 待機相当）。
-
-
-### TTY と IDE 内ターミナル
-
-Ink TUI のオペレータ入力欄は Emacs 風ショートカット（`Ctrl+a` / `Ctrl+k` + `Ctrl+y` 等）をサポートする。macOS では **Option を Meta（+Esc）** に設定しないと `Alt+b` / `Alt+f` が特殊文字入力になり効かない（iTerm2: Profiles → Keys、Terminal.app: Use Option as Meta key）。Cursor 等の **IDE 内ターミナル** では、IDE が `Ctrl+k` 等を先取りすることがある — ターミナルにフォーカスがあることと IDE のキーバインド設定を確認する。
-
-詳細: [docs/cli-text-input-keybindings.md](docs/cli-text-input-keybindings.md)
-
-### プロセス待機（post-loop）
-
-TTY 実行時、自律作業が一段落（conductor `finished` + 待ち事項なし）しても **デフォルトではプロセスを維持**する。追加指示を入力するか、`/exit`（または `exit`）で終了する。終了時は **テキストサマリを stderr** に出力（`--summary-format json` で stdout JSON に切替可）。
-
-`/exit` 終了時（isolated モード）は当該 Issue の worktree を削除する（[git worktree と依存インストール](#git-worktree-と依存インストール)）。
-
-- `--no-wait`: 自律ループ停止後に即終了（従来動作）
-- 非 TTY / CI: 従来どおり自動終了
-
-詳細は [docs/adr/0013-process-lifecycle-vs-autonomous-loop.md](docs/adr/0013-process-lifecycle-vs-autonomous-loop.md)。
-
-認証の詳細は上記 [認証](#認証) を参照。
+パッケージ変更を含む PR には changeset を追加します。手順の正本は [docs/RELEASE_GUIDE.md](docs/RELEASE_GUIDE.md)、changeset の概要は [.changeset/README.md](.changeset/README.md) を参照してください。
 
 ## ライセンス
 

@@ -1,5 +1,7 @@
 # 構成要素
 
+> **参照:** skill、worker、profile、Issue、PR などの概念と関係の概要。user team profile の配置・解決順の正本は [user-teams.md](user-teams.md)、config の詳細は [config.md](config.md) です。
+
 ## skill（作業スキル）
 
 - 基本的にこれに沿って進む
@@ -40,7 +42,7 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 
 `--profile <name>` の名前解決は上記優先順。パス指定（`.yaml` / `/` / 絶対パス）は従来どおり。
 
-デフォルト profile の優先順位:
+デフォルト profile の優先順位（全設定の正本は [settings.md](settings.md)）:
 
 | 順 | ソース |
 |----|--------|
@@ -64,7 +66,7 @@ harness 横断設定（profile 既定・session 既定・GitHub 認証 / monitor
 - `agents.<kind>` … agent の modular-prompt 拡張（`prompt` インライン / `promptFile` 外部 YAML）。未指定時は ensemble base のみ
 - `workers` … 起動する worker（`name` + `kind`）。`- ping` は name=kind の省略形
 - `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。`~` / `~/...` は homedir() で展開。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準
-- `acp` … **任意**。profile 全体の ACP spawn デフォルト（worker 未指定時に継承）。`workers[].acp` がある worker は CLI / `ENSEMBLE_DEFAULT_ACP_CLI` で上書きされない
+- `acp` … **任意**。profile 全体の ACP spawn デフォルト（worker 未指定時に継承）。`workers[].acp` がある worker は CLI / `ENSEMBLE_DEFAULT_ACP_CLI` / config `acp.defaultPreset` で上書きされない
 - `workers[].acp` … **任意**。worker 単位の ACP spawn（profile `acp` より優先）。`preset`（`cursor` | `claude` | `codex` | `pi` | `custom`）または `command` / `args` / `env` を指定。built-in preset への追加 `args` は preset 既定 args の後ろに連結
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む
 

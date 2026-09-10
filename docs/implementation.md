@@ -1,5 +1,7 @@
 # 実装方針（検討）
 
+> **参照:** 実装方針と段階導入の検討メモ。現行の技術構成の正本は [architecture.md](architecture.md) です。
+
 技術構成の正本は [architecture.md](architecture.md)。本文は要約とメモ。
 
 [my-logs#2027](https://github.com/otolab/my-logs/issues/2027) のコメントを反映。
