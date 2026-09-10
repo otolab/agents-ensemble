@@ -18,13 +18,14 @@ const packageRoot = path.resolve(
 
 type SetValueUpdater = string | ((previous: string) => string);
 type SetCursorUpdater = number | ((previous: number) => number);
+type ForkKeyAction = string | null;
 
 export type ForkKeyboardModules = {
   readonly useKeyboardInput: (options: {
     isActive: boolean;
     value: string;
     cursor: number;
-    keybindings: Readonly<Record<string, boolean>>;
+    keyActions: Readonly<Record<string, ForkKeyAction>>;
     autoNewLineLimit: number;
     onSubmit: (value: string) => void;
     onFirstLineUp: (() => void) | undefined;
@@ -81,7 +82,7 @@ export type ForkKeyboardModules = {
     initialLineCount: number,
     tabWidth?: number,
   ) => readonly unknown[];
-  readonly DEFAULT_KEYBINDINGS: Readonly<Record<string, boolean>>;
+  readonly DEFAULT_KEY_ACTIONS: Readonly<Record<string, ForkKeyAction>>;
 };
 
 let forkModulesPromise: Promise<ForkKeyboardModules> | undefined;
@@ -99,7 +100,7 @@ export async function loadForkKeyboardModules(): Promise<ForkKeyboardModules> {
     useUndo: undo.useUndo as ForkKeyboardModules['useUndo'],
     getCursorLineAndColumn: textUtils.getCursorLineAndColumn as ForkKeyboardModules['getCursorLineAndColumn'],
     buildVisualRows: textUtils.buildVisualRows as ForkKeyboardModules['buildVisualRows'],
-    DEFAULT_KEYBINDINGS: constants.DEFAULT_KEYBINDINGS as ForkKeyboardModules['DEFAULT_KEYBINDINGS'],
+    DEFAULT_KEY_ACTIONS: constants.DEFAULT_KEY_ACTIONS as ForkKeyboardModules['DEFAULT_KEY_ACTIONS'],
   }));
   return forkModulesPromise;
 }
@@ -118,7 +119,7 @@ export function OperatorTextAreaKeyboardHarness({
   onCursorPosition,
   lineWidth = 0,
 }: KeyboardHarnessProps) {
-  const { useKeyboardInput, useKillRing, useUndo, DEFAULT_KEYBINDINGS } = modules;
+  const { useKeyboardInput, useKillRing, useUndo, DEFAULT_KEY_ACTIONS } = modules;
   const [value, setValue] = useState('');
   const [cursor, setCursor] = useState(0);
   const { pushUndo, undo, resetMutationTracking } = useUndo({
@@ -138,7 +139,7 @@ export function OperatorTextAreaKeyboardHarness({
     isActive: true,
     value,
     cursor,
-    keybindings: DEFAULT_KEYBINDINGS,
+    keyActions: DEFAULT_KEY_ACTIONS,
     autoNewLineLimit: 3,
     onSubmit: () => {},
     onFirstLineUp: undefined,

@@ -169,7 +169,7 @@ Emacs 風を **自前実装** する場合の最小ループ:
 
 | 経路 | 入力実装 | Emacs 風 |
 |------|----------|----------|
-| TTY + Ink TUI | `OperatorTextArea` → フォーク `react-ink-textarea`（`pnpm` patch でキルリング / Readline 整合） | **ライブラリ内蔵**。`Ctrl+a/e/f/b/d`（`Ctrl+d` はカーソル位置の 1 文字削除）、`Ctrl+p/n`（visual row の上 / 下移動、上端 / 下端は no-op）、`Ctrl+k/u/w/y`、`Alt+b/f/y` をサポート。`Ctrl+r`（履歴逆検索）は **非対応**。 |
+| TTY + Ink TUI | `OperatorTextArea` → 公開 fork `@otolab/react-ink-textarea`（キルリング / Readline 整合を内蔵） | **ライブラリ内蔵**。`Ctrl+a/e/f/b/d`（`Ctrl+d` はカーソル位置の 1 文字削除）、`Ctrl+p/n`（visual row の上 / 下移動、上端 / 下端は no-op）、`Ctrl+k/u/w/y`、`Alt+b/f/y` をサポート。`Ctrl+r`（履歴逆検索）は **非対応**。 |
 | TTY スクロール | `issue-session-tui.tsx` の `useInput` | `PgUp/PgDn` / `Home`/`End`（入力空時 or Ctrl 修飾）— **編集ショートカットとは別レイヤ**（競合なし） |
 | 非 TTY | `readline` / `ENSEMBLE_OPERATOR_MESSAGE` | OS・Node readline 依存 |
 

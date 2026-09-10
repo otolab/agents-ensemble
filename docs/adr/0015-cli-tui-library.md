@@ -127,7 +127,7 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 
 | 項目 | 実装 |
 |------|------|
-| 依存 | `github:otolab/react-ink-textarea#<commit>`（#194 npm 公開後は `@otolab/react-ink-textarea` へ移行可） |
+| 依存 | `npm:@otolab/react-ink-textarea@0.4.1-otolab.3`（Emacs / IME 対応を公開 fork から取得） |
 | 表示・折り返し | フォーク `TextArea` の visual row（書記素幅ベース） |
 | IME 物理カーソル | フォーク `TextArea` の `cursorStart` + 内部 visual row。`IssueSessionTui` がペイン座標を渡し、`OperatorTextArea` がプロンプト幅を差し引いて委譲 |
 | ペイン高さ | `operator-input-layout` の `computeOperatorInputLayout`（入力欄の表示行数推定。IME とは別経路） |
