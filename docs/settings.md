@@ -44,9 +44,9 @@ worker spawn 時の ACP 解決（[ADR 0019](https://github.com/otolab/agents-ens
 profile.workers[].acp > profile.acp > CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
 ```
 
-### パターン D — 環境変数のみ
+### パターン D — 実行時入力（env / CLI）
 
-config キーなし。CI・スクリプト・端末検出向け。
+config キーなし。CI・スクリプト・端末検出、または 1 回限りのオペレータ入力向け。
 
 ### パターン E — 認証（config は可否のみ）
 
@@ -80,9 +80,15 @@ config キーなし。CI・スクリプト・端末検出向け。
 |------|----------|--------|-----|----------------|------|
 | TTY レイアウト | `ENSEMBLE_TUI_LAYOUT` | `tui.layout` | — | `pane` | A |
 | OSC 8 ハイパーリンク | `FORCE_HYPERLINK`（`1`/`0`） | `tui.forceHyperlink`（`auto`/`on`/`off`） | — | `auto` | A |
-| オペレータ 1 回注入 | `ENSEMBLE_OPERATOR_MESSAGE` | — | — | — | D |
+| オペレータ 1 回注入 | `ENSEMBLE_OPERATOR_MESSAGE` | — | `ensemble issue <ref> [message...]` | — | D |
 
 TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡して解決する。Issue リンク表示の詳細は [operator-input.md](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md)。
+
+### 初回オペレータメッセージの CLI / env 関係
+
+`ensemble issue <ref> [message...]` の残り引数をスペース 1 つで結合し、前後を trim して初回メッセージにします。CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できません。両方が trim 後に空でない場合は、優先順位を設けず起動前にエラーにします。
+
+新規セッションでは、指定した値を binding 直後に 1 回だけ `operator.message` として送ります。TTY / 非 TTY の両方に対応します。`--continue` / `--resume` に CLI メッセージを付けた場合は注入せず、stderr に 1 行の警告を出します。
 
 ## 一覧 — 自動化・非 TTY
 
@@ -118,7 +124,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 |--------------|------|
 | チーム / 個人の恒久既定（モデル、worktree、monitor） | `~/.ensemble/config.yaml` または project `.ensemble/config.yaml` |
 | CI で 1 ジョブだけ上書き | 環境変数（`CONDUCTOR_MODEL_ID` 等） |
-| 1 回限りの実行 | CLI フラグ |
+| 1 回限りの実行 | CLI フラグ（初回メッセージは `ensemble issue <ref> [message...]`） |
 | token | 環境変数 or `gh auth login` / `ensemble auth login`（config に書かない） |
 | tmux 内で Issue リンクを短縮表示 | `~/.ensemble/config.yaml` に `tui.forceHyperlink: on`（または env `FORCE_HYPERLINK=1`） |
 | worker ごとの ACP / cwd | `profile.yaml` |
@@ -130,7 +136,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 
 | env-only | 理由 |
 |----------|------|
-| `ENSEMBLE_OPERATOR_MESSAGE` | 非 TTY で 1 回だけオペレータ入力を注入する自動化用値。永続設定にはしない |
+| `ENSEMBLE_OPERATOR_MESSAGE` | CLI 引数を使えない自動化などで、1 回だけオペレータ入力を注入する env-only の値。永続設定にはしない |
 | `ENSEMBLE_ESCALATION_RESPONSE` | 非 TTY で `ask_human` への回答を 1 回注入する自動化用値。永続設定にはしない |
 | `CURSOR_API_KEY` | conductor の秘密情報。config に平文保存しない |
 | `GITHUB_TOKEN` / `GH_TOKEN` | GitHub API の秘密情報。config では token 本体を管理しない |

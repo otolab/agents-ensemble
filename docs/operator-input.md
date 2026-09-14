@@ -12,7 +12,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 |----|------|----------------|
 | **SessionPolicy** | dispatch 可否・ループ終了・自律ターン数 | `session-policy.ts` |
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
-| **SessionView** | TTY Ink TUI / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
+| **SessionView** | TTY Ink TUI / CLI 引数 / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
 データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。View は `submit` で `operator.message` をキューへ積むだけ。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
 
@@ -55,6 +55,19 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 購読解除関数を返せる（readline close 等）。省略可。
 
+## CLI からの初回オペレータメッセージ
+
+`ensemble issue <ref> [message...]` の残り引数をスペース 1 つで結合し、前後を trim した値を初回メッセージとして扱います。値が空文字または空白だけの場合は、メッセージ未指定として扱います。
+
+```bash
+ensemble issue 42 受け入れ条件を確認して実装してください
+ensemble issue https://github.com/org/repo/issues/42 "まずテストから始めてください"
+```
+
+セッションの operator input binding 直後に `api.submit(message)` を 1 回だけ呼ぶため、TTY（Ink TUI）と非 TTY のどちらでも、手入力を待たずに `operator.message` として conductor へ届きます。メッセージ未指定時の TTY 入力と `ENSEMBLE_OPERATOR_MESSAGE` の挙動は変わりません。
+
+CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できません。両方が trim 後に空でない場合は、セッション開始前にエラーになります。これは優先順位ではなく併用禁止です。`--continue` または `--resume` で CLI メッセージを指定した場合は注入せず、stderr に 1 行の警告を出します。`ENSEMBLE_OPERATOR_MESSAGE` は従来どおりそのセッションの binding で解決されます。
+
 ## TTY TUI レイアウト
 
 TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。
@@ -81,7 +94,8 @@ scrollback を実行中に上へ移動しているときに新着ログが追記
 | 環境 | 実装 | ファイル |
 |------|------|----------|
 | TTY（本番 CLI） | `createIssueSessionTuiHost`（Ink `pane` / `stream` + 入力欄） | `packages/cli/src/tui/create-issue-session-tui-host.tsx` |
-| 非 TTY + `ENSEMBLE_OPERATOR_MESSAGE` | `bindAsyncOperatorInput`（env を 1 回 submit） | `packages/cli/src/async-operator-input.ts` |
+| TTY + CLI メッセージ | `createIssueSessionTuiHost`（CLI メッセージを 1 回 submit） | `packages/cli/src/tui/create-issue-session-tui-host.tsx` |
+| 非 TTY + CLI メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` | `bindAsyncOperatorInput`（指定値を 1 回 submit） | `packages/cli/src/async-operator-input.ts` |
 | テスト | `createTestOperatorInputBinding` | `packages/core/src/conductor/testing/test-operator-input-binding.ts` |
 
 ## `runConductorSession` への接続
@@ -108,7 +122,7 @@ View が決めないこと（SessionPolicy / Driver の責務）:
 
 | 条件 | デフォルト |
 |------|-----------|
-| TTY または `ENSEMBLE_OPERATOR_MESSAGE` あり | 無制限 |
+| TTY、CLI メッセージ、または `ENSEMBLE_OPERATOR_MESSAGE` あり | 無制限 |
 | 非 TTY / CI | 5 |
 
 明示指定:

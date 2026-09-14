@@ -99,6 +99,29 @@ describe('bindAsyncOperatorInput', () => {
     process.env.ENSEMBLE_OPERATOR_MESSAGE = previous;
   });
 
+  it('submits the CLI message once without readline', () => {
+    const submit = vi.fn(() => true);
+    delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+
+    const dispose = bindAsyncOperatorInput(
+      {
+        submit,
+        getContext: () => ({
+          conductorTurn: 1,
+          autonomousTurns: 0,
+          maxTurns: 5,
+          openQuestions: [],
+        }),
+      },
+      { initialOperatorMessage: '  hello from cli  ' },
+    );
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith('hello from cli');
+    expect(mockCreateInterface).not.toHaveBeenCalled();
+    dispose();
+  });
+
   it('submits trimmed lines from readline without blocking caller', () => {
     const submit = vi.fn(() => true);
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
