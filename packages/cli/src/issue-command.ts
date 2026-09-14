@@ -251,7 +251,12 @@ export async function executeIssueCommand(
                   issueUrl,
                   initialOperatorMessage: initialOperatorMessageForBinding,
                 })),
-            continueOnConductorError: true,
+            continueOnConductorError: !hasOneShotOperatorMessage,
+            ...(hasOneShotOperatorMessage
+              ? {
+                  stopOnUnansweredInput: true,
+                }
+              : {}),
             ...(isTty() && postLoopWait && !hasOneShotOperatorMessage
               ? {
                   waitForOperatorExit: true,

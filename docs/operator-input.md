@@ -66,6 +66,8 @@ ensemble issue https://github.com/org/repo/issues/42 "まずテストから始�
 
 セッションの operator input binding 直後に `api.submit(message)` を 1 回だけ呼ぶため、TTY（Ink TUI）と非 TTY のどちらでも、手入力を待たずに `operator.message` として conductor へ届きます。CLI 初回メッセージまたは `ENSEMBLE_OPERATOR_MESSAGE` による単発注入では post-loop 待機を行わず、送信後にセッションを終了します。メッセージ未指定時の TTY 入力の挙動は変わりません。
 
+単発注入は追加入力を提供しないため、終了契約も通常の TTY 入力と異なります。初回メッセージを処理した conductor の `error` は再入力を待たずにエラー終了します。`ask_human` による未回答 open question、または未解決の permission が残った場合も、回答を待つ post-loop へは移らず、その時点でセッションを終了します。未回答 question は終了結果・sidecar に残り、未解決 permission は終了処理で拒否されます。
+
 CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できません。両方が trim 後に空でない場合は、セッション開始前にエラーになります。これは優先順位ではなく併用禁止です。`--continue` または `--resume` で CLI メッセージを指定した場合は注入せず、stderr に 1 行の警告を出します。`ENSEMBLE_OPERATOR_MESSAGE` は従来どおりそのセッションの binding で解決されます。
 
 ## TTY TUI レイアウト
@@ -115,7 +117,7 @@ View が決めないこと（SessionPolicy / Driver の責務）:
 
 - max-turns 到達後に worker イベントを送るか（`maxTurns <= 0` のときは常に可）
 - 次に送るイベント束の選び方（`operator.message` 最優先 → `permission` → worker continuation 1 回 → 静的優先度 — [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md)）
-- 未回答 open question があるときのループ継続（open question がある間は停止しない）
+- 未回答 open question があるときのループ継続（通常の binding では open question がある間は停止しない。単発注入では回答を待たずに停止する）
 - ループ終了条件
 
 ## CLI: 自律ターン上限

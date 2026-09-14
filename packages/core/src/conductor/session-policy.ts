@@ -21,6 +21,8 @@ export interface IssueLoopStopInput {
   openQuestions?: number;
   /** TTY 等でオペレータ入力があるとき、conductor error でもループを継続する。 */
   continueOnConductorError?: boolean;
+  /** 初回入力だけで終了する経路では、追加の operator 入力を待たずに停止する。 */
+  stopOnUnansweredInput?: boolean;
 }
 
 export const DEFAULT_MAX_ISSUE_TURNS = 5;
@@ -47,6 +49,12 @@ export function operatorInputMaxTurns(maxTurns: number): number | null {
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
   if (input.lastStatus === 'error') {
     return !input.continueOnConductorError;
+  }
+  if (
+    input.stopOnUnansweredInput &&
+    ((input.pendingPermissions ?? 0) > 0 || (input.openQuestions ?? 0) > 0)
+  ) {
+    return true;
   }
   if ((input.runningWorkers ?? 0) > 0) return false;
   if ((input.pendingPermissions ?? 0) > 0) return false;
@@ -110,6 +118,7 @@ export function buildIssueLoopStopInput(input: {
   permissionPipeline: PermissionPipeline;
   openQuestions: OpenQuestionRegistry;
   continueOnConductorError: boolean;
+  stopOnUnansweredInput?: boolean;
 }): IssueLoopStopInput {
   return {
     autonomousTurns: input.autonomousTurns,
@@ -120,5 +129,6 @@ export function buildIssueLoopStopInput(input: {
     pendingPermissions: input.permissionPipeline.pending.size,
     openQuestions: input.openQuestions.openCount,
     continueOnConductorError: input.continueOnConductorError,
+    stopOnUnansweredInput: input.stopOnUnansweredInput,
   };
 }

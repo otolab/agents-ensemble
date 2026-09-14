@@ -56,6 +56,8 @@ const baseOptions = {
 const issueUrl = 'https://github.com/org/repo/issues/1';
 
 type FakeConductorRunOptions = {
+  continueOnConductorError?: boolean;
+  stopOnUnansweredInput?: boolean;
   bindOperatorInput?: (api: {
     submit: (message: string) => boolean;
     getContext: () => {
@@ -219,6 +221,12 @@ describe('executeIssueCommand initial operator message wiring', () => {
 
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith('start the task');
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continueOnConductorError: false,
+        stopOnUnansweredInput: true,
+      }),
+    );
   });
 
   it('warns once and does not inject the CLI message when continuing', async () => {
@@ -371,6 +379,12 @@ describe('executeIssueCommand initial operator message wiring', () => {
     );
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith('from cli');
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continueOnConductorError: false,
+        stopOnUnansweredInput: true,
+      }),
+    );
     expect(runIssueSession).toHaveBeenCalledWith(
       expect.not.objectContaining({
         waitForOperatorExit: true,

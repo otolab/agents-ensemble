@@ -55,7 +55,7 @@ program
   .option('--model <id>', 'Conductor model id (default: config conductor.model, else default)')
   .option(
     '--max-turns <n>',
-    'Maximum conductor autonomous turns (0 = unlimited; default: unlimited on TTY, 5 otherwise)',
+    'Maximum conductor autonomous turns (0 = unlimited; default: unlimited on TTY or with an initial operator message, 5 otherwise)',
     (value) => Number.parseInt(value, 10),
   )
   .option('--no-max-turns', 'Disable autonomous turn limit')

@@ -82,6 +82,8 @@ export interface ConductorSessionDriverOptions {
   shutdownSignal: AbortSignal;
   maxTurns: number;
   continueOnConductorError: boolean;
+  /** one-shot 入力時は未回答の operator 入力を待たずに停止する。 */
+  stopOnUnansweredInput?: boolean;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
@@ -216,6 +218,7 @@ export async function runConductorSessionDriver(
         permissionPipeline: options.permissionPipeline,
         openQuestions: options.openQuestions,
         continueOnConductorError: options.continueOnConductorError,
+        stopOnUnansweredInput: options.stopOnUnansweredInput,
       });
       if (shouldBreakAfterLoopState(loopState)) {
         break;
@@ -237,6 +240,7 @@ export async function runConductorSessionDriver(
         permissionPipeline: options.permissionPipeline,
         openQuestions: options.openQuestions,
         continueOnConductorError: options.continueOnConductorError,
+        stopOnUnansweredInput: options.stopOnUnansweredInput,
       });
       if (shouldBreakAfterLoopState(loopState)) {
         break;
