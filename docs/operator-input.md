@@ -124,8 +124,8 @@ View が決めないこと（SessionPolicy / Driver の責務）:
 
 | 条件 | デフォルト |
 |------|-----------|
-| TTY、CLI メッセージ、または `ENSEMBLE_OPERATOR_MESSAGE` あり | 無制限 |
-| 非 TTY / CI | 5 |
+| TTY、または有効な CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` あり | 無制限 |
+| 非 TTY / CI で有効な単発メッセージなし（`--continue` / `--resume` で CLI メッセージだけを指定した場合を含む） | 5 |
 
 明示指定:
 
@@ -158,10 +158,10 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 | 条件 | 動作 |
 |------|------|
-| TTY + デフォルト（初回メッセージなし） | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
-| CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` | binding 直後に 1 回注入し、post-loop 待機なしで終了 |
+| TTY + デフォルト（有効な初回メッセージなし。`--continue` / `--resume` で CLI メッセージを無視した場合を含む） | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
+| 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | binding 直後に 1 回注入し、post-loop 待機なしで終了 |
 | `--no-wait` | 自律ループ停止後に即終了（従来動作） |
-| 非 TTY / CI | `waitForOperatorExit` なし → 即終了 |
+| 非 TTY / CI かつ有効な単発メッセージなし（`--continue` / `--resume` で CLI メッセージだけを指定した場合を含む） | `waitForOperatorExit` なし → 即終了 |
 | post-loop 中の TTY 追加入力 | `operator.message` としてキューに積み、継続中の SessionDriver が処理 |
 | post-loop 中の GitHub 更新 | `issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` を `github.update` として enqueue し、継続中の SessionDriver が処理（[harness-events.md](harness-events.md) §3） |
 

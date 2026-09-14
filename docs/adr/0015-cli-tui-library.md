@@ -81,8 +81,8 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 
 | 条件 | 動作（現行維持） |
 |------|------------------|
-| 非 TTY かつ CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` なし | Ink を起動しない。`createHarnessSink` のみ。stdout は終了時 SessionSummary JSON のみ |
-| CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` あり | 1 回 `submit` して終了（post-loop 待機なし）。conductor `error`、未回答 open question、未解決 permission があっても追加入力を待たず終了 |
+| 非 TTY かつ有効な単発メッセージなし（有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` なし。`--continue` / `--resume` で CLI メッセージだけを指定した場合を含む） | Ink を起動しない。`createHarnessSink` のみ。stdout は終了時 SessionSummary JSON のみ |
+| 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` あり | 1 回 `submit` して終了（post-loop 待機なし）。conductor `error`、未回答 open question、未解決 permission があっても追加入力を待たず終了 |
 | TTY | Ink TUI を起動。Dialogue / Harness を TUI ペインへ集約し、stdout への逐次 `write` は行わない（終了 JSON はプロセス終了時のみ） |
 
 `issue-command.ts` の `interactive` 分岐パターンを拡張し、TUI 経路と非 TUI 経路を **同一ファイル内で明示的に分岐**する。CI / e2e テストは非 TTY 経路のまま動作させる。
