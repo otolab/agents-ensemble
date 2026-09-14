@@ -125,7 +125,7 @@ View が決めないこと（SessionPolicy / Driver の責務）:
 | 条件 | デフォルト |
 |------|-----------|
 | TTY、または有効な CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` あり | 無制限 |
-| 非 TTY / CI で有効な単発メッセージなし（`--continue` / `--resume` で CLI メッセージだけを指定した場合を含む） | 5 |
+| 非 TTY / CI で有効な単発メッセージなし（`--continue` / `--resume` で CLI メッセージだけを指定した場合を含む。binding なし） | 5 |
 
 明示指定:
 
