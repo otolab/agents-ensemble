@@ -61,7 +61,7 @@ GitHub 更新（`issue.comment` / `pr.review` / `pr.review_comment` / `ci.comple
 
 #45 と同様、`isOperatorInputInteractive(initialOperatorMessage)`（TTY、CLI 初回メッセージ、または `ENSEMBLE_OPERATOR_MESSAGE`）で interactive を判定。CLI 初回メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は binding 直後に 1 回注入する入力経路であり、CLI 初回メッセージは `--continue` / `--resume` では無視して警告する。
 
-単発注入では interactive 判定を使って初回 `operator.message` を dispatch するが、追加入力の lifecycle は持たない。post-loop 待機を無効にし、conductor `error` は継続せず、未回答 open question / 未解決 permission が残っても入力待ちに入らずセッションを終了する。
+単発注入では interactive 判定を使って初回 `operator.message` を dispatch するが、追加入力の lifecycle は持たない。post-loop 待機を無効にし、conductor `error` は継続せず、SDK `cancelled` は terminal status（`stopReason: cancelled`）として扱う。未回答 open question / 未解決 permission が残っている、または dispatch hold 中にこの終了条件へ到達した場合も、入力待ちに入らずセッションを終了する。
 
 ## Consequences
 

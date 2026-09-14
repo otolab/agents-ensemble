@@ -56,6 +56,18 @@ describe('shouldStopIssueLoop', () => {
     ).toBe(true);
   });
 
+  it('stops on a cancelled SDK run even when conductor errors are retryable', () => {
+    expect(
+      shouldStopIssueLoop({
+        autonomousTurns: 1,
+        maxTurns: 0,
+        lastStatus: 'cancelled',
+        dispatchesThisTurn: 0,
+        continueOnConductorError: true,
+      }),
+    ).toBe(true);
+  });
+
   it('continues on error when continueOnConductorError is set', () => {
     expect(
       shouldStopIssueLoop({
@@ -174,6 +186,17 @@ describe('resolveIssueLoopStopReason', () => {
         dispatchesThisTurn: 1,
       }),
     ).toBe('completed');
+  });
+
+  it('preserves cancelled as the terminal stop reason', () => {
+    expect(
+      resolveIssueLoopStopReason({
+        autonomousTurns: 1,
+        maxTurns: 0,
+        lastStatus: 'cancelled',
+        dispatchesThisTurn: 0,
+      }),
+    ).toBe('cancelled');
   });
 });
 

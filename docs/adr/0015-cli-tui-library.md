@@ -87,7 +87,7 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 
 `issue-command.ts` の `interactive` 分岐パターンを拡張し、TUI 経路と非 TUI 経路を **同一ファイル内で明示的に分岐**する。CI / e2e テストは非 TTY 経路のまま動作させる。
 
-単発注入（CLI 初回メッセージまたは `ENSEMBLE_OPERATOR_MESSAGE`）では、入力 binding の終了後も conductor error の再試行や open question / permission の回答待ちを継続しない。未回答 question は終了結果・sidecar に残し、未解決 permission は teardown で拒否する。これは追加入力を提供する通常の TTY セッションの post-loop 待機とは別の終了契約である。
+単発注入（CLI 初回メッセージまたは `ENSEMBLE_OPERATOR_MESSAGE`）では、入力 binding の終了後も conductor error の再試行や open question / permission の回答待ちを継続しない。SDK の `cancelled` も terminal status として `stopReason: cancelled` に記録して終了する。dispatch hold 中にこの終了条件へ到達しても release を待たず、held trigger は追加 dispatch しない。未回答 question は終了結果・sidecar に残し、未解決 permission は teardown で拒否する。これは追加入力を提供する通常の TTY セッションの post-loop 待機とは別の終了契約である。
 
 ## Consequences
 

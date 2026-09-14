@@ -7,6 +7,7 @@ import type { WorkerSession } from '../runtime/worker-session.js';
 export type IssueLoopStopReason =
   | 'completed'
   | 'error'
+  | 'cancelled'
   | 'max_turns'
   | 'interrupted';
 
@@ -47,6 +48,11 @@ export function operatorInputMaxTurns(maxTurns: number): number | null {
 
 /** Issue session の conductor 自律ループを終了すべきか判定する（プロセス終了ではない）。 */
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
+  // `cancelled` is a terminal SDK run status, not a retryable conductor error.
+  // In particular, one-shot sessions must not fall through to event waiting.
+  if (input.lastStatus === 'cancelled') {
+    return true;
+  }
   if (input.lastStatus === 'error') {
     return !input.continueOnConductorError;
   }
@@ -68,6 +74,7 @@ export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
 export function resolveIssueLoopStopReason(
   input: IssueLoopStopInput,
 ): IssueLoopStopReason {
+  if (input.lastStatus === 'cancelled') return 'cancelled';
   if (input.lastStatus === 'error') return 'error';
   return 'completed';
 }
