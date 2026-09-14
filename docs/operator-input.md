@@ -96,8 +96,8 @@ scrollback を実行中に上へ移動しているときに新着ログが追記
 | 環境 | 実装 | ファイル |
 |------|------|----------|
 | TTY（本番 CLI） | `createIssueSessionTuiHost`（Ink `pane` / `stream` + 入力欄） | `packages/cli/src/tui/create-issue-session-tui-host.tsx` |
-| TTY + CLI メッセージ | `createIssueSessionTuiHost`（CLI メッセージを 1 回 submit） | `packages/cli/src/tui/create-issue-session-tui-host.tsx` |
-| 非 TTY + CLI メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` | `bindAsyncOperatorInput`（指定値を 1 回 submit） | `packages/cli/src/async-operator-input.ts` |
+| TTY + 有効な CLI 初回メッセージ（新規セッション） | `createIssueSessionTuiHost`（CLI メッセージを 1 回 submit） | `packages/cli/src/tui/create-issue-session-tui-host.tsx` |
+| 非 TTY + 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | `bindAsyncOperatorInput`（指定値を 1 回 submit） | `packages/cli/src/async-operator-input.ts` |
 | テスト | `createTestOperatorInputBinding` | `packages/core/src/conductor/testing/test-operator-input-binding.ts` |
 
 ## `runConductorSession` への接続
