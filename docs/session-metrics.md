@@ -60,7 +60,7 @@
 | `agentId` | `string` | SDK `ConductorAgent` | 終了 JSON・TTY テキスト（resume 用） | なし（常に設定） |
 | `issueUrl` | `string` | セッション開始引数 | 終了 JSON | なし |
 | `repoRoot` | `string` | worktree 解決後 | 終了 JSON | なし |
-| `stopReason` | `IssueLoopStopReason` | `session.stop`（`completed` / `error` / `max_turns` / `interrupted`） | 終了 JSON・TTY テキスト | なし |
+| `stopReason` | `IssueLoopStopReason` | `session.stop`（`completed` / `error` / `cancelled` / `max_turns` / `interrupted`） | 終了 JSON・TTY テキスト | なし |
 | `sendCount` | `number` | `conductor.send` 完了回数 | 終了 JSON・TTY テキスト・活動ログ（イベント本文） | `0` |
 | `lastRunStatus` | `string` | 直近 `conductor.send` の SDK status | 終了 JSON | 最終 send 無し時は `'finished'` |
 | `lastResult` | `string?` | 直近 `conductor.send` の応答末尾 | 終了 JSON | 省略 |

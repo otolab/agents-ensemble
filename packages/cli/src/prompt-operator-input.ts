@@ -2,12 +2,11 @@ import * as readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import type { OperatorInputContext } from '@agents-ensemble/core';
 import { formatIssueReference } from './tui/format-operator-context.js';
+import { resolveInitialOperatorMessage } from './operator-message.js';
 
-const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
-
-/** TTY または `ENSEMBLE_OPERATOR_MESSAGE` でオペレータ入力が実際に届く環境か。 */
-export function isOperatorInputInteractive(): boolean {
-  if (process.env[OPERATOR_MESSAGE_ENV]?.trim()) {
+/** TTY、CLI メッセージ、または `ENSEMBLE_OPERATOR_MESSAGE` で入力が届く環境か。 */
+export function isOperatorInputInteractive(initialOperatorMessage?: string): boolean {
+  if (resolveInitialOperatorMessage(initialOperatorMessage)) {
     return true;
   }
   return process.stdin.isTTY ?? false;
@@ -26,7 +25,7 @@ export async function promptOperatorInput(
   context: OperatorInputContext,
   issueUrl?: string,
 ): Promise<string | undefined> {
-  const fromEnv = process.env[OPERATOR_MESSAGE_ENV]?.trim();
+  const fromEnv = resolveInitialOperatorMessage();
   if (fromEnv) {
     return fromEnv;
   }

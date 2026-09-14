@@ -16,6 +16,7 @@ import { isOperatorInputTty } from './prompt-operator-input.js';
 import { resolveIssueSummaryFormat } from './resolve-summary-format.js';
 import { writeIssueSessionSummary } from './write-issue-session-summary.js';
 import { formatProfilesListJson, formatProfilesListText } from './format-profiles-list.js';
+import { normalizeInitialOperatorMessage } from './operator-message.js';
 
 const program = new Command();
 
@@ -31,6 +32,7 @@ program
     '<issue-url>',
     'GitHub Issue URL or number (e.g. 31, #31)',
   )
+  .argument('[message...]', 'Initial operator message words')
   .option(
     '--repo-root <path>',
     'Path to the local git clone for worker worktrees',
@@ -53,7 +55,7 @@ program
   .option('--model <id>', 'Conductor model id (default: config conductor.model, else default)')
   .option(
     '--max-turns <n>',
-    'Maximum conductor autonomous turns (0 = unlimited; default: unlimited on TTY, 5 otherwise)',
+    'Maximum conductor autonomous turns (0 = unlimited; default: unlimited on TTY or with an initial operator message, 5 otherwise)',
     (value) => Number.parseInt(value, 10),
   )
   .option('--no-max-turns', 'Disable autonomous turn limit')
@@ -99,6 +101,7 @@ program
   .action(
     async (
       issueRef: string,
+      messageParts: string[],
       options: {
         repoRoot: string;
         conductorCwd: string;
@@ -124,6 +127,7 @@ program
         const issueUrl = await resolveIssueUrl(issueRef, repoRoot);
         const result = await executeIssueCommand(issueUrl, {
           ...options,
+          initialOperatorMessage: normalizeInitialOperatorMessage(messageParts),
           defaultAcpArgs: options.defaultAcpArg,
         });
 

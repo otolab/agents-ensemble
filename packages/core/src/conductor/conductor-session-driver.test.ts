@@ -34,6 +34,7 @@ function createDriverOptions(input: {
   openQuestions?: OpenQuestionRegistry;
   maxTurns?: number;
   runningCount?: number;
+  stopOnUnansweredInput?: boolean;
 }) {
   const workerDispatches: never[] = [];
   const workerFailures: never[] = [];
@@ -55,10 +56,31 @@ function createDriverOptions(input: {
     shutdownSignal: new AbortController().signal,
     maxTurns: input.maxTurns ?? 5,
     continueOnConductorError: false,
+    stopOnUnansweredInput: input.stopOnUnansweredInput ?? false,
     workerDispatches,
     workerFailures,
     onSendComplete: vi.fn(),
   };
+}
+
+async function awaitDriverWithTimeout<T>(
+  promise: Promise<T>,
+  shutdown: AbortController,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          shutdown.abort();
+          reject(new Error('SessionDriver did not stop within the test timeout'));
+        }, 1_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 describe('runConductorSessionDriver', () => {
@@ -101,6 +123,91 @@ describe('runConductorSessionDriver', () => {
     expect(String(send.mock.calls[0]![0])).toContain('Test issue body for conductor.');
     expect(result.sendCount).toBe(1);
     expect(result.stopReason).toBe('completed');
+  });
+
+  it('stops a one-shot session when the SDK run is cancelled', async () => {
+    const holdState = createDispatchHoldState();
+    holdState.dispatchHold = true;
+    holdState.heldEvents.push({
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        acpSessionId: 'sess-1',
+        status: 'finished',
+        result: 'held result',
+      },
+    });
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-1',
+      status: 'cancelled',
+      result: 'cancelled by SDK',
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+
+    const resultPromise = runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue,
+        conductor,
+        maxTurns: 0,
+        stopOnUnansweredInput: true,
+      }),
+      dispatchHoldState: holdState,
+      shutdownSignal: shutdown.signal,
+    });
+    const result = await awaitDriverWithTimeout(resultPromise, shutdown);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(result.lastSendResult.status).toBe('cancelled');
+    expect(result.stopReason).toBe('cancelled');
+    expect(holdState.heldEvents).toHaveLength(1);
+  });
+
+  it('does not wait on held events when a one-shot has an unanswered question', async () => {
+    const holdState = createDispatchHoldState();
+    holdState.dispatchHold = true;
+    holdState.heldEvents.push({
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        acpSessionId: 'sess-1',
+        status: 'finished',
+        result: 'held result',
+      },
+    });
+    const openQuestions = new OpenQuestionRegistry();
+    openQuestions.enqueue({
+      question: 'Should the one-shot session continue?',
+      responseType: 'yes_no',
+    });
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'needs operator',
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+
+    const resultPromise = runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue,
+        conductor,
+        openQuestions,
+        maxTurns: 0,
+        stopOnUnansweredInput: true,
+      }),
+      dispatchHoldState: holdState,
+      shutdownSignal: shutdown.signal,
+    });
+    const result = await awaitDriverWithTimeout(resultPromise, shutdown);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(result.stopReason).toBe('completed');
+    expect(holdState).toMatchObject({ dispatchHold: true });
+    expect(holdState.heldEvents).toHaveLength(1);
+    expect(openQuestions.openCount).toBe(1);
   });
 
   it('continues consuming events after the issue loop stops when configured', async () => {

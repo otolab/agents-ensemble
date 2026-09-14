@@ -26,6 +26,18 @@ describe('isOperatorInputInteractive', () => {
       stdin.isTTY = original;
     }
   });
+
+  it('returns true when a CLI message is supplied in a non-TTY environment', () => {
+    vi.stubEnv('ENSEMBLE_OPERATOR_MESSAGE', '');
+    const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+    const original = stdin.isTTY;
+    stdin.isTTY = false;
+    try {
+      expect(isOperatorInputInteractive('from-cli')).toBe(true);
+    } finally {
+      stdin.isTTY = original;
+    }
+  });
 });
 
 describe('isOperatorInputTty', () => {

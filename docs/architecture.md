@@ -157,7 +157,7 @@ await conductor.send(workerStatusUpdate);
 
 `runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、結果を `Agent.create` / `Agent.resume` のトップレベル `mcpServers`（inline MCP）へ渡す。`local.settingSources` は使わず、設定値の変数展開は SDK に任せる。inline 設定は resume で永続化されないため、認証エラーからの in-process reconnect を含めて resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。
 
-**SDK にチャット UI はない。** CLI（TTY）では Ink TUI（`createIssueSessionTuiHost`）が非ブロッキング入力と `pane` / `stream` レイアウト表示を担い、`submitOperatorInput` 経由で `operator.message` をキューへ積む。非 TTY は `bindAsyncOperatorInput` / `ENSEMBLE_OPERATOR_MESSAGE`。ConductorSession はキューから dispatch するだけ。テストは `bindOperatorInput` にフェイクを渡す（`createTestOperatorInputBinding`）。ConductorSession がイベント列経由で `agent.send` に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（TUI / stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
+**SDK にチャット UI はない。** CLI（TTY）では Ink TUI（`createIssueSessionTuiHost`）が非ブロッキング入力と `pane` / `stream` レイアウト表示を担い、`submitOperatorInput` 経由で `operator.message` をキューへ積む。非 TTY は `bindAsyncOperatorInput` / CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE`。ConductorSession はキューから dispatch するだけ。テストは `bindOperatorInput` にフェイクを渡す（`createTestOperatorInputBinding`）。ConductorSession がイベント列経由で `agent.send` に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（TUI / stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
 
 conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。
 
@@ -293,7 +293,7 @@ worker (ACP)                    conductor (SDK)              オペレータ
 | レイヤ | 役割 |
 |--------|------|
 | **modular-prompt** | system prompt 文（指揮方針・materials） |
-| **オペレータメッセージ** | `agent.send` の user ターン（CLI TTY / `ENSEMBLE_OPERATOR_MESSAGE`） |
+| **オペレータメッセージ** | `agent.send` の user ターン（CLI TTY / CLI 初回引数 / `ENSEMBLE_OPERATOR_MESSAGE`） |
 | **OpenQuestionRegistry** | TODO リスト（`inq-N`）。tool で読む |
 | **SDK 会話** | LLM 会話履歴の正本（オペレータ発話・tool 結果を含む） |
 
@@ -314,7 +314,7 @@ Driver / Policy / View の 3 層（Issue #62）:
 |----|------|------------|
 | **SessionPolicy** | `canDispatchConductorSend`, `shouldStopIssueLoop`, `autonomousTurnsAfterConductorSend` / `autonomousTurnsAfterConductorBatch` | `session-policy.ts` |
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` 呼び出し | `conductor-session-driver.ts` |
-| **SessionView** | TTY Ink TUI / `ENSEMBLE_OPERATOR_MESSAGE` | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput`（[operator-input.md](operator-input.md)） |
+| **SessionView** | TTY Ink TUI / CLI 初回引数 / `ENSEMBLE_OPERATOR_MESSAGE` | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput`（[operator-input.md](operator-input.md)） |
 
 ```
 operator (View) ──submit──► operator.message ──► SessionEventQueue
@@ -331,14 +331,16 @@ worker / harness ──enqueue──►─────────────�
 - `WorkerSession` / `ConductorSession` が対。worker 由来・operator 由来のイベントは **1 本の列** に集約し、[ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い **1 束 = 1 `agent.send`**（束は 1 件のこともある。初回のみ system + ブリーフィング）
 
 - `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）。`maxTurns <= 0` または CLI `--no-max-turns` で無制限（上限チェック・max-turns open question 登録なし）
-- **CLI デフォルト**: TTY / `ENSEMBLE_OPERATOR_MESSAGE` あり → 無制限。非 TTY / CI → 5（暴走防止）
-- **TTY（本番 CLI）**: `bindOperatorInput` 使用時はループをブロックせず、未回答 open question があっても worker イベント等を処理し続ける。オペレータ入力は `operator.message` としてキューに載る。自律ループ停止後の post-loop 待機でも SessionDriver は停止せず、同じキューを消費する
+- **CLI デフォルト**: TTY、または有効な CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` あり → 無制限。非 TTY / CI で単発メッセージがない場合 → 5（暴走防止）。`--continue` / `--resume` で無視された CLI メッセージは interactive 判定と無制限化の対象外
+- **通常の binding（TTY 本番 CLI）**: `bindOperatorInput` 使用時はループをブロックせず、未回答 open question があっても worker イベント等を処理し続ける。オペレータ入力は `operator.message` としてキューに載る。自律ループ停止後の post-loop 待機でも SessionDriver は停止せず、同じキューを消費する
+- **単発 binding（CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE`）**: binding 直後に `operator.message` を 1 回だけ注入する。追加入力を提供しないため `waitForOperatorExit` と conductor error の継続を無効にし、error / `cancelled` / 未回答 open question / 未解決 permission では入力待ちへ移らず終了する。dispatch hold が残っていても、これらの停止条件より hold を優先して release を待つことはない
+- **`--continue` / `--resume`**: CLI 引数の初回メッセージだけを注入せず、stderr に警告する（その分の interactive 判定・無制限 `maxTurns`・binding も有効にしない）。`ENSEMBLE_OPERATOR_MESSAGE` は従来どおり環境変数の経路で解決する
 - 自律ターン上限到達（**リミット有効時のみ**）→ orchestrator が「次どうする？」（`source: max_turns`）を自動登録。オペレータは `bindOperatorInput` 経由で回答
 - **GitHub 更新**（`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed`）は自律中・post-loop 中とも `github.update` として同じ経路で処理する。ターン残ありなら通常 dispatch して状況把握ターンを 1 消費し、max-turns 到達後は `operator.message` / `permission.pending` のみ dispatch する
-- 終了条件: error / 実行中 worker / pending permission / **未回答 open question** がある間は継続
-- **自律ループ停止**（`shouldStopIssueLoop`）と **プロセス終了** は別概念（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。TTY デフォルトでは停止判定後も SessionDriver が post-loop のイベント待機を続け、`/exit` までプロセスを維持する。`/exit` 正常終了時は isolated worktree を削除（未コミット変更がある場合は拒否）。`--no-wait` で従来の即終了に戻せる
+- 終了条件: 通常の binding では error / 実行中 worker / pending permission / **未回答 open question** がある間は継続する。SDK の `cancelled` は terminal status として `stopReason: cancelled` に解決する。単発 binding では未回答 question / permission や dispatch hold の release を待たずに終了する
+- **自律ループ停止**（`shouldStopIssueLoop`）と **プロセス終了** は別概念（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)）。通常の TTY デフォルトでは停止判定後も SessionDriver が post-loop のイベント待機を続け、`/exit` までプロセスを維持する。単発 binding はこの post-loop 待機を持たない。`/exit` 正常終了時は isolated worktree を削除（未コミット変更がある場合は拒否）。`--no-wait` で従来の即終了に戻せる
 
-CLI: TTY は Ink TUI（非ブロッキング入力 + `pane` / `stream` レイアウト）、非 TTY は `ENSEMBLE_OPERATOR_MESSAGE` / `bindAsyncOperatorInput`。ログ・表示の正本は [session-logging.md](session-logging.md)。対話モデルは [ADR 0008](adr/0008-human-dialogue-open-questions.md)。
+CLI: 通常の TTY は Ink TUI（非ブロッキング入力 + `pane` / `stream` レイアウト）、CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` は TTY・非 TTY 共通の単発注入、メッセージなしの非 TTY は `bindAsyncOperatorInput`。`--continue` / `--resume` で CLI メッセージを指定した場合は単発注入せず警告する。ログ・表示の正本は [session-logging.md](session-logging.md)。対話モデルは [ADR 0008](adr/0008-human-dialogue-open-questions.md)。
 
 ---
 

@@ -12,7 +12,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 |----|------|----------------|
 | **SessionPolicy** | dispatch 可否・ループ終了・自律ターン数 | `session-policy.ts` |
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
-| **SessionView** | TTY Ink TUI / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
+| **SessionView** | TTY Ink TUI / CLI 引数 / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
 データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。View は `submit` で `operator.message` をキューへ積むだけ。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
 
@@ -55,6 +55,21 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 購読解除関数を返せる（readline close 等）。省略可。
 
+## CLI からの初回オペレータメッセージ
+
+`ensemble issue <ref> [message...]` の残り引数をスペース 1 つで結合し、前後を trim した値を初回メッセージとして扱います。値が空文字または空白だけの場合は、メッセージ未指定として扱います。
+
+```bash
+ensemble issue 42 受け入れ条件を確認して実装してください
+ensemble issue https://github.com/org/repo/issues/42 "まずテストから始めてください"
+```
+
+セッションの operator input binding 直後に `api.submit(message)` を 1 回だけ呼ぶため、TTY（Ink TUI）と非 TTY のどちらでも、手入力を待たずに `operator.message` として conductor へ届きます。CLI 初回メッセージまたは `ENSEMBLE_OPERATOR_MESSAGE` による単発注入では post-loop 待機を行わず、送信後にセッションを終了します。メッセージ未指定時の TTY 入力の挙動は変わりません。
+
+単発注入は追加入力を提供しないため、終了契約も通常の TTY 入力と異なります。初回メッセージを処理した conductor の `error` は再入力を待たずにエラー終了し、SDK の `cancelled` も terminal status（`stopReason: cancelled`）として終了します。`ask_human` による未回答 open question、または未解決の permission が残った場合も、回答を待つ post-loop へは移らず、その時点でセッションを終了します。dispatch hold 中にこれらの停止条件へ到達した場合も release を待ちません。未回答 question は終了結果・sidecar に残り、未解決 permission は終了処理で拒否されます。
+
+CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できません。両方が trim 後に空でない場合は、セッション開始前にエラーになります。これは優先順位ではなく併用禁止です。`--continue` または `--resume` で CLI メッセージを指定した場合は注入せず、stderr に 1 行の警告を出します。`ENSEMBLE_OPERATOR_MESSAGE` は従来どおりそのセッションの binding で解決されます。
+
 ## TTY TUI レイアウト
 
 TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。
@@ -81,7 +96,8 @@ scrollback を実行中に上へ移動しているときに新着ログが追記
 | 環境 | 実装 | ファイル |
 |------|------|----------|
 | TTY（本番 CLI） | `createIssueSessionTuiHost`（Ink `pane` / `stream` + 入力欄） | `packages/cli/src/tui/create-issue-session-tui-host.tsx` |
-| 非 TTY + `ENSEMBLE_OPERATOR_MESSAGE` | `bindAsyncOperatorInput`（env を 1 回 submit） | `packages/cli/src/async-operator-input.ts` |
+| TTY + 有効な CLI 初回メッセージ（新規セッション） | `createIssueSessionTuiHost`（CLI メッセージを 1 回 submit） | `packages/cli/src/tui/create-issue-session-tui-host.tsx` |
+| 非 TTY + 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | `bindAsyncOperatorInput`（指定値を 1 回 submit） | `packages/cli/src/async-operator-input.ts` |
 | テスト | `createTestOperatorInputBinding` | `packages/core/src/conductor/testing/test-operator-input-binding.ts` |
 
 ## `runConductorSession` への接続
@@ -101,15 +117,15 @@ View が決めないこと（SessionPolicy / Driver の責務）:
 
 - max-turns 到達後に worker イベントを送るか（`maxTurns <= 0` のときは常に可）
 - 次に送るイベント束の選び方（`operator.message` 最優先 → `permission` → worker continuation 1 回 → 静的優先度 — [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md)）
-- 未回答 open question があるときのループ継続（open question がある間は停止しない）
+- 未回答 open question があるときのループ継続（通常の binding では open question がある間は停止しない。単発注入では回答を待たずに停止する）
 - ループ終了条件
 
 ## CLI: 自律ターン上限
 
 | 条件 | デフォルト |
 |------|-----------|
-| TTY または `ENSEMBLE_OPERATOR_MESSAGE` あり | 無制限 |
-| 非 TTY / CI | 5 |
+| TTY、または有効な CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` あり | 無制限 |
+| 非 TTY / CI で有効な単発メッセージなし（`--continue` / `--resume` で CLI メッセージだけを指定した場合を含む。binding なし） | 5 |
 
 明示指定:
 
@@ -142,9 +158,10 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 | 条件 | 動作 |
 |------|------|
-| TTY + デフォルト | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
+| TTY + デフォルト（有効な初回メッセージなし。`--continue` / `--resume` で CLI メッセージを無視した場合を含む） | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
+| 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | binding 直後に 1 回注入し、post-loop 待機なしで終了 |
 | `--no-wait` | 自律ループ停止後に即終了（従来動作） |
-| 非 TTY / CI | `waitForOperatorExit` なし → 即終了 |
+| 非 TTY / CI かつ有効な単発メッセージなし（`--continue` / `--resume` で CLI メッセージだけを指定した場合を含む） | `waitForOperatorExit` なし → 即終了 |
 | post-loop 中の TTY 追加入力 | `operator.message` としてキューに積み、継続中の SessionDriver が処理 |
 | post-loop 中の GitHub 更新 | `issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` を `github.update` として enqueue し、継続中の SessionDriver が処理（[harness-events.md](harness-events.md) §3） |
 

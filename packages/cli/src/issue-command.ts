@@ -21,6 +21,10 @@ import { createSessionDisplaySink } from './display/create-session-display-sink.
 import { selectSessionDisplayBackend } from './display/select-session-display-backend.js';
 import { createHarnessSink, createObservationSink } from './session-sinks.js';
 import { createIssueSessionTuiHost } from './tui/create-issue-session-tui-host.js';
+import {
+  normalizeInitialOperatorMessage,
+  resolveInitialOperatorMessage,
+} from './operator-message.js';
 
 export interface IssueCommandOptions {
   repoRoot: string;
@@ -36,6 +40,8 @@ export interface IssueCommandOptions {
   defaultAcpCli?: string;
   defaultAcpCommand?: string;
   defaultAcpArgs?: string[];
+  /** `ensemble issue <ref> [message...]` の初回オペレータメッセージ。 */
+  initialOperatorMessage?: string;
   /** commander の `--no-github-monitor` 用。false で監視無効。 */
   githubMonitor?: boolean;
   githubMonitorDebounceMs?: number;
@@ -49,6 +55,7 @@ export interface IssueCommandDeps {
   loadEnsembleConfig?: typeof loadEnsembleConfig;
   SessionLogger?: typeof SessionLogger;
   findLatestSessionSidecarForIssue?: typeof findLatestSessionSidecarForIssue;
+  writeStderr?: (message: string) => void;
 }
 
 export interface ResolveResumeAgentIdResult {
@@ -116,6 +123,16 @@ export async function executeIssueCommand(
   const loadProfileFn = deps.loadProfile ?? loadProfile;
   const loadConfig = deps.loadEnsembleConfig ?? loadEnsembleConfig;
   const SessionLoggerCtor = deps.SessionLogger ?? SessionLogger;
+  const writeStderr =
+    deps.writeStderr ?? ((message: string) => void process.stderr.write(`${message}\n`));
+
+  const initialOperatorMessage = normalizeInitialOperatorMessage(
+    options.initialOperatorMessage,
+  );
+  // 起動前に CLI / env の併用を検出し、セッションを開始しない。
+  const resolvedInitialOperatorMessage = resolveInitialOperatorMessage(
+    initialOperatorMessage,
+  );
 
   const repoRoot = resolve(options.repoRoot);
   const ensembleConfig = await loadConfig(repoRoot);
@@ -135,10 +152,25 @@ export async function executeIssueCommand(
     { issueUrl, repoRoot },
     deps,
   );
-  const interactive = isInteractive();
+  if (initialOperatorMessage && resumeAgentId) {
+    writeStderr(
+      'Warning: the initial CLI operator message is ignored with --continue or --resume.',
+    );
+  }
+  const initialOperatorMessageForBinding = resumeAgentId
+    ? undefined
+    : initialOperatorMessage;
+  const resolvedInitialOperatorMessageForBinding = resumeAgentId
+    ? resolveInitialOperatorMessage()
+    : resolvedInitialOperatorMessage;
+  const interactive = isInteractive(initialOperatorMessageForBinding);
+  const hasOneShotOperatorMessage = Boolean(resolvedInitialOperatorMessageForBinding);
   const useTui = interactive && isTty();
   const tuiHost = useTui
-    ? createIssueSessionTuiHost(issueUrl, { config: ensembleConfig })
+    ? createIssueSessionTuiHost(issueUrl, {
+        config: ensembleConfig,
+        initialOperatorMessage: initialOperatorMessageForBinding,
+      })
     : undefined;
   const sessionLogger = new SessionLoggerCtor({ issueUrl, repoRoot });
   if (useTui) {
@@ -213,9 +245,19 @@ export async function executeIssueCommand(
       ...(interactive
         ? {
             bindOperatorInput:
-              tuiHost?.bindOperatorInput ?? ((api) => bindAsyncOperatorInput(api, { issueUrl })),
-            continueOnConductorError: true,
-            ...(isTty() && postLoopWait
+              tuiHost?.bindOperatorInput ??
+              ((api) =>
+                bindAsyncOperatorInput(api, {
+                  issueUrl,
+                  initialOperatorMessage: initialOperatorMessageForBinding,
+                })),
+            continueOnConductorError: !hasOneShotOperatorMessage,
+            ...(hasOneShotOperatorMessage
+              ? {
+                  stopOnUnansweredInput: true,
+                }
+              : {}),
+            ...(isTty() && postLoopWait && !hasOneShotOperatorMessage
               ? {
                   waitForOperatorExit: true,
                 }

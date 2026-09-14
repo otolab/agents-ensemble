@@ -42,6 +42,15 @@ cd /path/to/your/repository
 ensemble issue https://github.com/OWNER/REPOSITORY/issues/123
 ```
 
+初回の作業指示は、Issue 参照の後ろに CLI 引数として渡せます。複数の引数はスペース 1 つで結合され、前後の空白は除かれます。
+
+```bash
+ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 受け入れ条件を確認して実装してください
+ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 "まずテストから始めてください"
+```
+
+これは TTY / 非 TTY の両方で、セッション開始後に 1 回だけ `operator.message` として conductor へ送られます。CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は併用できず、両方が空でない場合は起動エラーになります。`--continue` / `--resume` では CLI メッセージは注入されず、stderr に警告が出ます。詳細は [オペレータ入力](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) と [設定値リファレンス](https://github.com/otolab/agents-ensemble/blob/main/docs/settings.md) を参照してください。
+
 ## 利用者向け doc
 
 設定・TUI・認証の詳細は README に重複させず、次の正本を参照してください。

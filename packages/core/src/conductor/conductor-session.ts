@@ -134,6 +134,11 @@ export interface RunConductorSessionOptions {
    */
   continueOnConductorError?: boolean;
   /**
+   * 初回 operator 入力だけで終了する経路。未回答の open question / permission を待たずに停止する。
+   * one-shot CLI / env 入力など、追加入力を提供しない View から指定する。
+   */
+  stopOnUnansweredInput?: boolean;
+  /**
    * 自律ループ停止後も harness を維持し、オペレータの `/exit` または追加指示を待つ。
    * CLI の TTY デフォルト。非 TTY / CI では false。
    */
@@ -788,6 +793,7 @@ export async function runConductorSession(
       shutdownSignal: driverShutdownSignal,
       maxTurns,
       continueOnConductorError,
+      stopOnUnansweredInput: options.stopOnUnansweredInput,
       continueAfterIssueLoopStop: waitForOperatorExit,
       onIssueLoopStop: waitForOperatorExit
         ? () => {

@@ -82,6 +82,8 @@ export interface ConductorSessionDriverOptions {
   shutdownSignal: AbortSignal;
   maxTurns: number;
   continueOnConductorError: boolean;
+  /** one-shot 入力時は未回答の operator 入力や held trigger の解放を待たずに停止する。 */
+  stopOnUnansweredInput?: boolean;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
@@ -138,11 +140,21 @@ export async function runConductorSessionDriver(
     loopState: Parameters<typeof shouldStopIssueLoop>[0],
   ): boolean => {
     stopReason = resolveIssueLoopStopReason(loopState);
-    if (loopState.lastStatus !== 'error' && dispatchHoldState.heldEvents.length > 0) {
+    const shouldStop = shouldStopIssueLoop(loopState);
+    // A normal binding may still release and flush held trigger events before
+    // stopping. A one-shot has no later operator input to release the hold,
+    // so its stop condition must take precedence or the Driver can wait
+    // forever. SDK terminal statuses also must not be hidden by the hold.
+    const holdBlocksStop =
+      dispatchHoldState.heldEvents.length > 0 &&
+      options.stopOnUnansweredInput !== true &&
+      loopState.lastStatus !== 'error' &&
+      loopState.lastStatus !== 'cancelled';
+    if (holdBlocksStop) {
       postLoopWaiting = false;
       return false;
     }
-    if (!shouldStopIssueLoop(loopState)) {
+    if (!shouldStop) {
       postLoopWaiting = false;
       return false;
     }
@@ -216,6 +228,7 @@ export async function runConductorSessionDriver(
         permissionPipeline: options.permissionPipeline,
         openQuestions: options.openQuestions,
         continueOnConductorError: options.continueOnConductorError,
+        stopOnUnansweredInput: options.stopOnUnansweredInput,
       });
       if (shouldBreakAfterLoopState(loopState)) {
         break;
@@ -223,10 +236,13 @@ export async function runConductorSessionDriver(
       continue;
     }
 
+    const canEvaluateStopWithHeldEvents =
+      dispatchHoldState.heldEvents.length === 0 ||
+      options.stopOnUnansweredInput === true;
     if (
       options.eventQueue.isEmpty() &&
       options.workerSession.runtime.runningCount === 0 &&
-      dispatchHoldState.heldEvents.length === 0
+      canEvaluateStopWithHeldEvents
     ) {
       const loopState = buildIssueLoopStopInput({
         autonomousTurns,
@@ -237,6 +253,7 @@ export async function runConductorSessionDriver(
         permissionPipeline: options.permissionPipeline,
         openQuestions: options.openQuestions,
         continueOnConductorError: options.continueOnConductorError,
+        stopOnUnansweredInput: options.stopOnUnansweredInput,
       });
       if (shouldBreakAfterLoopState(loopState)) {
         break;

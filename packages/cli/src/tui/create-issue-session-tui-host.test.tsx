@@ -254,6 +254,29 @@ describe('createIssueSessionTuiHost', () => {
     process.env.ENSEMBLE_OPERATOR_MESSAGE = previous;
   });
 
+  it('submits the CLI message once without Ink input', () => {
+    delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+
+    const host = createIssueSessionTuiHost(undefined, {
+      initialOperatorMessage: '  from cli  ',
+    });
+    const submit = vi.fn(() => true);
+
+    host.bindOperatorInput({
+      submit,
+      getContext: () => ({
+        conductorTurn: 1,
+        autonomousTurns: 0,
+        maxTurns: 0,
+        openQuestions: [],
+      }),
+    });
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith('from cli');
+    host.dispose();
+  });
+
   it('notifyReprompt refreshes operator context from getContext', () => {
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
     const host = createIssueSessionTuiHost();

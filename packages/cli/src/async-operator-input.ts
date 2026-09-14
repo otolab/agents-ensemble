@@ -2,13 +2,13 @@ import * as readline from 'node:readline/promises';
 import { stdin as input, stderr, stdout as output } from 'node:process';
 import type { OperatorInputBindingApi, OperatorInputContext } from '@agents-ensemble/core';
 import { formatIssueReference } from './tui/format-operator-context.js';
-
-const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
+import { resolveInitialOperatorMessage } from './operator-message.js';
 
 let activeReprompt: (() => void) | undefined;
 
 export interface AsyncOperatorInputOptions {
   issueUrl?: string;
+  initialOperatorMessage?: string;
 }
 
 /** open question 追加時に TTY プロンプト直前の案内を更新する。 */
@@ -42,9 +42,11 @@ export function bindAsyncOperatorInput(
   api: OperatorInputBindingApi,
   options: AsyncOperatorInputOptions = {},
 ): () => void {
-  const fromEnv = process.env[OPERATOR_MESSAGE_ENV]?.trim();
-  if (fromEnv) {
-    api.submit(fromEnv);
+  const initialOperatorMessage = resolveInitialOperatorMessage(
+    options.initialOperatorMessage,
+  );
+  if (initialOperatorMessage) {
+    api.submit(initialOperatorMessage);
     return () => {};
   }
 

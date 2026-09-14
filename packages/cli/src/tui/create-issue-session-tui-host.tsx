@@ -16,12 +16,12 @@ import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { trimBlankLinesOnly } from './operator-input-layout.js';
 import { resolveTuiIssueLinkMode } from './format-operator-context.js';
 import { resolveTuiLayoutMode } from './tui-layout-mode.js';
-
-const OPERATOR_MESSAGE_ENV = 'ENSEMBLE_OPERATOR_MESSAGE';
+import { resolveInitialOperatorMessage } from '../operator-message.js';
 
 export interface CreateIssueSessionTuiHostOptions {
   config?: EnsembleConfig;
   env?: NodeJS.ProcessEnv;
+  initialOperatorMessage?: string;
 }
 
 export interface IssueSessionTuiHost {
@@ -59,11 +59,12 @@ function createBindTuiOperatorInput(
     current: ((text: string, options?: OperatorInputSubmitOptions) => void) | undefined;
   },
   apiRef: { current: OperatorInputBindingApi | undefined },
+  initialOperatorMessage?: string,
 ): OperatorInputBinding {
   return (api: OperatorInputBindingApi) => {
-    const fromEnv = process.env[OPERATOR_MESSAGE_ENV]?.trim();
-    if (fromEnv) {
-      api.submit(fromEnv);
+    const operatorMessage = resolveInitialOperatorMessage(initialOperatorMessage);
+    if (operatorMessage) {
+      api.submit(operatorMessage);
       return () => {};
     }
 
@@ -134,7 +135,12 @@ export function createIssueSessionTuiHost(
   );
 
   const inkDisplayBackend = createInkDisplayBackend(viewModel);
-  const bindOperatorInput = createBindTuiOperatorInput(viewModel, onSubmitRef, apiRef);
+  const bindOperatorInput = createBindTuiOperatorInput(
+    viewModel,
+    onSubmitRef,
+    apiRef,
+    options.initialOperatorMessage,
+  );
   const telemetrySink = createTuiTelemetrySink(viewModel);
 
   return {

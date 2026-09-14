@@ -237,6 +237,41 @@ describe('runIssueSession', () => {
     expect(result.stopReason).toBe('error');
   });
 
+  it('stops after one-shot input when ask_human leaves an open question', async () => {
+    mockSend.mockImplementationOnce(async () => {
+      await conductorTools.ask_human!.execute({
+        question: 'Should we continue?',
+      });
+      return {
+        runId: 'run-1',
+        status: 'finished',
+        result: 'waiting for operator',
+      };
+    });
+
+    const result = await runIssueSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: '/repo',
+      profile: { workers: [] },
+      maxTurns: 0,
+      permissionPipeline: new PermissionPipeline({}),
+      bindOperatorInput: () => {},
+      continueOnConductorError: false,
+      stopOnUnansweredInput: true,
+    });
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(result.stopReason).toBe('completed');
+    expect(result.openQuestions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          question: 'Should we continue?',
+          status: 'open',
+        }),
+      ]),
+    );
+  });
+
   it('bindOperatorInput resumes after async submit without blocking the loop', async () => {
     mockSend
       .mockImplementationOnce(async () => {

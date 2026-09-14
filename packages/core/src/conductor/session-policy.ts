@@ -7,6 +7,7 @@ import type { WorkerSession } from '../runtime/worker-session.js';
 export type IssueLoopStopReason =
   | 'completed'
   | 'error'
+  | 'cancelled'
   | 'max_turns'
   | 'interrupted';
 
@@ -21,6 +22,8 @@ export interface IssueLoopStopInput {
   openQuestions?: number;
   /** TTY 等でオペレータ入力があるとき、conductor error でもループを継続する。 */
   continueOnConductorError?: boolean;
+  /** 初回入力だけで終了する経路では、追加の operator 入力を待たずに停止する。 */
+  stopOnUnansweredInput?: boolean;
 }
 
 export const DEFAULT_MAX_ISSUE_TURNS = 5;
@@ -45,8 +48,19 @@ export function operatorInputMaxTurns(maxTurns: number): number | null {
 
 /** Issue session の conductor 自律ループを終了すべきか判定する（プロセス終了ではない）。 */
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
+  // `cancelled` is a terminal SDK run status, not a retryable conductor error.
+  // In particular, one-shot sessions must not fall through to event waiting.
+  if (input.lastStatus === 'cancelled') {
+    return true;
+  }
   if (input.lastStatus === 'error') {
     return !input.continueOnConductorError;
+  }
+  if (
+    input.stopOnUnansweredInput &&
+    ((input.pendingPermissions ?? 0) > 0 || (input.openQuestions ?? 0) > 0)
+  ) {
+    return true;
   }
   if ((input.runningWorkers ?? 0) > 0) return false;
   if ((input.pendingPermissions ?? 0) > 0) return false;
@@ -60,6 +74,7 @@ export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
 export function resolveIssueLoopStopReason(
   input: IssueLoopStopInput,
 ): IssueLoopStopReason {
+  if (input.lastStatus === 'cancelled') return 'cancelled';
   if (input.lastStatus === 'error') return 'error';
   return 'completed';
 }
@@ -110,6 +125,7 @@ export function buildIssueLoopStopInput(input: {
   permissionPipeline: PermissionPipeline;
   openQuestions: OpenQuestionRegistry;
   continueOnConductorError: boolean;
+  stopOnUnansweredInput?: boolean;
 }): IssueLoopStopInput {
   return {
     autonomousTurns: input.autonomousTurns,
@@ -120,5 +136,6 @@ export function buildIssueLoopStopInput(input: {
     pendingPermissions: input.permissionPipeline.pending.size,
     openQuestions: input.openQuestions.openCount,
     continueOnConductorError: input.continueOnConductorError,
+    stopOnUnansweredInput: input.stopOnUnansweredInput,
   };
 }

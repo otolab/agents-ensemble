@@ -171,7 +171,7 @@ Emacs 風を **自前実装** する場合の最小ループ:
 |------|----------|----------|
 | TTY + Ink TUI | `OperatorTextArea` → 公開 fork `@otolab/react-ink-textarea`（キルリング / Readline 整合を内蔵） | **ライブラリ内蔵**。`Ctrl+a/e/f/b/d`（`Ctrl+d` はカーソル位置の 1 文字削除）、`Ctrl+p/n`（visual row の上 / 下移動、上端 / 下端は no-op）、`Ctrl+k/u/w/y`、`Alt+b/f/y` をサポート。`Ctrl+r`（履歴逆検索）は **非対応**。 |
 | TTY スクロール | `issue-session-tui.tsx` の `useInput` | `PgUp/PgDn` / `Home`/`End`（入力空時 or Ctrl 修飾）— **編集ショートカットとは別レイヤ**（競合なし） |
-| 非 TTY | `readline` / `ENSEMBLE_OPERATOR_MESSAGE` | OS・Node readline 依存 |
+| 非 TTY | `readline` / 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | 有効な CLI 初回メッセージは 1 回だけ注入。`--continue` / `--resume` で無視された CLI メッセージは注入せず、非 TTY では binding なし。readline は OS・Node readline 依存 |
 
 **`useInput` と TextArea の関係**: 活動ログスクロール用 `useInput` は `Home`/`End`/`PgUp`/`PgDn` のみ。行編集・textarea 内移動（`Ctrl+a/e/f/b/d/p/n` 等）は TextArea 内 `useKeyboardInput` が処理。入力欄に文字があるときはスクロール系は `Ctrl` 修飾時のみ有効。
 
