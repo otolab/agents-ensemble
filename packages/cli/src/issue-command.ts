@@ -130,7 +130,9 @@ export async function executeIssueCommand(
     options.initialOperatorMessage,
   );
   // 起動前に CLI / env の併用を検出し、セッションを開始しない。
-  resolveInitialOperatorMessage(initialOperatorMessage);
+  const resolvedInitialOperatorMessage = resolveInitialOperatorMessage(
+    initialOperatorMessage,
+  );
 
   const repoRoot = resolve(options.repoRoot);
   const ensembleConfig = await loadConfig(repoRoot);
@@ -155,10 +157,14 @@ export async function executeIssueCommand(
       'Warning: the initial CLI operator message is ignored with --continue or --resume.',
     );
   }
-  const interactive = isInteractive(initialOperatorMessage);
   const initialOperatorMessageForBinding = resumeAgentId
     ? undefined
     : initialOperatorMessage;
+  const resolvedInitialOperatorMessageForBinding = resumeAgentId
+    ? resolveInitialOperatorMessage()
+    : resolvedInitialOperatorMessage;
+  const interactive = isInteractive(initialOperatorMessageForBinding);
+  const hasOneShotOperatorMessage = Boolean(resolvedInitialOperatorMessageForBinding);
   const useTui = interactive && isTty();
   const tuiHost = useTui
     ? createIssueSessionTuiHost(issueUrl, {
@@ -246,7 +252,7 @@ export async function executeIssueCommand(
                   initialOperatorMessage: initialOperatorMessageForBinding,
                 })),
             continueOnConductorError: true,
-            ...(isTty() && postLoopWait
+            ...(isTty() && postLoopWait && !hasOneShotOperatorMessage
               ? {
                   waitForOperatorExit: true,
                 }

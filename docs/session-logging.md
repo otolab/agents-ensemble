@@ -54,10 +54,10 @@ conductor セッションには性質の異なる出力が混在する。
 
 | 内容 | 条件 |
 |------|------|
-| `operator> …` / `conductor> …` | TTY: Ink TUI ペイン。非 TTY + env: string backend（`bindAsyncOperatorInput` 経路） |
+| `operator> …` / `conductor> …` | TTY: Ink TUI ペイン。非 TTY + CLI 初回メッセージ / env: string backend（`bindAsyncOperatorInput` 経路） |
 | **SessionSummary** JSON | 非 TTY 終了時（`--summary-format auto` 既定）。e2e / パイプ向け |
 
-非 TTY では DisplaySink は noop backend（または env 時のみ string backend）。stdout は **終了サマリ JSON**（`--summary-format auto` 既定）。TTY では Ink TUI が対話を表示する（stdout への逐次 `write` は行わない）。
+非 TTY では DisplaySink は noop backend（または CLI 初回メッセージ / env 時のみ string backend）。stdout は **終了サマリ JSON**（`--summary-format auto` 既定）。TTY では Ink TUI が対話を表示する（stdout への逐次 `write` は行わない）。
 
 ### stderr
 

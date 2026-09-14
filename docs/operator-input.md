@@ -64,7 +64,7 @@ ensemble issue 42 受け入れ条件を確認して実装してください
 ensemble issue https://github.com/org/repo/issues/42 "まずテストから始めてください"
 ```
 
-セッションの operator input binding 直後に `api.submit(message)` を 1 回だけ呼ぶため、TTY（Ink TUI）と非 TTY のどちらでも、手入力を待たずに `operator.message` として conductor へ届きます。メッセージ未指定時の TTY 入力と `ENSEMBLE_OPERATOR_MESSAGE` の挙動は変わりません。
+セッションの operator input binding 直後に `api.submit(message)` を 1 回だけ呼ぶため、TTY（Ink TUI）と非 TTY のどちらでも、手入力を待たずに `operator.message` として conductor へ届きます。CLI 初回メッセージまたは `ENSEMBLE_OPERATOR_MESSAGE` による単発注入では post-loop 待機を行わず、送信後にセッションを終了します。メッセージ未指定時の TTY 入力の挙動は変わりません。
 
 CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できません。両方が trim 後に空でない場合は、セッション開始前にエラーになります。これは優先順位ではなく併用禁止です。`--continue` または `--resume` で CLI メッセージを指定した場合は注入せず、stderr に 1 行の警告を出します。`ENSEMBLE_OPERATOR_MESSAGE` は従来どおりそのセッションの binding で解決されます。
 
@@ -156,7 +156,8 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 | 条件 | 動作 |
 |------|------|
-| TTY + デフォルト | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
+| TTY + デフォルト（初回メッセージなし） | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
+| CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` | binding 直後に 1 回注入し、post-loop 待機なしで終了 |
 | `--no-wait` | 自律ループ停止後に即終了（従来動作） |
 | 非 TTY / CI | `waitForOperatorExit` なし → 即終了 |
 | post-loop 中の TTY 追加入力 | `operator.message` としてキューに積み、継続中の SessionDriver が処理 |

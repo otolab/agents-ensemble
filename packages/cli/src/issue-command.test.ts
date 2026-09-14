@@ -6,19 +6,27 @@ const mockTuiHost = vi.hoisted(() => {
   const telemetrySink = vi.fn();
   const notifyReprompt = vi.fn();
   const dispose = vi.fn();
+  const createIssueSessionTuiHost = vi.fn(
+    (_issueUrl: string, options?: { initialOperatorMessage?: string }) => ({
+      bindOperatorInput: options?.initialOperatorMessage
+        ? (api: { submit: (message: string) => boolean }) => {
+            api.submit(options.initialOperatorMessage!);
+            return () => {};
+          }
+        : bindOperatorInput,
+      displayBackend,
+      telemetrySink,
+      notifyReprompt,
+      dispose,
+    }),
+  );
   return {
     bindOperatorInput,
     displayBackend,
     telemetrySink,
     notifyReprompt,
     dispose,
-    createIssueSessionTuiHost: vi.fn(() => ({
-      bindOperatorInput,
-      displayBackend,
-      telemetrySink,
-      notifyReprompt,
-      dispose,
-    })),
+    createIssueSessionTuiHost,
   };
 });
 
@@ -46,6 +54,35 @@ const baseOptions = {
 };
 
 const issueUrl = 'https://github.com/org/repo/issues/1';
+
+type FakeConductorRunOptions = {
+  bindOperatorInput?: (api: {
+    submit: (message: string) => boolean;
+    getContext: () => {
+      conductorTurn: number;
+      autonomousTurns: number;
+      maxTurns: number | null;
+      openQuestions: never[];
+    };
+  }) => unknown;
+};
+
+function createFakeConductorRunIssueSession(
+  submit: (message: string) => boolean,
+) {
+  return vi.fn().mockImplementation(async (options: FakeConductorRunOptions) => {
+    options.bindOperatorInput?.({
+      submit,
+      getContext: () => ({
+        conductorTurn: 1,
+        autonomousTurns: 0,
+        maxTurns: 0,
+        openQuestions: [],
+      }),
+    });
+    return { stopReason: 'completed' };
+  });
+}
 
 describe('resolveResumeAgentIdFromOptions', () => {
   it('returns explicit --resume agent id', async () => {
@@ -158,7 +195,8 @@ describe('executeIssueCommand initial operator message wiring', () => {
   });
 
   it('injects the CLI message through the non-TTY binding once', async () => {
-    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const submit = vi.fn(() => true);
+    const runIssueSession = createFakeConductorRunIssueSession(submit);
     const loadProfile = vi.fn().mockResolvedValue({
       profile: { workers: [] },
       profilePath: '/tmp/profile.yaml',
@@ -179,34 +217,13 @@ describe('executeIssueCommand initial operator message wiring', () => {
       },
     );
 
-    const runOptions = runIssueSession.mock.calls[0]?.[0] as {
-      bindOperatorInput?: (api: {
-        submit: (message: string) => boolean;
-        getContext: () => {
-          conductorTurn: number;
-          autonomousTurns: number;
-          maxTurns: number;
-          openQuestions: never[];
-        };
-      }) => unknown;
-    };
-    const submit = vi.fn(() => true);
-    runOptions.bindOperatorInput?.({
-      submit,
-      getContext: () => ({
-        conductorTurn: 1,
-        autonomousTurns: 0,
-        maxTurns: 5,
-        openQuestions: [],
-      }),
-    });
-
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith('start the task');
   });
 
   it('warns once and does not inject the CLI message when continuing', async () => {
     const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const isOperatorInputInteractive = vi.fn((message?: string) => Boolean(message));
     const loadProfile = vi.fn().mockResolvedValue({
       profile: { workers: [] },
       profilePath: '/tmp/profile.yaml',
@@ -228,7 +245,7 @@ describe('executeIssueCommand initial operator message wiring', () => {
         initialOperatorMessage: 'ignored on continue',
       },
       {
-        isOperatorInputInteractive: () => true,
+        isOperatorInputInteractive,
         isOperatorInputTty: () => false,
         runIssueSession,
         loadProfile,
@@ -244,32 +261,18 @@ describe('executeIssueCommand initial operator message wiring', () => {
     );
 
     const runOptions = runIssueSession.mock.calls[0]?.[0] as {
-      bindOperatorInput?: (api: {
-        submit: (message: string) => boolean;
-        getContext: () => {
-          conductorTurn: number;
-          autonomousTurns: number;
-          maxTurns: number;
-          openQuestions: never[];
-        };
-      }) => unknown;
+      maxTurns?: number;
+      bindOperatorInput?: unknown;
     };
-    const submit = vi.fn(() => true);
-    runOptions.bindOperatorInput?.({
-      submit,
-      getContext: () => ({
-        conductorTurn: 1,
-        autonomousTurns: 0,
-        maxTurns: 5,
-        openQuestions: [],
-      }),
-    });
 
-    expect(submit).not.toHaveBeenCalled();
+    expect(isOperatorInputInteractive).toHaveBeenCalledWith(undefined);
+    expect(runOptions.maxTurns).toBe(5);
+    expect(runOptions.bindOperatorInput).toBeUndefined();
   });
 
   it('warns once and does not inject the CLI message when resuming an agent', async () => {
     const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const isOperatorInputInteractive = vi.fn((message?: string) => Boolean(message));
     const loadProfile = vi.fn().mockResolvedValue({
       profile: { workers: [] },
       profilePath: '/tmp/profile.yaml',
@@ -287,7 +290,7 @@ describe('executeIssueCommand initial operator message wiring', () => {
         initialOperatorMessage: 'ignored on resume',
       },
       {
-        isOperatorInputInteractive: () => true,
+        isOperatorInputInteractive,
         isOperatorInputTty: () => false,
         runIssueSession,
         loadProfile,
@@ -302,28 +305,13 @@ describe('executeIssueCommand initial operator message wiring', () => {
     );
 
     const runOptions = runIssueSession.mock.calls[0]?.[0] as {
-      bindOperatorInput?: (api: {
-        submit: (message: string) => boolean;
-        getContext: () => {
-          conductorTurn: number;
-          autonomousTurns: number;
-          maxTurns: number;
-          openQuestions: never[];
-        };
-      }) => unknown;
+      maxTurns?: number;
+      bindOperatorInput?: unknown;
     };
-    const submit = vi.fn(() => true);
-    runOptions.bindOperatorInput?.({
-      submit,
-      getContext: () => ({
-        conductorTurn: 1,
-        autonomousTurns: 0,
-        maxTurns: 5,
-        openQuestions: [],
-      }),
-    });
 
-    expect(submit).not.toHaveBeenCalled();
+    expect(isOperatorInputInteractive).toHaveBeenCalledWith(undefined);
+    expect(runOptions.maxTurns).toBe(5);
+    expect(runOptions.bindOperatorInput).toBeUndefined();
   });
 
   it('rejects CLI and environment messages before loading the session', async () => {
@@ -351,9 +339,10 @@ describe('executeIssueCommand initial operator message wiring', () => {
     }
   });
 
-  it('passes the CLI message to the TUI binding on a TTY', async () => {
+  it('injects the CLI message through the TTY binding once without post-loop wait', async () => {
     mockTuiHost.createIssueSessionTuiHost.mockClear();
-    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const submit = vi.fn(() => true);
+    const runIssueSession = createFakeConductorRunIssueSession(submit);
     const loadProfile = vi.fn().mockResolvedValue({
       profile: { workers: [] },
       profilePath: '/tmp/profile.yaml',
@@ -380,6 +369,48 @@ describe('executeIssueCommand initial operator message wiring', () => {
         initialOperatorMessage: 'from cli',
       }),
     );
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith('from cli');
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        waitForOperatorExit: true,
+      }),
+    );
+  });
+
+  it('does not enable post-loop wait for an environment one-shot on a TTY', async () => {
+    const previous = process.env.ENSEMBLE_OPERATOR_MESSAGE;
+    process.env.ENSEMBLE_OPERATOR_MESSAGE = 'from env';
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    try {
+      await executeIssueCommand(issueUrl, baseOptions, {
+        isOperatorInputInteractive: () => true,
+        isOperatorInputTty: () => true,
+        runIssueSession,
+        loadProfile,
+        SessionLogger,
+      });
+
+      expect(runIssueSession).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          waitForOperatorExit: true,
+        }),
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+      } else {
+        process.env.ENSEMBLE_OPERATOR_MESSAGE = previous;
+      }
+    }
   });
 });
 
