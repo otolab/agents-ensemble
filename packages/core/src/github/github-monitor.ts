@@ -71,6 +71,7 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
   let pollAbortController: AbortController | undefined;
   let hasPendingCi = false;
   let needsBootstrapPoll = isEmptyGitHubMonitorCursor(cursor);
+  let pollRequested = false;
   const pendingRegistrations = new Map<
     string,
     { registeredAt: string; kinds?: GitHubUpdateKind[] }
@@ -94,6 +95,15 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       pollTimer = undefined;
       void pollOnce();
     }, delayMs);
+  };
+
+  const requestPoll = (delayMs: number) => {
+    if (stopped || !started) return;
+    if (pollInFlight) {
+      pollRequested = true;
+      return;
+    }
+    schedulePoll(delayMs);
   };
 
   const pollOnce = async (): Promise<void> => {
@@ -140,8 +150,13 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       pollAbortController = undefined;
       pollInFlight = false;
       if (!stopped && started) {
-        const nextDelay = hasPendingCi ? activePollIntervalMs : pollIntervalMs;
-        schedulePoll(nextDelay);
+        if (pollRequested) {
+          pollRequested = false;
+          schedulePoll(0);
+        } else {
+          const nextDelay = hasPendingCi ? activePollIntervalMs : pollIntervalMs;
+          schedulePoll(nextDelay);
+        }
       }
     }
   };
@@ -199,6 +214,7 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       cursor.explicitPullRequests[key] ??= watch;
       pendingRegistrations.set(key, watch);
       options.onCursorChange?.(cursor);
+      requestPoll(0);
     },
   };
 }

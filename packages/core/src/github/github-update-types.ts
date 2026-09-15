@@ -7,7 +7,7 @@ export type GitHubUpdateKind =
 
 /** 1 件の GitHub 更新（debounce 前の単位）。 */
 export interface GitHubUpdateItem {
-  /** 安定 ID（comment / review / check の識別子）。 */
+  /** 安定 ID（comment / review / CI 実行の識別子）。 */
   id: string;
   kind: GitHubUpdateKind;
   /** conductor 向け 1 行要約。 */

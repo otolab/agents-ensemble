@@ -7,6 +7,7 @@ import {
   normalizeGitHubMonitorCursor,
   type ExplicitPullRequestWatch,
   type GitHubMonitorCursor,
+  type PullRequestCiCursor,
   type PullRequestMonitorCursor,
 } from './github-monitor-cursor.js';
 import {
@@ -75,6 +76,14 @@ interface GhCheckRun {
   status: string;
   conclusion?: string | null;
   detailsUrl?: string;
+  /** CheckRun の GraphQL node id。再実行ごとに変わる実行単位。 */
+  runId?: string;
+  /** head commit SHA（GraphQL レスポンスに含まれる場合）。 */
+  headSha?: string;
+  /** 実行開始時刻（GraphQL レスポンスに含まれる場合）。 */
+  startedAt?: string;
+  /** 実行完了時刻（GraphQL レスポンスに含まれる場合）。 */
+  completedAt?: string;
 }
 
 export async function fetchGitHubUpdates(
@@ -233,6 +242,9 @@ async function fetchPullRequestUpdates(input: {
     lastReviewCommentId: input.prCursor.lastReviewCommentId,
     pendingCheckNames: [...(input.prCursor.pendingCheckNames ?? [])],
     notifiedCheckNames: [...(input.prCursor.notifiedCheckNames ?? [])],
+    ...(input.prCursor.ciChecks
+      ? { ciChecks: cloneCiChecks(input.prCursor.ciChecks) }
+      : {}),
   };
   let hasPendingCi = false;
 
@@ -295,12 +307,13 @@ async function fetchPullRequestUpdates(input: {
       );
       const ciResult = collectCiUpdates({
         checkRuns,
+        ciChecks: cursor.ciChecks ?? {},
         pendingCheckNames: cursor.pendingCheckNames ?? [],
         notifiedCheckNames: cursor.notifiedCheckNames ?? [],
-        initialCursorPoll: input.initialCursorPoll,
         prNumber: input.pr.number,
       });
       updates.push(...ciResult.updates);
+      cursor.ciChecks = ciResult.ciChecks;
       cursor.pendingCheckNames = ciResult.pendingCheckNames;
       cursor.notifiedCheckNames = ciResult.notifiedCheckNames;
       hasPendingCi = ciResult.hasPendingCi;
@@ -397,12 +410,14 @@ function normalizeCheckRun(row: Record<string, unknown>): GhCheckRun | undefined
     return undefined;
   }
 
-  return {
+  const normalized: GhCheckRun = {
     name,
     status,
     conclusion: typeof row.conclusion === 'string' ? row.conclusion : null,
     detailsUrl: typeof row.detailsUrl === 'string' ? row.detailsUrl : undefined,
   };
+  addCheckRunMetadata(normalized, row);
+  return normalized;
 }
 
 function normalizeStatusContext(row: Record<string, unknown>): GhCheckRun | undefined {
@@ -413,17 +428,56 @@ function normalizeStatusContext(row: Record<string, unknown>): GhCheckRun | unde
   }
 
   const detailsUrl = typeof row.targetUrl === 'string' ? row.targetUrl : undefined;
+  const normalized: GhCheckRun = { name, status: '', conclusion: null, detailsUrl };
+  addCheckRunMetadata(normalized, row);
   if (state === 'PENDING' || state === 'EXPECTED') {
-    return { name, status: 'IN_PROGRESS', conclusion: null, detailsUrl };
+    normalized.status = 'IN_PROGRESS';
+    return normalized;
   }
   if (state === 'SUCCESS') {
-    return { name, status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl };
+    normalized.status = 'COMPLETED';
+    normalized.conclusion = 'SUCCESS';
+    return normalized;
   }
   if (state === 'FAILURE' || state === 'ERROR') {
-    return { name, status: 'COMPLETED', conclusion: state, detailsUrl };
+    normalized.status = 'COMPLETED';
+    normalized.conclusion = state;
+    return normalized;
   }
 
-  return { name, status: 'COMPLETED', conclusion: state, detailsUrl };
+  normalized.status = 'COMPLETED';
+  normalized.conclusion = state;
+  return normalized;
+}
+
+function addCheckRunMetadata(
+  normalized: GhCheckRun,
+  row: Record<string, unknown>,
+): void {
+  const runId =
+    typeof row.id === 'string'
+      ? row.id
+      : typeof row.databaseId === 'number' && Number.isSafeInteger(row.databaseId)
+        ? String(row.databaseId)
+        : undefined;
+  const headSha =
+    typeof row.headSha === 'string'
+      ? row.headSha
+      : isRecord(row.checkSuite) && typeof row.checkSuite.headSha === 'string'
+        ? row.checkSuite.headSha
+        : undefined;
+  const startedAt = typeof row.startedAt === 'string' ? row.startedAt : undefined;
+  const completedAt =
+    typeof row.completedAt === 'string' ? row.completedAt : undefined;
+
+  if (runId) normalized.runId = runId;
+  if (headSha) normalized.headSha = headSha;
+  if (startedAt) normalized.startedAt = startedAt;
+  if (completedAt) normalized.completedAt = completedAt;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 function collectReviewUpdates(
@@ -501,21 +555,24 @@ function collectReviewCommentUpdates(
 
 function collectCiUpdates(input: {
   checkRuns: GhCheckRun[];
+  ciChecks: Record<string, PullRequestCiCursor>;
   pendingCheckNames: string[];
   notifiedCheckNames: string[];
-  initialCursorPoll: boolean;
   prNumber: number;
 }): {
   updates: GitHubUpdateItem[];
+  ciChecks: Record<string, PullRequestCiCursor>;
   pendingCheckNames: string[];
   notifiedCheckNames: string[];
   hasPendingCi: boolean;
 } {
   const updates: GitHubUpdateItem[] = [];
   const pendingNow = new Set<string>();
-  const previousPending = new Set(input.pendingCheckNames);
   const notified = new Set(input.notifiedCheckNames);
-  const hadPreviousSnapshot = previousPending.size > 0;
+  const previousCiChecks = cloneCiChecks(input.ciChecks);
+  migrateLegacyCiCursor(previousCiChecks, input.pendingCheckNames, 'pending');
+  migrateLegacyCiCursor(previousCiChecks, input.notifiedCheckNames, 'completed');
+  const ciChecks = cloneCiChecks(previousCiChecks);
 
   for (const check of input.checkRuns) {
     const name = check.name;
@@ -525,24 +582,42 @@ function collectCiUpdates(input: {
     }
     if (isPendingCheckStatus(status)) {
       pendingNow.add(name);
+      ciChecks[name] = {
+        runKey: getCiRunKey(check),
+        status: 'pending',
+      };
       continue;
     }
     if (status !== 'COMPLETED') {
       continue;
     }
     const conclusion = safeUpperString(check.conclusion, 'UNKNOWN');
-    if (!hadPreviousSnapshot || !previousPending.has(name)) {
+    const currentRunKey = getCiRunKey(check);
+    const previous = previousCiChecks[name];
+    ciChecks[name] = {
+      runKey: currentRunKey,
+      status: 'completed',
+    };
+
+    // A completed check seen for the first time is the registration/search
+    // baseline. There is no reliable way to tell whether it finished before
+    // the registration poll without a previous snapshot.
+    if (!previous || isLegacyCompletedRunKey(previous.runKey)) {
       continue;
     }
-    if (notified.has(name)) {
+
+    // The run key changes on a new CheckRun (push/re-run), while a pending
+    // to completed transition keeps the same key. Either case is a new
+    // completion event. An existing cursor must still deliver changes on
+    // resume, including when the first poll after resume observes completion.
+    const isNewRun = previous.runKey !== currentRunKey;
+    const wasPending = previous.status === 'pending';
+    if (!isNewRun && !wasPending) {
       continue;
     }
-    if (input.initialCursorPoll) {
-      notified.add(name);
-      continue;
-    }
+
     updates.push({
-      id: `ci:${input.prNumber}:${name}:${conclusion}`,
+      id: `ci:${input.prNumber}:${name}:${currentRunKey}`,
       kind: 'ci.completed',
       summary: `PR #${input.prNumber} CI 完了（${name}・${conclusion}）`,
       url: check.detailsUrl,
@@ -555,10 +630,73 @@ function collectCiUpdates(input: {
 
   return {
     updates,
+    ciChecks,
     pendingCheckNames: [...pendingNow],
     notifiedCheckNames: [...notified],
     hasPendingCi: pendingNow.size > 0,
   };
+}
+
+function cloneCiChecks(
+  ciChecks: Record<string, PullRequestCiCursor>,
+): Record<string, PullRequestCiCursor> {
+  return Object.fromEntries(
+    Object.entries(ciChecks).map(([name, ciCursor]) => [
+      name,
+      { runKey: ciCursor.runKey, status: ciCursor.status },
+    ]),
+  );
+}
+
+function migrateLegacyCiCursor(
+  ciChecks: Record<string, PullRequestCiCursor>,
+  names: string[],
+  status: PullRequestCiCursor['status'],
+): void {
+  for (const name of names) {
+    if (ciChecks[name]) continue;
+    ciChecks[name] = {
+      runKey:
+        status === 'pending'
+          ? getLegacyPendingRunKey(name)
+          : getLegacyCompletedRunKey(name),
+      status,
+    };
+  }
+}
+
+function getLegacyPendingRunKey(name: string): string {
+  return `legacy-pending:${name}`;
+}
+
+function getLegacyCompletedRunKey(name: string): string {
+  return `legacy-completed:${name}`;
+}
+
+function isLegacyCompletedRunKey(runKey: string): boolean {
+  return runKey.startsWith('legacy-completed:');
+}
+
+function getCiRunKey(check: GhCheckRun): string {
+  if (check.runId) {
+    return `run:${check.runId}`;
+  }
+  if (check.headSha && check.startedAt) {
+    return `commit:${check.headSha}:started:${check.startedAt}`;
+  }
+  if (check.detailsUrl && check.completedAt) {
+    return `url:${check.detailsUrl}:completed:${check.completedAt}`;
+  }
+  if (check.detailsUrl) {
+    return `url:${check.detailsUrl}`;
+  }
+  if (check.completedAt) {
+    return `completed:${check.completedAt}`;
+  }
+  if (check.startedAt) {
+    return `started:${check.startedAt}`;
+  }
+  return `name:${check.name}`;
 }
 
 function isPendingCheckStatus(status: string): boolean {
@@ -566,7 +704,8 @@ function isPendingCheckStatus(status: string): boolean {
     status === 'QUEUED' ||
     status === 'IN_PROGRESS' ||
     status === 'PENDING' ||
-    status === 'WAITING'
+    status === 'WAITING' ||
+    status === 'REQUESTED'
   );
 }
 
