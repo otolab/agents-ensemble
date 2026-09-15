@@ -246,7 +246,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 セッション開始 ──attach（待機 prompt）──► worker 常駐（agent acp プロセス + ACP session）
 conductor ──prompt_worker──► WorkerOutboundQueue ──sendWorkerMessage──► session/prompt
 conductor ──list_workers / get_worker_status──► WorkerRuntime（読み取り専用・イベント列に積まない）
-conductor ──register_github_watch──► GitHubMonitor cursor（明示 PR watch）
+conductor ──register_github_watch──► GitHubMonitor cursor（明示 PR watch）──► 即時 bootstrap poll
 conductor ──get_session_usage / get_usage──────► SessionUsageTracker（読み取り専用・イベント列に積まない）
 worker    ──permission──────► ConductorInbox ──► SessionEventQueue ──► agent.send
 worker    ──Issue / PR 報告──► （非同期正本。harness 非経由）

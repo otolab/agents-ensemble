@@ -29,6 +29,20 @@ describe('isEmptyGitHubMonitorCursor', () => {
     ).toBe(false);
   });
 
+  it('returns false when PR cursor has a CI execution state', () => {
+    expect(
+      isEmptyGitHubMonitorCursor({
+        pullRequests: {
+          '42': {
+            ciChecks: {
+              'ci/test': { runKey: 'run:123', status: 'completed' },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it('preserves explicit pull request watches when normalized', () => {
     const cursor = normalizeGitHubMonitorCursor({
       explicitPullRequests: {
@@ -45,5 +59,25 @@ describe('isEmptyGitHubMonitorCursor', () => {
         kinds: ['pr.review', 'ci.completed'],
       },
     });
+  });
+
+  it('deep-copies run-aware CI cursors when normalized', () => {
+    const source = {
+      pullRequests: {
+        '42': {
+          ciChecks: {
+            'ci/test': { runKey: 'run:123', status: 'pending' as const },
+          },
+        },
+      },
+    };
+
+    const normalized = normalizeGitHubMonitorCursor(source);
+    expect(normalized.pullRequests?.['42']?.ciChecks).toEqual({
+      'ci/test': { runKey: 'run:123', status: 'pending' },
+    });
+    expect(normalized.pullRequests?.['42']?.ciChecks).not.toBe(
+      source.pullRequests['42'].ciChecks,
+    );
   });
 });

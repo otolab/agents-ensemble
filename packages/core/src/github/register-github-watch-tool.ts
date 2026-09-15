@@ -35,6 +35,7 @@ export function createRegisterGitHubWatchTool(
         'Register a pull request for the harness GitHub monitor.',
         'Provide prNumber or prUrl; the pull request must belong to the session Issue repository.',
         'If kinds is omitted, monitor PR reviews, review comments, and CI completion.',
+        'An immediate bootstrap poll records the current PR and CI state; already-completed checks are baseline only and are not emitted.',
         'Registering the same pull request more than once is a no-op.',
       ].join(' '),
       inputSchema: {

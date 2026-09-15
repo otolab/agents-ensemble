@@ -55,6 +55,7 @@ export {
 export type {
   ExplicitPullRequestWatch,
   GitHubMonitorCursor,
+  PullRequestCiCursor,
   PullRequestMonitorCursor,
 } from './github-monitor-cursor.js';
 export {

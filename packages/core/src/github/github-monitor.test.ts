@@ -115,7 +115,7 @@ describe('createGitHubMonitor', () => {
     expect(onUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it('polls a runtime-registered PR on the next cycle', async () => {
+  it('polls a runtime-registered PR immediately', async () => {
     const listPullRequestReviews = vi.fn().mockResolvedValue([]);
     const listPullRequestReviewComments = vi.fn().mockResolvedValue([]);
     const getStatusCheckRollup = vi.fn().mockResolvedValue([]);
@@ -150,7 +150,7 @@ describe('createGitHubMonitor', () => {
       registeredAt: '2026-09-07T05:00:00.000Z',
     });
 
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(0);
     await drainAsync();
 
     expect(listPullRequestReviews).toHaveBeenCalledWith('org', 'repo', 354);

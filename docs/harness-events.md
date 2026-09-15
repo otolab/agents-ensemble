@@ -140,7 +140,7 @@ SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが 
 | `cause` | `parse` \| `gh_cli` \| `auth` \| `unknown` | 失敗原因の分類 |
 | `retryable` | `boolean`（任意） | rate limit / 5xx 等で再試行が有効なとき `true` |
 
-監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。関連 PR は GitHub Search で自動検出するほか、conductor の `register_github_watch` で明示登録できる。明示登録した PR は Search に未反映でも次の poll から監視される。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
+監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。関連 PR は GitHub Search で自動検出するほか、conductor の `register_github_watch` で明示登録できる。明示登録した PR は Search に未反映でも監視され、登録後は即時（in-flight poll 中ならその完了直後）に bootstrap poll を行う。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
 
 **運用制限（#39）**
 
@@ -151,7 +151,10 @@ SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが 
 | 初回カーソル poll | **カーソル空の新規セッション**の初回 poll のみ（`initialCursorPoll`）。既存 Issue コメントは通知せずカーソルを進める。worker の init prompt（`startWorkers`）とは無関係 |
 | `--continue` 再開 | sidecar カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
 | PR 紐づけ | GitHub Search API（`type:pr repo:owner/repo <issueNumber>` 相当）または conductor の `register_github_watch`。Search 失敗時も明示登録済み PR は監視し、**Issue コメント監視も継続** |
-| CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）。前回 poll で pending だった check が `COMPLETED` + `conclusion` になったときのみ通知 |
+| CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）。PR ごとに check 名と run 単位のキー（CheckRun の node id、または commit / 時刻 / URL のフォールバック）を保存し、pending→完了、または別 run の完了を `ci.completed` として通知 |
+| CI カーソル | `pendingCheckNames` / `notifiedCheckNames` だけでなく、check 名ごとの `ciChecks[name] = { runKey, status }` を sidecar に保存。同一 check 名でも run key が変われば再実行として扱う |
+| 登録時の完了済み CI | bootstrap poll で現在 `COMPLETED` の check は **baseline のみ**。履歴の完了通知は行わず、以降に観測した別 run の完了だけを通知 |
+| CI の制限・失敗モード | API poll 失敗時は `harness.github.monitor_error` を出して前回カーソルを維持し、次回 poll で再試行する。run id 等の識別情報を取得できない古い StatusContext では URL / 時刻 / check 名をフォールバックにするため、同じキーを再利用する再実行は区別できない。WorkflowRun など未知の rollup 型は今回 skip |
 | CLI | `--no-github-monitor` で無効化。`--github-monitor-debounce-ms` で debounce 変更 |
 
 ### 2.2 worker prompt ライフサイクルイベント（#133 で統一）

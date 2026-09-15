@@ -623,7 +623,7 @@ describe('runConductorSession resume / shutdown', () => {
       await firstPollCompleted.promise;
       await drainAsync();
 
-      // The first poll after registration bootstraps the explicit PR cursor;
+      // Registration requests an immediate poll after the in-flight poll;
       // the following Search-empty poll delivers only new updates.
       await vi.advanceTimersByTimeAsync(1000);
       await drainAsync();
@@ -635,8 +635,8 @@ describe('runConductorSession resume / shutdown', () => {
       await drainAsync();
       const updateMessage = await githubUpdateMessage.promise;
 
-      expect(searchPolls).toBe(3);
-      expect(githubClient.searchLinkedPullRequests).toHaveBeenCalledTimes(3);
+      expect(searchPolls).toBe(4);
+      expect(githubClient.searchLinkedPullRequests).toHaveBeenCalledTimes(4);
       expect(listPullRequestReviews).toHaveBeenLastCalledWith('org', 'repo', 354);
       expect(listPullRequestReviewComments).toHaveBeenLastCalledWith(
         'org',
@@ -662,6 +662,9 @@ describe('runConductorSession resume / shutdown', () => {
         lastReviewId: '2',
         lastReviewCommentId: '2',
         pendingCheckNames: [],
+        ciChecks: {
+          build: { runKey: 'name:build', status: 'completed' },
+        },
       });
 
       shutdown.abort();
@@ -678,6 +681,9 @@ describe('runConductorSession resume / shutdown', () => {
         lastReviewId: '2',
         lastReviewCommentId: '2',
         pendingCheckNames: [],
+        ciChecks: {
+          build: { runKey: 'name:build', status: 'completed' },
+        },
       });
     } finally {
       firstSearchResolved = true;

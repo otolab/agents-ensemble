@@ -365,6 +365,143 @@ describe('fetchGitHubUpdates', () => {
     });
   });
 
+  it('emits CI completion for each distinct CheckRun execution', async () => {
+    const rollups = [
+      [
+        {
+          __typename: 'CheckRun',
+          id: 'check-run-1',
+          name: 'ci/test',
+          status: 'IN_PROGRESS',
+          conclusion: null,
+          startedAt: '2026-09-07T05:00:00.000Z',
+        },
+      ],
+      [
+        {
+          __typename: 'CheckRun',
+          id: 'check-run-1',
+          name: 'ci/test',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+          completedAt: '2026-09-07T05:01:00.000Z',
+        },
+      ],
+      [
+        {
+          __typename: 'CheckRun',
+          id: 'check-run-2',
+          name: 'ci/test',
+          status: 'IN_PROGRESS',
+          conclusion: null,
+          startedAt: '2026-09-07T05:02:00.000Z',
+        },
+      ],
+      [
+        {
+          __typename: 'CheckRun',
+          id: 'check-run-2',
+          name: 'ci/test',
+          status: 'COMPLETED',
+          conclusion: 'SUCCESS',
+          completedAt: '2026-09-07T05:03:00.000Z',
+        },
+      ],
+    ];
+    let poll = 0;
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+      getStatusCheckRollup: vi.fn(async () => rollups[poll++] ?? []),
+    });
+
+    let cursor = emptyGitHubMonitorCursor();
+    const results = [];
+    for (let index = 0; index < rollups.length; index += 1) {
+      const result = await fetchGitHubUpdates({
+        issueUrl: ISSUE_URL,
+        cursor,
+        ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+        githubClient,
+      });
+      results.push(result);
+      cursor = result.cursor;
+    }
+
+    expect(results[0]?.updates).toEqual([]);
+    expect(results[1]?.updates).toMatchObject([
+      expect.objectContaining({
+        kind: 'ci.completed',
+        checkName: 'ci/test',
+        checkConclusion: 'FAILURE',
+      }),
+    ]);
+    expect(results[2]?.updates).toEqual([]);
+    expect(results[3]?.updates).toMatchObject([
+      expect.objectContaining({
+        kind: 'ci.completed',
+        checkName: 'ci/test',
+        checkConclusion: 'SUCCESS',
+      }),
+    ]);
+    expect(cursor.pullRequests?.['42']?.ciChecks?.['ci/test']).toEqual({
+      runKey: 'run:check-run-2',
+      status: 'completed',
+    });
+  });
+
+  it('uses a completed registration snapshot as baseline and detects a later run', async () => {
+    const firstRun = {
+      __typename: 'CheckRun',
+      id: 'check-run-1',
+      name: 'ci/test',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      completedAt: '2026-09-07T05:00:00.000Z',
+    };
+    const secondRun = { ...firstRun, id: 'check-run-2', completedAt: '2026-09-07T05:02:00.000Z' };
+    let rollup = [firstRun];
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+      getStatusCheckRollup: vi.fn(async () => rollup),
+    });
+
+    const baseline = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: emptyGitHubMonitorCursor(),
+      initialCursorPoll: true,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(baseline.updates).toEqual([]);
+    expect(baseline.cursor.pullRequests?.['42']?.ciChecks?.['ci/test']).toEqual({
+      runKey: 'run:check-run-1',
+      status: 'completed',
+    });
+
+    const sameRun = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: baseline.cursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(sameRun.updates).toEqual([]);
+
+    rollup = [secondRun];
+    const laterRun = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: sameRun.cursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(laterRun.updates).toMatchObject([
+      expect.objectContaining({
+        kind: 'ci.completed',
+        checkName: 'ci/test',
+        checkConclusion: 'SUCCESS',
+      }),
+    ]);
+  });
+
   it('handles StatusContext entries in statusCheckRollup without throwing', async () => {
     const bootstrapClient = createMockClient({
       searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
