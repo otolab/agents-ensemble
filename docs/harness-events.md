@@ -57,7 +57,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。例: `conductor: reading`） |
 | `conductor.send` | 各 `agent.send` 完了後 | `[harness] conductor.send n=N status=... workerDone=... workerFailed=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
-| `worker.failed` | worker attach / prompt 失敗 | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
+| `worker.failed` | worker attach / prompt 失敗。該当 worker の pending permission は conductor への通知前に deny | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続）。GitHub 認証トークン未解決時（#222） | `[harness] warning: ...`（permission デッドロック / GitHub 認証不足） | なし |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
@@ -186,6 +186,19 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 |------|--------------------------|-------------------|------------------|
 | **attach 致命失敗**（`attachAndInit` の catch。resident 未成立） | `failed`（`failedWorkers`） | `prompt.failed` → `state failed` → `worker.failed` | `failed` |
 | **ラウンド失敗**（`executeRound` の catch。resident 維持） | `idle`（resident 存続） | `prompt.failed` → `worker.failed` → `finally` で `state idle` | `idle`（`state idle` が `prompt.failed` を上書き） |
+
+**worker 失敗時の permission cleanup（#283）**
+
+`worker.failed` を inbox processor が処理するとき、`WorkerSession` は先に
+`PermissionPipeline.denyPendingForWorker()` を呼ぶ。該当 worker の pending permission は
+`deny` として `ConductorInbox` の waiter に返され、pipeline から取り除かれる。その後に
+`worker.failed` の SessionLogEvent と SessionEvent を通知するため、conductor は worker
+失敗を受け取って次の判断へ進める。既に cleanup 済みの requestId を
+`resolve_permission` に渡した場合は、`Unknown pending permission (already resolved or worker failed)`
+という明確なエラーになる。
+
+これはプロセス全体の teardown や in-flight `agent.send` の割り込みを行うものではない。
+後者は [#86](https://github.com/otolab/agents-ensemble/issues/86) のスコープである。
 
 init prompt（`source: harness`）では attach 開始時に `started` を出し、init ラウンド完了時に `completed` を出す。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。正常系は `harness.worker.state` で `attaching` → `processing` → `idle` を併記する。
 

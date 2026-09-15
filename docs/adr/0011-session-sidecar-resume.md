@@ -88,6 +88,7 @@ v1 の sidecar には permission 待ち状態を保存しない。
 | シナリオ | 挙動 |
 |----------|------|
 | 正常終了（`finally`） | 未解決の pending permission は **deny** して worker に返す（既存の `rejectAllPendingPermissions`） |
+| worker ACP 失敗 | 該当 worker の未解決 permission は **deny** して waiter と registry から取り除き、`worker.failed` を conductor へ通知する |
 | 異常終了 + resume | sidecar に pending が無いため、中断直前の permission 待ちは **復元されない**。worker は deny またはタイムアウト相当になりうる。オペレータは再判断が必要 |
 | resume 後の新規 permission | 通常どおり `permission.pending` イベントで conductor に届く |
 
