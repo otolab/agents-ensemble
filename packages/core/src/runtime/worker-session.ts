@@ -99,7 +99,13 @@ export class WorkerSession {
       inbox: this.inbox,
       decidePermission,
       onWorkerCompleted: options.onWorkerCompleted,
-      onWorkerFailed: options.onWorkerFailed,
+      onWorkerFailed: (failure) => {
+        options.permissionPipeline?.denyPendingForWorker(
+          this.inbox,
+          failure.workerId,
+        );
+        options.onWorkerFailed?.(failure);
+      },
     });
   }
 

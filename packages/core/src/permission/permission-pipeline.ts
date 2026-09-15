@@ -65,12 +65,26 @@ export class PermissionPipeline {
   ): PendingPermission {
     const entry = this.pending.take(requestId);
     if (!entry) {
-      throw new Error(`Unknown pending permission: ${requestId}`);
+      throw new Error(
+        `Unknown pending permission (already resolved or worker failed): ${requestId}`,
+      );
     }
     inbox.fulfillPermission(
       requestId,
       approved ? allowOnce(entry.request) : deny(entry.request),
     );
     return entry;
+  }
+
+  /** worker failure 時に、その worker の permission 待ちを deny して inbox waiter を解消する。 */
+  denyPendingForWorker(
+    inbox: ConductorInbox,
+    workerId: string,
+  ): PendingPermission[] {
+    const entries = this.pending.takeForWorker(workerId);
+    for (const entry of entries) {
+      inbox.fulfillPermission(entry.id, deny(entry.request));
+    }
+    return entries;
   }
 }

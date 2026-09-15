@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKCustomTool } from '@cursor/sdk';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AcpBridge } from '../../src/acp/acp-bridge.js';
+import { AcpClient } from '../../src/acp/acp-client.js';
+import { startFakeAcpServer } from '../../src/acp/testing/fake-acp-server.js';
+import { createInProcessStreamPair } from '../../src/acp/testing/stream-pair.js';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
@@ -218,5 +222,92 @@ describe('open question / operator flow integration', () => {
     expect(result.workerDispatches).toHaveLength(1);
     expect(result.workerFailures).toHaveLength(0);
     expect(result.stopReason).toBe('completed');
+  });
+
+  it('continues with worker.failed after ACP fails during pending permission', async () => {
+    const streams = createInProcessStreamPair();
+    let permissionResponse: unknown;
+    const fakeServer = startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      requestPermissionOnPrompt: true,
+      permissionOptions: [{ optionId: 'backend-deny', kind: 'reject_once' }],
+      onPermissionResponse: (response) => {
+        permissionResponse = response;
+      },
+    });
+    const client = AcpClient.create({
+      readable: streams.clientReadable,
+      writable: streams.clientWritable,
+    });
+    await client.connect();
+
+    const pipeline = new PermissionPipeline({
+      policy: { allowTools: [], allowReadOnlyTools: false },
+    });
+    let pendingId: string | undefined;
+    let workerFailureMessage: string | undefined;
+    mockSend.mockImplementation(async (message: string) => {
+      if (message.includes('permission 判断待ち')) {
+        pendingId = extractYamlScalar(message, 'id');
+        streams.clientReadable.destroy(new Error('ACP quota exceeded'));
+        return {
+          runId: 'run-permission',
+          status: 'finished',
+          result: 'permission interrupted',
+        };
+      }
+      if (message.includes('## worker 失敗')) {
+        workerFailureMessage = message;
+        return {
+          runId: 'run-failure',
+          status: 'finished',
+          result: 'conductor handled worker failure',
+        };
+      }
+      return {
+        runId: 'run-initial',
+        status: 'finished',
+        result: 'initial',
+      };
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: REPO_ROOT,
+      profile: PING_PROFILE,
+      maxTurns: 10,
+      permissionPipeline: pipeline,
+      connectAcp: async () => AcpBridge.fromClient(client),
+      ownsWorkerAcpConnections: true,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+    });
+
+    expect(workerFailureMessage).toContain('## worker 失敗');
+    expect(workerFailureMessage).toContain('ACP quota exceeded');
+    expect(result.workerFailures).toEqual([
+      expect.objectContaining({
+        error: 'ACP quota exceeded',
+      }),
+    ]);
+    expect(result.lastResult).toBe('conductor handled worker failure');
+    expect(pipeline.pending.size).toBe(0);
+    expect(pendingId).toBeTruthy();
+    await expect(
+      conductorTools.resolve_permission!.execute({
+        requestId: pendingId!,
+        decision: 'deny',
+      }),
+    ).rejects.toThrow(
+      'Unknown pending permission (already resolved or worker failed)',
+    );
+    await vi.waitFor(() => {
+      expect(permissionResponse).toEqual({
+        outcome: { outcome: 'selected', optionId: 'backend-deny' },
+      });
+    });
+
+    fakeServer.stop();
   });
 });

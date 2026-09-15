@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ConductorInbox } from '../runtime/conductor-inbox.js';
 import { startInboxProcessor } from '../runtime/inbox-processor.js';
+import { deny } from './permission-broker.js';
 import { PermissionPipeline } from './permission-pipeline.js';
 import { createResolvePermissionTool } from './resolve-permission-tool.js';
 
@@ -74,6 +75,54 @@ describe('PermissionPipeline', () => {
     });
     await processor.stop();
   });
+
+  it('denies pending permissions for a failed worker and resolves its waiter', async () => {
+    const inbox = new ConductorInbox();
+    const pipeline = new PermissionPipeline({
+      policy: { allowTools: [], allowReadOnlyTools: false },
+    });
+    const processor = startInboxProcessor({
+      inbox,
+      decidePermission: (request, workerId, requestId) => {
+        const outcome = pipeline.evaluate(requestId, workerId, request);
+        return outcome.status === 'resolved' ? outcome.decision : null;
+      },
+    });
+
+    const workerOneHandler = inbox.createPermissionHandler('worker-1');
+    const workerTwoHandler = inbox.createPermissionHandler('worker-2');
+    const workerOneDecisionPromise = workerOneHandler({
+      toolName: 'Shell',
+      options: [{ optionId: 'backend-deny', kind: 'reject_once' }],
+      raw: {},
+    });
+    const workerTwoDecisionPromise = workerTwoHandler({
+      toolName: 'Shell',
+      options: [{ optionId: 'worker-two-deny', kind: 'reject_once' }],
+      raw: {},
+    });
+    await inbox.drain();
+
+    const pending = pipeline.pending.list().find(
+      (entry) => entry.workerId === 'worker-1',
+    )!;
+    expect(pipeline.denyPendingForWorker(inbox, 'worker-1')).toEqual([pending]);
+
+    await expect(workerOneDecisionPromise).resolves.toEqual(
+      deny({ options: pending.request.options }),
+    );
+    expect(pipeline.pending.list()).toEqual([
+      expect.objectContaining({ workerId: 'worker-2' }),
+    ]);
+
+    const workerTwoPending = pipeline.pending.list()[0]!;
+    pipeline.resolveAndFulfill(inbox, workerTwoPending.id, false);
+    await expect(workerTwoDecisionPromise).resolves.toEqual(
+      deny({ options: workerTwoPending.request.options }),
+    );
+    expect(pipeline.pending.size).toBe(0);
+    await processor.stop();
+  });
 });
 
 describe('createResolvePermissionTool', () => {
@@ -116,6 +165,14 @@ describe('createResolvePermissionTool', () => {
       toolName: 'Shell',
       reason: 'smoke test',
     });
+    await expect(
+      tools.resolve_permission.execute({
+        requestId: pendingId,
+        decision: 'deny',
+      }),
+    ).rejects.toThrow(
+      'Unknown pending permission (already resolved or worker failed)',
+    );
     await processor.stop();
   });
 });

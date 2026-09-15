@@ -30,6 +30,14 @@ export class PendingPermissionRegistry {
     return entry;
   }
 
+  takeForWorker(workerId: string): PendingPermission[] {
+    const entries = this.list().filter((entry) => entry.workerId === workerId);
+    for (const entry of entries) {
+      this.entries.delete(entry.id);
+    }
+    return entries;
+  }
+
   get size(): number {
     return this.entries.size;
   }
