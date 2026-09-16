@@ -43,6 +43,16 @@ describe('isEmptyGitHubMonitorCursor', () => {
     ).toBe(false);
   });
 
+  it('returns false when a PR needs a CI bootstrap retry', () => {
+    expect(
+      isEmptyGitHubMonitorCursor({
+        pullRequests: {
+          '42': { ciBootstrapPending: true },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it('preserves explicit pull request watches when normalized', () => {
     const cursor = normalizeGitHubMonitorCursor({
       explicitPullRequests: {
@@ -68,6 +78,7 @@ describe('isEmptyGitHubMonitorCursor', () => {
           ciChecks: {
             'ci/test': { runKey: 'run:123', status: 'pending' as const },
           },
+          ciBootstrapPending: true,
         },
       },
     };
@@ -79,5 +90,6 @@ describe('isEmptyGitHubMonitorCursor', () => {
     expect(normalized.pullRequests?.['42']?.ciChecks).not.toBe(
       source.pullRequests['42'].ciChecks,
     );
+    expect(normalized.pullRequests?.['42']?.ciBootstrapPending).toBe(true);
   });
 });

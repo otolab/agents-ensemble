@@ -165,6 +165,95 @@ describe('createGitHubMonitor', () => {
     await monitor.stop();
   });
 
+  it('retries a failed registration bootstrap and emits later CI completion', async () => {
+    let statusPolls = 0;
+    const onUpdate = vi.fn();
+    const onPollError = vi.fn();
+    const client: GitHubClient = {
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn().mockResolvedValue([]),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([]),
+      listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+      getStatusCheckRollup: vi.fn(async () => {
+        statusPolls += 1;
+        if (statusPolls === 1) {
+          throw new Error('temporary status API failure');
+        }
+        if (statusPolls === 2) {
+          return [
+            {
+              __typename: 'CheckRun',
+              id: 'check-run-1',
+              name: 'ci/test',
+              status: 'IN_PROGRESS',
+              conclusion: null,
+            },
+          ];
+        }
+        return [
+          {
+            __typename: 'CheckRun',
+            id: 'check-run-1',
+            name: 'ci/test',
+            status: 'COMPLETED',
+            conclusion: 'SUCCESS',
+          },
+        ];
+      }),
+    };
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      debounceMs: 0,
+      pollIntervalMs: 1000,
+      activePollIntervalMs: 1000,
+      githubClient: client,
+      onUpdate,
+      onPollError,
+    });
+
+    monitor.start();
+    await drainAsync();
+    monitor.registerPullRequest({
+      prNumber: 354,
+      registeredAt: '2026-09-07T05:00:00.000Z',
+      kinds: ['ci.completed'],
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await drainAsync();
+    expect(statusPolls).toBe(1);
+    expect(onPollError).toHaveBeenCalledTimes(1);
+    expect(monitor.getCursor().pullRequests?.['354']).toMatchObject({
+      ciBootstrapPending: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await drainAsync();
+    expect(statusPolls).toBe(2);
+    expect(monitor.getCursor().pullRequests?.['354']).toMatchObject({
+      ciChecks: {
+        'ci/test': { runKey: 'run:check-run-1', status: 'pending' },
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await drainAsync();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusPolls).toBe(3);
+    monitor.flush();
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onUpdate.mock.calls[0]![0].items).toMatchObject([
+      expect.objectContaining({
+        kind: 'ci.completed',
+        checkName: 'ci/test',
+      }),
+    ]);
+
+    await monitor.stop();
+  });
+
   it('notifies offline diffs on first poll when sidecar cursor is restored', async () => {
     const client: GitHubClient = {
       getIssue: vi.fn(),

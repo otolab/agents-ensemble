@@ -154,7 +154,8 @@ SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが 
 | CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）。PR ごとに check 名と run 単位のキー（CheckRun の node id、または commit / 時刻 / URL のフォールバック）を保存し、pending→完了、または別 run の完了を `ci.completed` として通知 |
 | CI カーソル | `pendingCheckNames` / `notifiedCheckNames` だけでなく、check 名ごとの `ciChecks[name] = { runKey, status }` を sidecar に保存。同一 check 名でも run key が変われば再実行として扱う |
 | 登録時の完了済み CI | bootstrap poll で現在 `COMPLETED` の check は **baseline のみ**。履歴の完了通知は行わず、以降に観測した別 run の完了だけを通知 |
-| CI の制限・失敗モード | API poll 失敗時は `harness.github.monitor_error` を出して前回カーソルを維持し、次回 poll で再試行する。run id 等の識別情報を取得できない古い StatusContext では URL / 時刻 / check 名をフォールバックにするため、同じキーを再利用する再実行は区別できない。WorkflowRun など未知の rollup 型は今回 skip |
+| 旧 CI カーソルの移行 | 旧 `pendingCheckNames` は pending 実行として移行し、完了時に通知する。旧 `notifiedCheckNames` **だけ**では実行 ID が失われているため、移行後の最初の completed は重複通知を避ける baseline とする。このため移行前後に発生した再実行を 1 回だけ区別できない可能性があり、次に観測する別 run からは通知する |
+| CI の制限・失敗モード | API poll 失敗時は `harness.github.monitor_error` を出して既存カーソルを維持し、次回 poll で再試行する。bootstrap 中の status poll が失敗した PR では `ciBootstrapPending` を保持し、成功した status snapshot だけで bootstrap 完了にする。run id 等の識別情報を取得できない古い StatusContext では URL / 時刻 / check 名をフォールバックにするため、同じキーを再利用する再実行は区別できない。WorkflowRun など未知の rollup 型は今回 skip |
 | CLI | `--no-github-monitor` で無効化。`--github-monitor-debounce-ms` で debounce 変更 |
 
 ### 2.2 worker prompt ライフサイクルイベント（#133 で統一）

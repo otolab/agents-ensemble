@@ -167,14 +167,18 @@ export async function fetchGitHubUpdates(
       cursor.pullRequests,
       prKey,
     );
+    const isNewExplicitPullRequest =
+      explicitWatch !== undefined && !hasPullRequestCursor;
     const prResult = await fetchPullRequestUpdates({
       client,
       issue,
       pr,
       prCursor,
-      initialCursorPoll:
+      initialCursorPoll: (input.initialCursorPoll ?? false) || isNewExplicitPullRequest,
+      ciBootstrapPoll:
         (input.initialCursorPoll ?? false) ||
-        (explicitWatch !== undefined && !hasPullRequestCursor),
+        isNewExplicitPullRequest ||
+        prCursor.ciBootstrapPending === true,
       watchKinds: resolveWatchKinds(explicitWatch?.kinds),
     });
     updates.push(...prResult.updates);
@@ -228,6 +232,7 @@ async function fetchPullRequestUpdates(input: {
   pr: GhPullRequestRef;
   prCursor: PullRequestMonitorCursor;
   initialCursorPoll: boolean;
+  ciBootstrapPoll: boolean;
   watchKinds: GitHubUpdateKind[];
 }): Promise<{
   updates: GitHubUpdateItem[];
@@ -244,6 +249,9 @@ async function fetchPullRequestUpdates(input: {
     notifiedCheckNames: [...(input.prCursor.notifiedCheckNames ?? [])],
     ...(input.prCursor.ciChecks
       ? { ciChecks: cloneCiChecks(input.prCursor.ciChecks) }
+      : {}),
+    ...(input.prCursor.ciBootstrapPending
+      ? { ciBootstrapPending: true }
       : {}),
   };
   let hasPendingCi = false;
@@ -316,8 +324,14 @@ async function fetchPullRequestUpdates(input: {
       cursor.ciChecks = ciResult.ciChecks;
       cursor.pendingCheckNames = ciResult.pendingCheckNames;
       cursor.notifiedCheckNames = ciResult.notifiedCheckNames;
+      delete cursor.ciBootstrapPending;
       hasPendingCi = ciResult.hasPendingCi;
     } catch (error) {
+      if (input.ciBootstrapPoll) {
+        // Do not turn a failed first status snapshot into a completed
+        // bootstrap. The next poll must retry CI initialization for this PR.
+        cursor.ciBootstrapPending = true;
+      }
       errors.push(
         createGitHubMonitorPhaseError('pr_status_checks', error, input.pr.number),
       );

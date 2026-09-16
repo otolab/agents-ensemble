@@ -50,13 +50,6 @@
     "implementer": { "acpSessionId": "...", "acpCwd": "/abs/path/to/cwd" }
   },
   "githubMonitor": {
-    "pullRequests": {
-      "354": {
-        "ciChecks": {
-          "ci/build": { "runKey": "run:...", "status": "completed" }
-        }
-      }
-    },
     "explicitPullRequests": {
       "354": {
         "registeredAt": "2026-08-09T12:00:00.000Z",
@@ -70,7 +63,6 @@
 
 - flush: `runConductorSession` の `finally`（正常終了・エラー・未処理例外を問わず best-effort）。状態変化時（send 完了・worker 完了・open question 変更）にも増分 flush する
 - GitHub monitor の `explicitPullRequests` は `register_github_watch` 実行時と poll 時に sidecar へ flush し、resume 後も Search に依存せず監視を継続する
-- GitHub monitor の PR ごとの `ciChecks` は check 名ごとに `{ runKey, status }` を保存する。`runKey` は CheckRun の node id など実行単位の識別情報から作り、同じ check 名の push / re-run を区別する。登録直後の bootstrap poll で既に完了している check は baseline として保存し、通知しない
 - SIGINT / SIGTERM: 内部 `AbortController` でイベント待ちを中断し、`stopReason: interrupted` で graceful shutdown + flush
 - load: `resumeAgentId` 指定時。sidecar が無い場合は `SessionSidecarNotFoundError` で起動失敗。`issueUrl` / `repoRoot` が一致しない場合もエラー
 - `--continue`（#31）: `findLatestSessionSidecarForIssue` で同一 Issue の最新 `updatedAt` を選ぶ

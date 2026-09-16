@@ -24,6 +24,8 @@ export interface PullRequestMonitorCursor {
   notifiedCheckNames?: string[];
   /** check 名ごとの現在の CI 実行カーソル。 */
   ciChecks?: Record<string, PullRequestCiCursor>;
+  /** CI の初回 status snapshot が失敗し、次回 bootstrap が必要な状態。 */
+  ciBootstrapPending?: boolean;
 }
 
 /** 明示的に登録された PR の監視設定。 */
@@ -107,6 +109,7 @@ function normalizePullRequestMonitorCursor(
           ),
         }
       : {}),
+    ...(cursor.ciBootstrapPending ? { ciBootstrapPending: true } : {}),
   };
 }
 
@@ -121,7 +124,8 @@ export function isEmptyGitHubMonitorCursor(cursor: GitHubMonitorCursor): boolean
       pr.lastReviewCommentId ||
       (pr.pendingCheckNames?.length ?? 0) > 0 ||
       (pr.notifiedCheckNames?.length ?? 0) > 0 ||
-      Object.keys(pr.ciChecks ?? {}).length > 0
+      Object.keys(pr.ciChecks ?? {}).length > 0 ||
+      pr.ciBootstrapPending === true
     ) {
       return false;
     }
