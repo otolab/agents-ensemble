@@ -1,5 +1,19 @@
 # @agents-ensemble/cli
 
+## 0.6.1
+
+### Patch Changes
+
+- a11ce11: Switch the CLI to the published `@otolab/react-ink-textarea@0.4.1-otolab.3` fork and remove the local patch override.
+- 36285a9: CLI 利用者向け README、設定ドキュメント、設定例を npm パッケージに同梱します。
+- 9e953db: `ensemble issue` が CLI 引数から初回のオペレータメッセージを受け取り、conductor へ 1 回送信できるようにしました。
+- Updated dependencies [13b6026]
+- Updated dependencies [e8503b2]
+- Updated dependencies [075b9a6]
+- Updated dependencies [c652456]
+- Updated dependencies [5f56e40]
+  - @agents-ensemble/core@0.6.1
+
 ## 0.6.0
 
 ### Patch Changes

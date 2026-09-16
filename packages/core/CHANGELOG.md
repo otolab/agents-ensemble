@@ -1,5 +1,15 @@
 # @agents-ensemble/core
 
+## 0.6.1
+
+### Patch Changes
+
+- 13b6026: conductor の Cursor SDK local agent が Cursor settings.json の proxy 設定を利用するようにしました。
+- e8503b2: conductor プロンプトに open question の一問一答形式を明記し、作業開始前に Issue へ作業方針をまとめる手順を team profile に追加しました。
+- 075b9a6: dispatch hold 中の `permission.pending` を held buffer に積み、release 時に他の trigger とまとめて conductor へ dispatch するようにしました。
+- c652456: GitHub PR 監視で CI の再実行を run 単位で検知し、登録直後の bootstrap poll でカーソルを初期化するようにしました。
+- 5f56e40: ACP worker の失敗時に pending permission を deny して inbox waiter を解消するようにしました。
+
 ## 0.6.0
 
 ### Minor Changes
