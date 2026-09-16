@@ -71,6 +71,20 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('任意のタイミングで入力 · /exit で終了');
   });
 
+  it('renders inline Markdown in static activity output', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('conductor', 'Use **bold** and `code`.');
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[conductor] Use bold and code.');
+    expect(frame).not.toContain('**');
+    expect(frame).not.toContain('`');
+  });
+
   it('shows dispatch hold count in the Workers pane title', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({

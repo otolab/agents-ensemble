@@ -44,7 +44,7 @@ describe('activity-log', () => {
     );
 
     expect(lines).toEqual([
-      { label: 'conductor', text: 'short reply', layout: 'inline' },
+      { label: 'conductor', segments: [{ text: 'short reply' }], layout: 'inline' },
     ]);
   });
 
@@ -55,10 +55,10 @@ describe('activity-log', () => {
     );
 
     expect(lines).toEqual([
-      { label: 'conductor', text: '', layout: 'label-row' },
-      { label: 'conductor', text: 'abcd', layout: 'body-row' },
-      { label: 'conductor', text: 'efgh', layout: 'body-row' },
-      { label: 'conductor', text: 'ij', layout: 'body-row' },
+      { label: 'conductor', segments: [], layout: 'label-row' },
+      { label: 'conductor', segments: [{ text: 'abcd' }], layout: 'body-row' },
+      { label: 'conductor', segments: [{ text: 'efgh' }], layout: 'body-row' },
+      { label: 'conductor', segments: [{ text: 'ij' }], layout: 'body-row' },
     ]);
     expect(formatActivityLogLabelPrefix('conductor')).toBe('[conductor] ');
   });
@@ -74,15 +74,15 @@ describe('activity-log', () => {
     );
 
     expect(lines).toEqual([
-      { label: 'operator', text: '', layout: 'label-row' },
-      { label: 'operator', text: 'aa', layout: 'body-row' },
-      { label: 'operator', text: 'bb', layout: 'body-row' },
-      { label: 'harness', text: '', layout: 'label-row' },
-      { label: 'harness', text: 'cc', layout: 'body-row' },
-      { label: 'harness', text: 'dd', layout: 'body-row' },
-      { label: 'observation', text: '', layout: 'label-row' },
-      { label: 'observation', text: 'ee', layout: 'body-row' },
-      { label: 'observation', text: 'ff', layout: 'body-row' },
+      { label: 'operator', segments: [], layout: 'label-row' },
+      { label: 'operator', segments: [{ text: 'aa' }], layout: 'body-row' },
+      { label: 'operator', segments: [{ text: 'bb' }], layout: 'body-row' },
+      { label: 'harness', segments: [], layout: 'label-row' },
+      { label: 'harness', segments: [{ text: 'cc' }], layout: 'body-row' },
+      { label: 'harness', segments: [{ text: 'dd' }], layout: 'body-row' },
+      { label: 'observation', segments: [], layout: 'label-row' },
+      { label: 'observation', segments: [{ text: 'ee' }], layout: 'body-row' },
+      { label: 'observation', segments: [{ text: 'ff' }], layout: 'body-row' },
     ]);
   });
 
@@ -93,10 +93,10 @@ describe('activity-log', () => {
     );
 
     expect(lines).toEqual([
-      { label: 'operator', text: '', layout: 'label-row' },
-      { label: 'operator', text: '段落1', layout: 'body-row' },
-      { label: 'operator', text: '', layout: 'body-row' },
-      { label: 'operator', text: '段落2', layout: 'body-row' },
+      { label: 'operator', segments: [], layout: 'label-row' },
+      { label: 'operator', segments: [{ text: '段落1' }], layout: 'body-row' },
+      { label: 'operator', segments: [], layout: 'body-row' },
+      { label: 'operator', segments: [{ text: '段落2' }], layout: 'body-row' },
     ]);
   });
 
@@ -111,9 +111,43 @@ describe('activity-log', () => {
     );
 
     expect(lines).toEqual([
-      { label: 'harness', text: 'telemetry', layout: 'inline' },
-      { label: 'separator', text: '', layout: 'separator' },
-      { label: 'conductor', text: 'reply', layout: 'inline' },
+      { label: 'harness', segments: [{ text: 'telemetry' }], layout: 'inline' },
+      { label: 'separator', segments: [], layout: 'separator' },
+      { label: 'conductor', segments: [{ text: 'reply' }], layout: 'inline' },
+    ]);
+  });
+
+  it('keeps inline Markdown styles in activity display segments', () => {
+    expect(
+      buildActivityLogDisplayLines(
+        [{ label: 'conductor', text: 'run **bold** with `code`' }],
+        80,
+      ),
+    ).toEqual([
+      {
+        label: 'conductor',
+        segments: [
+          { text: 'run ' },
+          { text: 'bold', bold: true },
+          { text: ' with ' },
+          { text: 'code', code: true },
+        ],
+        layout: 'inline',
+      },
+    ]);
+  });
+
+  it('preserves style when a segment crosses a wrap boundary', () => {
+    expect(
+      buildActivityLogDisplayLines(
+        [{ label: 'conductor', text: 'aa **bbcc** dd' }],
+        5,
+      ),
+    ).toEqual([
+      { label: 'conductor', segments: [], layout: 'label-row' },
+      { label: 'conductor', segments: [{ text: 'aa' }], layout: 'body-row' },
+      { label: 'conductor', segments: [{ text: 'bbcc', bold: true }], layout: 'body-row' },
+      { label: 'conductor', segments: [{ text: 'dd' }], layout: 'body-row' },
     ]);
   });
 

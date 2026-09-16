@@ -1,4 +1,8 @@
-import { wrapTextToWidth } from './wrap-text-to-width.js';
+import {
+  parseInlineMarkdown,
+  type InlineMarkdownSegment,
+} from '../inline-markdown.js';
+import { wrapInlineMarkdownToWidth } from './wrap-text-to-width.js';
 
 export type ActivityLogLabel = 'operator' | 'harness' | 'conductor' | 'observation';
 
@@ -34,7 +38,7 @@ export type ActivityLogDisplayLineLayout =
 
 export interface ActivityLogDisplayLine {
   label: ActivityLogEntryLabel;
-  text: string;
+  segments: InlineMarkdownSegment[];
   layout: ActivityLogDisplayLineLayout;
 }
 
@@ -94,25 +98,28 @@ export function buildActivityLogDisplayLines(
 
   for (const entry of entries) {
     if (entry.label === 'separator') {
-      lines.push({ label: 'separator', text: '', layout: 'separator' });
+      lines.push({ label: 'separator', segments: [], layout: 'separator' });
       continue;
     }
 
-    const bodyLines = wrapTextToWidth(entry.text, contentWidth);
+    const bodyLines = wrapInlineMarkdownToWidth(
+      parseInlineMarkdown(entry.text),
+      contentWidth,
+    );
     if (bodyLines.length <= 1) {
       lines.push({
         label: entry.label,
-        text: bodyLines[0] ?? '',
+        segments: bodyLines[0] ?? [],
         layout: 'inline',
       });
       continue;
     }
 
-    lines.push({ label: entry.label, text: '', layout: 'label-row' });
+    lines.push({ label: entry.label, segments: [], layout: 'label-row' });
     for (const bodyLine of bodyLines) {
       lines.push({
         label: entry.label,
-        text: bodyLine,
+        segments: bodyLine,
         layout: 'body-row',
       });
     }

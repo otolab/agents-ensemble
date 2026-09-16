@@ -22,6 +22,7 @@
     "chalk": "5.3.0",
     "commander": "14.0.1",
     "ink": "7.1.1",
+    "marked": "18.0.13",
     "react": "19.2.0",
     "react-ink-textarea": "npm:@otolab/react-ink-textarea@0.4.1-otolab.3",
     "string-width": "8.1.0"

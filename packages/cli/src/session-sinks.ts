@@ -5,6 +5,7 @@ import {
   formatHarnessLogBody,
   formatObservationStderrLine,
 } from './session-log-lines.js';
+import { renderInlineMarkdownToAnsi } from './inline-markdown.js';
 
 export interface HarnessSinkOptions {
   /** デフォルト: `console.error` */
@@ -18,7 +19,7 @@ export function createHarnessSink(options: HarnessSinkOptions = {}): SessionLogS
   return (event) => {
     const body = formatHarnessLogBody(event);
     if (body) {
-      writeStderr(`[harness] ${body}`);
+      writeStderr(renderInlineMarkdownToAnsi(`[harness] ${body}`));
     }
   };
 }
@@ -35,11 +36,13 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
   return (event) => {
     switch (event.type) {
       case 'operator.input':
-        writeStdout(`\noperator> ${event.text}\n`);
+        writeStdout(`\noperator> ${renderInlineMarkdownToAnsi(event.text)}\n`);
         break;
       case 'conductor.send':
         if (event.status === 'finished' && event.result?.trim()) {
-          writeStdout(`\nconductor> ${event.result.trim()}\n`);
+          writeStdout(
+            `\nconductor> ${renderInlineMarkdownToAnsi(event.result.trim())}\n`,
+          );
         } else if (event.status === 'error') {
           const detail = event.error?.message ?? 'unknown error';
           if (isConductorAuthError(detail)) {
@@ -92,7 +95,7 @@ export function createObservationSink(
   return (event) => {
     const line = formatObservationStderrLine(event);
     if (line) {
-      writeStderr(line);
+      writeStderr(renderInlineMarkdownToAnsi(line));
     }
   };
 }

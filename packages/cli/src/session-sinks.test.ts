@@ -5,6 +5,12 @@ import {
   createObservationSink,
 } from './session-sinks.js';
 
+const ANSI_SGR_PATTERN = /\u001b\[[0-9;]*m/g;
+
+function stripAnsiStyles(value: string): string {
+  return value.replace(ANSI_SGR_PATTERN, '');
+}
+
 describe('session sinks', () => {
   it('formats worker prompt harness events on stderr', () => {
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -116,6 +122,27 @@ describe('session sinks', () => {
     write.mockRestore();
   });
 
+  it('renders inline Markdown in dialogue output', () => {
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    createDialogueSink()({
+      type: 'conductor.send',
+      sendCount: 1,
+      runId: 'run-1',
+      status: 'finished',
+      result: 'run **bold** with `code`',
+      workerDispatches: 0,
+      workerFailures: 0,
+    });
+
+    const output = String(write.mock.calls[0]?.[0] ?? '');
+    expect(stripAnsiStyles(output)).toBe('\nconductor> run bold with code\n');
+    expect(output).not.toContain('**');
+    expect(output).not.toContain('`');
+
+    write.mockRestore();
+  });
+
   it('shows auth-specific dialogue message on auth conductor error', () => {
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
@@ -148,6 +175,29 @@ describe('session sinks', () => {
     });
 
     expect(writeStderr).toHaveBeenCalledWith('[auth] test recovery hint');
+  });
+
+  it('renders inline Markdown in observation stderr output', () => {
+    const writeStderr = vi.fn();
+
+    createObservationSink({ writeStderr })({
+      type: 'open.question.enqueued',
+      question: {
+        id: 'inq-1',
+        question: 'Run **this** with `command`?',
+        responseType: 'text',
+        source: 'conductor',
+        status: 'open',
+        askedAt: 1,
+      },
+    });
+
+    const output = String(writeStderr.mock.calls[0]?.[0] ?? '');
+    expect(stripAnsiStyles(output)).toBe(
+      '[open question] inq-1 [text] Run this with command?',
+    );
+    expect(output).not.toContain('**');
+    expect(output).not.toContain('`');
   });
 
   it('formats worker stderr on harness stderr', () => {

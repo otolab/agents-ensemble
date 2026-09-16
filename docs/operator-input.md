@@ -76,6 +76,18 @@ TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operat
 
 `ENSEMBLE_TUI_LAYOUT=stream` または `.ensemble/config.yaml` の `tui.layout: stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。環境変数は config より優先されます（[settings.md](settings.md)）。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /exit で終了` の prompt のみを表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
 
+### 表示出力の inline Markdown subset
+
+活動ログと Open questions の `question` / `context`、および dialogue / observation の端末出力では、次の inline Markdown だけを表示スタイルへ変換します。
+
+| 記法 | TUI | 端末出力 |
+|------|-----|----------|
+| `**text**` / `__text__` | 太字 | 太字（端末が対応する場合） |
+| `` `code` `` | code 風の色 | code 風の色（端末が対応する場合） |
+| `\*` / `\_` / `` \` `` など | エスケープ後のプレーン文字 | 同左 |
+
+`**` と `` ` `` はネストできます（例: `` **`flag`** ``）。表示幅で折り返された場合も、各行のスタイルは維持されます。未対応の見出し、リンク、リスト、コードブロック、テーブル、HTML は Markdown として解釈せず、そのまま表示します。未閉じの code span もプレーン文字列として表示します。
+
 ### Operator input の2モード
 
 pane / stream とも、下部の表示は open question の有無で次の2モードに解決されます。

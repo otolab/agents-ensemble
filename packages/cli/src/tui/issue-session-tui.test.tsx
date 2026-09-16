@@ -812,6 +812,34 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('[conductor] cond');
   });
 
+  it('renders inline Markdown in activity and open question panes', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [
+        createOpenQuestion({
+          id: 'inq-markdown',
+          question: 'Approve **this** with `command`?',
+          context: 'The **context** is visible.',
+        }),
+      ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.appendActivityLog('conductor', 'Use **bold** and `code`.');
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[conductor] Use bold and code.');
+    expect(frame).toContain('Approve this with command?');
+    expect(frame).toContain('The context is visible.');
+    expect(frame).not.toContain('**');
+    expect(frame).not.toContain('`');
+  });
+
   it('embeds pane titles on top borders without inner title rows', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({
