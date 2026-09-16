@@ -12,7 +12,7 @@ pnpm changeset
 
 ## リリース
 
-手順の正本は [docs/RELEASE_GUIDE.md](../docs/RELEASE_GUIDE.md)。
+手順の正本は [docs/prompts/release.md](../docs/prompts/release.md)。
 
 1. main に changeset が蓄積されていることを確認
 2. `git checkout -b release/X.Y.Z` を main から作成して push（空ブランチ可）

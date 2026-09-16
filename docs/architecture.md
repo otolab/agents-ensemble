@@ -6,7 +6,7 @@
 
 設計の大原則（スター型・Issue 紐づけ・遷移の非機械化など）は [design.md](design.md) を正本とする。本文はプロセス分離と通信経路を記述する。
 
-関連: [otolab/my-logs#2027](https://github.com/otolab/my-logs/issues/2027)、CONDUCTOR_MODE（`mode-controller` の `conductor` モード）
+関連: CONDUCTOR_MODE（`mode-controller` の `conductor` モード）
 
 ---
 
@@ -17,7 +17,7 @@
 手順が明確な GitHub Issue を起点に、**conductor が演奏せず** worker を起動・制御し、作業を進める CLI（`ensemble`）。作業とプロセスは **1 Issue + worktree** に紐づく。
 
 - **最小ユースケース**: `ensemble issue <url>` → worker 起動 → Issue / PR 上で作業
-- **直近スコープ**: #2027 で整理した「小さな作業単位の Issue ベースフロー」
+- **スコープ**: 小さな作業単位の Issue ベースフロー
 - **対象外（初期）**: 汎用タスクオーケ、IDE 内 Agent の代替
 
 ### CONDUCTOR_MODE との関係
@@ -181,7 +181,7 @@ conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.lo
 
 ## 4. Worker（ACP）
 
-conductor が制御する実行単位。**種別（kind）** によって読む Skill と起動時のシステムプロンプトが変わる。各 worker は **独立 session で自律的に** Skill に沿って動く。プロファイル（未実装）が種別ごとの定義を返す想定。
+conductor が制御する実行単位。**種別（kind）** によって読む Skill と起動時のシステムプロンプトが変わる。各 worker は **独立 session で自律的に** Skill に沿って動く。team profile（`profiles/`）が種別ごとの定義を返す。
 
 | 種別（例） | 役割の例 |
 |-----------|---------|
@@ -219,7 +219,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 | **reviewer** | 既存に参加 | 省略時は Issue worktree | レビュー Skill |
 | **librarian** | Issue worktree（正本は Issue） | 別 repo を指定可 | ドキュメント整備等 |
 
-起動プロンプトのパターンは [prompts.md](prompts.md)。**どの種別をいつ dispatch するか、どの Skill・起動文書を渡すかはプロファイルが決める。** profile の `workers[].workspace` で worker ごとに ACP cwd を上書きできる（[#167](https://github.com/otolab/agents-ensemble/issues/167)、[elements.md](elements.md)）。
+起動プロンプトのパターン例は [prompts/worker-bootstrap.md](prompts/worker-bootstrap.md)。**どの種別をいつ dispatch するか、どの Skill・起動文書を渡すかはプロファイルが決める。** profile の `workers[].workspace` で worker ごとに ACP cwd を上書きできる（[elements.md](elements.md)）。
 
 ### Worker の前提
 
@@ -232,7 +232,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 - **新規 worktree のベース** — 可能なら `git fetch` 後の `origin` デフォルトブランチ（`origin/HEAD` または `main`）から `ensemble/issue-N` を切る。remote なし・fetch 失敗時はローカル HEAD にフォールバック
 - 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— worktree の `cwd` から解決
 - ツール可否・MCP 等は **`spawn` / `session/new` のオプションで明示**
-- description 本文は checkbox の check 以外は基本触らない（#2027 運用）
+- description 本文は checkbox の check 以外は基本触らない
 
 ---
 
@@ -390,7 +390,7 @@ CLI は薄く、オーケストレーション本体は core に集約する。
 
 ## 8. 典型シーケンス（参考）
 
-固定フローではない。conductor が文脈で省略・繰り返す。参考フレームは [pipeline.md](pipeline.md)。
+固定フローではない。conductor が文脈で省略・繰り返す。参考フレームは [prompts/issue-workflow.md](prompts/issue-workflow.md)。
 
 ```
 ensemble issue https://github.com/org/repo/issues/123
@@ -420,43 +420,26 @@ ensemble issue https://github.com/org/repo/issues/123
 
 ---
 
-## 10. 段階導入
-
-| 段階 | 内容 |
-|------|------|
-| **0** | 本アーキテクチャ + CLI スケルトン（現状） |
-| **1** | ACP ブリッジ + 手動 dispatch 相当（固定プロンプトで worker 1 回） |
-| **2** | SDK conductor が Issue を読み、判断して dispatch |
-| **3** | permission 仲介、reviewer ループ、CLI 人間エスカレーション |
-
-Stage 3 までが初期スコープ。以降（#20 非同期化の完了、プロファイルなど）は別 Issue で追う。
-
-各段階のテストレベル（unittest / integration / e2e）と完了ゲートは [testing-strategy.md](testing-strategy.md) を正本とする。Stage 1 は ACP ブリッジを unittest で作りきってから integration → e2e（CLI 縦切り）の順。
-
-遷移の **機械ルール表は導入しない**（[design.md](design.md)）。段階は実装の厚みであり、判断ロジックの固定化ではない。
-
----
-
-## 11. 非目標・制約
+## 10. 非目標・制約
 
 - IDE サイドパネル Agent へのメッセージ注入
-- 汎用マルチエージェントフレームワーク（#2027 外のフロー）
+- 汎用マルチエージェントフレームワーク
 - WORKFLOW ファイルのスキーマ標準化
 - conductor によるファイル直接編集
 - Cloud Agent 前提の設計（初期は **local SDK + local ACP**）
 
 ---
 
-## 12. 関連ドキュメント
+## 11. 関連ドキュメント
 
 | 文書 | 内容 |
 |------|------|
 | [design.md](design.md) | 大原則・固くしないもの |
 | [orchestrator.md](orchestrator.md) | conductor の責務（運用寄り） |
 | [elements.md](elements.md) | skill, worker, issue 等 |
-| [pipeline.md](pipeline.md) | フェーズ参考 |
-| [prompts.md](prompts.md) | 起動プロンプト |
-| [implementation.md](implementation.md) | 実装メモ・段階導入の要約 |
+| [prompts/issue-workflow.md](prompts/issue-workflow.md) | フェーズ参考（手順） |
+| [prompts/worker-bootstrap.md](prompts/worker-bootstrap.md) | 起動プロンプト例（手順） |
+| [documentation-policy.md](documentation-policy.md) | 文書の種類と更新ルール |
 | [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e の分離 |
 | [session-logging.md](session-logging.md) | SessionLogger・stdout/stderr・終了 JSON |
 | [adr/0008-human-dialogue-open-questions.md](adr/0008-human-dialogue-open-questions.md) | open question / オペレータ対話 |
