@@ -162,6 +162,22 @@ describe('IssueSessionTui', () => {
     expect(lastFrame() ?? '').toContain('conductor dispatch 保留中（3 件）');
   });
 
+  it('keeps pending held events visible after dispatch hold release', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 1 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    expect(lastFrame() ?? '').toContain('conductor dispatch 保留中（1 件）');
+  });
+
   it('shows post-loop prompt in input area without waiting status', () => {
     const viewModel = createTuiViewModel();
     viewModel.setPostLoopWaiting(true);

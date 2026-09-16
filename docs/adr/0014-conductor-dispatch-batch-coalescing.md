@@ -80,16 +80,25 @@ dispatch 完了後、Driver は `lastDispatchedSourceKey` を束の key にセ�
 
 ### dispatch 保留（#265）
 
-conductor が `set_dispatch_hold({ hold: true })` を呼ぶと、worker 完了・失敗や GitHub 更新などの
-trigger `SessionEvent` は Driver メモリ内の held buffer に到着順で積まれる。保留は一時的な
+conductor が `set_dispatch_hold({ hold: true })` を呼ぶと、worker 完了・失敗、GitHub 更新、
+`permission.pending` などの hold 対象 trigger `SessionEvent` は Driver メモリ内の held buffer に到着順で積まれる。保留は一時的な
 Driver 状態であり sidecar には保存しないため、resume は常に `dispatchHold: false` から始まる。
 
-`operator.message` と `permission.pending` は保留を貫通する。オペレータ入力と permission の
-判断を、保留解除まで待たせないためである。`hold: false` では held buffer 全体を
-`formatSessionEventsForConductor(events[])` で 1 本の user メッセージへ合成し、1 回の
-`agent.send` として dispatch する。束内の worker outcome 件数と `autonomousTurns` は通常の
-batch と同じ規則で集計し、max-turns で送れない場合は operator/permission を先に処理してから
-flush する。
+`operator.message` だけは保留を貫通する。`permission.pending` は permission 判断の割り込みを
+防ぐため、他の trigger と同じく held buffer に積む。`hold: false` では held buffer 全体を
+`formatSessionEventsForConductor(events[])` で 1 本の user メッセージへ合成し、permission を含めて
+1 回の `agent.send` として dispatch する。束内の worker outcome 件数と `autonomousTurns` は通常の
+batch と同じ規則で集計する。max-turns で held buffer 内の worker / GitHub イベントをまだ送れない
+場合は、queue 上の `operator.message` / `permission.pending` を先に処理するだけでなく、held buffer
+内の `permission.pending` も `selectDispatchBatch` と同じ優先則で先に切り出して dispatch する。
+この場合、送信できない worker / GitHub イベントは held buffer と TUI の `heldEventCount` に残し、
+operator 入力で `autonomousTurns` がリセットされた後に残りを flush する。したがって OFF の
+`flushedEventCount` は flush 対象として回収した総数であり、解除直後の `heldEventCount` が 0 とは
+限らない。
+
+bootstrap 中に発生した `permission.pending` も同じ held buffer の対象である。hold 解除後に届いた
+permission は、[ADR 0016](0016-bootstrap-permission-conductor-wait.md) のとおり bootstrap 完了を
+待たずに処理する。ただし、hold 中は明示的な保留操作を優先して dispatch を遅延させる。
 
 #### 非永続 buffer の終了時リスク
 
