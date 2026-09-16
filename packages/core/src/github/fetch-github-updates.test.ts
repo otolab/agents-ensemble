@@ -581,6 +581,62 @@ describe('fetchGitHubUpdates', () => {
     ]);
   });
 
+  it('retries bootstrap for a Search-discovered PR and emits completion', async () => {
+    const completedRun = {
+      __typename: 'CheckRun',
+      id: 'check-run-search-1',
+      name: 'ci/test',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      completedAt: '2026-09-07T05:01:00.000Z',
+    };
+    let statusPoll = 0;
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+      getStatusCheckRollup: vi.fn(async () => {
+        statusPoll += 1;
+        if (statusPoll === 1) {
+          throw new Error('temporary status API failure');
+        }
+        return [completedRun];
+      }),
+    });
+    const existingSessionCursor = {
+      lastIssueCommentId: '100',
+      pullRequests: {},
+    };
+
+    const failedBootstrap = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: existingSessionCursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(failedBootstrap.errors).toMatchObject([
+      { phase: 'pr_status_checks', prNumber: 42 },
+    ]);
+    expect(failedBootstrap.cursor.pullRequests?.['42']).toMatchObject({
+      ciBootstrapPending: true,
+    });
+
+    const completed = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: failedBootstrap.cursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(completed.updates).toHaveLength(1);
+    expect(completed.updates[0]).toMatchObject({
+      kind: 'ci.completed',
+      checkName: 'ci/test',
+      checkConclusion: 'SUCCESS',
+    });
+    expect(completed.cursor.pullRequests?.['42']?.ciChecks?.['ci/test']).toEqual({
+      runKey: 'run:check-run-search-1',
+      status: 'completed',
+    });
+  });
+
   it('migrates legacy pending and notified-only CI cursors explicitly', async () => {
     const completedRun = {
       __typename: 'CheckRun',

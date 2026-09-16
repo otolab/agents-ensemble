@@ -254,6 +254,7 @@ worker    ──ラウンド終了──────► worker.completed ──�
 ensemble 終了 ──stop────────► 全 worker bridge close
 ```
 
+- GitHub monitor は Search で後から初めて見つけた PR にも CI bootstrap を適用する。status poll が失敗した場合は `ciBootstrapPending` を保存し、次回の成功まで初期化を完了扱いにしない
 - **常駐** = ensemble 中 `agent acp` プロセスを殺さない（attach / init prompt 後も bridge 保持）。
 - **sendWorkerMessage** = 既存 session への `session/prompt`（dispatch ではない）。
 - **`list_workers` / `get_worker_status`** = harness 上の worker 状態照会（読み取り専用）。`prompt_worker` は作業指示専用。オペレータの状態質問には状態照会ツールを使い、Issue / PR を読まず tool 結果で答える。返却は YAML。セッションイベント列には積まない（[Issue #70](https://github.com/otolab/agents-ensemble/issues/70)）。

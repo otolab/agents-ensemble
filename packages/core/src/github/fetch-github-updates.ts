@@ -167,17 +167,19 @@ export async function fetchGitHubUpdates(
       cursor.pullRequests,
       prKey,
     );
+    const isNewPullRequest = !hasPullRequestCursor;
     const isNewExplicitPullRequest =
-      explicitWatch !== undefined && !hasPullRequestCursor;
+      explicitWatch !== undefined && isNewPullRequest;
     const prResult = await fetchPullRequestUpdates({
       client,
       issue,
       pr,
       prCursor,
-      initialCursorPoll: (input.initialCursorPoll ?? false) || isNewExplicitPullRequest,
+      initialCursorPoll:
+        (input.initialCursorPoll ?? false) || isNewExplicitPullRequest,
       ciBootstrapPoll:
         (input.initialCursorPoll ?? false) ||
-        isNewExplicitPullRequest ||
+        isNewPullRequest ||
         prCursor.ciBootstrapPending === true,
       watchKinds: resolveWatchKinds(explicitWatch?.kinds),
     });
@@ -313,11 +315,13 @@ async function fetchPullRequestUpdates(input: {
           input.pr.number,
         ),
       );
+      const retryingCiBootstrap = cursor.ciBootstrapPending === true;
       const ciResult = collectCiUpdates({
         checkRuns,
         ciChecks: cursor.ciChecks ?? {},
         pendingCheckNames: cursor.pendingCheckNames ?? [],
         notifiedCheckNames: cursor.notifiedCheckNames ?? [],
+        emitFirstCompletedAfterBootstrapFailure: retryingCiBootstrap,
         prNumber: input.pr.number,
       });
       updates.push(...ciResult.updates);
@@ -572,6 +576,7 @@ function collectCiUpdates(input: {
   ciChecks: Record<string, PullRequestCiCursor>;
   pendingCheckNames: string[];
   notifiedCheckNames: string[];
+  emitFirstCompletedAfterBootstrapFailure: boolean;
   prNumber: number;
 }): {
   updates: GitHubUpdateItem[];
@@ -613,10 +618,15 @@ function collectCiUpdates(input: {
       status: 'completed',
     };
 
-    // A completed check seen for the first time is the registration/search
-    // baseline. There is no reliable way to tell whether it finished before
-    // the registration poll without a previous snapshot.
-    if (!previous || isLegacyCompletedRunKey(previous.runKey)) {
+    // A completed check seen for the first time is normally the
+    // registration/search baseline. After a failed bootstrap there is no
+    // baseline, so emit it to avoid losing an in-flight completion.
+    const emitFirstCompletedAfterBootstrapFailure =
+      input.emitFirstCompletedAfterBootstrapFailure && previous === undefined;
+    if (
+      (!previous || isLegacyCompletedRunKey(previous.runKey)) &&
+      !emitFirstCompletedAfterBootstrapFailure
+    ) {
       continue;
     }
 
@@ -624,9 +634,14 @@ function collectCiUpdates(input: {
     // to completed transition keeps the same key. Either case is a new
     // completion event. An existing cursor must still deliver changes on
     // resume, including when the first poll after resume observes completion.
-    const isNewRun = previous.runKey !== currentRunKey;
-    const wasPending = previous.status === 'pending';
-    if (!isNewRun && !wasPending) {
+    const isNewRun =
+      previous !== undefined && previous.runKey !== currentRunKey;
+    const wasPending = previous?.status === 'pending';
+    if (
+      !emitFirstCompletedAfterBootstrapFailure &&
+      !isNewRun &&
+      !wasPending
+    ) {
       continue;
     }
 
