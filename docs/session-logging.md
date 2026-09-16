@@ -209,16 +209,7 @@ conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（fol
 
 ---
 
-## 7. 今後の拡張（未実装）
-
-- 終了 JSON への `startedAt` / `durationMs`（セッション経過時間）
-- exit JSON への `autonomousTurns` / `maxTurns` 配線
-- GitHub 監視累計カウンタ
-- `conductorSends[]` 履歴（現状は末尾の `lastResult` / `lastError` のみ）
-
----
-
-## 8. 関連コード
+## 7. 関連コード
 
 | パス | 内容 |
 |------|------|

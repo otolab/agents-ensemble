@@ -39,4 +39,4 @@
 - worker は ACP でタスク単位の新 session
 - worker の `request_permission` は conductor が受け、ポリシーで自動許諾するか人間へ
 
-技術詳細は [architecture.md](architecture.md)。要約は [implementation.md](implementation.md)。
+技術詳細は [architecture.md](architecture.md)。

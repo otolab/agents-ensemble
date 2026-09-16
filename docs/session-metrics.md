@@ -2,7 +2,7 @@
 
 > **正本:** `ensemble issue` の終了サマリ、usage、worker 状態などのメトリクス項目。出力チャネルは [session-logging.md](session-logging.md)、イベント型は [harness-events.md](harness-events.md) を参照します。
 
-`ensemble issue` セッションで harness が収集・照会できる **統計・状態の正本一覧**。[#172](https://github.com/otolab/agents-ensemble/issues/172)（終了サマリ）・[#173](https://github.com/otolab/agents-ensemble/issues/173)（TUI テンプレート）・オペレータ向けツールが同じ語彙を参照する。
+`ensemble issue` セッションで harness が収集・照会できる **統計・状態の正本一覧**。終了サマリ・TUI テンプレート・オペレータ向けツールが同じ語彙を参照する。
 
 **関連文書**
 
@@ -95,14 +95,6 @@
 | `escalationCount` | `number` | CLI 導出 | 終了 JSON・TTY テキスト | `0` |
 | `openQuestionCount` | `number` | CLI 導出（未回答は別途フィルタ可） | 終了 JSON・TTY テキスト | `0` |
 
-### 2.4 セッション時間（#172 候補・未実装）
-
-| フィールド | 型 | ソース | 出力先 | 未取得時 |
-|-----------|-----|--------|--------|----------|
-| `startedAt` | `number?`（Unix ms） | セッション開始時刻（**未配線**） | 終了 JSON・TTY テキスト（案） | 省略 |
-| `endedAt` | `number?` | 終了時刻（**未配線**） | 同上 | 省略 |
-| `durationMs` | `number?` | `endedAt - startedAt`（**未配線**） | 同上 | 省略 |
-
 ---
 
 ## 3. LLM usage（`SessionUsageTracker`）
@@ -174,19 +166,19 @@
 |-----------|-----|--------|--------|----------|
 | `cost.rawCostCents` | `number` | `AgentUsage.cost`（セッション累計） | `sessionUsage.cost`・TTY テキスト | **フィールド省略**（エラーにしない） |
 | `cost.chargedCents` | `number` | 同上（割引・Cursor Token Fee 込み実課金） | 同上 | 同上 |
-| `runs[].cost` | `UsageCost?` | run 単位（`getUsage({ runId })`） | `get_usage` 拡張候補 | 省略 |
+| `runs[].cost` | `UsageCost?` | run 単位（`getUsage({ runId })`） | `get_usage` | 省略 |
 
 **注意**
 
 - `RunResult.usage` / per-round tracker は **トークンのみ**。cost は `getUsage()` のみ。
 - billing 反映 lag のため **run 終了直後は cost が無い**ことがある（SDK 型コメント）。
-- worker ACP は現状 cost 無し。将来 `LlmUsageSnapshot` 拡張で tracker に載せる想定（[#172 コメント](https://github.com/otolab/agents-ensemble/issues/172#issuecomment)）。
+- worker ACP は現状 cost 無し。
 
 ---
 
 ## 4. Harness worker 状態（runtime）
 
-正本: `WorkerRuntime` + `list_workers` / `get_worker_status`（`packages/core/src/dispatch/worker-status-tool.ts`）。**終了 JSON には現状載らない**（[#173](https://github.com/otolab/agents-ensemble/issues/173) テンプレートパラメータとして参照）。
+正本: `WorkerRuntime` + `list_workers` / `get_worker_status`（`packages/core/src/dispatch/worker-status-tool.ts`）。**終了 JSON には載らない**（TUI テンプレートパラメータとして参照）。
 
 ### 4.1 セッション集計（`WorkerSessionStatusSummary`）
 
@@ -227,7 +219,7 @@ TUI 表示語彙 `WorkerDisplayStatus`（`idle` / `running` / `failed`）は **�
 | `maxTurns` | `number` | `resolveMaxTurns(options.maxTurns)` | **未出力** | `SessionView`（`null` = 無制限） | `<= 0` は無制限 |
 | `DEFAULT_MAX_ISSUE_TURNS` | `5` | `session-policy.ts` | — | — | CLI 未指定時の既定 |
 
-`stopReason: 'max_turns'` は終了 JSON に載るが、**`autonomousTurns` / `maxTurns` の数値自体は exit report に含まれない**（[#172 非スコープ](https://github.com/otolab/agents-ensemble/issues/172) 案: harness 未配線のため先送り。配線するなら別フィールド設計）。
+`stopReason: 'max_turns'` は終了 JSON に載るが、**`autonomousTurns` / `maxTurns` の数値自体は exit report に含まれない**。
 
 ---
 
@@ -239,7 +231,7 @@ TUI 表示語彙 `WorkerDisplayStatus`（`idle` / `running` / `failed`）は **�
 | `harness.github.monitor_error` | `message: string`, `phase?`, `prNumber?`, `cause?`, `retryable?` | API 失敗（フェーズ単位） | **未集計** | 同上 | stderr は `message` のみ 1 行（後方互換） |
 | `githubMonitor` cursor | `GitHubMonitorCursor` | sidecar のみ | — | — | exit report 対象外 |
 
-終了サマリへの「GitHub 監視 N 件」は **現状取れない**。必要なら tracker 追加が別 Issue。
+終了サマリへの「GitHub 監視 N 件」は **現状取れない**（poll 差分はイベント単位のみ）。
 
 ---
 
@@ -255,20 +247,7 @@ TUI 表示語彙 `WorkerDisplayStatus`（`idle` / `running` / `failed`）は **�
 
 ---
 
-## 8. #172 実装対応（完了）
-
-| 変更 | メトリクス節 |
-|------|-------------|
-| 終了 JSON に `sessionUsage` 追加 | §3.1（`get_session_usage` と一致） |
-| `responseText` → `responsePreview` | §2.2 |
-| TTY `formatIssueSessionSummaryText` | §1, §2.1–2.3, §3.1 tokens, §3.3 cost |
-| `getUsage().cost` マージ | §3.3 |
-| `--summary-format` / `--include-full-response-text` | §2 冒頭表 |
-| `startedAt` / `durationMs` | §2.4（**未実装**） |
-
----
-
-## 9. 関連コード
+## 8. 関連コード
 
 | パス | 内容 |
 |------|------|

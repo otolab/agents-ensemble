@@ -1,8 +1,8 @@
-# リリースガイド
+# リリース手順
 
-> **正本:** `@agents-ensemble/core` と `@agents-ensemble/cli` の changeset・Release PR・npm 公開手順。現在の開発フローは本書を参照します。
+> **参照:** `@agents-ensemble/core` と `@agents-ensemble/cli` の changeset・Release PR・npm 公開手順。
 
-`@agents-ensemble/core` と `@agents-ensemble/cli` のリリース手順。フローは [modular-prompt](https://github.com/otolab/modular-prompt) を踏襲する。
+フローは [modular-prompt](https://github.com/otolab/modular-prompt) を踏襲する。
 
 ## 自動リリースフロー概要
 
@@ -128,6 +128,5 @@ git commit -m "chore: add changeset"
 
 ## 関連
 
-- [.changeset/README.md](../.changeset/README.md)
+- [.changeset/README.md](../../.changeset/README.md)
 - [Changesets](https://github.com/changesets/changesets)
-- [Issue #138](https://github.com/otolab/agents-ensemble/issues/138)

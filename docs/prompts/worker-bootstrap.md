@@ -1,10 +1,10 @@
-# 起動プロンプト
+# worker 起動プロンプト
 
-> **参照:** worker 起動プロンプトのパターン。実際の役割定義・作業指示の正本は、対象 Issue と profile / team materials です。
+> **参照:** worker 起動プロンプトのパターン例。実際の役割定義・作業指示の正本は、対象 Issue と profile / team materials です。
 
 自然言語ベース。conductor が dispatch 時に worker へ渡す起動文書。種別ごとに Skill 名・Issue / PR URL を差し替える。
 
-プロファイル（未実装）が種別ごとの **Skill 名** と **worker 用システムプロンプト** を返す想定。
+team profile が種別ごとの **Skill 名** と **worker 用システムプロンプト** を返す。
 
 ## 独立起動のブートストラップ
 
@@ -47,5 +47,3 @@ SKILL文書に沿って丁寧に作業してください。
 
 調査結果や作業方針決定のタイミングで、Issueに小さく報告するようにしてください。
 ```
-
-参照: `my-logs/logs/2026-w28-w31.md` — `[config-checker-fix] の開始プロンプト`
