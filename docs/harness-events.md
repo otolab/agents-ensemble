@@ -66,7 +66,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
 | `harness.teardown` | `runConductorSession` の `finally` 完了時（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
 | `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | `[harness] teardown.phase <name>` | なし |
-| `conductor.dispatch_hold` | conductor が `set_dispatch_hold` を呼んだとき、または held trigger の件数が変化したとき | `dispatch hold enabled` / `released (flushed N events)`（observation） | TUI の保留状態と件数を更新 |
+| `conductor.dispatch_hold` | conductor が `set_dispatch_hold` を呼んだとき、または held trigger（`permission.pending` を含む）の件数が変化したとき | `dispatch hold enabled` / `released (flushed N events)`（observation） | TUI の保留状態と件数を更新 |
 
 ### 2.1.1 オペレータ向け representation
 
@@ -105,7 +105,7 @@ open question・エスカレーション・CLI 通知。stderr の prefix は従
 | `session.continue` | `--continue` で sidecar から再開時 | `[continue] resuming session: conductorAgentId=...` | なし |
 | `session.post_loop_wait` | 自律的な連続処理が不要になり、TTY post-loop のイベント待機を開始したとき | （post-loop 待機メッセージ） | なし |
 | `session.operator_exit` | オペレータが `/exit` / `exit` を入力した直後（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | （終了フィードバックメッセージ） | なし |
-| `conductor.dispatch_hold` | `set_dispatch_hold` の ON/OFF、および held trigger 件数の更新（#265） | `dispatch hold enabled` / `released (flushed N events)` | TUI Workers ペインのタイトルを更新 |
+| `conductor.dispatch_hold` | `set_dispatch_hold` の ON/OFF、および held trigger（`permission.pending` を含む）件数の更新（#265） | `dispatch hold enabled` / `released (flushed N events)` | TUI Workers ペインのタイトルを更新 |
 
 CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）。
 
@@ -113,8 +113,8 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 
 | 読者 | 見えるもの | 見えないもの / 注意 |
 |------|------------|--------------------|
-| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。worker の活動は通常どおり表示される |
-| conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger は OFF 後に 1 回の `agent.send` へ合成される。operator/permission は保留されない |
+| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` を含む held trigger 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator.message は dispatch を貫通する |
+| conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending を含む）は OFF 後に 1 回の `agent.send` へ合成される。operator.message は保留されない |
 | 運用・resume | 保留は Driver メモリだけ | sidecar に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
 
 保留は一時的な運用モードであり、teardown flush や crash recovery は提供しない。`/exit`、
@@ -266,7 +266,7 @@ prompt_worker / sendWorkerMessage
        ├─ harness.worker.state processing ───────────────► stderr + TUI running
        ├─ harness.worker.acp.update (session/prompt 中) ► TUI 活動ヒントのみ（stderr / 活動ログには出さない #161）
        ├─ permission 保留 ─► permission.pending ───────► stderr / TUI 活動ログ（即時。Workers 欄は更新しない）
-       │                     SessionEvent permission.pending ► SessionEventQueue ► agent.send
+       │                     SessionEvent permission.pending ► SessionEventQueue ► （dispatch hold 中は held buffer、解除後は agent.send）
        │
        ├─ 成功 ─► harness.worker.prompt.completed (source=conductor) ► stderr + TUI idle
        │          harness.worker.state idle ────────────────► stderr + TUI idle
@@ -289,9 +289,10 @@ preempt（stopReason=cancelled）: `prompt.completed` / `worker.round` をスキ
   conductor.send ───────────────────────────► stderr + snapshot（末尾更新）+ TUI（conductor: idle）
 
 dispatch hold（#265）
-  set_dispatch_hold(true) ─────────────────► observation + TUI（保留中、N 件）
-  worker/github trigger ───────────────────► SessionEvent held buffer（`[harness]` は通常どおり）
-  operator/permission ────────────────────► SessionEventQueue ─► agent.send（保留を貫通）
+  set_dispatch_hold(true) ─────────────────► observation + TUI（保留中、N 件。permission.pending を含む）
+  worker/github/permission trigger ────────► SessionEvent held buffer（`[harness]` は通常どおり）
+  permission ─────────────────────────────► SessionEventQueue ─► held buffer（harness/TUI 活動ログは即時）
+  operator ───────────────────────────────► SessionEventQueue ─► agent.send（保留を貫通）
   set_dispatch_hold(false) ────────────────► observation ─► held events を 1 本化して agent.send
 
 GitHub monitor（セッション中は常時。`--no-github-monitor` で無効化可）

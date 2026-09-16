@@ -536,18 +536,23 @@ describe('runConductorSessionDriver', () => {
     expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
   });
 
-  it('dispatches permission.pending immediately while trigger events are held', async () => {
+  it('holds permission.pending with trigger events and flushes it after release', async () => {
     const holdState = createDispatchHoldState();
-    const holdTool = createSetDispatchHoldTool({ state: holdState });
+    const holdChanges: DispatchHoldChange[] = [];
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onChanged: (change) => holdChanges.push(change),
+    });
     const send = vi
       .fn()
       .mockImplementationOnce(async () => {
         await holdTool.set_dispatch_hold!.execute({ hold: true });
         return { runId: 'run-1', status: 'running', result: 'holding' };
       })
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toBe('operator can still interrupt');
         await holdTool.set_dispatch_hold!.execute({ hold: false });
-        return { runId: 'run-2', status: 'finished', result: 'permission' };
+        return { runId: 'run-2', status: 'running', result: 'released' };
       })
       .mockResolvedValueOnce({ runId: 'run-3', status: 'finished', result: 'flushed' });
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
@@ -556,6 +561,7 @@ describe('runConductorSessionDriver', () => {
     const driverPromise = runConductorSessionDriver({
       ...createDriverOptions({ eventQueue, conductor, maxTurns: 5 }),
       dispatchHoldState: holdState,
+      onDispatchHoldChanged: (change) => holdChanges.push(change),
     });
 
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
@@ -579,12 +585,31 @@ describe('runConductorSessionDriver', () => {
       },
     });
 
+    await vi.waitFor(() => expect(holdState.heldEvents).toHaveLength(2));
+    expect(send).toHaveBeenCalledTimes(1);
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'operator can still interrupt',
+    });
+
     const result = await driverPromise;
 
     expect(send).toHaveBeenCalledTimes(3);
-    expect(String(send.mock.calls[1]![0])).toContain('## permission 判断待ち');
-    expect(String(send.mock.calls[1]![0])).not.toContain('worker.completed');
-    expect(String(send.mock.calls[2]![0])).toContain('## worker ラウンド完了');
+    expect(String(send.mock.calls[1]![0])).toBe('operator can still interrupt');
+    expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
+    expect(String(send.mock.calls[2]![0])).toContain('permission.pending');
+    expect(holdChanges).toEqual([
+      { status: 'enabled', hold: true, heldEventCount: 0 },
+      { status: 'updated', hold: true, heldEventCount: 1 },
+      { status: 'updated', hold: true, heldEventCount: 2 },
+      {
+        status: 'released',
+        hold: false,
+        heldEventCount: 0,
+        flushedEventCount: 2,
+      },
+    ]);
+    expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
     expect(result.sendCount).toBe(3);
   });
 

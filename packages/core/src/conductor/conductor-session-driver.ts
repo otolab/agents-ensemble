@@ -440,7 +440,8 @@ async function waitForDispatchBatch(input: {
       maxTurns: input.maxTurns,
     });
 
-    // operator / permission は hold 中も、また release 後の flush よりも先に通す。
+    // operator.message は hold 中も通す。release 後に queue に残った
+    // permission.pending も held flush より先に通す。
     if (selected && isImmediateDispatchSource(selected.batch.sourceKey)) {
       input.eventQueue.replaceQueue(selected.remainingQueue);
       return {
