@@ -441,7 +441,8 @@ async function waitForDispatchBatch(input: {
     });
 
     // operator.message は hold 中も通す。release 後に queue に残った
-    // permission.pending も held flush より先に通す。
+    // permission.pending も held flush より先に通す。held buffer 内の
+    // permission.pending は max-turns で worker が止まっていても下の分岐で救済する。
     if (selected && isImmediateDispatchSource(selected.batch.sourceKey)) {
       input.eventQueue.replaceQueue(selected.remainingQueue);
       return {
@@ -453,16 +454,40 @@ async function waitForDispatchBatch(input: {
 
     if (
       !input.dispatchHoldState.dispatchHold &&
-      input.dispatchHoldState.heldEvents.length > 0 &&
-      input.dispatchHoldState.heldEvents.every((event) =>
-        canDispatchConductorSend(event, input.autonomousTurns, input.maxTurns),
-      )
+      input.dispatchHoldState.heldEvents.length > 0
     ) {
-      const events = input.dispatchHoldState.heldEvents.splice(0);
-      return {
-        events,
-        sourceKey: 'dispatch-hold',
-      };
+      const heldEvents = input.dispatchHoldState.heldEvents;
+      if (
+        heldEvents.every((event) =>
+          canDispatchConductorSend(event, input.autonomousTurns, input.maxTurns),
+        )
+      ) {
+        const events = heldEvents.splice(0);
+        notifyHeldDispatchProgress(input);
+        return {
+          events,
+          sourceKey: 'dispatch-hold',
+        };
+      }
+
+      // max-turns blocks worker/GitHub events, but permission.pending remains
+      // dispatchable. Reuse the normal batch selector so held permissions are
+      // selected with the same priority and batching rules as queued events.
+      const selectedHeld = selectDispatchBatch({
+        queue: heldEvents,
+        state: input.dispatchBatchState,
+        autonomousTurns: input.autonomousTurns,
+        maxTurns: input.maxTurns,
+      });
+      if (selectedHeld) {
+        input.dispatchHoldState.heldEvents = selectedHeld.remainingQueue;
+        notifyHeldDispatchProgress(input);
+        return {
+          events: selectedHeld.batch.events,
+          sourceKey: selectedHeld.batch.sourceKey,
+          selected: selectedHeld,
+        };
+      }
     }
 
     if (selected) {
@@ -485,6 +510,17 @@ async function waitForDispatchBatch(input: {
 
 function isImmediateDispatchSource(sourceKey: string): boolean {
   return sourceKey === 'operator' || sourceKey === 'permission';
+}
+
+function notifyHeldDispatchProgress(input: {
+  dispatchHoldState: DispatchHoldState;
+  onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
+}): void {
+  input.onDispatchHoldChanged?.({
+    status: 'updated',
+    hold: input.dispatchHoldState.dispatchHold,
+    heldEventCount: input.dispatchHoldState.heldEvents.length,
+  });
 }
 
 function isAbortError(error: unknown): boolean {

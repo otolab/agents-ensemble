@@ -59,7 +59,7 @@ describe('createSetDispatchHoldTool', () => {
       {
         status: 'released',
         hold: false,
-        heldEventCount: 0,
+        heldEventCount: 2,
         flushedEventCount: 2,
       },
     ]);

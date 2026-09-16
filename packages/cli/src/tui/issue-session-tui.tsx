@@ -196,9 +196,10 @@ export function WorkerStatusPane({
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
   const issueTitleRight = issueUrl ? formatIssueLabel(issueUrl) : undefined;
-  const dispatchHoldSuffix = dispatchHold?.hold
-    ? ` — conductor dispatch 保留中（${dispatchHold.heldEventCount} 件）`
-    : undefined;
+  const dispatchHoldSuffix =
+    dispatchHold && (dispatchHold.hold || dispatchHold.heldEventCount > 0)
+      ? ` — conductor dispatch 保留中（${dispatchHold.heldEventCount} 件）`
+      : undefined;
   return (
     <TitledBorderPane
       title={WORKER_PANE_TITLE}

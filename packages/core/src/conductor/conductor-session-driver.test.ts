@@ -434,7 +434,8 @@ describe('runConductorSessionDriver', () => {
     expect(holdChanges).toEqual([
       { status: 'enabled', hold: true, count: 0 },
       { status: 'updated', hold: true, count: 2 },
-      { status: 'released', hold: false, count: 0 },
+      { status: 'released', hold: false, count: 2 },
+      { status: 'updated', hold: false, count: 0 },
     ]);
     expect(onSendComplete.mock.calls.map(([info]) => info.autonomousTurns)).toEqual([
       1,
@@ -523,9 +524,10 @@ describe('runConductorSessionDriver', () => {
       {
         status: 'released',
         hold: false,
-        heldEventCount: 0,
+        heldEventCount: 2,
         flushedEventCount: 2,
       },
+      { status: 'updated', hold: false, heldEventCount: 0 },
     ]);
     expect(onSendComplete.mock.calls.map(([info]) => info.autonomousTurns)).toEqual([1, 2]);
     expect(onSendComplete.mock.calls[1]?.[0]).toMatchObject({
@@ -605,12 +607,123 @@ describe('runConductorSessionDriver', () => {
       {
         status: 'released',
         hold: false,
-        heldEventCount: 0,
+        heldEventCount: 2,
         flushedEventCount: 2,
       },
+      { status: 'updated', hold: false, heldEventCount: 0 },
     ]);
     expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
     expect(result.sendCount).toBe(3);
+  });
+
+  it('flushes held permission before max-turns-blocked worker events after release', async () => {
+    const holdState = createDispatchHoldState();
+    const eventQueue = new SessionEventQueue();
+    const holdChanges: DispatchHoldChange[] = [];
+    let releaseResult: { structuredContent?: unknown } | undefined;
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onChanged: (change) => holdChanges.push(change),
+      onBeforeRelease: () =>
+        bufferDispatchHoldEvents({
+          state: holdState,
+          eventQueue,
+          onChanged: (change) => holdChanges.push(change),
+        }),
+    });
+    const send = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await holdTool.set_dispatch_hold!.execute({ hold: true });
+        eventQueue.enqueue({
+          type: 'worker.completed',
+          result: {
+            name: 'implementer',
+            acpSessionId: 'sess-1',
+            status: 'finished',
+            result: 'done',
+          },
+        });
+        eventQueue.enqueue({
+          type: 'permission.pending',
+          permission: {
+            id: 'permission-1',
+            workerId: 'worker-1',
+            createdAt: 1,
+            request: { toolName: 'Shell', sessionId: 'sess-1' },
+          },
+        });
+        releaseResult = await holdTool.set_dispatch_hold!.execute({ hold: false });
+        return { runId: 'run-1', status: 'running', result: 'holding' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('permission.pending');
+        expect(message).not.toContain('worker.completed');
+        return { runId: 'run-2', status: 'running', result: 'permission handled' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toBe('operator resumes');
+        return { runId: 'run-3', status: 'running', result: 'turns reset' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('worker.completed');
+        return { runId: 'run-4', status: 'finished', result: 'worker flushed' };
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const openQuestions = new OpenQuestionRegistry();
+    const shutdown = new AbortController();
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor, maxTurns: 1, openQuestions }),
+      dispatchHoldState: holdState,
+      onDispatchHoldChanged: (change) => holdChanges.push(change),
+      shutdownSignal: shutdown.signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(holdState.heldEvents).toHaveLength(1);
+    });
+    expect(String(send.mock.calls[1]![0])).toContain('permission.pending');
+    expect(String(send.mock.calls[1]![0])).not.toContain('worker.completed');
+    expect(releaseResult?.structuredContent).toEqual({
+      dispatchHold: false,
+      flushedEventCount: 2,
+      sendScheduled: true,
+    });
+    expect(holdChanges).toEqual([
+      { status: 'enabled', hold: true, heldEventCount: 0 },
+      { status: 'updated', hold: true, heldEventCount: 2 },
+      {
+        status: 'released',
+        hold: false,
+        heldEventCount: 2,
+        flushedEventCount: 2,
+      },
+      { status: 'updated', hold: false, heldEventCount: 1 },
+    ]);
+
+    const maxTurnsQuestion = openQuestions.listOpen().find(
+      (question) => question.source === 'max_turns',
+    );
+    expect(maxTurnsQuestion).toBeDefined();
+    openQuestions.answer(maxTurnsQuestion!.id, {
+      answer: 'go ahead',
+      answeredBy: 'operator',
+    });
+    eventQueue.enqueue({ type: 'operator.message', text: 'operator resumes' });
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(String(send.mock.calls[2]![0])).toBe('operator resumes');
+    expect(String(send.mock.calls[3]![0])).toContain('worker.completed');
+    expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
+    expect(holdChanges.at(-1)).toEqual({
+      status: 'updated',
+      hold: false,
+      heldEventCount: 0,
+    });
+    expect(result.stopReason).toBe('completed');
   });
 
   it('reports autonomousTurns on each send complete', async () => {

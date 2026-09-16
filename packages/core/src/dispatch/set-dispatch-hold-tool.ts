@@ -23,7 +23,7 @@ export function createSetDispatchHoldTool(
         '`hold: true` is useful while reading an Issue/PR or coordinating several workers; held events are kept in arrival order.',
         '`operator.message` always bypasses the hold; `permission.pending` is held like other trigger events.',
         'Events already queued before release are collected before the flush count is returned.',
-        '`hold: false` releases the held trigger events, including permission.pending, as one combined conductor send.',
+        '`hold: false` releases the held trigger events, including permission.pending, for dispatch. Normally they arrive as one combined conductor send; after max-turns, permission may be sent first while blocked worker events remain held.',
       ].join(' '),
       inputSchema: {
         type: 'object',
@@ -63,7 +63,7 @@ export function createSetDispatchHoldTool(
         options.onChanged?.({
           status: 'released',
           hold: false,
-          heldEventCount: 0,
+          heldEventCount: options.state.heldEvents.length,
           flushedEventCount,
         });
         return yamlToolResult('set_dispatch_hold', {

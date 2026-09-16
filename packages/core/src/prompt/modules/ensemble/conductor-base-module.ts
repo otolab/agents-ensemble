@@ -36,7 +36,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
       items: [
         '- 複数 worker の完了をまとめて読みたいとき、Issue / PR を集中して読んでいるときは `set_dispatch_hold({ hold: true })` を使う',
         '- 保留中は `operator.message` だけ即時に届き、`permission.pending` は他の trigger と同じく held buffer に積まれる。permission の判断は `hold: false` まで待つ',
-        '- 作業状況をまとめて判断できる状態になったら `set_dispatch_hold({ hold: false })` を使う。保留中の trigger イベントは到着順の 1 束として 1 回の通知に合成される',
+        '- 作業状況をまとめて判断できる状態になったら `set_dispatch_hold({ hold: false })` を使う。保留中の trigger イベントは通常、到着順の 1 束として 1 回の通知に合成される。max-turns で worker / GitHub を送れない場合は held permission が先に届き、残りは operator 入力後に届く',
         '- 保留は一時的な Driver 状態で、セッション再開時には解除されている',
       ],
     },

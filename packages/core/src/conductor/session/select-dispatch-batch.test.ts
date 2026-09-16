@@ -261,6 +261,20 @@ describe('selectDispatchBatch', () => {
     expect(result?.remainingQueue).toEqual([workerCompleted('implementer')]);
   });
 
+  it('still selects permission at max turns while worker events remain blocked', () => {
+    const queue = [workerCompleted('implementer'), permission('perm-1')];
+    const result = selectDispatchBatch({
+      queue,
+      state: {},
+      autonomousTurns: 5,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('permission');
+    expect(result?.batch.events).toEqual([permission('perm-1')]);
+    expect(result?.remainingQueue).toEqual([workerCompleted('implementer')]);
+  });
+
   it('returns a single-event batch compatible with size-1 dispatch', () => {
     const queue = [workerCompleted('implementer')];
     const result = selectDispatchBatch({
