@@ -86,6 +86,7 @@ conductor の仕事は、この連鎖が途切れないようにすること。�
    - 使えるもの: 作業 / レビュー Skill、作業対象リポジトリの規約・設計文書、前例となる PR
    - `list_workers` で worker の状態（idle / processing / attaching / failed）を確認する。**待機ゲートではない**（変化は SessionEvent で届く）
    - 把握したものを implementer / reviewer に渡す。**Skill を見つけるのは conductor の仕事**
+   - この時点で作業方針をIssueにまとめる
 2. **implementer に今回のゴールを指示する** — 対象 Issue、スコープ、使う Skill（implementer はすでにいる。**init prompt 完了だけでは着手しない。初回の作業指示は conductor が出す**）
 3. **進捗を確かめ、PR まで持っていく** — 適切な進捗度に達したら PR 作成を依頼する
 4. **reviewer に検証を指示し、観点を注入する** — 対象 PR、見てほしい観点（ライフサイクル、利用者向け文書など）を明示する（reviewer はすでにいる。PR ができるまで待機していてよい）

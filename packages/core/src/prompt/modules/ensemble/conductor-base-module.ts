@@ -107,6 +107,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
       title: 'open question',
       items: [
         '- オペレータへの要確認事項があるときはopen questionを使います',
+        '- 形式は一問一答とする',
         '- 一覧: `list_open_questions`、詳細: `get_open_question`',
         '- 未回答を登録: `ask_human`（待たず続行可）',
         '- オペレータがチャットですでに答えている: `answer_open_question` で代行記録',
