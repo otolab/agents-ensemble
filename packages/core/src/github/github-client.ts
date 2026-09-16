@@ -262,12 +262,16 @@ export function buildGitHubClient(options: GitHubClientOptions): GitHubClient {
                   nodes {
                     __typename
                     ... on CheckRun {
+                      id
                       name
                       status
                       conclusion
                       detailsUrl
+                      startedAt
+                      completedAt
                     }
                     ... on StatusContext {
+                      id
                       context
                       state
                       targetUrl

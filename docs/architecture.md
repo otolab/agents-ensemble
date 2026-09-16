@@ -246,7 +246,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 セッション開始 ──attach（待機 prompt）──► worker 常駐（agent acp プロセス + ACP session）
 conductor ──prompt_worker──► WorkerOutboundQueue ──sendWorkerMessage──► session/prompt
 conductor ──list_workers / get_worker_status──► WorkerRuntime（読み取り専用・イベント列に積まない）
-conductor ──register_github_watch──► GitHubMonitor cursor（明示 PR watch）
+conductor ──register_github_watch──► GitHubMonitor cursor（明示 PR watch）──► 即時 bootstrap poll
 conductor ──get_session_usage / get_usage──────► SessionUsageTracker（読み取り専用・イベント列に積まない）
 worker    ──permission──────► ConductorInbox ──► SessionEventQueue ──► agent.send
 worker    ──Issue / PR 報告──► （非同期正本。harness 非経由）
@@ -254,6 +254,7 @@ worker    ──ラウンド終了──────► worker.completed ──�
 ensemble 終了 ──stop────────► 全 worker bridge close
 ```
 
+- GitHub monitor は Search で後から初めて見つけた PR にも CI bootstrap を適用する。status poll が失敗した場合は `ciBootstrapPending` を保存し、次回の成功まで初期化を完了扱いにしない
 - **常駐** = ensemble 中 `agent acp` プロセスを殺さない（attach / init prompt 後も bridge 保持）。
 - **sendWorkerMessage** = 既存 session への `session/prompt`（dispatch ではない）。
 - **`list_workers` / `get_worker_status`** = harness 上の worker 状態照会（読み取り専用）。`prompt_worker` は作業指示専用。オペレータの状態質問には状態照会ツールを使い、Issue / PR を読まず tool 結果で答える。返却は YAML。セッションイベント列には積まない（[Issue #70](https://github.com/otolab/agents-ensemble/issues/70)）。
