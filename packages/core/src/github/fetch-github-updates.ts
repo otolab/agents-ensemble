@@ -634,9 +634,11 @@ function collectCiUpdates(input: {
     // to completed transition keeps the same key. Either case is a new
     // completion event. An existing cursor must still deliver changes on
     // resume, including when the first poll after resume observes completion.
-    const isNewRun =
-      previous !== undefined && previous.runKey !== currentRunKey;
     const wasPending = previous?.status === 'pending';
+    const isNewRun =
+      previous !== undefined &&
+      previous.runKey !== currentRunKey &&
+      !isWeakRunKeyDrift(previous, currentRunKey);
     if (
       !emitFirstCompletedAfterBootstrapFailure &&
       !isNewRun &&
@@ -704,6 +706,27 @@ function getLegacyCompletedRunKey(name: string): string {
 
 function isLegacyCompletedRunKey(runKey: string): boolean {
   return runKey.startsWith('legacy-completed:');
+}
+
+/** run id が無く URL / 名前などの弱いキーだけが変わったときの再通知を抑える。 */
+function isWeakRunKey(runKey: string): boolean {
+  return (
+    runKey.startsWith('url:') ||
+    runKey.startsWith('name:') ||
+    runKey.startsWith('started:') ||
+    runKey.startsWith('completed:') ||
+    runKey.startsWith('legacy-')
+  );
+}
+
+function isWeakRunKeyDrift(
+  previous: PullRequestCiCursor,
+  currentRunKey: string,
+): boolean {
+  return (
+    previous.status === 'completed' &&
+    (isWeakRunKey(previous.runKey) || isWeakRunKey(currentRunKey))
+  );
 }
 
 function getCiRunKey(check: GhCheckRun): string {
