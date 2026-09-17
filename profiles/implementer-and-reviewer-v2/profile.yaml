@@ -1,0 +1,35 @@
+# implementer-and-reviewer v2（Issue #288）
+# 役割の立場・振る舞い・運用は materials に集約。agents は kind 登録のみ（prompt なし）。
+# harness 接続は core base-module、チーム運用は team-common.md。
+
+meta:
+  title: implementer-and-reviewer-v2
+  summary: conductor / implementer / reviewer — 役割別 materials 分割版（#288 作業中）
+
+agents:
+  conductor: {}
+  implementer: {}
+  reviewer: {}
+
+workers:
+  - name: implementer
+    kind: implementer
+  - name: reviewer
+    kind: reviewer
+
+materials:
+  - id: team-common
+    title: 標準動作モード（共通）
+    file: team-common.md
+  - id: team-conductor
+    title: 標準動作モード（conductor）
+    file: team-conductor.md
+    kinds: [conductor]
+  - id: team-implementer
+    title: 標準動作モード（implementer）
+    file: team-implementer.md
+    kinds: [implementer]
+  - id: team-reviewer
+    title: 標準動作モード（reviewer）
+    file: team-reviewer.md
+    kinds: [reviewer]

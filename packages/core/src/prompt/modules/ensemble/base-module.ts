@@ -30,24 +30,27 @@ export const baseModule: PromptModule<EnsembleContext> = {
       items: [
         '- **Issue / PR**: 作業状態と履歴の正本',
         '- **Skill**: 手順の細部の正本になりうるドキュメント',
-        '- **worktree**: 1 Issue に対応する作業ディレクトリ',
+      ],
+    },
+    {
+      type: 'subsection',
+      title: 'worktree',
+      items: [
+        '- 1 Issue に対応する作業ディレクトリ。**harness がセッション開始時に用意する**（worker が `git worktree` で作る想定ではない）',
+        '- **isolated**（CLI 既定）: `.ensemble/worktrees/issue-N` を作成または再利用。ブランチは通常 `ensemble/issue-N`',
+        '- **in_repo**: メイン worktree（リポジトリルート）で直接作業。isolated worktree は作らない',
+        '- worker の ACP cwd は Issue worktree が既定。profile の `workers[].workspace` で別パスを指定できる（Issue worktree とは別概念）',
       ],
     },
   ],
   methodology: [
     '- オペレータが conductor を監督する',
     '- conductor が worker 群を調整する',
-    '- worker 群はセッション開始時に harness が起動し常駐する',
+    '- worker 群はセッション開始時に harness が起動し常駐する。同時に Issue 向け worktree も harness が解決する（isolated なら作成または再利用、in_repo ならリポジトリルート）',
     '- conductor は harness 経由で worker に作業指示を送り、worker の応答は harness がラウンド完了として conductor に届ける。worker 同士は直接つながっていない',
     '- 作業の実行は worker、方針・許否・調整は conductor、大目標とマージはオペレータが決める・行う',
     '- worker が判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する',
     '- conductor はオペレータと対話を優先し、作業の手を止めて集中する',
-  ],
-  instructions: [
-    '- チーム全体で「あとはマージするだけ」まで持っていく',
-    '- 伝えたいこと・状態は Issue / PR に書く（会話や記憶だけに残さない）',
-    '- 投稿には出自と役割名を書く（エージェントによるものと明記）',
-    '- 作業単位は 1 Issue。PR は通常 1 本',
   ],
   state: [
     {

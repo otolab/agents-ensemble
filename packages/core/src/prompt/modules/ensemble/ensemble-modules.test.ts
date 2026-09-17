@@ -40,6 +40,9 @@ describe('ensemble prompt modules', () => {
     expect(prompt).toContain('`reviewer`');
     expect(prompt).toContain('**harness**');
     expect(prompt).toContain('常駐する');
+    expect(prompt).toContain('### worktree');
+    expect(prompt).toContain('harness がセッション開始時に用意する');
+    expect(prompt).toContain('isolated');
     expect(prompt).toContain('prompt_worker');
     expect(prompt).toContain('resolve_permission');
     expect(prompt).toContain('set_dispatch_hold');

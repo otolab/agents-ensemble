@@ -18,7 +18,7 @@
 
 compile 時の context は `EnsembleContext`（`kind`, `issueUrl`, `issueNumber`, `workers`, `kinds`）。`ensembleContext(kind, issueUrl, sessionState)` で組み立てる。`sessionState` は `sessionStateFromProfile(profile)` で profile から取る。base の **objective** は Issue 解決目標、**state** は workers 構成と kind 一覧。
 
-profile 起動文書は **PromptModule として merge** される（persona / instructions 等のセクション分担）。profile materials は **Prepared Materials** に載せ、materials があるときは instructions に「行動時の定義として読む」旨を1行追記する。`materials` の `kinds` を省略した項目は全 agent に、`kinds: [implementer]` のように指定した項目は列挙した kind にだけ compile 時に同梱される。ensemble 側に書くべき共通前提を profile に重複させない。
+profile 起動文書は **PromptModule として merge** される（persona / instructions 等のセクション分担）。profile materials は **Prepared Materials** に載せ、materials があるときは instructions に「行動時の定義として読む」旨を1行追記する。`materials` の `kinds` を省略した項目は全 agent に、`kinds: [implementer]` のように指定した項目は列挙した kind にだけ compile 時に同梱される。ensemble 側に書くべき共通前提を profile に重複させない。**チーム運用**（マージまで持っていく、Issue / PR 正本、投稿の出自、作業単位など）は profile の materials または起動文書に書き、base に置かない。
 
 ## セクションの分担
 
@@ -30,7 +30,7 @@ modular-prompt の標準セクションのうち、ensemble で主に使うも�
 | **objective** | この役割は何のためにいるか | 用語定義・実装詳細 |
 | **terms** | **この文脈で意味がずれる語**の定義のみ | 一般語の言い換え、運用ルール、手順 |
 | **methodology** | **operator – conductor – workers** の関係構造と、**中立な役割分担**（誰が何を担うかの簡潔な説明） | 特定ロールへの命令、手順の細部、ツールの使い方 |
-| **instructions** | **そのロールの**振る舞い、禁止事項、連携の手順、**ツールの使い方** | 用語の定義、harness の実装、全員向けの中立な分担説明 |
+| **instructions** | **そのロールの**振る舞い、禁止事項、連携の手順、**ツールの使い方**（`conductorBase` / `workerBase` の harness 接続含む） | 用語の定義、harness の実装、全員向けの中立な分担説明、**チーム運用方針** |
 | **state** | セッションの実行時データ（profile の **workers** 構成、**agents** の kind 一覧） | 用語定義、振る舞いの指示 |
 
 `guidelines` は原則使わず、指示的な内容は `instructions` へ寄せる（[base-module コメント](../packages/core/src/prompt/modules/ensemble/base-module.ts) と同じ方針）。
@@ -65,11 +65,12 @@ modular-prompt の標準セクションのうち、ensemble で主に使うも�
 - 作業の実行は worker、方針・許否・調整は conductor、大目標とマージはオペレータが決める・行う
 - worker が判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する
 
-載せない例（→ `instructions`）:
+載せない例（→ profile の起動文書 / materials）:
 
 - 判定に迷うものは conductor に返す（worker への命令）
 - 自分で決められないときは `ask_human` する（conductor への命令）
-- Issue / PR に書く、permission を要求する（手順・振る舞い）
+- Issue / PR に書く、マージまで持っていく、1 Issue 1 PR、投稿の出自（**チーム運用**）
+- permission を要求する（手順・振る舞い）
 - `prompt_worker` の使い方（ツール）
 - `list_workers` / `get_worker_status` の使い方（状態照会ツール）
 - `get_session_usage` / `get_usage` の使い方（LLM トークン照会ツール）
