@@ -93,50 +93,61 @@ export async function openWorkerAcpSession(
     assertWorkerWorkspaceDirectory(acpCwd, options.workerName);
   }
 
-  let ownsBridge = false;
+  let ownsBridge = options.bridge ? options.ownsBridge ?? false : false;
   let bridge = options.bridge;
-  if (!bridge) {
-    if (options.connectAcp) {
-      bridge = await options.connectAcp({
-        cwd: acpCwd,
-        spawn: options.spawn,
-        permissionHandler: options.permissionHandler,
-      });
-      ownsBridge = options.ownsBridge ?? true;
-    } else {
-      bridge = await AcpBridge.connect({
-        ...options.spawn,
-        cwd: acpCwd,
-        permissionHandler: options.permissionHandler,
-      });
-      ownsBridge = true;
+  try {
+    if (!bridge) {
+      if (options.connectAcp) {
+        bridge = await options.connectAcp({
+          cwd: acpCwd,
+          spawn: options.spawn,
+          permissionHandler: options.permissionHandler,
+        });
+        ownsBridge = options.ownsBridge ?? true;
+      } else {
+        bridge = await AcpBridge.connect({
+          ...options.spawn,
+          cwd: acpCwd,
+          permissionHandler: options.permissionHandler,
+        });
+        ownsBridge = true;
+      }
     }
-  }
 
-  let sessionId = options.resumeAcpSessionId;
-  if (sessionId) {
-    try {
-      await bridge.loadSession(
-        sessionId,
-        acpCwd,
-        options.permissionHandler,
-      );
-    } catch {
-      sessionId = undefined;
+    let sessionId = options.resumeAcpSessionId;
+    if (sessionId) {
+      try {
+        await bridge.loadSession(
+          sessionId,
+          acpCwd,
+          options.permissionHandler,
+        );
+      } catch {
+        sessionId = undefined;
+      }
     }
-  }
-  if (!sessionId) {
-    sessionId = await bridge.newSession(acpCwd);
-  }
+    if (!sessionId) {
+      sessionId = await bridge.newSession(acpCwd);
+    }
 
-  return {
-    bridge,
-    ownsBridge,
-    sessionId,
-    worktree,
-    issue,
-    acpCwd,
-  };
+    return {
+      bridge,
+      ownsBridge,
+      sessionId,
+      worktree,
+      issue,
+      acpCwd,
+    };
+  } catch (error) {
+    if (bridge && ownsBridge) {
+      try {
+        await bridge.close();
+      } catch {
+        // Preserve the original session initialization error.
+      }
+    }
+    throw error;
+  }
 }
 
 export async function runWorkerAcpPrompt(

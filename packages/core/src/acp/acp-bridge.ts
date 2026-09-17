@@ -29,8 +29,20 @@ export class AcpBridge {
     options: AcpBridgeConnectOptions = {},
   ): Promise<AcpBridge> {
     const client = await spawnAcpProcess(options);
-    await client.connect();
-    return new AcpBridge(client);
+    try {
+      await client.connect();
+      return new AcpBridge(client);
+    } catch (error) {
+      // `spawnAcpProcess` has already created the child by this point. A
+      // failed initialize/authenticate must not leave that one-shot child
+      // running without a bridge owner.
+      try {
+        await client.close();
+      } catch {
+        // Preserve the original connection error.
+      }
+      throw error;
+    }
   }
 
   /** 接続済みクライアントから生成（integration / in-process Fake 用）。 */

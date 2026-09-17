@@ -52,6 +52,26 @@ describe('openWorkerAcpSession', () => {
     expect(session.acpCwd).toBe(workspaceDir);
   });
 
+  it('closes an owned bridge when session initialization fails', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const connectAcp = vi.fn().mockResolvedValue({
+      newSession: vi.fn().mockRejectedValue(new Error('session/new failed')),
+      loadSession: vi.fn(),
+      promptSession: vi.fn(),
+      close,
+    });
+
+    await expect(
+      openWorkerAcpSession({
+        issueUrl: TEST_WORKTREE.issue.url,
+        worktree: TEST_WORKTREE,
+        connectAcp,
+      }),
+    ).rejects.toThrow('session/new failed');
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it('fails when workspace path does not exist', async () => {
     await expect(
       openWorkerAcpSession({
