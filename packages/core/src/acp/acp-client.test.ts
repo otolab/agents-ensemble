@@ -120,6 +120,33 @@ describe('AcpClient', () => {
     await client.close();
   });
 
+  it('propagates permission response write failures to the caller', async () => {
+    const streams = createInProcessStreamPair();
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      {
+        permissionHandler: vi.fn().mockResolvedValue({
+          outcome: { outcome: 'selected', optionId: 'allow-once' },
+        }),
+      },
+    );
+    const error = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+
+    streams.clientWritable.destroy(error);
+
+    await expect(
+      client.handleRequest({
+        jsonrpc: '2.0',
+        id: 'permission-1',
+        method: 'session/request_permission',
+        params: { toolName: 'shell' },
+      }),
+    ).rejects.toThrow('write EPIPE');
+  });
+
   it('cancels an in-flight prompt via session/cancel', async () => {
     const streams = createInProcessStreamPair();
     let releasePrompt: (() => void) | undefined;

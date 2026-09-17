@@ -119,7 +119,11 @@ export class AcpClient {
 
   /** 進行中の `session/prompt` を中止する（ACP `session/cancel` notification）。 */
   cancelSession(sessionId: string): void {
-    this.peer.notify('session/cancel', { sessionId });
+    // Cancellation is best effort. A failed write closes the peer and rejects
+    // the active prompt request; do not create an unhandled rejection here.
+    void this.peer.notify('session/cancel', { sessionId }).catch(() => {
+      // The active prompt observes the same transport failure.
+    });
   }
 
   async prompt(
@@ -191,8 +195,16 @@ export class AcpClient {
       this.permissionHandlerOverride ??
       this.options.permissionHandler ??
       defaultPermissionHandler;
-    const decision = await handler(request.params);
-    this.peer.respond(request.id, decision);
+    try {
+      const decision = await handler(request.params);
+      await this.peer.respond(request.id, decision);
+    } catch (error) {
+      // A permission response cannot be retried after the ACP pipe is gone.
+      // Closing the peer rejects the in-flight prompt, which lets the worker
+      // runtime publish worker.failed and deny any still-pending permission.
+      this.peer.close();
+      throw error;
+    }
   }
 }
 

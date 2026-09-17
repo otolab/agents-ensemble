@@ -191,6 +191,8 @@ stderr は行バッファで読み、`SessionLogger` の `worker.process.stderr`
 
 stdout へのプロトコル外出力は JsonRpc 層でパース失敗として検知される。現状は stderr capture を優先し、stdout 漏れの二重読みは行わない。
 
+ACP の writable pipe が `EPIPE` / `ECONNRESET` などで切断された場合、JsonRpc 層は write error を harness の未処理例外に漏らさず、進行中の JSON-RPC request を失敗させる。`session/request_permission` の返信中に切断された場合も同じ worker ラウンドが失敗し、`worker.failed` 経由で pending permission を deny して harness 側の待機状態を解消する。
+
 conductor（SDK）子プロセスの stdio は本 Issue のスコープ外（follow-up）。
 
 ---
