@@ -68,6 +68,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- PR の独立レビューを 1 回実行するときは `dispatch_reviewer` を使う',
         '- `prUrl` と `skillName` を渡し、既存 worktree は `worktreePath` または `issueUrl` で指定する',
         '- 常駐 reviewer の `prompt_worker` とは別の ACP session で実行され、レビュー完了後に閉じられる',
+        '- 同期 customTool 内でもレビューを完了できるよう、dispatch 専用 permission handler が要求をその場で解決する',
       ],
     },
     {

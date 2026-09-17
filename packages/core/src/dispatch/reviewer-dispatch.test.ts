@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PermissionHandler } from '../acp/types.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import * as worktreeModule from '../worktree/worktree.js';
 import {
@@ -56,13 +57,13 @@ describe('dispatchReviewer', () => {
     expect(connectAcp).toHaveBeenCalledWith({
       cwd: worktreePath,
       spawn: undefined,
-      permissionHandler: undefined,
+      permissionHandler: expect.any(Function),
     });
     expect(bridge.newSession).toHaveBeenCalledWith(worktreePath);
     expect(bridge.promptSession).toHaveBeenCalledWith(
       'review-session',
       expect.stringContaining('https://github.com/org/repo/pull/2'),
-      { permissionHandler: undefined, onUpdate: undefined },
+      { permissionHandler: expect.any(Function), onUpdate: undefined },
     );
     expect(bridge.close).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
@@ -115,6 +116,50 @@ describe('dispatchReviewer', () => {
     expect(bridge.close).toHaveBeenCalledOnce();
   });
 
+  it('resolves PR read and write permissions inside the dispatch turn', async () => {
+    const worktreePath = await createWorktreePath();
+    const bridge = createBridge();
+    bridge.promptSession = vi.fn().mockImplementation(
+      async (
+        _sessionId: string,
+        _prompt: string,
+        options?: { permissionHandler?: PermissionHandler },
+      ) => {
+        const handler = options?.permissionHandler;
+        if (!handler) {
+          throw new Error('reviewer permission handler was not provided');
+        }
+
+        for (const [command, optionId] of [
+          ['gh pr view 2', 'allow-read-pr'],
+          ['gh pr comment 2 --body review', 'allow-comment-pr'],
+          ['gh pr review 2 --request-changes', 'allow-review-pr'],
+        ] as const) {
+          const decision = await handler({
+            toolName: 'Shell',
+            toolCall: { type: 'shell', args: { command } },
+            options: [{ optionId, kind: 'allow_once' }],
+          });
+          expect(decision).toEqual({
+            outcome: { outcome: 'selected', optionId },
+          });
+        }
+
+        return { stopReason: 'end_turn' };
+      },
+    );
+    const connectAcp = vi.fn().mockResolvedValue(bridge);
+
+    const result = await dispatchReviewer({
+      prUrl: 'https://github.com/org/repo/pull/2',
+      skillName: 'pr-review',
+      worktreePath,
+      connectAcp,
+    });
+    expect(result).toMatchObject({ promptResult: { stopReason: 'end_turn' } });
+    expect(bridge.close).toHaveBeenCalledOnce();
+  });
+
   it('requires an existing worktree when no path or issue is supplied', async () => {
     await expect(
       dispatchReviewer({
@@ -164,7 +209,7 @@ describe('createReviewerDispatchTool', () => {
       issueUrl: undefined,
       repoRoot: '/repo',
       spawn: undefined,
-      permissionHandler: undefined,
+      permissionHandler: expect.any(Function),
     });
     expect(result.structuredContent).toEqual({
       prUrl: 'https://github.com/org/repo/pull/2',

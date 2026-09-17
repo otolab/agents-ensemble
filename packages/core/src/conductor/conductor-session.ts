@@ -542,9 +542,6 @@ export async function runConductorSession(
   const reviewerDispatchTools = createReviewerDispatchTool({
     repoRoot: options.repoRoot,
     spawn: reviewerWorker?.spawn,
-    permissionHandler: workerSession.inbox.createPermissionHandler(
-      'reviewer-dispatch',
-    ),
   });
 
   const workerStatusTools = createWorkerStatusTools({

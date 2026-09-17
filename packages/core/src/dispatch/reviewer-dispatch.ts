@@ -3,6 +3,8 @@ import type { SDKCustomTool } from '@cursor/sdk';
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { PermissionHandler, PromptResult } from '../acp/types.js';
+import { allowOnce } from '../permission/permission-broker.js';
+import { parsePermissionRequest } from '../permission/permission-request.js';
 import { parseIssueUrl, type IssueRef } from '../issue/issue-ref.js';
 import { buildReviewerPrompt } from '../prompt/build-reviewer-prompt.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
@@ -36,6 +38,19 @@ export interface ReviewerDispatchResult {
   promptResult: PromptResult;
 }
 
+/**
+ * Resolve reviewer permissions inside the one-shot dispatch turn.
+ *
+ * `dispatch_reviewer` runs as a synchronous conductor custom tool. Waiting for
+ * the conductor's inbox would require another conductor turn while the
+ * current `agent.send` is still waiting, so this path must resolve ACP
+ * permission requests locally. The manual CLI can still inject its
+ * interactive handler through `ReviewerDispatchOptions.permissionHandler`.
+ */
+export function createReviewerDispatchPermissionHandler(): PermissionHandler {
+  return (params) => allowOnce(parsePermissionRequest(params));
+}
+
 /** reviewer を既存 worktree 上の独立 ACP session で一度だけ実行する。 */
 export async function dispatchReviewer(
   options: ReviewerDispatchOptions,
@@ -46,17 +61,19 @@ export async function dispatchReviewer(
     skillName: options.skillName,
     worktreePath: worktree.path,
   });
+  const permissionHandler =
+    options.permissionHandler ?? createReviewerDispatchPermissionHandler();
   const session = await openWorkerAcpSession({
     issueUrl: worktree.issue.url,
     worktree,
     connectAcp: options.connectAcp,
     spawn: options.spawn,
-    permissionHandler: options.permissionHandler,
+    permissionHandler,
   });
 
   try {
     const promptResult = await runWorkerAcpPrompt(session, prompt, {
-      permissionHandler: options.permissionHandler,
+      permissionHandler,
       onUpdate: options.onUpdate,
     });
     return {
@@ -84,6 +101,8 @@ export function createReviewerDispatchTool(
   options: ReviewerDispatchToolOptions,
 ): Record<string, SDKCustomTool> {
   const runDispatch = options.dispatch ?? dispatchReviewer;
+  const permissionHandler =
+    options.permissionHandler ?? createReviewerDispatchPermissionHandler();
 
   return {
     dispatch_reviewer: {
@@ -135,7 +154,7 @@ export function createReviewerDispatchTool(
           issueUrl,
           repoRoot: optionalString(args.repoRoot) ?? options.repoRoot,
           spawn: options.spawn,
-          permissionHandler: options.permissionHandler,
+          permissionHandler,
         });
         const response = {
           prUrl: result.prUrl,
