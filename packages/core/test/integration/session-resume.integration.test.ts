@@ -2,7 +2,12 @@ import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SDKCustomTool } from '@cursor/sdk';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
+import {
+  SessionLogger,
+  type SessionLogEvent,
+} from '../../src/conductor/session/session-logger.js';
 import {
   attachWorker,
   buildWorkerAttachPrompt,
@@ -11,7 +16,7 @@ import {
 import { closeWorkerAcpSession } from '../../src/dispatch/worker-acp-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
-import type { Profile } from '../../src/profile/types.js';
+import type { Profile, ProfileAcpConfig } from '../../src/profile/types.js';
 import {
   saveSessionSidecar,
   SESSION_SIDECAR_VERSION,
@@ -25,17 +30,27 @@ import {
   TEST_WORKTREE,
 } from './helpers/in-process-acp-bridge.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
-import { isWorkerCompletedConductorMessage } from './helpers/conductor-session-assertions.js';
+import {
+  extractYamlScalar,
+  isWorkerCompletedConductorMessage,
+} from './helpers/conductor-session-assertions.js';
 import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
 
-const SIDECAR_MATERIAL_MARKER = 'SIDECAR_PROFILE_MATERIAL_UNIQUE';
-const CLI_MATERIAL_MARKER = 'CLI_PROFILE_MATERIAL_UNIQUE';
 const RESUME_AGENT_ID = 'agent-resume-test';
+
+// These tests inject an in-process bridge, but runConductorSession still
+// validates the resolved ACP spawn before attaching workers. Use a real,
+// always-available executable so the test does not require Cursor Agent CLI.
+const IN_PROCESS_ACP: ProfileAcpConfig = {
+  preset: 'custom',
+  command: process.execPath,
+};
 
 const PING_PROFILE_BASE: Profile = {
   agents: {
     ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },
+  acp: IN_PROCESS_ACP,
   workers: [{ name: 'ping-1', kind: 'ping' }],
 };
 
@@ -45,6 +60,8 @@ const { mockSend, mockClose, mockCreate } = vi.hoisted(() => {
   const mockCreate = vi.fn();
   return { mockSend, mockClose, mockCreate };
 });
+
+let conductorTools: Record<string, SDKCustomTool> = {};
 
 vi.mock('../../src/conductor/conductor-agent.js', () => ({
   ConductorAgent: {
@@ -75,12 +92,16 @@ describe('session resume integration', () => {
     mockSend.mockReset();
     mockClose.mockClear();
     mockCreate.mockReset();
-    mockCreate.mockImplementation(async () => ({
-      agentId: RESUME_AGENT_ID,
-      send: mockSend,
-      close: mockClose,
-      getUsage: createMockConductorGetUsage(),
-    }));
+    conductorTools = {};
+    mockCreate.mockImplementation(async (options, resumeOptions) => {
+      conductorTools = (resumeOptions ?? options).customTools ?? {};
+      return {
+        agentId: RESUME_AGENT_ID,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
   });
 
   afterEach(() => {
@@ -121,23 +142,9 @@ describe('session resume integration', () => {
 
     const sidecarProfile: Profile = {
       ...PING_PROFILE_BASE,
-      materials: [
-        {
-          id: 'sidecar-material',
-          title: 'Sidecar',
-          content: SIDECAR_MATERIAL_MARKER,
-        },
-      ],
-    };
-    const cliProfile: Profile = {
-      ...PING_PROFILE_BASE,
-      materials: [
-        {
-          id: 'cli-material',
-          title: 'CLI',
-          content: CLI_MATERIAL_MARKER,
-        },
-      ],
+      // Use a different worker name to prove that the sidecar profile, not
+      // the profile supplied by the resumed CLI invocation, drives resume.
+      workers: [{ name: 'resumed-ping', kind: 'ping' }],
     };
 
     await saveSessionSidecar(
@@ -163,7 +170,7 @@ describe('session resume integration', () => {
         ],
         sequence: 1,
         workers: {
-          'ping-1': { acpSessionId: firstDispatch.acpSessionId },
+          'resumed-ping': { acpSessionId: firstDispatch.acpSessionId },
         },
         updatedAt: Date.now(),
       },
@@ -189,7 +196,7 @@ describe('session resume integration', () => {
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: cliProfile,
+      profile: PING_PROFILE_BASE,
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -211,18 +218,157 @@ describe('session resume integration', () => {
       expect.objectContaining({ permissionHandler: expect.any(Function) }),
     );
 
-    const initialMessage = String(mockSend.mock.calls[0]![0]);
-    expect(initialMessage).toContain(SIDECAR_MATERIAL_MARKER);
-    expect(initialMessage).not.toContain(CLI_MATERIAL_MARKER);
+    const messages = mockSend.mock.calls.map((call) => String(call[0]));
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('yes, continue');
+    expect(messages.some((message) => message.includes('Issue #1'))).toBe(false);
 
     expect(
       result.openQuestions.find((question) => question.id === 'inq-resume-1')
         ?.status,
     ).toBe('answered');
     expect(result.workerDispatches).toHaveLength(1);
+    expect(result.workerDispatches[0]?.name).toBe('resumed-ping');
     expect(result.workerDispatches[0]?.acpSessionId).toBe(
       firstDispatch.acpSessionId,
     );
+  });
+
+  it('dispatches permission.pending from a resumed worker without an initial send', async () => {
+    const bridge = await createInProcessAcpBridge(undefined, {
+      requestPermissionOnPrompt: true,
+    });
+    const worktree = {
+      ...TEST_WORKTREE,
+      path: join(repoRoot, 'worktree'),
+    };
+    const sessionState = {
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      kinds: ['ping'],
+    };
+    const attachOptions = {
+      issueUrl: TEST_ISSUE.url,
+      name: 'ping-1',
+      kind: 'ping',
+      prompt: { instructions: [PING_SYSTEM_PROMPT] },
+      sessionState,
+      worktree,
+    };
+    const attached = await attachWorker({
+      ...attachOptions,
+      connectAcp: async () => bridge,
+      ownsBridge: false,
+    });
+    const firstDispatch = await runAttachedWorkerPrompt(
+      attached,
+      buildWorkerAttachPrompt(attachOptions, attached.session),
+    );
+    await closeWorkerAcpSession(attached.session);
+
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: RESUME_AGENT_ID,
+      }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: RESUME_AGENT_ID,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: PING_PROFILE_BASE,
+        openQuestions: [],
+        sequence: 0,
+        workers: {
+          'ping-1': { acpSessionId: firstDispatch.acpSessionId },
+        },
+        updatedAt: Date.now(),
+      },
+    );
+
+    const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
+
+    const permissionPipeline = new PermissionPipeline({
+      policy: { allowTools: [], allowReadOnlyTools: false },
+    });
+    let sendCount = 0;
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (message.includes('permission 判断待ち')) {
+        const requestId = extractYamlScalar(message, 'id');
+        expect(requestId).toBeTruthy();
+        await conductorTools.resolve_permission!.execute({
+          requestId: requestId!,
+          decision: 'allow',
+        });
+        return {
+          runId: `run-${sendCount}`,
+          status: 'finished',
+          result: 'permission resolved',
+        };
+      }
+      if (isWorkerCompletedConductorMessage(message)) {
+        return {
+          runId: `run-${sendCount}`,
+          status: 'finished',
+          result: 'conductor-ok',
+        };
+      }
+      throw new Error(`Unexpected resume conductor message: ${message}`);
+    });
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+    });
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: PING_PROFILE_BASE,
+      resumeAgentId: RESUME_AGENT_ID,
+      maxTurns: 5,
+      permissionPipeline,
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      sessionLogger,
+    });
+
+    expect(loadSessionSpy).toHaveBeenCalledWith(
+      firstDispatch.acpSessionId,
+      expect.any(String),
+      expect.any(Function),
+    );
+    expect(emitted).toContainEqual(expect.objectContaining({
+      type: 'permission.pending',
+      permission: expect.objectContaining({
+        request: expect.objectContaining({
+          sessionId: firstDispatch.acpSessionId,
+        }),
+      }),
+    }));
+    const messages = mockSend.mock.calls.map((call) => String(call[0]));
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(messages[0]).toContain('permission 判断待ち');
+    expect(messages[1]).toContain('worker.completed');
+    expect(
+      emitted
+        .filter((event) => event.type === 'conductor.send.started')
+        .some((event) => event.dispatchSource === 'initial'),
+    ).toBe(false);
+    expect(permissionPipeline.pending.size).toBe(0);
+    expect(result.stopReason).toBe('completed');
+    expect(result.workerDispatches).toHaveLength(1);
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.teardown.phase' && event.phase === 'workers',
+      ),
+    ).toBe(true);
   });
 
   it('restores worker session/load with custom workspace acpCwd on resume', async () => {
@@ -237,6 +383,7 @@ describe('session resume integration', () => {
     };
     const workspaceProfile: Profile = {
       agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
+      acp: IN_PROCESS_ACP,
       workers: [
         {
           name: 'librarian',
@@ -336,6 +483,7 @@ describe('session resume integration', () => {
     };
     const workspaceProfile: Profile = {
       agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
+      acp: IN_PROCESS_ACP,
       workers: [
         {
           name: 'librarian',
