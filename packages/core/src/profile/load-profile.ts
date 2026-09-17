@@ -104,6 +104,10 @@ export function parseProfile(source: unknown, label: string): Profile {
     }
   }
 
+  const validMaterialKinds = new Set([
+    ...Object.keys(profile.agents ?? {}),
+    ...profile.workers.map((worker) => worker.kind),
+  ]);
   for (const [index, material] of (profile.materials ?? []).entries()) {
     if (!material.content && !material.file) {
       throw new Error(
@@ -140,7 +144,7 @@ export function parseProfile(source: unknown, label: string): Profile {
             `Invalid profile material[${index}] in ${label}: duplicate kind "${kind}" in "kinds"`,
           );
         }
-        if (!Object.prototype.hasOwnProperty.call(profile.agents ?? {}, kind)) {
+        if (!validMaterialKinds.has(kind)) {
           throw new Error(
             `Invalid profile material[${index}] in ${label}: unknown kind "${kind}" in "kinds"`,
           );

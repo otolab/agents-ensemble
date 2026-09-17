@@ -215,6 +215,30 @@ materials:
     });
   });
 
+  it('accepts material kinds defined by workers without agent definitions', async () => {
+    const path = join(dir, 'worker-kind-material.yaml');
+    await writeFile(
+      path,
+      `agents:
+  conductor: {}
+workers:
+  - implementer
+materials:
+  - id: implementer-only
+    content: implementer only
+    kinds: [implementer]
+`,
+    );
+
+    const profile = await loadProfileFromFile(path);
+
+    expect(profile.materials?.[0]).toMatchObject({
+      id: 'implementer-only',
+      content: 'implementer only',
+      kinds: ['implementer'],
+    });
+  });
+
   it.each([
     ['empty', 'kinds: []', /"kinds" must not be empty/],
     ['unknown', 'kinds: [typo]', /unknown kind "typo"/],
