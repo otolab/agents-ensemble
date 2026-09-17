@@ -1107,4 +1107,59 @@ describe('runConductorSessionDriver', () => {
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
     await driverPromise;
   });
+
+  it('does not dispatch permission.pending until the initial send completes', async () => {
+    let resolveInitialSend!: (value: {
+      runId: string;
+      status: 'running';
+      result: string;
+    }) => void;
+    const initialSend = new Promise<{
+      runId: string;
+      status: 'running';
+      result: string;
+    }>((resolve) => {
+      resolveInitialSend = resolve;
+    });
+    const send = vi
+      .fn()
+      .mockReturnValueOnce(initialSend)
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'permission handled',
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+
+    const driverPromise = runConductorSessionDriver(
+      createDriverOptions({ eventQueue, conductor, maxTurns: 5 }),
+    );
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    eventQueue.enqueue({
+      type: 'permission.pending',
+      permission: {
+        id: 'permission-initial-send',
+        workerId: 'worker-1',
+        createdAt: 1,
+        request: { toolName: 'Shell', sessionId: 'sess-1' },
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(send).toHaveBeenCalledTimes(1);
+
+    resolveInitialSend({
+      runId: 'run-1',
+      status: 'running',
+      result: 'initial send completed',
+    });
+
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(String(send.mock.calls[1]![0])).toContain('permission.pending');
+    expect(result.stopReason).toBe('completed');
+  });
 });

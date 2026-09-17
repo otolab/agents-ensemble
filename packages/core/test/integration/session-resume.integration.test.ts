@@ -4,6 +4,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
 import {
+  SessionLogger,
+  type SessionLogEvent,
+} from '../../src/conductor/session/session-logger.js';
+import {
   attachWorker,
   buildWorkerAttachPrompt,
   runAttachedWorkerPrompt,
@@ -31,6 +35,17 @@ import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-ge
 const SIDECAR_MATERIAL_MARKER = 'SIDECAR_PROFILE_MATERIAL_UNIQUE';
 const CLI_MATERIAL_MARKER = 'CLI_PROFILE_MATERIAL_UNIQUE';
 const RESUME_AGENT_ID = 'agent-resume-test';
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 const PING_PROFILE_BASE: Profile = {
   agents: {
@@ -223,6 +238,161 @@ describe('session resume integration', () => {
     expect(result.workerDispatches[0]?.acpSessionId).toBe(
       firstDispatch.acpSessionId,
     );
+  });
+
+  it('reproduces permission.pending from a resumed worker during the initial send', async () => {
+    const bridge = await createInProcessAcpBridge(undefined, {
+      requestPermissionOnPrompt: true,
+    });
+    const worktree = {
+      ...TEST_WORKTREE,
+      path: join(repoRoot, 'worktree'),
+    };
+    const sessionState = {
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      kinds: ['ping'],
+    };
+    const attachOptions = {
+      issueUrl: TEST_ISSUE.url,
+      name: 'ping-1',
+      kind: 'ping',
+      prompt: { instructions: [PING_SYSTEM_PROMPT] },
+      sessionState,
+      worktree,
+    };
+    const attached = await attachWorker({
+      ...attachOptions,
+      connectAcp: async () => bridge,
+      ownsBridge: false,
+    });
+    const firstDispatch = await runAttachedWorkerPrompt(
+      attached,
+      buildWorkerAttachPrompt(attachOptions, attached.session),
+    );
+    await closeWorkerAcpSession(attached.session);
+
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: RESUME_AGENT_ID,
+      }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: RESUME_AGENT_ID,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: PING_PROFILE_BASE,
+        openQuestions: [],
+        sequence: 0,
+        workers: {
+          'ping-1': { acpSessionId: firstDispatch.acpSessionId },
+        },
+        updatedAt: Date.now(),
+      },
+    );
+
+    const initialSendStarted = createDeferred<void>();
+    const initialSendResult = createDeferred<{
+      runId: string;
+      status: 'running';
+      result: string;
+    }>();
+    mockSend.mockImplementationOnce(async () => {
+      initialSendStarted.resolve();
+      return initialSendResult.promise;
+    });
+    mockSend.mockResolvedValueOnce({
+      runId: 'run-permission',
+      status: 'finished',
+      result: 'permission dispatch after initial send',
+    });
+
+    const loadSession = bridge.loadSession.bind(bridge);
+    const loadSessionSpy = vi.spyOn(bridge, 'loadSession').mockImplementation(
+      async (sessionId, cwd, permissionHandler) => {
+        await initialSendStarted.promise;
+        return loadSession(sessionId, cwd, permissionHandler);
+      },
+    );
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+    });
+    const shutdown = new AbortController();
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: PING_PROFILE_BASE,
+      resumeAgentId: RESUME_AGENT_ID,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({
+        policy: { allowTools: [], allowReadOnlyTools: false },
+      }),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      sessionLogger,
+      shutdownSignal: shutdown.signal,
+    });
+    await vi.waitFor(() => {
+      expect(
+        emitted.some((event) => event.type === 'permission.pending'),
+      ).toBe(true);
+    });
+    const initialStartedIndex = emitted.findIndex(
+      (event) => event.type === 'conductor.send.started',
+    );
+    const pendingIndex = emitted.findIndex(
+      (event) => event.type === 'permission.pending',
+    );
+    expect(loadSessionSpy).toHaveBeenCalledWith(
+      firstDispatch.acpSessionId,
+      expect.any(String),
+      expect.any(Function),
+    );
+    expect(emitted[pendingIndex]).toMatchObject({
+      type: 'permission.pending',
+      permission: {
+        request: { sessionId: firstDispatch.acpSessionId },
+      },
+    });
+    expect(initialStartedIndex).toBeGreaterThanOrEqual(0);
+    expect(initialStartedIndex).toBeLessThan(pendingIndex);
+    expect(mockSend).toHaveBeenCalledTimes(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mockSend).toHaveBeenCalledTimes(1);
+
+    // Phase 0 records the current behavior: the initial send is outside the
+    // driver's abort-aware event loop, so teardown cannot begin until it is
+    // released. Phase 1 should replace this observation with the fixed path.
+    shutdown.abort();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(emitted.some((event) => event.type === 'session.stop')).toBe(false);
+
+    initialSendResult.resolve({
+      runId: 'run-initial',
+      status: 'running',
+      result: 'released after reproduction',
+    });
+    const result = await sessionPromise;
+
+    expect(result.stopReason).toBe('interrupted');
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(String(mockSend.mock.calls[1]![0])).toContain('permission.pending');
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.teardown.phase' && event.phase === 'workers',
+      ),
+    ).toBe(true);
   });
 
   it('restores worker session/load with custom workspace acpCwd on resume', async () => {
