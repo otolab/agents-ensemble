@@ -151,11 +151,11 @@ SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが 
 | 初回カーソル poll | **カーソル空の新規セッション**の初回 poll のみ（`initialCursorPoll`）。既存 Issue コメントは通知せずカーソルを進める。worker の init prompt（`startWorkers`）とは無関係 |
 | `--continue` 再開 | sidecar カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
 | PR 紐づけ | GitHub Search API（`type:pr repo:owner/repo <issueNumber>` 相当）または conductor の `register_github_watch`。Search 失敗時も明示登録済み PR は監視し、**Issue コメント監視も継続** |
-| CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）。PR ごとに check 名と run 単位のキー（CheckRun の node id、または commit / 時刻 / URL のフォールバック）を保存し、pending→完了、または別 run の完了を `ci.completed` として通知 |
-| CI カーソル | `pendingCheckNames` / `notifiedCheckNames` だけでなく、check 名ごとの `ciChecks[name] = { runKey, status }` を sidecar に保存。同一 check 名でも run key が変われば再実行として扱う |
+| CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）。PR ごとに check 名と run 単位の `runKey` を sidecar に保存し、**CI 状態の実際の遷移**（`pending→completed`、または別 run の完了）だけを `ci.completed` として通知する。毎 poll の再送はしない |
+| CI カーソル | `pendingCheckNames` / `notifiedCheckNames` だけでなく、check 名ごとの `ciChecks[name] = { runKey, status }` を sidecar に保存。**強いキー**は `run:${CheckRun.id}`（node id）。id 欠落時は `commit:` / `url:` / `started:` / `completed:` / `name:` / `legacy-*` などのフォールバック。**通知する**: `pending→completed`、または完了済み記録後に強い `runKey` が変わったとき（push / re-run）。**通知しない**: 既に `completed` として記録済みで、弱いキー同士だけが poll ごとに揺れたとき（例: `url:...` ↔ `run:...` の API 表現 drift） |
 | 登録・初検出時の完了済み CI | 成功した bootstrap poll で現在 `COMPLETED` の check は **baseline のみ**。履歴の完了通知は行わず、以降に観測した別 run の完了だけを通知。bootstrap の status poll が失敗した場合は baseline 未確定のため、再試行で最初に `COMPLETED` を観測したときは取りこぼし防止のため `ci.completed` を通知 |
 | 旧 CI カーソルの移行 | 旧 `pendingCheckNames` は pending 実行として移行し、完了時に通知する。旧 `notifiedCheckNames` **だけ**では実行 ID が失われているため、移行後の最初の completed は重複通知を避ける baseline とする。このため移行前後に発生した再実行を 1 回だけ区別できない可能性があり、次に観測する別 run からは通知する |
-| CI の制限・失敗モード | API poll 失敗時は `harness.github.monitor_error` を出して既存カーソルを維持し、次回 poll で再試行する。bootstrap 中の status poll が失敗した PR では `ciBootstrapPending` を保持し、成功した status snapshot だけで bootstrap 完了にする。run id 等の識別情報を取得できない古い StatusContext では URL / 時刻 / check 名をフォールバックにするため、同じキーを再利用する再実行は区別できない。WorkflowRun など未知の rollup 型は今回 skip |
+| CI の制限・失敗モード | API poll 失敗時は `harness.github.monitor_error` を出して既存カーソルを維持し、次回 poll で再試行する。bootstrap 中の status poll が失敗した PR では `ciBootstrapPending` を保持し、成功した status snapshot だけで bootstrap 完了にする。`statusCheckRollup` のメンバー集合は poll ごとに揺れることがある（欠落・遅延）。run id 等を取得できない StatusContext では弱いフォールバックに依存するため、**弱いキーだけで識別できる再実行**は区別できない（弱いキー drift の再通知抑止とトレードオフ）。`commit:` フォールバックと `run:` の揺れは現状再通知の余地あり。WorkflowRun など未知の rollup 型は skip |
 | CLI | `--no-github-monitor` で無効化。`--github-monitor-debounce-ms` で debounce 変更 |
 
 ### 2.2 worker prompt ライフサイクルイベント（#133 で統一）
@@ -232,7 +232,7 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | `resolve_permission` 待ち |
-| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` のみ dispatch 可） |
+| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が CI 状態遷移を検知したときだけ載る（同じ完了の毎 poll 再送はしない。§2.5）。conductor は必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` のみ dispatch 可） |
 
 ### 3.1 SessionLogEvent との対応
 
