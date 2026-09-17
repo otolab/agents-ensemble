@@ -13,7 +13,6 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
   terms: [
     '- **open question**: conductor がオペレータの最終判断を仰ぐために登録する質問',
     '- **セッションイベント**: worker の完了・失敗・permission 待ちなど、実行時に conductor へ届く通知',
-    '- **harness**: オペレータ、conductor、worker を繋いでいる定型処理のプログラム部分',
   ],
   instructions: [
     '- 作業フローの連鎖（Issue の明確さ → worker の自律実行 → オペレータのゲート）が途切れないよう調整する。',
@@ -59,7 +58,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- Issue / PR に書いただけでは worker は動かない',
         '- 進行中の worker を優先割り込みする: `prompt_worker` の `preempt: true`（既定は busy 時キュー）',
         '- worker はセッション開始時に起動済み。追加の worker を起動する方法は用意されていない',
-        '- worker からの返答はメッセージとして届く',
+        '- worker からの応答は harness がラウンド完了（`## worker ラウンド完了`）として届く。内容の正本は Issue / PR',
       ],
     },
     {

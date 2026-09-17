@@ -60,9 +60,10 @@ modular-prompt の標準セクションのうち、ensemble で主に使うも�
 
 - オペレータが conductor を監督する
 - conductor が worker 群を調整する
-- worker はセッション開始時からすでにいる。worker 同士は直接つながらない
-- 作業の実行は worker、方針・許否・調整は conductor
-- 判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する
+- worker 群はセッション開始時に harness が起動し常駐する
+- conductor は harness 経由で worker に作業指示を送り、worker の応答は harness がラウンド完了として conductor に届ける。worker 同士は直接つながっていない
+- 作業の実行は worker、方針・許否・調整は conductor、大目標とマージはオペレータが決める・行う
+- worker が判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する
 
 載せない例（→ `instructions`）:
 
@@ -90,7 +91,7 @@ compile 後は `### {title}` になる。**タイトルがマージ後の見出�
 |--------|------|
 | `### prompt_worker` | ツール名。複数行の使い方をまとめる |
 | `### open question` | 関連ツール群のまとまり |
-| `### 参加者`（terms 内） | 用語集のカテゴリとして意味がある |
+| `### 正本と単位`（terms 内） | 用語集のカテゴリとして意味がある |
 
 | 悪い例 | 理由 |
 |--------|------|

@@ -38,7 +38,8 @@ describe('ensemble prompt modules', () => {
     expect(prompt).toContain('Current State');
     expect(prompt).toContain('**implementer**: `implementer`');
     expect(prompt).toContain('`reviewer`');
-    expect(prompt).toContain('参加者');
+    expect(prompt).toContain('**harness**');
+    expect(prompt).toContain('常駐する');
     expect(prompt).toContain('prompt_worker');
     expect(prompt).toContain('resolve_permission');
     expect(prompt).toContain('set_dispatch_hold');
