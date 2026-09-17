@@ -115,6 +115,39 @@ export function parseProfile(source: unknown, label: string): Profile {
         `Invalid profile material[${index}] in ${label}: use either content or file`,
       );
     }
+
+    if (material.kinds !== undefined) {
+      if (!Array.isArray(material.kinds)) {
+        throw new Error(
+          `Invalid profile material[${index}] in ${label}: "kinds" must be an array of strings`,
+        );
+      }
+      if (material.kinds.length === 0) {
+        throw new Error(
+          `Invalid profile material[${index}] in ${label}: "kinds" must not be empty`,
+        );
+      }
+
+      const seenKinds = new Set<string>();
+      for (const kind of material.kinds) {
+        if (typeof kind !== 'string' || kind.length === 0) {
+          throw new Error(
+            `Invalid profile material[${index}] in ${label}: "kinds" must contain non-empty strings`,
+          );
+        }
+        if (seenKinds.has(kind)) {
+          throw new Error(
+            `Invalid profile material[${index}] in ${label}: duplicate kind "${kind}" in "kinds"`,
+          );
+        }
+        if (!Object.prototype.hasOwnProperty.call(profile.agents ?? {}, kind)) {
+          throw new Error(
+            `Invalid profile material[${index}] in ${label}: unknown kind "${kind}" in "kinds"`,
+          );
+        }
+        seenKinds.add(kind);
+      }
+    }
   }
 
   return profile;
@@ -171,6 +204,7 @@ async function resolveMaterial(
     id: material.id,
     title: material.title,
     content,
+    ...(material.kinds !== undefined ? { kinds: [...material.kinds] } : {}),
   };
 }
 

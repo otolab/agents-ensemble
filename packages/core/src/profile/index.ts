@@ -36,6 +36,7 @@ export type {
   ProfileAcpConfig,
   SessionWorkerSpec,
   EnsembleSessionState,
+  ResolvedProfileMaterial,
 } from './types.js';
 export type {
   TeamProfileSource,
@@ -58,4 +59,5 @@ export {
   normalizeProfileWorker,
   normalizeProfileWorkers,
   sessionStateFromProfile,
+  filterMaterialsForKind,
 } from './types.js';

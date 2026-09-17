@@ -1,6 +1,7 @@
 import { compile, merge } from '@modular-prompt/core';
 import type { PromptModule } from '@modular-prompt/core';
 import type { EnsembleSessionState } from '../profile/types.js';
+import { filterMaterialsForKind } from '../profile/types.js';
 import type { WorkerDispatchContext } from './contexts/kind.js';
 import { ensembleContext } from './contexts/kind.js';
 import { mergeWorkerSystemPrompt } from './modules/ensemble/index.js';
@@ -25,7 +26,7 @@ const workerDispatchModule: PromptModule<WorkerDispatchContext> = {
 export function buildWorkerPrompt(options: WorkerPromptOptions): string {
   const profileModule = profilePromptModule({
     agentModule: options.agentModule,
-    materials: options.sessionState.materials,
+    materials: filterMaterialsForKind(options.sessionState.materials, options.kind),
   });
   const module = merge(mergeWorkerSystemPrompt(profileModule), workerDispatchModule);
   return renderCompiledPrompt(

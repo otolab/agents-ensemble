@@ -50,6 +50,8 @@ agents:
 ensemble issue 42 --profile my-pair
 ```
 
+`materials` は `kinds` を省略すれば全 agent 共通になり、例えば `id: team-implementer`、`file: team-implementer.md`、`kinds: [implementer]` を指定すれば該当 kind の Prepared Materials にだけ同梱されます。`kinds` に指定できるのは profile の `agents` に定義した kind で、空配列や重複指定は無効です。
+
 ## 一覧
 
 ```bash

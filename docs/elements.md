@@ -70,6 +70,8 @@ harness 横断設定（profile 既定・session 既定・GitHub 認証 / monitor
 - `workers[].acp` … **任意**。worker 単位の ACP spawn（profile `acp` より優先）。`preset`（`cursor` | `claude` | `codex` | `pi` | `custom`）または `command` / `args` / `env` を指定。built-in preset への追加 `args` は preset 既定 args の後ろに連結
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む
 
+`materials` の各項目は `kinds` を省略すると全 agent に同梱され、`kinds: [conductor, reviewer]` のように指定すると列挙した kind の compile 結果だけに同梱されます。指定した kind は `agents` のキーに存在する必要があります。
+
 ## issue
 
 - 調査・検討・結果を**簡潔に、頻繁に**コメント

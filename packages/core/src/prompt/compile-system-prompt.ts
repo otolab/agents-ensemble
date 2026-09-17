@@ -3,7 +3,7 @@ import type { PromptModule } from '@modular-prompt/core';
 import type { IssueContext } from '../github/issue-context.js';
 import type { ResolvedProfile } from '../profile/types.js';
 import { ensembleContext } from './contexts/kind.js';
-import { sessionStateFromProfile } from '../profile/types.js';
+import { filterMaterialsForKind, sessionStateFromProfile } from '../profile/types.js';
 import { renderCompiledPrompt } from './render-compiled-prompt.js';
 import { mergeConductorSystemPrompt } from './modules/ensemble/index.js';
 import { profilePromptModule } from './modules/shared/profile-prompt-module.js';
@@ -22,7 +22,7 @@ export function compileConductorSystemPrompt(
   options: CompileConductorSystemPromptOptions,
 ): string {
   const sessionState = sessionStateFromProfile(options.profile);
-  const profileMaterials = sessionState.materials ?? [];
+  const profileMaterials = filterMaterialsForKind(sessionState.materials, 'conductor');
   const materials = options.issueContext
     ? [issueContextMaterial(options.issueContext), ...profileMaterials]
     : profileMaterials;

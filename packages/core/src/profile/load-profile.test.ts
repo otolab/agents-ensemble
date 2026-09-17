@@ -183,6 +183,59 @@ materials:
     expect(profile.materials?.[0]?.content).toBe('from file\n');
   });
 
+  it('loads and preserves material kinds', async () => {
+    const path = join(dir, 'profile.yaml');
+    await writeFile(
+      path,
+      `agents:
+  conductor: {}
+  implementer: {}
+workers:
+  - implementer
+materials:
+  - id: common
+    content: common
+  - id: implementer-only
+    content: implementer only
+    kinds: [implementer]
+`,
+    );
+
+    const profile = await loadProfileFromFile(path);
+
+    expect(profile.materials?.[0]).toMatchObject({
+      id: 'common',
+      content: 'common',
+    });
+    expect(profile.materials?.[0]?.kinds).toBeUndefined();
+    expect(profile.materials?.[1]).toMatchObject({
+      id: 'implementer-only',
+      content: 'implementer only',
+      kinds: ['implementer'],
+    });
+  });
+
+  it.each([
+    ['empty', 'kinds: []', /"kinds" must not be empty/],
+    ['unknown', 'kinds: [typo]', /unknown kind "typo"/],
+    ['duplicate', 'kinds: [implementer, implementer]', /duplicate kind "implementer"/],
+  ])('rejects %s material kinds', async (_name, kinds, error) => {
+    const path = join(dir, 'invalid-kinds.yaml');
+    await writeFile(
+      path,
+      `agents:
+  implementer: {}
+workers:
+  - implementer
+materials:
+  - content: invalid
+    ${kinds}
+`,
+    );
+
+    await expect(loadProfileFromFile(path)).rejects.toThrow(error);
+  });
+
   it('loads agent prompt from promptFile', async () => {
     const profileDir = join(dir, 'profiles', 'worker');
     await mkdir(profileDir, { recursive: true });
