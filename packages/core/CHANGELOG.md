@@ -1,5 +1,13 @@
 # @agents-ensemble/core
 
+## 0.6.3
+
+### Patch Changes
+
+- c7bfa82: conductor が `prompt_worker` で worker を dispatch した直後に自律ループが停止し teardown が始まる問題を修正しました。outbound dispatch 件数の追跡と `runningCount` の同期更新により、worker 完了を待ってから停止判定します。
+- 8a6c457: profile materials に `kinds` を指定し、agent kind ごとに Prepared Materials を絞り込めるようにしました。
+- cca77ad: ACP の pipe 切断時に JSON-RPC write error が未処理例外にならず、進行中の worker ラウンドへ伝播するようにしました。
+
 ## 0.6.2
 
 ### Patch Changes
