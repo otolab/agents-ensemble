@@ -829,6 +829,90 @@ describe('fetchGitHubUpdates', () => {
     });
   });
 
+  it('does not re-notify when completed check runKey drifts between weak keys', async () => {
+    let poll = 0;
+    const makeChecks = (keyMode: 'url' | 'runId') =>
+      Array.from({ length: 7 }, (_, i) => ({
+        __typename: 'CheckRun',
+        ...(keyMode === 'runId' ? { id: `run-${i}` } : {}),
+        name: `ci/job-${i}`,
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        detailsUrl: `https://github.com/org/repo/actions/runs/${i}`,
+      }));
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+      getStatusCheckRollup: vi.fn(async () =>
+        poll++ % 2 === 0 ? makeChecks('url') : makeChecks('runId'),
+      ),
+    });
+
+    let cursor = emptyGitHubMonitorCursor();
+    const bootstrap = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor,
+      initialCursorPoll: true,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    cursor = bootstrap.cursor;
+
+    for (let i = 0; i < 4; i++) {
+      const result = await fetchGitHubUpdates({
+        issueUrl: ISSUE_URL,
+        cursor,
+        ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+        githubClient,
+      });
+      expect(result.updates).toEqual([]);
+      cursor = result.cursor;
+    }
+  });
+
+  it('still notifies when a strong CheckRun id changes after completion', async () => {
+    const firstRun = {
+      __typename: 'CheckRun',
+      id: 'check-run-1',
+      name: 'ci/test',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+    };
+    const secondRun = { ...firstRun, id: 'check-run-2' };
+    let rollup: object[] = [firstRun];
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+      getStatusCheckRollup: vi.fn(async () => rollup),
+    });
+
+    const bootstrap = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: emptyGitHubMonitorCursor(),
+      initialCursorPoll: true,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(bootstrap.updates).toEqual([]);
+
+    const steady = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: bootstrap.cursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(steady.updates).toEqual([]);
+
+    rollup = [secondRun];
+    const rerun = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: steady.cursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(rerun.updates).toMatchObject([
+      expect.objectContaining({ kind: 'ci.completed', checkName: 'ci/test' }),
+    ]);
+  });
+
   it('normalizes StatusContext without __typename and non-string conclusion', () => {
     const normalized = normalizeStatusCheckRollup([
       ...GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_NO_TYPENAME,
