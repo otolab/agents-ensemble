@@ -36,7 +36,8 @@ describe('compileConductorSystemPrompt', () => {
     expect(prompt).toContain('Issue #42');
     expect(prompt).toContain('Current State');
     expect(prompt).toContain('**implementer**: `implementer`');
-    expect(prompt).toContain('参加者');
+    expect(prompt).toContain('**harness**');
+    expect(prompt).toContain('常駐する');
     expect(prompt).toContain('作業フローの連鎖');
     expect(prompt).toContain('resolve_permission');
   });
