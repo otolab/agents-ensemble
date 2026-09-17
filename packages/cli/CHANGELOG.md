@@ -1,5 +1,15 @@
 # @agents-ensemble/cli
 
+## 0.6.3
+
+### Patch Changes
+
+- 800ca6f: TUI と端末出力で inline Markdown の bold / code 表示に対応しました。
+- Updated dependencies [c7bfa82]
+- Updated dependencies [8a6c457]
+- Updated dependencies [cca77ad]
+  - @agents-ensemble/core@0.6.3
+
 ## 0.6.2
 
 ### Patch Changes
