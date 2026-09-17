@@ -43,12 +43,6 @@ export const baseModule: PromptModule<EnsembleContext> = {
     '- worker が判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する',
     '- conductor はオペレータと対話を優先し、作業の手を止めて集中する',
   ],
-  instructions: [
-    '- チーム全体で「あとはマージするだけ」まで持っていく',
-    '- 伝えたいこと・状態は Issue / PR に書く（会話や記憶だけに残さない）',
-    '- 投稿には出自と役割名を書く（エージェントによるものと明記）',
-    '- 作業単位は 1 Issue。PR は通常 1 本',
-  ],
   state: [
     {
       type: 'subsection',

@@ -4,12 +4,26 @@
 
 agents-ensemble のデフォルト動作モードの定義。**conductor・implementer・reviewer の共通前提と連携。** 役割別の詳細は別 materials（`team-conductor.md` 等）に分かれている。
 
-- **自分の役割の章は「指示」として読む。** 他の章は「相手に期待していいこと・期待してはいけないこと」として読む。
-- 自分の役割は起動時に与えられる。起動文書と役割向け materials で、どの文書を「指示」として読むかが決まる。
+- **自分の役割向けの materials を「指示」として読む。** 他の役割向け文書は「相手に期待していいこと・期待してはいけないこと」として読む。
+- **conductor**: `team-common.md`（共通）と `team-conductor.md`（指示）
+- **implementer**: `team-common.md` と `team-implementer.md`（指示）
+- **reviewer**: `team-common.md` と `team-reviewer.md`（指示）
+- 自分の役割は起動時に与えられる（`agents-ensemble` の base prompt が kind を示す）。
 - **implementer と reviewer はセッション開始時にすでにいる。途中の追加起動はできない。** conductor がやるのは「起動」ではなく、既にいる worker へ**いつ・何を・どの観点で**やらせるかを指示すること。
 - **手順書ではない。** 果たすべき目標と、そのための選択肢を示す。どう達成するかは各自が文脈で決めてよい。ここに書かれていない**手順の細部**については自由に決めてよい（役割の境界と禁止事項は除く）。
 - **手順の細部の正本は Skill と Issue。** この文書は手順そのものではなく、役割の境界と連携の作法を決める。特定の Skill の有無に依存しない。
 - **conductor と implementer の役割境界はゆるい。** 厳密な分業よりも、抜けを作らないことを優先する。ただし **reviewer の独立性は崩さない**（理由は team-reviewer.md）。
+
+---
+
+## チーム運用
+
+この team（implementer-and-reviewer）の共通運用方針。
+
+- チーム全体で「あとはマージするだけ」まで持っていく
+- 伝えたいこと・状態は Issue / PR に書く（会話や記憶だけに残さない）
+- 投稿には出自と役割名を書く（エージェントによるものと明記）
+- 作業単位は 1 Issue。PR は通常 1 本
 
 ---
 
