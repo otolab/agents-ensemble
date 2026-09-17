@@ -105,9 +105,9 @@ export async function openWorkerAcpSession(
       ownsBridge = options.ownsBridge ?? true;
     } else {
       bridge = await AcpBridge.connect({
+        ...options.spawn,
         cwd: acpCwd,
         permissionHandler: options.permissionHandler,
-        ...options.spawn,
       });
       ownsBridge = true;
     }

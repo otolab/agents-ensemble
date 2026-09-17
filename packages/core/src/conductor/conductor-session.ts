@@ -40,6 +40,7 @@ import {
 } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
+import { createReviewerDispatchTool } from '../dispatch/reviewer-dispatch.js';
 import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
 import { createSessionUsageTools } from '../dispatch/session-usage-tool.js';
 import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js';
@@ -537,6 +538,15 @@ export async function runConductorSession(
     workerNames: activeProfile.workers.map((worker) => worker.name),
   });
 
+  const reviewerWorker = workers.find((worker) => worker.kind === 'reviewer');
+  const reviewerDispatchTools = createReviewerDispatchTool({
+    repoRoot: options.repoRoot,
+    spawn: reviewerWorker?.spawn,
+    permissionHandler: workerSession.inbox.createPermissionHandler(
+      'reviewer-dispatch',
+    ),
+  });
+
   const workerStatusTools = createWorkerStatusTools({
     runtime: workerSession.runtime,
     workerNames: activeProfile.workers.map((worker) => worker.name),
@@ -594,6 +604,7 @@ export async function runConductorSession(
       ...openQuestionListTools,
       ...resolvePermissionTools,
       ...promptWorkerTools,
+      ...reviewerDispatchTools,
       ...workerStatusTools,
       ...registerGitHubWatchTools,
       ...sessionUsageTools,

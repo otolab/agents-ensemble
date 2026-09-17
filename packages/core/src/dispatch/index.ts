@@ -9,6 +9,16 @@ export type {
   WorkerPromptSource,
 } from './worker-dispatch.js';
 
+export {
+  createReviewerDispatchTool,
+  dispatchReviewer,
+} from './reviewer-dispatch.js';
+export type {
+  ReviewerDispatchOptions,
+  ReviewerDispatchResult,
+  ReviewerDispatchToolOptions,
+} from './reviewer-dispatch.js';
+
 export { createWorkerStatusTools } from './worker-status-tool.js';
 export type { WorkerStatusToolOptions } from './worker-status-tool.js';
 

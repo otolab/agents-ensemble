@@ -384,6 +384,45 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
+  it('registers the independent dispatch_reviewer tool', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => ({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'registered',
+    }));
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(conductorTools?.dispatch_reviewer).toMatchObject({
+      inputSchema: expect.objectContaining({
+        required: ['prUrl', 'skillName'],
+        properties: expect.objectContaining({
+          worktreePath: expect.any(Object),
+          issueUrl: expect.any(Object),
+          repoRoot: expect.any(Object),
+        }),
+      }),
+    });
+  });
+
   it('registers set_dispatch_hold and records hold transitions without sidecar state', async () => {
     let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
     const sessionLogger = new SessionLogger({

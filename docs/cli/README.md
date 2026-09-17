@@ -51,6 +51,27 @@ ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 "まずテスト�
 
 これは TTY / 非 TTY の両方で、セッション開始後に 1 回だけ `operator.message` として conductor へ送られます。CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は併用できず、両方が空でない場合は起動エラーになります。`--continue` / `--resume` では CLI メッセージは注入されず、stderr に警告が出ます。詳細は [オペレータ入力](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) と [設定値リファレンス](https://github.com/otolab/agents-ensemble/blob/main/docs/settings.md) を参照してください。
 
+## 独立 reviewer の手動起動
+
+既存の Issue worktree で、conductor の常駐 worker とは別の ACP reviewer session を 1 回だけ起動できます。
+
+```bash
+ensemble dispatch reviewer https://github.com/OWNER/REPOSITORY/pull/456 \
+  --skill pr-review \
+  --worktree-path /path/to/repository/.ensemble/worktrees/issue-123
+```
+
+`--worktree-path` を省略する場合は、Issue URL と clone root から既存 worktree を解決します。
+
+```bash
+ensemble dispatch reviewer https://github.com/OWNER/REPOSITORY/pull/456 \
+  --skill pr-review \
+  --issue-url https://github.com/OWNER/REPOSITORY/issues/123 \
+  --repo-root /path/to/repository
+```
+
+reviewer の結果は `prUrl`、`worktree`、`stopReason` を含む JSON で出力されます。worktree は事前に worker dispatch 等で作成しておいてください。
+
 ## 利用者向け doc
 
 設定・TUI・認証の詳細は README に重複させず、次の正本を参照してください。

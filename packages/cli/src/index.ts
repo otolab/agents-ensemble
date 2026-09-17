@@ -3,10 +3,12 @@
 import { resolve } from 'node:path';
 import { Command } from 'commander';
 import {
+  dispatchReviewer,
   getConductorAuthStatus,
   listConductorModels,
   loginConductor,
   logoutConductor,
+  PermissionBroker,
   resolveIssueUrl,
 } from '@agents-ensemble/core';
 import { readCliPackageVersion } from './cli-version.js';
@@ -17,6 +19,7 @@ import { resolveIssueSummaryFormat } from './resolve-summary-format.js';
 import { writeIssueSessionSummary } from './write-issue-session-summary.js';
 import { formatProfilesListJson, formatProfilesListText } from './format-profiles-list.js';
 import { normalizeInitialOperatorMessage } from './operator-message.js';
+import { promptPermissionDecision } from './prompt-permission.js';
 
 const program = new Command();
 
@@ -238,6 +241,63 @@ models
   });
 
 const profiles = program.command('profiles').description('Team profile catalog');
+
+const dispatch = program
+  .command('dispatch')
+  .description('Dispatch an independent reviewer session');
+
+dispatch
+  .command('reviewer')
+  .description('Dispatch a reviewer for a PR')
+  .argument('<pr-url>', 'GitHub PR URL')
+  .requiredOption('--skill <name>', 'Review Skill name for the reviewer')
+  .option('--worktree-path <path>', 'Existing worker worktree path')
+  .option('--issue-url <url>', 'Resolve worktree from Issue when path is omitted')
+  .option(
+    '--repo-root <path>',
+    'Local git clone root (used with --issue-url)',
+    process.cwd(),
+  )
+  .action(
+    async (
+      prUrl: string,
+      options: {
+        skill: string;
+        worktreePath?: string;
+        issueUrl?: string;
+        repoRoot: string;
+      },
+    ) => {
+      try {
+        const permissionBroker = new PermissionBroker({
+          onAsk: promptPermissionDecision,
+        });
+        const result = await dispatchReviewer({
+          prUrl,
+          skillName: options.skill,
+          worktreePath: options.worktreePath,
+          issueUrl: options.issueUrl,
+          repoRoot: resolve(options.repoRoot),
+          permissionHandler: permissionBroker.createHandler('manual-reviewer'),
+        });
+
+        console.log(
+          JSON.stringify(
+            {
+              prUrl: result.prUrl,
+              worktree: result.worktreePath,
+              stopReason: result.promptResult.stopReason,
+            },
+            null,
+            2,
+          ),
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
 
 profiles
   .command('list')

@@ -41,6 +41,7 @@ describe('ensemble prompt modules', () => {
     expect(prompt).toContain('**harness**');
     expect(prompt).toContain('常駐する');
     expect(prompt).toContain('prompt_worker');
+    expect(prompt).toContain('dispatch_reviewer');
     expect(prompt).toContain('resolve_permission');
     expect(prompt).toContain('set_dispatch_hold');
     expect(prompt).toContain('operator.message');

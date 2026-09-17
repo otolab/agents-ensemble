@@ -63,6 +63,15 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
     },
     {
       type: 'subsection',
+      title: 'dispatch_reviewer',
+      items: [
+        '- PR の独立レビューを 1 回実行するときは `dispatch_reviewer` を使う',
+        '- `prUrl` と `skillName` を渡し、既存 worktree は `worktreePath` または `issueUrl` で指定する',
+        '- 常駐 reviewer の `prompt_worker` とは別の ACP session で実行され、レビュー完了後に閉じられる',
+      ],
+    },
+    {
+      type: 'subsection',
       title: 'LLM トークン使用量照会',
       items: [
         '- オペレータの「トークン量」「コンテキスト上限の xx%」等は **作業指示ではない**。`get_session_usage` / `get_usage` で harness 集計を読む',
