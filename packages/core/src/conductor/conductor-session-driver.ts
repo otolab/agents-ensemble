@@ -94,7 +94,7 @@ export interface ConductorSessionDriverOptions {
   continueAfterIssueLoopStop?: boolean;
   /** 自律ループ停止相当の状態へ入ったときに post-loop UX を通知する。 */
   onIssueLoopStop?: () => void;
-  /** post-loop 再開時は初回 `agent.send`（system + ブリーフィング）を省略する。 */
+  /** 既存の conductor 会話を再開するときは初回 `agent.send`（system + ブリーフィング）を省略する。 */
   skipInitialSend?: boolean;
   /** `skipInitialSend` 時に引き継ぐ Driver 状態。 */
   resumeState?: Pick<

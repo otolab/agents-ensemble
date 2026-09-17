@@ -70,6 +70,8 @@ ensemble issue https://github.com/org/repo/issues/42 "まずテストから始�
 
 CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できません。両方が trim 後に空でない場合は、セッション開始前にエラーになります。これは優先順位ではなく併用禁止です。`--continue` または `--resume` で CLI メッセージを指定した場合は注入せず、stderr に 1 行の警告を出します。`ENSEMBLE_OPERATOR_MESSAGE` は従来どおりそのセッションの binding で解決されます。
 
+`--continue` / `--resume` では、sidecar の conductor agent を `Agent.resume` で復元するため、新規セッション用の initial conductor send（system prompt + Issue ブリーフィング）は行いません。復元中の worker から届く `permission.pending` などのイベントはキューに保持され、復元済み conductor への最初の入力として通常どおり dispatch されます。これにより、再開直後に worker が許可待ちになっても、initial send の完了を待たずに `resolve_permission` の判断へ進めます。
+
 ## TTY TUI レイアウト
 
 TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。

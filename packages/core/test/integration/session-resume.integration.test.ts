@@ -2,6 +2,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SDKCustomTool } from '@cursor/sdk';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
 import {
   SessionLogger,
@@ -29,23 +30,13 @@ import {
   TEST_WORKTREE,
 } from './helpers/in-process-acp-bridge.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
-import { isWorkerCompletedConductorMessage } from './helpers/conductor-session-assertions.js';
+import {
+  extractYamlScalar,
+  isWorkerCompletedConductorMessage,
+} from './helpers/conductor-session-assertions.js';
 import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
 
-const SIDECAR_MATERIAL_MARKER = 'SIDECAR_PROFILE_MATERIAL_UNIQUE';
-const CLI_MATERIAL_MARKER = 'CLI_PROFILE_MATERIAL_UNIQUE';
 const RESUME_AGENT_ID = 'agent-resume-test';
-
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T | PromiseLike<T>) => void;
-} {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 const PING_PROFILE_BASE: Profile = {
   agents: {
@@ -60,6 +51,8 @@ const { mockSend, mockClose, mockCreate } = vi.hoisted(() => {
   const mockCreate = vi.fn();
   return { mockSend, mockClose, mockCreate };
 });
+
+let conductorTools: Record<string, SDKCustomTool> = {};
 
 vi.mock('../../src/conductor/conductor-agent.js', () => ({
   ConductorAgent: {
@@ -90,12 +83,16 @@ describe('session resume integration', () => {
     mockSend.mockReset();
     mockClose.mockClear();
     mockCreate.mockReset();
-    mockCreate.mockImplementation(async () => ({
-      agentId: RESUME_AGENT_ID,
-      send: mockSend,
-      close: mockClose,
-      getUsage: createMockConductorGetUsage(),
-    }));
+    conductorTools = {};
+    mockCreate.mockImplementation(async (options, resumeOptions) => {
+      conductorTools = (resumeOptions ?? options).customTools ?? {};
+      return {
+        agentId: RESUME_AGENT_ID,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
   });
 
   afterEach(() => {
@@ -136,23 +133,9 @@ describe('session resume integration', () => {
 
     const sidecarProfile: Profile = {
       ...PING_PROFILE_BASE,
-      materials: [
-        {
-          id: 'sidecar-material',
-          title: 'Sidecar',
-          content: SIDECAR_MATERIAL_MARKER,
-        },
-      ],
-    };
-    const cliProfile: Profile = {
-      ...PING_PROFILE_BASE,
-      materials: [
-        {
-          id: 'cli-material',
-          title: 'CLI',
-          content: CLI_MATERIAL_MARKER,
-        },
-      ],
+      // Use a different worker name to prove that the sidecar profile, not
+      // the profile supplied by the resumed CLI invocation, drives resume.
+      workers: [{ name: 'resumed-ping', kind: 'ping' }],
     };
 
     await saveSessionSidecar(
@@ -178,7 +161,7 @@ describe('session resume integration', () => {
         ],
         sequence: 1,
         workers: {
-          'ping-1': { acpSessionId: firstDispatch.acpSessionId },
+          'resumed-ping': { acpSessionId: firstDispatch.acpSessionId },
         },
         updatedAt: Date.now(),
       },
@@ -204,7 +187,7 @@ describe('session resume integration', () => {
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: cliProfile,
+      profile: PING_PROFILE_BASE,
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -226,21 +209,23 @@ describe('session resume integration', () => {
       expect.objectContaining({ permissionHandler: expect.any(Function) }),
     );
 
-    const initialMessage = String(mockSend.mock.calls[0]![0]);
-    expect(initialMessage).toContain(SIDECAR_MATERIAL_MARKER);
-    expect(initialMessage).not.toContain(CLI_MATERIAL_MARKER);
+    const messages = mockSend.mock.calls.map((call) => String(call[0]));
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain('yes, continue');
+    expect(messages.some((message) => message.includes('Issue #1'))).toBe(false);
 
     expect(
       result.openQuestions.find((question) => question.id === 'inq-resume-1')
         ?.status,
     ).toBe('answered');
     expect(result.workerDispatches).toHaveLength(1);
+    expect(result.workerDispatches[0]?.name).toBe('resumed-ping');
     expect(result.workerDispatches[0]?.acpSessionId).toBe(
       firstDispatch.acpSessionId,
     );
   });
 
-  it('reproduces permission.pending from a resumed worker during the initial send', async () => {
+  it('dispatches permission.pending from a resumed worker without an initial send', async () => {
     const bridge = await createInProcessAcpBridge(undefined, {
       requestPermissionOnPrompt: true,
     });
@@ -291,29 +276,36 @@ describe('session resume integration', () => {
       },
     );
 
-    const initialSendStarted = createDeferred<void>();
-    const initialSendResult = createDeferred<{
-      runId: string;
-      status: 'running';
-      result: string;
-    }>();
-    mockSend.mockImplementationOnce(async () => {
-      initialSendStarted.resolve();
-      return initialSendResult.promise;
-    });
-    mockSend.mockResolvedValueOnce({
-      runId: 'run-permission',
-      status: 'finished',
-      result: 'permission dispatch after initial send',
-    });
+    const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
 
-    const loadSession = bridge.loadSession.bind(bridge);
-    const loadSessionSpy = vi.spyOn(bridge, 'loadSession').mockImplementation(
-      async (sessionId, cwd, permissionHandler) => {
-        await initialSendStarted.promise;
-        return loadSession(sessionId, cwd, permissionHandler);
-      },
-    );
+    const permissionPipeline = new PermissionPipeline({
+      policy: { allowTools: [], allowReadOnlyTools: false },
+    });
+    let sendCount = 0;
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (message.includes('permission 判断待ち')) {
+        const requestId = extractYamlScalar(message, 'id');
+        expect(requestId).toBeTruthy();
+        await conductorTools.resolve_permission!.execute({
+          requestId: requestId!,
+          decision: 'allow',
+        });
+        return {
+          runId: `run-${sendCount}`,
+          status: 'finished',
+          result: 'permission resolved',
+        };
+      }
+      if (isWorkerCompletedConductorMessage(message)) {
+        return {
+          runId: `run-${sendCount}`,
+          status: 'finished',
+          result: 'conductor-ok',
+        };
+      }
+      throw new Error(`Unexpected resume conductor message: ${message}`);
+    });
 
     const emitted: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({
@@ -323,70 +315,45 @@ describe('session resume integration', () => {
     sessionLogger.subscribe((event) => {
       emitted.push(event);
     });
-    const shutdown = new AbortController();
-
-    const sessionPromise = runConductorSession({
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: PING_PROFILE_BASE,
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
-      permissionPipeline: new PermissionPipeline({
-        policy: { allowTools: [], allowReadOnlyTools: false },
-      }),
+      permissionPipeline,
       connectAcp: async () => bridge,
       ownsWorkerAcpConnections: false,
       disableGitHubMonitor: true,
       disablePermissionDeadlockMonitor: true,
       sessionLogger,
-      shutdownSignal: shutdown.signal,
     });
-    await vi.waitFor(() => {
-      expect(
-        emitted.some((event) => event.type === 'permission.pending'),
-      ).toBe(true);
-    });
-    const initialStartedIndex = emitted.findIndex(
-      (event) => event.type === 'conductor.send.started',
-    );
-    const pendingIndex = emitted.findIndex(
-      (event) => event.type === 'permission.pending',
-    );
+
     expect(loadSessionSpy).toHaveBeenCalledWith(
       firstDispatch.acpSessionId,
       expect.any(String),
       expect.any(Function),
     );
-    expect(emitted[pendingIndex]).toMatchObject({
+    expect(emitted).toContainEqual(expect.objectContaining({
       type: 'permission.pending',
-      permission: {
-        request: { sessionId: firstDispatch.acpSessionId },
-      },
-    });
-    expect(initialStartedIndex).toBeGreaterThanOrEqual(0);
-    expect(initialStartedIndex).toBeLessThan(pendingIndex);
-    expect(mockSend).toHaveBeenCalledTimes(1);
-
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(mockSend).toHaveBeenCalledTimes(1);
-
-    // Phase 0 records the current behavior: the initial send is outside the
-    // driver's abort-aware event loop, so teardown cannot begin until it is
-    // released. Phase 1 should replace this observation with the fixed path.
-    shutdown.abort();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(emitted.some((event) => event.type === 'session.stop')).toBe(false);
-
-    initialSendResult.resolve({
-      runId: 'run-initial',
-      status: 'running',
-      result: 'released after reproduction',
-    });
-    const result = await sessionPromise;
-
-    expect(result.stopReason).toBe('interrupted');
+      permission: expect.objectContaining({
+        request: expect.objectContaining({
+          sessionId: firstDispatch.acpSessionId,
+        }),
+      }),
+    }));
+    const messages = mockSend.mock.calls.map((call) => String(call[0]));
     expect(mockSend).toHaveBeenCalledTimes(2);
-    expect(String(mockSend.mock.calls[1]![0])).toContain('permission.pending');
+    expect(messages[0]).toContain('permission 判断待ち');
+    expect(messages[1]).toContain('worker.completed');
+    expect(
+      emitted
+        .filter((event) => event.type === 'conductor.send.started')
+        .some((event) => event.dispatchSource === 'initial'),
+    ).toBe(false);
+    expect(permissionPipeline.pending.size).toBe(0);
+    expect(result.stopReason).toBe('completed');
+    expect(result.workerDispatches).toHaveLength(1);
     expect(
       emitted.some(
         (event) =>

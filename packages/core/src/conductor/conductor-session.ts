@@ -803,6 +803,11 @@ export async function runConductorSession(
         : undefined,
       workerDispatches: sessionLogger.workerDispatches,
       workerFailures: sessionLogger.workerFailures,
+      // Agent.resume already retains the conductor conversation. Worker
+      // startup happens before the driver, so resume events (including
+      // permission.pending) must be dispatched without waiting for a new
+      // session briefing.
+      skipInitialSend: Boolean(options.resumeAgentId),
       onSendStarted: (info) => {
         sessionLogger.emit({
           type: 'conductor.send.started',

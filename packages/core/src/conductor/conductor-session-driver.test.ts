@@ -1162,4 +1162,33 @@ describe('runConductorSessionDriver', () => {
     expect(String(send.mock.calls[1]![0])).toContain('permission.pending');
     expect(result.stopReason).toBe('completed');
   });
+
+  it('dispatches queued permission.pending immediately when the initial send is skipped', async () => {
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-permission',
+      status: 'finished',
+      result: 'permission handled',
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    eventQueue.enqueue({
+      type: 'permission.pending',
+      permission: {
+        id: 'permission-resume',
+        workerId: 'worker-1',
+        createdAt: 1,
+        request: { toolName: 'Shell', sessionId: 'sess-1' },
+      },
+    });
+
+    const result = await runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor, maxTurns: 5 }),
+      skipInitialSend: true,
+    });
+
+    expect(send).toHaveBeenCalledOnce();
+    expect(String(send.mock.calls[0]![0])).toContain('permission.pending');
+    expect(result.sendCount).toBe(1);
+    expect(result.stopReason).toBe('completed');
+  });
 });
