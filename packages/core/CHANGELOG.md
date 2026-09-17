@@ -1,5 +1,12 @@
 # @agents-ensemble/core
 
+## 0.6.4
+
+### Patch Changes
+
+- e1bba76: GitHub monitor の CI 完了通知で、CheckRun の弱い runKey（URL / 名前フォールバック）が poll ごとに揺れて同じ完了を毎回 `github.update` として再送する問題を修正。
+- dbe70a4: base-module のチーム運用 instructions を profile materials に移し、worktree 解決（isolated / in_repo）を terms に追記。同梱 `implementer-and-reviewer-v2` profile を追加（kind 別 materials 分割）。
+
 ## 0.6.3
 
 ### Patch Changes
