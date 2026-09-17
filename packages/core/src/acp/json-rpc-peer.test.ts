@@ -4,7 +4,7 @@ import { JsonRpcPeer } from './json-rpc-peer.js';
 import { serializeMessage } from './json-rpc.js';
 
 describe('JsonRpcPeer', () => {
-  it('rejects pending requests when the stream ends', async () => {
+  it('rejects pending requests but keeps the response path after readable end', async () => {
     const readable = new PassThrough();
     const writable = new PassThrough();
 
@@ -14,6 +14,8 @@ describe('JsonRpcPeer', () => {
     readable.end();
 
     await expect(pending).rejects.toThrow('JSON-RPC stream ended');
+    await expect(peer.respond(1, { ok: true })).resolves.toBeUndefined();
+    peer.close();
   });
 
   it('handles agent-initiated requests via onRequest', async () => {

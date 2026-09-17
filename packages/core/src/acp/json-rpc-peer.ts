@@ -28,14 +28,15 @@ export class JsonRpcPeer {
   private readonly lineBuffer = new NdJsonLineBuffer();
   private nextId = 1;
   private closed = false;
+  private readableError?: Error;
 
   constructor(private readonly options: JsonRpcPeerOptions) {
     options.readable.setEncoding('utf8');
     options.readable.on('data', (chunk: string) => this.handleChunk(chunk));
     options.readable.on('end', () =>
-      this.fail(new Error('JSON-RPC stream ended')),
+      this.failReadable(new Error('JSON-RPC stream ended')),
     );
-    options.readable.on('error', (error: Error) => this.fail(error));
+    options.readable.on('error', (error: Error) => this.failReadable(error));
     options.writable.on('error', (error: Error) => this.fail(error));
     options.writable.on('close', () => {
       if (!this.closed) {
@@ -46,7 +47,12 @@ export class JsonRpcPeer {
 
   request(method: string, params?: unknown): Promise<unknown> {
     if (this.closed) {
-      return Promise.reject(new Error('JSON-RPC peer is closed'));
+      return observeRejection(
+        Promise.reject(new Error('JSON-RPC peer is closed')),
+      );
+    }
+    if (this.readableError) {
+      return observeRejection(Promise.reject(this.readableError));
     }
 
     const id = this.nextId++;
@@ -177,6 +183,15 @@ export class JsonRpcPeer {
       this.rejectAll(normalized);
     }
     this.rejectWrites(normalized);
+  }
+
+  private failReadable(error: unknown): void {
+    if (this.readableError) return;
+    // ACP requests are read from this stream, but responses are written to a
+    // separate stream. Keep the writable side available for an in-flight
+    // agent request (notably permission cleanup) after readable failure.
+    this.readableError = toError(error);
+    this.rejectAll(this.readableError);
   }
 
   private rejectWrites(error: Error): void {
