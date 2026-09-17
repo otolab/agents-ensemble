@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AcpBridge } from '../acp/acp-bridge.js';
+import { AcpBridge } from '../acp/acp-bridge.js';
+import { AcpClient } from '../acp/acp-client.js';
+import { createInProcessStreamPair } from '../acp/testing/stream-pair.js';
+import { startFakeAcpServer } from '../acp/testing/fake-acp-server.js';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import { deny } from '../permission/permission-broker.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
@@ -111,6 +114,58 @@ describe('WorkerSession', () => {
     expect(failures).toEqual([{ error: 'ACP quota exceeded' }]);
 
     await session.stop();
+  });
+
+  it('denies pending permission when the ACP response pipe is closed', async () => {
+    const streams = createInProcessStreamPair();
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      requestPermissionOnPrompt: true,
+    });
+    const client = AcpClient.create({
+      readable: streams.clientReadable,
+      writable: streams.clientWritable,
+    });
+    const pipeline = new PermissionPipeline({
+      policy: { allowTools: [], allowReadOnlyTools: false },
+    });
+    const failures: string[] = [];
+
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping', prompt: { instructions: ['pong only'] } }],
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      permissionPipeline: pipeline,
+      connectAcp: async () => {
+        await client.connect();
+        return AcpBridge.fromClient(client);
+      },
+      ownsWorkerAcpConnections: false,
+      onWorkerFailed: (failure) => failures.push(failure.error),
+    });
+
+    session.startWorkers();
+    await vi.waitFor(() => {
+      expect(pipeline.pending.size).toBe(1);
+    });
+
+    streams.clientWritable.destroy(
+      Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }),
+    );
+
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    expect(pipeline.pending.size).toBe(0);
+    expect(failures).toContain('write EPIPE');
+
+    await session.stop();
+    await client.close();
   });
 
   it('bootstrap() delegates to startWorkers()', async () => {
