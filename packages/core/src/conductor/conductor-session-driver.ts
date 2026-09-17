@@ -105,6 +105,10 @@ export interface ConductorSessionDriverOptions {
   dispatchHoldState?: DispatchHoldState;
   /** dispatch 保留の切替・件数変化を TUI/観測へ通知する。 */
   onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
+  /** conductor send 開始時に outbound dispatch カウンタをリセットする。 */
+  resetOutboundDispatchesThisSend?: () => void;
+  /** `prompt_worker` 等の outbound dispatch 件数（ループ停止判定向け）。 */
+  getOutboundDispatchesThisSend?: () => number;
 }
 
 export interface ConductorSessionDriverResult {
@@ -182,6 +186,8 @@ export async function runConductorSessionDriver(
       sendCount: 0,
       autonomousTurns: 1,
       dispatchSource: 'initial',
+      resetOutboundDispatchesThisSend: options.resetOutboundDispatchesThisSend,
+      getOutboundDispatchesThisSend: options.getOutboundDispatchesThisSend,
       onSendStarted: options.onSendStarted,
       onSendProgress: options.onSendProgress,
       onSendComplete: (info) => {
@@ -305,6 +311,8 @@ export async function runConductorSessionDriver(
       dispatchSource: dispatchResult.sourceKey,
       workerOutcomeDispatches: workerDispatches,
       workerOutcomeFailures: workerFailures,
+      resetOutboundDispatchesThisSend: options.resetOutboundDispatchesThisSend,
+      getOutboundDispatchesThisSend: options.getOutboundDispatchesThisSend,
       onSendStarted: options.onSendStarted,
       onSendProgress: options.onSendProgress,
       onSendComplete: (info) => {
@@ -361,6 +369,8 @@ function runEventConductorSend(input: {
   dispatchSource?: string;
   workerOutcomeDispatches?: number;
   workerOutcomeFailures?: number;
+  resetOutboundDispatchesThisSend?: () => void;
+  getOutboundDispatchesThisSend?: () => number;
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
@@ -368,6 +378,8 @@ function runEventConductorSend(input: {
   const workersBefore = input.workerDispatches.length;
   const failuresBefore = input.workerFailures.length;
   const nextSendCount = input.sendCount + 1;
+
+  input.resetOutboundDispatchesThisSend?.();
 
   input.onSendStarted?.({
     sendCount: nextSendCount,
@@ -388,7 +400,9 @@ function runEventConductorSend(input: {
       },
     },
   ).then((sendResult) => {
-    const conductorDispatches = input.workerDispatches.length - workersBefore;
+    const completedDuringSend = input.workerDispatches.length - workersBefore;
+    const outboundDispatches = input.getOutboundDispatchesThisSend?.() ?? 0;
+    const conductorDispatches = Math.max(completedDuringSend, outboundDispatches);
     const conductorFailures = input.workerFailures.length - failuresBefore;
 
     input.onSendComplete({

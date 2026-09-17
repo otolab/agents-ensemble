@@ -176,6 +176,59 @@ describe('WorkerRuntime', () => {
     await runtime.shutdown();
   });
 
+  it('increments runningCount synchronously when sendWorkerMessage starts a round', async () => {
+    const inbox = new ConductorInbox();
+    let resolveInit: (() => void) | undefined;
+    const initPrompt = new Promise<void>((resolve) => {
+      resolveInit = resolve;
+    });
+
+    const promptSession = vi.fn(async () => {
+      if (!resolveInit) {
+        return { stopReason: 'end_turn', responseText: 'pong' };
+      }
+      await initPrompt;
+      resolveInit = undefined;
+      return { stopReason: 'end_turn', responseText: 'pong' };
+    });
+
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+    });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      prompt: { instructions: ['pong'] },
+      worktree: TEST_WORKTREE,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(promptSession).toHaveBeenCalledOnce();
+    });
+    resolveInit!();
+    await runtime.waitForIdle();
+
+    const sent = runtime.sendWorkerMessage('ping-1', 'follow-up task');
+    expect(sent).toEqual({ status: 'sent', worker: 'ping-1' });
+    expect(runtime.runningCount).toBe(1);
+
+    await runtime.waitForIdle();
+    await runtime.shutdown();
+  });
+
   it('queues sendWorkerMessage while processing and drains after round completes', async () => {
     const inbox = new ConductorInbox();
     const prompts: string[] = [];
