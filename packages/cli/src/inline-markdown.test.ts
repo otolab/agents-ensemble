@@ -49,6 +49,15 @@ describe('parseInlineMarkdown', () => {
       { text: '```\n**not bold**\n```' },
     ]);
   });
+
+  it('keeps Markdown inside inline HTML completely literal', () => {
+    expect(parseInlineMarkdown('<span>**bold**</span>')).toEqual([
+      { text: '<span>**bold**</span>' },
+    ]);
+    expect(parseInlineMarkdown('before <span>`code`</span> after')).toEqual([
+      { text: 'before <span>`code`</span> after' },
+    ]);
+  });
 });
 
 describe('renderInlineMarkdownToAnsi', () => {

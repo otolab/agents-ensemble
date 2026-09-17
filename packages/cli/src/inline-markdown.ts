@@ -101,6 +101,18 @@ function appendBlockToken(
   appendSegment(segments, token.raw, PLAIN_STYLE);
 }
 
+function containsHtmlToken(tokens: Token[]): boolean {
+  for (const token of tokens) {
+    if (token.type === 'html') {
+      return true;
+    }
+    if ('tokens' in token && token.tokens && containsHtmlToken(token.tokens)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Inline Markdown を表示用 segment 列へ変換する。
  *
@@ -114,7 +126,13 @@ export function parseInlineMarkdown(text: string): InlineMarkdownSegment[] {
 
   try {
     const segments: InlineMarkdownSegment[] = [];
-    for (const token of Lexer.lex(text)) {
+    const tokens = Lexer.lex(text);
+    if (containsHtmlToken(tokens)) {
+      // HTML is outside Phase 1. Keeping the complete input raw also prevents
+      // Markdown inside an inline HTML tag from being styled accidentally.
+      return [{ text }];
+    }
+    for (const token of tokens) {
       appendBlockToken(token, segments);
     }
     return segments;
