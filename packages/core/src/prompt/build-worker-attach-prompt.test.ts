@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { KIND_FILTER_SESSION_STATE } from './testing/test-profile.js';
 import { buildWorkerAttachPrompt } from './build-worker-attach-prompt.js';
 
 describe('buildWorkerAttachPrompt', () => {
@@ -58,5 +59,18 @@ describe('buildWorkerAttachPrompt', () => {
     expect(prompt).toContain('作業ディレクトリ: /other/docs-repo');
     expect(prompt).toContain('Issue worktree とは別');
     expect(prompt).not.toContain('作業 worktree:');
+  });
+
+  it('includes common and matching materials only', () => {
+    const prompt = buildWorkerAttachPrompt({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      kind: 'reviewer',
+      sessionState: KIND_FILTER_SESSION_STATE,
+    });
+
+    expect(prompt).toContain('fixture common material');
+    expect(prompt).toContain('fixture reviewer-only material');
+    expect(prompt).not.toContain('fixture conductor-only material');
+    expect(prompt).not.toContain('fixture implementer-only material');
   });
 });

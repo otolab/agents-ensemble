@@ -104,6 +104,10 @@ export function parseProfile(source: unknown, label: string): Profile {
     }
   }
 
+  const validMaterialKinds = new Set([
+    ...Object.keys(profile.agents ?? {}),
+    ...profile.workers.map((worker) => worker.kind),
+  ]);
   for (const [index, material] of (profile.materials ?? []).entries()) {
     if (!material.content && !material.file) {
       throw new Error(
@@ -114,6 +118,39 @@ export function parseProfile(source: unknown, label: string): Profile {
       throw new Error(
         `Invalid profile material[${index}] in ${label}: use either content or file`,
       );
+    }
+
+    if (material.kinds !== undefined) {
+      if (!Array.isArray(material.kinds)) {
+        throw new Error(
+          `Invalid profile material[${index}] in ${label}: "kinds" must be an array of strings`,
+        );
+      }
+      if (material.kinds.length === 0) {
+        throw new Error(
+          `Invalid profile material[${index}] in ${label}: "kinds" must not be empty`,
+        );
+      }
+
+      const seenKinds = new Set<string>();
+      for (const kind of material.kinds) {
+        if (typeof kind !== 'string' || kind.length === 0) {
+          throw new Error(
+            `Invalid profile material[${index}] in ${label}: "kinds" must contain non-empty strings`,
+          );
+        }
+        if (seenKinds.has(kind)) {
+          throw new Error(
+            `Invalid profile material[${index}] in ${label}: duplicate kind "${kind}" in "kinds"`,
+          );
+        }
+        if (!validMaterialKinds.has(kind)) {
+          throw new Error(
+            `Invalid profile material[${index}] in ${label}: unknown kind "${kind}" in "kinds"`,
+          );
+        }
+        seenKinds.add(kind);
+      }
     }
   }
 
@@ -171,6 +208,7 @@ async function resolveMaterial(
     id: material.id,
     title: material.title,
     content,
+    ...(material.kinds !== undefined ? { kinds: [...material.kinds] } : {}),
   };
 }
 

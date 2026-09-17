@@ -86,6 +86,8 @@ export interface ProfileMaterial {
   content?: string;
   /** `content` の代わりに、プロファイルディレクトリ基準のファイルパス。 */
   file?: string;
+  /** 同梱対象の agent kind。省略時は全 agent。 */
+  kinds?: string[];
 }
 
 /** load 後: materials の本文が解決済み。 */
@@ -93,6 +95,8 @@ export interface ResolvedProfileMaterial {
   id: string;
   title: string;
   content: string;
+  /** 同梱対象の agent kind。省略時は全 agent。 */
+  kinds?: string[];
 }
 
 /** load 後: agent 定義の prompt が解決済み。 */
@@ -131,10 +135,27 @@ export function resolvedProfileMaterials(
 
     const id = material.id ?? `material-${index + 1}`;
     const title = material.title ?? material.id ?? `Material ${index + 1}`;
-    return [{ id, title, content }];
+    return [
+      {
+        id,
+        title,
+        content,
+        ...(material.kinds !== undefined ? { kinds: [...material.kinds] } : {}),
+      },
+    ];
   });
 
   return resolved.length > 0 ? resolved : undefined;
+}
+
+/** agent kind に応じて Prepared Materials を絞り込む。`kinds` 省略は全員向け。 */
+export function filterMaterialsForKind(
+  materials: ResolvedProfileMaterial[] | undefined,
+  kind: string,
+): ResolvedProfileMaterial[] {
+  return (materials ?? []).filter(
+    (material) => material.kinds === undefined || material.kinds.includes(kind),
+  );
 }
 
 export function sessionStateFromProfile(

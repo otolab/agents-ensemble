@@ -14,11 +14,11 @@
 | `conductorBaseModule` | conductor のみ | `base` の後 |
 | `workerBaseModule` | worker のみ | `base` の後 |
 | profile 起動文書（`agents.<kind>.prompt` / `promptFile`） | 役割ごと | merge で追記（セクション分担） |
-| profile materials（`team.md` 等） | 全員共通 | 最後に追記（`materials` → Prepared Materials） |
+| profile materials（`team.md` 等） | 共通または `kinds` 指定の役割 | 最後に追記（`materials` → Prepared Materials） |
 
 compile 時の context は `EnsembleContext`（`kind`, `issueUrl`, `issueNumber`, `workers`, `kinds`）。`ensembleContext(kind, issueUrl, sessionState)` で組み立てる。`sessionState` は `sessionStateFromProfile(profile)` で profile から取る。base の **objective** は Issue 解決目標、**state** は workers 構成と kind 一覧。
 
-profile 起動文書は **PromptModule として merge** される（persona / instructions 等のセクション分担）。profile materials は **Prepared Materials** に載せ、materials があるときは instructions に「行動時の定義として読む」旨を1行追記する。ensemble 側に書くべき共通前提を profile に重複させない。
+profile 起動文書は **PromptModule として merge** される（persona / instructions 等のセクション分担）。profile materials は **Prepared Materials** に載せ、materials があるときは instructions に「行動時の定義として読む」旨を1行追記する。`materials` の `kinds` を省略した項目は全 agent に、`kinds: [implementer]` のように指定した項目は列挙した kind にだけ compile 時に同梱される。ensemble 側に書くべき共通前提を profile に重複させない。
 
 ## セクションの分担
 

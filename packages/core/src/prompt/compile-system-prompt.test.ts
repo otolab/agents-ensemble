@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  KIND_FILTER_PROFILE,
   TEST_ISSUE_URL,
   TEST_PROFILE,
 } from './testing/test-profile.js';
@@ -75,6 +76,18 @@ describe('compileConductorSystemPrompt', () => {
     expect(prompt).toContain('## Prepared Materials');
     expect(prompt).toContain('### Team definition');
     expect(prompt).toContain('profile team 定義');
+  });
+
+  it('includes common and conductor-only materials, excluding worker-only materials', () => {
+    const prompt = compileConductorSystemPrompt({
+      issueUrl: TEST_ISSUE_URL,
+      profile: KIND_FILTER_PROFILE,
+    });
+
+    expect(prompt).toContain('fixture common material');
+    expect(prompt).toContain('fixture conductor-only material');
+    expect(prompt).not.toContain('fixture implementer-only material');
+    expect(prompt).not.toContain('fixture reviewer-only material');
   });
 
   it('includes issue context in Prepared Materials when provided', () => {

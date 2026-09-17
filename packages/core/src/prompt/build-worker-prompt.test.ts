@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { KIND_FILTER_SESSION_STATE } from './testing/test-profile.js';
 import { buildWorkerPrompt } from './build-worker-prompt.js';
 
 describe('buildWorkerPrompt', () => {
@@ -42,5 +43,18 @@ describe('buildWorkerPrompt', () => {
     expect(prompt).toContain('行動時の定義として読み、従う');
     expect(prompt).toContain('## Prepared Materials');
     expect(prompt).toContain('worker team 定義');
+  });
+
+  it('includes common and matching materials only', () => {
+    const prompt = buildWorkerPrompt({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      kind: 'implementer',
+      sessionState: KIND_FILTER_SESSION_STATE,
+    });
+
+    expect(prompt).toContain('fixture common material');
+    expect(prompt).toContain('fixture implementer-only material');
+    expect(prompt).not.toContain('fixture conductor-only material');
+    expect(prompt).not.toContain('fixture reviewer-only material');
   });
 });
