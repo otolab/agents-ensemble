@@ -53,6 +53,7 @@ import {
   trimBlankLinesOnly,
 } from './operator-input-layout.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
+import type { InlineMarkdownSegment } from '../inline-markdown.js';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
@@ -121,6 +122,25 @@ function renderActivityLogLabel(label: ActivityLogLabel): ReactNode {
   return color ? <Text color={color}>[{label}]</Text> : <Text>[{label}]</Text>;
 }
 
+/** 共通 segment 列を Ink のネスト Text に変換する。 */
+export function renderInlineMarkdownSegments(
+  segments: InlineMarkdownSegment[],
+): ReactNode {
+  if (segments.length === 0) {
+    return <Text> </Text>;
+  }
+
+  return segments.map((segment, index) => (
+    <Text
+      key={`${index}-${segment.text}`}
+      bold={segment.bold}
+      color={segment.code ? 'yellow' : undefined}
+    >
+      {segment.text}
+    </Text>
+  ));
+}
+
 export function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
   if (line.layout === 'separator') {
     return <Text> </Text>;
@@ -128,7 +148,7 @@ export function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLi
 
   if (line.layout === 'body-row') {
     // Ink は空 <Text> の行高 0 になる。separator と同様スペース 1 文字で可視の空行にする。
-    return line.text === '' ? <Text> </Text> : <Text>{line.text}</Text>;
+    return <Text>{renderInlineMarkdownSegments(line.segments)}</Text>;
   }
 
   if (line.layout === 'label-row') {
@@ -145,7 +165,7 @@ export function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLi
   return (
     <Text>
       {renderActivityLogLabel(line.label)}
-      <Text> {line.text}</Text>
+      <Text> {renderInlineMarkdownSegments(line.segments)}</Text>
     </Text>
   );
 }
@@ -298,8 +318,11 @@ export function OpenQuestionsPane({
     >
       {layout.items.flatMap((item) =>
         item.lines.map((line, lineIndex) => (
-          <Text key={`${item.id}-${lineIndex}`} dimColor={item.compact && !item.isSelected}>
-            {line}
+          <Text
+            key={`${item.id}-${lineIndex}`}
+            dimColor={item.compact && !item.isSelected}
+          >
+            {renderInlineMarkdownSegments(line)}
           </Text>
         )),
       )}

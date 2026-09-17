@@ -42,7 +42,36 @@ describe('buildOpenQuestionListItems', () => {
 
     expect(items[0]?.compact).toBe(true);
     expect(items[1]?.isSelected).toBe(true);
-    expect(items[1]?.lines.some((line) => line.includes('more detail'))).toBe(true);
+    expect(
+      items[1]?.lines.some((line) =>
+        line.some((segment) => segment.text.includes('more detail')),
+      ),
+    ).toBe(true);
+  });
+
+  it('renders Markdown styles in the selected question and context', () => {
+    const [item] = buildOpenQuestionListItems(
+      [
+        createQuestion({
+          id: 'inq-1',
+          question: 'Run **this** with `command`?',
+          context: 'Use **care**.',
+        }),
+      ],
+      0,
+      80,
+    );
+
+    expect(item?.lines).toEqual([
+      [
+        { text: '▸ inq-1 [text] Run ' },
+        { text: 'this', bold: true },
+        { text: ' with ' },
+        { text: 'command', code: true },
+        { text: '?' },
+      ],
+      [{ text: '    Use ' }, { text: 'care', bold: true }, { text: '.' }],
+    ]);
   });
 });
 

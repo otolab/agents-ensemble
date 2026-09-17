@@ -1,5 +1,10 @@
 import type { OpenQuestion } from '@agents-ensemble/core';
-import { wrapTextToWidth } from './wrap-text-to-width.js';
+import {
+  parseInlineMarkdown,
+  type InlineMarkdownLine,
+  type InlineMarkdownSegment,
+} from '../inline-markdown.js';
+import { wrapInlineMarkdownToWidth } from './wrap-text-to-width.js';
 import {
   OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES,
   OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO,
@@ -11,7 +16,7 @@ import {
 
 export interface OpenQuestionListItemRender {
   id: string;
-  lines: string[];
+  lines: InlineMarkdownLine[];
   isSelected: boolean;
   compact: boolean;
 }
@@ -47,10 +52,18 @@ function buildSelectedQuestionItem(
   question: OpenQuestion,
   contentWidth: number,
 ): OpenQuestionListItemRender {
-  const header = `▸ ${question.id} [${question.responseType}] ${question.question}`;
-  const lines = [...wrapTextToWidth(header, contentWidth)];
+  const headerSegments = buildPrefixedSegments(
+    `▸ ${question.id} [${question.responseType}] `,
+    question.question,
+  );
+  const lines = wrapInlineMarkdownToWidth(headerSegments, contentWidth);
   if (question.context) {
-    lines.push(...wrapTextToWidth(`    ${question.context}`, contentWidth));
+    lines.push(
+      ...wrapInlineMarkdownToWidth(
+        buildPrefixedSegments('    ', question.context),
+        contentWidth,
+      ),
+    );
   }
   return {
     id: question.id,
@@ -70,14 +83,24 @@ export function buildOpenQuestionListItems(
       return buildSelectedQuestionItem(question, contentWidth);
     }
 
-    const header = `  ${question.id} [${question.responseType}] ${question.question}`;
+    const headerSegments = buildPrefixedSegments(
+      `  ${question.id} [${question.responseType}] `,
+      question.question,
+    );
     return {
       id: question.id,
-      lines: [wrapTextToWidth(header, contentWidth)[0] ?? header],
+      lines: [wrapInlineMarkdownToWidth(headerSegments, contentWidth)[0] ?? []],
       isSelected: false,
       compact: true,
     };
   });
+}
+
+function buildPrefixedSegments(
+  prefix: string,
+  text: string,
+): InlineMarkdownSegment[] {
+  return [{ text: prefix }, ...parseInlineMarkdown(text)];
 }
 
 export function countOpenQuestionsDisplayLines(items: OpenQuestionListItemRender[]): number {
