@@ -523,9 +523,14 @@ export async function runConductorSession(
     inbox: workerSession.inbox,
   });
 
-  const workerOutboundQueue = new WorkerOutboundQueue((worker, instruction, options) =>
-    workerSession.sendWorkerMessage(worker, instruction, options),
-  );
+  let outboundDispatchesThisSend = 0;
+  const workerOutboundQueue = new WorkerOutboundQueue((worker, instruction, options) => {
+    const result = workerSession.sendWorkerMessage(worker, instruction, options);
+    if (result.status !== 'error') {
+      outboundDispatchesThisSend += 1;
+    }
+    return result;
+  });
 
   const promptWorkerTools = createPromptWorkerTool({
     outboundQueue: workerOutboundQueue,
@@ -787,6 +792,10 @@ export async function runConductorSession(
       eventQueue,
       dispatchHoldState,
       onDispatchHoldChanged,
+      resetOutboundDispatchesThisSend: () => {
+        outboundDispatchesThisSend = 0;
+      },
+      getOutboundDispatchesThisSend: () => outboundDispatchesThisSend,
       workerSession,
       permissionPipeline,
       openQuestions,

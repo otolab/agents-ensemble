@@ -24,46 +24,65 @@ export interface JsonRpcPeerOptions {
  */
 export class JsonRpcPeer {
   private readonly pending = new Map<number | string, PendingRequest>();
+  private readonly pendingWrites = new Set<(error: Error) => void>();
   private readonly lineBuffer = new NdJsonLineBuffer();
   private nextId = 1;
   private closed = false;
+  private readableError?: Error;
 
   constructor(private readonly options: JsonRpcPeerOptions) {
     options.readable.setEncoding('utf8');
     options.readable.on('data', (chunk: string) => this.handleChunk(chunk));
-    options.readable.on('end', () => this.rejectAll(new Error('JSON-RPC stream ended')));
-    options.readable.on('error', (error: Error) => this.rejectAll(error));
-  }
-
-  async request(method: string, params?: unknown): Promise<unknown> {
-    if (this.closed) {
-      throw new Error('JSON-RPC peer is closed');
-    }
-
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      const message = { jsonrpc: '2.0' as const, id, method, params };
-      this.options.writable.write(serializeMessage(message));
+    options.readable.on('end', () =>
+      this.failReadable(new Error('JSON-RPC stream ended')),
+    );
+    options.readable.on('error', (error: Error) => this.failReadable(error));
+    options.writable.on('error', (error: Error) => this.fail(error));
+    options.writable.on('close', () => {
+      if (!this.closed) {
+        this.fail(new Error('JSON-RPC writable stream closed'));
+      }
     });
   }
 
-  respond(id: number | string, result: unknown): void {
-    this.options.writable.write(
-      serializeMessage({ jsonrpc: '2.0', id, result }),
-    );
+  request(method: string, params?: unknown): Promise<unknown> {
+    if (this.closed) {
+      return observeRejection(
+        Promise.reject(new Error('JSON-RPC peer is closed')),
+      );
+    }
+    if (this.readableError) {
+      return observeRejection(Promise.reject(this.readableError));
+    }
+
+    const id = this.nextId++;
+    const response = new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      const message = { jsonrpc: '2.0' as const, id, method, params };
+      void this.write(message).catch((error: unknown) => {
+        const waiter = this.pending.get(id);
+        if (!waiter) return;
+        this.pending.delete(id);
+        waiter.reject(toError(error));
+      });
+    });
+    return observeRejection(response);
   }
 
-  notify(method: string, params?: unknown): void {
-    this.options.writable.write(
-      serializeMessage({ jsonrpc: '2.0', method, params }),
-    );
+  respond(id: number | string, result: unknown): Promise<void> {
+    return observeRejection(this.write({ jsonrpc: '2.0', id, result }));
+  }
+
+  notify(method: string, params?: unknown): Promise<void> {
+    return observeRejection(this.write({ jsonrpc: '2.0', method, params }));
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.rejectAll(new Error('JSON-RPC peer closed'));
+    const error = new Error('JSON-RPC peer closed');
+    this.rejectAll(error);
+    this.rejectWrites(error);
   }
 
   private handleChunk(chunk: string): void {
@@ -93,8 +112,91 @@ export class JsonRpcPeer {
     }
 
     if ('method' in message && 'id' in message) {
-      void this.options.onRequest?.(message as JsonRpcRequest);
+      void this.handleRequest(message as JsonRpcRequest);
       return;
+    }
+  }
+
+  private async handleRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      await this.options.onRequest?.(request);
+    } catch (error) {
+      // A request handler failure means the transport can no longer complete
+      // the current request. Close the peer so pending calls fail as well,
+      // while keeping the rejection out of the process-level event loop.
+      this.fail(error);
+    }
+  }
+
+  private write(message: JsonRpcMessage): Promise<void> {
+    if (this.closed) {
+      return Promise.reject(new Error('JSON-RPC peer is closed'));
+    }
+
+    let serialized: string;
+    try {
+      serialized = serializeMessage(message);
+    } catch (error) {
+      return Promise.reject(toError(error));
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let rejectWrite: (error: Error) => void;
+
+      const finish = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        this.pendingWrites.delete(rejectWrite);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+
+      rejectWrite = (error) => finish(error);
+      this.pendingWrites.add(rejectWrite);
+
+      try {
+        this.options.writable.write(serialized, (error?: Error | null) => {
+          if (error) {
+            const writeError = toError(error);
+            this.fail(writeError);
+            finish(writeError);
+            return;
+          }
+          finish();
+        });
+      } catch (error) {
+        const writeError = toError(error);
+        this.fail(writeError);
+        finish(writeError);
+      }
+    });
+  }
+
+  private fail(error: unknown): void {
+    const normalized = toError(error);
+    if (!this.closed) {
+      this.closed = true;
+      this.rejectAll(normalized);
+    }
+    this.rejectWrites(normalized);
+  }
+
+  private failReadable(error: unknown): void {
+    if (this.readableError) return;
+    // ACP requests are read from this stream, but responses are written to a
+    // separate stream. Keep the writable side available for an in-flight
+    // agent request (notably permission cleanup) after readable failure.
+    this.readableError = toError(error);
+    this.rejectAll(this.readableError);
+  }
+
+  private rejectWrites(error: Error): void {
+    for (const reject of this.pendingWrites) {
+      reject(error);
     }
   }
 
@@ -104,4 +206,16 @@ export class JsonRpcPeer {
     }
     this.pending.clear();
   }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function observeRejection<T>(promise: Promise<T>): Promise<T> {
+  void promise.catch(() => {
+    // Preserve the rejected Promise for callers while preventing an ignored
+    // write result from becoming a process-level unhandled rejection.
+  });
+  return promise;
 }
