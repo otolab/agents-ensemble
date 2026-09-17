@@ -1,5 +1,12 @@
 # @agents-ensemble/core
 
+## 0.6.2
+
+### Patch Changes
+
+- e69df17: base-module の methodology / instructions を整理し、harness 経由の worker 往復と常駐を明文化。conductor-base の harness 定義重複を解消。
+- 612c94b: `--continue` 再開時に initial conductor send が `permission.pending` を塞ぎ calling/thinking で固まる問題を修正しました。resume 時は `skipInitialSend` を配線し、worker イベントを即時 dispatch します。
+
 ## 0.6.1
 
 ### Patch Changes
