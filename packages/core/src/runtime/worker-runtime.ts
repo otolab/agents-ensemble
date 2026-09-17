@@ -228,6 +228,11 @@ export class WorkerRuntime {
       };
     }
 
+    // Mark processing synchronously so harness stop checks (runningCount) see
+    // in-flight conductor dispatches before the async executeRound runs.
+    resident.state = 'processing';
+    resident.cancelInFlight = false;
+    this.processing.set(resident.workerId, resident.started);
     void this.executeRound(resident, text, 'conductor');
     return { status: 'sent', worker: name };
   }

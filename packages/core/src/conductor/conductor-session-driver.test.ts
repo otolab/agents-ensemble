@@ -125,6 +125,56 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('completed');
   });
 
+  it('continues after conductor send when outbound worker dispatches have no completions yet', async () => {
+    let outboundDispatches = 0;
+    const onSendComplete = vi.fn();
+    const send = vi.fn().mockImplementation(async () => {
+      outboundDispatches = 2;
+      return {
+        runId: 'run-1',
+        status: 'finished',
+        result: 'dispatched workers',
+      };
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+
+    const resultPromise = runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue,
+        conductor,
+        runningCount: 0,
+      }),
+      resetOutboundDispatchesThisSend: () => {
+        outboundDispatches = 0;
+      },
+      getOutboundDispatchesThisSend: () => outboundDispatches,
+      onSendComplete,
+      shutdownSignal: shutdown.signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledOnce();
+    });
+    expect(onSendComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conductorDispatchesThisTurn: 2,
+      }),
+    );
+
+    let settled = false;
+    void resultPromise.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+
+    shutdown.abort();
+    const result = await resultPromise;
+    expect(result.stopReason).toBe('interrupted');
+  });
+
   it('stops a one-shot session when the SDK run is cancelled', async () => {
     const holdState = createDispatchHoldState();
     holdState.dispatchHold = true;
