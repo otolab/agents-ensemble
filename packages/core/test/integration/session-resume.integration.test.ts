@@ -16,7 +16,7 @@ import {
 import { closeWorkerAcpSession } from '../../src/dispatch/worker-acp-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
-import type { Profile } from '../../src/profile/types.js';
+import type { Profile, ProfileAcpConfig } from '../../src/profile/types.js';
 import {
   saveSessionSidecar,
   SESSION_SIDECAR_VERSION,
@@ -38,10 +38,19 @@ import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-ge
 
 const RESUME_AGENT_ID = 'agent-resume-test';
 
+// These tests inject an in-process bridge, but runConductorSession still
+// validates the resolved ACP spawn before attaching workers. Use a real,
+// always-available executable so the test does not require Cursor Agent CLI.
+const IN_PROCESS_ACP: ProfileAcpConfig = {
+  preset: 'custom',
+  command: process.execPath,
+};
+
 const PING_PROFILE_BASE: Profile = {
   agents: {
     ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },
+  acp: IN_PROCESS_ACP,
   workers: [{ name: 'ping-1', kind: 'ping' }],
 };
 
@@ -374,6 +383,7 @@ describe('session resume integration', () => {
     };
     const workspaceProfile: Profile = {
       agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
+      acp: IN_PROCESS_ACP,
       workers: [
         {
           name: 'librarian',
@@ -473,6 +483,7 @@ describe('session resume integration', () => {
     };
     const workspaceProfile: Profile = {
       agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
+      acp: IN_PROCESS_ACP,
       workers: [
         {
           name: 'librarian',
