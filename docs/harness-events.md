@@ -55,7 +55,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `operator.input` | オペレータ発話をキューに載せる直前 | `[harness] operator.input turn=N bytes=...` | なし |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。例: `conductor: reading`） |
-| `conductor.send` | 各 `agent.send` 完了後 | `[harness] conductor.send n=N status=... workerDone=... workerFailed=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
+| `conductor.send` | 各 `agent.send` 完了後 | 成功: `[harness] conductor.send n=N status=finished workerDone=... workerFailed=...` / 失敗: `[harness] conductor.send ... 障害種別=...。復旧=...。 error=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗。該当 worker の pending permission は conductor への通知前に deny | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
@@ -91,7 +91,12 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 
 `worker.round` の長い worktree path、`worker.failed` / `worker.process.stderr` の
 診断文字列、`conductor.send` の status/count は調査に必要な情報を含むため、現時点
-では短縮 renderer を追加しない。候補を検討したうえで既存の 1 行表現を維持する。
+では短縮 renderer を追加しない。`conductor.send` のうち `status=error` は conductor の
+発話ではないため、CLI の `formatHarnessLogBody()` が operator 向け representation として
+障害種別・復旧ヒントを追加する。この同じ 1 行表現を HarnessSink（非 TTY）と
+`createTuiTelemetrySink()`（TTY の harness 活動ログ）が共有し、`formatConductorActivityBody()`
+と表示 state reducer は error を conductor チャネルへ渡さない。接続停滞・認証・モデル拒否は
+既知の障害種別として分類し、元の `error` と `n` / worker 件数を診断として残す。
 
 ### 2.4 セッション観測イベント（#92 で追加）
 

@@ -42,10 +42,6 @@ function setWorkerStatus(
   };
 }
 
-function formatConductorErrorMessage(message: string): string {
-  return `応答を生成できませんでした（${message}）。\n別の聞き方で再入力してください。`;
-}
-
 function seedSessionWorkers(
   state: SessionDisplayState,
   workers: Array<{ name: string; kind: string }>,
@@ -122,14 +118,6 @@ export function reduceDisplayState(
       let nextState = setWorkerStatus(state, 'conductor', 'conductor', 'idle');
       if (event.status === 'finished' && event.result?.trim()) {
         const output = event.result.trim();
-        if (nextState.conductorOutput === output) {
-          return nextState;
-        }
-        return { ...nextState, conductorOutput: output };
-      }
-      if (event.status === 'error') {
-        const detail = event.error?.message ?? 'unknown error';
-        const output = formatConductorErrorMessage(detail);
         if (nextState.conductorOutput === output) {
           return nextState;
         }

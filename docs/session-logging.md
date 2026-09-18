@@ -25,6 +25,13 @@ conductor セッションには性質の異なる出力が混在する。
 
 **原則**: 観測は `SessionLogger` に集約し、**sink** で出力先・フォーマットを分離する。永続化の正本は sidecar（会話本文は SDK / ACP 側）。
 
+`conductor.send` は status によって表示チャネルが分かれる。`status=finished` の `result` は
+conductor が実際に返した応答なので対話チャネル（`conductor>` / TUI 活動ログの
+`conductor`）に表示する。一方、`status=error` は SDK / transport が応答を返せなかった
+障害であり、conductor の発話ではない。これは対話チャネルへ合成せず、harness チャネル
+（非 TTY の `[harness]` stderr、TTY の TUI 活動ログ `harness`）に障害種別・復旧ヒント・
+`n` / worker 件数 / `error` の診断を表示する。
+
 ---
 
 ## 2. 出力チャネル（CLI）
@@ -63,14 +70,14 @@ conductor セッションには性質の異なる出力が混在する。
 
 | prefix | 内容 | 条件 |
 |--------|------|------|
-| `[harness]` | `SessionLogger` → HarnessSink（worktree / send / worker round 等） | **非 TTY のみ**（TTY + Ink 時は活動ログへ） |
+| `[harness]` | `SessionLogger` → HarnessSink（worktree / send / worker round 等。`conductor.send` の error は障害種別・復旧ヒント付き） | **非 TTY のみ**（TTY + Ink 時は活動ログへ） |
 | `[open question]` | `open.question.enqueued` → ObservationSink | **非 TTY のみ** |
 | `[operator answer]` | `escalation.recorded` → ObservationSink | **非 TTY のみ** |
 | `[worktree]` | `session.worktree.notice` → ObservationSink | **非 TTY のみ** |
 | `[continue]` | `session.continue` → ObservationSink | **非 TTY のみ** |
 | （終了サマリ） | `formatIssueSessionSummaryText`（`writeIssueSessionSummary`） | **TTY のみ**（`--summary-format auto` または `text`）。Ink unmount 後 |
 
-TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor 応答は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。既定の `pane` レイアウトでは Orchestration ペイン内の windowing、`ENSEMBLE_TUI_LAYOUT=stream` では `<Static>` と端末 scrollback を使う。stream の活動ログは端末表示用で、セッション sidecar や活動ログファイルには永続化しない。stream は実行中の端末スクロール中に新着ログで末尾へ戻ることがあり、既に追記された行は端末幅変更で再折り返しされない。
+TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor の**成功応答**は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。`conductor.send` の error は conductor 活動ログへ追記せず、harness 活動ログだけに障害として追記する。既定の `pane` レイアウトでは Orchestration ペイン内の windowing、`ENSEMBLE_TUI_LAYOUT=stream` では `<Static>` と端末 scrollback を使う。stream の活動ログは端末表示用で、セッション sidecar や活動ログファイルには永続化しない。stream は実行中の端末スクロール中に新着ログで末尾へ戻ることがあり、既に追記された行は端末幅変更で再折り返しされない。
 
 ### 終了 JSON（SessionSummary）
 
@@ -125,7 +132,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `operator.input` | オペレータ発話をキューに載せる直前 | なし（sink のみ） |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | なし（sink のみ） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | なし（log 相当。活動ログ / stderr には出さない。Workers ペイン活動ヒントのみ #161） |
-| `conductor.send` | 各 `agent.send` 完了後 | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` を更新 |
+| `conductor.send` | 各 `agent.send` 完了後 | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` を更新。成功 result は conductor 対話、error は harness 障害表示 |
 | `conductor.dispatch_hold` | `set_dispatch_hold` の切替、または held trigger 件数の変化 | なし（TUI の保留表示と observation のみ） |
 | `worker.round` | worker 1 ラウンド完了（init prompt 含む） | `workerDispatches` に追記 |
 | `worker.failed` | worker 失敗 | `workerFailures` に追記 |
@@ -147,7 +154,9 @@ Harness の human-readable な 1 行表現は、出力先ごとに重複させ�
 `renderSessionLogEvent()`（`packages/core/src/representation/`）を共有する。
 CLI の `formatHarnessLogBody()` はこの representation の thin wrapper であり、
 現在は `permission.pending` renderer が登録されている。未登録イベントは既存の
-CLI formatter で診断情報を保つ。permission の ACP variant と抽出優先順位は
+CLI formatter で診断情報を保つ。`conductor.send` の error は CLI formatter で
+障害種別・復旧ヒント・`n` / worker 件数 / `error` を付与し、harness チャネルへ出す。
+permission の ACP variant と抽出優先順位は
 [harness-events.md §2.1.1](harness-events.md#211-オペレータ向け-representation) を参照。
 
 表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question・dispatch 保留状態のイベント投影を保持する。TTY の Ink TUI（`packages/cli/src/tui/`）は `pane` / `stream` とも、operator binding 後は `getContext().openQuestions`（`OpenQuestionRegistry` の `listOpen()` スナップショット）を未回答一覧の正本として使い、binding 前だけ display state をフォールバックにする。これにより sidecar resume 後も復元済み question を表示できる（#94、#257、#263）。
@@ -175,7 +184,10 @@ CLI formatter で診断情報を保つ。permission の ACP variant と抽出優
 | conductor（SDK） | SDK store（`agentId`） | `conductor.send` の status / 末尾 result のみ |
 | worker（ACP） | ACP セッション | `worker.round` のメタデータ（name, stopReason, path）。**応答全文は対話 stdout に出さない** |
 
-オペレータが読むべき conductor 発話は DisplaySink → string backend（内部で `createDialogueSink`）経由。worker の `responseText` は終了 JSON の `workerResponses` に載るが、TTY セッション中の会話 UI には混ぜない。
+オペレータが読むべき conductor 発話は、成功応答に限り DisplaySink → string backend
+（内部で `createDialogueSink`）経由。`conductor.send` の error は conductor 発話では
+ないため、この経路を通らず harness チャネルに出す。worker の `responseText` は終了 JSON
+の `workerResponses` に載るが、TTY セッション中の会話 UI には混ぜない。
 
 ### worker 子プロセスの stdio
 
