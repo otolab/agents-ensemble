@@ -92,6 +92,31 @@ describe('createTuiTelemetrySink', () => {
     expect(viewModel.getSnapshot().activityLog).toEqual([]);
   });
 
+  it('shows conductor send errors in the harness channel', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({
+      type: 'conductor.send',
+      sendCount: 48,
+      runId: 'run-48',
+      status: 'error',
+      error: { message: 'Connection stalled repeatedly' },
+      workerDispatches: 0,
+      workerFailures: 0,
+    });
+
+    expect(viewModel.getSnapshot().activityLog).toEqual([
+      {
+        label: 'harness',
+        text: 'conductor.send n=48 status=error workerDone=0 workerFailed=0 障害種別=conductor SDK の接続障害。復旧=接続状態を確認してから再試行してください。 error=Connection stalled repeatedly',
+      },
+    ]);
+    expect(viewModel.getSnapshot().activityLog).not.toContainEqual(
+      expect.objectContaining({ label: 'conductor' }),
+    );
+  });
+
   it('does not append harness.worker.acp.update to activity log', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);

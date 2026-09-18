@@ -1,5 +1,4 @@
 import type { SessionLogSink } from '@agents-ensemble/core';
-import { isConductorAuthError } from '@agents-ensemble/core';
 import { stdout } from 'node:process';
 import {
   formatHarnessLogBody,
@@ -43,17 +42,6 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
           writeStdout(
             `\nconductor> ${renderInlineMarkdownToAnsi(event.result.trim())}\n`,
           );
-        } else if (event.status === 'error') {
-          const detail = event.error?.message ?? 'unknown error';
-          if (isConductorAuthError(detail)) {
-            writeStdout(
-              '\nconductor> 認証エラーが発生しました。stderr の [auth] 手順に従って再認証してください。\n',
-            );
-          } else {
-            writeStdout(
-              `\nconductor> 応答を生成できませんでした（${detail}）。\n別の聞き方で再入力してください。\n`,
-            );
-          }
         }
         break;
       case 'harness.worktree':

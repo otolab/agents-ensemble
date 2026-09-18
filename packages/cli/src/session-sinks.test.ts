@@ -67,7 +67,7 @@ describe('session sinks', () => {
     });
 
     expect(stderr).toHaveBeenCalledWith(
-      '[harness] conductor.send n=2 status=error workerDone=0 workerFailed=0 error=Model Blocked',
+      '[harness] conductor.send n=2 status=error workerDone=0 workerFailed=0 障害種別=conductor SDK のモデル拒否。復旧=モデル設定と入力内容を確認して再試行してください。 error=Model Blocked',
     );
     expect(stderr).toHaveBeenCalledTimes(1);
 
@@ -143,7 +143,7 @@ describe('session sinks', () => {
     write.mockRestore();
   });
 
-  it('shows auth-specific dialogue message on auth conductor error', () => {
+  it('does not show conductor dialogue for auth conductor error', () => {
     const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
 
     createDialogueSink()({
@@ -158,9 +158,7 @@ describe('session sinks', () => {
       workerFailures: 0,
     });
 
-    expect(write).toHaveBeenCalledWith(
-      '\nconductor> 認証エラーが発生しました。stderr の [auth] 手順に従って再認証してください。\n',
-    );
+    expect(write).not.toHaveBeenCalled();
 
     write.mockRestore();
   });

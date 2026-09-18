@@ -435,7 +435,7 @@ describe('reduceDisplayState', () => {
     });
   });
 
-  it('updates conductorOutput on error conductor.send', () => {
+  it('does not update conductorOutput on error conductor.send', () => {
     const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'conductor.send',
       sendCount: 1,
@@ -446,9 +446,7 @@ describe('reduceDisplayState', () => {
       workerFailures: 0,
     });
 
-    expect(state.conductorOutput).toBe(
-      '応答を生成できませんでした（Model Blocked）。\n別の聞き方で再入力してください。',
-    );
+    expect(state.conductorOutput).toBeNull();
     expect(state.workers.conductor).toEqual({
       kind: 'conductor',
       status: 'idle',

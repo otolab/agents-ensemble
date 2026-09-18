@@ -95,6 +95,37 @@ describe('session-log-lines', () => {
     ).toBe('conductor.send n=1 status=finished workerDone=0 workerFailed=0');
   });
 
+  it('classifies a known conductor connection error for the harness channel', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'conductor.send',
+        sendCount: 48,
+        runId: 'run-48',
+        status: 'error',
+        error: { message: 'Connection stalled repeatedly' },
+        workerDispatches: 0,
+        workerFailures: 0,
+      }),
+    ).toBe(
+      'conductor.send n=48 status=error workerDone=0 workerFailed=0 障害種別=conductor SDK の接続障害。復旧=接続状態を確認してから再試行してください。 error=Connection stalled repeatedly',
+    );
+  });
+
+  it('renders a harness diagnosis when a conductor error has no message', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'conductor.send',
+        sendCount: 49,
+        runId: 'run-49',
+        status: 'error',
+        workerDispatches: 1,
+        workerFailures: 1,
+      }),
+    ).toBe(
+      'conductor.send n=49 status=error workerDone=1 workerFailed=1 障害種別=conductor SDK の実行障害。復旧=エラー詳細を確認し、必要ならセッションを再試行してください。 error=unknown error',
+    );
+  });
+
   it('formats observation bodies', () => {
     expect(
       formatObservationLogBody({
@@ -176,5 +207,17 @@ describe('session-log-lines', () => {
         workerFailures: 0,
       }),
     ).toBe('hello conductor');
+
+    expect(
+      formatConductorActivityBody({
+        type: 'conductor.send',
+        sendCount: 2,
+        runId: 'run-2',
+        status: 'error',
+        error: { message: 'Connection stalled repeatedly' },
+        workerDispatches: 0,
+        workerFailures: 0,
+      }),
+    ).toBeUndefined();
   });
 });

@@ -1,7 +1,51 @@
 import {
+  isConductorAuthError,
   renderSessionLogEvent,
   type SessionLogEvent,
 } from '@agents-ensemble/core';
+
+interface ConductorSendErrorGuidance {
+  category: string;
+  recovery: string;
+}
+
+function classifyConductorSendError(
+  message: string,
+  code?: string,
+): ConductorSendErrorGuidance {
+  const signal = `${message} ${code ?? ''}`;
+
+  if (isConductorAuthError(signal)) {
+    return {
+      category: 'conductor SDK の認証障害',
+      recovery:
+        '認証状態を確認し、必要なら ensemble auth logout → ensemble auth login 後に再試行してください',
+    };
+  }
+
+  if (
+    /connection stalled repeatedly|connection|transport|network|timeout|timed out|deadline exceeded|unavailable|socket/i.test(
+      signal,
+    )
+  ) {
+    return {
+      category: 'conductor SDK の接続障害',
+      recovery: '接続状態を確認してから再試行してください',
+    };
+  }
+
+  if (/model blocked|content policy|safety/i.test(signal)) {
+    return {
+      category: 'conductor SDK のモデル拒否',
+      recovery: 'モデル設定と入力内容を確認して再試行してください',
+    };
+  }
+
+  return {
+    category: 'conductor SDK の実行障害',
+    recovery: 'エラー詳細を確認し、必要ならセッションを再試行してください',
+  };
+}
 
 /** harness sink と TUI 活動ログで共有する行本文（prefix なし）。 */
 export function formatHarnessLogBody(event: SessionLogEvent): string | undefined {
@@ -41,8 +85,16 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return renderSessionLogEvent(event);
     case 'conductor.send': {
       let line = `conductor.send n=${event.sendCount} status=${event.status} workerDone=${event.workerDispatches} workerFailed=${event.workerFailures}`;
-      if (event.status === 'error' && event.error) {
-        line += ` error=${event.error.message}`;
+      if (event.status === 'error') {
+        const detail = event.error?.message ?? 'unknown error';
+        const guidance = classifyConductorSendError(
+          detail,
+          event.error?.code,
+        );
+        line += ` 障害種別=${guidance.category}。復旧=${guidance.recovery}。 error=${detail}`;
+        if (event.error?.code) {
+          line += ` code=${event.error.code}`;
+        }
       }
       return line;
     }
@@ -149,10 +201,6 @@ export function formatConductorActivityBody(event: SessionLogEvent): string | un
   }
   if (event.status === 'finished' && event.result?.trim()) {
     return event.result.trim();
-  }
-  if (event.status === 'error') {
-    const detail = event.error?.message ?? 'unknown error';
-    return `応答を生成できませんでした（${detail}）。別の聞き方で再入力してください。`;
   }
   return undefined;
 }
