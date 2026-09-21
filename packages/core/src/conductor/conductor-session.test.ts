@@ -822,6 +822,109 @@ describe('runConductorSession resume / shutdown', () => {
     );
   });
 
+  it('recovers transport stalls without auth reconnect or recovery hints', async () => {
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const resumedSend = vi.fn().mockResolvedValue({
+      runId: 'run-2',
+      status: 'finished',
+      result: 'transport recovered',
+    });
+
+    mockSend.mockResolvedValueOnce({
+      runId: 'run-1',
+      status: 'error',
+      error: { message: 'Connection stalled repeatedly' },
+    });
+    mockResume.mockResolvedValue({
+      agentId: 'agent-test',
+      send: resumedSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(resumedSend).toHaveBeenCalledWith(
+      expect.stringContaining('作業フローの連鎖'),
+      expect.any(Object),
+    );
+    expect(
+      emitted
+        .filter((event) => event.type === 'conductor.transport.reconnect')
+        .map((event) => (event.type === 'conductor.transport.reconnect' ? event.status : '')),
+    ).toEqual(['attempt', 'succeeded']);
+    expect(emitted.some((event) => event.type === 'conductor.auth.reconnect')).toBe(false);
+    expect(emitted.some((event) => event.type === 'conductor.auth.recovery')).toBe(false);
+  });
+
+  it('handles /reconnect without sending a conductor message or touching workers', async () => {
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const onPostLoopWait = vi.fn();
+    const resumedSend = vi.fn();
+    let operatorApi: OperatorInputBindingApi | undefined;
+
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    mockResume.mockResolvedValue({
+      agentId: 'agent-test',
+      send: resumedSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
+    expect(operatorApi!.submit('/reconnect')).toBe(true);
+    await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(resumedSend).not.toHaveBeenCalled();
+
+    expect(operatorApi!.submit('/exit')).toBe(false);
+    await sessionPromise;
+
+    expect(
+      emitted
+        .filter((event) => event.type === 'conductor.transport.reconnect')
+        .map((event) => (event.type === 'conductor.transport.reconnect' ? event.status : '')),
+    ).toEqual(['attempt', 'succeeded']);
+    expect(emitted.some((event) => event.type === 'operator.input')).toBe(false);
+  });
+
   it('flushes sidecar on shutdown signal while waiting for events', async () => {
     const shutdown = new AbortController();
 

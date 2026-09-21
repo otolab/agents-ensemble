@@ -150,6 +150,29 @@ describe('createTuiTelemetrySink', () => {
     ]);
   });
 
+  it('appends transport reconnect to harness and observation activity logs', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({
+      type: 'conductor.transport.reconnect',
+      agentId: 'agent-1',
+      status: 'failed',
+      error: 'resume unavailable',
+    });
+
+    expect(viewModel.getSnapshot().activityLog).toEqual([
+      {
+        label: 'harness',
+        text: 'conductor.transport.reconnect status=failed agentId=agent-1 error=resume unavailable',
+      },
+      {
+        label: 'observation',
+        text: '[transport] conductor 再接続失敗 agentId=agent-1 error=resume unavailable',
+      },
+    ]);
+  });
+
   it('shows dispatch hold transitions as observations', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);

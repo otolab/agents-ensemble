@@ -22,6 +22,16 @@ const TEST_ISSUE = {
   url: 'https://github.com/org/repo/issues/1',
 };
 
+const { mockResume } = vi.hoisted(() => ({
+  mockResume: vi.fn(),
+}));
+
+vi.mock('./conductor-agent.js', () => ({
+  ConductorAgent: {
+    resume: mockResume,
+  },
+}));
+
 function createWorkerSessionStub(runningCount = 0) {
   return {
     runtime: { runningCount },
@@ -97,6 +107,7 @@ describe('runConductorSessionDriver', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    mockResume.mockReset();
   });
 
   it('runs initial send then stops when conductor finishes', async () => {
@@ -357,6 +368,70 @@ describe('runConductorSessionDriver', () => {
     expect(result.sendCount).toBe(3);
     expect(result.autonomousTurns).toBe(1);
     expect(result.stopReason).toBe('completed');
+  });
+
+  it('dispatches operator.reconnect without sending it to the conductor', async () => {
+    const recoveredSend = vi.fn().mockResolvedValue({
+      runId: 'run-2',
+      status: 'finished',
+      result: 'recovered',
+    });
+    const initialSend = vi.fn().mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'waiting',
+    });
+    const oldClose = vi.fn();
+    const resumedClose = vi.fn();
+    const conductor = {
+      agentId: 'agent-1',
+      send: initialSend,
+      close: oldClose,
+    } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const onTransportReconnectAttempt = vi.fn();
+    const onTransportReconnectComplete = vi.fn();
+    mockResume.mockResolvedValue({
+      agentId: 'agent-1',
+      send: recoveredSend,
+      close: resumedClose,
+    });
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      shutdownSignal: shutdown.signal,
+      continueAfterIssueLoopStop: true,
+      sendReconnect: {
+        conductorOptions: { cwd: '/repo' },
+        onTransportReconnectAttempt,
+        onTransportReconnectComplete,
+      },
+    });
+
+    await vi.waitFor(() => expect(initialSend).toHaveBeenCalledOnce());
+    eventQueue.enqueue({ type: 'operator.reconnect' });
+    await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
+
+    expect(oldClose).toHaveBeenCalledOnce();
+    expect(mockResume).toHaveBeenCalledWith('agent-1', { cwd: '/repo' });
+    expect(onTransportReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
+    expect(onTransportReconnectComplete).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      success: true,
+    });
+    expect(initialSend).toHaveBeenCalledOnce();
+
+    eventQueue.enqueue({ type: 'operator.message', text: 'continue after reconnect' });
+    await vi.waitFor(() => expect(recoveredSend).toHaveBeenCalledOnce());
+    expect(recoveredSend).toHaveBeenCalledWith(
+      'continue after reconnect',
+      expect.any(Object),
+    );
+
+    shutdown.abort();
+    const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
   });
 
   it('batches multiple operator messages into one conductor send', async () => {

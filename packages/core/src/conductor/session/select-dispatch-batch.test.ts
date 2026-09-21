@@ -116,6 +116,23 @@ describe('selectDispatchBatch', () => {
     expect(result?.remainingQueue).toEqual([workerCompleted('implementer')]);
   });
 
+  it('dispatches operator.reconnect with operator control priority', () => {
+    const queue: SessionEvent[] = [
+      workerCompleted('implementer'),
+      { type: 'operator.reconnect' },
+    ];
+    const result = selectDispatchBatch({
+      queue,
+      state: {},
+      autonomousTurns: 5,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('operator.reconnect');
+    expect(result?.batch.events).toEqual([{ type: 'operator.reconnect' }]);
+    expect(result?.remainingQueue).toEqual([workerCompleted('implementer')]);
+  });
+
   it('uses continuation source only on the next select', () => {
     const queue = [
       workerCompleted('implementer'),

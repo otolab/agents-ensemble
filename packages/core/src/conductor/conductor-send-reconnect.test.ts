@@ -12,6 +12,8 @@ vi.mock('./conductor-agent.js', () => ({
 }));
 
 import {
+  isConductorSendTransportError,
+  reconnectConductorAgent,
   sendConductorWithReconnect,
   type ConductorAgentHandle,
 } from './conductor-send-reconnect.js';
@@ -111,5 +113,152 @@ describe('sendConductorWithReconnect', () => {
 
     expect(mockResume).toHaveBeenCalledOnce();
     expect(result.status).toBe('error');
+  });
+
+  it('reconnects and retries once on a transport stall', async () => {
+    const firstSend = vi.fn().mockResolvedValue({
+      runId: 'run-1',
+      status: 'error',
+      error: { message: 'Connection stalled repeatedly' },
+    });
+    const secondSend = vi.fn().mockResolvedValue({
+      runId: 'run-2',
+      status: 'finished',
+      result: 'recovered',
+    });
+    const handle = createHandle(firstSend);
+    mockResume.mockResolvedValue({
+      agentId: 'agent-1',
+      send: secondSend,
+      close: mockClose,
+    });
+
+    const onAuthReconnectAttempt = vi.fn();
+    const onTransportReconnectAttempt = vi.fn();
+    const onTransportReconnectComplete = vi.fn();
+    const result = await sendConductorWithReconnect(handle, 'same prompt', {
+      conductorOptions: { cwd: '/repo' },
+      onAuthReconnectAttempt,
+      onTransportReconnectAttempt,
+      onTransportReconnectComplete,
+    });
+
+    expect(result.status).toBe('finished');
+    expect(mockClose).toHaveBeenCalledOnce();
+    expect(mockResume).toHaveBeenCalledWith('agent-1', { cwd: '/repo' });
+    expect(secondSend).toHaveBeenCalledWith('same prompt', expect.any(Object));
+    expect(onAuthReconnectAttempt).not.toHaveBeenCalled();
+    expect(onTransportReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
+    expect(onTransportReconnectComplete).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      success: true,
+    });
+  });
+
+  it('does not reconnect for unrelated conductor errors', async () => {
+    const result = {
+      runId: 'run-1',
+      status: 'error' as const,
+      error: { message: 'Model Blocked' },
+    };
+    const send = vi.fn().mockResolvedValue(result);
+
+    await expect(
+      sendConductorWithReconnect(createHandle(send), 'hello', {
+        conductorOptions: { cwd: '/repo' },
+      }),
+    ).resolves.toEqual(result);
+    expect(mockResume).not.toHaveBeenCalled();
+  });
+
+  it('returns the original transport error when reconnect fails', async () => {
+    const result = {
+      runId: 'run-1',
+      status: 'error' as const,
+      error: { message: 'Connection stalled repeatedly' },
+    };
+    const send = vi.fn().mockResolvedValue(result);
+    mockResume.mockRejectedValue(new Error('resume unavailable'));
+    const onTransportReconnectComplete = vi.fn();
+
+    await expect(
+      sendConductorWithReconnect(createHandle(send), 'hello', {
+        conductorOptions: { cwd: '/repo' },
+        onTransportReconnectComplete,
+      }),
+    ).resolves.toEqual(result);
+    expect(send).toHaveBeenCalledOnce();
+    expect(onTransportReconnectComplete).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      success: false,
+      error: 'resume unavailable',
+    });
+  });
+});
+
+describe('reconnectConductorAgent', () => {
+  afterEach(() => {
+    mockClose.mockClear();
+    mockResume.mockReset();
+  });
+
+  it('closes and resumes the same agent id', async () => {
+    const oldSend = vi.fn();
+    const resumed = {
+      agentId: 'agent-1',
+      send: vi.fn(),
+      close: mockClose,
+    };
+    const handle = createHandle(oldSend);
+    mockResume.mockResolvedValue(resumed);
+    const onReconnectAttempt = vi.fn();
+
+    await expect(
+      reconnectConductorAgent(handle, {
+        cwd: '/repo',
+        onReconnectAttempt,
+      }),
+    ).resolves.toBe('agent-1');
+
+    expect(onReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
+    expect(mockClose).toHaveBeenCalledOnce();
+    expect(mockResume).toHaveBeenCalledWith('agent-1', { cwd: '/repo' });
+    expect(handle.conductor).toBe(resumed);
+  });
+});
+
+describe('isConductorSendTransportError', () => {
+  it('detects stall messages and transport codes', () => {
+    expect(
+      isConductorSendTransportError({
+        runId: 'run-1',
+        status: 'error',
+        error: { message: 'Connection stalled repeatedly' },
+      }),
+    ).toBe(true);
+    expect(
+      isConductorSendTransportError({
+        runId: 'run-2',
+        status: 'error',
+        error: { code: 'ERR_CONNECTION_STALLED' },
+      }),
+    ).toBe(true);
+  });
+
+  it('does not classify auth or model errors as transport errors', () => {
+    expect(
+      isConductorSendTransportError({
+        runId: 'run-1',
+        status: 'error',
+        error: { message: 'Authentication error' },
+      }),
+    ).toBe(false);
+    expect(
+      isConductorSendTransportError({
+        runId: 'run-2',
+        status: 'error',
+        error: { message: 'Model Blocked' },
+      }),
+    ).toBe(false);
   });
 });

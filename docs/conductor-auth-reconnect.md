@@ -39,6 +39,22 @@ send が auth-like error のとき:
 | `conductor.auth.reconnect` | `resume(sameId)` 試行時 |
 | `conductor.auth.recovery` | 自動再接続失敗後（PR #99 互換の `[auth]` hint） |
 
+## transport stall の自動・手動再接続
+
+`Connection stalled repeatedly` など、明示的な connection / transport timeout 系の
+`error.message` または `error.code` は auth と分けて transport error と判定する。send ごとに
+1 回だけ `close` → `resume(sameId)` → 同じ prompt の再送を行う。再接続に失敗しても
+元の error 結果を返し、`continueOnConductorError` が有効な対話セッションは継続する。
+
+この経路では `conductor.transport.reconnect` を attempt / success / failure の各状態で
+emit し、auth の `[auth]` recovery hint は表示しない。オペレータは `/reconnect`（または
+`reconnect`）で同じ `resume(sameId)` を手動実行できる。手動操作は直近 send の完了後に
+行い、worker、worktree、プロセス、conductor へのコマンド送信には影響しない。
+
+stall が続く場合の暫定回避策は Ctrl+C + `--resume <agentId>`。`/exit` は isolated
+worktree の削除を行うことがあるため、worktree を残す必要がある場合は `/reconnect` を
+優先する。
+
 ## 制限
 
 | 経路 | 挙動 |

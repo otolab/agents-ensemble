@@ -1,6 +1,7 @@
 export type {
   SessionEvent,
   OperatorMessageEvent,
+  OperatorReconnectEvent,
   WorkerCompletedEvent,
   WorkerFailedEvent,
   PermissionPendingEvent,
@@ -39,6 +40,7 @@ export type {
   HarnessTeardownSummaryEvent,
   ConductorAuthRecoveryEvent,
   ConductorAuthReconnectEvent,
+  ConductorTransportReconnectEvent,
   HarnessGitHubUpdateEvent,
   HarnessGitHubMonitorErrorEvent,
   HarnessWarningEvent,

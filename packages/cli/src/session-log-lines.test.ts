@@ -183,6 +183,26 @@ describe('session-log-lines', () => {
     ).toBe('[auth] conductor 再接続を試行 agentId=agent-1');
   });
 
+  it('formats transport reconnect without an auth hint', () => {
+    const event = {
+      type: 'conductor.transport.reconnect' as const,
+      agentId: 'agent-1',
+      status: 'failed' as const,
+      error: 'resume unavailable',
+    };
+
+    expect(formatHarnessLogBody(event)).toBe(
+      'conductor.transport.reconnect status=failed agentId=agent-1 error=resume unavailable',
+    );
+    expect(formatObservationLogBody(event)).toBe(
+      '[transport] conductor 再接続失敗 agentId=agent-1 error=resume unavailable',
+    );
+    expect(formatObservationStderrLine(event)).toBe(
+      '[transport] conductor 再接続失敗 agentId=agent-1 error=resume unavailable',
+    );
+    expect(formatObservationStderrLine(event)).not.toContain('[auth]');
+  });
+
   it('suppresses harness.worker.acp.update from harness log body', () => {
     expect(
       formatHarnessLogBody({

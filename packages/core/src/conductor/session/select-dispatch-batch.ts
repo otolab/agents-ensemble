@@ -32,6 +32,7 @@ export interface SelectDispatchBatchResult {
 
 const STATIC_SOURCE_PRIORITY: Record<string, number> = {
   permission: 0,
+  'operator.reconnect': 0,
   'worker.failed': 1,
   'worker.completed': 2,
   github: 3,
@@ -42,6 +43,8 @@ export function eventSourceKey(event: SessionEvent): DispatchSourceKey {
   switch (event.type) {
     case 'operator.message':
       return 'operator';
+    case 'operator.reconnect':
+      return 'operator.reconnect';
     case 'permission.pending':
       return 'permission';
     case 'worker.completed':
@@ -61,6 +64,8 @@ function staticEventPriority(event: SessionEvent): number {
   switch (event.type) {
     case 'operator.message':
       return -1;
+    case 'operator.reconnect':
+      return STATIC_SOURCE_PRIORITY['operator.reconnect'];
     case 'permission.pending':
       return STATIC_SOURCE_PRIORITY.permission;
     case 'worker.failed':

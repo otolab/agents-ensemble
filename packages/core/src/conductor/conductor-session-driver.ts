@@ -12,8 +12,14 @@ import type { WorkerFailureRecord } from '../runtime/types.js';
 import type { WorkerSession } from '../runtime/worker-session.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import type { ConductorSendResult } from './conductor-agent.js';
-import type { ConductorAgentHandle, ConductorSendReconnectOptions } from './conductor-send-reconnect.js';
-import { sendConductorWithReconnect } from './conductor-send-reconnect.js';
+import type {
+  ConductorAgentHandle,
+  ConductorSendReconnectOptions,
+} from './conductor-send-reconnect.js';
+import {
+  reconnectConductorAgent,
+  sendConductorWithReconnect,
+} from './conductor-send-reconnect.js';
 import { formatSessionEventsForConductor } from './session/format-session-event.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import type { SessionEvent } from './session/session-event.js';
@@ -295,6 +301,12 @@ export async function runConductorSessionDriver(
       dispatchBatchState = markContinuationConsumed(dispatchBatchState, selected);
     }
 
+    if (dispatchResult.sourceKey === 'operator.reconnect') {
+      dispatchBatchState = dispatchBatchStateAfterSend(dispatchResult.sourceKey);
+      await runOperatorReconnect(options);
+      continue;
+    }
+
     const autonomousTurnsAfter = autonomousTurnsAfterConductorBatch(
       batch,
       autonomousTurns,
@@ -523,7 +535,31 @@ async function waitForDispatchBatch(input: {
 }
 
 function isImmediateDispatchSource(sourceKey: string): boolean {
-  return sourceKey === 'operator' || sourceKey === 'permission';
+  return (
+    sourceKey === 'operator' ||
+    sourceKey === 'operator.reconnect' ||
+    sourceKey === 'permission'
+  );
+}
+
+/** `/reconnect` は conductor へ送らず、直近 send 完了後に agent だけ差し替える。 */
+async function runOperatorReconnect(
+  options: ConductorSessionDriverOptions,
+): Promise<void> {
+  try {
+    await reconnectConductorAgent(options.conductorHandle, {
+      conductorOptions: options.sendReconnect.conductorOptions,
+      onReconnectAttempt:
+        options.sendReconnect.onTransportReconnectAttempt ??
+        options.sendReconnect.onReconnectAttempt,
+      onReconnectComplete:
+        options.sendReconnect.onTransportReconnectComplete ??
+        options.sendReconnect.onReconnectComplete,
+    });
+  } catch {
+    // Reconnect failures are observable through the callback above. Keep the
+    // session alive so the operator can retry or submit another message.
+  }
 }
 
 function notifyHeldDispatchProgress(input: {

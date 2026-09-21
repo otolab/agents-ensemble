@@ -187,7 +187,7 @@ describe('IssueSessionTui', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('追加指示を入力するか /exit で終了');
+    expect(frame).toContain('追加指示を入力するか /reconnect で再接続 · /exit で終了');
     expect(frame).not.toContain('post-loop 待機中');
   });
 
@@ -215,8 +215,8 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain(issueLabel);
     expect(frame).toContain(osc8Open);
     expect(frame).not.toContain(nonCanonicalOsc8Open);
-    expect(frame).toContain('任意のタイミングで入力 · /exit で終了');
-    expect(frame).not.toContain(`${issueLabel} — 任意のタイミングで入力 · /exit で終了`);
+    expect(frame).toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
+    expect(frame).not.toContain(`${issueLabel} — 任意のタイミングで入力 · /reconnect で再接続 · /exit で終了`);
 
     viewModel.setDisplayState({
       workers: {},
@@ -253,7 +253,7 @@ describe('IssueSessionTui', () => {
     expect(lastFrame() ?? '').toContain(issueLabel);
     expect(lastFrame() ?? '').toContain(osc8Open);
     expect(lastFrame() ?? '').not.toContain(nonCanonicalOsc8Open);
-    expect(lastFrame() ?? '').toContain('追加指示を入力するか /exit で終了');
+    expect(lastFrame() ?? '').toContain('追加指示を入力するか /reconnect で再接続 · /exit で終了');
     expect(lastFrame() ?? '').not.toContain('post-loop 待機中');
 
     viewModel.setShuttingDown(true);
@@ -690,7 +690,7 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('(活動ログなし)');
     expect(frame).not.toContain('Open questions');
     expect(frame).not.toContain('(未回答なし)');
-    expect(frame).toContain('任意のタイミングで入力 · /exit で終了');
+    expect(frame).toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
   });
 
   it('switches the lower UI between no-question and question modes', async () => {
@@ -700,7 +700,7 @@ describe('IssueSessionTui', () => {
     );
 
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+    expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
 
     viewModel.setDisplayState({
       workers: {},
@@ -711,7 +711,7 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain('Open questions');
     expect(lastFrame() ?? '').toContain('inq-1 (1/1) への回答');
-    expect(lastFrame() ?? '').not.toContain('任意のタイミングで入力 · /exit で終了');
+    expect(lastFrame() ?? '').not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
 
     viewModel.setDisplayState({
       workers: {},
@@ -721,7 +721,7 @@ describe('IssueSessionTui', () => {
     });
     await flushInkStdin();
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+    expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
   });
 
   it.each([
@@ -765,7 +765,7 @@ describe('IssueSessionTui', () => {
     const initialFrame = lastFrame() ?? '';
     expect(initialFrame).toContain('Open questions');
     expect(initialFrame).toContain('inq-resumed-1');
-    expect(initialFrame).not.toContain('任意のタイミングで入力 · /exit で終了');
+    expect(initialFrame).not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
 
     if (selectedIndex === 1) {
       stdin.write(INK_TEST_KEYS.shiftDownArrow);
@@ -781,16 +781,16 @@ describe('IssueSessionTui', () => {
     });
     if (restoredQuestions.length === 1) {
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
     } else {
       expect(lastFrame() ?? '').toContain('Open questions');
       expect(lastFrame() ?? '').toContain('inq-resumed-1');
-      expect(lastFrame() ?? '').not.toContain('任意のタイミングで入力 · /exit で終了');
+      expect(lastFrame() ?? '').not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
 
       setOperatorQuestions([]);
       await flushInkStdin();
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /exit で終了');
+      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
     }
   });
 

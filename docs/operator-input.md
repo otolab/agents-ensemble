@@ -14,7 +14,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
 | **SessionView** | TTY Ink TUI / CLI 引数 / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
-データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。View は `submit` で `operator.message` をキューへ積むだけ。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
+データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect` と `/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
 
 ## View 契約: `OperatorInputBinding`
 
@@ -42,6 +42,8 @@ type OperatorInputBinding = (
 
 - 空文字は無視（`false` を返す）
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
+- `/reconnect` / `reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
+- `/exit` / `exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
 - TTY（Ink TUI）では選択中の open question への回答として `submit` する（`targetOpenQuestionId` オプション）
 - 非 TTY では未回答 1 件のときはプレーンテキストをその open question への回答として解釈する
 
@@ -76,7 +78,7 @@ CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できま�
 
 TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。
 
-`ENSEMBLE_TUI_LAYOUT=stream` または `.ensemble/config.yaml` の `tui.layout: stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。環境変数は config より優先されます（[settings.md](settings.md)）。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /exit で終了` の prompt のみを表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
+`ENSEMBLE_TUI_LAYOUT=stream` または `.ensemble/config.yaml` の `tui.layout: stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。環境変数は config より優先されます（[settings.md](settings.md)）。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /reconnect で再接続 · /exit で終了` の prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
 
 ### 表示出力の inline Markdown subset
 
@@ -97,11 +99,11 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 | モード | 条件 | 表示と入力 |
 |--------|------|------------|
 | **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の prompt を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
-| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input には `任意のタイミングで入力 · /exit で終了` の prompt のみを表示する。submit は通常の operator メッセージとして送信する。 |
+| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input には `任意のタイミングで入力 · /reconnect で再接続 · /exit で終了` の prompt を表示する。通常の submit は operator メッセージとして送信する。 |
 
 resume で sidecar の未回答 question を復元した場合も、`getContext()` が同じ Registry から一覧を返すため、binding 後の pane / stream はモード A として表示する。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使う。
 
-post-loop 待機中はモード B の prompt を `追加指示を入力するか /exit で終了` に上書きします。終了中は `終了しています…` を表示して入力を無効化します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
+post-loop 待機中はモード B の prompt を `追加指示を入力するか /reconnect で再接続 · /exit で終了` に上書きします。終了中は `終了しています…` を表示して入力を無効化します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
 
 scrollback を実行中に上へ移動しているときに新着ログが追記されると、端末依存で表示が末尾へ戻ることがあります。端末幅を変更しても、既に Static として追記された行は再折り返しされません。
 
@@ -184,10 +186,19 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 | イベント | ターン残あり | max-turns 到達後 |
 |----------|------------|----------------|
 | `operator.message` | dispatch。オペレータ入力として自律ターン数をリセット | dispatch（`operator.message` は常に許可） |
+| `operator.reconnect` | dispatch。直近の send 完了後に conductor を close → `resume(sameId)`。worker / worktree / プロセスは変更しない | conductor へメッセージとして送らない。max-turns 到達後も許可 |
 | `permission.pending` | dispatch | dispatch（permission 判断を優先） |
 | `github.update` | dispatch。状況把握ターンとして自律ターンを 1 消費 | enqueue のみ。dispatch しない |
 
 自律ループ稼働中（post-loop 前）も同じ経路で処理する。GitHub 更新の種類による `notifyResume` 条件分岐は持たない（#160）。
+
+### `/reconnect` — conductor transport の手動再接続
+
+`/reconnect` または `reconnect`（大文字小文字無視・前後空白トリム）は、conductor との対話に載せない専用コマンドです。直近の `conductor.send` が完了（成功・エラーを含む）した後、現在の agent を `close` し、同じ `agentId` で `resume` します。再接続そのものは prompt を再送せず、次の operator 入力や worker/GitHub 通知から新しい agent を使います。worker、worktree、プロセスは触りません。
+
+成功・失敗は `conductor.transport.reconnect` として harness / observation に表示されます。失敗してもセッションは継続し、もう一度 `/reconnect` または通常の入力を受け付けます。send 中の in-flight 中断は行いません。
+
+Connection stalled が自動再接続後も続く場合は `/reconnect` を試してください。暫定回避策は Ctrl+C で終了して `--resume <agentId>` で再開することです。`/exit` は isolated worktree を削除することがあるため、worktree を残したい場合は `/exit` ではなく `/reconnect` または Ctrl+C + `--resume` を使います。
 
 ### `/exit` の即時フィードバック（#170）
 

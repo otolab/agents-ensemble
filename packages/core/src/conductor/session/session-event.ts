@@ -1,6 +1,7 @@
 export type {
   SessionEvent,
   OperatorMessageEvent,
+  OperatorReconnectEvent,
   WorkerCompletedEvent,
   WorkerFailedEvent,
   PermissionPendingEvent,
