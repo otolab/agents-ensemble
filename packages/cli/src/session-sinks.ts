@@ -64,6 +64,8 @@ export function createDialogueSink(options: DialogueSinkOptions = {}): SessionLo
       case 'session.post_loop_wait':
       case 'conductor.dispatch_hold':
       case 'conductor.auth.recovery':
+      case 'conductor.auth.reconnect':
+      case 'conductor.transport.reconnect':
         break;
     }
   };

@@ -26,6 +26,18 @@ export type {
 export { submitOperatorInput } from './submit-operator-input.js';
 export type { SubmitOperatorInputInput } from './submit-operator-input.js';
 export { isOperatorExitCommand } from './operator-exit.js';
+export { isOperatorReconnectCommand } from './operator-reconnect.js';
+export {
+  reconnectConductorAgent,
+  sendConductorWithReconnect,
+  isConductorSendTransportError,
+} from './conductor-send-reconnect.js';
+export type {
+  ConductorAgentHandle,
+  ConductorReconnectCompleteInfo,
+  ConductorReconnectOptions,
+  ConductorSendReconnectOptions,
+} from './conductor-send-reconnect.js';
 export {
   createOperatorPostLoopGate,
 } from './operator-post-loop-gate.js';
@@ -109,6 +121,7 @@ export type {
 export type {
   SessionEvent,
   OperatorMessageEvent,
+  OperatorReconnectEvent,
   WorkerCompletedEvent,
   WorkerFailedEvent,
   PermissionPendingEvent,

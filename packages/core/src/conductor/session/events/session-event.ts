@@ -9,6 +9,7 @@ export type { SessionEventDispatchFields } from './shared/dispatch-fields.js';
 /** ConductorSession のイベント列に載る項目（SDK tool 結果は含めない）。 */
 export type SessionEvent =
   | OperatorMessageEvent
+  | OperatorReconnectEvent
   | WorkerCompletedEvent
   | WorkerFailedEvent
   | PermissionPendingEvent
@@ -17,6 +18,11 @@ export type SessionEvent =
 export interface OperatorMessageEvent extends SessionEventDispatchFields {
   type: 'operator.message';
   text: string;
+}
+
+/** Conductor に送らず、現在の conductor agent だけを再接続する操作。 */
+export interface OperatorReconnectEvent extends SessionEventDispatchFields {
+  type: 'operator.reconnect';
 }
 
 export interface WorkerCompletedEvent extends SessionEventDispatchFields {

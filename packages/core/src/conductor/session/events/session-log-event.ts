@@ -204,6 +204,13 @@ export interface ConductorAuthReconnectEvent {
   agentId: string;
 }
 
+export interface ConductorTransportReconnectEvent {
+  type: 'conductor.transport.reconnect';
+  agentId: string;
+  status: 'attempt' | 'succeeded' | 'failed';
+  error?: string;
+}
+
 export interface HarnessGitHubUpdateEvent {
   type: 'harness.github.update';
   itemCount: number;
@@ -255,6 +262,7 @@ export type SessionLogEvent =
   | HarnessTeardownPhaseEvent
   | ConductorAuthRecoveryEvent
   | ConductorAuthReconnectEvent
+  | ConductorTransportReconnectEvent
   | HarnessGitHubUpdateEvent
   | HarnessGitHubMonitorErrorEvent
   | HarnessWarningEvent;

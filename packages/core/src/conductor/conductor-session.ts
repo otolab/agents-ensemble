@@ -74,6 +74,7 @@ import {
 } from './session-policy.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
 import { isOperatorExitCommand } from './operator-exit.js';
+import { isOperatorReconnectCommand } from './operator-reconnect.js';
 import {
   assertSessionSidecarMatches,
   requireSessionSidecarForResume,
@@ -607,10 +608,33 @@ export async function runConductorSession(
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
   const sendReconnect = {
     conductorOptions,
-    onReconnectAttempt: ({ agentId }: { agentId: string }) => {
+    onAuthReconnectAttempt: ({ agentId }: { agentId: string }) => {
       sessionLogger.emit({
         type: 'conductor.auth.reconnect',
         agentId,
+      });
+    },
+    onTransportReconnectAttempt: ({ agentId }: { agentId: string }) => {
+      sessionLogger.emit({
+        type: 'conductor.transport.reconnect',
+        agentId,
+        status: 'attempt',
+      });
+    },
+    onTransportReconnectComplete: ({
+      agentId,
+      success,
+      error,
+    }: {
+      agentId: string;
+      success: boolean;
+      error?: string;
+    }) => {
+      sessionLogger.emit({
+        type: 'conductor.transport.reconnect',
+        agentId,
+        status: success ? 'succeeded' : 'failed',
+        ...(error ? { error } : {}),
       });
     },
   };
@@ -754,6 +778,10 @@ export async function runConductorSession(
           operatorRequestedExit = true;
           operatorExitController.abort();
           return false;
+        }
+        if (isOperatorReconnectCommand(message)) {
+          eventQueue.enqueue({ type: 'operator.reconnect' });
+          return true;
         }
         const received = submitOperatorInput({
           message,

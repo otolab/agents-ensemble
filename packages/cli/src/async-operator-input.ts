@@ -55,7 +55,7 @@ export function bindAsyncOperatorInput(
   }
 
   stderr.write(
-    '\nオペレータ入力: 任意のタイミングで入力して Enter。conductor は継続します（/exit で終了）。\n',
+    '\nオペレータ入力: 任意のタイミングで入力して Enter。conductor は継続します（/reconnect で再接続、/exit で終了）。\n',
   );
 
   const rl = readline.createInterface({ input, output, terminal: true });

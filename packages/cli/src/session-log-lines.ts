@@ -81,6 +81,13 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
     }
     case 'conductor.send.progress':
       return undefined;
+    case 'conductor.transport.reconnect': {
+      let line = `conductor.transport.reconnect status=${event.status} agentId=${event.agentId}`;
+      if (event.error) {
+        line += ` error=${event.error}`;
+      }
+      return line;
+    }
     case 'permission.pending':
       return renderSessionLogEvent(event);
     case 'conductor.send': {
@@ -157,6 +164,15 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
       return event.hint;
     case 'conductor.auth.reconnect':
       return `[auth] conductor 再接続を試行 agentId=${event.agentId}`;
+    case 'conductor.transport.reconnect': {
+      const action =
+        event.status === 'attempt'
+          ? '試行'
+          : event.status === 'succeeded'
+            ? '成功'
+            : '失敗';
+      return `[transport] conductor 再接続${action} agentId=${event.agentId}${event.error ? ` error=${event.error}` : ''}`;
+    }
     default:
       return undefined;
   }
@@ -164,7 +180,11 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
 
 /** 非 TTY observation sink 向けの stderr 1 行（prefix 付き。auth recovery は hint をそのまま）。 */
 export function formatObservationStderrLine(event: SessionLogEvent): string | undefined {
-  if (event.type === 'conductor.auth.recovery' || event.type === 'conductor.auth.reconnect') {
+  if (
+    event.type === 'conductor.auth.recovery' ||
+    event.type === 'conductor.auth.reconnect' ||
+    event.type === 'conductor.transport.reconnect'
+  ) {
     const body = formatObservationLogBody(event);
     return body;
   }

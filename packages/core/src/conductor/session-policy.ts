@@ -85,7 +85,11 @@ export function canDispatchConductorSend(
   autonomousTurns: number,
   maxTurns: number,
 ): boolean {
-  if (event.type === 'operator.message' || event.type === 'permission.pending') {
+  if (
+    event.type === 'operator.message' ||
+    event.type === 'operator.reconnect' ||
+    event.type === 'permission.pending'
+  ) {
     return true;
   }
   if (!isMaxTurnsLimited(maxTurns)) {
@@ -110,6 +114,9 @@ export function autonomousTurnsAfterConductorBatch(
   events: SessionEvent[],
   autonomousTurns: number,
 ): number {
+  if (events.every((event) => event.type === 'operator.reconnect')) {
+    return autonomousTurns;
+  }
   if (events.some((event) => event.type === 'operator.message')) {
     return 0;
   }

@@ -41,6 +41,7 @@ export const SESSION_AUXILIARY_EVENT_TYPES = [
   'worker.process.stderr',
   'conductor.auth.recovery',
   'conductor.auth.reconnect',
+  'conductor.transport.reconnect',
 ] as const;
 
 export const ALL_SESSION_LOG_EVENT_TYPES = [
@@ -54,6 +55,7 @@ export type SessionLogEventType = (typeof ALL_SESSION_LOG_EVENT_TYPES)[number];
 /** harness-events.md §3 の conductor dispatch イベント。 */
 export const SESSION_EVENT_TYPES = [
   'operator.message',
+  'operator.reconnect',
   'worker.completed',
   'worker.failed',
   'permission.pending',

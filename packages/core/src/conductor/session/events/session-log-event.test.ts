@@ -17,13 +17,13 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(33);
+    expect(types.size).toBe(34);
   });
 
   it('lists every SessionEvent type exactly once', () => {
     const types = new Set(SESSION_EVENT_TYPES);
     expect(types.size).toBe(SESSION_EVENT_TYPES.length);
-    expect(types.size).toBe(5);
+    expect(types.size).toBe(6);
   });
 
   it('accepts minimal payloads for each SessionLogEvent type', () => {
@@ -191,6 +191,8 @@ describe('session event type groups', () => {
           return { type, agentId: 'aid', hint: 'login' };
         case 'conductor.auth.reconnect':
           return { type, agentId: 'aid' };
+        case 'conductor.transport.reconnect':
+          return { type, agentId: 'aid', status: 'attempt' };
         case 'harness.github.update':
           return { type, itemCount: 1 };
         case 'harness.github.monitor_error':
@@ -235,6 +237,8 @@ describe('session event type groups', () => {
       switch (type) {
         case 'operator.message':
           return { type, text: 'hi' };
+        case 'operator.reconnect':
+          return { type };
         case 'worker.completed':
           return { type, result: round };
         case 'worker.failed':

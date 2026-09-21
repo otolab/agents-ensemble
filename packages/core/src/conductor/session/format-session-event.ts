@@ -21,6 +21,8 @@ function formatSingleSessionEventForConductor(event: SessionEvent): string {
   switch (event.type) {
     case 'operator.message':
       return event.text.trim();
+    case 'operator.reconnect':
+      throw new Error('operator.reconnect must not be sent to the conductor');
     case 'worker.completed':
       return ['## worker ラウンド完了', '', formatEventBodyForConductor(event)].join('\n');
     case 'worker.failed':
@@ -48,6 +50,8 @@ function formatEventBodyForConductor(event: SessionEvent): string {
   switch (event.type) {
     case 'operator.message':
       return event.text.trim();
+    case 'operator.reconnect':
+      throw new Error('operator.reconnect must not be sent to the conductor');
     case 'worker.completed':
       return fencedYaml('worker.completed', event.result);
     case 'worker.failed':

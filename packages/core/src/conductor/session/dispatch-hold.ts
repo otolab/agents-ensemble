@@ -5,7 +5,7 @@ import type { SessionEventQueue } from './session-event-queue.js';
 /** Driver 内だけで生存する dispatch 保留状態。sidecar には保存しない。 */
 export interface DispatchHoldState {
   dispatchHold: boolean;
-  /** 保留中の trigger SessionEvent（operator.message を除く）。到着順を維持する。 */
+  /** 保留中の trigger SessionEvent（operator.message / operator.reconnect を除く）。到着順を維持する。 */
   heldEvents: SessionEvent[];
 }
 
@@ -63,6 +63,7 @@ export function bufferDispatchHoldEvents(
 function isHoldableDispatchEvent(event: SessionEvent): boolean {
   return (
     isTriggerSessionEvent(event) &&
-    event.type !== 'operator.message'
+    event.type !== 'operator.message' &&
+    event.type !== 'operator.reconnect'
   );
 }
