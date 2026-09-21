@@ -42,12 +42,12 @@ import {
 import { OperatorTextArea } from './operator-text-area.js';
 import { TitledBorderPane } from './titled-border-pane.js';
 import {
-  computeActivityPaneHeight,
   computeInputPaneHeight,
   computeOperatorInputCursorX,
   computeOperatorInputCursorY,
   computeOrchestrationLogVisibleLineCount,
 } from './compute-operator-input-cursor-y.js';
+import { resolvePaneHeights } from './pane-layout.js';
 import {
   computeMaxInputDisplayLines,
   trimBlankLinesOnly,
@@ -404,12 +404,17 @@ export function IssueSessionTui({
     hintLineCount,
     inputDisplayLineCount: visibleInputDisplayLineCount,
   });
-  const activityPaneHeight = computeActivityPaneHeight({
-    terminalRows: liveFrameRows,
-    hintLineCount,
-    inputDisplayLineCount: visibleInputDisplayLineCount,
+  const paneHeights = resolvePaneHeights({
+    liveFrameRows,
+    activityPaneHeight:
+      liveFrameRows -
+      WORKER_PANE_HEIGHT -
+      openQuestionsPaneHeight -
+      inputPaneHeight,
     openQuestionsPaneHeight,
+    inputPaneHeight,
   });
+  const { activityPaneHeight } = paneHeights;
   const visibleLineCount = computeOrchestrationLogVisibleLineCount(activityPaneHeight);
   const displayLineCount = useMemo(
     () => buildActivityLogDisplayLines(snapshot.activityLog, contentWidth).length,
@@ -423,6 +428,8 @@ export function IssueSessionTui({
       hintLineCount,
       inputDisplayLineCount: visibleInputDisplayLineCount,
       openQuestionsPaneHeight,
+      workerPaneHeight: paneHeights.workerPaneHeight,
+      activityPaneHeight,
       cursorLineOffset: 0,
     }),
   };
@@ -515,6 +522,7 @@ export function IssueSessionTui({
       <WorkerStatusPane
         workers={snapshot.displayState.workers}
         dispatchHold={snapshot.displayState.dispatchHold}
+        height={paneHeights.workerPaneHeight}
         terminalColumns={terminalColumns}
         issueUrl={issueUrl}
         issueLinkMode={issueLinkMode}
@@ -522,13 +530,16 @@ export function IssueSessionTui({
       <OrchestrationPane
         activityLog={snapshot.activityLog}
         contentWidth={contentWidth}
-        paneHeight={activityPaneHeight}
+        paneHeight={paneHeights.activityPaneHeight}
         linesFromBottom={linesFromBottom}
         terminalColumns={terminalColumns}
       />
       {operatorInputDisplay.mode === 'withQuestions' ? (
         <OpenQuestionsPane
-          layout={openQuestionsLayout}
+          layout={{
+            ...openQuestionsLayout,
+            paneHeight: paneHeights.openQuestionsPaneHeight,
+          }}
           terminalColumns={terminalColumns}
         />
       ) : null}
@@ -537,7 +548,7 @@ export function IssueSessionTui({
         borderStyle="single"
         borderColor={INPUT_PANE_BORDER_COLOR}
         paddingX={PANE_PADDING_X}
-        height={inputPaneHeight}
+        height={paneHeights.inputPaneHeight}
         terminalColumns={terminalColumns}
       >
         {operatorInputDisplay.hintLines.map((hintLine, index) => (

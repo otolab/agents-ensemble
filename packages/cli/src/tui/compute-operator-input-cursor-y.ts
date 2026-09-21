@@ -72,11 +72,16 @@ export function computeOperatorInputCursorY(params: {
   hintLineCount: number;
   inputDisplayLineCount?: number;
   openQuestionsPaneHeight: number;
+  workerPaneHeight?: number;
+  activityPaneHeight?: number;
   cursorLineOffset?: number;
 }): number {
+  const workerPaneHeight = params.workerPaneHeight ?? WORKER_PANE_HEIGHT;
+  const activityPaneHeight =
+    params.activityPaneHeight ?? computeActivityPaneHeight(params);
   const panesAboveInput =
-    WORKER_PANE_HEIGHT +
-    computeActivityPaneHeight(params) +
+    workerPaneHeight +
+    activityPaneHeight +
     params.openQuestionsPaneHeight;
 
   const cursorLineOffset = params.cursorLineOffset ?? 0;
@@ -116,6 +121,8 @@ export function computeOperatorInputLineIndex(params: {
   hintLineCount: number;
   inputDisplayLineCount?: number;
   openQuestionsPaneHeight: number;
+  workerPaneHeight?: number;
+  activityPaneHeight?: number;
   cursorLineOffset?: number;
 }): number {
   return computeOperatorInputCursorY(params) - OPERATOR_INPUT_CURSOR_Y_OFFSET;
