@@ -16,6 +16,7 @@ import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { trimBlankLinesOnly } from './operator-input-layout.js';
 import { resolveTuiIssueLinkMode } from './format-operator-context.js';
 import { resolveTuiLayoutMode } from './tui-layout-mode.js';
+import { createTuiResizeController } from './tui-terminal-size.js';
 import { resolveInitialOperatorMessage } from '../operator-message.js';
 
 export interface CreateIssueSessionTuiHostOptions {
@@ -108,6 +109,7 @@ export function createIssueSessionTuiHost(
     // existing bounded in-memory window; stream mode retains the scrollback.
     activityLogWindowSize: layoutMode === 'stream' ? null : undefined,
   });
+  const resizeController = createTuiResizeController();
   const onSubmitRef: {
     current: ((text: string, options?: OperatorInputSubmitOptions) => void) | undefined;
   } = {
@@ -121,6 +123,7 @@ export function createIssueSessionTuiHost(
     viewModel,
     issueUrl,
     issueLinkMode: resolveTuiIssueLinkMode({ env, config: options.config }),
+    terminalSizeStore: resizeController.terminalSize,
     onSubmit: (text: string, options?: OperatorInputSubmitOptions) => {
       onSubmitRef.current?.(text, options);
     },
@@ -131,7 +134,10 @@ export function createIssueSessionTuiHost(
     ) : (
       <IssueSessionTui {...commonProps} />
     ),
-    { alternateScreen: false },
+    {
+      alternateScreen: false,
+      stdout: resizeController.stdout,
+    },
   );
 
   const inkDisplayBackend = createInkDisplayBackend(viewModel);
@@ -161,6 +167,7 @@ export function createIssueSessionTuiHost(
     },
     dispose: () => {
       ink.unmount();
+      resizeController.dispose();
     },
   };
 }

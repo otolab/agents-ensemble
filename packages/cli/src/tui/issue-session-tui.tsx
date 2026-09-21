@@ -54,17 +54,22 @@ import {
 } from './operator-input-layout.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 import type { InlineMarkdownSegment } from '../inline-markdown.js';
+import {
+  useTuiTerminalSize,
+  type TuiTerminalSizeStore,
+} from './tui-terminal-size.js';
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string, options?: OperatorInputSubmitOptions) => void;
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
+  terminalSizeStore?: TuiTerminalSizeStore;
 }
 
-function usePaneContentWidth(): number {
+function usePaneContentWidth(columns: number): number {
   return getPaneContentWidth({
-    columns: process.stdout.columns ?? 80,
+    columns,
     paddingX: PANE_PADDING_X,
     borderWidth: ROUND_BORDER_WIDTH,
   });
@@ -205,12 +210,14 @@ export function WorkerStatusPane({
   workers,
   dispatchHold,
   height = WORKER_PANE_HEIGHT,
+  terminalColumns,
   issueUrl,
   issueLinkMode = 'label',
 }: {
   workers: TuiViewSnapshot['displayState']['workers'];
   dispatchHold?: TuiViewSnapshot['displayState']['dispatchHold'];
   height?: number;
+  terminalColumns?: number;
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
 }) {
@@ -231,6 +238,7 @@ export function WorkerStatusPane({
       borderColor="cyan"
       paddingX={PANE_PADDING_X}
       height={height}
+      terminalColumns={terminalColumns}
     >
       {entries.length === 0 ? (
         <Text dimColor>(待機中)</Text>
@@ -248,11 +256,13 @@ function OrchestrationPane({
   contentWidth,
   paneHeight,
   linesFromBottom,
+  terminalColumns,
 }: {
   activityLog: ActivityLogEntry[];
   contentWidth: number;
   paneHeight: number;
   linesFromBottom: number;
+  terminalColumns: number;
 }) {
   const logAreaRef = useRef(null);
   const { height: measuredLogAreaHeight, hasMeasured } = useBoxMetrics(logAreaRef);
@@ -283,6 +293,7 @@ function OrchestrationPane({
       borderColor="green"
       paddingX={PANE_PADDING_X}
       height={paneHeight}
+      terminalColumns={terminalColumns}
     >
       <Box ref={logAreaRef} flexGrow={1} flexDirection="column" overflow="hidden">
         {activityLog.length === 0 ? (
@@ -299,8 +310,10 @@ function OrchestrationPane({
 
 export function OpenQuestionsPane({
   layout,
+  terminalColumns,
 }: {
   layout: OpenQuestionsPaneLayout;
+  terminalColumns?: number;
 }) {
   if (layout.paneHeight === 0 || layout.items.length === 0) {
     return null;
@@ -314,6 +327,7 @@ export function OpenQuestionsPane({
       borderColor="magenta"
       paddingX={PANE_PADDING_X}
       height={layout.paneHeight}
+      terminalColumns={terminalColumns}
       titleBold={false}
     >
       {layout.items.flatMap((item) =>
@@ -335,6 +349,7 @@ export function IssueSessionTui({
   onSubmit,
   issueUrl,
   issueLinkMode = 'osc8',
+  terminalSizeStore,
 }: IssueSessionTuiProps) {
   const snapshot = useSyncExternalStore(
     viewModel.subscribe,
@@ -345,10 +360,15 @@ export function IssueSessionTui({
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
-  const contentWidth = usePaneContentWidth();
-  const terminalRows = process.stdout.rows ?? 24;
+  const terminalSize = useTuiTerminalSize(terminalSizeStore);
+  const { columns: terminalColumns, rows: terminalRows } = terminalSize;
+  // Keep one row outside the live frame. Ink clears the whole terminal when
+  // leaving a fullscreen frame; reserving a row avoids that scrollback-clearing
+  // branch while preserving the main-screen layout.
+  const liveFrameRows = Math.max(1, terminalRows - 1);
+  const contentWidth = usePaneContentWidth(terminalColumns);
   const operatorPrompt = 'operator> ';
-  const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
+  const maxInputDisplayLines = computeMaxInputDisplayLines(liveFrameRows);
   const openQuestions = getTuiOpenQuestions(snapshot);
   const openQuestionsLayout = useMemo(
     () =>
@@ -356,9 +376,9 @@ export function IssueSessionTui({
         openQuestions,
         selectedIndex: selectedQuestionIndex,
         contentWidth,
-        terminalRows,
+        terminalRows: liveFrameRows,
       }),
-    [openQuestions, selectedQuestionIndex, contentWidth, terminalRows],
+    [openQuestions, selectedQuestionIndex, contentWidth, liveFrameRows],
   );
   const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
   const operatorInputDisplay = resolveOperatorInputDisplayMode({
@@ -385,7 +405,7 @@ export function IssueSessionTui({
     inputDisplayLineCount: visibleInputDisplayLineCount,
   });
   const activityPaneHeight = computeActivityPaneHeight({
-    terminalRows,
+    terminalRows: liveFrameRows,
     hintLineCount,
     inputDisplayLineCount: visibleInputDisplayLineCount,
     openQuestionsPaneHeight,
@@ -399,7 +419,7 @@ export function IssueSessionTui({
   const cursorStart = {
     x: computeOperatorInputCursorX(operatorPrompt),
     y: computeOperatorInputCursorY({
-      terminalRows,
+      terminalRows: liveFrameRows,
       hintLineCount,
       inputDisplayLineCount: visibleInputDisplayLineCount,
       openQuestionsPaneHeight,
@@ -491,10 +511,11 @@ export function IssueSessionTui({
   };
 
   return (
-    <Box flexDirection="column" height={terminalRows}>
+    <Box flexDirection="column" width={terminalColumns} height={liveFrameRows}>
       <WorkerStatusPane
         workers={snapshot.displayState.workers}
         dispatchHold={snapshot.displayState.dispatchHold}
+        terminalColumns={terminalColumns}
         issueUrl={issueUrl}
         issueLinkMode={issueLinkMode}
       />
@@ -503,9 +524,13 @@ export function IssueSessionTui({
         contentWidth={contentWidth}
         paneHeight={activityPaneHeight}
         linesFromBottom={linesFromBottom}
+        terminalColumns={terminalColumns}
       />
       {operatorInputDisplay.mode === 'withQuestions' ? (
-        <OpenQuestionsPane layout={openQuestionsLayout} />
+        <OpenQuestionsPane
+          layout={openQuestionsLayout}
+          terminalColumns={terminalColumns}
+        />
       ) : null}
       <TitledBorderPane
         title={INPUT_PANE_TITLE}
@@ -513,6 +538,7 @@ export function IssueSessionTui({
         borderColor={INPUT_PANE_BORDER_COLOR}
         paddingX={PANE_PADDING_X}
         height={inputPaneHeight}
+        terminalColumns={terminalColumns}
       >
         {operatorInputDisplay.hintLines.map((hintLine, index) => (
           <WrappedTextLines

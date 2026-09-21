@@ -143,9 +143,14 @@ describe('createIssueSessionTuiHost', () => {
     const renderedElement = mockRender.mock.calls[0]?.[0] as {
       type: { name?: string };
     };
+    const renderOptions = mockRender.mock.calls[0]?.[1] as {
+      alternateScreen?: boolean;
+      stdout?: unknown;
+    };
 
     expect(renderedElement.type.name).toBe('IssueSessionTuiStream');
-    expect(mockRender.mock.calls[0]?.[1]).toEqual({ alternateScreen: false });
+    expect(renderOptions).toMatchObject({ alternateScreen: false });
+    expect(renderOptions.stdout).toBeDefined();
     host.dispose();
   });
 

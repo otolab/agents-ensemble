@@ -105,6 +105,8 @@ post-loop 待機中はモード B の prompt を `追加指示を入力するか
 
 scrollback を実行中に上へ移動しているときに新着ログが追記されると、端末依存で表示が末尾へ戻ることがあります。端末幅を変更しても、既に Static として追記された行は再折り返しされません。
 
+TTY の pane / stream は、Ink の resize 通知を 100ms の settle window にまとめ、同じ terminal size snapshot から幅・高さ・live frame と IME cursor の座標を再計算します。resize 時に端末全体を clear したり、stream の Static activity log を remount/replay したりはしません。pane は Ink の fullscreen clear 分岐を避けるため live frame の末尾 1 行を安全余白として予約し、最終サイズで再レイアウトします。stream は既追記 Static 行をそのまま残して下部 live frame だけを更新します。そのため、既追記行の再折り返しと scrollback 閲覧中の末尾復帰は引き続き非対応です。
+
 ## 実装例
 
 | 環境 | 実装 | ファイル |
