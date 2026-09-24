@@ -62,4 +62,5 @@
 - [PR #318](https://github.com/otolab/agents-ensemble/pull/318) — resize の Test plan と確認済み環境
 - [Issue #322](https://github.com/otolab/agents-ensemble/issues/322) — 実端末確認の作業単位
 - [ADR 0015](adr/0015-cli-tui-library.md) — #298 の resize / scrollback 保全方針
+- [tui-ink-upgrade.md](tui-ink-upgrade.md) — Ink / React 更新時の自動回帰ゲート
 - [operator-input.md](operator-input.md) — TUI の現在の挙動と制限
