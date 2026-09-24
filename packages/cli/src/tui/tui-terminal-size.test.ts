@@ -152,7 +152,8 @@ describe('tui terminal size', () => {
     expect(resizeListener).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(controller.stdout.columns).toBe(40);
+    expect(controller.stdout.columns).toBe(80);
+    expect(controller.terminalSize.getSnapshot().columns).toBe(40);
     expect(resizeListener).toHaveBeenCalledTimes(1);
 
     controller.dispose();
@@ -205,7 +206,7 @@ describe('tui terminal size', () => {
     source.emit('resize');
     await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
 
-    expect(controller.stdout.columns).toBe(60);
+    expect(controller.stdout.columns).toBe(80);
     expect(controller.stdout.rows).toBe(24);
     expect(resizeListener).toHaveBeenCalledTimes(1);
     expect(controller.terminalSize.getSnapshot()).toEqual({ columns: 60, rows: 20 });

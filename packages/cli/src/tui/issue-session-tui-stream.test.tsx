@@ -505,13 +505,21 @@ describe('IssueSessionTuiStream', () => {
     const initialFrame = lastFrame() ?? '';
     const countHistory = (frame: string) =>
       (frame.match(/\[harness\] before staged resize/g) ?? []).length;
-    const inkResizeNotifications: number[] = [];
+    const inkResizeNotifications: Array<{
+      terminalColumns: number;
+      proxyColumns: number;
+    }> = [];
     const inkResizeListener = () => {
-      inkResizeNotifications.push(resizeController.stdout.columns);
+      inkResizeNotifications.push({
+        terminalColumns: terminalSizeStore.getSnapshot().columns,
+        proxyColumns: resizeController.stdout.columns,
+      });
     };
     resizeController.stdout.on('resize', inkResizeListener);
     const unsubscribe = terminalSizeStore.subscribe(() => {
-      expect(resizeController.stdout.columns).toBe(terminalSizeStore.getSnapshot().columns);
+      expect(resizeController.stdout.columns).toBeGreaterThanOrEqual(
+        terminalSizeStore.getSnapshot().columns,
+      );
     });
 
     try {
@@ -534,7 +542,9 @@ describe('IssueSessionTuiStream', () => {
       await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
 
       const finalFrame = lastFrame() ?? '';
-      expect(inkResizeNotifications).toEqual([60]);
+      expect(inkResizeNotifications).toEqual([
+        { terminalColumns: 60, proxyColumns: 120 },
+      ]);
       expect(finalFrame).not.toBe(initialFrame);
       expect(countHistory(finalFrame)).toBe(1);
       expect(Math.max(...finalFrame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(60);
@@ -542,6 +552,65 @@ describe('IssueSessionTuiStream', () => {
       expect(finalFrame).toContain('operator>');
     } finally {
       unsubscribe();
+      resizeController.dispose();
+    }
+  });
+
+  it('applies a stream width increase after a pending shrink through the normal path', async () => {
+    vi.useFakeTimers();
+    const source = new ResizeSource();
+    source.columns = 120;
+    source.rows = 32;
+    const resizeController = createTuiResizeController(
+      source as unknown as NodeJS.WriteStream,
+    );
+    const terminalSizeStore = resizeController.terminalSize;
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        terminalSizeStore={terminalSizeStore}
+        onSubmit={() => {}}
+      />,
+    );
+    const resizeNotifications: Array<{
+      terminalColumns: number;
+      proxyColumns: number;
+    }> = [];
+    resizeController.stdout.on('resize', () => {
+      resizeNotifications.push({
+        terminalColumns: terminalSizeStore.getSnapshot().columns,
+        proxyColumns: resizeController.stdout.columns,
+      });
+    });
+
+    try {
+      source.columns = 60;
+      source.rows = 32;
+      source.emit('resize');
+      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
+      const shrunkFrame = lastFrame() ?? '';
+      const shrunkWidth = Math.max(
+        ...shrunkFrame.split('\n').map((line) => line.trimEnd().length),
+      );
+
+      source.columns = 120;
+      source.rows = 32;
+      source.emit('resize');
+      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+      const grownFrame = lastFrame() ?? '';
+      const grownWidth = Math.max(
+        ...grownFrame.split('\n').map((line) => line.trimEnd().length),
+      );
+
+      expect(terminalSizeStore.getSnapshot().columns).toBe(120);
+      expect(resizeNotifications).toEqual([
+        { terminalColumns: 60, proxyColumns: 120 },
+        { terminalColumns: 120, proxyColumns: 120 },
+      ]);
+      expect(grownFrame).not.toBe(shrunkFrame);
+      expect(grownWidth).toBeGreaterThan(shrunkWidth);
+    } finally {
       resizeController.dispose();
     }
   });

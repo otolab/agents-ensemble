@@ -19,7 +19,7 @@
 | `ink` | `7.1.1` |
 | `react` | `19.2.0` |
 | `ink-testing-library` | `4.0.0` |
-| resize settle | `100ms` (`TUI_RESIZE_SETTLE_MS`); columns shrink coalesce `250ms` after the last shrink event (`TUI_RESIZE_SHRINK_COALESCE_MS`) |
+| resize settle | `100ms` (`TUI_RESIZE_SETTLE_MS`); columns shrink coalesce `250ms` after the last shrink event (`TUI_RESIZE_SHRINK_COALESCE_MS`). TUI uses the settled physical columns; Ink's stdout proxy keeps a shrink-time columns high-water mark and raises it on grow. |
 
 ## 実行コマンド
 
@@ -44,7 +44,7 @@ pnpm --filter @agents-ensemble/cli test:run
 
 | テスト | 確認する契約 | 合格条件 |
 |--------|--------------|----------|
-| [`tui-terminal-size.test.ts`](../packages/cli/src/tui/tui-terminal-size.test.ts) | 通常の resize は 100ms の settle、columns の連続縮小は最後の縮小イベントから 250ms の quiet-period にまとめる。`createTuiResizeController` 経由で Ink の resize 通知と TUI の frame が同じ settled size を使う | 通常の変更は 100ms 後に 1 回、縮小中の中間幅は通知されず、最後の縮小イベントから 250ms 後に最終幅で 1 回だけ通知される。実 Ink frame の resize 後出力に pane の主要な枠・入力行があり、`ESC[2J` / `ESC[3J` が出力されない |
+| [`tui-terminal-size.test.ts`](../packages/cli/src/tui/tui-terminal-size.test.ts) | 通常の resize は 100ms の settle、columns の連続縮小は最後の縮小イベントから 250ms の quiet-period にまとめる。`createTuiResizeController` 経由で TUI は settled 実幅を使い、Ink は columns / rows の high-water mark proxy を使う | 通常の変更は 100ms 後に 1 回、縮小中の中間幅は通知されず、最後の縮小イベントから 250ms 後に最終実幅で 1 回だけ通知される。縮小時の Ink proxy columns は high-water mark を下回らず、拡大時は更新される。実 Ink frame の resize 後出力に pane の主要な枠・入力行があり、`ESC[2J` / `ESC[3J` が出力されない |
 | [`issue-session-tui.test.tsx`](../packages/cli/src/tui/issue-session-tui.test.tsx) | pane layout の短い端末への resize。60×12 では Ink に渡す live frame を 11 行として、各 pane の frame を保つ | 60×12 resize 後に 11 行、各行の幅が 60 以下、Workers / Orchestration / Operator input の上下枠と title が揃い、`operator>` が表示される |
 | [`issue-session-tui-stream.test.tsx`](../packages/cli/src/tui/issue-session-tui-stream.test.tsx) | stream の既存 `<Static>` activity history と resize 後の live frame の分離 | resize 後も resize 前の Static 行が 1 回だけ残り、再 replay / duplicate されず、live frame の行幅が変更後の端末幅以下になる |
 

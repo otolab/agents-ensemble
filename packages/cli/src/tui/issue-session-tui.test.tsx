@@ -761,13 +761,21 @@ describe('IssueSessionTui', () => {
       />,
     );
     const initialFrame = lastFrame() ?? '';
-    const inkResizeNotifications: number[] = [];
+    const inkResizeNotifications: Array<{
+      terminalColumns: number;
+      proxyColumns: number;
+    }> = [];
     const inkResizeListener = () => {
-      inkResizeNotifications.push(resizeController.stdout.columns);
+      inkResizeNotifications.push({
+        terminalColumns: terminalSizeStore.getSnapshot().columns,
+        proxyColumns: resizeController.stdout.columns,
+      });
     };
     resizeController.stdout.on('resize', inkResizeListener);
     const unsubscribe = terminalSizeStore.subscribe(() => {
-      expect(resizeController.stdout.columns).toBe(terminalSizeStore.getSnapshot().columns);
+      expect(resizeController.stdout.columns).toBeGreaterThanOrEqual(
+        terminalSizeStore.getSnapshot().columns,
+      );
     });
 
     try {
@@ -787,7 +795,9 @@ describe('IssueSessionTui', () => {
       await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
 
       const finalFrame = lastFrame() ?? '';
-      expect(inkResizeNotifications).toEqual([60]);
+      expect(inkResizeNotifications).toEqual([
+        { terminalColumns: 60, proxyColumns: 120 },
+      ]);
       expect(finalFrame).not.toBe(initialFrame);
       expect(Math.max(...finalFrame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(60);
       expect(finalFrame).toContain(WORKER_PANE_TITLE);
