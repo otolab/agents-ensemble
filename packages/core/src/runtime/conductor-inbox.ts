@@ -12,7 +12,20 @@ interface PermissionWaiter {
 export class ConductorInbox {
   private readonly listeners = new Set<InboxListener>();
   private readonly permissionWaiters = new Map<string, PermissionWaiter>();
+  private readonly permissionIdleResolvers = new Set<() => void>();
   private notifyChain: Promise<void> = Promise.resolve();
+
+  /** ACP permission requests that are waiting for a decision or dispatch. */
+  get pendingPermissionCount(): number {
+    return this.permissionWaiters.size;
+  }
+
+  async waitForPermissionsIdle(): Promise<void> {
+    if (this.permissionWaiters.size === 0) return;
+    await new Promise<void>((resolve) => {
+      this.permissionIdleResolvers.add(resolve);
+    });
+  }
 
   subscribe(listener: InboxListener): () => void {
     this.listeners.add(listener);
@@ -42,6 +55,7 @@ export class ConductorInbox {
     const waiter = this.permissionWaiters.get(id);
     if (!waiter) return;
     this.permissionWaiters.delete(id);
+    this.resolvePermissionIdleWaiters();
     waiter.resolve(decision);
   }
 
@@ -49,6 +63,7 @@ export class ConductorInbox {
     const waiter = this.permissionWaiters.get(id);
     if (!waiter) return;
     this.permissionWaiters.delete(id);
+    this.resolvePermissionIdleWaiters();
     waiter.reject(error);
   }
 
@@ -83,5 +98,13 @@ export class ConductorInbox {
 
   async drain(): Promise<void> {
     await this.notifyChain;
+  }
+
+  private resolvePermissionIdleWaiters(): void {
+    if (this.permissionWaiters.size > 0) return;
+    for (const resolve of this.permissionIdleResolvers) {
+      resolve();
+    }
+    this.permissionIdleResolvers.clear();
   }
 }

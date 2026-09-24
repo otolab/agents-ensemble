@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
+import type { AcpBridge } from '../acp/acp-bridge.js';
+import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import type {
@@ -984,6 +986,281 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockClose).toHaveBeenCalled();
   });
 
+  it('rejects permissions that arrive after teardown starts', async () => {
+    const pipeline = new PermissionPipeline({});
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    let workerPermissionHandler: PermissionHandler | undefined;
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+
+    const activePrompt = createDeferred<{ stopReason: string }>();
+    const activePromptStarted = vi.fn();
+    const lifecycle: string[] = [];
+    const cancelSession = vi.fn(() => {
+      lifecycle.push('cancel');
+      activePrompt.resolve({ stopReason: 'cancelled' });
+    });
+    const workerClose = vi.fn().mockImplementation(async () => {
+      lifecycle.push('close');
+    });
+    const promptSession = vi.fn(
+      async (
+        _sessionId: string,
+        prompt: string,
+        promptOptions?: { permissionHandler?: PermissionHandler },
+      ) => {
+        workerPermissionHandler = promptOptions?.permissionHandler;
+        if (prompt === 'active teardown prompt') {
+          activePromptStarted();
+          return activePrompt.promise;
+        }
+        return { stopReason: 'end_turn' };
+      },
+    );
+    const connectAcp = vi.fn(async () =>
+      ({
+        newSession: vi.fn().mockResolvedValue('worker-session'),
+        loadSession: vi.fn().mockResolvedValue(undefined),
+        promptSession,
+        cancelSession,
+        close: workerClose,
+      }) as unknown as AcpBridge,
+    );
+
+    const monitorStopStarted = vi.fn();
+    let releaseMonitorStop!: () => void;
+    const monitorStop = new Promise<void>((resolve) => {
+      releaseMonitorStop = resolve;
+    });
+    mockCreateGitHubMonitor.mockImplementation(() => ({
+      start: vi.fn(),
+      stop: vi.fn().mockImplementation(async () => {
+        monitorStopStarted();
+        await conductorTools!.prompt_worker!.execute({
+          worker: 'implementer',
+          instruction: 'active teardown prompt',
+        });
+        await monitorStop;
+      }),
+      flush: vi.fn(),
+      getCursor: vi.fn().mockReturnValue({
+        lastIssueCommentId: undefined,
+        pullRequests: {},
+      }),
+    }));
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        acp: {
+          preset: 'custom',
+          command: process.execPath,
+        },
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'main',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      connectAcp,
+      permissionPipeline: pipeline,
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    await vi.waitFor(() => expect(monitorStopStarted).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(activePromptStarted).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(workerPermissionHandler).toBeDefined());
+
+    const lateDecision = workerPermissionHandler!({
+      sessionId: 'worker-session',
+      toolName: 'Shell',
+      command: 'tmux kill-session -t issue1',
+    });
+    await expect(lateDecision).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'deny' },
+    });
+
+    releaseMonitorStop();
+    const result = await sessionPromise;
+
+    expect(result.stopReason).toBe('completed');
+    expect(workerClose).toHaveBeenCalledOnce();
+    expect(cancelSession).toHaveBeenCalledOnce();
+    expect(lifecycle.indexOf('cancel')).toBeGreaterThanOrEqual(0);
+    expect(lifecycle.indexOf('close')).toBeGreaterThanOrEqual(0);
+    expect(lifecycle.indexOf('cancel')).toBeLessThan(lifecycle.indexOf('close'));
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes('permission.rejected reason=teardown'),
+      ),
+    ).toBe(true);
+  });
+
+  it('dispatches a worker permission that arrives immediately after a permission-only turn', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+
+    let workerPermissionHandler: PermissionHandler | undefined;
+    const promptSession = vi.fn(
+      async (
+        _sessionId: string,
+        _prompt: string,
+        promptOptions?: { permissionHandler?: PermissionHandler },
+      ) => {
+        workerPermissionHandler = promptOptions?.permissionHandler;
+        return { stopReason: 'end_turn' };
+      },
+    );
+    const connectAcp = vi.fn(async () =>
+      ({
+        newSession: vi.fn().mockResolvedValue('worker-session'),
+        loadSession: vi.fn().mockResolvedValue(undefined),
+        promptSession,
+        cancelSession: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      }) as unknown as AcpBridge,
+    );
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const permissionIds: string[] = [];
+    const permissionDecisions: Array<Promise<PermissionDecision>> = [];
+    const requestPermission = () => {
+      const decision = workerPermissionHandler!({
+        sessionId: 'worker-session',
+        toolName: 'Shell',
+        command: 'tmux kill-session -t issue320-static',
+      });
+      permissionDecisions.push(Promise.resolve(decision));
+    };
+    const onPostLoopWait = vi.fn(requestPermission);
+
+    sessionLogger.subscribe((event) => {
+      if (event.type === 'permission.pending') {
+        permissionIds.push(event.permission.id);
+      }
+    });
+
+    let sendCount = 0;
+    let permissionSendCount = 0;
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (sendCount > 1 && message.includes('permission.pending')) {
+        const permissionIndex = permissionSendCount;
+        permissionSendCount += 1;
+        expect(permissionIds[permissionIndex]).toBeDefined();
+        await conductorTools!.resolve_permission!.execute({
+          requestId: permissionIds[permissionIndex],
+          decision: permissionIndex === 0 ? 'allow' : 'deny',
+        });
+        await permissionDecisions[permissionIndex];
+
+        if (permissionIndex === 0) {
+          // The worker can request the next permission before this conductor
+          // turn has returned, so the stop gate must observe its waiter.
+          requestPermission();
+        } else {
+          operatorApi!.submit('/exit');
+        }
+      }
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'permission handled',
+      };
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        acp: {
+          preset: 'custom',
+          command: process.execPath,
+        },
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'main',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      connectAcp,
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      disableGitHubMonitor: true,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    const result = await sessionPromise;
+
+    expect(result.stopReason).toBe('completed');
+    expect(permissionSendCount).toBe(2);
+    expect(onPostLoopWait).toHaveBeenCalledOnce();
+    expect(permissionIds).toHaveLength(2);
+    expect(permissionDecisions).toHaveLength(2);
+    await expect(permissionDecisions[0]).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'allow-once' },
+    });
+    await expect(permissionDecisions[1]).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'deny' },
+    });
+    const postLoopWaitIndex = emitted.findIndex(
+      (event) => event.type === 'session.post_loop_wait',
+    );
+    const stopIndex = emitted.findIndex(
+      (event) => event.type === 'session.stop',
+    );
+    expect(postLoopWaitIndex).toBeGreaterThanOrEqual(0);
+    expect(stopIndex).toBeGreaterThan(postLoopWaitIndex);
+  });
+
   it('waits for /exit after autonomous loop when waitForOperatorExit is true', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-1',
@@ -991,6 +1268,12 @@ describe('runConductorSession resume / shutdown', () => {
       result: 'done',
     });
 
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
     let operatorApi: OperatorInputBindingApi | undefined;
     const onPostLoopWait = vi.fn();
 
@@ -1002,6 +1285,7 @@ describe('runConductorSession resume / shutdown', () => {
       permissionPipeline: new PermissionPipeline({}),
       registerProcessSignalHandlers: false,
       waitForOperatorExit: true,
+      sessionLogger,
       onPostLoopWait,
       bindOperatorInput: (api) => {
         operatorApi = api;
@@ -1010,6 +1294,10 @@ describe('runConductorSession resume / shutdown', () => {
 
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
     expect(mockClose).not.toHaveBeenCalled();
+    expect(emitted.map((event) => event.type)).toContain(
+      'session.post_loop_wait',
+    );
+    expect(emitted.map((event) => event.type)).not.toContain('session.stop');
 
     operatorApi!.submit('/exit');
     const result = await sessionPromise;
@@ -1017,6 +1305,14 @@ describe('runConductorSession resume / shutdown', () => {
     expect(result.stopReason).toBe('completed');
     expect(mockSend).toHaveBeenCalledOnce();
     expect(mockClose).toHaveBeenCalled();
+    const postLoopWaitIndex = emitted.findIndex(
+      (event) => event.type === 'session.post_loop_wait',
+    );
+    const stopIndex = emitted.findIndex(
+      (event) => event.type === 'session.stop',
+    );
+    expect(postLoopWaitIndex).toBeGreaterThanOrEqual(0);
+    expect(stopIndex).toBeGreaterThan(postLoopWaitIndex);
   });
 
   it('resumes autonomous loop when operator sends input during post-loop wait', async () => {
