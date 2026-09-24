@@ -152,6 +152,53 @@ describe('activity-log', () => {
     ]);
   });
 
+  it('traverses nested lists and table cells in activity entries', () => {
+    const lines = buildActivityLogDisplayLines(
+      [
+        {
+          label: 'conductor',
+          text:
+            '- **bold** and `code` [link](https://example.com/root)\n' +
+            '  1. **nested** with **`deep`** [child](https://example.com/child)\n' +
+            '     - **deepest**\n\n' +
+            '| **Name** | Value |\n| --- | --- |\n| `foo` | [bar](https://example.com/bar) |',
+        },
+      ],
+      120,
+    );
+    const segments = lines.flatMap((line) => line.segments);
+
+    expect(segments).toEqual(
+      expect.arrayContaining([
+        { text: 'bold', bold: true },
+        { text: 'code', code: true },
+        { text: 'link', href: 'https://example.com/root' },
+        { text: 'nested', bold: true },
+        { text: 'deep', bold: true, code: true },
+        { text: 'child', href: 'https://example.com/child' },
+        { text: 'deepest', bold: true },
+        { text: 'Name', bold: true },
+        { text: 'foo', code: true },
+        { text: 'bar', href: 'https://example.com/bar' },
+      ]),
+    );
+  });
+
+  it('keeps link style on every wrapped link fragment', () => {
+    const lines = buildActivityLogDisplayLines(
+      [{ label: 'conductor', text: '- [linked text](https://example.com/link)' }],
+      6,
+    );
+    const linkSegments = lines
+      .flatMap((line) => line.segments)
+      .filter((segment) => segment.text.length > 0 && segment.href);
+
+    expect(linkSegments.length).toBeGreaterThan(1);
+    expect(linkSegments.every((segment) => segment.href === 'https://example.com/link')).toBe(
+      true,
+    );
+  });
+
   it('slices display lines with bottom pinning', () => {
     const lines = buildActivityLogDisplayLines(
       [

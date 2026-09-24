@@ -1,11 +1,12 @@
 import chalk from 'chalk';
-import { Lexer, type Token } from 'marked';
+import { Lexer, type Token, type Tokens } from 'marked';
 
 /** TUI と端末出力で共有する inline Markdown の表示単位。 */
 export interface InlineMarkdownSegment {
   text: string;
   bold?: boolean;
   code?: boolean;
+  href?: string;
 }
 
 export type InlineMarkdownLine = InlineMarkdownSegment[];
@@ -13,6 +14,7 @@ export type InlineMarkdownLine = InlineMarkdownSegment[];
 interface InlineMarkdownStyle {
   bold: boolean;
   code: boolean;
+  href?: string;
 }
 
 const PLAIN_STYLE: InlineMarkdownStyle = { bold: false, code: false };
@@ -30,7 +32,8 @@ function appendSegment(
   if (
     previous &&
     Boolean(previous.bold) === style.bold &&
-    Boolean(previous.code) === style.code
+    Boolean(previous.code) === style.code &&
+    previous.href === style.href
   ) {
     previous.text += text;
     return;
@@ -40,7 +43,41 @@ function appendSegment(
     text,
     ...(style.bold ? { bold: true } : {}),
     ...(style.code ? { code: true } : {}),
+    ...(style.href !== undefined ? { href: style.href } : {}),
   });
+}
+
+function isSupportedInlineLink(token: Token): boolean {
+  if (token.type !== 'link') {
+    return false;
+  }
+
+  // Keep reference links, autolinks, and bare GFM URLs literal. The Phase 2
+  // subset only supports the explicit `[text](url)` form.
+  return /^\[[\s\S]*\]\s*\(/.test(token.raw);
+}
+
+function appendToken(
+  token: Token,
+  style: InlineMarkdownStyle,
+  segments: InlineMarkdownSegment[],
+  source?: string,
+): void {
+  if (
+    token.type === 'list' ||
+    token.type === 'list_item' ||
+    token.type === 'table'
+  ) {
+    appendBlockToken(token, segments, source);
+    return;
+  }
+
+  if ((token.type === 'paragraph' || token.type === 'text') && token.tokens) {
+    appendSourceWithTokens(source ?? token.raw, token.tokens, style, segments);
+    return;
+  }
+
+  appendInlineToken(token, style, segments);
 }
 
 function appendTokens(
@@ -49,56 +86,212 @@ function appendTokens(
   segments: InlineMarkdownSegment[],
 ): void {
   for (const token of tokens) {
-    switch (token.type) {
-      case 'strong':
-        if (token.tokens) {
-          appendTokens(token.tokens, { ...style, bold: true }, segments);
-        } else {
-          appendSegment(segments, token.text, { ...style, bold: true });
-        }
-        break;
-      case 'codespan':
-        appendSegment(segments, token.text, { ...style, code: true });
-        break;
-      case 'escape':
-        appendSegment(segments, token.text, style);
-        break;
-      case 'text':
-        if (token.tokens) {
-          appendTokens(token.tokens, style, segments);
-        } else {
-          appendSegment(segments, token.text, style);
-        }
-        break;
-      default:
-        // Phase 1 only styles strong and codespan. Preserve every other
-        // token verbatim so unsupported Markdown remains backward compatible.
+    appendToken(token, style, segments);
+  }
+}
+
+function appendInlineToken(
+  token: Token,
+  style: InlineMarkdownStyle,
+  segments: InlineMarkdownSegment[],
+): void {
+  switch (token.type) {
+    case 'strong':
+      if (token.tokens) {
+        appendTokens(token.tokens, { ...style, bold: true }, segments);
+      } else {
+        appendSegment(segments, token.text, { ...style, bold: true });
+      }
+      break;
+    case 'codespan':
+      appendSegment(segments, token.text, { ...style, code: true });
+      break;
+    case 'escape':
+      appendSegment(segments, token.text, style);
+      break;
+    case 'link':
+      if (!isSupportedInlineLink(token)) {
         appendSegment(segments, token.raw, style);
         break;
+      }
+      if (token.tokens) {
+        appendTokens(token.tokens, { ...style, href: token.href }, segments);
+      } else {
+        appendSegment(segments, token.text, { ...style, href: token.href });
+      }
+      break;
+    case 'text':
+      if (token.tokens) {
+        appendSourceWithTokens(token.raw, token.tokens, style, segments);
+      } else {
+        appendSegment(segments, token.raw, style);
+      }
+      break;
+    default:
+      // Unsupported inline syntax remains verbatim for backward compatibility.
+      appendSegment(segments, token.raw, style);
+      break;
+  }
+}
+
+/**
+ * Append child tokens while preserving the source text between them.
+ *
+ * Block token children (notably list items) omit their parent's indentation,
+ * and text tokens omit the newline that follows their inline children. Finding
+ * each child raw value in order preserves both kinds of structural text while
+ * still allowing the child token to be traversed recursively.
+ */
+interface SourceRange {
+  start: number;
+  end: number;
+}
+
+function findSourceRange(source: string, raw: string, from: number): SourceRange | undefined {
+  const exactStart = source.indexOf(raw, from);
+  if (exactStart >= 0) {
+    return { start: exactStart, end: exactStart + raw.length };
+  }
+
+  // marked removes the common indentation from nested list token raw values.
+  // Match each token line at the corresponding source line while retaining the
+  // source's original indentation in the range passed to the recursive walk.
+  const rawLines = raw.split('\n');
+  const firstLine = rawLines[0]?.trimStart() ?? '';
+  if (!firstLine) {
+    return undefined;
+  }
+
+  let firstStart = source.indexOf(firstLine, from);
+  while (firstStart >= 0) {
+    const lineStart = source.lastIndexOf('\n', firstStart - 1) + 1;
+    if (/^[ \t]*$/.test(source.slice(lineStart, firstStart))) {
+      break;
+    }
+    firstStart = source.indexOf(firstLine, firstStart + 1);
+  }
+  if (firstStart < 0) {
+    return undefined;
+  }
+
+  let end = firstStart + firstLine.length;
+  for (const rawLine of rawLines.slice(1)) {
+    const lineStart = source.indexOf('\n', end);
+    if (lineStart < 0) {
+      return undefined;
+    }
+
+    const nextLineStart = lineStart + 1;
+    const nextLineEnd = source.indexOf('\n', nextLineStart);
+    const lineEnd = nextLineEnd >= 0 ? nextLineEnd : source.length;
+    const line = source.slice(nextLineStart, lineEnd);
+    const content = line.trimStart();
+    const expected = rawLine.trimStart();
+
+    if (expected && !content.startsWith(expected)) {
+      return undefined;
+    }
+
+    if (expected) {
+      end = nextLineStart + (line.length - content.length) + expected.length;
+    } else {
+      end = nextLineEnd >= 0 ? nextLineEnd + 1 : source.length;
     }
   }
+
+  return { start: firstStart, end };
+}
+
+function appendSourceWithTokens(
+  source: string,
+  tokens: Token[],
+  style: InlineMarkdownStyle,
+  segments: InlineMarkdownSegment[],
+): void {
+  let cursor = 0;
+  for (const token of tokens) {
+    const childRange = findSourceRange(source, token.raw, cursor);
+    if (!childRange) {
+      // marked may normalize a token in a malformed construct. Preserve the
+      // complete source rather than duplicating or inventing text.
+      appendSegment(segments, source.slice(cursor), style);
+      return;
+    }
+
+    appendSegment(segments, source.slice(cursor, childRange.start), style);
+    appendToken(token, style, segments, source.slice(childRange.start, childRange.end));
+    cursor = childRange.end;
+  }
+  appendSegment(segments, source.slice(cursor), style);
+}
+
+function appendTableToken(
+  token: Tokens.Table,
+  segments: InlineMarkdownSegment[],
+): void {
+  let cursor = 0;
+  const cells = [
+    ...token.header,
+    ...token.rows.flat(),
+  ];
+
+  for (const cell of cells) {
+    if (!cell.text) {
+      continue;
+    }
+
+    const cellStart = token.raw.indexOf(cell.text, cursor);
+    if (cellStart < 0) {
+      appendSegment(segments, token.raw.slice(cursor), PLAIN_STYLE);
+      return;
+    }
+
+    appendSegment(segments, token.raw.slice(cursor, cellStart), PLAIN_STYLE);
+    appendSourceWithTokens(cell.text, cell.tokens, PLAIN_STYLE, segments);
+    cursor = cellStart + cell.text.length;
+  }
+
+  appendSegment(segments, token.raw.slice(cursor), PLAIN_STYLE);
 }
 
 function appendBlockToken(
   token: Token,
   segments: InlineMarkdownSegment[],
+  source: string = token.raw,
 ): void {
-  if ((token.type === 'paragraph' || token.type === 'text') && token.tokens) {
-    appendTokens(token.tokens, PLAIN_STYLE, segments);
+  if (token.type === 'table') {
+    appendTableToken(token as Tokens.Table, segments);
+    return;
+  }
 
-    // Paragraph tokens omit a trailing newline from their inline children,
-    // while the raw token still contains it. Keep that layout whitespace.
-    const consumedRawLength = token.tokens.reduce(
-      (length, child) => length + child.raw.length,
-      0,
+  if (token.type === 'list') {
+    appendSourceWithTokens(
+      source,
+      (token as Tokens.List).items,
+      PLAIN_STYLE,
+      segments,
     );
-    appendSegment(segments, token.raw.slice(consumedRawLength), PLAIN_STYLE);
+    return;
+  }
+
+  if (token.type === 'list_item') {
+    appendSourceWithTokens(
+      source,
+      (token as Tokens.ListItem).tokens,
+      PLAIN_STYLE,
+      segments,
+    );
+    return;
+  }
+
+  if ((token.type === 'paragraph' || token.type === 'text') && token.tokens) {
+    appendSourceWithTokens(source, token.tokens, PLAIN_STYLE, segments);
     return;
   }
 
   // Block-level constructs (for example fenced code) are outside the
   // Phase 1 subset and must remain exactly as they were received.
-  appendSegment(segments, token.raw, PLAIN_STYLE);
+  appendSegment(segments, source, PLAIN_STYLE);
 }
 
 function containsHtmlToken(tokens: Token[]): boolean {
@@ -109,6 +302,18 @@ function containsHtmlToken(tokens: Token[]): boolean {
     if ('tokens' in token && token.tokens && containsHtmlToken(token.tokens)) {
       return true;
     }
+    if (token.type === 'list') {
+      if ((token as Tokens.List).items.some((item) => containsHtmlToken(item.tokens))) {
+        return true;
+      }
+    }
+    if (token.type === 'table') {
+      const table = token as Tokens.Table;
+      const cells = [...table.header, ...table.rows.flat()];
+      if (cells.some((cell) => containsHtmlToken(cell.tokens))) {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -117,7 +322,8 @@ function containsHtmlToken(tokens: Token[]): boolean {
  * Inline Markdown を表示用 segment 列へ変換する。
  *
  * marked の block / inline lexer を利用するため、エスケープと inline token のネストを
- * regex 置換で再実装せずに扱える。Phase 1 外の構文は raw 表記を保持する。
+ * regex 置換で再実装せずに扱える。対応ブロック内の構造も子 token を再帰走査し、
+ * Phase 2 外の構文は raw 表記を保持する。
  */
 export function parseInlineMarkdown(text: string): InlineMarkdownSegment[] {
   if (!text) {

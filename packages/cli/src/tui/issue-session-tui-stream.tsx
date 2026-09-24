@@ -76,16 +76,22 @@ function useStreamActivityLogWidth(columns: number): number {
 function StaticActivityLog({
   activityLog,
   contentWidth,
+  issueLinkMode,
 }: {
   activityLog: ActivityLogEntry[];
   contentWidth: number;
+  issueLinkMode: IssueLinkMode;
 }) {
   return (
     <Static<ActivityLogEntry> items={activityLog}>
       {(entry, index) => (
         <Box key={`activity-log-${index}`} flexDirection="column">
           {buildActivityLogDisplayLines([entry], contentWidth).map((line, lineIndex) => (
-            <ActivityLogDisplayLineRow key={`activity-line-${index}-${lineIndex}`} line={line} />
+            <ActivityLogDisplayLineRow
+              key={`activity-line-${index}-${lineIndex}`}
+              line={line}
+              issueLinkMode={issueLinkMode}
+            />
           ))}
         </Box>
       )}
@@ -278,6 +284,7 @@ export function IssueSessionTuiStream({
       <StaticActivityLog
         activityLog={snapshot.activityLog.slice(0, committedActivityCount)}
         contentWidth={activityLogContentWidth}
+        issueLinkMode={issueLinkMode}
       />
       <Box
         flexDirection="column"
@@ -290,6 +297,7 @@ export function IssueSessionTuiStream({
           <OpenQuestionsPane
             layout={streamOpenQuestionsLayout}
             terminalColumns={terminalColumns}
+            issueLinkMode={issueLinkMode}
           />
         ) : null}
         <TitledBorderPane

@@ -984,6 +984,65 @@ describe('IssueSessionTui', () => {
     expect(frame).not.toContain('`');
   });
 
+  it('renders nested Markdown links in pane activity and open questions', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [
+        createOpenQuestion({
+          id: 'inq-link',
+          question:
+            '- **choose** [this](https://example.com/question)\n' +
+            '  - **`deep`**',
+          context: 'Use [docs](https://example.com/context).',
+        }),
+      ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.appendActivityLog(
+      'conductor',
+      '- **bold** [activity](https://example.com/activity)\n  - `nested`',
+    );
+
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        issueLinkMode="osc8"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    const visibleFrame = frame.replace(/\u001b\]8;;[^\u0007]*\u0007/g, '');
+    expect(visibleFrame).toContain('[conductor]');
+    expect(visibleFrame).toContain('- bold activity');
+    expect(visibleFrame).toContain('▸ inq-link [text] - choose this');
+    expect(visibleFrame).toContain('    Use docs.');
+    expect(frame).toContain('\u001b]8;;https://example.com/activity\u0007');
+    expect(frame).toContain('\u001b]8;;https://example.com/question\u0007');
+    expect(frame).toContain('\u001b]8;;https://example.com/context\u0007');
+    expect(frame).not.toContain('**');
+    expect(frame).not.toContain('`');
+  });
+
+  it('keeps inline link text visible without OSC 8 in URL fallback mode', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('conductor', 'Read [docs](https://example.com/docs).');
+
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        issueLinkMode="url"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Read docs.');
+    expect(frame).not.toContain('\u001b]8;;https://example.com/docs\u0007');
+  });
+
   it('embeds pane titles on top borders without inner title rows', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({

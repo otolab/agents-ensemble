@@ -62,6 +62,18 @@ describe('wrapInlineMarkdownToWidth', () => {
     ]);
   });
 
+  it('keeps the href on every fragment of a wrapped link', () => {
+    expect(
+      wrapInlineMarkdownToWidth(
+        [{ text: 'long link', href: 'https://example.com/link' }],
+        4,
+      ),
+    ).toEqual([
+      [{ text: 'long', href: 'https://example.com/link' }],
+      [{ text: 'link', href: 'https://example.com/link' }],
+    ]);
+  });
+
   it('uses string-width for CJK text with style changes', () => {
     expect(
       wrapInlineMarkdownToWidth(parseInlineMarkdown('あい**うえ**'), 4),
