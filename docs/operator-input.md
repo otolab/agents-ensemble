@@ -109,7 +109,7 @@ post-loop 待機中はモード B の prompt を `追加指示を入力するか
 
 scrollback を実行中に上へ移動しているときに新着ログが追記されると、端末依存で表示が末尾へ戻ることがあります。端末幅を変更しても、既に Static として追記された行は再折り返しされません。
 
-TTY の pane / stream は、Ink の resize 通知を 100ms の settle window にまとめ、同じ terminal size snapshot から幅・高さ・live frame と IME cursor の座標を再計算します。resize 時に端末全体を clear したり、stream の Static activity log を remount/replay したりはしません。pane は Ink の fullscreen clear 分岐を避けるため live frame の末尾 1 行を安全余白として予約し、最終サイズで再レイアウトします。固定ペインの余剰行は短い端末で先に縮め、Orchestration はタイトル上枠と下枠を保てる最小 2 行まで compact します。これにより 60×12（live frame 11 行）への resize でも、no-question モードは各ペインのタイトル・上下枠と Operator input 行を維持します。さらに短い端末ではログ・Worker 状態・open question 本文がクリップされることがあり、全ペインの本文表示は保証しません。stream は既追記 Static 行をそのまま残して下部 live frame だけを更新します。そのため、既追記行の再折り返しと scrollback 閲覧中の末尾復帰は引き続き非対応です。
+TTY の pane / stream は、Ink の resize 通知を通常 100ms の settle window にまとめ、columns の連続した縮小では 250ms の coalesce window が終わるまで中間幅の live frame 更新を保留します。同じ terminal size snapshot から幅・高さ・live frame と IME cursor の座標を再計算します。resize 時に端末全体を clear したり、stream の Static activity log を remount/replay したりはしません。pane は Ink の fullscreen clear 分岐を避けるため live frame の末尾 1 行を安全余白として予約し、最終サイズで再レイアウトします。固定ペインの余剰行は短い端末で先に縮め、Orchestration はタイトル上枠と下枠を保てる最小 2 行まで compact します。これにより 60×12（live frame 11 行）への resize でも、no-question モードは各ペインのタイトル・上下枠と Operator input 行を維持します。さらに短い端末ではログ・Worker 状態・open question 本文がクリップされることがあり、全ペインの本文表示は保証しません。stream は既追記 Static 行をそのまま残して下部 live frame だけを更新します。そのため、既追記行の再折り返しと scrollback 閲覧中の末尾復帰は引き続き非対応です。
 
 この resize workaround の意図、Ink upstream との関係、撤去条件は [ADR 0022](adr/0022-tui-resize-workaround.md) に、Ink / React 更新時の回帰確認は [Ink / React アップグレード回帰手順](tui-ink-upgrade.md) に記載します。
 

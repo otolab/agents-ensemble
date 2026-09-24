@@ -2,6 +2,13 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
 
 export const TUI_RESIZE_SETTLE_MS = 100;
 
+/**
+ * iTerm2 + tmux can emit separate SIGWINCH events while a pane is being
+ * dragged. Keep width decreases pending for longer than the normal settle
+ * window so those intermediate widths do not trigger a live-frame redraw.
+ */
+export const TUI_RESIZE_SHRINK_COALESCE_MS = 250;
+
 export interface TuiTerminalSize {
   readonly columns: number;
   readonly rows: number;
@@ -39,9 +46,12 @@ export function createTuiTerminalSizeStore(
   stdout: TuiResizeSource = process.stdout,
   settleMs: number = TUI_RESIZE_SETTLE_MS,
   onSettled?: (size: TuiTerminalSize) => void,
+  shrinkCoalesceMs: number = TUI_RESIZE_SHRINK_COALESCE_MS,
 ): TuiTerminalSizeStore {
   let snapshot = readTuiTerminalSize(stdout);
+  let observedSize = snapshot;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  let settleMode: 'normal' | 'shrink' = 'normal';
   let disposed = false;
   const subscribers = new Set<() => void>();
 
@@ -67,10 +77,30 @@ export function createTuiTerminalSizeStore(
     if (disposed) {
       return;
     }
+
+    const next = readTuiTerminalSize(stdout);
+    const columnsIncreased = next.columns > observedSize.columns;
+    const rowsChanged = next.rows !== observedSize.rows;
+    const continuingShrink =
+      settleMode === 'shrink' &&
+      next.columns === observedSize.columns &&
+      next.rows === snapshot.rows &&
+      next.columns < snapshot.columns;
+    const columnsDecreased =
+      !rowsChanged &&
+      !columnsIncreased &&
+      (next.columns < observedSize.columns || continuingShrink);
+
+    observedSize = next;
+    settleMode = columnsDecreased ? 'shrink' : 'normal';
+
     if (settleTimer !== undefined) {
       clearTimeout(settleTimer);
     }
-    settleTimer = setTimeout(settleResize, Math.max(0, settleMs));
+    settleTimer = setTimeout(
+      settleResize,
+      Math.max(0, columnsDecreased ? Math.max(settleMs, shrinkCoalesceMs) : settleMs),
+    );
   };
 
   stdout.on('resize', onResize);

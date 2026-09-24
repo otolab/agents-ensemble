@@ -56,6 +56,18 @@
 4. **該当セルだけを更新する。** 手順と結果が揃ったセルを ✅ にし、未実施のセルは ⬜ のまま残す。既知制限に該当した場合は ⚠️ とし、#319〜#321 または新しい修正 Issue へリンクする。確認日と環境差分が重要な場合はセルの注記か Issue / PR に残す。
 5. **再実行のタイミングを記録する。** TUI の変更後、リリース前、または TUI の resize / IME / scrollback に関する regression が報告されたときに、同じ Test plan を再実行する。結果は Issue / PR に記録し、この表の状態と参照先を同時に更新する。
 
+## #340 iTerm2 + tmux の段階的縮小確認手順
+
+この手順は #340 の shrink coalesce（columns 縮小時の中間 live frame 更新抑制）を実端末で確認するためのものです。実施前は iTerm2 の pane / stream の resize と scrollback のセルを ⬜ のままにし、確認後に実施した環境・サイズ・結果を Issue または PR に記録してから該当セルだけを更新します。
+
+1. **環境を記録する。** macOS の iTerm2 で tmux セッションを開始し、iTerm2 / tmux / CLI のバージョン、`TERM`、対象 layout（`pane` または `stream`）を記録する。pane と stream は別々に実行する。
+2. **resize 前の scrollback を作る。** TUI の live frame より前に識別できる活動ログを複数出し、scrollback に残った代表行を 1 回だけ確認できる状態にする。alternate screen を使わず、native scrollback が有効であることを確認する。
+3. **幅を段階的に縮小する。** おおむね `120×32 → 110×32 → 100×32 → 90×32 → 80×32 → 70×32 → 60×32` の順で iTerm2 のウィンドウ幅を縮小する。連続ステップの間隔は 250ms 未満を目安にし、各ステップで pane / stream の live frame が中間幅ごとに上方向へ流れないことを観察する。最終幅に到達した後は 250ms 以上待つ。
+4. **高さ変更と拡大を分けて確認する。** `60×32 → 60×12` の高さ変更、`60×12 → 120×32` の幅拡大を個別に行い、live frame の枠・タイトル・入力欄が再配置されることを確認する。
+5. **scrollback を確認する。** resize 前の代表行が重複せず、broken frame / ghost line がなく、端末全体を消去する `ESC[2J` / `ESC[3J` 相当の結果がないことを確認する。確認結果（成功・失敗・未確認項目）を Issue / PR に記録する。
+
+TTY からはドラッグ終了イベントを取得できないため、250ms より長い停止を挟んだ後の縮小は別の coalesce 窓として扱われます。停止を含む操作でも問題が出た場合は、停止時間と幅の系列を記録し、新しい修正 Issue が必要か conductor に返します。
+
 ## 参照
 
 - [Issue #298 フォロー整理](https://github.com/otolab/agents-ensemble/issues/298#issuecomment-5806087165) — B+C+D、未検証環境、既知制限

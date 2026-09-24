@@ -15,7 +15,7 @@ Issue #298 の B+C+D 方針では、pane / stream の live frame だけを resiz
 
 `createTuiResizeController` の settle + high-water mark stdout proxy を維持し、Ink の upstream version bump では [Ink / React アップグレード回帰手順](../tui-ink-upgrade.md)を必須の回帰ゲートとする。
 
-- **settle:** `stdout.resize` の burst を `TUI_RESIZE_SETTLE_MS = 100` ms にまとめる。settled snapshot を TUI の layout / frame と Ink の resize listener で共有し、Ink が旧幅の frame を直列化しないようにする。
+- **settle:** 幅拡大または rows 変更を含む `stdout.resize` は `TUI_RESIZE_SETTLE_MS = 100` ms にまとめる。columns の連続した減少は `TUI_RESIZE_SHRINK_COALESCE_MS = 250` ms の専用窓で保留し、窓の間に届いた中間幅を TUI の snapshot / Ink の resize listener へ公開せず、最後の幅で 1 回だけ live frame を再配置する。settled snapshot は TUI の layout / frame と Ink の resize listener で共有し、Ink が旧幅の frame を直列化しないようにする。
 - **proxy:** TUI は settled snapshot の実際の `columns` / `rows` を使う。Ink に見せる `columns` は settled width、`rows` は resize 後も過去最大値を保つ high-water mark とし、縮小した瞬間に Ink の fullscreen-clear fallback が scrollback を消す判定へ入ることを避ける。
 - **出力:** resize 時に端末全体を clear しない。stream の `<Static>` activity history は remount / replay / re-emit せず、下部の live frame だけを更新する。
 - **監視:** `tui-terminal-size.test.ts`、`issue-session-tui.test.tsx`、`issue-session-tui-stream.test.tsx` を Ink / React / `ink-testing-library` 更新時の自動ゲートとする。clear sequence の不出力、controller 経由の frame 整合、pane 60×12、stream history 非重複を確認する。
@@ -25,12 +25,13 @@ Issue #298 の B+C+D 方針では、pane / stream の live frame だけを resiz
 ### 良い点
 
 - resize burst の途中で Ink と TUI が異なるサイズを使うことを避け、live frame の再配置を settled size に揃えられる。
+- 縮小中の中間幅を公開しないため、iTerm2 + tmux の段階的な SIGWINCH で live frame を幅ごとに再描画する回数を抑えられる。
 - 端末全体の clear と Static history の replay を避け、native scrollback を保つ。
 - upstream の仕様変更を、既存の clear / frame-integrity テストで早期に検知できる。
 
 ### 制約・リスク
 
-- 100 ms の settle により、resize 中の表示更新は遅延する。
+- 通常の resize は 100 ms、columns 縮小の最終表示は最大 250 ms の coalesce により遅延する。TTY にはドラッグ終了イベントがないため、250 ms より長く停止してから再び縮小した場合は別の縮小窓として扱われる。
 - Ink に渡す `rows` は縮小後も過去最大値のため、TUI の実サイズと Ink の viewport 値は意図的に異なる。proxy の `stdout` event / property 契約は Ink の実装変更に敏感である。
 - stream の既追記 Static 行は端末幅変更時に再折り返しされない。極端に短い端末では本文が clip されることがある。
 

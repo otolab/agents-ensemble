@@ -11,7 +11,7 @@ import { createTuiViewModel } from './tui-view-model.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import {
   createTuiTerminalSizeStore,
-  TUI_RESIZE_SETTLE_MS,
+  TUI_RESIZE_SHRINK_COALESCE_MS,
 } from './tui-terminal-size.js';
 
 class ResizeSource extends EventEmitter {
@@ -474,7 +474,7 @@ describe('IssueSessionTuiStream', () => {
     source.columns = 40;
     source.rows = 12;
     source.emit('resize');
-    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
 
     const frame = lastFrame() ?? '';
     expect(countHistory(frame)).toBe(1);

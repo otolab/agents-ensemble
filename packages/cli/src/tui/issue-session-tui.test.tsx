@@ -36,7 +36,7 @@ import {
 import type { OpenQuestion } from '@agents-ensemble/core';
 import {
   createTuiTerminalSizeStore,
-  TUI_RESIZE_SETTLE_MS,
+  TUI_RESIZE_SHRINK_COALESCE_MS,
 } from './tui-terminal-size.js';
 
 class ResizeSource extends EventEmitter {
@@ -731,7 +731,7 @@ describe('IssueSessionTui', () => {
     source.columns = 40;
     source.rows = 12;
     source.emit('resize');
-    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
 
     const frame = lastFrame() ?? '';
     expect(frame.split('\n')).toHaveLength(11);
@@ -762,7 +762,7 @@ describe('IssueSessionTui', () => {
       source.columns = 60;
       source.rows = 12;
       source.emit('resize');
-      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
 
       const frame = lastFrame() ?? '';
       const lines = frame.split('\n');
