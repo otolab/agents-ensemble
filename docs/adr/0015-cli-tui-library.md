@@ -175,6 +175,8 @@ Open questions の有無で Operator input を `withQuestions` / `noQuestions` �
 
 この追記は #298 の採用方針と #318 の実装・確認範囲を要約するものであり、ADR 0015 の元の Decision を変更しない。端末ごとの確認状況、未確認の実端末、Static 再折り返し・scrollback 閲覧中の末尾復帰・短い端末での clip は [TUI 端末互換性マトリクス](../tui-terminal-compatibility.md) と [operator-input.md](../operator-input.md) を参照する。
 
+settle と high-water mark proxy の技術的な意図・制約・撤去条件は [ADR 0022](0022-tui-resize-workaround.md) に分離して記録する。
+
 ## 関連
 
 - Issue #54, #89, #104, #108

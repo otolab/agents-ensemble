@@ -57,6 +57,7 @@
 |------|------|
 | [development.md](development.md) | ローカル開発・テスト・worktree・ブランチ運用の注意 |
 | [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e の分類と実行方針 |
+| [tui-ink-upgrade.md](tui-ink-upgrade.md) | Ink / React / `ink-testing-library` 更新時の TUI resize 回帰ゲート |
 | [modular-prompt.md](modular-prompt.md) | modular-prompt のセクション分担と実装との一致 |
 | [../AGENTS.md](../AGENTS.md) | エージェント向け索引 |
 
