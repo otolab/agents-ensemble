@@ -14,6 +14,7 @@
 | 設定全体・環境変数・解決順 | [settings.md](settings.md) | CLI / env / config / profile / TUI の対応表 |
 | `config.yaml` の書き方・MCP | [config.md](config.md) | `.ensemble/config.yaml` と `mcp.json` のスキーマ |
 | TUI とオペレータ入力の利用者向け挙動 | [operator-input.md](operator-input.md) | キー実装の調査・方針は [cli-text-input-keybindings.md](cli-text-input-keybindings.md) |
+| TUI scrollback の検出設計・端末制約 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | native viewport 検出、tmux adapter、A+B の設計境界 |
 | 認証トークンの解決 | [settings.md](settings.md) | `config.yaml` の認証関連キーは [config.md](config.md) |
 | conductor send の再接続設計 | [conductor-auth-reconnect.md](conductor-auth-reconnect.md) | 認証設定そのものの正本ではない |
 | 現行の技術構成 | [architecture.md](architecture.md) | 判断の履歴は ADR |
@@ -29,6 +30,7 @@
 | [settings.md](settings.md) | CLI / 環境変数 / config / profile / TUI の設定一覧と解決順（設定全体の正本） |
 | [config.md](config.md) | `.ensemble/config.yaml` の配置・書き方・スキーマ・MCP 設定（config の正本） |
 | [operator-input.md](operator-input.md) | TUI のレイアウト、オペレータ入力、post-loop の利用者向け契約 |
+| [tui-scrollback-detection.md](tui-scrollback-detection.md) | scrollback 閲覧検出の設計・端末別 C 可否・副作用 |
 | [cli-text-input-keybindings.md](cli-text-input-keybindings.md) | TUI 入力ショートカットの実装階層・対応状況（参照） |
 | [user-teams.md](user-teams.md) | `~/.ensemble/teams/` の user team profile の配置・解決順 |
 | [conductor-auth-reconnect.md](conductor-auth-reconnect.md) | conductor send の認証エラー時の in-process 再接続（設計正本） |
