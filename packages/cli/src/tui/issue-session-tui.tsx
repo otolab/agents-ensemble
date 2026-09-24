@@ -16,6 +16,7 @@ import {
   ACTIVITY_LOG_LABEL_COLORS,
   advanceActivityLogScrollOffset,
   buildActivityLogDisplayLines,
+  preserveActivityLogScrollOffset,
   sliceActivityLogDisplayLines,
   type ActivityLogDisplayLine,
   type ActivityLogEntry,
@@ -360,6 +361,8 @@ export function IssueSessionTui({
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
+  const previousActivityLogRef = useRef(snapshot.activityLog);
+  const previousDisplayLineCountRef = useRef(0);
   const terminalSize = useTuiTerminalSize(terminalSizeStore);
   const { columns: terminalColumns, rows: terminalRows } = terminalSize;
   // Keep one row outside the live frame. Ink clears the whole terminal when
@@ -438,8 +441,24 @@ export function IssueSessionTui({
   }, []);
 
   useEffect(() => {
-    setLinesFromBottom((current) => Math.min(current, maxLinesFromBottom));
-  }, [maxLinesFromBottom]);
+    const previousActivityLog = previousActivityLogRef.current;
+    const previousDisplayLineCount = previousDisplayLineCountRef.current;
+    const activityLogAppended = snapshot.activityLog !== previousActivityLog;
+    previousActivityLogRef.current = snapshot.activityLog;
+    previousDisplayLineCountRef.current = displayLineCount;
+
+    setLinesFromBottom((current) => {
+      if (!activityLogAppended) {
+        return Math.min(Math.max(0, current), maxLinesFromBottom);
+      }
+      return preserveActivityLogScrollOffset(
+        current,
+        previousDisplayLineCount,
+        displayLineCount,
+        maxLinesFromBottom,
+      );
+    });
+  }, [displayLineCount, maxLinesFromBottom, snapshot.activityLog]);
 
   useEffect(() => {
     setSelectedQuestionIndex((current) =>

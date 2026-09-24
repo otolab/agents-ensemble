@@ -45,6 +45,11 @@ import {
   useTuiTerminalSize,
   type TuiTerminalSizeStore,
 } from './tui-terminal-size.js';
+import {
+  createStreamScrollbackState,
+  reduceStreamScrollback,
+  type StreamScrollbackEvent,
+} from './stream-scrollback.js';
 
 export interface IssueSessionTuiStreamProps {
   viewModel: TuiViewModel;
@@ -52,6 +57,8 @@ export interface IssueSessionTuiStreamProps {
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
   terminalSizeStore?: TuiTerminalSizeStore;
+  /** Optional event injection point for a future terminal scrollback adapter. */
+  scrollbackEvent?: StreamScrollbackEvent;
 }
 
 function useStreamContentWidth(columns: number): number {
@@ -92,6 +99,7 @@ export function IssueSessionTuiStream({
   issueUrl,
   issueLinkMode = 'osc8',
   terminalSizeStore,
+  scrollbackEvent,
 }: IssueSessionTuiStreamProps) {
   const snapshot = useSyncExternalStore(
     viewModel.subscribe,
@@ -101,6 +109,9 @@ export function IssueSessionTuiStream({
   const [inputValue, setInputValue] = useState('');
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
+  const [scrollbackState, setScrollbackState] = useState(() =>
+    createStreamScrollbackState(snapshot.activityLog.length),
+  );
   const terminalSize = useTuiTerminalSize(terminalSizeStore);
   const { columns: terminalColumns, rows: terminalRows } = terminalSize;
   const contentWidth = useStreamContentWidth(terminalColumns);
@@ -131,7 +142,22 @@ export function IssueSessionTuiStream({
     postLoopWaiting: snapshot.postLoopWaiting,
     shuttingDown: snapshot.shuttingDown,
   });
-  const contextHintLines = operatorInputDisplay.hintLines;
+  const committedActivityCount = Math.min(
+    scrollbackState.detached
+      ? scrollbackState.committedActivityCount
+      : snapshot.activityLog.length,
+    snapshot.activityLog.length,
+  );
+  const pendingActivityCount = scrollbackState.detached
+    ? Math.max(0, snapshot.activityLog.length - committedActivityCount)
+    : 0;
+  const scrollbackHint =
+    pendingActivityCount > 0
+      ? `${pendingActivityCount} 件の新着 · End で最新へ`
+      : undefined;
+  const contextHintLines = scrollbackHint
+    ? [scrollbackHint, ...operatorInputDisplay.hintLines]
+    : operatorInputDisplay.hintLines;
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const hintLineCount = contextHintLines.reduce(
     (lineCount, line) => lineCount + wrapTextToWidth(line, contentWidth).length,
@@ -176,22 +202,54 @@ export function IssueSessionTuiStream({
     );
   }, [openQuestions]);
 
+  useEffect(() => {
+    if (!scrollbackEvent) {
+      return;
+    }
+
+    // The prop is an edge-triggered event. A future adapter should replace it
+    // when it observes another viewport transition.
+    setScrollbackState((current) =>
+      reduceStreamScrollback(current, scrollbackEvent, snapshot.activityLog.length),
+    );
+  }, [scrollbackEvent]);
+
+  const dispatchScrollbackEvent = (event: StreamScrollbackEvent) => {
+    setScrollbackState((current) =>
+      reduceStreamScrollback(current, event, snapshot.activityLog.length),
+    );
+  };
+
   useInput((_input, key) => {
-    if (openQuestions.length === 0 || !key.shift) {
+    if (openQuestions.length > 0 && key.shift) {
+      if (key.upArrow) {
+        setSelectedQuestionIndex((current) =>
+          advanceOpenQuestionSelection(current, 'up', openQuestions.length),
+        );
+        return;
+      }
+
+      if (key.downArrow) {
+        setSelectedQuestionIndex((current) =>
+          advanceOpenQuestionSelection(current, 'down', openQuestions.length),
+        );
+        return;
+      }
+    }
+
+    const scrollWithModifier = key.ctrl;
+    const scrollWithoutModifier = inputValue.length === 0;
+    if (!scrollWithModifier && !scrollWithoutModifier) {
       return;
     }
 
-    if (key.upArrow) {
-      setSelectedQuestionIndex((current) =>
-        advanceOpenQuestionSelection(current, 'up', openQuestions.length),
-      );
+    if (key.pageUp) {
+      dispatchScrollbackEvent({ type: 'detached', source: 'keyboard' });
       return;
     }
 
-    if (key.downArrow) {
-      setSelectedQuestionIndex((current) =>
-        advanceOpenQuestionSelection(current, 'down', openQuestions.length),
-      );
+    if (key.end) {
+      dispatchScrollbackEvent({ type: 'follow', source: 'keyboard' });
     }
   });
 
@@ -218,7 +276,7 @@ export function IssueSessionTuiStream({
   return (
     <>
       <StaticActivityLog
-        activityLog={snapshot.activityLog}
+        activityLog={snapshot.activityLog.slice(0, committedActivityCount)}
         contentWidth={activityLogContentWidth}
       />
       <Box
