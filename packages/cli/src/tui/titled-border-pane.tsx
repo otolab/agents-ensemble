@@ -20,6 +20,7 @@ export interface TitledBorderPaneProps {
   borderStyle: TuiBorderStyle;
   borderColor?: BoxProps['borderColor'];
   height: number;
+  terminalColumns?: number;
   paddingX?: number;
   titleBold?: boolean;
   children: ReactNode;
@@ -53,11 +54,12 @@ export function TitledBorderPane({
   borderStyle,
   borderColor,
   height,
+  terminalColumns,
   paddingX = 1,
   titleBold = true,
   children,
 }: TitledBorderPaneProps) {
-  const totalWidth = process.stdout.columns ?? 80;
+  const totalWidth = terminalColumns ?? process.stdout.columns ?? 80;
   const titleRightText =
     titleRightIssueUrl && titleRightLinkMode === 'url'
       ? formatIssueReference(titleRightIssueUrl, 'url')

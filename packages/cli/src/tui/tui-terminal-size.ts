@@ -1,0 +1,225 @@
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
+
+export const TUI_RESIZE_SETTLE_MS = 100;
+
+export interface TuiTerminalSize {
+  readonly columns: number;
+  readonly rows: number;
+}
+
+export interface TuiTerminalSizeStore {
+  getSnapshot: () => TuiTerminalSize;
+  subscribe: (listener: () => void) => () => void;
+  dispose: () => void;
+}
+
+type TuiResizeSource = Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>;
+type ResizeListener = () => void;
+
+function resolveDimension(value: number | undefined, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
+}
+
+export function readTuiTerminalSize(
+  stdout: Pick<NodeJS.WriteStream, 'columns' | 'rows'>,
+): TuiTerminalSize {
+  return {
+    columns: resolveDimension(stdout.columns, 80),
+    rows: resolveDimension(stdout.rows, 24),
+  };
+}
+
+function sameSize(left: TuiTerminalSize, right: TuiTerminalSize): boolean {
+  return left.columns === right.columns && left.rows === right.rows;
+}
+
+export function createTuiTerminalSizeStore(
+  stdout: TuiResizeSource = process.stdout,
+  settleMs: number = TUI_RESIZE_SETTLE_MS,
+  onSettled?: (size: TuiTerminalSize) => void,
+): TuiTerminalSizeStore {
+  let snapshot = readTuiTerminalSize(stdout);
+  let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  let disposed = false;
+  const subscribers = new Set<() => void>();
+
+  const settleResize = () => {
+    settleTimer = undefined;
+    if (disposed) {
+      return;
+    }
+
+    const next = readTuiTerminalSize(stdout);
+    if (sameSize(snapshot, next)) {
+      return;
+    }
+
+    snapshot = next;
+    for (const subscriber of [...subscribers]) {
+      subscriber();
+    }
+    onSettled?.(snapshot);
+  };
+
+  const onResize = () => {
+    if (disposed) {
+      return;
+    }
+    if (settleTimer !== undefined) {
+      clearTimeout(settleTimer);
+    }
+    settleTimer = setTimeout(settleResize, Math.max(0, settleMs));
+  };
+
+  stdout.on('resize', onResize);
+
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      if (disposed) {
+        return () => {};
+      }
+      subscribers.add(listener);
+      return () => {
+        subscribers.delete(listener);
+      };
+    },
+    dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      stdout.off('resize', onResize);
+      if (settleTimer !== undefined) {
+        clearTimeout(settleTimer);
+        settleTimer = undefined;
+      }
+      subscribers.clear();
+    },
+  };
+}
+
+export interface TuiResizeController {
+  readonly stdout: NodeJS.WriteStream;
+  readonly terminalSize: TuiTerminalSizeStore;
+  dispose: () => void;
+}
+
+/**
+ * Ink listens to stdout.resize independently of React. Delay that notification
+ * until the same settled snapshot used by the TUI has been rendered, so Ink
+ * does not serialize an old-width frame between SIGWINCH bursts.
+ *
+ * Ink 7 decides whether to emit clearTerminal by comparing the previous frame
+ * height with the current viewport. On a terminal shrink, that comparison can
+ * classify the old frame as fullscreen even when it did not fill the old
+ * viewport. Keep Ink's private viewport row value at a high-water mark while
+ * the TUI uses the actual settled rows from terminalSize; this prevents the
+ * renderer's fullscreen-clear fallback from erasing scrollback on shrink.
+ */
+export function createTuiResizeController(
+  stdout: NodeJS.WriteStream = process.stdout,
+  settleMs: number = TUI_RESIZE_SETTLE_MS,
+): TuiResizeController {
+  const resizeListeners = new Set<ResizeListener>();
+  let disposed = false;
+  let inkViewportRows = readTuiTerminalSize(stdout).rows;
+
+  const terminalSize = createTuiTerminalSizeStore(stdout, settleMs, (size) => {
+    if (disposed) {
+      return;
+    }
+    inkViewportRows = Math.max(inkViewportRows, size.rows);
+    queueMicrotask(() => {
+      if (disposed) {
+        return;
+      }
+      for (const listener of [...resizeListeners]) {
+        listener();
+      }
+    });
+  });
+
+  const resizeAwareStdout = new Proxy(stdout, {
+    get(target, property, receiver) {
+      if (property === 'columns' || property === 'rows') {
+        return property === 'rows'
+          ? inkViewportRows
+          : terminalSize.getSnapshot().columns;
+      }
+
+      if (property === 'on' || property === 'addListener') {
+        return (event: string, listener: ResizeListener) => {
+          if (event === 'resize') {
+            resizeListeners.add(listener);
+            return resizeAwareStdout;
+          }
+          const method = Reflect.get(target, property, target) as (
+            eventName: string,
+            eventListener: ResizeListener,
+          ) => unknown;
+          return method.call(target, event, listener);
+        };
+      }
+
+      if (property === 'off' || property === 'removeListener') {
+        return (event: string, listener: ResizeListener) => {
+          if (event === 'resize') {
+            resizeListeners.delete(listener);
+            return resizeAwareStdout;
+          }
+          const method = Reflect.get(target, property, target) as (
+            eventName: string,
+            eventListener: ResizeListener,
+          ) => unknown;
+          return method.call(target, event, listener);
+        };
+      }
+
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as NodeJS.WriteStream;
+
+  const controller: TuiResizeController = {
+    stdout: resizeAwareStdout,
+    terminalSize,
+    dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      terminalSize.dispose();
+      resizeListeners.clear();
+    },
+  };
+
+  return controller;
+}
+
+export function useTuiTerminalSize(
+  externalStore?: TuiTerminalSizeStore,
+): TuiTerminalSize {
+  const ownedStore = useMemo(
+    () => (externalStore ? undefined : createTuiTerminalSizeStore()),
+    [externalStore],
+  );
+  const store = externalStore ?? ownedStore;
+
+  useEffect(() => {
+    if (!ownedStore) {
+      return;
+    }
+    return () => {
+      ownedStore.dispose();
+    };
+  }, [ownedStore]);
+
+  if (!store) {
+    throw new Error('TUI terminal size store is unavailable');
+  }
+
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
+}

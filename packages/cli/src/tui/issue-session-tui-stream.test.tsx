@@ -2,12 +2,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./operator-text-area.js', () => import('./operator-text-area.test-double.js'));
 
+import { EventEmitter } from 'node:events';
 import React from 'react';
 import { cleanup, render } from 'ink-testing-library';
 import type { OpenQuestion } from '@agents-ensemble/core';
 import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
+import {
+  createTuiTerminalSizeStore,
+  TUI_RESIZE_SETTLE_MS,
+} from './tui-terminal-size.js';
+
+class ResizeSource extends EventEmitter {
+  columns = 80;
+  rows = 24;
+}
 
 function createOpenQuestion(
   overrides: Partial<OpenQuestion> & Pick<OpenQuestion, 'id' | 'question'>,
@@ -38,6 +48,7 @@ describe('IssueSessionTuiStream', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -437,6 +448,38 @@ describe('IssueSessionTuiStream', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('[harness] first');
     expect(frame).toContain('[observation] second');
+  });
+
+  it('settles the live frame without replaying stream Static history', async () => {
+    vi.useFakeTimers();
+    const source = new ResizeSource();
+    const terminalSizeStore = createTuiTerminalSizeStore(
+      source as unknown as Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+    );
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('harness', 'before resize');
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        terminalSizeStore={terminalSizeStore}
+        onSubmit={() => {}}
+      />,
+    );
+
+    const countHistory = (frame: string) =>
+      (frame.match(/\[harness\] before resize/g) ?? []).length;
+    expect(countHistory(lastFrame() ?? '')).toBe(1);
+
+    source.columns = 40;
+    source.rows = 12;
+    source.emit('resize');
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+
+    const frame = lastFrame() ?? '';
+    expect(countHistory(frame)).toBe(1);
+    expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(40);
+    terminalSizeStore.dispose();
   });
 
   it('submits input for the selected open question', async () => {

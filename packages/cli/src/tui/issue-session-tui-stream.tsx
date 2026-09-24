@@ -41,24 +41,29 @@ import { buildActivityLogDisplayLines, type ActivityLogEntry } from './activity-
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 import { resolveStreamPaneHeights } from './stream-layout.js';
 import { TitledBorderPane } from './titled-border-pane.js';
+import {
+  useTuiTerminalSize,
+  type TuiTerminalSizeStore,
+} from './tui-terminal-size.js';
 
 export interface IssueSessionTuiStreamProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string, options?: OperatorInputSubmitOptions) => void;
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
+  terminalSizeStore?: TuiTerminalSizeStore;
 }
 
-function useStreamContentWidth(): number {
+function useStreamContentWidth(columns: number): number {
   return getPaneContentWidth({
-    columns: process.stdout.columns ?? 80,
+    columns,
     paddingX: PANE_PADDING_X,
     borderWidth: ROUND_BORDER_WIDTH,
   });
 }
 
-function useStreamActivityLogWidth(): number {
-  return Math.max(1, process.stdout.columns ?? 80);
+function useStreamActivityLogWidth(columns: number): number {
+  return Math.max(1, columns);
 }
 
 function StaticActivityLog({
@@ -86,6 +91,7 @@ export function IssueSessionTuiStream({
   onSubmit,
   issueUrl,
   issueLinkMode = 'osc8',
+  terminalSizeStore,
 }: IssueSessionTuiStreamProps) {
   const snapshot = useSyncExternalStore(
     viewModel.subscribe,
@@ -95,9 +101,10 @@ export function IssueSessionTuiStream({
   const [inputValue, setInputValue] = useState('');
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
-  const contentWidth = useStreamContentWidth();
-  const activityLogContentWidth = useStreamActivityLogWidth();
-  const terminalRows = process.stdout.rows ?? 24;
+  const terminalSize = useTuiTerminalSize(terminalSizeStore);
+  const { columns: terminalColumns, rows: terminalRows } = terminalSize;
+  const contentWidth = useStreamContentWidth(terminalColumns);
+  const activityLogContentWidth = useStreamActivityLogWidth(terminalColumns);
   const operatorPrompt = 'operator> ';
   const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
   const openQuestions = getTuiOpenQuestions(snapshot);
@@ -216,13 +223,16 @@ export function IssueSessionTuiStream({
       />
       <Box
         flexDirection="column"
-        width={process.stdout.columns ?? 80}
+        width={terminalColumns}
         height={streamPaneHeights.dynamicFrameHeight}
         overflowX="visible"
         overflowY="hidden"
       >
         {operatorInputDisplay.mode === 'withQuestions' ? (
-          <OpenQuestionsPane layout={streamOpenQuestionsLayout} />
+          <OpenQuestionsPane
+            layout={streamOpenQuestionsLayout}
+            terminalColumns={terminalColumns}
+          />
         ) : null}
         <TitledBorderPane
           title={INPUT_PANE_TITLE}
@@ -230,6 +240,7 @@ export function IssueSessionTuiStream({
           borderColor={INPUT_PANE_BORDER_COLOR}
           paddingX={PANE_PADDING_X}
           height={streamPaneHeights.inputPaneHeight}
+          terminalColumns={terminalColumns}
         >
           {contextHintLines.map((line, index) => (
             <WrappedTextLines
@@ -255,6 +266,7 @@ export function IssueSessionTuiStream({
           workers={snapshot.displayState.workers}
           dispatchHold={snapshot.displayState.dispatchHold}
           height={streamPaneHeights.workerPaneHeight}
+          terminalColumns={terminalColumns}
           issueUrl={issueUrl}
           issueLinkMode={issueLinkMode}
         />

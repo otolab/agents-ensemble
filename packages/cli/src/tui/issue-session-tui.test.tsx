@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./operator-text-area.js', () => import('./operator-text-area.test-double.js'));
 
 import React from 'react';
+import { EventEmitter } from 'node:events';
 import { cleanup, render } from 'ink-testing-library';
 import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
@@ -14,21 +15,34 @@ import { resolveOpenQuestionsPaneLayout } from './open-questions-pane.js';
 import {
   computeActivityLogLineCapacity,
   computeActivityPaneHeight,
+  computeInputPaneHeight,
   computeOrchestrationLogVisibleLineCount,
   computeOperatorInputCursorX,
   computeOperatorInputLineIndex,
 } from './compute-operator-input-cursor-y.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
+import { resolvePaneHeights } from './pane-layout.js';
 import {
   INPUT_PANE_TITLE,
   MAIN_PANE_TITLE,
   OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+  OPERATOR_INPUT_POST_LOOP_HINT,
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
+  WORKER_PANE_HEIGHT,
   WORKER_PANE_TITLE,
 } from './tui-layout-constants.js';
 import type { OpenQuestion } from '@agents-ensemble/core';
+import {
+  createTuiTerminalSizeStore,
+  TUI_RESIZE_SETTLE_MS,
+} from './tui-terminal-size.js';
+
+class ResizeSource extends EventEmitter {
+  columns = 80;
+  rows = 24;
+}
 
 function findOperatorInputLine(lines: string[]): { lineIndex: number; inputStartX: number } {
   const operatorLineIndices = lines
@@ -48,6 +62,21 @@ function expectNoContentOnBorderLines(frame: string): void {
       expect(line).not.toMatch(/operator>/);
     }
   }
+}
+
+function expectCompleteTitledPaneFrame(frame: string, title: string): void {
+  const lines = frame.split('\n');
+  const topBorderIndex = lines.findIndex(
+    (line) =>
+      (line.startsWith('╭') || line.startsWith('┌')) && line.includes(title),
+  );
+  expect(topBorderIndex).toBeGreaterThanOrEqual(0);
+
+  const bottomBorderIndex = lines.findIndex(
+    (line, index) =>
+      index > topBorderIndex && (line.startsWith('╰') || line.startsWith('└')),
+  );
+  expect(bottomBorderIndex).toBeGreaterThan(topBorderIndex);
 }
 
 function fillScrollableHarnessLog(viewModel: ReturnType<typeof createTuiViewModel>, count = 30): void {
@@ -103,6 +132,7 @@ describe('IssueSessionTui', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -494,6 +524,7 @@ describe('IssueSessionTui', () => {
 
   it('aligns IME cursor coordinates with the rendered operator input line', () => {
     const terminalRows = 24;
+    const liveFrameRows = terminalRows - 1;
     const terminalColumns = 80;
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,
@@ -521,7 +552,7 @@ describe('IssueSessionTui', () => {
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
     const openQuestionsPaneHeight = 0;
     const expectedInputLineIndex = computeOperatorInputLineIndex({
-      terminalRows,
+      terminalRows: liveFrameRows,
       hintLineCount,
       openQuestionsPaneHeight,
     });
@@ -538,11 +569,12 @@ describe('IssueSessionTui', () => {
     expect(inputStartX).toBe(expectedCursorX);
     expect(lineIndex).toBe(expectedInputLineIndex);
     expect(expectedCursorY).toBe(lineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET);
-    expect(lines).toHaveLength(terminalRows);
+    expect(lines).toHaveLength(liveFrameRows);
   });
 
   it('aligns IME cursor coordinates when context hint wraps on a narrow terminal', () => {
     const terminalRows = 24;
+    const liveFrameRows = terminalRows - 1;
     const terminalColumns = 40;
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,
@@ -570,7 +602,7 @@ describe('IssueSessionTui', () => {
     const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
     const openQuestionsPaneHeight = 0;
     const expectedInputLineIndex = computeOperatorInputLineIndex({
-      terminalRows,
+      terminalRows: liveFrameRows,
       hintLineCount,
       openQuestionsPaneHeight,
     });
@@ -588,7 +620,7 @@ describe('IssueSessionTui', () => {
     expect(inputStartX).toBe(expectedCursorX);
     expect(lineIndex).toBe(expectedInputLineIndex);
     expect(expectedCursorY).toBe(lineIndex + OPERATOR_INPUT_CURSOR_Y_OFFSET);
-    expect(lines).toHaveLength(terminalRows);
+    expect(lines).toHaveLength(liveFrameRows);
   });
 
   it('shows conductor thinking during in-flight send then idle on completion', () => {
@@ -628,6 +660,7 @@ describe('IssueSessionTui', () => {
 
   it('does not bleed activity log text onto pane border lines', () => {
     const terminalRows = 24;
+    const liveFrameRows = terminalRows - 1;
     const terminalColumns = 80;
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,
@@ -675,7 +708,118 @@ describe('IssueSessionTui', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain(WORKER_PANE_TITLE);
     expectNoContentOnBorderLines(frame);
-    expect(frame.split('\n')).toHaveLength(terminalRows);
+    expect(frame.split('\n')).toHaveLength(liveFrameRows);
+  });
+
+  it('recomputes pane dimensions from the settled terminal size snapshot', async () => {
+    vi.useFakeTimers();
+    const source = new ResizeSource();
+    const terminalSizeStore = createTuiTerminalSizeStore(
+      source as unknown as Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+    );
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        terminalSizeStore={terminalSizeStore}
+        onSubmit={() => {}}
+      />,
+    );
+
+    expect((lastFrame() ?? '').split('\n')).toHaveLength(23);
+
+    source.columns = 40;
+    source.rows = 12;
+    source.emit('resize');
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+
+    const frame = lastFrame() ?? '';
+    expect(frame.split('\n')).toHaveLength(11);
+    expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(40);
+    expect(frame).toContain('operator>');
+    terminalSizeStore.dispose();
+  });
+
+  it('keeps every pane frame and the operator input row intact at 60x12 after resize', async () => {
+    vi.useFakeTimers();
+    const source = new ResizeSource();
+    source.columns = 120;
+    source.rows = 32;
+    const terminalSizeStore = createTuiTerminalSizeStore(
+      source as unknown as Pick<NodeJS.WriteStream, 'columns' | 'rows' | 'on' | 'off'>,
+    );
+    const viewModel = createTuiViewModel();
+    viewModel.setPostLoopWaiting(true);
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        terminalSizeStore={terminalSizeStore}
+        onSubmit={() => {}}
+      />,
+    );
+
+    try {
+      source.columns = 60;
+      source.rows = 12;
+      source.emit('resize');
+      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+
+      const frame = lastFrame() ?? '';
+      const lines = frame.split('\n');
+      expect(lines).toHaveLength(11);
+      expect(Math.max(...lines.map((line) => line.trimEnd().length))).toBeLessThanOrEqual(60);
+
+      for (const title of [WORKER_PANE_TITLE, MAIN_PANE_TITLE, INPUT_PANE_TITLE]) {
+        expectCompleteTitledPaneFrame(frame, title);
+        const stats = extractTuiPaneFrameStats(frame, title);
+        expect(stats.titleOnBorder).toBe(true);
+      }
+
+      const contentWidth = getPaneContentWidth({
+        columns: 60,
+        paddingX: PANE_PADDING_X,
+        borderWidth: ROUND_BORDER_WIDTH,
+      });
+      const hintLineCount = wrapTextToWidth(
+        OPERATOR_INPUT_POST_LOOP_HINT,
+        contentWidth,
+      ).length;
+      const requestedInputPaneHeight = computeInputPaneHeight({
+        hintLineCount,
+        inputDisplayLineCount: 1,
+      });
+      const paneHeights = resolvePaneHeights({
+        liveFrameRows: 11,
+        activityPaneHeight: 11 - WORKER_PANE_HEIGHT - requestedInputPaneHeight,
+        openQuestionsPaneHeight: 0,
+        inputPaneHeight: requestedInputPaneHeight,
+      });
+      expect(paneHeights).toEqual({
+        workerPaneHeight: 4,
+        activityPaneHeight: 3,
+        openQuestionsPaneHeight: 0,
+        inputPaneHeight: 4,
+      });
+
+      const inputLine = findOperatorInputLine(lines);
+      expect(inputLine.lineIndex).toBe(
+        computeOperatorInputLineIndex({
+          terminalRows: 11,
+          hintLineCount,
+          inputDisplayLineCount: 1,
+          openQuestionsPaneHeight: 0,
+          workerPaneHeight: paneHeights.workerPaneHeight,
+          activityPaneHeight: paneHeights.activityPaneHeight,
+        }),
+      );
+      expect(inputLine.lineIndex).toBeGreaterThanOrEqual(0);
+      expect(inputLine.lineIndex).toBeLessThan(lines.length);
+      expect(inputLine.inputStartX).toBeGreaterThanOrEqual(0);
+      expect(frame).toContain('Orchestration');
+      expect(frame).toContain('operator>');
+    } finally {
+      terminalSizeStore.dispose();
+    }
   });
 
   it('shows the no-question input mode when no session activity yet', () => {
@@ -874,13 +1018,15 @@ describe('IssueSessionTui', () => {
   });
 
   it('fills orchestration pane when scroll hint is shown on the top border', async () => {
+    const terminalRows = 24;
+    const liveFrameRows = terminalRows - 1;
     Object.defineProperty(process.stdout, 'columns', {
       configurable: true,
       value: 40,
     });
     Object.defineProperty(process.stdout, 'rows', {
       configurable: true,
-      value: 24,
+      value: terminalRows,
     });
 
     const viewModel = createTuiViewModel();
@@ -895,7 +1041,7 @@ describe('IssueSessionTui', () => {
 
     const capacity = computeOrchestrationLogVisibleLineCount(
       computeActivityPaneHeight({
-        terminalRows: 24,
+        terminalRows: liveFrameRows,
         hintLineCount: 2,
         openQuestionsPaneHeight: 0,
       }),
@@ -912,6 +1058,7 @@ describe('IssueSessionTui', () => {
 
   it('fills orchestration pane log rows without unused inner blank lines', () => {
     for (const terminalRows of [24, 40, 50] as const) {
+      const liveFrameRows = terminalRows - 1;
       Object.defineProperty(process.stdout, 'rows', {
         configurable: true,
         value: terminalRows,
@@ -925,7 +1072,7 @@ describe('IssueSessionTui', () => {
       );
 
       const capacity = computeActivityLogLineCapacity({
-        terminalRows,
+        terminalRows: liveFrameRows,
         hintLineCount: 1,
         openQuestionsPaneHeight: 0,
       });
