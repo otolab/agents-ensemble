@@ -117,7 +117,11 @@ describe('runConductorSessionDriver', () => {
       status: 'finished',
       result: 'done',
     });
-    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
     const eventQueue = new SessionEventQueue();
 
     const result = await runConductorSessionDriver({
@@ -312,6 +316,75 @@ describe('runConductorSessionDriver', () => {
     await vi.waitFor(() => expect(onIssueLoopStop).toHaveBeenCalledTimes(2));
     expect(String(send.mock.calls[1]![0])).toContain('## GitHub 更新');
     expect(String(send.mock.calls[1]![0])).toContain('build passed');
+
+    shutdown.abort();
+    const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
+  });
+
+  it('keeps dispatching permission events after a permission-only turn completes', async () => {
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const firstPermission = {
+      type: 'permission.pending' as const,
+      permission: {
+        id: 'permission-first',
+        workerId: 'worker-1',
+        createdAt: 1,
+        request: { toolName: 'Shell', sessionId: 'sess-1' },
+      },
+    };
+    const secondPermission = {
+      type: 'permission.pending' as const,
+      permission: {
+        id: 'permission-second',
+        workerId: 'worker-1',
+        createdAt: 2,
+        request: { toolName: 'Shell', sessionId: 'sess-1' },
+      },
+    };
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      })
+      .mockImplementationOnce(async () => {
+        // The worker can issue its next permission immediately after the
+        // conductor finishes resolving the previous one.
+        await Promise.resolve();
+        eventQueue.enqueue(secondPermission);
+        return {
+          runId: 'run-2',
+          status: 'finished',
+          result: 'permission handled',
+        };
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-3',
+        status: 'finished',
+        result: 'second permission handled',
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    let postLoopStops = 0;
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor, runningCount: 0 }),
+      shutdownSignal: shutdown.signal,
+      continueAfterIssueLoopStop: true,
+      onIssueLoopStop: () => {
+        postLoopStops += 1;
+        if (postLoopStops === 1) {
+          eventQueue.enqueue(firstPermission);
+        }
+      },
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
+    expect(String(send.mock.calls[1]![0])).toContain('permission-first');
+    expect(String(send.mock.calls[2]![0])).toContain('permission-second');
+    expect(postLoopStops).toBeGreaterThanOrEqual(3);
 
     shutdown.abort();
     const result = await driverPromise;
