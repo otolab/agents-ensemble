@@ -64,12 +64,10 @@ function createBindTuiOperatorInput(
 ): OperatorInputBinding {
   return (api: OperatorInputBindingApi) => {
     const operatorMessage = resolveInitialOperatorMessage(initialOperatorMessage);
-    if (operatorMessage) {
-      api.submit(operatorMessage);
-      return () => {};
-    }
-
     if (!process.stdin.isTTY) {
+      if (operatorMessage) {
+        api.submit(operatorMessage);
+      }
       return () => {};
     }
 
@@ -83,12 +81,18 @@ function createBindTuiOperatorInput(
 
     viewModel.setOperatorContext(api.getContext());
 
+    // Dispatch the initial message once, but keep the normal TTY binding alive
+    // so post-loop input (including /exit) still reaches the session.
+    if (operatorMessage) {
+      api.submit(operatorMessage);
+    }
+
     return () => {
-      apiRef.current = undefined;
-      if (onSubmitRef.current) {
+      if (apiRef.current === api) {
+        apiRef.current = undefined;
         onSubmitRef.current = undefined;
+        viewModel.setOperatorContext(undefined);
       }
-      viewModel.setOperatorContext(undefined);
     };
   };
 }

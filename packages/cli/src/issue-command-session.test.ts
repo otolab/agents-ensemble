@@ -25,6 +25,8 @@ const {
   const mockTuiCreate = vi.fn(
     (_issueUrl: string, options?: { initialOperatorMessage?: string }) => ({
       bindOperatorInput: (api: { submit: (message: string) => boolean }) => {
+        // Match the production binding lifecycle: register the API before
+        // dispatching the optional initial message, then keep it until dispose.
         mockTuiOperatorApi.current = api;
         const initialOperatorMessage =
           options?.initialOperatorMessage ??
@@ -32,7 +34,11 @@ const {
         if (initialOperatorMessage) {
           api.submit(initialOperatorMessage);
         }
-        return () => {};
+        return () => {
+          if (mockTuiOperatorApi.current === api) {
+            mockTuiOperatorApi.current = undefined;
+          }
+        };
       },
       displayBackend: { render: vi.fn() },
       telemetrySink: vi.fn(),
@@ -240,6 +246,10 @@ describe('executeIssueCommand with the core session', () => {
     expect(settled).toBe(false);
     expect(mockTuiOperatorApi.current).toBeDefined();
 
+    mockTuiOperatorApi.current!.submit('follow-up from cli');
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(3));
+    expect(mockSend.mock.calls[2]?.[0]).toBe('follow-up from cli');
+
     mockTuiOperatorApi.current!.submit('/exit');
     const result = await withTimeout(sessionPromise, 'TTY CLI-message session');
 
@@ -295,6 +305,10 @@ describe('executeIssueCommand with the core session', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(settled).toBe(false);
     expect(mockTuiOperatorApi.current).toBeDefined();
+
+    mockTuiOperatorApi.current!.submit('follow-up from env');
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(3));
+    expect(mockSend.mock.calls[2]?.[0]).toBe('follow-up from env');
 
     mockTuiOperatorApi.current!.submit('/exit');
     const result = await withTimeout(sessionPromise, 'TTY environment-message session');
