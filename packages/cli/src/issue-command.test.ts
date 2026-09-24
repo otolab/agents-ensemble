@@ -347,7 +347,7 @@ describe('executeIssueCommand initial operator message wiring', () => {
     }
   });
 
-  it('injects the CLI message through the TTY binding once without post-loop wait', async () => {
+  it('injects the CLI message through the TTY binding once and enables post-loop wait', async () => {
     mockTuiHost.createIssueSessionTuiHost.mockClear();
     const submit = vi.fn(() => true);
     const runIssueSession = createFakeConductorRunIssueSession(submit);
@@ -381,18 +381,18 @@ describe('executeIssueCommand initial operator message wiring', () => {
     expect(submit).toHaveBeenCalledWith('from cli');
     expect(runIssueSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        continueOnConductorError: false,
-        stopOnUnansweredInput: true,
+        continueOnConductorError: true,
+        waitForOperatorExit: true,
       }),
     );
     expect(runIssueSession).toHaveBeenCalledWith(
       expect.not.objectContaining({
-        waitForOperatorExit: true,
+        stopOnUnansweredInput: true,
       }),
     );
   });
 
-  it('does not enable post-loop wait for an environment one-shot on a TTY', async () => {
+  it('enables post-loop wait for an environment one-shot on a TTY', async () => {
     const previous = process.env.ENSEMBLE_OPERATOR_MESSAGE;
     process.env.ENSEMBLE_OPERATOR_MESSAGE = 'from env';
     const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
@@ -414,8 +414,14 @@ describe('executeIssueCommand initial operator message wiring', () => {
       });
 
       expect(runIssueSession).toHaveBeenCalledWith(
-        expect.not.objectContaining({
+        expect.objectContaining({
+          continueOnConductorError: true,
           waitForOperatorExit: true,
+        }),
+      );
+      expect(runIssueSession).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          stopOnUnansweredInput: true,
         }),
       );
     } finally {
@@ -425,6 +431,42 @@ describe('executeIssueCommand initial operator message wiring', () => {
         process.env.ENSEMBLE_OPERATOR_MESSAGE = previous;
       }
     }
+  });
+
+  it('keeps explicit --no-wait immediate for a TTY initial message', async () => {
+    const submit = vi.fn(() => true);
+    const runIssueSession = createFakeConductorRunIssueSession(submit);
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand(
+      issueUrl,
+      { ...baseOptions, initialOperatorMessage: 'from cli', noWait: true },
+      {
+        isOperatorInputInteractive: () => true,
+        isOperatorInputTty: () => true,
+        runIssueSession,
+        loadProfile,
+        SessionLogger,
+      },
+    );
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        continueOnConductorError: true,
+      }),
+    );
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        waitForOperatorExit: true,
+        stopOnUnansweredInput: true,
+      }),
+    );
   });
 });
 

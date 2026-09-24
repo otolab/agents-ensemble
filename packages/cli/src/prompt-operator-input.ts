@@ -12,7 +12,7 @@ export function isOperatorInputInteractive(initialOperatorMessage?: string): boo
   return process.stdin.isTTY ?? false;
 }
 
-/** post-loop 待機を有効にできる TTY 入力か（`ENSEMBLE_OPERATOR_MESSAGE` 単発注入は除外）。 */
+/** post-loop 待機を有効にできる TTY 入力か（初回メッセージの有無は問わない）。 */
 export function isOperatorInputTty(): boolean {
   return process.stdin.isTTY ?? false;
 }
