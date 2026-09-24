@@ -1044,6 +1044,10 @@ describe('runConductorSession resume / shutdown', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: {
+        acp: {
+          preset: 'custom',
+          command: process.execPath,
+        },
         workers: [{ name: 'implementer', kind: 'implementer' }],
       },
       workerWorktree: {
