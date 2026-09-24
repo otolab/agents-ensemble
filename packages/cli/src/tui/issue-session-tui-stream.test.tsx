@@ -10,8 +10,10 @@ import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import {
+  createTuiResizeController,
   createTuiTerminalSizeStore,
   TUI_RESIZE_SETTLE_MS,
+  TUI_RESIZE_SHRINK_COALESCE_MS,
 } from './tui-terminal-size.js';
 
 class ResizeSource extends EventEmitter {
@@ -578,12 +580,143 @@ describe('IssueSessionTuiStream', () => {
     source.columns = 40;
     source.rows = 12;
     source.emit('resize');
-    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
 
     const frame = lastFrame() ?? '';
     expect(countHistory(frame)).toBe(1);
     expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(40);
     terminalSizeStore.dispose();
+  });
+
+  it('coalesces staged same-row shrink before redrawing the stream frame', async () => {
+    vi.useFakeTimers();
+    const source = new ResizeSource();
+    source.columns = 120;
+    source.rows = 32;
+    const resizeController = createTuiResizeController(
+      source as unknown as NodeJS.WriteStream,
+    );
+    const terminalSizeStore = resizeController.terminalSize;
+    const viewModel = createTuiViewModel();
+    viewModel.appendActivityLog('harness', 'before staged resize');
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        terminalSizeStore={terminalSizeStore}
+        onSubmit={() => {}}
+      />,
+    );
+    const initialFrame = lastFrame() ?? '';
+    const countHistory = (frame: string) =>
+      (frame.match(/\[harness\] before staged resize/g) ?? []).length;
+    const inkResizeNotifications: Array<{
+      terminalColumns: number;
+      proxyColumns: number;
+    }> = [];
+    const inkResizeListener = () => {
+      inkResizeNotifications.push({
+        terminalColumns: terminalSizeStore.getSnapshot().columns,
+        proxyColumns: resizeController.stdout.columns,
+      });
+    };
+    resizeController.stdout.on('resize', inkResizeListener);
+    const unsubscribe = terminalSizeStore.subscribe(() => {
+      expect(resizeController.stdout.columns).toBeGreaterThanOrEqual(
+        terminalSizeStore.getSnapshot().columns,
+      );
+    });
+
+    try {
+      expect(countHistory(initialFrame)).toBe(1);
+
+      for (const columns of [110, 100, 90, 80, 70]) {
+        source.columns = columns;
+        source.rows = 32;
+        source.emit('resize');
+        await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+
+        expect(inkResizeNotifications).toEqual([]);
+        expect(lastFrame()).toBe(initialFrame);
+        expect(countHistory(lastFrame() ?? '')).toBe(1);
+      }
+
+      source.columns = 60;
+      source.rows = 32;
+      source.emit('resize');
+      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
+
+      const finalFrame = lastFrame() ?? '';
+      expect(inkResizeNotifications).toEqual([
+        { terminalColumns: 60, proxyColumns: 120 },
+      ]);
+      expect(finalFrame).not.toBe(initialFrame);
+      expect(countHistory(finalFrame)).toBe(1);
+      expect(Math.max(...finalFrame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(60);
+      expect(finalFrame).toContain('Workers');
+      expect(finalFrame).toContain('operator>');
+    } finally {
+      unsubscribe();
+      resizeController.dispose();
+    }
+  });
+
+  it('applies a stream width increase after a pending shrink through the normal path', async () => {
+    vi.useFakeTimers();
+    const source = new ResizeSource();
+    source.columns = 120;
+    source.rows = 32;
+    const resizeController = createTuiResizeController(
+      source as unknown as NodeJS.WriteStream,
+    );
+    const terminalSizeStore = resizeController.terminalSize;
+    const viewModel = createTuiViewModel();
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        terminalSizeStore={terminalSizeStore}
+        onSubmit={() => {}}
+      />,
+    );
+    const resizeNotifications: Array<{
+      terminalColumns: number;
+      proxyColumns: number;
+    }> = [];
+    resizeController.stdout.on('resize', () => {
+      resizeNotifications.push({
+        terminalColumns: terminalSizeStore.getSnapshot().columns,
+        proxyColumns: resizeController.stdout.columns,
+      });
+    });
+
+    try {
+      source.columns = 60;
+      source.rows = 32;
+      source.emit('resize');
+      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
+      const shrunkFrame = lastFrame() ?? '';
+      const shrunkWidth = Math.max(
+        ...shrunkFrame.split('\n').map((line) => line.trimEnd().length),
+      );
+
+      source.columns = 120;
+      source.rows = 32;
+      source.emit('resize');
+      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+      const grownFrame = lastFrame() ?? '';
+      const grownWidth = Math.max(
+        ...grownFrame.split('\n').map((line) => line.trimEnd().length),
+      );
+
+      expect(terminalSizeStore.getSnapshot().columns).toBe(120);
+      expect(resizeNotifications).toEqual([
+        { terminalColumns: 60, proxyColumns: 120 },
+        { terminalColumns: 120, proxyColumns: 120 },
+      ]);
+      expect(grownFrame).not.toBe(shrunkFrame);
+      expect(grownWidth).toBeGreaterThan(shrunkWidth);
+    } finally {
+      resizeController.dispose();
+    }
   });
 
   it('submits input for the selected open question', async () => {

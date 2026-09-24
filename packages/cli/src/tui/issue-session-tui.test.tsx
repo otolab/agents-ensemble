@@ -35,8 +35,10 @@ import {
 } from './tui-layout-constants.js';
 import type { OpenQuestion } from '@agents-ensemble/core';
 import {
+  createTuiResizeController,
   createTuiTerminalSizeStore,
   TUI_RESIZE_SETTLE_MS,
+  TUI_RESIZE_SHRINK_COALESCE_MS,
 } from './tui-terminal-size.js';
 
 class ResizeSource extends EventEmitter {
@@ -731,13 +733,79 @@ describe('IssueSessionTui', () => {
     source.columns = 40;
     source.rows = 12;
     source.emit('resize');
-    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
 
     const frame = lastFrame() ?? '';
     expect(frame.split('\n')).toHaveLength(11);
     expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(40);
     expect(frame).toContain('operator>');
     terminalSizeStore.dispose();
+  });
+
+  it('coalesces staged same-row shrink before redrawing the pane frame', async () => {
+    vi.useFakeTimers();
+    const source = new ResizeSource();
+    source.columns = 120;
+    source.rows = 32;
+    const resizeController = createTuiResizeController(
+      source as unknown as NodeJS.WriteStream,
+    );
+    const terminalSizeStore = resizeController.terminalSize;
+    const viewModel = createTuiViewModel();
+    viewModel.setPostLoopWaiting(true);
+    const { lastFrame } = render(
+      <IssueSessionTui
+        viewModel={viewModel}
+        terminalSizeStore={terminalSizeStore}
+        onSubmit={() => {}}
+      />,
+    );
+    const initialFrame = lastFrame() ?? '';
+    const inkResizeNotifications: Array<{
+      terminalColumns: number;
+      proxyColumns: number;
+    }> = [];
+    const inkResizeListener = () => {
+      inkResizeNotifications.push({
+        terminalColumns: terminalSizeStore.getSnapshot().columns,
+        proxyColumns: resizeController.stdout.columns,
+      });
+    };
+    resizeController.stdout.on('resize', inkResizeListener);
+    const unsubscribe = terminalSizeStore.subscribe(() => {
+      expect(resizeController.stdout.columns).toBeGreaterThanOrEqual(
+        terminalSizeStore.getSnapshot().columns,
+      );
+    });
+
+    try {
+      for (const columns of [110, 100, 90, 80, 70]) {
+        source.columns = columns;
+        source.rows = 32;
+        source.emit('resize');
+        await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+
+        expect(inkResizeNotifications).toEqual([]);
+        expect(lastFrame()).toBe(initialFrame);
+      }
+
+      source.columns = 60;
+      source.rows = 32;
+      source.emit('resize');
+      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
+
+      const finalFrame = lastFrame() ?? '';
+      expect(inkResizeNotifications).toEqual([
+        { terminalColumns: 60, proxyColumns: 120 },
+      ]);
+      expect(finalFrame).not.toBe(initialFrame);
+      expect(Math.max(...finalFrame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(60);
+      expect(finalFrame).toContain(WORKER_PANE_TITLE);
+      expect(finalFrame).toContain('operator>');
+    } finally {
+      unsubscribe();
+      resizeController.dispose();
+    }
   });
 
   it('keeps every pane frame and the operator input row intact at 60x12 after resize', async () => {
@@ -762,7 +830,7 @@ describe('IssueSessionTui', () => {
       source.columns = 60;
       source.rows = 12;
       source.emit('resize');
-      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+      await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS);
 
       const frame = lastFrame() ?? '';
       const lines = frame.split('\n');

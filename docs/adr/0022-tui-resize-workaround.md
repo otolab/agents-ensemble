@@ -1,6 +1,6 @@
 # ADR 0022: TUI resize workaround と Ink 回帰監視
 
-- Status: accepted
+- Status: superseded by [0024](0024-tui-shrink-coalesce.md)
 - Date: 2026-09-24
 
 ## Context

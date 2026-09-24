@@ -25,14 +25,14 @@
 |------------|--------|--------|-----|------------|
 | macOS + `script` 擬似 TTY（`TERM=tmux-256color`） | pane | ✅ `120×32 → 60×32 → 60×12 → 120×32`。broken frame なし | ⬜ 実 IME composition は未確認（自動テストのカーソル整合のみ） | ✅ broken frame、`ESC[2J`、`ESC[3J` なし |
 | macOS + `script` 擬似 TTY（`TERM=tmux-256color`） | stream | ✅ 同じ resize 手順で確認 | ⬜ 実 IME composition は未確認（自動テストのカーソル整合のみ） | ✅ clear sequence なし。代表的な Static 行の重複出力なし |
-| iTerm2 | pane | ⬜ #322 の実端末確認待ち | ⬜ 実 IME composition 未確認 | ⬜ native scrollback と resize の組み合わせ未確認 |
-| iTerm2 | stream | ⬜ #322 の実端末確認待ち | ⬜ 実 IME composition 未確認 | ⬜ native scrollback と Static/live frame の組み合わせ未確認 |
+| iTerm2 + tmux | pane | ⬜ #340 候補実装後の再確認待ち | ⬜ 実 IME composition 未確認 | ⬜ native scrollback と resize の再確認待ち |
+| iTerm2 + tmux | stream | ⚠️ #340 オペレータ確認で幅拡大回帰・縮小時の崩れを検出。候補実装後の再確認待ち | ⬜ 実 IME composition 未確認 | ⚠️ #340 オペレータ確認で縮小時に崩れて上に流れる症状。候補実装後の再確認待ち |
 | VS Code integrated terminal | pane | ⬜ #322 の実端末確認待ち | ⬜ 実 IME composition 未確認 | ⬜ integrated terminal の scrollback と resize 未確認 |
 | VS Code integrated terminal | stream | ⬜ #322 の実端末確認待ち | ⬜ 実 IME composition 未確認 | ⬜ integrated terminal の scrollback と Static/live frame 未確認 |
 | tmux copy mode 中 | pane | ⬜ copy mode 中の resize 未確認 | ⬜ 実 IME composition 未確認 | ⬜ copy mode 中の scrollback と live frame 更新未確認 |
 | tmux copy mode 中 | stream | ⬜ copy mode 中の resize 未確認 | ⬜ 実 IME composition 未確認 | ⬜ copy mode 中の scrollback と Static/live frame 更新未確認 |
 
-`TERM=tmux-256color` は #318 の `script` 擬似 TTY の設定値であり、tmux の copy mode を実端末で確認したことを意味しない。iTerm2、VS Code integrated terminal、tmux copy mode、実 IME composition は [Issue #322](https://github.com/otolab/agents-ensemble/issues/322) のスコープで、現時点では未確認である。
+`TERM=tmux-256color` は #318 の `script` 擬似 TTY の設定値であり、tmux の copy mode を実端末で確認したことを意味しない。iTerm2 + tmux については [Issue #340](https://github.com/otolab/agents-ensemble/issues/340) のオペレータ確認で stream の fail が記録されており、候補実装後の再確認待ちである。VS Code integrated terminal、tmux copy mode、実 IME composition は [Issue #322](https://github.com/otolab/agents-ensemble/issues/322) のスコープで、現時点では未確認である。
 
 確認済みの根拠は、[PR #318](https://github.com/otolab/agents-ensemble/pull/318) の Test plan と [Issue #298 のフォロー整理コメント](https://github.com/otolab/agents-ensemble/issues/298#issuecomment-5806087165) に記録された macOS + `script` 擬似 TTY の確認である。これは実端末全般の互換性を保証するものではない。
 
@@ -56,6 +56,18 @@
 3. **scrollback と IME を確認する。** resize 前後の scrollback に broken frame、`ESC[2J`、`ESC[3J`、Static 行の重複がないかを記録する。scrollback 閲覧中の新着ログ、tmux copy mode、実 IME composition 中の入力とカーソルも、実施したかどうかを明記する。
 4. **該当セルだけを更新する。** 手順と結果が揃ったセルを ✅ にし、未実施のセルは ⬜ のまま残す。既知制限に該当した場合は ⚠️ とし、#319〜#321 または新しい修正 Issue へリンクする。確認日と環境差分が重要な場合はセルの注記か Issue / PR に残す。
 5. **再実行のタイミングを記録する。** TUI の変更後、リリース前、または TUI の resize / IME / scrollback に関する regression が報告されたときに、同じ Test plan を再実行する。結果は Issue / PR に記録し、この表の状態と参照先を同時に更新する。
+
+## #340 iTerm2 + tmux の段階的縮小確認手順
+
+この手順は #340 の shrink coalesce（columns 縮小時の中間 live frame 更新抑制）と columns high-water mark を実端末で再確認するためのものです。方針の正本は [ADR 0024](adr/0024-tui-shrink-coalesce.md) です。変更前の候補は iTerm2 + tmux の stream で幅拡大回帰と縮小時の崩れ・scrollback への流れが fail だったため、候補実装後の結果が記録されるまで pass には更新しません。pane はまだ確認されていません。確認後に実施した環境・サイズ・結果を Issue または PR に記録してから該当セルだけを更新します。
+
+1. **環境を記録する。** macOS の iTerm2 で tmux セッションを開始し、iTerm2 / tmux / CLI のバージョン、`TERM`、対象 layout（`pane` または `stream`）を記録する。pane と stream は別々に実行する。
+2. **resize 前の scrollback を作る。** TUI の live frame より前に識別できる活動ログを複数出し、scrollback に残った代表行を 1 回だけ確認できる状態にする。alternate screen を使わず、native scrollback が有効であることを確認する。
+3. **幅を段階的に縮小する。** おおむね `120×32 → 110×32 → 100×32 → 90×32 → 80×32 → 70×32 → 60×32` の順で iTerm2 のウィンドウ幅を縮小する。連続ステップの間隔は 250ms 未満を目安にし、各ステップで pane / stream の live frame が中間幅ごとに上方向へ流れないことを観察する。最終幅に到達した後は、**最後の縮小イベントから** 250ms 以上待つ。
+4. **高さ変更と拡大を分けて確認する。** `60×32 → 60×12` の高さ変更、`60×12 → 120×32` の幅拡大を個別に行い、live frame の枠・タイトル・入力欄が再配置されることを確認する。
+5. **scrollback を確認する。** resize 前の代表行が重複せず、broken frame / ghost line がなく、端末全体を消去する `ESC[2J` / `ESC[3J` 相当の結果がないことを確認する。確認結果（成功・失敗・未確認項目）を Issue / PR に記録する。
+
+TTY からはドラッグ終了イベントを取得できないため、250ms より長い停止を挟んだ後の縮小は別の coalesce 窓として扱われます。停止を含む操作でも問題が出た場合は、停止時間と幅の系列を記録し、新しい修正 Issue が必要か conductor に返します。
 
 ## 参照
 

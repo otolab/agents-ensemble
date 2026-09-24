@@ -8,6 +8,7 @@ import { createTuiViewModel } from './tui-view-model.js';
 import {
   createTuiResizeController,
   createTuiTerminalSizeStore,
+  TUI_RESIZE_SHRINK_COALESCE_MS,
   TUI_RESIZE_SETTLE_MS,
   type TuiTerminalSize,
 } from './tui-terminal-size.js';
@@ -74,16 +75,14 @@ describe('tui terminal size', () => {
     store.subscribe(listener);
 
     source.columns = 60;
-    source.rows = 20;
     source.emit('resize');
     source.columns = 40;
-    source.rows = 12;
     source.emit('resize');
 
     expect(store.getSnapshot()).toEqual({ columns: 80, rows: 24 });
     expect(listener).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS - 1);
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS - 1);
     expect(store.getSnapshot()).toEqual({ columns: 80, rows: 24 });
     expect(listener).not.toHaveBeenCalled();
 
@@ -94,7 +93,41 @@ describe('tui terminal size', () => {
     store.dispose();
   });
 
-  it('delays Ink resize notifications until the settled snapshot is ready', async () => {
+  it('keeps width increases and row changes on the normal settle window', async () => {
+    vi.useFakeTimers();
+    const source = new FakeResizeSource();
+    const controller = createTuiResizeController(
+      source as unknown as NodeJS.WriteStream,
+      TUI_RESIZE_SETTLE_MS,
+    );
+    const resizeListener = vi.fn();
+    controller.stdout.on('resize', resizeListener);
+
+    source.columns = 120;
+    source.emit('resize');
+
+    expect(controller.stdout.columns).toBe(80);
+    expect(controller.stdout.rows).toBe(24);
+    expect(resizeListener).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+
+    expect(controller.stdout.columns).toBe(120);
+    expect(controller.stdout.rows).toBe(24);
+    expect(resizeListener).toHaveBeenCalledTimes(1);
+
+    source.rows = 30;
+    source.emit('resize');
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+
+    expect(controller.stdout.columns).toBe(120);
+    expect(controller.stdout.rows).toBe(30);
+    expect(resizeListener).toHaveBeenCalledTimes(2);
+
+    controller.dispose();
+  });
+
+  it('coalesces separated width decreases until the shrink window settles', async () => {
     vi.useFakeTimers();
     const source = new FakeResizeSource();
     const controller = createTuiResizeController(
@@ -105,34 +138,80 @@ describe('tui terminal size', () => {
     controller.stdout.on('resize', resizeListener);
 
     source.columns = 60;
+    source.emit('resize');
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+
+    expect(controller.stdout.columns).toBe(80);
+    expect(resizeListener).not.toHaveBeenCalled();
+
+    source.columns = 40;
+    source.emit('resize');
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SHRINK_COALESCE_MS - 1);
+
+    expect(controller.stdout.columns).toBe(80);
+    expect(resizeListener).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(controller.stdout.columns).toBe(80);
+    expect(controller.terminalSize.getSnapshot().columns).toBe(40);
+    expect(resizeListener).toHaveBeenCalledTimes(1);
+
+    controller.dispose();
+  });
+
+  it('flushes a pending shrink through the normal path when width grows again', async () => {
+    vi.useFakeTimers();
+    const source = new FakeResizeSource();
+    const controller = createTuiResizeController(
+      source as unknown as NodeJS.WriteStream,
+      TUI_RESIZE_SETTLE_MS,
+    );
+    const resizeListener = vi.fn();
+    controller.stdout.on('resize', resizeListener);
+
+    source.columns = 60;
+    source.emit('resize');
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+    expect(resizeListener).not.toHaveBeenCalled();
+
+    source.columns = 90;
+    source.emit('resize');
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS - 1);
+    expect(controller.stdout.columns).toBe(80);
+    expect(resizeListener).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(controller.stdout.columns).toBe(90);
+    expect(resizeListener).toHaveBeenCalledTimes(1);
+
+    controller.dispose();
+  });
+
+  it('keeps a row change on the normal settle window while a shrink is pending', async () => {
+    vi.useFakeTimers();
+    const source = new FakeResizeSource();
+    const controller = createTuiResizeController(
+      source as unknown as NodeJS.WriteStream,
+      TUI_RESIZE_SETTLE_MS,
+    );
+    const resizeListener = vi.fn();
+    controller.stdout.on('resize', resizeListener);
+
+    source.columns = 60;
+    source.emit('resize');
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
+    expect(resizeListener).not.toHaveBeenCalled();
+
     source.rows = 20;
     source.emit('resize');
+    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
 
     expect(controller.stdout.columns).toBe(80);
     expect(controller.stdout.rows).toBe(24);
-    expect(resizeListener).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
-
-    expect(controller.stdout.columns).toBe(60);
-    expect(controller.stdout.rows).toBe(24);
     expect(resizeListener).toHaveBeenCalledTimes(1);
-
-    source.columns = 70;
-    source.rows = 30;
-    source.emit('resize');
-    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
-
-    expect(controller.stdout.columns).toBe(70);
-    expect(controller.stdout.rows).toBe(30);
-    expect(resizeListener).toHaveBeenCalledTimes(2);
+    expect(controller.terminalSize.getSnapshot()).toEqual({ columns: 60, rows: 20 });
 
     controller.dispose();
-    source.columns = 40;
-    source.rows = 12;
-    source.emit('resize');
-    await vi.advanceTimersByTimeAsync(TUI_RESIZE_SETTLE_MS);
-    expect(resizeListener).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the real Ink frame intact through the resize controller without clear sequences', async () => {
@@ -172,7 +251,7 @@ describe('tui terminal size', () => {
       source.columns = 60;
       source.rows = 12;
       source.emit('resize');
-      await waitFor(TUI_RESIZE_SETTLE_MS + 80);
+      await waitFor(TUI_RESIZE_SHRINK_COALESCE_MS + 80);
       await ink.waitUntilRenderFlush();
 
       const outputAfterResize = output.slice(outputLengthBeforeResize).join('');
