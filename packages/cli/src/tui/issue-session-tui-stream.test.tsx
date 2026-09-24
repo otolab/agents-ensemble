@@ -82,6 +82,34 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
   });
 
+  it('expands the open-question pane for long detail while keeping compact entries', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [
+        createOpenQuestion({
+          id: 'inq-long',
+          question: `${'word '.repeat(55)}question-tail`,
+          context: `${'context '.repeat(40)}context-tail`,
+        }),
+        createOpenQuestion({
+          id: 'inq-compact',
+          question: 'This remains visible as a compact row',
+        }),
+      ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('context-tail');
+    expect(frame).toContain('inq-compact');
+  });
+
   it('renders inline Markdown in static activity output', () => {
     const viewModel = createTuiViewModel();
     viewModel.appendActivityLog('conductor', 'Use **bold** and `code`.');

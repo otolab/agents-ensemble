@@ -1183,8 +1183,16 @@ describe('IssueSessionTui', () => {
         workers: {},
         conductorOutput: null,
         openQuestions: [
-          createOpenQuestion({ id: 'inq-1', question: 'First question' }),
-          createOpenQuestion({ id: 'inq-2', question: 'Second question' }),
+          createOpenQuestion({
+            id: 'inq-1',
+            question: 'First question',
+            context: 'first selected detail',
+          }),
+          createOpenQuestion({
+            id: 'inq-2',
+            question: 'Second question',
+            context: 'second selected detail',
+          }),
         ],
         dispatchHold: { hold: false, heldEventCount: 0 },
       });
@@ -1194,6 +1202,8 @@ describe('IssueSessionTui', () => {
       );
 
       expect(lastFrame() ?? '').toContain('▸ inq-1');
+      expect(lastFrame() ?? '').toContain('first selected detail');
+      expect(lastFrame() ?? '').not.toContain('second selected detail');
 
       stdin.write(INK_TEST_KEYS.shiftDownArrow);
       await flushInkStdin();
@@ -1201,6 +1211,8 @@ describe('IssueSessionTui', () => {
       const frame = lastFrame() ?? '';
       expect(frame).toContain('2/2');
       expect(frame).toContain('▸ inq-2');
+      expect(frame).toContain('second selected detail');
+      expect(frame).not.toContain('first selected detail');
     });
 
     it('does not change selection on plain arrow keys', async () => {
@@ -1291,8 +1303,12 @@ describe('IssueSessionTui', () => {
         openQuestions: [
           createOpenQuestion({
             id: 'inq-long',
-            question: 'word '.repeat(30),
-            context: 'context '.repeat(10),
+            question: `${'word '.repeat(55)}question-tail`,
+            context: `${'context '.repeat(40)}context-tail`,
+          }),
+          createOpenQuestion({
+            id: 'inq-compact',
+            question: 'This remains visible as a compact row',
           }),
         ],
         dispatchHold: { hold: false, heldEventCount: 0 },
@@ -1304,9 +1320,11 @@ describe('IssueSessionTui', () => {
 
       const paneHeight = resolveOpenQuestionsPaneHeight(
         viewModel.getSnapshot().displayState.openQuestions,
+        23,
       );
       expect(paneHeight).toBeGreaterThan(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
-      expect(lastFrame() ?? '').toContain('context context');
+      expect(lastFrame() ?? '').toContain('context-tail');
+      expect(lastFrame() ?? '').toContain('inq-compact');
     });
   });
 

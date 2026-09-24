@@ -4,6 +4,7 @@ import {
   advanceOpenQuestionSelection,
   buildOpenQuestionListItems,
   clampOpenQuestionSelectionIndex,
+  computeMaxOpenQuestionsDisplayLines,
   resolveOpenQuestionsPaneLayout,
 } from './open-questions-pane.js';
 import { OPEN_QUESTIONS_PANE_MIN_HEIGHT } from './tui-layout-constants.js';
@@ -90,6 +91,11 @@ describe('clampOpenQuestionSelectionIndex', () => {
 });
 
 describe('resolveOpenQuestionsPaneLayout', () => {
+  it('raises the normal-terminal content cap for expanded question details', () => {
+    expect(computeMaxOpenQuestionsDisplayLines(23)).toBe(13);
+    expect(computeMaxOpenQuestionsDisplayLines(24)).toBe(14);
+  });
+
   it('uses zero height when there are no open questions', () => {
     const layout = resolveOpenQuestionsPaneLayout({
       openQuestions: [],
@@ -119,6 +125,51 @@ describe('resolveOpenQuestionsPaneLayout', () => {
     expect(layout.paneHeight).toBeGreaterThan(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
     expect(layout.titleText).toContain('1/1');
     expect(layout.titleText).toContain('Shift+↑↓で選択');
+  });
+
+  it('keeps compact entries when selected detail reaches the content cap', () => {
+    const layout = resolveOpenQuestionsPaneLayout({
+      openQuestions: [
+        {
+          ...SAMPLE_QUESTION,
+          question: 'selected '.repeat(80),
+          context: 'context '.repeat(60),
+        },
+        createQuestion({ id: 'inq-2', question: 'Second question' }),
+      ],
+      selectedIndex: 0,
+      contentWidth: 40,
+      terminalRows: 23,
+    });
+
+    expect(layout.items).toHaveLength(2);
+    expect(layout.items[0]?.isSelected).toBe(true);
+    expect(layout.items[1]?.compact).toBe(true);
+    expect(layout.titleText).toContain('1/2');
+    expect(layout.contentLineCount).toBe(13);
+  });
+
+  it('counts each non-selected question as one compact line in the requested height', () => {
+    const layout = resolveOpenQuestionsPaneLayout({
+      openQuestions: [
+        {
+          ...SAMPLE_QUESTION,
+          question: 'selected '.repeat(20),
+          context: 'context '.repeat(10),
+        },
+        createQuestion({ id: 'inq-2', question: 'Second question' }),
+        createQuestion({ id: 'inq-3', question: 'Third question' }),
+      ],
+      selectedIndex: 0,
+      contentWidth: 40,
+      terminalRows: 23,
+    });
+
+    expect(layout.items).toHaveLength(3);
+    expect(layout.items.slice(1).every((item) => item.compact)).toBe(true);
+    expect(layout.contentLineCount).toBe(
+      layout.items.reduce((sum, item) => sum + item.lines.length, 0),
+    );
   });
 
   it('does not append the discretionary input hint to the title', () => {
