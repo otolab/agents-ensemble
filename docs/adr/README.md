@@ -93,8 +93,9 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0019](0019-worker-acp-cli-presets.md) | Worker ACP CLI preset とデフォルト解決 | accepted |
 | [0020](0020-ensemble-config-setting-resolution.md) | ensemble config.yaml の設定解決順（Phase 1） | accepted |
 | [0021](0021-conductor-mcp-config-resolution.md) | conductor MCP 設定の 2 層解決と inline 配線 | accepted |
-| [0022](0022-tui-resize-workaround.md) | TUI resize workaround と Ink 回帰監視 | accepted |
+| [0022](0022-tui-resize-workaround.md) | TUI resize workaround と Ink 回帰監視 | superseded → [0024](0024-tui-shrink-coalesce.md) |
 | [0023](0023-tty-initial-message-post-loop.md) | TTY 初回メッセージの post-loop ライフサイクル | accepted |
+| [0024](0024-tui-shrink-coalesce.md) | TUI columns 縮小時の live frame coalesce | accepted |
 
 ## 追加するとき
 

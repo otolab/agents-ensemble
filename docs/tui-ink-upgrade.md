@@ -19,7 +19,7 @@
 | `ink` | `7.1.1` |
 | `react` | `19.2.0` |
 | `ink-testing-library` | `4.0.0` |
-| resize settle | `100ms` (`TUI_RESIZE_SETTLE_MS`); columns shrink coalesce `250ms` (`TUI_RESIZE_SHRINK_COALESCE_MS`) |
+| resize settle | `100ms` (`TUI_RESIZE_SETTLE_MS`); columns shrink coalesce `250ms` after the last shrink event (`TUI_RESIZE_SHRINK_COALESCE_MS`) |
 
 ## 実行コマンド
 
@@ -44,7 +44,7 @@ pnpm --filter @agents-ensemble/cli test:run
 
 | テスト | 確認する契約 | 合格条件 |
 |--------|--------------|----------|
-| [`tui-terminal-size.test.ts`](../packages/cli/src/tui/tui-terminal-size.test.ts) | 通常の resize は 100ms の settle、columns の連続縮小は 250ms の coalesce にまとめる。`createTuiResizeController` 経由で Ink の resize 通知と TUI の frame が同じ settled size を使う | 通常の変更は 100ms 後に 1 回、縮小中の中間幅は通知されず 250ms 後に最終幅で 1 回だけ通知される。実 Ink frame の resize 後出力に pane の主要な枠・入力行があり、`ESC[2J` / `ESC[3J` が出力されない |
+| [`tui-terminal-size.test.ts`](../packages/cli/src/tui/tui-terminal-size.test.ts) | 通常の resize は 100ms の settle、columns の連続縮小は最後の縮小イベントから 250ms の quiet-period にまとめる。`createTuiResizeController` 経由で Ink の resize 通知と TUI の frame が同じ settled size を使う | 通常の変更は 100ms 後に 1 回、縮小中の中間幅は通知されず、最後の縮小イベントから 250ms 後に最終幅で 1 回だけ通知される。実 Ink frame の resize 後出力に pane の主要な枠・入力行があり、`ESC[2J` / `ESC[3J` が出力されない |
 | [`issue-session-tui.test.tsx`](../packages/cli/src/tui/issue-session-tui.test.tsx) | pane layout の短い端末への resize。60×12 では Ink に渡す live frame を 11 行として、各 pane の frame を保つ | 60×12 resize 後に 11 行、各行の幅が 60 以下、Workers / Orchestration / Operator input の上下枠と title が揃い、`operator>` が表示される |
 | [`issue-session-tui-stream.test.tsx`](../packages/cli/src/tui/issue-session-tui-stream.test.tsx) | stream の既存 `<Static>` activity history と resize 後の live frame の分離 | resize 後も resize 前の Static 行が 1 回だけ残り、再 replay / duplicate されず、live frame の行幅が変更後の端末幅以下になる |
 
@@ -59,6 +59,6 @@ pnpm --filter @agents-ensemble/cli test:run
 1. 幅縮小時の frame / clear 挙動を含む upstream 修正が release され、対象バージョンと変更内容を確認できる。
 2. その候補バージョンでこの文書の 3 系統のテストを実行し、全件成功する。
 3. [TUI 端末互換性マトリクス](tui-terminal-compatibility.md) の resize / scrollback 手順を実端末で実行し、ghost line、frame 重複、意図しない clear sequence がないことを確認する。
-4. [ADR 0022](adr/0022-tui-resize-workaround.md) を新しい ADR で supersede し、実装・テスト・利用者向け文書を同じ変更で更新する。
+4. [ADR 0024](adr/0024-tui-shrink-coalesce.md) の shrink coalesce 撤去条件を満たし、実装・テスト・利用者向け文書を同じ変更で更新する。
 
 upstream の状況、候補バージョン、未検証の端末や手順は Issue / PR に記録する。#322 の実端末確認そのものはこの Issue のスコープではない。

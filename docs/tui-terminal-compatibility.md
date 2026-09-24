@@ -58,11 +58,11 @@
 
 ## #340 iTerm2 + tmux の段階的縮小確認手順
 
-この手順は #340 の shrink coalesce（columns 縮小時の中間 live frame 更新抑制）を実端末で確認するためのものです。実施前は iTerm2 の pane / stream の resize と scrollback のセルを ⬜ のままにし、確認後に実施した環境・サイズ・結果を Issue または PR に記録してから該当セルだけを更新します。
+この手順は #340 の shrink coalesce（columns 縮小時の中間 live frame 更新抑制）を実端末で確認するためのものです。方針の正本は [ADR 0024](adr/0024-tui-shrink-coalesce.md) です。実施前は iTerm2 の pane / stream の resize と scrollback のセルを ⬜ のままにし、確認後に実施した環境・サイズ・結果を Issue または PR に記録してから該当セルだけを更新します。
 
 1. **環境を記録する。** macOS の iTerm2 で tmux セッションを開始し、iTerm2 / tmux / CLI のバージョン、`TERM`、対象 layout（`pane` または `stream`）を記録する。pane と stream は別々に実行する。
 2. **resize 前の scrollback を作る。** TUI の live frame より前に識別できる活動ログを複数出し、scrollback に残った代表行を 1 回だけ確認できる状態にする。alternate screen を使わず、native scrollback が有効であることを確認する。
-3. **幅を段階的に縮小する。** おおむね `120×32 → 110×32 → 100×32 → 90×32 → 80×32 → 70×32 → 60×32` の順で iTerm2 のウィンドウ幅を縮小する。連続ステップの間隔は 250ms 未満を目安にし、各ステップで pane / stream の live frame が中間幅ごとに上方向へ流れないことを観察する。最終幅に到達した後は 250ms 以上待つ。
+3. **幅を段階的に縮小する。** おおむね `120×32 → 110×32 → 100×32 → 90×32 → 80×32 → 70×32 → 60×32` の順で iTerm2 のウィンドウ幅を縮小する。連続ステップの間隔は 250ms 未満を目安にし、各ステップで pane / stream の live frame が中間幅ごとに上方向へ流れないことを観察する。最終幅に到達した後は、**最後の縮小イベントから** 250ms 以上待つ。
 4. **高さ変更と拡大を分けて確認する。** `60×32 → 60×12` の高さ変更、`60×12 → 120×32` の幅拡大を個別に行い、live frame の枠・タイトル・入力欄が再配置されることを確認する。
 5. **scrollback を確認する。** resize 前の代表行が重複せず、broken frame / ghost line がなく、端末全体を消去する `ESC[2J` / `ESC[3J` 相当の結果がないことを確認する。確認結果（成功・失敗・未確認項目）を Issue / PR に記録する。
 
