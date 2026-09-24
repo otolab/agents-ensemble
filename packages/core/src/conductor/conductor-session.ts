@@ -1040,6 +1040,10 @@ export async function runConductorSession(
         ]);
       } else {
         await runGithubMonitorStop();
+        // A monitor stop callback can synchronously dispatch a worker prompt.
+        // Cancel that prompt before WorkerRuntime waits for idle and closes
+        // the ACP bridge.
+        workerSession.runtime.cancelAllActivePrompts();
         await runWorkerStop();
         await runConductorClose();
       }

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
-import type { PermissionHandler } from '../acp/types.js';
+import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import type {
@@ -1001,14 +1001,38 @@ describe('runConductorSession resume / shutdown', () => {
     sessionLogger.subscribe((event) => emitted.push(event));
 
     let workerPermissionHandler: PermissionHandler | undefined;
-    const workerClose = vi.fn().mockResolvedValue(undefined);
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+
+    const activePrompt = createDeferred<{ stopReason: string }>();
+    const activePromptStarted = vi.fn();
+    const lifecycle: string[] = [];
+    const cancelSession = vi.fn(() => {
+      lifecycle.push('cancel');
+      activePrompt.resolve({ stopReason: 'cancelled' });
+    });
+    const workerClose = vi.fn().mockImplementation(async () => {
+      lifecycle.push('close');
+    });
     const promptSession = vi.fn(
       async (
         _sessionId: string,
-        _prompt: string,
+        prompt: string,
         promptOptions?: { permissionHandler?: PermissionHandler },
       ) => {
         workerPermissionHandler = promptOptions?.permissionHandler;
+        if (prompt === 'active teardown prompt') {
+          activePromptStarted();
+          return activePrompt.promise;
+        }
         return { stopReason: 'end_turn' };
       },
     );
@@ -1017,7 +1041,7 @@ describe('runConductorSession resume / shutdown', () => {
         newSession: vi.fn().mockResolvedValue('worker-session'),
         loadSession: vi.fn().mockResolvedValue(undefined),
         promptSession,
-        cancelSession: vi.fn(),
+        cancelSession,
         close: workerClose,
       }) as unknown as AcpBridge,
     );
@@ -1031,6 +1055,10 @@ describe('runConductorSession resume / shutdown', () => {
       start: vi.fn(),
       stop: vi.fn().mockImplementation(async () => {
         monitorStopStarted();
+        await conductorTools!.prompt_worker!.execute({
+          worker: 'implementer',
+          instruction: 'active teardown prompt',
+        });
         await monitorStop;
       }),
       flush: vi.fn(),
@@ -1064,6 +1092,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     await vi.waitFor(() => expect(monitorStopStarted).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(activePromptStarted).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(workerPermissionHandler).toBeDefined());
 
     const lateDecision = workerPermissionHandler!({
@@ -1080,6 +1109,10 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(result.stopReason).toBe('completed');
     expect(workerClose).toHaveBeenCalledOnce();
+    expect(cancelSession).toHaveBeenCalledOnce();
+    expect(lifecycle.indexOf('cancel')).toBeGreaterThanOrEqual(0);
+    expect(lifecycle.indexOf('close')).toBeGreaterThanOrEqual(0);
+    expect(lifecycle.indexOf('cancel')).toBeLessThan(lifecycle.indexOf('close'));
     expect(
       emitted.some(
         (event) =>
@@ -1131,7 +1164,7 @@ describe('runConductorSession resume / shutdown', () => {
 
     let operatorApi: OperatorInputBindingApi | undefined;
     const permissionIds: string[] = [];
-    const permissionDecisions: Array<Promise<unknown>> = [];
+    const permissionDecisions: Array<Promise<PermissionDecision>> = [];
     const requestPermission = () => {
       const decision = workerPermissionHandler!({
         sessionId: 'worker-session',
@@ -1158,7 +1191,7 @@ describe('runConductorSession resume / shutdown', () => {
         expect(permissionIds[permissionIndex]).toBeDefined();
         await conductorTools!.resolve_permission!.execute({
           requestId: permissionIds[permissionIndex],
-          decision: 'allow',
+          decision: permissionIndex === 0 ? 'allow' : 'deny',
         });
         await permissionDecisions[permissionIndex];
 
@@ -1212,6 +1245,12 @@ describe('runConductorSession resume / shutdown', () => {
     expect(onPostLoopWait).toHaveBeenCalledOnce();
     expect(permissionIds).toHaveLength(2);
     expect(permissionDecisions).toHaveLength(2);
+    await expect(permissionDecisions[0]).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'allow-once' },
+    });
+    await expect(permissionDecisions[1]).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'deny' },
+    });
     const postLoopWaitIndex = emitted.findIndex(
       (event) => event.type === 'session.post_loop_wait',
     );
