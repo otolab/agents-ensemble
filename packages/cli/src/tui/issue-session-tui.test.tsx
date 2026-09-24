@@ -1353,6 +1353,33 @@ describe('IssueSessionTui', () => {
       expect(restoredFrame).not.toContain(SCROLL_HINT);
     });
 
+    it('keeps the same marker visible across a detached append and follows latest on End', async () => {
+      const viewModel = createTuiViewModel();
+      fillScrollableHarnessLog(viewModel);
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      stdin.write(INK_TEST_KEYS.pageUp);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('[harness] line-16');
+
+      viewModel.appendActivityLog('harness', 'newest-marker');
+      await flushInkStdin();
+
+      const detachedFrame = lastFrame() ?? '';
+      expect(detachedFrame).toContain('[harness] line-16');
+      expect(detachedFrame).not.toContain('[harness] newest-marker');
+
+      stdin.write(INK_TEST_KEYS.end);
+      await flushInkStdin();
+
+      const followedFrame = lastFrame() ?? '';
+      expect(followedFrame).toContain('[harness] newest-marker');
+      expect(followedFrame).toContain('[harness] line-29');
+    });
+
     it('does not scroll on plain PgUp when input has text; Ctrl+PgUp scrolls without changing input', async () => {
       const viewModel = createTuiViewModel();
       fillScrollableHarnessLog(viewModel);

@@ -7,6 +7,7 @@ import {
   buildActivityLogDisplayLines,
   formatActivityLogLabelPrefix,
   formatActivityLogLine,
+  preserveActivityLogScrollOffset,
   sliceActivityLogDisplayLines,
 } from './activity-log.js';
 
@@ -171,5 +172,30 @@ describe('activity-log', () => {
     expect(advanceActivityLogScrollOffset(3, 'home', 5, 20)).toBe(20);
     expect(advanceActivityLogScrollOffset(12, 'end', 5, 20)).toBe(0);
     expect(advanceActivityLogScrollOffset(18, 'pageUp', 5, 20)).toBe(20);
+  });
+
+  it('preserves a detached offset across wrapped and separator display lines', () => {
+    const previousLines = buildActivityLogDisplayLines(
+      [{ label: 'conductor', text: 'abcdefghij' }],
+      4,
+    );
+    const nextLines = buildActivityLogDisplayLines(
+      [
+        { label: 'conductor', text: 'abcdefghij' },
+        { label: 'separator', text: '' },
+        { label: 'harness', text: 'new' },
+      ],
+      4,
+    );
+
+    expect(
+      preserveActivityLogScrollOffset(4, previousLines.length, nextLines.length, 20),
+    ).toBe(6);
+  });
+
+  it('keeps follow at the bottom and clamps detached offsets to the window', () => {
+    expect(preserveActivityLogScrollOffset(0, 10, 14, 20)).toBe(0);
+    expect(preserveActivityLogScrollOffset(18, 10, 15, 20)).toBe(20);
+    expect(preserveActivityLogScrollOffset(18, 10, 15, 5)).toBe(5);
   });
 });

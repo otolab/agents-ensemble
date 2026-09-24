@@ -23,20 +23,19 @@ Issue #320 の対象は、`ENSEMBLE_TUI_LAYOUT=stream` で terminal scrollback �
 
 ### `pane`
 
-`pane` は Orchestration の活動ログをアプリ内の bounded window として描画する。`activity-log.ts` の `linesFromBottom=0` が末尾追従で、PgUp/PgDn/Home/End がこの state を操作する。新着で state を 0 に戻さないため、コード上は stream のような terminal viewport の tail jump は起こさない。
+`pane` は Orchestration の活動ログをアプリ内の bounded window として描画する。`activity-log.ts` の `linesFromBottom=0` が末尾追従で、PgUp/PgDn/Home/End がこの state を操作する。detached 中に新着があった場合は、新着 display line 数を `linesFromBottom` に加えて次の最大 offset で clamp するため、wrapped line・separator・bounded window の範囲で同じログ行を維持する。`End` は従来どおり 0 に戻して最新へ追従する。
 
-ただし `linesFromBottom` は末尾からの相対 offset であり、絶対的なログ行の identity ではない。遡っている間に表示行が追加されても同じ数値を維持するだけでは、以前見ていた marker を厳密に同じ位置に留められない。新着 display line 数を detached offset に反映する hardening と、wrapped line / bounded window の clamp を別途検証する必要がある。
 
 ### `stream`
 
-`stream` は `activityLogWindowSize: null` で活動ログ全体を保持し、`issue-session-tui-stream.tsx` の `<Static items={activityLog}>` で上へ append する。下部には live UI を描画し、`alternateScreen: false` の Normal Screen Buffer と terminal native scrollback を過去ログの正本にする。Ink は Static の新しい suffix と live frame を stdout へ描画するが、terminal emulator が現在どの scrollback viewport を表示しているかをアプリ state として持たない。
+`stream` は `activityLogWindowSize: null` で活動ログ全体を保持し、`issue-session-tui-stream.tsx` の `<Static>` で上へ append する。入力欄が空の `PgUp`、または入力中の `Ctrl+PgUp` は `stream-scrollback.ts` の detached event を reducer に渡す。detached 中は committed prefix だけを Static に渡し、新着 suffix は pending として保持する。live UI に pending 件数を表示し、`End` / `Ctrl+End` で suffix を順序どおり一度だけ追加して follow に戻る。下部には live UI を描画し、`alternateScreen: false` の Normal Screen Buffer と terminal native scrollback を過去ログの正本にする。既に Static へ渡した prefix は再送・remount・replay しない。
 
 従って pane と stream の違いは次の通りである。
 
 | | scroll の正本 | 新着時にアプリが知っている state | C の必要性 |
 |---|---|---|---|
-| `pane` | アプリ内 `linesFromBottom` | detached/follow と表示 offset | C なしで state を維持できる。絶対行維持の hardening は必要 |
-| `stream` | terminal native scrollback | Static の append 状態だけ。native viewport は不明 | mouse/scrollbar 経路を自動保護するには C が必要だが、共通 TTY では取得できない |
+| `pane` | アプリ内 `linesFromBottom` | detached/follow と新着 display line 数を反映した表示 offset | C なしで state と marker を維持できる |
+| `stream` | terminal native scrollback | keyboard detached、committed prefix、pending suffix、follow/flush | mouse/scrollbar 経路を自動保護するには C が必要だが、共通 TTY では取得できない。将来 adapter は同じ detached event 境界へ注入する |
 
 ## 選択肢と副作用
 

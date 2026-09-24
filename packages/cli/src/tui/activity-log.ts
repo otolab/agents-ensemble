@@ -70,6 +70,32 @@ export function advanceActivityLogScrollOffset(
   }
 }
 
+/**
+ * Keeps a detached pane on the same activity line after an append.
+ *
+ * The offset is measured from the bottom, so newly appended display lines are
+ * added to a non-zero offset. The next bounded-window maximum clamps the
+ * result when the retained history or pane height limits the range.
+ */
+export function preserveActivityLogScrollOffset(
+  linesFromBottom: number,
+  previousDisplayLineCount: number,
+  nextDisplayLineCount: number,
+  maxLinesFromBottom: number,
+): number {
+  const maxOffset = Math.max(0, maxLinesFromBottom);
+  const currentOffset = Math.min(Math.max(0, linesFromBottom), maxOffset);
+  if (currentOffset === 0) {
+    return 0;
+  }
+
+  const appendedDisplayLineCount = Math.max(
+    0,
+    nextDisplayLineCount - previousDisplayLineCount,
+  );
+  return Math.min(currentOffset + appendedDisplayLineCount, maxOffset);
+}
+
 export function appendActivityLogEntry(
   entries: ActivityLogEntry[],
   entry: ActivityLogEntry,
