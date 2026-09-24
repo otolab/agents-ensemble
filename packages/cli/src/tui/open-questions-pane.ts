@@ -107,6 +107,47 @@ export function countOpenQuestionsDisplayLines(items: OpenQuestionListItemRender
   return items.reduce((sum, item) => sum + item.lines.length, 0);
 }
 
+/**
+ * Fit selected detail into the content cap while reserving every compact row.
+ *
+ * Keep the original question order so the selected marker does not jump. When
+ * the selected item is too long, only its detail is clipped; compact rows are
+ * one line each and remain in the render list.
+ */
+function fitOpenQuestionItemsToContentLimit(
+  items: OpenQuestionListItemRender[],
+  selectedIndex: number,
+  maxContentLines: number,
+): OpenQuestionListItemRender[] {
+  const requestedContentLineCount = countOpenQuestionsDisplayLines(items);
+  if (requestedContentLineCount <= maxContentLines) {
+    return items;
+  }
+
+  const compactLineCount = items.reduce(
+    (sum, item) => sum + (item.compact ? item.lines.length : 0),
+    0,
+  );
+  const selectedItem = items[selectedIndex];
+  if (!selectedItem || selectedItem.compact) {
+    return items;
+  }
+
+  // Compact rows have priority. The selected item keeps at least its header
+  // line; if the compact list itself exceeds the cap, the terminal's existing
+  // short/overflow policy remains responsible for the final clipping.
+  const selectedLineBudget = Math.max(1, maxContentLines - compactLineCount);
+  if (selectedItem.lines.length <= selectedLineBudget) {
+    return items;
+  }
+
+  return items.map((item, index) =>
+    index === selectedIndex
+      ? { ...item, lines: item.lines.slice(0, selectedLineBudget) }
+      : item,
+  );
+}
+
 export function resolveOpenQuestionsPaneLayout(params: {
   openQuestions: OpenQuestion[];
   selectedIndex: number;
@@ -134,21 +175,12 @@ export function resolveOpenQuestionsPaneLayout(params: {
     selectedIndex,
     params.contentWidth,
   );
-  let items = fullItems;
-  let contentLineCount = Math.max(1, countOpenQuestionsDisplayLines(fullItems));
-
-  if (contentLineCount > maxContentLines) {
-    const selectedQuestion = params.openQuestions[selectedIndex];
-    if (selectedQuestion) {
-      items = [buildSelectedQuestionItem(selectedQuestion, params.contentWidth)];
-      contentLineCount = Math.min(
-        maxContentLines,
-        Math.max(1, countOpenQuestionsDisplayLines(items)),
-      );
-    } else {
-      contentLineCount = maxContentLines;
-    }
-  }
+  const items = fitOpenQuestionItemsToContentLimit(
+    fullItems,
+    selectedIndex,
+    maxContentLines,
+  );
+  const contentLineCount = Math.max(1, countOpenQuestionsDisplayLines(items));
 
   const paneHeight = Math.max(
     OPEN_QUESTIONS_PANE_MIN_HEIGHT,

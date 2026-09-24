@@ -17,7 +17,7 @@
 |----------|----------|
 | resize | 端末サイズを変更したときの live frame、枠、入力欄、および resize 後の再レイアウト |
 | IME | 実 IME composition 中の入力と物理カーソル位置。自動テストだけのカーソル計算検証は、実 IME の確認済みとは扱わない |
-| scrollback | resize 後に broken frame や意図しない clear sequence が scrollback に残らないこと。scrollback 閲覧中の末尾復帰は既知制限として別表に記載する |
+| scrollback | resize 後に broken frame や意図しない clear sequence が scrollback に残らないこと。keyboard detached 経路外の viewport 保持は既知制限として別表に記載する |
 
 ## 端末 × layout マトリクス
 
@@ -41,7 +41,8 @@
 | 状態 | layout / 確認項目 | 内容 | 参照 |
 |------|------------------|------|------|
 | ⚠️ | stream / scrollback | 端末幅を変更しても、既に `<Static>` として追記された行は再折り返しされない | [#319](https://github.com/otolab/agents-ensemble/issues/319) |
-| ⚠️ | pane / stream / scrollback | scrollback を上へ閲覧中に新着ログが追記されると、端末依存で末尾へ戻ることがある | [#320](https://github.com/otolab/agents-ensemble/issues/320) |
+| ⚠️ | stream / scrollback | 入力欄が空の `PgUp`、または入力中の `Ctrl+PgUp` で detached を宣言すると新着を保留し、`End` / `Ctrl+End` で追記して follow に戻る。mouse-only の native scrollback は terminal host から viewport state が通知されないため自動検出できない | [#320](https://github.com/otolab/agents-ensemble/issues/320) |
+| ⚠️ | pane / scrollback | `PgUp` / `Ctrl+PgUp` でアプリ内 windowing を detached にすると、新着 display line 数を offset に反映して同じログ行を維持する。端末の mouse-only native scrollback はアプリ内 windowing の操作対象外 | [#320](https://github.com/otolab/agents-ensemble/issues/320) |
 | ⚠️ | pane / stream / resize | 極端に短い端末では、枠・タイトル・入力行を維持してもログ、Worker 状態、open question 本文が clip されることがある。60×12 の no-question モードでは live frame の主要な枠と入力行を維持する | [#321](https://github.com/otolab/agents-ensemble/issues/321) |
 
 これらは未確認端末を確認済みとする理由にはならない。実端末で同じ制限以外の問題が見つかった場合は、修正 Issue を起票し、該当セルを ⚠️ と修正 Issue へのリンクに更新する。

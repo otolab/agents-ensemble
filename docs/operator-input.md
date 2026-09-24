@@ -78,9 +78,13 @@ CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できま�
 
 端末ごとの確認済み・未確認・既知制限と、実端末確認結果の更新手順は [TUI 端末互換性マトリクス](tui-terminal-compatibility.md) に記載します。
 
-TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。
+TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
 
 `ENSEMBLE_TUI_LAYOUT=stream` または `.ensemble/config.yaml` の `tui.layout: stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。環境変数は config より優先されます（[settings.md](settings.md)）。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /reconnect で再接続 · /exit で終了` の prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
+
+Open questions は内容駆動で高さを決めます。選択中 question の `question` と `context` は折り返し後の要求行数として扱い、非選択 question は 1 行の compact 表示として同じ一覧に残します。pane / stream とも、まずこの要求行数に合わせて Open questions 枠を拡大し、通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。表示上限に達した場合は、非選択 question の compact 行を先に 1 行ずつ確保し、残りを選択中の detail に割り当てます。そのため通常端末では、選択本文が長くても compact 行が実画面から隠れることはありません。端末の高さ、または compact 行を確保した残りの本文上限を超える極端に長い内容は、#321 と同じ非保証の clip 方針です。Open questions ペイン内のスクロールは行いません。
+
+`stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の live frame に `N 件の新着 · End で最新へ` と表示します。入力欄が空のときの `End`、または入力中の `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。既に Static へ渡した prefix の再送・remount・replay は行いません。
 
 ### 表示出力の inline Markdown subset
 
@@ -107,9 +111,9 @@ resume で sidecar の未回答 question を復元した場合も、`getContext(
 
 post-loop 待機中はモード B の prompt を `追加指示を入力するか /reconnect で再接続 · /exit で終了` に上書きします。終了中は `終了しています…` を表示して入力を無効化します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
 
-scrollback を実行中に上へ移動しているときに新着ログが追記されると、端末依存で表示が末尾へ戻ることがあります。端末幅を変更しても、既に Static として追記された行は再折り返しされません。
+`stream` の mouse-only scrollbar / native scrollback 操作は、terminal host から viewport state が TTY へ通知されないため keyboard detached として自動検出できません。保護が必要な場合は `PgUp` / `Ctrl+PgUp` で detached を宣言し、`End` / `Ctrl+End` で復帰します。端末幅を変更しても、既に Static として追記された行は再折り返しされません。
 
-TTY の pane / stream は、Ink の resize 通知を通常 100ms の settle window にまとめ、columns の連続した縮小では**最後の縮小イベントから 250ms**の quiet-period が終わるまで中間幅の live frame 更新を保留します。この時間は最初の縮小イベントからの絶対上限ではありません。TUI の `terminalSizeStore` は settled した実際の端末幅を使って幅・高さ・live frame と IME cursor の座標を再計算します。一方、Ink に渡す stdout proxy の `columns` は縮小中の high-water mark を保ち、幅が増えたときに更新します（`rows` も既存どおり high-water mark）。そのため、縮小後は Ink の viewport と TUI の実幅が意図的に異なることがあります。resize 時に端末全体を clear したり、stream の Static activity log を remount/replay したりはしません。pane は Ink の fullscreen clear 分岐を避けるため live frame の末尾 1 行を安全余白として予約し、最終サイズで再レイアウトします。固定ペインの余剰行は短い端末で先に縮め、Orchestration はタイトル上枠と下枠を保てる最小 2 行まで compact します。これにより 60×12（live frame 11 行）への resize でも、no-question モードは各ペインのタイトル・上下枠と Operator input 行を維持します。さらに短い端末ではログ・Worker 状態・open question 本文がクリップされることがあり、全ペインの本文表示は保証しません。stream は既追記 Static 行をそのまま残して下部 live frame だけを更新します。そのため、既追記行の再折り返しと scrollback 閲覧中の末尾復帰は引き続き非対応です。
+TTY の pane / stream は、Ink の resize 通知を通常 100ms の settle window にまとめ、columns の連続した縮小では**最後の縮小イベントから 250ms**の quiet-period が終わるまで中間幅の live frame 更新を保留します。この時間は最初の縮小イベントからの絶対上限ではありません。TUI の `terminalSizeStore` は settled した実際の端末幅を使って幅・高さ・live frame と IME cursor の座標を再計算します。一方、Ink に渡す stdout proxy の `columns` は縮小中の high-water mark を保ち、幅が増えたときに更新します（`rows` も既存どおり high-water mark）。そのため、縮小後は Ink の viewport と TUI の実幅が意図的に異なることがあります。resize 時に端末全体を clear したり、stream の Static activity log を remount/replay したりはしません。pane は Ink の fullscreen clear 分岐を避けるため live frame の末尾 1 行を安全余白として予約し、最終サイズで再レイアウトします。固定ペインの余剰行は短い端末で先に縮め、Orchestration はタイトル上枠と下枠を保てる最小 2 行まで compact します。これにより 60×12（live frame 11 行）への resize でも、no-question モードは各ペインのタイトル・上下枠と Operator input 行を維持します。さらに短い端末ではログ・Worker 状態・open question 本文がクリップされることがあり、全ペインの本文表示は保証しません。stream は既追記 Static 行をそのまま残して下部 live frame だけを更新します。そのため、既追記行の再折り返しと scrollback 閲覧中の末尾復帰、および mouse-only native scrollback の自動保護は引き続き非対応です。
 
 この resize workaround の意図、Ink upstream との関係、撤去条件は [ADR 0024](adr/0024-tui-shrink-coalesce.md) に、Ink / React 更新時の回帰確認は [Ink / React アップグレード回帰手順](tui-ink-upgrade.md) に記載します。従来の settle と rows high-water mark の判断履歴は [ADR 0022](adr/0022-tui-resize-workaround.md) に残しています。
 

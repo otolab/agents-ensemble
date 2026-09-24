@@ -84,6 +84,50 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
   });
 
+  it('keeps compact rows visible when long selected detail reaches the cap', async () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [
+        createOpenQuestion({
+          id: 'inq-long',
+          question: `question-start ${'word '.repeat(100)}`,
+          context: `first-detail-start ${'context '.repeat(80)}context-tail`,
+        }),
+        createOpenQuestion({
+          id: 'inq-compact-1',
+          question: 'Second question',
+          context: 'second-detail',
+        }),
+        createOpenQuestion({
+          id: 'inq-compact-2',
+          question: 'Third question',
+        }),
+      ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const initialFrame = lastFrame() ?? '';
+    expect(initialFrame).toContain('first-detail-start');
+    expect(initialFrame).toContain('inq-compact-1');
+    expect(initialFrame).toContain('inq-compact-2');
+
+    stdin.write(INK_TEST_KEYS.shiftDownArrow);
+    await flushInkStdin();
+
+    const switchedFrame = lastFrame() ?? '';
+    expect(switchedFrame).toContain('▸ inq-compact-1');
+    expect(switchedFrame).toContain('second-detail');
+    expect(switchedFrame).toContain('inq-long');
+    expect(switchedFrame).toContain('inq-compact-2');
+    expect(switchedFrame).not.toContain('first-detail-start');
+  });
+
   it('renders inline Markdown in static activity output', () => {
     const viewModel = createTuiViewModel();
     viewModel.appendActivityLog('conductor', 'Use **bold** and `code`.');
@@ -450,6 +494,66 @@ describe('IssueSessionTuiStream', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('[harness] first');
     expect(frame).toContain('[observation] second');
+  });
+
+  it('holds new activity while detached and flushes the pending suffix once on End', async () => {
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.appendActivityLog('harness', 'committed');
+
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    stdin.write(INK_TEST_KEYS.pageUp);
+    await flushInkStdin();
+
+    viewModel.appendActivityLog('harness', 'pending-one');
+    viewModel.appendActivityLog('harness', 'pending-two');
+    await flushInkStdin();
+
+    const detachedFrame = lastFrame() ?? '';
+    expect(detachedFrame).not.toContain('[harness] pending-one');
+    expect(detachedFrame).not.toContain('[harness] pending-two');
+    expect(detachedFrame).toContain('2 件の新着 · End で最新へ');
+
+    stdin.write(INK_TEST_KEYS.end);
+    await flushInkStdin();
+
+    const followedFrame = lastFrame() ?? '';
+    expect(followedFrame).toContain('[harness] pending-one');
+    expect(followedFrame).toContain('[harness] pending-two');
+    expect((followedFrame.match(/\[harness\] pending-one/g) ?? []).length).toBe(1);
+    expect((followedFrame.match(/\[harness\] pending-two/g) ?? []).length).toBe(1);
+    expect(followedFrame).not.toContain('2 件の新着 · End で最新へ');
+  });
+
+  it('requires Ctrl+PgUp while input has text, matching the pane key contract', async () => {
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.appendActivityLog('harness', 'committed');
+
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    stdin.write('typed');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.pageUp);
+    await flushInkStdin();
+
+    viewModel.appendActivityLog('harness', 'plain-page-up-followed');
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('[harness] plain-page-up-followed');
+    expect(lastFrame() ?? '').not.toContain('新着 · End で最新へ');
+
+    stdin.write(INK_TEST_KEYS.ctrlPageUp);
+    await flushInkStdin();
+    viewModel.appendActivityLog('harness', 'ctrl-page-up-pending');
+    await flushInkStdin();
+
+    const detachedFrame = lastFrame() ?? '';
+    expect(detachedFrame).toContain('typed');
+    expect(detachedFrame).not.toContain('[harness] ctrl-page-up-pending');
+    expect(detachedFrame).toContain('1 件の新着 · End で最新へ');
   });
 
   it('settles the live frame without replaying stream Static history', async () => {
