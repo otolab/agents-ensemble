@@ -107,6 +107,47 @@ export function countOpenQuestionsDisplayLines(items: OpenQuestionListItemRender
   return items.reduce((sum, item) => sum + item.lines.length, 0);
 }
 
+/**
+ * Fit selected detail into the content cap while reserving every compact row.
+ *
+ * Keep the original question order so the selected marker does not jump. When
+ * the selected item is too long, only its detail is clipped; compact rows are
+ * one line each and remain in the render list.
+ */
+function fitOpenQuestionItemsToContentLimit(
+  items: OpenQuestionListItemRender[],
+  selectedIndex: number,
+  maxContentLines: number,
+): OpenQuestionListItemRender[] {
+  const requestedContentLineCount = countOpenQuestionsDisplayLines(items);
+  if (requestedContentLineCount <= maxContentLines) {
+    return items;
+  }
+
+  const compactLineCount = items.reduce(
+    (sum, item) => sum + (item.compact ? item.lines.length : 0),
+    0,
+  );
+  const selectedItem = items[selectedIndex];
+  if (!selectedItem || selectedItem.compact) {
+    return items;
+  }
+
+  // Compact rows have priority. The selected item keeps at least its header
+  // line; if the compact list itself exceeds the cap, the terminal's existing
+  // short/overflow policy remains responsible for the final clipping.
+  const selectedLineBudget = Math.max(1, maxContentLines - compactLineCount);
+  if (selectedItem.lines.length <= selectedLineBudget) {
+    return items;
+  }
+
+  return items.map((item, index) =>
+    index === selectedIndex
+      ? { ...item, lines: item.lines.slice(0, selectedLineBudget) }
+      : item,
+  );
+}
+
 export function resolveOpenQuestionsPaneLayout(params: {
   openQuestions: OpenQuestion[];
   selectedIndex: number;
@@ -134,15 +175,12 @@ export function resolveOpenQuestionsPaneLayout(params: {
     selectedIndex,
     params.contentWidth,
   );
-  const requestedContentLineCount = Math.max(
-    1,
-    countOpenQuestionsDisplayLines(fullItems),
+  const items = fitOpenQuestionItemsToContentLimit(
+    fullItems,
+    selectedIndex,
+    maxContentLines,
   );
-  // Keep every question in the layout even when the terminal-size cap is
-  // reached. Non-selected questions are already one compact line each, so
-  // dropping them here makes the title count disagree with the rendered list.
-  // The pane/layout resolver handles the remaining overflow on short terminals.
-  const contentLineCount = Math.min(maxContentLines, requestedContentLineCount);
+  const contentLineCount = Math.max(1, countOpenQuestionsDisplayLines(items));
 
   const paneHeight = Math.max(
     OPEN_QUESTIONS_PANE_MIN_HEIGHT,
@@ -154,7 +192,7 @@ export function resolveOpenQuestionsPaneLayout(params: {
     titleText,
     titleSuffix,
     contentLineCount,
-    items: fullItems,
+    items,
     selectedIndex,
   };
 }

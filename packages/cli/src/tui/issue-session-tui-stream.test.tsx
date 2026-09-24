@@ -82,7 +82,7 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
   });
 
-  it('expands the open-question pane for long detail while keeping compact entries', () => {
+  it('keeps compact rows visible when long selected detail reaches the cap', async () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({
       workers: {},
@@ -90,24 +90,40 @@ describe('IssueSessionTuiStream', () => {
       openQuestions: [
         createOpenQuestion({
           id: 'inq-long',
-          question: `${'word '.repeat(55)}question-tail`,
-          context: `${'context '.repeat(40)}context-tail`,
+          question: `question-start ${'word '.repeat(100)}`,
+          context: `first-detail-start ${'context '.repeat(80)}context-tail`,
         }),
         createOpenQuestion({
-          id: 'inq-compact',
-          question: 'This remains visible as a compact row',
+          id: 'inq-compact-1',
+          question: 'Second question',
+          context: 'second-detail',
+        }),
+        createOpenQuestion({
+          id: 'inq-compact-2',
+          question: 'Third question',
         }),
       ],
       dispatchHold: { hold: false, heldEventCount: 0 },
     });
 
-    const { lastFrame } = render(
+    const { stdin, lastFrame } = render(
       <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
     );
 
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('context-tail');
-    expect(frame).toContain('inq-compact');
+    const initialFrame = lastFrame() ?? '';
+    expect(initialFrame).toContain('first-detail-start');
+    expect(initialFrame).toContain('inq-compact-1');
+    expect(initialFrame).toContain('inq-compact-2');
+
+    stdin.write(INK_TEST_KEYS.shiftDownArrow);
+    await flushInkStdin();
+
+    const switchedFrame = lastFrame() ?? '';
+    expect(switchedFrame).toContain('▸ inq-compact-1');
+    expect(switchedFrame).toContain('second-detail');
+    expect(switchedFrame).toContain('inq-long');
+    expect(switchedFrame).toContain('inq-compact-2');
+    expect(switchedFrame).not.toContain('first-detail-start');
   });
 
   it('renders inline Markdown in static activity output', () => {

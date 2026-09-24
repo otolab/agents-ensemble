@@ -147,6 +147,10 @@ describe('resolveOpenQuestionsPaneLayout', () => {
     expect(layout.items[1]?.compact).toBe(true);
     expect(layout.titleText).toContain('1/2');
     expect(layout.contentLineCount).toBe(13);
+    expect(layout.contentLineCount).toBe(
+      layout.items.reduce((sum, item) => sum + item.lines.length, 0),
+    );
+    expect(layout.items[0]?.lines).toHaveLength(12);
   });
 
   it('counts each non-selected question as one compact line in the requested height', () => {

@@ -1295,7 +1295,7 @@ describe('IssueSessionTui', () => {
       expect(onSubmit).toHaveBeenCalledWith('follow-up', undefined);
     });
 
-    it('grows open questions pane for long selected question text', () => {
+    it('keeps compact rows visible when long selected detail reaches the cap', async () => {
       const viewModel = createTuiViewModel();
       viewModel.setDisplayState({
         workers: {},
@@ -1303,18 +1303,23 @@ describe('IssueSessionTui', () => {
         openQuestions: [
           createOpenQuestion({
             id: 'inq-long',
-            question: `${'word '.repeat(55)}question-tail`,
-            context: `${'context '.repeat(40)}context-tail`,
+            question: `question-start ${'word '.repeat(100)}`,
+            context: `first-detail-start ${'context '.repeat(80)}context-tail`,
           }),
           createOpenQuestion({
-            id: 'inq-compact',
-            question: 'This remains visible as a compact row',
+            id: 'inq-compact-1',
+            question: 'Second question',
+            context: 'second-detail',
+          }),
+          createOpenQuestion({
+            id: 'inq-compact-2',
+            question: 'Third question',
           }),
         ],
         dispatchHold: { hold: false, heldEventCount: 0 },
       });
 
-      const { lastFrame } = render(
+      const { stdin, lastFrame } = render(
         <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
       );
 
@@ -1323,8 +1328,21 @@ describe('IssueSessionTui', () => {
         23,
       );
       expect(paneHeight).toBeGreaterThan(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
-      expect(lastFrame() ?? '').toContain('context-tail');
-      expect(lastFrame() ?? '').toContain('inq-compact');
+
+      const initialFrame = lastFrame() ?? '';
+      expect(initialFrame).toContain('first-detail-start');
+      expect(initialFrame).toContain('inq-compact-1');
+      expect(initialFrame).toContain('inq-compact-2');
+
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
+      await flushInkStdin();
+
+      const switchedFrame = lastFrame() ?? '';
+      expect(switchedFrame).toContain('▸ inq-compact-1');
+      expect(switchedFrame).toContain('second-detail');
+      expect(switchedFrame).toContain('inq-long');
+      expect(switchedFrame).toContain('inq-compact-2');
+      expect(switchedFrame).not.toContain('first-detail-start');
     });
   });
 
