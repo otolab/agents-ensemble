@@ -1089,6 +1089,139 @@ describe('runConductorSession resume / shutdown', () => {
     ).toBe(true);
   });
 
+  it('dispatches a worker permission that arrives immediately after a permission-only turn', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+
+    let workerPermissionHandler: PermissionHandler | undefined;
+    const promptSession = vi.fn(
+      async (
+        _sessionId: string,
+        _prompt: string,
+        promptOptions?: { permissionHandler?: PermissionHandler },
+      ) => {
+        workerPermissionHandler = promptOptions?.permissionHandler;
+        return { stopReason: 'end_turn' };
+      },
+    );
+    const connectAcp = vi.fn(async () =>
+      ({
+        newSession: vi.fn().mockResolvedValue('worker-session'),
+        loadSession: vi.fn().mockResolvedValue(undefined),
+        promptSession,
+        cancelSession: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      }) as unknown as AcpBridge,
+    );
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const permissionIds: string[] = [];
+    const permissionDecisions: Array<Promise<unknown>> = [];
+    const requestPermission = () => {
+      const decision = workerPermissionHandler!({
+        sessionId: 'worker-session',
+        toolName: 'Shell',
+        command: 'tmux kill-session -t issue320-static',
+      });
+      permissionDecisions.push(Promise.resolve(decision));
+    };
+    const onPostLoopWait = vi.fn(requestPermission);
+
+    sessionLogger.subscribe((event) => {
+      if (event.type === 'permission.pending') {
+        permissionIds.push(event.permission.id);
+      }
+    });
+
+    let sendCount = 0;
+    let permissionSendCount = 0;
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (sendCount > 1 && message.includes('permission.pending')) {
+        const permissionIndex = permissionSendCount;
+        permissionSendCount += 1;
+        expect(permissionIds[permissionIndex]).toBeDefined();
+        await conductorTools!.resolve_permission!.execute({
+          requestId: permissionIds[permissionIndex],
+          decision: 'allow',
+        });
+        await permissionDecisions[permissionIndex];
+
+        if (permissionIndex === 0) {
+          // The worker can request the next permission before this conductor
+          // turn has returned, so the stop gate must observe its waiter.
+          requestPermission();
+        } else {
+          operatorApi!.submit('/exit');
+        }
+      }
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'permission handled',
+      };
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        acp: {
+          preset: 'custom',
+          command: process.execPath,
+        },
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'main',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      connectAcp,
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      disableGitHubMonitor: true,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    const result = await sessionPromise;
+
+    expect(result.stopReason).toBe('completed');
+    expect(permissionSendCount).toBe(2);
+    expect(onPostLoopWait).toHaveBeenCalledOnce();
+    expect(permissionIds).toHaveLength(2);
+    expect(permissionDecisions).toHaveLength(2);
+    const postLoopWaitIndex = emitted.findIndex(
+      (event) => event.type === 'session.post_loop_wait',
+    );
+    const stopIndex = emitted.findIndex(
+      (event) => event.type === 'session.stop',
+    );
+    expect(postLoopWaitIndex).toBeGreaterThanOrEqual(0);
+    expect(stopIndex).toBeGreaterThan(postLoopWaitIndex);
+  });
+
   it('waits for /exit after autonomous loop when waitForOperatorExit is true', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-1',
