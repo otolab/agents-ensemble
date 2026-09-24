@@ -237,14 +237,17 @@ describe('createIssueSessionTuiHost', () => {
     host.dispose();
   });
 
-  it('submits ENSEMBLE_OPERATOR_MESSAGE once without Ink input', () => {
+  it('submits ENSEMBLE_OPERATOR_MESSAGE once and keeps the Ink input binding', () => {
     const previous = process.env.ENSEMBLE_OPERATOR_MESSAGE;
     process.env.ENSEMBLE_OPERATOR_MESSAGE = 'from env';
 
     const host = createIssueSessionTuiHost();
     const submit = vi.fn(() => true);
+    const renderedElement = mockRender.mock.calls[0]?.[0] as {
+      props: { onSubmit: (text: string) => void };
+    };
 
-    host.bindOperatorInput({
+    const dispose = host.bindOperatorInput({
       submit,
       getContext: () => ({
         conductorTurn: 1,
@@ -255,19 +258,28 @@ describe('createIssueSessionTuiHost', () => {
     });
 
     expect(submit).toHaveBeenCalledWith('from env');
+    renderedElement.props.onSubmit('follow-up');
+    expect(submit).toHaveBeenCalledWith('follow-up', undefined);
+
+    dispose?.();
+    renderedElement.props.onSubmit('after dispose');
+    expect(submit).not.toHaveBeenCalledWith('after dispose');
     host.dispose();
     process.env.ENSEMBLE_OPERATOR_MESSAGE = previous;
   });
 
-  it('submits the CLI message once without Ink input', () => {
+  it('submits the CLI message once and keeps the Ink input binding', () => {
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
 
     const host = createIssueSessionTuiHost(undefined, {
       initialOperatorMessage: '  from cli  ',
     });
     const submit = vi.fn(() => true);
+    const renderedElement = mockRender.mock.calls[0]?.[0] as {
+      props: { onSubmit: (text: string) => void };
+    };
 
-    host.bindOperatorInput({
+    const dispose = host.bindOperatorInput({
       submit,
       getContext: () => ({
         conductorTurn: 1,
@@ -279,6 +291,12 @@ describe('createIssueSessionTuiHost', () => {
 
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith('from cli');
+    renderedElement.props.onSubmit('follow-up');
+    expect(submit).toHaveBeenCalledWith('follow-up', undefined);
+
+    dispose?.();
+    renderedElement.props.onSubmit('after dispose');
+    expect(submit).not.toHaveBeenCalledWith('after dispose');
     host.dispose();
   });
 

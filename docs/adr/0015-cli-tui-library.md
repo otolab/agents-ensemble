@@ -165,6 +165,18 @@ TTY 判定は現行の `isOperatorInputInteractive()` / `isOperatorInputTty()`�
 
 Open questions の有無で Operator input を `withQuestions` / `noQuestions` の2モードに分ける。未回答一覧の正本は `OperatorInputBindingApi.getContext().openQuestions`、すなわち resume 時にも復元される `OpenQuestionRegistry.listOpen()` とする。未回答時だけ Open questions ペインを描画し、空状態では高さ 0 とする。Operator input には入力を促す prompt のみを載せ、Issue 参照や post-loop 待機などの status は載せない。Workers ペイン上枠の右端に Issue リンクを表示する。post-loop 待機中は no-question prompt を `追加指示を入力するか /exit で終了` に上書きし、shutting down は `終了しています…` を維持する。pane と stream は共通の表示モード resolver と高さ計算を使う。詳細な利用者向けルールは [operator-input.md](../operator-input.md) に記載する。
 
+### #298 TUI resize と scrollback 保全
+
+[#298 のフォロー整理](https://github.com/otolab/agents-ensemble/issues/298#issuecomment-5806087165) と [PR #318](https://github.com/otolab/agents-ensemble/pull/318) では、#257 の native scrollback を維持する前提から、候補 **B+C+D** のハイブリッドを採用した。`alternateScreen: false` は変更せず、resize 時の live frame だけを安全に再配置する。
+
+- **B+C（pane）:** stdout の resize 通知を **100ms の settle window** にまとめ、同じ settled terminal-size snapshot から幅・高さ・live frame・IME cursor を計算する。全画面 clear は行わず、live frame の末尾 1 行を安全余白として予約する。
+- **D（stream）:** `<Static>` の活動履歴を resize 境界で remount / replay / re-emit せず、下部の live frame だけを更新する。既追記 Static 行の再折り返しは対象外である。
+- **high-water mark stdout proxy:** Ink に見せる viewport の `rows` は resize 後も過去最大値を保ち、TUI 自身は settled snapshot の実サイズを使う。縮小時に Ink の fullscreen-clear fallback が scrollback を消す経路を避けるための実装上の保護である。
+
+この追記は #298 の採用方針と #318 の実装・確認範囲を要約するものであり、ADR 0015 の元の Decision を変更しない。端末ごとの確認状況、未確認の実端末、Static 再折り返し・scrollback 閲覧中の末尾復帰・短い端末での clip は [TUI 端末互換性マトリクス](../tui-terminal-compatibility.md) と [operator-input.md](../operator-input.md) を参照する。
+
+settle と high-water mark proxy の技術的な意図・制約・撤去条件は [ADR 0022](0022-tui-resize-workaround.md) に分離して記録する。
+
 ## 関連
 
 - Issue #54, #89, #104, #108

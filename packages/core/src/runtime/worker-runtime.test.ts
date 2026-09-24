@@ -229,6 +229,33 @@ describe('WorkerRuntime', () => {
     await runtime.shutdown();
   });
 
+  it('keeps runningCount non-zero while an inbox permission request is pending', async () => {
+    const inbox = new ConductorInbox();
+    let permissionId: string | undefined;
+    inbox.subscribe((message) => {
+      if (message.type === 'permission.request') {
+        permissionId = message.id;
+      }
+    });
+    const runtime = new WorkerRuntime({ inbox });
+
+    const decisionPromise = inbox.createPermissionHandler('worker-1')({
+      toolName: 'Shell',
+      raw: { command: 'echo test' },
+    });
+
+    await vi.waitFor(() => {
+      expect(permissionId).toBeDefined();
+      expect(runtime.runningCount).toBe(1);
+    });
+
+    inbox.fulfillPermission(permissionId!, {
+      outcome: { outcome: 'selected', optionId: 'deny' },
+    });
+    await decisionPromise;
+    expect(runtime.runningCount).toBe(0);
+  });
+
   it('queues sendWorkerMessage while processing and drains after round completes', async () => {
     const inbox = new ConductorInbox();
     const prompts: string[] = [];

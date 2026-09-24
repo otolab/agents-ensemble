@@ -51,6 +51,8 @@ pnpm test:integration
 pnpm test:e2e
 ```
 
+Ink / React / `ink-testing-library` の更新、または TUI の resize 配線を変更する場合は、3 系統の回帰ゲートと判定基準を [Ink / React アップグレード回帰手順](tui-ink-upgrade.md) に従って確認する。
+
 integration / e2e の設定を初めて作る場合:
 
 ```bash

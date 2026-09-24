@@ -9,6 +9,7 @@ const {
   mockFetchIssueContext,
   mockResolveGitHubAuthToken,
   mockSend,
+  mockTuiOperatorApi,
   mockTuiCreate,
   mockTuiDispose,
 } = vi.hoisted(() => {
@@ -18,13 +19,26 @@ const {
   const mockFetchIssueContext = vi.fn();
   const mockResolveGitHubAuthToken = vi.fn();
   const mockTuiDispose = vi.fn();
+  const mockTuiOperatorApi = {
+    current: undefined as { submit: (message: string) => boolean } | undefined,
+  };
   const mockTuiCreate = vi.fn(
     (_issueUrl: string, options?: { initialOperatorMessage?: string }) => ({
       bindOperatorInput: (api: { submit: (message: string) => boolean }) => {
-        if (options?.initialOperatorMessage) {
-          api.submit(options.initialOperatorMessage);
+        // Match the production binding lifecycle: register the API before
+        // dispatching the optional initial message, then keep it until dispose.
+        mockTuiOperatorApi.current = api;
+        const initialOperatorMessage =
+          options?.initialOperatorMessage ??
+          (process.env.ENSEMBLE_OPERATOR_MESSAGE?.trim() || undefined);
+        if (initialOperatorMessage) {
+          api.submit(initialOperatorMessage);
         }
-        return () => {};
+        return () => {
+          if (mockTuiOperatorApi.current === api) {
+            mockTuiOperatorApi.current = undefined;
+          }
+        };
       },
       displayBackend: { render: vi.fn() },
       telemetrySink: vi.fn(),
@@ -38,6 +52,7 @@ const {
     mockFetchIssueContext,
     mockResolveGitHubAuthToken,
     mockSend,
+    mockTuiOperatorApi,
     mockTuiCreate,
     mockTuiDispose,
   };
@@ -116,6 +131,7 @@ describe('executeIssueCommand with the core session', () => {
     mockFetchIssueContext.mockReset();
     mockResolveGitHubAuthToken.mockReset();
     mockSend.mockReset();
+    mockTuiOperatorApi.current = undefined;
     mockTuiCreate.mockClear();
     mockTuiDispose.mockClear();
 
@@ -154,7 +170,7 @@ describe('executeIssueCommand with the core session', () => {
     });
     const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
 
-    await executeIssueCommand(
+    const sessionPromise = executeIssueCommand(
       issueUrl,
       {
         repoRoot,
@@ -170,6 +186,13 @@ describe('executeIssueCommand with the core session', () => {
       },
     );
 
+    if (tty) {
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(mockTuiOperatorApi.current).toBeDefined());
+      mockTuiOperatorApi.current!.submit('/exit');
+    }
+    await sessionPromise;
+
     expect(mockSend).toHaveBeenCalledTimes(2);
     expect(String(mockSend.mock.calls[0]?.[0])).toContain('Test issue body');
     expect(mockSend.mock.calls[1]?.[0]).toBe('from cli');
@@ -179,6 +202,183 @@ describe('executeIssueCommand with the core session', () => {
         expect.objectContaining({ initialOperatorMessage: 'from cli' }),
       );
     }
+  });
+
+  it('keeps a plain TTY session in post-loop wait until /exit', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+
+    let operatorApi: { submit: (message: string) => boolean } | undefined;
+    const telemetryEventTypes: string[] = [];
+
+    mockTuiCreate.mockImplementationOnce(() => ({
+      bindOperatorInput: (api: { submit: (message: string) => boolean }) => {
+        operatorApi = api;
+        return () => {};
+      },
+      displayBackend: { render: vi.fn() },
+      telemetrySink: (event: { type: string }) => {
+        telemetryEventTypes.push(event.type);
+        if (event.type === 'session.post_loop_wait') {
+          operatorApi!.submit('/exit');
+        }
+      },
+      notifyReprompt: vi.fn(),
+      dispose: mockTuiDispose,
+    }));
+
+    const result = await withTimeout(
+      executeIssueCommand(
+        issueUrl,
+        {
+          repoRoot,
+          conductorCwd: repoRoot,
+          worktree: 'in_repo',
+          githubMonitor: false,
+        },
+        {
+          isOperatorInputInteractive: (message) => message === undefined,
+          isOperatorInputTty: () => true,
+          runIssueSession: runIssueSessionImpl,
+        },
+      ),
+      'plain TTY post-loop session',
+    );
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockTuiCreate).toHaveBeenCalledWith(
+      issueUrl,
+      expect.objectContaining({ initialOperatorMessage: undefined }),
+    );
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(telemetryEventTypes.indexOf('session.post_loop_wait')).toBeGreaterThanOrEqual(0);
+    expect(telemetryEventTypes.indexOf('session.stop')).toBeGreaterThan(
+      telemetryEventTypes.indexOf('session.post_loop_wait'),
+    );
+  });
+
+  it('keeps a TTY CLI-message session in post-loop wait until /exit', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+
+    const sessionPromise = executeIssueCommand(
+      issueUrl,
+      {
+        repoRoot,
+        conductorCwd: repoRoot,
+        worktree: 'in_repo',
+        githubMonitor: false,
+        initialOperatorMessage: 'from cli',
+      },
+      {
+        isOperatorInputInteractive: () => true,
+        isOperatorInputTty: () => true,
+        runIssueSession: runIssueSessionImpl,
+      },
+    );
+
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+    const tuiHost = mockTuiCreate.mock.results[0]?.value as {
+      telemetrySink: ReturnType<typeof vi.fn>;
+    };
+    await vi.waitFor(() =>
+      expect(tuiHost.telemetrySink).toHaveBeenCalledWith({
+        type: 'session.post_loop_wait',
+      }),
+    );
+
+    let settled = false;
+    void sessionPromise.then(() => {
+      settled = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(mockTuiOperatorApi.current).toBeDefined();
+
+    mockTuiOperatorApi.current!.submit('follow-up from cli');
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(3));
+    expect(mockSend.mock.calls[2]?.[0]).toBe('follow-up from cli');
+
+    mockTuiOperatorApi.current!.submit('/exit');
+    const result = await withTimeout(sessionPromise, 'TTY CLI-message session');
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockSend.mock.calls[1]?.[0]).toBe('from cli');
+    expect(tuiHost.telemetrySink).toHaveBeenCalledWith({
+      type: 'session.operator_exit',
+    });
+    expect(tuiHost.telemetrySink).toHaveBeenCalledWith({
+      type: 'session.stop',
+      stopReason: 'completed',
+    });
+  });
+
+  it('keeps a TTY environment-message session in post-loop wait until /exit', async () => {
+    process.env.ENSEMBLE_OPERATOR_MESSAGE = 'from env';
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+
+    const sessionPromise = executeIssueCommand(
+      issueUrl,
+      {
+        repoRoot,
+        conductorCwd: repoRoot,
+        worktree: 'in_repo',
+        githubMonitor: false,
+      },
+      {
+        isOperatorInputInteractive: () => true,
+        isOperatorInputTty: () => true,
+        runIssueSession: runIssueSessionImpl,
+      },
+    );
+
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+    const tuiHost = mockTuiCreate.mock.results[0]?.value as {
+      telemetrySink: ReturnType<typeof vi.fn>;
+    };
+    await vi.waitFor(() =>
+      expect(tuiHost.telemetrySink).toHaveBeenCalledWith({
+        type: 'session.post_loop_wait',
+      }),
+    );
+
+    let settled = false;
+    void sessionPromise.then(() => {
+      settled = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(mockTuiOperatorApi.current).toBeDefined();
+
+    mockTuiOperatorApi.current!.submit('follow-up from env');
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(3));
+    expect(mockSend.mock.calls[2]?.[0]).toBe('follow-up from env');
+
+    mockTuiOperatorApi.current!.submit('/exit');
+    const result = await withTimeout(sessionPromise, 'TTY environment-message session');
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockSend.mock.calls[1]?.[0]).toBe('from env');
+    expect(tuiHost.telemetrySink).toHaveBeenCalledWith({
+      type: 'session.operator_exit',
+    });
+    expect(tuiHost.telemetrySink).toHaveBeenCalledWith({
+      type: 'session.stop',
+      stopReason: 'completed',
+    });
   });
 
   it('stops on a one-shot conductor error instead of waiting for input', async () => {

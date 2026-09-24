@@ -165,7 +165,8 @@ export async function executeIssueCommand(
     : resolvedInitialOperatorMessage;
   const interactive = isInteractive(initialOperatorMessageForBinding);
   const hasOneShotOperatorMessage = Boolean(resolvedInitialOperatorMessageForBinding);
-  const useTui = interactive && isTty();
+  const tty = isTty();
+  const useTui = interactive && tty;
   const tuiHost = useTui
     ? createIssueSessionTuiHost(issueUrl, {
         config: ensembleConfig,
@@ -251,13 +252,16 @@ export async function executeIssueCommand(
                   issueUrl,
                   initialOperatorMessage: initialOperatorMessageForBinding,
                 })),
-            continueOnConductorError: !hasOneShotOperatorMessage,
-            ...(hasOneShotOperatorMessage
+            // A TTY remains interactive after the initial message, so keep
+            // the normal TTY policy even when that message was injected
+            // through the CLI or environment.
+            continueOnConductorError: tty || !hasOneShotOperatorMessage,
+            ...(!tty && hasOneShotOperatorMessage
               ? {
                   stopOnUnansweredInput: true,
                 }
               : {}),
-            ...(isTty() && postLoopWait && !hasOneShotOperatorMessage
+            ...(tty && postLoopWait
               ? {
                   waitForOperatorExit: true,
                 }

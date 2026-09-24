@@ -14,6 +14,7 @@ import { openQuestionToEscalationRecord } from '../escalation/open-question-to-e
 import type { OpenQuestion } from '../escalation/open-question.js';
 import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import type { EscalationRecord } from '../escalation/human-inquiry.js';
+import { deny } from '../permission/permission-broker.js';
 import type { PermissionPolicyRules } from '../permission/permission-policy.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import {
@@ -347,6 +348,7 @@ export async function runConductorSession(
   const workerAcpFingerprints = new Map(
     workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
   );
+  let teardownStarted = false;
   const workerWorktree =
     options.workerWorktree ??
     (workers.length > 0
@@ -393,6 +395,15 @@ export async function runConductorSession(
       ? { ownsWorkerAcpConnections: options.ownsWorkerAcpConnections }
       : {}),
     decidePermission: (request, workerId, requestId) => {
+      if (teardownStarted) {
+        const workerLabel =
+          workerSession.runtime.resolveWorkerLabel(workerId) ?? workerId;
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message: `permission.rejected reason=teardown worker=${workerLabel} tool=${request.toolName} id=${requestId}`,
+        });
+        return deny(request);
+      }
       const outcome = permissionPipeline.evaluate(requestId, workerId, request);
       if (outcome.status === 'resolved') {
         return outcome.decision;
@@ -946,6 +957,7 @@ export async function runConductorSession(
       });
     }
   } finally {
+    teardownStarted = true;
     const forceShutdown = operatorRequestedExit || shutdownSignal.aborted;
     const teardownStartedAt = Date.now();
     const teardownPhases: Record<string, number> = {};
@@ -982,6 +994,9 @@ export async function runConductorSession(
       if (githubMonitor) {
         githubMonitor.flush();
       }
+      // Stop active prompts before closing ACP bridges. Requests that arrive
+      // after this point are rejected by the teardown guard above.
+      workerSession.runtime.cancelAllActivePrompts();
       rejectAllPendingPermissions(permissionPipeline, workerSession.inbox);
       try {
         emitTeardownPhase('flushSidecar');
@@ -1025,6 +1040,10 @@ export async function runConductorSession(
         ]);
       } else {
         await runGithubMonitorStop();
+        // A monitor stop callback can synchronously dispatch a worker prompt.
+        // Cancel that prompt before WorkerRuntime waits for idle and closes
+        // the ACP bridge.
+        workerSession.runtime.cancelAllActivePrompts();
         await runWorkerStop();
         await runConductorClose();
       }
