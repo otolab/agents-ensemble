@@ -82,6 +82,50 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
   });
 
+  it('keeps compact rows visible when long selected detail reaches the cap', async () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [
+        createOpenQuestion({
+          id: 'inq-long',
+          question: `question-start ${'word '.repeat(100)}`,
+          context: `first-detail-start ${'context '.repeat(80)}context-tail`,
+        }),
+        createOpenQuestion({
+          id: 'inq-compact-1',
+          question: 'Second question',
+          context: 'second-detail',
+        }),
+        createOpenQuestion({
+          id: 'inq-compact-2',
+          question: 'Third question',
+        }),
+      ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const initialFrame = lastFrame() ?? '';
+    expect(initialFrame).toContain('first-detail-start');
+    expect(initialFrame).toContain('inq-compact-1');
+    expect(initialFrame).toContain('inq-compact-2');
+
+    stdin.write(INK_TEST_KEYS.shiftDownArrow);
+    await flushInkStdin();
+
+    const switchedFrame = lastFrame() ?? '';
+    expect(switchedFrame).toContain('▸ inq-compact-1');
+    expect(switchedFrame).toContain('second-detail');
+    expect(switchedFrame).toContain('inq-long');
+    expect(switchedFrame).toContain('inq-compact-2');
+    expect(switchedFrame).not.toContain('first-detail-start');
+  });
+
   it('renders inline Markdown in static activity output', () => {
     const viewModel = createTuiViewModel();
     viewModel.appendActivityLog('conductor', 'Use **bold** and `code`.');

@@ -1183,8 +1183,16 @@ describe('IssueSessionTui', () => {
         workers: {},
         conductorOutput: null,
         openQuestions: [
-          createOpenQuestion({ id: 'inq-1', question: 'First question' }),
-          createOpenQuestion({ id: 'inq-2', question: 'Second question' }),
+          createOpenQuestion({
+            id: 'inq-1',
+            question: 'First question',
+            context: 'first selected detail',
+          }),
+          createOpenQuestion({
+            id: 'inq-2',
+            question: 'Second question',
+            context: 'second selected detail',
+          }),
         ],
         dispatchHold: { hold: false, heldEventCount: 0 },
       });
@@ -1194,6 +1202,8 @@ describe('IssueSessionTui', () => {
       );
 
       expect(lastFrame() ?? '').toContain('▸ inq-1');
+      expect(lastFrame() ?? '').toContain('first selected detail');
+      expect(lastFrame() ?? '').not.toContain('second selected detail');
 
       stdin.write(INK_TEST_KEYS.shiftDownArrow);
       await flushInkStdin();
@@ -1201,6 +1211,8 @@ describe('IssueSessionTui', () => {
       const frame = lastFrame() ?? '';
       expect(frame).toContain('2/2');
       expect(frame).toContain('▸ inq-2');
+      expect(frame).toContain('second selected detail');
+      expect(frame).not.toContain('first selected detail');
     });
 
     it('does not change selection on plain arrow keys', async () => {
@@ -1283,7 +1295,7 @@ describe('IssueSessionTui', () => {
       expect(onSubmit).toHaveBeenCalledWith('follow-up', undefined);
     });
 
-    it('grows open questions pane for long selected question text', () => {
+    it('keeps compact rows visible when long selected detail reaches the cap', async () => {
       const viewModel = createTuiViewModel();
       viewModel.setDisplayState({
         workers: {},
@@ -1291,22 +1303,46 @@ describe('IssueSessionTui', () => {
         openQuestions: [
           createOpenQuestion({
             id: 'inq-long',
-            question: 'word '.repeat(30),
-            context: 'context '.repeat(10),
+            question: `question-start ${'word '.repeat(100)}`,
+            context: `first-detail-start ${'context '.repeat(80)}context-tail`,
+          }),
+          createOpenQuestion({
+            id: 'inq-compact-1',
+            question: 'Second question',
+            context: 'second-detail',
+          }),
+          createOpenQuestion({
+            id: 'inq-compact-2',
+            question: 'Third question',
           }),
         ],
         dispatchHold: { hold: false, heldEventCount: 0 },
       });
 
-      const { lastFrame } = render(
+      const { stdin, lastFrame } = render(
         <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
       );
 
       const paneHeight = resolveOpenQuestionsPaneHeight(
         viewModel.getSnapshot().displayState.openQuestions,
+        23,
       );
       expect(paneHeight).toBeGreaterThan(OPEN_QUESTIONS_PANE_MIN_HEIGHT);
-      expect(lastFrame() ?? '').toContain('context context');
+
+      const initialFrame = lastFrame() ?? '';
+      expect(initialFrame).toContain('first-detail-start');
+      expect(initialFrame).toContain('inq-compact-1');
+      expect(initialFrame).toContain('inq-compact-2');
+
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
+      await flushInkStdin();
+
+      const switchedFrame = lastFrame() ?? '';
+      expect(switchedFrame).toContain('▸ inq-compact-1');
+      expect(switchedFrame).toContain('second-detail');
+      expect(switchedFrame).toContain('inq-long');
+      expect(switchedFrame).toContain('inq-compact-2');
+      expect(switchedFrame).not.toContain('first-detail-start');
     });
   });
 

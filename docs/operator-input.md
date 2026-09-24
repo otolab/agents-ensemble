@@ -82,6 +82,8 @@ TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operat
 
 `ENSEMBLE_TUI_LAYOUT=stream` または `.ensemble/config.yaml` の `tui.layout: stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。環境変数は config より優先されます（[settings.md](settings.md)）。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /reconnect で再接続 · /exit で終了` の prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
 
+Open questions は内容駆動で高さを決めます。選択中 question の `question` と `context` は折り返し後の要求行数として扱い、非選択 question は 1 行の compact 表示として同じ一覧に残します。pane / stream とも、まずこの要求行数に合わせて Open questions 枠を拡大し、通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。表示上限に達した場合は、非選択 question の compact 行を先に 1 行ずつ確保し、残りを選択中の detail に割り当てます。そのため通常端末では、選択本文が長くても compact 行が実画面から隠れることはありません。端末の高さ、または compact 行を確保した残りの本文上限を超える極端に長い内容は、#321 と同じ非保証の clip 方針です。Open questions ペイン内のスクロールは行いません。
+
 `stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の live frame に `N 件の新着 · End で最新へ` と表示します。入力欄が空のときの `End`、または入力中の `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。既に Static へ渡した prefix の再送・remount・replay は行いません。
 
 ### 表示出力の inline Markdown subset

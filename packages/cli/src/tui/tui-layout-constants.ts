@@ -39,11 +39,16 @@ export const WORKER_PANE_HEIGHT = 6;
  */
 export const OPEN_QUESTIONS_PANE_MIN_HEIGHT = 3;
 
-/** Open questions ペイン本文の表示行数上限（端末行数に対する比率）。 */
-export const OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO = 0.35;
+/**
+ * Open questions ペイン本文の表示行数上限（端末行数に対する比率）。
+ *
+ * 選択中 question の折り返し行と非選択 question の compact 行を
+ * 80x24 程度の端末で同時に表示できるよう、従来の 35% から引き上げる。
+ */
+export const OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO = 0.6;
 
-/** Open questions ペイン本文の表示行数の絶対上限。 */
-export const OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES = 8;
+/** Open questions ペイン本文の表示行数の絶対上限（通常端末の本文行数に合わせる）。 */
+export const OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES = 14;
 
 /** Open questions ペインタイトルに付与する選択操作ヒント。 */
 export const OPEN_QUESTIONS_SELECTION_HINT = ' — Shift+↑↓で選択';
