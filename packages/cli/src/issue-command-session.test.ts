@@ -181,6 +181,62 @@ describe('executeIssueCommand with the core session', () => {
     }
   });
 
+  it('keeps a plain TTY session in post-loop wait until /exit', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+    let operatorApi: { submit: (message: string) => boolean } | undefined;
+    const telemetryEventTypes: string[] = [];
+
+    mockTuiCreate.mockImplementationOnce(() => ({
+      bindOperatorInput: (api: { submit: (message: string) => boolean }) => {
+        operatorApi = api;
+        return () => {};
+      },
+      displayBackend: { render: vi.fn() },
+      telemetrySink: (event: { type: string }) => {
+        telemetryEventTypes.push(event.type);
+        if (event.type === 'session.post_loop_wait') {
+          operatorApi!.submit('/exit');
+        }
+      },
+      notifyReprompt: vi.fn(),
+      dispose: mockTuiDispose,
+    }));
+
+    const result = await withTimeout(
+      executeIssueCommand(
+        issueUrl,
+        {
+          repoRoot,
+          conductorCwd: repoRoot,
+          worktree: 'in_repo',
+          githubMonitor: false,
+        },
+        {
+          isOperatorInputInteractive: (message) => message === undefined,
+          isOperatorInputTty: () => true,
+          runIssueSession: runIssueSessionImpl,
+        },
+      ),
+      'plain TTY post-loop session',
+    );
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockTuiCreate).toHaveBeenCalledWith(
+      issueUrl,
+      expect.objectContaining({ initialOperatorMessage: undefined }),
+    );
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(telemetryEventTypes.indexOf('session.post_loop_wait')).toBeGreaterThanOrEqual(0);
+    expect(telemetryEventTypes.indexOf('session.stop')).toBeGreaterThan(
+      telemetryEventTypes.indexOf('session.post_loop_wait'),
+    );
+  });
+
   it('stops on a one-shot conductor error instead of waiting for input', async () => {
     mockSend
       .mockResolvedValueOnce({

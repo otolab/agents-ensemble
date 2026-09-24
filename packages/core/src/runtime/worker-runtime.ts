@@ -79,9 +79,16 @@ export class WorkerRuntime {
 
   constructor(private readonly options: WorkerRuntimeOptions) {}
 
-  /** 進行中の prompt ラウンド数 + attach 中（conductor ループ用）。 */
+  /** 進行中の prompt / permission 待ち数 + attach 中（conductor ループ用）。 */
   get runningCount(): number {
-    return this.processing.size + this.attachInFlight;
+    // A permission request can arrive just after an ACP prompt reports idle.
+    // Keep the session alive until the inbox has either dispatched or fulfilled
+    // that request, so the stop gate cannot miss the permission event.
+    return (
+      this.processing.size +
+      this.attachInFlight +
+      this.options.inbox.pendingPermissionCount
+    );
   }
 
   /** attach 済み worker 数。 */
@@ -238,10 +245,13 @@ export class WorkerRuntime {
   }
 
   async waitForIdle(): Promise<void> {
-    if (this.processing.size === 0 && this.attachInFlight === 0) return;
-    await new Promise<void>((resolve) => {
-      this.idleResolvers.add(resolve);
-    });
+    const promptsIdle = this.processing.size === 0 && this.attachInFlight === 0;
+    const promptIdle = promptsIdle
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          this.idleResolvers.add(resolve);
+        });
+    await Promise.all([promptIdle, this.options.inbox.waitForPermissionsIdle()]);
   }
 
   /** 進行中の全 resident prompt を `session/cancel` する（明示 exit 用）。 */
