@@ -1,5 +1,18 @@
 # @agents-ensemble/cli
 
+## 0.6.5
+
+### Patch Changes
+
+- 0d47974: `conductor.send` の SDK/transport 失敗を conductor 対話チャンネルへ合成表示せず、harness 障害として分類済みの日本語要約と診断情報を表示する。
+- 882e3f9: conductor の Connection stalled 時に in-process transport 再接続を試行し、オペレータの `/reconnect` コマンドを追加する。
+- 46b836c: Keep TTY issue sessions alive for post-loop permission requests and reject late teardown requests safely.
+- 367105f: TTY で CLI または `ENSEMBLE_OPERATOR_MESSAGE` の初回メッセージを指定しても、`/exit` まで post-loop 待機と追加オペレータ入力を維持するようにしました。
+- b630488: TTY TUI のリサイズを settle してから pane / stream の live frame を同じ terminal size snapshot で再配置し、stream の Static activity log を再送しないようにする。
+- Updated dependencies [882e3f9]
+- Updated dependencies [46b836c]
+  - @agents-ensemble/core@0.6.5
+
 ## 0.6.4
 
 ### Patch Changes

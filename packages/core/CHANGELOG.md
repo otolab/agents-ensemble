@@ -1,5 +1,12 @@
 # @agents-ensemble/core
 
+## 0.6.5
+
+### Patch Changes
+
+- 882e3f9: conductor の Connection stalled 時に in-process transport 再接続を試行し、オペレータの `/reconnect` コマンドを追加する。
+- 46b836c: Keep TTY issue sessions alive for post-loop permission requests and reject late teardown requests safely.
+
 ## 0.6.4
 
 ### Patch Changes
