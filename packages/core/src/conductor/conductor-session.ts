@@ -299,6 +299,9 @@ export async function runConductorSession(
     }
   }
 
+  const conductorAgentFactory =
+    options.conductorAgentFactory ?? createConductorAgentFactory(conductorBackend);
+
   const githubAuth = await resolveGitHubAuthToken({ config: ensembleConfig });
   if (!githubAuth.token) {
     sessionLogger.emit({
@@ -654,8 +657,6 @@ export async function runConductorSession(
     customTools: conductorToolRegistry.toRecord(),
   };
 
-  const conductorAgentFactory =
-    options.conductorAgentFactory ?? createConductorAgentFactory(conductorBackend);
   conductorAgent = options.resumeAgentId
     ? await conductorAgentFactory.resume(options.resumeAgentId, conductorOptions)
     : await conductorAgentFactory.create(conductorOptions);
@@ -1121,15 +1122,9 @@ function createConductorAgentFactory(backend: ConductorBackend): ConductorAgentF
     return createCursorSdkConductorAgentFactory();
   }
 
-  const unsupported = (): never => {
-    throw new Error(
-      'Conductor backend "pi" is not supported yet; see issue #352 for the Pi implementation.',
-    );
-  };
-  return {
-    create: async (_options) => unsupported(),
-    resume: async (_agentId, _options) => unsupported(),
-  };
+  throw new Error(
+    'Conductor backend "pi" is not supported yet; see issue #352 for the Pi implementation.',
+  );
 }
 
 async function emitWorktreeRemoval(

@@ -27,6 +27,8 @@ CLI 明示指定 > 環境変数 > project .ensemble/config.yaml > user ~/.ensemb
 
 `loadEnsembleConfig(repoRoot)` は user → project の順で merge した `EnsembleConfig` を返す。各 `resolve*Setting` はその merged config を **config 層**として参照する。
 
+`conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > user / project の deep merge 済み `config.conductor.backend` > `cursor` の順で解決します。
+
 `ensemble issue` 起動時（GitHub monitor / Issue コンテキスト取得より前）に config を読み込む。
 
 ## テンプレート
