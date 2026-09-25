@@ -199,54 +199,62 @@ describe('runConductorSessionDriver', () => {
 
   it('dispatches late worker outcomes before stopping a one-shot session', async () => {
     const eventQueue = new SessionEventQueue();
-    const send = vi.fn().mockImplementationOnce(async () => {
-      await Promise.resolve();
-      eventQueue.enqueue({
-        type: 'worker.completed',
-        result: {
-          name: 'late-worker',
-          kind: 'implementer',
-          issue: TEST_ISSUE,
-          worktree: {
-            path: '/tmp/wt',
-            branch: 'ensemble/issue-1',
-            issue: TEST_ISSUE,
-          },
-          prompt: 'done',
-          promptResult: { stopReason: 'end_turn' },
-          acpSessionId: 'sess-completed',
-          source: 'harness',
-        },
-      });
-      eventQueue.enqueue({
-        type: 'worker.failed',
-        failure: {
-          name: 'late-worker',
-          kind: 'implementer',
-          error: 'late failure',
-        },
-      });
-      return {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
         runId: 'run-1',
         status: 'finished',
         result: 'done',
-      };
-    }).mockResolvedValueOnce({
-      runId: 'run-2',
-      status: 'finished',
-      result: 'worker outcomes delivered',
-    });
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'worker outcomes delivered',
+      });
+    const inbox = {
+      drain: vi.fn().mockImplementationOnce(async () => {
+        await Promise.resolve();
+        eventQueue.enqueue({
+          type: 'worker.completed',
+          result: {
+            name: 'late-worker',
+            kind: 'implementer',
+            issue: TEST_ISSUE,
+            worktree: {
+              path: '/tmp/wt',
+              branch: 'ensemble/issue-1',
+              issue: TEST_ISSUE,
+            },
+            prompt: 'done',
+            promptResult: { stopReason: 'end_turn' },
+            acpSessionId: 'sess-completed',
+            source: 'harness',
+          },
+        });
+        eventQueue.enqueue({
+          type: 'worker.failed',
+          failure: {
+            name: 'late-worker',
+            kind: 'implementer',
+            error: 'late failure',
+          },
+        });
+      }).mockResolvedValueOnce(undefined),
+    };
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const options = createDriverOptions({
+      eventQueue,
+      conductor,
+      stopOnUnansweredInput: true,
+    });
+    options.workerSession.inbox = inbox;
 
-    const result = await runConductorSessionDriver(
-      createDriverOptions({
-        eventQueue,
-        conductor,
-        stopOnUnansweredInput: true,
-      }),
-    );
+    expect(eventQueue.isEmpty()).toBe(true);
+
+    const result = await runConductorSessionDriver(options);
 
     expect(send).toHaveBeenCalledTimes(2);
+    expect(inbox.drain).toHaveBeenCalledTimes(2);
     expect(String(send.mock.calls[1]![0])).toContain('worker.completed');
     expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
     expect(result.stopReason).toBe('completed');
