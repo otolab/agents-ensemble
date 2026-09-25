@@ -52,6 +52,50 @@ describe('parseInlineMarkdown', () => {
     );
   });
 
+  it('styles every item in loose nested lists while preserving blank lines', () => {
+    const input = '- **a**\n\n  - **b**\n\n  - **c**';
+
+    expect(parseInlineMarkdown(input)).toEqual([
+      { text: '- ' },
+      { text: 'a', bold: true },
+      { text: '\n\n  - ' },
+      { text: 'b', bold: true },
+      { text: '\n\n  - ' },
+      { text: 'c', bold: true },
+    ]);
+  });
+
+  it('preserves the original indentation of fenced code in list items', () => {
+    const input = '- **a**\n  ```\n  **raw**\n  ```';
+
+    expect(parseInlineMarkdown(input)).toEqual([
+      { text: '- ' },
+      { text: 'a', bold: true },
+      { text: '\n  ```\n  **raw**\n  ```' },
+    ]);
+  });
+
+  it('preserves indentation while styling inline Markdown in nested tables', () => {
+    const input =
+      '- outer\n\n' +
+      '  | **a** | `b` |\n' +
+      '  | --- | --- |\n' +
+      '  | c | [d](https://example.com/d) |';
+
+    const segments = parseInlineMarkdown(input);
+
+    expect(segments.map((segment) => segment.text).join('')).toBe(
+      '- outer\n\n  | a | b |\n  | --- | --- |\n  | c | d |',
+    );
+    expect(segments).toEqual(
+      expect.arrayContaining([
+        { text: 'a', bold: true },
+        { text: 'b', code: true },
+        { text: 'd', href: 'https://example.com/d' },
+      ]),
+    );
+  });
+
   it('traverses inline styles inside GFM table cells', () => {
     const segments = parseInlineMarkdown(
       '| **Name** | Value |\n' +
