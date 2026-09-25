@@ -1,14 +1,21 @@
 import type { SDKCustomTool } from '@cursor/sdk';
-import type { ConductorToolRegistry } from './conductor-tool.js';
+import {
+  ConductorToolRegistry,
+  type ConductorToolSet,
+} from './conductor-tool.js';
 
 /** SDK-shaped custom tools kept at the Cursor backend boundary. */
 export type SdkCustomTools = Record<string, SDKCustomTool>;
 
 export function toSdkCustomTools(
-  registry: ConductorToolRegistry,
+  toolSet: ConductorToolRegistry | ConductorToolSet,
 ): SdkCustomTools {
   const tools: SdkCustomTools = {};
-  for (const tool of registry.list()) {
+  const entries =
+    toolSet instanceof ConductorToolRegistry
+      ? toolSet.list()
+      : Object.values(toolSet);
+  for (const tool of entries) {
     tools[tool.name] = {
       description: tool.description,
       inputSchema: tool.inputSchema,

@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ConductorAgent } from '../../src/conductor/conductor-agent.js';
+import { createCursorSdkConductorAgentFactory } from '../../src/conductor/cursor-sdk-conductor-agent.js';
 import { hasConductorAuth } from '../../src/conductor/conductor-auth.js';
 import { getConductorModelId } from './test-config.js';
 
@@ -9,8 +9,9 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 describe.skipIf(!hasConductorAuth())('ConductorAgent integration', () => {
   it('completes in agent mode with explicit finish text (not plan update)', async () => {
-    const conductor = await ConductorAgent.create({
+    const conductor = await createCursorSdkConductorAgentFactory().create({
       cwd: REPO_ROOT,
+      systemPrompt: 'integration test system prompt',
       modelId: getConductorModelId(),
     });
 

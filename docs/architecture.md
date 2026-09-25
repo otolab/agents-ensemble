@@ -131,6 +131,8 @@ conductor は **理解と dispatch に専念**し、ファイル編集・テス�
 | **`agent.send(message)`** | 会話への **user ターン 1 本**。オペレータ発話・自律ターンの状態通知 |
 | **SDK 会話** | LLM 会話履歴の正本 |
 
+Conductor backend は、**SDK では compiled prompt を初回 user send に渡し、Pi では system 受け口へ渡す**（Pi は #352）。
+
 worker（ACP）は `session/prompt` でターン更新全体を渡す。conductor（SDK）は **`send` = user 行の append** であり、毎ターン CompiledPrompt 相当を渡すモデルではない。
 
 ### SDK の使い方（想定）

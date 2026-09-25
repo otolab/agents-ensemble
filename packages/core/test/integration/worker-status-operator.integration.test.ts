@@ -32,20 +32,18 @@ const TWO_WORKER_PROFILE: Profile = {
   ],
 };
 
-const { mockSend, mockClose, mockCreate } = vi.hoisted(() => {
+const { mockSend, mockClose, mockCreate, mockCreateCursorSdkConductorAgentFactory } = vi.hoisted(() => {
   const mockSend = vi.fn();
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
-  return { mockSend, mockClose, mockCreate };
+  const mockCreateCursorSdkConductorAgentFactory = vi.fn();
+  return { mockSend, mockClose, mockCreate, mockCreateCursorSdkConductorAgentFactory };
 });
 
 let conductorTools: Record<string, SDKCustomTool> = {};
 
-vi.mock('../../src/conductor/conductor-agent.js', () => ({
-  ConductorAgent: {
-    create: mockCreate,
-    resume: mockCreate,
-  },
+vi.mock('../../src/conductor/cursor-sdk-conductor-agent.js', () => ({
+  createCursorSdkConductorAgentFactory: mockCreateCursorSdkConductorAgentFactory,
 }));
 
 function parseYamlBlock(text: string): Record<string, unknown> {
@@ -71,6 +69,11 @@ describe('worker status operator integration', () => {
     mockSend.mockReset();
     mockClose.mockClear();
     mockCreate.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReturnValue({
+      create: mockCreate,
+      resume: mockCreate,
+    });
     mockCreate.mockImplementation(async (options) => {
       conductorTools = options.customTools ?? {};
       return {

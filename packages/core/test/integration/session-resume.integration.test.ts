@@ -54,20 +54,18 @@ const PING_PROFILE_BASE: Profile = {
   workers: [{ name: 'ping-1', kind: 'ping' }],
 };
 
-const { mockSend, mockClose, mockCreate } = vi.hoisted(() => {
+const { mockSend, mockClose, mockCreate, mockCreateCursorSdkConductorAgentFactory } = vi.hoisted(() => {
   const mockSend = vi.fn();
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
-  return { mockSend, mockClose, mockCreate };
+  const mockCreateCursorSdkConductorAgentFactory = vi.fn();
+  return { mockSend, mockClose, mockCreate, mockCreateCursorSdkConductorAgentFactory };
 });
 
 let conductorTools: Record<string, SDKCustomTool> = {};
 
-vi.mock('../../src/conductor/conductor-agent.js', () => ({
-  ConductorAgent: {
-    create: mockCreate,
-    resume: mockCreate,
-  },
+vi.mock('../../src/conductor/cursor-sdk-conductor-agent.js', () => ({
+  createCursorSdkConductorAgentFactory: mockCreateCursorSdkConductorAgentFactory,
 }));
 
 describe('session resume integration', () => {
@@ -92,6 +90,11 @@ describe('session resume integration', () => {
     mockSend.mockReset();
     mockClose.mockClear();
     mockCreate.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReturnValue({
+      create: mockCreate,
+      resume: mockCreate,
+    });
     conductorTools = {};
     mockCreate.mockImplementation(async (options, resumeOptions) => {
       conductorTools = (resumeOptions ?? options).customTools ?? {};

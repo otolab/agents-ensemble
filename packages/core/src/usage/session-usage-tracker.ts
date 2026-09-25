@@ -1,5 +1,5 @@
-import type { TokenUsage } from '@cursor/sdk';
 import type { PromptResult } from '../acp/types.js';
+import type { ConductorTokenUsage } from '../conductor/conductor-agent.js';
 import { estimateTokenUsageFromText } from './estimate-token-usage.js';
 import type {
   LlmTokenCounts,
@@ -28,10 +28,10 @@ export class SessionUsageTracker {
   recordConductorRound(input: {
     runId: string;
     status: string;
-    usage?: TokenUsage;
+    usage?: ConductorTokenUsage;
     modelId?: string;
   }): SessionUsageRound {
-    const usage = input.usage ? fromSdkTokenUsage(input.usage) : null;
+    const usage = input.usage ? fromConductorTokenUsage(input.usage) : null;
     const round: SessionUsageRound = {
       roundId: nextRoundId(),
       agentKind: 'conductor',
@@ -154,7 +154,7 @@ function nextRoundId(): string {
   return `usage-round-${roundCounter}`;
 }
 
-function fromSdkTokenUsage(usage: TokenUsage): LlmUsageRecord {
+function fromConductorTokenUsage(usage: ConductorTokenUsage): LlmUsageRecord {
   return {
     source: 'sdk',
     inputTokens: usage.inputTokens,

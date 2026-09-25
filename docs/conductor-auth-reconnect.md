@@ -14,7 +14,7 @@ agents-ensemble の conductor は長寿命 `ConductorAgent` 1 本を保持する
 
 send が auth-like error のとき:
 
-`close` → `ConductorAgent.resume(sameId)` → send 再試行（1 回）
+`close` → `ConductorAgentFactory.resume(sameId)` → send 再試行（1 回）
 
 まだ失敗する場合は PR #99 互換の `[auth]` ヒント（手動 `logout` → `login` → `--resume` / `--continue`）へフォールバックする。in-process での自動 `login` は行わない（オペレータ方針）。
 

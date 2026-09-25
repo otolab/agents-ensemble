@@ -1,6 +1,7 @@
 import {
-  ConductorAgent,
-  type ConductorAgentOptions,
+  type ConductorAgent,
+  type ConductorAgentCreateOptions,
+  type ConductorAgentFactory,
   type ConductorSendCallbacks,
   type ConductorSendResult,
 } from './conductor-agent.js';
@@ -22,14 +23,21 @@ export interface ConductorReconnectCallbacks {
   onReconnectComplete?: (input: ConductorReconnectCompleteInfo) => void;
 }
 
-/** Direct な SDK options と既存の wrapper の両方を受け付ける。 */
+/** Direct な options と `conductorOptions` wrapper の両方を受け付ける。 */
 export type ConductorReconnectOptions =
-  | (ConductorAgentOptions & ConductorReconnectCallbacks)
-  | ({ conductorOptions: ConductorAgentOptions } & ConductorReconnectCallbacks);
+  | (ConductorAgentCreateOptions &
+      ConductorReconnectCallbacks & {
+        conductorAgentFactory: ConductorAgentFactory;
+      })
+  | ({
+      conductorOptions: ConductorAgentCreateOptions;
+      conductorAgentFactory: ConductorAgentFactory;
+    } & ConductorReconnectCallbacks);
 
 export interface ConductorSendReconnectOptions
   extends ConductorReconnectCallbacks {
-  conductorOptions: ConductorAgentOptions;
+  conductorOptions: ConductorAgentCreateOptions;
+  conductorAgentFactory: ConductorAgentFactory;
   /** 後方互換用。指定時は auth/transport 両方の attempt に使う。 */
   onReconnectAttempt?: (input: { agentId: string }) => void;
   onAuthReconnectAttempt?: (input: { agentId: string }) => void;
@@ -38,30 +46,36 @@ export interface ConductorSendReconnectOptions
   onTransportReconnectComplete?: (input: ConductorReconnectCompleteInfo) => void;
 }
 
-/** close → ConductorAgent.resume(sameId) で in-process の agent を差し替える。 */
+/** close → factory.resume(sameId) で in-process の agent を差し替える。 */
 export async function reconnectConductorAgent(
   handle: ConductorAgentHandle,
   options: ConductorReconnectOptions,
 ): Promise<string> {
   const agentId = handle.conductor.agentId;
   options.onReconnectAttempt?.({ agentId });
-  let conductorOptions: ConductorAgentOptions;
+  let conductorOptions: ConductorAgentCreateOptions;
+  const conductorAgentFactory = options.conductorAgentFactory;
   if ('conductorOptions' in options) {
     conductorOptions = options.conductorOptions;
   } else {
     const {
       onReconnectAttempt,
       onReconnectComplete,
+      conductorAgentFactory: _conductorAgentFactory,
       ...sdkOptions
     } = options;
     void onReconnectAttempt;
     void onReconnectComplete;
+    void _conductorAgentFactory;
     conductorOptions = sdkOptions;
   }
 
   try {
     await handle.conductor.close();
-    handle.conductor = await ConductorAgent.resume(agentId, conductorOptions);
+    handle.conductor = await conductorAgentFactory.resume(
+      agentId,
+      conductorOptions,
+    );
     options.onReconnectComplete?.({ agentId, success: true });
     return agentId;
   } catch (error) {
@@ -119,6 +133,7 @@ export async function sendConductorWithReconnect(
 
   try {
     await reconnectConductorAgent(handle, {
+      conductorAgentFactory: options.conductorAgentFactory,
       conductorOptions: options.conductorOptions,
       onReconnectAttempt: resolveReconnectAttempt(options, reconnectReason),
       onReconnectComplete: resolveReconnectComplete(options, reconnectReason),

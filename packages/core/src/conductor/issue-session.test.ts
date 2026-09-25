@@ -7,7 +7,7 @@ import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import { createTestOperatorInputBinding } from './testing/test-operator-input-binding.js';
 import { runIssueSession } from './issue-session.js';
 import { createMockConductorGetUsage } from '../testing/mock-conductor-get-usage.js';
-import type { ConductorAgentOptions } from './conductor-agent.js';
+import type { ConductorAgentCreateOptions } from './conductor-agent.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -16,20 +16,28 @@ const TEST_ISSUE = {
   url: 'https://github.com/org/repo/issues/1',
 };
 
-const { mockSend, mockClose, mockCreate } = vi.hoisted(() => {
+const {
+  mockSend,
+  mockClose,
+  mockCreate,
+  mockCreateCursorSdkConductorAgentFactory,
+} = vi.hoisted(() => {
   const mockSend = vi.fn();
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
-  return { mockSend, mockClose, mockCreate };
+  const mockCreateCursorSdkConductorAgentFactory = vi.fn();
+  return {
+    mockSend,
+    mockClose,
+    mockCreate,
+    mockCreateCursorSdkConductorAgentFactory,
+  };
 });
 
-let conductorTools: NonNullable<ConductorAgentOptions['customTools']> = {};
+let conductorTools: NonNullable<ConductorAgentCreateOptions['customTools']> = {};
 
-vi.mock('./conductor-agent.js', () => ({
-  ConductorAgent: {
-    create: mockCreate,
-    resume: mockCreate,
-  },
+vi.mock('./cursor-sdk-conductor-agent.js', () => ({
+  createCursorSdkConductorAgentFactory: mockCreateCursorSdkConductorAgentFactory,
 }));
 
 describe('runIssueSession', () => {
@@ -49,6 +57,11 @@ describe('runIssueSession', () => {
     mockSend.mockReset();
     mockClose.mockClear();
     mockCreate.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReturnValue({
+      create: mockCreate,
+      resume: mockCreate,
+    });
     mockCreate.mockImplementation(async (options) => {
       conductorTools = options.customTools ?? {};
       return {

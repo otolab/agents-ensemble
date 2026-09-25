@@ -1,8 +1,20 @@
-export { ConductorAgent } from './conductor-agent.js';
 export type {
+  ConductorAgent,
+  ConductorAgentCreateOptions,
+  ConductorAgentFactory,
   ConductorAgentOptions,
+  ConductorAgentUsage,
+  ConductorSendCallbacks,
+  ConductorSendError,
   ConductorSendResult,
+  ConductorTokenUsage,
+  ConductorToolCallStartedInfo,
+  ConductorUsageCost,
 } from './conductor-agent.js';
+export {
+  CursorSdkConductorAgent,
+  createCursorSdkConductorAgentFactory,
+} from './cursor-sdk-conductor-agent.js';
 export {
   ConductorToolRegistry,
 } from './conductor-tool.js';

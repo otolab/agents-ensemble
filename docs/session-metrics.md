@@ -160,7 +160,7 @@
 
 ### 3.3 課金コスト（SDK）
 
-`ConductorAgent.getUsage()` → `AgentUsage.cost`。終了時と `get_session_usage` は `enrichSessionUsageWithCost` でマージ。
+`ConductorAgent.getUsage()` → `cost`。終了時と `get_session_usage` は `enrichSessionUsageWithCost` でマージ。
 
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
