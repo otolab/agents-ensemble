@@ -27,6 +27,8 @@ CLI 明示指定 > 環境変数 > project .ensemble/config.yaml > user ~/.ensemb
 
 `loadEnsembleConfig(repoRoot)` は user → project の順で merge した `EnsembleConfig` を返す。各 `resolve*Setting` はその merged config を **config 層**として参照する。
 
+`conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > user / project の deep merge 済み `config.conductor.backend` > `cursor` の順で解決します。
+
 `ensemble issue` 起動時（GitHub monitor / Issue コンテキスト取得より前）に config を読み込む。
 
 ## テンプレート
@@ -48,6 +50,7 @@ profile:
   default: implementer-and-reviewer   # ENSEMBLE_DEFAULT_PROFILE 相当
 
 conductor:
+  backend: cursor                    # cursor（既定） | pi（未サポート、#352）
   model: default                      # CONDUCTOR_MODEL_ID 相当
 
 acp:
@@ -82,6 +85,7 @@ tui:
 |------|------|-----------|-----------|
 | `profile.default` | 既定 team profile（名前またはパス） | `--profile` | `ENSEMBLE_DEFAULT_PROFILE` |
 | `conductor.model` | conductor モデル id | `--model` | `CONDUCTOR_MODEL_ID` |
+| `conductor.backend` | conductor LLM backend（`cursor` / `pi`） | — | — |
 | `acp.defaultPreset` | worker ACP built-in preset | `--default-acp-cli` 等 | `ENSEMBLE_DEFAULT_ACP_CLI` |
 | `session.worktree` | worker workspace モード | `--worktree` | — |
 | `session.maxTurns.tty` / `nonTty` | 自律ターン上限 | `--max-turns` / `--no-max-turns` | — |

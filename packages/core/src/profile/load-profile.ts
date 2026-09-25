@@ -5,6 +5,7 @@ import { parsePromptModuleFromYaml } from './parse-prompt-module.js';
 import type {
   AgentDefinition,
   Profile,
+  ProfileConductorConfig,
   ProfileMaterial,
   ResolvedAgentDefinition,
   ResolvedProfile,
@@ -78,10 +79,12 @@ export function parseProfile(source: unknown, label: string): Profile {
 
   const raw = source as { workers: unknown[] } & Omit<Profile, 'workers'>;
   const workers = normalizeProfileWorkers(raw.workers, label);
+  const conductor = parseProfileConductorConfig(raw.conductor, label);
 
   const profile: Profile = {
     ...raw,
     workers,
+    ...(conductor !== undefined ? { conductor } : {}),
     ...(raw.acp !== undefined
       ? { acp: parseProfileAcpConfig(raw.acp, `${label} acp`) }
       : {}),
@@ -155,6 +158,29 @@ export function parseProfile(source: unknown, label: string): Profile {
   }
 
   return profile;
+}
+
+function parseProfileConductorConfig(
+  raw: unknown,
+  label: string,
+): ProfileConductorConfig | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`Invalid profile conductor in ${label}: expected object`);
+  }
+
+  const backend = (raw as Record<string, unknown>).backend;
+  if (backend === undefined) {
+    return {};
+  }
+  if (backend !== 'cursor' && backend !== 'pi') {
+    throw new Error(
+      `Invalid profile conductor.backend in ${label}: expected cursor | pi`,
+    );
+  }
+  return { backend };
 }
 
 export function resolveProfileFilePath(profileDir: string, fileRef: string): string {
@@ -246,6 +272,7 @@ export async function resolveProfile(
 
   return {
     workers: resolveProfileWorkers(profile.workers, profileDir, repoRoot),
+    ...(profile.conductor ? { conductor: profile.conductor } : {}),
     ...(profile.acp ? { acp: profile.acp } : {}),
     agents: Object.keys(agents).length > 0 ? agents : undefined,
     materials: await Promise.all(

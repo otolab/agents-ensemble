@@ -2,7 +2,7 @@ import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import {
   loadEnsembleConfig,
 } from '../config/load-ensemble-config.js';
-import type { EnsembleConfig } from '../config/types.js';
+import type { ConductorBackend, EnsembleConfig } from '../config/types.js';
 import {
   resolveMcpServersForSdk,
   type LoadMcpConfigOptions,
@@ -100,7 +100,10 @@ import {
   createGitHubMonitor,
   type GitHubMonitor,
 } from '../github/github-monitor.js';
-import { resolveGitHubMonitorEnabled } from '../config/resolve-settings.js';
+import {
+  resolveConductorBackendSetting,
+  resolveGitHubMonitorEnabled,
+} from '../config/resolve-settings.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import {
   formatGitHubErrorMessage,
@@ -133,7 +136,7 @@ export interface RunConductorSessionOptions {
   profile: ResolvedProfile;
   profilePath?: string;
   resumeAgentId?: string;
-  /** Conductor backend factory. Defaults to the Cursor SDK implementation. */
+  /** Optional factory override. Without it, `conductor.backend` selects the factory. */
   conductorAgentFactory?: ConductorAgentFactory;
   apiKey?: string;
   modelId?: string;
@@ -235,7 +238,10 @@ export async function runConductorSession(
 ): Promise<ConductorSessionResult> {
   const ensembleConfig =
     options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
-  const githubAuth = await resolveGitHubAuthToken({ config: ensembleConfig });
+  const conductorBackend = resolveConductorBackendSetting({
+    profile: options.profile,
+    config: ensembleConfig,
+  });
   const maxTurns = resolveMaxTurns(options.maxTurns);
   const sessionLogger =
     options.sessionLogger ??
@@ -243,12 +249,6 @@ export async function runConductorSession(
       issueUrl: options.issueUrl,
       repoRoot: options.repoRoot,
     });
-  if (!githubAuth.token) {
-    sessionLogger.emit({
-      type: 'harness.warning',
-      message: GITHUB_AUTH_HINT,
-    });
-  }
   attachLegacySessionCallbacks(sessionLogger, options);
   const escalations: EscalationRecord[] = [];
   const openQuestions = new OpenQuestionRegistry();
@@ -282,6 +282,7 @@ export async function runConductorSession(
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
       repoRoot: options.repoRoot,
+      conductorBackend,
     });
     openQuestions.restore({
       sequence: sidecar.sequence,
@@ -296,6 +297,17 @@ export async function runConductorSession(
         ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
       });
     }
+  }
+
+  const conductorAgentFactory =
+    options.conductorAgentFactory ?? createConductorAgentFactory(conductorBackend);
+
+  const githubAuth = await resolveGitHubAuthToken({ config: ensembleConfig });
+  if (!githubAuth.token) {
+    sessionLogger.emit({
+      type: 'harness.warning',
+      message: GITHUB_AUTH_HINT,
+    });
   }
 
   let systemPrompt: string;
@@ -645,12 +657,11 @@ export async function runConductorSession(
     customTools: conductorToolRegistry.toRecord(),
   };
 
-  const conductorAgentFactory =
-    options.conductorAgentFactory ?? createCursorSdkConductorAgentFactory();
   conductorAgent = options.resumeAgentId
     ? await conductorAgentFactory.resume(options.resumeAgentId, conductorOptions)
     : await conductorAgentFactory.create(conductorOptions);
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
+  // Keep auth/transport reconnects on the same backend factory as the session.
   const sendReconnect = {
     conductorAgentFactory,
     conductorOptions,
@@ -701,6 +712,7 @@ export async function runConductorSession(
       const sidecar: SessionSidecar = {
         version: SESSION_SIDECAR_VERSION,
         conductorAgentId: conductorHandle.conductor.agentId,
+        conductorBackend,
         issueUrl: options.issueUrl,
         repoRoot: options.repoRoot,
         profile: structuredClone(activeProfile),
@@ -1103,6 +1115,16 @@ export async function runConductorSession(
       process.off('SIGTERM', onTeardownSignal);
     }
   }
+}
+
+function createConductorAgentFactory(backend: ConductorBackend): ConductorAgentFactory {
+  if (backend === 'cursor') {
+    return createCursorSdkConductorAgentFactory();
+  }
+
+  throw new Error(
+    'Conductor backend "pi" is not supported yet; see issue #352 for the Pi implementation.',
+  );
 }
 
 async function emitWorktreeRemoval(

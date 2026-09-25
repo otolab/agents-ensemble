@@ -77,13 +77,17 @@ describe('parseEnsembleConfig', () => {
         },
       }),
     ).toEqual({});
+
+    expect(
+      parseEnsembleConfig({ conductor: { backend: 'unsupported' } }),
+    ).toEqual({});
   });
 
   it('parses Phase 1 keys', () => {
     expect(
       parseEnsembleConfig({
         profile: { default: 'my-team' },
-        conductor: { model: 'composer-2.5' },
+        conductor: { model: 'composer-2.5', backend: 'pi' },
         acp: { defaultPreset: 'claude' },
         session: {
           worktree: 'in-repo',
@@ -103,7 +107,7 @@ describe('parseEnsembleConfig', () => {
       }),
     ).toEqual({
       profile: { default: 'my-team' },
-      conductor: { model: 'composer-2.5' },
+      conductor: { model: 'composer-2.5', backend: 'pi' },
       acp: { defaultPreset: 'claude' },
       session: {
         worktree: 'in_repo',
@@ -176,13 +180,14 @@ describe('loadEnsembleConfig', () => {
     );
     await writeConfig(
       join(repoRoot, '.ensemble'),
-      `conductor:\n  model: project-model\nsession:\n  worktree: in-repo\n`,
+      `conductor:\n  model: project-model\n  backend: pi\nsession:\n  worktree: in-repo\n`,
     );
 
     const config = await loadEnsembleConfig(repoRoot, { userEnsembleRoot });
 
     expect(config.profile.default).toBe('user-team');
     expect(config.conductor.model).toBe('project-model');
+    expect(config.conductor.backend).toBe('pi');
     expect(config.session.worktree).toBe('in_repo');
     expect(config.session.maxTurns.nonTty).toBe(9);
   });
@@ -194,5 +199,15 @@ describe('loadEnsembleConfig', () => {
     const config = await loadEnsembleConfig(repoRoot, { userEnsembleRoot });
 
     expect(config.github.auth.allowGhAuthTokenFallback).toBe(true);
+  });
+
+  it('deep merges conductor backend across user and project config', async () => {
+    await writeConfig(userEnsembleRoot, `conductor:\n  backend: pi\n`);
+    await writeConfig(join(repoRoot, '.ensemble'), `conductor:\n  model: project-model\n`);
+
+    const config = await loadEnsembleConfig(repoRoot, { userEnsembleRoot });
+
+    expect(config.conductor.model).toBe('project-model');
+    expect(config.conductor.backend).toBe('pi');
   });
 });

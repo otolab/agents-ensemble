@@ -1,7 +1,12 @@
 import { ENSEMBLE_DEFAULT_ACP_CLI_ENV } from '../acp/resolve-acp-spawn.js';
 import type { WorkerWorktreeMode } from '../worktree/worktree.js';
-import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
-import type { EnsembleConfig, TuiForceHyperlinkMode, TuiLayoutMode } from './types.js';
+import { DEFAULT_CONDUCTOR_BACKEND, DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
+import type {
+  ConductorBackend,
+  EnsembleConfig,
+  TuiForceHyperlinkMode,
+  TuiLayoutMode,
+} from './types.js';
 
 /** `--profile` 未指定時の team profile（`load-profile` と共有）。 */
 export const ENSEMBLE_DEFAULT_PROFILE_ENV = 'ENSEMBLE_DEFAULT_PROFILE';
@@ -112,6 +117,19 @@ export function resolveConductorModelSetting(options: {
     defaultValue: DEFAULT_ENSEMBLE_CONFIG.conductor.model,
   });
   return normalizeConductorModelId(resolved ?? DEFAULT_ENSEMBLE_CONFIG.conductor.model);
+}
+
+/** profile の明示設定 > config（project/user merge 済み） > cursor。 */
+export function resolveConductorBackendSetting(options: {
+  profile?: { conductor?: { backend?: ConductorBackend } };
+  config?: EnsembleConfig;
+}): ConductorBackend {
+  return (
+    options.profile?.conductor?.backend ??
+    options.config?.conductor.backend ??
+    DEFAULT_ENSEMBLE_CONFIG.conductor.backend ??
+    DEFAULT_CONDUCTOR_BACKEND
+  );
 }
 
 export function resolveDefaultAcpPresetSetting(options: {

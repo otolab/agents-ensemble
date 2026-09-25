@@ -197,6 +197,111 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
+  it('fails fast when the startup backend differs from the sidecar backend', async () => {
+    const agentId = 'resume-backend-mismatch';
+    await saveSessionSidecar(
+      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: agentId,
+        conductorBackend: 'pi',
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        updatedAt: 0,
+      },
+    );
+
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+      }),
+    ).rejects.toThrow(/conductorBackend mismatch/);
+
+    expect(mockResume).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('fails fast when config selects the unsupported backend', async () => {
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        ensembleConfig: {
+          ...DEFAULT_ENSEMBLE_CONFIG,
+          conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },
+        },
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+      }),
+    ).rejects.toThrow(/Conductor backend "pi" is not supported yet.*#352/);
+
+    expect(mockCreateCursorSdkConductorAgentFactory).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('fails before resolving the worker worktree or attaching workers for Pi', async () => {
+    const resolveWorkerWorkspace = vi
+      .spyOn(worktreeModule, 'resolveWorkerWorkspace')
+      .mockResolvedValue({
+        path: join(repoRoot, 'worker'),
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: false,
+      });
+    const connectAcp = vi.fn();
+
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: {
+          conductor: { backend: 'pi' },
+          workers: [{ name: 'implementer', kind: 'implementer' }],
+        },
+        connectAcp,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+      }),
+    ).rejects.toThrow(/Conductor backend "pi" is not supported yet.*#352/);
+
+    expect(resolveWorkerWorkspace).not.toHaveBeenCalled();
+    expect(connectAcp).not.toHaveBeenCalled();
+  });
+
+  it('persists the selected profile backend in the sidecar', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-stub',
+      status: 'finished',
+      result: 'done',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      conductorAgentFactory: { create: mockCreate, resume: mockResume },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    const sidecar = await loadSessionSidecar(
+      sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+    );
+    expect(sidecar?.conductorBackend).toBe('pi');
+  });
+
   it('passes resolved MCP configuration to ConductorAgent.resume for explicit resume', async () => {
     const agentId = 'resume-agent';
     const projectMcpRoot = join(repoRoot, '.agents');
@@ -361,6 +466,10 @@ describe('runConductorSession resume / shutdown', () => {
         }),
       }),
     );
+    const sidecar = await loadSessionSidecar(
+      sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+    );
+    expect(sidecar?.conductorBackend).toBe('cursor');
   });
 
   it('registers the GitHub watch tool and persists a tool registration', async () => {

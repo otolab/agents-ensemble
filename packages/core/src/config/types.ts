@@ -6,9 +6,13 @@ export interface EnsembleProfileConfig {
   default?: string;
 }
 
+export type ConductorBackend = 'cursor' | 'pi';
+
 export interface EnsembleConductorConfig {
   /** conductor モデル id（`auto` は `default` と同義）。 */
   model: string;
+  /** conductor LLM backend（未指定時は `cursor`）。 */
+  backend?: ConductorBackend;
 }
 
 export interface EnsembleAcpConfig {

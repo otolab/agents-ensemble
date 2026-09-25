@@ -1,4 +1,8 @@
-export { DEFAULT_ENSEMBLE_CONFIG, DEFAULT_SESSION_MAX_TURNS_NON_TTY } from './defaults.js';
+export {
+  DEFAULT_CONDUCTOR_BACKEND,
+  DEFAULT_ENSEMBLE_CONFIG,
+  DEFAULT_SESSION_MAX_TURNS_NON_TTY,
+} from './defaults.js';
 export { deepMerge } from './deep-merge.js';
 export {
   ENSEMBLE_CONFIG_FILE,
@@ -8,6 +12,7 @@ export type { LoadEnsembleConfigOptions } from './load-ensemble-config.js';
 export { parseEnsembleConfig } from './parse-config.js';
 export {
   resolveBooleanSetting,
+  resolveConductorBackendSetting,
   resolveConductorModelSetting,
   resolveDefaultAcpPresetSetting,
   CONDUCTOR_MODEL_ID_ENV,
@@ -35,6 +40,7 @@ export type {
 } from './resolve-settings.js';
 export type {
   EnsembleAcpConfig,
+  ConductorBackend,
   EnsembleConductorConfig,
   EnsembleConfig,
   EnsembleGitHubAuthConfig,

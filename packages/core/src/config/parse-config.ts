@@ -5,6 +5,7 @@ import {
 import type { WorkerWorktreeMode } from '../worktree/worktree.js';
 import type {
   EnsembleAcpConfig,
+  ConductorBackend,
   EnsembleConductorConfig,
   EnsembleConfig,
   EnsembleGitHubAuthConfig,
@@ -67,7 +68,19 @@ function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined
     return undefined;
   }
   const model = readString(obj.model);
-  return model ? { model } : undefined;
+  const backend = parseConductorBackend(obj.backend);
+  if (model === undefined && backend === undefined) {
+    return undefined;
+  }
+  return {
+    ...(model !== undefined ? { model } : {}),
+    ...(backend !== undefined ? { backend } : {}),
+  } as EnsembleConductorConfig;
+}
+
+function parseConductorBackend(value: unknown): ConductorBackend | undefined {
+  const raw = readString(value);
+  return raw === 'cursor' || raw === 'pi' ? raw : undefined;
 }
 
 function parseAcpConfig(raw: unknown): EnsembleAcpConfig | undefined {
