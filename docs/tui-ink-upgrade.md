@@ -61,6 +61,6 @@ pnpm --filter @agents-ensemble/cli test:run
 1. 幅縮小時の frame / clear 挙動を含む upstream 修正が release され、対象バージョンと変更内容を確認できる。
 2. その候補バージョンでこの文書の 4 系統のテストを実行し、全件成功する。
 3. [TUI 端末互換性マトリクス](tui-terminal-compatibility.md) の resize / scrollback 手順を実端末で実行し、ghost line、frame 重複、意図しない clear sequence がないことを確認する。
-4. [ADR 0024](adr/0024-tui-shrink-coalesce.md) と [ADR 0025](adr/0025-tui-stream-shrink-recovery.md) の撤去条件を満たし、実装・テスト・利用者向け文書を同じ変更で更新する。
+4. [ADR 0024](adr/0024-tui-shrink-coalesce.md) と [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) の撤去条件を満たし、実装・テスト・利用者向け文書を同じ変更で更新する。
 
 upstream の状況、候補バージョン、未検証の端末や手順は Issue / PR に記録する。#322 の実端末確認そのものはこの Issue のスコープではない。

@@ -8,6 +8,7 @@ import {
 import type { WorkerDisplayStatus } from '../display/session-display-state.js';
 import {
   formatIssueLabel,
+  formatOsc8Link,
   formatIssueReference,
   resolveOperatorInputDisplayMode,
   type IssueLinkMode,
@@ -131,6 +132,7 @@ function renderActivityLogLabel(label: ActivityLogLabel): ReactNode {
 /** 共通 segment 列を Ink のネスト Text に変換する。 */
 export function renderInlineMarkdownSegments(
   segments: InlineMarkdownSegment[],
+  issueLinkMode: IssueLinkMode = 'label',
 ): ReactNode {
   if (segments.length === 0) {
     return <Text> </Text>;
@@ -138,23 +140,32 @@ export function renderInlineMarkdownSegments(
 
   return segments.map((segment, index) => (
     <Text
-      key={`${index}-${segment.text}`}
+      key={`${index}-${segment.text}-${segment.href ?? ''}`}
       bold={segment.bold}
-      color={segment.code ? 'yellow' : undefined}
+      color={segment.code ? 'yellow' : segment.href !== undefined ? 'blue' : undefined}
+      underline={segment.href !== undefined}
     >
-      {segment.text}
+      {segment.href !== undefined && issueLinkMode === 'osc8'
+        ? formatOsc8Link(segment.text, segment.href)
+        : segment.text}
     </Text>
   ));
 }
 
-export function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLine }) {
+export function ActivityLogDisplayLineRow({
+  line,
+  issueLinkMode = 'label',
+}: {
+  line: ActivityLogDisplayLine;
+  issueLinkMode?: IssueLinkMode;
+}) {
   if (line.layout === 'separator') {
     return <Text> </Text>;
   }
 
   if (line.layout === 'body-row') {
     // Ink は空 <Text> の行高 0 になる。separator と同様スペース 1 文字で可視の空行にする。
-    return <Text>{renderInlineMarkdownSegments(line.segments)}</Text>;
+    return <Text>{renderInlineMarkdownSegments(line.segments, issueLinkMode)}</Text>;
   }
 
   if (line.layout === 'label-row') {
@@ -171,7 +182,7 @@ export function ActivityLogDisplayLineRow({ line }: { line: ActivityLogDisplayLi
   return (
     <Text>
       {renderActivityLogLabel(line.label)}
-      <Text> {renderInlineMarkdownSegments(line.segments)}</Text>
+      <Text> {renderInlineMarkdownSegments(line.segments, issueLinkMode)}</Text>
     </Text>
   );
 }
@@ -258,12 +269,14 @@ function OrchestrationPane({
   paneHeight,
   linesFromBottom,
   terminalColumns,
+  issueLinkMode,
 }: {
   activityLog: ActivityLogEntry[];
   contentWidth: number;
   paneHeight: number;
   linesFromBottom: number;
   terminalColumns: number;
+  issueLinkMode: IssueLinkMode;
 }) {
   const logAreaRef = useRef(null);
   const { height: measuredLogAreaHeight, hasMeasured } = useBoxMetrics(logAreaRef);
@@ -301,7 +314,11 @@ function OrchestrationPane({
           <Text dimColor>(活動ログなし)</Text>
         ) : (
           visibleLines.map((line, index) => (
-            <ActivityLogDisplayLineRow key={`log-line-${index}`} line={line} />
+            <ActivityLogDisplayLineRow
+              key={`log-line-${index}`}
+              line={line}
+              issueLinkMode={issueLinkMode}
+            />
           ))
         )}
       </Box>
@@ -312,9 +329,11 @@ function OrchestrationPane({
 export function OpenQuestionsPane({
   layout,
   terminalColumns,
+  issueLinkMode = 'label',
 }: {
   layout: OpenQuestionsPaneLayout;
   terminalColumns?: number;
+  issueLinkMode?: IssueLinkMode;
 }) {
   if (layout.paneHeight === 0 || layout.items.length === 0) {
     return null;
@@ -337,7 +356,7 @@ export function OpenQuestionsPane({
             key={`${item.id}-${lineIndex}`}
             dimColor={item.compact && !item.isSelected}
           >
-            {renderInlineMarkdownSegments(line)}
+            {renderInlineMarkdownSegments(line, issueLinkMode)}
           </Text>
         )),
       )}
@@ -552,6 +571,7 @@ export function IssueSessionTui({
         paneHeight={paneHeights.activityPaneHeight}
         linesFromBottom={linesFromBottom}
         terminalColumns={terminalColumns}
+        issueLinkMode={issueLinkMode}
       />
       {operatorInputDisplay.mode === 'withQuestions' ? (
         <OpenQuestionsPane
@@ -560,6 +580,7 @@ export function IssueSessionTui({
             paneHeight: paneHeights.openQuestionsPaneHeight,
           }}
           terminalColumns={terminalColumns}
+          issueLinkMode={issueLinkMode}
         />
       ) : null}
       <TitledBorderPane

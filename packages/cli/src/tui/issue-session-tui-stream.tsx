@@ -77,17 +77,23 @@ function StaticActivityLog({
   activityLog,
   contentWidth,
   replayGeneration,
+  issueLinkMode,
 }: {
   activityLog: ActivityLogEntry[];
   contentWidth: number;
   replayGeneration: number;
+  issueLinkMode: IssueLinkMode;
 }) {
   return (
     <Static<ActivityLogEntry> key={replayGeneration} items={activityLog}>
       {(entry, index) => (
         <Box key={`activity-log-${index}`} flexDirection="column">
           {buildActivityLogDisplayLines([entry], contentWidth).map((line, lineIndex) => (
-            <ActivityLogDisplayLineRow key={`activity-line-${index}-${lineIndex}`} line={line} />
+            <ActivityLogDisplayLineRow
+              key={`activity-line-${index}-${lineIndex}`}
+              line={line}
+              issueLinkMode={issueLinkMode}
+            />
           ))}
         </Box>
       )}
@@ -281,6 +287,7 @@ export function IssueSessionTuiStream({
         activityLog={snapshot.activityLog.slice(0, committedActivityCount)}
         contentWidth={activityLogContentWidth}
         replayGeneration={snapshot.activityLogGeneration}
+        issueLinkMode={issueLinkMode}
       />
       <Box
         flexDirection="column"
@@ -293,6 +300,7 @@ export function IssueSessionTuiStream({
           <OpenQuestionsPane
             layout={streamOpenQuestionsLayout}
             terminalColumns={terminalColumns}
+            issueLinkMode={issueLinkMode}
           />
         ) : null}
         <TitledBorderPane

@@ -1,4 +1,4 @@
-# ADR 0025: stream の縮小時 scrollback 再同期
+# ADR 0026: stream の縮小時 scrollback 再同期
 
 - Status: accepted
 - Date: 2026-09-25

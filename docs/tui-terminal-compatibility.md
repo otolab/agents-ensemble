@@ -59,7 +59,7 @@
 
 ## #340 iTerm2 + tmux の段階的縮小確認手順
 
-この手順は #340 の shrink coalesce（columns 縮小時の中間 live frame 更新抑制）と columns high-water mark、および #346 の stream shrink recovery を実端末で再確認するためのものです。方針の正本は [ADR 0024](adr/0024-tui-shrink-coalesce.md) と [ADR 0025](adr/0025-tui-stream-shrink-recovery.md) です。stream は settled shrink ごとに意図した reset と activity replay を行うため、reset 前の native scrollback の連続性ではなく、Static marker の保持と旧 live frame fragment の非累積を判定します。結果が記録されるまで該当セルを pass には更新しません。
+この手順は #340 の shrink coalesce（columns 縮小時の中間 live frame 更新抑制）と columns high-water mark、および #346 の stream shrink recovery を実端末で再確認するためのものです。方針の正本は [ADR 0024](adr/0024-tui-shrink-coalesce.md) と [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) です。stream は settled shrink ごとに意図した reset と activity replay を行うため、reset 前の native scrollback の連続性ではなく、Static marker の保持と旧 live frame fragment の非累積を判定します。結果が記録されるまで該当セルを pass には更新しません。
 
 1. **環境を記録する。** macOS の iTerm2 で tmux セッションを開始し、iTerm2 / tmux / CLI のバージョン、`TERM`、対象 layout（`pane` または `stream`）を記録する。pane と stream は別々に実行する。
 2. **resize 前の scrollback を作る。** TUI の live frame より前に識別できる活動ログを複数出し、scrollback に残った代表行を 1 回だけ確認できる状態にする。alternate screen を使わず、native scrollback が有効であることを確認する。
@@ -77,6 +77,32 @@ TTY からはドラッグ終了イベントを取得できないため、250ms �
 - stream: `60×32 → 60×12 → 120×32` の height shrink / grow と幅 grow を個別に実施し、live frame の枠・入力欄・Workers を確認する。
 - pane: 同じ幅・高さ系列で full redraw sequence が出ず、既存の high-water / coalesce 回帰（枠・入力行・幅）を確認する。
 - capture: 可能なら tmux pipe-pane 等で出力を保存する。自動 capture は sequence 回数・activity replay・既存 history の非重複を検証するが、terminal/tmux の物理 reflow 自体は証明しない。
+
+## 手動ゲートの判定境界
+
+すべての TUI PR で iTerm2 + tmux を再実施するわけではありません。次の変更は端末の physical reflow、ANSI protocol、TTY の resize 通知、または Ink / terminal dependency の実挙動に依存するため、マージ前に少なくとも一回の実端末確認を必須とします。
+
+- `createTuiResizeController`、settle / shrink coalesce、columns / rows high-water mark、または resize transaction / redraw gate を変更する。
+- `TUI_FULL_REDRAW_SEQUENCE`、CSI 2J / CSI 3J / CSI H、`alternateScreen`、stdout proxy など、端末へ出す制御シーケンスやスクロールバッファの扱いを変更する。
+- Ink / React、TTY / PTY、tmux / terminal adapter、または関連する端末依存ライブラリを更新する。
+- 実端末での枠ゴミ、破断片、scrollback、幅拡大・縮小の回帰を修正する、または互換性マトリクスに影響する報告へ対応する。
+
+次の範囲に閉じた変更は、該当する自動テストと fake-TTY / Ink capture または E2E が通れば、通常は実端末を必須にしません。
+
+- view model の状態・表示文言・純粋な折り返し計算を変更し、resize controller / ANSI 出力 / Ink 依存バージョンを変更しない。
+- capture / E2E で、resize event の coalesce、clear sequence の回数と順序、activity replay の重複、live frame の幅、grow / height / pane の非回帰を観測できる。
+- 端末固有の不具合報告や互換性マトリクスの未確認セルを解消する変更ではない。
+
+自動 capture は「プロセスが意図した bytes を出したか」と「Ink が意図した frame を生成したか」を検証しますが、iTerm2 / tmux が CSI 3J を実際に scrollback から消すこと、physical reflow 後の行数、native scrollback の viewport / copy mode の状態までは証明しません。したがって #346 のように制御シーケンスと physical reflow の両方を変更する PR では、今回一回の手動ゲートを省略できません。手動実施後は環境、`TERM`、layout、幅系列、stream / pane の結果を Issue と PR に記録します。未実施の場合は「手動待ち」とし、下記チェックリストをオペレータへ引き渡します。
+
+### オペレータ引き渡しチェックリスト（#346）
+
+- [ ] macOS、iTerm2、tmux、CLI version、`TERM`、対象 commit を記録する。
+- [ ] clean session の stream で `120×32 → 110×32 → 100×32 → 90×32 → 80×32 → 70×32 → 60×32` を段階縮小し、最後の縮小から 250ms 以上待つ。
+- [ ] stream の Static `[observation]` marker が保持され、settled shrink ごとに reset が一回だけ出て、旧 Operator input / Workers の枠行・破断片が縮小回数に比例して累積しないことを確認する。
+- [ ] stream で `60×32 → 60×12 → 120×32` の height shrink / grow と幅 grow を個別に確認する。
+- [ ] clean session の pane で同じ系列を確認し、full redraw sequence が出ないこと、枠・入力欄・Workers が維持されることを確認する。
+- [ ] 可能なら `tmux pipe-pane` 等の capture を保存し、成功・失敗・未確認項目を [Issue #346](https://github.com/otolab/agents-ensemble/issues/346) と [PR #360](https://github.com/otolab/agents-ensemble/pull/360) に `🤖 implementer` またはオペレータ名付きで記録する。
 
 ## 参照
 

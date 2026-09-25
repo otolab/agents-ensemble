@@ -74,6 +74,35 @@ describe('buildOpenQuestionListItems', () => {
       [{ text: '    Use ' }, { text: 'care', bold: true }, { text: '.' }],
     ]);
   });
+
+  it('renders nested list and table Markdown in question and context', () => {
+    const [item] = buildOpenQuestionListItems(
+      [
+        createQuestion({
+          id: 'inq-nested-markdown',
+          question:
+            '- **choose** [this](https://example.com/question)\n' +
+            '  - **`deep`**',
+          context:
+            '| **Field** | Value |\n| --- | --- |\n| `mode` | [safe](https://example.com/context) |',
+        }),
+      ],
+      0,
+      120,
+    );
+    const segments = item?.lines.flat() ?? [];
+
+    expect(segments).toEqual(
+      expect.arrayContaining([
+        { text: 'choose', bold: true },
+        { text: 'this', href: 'https://example.com/question' },
+        { text: 'deep', bold: true, code: true },
+        { text: 'Field', bold: true },
+        { text: 'mode', code: true },
+        { text: 'safe', href: 'https://example.com/context' },
+      ]),
+    );
+  });
 });
 
 describe('advanceOpenQuestionSelection', () => {
