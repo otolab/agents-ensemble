@@ -161,6 +161,8 @@ await conductor.send(workerStatusUpdate);
 
 **SDK にチャット UI はない。** CLI（TTY）では Ink TUI（`createIssueSessionTuiHost`）が非ブロッキング入力と `pane` / `stream` レイアウト表示を担い、`submitOperatorInput` 経由で `operator.message` をキューへ積む。非 TTY は `bindAsyncOperatorInput` / CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE`。ConductorSession はキューから dispatch するだけ。テストは `bindOperatorInput` にフェイクを渡す（`createTestOperatorInputBinding`）。ConductorSession がイベント列経由で `agent.send` に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（TUI / stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
 
+`stream` の settled columns shrink は端末の physical reflow と Ink の論理フレームを再同期するため、保持済み activity history を replay する recovery transaction を持つ（[ADR 0026](adr/0026-tui-stream-shrink-recovery.md)）。通常の native scrollback / `alternateScreen: false` モデルと `pane` の bounded activity window は維持する。
+
 conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）

@@ -12,6 +12,7 @@ import { trimBlankLinesOnly } from './operator-input-layout.js';
 export interface TuiViewSnapshot {
   displayState: SessionDisplayState;
   activityLog: ActivityLogEntry[];
+  activityLogGeneration: number;
   postLoopWaiting: boolean;
   shuttingDown: boolean;
   operatorContext: OperatorInputContext | undefined;
@@ -36,6 +37,7 @@ export interface TuiViewModel {
   setDisplayState: (state: SessionDisplayState) => void;
   appendActivityLog: (label: ActivityLogLabel, text: string) => void;
   appendActivityLogSeparator: () => void;
+  requestActivityLogReplay: () => void;
   setPostLoopWaiting: (waiting: boolean) => void;
   setShuttingDown: (shuttingDown: boolean) => void;
   setOperatorContext: (context: OperatorInputContext | undefined) => void;
@@ -51,12 +53,14 @@ export function createTuiViewModel(options: {
       : options.activityLogWindowSize;
   let displayState = INITIAL_SESSION_DISPLAY_STATE;
   let activityLog: ActivityLogEntry[] = [];
+  let activityLogGeneration = 0;
   let postLoopWaiting = false;
   let shuttingDown = false;
   let operatorContext: OperatorInputContext | undefined;
   let snapshot: TuiViewSnapshot = {
     displayState,
     activityLog,
+    activityLogGeneration,
     postLoopWaiting,
     shuttingDown,
     operatorContext,
@@ -67,6 +71,7 @@ export function createTuiViewModel(options: {
     snapshot = {
       displayState,
       activityLog,
+      activityLogGeneration,
       postLoopWaiting,
       shuttingDown,
       operatorContext,
@@ -112,6 +117,10 @@ export function createTuiViewModel(options: {
         activityLogWindowSize === null
           ? [...activityLog, entry]
           : appendActivityLogEntry(activityLog, entry, activityLogWindowSize);
+      notify();
+    },
+    requestActivityLogReplay() {
+      activityLogGeneration += 1;
       notify();
     },
     setPostLoopWaiting(waiting) {

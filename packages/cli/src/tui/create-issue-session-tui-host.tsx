@@ -16,7 +16,11 @@ import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { trimBlankLinesOnly } from './operator-input-layout.js';
 import { resolveTuiIssueLinkMode } from './format-operator-context.js';
 import { resolveTuiLayoutMode } from './tui-layout-mode.js';
-import { createTuiResizeController } from './tui-terminal-size.js';
+import {
+  createTuiResizeController,
+  TUI_RESIZE_SETTLE_MS,
+} from './tui-terminal-size.js';
+import { createTuiResizeRecovery } from './tui-resize-recovery.js';
 import { resolveInitialOperatorMessage } from '../operator-message.js';
 
 export interface CreateIssueSessionTuiHostOptions {
@@ -113,7 +117,34 @@ export function createIssueSessionTuiHost(
     // existing bounded in-memory window; stream mode retains the scrollback.
     activityLogWindowSize: layoutMode === 'stream' ? null : undefined,
   });
-  const resizeController = createTuiResizeController();
+  const inkRef: { current: ReturnType<typeof render> | undefined } = {
+    current: undefined,
+  };
+  const recoveryRef: {
+    current: ReturnType<typeof createTuiResizeRecovery> | undefined;
+  } = {
+    current: undefined,
+  };
+  const resizeController = createTuiResizeController(
+    process.stdout,
+    TUI_RESIZE_SETTLE_MS,
+    (event) => {
+      recoveryRef.current?.recover(event);
+    },
+  );
+  const resizeRecovery = createTuiResizeRecovery({
+    enabled: layoutMode === 'stream',
+    clearInk: () => {
+      inkRef.current?.clear?.();
+    },
+    write: (data) => {
+      resizeController.stdout.write(data);
+    },
+    requestActivityLogReplay: () => {
+      viewModel.requestActivityLogReplay();
+    },
+  });
+  recoveryRef.current = resizeRecovery;
   const onSubmitRef: {
     current: ((text: string, options?: OperatorInputSubmitOptions) => void) | undefined;
   } = {
@@ -143,6 +174,7 @@ export function createIssueSessionTuiHost(
       stdout: resizeController.stdout,
     },
   );
+  inkRef.current = ink;
 
   const inkDisplayBackend = createInkDisplayBackend(viewModel);
   const bindOperatorInput = createBindTuiOperatorInput(
@@ -170,7 +202,9 @@ export function createIssueSessionTuiHost(
       }
     },
     dispose: () => {
+      resizeRecovery.dispose();
       ink.unmount();
+      inkRef.current = undefined;
       resizeController.dispose();
     },
   };

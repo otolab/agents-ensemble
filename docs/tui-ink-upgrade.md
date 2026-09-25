@@ -29,7 +29,8 @@
 pnpm --filter @agents-ensemble/cli exec vitest run \
   src/tui/tui-terminal-size.test.ts \
   src/tui/issue-session-tui.test.tsx \
-  src/tui/issue-session-tui-stream.test.tsx
+  src/tui/issue-session-tui-stream.test.tsx \
+  src/tui/tui-resize-recovery.test.ts
 ```
 
 依存更新や型・ビルド経路にも変更がある場合は、CLI の全 unit test も実行する。
@@ -44,21 +45,22 @@ pnpm --filter @agents-ensemble/cli test:run
 
 | テスト | 確認する契約 | 合格条件 |
 |--------|--------------|----------|
-| [`tui-terminal-size.test.ts`](../packages/cli/src/tui/tui-terminal-size.test.ts) | 通常の resize は 100ms の settle、columns の連続縮小は最後の縮小イベントから 250ms の quiet-period にまとめる。`createTuiResizeController` 経由で TUI は settled 実幅を使い、Ink は columns / rows の high-water mark proxy を使う | 通常の変更は 100ms 後に 1 回、縮小中の中間幅は通知されず、最後の縮小イベントから 250ms 後に最終実幅で 1 回だけ通知される。縮小時の Ink proxy columns は high-water mark を下回らず、拡大時は更新される。実 Ink frame の resize 後出力に pane の主要な枠・入力行があり、`ESC[2J` / `ESC[3J` が出力されない |
+| [`tui-terminal-size.test.ts`](../packages/cli/src/tui/tui-terminal-size.test.ts) | 通常の resize は 100ms の settle、columns の連続縮小は最後の縮小イベントから 250ms の quiet-period にまとめる。`createTuiResizeController` 経由で TUI は settled 実幅を使い、Ink は columns / rows の high-water mark proxy を使う | 通常の変更は 100ms 後に 1 回、縮小中の中間幅は通知されず、最後の縮小イベントから 250ms 後に最終実幅で 1 回だけ通知される。縮小時の Ink proxy columns は high-water mark を下回らず、拡大時は更新される。pane の実 Ink frame は `ESC[2J` / `ESC[3J` を出力せず、stream recovery は別の capture test で settled shrink ごとの reset を検証する |
 | [`issue-session-tui.test.tsx`](../packages/cli/src/tui/issue-session-tui.test.tsx) | pane layout の短い端末への resize。60×12 では Ink に渡す live frame を 11 行として、各 pane の frame を保つ | 60×12 resize 後に 11 行、各行の幅が 60 以下、Workers / Orchestration / Operator input の上下枠と title が揃い、`operator>` が表示される |
-| [`issue-session-tui-stream.test.tsx`](../packages/cli/src/tui/issue-session-tui-stream.test.tsx) | stream の既存 `<Static>` activity history と resize 後の live frame の分離 | resize 後も resize 前の Static 行が 1 回だけ残り、再 replay / duplicate されず、live frame の行幅が変更後の端末幅以下になる |
+| [`issue-session-tui-stream.test.tsx`](../packages/cli/src/tui/issue-session-tui-stream.test.tsx) | stream の Static activity history、shrink recovery、resize 後の live frame の分離 | recovery ごとに full redraw sequence が一度だけ出て、保持済み activity が一度だけ replay され、replay 内で duplicate せず、live frame の行幅が変更後の端末幅以下になる |
+| [`tui-resize-recovery.test.ts`](../packages/cli/src/tui/tui-resize-recovery.test.ts) | pane を除く stream shrink recovery の reset 条件と CSI sequence | columns shrink だけで clear → reset sequence → activity replay の順に一度実行し、grow / height change / dispose / disabled pane mode では実行しない |
 
-この 3 系統が、Ink の clear 判定、stdout proxy、pane / stream の frame integrity を監視する自動ゲートである。特に `tui-terminal-size.test.ts` の実 Ink テストは、clear sequence の再導入と controller 経由の frame 不整合を同時に検出する。
+この 4 系統が、Ink の clear 判定、stdout proxy、pane / stream の frame integrity、stream shrink recovery を監視する自動ゲートである。stream は意図した recovery clear sequence を使うため、capture test はそれが settled shrink ごとに一度だけ出て activity replay と順序づけられることを検出する。
 
 ## upstream 追跡と workaround の撤去条件
 
 [Ink #907](https://github.com/vadimdemedes/ink/issues/907) は幅縮小時の ghost line を扱うが、現時点では `Closed as not planned` である。[Ink #994](https://github.com/vadimdemedes/ink/pull/994) のように clear / scrollback を変更する upstream 更新も、#907 の wrap 行数不一致を直接解決したとは限らない。master の未リリース挙動だけを根拠に workaround を外してはならない。
 
-`createTuiResizeController` の settle + high-water mark proxy を撤去するには、次をすべて満たす必要がある。
+`createTuiResizeController` の settle + high-water mark proxy、および `tui-resize-recovery` を撤去するには、次をすべて満たす必要がある。
 
 1. 幅縮小時の frame / clear 挙動を含む upstream 修正が release され、対象バージョンと変更内容を確認できる。
-2. その候補バージョンでこの文書の 3 系統のテストを実行し、全件成功する。
+2. その候補バージョンでこの文書の 4 系統のテストを実行し、全件成功する。
 3. [TUI 端末互換性マトリクス](tui-terminal-compatibility.md) の resize / scrollback 手順を実端末で実行し、ghost line、frame 重複、意図しない clear sequence がないことを確認する。
-4. [ADR 0024](adr/0024-tui-shrink-coalesce.md) の shrink coalesce 撤去条件を満たし、実装・テスト・利用者向け文書を同じ変更で更新する。
+4. [ADR 0024](adr/0024-tui-shrink-coalesce.md) と [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) の撤去条件を満たし、実装・テスト・利用者向け文書を同じ変更で更新する。
 
 upstream の状況、候補バージョン、未検証の端末や手順は Issue / PR に記録する。#322 の実端末確認そのものはこの Issue のスコープではない。

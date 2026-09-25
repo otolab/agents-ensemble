@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createTuiViewModel, getTuiOpenQuestions } from './tui-view-model.js';
 
 const RESTORED_QUESTION = {
@@ -19,6 +19,7 @@ describe('getTuiOpenQuestions', () => {
         openQuestions: [],
       },
       activityLog: [],
+      activityLogGeneration: 0,
       postLoopWaiting: false,
       shuttingDown: false,
       operatorContext: {
@@ -40,6 +41,7 @@ describe('getTuiOpenQuestions', () => {
         openQuestions: [RESTORED_QUESTION],
       },
       activityLog: [],
+      activityLogGeneration: 0,
       postLoopWaiting: false,
       shuttingDown: false,
       operatorContext: undefined,
@@ -107,5 +109,17 @@ describe('createTuiViewModel activity log', () => {
       label: 'harness',
       text: 'line-1',
     });
+  });
+
+  it('increments the activity log generation for a full terminal replay', () => {
+    const model = createTuiViewModel({ activityLogWindowSize: null });
+    const listener = vi.fn();
+
+    model.subscribe(listener);
+    model.requestActivityLogReplay();
+
+    expect(model.getSnapshot().activityLogGeneration).toBe(1);
+    expect(model.getSnapshot().activityLog).toEqual([]);
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

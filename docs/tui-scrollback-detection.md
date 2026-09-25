@@ -28,7 +28,7 @@ Issue #320 の対象は、`ENSEMBLE_TUI_LAYOUT=stream` で terminal scrollback �
 
 ### `stream`
 
-`stream` は `activityLogWindowSize: null` で活動ログ全体を保持し、`issue-session-tui-stream.tsx` の `<Static>` で上へ append する。入力欄が空の `PgUp`、または入力中の `Ctrl+PgUp` は `stream-scrollback.ts` の detached event を reducer に渡す。detached 中は committed prefix だけを Static に渡し、新着 suffix は pending として保持する。live UI に pending 件数を表示し、`End` / `Ctrl+End` で suffix を順序どおり一度だけ追加して follow に戻る。下部には live UI を描画し、`alternateScreen: false` の Normal Screen Buffer と terminal native scrollback を過去ログの正本にする。既に Static へ渡した prefix は再送・remount・replay しない。
+`stream` は `activityLogWindowSize: null` で活動ログ全体を保持し、`issue-session-tui-stream.tsx` の `<Static>` で上へ append する。入力欄が空の `PgUp`、または入力中の `Ctrl+PgUp` は `stream-scrollback.ts` の detached event を reducer に渡す。detached 中は committed prefix だけを Static に渡し、新着 suffix は pending として保持する。live UI に pending 件数を表示し、`End` / `Ctrl+End` で suffix を順序どおり一度だけ追加して follow に戻る。下部には live UI を描画し、`alternateScreen: false` の Normal Screen Buffer と terminal native scrollback を過去ログの正本にする。通常の follow / detached 経路では既に Static へ渡した prefix を再送・remount・replay しない。例外として #346 の settled columns shrink recovery は terminal scrollback を reset し、保持済み activity history を新しい Static 世代として一度だけ再出力する。
 
 従って pane と stream の違いは次の通りである。
 

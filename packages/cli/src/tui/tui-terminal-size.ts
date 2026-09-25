@@ -14,6 +14,11 @@ export interface TuiTerminalSize {
   readonly rows: number;
 }
 
+export interface TuiResizeSettledEvent {
+  readonly previous: TuiTerminalSize;
+  readonly next: TuiTerminalSize;
+}
+
 export interface TuiTerminalSizeStore {
   getSnapshot: () => TuiTerminalSize;
   subscribe: (listener: () => void) => () => void;
@@ -67,10 +72,10 @@ export function createTuiTerminalSizeStore(
     }
 
     snapshot = next;
+    onSettled?.(snapshot);
     for (const subscriber of [...subscribers]) {
       subscriber();
     }
-    onSettled?.(snapshot);
   };
 
   const onResize = () => {
@@ -153,16 +158,20 @@ export interface TuiResizeController {
 export function createTuiResizeController(
   stdout: NodeJS.WriteStream = process.stdout,
   settleMs: number = TUI_RESIZE_SETTLE_MS,
+  onSettled?: (event: TuiResizeSettledEvent) => void,
 ): TuiResizeController {
   const resizeListeners = new Set<ResizeListener>();
   let disposed = false;
   let inkViewportColumns = readTuiTerminalSize(stdout).columns;
   let inkViewportRows = readTuiTerminalSize(stdout).rows;
+  let settledSize = readTuiTerminalSize(stdout);
 
   const terminalSize = createTuiTerminalSizeStore(stdout, settleMs, (size) => {
     if (disposed) {
       return;
     }
+    const previous = settledSize;
+    settledSize = size;
     // Keep Ink's width at a high-water mark while the TUI uses the settled
     // physical width. Ink's width-decrease handler clears its previous frame;
     // when that frame already wrapped at the new terminal width, its logical
@@ -170,6 +179,7 @@ export function createTuiResizeController(
     // into scrollback. Grow events still raise the mark and notify Ink.
     inkViewportColumns = Math.max(inkViewportColumns, size.columns);
     inkViewportRows = Math.max(inkViewportRows, size.rows);
+    onSettled?.({ previous, next: size });
     queueMicrotask(() => {
       if (disposed) {
         return;

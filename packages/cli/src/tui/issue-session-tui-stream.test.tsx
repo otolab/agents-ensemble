@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./operator-text-area.js', () => import('./operator-text-area.test-double.js'));
 
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import React from 'react';
+import { render as renderInk } from 'ink';
 import { cleanup, render } from 'ink-testing-library';
 import type { OpenQuestion } from '@agents-ensemble/core';
 import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
@@ -15,10 +17,42 @@ import {
   TUI_RESIZE_SETTLE_MS,
   TUI_RESIZE_SHRINK_COALESCE_MS,
 } from './tui-terminal-size.js';
+import {
+  createTuiResizeRecovery,
+  TUI_FULL_REDRAW_SEQUENCE,
+} from './tui-resize-recovery.js';
 
 class ResizeSource extends EventEmitter {
   columns = 80;
   rows = 24;
+}
+
+class FakeTtyStdout extends PassThrough {
+  isTTY = true;
+  columns = 120;
+  rows = 32;
+}
+
+class FakeTtyStdin extends PassThrough {
+  isTTY = true;
+  isRaw = false;
+
+  setRawMode(value: boolean) {
+    this.isRaw = value;
+    return this;
+  }
+
+  ref() {
+    return this;
+  }
+
+  unref() {
+    return this;
+  }
+}
+
+function waitFor(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function createOpenQuestion(
@@ -697,6 +731,103 @@ describe('IssueSessionTuiStream', () => {
     } finally {
       unsubscribe();
       resizeController.dispose();
+    }
+  });
+
+  it('clears and replays retained stream history once per settled shrink', async () => {
+    const source = new FakeTtyStdout();
+    const stdin = new FakeTtyStdin();
+    const stderr = new PassThrough();
+    const output: string[] = [];
+    source.on('data', (chunk: Buffer | string) => {
+      output.push(chunk.toString());
+    });
+
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.appendActivityLog('observation', 'before-resize');
+
+    let ink: ReturnType<typeof renderInk> | undefined;
+    let recovery: ReturnType<typeof createTuiResizeRecovery> | undefined;
+    const resizeController = createTuiResizeController(
+      source as unknown as NodeJS.WriteStream,
+      TUI_RESIZE_SETTLE_MS,
+      (event) => {
+        recovery?.recover(event);
+      },
+    );
+    recovery = createTuiResizeRecovery({
+      clearInk: () => {
+        ink?.clear();
+      },
+      write: (data) => {
+        resizeController.stdout.write(data);
+      },
+      requestActivityLogReplay: () => {
+        viewModel.requestActivityLogReplay();
+      },
+    });
+
+    ink = renderInk(
+      React.createElement(IssueSessionTuiStream, {
+        viewModel,
+        terminalSizeStore: resizeController.terminalSize,
+        onSubmit: () => {},
+      }),
+      {
+        stdout: resizeController.stdout,
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stderr: stderr as unknown as NodeJS.WriteStream,
+        alternateScreen: false,
+        interactive: true,
+        patchConsole: false,
+        maxFps: 60,
+      },
+    );
+
+    try {
+      await ink.waitUntilRenderFlush();
+      const firstOutputLength = output.join('').length;
+
+      source.columns = 60;
+      source.emit('resize');
+      await waitFor(TUI_RESIZE_SHRINK_COALESCE_MS + 80);
+      await ink.waitUntilRenderFlush();
+
+      const firstRecoveryOutput = output.join('').slice(firstOutputLength);
+      const firstResetIndex = firstRecoveryOutput.indexOf(TUI_FULL_REDRAW_SEQUENCE);
+      const firstMarkerIndex = firstRecoveryOutput.indexOf('[observation] before-resize');
+      expect(firstRecoveryOutput.split(TUI_FULL_REDRAW_SEQUENCE)).toHaveLength(2);
+      expect(firstResetIndex).toBeGreaterThanOrEqual(0);
+      expect(firstResetIndex).toBeLessThan(firstMarkerIndex);
+      expect(firstRecoveryOutput.match(/\[observation\] before-resize/g)).toHaveLength(1);
+      expect(viewModel.getSnapshot().activityLogGeneration).toBe(1);
+
+      viewModel.appendActivityLog('observation', 'after-resize');
+      await ink.waitUntilRenderFlush();
+      const secondOutputLength = output.join('').length;
+
+      source.columns = 40;
+      source.emit('resize');
+      await waitFor(TUI_RESIZE_SHRINK_COALESCE_MS + 80);
+      await ink.waitUntilRenderFlush();
+
+      const secondRecoveryOutput = output.join('').slice(secondOutputLength);
+      const secondResetIndex = secondRecoveryOutput.indexOf(TUI_FULL_REDRAW_SEQUENCE);
+      const secondMarkerIndex = secondRecoveryOutput.indexOf('[observation] before-resize');
+      expect(secondRecoveryOutput.split(TUI_FULL_REDRAW_SEQUENCE)).toHaveLength(2);
+      expect(secondResetIndex).toBeGreaterThanOrEqual(0);
+      expect(secondResetIndex).toBeLessThan(secondMarkerIndex);
+      expect(secondRecoveryOutput.match(/\[observation\] before-resize/g)).toHaveLength(1);
+      expect(secondRecoveryOutput.match(/\[observation\] after-resize/g)).toHaveLength(1);
+      expect(viewModel.getSnapshot().activityLogGeneration).toBe(2);
+    } finally {
+      recovery.dispose();
+      ink.unmount();
+      await ink.waitUntilExit();
+      resizeController.dispose();
+      stdin.destroy();
+      stderr.destroy();
+      source.destroy();
     }
   });
 
