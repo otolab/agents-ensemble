@@ -101,6 +101,8 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 
 ## 3. Conductor（SDK）
 
+> **進行中:** conductor の LLM backend を Cursor SDK と Pi（`pi-agent-core`）で切り替える方針は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)（**proposed**）。本節の記述は現行の **SDK 既定**前提。Epic [#348](https://github.com/otolab/agents-ensemble/issues/348)。
+
 ### 責務
 
 1. **状態把握** — Issue コメント、PR、CI、ラベル等（GitHub REST / GraphQL API）
