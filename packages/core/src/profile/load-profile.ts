@@ -272,6 +272,7 @@ export async function resolveProfile(
 
   return {
     workers: resolveProfileWorkers(profile.workers, profileDir, repoRoot),
+    ...(profile.conductor ? { conductor: profile.conductor } : {}),
     ...(profile.acp ? { acp: profile.acp } : {}),
     agents: Object.keys(agents).length > 0 ? agents : undefined,
     materials: await Promise.all(
