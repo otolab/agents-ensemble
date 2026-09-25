@@ -187,7 +187,6 @@ export async function runConductorSessionDriver(
     const canHavePendingWorkerOutcome =
       loopState.lastStatus === 'finished' &&
       loopState.dispatchesThisTurn === 0 &&
-      options.stopOnUnansweredInput !== true &&
       (loopState.pendingPermissions ?? 0) === 0 &&
       (loopState.openQuestions ?? 0) === 0;
     if (canHavePendingWorkerOutcome) {
