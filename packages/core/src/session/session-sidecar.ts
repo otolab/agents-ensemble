@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
+import type { ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 
 export const SESSION_SIDECAR_VERSION = 1;
@@ -32,6 +33,8 @@ export interface WorkerSessionSidecar {
 export interface SessionSidecar {
   version: typeof SESSION_SIDECAR_VERSION;
   conductorAgentId: string;
+  /** 起動時に選択した conductor backend。旧 sidecar の欠落値は cursor。 */
+  conductorBackend?: ConductorBackend;
   issueUrl: string;
   repoRoot: string;
   profile: ResolvedProfile;
@@ -141,7 +144,12 @@ export async function findLatestSessionSidecarForIssue(
 
 export function assertSessionSidecarMatches(
   sidecar: SessionSidecar,
-  input: { issueUrl: string; repoRoot: string; conductorAgentId: string },
+  input: {
+    issueUrl: string;
+    repoRoot: string;
+    conductorAgentId: string;
+    conductorBackend?: ConductorBackend;
+  },
 ): void {
   if (sidecar.conductorAgentId !== input.conductorAgentId) {
     throw new Error(
@@ -158,6 +166,14 @@ export function assertSessionSidecarMatches(
       `Session sidecar repoRoot mismatch: ${sidecar.repoRoot} !== ${input.repoRoot}`,
     );
   }
+  if (
+    input.conductorBackend !== undefined &&
+    (sidecar.conductorBackend ?? 'cursor') !== input.conductorBackend
+  ) {
+    throw new Error(
+      `Session sidecar conductorBackend mismatch: ${sidecar.conductorBackend ?? 'cursor'} !== ${input.conductorBackend}`,
+    );
+  }
 }
 
 function parseSessionSidecar(value: unknown): SessionSidecar {
@@ -171,6 +187,7 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
   if (typeof record.conductorAgentId !== 'string') {
     throw new Error('Invalid session sidecar: conductorAgentId');
   }
+  const conductorBackend = parseConductorBackend(record.conductorBackend);
   if (typeof record.issueUrl !== 'string') {
     throw new Error('Invalid session sidecar: issueUrl');
   }
@@ -220,6 +237,7 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
   return {
     version: SESSION_SIDECAR_VERSION,
     conductorAgentId: record.conductorAgentId,
+    conductorBackend,
     issueUrl: record.issueUrl,
     repoRoot: record.repoRoot,
     profile: record.profile as ResolvedProfile,
@@ -232,6 +250,17 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     ...(githubMonitor ? { githubMonitor } : {}),
     updatedAt,
   };
+}
+
+function parseConductorBackend(value: unknown): ConductorBackend {
+  if (value === undefined) {
+    // Sidecars written before backend selection used Cursor SDK unconditionally.
+    return 'cursor';
+  }
+  if (value === 'cursor' || value === 'pi') {
+    return value;
+  }
+  throw new Error('Invalid session sidecar: conductorBackend');
 }
 
 function isEnoent(error: unknown): boolean {

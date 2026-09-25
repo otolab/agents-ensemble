@@ -89,6 +89,15 @@ materials:
     expect(profile.workers).toEqual([{ name: 'ping', kind: 'ping' }]);
   });
 
+  it('loads the conductor backend from profile YAML', async () => {
+    const path = join(dir, 'profile.yaml');
+    await writeFile(path, 'conductor:\n  backend: pi\nworkers: []\n');
+
+    const profile = await loadProfileFromFile(path);
+
+    expect(profile.conductor).toEqual({ backend: 'pi' });
+  });
+
   it('preserves profile acp through resolveProfile and resolves worker spawn', async () => {
     const path = join(dir, 'profile.yaml');
     await writeFile(

@@ -48,6 +48,7 @@ profile:
   default: implementer-and-reviewer   # ENSEMBLE_DEFAULT_PROFILE 相当
 
 conductor:
+  backend: cursor                    # cursor（既定） | pi（未サポート、#352）
   model: default                      # CONDUCTOR_MODEL_ID 相当
 
 acp:
@@ -82,6 +83,7 @@ tui:
 |------|------|-----------|-----------|
 | `profile.default` | 既定 team profile（名前またはパス） | `--profile` | `ENSEMBLE_DEFAULT_PROFILE` |
 | `conductor.model` | conductor モデル id | `--model` | `CONDUCTOR_MODEL_ID` |
+| `conductor.backend` | conductor LLM backend（`cursor` / `pi`） | — | — |
 | `acp.defaultPreset` | worker ACP built-in preset | `--default-acp-cli` 等 | `ENSEMBLE_DEFAULT_ACP_CLI` |
 | `session.worktree` | worker workspace モード | `--worktree` | — |
 | `session.maxTurns.tty` / `nonTty` | 自律ターン上限 | `--max-turns` / `--no-max-turns` | — |

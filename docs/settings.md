@@ -28,6 +28,8 @@ CLI > 環境変数 > project config > user config > コード default
 
 `profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
+`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`cursor` は既存の Cursor SDK 経路、`pi` は選択を保存・検証するための予約値で、実行時は #352 の Pi 実装が入るまで未サポートエラーになります。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、conductor を起動せず失敗します。旧 sidecar にこのフィールドがない場合は、従来どおり `cursor` として扱います。
+
 ### パターン B — Phase 1 横断（env なし）
 
 ```
@@ -62,6 +64,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 |------|-------------|----------|-----|----------------|------|
 | 既定 team profile | `profile.default` | `ENSEMBLE_DEFAULT_PROFILE` | `--profile` | 同梱 `implementer-and-reviewer` | A |
 | conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | `--model` | `default` | A |
+| conductor backend | `conductor.backend` | — | — | `cursor` | profile > config > default |
 | worker ACP preset（profile 未指定 worker） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
 | Issue worktree | `session.worktree` | — | `--worktree` | `isolated` | B |
 | 自律ターン上限（TTY） | `session.maxTurns.tty` | — | `--max-turns` / `--no-max-turns` | `0`（無制限） | B |
@@ -144,7 +147,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | `TERM` / `TERM_PROGRAM` / `CI` 等 | TTY / CI の実行環境を検出する値 |
 | `CURSOR_RIPGREP_PATH` | SDK 起動時に利用する内部ツールの明示指定 |
 
-`profile.default`、`conductor.model`、`acp.defaultPreset`、`session.*`、`github.monitor.*`、`tui.*` のように config キーがある設定は、上の env-only 表ではなく本書の設定一覧と [config.md](config.md) に記載しています。env は invocation 単位の上書きとして残る場合があります。
+`profile.default`、`conductor.model`、`conductor.backend`、`acp.defaultPreset`、`session.*`、`github.monitor.*`、`tui.*` のように config キーがある設定は、上の env-only 表ではなく本書の設定一覧と [config.md](config.md) に記載しています。env は invocation 単位の上書きとして残る場合があります。
 
 ## 既知のギャップ
 

@@ -1,4 +1,5 @@
 import type { PromptModule } from '@modular-prompt/core';
+import type { ConductorBackend } from '../config/types.js';
 import { parseProfileAcpConfig } from '../acp/resolve-acp-spawn.js';
 import type {
   AcpSpawnFingerprint,
@@ -26,6 +27,11 @@ export interface AgentDefinition {
   prompt?: Record<string, unknown>;
   /** プロファイルディレクトリ基準の YAML ファイル。`prompt` と排他。 */
   promptFile?: string;
+}
+
+export interface ProfileConductorConfig {
+  /** conductor LLM backend（`cursor` | `pi`）。 */
+  backend?: ConductorBackend;
 }
 
 /** プロファイル YAML の worker エントリ（文字列は name=kind のショートハンド）。 */
@@ -71,6 +77,8 @@ export interface Profile {
   meta?: ProfileMeta;
   /** kind 名 → agent 定義。`default` はフォールバック用。 */
   agents?: Record<string, AgentDefinition>;
+  /** conductor backend の profile 単位の明示設定。 */
+  conductor?: ProfileConductorConfig;
   /** セッション開始時に起動する worker（name + kind）。 */
   workers: ProfileWorkerEntry[];
   /** profile 全体の ACP spawn デフォルト（worker 未指定時に継承）。 */

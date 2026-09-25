@@ -4,15 +4,17 @@ import {
   DEFAULT_GITHUB_MONITOR_POLL_INTERVAL_MS,
   DEFAULT_GITHUB_MONITOR_STOP_POLL_WAIT_MS,
 } from '../github/github-monitor.js';
-import type { EnsembleConfig } from './types.js';
+import type { ConductorBackend, EnsembleConfig } from './types.js';
 
 /** `packages/cli` の `NON_INTERACTIVE_DEFAULT_MAX_TURNS` と同期。 */
 export const DEFAULT_SESSION_MAX_TURNS_NON_TTY = 5;
+export const DEFAULT_CONDUCTOR_BACKEND: ConductorBackend = 'cursor';
 
 export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = {
   profile: {},
   conductor: {
     model: 'default',
+    backend: DEFAULT_CONDUCTOR_BACKEND,
   },
   acp: {
     defaultPreset: 'cursor',

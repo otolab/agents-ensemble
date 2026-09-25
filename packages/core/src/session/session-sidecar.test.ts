@@ -117,6 +117,41 @@ describe('session sidecar', () => {
     });
   });
 
+  it('assumes cursor for a legacy sidecar without conductorBackend', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-sidecar-'));
+    const path = sessionSidecarPath({
+      repoRoot: tempDir,
+      conductorAgentId: 'legacy-agent',
+    });
+    const legacySidecar = baseSidecar({
+      conductorAgentId: 'legacy-agent',
+      repoRoot: tempDir,
+    });
+    await mkdir(sessionSidecarDir(tempDir), { recursive: true });
+    await writeFile(path, `${JSON.stringify(legacySidecar)}\n`, 'utf8');
+
+    const loaded = await loadSessionSidecar(path);
+
+    expect(loaded?.conductorBackend).toBe('cursor');
+  });
+
+  it('rejects a conductor backend mismatch on resume validation', () => {
+    const sidecar = baseSidecar({
+      conductorAgentId: 'agent-backend',
+      conductorBackend: 'pi',
+      repoRoot: '/repo',
+    });
+
+    expect(() =>
+      assertSessionSidecarMatches(sidecar, {
+        conductorAgentId: 'agent-backend',
+        issueUrl: sidecar.issueUrl,
+        repoRoot: '/repo',
+        conductorBackend: 'cursor',
+      }),
+    ).toThrow(/conductorBackend mismatch/);
+  });
+
   it('rejects mismatched issueUrl on assert', () => {
     const sidecar = baseSidecar({
       conductorAgentId: 'agent-1',

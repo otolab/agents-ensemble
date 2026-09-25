@@ -12,6 +12,8 @@ profile:
   default: implementer-and-reviewer
 
 conductor:
+  # conductor backend（profile で指定した場合は profile が優先。cursor | pi）
+  backend: cursor
   # conductor モデル id（CLI --model / CONDUCTOR_MODEL_ID より優先度低）
   model: default
 

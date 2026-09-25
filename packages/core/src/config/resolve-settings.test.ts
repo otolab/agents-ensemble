@@ -6,6 +6,7 @@ import {
   ENSEMBLE_DEFAULT_PROFILE_ENV,
   FORCE_HYPERLINK_ENV,
   resolveBooleanSetting,
+  resolveConductorBackendSetting,
   resolveConductorModelSetting,
   resolveDefaultAcpPresetSetting,
   resolveForceHyperlinkSetting,
@@ -189,6 +190,41 @@ describe('resolveConductorModelSetting', () => {
     process.env[CONDUCTOR_MODEL_ID_ENV] = 'auto';
     expect(resolveConductorModelSetting({ env: process.env })).toBe('default');
     delete process.env[CONDUCTOR_MODEL_ID_ENV];
+  });
+});
+
+describe('resolveConductorBackendSetting', () => {
+  it('prefers profile over merged config', () => {
+    expect(
+      resolveConductorBackendSetting({
+        profile: { conductor: { backend: 'pi' } },
+        config: {
+          ...projectConfig,
+          conductor: { model: 'default', backend: 'cursor' },
+        },
+      }),
+    ).toBe('pi');
+  });
+
+  it('uses config when profile backend is omitted', () => {
+    expect(
+      resolveConductorBackendSetting({
+        profile: { conductor: {} },
+        config: {
+          ...projectConfig,
+          conductor: { model: 'default', backend: 'pi' },
+        },
+      }),
+    ).toBe('pi');
+  });
+
+  it('defaults to cursor when both profile and config omit backend', () => {
+    expect(
+      resolveConductorBackendSetting({
+        profile: { conductor: {} },
+        config: { ...projectConfig, conductor: { model: 'default' } },
+      }),
+    ).toBe('cursor');
   });
 });
 

@@ -27,6 +27,7 @@ export {
 } from './load-profile.js';
 export type {
   Profile,
+  ProfileConductorConfig,
   ProfileMaterial,
   ProfileMeta,
   ResolvedProfile,
