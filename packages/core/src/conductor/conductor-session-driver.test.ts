@@ -35,6 +35,7 @@ vi.mock('./conductor-agent.js', () => ({
 function createWorkerSessionStub(runningCount = 0) {
   return {
     runtime: { runningCount },
+    inbox: { drain: vi.fn().mockResolvedValue(undefined) },
   };
 }
 
@@ -137,6 +138,125 @@ describe('runConductorSessionDriver', () => {
     expect(String(send.mock.calls[0]![0])).toContain('作業フローの連鎖');
     expect(String(send.mock.calls[0]![0])).toContain('Test issue body for conductor.');
     expect(result.sendCount).toBe(1);
+    expect(result.stopReason).toBe('completed');
+  });
+
+  it('drains worker outcome notifications before stopping on an idle queue', async () => {
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    eventQueue.enqueue({
+      type: 'worker.failed',
+      failure: {
+        workerId: 'worker-failed',
+        name: 'fail-1',
+        kind: 'fail',
+        error: 'attach failed',
+        issueUrl: TEST_ISSUE.url,
+      },
+    });
+
+    let drainCount = 0;
+    const inbox = {
+      drain: vi.fn(async () => {
+        drainCount += 1;
+        if (drainCount === 1) {
+          eventQueue.enqueue({
+            type: 'worker.completed',
+            result: {
+              name: 'ping-1',
+              kind: 'ping',
+              issue: TEST_ISSUE,
+              worktree: {
+                path: '/tmp/wt',
+                branch: 'ensemble/issue-1',
+                issue: TEST_ISSUE,
+              },
+              prompt: 'done',
+              promptResult: { stopReason: 'end_turn' },
+              acpSessionId: 'sess-1',
+              source: 'harness',
+            },
+          });
+        }
+      }),
+    };
+    const options = createDriverOptions({ eventQueue, conductor });
+    options.workerSession.inbox = inbox;
+
+    const result = await runConductorSessionDriver(options);
+
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
+    expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
+    expect(inbox.drain).toHaveBeenCalledTimes(2);
+    expect(result.stopReason).toBe('completed');
+  });
+
+  it('dispatches late worker outcomes before stopping a one-shot session', async () => {
+    const eventQueue = new SessionEventQueue();
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'worker outcomes delivered',
+      });
+    const inbox = {
+      drain: vi.fn().mockImplementationOnce(async () => {
+        await Promise.resolve();
+        eventQueue.enqueue({
+          type: 'worker.completed',
+          result: {
+            name: 'late-worker',
+            kind: 'implementer',
+            issue: TEST_ISSUE,
+            worktree: {
+              path: '/tmp/wt',
+              branch: 'ensemble/issue-1',
+              issue: TEST_ISSUE,
+            },
+            prompt: 'done',
+            promptResult: { stopReason: 'end_turn' },
+            acpSessionId: 'sess-completed',
+            source: 'harness',
+          },
+        });
+        eventQueue.enqueue({
+          type: 'worker.failed',
+          failure: {
+            name: 'late-worker',
+            kind: 'implementer',
+            error: 'late failure',
+          },
+        });
+      }).mockResolvedValueOnce(undefined),
+    };
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const options = createDriverOptions({
+      eventQueue,
+      conductor,
+      stopOnUnansweredInput: true,
+    });
+    options.workerSession.inbox = inbox;
+
+    expect(eventQueue.isEmpty()).toBe(true);
+
+    const result = await runConductorSessionDriver(options);
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(inbox.drain).toHaveBeenCalledTimes(2);
+    expect(String(send.mock.calls[1]![0])).toContain('worker.completed');
+    expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
     expect(result.stopReason).toBe('completed');
   });
 
@@ -691,10 +811,27 @@ describe('runConductorSessionDriver', () => {
           result: 'holding and releasing',
         };
       })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('## worker 通知（implementer・2 件）');
+        eventQueue.enqueue({
+          type: 'worker.completed',
+          result: {
+            name: 'late-worker',
+            acpSessionId: 'sess-2',
+            status: 'finished',
+            result: 'late outcome',
+          },
+        });
+        return {
+          runId: 'run-2',
+          status: 'finished',
+          result: 'flushed',
+        };
+      })
       .mockResolvedValueOnce({
-        runId: 'run-2',
+        runId: 'run-3',
         status: 'finished',
-        result: 'flushed',
+        result: 'late outcome delivered',
       });
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
 
@@ -707,10 +844,11 @@ describe('runConductorSessionDriver', () => {
 
     const result = await driverPromise;
 
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(3);
     expect(String(send.mock.calls[1]![0])).toContain('## worker 通知（implementer・2 件）');
     expect(String(send.mock.calls[1]![0])).toContain('worker.completed');
     expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
+    expect(String(send.mock.calls[2]![0])).toContain('late-worker');
     expect(releaseResult?.structuredContent).toEqual({
       dispatchHold: false,
       flushedEventCount: 2,
@@ -727,12 +865,12 @@ describe('runConductorSessionDriver', () => {
       },
       { status: 'updated', hold: false, heldEventCount: 0 },
     ]);
-    expect(onSendComplete.mock.calls.map(([info]) => info.autonomousTurns)).toEqual([1, 2]);
+    expect(onSendComplete.mock.calls.map(([info]) => info.autonomousTurns)).toEqual([1, 2, 3]);
     expect(onSendComplete.mock.calls[1]?.[0]).toMatchObject({
       workerDispatches: 1,
       workerFailures: 1,
     });
-    expect(result.autonomousTurns).toBe(2);
+    expect(result.autonomousTurns).toBe(3);
     expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
   });
 
@@ -972,6 +1110,11 @@ describe('runConductorSessionDriver', () => {
         runId: 'run-2',
         status: 'finished',
         result: 'operator resumed',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-3',
+        status: 'finished',
+        result: 'late worker delivered',
       });
 
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
@@ -1011,9 +1154,10 @@ describe('runConductorSessionDriver', () => {
 
     const result = await driverPromise;
 
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(3);
     expect(String(send.mock.calls[1]![0])).toContain('go ahead');
-    expect(result.autonomousTurns).toBe(0);
+    expect(String(send.mock.calls[2]![0])).toContain('late worker');
+    expect(result.autonomousTurns).toBe(1);
     expect(result.stopReason).toBe('completed');
   });
 

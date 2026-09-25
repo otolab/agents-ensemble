@@ -146,9 +146,20 @@ export async function runConductorSessionDriver(
   const dispatchHoldState =
     options.dispatchHoldState ?? createDispatchHoldState();
 
-  const shouldBreakAfterLoopState = (
+  const hasDispatchableWorkerOutcome = (): boolean =>
+    selectDispatchBatch({
+      queue: options.eventQueue.snapshot().filter(
+        (event) =>
+          event.type === 'worker.completed' || event.type === 'worker.failed',
+      ),
+      state: dispatchBatchState,
+      autonomousTurns,
+      maxTurns: options.maxTurns,
+    }) !== undefined;
+
+  const shouldBreakAfterLoopState = async (
     loopState: Parameters<typeof shouldStopIssueLoop>[0],
-  ): boolean => {
+  ): Promise<boolean> => {
     stopReason = resolveIssueLoopStopReason(loopState);
     const shouldStop = shouldStopIssueLoop(loopState);
     // A normal binding may still release and flush held trigger events before
@@ -167,6 +178,26 @@ export async function runConductorSessionDriver(
     if (!shouldStop) {
       postLoopWaiting = false;
       return false;
+    }
+
+    // A worker publishes its outcome to the inbox before its runtime round
+    // leaves the running state. Drain that notification chain before
+    // deciding the session is idle, otherwise the driver can tear down in
+    // the gap before the outcome reaches eventQueue.
+    const canHavePendingWorkerOutcome =
+      loopState.lastStatus === 'finished' &&
+      loopState.dispatchesThisTurn === 0 &&
+      (loopState.pendingPermissions ?? 0) === 0 &&
+      (loopState.openQuestions ?? 0) === 0;
+    if (canHavePendingWorkerOutcome) {
+      await options.workerSession.inbox.drain();
+      if (
+        hasDispatchableWorkerOutcome() ||
+        options.workerSession.runtime.runningCount !== 0
+      ) {
+        postLoopWaiting = false;
+        return false;
+      }
     }
     if (!options.continueAfterIssueLoopStop) {
       return true;
@@ -242,7 +273,7 @@ export async function runConductorSessionDriver(
         continueOnConductorError: options.continueOnConductorError,
         stopOnUnansweredInput: options.stopOnUnansweredInput,
       });
-      if (shouldBreakAfterLoopState(loopState)) {
+      if (await shouldBreakAfterLoopState(loopState)) {
         break;
       }
       continue;
@@ -267,7 +298,7 @@ export async function runConductorSessionDriver(
         continueOnConductorError: options.continueOnConductorError,
         stopOnUnansweredInput: options.stopOnUnansweredInput,
       });
-      if (shouldBreakAfterLoopState(loopState)) {
+      if (await shouldBreakAfterLoopState(loopState)) {
         break;
       }
     }

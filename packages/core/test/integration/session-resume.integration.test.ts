@@ -219,8 +219,11 @@ describe('session resume integration', () => {
     );
 
     const messages = mockSend.mock.calls.map((call) => String(call[0]));
-    expect(messages).toHaveLength(1);
+    // Resume starts restored workers before the driver, so their completed
+    // outcome is queued and delivered after the operator answer.
+    expect(messages).toHaveLength(2);
     expect(messages[0]).toContain('yes, continue');
+    expect(isWorkerCompletedConductorMessage(messages[1]!)).toBe(true);
     expect(messages.some((message) => message.includes('Issue #1'))).toBe(false);
 
     expect(
