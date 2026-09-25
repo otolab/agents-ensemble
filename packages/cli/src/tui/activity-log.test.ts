@@ -184,6 +184,32 @@ describe('activity-log', () => {
     );
   });
 
+  it('renders Markdown styles in list continuation lines and nested items', () => {
+    const lines = buildActivityLogDisplayLines(
+      [
+        {
+          label: 'conductor',
+          text:
+            '- **first**\n' +
+            '  continuation **bold** with `code` and [link](https://example.com/link)\n' +
+            '  - **child**',
+        },
+      ],
+      120,
+    );
+    const segments = lines.flatMap((line) => line.segments);
+
+    expect(segments).toEqual(
+      expect.arrayContaining([
+        { text: 'first', bold: true },
+        { text: 'bold', bold: true },
+        { text: 'code', code: true },
+        { text: 'link', href: 'https://example.com/link' },
+        { text: 'child', bold: true },
+      ]),
+    );
+  });
+
   it('keeps link style on every wrapped link fragment', () => {
     const lines = buildActivityLogDisplayLines(
       [{ label: 'conductor', text: '- [linked text](https://example.com/link)' }],

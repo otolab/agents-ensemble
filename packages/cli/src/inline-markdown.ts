@@ -125,7 +125,7 @@ function appendInlineToken(
       if (token.tokens) {
         appendSourceWithTokens(token.raw, token.tokens, style, segments);
       } else {
-        appendSegment(segments, token.raw, style);
+        appendSegment(segments, source ?? token.raw, style);
       }
       break;
     default:
@@ -152,6 +152,28 @@ function findSourceRange(source: string, raw: string, from: number): SourceRange
   const exactStart = source.indexOf(raw, from);
   if (exactStart >= 0) {
     return { start: exactStart, end: exactStart + raw.length };
+  }
+
+  // Inline text tokens may begin with the newline separating the first line
+  // of a list item from its continuation. Match that newline literally, then
+  // resolve the following indented line using the normal line matcher.
+  const leadingNewlines = /^\n+/.exec(raw)?.[0] ?? '';
+  if (leadingNewlines) {
+    if (!source.startsWith(leadingNewlines, from)) {
+      return undefined;
+    }
+    const remainder = raw.slice(leadingNewlines.length);
+    if (!remainder) {
+      return { start: from, end: from + leadingNewlines.length };
+    }
+    const remainderRange = findSourceRange(
+      source,
+      remainder,
+      from + leadingNewlines.length,
+    );
+    return remainderRange
+      ? { start: from, end: remainderRange.end }
+      : undefined;
   }
 
   // marked removes the common indentation from nested block token raw values.
@@ -192,6 +214,7 @@ function findSourceRange(source: string, raw: string, from: number): SourceRange
     }
 
     let matches = true;
+    let lastMatchEnd: number | undefined;
     for (let offset = 0; offset < rawLines.length; offset += 1) {
       const sourceLine = sourceLines[firstIndex + offset];
       if (!sourceLine) {
@@ -200,11 +223,36 @@ function findSourceRange(source: string, raw: string, from: number): SourceRange
       }
 
       const expected = rawLines[offset]?.trimStart() ?? '';
-      const content = sourceLine.text.trimStart();
-      if (expected ? !content.startsWith(expected) : content !== '') {
-        matches = false;
-        break;
+      const leadingLength = sourceLine.text.length - sourceLine.text.trimStart().length;
+      const content = sourceLine.text.slice(leadingLength);
+      if (!expected) {
+        if (content !== '') {
+          matches = false;
+          break;
+        }
+        lastMatchEnd = sourceLine.contentEnd;
+        continue;
       }
+
+      let matchOffset = 0;
+      if (!content.startsWith(expected)) {
+        // A list item's first text token starts after its marker in source,
+        // while marked's normalized raw value starts at the item text.
+        const marker = /^(?:[-+*]|\d+[.)])[ \t]+/.exec(content);
+        if (offset !== 0 || !marker || !content.slice(marker[0].length).startsWith(expected)) {
+          matches = false;
+          break;
+        }
+        matchOffset = marker[0].length;
+      }
+
+      const matchEnd = leadingLength + matchOffset + expected.length;
+      // Preserve trailing whitespace on a fully matched source line, but do
+      // not consume following inline tokens on a continuation line.
+      lastMatchEnd = sourceLine.start +
+        (/^[ \t]*$/.test(sourceLine.text.slice(matchEnd))
+          ? sourceLine.text.length
+          : matchEnd);
     }
 
     if (matches) {
@@ -216,7 +264,7 @@ function findSourceRange(source: string, raw: string, from: number): SourceRange
         start: firstSourceLine.start,
         end: hasTrailingNewline
           ? lastSourceLine.end
-          : lastSourceLine.contentEnd,
+          : lastMatchEnd ?? lastSourceLine.contentEnd,
       };
     }
   }

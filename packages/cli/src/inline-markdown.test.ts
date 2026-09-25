@@ -52,6 +52,47 @@ describe('parseInlineMarkdown', () => {
     );
   });
 
+  it('styles inline Markdown in list item continuation lines and later items', () => {
+    const input =
+      '- first\n' +
+      '  continuation **bold** with `code` and [link](https://example.com/link)\n' +
+      '- **second**';
+    const segments = parseInlineMarkdown(input);
+
+    expect(segments.map((segment) => segment.text).join('')).toBe(
+      '- first\n  continuation bold with code and link\n- second',
+    );
+    expect(segments).toEqual(
+      expect.arrayContaining([
+        { text: 'bold', bold: true },
+        { text: 'code', code: true },
+        { text: 'link', href: 'https://example.com/link' },
+        { text: 'second', bold: true },
+      ]),
+    );
+  });
+
+  it('continues traversing a nested item after a list continuation line', () => {
+    const input =
+      '- **first**\n' +
+      '  continuation **bold** with `code` and [link](https://example.com/link)\n' +
+      '  - **child**';
+    const segments = parseInlineMarkdown(input);
+
+    expect(segments.map((segment) => segment.text).join('')).toBe(
+      '- first\n  continuation bold with code and link\n  - child',
+    );
+    expect(segments).toEqual(
+      expect.arrayContaining([
+        { text: 'first', bold: true },
+        { text: 'bold', bold: true },
+        { text: 'code', code: true },
+        { text: 'link', href: 'https://example.com/link' },
+        { text: 'child', bold: true },
+      ]),
+    );
+  });
+
   it('styles every item in loose nested lists while preserving blank lines', () => {
     const input = '- **a**\n\n  - **b**\n\n  - **c**';
 
