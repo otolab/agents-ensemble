@@ -96,6 +96,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0022](0022-tui-resize-workaround.md) | TUI resize workaround と Ink 回帰監視 | superseded → [0024](0024-tui-shrink-coalesce.md) |
 | [0023](0023-tty-initial-message-post-loop.md) | TTY 初回メッセージの post-loop ライフサイクル | accepted |
 | [0024](0024-tui-shrink-coalesce.md) | TUI columns 縮小時の live frame coalesce | accepted |
+| [0025](0025-tui-stream-shrink-recovery.md) | stream 縮小時 scrollback 再同期 | accepted |
 
 ## 追加するとき
 
