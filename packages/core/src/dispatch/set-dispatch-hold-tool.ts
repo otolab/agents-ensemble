@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import type {
   DispatchHoldChange,
   DispatchHoldState,
@@ -15,9 +15,10 @@ export interface SetDispatchHoldToolOptions {
 /** conductor が harness → conductor の trigger dispatch を一時停止する tool。 */
 export function createSetDispatchHoldTool(
   options: SetDispatchHoldToolOptions,
-): Record<string, SDKCustomTool> {
+): ConductorToolSet {
   return {
     set_dispatch_hold: {
+      name: 'set_dispatch_hold',
       description: [
         'Temporarily hold trigger SessionEvents before dispatching them to the conductor.',
         '`hold: true` is useful while reading an Issue/PR or coordinating several workers; held events are kept in arrival order.',

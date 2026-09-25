@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import type { WorkerOutboundQueue } from '../runtime/worker-outbound-queue.js';
 
 export interface PromptWorkerToolOptions {
@@ -8,12 +8,13 @@ export interface PromptWorkerToolOptions {
 
 export function createPromptWorkerTool(
   options: PromptWorkerToolOptions,
-): Record<string, SDKCustomTool> {
+): ConductorToolSet {
   const workerEnum =
     options.workerNames.length > 0 ? options.workerNames : ['__none__'];
 
   return {
     prompt_worker: {
+      name: 'prompt_worker',
       description:
         'Send a work instruction to an attached worker. The worker receives it as a new ACP prompt turn. Issue/PR alone does not trigger workers.',
       inputSchema: {

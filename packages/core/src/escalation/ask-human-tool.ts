@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import { formatOpenQuestionEnqueuedReport } from './format-registry-update.js';
 import type { HumanInquiryResponseType } from './human-inquiry.js';
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
@@ -10,9 +10,10 @@ export interface AskHumanToolOptions {
 
 export function createAskHumanTool(
   options: AskHumanToolOptions,
-): Record<string, SDKCustomTool> {
+): ConductorToolSet {
   return {
     ask_human: {
+      name: 'ask_human',
       description: [
         'Register a question for the human operator when they have NOT answered yet.',
         'The operator answers in chat on a later turn; you can continue without waiting.',

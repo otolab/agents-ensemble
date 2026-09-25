@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import {
   enrichSessionUsageWithCost,
   type GetConductorUsageCost,
@@ -15,11 +15,12 @@ export interface SessionUsageToolOptions {
 
 export function createSessionUsageTools(
   options: SessionUsageToolOptions,
-): Record<string, SDKCustomTool> {
+): ConductorToolSet {
   const agentEnum = ['conductor', ...options.workerNames];
 
   return {
     get_session_usage: {
+      name: 'get_session_usage',
       description:
         'Read session-wide LLM token usage (cumulative input/output, per-agent breakdown, context utilization when limit is known). Use for operator token / context % questions — not prompt_worker.',
       inputSchema: {
@@ -35,6 +36,7 @@ export function createSessionUsageTools(
       },
     },
     get_usage: {
+      name: 'get_usage',
       description:
         'Read the latest LLM usage round for conductor or a named worker. Use after get_session_usage when you need one round in detail.',
       inputSchema: {

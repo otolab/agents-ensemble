@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import type { WorkerRuntime } from '../runtime/worker-runtime.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import type {
@@ -15,12 +15,13 @@ export interface WorkerStatusToolOptions {
 
 export function createWorkerStatusTools(
   options: WorkerStatusToolOptions,
-): Record<string, SDKCustomTool> {
+): ConductorToolSet {
   const workerEnum =
     options.workerNames.length > 0 ? options.workerNames : ['__none__'];
 
   return {
     list_workers: {
+      name: 'list_workers',
       description:
         'List attached workers and harness summary. Worker `state` uses lifecycle vocabulary (attaching/idle/processing/failed). TUI maps attaching|processing to display `running` (see mapHarnessToDisplayStatus). Includes queue depth and runningCount. Use for operator status questions — do not prompt_worker for status checks.',
       inputSchema: {
@@ -33,6 +34,7 @@ export function createWorkerStatusTools(
       },
     },
     get_worker_status: {
+      name: 'get_worker_status',
       description:
         'Read one worker harness status in detail (`state` is lifecycle vocabulary: attaching/idle/processing/failed). Use after list_workers when you need queue preview or preempt/cancel flags.',
       inputSchema: {

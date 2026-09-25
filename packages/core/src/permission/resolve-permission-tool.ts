@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import type { ConductorInbox } from '../runtime/conductor-inbox.js';
 import type { PermissionPipeline } from './permission-pipeline.js';
 import type { PendingPermission } from './pending-permission.js';
@@ -15,9 +15,10 @@ export interface ResolvePermissionToolOptions {
 
 export function createResolvePermissionTool(
   options: ResolvePermissionToolOptions,
-): Record<string, SDKCustomTool> {
+): ConductorToolSet {
   return {
     resolve_permission: {
+      name: 'resolve_permission',
       description:
         'Resolve a pending worker permission request. When the operator already answered in chat, use answer_open_question first, then call this.',
       inputSchema: {

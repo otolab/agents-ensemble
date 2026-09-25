@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 
 export interface OpenQuestionListToolsOptions {
@@ -7,9 +7,10 @@ export interface OpenQuestionListToolsOptions {
 
 export function createOpenQuestionListTools(
   options: OpenQuestionListToolsOptions,
-): Record<string, SDKCustomTool> {
+): ConductorToolSet {
   return {
     list_open_questions: {
+      name: 'list_open_questions',
       description:
         'List open questions (TODO-style). Use to see pending or answered items without relying on prompt state.',
       inputSchema: {
@@ -50,6 +51,7 @@ export function createOpenQuestionListTools(
       },
     },
     get_open_question: {
+      name: 'get_open_question',
       description:
         'Read one open question by id. Use after list_open_questions when you need full detail.',
       inputSchema: {

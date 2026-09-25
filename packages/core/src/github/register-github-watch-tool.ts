@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
 import {
   DEFAULT_GITHUB_WATCH_KINDS,
@@ -28,9 +28,10 @@ export interface RegisterGitHubWatchToolOptions {
 
 export function createRegisterGitHubWatchTool(
   options: RegisterGitHubWatchToolOptions,
-): Record<string, SDKCustomTool> {
+): ConductorToolSet {
   return {
     register_github_watch: {
+      name: 'register_github_watch',
       description: [
         'Register a pull request for the harness GitHub monitor.',
         'Provide prNumber or prUrl; the pull request must belong to the session Issue repository.',

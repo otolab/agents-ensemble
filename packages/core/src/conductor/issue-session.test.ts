@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SDKCustomTool } from '@cursor/sdk';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
@@ -8,6 +7,7 @@ import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import { createTestOperatorInputBinding } from './testing/test-operator-input-binding.js';
 import { runIssueSession } from './issue-session.js';
 import { createMockConductorGetUsage } from '../testing/mock-conductor-get-usage.js';
+import type { ConductorAgentOptions } from './conductor-agent.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -23,7 +23,7 @@ const { mockSend, mockClose, mockCreate } = vi.hoisted(() => {
   return { mockSend, mockClose, mockCreate };
 });
 
-let conductorTools: Record<string, SDKCustomTool> = {};
+let conductorTools: NonNullable<ConductorAgentOptions['customTools']> = {};
 
 vi.mock('./conductor-agent.js', () => ({
   ConductorAgent: {

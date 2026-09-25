@@ -1,7 +1,13 @@
-import type { SDKJsonValue } from '@cursor/sdk';
 import yaml from 'js-yaml';
+import type {
+  ConductorJsonValue,
+  ConductorToolResult,
+} from '../conductor/conductor-tool.js';
 
-export function yamlToolResult(label: string, data: unknown) {
+export function yamlToolResult(
+  label: string,
+  data: unknown,
+): ConductorToolResult {
   const text = [
     '```yaml',
     `# ${label}`,
@@ -17,6 +23,6 @@ export function yamlToolResult(label: string, data: unknown) {
 
 export function toStructuredContent(
   data: unknown,
-): Record<string, SDKJsonValue> {
-  return JSON.parse(JSON.stringify(data)) as Record<string, SDKJsonValue>;
+): Record<string, ConductorJsonValue> {
+  return JSON.parse(JSON.stringify(data)) as Record<string, ConductorJsonValue>;
 }

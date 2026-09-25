@@ -8,7 +8,6 @@ import {
   type McpServerConfig,
   type RunResult,
   type SDKAgent,
-  type SDKCustomTool,
   type TokenUsage,
 } from '@cursor/sdk';
 import {
@@ -17,6 +16,7 @@ import {
 } from './configure-cursor-sdk-env.js';
 import { CONDUCTOR_AUTH_HINT, resolveConductorApiKey } from './conductor-auth.js';
 import { formatConductorToolName } from './conductor-tool-name.js';
+import type { SdkCustomTools } from './conductor-tool-sdk-adapter.js';
 import { resolveConductorModelId } from './resolve-conductor-model-id.js';
 
 export interface ConductorAgentOptions {
@@ -24,7 +24,7 @@ export interface ConductorAgentOptions {
   apiKey?: string;
   modelId?: string;
   mcpServers?: Record<string, McpServerConfig>;
-  customTools?: Record<string, SDKCustomTool>;
+  customTools?: SdkCustomTools;
   onStreamText?: (text: string) => void;
 }
 
