@@ -35,6 +35,7 @@ vi.mock('./conductor-agent.js', () => ({
 function createWorkerSessionStub(runningCount = 0) {
   return {
     runtime: { runningCount },
+    inbox: { drain: vi.fn().mockResolvedValue(undefined) },
   };
 }
 
@@ -137,6 +138,62 @@ describe('runConductorSessionDriver', () => {
     expect(String(send.mock.calls[0]![0])).toContain('作業フローの連鎖');
     expect(String(send.mock.calls[0]![0])).toContain('Test issue body for conductor.');
     expect(result.sendCount).toBe(1);
+    expect(result.stopReason).toBe('completed');
+  });
+
+  it('drains worker outcome notifications before stopping on an idle queue', async () => {
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    eventQueue.enqueue({
+      type: 'worker.failed',
+      failure: {
+        workerId: 'worker-failed',
+        name: 'fail-1',
+        kind: 'fail',
+        error: 'attach failed',
+        issueUrl: TEST_ISSUE.url,
+      },
+    });
+
+    let drainCount = 0;
+    const inbox = {
+      drain: vi.fn(async () => {
+        drainCount += 1;
+        if (drainCount === 1) {
+          eventQueue.enqueue({
+            type: 'worker.completed',
+            result: {
+              name: 'ping-1',
+              kind: 'ping',
+              issue: TEST_ISSUE,
+              worktree: {
+                path: '/tmp/wt',
+                branch: 'ensemble/issue-1',
+                issue: TEST_ISSUE,
+              },
+              prompt: 'done',
+              promptResult: { stopReason: 'end_turn' },
+              acpSessionId: 'sess-1',
+              source: 'harness',
+            },
+          });
+        }
+      }),
+    };
+    const options = createDriverOptions({ eventQueue, conductor });
+    options.workerSession.inbox = inbox;
+
+    const result = await runConductorSessionDriver(options);
+
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
+    expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
+    expect(inbox.drain).toHaveBeenCalledTimes(2);
     expect(result.stopReason).toBe('completed');
   });
 
