@@ -142,6 +142,46 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('`');
   });
 
+  it('renders nested Markdown links in stream activity and open questions', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [
+        createOpenQuestion({
+          id: 'inq-stream-link',
+          question: '- **choose** [this](https://example.com/question)',
+          context: 'Use `safe` [docs](https://example.com/context).',
+        }),
+      ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    viewModel.appendActivityLog(
+      'conductor',
+      '- **bold** [activity](https://example.com/activity)\n  - `nested`',
+    );
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream
+        viewModel={viewModel}
+        issueLinkMode="osc8"
+        onSubmit={() => {}}
+      />,
+    );
+
+    const frame = lastFrame() ?? '';
+    const visibleFrame = frame.replace(/\u001b\]8;;[^\u0007]*\u0007/g, '');
+    expect(visibleFrame).toContain('[conductor]');
+    expect(visibleFrame).toContain('- bold activity');
+    expect(visibleFrame).toContain('▸ inq-stream-link [text] - choose this');
+    expect(visibleFrame).toContain('    Use safe docs.');
+    expect(frame).toContain('\u001b]8;;https://example.com/activity\u0007');
+    expect(frame).toContain('\u001b]8;;https://example.com/question\u0007');
+    expect(frame).toContain('\u001b]8;;https://example.com/context\u0007');
+    expect(frame).not.toContain('**');
+    expect(frame).not.toContain('`');
+  });
+
   it('shows dispatch hold count in the Workers pane title', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({

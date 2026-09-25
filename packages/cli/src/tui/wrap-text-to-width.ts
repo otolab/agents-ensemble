@@ -72,6 +72,7 @@ interface StyledCharacter {
   width: number;
   bold?: boolean;
   code?: boolean;
+  href?: string;
 }
 
 function appendStyledSegment(
@@ -87,7 +88,8 @@ function appendStyledSegment(
   if (
     previous &&
     Boolean(previous.bold) === Boolean(character.bold) &&
-    Boolean(previous.code) === Boolean(character.code)
+    Boolean(previous.code) === Boolean(character.code) &&
+    previous.href === character.href
   ) {
     previous.text += text;
     return;
@@ -97,6 +99,7 @@ function appendStyledSegment(
     text,
     ...(character.bold ? { bold: true } : {}),
     ...(character.code ? { code: true } : {}),
+    ...(character.href !== undefined ? { href: character.href } : {}),
   });
 }
 
@@ -125,6 +128,7 @@ function toStyledCharacterLines(segments: InlineMarkdownSegment[]): StyledCharac
         width: stringWidth(character),
         ...(segment.bold ? { bold: true } : {}),
         ...(segment.code ? { code: true } : {}),
+        ...(segment.href !== undefined ? { href: segment.href } : {}),
       });
     }
   }
