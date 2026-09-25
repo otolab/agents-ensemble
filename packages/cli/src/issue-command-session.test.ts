@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   mockClose,
   mockCreate,
+  mockCreateCursorSdkConductorAgentFactory,
   mockFetchIssueContext,
   mockResolveGitHubAuthToken,
   mockSend,
@@ -16,6 +17,7 @@ const {
   const mockSend = vi.fn();
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
+  const mockCreateCursorSdkConductorAgentFactory = vi.fn();
   const mockFetchIssueContext = vi.fn();
   const mockResolveGitHubAuthToken = vi.fn();
   const mockTuiDispose = vi.fn();
@@ -49,6 +51,7 @@ const {
   return {
     mockClose,
     mockCreate,
+    mockCreateCursorSdkConductorAgentFactory,
     mockFetchIssueContext,
     mockResolveGitHubAuthToken,
     mockSend,
@@ -58,11 +61,8 @@ const {
   };
 });
 
-vi.mock('../../core/src/conductor/conductor-agent.js', () => ({
-  ConductorAgent: {
-    create: mockCreate,
-    resume: mockCreate,
-  },
+vi.mock('../../core/src/conductor/cursor-sdk-conductor-agent.js', () => ({
+  createCursorSdkConductorAgentFactory: mockCreateCursorSdkConductorAgentFactory,
 }));
 
 vi.mock('../../core/src/github/issue-context.js', () => ({
@@ -128,6 +128,11 @@ describe('executeIssueCommand with the core session', () => {
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
     mockClose.mockClear();
     mockCreate.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReturnValue({
+      create: mockCreate,
+      resume: mockCreate,
+    });
     mockFetchIssueContext.mockReset();
     mockResolveGitHubAuthToken.mockReset();
     mockSend.mockReset();

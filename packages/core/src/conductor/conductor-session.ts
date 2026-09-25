@@ -37,6 +37,7 @@ import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import {
   profileWorkersToSessionSpecs,
   sessionStateFromProfile,
+  resolveAgentPromptModule,
   type SessionWorkerSpec,
 } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
@@ -54,10 +55,14 @@ import {
 } from '../worktree/worktree.js';
 import { WorkerOutboundQueue } from '../runtime/worker-outbound-queue.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
-import { ConductorAgent, type ConductorAgentOptions } from './conductor-agent.js';
+import type {
+  ConductorAgent,
+  ConductorAgentCreateOptions,
+  ConductorAgentFactory,
+} from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
 import { ConductorToolRegistry } from './conductor-tool.js';
-import { toSdkCustomTools } from './conductor-tool-sdk-adapter.js';
+import { createCursorSdkConductorAgentFactory } from './cursor-sdk-conductor-agent.js';
 import {
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
@@ -97,13 +102,18 @@ import {
 } from '../github/github-monitor.js';
 import { resolveGitHubMonitorEnabled } from '../config/resolve-settings.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
-import { GITHUB_AUTH_HINT } from '../github/github-auth.js';
+import {
+  formatGitHubErrorMessage,
+  GITHUB_AUTH_HINT,
+} from '../github/github-auth.js';
+import { fetchIssueContext } from '../github/issue-context.js';
 import { resolveGitHubAuthToken } from '../github/resolve-github-auth-token.js';
 import {
   emptyGitHubMonitorCursor,
   type GitHubMonitorCursor,
 } from '../github/github-monitor-cursor.js';
 import { createRegisterGitHubWatchTool } from '../github/register-github-watch-tool.js';
+import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -123,6 +133,8 @@ export interface RunConductorSessionOptions {
   profile: ResolvedProfile;
   profilePath?: string;
   resumeAgentId?: string;
+  /** Conductor backend factory. Defaults to the Cursor SDK implementation. */
+  conductorAgentFactory?: ConductorAgentFactory;
   apiKey?: string;
   modelId?: string;
   maxTurns?: number;
@@ -284,6 +296,21 @@ export async function runConductorSession(
         ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
       });
     }
+  }
+
+  let systemPrompt: string;
+  try {
+    const issueContext = await fetchIssueContext(options.issueUrl, {
+      ensembleConfig,
+    });
+    systemPrompt = compileConductorSystemPrompt({
+      issueUrl: options.issueUrl,
+      profile: activeProfile,
+      agentModule: resolveAgentPromptModule('conductor', activeProfile.agents),
+      issueContext,
+    });
+  } catch (error) {
+    throw new Error(formatGitHubErrorMessage(error, ensembleConfig));
   }
 
   const ownsShutdownController = !options.shutdownSignal;
@@ -609,19 +636,23 @@ export async function runConductorSession(
     options.repoRoot,
     options.mcpConfigOptions,
   );
-  const conductorOptions: ConductorAgentOptions = {
+  const conductorOptions: ConductorAgentCreateOptions = {
     cwd: conductorCwd,
+    systemPrompt,
     apiKey: options.apiKey,
     modelId: options.modelId,
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-    customTools: toSdkCustomTools(conductorToolRegistry),
+    customTools: conductorToolRegistry.toRecord(),
   };
 
+  const conductorAgentFactory =
+    options.conductorAgentFactory ?? createCursorSdkConductorAgentFactory();
   conductorAgent = options.resumeAgentId
-    ? await ConductorAgent.resume(options.resumeAgentId, conductorOptions)
-    : await ConductorAgent.create(conductorOptions);
+    ? await conductorAgentFactory.resume(options.resumeAgentId, conductorOptions)
+    : await conductorAgentFactory.create(conductorOptions);
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
   const sendReconnect = {
+    conductorAgentFactory,
     conductorOptions,
     onAuthReconnectAttempt: ({ agentId }: { agentId: string }) => {
       sessionLogger.emit({
@@ -828,8 +859,7 @@ export async function runConductorSession(
   try {
     const driverResult = await runConductorSessionDriver({
       issueUrl: options.issueUrl,
-      profile: activeProfile,
-      ensembleConfig,
+      initialPrompt: systemPrompt,
       conductorHandle,
       sendReconnect,
       eventQueue,

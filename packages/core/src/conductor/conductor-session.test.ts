@@ -36,19 +36,29 @@ const TEST_ISSUE = {
   url: 'https://github.com/org/repo/issues/1',
 };
 
-const { mockSend, mockClose, mockCreate, mockResume } = vi.hoisted(() => {
+const {
+  mockSend,
+  mockClose,
+  mockCreate,
+  mockResume,
+  mockCreateCursorSdkConductorAgentFactory,
+} = vi.hoisted(() => {
   const mockSend = vi.fn();
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
   const mockResume = vi.fn();
-  return { mockSend, mockClose, mockCreate, mockResume };
+  const mockCreateCursorSdkConductorAgentFactory = vi.fn();
+  return {
+    mockSend,
+    mockClose,
+    mockCreate,
+    mockResume,
+    mockCreateCursorSdkConductorAgentFactory,
+  };
 });
 
-vi.mock('./conductor-agent.js', () => ({
-  ConductorAgent: {
-    create: mockCreate,
-    resume: mockResume,
-  },
+vi.mock('./cursor-sdk-conductor-agent.js', () => ({
+  createCursorSdkConductorAgentFactory: mockCreateCursorSdkConductorAgentFactory,
 }));
 
 const { mockCreateGitHubMonitor } = vi.hoisted(() => {
@@ -129,6 +139,11 @@ describe('runConductorSession resume / shutdown', () => {
     mockClose.mockClear();
     mockCreate.mockReset();
     mockResume.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReset();
+    mockCreateCursorSdkConductorAgentFactory.mockReturnValue({
+      create: mockCreate,
+      resume: mockResume,
+    });
     mockCreate.mockImplementation(async () => ({
       agentId: 'agent-test',
       send: mockSend,
@@ -231,6 +246,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockResume).toHaveBeenCalledWith(
       agentId,
       expect.objectContaining({
+        systemPrompt: expect.stringContaining('body'),
         mcpServers: {
           projectDocs: {
             type: 'http',
@@ -336,6 +352,7 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({
+        systemPrompt: expect.stringContaining('body'),
         mcpServers: expect.objectContaining({
           projectDocs: {
             type: 'http',

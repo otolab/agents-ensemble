@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { UsageCost } from '@cursor/sdk';
+import type { ConductorUsageCost } from '../conductor/conductor-agent.js';
 import {
   enrichSessionUsageWithCost,
 } from './enrich-session-usage-cost.js';
@@ -16,8 +16,8 @@ const EMPTY_SUMMARY: SessionUsageSummary = {
 };
 
 describe('enrichSessionUsageWithCost', () => {
-  it('merges cost when getter returns UsageCost', async () => {
-    const cost: UsageCost = { rawCostCents: 51, chargedCents: 42 };
+  it('merges cost when getter returns ConductorUsageCost', async () => {
+    const cost: ConductorUsageCost = { rawCostCents: 51, chargedCents: 42 };
     const result = await enrichSessionUsageWithCost(EMPTY_SUMMARY, async () => cost);
     expect(result.cost).toEqual(cost);
   });

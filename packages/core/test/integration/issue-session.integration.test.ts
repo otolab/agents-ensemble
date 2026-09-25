@@ -75,6 +75,7 @@ describe.skipIf(!hasConductorAuth())('runIssueSession integration', () => {
         }),
       }),
     );
+    expect(compileSpy).toHaveBeenCalledOnce();
     expect(result.workerFailures).toHaveLength(0);
     expect(
       result.workerDispatches.some((entry) =>

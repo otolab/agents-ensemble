@@ -1,16 +1,10 @@
-import type { EnsembleConfig } from '../config/types.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import { ensureMaxTurnsOpenQuestion } from '../escalation/enqueue-max-turns-question.js';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OpenQuestionRegistry } from '../escalation/open-question.js';
-import { fetchIssueContext } from '../github/issue-context.js';
-import { formatGitHubErrorMessage } from '../github/github-auth.js';
 import type { PermissionPipeline } from '../permission/permission-pipeline.js';
-import type { ResolvedProfile } from '../profile/types.js';
-import { resolveAgentPromptModule } from '../profile/types.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import type { WorkerSession } from '../runtime/worker-session.js';
-import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import type { ConductorSendResult } from './conductor-agent.js';
 import type {
   ConductorAgentHandle,
@@ -77,8 +71,8 @@ export interface ConductorSendCompleteInfo {
 
 export interface ConductorSessionDriverOptions {
   issueUrl: string;
-  profile: ResolvedProfile;
-  ensembleConfig: EnsembleConfig;
+  /** Compiled system prompt sent as the SDK backend's initial user turn. */
+  initialPrompt: string;
   conductorHandle: ConductorAgentHandle;
   sendReconnect: ConductorSendReconnectOptions;
   eventQueue: SessionEventQueue;
@@ -180,11 +174,9 @@ export async function runConductorSessionDriver(
 
   if (!options.skipInitialSend) {
     lastSendResult = await runEventConductorSend({
-      message: await buildInitialConductorMessage({
-        issueUrl: options.issueUrl,
-        profile: options.profile,
-        ensembleConfig: options.ensembleConfig,
-      }),
+      // Keep the initial dispatch asynchronous as it was when the driver
+      // fetched and compiled the prompt itself.
+      message: await Promise.resolve(options.initialPrompt),
       conductorHandle: options.conductorHandle,
       sendReconnect: options.sendReconnect,
       workerDispatches: options.workerDispatches,
@@ -348,26 +340,6 @@ export async function runConductorSessionDriver(
     autonomousTurns,
     lastDispatchesThisTurn,
   };
-}
-
-async function buildInitialConductorMessage(input: {
-  issueUrl: string;
-  profile: ResolvedProfile;
-  ensembleConfig: EnsembleConfig;
-}): Promise<string> {
-  try {
-    const issueContext = await fetchIssueContext(input.issueUrl, {
-      ensembleConfig: input.ensembleConfig,
-    });
-    return compileConductorSystemPrompt({
-      issueUrl: input.issueUrl,
-      profile: input.profile,
-      agentModule: resolveAgentPromptModule('conductor', input.profile.agents),
-      issueContext,
-    });
-  } catch (error) {
-    throw new Error(formatGitHubErrorMessage(error, input.ensembleConfig));
-  }
 }
 
 function runEventConductorSend(input: {
@@ -548,6 +520,7 @@ async function runOperatorReconnect(
 ): Promise<void> {
   try {
     await reconnectConductorAgent(options.conductorHandle, {
+      conductorAgentFactory: options.sendReconnect.conductorAgentFactory,
       conductorOptions: options.sendReconnect.conductorOptions,
       onReconnectAttempt:
         options.sendReconnect.onTransportReconnectAttempt ??

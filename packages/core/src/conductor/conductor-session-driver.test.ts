@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
-import * as issueContextModule from '../github/issue-context.js';
 import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../escalation/enqueue-max-turns-question.js';
@@ -22,14 +20,9 @@ const TEST_ISSUE = {
   url: 'https://github.com/org/repo/issues/1',
 };
 
-const { mockResume } = vi.hoisted(() => ({
+const { mockResume, mockCreate } = vi.hoisted(() => ({
   mockResume: vi.fn(),
-}));
-
-vi.mock('./conductor-agent.js', () => ({
-  ConductorAgent: {
-    resume: mockResume,
-  },
+  mockCreate: vi.fn(),
 }));
 
 function createWorkerSessionStub(runningCount = 0) {
@@ -53,11 +46,11 @@ function createDriverOptions(input: {
 
   return {
     issueUrl: TEST_ISSUE.url,
-    profile: { workers: [] },
-    ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+    initialPrompt: 'compiled conductor system prompt',
     conductorHandle,
     sendReconnect: {
-      conductorOptions: { cwd: '/repo' },
+      conductorAgentFactory: { create: mockCreate, resume: mockResume },
+      conductorOptions: { cwd: '/repo', systemPrompt: 'compiled conductor system prompt' },
     },
     eventQueue: input.eventQueue,
     workerSession: createWorkerSessionStub(input.runningCount ?? 0),
@@ -94,20 +87,9 @@ async function awaitDriverWithTimeout<T>(
 }
 
 describe('runConductorSessionDriver', () => {
-  beforeEach(() => {
-    vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
-      issue: TEST_ISSUE,
-      title: 'Test',
-      body: 'Test issue body for conductor.',
-      state: 'OPEN',
-      labels: [],
-      comments: [],
-    });
-  });
-
   afterEach(() => {
-    vi.restoreAllMocks();
     mockResume.mockReset();
+    mockCreate.mockReset();
   });
 
   it('runs initial send then stops when conductor finishes', async () => {
@@ -134,8 +116,7 @@ describe('runConductorSessionDriver', () => {
       dispatchSource: 'initial',
     });
     expect(send).toHaveBeenCalledTimes(1);
-    expect(String(send.mock.calls[0]![0])).toContain('作業フローの連鎖');
-    expect(String(send.mock.calls[0]![0])).toContain('Test issue body for conductor.');
+    expect(send.mock.calls[0]![0]).toBe('compiled conductor system prompt');
     expect(result.sendCount).toBe(1);
     expect(result.stopReason).toBe('completed');
   });
@@ -476,7 +457,11 @@ describe('runConductorSessionDriver', () => {
       shutdownSignal: shutdown.signal,
       continueAfterIssueLoopStop: true,
       sendReconnect: {
-        conductorOptions: { cwd: '/repo' },
+        conductorAgentFactory: { create: mockCreate, resume: mockResume },
+        conductorOptions: {
+          cwd: '/repo',
+          systemPrompt: 'compiled conductor system prompt',
+        },
         onTransportReconnectAttempt,
         onTransportReconnectComplete,
       },
@@ -487,7 +472,10 @@ describe('runConductorSessionDriver', () => {
     await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
 
     expect(oldClose).toHaveBeenCalledOnce();
-    expect(mockResume).toHaveBeenCalledWith('agent-1', { cwd: '/repo' });
+    expect(mockResume).toHaveBeenCalledWith('agent-1', {
+      cwd: '/repo',
+      systemPrompt: 'compiled conductor system prompt',
+    });
     expect(onTransportReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
     expect(onTransportReconnectComplete).toHaveBeenCalledWith({
       agentId: 'agent-1',

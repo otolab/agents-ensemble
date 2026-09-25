@@ -43,9 +43,9 @@ vi.mock('./configure-cursor-sdk-env.js', () => ({
 }));
 
 import { AuthenticationError } from '@cursor/sdk';
-import { ConductorAgent } from './conductor-agent.js';
+import { CursorSdkConductorAgent } from './cursor-sdk-conductor-agent.js';
 
-describe('ConductorAgent.send', () => {
+describe('CursorSdkConductorAgent.send', () => {
   afterEach(() => {
     mockSend.mockReset();
     mockWait.mockReset();
@@ -64,7 +64,10 @@ describe('ConductorAgent.send', () => {
       [Symbol.asyncDispose]: vi.fn(),
     });
 
-    const conductor = await ConductorAgent.create({ cwd: '/repo' });
+    const conductor = await CursorSdkConductorAgent.create({
+      cwd: '/repo',
+      systemPrompt: 'system prompt',
+    });
 
     try {
       expect(mockCreate).toHaveBeenCalledWith(
@@ -72,6 +75,7 @@ describe('ConductorAgent.send', () => {
           model: { id: 'default' },
         }),
       );
+      expect(mockCreate.mock.calls[0]?.[0]).not.toHaveProperty('systemPrompt');
       expect(mockEnsureCursorSdkProxy.mock.invocationCallOrder[0]).toBeLessThan(
         mockCreate.mock.invocationCallOrder[0],
       );
@@ -101,8 +105,9 @@ describe('ConductorAgent.send', () => {
       [Symbol.asyncDispose]: vi.fn(),
     });
 
-    const conductor = await ConductorAgent.create({
+    const conductor = await CursorSdkConductorAgent.create({
       cwd: '/repo',
+      systemPrompt: 'system prompt',
       mcpServers,
     });
 
@@ -128,8 +133,9 @@ describe('ConductorAgent.send', () => {
       [Symbol.asyncDispose]: vi.fn(),
     });
 
-    const conductor = await ConductorAgent.resume('agent-1', {
+    const conductor = await CursorSdkConductorAgent.resume('agent-1', {
       cwd: '/repo',
+      systemPrompt: 'system prompt',
       mcpServers,
     });
 
@@ -171,7 +177,10 @@ describe('ConductorAgent.send', () => {
       result: 'done',
     });
 
-    const conductor = await ConductorAgent.create({ cwd: '/repo' });
+    const conductor = await CursorSdkConductorAgent.create({
+      cwd: '/repo',
+      systemPrompt: 'system prompt',
+    });
 
     try {
       await conductor.send('hello', { onToolCallStarted });
@@ -194,13 +203,36 @@ describe('ConductorAgent.send', () => {
     });
     mockSend.mockRejectedValue(new AuthenticationError('not logged in'));
 
-    const conductor = await ConductorAgent.create({ cwd: '/repo' });
+    const conductor = await CursorSdkConductorAgent.create({
+      cwd: '/repo',
+      systemPrompt: 'system prompt',
+    });
 
     try {
       const result = await conductor.send('hello');
 
       expect(result.status).toBe('error');
       expect(result.error?.message).toBe('not logged in');
+    } finally {
+      await conductor.close();
+    }
+  });
+
+  it('ignores system prompt updates because the SDK has no system API', async () => {
+    mockCreate.mockResolvedValue({
+      agentId: 'agent-1',
+      send: mockSend,
+      [Symbol.asyncDispose]: vi.fn(),
+    });
+
+    const conductor = await CursorSdkConductorAgent.create({
+      cwd: '/repo',
+      systemPrompt: 'system prompt',
+    });
+
+    try {
+      await conductor.setSystemPrompt('updated system prompt');
+      expect(mockCreate).toHaveBeenCalledOnce();
     } finally {
       await conductor.close();
     }
@@ -213,12 +245,13 @@ describe('ConductorAgent.send', () => {
       send: mockSend,
       [Symbol.asyncDispose]: vi.fn(),
     });
-    const { ConductorAgent: IsolatedConductorAgent } = await import(
-      './conductor-agent.js'
+    const { CursorSdkConductorAgent: IsolatedConductorAgent } = await import(
+      './cursor-sdk-conductor-agent.js'
     );
 
     const conductor = await IsolatedConductorAgent.resume('agent-1', {
       cwd: '/repo',
+      systemPrompt: 'system prompt',
     });
 
     try {

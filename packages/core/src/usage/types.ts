@@ -1,4 +1,4 @@
-import type { UsageCost } from '@cursor/sdk';
+import type { ConductorUsageCost } from '../conductor/conductor-agent.js';
 
 /** Token counts for one LLM round or an aggregate. */
 export interface LlmTokenCounts {
@@ -59,5 +59,5 @@ export interface SessionUsageSummary {
   context: SessionContextUtilization;
   latestRound: SessionUsageRound | null;
   /** conductor `getUsage().cost`（セッション累計。未取得時は省略）。 */
-  cost?: UsageCost;
+  cost?: ConductorUsageCost;
 }

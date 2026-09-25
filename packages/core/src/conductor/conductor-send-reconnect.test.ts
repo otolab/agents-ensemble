@@ -1,15 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { mockClose, mockResume } = vi.hoisted(() => ({
+const { mockClose, mockResume, mockCreate } = vi.hoisted(() => ({
   mockClose: vi.fn().mockResolvedValue(undefined),
   mockResume: vi.fn(),
+  mockCreate: vi.fn(),
 }));
 
-vi.mock('./conductor-agent.js', () => ({
-  ConductorAgent: {
-    resume: mockResume,
-  },
-}));
+function createFactory() {
+  return { create: mockCreate, resume: mockResume };
+}
+
+function createConductorOptions() {
+  return { cwd: '/repo', systemPrompt: 'system prompt' };
+}
 
 import {
   isConductorSendTransportError,
@@ -43,7 +46,8 @@ describe('sendConductorWithReconnect', () => {
     const handle = createHandle(send);
 
     const result = await sendConductorWithReconnect(handle, 'hello', {
-      conductorOptions: { cwd: '/repo' },
+      conductorAgentFactory: createFactory(),
+      conductorOptions: createConductorOptions(),
     });
 
     expect(result.status).toBe('finished');
@@ -70,8 +74,10 @@ describe('sendConductorWithReconnect', () => {
 
     const onReconnectAttempt = vi.fn();
     const result = await sendConductorWithReconnect(handle, 'hello', {
+      conductorAgentFactory: createFactory(),
       conductorOptions: {
         cwd: '/repo',
+        systemPrompt: 'system prompt',
         modelId: 'composer-2.5',
         mcpServers: {
           docs: { type: 'http', url: 'https://example.test/mcp' },
@@ -83,6 +89,7 @@ describe('sendConductorWithReconnect', () => {
     expect(mockClose).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledWith('agent-1', {
       cwd: '/repo',
+      systemPrompt: 'system prompt',
       modelId: 'composer-2.5',
       mcpServers: {
         docs: { type: 'http', url: 'https://example.test/mcp' },
@@ -108,7 +115,8 @@ describe('sendConductorWithReconnect', () => {
     }));
 
     const result = await sendConductorWithReconnect(handle, 'hello', {
-      conductorOptions: { cwd: '/repo' },
+      conductorAgentFactory: createFactory(),
+      conductorOptions: createConductorOptions(),
     });
 
     expect(mockResume).toHaveBeenCalledOnce();
@@ -137,7 +145,8 @@ describe('sendConductorWithReconnect', () => {
     const onTransportReconnectAttempt = vi.fn();
     const onTransportReconnectComplete = vi.fn();
     const result = await sendConductorWithReconnect(handle, 'same prompt', {
-      conductorOptions: { cwd: '/repo' },
+      conductorAgentFactory: createFactory(),
+      conductorOptions: createConductorOptions(),
       onAuthReconnectAttempt,
       onTransportReconnectAttempt,
       onTransportReconnectComplete,
@@ -145,7 +154,10 @@ describe('sendConductorWithReconnect', () => {
 
     expect(result.status).toBe('finished');
     expect(mockClose).toHaveBeenCalledOnce();
-    expect(mockResume).toHaveBeenCalledWith('agent-1', { cwd: '/repo' });
+    expect(mockResume).toHaveBeenCalledWith('agent-1', {
+      cwd: '/repo',
+      systemPrompt: 'system prompt',
+    });
     expect(secondSend).toHaveBeenCalledWith('same prompt', expect.any(Object));
     expect(onAuthReconnectAttempt).not.toHaveBeenCalled();
     expect(onTransportReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
@@ -165,7 +177,8 @@ describe('sendConductorWithReconnect', () => {
 
     await expect(
       sendConductorWithReconnect(createHandle(send), 'hello', {
-        conductorOptions: { cwd: '/repo' },
+        conductorAgentFactory: createFactory(),
+        conductorOptions: createConductorOptions(),
       }),
     ).resolves.toEqual(result);
     expect(mockResume).not.toHaveBeenCalled();
@@ -183,7 +196,8 @@ describe('sendConductorWithReconnect', () => {
 
     await expect(
       sendConductorWithReconnect(createHandle(send), 'hello', {
-        conductorOptions: { cwd: '/repo' },
+        conductorAgentFactory: createFactory(),
+        conductorOptions: createConductorOptions(),
         onTransportReconnectComplete,
       }),
     ).resolves.toEqual(result);
@@ -215,14 +229,19 @@ describe('reconnectConductorAgent', () => {
 
     await expect(
       reconnectConductorAgent(handle, {
+        conductorAgentFactory: createFactory(),
         cwd: '/repo',
+        systemPrompt: 'system prompt',
         onReconnectAttempt,
       }),
     ).resolves.toBe('agent-1');
 
     expect(onReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
     expect(mockClose).toHaveBeenCalledOnce();
-    expect(mockResume).toHaveBeenCalledWith('agent-1', { cwd: '/repo' });
+    expect(mockResume).toHaveBeenCalledWith('agent-1', {
+      cwd: '/repo',
+      systemPrompt: 'system prompt',
+    });
     expect(handle.conductor).toBe(resumed);
   });
 });
