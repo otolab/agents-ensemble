@@ -146,9 +146,12 @@ export async function runConductorSessionDriver(
   const dispatchHoldState =
     options.dispatchHoldState ?? createDispatchHoldState();
 
-  const hasDispatchableEvent = (): boolean =>
+  const hasDispatchableWorkerOutcome = (): boolean =>
     selectDispatchBatch({
-      queue: options.eventQueue.snapshot(),
+      queue: options.eventQueue.snapshot().filter(
+        (event) =>
+          event.type === 'worker.completed' || event.type === 'worker.failed',
+      ),
       state: dispatchBatchState,
       autonomousTurns,
       maxTurns: options.maxTurns,
@@ -177,20 +180,6 @@ export async function runConductorSessionDriver(
       return false;
     }
 
-    // A worker outcome can be queued while the previous worker outcome send
-    // is completing. Keep consuming that worker batch before declaring the
-    // autonomous loop finished. Preserve the existing max-turn behavior by
-    // requiring the queued event to be dispatchable in the current state.
-    if (
-      loopState.lastStatus === 'finished' &&
-      loopState.dispatchesThisTurn === 0 &&
-      dispatchBatchState.lastDispatchedSourceKey?.startsWith('worker:') &&
-      hasDispatchableEvent()
-    ) {
-      postLoopWaiting = false;
-      return false;
-    }
-
     // A worker publishes its outcome to the inbox before its runtime round
     // leaves the running state. Drain that notification chain before
     // deciding the session is idle, otherwise the driver can tear down in
@@ -202,18 +191,13 @@ export async function runConductorSessionDriver(
       (loopState.pendingPermissions ?? 0) === 0 &&
       (loopState.openQuestions ?? 0) === 0;
     if (canHavePendingWorkerOutcome) {
+      await options.workerSession.inbox.drain();
       if (
-        options.eventQueue.isEmpty() &&
-        options.workerSession.runtime.runningCount === 0
+        hasDispatchableWorkerOutcome() ||
+        options.workerSession.runtime.runningCount !== 0
       ) {
-        await options.workerSession.inbox.drain();
-        if (
-          hasDispatchableEvent() ||
-          options.workerSession.runtime.runningCount !== 0
-        ) {
-          postLoopWaiting = false;
-          return false;
-        }
+        postLoopWaiting = false;
+        return false;
       }
     }
     if (!options.continueAfterIssueLoopStop) {

@@ -748,10 +748,27 @@ describe('runConductorSessionDriver', () => {
           result: 'holding and releasing',
         };
       })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('## worker 通知（implementer・2 件）');
+        eventQueue.enqueue({
+          type: 'worker.completed',
+          result: {
+            name: 'late-worker',
+            acpSessionId: 'sess-2',
+            status: 'finished',
+            result: 'late outcome',
+          },
+        });
+        return {
+          runId: 'run-2',
+          status: 'finished',
+          result: 'flushed',
+        };
+      })
       .mockResolvedValueOnce({
-        runId: 'run-2',
+        runId: 'run-3',
         status: 'finished',
-        result: 'flushed',
+        result: 'late outcome delivered',
       });
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
 
@@ -764,10 +781,11 @@ describe('runConductorSessionDriver', () => {
 
     const result = await driverPromise;
 
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(3);
     expect(String(send.mock.calls[1]![0])).toContain('## worker 通知（implementer・2 件）');
     expect(String(send.mock.calls[1]![0])).toContain('worker.completed');
     expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
+    expect(String(send.mock.calls[2]![0])).toContain('late-worker');
     expect(releaseResult?.structuredContent).toEqual({
       dispatchHold: false,
       flushedEventCount: 2,
@@ -784,12 +802,12 @@ describe('runConductorSessionDriver', () => {
       },
       { status: 'updated', hold: false, heldEventCount: 0 },
     ]);
-    expect(onSendComplete.mock.calls.map(([info]) => info.autonomousTurns)).toEqual([1, 2]);
+    expect(onSendComplete.mock.calls.map(([info]) => info.autonomousTurns)).toEqual([1, 2, 3]);
     expect(onSendComplete.mock.calls[1]?.[0]).toMatchObject({
       workerDispatches: 1,
       workerFailures: 1,
     });
-    expect(result.autonomousTurns).toBe(2);
+    expect(result.autonomousTurns).toBe(3);
     expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
   });
 
@@ -1029,6 +1047,11 @@ describe('runConductorSessionDriver', () => {
         runId: 'run-2',
         status: 'finished',
         result: 'operator resumed',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-3',
+        status: 'finished',
+        result: 'late worker delivered',
       });
 
     const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
@@ -1068,9 +1091,10 @@ describe('runConductorSessionDriver', () => {
 
     const result = await driverPromise;
 
-    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledTimes(3);
     expect(String(send.mock.calls[1]![0])).toContain('go ahead');
-    expect(result.autonomousTurns).toBe(0);
+    expect(String(send.mock.calls[2]![0])).toContain('late worker');
+    expect(result.autonomousTurns).toBe(1);
     expect(result.stopReason).toBe('completed');
   });
 

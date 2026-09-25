@@ -2,4 +2,4 @@
 "@agents-ensemble/core": patch
 ---
 
-Ensure queued worker completion and failure events are delivered before a conductor session stops.
+Ensure dispatchable worker completion and failure events are delivered before a conductor session stops, regardless of which event source triggered the preceding send.
