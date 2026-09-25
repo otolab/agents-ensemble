@@ -56,6 +56,8 @@ import { WorkerOutboundQueue } from '../runtime/worker-outbound-queue.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import { ConductorAgent, type ConductorAgentOptions } from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
+import { ConductorToolRegistry } from './conductor-tool.js';
+import { toSdkCustomTools } from './conductor-tool-sdk-adapter.js';
 import {
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
@@ -590,6 +592,18 @@ export async function runConductorSession(
     },
   });
 
+  const conductorToolRegistry = new ConductorToolRegistry();
+  conductorToolRegistry
+    .registerAll(askHumanTools)
+    .registerAll(answerOpenQuestionTools)
+    .registerAll(openQuestionListTools)
+    .registerAll(resolvePermissionTools)
+    .registerAll(promptWorkerTools)
+    .registerAll(workerStatusTools)
+    .registerAll(registerGitHubWatchTools)
+    .registerAll(sessionUsageTools)
+    .registerAll(dispatchHoldTools);
+
   const conductorCwd = options.conductorCwd ?? process.cwd();
   const mcpServers = await resolveMcpServersForSdk(
     options.repoRoot,
@@ -600,17 +614,7 @@ export async function runConductorSession(
     apiKey: options.apiKey,
     modelId: options.modelId,
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-    customTools: {
-      ...askHumanTools,
-      ...answerOpenQuestionTools,
-      ...openQuestionListTools,
-      ...resolvePermissionTools,
-      ...promptWorkerTools,
-      ...workerStatusTools,
-      ...registerGitHubWatchTools,
-      ...sessionUsageTools,
-      ...dispatchHoldTools,
-    },
+    customTools: toSdkCustomTools(conductorToolRegistry),
   };
 
   conductorAgent = options.resumeAgentId

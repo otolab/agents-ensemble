@@ -1,4 +1,4 @@
-import type { SDKCustomTool } from '@cursor/sdk';
+import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import { formatOpenQuestionAnsweredReport } from './format-registry-update.js';
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 import { recordOpenQuestionAnswer } from './record-open-question-answer.js';
@@ -10,9 +10,10 @@ export interface AnswerOpenQuestionToolOptions {
 
 export function createAnswerOpenQuestionTool(
   options: AnswerOpenQuestionToolOptions,
-): Record<string, SDKCustomTool> {
+): ConductorToolSet {
   return {
     answer_open_question: {
+      name: 'answer_open_question',
       description: [
         'Record an answer to an open question on the operator behalf.',
         'USE when the operator already answered in chat and you must close the open question before resolve_permission or the next action.',

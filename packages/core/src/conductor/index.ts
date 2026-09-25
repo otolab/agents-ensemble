@@ -3,6 +3,22 @@ export type {
   ConductorAgentOptions,
   ConductorSendResult,
 } from './conductor-agent.js';
+export {
+  ConductorToolRegistry,
+} from './conductor-tool.js';
+export type {
+  ConductorJsonValue,
+  ConductorTool,
+  ConductorToolExecute,
+  ConductorToolInputSchema,
+  ConductorToolResult,
+  ConductorToolSet,
+  ConductorToolTextContent,
+} from './conductor-tool.js';
+export {
+  toSdkCustomTools,
+} from './conductor-tool-sdk-adapter.js';
+export type { SdkCustomTools } from './conductor-tool-sdk-adapter.js';
 
 export { runConductorSession } from './conductor-session.js';
 export {
