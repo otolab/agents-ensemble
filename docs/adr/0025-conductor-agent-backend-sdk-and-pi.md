@@ -53,6 +53,35 @@
 - **worker ACP は変更しない**（既存 preset・attach 経路のまま。conductor `pi` と worker `pi` は独立）。
 - **認証統合は後回し**。Pi backend 初版は **ファイル上の設定**（profile、pi settings 等）を読むのみ。`ensemble auth` と Pi プロバイダの統合は [#356](https://github.com/otolab/agents-ensemble/issues/356)。
 
+### 5. Pi conductor のカスタマイズ（`.ensemble/pi`）
+
+Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/configuration.md) を **可能な限りそのまま**使う。配置は ensemble の他設定（`config.yaml` / `mcp.json`）と揃え、**`.ensemble/` 配下**に集約する。
+
+| 層 | パス（既定） | Pi 標準との対応 |
+|----|----------------|-----------------|
+| ユーザ | `~/.ensemble/pi/` | `~/.pi/agent/`（`PI_CODING_AGENT_DIR` / SDK `agentDir` で指す） |
+| プロジェクト | `<repoRoot>/.ensemble/pi/` | 作業ツリー上の `.pi/`（`settings.json`、`extensions/`、`skills/` 等） |
+
+ディレクトリ内のファイル名・意味は Pi 正本に従う（例: `settings.json`、`extensions/`、`models.json`、`auth.json`）。[settings.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md) のキーをそのまま受け付ける。
+
+**harness が常に入れるもの（利用者が外せない）**
+
+- ensemble **ConductorTool** 一式（dispatch / escalation / permission 等）。Pi のビルトイン coding ツールは conductor では載せない（[ADR 0006](0006-conductor-agent-mode.md) と同趣旨）。
+- **MCP ブリッジ** extension（[ADR 0021](0021-conductor-mcp-config-resolution.md) で解決した `mcp.json` を Pi 側へ渡す）。#354 の実装でパス固定または同梱。
+
+**利用者が足せるもの（オプション）**
+
+- 上記パスへの追加 **extensions / skills / prompts / themes**、および Pi 標準の `settings.json` による挙動調整（モデル既定、thinking、パッケージ宣言等）。
+- `config.yaml` の `conductor.pi.*` は **パス上書きや discovery のヒント**に限定し、Pi 本体の設定スキーマを二重定義しない。
+
+**system prompt の優先**
+
+- conductor の正本は **modular-prompt → `compileConductorSystemPrompt` → `ConductorAgentCreateOptions.systemPrompt`**（§1）。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は Pi 標準では system を置き換え得るが、conductor harness では **`systemPrompt` 受け口が優先**し、override ファイルは無視または **append のみ**許可するかは実装 Issue で固定（既定案: **無視**。追加指示は profile materials で渡す）。
+
+**解決順**
+
+- プロジェクト `.ensemble/pi/` はユーザ `~/.ensemble/pi/` を上書き（Pi の project-over-user と同じ思想）。`config.yaml` の明示パスはそれより優先（[config.md](../config.md) Phase 1 と同型）。
+
 ## Consequences
 
 ### 良い点
@@ -80,9 +109,11 @@
 | [#354](https://github.com/otolab/agents-ensemble/issues/354) | MCP ブリッジ |
 | [#355](https://github.com/otolab/agents-ensemble/issues/355) | ドキュメント正本の更新 |
 | [#356](https://github.com/otolab/agents-ensemble/issues/356) | 認証統合（任意・後回し） |
+| [#358](https://github.com/otolab/agents-ensemble/issues/358) | Pi `.ensemble/pi` 設定・ResourceLoader 配線 |
 
 ## 更新履歴（proposed 期間）
 
 | 日付 | 変更 |
 |------|------|
 | 2026-09-25 | 初版（#348 調査・オペレータ合意を反映） |
+| 2026-09-25 | §5 Pi カスタマイズ（`.ensemble/pi`、標準 config、既定 MCP + harness ツール） |
