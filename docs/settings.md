@@ -28,7 +28,7 @@ CLI > 環境変数 > project config > user config > コード default
 
 `profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
-`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`cursor` は既存の Cursor SDK 経路、`pi` は選択を保存・検証するための予約値で、実行時は #352 の Pi 実装が入るまで未サポートエラーになります。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、conductor を起動せず失敗します。旧 sidecar にこのフィールドがない場合は、従来どおり `cursor` として扱います。
+`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`cursor` は Cursor SDK 経路、`pi` は Pi Agent Core 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、Pi の `settings.json` / `auth.json` からモデルと認証を解決します。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、conductor を起動せず失敗します。旧 sidecar にこのフィールドがない場合は、従来どおり `cursor` として扱います。
 
 ### パターン B — Phase 1 横断（env なし）
 
@@ -55,7 +55,8 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 | 種別 | 解決順 |
 |------|--------|
 | GitHub API | `GITHUB_TOKEN` > `GH_TOKEN` > （`allowGhAuthTokenFallback: true` 時のみ）`gh auth token` |
-| conductor | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
+| conductor (cursor) | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
+| conductor (pi) | Pi の `auth.json` / `settings.json`（標準 `~/.pi/agent/`、ensemble `~/.ensemble/pi/` または project `.pi` / `.ensemble/pi/`） > provider 環境変数 |
 | worker ACP（preset 依存） | preset ごとに README / ADR 0019 参照 |
 
 ## 一覧 — Phase 1（config.yaml）
@@ -104,7 +105,8 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | 設定 | 環境変数 | config で制御できること |
 |------|----------|------------------------|
 | GitHub API token | `GITHUB_TOKEN` / `GH_TOKEN` | `github.auth.allowGhAuthTokenFallback` のみ |
-| conductor API key | `CURSOR_API_KEY` | —（`ensemble auth login` は別経路） |
+| conductor API key (cursor) | `CURSOR_API_KEY` | —（`ensemble auth login` は別経路） |
+| conductor API key (pi) | provider ごとの環境変数（Pi の env mapping） | Pi `auth.json` / `settings.json` にも設定可能 |
 
 ## 一覧 — 別ファイル
 

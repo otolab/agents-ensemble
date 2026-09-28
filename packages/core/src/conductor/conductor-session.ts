@@ -63,6 +63,7 @@ import type {
 import type { ConductorSendResult } from './conductor-agent.js';
 import { ConductorToolRegistry } from './conductor-tool.js';
 import { createCursorSdkConductorAgentFactory } from './cursor-sdk-conductor-agent.js';
+import { createPiConductorAgentFactory } from './pi-conductor-agent.js';
 import {
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
@@ -871,7 +872,10 @@ export async function runConductorSession(
   try {
     const driverResult = await runConductorSessionDriver({
       issueUrl: options.issueUrl,
-      initialPrompt: systemPrompt,
+      initialPrompt:
+        conductorBackend === 'pi'
+          ? createPiKickoffPrompt(options.issueUrl)
+          : systemPrompt,
       conductorHandle,
       sendReconnect,
       eventQueue,
@@ -1117,13 +1121,19 @@ export async function runConductorSession(
   }
 }
 
-function createConductorAgentFactory(backend: ConductorBackend): ConductorAgentFactory {
+export function createConductorAgentFactory(
+  backend: ConductorBackend,
+): ConductorAgentFactory {
   if (backend === 'cursor') {
     return createCursorSdkConductorAgentFactory();
   }
+  return createPiConductorAgentFactory();
+}
 
-  throw new Error(
-    'Conductor backend "pi" is not supported yet; see issue #352 for the Pi implementation.',
+function createPiKickoffPrompt(issueUrl: string): string {
+  return (
+    `Start the conductor workflow for ${issueUrl}. ` +
+    'Review the Issue context in your system instructions and dispatch the first required worker with prompt_worker.'
   );
 }
 

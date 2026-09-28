@@ -50,7 +50,7 @@ profile:
   default: implementer-and-reviewer   # ENSEMBLE_DEFAULT_PROFILE 相当
 
 conductor:
-  backend: cursor                    # cursor（既定） | pi（未サポート、#352）
+  backend: cursor                    # cursor（既定） | pi
   model: default                      # CONDUCTOR_MODEL_ID 相当
 
 acp:

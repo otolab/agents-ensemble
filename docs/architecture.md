@@ -92,16 +92,16 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 |---------|------|------|
 | **CLI** | Node.js (`packages/cli`) | コマンド解析、環境、終了処理 |
 | **Core** | TypeScript (`packages/core`) | ACP ブリッジ、dispatch、型の共有 |
-| **Conductor** | `@cursor/sdk` | 判断・dispatch 制御の主体 |
+| **Conductor** | `@cursor/sdk` または `@earendil-works/pi-agent-core` | 設定された backend による判断・dispatch 制御の主体 |
 | **Worker** | `agent acp` | Skill に沿った実作業（種別ごとに起動文書・Skill が異なる） |
 | **共有媒体** | GitHub Issue / PR | セッション会話に依存しない状態と履歴 |
 | **手順の正本** | Skill（dispatch 先の clone / worktree 上） | worker が読む手順 |
 
 ---
 
-## 3. Conductor（SDK）
+## 3. Conductor（SDK / Pi）
 
-> **進行中:** conductor の LLM backend を Cursor SDK と Pi（`pi-agent-core`）で切り替える方針は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)（**proposed**）。本節の記述は現行の **SDK 既定**前提。Epic [#348](https://github.com/otolab/agents-ensemble/issues/348)。
+conductor の LLM backend は Cursor SDK と Pi（`pi-agent-core`）から起動時に選択できます。既定は Cursor SDK で、両 backend とも同じ harness / worker ACP 経路を使います。方針の記録は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)（**proposed**）を参照してください。
 
 ### 責務
 
@@ -131,7 +131,7 @@ conductor は **理解と dispatch に専念**し、ファイル編集・テス�
 | **`agent.send(message)`** | 会話への **user ターン 1 本**。オペレータ発話・自律ターンの状態通知 |
 | **SDK 会話** | LLM 会話履歴の正本 |
 
-Conductor backend は、**SDK では compiled prompt を初回 user send に渡し、Pi では system 受け口へ渡す**（Pi は #352）。
+Conductor backend は、**SDK では compiled prompt を初回 user send に渡し、Pi では native system 受け口へ渡す**。Pi の初回 user send は Issue URL を含む短い kickoff です。
 
 worker（ACP）は `session/prompt` でターン更新全体を渡す。conductor（SDK）は **`send` = user 行の append** であり、毎ターン CompiledPrompt 相当を渡すモデルではない。
 
