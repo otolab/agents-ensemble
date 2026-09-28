@@ -23,7 +23,9 @@ vi.mock('@earendil-works/pi-ai/compat', () => ({
   getProviders: mockGetProviders,
 }));
 
+import { reconnectConductorAgent } from './conductor-send-reconnect.js';
 import {
+  createPiConductorAgentFactory,
   PiConductorAgent,
   resolvePiModelConfig,
 } from './pi-conductor-agent.js';
@@ -280,6 +282,150 @@ describe('PiConductorAgent', () => {
       'recompiled prompt',
     );
     await resumed.close();
+  });
+
+  it('persists the user prompt and one failure message when an in-flight send is aborted', async () => {
+    const piRoot = join(cwd, '.ensemble', 'pi');
+    await mkdir(piRoot, { recursive: true });
+    await writeFile(
+      join(piRoot, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'model-1' }),
+    );
+
+    const userMessage = {
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text: 'abort me' }],
+      timestamp: Date.now(),
+    };
+    const failureMessage = {
+      role: 'assistant' as const,
+      content: [{ type: 'text' as const, text: '' }],
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: 'model-1',
+      stopReason: 'aborted' as const,
+      errorMessage: 'aborted',
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    };
+
+    let releasePrompt!: () => void;
+    const promptReleased = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    let markPromptStarted!: () => void;
+    const promptStarted = new Promise<void>((resolve) => {
+      markPromptStarted = resolve;
+    });
+    fakeAgent.prompt.mockImplementation(async () => {
+      fakeAgent.state.messages.push(userMessage);
+      markPromptStarted();
+      await promptReleased;
+    });
+    fakeAgent.abort.mockImplementation(() => {
+      fakeAgent.state.messages.push(failureMessage);
+      listener?.({ type: 'agent_end', messages: [failureMessage] });
+      releasePrompt();
+    });
+
+    const options = {
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    };
+    const conductor = await PiConductorAgent.create(options);
+    const sendPromise = conductor.send('abort me');
+    await promptStarted;
+
+    const closePromise = conductor.close();
+    await expect(sendPromise).resolves.toMatchObject({ status: 'cancelled' });
+    await closePromise;
+
+    const resumed = await PiConductorAgent.resume(conductor.agentId, options);
+    expect(mockAgent.mock.calls.at(-1)?.[0].initialState.messages).toEqual([
+      userMessage,
+      failureMessage,
+    ]);
+    await resumed.close();
+  });
+
+  it('reconnects a Pi agent with its failure transcript without duplication', async () => {
+    const piRoot = join(cwd, '.ensemble', 'pi');
+    await mkdir(piRoot, { recursive: true });
+    await writeFile(
+      join(piRoot, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'model-1' }),
+    );
+
+    const userMessage = {
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text: 'reconnect me' }],
+      timestamp: Date.now(),
+    };
+    const failureMessage = {
+      role: 'assistant' as const,
+      content: [{ type: 'text' as const, text: '' }],
+      api: 'anthropic-messages',
+      provider: 'anthropic',
+      model: 'model-1',
+      stopReason: 'error' as const,
+      errorMessage: 'connection failed',
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      timestamp: Date.now(),
+    };
+    fakeAgent.prompt.mockImplementation(async () => {
+      fakeAgent.state.messages.push(userMessage, failureMessage);
+      listener?.({ type: 'agent_end', messages: [failureMessage] });
+    });
+
+    const options = {
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    };
+    const factory = createPiConductorAgentFactory();
+    const first = await factory.create(options);
+    const result = await first.send('reconnect me');
+    expect(result.status).toBe('error');
+
+    const handle = { conductor: first };
+    await reconnectConductorAgent(handle, {
+      conductorAgentFactory: factory,
+      conductorOptions: options,
+    });
+
+    expect(handle.conductor.agentId).toBe(first.agentId);
+    expect(mockAgent.mock.calls.at(-1)?.[0].initialState.messages).toEqual([
+      userMessage,
+      failureMessage,
+    ]);
+    await handle.conductor.close();
   });
 
   it('waits for an in-flight tool/send before closing the Pi agent', async () => {

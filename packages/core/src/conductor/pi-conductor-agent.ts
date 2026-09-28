@@ -264,7 +264,11 @@ export class PiConductorAgent implements ConductorAgent {
     }
 
     if (event.type === 'agent_end') {
-      await this.session.appendMessages(event.messages);
+      // Pi's failure/abort event can contain only the failure assistant while
+      // agent.state.messages already contains the user prompt and failure.
+      // Persist the full in-memory suffix so every run is written once in
+      // transcript order; close() uses the same serialized operation.
+      await this.session.appendNewMessages(this.agent.state.messages);
     }
   }
 

@@ -47,23 +47,6 @@ export class PiConductorSession {
     return this.persistedMessages;
   }
 
-  /** Append the messages emitted for one completed Pi run. */
-  async appendMessages(messages: readonly AgentMessage[]): Promise<void> {
-    const write = this.writeQueue.then(async () => {
-      for (const message of messages) {
-        await this.session.appendMessage(message);
-      }
-      if (messages.length > 0) {
-        this.persistedMessages = [
-          ...this.persistedMessages,
-          ...messages,
-        ];
-      }
-    });
-    this.writeQueue = write.catch(() => {});
-    await write;
-  }
-
   /** Append only the suffix not already written to the JSONL transcript. */
   async appendNewMessages(messages: readonly AgentMessage[]): Promise<void> {
     const write = this.writeQueue.then(async () => {
