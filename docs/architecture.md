@@ -168,7 +168,7 @@ await conductor.send(workerStatusUpdate);
 conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
-- **resume**: 別プロセスから `Agent.resume(conductorId)` で再開可能。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）に open question・profile・worker `acpSessionId` を保存（[ADR 0011](adr/0011-session-sidecar-resume.md)）
+- **resume**: 別プロセスから backend 固有の `resume(conductorAgentId)` で再開可能。Cursor は SDK の session、Pi は sidecar の `conductorAgentId` を Pi session id として `.ensemble/pi/sessions/` の JSONL transcript を復元する。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）には open question・profile・worker `acpSessionId` を保存する（[ADR 0011](adr/0011-session-sidecar-resume.md)）。
 - **ripgrep**: local agent の ignore scan 用。`ConductorAgent` 起動前に `ensureCursorSdkRipgrepPath()` が `@cursor/sdk-<platform>-<arch>/bin/rg` または PATH の `rg` を `CURSOR_RIPGREP_PATH` に設定する（[#43](https://github.com/otolab/agents-ensemble/issues/43)）。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 - **proxy**: `ConductorAgent` 起動前に `ensureCursorSdkProxy()` が Cursor の `settings.json` を読み、フラット形式の `http.proxy` / `http.noProxy` を `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` へ不足分だけ反映する。ネスト形式も互換入力として扱うが、両方に同じ設定がある場合はフラット形式を優先する。解決順は既存の環境変数 → Cursor settings → 未設定で、標準パスは macOS / Linux / Windows ごとに異なる。`cursor.general.disableHttp2: true` は SDK の `local.useHttp1ForAgent: true` に変換する。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK に対応する公開設定がなく未対応。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 
@@ -336,7 +336,7 @@ worker / harness ──enqueue──►─────────────�
 ```
 
 - `WorkerSession` / `ConductorSession` が対。worker 由来・operator 由来のイベントは **1 本の列** に集約し、[ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い **1 束 = 1 `agent.send`**（束は 1 件のこともある。新規セッションの初回のみ system + ブリーフィング）
-- **resume の初回 dispatch**: `Agent.resume(conductorId)` が SDK 側の conductor 会話を保持するため、`--continue` / `--resume` では新規セッション用の initial send を行わない。`WorkerSession` の attach 中に到着した `permission.pending` や `worker.completed` は `SessionEventQueue` に残り、復元後の最初のイベント束として SessionDriver が dispatch する。sidecar に driver のターン状態は保存せず、再起動時のカウンタは 0 から始める。
+- **resume の初回 dispatch**: backend の `resume(conductorAgentId)` が conductor transcript を復元するため、`--continue` / `--resume` では新規セッション用の initial send を行わない。Pi は毎回 compiled `systemPrompt` を再コンパイルして native system prompt に設定する。`WorkerSession` の attach 中に到着した `permission.pending` や `worker.completed` は `SessionEventQueue` に残り、復元後の最初のイベント束として SessionDriver が dispatch する。sidecar に driver のターン状態は保存せず、再起動時のカウンタは 0 から始める。
 
 - `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）。`maxTurns <= 0` または CLI `--no-max-turns` で無制限（上限チェック・max-turns open question 登録なし）
 - **CLI デフォルト**: TTY、または有効な CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` あり → 無制限。非 TTY / CI で単発メッセージがない場合 → 5（暴走防止）。`--continue` / `--resume` で無視された CLI メッセージは interactive 判定と無制限化の対象外

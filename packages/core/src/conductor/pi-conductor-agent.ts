@@ -25,6 +25,7 @@ import type {
   ConductorTokenUsage,
 } from './conductor-agent.js';
 import { toPiAgentTools } from './conductor-tool-pi-adapter.js';
+import { PiConductorSession } from './pi-conductor-session.js';
 
 interface PiSettingsFile {
   defaultProvider?: unknown;
@@ -107,13 +108,12 @@ export class PiConductorAgent implements ConductorAgent {
 
   private constructor(
     private readonly agent: Agent,
+    private readonly session: PiConductorSession,
     public readonly agentId: string,
     private readonly modelId: string,
     private readonly onStreamText?: (text: string) => void,
   ) {
-    this.unsubscribe = this.agent.subscribe((event) => {
-      this.handleEvent(event);
-    });
+    this.unsubscribe = this.agent.subscribe((event) => this.handleEvent(event));
   }
 
   static async create(
@@ -121,8 +121,10 @@ export class PiConductorAgent implements ConductorAgent {
   ): Promise<PiConductorAgent> {
     const agentId = randomUUID();
     const resolved = await resolvePiModelConfig(options);
+    const session = await PiConductorSession.create(options.cwd, agentId);
     return new PiConductorAgent(
-      createPiAgent(agentId, options, resolved),
+      createPiAgent(agentId, options, resolved, session.messages),
+      session,
       agentId,
       resolved.modelId,
       options.onStreamText,
@@ -134,10 +136,10 @@ export class PiConductorAgent implements ConductorAgent {
     options: ConductorAgentCreateOptions,
   ): Promise<PiConductorAgent> {
     const resolved = await resolvePiModelConfig(options);
-    // pi-agent-core's sessionId is forwarded to providers but does not restore
-    // a transcript by itself. Full persisted resume belongs to #353.
+    const session = await PiConductorSession.resume(options.cwd, agentId);
     return new PiConductorAgent(
-      createPiAgent(agentId, options, resolved),
+      createPiAgent(agentId, options, resolved, session.messages),
+      session,
       agentId,
       resolved.modelId,
       options.onStreamText,
@@ -217,8 +219,10 @@ export class PiConductorAgent implements ConductorAgent {
       : {};
   }
 
-  /** The native system prompt is installed at create time for Pi. */
-  async setSystemPrompt(_systemPrompt: string): Promise<void> {}
+  /** Resume recompiles and reinstalls the native system prompt on each run. */
+  async setSystemPrompt(systemPrompt: string): Promise<void> {
+    this.agent.state.systemPrompt = systemPrompt;
+  }
 
   async close(): Promise<void> {
     if (this.closePromise) {
@@ -229,6 +233,7 @@ export class PiConductorAgent implements ConductorAgent {
       try {
         this.agent.abort();
         await this.agent.waitForIdle();
+        await this.session.appendNewMessages(this.agent.state.messages);
       } finally {
         this.unsubscribe();
       }
@@ -236,7 +241,7 @@ export class PiConductorAgent implements ConductorAgent {
     return this.closePromise;
   }
 
-  private handleEvent(event: AgentEvent): void {
+  private async handleEvent(event: AgentEvent): Promise<void> {
     const activeSend = this.activeSend;
     if (event.type === 'tool_execution_start') {
       activeSend?.callbacks?.onToolCallStarted?.({
@@ -256,6 +261,10 @@ export class PiConductorAgent implements ConductorAgent {
 
     if (event.type === 'agent_end' && activeSend) {
       activeSend.finalMessage = lastAssistantMessage(event.messages);
+    }
+
+    if (event.type === 'agent_end') {
+      await this.session.appendMessages(event.messages);
     }
   }
 
@@ -278,6 +287,7 @@ function createPiAgent(
   agentId: string,
   options: ConductorAgentCreateOptions,
   resolved: PiResolvedModel,
+  messages: readonly AgentMessage[],
 ): Agent {
   const tools = options.customTools
     ? toPiAgentTools(options.customTools)
@@ -290,6 +300,7 @@ function createPiAgent(
       // Do not add Pi's built-in coding tools. Harness tools are the complete
       // loadout; repository work is delegated to worker ACP sessions.
       tools,
+      messages: [...messages],
     },
     sessionId: agentId,
     getApiKey: (provider) =>

@@ -34,7 +34,12 @@ describe('PiConductorAgent', () => {
   let listener: ((event: any) => void) | undefined;
   let unsubscribe: ReturnType<typeof vi.fn>;
   let fakeAgent: {
-    state: { systemPrompt: string; model: unknown; tools: unknown[]; messages: unknown[] };
+    state: {
+      systemPrompt: string;
+      model: unknown;
+      tools: unknown[];
+      messages: unknown[];
+    };
     subscribe: ReturnType<typeof vi.fn>;
     prompt: ReturnType<typeof vi.fn>;
     abort: ReturnType<typeof vi.fn>;
@@ -61,6 +66,7 @@ describe('PiConductorAgent', () => {
       fakeAgent.state.systemPrompt = options.initialState.systemPrompt;
       fakeAgent.state.model = options.initialState.model;
       fakeAgent.state.tools = options.initialState.tools;
+      fakeAgent.state.messages = [...(options.initialState.messages ?? [])];
       return fakeAgent;
     });
     mockGetEnvApiKey.mockReset();
@@ -217,15 +223,63 @@ describe('PiConductorAgent', () => {
       JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'model-1' }),
     );
 
-    const conductor = await PiConductorAgent.resume('pi-session-1', {
+    const created = await PiConductorAgent.create({
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+    await created.close();
+
+    const conductor = await PiConductorAgent.resume(created.agentId, {
       cwd,
       modelId: 'anthropic/model-1',
       systemPrompt: 'system',
     });
 
-    expect(conductor.agentId).toBe('pi-session-1');
-    expect(mockAgent.mock.calls[0]?.[0].sessionId).toBe('pi-session-1');
+    expect(conductor.agentId).toBe(created.agentId);
+    expect(mockAgent.mock.calls.at(-1)?.[0].sessionId).toBe(created.agentId);
     await conductor.close();
+  });
+
+  it('restores the persisted Pi transcript when resuming', async () => {
+    const piRoot = join(cwd, '.ensemble', 'pi');
+    await mkdir(piRoot, { recursive: true });
+    await writeFile(
+      join(piRoot, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'model-1' }),
+    );
+
+    const message = {
+      role: 'user' as const,
+      content: 'first prompt',
+      timestamp: Date.now(),
+    };
+    fakeAgent.prompt.mockImplementation(async () => {
+      fakeAgent.state.messages.push(message);
+      listener?.({ type: 'agent_end', messages: [message] });
+    });
+
+    const created = await PiConductorAgent.create({
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'compiled prompt',
+    });
+    await created.send('first prompt');
+    await created.close();
+
+    const resumed = await PiConductorAgent.resume(created.agentId, {
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'recompiled prompt',
+    });
+
+    expect(mockAgent.mock.calls.at(-1)?.[0].initialState.messages).toEqual([
+      message,
+    ]);
+    expect(mockAgent.mock.calls.at(-1)?.[0].initialState.systemPrompt).toBe(
+      'recompiled prompt',
+    );
+    await resumed.close();
   });
 
   it('waits for an in-flight tool/send before closing the Pi agent', async () => {
