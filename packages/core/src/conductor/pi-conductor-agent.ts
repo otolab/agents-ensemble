@@ -100,6 +100,7 @@ export class PiConductorAgent implements ConductorAgent {
   private readonly unsubscribe: () => void;
   private activeSend?: PiSendState;
   private closed = false;
+  private closePromise?: Promise<void>;
   private hasUsage = false;
   private rawCostCents = 0;
   private chargedCents = 0;
@@ -220,10 +221,19 @@ export class PiConductorAgent implements ConductorAgent {
   async setSystemPrompt(_systemPrompt: string): Promise<void> {}
 
   async close(): Promise<void> {
-    if (this.closed) return;
+    if (this.closePromise) {
+      return this.closePromise;
+    }
     this.closed = true;
-    this.agent.abort();
-    this.unsubscribe();
+    this.closePromise = (async () => {
+      try {
+        this.agent.abort();
+        await this.agent.waitForIdle();
+      } finally {
+        this.unsubscribe();
+      }
+    })();
+    return this.closePromise;
   }
 
   private handleEvent(event: AgentEvent): void {

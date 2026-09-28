@@ -32,25 +32,29 @@ describe('PiConductorAgent', () => {
   let cwd = '';
   let home = '';
   let listener: ((event: any) => void) | undefined;
+  let unsubscribe: ReturnType<typeof vi.fn>;
   let fakeAgent: {
     state: { systemPrompt: string; model: unknown; tools: unknown[]; messages: unknown[] };
     subscribe: ReturnType<typeof vi.fn>;
     prompt: ReturnType<typeof vi.fn>;
     abort: ReturnType<typeof vi.fn>;
+    waitForIdle: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
     cwd = await mkdtemp(join(tmpdir(), 'pi-conductor-project-'));
     home = await mkdtemp(join(tmpdir(), 'pi-conductor-home-'));
     listener = undefined;
+    unsubscribe = vi.fn();
     fakeAgent = {
       state: { systemPrompt: '', model: undefined, tools: [], messages: [] },
       subscribe: vi.fn((nextListener: (event: any) => void) => {
         listener = nextListener;
-        return vi.fn();
+        return unsubscribe;
       }),
       prompt: vi.fn(),
       abort: vi.fn(),
+      waitForIdle: vi.fn().mockResolvedValue(undefined),
     };
     mockAgent.mockReset();
     mockAgent.mockImplementation((options) => {
@@ -116,6 +120,8 @@ describe('PiConductorAgent', () => {
 
     await conductor.close();
     expect(fakeAgent.abort).toHaveBeenCalledOnce();
+    expect(fakeAgent.waitForIdle).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
   it('maps Pi tool events, text deltas, final text, and usage', async () => {
@@ -220,6 +226,90 @@ describe('PiConductorAgent', () => {
     expect(conductor.agentId).toBe('pi-session-1');
     expect(mockAgent.mock.calls[0]?.[0].sessionId).toBe('pi-session-1');
     await conductor.close();
+  });
+
+  it('waits for an in-flight tool/send before closing the Pi agent', async () => {
+    const piRoot = join(cwd, '.ensemble', 'pi');
+    await mkdir(piRoot, { recursive: true });
+    await writeFile(
+      join(piRoot, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'model-1' }),
+    );
+
+    let releaseTool!: () => void;
+    const toolReleased = new Promise<void>((resolve) => {
+      releaseTool = resolve;
+    });
+    let resolveIdle!: () => void;
+    const idle = new Promise<void>((resolve) => {
+      resolveIdle = resolve;
+    });
+    const toolStarted = vi.fn();
+    const executeHarnessTool = vi.fn(async () => {
+      toolStarted();
+      await toolReleased;
+      return { content: [{ type: 'text' as const, text: 'done' }] };
+    });
+
+    fakeAgent.prompt.mockImplementation(async () => {
+      await (fakeAgent.state.tools[0] as any).execute('call-1', {});
+      listener?.({
+        type: 'agent_end',
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'done' }],
+            model: 'model-1',
+            stopReason: 'stop',
+            usage: {
+              input: 1,
+              output: 1,
+              totalTokens: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: { total: 0 },
+            },
+          },
+        ],
+      });
+    });
+    fakeAgent.abort.mockImplementation(() => {
+      releaseTool();
+    });
+    fakeAgent.waitForIdle.mockImplementation(() => idle);
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+      customTools: {
+        prompt_worker: {
+          name: 'prompt_worker',
+          description: 'Dispatch to worker',
+          inputSchema: { type: 'object', properties: {} },
+          execute: executeHarnessTool,
+        },
+      },
+    });
+
+    const sendPromise = conductor.send('in-flight');
+    await vi.waitFor(() => expect(toolStarted).toHaveBeenCalledOnce());
+
+    const closePromise = conductor.close();
+    expect(fakeAgent.abort).toHaveBeenCalledOnce();
+    expect(fakeAgent.waitForIdle).toHaveBeenCalledOnce();
+    let closeSettled = false;
+    void closePromise.then(() => {
+      closeSettled = true;
+    });
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    resolveIdle();
+    await closePromise;
+    await sendPromise;
+    expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
   it('uses Pi settings and auth files without requiring ensemble auth', async () => {
