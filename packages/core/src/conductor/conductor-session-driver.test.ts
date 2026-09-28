@@ -39,6 +39,7 @@ function createDriverOptions(input: {
   maxTurns?: number;
   runningCount?: number;
   stopOnUnansweredInput?: boolean;
+  initialPrompt?: string;
 }) {
   const workerDispatches: never[] = [];
   const workerFailures: never[] = [];
@@ -47,7 +48,7 @@ function createDriverOptions(input: {
 
   return {
     issueUrl: TEST_ISSUE.url,
-    initialPrompt: 'compiled conductor system prompt',
+    initialPrompt: input.initialPrompt ?? 'compiled conductor system prompt',
     conductorHandle,
     sendReconnect: {
       conductorAgentFactory: { create: mockCreate, resume: mockResume },
@@ -120,6 +121,26 @@ describe('runConductorSessionDriver', () => {
     expect(send.mock.calls[0]![0]).toBe('compiled conductor system prompt');
     expect(result.sendCount).toBe(1);
     expect(result.stopReason).toBe('completed');
+  });
+
+  it('forwards a short backend-specific kickoff without modifying it', async () => {
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-pi-kickoff',
+      status: 'finished',
+      result: 'started',
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const kickoff = `Start the conductor workflow for ${TEST_ISSUE.url}.`;
+
+    await runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue: new SessionEventQueue(),
+        conductor,
+        initialPrompt: kickoff,
+      }),
+    });
+
+    expect(send).toHaveBeenCalledWith(kickoff, expect.any(Object));
   });
 
   it('drains worker outcome notifications before stopping on an idle queue', async () => {

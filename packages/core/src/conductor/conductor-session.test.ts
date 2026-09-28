@@ -42,23 +42,30 @@ const {
   mockCreate,
   mockResume,
   mockCreateCursorSdkConductorAgentFactory,
+  mockCreatePiConductorAgentFactory,
 } = vi.hoisted(() => {
   const mockSend = vi.fn();
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
   const mockResume = vi.fn();
   const mockCreateCursorSdkConductorAgentFactory = vi.fn();
+  const mockCreatePiConductorAgentFactory = vi.fn();
   return {
     mockSend,
     mockClose,
     mockCreate,
     mockResume,
     mockCreateCursorSdkConductorAgentFactory,
+    mockCreatePiConductorAgentFactory,
   };
 });
 
 vi.mock('./cursor-sdk-conductor-agent.js', () => ({
   createCursorSdkConductorAgentFactory: mockCreateCursorSdkConductorAgentFactory,
+}));
+
+vi.mock('./pi-conductor-agent.js', () => ({
+  createPiConductorAgentFactory: mockCreatePiConductorAgentFactory,
 }));
 
 const { mockCreateGitHubMonitor } = vi.hoisted(() => {
@@ -140,7 +147,12 @@ describe('runConductorSession resume / shutdown', () => {
     mockCreate.mockReset();
     mockResume.mockReset();
     mockCreateCursorSdkConductorAgentFactory.mockReset();
+    mockCreatePiConductorAgentFactory.mockReset();
     mockCreateCursorSdkConductorAgentFactory.mockReturnValue({
+      create: mockCreate,
+      resume: mockResume,
+    });
+    mockCreatePiConductorAgentFactory.mockReturnValue({
       create: mockCreate,
       resume: mockResume,
     });
@@ -230,26 +242,39 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it('fails fast when config selects the unsupported backend', async () => {
-    await expect(
-      runConductorSession({
-        issueUrl: TEST_ISSUE.url,
-        repoRoot,
-        profile: { workers: [] },
-        ensembleConfig: {
-          ...DEFAULT_ENSEMBLE_CONFIG,
-          conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },
-        },
-        permissionPipeline: new PermissionPipeline({}),
-        registerProcessSignalHandlers: false,
-      }),
-    ).rejects.toThrow(/Conductor backend "pi" is not supported yet.*#352/);
+  it('selects the Pi factory and sends a short kickoff instead of the compiled prompt', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-kickoff',
+      status: 'finished',
+      result: 'started',
+    });
 
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
     expect(mockCreateCursorSdkConductorAgentFactory).not.toHaveBeenCalled();
-    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ systemPrompt: expect.stringContaining('body') }),
+    );
+    expect(mockSend).toHaveBeenCalledWith(
+      expect.stringContaining(TEST_ISSUE.url),
+      expect.any(Object),
+    );
+    expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
   });
 
-  it('fails before resolving the worker worktree or attaching workers for Pi', async () => {
+  it('does not fail at backend selection before the Pi agent is created', async () => {
     const resolveWorkerWorkspace = vi
       .spyOn(worktreeModule, 'resolveWorkerWorkspace')
       .mockResolvedValue({
@@ -258,24 +283,23 @@ describe('runConductorSession resume / shutdown', () => {
         issue: TEST_ISSUE,
         inRepo: false,
       });
-    const connectAcp = vi.fn();
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-selection',
+      status: 'finished',
+      result: 'done',
+    });
 
-    await expect(
-      runConductorSession({
-        issueUrl: TEST_ISSUE.url,
-        repoRoot,
-        profile: {
-          conductor: { backend: 'pi' },
-          workers: [{ name: 'implementer', kind: 'implementer' }],
-        },
-        connectAcp,
-        permissionPipeline: new PermissionPipeline({}),
-        registerProcessSignalHandlers: false,
-      }),
-    ).rejects.toThrow(/Conductor backend "pi" is not supported yet.*#352/);
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
 
     expect(resolveWorkerWorkspace).not.toHaveBeenCalled();
-    expect(connectAcp).not.toHaveBeenCalled();
+    expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
   });
 
   it('persists the selected profile backend in the sidecar', async () => {

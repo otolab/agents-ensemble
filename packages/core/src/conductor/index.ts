@@ -16,6 +16,12 @@ export {
   createCursorSdkConductorAgentFactory,
 } from './cursor-sdk-conductor-agent.js';
 export {
+  PiConductorAgent,
+  createPiConductorAgentFactory,
+  resolvePiModelConfig,
+} from './pi-conductor-agent.js';
+export type { PiResolvedModel } from './pi-conductor-agent.js';
+export {
   ConductorToolRegistry,
 } from './conductor-tool.js';
 export type {
@@ -31,8 +37,15 @@ export {
   toSdkCustomTools,
 } from './conductor-tool-sdk-adapter.js';
 export type { SdkCustomTools } from './conductor-tool-sdk-adapter.js';
+export {
+  toPiAgentTools,
+} from './conductor-tool-pi-adapter.js';
+export type { PiAgentTool } from './conductor-tool-pi-adapter.js';
 
-export { runConductorSession } from './conductor-session.js';
+export {
+  createConductorAgentFactory,
+  runConductorSession,
+} from './conductor-session.js';
 export {
   ensureCursorSdkProxy,
   ensureCursorSdkRipgrepPath,
