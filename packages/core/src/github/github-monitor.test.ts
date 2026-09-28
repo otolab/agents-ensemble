@@ -233,8 +233,8 @@ describe('createGitHubMonitor', () => {
     await drainAsync();
     expect(statusPolls).toBe(2);
     expect(monitor.getCursor().pullRequests?.['354']).toMatchObject({
-      ciChecks: {
-        'ci/test': { runKey: 'run:check-run-1', status: 'pending' },
+      lastObserved: {
+        'ci/test': { phase: 'pending' },
       },
     });
 

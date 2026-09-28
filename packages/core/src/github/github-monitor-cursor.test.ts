@@ -29,13 +29,13 @@ describe('isEmptyGitHubMonitorCursor', () => {
     ).toBe(false);
   });
 
-  it('returns false when PR cursor has a CI execution state', () => {
+  it('returns false when PR cursor has a CI observation state', () => {
     expect(
       isEmptyGitHubMonitorCursor({
         pullRequests: {
           '42': {
-            ciChecks: {
-              'ci/test': { runKey: 'run:123', status: 'completed' },
+            lastObserved: {
+              'ci/test': { phase: 'completed', conclusion: 'SUCCESS' },
             },
           },
         },
@@ -71,12 +71,12 @@ describe('isEmptyGitHubMonitorCursor', () => {
     });
   });
 
-  it('deep-copies run-aware CI cursors when normalized', () => {
+  it('deep-copies CI snapshots when normalized', () => {
     const source = {
       pullRequests: {
         '42': {
-          ciChecks: {
-            'ci/test': { runKey: 'run:123', status: 'pending' as const },
+          lastObserved: {
+            'ci/test': { phase: 'pending' as const },
           },
           ciBootstrapPending: true,
         },
@@ -84,12 +84,36 @@ describe('isEmptyGitHubMonitorCursor', () => {
     };
 
     const normalized = normalizeGitHubMonitorCursor(source);
-    expect(normalized.pullRequests?.['42']?.ciChecks).toEqual({
-      'ci/test': { runKey: 'run:123', status: 'pending' },
+    expect(normalized.pullRequests?.['42']?.lastObserved).toEqual({
+      'ci/test': { phase: 'pending' },
     });
-    expect(normalized.pullRequests?.['42']?.ciChecks).not.toBe(
-      source.pullRequests['42'].ciChecks,
+    expect(normalized.pullRequests?.['42']?.lastObserved).not.toBe(
+      source.pullRequests['42'].lastObserved,
     );
     expect(normalized.pullRequests?.['42']?.ciBootstrapPending).toBe(true);
+  });
+
+  it('migrates legacy CI cursors to lastObserved once', () => {
+    const normalized = normalizeGitHubMonitorCursor({
+      pullRequests: {
+        '42': {
+          ciChecks: {
+            'ci/old-pending': { runKey: 'run:1', status: 'pending' },
+            'ci/old-completed': { runKey: 'run:2', status: 'completed' },
+          },
+          pendingCheckNames: ['ci/name-pending'],
+          notifiedCheckNames: ['ci/name-completed'],
+        },
+      },
+    });
+
+    expect(normalized.pullRequests?.['42']).toEqual({
+      lastObserved: {
+        'ci/old-pending': { phase: 'pending' },
+        'ci/old-completed': { phase: 'completed' },
+        'ci/name-pending': { phase: 'pending' },
+        'ci/name-completed': { phase: 'completed' },
+      },
+    });
   });
 });

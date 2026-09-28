@@ -813,9 +813,8 @@ describe('runConductorSession resume / shutdown', () => {
       expect(cursor.pullRequests?.['354']).toMatchObject({
         lastReviewId: '2',
         lastReviewCommentId: '2',
-        pendingCheckNames: [],
-        ciChecks: {
-          build: { runKey: 'name:build', status: 'completed' },
+        lastObserved: {
+          build: { phase: 'completed', conclusion: 'SUCCESS' },
         },
       });
 
@@ -832,9 +831,8 @@ describe('runConductorSession resume / shutdown', () => {
       expect(sidecar?.githubMonitor?.pullRequests?.['354']).toMatchObject({
         lastReviewId: '2',
         lastReviewCommentId: '2',
-        pendingCheckNames: [],
-        ciChecks: {
-          build: { runKey: 'name:build', status: 'completed' },
+        lastObserved: {
+          build: { phase: 'completed', conclusion: 'SUCCESS' },
         },
       });
     } finally {
