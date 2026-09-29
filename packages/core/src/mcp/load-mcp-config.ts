@@ -1,16 +1,35 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { McpServerConfig } from '@cursor/sdk';
 import { ENSEMBLE_DIR } from '../profile/profile-paths.js';
 
 export const MCP_CONFIG_FILE = 'mcp.json';
 export const PROJECT_MCP_CONFIG_DIR = '.agents';
 
-export type McpServers = Record<string, McpServerConfig>;
+/** MCP server definition shared by the Cursor SDK and Pi backends. */
+export interface McpServerConfig {
+  type?: 'stdio' | 'http' | 'sse';
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  auth?: {
+    CLIENT_ID: string;
+    CLIENT_SECRET?: string;
+    scopes?: string[];
+  };
+}
+
+/** Resolved MCP server definitions keyed by the server name in mcp.json. */
+export type McpServerConfigMap = Record<string, McpServerConfig>;
+
+/** @deprecated Use `McpServerConfigMap` instead. */
+export type McpServers = McpServerConfigMap;
 
 export interface McpConfig {
-  mcpServers: McpServers;
+  mcpServers: McpServerConfigMap;
 }
 
 export interface McpConfigLogger {
@@ -129,7 +148,7 @@ function parseMcpConfig(raw: unknown): McpConfig | undefined {
   }
 
   return {
-    mcpServers: Object.fromEntries(entries) as McpServers,
+    mcpServers: Object.fromEntries(entries) as McpServerConfigMap,
   };
 }
 
@@ -221,11 +240,19 @@ export async function loadMcpConfig(
   return merged;
 }
 
-/** SDK の inline MCP オプションとして渡す解決済みサーバー map を返す。 */
-export async function resolveMcpServersForSdk(
+/**
+ * Return the resolved server map for any conductor backend.
+ *
+ * The map intentionally retains the mcp.json server definitions. Each backend
+ * adapts the same snapshot to its own tool/transport representation.
+ */
+export async function resolveMcpServers(
   repoRoot: string,
   options: LoadMcpConfigOptions = {},
-): Promise<McpServers> {
+): Promise<McpServerConfigMap> {
   const config = await loadMcpConfig(repoRoot, options);
   return config.mcpServers;
 }
+
+/** @deprecated Use `resolveMcpServers` instead. */
+export const resolveMcpServersForSdk = resolveMcpServers;

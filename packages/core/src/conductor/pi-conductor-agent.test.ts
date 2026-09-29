@@ -3,9 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockAgent, mockGetEnvApiKey, mockGetModel, mockGetModels, mockGetProviders } =
-  vi.hoisted(() => ({
+const {
+  mockAgent,
+  mockCreatePiMcpBridge,
+  mockGetEnvApiKey,
+  mockGetModel,
+  mockGetModels,
+  mockGetProviders,
+} = vi.hoisted(() => ({
     mockAgent: vi.fn(),
+    mockCreatePiMcpBridge: vi.fn(),
     mockGetEnvApiKey: vi.fn(),
     mockGetModel: vi.fn(),
     mockGetModels: vi.fn(),
@@ -21,6 +28,10 @@ vi.mock('@earendil-works/pi-ai/compat', () => ({
   getModel: mockGetModel,
   getModels: mockGetModels,
   getProviders: mockGetProviders,
+}));
+
+vi.mock('./pi-mcp-bridge.js', () => ({
+  createPiMcpBridge: mockCreatePiMcpBridge,
 }));
 
 import { reconnectConductorAgent } from './conductor-send-reconnect.js';
@@ -71,6 +82,8 @@ describe('PiConductorAgent', () => {
       fakeAgent.state.messages = [...(options.initialState.messages ?? [])];
       return fakeAgent;
     });
+    mockCreatePiMcpBridge.mockReset();
+    mockCreatePiMcpBridge.mockResolvedValue(undefined);
     mockGetEnvApiKey.mockReset();
     mockGetEnvApiKey.mockReturnValue(undefined);
     mockGetModel.mockReset();
@@ -130,6 +143,37 @@ describe('PiConductorAgent', () => {
     expect(fakeAgent.abort).toHaveBeenCalledOnce();
     expect(fakeAgent.waitForIdle).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('loads resolved MCP tools into Pi and closes the bridge with the agent', async () => {
+    const closeBridge = vi.fn().mockResolvedValue(undefined);
+    const mcpTool = {
+      name: 'mcp_docs_lookup',
+      label: 'mcp_docs_lookup',
+      description: 'MCP lookup',
+      parameters: { type: 'object', properties: {} },
+      execute: vi.fn(),
+    };
+    mockCreatePiMcpBridge.mockResolvedValue({
+      tools: [mcpTool],
+      close: closeBridge,
+    });
+
+    const mcpServers = {
+      docs: { type: 'stdio' as const, command: 'docs-server' },
+    };
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+      mcpServers,
+    });
+
+    expect(mockCreatePiMcpBridge).toHaveBeenCalledWith(mcpServers, { cwd });
+    expect(fakeAgent.state.tools).toContain(mcpTool);
+
+    await conductor.close();
+    expect(closeBridge).toHaveBeenCalledOnce();
   });
 
   it('maps Pi tool events, text deltas, final text, and usage', async () => {

@@ -6,6 +6,7 @@ import {
   loadMcpConfig,
   MCP_CONFIG_FILE,
   PROJECT_MCP_CONFIG_DIR,
+  resolveMcpServers,
   resolveMcpServersForSdk,
 } from './load-mcp-config.js';
 
@@ -121,7 +122,23 @@ describe('loadMcpConfig', () => {
     expect(warn.mock.calls[0]?.[0]).toContain('valid server entries');
   });
 
-  it('returns the merged map for SDK inline options', async () => {
+  it('returns the merged map for all conductor backends', async () => {
+    await writeProjectConfig(
+      JSON.stringify({
+        mcpServers: {
+          projectOnly: { type: 'stdio', command: 'project-server' },
+        },
+      }),
+    );
+
+    await expect(
+      resolveMcpServers(repoRoot, { userEnsembleRoot }),
+    ).resolves.toEqual({
+      projectOnly: { type: 'stdio', command: 'project-server' },
+    });
+  });
+
+  it('keeps the SDK resolver name as a compatibility alias', async () => {
     await writeProjectConfig(
       JSON.stringify({
         mcpServers: {
