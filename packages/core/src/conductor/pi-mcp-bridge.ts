@@ -89,6 +89,7 @@ export interface PiMcpBridgeSdk {
 /** Injectable only for unit tests; production uses the pinned SDK loader. */
 export interface PiMcpBridgeDependencies {
   sdk?: PiMcpBridgeSdk;
+  loadSdk?: () => Promise<PiMcpBridgeSdk>;
 }
 
 export interface PiMcpBridgeOptions {
@@ -107,7 +108,8 @@ interface ConnectedServer {
 }
 
 /**
- * Load the harness-owned Pi MCP extension for one resolved mcp.json snapshot.
+ * Load the harness-owned in-process Pi MCP bridge for one resolved mcp.json
+ * snapshot. This is not a Pi ExtensionAPI extension.
  *
  * The bridge is deliberately in-memory: it does not write `.pi/mcp.json` or
  * mutate Pi settings. This keeps the ADR 0021 resolution result as the only
@@ -122,7 +124,8 @@ export async function createPiMcpBridge(
     return undefined;
   }
 
-  const sdk = dependencies.sdk ?? (await loadMcpSdk());
+  const sdk =
+    dependencies.sdk ?? (await loadMcpSdk(dependencies.loadSdk));
   const connectedServers: ConnectedServer[] = [];
   const tools: AgentTool[] = [];
   const usedToolNames = new Set<string>();
@@ -171,27 +174,33 @@ class LoadedPiMcpBridge implements PiMcpBridge {
   }
 }
 
-async function loadMcpSdk(): Promise<PiMcpBridgeSdk> {
+async function loadMcpSdk(
+  loader: () => Promise<PiMcpBridgeSdk> = importMcpSdk,
+): Promise<PiMcpBridgeSdk> {
   try {
-    const [client, stdio, streamableHttp, sse] = await Promise.all([
-      import('@modelcontextprotocol/sdk/client/index.js'),
-      import('@modelcontextprotocol/sdk/client/stdio.js'),
-      import('@modelcontextprotocol/sdk/client/streamableHttp.js'),
-      import('@modelcontextprotocol/sdk/client/sse.js'),
-    ]);
-    return {
-      Client: client.Client,
-      StdioClientTransport: stdio.StdioClientTransport,
-      StreamableHTTPClientTransport:
-        streamableHttp.StreamableHTTPClientTransport,
-      SSEClientTransport: sse.SSEClientTransport,
-    };
+    return await loader();
   } catch (error) {
     throw new Error(
       `Pi MCP bridge is unavailable. Install @modelcontextprotocol/sdk@${PI_MCP_SDK_VERSION} and reinstall @agents-ensemble/core.`,
       { cause: error },
     );
   }
+}
+
+async function importMcpSdk(): Promise<PiMcpBridgeSdk> {
+  const [client, stdio, streamableHttp, sse] = await Promise.all([
+    import('@modelcontextprotocol/sdk/client/index.js'),
+    import('@modelcontextprotocol/sdk/client/stdio.js'),
+    import('@modelcontextprotocol/sdk/client/streamableHttp.js'),
+    import('@modelcontextprotocol/sdk/client/sse.js'),
+  ]);
+  return {
+    Client: client.Client,
+    StdioClientTransport: stdio.StdioClientTransport,
+    StreamableHTTPClientTransport:
+      streamableHttp.StreamableHTTPClientTransport,
+    SSEClientTransport: sse.SSEClientTransport,
+  };
 }
 
 function createTransport(
@@ -266,43 +275,31 @@ function createPiMcpTool(
     // compatible with the TypeBox schema consumed by pi-agent-core.
     parameters: tool.inputSchema as AgentTool['parameters'],
     execute: async (_toolCallId, params, signal) => {
-      try {
-        const result = toMcpToolResult(
-          await client.callTool(
-            {
-              name: tool.name,
-              arguments: isRecord(params) ? params : {},
-            },
-            undefined,
-            signal ? { signal } : undefined,
-          ),
+      const result = toMcpToolResult(
+        await client.callTool(
+          {
+            name: tool.name,
+            arguments: isRecord(params) ? params : {},
+          },
+          undefined,
+          signal ? { signal } : undefined,
+        ),
+      );
+      if (result.isError) {
+        throw new Error(
+          `MCP tool ${serverName}/${tool.name} returned an error: ${mcpErrorDetail(result)}`,
         );
-        return {
-          content: toPiContent(result),
-          details: {
-            mcpServer: serverName,
-            mcpTool: tool.name,
-            isError: result.isError === true,
-            ...(result.structuredContent
-              ? { structuredContent: result.structuredContent }
-              : {}),
-          },
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: 'text' as const,
-              text: `MCP tool ${serverName}/${tool.name} failed: ${errorMessage(error)}`,
-            },
-          ],
-          details: {
-            mcpServer: serverName,
-            mcpTool: tool.name,
-            isError: true,
-          },
-        };
       }
+      return {
+        content: toPiContent(result),
+        details: {
+          mcpServer: serverName,
+          mcpTool: tool.name,
+          ...(result.structuredContent
+            ? { structuredContent: result.structuredContent }
+            : {}),
+        },
+      };
     },
   };
 }
@@ -430,6 +427,16 @@ function toMcpToolResult(value: unknown): McpToolResult {
       : {}),
     ...(value.isError === true ? { isError: true } : {}),
   };
+}
+
+function mcpErrorDetail(result: McpToolResult): string {
+  const text = (result.content ?? [])
+    .filter((item): item is McpContentText => item.type === 'text')
+    .map((item) => item.text)
+    .join('\n');
+  if (text) return text;
+  if (result.structuredContent) return JSON.stringify(result.structuredContent);
+  return 'the MCP server reported an error';
 }
 
 function errorMessage(error: unknown): string {

@@ -68,6 +68,30 @@ describe('createPiMcpBridge', () => {
     expect(FakeClient.clients).toHaveLength(0);
   });
 
+  it('does not load a bridge for an empty MCP map', async () => {
+    await expect(
+      createPiMcpBridge({}, { cwd: '/repo' }, { sdk: fakeSdk() }),
+    ).resolves.toBeUndefined();
+    expect(FakeClient.clients).toHaveLength(0);
+  });
+
+  it('fails fast with the pinned SDK guidance when the SDK import is unavailable', async () => {
+    const loadSdk = vi
+      .fn()
+      .mockRejectedValue(new Error('ERR_MODULE_NOT_FOUND'));
+
+    await expect(
+      createPiMcpBridge(
+        { docs: { type: 'stdio', command: 'mcp-server' } },
+        { cwd: '/repo' },
+        { loadSdk },
+      ),
+    ).rejects.toThrow(
+      `Pi MCP bridge is unavailable. Install @modelcontextprotocol/sdk@${PI_MCP_SDK_VERSION}`,
+    );
+    expect(loadSdk).toHaveBeenCalledOnce();
+  });
+
   it('connects from the resolved stdio definition and exposes discovered tools', async () => {
     FakeClient.clients.length = 0;
     FakeClient.tools = [
@@ -125,7 +149,6 @@ describe('createPiMcpBridge', () => {
       details: {
         mcpServer: 'docs',
         mcpTool: 'lookup-item',
-        isError: false,
         structuredContent: { ok: true },
       },
     });
@@ -133,6 +156,50 @@ describe('createPiMcpBridge', () => {
     await bridge?.close();
     await bridge?.close();
     expect(FakeClient.clients[0]?.close).toHaveBeenCalledOnce();
+  });
+
+  it('propagates MCP client exceptions from AgentTool execution', async () => {
+    FakeClient.clients.length = 0;
+    FakeClient.tools = [
+      {
+        name: 'lookup-item',
+        inputSchema: { type: 'object' },
+      },
+    ];
+    const bridge = await createPiMcpBridge(
+      { docs: { type: 'stdio', command: 'mcp-server' } },
+      { cwd: '/repo' },
+      { sdk: fakeSdk() },
+    );
+    const callError = new Error('connection lost');
+    FakeClient.clients[0]?.callTool.mockRejectedValueOnce(callError);
+
+    await expect(bridge!.tools[0]!.execute('call-1', {})).rejects.toBe(callError);
+    await bridge?.close();
+  });
+
+  it('propagates MCP isError results as AgentTool failures', async () => {
+    FakeClient.clients.length = 0;
+    FakeClient.tools = [
+      {
+        name: 'lookup-item',
+        inputSchema: { type: 'object' },
+      },
+    ];
+    const bridge = await createPiMcpBridge(
+      { docs: { type: 'stdio', command: 'mcp-server' } },
+      { cwd: '/repo' },
+      { sdk: fakeSdk() },
+    );
+    FakeClient.clients[0]?.callTool.mockResolvedValueOnce({
+      isError: true,
+      content: [{ type: 'text' as const, text: 'lookup failed' }],
+    });
+
+    await expect(bridge!.tools[0]!.execute('call-1', {})).rejects.toThrow(
+      'MCP tool docs/lookup-item returned an error: lookup failed',
+    );
+    await bridge?.close();
   });
 
   it('selects HTTP and SSE transports from the same server definitions', async () => {

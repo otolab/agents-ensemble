@@ -47,7 +47,7 @@
 
 - [ADR 0021](0021-conductor-mcp-config-resolution.md) の **2 層 `mcp.json` 解決**は両 backend 共通の正本とする。
 - SDK 経路は現行の inline `mcpServers` を維持。
-- Pi 経路は Pi コアが MCP を載せないため、**MCP ブリッジ用プラグイン（extension）**を harness から配線し、**同じ解決結果**が使えることを目標にする。
+- Pi 経路は Pi コアが MCP を載せないため、harness が **in-process thin bridge** を create/resume 時に配線し、**同じ解決結果**を使う。この bridge は Pi の ExtensionAPI extension / plugin ではなく、`@agents-ensemble/core` 内で `@modelcontextprotocol/sdk@1.30.0` の client を接続して Pi `AgentTool` へ変換する。
 
 ### 4. ツール・worker・認証
 
@@ -69,7 +69,7 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 **harness が常に入れるもの（利用者が外せない）**
 
 - ensemble **ConductorTool** 一式（dispatch / escalation / permission 等）。Pi のビルトイン coding ツールは conductor では載せない（[ADR 0006](0006-conductor-agent-mode.md) と同趣旨）。
-- **MCP ブリッジ** extension（[ADR 0021](0021-conductor-mcp-config-resolution.md) で解決した `mcp.json` を Pi 側へ渡す）。#354 の実装でパス固定または同梱。
+- **MCP ブリッジ**（[ADR 0021](0021-conductor-mcp-config-resolution.md) で解決した `mcp.json` を Pi 側へ渡す）。#354 の実装では Pi ExtensionAPI の extension を配置せず、core 内の in-process thin bridge として `@modelcontextprotocol/sdk@1.30.0` を使う。
 
 **利用者が足せるもの（オプション）**
 
@@ -119,3 +119,4 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 |------|------|
 | 2026-09-25 | 初版（#348 調査・オペレータ合意を反映） |
 | 2026-09-25 | §5 Pi カスタマイズ（`.ensemble/pi`、標準 config、既定 MCP + harness ツール） |
+| 2026-09-29 | #354 の Pi MCP bridge を Pi ExtensionAPI extension ではなく core 内 in-process thin bridge として具体化 |

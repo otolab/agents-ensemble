@@ -11,13 +11,13 @@ const {
   mockGetModels,
   mockGetProviders,
 } = vi.hoisted(() => ({
-    mockAgent: vi.fn(),
-    mockCreatePiMcpBridge: vi.fn(),
-    mockGetEnvApiKey: vi.fn(),
-    mockGetModel: vi.fn(),
-    mockGetModels: vi.fn(),
-    mockGetProviders: vi.fn(),
-  }));
+  mockAgent: vi.fn(),
+  mockCreatePiMcpBridge: vi.fn(),
+  mockGetEnvApiKey: vi.fn(),
+  mockGetModel: vi.fn(),
+  mockGetModels: vi.fn(),
+  mockGetProviders: vi.fn(),
+}));
 
 vi.mock('@earendil-works/pi-agent-core', () => ({
   Agent: mockAgent,
@@ -174,6 +174,78 @@ describe('PiConductorAgent', () => {
 
     await conductor.close();
     expect(closeBridge).toHaveBeenCalledOnce();
+  });
+
+  it('reinjects the MCP bridge on resume and closes both bridge lifecycles', async () => {
+    const firstClose = vi.fn().mockResolvedValue(undefined);
+    const secondClose = vi.fn().mockResolvedValue(undefined);
+    const firstTool = { name: 'mcp_first_tool' };
+    const secondTool = { name: 'mcp_second_tool' };
+    mockCreatePiMcpBridge
+      .mockResolvedValueOnce({ tools: [firstTool], close: firstClose })
+      .mockResolvedValueOnce({ tools: [secondTool], close: secondClose });
+
+    const mcpServers = {
+      docs: { type: 'stdio' as const, command: 'docs-server' },
+    };
+    const options = {
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+      mcpServers,
+    };
+    const created = await PiConductorAgent.create(options);
+    expect(fakeAgent.state.tools).toContain(firstTool);
+
+    await created.close();
+    expect(firstClose).toHaveBeenCalledOnce();
+
+    const resumed = await PiConductorAgent.resume(created.agentId, options);
+    expect(mockCreatePiMcpBridge).toHaveBeenNthCalledWith(1, mcpServers, {
+      cwd,
+    });
+    expect(mockCreatePiMcpBridge).toHaveBeenNthCalledWith(2, mcpServers, {
+      cwd,
+    });
+    expect(fakeAgent.state.tools).toContain(secondTool);
+    await resumed.close();
+    expect(secondClose).toHaveBeenCalledOnce();
+  });
+
+  it('rebuilds the MCP bridge during in-process reconnect', async () => {
+    const firstClose = vi.fn().mockResolvedValue(undefined);
+    const secondClose = vi.fn().mockResolvedValue(undefined);
+    const firstTool = { name: 'mcp_first_tool' };
+    const secondTool = { name: 'mcp_second_tool' };
+    mockCreatePiMcpBridge
+      .mockResolvedValueOnce({ tools: [firstTool], close: firstClose })
+      .mockResolvedValueOnce({ tools: [secondTool], close: secondClose });
+
+    const mcpServers = {
+      docs: { type: 'stdio' as const, command: 'docs-server' },
+    };
+    const options = {
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+      mcpServers,
+    };
+    const factory = createPiConductorAgentFactory();
+    const first = await factory.create(options);
+    const handle = { conductor: first };
+
+    await reconnectConductorAgent(handle, {
+      conductorAgentFactory: factory,
+      conductorOptions: options,
+    });
+
+    expect(firstClose).toHaveBeenCalledOnce();
+    expect(mockCreatePiMcpBridge).toHaveBeenNthCalledWith(2, mcpServers, {
+      cwd,
+    });
+    expect(fakeAgent.state.tools).toContain(secondTool);
+    await handle.conductor.close();
+    expect(secondClose).toHaveBeenCalledOnce();
   });
 
   it('maps Pi tool events, text deltas, final text, and usage', async () => {

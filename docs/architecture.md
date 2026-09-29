@@ -159,7 +159,7 @@ await conductor.send(operatorMessage);
 await conductor.send(workerStatusUpdate);
 ```
 
-`runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、backend 中立な同じ `mcpServers` map を conductor factory に渡す。Cursor SDK はそれを `Agent.create` / `Agent.resume` のトップレベル inline MCP として使い、Pi は harness 内蔵 MCP bridge が stdio/http/sse client と Pi `AgentTool` に変換する。`local.settingSources` や Pi の `.pi/mcp.json` への同期は行わず、認証・transport エラーからの in-process reconnect を含めて resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。
+`runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、backend 中立な同じ `mcpServers` map を conductor factory に渡す。Cursor SDK はそれを `Agent.create` / `Agent.resume` のトップレベル inline MCP として使い、Pi は harness 内蔵の in-process thin bridge が `@modelcontextprotocol/sdk` client を core 内で接続し、stdio/http/sse client と Pi `AgentTool` に変換する。これは Pi ExtensionAPI extension のロードではない。`local.settingSources` や Pi の `.pi/mcp.json` への同期は行わず、認証・transport エラーからの in-process reconnect を含めて resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。
 
 **SDK にチャット UI はない。** CLI（TTY）では Ink TUI（`createIssueSessionTuiHost`）が非ブロッキング入力と `pane` / `stream` レイアウト表示を担い、`submitOperatorInput` 経由で `operator.message` をキューへ積む。非 TTY は `bindAsyncOperatorInput` / CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE`。ConductorSession はキューから dispatch するだけ。テストは `bindOperatorInput` にフェイクを渡す（`createTestOperatorInputBinding`）。ConductorSession がイベント列経由で `agent.send` に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（TUI / stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
 
