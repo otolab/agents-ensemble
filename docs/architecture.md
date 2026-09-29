@@ -1,8 +1,8 @@
 # アーキテクチャ
 
-> **正本:** `ensemble` の現行技術構成（SDK conductor + ACP worker）。利用者向け CLI の入口は [cli/README.md](cli/README.md)、設定の正本は [settings.md](settings.md) と [config.md](config.md) です。
+> **正本:** `ensemble` の現行技術構成（Cursor SDK / Pi conductor + ACP worker）。利用者向け CLI の入口は [cli/README.md](cli/README.md)、設定の正本は [settings.md](settings.md) と [config.md](config.md) です。
 
-`ensemble` の技術構成。前提は **SDK で conductor**、**ACP で worker**。複数 agent が **conductor を中心とするスター型**で接続する。
+`ensemble` の技術構成。conductor は Cursor SDK（既定）または Pi を選択し、worker は **ACP** で接続する。複数 agent が **conductor を中心とするスター型**で接続する。
 
 設計の大原則（スター型・Issue 紐づけ・遷移の非機械化など）は [design.md](design.md) を正本とする。本文はプロセス分離と通信経路を記述する。
 
@@ -17,6 +17,7 @@
 手順が明確な GitHub Issue を起点に、**conductor が演奏せず** worker を起動・制御し、作業を進める CLI（`ensemble`）。作業とプロセスは **1 Issue + worktree** に紐づく。
 
 - **最小ユースケース**: `ensemble issue <url>` → worker 起動 → Issue / PR 上で作業
+- **backend 選択**: `conductor.backend` は `cursor`（既定）または `pi`。backend によって system prompt・認証・resume の扱いは異なるが、選択後も harness → worker ACP の経路と `ensemble issue <url>` の利用フローは共通（詳細は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)、設定は [settings.md](settings.md)）。
 - **スコープ**: 小さな作業単位の Issue ベースフロー
 - **対象外（初期）**: 汎用タスクオーケ、IDE 内 Agent の代替
 
@@ -48,7 +49,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
                            │
                            │ ACP
                            │
-    worker (reviewer) ─────┼───── conductor (SDK)
+    worker (reviewer) ─────┼───── conductor (Cursor SDK / Pi)
                            │         │
                            │         │ GitHub API
                            │         ▼
@@ -159,16 +160,16 @@ await conductor.send(operatorMessage);
 await conductor.send(workerStatusUpdate);
 ```
 
-`runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、結果を `Agent.create` / `Agent.resume` のトップレベル `mcpServers`（inline MCP）へ渡す。`local.settingSources` は使わず、設定値の変数展開は SDK に任せる。inline 設定は resume で永続化されないため、認証エラーからの in-process reconnect を含めて resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。
+SDK 経路の `runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、結果を `Agent.create` / `Agent.resume` のトップレベル `mcpServers`（inline MCP）へ渡す。`local.settingSources` は使わず、設定値の変数展開は SDK に任せる。inline 設定は resume で永続化されないため、認証エラーからの in-process reconnect を含めて resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。Pi 経路は同じ解決結果を MCP ブリッジ extension/plugin へ渡す前提で、Pi コア単体には MCP がない（[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)、[#354](https://github.com/otolab/agents-ensemble/issues/354)）。
 
-**SDK にチャット UI はない。** CLI（TTY）では Ink TUI（`createIssueSessionTuiHost`）が非ブロッキング入力と `pane` / `stream` レイアウト表示を担い、`submitOperatorInput` 経由で `operator.message` をキューへ積む。非 TTY は `bindAsyncOperatorInput` / CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE`。ConductorSession はキューから dispatch するだけ。テストは `bindOperatorInput` にフェイクを渡す（`createTestOperatorInputBinding`）。ConductorSession がイベント列経由で `agent.send` に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（TUI / stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
+**Conductor backend にチャット UI はない。** CLI（TTY）では Ink TUI（`createIssueSessionTuiHost`）が非ブロッキング入力と `pane` / `stream` レイアウト表示を担い、`submitOperatorInput` 経由で `operator.message` をキューへ積む。非 TTY は `bindAsyncOperatorInput` / CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE`。ConductorSession はキューから dispatch するだけ。テストは `bindOperatorInput` にフェイクを渡す（`createTestOperatorInputBinding`）。ConductorSession がイベント列経由で backend の agent に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（TUI / stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
 
 `stream` の settled columns shrink は端末の physical reflow と Ink の論理フレームを再同期するため、保持済み activity history を replay する recovery transaction を持つ（[ADR 0026](adr/0026-tui-stream-shrink-recovery.md)）。通常の native scrollback / `alternateScreen: false` モデルと `pane` の bounded activity window は維持する。
 
-conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）。worker の ACP は `agent login` で足りるが、**CLI ログインは SDK に自動では渡らない**。
+Cursor conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）です。この CLI ログインは **Cursor SDK 向けで、Pi backend には渡りません**。Pi は `~/.ensemble/pi/` または `<repoRoot>/.ensemble/pi/` の `settings.json` / `auth.json` など Pi の設定を使います。worker の ACP は `agent login` で足ります。
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
-- **resume**: 別プロセスから backend 固有の `resume(conductorAgentId)` で再開可能。Cursor は SDK の session、Pi は sidecar の `conductorAgentId` を Pi session id として `.ensemble/pi/sessions/` の JSONL transcript を復元する。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）には open question・profile・worker `acpSessionId` を保存する（[ADR 0011](adr/0011-session-sidecar-resume.md)）。
+- **resume**: 別プロセスから backend 固有の `resume(conductorAgentId)` で再開可能。Cursor は SDK の session、Pi は sidecar の `conductorAgentId` を Pi session id として `.ensemble/pi/sessions/` の JSONL transcript を復元する。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）には open question・profile・worker `acpSessionId` を保存する。resume 時に backend が起動時の解決結果と sidecar の値から変わっていれば fail fast する（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)）。
 - **ripgrep**: local agent の ignore scan 用。`ConductorAgent` 起動前に `ensureCursorSdkRipgrepPath()` が `@cursor/sdk-<platform>-<arch>/bin/rg` または PATH の `rg` を `CURSOR_RIPGREP_PATH` に設定する（[#43](https://github.com/otolab/agents-ensemble/issues/43)）。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 - **proxy**: `ConductorAgent` 起動前に `ensureCursorSdkProxy()` が Cursor の `settings.json` を読み、フラット形式の `http.proxy` / `http.noProxy` を `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` へ不足分だけ反映する。ネスト形式も互換入力として扱うが、両方に同じ設定がある場合はフラット形式を優先する。解決順は既存の環境変数 → Cursor settings → 未設定で、標準パスは macOS / Linux / Windows ごとに異なる。`cursor.general.disableHttp2: true` は SDK の `local.useHttp1ForAgent: true` に変換する。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK に対応する公開設定がなく未対応。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 
@@ -264,14 +265,14 @@ ensemble 終了 ──stop────────► 全 worker bridge close
 - **常駐** = ensemble 中 `agent acp` プロセスを殺さない（attach / init prompt 後も bridge 保持）。
 - **sendWorkerMessage** = 既存 session への `session/prompt`（dispatch ではない）。
 - **`list_workers` / `get_worker_status`** = harness 上の worker 状態照会（読み取り専用）。`prompt_worker` は作業指示専用。オペレータの状態質問には状態照会ツールを使い、Issue / PR を読まず tool 結果で答える。返却は YAML。セッションイベント列には積まない（[Issue #70](https://github.com/otolab/agents-ensemble/issues/70)）。
-- **`get_session_usage` / `get_usage`** = harness が蓄積した LLM トークン使用量照会（読み取り専用）。conductor 各 `agent.send` は `@cursor/sdk` の `RunResult.usage`、worker 各 prompt は ACP 応答の `usage`（無い場合は prompt/response から推定、`source: estimated`）。コンテキスト上限は SDK 1.0.27 時点で取得不可のため既定は `limit: null`（[Issue #102](https://github.com/otolab/agents-ensemble/issues/102)）。返却は YAML。イベント列には積まない。
+- **`get_session_usage` / `get_usage`** = harness が蓄積した LLM トークン使用量照会（読み取り専用）。conductor 各 backend の agent send、worker 各 prompt は usage（無い場合は prompt/response から推定、`source: estimated`）を使う。コンテキスト上限は SDK 1.0.27 時点で取得不可のため既定は `limit: null`（[Issue #102](https://github.com/otolab/agents-ensemble/issues/102)）。返却は YAML。イベント列には積まない。
 - 同一 worker は ACP 制約により prompt **直列**（per-worker キュー）。worker 間は並行可。
 - **`worker.completed` は 1 ラウンドの終了**。進捗の正本は Issue / PR。
 
 ### permission（conductor 制御）
 
 ```
-worker (ACP)                    conductor (SDK)              オペレータ
+worker (ACP)                    conductor (Cursor SDK / Pi)  オペレータ
      │                               │                          │
      │ session/request_permission    │                          │
      │ ─────────────────────────────>│  段1: policy 自明 allow/deny → 即応答
@@ -401,7 +402,7 @@ CLI は薄く、オーケストレーション本体は core に集約する。
 
 ```
 ensemble issue https://github.com/org/repo/issues/123
-  → conductor 起動（SDK）
+  → conductor 起動（Cursor SDK 既定 / Pi opt-in）
   → Issue / Skill を読む
   → dispatch implementer（ACP, worktree 作成）
   → implementer: 実装 → Issue 更新 → PR 作成

@@ -47,7 +47,7 @@
 
 | 文書 | 内容 |
 |------|------|
-| [architecture.md](architecture.md) | SDK conductor + ACP worker の現行技術アーキテクチャ |
+| [architecture.md](architecture.md) | Cursor SDK / Pi conductor + ACP worker の現行技術アーキテクチャ（導入範囲は [Epic #348](https://github.com/otolab/agents-ensemble/issues/348)） |
 | [elements.md](elements.md) | skill、worker、profile、Issue、PR などの構成要素 |
 | [orchestrator.md](orchestrator.md) | conductor / orchestrator の責務の整理 |
 | [harness-events.md](harness-events.md) | harness の SessionLogEvent / SessionEvent と出力語彙 |

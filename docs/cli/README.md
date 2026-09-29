@@ -2,7 +2,7 @@
 
 > **正本:** npm の `@agents-ensemble/cli` と GitHub の CLI 利用者向け入口。インストール・最小クイックスタート・doc 索引を掲載します。
 
-`@agents-ensemble/cli` は、GitHub Issue を起点に conductor が worker を起動・制御する CLI です。
+`@agents-ensemble/cli` は、GitHub Issue を起点に conductor が worker を起動・制御する CLI です。conductor は Cursor SDK（既定）または Pi（opt-in）を選べます。
 
 ## インストール
 
@@ -16,17 +16,46 @@ pnpm add -g @agents-ensemble/cli
 ensemble --help
 ```
 
+## Conductor backend の選択
+
+既定の backend は `cursor`（Cursor SDK）です。Pi を使う場合は、リポジトリの `.ensemble/config.yaml` またはユーザ設定の `~/.ensemble/config.yaml` で `conductor.backend` を `pi` にします。
+
+```yaml
+conductor:
+  backend: pi
+```
+
+Pi backend は Pi の設定ファイルを読みます。モデル設定と認証情報は、次のいずれかの `settings.json` / `auth.json` に用意してください（プロジェクト設定がユーザ設定を上書きします）。
+
+| 層 | パス |
+|----|------|
+| ユーザ | `~/.ensemble/pi/` |
+| プロジェクト | `<repoRoot>/.ensemble/pi/` |
+
+Pi backend では `ensemble auth login` は認証を設定しません。このコマンドは Cursor SDK 向けです。Pi の provider 認証は Pi の `auth.json` / `settings.json`（および Pi が提供する設定方法）を使います。Pi コアには MCP が組み込まれていないため、MCP を使う場合は MCP ブリッジ extension/plugin の配線が必要です。詳細は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) と [Issue #354](https://github.com/otolab/agents-ensemble/issues/354) を参照してください。
+
+backend はセッション開始時に選択され、resume の途中では切り替えられません。system prompt の渡し方、認証、resume の差分は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) にまとまっています。
+
+backend を選んだ後の主経路は共通です。リポジトリのディレクトリで、対象 Issue を同じ `ensemble issue <url>` コマンドに渡します。
+
 ## 最小クイックスタート
 
-初回だけ、worker・conductor・GitHub API の認証を準備します。
+初回だけ、worker・選択した conductor backend・GitHub API の認証を準備します。
 
 既定の `cursor` preset は、npm パッケージに含まれない Cursor Agent CLI の `agent` コマンドを使用します。先に [Cursor Agent CLI の公式インストール手順](https://cursor.com/docs/cli) に従ってインストールしてください。
+
+| 対象 | 準備 |
+|------|------|
+| worker（既定の Cursor ACP） | `agent login` |
+| conductor（Cursor SDK、既定） | `ensemble auth login` |
+| conductor（Pi） | 上記の Pi `settings.json` / `auth.json` を準備。`ensemble auth` は使わない |
+| GitHub API（gh CLI を使う場合） | `gh auth login` |
 
 ```bash
 # worker（既定の Cursor ACP）
 agent login
 
-# conductor（Cursor SDK）
+# conductor（Cursor SDK を使う場合だけ）
 ensemble auth login
 
 # GitHub API（gh CLI を使う場合）

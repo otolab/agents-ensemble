@@ -2,9 +2,9 @@
 
 > **正本:** `.ensemble/config.yaml` の配置・書き方・スキーマと conductor MCP 設定。本書以外の設定層の一覧・解決パターンは [settings.md](settings.md) を参照します。
 
-`.ensemble/config.yaml` は harness 横断の設定の正本。team-profile（`profile.yaml`）や conductor SDK 認証とは別系統。
+`.ensemble/config.yaml` は harness 横断の設定の正本。team-profile（`profile.yaml`）や conductor backend の認証とは別系統。
 
-conductor（Cursor SDK）に渡す MCP 設定もこの config.yaml とは別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定mcpjson) を参照）。
+conductor に渡す MCP 設定もこの config.yaml とは別の JSON ファイルで管理する（下記の [Conductor MCP 設定](#conductor-mcp-設定mcpjson) を参照）。
 
 ## 配置と解決順
 
@@ -153,7 +153,7 @@ MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単
 }
 ```
 
-この MVP では解決済み設定を conductor の Cursor SDK `Agent.create` / `Agent.resume` に inline MCP として渡す。`Agent.resume` と認証エラーからの in-process reconnect の両方で同じ設定を再注入する。設定値の `${env:...}` や `${workspaceFolder}` などの展開は SDK に任せる。`.cursor/mcp.json` へのコピー・symlink は行わず、ACP worker にはこの設定を渡さない。
+この MVP では Cursor SDK backend に解決済み設定を `Agent.create` / `Agent.resume` の inline MCP として渡す。`Agent.resume` と認証エラーからの in-process reconnect の両方で同じ設定を再注入する。Pi backend は同じ解決結果を MCP ブリッジ extension/plugin に渡す前提で、Pi コア単体には MCP がない（[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)、[#354](https://github.com/otolab/agents-ensemble/issues/354)）。設定値の `${env:...}` や `${workspaceFolder}` などの展開は SDK に任せる。`.cursor/mcp.json` へのコピー・symlink は行わず、ACP worker にはこの設定を渡さない。
 
 JSON が不正、または `mcpServers` / サーバー定義の形式が不正な場合は、そのファイルを `[mcp]` 警告とともにスキップする。もう一方の層が有効ならそちらは引き続き読み込み、両方をスキップした場合は MCP なしで起動する。MCP のホットリロードは行わないため、変更後は新しいセッションを開始する。
 

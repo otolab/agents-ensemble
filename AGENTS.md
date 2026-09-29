@@ -24,3 +24,7 @@
 | [docs/development.md](docs/development.md) | 開発環境・テスト・ブランチ運用の注意 |
 
 作業の記録・受け入れ条件は **GitHub Issue** を正本とする。
+
+## PR 完結性と認証統合
+
+PR は受け入れ条件だけでなく、変更が及ぶ利用者向け文書・運用導線まで完結させる。今回の Pi backend の認証統合はスコープ外だが、`ensemble auth` と Pi provider 認証を統合する作業は既存の [Issue #356](https://github.com/otolab/agents-ensemble/issues/356) に明示的に引き継ぐ。レビュー時の判断基準は [PR レビュー手順](docs/prompts/pr-review.md) を参照する。

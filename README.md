@@ -2,7 +2,7 @@
 
 GitHub Issue を起点に、conductor が worker を起動・制御して作業を進めるエージェントオーケストレーション CLI です。
 
-`ensemble` は SDK conductor と ACP worker を使うスター型の構成です。
+`ensemble` は Cursor SDK（既定）または Pi（opt-in）を conductor に使い、ACP worker を接続するスター型の構成です。
 
 ## はじめに
 
