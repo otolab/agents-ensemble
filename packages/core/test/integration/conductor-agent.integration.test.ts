@@ -2,12 +2,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createCursorSdkConductorAgentFactory } from '../../src/conductor/cursor-sdk-conductor-agent.js';
-import { hasConductorAuth } from '../../src/conductor/conductor-auth.js';
+import { cursorSdkIntegrationSkipReason } from './helpers/cursor-sdk-integration-home.js';
 import { getConductorModelId } from './test-config.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
+const SUITE_NAME = cursorSdkIntegrationSkipReason
+  ? `ConductorAgent integration (skipped: ${cursorSdkIntegrationSkipReason})`
+  : 'ConductorAgent integration';
 
-describe.skipIf(!hasConductorAuth())('ConductorAgent integration', () => {
+describe.skipIf(cursorSdkIntegrationSkipReason !== undefined)(SUITE_NAME, () => {
   it('completes in agent mode with explicit finish text (not plan update)', async () => {
     const conductor = await createCursorSdkConductorAgentFactory().create({
       cwd: REPO_ROOT,
