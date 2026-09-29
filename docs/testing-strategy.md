@@ -62,10 +62,10 @@ pnpm test:run          # 単発（CI デフォルト）
 
 ### モック方針
 
-| テストレベル | `agent acp` プロセス | JSON-RPC |
-|------------|---------------------|----------|
+| テストレベル | `agent acp` / SDK | transport / 通信 |
+|------------|------------------|----------------|
 | unittest | 使わない | Fake / モック transport |
-| integration | 実プロセス | 実 stdio |
+| integration | fake / in-process smoke、実 `agent acp`、または実 Cursor SDK | Fake transport、実 stdio、または SDK 接続（シナリオ別） |
 | e2e | 実プロセス（CLI 経由） | 実 stdio |
 
 **モックすべきもの（unittest）**: 子プロセス、`agent` バイナリ、ネットワーク、GitHub API クライアント、SDK Agent
@@ -76,7 +76,7 @@ pnpm test:run          # 単発（CI デフォルト）
 
 ## 2. 統合テスト
 
-**定義**: **複数モジュールの接続**、または **外部プロセス（`agent acp`）との実通信**を検証。ユーザー入口（CLI）は使わない。
+**定義**: **複数モジュールの接続**、fake / in-process transport の連携、または **外部プロセス（`agent acp`）・実 Cursor SDK との実通信**を検証。fake smoke は認証不要で CI の既定対象、実 ACP / SDK integration はローカル実行時に前提不足なら skip する。ユーザー入口（CLI）は使わない。
 
 ### 対象
 
