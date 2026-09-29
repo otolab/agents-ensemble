@@ -134,6 +134,37 @@ describe('session-log-lines', () => {
     ).toBe('自律作業が一段落しました。');
   });
 
+  it('formats worktree cleanup failures as operator warnings', () => {
+    const skipped = formatObservationLogBody({
+      type: 'harness.worktree.remove_skipped',
+      path: '/repo/.ensemble/worktrees/issue-7',
+      branch: 'ensemble/issue-7',
+      reason: 'dirty',
+    });
+    expect(skipped).toContain('[worktree] ⚠️');
+    expect(skipped).toContain('path=/repo/.ensemble/worktrees/issue-7');
+    expect(skipped).toContain('reason=dirty');
+    expect(skipped).toContain('commit または stash');
+    expect(skipped).toContain(
+      'git worktree remove /repo/.ensemble/worktrees/issue-7',
+    );
+
+    const failed = formatObservationLogBody({
+      type: 'harness.worktree.remove_failed',
+      path: '/repo/.ensemble/worktrees/issue-7',
+      branch: 'ensemble/issue-7',
+      error: 'git worktree remove failed\nlock held by worker',
+    });
+    expect(failed).toContain('[worktree] ⚠️');
+    expect(failed).toContain('reason=git error: git worktree remove failed lock held by worker');
+    expect(formatObservationStderrLine({
+      type: 'harness.worktree.remove_failed',
+      path: '/repo/.ensemble/worktrees/issue-7',
+      branch: 'ensemble/issue-7',
+      error: 'permission denied',
+    })).toContain('[worktree] ⚠️');
+  });
+
   it('formats dispatch hold observations', () => {
     expect(
       formatObservationLogBody({

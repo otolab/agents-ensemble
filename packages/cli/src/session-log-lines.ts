@@ -146,6 +146,10 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
       return `${event.record.question} → ${event.record.answer}`;
     case 'session.worktree.notice':
       return '特別モード: メイン worktree で直接作業します（isolated worktree は作りません）';
+    case 'harness.worktree.remove_skipped':
+      return `[worktree] ⚠️ worktree の削除をスキップしました path=${event.path} reason=${event.reason}。手動復旧: 変更を commit または stash してから git worktree remove ${event.path} を実行してください。`;
+    case 'harness.worktree.remove_failed':
+      return `[worktree] ⚠️ worktree の削除に失敗しました path=${event.path} reason=git error: ${summarizeWorktreeError(event.error)}。手動復旧: 変更を commit または stash してから git worktree remove ${event.path} を実行してください。`;
     case 'session.continue':
       return `resuming session: conductorAgentId=${event.conductorAgentId}`;
     case 'session.post_loop_wait':
@@ -183,7 +187,9 @@ export function formatObservationStderrLine(event: SessionLogEvent): string | un
   if (
     event.type === 'conductor.auth.recovery' ||
     event.type === 'conductor.auth.reconnect' ||
-    event.type === 'conductor.transport.reconnect'
+    event.type === 'conductor.transport.reconnect' ||
+    event.type === 'harness.worktree.remove_skipped' ||
+    event.type === 'harness.worktree.remove_failed'
   ) {
     const body = formatObservationLogBody(event);
     return body;
@@ -212,6 +218,14 @@ export function formatObservationStderrLine(event: SessionLogEvent): string | un
     default:
       return undefined;
   }
+}
+
+function summarizeWorktreeError(error: string): string {
+  const summary = error.replace(/\s+/g, ' ').trim();
+  if (summary.length <= 240) {
+    return summary;
+  }
+  return `${summary.slice(0, 237)}...`;
 }
 
 /** TUI 活動ログ向け conductor 応答本文。 */

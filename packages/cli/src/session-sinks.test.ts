@@ -281,4 +281,28 @@ describe('session sinks', () => {
       '\n自律作業が一段落しました。\n',
     );
   });
+
+  it('shows worktree cleanup warnings on observation stderr and keeps harness errors', () => {
+    const harnessStderr = vi.fn();
+    const observationStderr = vi.fn();
+    const event = {
+      type: 'harness.worktree.remove_failed' as const,
+      path: '/repo/.ensemble/worktrees/issue-7',
+      branch: 'ensemble/issue-7',
+      error: 'git worktree remove failed: lock held',
+    };
+
+    createHarnessSink({ writeStderr: harnessStderr })(event);
+    createObservationSink({ writeStderr: observationStderr })(event);
+
+    expect(harnessStderr).toHaveBeenCalledWith(
+      '[harness] worktree.remove_failed path=/repo/.ensemble/worktrees/issue-7 branch=ensemble/issue-7 error=git worktree remove failed: lock held',
+    );
+    expect(observationStderr).toHaveBeenCalledWith(
+      expect.stringContaining('[worktree] ⚠️'),
+    );
+    expect(observationStderr).toHaveBeenCalledWith(
+      expect.stringContaining('git worktree remove /repo/.ensemble/worktrees/issue-7'),
+    );
+  });
 });

@@ -78,6 +78,35 @@ describe('createTuiTelemetrySink', () => {
     ]);
   });
 
+  it('appends worktree cleanup warnings to the observation activity log', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({
+      type: 'harness.worktree.remove_skipped',
+      path: '/repo/.ensemble/worktrees/issue-7',
+      branch: 'ensemble/issue-7',
+      reason: 'dirty',
+    });
+    sink({
+      type: 'harness.worktree.remove_failed',
+      path: '/repo/.ensemble/worktrees/issue-7',
+      branch: 'ensemble/issue-7',
+      error: 'git worktree remove failed: lock held',
+    });
+
+    const observations = viewModel
+      .getSnapshot()
+      .activityLog.filter((entry) => entry.label === 'observation');
+    expect(observations).toHaveLength(2);
+    expect(observations[0]?.text).toContain('[worktree] ⚠️');
+    expect(observations[0]?.text).toContain('reason=dirty');
+    expect(observations[1]?.text).toContain('git error: git worktree remove failed: lock held');
+    expect(observations[1]?.text).toContain(
+      'git worktree remove /repo/.ensemble/worktrees/issue-7',
+    );
+  });
+
   it('does not append conductor.send.progress to activity log', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);

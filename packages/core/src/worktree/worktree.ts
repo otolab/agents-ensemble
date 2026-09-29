@@ -114,6 +114,12 @@ export type RemoveWorkerWorktreeResult =
   | { status: 'failed'; path: string; branch: string; error: string };
 
 /**
+ * Worktree の lock が ACP / worker の終了直後まで残ることがあるため、
+ * remove は短い backoff を挟んで限定的に再試行する。
+ */
+const WORKTREE_REMOVE_RETRY_DELAYS_MS = [100, 250] as const;
+
+/**
  * isolated worktree を削除する。存在しない場合は no-op。
  * 未コミット変更がある場合は削除せず `skipped_dirty` を返す（`--force` は使わない）。
  */
@@ -135,21 +141,28 @@ export async function removeWorkerWorktree(
     };
   }
 
-  try {
-    await runGit(['worktree', 'remove', existing.path], repoRoot);
-    return {
-      status: 'removed',
-      path: existing.path,
-      branch: existing.branch,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      status: 'failed',
-      path: existing.path,
-      branch: existing.branch,
-      error: message,
-    };
+  let lastError: string | undefined;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await runGit(['worktree', 'remove', existing.path], repoRoot);
+      return {
+        status: 'removed',
+        path: existing.path,
+        branch: existing.branch,
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      const retryDelay = WORKTREE_REMOVE_RETRY_DELAYS_MS[attempt];
+      if (retryDelay === undefined) {
+        return {
+          status: 'failed',
+          path: existing.path,
+          branch: existing.branch,
+          error: lastError,
+        };
+      }
+      await delay(retryDelay);
+    }
   }
 }
 
@@ -254,6 +267,12 @@ async function resolveOriginDefaultBranch(
 async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
   const { stdout } = await runGit(['status', '--porcelain'], worktreePath);
   return stdout.trim().length > 0;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolvePromise) => {
+    setTimeout(resolvePromise, milliseconds);
+  });
 }
 
 async function gitBranchExists(repoRoot: string, branch: string): Promise<boolean> {

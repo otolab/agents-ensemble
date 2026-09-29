@@ -50,8 +50,8 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 |------|----------------|-----------|-------------------|
 | `harness.worktree` | worktree resolve 直後（セッション開始、worker あり） | `[harness] worktree path=... branch=... mode=...` | なし |
 | `harness.worktree.removed` | post-loop `/exit` 後、isolated worktree 削除成功 | `[harness] worktree.removed path=... branch=...` | なし |
-| `harness.worktree.remove_skipped` | 未コミット変更あり等で削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` | なし |
-| `harness.worktree.remove_failed` | `git worktree remove` 失敗（best-effort） | `[harness] worktree.remove_failed path=... branch=... error=...` | なし |
+| `harness.worktree.remove_skipped` | 未コミット変更あり等で削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
+| `harness.worktree.remove_failed` | `git worktree remove` の限定リトライ後も失敗 | `[harness] worktree.remove_failed path=... branch=... error=...` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
 | `operator.input` | オペレータ発話をキューに載せる直前 | `[harness] operator.input turn=N bytes=...` | なし |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。例: `conductor: reading`） |
@@ -246,6 +246,8 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 ```
 セッション開始
   harness.worktree ─────────────────────────► stderr のみ
+  harness.worktree.remove_skipped/failed ───► harness stderr + observation warning
+                                                └─ TTY: 活動ログ / 非 TTY: stderr
   harness.session.workers ──────────────────► stderr + TUI seed（全 worker idle）
 
 WorkerSession.startWorkers()（worker ごと。attach + init prompt）
