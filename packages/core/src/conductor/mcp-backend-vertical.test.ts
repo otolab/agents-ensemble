@@ -82,7 +82,7 @@ function fakeMcpSdk(): PiMcpBridgeSdk {
 }
 
 describe('shared mcp.json backend path', () => {
-  it('executes the same resolved stdio definition through Cursor inline MCP and Pi bridge', async () => {
+  it('forwards the same resolved stdio definition to Cursor and executes it through the Pi bridge', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'mcp-backend-vertical-'));
     const projectMcpRoot = join(cwd, '.agents');
     await mkdir(projectMcpRoot, { recursive: true });
@@ -111,6 +111,9 @@ describe('shared mcp.json backend path', () => {
     );
     const piToolResult = await piBridge!.tools[0]!.execute('pi-call', {});
 
+    // Cursor is mocked here so CI can assert the backend-neutral map forwarding
+    // without requiring a Cursor account. The real Cursor SDK discovery/call/
+    // result is covered by the manual test plan recorded on PR #374.
     let cursorOptions: any;
     const cursorAgent = {
       agentId: 'cursor-agent',
