@@ -1,4 +1,4 @@
-import type { McpServers } from '../mcp/load-mcp-config.js';
+import type { McpServerConfigMap } from '../mcp/load-mcp-config.js';
 import type { ConductorToolSet } from './conductor-tool.js';
 
 /** Backend-neutral options used when creating or resuming a conductor. */
@@ -8,7 +8,7 @@ export interface ConductorAgentCreateOptions {
   systemPrompt: string;
   apiKey?: string;
   modelId?: string;
-  mcpServers?: McpServers;
+  mcpServers?: McpServerConfigMap;
   customTools?: ConductorToolSet;
   onStreamText?: (text: string) => void;
 }
