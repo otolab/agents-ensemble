@@ -23,6 +23,9 @@ const PI_PROFILE: Profile = {
   agents: {
     ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },
+  // The in-process bridge never spawns an ACP CLI, but the session validates
+  // the resolved worker preset before it attaches the injected bridge.
+  acp: { preset: 'custom', command: process.execPath },
   workers: [{ name: 'ping-1', kind: 'ping' }],
 };
 
