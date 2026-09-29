@@ -7,7 +7,7 @@ import {
   normalizeGitHubMonitorCursor,
   type ExplicitPullRequestWatch,
   type GitHubMonitorCursor,
-  type PullRequestCiCursor,
+  type PullRequestCiSnapshot,
   type PullRequestMonitorCursor,
 } from './github-monitor-cursor.js';
 import {
@@ -76,14 +76,8 @@ interface GhCheckRun {
   status: string;
   conclusion?: string | null;
   detailsUrl?: string;
-  /** CheckRun の GraphQL node id。再実行ごとに変わる実行単位。 */
-  runId?: string;
   /** head commit SHA（GraphQL レスポンスに含まれる場合）。 */
   headSha?: string;
-  /** 実行開始時刻（GraphQL レスポンスに含まれる場合）。 */
-  startedAt?: string;
-  /** 実行完了時刻（GraphQL レスポンスに含まれる場合）。 */
-  completedAt?: string;
 }
 
 export async function fetchGitHubUpdates(
@@ -247,10 +241,8 @@ async function fetchPullRequestUpdates(input: {
   const cursor: PullRequestMonitorCursor = {
     lastReviewId: input.prCursor.lastReviewId,
     lastReviewCommentId: input.prCursor.lastReviewCommentId,
-    pendingCheckNames: [...(input.prCursor.pendingCheckNames ?? [])],
-    notifiedCheckNames: [...(input.prCursor.notifiedCheckNames ?? [])],
-    ...(input.prCursor.ciChecks
-      ? { ciChecks: cloneCiChecks(input.prCursor.ciChecks) }
+    ...(input.prCursor.lastObserved
+      ? { lastObserved: cloneCiSnapshots(input.prCursor.lastObserved) }
       : {}),
     ...(input.prCursor.ciBootstrapPending
       ? { ciBootstrapPending: true }
@@ -318,16 +310,12 @@ async function fetchPullRequestUpdates(input: {
       const retryingCiBootstrap = cursor.ciBootstrapPending === true;
       const ciResult = collectCiUpdates({
         checkRuns,
-        ciChecks: cursor.ciChecks ?? {},
-        pendingCheckNames: cursor.pendingCheckNames ?? [],
-        notifiedCheckNames: cursor.notifiedCheckNames ?? [],
+        lastObserved: cursor.lastObserved ?? {},
         emitFirstCompletedAfterBootstrapFailure: retryingCiBootstrap,
         prNumber: input.pr.number,
       });
       updates.push(...ciResult.updates);
-      cursor.ciChecks = ciResult.ciChecks;
-      cursor.pendingCheckNames = ciResult.pendingCheckNames;
-      cursor.notifiedCheckNames = ciResult.notifiedCheckNames;
+      cursor.lastObserved = ciResult.lastObserved;
       delete cursor.ciBootstrapPending;
       hasPendingCi = ciResult.hasPendingCi;
     } catch (error) {
@@ -472,26 +460,13 @@ function addCheckRunMetadata(
   normalized: GhCheckRun,
   row: Record<string, unknown>,
 ): void {
-  const runId =
-    typeof row.id === 'string'
-      ? row.id
-      : typeof row.databaseId === 'number' && Number.isSafeInteger(row.databaseId)
-        ? String(row.databaseId)
-        : undefined;
   const headSha =
     typeof row.headSha === 'string'
       ? row.headSha
       : isRecord(row.checkSuite) && typeof row.checkSuite.headSha === 'string'
         ? row.checkSuite.headSha
         : undefined;
-  const startedAt = typeof row.startedAt === 'string' ? row.startedAt : undefined;
-  const completedAt =
-    typeof row.completedAt === 'string' ? row.completedAt : undefined;
-
-  if (runId) normalized.runId = runId;
   if (headSha) normalized.headSha = headSha;
-  if (startedAt) normalized.startedAt = startedAt;
-  if (completedAt) normalized.completedAt = completedAt;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -573,50 +548,32 @@ function collectReviewCommentUpdates(
 
 function collectCiUpdates(input: {
   checkRuns: GhCheckRun[];
-  ciChecks: Record<string, PullRequestCiCursor>;
-  pendingCheckNames: string[];
-  notifiedCheckNames: string[];
+  lastObserved: Record<string, PullRequestCiSnapshot>;
   emitFirstCompletedAfterBootstrapFailure: boolean;
   prNumber: number;
 }): {
   updates: GitHubUpdateItem[];
-  ciChecks: Record<string, PullRequestCiCursor>;
-  pendingCheckNames: string[];
-  notifiedCheckNames: string[];
+  lastObserved: Record<string, PullRequestCiSnapshot>;
   hasPendingCi: boolean;
 } {
   const updates: GitHubUpdateItem[] = [];
   const pendingNow = new Set<string>();
-  const notified = new Set(input.notifiedCheckNames);
-  const previousCiChecks = cloneCiChecks(input.ciChecks);
-  migrateLegacyCiCursor(previousCiChecks, input.pendingCheckNames, 'pending');
-  migrateLegacyCiCursor(previousCiChecks, input.notifiedCheckNames, 'completed');
-  const ciChecks = cloneCiChecks(previousCiChecks);
+  const lastObserved = cloneCiSnapshots(input.lastObserved);
 
   for (const check of input.checkRuns) {
+    const snapshot = normalizeCiSnapshot(check);
+    if (!snapshot) {
+      continue;
+    }
+
     const name = check.name;
-    const status = safeUpperString(check.status, '');
-    if (!name || !status) {
-      continue;
-    }
-    if (isPendingCheckStatus(status)) {
+    const previous = lastObserved[name];
+    lastObserved[name] = snapshot;
+
+    if (snapshot.phase === 'pending') {
       pendingNow.add(name);
-      ciChecks[name] = {
-        runKey: getCiRunKey(check),
-        status: 'pending',
-      };
       continue;
     }
-    if (status !== 'COMPLETED') {
-      continue;
-    }
-    const conclusion = safeUpperString(check.conclusion, 'UNKNOWN');
-    const currentRunKey = getCiRunKey(check);
-    const previous = previousCiChecks[name];
-    ciChecks[name] = {
-      runKey: currentRunKey,
-      status: 'completed',
-    };
 
     // A completed check seen for the first time is normally the
     // registration/search baseline. After a failed bootstrap there is no
@@ -624,31 +581,15 @@ function collectCiUpdates(input: {
     const emitFirstCompletedAfterBootstrapFailure =
       input.emitFirstCompletedAfterBootstrapFailure && previous === undefined;
     if (
-      (!previous || isLegacyCompletedRunKey(previous.runKey)) &&
-      !emitFirstCompletedAfterBootstrapFailure
-    ) {
-      continue;
-    }
-
-    // The run key changes on a new CheckRun (push/re-run), while a pending
-    // to completed transition keeps the same key. Either case is a new
-    // completion event. An existing cursor must still deliver changes on
-    // resume, including when the first poll after resume observes completion.
-    const wasPending = previous?.status === 'pending';
-    const isNewRun =
-      previous !== undefined &&
-      previous.runKey !== currentRunKey &&
-      !isWeakRunKeyDrift(previous, currentRunKey);
-    if (
       !emitFirstCompletedAfterBootstrapFailure &&
-      !isNewRun &&
-      !wasPending
+      !shouldNotifyCiCompletion(previous, snapshot)
     ) {
       continue;
     }
 
+    const conclusion = snapshot.conclusion ?? 'UNKNOWN';
     updates.push({
-      id: `ci:${input.prNumber}:${name}:${currentRunKey}`,
+      id: buildCiUpdateId(input.prNumber, name, snapshot),
       kind: 'ci.completed',
       summary: `PR #${input.prNumber} CI 完了（${name}・${conclusion}）`,
       url: check.detailsUrl,
@@ -656,99 +597,98 @@ function collectCiUpdates(input: {
       checkName: name,
       checkConclusion: conclusion,
     });
-    notified.add(name);
   }
 
   return {
     updates,
-    ciChecks,
-    pendingCheckNames: [...pendingNow],
-    notifiedCheckNames: [...notified],
+    lastObserved,
     hasPendingCi: pendingNow.size > 0,
   };
 }
 
-function cloneCiChecks(
-  ciChecks: Record<string, PullRequestCiCursor>,
-): Record<string, PullRequestCiCursor> {
-  return Object.fromEntries(
-    Object.entries(ciChecks).map(([name, ciCursor]) => [
-      name,
-      { runKey: ciCursor.runKey, status: ciCursor.status },
-    ]),
-  );
-}
+function normalizeCiSnapshot(check: GhCheckRun): PullRequestCiSnapshot | undefined {
+  const name = check.name;
+  const status = safeUpperString(check.status, '');
+  if (!name || !status) {
+    return undefined;
+  }
 
-function migrateLegacyCiCursor(
-  ciChecks: Record<string, PullRequestCiCursor>,
-  names: string[],
-  status: PullRequestCiCursor['status'],
-): void {
-  for (const name of names) {
-    if (ciChecks[name]) continue;
-    ciChecks[name] = {
-      runKey:
-        status === 'pending'
-          ? getLegacyPendingRunKey(name)
-          : getLegacyCompletedRunKey(name),
-      status,
+  if (isPendingCheckStatus(status)) {
+    return {
+      phase: 'pending',
+      ...(check.headSha ? { headSha: check.headSha } : {}),
     };
   }
+  if (status !== 'COMPLETED') {
+    return undefined;
+  }
+
+  const conclusion = safeUpperString(check.conclusion, '');
+  return {
+    phase: 'completed',
+    ...(conclusion ? { conclusion } : {}),
+    ...(check.headSha ? { headSha: check.headSha } : {}),
+  };
 }
 
-function getLegacyPendingRunKey(name: string): string {
-  return `legacy-pending:${name}`;
-}
-
-function getLegacyCompletedRunKey(name: string): string {
-  return `legacy-completed:${name}`;
-}
-
-function isLegacyCompletedRunKey(runKey: string): boolean {
-  return runKey.startsWith('legacy-completed:');
-}
-
-/** run id が無く URL / 名前などの弱いキーだけが変わったときの再通知を抑える。 */
-function isWeakRunKey(runKey: string): boolean {
-  return (
-    runKey.startsWith('url:') ||
-    runKey.startsWith('name:') ||
-    runKey.startsWith('started:') ||
-    runKey.startsWith('completed:') ||
-    runKey.startsWith('legacy-')
-  );
-}
-
-function isWeakRunKeyDrift(
-  previous: PullRequestCiCursor,
-  currentRunKey: string,
+/** 前回観測と今回観測の差分だけで CI 完了通知を判定する。 */
+function shouldNotifyCiCompletion(
+  previous: PullRequestCiSnapshot | undefined,
+  current: PullRequestCiSnapshot,
 ): boolean {
-  return (
-    previous.status === 'completed' &&
-    (isWeakRunKey(previous.runKey) || isWeakRunKey(currentRunKey))
-  );
+  if (current.phase !== 'completed' || previous === undefined) {
+    return false;
+  }
+  if (previous.phase === 'pending') {
+    return true;
+  }
+  if (previous.phase !== current.phase) {
+    return true;
+  }
+
+  // Optional metadata can disappear across API representations. Treat a
+  // change as meaningful only when both observations contain the field.
+  const conclusionChanged =
+    previous.conclusion !== undefined &&
+    current.conclusion !== undefined &&
+    previous.conclusion !== current.conclusion;
+  const headShaChanged =
+    previous.headSha !== undefined &&
+    current.headSha !== undefined &&
+    previous.headSha !== current.headSha;
+  return conclusionChanged || headShaChanged;
 }
 
-function getCiRunKey(check: GhCheckRun): string {
-  if (check.runId) {
-    return `run:${check.runId}`;
-  }
-  if (check.headSha && check.startedAt) {
-    return `commit:${check.headSha}:started:${check.startedAt}`;
-  }
-  if (check.detailsUrl && check.completedAt) {
-    return `url:${check.detailsUrl}:completed:${check.completedAt}`;
-  }
-  if (check.detailsUrl) {
-    return `url:${check.detailsUrl}`;
-  }
-  if (check.completedAt) {
-    return `completed:${check.completedAt}`;
-  }
-  if (check.startedAt) {
-    return `started:${check.startedAt}`;
-  }
-  return `name:${check.name}`;
+function buildCiUpdateId(
+  prNumber: number,
+  checkName: string,
+  snapshot: PullRequestCiSnapshot,
+): string {
+  return [
+    'ci',
+    prNumber,
+    checkName,
+    snapshot.phase,
+    snapshot.conclusion ?? 'UNKNOWN',
+    snapshot.headSha ?? 'UNKNOWN',
+  ].join(':');
+}
+
+function cloneCiSnapshots(
+  lastObserved: Record<string, PullRequestCiSnapshot>,
+): Record<string, PullRequestCiSnapshot> {
+  return Object.fromEntries(
+    Object.entries(lastObserved).map(([name, snapshot]) => [
+      name,
+      {
+        phase: snapshot.phase,
+        ...(snapshot.conclusion !== undefined
+          ? { conclusion: snapshot.conclusion }
+          : {}),
+        ...(snapshot.headSha !== undefined ? { headSha: snapshot.headSha } : {}),
+      },
+    ]),
+  );
 }
 
 function isPendingCheckStatus(status: string): boolean {

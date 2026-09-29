@@ -100,8 +100,7 @@ describe('fetchGitHubUpdates', () => {
       354,
     );
     expect(result.cursor.pullRequests?.['354']).toMatchObject({
-      pendingCheckNames: [],
-      notifiedCheckNames: [],
+      lastObserved: {},
     });
   });
 
@@ -329,9 +328,9 @@ describe('fetchGitHubUpdates', () => {
 
     expect(bootstrap.updates).toEqual([]);
     expect(bootstrap.cursor.pullRequests?.['42']?.lastReviewId).toBe('10');
-    expect(bootstrap.cursor.pullRequests?.['42']?.pendingCheckNames).toEqual([
-      'ci/test',
-    ]);
+    expect(bootstrap.cursor.pullRequests?.['42']?.lastObserved).toEqual({
+      'ci/test': { phase: 'pending' },
+    });
 
     const completedClient = createMockClient({
       searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
@@ -349,7 +348,7 @@ describe('fetchGitHubUpdates', () => {
         pullRequests: {
           '42': {
             ...bootstrap.cursor.pullRequests!['42']!,
-            pendingCheckNames: ['ci/test'],
+            lastObserved: { 'ci/test': { phase: 'pending' } },
           },
         },
       },
@@ -365,7 +364,7 @@ describe('fetchGitHubUpdates', () => {
     });
   });
 
-  it('emits CI completion for each distinct CheckRun execution', async () => {
+  it('emits one CI completion for each pending -> completed cycle', async () => {
     const rollups = [
       [
         {
@@ -443,13 +442,13 @@ describe('fetchGitHubUpdates', () => {
         checkConclusion: 'SUCCESS',
       }),
     ]);
-    expect(cursor.pullRequests?.['42']?.ciChecks?.['ci/test']).toEqual({
-      runKey: 'run:check-run-2',
-      status: 'completed',
+    expect(cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
+      phase: 'completed',
+      conclusion: 'SUCCESS',
     });
   });
 
-  it('uses a completed registration snapshot as baseline and detects a later run', async () => {
+  it('uses a completed registration snapshot as baseline and detects a conclusion change', async () => {
     const firstRun = {
       __typename: 'CheckRun',
       id: 'check-run-1',
@@ -458,7 +457,7 @@ describe('fetchGitHubUpdates', () => {
       conclusion: 'SUCCESS',
       completedAt: '2026-09-07T05:00:00.000Z',
     };
-    const secondRun = { ...firstRun, id: 'check-run-2', completedAt: '2026-09-07T05:02:00.000Z' };
+    const secondRun = { ...firstRun, conclusion: 'FAILURE' };
     let rollup = [firstRun];
     const githubClient = createMockClient({
       searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
@@ -473,9 +472,9 @@ describe('fetchGitHubUpdates', () => {
       githubClient,
     });
     expect(baseline.updates).toEqual([]);
-    expect(baseline.cursor.pullRequests?.['42']?.ciChecks?.['ci/test']).toEqual({
-      runKey: 'run:check-run-1',
-      status: 'completed',
+    expect(baseline.cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
+      phase: 'completed',
+      conclusion: 'SUCCESS',
     });
 
     const sameRun = await fetchGitHubUpdates({
@@ -497,9 +496,123 @@ describe('fetchGitHubUpdates', () => {
       expect.objectContaining({
         kind: 'ci.completed',
         checkName: 'ci/test',
-        checkConclusion: 'SUCCESS',
+        checkConclusion: 'FAILURE',
       }),
     ]);
+  });
+
+  it.each([
+    {
+      label: 'pending -> completed',
+      previous: { phase: 'pending' },
+      check: { status: 'COMPLETED', conclusion: 'SUCCESS' },
+      expectedNotification: true,
+    },
+    {
+      label: 'completed -> pending',
+      previous: { phase: 'completed', conclusion: 'SUCCESS' },
+      check: { status: 'IN_PROGRESS', conclusion: null },
+      expectedNotification: false,
+    },
+    {
+      label: 'completed with the same conclusion',
+      previous: { phase: 'completed', conclusion: 'SUCCESS' },
+      check: { status: 'COMPLETED', conclusion: 'SUCCESS' },
+      expectedNotification: false,
+    },
+    {
+      label: 'completed with a changed conclusion',
+      previous: { phase: 'completed', conclusion: 'FAILURE' },
+      check: { status: 'COMPLETED', conclusion: 'SUCCESS' },
+      expectedNotification: true,
+    },
+    {
+      label: 'completed with a changed head SHA',
+      previous: { phase: 'completed', conclusion: 'SUCCESS', headSha: 'sha-1' },
+      check: { status: 'COMPLETED', conclusion: 'SUCCESS', headSha: 'sha-2' },
+      expectedNotification: true,
+    },
+  ] as const)('uses only observation differences for $label', async ({
+    previous,
+    check,
+    expectedNotification,
+  }) => {
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+      getStatusCheckRollup: vi.fn().mockResolvedValue([
+        {
+          __typename: 'CheckRun',
+          name: 'ci/test',
+          ...check,
+        },
+      ]),
+    });
+
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: {
+        pullRequests: {
+          '42': { lastObserved: { 'ci/test': previous } },
+        },
+      },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+
+    expect(result.updates.some((update) => update.kind === 'ci.completed')).toBe(
+      expectedNotification,
+    );
+    expect(result.cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
+      phase: check.status === 'IN_PROGRESS' ? 'pending' : 'completed',
+      ...(check.conclusion ? { conclusion: check.conclusion } : {}),
+      ...(check.headSha ? { headSha: check.headSha } : {}),
+    });
+  });
+
+  it('keeps the last observation when a rollup check is temporarily missing', async () => {
+    const completedRun = {
+      __typename: 'CheckRun',
+      name: 'ci/test',
+      status: 'COMPLETED',
+      conclusion: 'SUCCESS',
+      headSha: 'sha-1',
+    };
+    let rollup: object[] = [completedRun];
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+      getStatusCheckRollup: vi.fn(async () => rollup),
+    });
+
+    const baseline = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: emptyGitHubMonitorCursor(),
+      initialCursorPoll: true,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+
+    rollup = [];
+    const missing = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: baseline.cursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(missing.updates).toEqual([]);
+    expect(missing.cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
+      phase: 'completed',
+      conclusion: 'SUCCESS',
+      headSha: 'sha-1',
+    });
+
+    rollup = [completedRun];
+    const restored = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: missing.cursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+    expect(restored.updates).toEqual([]);
   });
 
   it('retries a failed CI bootstrap before tracking completion', async () => {
@@ -558,8 +671,8 @@ describe('fetchGitHubUpdates', () => {
     });
     expect(pending.updates).toEqual([]);
     expect(pending.cursor.pullRequests?.['42']).toMatchObject({
-      ciChecks: {
-        'ci/test': { runKey: 'run:check-run-1', status: 'pending' },
+      lastObserved: {
+        'ci/test': { phase: 'pending' },
       },
     });
     expect(pending.cursor.pullRequests?.['42']).not.toHaveProperty(
@@ -631,9 +744,9 @@ describe('fetchGitHubUpdates', () => {
       checkName: 'ci/test',
       checkConclusion: 'SUCCESS',
     });
-    expect(completed.cursor.pullRequests?.['42']?.ciChecks?.['ci/test']).toEqual({
-      runKey: 'run:check-run-search-1',
-      status: 'completed',
+    expect(completed.cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
+      phase: 'completed',
+      conclusion: 'SUCCESS',
     });
   });
 
@@ -681,8 +794,8 @@ describe('fetchGitHubUpdates', () => {
     });
     expect(migratedNotifiedOnly.updates).toEqual([]);
     expect(
-      migratedNotifiedOnly.cursor.pullRequests?.['42']?.ciChecks?.['ci/test'],
-    ).toEqual({ runKey: 'run:check-run-1', status: 'completed' });
+      migratedNotifiedOnly.cursor.pullRequests?.['42']?.lastObserved?.['ci/test'],
+    ).toEqual({ phase: 'completed', conclusion: 'SUCCESS' });
   });
 
   it('handles StatusContext entries in statusCheckRollup without throwing', async () => {
@@ -702,9 +815,9 @@ describe('fetchGitHubUpdates', () => {
     });
 
     expect(bootstrap.updates).toEqual([]);
-    expect(bootstrap.cursor.pullRequests?.['42']?.pendingCheckNames).toEqual([
-      'ci/legacy',
-    ]);
+    expect(bootstrap.cursor.pullRequests?.['42']?.lastObserved).toEqual({
+      'ci/legacy': { phase: 'pending' },
+    });
 
     const completedClient = createMockClient({
       searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
@@ -720,7 +833,7 @@ describe('fetchGitHubUpdates', () => {
         pullRequests: {
           '42': {
             ...bootstrap.cursor.pullRequests!['42']!,
-            pendingCheckNames: ['ci/legacy'],
+            lastObserved: { 'ci/legacy': { phase: 'pending' } },
           },
         },
       },
@@ -797,7 +910,9 @@ describe('fetchGitHubUpdates', () => {
       prNumber: 42,
       cause: 'parse',
     });
-    expect(result.cursor.pullRequests?.['43']?.pendingCheckNames).toEqual(['ci/legacy']);
+    expect(result.cursor.pullRequests?.['43']?.lastObserved).toEqual({
+      'ci/legacy': { phase: 'pending' },
+    });
   });
 
   it('reports pr_search errors while continuing issue comment monitoring', async () => {
@@ -829,7 +944,7 @@ describe('fetchGitHubUpdates', () => {
     });
   });
 
-  it('does not re-notify when completed check runKey drifts between weak keys', async () => {
+  it('does not re-notify when rollup identity fields drift', async () => {
     let poll = 0;
     const makeChecks = (keyMode: 'url' | 'runId') =>
       Array.from({ length: 7 }, (_, i) => ({
@@ -869,15 +984,16 @@ describe('fetchGitHubUpdates', () => {
     }
   });
 
-  it('still notifies when a strong CheckRun id changes after completion', async () => {
+  it('notifies when the completed head SHA changes', async () => {
     const firstRun = {
       __typename: 'CheckRun',
       id: 'check-run-1',
       name: 'ci/test',
       status: 'COMPLETED',
       conclusion: 'SUCCESS',
+      headSha: 'sha-1',
     };
-    const secondRun = { ...firstRun, id: 'check-run-2' };
+    const secondRun = { ...firstRun, headSha: 'sha-2' };
     let rollup: object[] = [firstRun];
     const githubClient = createMockClient({
       searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
