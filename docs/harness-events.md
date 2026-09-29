@@ -50,8 +50,8 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 |------|----------------|-----------|-------------------|
 | `harness.worktree` | worktree resolve 直後（セッション開始、worker あり） | `[harness] worktree path=... branch=... mode=...` | なし |
 | `harness.worktree.removed` | post-loop `/exit` 後、isolated worktree 削除成功 | `[harness] worktree.removed path=... branch=...` | なし |
-| `harness.worktree.remove_skipped` | 未コミット変更あり等で削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
-| `harness.worktree.remove_failed` | `git worktree remove` の限定リトライ後も失敗 | `[harness] worktree.remove_failed path=... branch=... error=...` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
+| `harness.worktree.remove_skipped` | post-loop `/exit` の isolated worktree cleanup で未コミット変更あり等により削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
+| `harness.worktree.remove_failed` | post-loop `/exit` の isolated worktree cleanup で `git worktree remove` の限定リトライ後も失敗 | `[harness] worktree.remove_failed path=... branch=... error=...` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
 | `operator.input` | オペレータ発話をキューに載せる直前 | `[harness] operator.input turn=N bytes=...` | なし |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。例: `conductor: reading`） |
@@ -65,7 +65,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `conductor.auth.recovery` | 自動再接続失敗後の復旧ヒント | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
 | `conductor.transport.reconnect` | transport 自動再接続、または `/reconnect` の `resume(sameId)` | `[harness] conductor.transport.reconnect status=attempt\|succeeded\|failed agentId=...` / `[transport] ...` | なし（失敗時も auth hint は出さない） |
 | `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
-| `harness.teardown` | `runConductorSession` の `finally` 完了時（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
+| `harness.teardown` | `runConductorSession` の worker/ACP・conductor 停止後、isolated worktree 削除前（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
 | `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | `[harness] teardown.phase <name>` | なし |
 | `conductor.dispatch_hold` | conductor が `set_dispatch_hold` を呼んだとき、または held trigger（`permission.pending` を含む）の件数が変化したとき | `dispatch hold enabled` / `released (flushed N events)`（observation） | TUI の保留状態と件数を更新。解除後も未送信の held trigger があれば残数を表示 |
 
@@ -246,8 +246,6 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 ```
 セッション開始
   harness.worktree ─────────────────────────► stderr のみ
-  harness.worktree.remove_skipped/failed ───► harness stderr + observation warning
-                                                └─ TTY: 活動ログ / 非 TTY: stderr
   harness.session.workers ──────────────────► stderr + TUI seed（全 worker idle）
 
 WorkerSession.startWorkers()（worker ごと。attach + init prompt）
@@ -313,6 +311,15 @@ GitHub monitor（セッション中は常時。`--no-github-monitor` で無効�
 
 セッション終了
   session.stop ─────────────────────────────► stderr + snapshot
+  teardown（worker/ACP・conductor・GitHub monitor の停止）
+    harness.teardown.phase ─────────────────► stderr
+    harness.teardown ───────────────────────► stderr（force 時または 1s 超）
+
+  isolated worktree cleanup（正常 `/exit`、`harness.teardown` emit 後）
+    harness.teardown.phase worktree ─────────► stderr
+    harness.worktree.removed ────────────────► stderr
+    harness.worktree.remove_skipped/failed ──► harness stderr + observation warning
+                                                  └─ TTY: 活動ログ / 非 TTY: stderr
 ```
 
 **重要**: `worker.completed` は init prompt でも instruction でも **同じイベント型・同じ見出し**。conductor は YAML 内の `source` で「自分が指示していない harness 起因の自動処理」かどうかを判別する。`source: harness` は作業開始ではない。
