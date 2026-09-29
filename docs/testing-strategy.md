@@ -7,7 +7,7 @@
 ## 原則
 
 1. **下位レイヤから積む** — transport / client の unittest を先に固め、integration → e2e の順で厚くする
-2. **CI は unittest 必須** — integration / e2e は設定・環境が揃う場合のみ（未設定なら `skip`）
+2. **CI は unittest と認証不要の integration smoke を必須** — PR / main の CI では `session-resume.integration.test.ts` と `pi-conductor.integration.test.ts` を実行する。実 Cursor SDK integration と e2e は既定 CI に含めず、専用環境で設定・認証が不足する場合は `skip` とする
 3. **外部依存は境界で切る** — `agent acp` / GitHub API / `@cursor/sdk` は unittest ではモック or Fake
 4. **レベルごとに責務を分ける** — 下表の定義に従い、同じ振る舞いを複数レベルで重複検証しない
 
@@ -170,8 +170,8 @@ pnpm test:all           # 全レベル（ローカル用）
 
 | トリガー | unittest | integration | e2e |
 |---------|----------|-------------|-----|
-| PR | 必須 | スキップ（または nightly） | スキップ |
-| main | 必須 | 任意（secrets + label） | スキップ |
+| PR | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | スキップ |
+| main | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | スキップ |
 | 手動 / nightly | 必須 | 推奨 | 任意 |
 | リリース前 | 必須 | 必須（設定ある場合） | 推奨 |
 
