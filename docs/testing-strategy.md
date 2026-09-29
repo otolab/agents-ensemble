@@ -101,12 +101,16 @@ packages/core/test/integration/test-acp.yaml.example
 ### 実行
 
 ```bash
-pnpm test:integration
+pnpm test:integration  # fake smoke は設定不要、外部依存は前提がある場合に実行
 ```
+
+`pnpm test:integration` は fake / in-process smoke と、前提が揃った場合の実 ACP / 実 Cursor SDK integration をまとめて実行する。
 
 ### スキップ条件
 
-`test-acp.yaml`（gitignore）が無い、または `agent` が PATH に無い場合は `describe.skipIf` でスキップ。
+- `session-resume.integration.test.ts` と `pi-conductor.integration.test.ts` は fake / in-process smoke であり、`test-acp.yaml`、`agent` CLI、Cursor 認証を必要とせず、CI でも実行する。
+- 実 `agent acp` を起動する integration は `test-acp.yaml` と `agent` が必要で、どちらかがない場合は対象 suite を `describe.skipIf` でスキップする。
+- 実 Cursor SDK を使う `conductor-agent.integration.test.ts` と `issue-session.integration.test.ts` は Cursor 認証とネットワークを必要とする。認証がない、または隔離 HOME を作成・書き込みできない場合は、理由付きでスキップする。
 
 ### vitest 設定方針
 
@@ -161,7 +165,7 @@ pnpm test:e2e
 
 ```bash
 pnpm test:run           # unittest（CI 必須）
-pnpm test:integration   # integration（設定時のみ実行）
+pnpm test:integration   # fake smoke は設定不要、外部依存は前提がある場合に実行
 pnpm test:e2e           # e2e（設定時のみ実行）
 pnpm test:all           # 全レベル（ローカル用）
 ```

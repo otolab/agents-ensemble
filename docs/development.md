@@ -44,7 +44,7 @@ pnpm install --frozen-lockfile
 # unittest（CI 必須）
 pnpm test:run
 
-# 実 agent acp を使う integration test（test-acp.yaml が必要）
+# integration（fake / in-process smoke は設定不要、実 agent acp 経路は test-acp.yaml が必要）
 pnpm test:integration
 
 # CLI 縦切りの e2e test（test-acp.yaml が必要）
