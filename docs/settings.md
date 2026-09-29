@@ -28,7 +28,13 @@ CLI > 環境変数 > project config > user config > コード default
 
 `profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
-`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`cursor` は Cursor SDK 経路、`pi` は Pi Agent Core 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、Pi の `settings.json` / `auth.json` からモデルと認証を解決します。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、conductor を起動せず失敗します。旧 sidecar にこのフィールドがない場合は、従来どおり `cursor` として扱います。
+`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`cursor` は Cursor SDK 経路、`pi` は Pi Agent Core 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、Pi の `settings.json` / `auth.json` からモデルと認証を解決します。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
+
+```text
+Session sidecar conductorBackend mismatch: pi !== cursor
+```
+
+旧 sidecar にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `<conductor-cwd>/.ensemble/pi/sessions/` の JSONL に保存されます。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
 
 ### パターン B — Phase 1 横断（env なし）
 

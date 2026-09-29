@@ -40,6 +40,8 @@
 - **セッション途中で backend を切り替えない**。sidecar に `conductorBackend` を保存し、resume 時に起動時解決と不一致なら **fail fast**。
 - Pi と SDK の **セッションログ形式の横断互換**は要求しない（[#348](https://github.com/otolab/agents-ensemble/issues/348) 合意）。
 - [ADR 0011](0011-session-sidecar-resume.md) の harness 状態（open question、worker `acpSessionId` 等）は維持。conductor 側の永続 ID はバックエンドごとにマッピングする（Pi session id 等は実装 Issue で定義）。
+- Pi の最小実装では sidecar の `conductorAgentId` をそのまま Pi session id として再利用し、`<conductor-cwd>/.ensemble/pi/sessions/` の JSONL transcript を `pi-agent-core` の `JsonlSessionRepo` で保存・復元する。追加の sidecar ID フィールドは持たず、旧 sidecar の `conductorBackend` 欠落は従来どおり `cursor` として扱う。
+- Pi の resume は Issue context から compiled `systemPrompt` を毎回再コンパイルし、復元した transcript とは別に native system prompt へ再注入する。
 
 ### 3. MCP
 
