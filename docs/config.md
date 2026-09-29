@@ -153,7 +153,7 @@ MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単
 }
 ```
 
-この MVP では Cursor SDK backend に解決済み設定を `Agent.create` / `Agent.resume` の inline MCP として渡す。`Agent.resume` と認証エラーからの in-process reconnect の両方で同じ設定を再注入する。Pi backend は同じ解決結果を MCP ブリッジ extension/plugin に渡す前提で、Pi コア単体には MCP がない（[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)、[#354](https://github.com/otolab/agents-ensemble/issues/354)）。設定値の `${env:...}` や `${workspaceFolder}` などの展開は SDK に任せる。`.cursor/mcp.json` へのコピー・symlink は行わず、ACP worker にはこの設定を渡さない。
+この MVP では Cursor SDK backend に解決済み設定を `Agent.create` / `Agent.resume` の inline MCP として渡す。`Agent.resume` と認証エラーからの in-process reconnect の両方で同じ設定を再注入する。**Pi backend の現行実装は解決済み `mcpServers` を Pi Agent に渡さず、Pi コア単体では MCP を利用できない。** OPEN の [#354](https://github.com/otolab/agents-ensemble/issues/354) で、同じ解決結果を harness から MCP ブリッジ extension/plugin へ常時配線することが目標です（設計は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)）。設定値の `${env:...}` や `${workspaceFolder}` などの展開は SDK に任せる。`.cursor/mcp.json` へのコピー・symlink は行わず、ACP worker にはこの設定を渡さない。
 
 JSON が不正、または `mcpServers` / サーバー定義の形式が不正な場合は、そのファイルを `[mcp]` 警告とともにスキップする。もう一方の層が有効ならそちらは引き続き読み込み、両方をスキップした場合は MCP なしで起動する。MCP のホットリロードは行わないため、変更後は新しいセッションを開始する。
 

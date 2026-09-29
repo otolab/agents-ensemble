@@ -65,13 +65,13 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
-│  conductor (@agents-ensemble/core + Cursor SDK)               │
+│  conductor (@agents-ensemble/core + Cursor SDK / Pi)           │
 │  スター型の中心。長寿命 Agent 1 本                              │
 │  ・Issue / PR / CI の読取（GitHub REST / GraphQL）              │
 │  ・次の worker 種別の判断（LLM。ルール表は固定しない）          │
 │  ・worker の dispatch・制御（種別・Skill・起動文書）            │
 │  ・permission の集約（自動許諾含む）→ 必要時に人間へ            │
-│  ・実作業ツールは SDK mode + customTools で制限                 │
+│  ・実作業ツールは backend 別の ConductorTool adapter で制限     │
 └───────┬─────────────────┬─────────────────┬───────────────────┘
         │ spawn           │ spawn           │ spawn
         ▼                 ▼                 ▼
@@ -160,7 +160,7 @@ await conductor.send(operatorMessage);
 await conductor.send(workerStatusUpdate);
 ```
 
-SDK 経路の `runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、結果を `Agent.create` / `Agent.resume` のトップレベル `mcpServers`（inline MCP）へ渡す。`local.settingSources` は使わず、設定値の変数展開は SDK に任せる。inline 設定は resume で永続化されないため、認証エラーからの in-process reconnect を含めて resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。Pi 経路は同じ解決結果を MCP ブリッジ extension/plugin へ渡す前提で、Pi コア単体には MCP がない（[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)、[#354](https://github.com/otolab/agents-ensemble/issues/354)）。
+SDK 経路の `runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、結果を `Agent.create` / `Agent.resume` のトップレベル `mcpServers`（inline MCP）へ渡す。`local.settingSources` は使わず、設定値の変数展開は SDK に任せる。inline 設定は resume で永続化されないため、認証エラーからの in-process reconnect を含めて resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。Pi 経路では現行実装は `mcpServers` を Pi Agent に渡しておらず、Pi コア単体では MCP を利用できない。OPEN の [#354](https://github.com/otolab/agents-ensemble/issues/354) で、同じ解決結果を harness から MCP ブリッジ extension/plugin へ常時配線することが目標です（設計は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)）。
 
 **Conductor backend にチャット UI はない。** CLI（TTY）では Ink TUI（`createIssueSessionTuiHost`）が非ブロッキング入力と `pane` / `stream` レイアウト表示を担い、`submitOperatorInput` 経由で `operator.message` をキューへ積む。非 TTY は `bindAsyncOperatorInput` / CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE`。ConductorSession はキューから dispatch するだけ。テストは `bindOperatorInput` にフェイクを渡す（`createTestOperatorInputBinding`）。ConductorSession がイベント列経由で backend の agent に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（TUI / stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
 
@@ -390,7 +390,7 @@ agents-ensemble/
 | パッケージ | 依存（想定） | 責務 |
 |-----------|-------------|------|
 | `@agents-ensemble/cli` | `core`, `commander` | `ensemble issue` 等 |
-| `@agents-ensemble/core` | `@cursor/sdk` | ConductorAgent, AcpWorkerBridge, dispatch |
+| `@agents-ensemble/core` | `@cursor/sdk`, `@earendil-works/pi-agent-core` | ConductorAgent, AcpWorkerBridge, dispatch |
 
 CLI は薄く、オーケストレーション本体は core に集約する。
 

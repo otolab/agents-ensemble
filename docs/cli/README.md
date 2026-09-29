@@ -32,7 +32,7 @@ Pi backend は Pi の設定ファイルを読みます。モデル設定と認�
 | ユーザ | `~/.ensemble/pi/` |
 | プロジェクト | `<repoRoot>/.ensemble/pi/` |
 
-Pi backend では `ensemble auth login` は認証を設定しません。このコマンドは Cursor SDK 向けです。Pi の provider 認証は Pi の `auth.json` / `settings.json`（および Pi が提供する設定方法）を使います。Pi コアには MCP が組み込まれていないため、MCP を使う場合は MCP ブリッジ extension/plugin の配線が必要です。詳細は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) と [Issue #354](https://github.com/otolab/agents-ensemble/issues/354) を参照してください。
+Pi backend では `ensemble auth login` は認証を設定しません。このコマンドは Cursor SDK 向けです。Pi の provider 認証は Pi の `auth.json` / `settings.json`（および Pi が提供する設定方法）を使います。**現行の Pi backend は `mcpServers` を Pi Agent に配線していないため、Pi conductor では MCP は利用できません。** OPEN の [Issue #354](https://github.com/otolab/agents-ensemble/issues/354) で、harness から MCP ブリッジ extension/plugin を常時配線し、同じ MCP 設定を使えるようにすることが目標です。設計上の前提と制限は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) を参照してください。
 
 backend はセッション開始時に選択され、resume の途中では切り替えられません。system prompt の渡し方、認証、resume の差分は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) にまとまっています。
 
