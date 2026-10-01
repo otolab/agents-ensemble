@@ -32,7 +32,9 @@ Pi backend は Pi の設定ファイルを読みます。モデル設定と認�
 | ユーザ | `~/.ensemble/pi/` |
 | プロジェクト | `<repoRoot>/.ensemble/pi/` |
 
-Pi backend では `ensemble auth login` は認証を設定しません。このコマンドは Cursor SDK 向けです。Pi の provider 認証は Pi の `auth.json` / `settings.json`（および Pi が提供する設定方法）を使います。**現行の Pi backend は `mcpServers` を Pi Agent に配線していないため、Pi conductor では MCP は利用できません。** OPEN の [Issue #354](https://github.com/otolab/agents-ensemble/issues/354) で、harness から MCP ブリッジ extension/plugin を常時配線し、同じ MCP 設定を使えるようにすることが目標です。設計上の前提と制限は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) を参照してください。
+Pi backend では `ensemble auth login` は認証を設定しません。このコマンドは Cursor SDK 向けです。Pi の provider 認証は Pi の `auth.json` / `settings.json`（および Pi が提供する設定方法）を使います。`~/.ensemble/pi/` と `<repoRoot>/.ensemble/pi/` の `settings.json` / `auth.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決し、`conductor.pi.agentDir` / `conductor.pi.projectDir` で root のみ上書きできます。`.ensemble/pi/SYSTEM.md` は conductor の system prompt には使わず、modular-prompt のコンパイル結果を優先します。
+
+MCP は #354 の harness 内蔵 in-process bridge で Pi に接続します。解決済み `mcp.json` がある場合は MCP tools が、設定が無い場合も harness tools が、最小起動から常に有効です。bridge は Pi ExtensionAPI extension ではなく、harness が管理する tool adapter です。設計上の前提と制限は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) を参照してください。
 
 backend はセッション開始時に選択され、resume の途中では切り替えられません。system prompt の渡し方、認証、resume の差分は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) にまとまっています。
 

@@ -1,5 +1,7 @@
 import { ENSEMBLE_DEFAULT_ACP_CLI_ENV } from '../acp/resolve-acp-spawn.js';
 import type { WorkerWorktreeMode } from '../worktree/worktree.js';
+import { homedir } from 'node:os';
+import { isAbsolute, join, resolve } from 'node:path';
 import { DEFAULT_CONDUCTOR_BACKEND, DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
 import type {
   ConductorBackend,
@@ -130,6 +132,39 @@ export function resolveConductorBackendSetting(options: {
     DEFAULT_ENSEMBLE_CONFIG.conductor.backend ??
     DEFAULT_CONDUCTOR_BACKEND
   );
+}
+
+/**
+ * Resolve the Pi resource roots from the merged ensemble config.
+ *
+ * The project root is always anchored at repoRoot so a different conductor
+ * cwd cannot accidentally select another repository's `.ensemble/pi`.
+ * Relative configured paths use repoRoot as their base; `~` is expanded to
+ * the current user's home directory.
+ */
+export function resolveConductorPiResourcePaths(options: {
+  repoRoot: string;
+  config?: EnsembleConfig;
+}): { agentDir?: string; projectDir: string } {
+  const configured = options.config?.conductor.pi;
+  return {
+    ...(configured?.agentDir
+      ? { agentDir: resolveConfiguredPath(configured.agentDir, options.repoRoot) }
+      : {}),
+    projectDir: configured?.projectDir
+      ? resolveConfiguredPath(configured.projectDir, options.repoRoot)
+      : join(options.repoRoot, '.ensemble', 'pi'),
+  };
+}
+
+function resolveConfiguredPath(path: string, repoRoot: string): string {
+  if (path === '~') {
+    return homedir();
+  }
+  if (path.startsWith('~/')) {
+    return join(homedir(), path.slice(2));
+  }
+  return isAbsolute(path) ? path : resolve(repoRoot, path);
 }
 
 export function resolveDefaultAcpPresetSetting(options: {

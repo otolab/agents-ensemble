@@ -101,12 +101,22 @@ describe('PiConductorAgent', () => {
     vi.restoreAllMocks();
   });
 
-  it('installs the compiled prompt natively and exposes only harness tools', async () => {
+  it('installs the compiled prompt natively and adds project Pi extensions', async () => {
     const piRoot = join(cwd, '.ensemble', 'pi');
-    await mkdir(piRoot, { recursive: true });
+    await mkdir(join(piRoot, 'extensions'), { recursive: true });
     await writeFile(
       join(piRoot, 'settings.json'),
       JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'model-1' }),
+    );
+    await writeFile(join(piRoot, 'SYSTEM.md'), 'this must not replace the prompt');
+    await writeFile(
+      join(piRoot, 'extensions', 'project-extension.mjs'),
+      `export default (pi) => pi.registerTool({
+        name: 'project_extension',
+        description: 'Project extension',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => ({ content: [{ type: 'text', text: 'extension' }] }),
+      });`,
     );
     await writeFile(
       join(piRoot, 'auth.json'),
@@ -131,10 +141,13 @@ describe('PiConductorAgent', () => {
 
     const agentOptions = mockAgent.mock.calls[0]![0];
     expect(agentOptions.initialState.systemPrompt).toBe('compiled system prompt');
-    expect(agentOptions.initialState.tools).toHaveLength(1);
+    expect(agentOptions.initialState.tools).toHaveLength(2);
     expect(agentOptions.initialState.tools[0]).toMatchObject({
       name: 'prompt_worker',
       label: 'prompt_worker',
+    });
+    expect(agentOptions.initialState.tools[1]).toMatchObject({
+      name: 'project_extension',
     });
     expect(agentOptions.sessionId).toBe(conductor.agentId);
     expect(agentOptions.getApiKey('anthropic')).toBe('file-key');
@@ -166,11 +179,26 @@ describe('PiConductorAgent', () => {
       cwd,
       modelId: 'anthropic/model-1',
       systemPrompt: 'system',
+      customTools: {
+        prompt_worker: {
+          name: 'prompt_worker',
+          description: 'Dispatch to worker',
+          inputSchema: { type: 'object', properties: {} },
+          execute: async () => ({
+            content: [{ type: 'text' as const, text: 'dispatched' }],
+          }),
+        },
+      },
       mcpServers,
     });
 
     expect(mockCreatePiMcpBridge).toHaveBeenCalledWith(mcpServers, { cwd });
-    expect(fakeAgent.state.tools).toContain(mcpTool);
+    expect(fakeAgent.state.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'prompt_worker' }),
+        mcpTool,
+      ]),
+    );
 
     await conductor.close();
     expect(closeBridge).toHaveBeenCalledOnce();

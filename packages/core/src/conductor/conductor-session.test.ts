@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
@@ -272,6 +272,43 @@ describe('runConductorSession resume / shutdown', () => {
       expect.any(Object),
     );
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
+  });
+
+  it('passes resolved Pi resource root overrides to create options', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-resources',
+      status: 'finished',
+      result: 'started',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'pi',
+          pi: {
+            agentDir: '~/.custom-pi',
+            projectDir: '.custom-project-pi',
+          },
+        },
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pi: {
+          agentDir: join(homedir(), '.custom-pi'),
+          projectDir: join(repoRoot, '.custom-project-pi'),
+        },
+      }),
+    );
   });
 
   it('does not fail at backend selection before the Pi agent is created', async () => {

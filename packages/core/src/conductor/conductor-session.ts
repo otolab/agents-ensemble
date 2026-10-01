@@ -103,6 +103,7 @@ import {
 } from '../github/github-monitor.js';
 import {
   resolveConductorBackendSetting,
+  resolveConductorPiResourcePaths,
   resolveGitHubMonitorEnabled,
 } from '../config/resolve-settings.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
@@ -654,6 +655,14 @@ export async function runConductorSession(
     systemPrompt,
     apiKey: options.apiKey,
     modelId: options.modelId,
+    ...(conductorBackend === 'pi'
+      ? {
+          pi: resolveConductorPiResourcePaths({
+            repoRoot: options.repoRoot,
+            config: ensembleConfig,
+          }),
+        }
+      : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     customTools: conductorToolRegistry.toRecord(),
   };

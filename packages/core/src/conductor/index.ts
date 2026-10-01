@@ -1,6 +1,7 @@
 export type {
   ConductorAgent,
   ConductorAgentCreateOptions,
+  ConductorPiResourceOptions,
   ConductorAgentFactory,
   ConductorAgentOptions,
   ConductorAgentUsage,
@@ -21,6 +22,17 @@ export {
   resolvePiModelConfig,
 } from './pi-conductor-agent.js';
 export type { PiResolvedModel } from './pi-conductor-agent.js';
+export {
+  loadPiResources,
+  resolvePiResourceRoots,
+} from './pi-resource-loader.js';
+export type {
+  PiAuthFile,
+  PiResourceLoaderOptions,
+  PiResourceRoots,
+  PiResources,
+  PiSettingsFile,
+} from './pi-resource-loader.js';
 export {
   createPiMcpBridge,
   PI_MCP_SDK_VERSION,

@@ -1,11 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import {
   Agent,
   type AgentEvent,
   type AgentMessage,
+  type AgentTool,
 } from '@earendil-works/pi-agent-core';
 import {
   getEnvApiKey,
@@ -27,20 +25,16 @@ import type {
 import { toPiAgentTools } from './conductor-tool-pi-adapter.js';
 import { PiConductorSession } from './pi-conductor-session.js';
 import {
+  loadPiResources,
+  type PiAuthFile,
+  type PiResourceLoaderOptions,
+  type PiResources,
+  type PiSettingsFile,
+} from './pi-resource-loader.js';
+import {
   createPiMcpBridge,
   type PiMcpBridge,
 } from './pi-mcp-bridge.js';
-
-interface PiSettingsFile {
-  defaultProvider?: unknown;
-  defaultModel?: unknown;
-  model?: unknown;
-  modelId?: unknown;
-  apiKey?: unknown;
-  apiKeys?: unknown;
-}
-
-type PiAuthFile = Record<string, unknown>;
 
 interface PiSendState {
   runId: string;
@@ -55,24 +49,27 @@ export interface PiResolvedModel {
   apiKey?: string;
 }
 
-/**
- * Minimal Pi file configuration used by the first in-process backend.
- *
- * The full `.ensemble/pi` ResourceLoader is intentionally left for #358. For
- * now only Pi's model selection and credential files are read, with the
- * ensemble paths taking precedence over Pi's standard paths.
- */
-export async function resolvePiModelConfig(options: {
-  cwd: string;
-  modelId?: string;
-  apiKey?: string;
-  env?: NodeJS.ProcessEnv;
-  home?: string;
-}): Promise<PiResolvedModel> {
+/** Resolve the Pi model/auth selection from the standard resource roots. */
+export async function resolvePiModelConfig(
+  options: PiResourceLoaderOptions & {
+    modelId?: string;
+    apiKey?: string;
+  },
+): Promise<PiResolvedModel> {
+  const resources = await loadPiResources(options);
+  return resolvePiModelConfigFromResources(options, resources);
+}
+
+function resolvePiModelConfigFromResources(
+  options: PiResourceLoaderOptions & {
+    modelId?: string;
+    apiKey?: string;
+  },
+  resources: PiResources,
+): PiResolvedModel {
   const env = options.env ?? process.env;
-  const roots = piConfigRoots(options.cwd, env, options.home ?? homedir());
-  const settings = await readPiSettings(roots);
-  const auth = await readPiAuth(roots);
+  const settings = resources.settings;
+  const auth = resources.auth;
   const selection = resolvePiModelSelection(options.modelId, settings);
   const model = getModel(
     selection.provider as never,
@@ -125,7 +122,8 @@ export class PiConductorAgent implements ConductorAgent {
     options: ConductorAgentCreateOptions,
   ): Promise<PiConductorAgent> {
     const agentId = randomUUID();
-    const resolved = await resolvePiModelConfig(options);
+    const resources = await loadPiResources(options);
+    const resolved = resolvePiModelConfigFromResources(options, resources);
     const session = await PiConductorSession.create(options.cwd, agentId);
     const mcpBridge = await createPiMcpBridge(options.mcpServers, {
       cwd: options.cwd,
@@ -138,6 +136,7 @@ export class PiConductorAgent implements ConductorAgent {
           resolved,
           session.messages,
           mcpBridge,
+          resources,
         ),
         session,
         mcpBridge,
@@ -155,7 +154,8 @@ export class PiConductorAgent implements ConductorAgent {
     agentId: string,
     options: ConductorAgentCreateOptions,
   ): Promise<PiConductorAgent> {
-    const resolved = await resolvePiModelConfig(options);
+    const resources = await loadPiResources(options);
+    const resolved = resolvePiModelConfigFromResources(options, resources);
     const session = await PiConductorSession.resume(options.cwd, agentId);
     const mcpBridge = await createPiMcpBridge(options.mcpServers, {
       cwd: options.cwd,
@@ -168,6 +168,7 @@ export class PiConductorAgent implements ConductorAgent {
           resolved,
           session.messages,
           mcpBridge,
+          resources,
         ),
         session,
         mcpBridge,
@@ -332,11 +333,13 @@ function createPiAgent(
   resolved: PiResolvedModel,
   messages: readonly AgentMessage[],
   mcpBridge: PiMcpBridge | undefined,
+  resources: PiResources,
 ): Agent {
-  const tools = [
-    ...(options.customTools ? toPiAgentTools(options.customTools) : []),
-    ...(mcpBridge?.tools ?? []),
-  ];
+  const tools = uniquePiTools(
+    options.customTools ? toPiAgentTools(options.customTools) : [],
+    mcpBridge?.tools ?? [],
+    resources.extensionTools,
+  );
 
   return new Agent({
     initialState: {
@@ -355,60 +358,16 @@ function createPiAgent(
   });
 }
 
-function piConfigRoots(
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-  home: string,
-): string[] {
-  const userRoots = [
-    join(home, '.pi', 'agent'),
-    join(home, '.ensemble', 'pi'),
-    ...(env.PI_CODING_AGENT_DIR ? [env.PI_CODING_AGENT_DIR] : []),
-  ];
-  const projectRoots = [
-    join(cwd, '.pi'),
-    join(cwd, '.ensemble', 'pi'),
-  ];
-  return [...new Set([...userRoots, ...projectRoots])];
-}
-
-async function readPiSettings(roots: string[]): Promise<PiSettingsFile> {
-  let settings: PiSettingsFile = {};
-  for (const root of roots) {
-    const value = await readOptionalJson(join(root, 'settings.json'));
-    if (value) {
-      settings = { ...settings, ...value };
+function uniquePiTools(...groups: AgentTool[][]): AgentTool[] {
+  const tools = new Map<string, AgentTool>();
+  for (const group of groups) {
+    for (const tool of group) {
+      if (!tools.has(tool.name)) {
+        tools.set(tool.name, tool);
+      }
     }
   }
-  return settings;
-}
-
-async function readPiAuth(roots: string[]): Promise<PiAuthFile> {
-  let auth: PiAuthFile = {};
-  for (const root of roots) {
-    const value = await readOptionalJson(join(root, 'auth.json'));
-    if (value) {
-      auth = { ...auth, ...value };
-    }
-  }
-  return auth;
-}
-
-async function readOptionalJson(path: string): Promise<Record<string, unknown> | undefined> {
-  try {
-    const source = await readFile(path, 'utf8');
-    const value: unknown = JSON.parse(source);
-    if (!isRecord(value)) {
-      throw new Error(`Expected a JSON object in ${path}.`);
-    }
-    return value;
-  } catch (error) {
-    if (isFileNotFound(error)) return undefined;
-    if (error instanceof SyntaxError) {
-      throw new Error(`Invalid JSON in Pi configuration file ${path}.`);
-    }
-    throw error;
-  }
+  return [...tools.values()];
 }
 
 function resolvePiModelSelection(
@@ -548,13 +507,6 @@ function toConductorTokenUsage(usage: AssistantMessage['usage']): ConductorToken
 
 function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isFileNotFound(error: unknown): boolean {
-  return (
-    isRecord(error) &&
-    error.code === 'ENOENT'
-  );
 }
 
 function errorMessage(error: unknown): string {

@@ -112,8 +112,9 @@ interface ConnectedServer {
  * snapshot. This is not a Pi ExtensionAPI extension.
  *
  * The bridge is deliberately in-memory: it does not write `.pi/mcp.json` or
- * mutate Pi settings. This keeps the ADR 0021 resolution result as the only
- * configuration source until the full Pi ResourceLoader work in #358.
+ * mutate Pi settings. The Pi resource loader resolves user/project Pi
+ * resources separately; this bridge remains the harness-owned connection for
+ * the already-resolved ensemble MCP map.
  */
 export async function createPiMcpBridge(
   mcpServers: McpServerConfigMap | undefined,

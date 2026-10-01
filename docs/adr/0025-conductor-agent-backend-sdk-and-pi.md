@@ -96,7 +96,7 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 
 - conductor に **二系統**（SDK + Pi）のテスト・ドキュメント・障害切り分けが増える。
 - SDK と Pi で **初回ターン・system の扱いが異なる**（利用者向けに README / ADR で明示）。
-- MCP は Pi 側がブリッジ依存となり、未配線時は機能差が出る。
+- MCP は Pi 側が core 内 bridge に依存し、Cursor SDK と対応 transport / 認証の差が残る。
 - 認証がファイル分散のままでは、backend ごとに設定場所を理解する必要がある（#356 まで）。
 
 ### フォロー（実装 Issue）
@@ -121,3 +121,4 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 | 2026-09-25 | §5 Pi カスタマイズ（`.ensemble/pi`、標準 config、既定 MCP + harness ツール） |
 | 2026-09-29 | `ensemble auth` は Cursor SDK 向け、Pi は `settings.json` / `auth.json` を使う認証境界を明記 |
 | 2026-09-29 | #354 の Pi MCP bridge を Pi ExtensionAPI extension ではなく core 内 in-process thin bridge として具体化 |
+| 2026-10-01 | #358 の実装で user/project resource root と extension discovery を追加。`SYSTEM.md` / `APPEND_SYSTEM.md` は conductor では無視する既定案を確定 |
