@@ -124,6 +124,8 @@ export interface PiResources {
   auth: PiAuthFile;
   /** Unmerged layers, in user → project order, for provider-level precedence. */
   authLayers: PiAuthFile[];
+  /** Unmerged model layers, in user → project order, for provider-level precedence. */
+  modelsLayers: PiModelsFile[];
   models: PiModelsFile;
   extensionTools: AgentTool[];
   extensionPaths: string[];
@@ -233,6 +235,7 @@ export async function loadPiResources(
     settings,
     auth,
     authLayers: layers.map((layer) => layer.auth),
+    modelsLayers: layers.map((layer) => layer.models),
     models: mergeModels(layers.map((layer) => layer.models)),
     extensionTools: await loadExtensionTools(extensionPaths, options.cwd),
     extensionPaths,

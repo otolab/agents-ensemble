@@ -55,6 +55,7 @@ export interface PiResolvedModel {
   provider: string;
   modelId: string;
   model: Model<any>;
+  usesModelRegistry?: boolean;
   apiKey?: string;
 }
 
@@ -82,6 +83,21 @@ async function resolvePiModelConfigFromResources(
   const settings = resources.settings;
   const selection = resolvePiModelSelection(options.modelId, settings, resources.models);
   const providerConfig = resources.models.providers[selection.provider];
+  const projectProviderConfig = resources.modelsLayers.at(-1)?.providers[selection.provider];
+  const projectDefinesModel = projectProviderConfig?.models?.some(
+    (candidate) => candidate.id === selection.modelId,
+  );
+  const registryModel = projectDefinesModel
+    ? undefined
+    : authContext.modelRegistry.find(selection.provider, selection.modelId);
+  const apiKey = await resolvePiConductorApiKey({
+    authStorage: authContext.authStorage,
+    resources,
+    provider: selection.provider,
+    explicitApiKey: options.apiKey,
+    env,
+  });
+
   const builtInModel = getModel(
     selection.provider as never,
     selection.modelId as never,
@@ -90,7 +106,8 @@ async function resolvePiModelConfigFromResources(
     selection.provider,
     selection.modelId,
     providerConfig,
-    builtInModel,
+    registryModel ?? builtInModel,
+    registryModel,
   );
 
   if (!model) {
@@ -100,18 +117,11 @@ async function resolvePiModelConfigFromResources(
     );
   }
 
-  const apiKey = await resolvePiConductorApiKey({
-    authStorage: authContext.authStorage,
-    resources,
-    provider: selection.provider,
-    explicitApiKey: options.apiKey,
-    env,
-  });
-
   return {
     provider: selection.provider,
     modelId: selection.modelId,
     model: applyPiProviderRequestConfig(model, providerConfig, apiKey),
+    ...(registryModel ? { usesModelRegistry: true } : {}),
     ...(apiKey !== undefined ? { apiKey } : {}),
   };
 }
@@ -159,6 +169,7 @@ export class PiConductorAgent implements ConductorAgent {
           mcpBridge,
           resources,
           authContext.authStorage,
+          authContext.modelRegistry,
         ),
         session,
         mcpBridge,
@@ -194,6 +205,7 @@ export class PiConductorAgent implements ConductorAgent {
           mcpBridge,
           resources,
           authContext.authStorage,
+          authContext.modelRegistry,
         ),
         session,
         mcpBridge,
@@ -361,6 +373,7 @@ function createPiAgent(
   mcpBridge: PiMcpBridge | undefined,
   resources: PiResources,
   authStorage: ReturnType<typeof createPiConductorAuthContext>['authStorage'],
+  modelRegistry: ReturnType<typeof createPiConductorAuthContext>['modelRegistry'],
 ): Agent {
   const tools = uniquePiTools(
     options.customTools ? toPiAgentTools(options.customTools) : [],
@@ -378,14 +391,44 @@ function createPiAgent(
       messages: [...messages],
     },
     sessionId: agentId,
-    getApiKey: (provider) =>
-      resolvePiConductorApiKey({
+    getApiKey: async (provider) => {
+      const apiKey = await resolvePiConductorApiKey({
         authStorage,
         resources,
         provider,
         explicitApiKey:
           provider === resolved.provider ? options.apiKey : undefined,
-      }),
+      });
+      if (!resolved.usesModelRegistry || provider !== resolved.provider) {
+        return apiKey;
+      }
+
+      let registryModel = modelRegistry.find(provider, resolved.modelId);
+      if (!registryModel) return apiKey;
+
+      const requestAuth = await modelRegistry.getApiKeyAndHeaders(registryModel);
+      const projectProviderConfig = resources.modelsLayers.at(-1)?.providers[provider];
+      const headers = mergePiHeaders(
+        resolved.model.headers,
+        registryModel.headers,
+        requestAuth.ok ? requestAuth.headers : undefined,
+        projectProviderConfig?.headers,
+      );
+      const requestModel = {
+        ...resolved.model,
+        ...(projectProviderConfig?.baseUrl
+          ? { baseUrl: projectProviderConfig.baseUrl }
+          : registryModel.baseUrl
+            ? { baseUrl: registryModel.baseUrl }
+            : {}),
+        ...(registryModel.api ? { api: registryModel.api } : {}),
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      };
+      Object.assign(resolved.model, requestModel);
+
+      const registryApiKey = requestAuth.ok ? requestAuth.apiKey : undefined;
+      return apiKey ?? registryApiKey;
+    },
   });
 }
 
@@ -410,11 +453,12 @@ function resolvePiModel(
   modelId: string,
   providerConfig: PiProviderConfig | undefined,
   builtInModel: Model<any> | undefined,
+  registryModel?: Model<any>,
 ): Model<any> | undefined {
   const definition = providerConfig?.models?.find((candidate) => candidate.id === modelId);
-  let model = definition && providerConfig
+  let model = registryModel ?? (definition && providerConfig
     ? createPiModel(provider, providerConfig, definition)
-    : builtInModel;
+    : builtInModel);
   if (!model) return undefined;
 
   const override = providerConfig?.modelOverrides?.[modelId];
