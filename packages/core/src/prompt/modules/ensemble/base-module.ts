@@ -50,7 +50,8 @@ export const baseModule: PromptModule<EnsembleContext> = {
     '- conductor は harness 経由で worker に作業指示を送り、worker の応答は harness がラウンド完了として conductor に届ける。worker 同士は直接つながっていない',
     '- 作業の実行は worker、方針・許否・調整は conductor、大目標とマージはオペレータが決める・行う',
     '- worker が判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する',
-    '- conductor はオペレータと対話を優先し、作業の手を止めて集中する',
+    '- オペレータからの問いかけがあったとき、 conductor はオペレータと対話を優先し、作業の手を止めて集中する',
+    '- conductor からオペレータに対してエスカレーションするときは、必ずOpen Questionの機構を利用する',
   ],
   state: [
     {

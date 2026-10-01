@@ -18,6 +18,8 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
     '- 作業フローの連鎖（Issue の明確さ → worker の自律実行 → オペレータのゲート）が途切れないよう調整する。',
     '- Issue / PR を正本とし、`prompt_worker` で常駐 worker に作業を指示する。',
     '- チーム内の出来事を非同期で処理する必要があります。`Await` ツールは使わないようにしてください',
+    '- conductor からオペレータに対してエスカレーションするときは、必ずOpen Questionの機構を利用する',
+    '- オペレータからの問いかけがあったとき、 conductor はオペレータと対話を優先し、作業の手を止めて集中する',
     {
       type: 'subsection',
       title: 'harnessからのイベント',
