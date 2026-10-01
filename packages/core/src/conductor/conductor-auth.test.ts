@@ -33,6 +33,13 @@ describe('isConductorAuthError', () => {
   it('returns false for unrelated errors', () => {
     expect(isConductorAuthError('Model Blocked')).toBe(false);
   });
+
+  it.each([
+    'No API key for provider: anthropic',
+    '401 Unauthorized',
+  ])('detects Pi provider auth failure: %s', (message) => {
+    expect(isConductorAuthError(message)).toBe(true);
+  });
 });
 
 describe('isBareConductorSendAuthError', () => {

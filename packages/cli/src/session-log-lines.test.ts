@@ -127,6 +127,23 @@ describe('session-log-lines', () => {
     expect(line).not.toContain('Cursor');
   });
 
+  it.each(['No API key for provider: anthropic', '401 Unauthorized'])(
+    'classifies Pi auth failures as authentication errors: %s',
+    (message) => {
+      const line = formatHarnessLogBody({
+        type: 'conductor.send',
+        sendCount: 51,
+        runId: 'run-51',
+        status: 'error',
+        error: { message },
+        workerDispatches: 0,
+        workerFailures: 0,
+      });
+
+      expect(line).toContain('障害種別=conductor の認証障害');
+    },
+  );
+
   it('renders a harness diagnosis when a conductor error has no message', () => {
     expect(
       formatHarnessLogBody({

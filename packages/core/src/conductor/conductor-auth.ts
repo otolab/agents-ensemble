@@ -62,7 +62,7 @@ export function resolveConductorAuthBackend(
 
 /** RunResult.error 等の message が conductor 認証失敗か判定する。 */
 export function isConductorAuthError(message: string): boolean {
-  return /authentication error|not logged in|invalid api key|unauthenticated|try logging out/i.test(
+  return /authentication error|not logged in|invalid api key|no api key(?: for provider)?\s*[: ]|unauthenticated|unauthorized|\b(?:http\s*)?401\b|try logging out/i.test(
     message,
   );
 }

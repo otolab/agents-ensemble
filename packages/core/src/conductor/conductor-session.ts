@@ -68,6 +68,7 @@ import {
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
 } from './conductor-auth.js';
+import { resolvePiConductorProvider } from './conductor-pi-auth.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
@@ -667,6 +668,15 @@ export async function runConductorSession(
     customTools: conductorToolRegistry.toRecord(),
   };
 
+  const conductorProvider =
+    conductorBackend === 'pi'
+      ? (await resolvePiConductorProvider({
+          cwd: conductorOptions.cwd,
+          modelId: conductorOptions.modelId,
+          pi: conductorOptions.pi,
+        })) || undefined
+      : undefined;
+
   conductorAgent = options.resumeAgentId
     ? await conductorAgentFactory.resume(options.resumeAgentId, conductorOptions)
     : await conductorAgentFactory.create(conductorOptions);
@@ -992,9 +1002,7 @@ export async function runConductorSession(
               ? {
                   backend: 'pi',
                   pi: { agentDir: conductorOptions.pi?.agentDir },
-                  provider: options.modelId?.includes('/')
-                    ? options.modelId.split('/', 1)[0]
-                    : undefined,
+                  provider: conductorProvider,
                 }
               : { backend: 'cursor' },
           ),
