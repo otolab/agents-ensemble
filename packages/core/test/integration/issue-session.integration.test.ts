@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as compileModule from '../../src/prompt/compile-system-prompt.js';
-import { hasConductorAuth } from '../../src/conductor/conductor-auth.js';
 import { runIssueSession } from '../../src/conductor/issue-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import type { Profile } from '../../src/profile/types.js';
@@ -13,9 +12,13 @@ import {
   TEST_ISSUE,
   TEST_WORKTREE,
 } from './helpers/in-process-acp-bridge.js';
+import { cursorSdkIntegrationSkipReason } from './helpers/cursor-sdk-integration-home.js';
 import { getConductorModelId } from './test-config.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
+const SUITE_NAME = cursorSdkIntegrationSkipReason
+  ? `runIssueSession integration (skipped: ${cursorSdkIntegrationSkipReason})`
+  : 'runIssueSession integration';
 
 const SMOKE_PROFILE: Profile = {
   agents: {
@@ -35,7 +38,7 @@ const SMOKE_PROFILE: Profile = {
 const SMOKE_BRIEFING =
   'integration smoke test。worker の pong 確認後、応答に conductor-ok を含めて終了すること。';
 
-describe.skipIf(!hasConductorAuth())('runIssueSession integration', () => {
+describe.skipIf(cursorSdkIntegrationSkipReason !== undefined)(SUITE_NAME, () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });

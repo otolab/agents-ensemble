@@ -26,6 +26,10 @@ import type {
 } from './conductor-agent.js';
 import { toPiAgentTools } from './conductor-tool-pi-adapter.js';
 import { PiConductorSession } from './pi-conductor-session.js';
+import {
+  createPiMcpBridge,
+  type PiMcpBridge,
+} from './pi-mcp-bridge.js';
 
 interface PiSettingsFile {
   defaultProvider?: unknown;
@@ -109,6 +113,7 @@ export class PiConductorAgent implements ConductorAgent {
   private constructor(
     private readonly agent: Agent,
     private readonly session: PiConductorSession,
+    private readonly mcpBridge: PiMcpBridge | undefined,
     public readonly agentId: string,
     private readonly modelId: string,
     private readonly onStreamText?: (text: string) => void,
@@ -122,13 +127,28 @@ export class PiConductorAgent implements ConductorAgent {
     const agentId = randomUUID();
     const resolved = await resolvePiModelConfig(options);
     const session = await PiConductorSession.create(options.cwd, agentId);
-    return new PiConductorAgent(
-      createPiAgent(agentId, options, resolved, session.messages),
-      session,
-      agentId,
-      resolved.modelId,
-      options.onStreamText,
-    );
+    const mcpBridge = await createPiMcpBridge(options.mcpServers, {
+      cwd: options.cwd,
+    });
+    try {
+      return new PiConductorAgent(
+        createPiAgent(
+          agentId,
+          options,
+          resolved,
+          session.messages,
+          mcpBridge,
+        ),
+        session,
+        mcpBridge,
+        agentId,
+        resolved.modelId,
+        options.onStreamText,
+      );
+    } catch (error) {
+      await mcpBridge?.close();
+      throw error;
+    }
   }
 
   static async resume(
@@ -137,13 +157,28 @@ export class PiConductorAgent implements ConductorAgent {
   ): Promise<PiConductorAgent> {
     const resolved = await resolvePiModelConfig(options);
     const session = await PiConductorSession.resume(options.cwd, agentId);
-    return new PiConductorAgent(
-      createPiAgent(agentId, options, resolved, session.messages),
-      session,
-      agentId,
-      resolved.modelId,
-      options.onStreamText,
-    );
+    const mcpBridge = await createPiMcpBridge(options.mcpServers, {
+      cwd: options.cwd,
+    });
+    try {
+      return new PiConductorAgent(
+        createPiAgent(
+          agentId,
+          options,
+          resolved,
+          session.messages,
+          mcpBridge,
+        ),
+        session,
+        mcpBridge,
+        agentId,
+        resolved.modelId,
+        options.onStreamText,
+      );
+    } catch (error) {
+      await mcpBridge?.close();
+      throw error;
+    }
   }
 
   async send(
@@ -235,7 +270,11 @@ export class PiConductorAgent implements ConductorAgent {
         await this.agent.waitForIdle();
         await this.session.appendNewMessages(this.agent.state.messages);
       } finally {
-        this.unsubscribe();
+        try {
+          this.unsubscribe();
+        } finally {
+          await this.mcpBridge?.close();
+        }
       }
     })();
     return this.closePromise;
@@ -292,10 +331,12 @@ function createPiAgent(
   options: ConductorAgentCreateOptions,
   resolved: PiResolvedModel,
   messages: readonly AgentMessage[],
+  mcpBridge: PiMcpBridge | undefined,
 ): Agent {
-  const tools = options.customTools
-    ? toPiAgentTools(options.customTools)
-    : [];
+  const tools = [
+    ...(options.customTools ? toPiAgentTools(options.customTools) : []),
+    ...(mcpBridge?.tools ?? []),
+  ];
 
   return new Agent({
     initialState: {

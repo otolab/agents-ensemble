@@ -153,7 +153,11 @@ MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単
 }
 ```
 
-この MVP では Cursor SDK backend に解決済み設定を `Agent.create` / `Agent.resume` の inline MCP として渡す。`Agent.resume` と認証エラーからの in-process reconnect の両方で同じ設定を再注入する。**Pi backend の現行実装は解決済み `mcpServers` を Pi Agent に渡さず、Pi コア単体では MCP を利用できない。** OPEN の [#354](https://github.com/otolab/agents-ensemble/issues/354) で、同じ解決結果を harness から MCP ブリッジ extension/plugin へ常時配線することが目標です（設計は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)）。設定値の `${env:...}` や `${workspaceFolder}` などの展開は SDK に任せる。`.cursor/mcp.json` へのコピー・symlink は行わず、ACP worker にはこの設定を渡さない。
+解決済み設定は conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では harness 内蔵 MCP bridge が MCP client と Pi `AgentTool` に変換して使う。この bridge は Pi の ExtensionAPI extension をロードするものではなく、`@agents-ensemble/core` 内で `@modelcontextprotocol/sdk` client を接続する in-process thin bridge である。どちらも `resume` と認証・transport エラーからの in-process reconnect で同じ設定を再注入する。Pi は MCP 設定がある場合、session 開始前に全サーバーへ接続して tools を発見するため、接続または bridge の読み込みに失敗したら起動を fail する。
+
+設定値の `${env:...}` や `${workspaceFolder}` などの展開は Cursor SDK では SDK に任せ、Pi bridge では起動時の process environment と conductor cwd を使って同じ参照を展開する。Pi bridge は `stdio` / `http`（Streamable HTTP）/ `sse`、`env`、`cwd`、`headers` を扱う。Cursor SDK が提供する OAuth 対話（`auth` 定義）は Pi bridge の制限により未対応で、該当定義は明確なエラーにする。`.cursor/mcp.json` や `.pi/mcp.json` へのコピー・symlink、`settings.json` の書き換えは行わず、ACP worker にはこの設定を渡さない。Pi MCP tools は `mcp_<server>_<tool>` という衝突回避済みの名前で表示され、resources/prompts の専用 API は今回の bridge の対象外とする。Pi MCP tool の `callTool` 例外または MCP `isError` は成功結果に変換せず、`AgentTool.execute` の throw として model loop に伝える。
+
+Pi bridge は `@modelcontextprotocol/sdk@1.30.0` を core に同梱する。依存が欠落した環境で MCP 設定を持つ Pi backend を起動した場合は、インストールすべき固定バージョンを含むエラーで停止する。MCP 未設定時は bridge をロードせず、両 backend とも従来どおり MCP なしで起動する。
 
 JSON が不正、または `mcpServers` / サーバー定義の形式が不正な場合は、そのファイルを `[mcp]` 警告とともにスキップする。もう一方の層が有効ならそちらは引き続き読み込み、両方をスキップした場合は MCP なしで起動する。MCP のホットリロードは行わないため、変更後は新しいセッションを開始する。
 

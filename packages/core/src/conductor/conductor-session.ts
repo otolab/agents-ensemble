@@ -4,7 +4,7 @@ import {
 } from '../config/load-ensemble-config.js';
 import type { ConductorBackend, EnsembleConfig } from '../config/types.js';
 import {
-  resolveMcpServersForSdk,
+  resolveMcpServers,
   type LoadMcpConfigOptions,
 } from '../mcp/load-mcp-config.js';
 import { createAnswerOpenQuestionTool } from '../escalation/answer-open-question-tool.js';
@@ -645,7 +645,7 @@ export async function runConductorSession(
     .registerAll(dispatchHoldTools);
 
   const conductorCwd = options.conductorCwd ?? process.cwd();
-  const mcpServers = await resolveMcpServersForSdk(
+  const mcpServers = await resolveMcpServers(
     options.repoRoot,
     options.mcpConfigOptions,
   );

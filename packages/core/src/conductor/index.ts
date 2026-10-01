@@ -22,6 +22,16 @@ export {
 } from './pi-conductor-agent.js';
 export type { PiResolvedModel } from './pi-conductor-agent.js';
 export {
+  createPiMcpBridge,
+  PI_MCP_SDK_VERSION,
+} from './pi-mcp-bridge.js';
+export type {
+  PiMcpBridge,
+  PiMcpBridgeDependencies,
+  PiMcpBridgeOptions,
+  PiMcpBridgeSdk,
+} from './pi-mcp-bridge.js';
+export {
   ConductorToolRegistry,
 } from './conductor-tool.js';
 export type {

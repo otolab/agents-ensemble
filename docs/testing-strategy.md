@@ -7,7 +7,7 @@
 ## 原則
 
 1. **下位レイヤから積む** — transport / client の unittest を先に固め、integration → e2e の順で厚くする
-2. **CI は unittest 必須** — integration / e2e は設定・環境が揃う場合のみ（未設定なら `skip`）
+2. **CI は unittest と認証不要の integration smoke を必須** — PR / main の CI では `session-resume.integration.test.ts` と `pi-conductor.integration.test.ts` を実行する。実 Cursor SDK integration と e2e は既定 CI に含めず、専用環境で設定・認証が不足する場合は `skip` とする
 3. **外部依存は境界で切る** — `agent acp` / GitHub API / `@cursor/sdk` は unittest ではモック or Fake
 4. **レベルごとに責務を分ける** — 下表の定義に従い、同じ振る舞いを複数レベルで重複検証しない
 
@@ -62,10 +62,10 @@ pnpm test:run          # 単発（CI デフォルト）
 
 ### モック方針
 
-| テストレベル | `agent acp` プロセス | JSON-RPC |
-|------------|---------------------|----------|
+| テストレベル | `agent acp` / SDK | transport / 通信 |
+|------------|------------------|----------------|
 | unittest | 使わない | Fake / モック transport |
-| integration | 実プロセス | 実 stdio |
+| integration | fake / in-process smoke、実 `agent acp`、または実 Cursor SDK | Fake transport、実 stdio、または SDK 接続（シナリオ別） |
 | e2e | 実プロセス（CLI 経由） | 実 stdio |
 
 **モックすべきもの（unittest）**: 子プロセス、`agent` バイナリ、ネットワーク、GitHub API クライアント、SDK Agent
@@ -76,7 +76,7 @@ pnpm test:run          # 単発（CI デフォルト）
 
 ## 2. 統合テスト
 
-**定義**: **複数モジュールの接続**、または **外部プロセス（`agent acp`）との実通信**を検証。ユーザー入口（CLI）は使わない。
+**定義**: **複数モジュールの接続**、fake / in-process transport の連携、または **外部プロセス（`agent acp`）・実 Cursor SDK との実通信**を検証。fake smoke は認証不要で CI の既定対象、実 ACP / SDK integration はローカル実行時に前提不足なら skip する。ユーザー入口（CLI）は使わない。
 
 ### 対象
 
@@ -101,12 +101,16 @@ packages/core/test/integration/test-acp.yaml.example
 ### 実行
 
 ```bash
-pnpm test:integration
+pnpm test:integration  # fake smoke は設定不要、外部依存は前提がある場合に実行
 ```
+
+`pnpm test:integration` は fake / in-process smoke と、前提が揃った場合の実 ACP / 実 Cursor SDK integration をまとめて実行する。
 
 ### スキップ条件
 
-`test-acp.yaml`（gitignore）が無い、または `agent` が PATH に無い場合は `describe.skipIf` でスキップ。
+- `session-resume.integration.test.ts` と `pi-conductor.integration.test.ts` は fake / in-process smoke であり、`test-acp.yaml`、`agent` CLI、Cursor 認証を必要とせず、CI でも実行する。
+- 実 `agent acp` を起動する integration は `test-acp.yaml` と `agent` が必要で、どちらかがない場合は対象 suite を `describe.skipIf` でスキップする。
+- 実 Cursor SDK を使う `conductor-agent.integration.test.ts` と `issue-session.integration.test.ts` は Cursor 認証とネットワークを必要とする。認証がない、または隔離 HOME を作成・書き込みできない場合は、理由付きでスキップする。
 
 ### vitest 設定方針
 
@@ -161,7 +165,7 @@ pnpm test:e2e
 
 ```bash
 pnpm test:run           # unittest（CI 必須）
-pnpm test:integration   # integration（設定時のみ実行）
+pnpm test:integration   # fake smoke は設定不要、外部依存は前提がある場合に実行
 pnpm test:e2e           # e2e（設定時のみ実行）
 pnpm test:all           # 全レベル（ローカル用）
 ```
@@ -170,8 +174,8 @@ pnpm test:all           # 全レベル（ローカル用）
 
 | トリガー | unittest | integration | e2e |
 |---------|----------|-------------|-----|
-| PR | 必須 | スキップ（または nightly） | スキップ |
-| main | 必須 | 任意（secrets + label） | スキップ |
+| PR | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | スキップ |
+| main | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | スキップ |
 | 手動 / nightly | 必須 | 推奨 | 任意 |
 | リリース前 | 必須 | 必須（設定ある場合） | 推奨 |
 
