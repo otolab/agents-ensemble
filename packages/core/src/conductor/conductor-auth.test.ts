@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const { mockLogout } = vi.hoisted(() => ({
@@ -15,6 +18,7 @@ vi.mock('@cursor/sdk', () => ({
 
 import {
   formatConductorAuthRecoveryHint,
+  hasConductorAuth,
   isBareConductorSendAuthError,
   isConductorAuthError,
   isConductorSendAuthError,
@@ -115,6 +119,63 @@ describe('formatConductorAuthRecoveryHint', () => {
     expect(hint).toContain('/tmp/ensemble-pi/auth.json');
     expect(hint).toContain('--resume agent-1');
     expect(hint).not.toContain('ensemble auth logout');
+  });
+
+  it.each([
+    ['anthropic', 'ANTHROPIC_OAUTH_TOKEN'],
+    ['anthropic', 'ANTHROPIC_API_KEY'],
+    ['openai', 'OPENAI_API_KEY'],
+    ['github-copilot', 'COPILOT_GITHUB_TOKEN'],
+  ])('includes the Pi env mapping for %s', (provider, envKey) => {
+    const hint = formatConductorAuthRecoveryHint('agent-1', {
+      backend: 'pi',
+      provider,
+    });
+
+    expect(hint).toContain(envKey);
+    expect(hint).not.toContain('provider の環境変数');
+  });
+});
+
+describe('hasConductorAuth', () => {
+  it('checks Pi readiness against the configured default provider and model', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'conductor-auth-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'conductor-auth-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'claude-test' }),
+    );
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ openai: { type: 'api_key', key: 'openai-key' } }),
+    );
+
+    const options = {
+      backend: 'pi' as const,
+      pi: { cwd, pi: { agentDir, projectDir } },
+    };
+    expect(hasConductorAuth(options)).toBe(false);
+
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({
+        anthropic: { type: 'api_key', key: 'anthropic-key' },
+        openai: { type: 'api_key', key: 'openai-key' },
+      }),
+    );
+    expect(hasConductorAuth(options)).toBe(true);
+
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'openai/gpt-test' }),
+    );
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ openai: { type: 'api_key', key: 'openai-key' } }),
+    );
+    expect(hasConductorAuth(options)).toBe(true);
   });
 });
 

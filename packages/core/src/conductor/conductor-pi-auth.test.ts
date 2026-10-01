@@ -231,6 +231,40 @@ describe('Pi conductor authentication', () => {
     );
   });
 
+  it('checks readiness only for the provider selected by default settings', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'claude-test' }),
+    );
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ openai: { type: 'api_key', key: 'openai-key' } }),
+    );
+
+    const options = { cwd, pi: { agentDir, projectDir } };
+    expect(hasPiConductorAuth(options)).toBe(false);
+
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'anthropic-key' } }),
+    );
+    expect(hasPiConductorAuth(options)).toBe(true);
+
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'openai/gpt-test' }),
+    );
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ openai: { type: 'api_key', key: 'openai-key' } }),
+    );
+    expect(hasPiConductorAuth(options)).toBe(true);
+  });
+
   it('lists authenticated custom project models and gives a Pi-specific empty hint', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
     const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));

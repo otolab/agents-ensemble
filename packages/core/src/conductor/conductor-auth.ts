@@ -7,6 +7,7 @@ import {
   hasPiConductorAuth,
   loginPiConductor,
   logoutPiConductor,
+  formatPiProviderEnvHint,
   type PiConductorAuthOptions,
   type PiConductorAuthStatus,
   type PiConductorLoginResult,
@@ -112,7 +113,7 @@ export function formatConductorAuthRecoveryHint(
     return (
       `[auth] Pi 認証エラー（provider=${provider}）。` +
       `ensemble auth login --provider ${provider} を実行するか、${agentDir}/auth.json または ` +
-      'provider の環境変数を確認してください。' +
+      `環境変数 ${formatPiProviderEnvHint(provider)} を確認してください。` +
       `ensemble issue ... ${resume} で再試行できます。`
     );
   }

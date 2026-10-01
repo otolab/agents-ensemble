@@ -6,6 +6,7 @@ import {
   type AuthStatus,
 } from '@earendil-works/pi-coding-agent';
 import {
+  findEnvKeys,
   getEnvApiKey,
   type Model,
   type OAuthLoginCallbacks,
@@ -14,6 +15,7 @@ import {
   loadPiResources,
   resolvePiResourceRoots,
   type PiModelDefinition,
+  type PiModelsFile,
   type PiProviderConfig,
   type PiResourceLoaderOptions,
   type PiResources,
@@ -125,7 +127,7 @@ export async function loginPiConductor(
   const apiKey = options.apiKey?.trim();
   if (!apiKey) {
     throw new Error(
-      `Pi provider "${provider}" requires an API key. Pass a secret API-key prompt value or set ${formatProviderEnvHint(provider)}.`,
+      `Pi provider "${provider}" requires an API key. Pass a secret API-key prompt value or set ${formatPiProviderEnvHint(provider)}.`,
     );
   }
   context.authStorage.set(provider, { type: 'api_key', key: apiKey });
@@ -293,56 +295,182 @@ export function hasPiConductorAuth(options: PiConductorAuthOptions): boolean {
   const env = options.env ?? process.env;
   const roots = resolvePiResourceRoots(options);
   const projectAuth = readPiJsonSync(join(roots.projectDir, 'auth.json'));
-  const provider =
-    normalizeProvider(options.provider) ?? providerFromModelId(options.modelId);
+  const settings = readPiSettingsSync(roots);
+  const models = readPiModelsSync(roots);
+  const selection = resolvePiConductorSelectionSync(options, settings, models, context);
 
-  if (provider) {
-    const projectEntry = projectAuth?.[provider];
-    if (isPiOAuthAuthEntry(projectEntry)) return false;
-    return (
-      context.authStorage.hasAuth(provider) ||
-      resolvePiAuthEntry(projectEntry, env) !== undefined ||
-      resolvePiSettingsApiKey(
-        (readPiJsonSync(join(roots.projectDir, 'settings.json')) as PiSettingsFile | undefined) ??
-          {},
-        provider,
-        env,
-      ) !== undefined ||
-      resolvePiModelsApiKey(
-        readPiJsonSync(join(roots.projectDir, 'models.json'))?.providers?.[provider] as
-          | PiProviderConfig
-          | undefined,
-        env,
-      ) !== undefined ||
-      getEnvApiKey(provider, toProviderEnv(env)) !== undefined
-    );
+  if (selection.provider) {
+    return hasPiProviderAuthSync({
+      provider: selection.provider,
+      context,
+      roots,
+      projectAuth,
+      settings,
+      models,
+      env,
+    });
   }
 
-  if (context.modelRegistry.getAvailable().length > 0) return true;
-  if (
-    Object.values(projectAuth ?? {}).some(
-      (entry) => resolvePiAuthEntry(entry, env) !== undefined,
-    )
-  ) {
-    return true;
-  }
-  const projectSettings =
-    (readPiJsonSync(join(roots.projectDir, 'settings.json')) as PiSettingsFile | undefined) ??
-    {};
-  if (
-    typeof projectSettings.apiKey === 'string' ||
-    (isRecord(projectSettings.apiKeys) &&
-      Object.values(projectSettings.apiKeys).some((entry) => typeof entry === 'string'))
-  ) {
-    return true;
-  }
-  const projectModels = readPiJsonSync(join(roots.projectDir, 'models.json'))?.providers;
-  return (
-    isRecord(projectModels) &&
-    Object.values(projectModels).some((config) =>
-      resolvePiModelsApiKey(config as PiProviderConfig, env) !== undefined,
-    )
+  // A configured model that cannot be mapped to one provider is not a
+  // usable conductor selection, even if another provider happens to have
+  // credentials.
+  if (selection.modelId) return false;
+
+  return hasAnyPiConductorAuthSync({
+    context,
+    roots,
+    projectAuth,
+    settings,
+    models,
+    env,
+  });
+}
+
+interface PiConductorSelection {
+  provider?: string;
+  modelId?: string;
+}
+
+interface PiConductorAuthSyncContext {
+  context: PiConductorAuthContext;
+  roots: ReturnType<typeof resolvePiResourceRoots>;
+  projectAuth: Record<string, any> | undefined;
+  settings: PiSettingsFile;
+  models: PiModelsFile;
+  env: NodeJS.ProcessEnv;
+}
+
+/**
+ * Mirror PiConductorAgent's synchronous provider/model selection for guards.
+ * The async agent receives the same merged settings and model layers.
+ */
+function resolvePiConductorSelectionSync(
+  options: PiConductorAuthOptions,
+  settings: PiSettingsFile,
+  models: PiModelsFile,
+  context: PiConductorAuthContext,
+): PiConductorSelection {
+  const requestedModel = normalizeModelId(options.modelId);
+  const configuredModel = normalizeModelId(
+    firstString(settings.defaultModel, settings.model, settings.modelId),
   );
+  const selectedModel = requestedModel ?? configuredModel;
+  let provider = normalizeProvider(options.provider);
+  let modelId = selectedModel;
+
+  if (selectedModel?.includes('/')) {
+    const separator = selectedModel.indexOf('/');
+    if (!provider) {
+      provider = normalizeProvider(selectedModel.slice(0, separator));
+    }
+    modelId = normalizeModelId(selectedModel.slice(separator + 1));
+  }
+
+  if (!provider) provider = normalizeProvider(settings.defaultProvider);
+
+  if (!provider && modelId) {
+    const matches = new Set<string>();
+    for (const model of context.modelRegistry.getAll()) {
+      if (model.id === modelId) matches.add(model.provider);
+    }
+    for (const [candidate, config] of Object.entries(models.providers)) {
+      if (config.models?.some((model) => model.id === modelId)) {
+        matches.add(candidate);
+      }
+    }
+    if (matches.size === 1) provider = [...matches][0];
+  }
+
+  return {
+    ...(provider ? { provider } : {}),
+    ...(modelId ? { modelId } : {}),
+  };
+}
+
+function hasPiProviderAuthSync(
+  options: PiConductorAuthSyncContext & { provider: string },
+): boolean {
+  const projectEntry = options.projectAuth?.[options.provider];
+  if (
+    options.roots.agentDir !== options.roots.projectDir &&
+    isPiOAuthAuthEntry(projectEntry)
+  ) {
+    return false;
+  }
+  if (resolvePiAuthEntry(projectEntry, options.env) !== undefined) return true;
+  if (options.context.authStorage.has(options.provider)) return true;
+
+  // Keep readiness aligned with ModelRegistry, including command-backed or
+  // otherwise registry-native user models, while the explicit checks below
+  // honor the injected test/runtime environment.
+  if (
+    options.context.modelRegistry
+      .getAvailable()
+      .some((model) => model.provider === options.provider)
+  ) {
+    return true;
+  }
+  if (
+    resolvePiSettingsApiKey(options.settings, options.provider, options.env) !== undefined
+  ) {
+    return true;
+  }
+  if (
+    resolvePiModelsApiKey(
+      options.models.providers[options.provider],
+      options.env,
+    ) !== undefined
+  ) {
+    return true;
+  }
+  return getEnvApiKey(options.provider, toProviderEnv(options.env)) !== undefined;
+}
+
+function hasAnyPiConductorAuthSync(options: PiConductorAuthSyncContext): boolean {
+  if (options.context.modelRegistry.getAvailable().length > 0) return true;
+
+  const providers = new Set<string>([
+    ...options.context.authStorage.list(),
+    ...options.context.modelRegistry.getAll().map((model) => model.provider),
+    ...Object.keys(options.models.providers),
+    ...Object.keys(options.projectAuth ?? {}),
+    ...options.context.authStorage.getOAuthProviders().map((provider) => provider.id),
+  ]);
+  for (const provider of providers) {
+    if (hasPiProviderAuthSync({ ...options, provider })) return true;
+  }
+
+  if (
+    typeof options.settings.apiKey === 'string' ||
+    (isRecord(options.settings.apiKeys) &&
+      Object.values(options.settings.apiKeys).some((entry) => typeof entry === 'string'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function readPiSettingsSync(
+  roots: ReturnType<typeof resolvePiResourceRoots>,
+): PiSettingsFile {
+  return mergePiRecords(
+    readPiJsonSync(join(roots.agentDir, 'settings.json')) ?? {},
+    readPiJsonSync(join(roots.projectDir, 'settings.json')) ?? {},
+  ) as PiSettingsFile;
+}
+
+function readPiModelsSync(
+  roots: ReturnType<typeof resolvePiResourceRoots>,
+): PiModelsFile {
+  const merged = mergePiRecords(
+    readPiJsonSync(join(roots.agentDir, 'models.json')) ?? {},
+    readPiJsonSync(join(roots.projectDir, 'models.json')) ?? {},
+  );
+  return {
+    providers: isRecord(merged.providers)
+      ? (merged.providers as Record<string, PiProviderConfig>)
+      : {},
+  };
 }
 
 function resolveConductorProviderOrThrow(
@@ -455,7 +583,7 @@ function getPiProviderAuthStatus(
       provider,
       configured: true,
       source: 'environment',
-      label: formatProviderEnvHint(provider),
+      label: formatPiProviderEnvHint(provider),
     };
   }
   return normalizePiAuthStatus(provider, registryStatus, false);
@@ -592,9 +720,31 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
-function formatProviderEnvHint(provider: string): string {
+/** Return the concrete environment variables recognised by Pi for a provider. */
+export function formatPiProviderEnvHint(provider: string): string {
+  // `findEnvKeys` normally reports only variables that are currently set. A
+  // truthy probe lets the SDK expose its existing provider mapping even for a
+  // missing credential, which is the case where this recovery hint is used.
+  const envKeys = findEnvKeys(provider, PI_ENV_HINT_PROBE);
+  if (envKeys) return envKeys.join(' / ');
+
+  if (provider === 'google-vertex') {
+    return 'GOOGLE_APPLICATION_CREDENTIALS / GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION';
+  }
+  if (provider === 'amazon-bedrock') {
+    return (
+      'AWS_PROFILE / AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY / ' +
+      'AWS_BEARER_TOKEN_BEDROCK'
+    );
+  }
+
   return `${provider.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`;
 }
+
+const PI_ENV_HINT_PROBE = new Proxy<Record<string, string>>(
+  {},
+  { get: (_target, property) => (typeof property === 'string' ? 'configured' : undefined) },
+);
 
 function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -607,4 +757,19 @@ function readPiJsonSync(path: string): Record<string, any> | undefined {
   } catch {
     return undefined;
   }
+}
+
+function mergePiRecords(
+  base: Record<string, any>,
+  override: Record<string, any>,
+): Record<string, any> {
+  const merged: Record<string, any> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const previous = merged[key];
+    merged[key] =
+      isRecord(previous) && isRecord(value)
+        ? mergePiRecords(previous, value)
+        : value;
+  }
+  return merged;
 }
