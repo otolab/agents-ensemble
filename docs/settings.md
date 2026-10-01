@@ -28,7 +28,7 @@ CLI > 環境変数 > project config > user config > コード default
 
 `profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
-`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`cursor` は Cursor SDK 経路、`pi` は Pi Agent Core 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、`~/.ensemble/pi` と `<repoRoot>/.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決します。skills は system prompt へ追加し、prompts は `/name args` で展開します。themes は headless conductor のため読み込み・project 同名解決のみ行い、TUI 表示には使いません。root は `conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は無視します。`ensemble auth login` は Cursor SDK 向けで、Pi の認証には使いません。`settings.json` の headless 対応キーはモデル選択、認証 fallback、resource path に限られ、`defaultThinkingLevel` / `thinkingBudgets` / `packages` / `enableSkillCommands` など未対応キーは警告なしで無視します（詳細は [config.md](config.md#settingsjson-の-headless-対応範囲)）。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
+`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`cursor` は Cursor SDK 経路、`pi` は Pi Agent Core 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、`~/.ensemble/pi` と `<repoRoot>/.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決します。skills は system prompt へ追加し、prompts は `/name args` で展開します。themes は headless conductor のため読み込み・project 同名解決のみ行い、TUI 表示には使いません。root は `conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は無視します。`ensemble auth login|logout|status` は backend に分岐し、Pi では provider 単位に `AuthStorage` を使います。API key は TTY の secret prompt から user 層へ保存し、OAuth は Pi の OAuth flow を stderr 対話で実行します（SSH でも URL / device code を利用できます）。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
 
 ```text
 Session sidecar conductorBackend mismatch: pi !== cursor
@@ -62,7 +62,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 |------|--------|
 | GitHub API | `GITHUB_TOKEN` > `GH_TOKEN` > （`allowGhAuthTokenFallback: true` 時のみ）`gh auth token` |
 | conductor (cursor) | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
-| conductor (pi) | Pi の `auth.json` / `settings.json`（`~/.ensemble/pi/` → `<repoRoot>/.ensemble/pi/`、`conductor.pi.*` で root 上書き） > provider 環境変数。`ensemble auth` は使わない |
+| conductor (pi) | project `auth.json` の読取優先 > user `AuthStorage`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > `settings.json` fallback > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存。project 層の明示的な OAuth credential は refresh できないため使わず、user 層の `AuthStorage` へログインする |
 | worker ACP（preset 依存） | preset ごとに README / ADR 0019 参照 |
 
 ## 一覧 — Phase 1（config.yaml）
@@ -114,7 +114,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 |------|----------|------------------------|
 | GitHub API token | `GITHUB_TOKEN` / `GH_TOKEN` | `github.auth.allowGhAuthTokenFallback` のみ |
 | conductor API key (cursor) | `CURSOR_API_KEY` | —（`ensemble auth login` は別経路） |
-| conductor API key (pi) | provider ごとの環境変数（Pi の env mapping） | Pi `auth.json` / `settings.json` にも設定可能 |
+| conductor API key (pi) | provider ごとの環境変数（Pi の env mapping） | `ensemble auth login --provider <id>`、Pi `auth.json` / `settings.json` にも設定可能 |
 
 ## 一覧 — 別ファイル
 
@@ -138,7 +138,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | チーム / 個人の恒久既定（モデル、worktree、monitor） | `~/.ensemble/config.yaml` または project `.ensemble/config.yaml` |
 | CI で 1 ジョブだけ上書き | 環境変数（`CONDUCTOR_MODEL_ID` 等） |
 | 1 回限りの実行 | CLI フラグ（初回メッセージは `ensemble issue <ref> [message...]`） |
-| token | Cursor: 環境変数 or `ensemble auth login`、Pi: Pi の `auth.json` / `settings.json`、GitHub: `gh auth login`（いずれも config に書かない） |
+| token | Cursor: 環境変数 or `ensemble auth login`、Pi: `ensemble auth login --provider <id>` / Pi `auth.json` / provider 環境変数、GitHub: `gh auth login`（いずれも config に書かない） |
 | tmux 内で Issue リンクを短縮表示 | `~/.ensemble/config.yaml` に `tui.forceHyperlink: on`（または env `FORCE_HYPERLINK=1`） |
 | worker ごとの ACP / cwd | `profile.yaml` |
 | conductor の MCP | `mcp.json` |

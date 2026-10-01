@@ -1009,6 +1009,52 @@ describe('runConductorSession resume / shutdown', () => {
     );
   });
 
+  it('emits a Pi provider-specific recovery hint for SDK auth failures', async () => {
+    await mkdir(join(repoRoot, '.ensemble', 'pi'), { recursive: true });
+    await writeFile(
+      join(repoRoot, '.ensemble', 'pi', 'settings.json'),
+      JSON.stringify({
+        defaultProvider: 'anthropic',
+        defaultModel: 'model-1',
+      }),
+    );
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-auth',
+      status: 'error',
+      error: { message: 'No API key for provider: anthropic' },
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    const recovery = emitted.find(
+      (event): event is Extract<SessionLogEvent, { type: 'conductor.auth.recovery' }> =>
+        event.type === 'conductor.auth.recovery',
+    );
+    expect(recovery?.hint).toContain('provider=anthropic');
+    expect(recovery?.hint).toContain('ensemble auth login --provider anthropic');
+    expect(recovery?.hint).toContain('~/.ensemble/pi/auth.json');
+    expect(recovery?.hint).not.toContain('ensemble auth logout');
+  });
+
   it('recovers transport stalls without auth reconnect or recovery hints', async () => {
     const emitted: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({

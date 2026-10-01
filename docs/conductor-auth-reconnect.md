@@ -16,7 +16,7 @@ send が auth-like error のとき:
 
 `close` → `ConductorAgentFactory.resume(sameId)` → send 再試行（1 回）
 
-まだ失敗する場合は PR #99 互換の `[auth]` ヒント（手動 `logout` → `login` → `--resume` / `--continue`）へフォールバックする。in-process での自動 `login` は行わない（オペレータ方針）。
+まだ失敗する場合は PR #99 互換の backend 固有 `[auth]` ヒントへフォールバックする。Cursor は手動 `logout` → `login`、Pi は `ensemble auth login --provider <provider>` または project/user auth の確認を案内し、project 層の OAuth credential は stale token を使わず user 層へ移すよう案内する。いずれも `--resume` / `--continue` で再試行する。in-process での自動 `login` は行わない（オペレータ方針）。
 
 **非採用**
 
@@ -61,6 +61,7 @@ worktree の削除を行うことがあるため、worktree を残す必要が�
 |------|------|
 | TTY / 非 TTY | いずれも in-process `resume` + 1 回再試行のみ |
 | `CURSOR_API_KEY` | 環境変数モードの挙動は変更しない（#58）。hint は key ローテーション案内 |
+| Pi backend | 各 send の `AuthStorage.getApiKey(provider)` で stored API key / OAuth token を解決する。期限切れ OAuth token は Pi の refresh 処理に委ね、失敗時は provider-specific hint を表示 |
 | 起動時 `create` / `resume` auth 失敗 | スコープ外（別 Issue 候補） |
 | worker `agent login` | スコープ外 |
 

@@ -124,6 +124,8 @@ export interface PiResources {
   auth: PiAuthFile;
   /** Unmerged layers, in user → project order, for provider-level precedence. */
   authLayers: PiAuthFile[];
+  /** Unmerged model layers, in user → project order, for provider-level precedence. */
+  modelsLayers: PiModelsFile[];
   models: PiModelsFile;
   extensionTools: AgentTool[];
   extensionPaths: string[];
@@ -193,10 +195,11 @@ function resolveRootPath(
  * tools, and extension loading failures are isolated so a broken optional
  * local extension cannot prevent the fixed harness tools from starting.
  *
- * The conductor intentionally depends on low-level `pi-agent-core` rather
- * than the interactive `pi-coding-agent` package. This loader mirrors the
- * coding-agent resource roots and extension registration boundary without
- * adding Pi's built-in coding tools to the conductor.
+ * The conductor loop intentionally runs on low-level `pi-agent-core`; it uses
+ * `pi-coding-agent` only for its compatible AuthStorage/ModelRegistry services.
+ * This loader mirrors the coding-agent resource roots and extension
+ * registration boundary without starting its interactive UI or adding Pi's
+ * built-in coding tools to the conductor.
  */
 export async function loadPiResources(
   options: PiResourceLoaderOptions,
@@ -232,6 +235,7 @@ export async function loadPiResources(
     settings,
     auth,
     authLayers: layers.map((layer) => layer.auth),
+    modelsLayers: layers.map((layer) => layer.models),
     models: mergeModels(layers.map((layer) => layer.models)),
     extensionTools: await loadExtensionTools(extensionPaths, options.cwd),
     extensionPaths,

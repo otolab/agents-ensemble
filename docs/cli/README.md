@@ -25,14 +25,16 @@ conductor:
   backend: pi
 ```
 
-Pi backend は Pi の設定ファイルを読みます。モデル設定と認証情報は、次のいずれかの `settings.json` / `auth.json` に用意してください（プロジェクト設定がユーザ設定を上書きします）。
+Pi backend は Pi の設定ファイルを読みます。モデル設定は次のいずれかの resource root に置き、認証は `ensemble auth` または Pi の環境変数・設定ファイルから provider 単位で解決します（プロジェクト設定がユーザ設定を上書きします）。
 
 | 層 | パス |
 |----|------|
 | ユーザ | `~/.ensemble/pi/` |
 | プロジェクト | `<repoRoot>/.ensemble/pi/` |
 
-Pi backend では `ensemble auth login` は認証を設定しません。このコマンドは Cursor SDK 向けです。Pi の provider 認証は Pi の `auth.json` / `settings.json`（および Pi が提供する設定方法）を使います。`~/.ensemble/pi/` と `<repoRoot>/.ensemble/pi/` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決し、`conductor.pi.agentDir` / `conductor.pi.projectDir` で root のみ上書きできます。skills は compiled system prompt に追加され、prompts は `/name args` として展開されます。themes は headless conductor で読み込み・project 同名解決まで行いますが、TUI renderer がないため色・表示設定は適用しません。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は conductor の system prompt には使わず、modular-prompt のコンパイル結果を優先します。
+`ensemble auth login` は設定済みの conductor backend に分岐します。Cursor は Cursor SDK のブラウザログイン、Pi は **provider 単位のログイン**です。Pi では `--provider <id>` を指定でき、省略時は Pi `settings.json` の `defaultProvider`（または選択モデル）から決まります。API-key provider は TTY の secret prompt から `~/.ensemble/pi/auth.json`（または `conductor.pi.agentDir` の `auth.json`）へ保存し、OAuth provider は Pi の `AuthStorage.login` を使って URL・device code を stderr に表示します。`ensemble auth logout` は選択 provider の user 層 credential を削除し、`ensemble auth status` は秘密値を表示せず状態・保存先を示します。プロジェクト層の `<repoRoot>/.ensemble/pi/auth.json` は既存の project-over-user 読取優先を保ち、login が書き換えることはありません。project 層の明示的な OAuth credential は refresh できないため実行時には使わず、`ensemble auth login --provider <id>` で user 層へ保存する必要があります。`ensemble models list` は認証済み Pi model のみを表示します。
+
+Pi の resource root は `~/.ensemble/pi/` と `<repoRoot>/.ensemble/pi/` です。`conductor.pi.agentDir` / `conductor.pi.projectDir` で root のみ上書きできます。`settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決し、skills は compiled system prompt に追加され、prompts は `/name args` として展開されます。themes は headless conductor で読み込み・project 同名解決まで行いますが、TUI renderer がないため色・表示設定は適用しません。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は conductor の system prompt には使わず、modular-prompt のコンパイル結果を優先します。
 
 `settings.json` の headless 対応は、モデル選択（`defaultProvider` / `defaultModel`）、認証 fallback（`apiKey` / `apiKeys`）、resource path（`extensions` / `skills` / `prompts` / `themes`）に限定されます。`defaultThinkingLevel`、`thinkingBudgets`、`packages`、`enableSkillCommands` など Pi coding-agent の挙動・TUI・package 設定は警告なしで無視します。詳細な対応キーと失敗モードは [config.md の headless 対応範囲](../config.md#settingsjson-の-headless-対応範囲) を参照してください。
 
@@ -52,15 +54,21 @@ backend を選んだ後の主経路は共通です。リポジトリのディレ
 |------|------|
 | worker（既定の Cursor ACP） | `agent login` |
 | conductor（Cursor SDK、既定） | `ensemble auth login` |
-| conductor（Pi） | 上記の Pi `settings.json` / `auth.json` を準備。`ensemble auth` は使わない |
+| conductor（Pi、API key） | `ensemble auth login --provider <id>`（TTY の secret prompt） |
+| conductor（Pi、OAuth） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
 | GitHub API（gh CLI を使う場合） | `gh auth login` |
 
 ```bash
 # worker（既定の Cursor ACP）
 agent login
 
-# conductor（Cursor SDK を使う場合だけ）
+# conductor（Cursor SDK を使う場合）
 ensemble auth login
+
+# conductor（Pi を使う場合。provider 省略時は settings.json から解決）
+ensemble auth login --provider <provider-id>
+ensemble auth status
+ensemble models list
 
 # GitHub API（gh CLI を使う場合）
 gh auth login

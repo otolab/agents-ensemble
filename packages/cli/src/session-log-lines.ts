@@ -17,9 +17,9 @@ function classifyConductorSendError(
 
   if (isConductorAuthError(signal)) {
     return {
-      category: 'conductor SDK の認証障害',
+      category: 'conductor の認証障害',
       recovery:
-        '認証状態を確認し、必要なら ensemble auth logout → ensemble auth login 後に再試行してください',
+        '認証状態を確認し、表示された backend 固有の復旧手順で再試行してください',
     };
   }
 
@@ -29,20 +29,20 @@ function classifyConductorSendError(
     )
   ) {
     return {
-      category: 'conductor SDK の接続障害',
+      category: 'conductor の接続障害',
       recovery: '接続状態を確認してから再試行してください',
     };
   }
 
   if (/model blocked|content policy|safety/i.test(signal)) {
     return {
-      category: 'conductor SDK のモデル拒否',
+      category: 'conductor のモデル拒否',
       recovery: 'モデル設定と入力内容を確認して再試行してください',
     };
   }
 
   return {
-    category: 'conductor SDK の実行障害',
+    category: 'conductor の実行障害',
     recovery: 'エラー詳細を確認し、必要ならセッションを再試行してください',
   };
 }

@@ -107,9 +107,42 @@ describe('session-log-lines', () => {
         workerFailures: 0,
       }),
     ).toBe(
-      'conductor.send n=48 status=error workerDone=0 workerFailed=0 障害種別=conductor SDK の接続障害。復旧=接続状態を確認してから再試行してください。 error=Connection stalled repeatedly',
+      'conductor.send n=48 status=error workerDone=0 workerFailed=0 障害種別=conductor の接続障害。復旧=接続状態を確認してから再試行してください。 error=Connection stalled repeatedly',
     );
   });
+
+  it('keeps auth diagnosis backend-neutral until the recovery hint identifies Pi or Cursor', () => {
+    const line = formatHarnessLogBody({
+      type: 'conductor.send',
+      sendCount: 50,
+      runId: 'run-50',
+      status: 'error',
+      error: { message: 'Authentication error' },
+      workerDispatches: 0,
+      workerFailures: 0,
+    });
+
+    expect(line).toContain('障害種別=conductor の認証障害');
+    expect(line).toContain('backend 固有の復旧手順');
+    expect(line).not.toContain('Cursor');
+  });
+
+  it.each(['No API key for provider: anthropic', '401 Unauthorized'])(
+    'classifies Pi auth failures as authentication errors: %s',
+    (message) => {
+      const line = formatHarnessLogBody({
+        type: 'conductor.send',
+        sendCount: 51,
+        runId: 'run-51',
+        status: 'error',
+        error: { message },
+        workerDispatches: 0,
+        workerFailures: 0,
+      });
+
+      expect(line).toContain('障害種別=conductor の認証障害');
+    },
+  );
 
   it('renders a harness diagnosis when a conductor error has no message', () => {
     expect(
@@ -122,7 +155,7 @@ describe('session-log-lines', () => {
         workerFailures: 1,
       }),
     ).toBe(
-      'conductor.send n=49 status=error workerDone=1 workerFailed=1 障害種別=conductor SDK の実行障害。復旧=エラー詳細を確認し、必要ならセッションを再試行してください。 error=unknown error',
+      'conductor.send n=49 status=error workerDone=1 workerFailed=1 障害種別=conductor の実行障害。復旧=エラー詳細を確認し、必要ならセッションを再試行してください。 error=unknown error',
     );
   });
 

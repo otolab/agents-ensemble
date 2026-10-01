@@ -14,7 +14,7 @@
 | 要望 | 現状（SDK） |
 |------|-------------|
 | modular-prompt で組んだ conductor Instructions を **LLM の system ロール**に載せたい | SDK に system prompt API がない。初回 `agent.send` に compile 全文を載せるベストエフォート（[architecture.md](../architecture.md) §3） |
-| Cursor サブスク / local agent 以外のプロバイダで conductor を動かしたい | `CURSOR_API_KEY` / `ensemble auth login` 前提 |
+| Cursor サブスク / local agent 以外のプロバイダで conductor を動かしたい | Pi backend と provider 単位の `ensemble auth login` を使う |
 | [earendil-works/pi](https://github.com/earendil-works/pi) の `pi-agent-core` を harness に埋め込む | worker の `pi` CLI 経路とは別物 |
 
 検討した方向:
@@ -53,7 +53,7 @@
 
 - harness の conductor ツール（`prompt_worker`、escalation、permission 等）は **`ConductorTool` 型**に切り出し、SDK / Pi は adapter で各自のツール表現に変換する。
 - **worker ACP は変更しない**（既存 preset・attach 経路のまま。conductor `pi` と worker `pi` は独立）。
-- **認証統合は後回し**。Pi backend 初版は Pi の **ファイル上の設定**（`settings.json` / `auth.json` 等。provider 固有の設定方法を含む）を読み、`ensemble auth login/logout` は Cursor SDK の `~/.cursor/sdk/auth.json` だけを扱う。`ensemble auth` と Pi プロバイダの統合は [#356](https://github.com/otolab/agents-ensemble/issues/356)。
+- **認証は backend ごとのファサードで統合する**。Cursor は従来どおり Cursor SDK の `~/.cursor/sdk/auth.json` を扱い、Pi は `@earendil-works/pi-coding-agent` の `AuthStorage` と `ModelRegistry` を使う。Pi の user credential は `AuthStorage.create(join(agentDir, 'auth.json'))`（既定 `~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き）へ保存し、project `auth.json` は既存の project-over-user 読取優先を維持するが login の書込み先にはしない。`ensemble auth login/logout/status`、`ensemble models list`、auth recovery hint は選択 backend に分岐する。API-key provider は secret prompt → `AuthStorage.set`、OAuth provider は TTY / stderr の `AuthStorage.login` とし、PiConductorAgent は実行時に `authStorage.getApiKey(provider)` を呼んで OAuth refresh を可能にする。
 
 ### 5. Pi conductor のカスタマイズ（`.ensemble/pi`）
 
@@ -104,7 +104,7 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 - conductor に **二系統**（SDK + Pi）のテスト・ドキュメント・障害切り分けが増える。
 - SDK と Pi で **初回ターン・system の扱いが異なる**（利用者向けに README / ADR で明示）。
 - MCP は Pi 側が core 内 bridge に依存し、Cursor SDK と対応 transport / 認証の差が残る。
-- 認証がファイル分散のままでは、backend ごとに設定場所を理解する必要がある（#356 まで）。
+- Pi は project resource の auth と user `AuthStorage` の二層を持つため、project が読み取り優先、CLI login は user 層固定という境界を理解する必要がある。
 
 ### フォロー（実装 Issue）
 
@@ -117,7 +117,7 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 | [#353](https://github.com/otolab/agents-ensemble/issues/353) | Pi resume |
 | [#354](https://github.com/otolab/agents-ensemble/issues/354) | MCP ブリッジ |
 | [#355](https://github.com/otolab/agents-ensemble/issues/355) | ドキュメント正本の更新 |
-| [#356](https://github.com/otolab/agents-ensemble/issues/356) | 認証統合（任意・後回し） |
+| [#356](https://github.com/otolab/agents-ensemble/issues/356) | Pi AuthStorage / ModelRegistry と `ensemble auth` / `models list` の backend 統合 |
 | [#358](https://github.com/otolab/agents-ensemble/issues/358) | Pi `.ensemble/pi` 設定・ResourceLoader 配線 |
 
 ## 更新履歴（proposed 期間）
@@ -131,3 +131,4 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 | 2026-10-01 | #358 の実装で user/project resource root と extension discovery を追加。`SYSTEM.md` / `APPEND_SYSTEM.md` は conductor では無視する既定案を確定 |
 | 2026-10-01 | #358 reviewer 差し戻し対応: `models.json` の model 解決、skills/prompts の headless 適用、themes の JSON 解決（TUI 非適用）、および provider 単位の project-over-user auth を明記 |
 | 2026-10-01 | #358 2 回目の reviewer 差し戻し対応: Pi `settings.json` は headless conductor の対応キー（モデル選択、認証 fallback、resource path）に限定し、thinking / packages / TUI 等の未対応キーを無視する契約へ修正 |
+| 2026-10-01 | #356: Pi AuthStorage / ModelRegistry、provider 単位の `ensemble auth`、実行時 OAuth key 解決、認証済み model 一覧を追加 |

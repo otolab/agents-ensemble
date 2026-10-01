@@ -166,7 +166,7 @@ await conductor.send(workerStatusUpdate);
 
 `stream` の settled columns shrink は端末の physical reflow と Ink の論理フレームを再同期するため、保持済み activity history を replay する recovery transaction を持つ（[ADR 0026](adr/0026-tui-stream-shrink-recovery.md)）。通常の native scrollback / `alternateScreen: false` モデルと `pane` の bounded activity window は維持する。
 
-Cursor conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）です。この CLI ログインは **Cursor SDK 向けで、Pi backend には渡りません**。Pi は `~/.ensemble/pi/` または `<repoRoot>/.ensemble/pi/` の `settings.json` / `auth.json` など Pi の設定を使います。worker の ACP は `agent login` で足ります。
+Cursor conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）です。Pi conductor も同じ CLI を backend 分岐付きで使え、`ensemble auth login --provider <id>` は Pi の provider 単位 `AuthStorage` に API key または OAuth credential を保存します。Pi の project `auth.json` は読取専用の優先層で、login の書込み先は `~/.ensemble/pi/auth.json` または `conductor.pi.agentDir` の user 層です。project 層の明示的な OAuth credential は refresh 経路を持たないため実行時に拒否し、OAuth は user 層の `AuthStorage` へ保存します。`ensemble auth status` / `ensemble models list` は選択 backend の認証・モデルを表示します。worker の ACP は `agent login` で足ります。
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
 - **resume**: 別プロセスから backend 固有の `resume(conductorAgentId)` で再開可能。Cursor は SDK の session、Pi は sidecar の `conductorAgentId` を Pi session id として `.ensemble/pi/sessions/` の JSONL transcript を復元する。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）には open question・profile・worker `acpSessionId` を保存する。resume 時に backend が起動時の解決結果と sidecar の値から変わっていれば fail fast する（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)）。
