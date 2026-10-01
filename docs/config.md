@@ -114,9 +114,16 @@ profile / worker に `acp` がある worker は `--default-acp-*` / config `acp.
 | ユーザ | `~/.ensemble/pi/` |
 | プロジェクト | `<repoRoot>/.ensemble/pi/` |
 
-`conductor.pi.agentDir` / `conductor.pi.projectDir` は resource root のパスだけを上書きします。相対パスは `<repoRoot>` 基準、`~` はユーザ home 基準です。Pi の `settings.json` / `auth.json`、`extensions/`、`skills/`、`prompts/`、`themes/` をそのまま配置できます。ローカル extension の tool は fixed harness tools と MCP bridge の後ろに追加され、同名の harness/MCP tool は上書きしません。
+`conductor.pi.agentDir` / `conductor.pi.projectDir` は resource root のパスだけを上書きします。相対パスは `<repoRoot>` 基準、`~` はユーザ home 基準です。各 root の Pi 標準 resource を次のように解決します。
 
-conductor の system prompt は modular-prompt のコンパイル結果を使います。`.ensemble/pi/SYSTEM.md`（または resource root の `SYSTEM.md`）は conductor の system prompt として読み込みません。
+- `settings.json` / `auth.json`: user → project の deep merge。credential は provider 単位で project entry を優先します。
+- `models.json`: Pi 標準の `providers` / `models` / built-in `modelOverrides` / request headers を model 解決へ反映します。
+- `extensions/`: ExtensionAPI の tool を読み込み、fixed harness tools → MCP bridge → local extension の順で追加します。同名の harness/MCP tool は上書きしません。
+- `skills/`: `SKILL.md` を読み込み、model invocation が有効な skill 本文を compiled system prompt の後ろに追加します。`/skill:<name>` で明示的に展開できます。
+- `prompts/`: Markdown template を読み込み、`/name args` の user prompt を Pi 標準の引数置換で展開します。
+- `themes/`: Pi 標準 JSON として読み込み、project 同名を優先します。conductor は headless `pi-agent-core` のため TUI renderer がなく、theme の色・表示設定はモデル入出力には適用しません。
+
+conductor の system prompt の基底は modular-prompt のコンパイル結果です。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md`（または resource root の同名ファイル）は conductor には読み込みません。
 
 `.ensemble/` は既存のリポジトリ共通 gitignore 方針で無視されるため、Pi のローカル設定・認証・extension はコミットしません。
 

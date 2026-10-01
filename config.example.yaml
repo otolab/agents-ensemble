@@ -22,6 +22,8 @@ conductor:
   pi:
     agentDir: ~/.ensemble/pi
     projectDir: .ensemble/pi
+    # 上記の各 root に settings.json / auth.json / models.json、
+    # extensions/ / skills/ / prompts/ / themes/ を配置します。
 
 acp:
   # profile / worker に acp 未指定時の built-in preset

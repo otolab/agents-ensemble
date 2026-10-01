@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { extname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 
@@ -20,6 +20,87 @@ export interface PiSettingsFile {
 }
 
 export type PiAuthFile = Record<string, unknown>;
+
+export interface PiModelsFile {
+  providers: Record<string, PiProviderConfig>;
+}
+
+export interface PiProviderConfig {
+  name?: string;
+  baseUrl?: string;
+  apiKey?: string;
+  api?: string;
+  headers?: Record<string, string>;
+  authHeader?: boolean;
+  compat?: Record<string, unknown>;
+  models?: PiModelDefinition[];
+  modelOverrides?: Record<string, PiModelOverride>;
+}
+
+export interface PiModelDefinition {
+  id: string;
+  name?: string;
+  api?: string;
+  baseUrl?: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
+  input?: Array<'text' | 'image'>;
+  cost?: PiModelCost;
+  contextWindow?: number;
+  maxTokens?: number;
+  headers?: Record<string, string>;
+  compat?: Record<string, unknown>;
+}
+
+export interface PiModelOverride {
+  name?: string;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
+  input?: Array<'text' | 'image'>;
+  cost?: Partial<PiModelCost>;
+  contextWindow?: number;
+  maxTokens?: number;
+  headers?: Record<string, string>;
+  compat?: Record<string, unknown>;
+}
+
+export interface PiModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  tiers?: Array<PiModelCostTier>;
+}
+
+export interface PiModelCostTier {
+  inputTokensAbove: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+export interface PiSkillResource {
+  name: string;
+  description: string;
+  filePath: string;
+  content: string;
+  disableModelInvocation: boolean;
+}
+
+export interface PiPromptResource {
+  name: string;
+  description: string;
+  argumentHint?: string;
+  filePath: string;
+  content: string;
+}
+
+export interface PiThemeResource {
+  name: string;
+  filePath: string;
+  value: Record<string, unknown>;
+}
 
 export interface PiResourceRoots {
   agentDir: string;
@@ -41,11 +122,17 @@ export interface PiResources {
   roots: PiResourceRoots;
   settings: PiSettingsFile;
   auth: PiAuthFile;
+  /** Unmerged layers, in user → project order, for provider-level precedence. */
+  authLayers: PiAuthFile[];
+  models: PiModelsFile;
   extensionTools: AgentTool[];
   extensionPaths: string[];
   skillPaths: string[];
   promptPaths: string[];
   themePaths: string[];
+  skills: PiSkillResource[];
+  prompts: PiPromptResource[];
+  themes: PiThemeResource[];
 }
 
 const EXTENSION_FILE_EXTENSIONS = new Set(['.cjs', '.js', '.mjs', '.ts']);
@@ -144,17 +231,23 @@ export async function loadPiResources(
     roots,
     settings,
     auth,
+    authLayers: layers.map((layer) => layer.auth),
+    models: mergeModels(layers.map((layer) => layer.models)),
     extensionTools: await loadExtensionTools(extensionPaths, options.cwd),
     extensionPaths,
     skillPaths,
     promptPaths,
     themePaths,
+    skills: await loadSkills(skillPaths),
+    prompts: await loadPromptTemplates(promptPaths),
+    themes: await loadThemes(themePaths),
   };
 }
 
 interface ResourceLayer {
   settings: PiSettingsFile;
   auth: PiAuthFile;
+  models: PiModelsFile;
   extensionPaths: string[];
   skillPaths: string[];
   promptPaths: string[];
@@ -166,6 +259,10 @@ async function readResourceLayer(root: string): Promise<ResourceLayer> {
   return {
     settings,
     auth: (await readOptionalJson(join(root, 'auth.json'))) ?? {},
+    models: normalizeModelsFile(
+      (await readOptionalJson(join(root, 'models.json'))) ?? {},
+      join(root, 'models.json'),
+    ),
     extensionPaths: uniquePaths([
       ...(await discoverDirectoryResources(join(root, 'extensions'), true)),
       ...configuredResourcePaths(settings.extensions, root),
@@ -261,7 +358,7 @@ async function readOptionalJson(
 ): Promise<Record<string, unknown> | undefined> {
   try {
     const source = await readFile(path, 'utf8');
-    const value: unknown = JSON.parse(source);
+    const value: unknown = JSON.parse(stripJsonComments(source));
     if (!isRecord(value)) {
       throw new Error(`Expected a JSON object in ${path}.`);
     }
@@ -273,6 +370,366 @@ async function readOptionalJson(
     }
     throw error;
   }
+}
+
+function normalizeModelsFile(
+  value: Record<string, unknown>,
+  path: string,
+): PiModelsFile {
+  const providers = value.providers;
+  if (providers === undefined) return { providers: {} };
+  if (!isRecord(providers)) {
+    throw new Error(`Expected a providers object in Pi models file ${path}.`);
+  }
+
+  for (const [provider, config] of Object.entries(providers)) {
+    if (!isRecord(config)) {
+      throw new Error(`Expected provider "${provider}" to be an object in Pi models file ${path}.`);
+    }
+    for (const key of ['baseUrl', 'apiKey', 'api']) {
+      if (config[key] !== undefined && typeof config[key] !== 'string') {
+        throw new Error(`Expected provider "${provider}" ${key} to be a string in Pi models file ${path}.`);
+      }
+    }
+    if (config.authHeader !== undefined && typeof config.authHeader !== 'boolean') {
+      throw new Error(`Expected provider "${provider}" authHeader to be a boolean in Pi models file ${path}.`);
+    }
+    if (config.models !== undefined && !Array.isArray(config.models)) {
+      throw new Error(`Expected provider "${provider}" models to be an array in Pi models file ${path}.`);
+    }
+    for (const model of config.models ?? []) {
+      if (!isRecord(model) || typeof model.id !== 'string' || model.id.trim() === '') {
+        throw new Error(`Expected provider "${provider}" models to contain an id in Pi models file ${path}.`);
+      }
+    }
+    if (config.modelOverrides !== undefined && !isRecord(config.modelOverrides)) {
+      throw new Error(
+        `Expected provider "${provider}" modelOverrides to be an object in Pi models file ${path}.`,
+      );
+    }
+    for (const [modelId, override] of Object.entries(config.modelOverrides ?? {})) {
+      if (!isRecord(override)) {
+        throw new Error(
+          `Expected provider "${provider}" model override "${modelId}" to be an object in Pi models file ${path}.`,
+        );
+      }
+    }
+  }
+
+  return { providers: providers as Record<string, PiProviderConfig> };
+}
+
+function mergeModels(layers: PiModelsFile[]): PiModelsFile {
+  let merged: Record<string, unknown> = { providers: {} };
+  for (const layer of layers) {
+    merged = mergeRecords(merged, layer as unknown as Record<string, unknown>);
+  }
+  return normalizeModelsFile(merged, 'merged Pi models');
+}
+
+async function loadSkills(paths: string[]): Promise<PiSkillResource[]> {
+  const skills = new Map<string, PiSkillResource>();
+  for (const path of paths) {
+    for (const filePath of await discoverSkillFiles(path)) {
+      const resource = await readSkill(filePath);
+      if (resource) skills.set(resource.name, resource);
+    }
+  }
+  return [...skills.values()];
+}
+
+async function discoverSkillFiles(path: string): Promise<string[]> {
+  const directFile = await readableFile(path);
+  if (directFile && extname(path).toLowerCase() === '.md') return [path];
+
+  const entries = await readDirectory(path);
+  if (entries.length === 0) return [];
+  const skillFile = join(path, 'SKILL.md');
+  if (await readableFile(skillFile)) return [skillFile];
+
+  const files: string[] = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (entry.name.startsWith('.')) continue;
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await discoverSkillFiles(child)));
+    } else if (extname(entry.name).toLowerCase() === '.md') {
+      files.push(child);
+    }
+  }
+  return files;
+}
+
+async function readSkill(path: string): Promise<PiSkillResource | undefined> {
+  const source = await readOptionalText(path);
+  if (source === undefined) return undefined;
+  const parsed = parseMarkdownResource(source);
+  const name = stringValue(parsed.frontmatter.name) ?? basename(dirname(path));
+  const description =
+    stringValue(parsed.frontmatter.description) ?? firstNonEmptyLine(parsed.body) ?? name;
+  return {
+    name,
+    description,
+    filePath: path,
+    content: parsed.body,
+    disableModelInvocation: parsed.frontmatter['disable-model-invocation'] === true,
+  };
+}
+
+async function loadPromptTemplates(paths: string[]): Promise<PiPromptResource[]> {
+  const prompts = new Map<string, PiPromptResource>();
+  for (const filePath of await discoverFiles(paths, '.md', false)) {
+    const source = await readOptionalText(filePath);
+    if (source === undefined) continue;
+    const parsed = parseMarkdownResource(source);
+    const name = basename(filePath, '.md');
+    const description =
+      stringValue(parsed.frontmatter.description) ?? firstNonEmptyLine(parsed.body) ?? name;
+    const argumentHint = stringValue(parsed.frontmatter['argument-hint']);
+    prompts.set(name, {
+      name,
+      description,
+      ...(argumentHint ? { argumentHint } : {}),
+      filePath,
+      content: parsed.body,
+    });
+  }
+  return [...prompts.values()];
+}
+
+async function loadThemes(paths: string[]): Promise<PiThemeResource[]> {
+  const themes = new Map<string, PiThemeResource>();
+  for (const filePath of await discoverFiles(paths, '.json', false)) {
+    const value = await readOptionalJson(filePath);
+    if (!value) continue;
+    const name = typeof value.name === 'string' ? value.name : basename(filePath, '.json');
+    themes.set(name, { name, filePath, value });
+  }
+  return [...themes.values()];
+}
+
+async function discoverFiles(
+  paths: string[],
+  extension: string,
+  recursive: boolean,
+): Promise<string[]> {
+  const files: string[] = [];
+  for (const path of paths) {
+    const directFile = await readableFile(path);
+    if (directFile && extname(path).toLowerCase() === extension) {
+      files.push(path);
+      continue;
+    }
+    const entries = await readDirectory(path);
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+      if (entry.name.startsWith('.')) continue;
+      const child = join(path, entry.name);
+      if (entry.isDirectory()) {
+        if (recursive) files.push(...(await discoverFiles([child], extension, true)));
+      } else if (extname(entry.name).toLowerCase() === extension) {
+        files.push(child);
+      }
+    }
+  }
+  return files;
+}
+
+async function readableFile(path: string): Promise<boolean> {
+  try {
+    await readFile(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readOptionalText(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, 'utf8');
+  } catch (error) {
+    if (isPathUnavailable(error)) return undefined;
+    throw error;
+  }
+}
+
+interface ParsedMarkdownResource {
+  frontmatter: Record<string, string | boolean>;
+  body: string;
+}
+
+function parseMarkdownResource(source: string): ParsedMarkdownResource {
+  const lines = source.split(/\r?\n/);
+  if (lines[0]?.trim() !== '---') return { frontmatter: {}, body: source.trim() };
+  const end = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
+  if (end < 0) return { frontmatter: {}, body: source.trim() };
+
+  const frontmatter: Record<string, string | boolean> = {};
+  for (const line of lines.slice(1, end)) {
+    const separator = line.indexOf(':');
+    if (separator < 0) continue;
+    const key = line.slice(0, separator).trim();
+    const rawValue = line.slice(separator + 1).trim();
+    if (!key) continue;
+    if (rawValue === 'true' || rawValue === 'false') {
+      frontmatter[key] = rawValue === 'true';
+    } else {
+      frontmatter[key] = unquote(rawValue);
+    }
+  }
+  return {
+    frontmatter,
+    body: lines.slice(end + 1).join('\n').trim(),
+  };
+}
+
+function unquote(value: string): string {
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function firstNonEmptyLine(value: string): string | undefined {
+  return value.split(/\r?\n/).find((line) => line.trim())?.trim();
+}
+
+/** Add usable Pi skills to the compiled conductor prompt. */
+export function formatPiSkillsForPrompt(skills: PiSkillResource[]): string {
+  const visible = skills.filter((skill) => !skill.disableModelInvocation);
+  if (visible.length === 0) return '';
+  return [
+    '',
+    '',
+    '<pi_skills>',
+    ...visible.flatMap((skill) => [
+      `  <skill name="${escapeXml(skill.name)}" description="${escapeXml(skill.description)}" location="${escapeXml(skill.filePath)}">`,
+      skill.content,
+      '  </skill>',
+    ]),
+    '</pi_skills>',
+  ].join('\n');
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/** Expand Pi prompt templates and explicit skill invocations for headless sends. */
+export function expandPiResourcePrompt(
+  prompt: string,
+  resources: Pick<PiResources, 'prompts' | 'skills'>,
+): string {
+  const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(prompt);
+  if (!match) return prompt;
+  const name = match[1]!;
+  const args = splitPromptArguments(match[2] ?? '');
+  if (name.startsWith('skill:')) {
+    const skill = resources.skills.find((candidate) => candidate.name === name.slice('skill:'.length));
+    if (!skill) return prompt;
+    return `${substitutePromptArguments(skill.content, args)}${args.length > 0 ? `\n\n${args.join(' ')}` : ''}`;
+  }
+  const template = resources.prompts.find((candidate) => candidate.name === name);
+  return template ? substitutePromptArguments(template.content, args) : prompt;
+}
+
+function splitPromptArguments(value: string): string[] {
+  const args: string[] = [];
+  let current = '';
+  let quote: string | undefined;
+  for (const character of value) {
+    if (quote) {
+      if (character === quote) quote = undefined;
+      else current += character;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (/\s/.test(character)) {
+      if (current) {
+        args.push(current);
+        current = '';
+      }
+    } else {
+      current += character;
+    }
+  }
+  if (current) args.push(current);
+  return args;
+}
+
+function substitutePromptArguments(content: string, args: string[]): string {
+  const allArgs = args.join(' ');
+  return content.replace(
+    /\$\{(\d+):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g,
+    (_match, defaultNumber, defaultValue, sliceStart, sliceLength, simple) => {
+      if (defaultNumber) return args[Number(defaultNumber) - 1] || defaultValue;
+      if (sliceStart) {
+        const start = Math.max(0, Number(sliceStart) - 1);
+        return args.slice(start, sliceLength ? start + Number(sliceLength) : undefined).join(' ');
+      }
+      if (simple === 'ARGUMENTS' || simple === '@') return allArgs;
+      return args[Number(simple) - 1] ?? '';
+    },
+  );
+}
+
+function stripJsonComments(source: string): string {
+  let output = '';
+  let inString = false;
+  let escaped = false;
+  let lineComment = false;
+  let blockComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]!;
+    const next = source[index + 1];
+    if (lineComment) {
+      if (character === '\n') {
+        lineComment = false;
+        output += character;
+      }
+      continue;
+    }
+    if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false;
+        index += 1;
+      } else if (character === '\n') {
+        output += character;
+      }
+      continue;
+    }
+    if (inString) {
+      output += character;
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      output += character;
+    } else if (character === '/' && next === '/') {
+      lineComment = true;
+      index += 1;
+    } else if (character === '/' && next === '*') {
+      blockComment = true;
+      index += 1;
+    } else {
+      output += character;
+    }
+  }
+  return output;
 }
 
 function configuredResourcePaths(

@@ -73,7 +73,9 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 
 **利用者が足せるもの（オプション）**
 
-- 上記パスへの追加 **extensions / skills / prompts / themes**、および Pi 標準の `settings.json` による挙動調整（モデル既定、thinking、パッケージ宣言等）。
+- 上記パスへの追加 **extensions / skills / prompts / themes / models.json**。extensions は harness/MCP の後ろに tool として追加し、skills は compiled system prompt へ、prompts は `/name args` の user prompt 展開へ接続する。`models.json` の custom provider/model と built-in override は Pi model 解決へ反映する。
+- `themes/` は Pi 標準 JSON として読み込み・project 同名解決を行う。ただし conductor は headless `pi-agent-core` であり、Pi TUI の renderer を持たないため色・表示設定はモデル入出力へ適用しない。
+- Pi 標準の `settings.json` による挙動調整（モデル既定、thinking、パッケージ宣言等）。
 - `config.yaml` の `conductor.pi.*` は **パス上書きや discovery のヒント**に限定し、Pi 本体の設定スキーマを二重定義しない。
 
 **system prompt の優先**
@@ -122,3 +124,4 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 | 2026-09-29 | `ensemble auth` は Cursor SDK 向け、Pi は `settings.json` / `auth.json` を使う認証境界を明記 |
 | 2026-09-29 | #354 の Pi MCP bridge を Pi ExtensionAPI extension ではなく core 内 in-process thin bridge として具体化 |
 | 2026-10-01 | #358 の実装で user/project resource root と extension discovery を追加。`SYSTEM.md` / `APPEND_SYSTEM.md` は conductor では無視する既定案を確定 |
+| 2026-10-01 | #358 reviewer 差し戻し対応: `models.json` の model 解決、skills/prompts の headless 適用、themes の JSON 解決（TUI 非適用）、および provider 単位の project-over-user auth を明記 |
