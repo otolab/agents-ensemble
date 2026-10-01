@@ -1,11 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import {
   Agent,
   type AgentEvent,
   type AgentMessage,
+  type AgentTool,
 } from '@earendil-works/pi-agent-core';
 import {
   getEnvApiKey,
@@ -27,20 +25,23 @@ import type {
 import { toPiAgentTools } from './conductor-tool-pi-adapter.js';
 import { PiConductorSession } from './pi-conductor-session.js';
 import {
+  expandPiResourcePrompt,
+  formatPiSkillsForPrompt,
+  loadPiResources,
+  type PiAuthFile,
+  type PiModelDefinition,
+  type PiModelCost,
+  type PiModelOverride,
+  type PiModelsFile,
+  type PiProviderConfig,
+  type PiResourceLoaderOptions,
+  type PiResources,
+  type PiSettingsFile,
+} from './pi-resource-loader.js';
+import {
   createPiMcpBridge,
   type PiMcpBridge,
 } from './pi-mcp-bridge.js';
-
-interface PiSettingsFile {
-  defaultProvider?: unknown;
-  defaultModel?: unknown;
-  model?: unknown;
-  modelId?: unknown;
-  apiKey?: unknown;
-  apiKeys?: unknown;
-}
-
-type PiAuthFile = Record<string, unknown>;
 
 interface PiSendState {
   runId: string;
@@ -55,47 +56,57 @@ export interface PiResolvedModel {
   apiKey?: string;
 }
 
-/**
- * Minimal Pi file configuration used by the first in-process backend.
- *
- * The full `.ensemble/pi` ResourceLoader is intentionally left for #358. For
- * now only Pi's model selection and credential files are read, with the
- * ensemble paths taking precedence over Pi's standard paths.
- */
-export async function resolvePiModelConfig(options: {
-  cwd: string;
-  modelId?: string;
-  apiKey?: string;
-  env?: NodeJS.ProcessEnv;
-  home?: string;
-}): Promise<PiResolvedModel> {
+/** Resolve the Pi model/auth selection from the standard resource roots. */
+export async function resolvePiModelConfig(
+  options: PiResourceLoaderOptions & {
+    modelId?: string;
+    apiKey?: string;
+  },
+): Promise<PiResolvedModel> {
+  const resources = await loadPiResources(options);
+  return resolvePiModelConfigFromResources(options, resources);
+}
+
+function resolvePiModelConfigFromResources(
+  options: PiResourceLoaderOptions & {
+    modelId?: string;
+    apiKey?: string;
+  },
+  resources: PiResources,
+): PiResolvedModel {
   const env = options.env ?? process.env;
-  const roots = piConfigRoots(options.cwd, env, options.home ?? homedir());
-  const settings = await readPiSettings(roots);
-  const auth = await readPiAuth(roots);
-  const selection = resolvePiModelSelection(options.modelId, settings);
-  const model = getModel(
+  const settings = resources.settings;
+  const selection = resolvePiModelSelection(options.modelId, settings, resources.models);
+  const providerConfig = resources.models.providers[selection.provider];
+  const builtInModel = getModel(
     selection.provider as never,
     selection.modelId as never,
   ) as Model<any> | undefined;
+  const model = resolvePiModel(
+    selection.provider,
+    selection.modelId,
+    providerConfig,
+    builtInModel,
+  );
 
   if (!model) {
     throw new Error(
-      `Pi conductor model "${selection.provider}/${selection.modelId}" was not found in pi-ai. ` +
+      `Pi conductor model "${selection.provider}/${selection.modelId}" was not found in pi-ai or models.json. ` +
         'Set defaultProvider/defaultModel in Pi settings.json or pass a built-in provider/model id.',
     );
   }
 
   const apiKey =
     options.apiKey ??
-    resolvePiAuthKey(auth, selection.provider, env) ??
+    resolvePiAuthKey(resources.authLayers, selection.provider, env) ??
     resolvePiSettingsApiKey(settings, selection.provider, env) ??
+    resolvePiModelsApiKey(providerConfig, env) ??
     getEnvApiKey(selection.provider, toProviderEnv(env));
 
   return {
     provider: selection.provider,
     modelId: selection.modelId,
-    model,
+    model: applyPiProviderRequestConfig(model, providerConfig, apiKey),
     ...(apiKey !== undefined ? { apiKey } : {}),
   };
 }
@@ -114,6 +125,7 @@ export class PiConductorAgent implements ConductorAgent {
     private readonly agent: Agent,
     private readonly session: PiConductorSession,
     private readonly mcpBridge: PiMcpBridge | undefined,
+    private readonly resources: PiResources,
     public readonly agentId: string,
     private readonly modelId: string,
     private readonly onStreamText?: (text: string) => void,
@@ -125,7 +137,8 @@ export class PiConductorAgent implements ConductorAgent {
     options: ConductorAgentCreateOptions,
   ): Promise<PiConductorAgent> {
     const agentId = randomUUID();
-    const resolved = await resolvePiModelConfig(options);
+    const resources = await loadPiResources(options);
+    const resolved = resolvePiModelConfigFromResources(options, resources);
     const session = await PiConductorSession.create(options.cwd, agentId);
     const mcpBridge = await createPiMcpBridge(options.mcpServers, {
       cwd: options.cwd,
@@ -138,9 +151,11 @@ export class PiConductorAgent implements ConductorAgent {
           resolved,
           session.messages,
           mcpBridge,
+          resources,
         ),
         session,
         mcpBridge,
+        resources,
         agentId,
         resolved.modelId,
         options.onStreamText,
@@ -155,7 +170,8 @@ export class PiConductorAgent implements ConductorAgent {
     agentId: string,
     options: ConductorAgentCreateOptions,
   ): Promise<PiConductorAgent> {
-    const resolved = await resolvePiModelConfig(options);
+    const resources = await loadPiResources(options);
+    const resolved = resolvePiModelConfigFromResources(options, resources);
     const session = await PiConductorSession.resume(options.cwd, agentId);
     const mcpBridge = await createPiMcpBridge(options.mcpServers, {
       cwd: options.cwd,
@@ -168,9 +184,11 @@ export class PiConductorAgent implements ConductorAgent {
           resolved,
           session.messages,
           mcpBridge,
+          resources,
         ),
         session,
         mcpBridge,
+        resources,
         agentId,
         resolved.modelId,
         options.onStreamText,
@@ -204,7 +222,7 @@ export class PiConductorAgent implements ConductorAgent {
     const state: PiSendState = { runId, callbacks };
     this.activeSend = state;
     try {
-      await this.agent.prompt(prompt);
+      await this.agent.prompt(expandPiResourcePrompt(prompt, this.resources));
     } catch (error) {
       return {
         runId,
@@ -256,7 +274,7 @@ export class PiConductorAgent implements ConductorAgent {
 
   /** Resume recompiles and reinstalls the native system prompt on each run. */
   async setSystemPrompt(systemPrompt: string): Promise<void> {
-    this.agent.state.systemPrompt = systemPrompt;
+    this.agent.state.systemPrompt = withPiSkills(systemPrompt, this.resources);
   }
 
   async close(): Promise<void> {
@@ -332,15 +350,17 @@ function createPiAgent(
   resolved: PiResolvedModel,
   messages: readonly AgentMessage[],
   mcpBridge: PiMcpBridge | undefined,
+  resources: PiResources,
 ): Agent {
-  const tools = [
-    ...(options.customTools ? toPiAgentTools(options.customTools) : []),
-    ...(mcpBridge?.tools ?? []),
-  ];
+  const tools = uniquePiTools(
+    options.customTools ? toPiAgentTools(options.customTools) : [],
+    mcpBridge?.tools ?? [],
+    resources.extensionTools,
+  );
 
   return new Agent({
     initialState: {
-      systemPrompt: options.systemPrompt,
+      systemPrompt: withPiSkills(options.systemPrompt, resources),
       model: resolved.model,
       // Do not add Pi's built-in coding tools. Harness tools are the complete
       // loadout; repository work is delegated to worker ACP sessions.
@@ -355,65 +375,151 @@ function createPiAgent(
   });
 }
 
-function piConfigRoots(
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-  home: string,
-): string[] {
-  const userRoots = [
-    join(home, '.pi', 'agent'),
-    join(home, '.ensemble', 'pi'),
-    ...(env.PI_CODING_AGENT_DIR ? [env.PI_CODING_AGENT_DIR] : []),
-  ];
-  const projectRoots = [
-    join(cwd, '.pi'),
-    join(cwd, '.ensemble', 'pi'),
-  ];
-  return [...new Set([...userRoots, ...projectRoots])];
-}
-
-async function readPiSettings(roots: string[]): Promise<PiSettingsFile> {
-  let settings: PiSettingsFile = {};
-  for (const root of roots) {
-    const value = await readOptionalJson(join(root, 'settings.json'));
-    if (value) {
-      settings = { ...settings, ...value };
+function uniquePiTools(...groups: AgentTool[][]): AgentTool[] {
+  const tools = new Map<string, AgentTool>();
+  for (const group of groups) {
+    for (const tool of group) {
+      if (!tools.has(tool.name)) {
+        tools.set(tool.name, tool);
+      }
     }
   }
-  return settings;
+  return [...tools.values()];
 }
 
-async function readPiAuth(roots: string[]): Promise<PiAuthFile> {
-  let auth: PiAuthFile = {};
-  for (const root of roots) {
-    const value = await readOptionalJson(join(root, 'auth.json'));
-    if (value) {
-      auth = { ...auth, ...value };
-    }
-  }
-  return auth;
+function withPiSkills(systemPrompt: string, resources: PiResources): string {
+  return `${systemPrompt}${formatPiSkillsForPrompt(resources.skills)}`;
 }
 
-async function readOptionalJson(path: string): Promise<Record<string, unknown> | undefined> {
-  try {
-    const source = await readFile(path, 'utf8');
-    const value: unknown = JSON.parse(source);
-    if (!isRecord(value)) {
-      throw new Error(`Expected a JSON object in ${path}.`);
-    }
-    return value;
-  } catch (error) {
-    if (isFileNotFound(error)) return undefined;
-    if (error instanceof SyntaxError) {
-      throw new Error(`Invalid JSON in Pi configuration file ${path}.`);
-    }
-    throw error;
+function resolvePiModel(
+  provider: string,
+  modelId: string,
+  providerConfig: PiProviderConfig | undefined,
+  builtInModel: Model<any> | undefined,
+): Model<any> | undefined {
+  const definition = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+  let model = definition && providerConfig
+    ? createPiModel(provider, providerConfig, definition)
+    : builtInModel;
+  if (!model) return undefined;
+
+  const override = providerConfig?.modelOverrides?.[modelId];
+  if (providerConfig?.baseUrl || providerConfig?.compat) {
+    model = {
+      ...model,
+      ...(providerConfig.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
+      ...(providerConfig.compat
+        ? { compat: mergePiObjects(model.compat, providerConfig.compat) as Model<any>['compat'] }
+        : {}),
+    };
   }
+  return override ? applyPiModelOverride(model, override) : model;
+}
+
+function createPiModel(
+  provider: string,
+  providerConfig: PiProviderConfig,
+  definition: PiModelDefinition,
+): Model<any> {
+  const api = definition.api ?? providerConfig.api;
+  const baseUrl = definition.baseUrl ?? providerConfig.baseUrl;
+  if (!api || !baseUrl) {
+    throw new Error(
+      `Pi models.json provider "${provider}" model "${definition.id}" requires api and baseUrl.`,
+    );
+  }
+  return {
+    id: definition.id,
+    name: definition.name ?? definition.id,
+    api,
+    provider,
+    baseUrl,
+    reasoning: definition.reasoning ?? false,
+    thinkingLevelMap: definition.thinkingLevelMap,
+    input: definition.input ?? ['text'],
+    cost: normalizePiModelCost(definition.cost),
+    contextWindow: definition.contextWindow ?? 128000,
+    maxTokens: definition.maxTokens ?? 16384,
+    headers: mergePiHeaders(providerConfig.headers, definition.headers),
+    compat: mergePiObjects(providerConfig.compat, definition.compat) as Model<any>['compat'],
+  };
+}
+
+function applyPiModelOverride(model: Model<any>, override: PiModelOverride): Model<any> {
+  return {
+    ...model,
+    ...(override.name !== undefined ? { name: override.name } : {}),
+    ...(override.reasoning !== undefined ? { reasoning: override.reasoning } : {}),
+    ...(override.thinkingLevelMap !== undefined
+      ? { thinkingLevelMap: { ...model.thinkingLevelMap, ...override.thinkingLevelMap } }
+      : {}),
+    ...(override.input !== undefined ? { input: override.input } : {}),
+    ...(override.cost !== undefined
+      ? { cost: normalizePiModelCost({ ...model.cost, ...override.cost }) }
+      : {}),
+    ...(override.contextWindow !== undefined ? { contextWindow: override.contextWindow } : {}),
+    ...(override.maxTokens !== undefined ? { maxTokens: override.maxTokens } : {}),
+    ...(override.headers !== undefined
+      ? { headers: mergePiHeaders(model.headers, override.headers) }
+      : {}),
+    ...(override.compat !== undefined
+      ? { compat: mergePiObjects(model.compat, override.compat) as Model<any>['compat'] }
+      : {}),
+  };
+}
+
+function applyPiProviderRequestConfig(
+  model: Model<any>,
+  providerConfig: PiProviderConfig | undefined,
+  apiKey: string | undefined,
+): Model<any> {
+  if (!providerConfig) return model;
+  const headers = mergePiHeaders(model.headers, providerConfig.headers);
+  if (providerConfig.authHeader && apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+  return Object.keys(headers).length > 0 ? { ...model, headers } : model;
+}
+
+function normalizePiModelCost(cost: Partial<PiModelCost> | undefined) {
+  const defaults = emptyPiModelCost();
+  return {
+    input: numberValue(cost?.input, defaults.input),
+    output: numberValue(cost?.output, defaults.output),
+    cacheRead: numberValue(cost?.cacheRead, defaults.cacheRead),
+    cacheWrite: numberValue(cost?.cacheWrite, defaults.cacheWrite),
+    ...(cost?.tiers ? { tiers: cost.tiers } : {}),
+  };
+}
+
+function emptyPiModelCost() {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function mergePiHeaders(
+  ...headers: Array<Record<string, string> | undefined>
+): Record<string, string> {
+  return Object.assign({}, ...headers.filter((value): value is Record<string, string> => Boolean(value)));
+}
+
+function mergePiObjects(
+  ...values: unknown[]
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  for (const value of values) {
+    if (isRecord(value)) Object.assign(merged, value);
+  }
+  return merged;
 }
 
 function resolvePiModelSelection(
   requestedModelId: string | undefined,
   settings: PiSettingsFile,
+  models: PiModelsFile,
 ): { provider: string; modelId: string } {
   const requested = normalizeConfiguredString(requestedModelId);
   const configured = firstString(settings.defaultModel, settings.model, settings.modelId);
@@ -434,11 +540,15 @@ function resolvePiModelSelection(
   }
 
   if (!provider) {
-    const matches = getProviders().flatMap((candidate) =>
-      getModels(candidate).some((model) => model.id === modelId)
+    const candidates = new Set([...getProviders(), ...Object.keys(models.providers)]);
+    const matches = [...candidates].flatMap((candidate) => {
+      const builtInModels = getModels(candidate as never) ?? [];
+      const customModels = models.providers[candidate]?.models ?? [];
+      return builtInModels.some((model) => model.id === modelId) ||
+        customModels.some((model) => model.id === modelId)
         ? [candidate]
-        : [],
-    );
+        : [];
+    });
     if (matches.length === 1) provider = matches[0];
   }
 
@@ -452,11 +562,21 @@ function resolvePiModelSelection(
 }
 
 function resolvePiAuthKey(
-  auth: PiAuthFile,
+  authLayers: readonly PiAuthFile[],
   provider: string,
   env: NodeJS.ProcessEnv,
 ): string | undefined {
-  const entry = auth[provider];
+  for (let index = authLayers.length - 1; index >= 0; index -= 1) {
+    const value = resolvePiAuthEntry(authLayers[index]?.[provider], env);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function resolvePiAuthEntry(
+  entry: unknown,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
   if (typeof entry === 'string') return expandEnvReference(entry, env);
   if (!isRecord(entry)) return undefined;
 
@@ -467,6 +587,15 @@ function resolvePiAuthKey(
     }
   }
   return undefined;
+}
+
+function resolvePiModelsApiKey(
+  providerConfig: PiProviderConfig | undefined,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  return providerConfig?.apiKey
+    ? expandEnvReference(providerConfig.apiKey, env)
+    : undefined;
 }
 
 function resolvePiSettingsApiKey(
@@ -548,13 +677,6 @@ function toConductorTokenUsage(usage: AssistantMessage['usage']): ConductorToken
 
 function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function isFileNotFound(error: unknown): boolean {
-  return (
-    isRecord(error) &&
-    error.code === 'ENOENT'
-  );
 }
 
 function errorMessage(error: unknown): string {

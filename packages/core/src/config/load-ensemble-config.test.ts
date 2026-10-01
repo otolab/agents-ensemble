@@ -87,7 +87,11 @@ describe('parseEnsembleConfig', () => {
     expect(
       parseEnsembleConfig({
         profile: { default: 'my-team' },
-        conductor: { model: 'composer-2.5', backend: 'pi' },
+        conductor: {
+          model: 'composer-2.5',
+          backend: 'pi',
+          pi: { agentDir: '~/.ensemble/pi', projectDir: '.ensemble/pi' },
+        },
         acp: { defaultPreset: 'claude' },
         session: {
           worktree: 'in-repo',
@@ -107,7 +111,11 @@ describe('parseEnsembleConfig', () => {
       }),
     ).toEqual({
       profile: { default: 'my-team' },
-      conductor: { model: 'composer-2.5', backend: 'pi' },
+      conductor: {
+        model: 'composer-2.5',
+        backend: 'pi',
+        pi: { agentDir: '~/.ensemble/pi', projectDir: '.ensemble/pi' },
+      },
       acp: { defaultPreset: 'claude' },
       session: {
         worktree: 'in_repo',

@@ -8,11 +8,20 @@ export interface EnsembleProfileConfig {
 
 export type ConductorBackend = 'cursor' | 'pi';
 
+export interface EnsembleConductorPiConfig {
+  /** Pi の user resource root。絶対パスまたは repoRoot 基準の相対パス。 */
+  agentDir?: string;
+  /** Pi の project resource root。絶対パスまたは repoRoot 基準の相対パス。 */
+  projectDir?: string;
+}
+
 export interface EnsembleConductorConfig {
   /** conductor モデル id（`auto` は `default` と同義）。 */
   model: string;
   /** conductor LLM backend（未指定時は `cursor`）。 */
   backend?: ConductorBackend;
+  /** Pi resource root のパス上書き（Pi の設定スキーマではない）。 */
+  pi?: EnsembleConductorPiConfig;
 }
 
 export interface EnsembleAcpConfig {

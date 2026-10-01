@@ -13,9 +13,20 @@ profile:
 
 conductor:
   # conductor backend（profile で指定した場合は profile が優先。cursor | pi）
-  backend: cursor
+  # この例は Pi resource 配線を示すため pi。既定 backend は cursor。
+  backend: pi
   # conductor モデル id（CLI --model / CONDUCTOR_MODEL_ID より優先度低）
   model: default
+  # Pi backend の resource root（任意。パスだけを上書きする）
+  # 相対パスは repoRoot 基準、~ はユーザ home 基準
+  pi:
+    agentDir: ~/.ensemble/pi
+    projectDir: .ensemble/pi
+    # 上記の各 root に settings.json / auth.json / models.json、
+    # extensions/ / skills/ / prompts/ / themes/ を配置します。
+    # settings.json は headless conductor の対応キー（モデル選択・
+    # 認証 fallback・resource path）のみ有効です。thinking / packages /
+    # TUI 等の Pi coding-agent 設定は警告なしで無視します。
 
 acp:
   # profile / worker に acp 未指定時の built-in preset

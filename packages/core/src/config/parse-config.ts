@@ -8,6 +8,7 @@ import type {
   ConductorBackend,
   EnsembleConductorConfig,
   EnsembleConfig,
+  EnsembleConductorPiConfig,
   EnsembleGitHubAuthConfig,
   EnsembleGitHubConfig,
   EnsembleGitHubMonitorConfig,
@@ -69,13 +70,31 @@ function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined
   }
   const model = readString(obj.model);
   const backend = parseConductorBackend(obj.backend);
-  if (model === undefined && backend === undefined) {
+  const pi = parseConductorPiConfig(obj.pi);
+  if (model === undefined && backend === undefined && pi === undefined) {
     return undefined;
   }
   return {
     ...(model !== undefined ? { model } : {}),
     ...(backend !== undefined ? { backend } : {}),
+    ...(pi !== undefined ? { pi } : {}),
   } as EnsembleConductorConfig;
+}
+
+function parseConductorPiConfig(raw: unknown): EnsembleConductorPiConfig | undefined {
+  const obj = readObject(raw);
+  if (!obj) {
+    return undefined;
+  }
+  const agentDir = readString(obj.agentDir);
+  const projectDir = readString(obj.projectDir);
+  if (agentDir === undefined && projectDir === undefined) {
+    return undefined;
+  }
+  return {
+    ...(agentDir !== undefined ? { agentDir } : {}),
+    ...(projectDir !== undefined ? { projectDir } : {}),
+  };
 }
 
 function parseConductorBackend(value: unknown): ConductorBackend | undefined {

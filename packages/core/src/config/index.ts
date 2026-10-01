@@ -13,6 +13,7 @@ export { parseEnsembleConfig } from './parse-config.js';
 export {
   resolveBooleanSetting,
   resolveConductorBackendSetting,
+  resolveConductorPiResourcePaths,
   resolveConductorModelSetting,
   resolveDefaultAcpPresetSetting,
   CONDUCTOR_MODEL_ID_ENV,
@@ -42,6 +43,7 @@ export type {
   EnsembleAcpConfig,
   ConductorBackend,
   EnsembleConductorConfig,
+  EnsembleConductorPiConfig,
   EnsembleConfig,
   EnsembleGitHubAuthConfig,
   EnsembleGitHubConfig,

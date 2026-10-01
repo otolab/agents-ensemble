@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -190,6 +190,18 @@ describe('Pi conductor backend integration', () => {
 
   it('runs Pi kickoff through the real harness registry and a fake ACP worker', async () => {
     const bridge = await createInProcessAcpBridge();
+    const piAgentDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-agent-'));
+    const piProjectDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-project-'));
+    await mkdir(join(piProjectDir, 'extensions'), { recursive: true });
+    await writeFile(
+      join(piProjectDir, 'extensions', 'integration-extension.mjs'),
+      `export default (pi) => pi.registerTool({
+        name: 'integration_extension',
+        description: 'Loaded from the project Pi resource root',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => ({ content: [{ type: 'text', text: 'loaded' }] }),
+      });`,
+    );
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: REPO_ROOT,
@@ -197,7 +209,11 @@ describe('Pi conductor backend integration', () => {
       profile: PI_PROFILE,
       ensembleConfig: {
         ...DEFAULT_ENSEMBLE_CONFIG,
-        conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'pi',
+          pi: { agentDir: piAgentDir, projectDir: piProjectDir },
+        },
       },
       modelId: 'anthropic/claude-sonnet-4-5',
       maxTurns: 5,
@@ -223,6 +239,7 @@ describe('Pi conductor backend integration', () => {
     expect(agent?.state.systemPrompt).toContain('PI_COMPILED_SYSTEM_MARKER');
     const toolNames = agent?.state.tools.map((tool) => tool.name) ?? [];
     expect(toolNames).toContain('prompt_worker');
+    expect(toolNames).toContain('integration_extension');
     expect(toolNames).not.toContain('bash');
     expect(toolNames).not.toContain('edit');
     expect(toolNames).not.toContain('read');

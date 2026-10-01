@@ -1,6 +1,13 @@
 import type { McpServerConfigMap } from '../mcp/load-mcp-config.js';
 import type { ConductorToolSet } from './conductor-tool.js';
 
+export interface ConductorPiResourceOptions {
+  /** Optional Pi user resource root override. */
+  agentDir?: string;
+  /** Optional Pi project resource root override. */
+  projectDir?: string;
+}
+
 /** Backend-neutral options used when creating or resuming a conductor. */
 export interface ConductorAgentCreateOptions {
   cwd: string;
@@ -9,6 +16,8 @@ export interface ConductorAgentCreateOptions {
   apiKey?: string;
   modelId?: string;
   mcpServers?: McpServerConfigMap;
+  /** Pi-only resource root overrides; ignored by other backends. */
+  pi?: ConductorPiResourceOptions;
   customTools?: ConductorToolSet;
   onStreamText?: (text: string) => void;
 }

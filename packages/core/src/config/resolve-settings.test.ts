@@ -7,6 +7,7 @@ import {
   FORCE_HYPERLINK_ENV,
   resolveBooleanSetting,
   resolveConductorBackendSetting,
+  resolveConductorPiResourcePaths,
   resolveConductorModelSetting,
   resolveDefaultAcpPresetSetting,
   resolveForceHyperlinkSetting,
@@ -225,6 +226,32 @@ describe('resolveConductorBackendSetting', () => {
         config: { ...projectConfig, conductor: { model: 'default' } },
       }),
     ).toBe('cursor');
+  });
+});
+
+describe('resolveConductorPiResourcePaths', () => {
+  it('anchors relative overrides at repoRoot and preserves absolute paths', () => {
+    expect(
+      resolveConductorPiResourcePaths({
+        repoRoot: '/repo',
+        config: {
+          ...projectConfig,
+          conductor: {
+            model: 'default',
+            pi: { agentDir: '/user/pi', projectDir: '.custom/pi' },
+          },
+        },
+      }),
+    ).toEqual({
+      agentDir: '/user/pi',
+      projectDir: '/repo/.custom/pi',
+    });
+  });
+
+  it('defaults the project root to repoRoot/.ensemble/pi', () => {
+    expect(
+      resolveConductorPiResourcePaths({ repoRoot: '/repo', config: projectConfig }),
+    ).toEqual({ projectDir: '/repo/.ensemble/pi' });
   });
 });
 

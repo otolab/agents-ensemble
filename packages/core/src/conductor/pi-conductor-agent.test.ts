@@ -101,12 +101,22 @@ describe('PiConductorAgent', () => {
     vi.restoreAllMocks();
   });
 
-  it('installs the compiled prompt natively and exposes only harness tools', async () => {
+  it('installs the compiled prompt natively and adds project Pi extensions', async () => {
     const piRoot = join(cwd, '.ensemble', 'pi');
-    await mkdir(piRoot, { recursive: true });
+    await mkdir(join(piRoot, 'extensions'), { recursive: true });
     await writeFile(
       join(piRoot, 'settings.json'),
       JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'model-1' }),
+    );
+    await writeFile(join(piRoot, 'SYSTEM.md'), 'this must not replace the prompt');
+    await writeFile(
+      join(piRoot, 'extensions', 'project-extension.mjs'),
+      `export default (pi) => pi.registerTool({
+        name: 'project_extension',
+        description: 'Project extension',
+        parameters: { type: 'object', properties: {} },
+        execute: async () => ({ content: [{ type: 'text', text: 'extension' }] }),
+      });`,
     );
     await writeFile(
       join(piRoot, 'auth.json'),
@@ -131,10 +141,13 @@ describe('PiConductorAgent', () => {
 
     const agentOptions = mockAgent.mock.calls[0]![0];
     expect(agentOptions.initialState.systemPrompt).toBe('compiled system prompt');
-    expect(agentOptions.initialState.tools).toHaveLength(1);
+    expect(agentOptions.initialState.tools).toHaveLength(2);
     expect(agentOptions.initialState.tools[0]).toMatchObject({
       name: 'prompt_worker',
       label: 'prompt_worker',
+    });
+    expect(agentOptions.initialState.tools[1]).toMatchObject({
+      name: 'project_extension',
     });
     expect(agentOptions.sessionId).toBe(conductor.agentId);
     expect(agentOptions.getApiKey('anthropic')).toBe('file-key');
@@ -143,6 +156,37 @@ describe('PiConductorAgent', () => {
     expect(fakeAgent.abort).toHaveBeenCalledOnce();
     expect(fakeAgent.waitForIdle).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('applies Pi skills to the native prompt and expands prompt resources on send', async () => {
+    const piRoot = join(cwd, '.ensemble', 'pi');
+    await mkdir(join(piRoot, 'skills', 'review'), { recursive: true });
+    await mkdir(join(piRoot, 'prompts'), { recursive: true });
+    await writeFile(
+      join(piRoot, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'model-1' }),
+    );
+    await writeFile(
+      join(piRoot, 'skills', 'review', 'SKILL.md'),
+      '---\ndescription: review guidance\n---\nUse the review checklist.',
+    );
+    await writeFile(
+      join(piRoot, 'prompts', 'review.md'),
+      '---\ndescription: review template\n---\nReview issue $1.',
+    );
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'compiled system prompt',
+    });
+
+    expect(fakeAgent.state.systemPrompt).toContain('compiled system prompt');
+    expect(fakeAgent.state.systemPrompt).toContain('Use the review checklist.');
+
+    await conductor.send('/review 358');
+    expect(fakeAgent.prompt).toHaveBeenCalledWith('Review issue 358.');
+    await conductor.close();
   });
 
   it('loads resolved MCP tools into Pi and closes the bridge with the agent', async () => {
@@ -166,11 +210,26 @@ describe('PiConductorAgent', () => {
       cwd,
       modelId: 'anthropic/model-1',
       systemPrompt: 'system',
+      customTools: {
+        prompt_worker: {
+          name: 'prompt_worker',
+          description: 'Dispatch to worker',
+          inputSchema: { type: 'object', properties: {} },
+          execute: async () => ({
+            content: [{ type: 'text' as const, text: 'dispatched' }],
+          }),
+        },
+      },
       mcpServers,
     });
 
     expect(mockCreatePiMcpBridge).toHaveBeenCalledWith(mcpServers, { cwd });
-    expect(fakeAgent.state.tools).toContain(mcpTool);
+    expect(fakeAgent.state.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'prompt_worker' }),
+        mcpTool,
+      ]),
+    );
 
     await conductor.close();
     expect(closeBridge).toHaveBeenCalledOnce();
@@ -630,14 +689,20 @@ describe('PiConductorAgent', () => {
 
   it('uses Pi settings and auth files without requiring ensemble auth', async () => {
     const piRoot = join(cwd, '.ensemble', 'pi');
+    const userPiRoot = join(home, '.ensemble', 'pi');
     await mkdir(piRoot, { recursive: true });
+    await mkdir(userPiRoot, { recursive: true });
     await writeFile(
       join(piRoot, 'settings.json'),
       JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'model-1' }),
     );
     await writeFile(
       join(piRoot, 'auth.json'),
-      JSON.stringify({ anthropic: { type: 'api_key', key: '$PI_TEST_KEY' } }),
+      JSON.stringify({ anthropic: { type: 'api_key', token: '$PI_TEST_KEY' } }),
+    );
+    await writeFile(
+      join(userPiRoot, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'user-key' } }),
     );
 
     await expect(
@@ -650,6 +715,48 @@ describe('PiConductorAgent', () => {
       provider: 'anthropic',
       modelId: 'model-1',
       apiKey: 'expanded-key',
+    });
+  });
+
+  it('resolves a custom model from the Pi models.json standard resource', async () => {
+    const piRoot = join(cwd, '.ensemble', 'pi');
+    await mkdir(piRoot, { recursive: true });
+    await writeFile(
+      join(piRoot, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'local', defaultModel: 'review-model' }),
+    );
+    await writeFile(
+      join(piRoot, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            apiKey: '$LOCAL_MODEL_KEY',
+            authHeader: true,
+            models: [{ id: 'review-model', name: 'Review model' }],
+          },
+        },
+      }),
+    );
+    mockGetModel.mockReturnValue(undefined);
+
+    await expect(
+      resolvePiModelConfig({
+        cwd,
+        home,
+        env: { LOCAL_MODEL_KEY: 'local-key' },
+      }),
+    ).resolves.toMatchObject({
+      provider: 'local',
+      modelId: 'review-model',
+      apiKey: 'local-key',
+      model: {
+        name: 'Review model',
+        api: 'openai-completions',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        headers: { Authorization: 'Bearer local-key' },
+      },
     });
   });
 });
