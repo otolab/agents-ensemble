@@ -1,5 +1,23 @@
 # @agents-ensemble/core
 
+## 0.7.0
+
+### Minor Changes
+
+- 30378d8: Extract the backend-neutral ConductorAgent interface and factory, and move the default implementation behind the Cursor SDK backend.
+- 4bbfd69: Add configurable Cursor/Pi conductor backend selection, sidecar backend persistence, and resume mismatch validation. Pi selection remains an explicit unsupported stub until #352.
+- c1ed2be: Add the backend-neutral ConductorTool registry and Cursor SDK adapter for conductor harness tools.
+- d35e885: Add the Pi conductor backend with native system prompts, harness-tool adapters, and Pi file-based model/auth configuration.
+- 2497e75: Load the resolved ensemble MCP configuration into the Pi conductor through a pinned MCP bridge, alongside the existing Cursor SDK path.
+- c499139: Wire the Pi conductor to user/project `.ensemble/pi` resources, including local extensions, while retaining the fixed harness and MCP tool loadout.
+
+### Patch Changes
+
+- 72e21fd: Detect GitHub CI completions from normalized check-state differences instead of run identities, while preserving bootstrap and retry behavior.
+- b23cbb0: Persist Pi conductor transcripts and restore them for `--continue` / `--resume` with the existing sidecar agent id.
+- 1cd7865: Ensure dispatchable worker completion and failure events are delivered before a conductor session stops, regardless of which event source triggered the preceding send.
+- a1b685b: Warn when isolated worktree cleanup is skipped or fails, and retry transient cleanup failures after `/exit`.
+
 ## 0.6.5
 
 ### Patch Changes

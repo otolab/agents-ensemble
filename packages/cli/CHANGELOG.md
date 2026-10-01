@@ -1,5 +1,28 @@
 # @agents-ensemble/cli
 
+## 0.7.0
+
+### Patch Changes
+
+- 4bbfd69: Add configurable Cursor/Pi conductor backend selection, sidecar backend persistence, and resume mismatch validation. Pi selection remains an explicit unsupported stub until #352.
+- 9305ca9: Open questions ペインを内容駆動で拡大し、長文 question + context を通常端末で読めるようにした。非選択 question の compact 行も常に表示する。
+- f3ec576: TUI と端末出力の inline Markdown で、リスト・GFM テーブル内のスタイルと通常リンク表示に対応しました。
+- 6d6af3f: TTY TUI の `stream` で keyboard detached 中の新着 activity log を保留し、`End` で最新へ追従できるようにしました。`pane` では detached 中の新着追記後も同じログ行を維持します。
+- 715a438: Coalesce terminal-width decreases during TUI resize so pane and stream live frames are redrawn once at the final width.
+- ef7db30: Recover the stream TUI after a settled terminal-width shrink by resetting the display and replaying retained activity history.
+- a1b685b: Warn when isolated worktree cleanup is skipped or fails, and retry transient cleanup failures after `/exit`.
+- Updated dependencies [72e21fd]
+- Updated dependencies [30378d8]
+- Updated dependencies [4bbfd69]
+- Updated dependencies [c1ed2be]
+- Updated dependencies [d35e885]
+- Updated dependencies [2497e75]
+- Updated dependencies [c499139]
+- Updated dependencies [b23cbb0]
+- Updated dependencies [1cd7865]
+- Updated dependencies [a1b685b]
+  - @agents-ensemble/core@0.7.0
+
 ## 0.6.5
 
 ### Patch Changes
