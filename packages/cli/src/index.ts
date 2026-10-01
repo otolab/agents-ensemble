@@ -3,10 +3,7 @@
 import { resolve } from 'node:path';
 import { Command } from 'commander';
 import {
-  getConductorAuthStatus,
   listConductorModels,
-  loginConductor,
-  logoutConductor,
   resolveIssueUrl,
 } from '@agents-ensemble/core';
 import { readCliPackageVersion } from './cli-version.js';
@@ -17,6 +14,13 @@ import { resolveIssueSummaryFormat } from './resolve-summary-format.js';
 import { writeIssueSessionSummary } from './write-issue-session-summary.js';
 import { formatProfilesListJson, formatProfilesListText } from './format-profiles-list.js';
 import { normalizeInitialOperatorMessage } from './operator-message.js';
+import {
+  runConductorAuthStatus,
+  runConductorLogin,
+  runConductorLogout,
+  resolveConductorCommandContext,
+  type ConductorCommandOptions,
+} from './conductor-auth-command.js';
 
 const program = new Command();
 
@@ -151,16 +155,33 @@ program
     },
   );
 
-const auth = program.command('auth').description('Conductor (SDK) authentication');
+function addConductorCommandOptions(command: Command): Command {
+  return command
+    .option(
+      '--repo-root <path>',
+      'Repository root used for config, profile, and Pi project resources',
+      process.cwd(),
+    )
+    .option('--profile <name>', 'Team profile used to resolve conductor.backend')
+    .option('--provider <id>', 'Pi provider (default: settings.json defaultProvider)')
+    .option('--model-id <id>', 'Pi model id used to infer the provider');
+}
 
-auth
-  .command('login')
+const auth = program.command('auth').description('Conductor authentication');
+
+addConductorCommandOptions(auth.command('login'))
   .description(
-    'Browser login for conductor. Stores credentials in ~/.cursor/sdk/auth.json',
+    'Log in to the configured conductor backend (Cursor browser login or Pi provider login)',
   )
-  .action(async () => {
+  .action(async (options: ConductorCommandOptions) => {
     try {
-      const result = await loginConductor();
+      const result = await runConductorLogin(options);
+      if ('method' in result) {
+        console.log(
+          `Pi: logged in provider ${result.provider} (${result.method}); stored in ${result.authPath}`,
+        );
+        return;
+      }
       const who = result.email ?? 'unknown';
       console.log(`Logged in as ${who}`);
       console.log(`API key expires: ${new Date(result.apiKeyExpiresAtMs).toISOString()}`);
@@ -170,14 +191,15 @@ auth
     }
   });
 
-auth
-  .command('logout')
-  .description(
-    'Clear stored conductor (SDK) credentials from ~/.cursor/sdk/auth.json',
-  )
-  .action(async () => {
+addConductorCommandOptions(auth.command('logout'))
+  .description('Clear stored credentials for the configured conductor backend')
+  .action(async (options: ConductorCommandOptions) => {
     try {
-      await logoutConductor();
+      const result = await runConductorLogout(options);
+      if (result && 'backend' in result && result.backend === 'pi') {
+        console.log(`Pi: provider ${result.provider} logged out`);
+        return;
+      }
       console.log('SDK: logged out');
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
@@ -185,12 +207,25 @@ auth
     }
   });
 
-auth
-  .command('status')
-  .description('Show conductor (SDK) authentication status')
-  .action(async () => {
+addConductorCommandOptions(auth.command('status'))
+  .description('Show non-secret authentication status for the configured backend')
+  .action(async (options: ConductorCommandOptions) => {
     try {
-      const status = await getConductorAuthStatus();
+      const status = await runConductorAuthStatus(options);
+      if ('providers' in status) {
+        console.log(`Pi auth file: ${status.authPath}`);
+        if (status.providers.length === 0) {
+          console.log('Pi: no provider credentials configured');
+        }
+        for (const provider of status.providers) {
+          const state = provider.configured ? 'configured' : 'not configured';
+          const source = provider.source ? `; source=${provider.source}` : '';
+          const label = provider.label ? `; label=${provider.label}` : '';
+          console.log(`Pi: ${provider.provider}: ${state}${source}${label}`);
+        }
+        return;
+      }
+
       if (status.status === 'logged-in') {
         const who = status.email ?? 'unknown';
         const expires = status.apiKeyExpiresAtMs
@@ -212,17 +247,19 @@ auth
     }
   });
 
-const models = program
-  .command('models')
-  .description('Conductor (SDK) model catalog');
+const models = program.command('models').description('Conductor model catalog');
 
-models
-  .command('list')
-  .description('List models available to the authenticated conductor account')
+addConductorCommandOptions(models.command('list'))
+  .description('List models available to the authenticated conductor backend')
   .option('--json', 'Output JSON')
-  .action(async (options: { json?: boolean }) => {
+  .action(async (options: ConductorCommandOptions & { json?: boolean }) => {
     try {
-      const catalog = await listConductorModels();
+      const context = await resolveConductorCommandContext(options);
+      const catalog = await listConductorModels({
+        ...context.auth,
+        ...(options.provider ? { provider: options.provider } : {}),
+        ...(options.modelId ? { modelId: options.modelId } : {}),
+      });
       if (options.json) {
         console.log(formatModelsListJson(catalog));
         return;

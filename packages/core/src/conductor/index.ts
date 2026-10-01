@@ -43,6 +43,27 @@ export type {
   PiThemeResource,
 } from './pi-resource-loader.js';
 export {
+  createPiConductorAuthContext,
+  getPiConductorAuthStatus,
+  hasPiConductorAuth,
+  hasPiProviderAuth,
+  isPiConductorOAuthProvider,
+  listPiConductorModels,
+  loginPiConductor,
+  logoutPiConductor,
+  resolvePiConductorApiKey,
+  resolvePiConductorProvider,
+} from './conductor-pi-auth.js';
+export type {
+  PiConductorAuthContext,
+  PiConductorAuthOptions,
+  PiConductorAuthStatus,
+  PiConductorLoginResult,
+  PiConductorLogoutResult,
+  PiConductorModelListEntry,
+  PiProviderAuthStatus,
+} from './conductor-pi-auth.js';
+export {
   createPiMcpBridge,
   PI_MCP_SDK_VERSION,
 } from './pi-mcp-bridge.js';
@@ -219,7 +240,13 @@ export type {
 
 export {
   CONDUCTOR_AUTH_HINT,
+  resolveConductorAuthBackend,
   formatConductorAuthRecoveryHint,
+  type ConductorAuthOptions,
+  type ConductorAuthRecoveryOptions,
+  type ConductorAuthStatus,
+  type ConductorLoginResult,
+  type ConductorLogoutResult,
   getConductorAuthStatus,
   hasConductorAuth,
   isBareConductorSendAuthError,

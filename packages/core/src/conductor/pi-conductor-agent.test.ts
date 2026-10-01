@@ -150,7 +150,7 @@ describe('PiConductorAgent', () => {
       name: 'project_extension',
     });
     expect(agentOptions.sessionId).toBe(conductor.agentId);
-    expect(agentOptions.getApiKey('anthropic')).toBe('file-key');
+    await expect(agentOptions.getApiKey('anthropic')).resolves.toBe('file-key');
 
     await conductor.close();
     expect(fakeAgent.abort).toHaveBeenCalledOnce();
@@ -687,7 +687,7 @@ describe('PiConductorAgent', () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
-  it('uses Pi settings and auth files without requiring ensemble auth', async () => {
+  it('uses Pi settings and auth files with the standard Pi resource precedence', async () => {
     const piRoot = join(cwd, '.ensemble', 'pi');
     const userPiRoot = join(home, '.ensemble', 'pi');
     await mkdir(piRoot, { recursive: true });

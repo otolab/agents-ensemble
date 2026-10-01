@@ -986,7 +986,18 @@ export async function runConductorSession(
         sessionLogger.emit({
           type: 'conductor.auth.recovery',
           agentId: conductorHandle.conductor.agentId,
-          hint: formatConductorAuthRecoveryHint(conductorHandle.conductor.agentId),
+          hint: formatConductorAuthRecoveryHint(
+            conductorHandle.conductor.agentId,
+            conductorBackend === 'pi'
+              ? {
+                  backend: 'pi',
+                  pi: { agentDir: conductorOptions.pi?.agentDir },
+                  provider: options.modelId?.includes('/')
+                    ? options.modelId.split('/', 1)[0]
+                    : undefined,
+                }
+              : { backend: 'cursor' },
+          ),
         });
       }
       scheduleSidecarFlush();

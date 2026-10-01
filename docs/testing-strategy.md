@@ -147,7 +147,7 @@ pnpm test:e2e
 
 ### 前提・スキップ
 
-- `CURSOR_API_KEY` または `ensemble auth login` 済み
+- 対象 conductor backend の認証（Cursor は `CURSOR_API_KEY` / `ensemble auth login`、Pi は `ensemble auth login --provider <id>` または Pi `auth.json`）
 - `test-acp.yaml` + テスト用 Issue URL（または専用テスト repo）
 - GitHub API トークン（`GITHUB_TOKEN` / `GH_TOKEN`。実 Issue を触る場合）
 

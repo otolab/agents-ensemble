@@ -67,7 +67,7 @@ describe('session sinks', () => {
     });
 
     expect(stderr).toHaveBeenCalledWith(
-      '[harness] conductor.send n=2 status=error workerDone=0 workerFailed=0 障害種別=conductor SDK のモデル拒否。復旧=モデル設定と入力内容を確認して再試行してください。 error=Model Blocked',
+      '[harness] conductor.send n=2 status=error workerDone=0 workerFailed=0 障害種別=conductor のモデル拒否。復旧=モデル設定と入力内容を確認して再試行してください。 error=Model Blocked',
     );
     expect(stderr).toHaveBeenCalledTimes(1);
 

@@ -95,6 +95,20 @@ describe('formatConductorAuthRecoveryHint', () => {
     expect(hint).toContain('CURSOR_API_KEY');
     expect(hint).not.toMatch(/ensemble auth logout →/);
   });
+
+  it('gives Pi users a provider-specific login and auth-file hint', () => {
+    const hint = formatConductorAuthRecoveryHint('agent-1', {
+      backend: 'pi',
+      provider: 'anthropic',
+      pi: { agentDir: '/tmp/ensemble-pi' },
+    });
+
+    expect(hint).toContain('provider=anthropic');
+    expect(hint).toContain('ensemble auth login --provider anthropic');
+    expect(hint).toContain('/tmp/ensemble-pi/auth.json');
+    expect(hint).toContain('--resume agent-1');
+    expect(hint).not.toContain('ensemble auth logout');
+  });
 });
 
 describe('logoutConductor', () => {

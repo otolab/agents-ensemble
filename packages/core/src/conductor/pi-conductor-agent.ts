@@ -6,13 +6,16 @@ import {
   type AgentTool,
 } from '@earendil-works/pi-agent-core';
 import {
-  getEnvApiKey,
   getModel,
   getModels,
   getProviders,
   type AssistantMessage,
   type Model,
 } from '@earendil-works/pi-ai/compat';
+import {
+  createPiConductorAuthContext,
+  resolvePiConductorApiKey,
+} from './conductor-pi-auth.js';
 import type {
   ConductorAgent,
   ConductorAgentCreateOptions,
@@ -28,7 +31,6 @@ import {
   expandPiResourcePrompt,
   formatPiSkillsForPrompt,
   loadPiResources,
-  type PiAuthFile,
   type PiModelDefinition,
   type PiModelCost,
   type PiModelOverride,
@@ -64,16 +66,18 @@ export async function resolvePiModelConfig(
   },
 ): Promise<PiResolvedModel> {
   const resources = await loadPiResources(options);
-  return resolvePiModelConfigFromResources(options, resources);
+  const authContext = createPiConductorAuthContext(options);
+  return resolvePiModelConfigFromResources(options, resources, authContext);
 }
 
-function resolvePiModelConfigFromResources(
+async function resolvePiModelConfigFromResources(
   options: PiResourceLoaderOptions & {
     modelId?: string;
     apiKey?: string;
   },
   resources: PiResources,
-): PiResolvedModel {
+  authContext: ReturnType<typeof createPiConductorAuthContext>,
+): Promise<PiResolvedModel> {
   const env = options.env ?? process.env;
   const settings = resources.settings;
   const selection = resolvePiModelSelection(options.modelId, settings, resources.models);
@@ -96,12 +100,13 @@ function resolvePiModelConfigFromResources(
     );
   }
 
-  const apiKey =
-    options.apiKey ??
-    resolvePiAuthKey(resources.authLayers, selection.provider, env) ??
-    resolvePiSettingsApiKey(settings, selection.provider, env) ??
-    resolvePiModelsApiKey(providerConfig, env) ??
-    getEnvApiKey(selection.provider, toProviderEnv(env));
+  const apiKey = await resolvePiConductorApiKey({
+    authStorage: authContext.authStorage,
+    resources,
+    provider: selection.provider,
+    explicitApiKey: options.apiKey,
+    env,
+  });
 
   return {
     provider: selection.provider,
@@ -138,7 +143,8 @@ export class PiConductorAgent implements ConductorAgent {
   ): Promise<PiConductorAgent> {
     const agentId = randomUUID();
     const resources = await loadPiResources(options);
-    const resolved = resolvePiModelConfigFromResources(options, resources);
+    const authContext = createPiConductorAuthContext(options);
+    const resolved = await resolvePiModelConfigFromResources(options, resources, authContext);
     const session = await PiConductorSession.create(options.cwd, agentId);
     const mcpBridge = await createPiMcpBridge(options.mcpServers, {
       cwd: options.cwd,
@@ -152,6 +158,7 @@ export class PiConductorAgent implements ConductorAgent {
           session.messages,
           mcpBridge,
           resources,
+          authContext.authStorage,
         ),
         session,
         mcpBridge,
@@ -171,7 +178,8 @@ export class PiConductorAgent implements ConductorAgent {
     options: ConductorAgentCreateOptions,
   ): Promise<PiConductorAgent> {
     const resources = await loadPiResources(options);
-    const resolved = resolvePiModelConfigFromResources(options, resources);
+    const authContext = createPiConductorAuthContext(options);
+    const resolved = await resolvePiModelConfigFromResources(options, resources, authContext);
     const session = await PiConductorSession.resume(options.cwd, agentId);
     const mcpBridge = await createPiMcpBridge(options.mcpServers, {
       cwd: options.cwd,
@@ -185,6 +193,7 @@ export class PiConductorAgent implements ConductorAgent {
           session.messages,
           mcpBridge,
           resources,
+          authContext.authStorage,
         ),
         session,
         mcpBridge,
@@ -351,6 +360,7 @@ function createPiAgent(
   messages: readonly AgentMessage[],
   mcpBridge: PiMcpBridge | undefined,
   resources: PiResources,
+  authStorage: ReturnType<typeof createPiConductorAuthContext>['authStorage'],
 ): Agent {
   const tools = uniquePiTools(
     options.customTools ? toPiAgentTools(options.customTools) : [],
@@ -369,9 +379,13 @@ function createPiAgent(
     },
     sessionId: agentId,
     getApiKey: (provider) =>
-      provider === resolved.provider
-        ? (resolved.apiKey ?? getEnvApiKey(provider))
-        : getEnvApiKey(provider),
+      resolvePiConductorApiKey({
+        authStorage,
+        resources,
+        provider,
+        explicitApiKey:
+          provider === resolved.provider ? options.apiKey : undefined,
+      }),
   });
 }
 
@@ -561,66 +575,6 @@ function resolvePiModelSelection(
   return { provider, modelId };
 }
 
-function resolvePiAuthKey(
-  authLayers: readonly PiAuthFile[],
-  provider: string,
-  env: NodeJS.ProcessEnv,
-): string | undefined {
-  for (let index = authLayers.length - 1; index >= 0; index -= 1) {
-    const value = resolvePiAuthEntry(authLayers[index]?.[provider], env);
-    if (value !== undefined) return value;
-  }
-  return undefined;
-}
-
-function resolvePiAuthEntry(
-  entry: unknown,
-  env: NodeJS.ProcessEnv,
-): string | undefined {
-  if (typeof entry === 'string') return expandEnvReference(entry, env);
-  if (!isRecord(entry)) return undefined;
-
-  for (const key of ['key', 'apiKey', 'token', 'accessToken', 'access']) {
-    const value = entry[key];
-    if (typeof value === 'string') {
-      return expandEnvReference(value, env);
-    }
-  }
-  return undefined;
-}
-
-function resolvePiModelsApiKey(
-  providerConfig: PiProviderConfig | undefined,
-  env: NodeJS.ProcessEnv,
-): string | undefined {
-  return providerConfig?.apiKey
-    ? expandEnvReference(providerConfig.apiKey, env)
-    : undefined;
-}
-
-function resolvePiSettingsApiKey(
-  settings: PiSettingsFile,
-  provider: string,
-  env: NodeJS.ProcessEnv,
-): string | undefined {
-  if (typeof settings.apiKey === 'string') {
-    return expandEnvReference(settings.apiKey, env);
-  }
-  if (!isRecord(settings.apiKeys)) return undefined;
-  const value = settings.apiKeys[provider];
-  return typeof value === 'string' ? expandEnvReference(value, env) : undefined;
-}
-
-function expandEnvReference(value: string, env: NodeJS.ProcessEnv): string | undefined {
-  if (value.startsWith('!')) {
-    // Pi supports command-backed credentials. Do not execute arbitrary commands
-    // from a harness config; #356/#358 can define a deliberate credential hook.
-    return undefined;
-  }
-  const variable = /^\$\{([^}]+)\}$/.exec(value) ?? /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(value);
-  return variable ? env[variable[1]] : value;
-}
-
 function normalizeConfiguredString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim();
@@ -681,12 +635,4 @@ function isRecord(value: unknown): value is Record<string, any> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function toProviderEnv(env: NodeJS.ProcessEnv): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(env).filter(
-      (entry): entry is [string, string] => typeof entry[1] === 'string',
-    ),
-  );
 }
