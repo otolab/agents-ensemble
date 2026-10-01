@@ -507,9 +507,13 @@ function mergePiHeaders(
 }
 
 function mergePiObjects(
-  ...values: Array<Record<string, unknown> | undefined>
+  ...values: unknown[]
 ): Record<string, unknown> {
-  return Object.assign({}, ...values.filter((value): value is Record<string, unknown> => Boolean(value)));
+  const merged: Record<string, unknown> = {};
+  for (const value of values) {
+    if (isRecord(value)) Object.assign(merged, value);
+  }
+  return merged;
 }
 
 function resolvePiModelSelection(
