@@ -64,7 +64,7 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 | ユーザ | `~/.ensemble/pi/` | `~/.pi/agent/`（`PI_CODING_AGENT_DIR` / SDK `agentDir` で指す） |
 | プロジェクト | `<repoRoot>/.ensemble/pi/` | 作業ツリー上の `.pi/`（`settings.json`、`extensions/`、`skills/` 等） |
 
-ディレクトリ内のファイル名・意味は Pi 正本に従う（例: `settings.json`、`extensions/`、`models.json`、`auth.json`）。[settings.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md) のキーをそのまま受け付ける。
+ディレクトリ内のファイル名・resource path の意味は Pi 正本に従う（例: `settings.json`、`extensions/`、`models.json`、`auth.json`）。ただし conductor は `pi-agent-core` の headless 経路であり、`pi-coding-agent` の全設定適用器を組み込まない。したがって [settings.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md) のキーを無条件に受け付ける契約にはしない。
 
 **harness が常に入れるもの（現行）**
 
@@ -75,7 +75,12 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 
 - 上記パスへの追加 **extensions / skills / prompts / themes / models.json**。extensions は harness/MCP の後ろに tool として追加し、skills は compiled system prompt へ、prompts は `/name args` の user prompt 展開へ接続する。`models.json` の custom provider/model と built-in override は Pi model 解決へ反映する。
 - `themes/` は Pi 標準 JSON として読み込み・project 同名解決を行う。ただし conductor は headless `pi-agent-core` であり、Pi TUI の renderer を持たないため色・表示設定はモデル入出力へ適用しない。
-- Pi 標準の `settings.json` による挙動調整（モデル既定、thinking、パッケージ宣言等）。
+- Pi 標準の `settings.json` のうち、headless conductor が実際に使うキーは次の範囲に限定する。
+  - `defaultProvider` / `defaultModel`（`model` / `modelId` は conductor 互換 alias）: モデル選択。
+  - `apiKey` / `apiKeys`: `auth.json` の provider credential がない場合の認証 fallback。
+  - `extensions` / `skills` / `prompts` / `themes`: 各 resource root 基準の追加 path。
+- `defaultThinkingLevel`、`modelThinkingLevels`、`thinkingBudgets`、`enabledModels`、`defaultTools`、`codemode.*`、`packages`、`enableSkillCommands`、`sessionDir`、`compaction.*`、`branchSummary.*`、`theme` / `tuiMode` / `terminal.*` / `images.*` / `markdown.*`、network / retry / shell / update / telemetry 系の Pi settings key は headless conductor では **無視**する。未掲載の未対応キーも同じく、警告・拒否なしで無視する。`enableSkillCommands` は `/skill:<name>` の展開可否を変更せず、`packages` は install・package resource 解決を行わない。
+- 対応範囲の一覧と、無視されるキーの挙動は [config.md の headless 対応範囲](../config.md#settingsjson-の-headless-対応範囲) を利用者向け正本とする。
 - `config.yaml` の `conductor.pi.*` は **パス上書きや discovery のヒント**に限定し、Pi 本体の設定スキーマを二重定義しない。
 
 **system prompt の優先**
@@ -125,3 +130,4 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 | 2026-09-29 | #354 の Pi MCP bridge を Pi ExtensionAPI extension ではなく core 内 in-process thin bridge として具体化 |
 | 2026-10-01 | #358 の実装で user/project resource root と extension discovery を追加。`SYSTEM.md` / `APPEND_SYSTEM.md` は conductor では無視する既定案を確定 |
 | 2026-10-01 | #358 reviewer 差し戻し対応: `models.json` の model 解決、skills/prompts の headless 適用、themes の JSON 解決（TUI 非適用）、および provider 単位の project-over-user auth を明記 |
+| 2026-10-01 | #358 2 回目の reviewer 差し戻し対応: Pi `settings.json` は headless conductor の対応キー（モデル選択、認証 fallback、resource path）に限定し、thinking / packages / TUI 等の未対応キーを無視する契約へ修正 |
