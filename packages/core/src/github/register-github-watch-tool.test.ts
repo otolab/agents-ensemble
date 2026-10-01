@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { emptyGitHubMonitorCursor } from './github-monitor-cursor.js';
 import { createRegisterGitHubWatchTool } from './register-github-watch-tool.js';
+import { createUnregisterGitHubWatchTool } from './unregister-github-watch-tool.js';
 
 const ISSUE_URL = 'https://github.com/org/repo/issues/39';
 
@@ -103,5 +104,73 @@ describe('createRegisterGitHubWatchTool', () => {
       }),
     ).rejects.toThrow('same repository as the session Issue');
     expect(cursor.explicitPullRequests).toEqual({});
+  });
+});
+
+describe('createUnregisterGitHubWatchTool', () => {
+  it('removes only the explicit watch and preserves the PR cursor', async () => {
+    const cursor = {
+      pullRequests: { '354': { lastReviewId: '10' } },
+      explicitPullRequests: {
+        '354': {
+          registeredAt: '2026-09-07T05:00:00.000Z',
+          kinds: ['pr.review' as const],
+        },
+      },
+    };
+    const onUnregistered = vi.fn();
+    const tools = createUnregisterGitHubWatchTool({
+      issueUrl: ISSUE_URL,
+      getCursor: () => cursor,
+      onUnregistered,
+    });
+
+    const result = await tools.unregister_github_watch.execute({
+      prUrl: 'https://github.com/org/repo/pull/354/',
+    });
+
+    expect(result.structuredContent).toEqual({
+      ok: true,
+      prNumber: 354,
+      url: 'https://github.com/org/repo/pull/354',
+      message: 'Unregistered from harness GitHub monitor',
+    });
+    expect(cursor.explicitPullRequests).toEqual({});
+    expect(cursor.pullRequests).toEqual({ '354': { lastReviewId: '10' } });
+    expect(onUnregistered).toHaveBeenCalledWith(354);
+  });
+
+  it('returns ok false when the PR is not explicitly registered', async () => {
+    const cursor = emptyGitHubMonitorCursor();
+    const onUnregistered = vi.fn();
+    const tools = createUnregisterGitHubWatchTool({
+      issueUrl: ISSUE_URL,
+      getCursor: () => cursor,
+      onUnregistered,
+    });
+
+    const result = await tools.unregister_github_watch.execute({ prNumber: 355 });
+
+    expect(result.structuredContent).toEqual({
+      ok: false,
+      prNumber: 355,
+      url: 'https://github.com/org/repo/pull/355',
+      message:
+        'Pull request is not explicitly registered for the harness GitHub monitor',
+    });
+    expect(onUnregistered).not.toHaveBeenCalled();
+  });
+
+  it('throws for invalid arguments using the register parser rules', async () => {
+    const tools = createUnregisterGitHubWatchTool({
+      issueUrl: ISSUE_URL,
+      getCursor: () => emptyGitHubMonitorCursor(),
+    });
+
+    await expect(
+      tools.unregister_github_watch.execute({
+        prUrl: 'https://github.com/other/repo/pull/354',
+      }),
+    ).rejects.toThrow('same repository as the session Issue');
   });
 });

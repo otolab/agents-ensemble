@@ -174,6 +174,7 @@ describe('runConductorSession resume / shutdown', () => {
       stop: vi.fn().mockResolvedValue(undefined),
       flush: vi.fn(),
       getCursor: vi.fn().mockReturnValue({ lastIssueCommentId: undefined, pullRequests: {} }),
+      unregisterPullRequest: vi.fn(),
       onUpdate: options.onUpdate,
     }));
   });
@@ -564,12 +565,96 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     expect(conductorTools?.register_github_watch).toBeDefined();
+    expect(conductorTools?.unregister_github_watch).toBeDefined();
     const sidecar = await loadSessionSidecar(
       sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
     expect(sidecar?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
       registeredAt: expect.any(String),
       kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+    });
+  });
+
+  it('unregisters a resumed GitHub watch and preserves its poll cursor in the sidecar', async () => {
+    const agentId = 'resume-agent-with-github-watch';
+    await saveSessionSidecar(
+      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        githubMonitor: {
+          pullRequests: { '354': { lastReviewId: '10' } },
+          explicitPullRequests: {
+            '354': {
+              registeredAt: '2026-09-07T05:00:00.000Z',
+              kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+            },
+          },
+        },
+        updatedAt: 0,
+      },
+    );
+
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockResume.mockImplementation(async (_agentId, agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+
+    let unregisterPullRequest: ReturnType<typeof vi.fn> | undefined;
+    mockCreateGitHubMonitor.mockImplementationOnce((monitorOptions) => {
+      const cursor = monitorOptions.cursor!;
+      unregisterPullRequest = vi.fn((prNumber: number) => {
+        delete cursor.explicitPullRequests?.[String(prNumber)];
+        monitorOptions.onCursorChange?.(cursor);
+      });
+      return {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn(),
+        getCursor: vi.fn(() => cursor),
+        registerPullRequest: vi.fn(),
+        unregisterPullRequest,
+      };
+    });
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: agentId,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockResume).toHaveBeenCalled();
+    expect(conductorTools?.unregister_github_watch).toBeDefined();
+    await conductorTools!.unregister_github_watch!.execute({ prNumber: 354 });
+    expect(unregisterPullRequest).toHaveBeenCalledWith(354);
+    await vi.waitFor(async () => {
+      const sidecar = await loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+      );
+      expect(sidecar?.githubMonitor?.explicitPullRequests).toEqual({});
+    });
+    const sidecar = await loadSessionSidecar(
+      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+    );
+    expect(sidecar?.githubMonitor?.explicitPullRequests).toEqual({});
+    expect(sidecar?.githubMonitor?.pullRequests?.['354']).toEqual({
+      lastReviewId: '10',
     });
   });
 

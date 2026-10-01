@@ -146,7 +146,7 @@ SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが 
 | `cause` | `parse` \| `gh_cli` \| `auth` \| `unknown` | 失敗原因の分類 |
 | `retryable` | `boolean`（任意） | rate limit / 5xx 等で再試行が有効なとき `true` |
 
-監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。関連 PR は GitHub Search で自動検出するほか、conductor の `register_github_watch` で明示登録できる。明示登録した PR は Search に未反映でも監視され、登録後は即時（in-flight poll 中ならその完了直後）に bootstrap poll を行う。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
+監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。関連 PR は GitHub Search で自動検出するほか、conductor の `register_github_watch` で明示登録でき、`unregister_github_watch` で明示登録を解除できる。明示登録した PR は Search に未反映でも監視され、登録後は即時（in-flight poll 中ならその完了直後）に bootstrap poll を行う。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
 
 **運用制限（#39）**
 

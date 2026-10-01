@@ -90,6 +90,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- implementer から PR 作成の報告を受けたら、GitHub Search の反映を待たず `register_github_watch` で監視登録する',
         '- `register_github_watch` には `prNumber` または `prUrl` を渡す。同じリポジトリの PR だけを登録する',
         '- `kinds` を省略すると PR review / review comment / CI 完了を監視する。登録済み PR の再登録は不要',
+        '- PR がマージ完了・誤登録・監視不要になったら `unregister_github_watch` で明示登録を解除する。Search に残る PR は引き続き監視される',
       ],
     },
     {

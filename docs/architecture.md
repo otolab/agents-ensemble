@@ -117,7 +117,7 @@ conductor の LLM backend は Cursor SDK と Pi（`pi-agent-core`）から起動
 | 手段 | 内容 |
 |------|------|
 | `mode: "agent"` | SDK 実行モード（[adr/0006-conductor-agent-mode.md](adr/0006-conductor-agent-mode.md)）。振る舞いの正本は下記プロンプト / materials |
-| `customTools` | conductor 用: `ask_human`, `answer_open_question`, `list_open_questions`, `get_open_question`, `resolve_permission`, `register_github_watch`（[ADR 0007](adr/0007-permission-pipeline.md), [ADR 0008](adr/0008-human-dialogue-open-questions.md)）。worker 起動はセッション開始時 |
+| `customTools` | conductor 用: `ask_human`, `answer_open_question`, `list_open_questions`, `get_open_question`, `resolve_permission`, `register_github_watch`, `unregister_github_watch`（[ADR 0007](adr/0007-permission-pipeline.md), [ADR 0008](adr/0008-human-dialogue-open-questions.md)）。worker 起動はセッション開始時 |
 | プロンプト / materials | PromptModule と profile materials で指揮専任・委任方針を明示（conductor の正本） |
 
 conductor は **理解と dispatch に専念**し、ファイル編集・テスト実行は worker の domain とする。
@@ -146,7 +146,7 @@ await using conductor = await Agent.create({
   mode: "agent",
   local: {
     cwd: orchestratorWorkspace,
-    customTools: { ask_human, answer_open_question, list_open_questions, get_open_question, resolve_permission, register_github_watch },
+    customTools: { ask_human, answer_open_question, list_open_questions, get_open_question, resolve_permission, register_github_watch, unregister_github_watch },
   },
 });
 
@@ -253,7 +253,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 セッション開始 ──attach（待機 prompt）──► worker 常駐（agent acp プロセス + ACP session）
 conductor ──prompt_worker──► WorkerOutboundQueue ──sendWorkerMessage──► session/prompt
 conductor ──list_workers / get_worker_status──► WorkerRuntime（読み取り専用・イベント列に積まない）
-conductor ──register_github_watch──► GitHubMonitor cursor（明示 PR watch）──► 即時 bootstrap poll
+conductor ──register/unregister_github_watch──► GitHubMonitor cursor（明示 PR watch）──► 即時 bootstrap poll（register 時）
 conductor ──get_session_usage / get_usage──────► SessionUsageTracker（読み取り専用・イベント列に積まない）
 worker    ──permission──────► ConductorInbox ──► SessionEventQueue ──► agent.send
 worker    ──Issue / PR 報告──► （非同期正本。harness 非経由）
