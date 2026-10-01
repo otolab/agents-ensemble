@@ -62,7 +62,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 |------|--------|
 | GitHub API | `GITHUB_TOKEN` > `GH_TOKEN` > （`allowGhAuthTokenFallback: true` 時のみ）`gh auth token` |
 | conductor (cursor) | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
-| conductor (pi) | project `auth.json` の読取優先 > user `AuthStorage`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > `settings.json` fallback > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存 |
+| conductor (pi) | project `auth.json` の読取優先 > user `AuthStorage`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > `settings.json` fallback > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存。project 層の明示的な OAuth credential は refresh できないため使わず、user 層の `AuthStorage` へログインする |
 | worker ACP（preset 依存） | preset ごとに README / ADR 0019 参照 |
 
 ## 一覧 — Phase 1（config.yaml）

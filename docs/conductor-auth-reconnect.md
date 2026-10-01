@@ -16,7 +16,7 @@ send が auth-like error のとき:
 
 `close` → `ConductorAgentFactory.resume(sameId)` → send 再試行（1 回）
 
-まだ失敗する場合は PR #99 互換の backend 固有 `[auth]` ヒントへフォールバックする。Cursor は手動 `logout` → `login`、Pi は `ensemble auth login --provider <provider>` または project/user auth の確認を案内し、いずれも `--resume` / `--continue` で再試行する。in-process での自動 `login` は行わない（オペレータ方針）。
+まだ失敗する場合は PR #99 互換の backend 固有 `[auth]` ヒントへフォールバックする。Cursor は手動 `logout` → `login`、Pi は `ensemble auth login --provider <provider>` または project/user auth の確認を案内し、project 層の OAuth credential は stale token を使わず user 層へ移すよう案内する。いずれも `--resume` / `--continue` で再試行する。in-process での自動 `login` は行わない（オペレータ方針）。
 
 **非採用**
 

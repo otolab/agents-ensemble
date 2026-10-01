@@ -123,7 +123,7 @@ profile / worker に `acp` がある worker は `--default-acp-*` / config `acp.
 - `prompts/`: Markdown template を読み込み、`/name args` の user prompt を Pi 標準の引数置換で展開します。
 - `themes/`: Pi 標準 JSON として読み込み、project 同名を優先します。conductor は headless `pi-agent-core` のため TUI renderer がなく、theme の色・表示設定はモデル入出力には適用しません。
 
-Pi の認証 CLI は provider 単位です。`ensemble auth login --provider <id>` は API-key provider なら secret prompt の値を user root の `auth.json`（既定 `~/.ensemble/pi/auth.json`）へ `AuthStorage.set` し、OAuth provider なら Pi の `AuthStorage.login` を TTY / stderr 経由で実行します。`--provider` を省略した場合は `settings.json` の `defaultProvider` または選択モデルから解決します。`logout` / `status` も同じ provider 解決を使います。project `auth.json` は既存の project-over-user 読取優先を維持しますが、login の書込み先にはなりません。`ensemble models list` は `ModelRegistry` と project resource の解決結果から認証済み model だけを表示します。
+Pi の認証 CLI は provider 単位です。`ensemble auth login --provider <id>` は API-key provider なら secret prompt の値を user root の `auth.json`（既定 `~/.ensemble/pi/auth.json`）へ `AuthStorage.set` し、OAuth provider なら Pi の `AuthStorage.login` を TTY / stderr 経由で実行します。`--provider` を省略した場合は `settings.json` の `defaultProvider` または選択モデルから解決します。`logout` / `status` も同じ provider 解決を使います。project `auth.json` は既存の project-over-user 読取優先を維持しますが、login の書込み先にはなりません。project 層の明示的な OAuth credential は `AuthStorage` の refresh 対象外なので stale access token を使わず、実行時にエラーとして user 層ログインを案内します。OAuth は `ensemble auth login --provider <id>` で user 層へ保存してください。`ensemble models list` は `ModelRegistry` と project resource の解決結果から認証済み model だけを表示します。
 
 #### `settings.json` の headless 対応範囲
 

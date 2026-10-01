@@ -141,6 +141,62 @@ describe('Pi conductor authentication', () => {
     expect(getApiKey).toHaveBeenCalledWith('anthropic');
   });
 
+  it('rejects project OAuth credentials instead of sending an unrefreshable access token', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'auth.json'),
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: 'stale-access-token',
+          refresh: 'refresh-token',
+          expires: 0,
+        },
+      }),
+    );
+    const authStorage = AuthStorage.inMemory({
+      anthropic: { type: 'api_key', key: 'user-key' },
+    });
+    const resources = await loadPiResources({
+      cwd,
+      pi: { agentDir, projectDir },
+    });
+
+    await expect(
+      resolvePiConductorApiKey({
+        authStorage,
+        resources,
+        provider: 'anthropic',
+      }),
+    ).rejects.toThrow(/project .*OAuth.*ensemble auth login --provider anthropic/i);
+
+    expect(
+      hasPiConductorAuth({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'anthropic',
+      }),
+    ).toBe(false);
+    await expect(
+      getPiConductorAuthStatus({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'anthropic',
+      }),
+    ).resolves.toMatchObject({
+      providers: [
+        {
+          provider: 'anthropic',
+          configured: false,
+          source: 'project_oauth_unsupported',
+        },
+      ],
+    });
+  });
+
   it('resolves the configured provider and reports non-secret status', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
     const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));

@@ -242,8 +242,12 @@ export async function resolvePiConductorApiKey(options: {
   // both roots point at the same file, AuthStorage is the canonical reader so
   // OAuth refresh is not bypassed by the resource-layer compatibility parser.
   if (options.resources.roots.agentDir !== options.resources.roots.projectDir) {
+    const projectEntry = options.resources.authLayers.at(-1)?.[options.provider];
+    if (isPiOAuthAuthEntry(projectEntry)) {
+      throw new Error(formatProjectOAuthAuthError(options.provider));
+    }
     const projectKey = resolvePiAuthEntry(
-      options.resources.authLayers.at(-1)?.[options.provider],
+      projectEntry,
       env,
     );
     if (projectKey !== undefined) return projectKey;
@@ -293,9 +297,11 @@ export function hasPiConductorAuth(options: PiConductorAuthOptions): boolean {
     normalizeProvider(options.provider) ?? providerFromModelId(options.modelId);
 
   if (provider) {
+    const projectEntry = projectAuth?.[provider];
+    if (isPiOAuthAuthEntry(projectEntry)) return false;
     return (
       context.authStorage.hasAuth(provider) ||
-      resolvePiAuthEntry(projectAuth?.[provider], env) !== undefined ||
+      resolvePiAuthEntry(projectEntry, env) !== undefined ||
       resolvePiSettingsApiKey(
         (readPiJsonSync(join(roots.projectDir, 'settings.json')) as PiSettingsFile | undefined) ??
           {},
@@ -414,7 +420,15 @@ function getPiProviderAuthStatus(
   env: NodeJS.ProcessEnv,
 ): PiProviderAuthStatus {
   if (resources.roots.agentDir !== resources.roots.projectDir) {
-    const projectKey = resolvePiAuthEntry(resources.authLayers.at(-1)?.[provider], env);
+    const projectEntry = resources.authLayers.at(-1)?.[provider];
+    if (isPiOAuthAuthEntry(projectEntry)) {
+      return {
+        provider,
+        configured: false,
+        source: 'project_oauth_unsupported',
+      };
+    }
+    const projectKey = resolvePiAuthEntry(projectEntry, env);
     if (projectKey !== undefined) {
       return { provider, configured: true, source: 'project_stored' };
     }
@@ -491,11 +505,24 @@ function resolvePiAuthEntry(
 ): string | undefined {
   if (typeof entry === 'string') return expandEnvReference(entry, env);
   if (!isRecord(entry)) return undefined;
+  if (isPiOAuthAuthEntry(entry)) return undefined;
   for (const key of ['key', 'apiKey', 'token', 'accessToken', 'access']) {
     const value = entry[key];
     if (typeof value === 'string') return expandEnvReference(value, env);
   }
   return undefined;
+}
+
+function isPiOAuthAuthEntry(entry: unknown): boolean {
+  return isRecord(entry) && entry.type === 'oauth';
+}
+
+function formatProjectOAuthAuthError(provider: string): string {
+  return (
+    `Project Pi OAuth credentials for provider "${provider}" are not supported in ` +
+    'project .ensemble/pi/auth.json because that layer cannot refresh them safely. ' +
+    `Run ensemble auth login --provider ${provider} to store the credential in the user AuthStorage.`
+  );
 }
 
 function resolvePiSettingsApiKey(
