@@ -53,7 +53,7 @@
 
 - harness の conductor ツール（`prompt_worker`、escalation、permission 等）は **`ConductorTool` 型**に切り出し、SDK / Pi は adapter で各自のツール表現に変換する。
 - **worker ACP は変更しない**（既存 preset・attach 経路のまま。conductor `pi` と worker `pi` は独立）。
-- **認証統合は後回し**。Pi backend 初版は **ファイル上の設定**（profile、pi settings 等）を読むのみ。`ensemble auth` と Pi プロバイダの統合は [#356](https://github.com/otolab/agents-ensemble/issues/356)。
+- **認証統合は後回し**。Pi backend 初版は Pi の **ファイル上の設定**（`settings.json` / `auth.json` 等。provider 固有の設定方法を含む）を読み、`ensemble auth login/logout` は Cursor SDK の `~/.cursor/sdk/auth.json` だけを扱う。`ensemble auth` と Pi プロバイダの統合は [#356](https://github.com/otolab/agents-ensemble/issues/356)。
 
 ### 5. Pi conductor のカスタマイズ（`.ensemble/pi`）
 
@@ -66,7 +66,7 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 
 ディレクトリ内のファイル名・意味は Pi 正本に従う（例: `settings.json`、`extensions/`、`models.json`、`auth.json`）。[settings.md](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md) のキーをそのまま受け付ける。
 
-**harness が常に入れるもの（利用者が外せない）**
+**harness が常に入れるもの（現行）**
 
 - ensemble **ConductorTool** 一式（dispatch / escalation / permission 等）。Pi のビルトイン coding ツールは conductor では載せない（[ADR 0006](0006-conductor-agent-mode.md) と同趣旨）。
 - **MCP ブリッジ**（[ADR 0021](0021-conductor-mcp-config-resolution.md) で解決した `mcp.json` を Pi 側へ渡す）。#354 の実装では Pi ExtensionAPI の extension を配置せず、core 内の in-process thin bridge として `@modelcontextprotocol/sdk@1.30.0` を使う。
@@ -119,4 +119,5 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 |------|------|
 | 2026-09-25 | 初版（#348 調査・オペレータ合意を反映） |
 | 2026-09-25 | §5 Pi カスタマイズ（`.ensemble/pi`、標準 config、既定 MCP + harness ツール） |
+| 2026-09-29 | `ensemble auth` は Cursor SDK 向け、Pi は `settings.json` / `auth.json` を使う認証境界を明記 |
 | 2026-09-29 | #354 の Pi MCP bridge を Pi ExtensionAPI extension ではなく core 内 in-process thin bridge として具体化 |

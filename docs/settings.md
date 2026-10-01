@@ -28,7 +28,7 @@ CLI > 環境変数 > project config > user config > コード default
 
 `profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
-`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`cursor` は Cursor SDK 経路、`pi` は Pi Agent Core 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、Pi の `settings.json` / `auth.json` からモデルと認証を解決します。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
+`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`cursor` は Cursor SDK 経路、`pi` は Pi Agent Core 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、Pi の `settings.json` / `auth.json` からモデルと認証を解決します。`ensemble auth login` は Cursor SDK 向けで、Pi の認証には使いません。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
 
 ```text
 Session sidecar conductorBackend mismatch: pi !== cursor
@@ -62,7 +62,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 |------|--------|
 | GitHub API | `GITHUB_TOKEN` > `GH_TOKEN` > （`allowGhAuthTokenFallback: true` 時のみ）`gh auth token` |
 | conductor (cursor) | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
-| conductor (pi) | Pi の `auth.json` / `settings.json`（標準 `~/.pi/agent/`、ensemble `~/.ensemble/pi/` または project `.pi` / `.ensemble/pi/`） > provider 環境変数 |
+| conductor (pi) | Pi の `auth.json` / `settings.json`（標準 `~/.pi/agent/`、ensemble `~/.ensemble/pi/` または project `.pi` / `.ensemble/pi/`） > provider 環境変数。`ensemble auth` は使わない |
 | worker ACP（preset 依存） | preset ごとに README / ADR 0019 参照 |
 
 ## 一覧 — Phase 1（config.yaml）
@@ -136,7 +136,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | チーム / 個人の恒久既定（モデル、worktree、monitor） | `~/.ensemble/config.yaml` または project `.ensemble/config.yaml` |
 | CI で 1 ジョブだけ上書き | 環境変数（`CONDUCTOR_MODEL_ID` 等） |
 | 1 回限りの実行 | CLI フラグ（初回メッセージは `ensemble issue <ref> [message...]`） |
-| token | 環境変数 or `gh auth login` / `ensemble auth login`（config に書かない） |
+| token | Cursor: 環境変数 or `ensemble auth login`、Pi: Pi の `auth.json` / `settings.json`、GitHub: `gh auth login`（いずれも config に書かない） |
 | tmux 内で Issue リンクを短縮表示 | `~/.ensemble/config.yaml` に `tui.forceHyperlink: on`（または env `FORCE_HYPERLINK=1`） |
 | worker ごとの ACP / cwd | `profile.yaml` |
 | conductor の MCP | `mcp.json` |
