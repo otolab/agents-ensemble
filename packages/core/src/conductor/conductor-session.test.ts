@@ -1546,6 +1546,63 @@ describe('runConductorSession resume / shutdown', () => {
     expect(removeSpy).toHaveBeenCalledWith(repoRoot, TEST_ISSUE);
   });
 
+  it('emits the worktree removal error after post-loop /exit', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const removeSpy = vi
+      .spyOn(worktreeModule, 'removeWorkerWorktree')
+      .mockResolvedValue({
+        status: 'failed',
+        path: join(repoRoot, '.ensemble', 'worktrees', 'issue-1'),
+        branch: 'ensemble/issue-1',
+        error: 'git worktree remove failed: lock held',
+      });
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      sessionLogger,
+      workerWorktree: {
+        path: join(repoRoot, '.ensemble', 'worktrees', 'issue-1'),
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
+    operatorApi!.submit('/exit');
+    await sessionPromise;
+
+    expect(removeSpy).toHaveBeenCalledOnce();
+    expect(emitted).toContainEqual({
+      type: 'harness.worktree.remove_failed',
+      path: join(repoRoot, '.ensemble', 'worktrees', 'issue-1'),
+      branch: 'ensemble/issue-1',
+      error: 'git worktree remove failed: lock held',
+    });
+  });
+
   it('does not remove worktree when post-loop wait is interrupted', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-1',
