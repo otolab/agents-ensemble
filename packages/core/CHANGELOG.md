@@ -1,5 +1,18 @@
 # @agents-ensemble/core
 
+## 0.8.0
+
+### Minor Changes
+
+- c4d9ec5: Pi conductor を `AuthStorage` / `ModelRegistry` と統合し、`ensemble auth login|logout|status`、実行時 OAuth refresh、`ensemble models list` を provider 単位で利用できるようにする。
+
+### Patch Changes
+
+- f81ccc2: GitHub CI 通知を commit SHA ごとの `running` / `failed` / `completed` 集約状態の遷移として扱う。
+- 4485f04: conductor プロンプトでオペレータ対話の優先条件と Open Question 経由のエスカレーションを明記する。
+- 5d9199b: worker failure や teardown 後に残った stale な `permission.pending` の dispatch を防ぎ、cleanup の発生順と対象 requestId を観測できるようにする。
+- 78c2461: conductor が明示登録した GitHub PR の監視を解除できる `unregister_github_watch` ツールを追加する。
+
 ## 0.7.0
 
 ### Minor Changes

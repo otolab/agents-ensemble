@@ -1,5 +1,21 @@
 # @agents-ensemble/cli
 
+## 0.8.0
+
+### Minor Changes
+
+- c4d9ec5: Pi conductor を `AuthStorage` / `ModelRegistry` と統合し、`ensemble auth login|logout|status`、実行時 OAuth refresh、`ensemble models list` を provider 単位で利用できるようにする。
+
+### Patch Changes
+
+- 5d9199b: worker failure や teardown 後に残った stale な `permission.pending` の dispatch を防ぎ、cleanup の発生順と対象 requestId を観測できるようにする。
+- Updated dependencies [f81ccc2]
+- Updated dependencies [4485f04]
+- Updated dependencies [5d9199b]
+- Updated dependencies [c4d9ec5]
+- Updated dependencies [78c2461]
+  - @agents-ensemble/core@0.8.0
+
 ## 0.7.0
 
 ### Patch Changes
