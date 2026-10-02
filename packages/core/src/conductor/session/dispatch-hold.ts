@@ -25,6 +25,14 @@ export interface BufferDispatchHoldEventsOptions {
   onChanged?: (change: DispatchHoldChange) => void;
 }
 
+export interface PruneStalePermissionEventsOptions {
+  state: DispatchHoldState;
+  eventQueue: SessionEventQueue;
+  /** PermissionPipeline.pending を authoritative source として参照する。 */
+  isPermissionPending: (requestId: string) => boolean;
+  onChanged?: (change: DispatchHoldChange) => void;
+}
+
 export function createDispatchHoldState(): DispatchHoldState {
   return {
     dispatchHold: false,
@@ -58,6 +66,54 @@ export function bufferDispatchHoldEvents(
     heldEventCount: options.state.heldEvents.length,
   });
   return held.length;
+}
+
+/**
+ * cleanup 済みの permission.pending を dispatch 前に queue / held buffer から除去する。
+ *
+ * SessionEvent は enqueue 後に取り消せないため、PermissionPipeline.pending を
+ * authoritative source として毎回確認する。live な permission はそのまま残す。
+ */
+export function pruneStalePermissionEvents(
+  options: PruneStalePermissionEventsOptions,
+): number {
+  const queue = options.eventQueue.snapshot();
+  const activeQueue = filterActivePermissionEvents(
+    queue,
+    options.isPermissionPending,
+  );
+  const removedFromQueue = queue.length - activeQueue.length;
+  if (removedFromQueue > 0) {
+    options.eventQueue.replaceQueue(activeQueue);
+  }
+
+  const held = options.state.heldEvents;
+  const activeHeld = filterActivePermissionEvents(
+    held,
+    options.isPermissionPending,
+  );
+  const removedFromHeld = held.length - activeHeld.length;
+  if (removedFromHeld > 0) {
+    options.state.heldEvents = activeHeld;
+    options.onChanged?.({
+      status: 'updated',
+      hold: options.state.dispatchHold,
+      heldEventCount: activeHeld.length,
+    });
+  }
+
+  return removedFromQueue + removedFromHeld;
+}
+
+function filterActivePermissionEvents(
+  events: readonly SessionEvent[],
+  isPermissionPending: (requestId: string) => boolean,
+): SessionEvent[] {
+  return events.filter(
+    (event) =>
+      event.type !== 'permission.pending' ||
+      isPermissionPending(event.permission.id),
+  );
 }
 
 function isHoldableDispatchEvent(event: SessionEvent): boolean {

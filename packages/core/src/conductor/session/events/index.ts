@@ -27,6 +27,7 @@ export type {
   ConductorSendEvent,
   ConductorDispatchHoldEvent,
   PermissionPendingLogEvent,
+  PermissionCleanupEvent,
   WorkerRoundLogEvent,
   WorkerFailedLogEvent,
   WorkerProcessStderrEvent,

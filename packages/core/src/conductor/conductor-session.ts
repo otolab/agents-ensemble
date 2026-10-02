@@ -75,6 +75,7 @@ import { SessionEventQueue } from './session/session-event-queue.js';
 import {
   bufferDispatchHoldEvents,
   createDispatchHoldState,
+  pruneStalePermissionEvents,
   type DispatchHoldChange,
 } from './session/dispatch-hold.js';
 import {
@@ -94,6 +95,7 @@ import {
   type SessionSidecar,
 } from '../session/session-sidecar.js';
 import type { SessionUsageSummary } from '../usage/types.js';
+import type { PendingPermission } from '../permission/pending-permission.js';
 import { enrichSessionUsageWithCost } from '../usage/enrich-session-usage-cost.js';
 import { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 import type { OperatorInputBinding } from './operator-input-binding.js';
@@ -466,6 +468,17 @@ export async function runConductorSession(
       }
       return null;
     },
+    onPermissionCleanup: ({ workerId, entries }) => {
+      sessionLogger.emit({
+        type: 'permission.cleanup',
+        reason: 'worker.failed',
+        workerId,
+        entries: entries.map(({ id, workerId: entryWorkerId }) => ({
+          id,
+          workerId: entryWorkerId,
+        })),
+      });
+    },
     onWorkerCompleted: (result) => {
       sessionUsageTracker.recordWorkerRound({
         name: result.name,
@@ -641,6 +654,13 @@ export async function runConductorSession(
       bufferDispatchHoldEvents({
         state: dispatchHoldState,
         eventQueue,
+        onChanged: onDispatchHoldChanged,
+      });
+      pruneStalePermissionEvents({
+        state: dispatchHoldState,
+        eventQueue,
+        isPermissionPending: (requestId) =>
+          permissionPipeline.pending.get(requestId) !== undefined,
         onChanged: onDispatchHoldChanged,
       });
     },
@@ -919,6 +939,8 @@ export async function runConductorSession(
       getOutboundDispatchesThisSend: () => outboundDispatchesThisSend,
       workerSession,
       permissionPipeline,
+      isPermissionPending: (requestId) =>
+        permissionPipeline.pending.get(requestId) !== undefined,
       openQuestions,
       shutdownSignal: driverShutdownSignal,
       maxTurns,
@@ -1088,7 +1110,20 @@ export async function runConductorSession(
       // Stop active prompts before closing ACP bridges. Requests that arrive
       // after this point are rejected by the teardown guard above.
       workerSession.runtime.cancelAllActivePrompts();
-      rejectAllPendingPermissions(permissionPipeline, workerSession.inbox);
+      const rejectedPendingPermissions = rejectAllPendingPermissions(
+        permissionPipeline,
+        workerSession.inbox,
+      );
+      if (rejectedPendingPermissions.length > 0) {
+        sessionLogger.emit({
+          type: 'permission.cleanup',
+          reason: 'teardown',
+          entries: rejectedPendingPermissions.map(({ id, workerId }) => ({
+            id,
+            workerId,
+          })),
+        });
+      }
       try {
         emitTeardownPhase('flushSidecar');
         const phaseStart = Date.now();
@@ -1216,14 +1251,16 @@ async function emitWorktreeRemoval(
 function rejectAllPendingPermissions(
   pipeline: PermissionPipeline,
   inbox: WorkerSession['inbox'],
-): void {
+): PendingPermission[] {
+  const rejected: PendingPermission[] = [];
   for (const pending of [...pipeline.pending.list()]) {
     try {
-      pipeline.resolveAndFulfill(inbox, pending.id, false);
+      rejected.push(pipeline.resolveAndFulfill(inbox, pending.id, false));
     } catch {
       // already resolved
     }
   }
+  return rejected;
 }
 
 function attachLegacySessionCallbacks(

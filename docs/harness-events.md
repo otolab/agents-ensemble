@@ -59,6 +59,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗。該当 worker の pending permission は conductor への通知前に deny | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
+| `permission.cleanup` | worker failure / teardown で pending permission を deny・解消した直後 | `[harness] permission.cleanup reason=worker.failed worker=... count=... ids=...` | なし |
 | `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続）。GitHub 認証トークン未解決時（#222） | `[harness] warning: ...`（permission デッドロック / GitHub 認証不足） | なし |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
 | `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
@@ -206,6 +207,14 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 失敗を受け取って次の判断へ進める。既に cleanup 済みの requestId を
 `resolve_permission` に渡した場合は、`Unknown pending permission (already resolved or worker failed)`
 という明確なエラーになる。
+
+`permission.pending` は enqueue 後に取り消せないため、SessionDriver は dispatch 直前に
+`PermissionPipeline.pending` を authoritative source として requestId を再確認する。
+cleanup 済みのイベントは `SessionEventQueue` と dispatch-hold の held buffer のどちらからも
+prune し、live な pending は通常どおり dispatch する。cleanup の対象 worker・requestId・理由は
+`permission.cleanup` に記録されるため、`permission.pending` → `permission.cleanup` →
+`worker.failed` の順序と deny 結果を時系列で追跡できる。teardown cleanup は同イベントの
+`reason=teardown` として記録する。
 
 これはプロセス全体の teardown や in-flight `agent.send` の割り込みを行うものではない。
 後者は [#86](https://github.com/otolab/agents-ensemble/issues/86) のスコープである。

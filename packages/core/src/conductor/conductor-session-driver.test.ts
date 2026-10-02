@@ -9,6 +9,7 @@ import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js
 import {
   bufferDispatchHoldEvents,
   createDispatchHoldState,
+  pruneStalePermissionEvents,
   type DispatchHoldChange,
 } from './session/dispatch-hold.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
@@ -36,6 +37,8 @@ function createDriverOptions(input: {
   eventQueue: SessionEventQueue;
   conductor: ConductorAgent;
   openQuestions?: OpenQuestionRegistry;
+  permissionPipeline?: PermissionPipeline;
+  isPermissionPending?: (requestId: string) => boolean;
   maxTurns?: number;
   runningCount?: number;
   stopOnUnansweredInput?: boolean;
@@ -44,6 +47,7 @@ function createDriverOptions(input: {
   const workerDispatches: never[] = [];
   const workerFailures: never[] = [];
   const openQuestions = input.openQuestions ?? new OpenQuestionRegistry();
+  const permissionPipeline = input.permissionPipeline ?? new PermissionPipeline({});
   const conductorHandle: ConductorAgentHandle = { conductor: input.conductor };
 
   return {
@@ -56,7 +60,10 @@ function createDriverOptions(input: {
     },
     eventQueue: input.eventQueue,
     workerSession: createWorkerSessionStub(input.runningCount ?? 0),
-    permissionPipeline: new PermissionPipeline({}),
+    permissionPipeline,
+    ...(input.isPermissionPending
+      ? { isPermissionPending: input.isPermissionPending }
+      : {}),
     openQuestions,
     shutdownSignal: new AbortController().signal,
     maxTurns: input.maxTurns ?? 5,
@@ -65,6 +72,21 @@ function createDriverOptions(input: {
     workerDispatches,
     workerFailures,
     onSendComplete: vi.fn(),
+  };
+}
+
+function createPendingPermissionEvent(
+  pipeline: PermissionPipeline,
+  id: string,
+  workerId = 'worker-1',
+) {
+  pipeline.evaluate(id, workerId, {
+    toolName: 'Shell',
+    sessionId: 'sess-1',
+  });
+  return {
+    type: 'permission.pending' as const,
+    permission: pipeline.pending.get(id)!,
   };
 }
 
@@ -510,6 +532,184 @@ describe('runConductorSessionDriver', () => {
 
     shutdown.abort();
     const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
+  });
+
+  it('does not dispatch a cleanup-stale permission before worker.failed', async () => {
+    const eventQueue = new SessionEventQueue();
+    const permissionPipeline = new PermissionPipeline({
+      policy: { allowTools: [], allowReadOnlyTools: false },
+    });
+    const stalePermission = createPendingPermissionEvent(
+      permissionPipeline,
+      'permission-stale-queued',
+    );
+    permissionPipeline.pending.take(stalePermission.permission.id);
+    eventQueue.enqueue(stalePermission);
+    eventQueue.enqueue({
+      type: 'worker.failed',
+      failure: {
+        workerId: 'worker-1',
+        name: 'worker-1',
+        kind: 'implementer',
+        error: 'worker failed',
+        issueUrl: TEST_ISSUE.url,
+      },
+    });
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-failure',
+      status: 'finished',
+      result: 'failure handled',
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+
+    await runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue,
+        conductor,
+        permissionPipeline,
+        isPermissionPending: (id) => permissionPipeline.pending.get(id) !== undefined,
+      }),
+      skipInitialSend: true,
+    });
+
+    expect(send).toHaveBeenCalledOnce();
+    expect(String(send.mock.calls[0]![0])).toContain('worker.failed');
+    expect(String(send.mock.calls[0]![0])).not.toContain('permission-stale-queued');
+  });
+
+  it('prunes a permission cleaned during held release while preserving worker.failed', async () => {
+    const eventQueue = new SessionEventQueue();
+    const holdState = createDispatchHoldState();
+    holdState.dispatchHold = true;
+    const permissionPipeline = new PermissionPipeline({
+      policy: { allowTools: [], allowReadOnlyTools: false },
+    });
+    const stalePermission = createPendingPermissionEvent(
+      permissionPipeline,
+      'permission-stale-held',
+    );
+    holdState.heldEvents.push(stalePermission, {
+      type: 'worker.failed',
+      failure: {
+        workerId: 'worker-1',
+        name: 'worker-1',
+        kind: 'implementer',
+        error: 'worker failed',
+        issueUrl: TEST_ISSUE.url,
+      },
+    });
+    eventQueue.enqueue({ type: 'operator.message', text: 'release' });
+
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onBeforeRelease: () => {
+        permissionPipeline.pending.take(stalePermission.permission.id);
+        pruneStalePermissionEvents({
+          state: holdState,
+          eventQueue,
+          isPermissionPending: (id) =>
+            permissionPipeline.pending.get(id) !== undefined,
+        });
+      },
+    });
+    const send = vi.fn().mockImplementation(async (message: string) => {
+      if (message === 'release') {
+        await holdTool.set_dispatch_hold!.execute({ hold: false });
+      }
+      return {
+        runId: `run-${send.mock.calls.length}`,
+        status: message === 'release' ? 'running' : 'finished',
+        result: message,
+      };
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+
+    await runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue,
+        conductor,
+        permissionPipeline,
+        isPermissionPending: (id) => permissionPipeline.pending.get(id) !== undefined,
+      }),
+      dispatchHoldState: holdState,
+      skipInitialSend: true,
+    });
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(String(send.mock.calls[0]![0])).toBe('release');
+    expect(String(send.mock.calls[1]![0])).toContain('worker.failed');
+    expect(String(send.mock.calls[1]![0])).not.toContain('permission-stale-held');
+    expect(holdState.heldEvents).toEqual([]);
+  });
+
+  it('does not rescue a cleanup-stale permission from held max-turns events', async () => {
+    const eventQueue = new SessionEventQueue();
+    const holdState = createDispatchHoldState();
+    const permissionPipeline = new PermissionPipeline({
+      policy: { allowTools: [], allowReadOnlyTools: false },
+    });
+    const stalePermission = createPendingPermissionEvent(
+      permissionPipeline,
+      'permission-stale-max-turns',
+    );
+    const livePermission = createPendingPermissionEvent(
+      permissionPipeline,
+      'permission-live-max-turns',
+    );
+    permissionPipeline.pending.take(stalePermission.permission.id);
+    holdState.heldEvents.push(
+      stalePermission,
+      livePermission,
+      {
+        type: 'worker.completed',
+        result: {
+          name: 'worker-1',
+          kind: 'implementer',
+          acpSessionId: 'sess-1',
+          status: 'finished',
+          result: 'held worker result',
+        },
+      },
+    );
+    const shutdown = new AbortController();
+    const send = vi.fn().mockImplementation(async () => {
+      setTimeout(() => shutdown.abort(), 0);
+      return {
+        runId: 'run-permission',
+        status: 'finished',
+        result: 'permission handled',
+      };
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const options = createDriverOptions({
+      eventQueue,
+      conductor,
+      permissionPipeline,
+      isPermissionPending: (id) => permissionPipeline.pending.get(id) !== undefined,
+      maxTurns: 1,
+    });
+
+    const result = await runConductorSessionDriver({
+      ...options,
+      shutdownSignal: shutdown.signal,
+      dispatchHoldState: holdState,
+      skipInitialSend: true,
+      resumeState: {
+        sendCount: 1,
+        autonomousTurns: 1,
+        lastDispatchesThisTurn: 0,
+        lastSendResult: {
+          runId: 'run-initial',
+          status: 'finished',
+          result: 'initial',
+        },
+      },
+    });
+
+    expect(send).toHaveBeenCalledOnce();
+    expect(String(send.mock.calls[0]![0])).toContain('permission-live-max-turns');
+    expect(String(send.mock.calls[0]![0])).not.toContain('permission-stale-max-turns');
     expect(result.stopReason).toBe('interrupted');
   });
 

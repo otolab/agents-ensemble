@@ -15,6 +15,7 @@ export const HARNESS_TELEMETRY_EVENT_TYPES = [
   'conductor.send.progress',
   'conductor.send',
   'permission.pending',
+  'permission.cleanup',
   'worker.round',
   'worker.failed',
   'session.stop',

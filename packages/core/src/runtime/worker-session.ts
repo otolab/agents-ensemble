@@ -7,6 +7,7 @@ import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
 import type { SendWorkerMessageOptions, SendWorkerMessageResult } from './send-worker-message.js';
 import type { PermissionPipeline } from '../permission/permission-pipeline.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
+import type { PendingPermission } from '../permission/pending-permission.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import { startInboxProcessor } from './inbox-processor.js';
 import type { WorkerFailureRecord } from './types.js';
@@ -46,6 +47,10 @@ export interface WorkerSessionOptions {
     requestId: string,
   ) => PermissionDecision | null | Promise<PermissionDecision | null>;
   onWorkerCompleted?: (result: WorkerDispatchResult) => void;
+  onPermissionCleanup?: (event: {
+    workerId: string;
+    entries: PendingPermission[];
+  }) => void;
   onWorkerFailed?: (failure: WorkerFailureRecord) => void;
   onPromptTelemetry?: (event: import('./types.js').WorkerPromptTelemetry) => void;
   onAcpUpdate?: (event: import('./types.js').WorkerAcpUpdateTelemetry) => void;
@@ -100,10 +105,15 @@ export class WorkerSession {
       decidePermission,
       onWorkerCompleted: options.onWorkerCompleted,
       onWorkerFailed: (failure) => {
-        options.permissionPipeline?.denyPendingForWorker(
-          this.inbox,
-          failure.workerId,
-        );
+        const entries =
+          options.permissionPipeline?.denyPendingForWorker(
+            this.inbox,
+            failure.workerId,
+          ) ?? [];
+        options.onPermissionCleanup?.({
+          workerId: failure.workerId,
+          entries,
+        });
         options.onWorkerFailed?.(failure);
       },
     });

@@ -131,6 +131,13 @@ export interface PermissionPendingLogEvent extends PermissionPendingHarnessPaylo
   type: 'permission.pending';
 }
 
+export interface PermissionCleanupEvent {
+  type: 'permission.cleanup';
+  reason: 'worker.failed' | 'teardown';
+  workerId?: string;
+  entries: Array<{ id: string; workerId: string }>;
+}
+
 export interface WorkerRoundLogEvent {
   type: 'worker.round';
   dispatch: WorkerRoundOutcome;
@@ -248,6 +255,7 @@ export type SessionLogEvent =
   | ConductorSendEvent
   | ConductorDispatchHoldEvent
   | PermissionPendingLogEvent
+  | PermissionCleanupEvent
   | WorkerRoundLogEvent
   | WorkerFailedLogEvent
   | WorkerProcessStderrEvent

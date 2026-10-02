@@ -338,6 +338,7 @@ worker / harness ──enqueue──►─────────────�
 
 - `WorkerSession` / `ConductorSession` が対。worker 由来・operator 由来のイベントは **1 本の列** に集約し、[ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い **1 束 = 1 `agent.send`**（束は 1 件のこともある。新規セッションの初回のみ system + ブリーフィング）
 - **resume の初回 dispatch**: backend の `resume(conductorAgentId)` が conductor transcript を復元するため、`--continue` / `--resume` では新規セッション用の initial send を行わない。Pi は毎回 compiled `systemPrompt` を再コンパイルして native system prompt に設定する。`WorkerSession` の attach 中に到着した `permission.pending` や `worker.completed` は `SessionEventQueue` に残り、復元後の最初のイベント束として SessionDriver が dispatch する。sidecar に driver のターン状態は保存せず、再起動時のカウンタは 0 から始める。
+- **permission cleanup と dispatch**: worker failure / teardown で `PermissionPipeline.pending` から除去された requestId の `permission.pending` は、SessionDriver が dispatch 直前に queue と dispatch-hold の held buffer から prune する。live な pending は通常どおり dispatch し、cleanup の順序と対象は `permission.cleanup` の SessionLogEvent に残す。
 
 - `maxTurns` = 直近オペレータ入力からの conductor **自律ターン上限**（入力でリセット）。`maxTurns <= 0` または CLI `--no-max-turns` で無制限（上限チェック・max-turns open question 登録なし）
 - **CLI デフォルト**: TTY、または有効な CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` あり → 無制限。非 TTY / CI で単発メッセージがない場合 → 5（暴走防止）。`--continue` / `--resume` で無視された CLI メッセージは interactive 判定と無制限化の対象外

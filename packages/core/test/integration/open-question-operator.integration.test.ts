@@ -7,6 +7,7 @@ import { AcpClient } from '../../src/acp/acp-client.js';
 import { startFakeAcpServer } from '../../src/acp/testing/fake-acp-server.js';
 import { createInProcessStreamPair } from '../../src/acp/testing/stream-pair.js';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
+import { SessionLogger, type SessionLogEvent } from '../../src/conductor/session/session-logger.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../../src/escalation/enqueue-max-turns-question.js';
@@ -250,6 +251,12 @@ describe('open question / operator flow integration', () => {
     });
     let pendingId: string | undefined;
     let workerFailureMessage: string | undefined;
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: REPO_ROOT,
+    });
+    const events: SessionLogEvent[] = [];
+    sessionLogger.subscribe((event) => events.push(event));
     mockSend.mockImplementation(async (message: string) => {
       if (message.includes('permission 判断待ち')) {
         pendingId = extractYamlScalar(message, 'id');
@@ -281,6 +288,7 @@ describe('open question / operator flow integration', () => {
       profile: PING_PROFILE,
       maxTurns: 10,
       permissionPipeline: pipeline,
+      sessionLogger,
       connectAcp: async () => AcpBridge.fromClient(client),
       ownsWorkerAcpConnections: true,
       disableGitHubMonitor: true,
@@ -297,6 +305,21 @@ describe('open question / operator flow integration', () => {
     expect(result.lastResult).toBe('conductor handled worker failure');
     expect(pipeline.pending.size).toBe(0);
     expect(pendingId).toBeTruthy();
+    expect(
+      events
+        .filter(
+          (event) =>
+            event.type === 'permission.pending' ||
+            event.type === 'permission.cleanup' ||
+            event.type === 'worker.failed',
+        )
+        .map((event) => event.type),
+    ).toEqual(['permission.pending', 'permission.cleanup', 'worker.failed']);
+    const cleanup = events.find((event) => event.type === 'permission.cleanup');
+    expect(cleanup).toMatchObject({
+      reason: 'worker.failed',
+      entries: [{ id: pendingId }],
+    });
     await expect(
       conductorTools.resolve_permission!.execute({
         requestId: pendingId!,
