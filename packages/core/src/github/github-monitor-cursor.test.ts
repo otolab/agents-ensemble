@@ -34,8 +34,8 @@ describe('isEmptyGitHubMonitorCursor', () => {
       isEmptyGitHubMonitorCursor({
         pullRequests: {
           '42': {
-            lastObserved: {
-              'ci/test': { phase: 'completed', conclusion: 'SUCCESS' },
+            lastAggregateBySha: {
+              'sha-1': 'completed',
             },
           },
         },
@@ -71,12 +71,12 @@ describe('isEmptyGitHubMonitorCursor', () => {
     });
   });
 
-  it('deep-copies CI snapshots when normalized', () => {
+  it('deep-copies aggregate states when normalized', () => {
     const source = {
       pullRequests: {
         '42': {
-          lastObserved: {
-            'ci/test': { phase: 'pending' as const },
+          lastAggregateBySha: {
+            'sha-1': 'running' as const,
           },
           ciBootstrapPending: true,
         },
@@ -84,16 +84,16 @@ describe('isEmptyGitHubMonitorCursor', () => {
     };
 
     const normalized = normalizeGitHubMonitorCursor(source);
-    expect(normalized.pullRequests?.['42']?.lastObserved).toEqual({
-      'ci/test': { phase: 'pending' },
+    expect(normalized.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'running',
     });
-    expect(normalized.pullRequests?.['42']?.lastObserved).not.toBe(
-      source.pullRequests['42'].lastObserved,
+    expect(normalized.pullRequests?.['42']?.lastAggregateBySha).not.toBe(
+      source.pullRequests['42'].lastAggregateBySha,
     );
     expect(normalized.pullRequests?.['42']?.ciBootstrapPending).toBe(true);
   });
 
-  it('migrates legacy CI cursors to lastObserved once', () => {
+  it('resets legacy per-check CI cursors once on resume', () => {
     const normalized = normalizeGitHubMonitorCursor({
       pullRequests: {
         '42': {
@@ -107,13 +107,27 @@ describe('isEmptyGitHubMonitorCursor', () => {
       },
     });
 
-    expect(normalized.pullRequests?.['42']).toEqual({
-      lastObserved: {
-        'ci/old-pending': { phase: 'pending' },
-        'ci/old-completed': { phase: 'completed' },
-        'ci/name-pending': { phase: 'pending' },
-        'ci/name-completed': { phase: 'completed' },
+    expect(normalized.pullRequests?.['42']).toEqual({});
+  });
+
+  it('drops invalid aggregate states while preserving valid ones', () => {
+    const normalized = normalizeGitHubMonitorCursor({
+      pullRequests: {
+        '42': {
+          lastAggregateBySha: {
+            'sha-running': 'running',
+            'sha-failed': 'failed',
+            'sha-completed': 'completed',
+            'sha-invalid': 'pending' as never,
+          },
+        },
       },
+    });
+
+    expect(normalized.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-running': 'running',
+      'sha-failed': 'failed',
+      'sha-completed': 'completed',
     });
   });
 });

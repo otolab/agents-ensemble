@@ -50,6 +50,7 @@ describe('buildGitHubClient', () => {
                         status: 'COMPLETED',
                         conclusion: 'SUCCESS',
                         detailsUrl: 'https://example.com',
+                        checkSuite: { commit: { oid: 'sha-1' } },
                       },
                     ],
                   },
@@ -72,7 +73,17 @@ describe('buildGitHubClient', () => {
         status: 'COMPLETED',
         conclusion: 'SUCCESS',
         detailsUrl: 'https://example.com',
+        checkSuite: { commit: { oid: 'sha-1' } },
       },
     ]);
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.github.com/graphql',
+      expect.objectContaining({
+        body: expect.stringContaining('checkSuite'),
+      }),
+    );
+    expect((fetchFn.mock.calls[0]?.[1] as RequestInit).body).toEqual(
+      expect.stringContaining('commit'),
+    );
   });
 });

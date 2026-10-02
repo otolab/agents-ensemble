@@ -269,12 +269,20 @@ export function buildGitHubClient(options: GitHubClientOptions): GitHubClient {
                       detailsUrl
                       startedAt
                       completedAt
+                      checkSuite {
+                        commit {
+                          oid
+                        }
+                      }
                     }
                     ... on StatusContext {
                       id
                       context
                       state
                       targetUrl
+                      commit {
+                        oid
+                      }
                     }
                   }
                 }

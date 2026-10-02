@@ -157,11 +157,11 @@ SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが 
 | 初回カーソル poll | **カーソル空の新規セッション**の初回 poll のみ（`initialCursorPoll`）。既存 Issue コメントは通知せずカーソルを進める。worker の init prompt（`startWorkers`）とは無関係 |
 | `--continue` 再開 | sidecar カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
 | PR 紐づけ | GitHub Search API（`type:pr repo:owner/repo <issueNumber>` 相当）または conductor の `register_github_watch`。Search 失敗時も明示登録済み PR は監視し、**Issue コメント監視も継続** |
-| CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext**（後者は `context` + `state` を正規化）を、PR ごと・check 名ごとに `{ phase: 'pending' | 'completed', conclusion?: string, headSha?: string }` へ正規化する。前回の `lastObserved` と今回の snapshot の差分だけを `ci.completed` として通知し、run id / URL は通知判定に使わない。**通知する**: `pending→completed`、または両 poll で観測された `conclusion` / `headSha` が変化したとき。**通知しない**: 同じ snapshot の再観測。 |
-| CI カーソル | check 名ごとの最後の正規化観測状態を `lastObserved[name]` として sidecar に保存する。`statusCheckRollup` から check が一時的に欠落した poll では当該 `lastObserved` を更新せず、同じ状態で復帰しても通知しない。`phase` は既存 `isPendingCheckStatus` と整合させる。 |
-| 登録・初検出時の完了済み CI | 成功した bootstrap poll で現在 `COMPLETED` の check は **baseline のみ**。履歴の完了通知は行わず、以降の観測状態との差分だけを通知する。bootstrap の status poll が失敗した場合は baseline 未確定のため `ciBootstrapPending` を保持し、再試行で最初に `COMPLETED` を観測したときは取りこぼし防止のため `ci.completed` を通知する。 |
-| 旧 CI カーソルの移行 | 旧 `ciChecks` / `pendingCheckNames` / `notifiedCheckNames` は、最初の正規化時に check 名ごとの `{ phase }` へ 1 回だけ読み替え、以後は `lastObserved` のみを保存する。旧完了記録は completed baseline、旧 pending 記録は pending 観測として扱い、run identity は引き継がない。 |
-| CI の制限・失敗モード | API poll 失敗時は `harness.github.monitor_error` を出して既存カーソルを維持し、次回 poll で再試行する。bootstrap 中の status poll が失敗した PR では `ciBootstrapPending` を保持し、成功した status snapshot だけで bootstrap 完了にする。`statusCheckRollup` のメンバー集合は poll ごとに揺れることがある（欠落・遅延）が、欠落した check の `lastObserved` は sticky に保持する。CheckRun / StatusContext 以外の未知の rollup 型は skip。 |
+| CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext** から、CheckRun は `checkSuite.commit.oid`、StatusContext は `commit.oid` を取得する。SHA を解決できる check だけを内部の `skip | running | failed | complete` に正規化し、commit SHA ごとにグループ化する。集約は `running`（1 件でも running）> `failed`（1 件でも failed）> `completed`（すべて skip / complete）の 3 値。SHA 無し check は集約から除外する。前回の `lastAggregateBySha` と今回の集約状態が変わったときだけ、既存 kind `ci.completed`（意味は SHA 集約状態遷移）として通知し、payload に SHA と failed check 名を載せる。 |
+| CI カーソル | PR ごとの `lastAggregateBySha[sha]` を sidecar に保存する。通知判定は check 名・run id・URL・個別 conclusion の差分ではなく、同じ SHA の集約状態差分だけで行う。同一 SHA・同一状態の再 poll は通知しない。PR 全体の `hasPendingCi` は、その poll で観測した SHA 集約のいずれかが `running` のとき true とし、15s poll を選ぶ。 |
+| 登録・初検出時の完了済み CI | 成功した bootstrap poll で観測した SHA の集約状態は **baseline のみ**。履歴の通知は行わず、以降の状態遷移（`running→completed` / `running→failed` / `failed→running` を含む）だけを通知する。bootstrap の status poll が失敗した場合は baseline 未確定のため `ciBootstrapPending` を保持し、再試行で最初に非 running の集約状態を観測したときは取りこぼし防止のため通知する。 |
+| 旧 CI カーソルの移行 | 旧 `lastObserved` / `ciChecks` / `pendingCheckNames` / `notifiedCheckNames` は、check 単位状態から SHA 集約状態を安全に復元できないため、resume 時に 1 回だけ破棄する。次の status poll を現行モデルの baseline とし、旧 run identity は引き継がない。 |
+| CI の制限・失敗モード | API poll 失敗時は `harness.github.monitor_error` を出して既存カーソルを維持し、次回 poll で再試行する。bootstrap 中の status poll が失敗した PR では `ciBootstrapPending` を保持し、成功した status snapshot だけで bootstrap 完了にする。SHA 無し check は警告や通知を増やさず除外し、CheckRun / StatusContext 以外の未知の rollup 型は skip。 |
 | CLI | `--no-github-monitor` で無効化。`--github-monitor-debounce-ms` で debounce 変更 |
 
 ### 2.2 worker prompt ライフサイクルイベント（#133 で統一）
@@ -239,7 +239,7 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | `resolve_permission` 待ち |
-| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が CI 状態遷移を検知したときだけ載る（同じ完了の毎 poll 再送はしない。§2.5）。conductor は必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` のみ dispatch 可） |
+| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が commit SHA 単位の CI 集約状態遷移を検知したときだけ載る（同じ SHA・同じ状態の毎 poll 再送はしない。§2.5）。conductor は payload の SHA / failed check 名を手掛かりに必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` のみ dispatch 可） |
 
 ### 3.1 SessionLogEvent との対応
 
@@ -349,7 +349,7 @@ init prompt 把握の目安:
 | `## worker ラウンド完了` | worker の 1 `session/prompt` 終了 | `source: harness` なら **作業開始ではない**（init prompt 完了）。`source: conductor` なら自分が `prompt_worker` したラウンド。Issue / PR を読んで進捗判断 |
 | `## worker 失敗` | attach / prompt 失敗 | 再試行・エスカレーションを検討 |
 | `## permission 判断待ち` | worker の操作許可が保留（**init prompt ラウンド中もありうる**） | `resolve_permission` またはオペレータへ。**init prompt 完了を待たない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)） |
-| `## GitHub 更新` | Issue コメント / PR レビュー / CI 完了等 | 状況把握。**自動 `prompt_worker` はしない**。自律中・post-loop 中とも SessionDriver が処理する。ターン残ありなら dispatch して 1 ターン消費し、max-turns 到達後は `operator.message` / `permission.pending` 以外を dispatch しない |
+| `## GitHub 更新` | Issue コメント / PR レビュー / CI 集約状態遷移等 | 状況把握。**自動 `prompt_worker` はしない**。自律中・post-loop 中とも SessionDriver が処理する。ターン残ありなら dispatch して 1 ターン消費し、max-turns 到達後は `operator.message` / `permission.pending` 以外を dispatch しない |
 
 conductor は `list_workers` の `attachInFlight` / `state: processing` 等を **ポーリング・`Await` で待ってはならない**。状態変化は本表の SessionEvent のみが通知する。
 

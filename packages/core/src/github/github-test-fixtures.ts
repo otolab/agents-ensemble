@@ -5,6 +5,7 @@ export const GH_STATUS_CHECK_ROLLUP_COMPLETED_SUCCESS = [
     name: 'ci/test',
     status: 'COMPLETED',
     conclusion: 'SUCCESS',
+    headSha: 'sha-1',
     detailsUrl: 'https://github.com/org/repo/actions/runs/1',
   },
 ] as const;
@@ -15,6 +16,7 @@ export const GH_STATUS_CHECK_ROLLUP_IN_PROGRESS = [
     name: 'ci/test',
     status: 'IN_PROGRESS',
     conclusion: '',
+    headSha: 'sha-1',
     detailsUrl: 'https://github.com/org/repo/actions/runs/1',
   },
 ] as const;
@@ -25,6 +27,7 @@ export const GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_PENDING = [
     __typename: 'StatusContext',
     context: 'ci/legacy',
     state: 'PENDING',
+    headSha: 'sha-1',
     targetUrl: 'https://github.com/org/repo/actions/runs/2',
   },
 ] as const;
@@ -34,6 +37,7 @@ export const GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_SUCCESS = [
     __typename: 'StatusContext',
     context: 'ci/legacy',
     state: 'SUCCESS',
+    headSha: 'sha-1',
     targetUrl: 'https://github.com/org/repo/actions/runs/2',
   },
 ] as const;
@@ -46,6 +50,7 @@ export const GH_STATUS_CHECK_ROLLUP_STATUS_CONTEXT_NO_TYPENAME = [
   {
     context: 'ci/legacy-no-typename',
     state: 'PENDING',
+    headSha: 'sha-1',
     targetUrl: 'https://github.com/org/repo/actions/runs/3',
   },
 ] as const;
@@ -60,6 +65,7 @@ export const GH_STATUS_CHECK_ROLLUP_NON_STRING_CONCLUSION = [
     name: 'ci/broken-conclusion',
     status: 'COMPLETED',
     conclusion: 0,
+    headSha: 'sha-1',
     detailsUrl: 'https://github.com/org/repo/actions/runs/4',
   },
 ] as const;

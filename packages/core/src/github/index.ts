@@ -77,6 +77,7 @@ export type {
   UnregisterGitHubWatchToolOptions,
 } from './unregister-github-watch-tool.js';
 export type {
+  GitHubCiAggregateState,
   GitHubUpdateItem,
   GitHubUpdateKind,
   GitHubUpdatePayload,
