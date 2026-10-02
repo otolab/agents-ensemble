@@ -70,6 +70,12 @@ export type {
   GitHubWatchRegistration,
   RegisterGitHubWatchToolOptions,
 } from './register-github-watch-tool.js';
+export {
+  createUnregisterGitHubWatchTool,
+} from './unregister-github-watch-tool.js';
+export type {
+  UnregisterGitHubWatchToolOptions,
+} from './unregister-github-watch-tool.js';
 export type {
   GitHubUpdateItem,
   GitHubUpdateKind,

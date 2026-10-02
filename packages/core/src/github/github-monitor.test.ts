@@ -165,6 +165,51 @@ describe('createGitHubMonitor', () => {
     await monitor.stop();
   });
 
+  it('stops polling an unregistered explicit-only PR and preserves its cursor', async () => {
+    const listPullRequestReviews = vi.fn().mockResolvedValue([]);
+    const client: GitHubClient = {
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn().mockResolvedValue([]),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews,
+      listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+      getStatusCheckRollup: vi.fn().mockResolvedValue([]),
+    };
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      cursor: {
+        pullRequests: { '354': { lastReviewId: '10' } },
+        explicitPullRequests: {
+          '354': { registeredAt: '2026-09-07T05:00:00.000Z' },
+        },
+      },
+      pollIntervalMs: 1000,
+      githubClient: client,
+      onUpdate: vi.fn(),
+    });
+
+    monitor.start();
+    await drainAsync();
+    expect(listPullRequestReviews).toHaveBeenCalledTimes(1);
+
+    monitor.unregisterPullRequest(354);
+    expect(monitor.getCursor().explicitPullRequests).toEqual({});
+    expect(monitor.getCursor().pullRequests?.['354']).toMatchObject({
+      lastReviewId: '10',
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await drainAsync();
+    expect(listPullRequestReviews).toHaveBeenCalledTimes(1);
+    expect(monitor.getCursor().explicitPullRequests).toEqual({});
+    expect(monitor.getCursor().pullRequests?.['354']).toMatchObject({
+      lastReviewId: '10',
+    });
+
+    await monitor.stop();
+  });
+
   it('retries a failed registration bootstrap and emits later CI completion', async () => {
     let statusPolls = 0;
     const onUpdate = vi.fn();

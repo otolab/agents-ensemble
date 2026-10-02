@@ -63,32 +63,11 @@ export function createRegisterGitHubWatchTool(
         },
       },
       async execute(args) {
-        const issue = parseIssueUrl(options.issueUrl);
-        const numberFromArgs = parsePullRequestNumber(args.prNumber);
-        const urlRef = parsePullRequestUrl(args.prUrl);
-
-        if (numberFromArgs === undefined && urlRef === undefined) {
-          throw new Error('register_github_watch requires prNumber or prUrl');
-        }
-
-        if (urlRef && !sameRepository(issue, urlRef)) {
-          throw new Error(
-            'register_github_watch prUrl must belong to the same repository as the session Issue',
-          );
-        }
-
-        if (
-          numberFromArgs !== undefined &&
-          urlRef !== undefined &&
-          numberFromArgs !== urlRef.number
-        ) {
-          throw new Error(
-            'register_github_watch prNumber and prUrl refer to different pull requests',
-          );
-        }
-
-        const prNumber = numberFromArgs ?? urlRef!.number;
-        const url = `https://github.com/${issue.owner}/${issue.repo}/pull/${prNumber}`;
+        const { prNumber, url } = parseGitHubWatchTarget(
+          options.issueUrl,
+          args,
+          'register_github_watch',
+        );
         const requestedKinds = parseKinds(args.kinds);
         const cursor = options.getCursor();
         cursor.explicitPullRequests ??= {};
@@ -125,7 +104,51 @@ export function createRegisterGitHubWatchTool(
   };
 }
 
-function parsePullRequestNumber(value: unknown): number | undefined {
+export interface GitHubWatchTarget {
+  prNumber: number;
+  url: string;
+}
+
+export function parseGitHubWatchTarget(
+  issueUrl: string,
+  args: Record<string, unknown>,
+  toolName: 'register_github_watch' | 'unregister_github_watch',
+): GitHubWatchTarget {
+  const issue = parseIssueUrl(issueUrl);
+  const numberFromArgs = parsePullRequestNumber(args.prNumber, toolName);
+  const urlRef = parsePullRequestUrl(args.prUrl, toolName);
+
+  if (numberFromArgs === undefined && urlRef === undefined) {
+    throw new Error(`${toolName} requires prNumber or prUrl`);
+  }
+
+  if (urlRef && !sameRepository(issue, urlRef)) {
+    throw new Error(
+      `${toolName} prUrl must belong to the same repository as the session Issue`,
+    );
+  }
+
+  if (
+    numberFromArgs !== undefined &&
+    urlRef !== undefined &&
+    numberFromArgs !== urlRef.number
+  ) {
+    throw new Error(
+      `${toolName} prNumber and prUrl refer to different pull requests`,
+    );
+  }
+
+  const prNumber = numberFromArgs ?? urlRef!.number;
+  return {
+    prNumber,
+    url: `https://github.com/${issue.owner}/${issue.repo}/pull/${prNumber}`,
+  };
+}
+
+function parsePullRequestNumber(
+  value: unknown,
+  toolName: string,
+): number | undefined {
   if (value === undefined) return undefined;
 
   if (typeof value === 'number') {
@@ -135,29 +158,30 @@ function parsePullRequestNumber(value: unknown): number | undefined {
     if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
   }
 
-  throw new Error('register_github_watch prNumber must be a positive integer');
+  throw new Error(`${toolName} prNumber must be a positive integer`);
 }
 
-function parsePullRequestUrl(value: unknown):
+function parsePullRequestUrl(
+  value: unknown,
+  toolName: string,
+):
   | { owner: string; repo: string; number: number }
   | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error('register_github_watch prUrl must be a non-empty URL');
+    throw new Error(`${toolName} prUrl must be a non-empty URL`);
   }
 
   const match = /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(
     value.trim(),
   );
   if (!match) {
-    throw new Error(
-      'register_github_watch prUrl must be a GitHub pull request URL',
-    );
+    throw new Error(`${toolName} prUrl must be a GitHub pull request URL`);
   }
 
   const number = Number(match[3]);
   if (!Number.isSafeInteger(number) || number <= 0) {
-    throw new Error('register_github_watch prUrl must contain a valid PR number');
+    throw new Error(`${toolName} prUrl must contain a valid PR number`);
   }
 
   return { owner: match[1]!, repo: match[2]!, number };

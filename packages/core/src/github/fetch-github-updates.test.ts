@@ -104,6 +104,77 @@ describe('fetchGitHubUpdates', () => {
     });
   });
 
+  it('stops polling an explicit-only PR after its watch is removed', async () => {
+    const listPullRequestReviews = vi.fn().mockResolvedValue([]);
+    const listPullRequestReviewComments = vi.fn().mockResolvedValue([]);
+    const getStatusCheckRollup = vi.fn().mockResolvedValue([]);
+    const cursor = {
+      pullRequests: { '354': { lastReviewId: '10' } },
+      explicitPullRequests: {},
+    };
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient: createMockClient({
+        searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+        listPullRequestReviews,
+        listPullRequestReviewComments,
+        getStatusCheckRollup,
+      }),
+    });
+
+    expect(listPullRequestReviews).not.toHaveBeenCalled();
+    expect(listPullRequestReviewComments).not.toHaveBeenCalled();
+    expect(getStatusCheckRollup).not.toHaveBeenCalled();
+    expect(result.cursor.pullRequests?.['354']).toEqual({
+      lastReviewId: '10',
+    });
+  });
+
+  it('continues polling a Search-linked PR after its explicit watch is removed', async () => {
+    const linkedPr = {
+      number: 354,
+      title: 'feat',
+      url: 'https://github.com/org/repo/pull/354',
+      state: 'OPEN',
+    };
+    const githubClient = createMockClient({
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([linkedPr]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([
+        {
+          id: 11,
+          body: 'new review',
+          html_url: 'https://github.com/org/repo/pull/354#pullrequestreview-11',
+          user: { login: 'reviewer' },
+          state: 'APPROVED',
+          submitted_at: '2026-09-07T05:00:00.000Z',
+        },
+      ]),
+    });
+
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: {
+        pullRequests: { '354': { lastReviewId: '10' } },
+        explicitPullRequests: {},
+      },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient,
+    });
+
+    expect(result.updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'pr-review:11', kind: 'pr.review' }),
+      ]),
+    );
+    expect(githubClient.listPullRequestReviews).toHaveBeenCalledWith(
+      'org',
+      'repo',
+      354,
+    );
+  });
+
   it('bootstraps a newly registered PR before notifying its existing updates', async () => {
     const reviews = [
       {

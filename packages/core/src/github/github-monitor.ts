@@ -50,6 +50,8 @@ export interface GitHubMonitor {
     registeredAt: string;
     kinds?: GitHubUpdateKind[];
   }): void;
+  /** Remove a runtime PR watch without deleting its historical poll cursor. */
+  unregisterPullRequest(prNumber: number): void;
 }
 
 export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonitor {
@@ -76,6 +78,7 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
     string,
     { registeredAt: string; kinds?: GitHubUpdateKind[] }
   >();
+  const pendingUnregistrations = new Set<string>();
 
   const buffer = new DebounceBuffer<GitHubUpdateItem>({
     debounceMs,
@@ -121,7 +124,11 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       };
       const result = await fetchGitHubUpdates(input);
       cursor = mergePendingRegistrations(result.cursor, pendingRegistrations);
+      for (const key of pendingUnregistrations) {
+        delete cursor.explicitPullRequests?.[key];
+      }
       pendingRegistrations.clear();
+      pendingUnregistrations.clear();
       options.onCursorChange?.(cursor);
       needsBootstrapPoll = false;
       hasPendingCi = result.hasPendingCi;
@@ -213,8 +220,17 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       };
       cursor.explicitPullRequests[key] ??= watch;
       pendingRegistrations.set(key, watch);
+      pendingUnregistrations.delete(key);
       options.onCursorChange?.(cursor);
       requestPoll(0);
+    },
+
+    unregisterPullRequest(prNumber) {
+      const key = String(prNumber);
+      delete cursor.explicitPullRequests?.[key];
+      pendingRegistrations.delete(key);
+      pendingUnregistrations.add(key);
+      options.onCursorChange?.(cursor);
     },
   };
 }

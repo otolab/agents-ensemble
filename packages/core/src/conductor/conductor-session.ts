@@ -119,6 +119,7 @@ import {
   type GitHubMonitorCursor,
 } from '../github/github-monitor-cursor.js';
 import { createRegisterGitHubWatchTool } from '../github/register-github-watch-tool.js';
+import { createUnregisterGitHubWatchTool } from '../github/unregister-github-watch-tool.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
@@ -610,6 +611,17 @@ export async function runConductorSession(
       scheduleSidecarFlush();
     },
   });
+  const unregisterGitHubWatchTools = createUnregisterGitHubWatchTool({
+    issueUrl: options.issueUrl,
+    getCursor: () => {
+      githubMonitorCursor ??= emptyGitHubMonitorCursor();
+      return githubMonitorCursor;
+    },
+    onUnregistered: (prNumber) => {
+      githubMonitor?.unregisterPullRequest?.(prNumber);
+      scheduleSidecarFlush();
+    },
+  });
 
   let conductorAgent!: ConductorAgent;
 
@@ -643,6 +655,7 @@ export async function runConductorSession(
     .registerAll(promptWorkerTools)
     .registerAll(workerStatusTools)
     .registerAll(registerGitHubWatchTools)
+    .registerAll(unregisterGitHubWatchTools)
     .registerAll(sessionUsageTools)
     .registerAll(dispatchHoldTools);
 
