@@ -711,8 +711,12 @@ function aggregateCiChecks(checks: NormalizedCiCheck[]): {
   }
 
   const relevantCheck =
-    (state === 'running' && checks.find((check) => check.state === 'running')) ??
-    (state === 'failed' && checks.find((check) => check.state === 'failed')) ??
+    (state === 'running'
+      ? checks.find((check) => check.state === 'running')
+      : undefined) ??
+    (state === 'failed'
+      ? checks.find((check) => check.state === 'failed')
+      : undefined) ??
     checks[0];
   return {
     state,
