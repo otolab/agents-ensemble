@@ -7,7 +7,6 @@ import {
   normalizeGitHubMonitorCursor,
   type ExplicitPullRequestWatch,
   type GitHubMonitorCursor,
-  type PullRequestCiSnapshot,
   type PullRequestMonitorCursor,
 } from './github-monitor-cursor.js';
 import {
@@ -15,7 +14,11 @@ import {
   safeUpperString,
   type GitHubMonitorPhaseError,
 } from './github-monitor-error.js';
-import type { GitHubUpdateItem, GitHubUpdateKind } from './github-update-types.js';
+import type {
+  GitHubCiAggregateState,
+  GitHubUpdateItem,
+  GitHubUpdateKind,
+} from './github-update-types.js';
 
 const BODY_PREVIEW_MAX = 280;
 
@@ -78,6 +81,16 @@ interface GhCheckRun {
   detailsUrl?: string;
   /** head commit SHA（GraphQL レスポンスに含まれる場合）。 */
   headSha?: string;
+}
+
+/** statusCheckRollup の各 check を集約前に揃える内部 4 値。 */
+type NormalizedCiCheckState = 'skip' | 'running' | 'failed' | 'complete';
+
+interface NormalizedCiCheck {
+  name: string;
+  headSha: string;
+  state: NormalizedCiCheckState;
+  detailsUrl?: string;
 }
 
 export async function fetchGitHubUpdates(
@@ -241,8 +254,8 @@ async function fetchPullRequestUpdates(input: {
   const cursor: PullRequestMonitorCursor = {
     lastReviewId: input.prCursor.lastReviewId,
     lastReviewCommentId: input.prCursor.lastReviewCommentId,
-    ...(input.prCursor.lastObserved
-      ? { lastObserved: cloneCiSnapshots(input.prCursor.lastObserved) }
+    ...(input.prCursor.lastAggregateBySha
+      ? { lastAggregateBySha: cloneAggregateStates(input.prCursor.lastAggregateBySha) }
       : {}),
     ...(input.prCursor.ciBootstrapPending
       ? { ciBootstrapPending: true }
@@ -310,12 +323,12 @@ async function fetchPullRequestUpdates(input: {
       const retryingCiBootstrap = cursor.ciBootstrapPending === true;
       const ciResult = collectCiUpdates({
         checkRuns,
-        lastObserved: cursor.lastObserved ?? {},
+        lastAggregateBySha: cursor.lastAggregateBySha ?? {},
         emitFirstCompletedAfterBootstrapFailure: retryingCiBootstrap,
         prNumber: input.pr.number,
       });
       updates.push(...ciResult.updates);
-      cursor.lastObserved = ciResult.lastObserved;
+      cursor.lastAggregateBySha = ciResult.lastAggregateBySha;
       delete cursor.ciBootstrapPending;
       hasPendingCi = ciResult.hasPendingCi;
     } catch (error) {
@@ -460,13 +473,23 @@ function addCheckRunMetadata(
   normalized: GhCheckRun,
   row: Record<string, unknown>,
 ): void {
+  const checkSuite = isRecord(row.checkSuite) ? row.checkSuite : undefined;
   const headSha =
-    typeof row.headSha === 'string'
-      ? row.headSha
-      : isRecord(row.checkSuite) && typeof row.checkSuite.headSha === 'string'
-        ? row.checkSuite.headSha
-        : undefined;
+    (typeof row.headSha === 'string' ? row.headSha : undefined) ??
+    (checkSuite && isRecord(checkSuite.commit)
+      ? readCommitOid(checkSuite.commit)
+      : undefined) ??
+    (checkSuite && typeof checkSuite.headSha === 'string'
+      ? checkSuite.headSha
+      : undefined) ??
+    (isRecord(row.commit) ? readCommitOid(row.commit) : undefined);
   if (headSha) normalized.headSha = headSha;
+}
+
+function readCommitOid(commit: Record<string, unknown>): string | undefined {
+  return typeof commit.oid === 'string' && commit.oid.length > 0
+    ? commit.oid
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -548,75 +571,92 @@ function collectReviewCommentUpdates(
 
 function collectCiUpdates(input: {
   checkRuns: GhCheckRun[];
-  lastObserved: Record<string, PullRequestCiSnapshot>;
+  lastAggregateBySha: Record<string, GitHubCiAggregateState>;
   emitFirstCompletedAfterBootstrapFailure: boolean;
   prNumber: number;
 }): {
   updates: GitHubUpdateItem[];
-  lastObserved: Record<string, PullRequestCiSnapshot>;
+  lastAggregateBySha: Record<string, GitHubCiAggregateState>;
   hasPendingCi: boolean;
 } {
   const updates: GitHubUpdateItem[] = [];
-  const pendingNow = new Set<string>();
-  const lastObserved = cloneCiSnapshots(input.lastObserved);
+  const checksBySha = new Map<string, NormalizedCiCheck[]>();
+  const lastAggregateBySha = cloneAggregateStates(input.lastAggregateBySha);
+  let hasPendingCi = false;
 
   for (const check of input.checkRuns) {
-    const snapshot = normalizeCiSnapshot(check);
-    if (!snapshot) {
+    const normalized = normalizeCiCheck(check);
+    if (!normalized) {
       continue;
     }
 
-    const name = check.name;
-    const previous = lastObserved[name];
-    lastObserved[name] = snapshot;
+    const checks = checksBySha.get(normalized.headSha) ?? [];
+    checks.push(normalized);
+    checksBySha.set(normalized.headSha, checks);
+  }
 
-    if (snapshot.phase === 'pending') {
-      pendingNow.add(name);
+  for (const [commitSha, checks] of checksBySha) {
+    const aggregate = aggregateCiChecks(checks);
+    if (aggregate.state === 'running') {
+      hasPendingCi = true;
+    }
+    const previous = lastAggregateBySha[commitSha];
+    lastAggregateBySha[commitSha] = aggregate.state;
+
+    // A newly observed SHA/state is the baseline. After a failed bootstrap,
+    // emit a non-running aggregate so a completion that happened during the
+    // failed poll is not lost.
+    const shouldNotify =
+      previous !== undefined
+        ? previous !== aggregate.state
+        : input.emitFirstCompletedAfterBootstrapFailure &&
+          aggregate.state !== 'running';
+    if (!shouldNotify) {
       continue;
     }
 
-    // A completed check seen for the first time is normally the
-    // registration/search baseline. After a failed bootstrap there is no
-    // baseline, so emit it to avoid losing an in-flight completion.
-    const emitFirstCompletedAfterBootstrapFailure =
-      input.emitFirstCompletedAfterBootstrapFailure && previous === undefined;
-    if (
-      !emitFirstCompletedAfterBootstrapFailure &&
-      !shouldNotifyCiCompletion(previous, snapshot)
-    ) {
-      continue;
-    }
-
-    const conclusion = snapshot.conclusion ?? 'UNKNOWN';
     updates.push({
-      id: buildCiUpdateId(input.prNumber, name, snapshot),
+      id: buildCiUpdateId(input.prNumber, commitSha, aggregate.state),
       kind: 'ci.completed',
-      summary: `PR #${input.prNumber} CI 完了（${name}・${conclusion}）`,
-      url: check.detailsUrl,
+      summary: formatCiAggregateSummary(
+        input.prNumber,
+        commitSha,
+        aggregate.state,
+        aggregate.failedCheckNames,
+      ),
+      url: aggregate.detailsUrl,
       prNumber: input.prNumber,
-      checkName: name,
-      checkConclusion: conclusion,
+      commitSha,
+      aggregateState: aggregate.state,
+      ...(aggregate.state === 'failed' && aggregate.failedCheckNames.length > 0
+        ? { failedCheckNames: aggregate.failedCheckNames }
+        : {}),
     });
   }
 
   return {
     updates,
-    lastObserved,
-    hasPendingCi: pendingNow.size > 0,
+    lastAggregateBySha,
+    hasPendingCi,
   };
 }
 
-function normalizeCiSnapshot(check: GhCheckRun): PullRequestCiSnapshot | undefined {
+function normalizeCiCheck(check: GhCheckRun): NormalizedCiCheck | undefined {
   const name = check.name;
   const status = safeUpperString(check.status, '');
-  if (!name || !status) {
+  const headSha = check.headSha?.trim();
+  // The GraphQL query requests the commit OID for both rollup types. A
+  // malformed/older response without a resolvable SHA is ignored here.
+  if (!name || !status || !headSha) {
     return undefined;
   }
 
   if (isPendingCheckStatus(status)) {
     return {
-      phase: 'pending',
-      ...(check.headSha ? { headSha: check.headSha } : {}),
+      name,
+      headSha,
+      state: 'running',
+      ...(check.detailsUrl ? { detailsUrl: check.detailsUrl } : {}),
     };
   }
   if (status !== 'COMPLETED') {
@@ -625,70 +665,84 @@ function normalizeCiSnapshot(check: GhCheckRun): PullRequestCiSnapshot | undefin
 
   const conclusion = safeUpperString(check.conclusion, '');
   return {
-    phase: 'completed',
-    ...(conclusion ? { conclusion } : {}),
-    ...(check.headSha ? { headSha: check.headSha } : {}),
+    name,
+    headSha,
+    state: normalizeCompletedConclusion(conclusion),
+    ...(check.detailsUrl ? { detailsUrl: check.detailsUrl } : {}),
   };
 }
 
-/** 前回観測と今回観測の差分だけで CI 完了通知を判定する。 */
-function shouldNotifyCiCompletion(
-  previous: PullRequestCiSnapshot | undefined,
-  current: PullRequestCiSnapshot,
-): boolean {
-  if (current.phase !== 'completed' || previous === undefined) {
-    return false;
+function normalizeCompletedConclusion(
+  conclusion: string,
+): Exclude<NormalizedCiCheckState, 'running'> {
+  if (conclusion === 'SUCCESS') {
+    return 'complete';
   }
-  if (previous.phase === 'pending') {
-    return true;
+  if (conclusion === 'SKIPPED' || conclusion === 'NEUTRAL') {
+    return 'skip';
   }
-  if (previous.phase !== current.phase) {
-    return true;
-  }
-
-  // Optional metadata can disappear across API representations. Treat a
-  // change as meaningful only when both observations contain the field.
-  const conclusionChanged =
-    previous.conclusion !== undefined &&
-    current.conclusion !== undefined &&
-    previous.conclusion !== current.conclusion;
-  const headShaChanged =
-    previous.headSha !== undefined &&
-    current.headSha !== undefined &&
-    previous.headSha !== current.headSha;
-  return conclusionChanged || headShaChanged;
+  return 'failed';
 }
 
 function buildCiUpdateId(
   prNumber: number,
-  checkName: string,
-  snapshot: PullRequestCiSnapshot,
+  commitSha: string,
+  aggregateState: GitHubCiAggregateState,
 ): string {
-  return [
-    'ci',
-    prNumber,
-    checkName,
-    snapshot.phase,
-    snapshot.conclusion ?? 'UNKNOWN',
-    snapshot.headSha ?? 'UNKNOWN',
-  ].join(':');
+  return ['ci', prNumber, commitSha, aggregateState].join(':');
 }
 
-function cloneCiSnapshots(
-  lastObserved: Record<string, PullRequestCiSnapshot>,
-): Record<string, PullRequestCiSnapshot> {
-  return Object.fromEntries(
-    Object.entries(lastObserved).map(([name, snapshot]) => [
-      name,
-      {
-        phase: snapshot.phase,
-        ...(snapshot.conclusion !== undefined
-          ? { conclusion: snapshot.conclusion }
-          : {}),
-        ...(snapshot.headSha !== undefined ? { headSha: snapshot.headSha } : {}),
-      },
-    ]),
-  );
+function aggregateCiChecks(checks: NormalizedCiCheck[]): {
+  state: GitHubCiAggregateState;
+  failedCheckNames: string[];
+  detailsUrl?: string;
+} {
+  const hasRunning = checks.some((check) => check.state === 'running');
+  const failedCheckNames = checks
+    .filter((check) => check.state === 'failed')
+    .map((check) => check.name)
+    .sort();
+
+  let state: GitHubCiAggregateState = 'completed';
+  if (hasRunning) {
+    state = 'running';
+  } else if (failedCheckNames.length > 0) {
+    state = 'failed';
+  }
+
+  const relevantCheck =
+    (state === 'running'
+      ? checks.find((check) => check.state === 'running')
+      : undefined) ??
+    (state === 'failed'
+      ? checks.find((check) => check.state === 'failed')
+      : undefined) ??
+    checks[0];
+  return {
+    state,
+    failedCheckNames,
+    ...(relevantCheck?.detailsUrl ? { detailsUrl: relevantCheck.detailsUrl } : {}),
+  };
+}
+
+function formatCiAggregateSummary(
+  prNumber: number,
+  commitSha: string,
+  state: GitHubCiAggregateState,
+  failedCheckNames: string[],
+): string {
+  const shortSha = commitSha.slice(0, 7);
+  const suffix =
+    state === 'failed' && failedCheckNames.length > 0
+      ? `・${failedCheckNames.join(', ')}`
+      : '';
+  return `PR #${prNumber} CI 集約（${shortSha}・${state}${suffix}）`;
+}
+
+function cloneAggregateStates(
+  lastAggregateBySha: Record<string, GitHubCiAggregateState>,
+): Record<string, GitHubCiAggregateState> {
+  return Object.fromEntries(Object.entries(lastAggregateBySha));
 }
 
 function isPendingCheckStatus(status: string): boolean {

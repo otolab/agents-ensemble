@@ -233,6 +233,7 @@ describe('createGitHubMonitor', () => {
               name: 'ci/test',
               status: 'IN_PROGRESS',
               conclusion: null,
+              headSha: 'sha-1',
             },
           ];
         }
@@ -243,6 +244,7 @@ describe('createGitHubMonitor', () => {
             name: 'ci/test',
             status: 'COMPLETED',
             conclusion: 'SUCCESS',
+            headSha: 'sha-1',
           },
         ];
       }),
@@ -278,8 +280,8 @@ describe('createGitHubMonitor', () => {
     await drainAsync();
     expect(statusPolls).toBe(2);
     expect(monitor.getCursor().pullRequests?.['354']).toMatchObject({
-      lastObserved: {
-        'ci/test': { phase: 'pending' },
+      lastAggregateBySha: {
+        'sha-1': 'running',
       },
     });
 
@@ -292,7 +294,8 @@ describe('createGitHubMonitor', () => {
     expect(onUpdate.mock.calls[0]![0].items).toMatchObject([
       expect.objectContaining({
         kind: 'ci.completed',
-        checkName: 'ci/test',
+        commitSha: 'sha-1',
+        aggregateState: 'completed',
       }),
     ]);
 

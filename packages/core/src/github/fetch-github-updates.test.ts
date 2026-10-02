@@ -100,7 +100,7 @@ describe('fetchGitHubUpdates', () => {
       354,
     );
     expect(result.cursor.pullRequests?.['354']).toMatchObject({
-      lastObserved: {},
+      lastAggregateBySha: {},
     });
   });
 
@@ -399,8 +399,8 @@ describe('fetchGitHubUpdates', () => {
 
     expect(bootstrap.updates).toEqual([]);
     expect(bootstrap.cursor.pullRequests?.['42']?.lastReviewId).toBe('10');
-    expect(bootstrap.cursor.pullRequests?.['42']?.lastObserved).toEqual({
-      'ci/test': { phase: 'pending' },
+    expect(bootstrap.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'running',
     });
 
     const completedClient = createMockClient({
@@ -419,7 +419,7 @@ describe('fetchGitHubUpdates', () => {
         pullRequests: {
           '42': {
             ...bootstrap.cursor.pullRequests!['42']!,
-            lastObserved: { 'ci/test': { phase: 'pending' } },
+            lastAggregateBySha: { 'sha-1': 'running' },
           },
         },
       },
@@ -430,12 +430,12 @@ describe('fetchGitHubUpdates', () => {
     expect(withPending.updates).toHaveLength(1);
     expect(withPending.updates[0]).toMatchObject({
       kind: 'ci.completed',
-      checkName: 'ci/test',
-      checkConclusion: 'SUCCESS',
+      commitSha: 'sha-1',
+      aggregateState: 'completed',
     });
   });
 
-  it('emits one CI completion for each pending -> completed cycle', async () => {
+  it('emits one aggregate update for each SHA state transition', async () => {
     const rollups = [
       [
         {
@@ -444,6 +444,7 @@ describe('fetchGitHubUpdates', () => {
           name: 'ci/test',
           status: 'IN_PROGRESS',
           conclusion: null,
+          headSha: 'sha-1',
           startedAt: '2026-09-07T05:00:00.000Z',
         },
       ],
@@ -454,6 +455,7 @@ describe('fetchGitHubUpdates', () => {
           name: 'ci/test',
           status: 'COMPLETED',
           conclusion: 'FAILURE',
+          headSha: 'sha-1',
           completedAt: '2026-09-07T05:01:00.000Z',
         },
       ],
@@ -464,6 +466,7 @@ describe('fetchGitHubUpdates', () => {
           name: 'ci/test',
           status: 'IN_PROGRESS',
           conclusion: null,
+          headSha: 'sha-1',
           startedAt: '2026-09-07T05:02:00.000Z',
         },
       ],
@@ -474,6 +477,7 @@ describe('fetchGitHubUpdates', () => {
           name: 'ci/test',
           status: 'COMPLETED',
           conclusion: 'SUCCESS',
+          headSha: 'sha-1',
           completedAt: '2026-09-07T05:03:00.000Z',
         },
       ],
@@ -501,21 +505,27 @@ describe('fetchGitHubUpdates', () => {
     expect(results[1]?.updates).toMatchObject([
       expect.objectContaining({
         kind: 'ci.completed',
-        checkName: 'ci/test',
-        checkConclusion: 'FAILURE',
+        commitSha: 'sha-1',
+        aggregateState: 'failed',
+        failedCheckNames: ['ci/test'],
       }),
     ]);
-    expect(results[2]?.updates).toEqual([]);
+    expect(results[2]?.updates).toMatchObject([
+      expect.objectContaining({
+        kind: 'ci.completed',
+        commitSha: 'sha-1',
+        aggregateState: 'running',
+      }),
+    ]);
     expect(results[3]?.updates).toMatchObject([
       expect.objectContaining({
         kind: 'ci.completed',
-        checkName: 'ci/test',
-        checkConclusion: 'SUCCESS',
+        commitSha: 'sha-1',
+        aggregateState: 'completed',
       }),
     ]);
-    expect(cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
-      phase: 'completed',
-      conclusion: 'SUCCESS',
+    expect(cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'completed',
     });
   });
 
@@ -526,6 +536,7 @@ describe('fetchGitHubUpdates', () => {
       name: 'ci/test',
       status: 'COMPLETED',
       conclusion: 'SUCCESS',
+      headSha: 'sha-1',
       completedAt: '2026-09-07T05:00:00.000Z',
     };
     const secondRun = { ...firstRun, conclusion: 'FAILURE' };
@@ -543,9 +554,8 @@ describe('fetchGitHubUpdates', () => {
       githubClient,
     });
     expect(baseline.updates).toEqual([]);
-    expect(baseline.cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
-      phase: 'completed',
-      conclusion: 'SUCCESS',
+    expect(baseline.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'completed',
     });
 
     const sameRun = await fetchGitHubUpdates({
@@ -566,56 +576,64 @@ describe('fetchGitHubUpdates', () => {
     expect(laterRun.updates).toMatchObject([
       expect.objectContaining({
         kind: 'ci.completed',
-        checkName: 'ci/test',
-        checkConclusion: 'FAILURE',
+        commitSha: 'sha-1',
+        aggregateState: 'failed',
+        failedCheckNames: ['ci/test'],
       }),
     ]);
   });
 
   it.each([
     {
-      label: 'pending -> completed',
-      previous: { phase: 'pending' },
-      check: { status: 'COMPLETED', conclusion: 'SUCCESS' },
+      label: 'running -> completed',
+      previous: 'running',
+      checks: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
       expectedNotification: true,
+      expectedState: 'completed',
     },
     {
-      label: 'completed -> pending',
-      previous: { phase: 'completed', conclusion: 'SUCCESS' },
-      check: { status: 'IN_PROGRESS', conclusion: null },
+      label: 'running -> failed',
+      previous: 'running',
+      checks: [{ status: 'COMPLETED', conclusion: 'FAILURE' }],
+      expectedNotification: true,
+      expectedState: 'failed',
+    },
+    {
+      label: 'failed -> running after re-run',
+      previous: 'failed',
+      checks: [{ status: 'IN_PROGRESS', conclusion: null }],
+      expectedNotification: true,
+      expectedState: 'running',
+    },
+    {
+      label: 'same completed aggregate state',
+      previous: 'completed',
+      checks: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
       expectedNotification: false,
+      expectedState: 'completed',
     },
     {
-      label: 'completed with the same conclusion',
-      previous: { phase: 'completed', conclusion: 'SUCCESS' },
-      check: { status: 'COMPLETED', conclusion: 'SUCCESS' },
+      label: 'same failed aggregate state',
+      previous: 'failed',
+      checks: [{ status: 'COMPLETED', conclusion: 'CANCELLED' }],
       expectedNotification: false,
+      expectedState: 'failed',
     },
-    {
-      label: 'completed with a changed conclusion',
-      previous: { phase: 'completed', conclusion: 'FAILURE' },
-      check: { status: 'COMPLETED', conclusion: 'SUCCESS' },
-      expectedNotification: true,
-    },
-    {
-      label: 'completed with a changed head SHA',
-      previous: { phase: 'completed', conclusion: 'SUCCESS', headSha: 'sha-1' },
-      check: { status: 'COMPLETED', conclusion: 'SUCCESS', headSha: 'sha-2' },
-      expectedNotification: true,
-    },
-  ] as const)('uses only observation differences for $label', async ({
+  ] as const)('notifies only for aggregate state changes: $label', async ({
     previous,
-    check,
+    checks,
     expectedNotification,
+    expectedState,
   }) => {
     const githubClient = createMockClient({
       searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
       getStatusCheckRollup: vi.fn().mockResolvedValue([
-        {
+        ...checks.map((check) => ({
           __typename: 'CheckRun',
           name: 'ci/test',
+          headSha: 'sha-1',
           ...check,
-        },
+        })),
       ]),
     });
 
@@ -623,7 +641,7 @@ describe('fetchGitHubUpdates', () => {
       issueUrl: ISSUE_URL,
       cursor: {
         pullRequests: {
-          '42': { lastObserved: { 'ci/test': previous } },
+          '42': { lastAggregateBySha: { 'sha-1': previous } },
         },
       },
       ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
@@ -633,14 +651,161 @@ describe('fetchGitHubUpdates', () => {
     expect(result.updates.some((update) => update.kind === 'ci.completed')).toBe(
       expectedNotification,
     );
-    expect(result.cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
-      phase: check.status === 'IN_PROGRESS' ? 'pending' : 'completed',
-      ...(check.conclusion ? { conclusion: check.conclusion } : {}),
-      ...(check.headSha ? { headSha: check.headSha } : {}),
+    expect(result.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': expectedState,
     });
   });
 
-  it('keeps the last observation when a rollup check is temporarily missing', async () => {
+  it.each([
+    {
+      label: 'all skip',
+      checks: [{ name: 'ci/skip', status: 'COMPLETED', conclusion: 'SKIPPED' }],
+    },
+    {
+      label: 'skip and complete mixed',
+      checks: [
+        { name: 'ci/skip', status: 'COMPLETED', conclusion: 'NEUTRAL' },
+        { name: 'ci/test', status: 'COMPLETED', conclusion: 'SUCCESS' },
+      ],
+    },
+  ])('$label aggregates to completed', async ({ checks }) => {
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: {
+        pullRequests: {
+          '42': { lastAggregateBySha: { 'sha-1': 'running' } },
+        },
+      },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient: createMockClient({
+        searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+        getStatusCheckRollup: vi.fn().mockResolvedValue(
+          checks.map((check) => ({
+            __typename: 'CheckRun',
+            headSha: 'sha-1',
+            detailsUrl: 'https://example.test/ci',
+            ...check,
+          })),
+        ),
+      }),
+    });
+
+    expect(result.updates).toMatchObject([
+      expect.objectContaining({
+        aggregateState: 'completed',
+        commitSha: 'sha-1',
+      }),
+    ]);
+    expect(result.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'completed',
+    });
+  });
+
+  it('aggregates a running check before a completed check', async () => {
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: {
+        pullRequests: {
+          '42': { lastAggregateBySha: { 'sha-1': 'completed' } },
+        },
+      },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient: createMockClient({
+        searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+        getStatusCheckRollup: vi.fn().mockResolvedValue([
+          {
+            __typename: 'CheckRun',
+            name: 'ci/test',
+            status: 'COMPLETED',
+            conclusion: 'SUCCESS',
+            headSha: 'sha-1',
+          },
+          {
+            __typename: 'CheckRun',
+            name: 'ci/slow',
+            status: 'IN_PROGRESS',
+            conclusion: null,
+            headSha: 'sha-1',
+          },
+        ]),
+      }),
+    });
+
+    expect(result.updates).toMatchObject([
+      expect.objectContaining({ aggregateState: 'running', commitSha: 'sha-1' }),
+    ]);
+    expect(result.hasPendingCi).toBe(true);
+  });
+
+  it('keeps PR wakeup active when any current SHA aggregate is running', async () => {
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: {
+        pullRequests: {
+          '42': {
+            lastAggregateBySha: {
+              'sha-1': 'completed',
+              'sha-2': 'completed',
+            },
+          },
+        },
+      },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient: createMockClient({
+        searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+        getStatusCheckRollup: vi.fn().mockResolvedValue([
+          {
+            __typename: 'CheckRun',
+            name: 'ci/old-sha',
+            status: 'COMPLETED',
+            conclusion: 'SUCCESS',
+            headSha: 'sha-1',
+          },
+          {
+            __typename: 'CheckRun',
+            name: 'ci/new-sha',
+            status: 'IN_PROGRESS',
+            conclusion: null,
+            headSha: 'sha-2',
+          },
+        ]),
+      }),
+    });
+
+    expect(result.hasPendingCi).toBe(true);
+    expect(result.updates).toMatchObject([
+      expect.objectContaining({
+        commitSha: 'sha-2',
+        aggregateState: 'running',
+      }),
+    ]);
+  });
+
+  it('excludes a check when its SHA cannot be resolved', async () => {
+    const result = await fetchGitHubUpdates({
+      issueUrl: ISSUE_URL,
+      cursor: emptyGitHubMonitorCursor(),
+      initialCursorPoll: true,
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      githubClient: createMockClient({
+        searchLinkedPullRequests: vi.fn().mockResolvedValue([...PR_SEARCH]),
+        getStatusCheckRollup: vi.fn().mockResolvedValue([
+          {
+            __typename: 'CheckRun',
+            name: 'ci/no-sha',
+            status: 'IN_PROGRESS',
+            conclusion: null,
+          },
+        ]),
+      }),
+    });
+
+    expect(result.updates).toEqual([]);
+    expect(result.hasPendingCi).toBe(false);
+    expect(result.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({});
+  });
+
+  it('keeps the last aggregate when a rollup check is temporarily missing', async () => {
     const completedRun = {
       __typename: 'CheckRun',
       name: 'ci/test',
@@ -670,10 +835,8 @@ describe('fetchGitHubUpdates', () => {
       githubClient,
     });
     expect(missing.updates).toEqual([]);
-    expect(missing.cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
-      phase: 'completed',
-      conclusion: 'SUCCESS',
-      headSha: 'sha-1',
+    expect(missing.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'completed',
     });
 
     rollup = [completedRun];
@@ -693,6 +856,7 @@ describe('fetchGitHubUpdates', () => {
       name: 'ci/test',
       status: 'IN_PROGRESS',
       conclusion: null,
+      headSha: 'sha-1',
       startedAt: '2026-09-07T05:00:00.000Z',
     };
     const completedRun = {
@@ -742,8 +906,8 @@ describe('fetchGitHubUpdates', () => {
     });
     expect(pending.updates).toEqual([]);
     expect(pending.cursor.pullRequests?.['42']).toMatchObject({
-      lastObserved: {
-        'ci/test': { phase: 'pending' },
+      lastAggregateBySha: {
+        'sha-1': 'running',
       },
     });
     expect(pending.cursor.pullRequests?.['42']).not.toHaveProperty(
@@ -759,8 +923,8 @@ describe('fetchGitHubUpdates', () => {
     expect(completed.updates).toMatchObject([
       expect.objectContaining({
         kind: 'ci.completed',
-        checkName: 'ci/test',
-        checkConclusion: 'SUCCESS',
+        commitSha: 'sha-1',
+        aggregateState: 'completed',
       }),
     ]);
   });
@@ -772,6 +936,7 @@ describe('fetchGitHubUpdates', () => {
       name: 'ci/test',
       status: 'COMPLETED',
       conclusion: 'SUCCESS',
+      headSha: 'sha-1',
       completedAt: '2026-09-07T05:01:00.000Z',
     };
     let statusPoll = 0;
@@ -812,22 +977,22 @@ describe('fetchGitHubUpdates', () => {
     expect(completed.updates).toHaveLength(1);
     expect(completed.updates[0]).toMatchObject({
       kind: 'ci.completed',
-      checkName: 'ci/test',
-      checkConclusion: 'SUCCESS',
+      commitSha: 'sha-1',
+      aggregateState: 'completed',
     });
-    expect(completed.cursor.pullRequests?.['42']?.lastObserved?.['ci/test']).toEqual({
-      phase: 'completed',
-      conclusion: 'SUCCESS',
+    expect(completed.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'completed',
     });
   });
 
-  it('migrates legacy pending and notified-only CI cursors explicitly', async () => {
+  it('resets legacy CI cursors and records the current SHA baseline', async () => {
     const completedRun = {
       __typename: 'CheckRun',
       id: 'check-run-1',
       name: 'ci/test',
       status: 'COMPLETED',
       conclusion: 'SUCCESS',
+      headSha: 'sha-1',
       completedAt: '2026-09-07T05:01:00.000Z',
     };
     const createClient = () =>
@@ -846,12 +1011,10 @@ describe('fetchGitHubUpdates', () => {
       ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
       githubClient: createClient(),
     });
-    expect(migratedPending.updates).toMatchObject([
-      expect.objectContaining({
-        kind: 'ci.completed',
-        checkName: 'ci/test',
-      }),
-    ]);
+    expect(migratedPending.updates).toEqual([]);
+    expect(migratedPending.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'completed',
+    });
 
     const migratedNotifiedOnly = await fetchGitHubUpdates({
       issueUrl: ISSUE_URL,
@@ -864,9 +1027,9 @@ describe('fetchGitHubUpdates', () => {
       githubClient: createClient(),
     });
     expect(migratedNotifiedOnly.updates).toEqual([]);
-    expect(
-      migratedNotifiedOnly.cursor.pullRequests?.['42']?.lastObserved?.['ci/test'],
-    ).toEqual({ phase: 'completed', conclusion: 'SUCCESS' });
+    expect(migratedNotifiedOnly.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'completed',
+    });
   });
 
   it('handles StatusContext entries in statusCheckRollup without throwing', async () => {
@@ -886,8 +1049,8 @@ describe('fetchGitHubUpdates', () => {
     });
 
     expect(bootstrap.updates).toEqual([]);
-    expect(bootstrap.cursor.pullRequests?.['42']?.lastObserved).toEqual({
-      'ci/legacy': { phase: 'pending' },
+    expect(bootstrap.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'running',
     });
 
     const completedClient = createMockClient({
@@ -904,7 +1067,7 @@ describe('fetchGitHubUpdates', () => {
         pullRequests: {
           '42': {
             ...bootstrap.cursor.pullRequests!['42']!,
-            lastObserved: { 'ci/legacy': { phase: 'pending' } },
+            lastAggregateBySha: { 'sha-1': 'running' },
           },
         },
       },
@@ -915,8 +1078,8 @@ describe('fetchGitHubUpdates', () => {
     expect(withPending.updates).toHaveLength(1);
     expect(withPending.updates[0]).toMatchObject({
       kind: 'ci.completed',
-      checkName: 'ci/legacy',
-      checkConclusion: 'SUCCESS',
+      commitSha: 'sha-1',
+      aggregateState: 'completed',
     });
   });
 
@@ -981,8 +1144,8 @@ describe('fetchGitHubUpdates', () => {
       prNumber: 42,
       cause: 'parse',
     });
-    expect(result.cursor.pullRequests?.['43']?.lastObserved).toEqual({
-      'ci/legacy': { phase: 'pending' },
+    expect(result.cursor.pullRequests?.['43']?.lastAggregateBySha).toEqual({
+      'sha-1': 'running',
     });
   });
 
@@ -1024,6 +1187,7 @@ describe('fetchGitHubUpdates', () => {
         name: `ci/job-${i}`,
         status: 'COMPLETED',
         conclusion: 'SUCCESS',
+        headSha: 'sha-1',
         detailsUrl: `https://github.com/org/repo/actions/runs/${i}`,
       }));
     const githubClient = createMockClient({
@@ -1055,7 +1219,7 @@ describe('fetchGitHubUpdates', () => {
     }
   });
 
-  it('notifies when the completed head SHA changes', async () => {
+  it('baselines a newly observed head SHA independently', async () => {
     const firstRun = {
       __typename: 'CheckRun',
       id: 'check-run-1',
@@ -1095,9 +1259,11 @@ describe('fetchGitHubUpdates', () => {
       ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
       githubClient,
     });
-    expect(rerun.updates).toMatchObject([
-      expect.objectContaining({ kind: 'ci.completed', checkName: 'ci/test' }),
-    ]);
+    expect(rerun.updates).toEqual([]);
+    expect(rerun.cursor.pullRequests?.['42']?.lastAggregateBySha).toEqual({
+      'sha-1': 'completed',
+      'sha-2': 'completed',
+    });
   });
 
   it('normalizes StatusContext without __typename and non-string conclusion', () => {
@@ -1112,14 +1278,42 @@ describe('fetchGitHubUpdates', () => {
         name: 'ci/legacy-no-typename',
         status: 'IN_PROGRESS',
         conclusion: null,
+        headSha: 'sha-1',
         detailsUrl: 'https://github.com/org/repo/actions/runs/3',
       },
       {
         name: 'ci/broken-conclusion',
         status: 'COMPLETED',
         conclusion: null,
+        headSha: 'sha-1',
         detailsUrl: 'https://github.com/org/repo/actions/runs/4',
       },
+    ]);
+  });
+
+  it('resolves SHA from GraphQL CheckRun and StatusContext commit fields', () => {
+    const normalized = normalizeStatusCheckRollup([
+      {
+        __typename: 'CheckRun',
+        name: 'ci/check-run',
+        status: 'COMPLETED',
+        conclusion: 'SUCCESS',
+        checkSuite: { commit: { oid: 'sha-check-run' } },
+      },
+      {
+        __typename: 'StatusContext',
+        context: 'ci/status-context',
+        state: 'SUCCESS',
+        commit: { oid: 'sha-status-context' },
+      },
+    ]);
+
+    expect(normalized).toEqual([
+      expect.objectContaining({ name: 'ci/check-run', headSha: 'sha-check-run' }),
+      expect.objectContaining({
+        name: 'ci/status-context',
+        headSha: 'sha-status-context',
+      }),
     ]);
   });
 });

@@ -126,11 +126,23 @@ describe('formatSessionEventForConductor', () => {
           summary: 'Issue コメント（@alice）',
           author: 'alice',
         },
+        {
+          id: 'ci:1:sha-1:failed',
+          kind: 'ci.completed',
+          summary: 'PR #42 CI 集約（sha-1・failed・ci/test）',
+          prNumber: 42,
+          commitSha: 'sha-1234567',
+          aggregateState: 'failed',
+          failedCheckNames: ['ci/test'],
+        },
       ],
     });
 
     expect(message).toContain('## GitHub 更新');
     expect(message).toContain('```yaml');
     expect(message).toContain('issue-comment:1');
+    expect(message).toContain('commitSha: sha-1234567');
+    expect(message).toContain('aggregateState: failed');
+    expect(message).toContain('ci/test');
   });
 });

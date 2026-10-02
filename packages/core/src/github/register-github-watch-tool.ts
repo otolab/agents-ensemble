@@ -35,7 +35,7 @@ export function createRegisterGitHubWatchTool(
       description: [
         'Register a pull request for the harness GitHub monitor.',
         'Provide prNumber or prUrl; the pull request must belong to the session Issue repository.',
-        'If kinds is omitted, monitor PR reviews, review comments, and CI completion.',
+        'If kinds is omitted, monitor PR reviews, review comments, and CI aggregate state transitions.',
         'An immediate bootstrap poll records the current PR and CI state; already-completed checks are baseline only and are not emitted.',
         'Registering the same pull request more than once is a no-op.',
       ].join(' '),
@@ -58,7 +58,7 @@ export function createRegisterGitHubWatchTool(
               enum: [...DEFAULT_GITHUB_WATCH_KINDS],
             },
             description:
-              'Optional PR update kinds to monitor; defaults to review, review_comment, and ci.completed',
+              'Optional PR update kinds to monitor; defaults to review, review_comment, and ci.completed (CI aggregate state transitions)',
           },
         },
       },

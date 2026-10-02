@@ -59,6 +59,9 @@ function formatEventBodyForConductor(event: SessionEvent): string {
     case 'permission.pending':
       return fencedYaml('permission.pending', event.permission);
     case 'github.update':
+      // `ci.completed` items carry the commit-SHA aggregate state in the
+      // generic GitHub update YAML; preserve those fields for conductor
+      // decisions (especially failed check names and the SHA).
       return fencedYaml('github.update', event.items);
     default: {
       const _exhaustive: never = event;

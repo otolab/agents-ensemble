@@ -774,8 +774,8 @@ describe('runConductorSession resume / shutdown', () => {
     );
     const getStatusCheckRollup = vi.fn(async () =>
       searchPolls <= 2
-        ? [{ name: 'build', status: 'IN_PROGRESS', conclusion: null }]
-        : [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+        ? [{ name: 'build', status: 'IN_PROGRESS', conclusion: null, headSha: 'sha-1' }]
+        : [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: 'sha-1' }],
     );
     const githubClient: GitHubClient = {
       getIssue: vi.fn(),
@@ -935,8 +935,8 @@ describe('runConductorSession resume / shutdown', () => {
       expect(cursor.pullRequests?.['354']).toMatchObject({
         lastReviewId: '2',
         lastReviewCommentId: '2',
-        lastObserved: {
-          build: { phase: 'completed', conclusion: 'SUCCESS' },
+        lastAggregateBySha: {
+          'sha-1': 'completed',
         },
       });
 
@@ -953,8 +953,8 @@ describe('runConductorSession resume / shutdown', () => {
       expect(sidecar?.githubMonitor?.pullRequests?.['354']).toMatchObject({
         lastReviewId: '2',
         lastReviewCommentId: '2',
-        lastObserved: {
-          build: { phase: 'completed', conclusion: 'SUCCESS' },
+        lastAggregateBySha: {
+          'sha-1': 'completed',
         },
       });
     } finally {
