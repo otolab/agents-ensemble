@@ -17,7 +17,7 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(34);
+    expect(types.size).toBe(35);
   });
 
   it('lists every SessionEvent type exactly once', () => {
@@ -146,6 +146,13 @@ describe('session event type groups', () => {
           };
         case 'permission.pending':
           return { type, ...permissionHarness };
+        case 'permission.cleanup':
+          return {
+            type,
+            reason: 'worker.failed',
+            workerId: 'wid',
+            entries: [{ id: 'perm-1', workerId: 'wid' }],
+          };
         case 'worker.round':
           return { type, dispatch: round };
         case 'worker.failed':

@@ -20,6 +20,7 @@ import type { SessionEvent } from './session/session-event.js';
 import {
   bufferDispatchHoldEvents,
   createDispatchHoldState,
+  pruneStalePermissionEvents,
   type DispatchHoldChange,
   type DispatchHoldState,
 } from './session/dispatch-hold.js';
@@ -78,6 +79,8 @@ export interface ConductorSessionDriverOptions {
   eventQueue: SessionEventQueue;
   workerSession: WorkerSession;
   permissionPipeline: PermissionPipeline;
+  /** PermissionPipeline.pending を dispatch の authoritative source として参照する predicate。 */
+  isPermissionPending?: (requestId: string) => boolean;
   openQuestions: OpenQuestionRegistry;
   shutdownSignal: AbortSignal;
   maxTurns: number;
@@ -229,6 +232,15 @@ export async function runConductorSessionDriver(
   }
 
   while (true) {
+    if (options.isPermissionPending) {
+      pruneStalePermissionEvents({
+        state: dispatchHoldState,
+        eventQueue: options.eventQueue,
+        isPermissionPending: options.isPermissionPending,
+        onChanged: options.onDispatchHoldChanged,
+      });
+    }
+
     if (
       !inFlightSend &&
       isMaxTurnsLimited(options.maxTurns) &&
@@ -305,6 +317,7 @@ export async function runConductorSessionDriver(
         signal: options.shutdownSignal,
         dispatchHoldState,
         onDispatchHoldChanged: options.onDispatchHoldChanged,
+        isPermissionPending: options.isPermissionPending,
       });
     } catch (error) {
       if (isAbortError(error)) {
@@ -452,12 +465,22 @@ async function waitForDispatchBatch(input: {
   signal?: AbortSignal;
   dispatchHoldState: DispatchHoldState;
   onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
+  isPermissionPending?: (requestId: string) => boolean;
 }): Promise<DispatchBatchResult | undefined> {
   for (;;) {
     if (input.dispatchHoldState.dispatchHold) {
       bufferDispatchHoldEvents({
         state: input.dispatchHoldState,
         eventQueue: input.eventQueue,
+        onChanged: input.onDispatchHoldChanged,
+      });
+    }
+
+    if (input.isPermissionPending) {
+      pruneStalePermissionEvents({
+        state: input.dispatchHoldState,
+        eventQueue: input.eventQueue,
+        isPermissionPending: input.isPermissionPending,
         onChanged: input.onDispatchHoldChanged,
       });
     }

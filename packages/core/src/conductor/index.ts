@@ -188,11 +188,13 @@ export type {
 export {
   bufferDispatchHoldEvents,
   createDispatchHoldState,
+  pruneStalePermissionEvents,
 } from './session/dispatch-hold.js';
 export type {
   BufferDispatchHoldEventsOptions,
   DispatchHoldChange,
   DispatchHoldChangeStatus,
+  PruneStalePermissionEventsOptions,
   DispatchHoldState,
 } from './session/dispatch-hold.js';
 export {
@@ -235,6 +237,7 @@ export type {
   WorkerFailureOutcome,
   PermissionPendingConductorPayload,
   PermissionPendingHarnessPayload,
+  PermissionCleanupEvent,
   WorkerPromptLifecycleSource,
 } from './session/events/index.js';
 

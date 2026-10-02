@@ -51,6 +51,19 @@ describe('session-log-lines', () => {
     );
   });
 
+  it('formats permission cleanup diagnostics with full request ids', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'permission.cleanup',
+        reason: 'worker.failed',
+        workerId: 'worker-uuid',
+        entries: [{ id: 'perm-stale', workerId: 'worker-uuid' }],
+      }),
+    ).toBe(
+      'permission.cleanup reason=worker.failed worker=worker-uuid count=1 ids=perm-stale',
+    );
+  });
+
   it('formats harness.warning body', () => {
     expect(
       formatHarnessLogBody({

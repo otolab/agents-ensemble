@@ -90,6 +90,11 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
     }
     case 'permission.pending':
       return renderSessionLogEvent(event);
+    case 'permission.cleanup': {
+      const worker = event.workerId ? ` worker=${event.workerId}` : '';
+      const ids = event.entries.map((entry) => entry.id).join(',');
+      return `permission.cleanup reason=${event.reason}${worker} count=${event.entries.length}${ids ? ` ids=${ids}` : ''}`;
+    }
     case 'conductor.send': {
       let line = `conductor.send n=${event.sendCount} status=${event.status} workerDone=${event.workerDispatches} workerFailed=${event.workerFailures}`;
       if (event.status === 'error') {
