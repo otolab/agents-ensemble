@@ -337,5 +337,35 @@ describe('PiConductorAgent', () => {
         headers: { Authorization: 'Bearer local-key' },
       },
     });
+
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            apiKey: '!printf conductor-command-key',
+            authHeader: true,
+            models: [{ id: 'review-model', name: 'Review model' }],
+          },
+        },
+      }),
+    );
+
+    await expect(
+      resolvePiModelConfig({
+        cwd,
+        pi: { agentDir, projectDir },
+        env: {},
+      }),
+    ).resolves.toMatchObject({
+      provider: 'local',
+      modelId: 'review-model',
+      apiKey: 'conductor-command-key',
+      model: {
+        headers: { Authorization: 'Bearer conductor-command-key' },
+      },
+    });
   });
 });

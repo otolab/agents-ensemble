@@ -239,40 +239,70 @@ export async function resolvePiConductorApiKey(options: {
   // A project auth file intentionally remains above the user auth layer. When
   // both roots point at the same file, ModelRuntime is the canonical reader so
   // OAuth refresh is not bypassed by the resource-layer compatibility parser.
-  if (options.resources.roots.agentDir !== options.resources.roots.projectDir) {
-    const projectEntry = options.resources.authLayers.at(-1)?.[options.provider];
-    if (isPiOAuthAuthEntry(projectEntry)) {
-      throw new Error(formatProjectOAuthAuthError(options.provider));
-    }
-    const projectKey = resolvePiAuthEntry(
-      projectEntry,
-      env,
-    );
-    if (projectKey !== undefined) return projectKey;
-  }
-
-  // ModelRuntime owns the Pi 1.x credential store, OAuth refresh, and locking.
-  // Resolve it on every request instead of capturing the key at construction.
-  try {
-    const runtimeAuth = await options.modelRuntime.getAuth(options.provider);
-    if (runtimeAuth?.auth.apiKey !== undefined) return runtimeAuth.auth.apiKey;
-  } catch {
-    // A models.json command or environment reference can be unavailable in
-    // the injected environment. Continue through the ensemble fallback chain
-    // so its resolved map remains authoritative for this request.
-  }
-
+  const projectEntry = options.resources.authLayers.at(-1)?.[options.provider];
+  const projectKey =
+    options.resources.roots.agentDir !== options.resources.roots.projectDir
+      ? resolvePiAuthEntry(projectEntry, env)
+      : undefined;
   const settingsKey = resolvePiSettingsApiKey(
     options.resources.settings,
     options.provider,
     env,
   );
-  if (settingsKey !== undefined) return settingsKey;
-
   const modelsKey = resolvePiModelsApiKey(
     options.resources.models.providers[options.provider],
     env,
   );
+
+  if (options.resources.roots.agentDir !== options.resources.roots.projectDir) {
+    if (isPiOAuthAuthEntry(projectEntry)) {
+      throw new Error(formatProjectOAuthAuthError(options.provider));
+    }
+    if (projectKey !== undefined && !isPiCommandConfigValue(projectKey)) {
+      return projectKey;
+    }
+    if (projectKey !== undefined) {
+      // A project auth entry intentionally outranks the user credential. Use
+      // the Pi resolver through an isolated provider id so ModelRuntime does
+      // not select the lower-precedence user auth.json entry first.
+      return resolvePiProjectCommandApiKey(
+        options.modelRuntime,
+        options.provider,
+        projectKey,
+      );
+    }
+  }
+
+  // Pi resolves command references from the provider configuration at request
+  // time. Settings/auth are loaded by ensemble rather than Pi's resource
+  // loader, so register command references through the same public runtime API
+  // before asking the runtime for the request credential. Project auth keeps
+  // its higher precedence over settings and models.
+  if (settingsKey !== undefined && isPiCommandConfigValue(settingsKey)) {
+    options.modelRuntime.registerProvider(options.provider, { apiKey: settingsKey });
+  }
+  // ModelRuntime owns the Pi 1.x credential store, OAuth refresh, and locking.
+  // Resolve it on every request instead of capturing the key at construction.
+  let runtimeError: unknown;
+  try {
+    const runtimeAuth = await options.modelRuntime.getAuth(options.provider);
+    if (runtimeAuth?.auth.apiKey !== undefined) return runtimeAuth.auth.apiKey;
+  } catch (error) {
+    runtimeError = error;
+    // Non-command references can still use the ensemble fallback chain. A
+    // command reference is reported below instead of returning the raw command
+    // as an API key.
+  }
+
+  const commandKey = [settingsKey, modelsKey].find(
+    (value): value is string => value !== undefined && isPiCommandConfigValue(value),
+  );
+  if (commandKey !== undefined) {
+    throw formatPiCommandResolutionError(options.provider, commandKey, runtimeError);
+  }
+
+  if (settingsKey !== undefined) return settingsKey;
+
   if (modelsKey !== undefined) return modelsKey;
 
   return getEnvApiKey(options.provider, toProviderEnv(env));
@@ -670,9 +700,47 @@ function resolvePiModelsApiKey(
 }
 
 function expandEnvReference(value: string, env: NodeJS.ProcessEnv): string | undefined {
-  if (value.startsWith('!')) return undefined;
+  // Keep Pi command references opaque here. ModelRuntime's public provider
+  // registration path resolves `!command` with Pi's resolver at request time.
   const variable = /^\$\{([^}]+)\}$/.exec(value) ?? /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(value);
   return variable ? env[variable[1]] : value;
+}
+
+function isPiCommandConfigValue(value: string): boolean {
+  return value.startsWith('!');
+}
+
+function formatPiCommandResolutionError(
+  provider: string,
+  command: string,
+  cause: unknown,
+): Error {
+  const causeMessage = cause instanceof Error ? ` (${cause.message})` : '';
+  return new Error(
+    `Failed to resolve API key for Pi provider "${provider}" from shell command: ${command.slice(1)}${causeMessage}`,
+    cause instanceof Error ? { cause } : undefined,
+  );
+}
+
+async function resolvePiProjectCommandApiKey(
+  modelRuntime: ModelRuntime,
+  provider: string,
+  command: string,
+): Promise<string> {
+  const isolatedProvider = `__agents_ensemble_project_auth__${provider}`;
+  modelRuntime.registerProvider(isolatedProvider, { apiKey: command });
+  try {
+    const runtimeAuth = await modelRuntime.getAuth(isolatedProvider);
+    if (runtimeAuth?.auth.apiKey !== undefined) {
+      // Keep the resolved project credential as an in-memory runtime override
+      // so the actual conductor request also uses project-over-user auth.
+      await modelRuntime.setRuntimeApiKey(provider, runtimeAuth.auth.apiKey);
+      return runtimeAuth.auth.apiKey;
+    }
+  } catch (error) {
+    throw formatPiCommandResolutionError(provider, command, error);
+  }
+  throw formatPiCommandResolutionError(provider, command, undefined);
 }
 
 function toProviderEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -707,7 +775,9 @@ async function createPiModelRuntime(
     for (const [provider, entry] of Object.entries(resources.authLayers.at(-1) ?? {})) {
       if (isPiOAuthAuthEntry(entry)) continue;
       const key = resolvePiAuthEntry(entry, env);
-      if (key !== undefined) await runtime.setRuntimeApiKey(provider, key);
+      if (key !== undefined && !isPiCommandConfigValue(key)) {
+        await runtime.setRuntimeApiKey(provider, key);
+      }
     }
   }
 
@@ -715,7 +785,9 @@ async function createPiModelRuntime(
     for (const [provider, value] of Object.entries(resources.settings.apiKeys)) {
       if (typeof value !== 'string') continue;
       const key = expandEnvReference(value, env);
-      if (key !== undefined) await runtime.setRuntimeApiKey(provider, key);
+      if (key !== undefined && !isPiCommandConfigValue(key)) {
+        await runtime.setRuntimeApiKey(provider, key);
+      }
     }
   }
 
