@@ -4,6 +4,7 @@ import {
 } from '../config/load-ensemble-config.js';
 import type { ConductorBackend, EnsembleConfig } from '../config/types.js';
 import {
+  computeMcpConfigDigest,
   resolveMcpServers,
   type LoadMcpConfigOptions,
 } from '../mcp/load-mcp-config.js';
@@ -278,6 +279,13 @@ export async function runConductorSession(
   >();
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
   let githubMonitor: GitHubMonitor | undefined;
+  const conductorCwd = options.conductorCwd ?? process.cwd();
+  const mcpServers = await resolveMcpServers(
+    options.repoRoot,
+    options.mcpConfigOptions,
+  );
+  const mcpConfigDigest = computeMcpConfigDigest(mcpServers);
+  const mcpConfigConfigured = Object.keys(mcpServers).length > 0;
 
   if (options.resumeAgentId) {
     const sidecar = await requireSessionSidecarForResume({
@@ -289,6 +297,8 @@ export async function runConductorSession(
       issueUrl: options.issueUrl,
       repoRoot: options.repoRoot,
       conductorBackend,
+      mcpConfigDigest,
+      mcpConfigConfigured,
     });
     openQuestions.restore({
       sequence: sidecar.sequence,
@@ -679,11 +689,6 @@ export async function runConductorSession(
     .registerAll(sessionUsageTools)
     .registerAll(dispatchHoldTools);
 
-  const conductorCwd = options.conductorCwd ?? process.cwd();
-  const mcpServers = await resolveMcpServers(
-    options.repoRoot,
-    options.mcpConfigOptions,
-  );
   const conductorOptions: ConductorAgentCreateOptions = {
     cwd: conductorCwd,
     systemPrompt,
@@ -773,6 +778,7 @@ export async function runConductorSession(
         openQuestions: snapshot.openQuestions,
         sequence: snapshot.sequence,
         workers,
+        mcpConfigDigest,
         ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
         updatedAt: Date.now(),
       };

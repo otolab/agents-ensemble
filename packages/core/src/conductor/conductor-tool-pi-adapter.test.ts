@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ConductorToolRegistry } from './conductor-tool.js';
-import { toPiAgentTools } from './conductor-tool-pi-adapter.js';
+import { toPiCodingAgentTools } from './conductor-tool-pi-adapter.js';
 
-describe('toPiAgentTools', () => {
+describe('toPiCodingAgentTools', () => {
   it('converts a registry to Pi tools and forwards the backend-neutral result', async () => {
     const execute = vi.fn(async () => ({
       content: [{ type: 'text' as const, text: 'ok' }],
@@ -16,7 +16,7 @@ describe('toPiAgentTools', () => {
       execute,
     });
 
-    const tools = toPiAgentTools(registry);
+    const tools = toPiCodingAgentTools(registry);
 
     expect(tools).toHaveLength(1);
     expect(tools[0]).toMatchObject({
@@ -45,7 +45,7 @@ describe('toPiAgentTools', () => {
       },
     };
 
-    const [tool] = toPiAgentTools(registry);
+    const [tool] = toPiCodingAgentTools(registry);
 
     await expect(tool!.execute('call-1', {})).resolves.toEqual({
       content: [{ type: 'text', text: 'pong' }],

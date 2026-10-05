@@ -2,8 +2,9 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AuthStorage } from '@earendil-works/pi-coding-agent';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import {
+  createPiConductorAuthContext,
   getPiConductorAuthStatus,
   hasPiConductorAuth,
   listPiConductorModels,
@@ -49,7 +50,7 @@ describe('Pi conductor authentication', () => {
     });
   });
 
-  it('keeps project auth above user AuthStorage while using user auth dynamically', async () => {
+  it('keeps project auth above the user Pi runtime while resolving user auth dynamically', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
     const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
     const projectDir = join(cwd, '.ensemble', 'pi');
@@ -63,16 +64,22 @@ describe('Pi conductor authentication', () => {
       JSON.stringify({ anthropic: { type: 'api_key', key: 'project-key' } }),
     );
 
-    const authStorage = AuthStorage.create(join(agentDir, 'auth.json'));
-    authStorage.set('anthropic', { type: 'api_key', key: 'user-key' });
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'user-key' } }),
+    );
     const resources = await loadPiResources({
       cwd,
       pi: { agentDir, projectDir },
     });
 
+    const context = await createPiConductorAuthContext({
+      cwd,
+      pi: { agentDir, projectDir },
+    }, resources);
     await expect(
       resolvePiConductorApiKey({
-        authStorage,
+        modelRuntime: context.modelRuntime,
         resources,
         provider: 'anthropic',
       }),
@@ -83,22 +90,31 @@ describe('Pi conductor authentication', () => {
       cwd,
       pi: { agentDir, projectDir },
     });
+    const userOnlyContext = await createPiConductorAuthContext({
+      cwd,
+      pi: { agentDir, projectDir },
+    }, userOnlyResources);
     await expect(
       resolvePiConductorApiKey({
-        authStorage,
+        modelRuntime: userOnlyContext.modelRuntime,
         resources: userOnlyResources,
         provider: 'anthropic',
       }),
     ).resolves.toBe('user-key');
   });
 
-  it('delegates OAuth login to Pi AuthStorage callbacks', async () => {
+  it('delegates OAuth login to the Pi runtime callbacks', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
     const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
     const login = vi
-      .spyOn(AuthStorage.prototype, 'login')
+      .spyOn(ModelRuntime.prototype, 'login')
       .mockResolvedValue(undefined);
-    const callbacks = {} as Parameters<AuthStorage['login']>[1];
+    const callbacks = {
+      onAuth: vi.fn(),
+      onDeviceCode: vi.fn(),
+      onPrompt: vi.fn().mockResolvedValue('answer'),
+      onSelect: vi.fn().mockResolvedValue('option'),
+    };
 
     await expect(
       loginPiConductor({
@@ -112,10 +128,14 @@ describe('Pi conductor authentication', () => {
       provider: 'anthropic',
       method: 'oauth',
     });
-    expect(login).toHaveBeenCalledWith('anthropic', callbacks);
+    expect(login).toHaveBeenCalledWith(
+      'anthropic',
+      'oauth',
+      expect.objectContaining({ prompt: expect.any(Function), notify: expect.any(Function) }),
+    );
   });
 
-  it('asks AuthStorage for the key at request time so OAuth refresh can take effect', async () => {
+  it('asks the Pi runtime for the key at request time so OAuth refresh can take effect', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
     const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
     const projectDir = join(cwd, '.ensemble', 'pi');
@@ -124,21 +144,22 @@ describe('Pi conductor authentication', () => {
       cwd,
       pi: { agentDir, projectDir },
     });
-    const authStorage = AuthStorage.inMemory({
-      anthropic: { type: 'api_key', key: 'initial-key' },
-    });
-    const getApiKey = vi
-      .spyOn(authStorage, 'getApiKey')
-      .mockResolvedValue('refreshed-key');
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'initial-key' } }),
+    );
+    const context = await createPiConductorAuthContext({
+      cwd,
+      pi: { agentDir, projectDir },
+    }, resources);
 
     await expect(
       resolvePiConductorApiKey({
-        authStorage,
+        modelRuntime: context.modelRuntime,
         resources,
         provider: 'anthropic',
       }),
-    ).resolves.toBe('refreshed-key');
-    expect(getApiKey).toHaveBeenCalledWith('anthropic');
+    ).resolves.toBe('initial-key');
   });
 
   it('rejects project OAuth credentials instead of sending an unrefreshable access token', async () => {
@@ -157,17 +178,22 @@ describe('Pi conductor authentication', () => {
         },
       }),
     );
-    const authStorage = AuthStorage.inMemory({
-      anthropic: { type: 'api_key', key: 'user-key' },
-    });
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'user-key' } }),
+    );
     const resources = await loadPiResources({
       cwd,
       pi: { agentDir, projectDir },
     });
 
+    const context = await createPiConductorAuthContext({
+      cwd,
+      pi: { agentDir, projectDir },
+    }, resources);
     await expect(
       resolvePiConductorApiKey({
-        authStorage,
+        modelRuntime: context.modelRuntime,
         resources,
         provider: 'anthropic',
       }),
@@ -206,8 +232,10 @@ describe('Pi conductor authentication', () => {
       join(projectDir, 'settings.json'),
       JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'claude-test' }),
     );
-    const authStorage = AuthStorage.create(join(agentDir, 'auth.json'));
-    authStorage.set('anthropic', { type: 'api_key', key: 'secret-value' });
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'secret-value' } }),
+    );
 
     await expect(
       resolvePiConductorProvider({ cwd, pi: { agentDir } }),

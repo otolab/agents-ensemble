@@ -93,7 +93,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 |---------|------|------|
 | **CLI** | Node.js (`packages/cli`) | コマンド解析、環境、終了処理 |
 | **Core** | TypeScript (`packages/core`) | ACP ブリッジ、dispatch、型の共有 |
-| **Conductor** | `@cursor/sdk` または `@earendil-works/pi-agent-core` | 設定された backend による判断・dispatch 制御の主体 |
+| **Conductor** | `@cursor/sdk` または Pi 1.x (`pi-coding-agent` / `pi-ai`) | 設定された backend による判断・dispatch 制御の主体 |
 | **Worker** | `agent acp` | Skill に沿った実作業（種別ごとに起動文書・Skill が異なる） |
 | **共有媒体** | GitHub Issue / PR | セッション会話に依存しない状態と履歴 |
 | **手順の正本** | Skill（dispatch 先の clone / worktree 上） | worker が読む手順 |
@@ -102,7 +102,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 
 ## 3. Conductor（SDK / Pi）
 
-conductor の LLM backend は Cursor SDK と Pi（`pi-agent-core`）から起動時に選択できます。既定は Cursor SDK で、両 backend とも同じ harness / worker ACP 経路を使います。方針の記録は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)（**proposed**）を参照してください。
+conductor の LLM backend は Cursor SDK と Pi 1.x (`createAgentSession`) から起動時に選択できます。既定は Cursor SDK で、両 backend とも同じ harness / worker ACP 経路を使います。方針の記録は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)（**proposed**）を参照してください。
 
 ### 責務
 
@@ -160,16 +160,16 @@ await conductor.send(operatorMessage);
 await conductor.send(workerStatusUpdate);
 ```
 
-`runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、backend 中立な同じ `mcpServers` map を conductor factory に渡す。Cursor SDK はそれを `Agent.create` / `Agent.resume` のトップレベル inline MCP として使い、Pi は `.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を user → project で解決したうえで、harness 内蔵の in-process thin bridge が `@modelcontextprotocol/sdk` client を core 内で接続し、stdio/http/sse client と Pi `AgentTool` に変換する。これは Pi ExtensionAPI extension のロードではない。Pi の settings.json は headless 対応キー（モデル選択、認証 fallback、resource path）だけを参照し、thinking・package・TUI など未対応キーは無視する。Pi の skills は compiled modular prompt へ、prompts は headless user prompt の `/name args` 展開へ接続する。themes は JSON resource として解決するが、conductor に TUI renderer はないため表示へ適用しない。Pi では compiled modular prompt を native system prompt として使い、resource root の `SYSTEM.md` / `APPEND_SYSTEM.md` は読み込まない。`local.settingSources` や Pi の `.pi/mcp.json` への同期は行わず、認証・transport エラーからの in-process reconnect を含めて resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。
+`runConductorSession` は `<repoRoot>/.agents/mcp.json` と `~/.ensemble/mcp.json` を user → project の順で解決し、backend 中立な同じ `mcpServers` map を conductor factory に渡す。Cursor SDK はそれを `Agent.create` / `Agent.resume` のトップレベル inline MCP として使い、Pi は `.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を user → project で解決したうえで、Pi 1.x の `DefaultResourceLoader` に `createMcpExtension({ loadConfig })` を登録し、`createAgentSession` へ注入する。Pi へ渡す直前に Cursor 形式の `${env:VAR}` / `${workspaceFolder}` placeholder を conductor cwd / process environment へ解決する。sidecar には canonical MCP map digest を保存し、resume 時に現在の digest と比較して変更を fail fast する（digest に秘密値は保存しない）。Pi の自前 MCP client / transport は持たず、接続・tool discovery・OAuth・resource tools は公式 extension に委ねる。Pi は stdio / Streamable HTTP を使え、SSE は未対応である。Pi の settings.json は headless 対応キー（モデル選択、認証 fallback、resource path）だけを参照し、thinking・package・TUI など未対応キーは無視する。Pi の skills は compiled modular prompt へ、prompts は headless user prompt の `/name args` 展開へ接続する。themes は JSON resource として解決するが、conductor に TUI renderer はないため表示へ適用しない。Pi では compiled modular prompt を native system prompt として使い、resource root の `SYSTEM.md` / `APPEND_SYSTEM.md` は読み込まない。`local.settingSources` や Pi の `.pi/mcp.json` への同期は行わず、resume 時にも同じ options を再注入する。MCP 設定は conductor 専用で、ACP worker の `session/new` には渡さない。
 
 **Conductor backend にチャット UI はない。** CLI（TTY）では Ink TUI（`createIssueSessionTuiHost`）が非ブロッキング入力と `pane` / `stream` レイアウト表示を担い、`submitOperatorInput` 経由で `operator.message` をキューへ積む。非 TTY は `bindAsyncOperatorInput` / CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE`。ConductorSession はキューから dispatch するだけ。テストは `bindOperatorInput` にフェイクを渡す（`createTestOperatorInputBinding`）。ConductorSession がイベント列経由で backend の agent に渡す（[ADR 0008](adr/0008-human-dialogue-open-questions.md)、[ADR 0009](adr/0009-conductor-session-event-queue.md)）。**観測と表示の分離**（TUI / stdout 対話 / stderr harness / 終了 JSON）は [session-logging.md](session-logging.md)。
 
 `stream` の settled columns shrink は端末の physical reflow と Ink の論理フレームを再同期するため、保持済み activity history を replay する recovery transaction を持つ（[ADR 0026](adr/0026-tui-stream-shrink-recovery.md)）。通常の native scrollback / `alternateScreen: false` モデルと `pane` の bounded activity window は維持する。
 
-Cursor conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）です。Pi conductor も同じ CLI を backend 分岐付きで使え、`ensemble auth login --provider <id>` は Pi の provider 単位 `AuthStorage` に API key または OAuth credential を保存します。Pi の project `auth.json` は読取専用の優先層で、login の書込み先は `~/.ensemble/pi/auth.json` または `conductor.pi.agentDir` の user 層です。project 層の明示的な OAuth credential は refresh 経路を持たないため実行時に拒否し、OAuth は user 層の `AuthStorage` へ保存します。`ensemble auth status` / `ensemble models list` は選択 backend の認証・モデルを表示します。worker の ACP は `agent login` で足ります。
+Cursor conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）です。Pi conductor も同じ CLI を backend 分岐付きで使え、`ensemble auth login --provider <id>` は Pi 1.x の `ModelRuntime` に API key または OAuth credential を保存します。Pi の project `auth.json` は読取専用の優先層で、login の書込み先は `~/.ensemble/pi/auth.json` または `conductor.pi.agentDir` の user 層です。project 層の明示的な OAuth credential は refresh 経路を持たないため実行時に拒否し、OAuth は user 層の runtime へ保存します。MCP HTTP OAuth は Pi の MCP extension が別の credential store と対話フローで管理します。`ensemble auth status` / `ensemble models list` は選択 backend の認証・モデルを表示します。worker の ACP は `agent login` で足ります。
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
-- **resume**: 別プロセスから backend 固有の `resume(conductorAgentId)` で再開可能。Cursor は SDK の session、Pi は sidecar の `conductorAgentId` を Pi session id として `.ensemble/pi/sessions/` の JSONL transcript を復元する。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）には open question・profile・worker `acpSessionId` を保存する。resume 時に backend が起動時の解決結果と sidecar の値から変わっていれば fail fast する（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)）。
+- **resume**: 別プロセスから backend 固有の `resume(conductorAgentId)` で再開可能。Cursor は SDK の session、Pi は sidecar の `conductorAgentId` を Pi session id として `.ensemble/pi/sessions/` の JSONL transcript を復元する。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）には open question・profile・worker `acpSessionId`・MCP map digest を保存する。resume 時に backend または MCP map が起動時の解決結果と sidecar の値から変わっていれば fail fast する（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)）。
 - **ripgrep**: local agent の ignore scan 用。`ConductorAgent` 起動前に `ensureCursorSdkRipgrepPath()` が `@cursor/sdk-<platform>-<arch>/bin/rg` または PATH の `rg` を `CURSOR_RIPGREP_PATH` に設定する（[#43](https://github.com/otolab/agents-ensemble/issues/43)）。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 - **proxy**: `ConductorAgent` 起動前に `ensureCursorSdkProxy()` が Cursor の `settings.json` を読み、フラット形式の `http.proxy` / `http.noProxy` を `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` へ不足分だけ反映する。ネスト形式も互換入力として扱うが、両方に同じ設定がある場合はフラット形式を優先する。解決順は既存の環境変数 → Cursor settings → 未設定で、標準パスは macOS / Linux / Windows ごとに異なる。`cursor.general.disableHttp2: true` は SDK の `local.useHttp1ForAgent: true` に変換する。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK に対応する公開設定がなく未対応。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 
@@ -391,7 +391,7 @@ agents-ensemble/
 | パッケージ | 依存（想定） | 責務 |
 |-----------|-------------|------|
 | `@agents-ensemble/cli` | `core`, `commander` | `ensemble issue` 等 |
-| `@agents-ensemble/core` | `@cursor/sdk`, `@earendil-works/pi-agent-core` | ConductorAgent, AcpWorkerBridge, dispatch |
+| `@agents-ensemble/core` | `@cursor/sdk`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent` | ConductorAgent, AcpWorkerBridge, dispatch |
 
 CLI は薄く、オーケストレーション本体は core に集約する。
 

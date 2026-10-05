@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -252,6 +253,33 @@ export async function resolveMcpServers(
 ): Promise<McpServerConfigMap> {
   const config = await loadMcpConfig(repoRoot, options);
   return config.mcpServers;
+}
+
+/**
+ * Return a stable digest for the harness-resolved MCP server map.
+ *
+ * The digest is persisted in a session sidecar instead of the map itself so
+ * that credentials and other MCP values are not copied into session state.
+ * Object keys are sorted while array order is preserved.
+ */
+export function computeMcpConfigDigest(servers: McpServerConfigMap): string {
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalizeMcpValue(servers)))
+    .digest('hex');
+}
+
+function canonicalizeMcpValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalizeMcpValue(entry));
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalizeMcpValue(value[key])]),
+    );
+  }
+  return value;
 }
 
 /** @deprecated Use `resolveMcpServers` instead. */

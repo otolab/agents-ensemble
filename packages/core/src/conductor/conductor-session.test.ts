@@ -12,6 +12,7 @@ import type {
   GitHubPullRequestRef,
 } from '../github/github-client.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
+import { computeMcpConfigDigest } from '../mcp/load-mcp-config.js';
 import {
   loadSessionSidecar,
   saveSessionSidecar,
@@ -390,6 +391,12 @@ describe('runConductorSession resume / shutdown', () => {
         openQuestions: [],
         sequence: 0,
         workers: {},
+        mcpConfigDigest: computeMcpConfigDigest({
+          projectDocs: {
+            type: 'http',
+            url: 'https://example.test/mcp',
+          },
+        }),
         updatedAt: 0,
       },
     );

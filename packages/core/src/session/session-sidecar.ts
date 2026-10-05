@@ -44,6 +44,8 @@ export interface SessionSidecar {
   workers: Record<string, WorkerSessionSidecar>;
   /** GitHub 監視カーソル（#39）。 */
   githubMonitor?: GitHubMonitorCursor;
+  /** Harness-resolved MCP map digest used to reject unsafe resume. */
+  mcpConfigDigest?: string;
   /** flush 時刻（Unix ms）。`--continue` で最新セッションを選ぶために使う。 */
   updatedAt: number;
 }
@@ -149,6 +151,10 @@ export function assertSessionSidecarMatches(
     repoRoot: string;
     conductorAgentId: string;
     conductorBackend?: ConductorBackend;
+    /** Current harness-resolved MCP map digest. */
+    mcpConfigDigest?: string;
+    /** Whether the current resolved map contains at least one server. */
+    mcpConfigConfigured?: boolean;
   },
 ): void {
   if (sidecar.conductorAgentId !== input.conductorAgentId) {
@@ -173,6 +179,19 @@ export function assertSessionSidecarMatches(
     throw new Error(
       `Session sidecar conductorBackend mismatch: ${sidecar.conductorBackend ?? 'cursor'} !== ${input.conductorBackend}`,
     );
+  }
+  if (input.mcpConfigDigest !== undefined) {
+    if (sidecar.mcpConfigDigest === undefined) {
+      if (input.mcpConfigConfigured) {
+        throw new Error(
+          'Session sidecar MCP config digest missing; cannot safely resume with MCP configuration.',
+        );
+      }
+    } else if (sidecar.mcpConfigDigest !== input.mcpConfigDigest) {
+      throw new Error(
+        `Session sidecar MCP config digest mismatch: ${sidecar.mcpConfigDigest} !== ${input.mcpConfigDigest}`,
+      );
+    }
   }
 }
 
@@ -205,6 +224,12 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
   }
   if (!record.workers || typeof record.workers !== 'object') {
     throw new Error('Invalid session sidecar: workers');
+  }
+  if (
+    record.mcpConfigDigest !== undefined &&
+    typeof record.mcpConfigDigest !== 'string'
+  ) {
+    throw new Error('Invalid session sidecar: mcpConfigDigest');
   }
   const updatedAt =
     typeof record.updatedAt === 'number' ? record.updatedAt : 0;
@@ -248,6 +273,9 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     sequence: record.sequence,
     workers,
     ...(githubMonitor ? { githubMonitor } : {}),
+    ...(typeof record.mcpConfigDigest === 'string'
+      ? { mcpConfigDigest: record.mcpConfigDigest }
+      : {}),
     updatedAt,
   };
 }

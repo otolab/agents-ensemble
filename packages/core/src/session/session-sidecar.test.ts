@@ -152,6 +152,37 @@ describe('session sidecar', () => {
     ).toThrow(/conductorBackend mismatch/);
   });
 
+  it('rejects MCP configuration changes on resume', () => {
+    const sidecar = baseSidecar({
+      conductorAgentId: 'agent-mcp-digest',
+      mcpConfigDigest: 'old-digest',
+    });
+
+    expect(() =>
+      assertSessionSidecarMatches(sidecar, {
+        conductorAgentId: 'agent-mcp-digest',
+        issueUrl: sidecar.issueUrl,
+        repoRoot: sidecar.repoRoot,
+        mcpConfigDigest: 'new-digest',
+        mcpConfigConfigured: true,
+      }),
+    ).toThrow(/MCP config digest mismatch/);
+  });
+
+  it('rejects MCP resume when a legacy sidecar has no digest', () => {
+    const sidecar = baseSidecar({ conductorAgentId: 'agent-mcp-legacy' });
+
+    expect(() =>
+      assertSessionSidecarMatches(sidecar, {
+        conductorAgentId: 'agent-mcp-legacy',
+        issueUrl: sidecar.issueUrl,
+        repoRoot: sidecar.repoRoot,
+        mcpConfigDigest: 'current-digest',
+        mcpConfigConfigured: true,
+      }),
+    ).toThrow(/MCP config digest missing/);
+  });
+
   it('rejects mismatched issueUrl on assert', () => {
     const sidecar = baseSidecar({
       conductorAgentId: 'agent-1',
