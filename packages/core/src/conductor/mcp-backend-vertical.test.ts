@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createAgentSession,
@@ -119,6 +119,65 @@ describe('shared mcp.json backend path', () => {
     });
 
     await cursor.close();
+  });
+
+  it('resolves Cursor env and workspace placeholders before handing config to Pi', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mcp-pi-placeholders-'));
+    const piConfig = loadPiMcpConfig(
+      {
+        stdio: {
+          type: 'stdio',
+          command: '${workspaceFolder}/bin/mcp-server',
+          args: ['--root', '${workspaceFolder}', '--token', '${env:MCP_TOKEN}'],
+          cwd: '${workspaceFolder}/server',
+          env: { MCP_TOKEN: '${env:MCP_TOKEN}' },
+        },
+        http: {
+          type: 'http',
+          url: 'https://mcp.example.test/${workspaceFolderBasename}',
+          headers: { Authorization: 'Bearer ${env:MCP_TOKEN}' },
+        },
+      },
+      { cwd, env: { MCP_TOKEN: 'secret-token' } },
+    );
+
+    expect(piConfig.servers).toEqual([
+      expect.objectContaining({
+        name: 'stdio',
+        config: expect.objectContaining({
+          command: `${cwd}/bin/mcp-server`,
+          args: ['--root', cwd, '--token', 'secret-token'],
+          cwd: `${cwd}/server`,
+          env: { MCP_TOKEN: 'secret-token' },
+        }),
+      }),
+      expect.objectContaining({
+        name: 'http',
+        config: expect.objectContaining({
+          url: `https://mcp.example.test/${basename(cwd)}`,
+          headers: { Authorization: 'Bearer secret-token' },
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(piConfig)).not.toContain('${env:');
+    expect(JSON.stringify(piConfig)).not.toContain('${workspaceFolder');
+  });
+
+  it('rejects a missing Cursor env placeholder instead of passing it literally to Pi', () => {
+    expect(() =>
+      loadPiMcpConfig(
+        {
+          representative: {
+            type: 'stdio',
+            command: 'fixture-mcp',
+            env: { API_KEY: '${env:MISSING_MCP_TOKEN}' },
+          },
+        },
+        { cwd: '/workspace', env: {} },
+      ),
+    ).toThrow(
+      'MCP server "representative" references missing environment variable "MISSING_MCP_TOKEN" in env.API_KEY.',
+    );
   });
 
   it('exposes a resolved stdio server through the real Pi MCP extension', async () => {
