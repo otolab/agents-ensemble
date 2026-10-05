@@ -3,9 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  createPiMcpBridge,
-  type PiMcpBridgeSdk,
-} from './pi-mcp-bridge.js';
+  createAgentSession,
+  createCodemodeExtension,
+  createMcpExtension,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} from '@earendil-works/pi-coding-agent';
+import type { Model } from '@earendil-works/pi-ai';
+import { loadPiMcpConfig } from './pi-conductor-agent.js';
 import { resolveMcpServers } from '../mcp/load-mcp-config.js';
 
 const { mockCursorCreate, mockCursorResume } = vi.hoisted(() => ({
@@ -31,58 +38,8 @@ import { CursorSdkConductorAgent } from './cursor-sdk-conductor-agent.js';
 
 const SHARED_RESULT = 'shared-stdio-result';
 
-class FakeStdioTransport {
-  constructor(readonly options: unknown) {}
-}
-
-class FakeHttpTransport {
-  constructor(
-    readonly url: URL,
-    readonly options: unknown,
-  ) {}
-}
-
-class FakeSseTransport {
-  constructor(
-    readonly url: URL,
-    readonly options: unknown,
-  ) {}
-}
-
-class FakeMcpClient {
-  static readonly clients: FakeMcpClient[] = [];
-
-  readonly connect = vi.fn(async (_transport: unknown) => {});
-  readonly listTools = vi.fn(async () => ({
-    tools: [
-      {
-        name: 'echo',
-        description: 'Return the shared fixture result.',
-        inputSchema: { type: 'object' },
-      },
-    ],
-  }));
-  readonly callTool = vi.fn(async () => ({
-    content: [{ type: 'text' as const, text: SHARED_RESULT }],
-  }));
-  readonly close = vi.fn(async () => {});
-
-  constructor(readonly info: { name: string; version: string }) {
-    FakeMcpClient.clients.push(this);
-  }
-}
-
-function fakeMcpSdk(): PiMcpBridgeSdk {
-  return {
-    Client: FakeMcpClient,
-    StdioClientTransport: FakeStdioTransport,
-    StreamableHTTPClientTransport: FakeHttpTransport,
-    SSEClientTransport: FakeSseTransport,
-  };
-}
-
 describe('shared mcp.json backend path', () => {
-  it('forwards the same resolved stdio definition to Cursor and executes it through the Pi bridge', async () => {
+  it('passes one resolved stdio definition to Cursor and the official Pi MCP extension shape', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'mcp-backend-vertical-'));
     const projectMcpRoot = join(cwd, '.agents');
     await mkdir(projectMcpRoot, { recursive: true });
@@ -102,18 +59,8 @@ describe('shared mcp.json backend path', () => {
     const mcpServers = await resolveMcpServers(cwd, {
       userEnsembleRoot: join(cwd, 'user-ensemble'),
     });
+    const piConfig = loadPiMcpConfig(mcpServers);
 
-    FakeMcpClient.clients.length = 0;
-    const piBridge = await createPiMcpBridge(
-      mcpServers,
-      { cwd },
-      { sdk: fakeMcpSdk() },
-    );
-    const piToolResult = await piBridge!.tools[0]!.execute('pi-call', {});
-
-    // Cursor is mocked here so CI can assert the backend-neutral map forwarding
-    // without requiring a Cursor account. The real Cursor SDK discovery/call/
-    // result is covered by the manual test plan recorded on PR #374.
     let cursorOptions: any;
     const cursorAgent = {
       agentId: 'cursor-agent',
@@ -150,21 +97,140 @@ describe('shared mcp.json backend path', () => {
     const cursorResult = await cursor.send('use representative echo');
 
     expect(cursorOptions.mcpServers).toEqual(mcpServers);
-    expect(FakeMcpClient.clients[0]?.connect.mock.calls[0]?.[0]).toMatchObject({
-      options: {
-        command: 'fixture-mcp',
-        args: ['--shared'],
-      },
+    expect(piConfig).toEqual({
+      autoEnableCodemode: true,
+      errors: [],
+      servers: [
+        {
+          name: 'representative',
+          source: '<agents-ensemble-resolved-mcp.json>',
+          scope: 'project',
+          config: {
+            type: 'stdio',
+            command: 'fixture-mcp',
+            args: ['--shared'],
+          },
+        },
+      ],
     });
     expect(cursorResult).toMatchObject({
       status: 'finished',
       result: SHARED_RESULT,
     });
-    expect(piToolResult.content).toEqual([
-      { type: 'text', text: SHARED_RESULT },
-    ]);
 
     await cursor.close();
-    await piBridge?.close();
+  });
+
+  it('exposes a resolved stdio server through the real Pi MCP extension', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mcp-pi-extension-'));
+    const agentDir = join(cwd, 'pi-agent');
+    await mkdir(agentDir, { recursive: true });
+    const serverScript = String.raw`
+      const readline = require('node:readline');
+      const tools = [{
+        name: 'echo',
+        description: 'Echo the supplied text',
+        inputSchema: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text']
+        }
+      }];
+      const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
+      const fail = (id, message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message } }) + '\n');
+      readline.createInterface({ input: process.stdin }).on('line', (line) => {
+        const message = JSON.parse(line);
+        if (message.id === undefined) return;
+        if (message.method === 'initialize') {
+          send(message.id, {
+            protocolVersion: message.params?.protocolVersion ?? '2025-03-26',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'fixture-mcp', version: '1.0.0' }
+          });
+        } else if (message.method === 'tools/list') {
+          send(message.id, { tools });
+        } else if (message.method === 'tools/call') {
+          send(message.id, {
+            content: [{ type: 'text', text: message.params?.arguments?.text ?? '' }]
+          });
+        } else if (message.method === 'ping') {
+          send(message.id, {});
+        } else {
+          fail(message.id, 'method not found');
+        }
+      });
+    `;
+    const mcpServers = {
+      representative: {
+        type: 'stdio' as const,
+        command: process.execPath,
+        args: ['-e', serverScript],
+      },
+    };
+    const piConfig = loadPiMcpConfig(mcpServers);
+    const runtime = await ModelRuntime.create({
+      authPath: join(agentDir, 'auth.json'),
+      modelsPath: null,
+      allowModelNetwork: false,
+      refreshOnCreate: false,
+    });
+    const model = {
+      id: 'fixture-model',
+      name: 'Fixture model',
+      provider: 'fixture',
+      api: 'openai-completions',
+      baseUrl: 'http://127.0.0.1:1/v1',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 1_024,
+    } as Model<any>;
+    const settingsManager = SettingsManager.create(cwd, agentDir);
+    const resourceLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+      systemPrompt: 'fixture system prompt',
+      extensionFactories: [
+        createMcpExtension({
+          loadConfig: () => piConfig,
+          logPath: join(cwd, 'mcp.log'),
+          startupWaitMs: 2_000,
+        }),
+        createCodemodeExtension({ mode: 'on' }),
+      ],
+    });
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      modelRuntime: runtime,
+      model,
+      sessionManager: SessionManager.inMemory(cwd),
+      settingsManager,
+      resourceLoader,
+      noTools: 'builtin',
+    });
+    await session.bindExtensions({});
+
+    let echo = session.getToolDefinition('mcp__representative__echo');
+    for (let attempt = 0; !echo && attempt < 40; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      echo = session.getToolDefinition('mcp__representative__echo');
+    }
+    expect(echo).toBeDefined();
+    await expect(
+      echo!.execute('call-1', { text: 'shared-result' }, new AbortController().signal),
+    ).resolves.toMatchObject({
+      content: [{ type: 'text', text: 'shared-result' }],
+    });
+
+    session.dispose();
   });
 });

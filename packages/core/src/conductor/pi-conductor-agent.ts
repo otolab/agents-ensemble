@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import {
-  Agent,
-  type AgentEvent,
   type AgentMessage,
   type AgentTool,
 } from '@earendil-works/pi-agent-core';
@@ -9,9 +8,23 @@ import {
   getModel,
   getModels,
   getProviders,
-  type AssistantMessage,
-  type Model,
 } from '@earendil-works/pi-ai/compat';
+import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
+import {
+  createAgentSession,
+  createCodemodeExtension,
+  createMcpExtension,
+  createToolSearchExtension,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+  type AgentSession,
+  type AgentSessionEvent,
+  type ExtensionFactory,
+  type LoadedMcpConfig,
+  type McpServerConfig as PiMcpServerConfig,
+  type ToolDefinition,
+} from '@earendil-works/pi-coding-agent';
 import {
   createPiConductorAuthContext,
   resolvePiConductorApiKey,
@@ -25,8 +38,7 @@ import type {
   ConductorSendResult,
   ConductorTokenUsage,
 } from './conductor-agent.js';
-import { toPiAgentTools } from './conductor-tool-pi-adapter.js';
-import { PiConductorSession } from './pi-conductor-session.js';
+import { toPiCodingAgentTools } from './conductor-tool-pi-adapter.js';
 import {
   expandPiResourcePrompt,
   formatPiSkillsForPrompt,
@@ -40,10 +52,10 @@ import {
   type PiResources,
   type PiSettingsFile,
 } from './pi-resource-loader.js';
-import {
-  createPiMcpBridge,
-  type PiMcpBridge,
-} from './pi-mcp-bridge.js';
+import type { McpServerConfigMap } from '../mcp/load-mcp-config.js';
+
+/** Project-local Pi transcript storage used by the conductor backend. */
+export const PI_SESSION_ROOT = '.ensemble/pi/sessions';
 
 interface PiSendState {
   runId: string;
@@ -67,7 +79,7 @@ export async function resolvePiModelConfig(
   },
 ): Promise<PiResolvedModel> {
   const resources = await loadPiResources(options);
-  const authContext = createPiConductorAuthContext(options);
+  const authContext = await createPiConductorAuthContext(options, resources);
   return resolvePiModelConfigFromResources(options, resources, authContext);
 }
 
@@ -77,7 +89,7 @@ async function resolvePiModelConfigFromResources(
     apiKey?: string;
   },
   resources: PiResources,
-  authContext: ReturnType<typeof createPiConductorAuthContext>,
+  authContext: Awaited<ReturnType<typeof createPiConductorAuthContext>>,
 ): Promise<PiResolvedModel> {
   const env = options.env ?? process.env;
   const settings = resources.settings;
@@ -91,7 +103,7 @@ async function resolvePiModelConfigFromResources(
     ? undefined
     : authContext.modelRegistry.find(selection.provider, selection.modelId);
   const apiKey = await resolvePiConductorApiKey({
-    authStorage: authContext.authStorage,
+    modelRuntime: authContext.modelRuntime,
     resources,
     provider: selection.provider,
     explicitApiKey: options.apiKey,
@@ -136,88 +148,28 @@ export class PiConductorAgent implements ConductorAgent {
   private rawCostCents = 0;
   private chargedCents = 0;
 
-  private constructor(
-    private readonly agent: Agent,
-    private readonly session: PiConductorSession,
-    private readonly mcpBridge: PiMcpBridge | undefined,
+  constructor(
+    private readonly session: AgentSession,
     private readonly resources: PiResources,
+    private readonly systemPromptRef: { value: string },
     public readonly agentId: string,
     private readonly modelId: string,
     private readonly onStreamText?: (text: string) => void,
   ) {
-    this.unsubscribe = this.agent.subscribe((event) => this.handleEvent(event));
+    this.unsubscribe = this.session.subscribe((event) => this.handleEvent(event));
   }
 
   static async create(
     options: ConductorAgentCreateOptions,
   ): Promise<PiConductorAgent> {
-    const agentId = randomUUID();
-    const resources = await loadPiResources(options);
-    const authContext = createPiConductorAuthContext(options);
-    const resolved = await resolvePiModelConfigFromResources(options, resources, authContext);
-    const session = await PiConductorSession.create(options.cwd, agentId);
-    const mcpBridge = await createPiMcpBridge(options.mcpServers, {
-      cwd: options.cwd,
-    });
-    try {
-      return new PiConductorAgent(
-        createPiAgent(
-          agentId,
-          options,
-          resolved,
-          session.messages,
-          mcpBridge,
-          resources,
-          authContext.authStorage,
-          authContext.modelRegistry,
-        ),
-        session,
-        mcpBridge,
-        resources,
-        agentId,
-        resolved.modelId,
-        options.onStreamText,
-      );
-    } catch (error) {
-      await mcpBridge?.close();
-      throw error;
-    }
+    return createPiConductorSession(randomUUID(), options, 'startup');
   }
 
   static async resume(
     agentId: string,
     options: ConductorAgentCreateOptions,
   ): Promise<PiConductorAgent> {
-    const resources = await loadPiResources(options);
-    const authContext = createPiConductorAuthContext(options);
-    const resolved = await resolvePiModelConfigFromResources(options, resources, authContext);
-    const session = await PiConductorSession.resume(options.cwd, agentId);
-    const mcpBridge = await createPiMcpBridge(options.mcpServers, {
-      cwd: options.cwd,
-    });
-    try {
-      return new PiConductorAgent(
-        createPiAgent(
-          agentId,
-          options,
-          resolved,
-          session.messages,
-          mcpBridge,
-          resources,
-          authContext.authStorage,
-          authContext.modelRegistry,
-        ),
-        session,
-        mcpBridge,
-        resources,
-        agentId,
-        resolved.modelId,
-        options.onStreamText,
-      );
-    } catch (error) {
-      await mcpBridge?.close();
-      throw error;
-    }
+    return createPiConductorSession(agentId, options, 'resume');
   }
 
   async send(
@@ -243,7 +195,10 @@ export class PiConductorAgent implements ConductorAgent {
     const state: PiSendState = { runId, callbacks };
     this.activeSend = state;
     try {
-      await this.agent.prompt(expandPiResourcePrompt(prompt, this.resources));
+      await this.session.prompt(expandPiResourcePrompt(prompt, this.resources), {
+        expandPromptTemplates: false,
+        source: 'rpc',
+      });
     } catch (error) {
       return {
         runId,
@@ -256,7 +211,7 @@ export class PiConductorAgent implements ConductorAgent {
     }
 
     const finalMessage =
-      state.finalMessage ?? lastAssistantMessage(this.agent.state.messages);
+      state.finalMessage ?? lastAssistantMessage(this.session.state.messages);
     if (!finalMessage) {
       return {
         runId,
@@ -279,8 +234,9 @@ export class PiConductorAgent implements ConductorAgent {
     };
   }
 
-  /** Pi's core agent has no reload operation; settings are loaded at create. */
-  async reload(): Promise<void> {}
+  async reload(): Promise<void> {
+    await this.session.reload();
+  }
 
   async getUsage(): Promise<ConductorAgentUsage> {
     return this.hasUsage
@@ -295,7 +251,7 @@ export class PiConductorAgent implements ConductorAgent {
 
   /** Resume recompiles and reinstalls the native system prompt on each run. */
   async setSystemPrompt(systemPrompt: string): Promise<void> {
-    this.agent.state.systemPrompt = withPiSkills(systemPrompt, this.resources);
+    this.systemPromptRef.value = withPiSkills(systemPrompt, this.resources);
   }
 
   async close(): Promise<void> {
@@ -305,21 +261,19 @@ export class PiConductorAgent implements ConductorAgent {
     this.closed = true;
     this.closePromise = (async () => {
       try {
-        this.agent.abort();
-        await this.agent.waitForIdle();
-        await this.session.appendNewMessages(this.agent.state.messages);
+        await this.session.abort();
       } finally {
         try {
           this.unsubscribe();
         } finally {
-          await this.mcpBridge?.close();
+          this.session.dispose();
         }
       }
     })();
     return this.closePromise;
   }
 
-  private async handleEvent(event: AgentEvent): Promise<void> {
+  private handleEvent(event: AgentSessionEvent): void {
     const activeSend = this.activeSend;
     if (event.type === 'tool_execution_start') {
       activeSend?.callbacks?.onToolCallStarted?.({
@@ -341,13 +295,6 @@ export class PiConductorAgent implements ConductorAgent {
       activeSend.finalMessage = lastAssistantMessage(event.messages);
     }
 
-    if (event.type === 'agent_end') {
-      // Pi's failure/abort event can contain only the failure assistant while
-      // agent.state.messages already contains the user prompt and failure.
-      // Persist the full in-memory suffix so every run is written once in
-      // transcript order; close() uses the same serialized operation.
-      await this.session.appendNewMessages(this.agent.state.messages);
-    }
   }
 
   private recordUsage(message: AssistantMessage): void {
@@ -365,83 +312,203 @@ export function createPiConductorAgentFactory(): ConductorAgentFactory {
   };
 }
 
-function createPiAgent(
+type PiSessionStartReason = 'startup' | 'resume';
+
+async function createPiConductorSession(
   agentId: string,
   options: ConductorAgentCreateOptions,
-  resolved: PiResolvedModel,
-  messages: readonly AgentMessage[],
-  mcpBridge: PiMcpBridge | undefined,
-  resources: PiResources,
-  authStorage: ReturnType<typeof createPiConductorAuthContext>['authStorage'],
-  modelRegistry: ReturnType<typeof createPiConductorAuthContext>['modelRegistry'],
-): Agent {
-  const tools = uniquePiTools(
-    options.customTools ? toPiAgentTools(options.customTools) : [],
-    mcpBridge?.tools ?? [],
-    resources.extensionTools,
-  );
+  reason: PiSessionStartReason,
+): Promise<PiConductorAgent> {
+  // Validate the harness-resolved map before creating the SDK session so an
+  // unsupported transport fails with an actionable Pi-specific error.
+  if (options.mcpServers) loadPiMcpConfig(options.mcpServers);
+  const resources = await loadPiResources(options);
+  const authContext = await createPiConductorAuthContext(options, resources);
+  const resolved = await resolvePiModelConfigFromResources(options, resources, authContext);
+  if (options.apiKey !== undefined) {
+    await authContext.modelRuntime.setRuntimeApiKey(resolved.provider, options.apiKey);
+  }
 
-  return new Agent({
-    initialState: {
-      systemPrompt: withPiSkills(options.systemPrompt, resources),
-      model: resolved.model,
-      // Do not add Pi's built-in coding tools. Harness tools are the complete
-      // loadout; repository work is delegated to worker ACP sessions.
-      tools,
-      messages: [...messages],
-    },
-    sessionId: agentId,
-    getApiKey: async (provider) => {
-      const apiKey = await resolvePiConductorApiKey({
-        authStorage,
-        resources,
-        provider,
-        explicitApiKey:
-          provider === resolved.provider ? options.apiKey : undefined,
-      });
-      if (!resolved.usesModelRegistry || provider !== resolved.provider) {
-        return apiKey;
-      }
-
-      let registryModel = modelRegistry.find(provider, resolved.modelId);
-      if (!registryModel) return apiKey;
-
-      const requestAuth = await modelRegistry.getApiKeyAndHeaders(registryModel);
-      const projectProviderConfig = resources.modelsLayers.at(-1)?.providers[provider];
-      const headers = mergePiHeaders(
-        resolved.model.headers,
-        registryModel.headers,
-        requestAuth.ok ? requestAuth.headers : undefined,
-        projectProviderConfig?.headers,
+  const sessionDir = join(options.cwd, PI_SESSION_ROOT);
+  let sessionManager: SessionManager;
+  let previousSessionFile: string | undefined;
+  if (reason === 'resume') {
+    previousSessionFile = SessionManager.findById(options.cwd, agentId, sessionDir);
+    if (!previousSessionFile) {
+      throw new Error(
+        `Pi session not found for resume (sessionId=${agentId}, cwd=${options.cwd}, ` +
+          `sessionsRoot=${PI_SESSION_ROOT})`,
       );
-      const requestModel = {
-        ...resolved.model,
-        ...(projectProviderConfig?.baseUrl
-          ? { baseUrl: projectProviderConfig.baseUrl }
-          : registryModel.baseUrl
-            ? { baseUrl: registryModel.baseUrl }
-            : {}),
-        ...(registryModel.api ? { api: registryModel.api } : {}),
-        ...(Object.keys(headers).length > 0 ? { headers } : {}),
-      };
-      Object.assign(resolved.model, requestModel);
+    }
+    sessionManager = SessionManager.open(
+      previousSessionFile,
+      sessionDir,
+      options.cwd,
+    );
+  } else {
+    sessionManager = SessionManager.create(options.cwd, sessionDir, { id: agentId });
+  }
 
-      const registryApiKey = requestAuth.ok ? requestAuth.apiKey : undefined;
-      return apiKey ?? registryApiKey;
-    },
+  const systemPromptRef = {
+    value: withPiSkills(options.systemPrompt, resources),
+  };
+  const settingsManager = SettingsManager.create(options.cwd, authContext.agentDir);
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: options.cwd,
+    agentDir: authContext.agentDir,
+    settingsManager,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPrompt: systemPromptRef.value,
+    extensionFactories: [
+      createMcpExtension({
+        loadConfig: () => loadPiMcpConfig(options.mcpServers),
+      }),
+      createCodemodeExtension({ mode: 'on' }),
+      createToolSearchExtension(),
+      createPiSystemPromptExtension(systemPromptRef),
+    ],
   });
+  await resourceLoader.reload();
+
+  let session: AgentSession | undefined;
+  try {
+    const result = await createAgentSession({
+      cwd: options.cwd,
+      agentDir: authContext.agentDir,
+      modelRuntime: authContext.modelRuntime,
+      model: resolved.model,
+      sessionManager,
+      settingsManager,
+      resourceLoader,
+      // Keep repository operations in worker ACP sessions. The conductor gets
+      // only harness tools plus the official MCP/codemode extensions.
+      noTools: 'builtin',
+      customTools: uniquePiTools(
+        options.customTools ? toPiCodingAgentTools(options.customTools) : [],
+        resources.extensionTools.map(toPiCodingAgentTool),
+      ),
+      sessionStartEvent: {
+        type: 'session_start',
+        reason,
+        ...(previousSessionFile ? { previousSessionFile } : {}),
+      },
+    });
+    session = result.session;
+    await session.bindExtensions({});
+    return new PiConductorAgent(
+      session,
+      resources,
+      systemPromptRef,
+      agentId,
+      resolved.modelId,
+      options.onStreamText,
+    );
+  } catch (error) {
+    session?.dispose();
+    throw error;
+  }
 }
 
-function uniquePiTools(...groups: AgentTool[][]): AgentTool[] {
-  const tools = new Map<string, AgentTool>();
+function toPiCodingAgentTool(tool: AgentTool): ToolDefinition {
+  return {
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
+    parameters: tool.parameters,
+    execute: (toolCallId, params, signal, onUpdate) =>
+      tool.execute(
+        toolCallId,
+        params as never,
+        signal,
+        onUpdate as never,
+      ),
+  };
+}
+
+function uniquePiTools(...groups: ToolDefinition[][]): ToolDefinition[] {
+  const tools = new Map<string, ToolDefinition>();
   for (const group of groups) {
     for (const tool of group) {
-      if (!tools.has(tool.name)) {
-        tools.set(tool.name, tool);
-      }
+      if (!tools.has(tool.name)) tools.set(tool.name, tool);
     }
   }
   return [...tools.values()];
+}
+
+function createPiSystemPromptExtension(
+  systemPromptRef: { value: string },
+): ExtensionFactory {
+  return (pi) => {
+    pi.on('before_agent_start', (event) => {
+      // Change only Pi's custom preamble. MCP/codemode sections assembled by
+      // the official extensions remain intact on every request and resume.
+      event.systemPromptOptions.customPrompt = systemPromptRef.value;
+    });
+  };
+}
+
+export function loadPiMcpConfig(
+  servers: McpServerConfigMap | undefined,
+): LoadedMcpConfig {
+  return {
+    servers: Object.entries(servers ?? {}).map(([name, config]) => ({
+      name,
+      config: toPiMcpServerConfig(name, config),
+      source: '<agents-ensemble-resolved-mcp.json>',
+      scope: 'project' as const,
+    })),
+    autoEnableCodemode: true,
+    errors: [],
+  };
+}
+
+function toPiMcpServerConfig(
+  name: string,
+  config: McpServerConfigMap[string],
+): PiMcpServerConfig {
+  if (config.type === 'sse') {
+    throw new Error(
+      `MCP server "${name}" uses SSE, which Pi 1.0 does not support. ` +
+        'Use stdio or streamable HTTP instead.',
+    );
+  }
+  if (config.command) {
+    return {
+      type: 'stdio',
+      command: config.command,
+      ...(config.args ? { args: config.args } : {}),
+      ...(config.env ? { env: config.env } : {}),
+      ...(config.cwd ? { cwd: config.cwd } : {}),
+    };
+  }
+  if (config.url) {
+    return {
+      type: 'http',
+      url: config.url,
+      ...(config.headers ? { headers: config.headers } : {}),
+      ...(config.auth
+        ? {
+            oauth: {
+              clientId: config.auth.CLIENT_ID,
+              ...(config.auth.CLIENT_SECRET
+                ? { clientSecret: config.auth.CLIENT_SECRET }
+                : {}),
+              ...(config.auth.scopes?.length
+                ? { scope: config.auth.scopes.join(' ') }
+                : {}),
+            },
+          }
+        : {}),
+    };
+  }
+  throw new Error(
+    `MCP server "${name}" has no command or URL. ` +
+      'Use a valid resolved stdio or streamable HTTP configuration.',
+  );
 }
 
 function withPiSkills(systemPrompt: string, resources: PiResources): string {
@@ -559,9 +626,16 @@ function numberValue(value: unknown, fallback: number): number {
 }
 
 function mergePiHeaders(
-  ...headers: Array<Record<string, string> | undefined>
+  ...headers: Array<Record<string, string | null> | undefined>
 ): Record<string, string> {
-  return Object.assign({}, ...headers.filter((value): value is Record<string, string> => Boolean(value)));
+  const merged: Record<string, string> = {};
+  for (const headerSet of headers) {
+    if (!headerSet) continue;
+    for (const [name, value] of Object.entries(headerSet)) {
+      if (value !== null) merged[name] = value;
+    }
+  }
+  return merged;
 }
 
 function mergePiObjects(

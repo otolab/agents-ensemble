@@ -35,10 +35,9 @@
   },
   "dependencies": {
     "@cursor/sdk": "1.0.27",
-    "@earendil-works/pi-agent-core": "0.80.6",
-    "@earendil-works/pi-ai": "0.80.6",
-    "@earendil-works/pi-coding-agent": "0.80.6",
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@earendil-works/pi-agent-core": "1.0.2",
+    "@earendil-works/pi-ai": "1.0.2",
+    "@earendil-works/pi-coding-agent": "1.0.2",
     "@modular-prompt/core": "0.3.0",
     "js-yaml": "4.1.0"
   },

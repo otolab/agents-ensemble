@@ -195,11 +195,11 @@ function resolveRootPath(
  * tools, and extension loading failures are isolated so a broken optional
  * local extension cannot prevent the fixed harness tools from starting.
  *
- * The conductor loop intentionally runs on low-level `pi-agent-core`; it uses
- * `pi-coding-agent` only for its compatible AuthStorage/ModelRegistry services.
- * This loader mirrors the coding-agent resource roots and extension
- * registration boundary without starting its interactive UI or adding Pi's
- * built-in coding tools to the conductor.
+ * The conductor uses Pi 1.x `createAgentSession` for its headless session and
+ * supplies this loader's resolved user/project resources to that SDK boundary.
+ * This loader keeps the ensemble resource roots and optional local extension
+ * discovery separate from Pi's built-in coding tools; worker ACP sessions
+ * remain the place where repository operations happen.
  */
 export async function loadPiResources(
   options: PiResourceLoaderOptions,

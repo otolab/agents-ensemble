@@ -61,7 +61,7 @@ worktree の削除を行うことがあるため、worktree を残す必要が�
 |------|------|
 | TTY / 非 TTY | いずれも in-process `resume` + 1 回再試行のみ |
 | `CURSOR_API_KEY` | 環境変数モードの挙動は変更しない（#58）。hint は key ローテーション案内 |
-| Pi backend | 各 send の `AuthStorage.getApiKey(provider)` で stored API key / OAuth token を解決する。期限切れ OAuth token は Pi の refresh 処理に委ね、失敗時は provider-specific hint を表示 |
+| Pi backend | 各 send の Pi 1.x `ModelRuntime.getAuth(provider)` で stored API key / OAuth token を解決する。期限切れ OAuth token は Pi の refresh 処理に委ね、失敗時は provider-specific hint を表示 |
 | 起動時 `create` / `resume` auth 失敗 | スコープ外（別 Issue 候補） |
 | worker `agent login` | スコープ外 |
 

@@ -34,7 +34,7 @@ const PI_NO_WORKER_PROFILE: Profile = {
   workers: [],
 };
 
-interface FakePiAgentOptions {
+interface FakePiSessionOptions {
   initialState: {
     systemPrompt: string;
     model: { id?: string };
@@ -45,12 +45,15 @@ interface FakePiAgentOptions {
     }>;
   };
   sessionId?: string;
+  sessionManager?: {
+    appendMessage: (message: unknown) => string;
+  };
 }
 
-const { fakeAgents, FakePiAgent } = vi.hoisted(() => {
-  const agents: FakePiAgent[] = [];
+const { fakeSessions, createFakeAgentSession } = vi.hoisted(() => {
+  const sessions: FakePiSession[] = [];
 
-  class FakePiAgent {
+  class FakePiSession {
     readonly state: {
       systemPrompt: string;
       model: { id?: string };
@@ -66,7 +69,7 @@ const { fakeAgents, FakePiAgent } = vi.hoisted(() => {
     private readonly listeners = new Set<(event: any) => void>();
     private turn = 0;
 
-    constructor(options: FakePiAgentOptions) {
+    constructor(options: FakePiSessionOptions) {
       this.state = {
         systemPrompt: options.initialState.systemPrompt,
         model: options.initialState.model,
@@ -74,8 +77,9 @@ const { fakeAgents, FakePiAgent } = vi.hoisted(() => {
         messages: [...(options.initialState.messages ?? [])],
       };
       this.sessionId = options.sessionId;
+      this.sessionManager = options.sessionManager;
       this.initialMessageCount = this.state.messages.length;
-      agents.push(this);
+      sessions.push(this);
     }
 
     subscribe(listener: (event: any) => void): () => void {
@@ -87,6 +91,7 @@ const { fakeAgents, FakePiAgent } = vi.hoisted(() => {
       this.prompts.push(prompt);
       if (this.turn === 0 && this.state.messages.length > 0) {
         this.turn += 1;
+        this.appendUserMessage(prompt);
         this.finish('conductor-resumed');
         return;
       }
@@ -95,10 +100,12 @@ const { fakeAgents, FakePiAgent } = vi.hoisted(() => {
         this.turn += 1;
         const tool = this.state.tools.find((candidate) => candidate.name === 'prompt_worker');
         if (!tool || !this.state.systemPrompt.includes('ping-1')) {
+          this.appendUserMessage(prompt);
           this.finish('conductor-first');
           return;
         }
 
+        this.appendUserMessage(prompt);
         this.emit({
           type: 'tool_execution_start',
           toolCallId: 'pi-call-1',
@@ -123,10 +130,17 @@ const { fakeAgents, FakePiAgent } = vi.hoisted(() => {
         return;
       }
 
+      this.appendUserMessage(prompt);
       this.finish('conductor-ok');
     }
 
     abort(): void {}
+
+    dispose(): void {}
+
+    async bindExtensions(): Promise<void> {}
+
+    async reload(): Promise<void> {}
 
     async waitForIdle(): Promise<void> {}
 
@@ -155,7 +169,18 @@ const { fakeAgents, FakePiAgent } = vi.hoisted(() => {
         timestamp: Date.now(),
       };
       this.state.messages.push(message);
+      this.sessionManager?.appendMessage(message);
       this.emit({ type: 'agent_end', messages: [message] });
+    }
+
+    private appendUserMessage(prompt: string): void {
+      const message = {
+        role: 'user' as const,
+        content: [{ type: 'text' as const, text: prompt }],
+        timestamp: Date.now(),
+      };
+      this.state.messages.push(message);
+      this.sessionManager?.appendMessage(message);
     }
 
     private emit(event: any): void {
@@ -163,16 +188,46 @@ const { fakeAgents, FakePiAgent } = vi.hoisted(() => {
         listener(event);
       }
     }
+
+    private readonly sessionManager?: {
+      appendMessage: (message: unknown) => string;
+    };
   }
 
-  return { fakeAgents: agents, FakePiAgent };
+  function createFakeAgentSession(options: any): { session: FakePiSession; extensionsResult: { errors: [] } } {
+    const sessionManager = options.sessionManager;
+    const initialMessages = sessionManager?.buildSessionContext?.().messages ?? [];
+    const session = new FakePiSession({
+      initialState: {
+        systemPrompt: options.resourceLoader?.getSystemPrompt?.() ?? '',
+        model: options.model ?? {},
+        messages: initialMessages,
+        tools: options.customTools ?? [],
+      },
+      sessionId: sessionManager?.getSessionId?.(),
+      sessionManager,
+    });
+    return { session, extensionsResult: { errors: [] } };
+  }
+
+  return { fakeSessions: sessions, createFakeAgentSession };
 });
 
-vi.mock('@earendil-works/pi-agent-core', () => ({ Agent: FakePiAgent }));
+vi.mock('@earendil-works/pi-coding-agent', async () => {
+  const actual = await vi.importActual<typeof import('@earendil-works/pi-coding-agent')>(
+    '@earendil-works/pi-coding-agent',
+  );
+  return {
+    ...actual,
+    createAgentSession: vi.fn((options: unknown) =>
+      Promise.resolve(createFakeAgentSession(options)),
+    ),
+  };
+});
 
 describe('Pi conductor backend integration', () => {
   beforeEach(() => {
-    fakeAgents.length = 0;
+    fakeSessions.length = 0;
     vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
       issue: TEST_ISSUE,
       title: 'Pi backend integration',
@@ -234,18 +289,18 @@ describe('Pi conductor backend integration', () => {
     expect(workerDispatch?.name).toBe('ping-1');
     expect(workerDispatch?.promptResult.responseText).toContain('pong');
 
-    const [agent] = fakeAgents;
-    expect(agent).toBeDefined();
-    expect(agent?.state.systemPrompt).toContain('PI_COMPILED_SYSTEM_MARKER');
-    const toolNames = agent?.state.tools.map((tool) => tool.name) ?? [];
+    const [session] = fakeSessions;
+    expect(session).toBeDefined();
+    expect(session?.state.systemPrompt).toContain('PI_COMPILED_SYSTEM_MARKER');
+    const toolNames = session?.state.tools.map((tool) => tool.name) ?? [];
     expect(toolNames).toContain('prompt_worker');
     expect(toolNames).toContain('integration_extension');
     expect(toolNames).not.toContain('bash');
     expect(toolNames).not.toContain('edit');
     expect(toolNames).not.toContain('read');
-    expect(agent?.prompts[0]).toContain(TEST_ISSUE.url);
-    expect(agent?.prompts[0]).not.toContain('PI_COMPILED_SYSTEM_MARKER');
-    expect(agent?.prompts.length).toBeGreaterThanOrEqual(2);
+    expect(session?.prompts[0]).toContain(TEST_ISSUE.url);
+    expect(session?.prompts[0]).not.toContain('PI_COMPILED_SYSTEM_MARKER');
+    expect(session?.prompts.length).toBeGreaterThanOrEqual(2);
   });
 
   it('resumes a stopped Pi session with the same backend and transcript', async () => {
@@ -288,17 +343,17 @@ describe('Pi conductor backend integration', () => {
 
     expect(first.lastResult).toBe('conductor-first');
     expect(resumed.lastResult).toBe('conductor-resumed');
-    expect(fakeAgents).toHaveLength(2);
-    expect(fakeAgents[0]?.sessionId).toBe(first.agentId);
-    expect(fakeAgents[1]?.sessionId).toBe(first.agentId);
-    expect(fakeAgents[0]?.initialMessageCount).toBe(0);
-    expect(fakeAgents[1]?.initialMessageCount).toBe(1);
-    expect(fakeAgents[1]?.state.messages.length).toBeGreaterThan(1);
-    expect(fakeAgents[1]?.state.systemPrompt).toContain(
+    expect(fakeSessions).toHaveLength(2);
+    expect(fakeSessions[0]?.sessionId).toBe(first.agentId);
+    expect(fakeSessions[1]?.sessionId).toBe(first.agentId);
+    expect(fakeSessions[0]?.initialMessageCount).toBe(0);
+    expect(fakeSessions[1]?.initialMessageCount).toBe(2);
+    expect(fakeSessions[1]?.state.messages.length).toBeGreaterThan(1);
+    expect(fakeSessions[1]?.state.systemPrompt).toContain(
       'PI_COMPILED_SYSTEM_MARKER',
     );
-    expect(fakeAgents[1]?.prompts[0]).toContain('continue');
-    expect(fakeAgents[1]?.prompts[0]).not.toContain(
+    expect(fakeSessions[1]?.prompts[0]).toContain('continue');
+    expect(fakeSessions[1]?.prompts[0]).not.toContain(
       'Start the conductor workflow',
     );
   });

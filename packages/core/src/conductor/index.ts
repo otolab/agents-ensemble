@@ -64,16 +64,6 @@ export type {
   PiProviderAuthStatus,
 } from './conductor-pi-auth.js';
 export {
-  createPiMcpBridge,
-  PI_MCP_SDK_VERSION,
-} from './pi-mcp-bridge.js';
-export type {
-  PiMcpBridge,
-  PiMcpBridgeDependencies,
-  PiMcpBridgeOptions,
-  PiMcpBridgeSdk,
-} from './pi-mcp-bridge.js';
-export {
   ConductorToolRegistry,
 } from './conductor-tool.js';
 export type {
@@ -90,9 +80,8 @@ export {
 } from './conductor-tool-sdk-adapter.js';
 export type { SdkCustomTools } from './conductor-tool-sdk-adapter.js';
 export {
-  toPiAgentTools,
+  toPiCodingAgentTools,
 } from './conductor-tool-pi-adapter.js';
-export type { PiAgentTool } from './conductor-tool-pi-adapter.js';
 
 export {
   createConductorAgentFactory,

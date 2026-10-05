@@ -1,16 +1,19 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import {
-  AuthStorage,
   ModelRegistry,
-  type AuthStatus,
+  ModelRuntime,
 } from '@earendil-works/pi-coding-agent';
 import {
   findEnvKeys,
   getEnvApiKey,
+  getModels,
+  getProviders,
   type Model,
   type OAuthLoginCallbacks,
 } from '@earendil-works/pi-ai/compat';
+import type { AuthInteraction, AuthPrompt, AuthEvent } from '@earendil-works/pi-ai';
 import {
   loadPiResources,
   resolvePiResourceRoots,
@@ -27,7 +30,7 @@ export interface PiConductorAuthContext {
   agentDir: string;
   authPath: string;
   modelsPath: string;
-  authStorage: AuthStorage;
+  modelRuntime: ModelRuntime;
   modelRegistry: ModelRegistry;
 }
 
@@ -69,20 +72,22 @@ export interface PiConductorAuthOptions extends PiResourceLoaderOptions {
   modelId?: string;
 }
 
-/** Create the Pi credential store and model registry for the user root. */
-export function createPiConductorAuthContext(
+/** Create the Pi 1.x model runtime and registry for the resolved resource roots. */
+export async function createPiConductorAuthContext(
   options: PiResourceLoaderOptions,
-): PiConductorAuthContext {
+  resources?: PiResources,
+): Promise<PiConductorAuthContext> {
   const roots = resolvePiResourceRoots(options);
   const authPath = join(roots.agentDir, 'auth.json');
   const modelsPath = join(roots.agentDir, 'models.json');
-  const authStorage = AuthStorage.create(authPath);
+  const resolvedResources = resources ?? (await loadPiResources(options));
+  const modelRuntime = await createPiModelRuntime(options, resolvedResources);
   return {
     agentDir: roots.agentDir,
     authPath,
     modelsPath,
-    authStorage,
-    modelRegistry: ModelRegistry.create(authStorage, modelsPath),
+    modelRuntime,
+    modelRegistry: new ModelRegistry(modelRuntime),
   };
 }
 
@@ -91,7 +96,7 @@ export async function resolvePiConductorProvider(
   options: PiConductorAuthOptions,
 ): Promise<string> {
   const resources = await loadPiResources(options);
-  const context = createPiConductorAuthContext(options);
+  const context = await createPiConductorAuthContext(options, resources);
   return resolvePiConductorProviderFromResources(options, resources, context);
 }
 
@@ -103,11 +108,9 @@ export async function loginPiConductor(
   },
 ): Promise<PiConductorLoginResult> {
   const resources = await loadPiResources(options);
-  const context = createPiConductorAuthContext(options);
-  const provider = resolveConductorProviderOrThrow(options, resources, context);
-  const oauthProvider = context.authStorage
-    .getOAuthProviders()
-    .some((candidate) => candidate.id === provider);
+  const context = await createPiConductorAuthContext(options, resources);
+  const provider = await resolveConductorProviderOrThrow(options, resources, context);
+  const oauthProvider = Boolean(context.modelRuntime.getProvider(provider)?.auth.oauth);
 
   if (oauthProvider) {
     if (!options.oauthCallbacks) {
@@ -115,7 +118,11 @@ export async function loginPiConductor(
         `Pi provider "${provider}" uses OAuth. Run this command from a TTY so the OAuth login flow can interact with you.`,
       );
     }
-    await context.authStorage.login(provider, options.oauthCallbacks);
+    await context.modelRuntime.login(
+      provider,
+      'oauth',
+      toPiAuthInteraction(options.oauthCallbacks),
+    );
     return {
       backend: 'pi',
       provider,
@@ -130,7 +137,8 @@ export async function loginPiConductor(
       `Pi provider "${provider}" requires an API key. Pass a secret API-key prompt value or set ${formatPiProviderEnvHint(provider)}.`,
     );
   }
-  context.authStorage.set(provider, { type: 'api_key', key: apiKey });
+  await writePiApiKey(context.authPath, provider, apiKey);
+  await context.modelRuntime.setRuntimeApiKey(provider, apiKey);
   return {
     backend: 'pi',
     provider,
@@ -144,11 +152,9 @@ export async function isPiConductorOAuthProvider(
   options: PiConductorAuthOptions,
 ): Promise<boolean> {
   const resources = await loadPiResources(options);
-  const context = createPiConductorAuthContext(options);
-  const provider = resolveConductorProviderOrThrow(options, resources, context);
-  return context.authStorage
-    .getOAuthProviders()
-    .some((candidate) => candidate.id === provider);
+  const context = await createPiConductorAuthContext(options, resources);
+  const provider = await resolveConductorProviderOrThrow(options, resources, context);
+  return Boolean(context.modelRuntime.getProvider(provider)?.auth.oauth);
 }
 
 /** Remove a Pi provider's user-layer credential. */
@@ -156,9 +162,9 @@ export async function logoutPiConductor(
   options: PiConductorAuthOptions,
 ): Promise<PiConductorLogoutResult> {
   const resources = await loadPiResources(options);
-  const context = createPiConductorAuthContext(options);
-  const provider = resolveConductorProviderOrThrow(options, resources, context);
-  context.authStorage.logout(provider);
+  const context = await createPiConductorAuthContext(options, resources);
+  const provider = await resolveConductorProviderOrThrow(options, resources, context);
+  await context.modelRuntime.logout(provider);
   return {
     backend: 'pi',
     provider,
@@ -171,8 +177,8 @@ export async function getPiConductorAuthStatus(
   options: PiConductorAuthOptions,
 ): Promise<PiConductorAuthStatus> {
   const resources = await loadPiResources(options);
-  const context = createPiConductorAuthContext(options);
-  const providers = resolveStatusProviders(options, resources, context);
+  const context = await createPiConductorAuthContext(options, resources);
+  const providers = await resolveStatusProviders(options, resources, context);
   return {
     backend: 'pi',
     authPath: context.authPath,
@@ -187,14 +193,13 @@ export async function listPiConductorModels(
   options: PiConductorAuthOptions = { cwd: process.cwd() },
 ): Promise<PiConductorModelListEntry[]> {
   const resources = await loadPiResources(options);
-  const context = createPiConductorAuthContext(options);
+  const context = await createPiConductorAuthContext(options, resources);
   const requestedProvider =
     normalizeProvider(options.provider) ?? providerFromModelId(options.modelId);
   const entries = new Map<string, PiConductorModelListEntry>();
 
-  // ModelRegistry's fast `getAvailable()` only sees its user AuthStorage. The
-  // conductor also honors project auth.json, so filter the complete registry
-  // through the merged project-over-user auth view before listing models.
+  // Filter the complete Pi 1.x runtime catalog through the merged
+  // project-over-user auth view before listing models.
   for (const model of context.modelRegistry.getAll()) {
     if (requestedProvider && model.provider !== requestedProvider) continue;
     if (!hasPiProviderAuth(model.provider, context, resources, options.env ?? process.env)) {
@@ -203,17 +208,8 @@ export async function listPiConductorModels(
     addPiModelEntry(entries, model);
   }
 
-  // ModelRegistry reads the user models.json. Project models remain governed by
-  // the existing resource loader, so add those merged definitions explicitly.
-  for (const [provider, config] of Object.entries(resources.models.providers)) {
-    if (requestedProvider && provider !== requestedProvider) continue;
-    if (!hasPiProviderAuth(provider, context, resources, options.env ?? process.env)) {
-      continue;
-    }
-    for (const model of config.models ?? []) {
-      addPiCustomModelEntry(entries, provider, model);
-    }
-  }
+  // The runtime is built from the merged models resource, so custom models are
+  // already included in the registry above.
 
   const result = [...entries.values()].sort((left, right) =>
     left.id.localeCompare(right.id),
@@ -231,7 +227,7 @@ export async function listPiConductorModels(
 
 /** Resolve a key while retaining project-over-user auth precedence. */
 export async function resolvePiConductorApiKey(options: {
-  authStorage: AuthStorage;
+  modelRuntime: ModelRuntime;
   resources: Pick<PiResources, 'roots' | 'authLayers' | 'settings' | 'models'>;
   provider: string;
   explicitApiKey?: string;
@@ -241,7 +237,7 @@ export async function resolvePiConductorApiKey(options: {
   if (options.explicitApiKey !== undefined) return options.explicitApiKey;
 
   // A project auth file intentionally remains above the user auth layer. When
-  // both roots point at the same file, AuthStorage is the canonical reader so
+  // both roots point at the same file, ModelRuntime is the canonical reader so
   // OAuth refresh is not bypassed by the resource-layer compatibility parser.
   if (options.resources.roots.agentDir !== options.resources.roots.projectDir) {
     const projectEntry = options.resources.authLayers.at(-1)?.[options.provider];
@@ -255,11 +251,15 @@ export async function resolvePiConductorApiKey(options: {
     if (projectKey !== undefined) return projectKey;
   }
 
-  const userStatus = options.authStorage.getAuthStatus(options.provider);
-  if (userStatus.source === 'stored' || userStatus.source === 'runtime') {
-    // AuthStorage owns OAuth refresh and locking. Keep this call dynamic per
-    // request rather than capturing its result during agent construction.
-    return options.authStorage.getApiKey(options.provider);
+  // ModelRuntime owns the Pi 1.x credential store, OAuth refresh, and locking.
+  // Resolve it on every request instead of capturing the key at construction.
+  try {
+    const runtimeAuth = await options.modelRuntime.getAuth(options.provider);
+    if (runtimeAuth?.auth.apiKey !== undefined) return runtimeAuth.auth.apiKey;
+  } catch {
+    // A models.json command or environment reference can be unavailable in
+    // the injected environment. Continue through the ensemble fallback chain
+    // so its resolved map remains authoritative for this request.
   }
 
   const settingsKey = resolvePiSettingsApiKey(
@@ -291,19 +291,19 @@ export function hasPiProviderAuth(
 
 /** Synchronous readiness check used by CLI/e2e guards before async loading. */
 export function hasPiConductorAuth(options: PiConductorAuthOptions): boolean {
-  const context = createPiConductorAuthContext(options);
   const env = options.env ?? process.env;
   const roots = resolvePiResourceRoots(options);
+  const userAuth = readPiJsonSync(join(roots.agentDir, 'auth.json'));
   const projectAuth = readPiJsonSync(join(roots.projectDir, 'auth.json'));
   const settings = readPiSettingsSync(roots);
   const models = readPiModelsSync(roots);
-  const selection = resolvePiConductorSelectionSync(options, settings, models, context);
+  const selection = resolvePiConductorSelectionSync(options, settings, models, userAuth);
 
   if (selection.provider) {
     return hasPiProviderAuthSync({
       provider: selection.provider,
-      context,
       roots,
+      userAuth,
       projectAuth,
       settings,
       models,
@@ -317,8 +317,8 @@ export function hasPiConductorAuth(options: PiConductorAuthOptions): boolean {
   if (selection.modelId) return false;
 
   return hasAnyPiConductorAuthSync({
-    context,
     roots,
+    userAuth,
     projectAuth,
     settings,
     models,
@@ -332,8 +332,8 @@ interface PiConductorSelection {
 }
 
 interface PiConductorAuthSyncContext {
-  context: PiConductorAuthContext;
   roots: ReturnType<typeof resolvePiResourceRoots>;
+  userAuth: Record<string, any> | undefined;
   projectAuth: Record<string, any> | undefined;
   settings: PiSettingsFile;
   models: PiModelsFile;
@@ -348,7 +348,7 @@ function resolvePiConductorSelectionSync(
   options: PiConductorAuthOptions,
   settings: PiSettingsFile,
   models: PiModelsFile,
-  context: PiConductorAuthContext,
+  userAuth: Record<string, any> | undefined,
 ): PiConductorSelection {
   const requestedModel = normalizeModelId(options.modelId);
   const configuredModel = normalizeModelId(
@@ -370,7 +370,7 @@ function resolvePiConductorSelectionSync(
 
   if (!provider && modelId) {
     const matches = new Set<string>();
-    for (const model of context.modelRegistry.getAll()) {
+    for (const model of knownPiModelsSync(models, userAuth)) {
       if (model.id === modelId) matches.add(model.provider);
     }
     for (const [candidate, config] of Object.entries(models.providers)) {
@@ -398,16 +398,7 @@ function hasPiProviderAuthSync(
     return false;
   }
   if (resolvePiAuthEntry(projectEntry, options.env) !== undefined) return true;
-  if (options.context.authStorage.has(options.provider)) return true;
-
-  // Keep readiness aligned with ModelRegistry, including command-backed or
-  // otherwise registry-native user models, while the explicit checks below
-  // honor the injected test/runtime environment.
-  if (
-    options.context.modelRegistry
-      .getAvailable()
-      .some((model) => model.provider === options.provider)
-  ) {
+  if (resolvePiAuthEntry(options.userAuth?.[options.provider], options.env) !== undefined) {
     return true;
   }
   if (
@@ -427,14 +418,12 @@ function hasPiProviderAuthSync(
 }
 
 function hasAnyPiConductorAuthSync(options: PiConductorAuthSyncContext): boolean {
-  if (options.context.modelRegistry.getAvailable().length > 0) return true;
-
   const providers = new Set<string>([
-    ...options.context.authStorage.list(),
-    ...options.context.modelRegistry.getAll().map((model) => model.provider),
+    ...Object.keys(options.userAuth ?? {}),
+    ...knownPiModelsSync(options.models, options.userAuth).map((model) => model.provider),
     ...Object.keys(options.models.providers),
     ...Object.keys(options.projectAuth ?? {}),
-    ...options.context.authStorage.getOAuthProviders().map((provider) => provider.id),
+    ...getProviders(),
   ]);
   for (const provider of providers) {
     if (hasPiProviderAuthSync({ ...options, provider })) return true;
@@ -473,11 +462,11 @@ function readPiModelsSync(
   };
 }
 
-function resolveConductorProviderOrThrow(
+async function resolveConductorProviderOrThrow(
   options: PiConductorAuthOptions,
   resources: PiResources,
   context: PiConductorAuthContext,
-): string {
+): Promise<string> {
   const provider = resolvePiConductorProviderFromResources(options, resources, context);
   if (provider) return provider;
   throw new Error(
@@ -521,11 +510,11 @@ function resolvePiConductorProviderFromResources(
   return '';
 }
 
-function resolveStatusProviders(
+async function resolveStatusProviders(
   options: PiConductorAuthOptions,
   resources: PiResources,
   context: PiConductorAuthContext,
-): string[] {
+): Promise<string[]> {
   const explicit = normalizeProvider(options.provider);
   if (explicit) return [explicit];
 
@@ -533,10 +522,9 @@ function resolveStatusProviders(
   if (configured) return [configured];
 
   const providers = new Set<string>([
-    ...context.authStorage.list(),
+    ...(await context.modelRuntime.listCredentials()).map((entry) => entry.providerId),
     ...context.modelRegistry.getAll().map((model) => model.provider),
     ...Object.keys(resources.models.providers),
-    ...context.authStorage.getOAuthProviders().map((provider) => provider.id),
   ]);
   return [...providers].sort();
 }
@@ -562,7 +550,7 @@ function getPiProviderAuthStatus(
     }
   }
 
-  const registryStatus = context.modelRegistry.getProviderAuthStatus(provider);
+  const registryStatus = context.modelRuntime.getProviderAuthStatus(provider);
   if (registryStatus.configured || registryStatus.source === 'stored') {
     return normalizePiAuthStatus(provider, registryStatus, true);
   }
@@ -591,7 +579,7 @@ function getPiProviderAuthStatus(
 
 function normalizePiAuthStatus(
   provider: string,
-  status: AuthStatus,
+  status: PiRuntimeAuthStatus,
   configured: boolean,
 ): PiProviderAuthStatus {
   return {
@@ -601,6 +589,12 @@ function normalizePiAuthStatus(
     ...(status.label ? { label: status.label } : {}),
   };
 }
+
+type PiRuntimeAuthStatus = {
+  configured: boolean;
+  source?: string;
+  label?: string;
+};
 
 function addPiModelEntry(
   entries: Map<string, PiConductorModelListEntry>,
@@ -649,7 +643,7 @@ function formatProjectOAuthAuthError(provider: string): string {
   return (
     `Project Pi OAuth credentials for provider "${provider}" are not supported in ` +
     'project .ensemble/pi/auth.json because that layer cannot refresh them safely. ' +
-    `Run ensemble auth login --provider ${provider} to store the credential in the user AuthStorage.`
+    `Run ensemble auth login --provider ${provider} to store the credential in the user Pi runtime.`
   );
 }
 
@@ -687,6 +681,166 @@ function toProviderEnv(env: NodeJS.ProcessEnv): Record<string, string> {
       (entry): entry is [string, string] => typeof entry[1] === 'string',
     ),
   );
+}
+
+/** Build the Pi 1.x runtime from the already-resolved ensemble resource view. */
+async function createPiModelRuntime(
+  options: PiResourceLoaderOptions,
+  resources: PiResources,
+): Promise<ModelRuntime> {
+  const roots = resolvePiResourceRoots(options);
+  const runtime = await ModelRuntime.create({
+    authPath: join(roots.agentDir, 'auth.json'),
+    // The ensemble resource loader has already merged user and project models.
+    // Avoid letting ModelRuntime read an unmerged second view of models.json.
+    modelsPath: null,
+    allowModelNetwork: false,
+    refreshOnCreate: false,
+  });
+
+  const env = options.env ?? process.env;
+  for (const [provider, config] of Object.entries(resources.models.providers)) {
+    runtime.registerProvider(provider, toPiRuntimeProviderConfig(config, env));
+  }
+
+  if (roots.agentDir !== roots.projectDir) {
+    for (const [provider, entry] of Object.entries(resources.authLayers.at(-1) ?? {})) {
+      if (isPiOAuthAuthEntry(entry)) continue;
+      const key = resolvePiAuthEntry(entry, env);
+      if (key !== undefined) await runtime.setRuntimeApiKey(provider, key);
+    }
+  }
+
+  if (isRecord(resources.settings.apiKeys)) {
+    for (const [provider, value] of Object.entries(resources.settings.apiKeys)) {
+      if (typeof value !== 'string') continue;
+      const key = expandEnvReference(value, env);
+      if (key !== undefined) await runtime.setRuntimeApiKey(provider, key);
+    }
+  }
+
+  await runtime.refresh({ allowNetwork: false });
+  return runtime;
+}
+
+function toPiRuntimeProviderConfig(
+  config: PiProviderConfig,
+  env: NodeJS.ProcessEnv,
+): Parameters<ModelRuntime['registerProvider']>[1] {
+  const models = config.models?.map((model) => ({
+    type: 'chat' as const,
+    id: model.id,
+    name: model.name ?? model.id,
+    ...(model.api ?? config.api ? { api: model.api ?? config.api } : {}),
+    ...(model.baseUrl ?? config.baseUrl
+      ? { baseUrl: model.baseUrl ?? config.baseUrl }
+      : {}),
+    input: model.input ?? ['text'],
+    reasoning: model.reasoning ?? false,
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
+    cost: model.cost ?? emptyPiModelCost(),
+    contextWindow: model.contextWindow ?? 128000,
+    maxTokens: model.maxTokens ?? 16384,
+    ...(model.headers ? { headers: model.headers } : {}),
+    ...(model.compat ? { compat: model.compat } : {}),
+  }));
+
+  return {
+    ...(config.name ? { name: config.name } : {}),
+    ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
+    ...(config.apiKey
+      ? { apiKey: expandEnvReference(config.apiKey, env) ?? undefined }
+      : {}),
+    ...(config.api ? { api: config.api as any } : {}),
+    ...(config.headers ? { headers: config.headers } : {}),
+    ...(config.authHeader !== undefined ? { authHeader: config.authHeader } : {}),
+    ...(models ? { models } : {}),
+  } as Parameters<ModelRuntime['registerProvider']>[1];
+}
+
+async function writePiApiKey(
+  authPath: string,
+  provider: string,
+  apiKey: string,
+): Promise<void> {
+  await mkdir(dirname(authPath), { recursive: true });
+  let auth: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(await readFile(authPath, 'utf8'));
+    if (isRecord(parsed)) auth = parsed;
+  } catch (error) {
+    if (!isRecord(error) || error.code !== 'ENOENT') throw error;
+  }
+  auth[provider] = { type: 'api_key', key: apiKey };
+  await writeFile(authPath, `${JSON.stringify(auth, null, 2)}\n`, 'utf8');
+}
+
+function toPiAuthInteraction(callbacks: OAuthLoginCallbacks): AuthInteraction {
+  return {
+    signal: callbacks.signal,
+    prompt: async (prompt: AuthPrompt) => {
+      if (prompt.type === 'select') {
+        const selected = await callbacks.onSelect({
+          message: prompt.message,
+          options: prompt.options.map((option) => ({
+            id: option.id,
+            label: option.label,
+          })),
+        });
+        if (selected === undefined) throw new Error('OAuth login was cancelled.');
+        return selected;
+      }
+      if (prompt.type === 'manual_code' && callbacks.onManualCodeInput) {
+        return callbacks.onManualCodeInput();
+      }
+      return callbacks.onPrompt({
+        message: prompt.message,
+        ...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
+      });
+    },
+    notify: (event: AuthEvent) => {
+      if (event.type === 'auth_url') {
+        callbacks.onAuth({ url: event.url, instructions: event.instructions });
+      } else if (event.type === 'device_code') {
+        callbacks.onDeviceCode({
+          userCode: event.userCode,
+          verificationUri: event.verificationUri,
+          ...(event.intervalSeconds !== undefined
+            ? { intervalSeconds: event.intervalSeconds }
+            : {}),
+          ...(event.expiresInSeconds !== undefined
+            ? { expiresInSeconds: event.expiresInSeconds }
+            : {}),
+        });
+      } else if (callbacks.onProgress) {
+        callbacks.onProgress(event.message);
+      }
+    },
+  };
+}
+
+function knownPiModelsSync(
+  models: PiModelsFile,
+  _userAuth?: Record<string, any>,
+): Array<Pick<Model<any>, 'id' | 'provider'> & Partial<Pick<Model<any>, 'name'>>> {
+  const result: Array<Pick<Model<any>, 'id' | 'provider'> & Partial<Pick<Model<any>, 'name'>>> = [];
+  for (const provider of getProviders()) {
+    try {
+      for (const model of getModels(provider as never) ?? []) result.push(model);
+    } catch {
+      // A static provider catalog failure must not make the sync auth guard fail.
+    }
+  }
+  for (const [provider, config] of Object.entries(models.providers)) {
+    for (const model of config.models ?? []) {
+      result.push({ provider, id: model.id, name: model.name });
+    }
+  }
+  return result;
+}
+
+function emptyPiModelCost(): NonNullable<PiModelDefinition['cost']> {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 }
 
 function normalizeProvider(value: unknown): string | undefined {

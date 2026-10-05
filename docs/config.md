@@ -107,7 +107,7 @@ profile / worker に `acp` がある worker は `--default-acp-*` / config `acp.
 
 ### Pi resource root
 
-`conductor.backend: pi` のとき、Pi の標準ファイル名・ディレクトリを次の 2 層から解決します。プロジェクト層がユーザ層を上書きします。
+`conductor.backend: pi` のとき、Pi 1.x の標準ファイル名・ディレクトリを次の 2 層から解決します。プロジェクト層がユーザ層を上書きします。
 
 | 層 | 既定パス |
 |----|----------|
@@ -118,16 +118,16 @@ profile / worker に `acp` がある worker は `--default-acp-*` / config `acp.
 
 - `settings.json` / `auth.json`: user → project の deep merge。credential は provider 単位で project entry を優先します。
 - `models.json`: Pi 標準の `providers` / `models` / built-in `modelOverrides` / request headers を model 解決へ反映します。
-- `extensions/`: ExtensionAPI の tool を読み込み、fixed harness tools → MCP bridge → local extension の順で追加します。同名の harness/MCP tool は上書きしません。
+- `extensions/`: ExtensionAPI の tool を読み込み、fixed harness tools と local extension tools を conductor の custom tools として追加します。同名の harness tool は上書きしません。MCP は下記の Pi 公式 extension が担当します。
 - `skills/`: `SKILL.md` を読み込み、model invocation が有効な skill 本文を compiled system prompt の後ろに追加します。`/skill:<name>` で明示的に展開できます。
 - `prompts/`: Markdown template を読み込み、`/name args` の user prompt を Pi 標準の引数置換で展開します。
-- `themes/`: Pi 標準 JSON として読み込み、project 同名を優先します。conductor は headless `pi-agent-core` のため TUI renderer がなく、theme の色・表示設定はモデル入出力には適用しません。
+- `themes/`: Pi 標準 JSON として読み込み、project 同名を優先します。conductor は headless `AgentSession` のため TUI renderer がなく、theme の色・表示設定はモデル入出力には適用しません。
 
-Pi の認証 CLI は provider 単位です。`ensemble auth login --provider <id>` は API-key provider なら secret prompt の値を user root の `auth.json`（既定 `~/.ensemble/pi/auth.json`）へ `AuthStorage.set` し、OAuth provider なら Pi の `AuthStorage.login` を TTY / stderr 経由で実行します。`--provider` を省略した場合は `settings.json` の `defaultProvider` または選択モデルから解決します。`logout` / `status` も同じ provider 解決を使います。project `auth.json` は既存の project-over-user 読取優先を維持しますが、login の書込み先にはなりません。project 層の明示的な OAuth credential は `AuthStorage` の refresh 対象外なので stale access token を使わず、実行時にエラーとして user 層ログインを案内します。OAuth は `ensemble auth login --provider <id>` で user 層へ保存してください。`ensemble models list` は `ModelRegistry` と project resource の解決結果から認証済み model だけを表示します。
+Pi の認証 CLI は provider 単位です。`ensemble auth login --provider <id>` は API-key provider なら secret prompt の値を user root の `auth.json`（既定 `~/.ensemble/pi/auth.json`）へ保存し、OAuth provider なら Pi 1.x の `ModelRuntime.login` を TTY / stderr 経由で実行します。`--provider` を省略した場合は `settings.json` の `defaultProvider` または選択モデルから解決します。`logout` / `status` も同じ provider 解決を使います。project `auth.json` は既存の project-over-user 読取優先を維持しますが、login の書込み先にはなりません。project 層の明示的な OAuth credential は runtime が安全に refresh できないため実行時には使わず、user 層でのログインを案内します。Pi の MCP HTTP OAuth は conductor provider OAuth とは別に、公式 MCP extension が `mcp-auth.json` と対話フローを管理します。`ensemble models list` は `ModelRegistry` と project resource の解決結果から認証済み model だけを表示します。
 
 #### `settings.json` の headless 対応範囲
 
-conductor は `pi-agent-core` を直接使い、`pi-coding-agent` の設定適用器・TUI・package manager は起動しません。そのため `settings.json` は Pi 標準のファイル名と resource path の意味を保ちますが、headless conductor が実際に参照するキーだけを契約とします。
+conductor は Pi 1.x の `createAgentSession` / `DefaultResourceLoader` を headless で使います。TUI と package manager は起動しないため、`settings.json` は Pi 標準のファイル名と resource path の意味を保ちますが、headless conductor が実際に参照するキーだけを契約とします。
 
 実際に効くキーは次のとおりです。
 
@@ -143,7 +143,7 @@ Pi の `settings.md` にあるが headless conductor が適用しないキーは
 |------------------------------|------------------|
 | `defaultThinkingLevel` / `modelThinkingLevels` / `thinkingBudgets` / `enabledModels` | thinking level、budget、model cycling の設定 |
 | `hideThinkingBlock` / `showCacheMissNotices` / `cacheWarming` / `steeringMode` / `followUpMode` | transcript 表示、cache、対話キューの設定 |
-| `defaultTools` / `codemode.*` | Pi built-in coding tools の選択。conductor は harness / MCP / local extension の tool loadout を使います。 |
+| `defaultTools` / `codemode.*` | Pi built-in coding tools の選択。conductor は built-in coding tools を無効にし、harness / MCP / local extension と公式 codemode/tool-search extension の loadout を使います。 |
 | `packages` | Pi package の install・解決。package が提供する resource は自動導入しません。 |
 | `enableSkillCommands` | skill command の登録 toggle。読み込んだ skill の `/skill:<name>` 展開可否はこのキーで変更できません。 |
 | `sessionDir` / `compaction.*` / `branchSummary.*` | Pi の session・compact・branch summary。session は harness の `.ensemble/pi/sessions/` が管理します。 |
@@ -211,17 +211,17 @@ MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単
 }
 ```
 
-解決済み設定は conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では harness 内蔵 MCP bridge が MCP client と Pi `AgentTool` に変換して使う。この bridge は Pi の ExtensionAPI extension をロードするものではなく、`@agents-ensemble/core` 内で `@modelcontextprotocol/sdk` client を接続する in-process thin bridge である。どちらも `resume` と認証・transport エラーからの in-process reconnect で同じ設定を再注入する。Pi は MCP 設定がある場合、session 開始前に全サーバーへ接続して tools を発見するため、接続または bridge の読み込みに失敗したら起動を fail する。
+解決済み設定は conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では Pi 1.x の `DefaultResourceLoader` に `createMcpExtension({ loadConfig })` を extension factory として登録し、`createAgentSession` の起動時に注入する。Pi 側で `.pi/mcp.json` へ同期・コピー・symlink は行わず、resume 時も harness が解決した同じ map を再注入する。MCP 接続の管理、tool discovery、OAuth、resource tools は Pi 公式 extension に委ね、core は MCP client/transport を実装しない。
 
-設定値の `${env:...}` や `${workspaceFolder}` などの展開は Cursor SDK では SDK に任せ、Pi bridge では起動時の process environment と conductor cwd を使って同じ参照を展開する。Pi bridge は `stdio` / `http`（Streamable HTTP）/ `sse`、`env`、`cwd`、`headers` を扱う。Cursor SDK が提供する OAuth 対話（`auth` 定義）は Pi bridge の制限により未対応で、該当定義は明確なエラーにする。`.cursor/mcp.json` や `.pi/mcp.json` へのコピー・symlink、`settings.json` の書き換えは行わず、ACP worker にはこの設定を渡さない。Pi MCP tools は `mcp_<server>_<tool>` という衝突回避済みの名前で表示され、resources/prompts の専用 API は今回の bridge の対象外とする。Pi MCP tool の `callTool` 例外または MCP `isError` は成功結果に変換せず、`AgentTool.execute` の throw として model loop に伝える。Pi では extension の読み込み有無にかかわらず、harness tools と解決済み MCP bridge tools が conductor の tool loadout に含まれる。
+設定値の `env` / `headers` / `cwd` は harness が解決した map のまま Pi 公式 extension に渡す。Pi は `stdio` と Streamable HTTP (`http`) をサポートするが、shared `mcp.json` の `sse` 定義は Pi 1.x ではサポートしないため、Pi conductor の起動時に明確なエラーにする。HTTP の `auth` (`CLIENT_ID` / `CLIENT_SECRET` / `scopes`) は Pi の MCP OAuth 設定へ渡され、認可フローと credential 保存は公式 extension が管理する。`.cursor/mcp.json` や `.pi/mcp.json` へのコピー・symlink、`settings.json` の書き換えは行わず、ACP worker にはこの設定を渡さない。MCP server tool は公式名 `mcp__<server>__<tool>`（長すぎる・衝突する場合は Pi の hash suffix）で公開される。resources がある場合は公式の `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` が提供される。`codemode` / `tool_search` の exposure は公式 extension の設定に従う。
 
-Pi bridge は `@modelcontextprotocol/sdk@1.30.0` を core に同梱する。依存が欠落した環境で MCP 設定を持つ Pi backend を起動した場合は、インストールすべき固定バージョンを含むエラーで停止する。MCP 未設定時は bridge をロードせず、両 backend とも従来どおり MCP なしで起動する。
+Pi backend は `@earendil-works/pi-coding-agent@1.0.x` の公式 MCP extension を使う。MCP 未設定時は extension に空の解決結果を渡し、conductor は harness tools と local extension tools だけで起動する。
 
 JSON が不正、または `mcpServers` / サーバー定義の形式が不正な場合は、そのファイルを `[mcp]` 警告とともにスキップする。もう一方の層が有効ならそちらは引き続き読み込み、両方をスキップした場合は MCP なしで起動する。MCP のホットリロードは行わないため、変更後は新しいセッションを開始する。
 
 ## 秘密情報を config に書かない
 
-**token 本体を config に平文で保存しない。** 認証は環境変数、`gh auth login`、Cursor の `ensemble auth login`、または Pi の provider 単位 `ensemble auth login` / `AuthStorage` を使う。
+**token 本体を config に平文で保存しない。** 認証は環境変数、`gh auth login`、Cursor の `ensemble auth login`、または Pi の provider 単位 `ensemble auth login` / `ModelRuntime` を使う。MCP HTTP OAuth の credential は Pi 公式 extension の管理領域に保存する。
 
 ## スキーマ外キー
 
