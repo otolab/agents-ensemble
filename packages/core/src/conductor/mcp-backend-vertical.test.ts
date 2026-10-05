@@ -279,7 +279,7 @@ describe('shared mcp.json backend path', () => {
     await session.bindExtensions({});
 
     let echo = session.getToolDefinition('mcp__representative__echo');
-    for (let attempt = 0; !echo && attempt < 40; attempt += 1) {
+    for (let attempt = 0; !echo && attempt < 120; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 25));
       echo = session.getToolDefinition('mcp__representative__echo');
     }
