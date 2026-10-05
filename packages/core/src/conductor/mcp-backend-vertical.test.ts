@@ -329,5 +329,22 @@ describe('shared mcp.json backend path', () => {
         },
       }),
     ).rejects.toThrow(/Pi MCP startup failed|MCP server "unreachable".*failed to connect/i);
+
+    await expect(
+      PiConductorAgent.create({
+        cwd,
+        pi: { agentDir },
+        modelId: 'fixture/fixture-model',
+        systemPrompt: 'fixture system prompt',
+        mcpServers: {
+          'unreachable-http': {
+            type: 'http',
+            url: 'http://127.0.0.1:1/mcp',
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      /Pi MCP startup failed|MCP server "unreachable-http".*failed to connect/i,
+    );
   });
 });
