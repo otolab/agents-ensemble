@@ -12,7 +12,7 @@ import {
   SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 import type { Model } from '@earendil-works/pi-ai';
-import { loadPiMcpConfig } from './pi-conductor-agent.js';
+import { PiConductorAgent, loadPiMcpConfig } from './pi-conductor-agent.js';
 import { resolveMcpServers } from '../mcp/load-mcp-config.js';
 
 const { mockCursorCreate, mockCursorResume } = vi.hoisted(() => ({
@@ -232,5 +232,43 @@ describe('shared mcp.json backend path', () => {
     });
 
     session.dispose();
+  });
+
+  it('fails Pi conductor startup with the official MCP connection error', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'mcp-pi-unreachable-'));
+    const agentDir = join(cwd, 'pi-agent');
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'fixture', defaultModel: 'fixture-model' }),
+    );
+    await writeFile(
+      join(agentDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:1/v1',
+            models: [{ id: 'fixture-model', name: 'Fixture model' }],
+          },
+        },
+      }),
+    );
+
+    await expect(
+      PiConductorAgent.create({
+        cwd,
+        pi: { agentDir },
+        modelId: 'fixture/fixture-model',
+        systemPrompt: 'fixture system prompt',
+        mcpServers: {
+          unreachable: {
+            type: 'stdio',
+            command: process.execPath,
+            args: ['-e', 'process.exit(17)'],
+          },
+        },
+      }),
+    ).rejects.toThrow(/Pi MCP startup failed|MCP server "unreachable".*failed to connect/i);
   });
 });

@@ -21,6 +21,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionFactory,
+  type ExtensionUIContext,
   type LoadedMcpConfig,
   type McpServerConfig as PiMcpServerConfig,
   type ToolDefinition,
@@ -62,6 +63,12 @@ interface PiSendState {
   callbacks?: ConductorSendCallbacks;
   finalMessage?: AssistantMessage;
 }
+
+interface PiMcpStartupState {
+  error?: string;
+}
+
+const PI_MCP_STARTUP_OBSERVATION_MS = 2_000;
 
 export interface PiResolvedModel {
   provider: string;
@@ -154,6 +161,7 @@ export class PiConductorAgent implements ConductorAgent {
     private readonly systemPromptRef: { value: string },
     public readonly agentId: string,
     private readonly modelId: string,
+    private readonly mcpStartupState: PiMcpStartupState,
     private readonly onStreamText?: (text: string) => void,
   ) {
     this.unsubscribe = this.session.subscribe((event) => this.handleEvent(event));
@@ -182,6 +190,17 @@ export class PiConductorAgent implements ConductorAgent {
         runId,
         status: 'error',
         error: { message: 'Pi conductor agent is closed.' },
+      };
+    }
+    if (this.mcpStartupState.error) {
+      return {
+        runId,
+        status: 'error',
+        error: {
+          message: this.mcpStartupState.error,
+          code: 'MCP_CONNECTION_FAILED',
+        },
+        modelId: this.modelId,
       };
     }
     if (this.activeSend) {
@@ -294,7 +313,6 @@ export class PiConductorAgent implements ConductorAgent {
     if (event.type === 'agent_end' && activeSend) {
       activeSend.finalMessage = lastAssistantMessage(event.messages);
     }
-
   }
 
   private recordUsage(message: AssistantMessage): void {
@@ -376,6 +394,7 @@ async function createPiConductorSession(
 
   let session: AgentSession | undefined;
   try {
+    const mcpStartupState: PiMcpStartupState = {};
     const result = await createAgentSession({
       cwd: options.cwd,
       agentDir: authContext.agentDir,
@@ -398,18 +417,96 @@ async function createPiConductorSession(
       },
     });
     session = result.session;
-    await session.bindExtensions({});
+    await session.bindExtensions({
+      mode: 'rpc',
+      uiContext: createPiHeadlessExtensionUi(mcpStartupState),
+      onError: (error) => {
+        if (error.extensionPath.includes('mcp')) {
+          mcpStartupState.error =
+            `Pi MCP extension failed during ${error.event}: ${error.error}`;
+        }
+      },
+    });
+    await observePiMcpStartup(session, options.mcpServers, mcpStartupState);
+    if (mcpStartupState.error) {
+      throw new Error(mcpStartupState.error);
+    }
     return new PiConductorAgent(
       session,
       resources,
       systemPromptRef,
       agentId,
       resolved.modelId,
+      mcpStartupState,
       options.onStreamText,
     );
   } catch (error) {
     session?.dispose();
     throw error;
+  }
+}
+
+function createPiHeadlessExtensionUi(
+  state: PiMcpStartupState,
+): ExtensionUIContext {
+  return {
+    select: async () => undefined,
+    confirm: async () => false,
+    input: async () => undefined,
+    notify: (message: string, type?: 'info' | 'warning' | 'error') => {
+      if (
+        message.startsWith('MCP failed to load:') ||
+        (type === 'warning' && message.startsWith('MCP servers need attention:'))
+      ) {
+        state.error = `Pi MCP startup failed: ${message}`;
+      }
+    },
+    onTerminalInput: () => () => {},
+    setStatus: () => {},
+    setWorkingMessage: () => {},
+    setWorkingVisible: () => {},
+    setWorkingIndicator: () => {},
+    setHiddenThinkingLabel: () => {},
+    setWidget: () => {},
+    setFooter: () => {},
+    setHeader: () => {},
+    setTitle: () => {},
+    pasteToEditor: () => {},
+    setEditorText: () => {},
+    getEditorText: () => '',
+    editor: async () => undefined,
+    custom: async () => undefined,
+    getToolsExpanded: () => false,
+    setToolsExpanded: () => {},
+    get theme() {
+      return undefined;
+    },
+    getAllThemes: () => [],
+    getTheme: () => undefined,
+    setTheme: () => ({ success: false, error: 'Headless conductor has no theme.' }),
+  } as unknown as ExtensionUIContext;
+}
+
+async function observePiMcpStartup(
+  session: AgentSession,
+  servers: McpServerConfigMap | undefined,
+  state: PiMcpStartupState,
+): Promise<void> {
+  const names = Object.keys(servers ?? {});
+  if (names.length === 0 || typeof session.getAllTools !== 'function') return;
+
+  const deadline = Date.now() + PI_MCP_STARTUP_OBSERVATION_MS;
+  while (Date.now() < deadline && !state.error) {
+    const tools = session.getAllTools();
+    if (
+      names.every((name) => {
+        const namespace = name.replace(/[^A-Za-z0-9_]/g, '_');
+        return tools.some((tool) => tool.name.startsWith(`mcp__${namespace}__`));
+      })
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
 
