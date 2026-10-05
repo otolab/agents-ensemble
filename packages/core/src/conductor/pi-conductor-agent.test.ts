@@ -311,7 +311,7 @@ describe('PiConductorAgent', () => {
           local: {
             api: 'openai-completions',
             baseUrl: 'http://127.0.0.1:11434/v1',
-            apiKey: '$LOCAL_MODEL_KEY',
+            apiKey: '${LOCAL_MODEL_KEY}',
             authHeader: true,
             models: [{ id: 'review-model', name: 'Review model' }],
           },
@@ -367,5 +367,142 @@ describe('PiConductorAgent', () => {
         headers: { Authorization: 'Bearer conductor-command-key' },
       },
     });
+  });
+
+  it('passes a custom models.json !command credential through create into a Pi request', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            apiKey: '!printf command-key',
+            authHeader: true,
+            models: [{ id: 'review-model', name: 'Review model' }],
+          },
+        },
+      }),
+    );
+    mockGetModel.mockReturnValue(undefined);
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'local/review-model',
+      systemPrompt: 'system',
+    });
+    const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+    let requestAuth: unknown;
+    fakeSession.prompt.mockImplementation(async () => {
+      requestAuth = await sessionOptions.modelRuntime.getAuth(sessionOptions.model);
+    });
+
+    await expect(conductor.send('request')).resolves.toMatchObject({
+      status: 'finished',
+      modelId: 'review-model',
+    });
+    expect(sessionOptions.model).toMatchObject({
+      provider: 'local',
+      id: 'review-model',
+      headers: { Authorization: 'Bearer command-key' },
+    });
+    expect(requestAuth).toMatchObject({
+      auth: {
+        apiKey: 'command-key',
+        headers: { Authorization: 'Bearer command-key' },
+      },
+    });
+    await conductor.close();
+  });
+
+  it('reports a failed custom models.json !command through create', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            apiKey: "!sh -c 'exit 7'",
+            models: [{ id: 'review-model', name: 'Review model' }],
+          },
+        },
+      }),
+    );
+    mockGetModel.mockReturnValue(undefined);
+
+    await expect(
+      PiConductorAgent.create({
+        cwd,
+        pi: { agentDir, projectDir },
+        modelId: 'local/review-model',
+        systemPrompt: 'system',
+      }),
+    ).rejects.toThrow(/Failed to resolve API key for Pi provider "local" from shell command/);
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+  });
+
+  it('passes project !command auth over the user credential through create into a Pi request', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({ local: { type: 'api_key', key: 'user-key' } }),
+    );
+    await writeFile(
+      join(projectDir, 'auth.json'),
+      JSON.stringify({
+        local: { type: 'api_key', key: '!printf project-command-key' },
+      }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            authHeader: true,
+            models: [{ id: 'review-model', name: 'Review model' }],
+          },
+        },
+      }),
+    );
+    mockGetModel.mockReturnValue(undefined);
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'local/review-model',
+      systemPrompt: 'system',
+    });
+    const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+    let requestAuth: unknown;
+    fakeSession.prompt.mockImplementation(async () => {
+      requestAuth = await sessionOptions.modelRuntime.getAuth(sessionOptions.model);
+    });
+
+    await expect(conductor.send('request')).resolves.toMatchObject({
+      status: 'finished',
+      modelId: 'review-model',
+    });
+    expect(sessionOptions.model).toMatchObject({
+      provider: 'local',
+      id: 'review-model',
+      headers: { Authorization: 'Bearer project-command-key' },
+    });
+    expect(requestAuth).toMatchObject({
+      auth: {
+        apiKey: 'project-command-key',
+        headers: { Authorization: 'Bearer project-command-key' },
+      },
+    });
+    expect(requestAuth).not.toMatchObject({ auth: { apiKey: 'user-key' } });
+    await conductor.close();
   });
 });
