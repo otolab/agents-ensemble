@@ -42,12 +42,14 @@
 - [ADR 0011](0011-session-sidecar-resume.md) の harness 状態（open question、worker `acpSessionId` 等）は維持。conductor 側の永続 ID はバックエンドごとにマッピングする（Pi session id 等は実装 Issue で定義）。
 - Pi では sidecar の `conductorAgentId` をそのまま Pi session id として再利用し、`<conductor-cwd>/.ensemble/pi/sessions/` の JSONL transcript を Pi 1.x `SessionManager` で保存・復元する。追加の sidecar ID フィールドは持たず、旧 sidecar の `conductorBackend` 欠落は従来どおり `cursor` として扱う。
 - Pi の resume は Issue context から compiled `systemPrompt` を毎回再コンパイルし、復元した transcript とは別に native system prompt へ再注入する。
+- sidecar には harness が解決した MCP map の canonical SHA-256 digest を保存する。resume 時に現在の digest と比較し、変更があれば fail fast する。digest は map の秘密値そのものを保存しない。MCP なしの旧 sidecar は後方互換のため許容するが、MCP が設定された旧 sidecar は安全性のため拒否する。
 
 ### 3. MCP
 
 - [ADR 0021](0021-conductor-mcp-config-resolution.md) の **2 層 `mcp.json` 解決**は両 backend 共通の正本とする。
 - SDK 経路は現行の inline `mcpServers` を維持する。
 - Pi 経路は方針 B として、Pi 1.0.x の公式 `createMcpExtension({ loadConfig })` を `DefaultResourceLoader` の `extensionFactories` に登録し、`createAgentSession` の起動時に harness が ADR 0021 で解決した `McpServerConfigMap` を `LoadedMcpConfig` として注入する。`.pi/mcp.json` への同期・コピー・symlink は行わない。
+- Pi へ注入する MCP map は sidecar の canonical digest と対応付け、resume 時の変更を fail fast で拒否する。MCP の resume は map が同一の場合だけ許可する。
 - Pi 側の MCP client、transport、OAuth、tool/resource adapter は core で再実装せず、公式 extension に委ねる。公式 extension の server tool 名は `mcp__<server>__<tool>`（必要時は hash suffix）で、resource tools は `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` である。stdio と Streamable HTTP (`http`) を対象とし、SSE は Pi 1.x 非対応として Pi conductor の起動時にエラーにする。HTTP OAuth の対話・credential 保存は公式 extension の管理下に置く。
 
 ### 4. ツール・worker・認証
@@ -134,3 +136,4 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 | 2026-10-01 | #358 2 回目の reviewer 差し戻し対応: Pi `settings.json` は headless conductor の対応キー（モデル選択、認証 fallback、resource path）に限定し、thinking / packages / TUI 等の未対応キーを無視する契約へ修正 |
 | 2026-10-01 | #356: Pi AuthStorage / ModelRegistry、provider 単位の `ensemble auth`、実行時 OAuth key 解決、認証済み model 一覧を追加 |
 | 2026-10-05 | #392: Pi 1.0.x の `createAgentSession` / `DefaultResourceLoader` と公式 MCP extension を採用。旧 bridge、旧低レベル Agent ループ、SSE 対応を削除 |
+| 2026-10-05 | #392 reviewer 対応: Cursor placeholder 解決、Pi MCP 接続エラー観測、sidecar の MCP digest による resume 変更検出を追加 |

@@ -357,4 +357,71 @@ describe('Pi conductor backend integration', () => {
       'Start the conductor workflow',
     );
   });
+
+  it('resumes an MCP session only when the resolved configuration is unchanged', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-pi-mcp-resume-'));
+    const userEnsembleRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-pi-mcp-user-'),
+    );
+    const projectMcpRoot = join(repoRoot, '.agents');
+    const mcpPath = join(projectMcpRoot, 'mcp.json');
+    await mkdir(projectMcpRoot, { recursive: true });
+
+    const writeMcpConfig = async (exitCode: number): Promise<void> => {
+      await writeFile(
+        mcpPath,
+        JSON.stringify({
+          mcpServers: {
+            fixture: {
+              type: 'stdio',
+              command: process.execPath,
+              args: ['-e', `process.exit(${exitCode})`],
+            },
+          },
+        }),
+      );
+    };
+    await writeMcpConfig(0);
+
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'pi' as const,
+      },
+    };
+    const sessionOptions = {
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      conductorCwd: repoRoot,
+      profile: PI_NO_WORKER_PROFILE,
+      ensembleConfig,
+      mcpConfigOptions: { userEnsembleRoot },
+      modelId: 'anthropic/claude-sonnet-4-5',
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      disableGitHubMonitor: true,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    } as const;
+
+    const first = await runConductorSession(sessionOptions);
+    const resumed = await runConductorSession({
+      ...sessionOptions,
+      resumeAgentId: first.agentId,
+      bindOperatorInput:
+        createTestOperatorInputBinding(() => 'continue').bindOperatorInput,
+    });
+
+    expect(resumed.lastResult).toBe('conductor-resumed');
+
+    await writeMcpConfig(1);
+    await expect(
+      runConductorSession({
+        ...sessionOptions,
+        resumeAgentId: first.agentId,
+      }),
+    ).rejects.toThrow(/MCP config digest mismatch/);
+    expect(fakeSessions).toHaveLength(2);
+  });
 });

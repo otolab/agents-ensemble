@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  computeMcpConfigDigest,
   loadMcpConfig,
   MCP_CONFIG_FILE,
   PROJECT_MCP_CONFIG_DIR,
@@ -152,5 +153,32 @@ describe('loadMcpConfig', () => {
     ).resolves.toEqual({
       projectOnly: { type: 'stdio', command: 'project-server' },
     });
+  });
+
+  it('computes a stable digest without persisting MCP values', () => {
+    const first = computeMcpConfigDigest({
+      server: {
+        type: 'stdio',
+        command: 'server',
+        env: { TOKEN: 'secret-token' },
+        args: ['--one', '--two'],
+      },
+    });
+    const reordered = computeMcpConfigDigest({
+      server: {
+        args: ['--one', '--two'],
+        env: { TOKEN: 'secret-token' },
+        command: 'server',
+        type: 'stdio',
+      },
+    });
+    const changed = computeMcpConfigDigest({
+      server: { type: 'stdio', command: 'other-server' },
+    });
+
+    expect(first).toMatch(/^[a-f0-9]{64}$/);
+    expect(first).toBe(reordered);
+    expect(first).not.toBe(changed);
+    expect(first).not.toContain('secret-token');
   });
 });
