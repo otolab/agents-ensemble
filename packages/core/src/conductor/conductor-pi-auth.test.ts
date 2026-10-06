@@ -7,6 +7,7 @@ import {
   createPiConductorAuthContext,
   getPiConductorAuthStatus,
   hasPiConductorAuth,
+  hasPiProviderAuth,
   listPiConductorModels,
   loginPiConductor,
   logoutPiConductor,
@@ -84,6 +85,29 @@ describe('Pi conductor authentication', () => {
         provider: 'anthropic',
       }),
     ).resolves.toBe('project-key');
+
+    await writeFile(
+      join(projectDir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: '!printf project-command-key' } }),
+    );
+    const commandResources = await loadPiResources({
+      cwd,
+      pi: { agentDir, projectDir },
+    });
+    const commandContext = await createPiConductorAuthContext(
+      { cwd, pi: { agentDir, projectDir } },
+      commandResources,
+    );
+    await expect(
+      resolvePiConductorApiKey({
+        modelRuntime: commandContext.modelRuntime,
+        resources: commandResources,
+        provider: 'anthropic',
+      }),
+    ).resolves.toBe('project-command-key');
+    await expect(commandContext.modelRuntime.getAuth('anthropic')).resolves.toMatchObject({
+      auth: { apiKey: 'project-command-key' },
+    });
 
     await writeFile(join(projectDir, 'auth.json'), JSON.stringify({}));
     const userOnlyResources = await loadPiResources({
@@ -372,5 +396,147 @@ describe('Pi conductor authentication', () => {
         env: {},
       }),
     ).rejects.toThrow(/No authenticated Pi models.*ensemble auth login/);
+  });
+
+  it('resolves a custom models.json apiKey command through the Pi runtime', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'fixture', defaultModel: 'fixture-model' }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            apiKey: '!printf command-key',
+            models: [{ id: 'fixture-model', name: 'Fixture model' }],
+          },
+        },
+      }),
+    );
+
+    const options = {
+      cwd,
+      pi: { agentDir, projectDir },
+      env: {},
+    };
+    const resources = await loadPiResources(options);
+    const context = await createPiConductorAuthContext(options, resources);
+
+    await expect(
+      resolvePiConductorApiKey({
+        modelRuntime: context.modelRuntime,
+        resources,
+        provider: 'fixture',
+        env: {},
+      }),
+    ).resolves.toBe('command-key');
+    expect(hasPiConductorAuth({ ...options, provider: 'fixture' })).toBe(true);
+    expect(
+      hasPiProviderAuth('fixture', context, resources, {}),
+    ).toBe(true);
+    await expect(
+      listPiConductorModels({ ...options, provider: 'fixture' }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: 'fixture/fixture-model', provider: 'fixture' }),
+    ]);
+  });
+
+  it('resolves a settings.json apiKeys command through the Pi runtime', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({
+        defaultProvider: 'fixture',
+        defaultModel: 'fixture-model',
+        apiKeys: { fixture: '!printf settings-key' },
+      }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            models: [{ id: 'fixture-model', name: 'Fixture model' }],
+          },
+        },
+      }),
+    );
+
+    const options = { cwd, pi: { agentDir, projectDir }, env: {} };
+    const resources = await loadPiResources(options);
+    const context = await createPiConductorAuthContext(options, resources);
+
+    await expect(
+      resolvePiConductorApiKey({
+        modelRuntime: context.modelRuntime,
+        resources,
+        provider: 'fixture',
+        env: {},
+      }),
+    ).resolves.toBe('settings-key');
+
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({
+        defaultProvider: 'fixture',
+        defaultModel: 'fixture-model',
+        apiKey: '!printf settings-global-key',
+      }),
+    );
+    const globalResources = await loadPiResources(options);
+    const globalContext = await createPiConductorAuthContext(options, globalResources);
+    await expect(
+      resolvePiConductorApiKey({
+        modelRuntime: globalContext.modelRuntime,
+        resources: globalResources,
+        provider: 'fixture',
+        env: {},
+      }),
+    ).resolves.toBe('settings-global-key');
+  });
+
+  it('reports a clear error when a Pi apiKey command cannot be resolved', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            apiKey: "!sh -c 'exit 7'",
+            models: [{ id: 'fixture-model' }],
+          },
+        },
+      }),
+    );
+
+    const options = { cwd, pi: { agentDir, projectDir }, env: {} };
+    const resources = await loadPiResources(options);
+    const context = await createPiConductorAuthContext(options, resources);
+
+    await expect(
+      resolvePiConductorApiKey({
+        modelRuntime: context.modelRuntime,
+        resources,
+        provider: 'fixture',
+        env: {},
+      }),
+    ).rejects.toThrow(/Failed to resolve API key for Pi provider "fixture" from shell command/);
   });
 });
