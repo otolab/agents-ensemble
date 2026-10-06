@@ -1,5 +1,11 @@
 # @agents-ensemble/core
 
+## 0.9.1
+
+### Patch Changes
+
+- 4ee10c6: Pi conductor now resolves `!command` API keys in `models.json` and `settings.json` using Pi's standard configuration behavior.
+
 ## 0.9.0
 
 ### Minor Changes
