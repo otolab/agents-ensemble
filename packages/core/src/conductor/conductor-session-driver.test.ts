@@ -118,6 +118,7 @@ describe('runConductorSessionDriver', () => {
 
   it('runs initial send then stops when conductor finishes', async () => {
     const onSendStarted = vi.fn();
+    const onConductorInbound = vi.fn();
     const send = vi.fn().mockResolvedValue({
       runId: 'run-1',
       status: 'finished',
@@ -132,7 +133,13 @@ describe('runConductorSessionDriver', () => {
 
     const result = await runConductorSessionDriver({
       ...createDriverOptions({ eventQueue, conductor }),
+      onConductorInbound,
       onSendStarted,
+    });
+
+    expect(onConductorInbound).toHaveBeenCalledWith({
+      triggers: 1,
+      sources: ['initial'],
     });
 
     expect(onSendStarted).toHaveBeenCalledWith({
@@ -143,6 +150,32 @@ describe('runConductorSessionDriver', () => {
     expect(send.mock.calls[0]![0]).toBe('compiled conductor system prompt');
     expect(result.sendCount).toBe(1);
     expect(result.stopReason).toBe('completed');
+  });
+
+  it('summarizes the sources of a regular conductor inbound batch', async () => {
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    eventQueue.enqueue({ type: 'operator.message', text: 'next' });
+    const onConductorInbound = vi.fn();
+
+    await runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      onConductorInbound,
+    });
+
+    expect(onConductorInbound).toHaveBeenNthCalledWith(1, {
+      triggers: 1,
+      sources: ['initial'],
+    });
+    expect(onConductorInbound).toHaveBeenNthCalledWith(2, {
+      triggers: 1,
+      sources: ['operator'],
+    });
   });
 
   it('forwards a short backend-specific kickoff without modifying it', async () => {

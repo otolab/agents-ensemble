@@ -90,6 +90,7 @@ describe('parseEnsembleConfig', () => {
         conductor: {
           model: 'composer-2.5',
           backend: 'pi',
+          verbose: true,
           pi: { agentDir: '~/.ensemble/pi', projectDir: '.ensemble/pi' },
         },
         acp: { defaultPreset: 'claude' },
@@ -114,6 +115,7 @@ describe('parseEnsembleConfig', () => {
       conductor: {
         model: 'composer-2.5',
         backend: 'pi',
+        verbose: true,
         pi: { agentDir: '~/.ensemble/pi', projectDir: '.ensemble/pi' },
       },
       acp: { defaultPreset: 'claude' },

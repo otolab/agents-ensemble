@@ -17,6 +17,8 @@ conductor:
   backend: pi
   # conductor モデル id（CLI --model / CONDUCTOR_MODEL_ID より優先度低）
   model: default
+  # harness の詳細 telemetry（CLI --verbose / CONDUCTOR_VERBOSE より優先度低）
+  verbose: false
   # Pi backend の resource root（任意。パスだけを上書きする）
   # 相対パスは repoRoot 基準、~ はユーザ home 基準
   pi:

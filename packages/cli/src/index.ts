@@ -58,6 +58,10 @@ program
   )
   .option('--model <id>', 'Conductor model id (default: config conductor.model, else default)')
   .option(
+    '--verbose',
+    'Show detailed harness telemetry (default: config conductor.verbose or false)',
+  )
+  .option(
     '--max-turns <n>',
     'Maximum conductor autonomous turns (0 = unlimited; default: unlimited on TTY or with an initial operator message, 5 otherwise)',
     (value) => Number.parseInt(value, 10),
@@ -113,6 +117,7 @@ program
         continue?: boolean;
         profile?: string;
         model?: string;
+        verbose?: boolean;
         maxTurns?: number;
         noMaxTurns?: boolean;
         noWait?: boolean;

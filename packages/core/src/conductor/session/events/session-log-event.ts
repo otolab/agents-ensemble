@@ -93,6 +93,13 @@ export interface OperatorInputEvent {
   text: string;
 }
 
+/** harness から conductor へ渡す SessionEvent の束を要約する境界イベント。 */
+export interface ConductorInboundEvent {
+  type: 'conductor.inbound';
+  triggers: number;
+  sources: string[];
+}
+
 export interface ConductorSendStartedEvent {
   type: 'conductor.send.started';
   /** これから実行する send の通し番号（1 始まり）。 */
@@ -117,6 +124,20 @@ export interface ConductorSendEvent {
   error?: { message: string; code?: string };
   workerDispatches: number;
   workerFailures: number;
+}
+
+/** conductor から worker へ prompt_worker で送った prompt の要約。 */
+export interface ConductorOutboundEvent {
+  type: 'conductor.outbound';
+  workers: string[];
+  mode: 'conductor';
+}
+
+/** セッション開始時に harness が各 worker へ送る init prompt の要約。 */
+export interface HarnessWorkerBootstrapEvent {
+  type: 'harness.worker.bootstrap';
+  workers: Array<{ name: string; kind: string }>;
+  mode: 'init';
 }
 
 export interface ConductorDispatchHoldEvent {
@@ -250,9 +271,12 @@ export type SessionLogEvent =
   | HarnessWorkerStateEvent
   | HarnessSessionWorkersEvent
   | OperatorInputEvent
+  | ConductorInboundEvent
   | ConductorSendStartedEvent
   | ConductorSendProgressEvent
   | ConductorSendEvent
+  | ConductorOutboundEvent
+  | HarnessWorkerBootstrapEvent
   | ConductorDispatchHoldEvent
   | PermissionPendingLogEvent
   | PermissionCleanupEvent

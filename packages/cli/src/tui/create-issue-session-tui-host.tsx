@@ -27,6 +27,7 @@ export interface CreateIssueSessionTuiHostOptions {
   config?: EnsembleConfig;
   env?: NodeJS.ProcessEnv;
   initialOperatorMessage?: string;
+  verbose?: boolean;
 }
 
 export interface IssueSessionTuiHost {
@@ -183,7 +184,9 @@ export function createIssueSessionTuiHost(
     apiRef,
     options.initialOperatorMessage,
   );
-  const telemetrySink = createTuiTelemetrySink(viewModel);
+  const telemetrySink = createTuiTelemetrySink(viewModel, {
+    verbose: options.verbose,
+  });
 
   return {
     displayBackend: {

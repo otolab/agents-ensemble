@@ -15,6 +15,7 @@ export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = {
   conductor: {
     model: 'default',
     backend: DEFAULT_CONDUCTOR_BACKEND,
+    verbose: false,
   },
   acp: {
     defaultPreset: 'cursor',

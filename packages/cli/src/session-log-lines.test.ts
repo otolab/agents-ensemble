@@ -75,11 +75,14 @@ describe('session-log-lines', () => {
 
   it('formats conductor.send.started harness body', () => {
     expect(
-      formatHarnessLogBody({
-        type: 'conductor.send.started',
-        sendCount: 2,
-        dispatchSource: 'operator',
-      }),
+      formatHarnessLogBody(
+        {
+          type: 'conductor.send.started',
+          sendCount: 2,
+          dispatchSource: 'operator',
+        },
+        { verbose: true },
+      ),
     ).toBe('conductor.send.started n=2 source=operator');
   });
 
@@ -94,17 +97,78 @@ describe('session-log-lines', () => {
     ).toBeUndefined();
   });
 
-  it('formats harness bodies', () => {
+  it('formats compact conductor boundary summaries by default', () => {
     expect(
       formatHarnessLogBody({
-        type: 'conductor.send',
-        sendCount: 1,
-        runId: 'run-1',
-        status: 'finished',
-        result: 'ok',
-        workerDispatches: 0,
-        workerFailures: 0,
+        type: 'conductor.inbound',
+        triggers: 2,
+        sources: ['operator', 'worker:implementer'],
       }),
+    ).toBe('conductor.deliver triggers=2 sources=operator,worker:implementer');
+    expect(
+      formatHarnessLogBody({
+        type: 'harness.worker.bootstrap',
+        workers: [
+          { name: 'implementer', kind: 'implementer' },
+          { name: 'reviewer', kind: 'reviewer' },
+        ],
+        mode: 'init',
+      }),
+    ).toBe('worker.prompt workers=2 mode=init');
+    expect(
+      formatHarnessLogBody({
+        type: 'conductor.outbound',
+        workers: ['reviewer'],
+        mode: 'conductor',
+      }),
+    ).toBe('worker.prompt workers=1 mode=conductor names=reviewer');
+  });
+
+  it('suppresses normal lifecycle rows unless verbose is enabled', () => {
+    const event = {
+      type: 'harness.worker.prompt.completed' as const,
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'worker-1',
+      source: 'harness' as const,
+      stopReason: 'end_turn',
+    };
+
+    expect(formatHarnessLogBody(event)).toBeUndefined();
+    expect(formatHarnessLogBody(event, { verbose: true })).toBe(
+      'worker.prompt.completed name=implementer kind=implementer source=harness stopReason=end_turn',
+    );
+    expect(
+      formatHarnessLogBody({
+        type: 'harness.worker.state',
+        name: 'implementer',
+        kind: 'implementer',
+        workerId: 'worker-1',
+        state: 'idle',
+      }),
+    ).toBeUndefined();
+    expect(
+      formatHarnessLogBody({
+        type: 'harness.session.workers',
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      }),
+    ).toBeUndefined();
+  });
+
+  it('formats harness bodies', () => {
+    expect(
+      formatHarnessLogBody(
+        {
+          type: 'conductor.send',
+          sendCount: 1,
+          runId: 'run-1',
+          status: 'finished',
+          result: 'ok',
+          workerDispatches: 0,
+          workerFailures: 0,
+        },
+        { verbose: true },
+      ),
     ).toBe('conductor.send n=1 status=finished workerDone=0 workerFailed=0');
   });
 

@@ -4,6 +4,7 @@ import {
   loadEnsembleConfig,
   loadProfile,
   resolveConductorModelId,
+  resolveConductorVerboseSetting,
   resolveGitHubMonitorDebounceMs,
   resolveGitHubMonitorEnabled,
   resolveSessionMaxTurns,
@@ -33,6 +34,7 @@ export interface IssueCommandOptions {
   continue?: boolean;
   profile?: string;
   model?: string;
+  verbose?: boolean;
   maxTurns?: number;
   noMaxTurns?: boolean;
   noWait?: boolean;
@@ -136,6 +138,10 @@ export async function executeIssueCommand(
 
   const repoRoot = resolve(options.repoRoot);
   const ensembleConfig = await loadConfig(repoRoot);
+  const conductorVerbose = resolveConductorVerboseSetting({
+    cliVerbose: options.verbose,
+    config: ensembleConfig,
+  });
   const workerWorktreeMode = parseWorktreeMode(
     resolveSessionWorktreeMode({
       cliWorktree: options.worktree,
@@ -171,13 +177,14 @@ export async function executeIssueCommand(
     ? createIssueSessionTuiHost(issueUrl, {
         config: ensembleConfig,
         initialOperatorMessage: initialOperatorMessageForBinding,
+        verbose: conductorVerbose,
       })
     : undefined;
   const sessionLogger = new SessionLoggerCtor({ issueUrl, repoRoot });
   if (useTui) {
     sessionLogger.subscribe(tuiHost!.telemetrySink);
   } else {
-    sessionLogger.subscribe(createHarnessSink());
+    sessionLogger.subscribe(createHarnessSink({ verbose: conductorVerbose }));
     sessionLogger.subscribe(createObservationSink());
   }
   sessionLogger.subscribe(

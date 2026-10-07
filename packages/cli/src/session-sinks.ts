@@ -3,12 +3,15 @@ import { stdout } from 'node:process';
 import {
   formatHarnessLogBody,
   formatObservationStderrLine,
+  type HarnessLogBodyOptions,
 } from './session-log-lines.js';
 import { renderInlineMarkdownToAnsi } from './inline-markdown.js';
 
 export interface HarnessSinkOptions {
   /** デフォルト: `console.error` */
   writeStderr?: (message: string) => void;
+  /** 既定の要約に加えて従来のイベント単位行を表示する。 */
+  verbose?: boolean;
 }
 
 /** harness テレメトリ（開発者向け）。stderr に統一 prefix で出す。 */
@@ -16,7 +19,9 @@ export function createHarnessSink(options: HarnessSinkOptions = {}): SessionLogS
   const writeStderr = options.writeStderr ?? ((message) => console.error(message));
 
   return (event) => {
-    const body = formatHarnessLogBody(event);
+    const body = formatHarnessLogBody(event, {
+      verbose: options.verbose,
+    } satisfies HarnessLogBodyOptions);
     if (body) {
       writeStderr(renderInlineMarkdownToAnsi(`[harness] ${body}`));
     }

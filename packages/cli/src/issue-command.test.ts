@@ -361,7 +361,7 @@ describe('executeIssueCommand initial operator message wiring', () => {
 
     await executeIssueCommand(
       issueUrl,
-      { ...baseOptions, initialOperatorMessage: 'from cli' },
+      { ...baseOptions, initialOperatorMessage: 'from cli', verbose: true },
       {
         isOperatorInputInteractive: () => true,
         isOperatorInputTty: () => true,
@@ -375,6 +375,7 @@ describe('executeIssueCommand initial operator message wiring', () => {
       issueUrl,
       expect.objectContaining({
         initialOperatorMessage: 'from cli',
+        verbose: true,
       }),
     );
     expect(submit).toHaveBeenCalledTimes(1);

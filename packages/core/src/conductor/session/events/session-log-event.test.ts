@@ -17,7 +17,7 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(35);
+    expect(types.size).toBe(38);
   });
 
   it('lists every SessionEvent type exactly once', () => {
@@ -124,6 +124,8 @@ describe('session event type groups', () => {
           };
         case 'operator.input':
           return { type, conductorTurn: 1, text: 'hi' };
+        case 'conductor.inbound':
+          return { type, triggers: 1, sources: ['initial'] };
         case 'conductor.send.started':
           return { type, sendCount: 1 };
         case 'conductor.send.progress':
@@ -136,6 +138,14 @@ describe('session event type groups', () => {
             status: 'finished',
             workerDispatches: 0,
             workerFailures: 0,
+          };
+        case 'conductor.outbound':
+          return { type, workers: ['implementer'], mode: 'conductor' };
+        case 'harness.worker.bootstrap':
+          return {
+            type,
+            workers: [{ name: 'implementer', kind: 'implementer' }],
+            mode: 'init',
           };
         case 'conductor.dispatch_hold':
           return {

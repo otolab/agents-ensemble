@@ -149,6 +149,7 @@ export type {
 } from './session-policy.js';
 export { runConductorSessionDriver } from './conductor-session-driver.js';
 export type {
+  ConductorInboundInfo,
   ConductorSessionDriverOptions,
   ConductorSessionDriverResult,
   ConductorSendCompleteInfo,

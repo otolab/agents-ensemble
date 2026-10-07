@@ -3,12 +3,14 @@ import { ENSEMBLE_DEFAULT_ACP_CLI_ENV } from '../acp/resolve-acp-spawn.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
 import {
   CONDUCTOR_MODEL_ID_ENV,
+  CONDUCTOR_VERBOSE_ENV,
   ENSEMBLE_DEFAULT_PROFILE_ENV,
   FORCE_HYPERLINK_ENV,
   resolveBooleanSetting,
   resolveConductorBackendSetting,
   resolveConductorPiResourcePaths,
   resolveConductorModelSetting,
+  resolveConductorVerboseSetting,
   resolveDefaultAcpPresetSetting,
   resolveForceHyperlinkSetting,
   resolveGitHubMonitorDebounceMs,
@@ -27,7 +29,7 @@ import type { EnsembleConfig } from './types.js';
 const projectConfig: EnsembleConfig = {
   ...DEFAULT_ENSEMBLE_CONFIG,
   profile: { default: 'project-profile' },
-  conductor: { model: 'project-model' },
+  conductor: { model: 'project-model', verbose: true },
   acp: { defaultPreset: 'claude' },
   session: {
     worktree: 'in_repo',
@@ -191,6 +193,42 @@ describe('resolveConductorModelSetting', () => {
     process.env[CONDUCTOR_MODEL_ID_ENV] = 'auto';
     expect(resolveConductorModelSetting({ env: process.env })).toBe('default');
     delete process.env[CONDUCTOR_MODEL_ID_ENV];
+  });
+});
+
+describe('resolveConductorVerboseSetting', () => {
+  it('follows CLI > env > config > false', () => {
+    expect(
+      resolveConductorVerboseSetting({
+        cliVerbose: false,
+        env: { [CONDUCTOR_VERBOSE_ENV]: 'true' } as NodeJS.ProcessEnv,
+        config: projectConfig,
+      }),
+    ).toBe(false);
+    expect(
+      resolveConductorVerboseSetting({
+        env: { [CONDUCTOR_VERBOSE_ENV]: '0' } as NodeJS.ProcessEnv,
+        config: projectConfig,
+      }),
+    ).toBe(false);
+    expect(
+      resolveConductorVerboseSetting({
+        config: { ...projectConfig, conductor: { model: 'default' } },
+      }),
+    ).toBe(false);
+  });
+
+  it('accepts common boolean environment spellings', () => {
+    expect(
+      resolveConductorVerboseSetting({
+        env: { [CONDUCTOR_VERBOSE_ENV]: 'on' } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(true);
+    expect(
+      resolveConductorVerboseSetting({
+        env: { [CONDUCTOR_VERBOSE_ENV]: 'off' } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(false);
   });
 });
 

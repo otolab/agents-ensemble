@@ -8,11 +8,9 @@ describe('createTuiTelemetrySink', () => {
     const sink = createTuiTelemetrySink(viewModel);
 
     sink({
-      type: 'harness.worker.prompt.started',
-      name: 'implementer',
-      kind: 'implementer',
-      workerId: 'worker-1',
-      source: 'harness',
+      type: 'harness.worker.bootstrap',
+      workers: [{ name: 'implementer', kind: 'implementer' }],
+      mode: 'init',
     });
     sink({
       type: 'open.question.enqueued',
@@ -31,7 +29,7 @@ describe('createTuiTelemetrySink', () => {
     expect(snapshot.activityLog).toEqual([
       {
         label: 'harness',
-        text: 'worker.prompt.started name=implementer kind=implementer source=harness',
+        text: 'worker.prompt workers=1 mode=init',
       },
       {
         label: 'observation',
@@ -234,7 +232,7 @@ describe('createTuiTelemetrySink', () => {
 
   it('keeps harness activity visible while dispatch hold is enabled', () => {
     const viewModel = createTuiViewModel();
-    const sink = createTuiTelemetrySink(viewModel);
+    const sink = createTuiTelemetrySink(viewModel, { verbose: true });
 
     sink({
       type: 'conductor.dispatch_hold',
