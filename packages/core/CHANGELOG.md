@@ -1,5 +1,14 @@
 # @agents-ensemble/core
 
+## 0.9.2
+
+### Patch Changes
+
+- eb5a039: Issue 文脈に GitHub オペレータ login（`@me` の実体）を載せ、conductor プロンプトでオペレータ本人の GitHub 投稿を TTY 入力同等と扱う旨を明記します。
+- 498b1b8: Pi conductor の headless 経路で、`.ensemble/pi/settings.json` の `compaction.*` と `branchSummary.*` を user / project 層から解決して適用します。transcript の保存先は引き続き harness が管理します。
+- 5b9ee96: Pi conductor の headless 設定をコード上の allowlist に基づいて適用し、`.ensemble/pi` と Pi SDK の project settings の境界を明確化します。`compaction` / `branchSummary` の再適用ポリシーも create / reload / resume のライフサイクルに合わせて統一します。
+- b049653: Profile の `conductor.builtinTools` で Pi / Cursor conductor の built-in coding tools を制御できるようにします。省略・未指定は有効で、`false` のときだけ無効になります。
+
 ## 0.9.1
 
 ### Patch Changes
