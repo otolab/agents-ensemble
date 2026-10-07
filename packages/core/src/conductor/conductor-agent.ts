@@ -13,6 +13,8 @@ export interface ConductorAgentCreateOptions {
   cwd: string;
   /** Compiled conductor instructions, including the Issue context. */
   systemPrompt: string;
+  /** Whether backend built-in coding tools are available; omitted means enabled. */
+  builtinTools?: boolean;
   apiKey?: string;
   modelId?: string;
   mcpServers?: McpServerConfigMap;

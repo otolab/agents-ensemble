@@ -267,13 +267,37 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
     expect(mockCreateCursorSdkConductorAgentFactory).not.toHaveBeenCalled();
     expect(mockCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ systemPrompt: expect.stringContaining('body') }),
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining('body'),
+        builtinTools: true,
+      }),
     );
     expect(mockSend).toHaveBeenCalledWith(
       expect.stringContaining(TEST_ISSUE.url),
       expect.any(Object),
     );
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
+  });
+
+  it('passes profile conductor builtinTools to the backend factory', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-tools-disabled',
+      status: 'finished',
+      result: 'started',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'pi', builtinTools: false }, workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ builtinTools: false }),
+    );
   });
 
   it('passes resolved Pi resource root overrides to create options', async () => {

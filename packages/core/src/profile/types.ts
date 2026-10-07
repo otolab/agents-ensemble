@@ -32,6 +32,8 @@ export interface AgentDefinition {
 export interface ProfileConductorConfig {
   /** conductor LLM backend（`cursor` | `pi`）。 */
   backend?: ConductorBackend;
+  /** built-in coding tools の有効化。省略時は有効。 */
+  builtinTools?: boolean;
 }
 
 /** プロファイル YAML の worker エントリ（文字列は name=kind のショートハンド）。 */

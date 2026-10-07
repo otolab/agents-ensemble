@@ -457,9 +457,9 @@ async function createPiConductorSession(
       sessionManager,
       settingsManager,
       resourceLoader,
-      // Keep repository operations in worker ACP sessions. The conductor gets
-      // only harness tools plus the official MCP/codemode extensions.
-      noTools: 'builtin',
+      // Profile-controlled: when disabled, keep repository operations in
+      // worker ACP sessions and expose only harness/MCP/extension tools.
+      ...(options.builtinTools === false ? { noTools: 'builtin' as const } : {}),
       customTools: uniquePiTools(
         options.customTools ? toPiCodingAgentTools(options.customTools) : [],
         resources.extensionTools.map(toPiCodingAgentTool),

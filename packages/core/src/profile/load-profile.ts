@@ -171,16 +171,24 @@ function parseProfileConductorConfig(
     throw new Error(`Invalid profile conductor in ${label}: expected object`);
   }
 
-  const backend = (raw as Record<string, unknown>).backend;
-  if (backend === undefined) {
-    return {};
-  }
-  if (backend !== 'cursor' && backend !== 'pi') {
+  const config = raw as Record<string, unknown>;
+  const backend = config.backend;
+  if (backend !== undefined && backend !== 'cursor' && backend !== 'pi') {
     throw new Error(
       `Invalid profile conductor.backend in ${label}: expected cursor | pi`,
     );
   }
-  return { backend };
+  const builtinTools = config.builtinTools;
+  if (builtinTools !== undefined && typeof builtinTools !== 'boolean') {
+    throw new Error(
+      `Invalid profile conductor.builtinTools in ${label}: expected boolean`,
+    );
+  }
+
+  return {
+    ...(backend !== undefined ? { backend } : {}),
+    ...(builtinTools !== undefined ? { builtinTools } : {}),
+  };
 }
 
 export function resolveProfileFilePath(profileDir: string, fileRef: string): string {
