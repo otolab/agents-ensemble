@@ -24,6 +24,7 @@ import {
   type PiResources,
   type PiSettingsFile,
 } from './pi-resource-loader.js';
+import { getPiHeadlessSetting } from './pi-headless-settings.js';
 
 /** Auth and model services for the Pi conductor's user resource layer. */
 export interface PiConductorAuthContext {
@@ -382,7 +383,11 @@ function resolvePiConductorSelectionSync(
 ): PiConductorSelection {
   const requestedModel = normalizeModelId(options.modelId);
   const configuredModel = normalizeModelId(
-    firstString(settings.defaultModel, settings.model, settings.modelId),
+    firstString(
+      getPiHeadlessSetting(settings, 'defaultModel', 'model-selection'),
+      getPiHeadlessSetting(settings, 'model', 'model-selection'),
+      getPiHeadlessSetting(settings, 'modelId', 'model-selection'),
+    ),
   );
   const selectedModel = requestedModel ?? configuredModel;
   let provider = normalizeProvider(options.provider);
@@ -396,7 +401,11 @@ function resolvePiConductorSelectionSync(
     modelId = normalizeModelId(selectedModel.slice(separator + 1));
   }
 
-  if (!provider) provider = normalizeProvider(settings.defaultProvider);
+  if (!provider) {
+    provider = normalizeProvider(
+      getPiHeadlessSetting(settings, 'defaultProvider', 'model-selection'),
+    );
+  }
 
   if (!provider && modelId) {
     const matches = new Set<string>();
@@ -460,9 +469,15 @@ function hasAnyPiConductorAuthSync(options: PiConductorAuthSyncContext): boolean
   }
 
   if (
-    typeof options.settings.apiKey === 'string' ||
-    (isRecord(options.settings.apiKeys) &&
-      Object.values(options.settings.apiKeys).some((entry) => typeof entry === 'string'))
+    typeof getPiHeadlessSetting(options.settings, 'apiKey', 'auth-fallback') === 'string' ||
+    (isRecord(getPiHeadlessSetting(options.settings, 'apiKeys', 'auth-fallback')) &&
+      Object.values(
+        getPiHeadlessSetting(
+          options.settings,
+          'apiKeys',
+          'auth-fallback',
+        ) as Record<string, unknown>,
+      ).some((entry) => typeof entry === 'string'))
   ) {
     return true;
   }
@@ -514,14 +529,20 @@ function resolvePiConductorProviderFromResources(
 
   const requestedModel = normalizeModelId(options.modelId);
   const configuredModel = normalizeModelId(
-    firstString(resources.settings.defaultModel, resources.settings.model, resources.settings.modelId),
+    firstString(
+      getPiHeadlessSetting(resources.settings, 'defaultModel', 'model-selection'),
+      getPiHeadlessSetting(resources.settings, 'model', 'model-selection'),
+      getPiHeadlessSetting(resources.settings, 'modelId', 'model-selection'),
+    ),
   );
   const selectedModel = requestedModel ?? configuredModel;
   if (selectedModel?.includes('/')) {
     return selectedModel.slice(0, selectedModel.indexOf('/'));
   }
 
-  const configuredProvider = normalizeProvider(resources.settings.defaultProvider);
+  const configuredProvider = normalizeProvider(
+    getPiHeadlessSetting(resources.settings, 'defaultProvider', 'model-selection'),
+  );
   if (configuredProvider) return configuredProvider;
 
   if (selectedModel) {
@@ -682,11 +703,13 @@ function resolvePiSettingsApiKey(
   provider: string,
   env: NodeJS.ProcessEnv,
 ): string | undefined {
-  if (typeof settings.apiKey === 'string') {
-    return expandEnvReference(settings.apiKey, env);
+  const apiKey = getPiHeadlessSetting(settings, 'apiKey', 'auth-fallback');
+  if (typeof apiKey === 'string') {
+    return expandEnvReference(apiKey, env);
   }
-  if (!isRecord(settings.apiKeys)) return undefined;
-  const value = settings.apiKeys[provider];
+  const apiKeys = getPiHeadlessSetting(settings, 'apiKeys', 'auth-fallback');
+  if (!isRecord(apiKeys)) return undefined;
+  const value = apiKeys[provider];
   return typeof value === 'string' ? expandEnvReference(value, env) : undefined;
 }
 
@@ -781,8 +804,9 @@ async function createPiModelRuntime(
     }
   }
 
-  if (isRecord(resources.settings.apiKeys)) {
-    for (const [provider, value] of Object.entries(resources.settings.apiKeys)) {
+  const apiKeys = getPiHeadlessSetting(resources.settings, 'apiKeys', 'auth-fallback');
+  if (isRecord(apiKeys)) {
+    for (const [provider, value] of Object.entries(apiKeys)) {
       if (typeof value !== 'string') continue;
       const key = expandEnvReference(value, env);
       if (key !== undefined && !isPiCommandConfigValue(key)) {

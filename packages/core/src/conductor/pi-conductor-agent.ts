@@ -41,6 +41,11 @@ import type {
 } from './conductor-agent.js';
 import { toPiCodingAgentTools } from './conductor-tool-pi-adapter.js';
 import {
+  getPiHeadlessSettingsManagerOverrides,
+  getPiHeadlessSetting,
+  type PiHeadlessSettingsManagerOverrides,
+} from './pi-headless-settings.js';
+import {
   expandPiResourcePrompt,
   formatPiSkillsForPrompt,
   loadPiResources,
@@ -158,6 +163,8 @@ export class PiConductorAgent implements ConductorAgent {
   constructor(
     private readonly session: AgentSession,
     private readonly resources: PiResources,
+    private readonly settingsManager: SettingsManager,
+    private readonly headlessSettingsOverrides: PiHeadlessSettingsManagerOverrides,
     private readonly systemPromptRef: { value: string },
     public readonly agentId: string,
     private readonly modelId: string,
@@ -255,6 +262,10 @@ export class PiConductorAgent implements ConductorAgent {
 
   async reload(): Promise<void> {
     await this.session.reload();
+    // AgentSession.reload() reloads the SDK settings manager. Reapply the
+    // conductor's allowlisted snapshot after that reload so SDK file layers
+    // can never become the source of headless settings during a live session.
+    applyPiHeadlessSettings(this.settingsManager, this.headlessSettingsOverrides);
   }
 
   async getUsage(): Promise<ConductorAgentUsage> {
@@ -342,6 +353,7 @@ async function createPiConductorSession(
   // unsupported transport fails with an actionable Pi-specific error.
   if (options.mcpServers) loadPiMcpConfig(options.mcpServers, piMcpResolution);
   const resources = await loadPiResources(options);
+  const headlessSettingsOverrides = getPiHeadlessSettingsManagerOverrides(resources.settings);
   const authContext = await createPiConductorAuthContext(options, resources);
   const resolved = await resolvePiModelConfigFromResources(options, resources, authContext);
   if (options.apiKey !== undefined) {
@@ -371,7 +383,11 @@ async function createPiConductorSession(
   const systemPromptRef = {
     value: withPiSkills(options.systemPrompt, resources),
   };
-  const settingsManager = SettingsManager.create(options.cwd, authContext.agentDir);
+  // Pi's file-backed SettingsManager reads both agentDir/settings.json and
+  // <cwd>/.pi/settings.json. The conductor has a different resource contract
+  // (.ensemble/pi), so use an in-memory manager and populate it only through
+  // the code-level headless settings allowlist below.
+  const settingsManager = SettingsManager.inMemory();
   const resourceLoader = new DefaultResourceLoader({
     cwd: options.cwd,
     agentDir: authContext.agentDir,
@@ -392,12 +408,10 @@ async function createPiConductorSession(
     ],
   });
   await resourceLoader.reload();
-  // The ensemble resource roots use `.ensemble/pi/settings.json`, while the
-  // Pi SDK's SettingsManager only discovers `<cwd>/.pi/settings.json` as its
-  // project layer. Apply the settings that the headless conductor supports
-  // from the already merged ensemble resources without handing sessionDir (or
-  // any other unsupported setting) back to the SDK.
-  applyPiHeadlessSettings(settingsManager, resources.settings);
+  // Apply only the settings-manager channel from the already merged ensemble
+  // resources. Model selection, auth fallback, and resource paths are handled
+  // by their respective ensemble channels; all other keys stay ignored.
+  applyPiHeadlessSettings(settingsManager, headlessSettingsOverrides);
 
   let session: AgentSession | undefined;
   try {
@@ -441,6 +455,8 @@ async function createPiConductorSession(
     return new PiConductorAgent(
       session,
       resources,
+      settingsManager,
+      headlessSettingsOverrides,
       systemPromptRef,
       agentId,
       resolved.modelId,
@@ -455,17 +471,10 @@ async function createPiConductorSession(
 
 function applyPiHeadlessSettings(
   settingsManager: SettingsManager,
-  settings: PiSettingsFile,
+  overrides: PiHeadlessSettingsManagerOverrides,
 ): void {
   type SettingsOverrides = Parameters<SettingsManager['applyOverrides']>[0];
-  const overrides: SettingsOverrides = {};
-  if (settings.compaction !== undefined) {
-    overrides.compaction = settings.compaction as SettingsOverrides['compaction'];
-  }
-  if (settings.branchSummary !== undefined) {
-    overrides.branchSummary = settings.branchSummary as SettingsOverrides['branchSummary'];
-  }
-  settingsManager.applyOverrides(overrides);
+  settingsManager.applyOverrides(overrides as SettingsOverrides);
 }
 
 function createPiHeadlessExtensionUi(
@@ -858,9 +867,15 @@ function resolvePiModelSelection(
   models: PiModelsFile,
 ): { provider: string; modelId: string } {
   const requested = normalizeConfiguredString(requestedModelId);
-  const configured = firstString(settings.defaultModel, settings.model, settings.modelId);
+  const configured = firstString(
+    getPiHeadlessSetting(settings, 'defaultModel', 'model-selection'),
+    getPiHeadlessSetting(settings, 'model', 'model-selection'),
+    getPiHeadlessSetting(settings, 'modelId', 'model-selection'),
+  );
   const selected = requested ?? configured;
-  let provider = normalizeConfiguredString(settings.defaultProvider);
+  let provider = normalizeConfiguredString(
+    getPiHeadlessSetting(settings, 'defaultProvider', 'model-selection'),
+  );
   let modelId = selected;
 
   if (selected?.includes('/')) {

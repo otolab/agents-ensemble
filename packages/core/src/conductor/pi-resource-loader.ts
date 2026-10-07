@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { getPiHeadlessSetting } from './pi-headless-settings.js';
 
 /** The Pi settings fields used by model/auth resolution and resource loading. */
 export interface PiSettingsFile {
@@ -269,19 +270,22 @@ async function readResourceLayer(root: string): Promise<ResourceLayer> {
     ),
     extensionPaths: uniquePaths([
       ...(await discoverDirectoryResources(join(root, 'extensions'), true)),
-      ...configuredResourcePaths(settings.extensions, root),
+      ...configuredResourcePaths(
+        getPiHeadlessSetting(settings, 'extensions', 'resource-path'),
+        root,
+      ),
     ]),
     skillPaths: uniquePaths([
       ...(await discoverDirectoryResources(join(root, 'skills'), false)),
-      ...configuredResourcePaths(settings.skills, root),
+      ...configuredResourcePaths(getPiHeadlessSetting(settings, 'skills', 'resource-path'), root),
     ]),
     promptPaths: uniquePaths([
       ...(await discoverDirectoryResources(join(root, 'prompts'), false)),
-      ...configuredResourcePaths(settings.prompts, root),
+      ...configuredResourcePaths(getPiHeadlessSetting(settings, 'prompts', 'resource-path'), root),
     ]),
     themePaths: uniquePaths([
       ...(await discoverDirectoryResources(join(root, 'themes'), false)),
-      ...configuredResourcePaths(settings.themes, root),
+      ...configuredResourcePaths(getPiHeadlessSetting(settings, 'themes', 'resource-path'), root),
     ]),
   };
 }
