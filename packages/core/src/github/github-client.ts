@@ -51,7 +51,12 @@ export interface GitHubPullRequestReviewComment {
   created_at: string;
 }
 
+export interface GitHubAuthenticatedUser {
+  login: string;
+}
+
 export interface GitHubClient {
+  getAuthenticatedUser(): Promise<GitHubAuthenticatedUser>;
   getIssue(owner: string, repo: string, issueNumber: number): Promise<GitHubRestIssue>;
   listIssueComments(
     owner: string,
@@ -218,6 +223,10 @@ export function buildGitHubClient(options: GitHubClientOptions): GitHubClient {
   };
 
   return {
+    async getAuthenticatedUser() {
+      return restRequest<GitHubAuthenticatedUser>('/user');
+    },
+
     async getIssue(owner, repo, issueNumber) {
       return restRequest<GitHubRestIssue>(`/repos/${owner}/${repo}/issues/${issueNumber}`);
     },

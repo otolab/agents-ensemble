@@ -809,6 +809,7 @@ describe('runConductorSession resume / shutdown', () => {
         : [{ name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS', headSha: 'sha-1' }],
     );
     const githubClient: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
       getIssue: vi.fn(),
       listIssueComments: vi.fn().mockResolvedValue([]),
       searchLinkedPullRequests: vi.fn(async () => {

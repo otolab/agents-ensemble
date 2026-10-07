@@ -16,6 +16,7 @@ const SAMPLE_CONTEXT: IssueContext = {
   body: 'Inject title and body into conductor send.',
   state: 'OPEN',
   labels: ['enhancement'],
+  operator: { githubLogin: 'otolab' },
   comments: [
     {
       author: 'otolab',
@@ -29,6 +30,9 @@ describe('formatIssueContextForPrompt', () => {
   it('renders description and comments as markdown sections with yaml metadata', () => {
     const prompt = formatIssueContextForPrompt(SAMPLE_CONTEXT);
 
+    expect(prompt).toContain('オペレータ');
+    expect(prompt).toContain('`otolab`');
+    expect(prompt).toContain('@me');
     expect(prompt).toContain('## Description');
     expect(prompt).toContain('Inject title and body into conductor send.');
     expect(prompt).toContain('## Comments');
@@ -58,6 +62,8 @@ describe('formatIssueContextYaml', () => {
     expect(yaml).toContain('state: OPEN');
     expect(yaml).toContain('enhancement');
     expect(yaml).toContain('Use markdown sections and YAML metadata.');
+    expect(yaml).toContain('githubLogin: otolab');
+    expect(yaml).toContain("meAlias: '@me'");
     expect(yaml).toContain('author: otolab');
     expect(yaml).not.toContain('Inject title and body into conductor send.');
   });

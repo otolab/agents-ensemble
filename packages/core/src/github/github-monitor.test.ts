@@ -14,6 +14,7 @@ function createCommentPollingClient(): {
 } {
   let commentPolls = 0;
   const client: GitHubClient = {
+    getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
     getIssue: vi.fn(),
     listIssueComments: vi.fn(async () => {
       commentPolls++;
@@ -120,6 +121,7 @@ describe('createGitHubMonitor', () => {
     const listPullRequestReviewComments = vi.fn().mockResolvedValue([]);
     const getStatusCheckRollup = vi.fn().mockResolvedValue([]);
     const client: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
       getIssue: vi.fn(),
       listIssueComments: vi.fn().mockResolvedValue([]),
       searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
@@ -168,6 +170,7 @@ describe('createGitHubMonitor', () => {
   it('stops polling an unregistered explicit-only PR and preserves its cursor', async () => {
     const listPullRequestReviews = vi.fn().mockResolvedValue([]);
     const client: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
       getIssue: vi.fn(),
       listIssueComments: vi.fn().mockResolvedValue([]),
       searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
@@ -215,6 +218,7 @@ describe('createGitHubMonitor', () => {
     const onUpdate = vi.fn();
     const onPollError = vi.fn();
     const client: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
       getIssue: vi.fn(),
       listIssueComments: vi.fn().mockResolvedValue([]),
       searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
@@ -304,6 +308,7 @@ describe('createGitHubMonitor', () => {
 
   it('notifies offline diffs on first poll when sidecar cursor is restored', async () => {
     const client: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
       getIssue: vi.fn(),
       listIssueComments: vi.fn().mockResolvedValue([
         {
@@ -356,6 +361,7 @@ describe('createGitHubMonitor', () => {
     vi.useRealTimers();
     let pollResolve: (() => void) | undefined;
     const client: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
       getIssue: vi.fn(),
       listIssueComments: vi.fn(
         () =>
@@ -406,6 +412,7 @@ describe('createGitHubMonitor', () => {
     vi.useRealTimers();
     const onPollError = vi.fn();
     const githubClient: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
       getIssue: vi.fn(),
       listIssueComments: vi.fn().mockResolvedValue([]),
       searchLinkedPullRequests: vi.fn().mockResolvedValue([

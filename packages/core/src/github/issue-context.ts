@@ -13,6 +13,11 @@ export interface IssueComment {
   createdAt: string;
 }
 
+/** GitHub 上のオペレータ実体（`GITHUB_TOKEN` / `gh auth token` のユーザ）。 */
+export interface IssueContextOperator {
+  githubLogin: string;
+}
+
 export interface IssueContext {
   issue: IssueRef;
   title: string;
@@ -20,6 +25,8 @@ export interface IssueContext {
   state: string;
   labels: string[];
   comments: IssueComment[];
+  /** 解決できたときのみ。Issue / PR 本文の `@me` や author 照合に使う。 */
+  operator?: IssueContextOperator;
 }
 
 export interface FetchIssueContextOptions {
@@ -40,9 +47,10 @@ export async function fetchIssueContext(
       ...options.createClientOptions,
     }));
 
-  const [data, comments] = await Promise.all([
+  const [data, comments, authenticatedUser] = await Promise.all([
     client.getIssue(issue.owner, issue.repo, issue.number),
     client.listIssueComments(issue.owner, issue.repo, issue.number),
+    client.getAuthenticatedUser().catch(() => undefined),
   ]);
 
   return {
@@ -56,5 +64,8 @@ export async function fetchIssueContext(
       body: comment.body,
       createdAt: comment.created_at,
     })),
+    ...(authenticatedUser?.login
+      ? { operator: { githubLogin: authenticatedUser.login } }
+      : {}),
   };
 }
