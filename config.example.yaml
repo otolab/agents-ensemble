@@ -25,11 +25,16 @@ conductor:
     # 上記の各 root に settings.json / auth.json / models.json、
     # extensions/ / skills/ / prompts/ / themes/ を配置します。
     # settings.json は headless conductor の対応キー（モデル選択・認証
-    # fallback・resource path・compaction.*・branchSummary.*）が有効です。
+    # fallback・resource path・compaction.*・branchSummary.*）だけが有効です。
     # compaction / branchSummary は user → project の deep merge で適用します。
     # sessionDir は無視され、transcript は harness の
     # <repoRoot>/.ensemble/pi/sessions/ が正本です。thinking / packages /
     # TUI 等の Pi coding-agent 設定は警告なしで無視します。
+    # Pi 標準の <repoRoot>/.pi/settings.json は headless conductor では読みません。
+    # reload は起動時スナップショットを再適用し、設定変更の反映は resume/create で行います。
+    # reload または snapshot 復元に失敗した session は close/dispose され unusable になります。
+    # cleanup も失敗した場合は元エラーと cleanup error を含む AggregateError になります。
+    # その session は再利用せず、resume/create で再作成してください。
 
 acp:
   # profile / worker に acp 未指定時の built-in preset

@@ -35,7 +35,7 @@ jobs:
         run: pnpm --filter @agents-ensemble/core exec vitest run --config vitest.config.integration.ts test/integration/session-resume.integration.test.ts
 
       - name: Pi conductor integration tests
-        run: pnpm --filter @agents-ensemble/core exec vitest run --config vitest.config.integration.ts test/integration/pi-conductor.integration.test.ts
+        run: pnpm --filter @agents-ensemble/core exec vitest run --config vitest.config.integration.ts test/integration/pi-conductor.integration.test.ts test/integration/pi-headless-settings.integration.test.ts
 
       - name: CLI unit tests
         run: pnpm --filter @agents-ensemble/cli test:run

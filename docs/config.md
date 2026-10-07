@@ -129,17 +129,31 @@ Pi の認証 CLI は provider 単位です。`ensemble auth login --provider <id
 
 conductor は Pi 1.x の `createAgentSession` / `DefaultResourceLoader` を headless で使います。TUI と package manager は起動しないため、`settings.json` は Pi 標準のファイル名と resource path の意味を保ちますが、headless conductor が実際に参照するキーだけを契約とします。
 
+この契約のコード正本は [`pi-headless-settings.ts`](../packages/core/src/conductor/pi-headless-settings.ts) の `PI_HEADLESS_SETTING_DEFINITIONS` です。各キーには、conductor 内の `model-selection` / `auth-fallback` / `resource-path`、Pi SDK の `settings-manager-override` のいずれかの適用チャネル、または `ignored` が定義されています。表はコード正本を利用者向けに説明したものです。表にないキーも `ignored` と同じ扱いです。
+
 実際に効くキーは次のとおりです。
 
-| キー | headless conductor での意味 |
-|------|----------------------------|
-| `defaultProvider` / `defaultModel` | 明示的な `provider/model` がない場合のモデル選択。`model` / `modelId` は conductor の互換 alias として同じ選択に使います。 |
-| `apiKey` / `apiKeys` | `auth.json` に provider credential がない場合の認証 fallback。 |
-| `extensions` / `skills` / `prompts` / `themes` | 各 resource root を基準に追加で読む path。通常の `extensions/` 等の discovery と併用します。 |
-| `compaction.*` | Pi の `AgentSession` が行う manual / automatic compaction の設定。`enabled`、`reserveTokens`、`keepRecentTokens`、`modelOverrides` を user → project の deep merge 結果から `SettingsManager` 経由で適用します。 |
-| `branchSummary.*` | Pi の branch summary の `reserveTokens` / `skipPrompt`。`compaction.*` と同じ user → project の deep merge 結果を `SettingsManager` 経由で適用します。 |
+| キー | 適用チャネル | headless conductor での意味 |
+|------|--------------|----------------------------|
+| `defaultProvider` / `defaultModel` | `model-selection` | 明示的な `provider/model` がない場合のモデル選択。`model` / `modelId` は conductor の互換 alias として同じ選択に使います。 |
+| `apiKey` / `apiKeys` | `auth-fallback` | `auth.json` に provider credential がない場合の認証 fallback。 |
+| `extensions` / `skills` / `prompts` / `themes` | `resource-path` | 各 resource root を基準に追加で読む path。通常の `extensions/` 等の discovery と併用します。 |
+| `compaction.*` | `settings-manager-override` | Pi の `AgentSession` が行う manual / automatic compaction。`enabled`、`reserveTokens`、`keepRecentTokens`、`modelOverrides` だけを user → project の deep merge 結果から `SettingsManager` へ渡します。 |
+| `branchSummary.*` | `settings-manager-override` | Pi の branch summary。`reserveTokens` / `skipPrompt` だけを `compaction.*` と同じ merge 結果から `SettingsManager` へ渡します。 |
 
-Pi の `settings.md` にあるが headless conductor が適用しないキーは、拒否せず警告なしで無視します。
+#### Pi 標準の `<cwd>/.pi/settings.json` との関係
+
+Pi SDK の file-backed `SettingsManager` は通常、`agentDir/settings.json` と `<cwd>/.pi/settings.json` を自動的に読み込みます。しかし headless conductor はこの経路を使わず、**`SettingsManager.inMemory()` にコード正本で allowlist した settings-manager チャネルだけを渡します**。したがって、`<cwd>/.pi/settings.json`（および Pi 標準の `agentDir/settings.json`）に書いた値が headless conductor へ漏れることはありません。
+
+headless conductor の設定正本は常に `~/.ensemble/pi/settings.json` と `<repoRoot>/.ensemble/pi/settings.json` です。Pi CLI 用の `<cwd>/.pi/settings.json` とのコピー・symlink・自動マイグレーション・書き換えは行いません。`.pi` の設定を使う別の Pi CLI と、`ensemble issue` の Pi backend は独立しています。
+
+#### create / reload / resume の適用ポリシー
+
+- **create**: `loadPiResources` が `.ensemble/pi` の user → project を deep merge し、モデル選択・認証・resource path は各チャネルで使い、`compaction.*` / `branchSummary.*` は allowlist 後に in-memory `SettingsManager` へ適用します。
+- **reload**: Pi `AgentSession.reload()` の後に、create 時に解決した同じ settings-manager スナップショットを再適用します。実行中の `.ensemble/pi/settings.json` の変更を hot reload する契約ではないため、設定変更を反映するには `resume` または新しい create が必要です。`AgentSession.reload()` または snapshot の再適用が失敗した場合は、snapshot の復元を試みた後、session を close / dispose して unusable とします。失敗が 1 つだけで close / dispose が成功した場合はその元のエラーを reject し、reload と snapshot 復元の両方、または close / dispose の cleanup error も発生した場合は `AggregateError` を reject します。`AggregateError.errors` には発生した元の reload / snapshot エラーと cleanup error が含まれます。失敗した session は send で再利用せず、同じ transcript を続ける場合も `resume`、新しい作業なら create で再作成してください。
+- **resume**: 新しい Pi session を作るため `.ensemble/pi` を再読込し、create と同じチャネル適用を行ってから既存 transcript を開きます。resume でも `<cwd>/.pi/settings.json` は読みません。
+
+Pi の `settings.md` にあるが headless conductor が適用しないキーは、Pi SDK の SettingsManager へ渡さず、拒否せず警告なしで無視します。
 
 | 無視するキー（または prefix） | 適用されない挙動 |
 |------------------------------|------------------|
