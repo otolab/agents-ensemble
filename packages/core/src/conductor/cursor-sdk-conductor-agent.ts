@@ -36,6 +36,7 @@ const CURSOR_CODING_TOOLS: ToolName[] = [
   'ls',
   'delete',
   'readLints',
+  'semSearch',
   'applyAgentDiff',
   'task',
 ];

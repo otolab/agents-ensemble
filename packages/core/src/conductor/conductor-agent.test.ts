@@ -58,6 +58,7 @@ const EXPECTED_CURSOR_CODING_TOOLS = [
   'ls',
   'delete',
   'readLints',
+  'semSearch',
   'applyAgentDiff',
   'task',
 ] as const;
