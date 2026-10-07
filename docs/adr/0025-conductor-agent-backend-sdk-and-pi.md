@@ -74,7 +74,7 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 - ensemble **ConductorTool** 一式（dispatch / escalation / permission 等）。built-in coding tools の有効・無効は下記の profile 設定で制御する。
 - **Pi 公式 MCP extension**（[ADR 0021](0021-conductor-mcp-config-resolution.md) で解決した `mcp.json` を `createMcpExtension({ loadConfig })` へ渡す）。core は MCP client / transport / OAuth / resource tool を実装しない。
 
-`profile.conductor.builtinTools` が conductor の built-in coding tools を制御する唯一の設定である。省略・未指定は `true` とし、Pi は `noTools: 'builtin'` を設定せず、Cursor は `disallowedTools` を設定しない。`false` を明示した場合だけ、Pi は `noTools: 'builtin'` を設定し、Cursor は `shell` / `read` / `edit` / `grep` / `glob` / `ls` / `delete` / `readLints` / `applyAgentDiff` / `task` を `disallowedTools` で除外する。harness の custom tools と MCP は維持する。`settings.json.defaultTools` は headless conductor では読まず、`config.yaml` に同名の制御キーは設けない。
+`profile.conductor.builtinTools` が conductor の built-in coding tools を制御する唯一の設定である。省略・未指定は `true` とし、Pi は `noTools: 'builtin'` を設定せず、Cursor は `disallowedTools` を設定しない。`false` を明示した場合だけ、Pi は `noTools: 'builtin'` を設定し、Cursor は `shell` / `read` / `edit` / `write` / `grep` / `glob` / `ls` / `delete` / `readLints` / `applyAgentDiff` / `task` を `disallowedTools` で除外する。`mcp` は除外せず、harness の custom tools と MCP は維持する。`settings.json.defaultTools` は headless conductor では読まず、`config.yaml` に同名の制御キーは設けない。
 
 **利用者が足せるもの（オプション）**
 

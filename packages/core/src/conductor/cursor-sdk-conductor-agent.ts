@@ -30,6 +30,7 @@ const CURSOR_CODING_TOOLS: ToolName[] = [
   'shell',
   'read',
   'edit',
+  'write',
   'grep',
   'glob',
   'ls',

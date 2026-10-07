@@ -45,6 +45,23 @@ vi.mock('./configure-cursor-sdk-env.js', () => ({
 import { AuthenticationError } from '@cursor/sdk';
 import { CursorSdkConductorAgent } from './cursor-sdk-conductor-agent.js';
 
+// Explicitly tracks the Cursor SDK 1.0.27 built-in coding/change tools. Keep
+// `mcp` out of this list so harness custom tools and configured MCP servers
+// remain available when profile.conductor.builtinTools is false.
+const EXPECTED_CURSOR_CODING_TOOLS = [
+  'shell',
+  'read',
+  'edit',
+  'write',
+  'grep',
+  'glob',
+  'ls',
+  'delete',
+  'readLints',
+  'applyAgentDiff',
+  'task',
+] as const;
+
 describe('CursorSdkConductorAgent.send', () => {
   afterEach(() => {
     mockSend.mockReset();
@@ -93,7 +110,23 @@ describe('CursorSdkConductorAgent.send', () => {
     }
   });
 
-  it('disables Cursor coding tools only when builtinTools is false', async () => {
+  it('denies Cursor coding tools but preserves custom tools and MCP when false', async () => {
+    const mcpServers = {
+      docs: {
+        type: 'http' as const,
+        url: 'https://example.test/mcp',
+      },
+    };
+    const customTools = {
+      prompt_worker: {
+        name: 'prompt_worker',
+        description: 'Dispatch to a worker',
+        inputSchema: { type: 'object', properties: {} },
+        execute: async () => ({
+          content: [{ type: 'text' as const, text: 'dispatched' }],
+        }),
+      },
+    };
     mockCreate.mockResolvedValue({
       agentId: 'agent-1',
       send: mockSend,
@@ -104,22 +137,23 @@ describe('CursorSdkConductorAgent.send', () => {
       cwd: '/repo',
       systemPrompt: 'system prompt',
       builtinTools: false,
+      mcpServers,
+      customTools,
     });
 
     try {
-      expect(mockCreate.mock.calls[0]?.[0]).toMatchObject({
-        disallowedTools: [
-          'shell',
-          'read',
-          'edit',
-          'grep',
-          'glob',
-          'ls',
-          'delete',
-          'readLints',
-          'applyAgentDiff',
-          'task',
-        ],
+      const agentOptions = mockCreate.mock.calls[0]?.[0];
+      expect(agentOptions?.disallowedTools).toEqual(
+        EXPECTED_CURSOR_CODING_TOOLS,
+      );
+      expect(agentOptions?.disallowedTools).not.toContain('mcp');
+      expect(agentOptions?.mcpServers).toEqual(mcpServers);
+      expect(agentOptions?.local?.customTools).toEqual({
+        prompt_worker: expect.objectContaining({
+          description: 'Dispatch to a worker',
+          inputSchema: { type: 'object', properties: {} },
+          execute: expect.any(Function),
+        }),
       });
     } finally {
       await conductor.close();
