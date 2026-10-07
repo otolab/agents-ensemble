@@ -145,7 +145,7 @@ Pi の `settings.md` にあるが headless conductor が適用しないキーは
 |------------------------------|------------------|
 | `defaultThinkingLevel` / `modelThinkingLevels` / `thinkingBudgets` / `enabledModels` | thinking level、budget、model cycling の設定 |
 | `hideThinkingBlock` / `showCacheMissNotices` / `cacheWarming` / `steeringMode` / `followUpMode` | transcript 表示、cache、対話キューの設定 |
-| `defaultTools` / `codemode.*` | Pi built-in coding tools の選択。conductor は built-in coding tools を無効にし、harness / MCP / local extension と公式 codemode/tool-search extension の loadout を使います。 |
+| `defaultTools` / `codemode.*` | `defaultTools` は headless conductor では無視します。built-in coding tools は profile の `conductor.builtinTools`（省略・未指定は有効、`false` のみ無効）で制御し、`config.yaml` には同キーを設けません。 |
 | `packages` | Pi package の install・解決。package が提供する resource は自動導入しません。 |
 | `enableSkillCommands` | skill command の登録 toggle。読み込んだ skill の `/skill:<name>` 展開可否はこのキーで変更できません。 |
 | `sessionDir` | Pi の settings にある session 保存先は conductor では変更できません。transcript は常に harness が `<repoRoot>/.ensemble/pi/sessions/` で管理します。 |

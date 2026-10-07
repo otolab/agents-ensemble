@@ -692,6 +692,7 @@ export async function runConductorSession(
   const conductorOptions: ConductorAgentCreateOptions = {
     cwd: conductorCwd,
     systemPrompt,
+    builtinTools: activeProfile.conductor?.builtinTools !== false,
     apiKey: options.apiKey,
     modelId: options.modelId,
     ...(conductorBackend === 'pi'

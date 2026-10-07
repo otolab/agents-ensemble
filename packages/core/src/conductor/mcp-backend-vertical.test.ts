@@ -320,6 +320,7 @@ describe('shared mcp.json backend path', () => {
         pi: { agentDir },
         modelId: 'fixture/fixture-model',
         systemPrompt: 'fixture system prompt',
+        builtinTools: false,
         mcpServers: {
           unreachable: {
             type: 'stdio',
@@ -336,6 +337,7 @@ describe('shared mcp.json backend path', () => {
         pi: { agentDir },
         modelId: 'fixture/fixture-model',
         systemPrompt: 'fixture system prompt',
+        builtinTools: false,
         mcpServers: {
           'unreachable-http': {
             type: 'http',

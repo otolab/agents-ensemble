@@ -76,6 +76,7 @@ describe('CursorSdkConductorAgent.send', () => {
         }),
       );
       expect(mockCreate.mock.calls[0]?.[0]).not.toHaveProperty('systemPrompt');
+      expect(mockCreate.mock.calls[0]?.[0]).not.toHaveProperty('disallowedTools');
       expect(mockEnsureCursorSdkProxy.mock.invocationCallOrder[0]).toBeLessThan(
         mockCreate.mock.invocationCallOrder[0],
       );
@@ -89,6 +90,39 @@ describe('CursorSdkConductorAgent.send', () => {
       } else {
         process.env.CONDUCTOR_MODEL_ID = original;
       }
+    }
+  });
+
+  it('disables Cursor coding tools only when builtinTools is false', async () => {
+    mockCreate.mockResolvedValue({
+      agentId: 'agent-1',
+      send: mockSend,
+      [Symbol.asyncDispose]: vi.fn(),
+    });
+
+    const conductor = await CursorSdkConductorAgent.create({
+      cwd: '/repo',
+      systemPrompt: 'system prompt',
+      builtinTools: false,
+    });
+
+    try {
+      expect(mockCreate.mock.calls[0]?.[0]).toMatchObject({
+        disallowedTools: [
+          'shell',
+          'read',
+          'edit',
+          'grep',
+          'glob',
+          'ls',
+          'delete',
+          'readLints',
+          'applyAgentDiff',
+          'task',
+        ],
+      });
+    } finally {
+      await conductor.close();
     }
   });
 

@@ -163,7 +163,7 @@ describe('PiConductorAgent', () => {
       provider: 'anthropic',
       id: 'model-1',
     });
-    expect(sessionOptions.noTools).toBe('builtin');
+    expect(sessionOptions).not.toHaveProperty('noTools');
     expect(sessionOptions.customTools).toEqual([
       expect.objectContaining({ name: 'prompt_worker' }),
     ]);
@@ -254,6 +254,19 @@ describe('PiConductorAgent', () => {
     expect(fakeSession.abort).toHaveBeenCalledOnce();
     expect(fakeSession.dispose).toHaveBeenCalledOnce();
     void onStreamText;
+  });
+
+  it('disables Pi built-in tools only when builtinTools is false', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+      builtinTools: false,
+    });
+
+    expect(mockCreateAgentSession.mock.calls[0]![0].noTools).toBe('builtin');
+    await conductor.close();
   });
 
   it('rejects SSE before the Pi extension is started', async () => {

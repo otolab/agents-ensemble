@@ -5,6 +5,7 @@ import {
   type AgentOptions,
   type McpServerConfig,
   type SDKAgent,
+  type ToolName,
 } from '@cursor/sdk';
 import {
   ensureCursorSdkProxy,
@@ -23,6 +24,20 @@ import { resolveConductorApiKey } from './conductor-auth.js';
 import { formatConductorToolName } from './conductor-tool-name.js';
 import { toSdkCustomTools } from './conductor-tool-sdk-adapter.js';
 import { resolveConductorModelId } from './resolve-conductor-model-id.js';
+
+/** Cursor built-in tools that can directly inspect or modify a repository. */
+const CURSOR_CODING_TOOLS: ToolName[] = [
+  'shell',
+  'read',
+  'edit',
+  'grep',
+  'glob',
+  'ls',
+  'delete',
+  'readLints',
+  'applyAgentDiff',
+  'task',
+];
 
 /** Cursor SDK implementation of the backend-neutral conductor interface. */
 export class CursorSdkConductorAgent implements ConductorAgent {
@@ -149,6 +164,9 @@ function buildAgentOptions(options: ConductorAgentCreateOptions): AgentOptions {
     ...(apiKey !== undefined ? { apiKey } : {}),
     model: { id: resolveConductorModelId(options.modelId) },
     mode: 'agent',
+    ...(options.builtinTools === false
+      ? { disallowedTools: CURSOR_CODING_TOOLS }
+      : {}),
     ...(options.mcpServers !== undefined
       ? { mcpServers: options.mcpServers as Record<string, McpServerConfig> }
       : {}),

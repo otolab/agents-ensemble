@@ -98,6 +98,32 @@ materials:
     expect(profile.conductor).toEqual({ backend: 'pi' });
   });
 
+  it('loads conductor builtinTools and validates its boolean shape', async () => {
+    const disabledPath = join(dir, 'profile-disabled.yaml');
+    await writeFile(
+      disabledPath,
+      'conductor:\n  builtinTools: false\nworkers: []\n',
+    );
+    await expect(loadProfileFromFile(disabledPath)).resolves.toMatchObject({
+      conductor: { builtinTools: false },
+    });
+
+    const enabledPath = join(dir, 'profile-enabled.yaml');
+    await writeFile(enabledPath, 'conductor:\n  builtinTools: true\nworkers: []\n');
+    await expect(loadProfileFromFile(enabledPath)).resolves.toMatchObject({
+      conductor: { builtinTools: true },
+    });
+
+    const invalidPath = join(dir, 'profile-invalid.yaml');
+    await writeFile(
+      invalidPath,
+      'conductor:\n  builtinTools: "false"\nworkers: []\n',
+    );
+    await expect(loadProfileFromFile(invalidPath)).rejects.toThrow(
+      /profile conductor\.builtinTools.*boolean/,
+    );
+  });
+
   it('preserves profile acp through resolveProfile and resolves worker spawn', async () => {
     const path = join(dir, 'profile.yaml');
     await writeFile(
