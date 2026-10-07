@@ -233,6 +233,50 @@ describe('Pi headless settings with the real SDK', () => {
     expectSettings(resumedSession, 11_001, 12_001, 13_001, true, false);
   });
 
+  it('closes a failed real SDK reload and resumes the same transcript id', async () => {
+    await setupFixture();
+
+    const created = await PiConductorAgent.create(createOptions());
+    agents.push(created);
+    const createdSession = getSession(created);
+    createdSession.sessionManager.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: 'persist before failed reload' }],
+      timestamp: Date.now(),
+    });
+
+    const reloadError = new Error('real resource reload failed');
+    vi.spyOn(createdSession.resourceLoader, 'reload').mockRejectedValue(reloadError);
+
+    await expect(created.reload()).rejects.toBe(reloadError);
+    await expect(created.send('must not reuse failed real session')).resolves.toMatchObject({
+      status: 'error',
+      error: { message: 'Pi conductor agent is closed.' },
+    });
+
+    const resumed = await PiConductorAgent.resume(created.agentId, createOptions());
+    agents.push(resumed);
+    expect(resumed.agentId).toBe(created.agentId);
+    const resumedSession = getSession(resumed);
+    expect(resumedSession).toBeInstanceOf(AgentSession);
+    expect(resumedSession).not.toBe(createdSession);
+    expect(
+      resumedSession.sessionManager
+        .getEntries()
+        .some(
+          (entry) =>
+            entry.type === 'message' &&
+            entry.message.role === 'user' &&
+            entry.message.content.some(
+              (content) => content.type === 'text' && content.text === 'persist before failed reload',
+            ),
+        ),
+    ).toBe(true);
+    expectSettings(resumedSession, 1_001, 2_001, 3_001);
+    await resumed.reload();
+    expectSettings(resumedSession, 1_001, 2_001, 3_001);
+  });
+
   it('uses the allowlisted settings in real compaction and branch-summary paths', async () => {
     await setupFixture();
     await writeJson(join(ensembleProjectDir, 'settings.json'), {

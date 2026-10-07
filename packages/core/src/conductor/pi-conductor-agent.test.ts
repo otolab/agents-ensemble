@@ -489,6 +489,93 @@ describe('PiConductorAgent', () => {
     expect(fakeSession.dispose).toHaveBeenCalledOnce();
   });
 
+  it('reports the reload and cleanup errors together as AggregateError', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({
+        compaction: { enabled: false, reserveTokens: 2_500 },
+        branchSummary: { reserveTokens: 3_500, skipPrompt: true },
+      }),
+    );
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+
+    const settingsManager = mockCreateAgentSession.mock.calls[0]![0].settingsManager;
+    const reloadError = new Error('resource reload failed');
+    const cleanupError = new Error('session cleanup failed');
+    fakeSession.reload.mockImplementation(async () => {
+      await settingsManager.reload();
+      throw reloadError;
+    });
+    fakeSession.dispose.mockImplementation(() => {
+      throw cleanupError;
+    });
+
+    const error = await conductor.reload().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual(
+      expect.arrayContaining([reloadError, cleanupError]),
+    );
+    expect(settingsManager.getCompactionSettings({
+      provider: 'anthropic',
+      id: 'model-1',
+    })).toMatchObject({ enabled: false, reserveTokens: 2_500 });
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+    await expect(conductor.send('must not reuse failed reload')).resolves.toMatchObject({
+      status: 'error',
+      error: { message: 'Pi conductor agent is closed.' },
+    });
+    await expect(conductor.close()).rejects.toBe(cleanupError);
+  });
+
+  it('closes the session and returns a snapshot restore error', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({
+        compaction: { enabled: false, reserveTokens: 2_500 },
+        branchSummary: { reserveTokens: 3_500, skipPrompt: true },
+      }),
+    );
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+
+    const settingsManager = mockCreateAgentSession.mock.calls[0]![0].settingsManager;
+    const restoreError = new Error('snapshot restore failed');
+    const applyOverrides = vi.spyOn(settingsManager, 'applyOverrides').mockImplementation(() => {
+      throw restoreError;
+    });
+    fakeSession.reload.mockImplementation(async () => {
+      await settingsManager.reload();
+    });
+
+    await expect(conductor.reload()).rejects.toBe(restoreError);
+    expect(applyOverrides).toHaveBeenCalledWith({
+      compaction: { enabled: false, reserveTokens: 2_500 },
+      branchSummary: { reserveTokens: 3_500, skipPrompt: true },
+    });
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+    await expect(conductor.send('must not reuse failed snapshot restore')).resolves.toMatchObject({
+      status: 'error',
+      error: { message: 'Pi conductor agent is closed.' },
+    });
+  });
+
   it('keeps custom Pi resource model and auth resolution on the v1 runtime path', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     await mkdir(projectDir, { recursive: true });

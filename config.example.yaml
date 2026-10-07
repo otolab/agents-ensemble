@@ -33,6 +33,7 @@ conductor:
     # Pi 標準の <repoRoot>/.pi/settings.json は headless conductor では読みません。
     # reload は起動時スナップショットを再適用し、設定変更の反映は resume/create で行います。
     # reload または snapshot 復元に失敗した session は close/dispose され unusable になります。
+    # cleanup も失敗した場合は元エラーと cleanup error を含む AggregateError になります。
     # その session は再利用せず、resume/create で再作成してください。
 
 acp:
