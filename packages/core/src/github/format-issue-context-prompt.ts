@@ -6,9 +6,17 @@ import type { IssueComment, IssueContext } from './issue-context.js';
  * objective の Issue 番号と対応する正本。URL は base objective に載るためここでは繰り返さない。
  */
 export function formatIssueContextForPrompt(context: IssueContext): string {
+  const operatorNote = context.operator
+    ? [
+        `オペレータ（TTY で \`ensemble issue\` を実行している人）の GitHub login は \`${context.operator.githubLogin}\` です。`,
+        'Issue / PR 本文・コメント中の `@me` はこの login を指します。',
+        '',
+      ]
+    : [];
+
   const sections: string[] = [
     'Issue の正本（title / body / comments）。objective の Issue 番号と対応する。',
-    '',
+    ...operatorNote,
     '## Description',
     '',
     context.body.trim() || '(empty)',
@@ -32,6 +40,14 @@ export function formatIssueContextYaml(context: IssueContext): string {
     title: context.title,
     state: context.state,
     labels: context.labels,
+    ...(context.operator
+      ? {
+          operator: {
+            githubLogin: context.operator.githubLogin,
+            meAlias: '@me',
+          },
+        }
+      : {}),
     comments: context.comments.map((comment) => ({
       author: comment.author,
       createdAt: comment.createdAt,

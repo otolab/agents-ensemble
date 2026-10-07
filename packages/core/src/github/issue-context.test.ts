@@ -6,6 +6,7 @@ import type { GitHubClient } from './github-client.js';
 describe('fetchIssueContext', () => {
   it('maps GitHub REST issue and comments', async () => {
     const githubClient: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'operator-user' }),
       getIssue: vi.fn().mockResolvedValue({
         title: 'ACP bridge',
         body: 'Implement bridge',
@@ -39,6 +40,7 @@ describe('fetchIssueContext', () => {
     expect(context.title).toBe('ACP bridge');
     expect(context.labels).toEqual(['enhancement']);
     expect(context.comments).toHaveLength(1);
+    expect(context.operator).toEqual({ githubLogin: 'operator-user' });
     expect(githubClient.getIssue).toHaveBeenCalledWith('otolab', 'agents-ensemble', 3);
     expect(githubClient.listIssueComments).toHaveBeenCalledWith(
       'otolab',

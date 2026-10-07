@@ -30,6 +30,7 @@ const PR_SEARCH = [
 
 function createMockClient(handlers: Partial<GitHubClient>): GitHubClient {
   return {
+    getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
     getIssue: vi.fn(),
     listIssueComments: vi.fn().mockResolvedValue([]),
     searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
