@@ -444,6 +444,51 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
+  it('restores the snapshot and closes the session when Pi reload fails', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({
+        compaction: { enabled: false, reserveTokens: 2_500 },
+        branchSummary: { reserveTokens: 3_500, skipPrompt: true },
+      }),
+    );
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+
+    const settingsManager = mockCreateAgentSession.mock.calls[0]![0].settingsManager;
+    fakeSession.reload.mockImplementation(async () => {
+      await settingsManager.reload();
+      throw new Error('resource reload failed');
+    });
+
+    await expect(conductor.reload()).rejects.toThrow('resource reload failed');
+    expect(settingsManager.getCompactionSettings({
+      provider: 'anthropic',
+      id: 'model-1',
+    })).toMatchObject({ enabled: false, reserveTokens: 2_500 });
+    expect(settingsManager.getBranchSummarySettings()).toEqual({
+      reserveTokens: 3_500,
+      skipPrompt: true,
+    });
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+    await expect(conductor.send('must not reuse failed reload')).resolves.toMatchObject({
+      status: 'error',
+      error: { message: 'Pi conductor agent is closed.' },
+    });
+
+    await conductor.close();
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+  });
+
   it('keeps custom Pi resource model and auth resolution on the v1 runtime path', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     await mkdir(projectDir, { recursive: true });

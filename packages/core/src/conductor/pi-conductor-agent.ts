@@ -261,11 +261,44 @@ export class PiConductorAgent implements ConductorAgent {
   }
 
   async reload(): Promise<void> {
-    await this.session.reload();
-    // AgentSession.reload() reloads the SDK settings manager. Reapply the
-    // conductor's allowlisted snapshot after that reload so SDK file layers
-    // can never become the source of headless settings during a live session.
-    applyPiHeadlessSettings(this.settingsManager, this.headlessSettingsOverrides);
+    let sessionReloadFailed = false;
+    let sessionReloadError: unknown;
+    let snapshotRestoreFailed = false;
+    let snapshotRestoreError: unknown;
+
+    try {
+      await this.session.reload();
+    } catch (error) {
+      sessionReloadFailed = true;
+      sessionReloadError = error;
+    } finally {
+      // AgentSession.reload() reloads the SDK settings manager. Reapply the
+      // conductor's allowlisted snapshot even when a later resource/extension
+      // reload step rejects, so a failed reload cannot leave a live session
+      // with an empty or SDK-file-derived settings manager.
+      try {
+        applyPiHeadlessSettings(
+          this.settingsManager,
+          this.headlessSettingsOverrides,
+        );
+      } catch (error) {
+        snapshotRestoreFailed = true;
+        snapshotRestoreError = error;
+      }
+    }
+
+    if (sessionReloadFailed || snapshotRestoreFailed) {
+      // AgentSession does not provide a transactional reload. Once either the
+      // SDK reload or snapshot restoration fails, discard this object and let
+      // the caller create/resume a fresh session with a clean lifecycle.
+      let closeError: unknown;
+      try {
+        await this.close();
+      } catch (error) {
+        closeError = error;
+      }
+      throwReloadFailure(sessionReloadError, snapshotRestoreError, closeError);
+    }
   }
 
   async getUsage(): Promise<ConductorAgentUsage> {
@@ -475,6 +508,18 @@ function applyPiHeadlessSettings(
 ): void {
   type SettingsOverrides = Parameters<SettingsManager['applyOverrides']>[0];
   settingsManager.applyOverrides(overrides as SettingsOverrides);
+}
+
+function throwReloadFailure(
+  sessionReloadError: unknown,
+  snapshotRestoreError: unknown,
+  closeError: unknown,
+): never {
+  const errors = [sessionReloadError, snapshotRestoreError, closeError].filter(
+    (error): error is unknown => error !== undefined,
+  );
+  if (errors.length === 1) throw errors[0];
+  throw new AggregateError(errors, 'Pi conductor session reload failed and the session was closed.');
 }
 
 function createPiHeadlessExtensionUi(

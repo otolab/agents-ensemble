@@ -150,7 +150,7 @@ headless conductor の設定正本は常に `~/.ensemble/pi/settings.json` と `
 #### create / reload / resume の適用ポリシー
 
 - **create**: `loadPiResources` が `.ensemble/pi` の user → project を deep merge し、モデル選択・認証・resource path は各チャネルで使い、`compaction.*` / `branchSummary.*` は allowlist 後に in-memory `SettingsManager` へ適用します。
-- **reload**: Pi `AgentSession.reload()` の後に、create 時に解決した同じ settings-manager スナップショットを再適用します。実行中の `.ensemble/pi/settings.json` の変更を hot reload する契約ではないため、設定変更を反映するには `resume` または新しい create が必要です。
+- **reload**: Pi `AgentSession.reload()` の後に、create 時に解決した同じ settings-manager スナップショットを再適用します。実行中の `.ensemble/pi/settings.json` の変更を hot reload する契約ではないため、設定変更を反映するには `resume` または新しい create が必要です。`AgentSession.reload()` または snapshot の再適用が失敗した場合も snapshot の復元を試み、その後 session を close / dispose して unusable とし、元のエラーを返します。失敗した session は再利用せず、`resume` または新しい create で再作成してください。
 - **resume**: 新しい Pi session を作るため `.ensemble/pi` を再読込し、create と同じチャネル適用を行ってから既存 transcript を開きます。resume でも `<cwd>/.pi/settings.json` は読みません。
 
 Pi の `settings.md` にあるが headless conductor が適用しないキーは、Pi SDK の SettingsManager へ渡さず、拒否せず警告なしで無視します。
