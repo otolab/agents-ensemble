@@ -136,6 +136,8 @@ conductor は Pi 1.x の `createAgentSession` / `DefaultResourceLoader` を head
 | `defaultProvider` / `defaultModel` | 明示的な `provider/model` がない場合のモデル選択。`model` / `modelId` は conductor の互換 alias として同じ選択に使います。 |
 | `apiKey` / `apiKeys` | `auth.json` に provider credential がない場合の認証 fallback。 |
 | `extensions` / `skills` / `prompts` / `themes` | 各 resource root を基準に追加で読む path。通常の `extensions/` 等の discovery と併用します。 |
+| `compaction.*` | Pi の `AgentSession` が行う manual / automatic compaction の設定。`enabled`、`reserveTokens`、`keepRecentTokens`、`modelOverrides` を user → project の deep merge 結果から `SettingsManager` 経由で適用します。 |
+| `branchSummary.*` | Pi の branch summary の `reserveTokens` / `skipPrompt`。`compaction.*` と同じ user → project の deep merge 結果を `SettingsManager` 経由で適用します。 |
 
 Pi の `settings.md` にあるが headless conductor が適用しないキーは、拒否せず警告なしで無視します。
 
@@ -146,7 +148,7 @@ Pi の `settings.md` にあるが headless conductor が適用しないキーは
 | `defaultTools` / `codemode.*` | Pi built-in coding tools の選択。conductor は built-in coding tools を無効にし、harness / MCP / local extension と公式 codemode/tool-search extension の loadout を使います。 |
 | `packages` | Pi package の install・解決。package が提供する resource は自動導入しません。 |
 | `enableSkillCommands` | skill command の登録 toggle。読み込んだ skill の `/skill:<name>` 展開可否はこのキーで変更できません。 |
-| `sessionDir` / `compaction.*` / `branchSummary.*` | Pi の session・compact・branch summary。session は harness の `.ensemble/pi/sessions/` が管理します。 |
+| `sessionDir` | Pi の settings にある session 保存先は conductor では変更できません。transcript は常に harness が `<repoRoot>/.ensemble/pi/sessions/` で管理します。 |
 | `theme` / `quietStartup` / `tuiMode` / `fullscreen*` / `terminal.*` / `images.*` / `markdown.*` | headless conductor の TUI・terminal 表示 |
 | `transport` / `httpProxy` / `httpIdleTimeoutMs` / `websocketConnectTimeoutMs` / `retry.*` / `shellPath` / `shellCommandPrefix` / `npmCommand` | Pi coding-agent の network、shell、package runtime |
 | `collapseChangelog` / `enableInstallTelemetry` / `enableAnalytics` / `warnings.*` | coding-agent の update、telemetry、UI warning |

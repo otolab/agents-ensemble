@@ -82,7 +82,8 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
   - `defaultProvider` / `defaultModel`（`model` / `modelId` は conductor 互換 alias）: モデル選択。
   - `apiKey` / `apiKeys`: `auth.json` の provider credential がない場合の認証 fallback。
   - `extensions` / `skills` / `prompts` / `themes`: 各 resource root 基準の追加 path。
-- `defaultThinkingLevel`、`modelThinkingLevels`、`thinkingBudgets`、`enabledModels`、`defaultTools`、`codemode.*`、`packages`、`enableSkillCommands`、`sessionDir`、`compaction.*`、`branchSummary.*`、`theme` / `tuiMode` / `terminal.*` / `images.*` / `markdown.*`、network / retry / shell / update / telemetry 系の Pi settings key は headless conductor では **無視**する。未掲載の未対応キーも同じく、警告・拒否なしで無視する。`enableSkillCommands` は `/skill:<name>` の展開可否を変更せず、`packages` は install・package resource 解決を行わない。
+- `compaction.*` は Pi `AgentSession` の manual / automatic compaction へ、`branchSummary.*` は branch summary へ、`.ensemble/pi` の user → project deep merge 結果を `SettingsManager` 経由で適用する。
+- `defaultThinkingLevel`、`modelThinkingLevels`、`thinkingBudgets`、`enabledModels`、`defaultTools`、`codemode.*`、`packages`、`enableSkillCommands`、`sessionDir`、`theme` / `tuiMode` / `terminal.*` / `images.*` / `markdown.*`、network / retry / shell / update / telemetry 系の Pi settings key は headless conductor では **無視**する。未掲載の未対応キーも同じく、警告・拒否なしで無視する。`sessionDir` に関係なく transcript は harness の `<repoRoot>/.ensemble/pi/sessions/` が正本である。`enableSkillCommands` は `/skill:<name>` の展開可否を変更せず、`packages` は install・package resource 解決を行わない。
 - 対応範囲の一覧と、無視されるキーの挙動は [config.md の headless 対応範囲](../config.md#settingsjson-の-headless-対応範囲) を利用者向け正本とする。
 - `config.yaml` の `conductor.pi.*` は **パス上書きや discovery のヒント**に限定し、Pi 本体の設定スキーマを二重定義しない。
 
@@ -137,3 +138,4 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 | 2026-10-01 | #356: Pi AuthStorage / ModelRegistry、provider 単位の `ensemble auth`、実行時 OAuth key 解決、認証済み model 一覧を追加 |
 | 2026-10-05 | #392: Pi 1.0.x の `createAgentSession` / `DefaultResourceLoader` と公式 MCP extension を採用。旧 bridge、旧低レベル Agent ループ、SSE 対応を削除 |
 | 2026-10-05 | #392 reviewer 対応: Cursor placeholder 解決、Pi MCP 接続エラー観測、sidecar の MCP digest による resume 変更検出を追加 |
+| 2026-10-07 | #398: `.ensemble/pi` の user → project `compaction.*` / `branchSummary.*` を Pi `SettingsManager` 経由で headless conductor に適用。`sessionDir` は harness の transcript 保存先を維持 |
