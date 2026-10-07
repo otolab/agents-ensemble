@@ -297,6 +297,68 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
+  it('applies merged ensemble compaction settings without overriding the harness session directory', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({
+        defaultProvider: 'anthropic',
+        defaultModel: 'model-1',
+        compaction: {
+          enabled: false,
+          reserveTokens: 1_000,
+          modelOverrides: {
+            'anthropic/model-1': { keepRecentTokens: 2_000 },
+          },
+        },
+      }),
+    );
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({
+        compaction: {
+          reserveTokens: 3_000,
+          modelOverrides: {
+            'anthropic/model-1': { keepRecentTokens: 4_000 },
+          },
+        },
+        branchSummary: { reserveTokens: 5_000, skipPrompt: true },
+        sessionDir: '/tmp/ignored-by-conductor',
+      }),
+    );
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+
+    const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+    const settingsManager = sessionOptions.settingsManager;
+    expect(settingsManager.getCompactionSettings({
+      provider: 'anthropic',
+      id: 'model-1',
+    })).toEqual({
+      enabled: false,
+      reserveTokens: 3_000,
+      keepRecentTokens: 4_000,
+    });
+    expect(settingsManager.getBranchSummarySettings()).toEqual({
+      reserveTokens: 5_000,
+      skipPrompt: true,
+    });
+    expect(settingsManager.getSettings()).not.toHaveProperty('sessionDir');
+    expect(mockSessionManagerCreate).toHaveBeenCalledWith(
+      cwd,
+      join(cwd, '.ensemble/pi/sessions'),
+      expect.objectContaining({ id: expect.any(String) }),
+    );
+
+    await conductor.close();
+  });
+
   it('keeps custom Pi resource model and auth resolution on the v1 runtime path', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     await mkdir(projectDir, { recursive: true });

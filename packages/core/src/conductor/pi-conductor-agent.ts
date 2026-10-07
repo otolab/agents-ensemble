@@ -392,6 +392,12 @@ async function createPiConductorSession(
     ],
   });
   await resourceLoader.reload();
+  // The ensemble resource roots use `.ensemble/pi/settings.json`, while the
+  // Pi SDK's SettingsManager only discovers `<cwd>/.pi/settings.json` as its
+  // project layer. Apply the settings that the headless conductor supports
+  // from the already merged ensemble resources without handing sessionDir (or
+  // any other unsupported setting) back to the SDK.
+  applyPiHeadlessSettings(settingsManager, resources.settings);
 
   let session: AgentSession | undefined;
   try {
@@ -445,6 +451,21 @@ async function createPiConductorSession(
     session?.dispose();
     throw error;
   }
+}
+
+function applyPiHeadlessSettings(
+  settingsManager: SettingsManager,
+  settings: PiSettingsFile,
+): void {
+  type SettingsOverrides = Parameters<SettingsManager['applyOverrides']>[0];
+  const overrides: SettingsOverrides = {};
+  if (settings.compaction !== undefined) {
+    overrides.compaction = settings.compaction as SettingsOverrides['compaction'];
+  }
+  if (settings.branchSummary !== undefined) {
+    overrides.branchSummary = settings.branchSummary as SettingsOverrides['branchSummary'];
+  }
+  settingsManager.applyOverrides(overrides);
 }
 
 function createPiHeadlessExtensionUi(
