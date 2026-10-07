@@ -71,6 +71,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 |------|-------------|----------|-----|----------------|------|
 | 既定 team profile | `profile.default` | `ENSEMBLE_DEFAULT_PROFILE` | `--profile` | 同梱 `implementer-and-reviewer` | A |
 | conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | `--model` | `default` | A |
+| conductor 詳細 telemetry | `conductor.verbose` | `CONDUCTOR_VERBOSE` | `--verbose` | `false` | A |
 | conductor backend | `conductor.backend` | — | — | `cursor` | profile > config > default |
 | Pi user resource root | `conductor.pi.agentDir` | — | — | `~/.ensemble/pi` | config |
 | Pi project resource root | `conductor.pi.projectDir` | — | — | `<repoRoot>/.ensemble/pi` | config |

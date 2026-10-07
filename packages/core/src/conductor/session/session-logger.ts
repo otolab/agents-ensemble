@@ -70,8 +70,11 @@ export class SessionLogger {
       case 'harness.worker.state':
       case 'harness.session.workers':
       case 'operator.input':
+      case 'conductor.inbound':
       case 'conductor.send.started':
       case 'conductor.send.progress':
+      case 'conductor.outbound':
+      case 'harness.worker.bootstrap':
       case 'conductor.dispatch_hold':
       case 'permission.pending':
       case 'permission.cleanup':

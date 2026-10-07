@@ -12,7 +12,7 @@ function stripAnsiStyles(value: string): string {
 }
 
 describe('session sinks', () => {
-  it('formats worker prompt harness events on stderr', () => {
+  it('suppresses normal worker prompt rows by default and keeps failures', () => {
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const sink = createHarnessSink();
@@ -41,16 +41,62 @@ describe('session sinks', () => {
     });
 
     expect(stderr).toHaveBeenCalledWith(
+      '[harness] worker.prompt.failed name=implementer kind=implementer source=harness error=attach failed',
+    );
+    expect(stderr).toHaveBeenCalledTimes(1);
+
+    stderr.mockRestore();
+  });
+
+  it('restores detailed worker prompt rows with verbose', () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const sink = createHarnessSink({ verbose: true });
+
+    sink({
+      type: 'harness.worker.prompt.started',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      source: 'harness',
+    });
+    sink({
+      type: 'harness.worker.prompt.completed',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      source: 'harness',
+      stopReason: 'end_turn',
+    });
+
+    expect(stderr).toHaveBeenCalledWith(
       '[harness] worker.prompt.started name=implementer kind=implementer source=harness',
     );
     expect(stderr).toHaveBeenCalledWith(
       '[harness] worker.prompt.completed name=implementer kind=implementer source=harness stopReason=end_turn',
     );
-    expect(stderr).toHaveBeenCalledWith(
-      '[harness] worker.prompt.failed name=implementer kind=implementer source=harness error=attach failed',
-    );
 
     stderr.mockRestore();
+  });
+
+  it('prints compact boundary summaries by default', () => {
+    const writeStderr = vi.fn();
+    const sink = createHarnessSink({ writeStderr });
+
+    sink({ type: 'conductor.inbound', triggers: 1, sources: ['initial'] });
+    sink({
+      type: 'harness.worker.bootstrap',
+      workers: [{ name: 'implementer', kind: 'implementer' }],
+      mode: 'init',
+    });
+
+    expect(writeStderr).toHaveBeenNthCalledWith(
+      1,
+      '[harness] conductor.deliver triggers=1 sources=initial',
+    );
+    expect(writeStderr).toHaveBeenNthCalledWith(
+      2,
+      '[harness] worker.prompt workers=1 mode=init',
+    );
   });
 
   it('formats harness events on stderr', () => {
@@ -218,7 +264,7 @@ describe('session sinks', () => {
   it('uses injected stderr writer for harness sink', () => {
     const writeStderr = vi.fn();
 
-    createHarnessSink({ writeStderr })({
+    createHarnessSink({ writeStderr, verbose: true })({
       type: 'session.stop',
       stopReason: 'completed',
     });

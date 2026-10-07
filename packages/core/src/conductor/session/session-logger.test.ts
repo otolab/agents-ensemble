@@ -156,6 +156,46 @@ describe('SessionLogger', () => {
     expect(summary.lastResult).toBe('done');
   });
 
+  it('forwards boundary summaries without changing the session snapshot', () => {
+    const logger = new SessionLogger({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      repoRoot: '/repo',
+    });
+    const sink = vi.fn();
+    logger.subscribe(sink);
+
+    logger.emit({
+      type: 'conductor.inbound',
+      triggers: 1,
+      sources: ['initial'],
+    });
+    logger.emit({
+      type: 'conductor.outbound',
+      workers: ['implementer'],
+      mode: 'conductor',
+    });
+    logger.emit({
+      type: 'harness.worker.bootstrap',
+      workers: [{ name: 'implementer', kind: 'implementer' }],
+      mode: 'init',
+    });
+
+    expect(sink).toHaveBeenCalledTimes(3);
+    expect(
+      logger.snapshot({
+        agentId: 'agent-1',
+        escalations: [],
+        openQuestions: [],
+      }),
+    ).toMatchObject({
+      sendCount: 0,
+      lastRunStatus: 'finished',
+      workerDispatches: [],
+      workerFailures: [],
+      stopReason: 'completed',
+    });
+  });
+
   it('unsubscribes sinks', () => {
     const logger = new SessionLogger({
       issueUrl: 'https://github.com/org/repo/issues/1',

@@ -52,6 +52,7 @@ profile:
 conductor:
   backend: pi                        # cursor（既定） | pi
   model: default                      # CONDUCTOR_MODEL_ID 相当
+  verbose: false                      # CONDUCTOR_VERBOSE / --verbose 相当
   pi:
     # 任意。省略時は ~/.ensemble/pi と <repoRoot>/.ensemble/pi
     agentDir: ~/.ensemble/pi
@@ -89,6 +90,7 @@ tui:
 |------|------|-----------|-----------|
 | `profile.default` | 既定 team profile（名前またはパス） | `--profile` | `ENSEMBLE_DEFAULT_PROFILE` |
 | `conductor.model` | conductor モデル id | `--model` | `CONDUCTOR_MODEL_ID` |
+| `conductor.verbose` | harness 詳細 telemetry の表示 | `--verbose` | `CONDUCTOR_VERBOSE` |
 | `conductor.backend` | conductor LLM backend（`cursor` / `pi`） | — | — |
 | `conductor.pi.agentDir` | Pi user resource root のパス上書き | — | — |
 | `conductor.pi.projectDir` | Pi project resource root のパス上書き | — | — |

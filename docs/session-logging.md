@@ -32,6 +32,13 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
 （非 TTY の `[harness]` stderr、TTY の TUI 活動ログ `harness`）に障害種別・復旧ヒント・
 `n` / worker 件数 / `error` の診断を表示する。
 
+人間向けの `[harness]` テレメトリは、既定では conductor 境界の要約
+（`conductor.deliver` / `worker.prompt`）と障害・permission・warning・認証・worktree 警告に
+絞る。正常な worker state、prompt lifecycle、`conductor.send` 成功行などの細行は
+`conductor.verbose: true`、`CONDUCTOR_VERBOSE=true`、または `ensemble issue --verbose`
+で復活する。この切り替えは sink の表示だけに適用し、`SessionLogger.emit()`、TUI Workers
+ペイン、終了 JSON には適用しない。
+
 ---
 
 ## 2. 出力チャネル（CLI）
@@ -70,7 +77,7 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
 
 | prefix | 内容 | 条件 |
 |--------|------|------|
-| `[harness]` | `SessionLogger` → HarnessSink（worktree / send / worker round 等。`conductor.send` の error は障害種別・復旧ヒント付き） | **非 TTY のみ**（TTY + Ink 時は活動ログへ） |
+| `[harness]` | `SessionLogger` → HarnessSink（既定は境界要約・障害系。`conductor.send` の error は障害種別・復旧ヒント付き） | **非 TTY のみ**（TTY + Ink 時は活動ログへ） |
 | `[open question]` | `open.question.enqueued` → ObservationSink | **非 TTY のみ** |
 | `[operator answer]` | `escalation.recorded` → ObservationSink | **非 TTY のみ** |
 | `[worktree]` | `session.worktree.notice` → ObservationSink | **非 TTY のみ** |
@@ -130,9 +137,12 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `harness.worker.prompt.*` | worker prompt 開始 / 完了 / 失敗（init / instruction 対称） | なし（sink のみ） |
 | `harness.worker.state` / `harness.session.workers` | worker harness 状態遷移 / セッション開始時 seed（#147） | なし（sink のみ） |
 | `operator.input` | オペレータ発話をキューに載せる直前 | なし（sink のみ） |
+| `conductor.inbound` | harness が conductor へ渡す trigger 束の直前 | なし（sink のみ。既定は `conductor.deliver` 要約） |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | なし（sink のみ） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | なし（log 相当。活動ログ / stderr には出さない。Workers ペイン活動ヒントのみ #161） |
 | `conductor.send` | 各 `agent.send` 完了後 | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` を更新。成功 result は conductor 対話、error は harness 障害表示 |
+| `conductor.outbound` | `prompt_worker` による conductor → worker prompt を send 完了時に集約 | なし（sink のみ。既定は `worker.prompt` 要約） |
+| `harness.worker.bootstrap` | セッション開始時の init prompt 群を要約 | なし（sink のみ。既定は `worker.prompt` 要約） |
 | `conductor.dispatch_hold` | `set_dispatch_hold` の切替、または held trigger 件数の変化 | なし（TUI の保留表示と observation のみ） |
 | `worker.round` | worker 1 ラウンド完了（init prompt 含む） | `workerDispatches` に追記 |
 | `worker.failed` | worker 失敗 | `workerFailures` に追記 |
@@ -144,7 +154,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 
 | 関数 | ファイル | 役割 |
 |------|----------|------|
-| `createHarnessSink()` | `packages/cli/src/session-sinks.ts` | stderr `[harness]`（非 TTY） |
+| `createHarnessSink()` | `packages/cli/src/session-sinks.ts` | stderr `[harness]`（非 TTY、`verbose` で細行） |
 | `createObservationSink()` | 同上 | stderr 観測（非 TTY） |
 | `createTuiTelemetrySink()` | `packages/cli/src/tui/` | TTY Ink 活動ログ（harness + observation） |
 | `createSessionDisplaySink()` | `packages/cli/src/display/` | `SessionLogEvent` → reducer → `SessionDisplayBackend` |
@@ -155,7 +165,8 @@ Harness の human-readable な 1 行表現は、出力先ごとに重複させ�
 `renderSessionLogEvent()`（`packages/core/src/representation/`）を共有する。
 CLI の `formatHarnessLogBody()` はこの representation の thin wrapper であり、
 現在は `permission.pending` renderer が登録されている。未登録イベントは既存の
-CLI formatter で診断情報を保つ。`conductor.send` の error は CLI formatter で
+CLI formatter で診断情報を保つ。通常は境界要約・障害系だけを返し、`verbose: true` で
+従来の細行を返す。`conductor.send` の error は CLI formatter で
 障害種別・復旧ヒント・`n` / worker 件数 / `error` を付与し、harness チャネルへ出す。
 permission の ACP variant と抽出優先順位は
 [harness-events.md §2.1.1](harness-events.md#211-オペレータ向け-representation) を参照。

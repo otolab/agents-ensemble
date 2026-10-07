@@ -70,13 +70,20 @@ function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined
   }
   const model = readString(obj.model);
   const backend = parseConductorBackend(obj.backend);
+  const verbose = readBoolean(obj.verbose);
   const pi = parseConductorPiConfig(obj.pi);
-  if (model === undefined && backend === undefined && pi === undefined) {
+  if (
+    model === undefined &&
+    backend === undefined &&
+    verbose === undefined &&
+    pi === undefined
+  ) {
     return undefined;
   }
   return {
     ...(model !== undefined ? { model } : {}),
     ...(backend !== undefined ? { backend } : {}),
+    ...(verbose !== undefined ? { verbose } : {}),
     ...(pi !== undefined ? { pi } : {}),
   } as EnsembleConductorConfig;
 }

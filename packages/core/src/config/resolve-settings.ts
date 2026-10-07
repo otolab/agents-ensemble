@@ -16,6 +16,9 @@ export const ENSEMBLE_DEFAULT_PROFILE_ENV = 'ENSEMBLE_DEFAULT_PROFILE';
 /** conductor モデル id（`resolve-conductor-model-id` と共有）。 */
 export const CONDUCTOR_MODEL_ID_ENV = 'CONDUCTOR_MODEL_ID';
 
+/** conductor の詳細 harness telemetry 表示（`ensemble issue --verbose` と共有）。 */
+export const CONDUCTOR_VERBOSE_ENV = 'CONDUCTOR_VERBOSE';
+
 /** TTY レイアウト（`resolveTuiLayoutSetting` と共有）。 */
 export const TUI_LAYOUT_ENV = 'ENSEMBLE_TUI_LAYOUT';
 
@@ -24,6 +27,20 @@ export const FORCE_HYPERLINK_ENV = 'FORCE_HYPERLINK';
 
 function normalizeConductorModelId(modelId: string): string {
   return modelId === 'auto' ? 'default' : modelId;
+}
+
+function parseBooleanEnv(value: string | undefined): boolean | undefined {
+  const normalized = trimString(value)?.toLowerCase();
+  if (normalized === undefined) {
+    return undefined;
+  }
+  if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+    return true;
+  }
+  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+    return false;
+  }
+  return undefined;
 }
 
 /** 解決順: CLI 明示 > env > config > コード内 default */
@@ -119,6 +136,20 @@ export function resolveConductorModelSetting(options: {
     defaultValue: DEFAULT_ENSEMBLE_CONFIG.conductor.model,
   });
   return normalizeConductorModelId(resolved ?? DEFAULT_ENSEMBLE_CONFIG.conductor.model);
+}
+
+/** 解決順: CLI `--verbose` > `CONDUCTOR_VERBOSE` > config > false。 */
+export function resolveConductorVerboseSetting(options: {
+  cliVerbose?: boolean;
+  env?: NodeJS.ProcessEnv;
+  config?: EnsembleConfig;
+}): boolean {
+  return resolveBooleanSetting({
+    cli: options.cliVerbose,
+    env: parseBooleanEnv((options.env ?? process.env)[CONDUCTOR_VERBOSE_ENV]),
+    config: options.config?.conductor.verbose,
+    defaultValue: DEFAULT_ENSEMBLE_CONFIG.conductor.verbose ?? false,
+  });
 }
 
 /** profile の明示設定 > config（project/user merge 済み） > cursor。 */

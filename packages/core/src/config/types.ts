@@ -20,6 +20,8 @@ export interface EnsembleConductorConfig {
   model: string;
   /** conductor LLM backend（未指定時は `cursor`）。 */
   backend?: ConductorBackend;
+  /** harness の詳細 telemetry を人間向け出力へ表示するか。 */
+  verbose?: boolean;
   /** Pi resource root のパス上書き（Pi の設定スキーマではない）。 */
   pi?: EnsembleConductorPiConfig;
 }

@@ -48,15 +48,17 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 
 | type | 発火タイミング | stderr 例 | snapshot への影響 |
 |------|----------------|-----------|-------------------|
-| `harness.worktree` | worktree resolve 直後（セッション開始、worker あり） | `[harness] worktree path=... branch=... mode=...` | なし |
-| `harness.worktree.removed` | post-loop `/exit` 後、isolated worktree 削除成功 | `[harness] worktree.removed path=... branch=...` | なし |
+| `harness.worktree` | worktree resolve 直後（セッション開始、worker あり） | verbose 時のみ `[harness] worktree path=... branch=... mode=...` | なし |
+| `harness.worktree.removed` | post-loop `/exit` 後、isolated worktree 削除成功 | verbose 時のみ `[harness] worktree.removed path=... branch=...` | なし |
 | `harness.worktree.remove_skipped` | post-loop `/exit` の isolated worktree cleanup で未コミット変更あり等により削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
 | `harness.worktree.remove_failed` | post-loop `/exit` の isolated worktree cleanup で `git worktree remove` の限定リトライ後も失敗 | `[harness] worktree.remove_failed path=... branch=... error=...` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
-| `operator.input` | オペレータ発話をキューに載せる直前 | `[harness] operator.input turn=N bytes=...` | なし |
-| `conductor.send.started` | 各 `agent.send` 開始直前 | `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
+| `operator.input` | オペレータ発話をキューに載せる直前 | verbose 時のみ `[harness] operator.input turn=N bytes=...` | なし |
+| `conductor.inbound` | harness が `agent.send` へ渡す trigger 束を確定した直前 | `[harness] conductor.deliver triggers=N sources=...` | なし |
+| `conductor.send.started` | 各 `agent.send` 開始直前 | verbose 時のみ `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。例: `conductor: reading`） |
-| `conductor.send` | 各 `agent.send` 完了後 | 成功: `[harness] conductor.send n=N status=finished workerDone=... workerFailed=...` / 失敗: `[harness] conductor.send ... 障害種別=...。復旧=...。 error=...` | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
-| `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
+| `conductor.send` | 各 `agent.send` 完了後 | 成功は verbose 時のみ `[harness] conductor.send n=N status=finished ...`。失敗は既定でも障害種別・復旧ヒント付き | `sendCount`, `lastRunStatus`, `lastResult`, `lastError`（TUI Workers ペインで `conductor: idle`） |
+| `conductor.outbound` | conductor の 1 send 中に `prompt_worker` で送った worker を send 完了時に集約 | `[harness] worker.prompt workers=N mode=conductor names=...` | なし |
+| `worker.round` | worker の 1 `session/prompt` ラウンド完了（init prompt 含む） | verbose 時のみ `[harness] worker.round name=... kind=... source=... stopReason=... path=...` | `workerDispatches` に追記 |
 | `worker.failed` | worker attach / prompt 失敗。該当 worker の pending permission は conductor への通知前に deny | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `permission.cleanup` | worker failure / teardown で pending permission を deny・解消した直後 | `[harness] permission.cleanup reason=worker.failed worker=... count=... ids=...` | なし |
@@ -65,9 +67,9 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
 | `conductor.auth.recovery` | 自動再接続失敗後の復旧ヒント | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
 | `conductor.transport.reconnect` | transport 自動再接続、または `/reconnect` の `resume(sameId)` | `[harness] conductor.transport.reconnect status=attempt\|succeeded\|failed agentId=...` / `[transport] ...` | なし（失敗時も auth hint は出さない） |
-| `session.stop` | セッション終了直前 | `[harness] session.stop reason=...` | `stopReason` を確定 |
+| `session.stop` | セッション終了直前 | 異常終了時は既定でも `[harness] session.stop reason=...`。正常完了は verbose 時のみ | `stopReason` を確定 |
 | `harness.teardown` | `runConductorSession` の worker/ACP・conductor 停止後、isolated worktree 削除前（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
-| `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | `[harness] teardown.phase <name>` | なし |
+| `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | verbose 時のみ `[harness] teardown.phase <name>` | なし |
 | `conductor.dispatch_hold` | conductor が `set_dispatch_hold` を呼んだとき、または held trigger（`permission.pending` を含む）の件数が変化したとき | `dispatch hold enabled` / `released (flushed N events)`（observation） | TUI の保留状態と件数を更新。解除後も未送信の held trigger があれば残数を表示 |
 
 ### 2.1.1 オペレータ向け representation
@@ -91,10 +93,11 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 `tool=Shell cmd="…"` のように表示する。raw JSON fallback は未知 payload の診断用に
 残す。
 
-`worker.round` の長い worktree path、`worker.failed` / `worker.process.stderr` の
-診断文字列、`conductor.send` の status/count は調査に必要な情報を含むため、現時点
-では短縮 renderer を追加しない。`conductor.send` のうち `status=error` は conductor の
-発話ではないため、CLI の `formatHarnessLogBody()` が operator 向け representation として
+`worker.failed` / `worker.process.stderr` の診断文字列と、`conductor.send` の
+`status=error` は既定でも詳細に残す。正常な `worker.round`、worker state、send lifecycle は
+既定では細行を抑制し、`conductor.inbound` / `harness.worker.bootstrap` /
+`conductor.outbound` を境界要約として表示する。`conductor.send` のうち `status=error` は
+conductor の発話ではないため、CLI の `formatHarnessLogBody()` が operator 向け representation として
 障害種別・復旧ヒントを追加する。この同じ 1 行表現を HarnessSink（非 TTY）と
 `createTuiTelemetrySink()`（TTY の harness 活動ログ）が共有し、`formatConductorActivityBody()`
 と表示 state reducer は error を conductor チャネルへ渡さない。接続停滞・認証・モデル拒否は
@@ -167,16 +170,23 @@ SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが 
 
 ### 2.2 worker prompt ライフサイクルイベント（#133 で統一）
 
-init prompt（harness 起因）と instruction（conductor 起因）を **対称**に扱う。旧 `harness.worker.bootstrap.*` は廃止。
+init prompt（harness 起因）と instruction（conductor 起因）を **対称**に扱う。旧 `harness.worker.bootstrap.*` のイベント単位 API は廃止し、現在は単一の `harness.worker.bootstrap` 要約イベントを使う。
+
+正常な lifecycle の細行は既定では表示せず、セッション開始時の init prompt は
+`harness.worker.bootstrap`、conductor の `prompt_worker` は `conductor.outbound` で
+件数要約を表示する。`--verbose`、`CONDUCTOR_VERBOSE=true`、または
+`conductor.verbose: true` を指定すると、下表のイベント単位行も表示する。
 
 | type | 発火タイミング | stderr 例 | snapshot への影響 |
 |------|----------------|-----------|-------------------|
-| `harness.worker.prompt.started` | `session/prompt` ラウンド開始（init / instruction 共通） | `[harness] worker.prompt.started name=... kind=... source=harness\|conductor` | なし（TUI: running） |
-| `harness.worker.prompt.completed` | ラウンド ACP prompt 完了直後 | `[harness] worker.prompt.completed name=... kind=... source=... stopReason=...` | なし（TUI: idle） |
+| `harness.worker.prompt.started` | `session/prompt` ラウンド開始（init / instruction 共通） | verbose 時のみ `[harness] worker.prompt.started name=... kind=... source=harness\|conductor` | なし（TUI: running） |
+| `harness.worker.prompt.completed` | ラウンド ACP prompt 完了直後 | verbose 時のみ `[harness] worker.prompt.completed name=... kind=... source=... stopReason=...` | なし（TUI: idle） |
 | `harness.worker.prompt.failed` | attach 致命失敗、または `executeRound` 内の prompt 失敗 | `[harness] worker.prompt.failed name=... kind=... source=... error=...` | なし（TUI: 一時 `failed`。resident 維持時は直後の `harness.worker.state idle` で **idle** に戻る） |
+| `harness.worker.bootstrap` | セッション開始時、harness が profile worker へ init prompt を開始する直前 | `[harness] worker.prompt workers=N mode=init` | なし |
+| `conductor.outbound` | conductor の send 中に `prompt_worker` で送った worker を send 完了時に集約 | `[harness] worker.prompt workers=N mode=conductor names=...` | なし |
 | `harness.worker.acp.update` | `session/prompt` 中の ACP `session/update`（#148） | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。`running` 正本は `harness.worker.state`） |
-| `harness.worker.state` | `WorkerRuntime` の harness 状態遷移（#147） | `[harness] worker.state name=... kind=... state=attaching\|processing\|idle\|failed` | なし（TUI: 下表） |
-| `harness.session.workers` | セッション開始時、profile の worker 一覧確定直後 | `[harness] session.workers count=N names=...` | なし（TUI: 全員 idle で seed） |
+| `harness.worker.state` | `WorkerRuntime` の harness 状態遷移（#147） | verbose 時のみ `[harness] worker.state name=... kind=... state=attaching\|processing\|idle\|failed` | なし（TUI: 下表） |
+| `harness.session.workers` | セッション開始時、profile の worker 一覧確定直後 | verbose 時のみ `[harness] session.workers count=N names=...` | なし（TUI: 全員 idle で seed） |
 
 **TUI `WorkerDisplayStatus` と harness 状態の対応（#147）**
 
@@ -187,7 +197,7 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 | `idle` | `idle` |
 | `failed` | `failed`（**attach 致命失敗のみ**。`failedWorkers` 登録・resident なし） |
 
-`harness.worker.prompt.*` / `harness.worker.acp.update` も TUI を更新する。**Workers ペインの `running` / `idle` 正本は `harness.worker.state`**（および `prompt.started` / `prompt.completed`）。`harness.worker.acp.update` は **活動ヒント**（例: `running (calling: Shell)`）の更新にのみ使い、chunk 単位では stderr / 活動ログに出さない（#161）。
+`harness.worker.prompt.*` / `harness.worker.acp.update` も TUI を更新する。**Workers ペインの `running` / `idle` 正本は `harness.worker.state`**（および `prompt.started` / `prompt.completed`）。`harness.worker.acp.update` は **活動ヒント**（例: `running (calling: Shell)`）の更新にのみ使い、chunk 単位では stderr / 活動ログに出さない（#161）。これらのイベントは `SessionLogger.emit()` と Workers ペインの state 投影のために維持し、人間向け活動ログの細行だけを既定で抑制する。
 
 `permission.pending` は **Workers ペインを更新しない**（活動ログのみ）。permission 待ち中の worker は `harness.worker.state` / `prompt.*` が `processing` / `running` のまま維持される想定。
 
@@ -254,39 +264,40 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 
 ```
 セッション開始
-  harness.worktree ─────────────────────────► stderr のみ
-  harness.session.workers ──────────────────► stderr + TUI seed（全 worker idle）
+  harness.worktree ─────────────────────────► verbose 時のみ stderr
+  harness.session.workers ──────────────────► TUI seed（全 worker idle。stderr は verbose 時のみ）
+  harness.worker.bootstrap ─────────────────► stderr / TUI 活動ログ（worker.prompt workers=N mode=init）
 
 WorkerSession.startWorkers()（worker ごと。attach + init prompt）
-  harness.worker.prompt.started (source=harness) ───► stderr + TUI running
+  harness.worker.prompt.started (source=harness) ───► TUI running（stderr / 活動ログは verbose 時のみ）
        │
        ├─ attach + buildWorkerAttachPrompt + session/prompt
-       │    harness.worker.state processing ─► stderr + TUI running
+       │    harness.worker.state processing ─► TUI running（stderr / 活動ログは verbose 時のみ）
        │
-       ├─ 成功 ─► harness.worker.prompt.completed (source=harness) ► stderr + TUI idle
-       │          harness.worker.state idle ────────────────► stderr + TUI idle
-       │          worker.round (source=harness) ───────► stderr + snapshot（TUI: 変更なし）
+       ├─ 成功 ─► harness.worker.prompt.completed (source=harness) ► TUI idle（細行は verbose 時のみ）
+       │          harness.worker.state idle ────────────────► TUI idle（細行は verbose 時のみ）
+       │          worker.round (source=harness) ───────► snapshot（細行は verbose 時のみ）
        │          worker.completed (source=harness) ───► SessionEventQueue ► agent.send
        │
        ├─ attach 致命失敗 ─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
-       │                    harness.worker.state failed ──► stderr + TUI failed（最終）
+       │                    harness.worker.state failed ──► TUI failed（最終。細行は verbose 時のみ）
        │                    worker.failed ────────────────► stderr + snapshot + SessionEventQueue
        │
        └─ init ラウンド失敗（resident 維持）─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
                               worker.failed ────────────────► stderr + snapshot + SessionEventQueue
-                              harness.worker.state idle ────► stderr + TUI idle（最終。list_workers と一致）
+                              harness.worker.state idle ────► TUI idle（最終。細行は verbose 時のみ）
 
 prompt_worker / sendWorkerMessage
        │
-       ├─ harness.worker.prompt.started (source=conductor) ► stderr + TUI running
-       ├─ harness.worker.state processing ───────────────► stderr + TUI running
+       ├─ harness.worker.prompt.started (source=conductor) ► TUI running（細行は verbose 時のみ）
+       ├─ harness.worker.state processing ───────────────► TUI running（細行は verbose 時のみ）
        ├─ harness.worker.acp.update (session/prompt 中) ► TUI 活動ヒントのみ（stderr / 活動ログには出さない #161）
        ├─ permission 保留 ─► permission.pending ───────► stderr / TUI 活動ログ（即時。Workers 欄は更新しない）
        │                     SessionEvent permission.pending ► SessionEventQueue ► （dispatch hold 中は held buffer、解除後は agent.send）
        │
-       ├─ 成功 ─► harness.worker.prompt.completed (source=conductor) ► stderr + TUI idle
-       │          harness.worker.state idle ────────────────► stderr + TUI idle
-       │          worker.round (source=conductor) ───────► stderr + snapshot（TUI: running 中のみ idle）
+       ├─ 成功 ─► harness.worker.prompt.completed (source=conductor) ► TUI idle（細行は verbose 時のみ）
+       │          harness.worker.state idle ────────────────► TUI idle（細行は verbose 時のみ）
+       │          worker.round (source=conductor) ───────► snapshot（細行は verbose 時のみ）
        │          worker.completed (source=conductor) ───► SessionEventQueue ► agent.send
        │
        └─ ラウンド失敗（resident 維持）─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
@@ -296,13 +307,15 @@ prompt_worker / sendWorkerMessage
 preempt（stopReason=cancelled）: `prompt.completed` / `worker.round` をスキップし、次ラウンドの `started` + `state processing` で running 維持
 
 各 agent.send 開始
-  conductor.send.started ───────────────────► stderr + TUI（conductor: thinking）
+  conductor.inbound ────────────────────────► stderr / TUI 活動ログ（conductor.deliver triggers=N sources=...）
+  conductor.send.started ───────────────────► TUI（conductor: thinking。stderr は verbose 時のみ）
 
 各 agent.send 進行中（ツール開始）
   conductor.send.progress ──────────────────► TUI 活動ヒントのみ（stderr / 活動ログには出さない #161）
 
 各 agent.send 完了
-  conductor.send ───────────────────────────► stderr + snapshot（末尾更新）+ TUI（conductor: idle）
+  conductor.outbound ───────────────────────► stderr / TUI 活動ログ（worker.prompt workers=N mode=conductor）
+  conductor.send ───────────────────────────► snapshot（末尾更新）+ TUI（conductor: idle）。成功の細行は verbose、error は既定でも表示
 
 dispatch hold（#265）
   set_dispatch_hold(true) ─────────────────► observation + TUI（保留中、N 件。permission.pending を含む）
@@ -314,22 +327,28 @@ dispatch hold（#265）
                                                    └─► agent.send
 
 GitHub monitor（セッション中は常時。`--no-github-monitor` で無効化可）
-  harness.github.update ──────────────────────► stderr
+  harness.github.update ──────────────────────► verbose 時のみ stderr
   github.update ──────────────────────────────► SessionEventQueue ► agent.send
        │                                        （自律中・post-loop 待機中とも同じ Driver が消費）
 
 セッション終了
-  session.stop ─────────────────────────────► stderr + snapshot
+  session.stop ─────────────────────────────► snapshot（異常時のみ既定 stderr、正常は verbose）
   teardown（worker/ACP・conductor・GitHub monitor の停止）
-    harness.teardown.phase ─────────────────► stderr
+    harness.teardown.phase ─────────────────► verbose 時のみ stderr
     harness.teardown ───────────────────────► stderr（force 時または 1s 超）
 
   isolated worktree cleanup（正常 `/exit`、`harness.teardown` emit 後）
-    harness.teardown.phase worktree ─────────► stderr
-    harness.worktree.removed ────────────────► stderr
+    harness.teardown.phase worktree ─────────► verbose 時のみ stderr
+    harness.worktree.removed ────────────────► verbose 時のみ stderr
     harness.worktree.remove_skipped/failed ──► harness stderr + observation warning
                                                   └─ TTY: 活動ログ / 非 TTY: stderr
 ```
+
+人間向けの `[harness]` 行は sink の表示ポリシーであり、`SessionLogger.emit()` の
+イベント列や TUI Workers ペインの state 投影を削減するものではない。既定は境界要約と
+障害・permission・warning・認証・worktree 警告を表示し、正常 lifecycle の細行は抑制する。
+`conductor.verbose` の解決順は **CLI `--verbose` > `CONDUCTOR_VERBOSE` > project config >
+user config > `false`**。TTY の活動ログと非 TTY stderr は同じ `formatHarnessLogBody()` を使う。
 
 **重要**: `worker.completed` は init prompt でも instruction でも **同じイベント型・同じ見出し**。conductor は YAML 内の `source` で「自分が指示していない harness 起因の自動処理」かどうかを判別する。`source: harness` は作業開始ではない。
 
@@ -344,6 +363,9 @@ GitHub monitor（セッション中は常時。`--no-github-monitor` で無効�
 | `operator>` / `conductor>`（stdout、DisplaySink → string backend） | worker 応答全文（会話 UI に混ぜない） |
 | `[harness]` テレメトリ（stderr） | SessionEvent の YAML 本文（conductor 向け） |
 | `[open question]` 等（ObservationSink、stderr） | |
+
+`conductor.verbose` を有効にしたときの init prompt の細行は次のとおり。既定では
+`worker.prompt workers=N mode=init` の要約を使う。
 
 init prompt 把握の目安:
 

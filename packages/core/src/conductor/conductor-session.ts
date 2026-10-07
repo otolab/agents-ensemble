@@ -568,6 +568,16 @@ export async function runConductorSession(
     },
   });
 
+  if (workers.length > 0) {
+    sessionLogger.emit({
+      type: 'harness.worker.bootstrap',
+      workers: workers.map((worker) => ({
+        name: worker.name,
+        kind: worker.kind,
+      })),
+      mode: 'init',
+    });
+  }
   workerSession.startWorkers();
 
   const recordAnsweredQuestion = (answered: OpenQuestion) => {
@@ -604,10 +614,12 @@ export async function runConductorSession(
   });
 
   let outboundDispatchesThisSend = 0;
+  const outboundWorkersThisSend = new Set<string>();
   const workerOutboundQueue = new WorkerOutboundQueue((worker, instruction, options) => {
     const result = workerSession.sendWorkerMessage(worker, instruction, options);
     if (result.status !== 'error') {
       outboundDispatchesThisSend += 1;
+      outboundWorkersThisSend.add(worker);
     }
     return result;
   });
@@ -942,6 +954,7 @@ export async function runConductorSession(
       onDispatchHoldChanged,
       resetOutboundDispatchesThisSend: () => {
         outboundDispatchesThisSend = 0;
+        outboundWorkersThisSend.clear();
       },
       getOutboundDispatchesThisSend: () => outboundDispatchesThisSend,
       workerSession,
@@ -962,6 +975,13 @@ export async function runConductorSession(
         : undefined,
       workerDispatches: sessionLogger.workerDispatches,
       workerFailures: sessionLogger.workerFailures,
+      onConductorInbound: (info) => {
+        sessionLogger.emit({
+          type: 'conductor.inbound',
+          triggers: info.triggers,
+          sources: info.sources,
+        });
+      },
       // Agent.resume already retains the conductor conversation. Worker
       // startup happens before the driver, so resume events (including
       // permission.pending) must be dispatched without waiting for a new
@@ -1017,6 +1037,13 @@ export async function runConductorSession(
         usage: info.usage,
         modelId: info.modelId,
       });
+      if (outboundWorkersThisSend.size > 0) {
+        sessionLogger.emit({
+          type: 'conductor.outbound',
+          workers: [...outboundWorkersThisSend],
+          mode: 'conductor',
+        });
+      }
       sessionLogger.emit({
         type: 'conductor.send',
         sendCount: info.sendCount,
@@ -1027,6 +1054,7 @@ export async function runConductorSession(
         workerDispatches: info.workerDispatches,
         workerFailures: info.workerFailures,
       });
+      outboundWorkersThisSend.clear();
       if (
         isConductorSendAuthError({
           runId: info.runId,

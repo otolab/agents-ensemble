@@ -48,31 +48,51 @@ function classifyConductorSendError(
 }
 
 /** harness sink と TUI 活動ログで共有する行本文（prefix なし）。 */
-export function formatHarnessLogBody(event: SessionLogEvent): string | undefined {
+export interface HarnessLogBodyOptions {
+  /** 既定の境界・障害要約に加えて従来のイベント単位行を表示する。 */
+  verbose?: boolean;
+}
+
+export function formatHarnessLogBody(
+  event: SessionLogEvent,
+  options: HarnessLogBodyOptions = {},
+): string | undefined {
+  const verbose = options.verbose === true;
+
   switch (event.type) {
     case 'harness.worktree':
+      if (!verbose) return undefined;
       return `worktree path=${event.path} branch=${event.branch} mode=${event.mode}`;
     case 'harness.worktree.removed':
+      if (!verbose) return undefined;
       return `worktree.removed path=${event.path} branch=${event.branch}`;
     case 'harness.worktree.remove_skipped':
       return `worktree.remove_skipped path=${event.path} branch=${event.branch} reason=${event.reason}`;
     case 'harness.worktree.remove_failed':
       return `worktree.remove_failed path=${event.path} branch=${event.branch} error=${event.error}`;
     case 'harness.worker.prompt.started':
+      if (!verbose) return undefined;
       return `worker.prompt.started name=${event.name} kind=${event.kind} source=${event.source}`;
     case 'harness.worker.prompt.completed':
+      if (!verbose) return undefined;
       return `worker.prompt.completed name=${event.name} kind=${event.kind} source=${event.source} stopReason=${event.stopReason}`;
     case 'harness.worker.prompt.failed':
       return `worker.prompt.failed name=${event.name} kind=${event.kind} source=${event.source} error=${event.error}`;
     case 'harness.worker.acp.update':
       return undefined;
     case 'harness.worker.state':
+      if (!verbose) return undefined;
       return `worker.state name=${event.name} kind=${event.kind} state=${event.state}`;
     case 'harness.session.workers':
+      if (!verbose) return undefined;
       return `session.workers count=${event.workers.length} names=${event.workers.map((worker) => worker.name).join(',')}`;
     case 'operator.input':
+      if (!verbose) return undefined;
       return `operator.input turn=${event.conductorTurn} bytes=${event.text.length}`;
+    case 'conductor.inbound':
+      return `conductor.deliver triggers=${event.triggers} sources=${event.sources.join(',')}`;
     case 'conductor.send.started': {
+      if (!verbose) return undefined;
       let line = `conductor.send.started n=${event.sendCount}`;
       if (event.dispatchSource) {
         line += ` source=${event.dispatchSource}`;
@@ -96,6 +116,7 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return `permission.cleanup reason=${event.reason}${worker} count=${event.entries.length}${ids ? ` ids=${ids}` : ''}`;
     }
     case 'conductor.send': {
+      if (event.status !== 'error' && !verbose) return undefined;
       let line = `conductor.send n=${event.sendCount} status=${event.status} workerDone=${event.workerDispatches} workerFailed=${event.workerFailures}`;
       if (event.status === 'error') {
         const detail = event.error?.message ?? 'unknown error';
@@ -110,7 +131,12 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       }
       return line;
     }
+    case 'conductor.outbound':
+      return `worker.prompt workers=${event.workers.length} mode=${event.mode}${event.workers.length > 0 ? ` names=${event.workers.join(',')}` : ''}`;
+    case 'harness.worker.bootstrap':
+      return `worker.prompt workers=${event.workers.length} mode=${event.mode}`;
     case 'worker.round':
+      if (!verbose) return undefined;
       return `worker.round name=${event.dispatch.name} kind=${event.dispatch.kind} source=${event.dispatch.source ?? 'conductor'} stopReason=${event.dispatch.promptResult.stopReason} path=${event.dispatch.worktree.path}`;
     case 'worker.failed':
       return `worker.failed name=${event.failure.name} kind=${event.failure.kind} error=${event.failure.error}`;
@@ -119,8 +145,10 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return `worker.stderr${name} ${event.line}`;
     }
     case 'session.stop':
+      if (event.stopReason === 'completed' && !verbose) return undefined;
       return `session.stop reason=${event.stopReason}`;
     case 'harness.github.update':
+      if (!verbose) return undefined;
       return `github.update items=${event.itemCount}`;
     case 'harness.github.monitor_error':
       return `github.monitor_error ${event.message}`;
@@ -136,6 +164,7 @@ export function formatHarnessLogBody(event: SessionLogEvent): string | undefined
       return `teardown force=${event.force} total=${event.durationMs}ms${phases ? ` ${phases}` : ''}`;
     }
     case 'harness.teardown.phase':
+      if (!verbose) return undefined;
       return `teardown.phase ${event.phase}`;
     default:
       return undefined;

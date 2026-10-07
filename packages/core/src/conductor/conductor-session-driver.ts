@@ -27,6 +27,7 @@ import {
 import {
   countWorkerOutcomesInBatch,
   dispatchBatchStateAfterSend,
+  eventSourceKey,
   markContinuationConsumed,
   selectDispatchBatch,
   type DispatchBatchState,
@@ -52,6 +53,13 @@ export interface ConductorSendProgressInfo {
   sendCount: number;
   runId: string;
   tool: string;
+}
+
+export interface ConductorInboundInfo {
+  /** 今回の `agent.send` に束ねた trigger 数。 */
+  triggers: number;
+  /** 束に含まれる SessionEvent の source key。initial を含む。 */
+  sources: string[];
 }
 
 export interface ConductorSendCompleteInfo {
@@ -89,6 +97,8 @@ export interface ConductorSessionDriverOptions {
   stopOnUnansweredInput?: boolean;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
+  /** `agent.send` 直前の harness → conductor 境界要約。 */
+  onConductorInbound?: (info: ConductorInboundInfo) => void;
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
@@ -207,6 +217,10 @@ export async function runConductorSessionDriver(
   };
 
   if (!options.skipInitialSend) {
+    options.onConductorInbound?.({
+      triggers: 1,
+      sources: ['initial'],
+    });
     lastSendResult = await runEventConductorSend({
       // Keep the initial dispatch asynchronous as it was when the driver
       // fetched and compiled the prompt itself.
@@ -348,6 +362,10 @@ export async function runConductorSessionDriver(
       autonomousTurns,
     );
     const { workerDispatches, workerFailures } = countWorkerOutcomesInBatch(batch);
+    options.onConductorInbound?.({
+      triggers: batch.length,
+      sources: uniqueSources(batch, dispatchResult.sourceKey),
+    });
     inFlightSend = runEventConductorSend({
       message: formatSessionEventsForConductor(batch),
       conductorHandle: options.conductorHandle,
@@ -384,6 +402,11 @@ export async function runConductorSessionDriver(
     autonomousTurns,
     lastDispatchesThisTurn,
   };
+}
+
+function uniqueSources(batch: SessionEvent[], fallback: string): string[] {
+  const sources = [...new Set(batch.map((event) => eventSourceKey(event)))];
+  return sources.length > 0 ? sources : [fallback];
 }
 
 function runEventConductorSend(input: {
