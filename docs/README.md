@@ -15,7 +15,8 @@
 | `config.yaml` の書き方・MCP | [config.md](config.md) | `.ensemble/config.yaml` と `mcp.json` のスキーマ |
 | TUI とオペレータ入力の利用者向け挙動 | [operator-input.md](operator-input.md) | キー実装の調査・方針は [cli-text-input-keybindings.md](cli-text-input-keybindings.md) |
 | TUI scrollback の検出設計・端末制約 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | native viewport 検出、tmux adapter、A+B の設計境界 |
-| 認証トークンの解決 | [settings.md](settings.md) | `config.yaml` の認証関連キーは [config.md](config.md) |
+| Pi conductor の初回セットアップ・認証 | [pi-conductor-setup.md](pi-conductor-setup.md) | backend、resource root、provider login、復旧の利用者向け正本。全体設定は [settings.md](settings.md)、resource の詳細は [config.md](config.md) |
+| 認証トークンの全体解決 | [settings.md](settings.md) | Pi の利用者向け導線は [pi-conductor-setup.md](pi-conductor-setup.md)、`config.yaml` の認証関連キーは [config.md](config.md) |
 | conductor send の再接続設計 | [conductor-auth-reconnect.md](conductor-auth-reconnect.md) | 認証設定そのものの正本ではない |
 | 現行の技術構成 | [architecture.md](architecture.md) | 判断の履歴は ADR |
 | テスト分類・実行方針 | [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e |
@@ -27,6 +28,7 @@
 | 文書 | 内容 |
 |------|------|
 | [cli/README.md](cli/README.md) | インストール・認証準備・最小クイックスタート・利用者向け doc 索引 |
+| [pi-conductor-setup.md](pi-conductor-setup.md) | Pi conductor の backend 選択、resource root、provider 認証、`auth/models` CLI、障害復旧 |
 | [settings.md](settings.md) | CLI / 環境変数 / config / profile / TUI の設定一覧と解決順（設定全体の正本） |
 | [config.md](config.md) | `.ensemble/config.yaml` の配置・書き方・スキーマ・MCP 設定（config の正本） |
 | [operator-input.md](operator-input.md) | TUI のレイアウト、オペレータ入力、post-loop の利用者向け契約 |

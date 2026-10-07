@@ -62,7 +62,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 |------|--------|
 | GitHub API | `GITHUB_TOKEN` > `GH_TOKEN` > （`allowGhAuthTokenFallback: true` 時のみ）`gh auth token` |
 | conductor (cursor) | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
-| conductor (pi) | project `auth.json` の読取優先 > user `ModelRuntime`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > `settings.json` fallback > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存。project 層の明示的な OAuth credential は refresh できないため使わず、user 層の runtime へログインする |
+| conductor (pi) | [Pi conductor セットアップと認証](pi-conductor-setup.md)のとおり、project `auth.json` の読取優先 > user `ModelRuntime`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > `settings.json` fallback / `models.json` provider key > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存し、project OAuth は refresh しない |
 | worker ACP（preset 依存） | preset ごとに README / ADR 0019 参照 |
 
 ## 一覧 — Phase 1（config.yaml）
@@ -169,6 +169,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 
 ## 関連
 
+- [pi-conductor-setup.md](pi-conductor-setup.md) — Pi conductor の初回セットアップ・認証・復旧（利用者向け正本）
 - [config.md](config.md) — `config.yaml` スキーマ・MCP・移行表
 - [CLI README](https://github.com/otolab/agents-ensemble/blob/main/docs/cli/README.md) — CLI のインストール・最小クイックスタート
 - [operator-input.md](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) — TUI レイアウト・Issue リンク

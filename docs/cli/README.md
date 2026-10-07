@@ -25,20 +25,15 @@ conductor:
   backend: pi
 ```
 
-Pi backend は Pi の設定ファイルを読みます。モデル設定は次のいずれかの resource root に置き、認証は `ensemble auth` または Pi の環境変数・設定ファイルから provider 単位で解決します（プロジェクト設定がユーザ設定を上書きします）。
+Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の user root は `~/.ensemble/pi/`、project root は `<repoRoot>/.ensemble/pi/` が既定で、`conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。
 
-| 層 | パス |
-|----|------|
-| ユーザ | `~/.ensemble/pi/` |
-| プロジェクト | `<repoRoot>/.ensemble/pi/` |
+Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
-`ensemble auth login` は設定済みの conductor backend に分岐します。Cursor は Cursor SDK のブラウザログイン、Pi は **provider 単位のログイン**です。Pi では `--provider <id>` を指定でき、省略時は Pi `settings.json` の `defaultProvider`（または選択モデル）から決まります。API-key provider は TTY の secret prompt から `~/.ensemble/pi/auth.json`（または `conductor.pi.agentDir` の `auth.json`）へ保存し、OAuth provider は Pi 1.x の `ModelRuntime.login` を使って URL・device code を stderr に表示します。`ensemble auth logout` は選択 provider の user 層 credential を削除し、`ensemble auth status` は秘密値を表示せず状態・保存先を示します。プロジェクト層の `<repoRoot>/.ensemble/pi/auth.json` は既存の project-over-user 読取優先を保ち、login が書き換えることはありません。project 層の明示的な OAuth credential は refresh できないため実行時には使わず、`ensemble auth login --provider <id>` で user 層へ保存する必要があります。MCP HTTP OAuth は Pi 公式 MCP extension が別に管理します。`ensemble models list` は認証済み Pi model のみを表示します。
+Pi は headless の `createAgentSession` を使い、Pi CLI の `<cwd>/.pi/` 設定とは独立しています。resource discovery、`settings.json` の headless 対応範囲、`models.json`、MCP の制約は [config.md](https://github.com/otolab/agents-ensemble/blob/main/docs/config.md) と [ADR 0025](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0025-conductor-agent-backend-sdk-and-pi.md) を参照してください。
 
-Pi の resource root は `~/.ensemble/pi/` と `<repoRoot>/.ensemble/pi/` です。`conductor.pi.agentDir` / `conductor.pi.projectDir` で root のみ上書きできます。`settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決し、skills は compiled system prompt に追加され、prompts は `/name args` として展開されます。themes は headless conductor で読み込み・project 同名解決まで行いますが、TUI renderer がないため色・表示設定は適用しません。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は conductor の system prompt には使わず、modular-prompt のコンパイル結果を優先します。
+headless conductor の設定キーと create / reload / resume の適用範囲は [config.md の headless 対応範囲](https://github.com/otolab/agents-ensemble/blob/main/docs/config.md#settingsjson-の-headless-対応範囲) を参照してください。
 
-`settings.json` の headless 対応は、モデル選択（`defaultProvider` / `defaultModel`）、認証 fallback（`apiKey` / `apiKeys`）、resource path（`extensions` / `skills` / `prompts` / `themes`）、および Pi `AgentSession` の compaction（`compaction.*`）と branch summary（`branchSummary.*`）です。コード正本は `pi-headless-settings.ts` で、未知のキーを含む未対応設定は Pi SDK の SettingsManager に渡さず警告なしで無視します。headless conductor は `.ensemble/pi` の設定だけを使い、Pi 標準の `<cwd>/.pi/settings.json` は読みません。`sessionDir` は設定しても conductor の transcript 保存先を変更せず、harness の `<repoRoot>/.ensemble/pi/sessions/` を使います。create / resume は `.ensemble/pi` を読み、reload は起動時スナップショットを再適用します。reload または snapshot 復元に失敗した session は close / dispose 済みの unusable 状態になります。cleanup が成功した単一の元エラーはそのまま reject され、元エラーと cleanup error が併発した場合は `AggregateError` の `.errors` に両方を含めて reject されるため、失敗した session は再利用せず resume/create してください。詳細な対応キーと失敗モードは [config.md の headless 対応範囲](../config.md#settingsjson-の-headless-対応範囲) を参照してください。
-
-MCP は harness が解決した `mcp.json` の map を Pi 1.x の公式 `createMcpExtension({ loadConfig })` へ注入します。Pi の `createAgentSession` は stdio / Streamable HTTP を扱い、SSE はサポートしません。MCP tool 名は `mcp__<server>__<tool>`、resource tools は `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource` です。HTTP OAuth は公式 extension の対話フロー・credential store が担当します。解決済み設定が無い場合も harness tools と local extension tools は有効です。sidecar には MCP map の digest を保存し、resume 時に変更を検出した場合は fail fast します。Pi `.pi/mcp.json` への同期や core 独自の MCP client はありません。設計上の前提と制限は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) を参照してください。
+Pi の MCP transport、OAuth、resource tools、resume 時の制約は [ADR 0025](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0025-conductor-agent-backend-sdk-and-pi.md) にまとめています。
 
 backend はセッション開始時に選択され、resume の途中では切り替えられません。system prompt の渡し方、認証、resume の差分は [ADR 0025](../adr/0025-conductor-agent-backend-sdk-and-pi.md) にまとまっています。
 
@@ -98,6 +93,7 @@ ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 "まずテスト�
 
 | 文書 | 内容 |
 |------|------|
+| [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) | Pi backend の resource root、provider 認証、`auth/models` CLI、障害復旧 |
 | [設定値リファレンス](https://github.com/otolab/agents-ensemble/blob/main/docs/settings.md) | CLI / 環境変数 / config / profile / TUI の設定一覧と解決順 |
 | [ensemble 共通設定](https://github.com/otolab/agents-ensemble/blob/main/docs/config.md) | `.ensemble/config.yaml` の書き方・スキーマ・MCP 設定 |
 | [オペレータ入力](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) | TUI レイアウトと入力の利用者向け挙動 |
