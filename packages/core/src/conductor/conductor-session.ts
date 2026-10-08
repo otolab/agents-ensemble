@@ -44,6 +44,8 @@ import {
 import { WorkerSession } from '../runtime/worker-session.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
+import { createProjectSkillCatalog } from '../skills/project-skill-catalog.js';
+import { createProjectSkillTools } from '../skills/project-skill-tools.js';
 import { createSessionUsageTools } from '../dispatch/session-usage-tool.js';
 import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
@@ -635,6 +637,10 @@ export async function runConductorSession(
     getWorkerFailures: () => sessionLogger.workerFailures,
   });
 
+  const projectSkillTools = createProjectSkillTools({
+    catalog: createProjectSkillCatalog(options.repoRoot),
+  });
+
   const registerGitHubWatchTools = createRegisterGitHubWatchTool({
     issueUrl: options.issueUrl,
     getCursor: () => {
@@ -696,6 +702,7 @@ export async function runConductorSession(
     .registerAll(resolvePermissionTools)
     .registerAll(promptWorkerTools)
     .registerAll(workerStatusTools)
+    .registerAll(projectSkillTools)
     .registerAll(registerGitHubWatchTools)
     .registerAll(unregisterGitHubWatchTools)
     .registerAll(sessionUsageTools)

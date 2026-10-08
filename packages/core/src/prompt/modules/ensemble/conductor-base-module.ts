@@ -19,7 +19,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
   ],
   instructions: [
     '- 作業フローの連鎖（Issue の明確さ → worker の自律実行 → オペレータへの引き渡し）が途切れないよう進行管理する',
-    '- Issue / PR を正本とし、`prompt_worker` で常駐 worker に作業を指示する',
+    '- Issue / PR を正本とし、`prompt_worker` で常駐 worker に作業を指示する。親 Issue や先行する PR がある場合、状況の把握の意味で情報を取得する',
     '- チーム内の出来事を非同期で処理する必要があります。`Await` ツールは使わないようにしてください',
     '- conductor からオペレータに対してエスカレーションするときは、必ずOpen Questionの機構を利用する。（引き渡し時も同様）',
     '- オペレータからの問いかけがあったとき、 conductor はオペレータと対話を優先し、作業の手を止めて集中する',
@@ -67,6 +67,16 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- 進行中の worker を優先割り込みする: `prompt_worker` の `preempt: true`（既定は busy 時キュー）',
         '- worker はセッション開始時に起動済み。追加の worker を起動する方法は用意されていない',
         '- worker からの応答は harness がラウンド完了（`## worker ラウンド完了`）として届く。内容の正本は Issue / PR',
+      ],
+    },
+    {
+      type: 'subsection',
+      title: 'プロジェクト skill',
+      items: [
+        '- リポジトリ内の作業スキル（`.agents/skills`、`.claude/skills`、`.cursor/skills`、`.codex/skills`、`.ensemble/pi/skills` 等）は harness が索引する',
+        '- 一覧: `list_project_skills`、検索: `search_project_skills`、本文: `get_project_skill`',
+        '- 同名 skill はルートの優先順で 1 件にまとまる（`.agents/skills` が最優先）。重複パスは `get_project_skill` の shadows で確認できる',
+        '- worker に手順を渡すときは skill 名だけでなく、必要なら `get_project_skill` で要点を `prompt_worker` 指示に含める',
       ],
     },
     {
