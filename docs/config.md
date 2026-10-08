@@ -125,7 +125,7 @@ profile / worker に `acp` がある worker は `--default-acp-*` / config `acp.
 - `prompts/`: Markdown template を読み込み、`/name args` の user prompt を Pi 標準の引数置換で展開します。
 - `themes/`: Pi 標準 JSON として読み込み、project 同名を優先します。conductor は headless `AgentSession` のため TUI renderer がなく、theme の色・表示設定はモデル入出力には適用しません。
 
-Pi の認証 CLI は provider 単位です。`ensemble auth login --provider <id>` は API-key provider なら secret prompt の値を user root の `auth.json`（既定 `~/.ensemble/pi/auth.json`）へ保存し、OAuth provider なら Pi 1.x の `ModelRuntime.login` を TTY / stderr 経由で実行します。`--provider` を省略した場合は `settings.json` の `defaultProvider` または選択モデルから解決します。`logout` / `status` も同じ provider 解決を使います。project `auth.json` は既存の project-over-user 読取優先を維持しますが、login の書込み先にはなりません。project 層の明示的な OAuth credential は runtime が安全に refresh できないため実行時には使わず、user 層でのログインを案内します。Pi 標準どおり `models.json` / `settings.json` の API キーと header には `!command`（シェルコマンドの stdout）も指定できます。このコマンドは conductor プロセスの shell で実行され、同プロセスの OS 権限・環境を使うため、信頼できる設定でのみ使用してください。これは Pi と同じ accepted risk です。Pi の MCP HTTP OAuth は conductor provider OAuth とは別に、公式 MCP extension が `mcp-auth.json` と対話フローを管理します。`ensemble models list` は `ModelRegistry` と project resource の解決結果から認証済み model だけを表示します。
+Pi の初回セットアップ、provider 認証、認証優先順、TTY / stderr の login、project OAuth の制約、`ensemble models list`、missing key / 401 の復旧は [Pi conductor セットアップと認証](pi-conductor-setup.md)を正本とします。この config reference では、headless conductor が `settings.json` の `apiKey` / `apiKeys` を認証 fallback として使い、`models.json` の provider `apiKey` と `!command` も Pi resource として解決することだけを定義します。`!command` は conductor process の shell と OS 権限で実行されるため、信頼できる設定でのみ使用してください。Pi の MCP HTTP OAuth は provider OAuth とは別に、公式 MCP extension が管理します。
 
 #### `settings.json` の headless 対応範囲
 
@@ -247,6 +247,7 @@ YAML に未知のキーがあっても **無視する**（警告なし）。将�
 
 ## 関連
 
+- [pi-conductor-setup.md](pi-conductor-setup.md) — Pi conductor の初回セットアップ・認証・復旧（利用者向け正本）
 - [settings.md](settings.md) — 全設定層の一覧・解決パターン（本書は config.yaml 詳細）
 - [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) — 解決順の設計判断
 - [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) — `.ensemble/` 配下の規約（team-profile）
