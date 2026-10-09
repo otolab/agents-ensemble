@@ -612,32 +612,6 @@ function firstNonEmptyLine(value: string): string | undefined {
   return value.split(/\r?\n/).find((line) => line.trim())?.trim();
 }
 
-/** Add usable Pi skills to the compiled conductor prompt. */
-export function formatPiSkillsForPrompt(skills: PiSkillResource[]): string {
-  const visible = skills.filter((skill) => !skill.disableModelInvocation);
-  if (visible.length === 0) return '';
-  return [
-    '',
-    '',
-    '<pi_skills>',
-    ...visible.flatMap((skill) => [
-      `  <skill name="${escapeXml(skill.name)}" description="${escapeXml(skill.description)}" location="${escapeXml(skill.filePath)}">`,
-      skill.content,
-      '  </skill>',
-    ]),
-    '</pi_skills>',
-  ].join('\n');
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
 /** Expand Pi prompt templates and explicit skill invocations for headless sends. */
 export function expandPiResourcePrompt(
   prompt: string,

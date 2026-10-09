@@ -431,7 +431,6 @@ async function createPiConductorSession(
   // (.ensemble/pi), so use an in-memory manager and populate it only through
   // the code-level headless settings allowlist below.
   const settingsManager = SettingsManager.inMemory();
-  applyPiHeadlessSettings(settingsManager, headlessSettingsOverrides);
   if (piSkills) {
     applyPiHeadlessSettings(
       settingsManager,
@@ -460,6 +459,7 @@ async function createPiConductorSession(
     ],
   });
   await resourceLoader.reload();
+  applyPiHeadlessSettings(settingsManager, headlessSettingsOverrides);
 
   let session: AgentSession | undefined;
   try {
