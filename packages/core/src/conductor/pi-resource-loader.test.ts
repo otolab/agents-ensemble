@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadPiResources, resolvePiResourceRoots } from './pi-resource-loader.js';
+import {
+  expandPiResourcePrompt,
+  loadPiResources,
+  resolvePiResourceRoots,
+} from './pi-resource-loader.js';
 
 const EXTENSION = (name: string, text: string): string => `
 export default (pi) => pi.registerTool({
@@ -143,6 +147,26 @@ describe('Pi resource loader', () => {
       content: [{ type: 'text', text: 'project override' }],
       details: {},
     });
+  });
+
+  it('skips /skill: expansion when expandSkills is false', () => {
+    const prompt = expandPiResourcePrompt(
+      '/skill:review extra',
+      {
+        prompts: [],
+        skills: [
+          {
+            name: 'review',
+            description: 'review',
+            filePath: '/tmp/review/SKILL.md',
+            content: 'skill body',
+            disableModelInvocation: false,
+          },
+        ],
+      },
+      { expandSkills: false },
+    );
+    expect(prompt).toBe('/skill:review extra');
   });
 
   it('uses the ensemble defaults and PI_CODING_AGENT_DIR compatibility override', async () => {

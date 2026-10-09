@@ -124,6 +124,26 @@ materials:
     );
   });
 
+  it('loads conductor piSkills and validates its boolean shape', async () => {
+    const disabledPath = join(dir, 'profile-pi-skills-off.yaml');
+    await writeFile(
+      disabledPath,
+      'conductor:\n  piSkills: false\nworkers: []\n',
+    );
+    await expect(loadProfileFromFile(disabledPath)).resolves.toMatchObject({
+      conductor: { piSkills: false },
+    });
+
+    const invalidPath = join(dir, 'profile-pi-skills-invalid.yaml');
+    await writeFile(
+      invalidPath,
+      'conductor:\n  piSkills: "false"\nworkers: []\n',
+    );
+    await expect(loadProfileFromFile(invalidPath)).rejects.toThrow(
+      /profile conductor\.piSkills.*boolean/,
+    );
+  });
+
   it('preserves profile acp through resolveProfile and resolves worker spawn', async () => {
     const path = join(dir, 'profile.yaml');
     await writeFile(

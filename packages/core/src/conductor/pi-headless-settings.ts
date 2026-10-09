@@ -122,3 +122,13 @@ function pickRecord(
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+/** Pi SettingsManager overrides needed for Pi standard skill discovery. */
+export function getPiSkillsDiscoverySettingsOverrides(
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
+  const skills = settings.skills;
+  if (!Array.isArray(skills)) return {};
+  const paths = skills.filter((entry): entry is string => typeof entry === 'string');
+  return paths.length > 0 ? { skills: paths } : {};
+}

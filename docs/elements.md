@@ -68,7 +68,7 @@ harness 横断設定（profile 既定・session 既定・GitHub 認証 / monitor
 - `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。`~` / `~/...` は homedir() で展開。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準
 - `acp` … **任意**。profile 全体の ACP spawn デフォルト（worker 未指定時に継承）。`workers[].acp` がある worker は CLI / `ENSEMBLE_DEFAULT_ACP_CLI` / config `acp.defaultPreset` で上書きされない
 - `workers[].acp` … **任意**。worker 単位の ACP spawn（profile `acp` より優先）。`preset`（`cursor` | `claude` | `codex` | `pi` | `custom`）または `command` / `args` / `env` を指定。built-in preset への追加 `args` は preset 既定 args の後ろに連結
-- `conductor` … **任意**。`backend`（`cursor` | `pi`）と `builtinTools` を指定。`builtinTools` は conductor の built-in coding tools を制御し、省略・未指定は有効、`false` のみ無効。制御の正本は profile であり、`config.yaml` や worker ACP には同キーを設けない
+- `conductor` … **任意**。`backend`（`cursor` | `pi`）、`builtinTools`、`piSkills`（Pi backend のみ）を指定。`builtinTools` / `piSkills` は省略・未指定は有効、`false` のみ無効。制御の正本は profile であり、`config.yaml` や worker ACP には同キーを設けない
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む
 
 `materials` の各項目は `kinds` を省略すると全 agent に同梱され、`kinds: [conductor, reviewer]` のように指定すると列挙した kind の compile 結果だけに同梱されます。指定した kind は `agents` のキーまたは `workers[].kind` に存在する必要があります。

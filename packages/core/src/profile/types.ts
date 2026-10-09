@@ -34,6 +34,11 @@ export interface ProfileConductorConfig {
   backend?: ConductorBackend;
   /** built-in coding tools の有効化。省略時は有効。 */
   builtinTools?: boolean;
+  /**
+   * Pi backend のみ。Pi 標準の skill discovery（`DefaultResourceLoader` + `read` / `/skill:`）を使う。
+   * 省略時は有効。`false` で skill 索引・system prompt への載せを行わない。
+   */
+  piSkills?: boolean;
 }
 
 /** プロファイル YAML の worker エントリ（文字列は name=kind のショートハンド）。 */

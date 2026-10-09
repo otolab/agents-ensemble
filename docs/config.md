@@ -121,7 +121,7 @@ profile / worker に `acp` がある worker は `--default-acp-*` / config `acp.
 - `settings.json` / `auth.json`: user → project の deep merge。credential は provider 単位で project entry を優先します。
 - `models.json`: Pi 標準の `providers` / `models` / built-in `modelOverrides` / request headers を model 解決へ反映します。
 - `extensions/`: ExtensionAPI の tool を読み込み、fixed harness tools と local extension tools を conductor の custom tools として追加します。同名の harness tool は上書きしません。MCP は下記の Pi 公式 extension が担当します。
-- `skills/`: `SKILL.md` を読み込み、model invocation が有効な skill 本文を compiled system prompt の後ろに追加します。`/skill:<name>` で明示的に展開できます。
+- `skills/`: Pi 標準の skill discovery（`DefaultResourceLoader`）で索引します。system prompt には name / description / location のカタログを載せ、本文は `read` または `/skill:<name>` で読みます。`settings.json` の `skills` 配列で `.claude/skills` 等の追加パスを指定できます。profile の `conductor.piSkills`（省略時は有効）で無効化できます。
 - `prompts/`: Markdown template を読み込み、`/name args` の user prompt を Pi 標準の引数置換で展開します。
 - `themes/`: Pi 標準 JSON として読み込み、project 同名を優先します。conductor は headless `AgentSession` のため TUI renderer がなく、theme の色・表示設定はモデル入出力には適用しません。
 

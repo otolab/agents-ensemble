@@ -705,6 +705,9 @@ export async function runConductorSession(
     cwd: conductorCwd,
     systemPrompt,
     builtinTools: activeProfile.conductor?.builtinTools !== false,
+    ...(conductorBackend === 'pi'
+      ? { piSkills: activeProfile.conductor?.piSkills !== false }
+      : {}),
     apiKey: options.apiKey,
     modelId: options.modelId,
     ...(conductorBackend === 'pi'
