@@ -4,6 +4,11 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import { pathToFileURL } from 'node:url';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { getPiHeadlessSetting } from './pi-headless-settings.js';
+import {
+  discoverSkillFiles,
+  parseMarkdownResource,
+  readSkillMarkdown,
+} from '../skills/skill-markdown.js';
 
 /** The Pi settings fields used by model/auth resolution and resource loading. */
 export interface PiSettingsFile {
@@ -442,49 +447,11 @@ async function loadSkills(paths: string[]): Promise<PiSkillResource[]> {
   const skills = new Map<string, PiSkillResource>();
   for (const path of paths) {
     for (const filePath of await discoverSkillFiles(path)) {
-      const resource = await readSkill(filePath);
+      const resource = await readSkillMarkdown(filePath);
       if (resource) skills.set(resource.name, resource);
     }
   }
   return [...skills.values()];
-}
-
-async function discoverSkillFiles(path: string): Promise<string[]> {
-  const directFile = await readableFile(path);
-  if (directFile && extname(path).toLowerCase() === '.md') return [path];
-
-  const entries = await readDirectory(path);
-  if (entries.length === 0) return [];
-  const skillFile = join(path, 'SKILL.md');
-  if (await readableFile(skillFile)) return [skillFile];
-
-  const files: string[] = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (entry.name.startsWith('.')) continue;
-    const child = join(path, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await discoverSkillFiles(child)));
-    } else if (extname(entry.name).toLowerCase() === '.md') {
-      files.push(child);
-    }
-  }
-  return files;
-}
-
-async function readSkill(path: string): Promise<PiSkillResource | undefined> {
-  const source = await readOptionalText(path);
-  if (source === undefined) return undefined;
-  const parsed = parseMarkdownResource(source);
-  const name = stringValue(parsed.frontmatter.name) ?? basename(dirname(path));
-  const description =
-    stringValue(parsed.frontmatter.description) ?? firstNonEmptyLine(parsed.body) ?? name;
-  return {
-    name,
-    description,
-    filePath: path,
-    content: parsed.body,
-    disableModelInvocation: parsed.frontmatter['disable-model-invocation'] === true,
-  };
 }
 
 async function loadPromptTemplates(paths: string[]): Promise<PiPromptResource[]> {
@@ -561,47 +528,6 @@ async function readOptionalText(path: string): Promise<string | undefined> {
     if (isPathUnavailable(error)) return undefined;
     throw error;
   }
-}
-
-interface ParsedMarkdownResource {
-  frontmatter: Record<string, string | boolean>;
-  body: string;
-}
-
-function parseMarkdownResource(source: string): ParsedMarkdownResource {
-  const lines = source.split(/\r?\n/);
-  if (lines[0]?.trim() !== '---') return { frontmatter: {}, body: source.trim() };
-  const end = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
-  if (end < 0) return { frontmatter: {}, body: source.trim() };
-
-  const frontmatter: Record<string, string | boolean> = {};
-  for (const line of lines.slice(1, end)) {
-    const separator = line.indexOf(':');
-    if (separator < 0) continue;
-    const key = line.slice(0, separator).trim();
-    const rawValue = line.slice(separator + 1).trim();
-    if (!key) continue;
-    if (rawValue === 'true' || rawValue === 'false') {
-      frontmatter[key] = rawValue === 'true';
-    } else {
-      frontmatter[key] = unquote(rawValue);
-    }
-  }
-  return {
-    frontmatter,
-    body: lines.slice(end + 1).join('\n').trim(),
-  };
-}
-
-function unquote(value: string): string {
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
 }
 
 function stringValue(value: unknown): string | undefined {

@@ -117,7 +117,7 @@ conductor の LLM backend は Cursor SDK と Pi 1.x (`createAgentSession`) か�
 | 手段 | 内容 |
 |------|------|
 | `mode: "agent"` | SDK 実行モード（[adr/0006-conductor-agent-mode.md](adr/0006-conductor-agent-mode.md)）。振る舞いの正本は下記プロンプト / materials |
-| `customTools` | conductor 用: `ask_human`, `answer_open_question`, `list_open_questions`, `get_open_question`, `resolve_permission`, `register_github_watch`, `unregister_github_watch`（[ADR 0007](adr/0007-permission-pipeline.md), [ADR 0008](adr/0008-human-dialogue-open-questions.md)）。worker 起動はセッション開始時 |
+| `customTools` | conductor 用: `ask_human`, `answer_open_question`, `list_open_questions`, `get_open_question`, `resolve_permission`, `list_project_skills`, `search_project_skills`, `get_project_skill`, `register_github_watch`, `unregister_github_watch`（[ADR 0007](adr/0007-permission-pipeline.md), [ADR 0008](adr/0008-human-dialogue-open-questions.md)）。worker 起動はセッション開始時 |
 | プロンプト / materials | PromptModule と profile materials で指揮専任・委任方針を明示（conductor の正本） |
 
 conductor は **理解と dispatch に専念**し、ファイル編集・テスト実行は worker の domain とする。
@@ -146,7 +146,7 @@ await using conductor = await Agent.create({
   mode: "agent",
   local: {
     cwd: orchestratorWorkspace,
-    customTools: { ask_human, answer_open_question, list_open_questions, get_open_question, resolve_permission, register_github_watch, unregister_github_watch },
+    customTools: { ask_human, answer_open_question, list_open_questions, get_open_question, resolve_permission, list_project_skills, search_project_skills, get_project_skill, register_github_watch, unregister_github_watch },
   },
 });
 
