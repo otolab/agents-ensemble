@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   getPiHeadlessSettingsManagerOverrides,
+  getPiSkillsDiscoverySettingsOverrides,
   PI_HEADLESS_SETTING_DEFINITIONS,
 } from './pi-headless-settings.js';
 
@@ -45,6 +46,19 @@ describe('Pi headless settings contract', () => {
         },
       },
       branchSummary: { reserveTokens: 3_000, skipPrompt: true },
+    });
+  });
+
+  it('maps settings.skills into SettingsManager overrides for Pi discovery', () => {
+    expect(
+      getPiSkillsDiscoverySettingsOverrides({
+        skills: ['.claude/skills', '../.cursor/skills'],
+      }),
+    ).toEqual({
+      skills: ['.claude/skills', '../.cursor/skills'],
+    });
+    expect(getPiSkillsDiscoverySettingsOverrides({ skills: [1, 'ok'] })).toEqual({
+      skills: ['ok'],
     });
   });
 });

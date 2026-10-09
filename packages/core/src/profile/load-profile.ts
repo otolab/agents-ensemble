@@ -184,10 +184,17 @@ function parseProfileConductorConfig(
       `Invalid profile conductor.builtinTools in ${label}: expected boolean`,
     );
   }
+  const piSkills = config.piSkills;
+  if (piSkills !== undefined && typeof piSkills !== 'boolean') {
+    throw new Error(
+      `Invalid profile conductor.piSkills in ${label}: expected boolean`,
+    );
+  }
 
   return {
     ...(backend !== undefined ? { backend } : {}),
     ...(builtinTools !== undefined ? { builtinTools } : {}),
+    ...(piSkills !== undefined ? { piSkills } : {}),
   };
 }
 

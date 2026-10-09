@@ -15,6 +15,8 @@ export interface ConductorAgentCreateOptions {
   systemPrompt: string;
   /** Whether backend built-in coding tools are available; omitted means enabled. */
   builtinTools?: boolean;
+  /** Pi backend only: use Pi standard skill discovery; omitted means enabled. */
+  piSkills?: boolean;
   apiKey?: string;
   modelId?: string;
   mcpServers?: McpServerConfigMap;

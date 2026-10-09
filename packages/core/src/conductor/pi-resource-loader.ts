@@ -117,6 +117,8 @@ export interface PiResourceLoaderOptions {
   /** Injectable environment/home for tests; production uses process defaults. */
   env?: NodeJS.ProcessEnv;
   home?: string;
+  /** When false, only `skillPaths` are resolved and `skills` stays empty. */
+  loadSkillContents?: boolean;
 }
 
 export interface PiResources {
@@ -243,7 +245,8 @@ export async function loadPiResources(
     skillPaths,
     promptPaths,
     themePaths,
-    skills: await loadSkills(skillPaths),
+    skills:
+      options.loadSkillContents === false ? [] : await loadSkills(skillPaths),
     prompts: await loadPromptTemplates(promptPaths),
     themes: await loadThemes(themePaths),
   };
@@ -639,11 +642,15 @@ function escapeXml(value: string): string {
 export function expandPiResourcePrompt(
   prompt: string,
   resources: Pick<PiResources, 'prompts' | 'skills'>,
+  options?: { expandSkills?: boolean },
 ): string {
   const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(prompt);
   if (!match) return prompt;
   const name = match[1]!;
   const args = splitPromptArguments(match[2] ?? '');
+  if (name.startsWith('skill:') && options?.expandSkills === false) {
+    return prompt;
+  }
   if (name.startsWith('skill:')) {
     const skill = resources.skills.find((candidate) => candidate.name === name.slice('skill:'.length));
     if (!skill) return prompt;

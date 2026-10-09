@@ -43,11 +43,11 @@ import { toPiCodingAgentTools } from './conductor-tool-pi-adapter.js';
 import {
   getPiHeadlessSettingsManagerOverrides,
   getPiHeadlessSetting,
+  getPiSkillsDiscoverySettingsOverrides,
   type PiHeadlessSettingsManagerOverrides,
 } from './pi-headless-settings.js';
 import {
   expandPiResourcePrompt,
-  formatPiSkillsForPrompt,
   loadPiResources,
   type PiModelDefinition,
   type PiModelCost,
@@ -169,6 +169,7 @@ export class PiConductorAgent implements ConductorAgent {
     public readonly agentId: string,
     private readonly modelId: string,
     private readonly mcpStartupState: PiMcpStartupState,
+    private readonly piSkills: boolean,
     private readonly onStreamText?: (text: string) => void,
   ) {
     this.unsubscribe = this.session.subscribe((event) => this.handleEvent(event));
@@ -221,10 +222,15 @@ export class PiConductorAgent implements ConductorAgent {
     const state: PiSendState = { runId, callbacks };
     this.activeSend = state;
     try {
-      await this.session.prompt(expandPiResourcePrompt(prompt, this.resources), {
-        expandPromptTemplates: false,
-        source: 'rpc',
-      });
+      await this.session.prompt(
+        expandPiResourcePrompt(prompt, this.resources, {
+          expandSkills: !this.piSkills,
+        }),
+        {
+          expandPromptTemplates: false,
+          source: 'rpc',
+        },
+      );
     } catch (error) {
       return {
         runId,
@@ -314,7 +320,7 @@ export class PiConductorAgent implements ConductorAgent {
 
   /** Resume recompiles and reinstalls the native system prompt on each run. */
   async setSystemPrompt(systemPrompt: string): Promise<void> {
-    this.systemPromptRef.value = withPiSkills(systemPrompt, this.resources);
+    this.systemPromptRef.value = systemPrompt;
   }
 
   async close(): Promise<void> {
@@ -385,7 +391,11 @@ async function createPiConductorSession(
   // Validate the harness-resolved map before creating the SDK session so an
   // unsupported transport fails with an actionable Pi-specific error.
   if (options.mcpServers) loadPiMcpConfig(options.mcpServers, piMcpResolution);
-  const resources = await loadPiResources(options);
+  const piSkills = options.piSkills !== false;
+  const resources = await loadPiResources({
+    ...options,
+    loadSkillContents: !piSkills,
+  });
   const headlessSettingsOverrides = getPiHeadlessSettingsManagerOverrides(resources.settings);
   const authContext = await createPiConductorAuthContext(options, resources);
   const resolved = await resolvePiModelConfigFromResources(options, resources, authContext);
@@ -414,19 +424,28 @@ async function createPiConductorSession(
   }
 
   const systemPromptRef = {
-    value: withPiSkills(options.systemPrompt, resources),
+    value: options.systemPrompt,
   };
   // Pi's file-backed SettingsManager reads both agentDir/settings.json and
   // <cwd>/.pi/settings.json. The conductor has a different resource contract
   // (.ensemble/pi), so use an in-memory manager and populate it only through
   // the code-level headless settings allowlist below.
   const settingsManager = SettingsManager.inMemory();
+  applyPiHeadlessSettings(settingsManager, headlessSettingsOverrides);
+  if (piSkills) {
+    applyPiHeadlessSettings(
+      settingsManager,
+      getPiSkillsDiscoverySettingsOverrides(resources.settings),
+    );
+    settingsManager.setProjectTrusted(true);
+  }
   const resourceLoader = new DefaultResourceLoader({
     cwd: options.cwd,
     agentDir: authContext.agentDir,
     settingsManager,
     noExtensions: true,
-    noSkills: true,
+    noSkills: !piSkills,
+    additionalSkillPaths: piSkills ? resources.skillPaths : [],
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
@@ -441,10 +460,6 @@ async function createPiConductorSession(
     ],
   });
   await resourceLoader.reload();
-  // Apply only the settings-manager channel from the already merged ensemble
-  // resources. Model selection, auth fallback, and resource paths are handled
-  // by their respective ensemble channels; all other keys stay ignored.
-  applyPiHeadlessSettings(settingsManager, headlessSettingsOverrides);
 
   let session: AgentSession | undefined;
   try {
@@ -494,6 +509,7 @@ async function createPiConductorSession(
       agentId,
       resolved.modelId,
       mcpStartupState,
+      piSkills,
       options.onStreamText,
     );
   } catch (error) {
@@ -767,10 +783,6 @@ function expandPiMcpString(
       return basenameSuffix ? basename(resolution.cwd) : resolution.cwd;
     },
   );
-}
-
-function withPiSkills(systemPrompt: string, resources: PiResources): string {
-  return `${systemPrompt}${formatPiSkillsForPrompt(resources.skills)}`;
 }
 
 function resolvePiModel(
