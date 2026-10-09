@@ -1,5 +1,15 @@
 # @agents-ensemble/cli
 
+## 0.9.3
+
+### Patch Changes
+
+- 9fd9d71: 既定の harness telemetry を conductor 境界・障害系の要約に絞り、`--verbose` / `CONDUCTOR_VERBOSE` / `conductor.verbose` で詳細表示を復活します。
+- Updated dependencies [9fd9d71]
+- Updated dependencies [140e8ff]
+- Updated dependencies [dac599b]
+  - @agents-ensemble/core@0.9.3
+
 ## 0.9.2
 
 ### Patch Changes
