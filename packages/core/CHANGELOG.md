@@ -1,5 +1,13 @@
 # @agents-ensemble/core
 
+## 0.9.3
+
+### Patch Changes
+
+- 9fd9d71: 既定の harness telemetry を conductor 境界・障害系の要約に絞り、`--verbose` / `CONDUCTOR_VERBOSE` / `conductor.verbose` で詳細表示を復活します。
+- 140e8ff: conductor 基底プロンプトを調整（進行・引き渡しの objective、open question の位置、状態照会 subsection の整理）。
+- dac599b: Pi conductor の skill を Pi 標準の `DefaultResourceLoader` discovery に載せ替え、profile の `conductor.piSkills`（既定有効）で無効化できるようにします。
+
 ## 0.9.2
 
 ### Patch Changes
