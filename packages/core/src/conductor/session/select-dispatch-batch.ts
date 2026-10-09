@@ -36,6 +36,7 @@ const STATIC_SOURCE_PRIORITY: Record<string, number> = {
   'worker.failed': 1,
   'worker.completed': 2,
   github: 3,
+  'permission.stall': 4,
 };
 
 /** セッションイベントの dispatch ソース key を返す。 */
@@ -47,6 +48,8 @@ export function eventSourceKey(event: SessionEvent): DispatchSourceKey {
       return 'operator.reconnect';
     case 'permission.pending':
       return 'permission';
+    case 'permission.stall':
+      return 'permission.stall';
     case 'worker.completed':
       return `worker:${event.result.name}`;
     case 'worker.failed':
@@ -68,6 +71,8 @@ function staticEventPriority(event: SessionEvent): number {
       return STATIC_SOURCE_PRIORITY['operator.reconnect'];
     case 'permission.pending':
       return STATIC_SOURCE_PRIORITY.permission;
+    case 'permission.stall':
+      return STATIC_SOURCE_PRIORITY['permission.stall'];
     case 'worker.failed':
       return STATIC_SOURCE_PRIORITY['worker.failed'];
     case 'worker.completed':

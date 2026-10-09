@@ -578,6 +578,32 @@ describe('executeIssueCommand maxTurns wiring', () => {
     );
   });
 
+  it('passes explicit permission deadlock stall threshold to runIssueSession', async () => {
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand(
+      'https://github.com/org/repo/issues/1',
+      { ...baseOptions, permissionDeadlockStallMs: 420_000 },
+      {
+        isOperatorInputInteractive: () => false,
+        runIssueSession,
+        loadProfile,
+        SessionLogger,
+      },
+    );
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({ permissionDeadlockStallMs: 420_000 }),
+    );
+  });
+
   it('enables waitForOperatorExit when interactive TTY without --no-wait', async () => {
     mockTuiHost.createIssueSessionTuiHost.mockClear();
     mockTuiHost.dispose.mockClear();

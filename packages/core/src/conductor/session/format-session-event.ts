@@ -33,6 +33,12 @@ function formatSingleSessionEventForConductor(event: SessionEvent): string {
         '',
         formatEventBodyForConductor(event),
       ].join('\n');
+    case 'permission.stall':
+      return [
+        '## permission 停滞警告',
+        '',
+        formatEventBodyForConductor(event),
+      ].join('\n');
     case 'github.update':
       return [
         '## GitHub 更新',
@@ -58,6 +64,15 @@ function formatEventBodyForConductor(event: SessionEvent): string {
       return fencedYaml('worker.failed', event.failure);
     case 'permission.pending':
       return fencedYaml('permission.pending', event.permission);
+    case 'permission.stall':
+      return fencedYaml('permission.stall', {
+        message: event.message,
+        pendingPermissionIds: event.pendingPermissionIds,
+        pendingPermissionCount: event.pendingPermissionCount,
+        oldestPermissionCreatedAt: event.oldestPermissionCreatedAt,
+        stallAgeMs: event.stallAgeMs,
+        stallThresholdMs: event.stallThresholdMs,
+      });
     case 'github.update':
       // `ci.completed` items carry the commit-SHA aggregate state in the
       // generic GitHub update YAML; preserve those fields for conductor

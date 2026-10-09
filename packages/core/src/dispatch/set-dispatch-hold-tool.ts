@@ -22,9 +22,10 @@ export function createSetDispatchHoldTool(
       description: [
         'Temporarily hold trigger SessionEvents before dispatching them to the conductor.',
         '`hold: true` is useful while reading an Issue/PR or coordinating several workers; held events are kept in arrival order.',
-        '`operator.message` always bypasses the hold; `permission.pending` is held like other trigger events.',
+        '`operator.message` always bypasses the hold; `permission.pending` is held like other trigger events, and low-priority `permission.stall` is also a hold target.',
+        'Normal dispatch prioritizes `permission.pending` and other actionable operator input over `permission.stall`.',
         'Events already queued before release are collected before the flush count is returned.',
-        '`hold: false` releases the held trigger events, including permission.pending, for dispatch. Normally they arrive as one combined conductor send; after max-turns, permission may be sent first while blocked worker events remain held.',
+        '`hold: false` releases the held trigger events, including permission.pending and permission.stall, for dispatch. Normally they arrive as one combined conductor send; after max-turns, permission may still be sent first for recovery while blocked worker events remain held.',
       ].join(' '),
       inputSchema: {
         type: 'object',
@@ -32,7 +33,7 @@ export function createSetDispatchHoldTool(
           hold: {
             type: 'boolean',
             description:
-              'true to hold worker/GitHub/permission trigger events, false to release and flush them',
+              'true to hold worker/GitHub/permission.pending/permission.stall trigger events, false to release and flush them; permission.pending normally has priority over low-priority permission.stall, which may still arrive after max-turns for permission recovery',
           },
         },
         required: ['hold'],

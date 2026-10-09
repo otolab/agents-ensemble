@@ -5,6 +5,7 @@ export type {
   WorkerCompletedEvent,
   WorkerFailedEvent,
   PermissionPendingEvent,
+  PermissionStallEvent,
   GitHubUpdateEvent,
 } from './session-event.js';
 

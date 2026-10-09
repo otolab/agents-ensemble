@@ -211,6 +211,24 @@ describe('canDispatchConductorSend', () => {
     ).toBe(true);
   });
 
+  it('allows permission.stall at max turns for permission recovery', () => {
+    expect(
+      canDispatchConductorSend(
+        {
+          type: 'permission.stall',
+          message: 'permission stalled',
+          pendingPermissionIds: ['perm-1'],
+          pendingPermissionCount: 1,
+          oldestPermissionCreatedAt: 0,
+          stallAgeMs: 300_000,
+          stallThresholdMs: 300_000,
+        },
+        5,
+        5,
+      ),
+    ).toBe(true);
+  });
+
   it('blocks worker.completed at max turns', () => {
     expect(
       canDispatchConductorSend(

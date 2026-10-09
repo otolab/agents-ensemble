@@ -33,6 +33,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '  - 例えば、workerからの作業報告が後で通知として届くことがあります',
         '- `## worker ラウンド完了` — worker の 1 `session/prompt` ラウンド終了。`source: harness` は init prompt（作業開始ではない）、`source: conductor` は自分が `prompt_worker` したラウンド。タスク完了の意味ではない',
         '- `## permission 判断待ち` — worker の操作許可が保留中',
+        '- `## permission 停滞警告` — pending permission が長時間解消されないことを伝える低優先度の `permission.stall`。通常は `permission.pending` などの判断に必要な通知を優先し、stall 自体は一時的な dispatch hold の対象です。max-turns 到達後でも permission 回復用に届くことがあります',
       ],
     },
     {
@@ -40,8 +41,8 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
       title: 'dispatch 保留',
       items: [
         '- 複数 worker の完了をまとめて読みたいとき、Issue / PR を集中して読んでいるときは `set_dispatch_hold({ hold: true })` を使う',
-        '- 保留中は `operator.message` だけ即時に届き、`permission.pending` は他の trigger と同じく held buffer に積まれる。permission の判断は `hold: false` まで待つ',
-        '- 作業状況をまとめて判断できる状態になったら `set_dispatch_hold({ hold: false })` を使う。保留中の trigger イベントは通常、到着順の 1 束として 1 回の通知に合成される。max-turns で worker / GitHub を送れない場合は held permission が先に届き、残りは operator 入力後に届く',
+        '- 保留中は `operator.message` だけ即時に届き、`permission.pending` と低優先度の `permission.stall` は held buffer に積まれる。通常の dispatch では `permission.pending` など判断に必要な通知を stall より優先する',
+        '- 作業状況をまとめて判断できる状態になったら `set_dispatch_hold({ hold: false })` を使う。保留中の trigger イベントは通常、到着順の 1 束として 1 回の通知に合成される。max-turns で worker / GitHub を送れない場合でも、permission.pending と permission.stall は permission 回復用に届き得る',
         '- 保留は一時的な Driver 状態で、セッション再開時には解除されている',
       ],
     },

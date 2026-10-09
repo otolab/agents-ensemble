@@ -10,6 +10,22 @@ function toolText(result: { content: Array<{ text?: string }> }): string {
 }
 
 describe('createSetDispatchHoldTool', () => {
+  it('documents permission stall priority, hold, and max-turn recovery', () => {
+    const tools = createSetDispatchHoldTool({ state: createDispatchHoldState() });
+    const tool = tools.set_dispatch_hold!;
+    const holdDescription = String(
+      (tool.inputSchema.properties?.hold as { description?: string })
+        .description ?? '',
+    );
+
+    expect(tool.description).toContain('permission.stall');
+    expect(tool.description).toContain('permission.pending');
+    expect(tool.description).toContain('max-turns');
+    expect(holdDescription).toContain('permission.stall');
+    expect(holdDescription).toContain('permission.pending');
+    expect(holdDescription).toContain('max-turns');
+  });
+
   it('enables hold and reports the current buffered count', async () => {
     const state = createDispatchHoldState();
     const changes: DispatchHoldChange[] = [];

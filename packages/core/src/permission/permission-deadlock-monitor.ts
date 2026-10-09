@@ -1,7 +1,7 @@
 import type { PermissionPipeline } from './permission-pipeline.js';
 
-/** pending permission が継続したとみなす閾値（ms）。Issue #125 / harness-events.md §6。 */
-export const DEFAULT_PERMISSION_DEADLOCK_STALL_MS = 30_000;
+/** pending permission が継続したとみなす閾値（ms）。Issue #416 / harness-events.md §6。 */
+export const DEFAULT_PERMISSION_DEADLOCK_STALL_MS = 300_000;
 
 /** デッドロック検知の poll 間隔（ms）。 */
 export const DEFAULT_PERMISSION_DEADLOCK_POLL_MS = 5_000;
@@ -11,10 +11,22 @@ export interface PermissionDeadlockActivitySnapshot {
   hasProcessingWorker: boolean;
 }
 
+/** conductor に届ける permission 停滞通知の追加コンテキスト。 */
+export interface PermissionDeadlockStall {
+  message: string;
+  pendingPermissionIds: string[];
+  pendingPermissionCount: number;
+  oldestPermissionCreatedAt: number;
+  stallAgeMs: number;
+  stallThresholdMs: number;
+}
+
 export interface PermissionDeadlockMonitorOptions {
   pipeline: PermissionPipeline;
   getActivitySnapshot: () => PermissionDeadlockActivitySnapshot;
   onWarning: (message: string) => void;
+  /** `harness.warning` と同じ検知時に conductor 通知を受け取る。 */
+  onStall?: (stall: PermissionDeadlockStall) => void;
   stallThresholdMs?: number;
   pollIntervalMs?: number;
   shutdownSignal?: AbortSignal;
@@ -82,8 +94,10 @@ export function createPermissionDeadlockMonitor(
       return;
     }
 
-    const oldestCreatedAt = Math.min(...pending.map((entry) => entry.createdAt));
-    const stallAgeMs = now() - oldestCreatedAt;
+    const oldestPermissionCreatedAt = Math.min(
+      ...pending.map((entry) => entry.createdAt),
+    );
+    const stallAgeMs = now() - oldestPermissionCreatedAt;
     if (stallAgeMs < stallThresholdMs) {
       return;
     }
@@ -93,7 +107,16 @@ export function createPermissionDeadlockMonitor(
     }
 
     warnedForCurrentStall = true;
-    options.onWarning(formatPermissionDeadlockWarningMessage(stallThresholdMs));
+    const message = formatPermissionDeadlockWarningMessage(stallThresholdMs);
+    options.onWarning(message);
+    options.onStall?.({
+      message,
+      pendingPermissionIds: pending.map((entry) => entry.id),
+      pendingPermissionCount: pending.length,
+      oldestPermissionCreatedAt,
+      stallAgeMs,
+      stallThresholdMs,
+    });
   };
 
   const stopMonitor = () => {

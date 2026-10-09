@@ -20,6 +20,7 @@ import type { PermissionPolicyRules } from '../permission/permission-policy.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import {
   createPermissionDeadlockMonitor,
+  type PermissionDeadlockStall,
   type PermissionDeadlockMonitor,
 } from '../permission/permission-deadlock-monitor.js';
 import { createResolvePermissionTool } from '../permission/resolve-permission-tool.js';
@@ -216,7 +217,7 @@ export interface RunConductorSessionOptions {
   githubMonitorActivePollIntervalMs?: number;
   /** permission デッドロック検知を無効化する。 */
   disablePermissionDeadlockMonitor?: boolean;
-  /** pending permission 継続とみなす閾値（ms）。デフォルト 30s。 */
+  /** pending permission 継続とみなす閾値（ms）。デフォルト 300s。 */
   permissionDeadlockStallMs?: number;
   /** デッドロック検知の poll 間隔（ms）。デフォルト 5s。 */
   permissionDeadlockPollMs?: number;
@@ -888,6 +889,17 @@ export async function runConductorSession(
       }),
       onWarning: (message) => {
         sessionLogger.emit({ type: 'harness.warning', message });
+      },
+      onStall: (stall: PermissionDeadlockStall) => {
+        eventQueue.enqueue({
+          type: 'permission.stall',
+          message: stall.message,
+          pendingPermissionIds: stall.pendingPermissionIds,
+          pendingPermissionCount: stall.pendingPermissionCount,
+          oldestPermissionCreatedAt: stall.oldestPermissionCreatedAt,
+          stallAgeMs: stall.stallAgeMs,
+          stallThresholdMs: stall.stallThresholdMs,
+        });
       },
       stallThresholdMs: options.permissionDeadlockStallMs,
       pollIntervalMs: options.permissionDeadlockPollMs,

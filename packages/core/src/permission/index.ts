@@ -36,6 +36,7 @@ export {
 } from './permission-deadlock-monitor.js';
 export type {
   PermissionDeadlockActivitySnapshot,
+  PermissionDeadlockStall,
   PermissionDeadlockMonitor,
   PermissionDeadlockMonitorOptions,
 } from './permission-deadlock-monitor.js';

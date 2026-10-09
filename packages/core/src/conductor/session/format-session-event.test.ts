@@ -93,6 +93,25 @@ describe('formatSessionEventForConductor', () => {
     expect(message).toContain('toolName: shell');
   });
 
+  it('formats permission.stall with low-priority telemetry context', () => {
+    const message = formatSessionEventForConductor({
+      type: 'permission.stall',
+      message: 'long-running permission has not been resolved',
+      pendingPermissionIds: ['perm-1', 'perm-2'],
+      pendingPermissionCount: 2,
+      oldestPermissionCreatedAt: 1_700_000_000_000,
+      stallAgeMs: 300_000,
+      stallThresholdMs: 300_000,
+    });
+
+    expect(message).toContain('## permission 停滞警告');
+    expect(message).toContain('```yaml');
+    expect(message).toContain('permission.stall');
+    expect(message).toContain('pendingPermissionCount: 2');
+    expect(message).toContain('stallThresholdMs: 300000');
+    expect(message).toContain('long-running permission has not been resolved');
+  });
+
   it('formats multiple operator messages with numbered sections', () => {
     const message = formatSessionEventsForConductor([
       { type: 'operator.message', text: 'first' },

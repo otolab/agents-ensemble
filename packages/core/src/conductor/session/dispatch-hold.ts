@@ -14,7 +14,7 @@ export type DispatchHoldChangeStatus = 'enabled' | 'updated' | 'released';
 export interface DispatchHoldChange {
   status: DispatchHoldChangeStatus;
   hold: boolean;
-  /** held buffer に積まれた trigger の全件数（permission.pending を含む）。 */
+  /** held buffer に積まれた trigger の全件数（permission.pending / permission.stall を含む）。 */
   heldEventCount: number;
   flushedEventCount?: number;
 }
