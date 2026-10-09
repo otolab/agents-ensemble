@@ -48,6 +48,18 @@ function permission(id: string): SessionEvent {
   };
 }
 
+function permissionStall(id = 'perm-1'): SessionEvent {
+  return {
+    type: 'permission.stall',
+    message: 'permission stalled',
+    pendingPermissionIds: [id],
+    pendingPermissionCount: 1,
+    oldestPermissionCreatedAt: 1,
+    stallAgeMs: 300_000,
+    stallThresholdMs: 300_000,
+  };
+}
+
 function githubUpdate(count: number): SessionEvent {
   return {
     type: 'github.update',
@@ -63,6 +75,7 @@ describe('eventSourceKey', () => {
   it('maps event types to member keys', () => {
     expect(eventSourceKey(operator('hi'))).toBe('operator');
     expect(eventSourceKey(permission('p1'))).toBe('permission');
+    expect(eventSourceKey(permissionStall())).toBe('permission.stall');
     expect(eventSourceKey(workerCompleted('implementer'))).toBe(
       'worker:implementer',
     );
@@ -315,6 +328,44 @@ describe('selectDispatchBatch', () => {
 
     expect(result?.batch.sourceKey).toBe('worker:implementer');
     expect(result?.remainingQueue).toEqual([githubUpdate(1)]);
+  });
+
+  it('dispatches github.update before the low-priority permission stall notice', () => {
+    const queue = [permissionStall(), githubUpdate(1)];
+    const result = selectDispatchBatch({
+      queue,
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('github');
+    expect(result?.remainingQueue).toEqual([permissionStall()]);
+  });
+
+  it('keeps operator and pending permission ahead of a permission stall notice', () => {
+    const queue = [permissionStall(), permission('perm-2'), operator('answer')];
+
+    const operatorResult = selectDispatchBatch({
+      queue,
+      state: {},
+      autonomousTurns: 5,
+      maxTurns: 5,
+    });
+    expect(operatorResult?.batch.sourceKey).toBe('operator');
+    expect(operatorResult?.remainingQueue).toEqual([
+      permissionStall(),
+      permission('perm-2'),
+    ]);
+
+    const permissionResult = selectDispatchBatch({
+      queue: operatorResult!.remainingQueue,
+      state: {},
+      autonomousTurns: 5,
+      maxTurns: 5,
+    });
+    expect(permissionResult?.batch.sourceKey).toBe('permission');
+    expect(permissionResult?.remainingQueue).toEqual([permissionStall()]);
   });
 
   it('batches consecutive github.update events', () => {

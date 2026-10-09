@@ -3,6 +3,7 @@
 import { resolve } from 'node:path';
 import { Command } from 'commander';
 import {
+  DEFAULT_PERMISSION_DEADLOCK_STALL_MS,
   listConductorModels,
   resolveIssueUrl,
 } from '@agents-ensemble/core';
@@ -98,6 +99,11 @@ program
     (value) => Number.parseInt(value, 10),
   )
   .option(
+    '--permission-deadlock-stall-ms <n>',
+    `Permission deadlock warning threshold in milliseconds (default: ${DEFAULT_PERMISSION_DEADLOCK_STALL_MS})`,
+    (value) => Number.parseInt(value, 10),
+  )
+  .option(
     '--summary-format <format>',
     'Exit summary format: auto (TTY=text, non-TTY=json), json, or text',
     'auto',
@@ -127,6 +133,7 @@ program
         defaultAcpArg?: string[];
         githubMonitor?: boolean;
         githubMonitorDebounceMs?: number;
+        permissionDeadlockStallMs?: number;
         summaryFormat?: string;
         includeFullResponseText?: boolean;
       },

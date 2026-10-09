@@ -88,7 +88,8 @@ export function canDispatchConductorSend(
   if (
     event.type === 'operator.message' ||
     event.type === 'operator.reconnect' ||
-    event.type === 'permission.pending'
+    event.type === 'permission.pending' ||
+    event.type === 'permission.stall'
   ) {
     return true;
   }

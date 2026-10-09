@@ -798,6 +798,66 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('completed');
   });
 
+  it('dispatches permission.stall after operator.message and permission.pending', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'running',
+        result: 'working',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'running',
+        result: 'operator handled',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-3',
+        status: 'running',
+        result: 'permission handled',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-4',
+        status: 'finished',
+        result: 'stall handled',
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+
+    eventQueue.enqueue({
+      type: 'permission.stall',
+      message: 'permission stalled for a long time',
+      pendingPermissionIds: ['permission-1'],
+      pendingPermissionCount: 1,
+      oldestPermissionCreatedAt: 1,
+      stallAgeMs: 300_000,
+      stallThresholdMs: 300_000,
+    });
+    eventQueue.enqueue({
+      type: 'permission.pending',
+      permission: {
+        id: 'permission-1',
+        workerId: 'worker-1',
+        createdAt: 1,
+        request: { toolName: 'Shell', sessionId: 'sess-1' },
+      },
+    });
+    eventQueue.enqueue({ type: 'operator.message', text: 'operator takes priority' });
+    const result = await runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue,
+        conductor,
+        maxTurns: 2,
+      }),
+    });
+
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(String(send.mock.calls[1]![0])).toBe('operator takes priority');
+    expect(String(send.mock.calls[2]![0])).toContain('permission.pending');
+    expect(String(send.mock.calls[3]![0])).toContain('permission.stall');
+    expect(result.stopReason).toBe('completed');
+  });
+
   it('dispatches operator.reconnect without sending it to the conductor', async () => {
     const recoveredSend = vi.fn().mockResolvedValue({
       runId: 'run-2',

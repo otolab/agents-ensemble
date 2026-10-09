@@ -13,6 +13,7 @@ export type SessionEvent =
   | WorkerCompletedEvent
   | WorkerFailedEvent
   | PermissionPendingEvent
+  | PermissionStallEvent
   | GitHubUpdateEvent;
 
 export interface OperatorMessageEvent extends SessionEventDispatchFields {
@@ -39,6 +40,17 @@ export interface PermissionPendingEvent
   extends SessionEventDispatchFields,
     PermissionPendingConductorPayload {
   type: 'permission.pending';
+}
+
+/** pending permission の長時間停滞を伝える低優先度の harness 通知。 */
+export interface PermissionStallEvent extends SessionEventDispatchFields {
+  type: 'permission.stall';
+  message: string;
+  pendingPermissionIds: string[];
+  pendingPermissionCount: number;
+  oldestPermissionCreatedAt: number;
+  stallAgeMs: number;
+  stallThresholdMs: number;
 }
 
 export interface GitHubUpdateEvent extends SessionEventDispatchFields {

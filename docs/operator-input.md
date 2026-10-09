@@ -203,6 +203,7 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 | `operator.message` | dispatch。オペレータ入力として自律ターン数をリセット | dispatch（`operator.message` は常に許可） |
 | `operator.reconnect` | dispatch。直近の send 完了後に conductor を close → `resume(sameId)`。worker / worktree / プロセスは変更しない | conductor へメッセージとして送らない。max-turns 到達後も許可 |
 | `permission.pending` | dispatch | dispatch（permission 判断を優先） |
+| `permission.stall` | dispatch（低優先度。`operator.message` / `permission.pending` を先に選択） | dispatch（permission 回復用の例外。`operator.message` / `permission.pending` の後） |
 | `github.update` | dispatch。状況把握ターンとして自律ターンを 1 消費 | enqueue のみ。dispatch しない |
 
 自律ループ稼働中（post-loop 前）も同じ経路で処理する。GitHub 更新の種類による `notifyResume` 条件分岐は持たない（#160）。

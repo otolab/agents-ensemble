@@ -45,7 +45,7 @@ import {
 export interface ConductorSendStartedInfo {
   /** これから実行する send の通し番号（1 始まり）。 */
   sendCount: number;
-  /** dispatch 束の source key（`operator` / `permission` / `worker:*` / `initial`）。 */
+  /** dispatch 束の source key（`operator` / `permission` / `permission.stall` / `worker:*` / `initial`）。 */
   dispatchSource?: string;
 }
 
@@ -516,8 +516,9 @@ async function waitForDispatchBatch(input: {
     });
 
     // operator.message は hold 中も通す。release 後に queue に残った
-    // permission.pending も held flush より先に通す。held buffer 内の
-    // permission.pending は max-turns で worker が止まっていても下の分岐で救済する。
+    // permission.pending / permission.stall も held flush より先に通す。held
+    // buffer 内の permission 系イベントは max-turns で worker が止まっていても
+    // 下の分岐で救済する。
     if (selected && isImmediateDispatchSource(selected.batch.sourceKey)) {
       input.eventQueue.replaceQueue(selected.remainingQueue);
       return {
@@ -545,9 +546,9 @@ async function waitForDispatchBatch(input: {
         };
       }
 
-      // max-turns blocks worker/GitHub events, but permission.pending remains
-      // dispatchable. Reuse the normal batch selector so held permissions are
-      // selected with the same priority and batching rules as queued events.
+      // max-turns blocks worker/GitHub events, but permission events remain
+      // dispatchable. Reuse the normal batch selector so held permissions and
+      // stall notices are selected with the same priority and batching rules as queued events.
       const selectedHeld = selectDispatchBatch({
         queue: heldEvents,
         state: input.dispatchBatchState,

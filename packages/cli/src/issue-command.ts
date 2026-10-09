@@ -47,6 +47,8 @@ export interface IssueCommandOptions {
   /** commander の `--no-github-monitor` 用。false で監視無効。 */
   githubMonitor?: boolean;
   githubMonitorDebounceMs?: number;
+  /** permission 停滞警告の閾値（ms）。未指定時は core の既定値を使う。 */
+  permissionDeadlockStallMs?: number;
 }
 
 export interface IssueCommandDeps {
@@ -249,6 +251,9 @@ export async function executeIssueCommand(
       sessionLogger,
       ...(githubMonitorEnabled ? {} : { disableGitHubMonitor: true }),
       githubMonitorDebounceMs,
+      ...(options.permissionDeadlockStallMs !== undefined
+        ? { permissionDeadlockStallMs: options.permissionDeadlockStallMs }
+        : {}),
       ...(defaultAcp ? { defaultAcp: { ...defaultAcp, config: ensembleConfig } } : { defaultAcp: { config: ensembleConfig } }),
       ...(interactive
         ? {

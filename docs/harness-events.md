@@ -62,7 +62,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `worker.failed` | worker attach / prompt 失敗。該当 worker の pending permission は conductor への通知前に deny | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `permission.cleanup` | worker failure / teardown で pending permission を deny・解消した直後 | `[harness] permission.cleanup reason=worker.failed worker=... count=... ids=...` | なし |
-| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続）。GitHub 認証トークン未解決時（#222） | `[harness] warning: ...`（permission デッドロック / GitHub 認証不足） | なし |
+| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続）。GitHub 認証トークン未解決時（#222） | `[harness] warning: ...`（permission デッドロック / GitHub 認証不足） | なし。permission デッドロック時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
 | `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
 | `conductor.auth.recovery` | 自動再接続失敗後の復旧ヒント | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
@@ -70,7 +70,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `session.stop` | セッション終了直前 | 異常終了時は既定でも `[harness] session.stop reason=...`。正常完了は verbose 時のみ | `stopReason` を確定 |
 | `harness.teardown` | `runConductorSession` の worker/ACP・conductor 停止後、isolated worktree 削除前（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
 | `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | verbose 時のみ `[harness] teardown.phase <name>` | なし |
-| `conductor.dispatch_hold` | conductor が `set_dispatch_hold` を呼んだとき、または held trigger（`permission.pending` を含む）の件数が変化したとき | `dispatch hold enabled` / `released (flushed N events)`（observation） | TUI の保留状態と件数を更新。解除後も未送信の held trigger があれば残数を表示 |
+| `conductor.dispatch_hold` | conductor が `set_dispatch_hold` を呼んだとき、または held trigger（`permission.pending` / `permission.stall` を含む）の件数が変化したとき | `dispatch hold enabled` / `released (flushed N events)`（observation） | TUI の保留状態と件数を更新。解除後も未送信の held trigger があれば残数を表示 |
 
 ### 2.1.1 オペレータ向け representation
 
@@ -115,7 +115,7 @@ open question・エスカレーション・CLI 通知。stderr の prefix は従
 | `session.continue` | `--continue` で sidecar から再開時 | `[continue] resuming session: conductorAgentId=...` | なし |
 | `session.post_loop_wait` | 自律的な連続処理が不要になり、TTY post-loop のイベント待機を開始したとき | （post-loop 待機メッセージ） | なし |
 | `session.operator_exit` | オペレータが `/exit` / `exit` を入力した直後（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | （終了フィードバックメッセージ） | なし |
-| `conductor.dispatch_hold` | `set_dispatch_hold` の ON/OFF、および held trigger（`permission.pending` を含む）件数の更新（#265） | `dispatch hold enabled` / `released (flushed N events)` | TUI Workers ペインのタイトルを更新。解除後に残った held trigger も件数表示を維持 |
+| `conductor.dispatch_hold` | `set_dispatch_hold` の ON/OFF、および held trigger（`permission.pending` / `permission.stall` を含む）件数の更新（#265） | `dispatch hold enabled` / `released (flushed N events)` | TUI Workers ペインのタイトルを更新。解除後に残った held trigger も件数表示を維持 |
 
 CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）。
 
@@ -123,8 +123,8 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 
 | 読者 | 見えるもの | 見えないもの / 注意 |
 |------|------------|--------------------|
-| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` を含む held trigger 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator.message は dispatch を貫通する。max-turns により解除後も worker / GitHub が残る間は、残件数を表示する |
-| conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending を含む）は通常 OFF 後に 1 回の `agent.send` へ合成される。max-turns で worker / GitHub が送れない場合は held permission が先に dispatch され、残りは後続の operator 入力後に送られる。operator.message は保留されない |
+| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` / `permission.stall` を含む held trigger 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator.message は dispatch を貫通する。max-turns により解除後も worker / GitHub が残る間は、残件数を表示する |
+| conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending / permission.stall を含む）は通常 OFF 後に 1 回の `agent.send` へ合成される。max-turns で worker / GitHub が送れない場合は held permission が先に dispatch され、残りは後続の operator 入力後に送られる。operator.message は保留されない |
 | 運用・resume | 保留は Driver メモリだけ | sidecar に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
 
 保留は一時的な運用モードであり、teardown flush や crash recovery は提供しない。`/exit`、
@@ -258,7 +258,8 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | `resolve_permission` 待ち |
-| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が commit SHA 単位の CI 集約状態遷移を検知したときだけ載る（同じ SHA・同じ状態の毎 poll 再送はしない。§2.5）。conductor は payload の SHA / failed check 名を手掛かりに必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` のみ dispatch 可） |
+| `permission.stall` | worker 活動中の pending permission が既定 300s（`permissionDeadlockStallMs`）継続したとき | `## permission 停滞警告` | conductor 向けの低優先度 trigger。同一の連続停滞エピソードでは 1 回だけ。pending の再送ではなく、経過時間・対象 ID・閾値を含む。`harness.warning` は従来どおり operator 向けに出す |
+| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が commit SHA 単位の CI 集約状態遷移を検知したときだけ載る（同じ SHA・同じ状態の毎 poll 再送はしない。§2.5）。conductor は payload の SHA / failed check 名を手掛かりに必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` / `permission.stall` は dispatch 可） |
 
 ### 3.1 SessionLogEvent との対応
 
@@ -294,6 +295,7 @@ prompt_worker / sendWorkerMessage
        ├─ harness.worker.acp.update (session/prompt 中) ► TUI 活動ヒントのみ（stderr / 活動ログには出さない #161）
        ├─ permission 保留 ─► permission.pending ───────► stderr / TUI 活動ログ（即時。Workers 欄は更新しない）
        │                     SessionEvent permission.pending ► SessionEventQueue ► （dispatch hold 中は held buffer、解除後は agent.send）
+       │                     （停滞閾値到達時は permission.stall ► 同じ queue。低優先度、同一エピソード 1 回）
        │
        ├─ 成功 ─► harness.worker.prompt.completed (source=conductor) ► TUI idle（細行は verbose 時のみ）
        │          harness.worker.state idle ────────────────► TUI idle（細行は verbose 時のみ）
@@ -318,12 +320,12 @@ preempt（stopReason=cancelled）: `prompt.completed` / `worker.round` をスキ
   conductor.send ───────────────────────────► snapshot（末尾更新）+ TUI（conductor: idle）。成功の細行は verbose、error は既定でも表示
 
 dispatch hold（#265）
-  set_dispatch_hold(true) ─────────────────► observation + TUI（保留中、N 件。permission.pending を含む）
+  set_dispatch_hold(true) ─────────────────► observation + TUI（保留中、N 件。permission.pending / permission.stall を含む）
   worker/github/permission trigger ────────► SessionEvent held buffer（`[harness]` は通常どおり）
   permission ─────────────────────────────► SessionEventQueue ─► held buffer（harness/TUI 活動ログは即時）
   operator ───────────────────────────────► SessionEventQueue ─► agent.send（保留を貫通）
   set_dispatch_hold(false) ────────────────► observation ─► held events を dispatch
-                                                   │（通常は 1 本化。max-turns では permission を先行し、残件数を保持）
+                                                   │（通常は 1 本化。max-turns では permission.pending を先行し、stall はその後。残件数を保持）
                                                    └─► agent.send
 
 GitHub monitor（セッション中は常時。`--no-github-monitor` で無効化可）
@@ -380,7 +382,8 @@ init prompt 把握の目安:
 | `## worker ラウンド完了` | worker の 1 `session/prompt` 終了 | `source: harness` なら **作業開始ではない**（init prompt 完了）。`source: conductor` なら自分が `prompt_worker` したラウンド。Issue / PR を読んで進捗判断 |
 | `## worker 失敗` | attach / prompt 失敗 | 再試行・エスカレーションを検討 |
 | `## permission 判断待ち` | worker の操作許可が保留（**init prompt ラウンド中もありうる**） | `resolve_permission` またはオペレータへ。**init prompt 完了を待たない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)） |
-| `## GitHub 更新` | Issue コメント / PR レビュー / CI 集約状態遷移等 | 状況把握。**自動 `prompt_worker` はしない**。自律中・post-loop 中とも SessionDriver が処理する。ターン残ありなら dispatch して 1 ターン消費し、max-turns 到達後は `operator.message` / `permission.pending` 以外を dispatch しない |
+| `## permission 停滞警告` | pending permission が長時間解消されない状態の通知（`harness.warning` と同じ検知で 1 回） | `resolve_permission` を試みるか、解消できなければオペレータへエスカレーション。低優先度だが max-turns 到達後も permission 回復用に dispatch 可。`operator.message` / `permission.pending` を押しのけない |
+| `## GitHub 更新` | Issue コメント / PR レビュー / CI 集約状態遷移等 | 状況把握。**自動 `prompt_worker` はしない**。自律中・post-loop 中とも SessionDriver が処理する。ターン残ありなら dispatch して 1 ターン消費し、max-turns 到達後は `operator.message` / `permission.pending` / `permission.stall` 以外を dispatch しない |
 
 conductor は `list_workers` の `attachInFlight` / `state: processing` 等を **ポーリング・`Await` で待ってはならない**。状態変化は本表の SessionEvent のみが通知する。
 
@@ -473,11 +476,13 @@ TUI reducer はイベント駆動のため lifecycle を直接読まないが、
 
 | 項目 | 初期値 |
 |------|--------|
-| 停滞閾値 | **30s**（`permissionDeadlockStallMs`） |
+| 停滞閾値 | **300s**（`300_000ms`、`permissionDeadlockStallMs`） |
 | poll 間隔 | **5s**（`permissionDeadlockPollMs`） |
 | 警告回数 | 同一停滞エピソードで **1 回**。pending 解消後に再発した場合のみ再警告 |
 
-実装: `packages/core/src/permission/permission-deadlock-monitor.ts`。`runConductorSession` 起動時に自動開始（`disablePermissionDeadlockMonitor` で無効化可）。
+検知時は従来の `harness.warning` を operator 向けに出し、同時に `permission.stall` を `SessionEventQueue` へ 1 回 enqueue する。`permission.stall` は `inform` ではなく trigger のまま、静的優先度を既存イベントより低く（`operator.message` → `permission.pending` → worker / GitHub → `permission.stall`）定義するため、通常の選択で高優先度イベントを押しのけない。max-turns 到達後も `operator.message` / `permission.pending` に続く permission 回復用の例外として dispatch できる。dispatch hold 中は他の trigger と同様に held buffer に入り、解除後に選択される。CLI は `--permission-deadlock-stall-ms <n>`、API は `RunConductorSessionOptions.permissionDeadlockStallMs` で閾値を上書きできる。`permissionDeadlockPollMs` と worker UI の挙動は変更しない。
+
+実装: `packages/core/src/permission/permission-deadlock-monitor.ts`、`packages/core/src/conductor/session/select-dispatch-batch.ts`。`runConductorSession` 起動時に自動開始（`disablePermissionDeadlockMonitor` で無効化可）。
 
 ## 7. 関連コード
 
@@ -488,6 +493,8 @@ TUI reducer はイベント駆動のため lifecycle を直接読まないが、
 | `packages/core/src/conductor/session/events/session-log-event-groups.ts` | 型グループ定数（doc 対応） |
 | `packages/core/src/conductor/session/session-logger.ts` | `SessionLogger` |
 | `packages/core/src/conductor/session/format-session-event.ts` | conductor 向け見出し |
+| `packages/core/src/conductor/session/select-dispatch-batch.ts` | SessionEvent の静的優先度 |
+| `packages/core/src/conductor/session-policy.ts` | max-turns 後の dispatch 例外 |
 | `packages/core/src/conductor/conductor-session.ts` | emit / enqueue 配線 |
 | `packages/core/src/github/github-monitor.ts` | Issue / PR 更新監視 |
 | `packages/core/src/github/fetch-github-updates.ts` | GitHub REST / GraphQL ベース差分取得 |

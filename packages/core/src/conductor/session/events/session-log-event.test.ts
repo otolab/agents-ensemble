@@ -23,7 +23,7 @@ describe('session event type groups', () => {
   it('lists every SessionEvent type exactly once', () => {
     const types = new Set(SESSION_EVENT_TYPES);
     expect(types.size).toBe(SESSION_EVENT_TYPES.length);
-    expect(types.size).toBe(6);
+    expect(types.size).toBe(7);
   });
 
   it('accepts minimal payloads for each SessionLogEvent type', () => {
@@ -269,6 +269,16 @@ describe('session event type groups', () => {
               createdAt: 0,
               request: { toolName: 'Shell', raw: {} },
             },
+          };
+        case 'permission.stall':
+          return {
+            type,
+            message: 'permission stalled',
+            pendingPermissionIds: ['perm-1'],
+            pendingPermissionCount: 1,
+            oldestPermissionCreatedAt: 0,
+            stallAgeMs: 300_001,
+            stallThresholdMs: 300_000,
           };
         case 'github.update':
           return { type, items: [] };

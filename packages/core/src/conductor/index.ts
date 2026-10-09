@@ -210,6 +210,7 @@ export type {
   WorkerCompletedEvent,
   WorkerFailedEvent,
   PermissionPendingEvent,
+  PermissionStallEvent,
   GitHubUpdateEvent,
   SessionEventDispatchFields,
 } from './session/session-event.js';

@@ -56,6 +56,12 @@ profile.workers[].acp > profile.acp > CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP
 
 config キーなし。CI・スクリプト・端末検出、または 1 回限りのオペレータ入力向け。
 
+| 設定 | 環境変数 | config | CLI / API | コード default | 解決 |
+|------|----------|--------|-----------|----------------|------|
+| permission 停滞警告閾値 | — | — | `--permission-deadlock-stall-ms` / `RunConductorSessionOptions.permissionDeadlockStallMs` | `300_000ms`（300s） | 明示指定 > core default |
+
+`permissionDeadlockPollMs` は `5_000ms`（5s）のままで、この実行時設定の対象外です。
+
 ### パターン E — 認証（config は可否のみ）
 
 | 種別 | 解決順 |
