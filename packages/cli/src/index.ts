@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from 'node:path';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import {
   DEFAULT_PERMISSION_DEADLOCK_STALL_MS,
   listConductorModels,
@@ -22,6 +22,11 @@ import {
   resolveConductorCommandContext,
   type ConductorCommandOptions,
 } from './conductor-auth-command.js';
+import {
+  runPiModelsSync,
+  type PiModelsSyncResult,
+  type PiModelsSyncTarget,
+} from './pi-model-catalog-command.js';
 
 const program = new Command();
 
@@ -285,6 +290,82 @@ addConductorCommandOptions(models.command('list'))
       process.exit(1);
     }
   });
+
+addConductorCommandOptions(models.command('sync'))
+  .description('Compare a configured Pi provider catalog and add selected models')
+  .addOption(
+    new Option('--target <layer>', 'models.json layer to update when adding IDs')
+      .choices(['project', 'user']),
+  )
+  .option(
+    '--add <id>',
+    'Add an API model ID to the selected models.json (repeatable)',
+    (id: string, previous: string[] = []) => [...previous, id],
+    [],
+  )
+  .option('--json', 'Output JSON')
+  .action(
+    async (
+      options: ConductorCommandOptions & {
+        target?: PiModelsSyncTarget;
+        add?: string[];
+        json?: boolean;
+      },
+    ) => {
+      try {
+        const result = await runPiModelsSync(options);
+        if (options.json) {
+          console.log(formatPiModelsSyncJson(result));
+          return;
+        }
+        console.log(formatPiModelsSyncText(result));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
+function formatPiModelsSyncText(result: PiModelsSyncResult): string {
+  const lines = [`Pi provider: ${result.provider}`];
+  appendModelGroup(
+    lines,
+    'API only',
+    result.apiOnly.map((model) => model.id),
+  );
+  appendModelGroup(lines, 'JSON only', result.jsonOnly);
+  appendModelGroup(lines, 'Both', result.shared);
+  if (result.added.length > 0) {
+    lines.push(`Added to ${result.targetPath}:`);
+    lines.push(...result.added.map((id) => `  ${id}`));
+  }
+  if (result.skipped.length > 0) {
+    lines.push('Already present; preserved:');
+    lines.push(...result.skipped.map((id) => `  ${id}`));
+  }
+  return lines.join('\n');
+}
+
+function appendModelGroup(lines: string[], label: string, ids: string[]): void {
+  lines.push(`${label} (${ids.length}):`);
+  lines.push(...(ids.length > 0 ? ids.map((id) => `  ${id}`) : ['  （なし）']));
+}
+
+function formatPiModelsSyncJson(result: PiModelsSyncResult): string {
+  return JSON.stringify(
+    {
+      provider: result.provider,
+      apiOnly: result.apiOnly,
+      jsonOnly: result.jsonOnly,
+      shared: result.shared,
+      added: result.added,
+      skipped: result.skipped,
+      ...(result.targetPath ? { targetPath: result.targetPath } : {}),
+    },
+    null,
+    2,
+  );
+}
 
 const profiles = program.command('profiles').description('Team profile catalog');
 

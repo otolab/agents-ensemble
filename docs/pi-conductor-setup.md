@@ -97,6 +97,34 @@ ensemble models list --provider <provider-id>
 
 `auth status` は Pi の auth file の場所、provider ごとの configured 状態、credential の source を秘密値なしで表示します。`models list` は Pi の `ModelRegistry` と解決済み resource を使い、認証済み provider の model だけを表示します。対象 provider を `--provider` で絞れます。認証済み model が無い場合は Pi 向けの login / auth file / 環境変数の案内を含むエラーになります。
 
+### OpenAI 互換 provider の catalog を比較・追加する
+
+LiteLLM など、`models.json` に OpenAI 互換 endpoint として設定した provider は、明示的に `models sync` を実行して `/v1/models` catalog を確認できます。provider には `api: "openai-completions"` など Pi の OpenAI 互換 `api` と `baseUrl` が必要です。`baseUrl` は Pi の API base URL（通常は末尾が `/v1`）を指定してください。末尾が `/v1` なら `/models`、それ以外なら `/v1/models` を追加して取得します。
+
+```bash
+# API only / JSON only / 両方にある ID を表示（models.json は変更しない）
+ensemble models sync --provider litellm
+
+# API にある ID を選んで user models.json に追加
+ensemble models sync --provider litellm --target user --add gpt-6-luna
+
+# project models.json に追加
+ensemble models sync --provider litellm --target project --add gpt-6-luna
+
+# 同じ比較結果を機械処理する
+ensemble models sync --provider litellm --json
+```
+
+追加時は `--add <id>` を繰り返して複数 ID を指定できます。書込先は `--target project|user` で明示してください。project は `conductor.pi.projectDir`（既定 `<repoRoot>/.ensemble/pi`）、user は `conductor.pi.agentDir`（既定 `~/.ensemble/pi`）にある `models.json` です。既存の provider 設定と model 定義は残し、同じ ID がすでに有効なら更新せずスキップします。API にない ID の削除や既存定義の force update は行いません。
+
+user の `models.json` に追加しても、project の同じ provider に `models` 配列がある場合は Pi の project 優先により user 配列が隠れます。その場合はコマンドが書込前に停止するので、`--target project` を選んでください。
+
+このコマンドは Pi provider の `baseUrl`、`apiKey`（環境変数参照や `!command` を含む）、`authHeader` と既存の Pi credential 解決を使って catalog を取得します。認証情報、header、provider の応答本文は出力しません。ネットワーク接続は `models sync` の明示実行時だけで、conductor の通常の `ModelRuntime` は引き続き `allowModelNetwork: false` です。
+
+API が `max_input_tokens` を返す場合は、追加する Pi model の `contextWindow` にその整数値を設定します。Pi の `contextWindow` はモデルの入力コンテキスト上限として使われます。この値は provider が返した上限の取り込みであり、Pi の出力上限 `maxTokens` は設定しません。endpoint 側の値が不正または欠落していれば `contextWindow` は省略され、Pi の既定値が使われます。
+
+追加内容は、次回の `ensemble models list --provider <id>` で読み直されます。新しい conductor session でも create / resume 時に `models.json` が読み込まれます。実行中 session は hot reload しません。
+
 ### 5. Issue を実行する
 
 ```bash
