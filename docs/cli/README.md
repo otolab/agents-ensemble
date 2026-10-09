@@ -39,6 +39,10 @@ backend はセッション開始時に選択され、resume の途中では切�
 
 backend を選んだ後の主経路は共通です。リポジトリのディレクトリで、対象 Issue を同じ `ensemble issue <url>` コマンドに渡します。
 
+## permission 停滞警告の閾値
+
+`ensemble issue` の `--permission-deadlock-stall-ms <n>` で、worker の permission が停滞したときに警告・conductor 通知を出すまでの時間を上書きできます。既定値は **`300_000ms`（300 秒）**です。設定値の解決順と API 名は [設定値リファレンス](https://github.com/otolab/agents-ensemble/blob/main/docs/settings.md) を参照してください。poll 間隔と worker UI の挙動はこのオプションでは変更しません。
+
 ## 最小クイックスタート
 
 初回だけ、worker・選択した conductor backend・GitHub API の認証を準備します。

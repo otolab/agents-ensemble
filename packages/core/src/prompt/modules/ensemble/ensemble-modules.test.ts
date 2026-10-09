@@ -47,6 +47,9 @@ describe('ensemble prompt modules', () => {
     expect(prompt).toContain('resolve_permission');
     expect(prompt).toContain('set_dispatch_hold');
     expect(prompt).toContain('operator.message');
+    expect(prompt).toContain('permission.stall');
+    expect(prompt).toContain('低優先度');
+    expect(prompt).toContain('max-turns');
     expect(prompt).toContain('conductor が決められないことはオペレータが最終判断する');
     expect(prompt).not.toContain('permission を要求する');
   });
