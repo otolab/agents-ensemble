@@ -382,6 +382,48 @@ describe('assertAcpSpawnMatchesResume', () => {
       }),
     ).not.toThrow();
   });
+
+  it('accepts legacy codex sidecar without env when actual has builtin preset env', () => {
+    const legacySidecar = {
+      preset: 'codex' as const,
+      command: 'codex-acp',
+      args: [] as string[],
+    };
+    const currentSpawn = resolveWorkerAcpSpawn({
+      defaultOptions: {
+        config: {
+          acp: { defaultPreset: 'codex' },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: legacySidecar,
+        actual: acpSpawnFingerprint(currentSpawn),
+        workerName: 'implementer',
+      }),
+    ).not.toThrow();
+    expect(currentSpawn.env).toEqual({ INITIAL_AGENT_MODE: 'agent' });
+  });
+
+  it('compares env when sidecar fingerprint includes env', () => {
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: [],
+          env: { INITIAL_AGENT_MODE: 'agent', MODEL_PROVIDER: 'litellm' },
+        },
+        actual: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: [],
+          env: { INITIAL_AGENT_MODE: 'agent', MODEL_PROVIDER: 'litellm' },
+        },
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe('resolveWorkerAcpSpawns', () => {

@@ -403,7 +403,7 @@ export function assertAcpSpawnMatchesResume(input: {
     input.expected.preset === actual.preset &&
     input.expected.command === actual.command &&
     arraysEqual(input.expected.args, actual.args) &&
-    envMapsEqual(input.expected.env, actual.env);
+    envMapsEqualForResume(input.expected.env, actual.env);
 
   if (same) return;
 
@@ -447,4 +447,15 @@ function envMapsEqual(
     return false;
   }
   return leftKeys.every((key) => left?.[key] === right?.[key]);
+}
+
+/** Legacy sidecar（env 未保存）では env 比較をスキップし preset/command/args のみ照合する。 */
+function envMapsEqualForResume(
+  expected?: Record<string, string>,
+  actual?: Record<string, string>,
+): boolean {
+  if (!expected || Object.keys(expected).length === 0) {
+    return true;
+  }
+  return envMapsEqual(expected, actual);
 }
