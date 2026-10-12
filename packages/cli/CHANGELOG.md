@@ -1,5 +1,17 @@
 # @agents-ensemble/cli
 
+## 0.10.0
+
+### Patch Changes
+
+- 915c6b0: ADR 0028 を追加し、worker ACP 認証の既定を移譲、conductor は ensemble auth 標準と `!command` 移譲を明文化する（実装は #421）。
+- fda0b73: Extend the permission deadlock warning threshold to five minutes and notify the conductor with a low-priority stall event while preserving the operator warning.
+- Updated dependencies [915c6b0]
+- Updated dependencies [a4f121d]
+- Updated dependencies [fda0b73]
+- Updated dependencies [a83dbf9]
+  - @agents-ensemble/core@0.10.0
+
 ## 0.9.3
 
 ### Patch Changes
