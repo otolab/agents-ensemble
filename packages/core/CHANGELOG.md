@@ -1,5 +1,17 @@
 # @agents-ensemble/core
 
+## 0.10.0
+
+### Minor Changes
+
+- a4f121d: ensemble config の `acp.env` を追加し、codex-acp 等 spawn 時に env をマージ（builtin preset → config `acp.env`）。team profile の `acp` / `workers[].acp` は削除（YAML に残すと load 時エラー）。resume フィンガープリントに `env` を含め、legacy sidecar（env なし）は env 比較をスキップ。
+
+### Patch Changes
+
+- 915c6b0: ADR 0028 を追加し、worker ACP 認証の既定を移譲、conductor は ensemble auth 標準と `!command` 移譲を明文化する（実装は #421）。
+- fda0b73: Extend the permission deadlock warning threshold to five minutes and notify the conductor with a low-priority stall event while preserving the operator warning.
+- a83dbf9: worker ACP の codex 既定 authenticate を skip（移譲）に変更し、profile / worker `acp.authenticate` で管理モードを opt-in 可能にする（ADR 0028）。
+
 ## 0.9.3
 
 ### Patch Changes
