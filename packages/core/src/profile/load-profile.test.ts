@@ -144,8 +144,8 @@ materials:
     );
   });
 
-  it('preserves profile acp through resolveProfile and resolves worker spawn', async () => {
-    const path = join(dir, 'profile.yaml');
+  it('rejects profile acp blocks', async () => {
+    const path = join(dir, 'profile-acp.yaml');
     await writeFile(
       path,
       `acp:
@@ -153,24 +153,25 @@ materials:
 workers:
   - name: implementer
     kind: implementer
-agents:
-  implementer:
-    prompt:
-      instructions:
-        - work
 `,
     );
 
-    const profile = await loadProfileFromFile(path);
+    await expect(loadProfileFromFile(path)).rejects.toThrow(/"acp" is removed from team profile/);
+  });
 
-    expect(profile.acp).toEqual({ preset: 'claude' });
-    const specs = profileWorkersToSessionSpecs(profile);
-    expect(specs[0]?.spawn).toMatchObject({
-      command: 'claude-agent-acp',
-      args: [],
-      authenticate: { kind: 'skip' },
-    });
-    expect(specs[0]?.acpFingerprint?.preset).toBe('claude');
+  it('rejects worker acp blocks', async () => {
+    const path = join(dir, 'profile-worker-acp.yaml');
+    await writeFile(
+      path,
+      `workers:
+  - name: implementer
+    kind: implementer
+    acp:
+      preset: codex
+`,
+    );
+
+    await expect(loadProfileFromFile(path)).rejects.toThrow(/"acp" is removed from team profile/);
   });
 
   it('resolves worker workspace paths from profile and repo root', async () => {

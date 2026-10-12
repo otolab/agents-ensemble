@@ -12,8 +12,7 @@ import type {
 } from './types.js';
 import { resolveWorkerWorkspacePath } from './resolve-worker-workspace.js';
 import { assertTeamProfileWorkspacesAvailable } from './validate-team-profile-workspaces.js';
-import { normalizeProfileWorkers } from './types.js';
-import { parseProfileAcpConfig } from '../acp/resolve-acp-spawn.js';
+import { normalizeProfileWorkers, PROFILE_ACP_REMOVED_ERROR } from './types.js';
 import { resolveProfileDefaultRef } from '../config/resolve-settings.js';
 import type { EnsembleConfig } from '../config/types.js';
 import {
@@ -77,17 +76,18 @@ export function parseProfile(source: unknown, label: string): Profile {
     throw new Error(`Invalid profile: ${label} (expected YAML with "workers" array)`);
   }
 
-  const raw = source as { workers: unknown[] } & Omit<Profile, 'workers'>;
+  const raw = source as { workers: unknown[]; acp?: unknown } & Omit<Profile, 'workers'>;
   const workers = normalizeProfileWorkers(raw.workers, label);
   const conductor = parseProfileConductorConfig(raw.conductor, label);
+
+  if (raw.acp !== undefined) {
+    throw new Error(`Invalid profile ${label}: ${PROFILE_ACP_REMOVED_ERROR}`);
+  }
 
   const profile: Profile = {
     ...raw,
     workers,
     ...(conductor !== undefined ? { conductor } : {}),
-    ...(raw.acp !== undefined
-      ? { acp: parseProfileAcpConfig(raw.acp, `${label} acp`) }
-      : {}),
   };
 
   for (const [name, agent] of Object.entries(profile.agents ?? {})) {
@@ -288,7 +288,6 @@ export async function resolveProfile(
   return {
     workers: resolveProfileWorkers(profile.workers, profileDir, repoRoot),
     ...(profile.conductor ? { conductor: profile.conductor } : {}),
-    ...(profile.acp ? { acp: profile.acp } : {}),
     agents: Object.keys(agents).length > 0 ? agents : undefined,
     materials: await Promise.all(
       (profile.materials ?? []).map((material) =>

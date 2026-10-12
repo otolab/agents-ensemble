@@ -10,7 +10,7 @@
 | **環境変数** | シェル / CI | 一時上書き・秘密情報・自動化注入 |
 | **project config** | `<repoRoot>/.ensemble/config.yaml` | リポジトリ単位の既定 |
 | **user config** | `~/.ensemble/config.yaml` | マシン全体の既定 |
-| **team profile** | `profile.yaml`（[elements.md](elements.md)） | worker 構成・workspace（**ACP は非推奨 → [config.md](config.md)**） |
+| **team profile** | `profile.yaml`（[elements.md](elements.md)） | worker 構成・workspace（**ACP は含まない → [config.md](config.md)**） |
 | **Codex profile** | `~/.codex/config.toml` + `codex --profile` | Codex CLI の profile（ensemble team profile とは無関係） |
 | **MCP** | `.agents/mcp.json` / `~/.ensemble/mcp.json` | conductor 向け MCP（[config.md § MCP](config.md#conductor-mcp-設定mcpjson)） |
 | **コード default** | `packages/core/src/config/defaults.ts` 等 | config 未作成時のフォールバック |
@@ -50,10 +50,10 @@ CLI > project config > user config > コード default
 worker spawn 時の ACP preset 解決（[ADR 0019](adr/0019-worker-acp-cli-presets.md)）:
 
 ```
-profile.workers[].acp > profile.acp（非推奨・警告）> CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
+CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
 ```
 
-`acp.env` の正本は config（user → project deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env` → profile `acp.env`（非推奨）。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
+`acp.env` の正本は config（user → project deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
 
 ### パターン D — 実行時入力（env / CLI）
 
@@ -72,7 +72,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 | GitHub API | `GITHUB_TOKEN` > `GH_TOKEN` > （`allowGhAuthTokenFallback: true` 時のみ）`gh auth token` |
 | conductor (cursor) | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
 | conductor (pi) | [Pi conductor セットアップと認証](pi-conductor-setup.md)のとおり、project `auth.json` の読取優先 > user `ModelRuntime`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > `settings.json` fallback / `models.json` provider key > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存し、project OAuth は refresh しない |
-| worker ACP（preset 依存） | **既定は移譲**（harness は ACP `authenticate` を skip）。認証の正本は各 adapter の runtime 設定（Codex: `~/.codex` 等）。管理モード（harness が `authenticate` を呼ぶ）は profile / worker `acp.authenticate`（例: `chat-gpt`）で明示 opt-in — [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) / [ADR 0019](adr/0019-worker-acp-cli-presets.md) |
+| worker ACP（preset 依存） | **既定は移譲**（harness は ACP `authenticate` を skip）。認証の正本は各 adapter の runtime 設定（Codex: `~/.codex` 等）— [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) / [ADR 0019](adr/0019-worker-acp-cli-presets.md) |
 
 ## 一覧 — Phase 1（config.yaml）
 

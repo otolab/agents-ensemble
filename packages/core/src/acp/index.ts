@@ -63,8 +63,6 @@ export {
   resolveDefaultAcpSpawn,
   resolveWorkerAcpSpawn,
   resolveWorkerAcpSpawns,
-  resolveAcpConfig,
-  parseProfileAcpConfig,
   acpSpawnFingerprint,
   assertAcpSpawnMatchesResume,
   resolvedAcpSpawnToOptions,

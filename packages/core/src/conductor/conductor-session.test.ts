@@ -1420,11 +1420,10 @@ describe('runConductorSession resume / shutdown', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: {
-        acp: {
-          preset: 'custom',
-          command: process.execPath,
-        },
         workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      defaultAcp: {
+        defaultAcpCommand: process.execPath,
       },
       workerWorktree: {
         path: repoRoot,
@@ -1562,11 +1561,10 @@ describe('runConductorSession resume / shutdown', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: {
-        acp: {
-          preset: 'custom',
-          command: process.execPath,
-        },
         workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      defaultAcp: {
+        defaultAcpCommand: process.execPath,
       },
       workerWorktree: {
         path: repoRoot,

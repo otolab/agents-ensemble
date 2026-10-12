@@ -16,7 +16,7 @@ import {
 import { closeWorkerAcpSession } from '../../src/dispatch/worker-acp-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
-import type { Profile, ProfileAcpConfig } from '../../src/profile/types.js';
+import type { Profile } from '../../src/profile/types.js';
 import {
   saveSessionSidecar,
   SESSION_SIDECAR_VERSION,
@@ -25,6 +25,7 @@ import {
 import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
   createInProcessAcpBridge,
+  IN_PROCESS_DEFAULT_ACP,
   PING_SYSTEM_PROMPT,
   TEST_ISSUE,
   TEST_WORKTREE,
@@ -41,16 +42,10 @@ const RESUME_AGENT_ID = 'agent-resume-test';
 // These tests inject an in-process bridge, but runConductorSession still
 // validates the resolved ACP spawn before attaching workers. Use a real,
 // always-available executable so the test does not require Cursor Agent CLI.
-const IN_PROCESS_ACP: ProfileAcpConfig = {
-  preset: 'custom',
-  command: process.execPath,
-};
-
 const PING_PROFILE_BASE: Profile = {
   agents: {
     ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },
-  acp: IN_PROCESS_ACP,
   workers: [{ name: 'ping-1', kind: 'ping' }],
 };
 
@@ -200,6 +195,7 @@ describe('session resume integration', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: PING_PROFILE_BASE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -334,6 +330,7 @@ describe('session resume integration', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: PING_PROFILE_BASE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline,
@@ -389,7 +386,6 @@ describe('session resume integration', () => {
     };
     const workspaceProfile: Profile = {
       agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
-      acp: IN_PROCESS_ACP,
       workers: [
         {
           name: 'librarian',
@@ -464,6 +460,7 @@ describe('session resume integration', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: workspaceProfile,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -489,7 +486,6 @@ describe('session resume integration', () => {
     };
     const workspaceProfile: Profile = {
       agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
-      acp: IN_PROCESS_ACP,
       workers: [
         {
           name: 'librarian',
@@ -563,6 +559,7 @@ describe('session resume integration', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: workspaceProfile,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),

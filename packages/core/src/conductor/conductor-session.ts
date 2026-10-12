@@ -395,14 +395,11 @@ export async function runConductorSession(
     validateWorkerAcpPrerequisites(
       workers.map((worker) =>
         resolveWorkerAcpSpawn({
-          profileAcp: activeProfile.acp,
-          workerAcp: activeProfile.workers.find((w) => w.name === worker.name)?.acp,
-          workerName: worker.name,
           defaultOptions: options.defaultAcp,
         }),
       ),
     );
-    finalizeSessionWorkerSpecs(workers, activeProfile, options.defaultAcp);
+    finalizeSessionWorkerSpecs(workers, options.defaultAcp);
   }
   const workerAcpFingerprints = new Map(
     workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
@@ -1351,15 +1348,10 @@ function attachLegacySessionCallbacks(
 
 function finalizeSessionWorkerSpecs(
   workers: SessionWorkerSpec[],
-  profile: ResolvedProfile,
   defaultAcp?: DefaultAcpResolutionOptions,
 ): void {
   for (const worker of workers) {
-    const profileWorker = profile.workers.find((entry) => entry.name === worker.name);
     const resolved = resolveWorkerAcpSpawn({
-      profileAcp: profile.acp,
-      workerAcp: profileWorker?.acp,
-      workerName: worker.name,
       defaultOptions: defaultAcp,
     });
     const finalized = finalizeResolvedAcpSpawn(resolved);

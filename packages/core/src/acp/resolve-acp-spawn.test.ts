@@ -1,10 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   ENSEMBLE_DEFAULT_ACP_CLI_ENV,
   acpSpawnFingerprint,
   assertAcpSpawnMatchesResume,
   mergeAcpSpawnEnv,
-  resolveAcpConfig,
   resolveBuiltinAcpPreset,
   resolveDefaultAcpSpawn,
   resolveWorkerAcpSpawn,
@@ -100,15 +99,15 @@ describe('resolveDefaultAcpSpawn', () => {
 });
 
 describe('mergeAcpSpawnEnv', () => {
-  it('merges builtin preset env, then config env, then profile env', () => {
+  it('merges builtin preset env, then config env', () => {
     expect(
       mergeAcpSpawnEnv('codex', {
-        configEnv: { MODEL_PROVIDER: 'litellm', INITIAL_AGENT_MODE: 'override' },
-        profileEnv: { MODEL_PROVIDER: 'profile' },
+        MODEL_PROVIDER: 'litellm',
+        INITIAL_AGENT_MODE: 'override',
       }),
     ).toEqual({
       INITIAL_AGENT_MODE: 'override',
-      MODEL_PROVIDER: 'profile',
+      MODEL_PROVIDER: 'litellm',
     });
   });
 
@@ -179,20 +178,6 @@ describe('resolveBuiltinAcpPreset', () => {
 });
 
 describe('resolveWorkerAcpSpawn', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('warns when profile acp is used', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    resolveWorkerAcpSpawn({
-      profileAcp: { preset: 'codex' },
-    });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Deprecated: team profile profile acp'),
-    );
-  });
-
   it('merges config acp.env with builtin preset env', () => {
     const resolved = resolveWorkerAcpSpawn({
       defaultOptions: {
@@ -210,64 +195,12 @@ describe('resolveWorkerAcpSpawn', () => {
     });
   });
 
-  it('uses profile worker acp over profile default and CLI', () => {
-    expect(
-      resolveWorkerAcpSpawn({
-        profileAcp: { preset: 'codex' },
-        workerAcp: { preset: 'claude' },
-        defaultOptions: { defaultAcpCli: 'cursor' },
-      }),
-    ).toMatchObject({ preset: 'claude', command: 'claude-agent-acp' });
-  });
-
-  it('inherits profile acp when worker has no acp block', () => {
-    expect(
-      resolveWorkerAcpSpawn({
-        profileAcp: { preset: 'codex' },
-        defaultOptions: { defaultAcpCli: 'cursor' },
-      }),
-    ).toMatchObject({ preset: 'codex', command: 'codex-acp' });
-  });
-
-  it('merges profile and worker args for built-in preset', () => {
-    const resolved = resolveWorkerAcpSpawn({
-      profileAcp: { preset: 'cursor' },
-      workerAcp: { args: ['--flag'] },
-    });
-    expect(resolved.args).toEqual(['acp', '--flag']);
-  });
-
-  it('falls back to default resolution when profile has no acp', () => {
+  it('delegates to default resolution options', () => {
     expect(
       resolveWorkerAcpSpawn({
         defaultOptions: { defaultAcpCli: 'claude' },
       }),
     ).toMatchObject({ preset: 'claude', command: 'claude-agent-acp' });
-  });
-
-  it('applies profile authenticate opt-in over preset default', () => {
-    const resolved = resolveWorkerAcpSpawn({
-      profileAcp: { preset: 'codex', authenticate: 'chat-gpt' },
-    });
-    expect(resolved).toMatchObject({
-      preset: 'codex',
-      command: 'codex-acp',
-      authenticate: { kind: 'method', methodId: 'chat-gpt' },
-    });
-  });
-
-  it('lets worker authenticate override profile authenticate', () => {
-    const resolved = resolveWorkerAcpSpawn({
-      profileAcp: { preset: 'codex', authenticate: 'chat-gpt' },
-      workerAcp: { authenticate: 'skip' },
-    });
-    expect(resolved.authenticate).toEqual({ kind: 'skip' });
-  });
-});
-
-describe('resolveAcpConfig custom', () => {
-  it('requires command for custom preset', () => {
-    expect(() => resolveAcpConfig({ preset: 'custom' })).toThrow(/command/);
   });
 });
 
@@ -275,19 +208,19 @@ describe('profileWorkersToSessionSpecs', () => {
   const baseProfile: ResolvedProfile = {
     workers: [
       { name: 'implementer', kind: 'implementer' },
-      { name: 'reviewer', kind: 'reviewer', acp: { preset: 'codex' } },
+      { name: 'reviewer', kind: 'reviewer' },
     ],
-    acp: { preset: 'claude' },
   };
 
-  it('resolves per-worker spawn with profile priority', () => {
+  it('resolves the same spawn for every worker from defaultAcp options', () => {
     const specs = profileWorkersToSessionSpecs(baseProfile, {
-      defaultAcp: { defaultAcpCli: 'cursor' },
+      defaultAcp: { defaultAcpCli: 'codex' },
     });
     expect(specs[0]?.spawn).toMatchObject({
-      command: 'claude-agent-acp',
+      command: 'codex-acp',
       args: [],
       authenticate: { kind: 'skip' },
+      env: { INITIAL_AGENT_MODE: 'agent' },
     });
     expect(specs[1]?.spawn).toMatchObject({
       command: 'codex-acp',
@@ -295,7 +228,7 @@ describe('profileWorkersToSessionSpecs', () => {
       authenticate: { kind: 'skip' },
       env: { INITIAL_AGENT_MODE: 'agent' },
     });
-    expect(specs[0]?.acpFingerprint?.preset).toBe('claude');
+    expect(specs[0]?.acpFingerprint?.preset).toBe('codex');
     expect(specs[1]?.acpFingerprint?.preset).toBe('codex');
   });
 });
@@ -429,14 +362,13 @@ describe('assertAcpSpawnMatchesResume', () => {
 describe('resolveWorkerAcpSpawns', () => {
   it('returns a spawn map for every worker', () => {
     const map = resolveWorkerAcpSpawns({
-      profile: {
-        workers: [
-          { name: 'a', kind: 'implementer' },
-          { name: 'b', kind: 'reviewer' },
-        ],
-      },
+      workers: [
+        { name: 'a' },
+        { name: 'b' },
+      ],
     });
     expect(map.size).toBe(2);
     expect(map.get('a')?.preset).toBe('cursor');
+    expect(map.get('b')?.preset).toBe('cursor');
   });
 });

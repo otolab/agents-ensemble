@@ -111,7 +111,7 @@ tui:
 
 ### ACP spawn env（`acp.env`）
 
-`acp.env` は codex-acp 等の子プロセス spawn 時に渡す環境変数の正本です。**team profile の `acp` / `workers[].acp` は非推奨**（利用時に警告。新規利用は禁止）。
+`acp.env` は codex-acp 等の子プロセス spawn 時に渡す環境変数の正本です。**team profile に ACP 設定はない**（`acp` / `workers[].acp` を YAML に書くと load 時エラー）。
 
 #### 設定レイヤーの用語（混同防止）
 
@@ -127,7 +127,6 @@ spawn 解決時、子プロセスへ渡す env は次の順でマージされま
 
 1. **builtin preset 既定** — 例: codex の `INITIAL_AGENT_MODE: agent`
 2. **config `acp.env`** — user → project の deep merge 済み
-3. **team profile `acp.env`**（非推奨・移行期間のみ）— profile / worker 側が最後に上書き
 
 `acp.env` の user → project merge は他キーと同様に deep merge（project が user を上書き）。CLI / 環境変数による個別キーの上書きは Phase 1 では未提供。spawn 時は `process.env` を基底に `spawn.env` が上書きする（[ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md)）。
 
@@ -152,7 +151,6 @@ acp:
 |------|------------------|------------------|------|
 | `codex --profile litellm`（CLI 直接） | Codex profile `litellm` | — | `~/.codex/config.toml` の `[profiles.litellm]` を読む |
 | `ensemble issue` + 上記 config 例 | — | `MODEL_PROVIDER` / `CODEX_CONFIG` | codex-acp → `codex app-server`（**`--profile` 非対応**）。env で config ファイルを指定 |
-| team profile `acp.env` | 非推奨 | config に移行 | 警告付きで動作するが新規利用禁止 |
 
 `CODEX_CONFIG_PROFILE`（Codex 側 profile 名の env 指定）は [openai/codex#38104](https://github.com/openai/codex/issues/38104) で未実装。将来実装されたら `acp.env` に載せる想定。
 
@@ -260,15 +258,15 @@ conductor の system prompt の基底は modular-prompt のコンパイル結果
 
 **config 未作成時**は従来どおり env とコード default のみが効く（後方互換）。
 
-### team profile `acp` → config `acp`
+### team profile `acp` の削除
 
-team profile の `acp` / `workers[].acp` に ACP spawn 設定（preset・`env` 等）を書いていた場合:
+team profile の `acp` / `workers[].acp` は **削除済み**。YAML に残すと profile load 時にエラーになる。
 
 1. `acp.defaultPreset` → `.ensemble/config.yaml` の `acp.defaultPreset`
 2. `acp.env` / `workers[].acp.env` → `acp.env`（user / project の適切な層へ）
-3. profile 側の `acp` ブロックを削除（移行完了後）
+3. profile 側の `acp` ブロックを削除
 
-移行期間中は profile `acp` を残しても警告付きで動作するが、**新規利用は禁止**。worker 単位の ACP 切り替えは将来の config 側設計とし、本 Issue では横断 `defaultPreset` + `env` を正本とする。
+worker 単位の ACP 切り替えは将来の config 側設計とし、現状は横断 `defaultPreset` + `env` を正本とする。
 
 ## Conductor MCP 設定（mcp.json）
 
