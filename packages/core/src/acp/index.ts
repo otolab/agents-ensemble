@@ -52,6 +52,7 @@ export {
   validateWorkerAcpPrerequisites,
 } from './validate-acp-preset-prerequisites.js';
 export {
+  parseProfileAcpAuthenticate,
   resolveAcpAuthenticateStrategy,
   resolveBuiltinAcpAuthenticateStrategy,
 } from './resolve-acp-auth.js';

@@ -151,6 +151,25 @@ describe('resolveWorkerAcpSpawn', () => {
       }),
     ).toMatchObject({ preset: 'claude', command: 'claude-agent-acp' });
   });
+
+  it('applies profile authenticate opt-in over preset default', () => {
+    const resolved = resolveWorkerAcpSpawn({
+      profileAcp: { preset: 'codex', authenticate: 'chat-gpt' },
+    });
+    expect(resolved).toMatchObject({
+      preset: 'codex',
+      command: 'codex-acp',
+      authenticate: { kind: 'method', methodId: 'chat-gpt' },
+    });
+  });
+
+  it('lets worker authenticate override profile authenticate', () => {
+    const resolved = resolveWorkerAcpSpawn({
+      profileAcp: { preset: 'codex', authenticate: 'chat-gpt' },
+      workerAcp: { authenticate: 'skip' },
+    });
+    expect(resolved.authenticate).toEqual({ kind: 'skip' });
+  });
 });
 
 describe('resolveAcpConfig custom', () => {
@@ -180,7 +199,7 @@ describe('profileWorkersToSessionSpecs', () => {
     expect(specs[1]?.spawn).toMatchObject({
       command: 'codex-acp',
       args: [],
-      authenticate: { kind: 'method', methodId: 'chat-gpt' },
+      authenticate: { kind: 'skip' },
       env: { INITIAL_AGENT_MODE: 'agent' },
     });
     expect(specs[0]?.acpFingerprint?.preset).toBe('claude');

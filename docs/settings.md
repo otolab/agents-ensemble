@@ -69,7 +69,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 | GitHub API | `GITHUB_TOKEN` > `GH_TOKEN` > （`allowGhAuthTokenFallback: true` 時のみ）`gh auth token` |
 | conductor (cursor) | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
 | conductor (pi) | [Pi conductor セットアップと認証](pi-conductor-setup.md)のとおり、project `auth.json` の読取優先 > user `ModelRuntime`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > `settings.json` fallback / `models.json` provider key > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存し、project OAuth は refresh しない |
-| worker ACP（preset 依存） | preset ごとに README / ADR 0019 参照 |
+| worker ACP（preset 依存） | **既定は移譲**（harness は ACP `authenticate` を skip）。認証の正本は各 adapter の runtime 設定（Codex: `~/.codex` 等）。管理モード（harness が `authenticate` を呼ぶ）は profile / worker `acp.authenticate`（例: `chat-gpt`）で明示 opt-in — [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) / [ADR 0019](adr/0019-worker-acp-cli-presets.md) |
 
 ## 一覧 — Phase 1（config.yaml）
 

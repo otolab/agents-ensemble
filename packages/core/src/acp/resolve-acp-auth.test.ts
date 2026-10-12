@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  parseProfileAcpAuthenticate,
   resolveAcpAuthenticateStrategy,
   resolveBuiltinAcpAuthenticateStrategy,
 } from './resolve-acp-auth.js';
@@ -12,16 +13,24 @@ describe('resolveBuiltinAcpAuthenticateStrategy', () => {
     });
   });
 
-  it('uses chat-gpt for codex', () => {
-    expect(resolveBuiltinAcpAuthenticateStrategy('codex')).toEqual({
+  it('skips authenticate for codex, claude, and pi', () => {
+    expect(resolveBuiltinAcpAuthenticateStrategy('codex')).toEqual({ kind: 'skip' });
+    expect(resolveBuiltinAcpAuthenticateStrategy('claude')).toEqual({ kind: 'skip' });
+    expect(resolveBuiltinAcpAuthenticateStrategy('pi')).toEqual({ kind: 'skip' });
+  });
+});
+
+describe('parseProfileAcpAuthenticate', () => {
+  it('parses skip and method ids', () => {
+    expect(parseProfileAcpAuthenticate('skip')).toEqual({ kind: 'skip' });
+    expect(parseProfileAcpAuthenticate('chat-gpt')).toEqual({
       kind: 'method',
       methodId: 'chat-gpt',
     });
   });
 
-  it('skips authenticate for claude and pi', () => {
-    expect(resolveBuiltinAcpAuthenticateStrategy('claude')).toEqual({ kind: 'skip' });
-    expect(resolveBuiltinAcpAuthenticateStrategy('pi')).toEqual({ kind: 'skip' });
+  it('rejects empty strings', () => {
+    expect(() => parseProfileAcpAuthenticate('   ')).toThrow(/empty string/);
   });
 });
 

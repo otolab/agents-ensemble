@@ -70,10 +70,10 @@ spawn **前**に外部 CLI の存在も検証する（`ensemble issue` 起動経
 
 ensemble は spawn 解決後、`initialize` の直後に preset ごとの authenticate を行う（`resolveAcpAuthenticateStrategy`）。
 
-| preset | authenticate | 前提 |
-|--------|--------------|------|
+| preset | 既定 authenticate | 前提 |
+|--------|-------------------|------|
 | `cursor` | `cursor_login` | `agent login` / `CURSOR_API_KEY`（子プロセス env 継承） |
-| `codex` | `chat-gpt` | **`codex login` 済み**（Codex CLI と同じ ChatGPT セッションを再利用） |
+| `codex` | **skip**（移譲） | **`~/.codex` 等の runtime 設定**（`model_provider` / `[model_providers.*.auth]`）。管理モードは profile `acp.authenticate: chat-gpt` で opt-in — **正本は [ADR 0028](0028-authentication-delegation-and-ensemble-auth.md)** |
 | `claude` | **skip** | **Claude Code CLI ログイン済み**（`claude-agent-acp` は terminal/gateway 以外の authenticate 未実装） |
 | `pi` | **skip** | **`pi` 側のモデル/API key 設定済み**（`pi-acp` の authenticate は no-op） |
 | `custom` | `agent acp` なら `cursor_login`、それ以外 skip | adapter 次第 |

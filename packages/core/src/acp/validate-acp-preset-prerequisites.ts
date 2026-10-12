@@ -43,7 +43,7 @@ export function formatAcpPresetInstallHint(preset: AcpPresetId): string {
         '  開発: リポジトリルートで `pnpm install`（optional 再試行）\n' +
         `  利用者: \`npm i -g ${packageName}\`\n` +
         `  または PATH 上に \`${binName}\` を配置してください。\n` +
-        '  Codex の認証: 先に `codex login` 等で Codex CLI と同じログイン状態にしてください（ensemble は `chat-gpt` authenticate で再利用）。'
+        '  Codex の認証: `~/.codex` 等の runtime 設定（`model_provider` / `[model_providers.*.auth]`）を整えてください（ensemble は既定で ACP authenticate を skip し移譲）。管理モードは profile `acp.authenticate: chat-gpt` で opt-in（ADR 0028）。'
       );
     }
     case 'pi': {
