@@ -12,6 +12,7 @@ import type { Profile } from '../../src/profile/types.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
   createInProcessAcpBridge,
+  IN_PROCESS_DEFAULT_ACP,
   PING_SYSTEM_PROMPT,
   TEST_ISSUE,
   TEST_WORKTREE,
@@ -23,9 +24,6 @@ const PI_PROFILE: Profile = {
   agents: {
     ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },
-  // The in-process bridge never spawns an ACP CLI, but the session validates
-  // the resolved worker preset before it attaches the injected bridge.
-  acp: { preset: 'custom', command: process.execPath },
   workers: [{ name: 'ping-1', kind: 'ping' }],
 };
 
@@ -262,6 +260,7 @@ describe('Pi conductor backend integration', () => {
       repoRoot: REPO_ROOT,
       conductorCwd: REPO_ROOT,
       profile: PI_PROFILE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
       ensembleConfig: {
         ...DEFAULT_ENSEMBLE_CONFIG,
         conductor: {

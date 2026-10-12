@@ -4,6 +4,7 @@
 
 ### Patch Changes
 
+- ensemble config の `acp.env`（string map）を追加。codex-acp 等 spawn 時に builtin preset env → config `acp.env` の順でマージ。resume フィンガープリントに `env` を含め、legacy sidecar（env なし）は env 比較をスキップ。**破壊的変更**: team profile の `acp` / `workers[].acp` を削除（YAML に残すと load 時エラー）。移行は [config.md](../../docs/config.md#team-profile-acp-の削除)。
 - 9fd9d71: 既定の harness telemetry を conductor 境界・障害系の要約に絞り、`--verbose` / `CONDUCTOR_VERBOSE` / `conductor.verbose` で詳細表示を復活します。
 - 140e8ff: conductor 基底プロンプトを調整（進行・引き渡しの objective、open question の位置、状態照会 subsection の整理）。
 - dac599b: Pi conductor の skill を Pi 標準の `DefaultResourceLoader` discovery に載せ替え、profile の `conductor.piSkills`（既定有効）で無効化できるようにします。

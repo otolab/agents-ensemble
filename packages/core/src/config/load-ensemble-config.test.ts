@@ -93,7 +93,10 @@ describe('parseEnsembleConfig', () => {
           verbose: true,
           pi: { agentDir: '~/.ensemble/pi', projectDir: '.ensemble/pi' },
         },
-        acp: { defaultPreset: 'claude' },
+        acp: {
+          defaultPreset: 'claude',
+          env: { MODEL_PROVIDER: 'litellm' },
+        },
         session: {
           worktree: 'in-repo',
           maxTurns: { tty: 2, nonTty: 8 },
@@ -118,7 +121,7 @@ describe('parseEnsembleConfig', () => {
         verbose: true,
         pi: { agentDir: '~/.ensemble/pi', projectDir: '.ensemble/pi' },
       },
-      acp: { defaultPreset: 'claude' },
+      acp: { defaultPreset: 'claude', env: { MODEL_PROVIDER: 'litellm' } },
       session: {
         worktree: 'in_repo',
         maxTurns: { tty: 2, nonTty: 8 },
@@ -219,5 +222,24 @@ describe('loadEnsembleConfig', () => {
 
     expect(config.conductor.model).toBe('project-model');
     expect(config.conductor.backend).toBe('pi');
+  });
+
+  it('deep merges acp env across user and project config', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      `acp:\n  defaultPreset: codex\n  env:\n    MODEL_PROVIDER: litellm\n    CODEX_CONFIG: ~/.codex/litellm.config.toml\n`,
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `acp:\n  env:\n    CODEX_CONFIG: /project/litellm.config.toml\n`,
+    );
+
+    const config = await loadEnsembleConfig(repoRoot, { userEnsembleRoot });
+
+    expect(config.acp.defaultPreset).toBe('codex');
+    expect(config.acp.env).toEqual({
+      MODEL_PROVIDER: 'litellm',
+      CODEX_CONFIG: '/project/litellm.config.toml',
+    });
   });
 });

@@ -18,7 +18,10 @@ import * as issueContextModule from '../../src/github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../../src/github/resolve-github-auth-token.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import type { Profile } from '../../src/profile/types.js';
-import { createInProcessAcpBridge } from './helpers/in-process-acp-bridge.js';
+import {
+  createInProcessAcpBridge,
+  IN_PROCESS_DEFAULT_ACP,
+} from './helpers/in-process-acp-bridge.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -28,10 +31,6 @@ const TEST_ISSUE = {
 } as const;
 
 const PERMISSION_PROFILE: Profile = {
-  acp: {
-    preset: 'custom',
-    command: process.execPath,
-  },
   workers: [
     { name: 'completed-worker', kind: 'implementer' },
     { name: 'permission-worker', kind: 'implementer' },
@@ -237,6 +236,7 @@ describe('permission stall session integration', () => {
       repoRoot,
       ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
       profile: PERMISSION_PROFILE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
       workerWorktree: {
         path: repoRoot,
         branch: 'main',

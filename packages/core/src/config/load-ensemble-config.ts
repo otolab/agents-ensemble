@@ -7,7 +7,7 @@ import { ENSEMBLE_DIR } from '../profile/profile-paths.js';
 import { deepMerge } from './deep-merge.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
 import { parseEnsembleConfig } from './parse-config.js';
-import type { EnsembleConfig } from './types.js';
+import type { EnsembleConfig, EnsembleConfigLayer } from './types.js';
 
 export const ENSEMBLE_CONFIG_FILE = 'config.yaml';
 
@@ -35,7 +35,7 @@ async function readConfigYaml(path: string): Promise<unknown | undefined> {
 
 function mergeConfigLayer(
   base: EnsembleConfig,
-  layer: Partial<EnsembleConfig>,
+  layer: EnsembleConfigLayer,
 ): EnsembleConfig {
   return deepMerge(
     base as unknown as Record<string, unknown>,

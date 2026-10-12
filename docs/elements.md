@@ -58,7 +58,9 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 
 ### ensemble 共通設定（config.yaml）
 
-harness 横断設定（profile 既定・session 既定・GitHub 認証 / monitor 等）の正本。team-profile とは別ファイル。解決順と全キー: [config.md](config.md)、設計判断: [ADR 0020](adr/0020-ensemble-config-setting-resolution.md)。
+harness 横断設定（profile 既定・**ACP（preset・env）**・session 既定・GitHub 認証 / monitor 等）の正本。team-profile とは別ファイル。解決順と全キー: [config.md](config.md)、設計判断: [ADR 0020](adr/0020-ensemble-config-setting-resolution.md)。
+
+**Codex profile**（`codex --profile litellm` 等）は Codex CLI の世界の用語であり、ensemble の team profile とは無関係。LiteLLM 等の worker ACP 設定は `config.yaml` の `acp` 系に書く（[config.md § ACP spawn env](config.md#acp-spawn-envacpenv)）。
 
 ### フィールド
 
@@ -66,8 +68,7 @@ harness 横断設定（profile 既定・session 既定・GitHub 認証 / monitor
 - `agents.<kind>` … agent の modular-prompt 拡張（`prompt` インライン / `promptFile` 外部 YAML）。未指定時は ensemble base のみ
 - `workers` … 起動する worker（`name` + `kind`）。`- ping` は name=kind の省略形
 - `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。`~` / `~/...` は homedir() で展開。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準
-- `acp` … **任意**。profile 全体の ACP spawn デフォルト（worker 未指定時に継承）。`workers[].acp` がある worker は CLI / `ENSEMBLE_DEFAULT_ACP_CLI` / config `acp.defaultPreset` で上書きされない
-- `workers[].acp` … **任意**。worker 単位の ACP spawn（profile `acp` より優先）。`preset`（`cursor` | `claude` | `codex` | `pi` | `custom`）または `command` / `args` / `env` を指定。built-in preset への追加 `args` は preset 既定 args の後ろに連結
+- team profile に **ACP 設定はない**（`acp` / `workers[].acp` は削除済み。正本は [ensemble config](config.md) の `acp.defaultPreset` / `acp.env`）
 - `conductor` … **任意**。`backend`（`cursor` | `pi`）、`builtinTools`、`piSkills`（Pi backend のみ）を指定。`builtinTools` / `piSkills` は省略・未指定は有効、`false` のみ無効。制御の正本は profile であり、`config.yaml` や worker ACP には同キーを設けない
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む
 

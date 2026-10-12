@@ -6,6 +6,11 @@ import {
 } from '../../../src/acp/testing/fake-acp-server.js';
 import { createInProcessStreamPair } from '../../../src/acp/testing/stream-pair.js';
 
+/** runConductorSession の ACP 前提検証を in-process bridge テスト向けに満たす。 */
+export const IN_PROCESS_DEFAULT_ACP = {
+  defaultAcpCommand: process.execPath,
+};
+
 export const PING_SYSTEM_PROMPT =
   'これは接続テストです。調査・編集はせず、応答に pong とだけ含めて終了してください。';
 

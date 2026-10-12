@@ -8,6 +8,7 @@ import type {
   ConductorBackend,
   EnsembleConductorConfig,
   EnsembleConfig,
+  EnsembleConfigLayer,
   EnsembleConductorPiConfig,
   EnsembleGitHubAuthConfig,
   EnsembleGitHubConfig,
@@ -109,16 +110,42 @@ function parseConductorBackend(value: unknown): ConductorBackend | undefined {
   return raw === 'cursor' || raw === 'pi' ? raw : undefined;
 }
 
-function parseAcpConfig(raw: unknown): EnsembleAcpConfig | undefined {
+function parseStringMap(
+  raw: unknown,
+  label: string,
+): Record<string, string> | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return undefined;
+  }
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== 'string') {
+      continue;
+    }
+    env[key] = value;
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function parseAcpConfig(raw: unknown): Partial<EnsembleAcpConfig> | undefined {
   const obj = readObject(raw);
   if (!obj) {
     return undefined;
   }
   const preset = readString(obj.defaultPreset);
-  if (!preset || !isBuiltinAcpPresetId(preset)) {
+  const env = parseStringMap(obj.env, 'acp.env');
+  const validPreset =
+    preset && isBuiltinAcpPresetId(preset) ? (preset as BuiltinAcpPresetId) : undefined;
+  if (validPreset === undefined && env === undefined) {
     return undefined;
   }
-  return { defaultPreset: preset as BuiltinAcpPresetId };
+  return {
+    ...(validPreset !== undefined ? { defaultPreset: validPreset } : {}),
+    ...(env !== undefined ? { env } : {}),
+  };
 }
 
 function parseSessionMaxTurns(raw: unknown): EnsembleSessionMaxTurnsConfig | undefined {
@@ -258,13 +285,13 @@ function parseTuiConfig(raw: unknown): EnsembleTuiConfig | undefined {
  * YAML から既知スキーマのみ抽出する。未知キーは無視（将来拡張用）。
  * 無効な型の既知キーは無視し、下位層 / デフォルトにフォールバックする。
  */
-export function parseEnsembleConfig(raw: unknown): Partial<EnsembleConfig> {
+export function parseEnsembleConfig(raw: unknown): EnsembleConfigLayer {
   if (!raw || typeof raw !== 'object') {
     return {};
   }
 
   const root = raw as Record<string, unknown>;
-  const result: Partial<EnsembleConfig> = {};
+  const result: EnsembleConfigLayer = {};
 
   const profile = parseProfileConfig(root.profile);
   if (profile !== undefined) {

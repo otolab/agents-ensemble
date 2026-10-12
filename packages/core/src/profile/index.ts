@@ -34,7 +34,6 @@ export type {
   AgentDefinition,
   ProfileWorkerEntry,
   ProfileWorkerRef,
-  ProfileAcpConfig,
   SessionWorkerSpec,
   EnsembleSessionState,
   ResolvedProfileMaterial,
