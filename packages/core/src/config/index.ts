@@ -47,6 +47,7 @@ export type {
   EnsembleConductorConfig,
   EnsembleConductorPiConfig,
   EnsembleConfig,
+  EnsembleConfigLayer,
   EnsembleGitHubAuthConfig,
   EnsembleGitHubConfig,
   EnsembleGitHubMonitorConfig,

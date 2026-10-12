@@ -8,6 +8,7 @@ import type {
   ConductorBackend,
   EnsembleConductorConfig,
   EnsembleConfig,
+  EnsembleConfigLayer,
   EnsembleConductorPiConfig,
   EnsembleGitHubAuthConfig,
   EnsembleGitHubConfig,
@@ -284,13 +285,13 @@ function parseTuiConfig(raw: unknown): EnsembleTuiConfig | undefined {
  * YAML から既知スキーマのみ抽出する。未知キーは無視（将来拡張用）。
  * 無効な型の既知キーは無視し、下位層 / デフォルトにフォールバックする。
  */
-export function parseEnsembleConfig(raw: unknown): Partial<EnsembleConfig> {
+export function parseEnsembleConfig(raw: unknown): EnsembleConfigLayer {
   if (!raw || typeof raw !== 'object') {
     return {};
   }
 
   const root = raw as Record<string, unknown>;
-  const result: Partial<EnsembleConfig> = {};
+  const result: EnsembleConfigLayer = {};
 
   const profile = parseProfileConfig(root.profile);
   if (profile !== undefined) {

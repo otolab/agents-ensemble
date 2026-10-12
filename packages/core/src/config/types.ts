@@ -90,3 +90,8 @@ export interface EnsembleConfig {
   github: EnsembleGitHubConfig;
   tui: EnsembleTuiConfig;
 }
+
+/** YAML 1 層分の parse 結果（deep merge 前）。各セクションは部分指定可。 */
+export type EnsembleConfigLayer = {
+  [K in keyof EnsembleConfig]?: Partial<EnsembleConfig[K]>;
+};
