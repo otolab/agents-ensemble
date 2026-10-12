@@ -397,6 +397,7 @@ export async function runConductorSession(
         resolveWorkerAcpSpawn({
           profileAcp: activeProfile.acp,
           workerAcp: activeProfile.workers.find((w) => w.name === worker.name)?.acp,
+          workerName: worker.name,
           defaultOptions: options.defaultAcp,
         }),
       ),
@@ -1358,6 +1359,7 @@ function finalizeSessionWorkerSpecs(
     const resolved = resolveWorkerAcpSpawn({
       profileAcp: profile.acp,
       workerAcp: profileWorker?.acp,
+      workerName: worker.name,
       defaultOptions: defaultAcp,
     });
     const finalized = finalizeResolvedAcpSpawn(resolved);

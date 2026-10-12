@@ -59,7 +59,10 @@ conductor:
     projectDir: .ensemble/pi
 
 acp:
-  defaultPreset: cursor               # ENSEMBLE_DEFAULT_ACP_CLI 相当
+  defaultPreset: codex                # ENSEMBLE_DEFAULT_ACP_CLI 相当
+  env:                                # codex-acp 子プロセス spawn に渡す env（user → project deep merge）
+    MODEL_PROVIDER: litellm           # 例: LiteLLM ゲートウェイ
+    CODEX_CONFIG: ~/.codex/litellm.config.toml
 
 session:
   worktree: isolated                  # --worktree 既定（isolated | in-repo）
@@ -95,6 +98,7 @@ tui:
 | `conductor.pi.agentDir` | Pi user resource root のパス上書き | — | — |
 | `conductor.pi.projectDir` | Pi project resource root のパス上書き | — | — |
 | `acp.defaultPreset` | worker ACP built-in preset | `--default-acp-cli` 等 | `ENSEMBLE_DEFAULT_ACP_CLI` |
+| `acp.env` | codex-acp 等 spawn 時の env（string map） | — | — |
 | `session.worktree` | worker workspace モード | `--worktree` | — |
 | `session.maxTurns.tty` / `nonTty` | 自律ターン上限 | `--max-turns` / `--no-max-turns` | — |
 | `session.postLoop.wait` | post-loop 待機（TTY） | `--no-wait` | — |
@@ -105,7 +109,60 @@ tui:
 | `github.monitor.debounceMs` | 更新 debounce | `--github-monitor-debounce-ms` | — |
 | `github.monitor.pollIntervalMs` 他 | poll 間隔（コード内既定のみ） | — | — |
 
-profile / worker に `acp` がある worker は `--default-acp-*` / config `acp.defaultPreset` より **profile 側が優先**（従来どおり）。
+### ACP spawn env（`acp.env`）
+
+`acp.env` は codex-acp 等の子プロセス spawn 時に渡す環境変数の正本です。**team profile の `acp` / `workers[].acp` は非推奨**（利用時に警告。新規利用は禁止）。
+
+#### 設定レイヤーの用語（混同防止）
+
+| レイヤー | 正本 | 扱うもの |
+|----------|------|----------|
+| **team profile** | `profile.yaml` / `--profile` | conductor と workers（kind・workspace・Skill 素材など）。**ACP はこのレイヤーに属さない** |
+| **ensemble config** | `.ensemble/config.yaml` | ACP（preset・`env`）、session・GitHub・conductor model 等 |
+| **Codex profile** | `~/.codex/config.toml` + `codex --profile <name>` | Codex CLI の世界の profile（ensemble team profile とは無関係） |
+
+#### env のマージ順（後勝ち）
+
+spawn 解決時、子プロセスへ渡す env は次の順でマージされます。
+
+1. **builtin preset 既定** — 例: codex の `INITIAL_AGENT_MODE: agent`
+2. **config `acp.env`** — user → project の deep merge 済み
+3. **team profile `acp.env`**（非推奨・移行期間のみ）— profile / worker 側が最後に上書き
+
+`acp.env` の user → project merge は他キーと同様に deep merge（project が user を上書き）。CLI / 環境変数による個別キーの上書きは Phase 1 では未提供。spawn 時は `process.env` を基底に `spawn.env` が上書きする（[ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md)）。
+
+#### LiteLLM（OpenAI 互換ゲートウェイ）向け config 例
+
+**team profile ではなく ensemble config に書く。** 秘密情報はプレースホルダに置き換える。
+
+```yaml
+# ~/.ensemble/config.yaml または <repo>/.ensemble/config.yaml
+acp:
+  defaultPreset: codex
+  env:
+    MODEL_PROVIDER: litellm
+    CODEX_CONFIG: ~/.codex/litellm.config.toml
+```
+
+`litellm.config.toml` は Codex の [Profiles](https://developers.openai.com/codex/config-advanced) と同様に `~/.codex/` 配下に置く。`CODEX_CONFIG` でそのパスを codex-acp に指示する。
+
+#### CLI `codex --profile litellm` と ensemble worker の対応
+
+| 手段 | profile レイヤー | config `acp.env` | 備考 |
+|------|------------------|------------------|------|
+| `codex --profile litellm`（CLI 直接） | Codex profile `litellm` | — | `~/.codex/config.toml` の `[profiles.litellm]` を読む |
+| `ensemble issue` + 上記 config 例 | — | `MODEL_PROVIDER` / `CODEX_CONFIG` | codex-acp → `codex app-server`（**`--profile` 非対応**）。env で config ファイルを指定 |
+| team profile `acp.env` | 非推奨 | config に移行 | 警告付きで動作するが新規利用禁止 |
+
+`CODEX_CONFIG_PROFILE`（Codex 側 profile 名の env 指定）は [openai/codex#38104](https://github.com/openai/codex/issues/38104) で未実装。将来実装されたら `acp.env` に載せる想定。
+
+#### `litellm.config.toml` を `~/.codex/config.toml` に統合する代替
+
+`litellm` を Codex profile として `[profiles.litellm]` に書き、`codex --profile litellm` で使う方法もある。統合すると CLI と ensemble の設定が 1 ファイルにまとまるが、**ensemble worker は現状 `app-server` 経路で `--profile` を受け取れない**ため、CLI だけ統合しても worker 側は `CODEX_CONFIG` 等の env 指示が別途必要。profile 分割のまま `CODEX_CONFIG` でファイルを指す方が、CLI / ensemble の設定境界が明確になる。
+
+#### resume と `acp.env` 変更
+
+worker ACP spawn のフィンガープリント（[ADR 0011](adr/0011-session-sidecar-resume.md)）に `env` を含める。`acp.env` を変更して resume すると **spawn mismatch エラー**になる。env を変えたあと続けるには新規セッションを開始する。
 
 ### Pi resource root
 
@@ -185,7 +242,9 @@ conductor の system prompt の基底は modular-prompt のコンパイル結果
 
 `allowGhAuthTokenFallback: false` のときは **`gh auth token` を呼ばない**。CI 等では `GH_TOKEN` / `GITHUB_TOKEN` を明示設定すること。
 
-## 移行表（env → config）
+## 移行
+
+### env / コード default → config
 
 | 従来（env / コード default） | config キー | 備考 |
 |------------------------------|-------------|------|
@@ -200,6 +259,16 @@ conductor の system prompt の基底は modular-prompt のコンパイル結果
 | `FORCE_HYPERLINK` | `tui.forceHyperlink` | `1`/`0` ↔ `on`/`off`。未設定 ↔ `auto` |
 
 **config 未作成時**は従来どおり env とコード default のみが効く（後方互換）。
+
+### team profile `acp` → config `acp`
+
+team profile の `acp` / `workers[].acp` に ACP spawn 設定（preset・`env` 等）を書いていた場合:
+
+1. `acp.defaultPreset` → `.ensemble/config.yaml` の `acp.defaultPreset`
+2. `acp.env` / `workers[].acp.env` → `acp.env`（user / project の適切な層へ）
+3. profile 側の `acp` ブロックを削除（移行完了後）
+
+移行期間中は profile `acp` を残しても警告付きで動作するが、**新規利用は禁止**。worker 単位の ACP 切り替えは将来の config 側設計とし、本 Issue では横断 `defaultPreset` + `env` を正本とする。
 
 ## Conductor MCP 設定（mcp.json）
 

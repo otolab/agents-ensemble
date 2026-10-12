@@ -315,9 +315,26 @@ function parseAcpSpawnFingerprint(
   if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== 'string')) {
     throw new Error(`Invalid session sidecar worker acpSpawn args: ${workerName}`);
   }
+  let env: Record<string, string> | undefined;
+  if (record.env !== undefined) {
+    if (!record.env || typeof record.env !== 'object' || Array.isArray(record.env)) {
+      throw new Error(`Invalid session sidecar worker acpSpawn env: ${workerName}`);
+    }
+    env = {};
+    for (const [key, value] of Object.entries(record.env)) {
+      if (typeof value !== 'string') {
+        throw new Error(`Invalid session sidecar worker acpSpawn env.${key}: ${workerName}`);
+      }
+      env[key] = value;
+    }
+    if (Object.keys(env).length === 0) {
+      env = undefined;
+    }
+  }
   return {
     preset: record.preset as AcpSpawnFingerprint['preset'],
     command: record.command,
     args: record.args,
+    ...(env ? { env } : {}),
   };
 }

@@ -257,6 +257,7 @@ export function profileWorkersToSessionSpecs(
     const resolved = resolveWorkerAcpSpawn({
       profileAcp: profile.acp,
       workerAcp: worker.acp,
+      workerName: worker.name,
       defaultOptions: options?.defaultAcp,
     });
     return {

@@ -10,7 +10,8 @@
 | **環境変数** | シェル / CI | 一時上書き・秘密情報・自動化注入 |
 | **project config** | `<repoRoot>/.ensemble/config.yaml` | リポジトリ単位の既定 |
 | **user config** | `~/.ensemble/config.yaml` | マシン全体の既定 |
-| **team profile** | `profile.yaml`（[elements.md](https://github.com/otolab/agents-ensemble/blob/main/docs/elements.md)） | worker 構成・per-worker ACP / workspace |
+| **team profile** | `profile.yaml`（[elements.md](elements.md)） | worker 構成・workspace（**ACP は非推奨 → [config.md](config.md)**） |
+| **Codex profile** | `~/.codex/config.toml` + `codex --profile` | Codex CLI の profile（ensemble team profile とは無関係） |
 | **MCP** | `.agents/mcp.json` / `~/.ensemble/mcp.json` | conductor 向け MCP（[config.md § MCP](config.md#conductor-mcp-設定mcpjson)） |
 | **コード default** | `packages/core/src/config/defaults.ts` 等 | config 未作成時のフォールバック |
 
@@ -44,13 +45,15 @@ CLI > project config > user config > コード default
 
 `session.worktree` / `session.maxTurns.*` / `session.postLoop.wait` / `github.monitor.*` など。
 
-### パターン C — profile / worker 優先
+### パターン C — ACP preset 解決
 
-worker spawn 時の ACP 解決（[ADR 0019](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0019-worker-acp-cli-presets.md)）:
+worker spawn 時の ACP preset 解決（[ADR 0019](adr/0019-worker-acp-cli-presets.md)）:
 
 ```
-profile.workers[].acp > profile.acp > CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
+profile.workers[].acp > profile.acp（非推奨・警告）> CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
 ```
+
+`acp.env` の正本は config（user → project deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env` → profile `acp.env`（非推奨）。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
 
 ### パターン D — 実行時入力（env / CLI）
 
@@ -82,6 +85,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 | Pi user resource root | `conductor.pi.agentDir` | — | — | `~/.ensemble/pi` | config |
 | Pi project resource root | `conductor.pi.projectDir` | — | — | `<repoRoot>/.ensemble/pi` | config |
 | worker ACP preset（profile 未指定 worker） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
+| worker ACP spawn env | `acp.env` | — | — | — | config deep merge |
 | Issue worktree | `session.worktree` | — | `--worktree` | `isolated` | B |
 | 自律ターン上限（TTY） | `session.maxTurns.tty` | — | `--max-turns` / `--no-max-turns` | `0`（無制限） | B |
 | 自律ターン上限（非 TTY） | `session.maxTurns.nonTty` | — | `--max-turns` / `--no-max-turns` | `5` | B |

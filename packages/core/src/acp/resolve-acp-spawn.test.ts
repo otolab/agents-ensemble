@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ENSEMBLE_DEFAULT_ACP_CLI_ENV,
   acpSpawnFingerprint,
   assertAcpSpawnMatchesResume,
+  mergeAcpSpawnEnv,
   resolveAcpConfig,
   resolveBuiltinAcpPreset,
   resolveDefaultAcpSpawn,
@@ -98,6 +99,67 @@ describe('resolveDefaultAcpSpawn', () => {
   });
 });
 
+describe('mergeAcpSpawnEnv', () => {
+  it('merges builtin preset env, then config env, then profile env', () => {
+    expect(
+      mergeAcpSpawnEnv('codex', {
+        configEnv: { MODEL_PROVIDER: 'litellm', INITIAL_AGENT_MODE: 'override' },
+        profileEnv: { MODEL_PROVIDER: 'profile' },
+      }),
+    ).toEqual({
+      INITIAL_AGENT_MODE: 'override',
+      MODEL_PROVIDER: 'profile',
+    });
+  });
+
+  it('returns undefined when all layers are empty', () => {
+    expect(mergeAcpSpawnEnv('cursor')).toBeUndefined();
+  });
+});
+
+describe('resolveDefaultAcpSpawn with config acp.env', () => {
+  it('merges config env over builtin codex preset env', () => {
+    expect(
+      resolveDefaultAcpSpawn({
+        env: {},
+        config: {
+          acp: {
+            defaultPreset: 'codex',
+            env: { MODEL_PROVIDER: 'litellm', CODEX_CONFIG: '/path/to/litellm.config.toml' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      }),
+    ).toMatchObject({
+      preset: 'codex',
+      env: {
+        INITIAL_AGENT_MODE: 'agent',
+        MODEL_PROVIDER: 'litellm',
+        CODEX_CONFIG: '/path/to/litellm.config.toml',
+      },
+    });
+  });
+
+  it('applies config env when preset comes from CLI', () => {
+    expect(
+      resolveDefaultAcpSpawn({
+        defaultAcpCli: 'codex',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            env: { MODEL_PROVIDER: 'litellm' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      }),
+    ).toMatchObject({
+      preset: 'codex',
+      env: {
+        INITIAL_AGENT_MODE: 'agent',
+        MODEL_PROVIDER: 'litellm',
+      },
+    });
+  });
+});
+
 describe('resolveBuiltinAcpPreset', () => {
   it('does not use npx for built-in presets', () => {
     for (const preset of ['claude', 'codex', 'pi'] as const) {
@@ -117,6 +179,37 @@ describe('resolveBuiltinAcpPreset', () => {
 });
 
 describe('resolveWorkerAcpSpawn', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('warns when profile acp is used', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    resolveWorkerAcpSpawn({
+      profileAcp: { preset: 'codex' },
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Deprecated: team profile profile acp'),
+    );
+  });
+
+  it('merges config acp.env with builtin preset env', () => {
+    const resolved = resolveWorkerAcpSpawn({
+      defaultOptions: {
+        config: {
+          acp: {
+            defaultPreset: 'codex',
+            env: { MODEL_PROVIDER: 'litellm' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+    expect(resolved.env).toEqual({
+      INITIAL_AGENT_MODE: 'agent',
+      MODEL_PROVIDER: 'litellm',
+    });
+  });
+
   it('uses profile worker acp over profile default and CLI', () => {
     expect(
       resolveWorkerAcpSpawn({
@@ -207,7 +300,44 @@ describe('profileWorkersToSessionSpecs', () => {
   });
 });
 
+describe('acpSpawnFingerprint', () => {
+  it('includes env in fingerprint', () => {
+    expect(
+      acpSpawnFingerprint({
+        preset: 'codex',
+        command: 'codex-acp',
+        args: [],
+        env: { MODEL_PROVIDER: 'litellm' },
+      }),
+    ).toEqual({
+      preset: 'codex',
+      command: 'codex-acp',
+      args: [],
+      env: { MODEL_PROVIDER: 'litellm' },
+    });
+  });
+});
+
 describe('assertAcpSpawnMatchesResume', () => {
+  it('throws on env mismatch during resume', () => {
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: [],
+          env: { MODEL_PROVIDER: 'litellm' },
+        },
+        actual: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: [],
+          env: { MODEL_PROVIDER: 'openai' },
+        },
+      }),
+    ).toThrow(/resume ACP spawn mismatch/);
+  });
+
   it('throws on preset/command mismatch during resume', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({

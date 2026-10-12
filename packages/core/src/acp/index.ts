@@ -70,6 +70,7 @@ export {
   resolvedAcpSpawnToOptions,
   listBuiltinAcpPresetIds,
   isBuiltinAcpPresetId,
+  mergeAcpSpawnEnv,
 } from './resolve-acp-spawn.js';
 export type {
   BuiltinAcpPresetId,

@@ -41,6 +41,10 @@ conductor:
 acp:
   # profile / worker に acp 未指定時の built-in preset
   defaultPreset: cursor
+  # codex-acp 等 spawn 時の env（user → project deep merge）。LiteLLM 例は docs/config.md
+  # env:
+  #   MODEL_PROVIDER: litellm
+  #   CODEX_CONFIG: ~/.codex/litellm.config.toml
 
 session:
   # isolated: Issue 専用 worktree（既定） / in-repo: メイン worktree で直接作業

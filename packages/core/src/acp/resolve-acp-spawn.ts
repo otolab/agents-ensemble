@@ -29,6 +29,8 @@ export interface AcpSpawnFingerprint {
   preset: AcpPresetId;
   command: string;
   args: string[];
+  /** spawn に渡す env（builtin preset → config `acp.env` → profile `acp.env` のマージ結果）。 */
+  env?: Record<string, string>;
 }
 
 export interface DefaultAcpResolutionOptions {
@@ -79,6 +81,47 @@ export function resolveBuiltinAcpPreset(preset: BuiltinAcpPresetId): ResolvedAcp
     args: [...definition.args],
     ...(definition.env ? { env: { ...definition.env } } : {}),
   };
+}
+
+/**
+ * ACP spawn env のマージ順（後勝ち）:
+ * 1. builtin preset 既定（例: codex の `INITIAL_AGENT_MODE`）
+ * 2. ensemble config `acp.env`（user → project deep merge 済み）
+ * 3. team profile `acp.env` / `workers[].acp.env`（非推奨・移行期間の後勝ち）
+ */
+export function mergeAcpSpawnEnv(
+  preset: AcpPresetId,
+  layers: {
+    configEnv?: Record<string, string>;
+    profileEnv?: Record<string, string>;
+  } = {},
+): Record<string, string> | undefined {
+  const builtinEnv =
+    isBuiltinAcpPresetId(preset) && BUILTIN_PRESETS[preset].env
+      ? { ...BUILTIN_PRESETS[preset].env }
+      : {};
+  const merged = {
+    ...builtinEnv,
+    ...(layers.configEnv ?? {}),
+    ...(layers.profileEnv ?? {}),
+  };
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+const warnedDeprecatedProfileAcp = new Set<string>();
+
+function warnDeprecatedProfileAcp(source: 'profile' | 'worker', label?: string): void {
+  const key = `${source}:${label ?? ''}`;
+  if (warnedDeprecatedProfileAcp.has(key)) {
+    return;
+  }
+  warnedDeprecatedProfileAcp.add(key);
+  const where = source === 'profile' ? 'profile acp' : `worker acp (${label ?? 'unknown'})`;
+  console.warn(
+    `[ensemble] Deprecated: team profile ${where} for ACP spawn settings. ` +
+      'Use `.ensemble/config.yaml` `acp.defaultPreset` and `acp.env` instead. ' +
+      'See docs/config.md.',
+  );
 }
 
 function normalizeProfileAcpConfig(
@@ -193,7 +236,10 @@ function profileAuthenticateOverride(
   return parseProfileAcpAuthenticate(config.authenticate);
 }
 
-export function resolveAcpConfig(config: ProfileAcpConfig): ResolvedAcpSpawn {
+export function resolveAcpConfig(
+  config: ProfileAcpConfig,
+  options?: { configEnv?: Record<string, string> },
+): ResolvedAcpSpawn {
   const preset = config.preset ?? (config.command ? 'custom' : 'cursor');
   const authenticateOverride = profileAuthenticateOverride(config);
 
@@ -201,11 +247,15 @@ export function resolveAcpConfig(config: ProfileAcpConfig): ResolvedAcpSpawn {
     if (!config.command) {
       throw new Error('ACP custom preset requires "command"');
     }
+    const mergedEnv = mergeAcpSpawnEnv('custom', {
+      configEnv: options?.configEnv,
+      profileEnv: config.env,
+    });
     const spawn: ResolvedAcpSpawn = {
       preset: 'custom',
       command: config.command,
       args: [...(config.args ?? [])],
-      ...(config.env && Object.keys(config.env).length > 0 ? { env: { ...config.env } } : {}),
+      ...(mergedEnv ? { env: mergedEnv } : {}),
     };
     if (authenticateOverride) {
       spawn.authenticate = authenticateOverride;
@@ -218,14 +268,14 @@ export function resolveAcpConfig(config: ProfileAcpConfig): ResolvedAcpSpawn {
   }
 
   const builtin = resolveBuiltinAcpPreset(preset);
-  const mergedEnv = {
-    ...(builtin.env ?? {}),
-    ...(config.env ?? {}),
-  };
+  const mergedEnv = mergeAcpSpawnEnv(preset, {
+    configEnv: options?.configEnv,
+    profileEnv: config.env,
+  });
   const spawn: ResolvedAcpSpawn = {
     ...builtin,
     args: [...builtin.args, ...(config.args ?? [])],
-    ...(Object.keys(mergedEnv).length > 0 ? { env: mergedEnv } : {}),
+    ...(mergedEnv ? { env: mergedEnv } : {}),
   };
   if (authenticateOverride) {
     spawn.authenticate = authenticateOverride;
@@ -233,19 +283,31 @@ export function resolveAcpConfig(config: ProfileAcpConfig): ResolvedAcpSpawn {
   return spawn;
 }
 
+function withConfigAcpEnv(
+  spawn: ResolvedAcpSpawn,
+  configEnv?: Record<string, string>,
+): ResolvedAcpSpawn {
+  const mergedEnv = mergeAcpSpawnEnv(spawn.preset, { configEnv });
+  return { ...spawn, ...(mergedEnv ? { env: mergedEnv } : {}) };
+}
+
 export function resolveDefaultAcpSpawn(
   options: DefaultAcpResolutionOptions = {},
 ): ResolvedAcpSpawn {
   const env = options.env ?? process.env;
+  const configEnv = options.config?.acp?.env;
   const command = options.defaultAcpCommand?.trim();
   if (command) {
-    return resolveAcpConfig({
-      preset: 'custom',
-      command,
-      ...(options.defaultAcpArgs && options.defaultAcpArgs.length > 0
-        ? { args: options.defaultAcpArgs }
-        : {}),
-    });
+    return resolveAcpConfig(
+      {
+        preset: 'custom',
+        command,
+        ...(options.defaultAcpArgs && options.defaultAcpArgs.length > 0
+          ? { args: options.defaultAcpArgs }
+          : {}),
+      },
+      { configEnv },
+    );
   }
 
   const cliPreset = options.defaultAcpCli?.trim();
@@ -255,7 +317,7 @@ export function resolveDefaultAcpSpawn(
         `Invalid --default-acp-cli "${cliPreset}" (expected ${listBuiltinAcpPresetIds().join(' | ')})`,
       );
     }
-    return resolveBuiltinAcpPreset(cliPreset);
+    return withConfigAcpEnv(resolveBuiltinAcpPreset(cliPreset), configEnv);
   }
 
   const envPreset = env[ENSEMBLE_DEFAULT_ACP_CLI_ENV]?.trim();
@@ -265,25 +327,33 @@ export function resolveDefaultAcpSpawn(
         `Invalid ${ENSEMBLE_DEFAULT_ACP_CLI_ENV}="${envPreset}" (expected ${listBuiltinAcpPresetIds().join(' | ')})`,
       );
     }
-    return resolveBuiltinAcpPreset(envPreset);
+    return withConfigAcpEnv(resolveBuiltinAcpPreset(envPreset), configEnv);
   }
 
   const configPreset = options.config?.acp.defaultPreset;
   if (configPreset) {
-    return resolveBuiltinAcpPreset(configPreset);
+    return withConfigAcpEnv(resolveBuiltinAcpPreset(configPreset), configEnv);
   }
 
-  return resolveBuiltinAcpPreset('cursor');
+  return withConfigAcpEnv(resolveBuiltinAcpPreset('cursor'), configEnv);
 }
 
 export function resolveWorkerAcpSpawn(input: {
   profileAcp?: ProfileAcpConfig;
   workerAcp?: ProfileAcpConfig;
+  workerName?: string;
   defaultOptions?: DefaultAcpResolutionOptions;
 }): ResolvedAcpSpawn {
+  const configEnv = input.defaultOptions?.config?.acp?.env;
+  if (input.profileAcp) {
+    warnDeprecatedProfileAcp('profile');
+  }
+  if (input.workerAcp) {
+    warnDeprecatedProfileAcp('worker', input.workerName);
+  }
   const merged = mergeProfileAcpConfig(input.profileAcp, input.workerAcp);
   if (merged) {
-    return resolveAcpConfig(merged);
+    return resolveAcpConfig(merged, { configEnv });
   }
   return resolveDefaultAcpSpawn(input.defaultOptions);
 }
@@ -299,6 +369,7 @@ export function resolveWorkerAcpSpawns(input: {
       resolveWorkerAcpSpawn({
         profileAcp: input.profile.acp,
         workerAcp: worker.acp,
+        workerName: worker.name,
         defaultOptions: input.defaultOptions,
       }),
     );
@@ -311,6 +382,7 @@ export function acpSpawnFingerprint(spawn: ResolvedAcpSpawn): AcpSpawnFingerprin
     preset: spawn.preset,
     command: spawn.command,
     args: [...spawn.args],
+    ...(spawn.env && Object.keys(spawn.env).length > 0 ? { env: { ...spawn.env } } : {}),
   };
 }
 
@@ -330,7 +402,8 @@ export function assertAcpSpawnMatchesResume(input: {
   const same =
     input.expected.preset === actual.preset &&
     input.expected.command === actual.command &&
-    arraysEqual(input.expected.args, actual.args);
+    arraysEqual(input.expected.args, actual.args) &&
+    envMapsEqual(input.expected.env, actual.env);
 
   if (same) return;
 
@@ -362,4 +435,16 @@ export function resolvedAcpSpawnToOptions(
 
 function arraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function envMapsEqual(
+  left?: Record<string, string>,
+  right?: Record<string, string>,
+): boolean {
+  const leftKeys = Object.keys(left ?? {}).sort();
+  const rightKeys = Object.keys(right ?? {}).sort();
+  if (!arraysEqual(leftKeys, rightKeys)) {
+    return false;
+  }
+  return leftKeys.every((key) => left?.[key] === right?.[key]);
 }
