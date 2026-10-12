@@ -19,6 +19,11 @@ export interface ProfileAcpConfig {
   command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /**
+   * ACP `authenticate` の明示指定（preset 既定より優先）。
+   * method id（例: `chat-gpt`）または `skip`。
+   */
+  authenticate?: string;
 }
 
 /** kind ごとの agent 定義（modular-prompt 拡張）。`conductor` は暗黙起動の SDK agent、他は worker init prompt 用。 */

@@ -1,5 +1,9 @@
 import type { SpawnAcpProcessOptions } from './acp-process.js';
-import { resolveAcpAuthenticateStrategy } from './resolve-acp-auth.js';
+import {
+  parseProfileAcpAuthenticate,
+  resolveAcpAuthenticateStrategy,
+  type AcpAuthenticateStrategy,
+} from './resolve-acp-auth.js';
 import type { Profile, ProfileAcpConfig } from '../profile/types.js';
 import type { EnsembleConfig } from '../config/types.js';
 
@@ -16,6 +20,8 @@ export interface ResolvedAcpSpawn {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** profile / worker `acp.authenticate` 指定時のみ。未指定時は preset 既定へフォールバック。 */
+  authenticate?: AcpAuthenticateStrategy;
 }
 
 /** resume 検証用。sidecar に保存する最小フィンガープリント。 */
@@ -116,6 +122,15 @@ function normalizeProfileAcpConfig(
     }
   }
 
+  let authenticate: string | undefined;
+  if (config.authenticate !== undefined) {
+    if (typeof config.authenticate !== 'string' || !config.authenticate.trim()) {
+      throw new Error(`Invalid profile acp.authenticate in ${label}: expected non-empty string`);
+    }
+    authenticate = config.authenticate.trim();
+    parseProfileAcpAuthenticate(authenticate, label);
+  }
+
   if (!preset && !command) {
     throw new Error(
       `Invalid profile acp in ${label}: needs "preset" or "command"`,
@@ -127,7 +142,13 @@ function normalizeProfileAcpConfig(
   }
 
   if (command && !preset) {
-    return { preset: 'custom', command, ...(args ? { args } : {}), ...(env ? { env } : {}) };
+    return {
+      preset: 'custom',
+      command,
+      ...(args ? { args } : {}),
+      ...(env ? { env } : {}),
+      ...(authenticate ? { authenticate } : {}),
+    };
   }
 
   return {
@@ -135,6 +156,7 @@ function normalizeProfileAcpConfig(
     ...(command ? { command } : {}),
     ...(args ? { args } : {}),
     ...(env ? { env } : {}),
+    ...(authenticate ? { authenticate } : {}),
   };
 }
 
@@ -158,22 +180,37 @@ function mergeProfileAcpConfig(
     command: override.command ?? base.command,
     args: [...(base.args ?? []), ...(override.args ?? [])],
     env: { ...(base.env ?? {}), ...(override.env ?? {}) },
+    authenticate: override.authenticate ?? base.authenticate,
   };
+}
+
+function profileAuthenticateOverride(
+  config: ProfileAcpConfig,
+): AcpAuthenticateStrategy | undefined {
+  if (config.authenticate === undefined) {
+    return undefined;
+  }
+  return parseProfileAcpAuthenticate(config.authenticate);
 }
 
 export function resolveAcpConfig(config: ProfileAcpConfig): ResolvedAcpSpawn {
   const preset = config.preset ?? (config.command ? 'custom' : 'cursor');
+  const authenticateOverride = profileAuthenticateOverride(config);
 
   if (preset === 'custom') {
     if (!config.command) {
       throw new Error('ACP custom preset requires "command"');
     }
-    return {
+    const spawn: ResolvedAcpSpawn = {
       preset: 'custom',
       command: config.command,
       args: [...(config.args ?? [])],
       ...(config.env && Object.keys(config.env).length > 0 ? { env: { ...config.env } } : {}),
     };
+    if (authenticateOverride) {
+      spawn.authenticate = authenticateOverride;
+    }
+    return spawn;
   }
 
   if (!isBuiltinAcpPresetId(preset)) {
@@ -185,11 +222,15 @@ export function resolveAcpConfig(config: ProfileAcpConfig): ResolvedAcpSpawn {
     ...(builtin.env ?? {}),
     ...(config.env ?? {}),
   };
-  return {
+  const spawn: ResolvedAcpSpawn = {
     ...builtin,
     args: [...builtin.args, ...(config.args ?? [])],
     ...(Object.keys(mergedEnv).length > 0 ? { env: mergedEnv } : {}),
   };
+  if (authenticateOverride) {
+    spawn.authenticate = authenticateOverride;
+  }
+  return spawn;
 }
 
 export function resolveDefaultAcpSpawn(
@@ -307,7 +348,7 @@ export function resolvedAcpSpawnToOptions(
     ...base,
     command: spawn.command,
     args: [...spawn.args],
-    authenticate: resolveAcpAuthenticateStrategy(spawn),
+    authenticate: spawn.authenticate ?? resolveAcpAuthenticateStrategy(spawn),
     ...(spawn.env
       ? {
           env: {

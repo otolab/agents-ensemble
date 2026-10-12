@@ -6,6 +6,23 @@ export type AcpAuthenticateStrategy =
   | { kind: 'method'; methodId: string }
   | { kind: 'skip' };
 
+/** profile `acp.authenticate` 文字列を戦略へ。`skip` または method id（例: `chat-gpt`）。 */
+export function parseProfileAcpAuthenticate(
+  value: string,
+  label?: string,
+): AcpAuthenticateStrategy {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(
+      `Invalid profile acp.authenticate${label ? ` in ${label}` : ''}: empty string`,
+    );
+  }
+  if (trimmed === 'skip') {
+    return { kind: 'skip' };
+  }
+  return { kind: 'method', methodId: trimmed };
+}
+
 /** built-in preset ごとのデフォルト authenticate 戦略。 */
 export function resolveBuiltinAcpAuthenticateStrategy(
   preset: Exclude<AcpPresetId, 'custom'>,
@@ -14,8 +31,8 @@ export function resolveBuiltinAcpAuthenticateStrategy(
     case 'cursor':
       return { kind: 'method', methodId: 'cursor_login' };
     case 'codex':
-      // codex-acp: 既存の Codex CLI / ChatGPT ログインを再利用
-      return { kind: 'method', methodId: 'chat-gpt' };
+      // ADR 0028: 既定は移譲。管理モードは profile `acp.authenticate` で opt-in
+      return { kind: 'skip' };
     case 'claude':
       // claude-agent-acp: terminal / gateway 以外は未実装。CLI ログイン済みなら skip で session/new 可
       return { kind: 'skip' };
