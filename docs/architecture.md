@@ -314,6 +314,8 @@ worker (ACP)                    conductor (Cursor SDK / Pi)  オペレータ
 | 一覧・詳細が必要 | `list_open_questions` / `get_open_question` |
 | permission 判断 | `resolve_permission`（要確認時は open question を先に処理） |
 
+`ask_human` の `responseType` は `text`、`yes_no`、`choice` を指定できます。`yes_no` の回答は全文を保持し、共通パーサーの結果を `assent: yes | no | unclear` として記録します。`approved` は `relatedPermissionId` を持つ `yes_no` に限り、`yes` / `no` から導出します。`choice` は `choices: [{ id, label }]` を登録し、回答から解決した option id を `selectedChoice` に記録します。
+
 **ConductorSession ループ**（[ADR 0009](adr/0009-conductor-session-event-queue.md)）
 
 Driver / Policy / View の 3 層（Issue #62）:

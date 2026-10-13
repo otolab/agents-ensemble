@@ -107,13 +107,17 @@ function filterQuestions(
   return registry.list();
 }
 
-function summarizeListItem(entry: OpenQuestion): Record<string, string | boolean> {
+function summarizeListItem(entry: OpenQuestion): Record<string, unknown> {
   return {
     id: entry.id,
     status: entry.status,
     question: entry.question,
     responseType: entry.responseType,
+    ...(entry.choices ? { choices: entry.choices } : {}),
     ...(entry.answer ? { answer: entry.answer } : {}),
+    ...(entry.assent ? { assent: entry.assent } : {}),
+    ...(entry.selectedChoice ? { selectedChoice: entry.selectedChoice } : {}),
+    ...(entry.approved === undefined ? {} : { approved: entry.approved }),
     ...(entry.answeredBy ? { answeredBy: entry.answeredBy } : {}),
     ...(entry.relatedPermissionId
       ? { relatedPermissionId: entry.relatedPermissionId }

@@ -8,6 +8,7 @@ describe('applyOperatorMessage', () => {
     registry.enqueue({
       question: 'Allow shell?',
       responseType: 'yes_no',
+      relatedPermissionId: 'perm-1',
     });
 
     const result = applyOperatorMessage(registry, 'yes', {
@@ -19,10 +20,92 @@ describe('applyOperatorMessage', () => {
       id: 'inq-1',
       status: 'answered',
       answer: 'yes',
+      assent: 'yes',
       approved: true,
       answeredBy: 'operator',
     });
     expect(registry.listOpen()).toHaveLength(0);
+  });
+
+  it.each([
+    ['yes', 'yes', true],
+    ['OKです。', 'yes', true],
+    ['no', 'no', false],
+    ['いいえ', 'no', false],
+    ['maybe', 'unclear', undefined],
+    ['まだ決められません', 'unclear', undefined],
+  ] as const)(
+    'records %j as %s and derives approval only for permission-linked questions',
+    (answer, assent, approved) => {
+      const registry = new OpenQuestionRegistry();
+      registry.enqueue({
+        question: 'Allow shell?',
+        responseType: 'yes_no',
+        relatedPermissionId: 'perm-1',
+      });
+
+      const result = applyOperatorMessage(registry, answer);
+
+      expect(result.answered[0]).toMatchObject({ answer, assent });
+      expect(result.answered[0]?.approved).toBe(approved);
+    },
+  );
+
+  it('retains assent without approved for an unlinked yes_no question', () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      question: 'Proceed with this plan?',
+      responseType: 'yes_no',
+    });
+
+    const result = applyOperatorMessage(registry, 'okです。');
+
+    expect(result.answered[0]).toMatchObject({
+      answer: 'okです。',
+      assent: 'yes',
+    });
+    expect(result.answered[0]?.approved).toBeUndefined();
+  });
+
+  it('does not accept a caller supplied approved value without clear assent', () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      question: 'Allow shell?',
+      responseType: 'yes_no',
+      relatedPermissionId: 'perm-1',
+    });
+
+    registry.answer('inq-1', {
+      answer: 'maybe',
+      assent: 'unclear',
+      approved: true,
+      answeredBy: 'operator',
+    });
+
+    expect(registry.get('inq-1')).toMatchObject({ assent: 'unclear' });
+    expect(registry.get('inq-1')?.approved).toBeUndefined();
+  });
+
+  it('records a choice id and keeps the full answer', () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      question: 'Which approach?',
+      responseType: 'choice',
+      choices: [
+        { id: 'A', label: 'Ship now' },
+        { id: 'B', label: 'Wait for review' },
+      ],
+    });
+
+    const result = applyOperatorMessage(registry, 'B', {
+      targetQuestionId: 'inq-1',
+    });
+
+    expect(result.answered[0]).toMatchObject({
+      answer: 'B',
+      selectedChoice: 'B',
+    });
+    expect(result.answered[0]?.approved).toBeUndefined();
   });
 
   it('answers the only open question with a plain message', () => {

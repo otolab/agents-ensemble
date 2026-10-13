@@ -5,16 +5,21 @@ export {
 export type {
   HumanInquiryKind,
   HumanInquiryResponseType,
+  ChoiceOption,
+  YesNoAssent,
   HumanInquiryRequest,
   HumanInquiryResponse,
   HumanInquiryHandler,
   EscalationRecord,
 } from './human-inquiry.js';
 
+export { parseYesNoAssent, parseChoiceSelection } from './yes-no-assent.js';
+
 export {
   ESCALATION_RESPONSE_ENV,
   readEscalationEnvFallback,
   parseEnvInquiryResponse,
+  parseHumanInquiryAnswer,
   resolveHumanInquiryFromEnv,
   escalationUnavailableMessage,
   createEnvFallbackHumanInquiryHandler,

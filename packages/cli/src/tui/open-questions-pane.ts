@@ -65,6 +65,16 @@ function buildSelectedQuestionItem(
       ),
     );
   }
+  if (question.choices) {
+    for (const choice of question.choices) {
+      lines.push(
+        ...wrapInlineMarkdownToWidth(
+          buildPrefixedSegments(`    ${choice.id}: `, choice.label),
+          contentWidth,
+        ),
+      );
+    }
+  }
   return {
     id: question.id,
     lines,

@@ -175,9 +175,20 @@ export function formatHarnessLogBody(
 export function formatObservationLogBody(event: SessionLogEvent): string | undefined {
   switch (event.type) {
     case 'open.question.enqueued':
-      return `${event.question.id} [${event.question.responseType}] ${event.question.question}`;
-    case 'escalation.recorded':
-      return `${event.record.question} → ${event.record.answer}`;
+      return `${event.question.id} [${event.question.responseType}] ${event.question.question}${event.question.choices?.length ? ` choices=${event.question.choices.map(({ id, label }) => `${id}:${label}`).join(',')}` : ''}`;
+    case 'escalation.recorded': {
+      const assent =
+        event.record.assent === undefined ? '' : ` assent=${event.record.assent}`;
+      const selectedChoice =
+        event.record.selectedChoice === undefined
+          ? ''
+          : ` selectedChoice=${event.record.selectedChoice}`;
+      const approved =
+        event.record.approved === undefined
+          ? ''
+          : ` approved=${event.record.approved}`;
+      return `${event.record.question} → ${event.record.answer}${assent}${selectedChoice}${approved}`;
+    }
     case 'session.worktree.notice':
       return '特別モード: メイン worktree で直接作業します（isolated worktree は作りません）';
     case 'harness.worktree.remove_skipped':

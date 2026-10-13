@@ -75,6 +75,28 @@ describe('buildOpenQuestionListItems', () => {
     ]);
   });
 
+  it('shows choice ids and labels for the selected question', () => {
+    const [item] = buildOpenQuestionListItems(
+      [
+        createQuestion({
+          id: 'inq-choice',
+          question: 'Which approach?',
+          responseType: 'choice',
+          choices: [
+            { id: 'A', label: 'Ship now' },
+            { id: 'B', label: 'Wait for review' },
+          ],
+        }),
+      ],
+      0,
+      80,
+    );
+
+    const rendered = item?.lines.flat().map((segment) => segment.text).join('');
+    expect(rendered?.replace(/\s+/gu, ' ')).toContain('A: Ship now');
+    expect(rendered?.replace(/\s+/gu, ' ')).toContain('B: Wait for review');
+  });
+
   it('renders nested list and table Markdown in question and context', () => {
     const [item] = buildOpenQuestionListItems(
       [

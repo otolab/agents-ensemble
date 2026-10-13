@@ -34,4 +34,35 @@ describe('createAskHumanTool', () => {
     await tools.ask_human.execute({ question: 'Next step?' });
     expect(registry.listOpen()[0]?.responseType).toBe('text');
   });
+
+  it('enqueues a choice question with options', async () => {
+    const registry = new OpenQuestionRegistry();
+    const tools = createAskHumanTool({ registry });
+    await tools.ask_human.execute({
+      question: 'Which approach?',
+      responseType: 'choice',
+      choices: [
+        { id: 'A', label: 'Ship now' },
+        { id: 'B', label: 'Wait for review' },
+      ],
+    });
+
+    expect(registry.listOpen()[0]).toMatchObject({
+      responseType: 'choice',
+      choices: [
+        { id: 'A', label: 'Ship now' },
+        { id: 'B', label: 'Wait for review' },
+      ],
+    });
+  });
+
+  it('requires options for a choice question', async () => {
+    const tools = createAskHumanTool({ registry: new OpenQuestionRegistry() });
+    await expect(
+      tools.ask_human.execute({
+        question: 'Which approach?',
+        responseType: 'choice',
+      }),
+    ).rejects.toThrow('requires non-empty choices');
+  });
 });

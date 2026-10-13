@@ -20,4 +20,33 @@ describe('OpenQuestionRegistry snapshot', () => {
     const next = restored.enqueue({ question: 'Q3', responseType: 'text' });
     expect(next.id).toBe('inq-3');
   });
+
+  it('restores legacy approved values without recalculating them', () => {
+    const legacySnapshot = {
+      sequence: 1,
+      openQuestions: [
+        {
+          id: 'inq-1',
+          question: 'Allow the operation?',
+          responseType: 'yes_no' as const,
+          source: 'conductor' as const,
+          status: 'answered' as const,
+          askedAt: 1,
+          answer: 'okです。',
+          approved: false,
+          answeredAt: 2,
+          answeredBy: 'operator' as const,
+        },
+      ],
+    };
+    const restored = new OpenQuestionRegistry();
+
+    restored.restore(legacySnapshot);
+
+    expect(restored.get('inq-1')).toMatchObject({
+      answer: 'okです。',
+      approved: false,
+    });
+    expect(restored.get('inq-1')?.assent).toBeUndefined();
+  });
 });

@@ -1,8 +1,11 @@
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
+import { parseChoiceSelection, parseYesNoAssent } from './yes-no-assent.js';
 
 export interface RecordOpenQuestionAnswerInput {
   id: string;
   answer: string;
+  selectedChoice?: string;
+  /** @deprecated Approval is derived from assent for permission-linked yes_no questions. */
   approved?: boolean;
   answeredBy: 'operator' | 'conductor';
   sourceMessage?: string;
@@ -16,17 +19,35 @@ export function recordOpenQuestionAnswer(
   const entry = registry.get(input.id);
   if (!entry || entry.status !== 'open') return undefined;
 
-  const approved =
-    input.approved ??
-    (entry.responseType === 'yes_no'
-      ? input.answer.trim().toLowerCase().startsWith('y')
-      : undefined);
-
+  const assent =
+    entry.responseType === 'yes_no'
+      ? parseYesNoAssent(input.answer)
+      : undefined;
+  const selectedChoice =
+    entry.responseType === 'choice'
+      ? resolveSelectedChoice(
+          input.selectedChoice,
+          input.answer,
+          entry.choices ?? [],
+        )
+      : undefined;
   return registry.answer(input.id, {
     answer: input.answer,
-    approved,
+    assent,
+    selectedChoice,
     answeredBy: input.answeredBy,
     sourceMessage: input.sourceMessage,
     rationale: input.rationale,
   });
+}
+
+function resolveSelectedChoice(
+  selectedChoice: string | undefined,
+  answer: string,
+  choices: NonNullable<OpenQuestion['choices']>,
+): string | undefined {
+  const explicitChoice = choices.find(
+    (choice) => choice.id === selectedChoice?.trim(),
+  );
+  return explicitChoice?.id ?? parseChoiceSelection(answer, choices);
 }
