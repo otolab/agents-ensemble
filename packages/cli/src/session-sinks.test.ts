@@ -304,7 +304,17 @@ describe('session sinks', () => {
       record: {
         question: 'approve merge?',
         responseType: 'yes_no',
-        answer: 'yes',
+        answer: 'okです。',
+        assent: 'yes',
+      },
+    });
+    sink({
+      type: 'escalation.recorded',
+      record: {
+        question: 'continue?',
+        responseType: 'yes_no',
+        answer: 'maybe',
+        assent: 'unclear',
       },
     });
     sink({ type: 'session.worktree.notice', mode: 'in_repo' });
@@ -315,7 +325,10 @@ describe('session sinks', () => {
       '[open question] inq-1 [yes_no] approve merge?',
     );
     expect(writeStderr).toHaveBeenCalledWith(
-      '[operator answer] approve merge? → yes',
+      '[operator answer] approve merge? → okです。 assent=yes',
+    );
+    expect(writeStderr).toHaveBeenCalledWith(
+      '[operator answer] continue? → maybe assent=unclear',
     );
     expect(writeStderr).toHaveBeenCalledWith(
       '[worktree] 特別モード: メイン worktree で直接作業します（isolated worktree は作りません）',

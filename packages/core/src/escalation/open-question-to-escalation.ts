@@ -11,8 +11,11 @@ export function openQuestionToEscalationRecord(
   return {
     question: question.question,
     responseType: question.responseType,
+    choices: question.choices,
     context: question.context,
     answer: question.answer,
+    assent: question.assent,
+    selectedChoice: question.selectedChoice,
     approved: question.approved,
   };
 }

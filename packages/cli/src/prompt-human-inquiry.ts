@@ -3,6 +3,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import {
   createPermissionAskHandler,
   EscalationUnavailableError,
+  parseHumanInquiryAnswer,
   resolveHumanInquiryFromEnv,
   escalationUnavailableMessage,
   type HumanInquiryRequest,
@@ -29,8 +30,17 @@ export async function promptHumanInquiry(
 
     if (request.responseType === 'yes_no') {
       const answer = await rl.question(`${request.question} [y/N]: `);
-      const approved = answer.trim().toLowerCase().startsWith('y');
-      return { answer: answer.trim(), approved };
+      return parseHumanInquiryAnswer(answer, request);
+    }
+
+    if (request.responseType === 'choice') {
+      const choices = request.choices ?? [];
+      if (choices.length === 0) {
+        throw new Error('choice human inquiry requires at least one choice');
+      }
+      const options = choices.map(({ id, label }) => `  ${id}: ${label}`).join('\n');
+      const answer = await rl.question(`${request.question}\n${options}\n> `);
+      return parseHumanInquiryAnswer(answer, request);
     }
 
     const answer = await rl.question(`${request.question}\n> `);

@@ -84,6 +84,8 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
 | `[continue]` | `session.continue` → ObservationSink | **非 TTY のみ** |
 | （終了サマリ） | `formatIssueSessionSummaryText`（`writeIssueSessionSummary`） | **TTY のみ**（`--summary-format auto` または `text`）。Ink unmount 後 |
 
+open question の回答観測は回答全文を残し、`yes_no` には `assent=yes|no|unclear`、`choice` には解決した `selectedChoice` を付けます。`approved` は permission に関連付いた yes/no のみ出力します。choice 質問の登録観測には ID と label を表示します。
+
 TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor の**成功応答**は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。`conductor.send` の error は conductor 活動ログへ追記せず、harness 活動ログだけに障害として追記する。既定の `pane` レイアウトでは Orchestration ペイン内の windowing、`ENSEMBLE_TUI_LAYOUT=stream` では `<Static>` と端末 scrollback を使う。stream の活動ログは端末表示用で、セッション sidecar や活動ログファイルには永続化しない。stream は実行中の端末スクロール中に新着ログで末尾へ戻ることがあり、既に追記された行は端末幅変更で再折り返しされない。
 
 ### 終了 JSON（SessionSummary）

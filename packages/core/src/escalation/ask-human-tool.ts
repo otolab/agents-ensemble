@@ -1,6 +1,9 @@
 import type { ConductorToolSet } from '../conductor/conductor-tool.js';
 import { formatOpenQuestionEnqueuedReport } from './format-registry-update.js';
-import type { HumanInquiryResponseType } from './human-inquiry.js';
+import type {
+  ChoiceOption,
+  HumanInquiryResponseType,
+} from './human-inquiry.js';
 import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 
 export interface AskHumanToolOptions {
@@ -19,7 +22,7 @@ export function createAskHumanTool(
         'The operator answers in chat on a later turn; you can continue without waiting.',
         'DO NOT use if the operator already answered in chat — use answer_open_question to record their answer instead.',
         'DO NOT use answer_open_question and ask_human for the same decision in one turn.',
-        'Use yes_no for binary choices or text for open guidance.',
+        'Use yes_no for binary choices, choice for a fixed list of options, or text for open guidance.',
       ].join(' '),
       inputSchema: {
         type: 'object',
@@ -30,8 +33,22 @@ export function createAskHumanTool(
           },
           responseType: {
             type: 'string',
-            enum: ['yes_no', 'text'],
-            description: 'yes_no for y/n, text for free-form answer',
+            enum: ['yes_no', 'text', 'choice'],
+            description:
+              'yes_no for binary assent, choice for a fixed option list, text for free-form guidance',
+          },
+          choices: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                label: { type: 'string' },
+              },
+              required: ['id', 'label'],
+            },
+            description:
+              'Required for choice: options the operator can select by id, label, or one-based number',
           },
           context: {
             type: 'string',
@@ -52,6 +69,8 @@ export function createAskHumanTool(
         }
 
         const responseType = parseResponseType(args.responseType);
+        const choices =
+          responseType === 'choice' ? parseChoices(args.choices) : undefined;
         const context = args.context ? String(args.context) : undefined;
         const relatedPermissionId = args.relatedPermissionId
           ? String(args.relatedPermissionId)
@@ -60,6 +79,7 @@ export function createAskHumanTool(
         const entry = options.registry.enqueue({
           question,
           responseType,
+          choices,
           context,
           relatedPermissionId,
           source: 'conductor',
@@ -96,5 +116,29 @@ export function createAskHumanTool(
 
 function parseResponseType(value: unknown): HumanInquiryResponseType {
   const normalized = String(value ?? 'text').trim().toLowerCase();
-  return normalized === 'yes_no' ? 'yes_no' : 'text';
+  if (normalized === 'yes_no' || normalized === 'choice') return normalized;
+  return 'text';
+}
+
+function parseChoices(value: unknown): ChoiceOption[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('ask_human requires non-empty choices for responseType choice');
+  }
+
+  const choices = value.map((choice) => {
+    if (!choice || typeof choice !== 'object') {
+      throw new Error('ask_human choices must have string id and label fields');
+    }
+    const candidate = choice as Record<string, unknown>;
+    const id = String(candidate.id ?? '').trim();
+    const label = String(candidate.label ?? '').trim();
+    if (!id || !label) {
+      throw new Error('ask_human choices must have non-empty id and label fields');
+    }
+    return { id, label };
+  });
+  if (new Set(choices.map(({ id }) => id)).size !== choices.length) {
+    throw new Error('ask_human choice ids must be unique');
+  }
+  return choices;
 }

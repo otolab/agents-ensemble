@@ -1,17 +1,26 @@
 import type { OpenQuestion } from './open-question.js';
 
 export function formatOpenQuestionEnqueuedReport(question: OpenQuestion): string {
+  const choices = question.choices?.length
+    ? `\nchoices: ${question.choices.map(({ id, label }) => `${id}: ${label}`).join(', ')}`
+    : '';
   const context = question.context ? `\ncontext: ${question.context}` : '';
   const permission = question.relatedPermissionId
     ? `\npermission: ${question.relatedPermissionId}`
     : '';
-  return `【open question 登録】${question.id} [${question.responseType}]: ${question.question}${context}${permission}`;
+  return `【open question 登録】${question.id} [${question.responseType}]: ${question.question}${choices}${context}${permission}`;
 }
 
 export function formatOpenQuestionAnsweredReport(question: OpenQuestion): string {
+  const assent =
+    question.assent === undefined ? '' : `\nassent: ${question.assent}`;
+  const selectedChoice =
+    question.selectedChoice === undefined
+      ? ''
+      : `\nselectedChoice: ${question.selectedChoice}`;
   const approved =
     question.approved === undefined ? '' : `\napproved: ${question.approved}`;
-  return `【open question 回答】${question.id}: ${question.question} → ${question.answer} (by ${question.answeredBy})${approved}`;
+  return `【open question 回答】${question.id}: ${question.question} → ${question.answer} (by ${question.answeredBy})${assent}${selectedChoice}${approved}`;
 }
 
 export function joinOperatorInput(parts: Array<string | undefined>): string | undefined {

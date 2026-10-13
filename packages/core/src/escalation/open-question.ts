@@ -1,4 +1,5 @@
-import type { HumanInquiryResponseType } from './human-inquiry.js';
+import type { ChoiceOption, HumanInquiryResponseType } from './human-inquiry.js';
+import type { YesNoAssent } from './yes-no-assent.js';
 
 export type OpenQuestionStatus = 'open' | 'answered';
 
@@ -10,11 +11,14 @@ export interface OpenQuestion {
   id: string;
   question: string;
   responseType: HumanInquiryResponseType;
+  choices?: ChoiceOption[];
   context?: string;
   source: OpenQuestionSource;
   status: OpenQuestionStatus;
   askedAt: number;
   answer?: string;
+  assent?: YesNoAssent;
+  selectedChoice?: string;
   approved?: boolean;
   answeredAt?: number;
   answeredBy?: OpenQuestionAnsweredBy;
@@ -26,6 +30,7 @@ export interface OpenQuestion {
 export interface EnqueueOpenQuestionInput {
   question: string;
   responseType: HumanInquiryResponseType;
+  choices?: ChoiceOption[];
   context?: string;
   relatedPermissionId?: string;
   source?: OpenQuestionSource;
@@ -33,6 +38,9 @@ export interface EnqueueOpenQuestionInput {
 
 export interface AnswerOpenQuestionInput {
   answer: string;
+  assent?: YesNoAssent;
+  selectedChoice?: string;
+  /** @deprecated Approval is derived from assent for permission-linked yes_no questions. */
   approved?: boolean;
   answeredBy: OpenQuestionAnsweredBy;
   sourceMessage?: string;
@@ -50,6 +58,9 @@ export class OpenQuestionRegistry {
       id,
       question: input.question,
       responseType: input.responseType,
+      ...(input.choices
+        ? { choices: input.choices.map((choice) => ({ ...choice })) }
+        : {}),
       context: input.context,
       relatedPermissionId: input.relatedPermissionId,
       source: input.source ?? 'conductor',
@@ -67,12 +78,30 @@ export class OpenQuestionRegistry {
   answer(id: string, input: AnswerOpenQuestionInput): OpenQuestion | undefined {
     const entry = this.entries.get(id);
     if (!entry || entry.status !== 'open') return undefined;
+    if (
+      entry.responseType === 'choice' &&
+      !entry.choices?.some((choice) => choice.id === input.selectedChoice)
+    ) {
+      return undefined;
+    }
 
     const updated: OpenQuestion = {
       ...entry,
       status: 'answered',
       answer: input.answer,
-      approved: input.approved,
+      assent: entry.responseType === 'yes_no' ? input.assent : undefined,
+      selectedChoice:
+        entry.responseType === 'choice' &&
+        entry.choices?.some((choice) => choice.id === input.selectedChoice)
+          ? input.selectedChoice
+          : undefined,
+      approved:
+        entry.responseType === 'yes_no' &&
+        entry.relatedPermissionId &&
+        input.assent !== undefined &&
+        input.assent !== 'unclear'
+          ? input.assent === 'yes'
+          : undefined,
       answeredAt: Date.now(),
       answeredBy: input.answeredBy,
       sourceMessage: input.sourceMessage,

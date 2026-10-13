@@ -32,9 +32,10 @@ export function createAnswerOpenQuestionTool(
             type: 'string',
             description: 'Answer text to record',
           },
-          approved: {
-            type: 'boolean',
-            description: 'For yes_no questions: true/false. Omit to infer from answer text.',
+          selectedChoice: {
+            type: 'string',
+            description:
+              'Selected choice option id for a choice question; answer text is preserved separately',
           },
           rationale: {
             type: 'string',
@@ -55,18 +56,28 @@ export function createAnswerOpenQuestionTool(
           throw new Error('answer_open_question requires answer');
         }
 
-        const approved =
-          args.approved === undefined ? undefined : Boolean(args.approved);
+        const selectedChoice = args.selectedChoice
+          ? String(args.selectedChoice).trim()
+          : undefined;
         const rationale = args.rationale ? String(args.rationale) : undefined;
 
         const recorded = recordOpenQuestionAnswer(options.registry, {
           id: questionId,
           answer,
-          approved,
+          selectedChoice,
           answeredBy: 'conductor',
           rationale,
         });
         if (!recorded) {
+          const question = options.registry.get(questionId);
+          if (
+            question?.status === 'open' &&
+            question.responseType === 'choice'
+          ) {
+            throw new Error(
+              `answer_open_question: choice answer must resolve to one of the listed options: ${questionId}`,
+            );
+          }
           throw new Error(
             `answer_open_question: question not found or already answered: ${questionId}`,
           );
@@ -86,6 +97,12 @@ export function createAnswerOpenQuestionTool(
                   status: recorded.status,
                   answer: recorded.answer,
                   answeredBy: recorded.answeredBy,
+                  ...(recorded.assent === undefined
+                    ? {}
+                    : { assent: recorded.assent }),
+                  ...(recorded.selectedChoice === undefined
+                    ? {}
+                    : { selectedChoice: recorded.selectedChoice }),
                   report,
                   ...(recorded.approved === undefined
                     ? {}
@@ -100,6 +117,12 @@ export function createAnswerOpenQuestionTool(
             questionId: recorded.id,
             status: recorded.status,
             answeredBy: recorded.answeredBy ?? 'conductor',
+            ...(recorded.assent === undefined
+              ? {}
+              : { assent: recorded.assent }),
+            ...(recorded.selectedChoice === undefined
+              ? {}
+              : { selectedChoice: recorded.selectedChoice }),
           },
         };
       },
