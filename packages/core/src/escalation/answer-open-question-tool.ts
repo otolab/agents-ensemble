@@ -69,6 +69,15 @@ export function createAnswerOpenQuestionTool(
           rationale,
         });
         if (!recorded) {
+          const question = options.registry.get(questionId);
+          if (
+            question?.status === 'open' &&
+            question.responseType === 'choice'
+          ) {
+            throw new Error(
+              `answer_open_question: choice answer must resolve to one of the listed options: ${questionId}`,
+            );
+          }
           throw new Error(
             `answer_open_question: question not found or already answered: ${questionId}`,
           );

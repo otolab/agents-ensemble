@@ -108,6 +108,43 @@ describe('applyOperatorMessage', () => {
     expect(result.answered[0]?.approved).toBeUndefined();
   });
 
+  it('leaves an ambiguous choice open so the operator can answer again', () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      question: 'Which approach?',
+      responseType: 'choice',
+      choices: [
+        { id: 'A', label: 'Wait for review' },
+        { id: 'B', label: 'Wait for review' },
+      ],
+    });
+
+    const ambiguous = applyOperatorMessage(registry, 'Wait for review', {
+      targetQuestionId: 'inq-1',
+    });
+
+    expect(ambiguous).toEqual({
+      answered: [],
+      generalGuidance: 'Wait for review',
+    });
+    expect(registry.get('inq-1')).toMatchObject({
+      status: 'open',
+      responseType: 'choice',
+    });
+    expect(registry.get('inq-1')?.answer).toBeUndefined();
+
+    const retry = applyOperatorMessage(registry, 'B', {
+      targetQuestionId: 'inq-1',
+    });
+
+    expect(retry.answered[0]).toMatchObject({
+      status: 'answered',
+      answer: 'B',
+      selectedChoice: 'B',
+    });
+    expect(registry.listOpen()).toHaveLength(0);
+  });
+
   it('answers the only open question with a plain message', () => {
     const registry = new OpenQuestionRegistry();
     registry.enqueue({

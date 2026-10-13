@@ -2,6 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { OpenQuestionRegistry } from './open-question.js';
 
 describe('OpenQuestionRegistry snapshot', () => {
+  it('does not answer a choice question without a valid selection', () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      question: 'Which approach?',
+      responseType: 'choice',
+      choices: [
+        { id: 'A', label: 'Wait for review' },
+        { id: 'B', label: 'Wait for review' },
+      ],
+    });
+
+    const result = registry.answer('inq-1', {
+      answer: 'Wait for review',
+      answeredBy: 'operator',
+    });
+
+    expect(result).toBeUndefined();
+    expect(registry.get('inq-1')).toMatchObject({
+      status: 'open',
+      responseType: 'choice',
+    });
+    expect(registry.listOpen()).toHaveLength(1);
+  });
+
   it('restores sequence and entries', () => {
     const registry = new OpenQuestionRegistry();
     registry.enqueue({ question: 'Q1', responseType: 'text' });

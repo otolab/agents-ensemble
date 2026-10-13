@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createAnswerOpenQuestionTool } from './answer-open-question-tool.js';
+import { createOpenQuestionListTools } from './open-question-list-tools.js';
 import { OpenQuestionRegistry } from './open-question.js';
 
 describe('createAnswerOpenQuestionTool', () => {
@@ -77,5 +78,64 @@ describe('createAnswerOpenQuestionTool', () => {
       answer: 'The operator chose the second option.',
       selectedChoice: 'B',
     });
+  });
+
+  it('keeps an unresolved choice open and allows a valid answer after restore', async () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      question: 'Which approach?',
+      responseType: 'choice',
+      choices: [
+        { id: 'A', label: 'Wait for review' },
+        { id: 'B', label: 'Wait for review' },
+      ],
+    });
+    const tools = createAnswerOpenQuestionTool({ registry });
+
+    await expect(
+      tools.answer_open_question.execute({
+        questionId: 'inq-1',
+        answer: 'Wait for review',
+      }),
+    ).rejects.toThrow(/choice answer must resolve/u);
+
+    expect(registry.get('inq-1')).toMatchObject({
+      id: 'inq-1',
+      status: 'open',
+      responseType: 'choice',
+    });
+    expect(registry.get('inq-1')?.answer).toBeUndefined();
+    expect(registry.listAnswered()).toHaveLength(0);
+
+    const restored = new OpenQuestionRegistry();
+    restored.restore(registry.snapshot());
+    const listTools = createOpenQuestionListTools({ registry: restored });
+    const listed = await listTools.list_open_questions.execute({
+      status: 'open',
+    });
+    const listedBody = JSON.parse(String(listed.content[0]?.text));
+
+    expect(listedBody).toMatchObject({
+      status: 'open',
+      count: 1,
+      items: [{ id: 'inq-1', status: 'open', responseType: 'choice' }],
+    });
+
+    const retryTools = createAnswerOpenQuestionTool({ registry: restored });
+    await retryTools.answer_open_question.execute({
+      questionId: 'inq-1',
+      answer: 'The operator selected option B after review.',
+      selectedChoice: 'B',
+    });
+
+    expect(restored.listAnswered()).toMatchObject([
+      {
+        id: 'inq-1',
+        status: 'answered',
+        answer: 'The operator selected option B after review.',
+        selectedChoice: 'B',
+      },
+    ]);
+    expect(restored.listOpen()).toHaveLength(0);
   });
 });

@@ -78,6 +78,12 @@ export class OpenQuestionRegistry {
   answer(id: string, input: AnswerOpenQuestionInput): OpenQuestion | undefined {
     const entry = this.entries.get(id);
     if (!entry || entry.status !== 'open') return undefined;
+    if (
+      entry.responseType === 'choice' &&
+      !entry.choices?.some((choice) => choice.id === input.selectedChoice)
+    ) {
+      return undefined;
+    }
 
     const updated: OpenQuestion = {
       ...entry,
