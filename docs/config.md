@@ -66,6 +66,7 @@ acp:
 
 session:
   worktree: isolated                  # --worktree 既定（isolated | in-repo）
+  lazyWorkers: false                  # true: 初回 prompt_worker まで worker ACP attach を遅延
   maxTurns:
     tty: 0                            # 0 = 無制限
     nonTty: 5
@@ -100,6 +101,7 @@ tui:
 | `acp.defaultPreset` | worker ACP built-in preset | `--default-acp-cli` 等 | `ENSEMBLE_DEFAULT_ACP_CLI` |
 | `acp.env` | codex-acp 等 spawn 時の env（string map） | — | — |
 | `session.worktree` | worker workspace モード | `--worktree` | — |
+| `session.lazyWorkers` | 初回 `prompt_worker` まで worker ACP attach を遅延 | — | — |
 | `session.maxTurns.tty` / `nonTty` | 自律ターン上限 | `--max-turns` / `--no-max-turns` | — |
 | `session.postLoop.wait` | post-loop 待機（TTY） | `--no-wait` | — |
 | `tui.layout` | TTY レイアウト（`pane` / `stream`） | — | `ENSEMBLE_TUI_LAYOUT` |
@@ -250,6 +252,7 @@ conductor の system prompt の基底は modular-prompt のコンパイル結果
 | `CONDUCTOR_MODEL_ID` | `conductor.model` | 同上 |
 | `ENSEMBLE_DEFAULT_ACP_CLI` | `acp.defaultPreset` | 同上 |
 | CLI `--worktree` 既定 `isolated` | `session.worktree` | |
+| eager worker attach | `session.lazyWorkers: false` | 未指定も eager（後方互換） |
 | TTY 無制限 / 非 TTY 5 | `session.maxTurns.tty` / `nonTty` | |
 | TTY post-loop 待機 ON | `session.postLoop.wait` | |
 | monitor 各種定数 | `github.monitor.*` | |
@@ -257,6 +260,8 @@ conductor の system prompt の基底は modular-prompt のコンパイル結果
 | `FORCE_HYPERLINK` | `tui.forceHyperlink` | `1`/`0` ↔ `on`/`off`。未設定 ↔ `auto` |
 
 **config 未作成時**は従来どおり env とコード default のみが効く（後方互換）。
+
+`session.lazyWorkers` は既定 `false` です。`true` にすると profile の全 worker を session に登録して TUI / `list_workers` に `sleeping` と表示し、初回の通常 `prompt_worker` で対象 worker だけを attach / init します。init prompt 完了後に最初の instruction を別ラウンドで送り、その後はセッション終了まで常駐します。resume は sidecar に保存した設定を使い、ACP session のある worker は再 attach、まだ使っていない worker は sleeping のままにします。lazy 設定のない旧 sidecar は eager として扱います。
 
 ### team profile `acp` の削除
 

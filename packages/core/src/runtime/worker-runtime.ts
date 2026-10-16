@@ -60,6 +60,9 @@ interface AttachingWorker {
   workerId: string;
   name: string;
   kind: string;
+  queue: string[];
+  /** attach/init 中の preempt は init を止めず、待機 instruction を置き換える。 */
+  preemptInstruction?: string;
 }
 
 interface FailedWorker {
@@ -70,9 +73,11 @@ interface FailedWorker {
 }
 
 export class WorkerRuntime {
+  private readonly configuredWorkers = new Map<string, WorkerStartedInfo>();
   private readonly processing = new Map<string, WorkerStartedInfo>();
   private readonly residents = new Map<string, ResidentWorker>();
   private readonly attaching = new Map<string, AttachingWorker>();
+  private readonly sleeping = new Map<string, WorkerStartedInfo>();
   private readonly failedWorkers = new Map<string, FailedWorker>();
   private readonly idleResolvers = new Set<() => void>();
   private attachInFlight = 0;
@@ -113,19 +118,21 @@ export class WorkerRuntime {
     return [...this.processing.values()];
   }
 
-  /** attach 済み・attach 中・失敗済み worker の harness 状態一覧。 */
+  /** profile に登録された全 worker の harness 状態一覧。 */
   listWorkerStatuses(): WorkerStatusSummary[] {
-    const names = new Set<string>([
-      ...this.residents.keys(),
-      ...this.attaching.keys(),
-      ...this.failedWorkers.keys(),
-    ]);
-    return [...names].map((name) => this.summarizeWorkerStatus(name));
+    return [...this.configuredWorkers.keys()].map((name) =>
+      this.summarizeWorkerStatus(name),
+    );
   }
 
-  /** 1 worker の harness 状態詳細。未登録なら undefined。 */
   /** worker UUID から kind（なければ name）を返す。 */
   resolveWorkerLabel(workerId: string): string | undefined {
+    for (const started of this.configuredWorkers.values()) {
+      if (started.workerId === workerId) {
+        return started.kind;
+      }
+    }
+
     for (const resident of this.residents.values()) {
       if (resident.workerId === workerId) {
         return resident.started.kind;
@@ -154,24 +161,23 @@ export class WorkerRuntime {
   }
 
   getWorkerStatus(name: string): WorkerStatusDetail | undefined {
-    if (
-      !this.residents.has(name) &&
-      !this.attaching.has(name) &&
-      !this.failedWorkers.has(name)
-    ) {
+    const started = this.configuredWorkers.get(name);
+    if (!started) {
       return undefined;
     }
 
     const summary = this.summarizeWorkerStatus(name);
     const resident = this.residents.get(name);
     if (!resident) {
+      const attaching = this.attaching.get(name);
       return {
         ...summary,
-        workerId:
-          this.attaching.get(name)?.workerId ??
-          this.failedWorkers.get(name)?.workerId,
-        queuePreview: [],
-        preemptPending: false,
+        workerId: started.workerId,
+        queuePreview:
+          attaching?.queue.map((instruction) =>
+            summarizeInstruction(instruction),
+          ) ?? [],
+        preemptPending: attaching?.preemptInstruction !== undefined,
         cancelInFlight: false,
       };
     }
@@ -185,10 +191,19 @@ export class WorkerRuntime {
     };
   }
 
-  start(params: WorkerStartParams): string {
+  start(params: WorkerStartParams, options?: { lazy?: boolean }): string {
+    if (this.configuredWorkers.has(params.name)) {
+      throw new Error(`Worker "${params.name}" is already registered`);
+    }
     const workerId = randomUUID();
     const started: WorkerStartedInfo = { workerId, ...params };
-    void this.attachAndInit(started);
+    this.configuredWorkers.set(params.name, started);
+    if (options?.lazy) {
+      this.sleeping.set(params.name, started);
+      this.emitWorkerState(workerId, params.name, params.kind, 'sleeping');
+    } else {
+      void this.attachAndInit(started);
+    }
     return workerId;
   }
 
@@ -209,10 +224,38 @@ export class WorkerRuntime {
 
     const resident = this.residents.get(name);
     if (!resident) {
+      const started = this.sleeping.get(name);
+      if (started) {
+        this.sleeping.delete(name);
+        void this.attachAndInit(started, text);
+        return { status: 'sent', worker: name };
+      }
+
+      const attaching = this.attaching.get(name);
+      if (attaching) {
+        if (options?.preempt) {
+          attaching.queue.length = 0;
+          attaching.preemptInstruction = text;
+          return { status: 'queued', worker: name, position: 1 };
+        }
+        attaching.queue.push(text);
+        return {
+          status: 'queued',
+          worker: name,
+          position: attaching.queue.length,
+        };
+      }
+
+      const failed = this.failedWorkers.get(name);
+      const known = this.configuredWorkers.has(name);
       return {
         status: 'error',
         worker: name,
-        message: `Worker "${name}" is not attached`,
+        message: failed
+          ? `Worker "${name}" failed to attach: ${failed.error}`
+          : known
+            ? `Worker "${name}" is not available`
+            : `Worker "${name}" is not registered`,
       };
     }
 
@@ -309,23 +352,39 @@ export class WorkerRuntime {
         name: attaching.name,
         kind: attaching.kind,
         state: 'attaching',
-        queueDepth: 0,
+        queueDepth: attaching.queue.length,
       };
     }
 
     const resident = this.residents.get(name);
-    if (!resident) {
+    const started = this.configuredWorkers.get(name);
+    if (!started) {
       throw new Error(`summarizeWorkerStatus: unknown worker ${name}`);
     }
 
     return {
-      name: resident.attached.name,
-      kind: resident.attached.kind,
-      state: resident.state === 'processing' ? 'processing' : 'idle',
-      queueDepth: resident.queue.length,
-      worktreePath: resident.started.worktree.path,
-      workspacePath: this.summarizeAcpCwd(resident.attached.session.acpCwd),
-      acpSessionId: resident.attached.session.sessionId,
+      name: resident?.attached.name ?? started.name,
+      kind: resident?.attached.kind ?? started.kind,
+      state: resident
+        ? resident.state === 'processing'
+          ? 'processing'
+          : 'idle'
+        : this.sleeping.has(name)
+          ? 'sleeping'
+          : 'attaching',
+      queueDepth:
+        resident?.queue.length ?? this.attaching.get(name)?.queue.length ?? 0,
+      worktreePath: started.worktree.path,
+      ...(resident
+        ? {
+            workspacePath: this.summarizeAcpCwd(
+              resident.attached.session.acpCwd,
+            ),
+            acpSessionId: resident.attached.session.sessionId,
+          }
+        : started.resolvedWorkspacePath
+          ? { workspacePath: this.summarizeAcpCwd(started.resolvedWorkspacePath) }
+          : {}),
     };
   }
 
@@ -365,13 +424,18 @@ export class WorkerRuntime {
     });
   }
 
-  private async attachAndInit(started: WorkerStartedInfo): Promise<void> {
+  private async attachAndInit(
+    started: WorkerStartedInfo,
+    firstInstruction?: string,
+  ): Promise<void> {
     this.attachInFlight++;
-    this.attaching.set(started.name, {
+    const attaching: AttachingWorker = {
       workerId: started.workerId,
       name: started.name,
       kind: started.kind,
-    });
+      queue: firstInstruction ? [firstInstruction] : [],
+    };
+    this.attaching.set(started.name, attaching);
     this.emitWorkerState(
       started.workerId,
       started.name,
@@ -414,7 +478,10 @@ export class WorkerRuntime {
         started,
         attached,
         state: 'idle',
-        queue: [],
+        queue: attaching.queue,
+        ...(attaching.preemptInstruction
+          ? { preemptInstruction: attaching.preemptInstruction }
+          : {}),
         cancelInFlight: false,
       };
       this.residents.set(started.name, resident);

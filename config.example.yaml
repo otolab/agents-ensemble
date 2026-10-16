@@ -49,6 +49,8 @@ acp:
 session:
   # isolated: Issue 専用 worktree（既定） / in-repo: メイン worktree で直接作業
   worktree: isolated
+  # true の場合、worker は初回 prompt_worker まで ACP attach/init を行わない
+  # lazyWorkers: true
   maxTurns:
     tty: 0       # 0 = 無制限
     nonTty: 5

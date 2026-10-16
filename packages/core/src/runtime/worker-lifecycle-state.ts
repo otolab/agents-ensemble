@@ -3,4 +3,5 @@ export type WorkerLifecycleState =
   | 'attaching'
   | 'idle'
   | 'processing'
+  | 'sleeping'
   | 'failed';

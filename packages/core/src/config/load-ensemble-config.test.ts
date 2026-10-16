@@ -99,6 +99,7 @@ describe('parseEnsembleConfig', () => {
         },
         session: {
           worktree: 'in-repo',
+          lazyWorkers: true,
           maxTurns: { tty: 2, nonTty: 8 },
           postLoop: { wait: false },
         },
@@ -124,6 +125,7 @@ describe('parseEnsembleConfig', () => {
       acp: { defaultPreset: 'claude', env: { MODEL_PROVIDER: 'litellm' } },
       session: {
         worktree: 'in_repo',
+        lazyWorkers: true,
         maxTurns: { tty: 2, nonTty: 8 },
         postLoop: { wait: false },
       },
@@ -148,6 +150,12 @@ describe('parseEnsembleConfig', () => {
           forceHyperlink: 'maybe',
         },
       }),
+    ).toEqual({});
+  });
+
+  it('ignores invalid session.lazyWorkers values', () => {
+    expect(
+      parseEnsembleConfig({ session: { lazyWorkers: 'yes' } }),
     ).toEqual({});
   });
 });
@@ -203,6 +211,19 @@ describe('loadEnsembleConfig', () => {
     expect(config.conductor.backend).toBe('pi');
     expect(config.session.worktree).toBe('in_repo');
     expect(config.session.maxTurns.nonTty).toBe(9);
+  });
+
+  it('deep merges lazy worker attach setting and defaults to eager', async () => {
+    await writeConfig(userEnsembleRoot, `session:\n  lazyWorkers: true\n`);
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `session:\n  lazyWorkers: false\n`,
+    );
+
+    const config = await loadEnsembleConfig(repoRoot, { userEnsembleRoot });
+
+    expect(config.session.lazyWorkers).toBe(false);
+    expect(DEFAULT_ENSEMBLE_CONFIG.session.lazyWorkers).toBe(false);
   });
 
   it('project overrides user partial merge for github auth', async () => {

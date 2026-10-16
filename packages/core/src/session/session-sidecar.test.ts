@@ -54,6 +54,7 @@ describe('session sidecar', () => {
       workers: {
         implementer: { acpSessionId: 'sess-1', acpCwd: '/repo/docs' },
       },
+      lazyWorkers: true,
       githubMonitor: {
         pullRequests: {},
         explicitPullRequests: {
@@ -72,6 +73,7 @@ describe('session sidecar', () => {
     expect(loaded?.updatedAt).toBeGreaterThanOrEqual(before);
     expect(loaded).toMatchObject({
       ...sidecar,
+      lazyWorkers: true,
       updatedAt: expect.any(Number),
     });
     expect(loaded?.githubMonitor?.explicitPullRequests).toEqual({
@@ -133,6 +135,7 @@ describe('session sidecar', () => {
     const loaded = await loadSessionSidecar(path);
 
     expect(loaded?.conductorBackend).toBe('cursor');
+    expect(loaded?.lazyWorkers).toBeUndefined();
   });
 
   it('rejects a conductor backend mismatch on resume validation', () => {

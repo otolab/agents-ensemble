@@ -274,6 +274,7 @@ export async function runConductorSession(
     });
   };
   let activeProfile = options.profile;
+  let activeLazyWorkers = ensembleConfig.session.lazyWorkers;
   const workerSessions = new Map<
     string,
     { acpSessionId: string; acpCwd?: string; acpSpawn?: AcpSpawnFingerprint }
@@ -306,6 +307,8 @@ export async function runConductorSession(
       openQuestions: sidecar.openQuestions,
     });
     activeProfile = sidecar.profile;
+    // Sidecars written before this setting always started every worker eagerly.
+    activeLazyWorkers = sidecar.lazyWorkers ?? false;
     githubMonitorCursor = sidecar.githubMonitor;
     for (const [name, worker] of Object.entries(sidecar.workers)) {
       workerSessions.set(name, {
@@ -431,6 +434,7 @@ export async function runConductorSession(
         name: worker.name,
         kind: worker.kind,
       })),
+      ...(activeLazyWorkers ? { initialState: 'sleeping' } : {}),
     });
   }
 
@@ -443,6 +447,7 @@ export async function runConductorSession(
     repoRoot: options.repoRoot,
     ...(workerWorktree ? { worktree: workerWorktree } : {}),
     workers,
+    lazyWorkers: activeLazyWorkers,
     sessionState,
     restoredWorkerSessions: Object.fromEntries(workerSessions),
     permissionPipeline,
@@ -557,6 +562,13 @@ export async function runConductorSession(
       });
     },
     onWorkerState: (event) => {
+      if (activeLazyWorkers && event.state === 'attaching') {
+        sessionLogger.emit({
+          type: 'harness.worker.bootstrap',
+          workers: [{ name: event.name, kind: event.kind }],
+          mode: 'init',
+        });
+      }
       sessionLogger.emit({
         type: 'harness.worker.state',
         name: event.name,
@@ -567,7 +579,7 @@ export async function runConductorSession(
     },
   });
 
-  if (workers.length > 0) {
+  if (workers.length > 0 && !activeLazyWorkers) {
     sessionLogger.emit({
       type: 'harness.worker.bootstrap',
       workers: workers.map((worker) => ({
@@ -786,6 +798,7 @@ export async function runConductorSession(
         version: SESSION_SIDECAR_VERSION,
         conductorAgentId: conductorHandle.conductor.agentId,
         conductorBackend,
+        lazyWorkers: activeLazyWorkers,
         issueUrl: options.issueUrl,
         repoRoot: options.repoRoot,
         profile: structuredClone(activeProfile),

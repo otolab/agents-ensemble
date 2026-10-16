@@ -25,6 +25,8 @@ export interface WorkerSessionOptions {
   worktree?: WorktreeRef;
   repoRoot?: string;
   workers: SessionWorkerSpec[];
+  /** 全 worker を登録し、初回 `sendWorkerMessage` で attach する。 */
+  lazyWorkers?: boolean;
   sessionState: EnsembleSessionState;
   /** resume 時に復元する worker 名 → ACP session 情報。 */
   restoredWorkerSessions?: Record<
@@ -59,7 +61,7 @@ export interface WorkerSessionOptions {
 
 /**
  * 1 Issue セッションの worker 群。
- * conductor とは inbox 経由で接続し、セッション開始時に worker を attach する。
+ * conductor とは inbox 経由で接続し、eager または初回 dispatch 時に worker を attach する。
  */
 export class WorkerSession {
   readonly inbox = new ConductorInbox();
@@ -119,7 +121,7 @@ export class WorkerSession {
     });
   }
 
-  /** プロファイルで指定された worker を attach し init prompt ラウンドを開始する。 */
+  /** プロファイル worker を登録し、設定に応じて eager attach または sleeping にする。 */
   startWorkers(): void {
     if (this.options.workers.length > 0 && !this.options.worktree) {
       throw new Error('WorkerSession requires worktree when workers are configured');
@@ -145,6 +147,8 @@ export class WorkerSession {
         resumeAcpSessionId,
         spawn: worker.spawn,
         acpFingerprint: worker.acpFingerprint,
+      }, {
+        lazy: Boolean(this.options.lazyWorkers && !resumeAcpSessionId),
       });
       this.startedWorkerIds.push(workerId);
     }

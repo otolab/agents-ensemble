@@ -187,6 +187,19 @@ describe('reduceDisplayState', () => {
     });
   });
 
+  it('seeds profile workers as sleep when lazy attach is enabled', () => {
+    const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [{ name: 'implementer', kind: 'implementer' }],
+      initialState: 'sleeping',
+    });
+
+    expect(state.workers.implementer).toEqual({
+      kind: 'implementer',
+      status: 'sleep',
+    });
+  });
+
   it('maps harness.worker.state attaching and processing to running', () => {
     let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'harness.session.workers',

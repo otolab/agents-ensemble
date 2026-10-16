@@ -24,7 +24,7 @@ conductor・implementer・reviewer の**共通前提**。
 | | conductor | implementer | reviewer |
 |---|---|---|---|
 | **本業** | 作業フローの調定 | 実装・テスト・ドキュメント | 独立検証と合否判定 |
-| **起動** | セッション開始時に存在 | セッション開始時に常駐 | セッション開始時に常駐 |
+| **登録 / attach** | セッション開始時に存在 | worker 名はセッション開始時に登録。ACP attach は eager または初回指示時 | worker 名はセッション開始時に登録。ACP attach は eager または初回指示時 |
 | **読むもの** | Issue / PR / CI / worker の報告 | Issue / Skill / 設計文書 / コード | Issue / Skill / PR diff / 設計文書 / テスト結果 |
 | **触るもの** | worker への指示、人間との対話 | worktree のコード・テスト・文書 | 何も変更しない |
 | **出力** | 指示・質問・引き渡し | コミット・PR・Issue コメント | 判定つきの PR コメント |
@@ -44,7 +44,7 @@ conductor・implementer・reviewer の**共通前提**。
 **やらないこと**
 
 - 演奏しない（基本的にファイル編集・シェル実行・直接実装はしない）
-- worker の追加起動（定義外の worker は使えない）
+- worker の追加起動（定義外の worker は使えない。sleeping worker には通常の `prompt_worker` で指示する）
 - Issue の大目標の作り直しや作業単位の再定義を独断で行う
 
 ### implementer — やること・やらないこと
@@ -92,8 +92,9 @@ conductor・implementer・reviewer の**共通前提**。
 
 ```
 [セッション開始]
-  harness: worker init prompt（attach + 待機）— 実作業ではない
-  implementer / reviewer: 常駐・指示待ち
+  harness: implementer / reviewer を profile 登録
+  eager: init prompt（attach + 待機）後、常駐・指示待ち
+  lazy: sleeping。通常の初回 prompt_worker で対象だけ attach / init
 
 conductor   : Issue / 作業環境の把握
             : implementer に初回指示（ゴール・Skill・スコープ）

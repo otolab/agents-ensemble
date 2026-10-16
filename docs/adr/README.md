@@ -100,6 +100,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0026](0026-tui-stream-shrink-recovery.md) | stream 縮小時 scrollback 再同期 | accepted |
 | [0027](0027-permission-stall-notification.md) | permission 停滞通知の低優先度 dispatch | accepted |
 | [0028](0028-authentication-delegation-and-ensemble-auth.md) | 認証の管理方針（worker 移譲・conductor と ensemble auth） | accepted |
+| [0029](0029-lazy-worker-attach.md) | worker ACP lazy attach | accepted |
 
 ## 追加するとき
 

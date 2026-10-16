@@ -46,7 +46,7 @@ export const baseModule: PromptModule<EnsembleContext> = {
   methodology: [
     '- オペレータが conductor を監督する',
     '- conductor が worker 群を調整する',
-    '- worker 群はセッション開始時に harness が起動し常駐する。同時に Issue 向け worktree も harness が解決する（isolated なら作成または再利用、in_repo ならリポジトリルート）',
+    '- worker 群はセッション開始時に harness へ登録される。設定により全員を eager attach するか、初回 `prompt_worker` まで ACP attach を遅らせる。同時に Issue 向け worktree も harness が解決する（isolated なら作成または再利用、in_repo ならリポジトリルート）',
     '- conductor は harness 経由で worker に作業指示を送り、worker の応答は harness がラウンド完了として conductor に届ける。worker 同士は直接つながっていない',
     '- 作業の実行は worker、方針・許否・調整は conductor、大目標とマージはオペレータが決める・行う',
     '- worker が判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する',

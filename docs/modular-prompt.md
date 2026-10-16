@@ -60,7 +60,7 @@ modular-prompt の標準セクションのうち、ensemble で主に使うも�
 
 - オペレータが conductor を監督する
 - conductor が worker 群を調整する
-- worker 群はセッション開始時に harness が起動し常駐する
+- worker 群はセッション開始時に harness へ登録され、設定に応じ eager または初回指示時に ACP attach される
 - conductor は harness 経由で worker に作業指示を送り、worker の応答は harness がラウンド完了として conductor に届ける。worker 同士は直接つながっていない
 - 作業の実行は worker、方針・許否・調整は conductor、大目標とマージはオペレータが決める・行う
 - worker が判断に困ることは conductor が扱う。conductor が決められないことはオペレータが最終判断する

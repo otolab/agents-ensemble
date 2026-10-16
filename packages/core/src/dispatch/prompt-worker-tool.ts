@@ -16,7 +16,7 @@ export function createPromptWorkerTool(
     prompt_worker: {
       name: 'prompt_worker',
       description:
-        'Send a work instruction to an attached worker. The worker receives it as a new ACP prompt turn. Issue/PR alone does not trigger workers.',
+        'Send a work instruction to a registered worker. If it is sleeping, this ordinary first prompt_worker attaches and initializes it, then sends the instruction as a separate ACP prompt turn. Issue/PR alone does not trigger workers.',
       inputSchema: {
         type: 'object',
         properties: {

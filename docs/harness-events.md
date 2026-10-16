@@ -182,11 +182,11 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 | `harness.worker.prompt.started` | `session/prompt` ラウンド開始（init / instruction 共通） | verbose 時のみ `[harness] worker.prompt.started name=... kind=... source=harness\|conductor` | なし（TUI: running） |
 | `harness.worker.prompt.completed` | ラウンド ACP prompt 完了直後 | verbose 時のみ `[harness] worker.prompt.completed name=... kind=... source=... stopReason=...` | なし（TUI: idle） |
 | `harness.worker.prompt.failed` | attach 致命失敗、または `executeRound` 内の prompt 失敗 | `[harness] worker.prompt.failed name=... kind=... source=... error=...` | なし（TUI: 一時 `failed`。resident 維持時は直後の `harness.worker.state idle` で **idle** に戻る） |
-| `harness.worker.bootstrap` | セッション開始時、harness が profile worker へ init prompt を開始する直前 | `[harness] worker.prompt workers=N mode=init` | なし |
+| `harness.worker.bootstrap` | eager はセッション開始時の worker 群、lazy は対象 worker の attach / init 開始直前 | `[harness] worker.prompt workers=N mode=init` | なし |
 | `conductor.outbound` | conductor の send 中に `prompt_worker` で送った worker を send 完了時に集約 | `[harness] worker.prompt workers=N mode=conductor names=...` | なし |
 | `harness.worker.acp.update` | `session/prompt` 中の ACP `session/update`（#148） | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。`running` 正本は `harness.worker.state`） |
-| `harness.worker.state` | `WorkerRuntime` の harness 状態遷移（#147） | verbose 時のみ `[harness] worker.state name=... kind=... state=attaching\|processing\|idle\|failed` | なし（TUI: 下表） |
-| `harness.session.workers` | セッション開始時、profile の worker 一覧確定直後 | verbose 時のみ `[harness] session.workers count=N names=...` | なし（TUI: 全員 idle で seed） |
+| `harness.worker.state` | `WorkerRuntime` の harness 状態遷移（#147） | verbose 時のみ `[harness] worker.state name=... kind=... state=sleeping\|attaching\|processing\|idle\|failed` | なし（TUI: 下表） |
+| `harness.session.workers` | セッション開始時、profile の worker 一覧確定直後。lazy 時は `initialState: sleeping` を含む | verbose 時のみ `[harness] session.workers count=N names=...` | なし（TUI: eager は idle、lazy は sleep で seed） |
 
 **TUI `WorkerDisplayStatus` と harness 状態の対応（#147）**
 
@@ -195,6 +195,7 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 | `attaching` | `running` |
 | `processing` | `running` |
 | `idle` | `idle` |
+| `sleeping` | `sleep` |
 | `failed` | `failed`（**attach 致命失敗のみ**。`failedWorkers` 登録・resident なし） |
 
 `harness.worker.prompt.*` / `harness.worker.acp.update` も TUI を更新する。**Workers ペインの `running` / `idle` 正本は `harness.worker.state`**（および `prompt.started` / `prompt.completed`）。`harness.worker.acp.update` は **活動ヒント**（例: `running (calling: Shell)`）の更新にのみ使い、chunk 単位では stderr / 活動ログに出さない（#161）。これらのイベントは `SessionLogger.emit()` と Workers ペインの state 投影のために維持し、人間向け活動ログの細行だけを既定で抑制する。
@@ -229,7 +230,11 @@ prune し、live な pending は通常どおり dispatch する。cleanup の対
 これはプロセス全体の teardown や in-flight `agent.send` の割り込みを行うものではない。
 後者は [#86](https://github.com/otolab/agents-ensemble/issues/86) のスコープである。
 
-init prompt（`source: harness`）では attach 開始時に `started` を出し、init ラウンド完了時に `completed` を出す。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。正常系は `harness.worker.state` で `attaching` → `processing` → `idle` を併記する。
+init prompt（`source: harness`）では attach 開始時に `started` を出し、init ラウンド完了時に `completed` を出す。eager ではセッション開始時に全 worker 分をまとめて bootstrap し、lazy では sleeping worker へ初回 `prompt_worker` が来たとき対象 worker 1 件を bootstrap する。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。lazy の正常系は `sleeping` → `attaching` → `processing` → `idle`、以降の conductor 指示は `processing` → `idle`。
+
+lazy の初回 `prompt_worker` は runtime queue に instruction を保持して attach を開始する。init prompt は独立した `source: harness` ラウンドとして完了イベントを出し、その後に元 instruction を `source: conductor` の別ラウンドで実行する。init 中に permission が発生しても `permission.pending` は通常どおり conductor に届き、init の permission が解決するまで最初の instruction は queue に残る。
+
+attach handshake 中に届いた追加指示は queue に積む。まだ cancel 可能な ACP prompt がないため、この期間の `preempt: true` は待ち instruction を置き換えるだけで init 自体を中断しない。resident の init / instruction prompt が始まった後は既存の preempt 動作を使う。attach が失敗した場合は queued instructions を実行せず、`worker.failed` に通知して state を `failed` にする。自動 retry はせず、以後の指示には attach failure を返す。profile 外の worker 名は runtime で登録なしとして拒否する。
 
 ### 2.3 `worker.round` との関係（方針）
 
@@ -266,10 +271,10 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 ```
 セッション開始
   harness.worktree ─────────────────────────► verbose 時のみ stderr
-  harness.session.workers ──────────────────► TUI seed（全 worker idle。stderr は verbose 時のみ）
-  harness.worker.bootstrap ─────────────────► stderr / TUI 活動ログ（worker.prompt workers=N mode=init）
+  harness.session.workers ──────────────────► TUI seed（eager は idle、lazy は sleep。stderr は verbose 時のみ）
+  eager: harness.worker.bootstrap ──────────► stderr / TUI 活動ログ（worker.prompt workers=N mode=init）
 
-WorkerSession.startWorkers()（worker ごと。attach + init prompt）
+WorkerSession.startWorkers()（全 worker を登録。eager は全員を attach、lazy は復元 session のみ attach）
   harness.worker.prompt.started (source=harness) ───► TUI running（stderr / 活動ログは verbose 時のみ）
        │
        ├─ attach + buildWorkerAttachPrompt + session/prompt
@@ -290,6 +295,8 @@ WorkerSession.startWorkers()（worker ごと。attach + init prompt）
 
 prompt_worker / sendWorkerMessage
        │
+       ├─ sleeping の場合 lazy wake: bootstrap 1 worker → attaching → init prompt（source=harness）
+       │                              → init completion → 初回 instruction（source=conductor）
        ├─ harness.worker.prompt.started (source=conductor) ► TUI running（細行は verbose 時のみ）
        ├─ harness.worker.state processing ───────────────► TUI running（細行は verbose 時のみ）
        ├─ harness.worker.acp.update (session/prompt 中) ► TUI 活動ヒントのみ（stderr / 活動ログには出さない #161）

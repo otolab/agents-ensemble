@@ -45,13 +45,18 @@ function setWorkerStatus(
 function seedSessionWorkers(
   state: SessionDisplayState,
   workers: Array<{ name: string; kind: string }>,
+  initialState: 'idle' | 'sleeping' = 'idle',
 ): SessionDisplayState {
   let next = state;
+  const status =
+    initialState === 'sleeping'
+      ? mapHarnessToDisplayStatus('sleeping')
+      : WORKER_IDLE;
   for (const worker of workers) {
     if (next.workers[worker.name]) {
       continue;
     }
-    next = setWorkerStatus(next, worker.name, worker.kind, WORKER_IDLE);
+    next = setWorkerStatus(next, worker.name, worker.kind, status);
   }
   return next;
 }
@@ -63,7 +68,7 @@ export function reduceDisplayState(
 ): SessionDisplayState {
   switch (event.type) {
     case 'harness.session.workers':
-      return seedSessionWorkers(state, event.workers);
+      return seedSessionWorkers(state, event.workers, event.initialState);
     case 'harness.worker.state':
       return setWorkerStatus(
         state,

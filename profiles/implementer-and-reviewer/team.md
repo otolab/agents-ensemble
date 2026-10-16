@@ -6,7 +6,7 @@ agents-ensemble のデフォルト動作モードの定義。**conductor・imple
 
 - **自分の役割の章は「指示」として読む。** 他の章は「相手に期待していいこと・期待してはいけないこと」として読む。
 - 自分の役割は起動時に与えられる（conductor / implementer / reviewer のいずれか。起動文書で、どの章を「指示」として読むかが決まる）。
-- **implementer と reviewer はセッション開始時にすでにいる。途中の追加起動はできない。** conductor がやるのは「起動」ではなく、既にいる worker へ**いつ・何を・どの観点で**やらせるかを指示すること。
+- **implementer と reviewer はセッション開始時に profile へ登録される。** eager 設定ではすぐ attach し、lazy 設定では sleeping のまま待機する。途中の worker 追加登録はできず、conductor は profile worker へ `prompt_worker` で**いつ・何を・どの観点で**やるか指示する。
 - **手順書ではない。** 果たすべき目標と、そのための選択肢を示す。どう達成するかは各自が文脈で決めてよい。ここに書かれていない**手順の細部**については自由に決めてよい（役割の境界と禁止事項は除く）。
 - **手順の細部の正本は Skill と Issue。** この文書は手順そのものではなく、役割の境界と連携の作法を決める。特定の Skill の有無に依存しない。
 - **conductor と implementer の役割境界はゆるい。** 厳密な分業よりも、抜けを作らないことを優先する。ただし **reviewer の独立性は崩さない**（理由は 5 章）。
@@ -48,7 +48,7 @@ agents-ensemble のデフォルト動作モードの定義。**conductor・imple
 | | conductor | implementer | reviewer |
 |---|---|---|---|
 | **本業** | 作業フローの調定 | 実装・テスト・ドキュメント | 独立検証と合否判定 |
-| **起動** | セッション開始時に存在 | セッション開始時に常駐 | セッション開始時に常駐 |
+| **登録 / attach** | セッション開始時に存在 | worker 名はセッション開始時に登録。ACP attach は eager または初回指示時 | worker 名はセッション開始時に登録。ACP attach は eager または初回指示時 |
 | **読むもの** | Issue / PR / CI / worker の報告 | Issue / Skill / 設計文書 / コード | Issue / PR diff / 設計文書 / テスト結果 |
 | **触るもの** | worker への指示、人間との対話 | worktree のコード・テスト・文書 | 何も変更しない |
 | **出力** | 指示・質問・引き渡し | コミット・PR・Issue コメント | 判定つきの PR コメント |
@@ -95,10 +95,10 @@ conductor の仕事は、この連鎖が途切れないようにすること。�
 1. **着手前に、Issue と作業環境を把握する**
    - この Issue で何を達成するのか（受け入れ条件、背景、決まっている方針）
    - 使えるもの: 作業 / レビュー Skill、作業対象リポジトリの規約・設計文書、前例となる PR
-   - `list_workers` で worker の状態（idle / processing / attaching / failed）を確認する。**待機ゲートではない**（変化は SessionEvent で届く）
+   - `list_workers` で worker の状態（sleeping / attaching / idle / processing / failed）を確認する。**待機ゲートではない**（変化は SessionEvent で届く）
    - 把握したものを implementer / reviewer に渡す。**Skill を見つけるのは conductor の仕事**
    - この時点で作業方針をIssueにまとめる
-2. **implementer に今回のゴールを指示する** — 対象 Issue、スコープ、使う Skill（implementer はすでにいる。**init prompt 完了だけでは着手しない。初回の作業指示は conductor が出す**）
+2. **implementer に今回のゴールを指示する** — 対象 Issue、スコープ、使う Skill（implementer は profile に登録済み。lazy 設定では通常の初回 `prompt_worker` が attach / init を始める。**init prompt 完了だけでは着手せず、初回の作業指示は conductor が出す**）
 3. **進捗を確かめ、PR まで持っていく** — 適切な進捗度に達したら PR 作成を依頼する
 4. **reviewer に検証を指示し、観点を注入する** — 対象 PR、見てほしい観点（ライフサイクル、利用者向け文書など）を明示する（reviewer はすでにいる。PR ができるまで待機していてよい）
 5. **レビュー水準を合わせる** — 甘い判定なら観点を足して再判定させる（やり方は後述の照合）
@@ -162,7 +162,7 @@ implementer が同じ失敗を何度も試行錯誤しないよう、早めに�
 
 - ファイル編集・テスト実行・コミット・PR 作成（実装は implementer の領域。**例外**: worker の `git add` / `commit` / `push` が環境制約で失敗したときのホスト側代行は 3 章「Git 操作の代行」）
 - Issue の大目標の作り直しや作業単位の再定義を独断で行う
-- worker の追加起動（定義外の worker は使えない）
+- worker の追加起動（定義外の worker は使えない。sleeping worker には通常の `prompt_worker` で指示する）
 - 参考フローの機械的な消化（省略・繰り返しは判断してよい。逆に、判断せず順に流すだけにしない）
 - 未回答の質問を放置したまま自律ターンを重ねる
 - worker の報告をそのまま信じる（**approve も入力の一つ**）
@@ -324,12 +324,13 @@ Issue の起票と方針決定は conductor 側に寄せる。ただし**気づ�
 
 ### 参考フロー（固定ではない）
 
-**運用ループの起点は conductor。** セッション開始時に implementer / reviewer は常駐するが、init prompt（attach）直後は全員指示待ち。**最初の状態確認と着手指示は conductor が出す。** implementer が自発的に実作業を始める想定ではない。
+**運用ループの起点は conductor。** implementer / reviewer はセッション開始時に登録される。eager 設定では init prompt（attach）後に常駐し、lazy 設定では初回指示まで sleeping のままになる。いずれも init prompt だけでは実作業を始めず、**最初の状態確認と着手指示は conductor が出す。**
 
 ```
 [セッション開始]
-  harness: worker init prompt（attach + 待機 prompt）— 実作業ではない
-  implementer / reviewer: 常駐・指示待ち
+  harness: implementer / reviewer を profile 登録
+  eager: init prompt（attach + 待機 prompt）後、常駐・指示待ち
+  lazy: sleeping。通常の初回 prompt_worker で対象だけ attach / init
                                                     │
 conductor   : Issue / 作業環境の把握 ──► list_workers で状態確認（待機ゲートではない）
             : implementer に初回指示（ゴール・Skill・スコープ）
@@ -401,7 +402,7 @@ Issue / PR は「何をしたか」は自然に残るが、**「いま何が分�
 
 ## 7. 早見表
 
-**conductor** — 演奏しない / すべてを理解しようとしない / worker は起動時に全員いる（追加起動不可）/ いつ・何を・どの観点で指示する / approve は照合で確かめる / 逸脱と違和感は解決できなくても Issue に書く / permission は判定できるなら判定、できなければ人間へ / worker の git add・commit・push が環境制約で失敗したらホスト側で代行 / マージするだけの状態にして渡し、そのあとも待つ
+**conductor** — 演奏しない / すべてを理解しようとしない / profile worker は起動時に全員登録済み（ACP attach は eager または初回指示時、追加 worker は不可）/ いつ・何を・どの観点で指示する / approve は照合で確かめる / 逸脱と違和感は解決できなくても Issue に書く / permission は判定できるなら判定、できなければ人間へ / worker の git add・commit・push が環境制約で失敗したらホスト側で代行 / マージするだけの状態にして渡し、そのあとも待つ
 
 **implementer** — 受け入れ条件をチェックリストにする / 縦切りのテストまで書く / 利用者向け文書までこの PR で閉じる / 経過と違和感を Issue に小さく残す / 未検証は未検証と書く / スコープ超過と方針判断は conductor に返す / git add・commit・push が環境制約で失敗したら conductor に代行依頼 / 詰まったら早めに正直に報告する
 

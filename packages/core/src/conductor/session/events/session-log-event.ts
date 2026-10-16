@@ -85,6 +85,8 @@ export interface HarnessWorkerStateEvent {
 export interface HarnessSessionWorkersEvent {
   type: 'harness.session.workers';
   workers: Array<{ name: string; kind: string }>;
+  /** `sleeping` は profile 登録のみ、`idle` は eager 起動。省略時は `idle`。 */
+  initialState?: 'idle' | 'sleeping';
 }
 
 export interface OperatorInputEvent {
