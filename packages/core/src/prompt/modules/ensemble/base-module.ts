@@ -15,6 +15,8 @@ export const baseModule: PromptModule<EnsembleContext> = {
     (ctx) => ([
       `あなたは agents-ensemble team の **${ctx.kind}** です。`,
       `**${ctx.kind}** としてどう振る舞うべきか与えられた指示や資料をよく読んで把握し、実行してください。`,
+      `使用する言語はリポジトリやIssueに合わせます。`,
+      `特に記録に残す部分については、英語の直訳ではなく、対象言語らしい表現でニュアンスが残るように記述してください。これはコストを掛ける価値のある作業です。`,
     ]),
   ],
   terms: [
@@ -26,10 +28,10 @@ export const baseModule: PromptModule<EnsembleContext> = {
     '- **permission**: worker が実行しようとする操作に対する許可',
     {
       type: 'subsection',
-      title: '正本と単位',
+      title: 'Source of truth と単位',
       items: [
-        '- **Issue / PR**: 作業状態と履歴の正本',
-        '- **Skill**: 手順の細部の正本になりうるドキュメント',
+        '- **Issue / PR**: source of truth for 作業状態と履歴',
+        '- **Skill**: source of truth for procedure になりうるドキュメント',
       ],
     },
     {

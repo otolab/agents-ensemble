@@ -3,7 +3,7 @@ import type { IssueComment, IssueContext } from './issue-context.js';
 
 /**
  * Issue 文脈を conductor 初回 send 用 Markdown（セクション + YAML メタ）に整形する。
- * objective の Issue 番号と対応する正本。URL は base objective に載るためここでは繰り返さない。
+ * objective の Issue 番号と対応する source of truth。URL は base objective に載るためここでは繰り返さない。
  */
 export function formatIssueContextForPrompt(context: IssueContext): string {
   const operatorNote = context.operator
@@ -15,7 +15,7 @@ export function formatIssueContextForPrompt(context: IssueContext): string {
     : [];
 
   const sections: string[] = [
-    'Issue の正本（title / body / comments）。objective の Issue 番号と対応する。',
+    'Issue source of truth（title / body / comments）。objective の Issue 番号と対応する。',
     ...operatorNote,
     '## Description',
     '',
