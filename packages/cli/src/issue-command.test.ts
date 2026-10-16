@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { SessionLogEvent } from '@agents-ensemble/core';
 
 const mockTuiHost = vi.hoisted(() => {
   const bindOperatorInput = vi.fn(() => () => {});
@@ -45,7 +46,12 @@ vi.mock('./tui/create-issue-session-tui-host.js', () => ({
   createIssueSessionTuiHost: mockTuiHost.createIssueSessionTuiHost,
 }));
 
-import { executeIssueCommand, resolveIssueSessionMaxTurns, resolveResumeAgentIdFromOptions } from './issue-command.js';
+import {
+  executeIssueCommand,
+  issueCommandExitCode,
+  resolveIssueSessionMaxTurns,
+  resolveResumeAgentIdFromOptions,
+} from './issue-command.js';
 
 const baseOptions = {
   repoRoot: '/tmp/repo',
@@ -150,6 +156,65 @@ describe('resolveResumeAgentIdFromOptions', () => {
       { issueUrl, repoRoot: '/tmp/repo' },
     );
     expect(result).toEqual({});
+  });
+});
+
+describe('issueCommandExitCode', () => {
+  it('keeps cleanup-only failures successful and preserves error exit code 2', () => {
+    expect(issueCommandExitCode({ stopReason: 'completed' })).toBe(0);
+    expect(issueCommandExitCode({ stopReason: 'error' })).toBe(2);
+  });
+
+  it('returns exit code 0 for a completed issue command with a cleanup warning', async () => {
+    const worktreePath = '/tmp/repo/.ensemble/worktrees/issue-1';
+    const stderr: string[] = [];
+    const runIssueSession = vi.fn().mockImplementation(
+      async (options: {
+        sessionLogger: { emit: (event: SessionLogEvent) => void };
+      }) => {
+        options.sessionLogger.emit({
+          type: 'harness.worktree.remove_failed',
+          path: worktreePath,
+          branch: 'ensemble/issue-1',
+          error: 'cleanup threw unexpectedly: metadata unavailable',
+        });
+        return { stopReason: 'completed' };
+      },
+    );
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => {
+      const sinks = new Set<(event: SessionLogEvent) => void>();
+      return {
+        subscribe: (sink: (event: SessionLogEvent) => void) => {
+          sinks.add(sink);
+        },
+        emit: (event: SessionLogEvent) => {
+          for (const sink of sinks) sink(event);
+        },
+      };
+    });
+
+    const result = await executeIssueCommand(issueUrl, baseOptions, {
+      isOperatorInputInteractive: () => false,
+      isOperatorInputTty: () => false,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+      writeStderr: (message) => stderr.push(message),
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(issueCommandExitCode(result)).toBe(0);
+    expect(stderr.some((line) => line.includes('[worktree] ⚠️'))).toBe(true);
+    expect(stderr.some((line) => line.includes(worktreePath))).toBe(true);
+    expect(
+      stderr.some((line) =>
+        line.includes(`git worktree remove ${worktreePath}`),
+      ),
+    ).toBe(true);
   });
 });
 

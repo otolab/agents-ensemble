@@ -193,8 +193,13 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
       return '特別モード: メイン worktree で直接作業します（isolated worktree は作りません）';
     case 'harness.worktree.remove_skipped':
       return `[worktree] ⚠️ worktree の削除をスキップしました path=${event.path} reason=${event.reason}。手動復旧: 変更を commit または stash してから git worktree remove ${event.path} を実行してください。`;
-    case 'harness.worktree.remove_failed':
-      return `[worktree] ⚠️ worktree の削除に失敗しました path=${event.path} reason=git error: ${summarizeWorktreeError(event.error)}。手動復旧: 変更を commit または stash してから git worktree remove ${event.path} を実行してください。`;
+    case 'harness.worktree.remove_failed': {
+      const error = summarizeWorktreeError(event.error);
+      const reason = error.startsWith('git worktree remove failed')
+        ? `git error: ${error}`
+        : `cleanup error: ${error}`;
+      return `[worktree] ⚠️ worktree の削除に失敗しました path=${event.path} reason=${reason}。手動復旧: 変更を commit または stash してから git worktree remove ${event.path} を実行してください。`;
+    }
     case 'session.continue':
       return `resuming session: conductorAgentId=${event.conductorAgentId}`;
     case 'session.post_loop_wait':

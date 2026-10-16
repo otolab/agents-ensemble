@@ -271,6 +271,12 @@ describe('session-log-lines', () => {
       type: 'harness.worktree.remove_failed',
       path: '/repo/.ensemble/worktrees/issue-7',
       branch: 'ensemble/issue-7',
+      error: 'cleanup threw unexpectedly: permission denied',
+    })).toContain('reason=cleanup error: cleanup threw unexpectedly: permission denied');
+    expect(formatObservationStderrLine({
+      type: 'harness.worktree.remove_failed',
+      path: '/repo/.ensemble/worktrees/issue-7',
+      branch: 'ensemble/issue-7',
       error: 'permission denied',
     })).toContain('[worktree] ⚠️');
   });

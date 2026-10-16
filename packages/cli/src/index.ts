@@ -8,7 +8,7 @@ import {
   resolveIssueUrl,
 } from '@agents-ensemble/core';
 import { readCliPackageVersion } from './cli-version.js';
-import { executeIssueCommand } from './issue-command.js';
+import { executeIssueCommand, issueCommandExitCode } from './issue-command.js';
 import { formatModelsListJson, formatModelsListText } from './format-models-list.js';
 import { isOperatorInputTty } from './prompt-operator-input.js';
 import { resolveIssueSummaryFormat } from './resolve-summary-format.js';
@@ -162,8 +162,9 @@ program
           },
         });
 
-        if (result.stopReason === 'error') {
-          process.exit(2);
+        const exitCode = issueCommandExitCode(result);
+        if (exitCode !== 0) {
+          process.exit(exitCode);
         }
       } catch (error) {
         console.error(error instanceof Error ? error.message : error);

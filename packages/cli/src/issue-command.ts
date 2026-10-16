@@ -67,6 +67,13 @@ export interface ResolveResumeAgentIdResult {
   continuedFromSidecar?: string;
 }
 
+/** `ensemble issue` の結果をプロセス終了コードへ変換する。 */
+export function issueCommandExitCode(
+  result: Pick<ConductorSessionResult, 'stopReason'>,
+): number {
+  return result.stopReason === 'error' ? 2 : 0;
+}
+
 /** `--resume` / `--continue` から `runIssueSession` に渡す `resumeAgentId` を解決する。 */
 export async function resolveResumeAgentIdFromOptions(
   options: Pick<IssueCommandOptions, 'resume' | 'continue'>,
@@ -186,8 +193,10 @@ export async function executeIssueCommand(
   if (useTui) {
     sessionLogger.subscribe(tuiHost!.telemetrySink);
   } else {
-    sessionLogger.subscribe(createHarnessSink({ verbose: conductorVerbose }));
-    sessionLogger.subscribe(createObservationSink());
+    sessionLogger.subscribe(
+      createHarnessSink({ verbose: conductorVerbose, writeStderr }),
+    );
+    sessionLogger.subscribe(createObservationSink({ writeStderr }));
   }
   sessionLogger.subscribe(
     createSessionDisplaySink({

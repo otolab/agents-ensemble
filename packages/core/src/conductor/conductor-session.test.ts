@@ -1844,14 +1844,126 @@ describe('runConductorSession resume / shutdown', () => {
 
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
     operatorApi!.submit('/exit');
-    await sessionPromise;
+    const result = await sessionPromise;
 
+    expect(result.stopReason).toBe('completed');
     expect(removeSpy).toHaveBeenCalledOnce();
     expect(emitted).toContainEqual({
       type: 'harness.worktree.remove_failed',
       path: join(repoRoot, '.ensemble', 'worktrees', 'issue-1'),
       branch: 'ensemble/issue-1',
       error: 'git worktree remove failed: lock held',
+    });
+  });
+
+  it('keeps a completed result and reports dirty worktree after post-loop /exit', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const path = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    const removeSpy = vi
+      .spyOn(worktreeModule, 'removeWorkerWorktree')
+      .mockResolvedValue({
+        status: 'skipped_dirty',
+        path,
+        branch: 'ensemble/issue-1',
+      });
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      sessionLogger,
+      workerWorktree: {
+        path,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
+    operatorApi!.submit('/exit');
+    const result = await sessionPromise;
+
+    expect(result.stopReason).toBe('completed');
+    expect(removeSpy).toHaveBeenCalledOnce();
+    expect(emitted).toContainEqual({
+      type: 'harness.worktree.remove_skipped',
+      path,
+      branch: 'ensemble/issue-1',
+      reason: 'dirty',
+    });
+  });
+
+  it('keeps a completed result and reports an unexpected worktree cleanup throw', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const path = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    vi.spyOn(worktreeModule, 'removeWorkerWorktree').mockRejectedValue(
+      new Error('worktree metadata unavailable'),
+    );
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      sessionLogger,
+      workerWorktree: {
+        path,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
+    operatorApi!.submit('/exit');
+    const result = await sessionPromise;
+
+    expect(result.stopReason).toBe('completed');
+    expect(emitted).toContainEqual({
+      type: 'harness.worktree.remove_failed',
+      path,
+      branch: 'ensemble/issue-1',
+      error: 'cleanup threw unexpectedly: worktree metadata unavailable',
     });
   });
 
