@@ -83,7 +83,7 @@ github:
     stopPollWaitMs: 5000
 
 tui:
-  layout: pane                        # ENSEMBLE_TUI_LAYOUT 相当
+  layout: stream                      # TTY での既定（pane に戻す場合は明示）
   forceHyperlink: auto                # FORCE_HYPERLINK 相当（auto | on | off）
 ```
 

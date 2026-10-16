@@ -136,6 +136,16 @@ describe('createIssueSessionTuiHost', () => {
     expect(mockUnmount).toHaveBeenCalledTimes(1);
   });
 
+  it('uses stream layout by default', () => {
+    const host = createIssueSessionTuiHost(undefined, { env: {} });
+    const renderedElement = mockRender.mock.calls[0]?.[0] as {
+      type: { name?: string };
+    };
+
+    expect(renderedElement.type.name).toBe('IssueSessionTuiStream');
+    host.dispose();
+  });
+
   it('selects stream layout from ENSEMBLE_TUI_LAYOUT and disables alternate screen', () => {
     process.env.ENSEMBLE_TUI_LAYOUT = 'stream';
 

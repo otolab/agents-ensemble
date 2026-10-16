@@ -8,14 +8,15 @@ describe('resolveTuiLayoutMode', () => {
     ).toBe('stream');
   });
 
-  it('keeps pane as the default and for unknown values', () => {
-    expect(resolveTuiLayoutMode({ env: {}, isTty: true })).toBe('pane');
+  it('defaults to stream on TTY and keeps pane for unknown values', () => {
+    expect(resolveTuiLayoutMode({ env: {}, isTty: true })).toBe('stream');
     expect(
       resolveTuiLayoutMode({ env: { [TUI_LAYOUT_ENV]: 'unknown' }, isTty: true }),
     ).toBe('pane');
   });
 
   it('falls back to pane for non-TTY sessions even when stream is requested', () => {
+    expect(resolveTuiLayoutMode({ env: {}, isTty: false })).toBe('pane');
     expect(
       resolveTuiLayoutMode({ env: { [TUI_LAYOUT_ENV]: 'stream' }, isTty: false }),
     ).toBe('pane');
