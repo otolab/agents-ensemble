@@ -562,8 +562,16 @@ describe('loadProfile', () => {
 
     expect(profilePath).toBe(bundledDefaultProfilePath());
     expect(profile.workers.length).toBeGreaterThan(0);
-    expect(resolveAgentPromptModule('conductor', profile.agents)?.persona?.[0]).toContain(
-      'conductor',
+    expect(profile.agents?.conductor?.prompt).toBeUndefined();
+    expect(profile.materials).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'team-conductor',
+          title: '標準動作モード（conductor）',
+          content: expect.stringContaining('## 果たすこと'),
+          kinds: ['conductor'],
+        }),
+      ]),
     );
   });
 
@@ -693,8 +701,8 @@ describe('loadProfile', () => {
   });
 });
 
-describe('default profile compile equivalence', () => {
-  it('preserves key conductor profile phrases after modular-prompt migration', async () => {
+describe('default profile compilation', () => {
+  it('includes the bundled v2 conductor materials in the compiled prompt', async () => {
     const { profile } = await loadProfile({ cwd: '/no-such-cwd' });
     const prompt = compileConductorSystemPrompt({
       issueUrl: 'https://github.com/org/repo/issues/150',
@@ -703,8 +711,8 @@ describe('default profile compile equivalence', () => {
     });
 
     expect(prompt).toContain('**conductor**');
-    expect(prompt).toContain('§3 conductor');
-    expect(prompt).toContain('指示の典型的な内容');
+    expect(prompt).toContain('### 標準動作モード（conductor）');
+    expect(prompt).toContain('**すべてを理解することは求められていない。**');
     expect(prompt).toContain('permission.pending');
     expect(prompt).toContain('resolve_permission');
   });
