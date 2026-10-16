@@ -29,7 +29,7 @@ agents-ensemble のデフォルト動作モードの定義。**conductor・imple
 | # | 前提 | 具体的な意味 |
 |---|------|-------------|
 | 1 | **中心は conductor** | implementer と reviewer は直接会話しない。相手に伝えたいことは Issue / PR に書く。判断が必要なことは conductor に返す |
-| 2 | **Issue / PR are the source of truth for state** | 会話や記憶にしかない情報は「無い」扱い。書かれていないことは引き継がれない |
+| 2 | **Issue / PR は作業状態と履歴の source of truth** | 会話や記憶にしかない情報は「無い」扱い。書かれていないことは引き継がれない |
 | 3 | **気づいたことは Issue に書く** | 論点の整理、違和感、想定と違ったこと、未解決・保留・矛盾は、**解決できなくても**残す。ここが「いま何が分かっていないか」の置き場 |
 | 4 | **作業単位は 1 Issue** | 1 Issue = 1 worktree。PR は通常 1 本（レビュー往復は同一 PR 上）。Issue の受け入れ条件が完了の定義 |
 | 5 | **大目標は人間が決める** | Issue の目標設定と作業単位の切り方は人間の領域。方向転換の必要が見えたら conductor 経由で人間へ |
@@ -73,7 +73,7 @@ agents-ensemble のデフォルト動作モードの定義。**conductor・imple
 品質は「conductor の理解の深さ」ではなく、workersとの共通認識の確立と、次の連鎖で担保する。
 
 ```
-Issue（state の source of truth）の明確さ → worker の自律実行と状況把握 → 独立検証 → 人間のゲート
+Issue（作業状態と履歴の source of truth）の明確さ → worker の自律実行と状況把握 → 独立検証 → 人間のゲート
 ```
 
 conductor の仕事は、この連鎖が途切れないようにすること。難しい設計判断を毎回するのではなく、**理解を合わせる・把握する・指示する・確かめる・水準を合わせる・戻す**を確実に回す。
@@ -207,7 +207,7 @@ Issue と PR は最終的に **conductor の作品**でもある。引き渡し�
 
 | 場面 | 選択肢 |
 |---|---|
-| Procedure (source of truth) | 指示された Skill があればそれ。無ければ Issue と作業対象リポジトリの規約・設計文書 |
+| 手順の source of truth | 指示された Skill があればそれ。無ければ Issue と作業対象リポジトリの規約・設計文書 |
 | worktree | 1 Issue 1 worktree。作業ブランチを切る（既にあればそこに入る） |
 | 着手のタイミング | **conductor の初回作業指示を待つ**（init prompt 完了は着手ではない） |
 | Issue に報告するタイミング | 方針を決めたとき / 想定と違ったとき / 詰まったとき。**着手前でよい**。1 コメント 1 話題で小さく |
@@ -253,7 +253,7 @@ Issue の起票と方針決定は conductor 側に寄せる。ただし**気づ�
 
 - Issue 本文の受け入れ条件（＋コメントで合意された事項）
 - PR の diff とコミット履歴
-- 関連する設計文書・README — **どれがuser-facing source of truth か**を特定する
+- 関連する設計文書・README — **どれが利用者向け docs の source of truth か**を特定する
 - 作業対象リポジトリのレビュー慣習（あれば）
 - テスト結果（可能なら自分で実行する）、CI
 - conductor から注入されたレビュー観点。再レビューなら**前回のブロッカー一覧**

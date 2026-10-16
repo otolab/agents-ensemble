@@ -30,8 +30,8 @@ export const baseModule: PromptModule<EnsembleContext> = {
       type: 'subsection',
       title: 'Source of truth と単位',
       items: [
-        '- **Issue / PR**: source of truth for 作業状態と履歴',
-        '- **Skill**: source of truth for procedure になりうるドキュメント',
+        '- **Issue / PR**: 作業状態と履歴の source of truth',
+        '- **Skill**: 手順の細部の source of truth になりうるドキュメント',
       ],
     },
     {

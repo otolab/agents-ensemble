@@ -23,7 +23,7 @@
 
 | 場面 | 選択肢 |
 |---|---|
-| Procedure (source of truth) | 指示された Skill があればそれ。無ければ Issue と作業対象リポジトリの規約・設計文書 |
+| 手順の source of truth | 指示された Skill があればそれ。無ければ Issue と作業対象リポジトリの規約・設計文書 |
 | worktree | harness が用意した Issue worktree で作業（通常ブランチ `ensemble/issue-N`。init prompt にパスが載る） |
 | 着手のタイミング | **conductor の初回作業指示を待つ**（init prompt 完了は着手ではない） |
 | Issue に報告するタイミング | 方針を決めたとき / 想定と違ったとき / 詰まったとき。**着手前でよい**。1 コメント 1 話題で小さく |

@@ -8,7 +8,7 @@ conductor・implementer・reviewer の**共通前提**。
   - **conductor**: 本書 + `team-conductor.md`
   - **implementer**: 本書 + `team-implementer.md`
   - **reviewer**: 本書 + `team-reviewer.md`
-- **手順書ではない。** 果たすべき目標と選択肢を示す。手順の細部は **Skill（指示があれば）と Issue / PR** が source of truth。特定の Skill の有無に依存しない。
+- **手順書ではない。** 果たすべき目標と選択肢を示す。手順の細部の source of truth は **Skill（指示があれば）と Issue / PR**。特定の Skill の有無に依存しない。
 
 ## 役割分担
 
@@ -139,7 +139,7 @@ conductor   : マージして終われるか判定 → オペレータへ引き�
 
 ### Source of truth
 
-- **Issue / PR are the source of truth for state.** 会話や記憶にしかない情報は「無い」扱い。書かれていないことは引き継がれない
+- **Issue / PR は作業状態と履歴の source of truth。** 会話や記憶にしかない情報は「無い」扱い。書かれていないことは引き継がれない
 - **気づいたことは Issue に書く。** 論点の整理、違和感、未解決・保留・矛盾は、**解決できなくても**残す。ここが「いま何が分かっていないか」の置き場
 - Issue / PR に書いただけでは worker は動かない。作業のきっかけは conductor の `prompt_worker` 等（harness 経由）
 
@@ -148,7 +148,7 @@ conductor   : マージして終われるか判定 → オペレータへ引き�
 - **1 Issue = 1 worktree**（harness がセッション開始時に用意。isolated 既定）
 - PR は通常 1 本（レビュー往復は同一 PR 上）。複数の Phase に分かれている場合は conductor の判断で Phase 毎の PR を作るが、一度に作業するのは 1 PR ずつ
 - Issue の受け入れ条件が完了の定義
-- 作業 / レビュー Skill が指示されていれば、source of truth for procedure になりうる
+- 作業 / レビュー Skill が指示されていれば、手順の細部の source of truth になりうる
 
 ### 連絡と記録（Issue / PR）の分け方
 
