@@ -152,6 +152,8 @@ export function formatHarnessLogBody(
       return `github.update items=${event.itemCount}`;
     case 'harness.github.monitor_error':
       return `github.monitor_error ${event.message}`;
+    case 'harness.github.monitor_recovered':
+      return `github.monitor_recovered suppressed=${event.suppressedErrorCount}`;
     case 'harness.warning':
       return `warning: ${event.message}`;
     case 'harness.teardown': {

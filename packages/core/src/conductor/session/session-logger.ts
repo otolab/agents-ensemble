@@ -92,6 +92,7 @@ export class SessionLogger {
       case 'conductor.transport.reconnect':
       case 'harness.github.update':
       case 'harness.github.monitor_error':
+      case 'harness.github.monitor_recovered':
       case 'harness.warning':
         break;
     }

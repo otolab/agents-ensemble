@@ -9,7 +9,12 @@ export type GitHubMonitorErrorPhase =
   | 'pr_review_comments'
   | 'pr_status_checks';
 
-export type GitHubMonitorErrorCause = 'parse' | 'gh_cli' | 'auth' | 'unknown';
+export type GitHubMonitorErrorCause =
+  | 'parse'
+  | 'gh_cli'
+  | 'auth'
+  | 'network'
+  | 'unknown';
 
 export interface GitHubMonitorPhaseError {
   phase: GitHubMonitorErrorPhase;
@@ -72,6 +77,14 @@ export function classifyGitHubMonitorError(
     };
   }
 
+  if (isRetryableNetworkError(error)) {
+    return {
+      cause: 'network',
+      retryable: true,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+
   if (error instanceof TypeError) {
     return {
       cause: 'parse',
@@ -93,6 +106,50 @@ export function classifyGitHubMonitorError(
     retryable: false,
     message: String(error),
   };
+}
+
+const RETRYABLE_NETWORK_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+function isRetryableNetworkError(
+  error: unknown,
+  seen = new Set<unknown>(),
+): boolean {
+  if (error === null || typeof error !== 'object' || seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+
+  const candidate = error as {
+    message?: unknown;
+    code?: unknown;
+    cause?: unknown;
+  };
+  if (
+    typeof candidate.code === 'string' &&
+    RETRYABLE_NETWORK_ERROR_CODES.has(candidate.code)
+  ) {
+    return true;
+  }
+  if (
+    typeof candidate.message === 'string' &&
+    /^(fetch failed|network error|network request failed|load failed)$/i.test(
+      candidate.message.trim(),
+    )
+  ) {
+    return true;
+  }
+  return isRetryableNetworkError(candidate.cause, seen);
 }
 
 export function createGitHubMonitorPhaseError(

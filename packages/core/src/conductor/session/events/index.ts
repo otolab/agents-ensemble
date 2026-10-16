@@ -48,6 +48,7 @@ export type {
   ConductorTransportReconnectEvent,
   HarnessGitHubUpdateEvent,
   HarnessGitHubMonitorErrorEvent,
+  HarnessGitHubMonitorRecoveredEvent,
   HarnessWarningEvent,
 } from './session-log-event.js';
 

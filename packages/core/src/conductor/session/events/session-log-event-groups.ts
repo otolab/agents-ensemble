@@ -24,6 +24,7 @@ export const HARNESS_TELEMETRY_EVENT_TYPES = [
   'session.stop',
   'harness.github.update',
   'harness.github.monitor_error',
+  'harness.github.monitor_recovered',
   'harness.warning',
   'harness.teardown.phase',
 ] as const;

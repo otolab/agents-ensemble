@@ -35,6 +35,8 @@ export interface GitHubMonitorOptions {
   onUpdate: (payload: GitHubUpdatePayload) => void;
   onCursorChange?: (cursor: GitHubMonitorCursor) => void;
   onPollError?: (error: unknown) => void;
+  /** 抑止した retryable poll エラーの後、クリーンな poll が成功したときに呼ぶ。 */
+  onPollRecovered?: (suppressedErrorCount: number) => void;
   shutdownSignal?: AbortSignal;
   githubClient?: GitHubClient;
 }
@@ -74,6 +76,7 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
   let hasPendingCi = false;
   let needsBootstrapPoll = isEmptyGitHubMonitorCursor(cursor);
   let pollRequested = false;
+  const retryablePollErrors = new Map<string, { suppressedCount: number }>();
   const pendingRegistrations = new Map<
     string,
     { registeredAt: string; kinds?: GitHubUpdateKind[] }
@@ -137,15 +140,37 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       }
       for (const phaseError of result.errors) {
         const source = phaseError.sourceError ?? new Error(phaseError.message);
-        options.onPollError?.(
-          new GitHubMonitorError({
-            phase: phaseError.phase,
-            prNumber: phaseError.prNumber,
-            cause: phaseError.cause,
-            retryable: phaseError.retryable,
-            message: formatGitHubErrorMessage(source, options.ensembleConfig),
-          }),
+        const monitorError = new GitHubMonitorError({
+          phase: phaseError.phase,
+          prNumber: phaseError.prNumber,
+          cause: phaseError.cause,
+          retryable: phaseError.retryable,
+          message: formatGitHubErrorMessage(source, options.ensembleConfig),
+        });
+        if (monitorError.retryable) {
+          const key = [
+            monitorError.phase,
+            monitorError.prNumber ?? '',
+            monitorError.cause,
+          ].join(':');
+          const existing = retryablePollErrors.get(key);
+          if (existing) {
+            existing.suppressedCount += 1;
+            continue;
+          }
+          retryablePollErrors.set(key, { suppressedCount: 0 });
+        }
+        options.onPollError?.(monitorError);
+      }
+      if (result.errors.length === 0) {
+        const suppressedErrorCount = [...retryablePollErrors.values()].reduce(
+          (total, state) => total + state.suppressedCount,
+          0,
         );
+        if (suppressedErrorCount > 0) {
+          options.onPollRecovered?.(suppressedErrorCount);
+        }
+        retryablePollErrors.clear();
       }
     } catch (error) {
       if (!isAbortError(error)) {

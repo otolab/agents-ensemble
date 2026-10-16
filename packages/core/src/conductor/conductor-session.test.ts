@@ -7,6 +7,7 @@ import type { AcpBridge } from '../acp/acp-bridge.js';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
+import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import type {
   GitHubClient,
   GitHubPullRequestRef,
@@ -799,6 +800,60 @@ describe('runConductorSession resume / shutdown', () => {
         },
       ]),
     );
+  });
+
+  it('records GitHub monitor recovery summaries in the session log', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-github-recovery',
+      status: 'finished',
+      result: 'done',
+    });
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    const events: SessionLogEvent[] = [];
+    sessionLogger.subscribe((event) => events.push(event));
+    mockCreateGitHubMonitor.mockImplementationOnce((monitorOptions) => ({
+      start: () => {
+        monitorOptions.onPollError?.(
+          new GitHubMonitorError({
+            phase: 'issue_comments',
+            cause: 'network',
+            retryable: true,
+            message: 'fetch failed',
+          }),
+        );
+        monitorOptions.onPollRecovered?.(11);
+      },
+      stop: vi.fn().mockResolvedValue(undefined),
+      flush: vi.fn(),
+      getCursor: vi.fn().mockReturnValue({ pullRequests: {} }),
+      unregisterPullRequest: vi.fn(),
+    }));
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(events).toContainEqual({
+      type: 'harness.github.monitor_error',
+      message: 'fetch failed',
+      phase: 'issue_comments',
+      prNumber: undefined,
+      cause: 'network',
+      retryable: true,
+    });
+    expect(events).toContainEqual({
+      type: 'harness.github.monitor_recovered',
+      suppressedErrorCount: 11,
+    });
   });
 
   it('delivers a runtime-registered PR update through the live monitor', async () => {

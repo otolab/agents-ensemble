@@ -890,6 +890,12 @@ export async function runConductorSession(
           message,
         });
       },
+      onPollRecovered: (suppressedErrorCount) => {
+        sessionLogger.emit({
+          type: 'harness.github.monitor_recovered',
+          suppressedErrorCount,
+        });
+      },
     });
     githubMonitor.start();
   }
