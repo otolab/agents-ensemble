@@ -23,6 +23,8 @@ import {
 import { createTuiResizeRecovery } from './tui-resize-recovery.js';
 import { resolveInitialOperatorMessage } from '../operator-message.js';
 
+const PERFORMANCE_ENTRY_CLEAR_INTERVAL_MS = 30_000;
+
 export interface CreateIssueSessionTuiHostOptions {
   config?: EnsembleConfig;
   env?: NodeJS.ProcessEnv;
@@ -187,6 +189,20 @@ export function createIssueSessionTuiHost(
   const telemetrySink = createTuiTelemetrySink(viewModel, {
     verbose: options.verbose,
   });
+  // Ink/React can add User Timing entries during frequent redraws. Keep the
+  // process-wide buffer bounded for the lifetime shared by pane and stream.
+  const performanceEntryClearInterval = setInterval(() => {
+    try {
+      performance.clearMeasures();
+    } catch {
+      // Performance cleanup must not interrupt TUI rendering.
+    }
+    try {
+      performance.clearMarks();
+    } catch {
+      // Attempt to clear marks even if clearing measures failed.
+    }
+  }, PERFORMANCE_ENTRY_CLEAR_INTERVAL_MS);
 
   return {
     displayBackend: {
@@ -205,6 +221,7 @@ export function createIssueSessionTuiHost(
       }
     },
     dispose: () => {
+      clearInterval(performanceEntryClearInterval);
       resizeRecovery.dispose();
       ink.unmount();
       inkRef.current = undefined;
