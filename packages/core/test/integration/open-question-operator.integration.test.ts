@@ -241,7 +241,7 @@ describe('open question / operator flow integration', () => {
   it('links a Cursor ACP v1 Edit permission summary to the Open Question context', async () => {
     const bridge = await createInProcessAcpBridge(undefined, {
       requestPermissionOnPrompt: true,
-      permissionParams: permissionRequestFixtures.editCursorAcpV1,
+      permissionParams: permissionRequestFixtures.editCursorAcpV1.params,
     });
 
     let pendingId: string | undefined;
@@ -274,7 +274,7 @@ describe('open question / operator flow integration', () => {
           const expectedSummary =
             `permission.pending worker=implementer tool=Edit ` +
             'path=packages/core/src/permission/format-permission-summary-for-operator.ts ' +
-            `description="Edit permission summary renderer" id=${pendingId!.slice(0, 8)}...`;
+            `description="Edit File" id=${pendingId!.slice(0, 8)}...`;
           expect(permissionEvent.request.toolName).toBe('Edit');
           expect(permissionEvent.operatorSummary).toBe(expectedSummary);
 
@@ -339,7 +339,7 @@ describe('open question / operator flow integration', () => {
     const expectedSummary =
       `permission.pending worker=implementer tool=Edit ` +
       'path=packages/core/src/permission/format-permission-summary-for-operator.ts ' +
-      `description="Edit permission summary renderer" id=${pendingId!.slice(0, 8)}...`;
+      `description="Edit File" id=${pendingId!.slice(0, 8)}...`;
     expect(observedOpenQuestion).toMatchObject({
       relatedPermissionId: pendingId,
       context: `${expectedSummary}\nThe Edit permission is waiting.`,

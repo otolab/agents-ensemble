@@ -110,7 +110,9 @@ describe('extractPermissionOperationSummary', () => {
   it('reads Edit target from the ACP v1 toolCall rawInput and locations', () => {
     expect(
       extractPermissionOperationSummary(
-        parsePermissionRequest(permissionRequestFixtures.editCursorAcpV1),
+        parsePermissionRequest(
+          permissionRequestFixtures.editCursorAcpV1.params,
+        ),
       ),
     ).toEqual({
       field: 'path',

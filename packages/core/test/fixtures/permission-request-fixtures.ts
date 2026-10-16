@@ -31,52 +31,65 @@ export const permissionRequestFixtures = {
       raw_input: { filePath: 'packages/cli/src/session-log-lines.ts' },
     },
   },
-  /** Cursor ACP v1-shaped params with synthetic identifiers and edit contents. */
+  /** ACP v1 wire request shape; identifiers and edit contents are synthetic. */
   editCursorAcpV1: {
-    sessionId: 'session-cursor-edit-v1',
-    toolCall: {
-      toolCallId: 'edit-cursor-1234567890',
-      title: 'Edit permission summary renderer',
-      kind: 'edit',
-      status: 'pending',
-      rawInput: {
-        filePath:
-          'packages/core/src/permission/format-permission-summary-for-operator.ts',
-        edits: [{ oldString: 'old value', newString: 'new value' }],
-      },
-      locations: [
-        {
-          path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
-          line: 42,
+    jsonrpc: '2.0',
+    id: 0,
+    method: 'session/request_permission',
+    params: {
+      sessionId: 'session-cursor-edit-v1',
+      toolCall: {
+        toolCallId: 'edit-cursor-1234567890',
+        title: 'Edit File',
+        kind: 'edit',
+        status: 'pending',
+        rawInput: {
+          filePath:
+            'packages/core/src/permission/format-permission-summary-for-operator.ts',
+          oldString: '<redacted>',
+          newString: '<redacted>',
         },
+        locations: [
+          {
+            path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
+            line: 42,
+          },
+        ],
+      },
+      options: [
+        { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },
+        { optionId: 'reject-once', kind: 'reject_once', name: 'Reject' },
       ],
     },
-    options: [
-      { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },
-      { optionId: 'reject-once', kind: 'reject_once', name: 'Reject' },
-    ],
   },
+  /** Same synthetic ACP v1 frame, with the target available only in locations. */
   editCursorAcpV1LocationsOnly: {
-    sessionId: 'session-cursor-edit-v1-locations',
-    toolCall: {
-      toolCallId: 'edit-cursor-location-123456',
-      title: 'Edit permission summary renderer',
-      kind: 'edit',
-      status: 'pending',
-      rawInput: {
-        edits: [{ oldString: 'old value', newString: 'new value' }],
-      },
-      locations: [
-        {
-          path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
-          line: 42,
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'session/request_permission',
+    params: {
+      sessionId: 'session-cursor-edit-v1-locations',
+      toolCall: {
+        toolCallId: 'edit-cursor-location-123456',
+        title: 'Edit File',
+        kind: 'edit',
+        status: 'pending',
+        rawInput: {
+          oldString: '<redacted>',
+          newString: '<redacted>',
         },
+        locations: [
+          {
+            path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
+            line: 42,
+          },
+        ],
+      },
+      options: [
+        { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },
+        { optionId: 'reject-once', kind: 'reject_once', name: 'Reject' },
       ],
     },
-    options: [
-      { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },
-      { optionId: 'reject-once', kind: 'reject_once', name: 'Reject' },
-    ],
   },
   executeIdOnly: {
     sessionId: 'session-execute-id-only',
