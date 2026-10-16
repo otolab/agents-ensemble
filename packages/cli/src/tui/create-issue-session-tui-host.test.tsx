@@ -34,6 +34,8 @@ describe('createIssueSessionTuiHost', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     const previous = process.env.ENSEMBLE_OPERATOR_MESSAGE;
     const previousLayout = process.env.ENSEMBLE_TUI_LAYOUT;
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
@@ -44,6 +46,84 @@ describe('createIssueSessionTuiHost', () => {
     if (previousLayout !== undefined) {
       process.env.ENSEMBLE_TUI_LAYOUT = previousLayout;
     }
+  });
+
+  it('clears User Timing entries during long-running updates and stops on dispose', () => {
+    vi.useFakeTimers();
+    const entryPrefix = 'ensemble-issue-session-tui-host-test';
+    performance.clearMeasures();
+    performance.clearMarks();
+
+    const host = createIssueSessionTuiHost();
+    let previousMeasureCount = 0;
+    let observedClear = false;
+    let maximumMeasureCount = 0;
+
+    for (let update = 0; update < 50; update += 1) {
+      for (let entry = 0; entry < 100; entry += 1) {
+        const name = `${entryPrefix}-${update}-${entry}`;
+        performance.mark(`${name}-mark`);
+        performance.measure(`${name}-measure`, { start: 0, end: 1 });
+      }
+      host.displayBackend.render(
+        INITIAL_SESSION_DISPLAY_STATE,
+        INITIAL_SESSION_DISPLAY_STATE,
+        {
+          type: 'operator.input',
+          conductorTurn: update + 1,
+          text: `stream update ${update}`,
+        },
+      );
+      vi.advanceTimersByTime(1_000);
+
+      const measureCount = performance
+        .getEntriesByType('measure')
+        .filter((entry) => entry.name.startsWith(entryPrefix)).length;
+      maximumMeasureCount = Math.max(maximumMeasureCount, measureCount);
+      observedClear ||= measureCount < previousMeasureCount;
+      previousMeasureCount = measureCount;
+    }
+
+    expect(observedClear).toBe(true);
+    expect(maximumMeasureCount).toBeLessThan(3_000);
+    expect(
+      performance.getEntriesByType('mark').filter((entry) => entry.name.startsWith(entryPrefix)),
+    ).toHaveLength(2_000);
+
+    host.dispose();
+    const measuresBeforeDisposeAdvance = performance
+      .getEntriesByType('measure')
+      .filter((entry) => entry.name.startsWith(entryPrefix)).length;
+    vi.advanceTimersByTime(30_000);
+    expect(
+      performance.getEntriesByType('measure').filter((entry) => entry.name.startsWith(entryPrefix)),
+    ).toHaveLength(measuresBeforeDisposeAdvance);
+  });
+
+  it('keeps rendering when clearing User Timing entries throws', () => {
+    vi.useFakeTimers();
+    const clearMeasures = vi
+      .spyOn(performance, 'clearMeasures')
+      .mockImplementation(() => {
+        throw new Error('measure cleanup failed');
+      });
+    const clearMarks = vi.spyOn(performance, 'clearMarks');
+    const host = createIssueSessionTuiHost();
+
+    expect(() => vi.advanceTimersByTime(30_000)).not.toThrow();
+    expect(clearMeasures).toHaveBeenCalledTimes(1);
+    expect(clearMarks).toHaveBeenCalledTimes(1);
+
+    host.displayBackend.render(
+      INITIAL_SESSION_DISPLAY_STATE,
+      INITIAL_SESSION_DISPLAY_STATE,
+      {
+        type: 'operator.input',
+        conductorTurn: 1,
+        text: 'still rendering',
+      },
+    );
+    expect(() => host.dispose()).not.toThrow();
   });
 
   it('passes the current issue URL to the TUI view', () => {

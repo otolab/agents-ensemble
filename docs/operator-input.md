@@ -82,6 +82,8 @@ CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できま�
 
 TTY の既定は `stream` レイアウトです。従来のペイン分割を使う場合は `.ensemble/config.yaml` に `tui.layout: pane`、または `ENSEMBLE_TUI_LAYOUT=pane` を指定します。環境変数は config より優先されます（[settings.md](settings.md)）。非 TTY は常に `pane` 経路です。
 
+長時間 TTY セッションでは Ink / React の再描画に伴って Node の User Timing（measure / mark）が蓄積し、約 100 万件に達すると `MaxPerformanceEntryBufferExceededWarning` が出ることがあります。pane / stream 共通の TUI host は稼働中 30 秒ごとに `performance.clearMeasures()` と `performance.clearMarks()` を呼び、終了時にタイマーを解除します。クリアに失敗しても描画は継続します。Node の performance バッファはプロセス共通のため、この処理では同じプロセス内の他の measure / mark も消去されます。
+
 既定の `stream` レイアウトでは、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /reconnect で再接続 · /exit で終了` の prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（詳細は [ADR 0015](adr/0015-cli-tui-library.md)）。
 
 `pane` では Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
