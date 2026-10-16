@@ -152,6 +152,37 @@ project → user の優先関係は provider 単位です。project に API-key 
 
 user `auth.json` の credential は CLI が生成・更新するものを使うのが基本です。project resource、`settings.json`、`models.json` に秘密値を置く場合もリポジトリへ commit せず、`.ensemble/` の ignore 方針とアクセス権を確認してください。
 
+### `!command` とトークン取得の連続実行（LiteLLM / gcloud 等）
+
+Pi conductor は **LLM リクエストの直前**で `apiKey` の `!command` を解決します。1 回の `conductor.send` の中でもツール往復により **同じコマンドが短時間に複数回**走ることがあります。`gcloud auth print-identity-token` のように **トークン発行 API に触れるコマンド**を直に `!` すると、OAuth 側のレート制限や一時的な失敗の原因になり得ます（[Issue #432](https://github.com/otolab/agents-ensemble/issues/432)）。
+
+**ensemble harness は `!command` の自動ラップや TTL 設定を持ちません**（[ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の移譲モデルのまま）。代わりに、**キャッシュ付きの認証ヘルパースクリプト**を `models.json` から呼び出してください。Codex worker の `[model_providers.*.auth]` + `refresh_interval_ms` と同型で、**毎 `getAuth` でスクリプトは起動するが、キャッシュ hit 時は内側の gcloud を実行しない**運用です。
+
+リポジトリ同梱の [scripts/pi/cached-auth.sh](../scripts/pi/cached-auth.sh) をコピーするか、リポジトリ内の **絶対パス**で参照します。キャッシュファイルは既定で **`<repoRoot>/.ensemble/pi/cache/auth/`**（`600`、gitignore 対象の `.ensemble/` 配下）に置きます。
+
+```json
+{
+  "providers": {
+    "litellm": {
+      "baseUrl": "https://your-litellm.example/v1",
+      "apiKey": "!/absolute/path/to/agents-ensemble/scripts/pi/cached-auth.sh --ttl-ms 300000 -- gcloud auth print-identity-token --account=you@example.com",
+      "api": "openai-responses",
+      "authHeader": true,
+      "models": [{ "id": "your-model", "name": "your-model" }]
+    }
+  }
+}
+```
+
+| 項目 | 説明 |
+|------|------|
+| `--ttl-ms` | この間隔より短い再実行では内側コマンドをスキップ（既定 `300000` = 5 分）。`ENSEMBLE_PI_AUTH_CACHE_TTL_MS` でも指定可。 |
+| `--cache-dir` | 上書き時のみ。既定は `.ensemble/pi/cache/auth` または `ENSEMBLE_PI_AUTH_CACHE_DIR`。 |
+| JWT | stdout が JWT のとき、TTL に加え **`exp` の約 5 分前**まで再利用（`python3` がある環境）。 |
+| クリア | `cached-auth.sh --clear --ttl-ms 0 -- gcloud …` と同じコマンド行でキャッシュ削除。`gcloud auth login` 後に実行するとよい。 |
+
+Worker（Codex）側は `~/.codex/config.toml` の `refresh_interval_ms` で同様の抑制ができます。Pi conductor だけ直 `!gcloud` のままにしないでください。
+
 ## `ensemble auth` と Cursor の違い
 
 | | Cursor backend（既定） | Pi backend |
