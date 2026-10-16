@@ -44,6 +44,7 @@
   },
   "files": [
     "dist",
+    "scripts/pi/**",
     "README.md",
     "docs/**",
     "config.example.yaml"
