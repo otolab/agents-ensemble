@@ -49,7 +49,7 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 | 1 | CLI `--profile <ref>` |
 | 2 | 環境変数 `ENSEMBLE_DEFAULT_PROFILE`（空文字は未設定扱い） |
 | 3 | `.ensemble/config.yaml` の `profile.default`（project > user merge） |
-| 4 | 同梱 `profiles/implementer-and-reviewer/`（`default` エイリアス） |
+| 4 | 同梱 `profiles/implementer-and-reviewer-v2/`（`default` エイリアス） |
 
 `ENSEMBLE_DEFAULT_PROFILE` の値は `--profile` と同じ解釈（名前またはパス）。
 - 一覧: `ensemble profiles list`（`id` は `name@source` 形式。workspace 欠損の profile は `unusable`）

@@ -56,18 +56,31 @@ describe('formatProfilesListJson', () => {
   it('serializes entries as JSON', () => {
     const json = formatProfilesListJson([
       {
-        id: 'default@bundled',
+        id: 'implementer-and-reviewer@bundled',
         name: 'implementer-and-reviewer',
         source: 'bundled',
         path: '/profiles/implementer-and-reviewer/profile.yaml',
         workersPreview: ['implementer'],
         availability: 'available',
       },
+      {
+        id: 'implementer-and-reviewer-v2@bundled',
+        name: 'implementer-and-reviewer-v2',
+        source: 'bundled',
+        path: '/profiles/implementer-and-reviewer-v2/profile.yaml',
+        workersPreview: ['implementer'],
+        availability: 'available',
+      },
     ]);
 
     const parsed = JSON.parse(json);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].availability).toBe('available');
+    expect(parsed).toHaveLength(2);
+    expect(parsed.map((entry: { id: string }) => entry.id)).toEqual([
+      'implementer-and-reviewer@bundled',
+      'implementer-and-reviewer-v2@bundled',
+    ]);
+    expect(parsed.every((entry: { availability: string }) => entry.availability === 'available'))
+      .toBe(true);
   });
 
   it('includes availability and issues in JSON output', () => {

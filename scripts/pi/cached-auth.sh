@@ -5,7 +5,7 @@
 set -euo pipefail
 
 DEFAULT_TTL_MS=300000
-DEFAULT_CACHE_DIR=".ensemble/pi/cache/auth"
+DEFAULT_CACHE_DIR="${HOME}/.ensemble/pi/cache/auth"
 LOCK_NAME=".lock"
 
 usage() {
@@ -13,9 +13,9 @@ usage() {
 Usage: cached-auth.sh [options] -- <command> [args...]
 
 Options:
-  --cache-dir PATH   Cache directory (default: $ENSEMBLE_PI_AUTH_CACHE_DIR or .ensemble/pi/cache/auth)
+  --cache-dir PATH   Cache directory (default: ~/.ensemble/pi/cache/auth or $ENSEMBLE_PI_AUTH_CACHE_DIR)
   --ttl-ms MS        Minimum interval before re-running <command> (default: 300000)
-  --cache-key KEY    Cache file basename (default: sha256 of the command line)
+  --cache-key KEY    Cache file basename (default: default). 同一 --cache-dir で複数 credential だけ分けたいときに指定
   --clear            Delete cache entry for this key and exit
   -h, --help         Show this help
 
@@ -75,13 +75,7 @@ if [[ ${#command[@]} -eq 0 ]]; then
   exit 2
 fi
 
-if [[ -z "$cache_key" ]]; then
-  if command -v shasum >/dev/null 2>&1; then
-    cache_key="$(printf '%s\0' "${command[*]}" | shasum -a 256 | awk '{print $1}')"
-  else
-    cache_key="$(printf '%s\0' "${command[*]}" | sha256sum | awk '{print $1}')"
-  fi
-fi
+cache_key="${cache_key:-default}"
 
 mkdir -p "$cache_dir"
 chmod 700 "$cache_dir" 2>/dev/null || true
@@ -141,18 +135,12 @@ cache_valid() {
   return 1
 }
 
-run_locked() {
-  local lock_fd=9
-  exec {lock_fd}>"$lock_path"
-  if ! flock -w 60 "$lock_fd"; then
-    echo "cached-auth.sh: could not acquire cache lock" >&2
-    exit 1
-  fi
+refresh_cache() {
+  local out
   if cache_valid; then
     cat "$token_path"
     return 0
   fi
-  local out
   if ! out="$("${command[@]}")"; then
     echo "cached-auth.sh: command failed: ${command[*]}" >&2
     exit 1
@@ -169,24 +157,42 @@ run_locked() {
   printf '%s' "$out"
 }
 
+with_flock_lock() {
+  local lock_fd=9
+  exec {lock_fd}>"$lock_path"
+  if ! flock -w 60 "$lock_fd"; then
+    echo "cached-auth.sh: could not acquire cache lock" >&2
+    exit 1
+  fi
+  refresh_cache
+}
+
+with_mkdir_lock() {
+  local lock_dir="$cache_dir/.lock"
+  local waited=0
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    if cache_valid; then
+      cat "$token_path"
+      return 0
+    fi
+    sleep 0.05
+    waited=$((waited + 1))
+    if [[ "$waited" -ge 1200 ]]; then
+      echo "cached-auth.sh: could not acquire cache lock" >&2
+      exit 1
+    fi
+  done
+  trap 'rmdir "$lock_dir" 2>/dev/null || true' RETURN
+  refresh_cache
+}
+
 if cache_valid; then
   cat "$token_path"
   exit 0
 fi
 
 if command -v flock >/dev/null 2>&1; then
-  run_locked
+  with_flock_lock
 else
-  # macOS without flock: best-effort (parallel getAuth may duplicate refresh)
-  if cache_valid; then
-    cat "$token_path"
-  else
-    out="$("${command[@]}")"
-    out="$(printf '%s' "$out" | tr -d '\n\r' | sed -e 's/[[:space:]]*$//')"
-    umask 077
-    printf '%s' "$out" >"$token_path"
-    now_ms >"$meta_path"
-    chmod 600 "$token_path" "$meta_path" 2>/dev/null || true
-    printf '%s' "$out"
-  fi
+  with_mkdir_lock
 fi

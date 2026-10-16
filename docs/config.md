@@ -47,7 +47,7 @@ cp config.example.yaml ~/.ensemble/config.yaml
 
 ```yaml
 profile:
-  default: implementer-and-reviewer   # ENSEMBLE_DEFAULT_PROFILE 相当
+  default: implementer-and-reviewer-v2 # ENSEMBLE_DEFAULT_PROFILE 相当
 
 conductor:
   backend: pi                        # cursor（既定） | pi
@@ -84,7 +84,7 @@ github:
     stopPollWaitMs: 5000
 
 tui:
-  layout: pane                        # ENSEMBLE_TUI_LAYOUT 相当
+  layout: stream                      # TTY での既定（pane に戻す場合は明示）
   forceHyperlink: auto                # FORCE_HYPERLINK 相当（auto | on | off）
 ```
 

@@ -417,6 +417,18 @@ describe('backward compatibility without config', () => {
 });
 
 describe('resolveTuiLayoutSetting', () => {
+  it('defaults to stream and honors an explicit pane config', () => {
+    expect(resolveTuiLayoutSetting({ env: {} })).toBe('stream');
+    expect(
+      resolveTuiLayoutSetting({
+        config: {
+          ...projectConfig,
+          tui: { layout: 'pane', forceHyperlink: 'auto' },
+        },
+      }),
+    ).toBe('pane');
+  });
+
   it('prefers env over config', () => {
     expect(
       resolveTuiLayoutSetting({

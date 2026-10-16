@@ -66,10 +66,18 @@ describe('resolveTeamProfilePath', () => {
 
   it('resolves bundled default alias and canonical name', () => {
     expect(resolveTeamProfilePath('default', { repoRoot })).toBe(bundledDefaultProfilePath());
-    expect(resolveTeamProfilePath('implementer-and-reviewer', { repoRoot })).toBe(
+    expect(resolveTeamProfilePath('implementer-and-reviewer-v2', { repoRoot })).toBe(
       bundledDefaultProfilePath(),
     );
-    expect(bundledProfilePath('default')).toBe(bundledProfilePath('implementer-and-reviewer'));
+    expect(bundledProfilePath('default')).toBe(
+      bundledProfilePath('implementer-and-reviewer-v2'),
+    );
+  });
+
+  it('continues to resolve the bundled v1 profile by its explicit name', () => {
+    expect(resolveTeamProfilePath('implementer-and-reviewer', { repoRoot })).toBe(
+      bundledProfilePath('implementer-and-reviewer'),
+    );
   });
 
   it('falls back to legacy profiles/<name>/profile.yaml', async () => {
@@ -147,6 +155,11 @@ describe('listTeamProfiles', () => {
       name: 'implementer-and-reviewer',
       availability: 'available',
     });
+    expect(byId['implementer-and-reviewer-v2@bundled']).toMatchObject({
+      source: 'bundled',
+      name: 'implementer-and-reviewer-v2',
+      availability: 'available',
+    });
   });
 
   it('marks profile unusable when workspace is missing', async () => {
@@ -181,7 +194,7 @@ describe('teamProfileRoots', () => {
 
 describe('teamProfileId', () => {
   it('normalizes default alias in id', () => {
-    expect(teamProfileId('default', 'bundled')).toBe('implementer-and-reviewer@bundled');
+    expect(teamProfileId('default', 'bundled')).toBe('implementer-and-reviewer-v2@bundled');
   });
 });
 

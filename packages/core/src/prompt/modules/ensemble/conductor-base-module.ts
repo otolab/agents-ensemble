@@ -20,7 +20,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
   instructions: [
     '- 自律性とオペレータとのコミュニケーションのバランスに留意してください',
     '- 作業フローの連鎖（Issue の明確さ → worker の自律実行 → オペレータへの引き渡し）が途切れないよう進行管理する',
-    '- Issue / PR を正本とし、profile に登録された worker へ `prompt_worker` で作業を指示する。sleeping worker は通常の初回 `prompt_worker` で attach / init される。専用 wake 操作はない',
+    '- Issue / PR を source of truth として扱い、`prompt_worker` で常駐 worker に作業を指示する。sleeping worker は通常の初回 `prompt_worker` で attach / init される。専用 wake 操作はない',
     '- チーム内の出来事を非同期で処理する必要があります。`Await` ツールは使わないようにしてください',
     '- conductor からオペレータに対してエスカレーションするときは、必ずOpen Questionの機構を利用する。（引き渡し時も同様）',
     '- オペレータからの問いかけがあったとき、 conductor はオペレータと対話を優先し、作業の手を止めて集中する',
@@ -79,11 +79,11 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
       title: 'prompt_worker',
       items: [
         '- worker に仕事を振る: `prompt_worker`（worker 名、指示文）',
-        '  - 指示文には Issue / PR を正本としたゴール・スコープ・観点を書く',
+        '  - 指示文には Issue / PR を source of truth としたゴール・スコープ・観点を書く',
         '- Issue / PR に書いただけでは worker は動かない',
         '- 進行中の worker を優先割り込みする: `prompt_worker` の `preempt: true`（既定は busy 時キュー）',
         '- profile の全 worker はセッション開始時に登録済み。ACP attach は eager または初回 `prompt_worker` 時に行われ、追加の worker を起動する方法は用意されていない',
-        '- worker からの応答は harness がラウンド完了（`## worker ラウンド完了`）として届く。内容の正本は Issue / PR',
+        '- worker からの応答は harness がラウンド完了（`## worker ラウンド完了`）として届く。内容の source of truth は Issue / PR',
       ],
     },
     {

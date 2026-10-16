@@ -8,7 +8,7 @@ export const PROFILE_FILE = 'profile.yaml';
 export const TEAMS_DIR = 'teams';
 export const ENSEMBLE_DIR = '.ensemble';
 /** Canonical bundled default team profile name. */
-export const DEFAULT_PROFILE_NAME = 'implementer-and-reviewer';
+export const DEFAULT_PROFILE_NAME = 'implementer-and-reviewer-v2';
 /** CLI / API alias for {@link DEFAULT_PROFILE_NAME}. */
 export const DEFAULT_PROFILE_ALIAS = 'default';
 

@@ -44,7 +44,7 @@ export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = {
     },
   },
   tui: {
-    layout: 'pane',
+    layout: 'stream',
     forceHyperlink: 'auto',
   },
 };
