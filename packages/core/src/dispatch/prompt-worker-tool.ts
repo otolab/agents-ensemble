@@ -32,7 +32,7 @@ export function createPromptWorkerTool(
           preempt: {
             type: 'boolean',
             description:
-              'If true, cancel the in-progress prompt turn and send this instruction immediately (default: queue when busy)',
+              'If true, cancel a running prompt and run this instruction immediately after cancellation is confirmed. If a lazy worker is attaching or running init, do not cancel init: replace queued work; the call returns `queued` and this instruction runs after init. If omitted, queue behind current work.',
           },
         },
         required: ['worker', 'instruction'],

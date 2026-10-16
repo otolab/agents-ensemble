@@ -460,11 +460,11 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 | `processing` | `session/prompt` 実行中（init / instruction 共通） |
 | `idle` | prompt 中でない。次の `sendWorkerMessage` を受け付け可能 |
 | `sleeping` | lazy worker。初回の `sendWorkerMessage` を待機中 |
-| `failed` | attach または prompt 失敗 |
+| `failed` | attach 失敗、lazy init prompt の失敗 / キャンセル、または conductor prompt の失敗 |
 
 ### 6.2 TUI 表示語彙（`WorkerDisplayStatus`）
 
-正本型: `packages/core/src/runtime/worker-display-state.ts`（`idle` / `running` / `failed`）。
+正本型: `packages/core/src/runtime/worker-display-state.ts`（`sleep` / `idle` / `running` / `failed`）。runtime の `sleeping` は TUI の `sleep` に対応する。
 
 | WorkerLifecycleState（runtime / tool） | WorkerDisplayStatus（TUI / reducer） | 備考 |
 |--------------------------------------|-------------------------------------|------|
