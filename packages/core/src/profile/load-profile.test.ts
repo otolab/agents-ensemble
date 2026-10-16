@@ -19,6 +19,7 @@ import {
   resolveAgentPromptModule,
 } from './types.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
+import { loadUserInstructions } from '../prompt/load-user-instructions.js';
 
 describe('normalizeProfileWorker', () => {
   it('expands kind string to name=kind', () => {
@@ -702,16 +703,30 @@ describe('loadProfile', () => {
 });
 
 describe('default profile compilation', () => {
-  it('includes the bundled v2 conductor materials in the compiled prompt', async () => {
+  it('includes user-wide instructions and bundled v2 conductor materials in the compiled prompt', async () => {
+    const userEnsembleRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-user-instructions-'),
+    );
+    await writeFile(
+      join(userEnsembleRoot, 'AGENTS.md'),
+      'Operator-wide context shared by repositories.',
+    );
+    const userInstructions = await loadUserInstructions({ userEnsembleRoot });
     const { profile } = await loadProfile({ cwd: '/no-such-cwd' });
     const prompt = compileConductorSystemPrompt({
       issueUrl: 'https://github.com/org/repo/issues/150',
       profile,
       agentModule: resolveAgentPromptModule('conductor', profile.agents),
+      userInstructions,
     });
 
     expect(prompt).toContain('**conductor**');
+    expect(prompt).toContain('### User instructions (~/.ensemble/AGENTS.md)');
+    expect(prompt).toContain('Operator-wide context shared by repositories.');
     expect(prompt).toContain('### 標準動作モード（conductor）');
+    expect(prompt.indexOf('### User instructions')).toBeLessThan(
+      prompt.indexOf('### 標準動作モード（conductor）'),
+    );
     expect(prompt).toContain('**すべてを理解することは求められていない。**');
     expect(prompt).toContain('permission.pending');
     expect(prompt).toContain('resolve_permission');

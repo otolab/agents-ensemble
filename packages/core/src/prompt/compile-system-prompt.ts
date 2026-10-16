@@ -1,7 +1,10 @@
 import { compile } from '@modular-prompt/core';
 import type { PromptModule } from '@modular-prompt/core';
 import type { IssueContext } from '../github/issue-context.js';
-import type { ResolvedProfile } from '../profile/types.js';
+import type {
+  ResolvedProfile,
+  ResolvedProfileMaterial,
+} from '../profile/types.js';
 import { ensembleContext } from './contexts/kind.js';
 import { filterMaterialsForKind, sessionStateFromProfile } from '../profile/types.js';
 import { renderCompiledPrompt } from './render-compiled-prompt.js';
@@ -15,6 +18,8 @@ export interface CompileConductorSystemPromptOptions {
   agentModule?: PromptModule;
   /** 初回 send 用。Prepared Materials の Issue context として載せる。 */
   issueContext?: IssueContext;
+  /** profile に依存しない user-wide conductor 文書。 */
+  userInstructions?: ResolvedProfileMaterial;
 }
 
 /** conductor の system prompt（Instructions のみ。profile は merge で追記）。 */
@@ -23,9 +28,11 @@ export function compileConductorSystemPrompt(
 ): string {
   const sessionState = sessionStateFromProfile(options.profile);
   const profileMaterials = filterMaterialsForKind(sessionState.materials, 'conductor');
-  const materials = options.issueContext
-    ? [issueContextMaterial(options.issueContext), ...profileMaterials]
-    : profileMaterials;
+  const materials = [
+    ...(options.issueContext ? [issueContextMaterial(options.issueContext)] : []),
+    ...(options.userInstructions ? [options.userInstructions] : []),
+    ...profileMaterials,
+  ];
   const profileModule = profilePromptModule({
     agentModule: options.agentModule,
     materials,

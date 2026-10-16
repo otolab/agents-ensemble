@@ -10,7 +10,7 @@ export interface ProfilePromptModuleInput {
 }
 
 const MATERIALS_INSTRUCTION =
-  '- Prepared Materials に載った profile 定義文書は、行動時の定義として読み、従う';
+  '- Prepared Materials の文書は、記載された役割に従って参照し、適用される指示に従う';
 
 /** profile agent module と materials を modular-prompt モジュールに変換する。 */
 export function profilePromptModule(

@@ -40,7 +40,7 @@ describe('buildWorkerPrompt', () => {
       },
     });
 
-    expect(prompt).toContain('行動時の定義として読み、従う');
+    expect(prompt).toContain('記載された役割に従って参照し、適用される指示に従う');
     expect(prompt).toContain('## Prepared Materials');
     expect(prompt).toContain('worker team 定義');
   });

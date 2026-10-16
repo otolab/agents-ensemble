@@ -72,10 +72,26 @@ describe('compileConductorSystemPrompt', () => {
       },
     });
 
-    expect(prompt).toContain('行動時の定義として読み、従う');
+    expect(prompt).toContain('記載された役割に従って参照し、適用される指示に従う');
     expect(prompt).toContain('## Prepared Materials');
     expect(prompt).toContain('### Team definition');
     expect(prompt).toContain('profile team 定義');
+  });
+
+  it('includes user instructions before profile materials without depending on the profile', () => {
+    const prompt = compileConductorSystemPrompt({
+      issueUrl: TEST_ISSUE_URL,
+      profile: TEST_PROFILE,
+      userInstructions: {
+        id: 'user-instructions',
+        title: 'User instructions (~/.ensemble/AGENTS.md)',
+        content: '共有するオペレータ前提',
+      },
+    });
+
+    expect(prompt).toContain('### User instructions (~/.ensemble/AGENTS.md)');
+    expect(prompt).toContain('共有するオペレータ前提');
+    expect(prompt).toContain('Prepared Materials の文書は');
   });
 
   it('includes common and conductor-only materials, excluding worker-only materials', () => {
