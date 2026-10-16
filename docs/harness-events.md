@@ -207,7 +207,8 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 | 経路 | runtime / `list_workers` | 発火イベント（順） | TUI Workers 最終 |
 |------|--------------------------|-------------------|------------------|
 | **attach 致命失敗**（`attachAndInit` の catch。resident 未成立） | `failed`（`failedWorkers`） | `prompt.failed` → `state failed` → `worker.failed` | `failed` |
-| **ラウンド失敗**（`executeRound` の catch。resident 維持） | `idle`（resident 存続） | `prompt.failed` → `worker.failed` → `finally` で `state idle` | `idle`（`state idle` が `prompt.failed` を上書き） |
+| **lazy init 失敗 / キャンセル**（resident を破棄し、待機指示を drain） | `failed`（`failedWorkers`） | `prompt.failed` → `state failed` → `worker.failed` | `failed` |
+| **eager init / conductor ラウンド失敗**（resident 維持） | `idle`（resident 存続） | `prompt.failed` → `worker.failed` → `finally` で `state idle` | `idle`（`state idle` が `prompt.failed` を上書き） |
 
 **worker 失敗時の permission cleanup（#283）**
 
@@ -230,9 +231,11 @@ prune し、live な pending は通常どおり dispatch する。cleanup の対
 これはプロセス全体の teardown や in-flight `agent.send` の割り込みを行うものではない。
 後者は [#86](https://github.com/otolab/agents-ensemble/issues/86) のスコープである。
 
-init prompt（`source: harness`）では attach 開始時に `started` を出し、init ラウンド完了時に `completed` を出す。eager ではセッション開始時に全 worker 分をまとめて bootstrap し、lazy では sleeping worker へ初回 `prompt_worker` が来たとき対象 worker 1 件を bootstrap する。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。lazy の正常系は `sleeping` → `attaching` → `processing` → `idle`、以降の conductor 指示は `processing` → `idle`。
+init prompt（`source: harness`）では attach 開始時に `started` を出し、init 成功時に `completed` を出す。eager ではセッション開始時に全 worker 分をまとめて bootstrap し、lazy では sleeping worker へ初回 `prompt_worker` が来たとき対象 worker 1 件を bootstrap する。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。lazy の正常系は `sleeping` → `attaching` → `processing` → `idle`、以降の conductor 指示は `processing` → `idle`。
 
-lazy の初回 `prompt_worker` は runtime queue に instruction を保持して attach を開始する。init prompt は独立した `source: harness` ラウンドとして完了イベントを出し、その後に元 instruction を `source: conductor` の別ラウンドで実行する。init 中に permission が発生しても `permission.pending` は通常どおり conductor に届き、init の permission が解決するまで最初の instruction は queue に残る。
+lazy の初回 `prompt_worker` は runtime queue に instruction を保持して attach を開始する。init prompt は独立した `source: harness` ラウンドとして成功時に完了イベントを出し、その後に元 instruction を `source: conductor` の別ラウンドで実行する。init 中に permission が発生しても `permission.pending` は通常どおり conductor に届き、init の permission が解決するまで最初の instruction は queue に残る。
+
+lazy init prompt が失敗またはキャンセルされた場合、worker は `failed` になり、初回 instruction と待機中の指示を破棄する。破棄件数と理由を含むエラーを `worker.failed` で conductor に通知し、失敗した指示の暗黙実行・再試行は行わない。
 
 attach handshake 中に届いた追加指示は queue に積む。まだ cancel 可能な ACP prompt がないため、この期間の `preempt: true` は待ち instruction を置き換えるだけで init 自体を中断しない。resident の init / instruction prompt が始まった後は既存の preempt 動作を使う。attach が失敗した場合は queued instructions を実行せず、`worker.failed` に通知して state を `failed` にする。自動 retry はせず、以後の指示には attach failure を返す。profile 外の worker 名は runtime で登録なしとして拒否する。
 
@@ -289,9 +292,15 @@ WorkerSession.startWorkers()（全 worker を登録。eager は全員を attach�
        │                    harness.worker.state failed ──► TUI failed（最終。細行は verbose 時のみ）
        │                    worker.failed ────────────────► stderr + snapshot + SessionEventQueue
        │
-       └─ init ラウンド失敗（resident 維持）─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
-                              worker.failed ────────────────► stderr + snapshot + SessionEventQueue
-                              harness.worker.state idle ────► TUI idle（最終。細行は verbose 時のみ）
+       ├─ lazy init 失敗 / cancel（resident を破棄、queue を drain）
+       │    harness.worker.prompt.failed ─────────► stderr + TUI failed
+       │    harness.worker.state failed ──────────► TUI failed（最終。細行は verbose 時のみ）
+       │    worker.failed ────────────────────────► stderr + snapshot + SessionEventQueue
+       │
+       └─ eager init / conductor ラウンド失敗（resident 維持）
+            harness.worker.prompt.failed ─────────► stderr + TUI failed（一時）
+            worker.failed ────────────────────────► stderr + snapshot + SessionEventQueue
+            harness.worker.state idle ────────────► TUI idle（最終。細行は verbose 時のみ）
 
 prompt_worker / sendWorkerMessage
        │
@@ -450,6 +459,7 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 | `attaching` | ACP attach 中（init prompt 前） |
 | `processing` | `session/prompt` 実行中（init / instruction 共通） |
 | `idle` | prompt 中でない。次の `sendWorkerMessage` を受け付け可能 |
+| `sleeping` | lazy worker。初回の `sendWorkerMessage` を待機中 |
 | `failed` | attach または prompt 失敗 |
 
 ### 6.2 TUI 表示語彙（`WorkerDisplayStatus`）
@@ -461,6 +471,7 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 | `attaching` | `running` | `mapHarnessToDisplayStatus` で明示変換（#146 PR2） |
 | `processing` | `running` | prompt ライフサイクルイベントでも同様 |
 | `idle` | `idle` | |
+| `sleeping` | `sleep` | 初回の `sendWorkerMessage` を待機中 |
 | `failed` | `failed` | |
 
 変換関数: `mapHarnessToDisplayStatus`（`packages/core/src/runtime/map-worker-lifecycle.ts`）。  

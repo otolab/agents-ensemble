@@ -206,6 +206,75 @@ describe('WorkerSession', () => {
     await session.stop();
   });
 
+  it('force stop during lazy attach closes the late session without starting init', async () => {
+    let resolveBridge: ((bridge: AcpBridge) => void) | undefined;
+    const connectAcp = vi.fn(
+      () =>
+        new Promise<AcpBridge>((resolve) => {
+          resolveBridge = resolve;
+        }),
+    );
+    const close = vi.fn().mockResolvedValue(undefined);
+    const promptSession = vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      responseText: 'unexpected',
+    });
+    const bridge = {
+      newSession: vi.fn().mockResolvedValue('sess-1'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession,
+      close,
+    } as unknown as AcpBridge;
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+    });
+    const workerMessages: string[] = [];
+    session.inbox.subscribe((message) => {
+      if (
+        message.type === 'worker.completed' ||
+        message.type === 'worker.failed'
+      ) {
+        workerMessages.push(message.type);
+      }
+    });
+
+    session.startWorkers();
+    session.sendWorkerMessage('ping-1', 'first instruction');
+    session.sendWorkerMessage('ping-1', 'queued instruction');
+    await vi.waitFor(() => {
+      expect(connectAcp).toHaveBeenCalledOnce();
+    });
+
+    await session.stop({ force: true });
+    expect(close).not.toHaveBeenCalled();
+
+    resolveBridge?.(bridge);
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledOnce();
+    });
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    expect(promptSession).not.toHaveBeenCalled();
+    expect(session.runtime.attachedCount).toBe(0);
+    expect(workerMessages).toEqual([]);
+    expect(session.sendWorkerMessage('ping-1', 'after shutdown')).toMatchObject({
+      status: 'error',
+      message: 'Worker runtime has been shut down',
+    });
+  });
+
   it('queues lazy preempt during the init prompt without cancelling init', async () => {
     const prompts: string[] = [];
     const promptEvents: string[] = [];
@@ -303,6 +372,155 @@ describe('WorkerSession', () => {
     } finally {
       releaseInit();
       await session.stop();
+    }
+  });
+
+  it('fails lazy worker and drains queued instructions when init prompt rejects', async () => {
+    const prompts: string[] = [];
+    const failures: string[] = [];
+    let resolveInitStarted!: () => void;
+    let rejectInit: ((error: Error) => void) | undefined;
+    const initStarted = new Promise<void>((resolve) => {
+      resolveInitStarted = resolve;
+    });
+    const promptSession = vi.fn((_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        resolveInitStarted();
+        return new Promise<{ stopReason: string }>((_resolve, reject) => {
+          rejectInit = reject;
+        });
+      }
+      return Promise.resolve({ stopReason: 'end_turn' });
+    });
+    const close = vi.fn().mockResolvedValue(undefined);
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          close,
+        }) as unknown as AcpBridge,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+      onWorkerFailed: (failure) => failures.push(failure.error),
+    });
+
+    session.startWorkers();
+    session.sendWorkerMessage('ping-1', 'first instruction');
+
+    try {
+      await initStarted;
+      session.sendWorkerMessage('ping-1', 'second instruction');
+      expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+        state: 'processing',
+        queuePreview: ['first instruction', 'second instruction'],
+      });
+
+      rejectInit!(new Error('init rejected'));
+      await session.runtime.waitForIdle();
+      await session.inbox.drain();
+
+      expect(prompts).toHaveLength(1);
+      expect(failures).toEqual([
+        'Worker "ping-1" lazy init prompt failed: init rejected; discarded 2 queued instructions',
+      ]);
+      expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+        state: 'failed',
+        error:
+          'Worker "ping-1" lazy init prompt failed: init rejected; discarded 2 queued instructions',
+      });
+      expect(session.runtime.attachedCount).toBe(0);
+      expect(close).toHaveBeenCalledOnce();
+      expect(session.sendWorkerMessage('ping-1', 'retry')).toMatchObject({
+        status: 'error',
+        message:
+          'Worker "ping-1" failed to initialize: Worker "ping-1" lazy init prompt failed: init rejected; discarded 2 queued instructions',
+      });
+    } finally {
+      rejectInit?.(new Error('test cleanup'));
+      await session.stop({ force: true });
+    }
+  });
+
+  it('fails lazy worker and drains queued instructions when init prompt is cancelled', async () => {
+    const prompts: string[] = [];
+    const failures: string[] = [];
+    let resolveInitStarted!: () => void;
+    let cancelInit!: () => void;
+    const initStarted = new Promise<void>((resolve) => {
+      resolveInitStarted = resolve;
+    });
+    const promptSession = vi.fn((_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        resolveInitStarted();
+        return new Promise<{ stopReason: string }>((resolve) => {
+          cancelInit = () => resolve({ stopReason: 'cancelled' });
+        });
+      }
+      return Promise.resolve({ stopReason: 'end_turn' });
+    });
+    const cancelSession = vi.fn(() => cancelInit());
+    const close = vi.fn().mockResolvedValue(undefined);
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          cancelSession,
+          close,
+        }) as unknown as AcpBridge,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+      onWorkerFailed: (failure) => failures.push(failure.error),
+    });
+
+    session.startWorkers();
+    session.sendWorkerMessage('ping-1', 'first instruction');
+
+    try {
+      await initStarted;
+      session.sendWorkerMessage('ping-1', 'second instruction');
+      session.runtime.cancelAllActivePrompts();
+      expect(cancelSession).toHaveBeenCalledOnce();
+
+      await session.runtime.waitForIdle();
+      await session.inbox.drain();
+
+      expect(prompts).toHaveLength(1);
+      expect(failures).toEqual([
+        'Worker "ping-1" lazy init prompt was cancelled; discarded 2 queued instructions',
+      ]);
+      expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+        state: 'failed',
+        error:
+          'Worker "ping-1" lazy init prompt was cancelled; discarded 2 queued instructions',
+      });
+      expect(session.runtime.attachedCount).toBe(0);
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      await session.stop({ force: true });
     }
   });
 

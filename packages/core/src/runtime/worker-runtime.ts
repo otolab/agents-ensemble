@@ -71,6 +71,7 @@ interface FailedWorker {
   workerId: string;
   name: string;
   kind: string;
+  failureStage: 'attach' | 'init';
   error: string;
 }
 
@@ -83,6 +84,7 @@ export class WorkerRuntime {
   private readonly failedWorkers = new Map<string, FailedWorker>();
   private readonly idleResolvers = new Set<() => void>();
   private attachInFlight = 0;
+  private forceShutdownRequested = false;
 
   constructor(private readonly options: WorkerRuntimeOptions) {}
 
@@ -215,12 +217,32 @@ export class WorkerRuntime {
     instruction: string,
     options?: SendWorkerMessageOptions,
   ): SendWorkerMessageResult {
+    if (this.forceShutdownRequested) {
+      return {
+        status: 'error',
+        worker: name,
+        message: 'Worker runtime has been shut down',
+      };
+    }
+
     const text = instruction.trim();
     if (!text) {
       return {
         status: 'error',
         worker: name,
         message: 'instruction must not be empty',
+      };
+    }
+
+    const failed = this.failedWorkers.get(name);
+    if (failed) {
+      return {
+        status: 'error',
+        worker: name,
+        message:
+          failed.failureStage === 'init'
+            ? `Worker "${name}" failed to initialize: ${failed.error}`
+            : `Worker "${name}" failed to attach: ${failed.error}`,
       };
     }
 
@@ -248,16 +270,13 @@ export class WorkerRuntime {
         };
       }
 
-      const failed = this.failedWorkers.get(name);
       const known = this.configuredWorkers.has(name);
       return {
         status: 'error',
         worker: name,
-        message: failed
-          ? `Worker "${name}" failed to attach: ${failed.error}`
-          : known
-            ? `Worker "${name}" is not available`
-            : `Worker "${name}" is not registered`,
+        message: known
+          ? `Worker "${name}" is not available`
+          : `Worker "${name}" is not registered`,
       };
     }
 
@@ -315,6 +334,13 @@ export class WorkerRuntime {
   /** ensemble 終了時に全 resident の ACP 接続を閉じる。 */
   async shutdown(options?: { force?: boolean }): Promise<void> {
     if (options?.force) {
+      this.forceShutdownRequested = true;
+      this.sleeping.clear();
+      this.attaching.clear();
+      for (const resident of this.residents.values()) {
+        resident.queue.length = 0;
+        resident.preemptInstruction = undefined;
+      }
       this.cancelAllActivePrompts();
       const residents = [...this.residents.values()];
       await Promise.all(
@@ -478,6 +504,13 @@ export class WorkerRuntime {
         ),
       });
 
+      if (this.forceShutdownRequested) {
+        attaching.queue.length = 0;
+        attaching.preemptInstruction = undefined;
+        await closeWorkerAcpSession(attached.session);
+        return;
+      }
+
       const resident: ResidentWorker = {
         workerId: started.workerId,
         started,
@@ -512,11 +545,15 @@ export class WorkerRuntime {
     } catch (error) {
       this.residents.delete(started.name);
       this.attaching.delete(started.name);
+      if (this.forceShutdownRequested) {
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.failedWorkers.set(started.name, {
         workerId: started.workerId,
         name: started.name,
         kind: started.kind,
+        failureStage: 'attach',
         error: message,
       });
       this.emitWorkerState(
@@ -564,6 +601,10 @@ export class WorkerRuntime {
       });
     }
     let skipCompletion = false;
+    const isLazyInit =
+      source === 'harness' && resident.lazyInitInFlight;
+    let initCancelled = false;
+    let lazyInitFailed = false;
     try {
       const result = await runAttachedWorkerPrompt(
         resident.attached,
@@ -586,6 +627,13 @@ export class WorkerRuntime {
           },
         },
       );
+      if (this.forceShutdownRequested) {
+        return;
+      }
+      if (isLazyInit && result.promptResult.stopReason === 'cancelled') {
+        initCancelled = true;
+        throw new Error('init prompt was cancelled');
+      }
       const dispatch = { ...result, source };
       skipCompletion =
         result.promptResult.stopReason === 'cancelled' &&
@@ -602,7 +650,45 @@ export class WorkerRuntime {
         this.options.inbox.publishWorkerCompleted(resident.workerId, dispatch);
       }
     } catch (error) {
-      if (!resident.preemptInstruction) {
+      if (isLazyInit && !this.forceShutdownRequested) {
+        const queuedCount =
+          resident.queue.length + (resident.preemptInstruction ? 1 : 0);
+        const reason = initCancelled
+          ? 'was cancelled'
+          : `failed: ${error instanceof Error ? error.message : String(error)}`;
+        const queuedLabel = `${queuedCount} queued instruction${queuedCount === 1 ? '' : 's'}`;
+        const failureMessage =
+          `Worker "${resident.started.name}" lazy init prompt ${reason}; ` +
+          `discarded ${queuedLabel}`;
+        const failure = new Error(failureMessage);
+        lazyInitFailed = true;
+        resident.queue.length = 0;
+        resident.preemptInstruction = undefined;
+        resident.lazyInitInFlight = false;
+        this.failedWorkers.set(resident.started.name, {
+          workerId: resident.workerId,
+          name: resident.started.name,
+          kind: resident.started.kind,
+          failureStage: 'init',
+          error: failureMessage,
+        });
+        this.residents.delete(resident.started.name);
+        this.emitPromptTelemetry({
+          phase: 'failed',
+          source,
+          workerId: resident.workerId,
+          name: resident.started.name,
+          kind: resident.started.kind,
+          error: failureMessage,
+        });
+        this.emitWorkerState(
+          resident.workerId,
+          resident.started.name,
+          resident.started.kind,
+          'failed',
+        );
+        this.options.inbox.publishWorkerFailed(resident.started, failure);
+      } else if (!this.forceShutdownRequested && !resident.preemptInstruction) {
         const message = error instanceof Error ? error.message : String(error);
         this.emitPromptTelemetry({
           phase: 'failed',
@@ -619,6 +705,20 @@ export class WorkerRuntime {
         resident.lazyInitInFlight = false;
       }
       this.finishPromptRound(resident.workerId);
+      if (this.forceShutdownRequested) {
+        resident.queue.length = 0;
+        resident.preemptInstruction = undefined;
+        return;
+      }
+      if (lazyInitFailed) {
+        try {
+          await closeWorkerAcpSession(resident.attached.session);
+        } catch {
+          // Retain the session so a later non-forced shutdown can retry cleanup.
+          this.residents.set(resident.started.name, resident);
+        }
+        return;
+      }
       const preempt = resident.preemptInstruction;
       if (preempt) {
         resident.preemptInstruction = undefined;
