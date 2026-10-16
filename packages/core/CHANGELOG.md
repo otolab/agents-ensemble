@@ -1,5 +1,21 @@
 # @agents-ensemble/core
 
+## 0.11.0
+
+### Minor Changes
+
+- 3191159: TTY TUI の既定レイアウトを `pane` から `stream` に変更します。従来のペイン分割を使う場合は `tui.layout: pane` または `ENSEMBLE_TUI_LAYOUT=pane` を指定してください。stream では scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（[operator-input.md](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md)、[ADR 0015](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0015-cli-tui-library.md)）。
+
+### Patch Changes
+
+- 76ce635: Make `implementer-and-reviewer-v2` the bundled default team profile.
+- 1685822: Record open-question `yes_no` answers as three-way assent and add choice questions with a canonical selected option id. Existing sidecars remain readable, and legacy `approved` values are restored unchanged rather than recalculated; new `approved` values are derived only for permission-linked `yes_no` questions.
+- 8ee983a: conductor 基底プロンプトで自律性とオペレータコミュニケーションの方針、harness イベント、GitHub 監視、permission の記述を整理する。
+- 93fff85: Add opt-in lazy ACP worker attach with sleeping worker status and preserve eager startup by default.
+- fd97be2: エージェント向けプロンプト・team materials の「正本」表現を source of truth 等に置き換える。
+- c190760: Support profile-independent user instructions for conductor sessions.
+- 4b34c5f: Keep isolated worktree cleanup failures as warnings without changing the session exit code.
+
 ## 0.10.1
 
 ### Patch Changes

@@ -1,5 +1,32 @@
 # @agents-ensemble/cli
 
+## 0.11.0
+
+### Minor Changes
+
+- 3191159: TTY TUI の既定レイアウトを `pane` から `stream` に変更します。従来のペイン分割を使う場合は `tui.layout: pane` または `ENSEMBLE_TUI_LAYOUT=pane` を指定してください。stream では scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（[operator-input.md](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md)、[ADR 0015](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0015-cli-tui-library.md)）。
+
+### Patch Changes
+
+- 49a7e49: Add an explicit Pi model catalog comparison and import command for OpenAI-compatible providers.
+- 76ce635: Make `implementer-and-reviewer-v2` the bundled default team profile.
+- 1685822: Record open-question `yes_no` answers as three-way assent and add choice questions with a canonical selected option id. Existing sidecars remain readable, and legacy `approved` values are restored unchanged rather than recalculated; new `approved` values are derived only for permission-linked `yes_no` questions.
+- 93fff85: Add opt-in lazy ACP worker attach with sleeping worker status and preserve eager startup by default.
+- 09e7baa: Pi `cached-auth.sh` の既定キャッシュキーを `default` にし、既定 cache-dir を~/.ensemble/pi/cache/auth に変更。macOS 向け mkdir ロックを追加。
+- dbe0a2d: Pi conductor の `models.json` `!command` 向けに `scripts/pi/cached-auth.sh` を同梱し、gcloud identity token 等の連続取得を抑えるキャッシュ運用をドキュメントに追記する。
+- c190760: Support profile-independent user instructions for conductor sessions.
+- 4b34c5f: Keep isolated worktree cleanup failures as warnings without changing the session exit code.
+- c1da931: Preserve multiline activity posts and show compact Open Questions details with explicit truncation.
+- Updated dependencies [76ce635]
+- Updated dependencies [1685822]
+- Updated dependencies [8ee983a]
+- Updated dependencies [93fff85]
+- Updated dependencies [fd97be2]
+- Updated dependencies [c190760]
+- Updated dependencies [4b34c5f]
+- Updated dependencies [3191159]
+  - @agents-ensemble/core@0.11.0
+
 ## 0.10.1
 
 ### Patch Changes
