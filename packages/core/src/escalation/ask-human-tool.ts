@@ -8,6 +8,8 @@ import type { OpenQuestion, OpenQuestionRegistry } from './open-question.js';
 
 export interface AskHumanToolOptions {
   registry: OpenQuestionRegistry;
+  /** 関連 permission が pending の間、その operator 向け要約を取得する。 */
+  getPermissionSummary?: (permissionId: string) => string | undefined;
   onEnqueued?: (question: OpenQuestion) => void;
 }
 
@@ -71,10 +73,19 @@ export function createAskHumanTool(
         const responseType = parseResponseType(args.responseType);
         const choices =
           responseType === 'choice' ? parseChoices(args.choices) : undefined;
-        const context = args.context ? String(args.context) : undefined;
         const relatedPermissionId = args.relatedPermissionId
-          ? String(args.relatedPermissionId)
+          ? String(args.relatedPermissionId).trim() || undefined
           : undefined;
+        const suppliedContext = args.context
+          ? String(args.context).trim() || undefined
+          : undefined;
+        const permissionSummary = relatedPermissionId
+          ? options.getPermissionSummary?.(relatedPermissionId)
+          : undefined;
+        const context =
+          permissionSummary && !suppliedContext?.includes(permissionSummary)
+            ? [permissionSummary, suppliedContext].filter(Boolean).join('\n')
+            : suppliedContext;
 
         const entry = options.registry.enqueue({
           question,

@@ -75,6 +75,28 @@ describe('buildOpenQuestionListItems', () => {
     ]);
   });
 
+  it('shows the linked permission id and operation summary in question context', () => {
+    const summary =
+      'permission.pending worker=implementer tool=Edit path=src/example.ts id=perm-123...';
+    const [item] = buildOpenQuestionListItems(
+      [
+        createQuestion({
+          id: 'inq-permission',
+          question: 'Should I allow this edit?',
+          context: summary,
+          relatedPermissionId: 'permission-request-123456',
+        }),
+      ],
+      0,
+      120,
+    );
+
+    const rendered = item?.lines.flat().map((segment) => segment.text).join('');
+    expect(rendered).toContain('inq-permission');
+    expect(rendered).toContain(summary);
+    expect(rendered).toContain('id=perm-123...');
+  });
+
   it('shows choice ids and labels for the selected question', () => {
     const [item] = buildOpenQuestionListItems(
       [

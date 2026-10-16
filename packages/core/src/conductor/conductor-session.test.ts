@@ -1587,6 +1587,9 @@ describe('runConductorSession resume / shutdown', () => {
     mockSend.mockImplementation(async (message: string) => {
       sendCount += 1;
       if (sendCount > 1 && message.includes('permission.pending')) {
+        expect(message).toContain(
+          'operatorSummary: permission.pending worker=implementer tool=Shell cmd=',
+        );
         const permissionIndex = permissionSendCount;
         permissionSendCount += 1;
         expect(permissionIds[permissionIndex]).toBeDefined();

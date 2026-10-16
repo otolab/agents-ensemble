@@ -110,8 +110,13 @@ function readToolCallRecord(
 function readToolCallPayload(
   record: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const toolCall = record.toolCall ?? record.tool_call;
-  return asRecordOrJson(toolCall);
+  const directToolCall = asRecordOrJson(record.toolCall ?? record.tool_call);
+  if (directToolCall) {
+    return directToolCall;
+  }
+
+  const subject = asRecordOrJson(record.subject);
+  return asRecordOrJson(subject?.toolCall ?? subject?.tool_call);
 }
 
 function inferAcpToolName(
@@ -175,6 +180,7 @@ function inferToolNameFromInput(
     record.arguments,
     record.rawInput,
     record.raw_input,
+    record.subject,
     toolCall?.args,
     toolCall?.rawInput,
     toolCall?.raw_input,

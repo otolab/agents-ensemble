@@ -26,6 +26,11 @@ export function formatPermissionSummaryForOperator(
     parts.push(`${operation.field}=${formatLogValue(operation.value)}`);
   }
 
+  const description = extractPermissionDescription(pending.request);
+  if (description) {
+    parts.push(`description=${formatLogValue(description)}`);
+  }
+
   parts.push(`id=${formatLogValue(shortPermissionId(pending.id))}`);
   return parts.join(' ');
 }
@@ -40,16 +45,25 @@ export function extractPermissionOperationSummary(
   request: PermissionRequest,
 ): PermissionOperationSummary | undefined {
   const raw = asRecord(request.raw) ?? {};
-  const toolCall =
-    asRecordOrJson(raw.toolCall) ?? asRecordOrJson(raw.tool_call);
+  const subject = asRecordOrJson(raw.subject);
+  const toolCalls = [
+    asRecordOrJson(raw.toolCall) ?? asRecordOrJson(raw.tool_call),
+    asRecordOrJson(subject?.toolCall) ?? asRecordOrJson(subject?.tool_call),
+  ].filter(
+    (toolCall): toolCall is Record<string, unknown> => toolCall !== undefined,
+  );
+  const toolCall = toolCalls[0];
   const inputs = [
     asRecordOrJson(raw.input),
     asRecordOrJson(raw.arguments),
     asRecordOrJson(raw.rawInput),
     asRecordOrJson(raw.raw_input),
-    asRecordOrJson(toolCall?.args),
-    asRecordOrJson(toolCall?.rawInput),
-    asRecordOrJson(toolCall?.raw_input),
+    subject,
+    ...toolCalls.flatMap((candidate) => [
+      asRecordOrJson(candidate.args),
+      asRecordOrJson(candidate.rawInput),
+      asRecordOrJson(candidate.raw_input),
+    ]),
     raw,
   ].filter((input): input is Record<string, unknown> => input !== undefined);
 
@@ -86,21 +100,23 @@ export function extractPermissionOperationSummary(
     return { field: 'path', value: sanitizeSummaryValue(path) };
   }
 
-  const locationPath = readLocationPath(raw, toolCall);
+  const locationPath = readLocationPath(raw, subject, ...toolCalls);
   if (locationPath) {
     return { field: 'path', value: sanitizeSummaryValue(locationPath) };
-  }
-
-  const toolCallId =
-    readString(toolCall, 'toolCallId', 'tool_call_id') ??
-    readString(raw, 'toolCallId', 'tool_call_id');
-  if (toolCallId) {
-    return { field: 'toolCallId', value: sanitizeSummaryValue(toolCallId) };
   }
 
   const title = readString(toolCall, 'title', 'description');
   if (title) {
     return { field: 'detail', value: sanitizeSummaryValue(title) };
+  }
+
+  const toolCallId =
+    toolCalls
+      .map((candidate) => readString(candidate, 'toolCallId', 'tool_call_id'))
+      .find((value): value is string => value !== undefined) ??
+    readString(raw, 'toolCallId', 'tool_call_id');
+  if (toolCallId) {
+    return { field: 'toolCallId', value: sanitizeSummaryValue(toolCallId) };
   }
 
   const fallback = sanitizeSummaryValue(safeShortenRaw(request.raw));
@@ -109,6 +125,22 @@ export function extractPermissionOperationSummary(
   }
 
   return undefined;
+}
+
+function extractPermissionDescription(request: PermissionRequest): string | undefined {
+  const raw = asRecord(request.raw);
+  const subject = asRecordOrJson(raw?.subject);
+  const toolCalls = [
+    asRecordOrJson(raw?.toolCall) ?? asRecordOrJson(raw?.tool_call),
+    asRecordOrJson(subject?.toolCall) ?? asRecordOrJson(subject?.tool_call),
+  ];
+  const description = [
+    readString(raw, 'description'),
+    readString(subject, 'description'),
+    ...toolCalls.map((toolCall) => readString(toolCall, 'description')),
+  ].find((value): value is string => value !== undefined);
+
+  return description ? sanitizeSummaryValue(description) : undefined;
 }
 
 function shortPermissionId(id: string): string {
@@ -144,9 +176,13 @@ function asRecordOrJson(value: unknown): Record<string, unknown> | undefined {
 
 function readLocationPath(
   raw: Record<string, unknown>,
-  toolCall: Record<string, unknown> | undefined,
+  ...contexts: Array<Record<string, unknown> | undefined>
 ): string | undefined {
-  for (const candidate of [raw.locations, toolCall?.locations]) {
+  const locations = [
+    raw.locations,
+    ...contexts.map((context) => context?.locations),
+  ];
+  for (const candidate of locations) {
     if (!Array.isArray(candidate)) {
       continue;
     }

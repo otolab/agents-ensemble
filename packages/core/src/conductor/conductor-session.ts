@@ -99,6 +99,7 @@ import {
 } from '../session/session-sidecar.js';
 import type { SessionUsageSummary } from '../usage/types.js';
 import type { PendingPermission } from '../permission/pending-permission.js';
+import { formatPermissionSummaryForOperator } from '../permission/format-permission-summary-for-operator.js';
 import { enrichSessionUsageWithCost } from '../usage/enrich-session-usage-cost.js';
 import { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 import type { OperatorInputBinding } from './operator-input-binding.js';
@@ -479,12 +480,19 @@ export async function runConductorSession(
       if (pending) {
         const workerLabel =
           workerSession.runtime.resolveWorkerLabel(workerId) ?? workerId;
+        const operatorSummary = formatPermissionSummaryForOperator(pending, {
+          workerLabel,
+        });
         sessionLogger.emit({
           type: 'permission.pending',
           permission: pending,
           workerLabel,
         });
-        eventQueue.enqueue({ type: 'permission.pending', permission: pending });
+        eventQueue.enqueue({
+          type: 'permission.pending',
+          permission: pending,
+          operatorSummary,
+        });
       }
       return null;
     },
@@ -609,6 +617,16 @@ export async function runConductorSession(
 
   const askHumanTools = createAskHumanTool({
     registry: openQuestions,
+    getPermissionSummary: (permissionId) => {
+      const pending = permissionPipeline.pending.get(permissionId);
+      if (!pending) {
+        return undefined;
+      }
+      const workerLabel =
+        workerSession.runtime.resolveWorkerLabel(pending.workerId) ??
+        pending.workerId;
+      return formatPermissionSummaryForOperator(pending, { workerLabel });
+    },
     onEnqueued: (question) => {
       sessionLogger.emit({ type: 'open.question.enqueued', question });
       options.onOpenQuestionEnqueued?.(question);

@@ -114,6 +114,7 @@ describe('parsePermissionRequest', () => {
     ],
     ['read payload', permissionRequestFixtures.readPath, 'Read'],
     ['edit payload with snake_case fields', permissionRequestFixtures.editPath, 'Edit'],
+    ['Cursor ACP nested Edit payload', permissionRequestFixtures.editCursorAcp, 'Edit'],
     ['execute id-only payload', permissionRequestFixtures.executeIdOnly, 'Shell'],
   ])('infers tool name from %s', (_name, payload, expectedTool) => {
     expect(parsePermissionRequest(payload).toolName).toBe(expectedTool);
@@ -145,6 +146,14 @@ describe('ACP permission request fixtures', () => {
       { field: 'path', value: 'packages/cli/src/session-log-lines.ts' },
     ],
     [
+      permissionRequestFixtures.editCursorAcp,
+      {
+        field: 'path',
+        value:
+          'packages/core/src/permission/format-permission-summary-for-operator.ts',
+      },
+    ],
+    [
       permissionRequestFixtures.executeIdOnly,
       { field: 'toolCallId', value: 'exec-id-only-1' },
     ],
@@ -168,6 +177,20 @@ describe('ACP permission request fixtures', () => {
       request,
     }, { workerLabel: 'implementer' })).toBe(
       'permission.pending worker=implementer tool=Shell cmd="pnpm test" id=4bf9479c...',
+    );
+  });
+
+  it('includes the explicit ACP permission description with the Edit target', () => {
+    const request = parsePermissionRequest(permissionRequestFixtures.editCursorAcp);
+    const summary = formatPermissionSummaryForOperator({
+      id: 'permission-edit-1234567890',
+      workerId: 'worker-uuid',
+      createdAt: 0,
+      request,
+    }, { workerLabel: 'implementer' });
+
+    expect(summary).toBe(
+      'permission.pending worker=implementer tool=Edit path=packages/core/src/permission/format-permission-summary-for-operator.ts description="Allow the agent to update the permission summary renderer." id=permissi...',
     );
   });
 });

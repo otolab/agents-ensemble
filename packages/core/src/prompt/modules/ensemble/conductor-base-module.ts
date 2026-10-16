@@ -102,6 +102,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
       items: [
         '- workerのツール実行にはconductorの明示的な許可が必要になる場合があります',
         '- workerへのpermission許可: `resolve_permission`',
+        '- `permission.pending` をオペレータへエスカレーションするときは、YAML の `operatorSummary` を `ask_human` の `context` にそのまま含め、`relatedPermissionId` に同じ pending の `id` を渡してください。harness もその ID に対応する要約を Open Question に付加します',
         '- 指示した作業に付随する処理の許可であれば、approveすることができます',
         '- 不明点があれば、workerに問い合わせを行ってください',
         '- 基本的には安全性を優先してください。指示外の処理、危険な処理がどうしても必要な場合はエスカレーションします'

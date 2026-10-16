@@ -31,6 +31,32 @@ export const permissionRequestFixtures = {
       raw_input: { filePath: 'packages/cli/src/session-log-lines.ts' },
     },
   },
+  editCursorAcp: {
+    sessionId: 'session-cursor-edit',
+    title: 'Approve file edit?',
+    description: 'Allow the agent to update the permission summary renderer.',
+    subject: {
+      type: 'tool_call',
+      toolCall: {
+        toolCallId: 'edit-cursor-1234567890',
+        title: 'Edit permission summary renderer',
+        kind: 'edit',
+        locations: [
+          {
+            path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
+            line: 42,
+          },
+        ],
+        rawInput: {
+          edits: [{ oldString: 'old value', newString: 'new value' }],
+        },
+      },
+    },
+    options: [
+      { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },
+      { optionId: 'reject-once', kind: 'reject_once', name: 'Reject' },
+    ],
+  },
   executeIdOnly: {
     sessionId: 'session-execute-id-only',
     toolCall: {
