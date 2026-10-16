@@ -52,6 +52,7 @@ import { parseIssueUrl, type IssueRef } from '../issue/issue-ref.js';
 import {
   resolveWorkerWorkspace,
   removeWorkerWorktree,
+  type RemoveWorkerWorktreeResult,
   type WorkerWorktreeMode,
   type WorktreeRef,
 } from '../worktree/worktree.js';
@@ -1254,7 +1255,7 @@ export async function runConductorSession(
         !workerWorktree.inRepo
       ) {
         emitTeardownPhase('worktree');
-        await emitWorktreeRemoval(sessionLogger, options.repoRoot, issue);
+        await emitWorktreeRemoval(sessionLogger, options.repoRoot, workerWorktree);
       }
     } finally {
       process.off('SIGINT', onTeardownSignal);
@@ -1282,9 +1283,22 @@ function createPiKickoffPrompt(issueUrl: string): string {
 async function emitWorktreeRemoval(
   sessionLogger: SessionLogger,
   repoRoot: string,
-  issue: IssueRef,
+  worktree: WorktreeRef,
 ): Promise<void> {
-  const result = await removeWorkerWorktree(repoRoot, issue);
+  let result: RemoveWorkerWorktreeResult;
+  try {
+    result = await removeWorkerWorktree(repoRoot, worktree.issue);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    sessionLogger.emit({
+      type: 'harness.worktree.remove_failed',
+      path: worktree.path,
+      branch: worktree.branch,
+      error: `cleanup threw unexpectedly: ${detail}`,
+    });
+    return;
+  }
+
   switch (result.status) {
     case 'removed':
       sessionLogger.emit({
