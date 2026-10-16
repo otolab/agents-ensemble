@@ -193,8 +193,10 @@ export async function executeIssueCommand(
   if (useTui) {
     sessionLogger.subscribe(tuiHost!.telemetrySink);
   } else {
-    sessionLogger.subscribe(createHarnessSink({ verbose: conductorVerbose }));
-    sessionLogger.subscribe(createObservationSink());
+    sessionLogger.subscribe(
+      createHarnessSink({ verbose: conductorVerbose, writeStderr }),
+    );
+    sessionLogger.subscribe(createObservationSink({ writeStderr }));
   }
   sessionLogger.subscribe(
     createSessionDisplaySink({
