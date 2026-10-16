@@ -60,7 +60,7 @@ program
   )
   .option(
     '--profile <name>',
-    'Team profile name or path (default: config profile.default, ENSEMBLE_DEFAULT_PROFILE env, else bundled implementer-and-reviewer). Name resolves: project .ensemble/teams/ > ~/.ensemble/teams/ > bundled > legacy profiles/',
+    'Team profile name or path (default: config profile.default, ENSEMBLE_DEFAULT_PROFILE env, else bundled implementer-and-reviewer-v2). Name resolves: project .ensemble/teams/ > ~/.ensemble/teams/ > bundled > legacy profiles/',
   )
   .option('--model <id>', 'Conductor model id (default: config conductor.model, else default)')
   .option(

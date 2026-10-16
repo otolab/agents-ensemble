@@ -450,10 +450,18 @@ describe('profileWorkersToSessionSpecs', () => {
 });
 
 describe('resolveProfilePath', () => {
-  it('resolves default alias to bundled implementer-and-reviewer profile', () => {
-    expect(resolveProfilePath('default', '/repo')).toBe(bundledDefaultProfilePath());
+  it('resolves default alias to bundled implementer-and-reviewer-v2 profile', () => {
+    expect(resolveProfilePath('default', '/repo')).toBe(
+      bundledProfilePath('implementer-and-reviewer-v2'),
+    );
+    expect(bundledDefaultProfilePath()).toBe(
+      bundledProfilePath('implementer-and-reviewer-v2'),
+    );
+  });
+
+  it('continues to resolve the bundled implementer-and-reviewer v1 profile by name', () => {
     expect(resolveProfilePath('implementer-and-reviewer', '/repo')).toBe(
-      bundledDefaultProfilePath(),
+      bundledProfilePath('implementer-and-reviewer'),
     );
   });
 

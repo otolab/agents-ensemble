@@ -9,7 +9,7 @@
 
 profile:
   # --profile 未指定時の team profile（名前またはパス）
-  default: implementer-and-reviewer
+  default: implementer-and-reviewer-v2
 
 conductor:
   # conductor backend（profile で指定した場合は profile が優先。cursor | pi）

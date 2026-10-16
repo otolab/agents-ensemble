@@ -47,7 +47,7 @@ cp config.example.yaml ~/.ensemble/config.yaml
 
 ```yaml
 profile:
-  default: implementer-and-reviewer   # ENSEMBLE_DEFAULT_PROFILE 相当
+  default: implementer-and-reviewer-v2 # ENSEMBLE_DEFAULT_PROFILE 相当
 
 conductor:
   backend: pi                        # cursor（既定） | pi

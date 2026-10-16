@@ -66,3 +66,7 @@ Skill との概念対応: **Skill = 作業手順の正本**、**team-profile = �
 - [ADR 0004](0004-profile-agents-without-fixed-skills.md) — Skill 非固定（本文は不変）
 - [elements.md](../elements.md) § プロファイル
 - [user-teams.md](../user-teams.md) — `~/.ensemble/teams/` 規約
+
+## 現在の組み込み default
+
+[#431](https://github.com/otolab/agents-ensemble/issues/431) により、現在の組み込み default は `implementer-and-reviewer-v2` です。`default` エイリアスも v2 を解決します。上記 Decision はこの変更前の記録であり、v1 の `implementer-and-reviewer` は明示指定用として同梱されています。

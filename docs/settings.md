@@ -78,7 +78,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 
 | 設定 | config キー | 環境変数 | CLI | コード default | 解決 |
 |------|-------------|----------|-----|----------------|------|
-| 既定 team profile | `profile.default` | `ENSEMBLE_DEFAULT_PROFILE` | `--profile` | 同梱 `implementer-and-reviewer` | A |
+| 既定 team profile | `profile.default` | `ENSEMBLE_DEFAULT_PROFILE` | `--profile` | 同梱 `implementer-and-reviewer-v2` | A |
 | conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | `--model` | `default` | A |
 | conductor 詳細 telemetry | `conductor.verbose` | `CONDUCTOR_VERBOSE` | `--verbose` | `false` | A |
 | conductor backend | `conductor.backend` | — | — | `cursor` | profile > config > default |
