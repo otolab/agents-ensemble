@@ -90,9 +90,25 @@ vi.mock('./tui/create-issue-session-tui-host.js', () => ({
 }));
 
 import { executeIssueCommand } from './issue-command.js';
+import { DEFAULT_ENSEMBLE_CONFIG } from '../../core/src/config/defaults.js';
 import { runIssueSession as runIssueSessionImpl } from '../../core/src/conductor/issue-session.js';
 
 const issueUrl = 'https://github.com/org/repo/issues/1';
+
+function runIssueSessionWithTestConfig(
+  options: Parameters<typeof runIssueSessionImpl>[0],
+) {
+  return runIssueSessionImpl({
+    ...options,
+    ensembleConfig: {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'cursor',
+      },
+    },
+  });
+}
 
 function defaultConductorUsage() {
   return {
@@ -187,7 +203,7 @@ describe('executeIssueCommand with the core session', () => {
       {
         isOperatorInputInteractive: (message) => Boolean(message),
         isOperatorInputTty: () => tty,
-        runIssueSession: runIssueSessionImpl,
+        runIssueSession: runIssueSessionWithTestConfig,
       },
     );
 
@@ -248,7 +264,7 @@ describe('executeIssueCommand with the core session', () => {
         {
           isOperatorInputInteractive: (message) => message === undefined,
           isOperatorInputTty: () => true,
-          runIssueSession: runIssueSessionImpl,
+          runIssueSession: runIssueSessionWithTestConfig,
         },
       ),
       'plain TTY post-loop session',
@@ -286,7 +302,7 @@ describe('executeIssueCommand with the core session', () => {
       {
         isOperatorInputInteractive: () => true,
         isOperatorInputTty: () => true,
-        runIssueSession: runIssueSessionImpl,
+        runIssueSession: runIssueSessionWithTestConfig,
       },
     );
 
@@ -346,7 +362,7 @@ describe('executeIssueCommand with the core session', () => {
       {
         isOperatorInputInteractive: () => true,
         isOperatorInputTty: () => true,
-        runIssueSession: runIssueSessionImpl,
+        runIssueSession: runIssueSessionWithTestConfig,
       },
     );
 
@@ -413,7 +429,7 @@ describe('executeIssueCommand with the core session', () => {
         {
           isOperatorInputInteractive: (message) => Boolean(message),
           isOperatorInputTty: () => false,
-          runIssueSession: runIssueSessionImpl,
+          runIssueSession: runIssueSessionWithTestConfig,
         },
       ),
       'one-shot error session',
@@ -466,7 +482,7 @@ describe('executeIssueCommand with the core session', () => {
         {
           isOperatorInputInteractive: (message) => Boolean(message),
           isOperatorInputTty: () => false,
-          runIssueSession: runIssueSessionImpl,
+          runIssueSession: runIssueSessionWithTestConfig,
         },
       ),
       'one-shot ask_human session',

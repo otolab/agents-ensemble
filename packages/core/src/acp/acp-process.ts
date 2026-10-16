@@ -56,7 +56,11 @@ export async function spawnAcpProcess(
   });
 
   const drainChildStderr = async (): Promise<void> => {
-    if (!child.stderr.readableEnded) {
+    if (
+      !child.stderr.readableEnded &&
+      child.exitCode === null &&
+      child.signalCode === null
+    ) {
       await Promise.race([
         once(child.stderr, 'end'),
         once(child, 'exit'),

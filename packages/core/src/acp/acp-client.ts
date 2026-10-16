@@ -162,12 +162,11 @@ export class AcpClient {
 
   async close(): Promise<void> {
     this.peer.close();
-    this.options.childProcess?.stdin?.end();
-    if (this.options.drainChildStderr) {
-      await this.options.drainChildStderr();
-    }
     if (this.options.childProcess) {
       await terminateChildProcess(this.options.childProcess);
+    }
+    if (this.options.drainChildStderr) {
+      await this.options.drainChildStderr();
     }
   }
 
@@ -220,7 +219,17 @@ function defaultPermissionHandler(): typeof DEFAULT_PERMISSION_DECISION {
   return DEFAULT_PERMISSION_DECISION;
 }
 
-export async function terminateChildProcess(child: ChildProcess): Promise<void> {
+export interface ChildProcessTerminationOptions {
+  /** Grace period after SIGTERM before SIGKILL. */
+  graceMs?: number;
+  /** Maximum time to wait for the child to be reaped after SIGKILL. */
+  forceKillWaitMs?: number;
+}
+
+export async function terminateChildProcess(
+  child: ChildProcess,
+  options: ChildProcessTerminationOptions = {},
+): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
 
   child.stdin?.end();
@@ -229,10 +238,18 @@ export async function terminateChildProcess(child: ChildProcess): Promise<void> 
     child.kill('SIGTERM');
   }
 
-  const exited = await waitForChildExit(child, 5_000);
-  if (!exited && !child.killed) {
+  const exited = await waitForChildExit(child, options.graceMs ?? 5_000);
+  if (!exited) {
     child.kill('SIGKILL');
-    await waitForChildExit(child, 2_000);
+    const forceKilled = await waitForChildExit(
+      child,
+      options.forceKillWaitMs ?? 2_000,
+    );
+    if (!forceKilled) {
+      throw new Error(
+        `Child process ${child.pid ?? '<unknown>'} did not exit after SIGKILL`,
+      );
+    }
   }
 }
 
