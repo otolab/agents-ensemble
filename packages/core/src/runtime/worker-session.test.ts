@@ -206,6 +206,106 @@ describe('WorkerSession', () => {
     await session.stop();
   });
 
+  it('queues lazy preempt during the init prompt without cancelling init', async () => {
+    const prompts: string[] = [];
+    const promptEvents: string[] = [];
+    const completedSources: Array<string | undefined> = [];
+    let resolveInitStarted!: () => void;
+    let releaseInit!: () => void;
+    const initStarted = new Promise<void>((resolve) => {
+      resolveInitStarted = resolve;
+    });
+    const initGate = new Promise<void>((resolve) => {
+      releaseInit = resolve;
+    });
+    const promptSession = vi.fn(async (_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        resolveInitStarted();
+        await initGate;
+      }
+      return { stopReason: 'end_turn', responseText: 'pong' };
+    });
+    const cancelSession = vi.fn();
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          cancelSession,
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+      onPromptTelemetry: (event) => {
+        promptEvents.push(`${event.source}:${event.phase}`);
+      },
+    });
+    session.inbox.subscribe((message) => {
+      if (message.type === 'worker.completed') {
+        completedSources.push(message.result.source);
+      }
+    });
+
+    session.startWorkers();
+    expect(session.sendWorkerMessage('ping-1', 'first instruction').status).toBe(
+      'sent',
+    );
+
+    try {
+      await initStarted;
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('init prompt');
+
+      expect(
+        session.sendWorkerMessage('ping-1', 'replacement instruction', {
+          preempt: true,
+        }),
+      ).toEqual({
+        status: 'queued',
+        worker: 'ping-1',
+        position: 1,
+      });
+      expect(cancelSession).not.toHaveBeenCalled();
+      expect(prompts).toHaveLength(1);
+      expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+        state: 'processing',
+        queuePreview: [],
+        preemptPending: true,
+        cancelInFlight: false,
+      });
+      expect(promptEvents).toEqual(['harness:started']);
+
+      releaseInit();
+      await session.runtime.waitForIdle();
+      await session.inbox.drain();
+
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toBe('replacement instruction');
+      expect(promptEvents).toEqual([
+        'harness:started',
+        'harness:completed',
+        'conductor:started',
+        'conductor:completed',
+      ]);
+      expect(completedSources).toEqual(['harness', 'conductor']);
+      expect(cancelSession).not.toHaveBeenCalled();
+    } finally {
+      releaseInit();
+      await session.stop();
+    }
+  });
+
   it('keeps the first instruction queued while lazy init waits for permission', async () => {
     const prompts: string[] = [];
     let permissionId: string | undefined;

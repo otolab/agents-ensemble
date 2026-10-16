@@ -51,6 +51,8 @@ interface ResidentWorker {
   attached: AttachedWorker;
   state: 'idle' | 'processing';
   queue: string[];
+  /** Lazy attach init stays active when conductor preempts its queued instruction. */
+  lazyInitInFlight: boolean;
   /** `session/cancel` 応答待ちの新指示。 */
   preemptInstruction?: string;
   cancelInFlight: boolean;
@@ -263,6 +265,9 @@ export class WorkerRuntime {
       if (options?.preempt) {
         resident.queue.length = 0;
         resident.preemptInstruction = text;
+        if (resident.lazyInitInFlight) {
+          return { status: 'queued', worker: name, position: 1 };
+        }
         if (!resident.cancelInFlight) {
           resident.cancelInFlight = true;
           cancelWorkerAcpPrompt(resident.attached.session);
@@ -479,6 +484,7 @@ export class WorkerRuntime {
         attached,
         state: 'idle',
         queue: attaching.queue,
+        lazyInitInFlight: firstInstruction !== undefined,
         ...(attaching.preemptInstruction
           ? { preemptInstruction: attaching.preemptInstruction }
           : {}),
@@ -609,6 +615,9 @@ export class WorkerRuntime {
         this.options.inbox.publishWorkerFailed(resident.started, error);
       }
     } finally {
+      if (source === 'harness' && resident.lazyInitInFlight) {
+        resident.lazyInitInFlight = false;
+      }
       this.finishPromptRound(resident.workerId);
       const preempt = resident.preemptInstruction;
       if (preempt) {
