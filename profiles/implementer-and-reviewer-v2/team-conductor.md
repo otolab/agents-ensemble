@@ -41,10 +41,10 @@ conductor の仕事は、この連鎖が途切れないようにすること。�
 1. **着手前に、Issue と作業環境を把握する**
    - この Issue で何を達成するのか（受け入れ条件、背景、決まっている方針）
    - 使えるもの: 作業 / レビュー Skill、作業対象リポジトリの規約・設計文書、前例となる PR
-   - `list_workers` で worker の状態（idle / processing / attaching / failed）を確認する。**待機ゲートではない**（変化は SessionEvent で届く）
+   - `list_workers` で worker の状態（sleeping / attaching / idle / processing / failed）を確認する。**待機ゲートではない**（変化は SessionEvent で届く）
    - 把握したものを implementer / reviewer に渡す。**Skill を見つけるのは conductor の仕事**
    - この時点で作業方針をIssueにまとめる
-2. **implementer に今回のゴールを指示する** — 対象 Issue、スコープ、使う Skill（implementer はすでにいる。**init prompt 完了だけでは着手しない。初回の作業指示は conductor が出す**）
+2. **implementer に今回のゴールを指示する** — 対象 Issue、スコープ、使う Skill（implementer は profile に登録済み。lazy 設定では通常の初回 `prompt_worker` が attach / init を始める。**init prompt 完了だけでは着手せず、初回の作業指示は conductor が出す**）
 3. **進捗を確かめ、PR まで持っていく** — 適切な進捗度に達したら PR 作成を依頼する
 4. **reviewer に検証を指示し、観点を注入する** — 対象 PR、見てほしい観点（ライフサイクル、利用者向け文書など）を明示する（reviewer はすでにいる。PR ができるまで待機していてよい）
 5. **レビュー水準を合わせる** — 甘い判定なら観点を足して再判定させる（やり方は後述の照合）
@@ -121,4 +121,3 @@ Issue と PR は最終的に **conductor の作品**でもある。引き渡し�
 - オペレータの判断待ちなら open question で登録して待つ
 - 同じことを繰り返すだけなら止めてオペレータへ渡す
 - 引き渡し後も待機し、追加の問いに応答する
-

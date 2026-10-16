@@ -117,7 +117,7 @@ conductor の LLM backend は Cursor SDK と Pi 1.x (`createAgentSession`) か�
 | 手段 | 内容 |
 |------|------|
 | `mode: "agent"` | SDK 実行モード（[adr/0006-conductor-agent-mode.md](adr/0006-conductor-agent-mode.md)）。振る舞いの正本は下記プロンプト / materials |
-| `customTools` | conductor 用: `ask_human`, `answer_open_question`, `list_open_questions`, `get_open_question`, `resolve_permission`, `register_github_watch`, `unregister_github_watch`（[ADR 0007](adr/0007-permission-pipeline.md), [ADR 0008](adr/0008-human-dialogue-open-questions.md)）。worker 起動はセッション開始時 |
+| `customTools` | conductor 用: `ask_human`, `answer_open_question`, `list_open_questions`, `get_open_question`, `resolve_permission`, `register_github_watch`, `unregister_github_watch`（[ADR 0007](adr/0007-permission-pipeline.md), [ADR 0008](adr/0008-human-dialogue-open-questions.md)）。worker は profile に登録され、ACP attach は eager または初回 `prompt_worker` 時 |
 | プロンプト / materials | PromptModule と profile materials で指揮専任・委任方針を明示（conductor の正本） |
 
 conductor は **理解と dispatch に専念**し、ファイル編集・テスト実行は worker の domain とする。
@@ -209,14 +209,23 @@ conductor が制御する実行単位。**種別（kind）** によって読む 
 
 ### 起動パターン
 
-各 dispatch で:
+`session.lazyWorkers`（既定 `false`）で attach 時期を選ぶ。どちらの設定でも profile worker はセッション開始時に登録され、worktree は harness が解決する。
+
+- **eager（既定）**: セッション開始時に各 worker について ACP process を spawn し、attach / init prompt を実行する。
+- **lazy**: profile 名と kind を登録し、初期状態を `sleeping` とする。対象への通常の初回 `prompt_worker` が ACP attach / init prompt を始め、その init prompt が終わってから元の instruction を別の `session/prompt` ラウンドとして送る。専用 wake 操作はない。
+
+実際の attach 時:
 
 1. `spawn(command, args, { cwd, env, ... })` — **ツール・環境は起動オプションで明示**（既定は `agent acp` = preset `cursor`）
-2. JSON-RPC: `initialize` → `authenticate` → `session/new`（`cwd`, `mcpServers` 等）
-3. `session/prompt` に **種別用起動プロンプト** + Skill 名 / Issue URL
+2. JSON-RPC: `initialize` → `authenticate` → `session/new`（または sidecar session の `session/load`）
+3. `session/prompt` に **種別用起動プロンプト** + Skill 名 / Issue URL（resume では resume prompt）
 4. `session/update` を conductor が購読（進捗）
 5. `session/request_permission` → conductor が応答
-6. 完了後 session 終了（次フェーズは **新 session**）
+6. init 完了後は ACP session を保持し、後続 `prompt_worker` を同じ session に送る。終了時に bridge を閉じる。
+
+lazy mode の初回 instruction は init prompt と別ラウンドにする。これにより `source: harness` の init と `source: conductor` の指示が区別され、各 `worker.round` と prompt lifecycle event の対称性を維持する。初回 instruction は init / permission 待ちの間 runtime queue に保持する。
+
+`list_workers` / `get_worker_status` は登録済み worker 全員を返し、runtime state `sleeping` は未 attach、`idle` は attach 済みで prompt を実行していない状態を表す。TUI は `sleep` / `idle` と表示を分ける。resume は sidecar の attach policy を復元し、ACP session ID を持つ worker だけを先に `session/load` する。未使用 worker は sleeping のまま。旧 sidecar に policy がない場合は eager とする。
 
 worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起動文書は conductor が与え、手順の正本は dispatch 先の worktree（`cwd`）上の Skill ファイルとする。
 
@@ -250,8 +259,9 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 [ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md) を参照。
 
 ```
-セッション開始 ──attach（待機 prompt）──► worker 常駐（agent acp プロセス + ACP session）
-conductor ──prompt_worker──► WorkerOutboundQueue ──sendWorkerMessage──► session/prompt
+セッション開始 ──登録──► worker roster ──lazyWorkers=true──► sleeping（ACP 未起動）
+eager または初回 prompt_worker ──attach / init──► worker 常駐（agent acp プロセス + ACP session）
+conductor ──prompt_worker──► WorkerOutboundQueue ──sendWorkerMessage──► 初回は attach / init 後に instruction、以降 session/prompt
 conductor ──list_workers / get_worker_status──► WorkerRuntime（読み取り専用・イベント列に積まない）
 conductor ──register/unregister_github_watch──► GitHubMonitor cursor（明示 PR watch）──► 即時 bootstrap poll（register 時）
 conductor ──get_session_usage / get_usage──────► SessionUsageTracker（読み取り専用・イベント列に積まない）
@@ -264,6 +274,7 @@ ensemble 終了 ──stop────────► 全 worker bridge close
 - GitHub monitor は Search で後から初めて見つけた PR にも CI bootstrap を適用する。CI は GraphQL の CheckRun `checkSuite.commit.oid` / StatusContext `commit.oid` を使って check を commit SHA ごとに集約し、sidecar の `lastAggregateBySha[sha]` に `running` / `failed` / `completed` を保存する。集約状態が変わったときだけ既存 kind `ci.completed` を通知し、SHA を解決できない check は除外する。status poll が失敗した場合は `ciBootstrapPending` を保存し、次回の成功まで初期化を完了扱いにしない
 - **常駐** = ensemble 中 `agent acp` プロセスを殺さない（attach / init prompt 後も bridge 保持）。
 - **sendWorkerMessage** = 既存 session への `session/prompt`（dispatch ではない）。
+- **worker 登録と attach** = profile worker 名はセッション開始時にすべて登録される。`session.lazyWorkers: true` のとき sleeping worker への通常の初回 `prompt_worker` が attach / init を起動し、init 後に instruction を送る。起動済み worker はセッション終了まで常駐する。
 - **`list_workers` / `get_worker_status`** = harness 上の worker 状態照会（読み取り専用）。`prompt_worker` は作業指示専用。オペレータの状態質問には状態照会ツールを使い、Issue / PR を読まず tool 結果で答える。返却は YAML。セッションイベント列には積まない（[Issue #70](https://github.com/otolab/agents-ensemble/issues/70)）。
 - **`get_session_usage` / `get_usage`** = harness が蓄積した LLM トークン使用量照会（読み取り専用）。conductor 各 backend の agent send、worker 各 prompt は usage（無い場合は prompt/response から推定、`source: estimated`）を使う。コンテキスト上限は SDK 1.0.27 時点で取得不可のため既定は `limit: null`（[Issue #102](https://github.com/otolab/agents-ensemble/issues/102)）。返却は YAML。イベント列には積まない。
 - 同一 worker は ACP 制約により prompt **直列**（per-worker キュー）。worker 間は並行可。

@@ -35,6 +35,8 @@ export interface SessionSidecar {
   conductorAgentId: string;
   /** 起動時に選択した conductor backend。旧 sidecar の欠落値は cursor。 */
   conductorBackend?: ConductorBackend;
+  /** 初回 `prompt_worker` まで ACP attach を遅延する。旧 sidecar は eager。 */
+  lazyWorkers?: boolean;
   issueUrl: string;
   repoRoot: string;
   profile: ResolvedProfile;
@@ -231,6 +233,12 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
   ) {
     throw new Error('Invalid session sidecar: mcpConfigDigest');
   }
+  if (
+    record.lazyWorkers !== undefined &&
+    typeof record.lazyWorkers !== 'boolean'
+  ) {
+    throw new Error('Invalid session sidecar: lazyWorkers');
+  }
   const updatedAt =
     typeof record.updatedAt === 'number' ? record.updatedAt : 0;
 
@@ -263,6 +271,9 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     version: SESSION_SIDECAR_VERSION,
     conductorAgentId: record.conductorAgentId,
     conductorBackend,
+    ...(typeof record.lazyWorkers === 'boolean'
+      ? { lazyWorkers: record.lazyWorkers }
+      : {}),
     issueUrl: record.issueUrl,
     repoRoot: record.repoRoot,
     profile: record.profile as ResolvedProfile,

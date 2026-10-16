@@ -46,12 +46,645 @@ describe('WorkerSession', () => {
     });
 
     session.startWorkers();
+    await session.runtime.waitForIdle();
+
+    expect(connectAcp).toHaveBeenCalledOnce();
+    expect(session.runtime.getWorkerStatus('ping-1')?.state).toBe('idle');
     await session.stop();
 
     expect(session.startedWorkerIds).toHaveLength(1);
     expect(connectAcp).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
     expect(session.runtime.attachedCount).toBe(0);
+  });
+
+  it('keeps lazy workers asleep until their first instruction, then stays resident', async () => {
+    const prompts: string[] = [];
+    const completedSources: Array<string | undefined> = [];
+    const promptSession = vi.fn(async (_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      return { stopReason: 'end_turn', responseText: 'pong' };
+    });
+    const connectAcp = vi.fn(async () =>
+      ({
+        newSession: vi.fn().mockResolvedValue('sess-1'),
+        loadSession: vi.fn().mockResolvedValue(undefined),
+        promptSession,
+        close: vi.fn().mockResolvedValue(undefined),
+      }) as unknown as AcpBridge,
+    );
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [
+        { name: 'ping-1', kind: 'ping', prompt: { instructions: ['pong only'] } },
+        { name: 'ping-2', kind: 'ping', prompt: { instructions: ['pong only'] } },
+      ],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [
+          { name: 'ping-1', kind: 'ping' },
+          { name: 'ping-2', kind: 'ping' },
+        ],
+        kinds: ['ping'],
+      },
+      connectAcp,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+    });
+    session.inbox.subscribe((message) => {
+      if (message.type === 'worker.completed') {
+        completedSources.push(message.result.source);
+      }
+    });
+
+    session.startWorkers();
+
+    expect(connectAcp).not.toHaveBeenCalled();
+    expect(session.runtime.attachedCount).toBe(0);
+    expect(session.runtime.listWorkerStatuses().map(({ state }) => state)).toEqual([
+      'sleeping',
+      'sleeping',
+    ]);
+
+    expect(session.sendWorkerMessage('ping-1', 'first instruction')).toEqual({
+      status: 'sent',
+      worker: 'ping-1',
+    });
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    expect(connectAcp).toHaveBeenCalledOnce();
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain('init prompt');
+    expect(prompts[1]).toBe('first instruction');
+    expect(completedSources).toEqual(['harness', 'conductor']);
+    expect(session.runtime.getWorkerStatus('ping-2')?.state).toBe('sleeping');
+
+    expect(session.sendWorkerMessage('ping-1', 'second instruction')).toEqual({
+      status: 'sent',
+      worker: 'ping-1',
+    });
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    expect(connectAcp).toHaveBeenCalledOnce();
+    expect(prompts).toHaveLength(3);
+    expect(prompts[2]).toBe('second instruction');
+    expect(completedSources).toEqual(['harness', 'conductor', 'conductor']);
+    expect(session.runtime.getWorkerStatus('ping-1')?.state).toBe('idle');
+
+    await session.stop();
+  });
+
+  it('queues prompts while lazy attach is in flight and applies preempt after init', async () => {
+    let resolveBridge: ((bridge: AcpBridge) => void) | undefined;
+    const prompts: string[] = [];
+    const connectAcp = vi.fn(
+      () =>
+        new Promise<AcpBridge>((resolve) => {
+          resolveBridge = resolve;
+        }),
+    );
+    const promptSession = vi.fn(async (_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      return { stopReason: 'end_turn', responseText: 'pong' };
+    });
+    const bridge = {
+      newSession: vi.fn().mockResolvedValue('sess-1'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession,
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+    });
+
+    session.startWorkers();
+    expect(session.sendWorkerMessage('ping-1', 'first instruction').status).toBe(
+      'sent',
+    );
+    expect(session.sendWorkerMessage('ping-1', 'queued instruction')).toEqual({
+      status: 'queued',
+      worker: 'ping-1',
+      position: 2,
+    });
+    expect(
+      session.sendWorkerMessage('ping-1', 'preempt instruction', {
+        preempt: true,
+      }),
+    ).toEqual({
+      status: 'queued',
+      worker: 'ping-1',
+      position: 1,
+    });
+    expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+      state: 'attaching',
+      queuePreview: [],
+      preemptPending: true,
+    });
+
+    resolveBridge?.(bridge);
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain('init prompt');
+    expect(prompts[1]).toBe('preempt instruction');
+    await session.stop();
+  });
+
+  it('force stop during lazy attach closes the late session without starting init', async () => {
+    let resolveBridge: ((bridge: AcpBridge) => void) | undefined;
+    const connectAcp = vi.fn(
+      () =>
+        new Promise<AcpBridge>((resolve) => {
+          resolveBridge = resolve;
+        }),
+    );
+    const close = vi.fn().mockResolvedValue(undefined);
+    const promptSession = vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      responseText: 'unexpected',
+    });
+    const bridge = {
+      newSession: vi.fn().mockResolvedValue('sess-1'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession,
+      close,
+    } as unknown as AcpBridge;
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+    });
+    const workerMessages: string[] = [];
+    session.inbox.subscribe((message) => {
+      if (
+        message.type === 'worker.completed' ||
+        message.type === 'worker.failed'
+      ) {
+        workerMessages.push(message.type);
+      }
+    });
+
+    session.startWorkers();
+    session.sendWorkerMessage('ping-1', 'first instruction');
+    session.sendWorkerMessage('ping-1', 'queued instruction');
+    await vi.waitFor(() => {
+      expect(connectAcp).toHaveBeenCalledOnce();
+    });
+
+    await session.stop({ force: true });
+    expect(close).not.toHaveBeenCalled();
+
+    resolveBridge?.(bridge);
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledOnce();
+    });
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    expect(promptSession).not.toHaveBeenCalled();
+    expect(session.runtime.attachedCount).toBe(0);
+    expect(workerMessages).toEqual([]);
+    expect(session.sendWorkerMessage('ping-1', 'after shutdown')).toMatchObject({
+      status: 'error',
+      message: 'Worker runtime has been shut down',
+    });
+  });
+
+  it('queues lazy preempt during the init prompt without cancelling init', async () => {
+    const prompts: string[] = [];
+    const promptEvents: string[] = [];
+    const completedSources: Array<string | undefined> = [];
+    let resolveInitStarted!: () => void;
+    let releaseInit!: () => void;
+    const initStarted = new Promise<void>((resolve) => {
+      resolveInitStarted = resolve;
+    });
+    const initGate = new Promise<void>((resolve) => {
+      releaseInit = resolve;
+    });
+    const promptSession = vi.fn(async (_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        resolveInitStarted();
+        await initGate;
+      }
+      return { stopReason: 'end_turn', responseText: 'pong' };
+    });
+    const cancelSession = vi.fn();
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          cancelSession,
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+      onPromptTelemetry: (event) => {
+        promptEvents.push(`${event.source}:${event.phase}`);
+      },
+    });
+    session.inbox.subscribe((message) => {
+      if (message.type === 'worker.completed') {
+        completedSources.push(message.result.source);
+      }
+    });
+
+    session.startWorkers();
+    expect(session.sendWorkerMessage('ping-1', 'first instruction').status).toBe(
+      'sent',
+    );
+
+    try {
+      await initStarted;
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('init prompt');
+
+      expect(
+        session.sendWorkerMessage('ping-1', 'replacement instruction', {
+          preempt: true,
+        }),
+      ).toEqual({
+        status: 'queued',
+        worker: 'ping-1',
+        position: 1,
+      });
+      expect(cancelSession).not.toHaveBeenCalled();
+      expect(prompts).toHaveLength(1);
+      expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+        state: 'processing',
+        queuePreview: [],
+        preemptPending: true,
+        cancelInFlight: false,
+      });
+      expect(promptEvents).toEqual(['harness:started']);
+
+      releaseInit();
+      await session.runtime.waitForIdle();
+      await session.inbox.drain();
+
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toBe('replacement instruction');
+      expect(promptEvents).toEqual([
+        'harness:started',
+        'harness:completed',
+        'conductor:started',
+        'conductor:completed',
+      ]);
+      expect(completedSources).toEqual(['harness', 'conductor']);
+      expect(cancelSession).not.toHaveBeenCalled();
+    } finally {
+      releaseInit();
+      await session.stop();
+    }
+  });
+
+  it('fails lazy worker and drains queued instructions when init prompt rejects', async () => {
+    const prompts: string[] = [];
+    const failures: string[] = [];
+    let resolveInitStarted!: () => void;
+    let rejectInit: ((error: Error) => void) | undefined;
+    const initStarted = new Promise<void>((resolve) => {
+      resolveInitStarted = resolve;
+    });
+    const promptSession = vi.fn((_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        resolveInitStarted();
+        return new Promise<{ stopReason: string }>((_resolve, reject) => {
+          rejectInit = reject;
+        });
+      }
+      return Promise.resolve({ stopReason: 'end_turn' });
+    });
+    const close = vi.fn().mockResolvedValue(undefined);
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          close,
+        }) as unknown as AcpBridge,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+      onWorkerFailed: (failure) => failures.push(failure.error),
+    });
+
+    session.startWorkers();
+    session.sendWorkerMessage('ping-1', 'first instruction');
+
+    try {
+      await initStarted;
+      session.sendWorkerMessage('ping-1', 'second instruction');
+      expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+        state: 'processing',
+        queuePreview: ['first instruction', 'second instruction'],
+      });
+
+      rejectInit!(new Error('init rejected'));
+      await session.runtime.waitForIdle();
+      await session.inbox.drain();
+
+      expect(prompts).toHaveLength(1);
+      expect(failures).toEqual([
+        'Worker "ping-1" lazy init prompt failed: init rejected; discarded 2 queued instructions',
+      ]);
+      expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+        state: 'failed',
+        error:
+          'Worker "ping-1" lazy init prompt failed: init rejected; discarded 2 queued instructions',
+      });
+      expect(session.runtime.attachedCount).toBe(0);
+      expect(close).toHaveBeenCalledOnce();
+      expect(session.sendWorkerMessage('ping-1', 'retry')).toMatchObject({
+        status: 'error',
+        message:
+          'Worker "ping-1" failed to initialize: Worker "ping-1" lazy init prompt failed: init rejected; discarded 2 queued instructions',
+      });
+    } finally {
+      rejectInit?.(new Error('test cleanup'));
+      await session.stop({ force: true });
+    }
+  });
+
+  it('fails lazy worker and drains queued instructions when init prompt is cancelled', async () => {
+    const prompts: string[] = [];
+    const failures: string[] = [];
+    let resolveInitStarted!: () => void;
+    let cancelInit!: () => void;
+    const initStarted = new Promise<void>((resolve) => {
+      resolveInitStarted = resolve;
+    });
+    const promptSession = vi.fn((_sessionId: string, prompt: string) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        resolveInitStarted();
+        return new Promise<{ stopReason: string }>((resolve) => {
+          cancelInit = () => resolve({ stopReason: 'cancelled' });
+        });
+      }
+      return Promise.resolve({ stopReason: 'end_turn' });
+    });
+    const cancelSession = vi.fn(() => cancelInit());
+    const close = vi.fn().mockResolvedValue(undefined);
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          cancelSession,
+          close,
+        }) as unknown as AcpBridge,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+      onWorkerFailed: (failure) => failures.push(failure.error),
+    });
+
+    session.startWorkers();
+    session.sendWorkerMessage('ping-1', 'first instruction');
+
+    try {
+      await initStarted;
+      session.sendWorkerMessage('ping-1', 'second instruction');
+      session.runtime.cancelAllActivePrompts();
+      expect(cancelSession).toHaveBeenCalledOnce();
+
+      await session.runtime.waitForIdle();
+      await session.inbox.drain();
+
+      expect(prompts).toHaveLength(1);
+      expect(failures).toEqual([
+        'Worker "ping-1" lazy init prompt was cancelled; discarded 2 queued instructions',
+      ]);
+      expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+        state: 'failed',
+        error:
+          'Worker "ping-1" lazy init prompt was cancelled; discarded 2 queued instructions',
+      });
+      expect(session.runtime.attachedCount).toBe(0);
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      await session.stop({ force: true });
+    }
+  });
+
+  it('keeps the first instruction queued while lazy init waits for permission', async () => {
+    const prompts: string[] = [];
+    let permissionId: string | undefined;
+    const promptSession = vi.fn(
+      async (
+        _sessionId: string,
+        prompt: string,
+        options?: { permissionHandler?: PermissionHandler },
+      ) => {
+        prompts.push(prompt);
+        if (prompts.length === 1) {
+          const decision = options?.permissionHandler?.({
+            toolName: 'Shell',
+            options: [{ optionId: 'allow-once', kind: 'allow_once' }],
+            raw: { command: 'echo test' },
+          });
+          if (!decision) {
+            throw new Error('permission handler was not provided');
+          }
+          await decision;
+        }
+        return { stopReason: 'end_turn', responseText: 'pong' };
+      },
+    );
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('sess-1'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession,
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+      decidePermission: () => null,
+    });
+    session.inbox.subscribe((message) => {
+      if (message.type === 'permission.request') {
+        permissionId = message.id;
+      }
+    });
+
+    session.startWorkers();
+    session.sendWorkerMessage('ping-1', 'first instruction');
+
+    await vi.waitFor(() => {
+      expect(permissionId).toBeDefined();
+    });
+    expect(prompts).toHaveLength(1);
+    expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+      state: 'processing',
+      queuePreview: ['first instruction'],
+    });
+
+    session.inbox.fulfillPermission(permissionId!, {
+      outcome: { outcome: 'selected', optionId: 'allow-once' },
+    });
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain('init prompt');
+    expect(prompts[1]).toBe('first instruction');
+    await session.stop();
+  });
+
+  it('reports lazy attach failure and rejects later prompts for that worker', async () => {
+    const failures: string[] = [];
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [{ name: 'ping-1', kind: 'ping' }],
+      lazyWorkers: true,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async () => {
+        throw new Error('ACP unavailable');
+      },
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+      onWorkerFailed: (failure) => failures.push(failure.error),
+    });
+
+    session.startWorkers();
+    expect(session.sendWorkerMessage('ping-1', 'first instruction').status).toBe(
+      'sent',
+    );
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+
+    expect(session.runtime.getWorkerStatus('ping-1')).toMatchObject({
+      state: 'failed',
+      error: 'ACP unavailable',
+    });
+    expect(failures).toEqual(['ACP unavailable']);
+    expect(session.sendWorkerMessage('ping-1', 'retry')).toMatchObject({
+      status: 'error',
+      message: 'Worker "ping-1" failed to attach: ACP unavailable',
+    });
+    expect(session.sendWorkerMessage('unknown', 'task')).toMatchObject({
+      status: 'error',
+      message: 'Worker "unknown" is not registered',
+    });
+
+    await session.stop();
+  });
+
+  it('restores only workers with saved ACP sessions when lazy attach is enabled', async () => {
+    const connectAcp = vi.fn(async () =>
+      ({
+        newSession: vi.fn().mockResolvedValue('sess-new'),
+        loadSession: vi.fn().mockResolvedValue(undefined),
+        promptSession: vi.fn().mockResolvedValue({
+          stopReason: 'end_turn',
+          responseText: 'ready',
+        }),
+        close: vi.fn().mockResolvedValue(undefined),
+      }) as unknown as AcpBridge,
+    );
+    const session = new WorkerSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      workers: [
+        { name: 'ping-1', kind: 'ping' },
+        { name: 'ping-2', kind: 'ping' },
+      ],
+      lazyWorkers: true,
+      restoredWorkerSessions: {
+        'ping-1': { acpSessionId: 'saved-session' },
+      },
+      sessionState: {
+        workers: [
+          { name: 'ping-1', kind: 'ping' },
+          { name: 'ping-2', kind: 'ping' },
+        ],
+        kinds: ['ping'],
+      },
+      connectAcp,
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+    });
+
+    session.startWorkers();
+
+    expect(connectAcp).toHaveBeenCalledOnce();
+    expect(session.runtime.getWorkerStatus('ping-2')?.state).toBe('sleeping');
+    await session.runtime.waitForIdle();
+    await session.inbox.drain();
+    expect(session.runtime.getWorkerStatus('ping-1')?.state).toBe('idle');
+
+    await session.stop();
   });
 
   it('denies pending permission when an ACP worker fails', async () => {

@@ -11,6 +11,8 @@ export function mapHarnessToDisplayStatus(
       return 'running';
     case 'idle':
       return 'idle';
+    case 'sleeping':
+      return 'sleep';
     case 'failed':
       return 'failed';
     default: {

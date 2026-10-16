@@ -33,6 +33,7 @@ const projectConfig: EnsembleConfig = {
   acp: { defaultPreset: 'claude' },
   session: {
     worktree: 'in_repo',
+    lazyWorkers: false,
     maxTurns: { tty: 3, nonTty: 7 },
     postLoop: { wait: false },
   },

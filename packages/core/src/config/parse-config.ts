@@ -179,13 +179,20 @@ function parseSessionConfig(raw: unknown): EnsembleSessionConfig | undefined {
     return undefined;
   }
   const worktree = parseWorktreeMode(obj.worktree);
+  const lazyWorkers = readBoolean(obj.lazyWorkers);
   const maxTurns = parseSessionMaxTurns(obj.maxTurns);
   const postLoop = parseSessionPostLoop(obj.postLoop);
-  if (worktree === undefined && maxTurns === undefined && postLoop === undefined) {
+  if (
+    worktree === undefined &&
+    lazyWorkers === undefined &&
+    maxTurns === undefined &&
+    postLoop === undefined
+  ) {
     return undefined;
   }
   return {
     ...(worktree !== undefined ? { worktree } : {}),
+    ...(lazyWorkers !== undefined ? { lazyWorkers } : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
     ...(postLoop !== undefined ? { postLoop } : {}),
   } as EnsembleSessionConfig;

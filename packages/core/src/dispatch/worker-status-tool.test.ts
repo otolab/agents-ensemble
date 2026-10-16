@@ -19,6 +19,52 @@ function toolText(result: { content: Array<{ text?: string }> }): string {
 }
 
 describe('createWorkerStatusTools', () => {
+  it('exposes registered lazy workers as sleeping without attaching them', async () => {
+    const inbox = new ConductorInbox();
+    const connectAcp = vi.fn(async () => {
+      throw new Error('sleeping worker should not attach before a prompt');
+    });
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp,
+    });
+
+    runtime.start(
+      {
+        name: 'implementer',
+        issueUrl: TEST_WORKTREE.issue.url,
+        kind: 'implementer',
+        prompt: { instructions: ['work'] },
+        worktree: TEST_WORKTREE,
+        sessionState: {
+          workers: [{ name: 'implementer', kind: 'implementer' }],
+          kinds: ['implementer'],
+        },
+      },
+      { lazy: true },
+    );
+
+    const tools = createWorkerStatusTools({
+      runtime,
+      workerNames: ['implementer'],
+      getWorkerFailures: () => [],
+    });
+    const listed = await tools.list_workers.execute({});
+    const detail = await tools.get_worker_status.execute({
+      worker: 'implementer',
+    });
+
+    expect(connectAcp).not.toHaveBeenCalled();
+    expect(toolText(listed)).toContain('state: sleeping');
+    expect(listed.structuredContent).toMatchObject({
+      attachedCount: 0,
+      workers: [{ name: 'implementer', state: 'sleeping' }],
+    });
+    expect(toolText(detail)).toContain('state: sleeping');
+    expect(runtime.getWorkerStatus('implementer')?.state).toBe('sleeping');
+    await runtime.shutdown();
+  });
+
   it('list_workers returns YAML summary aligned with runtime', async () => {
     const inbox = new ConductorInbox();
     const runtime = new WorkerRuntime({

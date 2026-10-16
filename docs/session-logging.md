@@ -144,7 +144,7 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | なし（log 相当。活動ログ / stderr には出さない。Workers ペイン活動ヒントのみ #161） |
 | `conductor.send` | 各 `agent.send` 完了後 | `sendCount`, `lastRunStatus`, `lastResult`, `lastError` を更新。成功 result は conductor 対話、error は harness 障害表示 |
 | `conductor.outbound` | `prompt_worker` による conductor → worker prompt を send 完了時に集約 | なし（sink のみ。既定は `worker.prompt` 要約） |
-| `harness.worker.bootstrap` | セッション開始時の init prompt 群を要約 | なし（sink のみ。既定は `worker.prompt` 要約） |
+| `harness.worker.bootstrap` | eager はセッション開始時の init prompt 群、lazy は初回 instruction 時に attach する worker を要約 | なし（sink のみ。既定は `worker.prompt` 要約） |
 | `conductor.dispatch_hold` | `set_dispatch_hold` の切替、または held trigger 件数の変化 | なし（TUI の保留表示と observation のみ） |
 | `worker.round` | worker 1 ラウンド完了（init prompt 含む） | `workerDispatches` に追記 |
 | `worker.failed` | worker 失敗 | `workerFailures` に追記 |

@@ -16,7 +16,7 @@ export function createPromptWorkerTool(
     prompt_worker: {
       name: 'prompt_worker',
       description:
-        'Send a work instruction to an attached worker. The worker receives it as a new ACP prompt turn. Issue/PR alone does not trigger workers.',
+        'Send a work instruction to a registered worker. If it is sleeping, this ordinary first prompt_worker attaches and initializes it, then sends the instruction as a separate ACP prompt turn. Issue/PR alone does not trigger workers.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -32,7 +32,7 @@ export function createPromptWorkerTool(
           preempt: {
             type: 'boolean',
             description:
-              'If true, cancel the in-progress prompt turn and send this instruction immediately (default: queue when busy)',
+              'If true, cancel a running prompt and run this instruction immediately after cancellation is confirmed. If a lazy worker is attaching or running init, do not cancel init: replace queued work; the call returns `queued` and this instruction runs after init. If omitted, queue behind current work.',
           },
         },
         required: ['worker', 'instruction'],

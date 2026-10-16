@@ -22,6 +22,7 @@ export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = {
   },
   session: {
     worktree: 'isolated',
+    lazyWorkers: false,
     maxTurns: {
       tty: 0,
       nonTty: DEFAULT_SESSION_MAX_TURNS_NON_TTY,

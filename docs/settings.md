@@ -88,6 +88,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 | worker ACP preset（profile 未指定 worker） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
 | worker ACP spawn env | `acp.env` | — | — | — | config deep merge |
 | Issue worktree | `session.worktree` | — | `--worktree` | `isolated` | B |
+| worker ACP lazy attach | `session.lazyWorkers` | — | — | `false` | B |
 | 自律ターン上限（TTY） | `session.maxTurns.tty` | — | `--max-turns` / `--no-max-turns` | `0`（無制限） | B |
 | 自律ターン上限（非 TTY） | `session.maxTurns.nonTty` | — | `--max-turns` / `--no-max-turns` | `5` | B |
 | post-loop 待機（TTY） | `session.postLoop.wait` | — | `--no-wait` | `true` | B |

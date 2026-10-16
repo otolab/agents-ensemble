@@ -67,8 +67,12 @@ describe('reduceDisplayState', () => {
     });
   });
 
-  it('marks worker failed on prompt failure', () => {
-    const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+  it('does not project prompt failure telemetry as lifecycle state', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [{ name: 'reviewer', kind: 'reviewer' }],
+    });
+    state = reduceDisplayState(state, {
       type: 'harness.worker.prompt.failed',
       name: 'reviewer',
       kind: 'reviewer',
@@ -79,11 +83,11 @@ describe('reduceDisplayState', () => {
 
     expect(state.workers.reviewer).toEqual({
       kind: 'reviewer',
-      status: 'failed',
+      status: 'idle',
     });
   });
 
-  it('returns to idle after round failure when harness.worker.state idle follows prompt.failed', () => {
+  it('keeps idle when delayed worker.failed follows a nonterminal prompt failure', () => {
     let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'harness.session.workers',
       workers: [{ name: 'implementer', kind: 'implementer' }],
@@ -103,7 +107,7 @@ describe('reduceDisplayState', () => {
       source: 'conductor',
       error: 'prompt failed',
     });
-    expect(state.workers.implementer?.status).toBe('failed');
+    expect(state.workers.implementer?.status).toBe('running');
 
     state = reduceDisplayState(state, {
       type: 'harness.worker.state',
@@ -112,13 +116,67 @@ describe('reduceDisplayState', () => {
       workerId: 'w-1',
       state: 'idle',
     });
+    state = reduceDisplayState(state, {
+      type: 'worker.failed',
+      failure: {
+        workerId: 'w-1',
+        name: 'implementer',
+        kind: 'implementer',
+        error: 'prompt failed',
+        issueUrl: 'https://github.com/o/r/issues/1',
+      },
+    });
     expect(state.workers.implementer?.status).toBe('idle');
+  });
+
+  it('keeps the next prompt running when delayed worker.failed arrives', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.worker.state',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      state: 'processing',
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.prompt.failed',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      source: 'conductor',
+      error: 'previous prompt failed',
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.state',
+      name: 'implementer',
+      kind: 'implementer',
+      workerId: 'w-1',
+      state: 'processing',
+    });
+    state = reduceDisplayState(state, {
+      type: 'worker.failed',
+      failure: {
+        workerId: 'w-1',
+        name: 'implementer',
+        kind: 'implementer',
+        error: 'previous prompt failed',
+        issueUrl: 'https://github.com/o/r/issues/1',
+      },
+    });
+
+    expect(state.workers.implementer?.status).toBe('running');
   });
 
   it('keeps failed on attach fatal failure via harness.worker.state failed', () => {
     let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'harness.session.workers',
       workers: [{ name: 'reviewer', kind: 'reviewer' }],
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.state',
+      name: 'reviewer',
+      kind: 'reviewer',
+      workerId: 'w-2',
+      state: 'failed',
     });
     state = reduceDisplayState(state, {
       type: 'harness.worker.prompt.failed',
@@ -129,11 +187,51 @@ describe('reduceDisplayState', () => {
       error: 'attach failed',
     });
     state = reduceDisplayState(state, {
+      type: 'worker.failed',
+      failure: {
+        workerId: 'w-2',
+        name: 'reviewer',
+        kind: 'reviewer',
+        error: 'attach failed',
+        issueUrl: 'https://github.com/o/r/issues/1',
+      },
+    });
+
+    expect(state.workers.reviewer).toEqual({
+      kind: 'reviewer',
+      status: 'failed',
+    });
+  });
+
+  it('keeps failed on lazy init failure after delayed worker.failed', () => {
+    let state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [{ name: 'reviewer', kind: 'reviewer' }],
+    });
+    state = reduceDisplayState(state, {
+      type: 'harness.worker.prompt.failed',
+      name: 'reviewer',
+      kind: 'reviewer',
+      workerId: 'w-2',
+      source: 'harness',
+      error: 'init failed',
+    });
+    state = reduceDisplayState(state, {
       type: 'harness.worker.state',
       name: 'reviewer',
       kind: 'reviewer',
       workerId: 'w-2',
       state: 'failed',
+    });
+    state = reduceDisplayState(state, {
+      type: 'worker.failed',
+      failure: {
+        workerId: 'w-2',
+        name: 'reviewer',
+        kind: 'reviewer',
+        error: 'init failed',
+        issueUrl: 'https://github.com/o/r/issues/1',
+      },
     });
 
     expect(state.workers.reviewer).toEqual({
@@ -184,6 +282,19 @@ describe('reduceDisplayState', () => {
     expect(state.workers.reviewer).toEqual({
       kind: 'reviewer',
       status: 'idle',
+    });
+  });
+
+  it('seeds profile workers as sleep when lazy attach is enabled', () => {
+    const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
+      type: 'harness.session.workers',
+      workers: [{ name: 'implementer', kind: 'implementer' }],
+      initialState: 'sleeping',
+    });
+
+    expect(state.workers.implementer).toEqual({
+      kind: 'implementer',
+      status: 'sleep',
     });
   });
 
@@ -362,7 +473,7 @@ describe('reduceDisplayState', () => {
     expect(state.workers.implementer?.status).toBe('idle');
   });
 
-  it('marks worker failed on worker.failed', () => {
+  it('does not create a lifecycle status from worker.failed alone', () => {
     const state = reduceDisplayState(INITIAL_SESSION_DISPLAY_STATE, {
       type: 'worker.failed',
       failure: {
@@ -374,10 +485,7 @@ describe('reduceDisplayState', () => {
       },
     });
 
-    expect(state.workers.implementer).toEqual({
-      kind: 'implementer',
-      status: 'failed',
-    });
+    expect(state).toBe(INITIAL_SESSION_DISPLAY_STATE);
   });
 
   it('updates conductorOutput on finished conductor.send', () => {

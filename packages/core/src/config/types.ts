@@ -47,6 +47,8 @@ export interface EnsembleSessionPostLoopConfig {
 
 export interface EnsembleSessionConfig {
   worktree: WorkerWorktreeMode;
+  /** ACP worker attach を初回 `prompt_worker` まで遅延する。既定は eager。 */
+  lazyWorkers: boolean;
   maxTurns: EnsembleSessionMaxTurnsConfig;
   postLoop: EnsembleSessionPostLoopConfig;
 }

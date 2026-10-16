@@ -51,6 +51,8 @@ interface ResidentWorker {
   attached: AttachedWorker;
   state: 'idle' | 'processing';
   queue: string[];
+  /** Lazy attach init stays active when conductor preempts its queued instruction. */
+  lazyInitInFlight: boolean;
   /** `session/cancel` 応答待ちの新指示。 */
   preemptInstruction?: string;
   cancelInFlight: boolean;
@@ -60,22 +62,29 @@ interface AttachingWorker {
   workerId: string;
   name: string;
   kind: string;
+  queue: string[];
+  /** attach/init 中の preempt は init を止めず、待機 instruction を置き換える。 */
+  preemptInstruction?: string;
 }
 
 interface FailedWorker {
   workerId: string;
   name: string;
   kind: string;
+  failureStage: 'attach' | 'init';
   error: string;
 }
 
 export class WorkerRuntime {
+  private readonly configuredWorkers = new Map<string, WorkerStartedInfo>();
   private readonly processing = new Map<string, WorkerStartedInfo>();
   private readonly residents = new Map<string, ResidentWorker>();
   private readonly attaching = new Map<string, AttachingWorker>();
+  private readonly sleeping = new Map<string, WorkerStartedInfo>();
   private readonly failedWorkers = new Map<string, FailedWorker>();
   private readonly idleResolvers = new Set<() => void>();
   private attachInFlight = 0;
+  private forceShutdownRequested = false;
 
   constructor(private readonly options: WorkerRuntimeOptions) {}
 
@@ -113,19 +122,21 @@ export class WorkerRuntime {
     return [...this.processing.values()];
   }
 
-  /** attach 済み・attach 中・失敗済み worker の harness 状態一覧。 */
+  /** profile に登録された全 worker の harness 状態一覧。 */
   listWorkerStatuses(): WorkerStatusSummary[] {
-    const names = new Set<string>([
-      ...this.residents.keys(),
-      ...this.attaching.keys(),
-      ...this.failedWorkers.keys(),
-    ]);
-    return [...names].map((name) => this.summarizeWorkerStatus(name));
+    return [...this.configuredWorkers.keys()].map((name) =>
+      this.summarizeWorkerStatus(name),
+    );
   }
 
-  /** 1 worker の harness 状態詳細。未登録なら undefined。 */
   /** worker UUID から kind（なければ name）を返す。 */
   resolveWorkerLabel(workerId: string): string | undefined {
+    for (const started of this.configuredWorkers.values()) {
+      if (started.workerId === workerId) {
+        return started.kind;
+      }
+    }
+
     for (const resident of this.residents.values()) {
       if (resident.workerId === workerId) {
         return resident.started.kind;
@@ -154,24 +165,23 @@ export class WorkerRuntime {
   }
 
   getWorkerStatus(name: string): WorkerStatusDetail | undefined {
-    if (
-      !this.residents.has(name) &&
-      !this.attaching.has(name) &&
-      !this.failedWorkers.has(name)
-    ) {
+    const started = this.configuredWorkers.get(name);
+    if (!started) {
       return undefined;
     }
 
     const summary = this.summarizeWorkerStatus(name);
     const resident = this.residents.get(name);
     if (!resident) {
+      const attaching = this.attaching.get(name);
       return {
         ...summary,
-        workerId:
-          this.attaching.get(name)?.workerId ??
-          this.failedWorkers.get(name)?.workerId,
-        queuePreview: [],
-        preemptPending: false,
+        workerId: started.workerId,
+        queuePreview:
+          attaching?.queue.map((instruction) =>
+            summarizeInstruction(instruction),
+          ) ?? [],
+        preemptPending: attaching?.preemptInstruction !== undefined,
         cancelInFlight: false,
       };
     }
@@ -185,10 +195,19 @@ export class WorkerRuntime {
     };
   }
 
-  start(params: WorkerStartParams): string {
+  start(params: WorkerStartParams, options?: { lazy?: boolean }): string {
+    if (this.configuredWorkers.has(params.name)) {
+      throw new Error(`Worker "${params.name}" is already registered`);
+    }
     const workerId = randomUUID();
     const started: WorkerStartedInfo = { workerId, ...params };
-    void this.attachAndInit(started);
+    this.configuredWorkers.set(params.name, started);
+    if (options?.lazy) {
+      this.sleeping.set(params.name, started);
+      this.emitWorkerState(workerId, params.name, params.kind, 'sleeping');
+    } else {
+      void this.attachAndInit(started);
+    }
     return workerId;
   }
 
@@ -198,6 +217,14 @@ export class WorkerRuntime {
     instruction: string,
     options?: SendWorkerMessageOptions,
   ): SendWorkerMessageResult {
+    if (this.forceShutdownRequested) {
+      return {
+        status: 'error',
+        worker: name,
+        message: 'Worker runtime has been shut down',
+      };
+    }
+
     const text = instruction.trim();
     if (!text) {
       return {
@@ -207,12 +234,49 @@ export class WorkerRuntime {
       };
     }
 
-    const resident = this.residents.get(name);
-    if (!resident) {
+    const failed = this.failedWorkers.get(name);
+    if (failed) {
       return {
         status: 'error',
         worker: name,
-        message: `Worker "${name}" is not attached`,
+        message:
+          failed.failureStage === 'init'
+            ? `Worker "${name}" failed to initialize: ${failed.error}`
+            : `Worker "${name}" failed to attach: ${failed.error}`,
+      };
+    }
+
+    const resident = this.residents.get(name);
+    if (!resident) {
+      const started = this.sleeping.get(name);
+      if (started) {
+        this.sleeping.delete(name);
+        void this.attachAndInit(started, text);
+        return { status: 'sent', worker: name };
+      }
+
+      const attaching = this.attaching.get(name);
+      if (attaching) {
+        if (options?.preempt) {
+          attaching.queue.length = 0;
+          attaching.preemptInstruction = text;
+          return { status: 'queued', worker: name, position: 1 };
+        }
+        attaching.queue.push(text);
+        return {
+          status: 'queued',
+          worker: name,
+          position: attaching.queue.length,
+        };
+      }
+
+      const known = this.configuredWorkers.has(name);
+      return {
+        status: 'error',
+        worker: name,
+        message: known
+          ? `Worker "${name}" is not available`
+          : `Worker "${name}" is not registered`,
       };
     }
 
@@ -220,6 +284,9 @@ export class WorkerRuntime {
       if (options?.preempt) {
         resident.queue.length = 0;
         resident.preemptInstruction = text;
+        if (resident.lazyInitInFlight) {
+          return { status: 'queued', worker: name, position: 1 };
+        }
         if (!resident.cancelInFlight) {
           resident.cancelInFlight = true;
           cancelWorkerAcpPrompt(resident.attached.session);
@@ -267,6 +334,13 @@ export class WorkerRuntime {
   /** ensemble 終了時に全 resident の ACP 接続を閉じる。 */
   async shutdown(options?: { force?: boolean }): Promise<void> {
     if (options?.force) {
+      this.forceShutdownRequested = true;
+      this.sleeping.clear();
+      this.attaching.clear();
+      for (const resident of this.residents.values()) {
+        resident.queue.length = 0;
+        resident.preemptInstruction = undefined;
+      }
       this.cancelAllActivePrompts();
       const residents = [...this.residents.values()];
       await Promise.all(
@@ -309,23 +383,39 @@ export class WorkerRuntime {
         name: attaching.name,
         kind: attaching.kind,
         state: 'attaching',
-        queueDepth: 0,
+        queueDepth: attaching.queue.length,
       };
     }
 
     const resident = this.residents.get(name);
-    if (!resident) {
+    const started = this.configuredWorkers.get(name);
+    if (!started) {
       throw new Error(`summarizeWorkerStatus: unknown worker ${name}`);
     }
 
     return {
-      name: resident.attached.name,
-      kind: resident.attached.kind,
-      state: resident.state === 'processing' ? 'processing' : 'idle',
-      queueDepth: resident.queue.length,
-      worktreePath: resident.started.worktree.path,
-      workspacePath: this.summarizeAcpCwd(resident.attached.session.acpCwd),
-      acpSessionId: resident.attached.session.sessionId,
+      name: resident?.attached.name ?? started.name,
+      kind: resident?.attached.kind ?? started.kind,
+      state: resident
+        ? resident.state === 'processing'
+          ? 'processing'
+          : 'idle'
+        : this.sleeping.has(name)
+          ? 'sleeping'
+          : 'attaching',
+      queueDepth:
+        resident?.queue.length ?? this.attaching.get(name)?.queue.length ?? 0,
+      worktreePath: started.worktree.path,
+      ...(resident
+        ? {
+            workspacePath: this.summarizeAcpCwd(
+              resident.attached.session.acpCwd,
+            ),
+            acpSessionId: resident.attached.session.sessionId,
+          }
+        : started.resolvedWorkspacePath
+          ? { workspacePath: this.summarizeAcpCwd(started.resolvedWorkspacePath) }
+          : {}),
     };
   }
 
@@ -365,13 +455,18 @@ export class WorkerRuntime {
     });
   }
 
-  private async attachAndInit(started: WorkerStartedInfo): Promise<void> {
+  private async attachAndInit(
+    started: WorkerStartedInfo,
+    firstInstruction?: string,
+  ): Promise<void> {
     this.attachInFlight++;
-    this.attaching.set(started.name, {
+    const attaching: AttachingWorker = {
       workerId: started.workerId,
       name: started.name,
       kind: started.kind,
-    });
+      queue: firstInstruction ? [firstInstruction] : [],
+    };
+    this.attaching.set(started.name, attaching);
     this.emitWorkerState(
       started.workerId,
       started.name,
@@ -409,12 +504,23 @@ export class WorkerRuntime {
         ),
       });
 
+      if (this.forceShutdownRequested) {
+        attaching.queue.length = 0;
+        attaching.preemptInstruction = undefined;
+        await closeWorkerAcpSession(attached.session);
+        return;
+      }
+
       const resident: ResidentWorker = {
         workerId: started.workerId,
         started,
         attached,
         state: 'idle',
-        queue: [],
+        queue: attaching.queue,
+        lazyInitInFlight: firstInstruction !== undefined,
+        ...(attaching.preemptInstruction
+          ? { preemptInstruction: attaching.preemptInstruction }
+          : {}),
         cancelInFlight: false,
       };
       this.residents.set(started.name, resident);
@@ -439,11 +545,15 @@ export class WorkerRuntime {
     } catch (error) {
       this.residents.delete(started.name);
       this.attaching.delete(started.name);
+      if (this.forceShutdownRequested) {
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.failedWorkers.set(started.name, {
         workerId: started.workerId,
         name: started.name,
         kind: started.kind,
+        failureStage: 'attach',
         error: message,
       });
       this.emitWorkerState(
@@ -491,6 +601,10 @@ export class WorkerRuntime {
       });
     }
     let skipCompletion = false;
+    const isLazyInit =
+      source === 'harness' && resident.lazyInitInFlight;
+    let initCancelled = false;
+    let lazyInitFailed = false;
     try {
       const result = await runAttachedWorkerPrompt(
         resident.attached,
@@ -513,6 +627,13 @@ export class WorkerRuntime {
           },
         },
       );
+      if (this.forceShutdownRequested) {
+        return;
+      }
+      if (isLazyInit && result.promptResult.stopReason === 'cancelled') {
+        initCancelled = true;
+        throw new Error('init prompt was cancelled');
+      }
       const dispatch = { ...result, source };
       skipCompletion =
         result.promptResult.stopReason === 'cancelled' &&
@@ -529,7 +650,45 @@ export class WorkerRuntime {
         this.options.inbox.publishWorkerCompleted(resident.workerId, dispatch);
       }
     } catch (error) {
-      if (!resident.preemptInstruction) {
+      if (isLazyInit && !this.forceShutdownRequested) {
+        const queuedCount =
+          resident.queue.length + (resident.preemptInstruction ? 1 : 0);
+        const reason = initCancelled
+          ? 'was cancelled'
+          : `failed: ${error instanceof Error ? error.message : String(error)}`;
+        const queuedLabel = `${queuedCount} queued instruction${queuedCount === 1 ? '' : 's'}`;
+        const failureMessage =
+          `Worker "${resident.started.name}" lazy init prompt ${reason}; ` +
+          `discarded ${queuedLabel}`;
+        const failure = new Error(failureMessage);
+        lazyInitFailed = true;
+        resident.queue.length = 0;
+        resident.preemptInstruction = undefined;
+        resident.lazyInitInFlight = false;
+        this.failedWorkers.set(resident.started.name, {
+          workerId: resident.workerId,
+          name: resident.started.name,
+          kind: resident.started.kind,
+          failureStage: 'init',
+          error: failureMessage,
+        });
+        this.residents.delete(resident.started.name);
+        this.emitPromptTelemetry({
+          phase: 'failed',
+          source,
+          workerId: resident.workerId,
+          name: resident.started.name,
+          kind: resident.started.kind,
+          error: failureMessage,
+        });
+        this.emitWorkerState(
+          resident.workerId,
+          resident.started.name,
+          resident.started.kind,
+          'failed',
+        );
+        this.options.inbox.publishWorkerFailed(resident.started, failure);
+      } else if (!this.forceShutdownRequested && !resident.preemptInstruction) {
         const message = error instanceof Error ? error.message : String(error);
         this.emitPromptTelemetry({
           phase: 'failed',
@@ -542,7 +701,24 @@ export class WorkerRuntime {
         this.options.inbox.publishWorkerFailed(resident.started, error);
       }
     } finally {
+      if (source === 'harness' && resident.lazyInitInFlight) {
+        resident.lazyInitInFlight = false;
+      }
       this.finishPromptRound(resident.workerId);
+      if (this.forceShutdownRequested) {
+        resident.queue.length = 0;
+        resident.preemptInstruction = undefined;
+        return;
+      }
+      if (lazyInitFailed) {
+        try {
+          await closeWorkerAcpSession(resident.attached.session);
+        } catch {
+          // Retain the session so a later non-forced shutdown can retry cleanup.
+          this.residents.set(resident.started.name, resident);
+        }
+        return;
+      }
       const preempt = resident.preemptInstruction;
       if (preempt) {
         resident.preemptInstruction = undefined;

@@ -177,16 +177,30 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 件数要約を表示する。`--verbose`、`CONDUCTOR_VERBOSE=true`、または
 `conductor.verbose: true` を指定すると、下表のイベント単位行も表示する。
 
+`harness.worker.prompt.failed` は attach / prompt の失敗イベントであり、runtime の
+terminal state を単独では意味しない。attach failure と lazy init prompt の reject /
+cancel は worker を terminal `failed` にする。resident worker の prompt failure は
+`worker.failed` も通知するが、lifecycle state は `failed` にならず、queued work が
+なければ `idle` に戻る（queued work があれば次の prompt を開始する）。
+`harness.worker.prompt.failed` は runtime が失敗経路内で同期 emit する一方、
+`worker.failed` は `ConductorInbox` に enqueue され、listener callback は非同期に処理される。
+runtime は inbox callback の完了を待たずに `idle` への遷移や次の prompt を進めるため、
+`worker.failed` の処理と後続の state / prompt event の観測順は保証されない。TUI の
+WorkerDisplayStatus は runtime lifecycle を表示する。`prompt.failed` / `worker.failed` は
+診断 event として保持するが WorkerDisplayStatus を変更しない。terminal failure は
+`harness.worker.state failed` で表示し、resident prompt failure 後は runtime の `idle` /
+`processing` state を表示するため、遅れて届いた `worker.failed` に status を戻されない。
+
 | type | 発火タイミング | stderr 例 | snapshot への影響 |
 |------|----------------|-----------|-------------------|
 | `harness.worker.prompt.started` | `session/prompt` ラウンド開始（init / instruction 共通） | verbose 時のみ `[harness] worker.prompt.started name=... kind=... source=harness\|conductor` | なし（TUI: running） |
 | `harness.worker.prompt.completed` | ラウンド ACP prompt 完了直後 | verbose 時のみ `[harness] worker.prompt.completed name=... kind=... source=... stopReason=...` | なし（TUI: idle） |
-| `harness.worker.prompt.failed` | attach 致命失敗、または `executeRound` 内の prompt 失敗 | `[harness] worker.prompt.failed name=... kind=... source=... error=...` | なし（TUI: 一時 `failed`。resident 維持時は直後の `harness.worker.state idle` で **idle** に戻る） |
-| `harness.worker.bootstrap` | セッション開始時、harness が profile worker へ init prompt を開始する直前 | `[harness] worker.prompt workers=N mode=init` | なし |
+| `harness.worker.prompt.failed` | attach 致命失敗、lazy init prompt の reject / cancel、または resident prompt の失敗（runtime が同期 emit） | `[harness] worker.prompt.failed name=... kind=... source=... error=...` | なし（診断 event。WorkerDisplayStatus は変更しない。terminal `failed` / resident `idle` or `processing` は lifecycle state event が反映） |
+| `harness.worker.bootstrap` | eager はセッション開始時の worker 群、lazy は対象 worker の attach / init 開始直前 | `[harness] worker.prompt workers=N mode=init` | なし |
 | `conductor.outbound` | conductor の send 中に `prompt_worker` で送った worker を send 完了時に集約 | `[harness] worker.prompt workers=N mode=conductor names=...` | なし |
 | `harness.worker.acp.update` | `session/prompt` 中の ACP `session/update`（#148） | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。`running` 正本は `harness.worker.state`） |
-| `harness.worker.state` | `WorkerRuntime` の harness 状態遷移（#147） | verbose 時のみ `[harness] worker.state name=... kind=... state=attaching\|processing\|idle\|failed` | なし（TUI: 下表） |
-| `harness.session.workers` | セッション開始時、profile の worker 一覧確定直後 | verbose 時のみ `[harness] session.workers count=N names=...` | なし（TUI: 全員 idle で seed） |
+| `harness.worker.state` | `WorkerRuntime` の harness 状態遷移（#147） | verbose 時のみ `[harness] worker.state name=... kind=... state=sleeping\|attaching\|processing\|idle\|failed` | なし（TUI: 下表） |
+| `harness.session.workers` | セッション開始時、profile の worker 一覧確定直後。lazy 時は `initialState: sleeping` を含む | verbose 時のみ `[harness] session.workers count=N names=...` | なし（TUI: eager は idle、lazy は sleep で seed） |
 
 **TUI `WorkerDisplayStatus` と harness 状態の対応（#147）**
 
@@ -195,18 +209,29 @@ init prompt（harness 起因）と instruction（conductor 起因）を **対称
 | `attaching` | `running` |
 | `processing` | `running` |
 | `idle` | `idle` |
-| `failed` | `failed`（**attach 致命失敗のみ**。`failedWorkers` 登録・resident なし） |
+| `sleeping` | `sleep` |
+| `failed` | `failed`（attach 致命失敗、または lazy init prompt の reject / cancel。`failedWorkers` 登録・resident なし） |
 
-`harness.worker.prompt.*` / `harness.worker.acp.update` も TUI を更新する。**Workers ペインの `running` / `idle` 正本は `harness.worker.state`**（および `prompt.started` / `prompt.completed`）。`harness.worker.acp.update` は **活動ヒント**（例: `running (calling: Shell)`）の更新にのみ使い、chunk 単位では stderr / 活動ログに出さない（#161）。これらのイベントは `SessionLogger.emit()` と Workers ペインの state 投影のために維持し、人間向け活動ログの細行だけを既定で抑制する。
+`harness.worker.state` と `prompt.started` / `prompt.completed` が Workers ペインの lifecycle status を更新する。`prompt.failed` は診断 event であり status を変更しない。非同期 `worker.failed` notification も WorkerDisplayStatus を変更しない。`harness.worker.acp.update` は **活動ヒント**（例: `running (calling: Shell)`）の更新にのみ使い、chunk 単位では stderr / 活動ログに出さない（#161）。これらのイベントは `SessionLogger.emit()` と Workers ペインの state 投影のために維持し、人間向け活動ログの細行だけを既定で抑制する。
+
+TUI の terminal `failed` は `harness.worker.state failed` が表す runtime
+`WorkerLifecycleState` に対応する。resident prompt failure は failure event として記録されるが
+WorkerDisplayStatus は直接変更せず、queue が空なら `idle`、work が残れば次の `processing` を
+表示する。非同期 `worker.failed` callback はどちらの lifecycle display も上書きしない。
 
 `permission.pending` は **Workers ペインを更新しない**（活動ログのみ）。permission 待ち中の worker は `harness.worker.state` / `prompt.*` が `processing` / `running` のまま維持される想定。
 
 **失敗経路の分岐（#147）**
 
-| 経路 | runtime / `list_workers` | 発火イベント（順） | TUI Workers 最終 |
-|------|--------------------------|-------------------|------------------|
-| **attach 致命失敗**（`attachAndInit` の catch。resident 未成立） | `failed`（`failedWorkers`） | `prompt.failed` → `state failed` → `worker.failed` | `failed` |
-| **ラウンド失敗**（`executeRound` の catch。resident 維持） | `idle`（resident 存続） | `prompt.failed` → `worker.failed` → `finally` で `state idle` | `idle`（`state idle` が `prompt.failed` を上書き） |
+| 経路 | runtime / `list_workers` | 同期 lifecycle / prompt event（順） | `worker.failed` | TUI Workers 最終 |
+|------|--------------------------|------------------------------------|-----------------|------------------|
+| **attach 致命失敗**（`attachAndInit` の catch。resident 未成立） | terminal `failed`（`failedWorkers`） | `state failed` → `prompt.failed` | inbox に enqueue。listener callback は非同期 | `failed` |
+| **lazy init prompt reject / cancel**（resident を破棄し、待機指示を drain） | terminal `failed`（`failedWorkers`） | `prompt.failed` → `state failed` | inbox に enqueue。listener callback は非同期 | `failed` |
+| **eager init / conductor prompt failure**（resident 維持、queue が空） | `idle`（resident 存続） | `prompt.failed` → `state idle` | inbox に enqueue。callback は WorkerDisplayStatus を変更しない | `idle` |
+
+resident に queued work が残っている場合、runtime は次の prompt を開始して
+`state processing` に進む。遅れて処理される `worker.failed` は通知 / 診断用であり、
+TUI の lifecycle display は `processing` のまま保たれる。
 
 **worker 失敗時の permission cleanup（#283）**
 
@@ -229,7 +254,13 @@ prune し、live な pending は通常どおり dispatch する。cleanup の対
 これはプロセス全体の teardown や in-flight `agent.send` の割り込みを行うものではない。
 後者は [#86](https://github.com/otolab/agents-ensemble/issues/86) のスコープである。
 
-init prompt（`source: harness`）では attach 開始時に `started` を出し、init ラウンド完了時に `completed` を出す。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。正常系は `harness.worker.state` で `attaching` → `processing` → `idle` を併記する。
+init prompt（`source: harness`）では attach 開始時に `started` を出し、init 成功時に `completed` を出す。eager ではセッション開始時に全 worker 分をまとめて bootstrap し、lazy では sleeping worker へ初回 `prompt_worker` が来たとき対象 worker 1 件を bootstrap する。conductor 指示（`source: conductor`）では `executeRound` 開始時に `started`、完了時に `completed`。lazy の正常系は `sleeping` → `attaching` → `processing` → `idle`、以降の conductor 指示は `processing` → `idle`。
+
+lazy の初回 `prompt_worker` は runtime queue に instruction を保持して attach を開始する。init prompt は独立した `source: harness` ラウンドとして成功時に完了イベントを出し、その後に元 instruction を `source: conductor` の別ラウンドで実行する。init 中に permission が発生しても `permission.pending` は通常どおり conductor に届き、init の permission が解決するまで最初の instruction は queue に残る。
+
+lazy init prompt が失敗またはキャンセルされた場合、worker は `failed` になり、初回 instruction と待機中の指示を破棄する。破棄件数と理由を含むエラーを `worker.failed` で conductor に通知し、失敗した指示の暗黙実行・再試行は行わない。
+
+attach handshake 中に届いた追加指示は queue に積む。まだ cancel 可能な ACP prompt がないため、この期間の `preempt: true` は待ち instruction を置き換えるだけで init 自体を中断しない。resident の init / instruction prompt が始まった後は既存の preempt 動作を使う。attach が失敗した場合は queued instructions を実行せず、`worker.failed` に通知して state を `failed` にする。自動 retry はせず、以後の指示には attach failure を返す。profile 外の worker 名は runtime で登録なしとして拒否する。
 
 ### 2.3 `worker.round` との関係（方針）
 
@@ -266,10 +297,10 @@ init prompt（`source: harness`）では attach 開始時に `started` を出し
 ```
 セッション開始
   harness.worktree ─────────────────────────► verbose 時のみ stderr
-  harness.session.workers ──────────────────► TUI seed（全 worker idle。stderr は verbose 時のみ）
-  harness.worker.bootstrap ─────────────────► stderr / TUI 活動ログ（worker.prompt workers=N mode=init）
+  harness.session.workers ──────────────────► TUI seed（eager は idle、lazy は sleep。stderr は verbose 時のみ）
+  eager: harness.worker.bootstrap ──────────► stderr / TUI 活動ログ（worker.prompt workers=N mode=init）
 
-WorkerSession.startWorkers()（worker ごと。attach + init prompt）
+WorkerSession.startWorkers()（全 worker を登録。eager は全員を attach、lazy は復元 session のみ attach）
   harness.worker.prompt.started (source=harness) ───► TUI running（stderr / 活動ログは verbose 時のみ）
        │
        ├─ attach + buildWorkerAttachPrompt + session/prompt
@@ -280,16 +311,26 @@ WorkerSession.startWorkers()（worker ごと。attach + init prompt）
        │          worker.round (source=harness) ───────► snapshot（細行は verbose 時のみ）
        │          worker.completed (source=harness) ───► SessionEventQueue ► agent.send
        │
-       ├─ attach 致命失敗 ─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
-       │                    harness.worker.state failed ──► TUI failed（最終。細行は verbose 時のみ）
-       │                    worker.failed ────────────────► stderr + snapshot + SessionEventQueue
+       ├─ attach 致命失敗 ─► harness.worker.state failed ──► TUI failed（細行は verbose 時のみ）
+       │                    harness.worker.prompt.failed ► stderr（診断 event、status は変更しない）
        │
-       └─ init ラウンド失敗（resident 維持）─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
-                              worker.failed ────────────────► stderr + snapshot + SessionEventQueue
-                              harness.worker.state idle ────► TUI idle（最終。細行は verbose 時のみ）
+       ├─ lazy init 失敗 / cancel（resident を破棄、queue を drain）
+       │    harness.worker.prompt.failed ─────────► stderr（診断 event、status は変更しない）
+       │    harness.worker.state failed ──────────► TUI failed（最終。細行は verbose 時のみ）
+       │
+       └─ eager init / conductor prompt failure（resident 維持）
+            harness.worker.prompt.failed ─────────► stderr（診断 event、status は変更しない）
+            harness.worker.state idle ────────────► TUI idle（queue が空の場合。細行は verbose 時のみ）
+            queue に work があれば次の prompt を開始し state processing へ
+
+上記の失敗経路では `worker.failed` を `ConductorInbox` に enqueue し、inbox callback が
+後から `SessionEventQueue` / snapshot に通知する。これは通知 / 診断用であり、
+WorkerDisplayStatus は変更しない。
 
 prompt_worker / sendWorkerMessage
        │
+       ├─ sleeping の場合 lazy wake: bootstrap 1 worker → attaching → init prompt（source=harness）
+       │                              → init completion → 初回 instruction（source=conductor）
        ├─ harness.worker.prompt.started (source=conductor) ► TUI running（細行は verbose 時のみ）
        ├─ harness.worker.state processing ───────────────► TUI running（細行は verbose 時のみ）
        ├─ harness.worker.acp.update (session/prompt 中) ► TUI 活動ヒントのみ（stderr / 活動ログには出さない #161）
@@ -302,9 +343,12 @@ prompt_worker / sendWorkerMessage
        │          worker.round (source=conductor) ───────► snapshot（細行は verbose 時のみ）
        │          worker.completed (source=conductor) ───► SessionEventQueue ► agent.send
        │
-       └─ ラウンド失敗（resident 維持）─► harness.worker.prompt.failed ► stderr + TUI failed（一時）
-                              worker.failed ────────────────► stderr + snapshot + SessionEventQueue
-                              harness.worker.state idle ────► stderr + TUI idle（最終。list_workers と一致）
+       └─ ラウンド失敗（resident 維持）
+            同期: harness.worker.prompt.failed ► stderr（診断 event、status は変更しない）
+                  queue が空なら harness.worker.state idle ► TUI idle
+                  queue に work があれば次の prompt / state processing を開始
+            非同期通知: worker.failed を inbox に enqueue ► callback が後続処理
+            worker.failed は WorkerDisplayStatus を変更しない
 
 preempt（stopReason=cancelled）: `prompt.completed` / `worker.round` をスキップし、次ラウンドの `started` + `state processing` で running 維持
 
@@ -443,18 +487,25 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 | `attaching` | ACP attach 中（init prompt 前） |
 | `processing` | `session/prompt` 実行中（init / instruction 共通） |
 | `idle` | prompt 中でない。次の `sendWorkerMessage` を受け付け可能 |
-| `failed` | attach または prompt 失敗 |
+| `sleeping` | lazy worker。初回の `sendWorkerMessage` を待機中 |
+| `failed` | terminal state。attach 失敗、または lazy init prompt の reject / cancel |
+
+通常の resident conductor prompt failure は `worker.failed` を inbox に enqueue するが、
+runtime state は terminal `failed` にならない。failure event は診断ログに残り、TUI の
+WorkerDisplayStatus は queue が空なら `idle`、work が残れば次の prompt の `processing` を
+示す。非同期 inbox callback は lifecycle display を変更しない。
 
 ### 6.2 TUI 表示語彙（`WorkerDisplayStatus`）
 
-正本型: `packages/core/src/runtime/worker-display-state.ts`（`idle` / `running` / `failed`）。
+正本型: `packages/core/src/runtime/worker-display-state.ts`（`sleep` / `idle` / `running` / `failed`）。runtime の `sleeping` は TUI の `sleep` に対応する。
 
 | WorkerLifecycleState（runtime / tool） | WorkerDisplayStatus（TUI / reducer） | 備考 |
 |--------------------------------------|-------------------------------------|------|
 | `attaching` | `running` | `mapHarnessToDisplayStatus` で明示変換（#146 PR2） |
 | `processing` | `running` | prompt ライフサイクルイベントでも同様 |
 | `idle` | `idle` | |
-| `failed` | `failed` | |
+| `sleeping` | `sleep` | 初回の `sendWorkerMessage` を待機中 |
+| `failed` | `failed` | attach / lazy init の terminal state。`prompt.failed` / `worker.failed` は status を変更しない |
 
 変換関数: `mapHarnessToDisplayStatus`（`packages/core/src/runtime/map-worker-lifecycle.ts`）。  
 TUI reducer はイベント駆動のため lifecycle を直接読まないが、worker 向け表示更新はこの関数経由の定数を使用する。

@@ -207,7 +207,7 @@
 | `cancelInFlight` | `boolean` | キャンセル中 | — | ○ | `false` |
 | `lastFailure.error` | `string?` | `workerFailures` から結合 | — | ○ | 省略 |
 
-TUI 表示語彙 `WorkerDisplayStatus`（`idle` / `running` / `failed`）は **別層**。reducer が lifecycle から導出（[harness-events.md §6](harness-events.md)）。
+TUI 表示語彙 `WorkerDisplayStatus`（`sleep` / `idle` / `running` / `failed`）は **別層**。runtime `sleeping` は未 attach、`idle` は attach 済みで prompt 待ち。reducer が lifecycle から導出（[harness-events.md §6](harness-events.md)）。
 
 ---
 

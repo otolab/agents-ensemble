@@ -12,7 +12,6 @@ import { workerActivityFromAcpUpdate } from './worker-activity-from-acp-update.j
 
 const WORKER_RUNNING = mapHarnessToDisplayStatus('processing');
 const WORKER_IDLE = mapHarnessToDisplayStatus('idle');
-const WORKER_FAILED = mapHarnessToDisplayStatus('failed');
 
 function setWorkerStatus(
   state: SessionDisplayState,
@@ -45,13 +44,18 @@ function setWorkerStatus(
 function seedSessionWorkers(
   state: SessionDisplayState,
   workers: Array<{ name: string; kind: string }>,
+  initialState: 'idle' | 'sleeping' = 'idle',
 ): SessionDisplayState {
   let next = state;
+  const status =
+    initialState === 'sleeping'
+      ? mapHarnessToDisplayStatus('sleeping')
+      : WORKER_IDLE;
   for (const worker of workers) {
     if (next.workers[worker.name]) {
       continue;
     }
-    next = setWorkerStatus(next, worker.name, worker.kind, WORKER_IDLE);
+    next = setWorkerStatus(next, worker.name, worker.kind, status);
   }
   return next;
 }
@@ -63,7 +67,7 @@ export function reduceDisplayState(
 ): SessionDisplayState {
   switch (event.type) {
     case 'harness.session.workers':
-      return seedSessionWorkers(state, event.workers);
+      return seedSessionWorkers(state, event.workers, event.initialState);
     case 'harness.worker.state':
       return setWorkerStatus(
         state,
@@ -76,7 +80,9 @@ export function reduceDisplayState(
     case 'harness.worker.prompt.completed':
       return setWorkerStatus(state, event.name, event.kind, WORKER_IDLE);
     case 'harness.worker.prompt.failed':
-      return setWorkerStatus(state, event.name, event.kind, WORKER_FAILED);
+      // Failure telemetry is diagnostic only. The associated lifecycle state
+      // event owns status and may precede or follow this event.
+      return state;
     case 'harness.worker.acp.update': {
       const activity = workerActivityFromAcpUpdate(
         event.sessionUpdate,
@@ -108,12 +114,10 @@ export function reduceDisplayState(
       return state;
     }
     case 'worker.failed':
-      return setWorkerStatus(
-        state,
-        event.failure.name,
-        event.failure.kind,
-        WORKER_FAILED,
-      );
+      // This inbox notification is asynchronous and may arrive after a newer
+      // idle/processing state. Terminal failures are represented by
+      // harness.worker.state, so do not project this notification as status.
+      return state;
     case 'conductor.send': {
       let nextState = setWorkerStatus(state, 'conductor', 'conductor', 'idle');
       if (event.status === 'finished' && event.result?.trim()) {
