@@ -1,4 +1,5 @@
 import yaml from 'js-yaml';
+import { formatPermissionSummaryForOperator } from '../../permission/format-permission-summary-for-operator.js';
 import type { SessionEvent } from './session-event.js';
 
 /** セッションイベントを conductor 向け user メッセージ文字列に変換する。 */
@@ -63,7 +64,12 @@ function formatEventBodyForConductor(event: SessionEvent): string {
     case 'worker.failed':
       return fencedYaml('worker.failed', event.failure);
     case 'permission.pending':
-      return fencedYaml('permission.pending', event.permission);
+      return fencedYaml('permission.pending', {
+        ...event.permission,
+        operatorSummary:
+          event.operatorSummary ??
+          formatPermissionSummaryForOperator(event.permission),
+      });
     case 'permission.stall':
       return fencedYaml('permission.stall', {
         message: event.message,

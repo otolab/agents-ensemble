@@ -83,14 +83,45 @@ describe('formatSessionEventForConductor', () => {
         request: {
           toolName: 'shell',
           sessionId: 'sess-1',
+          raw: { toolCall: { kind: 'execute', rawInput: { command: 'pnpm test' } } },
         },
       },
+      operatorSummary:
+        'permission.pending worker=implementer tool=Shell cmd="pnpm test" id=perm-1',
     });
 
     expect(message).toContain('## permission 判断待ち');
     expect(message).toContain('```yaml');
     expect(message).toContain('id: perm-1');
     expect(message).toContain('toolName: shell');
+    expect(message).toContain(
+      'operatorSummary: permission.pending worker=implementer tool=Shell cmd="pnpm test" id=perm-1',
+    );
+  });
+
+  it('derives operatorSummary when a permission event has no preformatted summary', () => {
+    const message = formatSessionEventForConductor({
+      type: 'permission.pending',
+      permission: {
+        id: 'permission-request-123456',
+        workerId: 'worker-1',
+        createdAt: 1_700_000_000_000,
+        request: {
+          toolName: 'Edit',
+          sessionId: 'sess-1',
+          raw: {
+            toolCall: {
+              kind: 'edit',
+              rawInput: { filePath: 'src/example.ts' },
+            },
+          },
+        },
+      },
+    });
+
+    expect(message).toContain(
+      'operatorSummary: permission.pending worker=worker-1 tool=Edit path=src/example.ts id=permissi...',
+    );
   });
 
   it('formats permission.stall with low-priority telemetry context', () => {

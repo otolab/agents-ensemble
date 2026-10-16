@@ -5,6 +5,7 @@ import {
 } from './format-permission-summary-for-operator.js';
 import type { PendingPermission } from './pending-permission.js';
 import { parsePermissionRequest } from './permission-request.js';
+import { permissionRequestFixtures } from '../../test/fixtures/permission-request-fixtures.js';
 
 function pending(
   overrides: Partial<PendingPermission> & Pick<PendingPermission, 'id' | 'request'>,
@@ -104,5 +105,19 @@ describe('extractPermissionOperationSummary', () => {
         }),
       ),
     ).toEqual({ field: 'path', value: 'packages/core/src/index.ts' });
+  });
+
+  it('reads Edit target from the ACP v1 toolCall rawInput and locations', () => {
+    expect(
+      extractPermissionOperationSummary(
+        parsePermissionRequest(
+          permissionRequestFixtures.editCursorAcpV1.params,
+        ),
+      ),
+    ).toEqual({
+      field: 'path',
+      value:
+        '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
+    });
   });
 });

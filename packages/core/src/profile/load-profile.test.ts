@@ -730,5 +730,7 @@ describe('default profile compilation', () => {
     expect(prompt).toContain('**すべてを理解することは求められていない。**');
     expect(prompt).toContain('permission.pending');
     expect(prompt).toContain('resolve_permission');
+    expect(prompt).toContain('operatorSummary');
+    expect(prompt).toContain('relatedPermissionId');
   });
 });

@@ -114,6 +114,11 @@ describe('parsePermissionRequest', () => {
     ],
     ['read payload', permissionRequestFixtures.readPath, 'Read'],
     ['edit payload with snake_case fields', permissionRequestFixtures.editPath, 'Edit'],
+    [
+      'Cursor ACP v1 Edit payload',
+      permissionRequestFixtures.editCursorAcpV1.params,
+      'Edit',
+    ],
     ['execute id-only payload', permissionRequestFixtures.executeIdOnly, 'Shell'],
   ])('infers tool name from %s', (_name, payload, expectedTool) => {
     expect(parsePermissionRequest(payload).toolName).toBe(expectedTool);
@@ -130,6 +135,30 @@ describe('parsePermissionRequest', () => {
 });
 
 describe('ACP permission request fixtures', () => {
+  it('uses the ACP v1 session/request_permission wire shape', () => {
+    expect(permissionRequestFixtures.editCursorAcpV1).toMatchObject({
+      jsonrpc: '2.0',
+      method: 'session/request_permission',
+      params: {
+        toolCall: {
+          kind: 'edit',
+          rawInput: {
+            filePath:
+              '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
+          },
+          locations: [
+            {
+              path: '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
+            },
+          ],
+        },
+      },
+    });
+    expect(permissionRequestFixtures.editCursorAcpV1.params).not.toHaveProperty(
+      'subject',
+    );
+  });
+
   it.each([
     [permissionRequestFixtures.dogfoodingExecute, { field: 'cmd', value: 'pnpm test' }],
     [
@@ -143,6 +172,22 @@ describe('ACP permission request fixtures', () => {
     [
       permissionRequestFixtures.editPath,
       { field: 'path', value: 'packages/cli/src/session-log-lines.ts' },
+    ],
+    [
+      permissionRequestFixtures.editCursorAcpV1.params,
+      {
+        field: 'path',
+        value:
+          '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
+      },
+    ],
+    [
+      permissionRequestFixtures.editCursorAcpV1LocationsOnly.params,
+      {
+        field: 'path',
+        value:
+          '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
+      },
     ],
     [
       permissionRequestFixtures.executeIdOnly,
@@ -169,5 +214,38 @@ describe('ACP permission request fixtures', () => {
     }, { workerLabel: 'implementer' })).toBe(
       'permission.pending worker=implementer tool=Shell cmd="pnpm test" id=4bf9479c...',
     );
+  });
+
+  it('extracts an Edit target from the ACP v1 wire request', () => {
+    const request = parsePermissionRequest(
+      permissionRequestFixtures.editCursorAcpV1.params,
+    );
+    const summary = formatPermissionSummaryForOperator({
+      id: 'permission-edit-1234567890',
+      workerId: 'worker-uuid',
+      createdAt: 0,
+      request,
+    }, { workerLabel: 'implementer' });
+
+    expect(summary).toBe(
+      'permission.pending worker=implementer tool=Edit path=/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts description="Edit File" id=permissi...',
+    );
+  });
+
+  it('falls back to ACP v1 locations when rawInput has no path', () => {
+    const summary = formatPermissionSummaryForOperator({
+      id: 'permission-edit-1234567890',
+      workerId: 'worker-uuid',
+      createdAt: 0,
+      request: parsePermissionRequest(
+        permissionRequestFixtures.editCursorAcpV1LocationsOnly.params,
+      ),
+    }, { workerLabel: 'implementer' });
+
+    expect(summary).toContain(
+      'tool=Edit path=/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
+    );
+    expect(summary).toContain('description="Edit File"');
+    expect(summary).toContain('id=permissi...');
   });
 });

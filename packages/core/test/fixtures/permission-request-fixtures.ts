@@ -1,4 +1,4 @@
-/** Representative ACP `session/request_permission` payloads seen by the harness. */
+/** ACP `session/request_permission` payload examples for representative wire shapes. */
 export const permissionRequestFixtures = {
   dogfoodingExecute: {
     sessionId: '01a07a33-d3c1-7ff2-a36a-0f43c2486e45',
@@ -29,6 +29,66 @@ export const permissionRequestFixtures = {
       toolCallId: 'edit-1',
       kind: 'edit',
       raw_input: { filePath: 'packages/cli/src/session-log-lines.ts' },
+    },
+  },
+  /** ACP v1 wire request shape; identifiers and edit contents are synthetic. */
+  editCursorAcpV1: {
+    jsonrpc: '2.0',
+    id: 0,
+    method: 'session/request_permission',
+    params: {
+      sessionId: 'session-cursor-edit-v1',
+      toolCall: {
+        toolCallId: 'edit-cursor-1234567890',
+        title: 'Edit File',
+        kind: 'edit',
+        status: 'pending',
+        rawInput: {
+          filePath:
+            '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
+          oldString: '<redacted>',
+          newString: '<redacted>',
+        },
+        locations: [
+          {
+            path: '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
+            line: 42,
+          },
+        ],
+      },
+      options: [
+        { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },
+        { optionId: 'reject-once', kind: 'reject_once', name: 'Reject' },
+      ],
+    },
+  },
+  /** Same synthetic ACP v1 frame, with the target available only in locations. */
+  editCursorAcpV1LocationsOnly: {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'session/request_permission',
+    params: {
+      sessionId: 'session-cursor-edit-v1-locations',
+      toolCall: {
+        toolCallId: 'edit-cursor-location-123456',
+        title: 'Edit File',
+        kind: 'edit',
+        status: 'pending',
+        rawInput: {
+          oldString: '<redacted>',
+          newString: '<redacted>',
+        },
+        locations: [
+          {
+            path: '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
+            line: 42,
+          },
+        ],
+      },
+      options: [
+        { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },
+        { optionId: 'reject-once', kind: 'reject_once', name: 'Reject' },
+      ],
     },
   },
   executeIdOnly: {
