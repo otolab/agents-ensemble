@@ -72,6 +72,25 @@ describe('parseInlineMarkdown', () => {
     );
   });
 
+  it('preserves explicit line and paragraph breaks around Markdown lists', () => {
+    const input =
+      'First paragraph line one\n' +
+      'First paragraph line two\n\n' +
+      '- **first item**\n' +
+      '- `second item`';
+    const segments = parseInlineMarkdown(input);
+
+    expect(segments.map((segment) => segment.text).join('')).toBe(
+      'First paragraph line one\nFirst paragraph line two\n\n- first item\n- second item',
+    );
+    expect(segments).toEqual(
+      expect.arrayContaining([
+        { text: 'first item', bold: true },
+        { text: 'second item', code: true },
+      ]),
+    );
+  });
+
   it('continues traversing a nested item after a list continuation line', () => {
     const input =
       '- **first**\n' +

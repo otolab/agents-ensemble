@@ -1328,9 +1328,12 @@ describe('IssueSessionTui', () => {
         <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
       );
 
-      expect(lastFrame() ?? '').toContain('▸ inq-1');
-      expect(lastFrame() ?? '').toContain('first selected detail');
-      expect(lastFrame() ?? '').not.toContain('second selected detail');
+      const initialFrame = lastFrame() ?? '';
+      expect(initialFrame).toContain('▸ inq-1');
+      expect(initialFrame).toContain('first selected detail');
+      expect(initialFrame).toContain('inq-2 [text] Second question');
+      expect(initialFrame).toContain('second selected detail');
+      expect(initialFrame).not.toContain('▸ inq-2');
 
       stdin.write(INK_TEST_KEYS.shiftDownArrow);
       await flushInkStdin();
@@ -1339,7 +1342,9 @@ describe('IssueSessionTui', () => {
       expect(frame).toContain('2/2');
       expect(frame).toContain('▸ inq-2');
       expect(frame).toContain('second selected detail');
-      expect(frame).not.toContain('first selected detail');
+      expect(frame).toContain('inq-1 [text] First question');
+      expect(frame).toContain('first selected detail');
+      expect(frame).not.toContain('▸ inq-1');
     });
 
     it('does not change selection on plain arrow keys', async () => {

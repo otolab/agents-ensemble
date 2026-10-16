@@ -118,6 +118,23 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
   });
 
+  it('keeps operator line and paragraph breaks in stream activity output', () => {
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.appendActivityLog('operator', 'first line\n\nsecond line');
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frameLines = (lastFrame() ?? '').split('\n');
+    const labelIndex = frameLines.findIndex((line) => line.includes('[operator]'));
+    const firstIndex = frameLines.findIndex((line) => line.includes('first line'));
+    const secondIndex = frameLines.findIndex((line) => line.includes('second line'));
+    expect(labelIndex).toBeGreaterThanOrEqual(0);
+    expect(firstIndex).toBeGreaterThan(labelIndex);
+    expect(secondIndex).toBeGreaterThan(firstIndex + 1);
+  });
+
   it('keeps compact rows visible when long selected detail reaches the cap', async () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({

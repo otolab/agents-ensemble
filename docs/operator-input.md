@@ -86,13 +86,15 @@ TTY の既定は `stream` レイアウトです。従来のペイン分割を使
 
 `pane` では Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
 
-Open questions は内容駆動で高さを決めます。選択中 question の `question` と `context` は折り返し後の要求行数として扱い、非選択 question は 1 行の compact 表示として同じ一覧に残します。pane / stream とも、まずこの要求行数に合わせて Open questions 枠を拡大し、通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。表示上限に達した場合は、非選択 question の compact 行を先に 1 行ずつ確保し、残りを選択中の detail に割り当てます。そのため通常端末では、選択本文が長くても compact 行が実画面から隠れることはありません。端末の高さ、または compact 行を確保した残りの本文上限を超える極端に長い内容は、#321 と同じ非保証の clip 方針です。Open questions ペイン内のスクロールは行いません。
+活動ログは投稿本文の明示的な改行と段落間の空行を表示行として保ち、端末幅に合わせて各行を折り返します。複数行の投稿ではラベルを独立行に置き、本文を次の行から表示します。これは pane と stream の両方に適用されます。pane は可視行数を超えた過去ログをスクロールで確認でき、stream は端末 scrollback に追記します。
+
+Open questions は内容駆動で高さを決めます。選択中 question の `question` / `context` / `choices` は、それぞれ明示的な改行・段落・リスト構造を保って折り返します。非選択 question は question、context、choices の順に最大 2 行まで表示し、続きがある場合は 2 行目の末尾に `…` を付けます。pane / stream とも、まず compact 行を確保し、残りを選択中の detail に割り当てます。通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。選択中の detail が上限を超える場合は、表示できる末尾行に `…` を付けて省略を示します。端末の高さ、または compact 行を確保した残りの本文上限を超える内容はクリップされることがあり、Open questions ペイン内のスクロールは行いません。
 
 `stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の live frame に `N 件の新着 · End で最新へ` と表示します。入力欄が空のときの `End`、または入力中の `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。通常の detached 経路では既に Static へ渡した prefix の再送・remount・replay は行いません。settled columns shrink の scrollback recovery だけは [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って terminal reset 後に保持済み activity を再出力します。
 
 ### 表示出力の inline Markdown subset
 
-活動ログと Open questions の `question` / `context`、および dialogue / observation の端末出力では、次の inline Markdown だけを表示スタイルへ変換します。
+活動ログと Open questions の `question` / `context` / `choices`、および dialogue / observation の端末出力では、次の inline Markdown だけを表示スタイルへ変換します。
 
 | 記法 | TUI | 端末出力 |
 |------|-----|----------|
@@ -101,7 +103,7 @@ Open questions は内容駆動で高さを決めます。選択中 question の 
 | `[text](url)` | 表示テキストをリンク風に表示。OSC 8 対応時はクリック可能 | 表示テキストだけを表示（URL は出さない） |
 | `\*` / `\_` / `` \` `` など | エスケープ後のプレーン文字 | 同左 |
 
-`**`、`` ` ``、リンク表示テキストは相互にネストできます（例: `` **`flag`** ``、`[**bold**](url)`）。箇条書き・番号付きリストは任意段を再帰的に辿り、リスト記号と簡易インデントを保ったまま item 内の inline style を適用します。GFM テーブルも列揃えを変更せず、セル内の inline style だけを適用します。表示幅で折り返された場合も、各行の style とリンク先は `string-width` に合わせて維持されます。
+`**`、`` ` ``、リンク表示テキストは相互にネストできます（例: `` **`flag`** ``、`[**bold**](url)`）。明示的な改行と段落間の空行は表示行に保たれます。箇条書き・番号付きリストは任意段を再帰的に辿り、リスト記号と簡易インデントを保ったまま item 内の inline style を適用します。GFM テーブルも列揃えを変更せず、セル内の inline style だけを適用します。表示幅で折り返された場合も、各行の style とリンク先は `string-width` に合わせて維持されます。
 
 リンクは通常の `[text](url)` 形式だけに対応し、表示テキストから URL を省略します。TTY TUI では、Workers ペインの Issue リンクと同じ `issueLinkMode`（端末判定、`FORCE_HYPERLINK`、`tui.forceHyperlink`）を使い、OSC 8 が有効な場合だけ表示テキストを OSC 8 で包みます。参照リンク `[text][ref]`、自動リンク `<url>`、未対応の見出しなどスコープ外のブロック構造、コードブロックは Markdown として解釈せず、そのまま表示します。HTML を含む入力全体も Markdown として解釈せず、未閉じの code span もプレーン文字列として表示します。
 
