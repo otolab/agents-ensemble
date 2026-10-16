@@ -252,7 +252,12 @@ export interface HarnessGitHubMonitorErrorEvent {
   phase?: 'issue_comments' | 'pr_search' | 'pr_reviews' | 'pr_review_comments' | 'pr_status_checks';
   prNumber?: number;
   retryable?: boolean;
-  cause?: 'parse' | 'gh_cli' | 'auth' | 'unknown';
+  cause?: 'parse' | 'gh_cli' | 'auth' | 'network' | 'unknown';
+}
+
+export interface HarnessGitHubMonitorRecoveredEvent {
+  type: 'harness.github.monitor_recovered';
+  suppressedErrorCount: number;
 }
 
 export interface HarnessWarningEvent {
@@ -299,6 +304,7 @@ export type SessionLogEvent =
   | ConductorTransportReconnectEvent
   | HarnessGitHubUpdateEvent
   | HarnessGitHubMonitorErrorEvent
+  | HarnessGitHubMonitorRecoveredEvent
   | HarnessWarningEvent;
 
 export type SessionLogSink = (event: SessionLogEvent) => void;

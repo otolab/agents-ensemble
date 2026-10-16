@@ -17,7 +17,7 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(38);
+    expect(types.size).toBe(39);
   });
 
   it('lists every SessionEvent type exactly once', () => {
@@ -214,6 +214,8 @@ describe('session event type groups', () => {
           return { type, itemCount: 1 };
         case 'harness.github.monitor_error':
           return { type, message: 'e' };
+        case 'harness.github.monitor_recovered':
+          return { type, suppressedErrorCount: 1 };
         case 'harness.warning':
           return { type, message: 'w' };
         default: {

@@ -139,6 +139,7 @@ SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが 
 |------|----------------|-----------|-------------------|
 | `harness.github.update` | debounce 後に `github.update` をキューへ載せる直前 | `[harness] github.update items=N` | なし |
 | `harness.github.monitor_error` | GitHub API poll 失敗（best-effort。監視は継続。認証失敗時は `[github-auth]` ヒント付き） | `[harness] github.monitor_error ...`（後方互換 1 行。構造化フィールドはイベント型に保持） | なし |
+| `harness.github.monitor_recovered` | retryable エラーを抑止した後、エラーなしの poll が成功したとき | `[harness] github.monitor_recovered suppressed=N` | なし |
 
 `harness.github.monitor_error` の構造化フィールド（[#185](https://github.com/otolab/agents-ensemble/issues/185)）:
 
@@ -147,8 +148,10 @@ SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが 
 | `message` | `string` | 人間向けエラー文（stderr 1 行の本文） |
 | `phase` | `issue_comments` \| `pr_search` \| `pr_reviews` \| `pr_review_comments` \| `pr_status_checks` | 失敗フェーズ |
 | `prNumber` | `number`（任意） | 関連 PR 番号 |
-| `cause` | `parse` \| `gh_cli` \| `auth` \| `unknown` | 失敗原因の分類 |
+| `cause` | `parse` \| `gh_cli` \| `auth` \| `network` \| `unknown` | 失敗原因の分類 |
 | `retryable` | `boolean`（任意） | rate limit / 5xx 等で再試行が有効なとき `true` |
+
+同じフェーズ・PR・原因で続く retryable エラーは、最初の `monitor_error` だけを記録し、以降はクリーンな poll が成功するまで抑止する。復旧時は `monitor_recovered` を1行出して抑止した件数を示す。認証や parse など非 retryable のエラーは抑止せず、poll ごとに記録する。
 
 監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。関連 PR は GitHub Search で自動検出するほか、conductor の `register_github_watch` で明示登録でき、`unregister_github_watch` で明示登録を解除できる。明示登録した PR は Search に未反映でも監視され、登録後は即時（in-flight poll 中ならその完了直後）に bootstrap poll を行う。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
 

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { safeUpperString } from './github-monitor-error.js';
+import {
+  classifyGitHubMonitorError,
+  safeUpperString,
+} from './github-monitor-error.js';
 
 describe('safeUpperString', () => {
   it('uppercases non-empty strings', () => {
@@ -15,5 +18,23 @@ describe('safeUpperString', () => {
 
   it('returns fallback for empty strings', () => {
     expect(safeUpperString('', 'UNKNOWN')).toBe('UNKNOWN');
+  });
+});
+
+describe('classifyGitHubMonitorError', () => {
+  it('classifies fetch failures as retryable network errors', () => {
+    expect(classifyGitHubMonitorError(new TypeError('fetch failed'))).toEqual({
+      cause: 'network',
+      retryable: true,
+      message: 'fetch failed',
+    });
+  });
+
+  it('keeps unrelated TypeErrors non-retryable parse errors', () => {
+    expect(classifyGitHubMonitorError(new TypeError('invalid response shape'))).toEqual({
+      cause: 'parse',
+      retryable: false,
+      message: 'invalid response shape',
+    });
   });
 });

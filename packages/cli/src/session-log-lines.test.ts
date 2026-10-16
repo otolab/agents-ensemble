@@ -73,6 +73,15 @@ describe('session-log-lines', () => {
     ).toBe('warning: test warning');
   });
 
+  it('formats GitHub monitor recovery summaries', () => {
+    expect(
+      formatHarnessLogBody({
+        type: 'harness.github.monitor_recovered',
+        suppressedErrorCount: 11,
+      }),
+    ).toBe('github.monitor_recovered suppressed=11');
+  });
+
   it('formats conductor.send.started harness body', () => {
     expect(
       formatHarnessLogBody(

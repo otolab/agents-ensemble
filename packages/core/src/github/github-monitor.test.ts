@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import { createGitHubMonitor } from './github-monitor.js';
-import type { GitHubClient } from './github-client.js';
+import { GitHubApiError, type GitHubClient } from './github-client.js';
 
 async function drainAsync(): Promise<void> {
   await Promise.resolve();
@@ -448,5 +448,129 @@ describe('createGitHubMonitor', () => {
 
     await monitor.stop();
     vi.useFakeTimers();
+  });
+
+  it('coalesces repeated retryable failures and reports recovery after a clean poll', async () => {
+    let issueCommentPolls = 0;
+    let successfulPollAt: number | undefined;
+    const onPollError = vi.fn();
+    const onPollRecovered = vi.fn();
+    const onUpdate = vi.fn();
+    const client: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn(async () => {
+        issueCommentPolls += 1;
+        if (issueCommentPolls <= 12) {
+          throw new TypeError('fetch failed');
+        }
+        successfulPollAt = Date.now();
+        return [
+          {
+            id: 1,
+            body: 'baseline',
+            html_url: 'https://github.com/org/repo/issues/39#issuecomment-1',
+            user: { login: 'op' },
+            created_at: '2026-01-01T00:00:00Z',
+          },
+          {
+            id: 2,
+            body: 'new comment',
+            html_url: 'https://github.com/org/repo/issues/39#issuecomment-2',
+            user: { login: 'op' },
+            created_at: '2026-01-02T00:00:00Z',
+          },
+        ];
+      }),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([]),
+      listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+      getStatusCheckRollup: vi.fn().mockResolvedValue([]),
+    };
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      cursor: { lastIssueCommentId: '1', pullRequests: {} },
+      debounceMs: 5000,
+      pollIntervalMs: 1000,
+      githubClient: client,
+      onUpdate,
+      onPollError,
+      onPollRecovered,
+    });
+
+    monitor.start();
+    await vi.waitFor(() => expect(onPollError).toHaveBeenCalledTimes(1));
+    expect(issueCommentPolls).toBe(1);
+    expect(onPollError.mock.calls[0]![0]).toMatchObject({
+      phase: 'issue_comments',
+      cause: 'network',
+      retryable: true,
+      message: 'fetch failed',
+    });
+
+    await vi.advanceTimersByTimeAsync(12_000);
+    expect(issueCommentPolls).toBe(13);
+    expect(onPollError).toHaveBeenCalledTimes(1);
+    expect(onPollRecovered).toHaveBeenCalledOnce();
+    expect(onPollRecovered).toHaveBeenCalledWith(11);
+    expect(monitor.getCursor().lastIssueCommentId).toBe('2');
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    const debounceRemaining = 5000 - (Date.now() - successfulPollAt!);
+    expect(debounceRemaining).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(debounceRemaining - 1);
+    expect(onUpdate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onUpdate.mock.calls[0]![0].items).toMatchObject([
+      expect.objectContaining({
+        id: 'issue-comment:2',
+        bodyPreview: 'new comment',
+      }),
+    ]);
+
+    await monitor.stop();
+  });
+
+  it('continues to report non-retryable authentication errors on each poll', async () => {
+    const onPollError = vi.fn();
+    const client: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
+      getIssue: vi.fn(),
+      listIssueComments: vi
+        .fn()
+        .mockRejectedValue(
+          new GitHubApiError('GitHub API 401: Bad credentials', { status: 401 }),
+        ),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([]),
+      listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+      getStatusCheckRollup: vi.fn().mockResolvedValue([]),
+    };
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      cursor: { lastIssueCommentId: '1', pullRequests: {} },
+      pollIntervalMs: 1000,
+      githubClient: client,
+      onUpdate: vi.fn(),
+      onPollError,
+    });
+
+    monitor.start();
+    await vi.waitFor(() => expect(onPollError).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(onPollError).toHaveBeenCalledTimes(3);
+    for (const [error] of onPollError.mock.calls) {
+      expect(error).toMatchObject({
+        cause: 'auth',
+        retryable: false,
+      });
+      expect(error.message).toContain('[github-auth]');
+    }
+
+    await monitor.stop();
   });
 });
