@@ -144,11 +144,11 @@ describe('ACP permission request fixtures', () => {
           kind: 'edit',
           rawInput: {
             filePath:
-              'packages/core/src/permission/format-permission-summary-for-operator.ts',
+              '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
           },
           locations: [
             {
-              path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
+              path: '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
             },
           ],
         },
@@ -178,7 +178,7 @@ describe('ACP permission request fixtures', () => {
       {
         field: 'path',
         value:
-          'packages/core/src/permission/format-permission-summary-for-operator.ts',
+          '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
       },
     ],
     [
@@ -186,7 +186,7 @@ describe('ACP permission request fixtures', () => {
       {
         field: 'path',
         value:
-          'packages/core/src/permission/format-permission-summary-for-operator.ts',
+          '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
       },
     ],
     [
@@ -228,7 +228,7 @@ describe('ACP permission request fixtures', () => {
     }, { workerLabel: 'implementer' });
 
     expect(summary).toBe(
-      'permission.pending worker=implementer tool=Edit path=packages/core/src/permission/format-permission-summary-for-operator.ts description="Edit File" id=permissi...',
+      'permission.pending worker=implementer tool=Edit path=/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts description="Edit File" id=permissi...',
     );
   });
 
@@ -243,7 +243,7 @@ describe('ACP permission request fixtures', () => {
     }, { workerLabel: 'implementer' });
 
     expect(summary).toContain(
-      'tool=Edit path=packages/core/src/permission/format-permission-summary-for-operator.ts',
+      'tool=Edit path=/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
     );
     expect(summary).toContain('description="Edit File"');
     expect(summary).toContain('id=permissi...');

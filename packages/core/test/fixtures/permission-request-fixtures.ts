@@ -45,13 +45,13 @@ export const permissionRequestFixtures = {
         status: 'pending',
         rawInput: {
           filePath:
-            'packages/core/src/permission/format-permission-summary-for-operator.ts',
+            '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
           oldString: '<redacted>',
           newString: '<redacted>',
         },
         locations: [
           {
-            path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
+            path: '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
             line: 42,
           },
         ],
@@ -80,7 +80,7 @@ export const permissionRequestFixtures = {
         },
         locations: [
           {
-            path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
+            path: '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
             line: 42,
           },
         ],

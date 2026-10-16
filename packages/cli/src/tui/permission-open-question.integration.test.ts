@@ -129,7 +129,7 @@ describe('permission summary in the TTY Open Questions pane', () => {
         expect(permissionEvent.request.toolName).toBe('Edit');
         expect(permissionEvent.operatorSummary).toBe(
           `permission.pending worker=implementer tool=Edit ` +
-            'path=packages/core/src/permission/format-permission-summary-for-operator.ts ' +
+            'path=/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts ' +
             `description="Edit File" id=${pendingId.slice(0, 8)}...`,
         );
 
@@ -180,7 +180,7 @@ describe('permission summary in the TTY Open Questions pane', () => {
     expect(questionAtEnqueue).toMatchObject({
       relatedPermissionId: pendingId,
       context: expect.stringContaining(
-        `permission.pending worker=implementer tool=Edit path=packages/core/src/permission/format-permission-summary-for-operator.ts`,
+        `permission.pending worker=implementer tool=Edit path=/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts`,
       ),
     });
 
@@ -199,8 +199,11 @@ describe('permission summary in the TTY Open Questions pane', () => {
       `▸ ${questionAtEnqueue!.id} [yes_no] Should I allow this file edit?`,
     );
     expect(visibleFrame).toContain('permission.pending worker=implementer tool=Edit');
-    expect(visibleFrame).toContain(
-      'path=packages/core/src/permission/format-permission-summary-for-operator.ts',
+    const visibleText = visibleFrame
+      .replace(/[│╭╮╰╯─┌┐└┘]/gu, '')
+      .replace(/\s+/gu, '');
+    expect(visibleText).toContain(
+      'path=/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
     );
     expect(visibleFrame).toContain('description="Edit');
     expect(visibleFrame).toContain('File"');

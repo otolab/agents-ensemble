@@ -273,7 +273,7 @@ describe('open question / operator flow integration', () => {
           expect(pendingId).toBeTruthy();
           const expectedSummary =
             `permission.pending worker=implementer tool=Edit ` +
-            'path=packages/core/src/permission/format-permission-summary-for-operator.ts ' +
+            'path=/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts ' +
             `description="Edit File" id=${pendingId!.slice(0, 8)}...`;
           expect(permissionEvent.request.toolName).toBe('Edit');
           expect(permissionEvent.operatorSummary).toBe(expectedSummary);
@@ -338,7 +338,7 @@ describe('open question / operator flow integration', () => {
     expect(pendingId).toBeTruthy();
     const expectedSummary =
       `permission.pending worker=implementer tool=Edit ` +
-      'path=packages/core/src/permission/format-permission-summary-for-operator.ts ' +
+      'path=/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts ' +
       `description="Edit File" id=${pendingId!.slice(0, 8)}...`;
     expect(observedOpenQuestion).toMatchObject({
       relatedPermissionId: pendingId,

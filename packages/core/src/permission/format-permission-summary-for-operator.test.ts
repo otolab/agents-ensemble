@@ -117,7 +117,7 @@ describe('extractPermissionOperationSummary', () => {
     ).toEqual({
       field: 'path',
       value:
-        'packages/core/src/permission/format-permission-summary-for-operator.ts',
+        '/workspace/agents-ensemble/packages/core/src/permission/format-permission-summary-for-operator.ts',
     });
   });
 });
