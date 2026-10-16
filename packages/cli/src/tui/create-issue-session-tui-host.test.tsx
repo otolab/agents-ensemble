@@ -49,7 +49,7 @@ describe('createIssueSessionTuiHost', () => {
   });
 
   it('clears User Timing entries during long-running updates and stops on dispose', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const entryPrefix = 'ensemble-issue-session-tui-host-test';
     performance.clearMeasures();
     performance.clearMarks();
@@ -59,7 +59,7 @@ describe('createIssueSessionTuiHost', () => {
     let observedClear = false;
     let maximumMeasureCount = 0;
 
-    for (let update = 0; update < 50; update += 1) {
+    for (let update = 0; update < 60; update += 1) {
       for (let entry = 0; entry < 100; entry += 1) {
         const name = `${entryPrefix}-${update}-${entry}`;
         performance.mark(`${name}-mark`);
@@ -88,16 +88,26 @@ describe('createIssueSessionTuiHost', () => {
     expect(maximumMeasureCount).toBeLessThan(3_000);
     expect(
       performance.getEntriesByType('mark').filter((entry) => entry.name.startsWith(entryPrefix)),
-    ).toHaveLength(2_000);
+    ).toHaveLength(0);
+    expect(
+      performance
+        .getEntriesByType('measure')
+        .filter((entry) => entry.name.startsWith(entryPrefix)),
+    ).toHaveLength(0);
 
     host.dispose();
-    const measuresBeforeDisposeAdvance = performance
-      .getEntriesByType('measure')
-      .filter((entry) => entry.name.startsWith(entryPrefix)).length;
+    for (let entry = 0; entry < 100; entry += 1) {
+      const name = `${entryPrefix}-after-dispose-${entry}`;
+      performance.mark(`${name}-mark`);
+      performance.measure(`${name}-measure`, { start: 0, end: 1 });
+    }
     vi.advanceTimersByTime(30_000);
     expect(
       performance.getEntriesByType('measure').filter((entry) => entry.name.startsWith(entryPrefix)),
-    ).toHaveLength(measuresBeforeDisposeAdvance);
+    ).toHaveLength(100);
+    expect(
+      performance.getEntriesByType('mark').filter((entry) => entry.name.startsWith(entryPrefix)),
+    ).toHaveLength(100);
   });
 
   it('keeps rendering when clearing User Timing entries throws', () => {
