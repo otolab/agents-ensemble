@@ -101,7 +101,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 
 | 設定 | 環境変数 | config | CLI | コード default | 解決 |
 |------|----------|--------|-----|----------------|------|
-| TTY レイアウト | `ENSEMBLE_TUI_LAYOUT` | `tui.layout` | — | `pane` | A |
+| TTY レイアウト | `ENSEMBLE_TUI_LAYOUT` | `tui.layout` | — | `stream` | A |
 | OSC 8 ハイパーリンク | `FORCE_HYPERLINK`（`1`/`0`） | `tui.forceHyperlink`（`auto`/`on`/`off`） | — | `auto` | A |
 | オペレータ 1 回注入 | `ENSEMBLE_OPERATOR_MESSAGE` | — | `ensemble issue <ref> [message...]` | — | D |
 

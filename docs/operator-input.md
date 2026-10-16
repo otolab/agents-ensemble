@@ -80,9 +80,11 @@ CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できま�
 
 端末ごとの確認済み・未確認・既知制限と、実端末確認結果の更新手順は [TUI 端末互換性マトリクス](tui-terminal-compatibility.md) に記載します。
 
-TTY の既定は `pane` レイアウトです。Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
+TTY の既定は `stream` レイアウトです。従来のペイン分割を使う場合は `.ensemble/config.yaml` に `tui.layout: pane`、または `ENSEMBLE_TUI_LAYOUT=pane` を指定します。環境変数は config より優先されます（[settings.md](settings.md)）。非 TTY は常に `pane` 経路です。
 
-`ENSEMBLE_TUI_LAYOUT=stream` または `.ensemble/config.yaml` の `tui.layout: stream` を指定すると、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。環境変数は config より優先されます（[settings.md](settings.md)）。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /reconnect で再接続 · /exit で終了` の prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。非 TTY は常に `pane` 経路です。
+既定の `stream` レイアウトでは、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /reconnect で再接続 · /exit で終了` の prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（詳細は [ADR 0015](adr/0015-cli-tui-library.md)）。
+
+`pane` では Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
 
 Open questions は内容駆動で高さを決めます。選択中 question の `question` と `context` は折り返し後の要求行数として扱い、非選択 question は 1 行の compact 表示として同じ一覧に残します。pane / stream とも、まずこの要求行数に合わせて Open questions 枠を拡大し、通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。表示上限に達した場合は、非選択 question の compact 行を先に 1 行ずつ確保し、残りを選択中の detail に割り当てます。そのため通常端末では、選択本文が長くても compact 行が実画面から隠れることはありません。端末の高さ、または compact 行を確保した残りの本文上限を超える極端に長い内容は、#321 と同じ非保証の clip 方針です。Open questions ペイン内のスクロールは行いません。
 
