@@ -5,28 +5,15 @@
 set -euo pipefail
 
 DEFAULT_TTL_MS=300000
+DEFAULT_CACHE_DIR="${HOME}/.ensemble/pi/cache/auth"
 LOCK_NAME=".lock"
-
-_script_dir() {
-  local src="${BASH_SOURCE[0]}"
-  while [[ -L "$src" ]]; do
-    local d
-    d="$(cd "$(dirname "$src")" && pwd)"
-    src="$(readlink "$src")"
-    [[ "$src" != /* ]] && src="$d/$src"
-  done
-  cd "$(dirname "$src")" && pwd
-}
-
-# コピー先（例: ~/.ensemble/pi/cached-auth.sh）でも CWD に依存せず同じ cache を使う
-DEFAULT_CACHE_DIR="$(_script_dir)/cache/auth"
 
 usage() {
   cat <<'EOF'
 Usage: cached-auth.sh [options] -- <command> [args...]
 
 Options:
-  --cache-dir PATH   Cache directory (default: <script-dir>/cache/auth or $ENSEMBLE_PI_AUTH_CACHE_DIR)
+  --cache-dir PATH   Cache directory (default: ~/.ensemble/pi/cache/auth or $ENSEMBLE_PI_AUTH_CACHE_DIR)
   --ttl-ms MS        Minimum interval before re-running <command> (default: 300000)
   --cache-key KEY    Cache file basename (default: default). 同一 --cache-dir で複数 credential だけ分けたいときに指定
   --clear            Delete cache entry for this key and exit

@@ -158,7 +158,7 @@ Pi conductor は **LLM リクエストの直前**で `apiKey` の `!command` を
 
 **ensemble harness は `!command` の自動ラップや TTL 設定を持ちません**（[ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の移譲モデルのまま）。代わりに、**キャッシュ付きの認証ヘルパースクリプト**を `models.json` から呼び出してください。Codex worker の `[model_providers.*.auth]` + `refresh_interval_ms` と同型で、**毎 `getAuth` でスクリプトは起動するが、キャッシュ hit 時は内側の gcloud を実行しない**運用です。
 
-リポジトリ同梱の [scripts/pi/cached-auth.sh](../scripts/pi/cached-auth.sh) をコピーするか、リポジトリ内の **絶対パス**で参照します。キャッシュファイルは既定で **`<repoRoot>/.ensemble/pi/cache/auth/`**（`600`、gitignore 対象の `.ensemble/` 配下）に置きます。
+リポジトリ同梱の [scripts/pi/cached-auth.sh](../scripts/pi/cached-auth.sh) をコピーするか、リポジトリ内の **絶対パス**で参照します。キャッシュファイルは既定で **`~/.ensemble/pi/cache/auth/`**（`600`。CWD や作業リポジトリに依存しない）に置きます。リポジトリ配下に置きたい場合は `--cache-dir` または `ENSEMBLE_PI_AUTH_CACHE_DIR` で上書きしてください。
 
 ```json
 {
@@ -177,7 +177,7 @@ Pi conductor は **LLM リクエストの直前**で `apiKey` の `!command` を
 | 項目 | 説明 |
 |------|------|
 | `--ttl-ms` | この間隔より短い再実行では内側コマンドをスキップ（既定 `300000` = 5 分）。`ENSEMBLE_PI_AUTH_CACHE_TTL_MS` でも指定可。 |
-| `--cache-dir` | キャッシュの置き場（**スコープの本体**）。既定はスクリプト横の `cache/auth` または `ENSEMBLE_PI_AUTH_CACHE_DIR`。 |
+| `--cache-dir` | キャッシュの置き場（**スコープの本体**）。既定は `~/.ensemble/pi/cache/auth` または `ENSEMBLE_PI_AUTH_CACHE_DIR`。 |
 | `--cache-key` | 同一 `--cache-dir` 内で複数 credential を分けたいときだけ指定。未指定は `default`（内側コマンド行はキーに含めない）。 |
 | JWT | stdout が JWT のとき、TTL に加え **`exp` の約 5 分前**まで再利用（`python3` がある環境）。 |
 | クリア | 同じ `--cache-dir`（と `--cache-key`）で `--clear -- gcloud …`。`gcloud auth login` 後に実行するとよい。 |
