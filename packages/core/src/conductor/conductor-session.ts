@@ -125,6 +125,7 @@ import {
 import { createRegisterGitHubWatchTool } from '../github/register-github-watch-tool.js';
 import { createUnregisterGitHubWatchTool } from '../github/unregister-github-watch-tool.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
+import { loadUserInstructions } from '../prompt/load-user-instructions.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -244,6 +245,9 @@ export interface ConductorSessionResult {
 export async function runConductorSession(
   options: RunConductorSessionOptions,
 ): Promise<ConductorSessionResult> {
+  const userInstructions = await loadUserInstructions({
+    userEnsembleRoot: options.mcpConfigOptions?.userEnsembleRoot,
+  });
   const ensembleConfig =
     options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
   const conductorBackend = resolveConductorBackendSetting({
@@ -337,6 +341,7 @@ export async function runConductorSession(
       profile: activeProfile,
       agentModule: resolveAgentPromptModule('conductor', activeProfile.agents),
       issueContext,
+      userInstructions,
     });
   } catch (error) {
     throw new Error(formatGitHubErrorMessage(error, ensembleConfig));

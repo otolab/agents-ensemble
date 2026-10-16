@@ -279,6 +279,60 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
   });
 
+  it('adds the user-wide document to the conductor prompt from the shared user root', async () => {
+    await writeFile(
+      join(userEnsembleRoot, 'AGENTS.md'),
+      'Shared operator context for every repository.',
+    );
+    mockSend.mockResolvedValue({
+      runId: 'run-user-instructions',
+      status: 'finished',
+      result: 'started',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining(
+          'Shared operator context for every repository.',
+        ),
+      }),
+    );
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        systemPrompt: expect.stringContaining('## Prepared Materials'),
+      }),
+    );
+  });
+
+  it(
+    'fails before fetching the Issue or starting the agent when the user document is unreadable',
+    async () => {
+      await mkdir(join(userEnsembleRoot, 'AGENTS.md'));
+
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          permissionPipeline: new PermissionPipeline({}),
+          registerProcessSignalHandlers: false,
+        }),
+      ).rejects.toThrow(/Failed to read user instructions at .*AGENTS\.md/);
+
+      expect(issueContextModule.fetchIssueContext).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+    },
+  );
+
   it('passes profile conductor builtinTools to the backend factory', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-tools-disabled',

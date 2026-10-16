@@ -27,7 +27,7 @@ describe('profilePromptModule', () => {
     );
 
     expect(prompt).toContain('bootstrap 指示');
-    expect(prompt).toContain('行動時の定義として読み、従う');
+    expect(prompt).toContain('記載された役割に従って参照し、適用される指示に従う');
     expect(prompt).toContain('## Prepared Materials');
     expect(prompt).toContain('### Team definition');
     expect(prompt).toContain('team 定義');
@@ -48,7 +48,7 @@ describe('profilePromptModule', () => {
       ),
     );
 
-    expect(prompt).toContain('行動時の定義として読み、従う');
+    expect(prompt).toContain('記載された役割に従って参照し、適用される指示に従う');
     expect(prompt).toContain('## Instructions');
     expect(prompt).toContain('## Prepared Materials');
     expect(prompt).toContain('team only');
