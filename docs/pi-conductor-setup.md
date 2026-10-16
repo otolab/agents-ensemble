@@ -177,9 +177,10 @@ Pi conductor は **LLM リクエストの直前**で `apiKey` の `!command` を
 | 項目 | 説明 |
 |------|------|
 | `--ttl-ms` | この間隔より短い再実行では内側コマンドをスキップ（既定 `300000` = 5 分）。`ENSEMBLE_PI_AUTH_CACHE_TTL_MS` でも指定可。 |
-| `--cache-dir` | 上書き時のみ。既定は `.ensemble/pi/cache/auth` または `ENSEMBLE_PI_AUTH_CACHE_DIR`。 |
+| `--cache-dir` | キャッシュの置き場（**スコープの本体**）。既定はスクリプト横の `cache/auth` または `ENSEMBLE_PI_AUTH_CACHE_DIR`。 |
+| `--cache-key` | 同一 `--cache-dir` 内で複数 credential を分けたいときだけ指定。未指定は `default`（内側コマンド行はキーに含めない）。 |
 | JWT | stdout が JWT のとき、TTL に加え **`exp` の約 5 分前**まで再利用（`python3` がある環境）。 |
-| クリア | `cached-auth.sh --clear --ttl-ms 0 -- gcloud …` と同じコマンド行でキャッシュ削除。`gcloud auth login` 後に実行するとよい。 |
+| クリア | 同じ `--cache-dir`（と `--cache-key`）で `--clear -- gcloud …`。`gcloud auth login` 後に実行するとよい。 |
 
 Worker（Codex）側は `~/.codex/config.toml` の `refresh_interval_ms` で同様の抑制ができます。Pi conductor だけ直 `!gcloud` のままにしないでください。
 
