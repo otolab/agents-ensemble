@@ -13,6 +13,7 @@ import type { ConductorAgentFactory } from '../../../core/src/conductor/conducto
 import { createMockConductorGetUsage } from '../../../core/src/testing/mock-conductor-get-usage.js';
 import {
   createInProcessAcpBridge,
+  IN_PROCESS_DEFAULT_ACP,
   PING_SYSTEM_PROMPT,
   TEST_ISSUE,
   TEST_WORKTREE,
@@ -157,6 +158,7 @@ describe('permission summary in the TTY Open Questions pane', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot: REPO_ROOT,
       profile: IMPLEMENTER_PROFILE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
       conductorAgentFactory,
       maxTurns: 10,
       permissionPipeline: new PermissionPipeline({
