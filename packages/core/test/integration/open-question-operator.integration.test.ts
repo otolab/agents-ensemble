@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKCustomTool } from '@cursor/sdk';
+import yaml from 'js-yaml';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AcpBridge } from '../../src/acp/acp-bridge.js';
@@ -11,6 +12,7 @@ import { SessionLogger, type SessionLogEvent } from '../../src/conductor/session
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../../src/escalation/enqueue-max-turns-question.js';
+import type { OpenQuestion } from '../../src/escalation/open-question.js';
 import type { Profile } from '../../src/profile/types.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
@@ -26,6 +28,7 @@ import {
 } from './helpers/conductor-session-assertions.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
 import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
+import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
@@ -34,6 +37,13 @@ const PING_PROFILE: Profile = {
     ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },
   workers: [{ name: 'ping-1', kind: 'ping' }],
+};
+
+const IMPLEMENTER_PROFILE: Profile = {
+  agents: {
+    implementer: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
+  },
+  workers: [{ name: 'implementer-1', kind: 'implementer' }],
 };
 
 const { mockSend, mockClose, mockCreate, mockCreateCursorSdkConductorAgentFactory } = vi.hoisted(() => {
@@ -226,6 +236,120 @@ describe('open question / operator flow integration', () => {
     expect(result.workerDispatches).toHaveLength(1);
     expect(result.workerFailures).toHaveLength(0);
     expect(result.stopReason).toBe('completed');
+  });
+
+  it('links a Cursor ACP v1 Edit permission summary to the Open Question context', async () => {
+    const bridge = await createInProcessAcpBridge(undefined, {
+      requestPermissionOnPrompt: true,
+      permissionParams: permissionRequestFixtures.editCursorAcpV1,
+    });
+
+    let pendingId: string | undefined;
+    let observedOpenQuestion: OpenQuestion | undefined;
+    let askedHuman = false;
+    let sendCount = 0;
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount++;
+      if (sendCount === 1) {
+        await conductorTools.prompt_worker!.execute({
+          worker: 'implementer-1',
+          instruction: 'Perform the requested work.',
+        });
+        return { runId: 'run-dispatch', status: 'finished', result: 'worker sent' };
+      }
+
+      if (message.includes('permission 判断待ち')) {
+        const yamlStart = message.indexOf('```yaml\n');
+        const yamlEnd = message.indexOf('\n```', yamlStart);
+        const permissionEvent = yaml.load(
+          message.slice(yamlStart + '```yaml\n'.length, yamlEnd),
+        ) as {
+          id: string;
+          request: { toolName: string };
+          operatorSummary: string;
+        };
+        if (!askedHuman) {
+          pendingId = permissionEvent.id;
+          expect(pendingId).toBeTruthy();
+          const expectedSummary =
+            `permission.pending worker=implementer tool=Edit ` +
+            'path=packages/core/src/permission/format-permission-summary-for-operator.ts ' +
+            `description="Edit permission summary renderer" id=${pendingId!.slice(0, 8)}...`;
+          expect(permissionEvent.request.toolName).toBe('Edit');
+          expect(permissionEvent.operatorSummary).toBe(expectedSummary);
+
+          await conductorTools.ask_human!.execute({
+            question: 'Should I allow this file edit?',
+            responseType: 'yes_no',
+            context: 'The Edit permission is waiting.',
+            relatedPermissionId: pendingId,
+          });
+          askedHuman = true;
+        } else {
+          await conductorTools.resolve_permission!.execute({
+            requestId: permissionEvent.id,
+            decision: 'deny',
+          });
+        }
+        return {
+          runId: 'run-ask-human',
+          status: 'finished',
+          result: 'permission question registered',
+        };
+      }
+
+      if (message.includes('【open question 回答】')) {
+        await conductorTools.resolve_permission!.execute({
+          requestId: pendingId,
+          decision: 'deny',
+        });
+        return { runId: 'run-deny-permission', status: 'finished', result: 'denied' };
+      }
+
+      return { runId: `run-${sendCount}`, status: 'finished', result: 'ok' };
+    });
+
+    let operatorAnswered = false;
+    const operator = createTestOperatorInputBinding((context) => {
+      observedOpenQuestion = context.openQuestions.find(
+        (question) => question.relatedPermissionId === pendingId,
+      );
+      if (observedOpenQuestion && !operatorAnswered) {
+        operatorAnswered = true;
+        return 'no';
+      }
+      return undefined;
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: REPO_ROOT,
+      profile: IMPLEMENTER_PROFILE,
+      maxTurns: 10,
+      permissionPipeline: new PermissionPipeline({
+        policy: { allowTools: [], allowReadOnlyTools: false },
+      }),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+      bindOperatorInput: operator.bindOperatorInput,
+      onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
+    });
+
+    expect(pendingId).toBeTruthy();
+    const expectedSummary =
+      `permission.pending worker=implementer tool=Edit ` +
+      'path=packages/core/src/permission/format-permission-summary-for-operator.ts ' +
+      `description="Edit permission summary renderer" id=${pendingId!.slice(0, 8)}...`;
+    expect(observedOpenQuestion).toMatchObject({
+      relatedPermissionId: pendingId,
+      context: `${expectedSummary}\nThe Edit permission is waiting.`,
+    });
+    expect(result.openQuestions).toContainEqual(
+      expect.objectContaining({
+        relatedPermissionId: pendingId,
+        context: `${expectedSummary}\nThe Edit permission is waiting.`,
+      }),
+    );
   });
 
   it('continues with worker.failed after ACP fails during pending permission', async () => {

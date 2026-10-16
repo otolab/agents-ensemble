@@ -24,6 +24,8 @@ export interface FakeAcpServerOptions {
   requestPermissionOnPrompt?: boolean;
   /** Options to advertise in a fake session/request_permission request. */
   permissionOptions?: PermissionOption[];
+  /** Full permission params for a representative ACP wire payload fixture. */
+  permissionParams?: Record<string, unknown>;
   /** Called with the selected decision sent by the client. */
   onPermissionResponse?: (decision: unknown) => void;
   /** Called when session/prompt is received. May push session/update via `notify`. */
@@ -208,13 +210,15 @@ export class FakeAcpServer {
         jsonrpc: '2.0',
         id: requestId,
         method: 'session/request_permission',
-        params: {
-          sessionId,
-          toolName: 'test-tool',
-          ...(this.options.permissionOptions
-            ? { options: this.options.permissionOptions }
-            : {}),
-        },
+        params: this.options.permissionParams
+          ? { ...this.options.permissionParams, sessionId }
+          : {
+              sessionId,
+              toolName: 'test-tool',
+              ...(this.options.permissionOptions
+                ? { options: this.options.permissionOptions }
+                : {}),
+            },
       });
     });
   }

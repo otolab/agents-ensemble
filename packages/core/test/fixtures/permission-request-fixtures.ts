@@ -1,4 +1,4 @@
-/** Representative ACP `session/request_permission` payloads seen by the harness. */
+/** ACP `session/request_permission` payload examples for representative wire shapes. */
 export const permissionRequestFixtures = {
   dogfoodingExecute: {
     sessionId: '01a07a33-d3c1-7ff2-a36a-0f43c2486e45',
@@ -31,26 +31,47 @@ export const permissionRequestFixtures = {
       raw_input: { filePath: 'packages/cli/src/session-log-lines.ts' },
     },
   },
-  editCursorAcp: {
-    sessionId: 'session-cursor-edit',
-    title: 'Approve file edit?',
-    description: 'Allow the agent to update the permission summary renderer.',
-    subject: {
-      type: 'tool_call',
-      toolCall: {
-        toolCallId: 'edit-cursor-1234567890',
-        title: 'Edit permission summary renderer',
-        kind: 'edit',
-        locations: [
-          {
-            path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
-            line: 42,
-          },
-        ],
-        rawInput: {
-          edits: [{ oldString: 'old value', newString: 'new value' }],
-        },
+  /** Cursor ACP v1-shaped params with synthetic identifiers and edit contents. */
+  editCursorAcpV1: {
+    sessionId: 'session-cursor-edit-v1',
+    toolCall: {
+      toolCallId: 'edit-cursor-1234567890',
+      title: 'Edit permission summary renderer',
+      kind: 'edit',
+      status: 'pending',
+      rawInput: {
+        filePath:
+          'packages/core/src/permission/format-permission-summary-for-operator.ts',
+        edits: [{ oldString: 'old value', newString: 'new value' }],
       },
+      locations: [
+        {
+          path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
+          line: 42,
+        },
+      ],
+    },
+    options: [
+      { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },
+      { optionId: 'reject-once', kind: 'reject_once', name: 'Reject' },
+    ],
+  },
+  editCursorAcpV1LocationsOnly: {
+    sessionId: 'session-cursor-edit-v1-locations',
+    toolCall: {
+      toolCallId: 'edit-cursor-location-123456',
+      title: 'Edit permission summary renderer',
+      kind: 'edit',
+      status: 'pending',
+      rawInput: {
+        edits: [{ oldString: 'old value', newString: 'new value' }],
+      },
+      locations: [
+        {
+          path: 'packages/core/src/permission/format-permission-summary-for-operator.ts',
+          line: 42,
+        },
+      ],
     },
     options: [
       { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },

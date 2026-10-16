@@ -137,7 +137,9 @@ function extractPermissionDescription(request: PermissionRequest): string | unde
   const description = [
     readString(raw, 'description'),
     readString(subject, 'description'),
-    ...toolCalls.map((toolCall) => readString(toolCall, 'description')),
+    ...toolCalls.map((toolCall) =>
+      readString(toolCall, 'description', 'title'),
+    ),
   ].find((value): value is string => value !== undefined);
 
   return description ? sanitizeSummaryValue(description) : undefined;

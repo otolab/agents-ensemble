@@ -107,10 +107,10 @@ describe('extractPermissionOperationSummary', () => {
     ).toEqual({ field: 'path', value: 'packages/core/src/index.ts' });
   });
 
-  it('reads Edit target from ACP subject.toolCall rawInput and locations', () => {
+  it('reads Edit target from the ACP v1 toolCall rawInput and locations', () => {
     expect(
       extractPermissionOperationSummary(
-        parsePermissionRequest(permissionRequestFixtures.editCursorAcp),
+        parsePermissionRequest(permissionRequestFixtures.editCursorAcpV1),
       ),
     ).toEqual({
       field: 'path',
