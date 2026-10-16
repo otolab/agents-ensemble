@@ -8,7 +8,7 @@ conductor・implementer・reviewer の**共通前提**。
   - **conductor**: 本書 + `team-conductor.md`
   - **implementer**: 本書 + `team-implementer.md`
   - **reviewer**: 本書 + `team-reviewer.md`
-- **手順書ではない。** 果たすべき目標と選択肢を示す。手順の細部は **Skill（指示があれば）と Issue / PR** が正本。特定の Skill の有無に依存しない。
+- **手順書ではない。** 果たすべき目標と選択肢を示す。手順の細部の source of truth は **Skill（指示があれば）と Issue / PR**。特定の Skill の有無に依存しない。
 
 ## 役割分担
 
@@ -111,7 +111,7 @@ conductor   : マージして終われるか判定 → オペレータへ引き�
 全員        : 待機（追加の問いに応答）
 ```
 
-役割ごとのフローと終了条件は、各 kind の materials（`team-conductor.md` 等）を正本とする。
+役割ごとのフローと終了条件は、各 kind の materials（`team-conductor.md` 等）を authoritative とする（その役割の source of truth）。
 
 ### 手戻し
 
@@ -137,9 +137,9 @@ conductor   : マージして終われるか判定 → オペレータへ引き�
 
 共有媒体としての Issue / PR の使い方。
 
-### 正本として使う
+### Source of truth
 
-- **状態の正本は Issue / PR。** 会話や記憶にしかない情報は「無い」扱い。書かれていないことは引き継がれない
+- **Issue / PR は作業状態と履歴の source of truth。** 会話や記憶にしかない情報は「無い」扱い。書かれていないことは引き継がれない
 - **気づいたことは Issue に書く。** 論点の整理、違和感、未解決・保留・矛盾は、**解決できなくても**残す。ここが「いま何が分かっていないか」の置き場
 - Issue / PR に書いただけでは worker は動かない。作業のきっかけは conductor の `prompt_worker` 等（harness 経由）
 
@@ -148,9 +148,9 @@ conductor   : マージして終われるか判定 → オペレータへ引き�
 - **1 Issue = 1 worktree**（harness がセッション開始時に用意。isolated 既定）
 - PR は通常 1 本（レビュー往復は同一 PR 上）。複数の Phase に分かれている場合は conductor の判断で Phase 毎の PR を作るが、一度に作業するのは 1 PR ずつ
 - Issue の受け入れ条件が完了の定義
-- 作業 / レビュー Skill が指示されていれば、手順の細部の正本になりうる
+- 作業 / レビュー Skill が指示されていれば、手順の細部の source of truth になりうる
 
-### 連絡と正本の分け方
+### 連絡と記録（Issue / PR）の分け方
 
 - **対話・依頼・業務連絡** — conductor 経由の通常メッセージング（`prompt_worker` 等）。implementer と reviewer は直接話さない
 - **蓄積すべき情報** — Issue / PR に書く。後から読み直せる状態・履歴・判断の根拠はここに置く

@@ -12,4 +12,4 @@ instructions:
       - '**§4 implementer** — 指示として従う'
       - その他の章 — 相手（conductor / reviewer）への期待として読む
       - §1 全員の前提、§6 連携 — 全員共通のルール
-      - 手順の細部の正本は **Skill（指示があれば）と Issue / PR**。
+      - 手順の細部の source of truth は **Skill（指示があれば）と Issue / PR**。
