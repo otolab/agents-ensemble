@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseInlineMarkdown } from '../inline-markdown.js';
 import {
   getPaneContentWidth,
+  truncateInlineMarkdownLineToWidth,
   wrapInlineMarkdownToWidth,
   wrapTextToWidth,
 } from './wrap-text-to-width.js';
@@ -21,6 +22,15 @@ describe('wrapTextToWidth', () => {
 
   it('preserves explicit newlines', () => {
     expect(wrapTextToWidth('line one\nline two', 20)).toEqual(['line one', 'line two']);
+  });
+
+  it('preserves paragraph separators and a trailing empty line', () => {
+    expect(wrapTextToWidth('first paragraph\n\nthird paragraph\n', 20)).toEqual([
+      'first paragraph',
+      '',
+      'third paragraph',
+      '',
+    ]);
   });
 
   it('handles empty string', () => {
@@ -90,5 +100,29 @@ describe('wrapInlineMarkdownToWidth', () => {
       [{ text: 'first', bold: true }],
       [{ text: 'second', code: true }],
     ]);
+  });
+
+  it('preserves paragraphs and list structure while wrapping styled text', () => {
+    expect(
+      wrapInlineMarkdownToWidth(
+        parseInlineMarkdown('**one**\nsecond paragraph\n\n- **item**'),
+        12,
+      ),
+    ).toEqual([
+      [{ text: 'one', bold: true }],
+      [{ text: 'second' }],
+      [{ text: 'paragraph' }],
+      [],
+      [{ text: '- ' }, { text: 'item', bold: true }],
+    ]);
+  });
+
+  it('truncates styled wide text within the display width and adds an ellipsis', () => {
+    expect(
+      truncateInlineMarkdownLineToWidth(
+        [{ text: 'あいうえ', bold: true }, { text: ' tail', href: 'https://example.com' }],
+        5,
+      ),
+    ).toEqual([{ text: 'あい', bold: true }, { text: '…' }]);
   });
 });

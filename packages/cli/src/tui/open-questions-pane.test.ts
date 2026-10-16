@@ -97,6 +97,74 @@ describe('buildOpenQuestionListItems', () => {
     expect(rendered?.replace(/\s+/gu, ' ')).toContain('B: Wait for review');
   });
 
+  it('preserves selected question, context, and choice line breaks', () => {
+    const [item] = buildOpenQuestionListItems(
+      [
+        createQuestion({
+          id: 'inq-multiline',
+          question: 'Question line one\nQuestion line two',
+          context: 'Context line one\nContext line two',
+          responseType: 'choice',
+          choices: [{ id: 'A', label: 'Choice line one\nChoice line two' }],
+        }),
+      ],
+      0,
+      80,
+    );
+
+    expect(item?.lines.map((line) => line.map((segment) => segment.text).join(''))).toEqual([
+      '▸ inq-multiline [choice] Question line one',
+      'Question line two',
+      '    Context line one',
+      'Context line two',
+      '    A: Choice line one',
+      'Choice line two',
+    ]);
+  });
+
+  it('shows up to two compact lines and marks omitted question, context, or choice text', () => {
+    const items = buildOpenQuestionListItems(
+      [
+        createQuestion({ id: 'inq-selected', question: 'Selected?' }),
+        createQuestion({
+          id: 'inq-question',
+          question: 'Question line one\nQuestion line two\nQuestion line three',
+        }),
+        createQuestion({
+          id: 'inq-choice',
+          question: 'Choice?',
+          responseType: 'choice',
+          choices: [{ id: 'A', label: 'Choice line one\nChoice line two' }],
+        }),
+        createQuestion({
+          id: 'inq-context',
+          question: 'Context?',
+          context: 'Context line one\nContext line two',
+        }),
+      ],
+      0,
+      80,
+    );
+
+    expect(items.slice(1).map((item) => item.lines.map((line) =>
+      line.map((segment) => segment.text).join(''),
+    ))).toEqual([
+      [
+        '  inq-question [text] Question line one',
+        'Question line two…',
+      ],
+      [
+        '  inq-choice [choice] Choice?',
+        '    A: Choice line one…',
+      ],
+      [
+        '  inq-context [text] Context?',
+        '    Context line one…',
+      ],
+    ]);
+    expect(items.slice(1).every((item) => item.lines.length <= 2)).toBe(true);
+  });
+
   it('renders nested list and table Markdown in question and context', () => {
     const [item] = buildOpenQuestionListItems(
       [
@@ -202,9 +270,12 @@ describe('resolveOpenQuestionsPaneLayout', () => {
       layout.items.reduce((sum, item) => sum + item.lines.length, 0),
     );
     expect(layout.items[0]?.lines).toHaveLength(12);
+    expect(
+      layout.items[0]?.lines.at(-1)?.map((segment) => segment.text).join(''),
+    ).toContain('…');
   });
 
-  it('counts each non-selected question as one compact line in the requested height', () => {
+  it('reserves each non-selected question compact line in the requested height', () => {
     const layout = resolveOpenQuestionsPaneLayout({
       openQuestions: [
         {
@@ -213,7 +284,7 @@ describe('resolveOpenQuestionsPaneLayout', () => {
           context: 'context '.repeat(10),
         },
         createQuestion({ id: 'inq-2', question: 'Second question' }),
-        createQuestion({ id: 'inq-3', question: 'Third question' }),
+        createQuestion({ id: 'inq-3', question: 'Third question\nMore detail' }),
       ],
       selectedIndex: 0,
       contentWidth: 40,
@@ -222,6 +293,7 @@ describe('resolveOpenQuestionsPaneLayout', () => {
 
     expect(layout.items).toHaveLength(3);
     expect(layout.items.slice(1).every((item) => item.compact)).toBe(true);
+    expect(layout.items[2]?.lines).toHaveLength(2);
     expect(layout.contentLineCount).toBe(
       layout.items.reduce((sum, item) => sum + item.lines.length, 0),
     );

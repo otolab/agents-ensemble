@@ -217,3 +217,56 @@ export function wrapInlineMarkdownToWidth(
     wrapStyledCharacterLine(line, width),
   );
 }
+
+/** 表示幅に合わせて 1 行を切り詰め、省略記号を付ける。 */
+export function truncateInlineMarkdownLineToWidth(
+  segments: InlineMarkdownLine,
+  width: number,
+): InlineMarkdownLine {
+  const safeWidth = Math.max(1, width);
+  const ellipsis = '…';
+  const textWidth = Math.max(0, safeWidth - stringWidth(ellipsis));
+  const truncated: InlineMarkdownLine = [];
+  let currentWidth = 0;
+  let isFull = false;
+
+  for (const segment of segments) {
+    for (const character of Array.from(segment.text)) {
+      const characterWidth = stringWidth(character);
+      if (currentWidth + characterWidth > textWidth) {
+        isFull = true;
+        break;
+      }
+      appendStyledSegment(truncated, character, {
+        text: character,
+        width: characterWidth,
+        ...(segment.bold ? { bold: true } : {}),
+        ...(segment.code ? { code: true } : {}),
+        ...(segment.href !== undefined ? { href: segment.href } : {}),
+      });
+      currentWidth += characterWidth;
+    }
+    if (isFull) {
+      break;
+    }
+  }
+
+  while (truncated.length > 0) {
+    const lastSegment = truncated.at(-1);
+    const lastCharacter = lastSegment && Array.from(lastSegment.text).at(-1);
+    if (!lastSegment || !lastCharacter || lastCharacter.trim() !== '') {
+      break;
+    }
+
+    lastSegment.text = Array.from(lastSegment.text).slice(0, -1).join('');
+    if (lastSegment.text === '') {
+      truncated.pop();
+    }
+  }
+
+  appendStyledSegment(truncated, ellipsis, {
+    text: ellipsis,
+    width: stringWidth(ellipsis),
+  });
+  return truncated;
+}

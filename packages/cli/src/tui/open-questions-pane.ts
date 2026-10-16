@@ -4,7 +4,10 @@ import {
   type InlineMarkdownLine,
   type InlineMarkdownSegment,
 } from '../inline-markdown.js';
-import { wrapInlineMarkdownToWidth } from './wrap-text-to-width.js';
+import {
+  truncateInlineMarkdownLineToWidth,
+  wrapInlineMarkdownToWidth,
+} from './wrap-text-to-width.js';
 import {
   OPEN_QUESTIONS_PANE_MAX_DISPLAY_LINES,
   OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO,
@@ -30,6 +33,8 @@ export interface OpenQuestionsPaneLayout {
   selectedIndex: number;
 }
 
+const OPEN_QUESTION_COMPACT_MAX_LINES = 2;
+
 /** 端末行数から Open questions 本文の最大表示行数を算出する。 */
 export function computeMaxOpenQuestionsDisplayLines(terminalRows: number): number {
   const ratioCap = Math.floor(terminalRows * OPEN_QUESTIONS_PANE_MAX_HEIGHT_RATIO);
@@ -52,11 +57,27 @@ function buildSelectedQuestionItem(
   question: OpenQuestion,
   contentWidth: number,
 ): OpenQuestionListItemRender {
-  const headerSegments = buildPrefixedSegments(
-    `▸ ${question.id} [${question.responseType}] `,
-    question.question,
+  return {
+    id: question.id,
+    lines: buildQuestionDetailLines(
+      question,
+      `▸ ${question.id} [${question.responseType}] `,
+      contentWidth,
+    ),
+    isSelected: true,
+    compact: false,
+  };
+}
+
+function buildQuestionDetailLines(
+  question: OpenQuestion,
+  headerPrefix: string,
+  contentWidth: number,
+): InlineMarkdownLine[] {
+  const lines = wrapInlineMarkdownToWidth(
+    buildPrefixedSegments(headerPrefix, question.question),
+    contentWidth,
   );
-  const lines = wrapInlineMarkdownToWidth(headerSegments, contentWidth);
   if (question.context) {
     lines.push(
       ...wrapInlineMarkdownToWidth(
@@ -75,12 +96,7 @@ function buildSelectedQuestionItem(
       );
     }
   }
-  return {
-    id: question.id,
-    lines,
-    isSelected: true,
-    compact: false,
-  };
+  return lines;
 }
 
 export function buildOpenQuestionListItems(
@@ -93,13 +109,26 @@ export function buildOpenQuestionListItems(
       return buildSelectedQuestionItem(question, contentWidth);
     }
 
-    const headerSegments = buildPrefixedSegments(
+    const lines = buildQuestionDetailLines(
+      question,
       `  ${question.id} [${question.responseType}] `,
-      question.question,
+      contentWidth,
     );
+    const compactLines = lines.slice(0, OPEN_QUESTION_COMPACT_MAX_LINES);
+    if (lines.length > compactLines.length) {
+      const lastIndex = compactLines.length - 1;
+      const lastLine = compactLines[lastIndex];
+      if (lastLine) {
+        compactLines[lastIndex] = truncateInlineMarkdownLineToWidth(
+          lastLine,
+          contentWidth,
+        );
+      }
+    }
+
     return {
       id: question.id,
-      lines: [wrapInlineMarkdownToWidth(headerSegments, contentWidth)[0] ?? []],
+      lines: compactLines,
       isSelected: false,
       compact: true,
     };
@@ -122,12 +151,13 @@ export function countOpenQuestionsDisplayLines(items: OpenQuestionListItemRender
  *
  * Keep the original question order so the selected marker does not jump. When
  * the selected item is too long, only its detail is clipped; compact rows are
- * one line each and remain in the render list.
+ * at most two lines each and remain in the render list.
  */
 function fitOpenQuestionItemsToContentLimit(
   items: OpenQuestionListItemRender[],
   selectedIndex: number,
   maxContentLines: number,
+  contentWidth: number,
 ): OpenQuestionListItemRender[] {
   const requestedContentLineCount = countOpenQuestionsDisplayLines(items);
   if (requestedContentLineCount <= maxContentLines) {
@@ -151,11 +181,18 @@ function fitOpenQuestionItemsToContentLimit(
     return items;
   }
 
-  return items.map((item, index) =>
-    index === selectedIndex
-      ? { ...item, lines: item.lines.slice(0, selectedLineBudget) }
-      : item,
-  );
+  return items.map((item, index) => {
+    if (index !== selectedIndex) {
+      return item;
+    }
+    const lines = item.lines.slice(0, selectedLineBudget);
+    const lastIndex = lines.length - 1;
+    const lastLine = lines[lastIndex];
+    if (lastLine) {
+      lines[lastIndex] = truncateInlineMarkdownLineToWidth(lastLine, contentWidth);
+    }
+    return { ...item, lines };
+  });
 }
 
 export function resolveOpenQuestionsPaneLayout(params: {
@@ -189,6 +226,7 @@ export function resolveOpenQuestionsPaneLayout(params: {
     fullItems,
     selectedIndex,
     maxContentLines,
+    params.contentWidth,
   );
   const contentLineCount = Math.max(1, countOpenQuestionsDisplayLines(items));
 
