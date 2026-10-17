@@ -1,11 +1,11 @@
 export type OperatorPostLoopAction = 'exit' | 'resume';
 
-/** 自律ループ停止後、オペレータの `/exit` または追加指示を待つ。 */
+/** 自律ループ停止後、オペレータの `/close` / `/exit` または追加指示を待つ。 */
 export interface OperatorPostLoopGate {
   isWaiting(): boolean;
   /** `prepareForWait` 後・`wait` 前の短い窓で post-loop 向け notify を受け付けるか。 */
   isPreparedForWait(): boolean;
-  /** `session.post_loop_wait` emit 直前に呼ぶ。`wait` 前の `/exit` レースを防ぐ。 */
+  /** `session.post_loop_wait` emit 直前に呼ぶ。`wait` 前の終了コマンドとの競合を防ぐ。 */
   prepareForWait(): void;
   wait(signal: AbortSignal): Promise<OperatorPostLoopAction>;
   notifyExit(): void;

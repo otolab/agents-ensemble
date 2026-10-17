@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ const {
   mockClose,
   mockCreate,
   mockCreateCursorSdkConductorAgentFactory,
+  mockCreateGitHubMonitor,
   mockFetchIssueContext,
   mockResolveGitHubAuthToken,
   mockSend,
@@ -18,6 +19,7 @@ const {
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
   const mockCreateCursorSdkConductorAgentFactory = vi.fn();
+  const mockCreateGitHubMonitor = vi.fn();
   const mockFetchIssueContext = vi.fn();
   const mockResolveGitHubAuthToken = vi.fn();
   const mockTuiDispose = vi.fn();
@@ -52,6 +54,7 @@ const {
     mockClose,
     mockCreate,
     mockCreateCursorSdkConductorAgentFactory,
+    mockCreateGitHubMonitor,
     mockFetchIssueContext,
     mockResolveGitHubAuthToken,
     mockSend,
@@ -73,6 +76,15 @@ vi.mock('../../core/src/github/resolve-github-auth-token.js', () => ({
   resolveGitHubAuthToken: mockResolveGitHubAuthToken,
 }));
 
+vi.mock('../../core/src/github/github-monitor.js', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('../../core/src/github/github-monitor.js')>();
+  return {
+    ...original,
+    createGitHubMonitor: mockCreateGitHubMonitor,
+  };
+});
+
 vi.mock('@agents-ensemble/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agents-ensemble/core')>();
   return {
@@ -89,8 +101,16 @@ vi.mock('./tui/create-issue-session-tui-host.js', () => ({
   createIssueSessionTuiHost: mockTuiCreate,
 }));
 
-import { executeIssueCommand } from './issue-command.js';
+import { executeIssueCommand, issueCommandExitCode } from './issue-command.js';
+import type { AcpBridge } from '../../core/src/acp/acp-bridge.js';
+import { DEFAULT_ENSEMBLE_CONFIG } from '../../core/src/config/defaults.js';
 import { runIssueSession as runIssueSessionImpl } from '../../core/src/conductor/issue-session.js';
+import { runGit } from '../../core/src/git/run-git.js';
+import {
+  loadSessionSidecar,
+  sessionSidecarPath,
+} from '../../core/src/session/session-sidecar.js';
+import * as worktreeModule from '../../core/src/worktree/worktree.js';
 
 const issueUrl = 'https://github.com/org/repo/issues/1';
 
@@ -123,12 +143,38 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   }
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe('executeIssueCommand with the core session', () => {
   beforeEach(() => {
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
     mockClose.mockClear();
     mockCreate.mockReset();
     mockCreateCursorSdkConductorAgentFactory.mockReset();
+    mockCreateGitHubMonitor.mockReset();
+    mockCreateGitHubMonitor.mockImplementation((options) => {
+      const cursor = structuredClone(
+        options.cursor ?? { pullRequests: {}, explicitPullRequests: {} },
+      );
+      return {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn(),
+        getCursor: vi.fn(() => cursor),
+        acknowledgeUpdates: vi.fn(),
+        registerPullRequest: vi.fn(),
+        unregisterPullRequest: vi.fn(),
+      };
+    });
     mockCreateCursorSdkConductorAgentFactory.mockReturnValue({
       create: mockCreate,
       resume: mockCreate,
@@ -162,6 +208,7 @@ describe('executeIssueCommand with the core session', () => {
 
   afterEach(() => {
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+    vi.restoreAllMocks();
   });
 
   it.each([
@@ -264,6 +311,398 @@ describe('executeIssueCommand with the core session', () => {
     expect(telemetryEventTypes.indexOf('session.stop')).toBeGreaterThan(
       telemetryEventTypes.indexOf('session.post_loop_wait'),
     );
+  });
+
+  it('closes a TTY session and resumes it from the sidecar with --continue', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    let resolveInFlightGithubSend!: (result: {
+      runId: string;
+      status: string;
+      result: string;
+    }) => void;
+    const inFlightGithubSend = new Promise<{
+      runId: string;
+      status: string;
+      result: string;
+    }>((resolve) => {
+      resolveInFlightGithubSend = resolve;
+    });
+    mockSend
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      })
+      .mockReturnValueOnce(inFlightGithubSend);
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+    await runGit(['init'], repoRoot);
+    await runGit(['config', 'user.email', 'test@example.com'], repoRoot);
+    await runGit(['config', 'user.name', 'test'], repoRoot);
+    await runGit(['commit', '--allow-empty', '-m', 'init'], repoRoot);
+    const options = {
+      repoRoot,
+      conductorCwd: repoRoot,
+      worktree: 'isolated' as const,
+    };
+    const deps = {
+      isOperatorInputInteractive: (message: string | undefined) =>
+        message === undefined,
+      isOperatorInputTty: () => true,
+      runIssueSession: runIssueSessionImpl,
+    };
+    const pendingUpdate = {
+      id: 'issue-comment:42',
+      kind: 'issue.comment' as const,
+      summary: 'arrived while the TTY session was closing',
+      bodyPreview: 'arrived while the TTY session was closing',
+    };
+    const closeAcknowledge = vi.fn();
+    let resumeAcknowledge: ReturnType<typeof vi.fn> | undefined;
+    mockCreateGitHubMonitor
+      .mockImplementationOnce((monitorOptions) => {
+        let cursor = structuredClone(
+          monitorOptions.cursor ?? {
+            pullRequests: {},
+            explicitPullRequests: {},
+          },
+        );
+        return {
+          start: vi.fn(() => {
+            cursor = {
+              ...cursor,
+              lastIssueCommentId: '42',
+              pendingUpdates: [pendingUpdate],
+            };
+            monitorOptions.onCursorChange?.(cursor);
+            monitorOptions.onUpdate({ items: [pendingUpdate] });
+          }),
+          stop: vi.fn().mockResolvedValue(undefined),
+          flush: vi.fn(),
+          getCursor: vi.fn(() => cursor),
+          acknowledgeUpdates: closeAcknowledge,
+          registerPullRequest: vi.fn(),
+          unregisterPullRequest: vi.fn(),
+        };
+      })
+      .mockImplementationOnce((monitorOptions) => {
+        let cursor = structuredClone(monitorOptions.cursor!);
+        const acknowledgeUpdates = vi.fn((ids: readonly string[]) => {
+          const acknowledged = new Set(ids);
+          const pendingUpdates = (cursor.pendingUpdates ?? []).filter(
+            (item) => !acknowledged.has(item.id),
+          );
+          cursor = {
+            ...cursor,
+            ...(pendingUpdates.length > 0 ? { pendingUpdates } : {}),
+          };
+          if (pendingUpdates.length === 0) {
+            delete cursor.pendingUpdates;
+          }
+          monitorOptions.onCursorChange?.(cursor);
+        });
+        resumeAcknowledge = acknowledgeUpdates;
+        return {
+          start: vi.fn(() => {
+            monitorOptions.onUpdate({
+              items: cursor.pendingUpdates ?? [],
+            });
+          }),
+          stop: vi.fn().mockResolvedValue(undefined),
+          flush: vi.fn(),
+          getCursor: vi.fn(() => cursor),
+          acknowledgeUpdates,
+          registerPullRequest: vi.fn(),
+          unregisterPullRequest: vi.fn(),
+        };
+      });
+
+    const closePromise = executeIssueCommand(issueUrl, options, deps);
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(mockTuiOperatorApi.current).toBeDefined(),
+    );
+    mockTuiOperatorApi.current!.submit('/close');
+    resolveInFlightGithubSend({
+      runId: 'run-2',
+      status: 'finished',
+      result: 'done',
+    });
+    const closeResult = await withTimeout(closePromise, 'TTY /close');
+
+    expect(closeResult.stopReason).toBe('completed');
+    expect(mockClose).toHaveBeenCalledOnce();
+    expect(mockTuiDispose).toHaveBeenCalledOnce();
+    const closedTui = mockTuiCreate.mock.results[0]?.value as {
+      telemetrySink: ReturnType<typeof vi.fn>;
+    };
+    expect(closedTui.telemetrySink).toHaveBeenCalledWith({
+      type: 'session.operator_close',
+    });
+    const sidecarPath = join(
+      repoRoot,
+      '.ensemble',
+      'sessions',
+      'agent-test.json',
+    );
+    const closeSidecar = JSON.parse(await readFile(sidecarPath, 'utf8'));
+    expect(closeSidecar.githubMonitor.pendingUpdates).toEqual([pendingUpdate]);
+    expect(closeAcknowledge).not.toHaveBeenCalled();
+
+    const continuePromise = executeIssueCommand(
+      issueUrl,
+      { ...options, continue: true },
+      deps,
+    );
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(resumeAcknowledge).toHaveBeenCalledWith([pendingUpdate.id]),
+    );
+    await vi.waitFor(() =>
+      expect(mockTuiOperatorApi.current).toBeDefined(),
+    );
+
+    expect(mockCreate.mock.calls[1]?.[0]).toBe('agent-test');
+    const resumedTui = mockTuiCreate.mock.results[1]?.value as {
+      telemetrySink: ReturnType<typeof vi.fn>;
+    };
+    expect(resumedTui.telemetrySink).toHaveBeenCalledWith({
+      type: 'session.continue',
+      conductorAgentId: 'agent-test',
+    });
+
+    mockTuiOperatorApi.current!.submit('/close');
+    const continueResult = await withTimeout(
+      continuePromise,
+      'TTY --continue session',
+    );
+
+    expect(continueResult.stopReason).toBe('completed');
+    expect(mockSend).toHaveBeenCalledTimes(3);
+    expect(mockSend.mock.calls[2]?.[0]).toContain(
+      'arrived while the TTY session was closing',
+    );
+    expect(mockClose).toHaveBeenCalledTimes(2);
+    expect(mockTuiDispose).toHaveBeenCalledTimes(2);
+    const continuedSidecar = JSON.parse(
+      await readFile(sidecarPath, 'utf8'),
+    );
+    expect(continuedSidecar.githubMonitor.pendingUpdates).toBeUndefined();
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it('continues the same worker ACP session after /close interrupts its first prompt', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+    const userEnsembleRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-cli-session-user-'),
+    );
+    await runGit(['init'], repoRoot);
+    await runGit(['config', 'user.email', 'test@example.com'], repoRoot);
+    await runGit(['config', 'user.name', 'test'], repoRoot);
+    await runGit(['commit', '--allow-empty', '-m', 'init'], repoRoot);
+
+    const worktreePath = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    const firstPrompt = createDeferred<{
+      stopReason: string;
+      responseText: string;
+    }>();
+    const firstBridge = {
+      newSession: vi.fn().mockResolvedValue('worker-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn(() => firstPrompt.promise),
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const resumedBridge = {
+      newSession: vi.fn().mockResolvedValue('unexpected-new-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'worker resumed after close',
+      }),
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi
+      .fn()
+      .mockResolvedValueOnce(firstBridge)
+      .mockResolvedValueOnce(resumedBridge);
+    const options = {
+      repoRoot,
+      conductorCwd: repoRoot,
+      worktree: 'isolated',
+      githubMonitor: false,
+      defaultAcpCommand: process.execPath,
+    };
+    const deps = {
+      isOperatorInputInteractive: () => true,
+      isOperatorInputTty: () => true,
+      loadEnsembleConfig: async () => structuredClone(DEFAULT_ENSEMBLE_CONFIG),
+      loadProfile: async () => ({
+        profile: {
+          workers: [{ name: 'implementer', kind: 'implementer' }],
+        },
+        profilePath: '/tmp/profile.yaml',
+      }),
+      runIssueSession: (
+        sessionOptions: Parameters<typeof runIssueSessionImpl>[0],
+      ) =>
+        runIssueSessionImpl({
+          ...sessionOptions,
+          connectAcp,
+          disableGitHubMonitor: true,
+          mcpConfigOptions: { userEnsembleRoot },
+          registerProcessSignalHandlers: false,
+        }),
+    };
+
+    try {
+      const closePromise = executeIssueCommand(issueUrl, options, deps);
+      await vi.waitFor(() =>
+        expect(firstBridge.promptSession).toHaveBeenCalledOnce(),
+      );
+      await vi.waitFor(() =>
+        expect(mockTuiOperatorApi.current).toBeDefined(),
+      );
+      expect(mockTuiOperatorApi.current!.submit('/close')).toBe(false);
+      const closeResult = await withTimeout(closePromise, 'worker /close');
+
+      expect(closeResult.stopReason).toBe('completed');
+      expect(firstBridge.cancelSession).toHaveBeenCalledWith('worker-session');
+      expect(firstBridge.close).toHaveBeenCalledOnce();
+      await expect(access(worktreePath)).resolves.toBeUndefined();
+      await expect(
+        loadSessionSidecar(
+          sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        ),
+      ).resolves.toMatchObject({
+        workers: {
+          implementer: {
+            acpSessionId: 'worker-session',
+            acpCwd: worktreePath,
+          },
+        },
+      });
+
+      firstPrompt.resolve({ stopReason: 'cancelled', responseText: '' });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const sendsBeforeContinue = mockSend.mock.calls.length;
+      const continuePromise = executeIssueCommand(
+        issueUrl,
+        { ...options, continue: true },
+        deps,
+      );
+      await vi.waitFor(() =>
+        expect(resumedBridge.loadSession).toHaveBeenCalledWith(
+          'worker-session',
+          worktreePath,
+          expect.any(Function),
+        ),
+      );
+      await vi.waitFor(() =>
+        expect(mockSend).toHaveBeenCalledTimes(sendsBeforeContinue + 1),
+      );
+      expect(connectAcp).toHaveBeenCalledTimes(2);
+      expect(connectAcp.mock.calls[1]?.[0].cwd).toBe(worktreePath);
+      expect(resumedBridge.newSession).not.toHaveBeenCalled();
+      expect(resumedBridge.promptSession).toHaveBeenCalledWith(
+        'worker-session',
+        expect.stringContaining('前回の続きです'),
+        expect.any(Object),
+      );
+      expect(String(mockSend.mock.calls[sendsBeforeContinue]?.[0])).toContain(
+        'worker resumed after close',
+      );
+      expect(mockTuiOperatorApi.current).toBeDefined();
+      expect(mockTuiOperatorApi.current!.submit('/close')).toBe(false);
+      const continueResult = await withTimeout(
+        continuePromise,
+        'worker --continue',
+      );
+
+      expect(continueResult.stopReason).toBe('completed');
+      expect(resumedBridge.close).toHaveBeenCalledOnce();
+      await expect(access(worktreePath)).resolves.toBeUndefined();
+    } finally {
+      firstPrompt.resolve({ stopReason: 'cancelled', responseText: '' });
+      await rm(repoRoot, { recursive: true, force: true });
+      await rm(userEnsembleRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps /exit worktree cleanup failures warning-only with exit code 0', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+    const path = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    const removeSpy = vi
+      .spyOn(worktreeModule, 'removeWorkerWorktree')
+      .mockResolvedValue({
+        status: 'failed',
+        path,
+        branch: 'ensemble/issue-1',
+        error: 'git worktree remove failed: lock held',
+      });
+
+    const sessionPromise = executeIssueCommand(
+      issueUrl,
+      {
+        repoRoot,
+        conductorCwd: repoRoot,
+        worktree: 'isolated',
+        githubMonitor: false,
+      },
+      {
+        isOperatorInputInteractive: (message) => message === undefined,
+        isOperatorInputTty: () => true,
+        runIssueSession: (sessionOptions) =>
+          runIssueSessionImpl({
+            ...sessionOptions,
+            workerWorktree: {
+              path,
+              branch: 'ensemble/issue-1',
+              issue: {
+                owner: 'org',
+                repo: 'repo',
+                number: 1,
+                url: issueUrl,
+              },
+            },
+          }),
+      },
+    );
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(mockTuiOperatorApi.current).toBeDefined(),
+    );
+    mockTuiOperatorApi.current!.submit('/exit');
+    const result = await withTimeout(sessionPromise, 'TTY /exit cleanup failure');
+
+    expect(result.stopReason).toBe('completed');
+    expect(issueCommandExitCode(result)).toBe(0);
+    expect(removeSpy).toHaveBeenCalledOnce();
+    const tui = mockTuiCreate.mock.results[0]?.value as {
+      telemetrySink: ReturnType<typeof vi.fn>;
+    };
+    expect(tui.telemetrySink).toHaveBeenCalledWith({
+      type: 'harness.worktree.remove_failed',
+      path,
+      branch: 'ensemble/issue-1',
+      error: 'git worktree remove failed: lock held',
+    });
   });
 
   it('keeps a TTY CLI-message session in post-loop wait until /exit', async () => {

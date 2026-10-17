@@ -244,7 +244,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 - **Issue worktree に紐づく** — implementer は worktree を作成し、**未指定 worker** は同じ Issue worktree を ACP cwd として共有する（規約）
 - **per-worker ACP cwd** — profile の `workers[].workspace` で worker ごとに ACP の cwd を上書き可能（Issue worktree とは別。外部 repo では isolated worktree を自動作成しない）
 - **worker ACP spawn** — 正本は ensemble config の `acp.defaultPreset` / `acp.env`（[config.md](config.md)）。team profile に ACP はない。preset 解決: CLI `--default-acp-*` / `ENSEMBLE_DEFAULT_ACP_CLI` / config `acp.defaultPreset`（[settings.md](settings.md)、[ADR 0019](adr/0019-worker-acp-cli-presets.md)）
-- **worktree のライフサイクル** — isolated モードではセッション開始時に `.ensemble/worktrees/issue-N` を作成（既存なら再利用）。TTY + post-loop で `/exit` 正常終了時に削除（未コミット変更がある場合は削除拒否）。`in-repo` では削除しない。ローカルブランチ `ensemble/issue-N` は残す
+- **worktree のライフサイクル** — isolated モードではセッション開始時に `.ensemble/worktrees/issue-N` を作成（既存なら再利用）。TTY + post-loop の `/exit` 正常終了時は cleanup を試み、未コミット変更がある場合は削除を拒否する。`/close` は終了前に sidecar を flush して worker / conductor / GitHub monitor を停止するが、worktree cleanup を行わず、同じ Issue の `--continue` で再利用できる。`in-repo` では削除しない。ローカルブランチ `ensemble/issue-N` は残す
 - **新規 worktree のベース** — 可能なら `git fetch` 後の `origin` デフォルトブランチ（`origin/HEAD` または `main`）から `ensemble/issue-N` を切る。remote なし・fetch 失敗時はローカル HEAD にフォールバック
 - 手順は **Skill が正本**（`SKILL.md`、必要なら `CASE_STUDIES.md`）— worktree の `cwd` から解決
 - ツール可否・MCP 等は **`spawn` / `session/new` のオプションで明示**
@@ -362,7 +362,7 @@ worker / harness ──enqueue──►─────────────�
 - 自律ターン上限到達（**リミット有効時のみ**）→ orchestrator が「次どうする？」（`source: max_turns`）を自動登録。オペレータは `bindOperatorInput` 経由で回答
 - **GitHub 更新**（`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed`）は自律中・post-loop 中とも `github.update` として同じ経路で処理する。ターン残ありなら通常 dispatch して状況把握ターンを 1 消費し、max-turns 到達後は `operator.message` / `permission.pending` / `permission.stall` 以外を dispatch しない
 - 終了条件: 通常の binding（TTY の初回メッセージ注入を含む）では error / 実行中 worker / pending permission / **未回答 open question** がある間は継続する。SDK の `cancelled` は terminal status として `stopReason: cancelled` に解決する。非 TTY の単発 binding では未回答 question / permission や dispatch hold の release を待たずに終了する
-- **自律ループ停止**（`shouldStopIssueLoop`）と **プロセス終了** は別概念（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)、初回メッセージの分類は [ADR 0023](adr/0023-tty-initial-message-post-loop.md)）。通常の TTY デフォルトでは停止判定後も SessionDriver が post-loop のイベント待機を続け、初回メッセージの有無に関わらず `/exit` までプロセスを維持する。非 TTY の単発 binding はこの post-loop 待機を持たない。`/exit` 正常終了時は isolated worktree を削除（未コミット変更がある場合は拒否）。`--no-wait` で従来の即終了に戻せる
+- **自律ループ停止**（`shouldStopIssueLoop`）と **プロセス終了** は別概念（[ADR 0013](adr/0013-process-lifecycle-vs-autonomous-loop.md)、初回メッセージの分類は [ADR 0023](adr/0023-tty-initial-message-post-loop.md)）。通常の TTY デフォルトでは停止判定後も SessionDriver が post-loop のイベント待機を続け、初回メッセージの有無に関わらず `/close` または `/exit` までプロセスを維持する。両コマンドとも sidecar を flush して worker / conductor / monitor を停止し、未解決 permission は deny する。`/close` は isolated worktree を保持し、`/exit` 正常終了時は cleanup を試みる（未コミット変更がある場合は拒否）。非 TTY の単発 binding は post-loop 待機を持たない。`--no-wait` で従来の即終了に戻せる
 
 CLI: 通常の TTY は Ink TUI（非ブロッキング入力 + `pane` / `stream` レイアウト）。CLI 初回メッセージ / `ENSEMBLE_OPERATOR_MESSAGE` は TTY・非 TTY 共通で binding 直後に 1 回注入するが、TTY では通常の post-loop 待機を維持し、非 TTY では one-shot として終了する。メッセージなしの非 TTY は `bindAsyncOperatorInput`。`--continue` / `--resume` で CLI メッセージを指定した場合は単発注入せず警告する。ログ・表示の正本は [session-logging.md](session-logging.md)。対話モデルは [ADR 0008](adr/0008-human-dialogue-open-questions.md)。
 

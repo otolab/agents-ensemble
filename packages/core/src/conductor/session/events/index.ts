@@ -42,6 +42,7 @@ export type {
   SessionContinueEvent,
   SessionPostLoopWaitEvent,
   SessionOperatorExitEvent,
+  SessionOperatorCloseEvent,
   HarnessTeardownSummaryEvent,
   ConductorAuthRecoveryEvent,
   ConductorAuthReconnectEvent,

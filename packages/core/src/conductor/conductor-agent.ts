@@ -82,6 +82,8 @@ export interface ConductorAgent {
   getUsage(): Promise<ConductorAgentUsage>;
   setSystemPrompt(systemPrompt: string): Promise<void>;
   close(): Promise<void>;
+  /** Close resources for a resumable TTY session without changing normal exit cleanup. */
+  closeForResume?(): Promise<void>;
 }
 
 /** Factory boundary used by the harness to select a conductor backend. */

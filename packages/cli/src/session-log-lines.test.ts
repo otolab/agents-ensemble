@@ -251,6 +251,16 @@ describe('session-log-lines', () => {
         type: 'session.post_loop_wait',
       }),
     ).toBe('自律作業が一段落しました。');
+    expect(
+      formatObservationLogBody({
+        type: 'session.operator_close',
+      }),
+    ).toBe('セッションを保存して閉じています…');
+    expect(
+      formatObservationStderrLine({
+        type: 'session.operator_close',
+      }),
+    ).toBe('\nセッションを保存して閉じています…\n');
   });
 
   it('formats worktree cleanup failures as operator warnings', () => {

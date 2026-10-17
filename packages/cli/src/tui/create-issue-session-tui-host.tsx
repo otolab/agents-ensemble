@@ -89,7 +89,7 @@ function createBindTuiOperatorInput(
     viewModel.setOperatorContext(api.getContext());
 
     // Dispatch the initial message once, but keep the normal TTY binding alive
-    // so post-loop input (including /exit) still reaches the session.
+    // so post-loop input (including /close and /exit) still reaches the session.
     if (operatorMessage) {
       api.submit(operatorMessage);
     }

@@ -73,6 +73,10 @@ interface PiMcpStartupState {
   error?: string;
 }
 
+interface PiMcpLifecycleState {
+  enabled: boolean;
+}
+
 const PI_MCP_STARTUP_OBSERVATION_MS = 2_000;
 
 export interface PiResolvedModel {
@@ -169,6 +173,7 @@ export class PiConductorAgent implements ConductorAgent {
     public readonly agentId: string,
     private readonly modelId: string,
     private readonly mcpStartupState: PiMcpStartupState,
+    private readonly mcpLifecycleState: PiMcpLifecycleState,
     private readonly piSkills: boolean,
     private readonly onStreamText?: (text: string) => void,
   ) {
@@ -342,6 +347,34 @@ export class PiConductorAgent implements ConductorAgent {
     return this.closePromise;
   }
 
+  async closeForResume(): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise;
+    }
+    this.closed = true;
+    this.closePromise = (async () => {
+      try {
+        await this.session.abort();
+      } finally {
+        try {
+          this.unsubscribe();
+        } finally {
+          try {
+            if (this.mcpLifecycleState.enabled) {
+              // Pi dispose does not await MCP extension shutdown. Disable MCP
+              // and reload once so its stdio children close before disposal.
+              this.mcpLifecycleState.enabled = false;
+              await this.session.reload();
+            }
+          } finally {
+            this.session.dispose();
+          }
+        }
+      }
+    })();
+    return this.closePromise;
+  }
+
   private handleEvent(event: AgentSessionEvent): void {
     const activeSend = this.activeSend;
     if (event.type === 'tool_execution_start') {
@@ -388,6 +421,9 @@ async function createPiConductorSession(
   reason: PiSessionStartReason,
 ): Promise<PiConductorAgent> {
   const piMcpResolution = { cwd: options.cwd };
+  const mcpLifecycleState: PiMcpLifecycleState = {
+    enabled: Object.keys(options.mcpServers ?? {}).length > 0,
+  };
   // Validate the harness-resolved map before creating the SDK session so an
   // unsupported transport fails with an actionable Pi-specific error.
   if (options.mcpServers) loadPiMcpConfig(options.mcpServers, piMcpResolution);
@@ -451,7 +487,11 @@ async function createPiConductorSession(
     systemPrompt: systemPromptRef.value,
     extensionFactories: [
       createMcpExtension({
-        loadConfig: () => loadPiMcpConfig(options.mcpServers, piMcpResolution),
+        loadConfig: () =>
+          loadPiMcpConfig(
+            mcpLifecycleState.enabled ? options.mcpServers : undefined,
+            piMcpResolution,
+          ),
       }),
       createCodemodeExtension({ mode: 'on' }),
       createToolSearchExtension(),
@@ -509,6 +549,7 @@ async function createPiConductorSession(
       agentId,
       resolved.modelId,
       mcpStartupState,
+      mcpLifecycleState,
       piSkills,
       options.onStreamText,
     );

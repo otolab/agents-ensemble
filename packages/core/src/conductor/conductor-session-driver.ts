@@ -66,6 +66,8 @@ export interface ConductorSendCompleteInfo {
   sendCount: number;
   runId: string;
   status: ConductorSendResult['status'];
+  /** GitHub update IDs included in this send; used to acknowledge the durable outbox. */
+  githubUpdateIds?: string[];
   result?: string;
   error?: ConductorSendResult['error'];
   usage?: ConductorSendResult['usage'];
@@ -232,6 +234,7 @@ export async function runConductorSessionDriver(
       sendCount: 0,
       autonomousTurns: 1,
       dispatchSource: 'initial',
+      githubUpdateIds: [],
       resetOutboundDispatchesThisSend: options.resetOutboundDispatchesThisSend,
       getOutboundDispatchesThisSend: options.getOutboundDispatchesThisSend,
       onSendStarted: options.onSendStarted,
@@ -377,6 +380,11 @@ export async function runConductorSessionDriver(
       dispatchSource: dispatchResult.sourceKey,
       workerOutcomeDispatches: workerDispatches,
       workerOutcomeFailures: workerFailures,
+      githubUpdateIds: batch.flatMap((event) =>
+        event.type === 'github.update'
+          ? event.items.map((item) => item.id)
+          : [],
+      ),
       resetOutboundDispatchesThisSend: options.resetOutboundDispatchesThisSend,
       getOutboundDispatchesThisSend: options.getOutboundDispatchesThisSend,
       onSendStarted: options.onSendStarted,
@@ -418,6 +426,7 @@ function runEventConductorSend(input: {
   sendCount: number;
   autonomousTurns: number;
   dispatchSource?: string;
+  githubUpdateIds: string[];
   workerOutcomeDispatches?: number;
   workerOutcomeFailures?: number;
   resetOutboundDispatchesThisSend?: () => void;
@@ -468,6 +477,7 @@ function runEventConductorSend(input: {
       workerFailures: input.workerOutcomeFailures ?? conductorFailures,
       conductorDispatchesThisTurn: conductorDispatches + conductorFailures,
       autonomousTurns: input.autonomousTurns,
+      githubUpdateIds: input.githubUpdateIds,
     });
 
     return sendResult;

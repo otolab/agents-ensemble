@@ -19,6 +19,20 @@ describe('isEmptyGitHubMonitorCursor', () => {
     ).toBe(false);
   });
 
+  it('returns false while a pending update is retained for delivery', () => {
+    expect(
+      isEmptyGitHubMonitorCursor({
+        pendingUpdates: [
+          {
+            id: 'issue-comment:100',
+            kind: 'issue.comment',
+            summary: 'pending',
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it('returns false when PR cursor has review state', () => {
     expect(
       isEmptyGitHubMonitorCursor({
@@ -69,6 +83,26 @@ describe('isEmptyGitHubMonitorCursor', () => {
         kinds: ['pr.review', 'ci.completed'],
       },
     });
+  });
+
+  it('deep-copies pending update outbox items when normalized', () => {
+    const source = {
+      pendingUpdates: [
+        {
+          id: 'ci:sha-1:failed',
+          kind: 'ci.completed' as const,
+          summary: 'build failed',
+          failedCheckNames: ['test'],
+        },
+      ],
+    };
+
+    const normalized = normalizeGitHubMonitorCursor(source);
+    expect(normalized.pendingUpdates).toEqual(source.pendingUpdates);
+    expect(normalized.pendingUpdates).not.toBe(source.pendingUpdates);
+    expect(normalized.pendingUpdates?.[0]?.failedCheckNames).not.toBe(
+      source.pendingUpdates[0]?.failedCheckNames,
+    );
   });
 
   it('deep-copies aggregate states when normalized', () => {

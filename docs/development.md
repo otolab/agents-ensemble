@@ -47,7 +47,7 @@ pnpm test:run
 # integration（fake / in-process smoke は設定不要、実 agent acp 経路は test-acp.yaml が必要）
 pnpm test:integration
 
-# CLI 縦切りの e2e test（test-acp.yaml が必要）
+# CLI 縦切り e2e（test-acp.yaml が必要なシナリオと、認証不要の PTY teardown fixture）
 pnpm test:e2e
 ```
 
@@ -63,6 +63,7 @@ cp packages/core/test/integration/test-acp.yaml.example \
 ```
 
 `test-acp.yaml` の `issueUrl` / `repoRoot` などを環境に合わせて編集してからテストを実行する。認証や外部サービスを含む前提は [testing-strategy.md](testing-strategy.md) に記載している。
+Pi + stdio MCP の TTY `/close` e2e はローカル fake model / GitHub 応答を使い、外部認証を必要としません。Python 3 の標準 `pty` モジュールと localhost bind が必要です。
 
 ローカルセッションを確認する場合は、ビルド後に次を実行する。詳細なオプションや利用者向け手順は [cli/README.md](cli/README.md) を参照する。
 
