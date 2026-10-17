@@ -1,14 +1,19 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import {
+  lstat,
   mkdtemp,
   mkdir,
   readFile,
   rm,
+  readlink,
   stat,
+  symlink,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -26,6 +31,53 @@ const markerProgram = `
 
 async function makeTempDir() {
   return mkdtemp(join(tmpdir(), 'ensemble-cached-auth-'));
+}
+
+async function exitedPid() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    child.once('error', reject);
+    child.once('spawn', () => child.kill('SIGKILL'));
+    child.once('close', () => resolve(child.pid));
+  });
+}
+
+function processStartIdentity(pid) {
+  const result = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], {
+    encoding: 'utf8',
+    env: { ...process.env, LC_ALL: 'C' },
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  if (result.error || result.status !== 0) return undefined;
+  const identity = result.stdout.trim().replace(/\s+/gu, ' ');
+  return identity || undefined;
+}
+
+async function installOwnerLock(cacheDir, options = {}) {
+  const id = options.id ?? randomBytes(16).toString('hex');
+  const ownerName = `.lock-owner-${id}`;
+  const ownerPath = join(cacheDir, ownerName);
+  const lockPath = join(cacheDir, '.lock.d');
+  const owner = {
+    version: 1,
+    id,
+    pid: options.pid ?? process.pid,
+    hostname: options.hostname ?? hostname(),
+    processStartIdentity:
+      options.processStartIdentity ??
+      processStartIdentity(options.pid ?? process.pid) ??
+      null,
+  };
+  await mkdir(ownerPath);
+  await writeFile(join(ownerPath, 'owner.json'), `${JSON.stringify(owner)}\n`);
+  await symlink(
+    process.platform === 'win32' ? ownerPath : ownerName,
+    lockPath,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  return { id, ownerName, ownerPath, lockPath };
 }
 
 function run(cacheDir, command, options = {}) {
@@ -170,27 +222,101 @@ test('--clear waits for the refresh lock instead of treating the cache as a hit'
   await mkdir(cacheDir);
   await writeFile(join(cacheDir, 'default.token'), 'cached-token');
   await writeFile(join(cacheDir, 'default.meta'), `${Date.now()}\n`);
-  const lockPath = join(cacheDir, '.lock.d');
-  await mkdir(lockPath);
+  const ownerLock = await installOwnerLock(cacheDir);
 
-  let markSpawned;
-  const spawned = new Promise((resolve) => {
-    markSpawned = resolve;
-  });
+  let clearSettled = false;
   const clear = runAsync(
     cacheDir,
     [process.execPath, '-e', 'process.exit(9)'],
     true,
-    markSpawned,
-  );
-  await spawned;
+  ).then((result) => {
+    clearSettled = true;
+    return result;
+  });
   await new Promise((resolve) => setTimeout(resolve, 300));
-  await rm(lockPath, { recursive: true });
+  assert.equal(clearSettled, false);
+  assert.equal(await readlink(ownerLock.lockPath), ownerLock.ownerName);
+  assert.equal((await lstat(ownerLock.ownerPath)).isDirectory(), true);
+  await unlink(ownerLock.lockPath);
+  await rm(ownerLock.ownerPath, { recursive: true });
   const result = await clear;
 
   assert.equal(result.status, 0, result.stderr);
   await assert.rejects(readFile(join(cacheDir, 'default.token')));
   await assert.rejects(readFile(join(cacheDir, 'default.meta')));
+});
+
+test('recovers an orphaned owner lock and serializes concurrent misses', async (t) => {
+  const root = await makeTempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cacheDir = join(root, 'cache');
+  const marker = join(root, 'runs');
+  await mkdir(cacheDir);
+  const deadOwnerPid = await exitedPid();
+  const ownerLock = await installOwnerLock(cacheDir, {
+    pid: deadOwnerPid,
+  });
+
+  const command = markerCommand(marker, 'recovered-token', 100);
+  const results = await Promise.all(
+    Array.from({ length: 6 }, () => runAsync(cacheDir, command)),
+  );
+
+  assert.deepEqual(
+    results.map((result) => [result.status, result.stdout]),
+    Array.from({ length: 6 }, () => [0, 'recovered-token']),
+  );
+  assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1);
+  await assert.rejects(lstat(ownerLock.lockPath));
+});
+
+test('recovers a lock interrupted after its owner directory was claimed during recovery', async (t) => {
+  const root = await makeTempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cacheDir = join(root, 'cache');
+  await mkdir(cacheDir);
+  const deadRecoveryPid = await exitedPid();
+  const id = randomBytes(16).toString('hex');
+  const ownerName = `.lock-owner-${id}`;
+  const hostHex = Buffer.from(hostname()).toString('hex');
+  const nonce = randomBytes(16).toString('hex');
+  const recoveryName = `.lock-recovery-${id}-${hostHex}-${deadRecoveryPid}-0-${nonce}`;
+  await mkdir(join(cacheDir, recoveryName));
+  await symlink(
+    process.platform === 'win32'
+      ? join(cacheDir, ownerName)
+      : ownerName,
+    join(cacheDir, '.lock.d'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  await writeFile(join(cacheDir, 'default.token'), 'cached-token');
+  await writeFile(join(cacheDir, 'default.meta'), `${Date.now()}\n`);
+
+  const result = run(
+    cacheDir,
+    [process.execPath, '-e', 'process.exit(9)'],
+    { clear: true },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  await assert.rejects(readFile(join(cacheDir, 'default.token')));
+  await assert.rejects(readFile(join(cacheDir, 'default.meta')));
+  await assert.rejects(lstat(join(cacheDir, '.lock.d')));
+});
+
+test('fails fast without removing an ownerless legacy lock', async (t) => {
+  const root = await makeTempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cacheDir = join(root, 'cache');
+  const lockPath = join(cacheDir, '.lock.d');
+  await mkdir(cacheDir);
+  await mkdir(lockPath);
+
+  const result = run(cacheDir, markerCommand(join(root, 'runs'), 'token'));
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /ownerless format/);
+  assert.equal((await lstat(lockPath)).isDirectory(), true);
 });
 
 test('serializes concurrent misses and ignores the legacy .lock file/directory path', async (t) => {
@@ -214,6 +340,9 @@ test('serializes concurrent misses and ignores the legacy .lock file/directory p
     assert.deepEqual(
       results.map((result) => [result.status, result.stdout]),
       Array.from({ length: 8 }, () => [0, 'shared-token']),
+      results
+        .map(({ status, stderr }, index) => `worker ${index}: exit=${status}, stderr=${stderr}`)
+        .join('\n'),
     );
     assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1);
     await assert.rejects(stat(join(cacheDir, '.lock.d')));

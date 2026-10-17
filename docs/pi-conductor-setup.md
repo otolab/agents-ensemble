@@ -195,7 +195,9 @@ realpath "./node_modules/@agents-ensemble/cli/scripts/pi/cached-auth.mjs"
 
 Worker（Codex）側は `~/.codex/config.toml` の `refresh_interval_ms` で同様の抑制ができます。Pi conductor だけ直 `!gcloud` のままにしないでください。
 
-Node helper は既存の `default.token` / `default.meta` 形式を読み書きするため、#437 以降の bash 版が作ったキャッシュをそのまま使えます。`.meta` は引き続き取得時刻のミリ秒だけを保存します。miss / refresh は cache-dir 内の `.lock.d/` を mkdir して排他し、旧 bash 版が使っていた `.lock` のファイル形式（flock）とディレクトリ形式（mkdir）には触れません。キャッシュディレクトリは `700`、token / meta は `600` で保存します。
+Node helper は既存の `default.token` / `default.meta` 形式を読み書きするため、#437 以降の bash 版が作ったキャッシュをそのまま使えます。`.meta` は引き続き取得時刻のミリ秒だけを保存します。miss / refresh / clear は cache-dir 内の `.lock.d` symlink で排他し、所有者の host・PID・取得時の process start identity は同じ cache-dir 内の専用 directory に記録します。同じ host 上で所有プロセスの終了を確認できた lock は回収します。process start identity を参照できる環境では PID 再利用も識別します。参照できない場合は PID の生存状態で保守的に判定し、生きている PID の lock は奪いません。この場合、終了済みプロセスの PID が再利用されていると現行 60 秒の lock timeout まで待つことがあります。別 host や所有者を確認できない lock は奪わず、未知の lock は 60 秒待たずエラーで停止します。
+
+旧実装が作った owner metadata のない `.lock.d/` directory は、生きた旧 helper と異常終了後の残留物を安全に区別できないため自動回収しません。旧版と新版の切替後にこのエラーが出た場合は、該当 cache-dir を使う helper が動いていないことを確認してから、その `.lock.d/` を手動で削除してください。旧 bash 版の `.lock` file / directory には触れません。キャッシュディレクトリは `700`、token / meta は `600` で保存します。
 
 #### bash 版からの移行
 
