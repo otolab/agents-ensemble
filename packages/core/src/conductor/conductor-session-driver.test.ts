@@ -499,6 +499,55 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('interrupted');
   });
 
+  it('reports only the GitHub update IDs included in each completed send', async () => {
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const onSendComplete = vi.fn();
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'github update handled',
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      shutdownSignal: shutdown.signal,
+      continueAfterIssueLoopStop: true,
+      onSendComplete,
+    });
+
+    await vi.waitFor(() =>
+      expect(onSendComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ sendCount: 1, githubUpdateIds: [] }),
+      ),
+    );
+    eventQueue.enqueue({
+      type: 'github.update',
+      items: [
+        { id: 'review:10', kind: 'pr.review', summary: 'review' },
+        { id: 'ci:sha-1:failed', kind: 'ci.completed', summary: 'failed' },
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(onSendComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sendCount: 2,
+          githubUpdateIds: ['review:10', 'ci:sha-1:failed'],
+        }),
+      ),
+    );
+
+    shutdown.abort();
+    await driverPromise;
+  });
+
   it('keeps dispatching permission events after a permission-only turn completes', async () => {
     const eventQueue = new SessionEventQueue();
     const shutdown = new AbortController();

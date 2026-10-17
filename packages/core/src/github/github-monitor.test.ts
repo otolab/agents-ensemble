@@ -88,11 +88,65 @@ describe('createGitHubMonitor', () => {
     await drainAsync();
     expect(getCommentPolls()).toBe(2);
     expect(onUpdate).not.toHaveBeenCalled();
+    expect(monitor.getCursor().pendingUpdates).toMatchObject([
+      { id: 'issue-comment:2', kind: 'issue.comment' },
+    ]);
 
     await vi.advanceTimersByTimeAsync(5000);
     expect(onUpdate).toHaveBeenCalledTimes(1);
     expect(onUpdate.mock.calls[0]![0].items).toHaveLength(1);
+    monitor.acknowledgeUpdates(['issue-comment:2']);
+    expect(monitor.getCursor().pendingUpdates).toBeUndefined();
 
+    await monitor.stop();
+  });
+
+  it('re-delivers persisted pending updates on resume until acknowledged', async () => {
+    const pendingUpdate = {
+      id: 'issue-comment:101',
+      kind: 'issue.comment' as const,
+      summary: 'saved before close',
+      bodyPreview: 'saved before close',
+    };
+    const onUpdate = vi.fn();
+    const onCursorChange = vi.fn();
+    const client: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn().mockResolvedValue([]),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([]),
+      listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+      getStatusCheckRollup: vi.fn().mockResolvedValue([]),
+    };
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      cursor: {
+        lastIssueCommentId: '101',
+        pullRequests: {},
+        pendingUpdates: [pendingUpdate],
+      },
+      debounceMs: 100,
+      pollIntervalMs: 60_000,
+      githubClient: client,
+      onUpdate,
+      onCursorChange,
+    });
+
+    monitor.start();
+    await drainAsync();
+    expect(monitor.getCursor().pendingUpdates).toEqual([pendingUpdate]);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onUpdate.mock.calls[0]![0].items).toEqual([pendingUpdate]);
+
+    monitor.acknowledgeUpdates([pendingUpdate.id]);
+    expect(monitor.getCursor().pendingUpdates).toBeUndefined();
+    expect(onCursorChange).toHaveBeenCalledWith(
+      expect.objectContaining({ lastIssueCommentId: '101' }),
+    );
     await monitor.stop();
   });
 
@@ -114,6 +168,9 @@ describe('createGitHubMonitor', () => {
     await drainAsync();
     await monitor.stop();
     expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(monitor.getCursor().pendingUpdates).toMatchObject([
+      { id: 'issue-comment:2', kind: 'issue.comment' },
+    ]);
   });
 
   it('polls a runtime-registered PR immediately', async () => {
@@ -388,6 +445,7 @@ describe('createGitHubMonitor', () => {
     const monitor = createGitHubMonitor({
       issueUrl: 'https://github.com/org/repo/issues/39',
       ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      cursor: { lastIssueCommentId: '0', pullRequests: {} },
       debounceMs: 60_000,
       pollIntervalMs: 60_000,
       stopPollWaitMs: 50,
@@ -405,6 +463,11 @@ describe('createGitHubMonitor', () => {
     expect(client.listIssueComments).toHaveBeenCalledTimes(1);
     pollResolve?.();
     await drainAsync();
+    expect(monitor.getCursor()).toMatchObject({
+      lastIssueCommentId: '0',
+      pendingUpdates: undefined,
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
     vi.useFakeTimers();
   });
 

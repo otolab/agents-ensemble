@@ -227,9 +227,9 @@ Connection stalled が自動再接続後も続く場合は `/reconnect` を試�
 
 ### `/close` — worktree を残してセッションを閉じる
 
-`/close` または `close`（大文字小文字無視・前後空白トリム）は、conductor に送らない終了コマンドです。入力直後に `session.operator_close` を emit し、`/exit` と同じ force teardown で処理中 worker prompt を停止し、未解決 permission を deny し、sidecar を flush して GitHub monitor・worker ACP・conductor を閉じます。その後 TUI も dispose され、TTY プロセスが終了します。
+`/close` または `close`（大文字小文字無視・前後空白トリム）は、conductor に送らない終了コマンドです。入力直後に `session.operator_close` を emit し、force teardown で処理中 worker prompt を停止して未解決 permission を deny します。GitHub monitor を止めて最新 cursor と未配送更新を sidecar に flush した後、worker ACP と conductor を閉じます。その後 TUI も dispose され、TTY プロセスが終了します。
 
-sidecar には conductor agent ID、worker ACP session ID と作業ディレクトリ、profile、未回答 open question などを保存します。sidecar の flush に失敗した場合は warning を表示します。最新状態から再開できず、以前の保存状態から再開するか、`--continue` で再開できないことがあります。worktree cleanup 段階は実行しないため isolated worktree とローカルブランチはそのまま残ります。終了後は同じリポジトリ・Issue で `ensemble issue <same> --continue` を実行すると、その Issue の最新 sidecar から conductor と worker を再開し、既存 worktree を再利用します。resume は未完了 `agent.send` や teardown で deny した permission を復元しません（[ADR 0017](adr/0017-conductor-send-lifecycle-events.md)）。
+sidecar には conductor agent ID、worker ACP session ID と作業ディレクトリ、profile、未回答 open question、conductor への配送が完了していない GitHub 更新などを保存します。GitHub 更新は conductor send が `finished` になるまで sidecar に残し、`/close` や再起動で send が完了しなかった場合は `--continue` 時に再配送します。send 完了直後、更新済み ID の記録が sidecar に保存される前にプロセスが落ちた場合は、同じ更新が再度届くことがあります。sidecar の flush に失敗した場合は warning を表示します。最新状態から再開できず、以前の保存状態から再開するか、`--continue` で再開できないことがあります。worktree cleanup 段階は実行しないため isolated worktree とローカルブランチはそのまま残ります。終了後は同じリポジトリ・Issue で `ensemble issue <same> --continue` を実行すると、その Issue の最新 sidecar から conductor と worker を再開し、既存 worktree を再利用します。resume は未完了 `agent.send` や teardown で deny した permission を復元しません（[ADR 0017](adr/0017-conductor-send-lifecycle-events.md)）。
 
 ### `/exit` の即時フィードバック（#170）
 
@@ -258,7 +258,7 @@ cleanup が dirty worktree のためスキップされた場合や、削除に�
 |------|------------|----------------|
 | `/exit` / `/close` 直後 | 専用イベントで TUI は終了フィードバック・入力無効化 | 活動ログ / 入力ヒント |
 | `buildResult` | 明示 exit / interrupt 時は `getUsage().cost` 取得をスキップ（SDK 応答待ちで固まらない） | なし |
-| `finally` teardown（停止フェーズ） | force 時は worker / conductor / GitHub 監視を並列停止。子プロセスは SIGTERM 後最大 5s、残存時 SIGKILL。worker / ACP・conductor・GitHub monitor の停止後、worktree cleanup 前に `harness.teardown` を emit | `harness.teardown.phase` で段階表示。完了時 `harness.teardown`（1s 超または force 時） |
+| `finally` teardown（停止フェーズ） | `/close` は GitHub monitor を先に止め、cursor と未配送更新を sidecar に保存してから worker / conductor を並列停止。`/exit` は従来どおり worker / conductor / monitor を並列停止。子プロセスは SIGTERM 後最大 5s、残存時 SIGKILL。各停止後、worktree cleanup 前に `harness.teardown` を emit | `harness.teardown.phase` で段階表示。完了時 `harness.teardown`（1s 超または force 時） |
 | GitHub monitor `stop`（停止フェーズ内・accepted risk） | 監視有効時、GitHub API poll 実行中（`pollInFlight`）に `/exit` または `/close` すると `stop()` が poll 完了までブロックしうる | 最大 5s 待機後に poll を abort して teardown 継続（#209）。`harness.teardown.phase` で段階表示 |
 | isolated worktree 削除（停止フェーズ後） | 正常 `/exit` のみ `harness.teardown` emit 後に clean worktree の削除を試みる。`/close` はこの段階を実行しない。未コミット変更時は削除をスキップし、`git worktree remove` の一時的な失敗は初回＋100ms／250ms の最大 3 回まで再試行 | `/exit` では `harness.teardown.phase=worktree` の後、成功は `harness.worktree.removed`。dirty / 最終失敗は `[harness]` の診断行を残し、TTY 活動ログと非 TTY stderr に `[worktree] ⚠️`、path・reason・手動復旧コマンドを表示 |
 

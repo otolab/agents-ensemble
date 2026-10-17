@@ -1089,6 +1089,7 @@ export async function runConductorSession(
       sendCount: number;
       runId: string;
       status: ConductorSendResult['status'];
+      githubUpdateIds?: string[];
       result?: string;
       error?: ConductorSendResult['error'];
       usage?: ConductorSendResult['usage'];
@@ -1099,6 +1100,14 @@ export async function runConductorSession(
     }): void {
       sendCount = info.sendCount;
       autonomousTurns = info.autonomousTurns;
+      const githubUpdateIds = info.githubUpdateIds ?? [];
+      if (
+        info.status === 'finished' &&
+        !operatorRequestedClose &&
+        githubUpdateIds.length > 0
+      ) {
+        githubMonitor?.acknowledgeUpdates?.(githubUpdateIds);
+      }
       sessionUsageTracker.recordConductorRound({
         runId: info.runId,
         status: info.status,
@@ -1210,7 +1219,7 @@ export async function runConductorSession(
         emitTeardownPhase('permissionDeadlockMonitor');
         permissionDeadlockMonitor.stop();
       }
-      if (githubMonitor) {
+      if (githubMonitor && !operatorRequestedClose) {
         githubMonitor.flush();
       }
       // Stop active prompts before closing ACP bridges. Requests that arrive
@@ -1230,6 +1239,17 @@ export async function runConductorSession(
           })),
         });
       }
+
+      let githubMonitorStopped = false;
+      if (githubMonitor && operatorRequestedClose) {
+        emitTeardownPhase('githubMonitor');
+        const phaseStart = Date.now();
+        await githubMonitor.stop();
+        githubMonitorCursor = githubMonitor.getCursor();
+        teardownPhases.githubMonitor = Date.now() - phaseStart;
+        githubMonitorStopped = true;
+      }
+
       try {
         emitTeardownPhase('flushSidecar');
         const phaseStart = Date.now();
@@ -1247,7 +1267,7 @@ export async function runConductorSession(
       }
 
       const runGithubMonitorStop = async (): Promise<void> => {
-        if (!githubMonitor) {
+        if (!githubMonitor || githubMonitorStopped) {
           return;
         }
         emitTeardownPhase('githubMonitor');

@@ -176,6 +176,7 @@ describe('runConductorSession resume / shutdown', () => {
       stop: vi.fn().mockResolvedValue(undefined),
       flush: vi.fn(),
       getCursor: vi.fn().mockReturnValue({ lastIssueCommentId: undefined, pullRequests: {} }),
+      acknowledgeUpdates: vi.fn(),
       unregisterPullRequest: vi.fn(),
       onUpdate: options.onUpdate,
     }));
@@ -2034,7 +2035,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(resumedBridge.loadSession).toHaveBeenCalledWith(
       'worker-session',
       path,
-      undefined,
+      expect.any(Function),
     );
     expect(resumedBridge.newSession).not.toHaveBeenCalled();
     expect(continuedOperatorApi!.submit('/close')).toBe(false);

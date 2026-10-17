@@ -44,7 +44,7 @@ export interface SessionSidecar {
   openQuestions: OpenQuestion[];
   sequence: number;
   workers: Record<string, WorkerSessionSidecar>;
-  /** GitHub 監視カーソル（#39）。 */
+  /** GitHub 監視カーソルと未配送更新（#39）。 */
   githubMonitor?: GitHubMonitorCursor;
   /** Harness-resolved MCP map digest used to reject unsafe resume. */
   mcpConfigDigest?: string;

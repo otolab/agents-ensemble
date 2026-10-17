@@ -1,5 +1,6 @@
 import type {
   GitHubCiAggregateState,
+  GitHubUpdateItem,
   GitHubUpdateKind,
 } from './github-update-types.js';
 
@@ -81,6 +82,8 @@ export interface GitHubMonitorCursor {
   pullRequests?: Record<string, PullRequestMonitorCursor>;
   /** search 以外で明示登録された PR 番号（文字列キー）。 */
   explicitPullRequests?: Record<string, ExplicitPullRequestWatch>;
+  /** conductor が受け取ったことを確認できていない更新。再開時に再配送する。 */
+  pendingUpdates?: GitHubUpdateItem[];
 }
 
 export function emptyGitHubMonitorCursor(): GitHubMonitorCursor {
@@ -109,6 +112,16 @@ export function normalizeGitHubMonitorCursor(
         ],
       ),
     ),
+    ...(cursor?.pendingUpdates && cursor.pendingUpdates.length > 0
+      ? {
+          pendingUpdates: cursor.pendingUpdates.map((item) => ({
+            ...item,
+            ...(item.failedCheckNames
+              ? { failedCheckNames: [...item.failedCheckNames] }
+              : {}),
+          })),
+        }
+      : {}),
   };
 }
 
@@ -145,7 +158,7 @@ function isAggregateState(value: unknown): value is GitHubCiAggregateState {
 
 /** 新規セッション初回 poll のカーソル初期化のみか（sidecar 復元済みなら false）。worker の init prompt とは無関係。 */
 export function isEmptyGitHubMonitorCursor(cursor: GitHubMonitorCursor): boolean {
-  if (cursor.lastIssueCommentId) {
+  if (cursor.lastIssueCommentId || cursor.pendingUpdates?.length) {
     return false;
   }
   for (const pr of Object.values(cursor.pullRequests ?? {})) {

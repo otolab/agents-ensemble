@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ const {
   mockClose,
   mockCreate,
   mockCreateCursorSdkConductorAgentFactory,
+  mockCreateGitHubMonitor,
   mockFetchIssueContext,
   mockResolveGitHubAuthToken,
   mockSend,
@@ -18,6 +19,7 @@ const {
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
   const mockCreateCursorSdkConductorAgentFactory = vi.fn();
+  const mockCreateGitHubMonitor = vi.fn();
   const mockFetchIssueContext = vi.fn();
   const mockResolveGitHubAuthToken = vi.fn();
   const mockTuiDispose = vi.fn();
@@ -52,6 +54,7 @@ const {
     mockClose,
     mockCreate,
     mockCreateCursorSdkConductorAgentFactory,
+    mockCreateGitHubMonitor,
     mockFetchIssueContext,
     mockResolveGitHubAuthToken,
     mockSend,
@@ -72,6 +75,15 @@ vi.mock('../../core/src/github/issue-context.js', () => ({
 vi.mock('../../core/src/github/resolve-github-auth-token.js', () => ({
   resolveGitHubAuthToken: mockResolveGitHubAuthToken,
 }));
+
+vi.mock('../../core/src/github/github-monitor.js', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('../../core/src/github/github-monitor.js')>();
+  return {
+    ...original,
+    createGitHubMonitor: mockCreateGitHubMonitor,
+  };
+});
 
 vi.mock('@agents-ensemble/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agents-ensemble/core')>();
@@ -131,6 +143,21 @@ describe('executeIssueCommand with the core session', () => {
     mockClose.mockClear();
     mockCreate.mockReset();
     mockCreateCursorSdkConductorAgentFactory.mockReset();
+    mockCreateGitHubMonitor.mockReset();
+    mockCreateGitHubMonitor.mockImplementation((options) => {
+      const cursor = structuredClone(
+        options.cursor ?? { pullRequests: {}, explicitPullRequests: {} },
+      );
+      return {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn(),
+        getCursor: vi.fn(() => cursor),
+        acknowledgeUpdates: vi.fn(),
+        registerPullRequest: vi.fn(),
+        unregisterPullRequest: vi.fn(),
+      };
+    });
     mockCreateCursorSdkConductorAgentFactory.mockReturnValue({
       create: mockCreate,
       resume: mockCreate,
@@ -275,6 +302,25 @@ describe('executeIssueCommand with the core session', () => {
       status: 'finished',
       result: 'done',
     });
+    let resolveInFlightGithubSend!: (result: {
+      runId: string;
+      status: string;
+      result: string;
+    }) => void;
+    const inFlightGithubSend = new Promise<{
+      runId: string;
+      status: string;
+      result: string;
+    }>((resolve) => {
+      resolveInFlightGithubSend = resolve;
+    });
+    mockSend
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      })
+      .mockReturnValueOnce(inFlightGithubSend);
     const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
     await runGit(['init'], repoRoot);
     await runGit(['config', 'user.email', 'test@example.com'], repoRoot);
@@ -285,7 +331,6 @@ describe('executeIssueCommand with the core session', () => {
       repoRoot,
       conductorCwd: repoRoot,
       worktree: 'isolated' as const,
-      githubMonitor: false,
     };
     const deps = {
       isOperatorInputInteractive: (message: string | undefined) =>
@@ -293,13 +338,83 @@ describe('executeIssueCommand with the core session', () => {
       isOperatorInputTty: () => true,
       runIssueSession: runIssueSessionImpl,
     };
+    const pendingUpdate = {
+      id: 'issue-comment:42',
+      kind: 'issue.comment' as const,
+      summary: 'arrived while the TTY session was closing',
+      bodyPreview: 'arrived while the TTY session was closing',
+    };
+    const closeAcknowledge = vi.fn();
+    let resumeAcknowledge: ReturnType<typeof vi.fn> | undefined;
+    mockCreateGitHubMonitor
+      .mockImplementationOnce((monitorOptions) => {
+        let cursor = structuredClone(
+          monitorOptions.cursor ?? {
+            pullRequests: {},
+            explicitPullRequests: {},
+          },
+        );
+        return {
+          start: vi.fn(() => {
+            cursor = {
+              ...cursor,
+              lastIssueCommentId: '42',
+              pendingUpdates: [pendingUpdate],
+            };
+            monitorOptions.onCursorChange?.(cursor);
+            monitorOptions.onUpdate({ items: [pendingUpdate] });
+          }),
+          stop: vi.fn().mockResolvedValue(undefined),
+          flush: vi.fn(),
+          getCursor: vi.fn(() => cursor),
+          acknowledgeUpdates: closeAcknowledge,
+          registerPullRequest: vi.fn(),
+          unregisterPullRequest: vi.fn(),
+        };
+      })
+      .mockImplementationOnce((monitorOptions) => {
+        let cursor = structuredClone(monitorOptions.cursor!);
+        const acknowledgeUpdates = vi.fn((ids: readonly string[]) => {
+          const acknowledged = new Set(ids);
+          const pendingUpdates = (cursor.pendingUpdates ?? []).filter(
+            (item) => !acknowledged.has(item.id),
+          );
+          cursor = {
+            ...cursor,
+            ...(pendingUpdates.length > 0 ? { pendingUpdates } : {}),
+          };
+          if (pendingUpdates.length === 0) {
+            delete cursor.pendingUpdates;
+          }
+          monitorOptions.onCursorChange?.(cursor);
+        });
+        resumeAcknowledge = acknowledgeUpdates;
+        return {
+          start: vi.fn(() => {
+            monitorOptions.onUpdate({
+              items: cursor.pendingUpdates ?? [],
+            });
+          }),
+          stop: vi.fn().mockResolvedValue(undefined),
+          flush: vi.fn(),
+          getCursor: vi.fn(() => cursor),
+          acknowledgeUpdates,
+          registerPullRequest: vi.fn(),
+          unregisterPullRequest: vi.fn(),
+        };
+      });
 
     const closePromise = executeIssueCommand(issueUrl, options, deps);
-    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
     await vi.waitFor(() =>
       expect(mockTuiOperatorApi.current).toBeDefined(),
     );
     mockTuiOperatorApi.current!.submit('/close');
+    resolveInFlightGithubSend({
+      runId: 'run-2',
+      status: 'finished',
+      result: 'done',
+    });
     const closeResult = await withTimeout(closePromise, 'TTY /close');
 
     expect(closeResult.stopReason).toBe('completed');
@@ -311,6 +426,15 @@ describe('executeIssueCommand with the core session', () => {
     expect(closedTui.telemetrySink).toHaveBeenCalledWith({
       type: 'session.operator_close',
     });
+    const sidecarPath = join(
+      repoRoot,
+      '.ensemble',
+      'sessions',
+      'agent-test.json',
+    );
+    const closeSidecar = JSON.parse(await readFile(sidecarPath, 'utf8'));
+    expect(closeSidecar.githubMonitor.pendingUpdates).toEqual([pendingUpdate]);
+    expect(closeAcknowledge).not.toHaveBeenCalled();
     await expect(access(worktreePath)).resolves.toBeUndefined();
 
     const continuePromise = executeIssueCommand(
@@ -319,6 +443,10 @@ describe('executeIssueCommand with the core session', () => {
       deps,
     );
     await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(resumeAcknowledge).toHaveBeenCalledWith([pendingUpdate.id]),
+    );
     await vi.waitFor(() =>
       expect(mockTuiOperatorApi.current).toBeDefined(),
     );
@@ -339,9 +467,16 @@ describe('executeIssueCommand with the core session', () => {
     );
 
     expect(continueResult.stopReason).toBe('completed');
-    expect(mockSend).toHaveBeenCalledOnce();
+    expect(mockSend).toHaveBeenCalledTimes(3);
+    expect(mockSend.mock.calls[2]?.[0]).toContain(
+      'arrived while the TTY session was closing',
+    );
     expect(mockClose).toHaveBeenCalledTimes(2);
     expect(mockTuiDispose).toHaveBeenCalledTimes(2);
+    const continuedSidecar = JSON.parse(
+      await readFile(sidecarPath, 'utf8'),
+    );
+    expect(continuedSidecar.githubMonitor.pendingUpdates).toBeUndefined();
     await expect(access(worktreePath)).resolves.toBeUndefined();
     await rm(repoRoot, { recursive: true, force: true });
   });
