@@ -131,6 +131,7 @@ pnpm test:integration  # fake smoke は設定不要、外部依存は前提が�
 | **smoke** | `ensemble issue` — conductor + worker 連携、終了 JSON の必須フィールド |
 | **operator 入力** | `ENSEMBLE_OPERATOR_MESSAGE` による post-loop 入力 |
 | **roundtrip** | worker メッセージの往復（profile 別 fixture） |
+| **Pi TTY teardown** | 実 CLI を PTY で起動し、Pi + stdio MCP の `/exit` 後にサマリーから 3 秒以内の自然終了と MCP PID 回収を確認 |
 
 ### 配置
 
@@ -147,11 +148,12 @@ pnpm test:e2e
 
 ### 前提・スキップ
 
+- `issue-pi-tty-exit.e2e.test.ts` はローカル fake model / GitHub fixture を使い、外部認証や `test-acp.yaml` は不要。Python 3 の標準 `pty` モジュールと localhost bind が必要で、Windows では skip する。
 - 対象 conductor backend の認証（Cursor は `CURSOR_API_KEY` / `ensemble auth login`、Pi は `ensemble auth login --provider <id>` または Pi `auth.json`）
 - `test-acp.yaml` + テスト用 Issue URL（または専用テスト repo）
 - GitHub API トークン（`GITHUB_TOKEN` / `GH_TOKEN`。実 Issue を触る場合）
 
-未設定時は skip。
+上記の認証・外部サービス前提がある e2e は、未設定時に skip。
 
 ### vitest 設定方針
 

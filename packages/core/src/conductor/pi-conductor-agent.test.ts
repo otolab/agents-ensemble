@@ -256,6 +256,28 @@ describe('PiConductorAgent', () => {
     void onStreamText;
   });
 
+  it('closes MCP during session shutdown without launching replacement servers', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+      mcpServers: {
+        fixture: {
+          type: 'stdio',
+          command: 'fixture-mcp',
+        },
+      },
+    });
+
+    expect(mcpLoadConfig?.().servers).toHaveLength(1);
+    await Promise.all([conductor.close(), conductor.close()]);
+
+    expect(fakeSession.reload).toHaveBeenCalledOnce();
+    expect(mcpLoadConfig?.().servers).toEqual([]);
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+  });
+
   it('disables Pi built-in tools only when builtinTools is false', async () => {
     const conductor = await PiConductorAgent.create({
       cwd,
