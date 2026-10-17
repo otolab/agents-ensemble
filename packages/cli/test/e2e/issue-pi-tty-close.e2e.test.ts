@@ -534,12 +534,7 @@ globalThis.fetch = async (input, init) => {
           45_000,
         );
         runner.stdin?.write('/close');
-        await waitForText(
-          () => stripTerminalControls(output),
-          'operator> /close',
-          runner,
-          5_000,
-        );
+        await new Promise((resolve) => setTimeout(resolve, 100));
         runner.stdin?.write('\r');
         await waitForText(
           () => stripTerminalControls(output),

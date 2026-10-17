@@ -122,7 +122,7 @@ describe('TTY /close process lifecycle', () => {
         let stdout = '';
         let stderr = '';
         let settled = false;
-        let closeCommandTyped = false;
+        let closeCommandSent = false;
         let closeEnterSent = false;
         const killProcessGroup = () => {
           if (child.pid === undefined) return;
@@ -139,8 +139,9 @@ describe('TTY /close process lifecycle', () => {
           const outputTail = stripTerminalControls(stdout).slice(-8_000);
           reject(
             new Error(
-                `TTY /close child did not exit naturally within 15 seconds; ` +
+              `TTY /close child did not exit naturally within 15 seconds; ` +
                 `inputReady=${stdout.includes('TTY_CLOSE_INPUT_READY')}; ` +
+                `commandSent=${closeCommandSent}; ` +
                 `enterSent=${closeEnterSent}; ` +
                 `closeSubmitted=${stdout.includes('TTY_CLOSE_SUBMITTED accepted=false')}\n` +
                 `stdout tail:\n${outputTail}\nstderr:\n${stderr}`,
@@ -150,20 +151,14 @@ describe('TTY /close process lifecycle', () => {
 
         child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
           stdout += chunk;
-          const visibleStdout = stripTerminalControls(stdout);
-          if (!closeCommandTyped && stdout.includes('TTY_CLOSE_INPUT_READY')) {
-            closeCommandTyped = true;
+          if (!closeCommandSent && stdout.includes('TTY_CLOSE_INPUT_READY')) {
+            closeCommandSent = true;
             child.stdin.write('/close');
-          }
-          if (
-            closeCommandTyped &&
-            !closeEnterSent &&
-            visibleStdout.includes('operator> /close')
-          ) {
-            closeEnterSent = true;
             setTimeout(() => {
-              if (!settled) child.stdin.write('\r');
-            }, 50);
+              if (settled) return;
+              closeEnterSent = true;
+              child.stdin.write('\r');
+            }, 100);
           }
         });
         child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
