@@ -195,9 +195,11 @@ realpath "./node_modules/@agents-ensemble/cli/scripts/pi/cached-auth.mjs"
 
 Worker（Codex）側は `~/.codex/config.toml` の `refresh_interval_ms` で同様の抑制ができます。Pi conductor だけ直 `!gcloud` のままにしないでください。
 
-Node helper は既存の `default.token` / `default.meta` 形式を読み書きするため、#437 以降の bash 版が作ったキャッシュをそのまま使えます。`.meta` は引き続き取得時刻のミリ秒だけを保存します。miss / refresh / clear は cache-dir 内の `.lock.d` symlink で排他し、所有者の host・PID・取得時の process start identity は同じ cache-dir 内の専用 directory に記録します。同じ host 上で所有プロセスの終了を確認できた lock は回収します。process start identity を参照できる環境では PID 再利用も識別します。参照できない場合は PID の生存状態で保守的に判定し、生きている PID の lock は奪いません。この場合、終了済みプロセスの PID が再利用されていると現行 60 秒の lock timeout まで待つことがあります。別 host や所有者を確認できない lock は奪わず、未知の lock は 60 秒待たずエラーで停止します。
+Node helper は既存の `default.token` / `default.meta` 形式を読み書きするため、#437 以降の bash 版が作ったキャッシュをそのまま使えます。`.meta` は引き続き取得時刻のミリ秒だけを保存します。miss / refresh / clear は cache-dir 内の `.lock.d` symlink で排他し、所有者の host・PID・process start identity を同じ cache-dir 内の専用 directory に記録します。Linux ではさらに owner と recovery process の PID namespace identity を `/proc/self/ns/pid` から記録し、確認側も一致する場合だけ PID を検査します。namespace identity が読めない、記録がない、または一致しない場合は owner を stale とみなさず、その lock を奪いません。Linux で現在の namespace identity を読めない場合、新しい lock の作成もエラーで止めます。同じ host・同じ PID namespace 上で owner の終了を確認できた lock は回収します。Linux の `/proc` が別 PID namespace から mount されている場合は `/proc/1/ns/pid` も照合し、現在の namespace と一致するときだけ `ps` で start identity を読みます。一致を確認できないときは、生きている PID を stale と判定せず、lock timeout 後に失敗することがあります。終了済み PID は `kill(pid, 0)` で `ESRCH` を確認できた場合に回収できます。
 
-旧実装が作った owner metadata のない `.lock.d/` directory は、生きた旧 helper と異常終了後の残留物を安全に区別できないため自動回収しません。旧版と新版の切替後にこのエラーが出た場合は、該当 cache-dir を使う helper が動いていないことを確認してから、その `.lock.d/` を手動で削除してください。旧 bash 版の `.lock` file / directory には触れません。キャッシュディレクトリは `700`、token / meta は `600` で保存します。
+macOS の process start identity は `ps -o lstart=` から得るため秒単位です。同じ秒のうちに PID が再利用され、start identity が一致して見える場合は owner を生存中として扱います。lock は奪われませんが、古い lock でも最大 60 秒の lock timeout まで待ってから失敗することがあります。より細かな時刻を返す Darwin native API はありますが、この単体 Node helper は native bridge / helper を含まず、そこからは取得しません。start identity を取得できない場合も PID の生存状態で保守的に判定し、終了済み PID が再利用されていれば同様に timeout まで待つ可能性があります。別 host や所有者を確認できない lock は奪わず、PID namespace が欠落・不一致の場合など判定不能な lock は待たずにエラーで停止します。
+
+旧実装が作った owner metadata のない `.lock.d/` directory は、生きた旧 helper と異常終了後の残留物を安全に区別できないため自動回収しません。また、新しい owner metadata に Linux PID namespace identity がない旧形式 lock も Linux では回収しません。いずれもエラーが出た場合は、その cache-dir を使う helper がどの PID namespace からも動いていないことを確認してから、`.lock.d` を手動で削除してください。`.lock.d` が owner symlink の場合、参照先の `.lock-owner-*` directory は lock ではなく残骸になります。旧 bash 版の `.lock` file / directory には触れません。キャッシュディレクトリは `700`、token / meta は `600` で保存します。
 
 #### bash 版からの移行
 

@@ -17,6 +17,12 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import {
+  pidNamespaceIdentity,
+  processStartIdentity as helperProcessStartIdentity,
+  processState,
+  requirePidNamespaceIdentity,
+} from './cached-auth.mjs';
 
 const scriptPath = fileURLToPath(new URL('./cached-auth.mjs', import.meta.url));
 const markerProgram = `
@@ -61,7 +67,7 @@ async function installOwnerLock(cacheDir, options = {}) {
   const ownerPath = join(cacheDir, ownerName);
   const lockPath = join(cacheDir, '.lock.d');
   const owner = {
-    version: 1,
+    version: 2,
     id,
     pid: options.pid ?? process.pid,
     hostname: options.hostname ?? hostname(),
@@ -69,6 +75,8 @@ async function installOwnerLock(cacheDir, options = {}) {
       options.processStartIdentity ??
       processStartIdentity(options.pid ?? process.pid) ??
       null,
+    pidNamespaceIdentity:
+      options.pidNamespaceIdentity ?? pidNamespaceIdentity() ?? null,
   };
   await mkdir(ownerPath);
   await writeFile(join(ownerPath, 'owner.json'), `${JSON.stringify(owner)}\n`);
@@ -246,6 +254,172 @@ test('--clear waits for the refresh lock instead of treating the cache as a hit'
   await assert.rejects(readFile(join(cacheDir, 'default.meta')));
 });
 
+test('Linux owner PIDs are not inspected across missing or different PID namespaces', () => {
+  let pidChecks = 0;
+  const checkOptions = {
+    platform: 'linux',
+    currentHost: 'shared-host',
+    killProcess: () => {
+      pidChecks += 1;
+    },
+    getProcessStartIdentity: () => 'start-identity',
+  };
+
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      'start-identity',
+      'pid:[4026531840]',
+      { ...checkOptions, currentPidNamespaceIdentity: 'pid:[4026532000]' },
+    ),
+    'unknown',
+  );
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      'start-identity',
+      undefined,
+      { ...checkOptions, currentPidNamespaceIdentity: 'pid:[4026531840]' },
+    ),
+    'unknown',
+  );
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      'start-identity',
+      'pid:[4026531840]',
+      { ...checkOptions, currentPidNamespaceIdentity: undefined },
+    ),
+    'unknown',
+  );
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      'start-identity',
+      'pid:[4026531840]',
+      { ...checkOptions, currentPidNamespaceIdentity: 'unreadable' },
+    ),
+    'unknown',
+  );
+  assert.equal(pidChecks, 0);
+  assert.throws(
+    () => requirePidNamespaceIdentity(undefined, 'linux'),
+    /cannot determine the current Linux PID namespace/,
+  );
+  assert.equal(
+    requirePidNamespaceIdentity('pid:[4026531840]', 'linux'),
+    'pid:[4026531840]',
+  );
+  assert.equal(requirePidNamespaceIdentity(undefined, 'darwin'), null);
+});
+
+test('Linux process start identity is read only through a matching procfs PID namespace', () => {
+  let psChecks = 0;
+  const spawnForPs = () => {
+    psChecks += 1;
+    return { status: 0, stdout: 'start-identity\n' };
+  };
+
+  assert.equal(
+    helperProcessStartIdentity(412, {
+      platform: 'linux',
+      currentPidNamespaceIdentity: 'pid:[4026531840]',
+      procfsPidNamespaceIdentity: 'pid:[4026532000]',
+      spawnSync: spawnForPs,
+    }),
+    undefined,
+  );
+  assert.equal(psChecks, 0);
+  assert.equal(
+    helperProcessStartIdentity(412, {
+      platform: 'linux',
+      currentPidNamespaceIdentity: 'pid:[4026531840]',
+      procfsPidNamespaceIdentity: undefined,
+      spawnSync: spawnForPs,
+    }),
+    undefined,
+  );
+  assert.equal(psChecks, 0);
+  assert.equal(
+    helperProcessStartIdentity(412, {
+      platform: 'linux',
+      currentPidNamespaceIdentity: 'pid:[4026531840]',
+      procfsPidNamespaceIdentity: 'pid:[4026531840]',
+      spawnSync: spawnForPs,
+    }),
+    'start-identity',
+  );
+  assert.equal(psChecks, 1);
+});
+
+test(
+  'reads the current Linux PID namespace identity',
+  { skip: process.platform !== 'linux' },
+  () => {
+    assert.match(pidNamespaceIdentity(), /^pid:\[\d+\]$/u);
+  },
+);
+
+test('Linux locks are classified as live or stale only within the same PID namespace', () => {
+  const sharedOptions = {
+    platform: 'linux',
+    currentHost: 'shared-host',
+    currentPidNamespaceIdentity: 'pid:[4026531840]',
+    getProcessStartIdentity: () => 'start-identity',
+  };
+
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      'start-identity',
+      'pid:[4026531840]',
+      { ...sharedOptions, killProcess: () => {} },
+    ),
+    'live',
+  );
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      'start-identity',
+      'pid:[4026531840]',
+      {
+        ...sharedOptions,
+        killProcess: () => {
+          const error = new Error('process does not exist');
+          error.code = 'ESRCH';
+          throw error;
+        },
+      },
+    ),
+    'dead',
+  );
+});
+
+test('a matching Darwin start identity is treated as live on second-granularity PID reuse', () => {
+  const secondGranularityIdentity = 'Thu Oct 17 05:34:54 2026';
+  assert.equal(
+    processState(
+      412,
+      'mac-host',
+      secondGranularityIdentity,
+      undefined,
+      {
+        platform: 'darwin',
+        currentHost: 'mac-host',
+        killProcess: () => {},
+        getProcessStartIdentity: () => secondGranularityIdentity,
+      },
+    ),
+    'live',
+  );
+});
+
 test('recovers an orphaned owner lock and serializes concurrent misses', async (t) => {
   const root = await makeTempDir();
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -279,8 +453,12 @@ test('recovers a lock interrupted after its owner directory was claimed during r
   const id = randomBytes(16).toString('hex');
   const ownerName = `.lock-owner-${id}`;
   const hostHex = Buffer.from(hostname()).toString('hex');
+  const ownerPidNamespaceIdentity = pidNamespaceIdentity();
+  const pidNamespaceHex = ownerPidNamespaceIdentity
+    ? Buffer.from(ownerPidNamespaceIdentity).toString('hex')
+    : '0';
   const nonce = randomBytes(16).toString('hex');
-  const recoveryName = `.lock-recovery-${id}-${hostHex}-${deadRecoveryPid}-0-${nonce}`;
+  const recoveryName = `.lock-recovery-${id}-${hostHex}-${deadRecoveryPid}-0-${pidNamespaceHex}-${nonce}`;
   await mkdir(join(cacheDir, recoveryName));
   await symlink(
     process.platform === 'win32'
