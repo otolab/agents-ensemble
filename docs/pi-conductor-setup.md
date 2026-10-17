@@ -158,14 +158,24 @@ Pi conductor は **LLM リクエストの直前**で `apiKey` の `!command` を
 
 **ensemble harness は `!command` の自動ラップや TTL 設定を持ちません**（[ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の移譲モデルのまま）。代わりに、**キャッシュ付きの認証ヘルパースクリプト**を `models.json` から呼び出してください。Codex worker の `[model_providers.*.auth]` + `refresh_interval_ms` と同型で、**毎 `getAuth` でスクリプトは起動するが、キャッシュ hit 時は内側の gcloud を実行しない**運用です。
 
-リポジトリ同梱の [scripts/pi/cached-auth.sh](../scripts/pi/cached-auth.sh) をコピーするか、リポジトリ内の **絶対パス**で参照します。キャッシュファイルは既定で **`~/.ensemble/pi/cache/auth/`**（`600`。CWD や作業リポジトリに依存しない）に置きます。リポジトリ配下に置きたい場合は `--cache-dir` または `ENSEMBLE_PI_AUTH_CACHE_DIR` で上書きしてください。
+Pi の `!command` は Node.js 実装の [scripts/pi/cached-auth.mjs](../scripts/pi/cached-auth.mjs) を使います。repository clone ではその絶対パスを指定してください。npm 配布版を使う場合、`@agents-ensemble/cli/scripts/pi/cached-auth.mjs` は package 内の相対パスなので、そのまま `!command` には渡せません。npm の install root から実ファイルの絶対パスを取得します。
+
+```bash
+# npm でグローバル install した場合（/ から実行し、repo の packageManager 設定を避ける）
+realpath "$(cd / && npm root -g)/@agents-ensemble/cli/scripts/pi/cached-auth.mjs"
+
+# 現在のプロジェクトに install した場合（consumer project root から実行）
+realpath "./node_modules/@agents-ensemble/cli/scripts/pi/cached-auth.mjs"
+```
+
+出力された絶対パスを `models.json` の `apiKey` に使います。package subpath や `realpath` コマンド自体を `apiKey` に書くのではなく、出力された helper のパスを `!` の直後に指定してください。下の例の `/absolute/path/to/cached-auth.mjs` は、clone のパスまたは上記コマンドの出力に置き換えます。キャッシュファイルは既定で **`~/.ensemble/pi/cache/auth/`**（`600`。CWD や作業リポジトリに依存しない）に置きます。リポジトリ配下に置きたい場合は `--cache-dir` または `ENSEMBLE_PI_AUTH_CACHE_DIR` で上書きしてください。
 
 ```json
 {
   "providers": {
     "litellm": {
       "baseUrl": "https://your-litellm.example/v1",
-      "apiKey": "!/absolute/path/to/agents-ensemble/scripts/pi/cached-auth.sh --ttl-ms 300000 -- gcloud auth print-identity-token --account=you@example.com",
+      "apiKey": "!/absolute/path/to/cached-auth.mjs --ttl-ms 300000 -- gcloud auth print-identity-token --account=you@example.com",
       "api": "openai-responses",
       "authHeader": true,
       "models": [{ "id": "your-model", "name": "your-model" }]
@@ -176,13 +186,56 @@ Pi conductor は **LLM リクエストの直前**で `apiKey` の `!command` を
 
 | 項目 | 説明 |
 |------|------|
-| `--ttl-ms` | この間隔より短い再実行では内側コマンドをスキップ（既定 `300000` = 5 分）。`ENSEMBLE_PI_AUTH_CACHE_TTL_MS` でも指定可。 |
+| `--ttl-ms` | この間隔より短い再実行では内側コマンドをスキップ（既定 `300000` = 5 分）。`ENSEMBLE_PI_AUTH_CACHE_TTL_MS` でも指定可。TTL を過ぎても JWT の `exp` が約 5 分より先なら再利用します。 |
 | `--cache-dir` | キャッシュの置き場（**スコープの本体**）。既定は `~/.ensemble/pi/cache/auth` または `ENSEMBLE_PI_AUTH_CACHE_DIR`。 |
 | `--cache-key` | 同一 `--cache-dir` 内で複数 credential を分けたいときだけ指定。未指定は `default`（内側コマンド行はキーに含めない）。 |
-| JWT | stdout が JWT のとき、TTL に加え **`exp` の約 5 分前**まで再利用（`python3` がある環境）。 |
-| クリア | 同じ `--cache-dir`（と `--cache-key`）で `--clear -- gcloud …`。`gcloud auth login` 後に実行するとよい。 |
+| `--` | 以降の argv を内側コマンドへ渡します。helper は shell を介さず、そのコマンドを直接起動します。 |
+| JWT | stdout が JWT のとき、TTL に加え `exp` を Node.js で判定します。`python3` は不要です。 |
+| クリア | 同じ `--cache-dir`（と `--cache-key`）で `--clear -- gcloud …`。`--clear` でも `--` と内側コマンドは必要です。`gcloud auth login` 後に実行するとよいです。 |
 
 Worker（Codex）側は `~/.codex/config.toml` の `refresh_interval_ms` で同様の抑制ができます。Pi conductor だけ直 `!gcloud` のままにしないでください。
+
+Node helper は既存の `default.token` / `default.meta` 形式を読み書きするため、#437 以降の bash 版が作ったキャッシュをそのまま使えます。`.meta` は引き続き取得時刻のミリ秒だけを保存します。miss / refresh / clear は cache-dir 内の `.lock.d` symlink で排他し、所有者の host・PID・process start identity を同じ cache-dir 内の専用 directory に記録します。Linux ではさらに owner と recovery process の PID namespace identity を `/proc/self/ns/pid` から記録し、確認側も一致する場合だけ PID を検査します。namespace identity が読めない、記録がない、または一致しない場合は owner を stale とみなさず、その lock を奪いません。Linux で現在の namespace identity を読めない場合、新しい lock の作成もエラーで止めます。同じ host・同じ PID namespace 上で owner の終了を確認できた lock は回収します。Linux の `/proc` が別 PID namespace から mount されている場合は `/proc/1/ns/pid` も照合し、現在の namespace と一致するときだけ `ps` で start identity を読みます。一致を確認できないときは、生きている PID を stale と判定せず、lock timeout 後に失敗することがあります。終了済み PID は `kill(pid, 0)` で `ESRCH` を確認できた場合に回収できます。
+
+macOS の process start identity は `ps -o lstart=` から得るため秒単位です。同じ秒のうちに PID が再利用され、start identity が一致して見える場合は owner を生存中として扱います。lock は奪われませんが、古い lock でも最大 60 秒の lock timeout まで待ってから失敗することがあります。より細かな時刻を返す Darwin native API はありますが、この単体 Node helper は native bridge / helper を含まず、そこからは取得しません。start identity を取得できない場合も PID の生存状態で保守的に判定し、終了済み PID が再利用されていれば同様に timeout まで待つ可能性があります。別 host や所有者を確認できない lock は奪わず、PID namespace が欠落・不一致の場合など判定不能な lock は待たずにエラーで停止します。
+
+旧実装が作った owner metadata のない `.lock.d/` directory は、生きた旧 helper と異常終了後の残留物を安全に区別できないため自動回収しません。また、新しい owner metadata に Linux PID namespace identity がない旧形式 lock も Linux では回収しません。いずれもエラーが出た場合は、その cache-dir を使う helper がどの PID namespace からも動いていないことを確認してから、`.lock.d` を手動で削除してください。`.lock.d` が owner symlink の場合、参照先の `.lock-owner-*` directory は lock ではなく残骸になります。旧 bash 版の `.lock` file / directory には触れません。キャッシュディレクトリは `700`、token / meta は `600` で保存します。
+
+#### bash 版からの移行
+
+`scripts/pi/cached-auth.sh` は非推奨の互換 wrapper です。同じディレクトリに `cached-auth.mjs` がある場合だけ Node helper へ委譲します。Pi は Node.js が前提のため、bash 版単独の Node-less fallback は提供しません。
+
+`~/.ensemble/pi/cached-auth.sh` を以前コピーして使っている場合、そのコピーは自動更新されません。`models.json` の `apiKey` を新しい `cached-auth.mjs` の絶対パスへ変更してください。ホーム配下のコピーを続ける場合は、`cached-auth.mjs` を同じ場所へコピーし、`apiKey` のパスも `.mjs` に変えます。既定 cache-dir と key が同じなら、既存の `~/.ensemble/pi/cache/auth/default.token` / `default.meta` は再利用されます。新しい entrypoint で読めることを確認してから旧 shell コピーを削除できます。
+
+#### macOS で hit 時間を測る
+
+リポジトリ clone から次を実行します。ベンチは一時 cache-dir に `benchmark-token` を作り、`/bin/sh` から Node の shebang script を新しい process として起動します。10 組の no-op / hit を交互の順序で測り、各組の `hit - no-op` と p50 を出します。hit 側では、キャッシュが外れて内側コマンドが実行された場合に一時 marker を作るため、実際の credential command を使わず hit を確認できます。終了時に一時ディレクトリを削除します。
+
+```bash
+node scripts/pi/bench-cached-auth.mjs
+```
+
+出力には platform / architecture、Node.js の版、10 組それぞれの no-op / hit 時間と差分、各 p50 が表示されます。これらの性能値は helper の起動コストと追加遅延を把握するための参考情報で、今回の Issue / PR の完了判定には使いません。hit / no-op の絶対 p50 と全サンプルを環境情報とともに記録してください。
+
+ベンチスクリプトには以前の比較値を表示する `macOS acceptance (<= 25 ms)` 診断と、macOS でその値を超えたときに終了コード 1 を返す挙動が残っています。これは未変更のスクリプト動作です。オペレータの判断により、25 ms は現在の Issue / PR の受け入れ gate ではなく、測定値とともに参考情報として扱います。
+
+2026-10-16 の初回測定は macOS 15.7.9（build 24G830、Apple Silicon / arm64）で、Node.js 24.16.0 の hit p50 が **148.72 ms**、no-op 起動 p50 が **128.72 ms**でした。Node.js 22.22.3 の hit p50 は **346.56 ms**でした。これらは当時の測定記録です。
+
+2026-10-17 に同じ Mac で新しい paired ベンチを実行しました。別プロセスを止めずに計測したため、no-op の絶対時間にも大きなばらつきがあります。paired `hit - no-op` p50 は Node.js 24.16.0 で **30.65 ms**、Node.js 22.22.3 で **11.12 ms**でした。これらも pass/fail 判定ではなく参考値です。
+
+| Node.js | no-op p50 | hit p50 | paired `hit - no-op` p50 |
+|---------|-----------|---------|--------------------------|
+| 24.16.0 | 516.14 ms | 577.82 ms | **30.65 ms** |
+| 22.22.3 | 597.53 ms | 606.35 ms | **11.12 ms** |
+
+10 組のサンプルは次のとおりです（各列は同じ組の no-op / hit / 差分）。
+
+| Node.js | no-op ms | hit ms | hit − no-op ms |
+|---------|----------|--------|----------------|
+| 24.16.0 | 758.75, 449.12, 514.32, 464.70, 511.93, 517.96, 669.41, 495.54, 601.80, 563.23 | 514.07, 609.14, 659.47, 610.92, 543.98, 546.50, 623.96, 524.79, 528.54, 646.49 | -244.69, 160.02, 145.15, 146.22, 32.05, 28.54, -45.45, 29.25, -73.26, 83.26 |
+| 22.22.3 | 807.09, 547.69, 598.60, 547.81, 581.10, 596.45, 782.49, 618.37, 629.50, 585.55 | 531.15, 610.22, 717.29, 602.47, 549.25, 597.37, 700.96, 595.58, 650.81, 637.55 | -275.94, 62.53, 118.69, 54.67, -31.85, 0.92, -81.53, -22.79, 21.31, 52.00 |
+
+測定したのはこの Mac のみです。no-op p50 が 500 ms を超え、差分にも負値を含むため、同時稼働プロセスの影響が見える測定として扱います。安定した負荷条件の測定は未実施です。
 
 ## `ensemble auth` と Cursor の違い
 

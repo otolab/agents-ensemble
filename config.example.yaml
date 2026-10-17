@@ -24,6 +24,8 @@ conductor:
   pi:
     agentDir: ~/.ensemble/pi
     projectDir: .ensemble/pi
+    # models.json の apiKey: "!..." で使うキャッシュ helper と旧
+    # ~/.ensemble/pi/cached-auth.sh からの移行は docs/pi-conductor-setup.md を参照。
     # 上記の各 root に settings.json / auth.json / models.json、
     # extensions/ / skills/ / prompts/ / themes/ を配置します。
     # settings.json は headless conductor の対応キー（モデル選択・認証
