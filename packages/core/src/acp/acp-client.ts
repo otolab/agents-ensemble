@@ -220,6 +220,8 @@ function defaultPermissionHandler(): typeof DEFAULT_PERMISSION_DECISION {
 }
 
 export interface ChildProcessTerminationOptions {
+  /** Time to let the child exit after stdin EOF before sending SIGTERM. */
+  gracefulExitMs?: number;
   /** Grace period after SIGTERM before SIGKILL. */
   graceMs?: number;
   /** Maximum time to wait for the child to be reaped after SIGKILL. */
@@ -234,10 +236,13 @@ export async function terminateChildProcess(
 
   child.stdin?.end();
 
-  if (!child.killed) {
-    child.kill('SIGTERM');
-  }
+  const exitedGracefully = await waitForChildExit(
+    child,
+    options.gracefulExitMs ?? 500,
+  );
+  if (exitedGracefully) return;
 
+  child.kill('SIGTERM');
   const exited = await waitForChildExit(child, options.graceMs ?? 5_000);
   if (!exited) {
     child.kill('SIGKILL');

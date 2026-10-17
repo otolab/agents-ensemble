@@ -19,6 +19,7 @@ describe('AcpClient', () => {
     await once(child.stdout!, 'data');
 
     await terminateChildProcess(child, {
+      gracefulExitMs: 25,
       graceMs: 25,
       forceKillWaitMs: 1_000,
     });
