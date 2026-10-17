@@ -158,14 +158,24 @@ Pi conductor は **LLM リクエストの直前**で `apiKey` の `!command` を
 
 **ensemble harness は `!command` の自動ラップや TTL 設定を持ちません**（[ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の移譲モデルのまま）。代わりに、**キャッシュ付きの認証ヘルパースクリプト**を `models.json` から呼び出してください。Codex worker の `[model_providers.*.auth]` + `refresh_interval_ms` と同型で、**毎 `getAuth` でスクリプトは起動するが、キャッシュ hit 時は内側の gcloud を実行しない**運用です。
 
-Pi の `!command` は Node.js 実装の [scripts/pi/cached-auth.mjs](../scripts/pi/cached-auth.mjs) を使います。repository clone の絶対パスから呼び出すか、npm 版では `@agents-ensemble/cli/scripts/pi/cached-auth.mjs` を参照してください。キャッシュファイルは既定で **`~/.ensemble/pi/cache/auth/`**（`600`。CWD や作業リポジトリに依存しない）に置きます。リポジトリ配下に置きたい場合は `--cache-dir` または `ENSEMBLE_PI_AUTH_CACHE_DIR` で上書きしてください。
+Pi の `!command` は Node.js 実装の [scripts/pi/cached-auth.mjs](../scripts/pi/cached-auth.mjs) を使います。repository clone ではその絶対パスを指定してください。npm 配布版を使う場合、`@agents-ensemble/cli/scripts/pi/cached-auth.mjs` は package 内の相対パスなので、そのまま `!command` には渡せません。npm の install root から実ファイルの絶対パスを取得します。
+
+```bash
+# npm でグローバル install した場合（/ から実行し、repo の packageManager 設定を避ける）
+realpath "$(cd / && npm root -g)/@agents-ensemble/cli/scripts/pi/cached-auth.mjs"
+
+# 現在のプロジェクトに install した場合（consumer project root から実行）
+realpath "./node_modules/@agents-ensemble/cli/scripts/pi/cached-auth.mjs"
+```
+
+出力された絶対パスを `models.json` の `apiKey` に使います。package subpath や `realpath` コマンド自体を `apiKey` に書くのではなく、出力された helper のパスを `!` の直後に指定してください。下の例の `/absolute/path/to/cached-auth.mjs` は、clone のパスまたは上記コマンドの出力に置き換えます。キャッシュファイルは既定で **`~/.ensemble/pi/cache/auth/`**（`600`。CWD や作業リポジトリに依存しない）に置きます。リポジトリ配下に置きたい場合は `--cache-dir` または `ENSEMBLE_PI_AUTH_CACHE_DIR` で上書きしてください。
 
 ```json
 {
   "providers": {
     "litellm": {
       "baseUrl": "https://your-litellm.example/v1",
-      "apiKey": "!/absolute/path/to/agents-ensemble/scripts/pi/cached-auth.mjs --ttl-ms 300000 -- gcloud auth print-identity-token --account=you@example.com",
+      "apiKey": "!/absolute/path/to/cached-auth.mjs --ttl-ms 300000 -- gcloud auth print-identity-token --account=you@example.com",
       "api": "openai-responses",
       "authHeader": true,
       "models": [{ "id": "your-model", "name": "your-model" }]
@@ -201,16 +211,18 @@ Node helper は既存の `default.token` / `default.meta` 形式を読み書き�
 node scripts/pi/bench-cached-auth.mjs
 ```
 
-出力には platform / architecture、Node.js の版、10 組それぞれの no-op / hit 時間と差分、各 p50 が表示されます。性能の判定基準は macOS で paired `hit - no-op` p50 **25 ms 以下**です。hit / no-op の絶対 p50 と全サンプルも記録してください。この相対値は起動コストを引いた helper の追加遅延を見るための基準です。
+出力には platform / architecture、Node.js の版、10 組それぞれの no-op / hit 時間と差分、各 p50 が表示されます。これらの性能値は helper の起動コストと追加遅延を把握するための参考情報で、今回の Issue / PR の完了判定には使いません。hit / no-op の絶対 p50 と全サンプルを環境情報とともに記録してください。
 
-2026-10-16 の初回測定は macOS 15.7.9（build 24G830、Apple Silicon / arm64）で、Node.js 24.16.0 の hit p50 が **148.72 ms**、no-op 起動 p50 が **128.72 ms**でした。Node.js 22.22.3 の hit p50 は **346.56 ms**でした。元の絶対基準 p50 < 100 ms は達成していません。
+ベンチスクリプトには以前の比較値を表示する `macOS acceptance (<= 25 ms)` 診断と、macOS でその値を超えたときに終了コード 1 を返す挙動が残っています。これは未変更のスクリプト動作です。オペレータの判断により、25 ms は現在の Issue / PR の受け入れ gate ではなく、測定値とともに参考情報として扱います。
 
-2026-10-17 に同じ Mac で新しい paired ベンチを実行しました。別プロセスを止めずに計測したため、no-op の絶対時間にも大きなばらつきがあります。Node.js 24.16.0 は paired p50 が **30.65 ms**で新しい 25 ms 基準を満たしていません。Node.js 22.22.3 は **11.12 ms**で基準を満たしました。Node.js 24.16.0 が未達のため、Issue 全体の性能条件は達成扱いにしません。
+2026-10-16 の初回測定は macOS 15.7.9（build 24G830、Apple Silicon / arm64）で、Node.js 24.16.0 の hit p50 が **148.72 ms**、no-op 起動 p50 が **128.72 ms**でした。Node.js 22.22.3 の hit p50 は **346.56 ms**でした。これらは当時の測定記録です。
 
-| Node.js | no-op p50 | hit p50 | paired `hit - no-op` p50 | 25 ms 基準 |
-|---------|-----------|---------|--------------------------|-----------|
-| 24.16.0 | 516.14 ms | 577.82 ms | **30.65 ms** | 未達 |
-| 22.22.3 | 597.53 ms | 606.35 ms | **11.12 ms** | 達成 |
+2026-10-17 に同じ Mac で新しい paired ベンチを実行しました。別プロセスを止めずに計測したため、no-op の絶対時間にも大きなばらつきがあります。paired `hit - no-op` p50 は Node.js 24.16.0 で **30.65 ms**、Node.js 22.22.3 で **11.12 ms**でした。これらも pass/fail 判定ではなく参考値です。
+
+| Node.js | no-op p50 | hit p50 | paired `hit - no-op` p50 |
+|---------|-----------|---------|--------------------------|
+| 24.16.0 | 516.14 ms | 577.82 ms | **30.65 ms** |
+| 22.22.3 | 597.53 ms | 606.35 ms | **11.12 ms** |
 
 10 組のサンプルは次のとおりです（各列は同じ組の no-op / hit / 差分）。
 
