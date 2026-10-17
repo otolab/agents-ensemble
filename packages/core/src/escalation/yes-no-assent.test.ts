@@ -47,4 +47,13 @@ describe('parseChoiceSelection', () => {
       ]),
     ).toBeUndefined();
   });
+
+  it('does not guess when normalized option ids are ambiguous', () => {
+    expect(
+      parseChoiceSelection('A', [
+        { id: 'A', label: 'Ship now' },
+        { id: 'a.', label: 'Ship later' },
+      ]),
+    ).toBeUndefined();
+  });
 });

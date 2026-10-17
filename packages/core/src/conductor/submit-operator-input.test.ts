@@ -80,6 +80,98 @@ describe('submitOperatorInput', () => {
     expect(escalations[0]?.answer).toBe('approved');
   });
 
+  it('records targeted choice free text instead of sending it as general guidance', () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      id: 'inq-1',
+      question: 'Which approach?',
+      responseType: 'choice',
+      choices: [
+        { id: 'A', label: 'Ship now' },
+        { id: 'B', label: 'Wait for review' },
+      ],
+    });
+    registry.enqueue({
+      id: 'inq-2',
+      question: 'Which release window?',
+      responseType: 'choice',
+      choices: [
+        { id: 'C', label: 'This week' },
+        { id: 'D', label: 'Next week' },
+      ],
+    });
+    const eventQueue = new SessionEventQueue();
+    const sessionLogger = new SessionLogger({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      repoRoot: '/repo',
+    });
+    const escalations: Array<{ question: string; answer: string }> = [];
+
+    const received = submitOperatorInput({
+      message: 'Release after the API compatibility pass.',
+      targetOpenQuestionId: 'inq-2',
+      conductorTurn: 3,
+      openQuestions: registry,
+      escalations,
+      eventQueue,
+      sessionLogger,
+    });
+
+    expect(received).toBe(true);
+    expect(registry.get('inq-2')).toMatchObject({
+      status: 'answered',
+      answer: 'Release after the API compatibility pass.',
+      answeredBy: 'operator',
+    });
+    expect(registry.get('inq-2')?.selectedChoice).toBeUndefined();
+    expect(registry.get('inq-1')?.status).toBe('open');
+    expect(escalations).toHaveLength(1);
+    expect(escalations[0]?.answer).toBe(
+      'Release after the API compatibility pass.',
+    );
+    expect(eventQueue.dequeue()).toMatchObject({
+      type: 'operator.message',
+      text: expect.stringContaining(
+        'Release after the API compatibility pass.',
+      ),
+    });
+  });
+
+  it('answers a sole choice question with un-targeted free text', () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      question: 'Which approach?',
+      responseType: 'choice',
+      choices: [{ id: 'A', label: 'Ship now' }],
+    });
+    const eventQueue = new SessionEventQueue();
+    const sessionLogger = new SessionLogger({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      repoRoot: '/repo',
+    });
+
+    const received = submitOperatorInput({
+      message: 'Use a staged rollout first.',
+      conductorTurn: 2,
+      openQuestions: registry,
+      escalations: [],
+      eventQueue,
+      sessionLogger,
+    });
+
+    expect(received).toBe(true);
+    expect(registry.get('inq-1')).toMatchObject({
+      status: 'answered',
+      answer: 'Use a staged rollout first.',
+      answeredBy: 'operator',
+    });
+    expect(registry.get('inq-1')?.selectedChoice).toBeUndefined();
+    expect(eventQueue.dequeue()).toMatchObject({
+      type: 'operator.message',
+      text: expect.stringContaining('Use a staged rollout first.'),
+    });
+  });
+
   it('preserves blank lines in operator.input and operator.message text', () => {
     const eventQueue = new SessionEventQueue();
     const sessionLogger = new SessionLogger({

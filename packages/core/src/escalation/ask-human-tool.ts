@@ -24,7 +24,7 @@ export function createAskHumanTool(
         'The operator answers in chat on a later turn; you can continue without waiting.',
         'DO NOT use if the operator already answered in chat — use answer_open_question to record their answer instead.',
         'DO NOT use answer_open_question and ask_human for the same decision in one turn.',
-        'Use yes_no for binary choices, choice for a fixed list of options, or text for open guidance.',
+        'Use yes_no for binary choices, choice to offer a fixed list of quick-select options (operators may still answer in free text), or text for open guidance.',
       ].join(' '),
       inputSchema: {
         type: 'object',
@@ -37,7 +37,7 @@ export function createAskHumanTool(
             type: 'string',
             enum: ['yes_no', 'text', 'choice'],
             description:
-              'yes_no for binary assent, choice for a fixed option list, text for free-form guidance',
+              'yes_no for binary assent, choice for a fixed option list with free-form answers also accepted, text for open guidance',
           },
           choices: {
             type: 'array',
@@ -50,7 +50,7 @@ export function createAskHumanTool(
               required: ['id', 'label'],
             },
             description:
-              'Required for choice: options the operator can select by id, label, or one-based number',
+              'Required for choice: options the operator can select by id, unique label, or one-based number. Free-form answers are also accepted; an ambiguous label is recorded as answer text without selectedChoice.',
           },
           context: {
             type: 'string',

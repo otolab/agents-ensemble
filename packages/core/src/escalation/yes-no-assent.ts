@@ -144,10 +144,11 @@ export function parseChoiceSelection(
   const normalizedAnswer = normalizeAnswer(answer);
   if (!normalizedAnswer) return undefined;
 
-  const matchedId = choices.find(
+  const matchingIds = choices.filter(
     (choice) => normalizeAnswer(choice.id) === normalizedAnswer,
   );
-  if (matchedId) return matchedId.id;
+  if (matchingIds.length === 1) return matchingIds[0]?.id;
+  if (matchingIds.length > 1) return undefined;
 
   const matchingLabels = choices.filter(
     (choice) => normalizeAnswer(choice.label) === normalizedAnswer,
