@@ -102,8 +102,14 @@ vi.mock('./tui/create-issue-session-tui-host.js', () => ({
 }));
 
 import { executeIssueCommand, issueCommandExitCode } from './issue-command.js';
+import type { AcpBridge } from '../../core/src/acp/acp-bridge.js';
+import { DEFAULT_ENSEMBLE_CONFIG } from '../../core/src/config/defaults.js';
 import { runIssueSession as runIssueSessionImpl } from '../../core/src/conductor/issue-session.js';
 import { runGit } from '../../core/src/git/run-git.js';
+import {
+  loadSessionSidecar,
+  sessionSidecarPath,
+} from '../../core/src/session/session-sidecar.js';
 import * as worktreeModule from '../../core/src/worktree/worktree.js';
 
 const issueUrl = 'https://github.com/org/repo/issues/1';
@@ -135,6 +141,17 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
       clearTimeout(timer);
     }
   }
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe('executeIssueCommand with the core session', () => {
@@ -326,7 +343,6 @@ describe('executeIssueCommand with the core session', () => {
     await runGit(['config', 'user.email', 'test@example.com'], repoRoot);
     await runGit(['config', 'user.name', 'test'], repoRoot);
     await runGit(['commit', '--allow-empty', '-m', 'init'], repoRoot);
-    const worktreePath = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
     const options = {
       repoRoot,
       conductorCwd: repoRoot,
@@ -435,7 +451,6 @@ describe('executeIssueCommand with the core session', () => {
     const closeSidecar = JSON.parse(await readFile(sidecarPath, 'utf8'));
     expect(closeSidecar.githubMonitor.pendingUpdates).toEqual([pendingUpdate]);
     expect(closeAcknowledge).not.toHaveBeenCalled();
-    await expect(access(worktreePath)).resolves.toBeUndefined();
 
     const continuePromise = executeIssueCommand(
       issueUrl,
@@ -477,8 +492,152 @@ describe('executeIssueCommand with the core session', () => {
       await readFile(sidecarPath, 'utf8'),
     );
     expect(continuedSidecar.githubMonitor.pendingUpdates).toBeUndefined();
-    await expect(access(worktreePath)).resolves.toBeUndefined();
     await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it('continues the same worker ACP session after /close interrupts its first prompt', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+    const userEnsembleRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-cli-session-user-'),
+    );
+    await runGit(['init'], repoRoot);
+    await runGit(['config', 'user.email', 'test@example.com'], repoRoot);
+    await runGit(['config', 'user.name', 'test'], repoRoot);
+    await runGit(['commit', '--allow-empty', '-m', 'init'], repoRoot);
+
+    const worktreePath = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    const firstPrompt = createDeferred<{
+      stopReason: string;
+      responseText: string;
+    }>();
+    const firstBridge = {
+      newSession: vi.fn().mockResolvedValue('worker-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn(() => firstPrompt.promise),
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const resumedBridge = {
+      newSession: vi.fn().mockResolvedValue('unexpected-new-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'worker resumed after close',
+      }),
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi
+      .fn()
+      .mockResolvedValueOnce(firstBridge)
+      .mockResolvedValueOnce(resumedBridge);
+    const options = {
+      repoRoot,
+      conductorCwd: repoRoot,
+      worktree: 'isolated',
+      githubMonitor: false,
+      defaultAcpCommand: process.execPath,
+    };
+    const deps = {
+      isOperatorInputInteractive: () => true,
+      isOperatorInputTty: () => true,
+      loadEnsembleConfig: async () => structuredClone(DEFAULT_ENSEMBLE_CONFIG),
+      loadProfile: async () => ({
+        profile: {
+          workers: [{ name: 'implementer', kind: 'implementer' }],
+        },
+        profilePath: '/tmp/profile.yaml',
+      }),
+      runIssueSession: (
+        sessionOptions: Parameters<typeof runIssueSessionImpl>[0],
+      ) =>
+        runIssueSessionImpl({
+          ...sessionOptions,
+          connectAcp,
+          disableGitHubMonitor: true,
+          mcpConfigOptions: { userEnsembleRoot },
+          registerProcessSignalHandlers: false,
+        }),
+    };
+
+    try {
+      const closePromise = executeIssueCommand(issueUrl, options, deps);
+      await vi.waitFor(() =>
+        expect(firstBridge.promptSession).toHaveBeenCalledOnce(),
+      );
+      await vi.waitFor(() =>
+        expect(mockTuiOperatorApi.current).toBeDefined(),
+      );
+      expect(mockTuiOperatorApi.current!.submit('/close')).toBe(false);
+      const closeResult = await withTimeout(closePromise, 'worker /close');
+
+      expect(closeResult.stopReason).toBe('completed');
+      expect(firstBridge.cancelSession).toHaveBeenCalledWith('worker-session');
+      expect(firstBridge.close).toHaveBeenCalledOnce();
+      await expect(access(worktreePath)).resolves.toBeUndefined();
+      await expect(
+        loadSessionSidecar(
+          sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        ),
+      ).resolves.toMatchObject({
+        workers: {
+          implementer: {
+            acpSessionId: 'worker-session',
+            acpCwd: worktreePath,
+          },
+        },
+      });
+
+      firstPrompt.resolve({ stopReason: 'cancelled', responseText: '' });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const sendsBeforeContinue = mockSend.mock.calls.length;
+      const continuePromise = executeIssueCommand(
+        issueUrl,
+        { ...options, continue: true },
+        deps,
+      );
+      await vi.waitFor(() =>
+        expect(resumedBridge.loadSession).toHaveBeenCalledWith(
+          'worker-session',
+          worktreePath,
+          expect.any(Function),
+        ),
+      );
+      await vi.waitFor(() =>
+        expect(mockSend).toHaveBeenCalledTimes(sendsBeforeContinue + 1),
+      );
+      expect(connectAcp).toHaveBeenCalledTimes(2);
+      expect(connectAcp.mock.calls[1]?.[0].cwd).toBe(worktreePath);
+      expect(resumedBridge.newSession).not.toHaveBeenCalled();
+      expect(resumedBridge.promptSession).toHaveBeenCalledWith(
+        'worker-session',
+        expect.stringContaining('前回の続きです'),
+        expect.any(Object),
+      );
+      expect(String(mockSend.mock.calls[sendsBeforeContinue]?.[0])).toContain(
+        'worker resumed after close',
+      );
+      expect(mockTuiOperatorApi.current).toBeDefined();
+      expect(mockTuiOperatorApi.current!.submit('/close')).toBe(false);
+      const continueResult = await withTimeout(
+        continuePromise,
+        'worker --continue',
+      );
+
+      expect(continueResult.stopReason).toBe('completed');
+      expect(resumedBridge.close).toHaveBeenCalledOnce();
+      await expect(access(worktreePath)).resolves.toBeUndefined();
+    } finally {
+      firstPrompt.resolve({ stopReason: 'cancelled', responseText: '' });
+      await rm(repoRoot, { recursive: true, force: true });
+      await rm(userEnsembleRoot, { recursive: true, force: true });
+    }
   });
 
   it('keeps /exit worktree cleanup failures warning-only with exit code 0', async () => {

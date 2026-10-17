@@ -1225,6 +1225,21 @@ export async function runConductorSession(
       // Stop active prompts before closing ACP bridges. Requests that arrive
       // after this point are rejected by the teardown guard above.
       workerSession.runtime.cancelAllActivePrompts();
+      if (operatorRequestedClose) {
+        // A worker's ACP session exists before its first prompt completes, but
+        // workerSessions is normally updated by onWorkerCompleted. Snapshot
+        // attached sessions now so force shutdown cannot discard the only
+        // completion event that would have persisted a resumable session ID.
+        for (const attached of workerSession.runtime.listAttached()) {
+          workerSessions.set(attached.name, {
+            acpSessionId: attached.session.sessionId,
+            acpCwd: attached.session.acpCwd,
+            ...(workerAcpFingerprints.get(attached.name)
+              ? { acpSpawn: workerAcpFingerprints.get(attached.name) }
+              : {}),
+          });
+        }
+      }
       const rejectedPendingPermissions = rejectAllPendingPermissions(
         permissionPipeline,
         workerSession.inbox,
@@ -1287,7 +1302,11 @@ export async function runConductorSession(
       const runConductorClose = async (): Promise<void> => {
         emitTeardownPhase('conductor');
         const phaseStart = Date.now();
-        await conductorHandle.conductor.close();
+        if (operatorRequestedClose && conductorHandle.conductor.closeForResume) {
+          await conductorHandle.conductor.closeForResume();
+        } else {
+          await conductorHandle.conductor.close();
+        }
         teardownPhases.conductor = Date.now() - phaseStart;
       };
 

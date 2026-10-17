@@ -421,8 +421,12 @@ describe('IssueSessionTui', () => {
     viewModel.setPostLoopWaiting(true);
     await flushInkStdin();
     expectCanonicalIssueUrl();
-    expect(lastFrame() ?? '').toContain('追加指示を入力するか');
-    expect(lastFrame() ?? '').toContain('/exit 掃除して終了');
+    const postLoopFrame = (lastFrame() ?? '').replace(/\s+/g, ' ');
+    expect(postLoopFrame).toContain('追加指示 ·');
+    expect(postLoopFrame).toContain('/close');
+    expect(postLoopFrame).toContain('保存して閉じる');
+    expect(postLoopFrame).toContain('/exit');
+    expect(postLoopFrame).toContain('掃除して終了');
 
     viewModel.setShuttingDown(true);
     await flushInkStdin();
@@ -863,10 +867,10 @@ describe('IssueSessionTui', () => {
         inputPaneHeight: requestedInputPaneHeight,
       });
       expect(paneHeights).toEqual({
-        workerPaneHeight: 4,
+        workerPaneHeight: 3,
         activityPaneHeight: 3,
         openQuestionsPaneHeight: 0,
-        inputPaneHeight: 4,
+        inputPaneHeight: 5,
       });
 
       const inputLine = findOperatorInputLine(lines);

@@ -131,6 +131,7 @@ pnpm test:integration  # fake smoke は設定不要、外部依存は前提が�
 | **smoke** | `ensemble issue` — conductor + worker 連携、終了 JSON の必須フィールド |
 | **operator 入力** | `ENSEMBLE_OPERATOR_MESSAGE` による post-loop 入力 |
 | **roundtrip** | worker メッセージの往復（profile 別 fixture） |
+| **Pi TTY close / resume** | 実 CLI を PTY で起動し、`/close` 後の自然終了・stdio MCP PID 回収と、保存済み Pi session の `--continue` を確認。worker の同一 worktree / ACP session 再開は CLI session unit test で確認 |
 
 ### 配置
 
@@ -147,7 +148,8 @@ pnpm test:e2e
 
 ### 前提・スキップ
 
-- 対象 conductor backend の認証（Cursor は `CURSOR_API_KEY` / `ensemble auth login`、Pi は `ensemble auth login --provider <id>` または Pi `auth.json`）
+- `issue-pi-tty-close.e2e.test.ts` はローカル fake model / GitHub 応答と stdio MCP fixture を使い、外部認証や `test-acp.yaml` は不要。Python 3 の標準 `pty` モジュールと localhost bind が必要で、Windows では skip する。
+- その他の対象 conductor backend の認証（Cursor は `CURSOR_API_KEY` / `ensemble auth login`、Pi は `ensemble auth login --provider <id>` または Pi `auth.json`）
 - `test-acp.yaml` + テスト用 Issue URL（または専用テスト repo）
 - GitHub API トークン（`GITHUB_TOKEN` / `GH_TOKEN`。実 Issue を触る場合）
 
@@ -174,8 +176,8 @@ pnpm test:all           # 全レベル（ローカル用）
 
 | トリガー | unittest | integration | e2e |
 |---------|----------|-------------|-----|
-| PR | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | スキップ |
-| main | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | スキップ |
+| PR | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | Pi TTY close / resume process e2e（認証不要） |
+| main | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | Pi TTY close / resume process e2e（認証不要） |
 | 手動 / nightly | 必須 | 推奨 | 任意 |
 | リリース前 | 必須 | 必須（設定ある場合） | 推奨 |
 

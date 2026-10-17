@@ -463,10 +463,9 @@ describe('createGitHubMonitor', () => {
     expect(client.listIssueComments).toHaveBeenCalledTimes(1);
     pollResolve?.();
     await drainAsync();
-    expect(monitor.getCursor()).toMatchObject({
-      lastIssueCommentId: '0',
-      pendingUpdates: undefined,
-    });
+    const cursorAfterLatePoll = monitor.getCursor();
+    expect(cursorAfterLatePoll.lastIssueCommentId).toBe('0');
+    expect(cursorAfterLatePoll.pendingUpdates).toBeUndefined();
     expect(onUpdate).not.toHaveBeenCalled();
     vi.useFakeTimers();
   });
