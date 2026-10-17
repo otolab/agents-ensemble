@@ -211,6 +211,10 @@ export interface SessionOperatorExitEvent {
   type: 'session.operator_exit';
 }
 
+export interface SessionOperatorCloseEvent {
+  type: 'session.operator_close';
+}
+
 export interface HarnessTeardownSummaryEvent {
   type: 'harness.teardown';
   force: boolean;
@@ -297,6 +301,7 @@ export type SessionLogEvent =
   | SessionContinueEvent
   | SessionPostLoopWaitEvent
   | SessionOperatorExitEvent
+  | SessionOperatorCloseEvent
   | HarnessTeardownSummaryEvent
   | HarnessTeardownPhaseEvent
   | ConductorAuthRecoveryEvent

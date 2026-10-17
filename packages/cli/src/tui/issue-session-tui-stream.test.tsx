@@ -115,7 +115,7 @@ describe('IssueSessionTuiStream', () => {
     expect(frame.indexOf('Open questions')).toBeLessThan(frame.indexOf('Operator input'));
     expect(frame.indexOf('Operator input')).toBeLessThan(frame.indexOf('Workers'));
     expect(frame).toContain('inq-1 (1/1) への回答');
-    expect(frame).not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
+    expect(frame).not.toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
   });
 
   it('keeps operator line and paragraph breaks in stream activity output', () => {
@@ -264,7 +264,7 @@ describe('IssueSessionTuiStream', () => {
 
     const frame = lastFrame() ?? '';
     const operatorInputIndex = frame.indexOf('Operator input');
-    const instructionHintIndex = frame.indexOf('追加指示を入力するか /reconnect で再接続 · /exit で終了');
+    const instructionHintIndex = frame.indexOf('追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
     const workersIndex = frame.indexOf('Workers');
 
     expect(operatorInputIndex).toBeGreaterThanOrEqual(0);
@@ -272,7 +272,7 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('(未回答なし)');
     expect(instructionHintIndex).toBeGreaterThan(operatorInputIndex);
     expect(workersIndex).toBeGreaterThan(operatorInputIndex);
-    expect(frame).toContain('追加指示を入力するか /reconnect で再接続 · /exit で終了');
+    expect(frame).toContain('追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
     expect(frame).toContain('otolab/agents-ensemble#261');
     expect(frame).not.toContain('post-loop 待機中');
     expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(80);
@@ -396,7 +396,7 @@ describe('IssueSessionTuiStream', () => {
     await flushInkStdin();
     expectCanonicalIssueUrl();
     expect(lastFrame() ?? '').toContain('追加指示を入力するか');
-    expect(lastFrame() ?? '').toContain('/exit で終了');
+    expect(lastFrame() ?? '').toContain('/exit 掃除して終了');
 
     viewModel.setShuttingDown(true);
     await flushInkStdin();
@@ -520,7 +520,7 @@ describe('IssueSessionTuiStream', () => {
     viewModel.setPostLoopWaiting(true);
     await flushInkStdin();
     expectCanonicalIssueLink();
-    expect(lastFrame() ?? '').toContain('追加指示を入力するか /reconnect で再接続 · /exit で終了');
+    expect(lastFrame() ?? '').toContain('追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
 
     viewModel.setShuttingDown(true);
     await flushInkStdin();
@@ -541,7 +541,7 @@ describe('IssueSessionTuiStream', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
+    expect(frame).toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
     expect(frame).not.toContain('自律ターン');
   });
 
@@ -558,9 +558,9 @@ describe('IssueSessionTuiStream', () => {
     );
 
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
+    expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
     expect(lastFrame() ?? '').toContain('otolab/agents-ensemble#263');
-    expect(lastFrame() ?? '').not.toContain('otolab/agents-ensemble#263 — 任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
+    expect(lastFrame() ?? '').not.toContain('otolab/agents-ensemble#263 — 任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
 
     stdin.write('follow-up');
     await flushInkStdin();
@@ -972,7 +972,7 @@ describe('IssueSessionTuiStream', () => {
     const initialFrame = lastFrame() ?? '';
     expect(initialFrame).toContain('Open questions');
     expect(initialFrame).toContain('inq-resumed-1');
-    expect(initialFrame).not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
+    expect(initialFrame).not.toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
 
     if (selectedIndex === 1) {
       stdin.write(INK_TEST_KEYS.shiftDownArrow);
@@ -988,16 +988,16 @@ describe('IssueSessionTuiStream', () => {
     });
     if (restoredQuestions.length === 1) {
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
+      expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
     } else {
       expect(lastFrame() ?? '').toContain('Open questions');
       expect(lastFrame() ?? '').toContain('inq-resumed-1');
-      expect(lastFrame() ?? '').not.toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
+      expect(lastFrame() ?? '').not.toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
 
       setOperatorQuestions([]);
       await flushInkStdin();
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('任意のタイミングで入力 · /reconnect で再接続 · /exit で終了');
+      expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
     }
   });
 

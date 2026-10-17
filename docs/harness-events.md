@@ -119,6 +119,7 @@ open question・エスカレーション・CLI 通知。stderr の prefix は従
 | `session.continue` | `--continue` で sidecar から再開時 | `[continue] resuming session: conductorAgentId=...` | なし |
 | `session.post_loop_wait` | 自律的な連続処理が不要になり、TTY post-loop のイベント待機を開始したとき | （post-loop 待機メッセージ） | なし |
 | `session.operator_exit` | オペレータが `/exit` / `exit` を入力した直後（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | （終了フィードバックメッセージ） | なし |
+| `session.operator_close` | オペレータが `/close` / `close` を入力した直後（[#458](https://github.com/otolab/agents-ensemble/issues/458)） | （保存して閉じるフィードバックメッセージ） | なし |
 | `conductor.dispatch_hold` | `set_dispatch_hold` の ON/OFF、および held trigger（`permission.pending` / `permission.stall` を含む）件数の更新（#265） | `dispatch hold enabled` / `released (flushed N events)` | TUI Workers ペインのタイトルを更新。解除後に残った held trigger も件数表示を維持 |
 
 CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）。
@@ -132,7 +133,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | 運用・resume | 保留は Driver メモリだけ | sidecar に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
 
 保留は一時的な運用モードであり、teardown flush や crash recovery は提供しない。`/exit`、
-SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが `hold: false` より先に
+`/close`、SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが `hold: false` より先に
 起きた場合、Driver 内の held buffer と queue に残る hold 対象 trigger は dispatch / sidecar
 保存されず失われる。operator は終了前に `set_dispatch_hold({ hold: false })` を呼び、release
 完了を確認する必要がある。resume は空の hold（`dispatchHold: false`）で始まる。
@@ -390,7 +391,7 @@ GitHub monitor（セッション中は常時。`--no-github-monitor` で無効�
     harness.teardown.phase ─────────────────► verbose 時のみ stderr
     harness.teardown ───────────────────────► stderr（force 時または 1s 超）
 
-  isolated worktree cleanup（正常 `/exit`、`harness.teardown` emit 後）
+  isolated worktree cleanup（正常 `/exit` のみ。`harness.teardown` emit 後。`/close` は実行しない）
     harness.teardown.phase worktree ─────────► verbose 時のみ stderr
     harness.worktree.removed ────────────────► verbose 時のみ stderr
     harness.worktree.remove_skipped/failed ──► harness stderr + observation warning
@@ -479,6 +480,7 @@ prompt ライフサイクルイベントは **exit JSON には載せない**（�
 | `[continue]` | `session.continue` | |
 | （post-loop メッセージ） | `session.post_loop_wait` | |
 | （終了フィードバック） | `session.operator_exit` | TTY では入力欄も無効化（`shuttingDown`） |
+| （保存して閉じるフィードバック） | `session.operator_close` | TTY では入力欄も無効化（`shuttingDown`） |
 
 ---
 

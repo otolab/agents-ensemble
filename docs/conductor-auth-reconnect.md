@@ -51,9 +51,10 @@ emit し、auth の `[auth]` recovery hint は表示しない。オペレータ�
 `reconnect`）で同じ `resume(sameId)` を手動実行できる。手動操作は直近 send の完了後に
 行い、worker、worktree、プロセス、conductor へのコマンド送信には影響しない。
 
-stall が続く場合の暫定回避策は Ctrl+C + `--resume <agentId>`。`/exit` は isolated
-worktree の削除を行うことがあるため、worktree を残す必要がある場合は `/reconnect` を
-優先する。
+stall が続き、worktree を残したままプロセスを終了したい場合は `/close` の後に
+`ensemble issue <same> --continue` で再開します。Ctrl+C も worktree を削除しませんが、
+セッション結果は `interrupted` になります。`/exit` は isolated worktree の cleanup を
+試みます。プロセスを維持して conductor だけ再接続する場合は `/reconnect` を使います。
 
 ## 制限
 

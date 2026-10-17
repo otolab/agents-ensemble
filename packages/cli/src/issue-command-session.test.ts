@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -89,8 +89,10 @@ vi.mock('./tui/create-issue-session-tui-host.js', () => ({
   createIssueSessionTuiHost: mockTuiCreate,
 }));
 
-import { executeIssueCommand } from './issue-command.js';
+import { executeIssueCommand, issueCommandExitCode } from './issue-command.js';
 import { runIssueSession as runIssueSessionImpl } from '../../core/src/conductor/issue-session.js';
+import { runGit } from '../../core/src/git/run-git.js';
+import * as worktreeModule from '../../core/src/worktree/worktree.js';
 
 const issueUrl = 'https://github.com/org/repo/issues/1';
 
@@ -162,6 +164,7 @@ describe('executeIssueCommand with the core session', () => {
 
   afterEach(() => {
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+    vi.restoreAllMocks();
   });
 
   it.each([
@@ -264,6 +267,148 @@ describe('executeIssueCommand with the core session', () => {
     expect(telemetryEventTypes.indexOf('session.stop')).toBeGreaterThan(
       telemetryEventTypes.indexOf('session.post_loop_wait'),
     );
+  });
+
+  it('closes a TTY session and resumes it from the sidecar with --continue', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+    await runGit(['init'], repoRoot);
+    await runGit(['config', 'user.email', 'test@example.com'], repoRoot);
+    await runGit(['config', 'user.name', 'test'], repoRoot);
+    await runGit(['commit', '--allow-empty', '-m', 'init'], repoRoot);
+    const worktreePath = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    const options = {
+      repoRoot,
+      conductorCwd: repoRoot,
+      worktree: 'isolated' as const,
+      githubMonitor: false,
+    };
+    const deps = {
+      isOperatorInputInteractive: (message: string | undefined) =>
+        message === undefined,
+      isOperatorInputTty: () => true,
+      runIssueSession: runIssueSessionImpl,
+    };
+
+    const closePromise = executeIssueCommand(issueUrl, options, deps);
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(mockTuiOperatorApi.current).toBeDefined(),
+    );
+    mockTuiOperatorApi.current!.submit('/close');
+    const closeResult = await withTimeout(closePromise, 'TTY /close');
+
+    expect(closeResult.stopReason).toBe('completed');
+    expect(mockClose).toHaveBeenCalledOnce();
+    expect(mockTuiDispose).toHaveBeenCalledOnce();
+    const closedTui = mockTuiCreate.mock.results[0]?.value as {
+      telemetrySink: ReturnType<typeof vi.fn>;
+    };
+    expect(closedTui.telemetrySink).toHaveBeenCalledWith({
+      type: 'session.operator_close',
+    });
+    await expect(access(worktreePath)).resolves.toBeUndefined();
+
+    const continuePromise = executeIssueCommand(
+      issueUrl,
+      { ...options, continue: true },
+      deps,
+    );
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(mockTuiOperatorApi.current).toBeDefined(),
+    );
+
+    expect(mockCreate.mock.calls[1]?.[0]).toBe('agent-test');
+    const resumedTui = mockTuiCreate.mock.results[1]?.value as {
+      telemetrySink: ReturnType<typeof vi.fn>;
+    };
+    expect(resumedTui.telemetrySink).toHaveBeenCalledWith({
+      type: 'session.continue',
+      conductorAgentId: 'agent-test',
+    });
+
+    mockTuiOperatorApi.current!.submit('/close');
+    const continueResult = await withTimeout(
+      continuePromise,
+      'TTY --continue session',
+    );
+
+    expect(continueResult.stopReason).toBe('completed');
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(mockClose).toHaveBeenCalledTimes(2);
+    expect(mockTuiDispose).toHaveBeenCalledTimes(2);
+    await expect(access(worktreePath)).resolves.toBeUndefined();
+    await rm(repoRoot, { recursive: true, force: true });
+  });
+
+  it('keeps /exit worktree cleanup failures warning-only with exit code 0', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
+    const path = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    const removeSpy = vi
+      .spyOn(worktreeModule, 'removeWorkerWorktree')
+      .mockResolvedValue({
+        status: 'failed',
+        path,
+        branch: 'ensemble/issue-1',
+        error: 'git worktree remove failed: lock held',
+      });
+
+    const sessionPromise = executeIssueCommand(
+      issueUrl,
+      {
+        repoRoot,
+        conductorCwd: repoRoot,
+        worktree: 'isolated',
+        githubMonitor: false,
+      },
+      {
+        isOperatorInputInteractive: (message) => message === undefined,
+        isOperatorInputTty: () => true,
+        runIssueSession: (sessionOptions) =>
+          runIssueSessionImpl({
+            ...sessionOptions,
+            workerWorktree: {
+              path,
+              branch: 'ensemble/issue-1',
+              issue: {
+                owner: 'org',
+                repo: 'repo',
+                number: 1,
+                url: issueUrl,
+              },
+            },
+          }),
+      },
+    );
+    await vi.waitFor(() => expect(mockSend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(mockTuiOperatorApi.current).toBeDefined(),
+    );
+    mockTuiOperatorApi.current!.submit('/exit');
+    const result = await withTimeout(sessionPromise, 'TTY /exit cleanup failure');
+
+    expect(result.stopReason).toBe('completed');
+    expect(issueCommandExitCode(result)).toBe(0);
+    expect(removeSpy).toHaveBeenCalledOnce();
+    const tui = mockTuiCreate.mock.results[0]?.value as {
+      telemetrySink: ReturnType<typeof vi.fn>;
+    };
+    expect(tui.telemetrySink).toHaveBeenCalledWith({
+      type: 'harness.worktree.remove_failed',
+      path,
+      branch: 'ensemble/issue-1',
+      error: 'git worktree remove failed: lock held',
+    });
   });
 
   it('keeps a TTY CLI-message session in post-loop wait until /exit', async () => {

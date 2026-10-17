@@ -88,6 +88,7 @@ import {
 } from './session-policy.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
 import { isOperatorExitCommand } from './operator-exit.js';
+import { isOperatorCloseCommand } from './operator-close.js';
 import { isOperatorReconnectCommand } from './operator-reconnect.js';
 import {
   assertSessionSidecarMatches,
@@ -169,7 +170,7 @@ export interface RunConductorSessionOptions {
    */
   stopOnUnansweredInput?: boolean;
   /**
-   * 自律ループ停止後も harness を維持し、オペレータの `/exit` または追加指示を待つ。
+   * 自律ループ停止後も harness を維持し、オペレータの `/close` / `/exit` または追加指示を待つ。
    * CLI の TTY デフォルト。非 TTY / CI では false。
    */
   waitForOperatorExit?: boolean;
@@ -358,10 +359,10 @@ export async function runConductorSession(
     : undefined;
   const shutdownSignal =
     options.shutdownSignal ?? shutdownController!.signal;
-  const operatorExitController = new AbortController();
+  const operatorTerminationController = new AbortController();
   const driverShutdownSignal = AbortSignal.any([
     shutdownSignal,
-    operatorExitController.signal,
+    operatorTerminationController.signal,
   ]);
   let unregisterProcessSignalHandlers = () => {};
   if (
@@ -953,6 +954,7 @@ export async function runConductorSession(
   const continueOnConductorError = options.continueOnConductorError ?? false;
   const waitForOperatorExit = options.waitForOperatorExit ?? false;
   let operatorRequestedExit = false;
+  let operatorRequestedClose = false;
   let disposeOperatorInput: (() => void) | undefined;
 
   if (options.bindOperatorInput) {
@@ -962,7 +964,14 @@ export async function runConductorSession(
           sessionLogger.emit({ type: 'session.operator_exit' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedExit = true;
-          operatorExitController.abort();
+          operatorTerminationController.abort();
+          return false;
+        }
+        if (isOperatorCloseCommand(message)) {
+          sessionLogger.emit({ type: 'session.operator_close' });
+          workerSession.runtime.cancelAllActivePrompts();
+          operatorRequestedClose = true;
+          operatorTerminationController.abort();
           return false;
         }
         if (isOperatorReconnectCommand(message)) {
@@ -1067,7 +1076,10 @@ export async function runConductorSession(
     stopReason = driverResult.stopReason;
     sendCount = driverResult.sendCount;
     autonomousTurns = driverResult.autonomousTurns;
-    if (operatorRequestedExit && stopReason === 'interrupted') {
+    if (
+      (operatorRequestedExit || operatorRequestedClose) &&
+      stopReason === 'interrupted'
+    ) {
       stopReason = 'completed';
     }
 
@@ -1162,7 +1174,10 @@ export async function runConductorSession(
     }
   } finally {
     teardownStarted = true;
-    const forceShutdown = operatorRequestedExit || shutdownSignal.aborted;
+    const forceShutdown =
+      operatorRequestedExit ||
+      operatorRequestedClose ||
+      shutdownSignal.aborted;
     const teardownStartedAt = Date.now();
     const teardownPhases: Record<string, number> = {};
 
@@ -1220,8 +1235,15 @@ export async function runConductorSession(
         const phaseStart = Date.now();
         await flushSidecar();
         teardownPhases.flushSidecar = Date.now() - phaseStart;
-      } catch {
-        // best-effort persistence
+      } catch (error) {
+        if (operatorRequestedClose) {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message:
+              `/close 時に sidecar を保存できませんでした。最新状態から再開できず、直前に保存された状態からの再開になる場合があります。 error=${detail}`,
+          });
+        }
       }
 
       const runGithubMonitorStop = async (): Promise<void> => {

@@ -14,7 +14,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
 | **SessionView** | TTY Ink TUI / CLI 引数 / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
-データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect` と `/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
+データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect`、`/close`、`/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
 
 ## View 契約: `OperatorInputBinding`
 
@@ -43,6 +43,7 @@ type OperatorInputBinding = (
 - 空文字は無視（`false` を返す）
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
 - `/reconnect` / `reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
+- `/close` / `close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。sidecar を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
 - `/exit` / `exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
 - TTY（Ink TUI）では選択中の open question への回答として `submit` する（`targetOpenQuestionId` オプション）
 - 非 TTY では未回答 1 件のときはプレーンテキストをその open question への回答として解釈する
@@ -68,7 +69,7 @@ ensemble issue 42 受け入れ条件を確認して実装してください
 ensemble issue https://github.com/org/repo/issues/42 "まずテストから始めてください"
 ```
 
-セッションの operator input binding 直後に `api.submit(message)` を 1 回だけ呼ぶため、TTY（Ink TUI）と非 TTY のどちらでも、手入力を待たずに `operator.message` として conductor へ届きます。TTY では初回メッセージの有無に関わらず通常の binding として扱い、`session.post_loop_wait` から `/exit` まで待機します（`--no-wait` または `session.postLoop.wait: false` を除く）。メッセージ未指定時の TTY 入力の挙動も変わりません。
+セッションの operator input binding 直後に `api.submit(message)` を 1 回だけ呼ぶため、TTY（Ink TUI）と非 TTY のどちらでも、手入力を待たずに `operator.message` として conductor へ届きます。TTY では初回メッセージの有無に関わらず通常の binding として扱い、`session.post_loop_wait` から `/close` または `/exit` まで待機します（`--no-wait` または `session.postLoop.wait: false` を除く）。メッセージ未指定時の TTY 入力の挙動も変わりません。
 
 非 TTY の単発注入は追加入力を提供しないため、終了契約も通常の TTY 入力と異なります。初回メッセージを処理した conductor の `error` は再入力を待たずにエラー終了し、SDK の `cancelled` も terminal status（`stopReason: cancelled`）として終了します。`ask_human` による未回答 open question、または未解決の permission が残った場合も、回答を待つ post-loop へは移らず、その時点でセッションを終了します。dispatch hold 中にこれらの停止条件へ到達した場合も release を待ちません。未回答 question は終了結果・sidecar に残り、未解決 permission は終了処理で拒否されます。TTY の初回メッセージはこの単発終了契約を使わず、post-loop 待機中に追加入力で処理できます。
 
@@ -84,7 +85,7 @@ TTY の既定は `stream` レイアウトです。従来のペイン分割を使
 
 長時間 TTY セッションでは Ink / React の再描画に伴って Node の User Timing（measure / mark）が蓄積し、約 100 万件に達すると `MaxPerformanceEntryBufferExceededWarning` が出ることがあります。pane / stream 共通の TUI host は稼働中 30 秒ごとに `performance.clearMeasures()` と `performance.clearMarks()` を呼び、終了時にタイマーを解除します。クリアに失敗しても描画は継続します。Node の performance バッファはプロセス共通のため、この処理では同じプロセス内の他の measure / mark も消去されます。
 
-既定の `stream` レイアウトでは、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `追加指示を入力するか /reconnect で再接続 · /exit で終了` の prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（詳細は [ADR 0015](adr/0015-cli-tui-library.md)）。
+既定の `stream` レイアウトでは、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `/close` と `/exit` の動作を区別した prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（詳細は [ADR 0015](adr/0015-cli-tui-library.md)）。
 
 `pane` では Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
 
@@ -116,11 +117,11 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 | モード | 条件 | 表示と入力 |
 |--------|------|------------|
 | **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の prompt を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
-| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input には `任意のタイミングで入力 · /reconnect で再接続 · /exit で終了` の prompt を表示する。通常の submit は operator メッセージとして送信する。 |
+| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input には `任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了` の prompt を表示する。通常の submit は operator メッセージとして送信する。 |
 
 resume で sidecar の未回答 question を復元した場合も、`getContext()` が同じ Registry から一覧を返すため、binding 後の pane / stream はモード A として表示する。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使う。
 
-post-loop 待機中はモード B の prompt を `追加指示を入力するか /reconnect で再接続 · /exit で終了` に上書きします。終了中は `終了しています…` を表示して入力を無効化します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
+post-loop 待機中はモード B の prompt を `追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了` に上書きします。終了中は入力を無効化します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
 
 `stream` の mouse-only scrollbar / native scrollback 操作は、terminal host から viewport state が TTY へ通知されないため keyboard detached として自動検出できません。保護が必要な場合は `PgUp` / `Ctrl+PgUp` で detached を宣言し、`End` / `Ctrl+End` で復帰します。通常の幅変更では既に Static として追記された行は再折り返しされませんが、settled columns shrink では [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って scrollback を reset し、保持済み activity history を新幅で再出力します。
 
@@ -197,7 +198,7 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 | 条件 | 動作 |
 |------|------|
-| TTY + デフォルト（有効な初回メッセージの有無に関わらず。`--continue` / `--resume` で CLI メッセージを無視した場合を含む） | 自律ループ停止後も `operator>` を維持。`/exit` でプロセス終了 |
+| TTY + デフォルト（有効な初回メッセージの有無に関わらず。`--continue` / `--resume` で CLI メッセージを無視した場合を含む） | 自律ループ停止後も `operator>` を維持。`/close` または `/exit` で teardown 後にプロセス終了 |
 | 非 TTY / CI + 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | binding 直後に 1 回注入し、post-loop 待機なしで終了 |
 | `--no-wait` | 自律ループ停止後に即終了（従来動作） |
 | 非 TTY / CI かつ有効な単発メッセージなし（`--continue` / `--resume` で CLI メッセージだけを指定した場合を含む） | `waitForOperatorExit` なし → 即終了 |
@@ -222,7 +223,13 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 成功・失敗は `conductor.transport.reconnect` として harness / observation に表示されます。失敗してもセッションは継続し、もう一度 `/reconnect` または通常の入力を受け付けます。send 中の in-flight 中断は行いません。
 
-Connection stalled が自動再接続後も続く場合は `/reconnect` を試してください。暫定回避策は Ctrl+C で終了して `--resume <agentId>` で再開することです。`/exit` は isolated worktree を削除することがあるため、worktree を残したい場合は `/exit` ではなく `/reconnect` または Ctrl+C + `--resume` を使います。
+Connection stalled が自動再接続後も続く場合は `/reconnect` を試してください。worktree を残したままプロセスを終了するには `/close` を使います（次節）。Ctrl+C も cleanup を行いませんが、終了結果は `interrupted` になります。`/exit` は isolated worktree の cleanup を試みます。プロセスを維持したまま conductor を再接続する場合は `/reconnect` を使います。
+
+### `/close` — worktree を残してセッションを閉じる
+
+`/close` または `close`（大文字小文字無視・前後空白トリム）は、conductor に送らない終了コマンドです。入力直後に `session.operator_close` を emit し、`/exit` と同じ force teardown で処理中 worker prompt を停止し、未解決 permission を deny し、sidecar を flush して GitHub monitor・worker ACP・conductor を閉じます。その後 TUI も dispose され、TTY プロセスが終了します。
+
+sidecar には conductor agent ID、worker ACP session ID と作業ディレクトリ、profile、未回答 open question などを保存します。sidecar の flush に失敗した場合は warning を表示します。最新状態から再開できず、以前の保存状態から再開するか、`--continue` で再開できないことがあります。worktree cleanup 段階は実行しないため isolated worktree とローカルブランチはそのまま残ります。終了後は同じリポジトリ・Issue で `ensemble issue <same> --continue` を実行すると、その Issue の最新 sidecar から conductor と worker を再開し、既存 worktree を再利用します。resume は未完了 `agent.send` や teardown で deny した permission を復元しません（[ADR 0017](adr/0017-conductor-send-lifecycle-events.md)）。
 
 ### `/exit` の即時フィードバック（#170）
 
@@ -230,24 +237,30 @@ Connection stalled が自動再接続後も続く場合は `/reconnect` を試�
 
 | 表示経路 | 内容 |
 |----------|------|
-| TTY（Ink） | 活動ログに「終了しています…」（`session.post_loop_wait` と同様 observation ラベル）。入力欄のヒントも同文になり、二重 submit を防ぐため入力は無効化 |
+| TTY（Ink） | 活動ログに「終了しています…」（`session.post_loop_wait` と同様 observation ラベル）。入力欄は二重 submit を防ぐため無効化 |
 | 非 TTY interactive | stderr に `\n終了しています…\n`（`createObservationSink`） |
 
-その後、worker へ `session/cancel`、明示 exit 時は fast path teardown（`waitForIdle` スキップ・並列 close）が走る。詳細は [harness-events.md](harness-events.md) の `harness.teardown`。
+その後、worker へ `session/cancel`、明示 exit 時は fast path teardown（`waitForIdle` スキップ・並列 close）が走る。終了後、isolated worktree の cleanup を試みます。詳細は [harness-events.md](harness-events.md) の `harness.teardown`。
+
+cleanup が dirty worktree のためスキップされた場合や、削除に失敗した場合は warning と復旧方法を表示します。cleanup の失敗はセッション結果を error にせず、CLI exit code に影響しません（[#448](https://github.com/otolab/agents-ensemble/issues/448)）。
+
+### `/close` の即時フィードバック
+
+`/close` または `close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup は行いません。
 
 #### post-loop 開始直後の `/exit`（#200）
 
-`session.post_loop_wait` の通知後も SessionDriver がイベント待機を継続する。`/exit` は専用の終了 signal で Driver の待機を中断するため、通知と待機 API の間に `/exit` が失われるレースはない。
+`session.post_loop_wait` の通知後も SessionDriver がイベント待機を継続する。`/close` と `/exit` は専用の終了 signal で Driver の待機を中断するため、通知と待機 API の間に終了入力が失われるレースはない。
 
 #### teardown が長引く場合（#200）
 
 | 段階 | 通常の挙動 | 利用者への表示 |
 |------|------------|----------------|
-| `/exit` 直後 | `session.operator_exit` で TUI は「終了しています…」・入力無効化 | 活動ログ / 入力ヒント |
+| `/exit` / `/close` 直後 | 専用イベントで TUI は終了フィードバック・入力無効化 | 活動ログ / 入力ヒント |
 | `buildResult` | 明示 exit / interrupt 時は `getUsage().cost` 取得をスキップ（SDK 応答待ちで固まらない） | なし |
 | `finally` teardown（停止フェーズ） | force 時は worker / conductor / GitHub 監視を並列停止。子プロセスは SIGTERM 後最大 5s、残存時 SIGKILL。worker / ACP・conductor・GitHub monitor の停止後、worktree cleanup 前に `harness.teardown` を emit | `harness.teardown.phase` で段階表示。完了時 `harness.teardown`（1s 超または force 時） |
-| GitHub monitor `stop`（停止フェーズ内・accepted risk） | 監視有効時、GitHub API poll 実行中（`pollInFlight`）に `/exit` すると `stop()` が poll 完了までブロックしうる | 最大 5s 待機後に poll を abort して teardown 継続（#209）。`harness.teardown.phase` で段階表示 |
-| isolated worktree 削除（停止フェーズ後） | `harness.teardown` emit 後、`/exit` 正常終了時に clean worktree のみ削除。未コミット変更時はスキップし、`git worktree remove` の一時的な失敗は初回＋100ms／250ms の最大 3 回まで再試行 | `harness.teardown.phase=worktree` の後、成功は `harness.worktree.removed`。dirty / 最終失敗は `[harness]` の診断行を残し、TTY 活動ログと非 TTY stderr に `[worktree] ⚠️`、path・reason・手動復旧コマンドを表示 |
+| GitHub monitor `stop`（停止フェーズ内・accepted risk） | 監視有効時、GitHub API poll 実行中（`pollInFlight`）に `/exit` または `/close` すると `stop()` が poll 完了までブロックしうる | 最大 5s 待機後に poll を abort して teardown 継続（#209）。`harness.teardown.phase` で段階表示 |
+| isolated worktree 削除（停止フェーズ後） | 正常 `/exit` のみ `harness.teardown` emit 後に clean worktree の削除を試みる。`/close` はこの段階を実行しない。未コミット変更時は削除をスキップし、`git worktree remove` の一時的な失敗は初回＋100ms／250ms の最大 3 回まで再試行 | `/exit` では `harness.teardown.phase=worktree` の後、成功は `harness.worktree.removed`。dirty / 最終失敗は `[harness]` の診断行を残し、TTY 活動ログと非 TTY stderr に `[worktree] ⚠️`、path・reason・手動復旧コマンドを表示 |
 
 worktree 削除の再試行は、一時的に ACP / worker の終了処理が git worktree の lock を保持しているケースを対象にした限定的な改善です。`git worktree remove --force` は使わず、dirty worktree の自動破棄や SIGINT 時の削除も行いません。全試行が失敗した場合は最後の git エラーを `harness.worktree.remove_failed` と warning の両方に残します。warning には、変更を commit または stash した後に `git worktree remove <path>` を手動実行する復旧ヒントを含めます。post-loop の worktree cleanup failure は warning として記録し、CLI exit code には影響しません。CLI は `stopReason === 'error'` の場合だけ exit 2 で終了します。
 
@@ -255,7 +268,7 @@ worktree 削除の再試行は、一時的に ACP / worker の終了処理が gi
 
 | 項目 | 内容 |
 |------|------|
-| 発生条件 | GitHub 監視が有効（デフォルト）で、GitHub API による poll が進行中に `/exit` |
+| 発生条件 | GitHub 監視が有効（デフォルト）で、GitHub API による poll が進行中に `/exit` または `/close` |
 | 症状 | UI は即「終了しています…」になるが、teardown が `githubMonitor.stop()` で `pollInFlight` 待ちになりプロセスが長時間残る（5s 超は abort） |
 | 回避策 | `--no-github-monitor` で監視を無効化（[cli/README.md](cli/README.md)・[harness-events.md](harness-events.md)） |
 | 実装 | poll / `stop()` のタイムアウト 5s（#209）。超過時は進行中 API リクエストを abort して teardown 継続 |

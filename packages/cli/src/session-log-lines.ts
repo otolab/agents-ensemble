@@ -208,6 +208,8 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
       return '自律作業が一段落しました。';
     case 'session.operator_exit':
       return '終了しています…';
+    case 'session.operator_close':
+      return 'セッションを保存して閉じています…';
     case 'conductor.dispatch_hold':
       if (event.status === 'enabled') {
         return 'dispatch hold enabled';
@@ -264,6 +266,7 @@ export function formatObservationStderrLine(event: SessionLogEvent): string | un
     case 'session.post_loop_wait':
       return `\n${body}\n`;
     case 'session.operator_exit':
+    case 'session.operator_close':
       return `\n${body}\n`;
     case 'conductor.dispatch_hold':
       return `[observation] ${body}`;

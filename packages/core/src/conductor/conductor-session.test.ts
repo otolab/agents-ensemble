@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -1854,6 +1854,197 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(removeSpy).toHaveBeenCalledOnce();
     expect(removeSpy).toHaveBeenCalledWith(repoRoot, TEST_ISSUE);
+  });
+
+  it('closes with a resumable sidecar and leaves the isolated worktree intact', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    const firstBridge = {
+      newSession: vi.fn().mockResolvedValue('worker-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'ready',
+      }),
+      cancelSession: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const resumedBridge = {
+      newSession: vi.fn().mockResolvedValue('unexpected-new-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'ready',
+      }),
+      cancelSession: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi
+      .fn()
+      .mockResolvedValueOnce(firstBridge)
+      .mockResolvedValueOnce(resumedBridge);
+    mockSend.mockImplementationOnce(async () => {
+      await conductorTools!.prompt_worker!.execute({
+        worker: 'implementer',
+        instruction: 'persist the worker ACP session',
+      });
+      return {
+        runId: 'run-1',
+        status: 'finished',
+        result: 'done',
+      };
+    });
+
+    const path = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    await mkdir(path, { recursive: true });
+    const removeSpy = vi
+      .spyOn(worktreeModule, 'removeWorkerWorktree')
+      .mockResolvedValue({ status: 'not_found' });
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      defaultAcp: { defaultAcpCommand: process.execPath },
+      disableGitHubMonitor: true,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      sessionLogger,
+      workerWorktree: {
+        path,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+      connectAcp,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+    expect(operatorApi!.submit('/close')).toBe(false);
+    const result = await sessionPromise;
+
+    expect(result.stopReason).toBe('completed');
+    expect(removeSpy).not.toHaveBeenCalled();
+    await expect(access(path)).resolves.toBeUndefined();
+    await expect(
+      loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      ),
+    ).resolves.toMatchObject({
+      conductorAgentId: 'agent-test',
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      workers: {
+        implementer: {
+          acpSessionId: 'worker-session',
+          acpCwd: path,
+        },
+      },
+    });
+    expect(emitted).toContainEqual({ type: 'session.operator_close' });
+    expect(emitted).not.toContainEqual({ type: 'session.operator_exit' });
+    expect(
+      emitted.some(
+        (event) => event.type === 'harness.teardown' && event.force === true,
+      ),
+    ).toBe(true);
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.teardown.phase' && event.phase === 'conductor',
+      ),
+    ).toBe(true);
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.teardown.phase' && event.phase === 'worktree',
+      ),
+    ).toBe(false);
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.worktree.removed' ||
+          event.type === 'harness.worktree.remove_skipped' ||
+          event.type === 'harness.worktree.remove_failed',
+      ),
+    ).toBe(false);
+
+    expect(firstBridge.close).toHaveBeenCalledOnce();
+    expect(connectAcp).toHaveBeenCalledOnce();
+
+    const sendsBeforeContinue = mockSend.mock.calls.length;
+    let continuedOperatorApi: OperatorInputBindingApi | undefined;
+    const continuedPostLoopWait = vi.fn();
+    const continuePromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: 'agent-test',
+      defaultAcp: { defaultAcpCommand: process.execPath },
+      disableGitHubMonitor: true,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait: continuedPostLoopWait,
+      workerWorktree: {
+        path,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+      connectAcp,
+      bindOperatorInput: (api) => {
+        continuedOperatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(continuedPostLoopWait).toHaveBeenCalledOnce(),
+    );
+    expect(connectAcp).toHaveBeenCalledTimes(2);
+    expect(connectAcp.mock.calls[1]?.[0].cwd).toBe(path);
+    expect(resumedBridge.loadSession).toHaveBeenCalledWith(
+      'worker-session',
+      path,
+      undefined,
+    );
+    expect(resumedBridge.newSession).not.toHaveBeenCalled();
+    expect(continuedOperatorApi!.submit('/close')).toBe(false);
+    const continuedResult = await continuePromise;
+
+    expect(continuedResult.stopReason).toBe('completed');
+    expect(resumedBridge.close).toHaveBeenCalledOnce();
+    expect(removeSpy).not.toHaveBeenCalled();
+    await expect(access(path)).resolves.toBeUndefined();
+    expect(mockSend).toHaveBeenCalledTimes(sendsBeforeContinue);
   });
 
   it('emits the worktree removal error after post-loop /exit', async () => {

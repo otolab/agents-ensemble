@@ -55,11 +55,11 @@ export const OPEN_QUESTIONS_SELECTION_HINT = ' — Shift+↑↓で選択';
 
 /** Open questions がないときに Operator input へ表示する任意入力 prompt。 */
 export const OPERATOR_INPUT_DISCRETIONARY_HINT =
-  '任意のタイミングで入力 · /reconnect で再接続 · /exit で終了';
+  '任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了';
 
 /** post-loop 待機中に Operator input へ表示する追加入力 prompt。 */
 export const OPERATOR_INPUT_POST_LOOP_HINT =
-  '追加指示を入力するか /reconnect で再接続 · /exit で終了';
+  '追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了';
 
 /** 終了処理中に Operator input へ表示する prompt。 */
 export const OPERATOR_INPUT_SHUTTING_DOWN_HINT = '終了しています…';

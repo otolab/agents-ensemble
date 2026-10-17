@@ -17,7 +17,7 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(39);
+    expect(types.size).toBe(40);
   });
 
   it('lists every SessionEvent type exactly once', () => {
@@ -199,6 +199,7 @@ describe('session event type groups', () => {
         case 'session.post_loop_wait':
           return { type };
         case 'session.operator_exit':
+        case 'session.operator_close':
           return { type };
         case 'harness.teardown':
           return { type, force: true, durationMs: 1, phases: { workers: 1 } };
