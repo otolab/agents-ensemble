@@ -46,8 +46,9 @@ function resolveSelectedChoice(
   answer: string,
   choices: NonNullable<OpenQuestion['choices']>,
 ): string | undefined {
-  const explicitChoice = choices.find(
+  const explicitChoices = choices.filter(
     (choice) => choice.id === selectedChoice?.trim(),
   );
-  return explicitChoice?.id ?? parseChoiceSelection(answer, choices);
+  if (explicitChoices.length === 1) return explicitChoices[0]?.id;
+  return parseChoiceSelection(answer, choices);
 }

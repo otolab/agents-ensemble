@@ -86,7 +86,36 @@ describe('applyOperatorMessage', () => {
     expect(registry.get('inq-1')?.approved).toBeUndefined();
   });
 
-  it('records a choice id and keeps the full answer', () => {
+  it.each([
+    ['B', 'B'],
+    ['2', 'B'],
+    ['Wait for review', 'B'],
+  ])(
+    'records choice input %j as option %s and keeps the full answer',
+    (answer, selectedChoice) => {
+      const registry = new OpenQuestionRegistry();
+      registry.enqueue({
+        question: 'Which approach?',
+        responseType: 'choice',
+        choices: [
+          { id: 'A', label: 'Ship now' },
+          { id: 'B', label: 'Wait for review' },
+        ],
+      });
+
+      const result = applyOperatorMessage(registry, answer, {
+        targetQuestionId: 'inq-1',
+      });
+
+      expect(result.answered[0]).toMatchObject({
+        answer,
+        selectedChoice,
+      });
+      expect(result.answered[0]?.approved).toBeUndefined();
+    },
+  );
+
+  it('records unlisted free text for a choice question without selecting an option', () => {
     const registry = new OpenQuestionRegistry();
     registry.enqueue({
       question: 'Which approach?',
@@ -97,18 +126,28 @@ describe('applyOperatorMessage', () => {
       ],
     });
 
-    const result = applyOperatorMessage(registry, 'B', {
-      targetQuestionId: 'inq-1',
-    });
+    const result = applyOperatorMessage(
+      registry,
+      'Use a staged rollout first.',
+      { targetQuestionId: 'inq-1' },
+    );
 
-    expect(result.answered[0]).toMatchObject({
-      answer: 'B',
-      selectedChoice: 'B',
+    expect(result).toMatchObject({
+      answered: [
+        {
+          id: 'inq-1',
+          status: 'answered',
+          answer: 'Use a staged rollout first.',
+          answeredBy: 'operator',
+        },
+      ],
     });
-    expect(result.answered[0]?.approved).toBeUndefined();
+    expect(result.answered[0]?.selectedChoice).toBeUndefined();
+    expect(result.generalGuidance).toBeUndefined();
+    expect(registry.listOpen()).toHaveLength(0);
   });
 
-  it('leaves an ambiguous choice open so the operator can answer again', () => {
+  it('records an ambiguous choice label as free text without guessing an option', () => {
     const registry = new OpenQuestionRegistry();
     registry.enqueue({
       question: 'Which approach?',
@@ -123,25 +162,33 @@ describe('applyOperatorMessage', () => {
       targetQuestionId: 'inq-1',
     });
 
-    expect(ambiguous).toEqual({
-      answered: [],
-      generalGuidance: 'Wait for review',
-    });
-    expect(registry.get('inq-1')).toMatchObject({
-      status: 'open',
+    expect(ambiguous.answered).toMatchObject([
+      {
+        id: 'inq-1',
+        status: 'answered',
+        answer: 'Wait for review',
+      },
+    ]);
+    expect(ambiguous.answered[0]?.selectedChoice).toBeUndefined();
+    expect(ambiguous.generalGuidance).toBeUndefined();
+    expect(registry.listOpen()).toHaveLength(0);
+  });
+
+  it('answers the only open choice question with un-targeted free text', () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      question: 'Which approach?',
       responseType: 'choice',
-    });
-    expect(registry.get('inq-1')?.answer).toBeUndefined();
-
-    const retry = applyOperatorMessage(registry, 'B', {
-      targetQuestionId: 'inq-1',
+      choices: [{ id: 'A', label: 'Ship now' }],
     });
 
-    expect(retry.answered[0]).toMatchObject({
+    const result = applyOperatorMessage(registry, 'Use a staged rollout.');
+
+    expect(result.answered[0]).toMatchObject({
       status: 'answered',
-      answer: 'B',
-      selectedChoice: 'B',
+      answer: 'Use a staged rollout.',
     });
+    expect(result.answered[0]?.selectedChoice).toBeUndefined();
     expect(registry.listOpen()).toHaveLength(0);
   });
 

@@ -35,7 +35,7 @@ export function createAnswerOpenQuestionTool(
           selectedChoice: {
             type: 'string',
             description:
-              'Selected choice option id for a choice question; answer text is preserved separately',
+              'Optional choice option id when the operator intent uniquely identifies it; answer text is always preserved and may be free-form',
           },
           rationale: {
             type: 'string',
@@ -69,15 +69,6 @@ export function createAnswerOpenQuestionTool(
           rationale,
         });
         if (!recorded) {
-          const question = options.registry.get(questionId);
-          if (
-            question?.status === 'open' &&
-            question.responseType === 'choice'
-          ) {
-            throw new Error(
-              `answer_open_question: choice answer must resolve to one of the listed options: ${questionId}`,
-            );
-          }
           throw new Error(
             `answer_open_question: question not found or already answered: ${questionId}`,
           );

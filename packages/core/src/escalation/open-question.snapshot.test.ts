@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { OpenQuestionRegistry } from './open-question.js';
 
 describe('OpenQuestionRegistry snapshot', () => {
-  it('does not answer a choice question without a valid selection', () => {
+  it('answers a choice question without a selection and preserves only a valid selectedChoice', () => {
     const registry = new OpenQuestionRegistry();
     registry.enqueue({
       question: 'Which approach?',
@@ -14,16 +14,41 @@ describe('OpenQuestionRegistry snapshot', () => {
     });
 
     const result = registry.answer('inq-1', {
-      answer: 'Wait for review',
+      answer: 'Use a staged rollout.',
       answeredBy: 'operator',
     });
 
-    expect(result).toBeUndefined();
-    expect(registry.get('inq-1')).toMatchObject({
-      status: 'open',
+    expect(result).toMatchObject({
+      status: 'answered',
       responseType: 'choice',
+      answer: 'Use a staged rollout.',
     });
-    expect(registry.listOpen()).toHaveLength(1);
+    expect(result?.selectedChoice).toBeUndefined();
+    expect(registry.listOpen()).toHaveLength(0);
+  });
+
+  it('does not preserve a selectedChoice that is not a unique option id', () => {
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      question: 'Which approach?',
+      responseType: 'choice',
+      choices: [
+        { id: 'A', label: 'Ship now' },
+        { id: 'A', label: 'Ship later' },
+      ],
+    });
+
+    const result = registry.answer('inq-1', {
+      answer: 'Ship now',
+      selectedChoice: 'A',
+      answeredBy: 'operator',
+    });
+
+    expect(result).toMatchObject({
+      status: 'answered',
+      answer: 'Ship now',
+    });
+    expect(result?.selectedChoice).toBeUndefined();
   });
 
   it('restores sequence and entries', () => {

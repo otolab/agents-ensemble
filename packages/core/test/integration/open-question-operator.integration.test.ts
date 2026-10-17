@@ -142,6 +142,68 @@ describe('open question / operator flow integration', () => {
     ).toBe('answered');
   });
 
+  it('records free-text operator answers to choice questions in the event queue', async () => {
+    mockSend
+      .mockImplementationOnce(async () => {
+        await conductorTools.ask_human!.execute({
+          question: 'Which release approach?',
+          responseType: 'choice',
+          choices: [
+            { id: 'A', label: 'Ship now' },
+            { id: 'B', label: 'Wait for review' },
+          ],
+        });
+        return {
+          runId: 'run-1',
+          status: 'finished',
+          result: 'registered choice question',
+        };
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'conductor-ok',
+      });
+
+    const operator = createTestOperatorInputBinding((context) => {
+      if (context.openQuestions.some((question) => question.id === 'inq-1')) {
+        return 'Release after the compatibility pass.';
+      }
+      return undefined;
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: REPO_ROOT,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      bindOperatorInput: operator.bindOperatorInput,
+      onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
+    });
+
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    const operatorMessage = String(mockSend.mock.calls[1]![0]);
+    expect(operatorMessage).toContain('Release after the compatibility pass.');
+    expect(operatorMessage).toContain('【open question 回答】inq-1');
+    expect(operatorMessage).not.toContain('selectedChoice:');
+    expect(result.openQuestions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'inq-1',
+          responseType: 'choice',
+          status: 'answered',
+          answer: 'Release after the compatibility pass.',
+          answeredBy: 'operator',
+        }),
+      ]),
+    );
+    expect(
+      result.openQuestions.find((question) => question.id === 'inq-1')
+        ?.selectedChoice,
+    ).toBeUndefined();
+  });
+
   it('resumes after max_turns open question via operator.message event', async () => {
     mockSend
       .mockResolvedValueOnce({

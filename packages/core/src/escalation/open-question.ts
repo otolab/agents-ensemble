@@ -78,23 +78,20 @@ export class OpenQuestionRegistry {
   answer(id: string, input: AnswerOpenQuestionInput): OpenQuestion | undefined {
     const entry = this.entries.get(id);
     if (!entry || entry.status !== 'open') return undefined;
-    if (
-      entry.responseType === 'choice' &&
-      !entry.choices?.some((choice) => choice.id === input.selectedChoice)
-    ) {
-      return undefined;
-    }
+
+    const matchingChoices =
+      entry.responseType === 'choice'
+        ? entry.choices?.filter((choice) => choice.id === input.selectedChoice)
+        : undefined;
+    const selectedChoice =
+      matchingChoices?.length === 1 ? matchingChoices[0]?.id : undefined;
 
     const updated: OpenQuestion = {
       ...entry,
       status: 'answered',
       answer: input.answer,
       assent: entry.responseType === 'yes_no' ? input.assent : undefined,
-      selectedChoice:
-        entry.responseType === 'choice' &&
-        entry.choices?.some((choice) => choice.id === input.selectedChoice)
-          ? input.selectedChoice
-          : undefined,
+      selectedChoice,
       approved:
         entry.responseType === 'yes_no' &&
         entry.relatedPermissionId &&

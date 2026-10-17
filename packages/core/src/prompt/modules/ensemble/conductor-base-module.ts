@@ -46,6 +46,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- 一覧: `list_open_questions`、詳細: `get_open_question`',
         '- 未回答を登録: `ask_human`（待たず続行可）',
         '- オペレータがチャットですでに答えている: `answer_open_question` で代行記録',
+        '- `choice` の選択肢は回答を簡潔にする候補です。オペレータは自由記述でも回答でき、意図を一意に特定できる場合だけ `selectedChoice` を記録します',
         '- 同一判断で `ask_human` と `answer_open_question` を同ターンで併用しない',
       ],
     },
