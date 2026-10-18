@@ -259,7 +259,7 @@ cleanup が dirty worktree のためスキップされた場合や、削除に�
 | 段階 | 通常の挙動 | 利用者への表示 |
 |------|------------|----------------|
 | `/exit` / `/close` 直後 | 専用イベントで TUI は終了フィードバック・入力無効化 | 活動ログ / 入力ヒント |
-| `buildResult` | 明示 exit / interrupt 時は `getUsage().cost` 取得をスキップ（SDK 応答待ちで固まらない） | なし |
+| `buildResult` | 明示 `/exit` / `/close` / interrupt 時は `getUsage().cost` 取得をスキップ（SDK 応答待ちで teardown を止めない） | なし |
 | `finally` teardown（停止フェーズ） | `/close` は処理中 worker prompt を cancel し、permission を deny、attach 済み ACP session ID / cwd を snapshot してから monitor を停止し、その cursor / outbox を sidecar に flush する。続いて worker と conductor を force stop する。Pi は MCP を無効にして reload し、stdio MCP child を閉じてから session を dispose する。worker ACP child は stdin EOF 後 500ms 待ち、SIGTERM 後 5s、SIGKILL 後最大 2s の回収を試みる。`/exit` は cursor を flush してから worker / conductor / monitor を停止する | `harness.teardown.phase` で段階表示。完了時 `harness.teardown`（1s 超または force 時） |
 | GitHub monitor `stop`（停止フェーズ内・accepted risk） | poll 実行中に `/exit` または `/close` すると `stop()` は完了を待つ | 5s まで待ち、超過時 poll を abort。その後最大 500ms 待って teardown を続ける（#209） |
 | isolated worktree 削除（停止フェーズ後） | 正常 `/exit` のみ clean worktree の削除を試みる。`/close` と Ctrl+C/SIGINT は削除しない。未コミット変更時は削除を拒否し、一時的な失敗は初回＋100ms／250ms の最大 3 回まで再試行 | `/exit` では成功時 `harness.worktree.removed`。dirty / 最終失敗時は診断と手動復旧方法を表示 |

@@ -1858,6 +1858,73 @@ describe('runConductorSession resume / shutdown', () => {
     expect(removeSpy).toHaveBeenCalledWith(repoRoot, TEST_ISSUE);
   });
 
+  it('tears down and flushes on /close when usage collection never resolves', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+    const unresolvedUsage = createDeferred<{
+      cost?: { rawCostCents: number; chargedCents: number };
+    }>();
+    const getUsage = vi.fn(() => unresolvedUsage.promise);
+    mockCreate.mockImplementationOnce(async () => ({
+      agentId: 'agent-test',
+      send: mockSend,
+      close: mockClose,
+      getUsage,
+    }));
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const onPostLoopWait = vi.fn();
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      sessionLogger,
+      disableGitHubMonitor: true,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+    expect(operatorApi!.submit('/close')).toBe(false);
+    const result = await sessionPromise;
+
+    expect(result.stopReason).toBe('completed');
+    expect(getUsage).not.toHaveBeenCalled();
+    expect(mockClose).toHaveBeenCalledOnce();
+    expect(emitted).toContainEqual({
+      type: 'harness.teardown.phase',
+      phase: 'flushSidecar',
+    });
+    expect(emitted).toContainEqual({
+      type: 'harness.teardown.phase',
+      phase: 'conductor',
+    });
+    await expect(
+      loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      ),
+    ).resolves.toMatchObject({
+      conductorAgentId: 'agent-test',
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+  });
+
   it('closes with a resumable sidecar and leaves the isolated worktree intact', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-1',

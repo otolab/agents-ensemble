@@ -1161,7 +1161,9 @@ export async function runConductorSession(
     async function buildResult(): Promise<ConductorSessionResult> {
       sessionLogger.finish(stopReason);
       const skipUsageCostFetch =
-        operatorRequestedExit || shutdownSignal.aborted;
+        operatorRequestedExit ||
+        operatorRequestedClose ||
+        shutdownSignal.aborted;
       const sessionUsage = await enrichSessionUsageWithCost(
         sessionUsageTracker.getSessionSummary(),
         skipUsageCostFetch
