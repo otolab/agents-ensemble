@@ -1,4 +1,4 @@
-import { Box, Static, useInput } from 'ink';
+import { Box, Static, Text, useInput } from 'ink';
 import {
   useCallback,
   useEffect,

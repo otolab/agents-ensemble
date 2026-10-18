@@ -25,6 +25,9 @@ describe('operator command suggestions', () => {
     expect(getOperatorCommandSuggestions('  /ex  ').map(({ name }) => name)).toEqual([
       '/exit',
     ]);
+    expect(getOperatorCommandSuggestions('\t/ex\t').map(({ name }) => name)).toEqual([
+      '/exit',
+    ]);
     expect(getOperatorCommandSuggestions('ordinary /exit')).toEqual([]);
     expect(getOperatorCommandSuggestions('/exit with arguments')).toEqual([]);
     expect(getOperatorCommandSuggestions('/ex\nmore text')).toEqual([]);
