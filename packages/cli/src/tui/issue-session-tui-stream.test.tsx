@@ -88,6 +88,24 @@ describe('IssueSessionTuiStream', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows filtered slash command suggestions in stream input and submits on Enter', async () => {
+    const viewModel = createTuiViewModel();
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />,
+    );
+
+    stdin.write('/ex');
+    await flushInkStdin();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('/exit — セッションを終了');
+    expect(frame).not.toContain('/reconnect — conductor を再接続');
+
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
+  });
+
   it('renders activity as unframed static output and keeps the lower panes framed', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({

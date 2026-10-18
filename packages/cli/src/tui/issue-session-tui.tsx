@@ -42,6 +42,7 @@ import {
   WORKER_PANE_TITLE,
 } from './tui-layout-constants.js';
 import { OperatorTextArea } from './operator-text-area.js';
+import { getOperatorCommandSuggestionLines } from './operator-command-suggestions.js';
 import { TitledBorderPane } from './titled-border-pane.js';
 import {
   computeInputPaneHeight,
@@ -403,6 +404,10 @@ export function IssueSessionTui({
     [openQuestions, selectedQuestionIndex, contentWidth, liveFrameRows],
   );
   const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
+  const commandSuggestionLines = getOperatorCommandSuggestionLines(
+    inputValue,
+    contentWidth,
+  );
   const operatorInputDisplay = resolveOperatorInputDisplayMode({
     openQuestions,
     selection: selectedQuestion
@@ -419,7 +424,7 @@ export function IssueSessionTui({
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
   const hintLineCount = operatorInputDisplay.hintLines.reduce(
     (lineCount, hintLine) => lineCount + wrapTextToWidth(hintLine, contentWidth).length,
-    0,
+    commandSuggestionLines.length,
   );
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const inputPaneHeight = computeInputPaneHeight({
@@ -598,6 +603,14 @@ export function IssueSessionTui({
             width={contentWidth}
             color={INPUT_PANE_HINT_COLOR}
           />
+        ))}
+        {commandSuggestionLines.map((line, index) => (
+          <Text
+            key={`operator-command-suggestion-${index}`}
+            color={INPUT_PANE_HINT_COLOR}
+          >
+            {line}
+          </Text>
         ))}
         <OperatorTextArea
           value={inputValue}

@@ -110,6 +110,11 @@ export type { SubmitOperatorInputInput } from './submit-operator-input.js';
 export { isOperatorExitCommand } from './operator-exit.js';
 export { isOperatorReconnectCommand } from './operator-reconnect.js';
 export {
+  isOperatorCommand,
+  OPERATOR_COMMANDS,
+} from './operator-command.js';
+export type { OperatorCommandId } from './operator-command.js';
+export {
   reconnectConductorAgent,
   sendConductorWithReconnect,
   isConductorSendTransportError,

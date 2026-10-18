@@ -138,6 +138,30 @@ describe('IssueSessionTui', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows slash command suggestions in the input pane and submits the typed text unchanged', async () => {
+    const viewModel = createTuiViewModel();
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />,
+    );
+
+    stdin.write('/');
+    await flushInkStdin();
+    const allCommandsFrame = lastFrame() ?? '';
+    expect(allCommandsFrame).toContain('/reconnect — conductor を再接続');
+    expect(allCommandsFrame).toContain('/exit — セッションを終了');
+
+    stdin.write('ex');
+    await flushInkStdin();
+    const filteredFrame = lastFrame() ?? '';
+    expect(filteredFrame).toContain('/exit — セッションを終了');
+    expect(filteredFrame).not.toContain('/reconnect — conductor を再接続');
+
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
+  });
+
   it('renders four panes with worker, session log, open questions, and input', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({

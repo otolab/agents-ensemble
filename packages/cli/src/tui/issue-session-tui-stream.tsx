@@ -21,6 +21,7 @@ import {
   ROUND_BORDER_WIDTH,
 } from './tui-layout-constants.js';
 import { OperatorTextArea } from './operator-text-area.js';
+import { getOperatorCommandSuggestionLines } from './operator-command-suggestions.js';
 import {
   ActivityLogDisplayLineRow,
   OpenQuestionsPane,
@@ -138,6 +139,10 @@ export function IssueSessionTuiStream({
     [openQuestions, selectedQuestionIndex, contentWidth, terminalRows],
   );
   const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
+  const commandSuggestionLines = getOperatorCommandSuggestionLines(
+    inputValue,
+    contentWidth,
+  );
   const operatorInputDisplay = resolveOperatorInputDisplayMode({
     openQuestions,
     selection: selectedQuestion
@@ -169,7 +174,7 @@ export function IssueSessionTuiStream({
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const hintLineCount = contextHintLines.reduce(
     (lineCount, line) => lineCount + wrapTextToWidth(line, contentWidth).length,
-    0,
+    commandSuggestionLines.length,
   );
   const desiredInputPaneHeight = computeInputPaneHeight({
     hintLineCount,
@@ -318,6 +323,14 @@ export function IssueSessionTuiStream({
               width={contentWidth}
               color={INPUT_PANE_HINT_COLOR}
             />
+          ))}
+          {commandSuggestionLines.map((line, index) => (
+            <Text
+              key={`operator-command-suggestion-${index}`}
+              color={INPUT_PANE_HINT_COLOR}
+            >
+              {line}
+            </Text>
           ))}
           <OperatorTextArea
             value={inputValue}
