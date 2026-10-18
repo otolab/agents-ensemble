@@ -33,6 +33,8 @@ describe('operator command suggestions', () => {
     expect(getOperatorCommandSuggestions('/ex\nmore text')).toEqual([]);
     expect(getOperatorCommandSuggestions('/ex\n')).toEqual([]);
     expect(getOperatorCommandSuggestions('/ex\r\n')).toEqual([]);
+    expect(getOperatorCommandSuggestions('/ex\u2028')).toEqual([]);
+    expect(getOperatorCommandSuggestions('/ex\u2029')).toEqual([]);
     expect(getOperatorCommandSuggestions('/unknown')).toEqual([]);
   });
 
