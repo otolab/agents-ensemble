@@ -253,7 +253,7 @@ describe('PiConductorAgent', () => {
     await conductor.close();
     expect(fakeSession.abort).toHaveBeenCalledOnce();
     expect(fakeSession.dispose).toHaveBeenCalledOnce();
-    expect(fakeSession.reload).not.toHaveBeenCalled();
+    expect(fakeSession.reload).toHaveBeenCalledOnce();
     void onStreamText;
   });
 
