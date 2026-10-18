@@ -50,17 +50,6 @@ async function exitedPid() {
   });
 }
 
-function processStartIdentity(pid) {
-  const result = spawnSync('ps', ['-p', String(pid), '-o', 'lstart='], {
-    encoding: 'utf8',
-    env: { ...process.env, LC_ALL: 'C' },
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
-  if (result.error || result.status !== 0) return undefined;
-  const identity = result.stdout.trim().replace(/\s+/gu, ' ');
-  return identity || undefined;
-}
-
 async function installOwnerLock(cacheDir, options = {}) {
   const id = options.id ?? randomBytes(16).toString('hex');
   const ownerName = `.lock-owner-${id}`;
@@ -73,10 +62,14 @@ async function installOwnerLock(cacheDir, options = {}) {
     hostname: options.hostname ?? hostname(),
     processStartIdentity:
       options.processStartIdentity ??
-      processStartIdentity(options.pid ?? process.pid) ??
+      helperProcessStartIdentity(options.pid ?? process.pid) ??
       null,
-    pidNamespaceIdentity:
-      options.pidNamespaceIdentity ?? pidNamespaceIdentity() ?? null,
+    pidNamespaceIdentity: Object.prototype.hasOwnProperty.call(
+      options,
+      'pidNamespaceIdentity',
+    )
+      ? options.pidNamespaceIdentity
+      : pidNamespaceIdentity() ?? null,
   };
   await mkdir(ownerPath);
   await writeFile(join(ownerPath, 'owner.json'), `${JSON.stringify(owner)}\n`);
@@ -230,7 +223,25 @@ test('--clear waits for the refresh lock instead of treating the cache as a hit'
   await mkdir(cacheDir);
   await writeFile(join(cacheDir, 'default.token'), 'cached-token');
   await writeFile(join(cacheDir, 'default.meta'), `${Date.now()}\n`);
-  const ownerLock = await installOwnerLock(cacheDir);
+  let ownerOptions = {};
+  if (process.platform === 'linux') {
+    const legacyIdentity = spawnSync(
+      'ps',
+      ['-p', String(process.pid), '-o', 'lstart='],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, LC_ALL: 'C' },
+        stdio: ['ignore', 'pipe', 'ignore'],
+      },
+    );
+    ownerOptions = {
+      processStartIdentity:
+        !legacyIdentity.error && legacyIdentity.status === 0
+          ? legacyIdentity.stdout.trim().replace(/\s+/gu, ' ')
+          : 'legacy-identity-unavailable',
+    };
+  }
+  const ownerLock = await installOwnerLock(cacheDir, ownerOptions);
 
   let clearSettled = false;
   const clear = runAsync(
@@ -317,11 +328,16 @@ test('Linux owner PIDs are not inspected across missing or different PID namespa
   assert.equal(requirePidNamespaceIdentity(undefined, 'darwin'), null);
 });
 
-test('Linux process start identity is read only through a matching procfs PID namespace', () => {
-  let psChecks = 0;
-  const spawnForPs = () => {
-    psChecks += 1;
-    return { status: 0, stdout: 'start-identity\n' };
+test('Linux process start identity uses proc stat ticks only through a matching PID namespace', () => {
+  let statReads = 0;
+  const fields = Array.from({ length: 20 }, (_, index) =>
+    index === 0 ? 'S' : index === 19 ? '987654' : String(index),
+  );
+  const stat = `412 (worker name (with parens)) ${fields.join(' ')}\n`;
+  const readStat = (path) => {
+    statReads += 1;
+    assert.equal(path, '/proc/412/stat');
+    return stat;
   };
 
   assert.equal(
@@ -329,31 +345,41 @@ test('Linux process start identity is read only through a matching procfs PID na
       platform: 'linux',
       currentPidNamespaceIdentity: 'pid:[4026531840]',
       procfsPidNamespaceIdentity: 'pid:[4026532000]',
-      spawnSync: spawnForPs,
+      readFileSync: readStat,
     }),
     undefined,
   );
-  assert.equal(psChecks, 0);
+  assert.equal(statReads, 0);
   assert.equal(
     helperProcessStartIdentity(412, {
       platform: 'linux',
       currentPidNamespaceIdentity: 'pid:[4026531840]',
       procfsPidNamespaceIdentity: undefined,
-      spawnSync: spawnForPs,
+      readFileSync: readStat,
     }),
     undefined,
   );
-  assert.equal(psChecks, 0);
+  assert.equal(statReads, 0);
   assert.equal(
     helperProcessStartIdentity(412, {
       platform: 'linux',
       currentPidNamespaceIdentity: 'pid:[4026531840]',
       procfsPidNamespaceIdentity: 'pid:[4026531840]',
-      spawnSync: spawnForPs,
+      readFileSync: readStat,
     }),
-    'start-identity',
+    'linux:987654',
   );
-  assert.equal(psChecks, 1);
+  assert.equal(statReads, 1);
+  assert.equal(
+    helperProcessStartIdentity(413, {
+      platform: 'linux',
+      currentPidNamespaceIdentity: 'pid:[4026531840]',
+      procfsPidNamespaceIdentity: 'pid:[4026531840]',
+      readFileSync: readStat,
+    }),
+    undefined,
+  );
+  assert.equal(statReads, 2);
 });
 
 test(
@@ -399,6 +425,83 @@ test('Linux locks are classified as live or stale only within the same PID names
     ),
     'dead',
   );
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      'linux:1234',
+      'pid:[4026531840]',
+      {
+        ...sharedOptions,
+        killProcess: () => {},
+        getProcessStartIdentity: () => 'linux:5678',
+      },
+    ),
+    'dead',
+  );
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      'linux:1234',
+      'pid:[4026531840]',
+      {
+        ...sharedOptions,
+        killProcess: () => {},
+        getProcessStartIdentity: () => undefined,
+      },
+    ),
+    'live',
+  );
+
+  const legacyStartIdentity = 'Thu Oct 17 05:34:54 2026';
+  const legacyOptions = {
+    platform: 'linux',
+    currentHost: 'shared-host',
+    currentPidNamespaceIdentity: 'pid:[4026531840]',
+    procfsPidNamespaceIdentity: 'pid:[4026531840]',
+    killProcess: () => {},
+    spawnSync: () => ({
+      status: 0,
+      stdout: `${legacyStartIdentity}\n`,
+    }),
+  };
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      legacyStartIdentity,
+      'pid:[4026531840]',
+      legacyOptions,
+    ),
+    'live',
+  );
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      legacyStartIdentity,
+      'pid:[4026531840]',
+      {
+        ...legacyOptions,
+        spawnSync: () => ({
+          status: 0,
+          stdout: 'Thu Oct 17 05:34:55 2026\n',
+        }),
+      },
+    ),
+    'dead',
+  );
+  assert.equal(
+    processState(
+      412,
+      'shared-host',
+      'linux:invalid',
+      'pid:[4026531840]',
+      { ...legacyOptions, killProcess: () => assert.fail('must not probe PID') },
+    ),
+    'unknown',
+  );
 });
 
 test('a matching Darwin start identity is treated as live on second-granularity PID reuse', () => {
@@ -420,28 +523,68 @@ test('a matching Darwin start identity is treated as live on second-granularity 
   );
 });
 
-test('recovers an orphaned owner lock and serializes concurrent misses', async (t) => {
+test('fails closed for Linux owner symlinks with missing or different namespace identity', {
+  skip: process.platform !== 'linux',
+}, async (t) => {
   const root = await makeTempDir();
   t.after(() => rm(root, { recursive: true, force: true }));
-  const cacheDir = join(root, 'cache');
-  const marker = join(root, 'runs');
-  await mkdir(cacheDir);
-  const deadOwnerPid = await exitedPid();
-  const ownerLock = await installOwnerLock(cacheDir, {
-    pid: deadOwnerPid,
-  });
+  const currentNamespace = pidNamespaceIdentity();
+  assert.match(currentNamespace ?? '', /^pid:\[\d+\]$/u);
+  const differentNamespace =
+    currentNamespace === 'pid:[1]' ? 'pid:[2]' : 'pid:[1]';
 
-  const command = markerCommand(marker, 'recovered-token', 100);
-  const results = await Promise.all(
-    Array.from({ length: 6 }, () => runAsync(cacheDir, command)),
-  );
+  for (const [label, namespace] of [
+    ['missing', null],
+    ['different', differentNamespace],
+  ]) {
+    const cacheDir = join(root, label);
+    const marker = join(root, `${label}-credential-runs`);
+    await mkdir(cacheDir);
+    const ownerLock = await installOwnerLock(cacheDir, {
+      pidNamespaceIdentity: namespace,
+    });
+    const result = run(cacheDir, markerCommand(marker, 'must-not-run'));
 
-  assert.deepEqual(
-    results.map((result) => [result.status, result.stdout]),
-    Array.from({ length: 6 }, () => [0, 'recovered-token']),
-  );
-  assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1);
-  await assert.rejects(lstat(ownerLock.lockPath));
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /PID namespace is missing, inaccessible, or different/u);
+    assert.equal(await readlink(ownerLock.lockPath), ownerLock.ownerName);
+    await assert.rejects(readFile(marker), { code: 'ENOENT' });
+  }
+});
+
+test('recovers orphan locks and serializes six concurrent misses over repeated rounds', async (t) => {
+  const root = await makeTempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const rounds = process.platform === 'linux' ? 8 : 1;
+
+  for (let round = 0; round < rounds; round += 1) {
+    const cacheDir = join(root, `cache-${round}`);
+    const marker = join(root, `runs-${round}`);
+    await mkdir(cacheDir);
+    const deadOwnerPid = await exitedPid();
+    const ownerLock = await installOwnerLock(cacheDir, {
+      pid: deadOwnerPid,
+    });
+
+    const command = markerCommand(marker, 'recovered-token', 100);
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () => runAsync(cacheDir, command)),
+    );
+    const diagnostics = results
+      .map(
+        ({ status, stdout, stderr }, index) =>
+          `round ${round} worker ${index}: exit=${status}, stdout=${JSON.stringify(stdout)}, stderr=${JSON.stringify(stderr)}`,
+      )
+      .join('\n');
+
+    assert.deepEqual(
+      results.map((result) => [result.status, result.stdout]),
+      Array.from({ length: 6 }, () => [0, 'recovered-token']),
+      diagnostics,
+    );
+    assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1);
+    await assert.rejects(lstat(ownerLock.lockPath));
+  }
 });
 
 test('recovers a lock interrupted after its owner directory was claimed during recovery', async (t) => {
@@ -495,6 +638,27 @@ test('fails fast without removing an ownerless legacy lock', async (t) => {
   assert.equal(result.status, 1);
   assert.match(result.stderr, /ownerless format/);
   assert.equal((await lstat(lockPath)).isDirectory(), true);
+});
+
+test('fails closed after bounded retries for a stable owner symlink without metadata', async (t) => {
+  const root = await makeTempDir();
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cacheDir = join(root, 'cache');
+  const lockPath = join(cacheDir, '.lock.d');
+  const ownerName = `.lock-owner-${randomBytes(16).toString('hex')}`;
+  const ownerPath = join(cacheDir, ownerName);
+  const marker = join(root, 'credential-runs');
+  await mkdir(cacheDir);
+  await mkdir(ownerPath);
+  await symlink(ownerName, lockPath, 'dir');
+
+  const result = run(cacheDir, markerCommand(marker, 'must-not-run'));
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /owner record is missing/u);
+  assert.equal(await readlink(lockPath), ownerName);
+  assert.equal((await lstat(ownerPath)).isDirectory(), true);
+  await assert.rejects(readFile(marker), { code: 'ENOENT' });
 });
 
 test('serializes concurrent misses and ignores the legacy .lock file/directory path', async (t) => {

@@ -25,6 +25,7 @@ const LOCK_OWNER_PREFIX = '.lock-owner-';
 const LOCK_RECOVERY_PREFIX = '.lock-recovery-';
 const LOCK_TIMEOUT_MS = 60_000;
 const LOCK_POLL_MS = 25;
+const LOCK_MISSING_OWNER_RETRIES = 4;
 const SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));
 
 function usage() {
@@ -203,6 +204,43 @@ function refresh(paths, ttlMs, command) {
   return token;
 }
 
+function psProcessStartIdentity(pid, options = {}) {
+  const result = (options.spawnSync ?? spawnSync)(
+    'ps',
+    ['-p', String(pid), '-o', 'lstart='],
+    {
+      encoding: 'utf8',
+      env: { ...process.env, LC_ALL: 'C' },
+      stdio: ['ignore', 'pipe', 'ignore'],
+    },
+  );
+  if (result.error || result.status !== 0) return undefined;
+  const identity = result.stdout.trim().replace(/\s+/gu, ' ');
+  return identity || undefined;
+}
+
+function legacyLinuxProcessStartIdentity(pid, options = {}) {
+  const currentPidNamespaceIdentity = Object.prototype.hasOwnProperty.call(
+    options,
+    'currentPidNamespaceIdentity',
+  )
+    ? options.currentPidNamespaceIdentity
+    : pidNamespaceIdentity('linux');
+  const procfsPidNamespaceIdentity = Object.prototype.hasOwnProperty.call(
+    options,
+    'procfsPidNamespaceIdentity',
+  )
+    ? options.procfsPidNamespaceIdentity
+    : pidNamespaceIdentityForProcfs('linux');
+  if (
+    typeof currentPidNamespaceIdentity !== 'string' ||
+    currentPidNamespaceIdentity !== procfsPidNamespaceIdentity
+  ) {
+    return undefined;
+  }
+  return psProcessStartIdentity(pid, options);
+}
+
 export function processStartIdentity(pid, options = {}) {
   const platform = options.platform ?? process.platform;
   if (platform === 'linux') {
@@ -225,20 +263,34 @@ export function processStartIdentity(pid, options = {}) {
     ) {
       return undefined;
     }
+    let stat;
+    try {
+      stat = (options.readFileSync ?? readFileSync)(
+        `/proc/${pid}/stat`,
+        'utf8',
+      );
+    } catch {
+      return undefined;
+    }
+    const pidMatch = /^(\d+)\s+\(/u.exec(stat);
+    const closingParen = stat.lastIndexOf(')');
+    if (
+      !pidMatch ||
+      Number(pidMatch[1]) !== pid ||
+      closingParen < pidMatch[0].length
+    ) {
+      return undefined;
+    }
+    // The comm field can contain spaces and parentheses. After its final `)`,
+    // field 3 (state) is index 0 and field 22 (starttime) is index 19.
+    const fields = stat.slice(closingParen + 1).trim().split(/\s+/u);
+    const startTimeTicks = fields[19];
+    return /^\d+$/u.test(startTimeTicks ?? '')
+      ? `linux:${startTimeTicks}`
+      : undefined;
   }
 
-  const result = (options.spawnSync ?? spawnSync)(
-    'ps',
-    ['-p', String(pid), '-o', 'lstart='],
-    {
-      encoding: 'utf8',
-      env: { ...process.env, LC_ALL: 'C' },
-      stdio: ['ignore', 'pipe', 'ignore'],
-    },
-  );
-  if (result.error || result.status !== 0) return undefined;
-  const identity = result.stdout.trim().replace(/\s+/gu, ' ');
-  return identity || undefined;
+  return psProcessStartIdentity(pid, options);
 }
 
 export function pidNamespaceIdentity(platform = process.platform) {
@@ -285,6 +337,7 @@ export function processState(
 ) {
   const platform = options.platform ?? process.platform;
   const currentHost = options.currentHost ?? hostname();
+  let currentPidNamespaceIdentity;
   if (!Number.isSafeInteger(pid) || pid <= 0) return 'unknown';
   if (processHost !== currentHost) return 'unknown';
 
@@ -293,7 +346,7 @@ export function processState(
       options,
       'currentPidNamespaceIdentity',
     );
-    const currentPidNamespaceIdentity = hasInjectedNamespace
+    currentPidNamespaceIdentity = hasInjectedNamespace
       ? options.currentPidNamespaceIdentity
       : pidNamespaceIdentity(platform);
     if (
@@ -302,6 +355,13 @@ export function processState(
       typeof currentPidNamespaceIdentity !== 'string' ||
       !/^pid:\[\d+\]$/u.test(currentPidNamespaceIdentity) ||
       currentPidNamespaceIdentity !== expectedPidNamespaceIdentity
+    ) {
+      return 'unknown';
+    }
+    if (
+      typeof expectedStartIdentity === 'string' &&
+      expectedStartIdentity.startsWith('linux:') &&
+      !/^linux:\d+$/u.test(expectedStartIdentity)
     ) {
       return 'unknown';
     }
@@ -317,9 +377,15 @@ export function processState(
   if (typeof expectedStartIdentity !== 'string' || expectedStartIdentity.length === 0) {
     return 'live';
   }
-  const actualStartIdentity = (
-    options.getProcessStartIdentity ?? processStartIdentity
-  )(pid);
+  const actualStartIdentity = options.getProcessStartIdentity
+    ? options.getProcessStartIdentity(pid)
+    : platform === 'linux' &&
+        !expectedStartIdentity.startsWith('linux:')
+      ? legacyLinuxProcessStartIdentity(pid, {
+          ...options,
+          currentPidNamespaceIdentity,
+        })
+      : processStartIdentity(pid);
   if (actualStartIdentity === undefined) {
     try {
       (options.killProcess ?? ((targetPid) => process.kill(targetPid, 0)))(pid);
@@ -498,9 +564,23 @@ function inspectExistingLock(cacheDir, lockPath, currentPidNamespaceIdentity) {
 
   const candidates = recoveryCandidates(cacheDir, target.ownerId);
   if (candidates.length === 0) {
+    // Another reaper can rename the owner directory, unlink this symlink, and
+    // remove its recovery directory between our owner read and directory scan.
+    // Re-read the symlink before deciding this is a static ownerless lock.
+    const currentTarget = readLockTarget(cacheDir, lockPath);
+    if (
+      currentTarget.state !== 'owned' ||
+      currentTarget.ownerId !== target.ownerId
+    ) {
+      return {
+        state: 'retry',
+        reason: 'the lock target changed while its owner record was read',
+      };
+    }
     return {
       ...target,
-      state: 'unknown',
+      state: 'retry',
+      retryKind: 'missing-owner-record',
       reason: 'the lock owner record is missing',
     };
   }
@@ -640,6 +720,8 @@ function withLock(cacheDir, paths, ttlMs, command, action) {
   const lockPath = join(cacheDir, LOCK_DIR_NAME);
   const currentPidNamespaceIdentity = pidNamespaceIdentity();
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  let missingOwnerTarget;
+  let missingOwnerRetries = 0;
   let lock;
   while (true) {
     try {
@@ -664,6 +746,8 @@ function withLock(cacheDir, paths, ttlMs, command, action) {
       currentPidNamespaceIdentity,
     );
     if (existingLock.state === 'stale-owner' || existingLock.state === 'stale-recovery') {
+      missingOwnerTarget = undefined;
+      missingOwnerRetries = 0;
       if (
         reclaimStaleLock(
           cacheDir,
@@ -672,12 +756,41 @@ function withLock(cacheDir, paths, ttlMs, command, action) {
           currentPidNamespaceIdentity,
         )
       ) continue;
+    } else if (existingLock.state === 'retry') {
+      if (existingLock.retryKind === 'missing-owner-record') {
+        const currentTarget = readLockTarget(cacheDir, lockPath);
+        if (
+          currentTarget.state !== 'owned' ||
+          currentTarget.ownerId !== existingLock.ownerId
+        ) {
+          missingOwnerTarget = undefined;
+          missingOwnerRetries = 0;
+        } else if (currentTarget.ownerId === missingOwnerTarget) {
+          missingOwnerRetries += 1;
+        } else {
+          missingOwnerTarget = currentTarget.ownerId;
+          missingOwnerRetries = 1;
+        }
+        if (missingOwnerRetries >= LOCK_MISSING_OWNER_RETRIES) {
+          throw new Error(
+            `cache lock owner cannot be verified (${existingLock.reason}); refusing to remove it`,
+          );
+        }
+      } else {
+        missingOwnerTarget = undefined;
+        missingOwnerRetries = 0;
+      }
     } else if (existingLock.state === 'unknown') {
       throw new Error(
         `cache lock owner cannot be verified (${existingLock.reason}); refusing to remove it`,
       );
     } else if (existingLock.state === 'free') {
+      missingOwnerTarget = undefined;
+      missingOwnerRetries = 0;
       continue;
+    } else {
+      missingOwnerTarget = undefined;
+      missingOwnerRetries = 0;
     }
 
     if (Date.now() >= deadline) {
