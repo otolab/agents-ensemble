@@ -40,6 +40,9 @@ jobs:
       - name: CLI unit tests
         run: pnpm --filter @agents-ensemble/cli test:run
 
+      - name: Pi TTY MCP teardown e2e
+        run: pnpm --filter @agents-ensemble/cli exec vitest run --config vitest.config.e2e.ts test/e2e/issue-pi-tty-exit.e2e.test.ts
+
       - name: Pi TTY close and resume process e2e
         run: pnpm --filter @agents-ensemble/cli exec vitest run --config vitest.config.e2e.ts test/e2e/issue-pi-tty-close.e2e.test.ts
 

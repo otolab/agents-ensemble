@@ -334,14 +334,40 @@ export class PiConductorAgent implements ConductorAgent {
     }
     this.closed = true;
     this.closePromise = (async () => {
+      const errors: unknown[] = [];
       try {
         await this.session.abort();
-      } finally {
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
         try {
           this.unsubscribe();
-        } finally {
-          this.session.dispose();
+        } catch (error) {
+          errors.push(error);
         }
+        if (this.mcpLifecycleState.enabled) {
+          // AgentSession.dispose() invalidates extension contexts but does not
+          // emit Pi's awaited session_shutdown event. Reload once with MCP
+          // disabled so the official extension closes its stdio transports
+          // before disposal without starting replacement children.
+          this.mcpLifecycleState.enabled = false;
+          try {
+            await this.session.reload();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+      } finally {
+        try {
+          this.session.dispose();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, 'Pi conductor session cleanup failed.');
       }
     })();
     return this.closePromise;
@@ -554,8 +580,26 @@ async function createPiConductorSession(
       options.onStreamText,
     );
   } catch (error) {
-    session?.dispose();
-    throw error;
+    if (!session) throw error;
+    const cleanupErrors: unknown[] = [];
+    if (mcpLifecycleState.enabled) {
+      mcpLifecycleState.enabled = false;
+      try {
+        await session.reload();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    try {
+      session.dispose();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length === 0) throw error;
+    throw new AggregateError(
+      [error, ...cleanupErrors],
+      'Pi conductor startup failed and session cleanup was incomplete.',
+    );
   }
 }
 

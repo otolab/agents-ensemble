@@ -1,9 +1,33 @@
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { AcpClient } from './acp-client.js';
+import { AcpClient, terminateChildProcess } from './acp-client.js';
 import { createInProcessStreamPair } from './testing/stream-pair.js';
 import { startFakeAcpServer } from './testing/fake-acp-server.js';
 
 describe('AcpClient', () => {
+  it('force-kills and reaps a child that ignores SIGTERM', async () => {
+    const child = spawn(
+      process.execPath,
+      [
+        '-e',
+        "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {}, 1000);",
+      ],
+      { stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    await once(child, 'spawn');
+    await once(child.stdout!, 'data');
+
+    await terminateChildProcess(child, {
+      gracefulExitMs: 25,
+      graceMs: 25,
+      forceKillWaitMs: 1_000,
+    });
+
+    expect(child.signalCode).toBe('SIGKILL');
+    expect(child.exitCode).toBeNull();
+  });
+
   it('runs connect → newSession → prompt', async () => {
     const streams = createInProcessStreamPair();
     startFakeAcpServer({

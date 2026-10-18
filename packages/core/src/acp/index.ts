@@ -25,6 +25,7 @@ export { AcpClient, terminateChildProcess } from './acp-client.js';
 export type {
   AcpClientOptions,
   AcpClientStreams,
+  ChildProcessTerminationOptions,
   SessionUpdateHandler,
 } from './acp-client.js';
 

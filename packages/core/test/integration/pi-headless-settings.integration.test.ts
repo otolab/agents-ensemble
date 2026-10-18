@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -233,6 +233,103 @@ describe('Pi headless settings with the real SDK', () => {
     expectSettings(resumedSession, 11_001, 12_001, 13_001, true, false);
   });
 
+  it('closes each stdio MCP child on reload and close without leaving duplicates', async () => {
+    await setupFixture();
+    const pidPath = join(cwd, 'mcp-pids');
+    const serverPath = join(cwd, 'fixture-mcp-server.cjs');
+    const mcpServers = {
+      fixture: {
+        type: 'stdio' as const,
+        command: process.execPath,
+        args: [serverPath],
+        env: { MCP_PID_FILE: pidPath },
+      },
+    };
+    await writeFile(
+      serverPath,
+      `
+const fs = require('node:fs');
+fs.appendFileSync(process.env.MCP_PID_FILE, String(process.pid) + '\\n');
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  input += chunk;
+  for (;;) {
+    const newline = input.indexOf('\\n');
+    if (newline < 0) break;
+    const line = input.slice(0, newline);
+    input = input.slice(newline + 1);
+    const message = JSON.parse(line);
+    if (!Object.prototype.hasOwnProperty.call(message, 'id')) continue;
+    let result = {};
+    if (message.method === 'initialize') {
+      result = {
+        protocolVersion: '2025-06-18',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'fixture-mcp', version: '1.0.0' },
+      };
+    } else if (message.method === 'tools/list') {
+      result = { tools: [] };
+    }
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
+  }
+});
+setInterval(() => {}, 60_000);
+`,
+    );
+
+    const conductor = await PiConductorAgent.create({
+      ...createOptions(),
+      mcpServers,
+    });
+    agents.push(conductor);
+
+    await vi.waitFor(async () => {
+      expect(await readProcessIds(pidPath)).toHaveLength(1);
+    });
+    const firstPid = (await readProcessIds(pidPath))[0]!;
+    expect(isProcessAlive(firstPid)).toBe(true);
+
+    await conductor.reload();
+
+    await vi.waitFor(async () => {
+      expect(await readProcessIds(pidPath)).toHaveLength(2);
+    });
+    const pidsAfterReload = await readProcessIds(pidPath);
+    const secondPid = pidsAfterReload[1]!;
+    expect(isProcessAlive(firstPid)).toBe(false);
+    expect(isProcessAlive(secondPid)).toBe(true);
+
+    const agentId = conductor.agentId;
+    getSession(conductor).sessionManager.appendMessage({
+      role: 'user',
+      content: [{ type: 'text', text: 'persist before MCP reconnect' }],
+      timestamp: Date.now(),
+    });
+    await conductor.close();
+
+    expect(await readProcessIds(pidPath)).toHaveLength(2);
+    expect(isProcessAlive(secondPid)).toBe(false);
+
+    const resumed = await PiConductorAgent.resume(agentId, {
+      ...createOptions(),
+      mcpServers,
+    });
+    agents.push(resumed);
+
+    await vi.waitFor(async () => {
+      expect(await readProcessIds(pidPath)).toHaveLength(3);
+    });
+    const thirdPid = (await readProcessIds(pidPath))[2]!;
+    expect(isProcessAlive(secondPid)).toBe(false);
+    expect(isProcessAlive(thirdPid)).toBe(true);
+
+    await resumed.close();
+
+    expect(await readProcessIds(pidPath)).toHaveLength(3);
+    expect(isProcessAlive(thirdPid)).toBe(false);
+  });
+
   it('closes a failed real SDK reload and resumes the same transcript id', async () => {
     await setupFixture();
 
@@ -377,3 +474,24 @@ describe('Pi headless settings with the real SDK', () => {
     ).toBe(true);
   });
 });
+
+async function readProcessIds(path: string): Promise<number[]> {
+  const content = await readFile(path, 'utf8').catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+    throw error;
+  });
+  return content
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((pid) => Number(pid));
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    throw error;
+  }
+}

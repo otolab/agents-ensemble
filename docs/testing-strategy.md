@@ -109,6 +109,7 @@ pnpm test:integration  # fake smoke は設定不要、外部依存は前提が�
 ### スキップ条件
 
 - `session-resume.integration.test.ts` と `pi-conductor.integration.test.ts` は fake / in-process smoke であり、`test-acp.yaml`、`agent` CLI、Cursor 認証を必要とせず、CI でも実行する。
+- Fake / in-process ACP を注入して `runConductorSession` を呼ぶテストでは、`defaultAcp: { defaultAcpCommand: process.execPath }` を渡すか、既存の `IN_PROCESS_DEFAULT_ACP` helper を使う。`connectAcp` の差し替えだけでは worker setup 時の ACP prerequisite check を通らない。
 - 実 `agent acp` を起動する integration は `test-acp.yaml` と `agent` が必要で、どちらかがない場合は対象 suite を `describe.skipIf` でスキップする。
 - 実 Cursor SDK を使う `conductor-agent.integration.test.ts` と `issue-session.integration.test.ts` は Cursor 認証とネットワークを必要とする。認証がない、または隔離 HOME を作成・書き込みできない場合は、理由付きでスキップする。
 
@@ -131,7 +132,8 @@ pnpm test:integration  # fake smoke は設定不要、外部依存は前提が�
 | **smoke** | `ensemble issue` — conductor + worker 連携、終了 JSON の必須フィールド |
 | **operator 入力** | `ENSEMBLE_OPERATOR_MESSAGE` による post-loop 入力 |
 | **roundtrip** | worker メッセージの往復（profile 別 fixture） |
-| **Pi TTY close / resume** | 実 CLI を PTY で起動し、`/close` 後の自然終了・stdio MCP PID 回収と、保存済み Pi session の `--continue` を確認。worker の同一 worktree / ACP session 再開は CLI session unit test で確認 |
+| **Pi TTY `/exit` teardown** | 実 CLI を PTY で起動し、Pi + stdio MCP の `/exit` 後にサマリーから 3 秒以内の自然終了と MCP PID 回収を確認 |
+| **Pi TTY `/close` / resume** | 実 CLI を PTY で起動し、`/close` 後の自然終了・stdio MCP PID 回収と保存済み Pi session の `--continue` を確認。worker の同一 worktree / ACP session 再開は CLI session unit test で確認 |
 
 ### 配置
 
@@ -148,12 +150,12 @@ pnpm test:e2e
 
 ### 前提・スキップ
 
-- `issue-pi-tty-close.e2e.test.ts` はローカル fake model / GitHub 応答と stdio MCP fixture を使い、外部認証や `test-acp.yaml` は不要。Python 3 の標準 `pty` モジュールと localhost bind が必要で、Windows では skip する。
+- `issue-pi-tty-exit.e2e.test.ts` は `/exit` cleanup 後の自然終了と Pi stdio MCP child 回収を検証する。`issue-pi-tty-close.e2e.test.ts` は `/close` の自然終了・child 回収・保存済み Pi session の `--continue` を検証する。両 fixture はローカル fake model / GitHub 応答を使い、外部認証や `test-acp.yaml` は不要。Python 3 の標準 `pty` モジュールと localhost bind が必要で、Windows では skip する。
 - その他の対象 conductor backend の認証（Cursor は `CURSOR_API_KEY` / `ensemble auth login`、Pi は `ensemble auth login --provider <id>` または Pi `auth.json`）
 - `test-acp.yaml` + テスト用 Issue URL（または専用テスト repo）
 - GitHub API トークン（`GITHUB_TOKEN` / `GH_TOKEN`。実 Issue を触る場合）
 
-未設定時は skip。
+上記の認証・外部サービス前提がある e2e は、未設定時に skip。
 
 ### vitest 設定方針
 
@@ -176,8 +178,8 @@ pnpm test:all           # 全レベル（ローカル用）
 
 | トリガー | unittest | integration | e2e |
 |---------|----------|-------------|-----|
-| PR | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | Pi TTY close / resume process e2e（認証不要） |
-| main | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | Pi TTY close / resume process e2e（認証不要） |
+| PR | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | Pi TTY `/exit` teardown と `/close` / resume process e2e（認証不要） |
+| main | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | Pi TTY `/exit` teardown と `/close` / resume process e2e（認証不要） |
 | 手動 / nightly | 必須 | 推奨 | 任意 |
 | リリース前 | 必須 | 必須（設定ある場合） | 推奨 |
 
