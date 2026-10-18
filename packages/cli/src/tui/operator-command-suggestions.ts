@@ -3,6 +3,10 @@ import { wrapTextToWidth } from './wrap-text-to-width.js';
 
 /** 入力全体が単一行のコマンド名 prefix のときだけ候補を返す。 */
 export function getOperatorCommandSuggestions(input: string) {
+  if (/[\r\n\u2028\u2029]/u.test(input)) {
+    return [];
+  }
+
   const match = /^[\t ]*\/([^\s]*)[\t ]*$/u.exec(input);
   if (!match) {
     return [];
