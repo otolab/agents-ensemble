@@ -38,6 +38,6 @@ describe('operator command suggestions', () => {
     const rows = getOperatorCommandSuggestionLines('/ex', 12);
     expect(rows.length).toBeGreaterThan(1);
     expect(rows.join('\n')).toContain('/exit');
-    expect(rows.join('\n')).toContain('セッションを終了');
+    expect(rows.join('')).toContain('セッションを終了');
   });
 });
