@@ -73,6 +73,10 @@ interface PiMcpStartupState {
   error?: string;
 }
 
+interface PiMcpLifecycleState {
+  enabled: boolean;
+}
+
 const PI_MCP_STARTUP_OBSERVATION_MS = 2_000;
 
 export interface PiResolvedModel {
@@ -169,6 +173,7 @@ export class PiConductorAgent implements ConductorAgent {
     public readonly agentId: string,
     private readonly modelId: string,
     private readonly mcpStartupState: PiMcpStartupState,
+    private readonly mcpLifecycleState: PiMcpLifecycleState,
     private readonly piSkills: boolean,
     private readonly onStreamText?: (text: string) => void,
   ) {
@@ -329,14 +334,40 @@ export class PiConductorAgent implements ConductorAgent {
     }
     this.closed = true;
     this.closePromise = (async () => {
+      const errors: unknown[] = [];
       try {
         await this.session.abort();
-      } finally {
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
         try {
           this.unsubscribe();
-        } finally {
-          this.session.dispose();
+        } catch (error) {
+          errors.push(error);
         }
+        if (this.mcpLifecycleState.enabled) {
+          // AgentSession.dispose() invalidates extension contexts but does not
+          // emit Pi's awaited session_shutdown event. Reload once with MCP
+          // disabled so the official extension closes its stdio transports
+          // before disposal without starting replacement children.
+          this.mcpLifecycleState.enabled = false;
+          try {
+            await this.session.reload();
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+      } finally {
+        try {
+          this.session.dispose();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, 'Pi conductor session cleanup failed.');
       }
     })();
     return this.closePromise;
@@ -388,6 +419,9 @@ async function createPiConductorSession(
   reason: PiSessionStartReason,
 ): Promise<PiConductorAgent> {
   const piMcpResolution = { cwd: options.cwd };
+  const mcpLifecycleState: PiMcpLifecycleState = {
+    enabled: Object.keys(options.mcpServers ?? {}).length > 0,
+  };
   // Validate the harness-resolved map before creating the SDK session so an
   // unsupported transport fails with an actionable Pi-specific error.
   if (options.mcpServers) loadPiMcpConfig(options.mcpServers, piMcpResolution);
@@ -451,7 +485,11 @@ async function createPiConductorSession(
     systemPrompt: systemPromptRef.value,
     extensionFactories: [
       createMcpExtension({
-        loadConfig: () => loadPiMcpConfig(options.mcpServers, piMcpResolution),
+        loadConfig: () =>
+          loadPiMcpConfig(
+            mcpLifecycleState.enabled ? options.mcpServers : undefined,
+            piMcpResolution,
+          ),
       }),
       createCodemodeExtension({ mode: 'on' }),
       createToolSearchExtension(),
@@ -509,12 +547,31 @@ async function createPiConductorSession(
       agentId,
       resolved.modelId,
       mcpStartupState,
+      mcpLifecycleState,
       piSkills,
       options.onStreamText,
     );
   } catch (error) {
-    session?.dispose();
-    throw error;
+    if (!session) throw error;
+    const cleanupErrors: unknown[] = [];
+    if (mcpLifecycleState.enabled) {
+      mcpLifecycleState.enabled = false;
+      try {
+        await session.reload();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    try {
+      session.dispose();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length === 0) throw error;
+    throw new AggregateError(
+      [error, ...cleanupErrors],
+      'Pi conductor startup failed and session cleanup was incomplete.',
+    );
   }
 }
 

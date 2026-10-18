@@ -245,11 +245,15 @@ Connection stalled が自動再接続後も続く場合は `/reconnect` を試�
 |------|------------|----------------|
 | `/exit` 直後 | `session.operator_exit` で TUI は「終了しています…」・入力無効化 | 活動ログ / 入力ヒント |
 | `buildResult` | 明示 exit / interrupt 時は `getUsage().cost` 取得をスキップ（SDK 応答待ちで固まらない） | なし |
-| `finally` teardown（停止フェーズ） | force 時は worker / conductor / GitHub 監視を並列停止。子プロセスは SIGTERM 後最大 5s、残存時 SIGKILL。worker / ACP・conductor・GitHub monitor の停止後、worktree cleanup 前に `harness.teardown` を emit | `harness.teardown.phase` で段階表示。完了時 `harness.teardown`（1s 超または force 時） |
+| `finally` teardown（停止フェーズ） | force 時は worker / conductor / GitHub 監視を並列停止。worker ACP 子プロセスは stdin EOF 後 500ms 以内の自然終了を待ち、残存時 SIGTERM 後最大 5s、さらに残存時 SIGKILL。worker / ACP・conductor・GitHub monitor の停止後、worktree cleanup 前に `harness.teardown` を emit | `harness.teardown.phase` で段階表示。完了時 `harness.teardown`（1s 超または force 時） |
 | GitHub monitor `stop`（停止フェーズ内・accepted risk） | 監視有効時、GitHub API poll 実行中（`pollInFlight`）に `/exit` すると `stop()` が poll 完了までブロックしうる | 最大 5s 待機後に poll を abort して teardown 継続（#209）。`harness.teardown.phase` で段階表示 |
 | isolated worktree 削除（停止フェーズ後） | `harness.teardown` emit 後、`/exit` 正常終了時に clean worktree のみ削除。未コミット変更時はスキップし、`git worktree remove` の一時的な失敗は初回＋100ms／250ms の最大 3 回まで再試行 | `harness.teardown.phase=worktree` の後、成功は `harness.worktree.removed`。dirty / 最終失敗は `[harness]` の診断行を残し、TTY 活動ログと非 TTY stderr に `[worktree] ⚠️`、path・reason・手動復旧コマンドを表示 |
 
 worktree 削除の再試行は、一時的に ACP / worker の終了処理が git worktree の lock を保持しているケースを対象にした限定的な改善です。`git worktree remove --force` は使わず、dirty worktree の自動破棄や SIGINT 時の削除も行いません。全試行が失敗した場合は最後の git エラーを `harness.worktree.remove_failed` と warning の両方に残します。warning には、変更を commit または stash した後に `git worktree remove <path>` を手動実行する復旧ヒントを含めます。post-loop の worktree cleanup failure は warning として記録し、CLI exit code には影響しません。CLI は `stopReason === 'error'` の場合だけ exit 2 で終了します。
+
+正常に `/exit` が完了すれば Pi の stdio MCP 子プロセスと worker ACP 子プロセスを停止・回収して CLI は自然終了します。サマリー表示後に Ctrl+C で終了させる回避操作は不要です。
+
+worker ACP は stdin EOF 後 500ms の自然終了猶予を持ちます。終了しない場合は SIGTERM を送り、5 秒後も残っていれば SIGKILL で終了を求め、最大 2 秒回収を待ちます。それでも終了を確認できなければ teardown error になります。
 
 **GitHub monitor poll ハング（accepted risk, #200）**
 

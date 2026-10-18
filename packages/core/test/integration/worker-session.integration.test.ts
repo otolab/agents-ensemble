@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AcpBridge } from '../../src/acp/acp-bridge.js';
 import { AcpClient } from '../../src/acp/acp-client.js';
@@ -61,6 +64,95 @@ describe('WorkerSession integration', () => {
 
     await session.stop();
     expect(session.runtime.attachedCount).toBe(0);
+  });
+
+  it('waits for the owned ACP child to exit during force stop', async () => {
+    const fixtureDir = await mkdtemp(join(tmpdir(), 'worker-acp-stop-'));
+    const serverPath = join(fixtureDir, 'fake-acp-server.cjs');
+    const pidPath = join(fixtureDir, 'acp-pids');
+    await writeFile(
+      serverPath,
+      `
+const fs = require('node:fs');
+fs.writeFileSync(process.env.ACP_PID_FILE, String(process.pid));
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  input += chunk;
+  for (;;) {
+    const newline = input.indexOf('\\n');
+    if (newline < 0) break;
+    const line = input.slice(0, newline);
+    input = input.slice(newline + 1);
+    const message = JSON.parse(line);
+    if (!Object.prototype.hasOwnProperty.call(message, 'id')) continue;
+    let result = {};
+    if (message.method === 'initialize') {
+      result = {
+        protocolVersion: 1,
+        agentCapabilities: { session: {} },
+        agentInfo: { name: 'fixture-acp', version: '1.0.0' },
+      };
+    } else if (message.method === 'session/new') {
+      result = { sessionId: 'fixture-session' };
+    } else if (message.method === 'session/prompt') {
+      result = { stopReason: 'end_turn' };
+    }
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }) + '\\n');
+  }
+});
+setInterval(() => {}, 60_000);
+`,
+    );
+
+    const session = new WorkerSession({
+      issueUrl: TEST_ISSUE.url,
+      worktree: { ...TEST_WORKTREE, path: fixtureDir },
+      workers: [
+        {
+          name: 'ping-1',
+          kind: 'ping',
+          prompt: { instructions: [PING_SYSTEM_PROMPT] },
+        },
+      ],
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      connectAcp: async ({ cwd }) =>
+        AcpBridge.connect({
+          cwd,
+          command: process.execPath,
+          args: [serverPath],
+          env: { ...process.env, ACP_PID_FILE: pidPath },
+        }),
+      decidePermission: () => ({
+        outcome: { outcome: 'selected', optionId: 'allow-once' },
+      }),
+    });
+
+    let stopped = false;
+    try {
+      session.startWorkers();
+      await session.runtime.waitForIdle();
+      await session.inbox.drain();
+
+      const pid = Number(await readFile(pidPath, 'utf8'));
+      expect(Number.isInteger(pid)).toBe(true);
+      expect(isProcessAlive(pid)).toBe(true);
+
+      await session.stop({ force: true });
+      stopped = true;
+
+      expect(session.runtime.attachedCount).toBe(0);
+      expect(isProcessAlive(pid)).toBe(false);
+    } finally {
+      try {
+        if (!stopped) await session.stop({ force: true });
+      } finally {
+        await rm(fixtureDir, { recursive: true, force: true });
+      }
+    }
   });
 
   it('denies pending permission and forwards worker failure after ACP disconnects', async () => {
@@ -176,3 +268,13 @@ describe('WorkerSession integration', () => {
     await session.stop();
   });
 });
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    throw error;
+  }
+}
