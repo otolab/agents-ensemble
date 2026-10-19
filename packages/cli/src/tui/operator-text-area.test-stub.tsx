@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useInput } from 'ink';
+import type { TKeybindings } from 'react-ink-textarea';
 import { vi } from 'vitest';
 
 export const textAreaSpy = vi.fn();
@@ -9,11 +10,14 @@ export function TestTextArea(props: {
   readonly value: string;
   readonly onChange?: (value: string) => void;
   readonly onSubmit?: (value: string) => void;
-  readonly onCursorChange?: (position: [number, number]) => void;
   readonly linePrefix?: unknown;
   readonly viewportLines?: number;
   readonly initialLineCount?: number;
   readonly cursorStart?: { readonly x?: number; readonly y: number };
+  readonly keybindings?: TKeybindings;
+  readonly onTab?: (shift: boolean) => void;
+  readonly cursorPosition?: [number, number];
+  readonly onCursorChange?: (position: [number, number]) => void;
 }) {
   const [cursorOffset, setCursorOffset] = useState(props.value.length);
 
@@ -33,8 +37,8 @@ export function TestTextArea(props: {
         key.end ||
         key.leftArrow ||
         key.rightArrow ||
-        key.upArrow ||
-        key.downArrow
+        (key.upArrow && props.keybindings?.Up !== false) ||
+        (key.downArrow && props.keybindings?.Down !== false)
       ) {
         if (key.home) {
           const lineStart = props.value.lastIndexOf('\n', cursorOffset - 1) + 1;
@@ -52,6 +56,10 @@ export function TestTextArea(props: {
         if (key.leftArrow) {
           setCursorOffset(Math.max(0, cursorOffset - 1));
         }
+        return;
+      }
+      if (key.tab) {
+        props.onTab?.(!!key.shift);
         return;
       }
       if (key.return && !key.shift) {

@@ -8,6 +8,7 @@ import stringWidth from 'string-width';
 import type { OperatorTextAreaProps } from './operator-text-area.js';
 import {
   computeOperatorInputLayout,
+  logicalPositionToOffset,
   mapCursorOffsetToDisplayPosition,
   sliceVisibleInputDisplayLines,
 } from './operator-input-layout.js';
@@ -22,6 +23,10 @@ export function OperatorTextArea({
   promptPrefix = '',
   maxDisplayLines,
   onDisplayLineCountChange,
+  commandSuggestionsActive = false,
+  onTab,
+  cursorPosition: controlledCursorPosition,
+  onCursorChange,
   cursorStart,
 }: OperatorTextAreaProps) {
   const [cursorOffset, setCursorOffset] = useState(value.length);
@@ -52,10 +57,18 @@ export function OperatorTextArea({
   }, [layout.displayLines.length, onDisplayLineCountChange]);
 
   useEffect(() => {
-    if (focus) {
+    if (controlledCursorPosition) {
+      setCursorOffset(
+        logicalPositionToOffset(
+          value,
+          controlledCursorPosition[0],
+          controlledCursorPosition[1],
+        ),
+      );
+    } else if (focus) {
       setCursorOffset((previous) => Math.min(previous, value.length));
     }
-  }, [value, focus]);
+  }, [value, focus, controlledCursorPosition]);
 
   const visibleCursorLineIndex = cursorPosition.displayLineIndex - scrollOffset;
   const cursorColumnInVisibleLine = cursorPosition.columnInLine;
@@ -77,7 +90,72 @@ export function OperatorTextArea({
       if (!focus) {
         return;
       }
-      if (key.pageUp || key.pageDown || key.home || key.end || key.tab || (key.shift && key.tab)) {
+      if (key.tab) {
+        if (commandSuggestionsActive) {
+          onTab?.(!!key.shift);
+        }
+        return;
+      }
+      if (
+        key.pageUp ||
+        key.pageDown ||
+        key.home ||
+        key.end ||
+        key.leftArrow ||
+        key.rightArrow ||
+        key.upArrow ||
+        key.downArrow
+      ) {
+        if (commandSuggestionsActive && (key.upArrow || key.downArrow)) {
+          return;
+        }
+        const lineStart = value.lastIndexOf('\n', cursorOffset - 1) + 1;
+        const lineEndIndex = value.indexOf('\n', cursorOffset);
+        const lineEnd = lineEndIndex < 0 ? value.length : lineEndIndex;
+        if (key.home) {
+          setCursorOffset(lineStart);
+          onCursorChange?.(cursorPositionFor(value, lineStart));
+        } else if (key.end) {
+          setCursorOffset(lineEnd);
+          onCursorChange?.(cursorPositionFor(value, lineEnd));
+        } else if (key.leftArrow) {
+          const nextOffset = Math.max(0, cursorOffset - 1);
+          setCursorOffset(nextOffset);
+          onCursorChange?.(cursorPositionFor(value, nextOffset));
+        } else if (key.rightArrow) {
+          const nextOffset = Math.min(value.length, cursorOffset + 1);
+          setCursorOffset(nextOffset);
+          onCursorChange?.(cursorPositionFor(value, nextOffset));
+        } else if (key.upArrow) {
+          const newlineIndex = value.lastIndexOf('\n', cursorOffset - 1);
+          if (newlineIndex >= 0) {
+            const offsetOnPreviousLine = cursorOffset - (newlineIndex + 1);
+            const previousLineStart = value.lastIndexOf('\n', newlineIndex - 1) + 1;
+            const nextOffset = Math.min(
+              previousLineStart + offsetOnPreviousLine,
+              newlineIndex,
+            );
+            setCursorOffset(nextOffset);
+            onCursorChange?.(cursorPositionFor(value, nextOffset));
+          }
+        } else if (key.downArrow) {
+          const nextLineStart = value.indexOf('\n', cursorOffset);
+          if (nextLineStart >= 0) {
+            const nextLineEndIndex = value.indexOf('\n', nextLineStart + 1);
+            const nextLineEnd = nextLineEndIndex < 0 ? value.length : nextLineEndIndex;
+            const nextOffset = Math.min(
+              nextLineStart + 1 + (cursorOffset - lineStart),
+              nextLineEnd,
+            );
+            setCursorOffset(nextOffset);
+            onCursorChange?.(cursorPositionFor(value, nextOffset));
+          } else {
+            const nextValue = `${value}\n`;
+            onChange(nextValue);
+            setCursorOffset(nextValue.length);
+            onCursorChange?.(cursorPositionFor(nextValue, nextValue.length));
+          }
+        }
         return;
       }
       if (key.return && !key.shift) {
@@ -88,6 +166,7 @@ export function OperatorTextArea({
         const nextValue = value.slice(0, cursorOffset) + '\n' + value.slice(cursorOffset);
         onChange(nextValue);
         setCursorOffset(cursorOffset + 1);
+        onCursorChange?.(cursorPositionFor(nextValue, cursorOffset + 1));
         return;
       }
       if (key.backspace || key.delete) {
@@ -97,12 +176,14 @@ export function OperatorTextArea({
         const nextValue = value.slice(0, cursorOffset - 1) + value.slice(cursorOffset);
         onChange(nextValue);
         setCursorOffset(cursorOffset - 1);
+        onCursorChange?.(cursorPositionFor(nextValue, cursorOffset - 1));
         return;
       }
       if (input) {
         const nextValue = value.slice(0, cursorOffset) + input + value.slice(cursorOffset);
         onChange(nextValue);
         setCursorOffset(cursorOffset + input.length);
+        onCursorChange?.(cursorPositionFor(nextValue, cursorOffset + input.length));
       }
     },
     { isActive: focus },
@@ -123,4 +204,10 @@ export function OperatorTextArea({
       })}
     </>
   );
+}
+
+function cursorPositionFor(value: string, cursorOffset: number): [number, number] {
+  const line = value.slice(0, cursorOffset).split('\n').length - 1;
+  const lineStart = value.lastIndexOf('\n', cursorOffset - 1) + 1;
+  return [line, cursorOffset - lineStart];
 }

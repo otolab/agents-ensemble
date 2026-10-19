@@ -78,6 +78,32 @@ describe('OperatorTextArea (production wrapper)', () => {
     props?.onSubmit?.('hello');
     expect(onSubmit).toHaveBeenCalledWith('hello');
     expect(props?.cursorStart).toBeUndefined();
+    expect(props?.keybindings).toBeUndefined();
+  });
+
+  it('hands arrows and Tab to an active suggestion menu and forwards controlled cursor state', () => {
+    const onTab = vi.fn();
+    const onCursorChange = vi.fn();
+    render(
+      <OperatorTextArea
+        value="/cl"
+        onChange={() => {}}
+        contentWidth={40}
+        maxDisplayLines={4}
+        commandSuggestionsActive
+        onTab={onTab}
+        cursorPosition={[0, 3]}
+        onCursorChange={onCursorChange}
+      />,
+    );
+
+    const props = textAreaSpy.mock.calls.at(-1)?.[0];
+    expect(props?.keybindings).toEqual({ Up: false, Down: false });
+    expect(props?.cursorPosition).toEqual([0, 3]);
+    expect(props?.onCursorChange).toBe(onCursorChange);
+    props?.onTab?.(false);
+    expect(onTab).toHaveBeenCalledWith(false);
+    expect(props?.onSubmit).toBeTypeOf('function');
   });
 
   it('forwards cursorStart to TextArea when promptPrefix is set', () => {

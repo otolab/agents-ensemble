@@ -11,6 +11,12 @@ export const OPERATOR_COMMANDS = [
     aliases: ['exit'],
     description: 'セッションを終了',
   },
+  {
+    id: 'close',
+    name: '/close',
+    aliases: ['close'],
+    description: 'worktree を残してセッションを閉じる',
+  },
 ] as const;
 
 export type OperatorCommandId = (typeof OPERATOR_COMMANDS)[number]['id'];

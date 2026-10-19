@@ -36,6 +36,7 @@ export const INK_TEST_KEYS = {
   rightArrow: '\u001B[C',
   upArrow: '\u001B[A',
   downArrow: '\u001B[B',
+  tab: '\t',
   /** xterm modifyOtherKeys: Shift+Enter */
   shiftEnter: '\x1b[27;2;13~',
   /** xterm: Ctrl+PageUp */

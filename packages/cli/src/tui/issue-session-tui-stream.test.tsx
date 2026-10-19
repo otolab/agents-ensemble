@@ -106,6 +106,27 @@ describe('IssueSessionTuiStream', () => {
     expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
   });
 
+  it('selects a slash suggestion and Tab completes it without submitting', async () => {
+    const viewModel = createTuiViewModel();
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />,
+    );
+
+    stdin.write('/cl');
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› /close');
+
+    stdin.write(INK_TEST_KEYS.tab);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('operator> /close');
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenCalledWith('/close', undefined);
+  });
+
   it('renders activity as unframed static output and keeps the lower panes framed', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({
@@ -1039,9 +1060,12 @@ describe('IssueSessionTuiStream', () => {
       <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
     );
 
+    stdin.write('/');
+    await flushInkStdin();
     stdin.write(INK_TEST_KEYS.shiftDownArrow);
     await flushInkStdin();
 
+    expect(lastFrame() ?? '').toContain('› /reconnect');
     expect(lastFrame() ?? '').toContain('2/2');
     expect(lastFrame() ?? '').toContain('▸ inq-2');
   });
