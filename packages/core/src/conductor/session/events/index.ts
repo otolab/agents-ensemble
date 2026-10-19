@@ -59,6 +59,11 @@ export type {
   PermissionPendingHarnessPayload,
 } from './shared/permission-pending.js';
 export type {
+  PermissionBrief,
+  PermissionBriefOperation,
+  PermissionOperationKind,
+} from '../../../permission/permission-brief.js';
+export type {
   WorkerRoundOutcome,
   WorkerFailureOutcome,
 } from './shared/worker-outcome.js';

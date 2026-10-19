@@ -24,6 +24,10 @@ import {
   type PermissionDeadlockMonitor,
 } from '../permission/permission-deadlock-monitor.js';
 import { createResolvePermissionTool } from '../permission/resolve-permission-tool.js';
+import {
+  buildPermissionBrief,
+  getPermissionToolCallId,
+} from '../permission/permission-brief.js';
 import type { Profile, ResolvedProfile } from '../profile/types.js';
 import type { DefaultAcpResolutionOptions, AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import {
@@ -43,8 +47,10 @@ import {
   type SessionWorkerSpec,
 } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
+import { ToolCallSnapshotRegistry } from '../runtime/tool-call-snapshot-registry.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
+import { createGetToolCallTool } from '../dispatch/get-tool-call-tool.js';
 import { createSessionUsageTools } from '../dispatch/session-usage-tool.js';
 import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
@@ -450,6 +456,8 @@ export async function runConductorSession(
     contextLimitTokens: options.contextLimitTokens,
   });
 
+  const toolCallSnapshots = new ToolCallSnapshotRegistry();
+
   const workerSession = new WorkerSession({
     issueUrl: options.issueUrl,
     repoRoot: options.repoRoot,
@@ -484,6 +492,7 @@ export async function runConductorSession(
         const operatorSummary = formatPermissionSummaryForOperator(pending, {
           workerLabel,
         });
+        const toolCallId = getPermissionToolCallId(pending.request);
         sessionLogger.emit({
           type: 'permission.pending',
           permission: pending,
@@ -492,6 +501,11 @@ export async function runConductorSession(
         eventQueue.enqueue({
           type: 'permission.pending',
           permission: pending,
+          worker: workerLabel,
+          brief: buildPermissionBrief(
+            pending.request,
+            toolCallId ? toolCallSnapshots.get(toolCallId) : undefined,
+          ),
           operatorSummary,
         });
       }
@@ -566,6 +580,9 @@ export async function runConductorSession(
       }
     },
     onAcpUpdate: (event) => {
+      if (event.toolCallUpdate) {
+        toolCallSnapshots.apply(event.toolCallUpdate);
+      }
       sessionLogger.emit({
         type: 'harness.worker.acp.update',
         name: event.name,
@@ -647,6 +664,9 @@ export async function runConductorSession(
   const resolvePermissionTools = createResolvePermissionTool({
     pipeline: permissionPipeline,
     inbox: workerSession.inbox,
+  });
+  const getToolCallTools = createGetToolCallTool({
+    snapshots: toolCallSnapshots,
   });
 
   let outboundDispatchesThisSend = 0;
@@ -730,6 +750,7 @@ export async function runConductorSession(
     .registerAll(answerOpenQuestionTools)
     .registerAll(openQuestionListTools)
     .registerAll(resolvePermissionTools)
+    .registerAll(getToolCallTools)
     .registerAll(promptWorkerTools)
     .registerAll(workerStatusTools)
     .registerAll(registerGitHubWatchTools)

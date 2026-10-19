@@ -19,6 +19,8 @@ export interface InProcessAcpBridgeOptions {
   requestPermissionOnPrompt?: boolean;
   /** 実際の ACP permission params と同じ形を通す fixture。 */
   permissionParams?: Record<string, unknown>;
+  /** permission request の直前に送る tool-call update fixture。 */
+  toolCallUpdatesBeforePermission?: Array<Record<string, unknown>>;
 }
 
 export async function createInProcessAcpBridge(
@@ -35,6 +37,7 @@ export async function createInProcessAcpBridge(
     writable: streams.serverWritable,
     requestPermissionOnPrompt: options?.requestPermissionOnPrompt,
     permissionParams: options?.permissionParams,
+    toolCallUpdatesBeforePermission: options?.toolCallUpdatesBeforePermission,
     onPrompt: onPrompt ?? (async ({ notify, sessionId }) => {
       notify('session/update', {
         sessionId,

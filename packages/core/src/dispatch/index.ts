@@ -12,6 +12,9 @@ export type {
 export { createWorkerStatusTools } from './worker-status-tool.js';
 export type { WorkerStatusToolOptions } from './worker-status-tool.js';
 
+export { createGetToolCallTool } from './get-tool-call-tool.js';
+export type { GetToolCallToolOptions } from './get-tool-call-tool.js';
+
 export { createSessionUsageTools } from './session-usage-tool.js';
 export type { SessionUsageToolOptions } from './session-usage-tool.js';
 

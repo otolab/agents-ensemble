@@ -76,6 +76,8 @@ export interface WorkerAcpUpdateTelemetry {
   sessionId?: string;
   /** `tool_call` / `tool_call_update` 時の tool 名（あれば）。 */
   toolName?: string;
+  /** Full ACP update payload, forwarded for tool-call snapshot accumulation. */
+  toolCallUpdate?: Record<string, unknown>;
 }
 
 export interface WorkerStateTelemetry {

@@ -444,6 +444,7 @@ export class WorkerRuntime {
     sessionUpdate: string,
     sessionId?: string,
     toolName?: string,
+    toolCallUpdate?: Record<string, unknown>,
   ): void {
     this.options.onAcpUpdate?.({
       workerId: resident.workerId,
@@ -452,6 +453,7 @@ export class WorkerRuntime {
       sessionUpdate,
       sessionId,
       ...(toolName ? { toolName } : {}),
+      ...(toolCallUpdate ? { toolCallUpdate } : {}),
     });
   }
 
@@ -622,6 +624,10 @@ export class WorkerRuntime {
                 sessionUpdate,
                 update.sessionId,
                 toolName,
+                sessionUpdate === 'tool_call' ||
+                  sessionUpdate === 'tool_call_update'
+                  ? update.update
+                  : undefined,
               );
             }
           },

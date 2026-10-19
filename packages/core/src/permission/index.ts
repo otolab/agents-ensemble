@@ -21,6 +21,15 @@ export type {
   PermissionOption,
   PermissionRequest,
 } from './permission-request.js';
+export {
+  buildPermissionBrief,
+  getPermissionToolCallId,
+} from './permission-brief.js';
+export type {
+  PermissionBrief,
+  PermissionBriefOperation,
+  PermissionOperationKind,
+} from './permission-brief.js';
 
 export { PermissionPipeline } from './permission-pipeline.js';
 export type {

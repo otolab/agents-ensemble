@@ -93,7 +93,40 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 `tool=Shell cmd="…"` のように表示する。raw JSON fallback は未知 payload の診断用に
 残す。
 
-conductor 向け `permission.pending` YAML には同じ要約を `operatorSummary` として含める。
+conductor 向け `permission.pending` YAML には判断用の `brief` と、ACP
+`session/request_permission` の params 全体を `request.raw` として含める。
+`request.raw` は permission RPC の内容であり、先行する `session/update` の tool call
+スナップショットとは別の情報である。`brief` はまず params から項目を埋め、足りない分を
+`toolCallId` で蓄積済みスナップショットから補う。必須項目が得られなければ
+`brief.missing` に列挙するため、ID だけの要求が操作内容まで判明した扱いにはならない。
+従来の `operatorSummary` も互換用・エスカレーション用として併記する。
+
+```yaml
+id: <pending id>
+workerId: <internal worker id>
+worker: <operator label>
+createdAt: <epoch ms>
+request:
+  toolName: Edit
+  sessionId: <optional>
+  options: <optional>
+  raw: <all request_permission params>
+brief:
+  toolCallId: <optional>
+  tool: Edit
+  operation:
+    kind: edit
+    path: <resolved path>
+    line: <optional>
+  missing: []
+operatorSummary: <short operator-facing summary>
+```
+
+`tool_call` と `tool_call_update` は `toolCallId` ごとに conductor session 内で累積する。
+件数上限は設けず、スナップショットは session の終了まで保持して終了時に破棄する。conductor は
+`get_tool_call(toolCallId)` で蓄積した tool call 全体を取得できる。permission params
+と snapshot は混ぜず、`get_tool_call` が返すのは後者だけである。
+
 `ask_human` が `relatedPermissionId` を指定した場合、harness はその pending permission の要約を
 Open Question の context にも付加し、TTY の Open questions ペインで質問と request id を対応して確認できる。
 
@@ -296,7 +329,7 @@ attach handshake 中に届いた追加指示は queue に積む。まだ cancel 
 | `operator.reconnect` | オペレータが `/reconnect` / `reconnect` を入力 | **なし** | Driver が `close` → `resume(sameId)` を実行。conductor へ送らず、worker / worktree / プロセスには触れない |
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
-| `permission.pending` | permission が保留 | `## permission 判断待ち` | `operatorSummary` に worker / tool / 操作概要 / 短縮 request id を含む。`ask_human.relatedPermissionId` で Open Question context にも連携し、TTY で対応する request を確認できる |
+| `permission.pending` | permission が保留 | `## permission 判断待ち` | conductor 向け YAML に `request.raw`（params 全文）と `brief`（構造化された判断用情報）を含む。補えない必須情報は `brief.missing` に載せる。`operatorSummary` も互換用に併記し、`ask_human.relatedPermissionId` で Open Question context と連携する |
 | `permission.stall` | worker 活動中の pending permission が既定 300s（`permissionDeadlockStallMs`）継続したとき | `## permission 停滞警告` | conductor 向けの低優先度 trigger。同一の連続停滞エピソードでは 1 回だけ。pending の再送ではなく、経過時間・対象 ID・閾値を含む。`harness.warning` は従来どおり operator 向けに出す |
 | `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が commit SHA 単位の CI 集約状態遷移を検知したときだけ載る（同じ SHA・同じ状態の毎 poll 再送はしない。§2.5）。conductor は payload の SHA / failed check 名を手掛かりに必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` / `permission.stall` は dispatch 可） |
 
