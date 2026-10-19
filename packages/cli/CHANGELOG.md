@@ -1,5 +1,25 @@
 # @agents-ensemble/cli
 
+## 0.12.0
+
+### Minor Changes
+
+- faa55f5: TTY に `/close` を追加し、Pi conductor の resumable close では stdio MCP 子プロセスを停止してから session を dispose する
+- 86a53d2: TTY に `/close` コマンドを追加し、sidecar と worktree を残してセッションを閉じ、同じ Issue を `--continue` で再開できるようにします。
+
+### Patch Changes
+
+- 87fc4d8: Pi `cached-auth` の Node.js entrypoint を追加し、既存キャッシュとの互換を保ったまま cache hit の起動・判定を軽量化する。
+- 822b7e2: 長時間の TTY Issue セッションで User Timing の measure / mark を定期的に整理し、Node の performance entry buffer が肥大化するのを防ぎます。
+- b9c0e1f: Operator input の slash コマンド候補を表示し、候補表示と既存コマンド判定で同じカタログを使う
+- Updated dependencies [faa55f5]
+- Updated dependencies [c175013]
+- Updated dependencies [e621fb0]
+- Updated dependencies [b9c0e1f]
+- Updated dependencies [721341b]
+- Updated dependencies [cad3ca8]
+  - @agents-ensemble/core@0.12.0
+
 ## 0.11.0
 
 ### Minor Changes
