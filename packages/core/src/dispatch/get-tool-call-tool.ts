@@ -14,7 +14,7 @@ export function createGetToolCallTool(
     get_tool_call: {
       name: 'get_tool_call',
       description:
-        'Return the complete accumulated tool call for a toolCallId.',
+        'Return accumulated tool call data and its worker / ACP session scope for a toolCallId.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -31,10 +31,28 @@ export function createGetToolCallTool(
           throw new Error('get_tool_call requires toolCallId');
         }
 
-        const snapshot = options.snapshots.get(toolCallId);
+        const matches = options.snapshots.findAll(toolCallId);
+        const result =
+          matches.length === 1
+            ? {
+                workerId: matches[0]!.workerId,
+                sessionId: matches[0]!.sessionId,
+                toolCall: matches[0]!.snapshot,
+              }
+            : matches.length === 0
+              ? { found: false, toolCallId }
+              : {
+                  ambiguous: true,
+                  toolCallId,
+                  matches: matches.map(({ workerId, sessionId, snapshot }) => ({
+                    workerId,
+                    sessionId,
+                    toolCall: snapshot,
+                  })),
+                };
         return yamlToolResult(
           'get_tool_call',
-          snapshot ?? { found: false, toolCallId },
+          result,
         );
       },
     },

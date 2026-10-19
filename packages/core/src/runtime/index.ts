@@ -10,7 +10,11 @@ export type {
 export { WorkerRuntime } from './worker-runtime.js';
 export type { WorkerRuntimeOptions } from './worker-runtime.js';
 export { ToolCallSnapshotRegistry } from './tool-call-snapshot-registry.js';
-export type { ToolCallSnapshot } from './tool-call-snapshot-registry.js';
+export type {
+  ScopedToolCallSnapshot,
+  ToolCallSnapshot,
+  ToolCallSnapshotScope,
+} from './tool-call-snapshot-registry.js';
 export { mapHarnessToDisplayStatus } from './map-worker-lifecycle.js';
 export type { WorkerLifecycleState } from './worker-lifecycle-state.js';
 export type { WorkerDisplayStatus } from './worker-display-state.js';

@@ -103,7 +103,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
       items: [
         '- workerのツール実行にはconductorの明示的な許可が必要になる場合があります',
         '- workerへのpermission許可: `resolve_permission`',
-        '- `permission.pending` では `brief` を判断用の要約、`request.raw` を permission RPC params 全文として読む。`brief.missing` が空でないときは `request.raw` を確認し、`brief.toolCallId` があれば `get_tool_call` で先行 update を取得する。ID だけでは対象や操作内容が分かったことにしない',
+        '- `permission.pending` では `brief` を判断用の要約、`request.raw` を permission RPC params 全文として読む。`brief.missing` が空でないときは `request.raw` を確認し、`brief.toolCallId` があれば `get_tool_call` で先行 update を取得する。返る `workerId` / `sessionId` が pending request と一致することを確かめ、一致しない・request に session ID がない場合は snapshot を判断材料にしない。結果が `ambiguous: true` の場合は `workerId` と `request.sessionId` に一致する候補だけを使う。ID だけでは対象や操作内容が分かったことにしない',
         '- `permission.pending` をオペレータへエスカレーションするときは、YAML の `operatorSummary` を `ask_human` の `context` にそのまま含め、`relatedPermissionId` に同じ pending の `id` を渡してください。harness もその ID に対応する要約を Open Question に付加します',
         '- 指示した作業に付随する処理の許可であれば、approveすることができます',
         '- 不明点があれば、workerに問い合わせを行ってください',

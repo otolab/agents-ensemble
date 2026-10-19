@@ -3,23 +3,52 @@ export interface ToolCallSnapshot extends Record<string, unknown> {
   toolCallId: string;
 }
 
+/** ACP tool-call IDs are unique only within a worker's ACP session. */
+export interface ToolCallSnapshotScope {
+  workerId: string;
+  sessionId: string;
+}
+
+export interface ScopedToolCallSnapshot extends ToolCallSnapshotScope {
+  snapshot: ToolCallSnapshot;
+}
+
 /**
  * Keeps tool-call snapshots for one conductor session.
  *
  * Entries live for the lifetime of the owning conductor session and are
- * discarded with it. ACP updates are partial, so omitted and null fields do
- * not erase previously observed data.
+ * discarded with it. Snapshots are scoped by worker and ACP session because
+ * ACP toolCallIds are not unique across sessions. ACP updates are partial, so
+ * omitted and null fields do not erase previously observed data.
  */
 export class ToolCallSnapshotRegistry {
-  private readonly snapshots = new Map<string, ToolCallSnapshot>();
+  private readonly snapshots = new Map<
+    string,
+    Map<string, Map<string, ToolCallSnapshot>>
+  >();
 
-  apply(update: Record<string, unknown>): void {
+  apply(scope: ToolCallSnapshotScope, update: Record<string, unknown>): void {
+    if (!scope.workerId || !scope.sessionId) {
+      return;
+    }
+
     const nested = asRecord(update.toolCall ?? update.tool_call);
     const toolCallId =
       readString(update, 'toolCallId', 'tool_call_id') ??
       (nested ? readString(nested, 'toolCallId', 'tool_call_id') : undefined);
     if (!toolCallId) {
       return;
+    }
+
+    let workerSnapshots = this.snapshots.get(scope.workerId);
+    if (!workerSnapshots) {
+      workerSnapshots = new Map();
+      this.snapshots.set(scope.workerId, workerSnapshots);
+    }
+    let sessionSnapshots = workerSnapshots.get(scope.sessionId);
+    if (!sessionSnapshots) {
+      sessionSnapshots = new Map();
+      workerSnapshots.set(scope.sessionId, sessionSnapshots);
     }
 
     const incoming: Record<string, unknown> = {
@@ -35,18 +64,39 @@ export class ToolCallSnapshotRegistry {
       ),
       toolCallId,
     };
-    const previous = this.snapshots.get(toolCallId);
+    const previous = sessionSnapshots.get(toolCallId);
     const accumulated = { ...(previous ?? {}) };
     for (const [key, value] of Object.entries(incoming)) {
       if (value !== undefined && value !== null) {
         accumulated[key] = value;
       }
     }
-    this.snapshots.set(toolCallId, accumulated as ToolCallSnapshot);
+    sessionSnapshots.set(toolCallId, accumulated as ToolCallSnapshot);
   }
 
-  get(toolCallId: string): ToolCallSnapshot | undefined {
-    return this.snapshots.get(toolCallId);
+  /** Returns a snapshot only for the exact worker and ACP session scope. */
+  get(
+    toolCallId: string,
+    scope: ToolCallSnapshotScope,
+  ): ToolCallSnapshot | undefined {
+    return this.snapshots
+      .get(scope.workerId)
+      ?.get(scope.sessionId)
+      ?.get(toolCallId);
+  }
+
+  /** Returns all matches separately, with their worker/session scopes intact. */
+  findAll(toolCallId: string): ScopedToolCallSnapshot[] {
+    const matches: ScopedToolCallSnapshot[] = [];
+    for (const [workerId, workerSnapshots] of this.snapshots) {
+      for (const [sessionId, sessionSnapshots] of workerSnapshots) {
+        const snapshot = sessionSnapshots.get(toolCallId);
+        if (snapshot) {
+          matches.push({ workerId, sessionId, snapshot });
+        }
+      }
+    }
+    return matches;
   }
 }
 

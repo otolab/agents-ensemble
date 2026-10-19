@@ -493,6 +493,13 @@ export async function runConductorSession(
           workerLabel,
         });
         const toolCallId = getPermissionToolCallId(pending.request);
+        const toolCallSnapshot =
+          toolCallId && pending.request.sessionId
+            ? toolCallSnapshots.get(toolCallId, {
+                workerId,
+                sessionId: pending.request.sessionId,
+              })
+            : undefined;
         sessionLogger.emit({
           type: 'permission.pending',
           permission: pending,
@@ -504,7 +511,7 @@ export async function runConductorSession(
           worker: workerLabel,
           brief: buildPermissionBrief(
             pending.request,
-            toolCallId ? toolCallSnapshots.get(toolCallId) : undefined,
+            toolCallSnapshot,
           ),
           operatorSummary,
         });
@@ -581,7 +588,10 @@ export async function runConductorSession(
     },
     onAcpUpdate: (event) => {
       if (event.toolCallUpdate) {
-        toolCallSnapshots.apply(event.toolCallUpdate);
+        toolCallSnapshots.apply(
+          { workerId: event.workerId, sessionId: event.sessionId ?? '' },
+          event.toolCallUpdate,
+        );
       }
       sessionLogger.emit({
         type: 'harness.worker.acp.update',

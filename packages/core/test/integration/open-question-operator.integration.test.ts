@@ -358,20 +358,24 @@ describe('open question / operator flow integration', () => {
           toolCallId: permissionEvent.brief.toolCallId,
         });
         expect(snapshot.structuredContent).toMatchObject({
-          toolCallId: 'call-edit-from-update',
-          kind: 'edit',
-          title: 'Edit File',
-          status: 'in_progress',
-          rawInput: {
-            oldString: '<redacted>',
-            newString: '<redacted>',
-          },
-          locations: [
-            {
-              path: '/workspace/agents-ensemble/packages/core/src/example.ts',
-              line: 27,
+          workerId: permissionEvent.workerId,
+          sessionId: 'fake-session-1',
+          toolCall: {
+            toolCallId: 'call-edit-from-update',
+            kind: 'edit',
+            title: 'Edit File',
+            status: 'in_progress',
+            rawInput: {
+              oldString: '<redacted>',
+              newString: '<redacted>',
             },
-          ],
+            locations: [
+              {
+                path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+                line: 27,
+              },
+            ],
+          },
         });
         await conductorTools.resolve_permission!.execute({
           requestId: permissionEvent.id,

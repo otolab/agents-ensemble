@@ -122,10 +122,20 @@ brief:
 operatorSummary: <short operator-facing summary>
 ```
 
-`tool_call` と `tool_call_update` は `toolCallId` ごとに conductor session 内で累積する。
-件数上限は設けず、スナップショットは session の終了まで保持して終了時に破棄する。conductor は
-`get_tool_call(toolCallId)` で蓄積した tool call 全体を取得できる。permission params
-と snapshot は混ぜず、`get_tool_call` が返すのは後者だけである。
+`tool_call` と `tool_call_update` は conductor session 内で worker と ACP `sessionId` ごとに分け、
+各スコープ内で `toolCallId` ごとに累積する。ID は ACP session をまたいで一意とは限らない。
+件数上限は設けず、スナップショットは conductor session の終了まで保持して終了時に破棄する。
+permission `brief` は同じ worker / ACP session の snapshot だけを不足項目の補完に使う。
+permission request に session ID がなくスコープを特定できない場合、snapshot からは補完しない。
+
+conductor は引き続き `get_tool_call(toolCallId)` を使う。ID が 1 件に解決できる場合は
+`workerId` / `sessionId` と蓄積した tool call (`toolCall`) を返すため、permission.pending と同じ
+スコープか確認する。
+request に session ID がない場合やスコープが一致しない場合、その snapshot を判断材料にしない。
+複数スコープで同じ ID が見つかった場合は `ambiguous: true` とし、各候補を
+`workerId` / `sessionId` / `toolCall` の組で別々に返すため、permission.pending の worker と session に
+一致する候補を選ぶ。候補を混ぜて返すことはない。permission params と snapshot も混ぜず、
+`get_tool_call` が返すのは後者だけである。
 
 `ask_human` が `relatedPermissionId` を指定した場合、harness はその pending permission の要約を
 Open Question の context にも付加し、TTY の Open questions ペインで質問と request id を対応して確認できる。
