@@ -139,12 +139,14 @@ describe('PiConductorAgent', () => {
         args: ['--shared'],
       },
     };
+    const onContextCompaction = vi.fn();
     const conductor = await PiConductorAgent.create({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
       systemPrompt: 'compiled system prompt',
       mcpServers,
+      onContextCompaction,
       customTools: {
         prompt_worker: {
           name: 'prompt_worker',
@@ -213,6 +215,14 @@ describe('PiConductorAgent', () => {
         type: 'message_update',
         assistantMessageEvent: { type: 'text_delta', delta: 'started' },
       });
+      sessionListener?.({
+        type: 'entry_appended',
+        entry: { type: 'compaction' },
+      });
+      sessionListener?.({
+        type: 'entry_appended',
+        entry: { type: 'branch_summary' },
+      });
       fakeSession.state.messages = [finalMessage];
       sessionListener?.({
         type: 'agent_end',
@@ -235,6 +245,7 @@ describe('PiConductorAgent', () => {
       tool: 'prompt_worker',
       callId: 'call-1',
     });
+    expect(onContextCompaction).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       status: 'finished',
       result: 'started',

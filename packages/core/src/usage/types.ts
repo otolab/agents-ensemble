@@ -38,6 +38,21 @@ export interface SessionUsageAgentTotals {
   tokens: LlmTokenCounts | null;
 }
 
+export interface SessionUsageCacheStats {
+  /** Input-token cache hits divided by input tokens plus cache hits (0–1). */
+  cacheHitRate?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
+export interface SessionUsageCacheSummary {
+  totals: SessionUsageCacheStats;
+  byAgent: {
+    conductor: SessionUsageCacheStats | null;
+    workers: Record<string, SessionUsageCacheStats | null>;
+  };
+}
+
 export interface SessionContextUtilization {
   limit: number | null;
   /** limit 算出に使った累計 input tokens。limit 不明時も参考値として返す。 */
@@ -58,6 +73,10 @@ export interface SessionUsageSummary {
   };
   context: SessionContextUtilization;
   latestRound: SessionUsageRound | null;
+  /** Cache-derived metrics. Omitted when no round reported cache counters. */
+  cacheStats?: SessionUsageCacheSummary;
+  /** Successful context compactions, when the selected backend has a reliable counter. */
+  compactionCount?: number;
   /** conductor `getUsage().cost`（セッション累計。未取得時は省略）。 */
   cost?: ConductorUsageCost;
 }

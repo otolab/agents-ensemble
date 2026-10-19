@@ -38,6 +38,10 @@ describe('createSessionUsageTools', () => {
     expect(toolText(result)).toContain('inputTokens: 40');
     expect(result.structuredContent).toMatchObject({
       totals: { rounds: 1, roundsWithUsage: 1 },
+      cacheStats: {
+        totals: { cacheReadTokens: 0, cacheWriteTokens: 0, cacheHitRate: 0 },
+        byAgent: { conductor: { cacheHitRate: 0 } },
+      },
     });
   });
 
@@ -68,6 +72,20 @@ describe('createSessionUsageTools', () => {
     expect(result.structuredContent).toMatchObject({
       cost: { rawCostCents: 12, chargedCents: 10 },
     });
+  });
+
+  it('get_session_usage returns compaction count when the tracker supports it', async () => {
+    const tracker = new SessionUsageTracker({ trackCompactions: true });
+    tracker.recordContextCompaction();
+
+    const tools = createSessionUsageTools({
+      tracker,
+      workerNames: [],
+    });
+
+    const result = await tools.get_session_usage!.execute({});
+    expect(result.structuredContent).toMatchObject({ compactionCount: 1 });
+    expect(toolText(result)).toContain('compactionCount: 1');
   });
 
   it('get_usage returns latest round for a worker', async () => {

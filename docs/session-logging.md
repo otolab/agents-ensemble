@@ -101,7 +101,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 | 蓄積（全履歴） | `workerDispatches` / CLI 出力では `workerResponses` に要約 |
 | harness 参照用 | `agentId`, `issueUrl`, `repoRoot` |
 | 終了時スナップショット | `escalations`, `openQuestions` |
-| LLM usage | `sessionUsage`（`get_session_usage` と同型。cost は conductor `getUsage()` からマージ） |
+| LLM usage | `sessionUsage`（`get_session_usage` と同型。cache stats / compaction count は計測可能な場合のみ、cost は conductor `getUsage()` からマージ） |
 | worker 応答要約 | `workerResponses[].responsePreview`（全文は `--include-full-response-text`） |
 
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。

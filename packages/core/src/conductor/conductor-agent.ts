@@ -17,6 +17,8 @@ export interface ConductorAgentCreateOptions {
   builtinTools?: boolean;
   /** Pi backend only: use Pi standard skill discovery; omitted means enabled. */
   piSkills?: boolean;
+  /** Pi backend only: called after a context compaction entry is persisted. */
+  onContextCompaction?: () => void;
   apiKey?: string;
   modelId?: string;
   mcpServers?: McpServerConfigMap;

@@ -39,7 +39,7 @@
 | **活動ログ** | TTY Ink Orchestration ペイン（`[harness]` / `[observation]` 等） |
 | **sidecar** | `{repoRoot}/.ensemble/sessions/{agentId}.json`（resume 正本。exit report ではない） |
 
-**未取得時** 列: フィールド省略・`null`・エラー・推定のいずれか。終了 JSON と `get_session_usage` の cost / tokens は **同一マージ経路**（`enrichSessionUsageWithCost`）で一致させる。
+**未取得時** 列: フィールド省略・`null`・エラー・推定のいずれか。終了 JSON と `get_session_usage` の tokens / cache stats / compaction count は同じ `SessionUsageTracker` のスナップショットを使い、conductor cost は同一の `enrichSessionUsageWithCost` 経路で揃える。
 
 ---
 
@@ -97,13 +97,40 @@
 
 ---
 
+### 2.4 TTY 終了サマリ例
+
+`sessionUsage` があるときは、全体・conductor・worker 名別の input / output tokens を表示する。cache rate と cost / compaction は取得できる項目だけ表示する。
+
+```text
+セッション終了 (completed)
+  conductor ターン: 3
+  worker ラウンド: 3 完了 / 0 失敗
+  トークン:
+    全体: input 3k / output 920
+    conductor: input 2k / output 600
+    worker implementer: input 500 / output 120
+    worker reviewer: input 300 / output 200
+    worker は ACP が usage を返さないラウンドで応答文からの推定値を含む場合があります。
+  キャッシュヒット率: 全体 21.7% (read 500, write 20) / conductor 20% (read 400, write 20) / worker implementer 33.3% (read 100, write 0)
+  コンテキスト: 1% (100,000 上限)
+  課金:
+    conductor（実課金）: $0.42 (raw $0.51)
+    workers 小計: 算出なし（ACP が cost を返さないため）
+    全体: $0.42 (raw $0.51)（conductor 実課金のみ。worker 分は未算出）
+  コンテキスト圧縮: 2 回
+  未回答 open question: 0
+  agentId: agent-1
+```
+
+worker がいない場合は課金を `課金（全体 = conductor 実課金）` の 1 行にまとめる。conductor cost 未取得時は課金行を出さず、worker 分の金額を推定して補わない。
+
 ## 3. LLM usage（`SessionUsageTracker`）
 
 正本: `packages/core/src/usage/session-usage-tracker.ts`。conductor 各 `agent.send` は SDK `RunResult.usage`、worker 各 prompt は ACP `usage` または **推定**（`estimateTokenUsageFromText`）。
 
 ### 3.1 セッションサマリ（`SessionUsageSummary`）
 
-`get_session_usage` と `ConductorSessionResult.sessionUsage` は **同一形状**（`enrichSessionUsageWithCost` 適用後）。`buildResult` では **`totals.rounds > 0` または `cost != null` のときのみ** `sessionUsage` を載せる（それ以外はフィールド自体を省略）。
+`get_session_usage` と `ConductorSessionResult.sessionUsage` は **同一形状**（`enrichSessionUsageWithCost` 適用後）。`buildResult` では usage round、cost、または信頼できる compaction counter があるときだけ `sessionUsage` を載せる（それ以外はフィールド自体を省略）。
 
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
@@ -113,6 +140,8 @@
 | `byAgent.conductor` | `SessionUsageAgentTotals` | conductor ラウンドのみ | 同上 | rounds `0`, tokens `null` |
 | `byAgent.workers` | `Record<string, SessionUsageAgentTotals>` | worker 名別 | 同上 | `{}` |
 | `context` | `SessionContextUtilization` | 下表 | 同上・TTY（limit 既知時） | 下表 |
+| `cacheStats` | `SessionUsageCacheSummary?` | cache counters を報告した round から算出 | 同上・TTY（rate が算出可能な scope のみ） | 全 round で cache fields が無ければ省略 |
+| `compactionCount` | `number?` | 下記の backend 固有イベント | 同上・TTY | 信頼できる counter が無い backend では省略。Pi では `0` も counter 利用可能を表す値として返す |
 | `latestRound` | `SessionUsageRound \| null` | 最終ラウンド | `get_session_usage` のみ（終了 JSON には含めない案） | `null` |
 
 `LlmTokenCounts`（合算・1 ラウンド共通）:
@@ -125,6 +154,16 @@
 | `reasoningTokens` | `number?` | いずれかのラウンドにあれば合算に含める | 全ラウンド欠如時は省略 |
 | `cacheReadTokens` | `number?` | 同上 | 同上 |
 | `cacheWriteTokens` | `number?` | 同上 | 同上 |
+
+`cacheStats` は全体・conductor・worker 名別に、cache counters を得られた round の値を集約する。cache hit rate の定義は次のとおり。
+
+```text
+sum(cacheReadTokens) / sum(inputTokens + cacheReadTokens)
+```
+
+この合計は `cacheReadTokens` が報告された round に限る。`inputTokens` は同じ round の値を使い、cache counter が無い round の input は分母に含めない。分母が 0 の scope では `cacheHitRate` を省略する。全 round で cache fields が無い場合は `cacheStats` 自体を省略し、0% と扱わない。`cacheWriteTokens` は報告された round のみを加算し、hit rate の式には含めない。比率は `0..1` の値で JSON / YAML に載り、TTY は百分率で表示する。
+
+集計 token 数は SDK / ACP の usage と応答文から推定した worker usage が混在することがある。worker の ACP usage が無いラウンドでは `estimateTokenUsageFromText` の値を使う。
 
 `SessionContextUtilization`:
 
@@ -158,21 +197,27 @@
 | `acp` | ACP `session/prompt` の `usage` | worker で ACP が usage を返した |
 | `estimated` | `estimateTokenUsageFromText` | worker で ACP usage 無し |
 
-### 3.3 課金コスト（SDK）
+### 3.3 Conductor 課金コスト
 
 `ConductorAgent.getUsage()` → `cost`。終了時と `get_session_usage` は `enrichSessionUsageWithCost` でマージ。
 
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
-| `cost.rawCostCents` | `number` | `AgentUsage.cost`（セッション累計） | `sessionUsage.cost`・TTY テキスト | **フィールド省略**（エラーにしない） |
-| `cost.chargedCents` | `number` | 同上（割引・Cursor Token Fee 込み実課金） | 同上 | 同上 |
+| `cost.rawCostCents` | `number` | Cursor `AgentUsage.cost` / Pi `AssistantMessage.usage.cost` のセッション累計 | `sessionUsage.cost`・TTY テキスト | **フィールド省略**（エラーにしない） |
+| `cost.chargedCents` | `number` | Cursor は同上（割引・Cursor Token Fee 込み実課金）。Pi は報告 usage cost と同額 | 同上 | 同上 |
 | `runs[].cost` | `UsageCost?` | run 単位（`getUsage({ runId })`） | `get_usage` | 省略 |
+
+worker cost は **表示しない（Issue #469 の方針 A）**。ACP の `PromptResult.usage` は token counts のみで、現行の worker usage record に model ID が無い。Pi の `models.json` にモデル単価を設定できる場合も、それを任意の ACP worker の provider / model に安全に対応付けられないため、単価を当てはめた推定は行わない。したがって `sessionUsage.cost` は conductor の実課金のみを表す。TTY では全体 cost も同額で表示し、worker 分を含まないことを明記する。worker cost API が無い場合は worker 小計を「算出なし」と表示する。
 
 **注意**
 
 - `RunResult.usage` / per-round tracker は **トークンのみ**。cost は `getUsage()` のみ。
 - billing 反映 lag のため **run 終了直後は cost が無い**ことがある（SDK 型コメント）。
 - worker ACP は現状 cost 無し。
+
+### 3.4 Context compaction 回数
+
+Pi conductor は Pi coding-agent の `AgentSessionEvent` で `entry_appended` を受け、追加された entry の `type` が `compaction` の場合に限りカウントする。これは完了して transcript に記録された compaction の数であり、失敗した試行や branch summary は含めない。組み込み Pi backend では `compactionCount` を含める（0 回も表示）。Cursor SDK および backend factory を差し替えた場合は、このカウンタを提供しないためフィールドと TTY 行を出さない。
 
 ---
 

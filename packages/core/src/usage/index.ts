@@ -11,6 +11,8 @@ export type {
   SessionContextUtilization,
   SessionUsageAgentKind,
   SessionUsageAgentTotals,
+  SessionUsageCacheStats,
+  SessionUsageCacheSummary,
   SessionUsageRound,
   SessionUsageSummary,
 } from './types.js';

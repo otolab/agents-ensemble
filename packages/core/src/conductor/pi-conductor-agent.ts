@@ -176,6 +176,7 @@ export class PiConductorAgent implements ConductorAgent {
     private readonly mcpLifecycleState: PiMcpLifecycleState,
     private readonly piSkills: boolean,
     private readonly onStreamText?: (text: string) => void,
+    private readonly onContextCompaction?: () => void,
   ) {
     this.unsubscribe = this.session.subscribe((event) => this.handleEvent(event));
   }
@@ -403,6 +404,14 @@ export class PiConductorAgent implements ConductorAgent {
 
   private handleEvent(event: AgentSessionEvent): void {
     const activeSend = this.activeSend;
+    if (
+      event.type === 'entry_appended' &&
+      event.entry.type === 'compaction'
+    ) {
+      this.onContextCompaction?.();
+      return;
+    }
+
     if (event.type === 'tool_execution_start') {
       activeSend?.callbacks?.onToolCallStarted?.({
         runId: activeSend.runId,
@@ -578,6 +587,7 @@ async function createPiConductorSession(
       mcpLifecycleState,
       piSkills,
       options.onStreamText,
+      options.onContextCompaction,
     );
   } catch (error) {
     if (!session) throw error;

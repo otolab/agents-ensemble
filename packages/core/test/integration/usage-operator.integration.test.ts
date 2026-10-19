@@ -179,5 +179,13 @@ describe('usage operator integration', () => {
     expect(result.lastResult).toContain('percent=');
     expect(result.sessionUsage?.totals.rounds).toBeGreaterThanOrEqual(2);
     expect(result.sessionUsage?.context.limit).toBe(100_000);
+    expect(result.sessionUsage?.byAgent.workers['ping-1']?.tokens).toMatchObject({
+      inputTokens: 200,
+      outputTokens: 80,
+    });
+    expect(result.sessionUsage?.cacheStats?.totals).toMatchObject({
+      cacheReadTokens: 0,
+      cacheHitRate: 0,
+    });
   });
 });

@@ -6,13 +6,17 @@ import type {
   LlmUsageRecord,
   SessionContextUtilization,
   SessionUsageAgentTotals,
+  SessionUsageCacheStats,
+  SessionUsageCacheSummary,
   SessionUsageRound,
   SessionUsageSummary,
 } from './types.js';
 
 export interface SessionUsageTrackerOptions {
-  /** テスト用。SDK が limit を返さないため、指定時のみ利用率を算出する。 */
+  /** SDK が limit を返さないため、指定時のみ利用率を算出する。 */
   contextLimitTokens?: number;
+  /** Enable only when the selected backend exposes a reliable compaction counter. */
+  trackCompactions?: boolean;
 }
 
 let roundCounter = 0;
@@ -20,9 +24,18 @@ let roundCounter = 0;
 export class SessionUsageTracker {
   private readonly rounds: SessionUsageRound[] = [];
   private readonly contextLimitTokens?: number;
+  private readonly trackCompactions: boolean;
+  private compactionCount = 0;
 
   constructor(options: SessionUsageTrackerOptions = {}) {
     this.contextLimitTokens = options.contextLimitTokens;
+    this.trackCompactions = options.trackCompactions ?? false;
+  }
+
+  recordContextCompaction(): void {
+    if (this.trackCompactions) {
+      this.compactionCount += 1;
+    }
   }
 
   recordConductorRound(input: {
@@ -109,6 +122,7 @@ export class SessionUsageTracker {
     }
 
     const allWithUsage = this.rounds.filter((round) => round.usage != null);
+    const cacheStats = this.buildCacheSummary(workerNames);
 
     return {
       totals: {
@@ -122,6 +136,37 @@ export class SessionUsageTracker {
       },
       context: this.buildContextUtilization(),
       latestRound: this.getLatestRound(),
+      ...(cacheStats ? { cacheStats } : {}),
+      ...(this.trackCompactions ? { compactionCount: this.compactionCount } : {}),
+    };
+  }
+
+  private buildCacheSummary(
+    workerNames: string[],
+  ): SessionUsageCacheSummary | undefined {
+    const totals = summarizeCacheStats(this.rounds);
+    if (!totals) {
+      return undefined;
+    }
+
+    return {
+      totals,
+      byAgent: {
+        conductor: summarizeCacheStats(
+          this.rounds.filter((round) => round.agentKind === 'conductor'),
+        ),
+        workers: Object.fromEntries(
+          workerNames.map((name) => [
+            name,
+            summarizeCacheStats(
+              this.rounds.filter(
+                (round) =>
+                  round.agentKind === 'worker' && round.agentName === name,
+              ),
+            ),
+          ]),
+        ),
+      },
     };
   }
 
@@ -147,6 +192,46 @@ export class SessionUsageTracker {
       percent,
     };
   }
+}
+
+function summarizeCacheStats(
+  rounds: SessionUsageRound[],
+): SessionUsageCacheStats | null {
+  const withUsage = rounds.flatMap((round) =>
+    round.usage ? [round.usage] : [],
+  );
+  const withCacheRead = withUsage.filter(
+    (usage) => usage.cacheReadTokens != null,
+  );
+  const withCacheWrite = withUsage.filter(
+    (usage) => usage.cacheWriteTokens != null,
+  );
+  if (withCacheRead.length === 0 && withCacheWrite.length === 0) {
+    return null;
+  }
+
+  const cacheReadTokens =
+    withCacheRead.length > 0
+      ? withCacheRead.reduce((sum, usage) => sum + usage.cacheReadTokens!, 0)
+      : undefined;
+  const cacheWriteTokens =
+    withCacheWrite.length > 0
+      ? withCacheWrite.reduce((sum, usage) => sum + usage.cacheWriteTokens!, 0)
+      : undefined;
+  const cacheReadInputTokens = withCacheRead.reduce(
+    (sum, usage) => sum + usage.inputTokens,
+    0,
+  );
+  const cacheHitDenominator =
+    cacheReadInputTokens + (cacheReadTokens ?? 0);
+
+  return {
+    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(cacheReadTokens !== undefined && cacheHitDenominator > 0
+      ? { cacheHitRate: cacheReadTokens / cacheHitDenominator }
+      : {}),
+  };
 }
 
 function nextRoundId(): string {

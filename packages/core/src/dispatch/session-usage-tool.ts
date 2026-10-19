@@ -22,7 +22,7 @@ export function createSessionUsageTools(
     get_session_usage: {
       name: 'get_session_usage',
       description:
-        'Read session-wide LLM token usage (cumulative input/output, per-agent breakdown, context utilization when limit is known). Use for operator token / context % questions — not prompt_worker.',
+        'Read session-wide LLM usage (cumulative input/output and per-agent breakdown, cache-hit rates when reported, context utilization when known, and cost / compaction data when available). Use for operator token, cache, context, cost, or compaction questions — not prompt_worker.',
       inputSchema: {
         type: 'object',
         properties: {},

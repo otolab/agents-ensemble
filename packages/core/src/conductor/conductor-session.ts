@@ -448,6 +448,8 @@ export async function runConductorSession(
 
   const sessionUsageTracker = new SessionUsageTracker({
     contextLimitTokens: options.contextLimitTokens,
+    trackCompactions:
+      conductorBackend === 'pi' && options.conductorAgentFactory == null,
   });
 
   const workerSession = new WorkerSession({
@@ -756,6 +758,12 @@ export async function runConductorSession(
       : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
     customTools: conductorToolRegistry.toRecord(),
+    ...(conductorBackend === 'pi' && options.conductorAgentFactory == null
+      ? {
+          onContextCompaction: () =>
+            sessionUsageTracker.recordContextCompaction(),
+        }
+      : {}),
   };
 
   const conductorProvider =
@@ -1178,7 +1186,9 @@ export async function runConductorSession(
         escalations,
         openQuestions: openQuestions.list(),
         sessionUsage:
-          sessionUsage.totals.rounds > 0 || sessionUsage.cost != null
+          sessionUsage.totals.rounds > 0 ||
+          sessionUsage.cost != null ||
+          sessionUsage.compactionCount != null
             ? sessionUsage
             : undefined,
       });
