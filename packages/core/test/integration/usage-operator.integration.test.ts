@@ -13,6 +13,7 @@ import { PermissionPipeline } from '../../src/permission/permission-pipeline.js'
 import type { Profile } from '../../src/profile/types.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
+  IN_PROCESS_DEFAULT_ACP,
   createInProcessAcpBridge,
   PING_SYSTEM_PROMPT,
   TEST_ISSUE,
@@ -199,6 +200,7 @@ describe('usage operator integration', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot: REPO_ROOT,
       profile: ONE_WORKER_PROFILE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
       maxTurns: 10,
       contextLimitTokens: 100_000,
       permissionPipeline: new PermissionPipeline({}),
@@ -286,6 +288,7 @@ describe('usage operator integration', () => {
         issueUrl: TEST_ISSUE.url,
         repoRoot: REPO_ROOT,
         profile: ONE_WORKER_PROFILE,
+        defaultAcp: IN_PROCESS_DEFAULT_ACP,
         maxTurns: 10,
         permissionPipeline: new PermissionPipeline({
           policy: { allowTools: [], allowReadOnlyTools: false },
