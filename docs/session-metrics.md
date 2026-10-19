@@ -99,14 +99,14 @@
 
 ### 2.4 TTY 終了サマリ例
 
-`sessionUsage` があるときは、全体・conductor・worker 名別の input / output tokens を表示する。cache rate と cost / compaction は取得できる項目だけ表示する。
+`sessionUsage` があるときは、取得・記録できた usage の input / output tokens を表示する。合計には worker の成功応答から推定した値が含まれる場合があり、失敗などで usage round が残らなかった消費分は含まれない。cache rate と cost / compaction は取得できる項目だけ表示する。
 
 ```text
 セッション終了 (completed)
   conductor ターン: 3
   worker ラウンド: 3 完了 / 0 失敗
-  トークン:
-    全体: input 3k / output 920
+  トークン（取得・記録済み usage）:
+    取得・記録済み合計: input 3k / output 920
     conductor: input 2k / output 600
     worker implementer: input 500 / output 120
     worker reviewer: input 300 / output 200
@@ -127,9 +127,10 @@ worker がモデル要求後に切断され、token usage が記録されない�
 セッション終了 (completed)
   conductor ターン: 1
   worker ラウンド: 0 完了 / 1 失敗
-  トークン:
-    全体: input 1k / output 100
+  トークン（取得・記録済み usage）:
+    取得・記録済み合計: input 1k / output 100
     conductor: input 1k / output 100
+    失敗などで usage が未記録の消費分は含まれません。
   課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)
   未回答 open question: 0
   agentId: agent-1
@@ -145,16 +146,21 @@ worker がモデル要求後に切断され、token usage が記録されない�
 
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
+| `tokenScope` | `SessionUsageTokenScope?` | tracker 固定値 `recorded-usage-only` | 終了 JSON・`get_session_usage` YAML / structured content・TTY 表示 | tracker の実出力では常に存在。利用側が構築する既存 summary では省略可 |
 | `totals.rounds` | `number` | 記録ラウンド総数 | `get_session_usage`・終了 JSON | `0` |
 | `totals.roundsWithUsage` | `number` | `usage != null` のラウンド数 | 同上 | `0` |
-| `totals.tokens` | `LlmTokenCounts \| null` | 全ラウンド合算 | 同上・TTY テキスト | `null` |
+| `totals.tokens` | `LlmTokenCounts \| null` | usage が記録されたラウンドの合算 | 同上・TTY テキスト | `null` |
 | `byAgent.conductor` | `SessionUsageAgentTotals` | conductor ラウンドのみ | 同上 | rounds `0`, tokens `null` |
 | `byAgent.workers` | `Record<string, SessionUsageAgentTotals>` | worker 名別 | 同上 | `{}` |
 | `context` | `SessionContextUtilization` | 下表 | 同上・TTY（limit 既知時） | 下表 |
 | `cacheStats` | `SessionUsageCacheSummary?` | cache counters を報告した round から算出 | 同上・TTY（rate が算出可能な scope のみ） | 全 round で cache fields が無ければ省略 |
 | `compactionCount` | `number?` | 下記の backend 固有イベント | 同上・TTY | 信頼できる counter が無い backend では省略。Pi では `0` も counter 利用可能を表す値として返す |
 | `cost` | `SessionUsageCost?` | conductor が報告した実課金。`scope: 'conductor-only'` | 同上・TTY・`get_session_usage` | 未取得時は省略 |
-| `latestRound` | `SessionUsageRound \| null` | 最終ラウンド | `get_session_usage` のみ（終了 JSON には含めない案） | `null` |
+| `latestRound` | `SessionUsageRound \| null` | 最終ラウンド | `get_session_usage`・終了 JSON | `null` |
+
+`tokenScope: 'recorded-usage-only'` は合計が実際の全消費量を保証せず、usage を取得・記録できたラウンドだけを集計することを示す。worker が正常に完了して ACP usage を返さない場合は応答文からの推定 usage が含まれる一方、usage round が残らない失敗 worker の消費分は含まれない。`totals` と `byAgent` は同じ scope に従う。
+
+`SessionUsageSummary` の `tokenScope` と cost の `scope` は、以前の object literal を構築する TypeScript 利用者との互換性のため公開型では optional とする。`SessionUsageTracker` は `tokenScope` を、`enrichSessionUsageWithCost` は cost がある場合の `scope: 'conductor-only'` を、いずれも runtime 出力に常に含める。
 
 `LlmTokenCounts`（合算・1 ラウンド共通）:
 
@@ -215,7 +221,7 @@ sum(cacheReadTokens) / sum(inputTokens + cacheReadTokens)
 
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
-| `cost.scope` | `'conductor-only'` | `enrichSessionUsageWithCost` が明示。worker cost を含まない | 終了 JSON・`get_session_usage`・TTY テキスト | cost ごと省略 |
+| `cost.scope` | `'conductor-only'?` | `enrichSessionUsageWithCost` が runtime で明示。worker cost を含まない | 終了 JSON・`get_session_usage`・TTY テキスト | cost ごと省略。公開型では後方互換のため optional |
 | `cost.rawCostCents` | `number` | Cursor `AgentUsage.cost.rawCostCents` のセッション累計 | 同上 | **フィールド省略**（エラーにしない） |
 | `cost.chargedCents` | `number` | Cursor `AgentUsage.cost.chargedCents`（割引・Cursor Token Fee 込み） | 同上 | 同上 |
 | `runs[].cost` | `UsageCost?` | run 単位（`getUsage({ runId })`） | `get_usage` | 省略 |

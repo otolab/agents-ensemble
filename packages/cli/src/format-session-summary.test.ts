@@ -49,6 +49,7 @@ function createSummary(
       },
     ],
     sessionUsage: {
+      tokenScope: 'recorded-usage-only',
       totals: {
         rounds: 2,
         roundsWithUsage: 2,
@@ -78,6 +79,8 @@ describe('formatIssueSessionSummaryJson', () => {
   it('includes sessionUsage and responsePreview by default', () => {
     const json = JSON.parse(formatIssueSessionSummaryJson(createSummary()));
     expect(json.sessionUsage?.totals.tokens.inputTokens).toBe(1200);
+    expect(json.sessionUsage?.tokenScope).toBe('recorded-usage-only');
+    expect(json.sessionUsage?.latestRound).toBeNull();
     expect(json.workerResponses[0]).toMatchObject({
       name: 'implementer',
       responsePreview: 'hello world response',
@@ -144,12 +147,13 @@ describe('formatIssueSessionSummaryJson', () => {
 });
 
 describe('formatIssueSessionSummaryText', () => {
-  it('renders total and conductor token rows with conductor actual cost', () => {
+  it('renders recorded total and conductor token rows with conductor actual cost', () => {
     const text = formatIssueSessionSummaryText(createSummary());
     expect(text).toContain('セッション終了 (completed)');
     expect(text).toContain('conductor ターン: 3');
     expect(text).toContain('worker ラウンド: 1 完了 / 0 失敗');
-    expect(text).toContain('全体: input 1k / output 340');
+    expect(text).toContain('トークン（取得・記録済み usage）:');
+    expect(text).toContain('取得・記録済み合計: input 1k / output 340');
     expect(text).toContain('conductor: input 1k / output 300');
     expect(text).toContain(
       '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
@@ -240,7 +244,7 @@ describe('formatIssueSessionSummaryText', () => {
     );
 
     expect(text).toContain('worker ラウンド: 2 完了 / 0 失敗');
-    expect(text).toContain('全体: input 3k / output 920');
+    expect(text).toContain('取得・記録済み合計: input 3k / output 920');
     expect(text).toContain('conductor: input 2k / output 600');
     expect(text).toContain('worker implementer: input 500 / output 120');
     expect(text).toContain('worker reviewer: input 300 / output 200');
@@ -297,13 +301,21 @@ describe('formatIssueSessionSummaryText', () => {
     const json = JSON.parse(formatIssueSessionSummaryJson(summary));
 
     expect(text).toContain('worker ラウンド: 0 完了 / 1 失敗');
+    expect(text).toContain('取得・記録済み合計: input 1k / output 340');
+    expect(text).toContain(
+      '失敗などで usage が未記録の消費分は含まれません。',
+    );
+    expect(text).not.toContain('全体: input 1k / output 340');
     expect(text).toContain(
       '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
     );
     expect(text).not.toContain('全体 = conductor');
     expect(text).not.toContain('全体: $0.42');
     expect(json.workerFailureCount).toBe(1);
+    expect(json.sessionUsage.tokenScope).toBe('recorded-usage-only');
     expect(json.sessionUsage.cost.scope).toBe('conductor-only');
+    expect(json.sessionUsage.totals.tokens.inputTokens).toBe(1200);
+    expect(json.sessionUsage.byAgent.workers).toEqual({});
   });
 });
 

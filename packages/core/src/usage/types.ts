@@ -63,10 +63,18 @@ export interface SessionContextUtilization {
 
 /** Reported conductor billing only; worker charges are not included. */
 export interface SessionUsageCost extends ConductorUsageCost {
-  scope: 'conductor-only';
+  /** Present on runtime-enriched summaries; optional for source compatibility. */
+  scope?: 'conductor-only';
 }
 
+export type SessionUsageTokenScope = 'recorded-usage-only';
+
 export interface SessionUsageSummary {
+  /**
+   * Totals include recorded usage only; failed rounds without usage are absent.
+   * Runtime tracker summaries always set this field.
+   */
+  tokenScope?: SessionUsageTokenScope;
   totals: {
     rounds: number;
     roundsWithUsage: number;

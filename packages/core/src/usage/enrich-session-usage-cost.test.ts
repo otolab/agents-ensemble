@@ -16,6 +16,18 @@ const EMPTY_SUMMARY: SessionUsageSummary = {
 };
 
 describe('enrichSessionUsageWithCost', () => {
+  it('keeps legacy cost literals assignable to SessionUsageSummary', () => {
+    const legacySummary: SessionUsageSummary = {
+      ...EMPTY_SUMMARY,
+      cost: { rawCostCents: 51, chargedCents: 42 },
+    };
+
+    expect(legacySummary.cost).toEqual({
+      rawCostCents: 51,
+      chargedCents: 42,
+    });
+  });
+
   it('merges cost when getter returns ConductorUsageCost', async () => {
     const cost: ConductorUsageCost = { rawCostCents: 51, chargedCents: 42 };
     const result = await enrichSessionUsageWithCost(EMPTY_SUMMARY, async () => cost);

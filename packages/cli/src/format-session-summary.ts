@@ -107,7 +107,7 @@ export function formatIssueSessionSummaryText(summary: SessionSummary): string {
     const tokenRows: string[] = [];
     if (usage.totals.tokens) {
       tokenRows.push(
-        `    全体: ${formatTokenUsage(
+        `    取得・記録済み合計: ${formatTokenUsage(
           usage.totals.tokens.inputTokens,
           usage.totals.tokens.outputTokens,
         )}`,
@@ -131,11 +131,16 @@ export function formatIssueSessionSummaryText(summary: SessionSummary): string {
       );
     }
     if (tokenRows.length > 0) {
-      lines.push('  トークン:');
+      lines.push('  トークン（取得・記録済み usage）:');
       lines.push(...tokenRows);
       if (Object.keys(usage.byAgent.workers).length > 0) {
         lines.push(
           '    worker は ACP が usage を返さないラウンドで応答文からの推定値を含む場合があります。',
+        );
+      }
+      if (summary.workerFailures.length > 0) {
+        lines.push(
+          '    失敗などで usage が未記録の消費分は含まれません。',
         );
       }
     }

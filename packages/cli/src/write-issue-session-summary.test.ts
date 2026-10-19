@@ -75,7 +75,7 @@ describe('writeIssueSessionSummary', () => {
     writeIssueSessionSummary(result, { format: 'text' });
 
     const text = String(errorSpy.mock.calls[0]?.[0]);
-    expect(text).toContain('全体: input 120 / output 30');
+    expect(text).toContain('取得・記録済み合計: input 120 / output 30');
     expect(text).toContain('conductor: input 80 / output 20');
     expect(text).toContain('worker implementer: input 40 / output 10');
     expect(text).toContain('コンテキスト圧縮: 1 回');
@@ -116,6 +116,11 @@ describe('writeIssueSessionSummary', () => {
 
     const text = String(errorSpy.mock.calls[0]?.[0]);
     expect(text).toContain('worker ラウンド: 0 完了 / 1 失敗');
+    expect(text).toContain('取得・記録済み合計: input 80 / output 20');
+    expect(text).toContain(
+      '失敗などで usage が未記録の消費分は含まれません。',
+    );
+    expect(text).not.toContain('全体: input 80 / output 20');
     expect(text).toContain(
       '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
     );

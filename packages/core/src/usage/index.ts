@@ -15,5 +15,6 @@ export type {
   SessionUsageCacheSummary,
   SessionUsageCost,
   SessionUsageRound,
+  SessionUsageTokenScope,
   SessionUsageSummary,
 } from './types.js';

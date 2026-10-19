@@ -38,6 +38,7 @@ describe('SessionUsageTracker', () => {
 
     const summary = tracker.getSessionSummary();
 
+    expect(summary.tokenScope).toBe('recorded-usage-only');
     expect(summary.totals.rounds).toBe(2);
     expect(summary.totals.roundsWithUsage).toBe(2);
     expect(summary.totals.tokens).toMatchObject({

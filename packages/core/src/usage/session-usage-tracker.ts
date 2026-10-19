@@ -125,6 +125,7 @@ export class SessionUsageTracker {
     const cacheStats = this.buildCacheSummary(workerNames);
 
     return {
+      tokenScope: 'recorded-usage-only',
       totals: {
         rounds: this.rounds.length,
         roundsWithUsage: allWithUsage.length,
