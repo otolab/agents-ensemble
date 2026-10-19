@@ -3,7 +3,7 @@
  * IssueSessionTui の縦切りテストでは本番の OperatorTextArea の契約だけを再現する。
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { Text, useCursor, useInput } from 'ink';
+import { Text, useCursor, useInput, usePaste } from 'ink';
 import stringWidth from 'string-width';
 import type { OperatorTextAreaProps } from './operator-text-area.js';
 import {
@@ -84,6 +84,18 @@ export function OperatorTextArea({
   } else {
     setCursorPosition(undefined);
   }
+
+  usePaste(
+    (pastedText) => {
+      const nextValue =
+        value.slice(0, cursorOffset) + pastedText + value.slice(cursorOffset);
+      const nextCursorOffset = cursorOffset + pastedText.length;
+      onChange(nextValue);
+      setCursorOffset(nextCursorOffset);
+      onCursorChange?.(cursorPositionFor(nextValue, nextCursorOffset));
+    },
+    { isActive: focus },
+  );
 
   useInput(
     (input, key) => {

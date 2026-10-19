@@ -38,8 +38,9 @@ import {
   computeOperatorInputCursorX,
   computeStreamOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
+import { resolveOperatorInputDisplayMode } from './format-operator-context.js';
 import { PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
-import { getPaneContentWidth } from './wrap-text-to-width.js';
+import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 describe('IssueSessionTuiStream IME cursor contract', () => {
   beforeEach(() => {
@@ -106,6 +107,12 @@ describe('IssueSessionTuiStream IME cursor contract', () => {
       '/',
       contentWidth,
     ).length;
+    const contextHintLineCount = resolveOperatorInputDisplayMode({
+      openQuestions: [],
+    }).hintLines.reduce(
+      (lineCount, line) => lineCount + wrapTextToWidth(line, contentWidth).length,
+      0,
+    );
     const props = mockOperatorTextArea.mock.calls.at(-1)?.[0] as {
       commandSuggestionsActive?: boolean;
       cursorPosition?: [number, number];
@@ -116,7 +123,7 @@ describe('IssueSessionTuiStream IME cursor contract', () => {
     expect(props.cursorStart?.y).toBe(
       computeStreamOperatorInputCursorY({
         openQuestionsPaneHeight: 0,
-        hintLineCount: suggestionLineCount,
+        hintLineCount: contextHintLineCount + suggestionLineCount,
       }),
     );
     expect(lastFrame() ?? '').toContain('› /reconnect');

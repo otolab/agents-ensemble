@@ -259,11 +259,7 @@ describe('IssueSessionTui', () => {
     const multiline = render(
       <IssueSessionTui viewModel={secondViewModel} onSubmit={multilineSubmit} />,
     );
-    multiline.stdin.write('first');
-    await flushInkStdin();
-    multiline.stdin.write(INK_TEST_KEYS.shiftEnter);
-    await flushInkStdin();
-    multiline.stdin.write('second');
+    multiline.stdin.write('\u001B[200~first\nsecond\u001B[201~');
     await flushInkStdin();
     multiline.stdin.write(INK_TEST_KEYS.upArrow);
     await flushInkStdin();

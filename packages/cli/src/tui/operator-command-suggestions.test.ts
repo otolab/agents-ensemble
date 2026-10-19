@@ -50,7 +50,8 @@ describe('operator command suggestions', () => {
     const rows = getOperatorCommandSuggestionLines('/ex', 12);
     expect(rows.length).toBeGreaterThan(1);
     expect(rows.map(({ text }) => text).join('\n')).toContain('/exit');
-    expect(rows.map(({ text }) => text).join('')).toContain('セッションを終了');
+    const commandText = rows.map(({ text }) => text.slice(2)).join('');
+    expect(commandText).toContain('セッションを終了');
   });
 
   it('selects the first candidate by default and keeps selection visible in wrapped rows', () => {
