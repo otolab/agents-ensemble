@@ -46,6 +46,8 @@ export interface GitHubMonitor {
   stop(): Promise<void>;
   flush(): void;
   getCursor(): GitHubMonitorCursor;
+  /** Remove updates after a conductor send has completed successfully. */
+  acknowledgeUpdates?(ids: readonly string[]): void;
   /** Add a runtime PR watch without waiting for GitHub Search to find it. */
   registerPullRequest(registration: {
     prNumber: number;
@@ -126,12 +128,18 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
         abortSignal: pollAbortController.signal,
       };
       const result = await fetchGitHubUpdates(input);
+      // A poll that resolves after stop began must remain uncommitted so a
+      // resumed session can fetch it again from the previously saved cursor.
+      if (stopped) return;
       cursor = mergePendingRegistrations(result.cursor, pendingRegistrations);
       for (const key of pendingUnregistrations) {
         delete cursor.explicitPullRequests?.[key];
       }
       pendingRegistrations.clear();
       pendingUnregistrations.clear();
+      if (result.updates.length > 0) {
+        cursor = appendPendingUpdates(cursor, result.updates);
+      }
       options.onCursorChange?.(cursor);
       needsBootstrapPoll = false;
       hasPendingCi = result.hasPendingCi;
@@ -201,6 +209,9 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
     start() {
       if (started || stopped) return;
       started = true;
+      if (cursor.pendingUpdates?.length) {
+        buffer.pushMany(cursor.pendingUpdates);
+      }
       void pollOnce();
     },
 
@@ -236,6 +247,23 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       return normalizeGitHubMonitorCursor(cursor);
     },
 
+    acknowledgeUpdates(ids) {
+      if (ids.length === 0 || !cursor.pendingUpdates?.length) return;
+      const acknowledged = new Set(ids);
+      const pendingUpdates = cursor.pendingUpdates.filter(
+        (item) => !acknowledged.has(item.id),
+      );
+      if (pendingUpdates.length === cursor.pendingUpdates.length) return;
+      cursor = {
+        ...cursor,
+        ...(pendingUpdates.length > 0 ? { pendingUpdates } : {}),
+      };
+      if (pendingUpdates.length === 0) {
+        delete cursor.pendingUpdates;
+      }
+      options.onCursorChange?.(cursor);
+    },
+
     registerPullRequest(registration) {
       const key = String(registration.prNumber);
       cursor.explicitPullRequests ??= {};
@@ -257,6 +285,22 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
       pendingUnregistrations.add(key);
       options.onCursorChange?.(cursor);
     },
+  };
+}
+
+function appendPendingUpdates(
+  cursor: GitHubMonitorCursor,
+  updates: GitHubUpdateItem[],
+): GitHubMonitorCursor {
+  const pendingUpdates = new Map(
+    (cursor.pendingUpdates ?? []).map((item) => [item.id, item]),
+  );
+  for (const item of updates) {
+    pendingUpdates.set(item.id, item);
+  }
+  return {
+    ...cursor,
+    pendingUpdates: [...pendingUpdates.values()],
   };
 }
 

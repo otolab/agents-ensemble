@@ -108,6 +108,7 @@ export type {
 export { submitOperatorInput } from './submit-operator-input.js';
 export type { SubmitOperatorInputInput } from './submit-operator-input.js';
 export { isOperatorExitCommand } from './operator-exit.js';
+export { isOperatorCloseCommand } from './operator-close.js';
 export { isOperatorReconnectCommand } from './operator-reconnect.js';
 export {
   reconnectConductorAgent,

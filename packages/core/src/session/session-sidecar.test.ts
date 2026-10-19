@@ -63,6 +63,13 @@ describe('session sidecar', () => {
             kinds: ['pr.review', 'ci.completed'],
           },
         },
+        pendingUpdates: [
+          {
+            id: 'issue-comment:101',
+            kind: 'issue.comment',
+            summary: 'stored until conductor receives it',
+          },
+        ],
       },
     });
 
@@ -82,6 +89,13 @@ describe('session sidecar', () => {
         kinds: ['pr.review', 'ci.completed'],
       },
     });
+    expect(loaded?.githubMonitor?.pendingUpdates).toEqual([
+      {
+        id: 'issue-comment:101',
+        kind: 'issue.comment',
+        summary: 'stored until conductor receives it',
+      },
+    ]);
     expect(JSON.parse(await readFile(path, 'utf8')).updatedAt).toEqual(
       loaded?.updatedAt,
     );

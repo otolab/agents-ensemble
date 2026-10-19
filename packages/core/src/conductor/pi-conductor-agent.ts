@@ -373,6 +373,34 @@ export class PiConductorAgent implements ConductorAgent {
     return this.closePromise;
   }
 
+  async closeForResume(): Promise<void> {
+    if (this.closePromise) {
+      return this.closePromise;
+    }
+    this.closed = true;
+    this.closePromise = (async () => {
+      try {
+        await this.session.abort();
+      } finally {
+        try {
+          this.unsubscribe();
+        } finally {
+          try {
+            if (this.mcpLifecycleState.enabled) {
+              // Pi dispose does not await MCP extension shutdown. Disable MCP
+              // and reload once so its stdio children close before disposal.
+              this.mcpLifecycleState.enabled = false;
+              await this.session.reload();
+            }
+          } finally {
+            this.session.dispose();
+          }
+        }
+      }
+    })();
+    return this.closePromise;
+  }
+
   private handleEvent(event: AgentSessionEvent): void {
     const activeSend = this.activeSend;
     if (event.type === 'tool_execution_start') {

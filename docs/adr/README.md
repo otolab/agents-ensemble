@@ -101,6 +101,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0027](0027-permission-stall-notification.md) | permission 停滞通知の低優先度 dispatch | accepted |
 | [0028](0028-authentication-delegation-and-ensemble-auth.md) | 認証の管理方針（worker 移譲・conductor と ensemble auth） | accepted |
 | [0029](0029-lazy-worker-attach.md) | worker ACP lazy attach | accepted |
+| [0030](0030-tty-close-lifecycle.md) | TTY `/close` の再開可能な終了契約 | accepted |
 
 ## 追加するとき
 

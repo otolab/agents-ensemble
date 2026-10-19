@@ -37,6 +37,7 @@ export const SESSION_OBSERVATION_EVENT_TYPES = [
   'session.continue',
   'session.post_loop_wait',
   'session.operator_exit',
+  'session.operator_close',
   'harness.teardown',
   'conductor.dispatch_hold',
 ] as const;

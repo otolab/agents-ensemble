@@ -253,6 +253,7 @@ describe('PiConductorAgent', () => {
     await conductor.close();
     expect(fakeSession.abort).toHaveBeenCalledOnce();
     expect(fakeSession.dispose).toHaveBeenCalledOnce();
+    expect(fakeSession.reload).toHaveBeenCalledOnce();
     void onStreamText;
   });
 
@@ -289,6 +290,29 @@ describe('PiConductorAgent', () => {
 
     expect(mockCreateAgentSession.mock.calls[0]![0].noTools).toBe('builtin');
     await conductor.close();
+  });
+
+  it('shuts down Pi MCP children when closing a resumable session', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+      mcpServers: {
+        fixture: { type: 'stdio', command: 'fixture-mcp' },
+      },
+    });
+
+    expect(mcpLoadConfig?.()).toMatchObject({
+      servers: [expect.objectContaining({ name: 'fixture' })],
+    });
+
+    await conductor.closeForResume();
+
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.reload).toHaveBeenCalledOnce();
+    expect(mcpLoadConfig?.()).toMatchObject({ servers: [] });
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
   });
 
   it('rejects SSE before the Pi extension is started', async () => {

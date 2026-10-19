@@ -76,6 +76,22 @@ describe('createTuiTelemetrySink', () => {
     ]);
   });
 
+  it('marks shutting down and appends close feedback on session.operator_close', () => {
+    const viewModel = createTuiViewModel();
+    const sink = createTuiTelemetrySink(viewModel);
+
+    sink({ type: 'session.operator_close' });
+
+    const snapshot = viewModel.getSnapshot();
+    expect(snapshot.shuttingDown).toBe(true);
+    expect(snapshot.activityLog).toEqual([
+      {
+        label: 'observation',
+        text: 'セッションを保存して閉じています…',
+      },
+    ]);
+  });
+
   it('appends worktree cleanup warnings to the observation activity log', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);

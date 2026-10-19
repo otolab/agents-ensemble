@@ -88,6 +88,7 @@ import {
 } from './session-policy.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
 import { isOperatorExitCommand } from './operator-exit.js';
+import { isOperatorCloseCommand } from './operator-close.js';
 import { isOperatorReconnectCommand } from './operator-reconnect.js';
 import {
   assertSessionSidecarMatches,
@@ -169,7 +170,7 @@ export interface RunConductorSessionOptions {
    */
   stopOnUnansweredInput?: boolean;
   /**
-   * 自律ループ停止後も harness を維持し、オペレータの `/exit` または追加指示を待つ。
+   * 自律ループ停止後も harness を維持し、オペレータの `/close` / `/exit` または追加指示を待つ。
    * CLI の TTY デフォルト。非 TTY / CI では false。
    */
   waitForOperatorExit?: boolean;
@@ -358,10 +359,10 @@ export async function runConductorSession(
     : undefined;
   const shutdownSignal =
     options.shutdownSignal ?? shutdownController!.signal;
-  const operatorExitController = new AbortController();
+  const operatorTerminationController = new AbortController();
   const driverShutdownSignal = AbortSignal.any([
     shutdownSignal,
-    operatorExitController.signal,
+    operatorTerminationController.signal,
   ]);
   let unregisterProcessSignalHandlers = () => {};
   if (
@@ -953,6 +954,7 @@ export async function runConductorSession(
   const continueOnConductorError = options.continueOnConductorError ?? false;
   const waitForOperatorExit = options.waitForOperatorExit ?? false;
   let operatorRequestedExit = false;
+  let operatorRequestedClose = false;
   let disposeOperatorInput: (() => void) | undefined;
 
   if (options.bindOperatorInput) {
@@ -962,7 +964,14 @@ export async function runConductorSession(
           sessionLogger.emit({ type: 'session.operator_exit' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedExit = true;
-          operatorExitController.abort();
+          operatorTerminationController.abort();
+          return false;
+        }
+        if (isOperatorCloseCommand(message)) {
+          sessionLogger.emit({ type: 'session.operator_close' });
+          workerSession.runtime.cancelAllActivePrompts();
+          operatorRequestedClose = true;
+          operatorTerminationController.abort();
           return false;
         }
         if (isOperatorReconnectCommand(message)) {
@@ -1067,7 +1076,10 @@ export async function runConductorSession(
     stopReason = driverResult.stopReason;
     sendCount = driverResult.sendCount;
     autonomousTurns = driverResult.autonomousTurns;
-    if (operatorRequestedExit && stopReason === 'interrupted') {
+    if (
+      (operatorRequestedExit || operatorRequestedClose) &&
+      stopReason === 'interrupted'
+    ) {
       stopReason = 'completed';
     }
 
@@ -1077,6 +1089,7 @@ export async function runConductorSession(
       sendCount: number;
       runId: string;
       status: ConductorSendResult['status'];
+      githubUpdateIds?: string[];
       result?: string;
       error?: ConductorSendResult['error'];
       usage?: ConductorSendResult['usage'];
@@ -1087,6 +1100,14 @@ export async function runConductorSession(
     }): void {
       sendCount = info.sendCount;
       autonomousTurns = info.autonomousTurns;
+      const githubUpdateIds = info.githubUpdateIds ?? [];
+      if (
+        info.status === 'finished' &&
+        !operatorRequestedClose &&
+        githubUpdateIds.length > 0
+      ) {
+        githubMonitor?.acknowledgeUpdates?.(githubUpdateIds);
+      }
       sessionUsageTracker.recordConductorRound({
         runId: info.runId,
         status: info.status,
@@ -1140,7 +1161,9 @@ export async function runConductorSession(
     async function buildResult(): Promise<ConductorSessionResult> {
       sessionLogger.finish(stopReason);
       const skipUsageCostFetch =
-        operatorRequestedExit || shutdownSignal.aborted;
+        operatorRequestedExit ||
+        operatorRequestedClose ||
+        shutdownSignal.aborted;
       const sessionUsage = await enrichSessionUsageWithCost(
         sessionUsageTracker.getSessionSummary(),
         skipUsageCostFetch
@@ -1162,7 +1185,10 @@ export async function runConductorSession(
     }
   } finally {
     teardownStarted = true;
-    const forceShutdown = operatorRequestedExit || shutdownSignal.aborted;
+    const forceShutdown =
+      operatorRequestedExit ||
+      operatorRequestedClose ||
+      shutdownSignal.aborted;
     const teardownStartedAt = Date.now();
     const teardownPhases: Record<string, number> = {};
 
@@ -1195,12 +1221,27 @@ export async function runConductorSession(
         emitTeardownPhase('permissionDeadlockMonitor');
         permissionDeadlockMonitor.stop();
       }
-      if (githubMonitor) {
+      if (githubMonitor && !operatorRequestedClose) {
         githubMonitor.flush();
       }
       // Stop active prompts before closing ACP bridges. Requests that arrive
       // after this point are rejected by the teardown guard above.
       workerSession.runtime.cancelAllActivePrompts();
+      if (operatorRequestedClose) {
+        // A worker's ACP session exists before its first prompt completes, but
+        // workerSessions is normally updated by onWorkerCompleted. Snapshot
+        // attached sessions now so force shutdown cannot discard the only
+        // completion event that would have persisted a resumable session ID.
+        for (const attached of workerSession.runtime.listAttached()) {
+          workerSessions.set(attached.name, {
+            acpSessionId: attached.session.sessionId,
+            acpCwd: attached.session.acpCwd,
+            ...(workerAcpFingerprints.get(attached.name)
+              ? { acpSpawn: workerAcpFingerprints.get(attached.name) }
+              : {}),
+          });
+        }
+      }
       const rejectedPendingPermissions = rejectAllPendingPermissions(
         permissionPipeline,
         workerSession.inbox,
@@ -1215,17 +1256,35 @@ export async function runConductorSession(
           })),
         });
       }
+
+      let githubMonitorStopped = false;
+      if (githubMonitor && operatorRequestedClose) {
+        emitTeardownPhase('githubMonitor');
+        const phaseStart = Date.now();
+        await githubMonitor.stop();
+        githubMonitorCursor = githubMonitor.getCursor();
+        teardownPhases.githubMonitor = Date.now() - phaseStart;
+        githubMonitorStopped = true;
+      }
+
       try {
         emitTeardownPhase('flushSidecar');
         const phaseStart = Date.now();
         await flushSidecar();
         teardownPhases.flushSidecar = Date.now() - phaseStart;
-      } catch {
-        // best-effort persistence
+      } catch (error) {
+        if (operatorRequestedClose) {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message:
+              `/close 時に sidecar を保存できませんでした。最新状態から再開できず、直前に保存された状態からの再開になる場合があります。 error=${detail}`,
+          });
+        }
       }
 
       const runGithubMonitorStop = async (): Promise<void> => {
-        if (!githubMonitor) {
+        if (!githubMonitor || githubMonitorStopped) {
           return;
         }
         emitTeardownPhase('githubMonitor');
@@ -1245,7 +1304,11 @@ export async function runConductorSession(
       const runConductorClose = async (): Promise<void> => {
         emitTeardownPhase('conductor');
         const phaseStart = Date.now();
-        await conductorHandle.conductor.close();
+        if (operatorRequestedClose && conductorHandle.conductor.closeForResume) {
+          await conductorHandle.conductor.closeForResume();
+        } else {
+          await conductorHandle.conductor.close();
+        }
         teardownPhases.conductor = Date.now() - phaseStart;
       };
 

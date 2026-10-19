@@ -27,7 +27,10 @@ export function createTuiTelemetrySink(
       viewModel.setPostLoopWaiting(true);
     }
 
-    if (event.type === 'session.operator_exit') {
+    if (
+      event.type === 'session.operator_exit' ||
+      event.type === 'session.operator_close'
+    ) {
       viewModel.setShuttingDown(true);
     }
 

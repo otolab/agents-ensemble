@@ -75,7 +75,7 @@ program
   .option('--no-max-turns', 'Disable autonomous turn limit')
   .option(
     '--no-wait',
-    'Exit immediately when the autonomous loop completes (TTY default: wait for /exit)',
+    'Exit immediately when the autonomous loop completes (TTY default: wait for /close or /exit)',
   )
   .option(
     '--worktree <mode>',

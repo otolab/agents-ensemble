@@ -10,7 +10,7 @@ import { CLI_ENTRY } from './test-helpers.js';
 
 const ISSUE_URL = 'https://github.com/fixture/fixture/issues/1';
 const POST_LOOP_HINT =
-  '追加指示を入力するか /reconnect で再接続 · /exit で終了';
+  '追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了';
 const SUMMARY_PREFIX = 'セッション終了 (';
 
 const PYTHON_PTY_RUNNER = String.raw`
