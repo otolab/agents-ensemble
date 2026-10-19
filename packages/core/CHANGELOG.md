@@ -1,5 +1,16 @@
 # @agents-ensemble/core
 
+## 0.12.0
+
+### Patch Changes
+
+- faa55f5: TTY に `/close` を追加し、Pi conductor の resumable close では stdio MCP 子プロセスを停止してから session を dispose する
+- c175013: GitHub 監視の連続 retryable poll エラーを抑止し、復旧時に抑止件数を記録する
+- e621fb0: Pi MCP と worker ACP の終了処理で子プロセスを停止・回収する
+- b9c0e1f: Operator input の slash コマンド候補を表示し、候補表示と既存コマンド判定で同じカタログを使う
+- 721341b: `permission.pending` と関連する Open Question に、ACP payload から抽出した操作概要を表示します。
+- cad3ca8: `choice` の open question で自由記述回答を受け付け、選択肢に一意に解決できた場合だけ `selectedChoice` を記録します。
+
 ## 0.11.0
 
 ### Minor Changes
