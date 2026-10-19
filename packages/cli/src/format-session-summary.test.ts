@@ -81,6 +81,15 @@ describe('formatIssueSessionSummaryJson', () => {
     expect(json.workerResponses[0].responseText).toBeUndefined();
   });
 
+  it('omits conductor cost from exit JSON when billing data is unavailable', () => {
+    const { cost: _cost, ...sessionUsage } = createSummary().sessionUsage!;
+    const json = JSON.parse(
+      formatIssueSessionSummaryJson(createSummary({ sessionUsage })),
+    );
+
+    expect(json.sessionUsage.cost).toBeUndefined();
+  });
+
   it('keeps cache and compaction metrics identical in the exit JSON', () => {
     const sessionUsage = {
       ...createSummary().sessionUsage!,

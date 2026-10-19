@@ -160,9 +160,6 @@ export class PiConductorAgent implements ConductorAgent {
   private activeSend?: PiSendState;
   private closed = false;
   private closePromise?: Promise<void>;
-  private hasUsage = false;
-  private rawCostCents = 0;
-  private chargedCents = 0;
 
   constructor(
     private readonly session: AgentSession,
@@ -258,7 +255,6 @@ export class PiConductorAgent implements ConductorAgent {
       };
     }
 
-    this.recordUsage(finalMessage);
     const status = statusFromStopReason(finalMessage.stopReason);
     return {
       runId,
@@ -314,14 +310,10 @@ export class PiConductorAgent implements ConductorAgent {
   }
 
   async getUsage(): Promise<ConductorAgentUsage> {
-    return this.hasUsage
-      ? {
-          cost: {
-            rawCostCents: this.rawCostCents,
-            chargedCents: this.chargedCents,
-          },
-        }
-      : {};
+    // Pi's AssistantMessage.usage.cost is calculated from the model's configured
+    // token rates. It is not a provider billing record, so it must not enter the
+    // shared charged-cost field used by session usage and exit summaries.
+    return {};
   }
 
   /** Resume recompiles and reinstalls the native system prompt on each run. */
@@ -405,8 +397,10 @@ export class PiConductorAgent implements ConductorAgent {
   private handleEvent(event: AgentSessionEvent): void {
     const activeSend = this.activeSend;
     if (
-      event.type === 'entry_appended' &&
-      event.entry.type === 'compaction'
+      event.type === 'compaction_end' &&
+      event.result != null &&
+      !event.aborted &&
+      event.errorMessage == null
     ) {
       this.onContextCompaction?.();
       return;
@@ -431,12 +425,6 @@ export class PiConductorAgent implements ConductorAgent {
     if (event.type === 'agent_end' && activeSend) {
       activeSend.finalMessage = lastAssistantMessage(event.messages);
     }
-  }
-
-  private recordUsage(message: AssistantMessage): void {
-    this.hasUsage = true;
-    this.rawCostCents += message.usage.cost.total * 100;
-    this.chargedCents += message.usage.cost.total * 100;
   }
 }
 

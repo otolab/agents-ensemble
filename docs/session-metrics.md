@@ -203,21 +203,23 @@ sum(cacheReadTokens) / sum(inputTokens + cacheReadTokens)
 
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
-| `cost.rawCostCents` | `number` | Cursor `AgentUsage.cost` / Pi `AssistantMessage.usage.cost` のセッション累計 | `sessionUsage.cost`・TTY テキスト | **フィールド省略**（エラーにしない） |
-| `cost.chargedCents` | `number` | Cursor は同上（割引・Cursor Token Fee 込み実課金）。Pi は報告 usage cost と同額 | 同上 | 同上 |
+| `cost.rawCostCents` | `number` | Cursor `AgentUsage.cost.rawCostCents` のセッション累計 | `sessionUsage.cost`・TTY テキスト | **フィールド省略**（エラーにしない） |
+| `cost.chargedCents` | `number` | Cursor `AgentUsage.cost.chargedCents`（割引・Cursor Token Fee 込み） | 同上 | 同上 |
 | `runs[].cost` | `UsageCost?` | run 単位（`getUsage({ runId })`） | `get_usage` | 省略 |
 
-worker cost は **表示しない（Issue #469 の方針 A）**。ACP の `PromptResult.usage` は token counts のみで、現行の worker usage record に model ID が無い。Pi の `models.json` にモデル単価を設定できる場合も、それを任意の ACP worker の provider / model に安全に対応付けられないため、単価を当てはめた推定は行わない。したがって `sessionUsage.cost` は conductor の実課金のみを表す。TTY では全体 cost も同額で表示し、worker 分を含まないことを明記する。worker cost API が無い場合は worker 小計を「算出なし」と表示する。
+Pi backend の `AssistantMessage.usage.cost` は `pi-ai` v1.2.0 の `calculateCost` が `model.cost` の token 単価と usage から算出する値で、provider の請求記録ではない（[Pi v1.2.0 `calculateCost`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/models.ts#L1119-L1137)）。この値は `ConductorAgent.getUsage()` / `enrichSessionUsageWithCost` に渡さず、`sessionUsage.cost`・`get_session_usage`・TTY に載せない。コスト欄は実課金を報告する backend 値がある場合だけ表示する。
+
+worker cost は **表示しない（Issue #469 の方針 A）**。ACP の `PromptResult.usage` は token counts のみで、現行の worker usage record に model ID が無い。Pi の `models.json` にモデル単価を設定できる場合も、それを任意の ACP worker の provider / model に安全に対応付けられないため、単価を当てはめた推定は行わない。`sessionUsage.cost` は実課金を報告する conductor 値だけを表し、TTY では全体 cost も同額で表示して worker 分を含まないことを明記する。worker cost API が無い場合は worker 小計を「算出なし」と表示する。
 
 **注意**
 
-- `RunResult.usage` / per-round tracker は **トークンのみ**。cost は `getUsage()` のみ。
+- `RunResult.usage` / per-round tracker は **トークンのみ**。実課金 cost は backend が請求記録として報告する場合に限り `getUsage()` から取得する。モデル料金率による計算値は実課金 cost に含めない。
 - billing 反映 lag のため **run 終了直後は cost が無い**ことがある（SDK 型コメント）。
 - worker ACP は現状 cost 無し。
 
 ### 3.4 Context compaction 回数
 
-Pi conductor は Pi coding-agent の `AgentSessionEvent` で `entry_appended` を受け、追加された entry の `type` が `compaction` の場合に限りカウントする。これは完了して transcript に記録された compaction の数であり、失敗した試行や branch summary は含めない。組み込み Pi backend では `compactionCount` を含める（0 回も表示）。Cursor SDK および backend factory を差し替えた場合は、このカウンタを提供しないためフィールドと TTY 行を出さない。
+Pi v1.2.0 の `AgentSessionEvent.compaction_end` は成功時に `result` を含み、失敗時は `result: undefined`、中断時は `aborted: true` を通知する（[event type](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L207-L214)、[manual compaction](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L2713-L2735)、[auto compaction](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L3017-L3047)）。Pi conductor は `result` があり、中断・エラーでない `compaction_end` だけを数える。`entry_appended` は通常成功経路では発火しないため counter source に使わない。組み込み Pi backend は `compactionCount` を含め、成功イベントが無いセッションは `0` と表示する。Cursor SDK および差し替え backend factory はこのカウンタを提供しないため、フィールドと TTY 行を出さない。
 
 ---
 

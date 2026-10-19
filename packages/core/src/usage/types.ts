@@ -77,6 +77,6 @@ export interface SessionUsageSummary {
   cacheStats?: SessionUsageCacheSummary;
   /** Successful context compactions, when the selected backend has a reliable counter. */
   compactionCount?: number;
-  /** conductor `getUsage().cost`（セッション累計。未取得時は省略）。 */
+  /** Conductor の請求記録（セッション累計。推定値・未取得時は省略）。 */
   cost?: ConductorUsageCost;
 }

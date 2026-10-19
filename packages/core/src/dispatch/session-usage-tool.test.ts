@@ -43,6 +43,7 @@ describe('createSessionUsageTools', () => {
         byAgent: { conductor: { cacheHitRate: 0 } },
       },
     });
+    expect(result.structuredContent).not.toHaveProperty('cost');
   });
 
   it('get_session_usage merges conductor cost when provided', async () => {
