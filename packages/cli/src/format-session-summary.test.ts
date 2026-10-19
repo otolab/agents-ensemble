@@ -64,7 +64,11 @@ function createSummary(
       },
       context: { limit: 100_000, usedInputTokens: 1200, percent: 1 },
       latestRound: null,
-      cost: { rawCostCents: 51, chargedCents: 42 },
+      cost: {
+        rawCostCents: 51,
+        chargedCents: 42,
+        scope: 'conductor-only',
+      },
     },
     ...overrides,
   };
@@ -105,6 +109,7 @@ describe('formatIssueSessionSummaryJson', () => {
 
     expect(json.sessionUsage).toEqual(sessionUsage);
     expect(json.sessionUsage.costByAgent).toBeUndefined();
+    expect(json.sessionUsage.cost.scope).toBe('conductor-only');
   });
 
   it('truncates long responses in preview', () => {
@@ -146,7 +151,9 @@ describe('formatIssueSessionSummaryText', () => {
     expect(text).toContain('worker ラウンド: 1 完了 / 0 失敗');
     expect(text).toContain('全体: input 1k / output 340');
     expect(text).toContain('conductor: input 1k / output 300');
-    expect(text).toContain('課金（全体 = conductor 実課金）: $0.42 (raw $0.51)');
+    expect(text).toContain(
+      '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
+    );
     expect(text).toContain('未回答 open question: 1');
     expect(text).toContain('agentId: agent-1');
   });
@@ -240,9 +247,8 @@ describe('formatIssueSessionSummaryText', () => {
     expect(text).toContain(
       'キャッシュヒット率: 全体 21.7% (read 500, write 20) / conductor 20% (read 400, write 20) / worker implementer 33.3% (read 100, write 0)',
     );
-    expect(text).toContain('workers 小計: 算出なし（ACP が cost を返さないため）');
     expect(text).toContain(
-      '全体: $0.42 (raw $0.51)（conductor 実課金のみ。worker 分は未算出）',
+      '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
     );
     expect(text).toContain('コンテキスト圧縮: 2 回');
   });
@@ -264,6 +270,40 @@ describe('formatIssueSessionSummaryText', () => {
     expect(text).not.toContain('課金');
     expect(text).not.toContain('キャッシュヒット率');
     expect(text).not.toContain('コンテキスト圧縮');
+  });
+
+  it('does not present conductor cost as the session total when a worker failed without usage', () => {
+    const base = createSummary();
+    const summary = createSummary({
+      workerDispatches: [],
+      workerFailures: [
+        {
+          workerId: 'worker-implementer',
+          name: 'implementer',
+          kind: 'implementer',
+          issueUrl: 'https://github.com/org/repo/issues/1',
+          error: 'ACP disconnected after the prompt started',
+        },
+      ],
+      sessionUsage: {
+        ...base.sessionUsage!,
+        byAgent: {
+          ...base.sessionUsage!.byAgent,
+          workers: {},
+        },
+      },
+    });
+    const text = formatIssueSessionSummaryText(summary);
+    const json = JSON.parse(formatIssueSessionSummaryJson(summary));
+
+    expect(text).toContain('worker ラウンド: 0 完了 / 1 失敗');
+    expect(text).toContain(
+      '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
+    );
+    expect(text).not.toContain('全体 = conductor');
+    expect(text).not.toContain('全体: $0.42');
+    expect(json.workerFailureCount).toBe(1);
+    expect(json.sessionUsage.cost.scope).toBe('conductor-only');
   });
 });
 

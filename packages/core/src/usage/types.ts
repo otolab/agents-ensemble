@@ -61,6 +61,11 @@ export interface SessionContextUtilization {
   limitUnavailableReason?: string;
 }
 
+/** Reported conductor billing only; worker charges are not included. */
+export interface SessionUsageCost extends ConductorUsageCost {
+  scope: 'conductor-only';
+}
+
 export interface SessionUsageSummary {
   totals: {
     rounds: number;
@@ -77,6 +82,6 @@ export interface SessionUsageSummary {
   cacheStats?: SessionUsageCacheSummary;
   /** Successful context compactions, when the selected backend has a reliable counter. */
   compactionCount?: number;
-  /** Conductor の請求記録（セッション累計。推定値・未取得時は省略）。 */
-  cost?: ConductorUsageCost;
+  /** Conductor の請求記録（worker 分を含まない。推定値・未取得時は省略）。 */
+  cost?: SessionUsageCost;
 }

@@ -183,18 +183,10 @@ export function formatIssueSessionSummaryText(summary: SessionSummary): string {
 
   const cost = usage?.cost;
   if (cost) {
-    const workers = Object.keys(usage?.byAgent.workers ?? {});
     const costText = `${formatUsdFromCents(cost.chargedCents)} (raw ${formatUsdFromCents(cost.rawCostCents)})`;
-    if (workers.length === 0) {
-      lines.push(`  課金（全体 = conductor 実課金）: ${costText}`);
-    } else {
-      lines.push('  課金:');
-      lines.push(`    conductor（実課金）: ${costText}`);
-      lines.push('    workers 小計: 算出なし（ACP が cost を返さないため）');
-      lines.push(
-        `    全体: ${costText}（conductor 実課金のみ。worker 分は未算出）`,
-      );
-    }
+    lines.push(
+      `  課金（取得できた conductor 実課金。worker 分は未算出）: ${costText}`,
+    );
   }
 
   if (usage?.compactionCount != null) {

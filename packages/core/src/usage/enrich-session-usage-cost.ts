@@ -20,7 +20,10 @@ export async function enrichSessionUsageWithCost(
     if (cost == null) {
       return summary;
     }
-    return { ...summary, cost };
+    return {
+      ...summary,
+      cost: { ...cost, scope: 'conductor-only' },
+    };
   } catch {
     return summary;
   }

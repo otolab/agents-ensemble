@@ -19,7 +19,10 @@ describe('enrichSessionUsageWithCost', () => {
   it('merges cost when getter returns ConductorUsageCost', async () => {
     const cost: ConductorUsageCost = { rawCostCents: 51, chargedCents: 42 };
     const result = await enrichSessionUsageWithCost(EMPTY_SUMMARY, async () => cost);
-    expect(result.cost).toEqual(cost);
+    expect(result.cost).toEqual({
+      ...cost,
+      scope: 'conductor-only',
+    });
   });
 
   it('returns original summary when getter is omitted', async () => {

@@ -113,16 +113,27 @@
     worker は ACP が usage を返さないラウンドで応答文からの推定値を含む場合があります。
   キャッシュヒット率: 全体 21.7% (read 500, write 20) / conductor 20% (read 400, write 20) / worker implementer 33.3% (read 100, write 0)
   コンテキスト: 1% (100,000 上限)
-  課金:
-    conductor（実課金）: $0.42 (raw $0.51)
-    workers 小計: 算出なし（ACP が cost を返さないため）
-    全体: $0.42 (raw $0.51)（conductor 実課金のみ。worker 分は未算出）
+  課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)
   コンテキスト圧縮: 2 回
   未回答 open question: 0
   agentId: agent-1
 ```
 
-worker がいない場合は課金を `課金（全体 = conductor 実課金）` の 1 行にまとめる。conductor cost 未取得時は課金行を出さず、worker 分の金額を推定して補わない。
+cost 行は conductor から取得できた実課金だけを示す。worker が成功して token usage が記録された場合も、失敗して usage が残らなかった場合も、worker cost は取得できないため、セッション全体の金額として conductor cost を表示しない。cost 未取得時は行を省略する。
+
+worker がモデル要求後に切断され、token usage が記録されない場合の表示例:
+
+```text
+セッション終了 (completed)
+  conductor ターン: 1
+  worker ラウンド: 0 完了 / 1 失敗
+  トークン:
+    全体: input 1k / output 100
+    conductor: input 1k / output 100
+  課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)
+  未回答 open question: 0
+  agentId: agent-1
+```
 
 ## 3. LLM usage（`SessionUsageTracker`）
 
@@ -142,6 +153,7 @@ worker がいない場合は課金を `課金（全体 = conductor 実課金）`
 | `context` | `SessionContextUtilization` | 下表 | 同上・TTY（limit 既知時） | 下表 |
 | `cacheStats` | `SessionUsageCacheSummary?` | cache counters を報告した round から算出 | 同上・TTY（rate が算出可能な scope のみ） | 全 round で cache fields が無ければ省略 |
 | `compactionCount` | `number?` | 下記の backend 固有イベント | 同上・TTY | 信頼できる counter が無い backend では省略。Pi では `0` も counter 利用可能を表す値として返す |
+| `cost` | `SessionUsageCost?` | conductor が報告した実課金。`scope: 'conductor-only'` | 同上・TTY・`get_session_usage` | 未取得時は省略 |
 | `latestRound` | `SessionUsageRound \| null` | 最終ラウンド | `get_session_usage` のみ（終了 JSON には含めない案） | `null` |
 
 `LlmTokenCounts`（合算・1 ラウンド共通）:
@@ -203,13 +215,14 @@ sum(cacheReadTokens) / sum(inputTokens + cacheReadTokens)
 
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
-| `cost.rawCostCents` | `number` | Cursor `AgentUsage.cost.rawCostCents` のセッション累計 | `sessionUsage.cost`・TTY テキスト | **フィールド省略**（エラーにしない） |
+| `cost.scope` | `'conductor-only'` | `enrichSessionUsageWithCost` が明示。worker cost を含まない | 終了 JSON・`get_session_usage`・TTY テキスト | cost ごと省略 |
+| `cost.rawCostCents` | `number` | Cursor `AgentUsage.cost.rawCostCents` のセッション累計 | 同上 | **フィールド省略**（エラーにしない） |
 | `cost.chargedCents` | `number` | Cursor `AgentUsage.cost.chargedCents`（割引・Cursor Token Fee 込み） | 同上 | 同上 |
 | `runs[].cost` | `UsageCost?` | run 単位（`getUsage({ runId })`） | `get_usage` | 省略 |
 
 Pi backend の `AssistantMessage.usage.cost` は `pi-ai` v1.2.0 の `calculateCost` が `model.cost` の token 単価と usage から算出する値で、provider の請求記録ではない（[Pi v1.2.0 `calculateCost`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/models.ts#L1119-L1137)）。この値は `ConductorAgent.getUsage()` / `enrichSessionUsageWithCost` に渡さず、`sessionUsage.cost`・`get_session_usage`・TTY に載せない。コスト欄は実課金を報告する backend 値がある場合だけ表示する。
 
-worker cost は **表示しない（Issue #469 の方針 A）**。ACP の `PromptResult.usage` は token counts のみで、現行の worker usage record に model ID が無い。Pi の `models.json` にモデル単価を設定できる場合も、それを任意の ACP worker の provider / model に安全に対応付けられないため、単価を当てはめた推定は行わない。`sessionUsage.cost` は実課金を報告する conductor 値だけを表し、TTY では全体 cost も同額で表示して worker 分を含まないことを明記する。worker cost API が無い場合は worker 小計を「算出なし」と表示する。
+worker cost は **表示しない（Issue #469 の方針 A）**。ACP の `PromptResult.usage` は token counts のみで、現行の worker usage record に model ID が無い。Pi の `models.json` にモデル単価を設定できる場合も、それを任意の ACP worker の provider / model に安全に対応付けられないため、単価を当てはめた推定は行わない。`sessionUsage.cost.scope` は常に `conductor-only` で、JSON / YAML 利用者にも cost が conductor 分だけであることを伝える。TTY も取得できた conductor 実課金を worker 分未算出と併記し、セッション全体の金額とは呼ばない。worker failure で usage round が残らない場合も同じ scope を保つ。
 
 **注意**
 

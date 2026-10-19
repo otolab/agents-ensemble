@@ -82,4 +82,44 @@ describe('writeIssueSessionSummary', () => {
     expect(text).not.toContain('課金');
     expect(logSpy).not.toHaveBeenCalled();
   });
+
+  it('keeps conductor cost scoped when a failed worker has no usage round', () => {
+    const tracker = new SessionUsageTracker();
+    tracker.recordConductorRound({
+      runId: 'run-worker-failure',
+      status: 'finished',
+      usage: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+    });
+    const result = {
+      ...BASE_SUMMARY,
+      workerFailures: [
+        {
+          workerId: 'worker-implementer',
+          name: 'implementer',
+          kind: 'implementer',
+          issueUrl: BASE_SUMMARY.issueUrl,
+          error: 'ACP disconnected after the prompt started',
+        },
+      ],
+      sessionUsage: {
+        ...tracker.getSessionSummary(),
+        cost: {
+          rawCostCents: 51,
+          chargedCents: 42,
+          scope: 'conductor-only' as const,
+        },
+      },
+    } satisfies ConductorSessionResult;
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    writeIssueSessionSummary(result, { format: 'text' });
+
+    const text = String(errorSpy.mock.calls[0]?.[0]);
+    expect(text).toContain('worker ラウンド: 0 完了 / 1 失敗');
+    expect(text).toContain(
+      '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
+    );
+    expect(text).not.toContain('全体 = conductor');
+    expect(text).not.toContain('全体: $0.42');
+  });
 });

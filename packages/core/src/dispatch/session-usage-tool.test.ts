@@ -62,7 +62,7 @@ describe('createSessionUsageTools', () => {
 
     const tools = createSessionUsageTools({
       tracker,
-      workerNames: [],
+      workerNames: ['implementer'],
       getConductorUsageCost: async () => ({
         rawCostCents: 12,
         chargedCents: 10,
@@ -71,8 +71,13 @@ describe('createSessionUsageTools', () => {
 
     const result = await tools.get_session_usage!.execute({});
     expect(result.structuredContent).toMatchObject({
-      cost: { rawCostCents: 12, chargedCents: 10 },
+      cost: {
+        rawCostCents: 12,
+        chargedCents: 10,
+        scope: 'conductor-only',
+      },
     });
+    expect(toolText(result)).toContain('scope: conductor-only');
   });
 
   it('get_session_usage returns compaction count when the tracker supports it', async () => {

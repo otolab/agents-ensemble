@@ -13,6 +13,7 @@ export type {
   SessionUsageAgentTotals,
   SessionUsageCacheStats,
   SessionUsageCacheSummary,
+  SessionUsageCost,
   SessionUsageRound,
   SessionUsageSummary,
 } from './types.js';
