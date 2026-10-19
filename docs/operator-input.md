@@ -95,6 +95,8 @@ Open questions は内容駆動で高さを決めます。選択中 question の 
 
 `stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の live frame に `N 件の新着 · End で最新へ` と表示します。入力欄が空のときの `End`、または入力中の `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。通常の detached 経路では既に Static へ渡した prefix の再送・remount・replay は行いません。settled columns shrink の scrollback recovery だけは [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って terminal reset 後に保持済み activity を再出力します。
 
+TTY の pane / stream では、入力が単一行の slash コマンド prefix の間、Operator input ペイン内に候補と短い説明を表示します。先頭の空白またはタブは無視し、`/` に続く名前を大文字小文字を区別せず prefix 一致で絞り込みます（例: `/ex` は `/exit`）。オペレータ入力で専用処理されるコマンドだけを候補に出し、別名は表示しません。候補は案内として表示するだけで、Enter は入力欄の内容を従来どおり送信します。Tab 補完や上下キーによる候補選択はなく、既存の入力キーと IME カーソル同期をそのまま使います。複数行入力や、候補名の prefix として一致しない slash 付き本文には候補を出しません。
+
 ### 表示出力の inline Markdown subset
 
 活動ログと Open questions の `question` / `context` / `choices`、および dialogue / observation の端末出力では、次の inline Markdown だけを表示スタイルへ変換します。
