@@ -173,7 +173,13 @@ Emacs 風を **自前実装** する場合の最小ループ:
 | TTY スクロール | `issue-session-tui.tsx` の `useInput` | `PgUp/PgDn` / `Home`/`End`（入力空時 or Ctrl 修飾）— **編集ショートカットとは別レイヤ**（競合なし） |
 | 非 TTY | `readline` / 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | 有効な CLI 初回メッセージは 1 回だけ注入。`--continue` / `--resume` で無視された CLI メッセージは注入せず、非 TTY では binding なし。readline は OS・Node readline 依存 |
 
-**`useInput` と TextArea の関係**: 活動ログスクロール用 `useInput` は `Home`/`End`/`PgUp`/`PgDn` のみ。行編集・textarea 内移動（`Ctrl+a/e/f/b/d/p/n` 等）は TextArea 内 `useKeyboardInput` が処理。入力欄に文字があるときはスクロール系は `Ctrl` 修飾時のみ有効。
+**`useInput` と TextArea の関係**: 活動ログスクロール用 `useInput` は `Home`/`End`/`PgUp`/`PgDn` を扱います。slash 候補が表示されている単一行入力に限り、同じ `useInput` が上下矢印で候補選択を進めます。この間だけ TextArea の `Up` / `Down` action を無効にして二重処理を防ぎます。Tab は TextArea の `onTab` callback から候補補完へ渡し、Enter は TextArea の既存 submit action に残します。候補がないときや複数行入力では上下矢印を含む既存 textarea 操作に戻ります。行編集ショートカット（`Ctrl+a/e/f/b/d/p/n` 等）は引き続き TextArea 内 `useKeyboardInput` が処理し、入力欄に文字があるときはスクロール系は `Ctrl` 修飾時のみ有効。
+
+### Slash command 候補のキー操作
+
+TTY の pane / stream では単一行の slash command prefix に一致する候補がある間、候補の先頭を初期選択します。上下矢印で移動し、先頭・末尾では循環しません。候補を編集すると先頭選択へ戻ります。Tab は選択中の候補名で入力全体を置き換え、入力カーソルを末尾へ移しますが submit はしません。続けて Enter を押すと、補完後の入力が従来の Operator input submit 経路へ進みます。
+
+候補がないとき、通常入力、複数行入力では候補専用の矢印・Tab 処理を有効にせず、TextArea の既存 keybinding を保ちます。Open questions が表示されているときの `Shift+↑/↓` による質問選択も優先します。`Ctrl+p/n` の visual row 移動も候補選択とは別のキー操作として維持されます。候補表示と折り返し行数は pane の高さ・IME カーソル座標計算に含めます。利用者向けの全体説明は [operator-input.md](operator-input.md) を参照してください。
 
 **テスト**: `packages/cli/src/tui/operator-text-area-emacs-keys.test.tsx` でフォークキーマップ監査と `useKillRing` 挙動に加え、`operator-text-area-keyboard-harness.tsx` を介した実キー列（`Ctrl+a/e/f/b/d`、`Ctrl+p/n`、`Ctrl+k` + `Ctrl+y`、`Alt+b/f`）を CI で担保する。`Ctrl+p/n` はフォークの `buildVisualRows` を使った multiline 入力で visual row 移動と上下端 no-op を検証する。`ink-testing-library` では実 `TextArea` の measureElement 連鎖が stdin の縦切りを不安定にするため、TextArea 内部の `useKeyboardInput` 配線を再現した React ハーネスで検証する。TTY + 日本語 IME はマージ前の実機ゲート（#186 / #196）。
 

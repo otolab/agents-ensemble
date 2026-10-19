@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo } from 'react';
 import { Box, Text } from 'ink';
 import stringWidth from 'string-width';
-import { TextArea, type TLinePrefixProps } from 'react-ink-textarea';
+import { TextArea, type TKeybindings, type TLinePrefixProps } from 'react-ink-textarea';
 import { computeOperatorInputLayout } from './operator-input-layout.js';
 import { INPUT_PANE_PROMPT_COLOR } from './tui-layout-constants.js';
 
@@ -17,6 +17,13 @@ export interface OperatorTextAreaProps {
   /** 入力欄に表示できる最大行数（末尾追従）。 */
   readonly maxDisplayLines: number;
   readonly onDisplayLineCountChange?: (lineCount: number) => void;
+  /** Slash 候補表示中は上下矢印を候補選択へ渡す。 */
+  readonly commandSuggestionsActive?: boolean;
+  /** TextArea の Tab callback。 */
+  readonly onTab?: (shift: boolean) => void;
+  /** 候補補完後の caret 位置。 */
+  readonly cursorPosition?: [number, number];
+  readonly onCursorChange?: (position: [number, number]) => void;
   /**
    * Ink 出力原点からの入力欄先頭行位置。IME 変換窓を実カーソルに合わせる。
    * `x` はプロンプト直前の列（`linePrefix` 幅は TextArea 側で加算）、`y` は表示先頭行。
@@ -37,6 +44,10 @@ export function OperatorTextArea({
   promptPrefix = '',
   maxDisplayLines,
   onDisplayLineCountChange,
+  commandSuggestionsActive = false,
+  onTab,
+  cursorPosition,
+  onCursorChange,
   cursorStart,
 }: OperatorTextAreaProps) {
   const promptWidth = stringWidth(promptPrefix);
@@ -67,6 +78,9 @@ export function OperatorTextArea({
           y: cursorStart.y,
         }
       : undefined;
+  const keybindings: TKeybindings | undefined = commandSuggestionsActive
+    ? { Up: false, Down: false }
+    : undefined;
 
   return (
     <Box width={contentWidth} flexDirection="column">
@@ -75,6 +89,10 @@ export function OperatorTextArea({
         value={value}
         onChange={onChange}
         onSubmit={(submitted) => onSubmit?.(submitted)}
+        onTab={onTab}
+        keybindings={keybindings}
+        cursorPosition={cursorPosition}
+        onCursorChange={onCursorChange}
         linePrefix={promptPrefix ? linePrefix : undefined}
         viewportLines={maxDisplayLines}
         initialLineCount={1}

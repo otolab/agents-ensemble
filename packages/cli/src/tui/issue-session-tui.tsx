@@ -42,7 +42,11 @@ import {
   WORKER_PANE_TITLE,
 } from './tui-layout-constants.js';
 import { OperatorTextArea } from './operator-text-area.js';
-import { getOperatorCommandSuggestionLines } from './operator-command-suggestions.js';
+import {
+  advanceOperatorCommandSelection,
+  getOperatorCommandSuggestionLines,
+  getOperatorCommandSuggestions,
+} from './operator-command-suggestions.js';
 import { TitledBorderPane } from './titled-border-pane.js';
 import {
   computeInputPaneHeight,
@@ -378,8 +382,10 @@ export function IssueSessionTui({
     viewModel.getSnapshot,
   );
   const [inputValue, setInputValue] = useState('');
+  const [inputCursorPosition, setInputCursorPosition] = useState<[number, number]>([0, 0]);
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
   const previousActivityLogRef = useRef(snapshot.activityLog);
   const previousDisplayLineCountRef = useRef(0);
@@ -404,9 +410,11 @@ export function IssueSessionTui({
     [openQuestions, selectedQuestionIndex, contentWidth, liveFrameRows],
   );
   const selectedQuestion = openQuestions[openQuestionsLayout.selectedIndex];
+  const commandSuggestions = getOperatorCommandSuggestions(inputValue);
   const commandSuggestionLines = getOperatorCommandSuggestionLines(
     inputValue,
     contentWidth,
+    selectedCommandIndex,
   );
   const operatorInputDisplay = resolveOperatorInputDisplayMode({
     openQuestions,
@@ -517,6 +525,21 @@ export function IssueSessionTui({
       }
     }
 
+    if (commandSuggestions.length > 0) {
+      if (key.upArrow) {
+        setSelectedCommandIndex((current) =>
+          advanceOperatorCommandSelection(current, 'up', commandSuggestions.length),
+        );
+        return;
+      }
+      if (key.downArrow) {
+        setSelectedCommandIndex((current) =>
+          advanceOperatorCommandSelection(current, 'down', commandSuggestions.length),
+        );
+        return;
+      }
+    }
+
     const scrollWithModifier = key.ctrl;
     const scrollWithoutModifier = inputValue.length === 0;
     if (!scrollWithModifier && !scrollWithoutModifier) {
@@ -557,7 +580,27 @@ export function IssueSessionTui({
         : undefined,
     );
     setInputValue('');
+    setInputCursorPosition([0, 0]);
+    setSelectedCommandIndex(0);
     setInputDisplayLineCount(1);
+  };
+
+  const handleInputChange = (value: string) => {
+    setInputValue(value);
+    setSelectedCommandIndex(0);
+  };
+
+  const handleCommandTab = (shift: boolean) => {
+    if (shift) {
+      return;
+    }
+    const selectedCommand = commandSuggestions[selectedCommandIndex];
+    if (!selectedCommand) {
+      return;
+    }
+    setInputValue(selectedCommand.name);
+    setInputCursorPosition([0, selectedCommand.name.length]);
+    setSelectedCommandIndex(0);
   };
 
   return (
@@ -604,23 +647,28 @@ export function IssueSessionTui({
             color={INPUT_PANE_HINT_COLOR}
           />
         ))}
-        {commandSuggestionLines.map((line, index) => (
+        {commandSuggestionLines.map((line) => (
           <Text
-            key={`operator-command-suggestion-${index}`}
-            color={INPUT_PANE_HINT_COLOR}
+            key={`operator-command-suggestion-${line.id}`}
+            color={line.isSelected ? 'cyan' : INPUT_PANE_HINT_COLOR}
+            bold={line.isSelected}
           >
-            {line}
+            {line.text}
           </Text>
         ))}
         <OperatorTextArea
           value={inputValue}
-          onChange={setInputValue}
+          onChange={handleInputChange}
           onSubmit={handleSubmit}
           focus={!snapshot.shuttingDown}
           contentWidth={contentWidth}
           promptPrefix={operatorPrompt}
           maxDisplayLines={maxInputDisplayLines}
           onDisplayLineCountChange={handleDisplayLineCountChange}
+          commandSuggestionsActive={commandSuggestions.length > 0}
+          onTab={commandSuggestions.length > 0 ? handleCommandTab : undefined}
+          cursorPosition={inputCursorPosition}
+          onCursorChange={setInputCursorPosition}
           cursorStart={cursorStart}
         />
       </TitledBorderPane>

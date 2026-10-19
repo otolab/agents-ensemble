@@ -11,8 +11,8 @@ describe('operator command catalog', () => {
     ).toEqual([
       { name: '/reconnect', aliases: ['reconnect'] },
       { name: '/exit', aliases: ['exit'] },
+      { name: '/close', aliases: ['close'] },
     ]);
-    expect(OPERATOR_COMMANDS.map(({ name }) => name)).not.toContain('/close');
   });
 
   it('uses the catalog for case-insensitive exact command matching', () => {

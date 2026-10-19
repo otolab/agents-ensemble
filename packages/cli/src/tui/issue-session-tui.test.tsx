@@ -162,6 +162,117 @@ describe('IssueSessionTui', () => {
     expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
   });
 
+  it('selects slash suggestions with bounded arrows and completes with Tab before Enter submits', async () => {
+    const viewModel = createTuiViewModel();
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />,
+    );
+
+    stdin.write('/');
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› /reconnect');
+
+    for (const key of [
+      INK_TEST_KEYS.downArrow,
+      INK_TEST_KEYS.downArrow,
+    ]) {
+      stdin.write(key);
+      await flushInkStdin();
+    }
+    expect(lastFrame() ?? '').toContain('› /close');
+
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› /close');
+
+    for (const key of [INK_TEST_KEYS.upArrow, INK_TEST_KEYS.upArrow]) {
+      stdin.write(key);
+      await flushInkStdin();
+    }
+    expect(lastFrame() ?? '').toContain('› /reconnect');
+
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› /reconnect');
+
+    for (const key of [
+      INK_TEST_KEYS.downArrow,
+      INK_TEST_KEYS.downArrow,
+      INK_TEST_KEYS.tab,
+    ]) {
+      stdin.write(key);
+      await flushInkStdin();
+    }
+    expect(lastFrame() ?? '').toContain('operator> /close');
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenCalledWith('/close', undefined);
+  });
+
+  it('resets selection to the first matching candidate when the prefix changes', async () => {
+    const viewModel = createTuiViewModel();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    stdin.write('/');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› /close');
+
+    stdin.write('e');
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› /exit');
+
+    stdin.write(INK_TEST_KEYS.tab);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('operator> /exit');
+  });
+
+  it('keeps Tab and arrow editing behavior when there is no match or input is multiline', async () => {
+    const viewModel = createTuiViewModel();
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />,
+    );
+
+    stdin.write('/unknown');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.tab);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('operator> /unknown');
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenCalledWith('/unknown', undefined);
+
+    cleanup();
+    const secondViewModel = createTuiViewModel();
+    const multilineSubmit = vi.fn();
+    const multiline = render(
+      <IssueSessionTui viewModel={secondViewModel} onSubmit={multilineSubmit} />,
+    );
+    multiline.stdin.write('\u001B[200~first\nsecond\u001B[201~');
+    await flushInkStdin();
+    multiline.stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    multiline.stdin.write('X');
+    await flushInkStdin();
+
+    expect(multiline.lastFrame() ?? '').toContain('firstX');
+    expect(multiline.lastFrame() ?? '').not.toContain('› /');
+    multiline.stdin.write('\r');
+    await flushInkStdin();
+    expect(multilineSubmit).toHaveBeenCalledWith('firstX\nsecond', undefined);
+  });
+
   it('renders four panes with worker, session log, open questions, and input', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({
