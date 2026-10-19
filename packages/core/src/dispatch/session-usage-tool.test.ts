@@ -14,7 +14,7 @@ describe('createSessionUsageTools', () => {
     resetSessionUsageRoundCounter();
   });
 
-  it('get_session_usage returns YAML summary', async () => {
+  it('get_session_usage marks token totals as recorded usage when a worker has no usage round', async () => {
     const tracker = new SessionUsageTracker();
     tracker.recordConductorRound({
       runId: 'run-1',
@@ -37,8 +37,15 @@ describe('createSessionUsageTools', () => {
     expect(toolText(result)).toContain('# get_session_usage');
     expect(toolText(result)).toContain('inputTokens: 40');
     expect(result.structuredContent).toMatchObject({
+      tokenScope: 'recorded-usage-only',
       totals: { rounds: 1, roundsWithUsage: 1 },
+      cacheStats: {
+        totals: { cacheReadTokens: 0, cacheWriteTokens: 0, cacheHitRate: 0 },
+        byAgent: { conductor: { cacheHitRate: 0 } },
+      },
     });
+    expect(toolText(result)).toContain('tokenScope: recorded-usage-only');
+    expect(result.structuredContent).not.toHaveProperty('cost');
   });
 
   it('get_session_usage merges conductor cost when provided', async () => {
@@ -57,7 +64,7 @@ describe('createSessionUsageTools', () => {
 
     const tools = createSessionUsageTools({
       tracker,
-      workerNames: [],
+      workerNames: ['implementer'],
       getConductorUsageCost: async () => ({
         rawCostCents: 12,
         chargedCents: 10,
@@ -66,8 +73,27 @@ describe('createSessionUsageTools', () => {
 
     const result = await tools.get_session_usage!.execute({});
     expect(result.structuredContent).toMatchObject({
-      cost: { rawCostCents: 12, chargedCents: 10 },
+      cost: {
+        rawCostCents: 12,
+        chargedCents: 10,
+        scope: 'conductor-only',
+      },
     });
+    expect(toolText(result)).toContain('scope: conductor-only');
+  });
+
+  it('get_session_usage returns compaction count when the tracker supports it', async () => {
+    const tracker = new SessionUsageTracker({ trackCompactions: true });
+    tracker.recordContextCompaction();
+
+    const tools = createSessionUsageTools({
+      tracker,
+      workerNames: [],
+    });
+
+    const result = await tools.get_session_usage!.execute({});
+    expect(result.structuredContent).toMatchObject({ compactionCount: 1 });
+    expect(toolText(result)).toContain('compactionCount: 1');
   });
 
   it('get_usage returns latest round for a worker', async () => {

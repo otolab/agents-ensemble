@@ -3,7 +3,10 @@ import type { SessionUsageSummary } from './types.js';
 
 export type GetConductorUsageCost = () => Promise<ConductorUsageCost | undefined>;
 
-/** SDK `getUsage().cost` を session usage にマージする。未取得・失敗時は元の summary を返す。 */
+/**
+ * Conductor が報告した請求記録を session usage にマージする。
+ * 推定値は渡さず、未取得・失敗時は元の summary を返す。
+ */
 export async function enrichSessionUsageWithCost(
   summary: SessionUsageSummary,
   getCost?: GetConductorUsageCost,
@@ -17,7 +20,10 @@ export async function enrichSessionUsageWithCost(
     if (cost == null) {
       return summary;
     }
-    return { ...summary, cost };
+    return {
+      ...summary,
+      cost: { ...cost, scope: 'conductor-only' },
+    };
   } catch {
     return summary;
   }

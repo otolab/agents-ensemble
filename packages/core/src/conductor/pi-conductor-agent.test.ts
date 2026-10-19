@@ -139,12 +139,14 @@ describe('PiConductorAgent', () => {
         args: ['--shared'],
       },
     };
+    const onContextCompaction = vi.fn();
     const conductor = await PiConductorAgent.create({
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
       systemPrompt: 'compiled system prompt',
       mcpServers,
+      onContextCompaction,
       customTools: {
         prompt_worker: {
           name: 'prompt_worker',
@@ -213,6 +215,24 @@ describe('PiConductorAgent', () => {
         type: 'message_update',
         assistantMessageEvent: { type: 'text_delta', delta: 'started' },
       });
+      sessionListener?.({
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: {
+          summary: 'compacted',
+          firstKeptEntryId: 'entry-1',
+          tokensBefore: 100,
+          estimatedTokensAfter: 50,
+          usage: {},
+          details: '',
+        },
+        aborted: false,
+        willRetry: false,
+      });
+      sessionListener?.({
+        type: 'entry_appended',
+        entry: { type: 'branch_summary' },
+      });
       fakeSession.state.messages = [finalMessage];
       sessionListener?.({
         type: 'agent_end',
@@ -235,6 +255,7 @@ describe('PiConductorAgent', () => {
       tool: 'prompt_worker',
       callId: 'call-1',
     });
+    expect(onContextCompaction).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       status: 'finished',
       result: 'started',
@@ -247,14 +268,66 @@ describe('PiConductorAgent', () => {
         cacheWriteTokens: 1,
       },
     });
-    expect(await conductor.getUsage()).toEqual({
-      cost: { rawCostCents: 25, chargedCents: 25 },
-    });
+    // Pi's usage.cost is calculated from configured token rates, not billing data.
+    expect(await conductor.getUsage()).toEqual({});
     await conductor.close();
     expect(fakeSession.abort).toHaveBeenCalledOnce();
     expect(fakeSession.dispose).toHaveBeenCalledOnce();
     expect(fakeSession.reload).toHaveBeenCalledOnce();
     void onStreamText;
+  });
+
+  it('counts only successful compaction_end events and ignores missing, failed, or aborted results', async () => {
+    const onContextCompaction = vi.fn();
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+      onContextCompaction,
+    });
+
+    // Persisted compaction entries are not the normal success notification.
+    sessionListener?.({
+      type: 'entry_appended',
+      entry: { type: 'compaction' },
+    });
+    // No event means there is nothing to count.
+    expect(onContextCompaction).not.toHaveBeenCalled();
+
+    sessionListener?.({
+      type: 'compaction_end',
+      reason: 'threshold',
+      result: undefined,
+      aborted: false,
+      willRetry: false,
+      errorMessage: 'Auto-compaction failed',
+    });
+    sessionListener?.({
+      type: 'compaction_end',
+      reason: 'manual',
+      result: undefined,
+      aborted: true,
+      willRetry: false,
+    });
+    expect(onContextCompaction).not.toHaveBeenCalled();
+
+    sessionListener?.({
+      type: 'compaction_end',
+      reason: 'overflow',
+      result: {
+        summary: 'compacted',
+        firstKeptEntryId: 'entry-2',
+        tokensBefore: 200,
+        estimatedTokensAfter: 80,
+        usage: {},
+        details: '',
+      },
+      aborted: false,
+      willRetry: true,
+    });
+    expect(onContextCompaction).toHaveBeenCalledOnce();
+    await conductor.close();
   });
 
   it('closes MCP during session shutdown without launching replacement servers', async () => {

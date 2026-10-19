@@ -31,6 +31,7 @@ import type {
   GitHubUpdatePayload,
 } from '../github/github-update-types.js';
 import { createMockConductorGetUsage } from '../testing/mock-conductor-get-usage.js';
+import type { ConductorAgentCreateOptions } from './conductor-agent.js';
 
 const TEST_ISSUE = {
   owner: 'org',
@@ -280,6 +281,56 @@ describe('runConductorSession resume / shutdown', () => {
       expect.any(Object),
     );
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
+  });
+
+  it('shares Pi tokens and successful compactions with get_session_usage while omitting estimated cost', async () => {
+    let createOptions: ConductorAgentCreateOptions | undefined;
+    mockCreate.mockImplementationOnce(async (options: ConductorAgentCreateOptions) => {
+      createOptions = options;
+      options.onContextCompaction?.();
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: vi.fn().mockResolvedValue({}),
+      };
+    });
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-usage',
+      status: 'finished',
+      result: 'done',
+      usage: { inputTokens: 12, outputTokens: 5, totalTokens: 17 },
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(result.sessionUsage).toMatchObject({
+      totals: {
+        rounds: 1,
+        tokens: { inputTokens: 12, outputTokens: 5, totalTokens: 17 },
+      },
+      compactionCount: 1,
+    });
+    expect(result.sessionUsage).not.toHaveProperty('cost');
+
+    const usageTool = createOptions?.customTools?.get_session_usage;
+    expect(usageTool).toBeDefined();
+    const usageResult = await usageTool!.execute({});
+    expect(usageResult.structuredContent).toMatchObject({
+      totals: {
+        rounds: 1,
+        tokens: { inputTokens: 12, outputTokens: 5, totalTokens: 17 },
+      },
+      compactionCount: 1,
+    });
+    expect(usageResult.structuredContent).not.toHaveProperty('cost');
   });
 
   it('adds the user-wide document to the conductor prompt from the shared user root', async () => {

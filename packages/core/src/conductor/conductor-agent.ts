@@ -17,6 +17,8 @@ export interface ConductorAgentCreateOptions {
   builtinTools?: boolean;
   /** Pi backend only: use Pi standard skill discovery; omitted means enabled. */
   piSkills?: boolean;
+  /** Pi backend only: called when `compaction_end` reports a successful compaction. */
+  onContextCompaction?: () => void;
   apiKey?: string;
   modelId?: string;
   mcpServers?: McpServerConfigMap;
@@ -44,11 +46,14 @@ export interface ConductorTokenUsage {
 }
 
 export interface ConductorUsageCost {
+  /** Raw cost in cents from a backend billing record; omit estimates. */
   rawCostCents: number;
+  /** Charged cost in cents from a backend billing record; omit estimates. */
   chargedCents: number;
 }
 
 export interface ConductorAgentUsage {
+  /** Backend-reported billing data. Model-rate estimates do not belong here. */
   cost?: ConductorUsageCost;
 }
 
