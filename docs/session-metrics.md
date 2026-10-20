@@ -11,6 +11,7 @@
 | [session-logging.md](session-logging.md) | 出力チャネル・SessionLogger・終了 JSON の役割 |
 | [harness-events.md](harness-events.md) | SessionLogEvent / SessionEvent・exit JSON との対応 |
 | [architecture.md](architecture.md) | `SessionUsageTracker`・`get_session_usage` の配線 |
+| [token-usage-semantics.md](token-usage-semantics.md) | LLM usage の source 別の意味、課金との違い、harness 集計の注意 |
 
 **型の正本**
 
@@ -143,6 +144,8 @@ worker がモデル要求後に切断され、token usage が記録されない�
 ## 3. LLM usage（`SessionUsageTracker`）
 
 正本: `packages/core/src/usage/session-usage-tracker.ts`。conductor 各 `agent.send` は SDK `RunResult.usage`、worker 各 prompt は ACP `usage` または **推定**（`estimateTokenUsageFromText`）。
+
+input / output / cache の source ごとの意味、provider 課金との違い、cache rate と context utilization の読み方は [token-usage-semantics.md](token-usage-semantics.md) を参照してください。
 
 ### 3.1 セッションサマリ（`SessionUsageSummary`）
 
