@@ -108,6 +108,6 @@ TTY で worktree とセッション状態を残してプロセスを閉じるに
 | [TUI ショートカット](https://github.com/otolab/agents-ensemble/blob/main/docs/cli-text-input-keybindings.md) | 入力ショートカットの対応状況と実装方針 |
 | [ユーザ定義 team profile](https://github.com/otolab/agents-ensemble/blob/main/docs/user-teams.md) | `~/.ensemble/teams/` の profile 配置と解決順 |
 | [conductor 認証再接続](https://github.com/otolab/agents-ensemble/blob/main/docs/conductor-auth-reconnect.md) | send 経路の in-process 再接続設計 |
-| [Session usage と終了サマリ](https://github.com/otolab/agents-ensemble/blob/main/docs/session-metrics.md) | TTY / JSON の token・cache・cost・compaction 表示と取得範囲 |
+| [Session usage と終了サマリ](https://github.com/otolab/agents-ensemble/blob/main/docs/session-metrics.md) | 終了サマリの開始時刻（`startedAt`）・経過時間（`durationMs`）と、TTY / JSON の token・cache・cost・compaction 表示および取得範囲 |
 
 GitHub 上の全ドキュメントは [docs/README.md](https://github.com/otolab/agents-ensemble/blob/main/docs/README.md) から参照できます。
