@@ -1,8 +1,10 @@
 import { mkdir, mkdtemp } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKCustomTool } from '@cursor/sdk';
+import yaml from 'js-yaml';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
 import {
   SessionLogger,
@@ -22,6 +24,11 @@ import {
   SESSION_SIDECAR_VERSION,
   sessionSidecarPath,
 } from '../../src/session/session-sidecar.js';
+import {
+  loadOpenQuestionsStore,
+  openQuestionsStorePath,
+  saveOpenQuestionsStore,
+} from '../../src/session/open-questions-store.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
 import {
   createInProcessAcpBridge,
@@ -31,6 +38,7 @@ import {
   TEST_WORKTREE,
 } from './helpers/in-process-acp-bridge.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
+import type { OperatorInputBinding } from '../../src/conductor/operator-input-binding.js';
 import {
   extractYamlScalar,
   isWorkerCompletedConductorMessage,
@@ -190,6 +198,19 @@ describe('session resume integration', () => {
       );
       return question ? 'yes, continue' : undefined;
     });
+    let openQuestionsAtBinding: unknown;
+    const bindOperatorInput: OperatorInputBinding = (api) => {
+      openQuestionsAtBinding = yaml.load(
+        readFileSync(
+          openQuestionsStorePath({
+            repoRoot,
+            conductorAgentId: RESUME_AGENT_ID,
+          }),
+          'utf8',
+        ),
+      );
+      return operator.bindOperatorInput(api);
+    };
 
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
@@ -199,7 +220,7 @@ describe('session resume integration', () => {
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
-      bindOperatorInput: operator.bindOperatorInput,
+      bindOperatorInput,
       onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
       connectAcp: async () => bridge,
       ownsWorkerAcpConnections: false,
@@ -224,6 +245,17 @@ describe('session resume integration', () => {
     expect(messages[0]).toContain('yes, continue');
     expect(isWorkerCompletedConductorMessage(messages[1]!)).toBe(true);
     expect(messages.some((message) => message.includes('Issue #1'))).toBe(false);
+    expect(openQuestionsAtBinding).toMatchObject({
+      version: 1,
+      sequence: 1,
+      openQuestions: [
+        {
+          id: 'inq-resume-1',
+          status: 'open',
+          question: 'Continue after restart?',
+        },
+      ],
+    });
 
     expect(
       result.openQuestions.find((question) => question.id === 'inq-resume-1')
@@ -234,6 +266,112 @@ describe('session resume integration', () => {
     expect(result.workerDispatches[0]?.acpSessionId).toBe(
       firstDispatch.acpSessionId,
     );
+    expect(
+      await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: RESUME_AGENT_ID,
+        }),
+      ),
+    ).toEqual({
+      sequence: 1,
+      openQuestions: result.openQuestions,
+    });
+  });
+
+  it('prefers open questions YAML over the JSON sidecar when resuming', async () => {
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: RESUME_AGENT_ID,
+      }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: RESUME_AGENT_ID,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [
+          {
+            id: 'inq-json-1',
+            status: 'open',
+            question: 'This stale JSON question must not be restored.',
+            responseType: 'text',
+            source: 'conductor',
+            askedAt: 1,
+          },
+        ],
+        sequence: 1,
+        workers: {},
+        updatedAt: Date.now(),
+      },
+    );
+    await saveOpenQuestionsStore(
+      openQuestionsStorePath({
+        repoRoot,
+        conductorAgentId: RESUME_AGENT_ID,
+      }),
+      {
+        sequence: 8,
+        openQuestions: [
+          {
+            id: 'inq-yaml-8',
+            status: 'open',
+            question: 'This question came from YAML.',
+            responseType: 'text',
+            source: 'conductor',
+            askedAt: 2,
+          },
+        ],
+      },
+    );
+
+    mockSend.mockResolvedValue({
+      runId: 'run-yaml-resume',
+      status: 'finished',
+      result: 'recorded answer',
+    });
+    const operator = createTestOperatorInputBinding((context) =>
+      context.openQuestions.some((question) => question.id === 'inq-yaml-8')
+        ? 'answer from YAML'
+        : undefined,
+    );
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: RESUME_AGENT_ID,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      bindOperatorInput: operator.bindOperatorInput,
+      onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
+    });
+
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(String(mockSend.mock.calls[0]?.[0])).toContain('answer from YAML');
+    expect(result.openQuestions).toEqual([
+      expect.objectContaining({
+        id: 'inq-yaml-8',
+        question: 'This question came from YAML.',
+        status: 'answered',
+        answer: 'answer from YAML',
+      }),
+    ]);
+    expect(result.openQuestions).not.toContainEqual(
+      expect.objectContaining({ id: 'inq-json-1' }),
+    );
+    expect(
+      await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: RESUME_AGENT_ID,
+        }),
+      ),
+    ).toEqual({
+      sequence: 8,
+      openQuestions: result.openQuestions,
+    });
   });
 
   it('dispatches permission.pending from a resumed worker without an initial send', async () => {

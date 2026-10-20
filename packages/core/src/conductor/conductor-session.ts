@@ -104,6 +104,11 @@ import {
   sessionSidecarPath,
   type SessionSidecar,
 } from '../session/session-sidecar.js';
+import {
+  loadOpenQuestionsStore,
+  openQuestionsStorePath,
+  saveOpenQuestionsStore,
+} from '../session/open-questions-store.js';
 import type { SessionUsageSummary } from '../usage/types.js';
 import type { PendingPermission } from '../permission/pending-permission.js';
 import { formatPermissionSummaryForOperator } from '../permission/format-permission-summary-for-operator.js';
@@ -316,10 +321,31 @@ export async function runConductorSession(
       mcpConfigDigest,
       mcpConfigConfigured,
     });
-    openQuestions.restore({
-      sequence: sidecar.sequence,
-      openQuestions: sidecar.openQuestions,
+    const openQuestionsPath = openQuestionsStorePath({
+      repoRoot: options.repoRoot,
+      conductorAgentId: options.resumeAgentId,
     });
+    const openQuestionsSnapshot =
+      await loadOpenQuestionsStore(openQuestionsPath);
+    if (openQuestionsSnapshot) {
+      openQuestions.restore(openQuestionsSnapshot);
+    } else {
+      const legacySnapshot = {
+        sequence: sidecar.sequence,
+        openQuestions: sidecar.openQuestions,
+      };
+      openQuestions.restore(legacySnapshot);
+      try {
+        await saveOpenQuestionsStore(openQuestionsPath, legacySnapshot);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            `旧 sidecar から復元した open question を YAML にバックフィルできませんでした。今回のセッションは継続します。 error=${detail}`,
+        });
+      }
+    }
     activeProfile = sidecar.profile;
     // Sidecars written before this setting always started every worker eagerly.
     activeLazyWorkers = sidecar.lazyWorkers ?? false;
@@ -865,6 +891,13 @@ export async function runConductorSession(
         ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
         updatedAt: Date.now(),
       };
+      await saveOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot: options.repoRoot,
+          conductorAgentId: conductorHandle.conductor.agentId,
+        }),
+        snapshot,
+      );
       await saveSessionSidecar(
         sessionSidecarPath({
           repoRoot: options.repoRoot,

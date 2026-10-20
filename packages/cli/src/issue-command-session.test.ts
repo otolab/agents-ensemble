@@ -110,6 +110,10 @@ import {
   loadSessionSidecar,
   sessionSidecarPath,
 } from '../../core/src/session/session-sidecar.js';
+import {
+  openQuestionsStorePath,
+  saveOpenQuestionsStore,
+} from '../../core/src/session/open-questions-store.js';
 import * as worktreeModule from '../../core/src/worktree/worktree.js';
 
 const issueUrl = 'https://github.com/org/repo/issues/1';
@@ -466,6 +470,25 @@ describe('executeIssueCommand with the core session', () => {
     const closeSidecar = JSON.parse(await readFile(sidecarPath, 'utf8'));
     expect(closeSidecar.githubMonitor.pendingUpdates).toEqual([pendingUpdate]);
     expect(closeAcknowledge).not.toHaveBeenCalled();
+    await saveOpenQuestionsStore(
+      openQuestionsStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      }),
+      {
+        sequence: 4,
+        openQuestions: [
+          {
+            id: 'inq-4',
+            status: 'open',
+            question: 'Should --continue use the YAML snapshot?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            askedAt: 1,
+          },
+        ],
+      },
+    );
 
     const continuePromise = executeIssueCommand(
       issueUrl,
@@ -497,6 +520,13 @@ describe('executeIssueCommand with the core session', () => {
     );
 
     expect(continueResult.stopReason).toBe('completed');
+    expect(continueResult.openQuestions).toEqual([
+      expect.objectContaining({
+        id: 'inq-4',
+        question: 'Should --continue use the YAML snapshot?',
+        status: 'open',
+      }),
+    ]);
     expect(mockSend).toHaveBeenCalledTimes(3);
     expect(mockSend.mock.calls[2]?.[0]).toContain(
       'arrived while the TTY session was closing',
