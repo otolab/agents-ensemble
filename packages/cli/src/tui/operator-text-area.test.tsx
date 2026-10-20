@@ -90,7 +90,7 @@ describe('OperatorTextArea (production wrapper)', () => {
         onChange={() => {}}
         contentWidth={40}
         maxDisplayLines={4}
-        commandSuggestionsActive
+        suggestionsActive
         onTab={onTab}
         cursorPosition={[0, 3]}
         onCursorChange={onCursorChange}
