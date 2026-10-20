@@ -179,15 +179,19 @@ describe('runConductorSession resume / shutdown', () => {
       getUsage: createMockConductorGetUsage(),
     }));
     mockCreateGitHubMonitor.mockReset();
-    mockCreateGitHubMonitor.mockImplementation((options) => ({
-      start: vi.fn(),
-      stop: vi.fn().mockResolvedValue(undefined),
-      flush: vi.fn(),
-      getCursor: vi.fn().mockReturnValue({ lastIssueCommentId: undefined, pullRequests: {} }),
-      acknowledgeUpdates: vi.fn(),
-      unregisterPullRequest: vi.fn(),
-      onUpdate: options.onUpdate,
-    }));
+    mockCreateGitHubMonitor.mockImplementation((options) => {
+      const cursor = options.cursor ?? { pullRequests: {} };
+      return {
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+        flush: vi.fn(),
+        getCursor: vi.fn().mockReturnValue(cursor),
+        acknowledgeUpdates: vi.fn(),
+        registerPullRequest: vi.fn(),
+        unregisterPullRequest: vi.fn(),
+        onUpdate: options.onUpdate,
+      };
+    });
   });
 
   afterEach(() => {
