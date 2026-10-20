@@ -61,6 +61,8 @@
 | `agentId` | `string` | SDK `ConductorAgent` | 終了 JSON・TTY テキスト（resume 用） | なし（常に設定） |
 | `issueUrl` | `string` | セッション開始引数 | 終了 JSON | なし |
 | `repoRoot` | `string` | worktree 解決後 | 終了 JSON | なし |
+| `startedAt` | `number` | `SessionLogger` 生成時の `Date.now()`（Unix epoch ms） | 終了 JSON | なし |
+| `durationMs` | `number` | 終了 snapshot 生成時の `Date.now() - startedAt` | 終了 JSON・TTY テキスト | なし。snapshot 以後の teardown は含まない |
 | `stopReason` | `IssueLoopStopReason` | `session.stop`（`completed` / `error` / `cancelled` / `max_turns` / `interrupted`） | 終了 JSON・TTY テキスト | なし |
 | `sendCount` | `number` | `conductor.send` 完了回数 | 終了 JSON・TTY テキスト・活動ログ（イベント本文） | `0` |
 | `lastRunStatus` | `string` | 直近 `conductor.send` の SDK status | 終了 JSON | 最終 send 無し時は `'finished'` |
@@ -104,6 +106,7 @@
 
 ```text
 セッション終了 (completed)
+  経過時間: 2分15秒
   conductor ターン: 3
   worker ラウンド: 3 完了 / 0 失敗
   トークン（取得・記録済み usage）:

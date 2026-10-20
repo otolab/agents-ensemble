@@ -98,7 +98,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 
 | 分類 | フィールド |
 |------|-----------|
-| メトリクス | `sendCount`, `stopReason`, `lastRunStatus` |
+| メトリクス | `startedAt`（Unix epoch ms）, `durationMs`（`SessionLogger` 生成から終了 snapshot 生成まで）, `sendCount`, `stopReason`, `lastRunStatus` |
 | 末尾のみ | `lastResult`, `lastError` |
 | 蓄積（全履歴） | `workerDispatches` / CLI 出力では `workerResponses` に要約 |
 | harness 参照用 | `agentId`, `issueUrl`, `repoRoot` |
@@ -107,6 +107,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 | worker 応答要約 | `workerResponses[].responsePreview`（全文は `--include-full-response-text`） |
 
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
+`durationMs` は終了 snapshot を作る時点で算出するため、その後に実行する resource teardown や worktree cleanup の時間は含みません。teardown の所要時間は `harness.teardown.durationMs` として別に記録します。
 
 resume 用の harness 状態は sidecar と open question YAML に保存します。open question の正本は YAML で、sidecar JSON の `openQuestions` / `sequence` は移行期間中の互換コピーです。終了 JSON の `agentId` は参照用コピーです。
 

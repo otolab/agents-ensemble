@@ -14,6 +14,8 @@ function createSummary(
     agentId: 'agent-1',
     issueUrl: 'https://github.com/org/repo/issues/1',
     repoRoot: '/repo',
+    startedAt: 1_750_000_000_000,
+    durationMs: 83_000,
     sendCount: 3,
     stopReason: 'completed',
     lastRunStatus: 'finished',
@@ -78,6 +80,8 @@ function createSummary(
 describe('formatIssueSessionSummaryJson', () => {
   it('includes sessionUsage and responsePreview by default', () => {
     const json = JSON.parse(formatIssueSessionSummaryJson(createSummary()));
+    expect(json.startedAt).toBe(1_750_000_000_000);
+    expect(json.durationMs).toBe(83_000);
     expect(json.sessionUsage?.totals.tokens.inputTokens).toBe(1200);
     expect(json.sessionUsage?.tokenScope).toBe('recorded-usage-only');
     expect(json.sessionUsage?.latestRound).toBeNull();
@@ -150,6 +154,7 @@ describe('formatIssueSessionSummaryText', () => {
   it('renders recorded total and conductor token rows with conductor actual cost', () => {
     const text = formatIssueSessionSummaryText(createSummary());
     expect(text).toContain('セッション終了 (completed)');
+    expect(text).toContain('経過時間: 1分23秒');
     expect(text).toContain('conductor ターン: 3');
     expect(text).toContain('worker ラウンド: 1 完了 / 0 失敗');
     expect(text).toContain('トークン（取得・記録済み usage）:');

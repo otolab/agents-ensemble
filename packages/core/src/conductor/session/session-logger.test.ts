@@ -26,6 +26,29 @@ const TEST_DISPATCH = {
 };
 
 describe('SessionLogger', () => {
+  it('records the start time and elapsed time in its summary snapshot', () => {
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValueOnce(1_750_000_000_000);
+    now.mockReturnValueOnce(1_750_000_001_250);
+    const logger = new SessionLogger({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      repoRoot: '/repo',
+    });
+
+    try {
+      const summary = logger.snapshot({
+        agentId: 'agent-1',
+        escalations: [],
+        openQuestions: [],
+      });
+
+      expect(summary.startedAt).toBe(1_750_000_000_000);
+      expect(summary.durationMs).toBe(1_250);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('records events and builds a ConductorSessionResult-compatible snapshot', () => {
     const logger = new SessionLogger({
       issueUrl: 'https://github.com/org/repo/issues/1',
