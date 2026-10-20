@@ -66,6 +66,31 @@ describe('open questions store', () => {
     ).toBe('inq-5');
   });
 
+  it('preserves question IDs without the registry-generated inq-N form', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
+    const path = openQuestionsStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-custom-id',
+    });
+    const snapshot = {
+      sequence: 8,
+      openQuestions: [
+        {
+          id: 'inq-yaml-8',
+          question: 'Question from a stored snapshot',
+          responseType: 'text' as const,
+          source: 'conductor' as const,
+          status: 'open' as const,
+          askedAt: 1,
+        },
+      ],
+    };
+
+    await saveOpenQuestionsStore(path, snapshot);
+
+    await expect(loadOpenQuestionsStore(path)).resolves.toEqual(snapshot);
+  });
+
   it('returns undefined when the YAML store does not exist', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
 

@@ -91,7 +91,10 @@ function parseOpenQuestionsStore(
       throw new Error(`Invalid open questions YAML: duplicate id ${id}`);
     }
     questionIds.add(id);
-    if (idSequence > highestQuestionSequence) {
+    if (
+      idSequence !== undefined &&
+      idSequence > highestQuestionSequence
+    ) {
       highestQuestionSequence = idSequence;
     }
   }
@@ -110,16 +113,14 @@ function parseOpenQuestionsStore(
 function validateOpenQuestion(
   value: unknown,
   index: number,
-): { id: string; sequence: number } {
+): { id: string; sequence?: number } {
   const field = `openQuestions[${index}]`;
   const question = asRecord(value, field);
   requireString(question.id, `${field}.id`);
-  const idMatch = /^inq-([1-9]\d*)$/.exec(question.id as string);
-  if (!idMatch) {
-    throw new Error(`Invalid open questions YAML: ${field}.id`);
-  }
-  const idSequence = Number(idMatch[1]);
-  if (!Number.isSafeInteger(idSequence)) {
+  const id = question.id as string;
+  const idMatch = /^inq-([1-9]\d*)$/.exec(id);
+  const idSequence = idMatch ? Number(idMatch[1]) : undefined;
+  if (idSequence !== undefined && !Number.isSafeInteger(idSequence)) {
     throw new Error(`Invalid open questions YAML: ${field}.id`);
   }
   requireString(question.question, `${field}.question`);
@@ -198,7 +199,10 @@ function validateOpenQuestion(
       );
     }
   }
-  return { id: question.id as string, sequence: idSequence };
+  return {
+    id,
+    ...(idSequence !== undefined ? { sequence: idSequence } : {}),
+  };
 }
 
 function asRecord(value: unknown, field: string): Record<string, unknown> {
