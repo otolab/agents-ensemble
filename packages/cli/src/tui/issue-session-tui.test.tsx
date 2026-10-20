@@ -800,6 +800,8 @@ describe('IssueSessionTui', () => {
       <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
     );
     expect(thinkingFrame() ?? '').toContain('conductor: thinking');
+    expect(thinkingFrame() ?? '').toContain('implementer: idle');
+    expect(thinkingFrame() ?? '').not.toContain('implementer (implementer)');
     unmountThinking();
 
     viewModel.setDisplayState({
@@ -817,6 +819,38 @@ describe('IssueSessionTui', () => {
     );
     expect(idleFrame() ?? '').toContain('conductor: idle');
     expect(idleFrame() ?? '').not.toContain('conductor: thinking');
+  });
+
+  it('formats worker names and running activity in the workers pane', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {
+        conductor: { kind: 'conductor', status: 'running' },
+        implementer: {
+          kind: 'implementer',
+          status: 'running',
+          activity: 'calling: Shell',
+        },
+        impl: {
+          kind: 'implementer',
+          status: 'running',
+          activity: 'editing files',
+        },
+      },
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('conductor: thinking');
+    expect(frame).toContain('implementer: running (calling: Shell)');
+    expect(frame).not.toContain('implementer (implementer)');
+    expect(frame).toContain('impl (implementer): running (editing files)');
   });
 
   it('does not bleed activity log text onto pane border lines', () => {
