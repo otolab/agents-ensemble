@@ -36,8 +36,8 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       items: [
         '- `.ensemble/sessions/` の sidecar 一覧と要約を読む読み取り専用ツールです',
         '- Issue URL と参照、`conductorAgentId`、conductor backend、profile、worker 名、open question 件数と要約、更新時刻、`dataAsOf` を返します。従来の `agentId` も互換のため残します',
-        '- `statusLine` は conductor の最新報告（未報告・読み取り不可は `null`）、`reportedAt` は報告時刻です',
-        '- `lifecycle` は `closed` / `exited` / `interrupted` / `unknown` です。旧 sidecar や未記録は `unknown` で、`running` は記録しません',
+        '- `statusLine` は conductor の最新報告（未報告・読み取り不可は `null`）、`reportedAt` は報告時刻です。`statusLineHistory` には直近の過去報告を古い順で返します（最大 50 件、状態ファイル全体で最大 16 KiB）',
+        '- `lifecycle` は `closed` / `exited` / `interrupted` / `unknown` です。旧 sidecar や未記録、再開後は `unknown` で、`running` は記録しません',
         '- `limit` は返却する件数（1〜50、既定 20）です',
         '- `sort` は `updatedAtDesc`（既定）または `updatedAtAsc`、`hasStatusLine` は報告の有無、`lifecycle` は終了区分で絞り込みます',
         '- 読み取り専用で、conductor への接続や起動状態の判定は行いません',

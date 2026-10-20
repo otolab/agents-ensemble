@@ -38,6 +38,7 @@ describe('list_operator_sessions', () => {
         conductorBackend: string;
         statusLine: string | null;
         reportedAt: number | null;
+        statusLineHistory: Array<{ statusLine: string; reportedAt: number }>;
         lifecycle: string;
         openQuestionCount: number;
         workers: string[];
@@ -60,6 +61,7 @@ describe('list_operator_sessions', () => {
           conductorBackend: 'cursor',
           statusLine: '実装中：レビュー待ち',
           reportedAt: expect.any(Number),
+          statusLineHistory: [],
           lifecycle: 'closed',
           openQuestionCount: 1,
           workers: ['implementer'],
@@ -120,6 +122,56 @@ describe('list_operator_sessions', () => {
       expect.objectContaining({ conductorAgentId: 'closed', issueUrl }),
       expect.objectContaining({ conductorAgentId: 'exited', issueUrl }),
     ]);
+  });
+
+  it('returns bounded statusLine history through the existing list tool', async () => {
+    const issueUrl = 'https://github.com/example/project/issues/499';
+    await writeSidecar('history', 30, issueUrl, {
+      statusLine: '最新の報告',
+    });
+    await writeFile(
+      join(
+        repoRoot,
+        '.ensemble',
+        'sessions',
+        'history',
+        'session-state.yaml',
+      ),
+      [
+        'version: 2',
+        'current:',
+        '  statusLine: 最新の報告',
+        '  reportedAt: 30',
+        'history:',
+        '  - statusLine: 最初の報告',
+        '    reportedAt: 10',
+        '  - statusLine: 前の報告',
+        '    reportedAt: 20',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const result = JSON.parse(
+      (await createListOperatorSessionsTool(repoRoot).execute({})).content[0]!
+        .text,
+    ) as {
+      sessions: Array<{
+        statusLine: string | null;
+        reportedAt: number | null;
+        statusLineHistory: Array<{ statusLine: string; reportedAt: number }>;
+      }>;
+    };
+    expect(result.sessions[0]).toEqual(
+      expect.objectContaining({
+        statusLine: '最新の報告',
+        reportedAt: 30,
+        statusLineHistory: [
+          { statusLine: '最初の報告', reportedAt: 10 },
+          { statusLine: '前の報告', reportedAt: 20 },
+        ],
+      }),
+    );
   });
 
   it('returns an empty result when this repository has no session directory', async () => {

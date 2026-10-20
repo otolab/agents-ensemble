@@ -7,8 +7,8 @@ import {
   type ConductorJsonValue,
   type ConductorTool,
   type SessionLifecycle,
+  type SessionStateStore,
   type SessionSidecar,
-  type SessionStatusLine,
 } from '@agents-ensemble/core/operator-runtime';
 
 export const LIST_OPERATOR_SESSIONS_TOOL = 'list_operator_sessions';
@@ -33,6 +33,7 @@ interface OperatorSessionSummary {
   updatedAt: number;
   statusLine: string | null;
   reportedAt: number | null;
+  statusLineHistory: SessionStateStore['history'];
   lifecycle: SessionLifecycle;
   openQuestionCount: number;
   workers: string[];
@@ -184,7 +185,7 @@ function resolveLifecycle(
 async function loadStatusLine(
   repoRoot: string,
   sidecar: SessionSidecar,
-): Promise<SessionStatusLine | undefined> {
+): Promise<SessionStateStore | undefined> {
   try {
     return await loadSessionStateStore(
       sessionStateStorePath({
@@ -201,7 +202,7 @@ async function loadStatusLine(
 
 function summarizeSession(
   sidecar: SessionSidecar,
-  status: SessionStatusLine | undefined,
+  status: SessionStateStore | undefined,
 ): OperatorSessionSummary {
   let issueRef: OperatorSessionSummary['issueRef'] = null;
   try {
@@ -229,8 +230,9 @@ function summarizeSession(
       sidecar.profilePath ??
       'unknown',
     updatedAt: sidecar.updatedAt,
-    statusLine: status?.statusLine ?? null,
-    reportedAt: status?.reportedAt ?? null,
+    statusLine: status?.current.statusLine ?? null,
+    reportedAt: status?.current.reportedAt ?? null,
+    statusLineHistory: status?.history ?? [],
     lifecycle: sidecar.lifecycle ?? 'unknown',
     openQuestionCount: openQuestions.length,
     workers: Object.keys(sidecar.workers).sort(),

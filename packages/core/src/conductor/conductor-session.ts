@@ -335,11 +335,11 @@ export async function runConductorSession(
   let toolCallHistoryNeedsRewrite = false;
 
   if (options.resumeAgentId) {
-    const sidecar = await requireSessionSidecarForResume({
+    const loadedSidecar = await requireSessionSidecarForResume({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
     });
-    assertSessionSidecarMatches(sidecar, {
+    assertSessionSidecarMatches(loadedSidecar, {
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
       repoRoot: options.repoRoot,
@@ -347,6 +347,22 @@ export async function runConductorSession(
       mcpConfigDigest,
       mcpConfigConfigured,
     });
+    // A previously completed lifecycle no longer describes this instance once
+    // resume begins. Persist unknown before restoring or attaching anything so
+    // a crash before the first regular sidecar flush cannot leave stale
+    // `closed` / `exited` data behind.
+    const sidecar: SessionSidecar = {
+      ...loadedSidecar,
+      lifecycle: 'unknown',
+      updatedAt: Date.now(),
+    };
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot: options.repoRoot,
+        conductorAgentId: options.resumeAgentId,
+      }),
+      sidecar,
+    );
     const history = await loadToolCallSnapshotHistory({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
@@ -454,6 +470,8 @@ export async function runConductorSession(
     new PermissionPipeline({ policy: options.permissionPolicy });
 
   let scheduleSidecarFlush = () => {};
+  let flushSidecar: (lifecycle?: SessionLifecycle) => Promise<void> =
+    async () => {};
   let scheduleToolCallHistoryFlush = () => {};
   let flushToolCallHistory = async () => {};
   let toolCallHistoryDirty = toolCallHistoryNeedsRewrite;
@@ -817,9 +835,12 @@ export async function runConductorSession(
       githubMonitorCursor ??= emptyGitHubMonitorCursor();
       return githubMonitorCursor;
     },
-    onRegistered: (registration) => {
+    onRegistered: async (registration) => {
       githubMonitor?.registerPullRequest?.(registration);
-      scheduleSidecarFlush();
+      // Do not report success to the conductor until the explicit watch is
+      // durable. This closes the crash window between the tool result and a
+      // later best-effort flush.
+      await flushSidecar();
     },
   });
   const unregisterGitHubWatchTools = createUnregisterGitHubWatchTool({
@@ -828,9 +849,9 @@ export async function runConductorSession(
       githubMonitorCursor ??= emptyGitHubMonitorCursor();
       return githubMonitorCursor;
     },
-    onUnregistered: (prNumber) => {
+    onUnregistered: async (prNumber) => {
       githubMonitor?.unregisterPullRequest?.(prNumber);
-      scheduleSidecarFlush();
+      await flushSidecar();
     },
   });
 
@@ -975,8 +996,6 @@ export async function runConductorSession(
   };
 
   let sidecarFlushQueue: Promise<void> = Promise.resolve();
-  let flushSidecar: (lifecycle?: SessionLifecycle) => Promise<void> =
-    async () => {};
   flushSidecar = (lifecycle): Promise<void> => {
     const nextFlush = sidecarFlushQueue.then(async () => {
       const workers: SessionSidecar['workers'] = {};

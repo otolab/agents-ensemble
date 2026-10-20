@@ -42,6 +42,7 @@ export {
 export {
   loadSessionStateStore,
   sessionStateStorePath,
+  type SessionStateStore,
   type SessionStatusLine,
 } from './session/session-state-store.js';
 export { parseIssueUrl } from './issue/issue-ref.js';

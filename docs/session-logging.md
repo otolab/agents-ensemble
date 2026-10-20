@@ -193,15 +193,19 @@ permission の ACP variant と抽出優先順位は
     session-state.yaml
 ```
 
-`session-state.yaml` は `report_session_state` が登録した最新の statusLine と報告時刻をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。
+`session-state.yaml` は `report_session_state` が登録した最新の statusLine と過去の報告をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。`current` が最新値、`history` は過去の値を古い順に並べた一覧です。履歴は最大 50 件、ファイル全体は最大 16 KiB で、上限を超える場合は古い履歴から削除します。
 
 ```yaml
-version: 1
-statusLine: "レビュー中：CIテスト待ち"
-reportedAt: 1735689600000
+version: 2
+current:
+  statusLine: "レビュー中：CIテスト待ち"
+  reportedAt: 1735689600000
+history:
+  - statusLine: "調査中：失敗を再現"
+    reportedAt: 1735689500000
 ```
 
-statusLine の履歴は保存せず、最新の 1 件だけを保持します。異なる `conductorAgentId` は同じ Issue を扱っていても別々のファイルです。
+一覧ツールは `statusLine` / `reportedAt` に加え、`statusLineHistory` として保存済みの履歴も返します。旧 version 1 ファイルは読み取り時に `current` として扱い、次の報告時に version 2 へ移行します。異なる `conductorAgentId` は同じ Issue を扱っていても別々のファイルです。
 
 `open-questions.yaml` は OpenQuestionRegistry 全体のスナップショットです。質問の登録・回答後と終了時に atomic rename で保存します。YAML の形は次のとおりです。
 
@@ -228,7 +232,7 @@ openQuestions:
 
 `--continue` は従来どおり JSON sidecar の `updatedAt` からセッションを選びます。`--resume` / `--continue` の復元時は、YAML があれば質問一覧と sequence にその内容を使います。YAML がまだない既存セッションでは JSON sidecar の `openQuestions` と `sequence` から復元し、YAML をバックフィルします。移行期間中は flush のたびに両方へ同じ質問スナップショットを書きます。YAML が存在していて読み取りまたはスキーマ検証に失敗した場合は resume を中止し、古い可能性がある JSON 側の質問一覧へ黙って切り替えません。
 
-JSON sidecar の `lifecycle` は最後に完了した teardown の区分です。`/close` は `closed`、`/exit` は isolated worktree の cleanup 試行後に `exited`、SIGINT / SIGTERM による終了は `interrupted` を最終 sidecar flush で記録します。それ以外の通常終了は `unknown` です。古い sidecar で値がない場合も `unknown` として扱います。Phase 1 は `running` を記録しないため、この値は現在プロセスが稼働中かどうかを示しません。operator-agent は sidecar と session-state の読み取りだけを行い、conductor に接続しません。
+JSON sidecar の `lifecycle` は最後に完了した teardown の区分です。`/close` は `closed`、`/exit` は isolated worktree の cleanup 試行後に `exited`、SIGINT / SIGTERM による終了は `interrupted` を最終 sidecar flush で記録します。それ以外の通常終了は `unknown` です。古い sidecar で値がない場合も `unknown` として扱います。既存 sidecar を resume する際は conductor の再開処理に入る前に `unknown` を atomic に保存し、resume 後に flush する前のクラッシュで前回 teardown の値が残らないようにします。Phase 1 は `running` を記録しないため、この値は現在プロセスが稼働中かどうかを示しません。operator-agent は sidecar と session-state の読み取りだけを行い、conductor に接続しません。
 
 | | SessionSummary（終了 JSON） | sidecar / session YAML |
 |--|---------------------------|---------|
@@ -236,7 +240,7 @@ JSON sidecar の `lifecycle` は最後に完了した teardown の区分です�
 | **タイミング** | プロセス終了時に 1 回 | 状態変化時に best-effort flush + 終了時 |
 | **会話本文** | 載せない（worker 応答の要約のみ） | 載せない |
 | **open question** | 終了時の一覧スナップショット | YAML が正本。移行中は JSON sidecar にも同じ一覧を保存 |
-| **operator 状態** | 載せない | `session-state.yaml` に最新 statusLine、JSON sidecar に lifecycle を保存 |
+| **operator 状態** | 載せない | `session-state.yaml` に最新 statusLine と上限付き履歴、JSON sidecar に lifecycle を保存 |
 | **worker session** | 載せない | `acpSessionId` を保持 |
 | **tool-call snapshot** | 載せない | 別ファイル `.tool-calls` に保持（TTL / サイズ上限あり） |
 

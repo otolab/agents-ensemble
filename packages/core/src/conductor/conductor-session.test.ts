@@ -284,6 +284,52 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
+  it.each(['closed', 'exited'] as const)(
+    'clears stale %s lifecycle before resuming the conductor',
+    async (lifecycle) => {
+      const agentId = `resume-${lifecycle}-lifecycle`;
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: agentId,
+      });
+      await saveSessionSidecar(sidecarPath, {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        lifecycle,
+        updatedAt: 1,
+      });
+      mockResume.mockImplementationOnce(async () => {
+        const persisted = await loadSessionSidecar(sidecarPath);
+        expect(persisted?.lifecycle).toBe('unknown');
+        throw new Error('simulated crash before first regular sidecar flush');
+      });
+
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          resumeAgentId: agentId,
+          permissionPipeline: new PermissionPipeline({}),
+          registerProcessSignalHandlers: false,
+        }),
+      ).rejects.toThrow(
+        'simulated crash before first regular sidecar flush',
+      );
+
+      await expect(loadSessionSidecar(sidecarPath)).resolves.toMatchObject({
+        lifecycle: 'unknown',
+        updatedAt: expect.any(Number),
+      });
+    },
+  );
+
   it('selects the Pi factory and sends a short kickoff instead of the compiled prompt', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-kickoff',
@@ -413,8 +459,11 @@ describe('runConductorSession resume / shutdown', () => {
         }),
       ),
     ).resolves.toMatchObject({
-      statusLine: 'レビュー中：CIテスト待ち',
-      reportedAt: expect.any(Number),
+      current: {
+        statusLine: 'レビュー中：CIテスト待ち',
+        reportedAt: expect.any(Number),
+      },
+      history: [],
     });
   });
 
@@ -771,6 +820,13 @@ describe('runConductorSession resume / shutdown', () => {
     });
     mockSend.mockImplementationOnce(async () => {
       await conductorTools!.register_github_watch!.execute({ prNumber: 354 });
+      const sidecar = await loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      );
+      expect(sidecar?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+        registeredAt: expect.any(String),
+        kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+      });
       return {
         runId: 'run-1',
         status: 'finished',
