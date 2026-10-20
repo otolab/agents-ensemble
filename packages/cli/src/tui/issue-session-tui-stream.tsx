@@ -17,6 +17,7 @@ import {
   INPUT_PANE_TITLE,
   INPUT_PANE_BORDER_COLOR,
   INPUT_PANE_HINT_COLOR,
+  OPERATOR_INPUT_PROMPT,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
 } from './tui-layout-constants.js';
@@ -131,7 +132,7 @@ export function IssueSessionTuiStream({
   const { columns: terminalColumns, rows: terminalRows } = terminalSize;
   const contentWidth = useStreamContentWidth(terminalColumns);
   const activityLogContentWidth = useStreamActivityLogWidth(terminalColumns);
-  const operatorPrompt = 'operator> ';
+  const operatorPrompt = OPERATOR_INPUT_PROMPT;
   const maxInputDisplayLines = computeMaxInputDisplayLines(terminalRows);
   const openQuestions = getTuiOpenQuestions(snapshot);
   const openQuestionsLayout = useMemo(

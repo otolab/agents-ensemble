@@ -13,6 +13,7 @@ import {
   INPUT_PANE_BORDER_ROWS,
   INPUT_PANE_LEFT_COLUMNS,
   OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+  OPERATOR_INPUT_PROMPT,
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
@@ -109,7 +110,7 @@ describe('computeActivityLogLineCapacity', () => {
 
 describe('computeOperatorInputCursorX', () => {
   it('includes left border, padding, and prompt width', () => {
-    const operatorPrompt = 'operator> ';
+    const operatorPrompt = OPERATOR_INPUT_PROMPT;
     expect(computeOperatorInputCursorX(operatorPrompt)).toBe(
       INPUT_PANE_LEFT_COLUMNS + operatorPrompt.length,
     );

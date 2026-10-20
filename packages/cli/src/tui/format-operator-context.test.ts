@@ -9,7 +9,10 @@ import {
   resolveTuiIssueLinkMode,
   supportsOsc8Hyperlinks,
 } from './format-operator-context.js';
-import { OPERATOR_INPUT_SHUTTING_DOWN_HINT } from './tui-layout-constants.js';
+import {
+  OPERATOR_INPUT_PROMPT,
+  OPERATOR_INPUT_SHUTTING_DOWN_HINT,
+} from './tui-layout-constants.js';
 
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/249';
 const NON_CANONICAL_ISSUE_URL = 'http://github.com/otolab/agents-ensemble/issues/249/';
@@ -24,7 +27,8 @@ const OPEN_QUESTION: OpenQuestion = {
 
 describe('formatOperatorContextHint', () => {
   it('returns default prompt when context is undefined', () => {
-    expect(formatOperatorContextHint(undefined)).toBe('operator> ');
+    expect(OPERATOR_INPUT_PROMPT).toBe('> ');
+    expect(formatOperatorContextHint(undefined)).toBe(OPERATOR_INPUT_PROMPT);
   });
 
   it('highlights open questions with selection context', () => {
@@ -59,7 +63,7 @@ describe('formatOperatorContextHint', () => {
         maxTurns: null,
         openQuestions: [],
       }),
-    ).toBe('operator> ');
+    ).toBe(OPERATOR_INPUT_PROMPT);
   });
 
   it('does not add an issue reference to the empty no-question prompt', () => {
@@ -73,7 +77,7 @@ describe('formatOperatorContextHint', () => {
       undefined,
     );
 
-    expect(hint).toBe('operator> ');
+    expect(hint).toBe(OPERATOR_INPUT_PROMPT);
   });
 
   it('does not add the issue reference when an open question is selected', () => {

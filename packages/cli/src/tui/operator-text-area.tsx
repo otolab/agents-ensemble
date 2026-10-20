@@ -12,7 +12,7 @@ export interface OperatorTextAreaProps {
   readonly onSubmit?: (value: string) => void;
   /** ペイン内コンテンツ幅（折り返し計算用）。 */
   readonly contentWidth: number;
-  /** 1 行目先頭のプロンプト（例: `operator> `）。 */
+  /** 1 行目先頭のプロンプト（例: `> `）。 */
   readonly promptPrefix?: string;
   /** 入力欄に表示できる最大行数（末尾追従）。 */
   readonly maxDisplayLines: number;

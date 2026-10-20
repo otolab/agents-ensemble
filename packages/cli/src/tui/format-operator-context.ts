@@ -1,6 +1,9 @@
 import type { EnsembleConfig, OpenQuestion, OperatorInputContext } from '@agents-ensemble/core';
 import { buildIssueUrl, parseIssueUrl, resolveForceHyperlinkSetting } from '@agents-ensemble/core';
-import { OPERATOR_INPUT_SHUTTING_DOWN_HINT } from './tui-layout-constants.js';
+import {
+  OPERATOR_INPUT_PROMPT,
+  OPERATOR_INPUT_SHUTTING_DOWN_HINT,
+} from './tui-layout-constants.js';
 
 export type IssueLinkMode = 'osc8' | 'label' | 'url';
 
@@ -194,12 +197,12 @@ export function formatOperatorContextHint(
   selection?: OpenQuestionSelectionContext,
 ): string {
   if (!context) {
-    return 'operator> ';
+    return OPERATOR_INPUT_PROMPT;
   }
 
   const resolution = resolveOperatorInputDisplayMode({
     openQuestions: context.openQuestions,
     selection,
   });
-  return resolution.hintLines[0] ?? 'operator> ';
+  return resolution.hintLines[0] ?? OPERATOR_INPUT_PROMPT;
 }

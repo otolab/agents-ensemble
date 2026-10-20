@@ -11,6 +11,7 @@ import type { OpenQuestion } from '@agents-ensemble/core';
 import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
+import { OPERATOR_INPUT_PROMPT } from './tui-layout-constants.js';
 import {
   createTuiResizeController,
   createTuiTerminalSizeStore,
@@ -119,7 +120,8 @@ describe('IssueSessionTuiStream', () => {
 
     stdin.write(INK_TEST_KEYS.tab);
     await flushInkStdin();
-    expect(lastFrame() ?? '').toContain('operator> /close');
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}/close`);
+    expect(lastFrame() ?? '').not.toContain('operator> ');
     expect(onSubmit).not.toHaveBeenCalled();
 
     stdin.write('\r');

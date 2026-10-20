@@ -8,6 +8,7 @@ import {
   sliceVisibleInputDisplayLines,
   trimBlankLinesOnly,
 } from './operator-input-layout.js';
+import { OPERATOR_INPUT_PROMPT } from './tui-layout-constants.js';
 
 describe('trimBlankLinesOnly', () => {
   it('removes only leading and trailing blank lines', () => {
@@ -29,20 +30,27 @@ describe('computeMaxInputDisplayLines', () => {
 describe('computeOperatorInputDisplayLines', () => {
   it('wraps first line with prompt width and later lines at full width', () => {
     const contentWidth = 20;
-    const promptWidth = 10;
-    const lines = computeOperatorInputDisplayLines('abcdefghijklmnop', contentWidth, promptWidth);
-    expect(lines.length).toBeGreaterThan(1);
+    const lines = computeOperatorInputDisplayLines(
+      'abcdefghijklmnopqrs',
+      contentWidth,
+      OPERATOR_INPUT_PROMPT.length,
+    );
+    expect(lines).toEqual(['abcdefghijklmnopqr', 's']);
   });
 
   it('preserves explicit newlines', () => {
-    const lines = computeOperatorInputDisplayLines('line1\nline2', 40, 10);
+    const lines = computeOperatorInputDisplayLines(
+      'line1\nline2',
+      40,
+      OPERATOR_INPUT_PROMPT.length,
+    );
     expect(lines).toEqual(['line1', 'line2']);
   });
 });
 
 describe('cursor mapping', () => {
   const contentWidth = 40;
-  const promptWidth = 10;
+  const promptWidth = OPERATOR_INPUT_PROMPT.length;
 
   it('maps offset to display position and back', () => {
     const value = 'hello\nworld';
@@ -60,7 +68,7 @@ describe('cursor mapping', () => {
 
   it('tracks wrapped line starts consistently with layout', () => {
     const value = 'word '.repeat(20);
-    const layout = computeOperatorInputLayout(value, 30, 10);
+    const layout = computeOperatorInputLayout(value, 30, OPERATOR_INPUT_PROMPT.length);
     expect(layout.displayLines.length).toBeGreaterThan(1);
     expect(layout.lineStartOffsets[0]).toBe(0);
     expect(layout.lineStartOffsets[1]).toBeGreaterThan(0);
@@ -91,4 +99,3 @@ describe('sliceVisibleInputDisplayLines with cursor', () => {
     expect(visibleLines).toEqual(['c', 'd', 'e']);
   });
 });
-
