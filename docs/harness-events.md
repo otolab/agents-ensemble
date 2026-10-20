@@ -173,13 +173,13 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 
 | 読者 | 見えるもの | 見えないもの / 注意 |
 |------|------------|--------------------|
-| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` / `permission.stall` を含む held trigger 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator.message は dispatch を貫通する。max-turns により解除後も worker / GitHub が残る間は、残件数を表示する |
-| conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending / permission.stall を含む）は通常 OFF 後に 1 回の `agent.send` へ合成される。max-turns で worker / GitHub が送れない場合は held permission が先に dispatch され、残りは後続の operator 入力後に送られる。operator.message は保留されない |
+| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` / `permission.stall` と、更新に同梱する接続復旧 inform を含む held event 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator.message は dispatch を貫通する。max-turns により解除後も worker / GitHub が残る間は、残件数を表示する |
+| conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending / permission.stall を含む）と接続復旧 inform は通常 OFF 後に 1 回の `agent.send` へ合成される。max-turns で worker / GitHub が送れない場合は held permission が先に dispatch され、残りは後続の operator 入力後に送られる。operator.message は保留されない |
 | 運用・resume | 保留は Driver メモリだけ | sidecar に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
 
 保留は一時的な運用モードであり、teardown flush や crash recovery は提供しない。`/exit`、
 `/close`、SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが `hold: false` より先に
-起きた場合、Driver 内の held buffer と queue に残る hold 対象 trigger は dispatch / sidecar
+起きた場合、Driver 内の held buffer と queue に残る hold 対象 SessionEvent は dispatch / sidecar
 保存されず失われる。operator は終了前に `set_dispatch_hold({ hold: false })` を呼び、release
 完了を確認する必要がある。resume は空の hold（`dispatchHold: false`）で始まる。
 
@@ -201,7 +201,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | `cause` | `parse` \| `gh_cli` \| `auth` \| `network` \| `unknown` | 失敗原因の分類 |
 | `retryable` | `boolean`（任意） | rate limit / 5xx 等で再試行が有効なとき `true` |
 
-同じフェーズ・PR・原因で続く retryable エラーは、最初の `monitor_error` だけを記録し、以降はクリーンな poll が成功するまで抑止する。復旧時は `monitor_recovered` を1行出して抑止した件数を示す。認証や parse など非 retryable のエラーは抑止せず、poll ごとに記録する。
+同じフェーズ・PR・原因で続く retryable エラーは、最初の `monitor_error` だけを記録し、以降はクリーンな poll が成功するまで抑止する。復旧時は `monitor_recovered` を1行出して抑止した件数を示す。同時に `harness.connectivity.recovered` を SessionEventQueue に載せる。同じ復旧 poll が GitHub 更新を返した場合は inform として更新束に同梱し、更新がなければ独立した trigger として dispatch する。認証や parse など非 retryable のエラーは抑止せず、poll ごとに記録する。
 
 監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。関連 PR は GitHub Search で自動検出するほか、conductor の `register_github_watch` で明示登録でき、`unregister_github_watch` で明示登録を解除できる。明示登録した PR は Search に未反映でも監視され、登録後は即時（in-flight poll 中ならその完了直後）に bootstrap poll を行う。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
 
@@ -343,6 +343,7 @@ attach handshake 中に届いた追加指示は queue に積む。まだ cancel 
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | conductor 向け YAML に `request.raw`（params 全文）と `brief`（構造化された判断用情報）を含む。補えない必須情報は `brief.missing` に載せる。`operatorSummary` は conductor が質問や context を組み立てる際の参照情報として併記する。`ask_human.relatedPermissionId` は Open Question と permission を関連づける |
 | `permission.stall` | worker 活動中の pending permission が既定 300s（`permissionDeadlockStallMs`）継続したとき | `## permission 停滞警告` | conductor 向けの低優先度 trigger。同一の連続停滞エピソードでは 1 回だけ。pending の再送ではなく、経過時間・対象 ID・閾値を含む。`harness.warning` は従来どおり operator 向けに出す |
+| `harness.connectivity.recovered` | GitHub monitor が抑止中の再試行可能な poll エラー後、エラーなしの poll に復旧したとき | `## 接続復旧` | `source: github_monitor` と `suppressedErrorCount` を YAML で伝える。復旧 poll に GitHub 更新があれば同じ source の inform として更新束に同梱し、更新がなければ単独 trigger。単独 trigger は `permission.stall` より低優先で、GitHub 更新・worker イベントと同じ max-turns 制限に従う |
 | `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が commit SHA 単位の CI 集約状態遷移を検知したときだけ載る（同じ SHA・同じ状態の毎 poll 再送はしない。§2.5）。conductor は payload の SHA / failed check 名を手掛かりに必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` / `permission.stall` は dispatch 可） |
 
 ### 3.1 SessionLogEvent との対応

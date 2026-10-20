@@ -36,7 +36,10 @@ export interface GitHubMonitorOptions {
   onCursorChange?: (cursor: GitHubMonitorCursor) => void;
   onPollError?: (error: unknown) => void;
   /** 抑止した retryable poll エラーの後、クリーンな poll が成功したときに呼ぶ。 */
-  onPollRecovered?: (suppressedErrorCount: number) => void;
+  onPollRecovered?: (
+    suppressedErrorCount: number,
+    hasUpdates: boolean,
+  ) => void;
   shutdownSignal?: AbortSignal;
   githubClient?: GitHubClient;
 }
@@ -176,7 +179,10 @@ export function createGitHubMonitor(options: GitHubMonitorOptions): GitHubMonito
           0,
         );
         if (suppressedErrorCount > 0) {
-          options.onPollRecovered?.(suppressedErrorCount);
+          options.onPollRecovered?.(
+            suppressedErrorCount,
+            result.updates.length > 0,
+          );
         }
         retryablePollErrors.clear();
       }

@@ -877,7 +877,7 @@ describe('runConductorSession resume / shutdown', () => {
             message: 'fetch failed',
           }),
         );
-        monitorOptions.onPollRecovered?.(11);
+        monitorOptions.onPollRecovered?.(11, false);
       },
       stop: vi.fn().mockResolvedValue(undefined),
       flush: vi.fn(),
@@ -906,6 +906,54 @@ describe('runConductorSession resume / shutdown', () => {
     expect(events).toContainEqual({
       type: 'harness.github.monitor_recovered',
       suppressedErrorCount: 11,
+    });
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(mockSend.mock.calls[1]?.[0]).toContain('## 接続復旧');
+    expect(mockSend.mock.calls[1]?.[0]).toContain('suppressedErrorCount: 11');
+  });
+
+  it('coalesces GitHub monitor recovery with updates from the same poll', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-github-recovery-update',
+      status: 'finished',
+      result: 'done',
+    });
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    const events: SessionLogEvent[] = [];
+    sessionLogger.subscribe((event) => events.push(event));
+    mockCreateGitHubMonitor.mockImplementationOnce((monitorOptions) => ({
+      start: () => {
+        monitorOptions.onPollRecovered?.(4, true);
+        monitorOptions.onUpdate(issueCommentUpdate('recovered comment'));
+      },
+      stop: vi.fn().mockResolvedValue(undefined),
+      flush: vi.fn(),
+      getCursor: vi.fn().mockReturnValue({ pullRequests: {} }),
+      unregisterPullRequest: vi.fn(),
+    }));
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    const recoveryDispatch = String(mockSend.mock.calls[1]?.[0]);
+    expect(recoveryDispatch).toContain('## GitHub 更新・接続復旧（2 件）');
+    expect(recoveryDispatch).toContain('suppressedErrorCount: 4');
+    expect(recoveryDispatch).toContain('recovered comment');
+    expect(events).toContainEqual({
+      type: 'conductor.inbound',
+      triggers: 1,
+      sources: ['github'],
     });
   });
 

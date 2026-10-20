@@ -1,6 +1,9 @@
 import type { SessionEvent } from './session-event.js';
 import { canDispatchConductorSend } from '../session-policy.js';
-import { isTriggerSessionEvent } from './dispatch-mode.js';
+import {
+  isTriggerSessionEvent,
+  sessionEventDispatchMode,
+} from './dispatch-mode.js';
 
 /** dispatch 束の source key（[ADR 0014](../../../docs/adr/0014-conductor-dispatch-batch-coalescing.md)）。 */
 export type DispatchSourceKey = string;
@@ -37,6 +40,7 @@ const STATIC_SOURCE_PRIORITY: Record<string, number> = {
   'worker.completed': 2,
   github: 3,
   'permission.stall': 4,
+  'github.recovered': 5,
 };
 
 /** セッションイベントの dispatch ソース key を返す。 */
@@ -55,6 +59,8 @@ export function eventSourceKey(event: SessionEvent): DispatchSourceKey {
     case 'worker.failed':
       return `worker:${event.failure.name}`;
     case 'github.update':
+      return 'github';
+    case 'harness.connectivity.recovered':
       return 'github';
     default: {
       const _exhaustive: never = event;
@@ -79,6 +85,8 @@ function staticEventPriority(event: SessionEvent): number {
       return STATIC_SOURCE_PRIORITY['worker.completed'];
     case 'github.update':
       return STATIC_SOURCE_PRIORITY.github;
+    case 'harness.connectivity.recovered':
+      return STATIC_SOURCE_PRIORITY['github.recovered'];
     default:
       return Number.MAX_SAFE_INTEGER;
   }
@@ -106,8 +114,11 @@ function pickStaticSourceKey(
     const firstIndex = queue.indexOf(event);
     const priority = staticEventPriority(event);
     const existing = keys.get(key);
-    if (!existing || firstIndex < existing.firstIndex) {
+    if (!existing) {
       keys.set(key, { priority, firstIndex });
+    } else {
+      existing.priority = Math.min(existing.priority, priority);
+      existing.firstIndex = Math.min(existing.firstIndex, firstIndex);
     }
   }
 
@@ -173,11 +184,18 @@ export function selectDispatchBatch(
     chosenKey = pickStaticSourceKey(queue, eligible);
   }
 
-  const batchEvents = queue.filter(
-    (event) =>
-      isDispatchable(event, autonomousTurns, maxTurns) &&
-      eventSourceKey(event) === chosenKey,
-  );
+  const batchEvents = queue.filter((event) => {
+    if (eventSourceKey(event) !== chosenKey) {
+      return false;
+    }
+    if (isDispatchable(event, autonomousTurns, maxTurns)) {
+      return true;
+    }
+    return (
+      sessionEventDispatchMode(event) === 'inform' &&
+      canDispatchConductorSend(event, autonomousTurns, maxTurns)
+    );
+  });
   const batchSet = new Set(batchEvents);
   const remainingQueue = queue.filter((event) => !batchSet.has(event));
 

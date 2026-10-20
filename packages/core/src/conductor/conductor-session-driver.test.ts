@@ -1303,6 +1303,65 @@ describe('runConductorSessionDriver', () => {
     expect(result.sendCount).toBe(3);
   });
 
+  it('holds same-poll GitHub recovery with its update and flushes once released', async () => {
+    const holdState = createDispatchHoldState();
+    const eventQueue = new SessionEventQueue();
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onBeforeRelease: () =>
+        bufferDispatchHoldEvents({
+          state: holdState,
+          eventQueue,
+        }),
+    });
+    const send = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await holdTool.set_dispatch_hold!.execute({ hold: true });
+        eventQueue.enqueue({
+          type: 'harness.connectivity.recovered',
+          source: 'github_monitor',
+          suppressedErrorCount: 3,
+          dispatchMode: 'inform',
+        });
+        eventQueue.enqueue({
+          type: 'github.update',
+          items: [
+            {
+              id: 'issue-comment:recovered',
+              kind: 'issue.comment',
+              summary: 'recovered update',
+            },
+          ],
+        });
+        await holdTool.set_dispatch_hold!.execute({ hold: false });
+        return { runId: 'run-1', status: 'finished', result: 'hold released' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('## GitHub 更新・接続復旧（2 件）');
+        expect(message).toContain('suppressedErrorCount: 3');
+        expect(message).toContain('recovered update');
+        return { runId: 'run-2', status: 'finished', result: 'recovery handled' };
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue,
+        conductor,
+      }),
+      dispatchHoldState: holdState,
+    });
+
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(String(send.mock.calls[1]![0])).toContain(
+      '## GitHub 更新・接続復旧（2 件）',
+    );
+    expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
+    expect(result.stopReason).toBe('completed');
+  });
+
   it('flushes held permission before max-turns-blocked worker events after release', async () => {
     const holdState = createDispatchHoldState();
     const eventQueue = new SessionEventQueue();

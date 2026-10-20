@@ -217,6 +217,7 @@ export type {
   WorkerFailedEvent,
   PermissionPendingEvent,
   PermissionStallEvent,
+  HarnessConnectivityRecoveredEvent,
   GitHubUpdateEvent,
   SessionEventDispatchFields,
 } from './session/session-event.js';

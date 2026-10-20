@@ -6,6 +6,7 @@ export type {
   WorkerFailedEvent,
   PermissionPendingEvent,
   PermissionStallEvent,
+  HarnessConnectivityRecoveredEvent,
   GitHubUpdateEvent,
   SessionEventDispatchFields,
 } from './events/session-event.js';
