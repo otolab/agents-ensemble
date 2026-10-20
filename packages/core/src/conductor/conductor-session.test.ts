@@ -9,6 +9,10 @@ import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import type {
+  GitHubMonitor,
+  GitHubMonitorOptions,
+} from '../github/github-monitor.js';
+import type {
   GitHubClient,
   GitHubPullRequestRef,
 } from '../github/github-client.js';
@@ -179,19 +183,41 @@ describe('runConductorSession resume / shutdown', () => {
       getUsage: createMockConductorGetUsage(),
     }));
     mockCreateGitHubMonitor.mockReset();
-    mockCreateGitHubMonitor.mockImplementation((options) => {
-      const cursor = options.cursor ?? { pullRequests: {} };
-      return {
-        start: vi.fn(),
-        stop: vi.fn().mockResolvedValue(undefined),
-        flush: vi.fn(),
-        getCursor: vi.fn().mockReturnValue(cursor),
-        acknowledgeUpdates: vi.fn(),
-        registerPullRequest: vi.fn(),
-        unregisterPullRequest: vi.fn(),
-        onUpdate: options.onUpdate,
-      };
-    });
+    mockCreateGitHubMonitor.mockImplementation(
+      (options: GitHubMonitorOptions) => {
+        const cursor: GitHubMonitorCursor = options.cursor ?? {
+          pullRequests: {},
+        };
+        const registerPullRequest = vi.fn(
+          (
+            registration: Parameters<
+              GitHubMonitor['registerPullRequest']
+            >[0],
+          ) => {
+            cursor.explicitPullRequests ??= {};
+            cursor.explicitPullRequests[String(registration.prNumber)] = {
+              registeredAt: registration.registeredAt,
+              ...(registration.kinds ? { kinds: [...registration.kinds] } : {}),
+            };
+            options.onCursorChange?.(cursor);
+          },
+        );
+        const unregisterPullRequest = vi.fn((prNumber: number) => {
+          delete cursor.explicitPullRequests?.[String(prNumber)];
+          options.onCursorChange?.(cursor);
+        });
+        return {
+          start: vi.fn(),
+          stop: vi.fn().mockResolvedValue(undefined),
+          flush: vi.fn(),
+          getCursor: vi.fn().mockReturnValue(cursor),
+          acknowledgeUpdates: vi.fn(),
+          registerPullRequest,
+          unregisterPullRequest,
+          onUpdate: options.onUpdate,
+        };
+      },
+    );
   });
 
   afterEach(() => {
