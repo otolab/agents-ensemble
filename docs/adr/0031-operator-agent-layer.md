@@ -58,6 +58,19 @@ operator-agent が conductor に効かせるのは、上記チャネル経由で
 
 `ensemble issue` の起動・kill を operator-agent のコア責務にしない。
 
+### Phase 1 の設定・接続（LLM / config）
+
+operator-agent は **別プロセス・別 agent セッション**だが、Phase 1 では **conductor と同じ接続設定・config 解決を流用**する（専用 `operator.*` キーは置かない）。
+
+| 項目 | Phase 1 |
+|------|---------|
+| **config** | `.ensemble/config.yaml`、profile、`repoRoot` 解決は `ensemble issue` と同様（[settings.md](../settings.md) / [config.md](../config.md)） |
+| **LLM backend** | `conductor.backend` / `conductor.model`（および Pi の `conductor.pi.*` 等、backend に付随する conductor 用設定） |
+| **認証** | [ADR 0028](0028-authentication-delegation-and-ensemble-auth.md) の **conductor 席**と同経路（`ensemble auth`、env、`!command` 移譲） |
+| **GitHub** | harness の `github.*`（monitor 等） |
+
+`operator.model` や operator 専用 auth などの **分離は、利用ケースが固まってから**検討する。実装は [#488](https://github.com/otolab/agents-ensemble/issues/488) で conductor 向け `resolve-settings` 相当の再利用を前提とする。
+
 ### 現行 `ensemble issue` との共存
 
 - **出荷済み**: 人間が **SessionView**（`operator.message`、Operator input ペイン）で **operator ロール相当**を担う。プロンプト terms の「オペレータ」は当面この経路を指す。

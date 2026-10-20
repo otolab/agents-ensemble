@@ -105,6 +105,8 @@ user  →  operator（ロール）  →  conductor  →  workers
 
 現行の `ensemble issue` では、人間が TTY / CLI 経由で conductor を監督する（プロンプト terms の「オペレータ」）。operator-agent はその **代替・補助の実行者**として足す。Open Question の外部連携（[#481](https://github.com/otolab/agents-ensemble/issues/481)）は operator 層の入出力として扱う。
 
+**Phase 1 の設定**: operator-agent の LLM 接続と `.ensemble` config は **conductor 用の解決を流用**する（`conductor.backend` / `conductor.model`、認証は [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の conductor 席と同経路）。operator 専用 config キーは後続。詳細は [ADR 0031](adr/0031-operator-agent-layer.md)。
+
 ### レイヤー
 
 | レイヤー | 技術 | 役割 |
