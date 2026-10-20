@@ -38,6 +38,24 @@ describe('createReportSessionStateTool', () => {
     expect(result.structuredContent).toEqual({ statusLine });
   });
 
+  it('waits for persistence before reporting success', async () => {
+    const reported: string[] = [];
+    const persistentTool = createReportSessionStateTool({
+      onReport: async (statusLine) => {
+        reported.push(statusLine);
+      },
+    }).report_session_state!;
+
+    const result = await persistentTool.execute({
+      statusLine: '調査中：再現条件を確認',
+    });
+
+    expect(reported).toEqual(['調査中：再現条件を確認']);
+    expect(result.structuredContent).toEqual({
+      statusLine: '調査中：再現条件を確認',
+    });
+  });
+
   it('rejects an empty, missing, multiline, or overlong statusLine', async () => {
     await expect(tool.execute({})).rejects.toThrow(
       'report_session_state requires statusLine',

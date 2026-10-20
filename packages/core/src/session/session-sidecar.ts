@@ -8,6 +8,12 @@ import type { ResolvedProfile } from '../profile/types.js';
 
 export const SESSION_SIDECAR_VERSION = 1;
 
+export type SessionLifecycle =
+  | 'closed'
+  | 'exited'
+  | 'interrupted'
+  | 'unknown';
+
 export class SessionSidecarNotFoundError extends Error {
   readonly code = 'SESSION_SIDECAR_NOT_FOUND';
 
@@ -48,6 +54,8 @@ export interface SessionSidecar {
   githubMonitor?: GitHubMonitorCursor;
   /** Harness-resolved MCP map digest used to reject unsafe resume. */
   mcpConfigDigest?: string;
+  /** Last completed process lifecycle; absent legacy values are unknown. */
+  lifecycle?: SessionLifecycle;
   /** flush 時刻（Unix ms）。`--continue` で最新セッションを選ぶために使う。 */
   updatedAt: number;
 }
@@ -239,6 +247,15 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
   ) {
     throw new Error('Invalid session sidecar: lazyWorkers');
   }
+  if (
+    record.lifecycle !== undefined &&
+    record.lifecycle !== 'closed' &&
+    record.lifecycle !== 'exited' &&
+    record.lifecycle !== 'interrupted' &&
+    record.lifecycle !== 'unknown'
+  ) {
+    throw new Error('Invalid session sidecar: lifecycle');
+  }
   const updatedAt =
     typeof record.updatedAt === 'number' ? record.updatedAt : 0;
 
@@ -286,6 +303,9 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     ...(githubMonitor ? { githubMonitor } : {}),
     ...(typeof record.mcpConfigDigest === 'string'
       ? { mcpConfigDigest: record.mcpConfigDigest }
+      : {}),
+    ...(record.lifecycle !== undefined
+      ? { lifecycle: record.lifecycle as SessionLifecycle }
       : {}),
     updatedAt,
   };

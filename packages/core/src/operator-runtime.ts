@@ -34,5 +34,15 @@ export {
 } from './profile/types.js';
 export { profilePromptModule } from './prompt/modules/shared/profile-prompt-module.js';
 export { renderCompiledPrompt } from './prompt/render-compiled-prompt.js';
-export { listSessionSidecars } from './session/session-sidecar.js';
-export type { SessionSidecar } from './session/session-sidecar.js';
+export {
+  listSessionSidecars,
+  type SessionLifecycle,
+  type SessionSidecar,
+} from './session/session-sidecar.js';
+export {
+  loadSessionStateStore,
+  sessionStateStorePath,
+  type SessionStatusLine,
+} from './session/session-state-store.js';
+export { parseIssueUrl } from './issue/issue-ref.js';
+export type { IssueRef } from './issue/issue-ref.js';

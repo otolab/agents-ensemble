@@ -20,10 +20,11 @@ conductor セッションには性質の異なる出力が混在する。
 | **harness テレメトリ** | 開発者・運用者 | worktree 解決、worker ラウンド完了、send 回数 |
 | **exit report** | e2e / CI / スクリプト | 終了時 JSON（`stopReason`, `workerResponses` 等） |
 | **resume 状態** | 次回 `ensemble issue --resume` | sidecar JSON と open question YAML |
+| **operator 状態** | `list_operator_sessions` | sidecar lifecycle と session-state YAML |
 
 これらを 1 本の stderr に混ぜると、TTY 利用時に **会話相手が worker に見える**・**conductor の応答が終了まで見えない** といった UX 問題が起きる（#44）。
 
-**原則**: 観測は `SessionLogger` に集約し、**sink** で出力先・フォーマットを分離する。resume に必要な harness 状態は sidecar JSON と open question YAML に永続化する（会話本文は SDK / ACP 側）。
+**原則**: 観測は `SessionLogger` に集約し、**sink** で出力先・フォーマットを分離する。resume に必要な harness 状態は sidecar JSON と open question YAML に永続化し、operator 向けの statusLine は session-state YAML に保存する（会話本文は SDK / ACP 側）。
 
 `conductor.send` は status によって表示チャネルが分かれる。`status=finished` の `result` は
 conductor が実際に返した応答なので対話チャネル（`conductor>` / TUI 活動ログの
@@ -64,6 +65,7 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
     sidecar flush → {repoRoot}/.ensemble/sessions/{agentId}.json
     tool-call history flush → {repoRoot}/.ensemble/sessions/{agentId}.tool-calls
     question flush → {repoRoot}/.ensemble/sessions/{agentId}/open-questions.yaml
+    operator status → {repoRoot}/.ensemble/sessions/{agentId}/session-state.yaml
 ```
 
 ### stdout
@@ -108,7 +110,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
 
-resume 用の harness 状態は sidecar と open question YAML に保存します。open question の正本は YAML で、sidecar JSON の `openQuestions` / `sequence` は移行期間中の互換コピーです。終了 JSON の `agentId` は参照用コピーです。
+resume 用の harness 状態は sidecar と open question YAML に保存します。open question の正本は YAML で、sidecar JSON の `openQuestions` / `sequence` は移行期間中の互換コピーです。operator 向け statusLine は別の session-state YAML に保存します。終了 JSON の `agentId` は参照用コピーです。
 
 CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（e2e 互換）。`--summary-format` / `--include-full-response-text` で終了出力を制御する。
 
@@ -188,7 +190,18 @@ permission の ACP variant と抽出優先順位は
   {conductorAgentId}.json
   {conductorAgentId}/
     open-questions.yaml
+    session-state.yaml
 ```
+
+`session-state.yaml` は `report_session_state` が登録した最新の statusLine と報告時刻をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。
+
+```yaml
+version: 1
+statusLine: "レビュー中：CIテスト待ち"
+reportedAt: 1735689600000
+```
+
+statusLine の履歴は保存せず、最新の 1 件だけを保持します。異なる `conductorAgentId` は同じ Issue を扱っていても別々のファイルです。
 
 `open-questions.yaml` は OpenQuestionRegistry 全体のスナップショットです。質問の登録・回答後と終了時に atomic rename で保存します。YAML の形は次のとおりです。
 
@@ -215,12 +228,15 @@ openQuestions:
 
 `--continue` は従来どおり JSON sidecar の `updatedAt` からセッションを選びます。`--resume` / `--continue` の復元時は、YAML があれば質問一覧と sequence にその内容を使います。YAML がまだない既存セッションでは JSON sidecar の `openQuestions` と `sequence` から復元し、YAML をバックフィルします。移行期間中は flush のたびに両方へ同じ質問スナップショットを書きます。YAML が存在していて読み取りまたはスキーマ検証に失敗した場合は resume を中止し、古い可能性がある JSON 側の質問一覧へ黙って切り替えません。
 
-| | SessionSummary（終了 JSON） | sidecar / open question YAML |
+JSON sidecar の `lifecycle` は最後に完了した teardown の区分です。`/close` は `closed`、`/exit` は isolated worktree の cleanup 試行後に `exited`、SIGINT / SIGTERM による終了は `interrupted` を最終 sidecar flush で記録します。それ以外の通常終了は `unknown` です。古い sidecar で値がない場合も `unknown` として扱います。Phase 1 は `running` を記録しないため、この値は現在プロセスが稼働中かどうかを示しません。operator-agent は sidecar と session-state の読み取りだけを行い、conductor に接続しません。
+
+| | SessionSummary（終了 JSON） | sidecar / session YAML |
 |--|---------------------------|---------|
 | **目的** | 1 回の実行結果の報告 | セッション再開用の harness 状態 |
 | **タイミング** | プロセス終了時に 1 回 | 状態変化時に best-effort flush + 終了時 |
 | **会話本文** | 載せない（worker 応答の要約のみ） | 載せない |
 | **open question** | 終了時の一覧スナップショット | YAML が正本。移行中は JSON sidecar にも同じ一覧を保存 |
+| **operator 状態** | 載せない | `session-state.yaml` に最新 statusLine、JSON sidecar に lifecycle を保存 |
 | **worker session** | 載せない | `acpSessionId` を保持 |
 | **tool-call snapshot** | 載せない | 別ファイル `.tool-calls` に保持（TTL / サイズ上限あり） |
 

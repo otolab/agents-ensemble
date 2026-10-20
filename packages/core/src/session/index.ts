@@ -12,6 +12,7 @@ export {
 } from './session-sidecar.js';
 export type {
   FindLatestSessionSidecarInput,
+  SessionLifecycle,
   SessionSidecar,
   WorkerSessionSidecar,
 } from './session-sidecar.js';
@@ -22,3 +23,14 @@ export {
   saveOpenQuestionsStore,
 } from './open-questions-store.js';
 export type { OpenQuestionsStoreDocument } from './open-questions-store.js';
+export {
+  loadSessionStateStore,
+  saveSessionStatusLine,
+  SESSION_STATE_STORE_VERSION,
+  SESSION_STATUS_LINE_MAX_LENGTH,
+  sessionStateStorePath,
+} from './session-state-store.js';
+export type {
+  SessionStatePathOptions,
+  SessionStatusLine,
+} from './session-state-store.js';

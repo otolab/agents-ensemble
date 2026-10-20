@@ -22,6 +22,10 @@ import {
   SESSION_SIDECAR_VERSION,
   sessionSidecarPath,
 } from '../session/session-sidecar.js';
+import {
+  loadSessionStateStore,
+  sessionStateStorePath,
+} from '../session/session-state-store.js';
 import { openQuestionsStorePath } from '../session/open-questions-store.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
 import { runConductorSession as runConductorSessionImpl } from './conductor-session.js';
@@ -370,6 +374,17 @@ describe('runConductorSession resume / shutdown', () => {
     expect(conductorTools?.report_session_state).toBeDefined();
     expect(statusResult?.structuredContent).toEqual({
       statusLine: 'レビュー中：CIテスト待ち',
+    });
+    await expect(
+      loadSessionStateStore(
+        sessionStateStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      ),
+    ).resolves.toMatchObject({
+      statusLine: 'レビュー中：CIテスト待ち',
+      reportedAt: expect.any(Number),
     });
   });
 
@@ -1560,6 +1575,68 @@ describe('runConductorSession resume / shutdown', () => {
       sequence: 0,
     });
     expect(sidecar?.updatedAt).toBeGreaterThan(0);
+    expect(sidecar?.lifecycle).toBe('interrupted');
+  });
+
+  it.each([
+    ['/close', 'closed'],
+    ['/exit', 'exited'],
+  ] as const)(
+    'records %s lifecycle in the final resume sidecar flush',
+    async (command, lifecycle) => {
+      mockSend.mockResolvedValue({
+        runId: `run-${lifecycle}`,
+        status: 'finished',
+        result: 'done',
+      });
+      const onPostLoopWait = vi.fn();
+      let operatorApi: OperatorInputBindingApi | undefined;
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        onPostLoopWait,
+        bindOperatorInput: (api) => {
+          operatorApi = api;
+        },
+      });
+
+      await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+      operatorApi!.submit(command);
+      await sessionPromise;
+
+      const sidecar = await loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      );
+      expect(sidecar?.lifecycle).toBe(lifecycle);
+      expect(sidecar?.updatedAt).toBeGreaterThan(0);
+    },
+  );
+
+  it('records unknown lifecycle for ordinary completion without an operator exit command', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-completed',
+      status: 'finished',
+      result: 'done',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    await expect(
+      loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      ),
+    ).resolves.toMatchObject({ lifecycle: 'unknown' });
   });
 
   it.each([

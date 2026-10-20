@@ -17,8 +17,12 @@ describe('list_operator_sessions', () => {
   });
 
   it('returns recent sidecar summaries with open-question and worker details', async () => {
-    await writeSidecar('older', 10, 'https://github.com/example/project/issues/1');
-    await writeSidecar('newer', 20, 'https://github.com/example/project/issues/2');
+    const issueUrl = 'https://github.com/example/project/issues/1';
+    await writeSidecar('older', 10, issueUrl);
+    await writeSidecar('newer', 20, issueUrl, {
+      lifecycle: 'closed',
+      statusLine: '実装中：レビュー待ち',
+    });
     const tool = createListOperatorSessionsTool(repoRoot);
 
     const result = await tool.execute({ limit: 1 });
@@ -28,8 +32,14 @@ describe('list_operator_sessions', () => {
       returned: number;
       sessions: Array<{
         agentId: string;
+        conductorAgentId: string;
+        issueRef: { owner: string; repo: string; number: number };
         issueUrl: string;
         conductorBackend: string;
+        statusLine: string | null;
+        reportedAt: number | null;
+        lifecycle: string;
+        openQuestionCount: number;
         workers: string[];
         openQuestions: Array<{ id: string; question: string }>;
         answeredQuestionCount: number;
@@ -40,11 +50,18 @@ describe('list_operator_sessions', () => {
       repoRoot,
       total: 2,
       returned: 1,
+      dataAsOf: expect.any(String),
       sessions: [
         {
           agentId: 'newer',
-          issueUrl: 'https://github.com/example/project/issues/2',
+          conductorAgentId: 'newer',
+          issueRef: { owner: 'example', repo: 'project', number: 1 },
+          issueUrl,
           conductorBackend: 'cursor',
+          statusLine: '実装中：レビュー待ち',
+          reportedAt: expect.any(Number),
+          lifecycle: 'closed',
+          openQuestionCount: 1,
           workers: ['implementer'],
           openQuestions: [
             {
@@ -56,10 +73,53 @@ describe('list_operator_sessions', () => {
         },
       ],
     });
+    expect(summary.sessions[0]?.answeredQuestionCount).toBe(1);
     expect(result.structuredContent).toMatchObject({
       total: 2,
       returned: 1,
     });
+  });
+
+  it('filters per conductor instance by statusLine and lifecycle and keeps legacy sessions unknown', async () => {
+    const issueUrl = 'https://github.com/example/project/issues/1';
+    await writeSidecar('legacy', 10, issueUrl);
+    await writeSidecar('closed', 20, issueUrl, {
+      lifecycle: 'closed',
+      statusLine: 'CI 確認中',
+    });
+    await writeSidecar('exited', 30, issueUrl, { lifecycle: 'exited' });
+    const tool = createListOperatorSessionsTool(repoRoot);
+
+    const reported = JSON.parse(
+      (await tool.execute({ hasStatusLine: true })).content[0]!.text,
+    ) as { sessions: Array<{ conductorAgentId: string }> };
+    expect(reported.sessions.map((session) => session.conductorAgentId)).toEqual([
+      'closed',
+    ]);
+
+    const legacy = JSON.parse(
+      (
+        await tool.execute({
+          hasStatusLine: false,
+          lifecycle: 'unknown',
+        })
+      ).content[0]!.text,
+    ) as { sessions: Array<{ conductorAgentId: string; lifecycle: string }> };
+    expect(legacy.sessions).toEqual([
+      expect.objectContaining({
+        conductorAgentId: 'legacy',
+        lifecycle: 'unknown',
+      }),
+    ]);
+
+    const sameIssueInstances = JSON.parse(
+      (await tool.execute({ sort: 'updatedAtAsc' })).content[0]!.text,
+    ) as { sessions: Array<{ conductorAgentId: string; issueUrl: string }> };
+    expect(sameIssueInstances.sessions).toEqual([
+      expect.objectContaining({ conductorAgentId: 'legacy', issueUrl }),
+      expect.objectContaining({ conductorAgentId: 'closed', issueUrl }),
+      expect.objectContaining({ conductorAgentId: 'exited', issueUrl }),
+    ]);
   });
 
   it('returns an empty result when this repository has no session directory', async () => {
@@ -85,12 +145,25 @@ describe('list_operator_sessions', () => {
     await expect(tool.execute({ limit: 1.5 })).rejects.toThrow(
       'limit must be an integer between 1 and 50',
     );
+    await expect(tool.execute({ sort: 'oldest' })).rejects.toThrow(
+      'sort must be updatedAtDesc or updatedAtAsc',
+    );
+    await expect(tool.execute({ hasStatusLine: 'yes' })).rejects.toThrow(
+      'hasStatusLine must be a boolean',
+    );
+    await expect(tool.execute({ lifecycle: 'running' })).rejects.toThrow(
+      'lifecycle must be one of closed, exited, interrupted, unknown',
+    );
   });
 
   async function writeSidecar(
     agentId: string,
     updatedAt: number,
     issueUrl: string,
+    options: {
+      lifecycle?: 'closed' | 'exited' | 'interrupted' | 'unknown';
+      statusLine?: string;
+    } = {},
   ): Promise<void> {
     await writeFile(
       join(repoRoot, '.ensemble', 'sessions', `${agentId}.json`),
@@ -99,6 +172,7 @@ describe('list_operator_sessions', () => {
         conductorAgentId: agentId,
         issueUrl,
         repoRoot,
+        ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
         profile: {
           meta: { title: 'Example team' },
           workers: [],
@@ -130,5 +204,18 @@ describe('list_operator_sessions', () => {
         updatedAt,
       }),
     );
+    if (options.statusLine) {
+      const stateDir = join(
+        repoRoot,
+        '.ensemble',
+        'sessions',
+        agentId,
+      );
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(
+        join(stateDir, 'session-state.yaml'),
+        `version: 1\nstatusLine: "${options.statusLine}"\nreportedAt: ${updatedAt + 1}\n`,
+      );
+    }
   }
 });

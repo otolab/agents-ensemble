@@ -105,8 +105,13 @@ import {
   saveSessionSidecar,
   SESSION_SIDECAR_VERSION,
   sessionSidecarPath,
+  type SessionLifecycle,
   type SessionSidecar,
 } from '../session/session-sidecar.js';
+import {
+  saveSessionStatusLine,
+  sessionStateStorePath,
+} from '../session/session-state-store.js';
 import {
   loadToolCallSnapshotHistory,
   pruneExpiredToolCallSnapshotHistoryFiles,
@@ -840,7 +845,25 @@ export async function runConductorSession(
     },
   });
 
-  const reportSessionStateTool = createReportSessionStateTool();
+  let sessionStateWriteQueue: Promise<void> = Promise.resolve();
+  const reportSessionStateTool = createReportSessionStateTool({
+    onReport: (statusLine) => {
+      if (teardownStarted) {
+        throw new Error('report_session_state is unavailable during teardown');
+      }
+      const write = sessionStateWriteQueue.then(() =>
+        saveSessionStatusLine(
+          sessionStateStorePath({
+            repoRoot: options.repoRoot,
+            conductorAgentId: conductorAgent.agentId,
+          }),
+          statusLine,
+        ),
+      );
+      sessionStateWriteQueue = write.catch(() => {});
+      return write;
+    },
+  });
 
   const dispatchHoldTools = createSetDispatchHoldTool({
     state: dispatchHoldState,
@@ -952,8 +975,9 @@ export async function runConductorSession(
   };
 
   let sidecarFlushQueue: Promise<void> = Promise.resolve();
-  let flushSidecar: () => Promise<void> = async () => {};
-  flushSidecar = (): Promise<void> => {
+  let flushSidecar: (lifecycle?: SessionLifecycle) => Promise<void> =
+    async () => {};
+  flushSidecar = (lifecycle): Promise<void> => {
     const nextFlush = sidecarFlushQueue.then(async () => {
       const workers: SessionSidecar['workers'] = {};
       for (const [name, worker] of workerSessions) {
@@ -977,6 +1001,7 @@ export async function runConductorSession(
         sequence: snapshot.sequence,
         workers,
         mcpConfigDigest,
+        ...(lifecycle ? { lifecycle } : {}),
         ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
         updatedAt: Date.now(),
       };
@@ -1573,6 +1598,20 @@ export async function runConductorSession(
         await emitWorktreeRemoval(sessionLogger, options.repoRoot, workerWorktree);
       }
     } finally {
+      const lifecycle: SessionLifecycle = operatorRequestedClose
+        ? 'closed'
+        : operatorRequestedExit
+          ? 'exited'
+          : shutdownSignal.aborted
+            ? 'interrupted'
+            : 'unknown';
+      try {
+        emitTeardownPhase('flushSidecar');
+        await sessionStateWriteQueue;
+        await flushSidecar(lifecycle);
+      } catch (error) {
+        reportSidecarFlushFailure(error);
+      }
       process.off('SIGINT', onTeardownSignal);
       process.off('SIGTERM', onTeardownSignal);
     }
