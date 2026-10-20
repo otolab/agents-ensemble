@@ -1,5 +1,22 @@
 # @agents-ensemble/core
 
+## 0.13.0
+
+### Minor Changes
+
+- a19ab4a: Add structured permission briefs and tool-call snapshot lookup for the conductor.
+- 05168a8: `ensemble operator-agent` と独立した operator-agent package を追加しました。TTY 対話では conductor と同じ backend・model・profile・認証設定を使い、保存済み sidecar を読み取り専用ツールから参照できます。
+- 993b66e: Persist cumulative worker tool-call snapshots across session resume.
+- 4ef2ec7: Dispatch GitHub monitor recovery to the conductor, coalescing recovery details with updates from the same poll.
+- e24cb1b: Add a conductor tool for reporting a concise session status line.
+
+### Patch Changes
+
+- 55d2729: Expose per-agent token and cache details in session summaries, mark token totals as recorded usage only, and report reliable Pi compaction counts. Billing scope is conductor-only; its additive metadata remains optional in the public type for source compatibility.
+- 5715bc8: Open Question の context への permission summary の自動追記をなくしました。必要な説明は conductor が質問と context に記述します。
+- 9eb66ba: ADR 0031 で operator-agent 層を採用し、Phase 1 は conductor の config・backend・認証を流用して `ConductorAgent`（SDK / Pi、ACP 非採用）で動かす方針を architecture / modular-prompt に追記しました。
+- c7ab17a: Persist OpenQuestionRegistry snapshots in YAML and restore them from the YAML store when resuming sessions.
+
 ## 0.12.0
 
 ### Patch Changes
