@@ -48,6 +48,7 @@ export {
 } from './session/open-question-control.js';
 export type {
   OpenQuestionControlAnswerResult,
+  OpenQuestionControlErrorData,
   OpenQuestionControlListItem,
 } from './session/open-question-control.js';
 export {

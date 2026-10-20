@@ -38,6 +38,7 @@ import {
 import * as openQuestionsStoreModule from '../session/open-questions-store.js';
 import {
   OPEN_QUESTION_CONTROL_METHODS,
+  OpenQuestionControlRemoteError,
   sendOpenQuestionControlRequest,
 } from '../session/open-question-control.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
@@ -138,6 +139,23 @@ function createDeferred<T>(): {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Promise did not settle within ${timeoutMs}ms.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 async function drainAsync(): Promise<void> {
@@ -1169,6 +1187,177 @@ describe('runConductorSession resume / shutdown', () => {
       await sessionPromise.catch(() => {});
     }
   });
+
+  it.each(['operator /close', 'shutdown signal'] as const)(
+    'bounds teardown and reports unknown when UDS answer dispatch never settles (%s)',
+    async (shutdownMode) => {
+      let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+      let operatorInput: OperatorInputBindingApi | undefined;
+      let sendCount = 0;
+      const dispatchStarted = createDeferred<void>();
+      const finishDispatch = createDeferred<void>();
+      const lateDispatchReturned = createDeferred<void>();
+      const shutdown = new AbortController();
+
+      mockCreate.mockImplementationOnce(async (agentOptions) => {
+        conductorTools = agentOptions.customTools;
+        return {
+          agentId: 'agent-test',
+          send: mockSend,
+          close: mockClose,
+          getUsage: createMockConductorGetUsage(),
+        };
+      });
+      mockSend.mockImplementation(async (message: string) => {
+        sendCount += 1;
+        if (sendCount === 1) {
+          await conductorTools!.ask_human!.execute({
+            question: 'Proceed with the release?',
+            responseType: 'yes_no',
+            relatedPermissionId: 'perm-1',
+          });
+        } else {
+          expect(message).toContain(
+            '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
+          );
+          dispatchStarted.resolve();
+          await finishDispatch.promise;
+          lateDispatchReturned.resolve();
+          return {
+            runId: `run-${sendCount}`,
+            status: 'error',
+            error: { message: 'Connection stalled repeatedly' },
+          };
+        }
+        return {
+          runId: `run-${sendCount}`,
+          status: 'finished',
+          result: 'done',
+        };
+      });
+
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        shutdownSignal: shutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        bindOperatorInput: (api) => {
+          operatorInput = api;
+          return () => {};
+        },
+      });
+
+      try {
+        await vi.waitFor(async () => {
+          const sidecar = await loadSessionSidecar(
+            sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+          );
+          expect(sidecar?.harnessSocketPath).toBeTruthy();
+        });
+        const sidecarPath = sessionSidecarPath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        });
+        const socketPath = (
+          await loadSessionSidecar(sidecarPath)
+        )?.harnessSocketPath;
+        expect(socketPath).toBeTruthy();
+
+        const storePath = openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        });
+        await vi.waitFor(async () => {
+          expect(
+            (await loadOpenQuestionsStore(storePath))?.openQuestions,
+          ).toHaveLength(1);
+        });
+        const questionId = (await loadOpenQuestionsStore(storePath))!
+          .openQuestions[0]!.id;
+        const answerOutcome = sendOpenQuestionControlRequest<{
+          question: { id: string; status: string; answeredBy: string };
+        }>(socketPath!, {
+          method: OPEN_QUESTION_CONTROL_METHODS.answer,
+          params: { questionId, answer: 'yes' },
+        }).then(
+          (result) => ({ kind: 'success' as const, result }),
+          (error: unknown) => ({ kind: 'error' as const, error }),
+        );
+
+        await settleWithin(dispatchStarted.promise, 5_000);
+        await vi.waitFor(async () => {
+          expect(
+            (await loadOpenQuestionsStore(storePath))?.openQuestions[0]
+              ?.status,
+          ).toBe('answered');
+        });
+
+        if (shutdownMode === 'operator /close') {
+          expect(operatorInput!.submit('/close')).toBe(false);
+        } else {
+          shutdown.abort();
+        }
+
+        const [sessionResult, outcome] = await Promise.all([
+          settleWithin(sessionPromise, 12_000),
+          settleWithin(answerOutcome, 12_000),
+        ]);
+        expect(outcome.kind).toBe('error');
+        if (outcome.kind === 'error') {
+          expect(outcome.error).toBeInstanceOf(OpenQuestionControlRemoteError);
+          expect(outcome.error).toMatchObject({
+            rpcCode: -32005,
+            data: {
+              outcome: 'unknown',
+              answerStatus: 'recorded',
+              dispatchStatus: 'unknown',
+            },
+          });
+          expect(outcome.error.message.toLowerCase()).toContain(
+            'do not resubmit',
+          );
+        }
+        expect(sessionResult.openQuestions).toEqual([
+          expect.objectContaining({
+            id: questionId,
+            status: 'answered',
+            answer: 'yes',
+            answeredBy: 'operator',
+          }),
+        ]);
+
+        const persistedStore = await loadOpenQuestionsStore(storePath);
+        const persistedSidecar = await loadSessionSidecar(sidecarPath);
+        expect(persistedStore?.openQuestions).toHaveLength(1);
+        expect(persistedStore?.openQuestions[0]).toMatchObject({
+          id: questionId,
+          status: 'answered',
+          answer: 'yes',
+          answeredBy: 'operator',
+        });
+        expect(persistedSidecar?.openQuestions).toEqual(
+          persistedStore?.openQuestions,
+        );
+        expect(persistedSidecar?.harnessSocketPath).toBeUndefined();
+        expect(sendCount).toBe(2);
+
+        finishDispatch.resolve();
+        await settleWithin(lateDispatchReturned.promise, 1_000);
+        await drainAsync();
+        expect(mockResume).not.toHaveBeenCalled();
+        expect(sendCount).toBe(2);
+      } finally {
+        finishDispatch.resolve();
+        shutdown.abort();
+        await sessionPromise.catch(() => {});
+      }
+    },
+    20_000,
+  );
 
   it('registers the GitHub watch tool and persists a tool registration', async () => {
     let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];

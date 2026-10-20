@@ -51,7 +51,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       title: 'live Open Question control',
       items: [
         '- `list_live_open_questions` は `conductorAgentId` を指定し、稼働中 harness の open 一覧を読みます',
-        '- `answer_live_open_question` は `conductorAgentId`、question id、operator が選んだ回答を送り、YAML flush 完了後に結果を返します',
+        '- `answer_live_open_question` は `conductorAgentId`、question id、operator が選んだ回答を送り、YAML flush と通常時の conductor dispatch 完了後に結果を返します。終了時に保存済み・dispatch 未確認なら `outcome: unknown` となるため、回答を再送せず保存状態を確認してください',
         '- 接続先が停止中・到達不能ならエラーです。YAML file watch や自動 fallback はありません',
         '- 質問・context・回答は保存値のまま扱われます。自由入力に対する secret masking は行われません',
       ],

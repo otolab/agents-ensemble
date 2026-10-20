@@ -280,6 +280,13 @@ export interface ConductorSessionResult {
   sessionUsage?: SessionUsageSummary;
 }
 
+const OPEN_QUESTION_CONTROL_DRAIN_TIMEOUT_MS = 5_000;
+const RECORDED_ANSWER_UNKNOWN_DISPATCH = {
+  outcome: 'unknown',
+  answerStatus: 'recorded',
+  dispatchStatus: 'unknown',
+} as const;
+
 export async function runConductorSession(
   options: RunConductorSessionOptions,
 ): Promise<ConductorSessionResult> {
@@ -494,9 +501,30 @@ export async function runConductorSession(
       controller.abort();
       return;
     }
-    void quiescing
-      .catch(reportDrainFailure)
-      .finally(() => controller.abort());
+    let drainTimeout: ReturnType<typeof setTimeout> | undefined;
+    const drainDeadline = new Promise<'timeout'>((resolve) => {
+      drainTimeout = setTimeout(
+        () => resolve('timeout'),
+        OPEN_QUESTION_CONTROL_DRAIN_TIMEOUT_MS,
+      );
+    });
+    const drainResult = quiescing.then(
+      () => 'drained' as const,
+      (error: unknown) => {
+        reportDrainFailure(error);
+        return 'failed' as const;
+      },
+    );
+    void Promise.race([drainResult, drainDeadline]).then((result) => {
+      if (drainTimeout) clearTimeout(drainTimeout);
+      if (result === 'timeout') {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message: `Open Question control drain exceeded ${OPEN_QUESTION_CONTROL_DRAIN_TIMEOUT_MS}ms; aborting conductor dispatch. Accepted answers may have unknown notification outcomes.`,
+        });
+      }
+      controller.abort();
+    });
   };
   const onShutdownSignal = () =>
     abortAfterOpenQuestionDrain(drainedShutdownController);
@@ -1387,7 +1415,8 @@ export async function runConductorSession(
         if (!dispatchReceipt) {
           throw new OpenQuestionControlOperationError(
             -32603,
-            'The answer was recorded, but its conductor notification was not queued.',
+            'The answer was recorded, but its conductor notification was not queued. The outcome is unknown; do not resubmit the answer and inspect the session state.',
+            RECORDED_ANSWER_UNKNOWN_DISPATCH,
           );
         }
         await dispatchReceipt;
@@ -1470,7 +1499,8 @@ export async function runConductorSession(
             receipt.reject(
               new OpenQuestionControlOperationError(
                 -32005,
-                'The answer was recorded and persisted, but conductor notification could not be confirmed. Do not resubmit the answer; inspect the live session.',
+                'The answer was recorded and persisted, but conductor notification could not be confirmed. The outcome is unknown; do not resubmit the answer and inspect the session state.',
+                RECORDED_ANSWER_UNKNOWN_DISPATCH,
               ),
             );
           } else {
@@ -1601,7 +1631,8 @@ export async function runConductorSession(
       receipt.reject(
         new OpenQuestionControlOperationError(
           -32005,
-          'The answer was recorded and persisted, but the conductor session stopped before notification completed. Do not resubmit the answer; inspect the live session.',
+          'The answer was recorded and persisted, but the conductor session stopped before notification completed. The outcome is unknown; do not resubmit the answer and inspect the session state.',
+          RECORDED_ANSWER_UNKNOWN_DISPATCH,
         ),
       );
     }

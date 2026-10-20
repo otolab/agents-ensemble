@@ -63,7 +63,7 @@ export function createAnswerLiveOpenQuestionTool(
   return {
     name: ANSWER_LIVE_OPEN_QUESTION_TOOL,
     description:
-      'Submit an operator-approved answer to one open question in a running Issue harness. The harness persists the answer and sends it to the conductor before returning. If the connection closes after submission, the outcome is unknown; inspect the live session before taking further action.',
+      'Submit an operator-approved answer to one open question in a running Issue harness. The harness persists the answer and normally waits for conductor dispatch before returning. If shutdown interrupts dispatch, the answer remains recorded and the result reports an unknown outcome; do not resubmit it, inspect the saved session state.',
     inputSchema: {
       type: 'object',
       properties: {

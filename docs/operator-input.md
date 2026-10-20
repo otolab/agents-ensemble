@@ -52,9 +52,15 @@ type OperatorInputBinding = (
 
 ### 稼働中 harness の Open Question control
 
-`ensemble issue` はセッションごとの UDS listener を持ち、sidecar の `harnessSocketPath` から operator-agent が接続できます。`list_live_open_questions` は稼働中 Registry の未回答一覧を読み、`answer_live_open_question` は質問 ID と operator が選んだ回答を渡します。harness は `submitOperatorInput` / `recordOpenQuestionAnswer` を通して既存の回答・permission invariants を適用し、`operator.message` 相当を event queue に積みます。回答が YAML と JSON sidecar に保存され、conductor への send が完了してから成功を返します。終了要求は listener を閉じた後、受理済みの回答を永続化・dispatch してから driver を停止します。
+`ensemble issue` はセッションごとの UDS listener を持ち、sidecar の `harnessSocketPath` から operator-agent が接続できます。`list_live_open_questions` は稼働中 Registry の未回答一覧を読み、`answer_live_open_question` は質問 ID と operator が選んだ回答を渡します。harness は `submitOperatorInput` / `recordOpenQuestionAnswer` を通して既存の回答・permission invariants を適用し、Registry を更新して `operator.message` 相当を event queue に積みます。回答 handler は YAML と JSON sidecar を flush した後、conductor send の receipt を待ちます。通常は保存と send 完了の両方を確認して成功を返します。終了要求時は listener を閉じ、受理済み request の drain を最大 5 秒待ってから driver を停止します。
 
-UDS は稼働中 session 専用です。listener がない・接続できない場合はエラーになり、保存 YAML への自動 fallback はしません。要求送信後、応答を受け取る前に接続が切れた場合は回答結果を特定できない transport error になります。自動再送は行わず、回答済み一覧や session state を確認してから次の操作を決めてください。回答が保存された後に conductor 通知を確認できなかった場合も、エラー本文は回答が保存済みであることを示すため、同じ回答を再送しないでください。YAML は引き続き resume と保存済み読み取りの正本です。socket path は停止時に sidecar から外します。
+終了時に drain が 5 秒を超えると driver を abort します。回答が保存済みでも conductor send の完了を確認できなければ成功扱いにせず、JSON-RPC error `-32005` として次の data を返します。
+
+```json
+{"outcome":"unknown","answerStatus":"recorded","dispatchStatus":"unknown"}
+```
+
+この場合、回答は Registry / YAML / sidecar に記録済みですが、conductor への到達は未確認です。再送すると回答済み質問への操作になるため、自動再送はせず、保存状態と session log を確認してから次の操作を決めてください。listener がない・接続できない場合もエラーになり、保存 YAML への自動 fallback はしません。要求送信後、応答を受け取る前に接続が切れた場合は `outcome: unknown` の transport error になります。YAML は引き続き resume と保存済み読み取りの正本です。socket path は停止時に sidecar から外します。
 
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 

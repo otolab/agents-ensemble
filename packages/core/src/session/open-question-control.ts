@@ -32,6 +32,12 @@ export interface OpenQuestionControlAnswerResult {
     Partial<Pick<OpenQuestion, 'answeredBy' | 'approved'>>;
 }
 
+export interface OpenQuestionControlErrorData {
+  outcome: 'unknown';
+  answerStatus: 'recorded';
+  dispatchStatus: 'unknown';
+}
+
 export interface OpenQuestionControlServerOptions {
   listOpenQuestions: () => OpenQuestion[];
   answerOpenQuestion: (
@@ -61,6 +67,7 @@ export class OpenQuestionControlOperationError extends Error {
   constructor(
     public readonly rpcCode: number,
     message: string,
+    public readonly data?: OpenQuestionControlErrorData,
   ) {
     super(message);
     this.name = 'OpenQuestionControlOperationError';
@@ -71,6 +78,7 @@ export class OpenQuestionControlRemoteError extends Error {
   constructor(
     public readonly rpcCode: number,
     message: string,
+    public readonly data?: OpenQuestionControlErrorData,
   ) {
     super(message);
     this.name = 'OpenQuestionControlRemoteError';
@@ -304,6 +312,7 @@ export async function sendOpenQuestionControlRequest<T>(
               typeof error.message === 'string'
                 ? error.message
                 : 'Open Question control request failed.',
+              parseOpenQuestionControlErrorData(error.data),
             )),
           );
           return;
@@ -386,7 +395,12 @@ async function handleRequest(
     }
   } catch (error) {
     if (error instanceof OpenQuestionControlOperationError) {
-      return errorResponse(requestId, error.rpcCode, error.message);
+      return errorResponse(
+        requestId,
+        error.rpcCode,
+        error.message,
+        error.data,
+      );
     }
     return errorResponse(requestId, -32603, 'Open Question operation failed.');
   }
@@ -430,7 +444,11 @@ interface JsonRpcResponse {
   jsonrpc: typeof JSON_RPC_VERSION;
   id: string | number | null;
   result?: unknown;
-  error?: { code: number; message: string };
+  error?: {
+    code: number;
+    message: string;
+    data?: OpenQuestionControlErrorData;
+  };
 }
 
 function successResponse(id: string | number, result: unknown): JsonRpcResponse {
@@ -441,8 +459,31 @@ function errorResponse(
   id: string | number | null,
   code: number,
   message: string,
+  data?: OpenQuestionControlErrorData,
 ): JsonRpcResponse {
-  return { jsonrpc: JSON_RPC_VERSION, id, error: { code, message } };
+  return {
+    jsonrpc: JSON_RPC_VERSION,
+    id,
+    error: { code, message, ...(data ? { data } : {}) },
+  };
+}
+
+function parseOpenQuestionControlErrorData(
+  value: unknown,
+): OpenQuestionControlErrorData | undefined {
+  if (
+    !isRecord(value) ||
+    value.outcome !== 'unknown' ||
+    value.answerStatus !== 'recorded' ||
+    value.dispatchStatus !== 'unknown'
+  ) {
+    return undefined;
+  }
+  return {
+    outcome: 'unknown',
+    answerStatus: 'recorded',
+    dispatchStatus: 'unknown',
+  };
 }
 
 function writeResponse(

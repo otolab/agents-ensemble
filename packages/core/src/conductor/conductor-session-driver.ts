@@ -237,6 +237,7 @@ export async function runConductorSessionDriver(
       message: await Promise.resolve(options.initialPrompt),
       conductorHandle: options.conductorHandle,
       sendReconnect: options.sendReconnect,
+      signal: options.shutdownSignal,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
       sendCount: 0,
@@ -381,6 +382,7 @@ export async function runConductorSessionDriver(
       message: formatSessionEventsForConductor(batch),
       conductorHandle: options.conductorHandle,
       sendReconnect: options.sendReconnect,
+      signal: options.shutdownSignal,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
       sendCount,
@@ -446,6 +448,7 @@ function runEventConductorSend(input: {
   message: string;
   conductorHandle: ConductorAgentHandle;
   sendReconnect: ConductorSendReconnectOptions;
+  signal: AbortSignal;
   workerDispatches: WorkerDispatchResult[];
   workerFailures: WorkerFailureRecord[];
   sendCount: number;
@@ -476,6 +479,7 @@ function runEventConductorSend(input: {
     input.message,
     {
       ...input.sendReconnect,
+      signal: input.signal,
       onToolCallStarted: (info) => {
         input.onSendProgress?.({
           sendCount: nextSendCount,
