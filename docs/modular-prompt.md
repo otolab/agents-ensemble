@@ -85,7 +85,9 @@ modular-prompt の標準セクションのうち、ensemble で主に使うも�
 - **そのロールの**具体的振る舞い（「〜しろ」「〜するな」「〜に返す」）
 - 禁止事項（conductor: 演奏しない、など）
 - 連携の手順（いつ・何を・どう送るか）
-- ツール名ごとの使い方（`### prompt_worker`, `### LLM トークン使用量照会`, `### worker 状態照会`, `### open question`）
+- ツール名ごとの使い方（`### prompt_worker`, `### LLM トークン使用量照会`, `### worker 状態照会`, `### オペレータ向けセッション状態`, `### open question`）
+- `report_session_state` の説明は短く保ち、80 文字以内の一文例を添える。worker 一覧や長いメトリクスは含めない
+- 一文例: `レビュー中：CIテスト待ち`
 
 ## subsection のルール
 

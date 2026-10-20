@@ -99,6 +99,15 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
     },
     {
       type: 'subsection',
+      title: 'オペレータ向けセッション状態',
+      items: [
+        '- `report_session_state` で、オペレータ向けの短い状態を 80 文字以内の一文で登録する',
+        '- 例: `report_session_state({ statusLine: "レビュー中：CIテスト待ち" })`',
+        '- worker の一覧、長いメトリクス、permission の詳細は含めない',
+      ],
+    },
+    {
+      type: 'subsection',
       title: 'permission',
       items: [
         '- workerのツール実行にはconductorの明示的な許可が必要になる場合があります',
