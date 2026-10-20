@@ -42,7 +42,7 @@ describe('createAskHumanTool', () => {
     expect(registry.listOpen()[0]).toMatchObject({
       relatedPermissionId: 'permission-request-123456',
       context: 'The operator should decide.',
-    );
+    });
   });
 
   it('defaults responseType to text', async () => {
