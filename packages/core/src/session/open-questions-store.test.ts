@@ -123,7 +123,7 @@ describe('open questions store', () => {
 
     await writeFile(
       path,
-      'version: 1\nsequence: 0\nopenQuestions:\n  - id: broken\n',
+      'version: 1\nsequence: 0\nopenQuestions:\n  - id: inq-1\n',
       'utf8',
     );
     await expect(loadOpenQuestionsStore(path)).rejects.toThrow(
