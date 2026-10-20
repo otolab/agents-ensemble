@@ -300,6 +300,116 @@ describe('open question / operator flow integration', () => {
     expect(result.stopReason).toBe('completed');
   });
 
+  it('combines prior tool-call updates with full permission params for conductor', async () => {
+    const bridge = await createInProcessAcpBridge(undefined, {
+      requestPermissionOnPrompt: true,
+      permissionParams: permissionRequestFixtures.editPermissionIdOnly,
+      toolCallUpdatesBeforePermission:
+        permissionRequestFixtures.editPriorToolCallUpdates,
+    });
+
+    let sendCount = 0;
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount++;
+      if (sendCount === 1) {
+        return { runId: 'run-init', status: 'finished', result: 'init' };
+      }
+      if (message.includes('permission 判断待ち')) {
+        const yamlStart = message.indexOf('```yaml\n');
+        const yamlEnd = message.indexOf('\n```', yamlStart);
+        const permissionEvent = yaml.load(
+          message.slice(yamlStart + '```yaml\n'.length, yamlEnd),
+        ) as {
+          id: string;
+          workerId: string;
+          worker: string;
+          request: { raw: Record<string, unknown> };
+          brief: {
+            toolCallId: string;
+            tool: string;
+            operation: { kind: string; path?: string; line?: number };
+            missing: string[];
+          };
+        };
+
+        expect(permissionEvent.worker).toBe('implementer');
+        expect(permissionEvent.workerId).toBeTruthy();
+        expect(permissionEvent.request.raw).toMatchObject({
+          sessionId: 'fake-session-1',
+          toolCall: { toolCallId: 'call-edit-from-update' },
+          options: permissionRequestFixtures.editPermissionIdOnly.options,
+          backendExtension: { source: 'permission-rpc' },
+        });
+        expect(permissionEvent.brief).toEqual({
+          toolCallId: 'call-edit-from-update',
+          tool: 'Edit',
+          operation: {
+            kind: 'edit',
+            path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+            line: 27,
+          },
+          missing: [],
+        });
+        expect(permissionEvent.request.raw.toolCall).not.toHaveProperty(
+          'locations',
+        );
+
+        const snapshot = await conductorTools.get_tool_call!.execute({
+          toolCallId: permissionEvent.brief.toolCallId,
+        });
+        expect(snapshot.structuredContent).toMatchObject({
+          workerId: permissionEvent.workerId,
+          sessionId: 'fake-session-1',
+          toolCall: {
+            toolCallId: 'call-edit-from-update',
+            kind: 'edit',
+            title: 'Edit File',
+            status: 'in_progress',
+            rawInput: {
+              oldString: '<redacted>',
+              newString: '<redacted>',
+            },
+            locations: [
+              {
+                path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+                line: 27,
+              },
+            ],
+          },
+        });
+        await conductorTools.resolve_permission!.execute({
+          requestId: permissionEvent.id,
+          decision: 'allow',
+        });
+        return {
+          runId: 'run-permission',
+          status: 'finished',
+          result: 'permission resolved',
+        };
+      }
+      if (isWorkerCompletedConductorMessage(message)) {
+        return { runId: 'run-complete', status: 'finished', result: 'done' };
+      }
+      return { runId: `run-${sendCount}`, status: 'finished', result: 'ok' };
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: REPO_ROOT,
+      profile: IMPLEMENTER_PROFILE,
+      maxTurns: 10,
+      permissionPipeline: new PermissionPipeline({
+        policy: { allowTools: [], allowReadOnlyTools: false },
+      }),
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+    });
+
+    expect(mockSend).toHaveBeenCalledTimes(3);
+    expect(result.workerFailures).toHaveLength(0);
+    expect(result.stopReason).toBe('completed');
+  });
+
   it('links a Cursor ACP v1 Edit permission summary to the Open Question context', async () => {
     const bridge = await createInProcessAcpBridge(undefined, {
       requestPermissionOnPrompt: true,

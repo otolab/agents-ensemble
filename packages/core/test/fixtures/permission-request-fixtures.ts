@@ -97,4 +97,37 @@ export const permissionRequestFixtures = {
       toolCallId: 'exec-id-only-1',
     },
   },
+  /** Edit information split between earlier session/update and permission params. */
+  editPriorToolCallUpdates: [
+    {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'call-edit-from-update',
+      kind: 'edit',
+      title: 'Edit File',
+      status: 'pending',
+      rawInput: {
+        oldString: '<redacted>',
+        newString: '<redacted>',
+      },
+    },
+    {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'call-edit-from-update',
+      status: 'in_progress',
+      locations: [
+        {
+          path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+          line: 27,
+        },
+      ],
+    },
+  ],
+  editPermissionIdOnly: {
+    toolCall: { toolCallId: 'call-edit-from-update' },
+    options: [
+      { optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' },
+      { optionId: 'reject-once', kind: 'reject_once', name: 'Reject' },
+    ],
+    backendExtension: { source: 'permission-rpc' },
+  },
 } as const;

@@ -22,6 +22,8 @@ export interface FakeAcpServerOptions {
   onAuthenticate?: (methodId: string) => void;
   /** Emit session/request_permission before responding to session/prompt. */
   requestPermissionOnPrompt?: boolean;
+  /** Emit these `session/update` payloads immediately before permission. */
+  toolCallUpdatesBeforePermission?: Array<Record<string, unknown>>;
   /** Options to advertise in a fake session/request_permission request. */
   permissionOptions?: PermissionOption[];
   /** Full permission params for a representative ACP wire payload fixture. */
@@ -149,6 +151,9 @@ export class FakeAcpServer {
         };
 
         if (this.options.requestPermissionOnPrompt) {
+          for (const update of this.options.toolCallUpdatesBeforePermission ?? []) {
+            this.notify('session/update', { sessionId, update });
+          }
           await this.requestPermissionAndWait(sessionId);
         }
 

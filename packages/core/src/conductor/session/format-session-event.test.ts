@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import yaml from 'js-yaml';
 import {
   formatSessionEventForConductor,
   formatSessionEventsForConductor,
@@ -122,6 +123,53 @@ describe('formatSessionEventForConductor', () => {
     expect(message).toContain(
       'operatorSummary: permission.pending worker=worker-1 tool=Edit path=src/example.ts id=permissi...',
     );
+  });
+
+  it('preserves full permission params and includes a structured brief', () => {
+    const raw = {
+      sessionId: 'sess-edit',
+      toolCall: {
+        toolCallId: 'call-edit-1',
+        kind: 'edit',
+        rawInput: { filePath: '/repo/src/example.ts' },
+      },
+      options: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow once' }],
+      backendExtension: { trace: 'full-value' },
+    };
+    const message = formatSessionEventForConductor({
+      type: 'permission.pending',
+      worker: 'implementer',
+      permission: {
+        id: 'perm-edit-1',
+        workerId: 'worker-internal-1',
+        createdAt: 1_700_000_000_000,
+        request: {
+          toolName: 'Edit',
+          sessionId: 'sess-edit',
+          options: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow once' }],
+          raw,
+        },
+      },
+    });
+    const yamlBlock = message.match(/```yaml\n([\s\S]*?)\n```/)?.[1];
+    const formatted = yaml.load(yamlBlock!) as Record<string, unknown>;
+
+    expect(formatted).toMatchObject({
+      id: 'perm-edit-1',
+      workerId: 'worker-internal-1',
+      worker: 'implementer',
+      request: {
+        toolName: 'Edit',
+        sessionId: 'sess-edit',
+        raw,
+      },
+      brief: {
+        toolCallId: 'call-edit-1',
+        tool: 'Edit',
+        operation: { kind: 'edit', path: '/repo/src/example.ts' },
+        missing: [],
+      },
+    });
   });
 
   it('formats permission.stall with low-priority telemetry context', () => {
