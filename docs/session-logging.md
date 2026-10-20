@@ -62,6 +62,7 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
 
   別経路（SessionLogger 外）:
     sidecar flush → {repoRoot}/.ensemble/sessions/{agentId}.json
+    tool-call history flush → {repoRoot}/.ensemble/sessions/{agentId}.tool-calls
     question flush → {repoRoot}/.ensemble/sessions/{agentId}/open-questions.yaml
 ```
 
@@ -221,8 +222,12 @@ openQuestions:
 | **会話本文** | 載せない（worker 応答の要約のみ） | 載せない |
 | **open question** | 終了時の一覧スナップショット | YAML が正本。移行中は JSON sidecar にも同じ一覧を保存 |
 | **worker session** | 載せない | `acpSessionId` を保持 |
+| **tool-call snapshot** | 載せない | 別ファイル `.tool-calls` に保持（TTL / サイズ上限あり） |
 
-詳細は [ADR 0011](adr/0011-session-sidecar-resume.md) と [operator-input.md](operator-input.md) の post-loop / 終了動作を参照してください。sidecar JSON のスキーマと他の復元状態は ADR 0011 を参照してください。
+tool-call history は sidecar 本体から独立して読み書きし、履歴ファイルの欠損や破損で resume を妨げません。
+保持期限・上限・プライバシー上の扱いは [harness-events.md](harness-events.md) を参照してください。
+詳細は [ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0032](adr/0032-tool-call-snapshot-history.md)、
+[operator-input.md](operator-input.md) の post-loop / 終了動作を参照してください。sidecar JSON のスキーマと他の復元状態は ADR 0011 を参照してください。
 
 ---
 

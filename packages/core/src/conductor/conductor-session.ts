@@ -47,7 +47,10 @@ import {
   type SessionWorkerSpec,
 } from '../profile/types.js';
 import { WorkerSession } from '../runtime/worker-session.js';
-import { ToolCallSnapshotRegistry } from '../runtime/tool-call-snapshot-registry.js';
+import {
+  ToolCallSnapshotRegistry,
+  type StoredToolCallSnapshot,
+} from '../runtime/tool-call-snapshot-registry.js';
 import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
 import { createGetToolCallTool } from '../dispatch/get-tool-call-tool.js';
@@ -105,6 +108,12 @@ import {
   sessionSidecarPath,
   type SessionSidecar,
 } from '../session/session-sidecar.js';
+import {
+  loadToolCallSnapshotHistory,
+  pruneExpiredToolCallSnapshotHistoryFiles,
+  saveToolCallSnapshotHistory,
+  toolCallSnapshotHistoryPath,
+} from '../session/tool-call-snapshot-history.js';
 import {
   loadOpenQuestionsStore,
   openQuestionsStorePath,
@@ -277,6 +286,16 @@ export async function runConductorSession(
       repoRoot: options.repoRoot,
     });
   attachLegacySessionCallbacks(sessionLogger, options);
+  const expiredHistory = await pruneExpiredToolCallSnapshotHistoryFiles(
+    options.repoRoot,
+  );
+  if (expiredHistory.failedCount > 0) {
+    sessionLogger.emit({
+      type: 'harness.warning',
+      message:
+        'Some expired tool-call snapshot history files could not be removed.',
+    });
+  }
   const escalations: EscalationRecord[] = [];
   const openQuestions = new OpenQuestionRegistry();
   const eventQueue = new SessionEventQueue();
@@ -308,6 +327,8 @@ export async function runConductorSession(
   );
   const mcpConfigDigest = computeMcpConfigDigest(mcpServers);
   const mcpConfigConfigured = Object.keys(mcpServers).length > 0;
+  let resumeToolCallSnapshots: StoredToolCallSnapshot[] = [];
+  let toolCallHistoryNeedsRewrite = false;
 
   if (options.resumeAgentId) {
     const sidecar = await requireSessionSidecarForResume({
@@ -322,6 +343,18 @@ export async function runConductorSession(
       mcpConfigDigest,
       mcpConfigConfigured,
     });
+    const history = await loadToolCallSnapshotHistory({
+      repoRoot: options.repoRoot,
+      conductorAgentId: options.resumeAgentId,
+    });
+    resumeToolCallSnapshots = history.entries;
+    toolCallHistoryNeedsRewrite = history.needsRewrite;
+    if (history.warning) {
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: `${history.warning}; the session will continue without affected history`,
+      });
+    }
     const openQuestionsPath = openQuestionsStorePath({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
@@ -417,6 +450,9 @@ export async function runConductorSession(
     new PermissionPipeline({ policy: options.permissionPolicy });
 
   let scheduleSidecarFlush = () => {};
+  let scheduleToolCallHistoryFlush = () => {};
+  let flushToolCallHistory = async () => {};
+  let toolCallHistoryDirty = toolCallHistoryNeedsRewrite;
 
   const sessionState = sessionStateFromProfile(activeProfile);
 
@@ -487,6 +523,8 @@ export async function runConductorSession(
   });
 
   const toolCallSnapshots = new ToolCallSnapshotRegistry();
+  let toolCallHistoryLimitWarningEmitted = false;
+  let toolCallHistoryOversizeWarningEmitted = false;
 
   const workerSession = new WorkerSession({
     issueUrl: options.issueUrl,
@@ -618,10 +656,40 @@ export async function runConductorSession(
     },
     onAcpUpdate: (event) => {
       if (event.toolCallUpdate) {
-        toolCallSnapshots.apply(
-          { workerId: event.workerId, sessionId: event.sessionId ?? '' },
+        const result = toolCallSnapshots.applyWithResult(
+          {
+            workerId: event.workerId,
+            workerName: event.name,
+            sessionId: event.sessionId ?? '',
+          },
           event.toolCallUpdate,
         );
+        if (result.status === 'applied') {
+          toolCallHistoryDirty = true;
+          scheduleToolCallHistoryFlush();
+          if (
+            result.evictedCount > 0 &&
+            !toolCallHistoryLimitWarningEmitted
+          ) {
+            toolCallHistoryLimitWarningEmitted = true;
+            sessionLogger.emit({
+              type: 'harness.warning',
+              message:
+                'Tool-call snapshot history reached its retention limit; oldest snapshots were removed.',
+            });
+          }
+        } else if (result.reason === 'too-large') {
+          toolCallHistoryDirty = true;
+          scheduleToolCallHistoryFlush();
+          if (!toolCallHistoryOversizeWarningEmitted) {
+            toolCallHistoryOversizeWarningEmitted = true;
+            sessionLogger.emit({
+              type: 'harness.warning',
+              message:
+                'A tool-call snapshot exceeds the history size limit and was not retained.',
+            });
+          }
+        }
       }
       sessionLogger.emit({
         type: 'harness.worker.acp.update',
@@ -662,6 +730,24 @@ export async function runConductorSession(
     });
   }
   workerSession.startWorkers();
+  if (resumeToolCallSnapshots.length > 0) {
+    const workerIdsByName = new Map<string, string>();
+    workers.forEach((worker, index) => {
+      const workerId = workerSession.startedWorkerIds[index];
+      if (workerId) workerIdsByName.set(worker.name, workerId);
+    });
+    const restoreResult = toolCallSnapshots.restore(
+      resumeToolCallSnapshots,
+      workerIdsByName,
+    );
+    if (restoreResult.skippedCount > 0) {
+      toolCallHistoryDirty = true;
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: `${restoreResult.skippedCount} tool-call snapshot entr${restoreResult.skippedCount === 1 ? 'y was' : 'ies were'} skipped because its worker is no longer available or its data is invalid.`,
+      });
+    }
+  }
 
   const recordAnsweredQuestion = (answered: OpenQuestion) => {
     const record = openQuestionToEscalationRecord(answered);
@@ -924,6 +1010,59 @@ export async function runConductorSession(
   scheduleSidecarFlush = () => {
     void flushSidecar().catch(reportSidecarFlushFailure);
   };
+  const toolCallHistoryPath = toolCallSnapshotHistoryPath({
+    repoRoot: options.repoRoot,
+    conductorAgentId: conductorHandle.conductor.agentId,
+  });
+  let toolCallHistoryFlushTimer:
+    | ReturnType<typeof setTimeout>
+    | undefined;
+  let toolCallHistoryFlushQueue: Promise<void> = Promise.resolve();
+  let toolCallHistoryFlushWarningEmitted = false;
+  const emitToolCallHistoryFlushWarning = () => {
+    if (toolCallHistoryFlushWarningEmitted) return;
+    toolCallHistoryFlushWarningEmitted = true;
+    sessionLogger.emit({
+      type: 'harness.warning',
+      message:
+        'Tool-call snapshot history could not be saved; the latest history may be unavailable after resume.',
+    });
+  };
+  flushToolCallHistory = (): Promise<void> => {
+    if (toolCallHistoryFlushTimer) {
+      clearTimeout(toolCallHistoryFlushTimer);
+      toolCallHistoryFlushTimer = undefined;
+    }
+    if (!toolCallHistoryDirty) return toolCallHistoryFlushQueue;
+
+    toolCallHistoryDirty = false;
+    const nextFlush = toolCallHistoryFlushQueue.then(() =>
+      saveToolCallSnapshotHistory(toolCallHistoryPath, toolCallSnapshots.snapshot()),
+    );
+    toolCallHistoryFlushQueue = nextFlush.catch(() => {});
+    return nextFlush;
+  };
+  scheduleToolCallHistoryFlush = () => {
+    toolCallHistoryDirty = true;
+    if (toolCallHistoryFlushTimer) return;
+    toolCallHistoryFlushTimer = setTimeout(() => {
+      toolCallHistoryFlushTimer = undefined;
+      void flushToolCallHistory().catch(() => {
+        toolCallHistoryDirty = true;
+        emitToolCallHistoryFlushWarning();
+      });
+    }, 100);
+    toolCallHistoryFlushTimer.unref?.();
+  };
+  const flushToolCallHistoryBestEffort = async (): Promise<void> => {
+    try {
+      await flushToolCallHistory();
+    } catch {
+      toolCallHistoryDirty = true;
+      emitToolCallHistoryFlushWarning();
+    }
+  };
+  if (toolCallHistoryDirty) scheduleToolCallHistoryFlush();
 
   let sendCount = 0;
   let autonomousTurns = 0;
@@ -1367,6 +1506,7 @@ export async function runConductorSession(
       } catch (error) {
         reportSidecarFlushFailure(error);
       }
+      await flushToolCallHistoryBestEffort();
 
       const runGithubMonitorStop = async (): Promise<void> => {
         if (!githubMonitor || githubMonitorStopped) {
@@ -1412,6 +1552,10 @@ export async function runConductorSession(
         await runWorkerStop();
         await runConductorClose();
       }
+
+      // ACP updates can arrive while cancellation and bridge shutdown settle.
+      // Flush once more after all workers stop to capture their final snapshot.
+      await flushToolCallHistoryBestEffort();
 
       sessionLogger.emit({
         type: 'harness.teardown',

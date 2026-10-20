@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import {
   SessionLogger,
   type SessionLogEvent,
 } from '../../src/conductor/session/session-logger.js';
+import type { OperatorInputBindingApi } from '../../src/conductor/operator-input-binding.js';
 import {
   attachWorker,
   buildWorkerAttachPrompt,
@@ -44,6 +45,9 @@ import {
   isWorkerCompletedConductorMessage,
 } from './helpers/conductor-session-assertions.js';
 import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
+import { toolCallSnapshotHistoryPath } from '../../src/session/tool-call-snapshot-history.js';
+import { TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS } from '../../src/runtime/tool-call-snapshot-registry.js';
+import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
 
 const RESUME_AGENT_ID = 'agent-resume-test';
 
@@ -374,6 +378,61 @@ describe('session resume integration', () => {
     });
   });
 
+  it('continues resuming when the optional tool-call history is corrupt', async () => {
+    const historyPath = toolCallSnapshotHistoryPath({
+      repoRoot,
+      conductorAgentId: RESUME_AGENT_ID,
+    });
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: RESUME_AGENT_ID,
+      }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: RESUME_AGENT_ID,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        updatedAt: Date.now(),
+      },
+    );
+    await writeFile(historyPath, '{invalid json', 'utf8');
+    mockSend.mockResolvedValue({
+      runId: 'resume-corrupt-history',
+      status: 'finished',
+      result: 'resumed',
+    });
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: RESUME_AGENT_ID,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      sessionLogger,
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: 'harness.warning',
+        message: expect.stringContaining('history is invalid and was discarded'),
+      }),
+    );
+    await expect(readFile(historyPath, 'utf8')).rejects.toThrow();
+  });
+
   it('dispatches permission.pending from a resumed worker without an initial send', async () => {
     const bridge = await createInProcessAcpBridge(undefined, {
       requestPermissionOnPrompt: true,
@@ -510,6 +569,252 @@ describe('session resume integration', () => {
           event.type === 'harness.teardown.phase' && event.phase === 'workers',
       ),
     ).toBe(true);
+  });
+
+  it('restores tool-call history for permission briefs and lookup after /close and resume', async () => {
+    const toolCallUpdates: Array<Record<string, unknown>> =
+      permissionRequestFixtures.editPriorToolCallUpdates.map((update) => ({
+        ...update,
+      }));
+    const bridge = await createInProcessAcpBridge(undefined, {
+      requestPermissionOnPrompt: true,
+      permissionParams: permissionRequestFixtures.editPermissionIdOnly,
+      toolCallUpdatesBeforePermission: toolCallUpdates,
+    });
+    const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
+    const worktree = {
+      ...TEST_WORKTREE,
+      path: join(repoRoot, 'worktree'),
+    };
+    let phase: 'initial' | 'resume' = 'initial';
+    let initialWorkerId: string | undefined;
+    const closeForResume = vi.fn().mockResolvedValue(undefined);
+    mockCreate.mockImplementation(async (options, resumeOptions) => {
+      conductorTools = (resumeOptions ?? options).customTools ?? {};
+      return {
+        agentId: RESUME_AGENT_ID,
+        send: mockSend,
+        close: mockClose,
+        closeForResume,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+
+    mockSend.mockImplementation(async (message: string) => {
+      if (message.includes('# permission.pending')) {
+        const yamlStart = message.indexOf('```yaml\n');
+        const yamlEnd = message.indexOf('\n```', yamlStart);
+        const pending = yaml.load(
+          message.slice(yamlStart + '```yaml\n'.length, yamlEnd),
+        ) as {
+          id: string;
+          workerId: string;
+          request: { raw: Record<string, unknown> };
+          brief: {
+            toolCallId: string;
+            operation: { kind: string; path?: string; line?: number };
+            missing: string[];
+          };
+        };
+
+        if (phase === 'initial') {
+          initialWorkerId = pending.workerId;
+          expect(pending.brief).toMatchObject({
+            toolCallId: 'call-edit-from-update',
+            operation: {
+              kind: 'edit',
+              path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+              line: 27,
+            },
+            missing: [],
+          });
+          const snapshot = await conductorTools.get_tool_call!.execute({
+            toolCallId: pending.brief.toolCallId,
+          });
+          expect(snapshot.structuredContent).toMatchObject({
+            workerId: pending.workerId,
+            sessionId: 'fake-session-1',
+            toolCall: {
+              toolCallId: 'call-edit-from-update',
+              status: 'in_progress',
+              locations: [
+                {
+                  path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+                  line: 27,
+                },
+              ],
+            },
+          });
+        } else {
+          expect(pending.workerId).not.toBe(initialWorkerId);
+          expect(pending.request.raw.sessionId).toBe('fake-session-1');
+          expect(pending.brief).toMatchObject({
+            toolCallId: 'call-edit-from-update',
+            operation: {
+              kind: 'edit',
+              path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+              line: 27,
+            },
+            missing: [],
+          });
+          const snapshot = await conductorTools.get_tool_call!.execute({
+            toolCallId: pending.brief.toolCallId,
+          });
+          expect(snapshot.structuredContent).toMatchObject({
+            workerId: pending.workerId,
+            sessionId: 'fake-session-1',
+            toolCall: {
+              toolCallId: 'call-edit-from-update',
+              status: 'in_progress',
+              locations: [
+                {
+                  path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+                  line: 27,
+                },
+              ],
+            },
+          });
+          const futureSnapshot = await conductorTools.get_tool_call!.execute({
+            toolCallId: 'call-future-updated-at',
+          });
+          expect(futureSnapshot.structuredContent).toMatchObject({
+            found: false,
+            toolCallId: 'call-future-updated-at',
+          });
+        }
+
+        await conductorTools.resolve_permission!.execute({
+          requestId: pending.id,
+          decision: 'allow',
+        });
+      }
+      return {
+        runId: `${phase}-run`,
+        status: 'finished',
+        result: 'ok',
+      };
+    });
+
+    let firstOperatorApi: OperatorInputBindingApi | undefined;
+    const firstPostLoopWait = vi.fn();
+    const firstSessionEvents: SessionLogEvent[] = [];
+    const firstSessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    firstSessionLogger.subscribe((event) => firstSessionEvents.push(event));
+    const firstSessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: PING_PROFILE_BASE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
+      maxTurns: 10,
+      permissionPipeline: new PermissionPipeline({}),
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+      workerWorktree: worktree,
+      waitForOperatorExit: true,
+      onPostLoopWait: firstPostLoopWait,
+      sessionLogger: firstSessionLogger,
+      bindOperatorInput: (api) => {
+        firstOperatorApi = api;
+      },
+    });
+    await vi.waitFor(() => expect(firstPostLoopWait).toHaveBeenCalledOnce());
+    expect(firstOperatorApi!.submit('/close')).toBe(false);
+    const firstResult = await firstSessionPromise;
+
+    expect(firstResult.stopReason).toBe('completed');
+    expect(closeForResume).toHaveBeenCalledOnce();
+    expect(firstSessionEvents).toContainEqual({ type: 'session.operator_close' });
+    expect(initialWorkerId).toBeTruthy();
+    const initialPrompt = String(mockSend.mock.calls[0]?.[0] ?? '');
+    expect(initialPrompt).toContain('permission 判断待ち');
+    expect(initialPrompt).not.toContain('# permission.pending');
+
+    const historyPath = toolCallSnapshotHistoryPath({
+      repoRoot,
+      conductorAgentId: RESUME_AGENT_ID,
+    });
+    const savedHistory = JSON.parse(await readFile(historyPath, 'utf8')) as {
+      snapshots: Array<{
+        workerId: string;
+        workerName: string;
+        sessionId: string;
+      }>;
+    };
+    expect(savedHistory.snapshots).toContainEqual(
+      expect.objectContaining({
+        workerId: initialWorkerId,
+        workerName: 'ping-1',
+        sessionId: 'fake-session-1',
+      }),
+    );
+    const futureEntry = {
+      ...savedHistory.snapshots[0]!,
+      updatedAt: Date.now() + 2 * TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS,
+      snapshot: {
+        toolCallId: 'call-future-updated-at',
+        kind: 'shell',
+        rawInput: { command: 'private future command' },
+        locations: [{ path: '/private/future/path' }],
+      },
+    };
+    await writeFile(
+      historyPath,
+      JSON.stringify({
+        ...savedHistory,
+        snapshots: [...savedHistory.snapshots, futureEntry],
+      }),
+      'utf8',
+    );
+
+    toolCallUpdates.length = 0;
+    phase = 'resume';
+    const resumedResult = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: PING_PROFILE_BASE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
+      resumeAgentId: RESUME_AGENT_ID,
+      maxTurns: 10,
+      permissionPipeline: new PermissionPipeline({}),
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+      workerWorktree: worktree,
+    });
+
+    expect(resumedResult.stopReason).toBe('completed');
+    expect(loadSessionSpy).toHaveBeenCalledWith(
+      'fake-session-1',
+      expect.any(String),
+      expect.any(Function),
+    );
+    const rewrittenHistory = JSON.parse(await readFile(historyPath, 'utf8')) as {
+      snapshots: Array<{
+        snapshot: { toolCallId: string };
+      }>;
+    };
+    expect(rewrittenHistory.snapshots).toContainEqual(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          toolCallId: 'call-edit-from-update',
+        }),
+      }),
+    );
+    expect(rewrittenHistory.snapshots).not.toContainEqual(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          toolCallId: 'call-future-updated-at',
+        }),
+      }),
+    );
+    expect(JSON.stringify(rewrittenHistory)).not.toContain('private future command');
+    expect(JSON.stringify(rewrittenHistory)).not.toContain('/private/future/path');
   });
 
   it('restores worker session/load with custom workspace acpCwd on resume', async () => {

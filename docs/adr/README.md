@@ -103,6 +103,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0029](0029-lazy-worker-attach.md) | worker ACP lazy attach | accepted |
 | [0030](0030-tty-close-lifecycle.md) | TTY `/close` の再開可能な終了契約 | accepted |
 | [0031](0031-operator-agent-layer.md) | operator 層と operator-agent（user – operator – conductor – workers） | accepted |
+| [0032](0032-tool-call-snapshot-history.md) | tool-call snapshot 履歴の永続化 | accepted |
 
 ## 追加するとき
 
