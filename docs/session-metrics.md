@@ -134,6 +134,7 @@ worker がモデル要求後に切断され、token usage が記録されない�
   usage（記録済み）:
     conductor: input 1k · output 100
     合計: input 1k · output 100
+    ※ 記録分のみ。失敗などで未記録の usage は含みません。
   課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)
   未回答 open question: 0
   agentId: agent-1
