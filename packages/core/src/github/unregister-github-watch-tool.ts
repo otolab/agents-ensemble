@@ -10,13 +10,18 @@ export interface UnregisterGitHubWatchToolOptions {
   issueUrl: string;
   /** The mutable session cursor that is persisted by the conductor session. */
   getCursor: () => GitHubMonitorCursor;
-  /** Called only when a PR was explicitly registered and is now removed. */
+  /**
+   * Called when an unregistration must be persisted, including after a failed
+   * attempt.
+   */
   onUnregistered?: (prNumber: number) => void | Promise<void>;
 }
 
 export function createUnregisterGitHubWatchTool(
   options: UnregisterGitHubWatchToolOptions,
 ): ConductorToolSet {
+  const pendingPersistence = new Set<string>();
+
   return {
     unregister_github_watch: {
       name: 'unregister_github_watch',
@@ -49,7 +54,8 @@ export function createUnregisterGitHubWatchTool(
         const cursor = options.getCursor();
         const key = String(target.prNumber);
         const explicitPullRequests = cursor.explicitPullRequests;
-        if (!explicitPullRequests?.[key]) {
+        const wasRegistered = Boolean(explicitPullRequests?.[key]);
+        if (!wasRegistered && !pendingPersistence.has(key)) {
           return yamlToolResult('unregister_github_watch', {
             ok: false,
             prNumber: target.prNumber,
@@ -59,8 +65,18 @@ export function createUnregisterGitHubWatchTool(
           });
         }
 
-        delete explicitPullRequests[key];
-        await options.onUnregistered?.(target.prNumber);
+        if (wasRegistered) {
+          delete explicitPullRequests![key];
+          if (options.onUnregistered) pendingPersistence.add(key);
+        }
+
+        if (pendingPersistence.has(key)) {
+          // Preserve the retry marker if persistence rejects after the cursor
+          // has already been updated in memory.
+          await options.onUnregistered?.(target.prNumber);
+          pendingPersistence.delete(key);
+        }
+
         return yamlToolResult('unregister_github_watch', {
           ok: true,
           prNumber: target.prNumber,

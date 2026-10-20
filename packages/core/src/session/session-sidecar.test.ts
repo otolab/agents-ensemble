@@ -133,6 +133,41 @@ describe('session sidecar', () => {
     });
   });
 
+  it('round-trips teardown lifecycle while legacy sidecars remain unset', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-sidecar-'));
+    const closedPath = sessionSidecarPath({
+      repoRoot: tempDir,
+      conductorAgentId: 'closed-agent',
+    });
+    const legacyPath = sessionSidecarPath({
+      repoRoot: tempDir,
+      conductorAgentId: 'legacy-agent',
+    });
+
+    await saveSessionSidecar(
+      closedPath,
+      baseSidecar({
+        conductorAgentId: 'closed-agent',
+        repoRoot: tempDir,
+        lifecycle: 'closed',
+      }),
+    );
+    await saveSessionSidecar(
+      legacyPath,
+      baseSidecar({
+        conductorAgentId: 'legacy-agent',
+        repoRoot: tempDir,
+      }),
+    );
+
+    await expect(loadSessionSidecar(closedPath)).resolves.toMatchObject({
+      lifecycle: 'closed',
+    });
+    await expect(loadSessionSidecar(legacyPath)).resolves.not.toHaveProperty(
+      'lifecycle',
+    );
+  });
+
   it('assumes cursor for a legacy sidecar without conductorBackend', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-sidecar-'));
     const path = sessionSidecarPath({

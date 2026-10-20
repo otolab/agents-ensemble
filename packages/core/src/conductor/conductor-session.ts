@@ -105,8 +105,13 @@ import {
   saveSessionSidecar,
   SESSION_SIDECAR_VERSION,
   sessionSidecarPath,
+  type SessionLifecycle,
   type SessionSidecar,
 } from '../session/session-sidecar.js';
+import {
+  saveSessionStatusLine,
+  sessionStateStorePath,
+} from '../session/session-state-store.js';
 import {
   loadToolCallSnapshotHistory,
   pruneExpiredToolCallSnapshotHistoryFiles,
@@ -334,11 +339,11 @@ export async function runConductorSession(
   let toolCallHistoryNeedsRewrite = false;
 
   if (options.resumeAgentId) {
-    const sidecar = await requireSessionSidecarForResume({
+    const loadedSidecar = await requireSessionSidecarForResume({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
     });
-    assertSessionSidecarMatches(sidecar, {
+    assertSessionSidecarMatches(loadedSidecar, {
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
       repoRoot: options.repoRoot,
@@ -346,6 +351,22 @@ export async function runConductorSession(
       mcpConfigDigest,
       mcpConfigConfigured,
     });
+    // A previously completed lifecycle no longer describes this instance once
+    // resume begins. Persist unknown before restoring or attaching anything so
+    // a crash before the first regular sidecar flush cannot leave stale
+    // `closed` / `exited` data behind.
+    const sidecar: SessionSidecar = {
+      ...loadedSidecar,
+      lifecycle: 'unknown',
+      updatedAt: Date.now(),
+    };
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot: options.repoRoot,
+        conductorAgentId: options.resumeAgentId,
+      }),
+      sidecar,
+    );
     const history = await loadToolCallSnapshotHistory({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
@@ -453,6 +474,8 @@ export async function runConductorSession(
     new PermissionPipeline({ policy: options.permissionPolicy });
 
   let scheduleSidecarFlush = () => {};
+  let flushSidecar: (lifecycle?: SessionLifecycle) => Promise<void> =
+    async () => {};
   let scheduleToolCallHistoryFlush = () => {};
   let flushToolCallHistory = async () => {};
   let toolCallHistoryDirty = toolCallHistoryNeedsRewrite;
@@ -816,9 +839,12 @@ export async function runConductorSession(
       githubMonitorCursor ??= emptyGitHubMonitorCursor();
       return githubMonitorCursor;
     },
-    onRegistered: (registration) => {
+    onRegistered: async (registration) => {
       githubMonitor?.registerPullRequest?.(registration);
-      scheduleSidecarFlush();
+      // Do not report success to the conductor until the explicit watch is
+      // durable. This closes the crash window between the tool result and a
+      // later best-effort flush.
+      await flushSidecar();
     },
   });
   const unregisterGitHubWatchTools = createUnregisterGitHubWatchTool({
@@ -827,9 +853,9 @@ export async function runConductorSession(
       githubMonitorCursor ??= emptyGitHubMonitorCursor();
       return githubMonitorCursor;
     },
-    onUnregistered: (prNumber) => {
+    onUnregistered: async (prNumber) => {
       githubMonitor?.unregisterPullRequest?.(prNumber);
-      scheduleSidecarFlush();
+      await flushSidecar();
     },
   });
 
@@ -844,7 +870,25 @@ export async function runConductorSession(
     },
   });
 
-  const reportSessionStateTool = createReportSessionStateTool();
+  let sessionStateWriteQueue: Promise<void> = Promise.resolve();
+  const reportSessionStateTool = createReportSessionStateTool({
+    onReport: (statusLine) => {
+      if (teardownStarted) {
+        throw new Error('report_session_state is unavailable during teardown');
+      }
+      const write = sessionStateWriteQueue.then(() =>
+        saveSessionStatusLine(
+          sessionStateStorePath({
+            repoRoot: options.repoRoot,
+            conductorAgentId: conductorAgent.agentId,
+          }),
+          statusLine,
+        ),
+      );
+      sessionStateWriteQueue = write.catch(() => {});
+      return write;
+    },
+  });
 
   const dispatchHoldTools = createSetDispatchHoldTool({
     state: dispatchHoldState,
@@ -956,8 +1000,7 @@ export async function runConductorSession(
   };
 
   let sidecarFlushQueue: Promise<void> = Promise.resolve();
-  let flushSidecar: () => Promise<void> = async () => {};
-  flushSidecar = (): Promise<void> => {
+  flushSidecar = (lifecycle): Promise<void> => {
     const nextFlush = sidecarFlushQueue.then(async () => {
       const workers: SessionSidecar['workers'] = {};
       for (const [name, worker] of workerSessions) {
@@ -981,6 +1024,7 @@ export async function runConductorSession(
         sequence: snapshot.sequence,
         workers,
         mcpConfigDigest,
+        ...(lifecycle ? { lifecycle } : {}),
         ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
         updatedAt: Date.now(),
       };
@@ -1577,6 +1621,20 @@ export async function runConductorSession(
         await emitWorktreeRemoval(sessionLogger, options.repoRoot, workerWorktree);
       }
     } finally {
+      const lifecycle: SessionLifecycle = operatorRequestedClose
+        ? 'closed'
+        : operatorRequestedExit
+          ? 'exited'
+          : shutdownSignal.aborted
+            ? 'interrupted'
+            : 'unknown';
+      try {
+        emitTeardownPhase('flushSidecar');
+        await sessionStateWriteQueue;
+        await flushSidecar(lifecycle);
+      } catch (error) {
+        reportSidecarFlushFailure(error);
+      }
       process.off('SIGINT', onTeardownSignal);
       process.off('SIGTERM', onTeardownSignal);
     }

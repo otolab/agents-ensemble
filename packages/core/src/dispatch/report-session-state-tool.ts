@@ -3,7 +3,9 @@ import { yamlToolResult } from './yaml-tool-result.js';
 
 export const REPORT_SESSION_STATE_MAX_LENGTH = 80;
 
-export function createReportSessionStateTool(): ConductorToolSet {
+export function createReportSessionStateTool(options?: {
+  onReport?: (statusLine: string) => Promise<void>;
+}): ConductorToolSet {
   return {
     report_session_state: {
       name: 'report_session_state',
@@ -38,6 +40,7 @@ export function createReportSessionStateTool(): ConductorToolSet {
           );
         }
 
+        await options?.onReport?.(statusLine);
         return yamlToolResult('report_session_state', { statusLine });
       },
     },

@@ -9,6 +9,10 @@ import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import type {
+  GitHubMonitor,
+  GitHubMonitorOptions,
+} from '../github/github-monitor.js';
+import type {
   GitHubClient,
   GitHubPullRequestRef,
 } from '../github/github-client.js';
@@ -22,6 +26,11 @@ import {
   SESSION_SIDECAR_VERSION,
   sessionSidecarPath,
 } from '../session/session-sidecar.js';
+import * as sessionSidecarModule from '../session/session-sidecar.js';
+import {
+  loadSessionStateStore,
+  sessionStateStorePath,
+} from '../session/session-state-store.js';
 import { openQuestionsStorePath } from '../session/open-questions-store.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
 import { runConductorSession as runConductorSessionImpl } from './conductor-session.js';
@@ -175,15 +184,41 @@ describe('runConductorSession resume / shutdown', () => {
       getUsage: createMockConductorGetUsage(),
     }));
     mockCreateGitHubMonitor.mockReset();
-    mockCreateGitHubMonitor.mockImplementation((options) => ({
-      start: vi.fn(),
-      stop: vi.fn().mockResolvedValue(undefined),
-      flush: vi.fn(),
-      getCursor: vi.fn().mockReturnValue({ lastIssueCommentId: undefined, pullRequests: {} }),
-      acknowledgeUpdates: vi.fn(),
-      unregisterPullRequest: vi.fn(),
-      onUpdate: options.onUpdate,
-    }));
+    mockCreateGitHubMonitor.mockImplementation(
+      (options: GitHubMonitorOptions) => {
+        const cursor: GitHubMonitorCursor = options.cursor ?? {
+          pullRequests: {},
+        };
+        const registerPullRequest = vi.fn(
+          (
+            registration: Parameters<
+              GitHubMonitor['registerPullRequest']
+            >[0],
+          ) => {
+            cursor.explicitPullRequests ??= {};
+            cursor.explicitPullRequests[String(registration.prNumber)] = {
+              registeredAt: registration.registeredAt,
+              ...(registration.kinds ? { kinds: [...registration.kinds] } : {}),
+            };
+            options.onCursorChange?.(cursor);
+          },
+        );
+        const unregisterPullRequest = vi.fn((prNumber: number) => {
+          delete cursor.explicitPullRequests?.[String(prNumber)];
+          options.onCursorChange?.(cursor);
+        });
+        return {
+          start: vi.fn(),
+          stop: vi.fn().mockResolvedValue(undefined),
+          flush: vi.fn(),
+          getCursor: vi.fn().mockReturnValue(cursor),
+          acknowledgeUpdates: vi.fn(),
+          registerPullRequest,
+          unregisterPullRequest,
+          onUpdate: options.onUpdate,
+        };
+      },
+    );
   });
 
   afterEach(() => {
@@ -249,6 +284,52 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockResume).not.toHaveBeenCalled();
     expect(mockCreate).not.toHaveBeenCalled();
   });
+
+  it.each(['closed', 'exited'] as const)(
+    'clears stale %s lifecycle before resuming the conductor',
+    async (lifecycle) => {
+      const agentId = `resume-${lifecycle}-lifecycle`;
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: agentId,
+      });
+      await saveSessionSidecar(sidecarPath, {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        lifecycle,
+        updatedAt: 1,
+      });
+      mockResume.mockImplementationOnce(async () => {
+        const persisted = await loadSessionSidecar(sidecarPath);
+        expect(persisted?.lifecycle).toBe('unknown');
+        throw new Error('simulated crash before first regular sidecar flush');
+      });
+
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          resumeAgentId: agentId,
+          permissionPipeline: new PermissionPipeline({}),
+          registerProcessSignalHandlers: false,
+        }),
+      ).rejects.toThrow(
+        'simulated crash before first regular sidecar flush',
+      );
+
+      await expect(loadSessionSidecar(sidecarPath)).resolves.toMatchObject({
+        lifecycle: 'unknown',
+        updatedAt: expect.any(Number),
+      });
+    },
+  );
 
   it('selects the Pi factory and sends a short kickoff instead of the compiled prompt', async () => {
     mockSend.mockResolvedValue({
@@ -370,6 +451,20 @@ describe('runConductorSession resume / shutdown', () => {
     expect(conductorTools?.report_session_state).toBeDefined();
     expect(statusResult?.structuredContent).toEqual({
       statusLine: 'レビュー中：CIテスト待ち',
+    });
+    await expect(
+      loadSessionStateStore(
+        sessionStateStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      ),
+    ).resolves.toMatchObject({
+      current: {
+        statusLine: 'レビュー中：CIテスト待ち',
+        reportedAt: expect.any(Number),
+      },
+      history: [],
     });
   });
 
@@ -726,6 +821,13 @@ describe('runConductorSession resume / shutdown', () => {
     });
     mockSend.mockImplementationOnce(async () => {
       await conductorTools!.register_github_watch!.execute({ prNumber: 354 });
+      const sidecar = await loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      );
+      expect(sidecar?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+        registeredAt: expect.any(String),
+        kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+      });
       return {
         runId: 'run-1',
         status: 'finished',
@@ -751,6 +853,76 @@ describe('runConductorSession resume / shutdown', () => {
     expect(sidecar?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
       registeredAt: expect.any(String),
       kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+    });
+  });
+
+  it('retries registration persistence after a sidecar flush failure', async () => {
+    const sidecarPath = sessionSidecarPath({
+      repoRoot,
+      conductorAgentId: 'agent-test',
+    });
+    let failSidecarFlush = false;
+    const persistSidecar = sessionSidecarModule.saveSessionSidecar;
+    vi.spyOn(sessionSidecarModule, 'saveSessionSidecar').mockImplementation(
+      async (path, sidecar) => {
+        if (failSidecarFlush && path === sidecarPath) {
+          throw new Error('simulated sidecar flush failure');
+        }
+        await persistSidecar(path, sidecar);
+      },
+    );
+
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => {
+      const register = conductorTools!.register_github_watch!;
+      failSidecarFlush = true;
+      await expect(register.execute({ prNumber: 354 })).rejects.toThrow(
+        'simulated sidecar flush failure',
+      );
+
+      const sidecarAfterFailure = await loadSessionSidecar(sidecarPath);
+      expect(
+        sidecarAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
+      ).toBeUndefined();
+      const monitor = mockCreateGitHubMonitor.mock.results[0]!
+        .value as GitHubMonitor;
+      expect(monitor.getCursor().explicitPullRequests?.['354']).toMatchObject({
+        registeredAt: expect.any(String),
+      });
+
+      failSidecarFlush = false;
+      const retryResult = await register.execute({ prNumber: 354 });
+      expect(retryResult.structuredContent).toMatchObject({ ok: true });
+      const sidecarAfterRetry = await loadSessionSidecar(sidecarPath);
+      expect(
+        sidecarAfterRetry?.githubMonitor?.explicitPullRequests,
+      ).toEqual(monitor.getCursor().explicitPullRequests);
+      expect(monitor.registerPullRequest).toHaveBeenCalledTimes(2);
+
+      return {
+        runId: 'run-1',
+        status: 'finished',
+        result: 'registered after retry',
+      };
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
     });
   });
 
@@ -834,6 +1006,100 @@ describe('runConductorSession resume / shutdown', () => {
     expect(sidecar?.githubMonitor?.explicitPullRequests).toEqual({});
     expect(sidecar?.githubMonitor?.pullRequests?.['354']).toEqual({
       lastReviewId: '10',
+    });
+  });
+
+  it('retries unregistration persistence after a sidecar flush failure', async () => {
+    const agentId = 'resume-agent-with-github-watch-retry';
+    const sidecarPath = sessionSidecarPath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await saveSessionSidecar(sidecarPath, {
+      version: SESSION_SIDECAR_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      githubMonitor: {
+        pullRequests: { '354': { lastReviewId: '10' } },
+        explicitPullRequests: {
+          '354': {
+            registeredAt: '2026-09-07T05:00:00.000Z',
+            kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+          },
+        },
+      },
+      updatedAt: 0,
+    });
+
+    let failSidecarFlush = false;
+    const persistSidecar = sessionSidecarModule.saveSessionSidecar;
+    vi.spyOn(sessionSidecarModule, 'saveSessionSidecar').mockImplementation(
+      async (path, sidecar) => {
+        if (failSidecarFlush && path === sidecarPath) {
+          throw new Error('simulated sidecar flush failure');
+        }
+        await persistSidecar(path, sidecar);
+      },
+    );
+
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockResume.mockImplementationOnce(async (_resumeAgentId, agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => {
+      const unregister = conductorTools!.unregister_github_watch!;
+      failSidecarFlush = true;
+      await expect(unregister.execute({ prNumber: 354 })).rejects.toThrow(
+        'simulated sidecar flush failure',
+      );
+
+      const sidecarAfterFailure = await loadSessionSidecar(sidecarPath);
+      expect(
+        sidecarAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
+      ).toMatchObject({ registeredAt: '2026-09-07T05:00:00.000Z' });
+      const monitor = mockCreateGitHubMonitor.mock.results[0]!
+        .value as GitHubMonitor;
+      expect(monitor.getCursor().explicitPullRequests).toEqual({});
+
+      failSidecarFlush = false;
+      const retryResult = await unregister.execute({ prNumber: 354 });
+      expect(retryResult.structuredContent).toMatchObject({ ok: true });
+      const sidecarAfterRetry = await loadSessionSidecar(sidecarPath);
+      expect(sidecarAfterRetry?.githubMonitor?.explicitPullRequests).toEqual(
+        monitor.getCursor().explicitPullRequests,
+      );
+      expect(sidecarAfterRetry?.githubMonitor?.pullRequests?.['354']).toEqual({
+        lastReviewId: '10',
+      });
+      expect(monitor.unregisterPullRequest).toHaveBeenCalledTimes(2);
+
+      return {
+        runId: 'run-1',
+        status: 'finished',
+        result: 'unregistered after retry',
+      };
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: agentId,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
     });
   });
 
@@ -1560,6 +1826,68 @@ describe('runConductorSession resume / shutdown', () => {
       sequence: 0,
     });
     expect(sidecar?.updatedAt).toBeGreaterThan(0);
+    expect(sidecar?.lifecycle).toBe('interrupted');
+  });
+
+  it.each([
+    ['/close', 'closed'],
+    ['/exit', 'exited'],
+  ] as const)(
+    'records %s lifecycle in the final resume sidecar flush',
+    async (command, lifecycle) => {
+      mockSend.mockResolvedValue({
+        runId: `run-${lifecycle}`,
+        status: 'finished',
+        result: 'done',
+      });
+      const onPostLoopWait = vi.fn();
+      let operatorApi: OperatorInputBindingApi | undefined;
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        onPostLoopWait,
+        bindOperatorInput: (api) => {
+          operatorApi = api;
+        },
+      });
+
+      await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+      operatorApi!.submit(command);
+      await sessionPromise;
+
+      const sidecar = await loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      );
+      expect(sidecar?.lifecycle).toBe(lifecycle);
+      expect(sidecar?.updatedAt).toBeGreaterThan(0);
+    },
+  );
+
+  it('records unknown lifecycle for ordinary completion without an operator exit command', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-completed',
+      status: 'finished',
+      result: 'done',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    await expect(
+      loadSessionSidecar(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      ),
+    ).resolves.toMatchObject({ lifecycle: 'unknown' });
   });
 
   it.each([

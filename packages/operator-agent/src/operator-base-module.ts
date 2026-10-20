@@ -27,7 +27,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
   ],
   instructions: [
     '状況を尋ねられたら `list_operator_sessions` を使い、保存済み sidecar に含まれる情報と取得時点を明示してください。',
-    'sidecar にない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。',
+    'sidecar にない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。`lifecycle` は保存済みの終了区分であり、現在プロセスが動いているかは示しません。',
     '作業や conductor への連絡を実行したと主張せず、判断に必要な事実・選択肢・不確実な点を簡潔に整理してください。',
     'profile の operator 向け追加指示と Prepared Materials があれば、それに従ってください。',
     {
@@ -35,8 +35,12 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       title: 'list_operator_sessions',
       items: [
         '- `.ensemble/sessions/` の sidecar 一覧と要約を読む読み取り専用ツールです',
-        '- Issue URL、conductor backend、profile、worker 名、open question の要約、更新時刻を返します',
+        '- Issue URL と参照、`conductorAgentId`、conductor backend、profile、worker 名、open question 件数と要約、更新時刻、`dataAsOf` を返します。従来の `agentId` も互換のため残します',
+        '- `statusLine` は conductor の最新報告（未報告・読み取り不可は `null`）、`reportedAt` は報告時刻です。`statusLineHistory` には直近の過去報告を古い順で返します（最大 50 件、状態ファイル全体で最大 16 KiB）',
+        '- `lifecycle` は `closed` / `exited` / `interrupted` / `unknown` です。旧 sidecar や未記録、再開後は `unknown` で、`running` は記録しません',
         '- `limit` は返却する件数（1〜50、既定 20）です',
+        '- `sort` は `updatedAtDesc`（既定）または `updatedAtAsc`、`hasStatusLine` は報告の有無、`lifecycle` は終了区分で絞り込みます',
+        '- 読み取り専用で、conductor への接続や起動状態の判定は行いません',
       ],
     },
   ],
