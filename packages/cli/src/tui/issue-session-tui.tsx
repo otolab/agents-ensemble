@@ -49,6 +49,11 @@ import {
   getOperatorCommandSuggestionLines,
   getOperatorCommandSuggestions,
 } from './operator-command-suggestions.js';
+import {
+  advanceOpenQuestionAnswerSuggestionSelection,
+  getOpenQuestionAnswerSuggestionLines,
+  getOpenQuestionAnswerSuggestions,
+} from './open-question-answer-suggestions.js';
 import { TitledBorderPane } from './titled-border-pane.js';
 import {
   computeInputPaneHeight,
@@ -389,7 +394,10 @@ export function IssueSessionTui({
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+  const [selectedAnswerSuggestionIndex, setSelectedAnswerSuggestionIndex] = useState(0);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
+  const [hiddenAnswerSuggestionQuestionId, setHiddenAnswerSuggestionQuestionId] =
+    useState<string>();
   const previousActivityLogRef = useRef(snapshot.activityLog);
   const previousDisplayLineCountRef = useRef(0);
   const terminalSize = useTuiTerminalSize(terminalSizeStore);
@@ -430,11 +438,24 @@ export function IssueSessionTui({
       : undefined,
     shuttingDown: snapshot.shuttingDown,
   });
+  const isSlashInput = /^[\t ]*\//u.test(inputValue);
+  const answerSuggestions =
+    operatorInputDisplay.mode === 'withQuestions' &&
+    !snapshot.shuttingDown &&
+    !isSlashInput &&
+    selectedQuestion?.id !== hiddenAnswerSuggestionQuestionId
+      ? getOpenQuestionAnswerSuggestions(inputValue, selectedQuestion)
+      : [];
+  const answerSuggestionLines = getOpenQuestionAnswerSuggestionLines(
+    answerSuggestions,
+    contentWidth,
+    selectedAnswerSuggestionIndex,
+  );
   const openQuestionsPaneHeight =
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
   const hintLineCount = operatorInputDisplay.hintLines.reduce(
     (lineCount, hintLine) => lineCount + wrapTextToWidth(hintLine, contentWidth).length,
-    commandSuggestionLines.length,
+    commandSuggestionLines.length + answerSuggestionLines.length,
   );
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const inputPaneHeight = computeInputPaneHeight({
@@ -500,6 +521,10 @@ export function IssueSessionTui({
     );
   }, [openQuestions]);
 
+  useEffect(() => {
+    setSelectedAnswerSuggestionIndex(0);
+  }, [selectedQuestion?.id]);
+
   const applyScrollAction = (action: ActivityLogScrollAction) => {
     setLinesFromBottom((current) =>
       advanceActivityLogScrollOffset(
@@ -542,6 +567,29 @@ export function IssueSessionTui({
       }
     }
 
+    if (answerSuggestions.length > 0) {
+      if (key.upArrow) {
+        setSelectedAnswerSuggestionIndex((current) =>
+          advanceOpenQuestionAnswerSuggestionSelection(
+            current,
+            'up',
+            answerSuggestions.length,
+          ),
+        );
+        return;
+      }
+      if (key.downArrow) {
+        setSelectedAnswerSuggestionIndex((current) =>
+          advanceOpenQuestionAnswerSuggestionSelection(
+            current,
+            'down',
+            answerSuggestions.length,
+          ),
+        );
+        return;
+      }
+    }
+
     const scrollWithModifier = key.ctrl;
     const scrollWithoutModifier = inputValue.length === 0;
     if (!scrollWithModifier && !scrollWithoutModifier) {
@@ -565,8 +613,26 @@ export function IssueSessionTui({
     }
   });
 
+  const applyAnswerSuggestion = () => {
+    const selectedSuggestion = answerSuggestions[selectedAnswerSuggestionIndex];
+    if (!selectedQuestion || !selectedSuggestion) {
+      return;
+    }
+
+    setInputValue(selectedSuggestion.value);
+    setInputCursorPosition([0, selectedSuggestion.value.length]);
+    setHiddenAnswerSuggestionQuestionId(selectedQuestion.id);
+    setSelectedAnswerSuggestionIndex(0);
+    setInputDisplayLineCount(1);
+  };
+
   const handleSubmit = (value: string) => {
     if (snapshot.shuttingDown) {
+      return;
+    }
+
+    if (answerSuggestions.length > 0) {
+      applyAnswerSuggestion();
       return;
     }
 
@@ -584,25 +650,35 @@ export function IssueSessionTui({
     setInputValue('');
     setInputCursorPosition([0, 0]);
     setSelectedCommandIndex(0);
+    setSelectedAnswerSuggestionIndex(0);
+    setHiddenAnswerSuggestionQuestionId(undefined);
     setInputDisplayLineCount(1);
   };
 
   const handleInputChange = (value: string) => {
     setInputValue(value);
     setSelectedCommandIndex(0);
+    setSelectedAnswerSuggestionIndex(0);
+    setHiddenAnswerSuggestionQuestionId(undefined);
   };
 
-  const handleCommandTab = (shift: boolean) => {
+  const handleSuggestionTab = (shift: boolean) => {
     if (shift) {
       return;
     }
-    const selectedCommand = commandSuggestions[selectedCommandIndex];
-    if (!selectedCommand) {
+
+    if (commandSuggestions.length > 0) {
+      const selectedCommand = commandSuggestions[selectedCommandIndex];
+      if (!selectedCommand) {
+        return;
+      }
+      setInputValue(selectedCommand.name);
+      setInputCursorPosition([0, selectedCommand.name.length]);
+      setSelectedCommandIndex(0);
       return;
     }
-    setInputValue(selectedCommand.name);
-    setInputCursorPosition([0, selectedCommand.name.length]);
-    setSelectedCommandIndex(0);
+
+    applyAnswerSuggestion();
   };
 
   return (
@@ -658,6 +734,15 @@ export function IssueSessionTui({
             {line.text}
           </Text>
         ))}
+        {answerSuggestionLines.map((line) => (
+          <Text
+            key={`open-question-answer-suggestion-${line.id}`}
+            color={line.isSelected ? 'cyan' : INPUT_PANE_HINT_COLOR}
+            bold={line.isSelected}
+          >
+            {line.text}
+          </Text>
+        ))}
         <OperatorTextArea
           value={inputValue}
           onChange={handleInputChange}
@@ -667,8 +752,14 @@ export function IssueSessionTui({
           promptPrefix={operatorPrompt}
           maxDisplayLines={maxInputDisplayLines}
           onDisplayLineCountChange={handleDisplayLineCountChange}
-          commandSuggestionsActive={commandSuggestions.length > 0}
-          onTab={commandSuggestions.length > 0 ? handleCommandTab : undefined}
+          suggestionsActive={
+            commandSuggestions.length > 0 || answerSuggestions.length > 0
+          }
+          onTab={
+            commandSuggestions.length > 0 || answerSuggestions.length > 0
+              ? handleSuggestionTab
+              : undefined
+          }
           cursorPosition={inputCursorPosition}
           onCursorChange={setInputCursorPosition}
           cursorStart={cursorStart}

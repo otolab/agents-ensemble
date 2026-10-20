@@ -118,11 +118,11 @@ describe('IssueSessionTuiStream IME cursor contract', () => {
       0,
     );
     const props = mockOperatorTextArea.mock.calls.at(-1)?.[0] as {
-      commandSuggestionsActive?: boolean;
+      suggestionsActive?: boolean;
       cursorPosition?: [number, number];
       cursorStart?: { x?: number; y: number };
     };
-    expect(props.commandSuggestionsActive).toBe(true);
+    expect(props.suggestionsActive).toBe(true);
     expect(props.cursorPosition).toEqual([0, 1]);
     expect(props.cursorStart?.y).toBe(
       computeStreamOperatorInputCursorY({
