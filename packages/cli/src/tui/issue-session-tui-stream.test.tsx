@@ -129,6 +129,125 @@ describe('IssueSessionTuiStream', () => {
     expect(onSubmit).toHaveBeenCalledWith('/close', undefined);
   });
 
+  it.each([
+    {
+      name: 'choice',
+      question: createOpenQuestion({
+        id: 'inq-choice',
+        question: 'Choose a mode',
+        responseType: 'choice',
+        choices: [
+          { id: 'safe', label: 'Safe mode' },
+          { id: 'secure', label: 'Secure mode' },
+          { id: 'fast', label: 'Fast mode' },
+        ],
+      }),
+      prefix: 's',
+      completedValue: 'secure',
+      expectedSuggestion: 'safe: Safe mode',
+      hasMultipleSuggestions: true,
+    },
+    {
+      name: 'yes_no',
+      question: createOpenQuestion({
+        id: 'inq-yes-no',
+        question: 'Proceed?',
+        responseType: 'yes_no',
+      }),
+      prefix: 'n',
+      completedValue: 'no',
+      expectedSuggestion: 'no — いいえ',
+      hasMultipleSuggestions: false,
+    },
+  ])(
+    'completes and submits the selected $name answer in stream mode',
+    async ({
+      question,
+      prefix,
+      completedValue,
+      expectedSuggestion,
+      hasMultipleSuggestions,
+    }) => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          question,
+          createOpenQuestion({
+            id: 'inq-text',
+            question: 'Anything else?',
+          }),
+        ],
+        dispatchHold: { hold: false, heldEventCount: 0 },
+      });
+      const onSubmit = vi.fn();
+      const { stdin, lastFrame } = render(
+        <IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />,
+      );
+
+      stdin.write(prefix);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain(expectedSuggestion);
+
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('2/2');
+      expect(lastFrame() ?? '').not.toContain(`› ${expectedSuggestion}`);
+
+      stdin.write(INK_TEST_KEYS.shiftUpArrow);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('1/2');
+      expect(lastFrame() ?? '').toContain(expectedSuggestion);
+
+      if (hasMultipleSuggestions) {
+        stdin.write(INK_TEST_KEYS.downArrow);
+        await flushInkStdin();
+        expect(lastFrame() ?? '').toContain('› secure: Secure mode');
+      }
+
+      stdin.write('\r');
+      await flushInkStdin();
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}${completedValue}`);
+      expect(lastFrame() ?? '').not.toContain(`› ${completedValue}:`);
+
+      stdin.write(' because it is safer');
+      await flushInkStdin();
+      stdin.write('\r');
+      await flushInkStdin();
+      expect(onSubmit).toHaveBeenCalledWith(
+        `${completedValue} because it is safer`,
+        { targetOpenQuestionId: question.id },
+      );
+    },
+  );
+
+  it('prioritizes slash suggestions over answer suggestions in stream mode', async () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [
+        createOpenQuestion({
+          id: 'inq-choice',
+          question: 'Choose a mode',
+          responseType: 'choice',
+          choices: [{ id: 'exit', label: 'Exit mode' }],
+        }),
+      ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    stdin.write('/');
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› /reconnect');
+    expect(lastFrame() ?? '').not.toContain('› exit: Exit mode');
+  });
+
   it('renders activity as unframed static output and keeps the lower panes framed', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({

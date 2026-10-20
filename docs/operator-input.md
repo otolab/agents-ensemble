@@ -101,9 +101,15 @@ TTY の pane / stream では、入力が単一行の slash コマンド prefix �
 
 TTY の Ink pane / stream にある Operator input 欄の行頭には `> ` を表示します。ペインタイトルで入力者が分かるため、行頭に `operator` は重ねて表示しません。Ink を使わない TTY 継続入力（`bindAsyncOperatorInput`）では `operator> ` を維持します。非 TTY では対話 readline を開きません。また、非 TUI の stdout 対話ログに付く `operator>` / `conductor>` は入力プロンプトではなく話者ラベルのため、この変更の対象外です。
 
-候補が出ると先頭の候補が選択状態になり、`›` と強調表示で分かります。上下矢印で選択を移動し、一覧の先頭・末尾ではそれ以上移動しません。入力内容を編集すると先頭候補が選び直されます。Open questions が表示されているときの `Shift+↑/↓` は、従来どおり質問の選択に使います。Tab は選択中のコマンド名で入力欄全体を置き換え、入力カーソルを末尾へ移します。Tab だけでは送信・実行せず、Enter を押すと入力欄の内容を従来どおり submit します。Shift+Tab は補完しません。
+候補が出ると先頭の候補が選択状態になり、`›` と強調表示で分かります。上下矢印で選択を移動し、一覧の先頭・末尾ではそれ以上移動しません。入力内容を編集すると先頭候補が選び直されます。Open questions が表示されているときの `Shift+↑/↓` は、従来どおり質問の選択に使います。slash 候補の Tab は選択中のコマンド名で入力欄全体を置き換え、入力カーソルを末尾へ移します。Tab だけでは送信・実行せず、Enter を押すと入力欄の内容を従来どおり submit します。Shift+Tab は補完しません。
 
 候補がない入力、通常の入力、複数行入力では、上下矢印を含む既存の textarea 操作を使います。候補は、候補名の prefix として一致しない slash 付き本文や複数行入力には表示しません。IME 物理カーソルは従来どおり入力欄の caret に追従します。
+
+モード A では、選択中の Open Question が `choice`（選択肢が 1 件以上）または `yes_no` のとき、入力欄が単一行であれば回答候補も表示します。入力が空なら全候補を表示し、入力があれば大文字小文字を区別せず prefix で絞り込みます。`choice` は ID・label・候補順の 1 始まり番号で絞り込み、Enter で補完すると ID が入力欄に入ります。`yes_no` は `yes — はい` / `no — いいえ` を表示し、英語または日本語の prefix で絞り込みます。補完値は `yes` / `no` です。`text` の質問と非 TTY 入力には回答候補を表示しません。
+
+回答候補の上下矢印は候補選択に使い、`Shift+↑/↓` は従来どおり質問選択に使います。slash 入力では slash 候補を優先し、回答候補と同時には表示しません。回答候補が表示中の Enter は選択候補を入力欄へ補完するだけで送信しません。候補を補完した後の Enter は、従来どおり選択中の質問 ID を付けて送信します。Tab も回答候補の補完に使えます。補完後は候補表示を閉じ、追記で入力が変わると prefix に応じて再表示します。
+
+回答の意味付けは既存 core の規則に従います。choice の `selectedChoice` は回答全文が ID・一意な label・候補順の番号に解決できる場合だけ記録され、理由などを追記した回答は従来どおり自由記述として扱われます。yes/no も回答全文から assent を判定し、判定できない追記付き回答は `unclear` になります。
 
 ### 表示出力の inline Markdown subset
 
@@ -126,7 +132,7 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 
 | モード | 条件 | 表示と入力 |
 |--------|------|------------|
-| **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の prompt を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
+| **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の prompt を表示し、Issue 参照と自律ターン数は表示しない。choice / yes_no の回答候補が表示中は最初の Enter で補完し、次の Enter で `targetOpenQuestionId` 付き送信を行う。 |
 | **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input は固定案内を出さず、入力欄だけを表示する。通常の submit は operator メッセージとして送信する。 |
 
 `--continue` / `--resume` では、`open-questions.yaml` があればその YAML を正本として Registry を復元し、YAML がない legacy session に限って JSON sidecar の `openQuestions` / `sequence` から復元して YAML をバックフィルします。YAML が存在する場合に読み取り・検証に失敗したら resume を中止し、JSON sidecar にはフォールバックしません。復元後は `getContext()` が同じ Registry から未回答 question の一覧を返すため、binding 後の pane / stream はモード A として表示します。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使います。

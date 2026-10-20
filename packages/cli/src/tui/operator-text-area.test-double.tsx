@@ -23,7 +23,7 @@ export function OperatorTextArea({
   promptPrefix = '',
   maxDisplayLines,
   onDisplayLineCountChange,
-  commandSuggestionsActive = false,
+  suggestionsActive = false,
   onTab,
   cursorPosition: controlledCursorPosition,
   onCursorChange,
@@ -103,7 +103,7 @@ export function OperatorTextArea({
         return;
       }
       if (key.tab) {
-        if (commandSuggestionsActive) {
+        if (suggestionsActive) {
           onTab?.(!!key.shift);
         }
         return;
@@ -118,7 +118,7 @@ export function OperatorTextArea({
         key.upArrow ||
         key.downArrow
       ) {
-        if (commandSuggestionsActive && (key.upArrow || key.downArrow)) {
+        if (suggestionsActive && (key.upArrow || key.downArrow)) {
           return;
         }
         const lineStart = value.lastIndexOf('\n', cursorOffset - 1) + 1;

@@ -17,8 +17,8 @@ export interface OperatorTextAreaProps {
   /** 入力欄に表示できる最大行数（末尾追従）。 */
   readonly maxDisplayLines: number;
   readonly onDisplayLineCountChange?: (lineCount: number) => void;
-  /** Slash 候補表示中は上下矢印を候補選択へ渡す。 */
-  readonly commandSuggestionsActive?: boolean;
+  /** 候補表示中は上下矢印を候補選択へ渡す。 */
+  readonly suggestionsActive?: boolean;
   /** TextArea の Tab callback。 */
   readonly onTab?: (shift: boolean) => void;
   /** 候補補完後の caret 位置。 */
@@ -44,7 +44,7 @@ export function OperatorTextArea({
   promptPrefix = '',
   maxDisplayLines,
   onDisplayLineCountChange,
-  commandSuggestionsActive = false,
+  suggestionsActive = false,
   onTab,
   cursorPosition,
   onCursorChange,
@@ -78,7 +78,7 @@ export function OperatorTextArea({
           y: cursorStart.y,
         }
       : undefined;
-  const keybindings: TKeybindings | undefined = commandSuggestionsActive
+  const keybindings: TKeybindings | undefined = suggestionsActive
     ? { Up: false, Down: false }
     : undefined;
 
