@@ -125,7 +125,7 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 | **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の prompt を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
 | **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input には `任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了` の prompt を表示する。通常の submit は operator メッセージとして送信する。 |
 
-resume で sidecar の未回答 question を復元した場合も、`getContext()` が同じ Registry から一覧を返すため、binding 後の pane / stream はモード A として表示する。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使う。
+`--continue` / `--resume` では、`open-questions.yaml` があればその YAML を正本として Registry を復元し、YAML がない legacy session に限って JSON sidecar の `openQuestions` / `sequence` から復元して YAML をバックフィルします。YAML が存在する場合に読み取り・検証に失敗したら resume を中止し、JSON sidecar にはフォールバックしません。復元後は `getContext()` が同じ Registry から未回答 question の一覧を返すため、binding 後の pane / stream はモード A として表示します。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使います。
 
 post-loop 待機中はモード B の prompt を `追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了` に上書きします。終了中は入力を無効化します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
 
