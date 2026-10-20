@@ -99,7 +99,7 @@ Open questions は内容駆動で高さを決めます。選択中 question の 
 
 TTY の pane / stream では、入力が単一行の slash コマンド prefix の間、Operator input ペイン内に候補と短い説明を表示します。先頭の空白またはタブは無視し、`/` に続く名前を大文字小文字を区別せず prefix 一致で絞り込みます（例: `/ex` は `/exit`、`/cl` は `/close`）。オペレータ入力で専用処理されるコマンドだけを候補に出し、別名は表示しません。
 
-入力行の先頭には `> ` を表示します。ペインタイトルで入力者が分かるため、行頭に `operator` は重ねて表示しません。readline などペインタイトルのない非 TTY 表示では、話者を示す `operator> ` を使います。
+TTY の Ink pane / stream にある Operator input 欄の行頭には `> ` を表示します。ペインタイトルで入力者が分かるため、行頭に `operator` は重ねて表示しません。Ink を使わない TTY 継続入力（`bindAsyncOperatorInput`）では `operator> ` を維持します。非 TTY では対話 readline を開きません。また、非 TUI の stdout 対話ログに付く `operator>` / `conductor>` は入力プロンプトではなく話者ラベルのため、この変更の対象外です。
 
 候補が出ると先頭の候補が選択状態になり、`›` と強調表示で分かります。上下矢印で選択を移動し、一覧の先頭・末尾ではそれ以上移動しません。入力内容を編集すると先頭候補が選び直されます。Open questions が表示されているときの `Shift+↑/↓` は、従来どおり質問の選択に使います。Tab は選択中のコマンド名で入力欄全体を置き換え、入力カーソルを末尾へ移します。Tab だけでは送信・実行せず、Enter を押すと入力欄の内容を従来どおり submit します。Shift+Tab は補完しません。
 
@@ -208,7 +208,7 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 | 条件 | 動作 |
 |------|------|
-| TTY + デフォルト（有効な初回メッセージの有無に関わらず。`--continue` / `--resume` で CLI メッセージを無視した場合を含む） | 自律ループ停止後も `operator>` を維持。`/close` または `/exit` で teardown 後にプロセス終了 |
+| TTY + デフォルト（有効な初回メッセージの有無に関わらず。`--continue` / `--resume` で CLI メッセージを無視した場合を含む） | 自律ループ停止後も Ink pane / stream の入力欄に `> ` を表示。`/close` または `/exit` で teardown 後にプロセス終了 |
 | 非 TTY / CI + 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | binding 直後に 1 回注入し、post-loop 待機なしで終了 |
 | `--no-wait` | 自律ループ停止後に即終了（従来動作） |
 | 非 TTY / CI かつ有効な単発メッセージなし（`--continue` / `--resume` で CLI メッセージだけを指定した場合を含む） | `waitForOperatorExit` なし → 即終了 |

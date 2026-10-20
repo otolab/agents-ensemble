@@ -46,7 +46,7 @@ pnpm --filter @agents-ensemble/cli test:run
 | テスト | 確認する契約 | 合格条件 |
 |--------|--------------|----------|
 | [`tui-terminal-size.test.ts`](../packages/cli/src/tui/tui-terminal-size.test.ts) | 通常の resize は 100ms の settle、columns の連続縮小は最後の縮小イベントから 250ms の quiet-period にまとめる。`createTuiResizeController` 経由で TUI は settled 実幅を使い、Ink は columns / rows の high-water mark proxy を使う | 通常の変更は 100ms 後に 1 回、縮小中の中間幅は通知されず、最後の縮小イベントから 250ms 後に最終実幅で 1 回だけ通知される。縮小時の Ink proxy columns は high-water mark を下回らず、拡大時は更新される。pane の実 Ink frame は `ESC[2J` / `ESC[3J` を出力せず、stream recovery は別の capture test で settled shrink ごとの reset を検証する |
-| [`issue-session-tui.test.tsx`](../packages/cli/src/tui/issue-session-tui.test.tsx) | pane layout の短い端末への resize。60×12 では Ink に渡す live frame を 11 行として、各 pane の frame を保つ | 60×12 resize 後に 11 行、各行の幅が 60 以下、Workers / Orchestration / Operator input の上下枠と title が揃い、`operator>` が表示される |
+| [`issue-session-tui.test.tsx`](../packages/cli/src/tui/issue-session-tui.test.tsx) | pane layout の短い端末への resize。60×12 では Ink に渡す live frame を 11 行として、各 pane の frame を保つ | 60×12 resize 後に 11 行、各行の幅が 60 以下、Workers / Orchestration / Operator input の上下枠と title が揃い、入力欄に `> ` が表示される |
 | [`issue-session-tui-stream.test.tsx`](../packages/cli/src/tui/issue-session-tui-stream.test.tsx) | stream の Static activity history、shrink recovery、resize 後の live frame の分離 | recovery ごとに full redraw sequence が一度だけ出て、保持済み activity が一度だけ replay され、replay 内で duplicate せず、live frame の行幅が変更後の端末幅以下になる |
 | [`tui-resize-recovery.test.ts`](../packages/cli/src/tui/tui-resize-recovery.test.ts) | pane を除く stream shrink recovery の reset 条件と CSI sequence | columns shrink だけで clear → reset sequence → activity replay の順に一度実行し、grow / height change / dispose / disabled pane mode では実行しない |
 
