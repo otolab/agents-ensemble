@@ -243,4 +243,38 @@ describe('formatSessionEventForConductor', () => {
     expect(message).toContain('aggregateState: failed');
     expect(message).toContain('ci/test');
   });
+
+  it('formats a standalone GitHub monitor recovery with source and suppression count', () => {
+    const message = formatSessionEventForConductor({
+      type: 'harness.connectivity.recovered',
+      source: 'github_monitor',
+      suppressedErrorCount: 11,
+    });
+
+    expect(message).toContain('## 接続復旧');
+    expect(message).toContain('# harness.connectivity.recovered');
+    expect(message).toContain('source: github_monitor');
+    expect(message).toContain('suppressedErrorCount: 11');
+  });
+
+  it('formats a GitHub update and its recovery inform as one message', () => {
+    const message = formatSessionEventsForConductor([
+      {
+        type: 'harness.connectivity.recovered',
+        source: 'github_monitor',
+        suppressedErrorCount: 11,
+        dispatchMode: 'inform',
+      },
+      {
+        type: 'github.update',
+        items: [{ id: 'issue-comment:1', kind: 'issue.comment', summary: 'new comment' }],
+      },
+    ]);
+
+    expect(message).toContain('## GitHub 更新・接続復旧（2 件）');
+    expect(message).toContain('# harness.connectivity.recovered');
+    expect(message).toContain('suppressedErrorCount: 11');
+    expect(message).toContain('# github.update');
+    expect(message).toContain('new comment');
+  });
 });

@@ -3,7 +3,7 @@ import type { SessionEvent } from './session-event.js';
 /**
  * harness イベントの conductor dispatch モード（#148）。
  * - telemetry: SessionLogEvent のみ（本モジュールの対象外）
- * - inform: 次の trigger 束に同梱（フェーズ2）
+ * - inform: 同じ source key の trigger 束に同梱
  * - trigger: 単独で `agent.send` 束の主体になりうる（現行 SessionEvent）
  */
 export type DispatchMode = 'telemetry' | 'inform' | 'trigger';

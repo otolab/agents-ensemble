@@ -25,6 +25,9 @@ import {
   type DispatchHoldState,
 } from './session/dispatch-hold.js';
 import {
+  isTriggerSessionEvent,
+} from './session/dispatch-mode.js';
+import {
   countWorkerOutcomesInBatch,
   dispatchBatchStateAfterSend,
   eventSourceKey,
@@ -366,7 +369,7 @@ export async function runConductorSessionDriver(
     );
     const { workerDispatches, workerFailures } = countWorkerOutcomesInBatch(batch);
     options.onConductorInbound?.({
-      triggers: batch.length,
+      triggers: batch.filter(isTriggerSessionEvent).length,
       sources: uniqueSources(batch, dispatchResult.sourceKey),
     });
     inFlightSend = runEventConductorSend({

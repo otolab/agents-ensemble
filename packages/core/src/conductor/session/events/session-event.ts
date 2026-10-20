@@ -14,6 +14,7 @@ export type SessionEvent =
   | WorkerFailedEvent
   | PermissionPendingEvent
   | PermissionStallEvent
+  | HarnessConnectivityRecoveredEvent
   | GitHubUpdateEvent;
 
 export interface OperatorMessageEvent extends SessionEventDispatchFields {
@@ -51,6 +52,14 @@ export interface PermissionStallEvent extends SessionEventDispatchFields {
   oldestPermissionCreatedAt: number;
   stallAgeMs: number;
   stallThresholdMs: number;
+}
+
+/** GitHub monitor が retryable poll エラー後に復旧したことを伝える。 */
+export interface HarnessConnectivityRecoveredEvent
+  extends SessionEventDispatchFields {
+  type: 'harness.connectivity.recovered';
+  source: 'github_monitor';
+  suppressedErrorCount: number;
 }
 
 export interface GitHubUpdateEvent extends SessionEventDispatchFields {

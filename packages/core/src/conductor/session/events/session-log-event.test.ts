@@ -23,7 +23,7 @@ describe('session event type groups', () => {
   it('lists every SessionEvent type exactly once', () => {
     const types = new Set(SESSION_EVENT_TYPES);
     expect(types.size).toBe(SESSION_EVENT_TYPES.length);
-    expect(types.size).toBe(7);
+    expect(types.size).toBe(8);
   });
 
   it('accepts minimal payloads for each SessionLogEvent type', () => {
@@ -282,6 +282,12 @@ describe('session event type groups', () => {
             oldestPermissionCreatedAt: 0,
             stallAgeMs: 300_001,
             stallThresholdMs: 300_000,
+          };
+        case 'harness.connectivity.recovered':
+          return {
+            type,
+            source: 'github_monitor',
+            suppressedErrorCount: 3,
           };
         case 'github.update':
           return { type, items: [] };

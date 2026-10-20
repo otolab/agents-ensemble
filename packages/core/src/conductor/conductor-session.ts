@@ -294,6 +294,7 @@ export async function runConductorSession(
   >();
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
   let githubMonitor: GitHubMonitor | undefined;
+  const pendingGitHubRecoveries: number[] = [];
   const conductorCwd = options.conductorCwd ?? process.cwd();
   const mcpServers = await resolveMcpServers(
     options.repoRoot,
@@ -922,6 +923,14 @@ export async function runConductorSession(
           type: 'harness.github.update',
           itemCount: payload.items.length,
         });
+        for (const suppressedErrorCount of pendingGitHubRecoveries.splice(0)) {
+          eventQueue.enqueue({
+            type: 'harness.connectivity.recovered',
+            source: 'github_monitor',
+            suppressedErrorCount,
+            dispatchMode: 'inform',
+          });
+        }
         eventQueue.enqueue({
           type: 'github.update',
           items: payload.items,
@@ -948,11 +957,20 @@ export async function runConductorSession(
           message,
         });
       },
-      onPollRecovered: (suppressedErrorCount) => {
+      onPollRecovered: (suppressedErrorCount, hasUpdates) => {
         sessionLogger.emit({
           type: 'harness.github.monitor_recovered',
           suppressedErrorCount,
         });
+        if (hasUpdates) {
+          pendingGitHubRecoveries.push(suppressedErrorCount);
+        } else {
+          eventQueue.enqueue({
+            type: 'harness.connectivity.recovered',
+            source: 'github_monitor',
+            suppressedErrorCount,
+          });
+        }
       },
     });
     githubMonitor.start();

@@ -71,11 +71,23 @@ function githubUpdate(count: number): SessionEvent {
   };
 }
 
+function githubRecovery(
+  dispatchMode?: 'inform',
+): SessionEvent {
+  return {
+    type: 'harness.connectivity.recovered',
+    source: 'github_monitor',
+    suppressedErrorCount: 3,
+    ...(dispatchMode ? { dispatchMode } : {}),
+  };
+}
+
 describe('eventSourceKey', () => {
   it('maps event types to member keys', () => {
     expect(eventSourceKey(operator('hi'))).toBe('operator');
     expect(eventSourceKey(permission('p1'))).toBe('permission');
     expect(eventSourceKey(permissionStall())).toBe('permission.stall');
+    expect(eventSourceKey(githubRecovery())).toBe('github');
     expect(eventSourceKey(workerCompleted('implementer'))).toBe(
       'worker:implementer',
     );
@@ -343,6 +355,28 @@ describe('selectDispatchBatch', () => {
     expect(result?.remainingQueue).toEqual([permissionStall()]);
   });
 
+  it('dispatches permission.stall before a standalone GitHub recovery notice', () => {
+    const recovery = githubRecovery();
+    const stall = permissionStall();
+    const result = selectDispatchBatch({
+      queue: [recovery, stall],
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.events).toEqual([stall]);
+    expect(result?.remainingQueue).toEqual([recovery]);
+    expect(
+      selectDispatchBatch({
+        queue: result!.remainingQueue,
+        state: {},
+        autonomousTurns: 1,
+        maxTurns: 5,
+      })?.batch.events,
+    ).toEqual([recovery]);
+  });
+
   it('keeps operator and pending permission ahead of a permission stall notice', () => {
     const queue = [permissionStall(), permission('perm-2'), operator('answer')];
 
@@ -379,6 +413,50 @@ describe('selectDispatchBatch', () => {
 
     expect(result?.batch.sourceKey).toBe('github');
     expect(result?.batch.events).toHaveLength(2);
+  });
+
+  it('bundles a same-source recovery inform with github.update in one batch', () => {
+    const recovery = githubRecovery('inform');
+    const update = githubUpdate(1);
+    const result = selectDispatchBatch({
+      queue: [recovery, update],
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('github');
+    expect(result?.batch.events).toEqual([recovery, update]);
+    expect(result?.remainingQueue).toEqual([]);
+  });
+
+  it('blocks recovery and GitHub updates at max turns while allowing operator input', () => {
+    const recovery = githubRecovery();
+    const update = githubUpdate(1);
+    const blockedRecovery = selectDispatchBatch({
+      queue: [recovery],
+      state: {},
+      autonomousTurns: 1,
+      maxTurns: 1,
+    });
+    expect(blockedRecovery).toBeUndefined();
+
+    const result = selectDispatchBatch({
+      queue: [recovery, update, operator('continue')],
+      state: {},
+      autonomousTurns: 1,
+      maxTurns: 1,
+    });
+    expect(result?.batch.events).toEqual([operator('continue')]);
+    expect(result?.remainingQueue).toEqual([recovery, update]);
+
+    const resumed = selectDispatchBatch({
+      queue: result!.remainingQueue,
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 1,
+    });
+    expect(resumed?.batch.events).toEqual([recovery, update]);
   });
 
   it('ignores inform-mode SessionEvent until a trigger event arrives', () => {

@@ -41,6 +41,12 @@ function formatSingleSessionEventForConductor(event: SessionEvent): string {
         '',
         formatEventBodyForConductor(event),
       ].join('\n');
+    case 'harness.connectivity.recovered':
+      return [
+        '## 接続復旧',
+        '',
+        formatEventBodyForConductor(event),
+      ].join('\n');
     case 'github.update':
       return [
         '## GitHub 更新',
@@ -93,6 +99,11 @@ function formatEventBodyForConductor(event: SessionEvent): string {
         stallAgeMs: event.stallAgeMs,
         stallThresholdMs: event.stallThresholdMs,
       });
+    case 'harness.connectivity.recovered':
+      return fencedYaml('harness.connectivity.recovered', {
+        source: event.source,
+        suppressedErrorCount: event.suppressedErrorCount,
+      });
     case 'github.update':
       // `ci.completed` items carry the commit-SHA aggregate state in the
       // generic GitHub update YAML; preserve those fields for conductor
@@ -124,6 +135,16 @@ function batchHeadingForEvents(events: SessionEvent[]): string {
   }
   if (events.every((event) => event.type === 'github.update')) {
     return `## GitHub 更新（${count} 件）`;
+  }
+  if (
+    events.some((event) => event.type === 'harness.connectivity.recovered') &&
+    events.every(
+      (event) =>
+        event.type === 'github.update' ||
+        event.type === 'harness.connectivity.recovered',
+    )
+  ) {
+    return `## GitHub 更新・接続復旧（${count} 件）`;
   }
 
   const workerEvents = events.filter(

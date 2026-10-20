@@ -66,6 +66,7 @@ export const SESSION_EVENT_TYPES = [
   'worker.failed',
   'permission.pending',
   'permission.stall',
+  'harness.connectivity.recovered',
   'github.update',
 ] as const;
 

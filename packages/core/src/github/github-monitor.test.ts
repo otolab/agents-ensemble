@@ -575,7 +575,7 @@ describe('createGitHubMonitor', () => {
     expect(issueCommentPolls).toBe(13);
     expect(onPollError).toHaveBeenCalledTimes(1);
     expect(onPollRecovered).toHaveBeenCalledOnce();
-    expect(onPollRecovered).toHaveBeenCalledWith(11);
+    expect(onPollRecovered).toHaveBeenCalledWith(11, true);
     expect(monitor.getCursor().lastIssueCommentId).toBe('2');
     expect(onUpdate).not.toHaveBeenCalled();
 
@@ -592,6 +592,50 @@ describe('createGitHubMonitor', () => {
       }),
     ]);
 
+    await monitor.stop();
+  });
+
+  it('marks a clean recovery poll without GitHub updates', async () => {
+    let issueCommentPolls = 0;
+    const onPollRecovered = vi.fn();
+    const client: GitHubClient = {
+      getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
+      getIssue: vi.fn(),
+      listIssueComments: vi.fn(async () => {
+        issueCommentPolls += 1;
+        if (issueCommentPolls < 3) {
+          throw new TypeError('fetch failed');
+        }
+        return [
+          {
+            id: 1,
+            body: 'baseline',
+            html_url: 'https://github.com/org/repo/issues/39#issuecomment-1',
+            user: { login: 'op' },
+            created_at: '2026-01-01T00:00:00Z',
+          },
+        ];
+      }),
+      searchLinkedPullRequests: vi.fn().mockResolvedValue([]),
+      listPullRequestReviews: vi.fn().mockResolvedValue([]),
+      listPullRequestReviewComments: vi.fn().mockResolvedValue([]),
+      getStatusCheckRollup: vi.fn().mockResolvedValue([]),
+    };
+    const monitor = createGitHubMonitor({
+      issueUrl: 'https://github.com/org/repo/issues/39',
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+      cursor: { lastIssueCommentId: '1', pullRequests: {} },
+      pollIntervalMs: 1000,
+      githubClient: client,
+      onUpdate: vi.fn(),
+      onPollRecovered,
+    });
+
+    monitor.start();
+    await drainAsync();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(onPollRecovered).toHaveBeenCalledWith(1, false);
     await monitor.stop();
   });
 
