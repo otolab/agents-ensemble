@@ -20,7 +20,10 @@ export interface RegisterGitHubWatchToolOptions {
   issueUrl: string;
   /** The mutable session cursor that is persisted by the conductor session. */
   getCursor: () => GitHubMonitorCursor;
-  /** Called only when a PR is newly registered. */
+  /**
+   * Called when a registration must be persisted, including after a failed
+   * attempt.
+   */
   onRegistered?: (registration: GitHubWatchRegistration) => void | Promise<void>;
   /** Test hook for deterministic registration timestamps. */
   now?: () => Date;
@@ -29,6 +32,8 @@ export interface RegisterGitHubWatchToolOptions {
 export function createRegisterGitHubWatchTool(
   options: RegisterGitHubWatchToolOptions,
 ): ConductorToolSet {
+  const pendingPersistence = new Set<string>();
+
   return {
     register_github_watch: {
       name: 'register_github_watch',
@@ -77,8 +82,9 @@ export function createRegisterGitHubWatchTool(
           ? resolveKinds(existing.kinds)
           : requestedKinds;
 
+        let registration: GitHubWatchRegistration;
         if (!existing) {
-          const registration: GitHubWatchRegistration = {
+          registration = {
             prNumber,
             registeredAt: (options.now ?? (() => new Date()))().toISOString(),
             kinds,
@@ -87,7 +93,20 @@ export function createRegisterGitHubWatchTool(
             registeredAt: registration.registeredAt,
             kinds: [...kinds],
           };
+          if (options.onRegistered) pendingPersistence.add(key);
+        } else {
+          registration = {
+            prNumber,
+            registeredAt: existing.registeredAt,
+            kinds,
+          };
+        }
+
+        if (pendingPersistence.has(key)) {
+          // A failed callback leaves the cursor changed in memory. Keep the
+          // operation pending so a repeated registration retries persistence.
           await options.onRegistered?.(registration);
+          pendingPersistence.delete(key);
         }
 
         return yamlToolResult('register_github_watch', {

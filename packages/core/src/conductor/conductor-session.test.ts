@@ -26,6 +26,7 @@ import {
   SESSION_SIDECAR_VERSION,
   sessionSidecarPath,
 } from '../session/session-sidecar.js';
+import * as sessionSidecarModule from '../session/session-sidecar.js';
 import {
   loadSessionStateStore,
   sessionStateStorePath,
@@ -855,6 +856,76 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
+  it('retries registration persistence after a sidecar flush failure', async () => {
+    const sidecarPath = sessionSidecarPath({
+      repoRoot,
+      conductorAgentId: 'agent-test',
+    });
+    let failSidecarFlush = false;
+    const persistSidecar = sessionSidecarModule.saveSessionSidecar;
+    vi.spyOn(sessionSidecarModule, 'saveSessionSidecar').mockImplementation(
+      async (path, sidecar) => {
+        if (failSidecarFlush && path === sidecarPath) {
+          throw new Error('simulated sidecar flush failure');
+        }
+        await persistSidecar(path, sidecar);
+      },
+    );
+
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => {
+      const register = conductorTools!.register_github_watch!;
+      failSidecarFlush = true;
+      await expect(register.execute({ prNumber: 354 })).rejects.toThrow(
+        'simulated sidecar flush failure',
+      );
+
+      const sidecarAfterFailure = await loadSessionSidecar(sidecarPath);
+      expect(
+        sidecarAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
+      ).toBeUndefined();
+      const monitor = mockCreateGitHubMonitor.mock.results[0]!
+        .value as GitHubMonitor;
+      expect(monitor.getCursor().explicitPullRequests?.['354']).toMatchObject({
+        registeredAt: expect.any(String),
+      });
+
+      failSidecarFlush = false;
+      const retryResult = await register.execute({ prNumber: 354 });
+      expect(retryResult.structuredContent).toMatchObject({ ok: true });
+      const sidecarAfterRetry = await loadSessionSidecar(sidecarPath);
+      expect(
+        sidecarAfterRetry?.githubMonitor?.explicitPullRequests,
+      ).toEqual(monitor.getCursor().explicitPullRequests);
+      expect(monitor.registerPullRequest).toHaveBeenCalledTimes(2);
+
+      return {
+        runId: 'run-1',
+        status: 'finished',
+        result: 'registered after retry',
+      };
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+  });
+
   it('unregisters a resumed GitHub watch and preserves its poll cursor in the sidecar', async () => {
     const agentId = 'resume-agent-with-github-watch';
     await saveSessionSidecar(
@@ -935,6 +1006,100 @@ describe('runConductorSession resume / shutdown', () => {
     expect(sidecar?.githubMonitor?.explicitPullRequests).toEqual({});
     expect(sidecar?.githubMonitor?.pullRequests?.['354']).toEqual({
       lastReviewId: '10',
+    });
+  });
+
+  it('retries unregistration persistence after a sidecar flush failure', async () => {
+    const agentId = 'resume-agent-with-github-watch-retry';
+    const sidecarPath = sessionSidecarPath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await saveSessionSidecar(sidecarPath, {
+      version: SESSION_SIDECAR_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      githubMonitor: {
+        pullRequests: { '354': { lastReviewId: '10' } },
+        explicitPullRequests: {
+          '354': {
+            registeredAt: '2026-09-07T05:00:00.000Z',
+            kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
+          },
+        },
+      },
+      updatedAt: 0,
+    });
+
+    let failSidecarFlush = false;
+    const persistSidecar = sessionSidecarModule.saveSessionSidecar;
+    vi.spyOn(sessionSidecarModule, 'saveSessionSidecar').mockImplementation(
+      async (path, sidecar) => {
+        if (failSidecarFlush && path === sidecarPath) {
+          throw new Error('simulated sidecar flush failure');
+        }
+        await persistSidecar(path, sidecar);
+      },
+    );
+
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    mockResume.mockImplementationOnce(async (_resumeAgentId, agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => {
+      const unregister = conductorTools!.unregister_github_watch!;
+      failSidecarFlush = true;
+      await expect(unregister.execute({ prNumber: 354 })).rejects.toThrow(
+        'simulated sidecar flush failure',
+      );
+
+      const sidecarAfterFailure = await loadSessionSidecar(sidecarPath);
+      expect(
+        sidecarAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
+      ).toMatchObject({ registeredAt: '2026-09-07T05:00:00.000Z' });
+      const monitor = mockCreateGitHubMonitor.mock.results[0]!
+        .value as GitHubMonitor;
+      expect(monitor.getCursor().explicitPullRequests).toEqual({});
+
+      failSidecarFlush = false;
+      const retryResult = await unregister.execute({ prNumber: 354 });
+      expect(retryResult.structuredContent).toMatchObject({ ok: true });
+      const sidecarAfterRetry = await loadSessionSidecar(sidecarPath);
+      expect(sidecarAfterRetry?.githubMonitor?.explicitPullRequests).toEqual(
+        monitor.getCursor().explicitPullRequests,
+      );
+      expect(sidecarAfterRetry?.githubMonitor?.pullRequests?.['354']).toEqual({
+        lastReviewId: '10',
+      });
+      expect(monitor.unregisterPullRequest).toHaveBeenCalledTimes(2);
+
+      return {
+        runId: 'run-1',
+        status: 'finished',
+        result: 'unregistered after retry',
+      };
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: agentId,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
     });
   });
 
