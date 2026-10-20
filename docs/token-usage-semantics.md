@@ -12,8 +12,8 @@
 | `outputTokens` | backend が output / response として報告した件数。reasoning token の扱いは backend による |
 | `cacheReadTokens` | backend が cache から読んだ input として報告した件数 |
 | `cacheWriteTokens` | backend が cache に書いた input として報告した件数 |
-| `totalTokens` | backend が返した total。テキスト推定の場合は推定 input と推定 output の和 |
-| `reasoningTokens` | backend が分離して報告した reasoning 件数。Pi では `output` の内数 |
+| `totalTokens` | backend が返した total。ACP が省略した場合は harness が input と output の和を使い、テキスト推定では推定 input と推定 output の和 |
+| `reasoningTokens` | backend が分離して報告し harness が記録した reasoning 件数。Pi の API では `output` の内数だが、現行 adapter は harness に渡さない |
 
 cache read / write は input を別の料金区分で数えた値の場合があります。`inputTokens` に含まれるか、別枠かは一律ではありません。backend の返却値を確認せずに `inputTokens + cacheReadTokens + cacheWriteTokens` を独自の総 input として扱わないでください。`totalTokens` も別 backend の値と直接比較できる共通の請求単位ではありません。
 
@@ -24,8 +24,8 @@ cache read / write は input を別の料金区分で数えた値の場合があ
 | source | input / output | cache / reasoning | 留意点 |
 |--------|----------------|-------------------|--------|
 | Cursor SDK (`sdk`) | `@cursor/sdk` の `TokenUsage.inputTokens` / `outputTokens` を記録 | `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens` があれば記録 | SDK が返す各項目をそのまま使う。SDK の `getUsage()` が返す課金値は §3 を参照 |
-| Pi (`sdk`) | `AssistantMessage.usage.input` / `output` を `inputTokens` / `outputTokens` に写す | `cacheRead` / `cacheWrite` と、あれば `reasoning` を写す。Pi の `reasoning` は `output` の内数 | Pi は複数 provider の API を扱うため、実際の計上範囲は provider による。`usage.cost` はモデル定義の単価からの計算値 |
-| ACP worker (`acp`) | 本リポジトリが `session/prompt` 応答の `usage.inputTokens` / `outputTokens` として受け取った値 | 応答に `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens` があれば記録 | ACP preset / agent ごとに報告の有無と意味を確認する必要がある。共通の ACP usage 契約としては扱わない |
+| Pi (`sdk`) | `AssistantMessage.usage.input` / `output` を `inputTokens` / `outputTokens` に写す | `cacheRead` / `cacheWrite` があれば写す。Pi の `reasoning` は `output` の内数だが、現行 adapter は harness の `reasoningTokens` に写さない | Pi は複数 provider の API を扱うため、実際の計上範囲は provider による。`usage.cost` はモデル定義の単価からの計算値 |
+| ACP worker (`acp`) | 本リポジトリが `session/prompt` 応答の `usage.inputTokens` / `outputTokens` として受け取った値。`totalTokens` が無ければ harness がこの2項目の和を設定 | 応答に `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens` があれば記録 | ACP preset / agent ごとに報告の有無と意味を確認する必要がある。共通の ACP usage 契約としては扱わない |
 | worker テキスト推定 (`estimated`) | prompt と応答テキストそれぞれの UTF‑8 byte 数を 4 で割って切り上げる | cache / reasoning は推定しない | model tokenizer を使わない粗い近似。provider が数えた token 数や課金量ではない |
 
 Cursor SDK は `inputTokens`、`outputTokens`、cache read / write、`totalTokens` を usage として公開します。Pi の `Usage` 型も同様の区分を持ちますが、対応する API や provider は一つではありません。したがって、同じ項目名でも provider をまたいだ意味の同一性は保証されません。[Cursor SDK usage](https://cursor.com/docs/sdk/typescript)、[Pi `Usage` 型 v1.2.0](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/types.ts)
@@ -64,14 +64,12 @@ cost や usage を継続的に監視する場合の参考:
 
 直近ラウンドの `get_usage` は、そのラウンドの `usage.source` と token counters を返します。`get_session_usage` と終了 JSON の `sessionUsage` はセッション集計で、source を含むラウンド詳細は `latestRound` だけです。各 tool / 出力の形は [session-metrics.md](session-metrics.md) を参照してください。
 
-## 6. TTY 表示方針メモ
+## 6. TTY 終了サマリでの現行表示
 
-TTY は usage の scope と source を読み違えにくい形で表示します。
+TTY 終了サマリは取得・記録できた usage の input / output を合計と agent 別に表示します。worker の ACP usage がない正常完了ラウンドはテキストからの推定値を含むことがあり、usage が記録されなかった失敗分は含みません。
 
-- conductor と worker は agent ごとに行を分け、input / output を同じ行に置きます。cache read / write / hit は、その agent の cache 値がある場合だけ同じ行に表示します。
-- 合計行を表示する場合は input / output の合計に限ります。cache がある agent だけの値を「全体」の cache 合計や hit rate として表示しません。
-- worker の usage に推定値が含まれるときは、その worker 行にだけ「推定含む」と示します。全 worker に当てはまるような説明は出しません。
-- TTY の token 数は記録できた usage の集計であることが分かる見出しにします。失敗した worker の未記録分を token 数に加えません。
-- 課金額を表示する場合は conductor の実課金と明記し、worker を含む session cost と誤読されない表現にします。Pi の単価計算値や token 数からの推定額は実課金として表示しません。
+cache hit rate は算出できた scope について表示します。全体の cache stats は cache counter を報告したラウンドだけを集計するため、cache 値のない agent を含まない場合があります。「全体」の表示が全 agent の cache を網羅するとは限りません。rate の計算範囲は §3 を参照してください。
 
-表示先と現行 TTY サマリの項目は [session-metrics.md §2.4](session-metrics.md#24-tty-終了サマリ例) を参照してください。
+課金行は取得できた conductor の実課金だけを示し、worker 分は含みません。課金が取得できない場合は行を表示しません。
+
+現行の出力例と項目の詳細は [session-metrics.md §2.4](session-metrics.md#24-tty-終了サマリ例) を参照してください。
