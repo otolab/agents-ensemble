@@ -1355,14 +1355,12 @@ export async function runConductorSession(
         await flushSidecar();
         teardownPhases.flushSidecar = Date.now() - phaseStart;
       } catch (error) {
-        if (operatorRequestedClose) {
-          const detail = error instanceof Error ? error.message : String(error);
-          sessionLogger.emit({
-            type: 'harness.warning',
-            message:
-              `/close 時に sidecar を保存できませんでした。最新状態から再開できず、直前に保存された状態からの再開になる場合があります。 error=${detail}`,
-          });
-        }
+        const detail = error instanceof Error ? error.message : String(error);
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            `Open Question YAML / session sidecar を保存できませんでした。最新状態から再開できず、直前に保存された状態からの再開になる場合があります。 error=${detail}`,
+        });
       }
 
       const runGithubMonitorStop = async (): Promise<void> => {

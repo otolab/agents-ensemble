@@ -105,4 +105,66 @@ describe('open questions store', () => {
       /openQuestions\[0\]\.question/,
     );
   });
+
+  it('rejects a sequence behind an existing question ID before restore can overwrite it', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
+    const path = openQuestionsStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-sequence-mismatch',
+    });
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      [
+        'version: 1',
+        'sequence: 1',
+        'openQuestions:',
+        '  - id: inq-2',
+        '    question: Existing question',
+        '    responseType: text',
+        '    status: open',
+        '    source: conductor',
+        '    askedAt: 1',
+      ].join('\n'),
+      'utf8',
+    );
+
+    await expect(loadOpenQuestionsStore(path)).rejects.toThrow(
+      /sequence is behind question id inq-2/,
+    );
+  });
+
+  it('rejects duplicate IDs that would overwrite each other during restore', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
+    const path = openQuestionsStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-duplicate-id',
+    });
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      [
+        'version: 1',
+        'sequence: 1',
+        'openQuestions:',
+        '  - id: inq-1',
+        '    question: First question',
+        '    responseType: text',
+        '    status: open',
+        '    source: conductor',
+        '    askedAt: 1',
+        '  - id: inq-1',
+        '    question: Second question',
+        '    responseType: text',
+        '    status: open',
+        '    source: conductor',
+        '    askedAt: 2',
+      ].join('\n'),
+      'utf8',
+    );
+
+    await expect(loadOpenQuestionsStore(path)).rejects.toThrow(
+      /duplicate id inq-1/,
+    );
+  });
 });

@@ -83,8 +83,22 @@ function parseOpenQuestionsStore(
     throw new Error('Invalid open questions YAML: openQuestions');
   }
 
+  const questionIds = new Set<string>();
+  let highestQuestionSequence = 0;
   for (const [index, question] of record.openQuestions.entries()) {
-    validateOpenQuestion(question, index);
+    const { id, sequence: idSequence } = validateOpenQuestion(question, index);
+    if (questionIds.has(id)) {
+      throw new Error(`Invalid open questions YAML: duplicate id ${id}`);
+    }
+    questionIds.add(id);
+    if (idSequence > highestQuestionSequence) {
+      highestQuestionSequence = idSequence;
+    }
+  }
+  if (highestQuestionSequence > (record.sequence as number)) {
+    throw new Error(
+      `Invalid open questions YAML: sequence is behind question id inq-${highestQuestionSequence}`,
+    );
   }
 
   return {
@@ -93,10 +107,21 @@ function parseOpenQuestionsStore(
   };
 }
 
-function validateOpenQuestion(value: unknown, index: number): void {
+function validateOpenQuestion(
+  value: unknown,
+  index: number,
+): { id: string; sequence: number } {
   const field = `openQuestions[${index}]`;
   const question = asRecord(value, field);
   requireString(question.id, `${field}.id`);
+  const idMatch = /^inq-([1-9]\d*)$/.exec(question.id as string);
+  if (!idMatch) {
+    throw new Error(`Invalid open questions YAML: ${field}.id`);
+  }
+  const idSequence = Number(idMatch[1]);
+  if (!Number.isSafeInteger(idSequence)) {
+    throw new Error(`Invalid open questions YAML: ${field}.id`);
+  }
   requireString(question.question, `${field}.question`);
   requireString(question.responseType, `${field}.responseType`);
   if (
@@ -173,6 +198,7 @@ function validateOpenQuestion(value: unknown, index: number): void {
       );
     }
   }
+  return { id: question.id as string, sequence: idSequence };
 }
 
 function asRecord(value: unknown, field: string): Record<string, unknown> {
