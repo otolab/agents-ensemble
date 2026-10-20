@@ -35,6 +35,8 @@ export function formatIssueSessionSummaryJson(
       agentId: summary.agentId,
       issueUrl: summary.issueUrl,
       repoRoot: summary.repoRoot,
+      startedAt: summary.startedAt,
+      durationMs: summary.durationMs,
       sendCount: summary.sendCount,
       stopReason: summary.stopReason,
       lastRunStatus: summary.lastRunStatus,
@@ -93,10 +95,27 @@ function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1).replace(/\.0$/, '')}%`;
 }
 
+function formatElapsedTime(durationMs: number): string {
+  const totalSeconds = Math.floor(durationMs / 1_000);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+
+  if (hours > 0) {
+    return `${hours}時間${minutes}分${seconds}秒`;
+  }
+  if (totalMinutes > 0) {
+    return `${totalMinutes}分${seconds}秒`;
+  }
+  return `${seconds}秒`;
+}
+
 /** TTY 終了時の人間向けサマリ（1 画面程度）。 */
 export function formatIssueSessionSummaryText(summary: SessionSummary): string {
   const lines: string[] = [];
   lines.push(`セッション終了 (${summary.stopReason})`);
+  lines.push(`  経過時間: ${formatElapsedTime(summary.durationMs)}`);
   lines.push(`  conductor ターン: ${summary.sendCount}`);
   lines.push(
     `  worker ラウンド: ${summary.workerDispatches.length} 完了 / ${summary.workerFailures.length} 失敗`,

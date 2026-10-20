@@ -9,6 +9,8 @@ const BASE_SUMMARY = {
   agentId: 'agent-1',
   issueUrl: 'https://github.com/org/repo/issues/1',
   repoRoot: '/repo',
+  startedAt: 1_750_000_000_000,
+  durationMs: 1_250,
   sendCount: 1,
   stopReason: 'completed',
   lastRunStatus: 'finished',

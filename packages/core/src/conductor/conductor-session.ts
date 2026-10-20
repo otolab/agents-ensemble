@@ -251,6 +251,10 @@ export interface ConductorSessionResult {
   agentId: string;
   issueUrl: string;
   repoRoot: string;
+  /** SessionLogger 生成時の Unix epoch milliseconds。 */
+  startedAt: number;
+  /** SessionLogger 生成から終了 snapshot 生成までの経過時間（milliseconds）。 */
+  durationMs: number;
   /** 完了した `agent.send` 回数。 */
   sendCount: number;
   stopReason: IssueLoopStopReason;

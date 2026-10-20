@@ -23,6 +23,7 @@ export interface SessionLoggerOptions {
 export class SessionLogger {
   readonly workerDispatches: WorkerDispatchResult[] = [];
   readonly workerFailures: WorkerFailureRecord[] = [];
+  readonly startedAt: number;
 
   private readonly sinks = new Set<
     (event: SessionLogEvent) => void
@@ -33,7 +34,9 @@ export class SessionLogger {
   private lastError?: { message: string; code?: string };
   private stopReason: IssueLoopStopReason = 'completed';
 
-  constructor(private readonly options: SessionLoggerOptions) {}
+  constructor(private readonly options: SessionLoggerOptions) {
+    this.startedAt = Date.now();
+  }
 
   subscribe(sink: (event: SessionLogEvent) => void): () => void {
     this.sinks.add(sink);
@@ -117,6 +120,8 @@ export class SessionLogger {
       agentId: input.agentId,
       issueUrl: this.options.issueUrl,
       repoRoot: this.options.repoRoot,
+      startedAt: this.startedAt,
+      durationMs: Date.now() - this.startedAt,
       sendCount: this.sendCount,
       stopReason: this.stopReason,
       lastRunStatus: this.lastRunStatus,
