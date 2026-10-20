@@ -123,6 +123,11 @@ function runIssueSessionWithTestConfig(
 ) {
   return runIssueSessionImpl({
     ...options,
+    mcpConfigOptions: {
+      ...options.mcpConfigOptions,
+      // Keep user instructions and MCP config out of the operator's HOME.
+      userEnsembleRoot: join(options.repoRoot, '.test-user-ensemble'),
+    },
     ensembleConfig: {
       ...DEFAULT_ENSEMBLE_CONFIG,
       conductor: {
@@ -371,7 +376,7 @@ describe('executeIssueCommand with the core session', () => {
       isOperatorInputInteractive: (message: string | undefined) =>
         message === undefined,
       isOperatorInputTty: () => true,
-      runIssueSession: runIssueSessionImpl,
+      runIssueSession: runIssueSessionWithTestConfig,
     };
     const pendingUpdate = {
       id: 'issue-comment:42',
@@ -547,9 +552,6 @@ describe('executeIssueCommand with the core session', () => {
       result: 'done',
     });
     const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-'));
-    const userEnsembleRoot = await mkdtemp(
-      join(tmpdir(), 'ensemble-cli-session-user-'),
-    );
     await runGit(['init'], repoRoot);
     await runGit(['config', 'user.email', 'test@example.com'], repoRoot);
     await runGit(['config', 'user.name', 'test'], repoRoot);
@@ -601,11 +603,10 @@ describe('executeIssueCommand with the core session', () => {
       runIssueSession: (
         sessionOptions: Parameters<typeof runIssueSessionImpl>[0],
       ) =>
-        runIssueSessionImpl({
+        runIssueSessionWithTestConfig({
           ...sessionOptions,
           connectAcp,
           disableGitHubMonitor: true,
-          mcpConfigOptions: { userEnsembleRoot },
           registerProcessSignalHandlers: false,
         }),
     };
@@ -681,7 +682,6 @@ describe('executeIssueCommand with the core session', () => {
     } finally {
       firstPrompt.resolve({ stopReason: 'cancelled', responseText: '' });
       await rm(repoRoot, { recursive: true, force: true });
-      await rm(userEnsembleRoot, { recursive: true, force: true });
     }
   });
 
@@ -714,7 +714,7 @@ describe('executeIssueCommand with the core session', () => {
         isOperatorInputInteractive: (message) => message === undefined,
         isOperatorInputTty: () => true,
         runIssueSession: (sessionOptions) =>
-          runIssueSessionImpl({
+          runIssueSessionWithTestConfig({
             ...sessionOptions,
             workerWorktree: {
               path,
