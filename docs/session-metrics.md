@@ -157,7 +157,7 @@ input / output / cache の source ごとの意味、provider 課金との違い�
 | `byAgent.conductor` | `SessionUsageAgentTotals` | conductor ラウンドのみ | 同上 | rounds `0`, tokens `null` |
 | `byAgent.workers` | `Record<string, SessionUsageAgentTotals>` | worker 名別 | 同上 | `{}` |
 | `context` | `SessionContextUtilization` | 下表 | 同上・TTY（limit 既知時） | 下表 |
-| `cacheStats` | `SessionUsageCacheSummary?` | cache counters を報告した round から算出 | 同上・TTY（rate が算出可能な scope のみ） | 全 round で cache fields が無ければ省略 |
+| `cacheStats` | `SessionUsageCacheSummary?` | cache counters を報告した round から算出 | 同上・TTY（agent ごとの cache read / write 値があれば表示。hit rate は算出可能な場合のみ表示） | 全 round で cache fields が無ければ省略 |
 | `compactionCount` | `number?` | 下記の backend 固有イベント | 同上・TTY | 信頼できる counter が無い backend では省略。Pi では `0` も counter 利用可能を表す値として返す |
 | `cost` | `SessionUsageCost?` | conductor が報告した実課金。`scope: 'conductor-only'` | 同上・TTY・`get_session_usage` | 未取得時は省略 |
 | `latestRound` | `SessionUsageRound \| null` | 最終ラウンド | `get_session_usage`・終了 JSON | `null` |
