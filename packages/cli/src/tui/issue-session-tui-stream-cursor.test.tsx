@@ -79,13 +79,13 @@ describe('IssueSessionTuiStream IME cursor contract', () => {
     };
     expect(props.cursorStart).toEqual({
       x: computeOperatorInputCursorX('operator> '),
-      // live frame: input title (1) + the post-loop prompt line
-      y: 2,
+      // live frame: input title (1); no fixed no-question hint line
+      y: 1,
     });
     expect(props.cursorStart?.y).toBe(
       computeStreamOperatorInputCursorY({
         openQuestionsPaneHeight: 0,
-        hintLineCount: 1,
+        hintLineCount: 0,
       }),
     );
   });

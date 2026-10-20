@@ -160,7 +160,6 @@ export function IssueSessionTuiStream({
           total: openQuestions.length,
         }
       : undefined,
-    postLoopWaiting: snapshot.postLoopWaiting,
     shuttingDown: snapshot.shuttingDown,
   });
   const committedActivityCount = Math.min(

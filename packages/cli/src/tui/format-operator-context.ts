@@ -1,10 +1,6 @@
 import type { EnsembleConfig, OpenQuestion, OperatorInputContext } from '@agents-ensemble/core';
 import { buildIssueUrl, parseIssueUrl, resolveForceHyperlinkSetting } from '@agents-ensemble/core';
-import {
-  OPERATOR_INPUT_DISCRETIONARY_HINT,
-  OPERATOR_INPUT_POST_LOOP_HINT,
-  OPERATOR_INPUT_SHUTTING_DOWN_HINT,
-} from './tui-layout-constants.js';
+import { OPERATOR_INPUT_SHUTTING_DOWN_HINT } from './tui-layout-constants.js';
 
 export type IssueLinkMode = 'osc8' | 'label' | 'url';
 
@@ -161,13 +157,12 @@ export interface OperatorInputDisplayResolution {
 /**
  * Operator input の表示モードと prompt 行を解決する。
  *
- * 表示モード自体は open question の有無による2値だけとし、Operator input には
- * 入力を促す行のみを載せる（Issue 参照や post-loop 待機などの status は載せない）。
+ * 表示モード自体は open question の有無による2値だけとする。
+ * question がない通常時は入力欄を空け、question があるときだけ選択・回答の案内を載せる。
  */
 export function resolveOperatorInputDisplayMode(params: {
   openQuestions: readonly OpenQuestion[];
   selection?: OpenQuestionSelectionContext;
-  postLoopWaiting?: boolean;
   shuttingDown?: boolean;
 }): OperatorInputDisplayResolution {
   const mode: OperatorInputDisplayMode =
@@ -180,13 +175,6 @@ export function resolveOperatorInputDisplayMode(params: {
     };
   }
 
-  if (params.postLoopWaiting && mode === 'noQuestions') {
-    return {
-      mode,
-      hintLines: [OPERATOR_INPUT_POST_LOOP_HINT],
-    };
-  }
-
   if (mode === 'withQuestions') {
     const questionHint = params.selection
       ? `${params.selection.id} (${params.selection.index + 1}/${params.selection.total}) への回答 — Shift+↑↓で選択 · Enter で送信`
@@ -196,7 +184,7 @@ export function resolveOperatorInputDisplayMode(params: {
 
   return {
     mode,
-    hintLines: [OPERATOR_INPUT_DISCRETIONARY_HINT],
+    hintLines: [],
   };
 }
 

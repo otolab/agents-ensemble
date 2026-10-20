@@ -141,6 +141,9 @@ describe('bindAsyncOperatorInput', () => {
       }),
     });
 
+    expect(stderrWrites.join('')).toContain(
+      '/reconnect、/close 保存して閉じる、/exit 掃除して終了',
+    );
     expect(mockCreateInterface).toHaveBeenCalledTimes(1);
     fakeRl.emit('line', '  ping  ');
     expect(submit).toHaveBeenCalledWith('ping');

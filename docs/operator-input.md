@@ -85,7 +85,9 @@ TTY の既定は `stream` レイアウトです。従来のペイン分割を使
 
 長時間 TTY セッションでは Ink / React の再描画に伴って Node の User Timing（measure / mark）が蓄積し、約 100 万件に達すると `MaxPerformanceEntryBufferExceededWarning` が出ることがあります。pane / stream 共通の TUI host は稼働中 30 秒ごとに `performance.clearMeasures()` と `performance.clearMarks()` を呼び、終了時にタイマーを解除します。クリアに失敗しても描画は継続します。Node の performance バッファはプロセス共通のため、この処理では同じプロセス内の他の measure / mark も消去されます。
 
-既定の `stream` レイアウトでは、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `/close` と `/exit` の動作を区別した prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（詳細は [ADR 0015](adr/0015-cli-tui-library.md)）。
+既定の `stream` レイアウトでは、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画しません。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（詳細は [ADR 0015](adr/0015-cli-tui-library.md)）。
+
+question がないときの pane / stream の Operator input は、通常時・post-loop 待機中とも固定案内を出さず入力欄を表示します。TTY の pane / stream では `/` 入力時にコマンド候補を表示します。stream の scrollback 閲覧中に保留した新着がある場合は、その件数と `End` による復帰案内を引き続き表示します。question があるときの選択・回答案内と、終了処理中の `終了しています…` も表示します。この変更は TTY の pane / stream に限り、readline 経路の1行案内にあるコマンド一覧は維持します。非 TTY では対話入力を開かず、CLI / env の初回メッセージがあれば従来どおり1回だけ送信します。
 
 `pane` では Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
 
@@ -123,11 +125,11 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 | モード | 条件 | 表示と入力 |
 |--------|------|------------|
 | **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の prompt を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
-| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input には `任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了` の prompt を表示する。通常の submit は operator メッセージとして送信する。 |
+| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input は固定案内を出さず、入力欄だけを表示する。通常の submit は operator メッセージとして送信する。 |
 
 resume で sidecar の未回答 question を復元した場合も、`getContext()` が同じ Registry から一覧を返すため、binding 後の pane / stream はモード A として表示する。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使う。
 
-post-loop 待機中はモード B の prompt を `追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了` に上書きします。終了中は入力を無効化します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
+post-loop 待機中も Operator input はモード B と同じく入力欄だけを表示します。終了中は入力を無効化し、`終了しています…` を表示します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
 
 `stream` の mouse-only scrollbar / native scrollback 操作は、terminal host から viewport state が TTY へ通知されないため keyboard detached として自動検出できません。保護が必要な場合は `PgUp` / `Ctrl+PgUp` で detached を宣言し、`End` / `Ctrl+End` で復帰します。通常の幅変更では既に Static として追記された行は再折り返しされませんが、settled columns shrink では [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って scrollback を reset し、保持済み activity history を新幅で再出力します。
 
