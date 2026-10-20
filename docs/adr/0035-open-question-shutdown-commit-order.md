@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-20
-- Related: [ADR 0033](0033-live-open-question-control-uds.md), [ADR 0034](0034-bounded-open-question-dispatch-drain.md), [Issue #481](https://github.com/otolab/agents-ensemble/issues/481)
+- Related: [ADR 0033](0033-live-open-question-control-uds.md), [ADR 0034](0034-bounded-open-question-dispatch-drain.md), [ADR 0036](0036-live-open-question-answer-contract.md), [Issue #481](https://github.com/otolab/agents-ensemble/issues/481)
 
 ## Context
 

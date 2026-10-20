@@ -1,6 +1,6 @@
 # ADR 0033: 稼働中 Open Question の UDS control API
 
-- Status: accepted
+- Status: superseded by [0036](0036-live-open-question-answer-contract.md) (answer persistence/ack contract only)
 - Date: 2026-10-20
 - Related: [ADR 0008](0008-human-dialogue-open-questions.md), [ADR 0011](0011-session-sidecar-resume.md), [ADR 0031](0031-operator-agent-layer.md), [Issue #480](https://github.com/otolab/agents-ensemble/issues/480), [Issue #481](https://github.com/otolab/agents-ensemble/issues/481)
 
