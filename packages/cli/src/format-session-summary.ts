@@ -87,12 +87,40 @@ function formatUsdFromCents(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-function formatTokenUsage(inputTokens: number, outputTokens: number): string {
-  return `input ${formatTokenCount(inputTokens)} / output ${formatTokenCount(outputTokens)}`;
-}
-
 function formatPercent(value: number): string {
   return `${(value * 100).toFixed(1).replace(/\.0$/, '')}%`;
+}
+
+function formatAgentUsage(
+  label: string,
+  inputTokens: number,
+  outputTokens: number,
+  cacheStats: SessionUsageCacheStats | null,
+  estimated = false,
+): string {
+  const hasCache =
+    cacheStats != null &&
+    (cacheStats.cacheReadTokens != null ||
+      cacheStats.cacheWriteTokens != null);
+  const values = [
+    `${hasCache ? '新規 input' : 'input'} ${formatTokenCount(inputTokens)}`,
+    `output ${formatTokenCount(outputTokens)}`,
+  ];
+
+  if (hasCache && cacheStats?.cacheReadTokens != null) {
+    values.push(`cache read ${formatTokenCount(cacheStats.cacheReadTokens)}`);
+  }
+  if (hasCache && cacheStats?.cacheWriteTokens != null) {
+    values.push(`cache write ${formatTokenCount(cacheStats.cacheWriteTokens)}`);
+  }
+  if (hasCache && cacheStats?.cacheHitRate != null) {
+    values.push(`hit ${formatPercent(cacheStats.cacheHitRate)}`);
+  }
+  if (estimated) {
+    values.push('推定');
+  }
+
+  return `    ${label}: ${values.join(' · ')}`;
 }
 
 function formatElapsedTime(durationMs: number): string {
@@ -124,77 +152,46 @@ export function formatIssueSessionSummaryText(summary: SessionSummary): string {
   const usage = summary.sessionUsage;
   if (usage) {
     const tokenRows: string[] = [];
-    if (usage.totals.tokens) {
-      tokenRows.push(
-        `    取得・記録済み合計: ${formatTokenUsage(
-          usage.totals.tokens.inputTokens,
-          usage.totals.tokens.outputTokens,
-        )}`,
-      );
-    }
+    const estimatedWorkers = new Set(
+      summary.workerDispatches
+        .filter((dispatch) => dispatch.promptResult.usage == null)
+        .map((dispatch) => dispatch.name),
+    );
+
     if (usage.byAgent.conductor.tokens) {
+      const tokens = usage.byAgent.conductor.tokens;
       tokenRows.push(
-        `    conductor: ${formatTokenUsage(
-          usage.byAgent.conductor.tokens.inputTokens,
-          usage.byAgent.conductor.tokens.outputTokens,
-        )}`,
+        formatAgentUsage(
+          'conductor',
+          tokens.inputTokens,
+          tokens.outputTokens,
+          usage.cacheStats?.byAgent.conductor ?? null,
+        ),
       );
     }
     for (const [name, agent] of Object.entries(usage.byAgent.workers)) {
       if (!agent.tokens) continue;
       tokenRows.push(
-        `    worker ${name}: ${formatTokenUsage(
+        formatAgentUsage(
+          `worker ${name}`,
           agent.tokens.inputTokens,
           agent.tokens.outputTokens,
-        )}`,
+          usage.cacheStats?.byAgent.workers[name] ?? null,
+          estimatedWorkers.has(name),
+        ),
+      );
+    }
+    if (usage.totals.tokens) {
+      const tokens = usage.totals.tokens;
+      tokenRows.push(
+        `    合計: input ${formatTokenCount(tokens.inputTokens)} · output ${
+          formatTokenCount(tokens.outputTokens)
+        }`,
       );
     }
     if (tokenRows.length > 0) {
-      lines.push('  トークン（取得・記録済み usage）:');
+      lines.push('  usage（記録済み）:');
       lines.push(...tokenRows);
-      if (Object.keys(usage.byAgent.workers).length > 0) {
-        lines.push(
-          '    worker は ACP が usage を返さないラウンドで応答文からの推定値を含む場合があります。',
-        );
-      }
-      if (summary.workerFailures.length > 0) {
-        lines.push(
-          '    失敗などで usage が未記録の消費分は含まれません。',
-        );
-      }
-    }
-
-    const cacheStats = usage.cacheStats;
-    if (cacheStats) {
-      const cacheScopes: Array<[string, SessionUsageCacheStats | null]> = [
-        ['全体', cacheStats.totals],
-        ['conductor', cacheStats.byAgent.conductor],
-        ...Object.entries(cacheStats.byAgent.workers).map(([name, stats]) => [
-          `worker ${name}`,
-          stats,
-        ] as [string, SessionUsageCacheStats | null]),
-      ];
-      const cacheRows = cacheScopes.flatMap(([label, stats]) => {
-        if (!stats || stats.cacheHitRate == null) {
-          return [];
-        }
-        const details = [
-          stats.cacheReadTokens != null
-            ? `read ${formatTokenCount(stats.cacheReadTokens)}`
-            : undefined,
-          stats.cacheWriteTokens != null
-            ? `write ${formatTokenCount(stats.cacheWriteTokens)}`
-            : undefined,
-        ].filter((value) => value != null);
-        return [
-          `${label} ${formatPercent(stats.cacheHitRate)}${
-            details.length > 0 ? ` (${details.join(', ')})` : ''
-          }`,
-        ];
-      });
-      if (cacheRows.length > 0) {
-        lines.push(`  キャッシュヒット率: ${cacheRows.join(' / ')}`);
-      }
     }
 
     const context = usage.context;

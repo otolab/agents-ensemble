@@ -157,9 +157,9 @@ describe('formatIssueSessionSummaryText', () => {
     expect(text).toContain('経過時間: 1分23秒');
     expect(text).toContain('conductor ターン: 3');
     expect(text).toContain('worker ラウンド: 1 完了 / 0 失敗');
-    expect(text).toContain('トークン（取得・記録済み usage）:');
-    expect(text).toContain('取得・記録済み合計: input 1k / output 340');
-    expect(text).toContain('conductor: input 1k / output 300');
+    expect(text).toContain('usage（記録済み）:');
+    expect(text).toContain('conductor: input 1k · output 300');
+    expect(text).toContain('合計: input 1k · output 340');
     expect(text).toContain(
       '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
     );
@@ -178,6 +178,14 @@ describe('formatIssueSessionSummaryText', () => {
             ...dispatch,
             name: 'reviewer',
             kind: 'reviewer',
+            promptResult: {
+              ...dispatch.promptResult,
+              usage: {
+                inputTokens: 300,
+                outputTokens: 200,
+                totalTokens: 500,
+              },
+            },
           },
         ],
         sessionUsage: {
@@ -249,13 +257,17 @@ describe('formatIssueSessionSummaryText', () => {
     );
 
     expect(text).toContain('worker ラウンド: 2 完了 / 0 失敗');
-    expect(text).toContain('取得・記録済み合計: input 3k / output 920');
-    expect(text).toContain('conductor: input 2k / output 600');
-    expect(text).toContain('worker implementer: input 500 / output 120');
-    expect(text).toContain('worker reviewer: input 300 / output 200');
     expect(text).toContain(
-      'キャッシュヒット率: 全体 21.7% (read 500, write 20) / conductor 20% (read 400, write 20) / worker implementer 33.3% (read 100, write 0)',
+      'conductor: 新規 input 2k · output 600 · cache read 400 · cache write 20 · hit 20%',
     );
+    expect(text).toContain(
+      'worker implementer: 新規 input 500 · output 120 · cache read 100 · cache write 0 · hit 33.3% · 推定',
+    );
+    expect(text).toContain('worker reviewer: input 300 · output 200');
+    expect(text).toContain('合計: input 3k · output 920');
+    expect(text).not.toContain('21.7%');
+    expect(text).not.toContain('worker は ACP が usage を返さない');
+    expect(text).not.toContain('キャッシュヒット率:');
     expect(text).toContain(
       '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
     );
@@ -306,10 +318,8 @@ describe('formatIssueSessionSummaryText', () => {
     const json = JSON.parse(formatIssueSessionSummaryJson(summary));
 
     expect(text).toContain('worker ラウンド: 0 完了 / 1 失敗');
-    expect(text).toContain('取得・記録済み合計: input 1k / output 340');
-    expect(text).toContain(
-      '失敗などで usage が未記録の消費分は含まれません。',
-    );
+    expect(text).toContain('合計: input 1k · output 340');
+    expect(text).not.toContain('失敗などで usage が未記録');
     expect(text).not.toContain('全体: input 1k / output 340');
     expect(text).toContain(
       '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',

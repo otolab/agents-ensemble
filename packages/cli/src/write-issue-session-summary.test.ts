@@ -69,6 +69,36 @@ describe('writeIssueSessionSummary', () => {
     tracker.recordContextCompaction();
     const result = {
       ...BASE_SUMMARY,
+      workerDispatches: [
+        {
+          name: 'implementer',
+          kind: 'implementer',
+          source: 'conductor' as const,
+          issue: {
+            owner: 'org',
+            repo: 'repo',
+            number: 1,
+            url: BASE_SUMMARY.issueUrl,
+          },
+          worktree: {
+            path: '/repo/.ensemble/worktrees/issue-1',
+            branch: 'ensemble/issue-1',
+            issue: {
+              owner: 'org',
+              repo: 'repo',
+              number: 1,
+              url: BASE_SUMMARY.issueUrl,
+            },
+          },
+          prompt: 'implement the issue',
+          promptResult: {
+            stopReason: 'end_turn',
+            responseText: 'implemented',
+            usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+          },
+          acpSessionId: 'acp-1',
+        },
+      ],
       sessionUsage: tracker.getSessionSummary(),
     } satisfies ConductorSessionResult;
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -77,9 +107,11 @@ describe('writeIssueSessionSummary', () => {
     writeIssueSessionSummary(result, { format: 'text' });
 
     const text = String(errorSpy.mock.calls[0]?.[0]);
-    expect(text).toContain('取得・記録済み合計: input 120 / output 30');
-    expect(text).toContain('conductor: input 80 / output 20');
-    expect(text).toContain('worker implementer: input 40 / output 10');
+    expect(text).toContain('usage（記録済み）:');
+    expect(text).toContain('conductor: input 80 · output 20');
+    expect(text).toContain('worker implementer: input 40 · output 10');
+    expect(text).toContain('合計: input 120 · output 30');
+    expect(text).not.toContain('worker は ACP が usage を返さない');
     expect(text).toContain('コンテキスト圧縮: 1 回');
     expect(text).not.toContain('課金');
     expect(logSpy).not.toHaveBeenCalled();
@@ -118,10 +150,8 @@ describe('writeIssueSessionSummary', () => {
 
     const text = String(errorSpy.mock.calls[0]?.[0]);
     expect(text).toContain('worker ラウンド: 0 完了 / 1 失敗');
-    expect(text).toContain('取得・記録済み合計: input 80 / output 20');
-    expect(text).toContain(
-      '失敗などで usage が未記録の消費分は含まれません。',
-    );
+    expect(text).toContain('合計: input 80 · output 20');
+    expect(text).not.toContain('失敗などで usage が未記録');
     expect(text).not.toContain('全体: input 80 / output 20');
     expect(text).toContain(
       '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
