@@ -123,6 +123,11 @@ import {
   openQuestionsStorePath,
   saveOpenQuestionsStore,
 } from '../session/open-questions-store.js';
+import {
+  OpenQuestionControlOperationError,
+  startOpenQuestionControlServer,
+  type OpenQuestionControlServer,
+} from '../session/open-question-control.js';
 import type { SessionUsageSummary } from '../usage/types.js';
 import type { PendingPermission } from '../permission/pending-permission.js';
 import { formatPermissionSummaryForOperator } from '../permission/format-permission-summary-for-operator.js';
@@ -306,6 +311,8 @@ export async function runConductorSession(
   }
   const escalations: EscalationRecord[] = [];
   const openQuestions = new OpenQuestionRegistry();
+  let harnessSocketPath: string | undefined;
+  let openQuestionControlServer: OpenQuestionControlServer | undefined;
   const eventQueue = new SessionEventQueue();
   const dispatchHoldState = createDispatchHoldState();
   const onDispatchHoldChanged = (change: DispatchHoldChange): void => {
@@ -358,6 +365,7 @@ export async function runConductorSession(
     const sidecar: SessionSidecar = {
       ...loadedSidecar,
       lifecycle: 'unknown',
+      harnessSocketPath: undefined,
       updatedAt: Date.now(),
     };
     await saveSessionSidecar(
@@ -1016,6 +1024,7 @@ export async function runConductorSession(
         conductorAgentId: conductorHandle.conductor.agentId,
         conductorBackend,
         lazyWorkers: activeLazyWorkers,
+        ...(harnessSocketPath ? { harnessSocketPath } : {}),
         issueUrl: options.issueUrl,
         repoRoot: options.repoRoot,
         profile: structuredClone(activeProfile),
@@ -1282,6 +1291,46 @@ export async function runConductorSession(
   }
 
   try {
+    openQuestionControlServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => openQuestions.listOpen(),
+      answerOpenQuestion: async ({ questionId, answer }) => {
+        if (teardownStarted) {
+          throw new OpenQuestionControlOperationError(
+            -32000,
+            'The session is shutting down.',
+          );
+        }
+        const current = openQuestions.get(questionId);
+        if (!current || current.status !== 'open') {
+          throw new OpenQuestionControlOperationError(
+            -32004,
+            'Open Question is not available.',
+          );
+        }
+        const accepted = submitOperatorInput({
+          message: answer,
+          targetOpenQuestionId: questionId,
+          conductorTurn: sendCount + 1,
+          openQuestions,
+          escalations,
+          eventQueue,
+          sessionLogger,
+          onEscalated: (record) => options.onEscalated?.(record),
+        });
+        const answered = openQuestions.get(questionId);
+        if (!accepted || !answered || answered.status !== 'answered') {
+          throw new OpenQuestionControlOperationError(
+            -32004,
+            'Open Question could not be answered.',
+          );
+        }
+        await flushSidecar();
+        return answered;
+      },
+    });
+    harnessSocketPath = openQuestionControlServer.socketPath;
+    await flushSidecar().catch(reportSidecarFlushFailure);
+
     const driverResult = await runConductorSessionDriver({
       issueUrl: options.issueUrl,
       initialPrompt:
@@ -1494,6 +1543,23 @@ export async function runConductorSession(
     };
 
     try {
+      const activeControlServer = openQuestionControlServer;
+      openQuestionControlServer = undefined;
+      harnessSocketPath = undefined;
+      if (activeControlServer) {
+        emitTeardownPhase('openQuestionControl');
+        const phaseStart = Date.now();
+        try {
+          await activeControlServer.close();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message: `Open Question control socket cleanup failed: ${detail}`,
+          });
+        }
+        teardownPhases.openQuestionControl = Date.now() - phaseStart;
+      }
       disposeOperatorInput?.();
       if (permissionDeadlockMonitor) {
         emitTeardownPhase('permissionDeadlockMonitor');

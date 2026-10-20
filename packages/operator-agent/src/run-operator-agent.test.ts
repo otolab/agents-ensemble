@@ -165,9 +165,13 @@ describe('runOperatorAgent', () => {
     });
     expect(agentOptions?.systemPrompt).toContain('operator ロール');
     expect(agentOptions?.systemPrompt).toContain('Profile operator guidance.');
+    expect(agentOptions?.systemPrompt).toContain('answer_live_open_question');
+    expect(agentOptions?.systemPrompt).toContain('自動解決はしません');
     expect(agentOptions?.systemPrompt).not.toContain('dispatch');
     expect(Object.keys(agentOptions?.customTools ?? {})).toEqual([
       'list_operator_sessions',
+      'list_live_open_questions',
+      'answer_live_open_question',
     ]);
   });
 

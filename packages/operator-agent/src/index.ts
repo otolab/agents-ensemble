@@ -11,3 +11,9 @@ export {
 } from './list-operator-sessions-tool.js';
 export { operatorBaseModule } from './operator-base-module.js';
 export type { OperatorPromptContext } from './operator-base-module.js';
+export {
+  ANSWER_LIVE_OPEN_QUESTION_TOOL,
+  createAnswerLiveOpenQuestionTool,
+  createListLiveOpenQuestionsTool,
+  LIST_LIVE_OPEN_QUESTIONS_TOOL,
+} from './open-question-control-tools.js';

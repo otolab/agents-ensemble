@@ -50,6 +50,12 @@ type OperatorInputBinding = (
 - `choice` の選択肢は回答を簡潔にするための候補で、オペレータは自由記述でも回答できる。選択肢 ID / 一意な label / 候補順の 1 始まり番号に一意に解決できる入力には `selectedChoice` を記録し、それ以外は回答全文を保存して `selectedChoice` を付けない。重複する label は自由記述として記録し、候補を推測しない。TTY の Open questions ペインには選択肢を表示する
 - `yes_no` の回答は原文と `assent: yes | no | unclear` を記録する。判定できない回答は否定にせず `unclear` とし、`approved` は permission に関連付けた質問に限って明確な assent から導出する
 
+### 稼働中 harness の Open Question control
+
+`ensemble issue` はセッションごとの UDS listener を持ち、sidecar の `harnessSocketPath` から operator-agent が接続できます。`list_live_open_questions` は稼働中 Registry の未回答一覧を読み、`answer_live_open_question` は質問 ID と operator が選んだ回答を渡します。harness は `submitOperatorInput` / `recordOpenQuestionAnswer` を通して既存の回答・permission invariants を適用し、`operator.message` 相当を event queue に積みます。回答が YAML と JSON sidecar に保存された後で成功を返します。
+
+UDS は稼働中 session 専用です。listener がない・接続できない場合はエラーになり、保存 YAML への自動 fallback はしません。YAML は引き続き resume と保存済み読み取りの正本です。socket path は停止時に sidecar から外します。
+
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 
 ### `getContext()`

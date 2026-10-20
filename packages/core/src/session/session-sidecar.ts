@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
@@ -43,6 +43,8 @@ export interface SessionSidecar {
   conductorBackend?: ConductorBackend;
   /** 初回 `prompt_worker` まで ACP attach を遅延する。旧 sidecar は eager。 */
   lazyWorkers?: boolean;
+  /** 稼働中 session の local control socket。teardown 時に除去する。 */
+  harnessSocketPath?: string;
   issueUrl: string;
   repoRoot: string;
   profile: ResolvedProfile;
@@ -111,9 +113,16 @@ export async function saveSessionSidecar(
     ...sidecar,
     updatedAt: Date.now(),
   });
-  await mkdir(dirname(path), { recursive: true });
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
   const tempPath = `${path}.tmp`;
-  await writeFile(tempPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
+  await writeFile(
+    tempPath,
+    `${JSON.stringify(parsed, null, 2)}\n`,
+    { encoding: 'utf8', mode: 0o600 },
+  );
+  await chmod(tempPath, 0o600);
   await rename(tempPath, path);
 }
 
@@ -248,6 +257,13 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     throw new Error('Invalid session sidecar: lazyWorkers');
   }
   if (
+    record.harnessSocketPath !== undefined &&
+    (typeof record.harnessSocketPath !== 'string' ||
+      record.harnessSocketPath.length === 0)
+  ) {
+    throw new Error('Invalid session sidecar: harnessSocketPath');
+  }
+  if (
     record.lifecycle !== undefined &&
     record.lifecycle !== 'closed' &&
     record.lifecycle !== 'exited' &&
@@ -290,6 +306,9 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     conductorBackend,
     ...(typeof record.lazyWorkers === 'boolean'
       ? { lazyWorkers: record.lazyWorkers }
+      : {}),
+    ...(typeof record.harnessSocketPath === 'string'
+      ? { harnessSocketPath: record.harnessSocketPath }
       : {}),
     issueUrl: record.issueUrl,
     repoRoot: record.repoRoot,

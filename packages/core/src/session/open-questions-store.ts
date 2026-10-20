@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import yaml from 'js-yaml';
 import type {
@@ -48,7 +48,9 @@ export async function saveOpenQuestionsStore(
     version: OPEN_QUESTIONS_STORE_VERSION,
     ...snapshot,
   });
-  await mkdir(dirname(path), { recursive: true });
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
   const tempPath = `${path}.tmp`;
   await writeFile(
     tempPath,
@@ -59,8 +61,9 @@ export async function saveOpenQuestionsStore(
       },
       { lineWidth: 120 },
     )}\n`,
-    'utf8',
+    { encoding: 'utf8', mode: 0o600 },
   );
+  await chmod(tempPath, 0o600);
   await rename(tempPath, path);
 }
 

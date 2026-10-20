@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,7 +31,14 @@ import {
   loadSessionStateStore,
   sessionStateStorePath,
 } from '../session/session-state-store.js';
-import { openQuestionsStorePath } from '../session/open-questions-store.js';
+import {
+  loadOpenQuestionsStore,
+  openQuestionsStorePath,
+} from '../session/open-questions-store.js';
+import {
+  OPEN_QUESTION_CONTROL_METHODS,
+  sendOpenQuestionControlRequest,
+} from '../session/open-question-control.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
 import { runConductorSession as runConductorSessionImpl } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
@@ -806,6 +813,173 @@ describe('runConductorSession resume / shutdown', () => {
       sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
     expect(sidecar?.conductorBackend).toBe('cursor');
+  });
+
+  it('answers a live Open Question through UDS, persists it, and dispatches operator.message', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    let operatorInput: OperatorInputBindingApi | undefined;
+    let sendCount = 0;
+    const receivedOperatorMessage = createDeferred<string>();
+    const shutdown = new AbortController();
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        await conductorTools!.ask_human!.execute({
+          question: 'Proceed with the release?',
+          responseType: 'yes_no',
+          relatedPermissionId: 'perm-1',
+        });
+      } else {
+        receivedOperatorMessage.resolve(message);
+      }
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'done',
+      };
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (api) => {
+        operatorInput = api;
+        return () => {};
+      },
+    });
+
+    try {
+      await vi.waitFor(async () => {
+        const sidecar = await loadSessionSidecar(
+          sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        );
+        expect(sidecar?.harnessSocketPath).toBeTruthy();
+      });
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      const sidecar = await loadSessionSidecar(sidecarPath);
+      const socketPath = sidecar?.harnessSocketPath;
+      expect(socketPath).toBeTruthy();
+
+      let liveList: {
+        questions: Array<{ id: string; question: string }>;
+      } = { questions: [] };
+      await vi.waitFor(async () => {
+        liveList = await sendOpenQuestionControlRequest(socketPath!, {
+          method: OPEN_QUESTION_CONTROL_METHODS.list,
+          params: {},
+        });
+        expect(liveList.questions).toHaveLength(1);
+      });
+      const registryList = await conductorTools!.list_open_questions!.execute({
+        status: 'open',
+      });
+      const registryItems = JSON.parse(
+        registryList.content[0]!.text,
+      ).items as Array<{ id: string; question: string; status: string }>;
+      const liveQuestions = liveList.questions.map(({ id, question }) => ({
+        id,
+        question,
+      }));
+      expect(liveQuestions).toEqual(registryItems.map(({ id, question }) => ({
+        id,
+        question,
+      })));
+
+      await vi.waitFor(async () => {
+        const store = await loadOpenQuestionsStore(
+          openQuestionsStorePath({
+            repoRoot,
+            conductorAgentId: 'agent-test',
+          }),
+        );
+        expect(store?.openQuestions).toHaveLength(1);
+      });
+      const openQuestionsStore = await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      );
+      expect(liveQuestions).toEqual(
+        openQuestionsStore?.openQuestions
+          .filter(({ status }) => status === 'open')
+          .map(({ id, question }) => ({ id, question })),
+      );
+      await sendOpenQuestionControlRequest(socketPath!, {
+        method: OPEN_QUESTION_CONTROL_METHODS.answer,
+        params: { questionId: liveList.questions[0]!.id, answer: 'yes' },
+      });
+
+      const store = await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      );
+      expect(store?.openQuestions[0]).toMatchObject({
+        status: 'answered',
+        answer: 'yes',
+        answeredBy: 'operator',
+        assent: 'yes',
+        approved: true,
+        relatedPermissionId: 'perm-1',
+      });
+      const persistedSidecar = await loadSessionSidecar(sidecarPath);
+      expect(persistedSidecar?.openQuestions).toEqual(store?.openQuestions);
+      expect(persistedSidecar?.harnessSocketPath).toBe(socketPath);
+
+      await expect(receivedOperatorMessage.promise).resolves.toContain(
+        '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
+      );
+      expect(sendCount).toBe(2);
+      expect(
+        await conductorTools!.list_open_questions!.execute({ status: 'open' }),
+      ).toMatchObject({
+        content: [
+          {
+            text: expect.stringContaining('"count": 0'),
+          },
+        ],
+      });
+
+      operatorInput!.submit('/close');
+      await expect(sessionPromise).resolves.toMatchObject({
+        openQuestions: [
+          expect.objectContaining({
+            status: 'answered',
+            answeredBy: 'operator',
+            approved: true,
+          }),
+        ],
+      });
+      const finalSidecar = await loadSessionSidecar(sidecarPath);
+      expect(finalSidecar?.lifecycle).toBe('closed');
+      expect(finalSidecar?.harnessSocketPath).toBeUndefined();
+      await expect(stat(socketPath!)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      shutdown.abort();
+      await sessionPromise.catch(() => {});
+    }
   });
 
   it('registers the GitHub watch tool and persists a tool registration', async () => {

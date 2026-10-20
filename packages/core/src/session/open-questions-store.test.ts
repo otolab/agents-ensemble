@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -55,6 +55,12 @@ describe('open questions store', () => {
     expect(await readFile(path, 'utf8')).toContain(
       `version: ${OPEN_QUESTIONS_STORE_VERSION}`,
     );
+    const [fileInfo, directoryInfo] = await Promise.all([
+      stat(path),
+      stat(dirname(path)),
+    ]);
+    expect(fileInfo.mode & 0o777).toBe(0o600);
+    expect(directoryInfo.mode & 0o777).toBe(0o700);
 
     const restored = new OpenQuestionRegistry();
     restored.restore((await loadOpenQuestionsStore(path))!);

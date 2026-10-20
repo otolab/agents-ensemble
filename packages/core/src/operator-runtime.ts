@@ -35,10 +35,20 @@ export {
 export { profilePromptModule } from './prompt/modules/shared/profile-prompt-module.js';
 export { renderCompiledPrompt } from './prompt/render-compiled-prompt.js';
 export {
+  loadSessionSidecar,
   listSessionSidecars,
   type SessionLifecycle,
   type SessionSidecar,
 } from './session/session-sidecar.js';
+export {
+  OPEN_QUESTION_CONTROL_METHODS,
+  OpenQuestionControlRemoteError,
+  sendOpenQuestionControlRequest,
+} from './session/open-question-control.js';
+export type {
+  OpenQuestionControlAnswerResult,
+  OpenQuestionControlListItem,
+} from './session/open-question-control.js';
 export {
   loadSessionStateStore,
   sessionStateStorePath,
