@@ -117,6 +117,8 @@ export interface PiResourceLoaderOptions {
   /** Injectable environment/home for tests; production uses process defaults. */
   env?: NodeJS.ProcessEnv;
   home?: string;
+  /** When false, do not discover, import, or execute configured extensions. */
+  loadExtensions?: boolean;
   /** When false, only `skillPaths` are resolved and `skills` stays empty. */
   loadSkillContents?: boolean;
 }
@@ -209,8 +211,12 @@ export async function loadPiResources(
 ): Promise<PiResources> {
   const roots = resolvePiResourceRoots(options);
   const layers = [
-    await readResourceLayer(roots.agentDir),
-    await readResourceLayer(roots.projectDir),
+    await readResourceLayer(roots.agentDir, {
+      loadExtensions: options.loadExtensions !== false,
+    }),
+    await readResourceLayer(roots.projectDir, {
+      loadExtensions: options.loadExtensions !== false,
+    }),
   ];
 
   let settings: PiSettingsFile = {};
@@ -240,7 +246,10 @@ export async function loadPiResources(
     authLayers: layers.map((layer) => layer.auth),
     modelsLayers: layers.map((layer) => layer.models),
     models: mergeModels(layers.map((layer) => layer.models)),
-    extensionTools: await loadExtensionTools(extensionPaths, options.cwd),
+    extensionTools:
+      options.loadExtensions === false
+        ? []
+        : await loadExtensionTools(extensionPaths, options.cwd),
     extensionPaths,
     skillPaths,
     promptPaths,
@@ -262,7 +271,10 @@ interface ResourceLayer {
   themePaths: string[];
 }
 
-async function readResourceLayer(root: string): Promise<ResourceLayer> {
+async function readResourceLayer(
+  root: string,
+  options: { loadExtensions: boolean },
+): Promise<ResourceLayer> {
   const settings = (await readOptionalJson(join(root, 'settings.json'))) as PiSettingsFile ?? {};
   return {
     settings,
@@ -271,13 +283,15 @@ async function readResourceLayer(root: string): Promise<ResourceLayer> {
       (await readOptionalJson(join(root, 'models.json'))) ?? {},
       join(root, 'models.json'),
     ),
-    extensionPaths: uniquePaths([
-      ...(await discoverDirectoryResources(join(root, 'extensions'), true)),
-      ...configuredResourcePaths(
-        getPiHeadlessSetting(settings, 'extensions', 'resource-path'),
-        root,
-      ),
-    ]),
+    extensionPaths: options.loadExtensions
+      ? uniquePaths([
+          ...(await discoverDirectoryResources(join(root, 'extensions'), true)),
+          ...configuredResourcePaths(
+            getPiHeadlessSetting(settings, 'extensions', 'resource-path'),
+            root,
+          ),
+        ])
+      : [],
     skillPaths: uniquePaths([
       ...(await discoverDirectoryResources(join(root, 'skills'), false)),
       ...configuredResourcePaths(getPiHeadlessSetting(settings, 'skills', 'resource-path'), root),

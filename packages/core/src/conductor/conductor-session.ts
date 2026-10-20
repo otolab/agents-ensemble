@@ -2,7 +2,7 @@ import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import {
   loadEnsembleConfig,
 } from '../config/load-ensemble-config.js';
-import type { ConductorBackend, EnsembleConfig } from '../config/types.js';
+import type { EnsembleConfig } from '../config/types.js';
 import {
   computeMcpConfigDigest,
   resolveMcpServers,
@@ -75,8 +75,7 @@ import type {
 } from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
 import { ConductorToolRegistry } from './conductor-tool.js';
-import { createCursorSdkConductorAgentFactory } from './cursor-sdk-conductor-agent.js';
-import { createPiConductorAgentFactory } from './pi-conductor-agent.js';
+import { createConductorAgentFactory } from './conductor-agent-factory.js';
 import {
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
@@ -1578,15 +1577,6 @@ export async function runConductorSession(
       process.off('SIGTERM', onTeardownSignal);
     }
   }
-}
-
-export function createConductorAgentFactory(
-  backend: ConductorBackend,
-): ConductorAgentFactory {
-  if (backend === 'cursor') {
-    return createCursorSdkConductorAgentFactory();
-  }
-  return createPiConductorAgentFactory();
 }
 
 function createPiKickoffPrompt(issueUrl: string): string {

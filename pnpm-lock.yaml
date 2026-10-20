@@ -29,6 +29,9 @@ importers:
       '@agents-ensemble/core':
         specifier: workspace:*
         version: link:../core
+      '@agents-ensemble/operator-agent':
+        specifier: workspace:*
+        version: link:../operator-agent
       ansi-styles:
         specifier: 6.2.3
         version: 6.2.3
@@ -116,6 +119,25 @@ importers:
       pi-acp:
         specifier: 0.0.33
         version: 0.0.33
+
+  packages/operator-agent:
+    dependencies:
+      '@agents-ensemble/core':
+        specifier: workspace:*
+        version: link:../core
+      '@modular-prompt/core':
+        specifier: 0.3.0
+        version: 0.3.0
+    devDependencies:
+      '@types/node':
+        specifier: 22.18.10
+        version: 22.18.10
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@22.18.10)(jiti@2.7.0)(yaml@2.9.1)
 
 packages:
 

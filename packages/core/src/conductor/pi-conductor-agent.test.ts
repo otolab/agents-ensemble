@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -363,6 +364,83 @@ describe('PiConductorAgent', () => {
 
     expect(mockCreateAgentSession.mock.calls[0]![0].noTools).toBe('builtin');
     await conductor.close();
+  });
+
+  it('does not discover, import, or register configured extensions when disabled', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const extensionsDir = join(projectDir, 'extensions');
+    const configuredImportMarker = join(cwd, 'configured-extension-imported');
+    const configuredFactoryMarker = join(cwd, 'configured-extension-factory-called');
+    const discoveredImportMarker = join(cwd, 'discovered-extension-imported');
+    const discoveredFactoryMarker = join(cwd, 'discovered-extension-factory-called');
+    await mkdir(extensionsDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({
+        defaultProvider: 'anthropic',
+        defaultModel: 'model-1',
+        extensions: ['./configured-extension.mjs'],
+      }),
+    );
+
+    const extensionSource = (importMarker: string, factoryMarker: string) =>
+      [
+        "import { writeFile } from 'node:fs/promises';",
+        `await writeFile(${JSON.stringify(importMarker)}, 'imported');`,
+        'export default async (pi) => {',
+        `  await writeFile(${JSON.stringify(factoryMarker)}, 'called');`,
+        '  pi.registerTool({',
+        "    name: 'project_extension_tool',",
+        "    description: 'Configured project extension tool',",
+        "    parameters: { type: 'object', properties: {} },",
+        "    execute: async () => ({ content: [{ type: 'text', text: 'extension' }] }),",
+        '  });',
+        '};',
+      ].join('\n');
+    await writeFile(
+      join(projectDir, 'configured-extension.mjs'),
+      extensionSource(configuredImportMarker, configuredFactoryMarker),
+    );
+    await writeFile(
+      join(extensionsDir, 'discovered-extension.mjs'),
+      extensionSource(discoveredImportMarker, discoveredFactoryMarker),
+    );
+
+    const operator = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'operator system',
+      builtinTools: false,
+      piExtensions: false,
+      customTools: {
+        list_operator_sessions: {
+          name: 'list_operator_sessions',
+          description: 'Read saved session summaries',
+          inputSchema: { type: 'object', properties: {} },
+          execute: async () => ({
+            content: [{ type: 'text' as const, text: 'sessions' }],
+          }),
+        },
+      },
+    });
+
+    try {
+      const sessionOptions = mockCreateAgentSession.mock.calls[0]![0];
+      expect(sessionOptions.model).toMatchObject({
+        provider: 'anthropic',
+        id: 'model-1',
+      });
+      expect(
+        sessionOptions.customTools?.map((tool: { name: string }) => tool.name),
+      ).toEqual(['list_operator_sessions']);
+      expect(existsSync(configuredImportMarker)).toBe(false);
+      expect(existsSync(configuredFactoryMarker)).toBe(false);
+      expect(existsSync(discoveredImportMarker)).toBe(false);
+      expect(existsSync(discoveredFactoryMarker)).toBe(false);
+    } finally {
+      await operator.close();
+    }
   });
 
   it('shuts down Pi MCP children when closing a resumable session', async () => {

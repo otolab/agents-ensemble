@@ -6,6 +6,7 @@
   "files": [],
   "references": [
     { "path": "./packages/core" },
+    { "path": "./packages/operator-agent" },
     { "path": "./packages/cli" }
   ]
 }
