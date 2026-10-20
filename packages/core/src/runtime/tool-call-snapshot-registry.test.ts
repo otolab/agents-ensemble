@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ToolCallSnapshotRegistry } from './tool-call-snapshot-registry.js';
+import {
+  ToolCallSnapshotRegistry,
+  TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES,
+  TOOL_CALL_SNAPSHOT_HISTORY_MAX_ENTRIES,
+  TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS,
+} from './tool-call-snapshot-registry.js';
 
 describe('ToolCallSnapshotRegistry', () => {
   it('accumulates partial tool_call updates by toolCallId', () => {
@@ -123,5 +128,159 @@ describe('ToolCallSnapshotRegistry', () => {
         },
       },
     ]);
+  });
+
+  it('rebinds persisted scopes to new runtime worker IDs without mixing sessions', () => {
+    const beforeResume = new ToolCallSnapshotRegistry();
+    beforeResume.apply(
+      {
+        workerId: 'old-worker-a',
+        workerName: 'implementer',
+        sessionId: 'acp-session-a',
+      },
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call-reused',
+        kind: 'edit',
+        locations: [{ path: '/repo/a.ts' }],
+      },
+      10_000,
+    );
+    beforeResume.apply(
+      {
+        workerId: 'old-worker-b',
+        workerName: 'reviewer',
+        sessionId: 'acp-session-b',
+      },
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call-reused',
+        kind: 'shell',
+        rawInput: { command: 'echo reviewer' },
+      },
+      11_000,
+    );
+    beforeResume.apply(
+      {
+        workerId: 'old-worker-a',
+        workerName: 'implementer',
+        sessionId: 'acp-session-c',
+      },
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'call-reused',
+        kind: 'read',
+        locations: [{ path: '/repo/c.ts' }],
+      },
+      11_500,
+    );
+
+    const afterResume = new ToolCallSnapshotRegistry();
+    expect(
+      afterResume.restore(
+        beforeResume.snapshot(11_500),
+        new Map([
+          ['implementer', 'new-worker-a'],
+          ['reviewer', 'new-worker-b'],
+        ]),
+        12_000,
+      ),
+    ).toEqual({ restoredCount: 3, skippedCount: 0 });
+
+    expect(afterResume.findAll('call-reused', 12_000)).toEqual([
+      {
+        workerId: 'new-worker-a',
+        workerName: 'implementer',
+        sessionId: 'acp-session-a',
+        snapshot: {
+          toolCallId: 'call-reused',
+          kind: 'edit',
+          locations: [{ path: '/repo/a.ts' }],
+        },
+      },
+      {
+        workerId: 'new-worker-a',
+        workerName: 'implementer',
+        sessionId: 'acp-session-c',
+        snapshot: {
+          toolCallId: 'call-reused',
+          kind: 'read',
+          locations: [{ path: '/repo/c.ts' }],
+        },
+      },
+      {
+        workerId: 'new-worker-b',
+        workerName: 'reviewer',
+        sessionId: 'acp-session-b',
+        snapshot: {
+          toolCallId: 'call-reused',
+          kind: 'shell',
+          rawInput: { command: 'echo reviewer' },
+        },
+      },
+    ]);
+    expect(afterResume.get('call-reused', {
+      workerId: 'new-worker-a',
+      sessionId: 'acp-session-a',
+    }, 12_000)).toMatchObject({ kind: 'edit' });
+    expect(afterResume.get('call-reused', {
+      workerId: 'new-worker-a',
+      sessionId: 'acp-session-c',
+    }, 12_000)).toMatchObject({ kind: 'read' });
+  });
+
+  it('expires old entries and declines a single snapshot larger than the file limit', () => {
+    const registry = new ToolCallSnapshotRegistry();
+    const oldTime = 1_000;
+    registry.apply(
+      { workerId: 'worker-a', workerName: 'implementer', sessionId: 'session-a' },
+      { toolCallId: 'call-expired', kind: 'read' },
+      oldTime,
+    );
+    registry.apply(
+      { workerId: 'worker-a', workerName: 'implementer', sessionId: 'session-a' },
+      {
+        toolCallId: 'call-oversized',
+        rawInput: { value: 'x'.repeat(TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES + 1) },
+      },
+      oldTime + TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS + 1,
+    );
+
+    expect(registry.get('call-expired', {
+      workerId: 'worker-a',
+      sessionId: 'session-a',
+    }, oldTime + TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS + 1)).toBeUndefined();
+    expect(registry.get('call-oversized', {
+      workerId: 'worker-a',
+      sessionId: 'session-a',
+    }, oldTime + TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS + 1)).toBeUndefined();
+  });
+
+  it('evicts the oldest complete snapshot when the entry limit is reached', () => {
+    const registry = new ToolCallSnapshotRegistry();
+    const now = 20_000 + TOOL_CALL_SNAPSHOT_HISTORY_MAX_ENTRIES;
+    for (let index = 0; index <= TOOL_CALL_SNAPSHOT_HISTORY_MAX_ENTRIES; index += 1) {
+      registry.apply(
+        {
+          workerId: 'worker-a',
+          workerName: 'implementer',
+          sessionId: 'session-a',
+        },
+        { toolCallId: `call-${index}`, kind: 'read' },
+        now - TOOL_CALL_SNAPSHOT_HISTORY_MAX_ENTRIES + index,
+      );
+    }
+
+    expect(registry.snapshot(now)).toHaveLength(
+      TOOL_CALL_SNAPSHOT_HISTORY_MAX_ENTRIES,
+    );
+    expect(registry.get('call-0', {
+      workerId: 'worker-a',
+      sessionId: 'session-a',
+    }, now)).toBeUndefined();
+    expect(registry.get(`call-${TOOL_CALL_SNAPSHOT_HISTORY_MAX_ENTRIES}`, {
+      workerId: 'worker-a',
+      sessionId: 'session-a',
+    }, now)).toBeDefined();
   });
 });

@@ -102,6 +102,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0028](0028-authentication-delegation-and-ensemble-auth.md) | 認証の管理方針（worker 移譲・conductor と ensemble auth） | accepted |
 | [0029](0029-lazy-worker-attach.md) | worker ACP lazy attach | accepted |
 | [0030](0030-tty-close-lifecycle.md) | TTY `/close` の再開可能な終了契約 | accepted |
+| [0031](0031-tool-call-snapshot-history.md) | tool-call snapshot 履歴の永続化 | accepted |
 
 ## 追加するとき
 

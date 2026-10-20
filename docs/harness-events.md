@@ -122,9 +122,19 @@ brief:
 operatorSummary: <short operator-facing summary>
 ```
 
-`tool_call` と `tool_call_update` は conductor session 内で worker と ACP `sessionId` ごとに分け、
-各スコープ内で `toolCallId` ごとに累積する。ID は ACP session をまたいで一意とは限らない。
-件数上限は設けず、スナップショットは conductor session の終了まで保持して終了時に破棄する。
+`tool_call` と `tool_call_update` は `(workerId, ACP sessionId, toolCallId)` ごとに累積する。
+ID は ACP session をまたいで一意とは限らない。累積した履歴は、resume sidecar 本体とは別の
+`.ensemble/sessions/{conductorAgentId}.tool-calls` に JSON で原子的に保存する。
+sidecar と別にすることで、履歴ファイルの欠損や破損が conductor / worker session の resume を妨げない。
+
+履歴は最終更新から 30 日で期限切れになり、1 session あたり最大 1,000 件・8 MiB まで保持する。
+上限を超えるときは古い snapshot を単位ごとに削除し、1 件だけでサイズ上限を超える snapshot は保存しない。
+更新時の flush は 100 ms でまとめ、終了時にも最後の flush を行う。予期しないプロセス終了では、
+直近の flush 以降の更新が失われることがある。古い履歴ファイルは session 起動時に削除し、
+snapshot がすべて期限切れになったファイルや、30 日以上残った atomic write 用一時ファイルも削除する。
+
+`workerId` は harness の起動ごとに変わるため、履歴には worker 名も記録する。resume 時は worker 名から
+現在の `workerId` に結び直し、保存時の ACP `sessionId` は維持する。これにより
 permission `brief` は同じ worker / ACP session の snapshot だけを不足項目の補完に使う。
 permission request に session ID がなくスコープを特定できない場合、snapshot からは補完しない。
 
@@ -136,6 +146,13 @@ request に session ID がない場合やスコープが一致しない場合、
 `workerId` / `sessionId` / `toolCall` の組で別々に返すため、permission.pending の worker と session に
 一致する候補を選ぶ。候補を混ぜて返すことはない。permission params と snapshot も混ぜず、
 `get_tool_call` が返すのは後者だけである。
+
+履歴ファイルはローカルに平文で保存され、tool-call の path、command、入力内容などを含む場合がある。
+`.ensemble/` は gitignore 対象で、履歴ファイル自体を Issue / PR や終了 JSON には含めない。
+ただし、permission brief の補完や `get_tool_call` で snapshot を conductor に渡すため、その内容が
+選択中 backend の conductor 会話へ含まれる場合がある。利用者は該当する `.tool-calls` ファイルを削除して
+履歴を早期削除できる。履歴ファイルが読めない場合、
+不正な envelope は破棄し、不正な個別 entry は読み飛ばして warning を出す。履歴を失っても resume は続行する。
 
 `operatorSummary` は conductor が permission の内容を判断し、必要な質問や `ask_human` の
 context を組み立てるための情報である。context は conductor が記述する。

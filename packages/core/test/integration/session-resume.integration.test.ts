@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKCustomTool } from '@cursor/sdk';
+import yaml from 'js-yaml';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
 import {
   SessionLogger,
@@ -36,6 +37,8 @@ import {
   isWorkerCompletedConductorMessage,
 } from './helpers/conductor-session-assertions.js';
 import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
+import { toolCallSnapshotHistoryPath } from '../../src/session/tool-call-snapshot-history.js';
+import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
 
 const RESUME_AGENT_ID = 'agent-resume-test';
 
@@ -236,6 +239,61 @@ describe('session resume integration', () => {
     );
   });
 
+  it('continues resuming when the optional tool-call history is corrupt', async () => {
+    const historyPath = toolCallSnapshotHistoryPath({
+      repoRoot,
+      conductorAgentId: RESUME_AGENT_ID,
+    });
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: RESUME_AGENT_ID,
+      }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: RESUME_AGENT_ID,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        updatedAt: Date.now(),
+      },
+    );
+    await writeFile(historyPath, '{invalid json', 'utf8');
+    mockSend.mockResolvedValue({
+      runId: 'resume-corrupt-history',
+      status: 'finished',
+      result: 'resumed',
+    });
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: RESUME_AGENT_ID,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      sessionLogger,
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(emitted).toContainEqual(
+      expect.objectContaining({
+        type: 'harness.warning',
+        message: expect.stringContaining('history is invalid and was discarded'),
+      }),
+    );
+    await expect(readFile(historyPath, 'utf8')).rejects.toThrow();
+  });
+
   it('dispatches permission.pending from a resumed worker without an initial send', async () => {
     const bridge = await createInProcessAcpBridge(undefined, {
       requestPermissionOnPrompt: true,
@@ -372,6 +430,166 @@ describe('session resume integration', () => {
           event.type === 'harness.teardown.phase' && event.phase === 'workers',
       ),
     ).toBe(true);
+  });
+
+  it('restores tool-call history for permission briefs and lookup after resume', async () => {
+    const toolCallUpdates: Array<Record<string, unknown>> =
+      permissionRequestFixtures.editPriorToolCallUpdates.map((update) => ({
+        ...update,
+      }));
+    const bridge = await createInProcessAcpBridge(undefined, {
+      requestPermissionOnPrompt: true,
+      permissionParams: permissionRequestFixtures.editPermissionIdOnly,
+      toolCallUpdatesBeforePermission: toolCallUpdates,
+    });
+    const worktree = {
+      ...TEST_WORKTREE,
+      path: join(repoRoot, 'worktree'),
+    };
+    let phase: 'initial' | 'resume' = 'initial';
+    let initialWorkerId: string | undefined;
+
+    mockSend.mockImplementation(async (message: string) => {
+      if (message.includes('permission 判断待ち')) {
+        const yamlStart = message.indexOf('```yaml\n');
+        const yamlEnd = message.indexOf('\n```', yamlStart);
+        const pending = yaml.load(
+          message.slice(yamlStart + '```yaml\n'.length, yamlEnd),
+        ) as {
+          id: string;
+          workerId: string;
+          request: { raw: Record<string, unknown> };
+          brief: {
+            toolCallId: string;
+            operation: { kind: string; path?: string; line?: number };
+            missing: string[];
+          };
+        };
+
+        if (phase === 'initial') {
+          initialWorkerId = pending.workerId;
+          expect(pending.brief).toMatchObject({
+            toolCallId: 'call-edit-from-update',
+            operation: {
+              kind: 'edit',
+              path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+              line: 27,
+            },
+            missing: [],
+          });
+          const snapshot = await conductorTools.get_tool_call!.execute({
+            toolCallId: pending.brief.toolCallId,
+          });
+          expect(snapshot.structuredContent).toMatchObject({
+            workerId: pending.workerId,
+            sessionId: 'fake-session-1',
+            toolCall: {
+              toolCallId: 'call-edit-from-update',
+              status: 'in_progress',
+              locations: [
+                {
+                  path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+                  line: 27,
+                },
+              ],
+            },
+          });
+        } else {
+          expect(pending.workerId).not.toBe(initialWorkerId);
+          expect(pending.request.raw.sessionId).toBe('fake-session-1');
+          expect(pending.brief).toMatchObject({
+            toolCallId: 'call-edit-from-update',
+            operation: {
+              kind: 'edit',
+              path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+              line: 27,
+            },
+            missing: [],
+          });
+          const snapshot = await conductorTools.get_tool_call!.execute({
+            toolCallId: pending.brief.toolCallId,
+          });
+          expect(snapshot.structuredContent).toMatchObject({
+            workerId: pending.workerId,
+            sessionId: 'fake-session-1',
+            toolCall: {
+              toolCallId: 'call-edit-from-update',
+              status: 'in_progress',
+              locations: [
+                {
+                  path: '/workspace/agents-ensemble/packages/core/src/example.ts',
+                  line: 27,
+                },
+              ],
+            },
+          });
+        }
+
+        await conductorTools.resolve_permission!.execute({
+          requestId: pending.id,
+          decision: 'allow',
+        });
+      }
+      return {
+        runId: `${phase}-run`,
+        status: 'finished',
+        result: 'ok',
+      };
+    });
+
+    const firstResult = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: PING_PROFILE_BASE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
+      maxTurns: 10,
+      permissionPipeline: new PermissionPipeline({}),
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+      workerWorktree: worktree,
+    });
+    expect(firstResult.stopReason).toBe('completed');
+    expect(initialWorkerId).toBeTruthy();
+
+    const historyPath = toolCallSnapshotHistoryPath({
+      repoRoot,
+      conductorAgentId: RESUME_AGENT_ID,
+    });
+    const savedHistory = JSON.parse(await readFile(historyPath, 'utf8')) as {
+      snapshots: Array<{
+        workerId: string;
+        workerName: string;
+        sessionId: string;
+      }>;
+    };
+    expect(savedHistory.snapshots).toContainEqual(
+      expect.objectContaining({
+        workerId: initialWorkerId,
+        workerName: 'ping-1',
+        sessionId: 'fake-session-1',
+      }),
+    );
+
+    toolCallUpdates.length = 0;
+    phase = 'resume';
+    const resumedResult = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: PING_PROFILE_BASE,
+      defaultAcp: IN_PROCESS_DEFAULT_ACP,
+      resumeAgentId: RESUME_AGENT_ID,
+      maxTurns: 10,
+      permissionPipeline: new PermissionPipeline({}),
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      connectAcp: async () => bridge,
+      ownsWorkerAcpConnections: false,
+      workerWorktree: worktree,
+    });
+
+    expect(resumedResult.stopReason).toBe('completed');
   });
 
   it('restores worker session/load with custom workspace acpCwd on resume', async () => {

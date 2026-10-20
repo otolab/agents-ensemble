@@ -237,6 +237,10 @@ Connection stalled が自動再接続後も続く場合は `/reconnect` を試�
 
 sidecar には conductor agent ID、worker ACP session ID / cwd、profile、未回答 open question、GitHub monitor cursor / pending update などを保存します。worktree path は保存せず、同じ Issue の `issueUrl` と `repoRoot` から再導出します。`--continue` は既存 conductor ID を使い、保存済み worker ACP session ID / cwd が整合すれば `session/load` します。保存 session を load できない場合は新しい ACP session と bootstrap prompt にフォールバックし、以前の worker transcript は復元されません。
 
+`tool_call` / `tool_call_update` から累積した snapshot は、resume sidecar と別の `.ensemble/sessions/{conductorAgentId}.tool-calls` に保存し、`--continue` / `--resume` 後の permission brief と `get_tool_call` で再利用します。履歴が無い旧 session、読めないファイル、不正な entry は履歴なしとして扱うため、tool-call 履歴の問題だけで session resume が失敗することはありません。履歴は最終更新から 30 日、最大 1,000 件かつ 8 MiB まで保持し、上限時は古い snapshot を削除します。1 件で上限を超える snapshot は保存しません。終了時に flush しますが、予期しないプロセス終了では最後の flush 以降が失われる場合があります。
+
+履歴ファイルはローカルに平文で置かれ、path、command、tool input などを含む可能性があります。`.ensemble/` は gitignore 対象で、ファイル自体は Issue / PR や終了 JSON に含めませんが、再開後に permission brief や `get_tool_call` で conductor へ渡した内容は、選択中 backend の会話に含まれる場合があります。履歴を早期削除するには対象の `.tool-calls` ファイルを削除してください。
+
 GitHub update は conductor send が `finished` で完了した後に限って outbox から ack します。`/close` と send 完了が競合すると、send が完了しても close 中は ack せず、`--continue` 後に再配送します。ack 後に cursor を sidecar へ flush する前の crash でも重複することがあり、配送は at-least-once です。sidecar flush は best effort で、失敗時は warning を表示して終了を続けます。直近の更新が残らず、以前の sidecar から再開するか、有効な sidecar がなければ再開できない場合があります。in-flight conductor send と teardown で deny した permission は保存・再開しません（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0017](adr/0017-conductor-send-lifecycle-events.md)）。
 
 ### `/exit` の即時フィードバック（#170）
