@@ -103,20 +103,18 @@
 
 ### 2.4 TTY 終了サマリ例
 
-`sessionUsage` があるときは、取得・記録できた usage の input / output tokens を表示する。合計には worker の成功応答から推定した値が含まれる場合があり、失敗などで usage round が残らなかった消費分は含まれない。cache rate と cost / compaction は取得できる項目だけ表示する。
+`sessionUsage` があるときは、agent ごとに input / output tokens と、その agent が報告した cache 値を同じ行に表示し、最後に `totals.tokens` の input / output だけを合計行として表示する。cache の合計行は出さない。worker の ACP usage がない完了ラウンドは応答文からの推定を行末の `推定` で示す。失敗などで usage round が残らなかった消費分は含まれないが、TTY に脚注は出さない。cache rate は取得できる項目だけ表示し、式は [token-usage-semantics.md §3](token-usage-semantics.md#3-harness-集計の読み方) のとおり。cost / compaction も取得できる項目だけ表示する。
 
 ```text
 セッション終了 (completed)
   経過時間: 2分15秒
   conductor ターン: 3
   worker ラウンド: 3 完了 / 0 失敗
-  トークン（取得・記録済み usage）:
-    取得・記録済み合計: input 3k / output 920
-    conductor: input 2k / output 600
-    worker implementer: input 500 / output 120
-    worker reviewer: input 300 / output 200
-    worker は ACP が usage を返さないラウンドで応答文からの推定値を含む場合があります。
-  キャッシュヒット率: 全体 21.7% (read 500, write 20) / conductor 20% (read 400, write 20) / worker implementer 33.3% (read 100, write 0)
+  usage（記録済み）:
+    conductor: 新規 input 2k · output 600 · cache read 400 · cache write 20 · hit 20%
+    worker implementer: 新規 input 500 · output 120 · cache read 100 · cache write 0 · hit 33.3% · 推定
+    worker reviewer: input 300 · output 200
+    合計: input 3k · output 920
   コンテキスト: 1% (100,000 上限)
   課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)
   コンテキスト圧縮: 2 回
@@ -132,10 +130,9 @@ worker がモデル要求後に切断され、token usage が記録されない�
 セッション終了 (completed)
   conductor ターン: 1
   worker ラウンド: 0 完了 / 1 失敗
-  トークン（取得・記録済み usage）:
-    取得・記録済み合計: input 1k / output 100
-    conductor: input 1k / output 100
-    失敗などで usage が未記録の消費分は含まれません。
+  usage（記録済み）:
+    conductor: input 1k · output 100
+    合計: input 1k · output 100
   課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)
   未回答 open question: 0
   agentId: agent-1

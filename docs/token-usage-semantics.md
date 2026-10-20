@@ -64,11 +64,11 @@ cost や usage を継続的に監視する場合の参考:
 
 直近ラウンドの `get_usage` は、そのラウンドの `usage.source` と token counters を返します。`get_session_usage` と終了 JSON の `sessionUsage` はセッション集計で、source を含むラウンド詳細は `latestRound` だけです。各 tool / 出力の形は [session-metrics.md](session-metrics.md) を参照してください。
 
-## 6. TTY 終了サマリでの現行表示
+## 6. TTY 終了サマリの表示
 
-TTY 終了サマリは取得・記録できた usage の input / output を合計と agent 別に表示します。worker の ACP usage がない正常完了ラウンドはテキストからの推定値を含むことがあり、usage が記録されなかった失敗分は含みません。
+TTY 終了サマリは、取得・記録できた usage を agent ごとに一行で表示し、行末に `totals.tokens` 由来の input / output 合計を出します。合計行に cache counters は含めません。worker に ACP usage がない完了ラウンドの推定値は、その worker 行に `推定` と付けます。usage が記録されなかった失敗分は合計に含まれません。`tokenScope` の意味は JSON / `get_session_usage` で確認できます。
 
-cache hit rate は算出できた scope について表示します。全体の cache stats は cache counter を報告したラウンドだけを集計するため、cache 値のない agent を含まない場合があります。「全体」の表示が全 agent の cache を網羅するとは限りません。rate の計算範囲は §3 を参照してください。
+cache read / write / hit rate は、その値を報告した agent の行だけに表示します。cache の全体行はありません。cache 値がある agent の input は `新規 input` と表示しますが、値は backend が報告した `inputTokens` のままで、cache counters を差し引いて再計算するものではありません。各 provider の input と cache の計上範囲、および hit rate の式は §3 を参照してください。
 
 課金行は取得できた conductor の実課金だけを示し、worker 分は含みません。課金が取得できない場合は行を表示しません。
 
