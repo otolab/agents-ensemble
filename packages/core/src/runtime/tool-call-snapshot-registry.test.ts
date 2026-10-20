@@ -229,6 +229,45 @@ describe('ToolCallSnapshotRegistry', () => {
     }, 12_000)).toMatchObject({ kind: 'read' });
   });
 
+  it('skips future-dated history while restoring valid entries', () => {
+    const registry = new ToolCallSnapshotRegistry();
+    const now = 50_000;
+    const restored = registry.restore(
+      [
+        {
+          workerId: 'old-worker',
+          workerName: 'implementer',
+          sessionId: 'acp-session',
+          updatedAt: now - 1_000,
+          snapshot: { toolCallId: 'call-valid', kind: 'edit' },
+        },
+        {
+          workerId: 'old-worker',
+          workerName: 'implementer',
+          sessionId: 'acp-session',
+          updatedAt: now + 2 * TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS,
+          snapshot: {
+            toolCallId: 'call-future',
+            kind: 'shell',
+            rawInput: { command: 'private command' },
+          },
+        },
+      ],
+      new Map([['implementer', 'new-worker']]),
+      now,
+    );
+
+    expect(restored).toEqual({ restoredCount: 1, skippedCount: 1 });
+    expect(registry.get('call-valid', {
+      workerId: 'new-worker',
+      sessionId: 'acp-session',
+    }, now)).toMatchObject({ kind: 'edit' });
+    expect(registry.get('call-future', {
+      workerId: 'new-worker',
+      sessionId: 'acp-session',
+    }, now)).toBeUndefined();
+  });
+
   it('expires old entries and declines a single snapshot larger than the file limit', () => {
     const registry = new ToolCallSnapshotRegistry();
     const oldTime = 1_000;

@@ -233,6 +233,7 @@ export class ToolCallSnapshotRegistry {
         !workerId ||
         !Number.isFinite(entry.updatedAt) ||
         entry.updatedAt <= 0 ||
+        entry.updatedAt > now ||
         entry.updatedAt <= now - TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS ||
         !isSnapshot(entry.snapshot) ||
         entry.snapshot.toolCallId.trim() === '' ||

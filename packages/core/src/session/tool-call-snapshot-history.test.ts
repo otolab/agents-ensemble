@@ -109,6 +109,36 @@ describe('tool-call snapshot history', () => {
     });
   });
 
+  it('skips future-dated entries and marks the history for rewrite', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    const path = toolCallSnapshotHistoryPath({
+      repoRoot,
+      conductorAgentId: 'agent-future-entry',
+    });
+    const now = Date.now();
+    const validEntry = { ...ENTRY, updatedAt: now - 1_000 };
+    const futureEntry = {
+      ...ENTRY,
+      updatedAt: now + 1,
+      snapshot: {
+        ...ENTRY.snapshot,
+        toolCallId: 'call-future',
+        rawInput: { command: 'private command' },
+      },
+    };
+    await saveToolCallSnapshotHistory(path, [validEntry, futureEntry]);
+
+    await expect(loadToolCallSnapshotHistory({
+      repoRoot,
+      conductorAgentId: 'agent-future-entry',
+      now,
+    })).resolves.toMatchObject({
+      entries: [validEntry],
+      needsRewrite: true,
+      warning: expect.stringContaining('1 invalid entry'),
+    });
+  });
+
   it('discards legacy history formats without failing the session', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
     const path = toolCallSnapshotHistoryPath({

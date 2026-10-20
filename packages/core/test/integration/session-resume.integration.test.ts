@@ -39,6 +39,7 @@ import {
 } from './helpers/conductor-session-assertions.js';
 import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
 import { toolCallSnapshotHistoryPath } from '../../src/session/tool-call-snapshot-history.js';
+import { TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS } from '../../src/runtime/tool-call-snapshot-registry.js';
 import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
 
 const RESUME_AGENT_ID = 'agent-resume-test';
@@ -536,6 +537,13 @@ describe('session resume integration', () => {
               ],
             },
           });
+          const futureSnapshot = await conductorTools.get_tool_call!.execute({
+            toolCallId: 'call-future-updated-at',
+          });
+          expect(futureSnapshot.structuredContent).toMatchObject({
+            found: false,
+            toolCallId: 'call-future-updated-at',
+          });
         }
 
         await conductorTools.resolve_permission!.execute({
@@ -607,6 +615,24 @@ describe('session resume integration', () => {
         sessionId: 'fake-session-1',
       }),
     );
+    const futureEntry = {
+      ...savedHistory.snapshots[0]!,
+      updatedAt: Date.now() + 2 * TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS,
+      snapshot: {
+        toolCallId: 'call-future-updated-at',
+        kind: 'shell',
+        rawInput: { command: 'private future command' },
+        locations: [{ path: '/private/future/path' }],
+      },
+    };
+    await writeFile(
+      historyPath,
+      JSON.stringify({
+        ...savedHistory,
+        snapshots: [...savedHistory.snapshots, futureEntry],
+      }),
+      'utf8',
+    );
 
     toolCallUpdates.length = 0;
     phase = 'resume';
@@ -631,6 +657,27 @@ describe('session resume integration', () => {
       expect.any(String),
       expect.any(Function),
     );
+    const rewrittenHistory = JSON.parse(await readFile(historyPath, 'utf8')) as {
+      snapshots: Array<{
+        snapshot: { toolCallId: string };
+      }>;
+    };
+    expect(rewrittenHistory.snapshots).toContainEqual(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          toolCallId: 'call-edit-from-update',
+        }),
+      }),
+    );
+    expect(rewrittenHistory.snapshots).not.toContainEqual(
+      expect.objectContaining({
+        snapshot: expect.objectContaining({
+          toolCallId: 'call-future-updated-at',
+        }),
+      }),
+    );
+    expect(JSON.stringify(rewrittenHistory)).not.toContain('private future command');
+    expect(JSON.stringify(rewrittenHistory)).not.toContain('/private/future/path');
   });
 
   it('restores worker session/load with custom workspace acpCwd on resume', async () => {

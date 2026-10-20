@@ -112,10 +112,11 @@ export async function loadToolCallSnapshotHistory(input: {
     };
   }
 
+  const now = input.now ?? Date.now();
   const entries: StoredToolCallSnapshot[] = [];
   let invalidCount = 0;
   for (const candidate of value.snapshots) {
-    const entry = parseHistoryEntry(candidate);
+    const entry = parseHistoryEntry(candidate, now);
     if (!entry) {
       invalidCount += 1;
       continue;
@@ -133,7 +134,6 @@ export async function loadToolCallSnapshotHistory(input: {
     needsRewrite = true;
   }
 
-  const now = input.now ?? Date.now();
   const retained = entries.filter(
     (entry) =>
       entry.updatedAt >
@@ -223,7 +223,10 @@ export async function pruneExpiredToolCallSnapshotHistoryFiles(
   return { removedCount, failedCount };
 }
 
-function parseHistoryEntry(value: unknown): StoredToolCallSnapshot | undefined {
+function parseHistoryEntry(
+  value: unknown,
+  now: number,
+): StoredToolCallSnapshot | undefined {
   if (!isRecord(value)) return undefined;
   const snapshot = value.snapshot;
   if (
@@ -236,6 +239,7 @@ function parseHistoryEntry(value: unknown): StoredToolCallSnapshot | undefined {
     typeof value.updatedAt !== 'number' ||
     !Number.isFinite(value.updatedAt) ||
     value.updatedAt <= 0 ||
+    value.updatedAt > now ||
     !isRecord(snapshot) ||
     typeof snapshot.toolCallId !== 'string' ||
     snapshot.toolCallId.trim() === ''
