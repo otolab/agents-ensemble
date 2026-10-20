@@ -155,7 +155,7 @@ Emacs 風を **自前実装** する場合の最小ループ:
 | **ライブラリに委譲** | マルチライン入力が主 | ◎ `react-ink-textarea`（フォーク）が Emacs 風を内蔵 |
 | **薄いラッパー** | ライブラリ + IME 同期だけ自前 | 現状 `OperatorTextArea` + `cursorStart` |
 | **フル自前** | 特殊レイアウト・キーマップ | 非推奨（二重実装・IME リスク） |
-| **Readline 直呼び** | 1 行・同期 REPL のみ | 非 TTY 経路のみ |
+| **Readline 直呼び** | 1 行・同期 REPL のみ | TTY の readline 経路（Ink TUI とは別系統） |
 
 ### 5.2 テスト観点
 
