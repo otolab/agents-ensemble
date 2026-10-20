@@ -105,7 +105,8 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0031](0031-operator-agent-layer.md) | operator 層と operator-agent（user – operator – conductor – workers） | accepted |
 | [0032](0032-tool-call-snapshot-history.md) | tool-call snapshot 履歴の永続化 | accepted |
 | [0033](0033-live-open-question-control-uds.md) | 稼働中 Open Question の UDS control API | accepted |
-| [0034](0034-bounded-open-question-dispatch-drain.md) | 稼働中 Open Question の bounded dispatch drain | accepted |
+| [0034](0034-bounded-open-question-dispatch-drain.md) | 稼働中 Open Question の bounded dispatch drain | superseded → [0035](0035-open-question-shutdown-commit-order.md) |
+| [0035](0035-open-question-shutdown-commit-order.md) | Open Question の shutdown retry 抑止と永続化 commit 順序 | accepted |
 
 ## 追加するとき
 

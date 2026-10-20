@@ -11,11 +11,12 @@ import type { OperatorMessageEvent } from './session/session-event.js';
 export interface SubmitOperatorInputInput {
   message: string;
   targetOpenQuestionId?: string;
+  answeredAt?: number;
   conductorTurn: number;
   openQuestions: OpenQuestionRegistry;
   escalations: EscalationRecord[];
   eventQueue: SessionEventQueue;
-  sessionLogger: SessionLogger;
+  sessionLogger: Pick<SessionLogger, 'emit'>;
   onEscalated?: (record: EscalationRecord) => void;
   onOperatorMessageQueued?: (event: OperatorMessageEvent) => void;
 }
@@ -29,6 +30,7 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
 
   const applied = applyOperatorMessage(input.openQuestions, trimmed, {
     targetQuestionId: input.targetOpenQuestionId,
+    answeredAt: input.answeredAt,
   });
   const text =
     applied.answered.length > 0

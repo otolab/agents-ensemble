@@ -4,6 +4,7 @@ import { parseChoiceSelection, parseYesNoAssent } from './yes-no-assent.js';
 export interface RecordOpenQuestionAnswerInput {
   id: string;
   answer: string;
+  answeredAt?: number;
   selectedChoice?: string;
   /** @deprecated Approval is derived from assent for permission-linked yes_no questions. */
   approved?: boolean;
@@ -33,6 +34,7 @@ export function recordOpenQuestionAnswer(
       : undefined;
   return registry.answer(input.id, {
     answer: input.answer,
+    answeredAt: input.answeredAt,
     assent,
     selectedChoice,
     answeredBy: input.answeredBy,

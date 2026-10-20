@@ -1,6 +1,6 @@
 # ADR 0034: 稼働中 Open Question の bounded dispatch drain
 
-- Status: accepted
+- Status: superseded by [0035](0035-open-question-shutdown-commit-order.md)
 - Date: 2026-10-20
 - Related: [ADR 0033](0033-live-open-question-control-uds.md), [Issue #481](https://github.com/otolab/agents-ensemble/issues/481)
 

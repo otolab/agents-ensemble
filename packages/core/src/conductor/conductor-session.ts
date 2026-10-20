@@ -13,7 +13,10 @@ import { createAskHumanTool } from '../escalation/ask-human-tool.js';
 import { createOpenQuestionListTools } from '../escalation/open-question-list-tools.js';
 import { openQuestionToEscalationRecord } from '../escalation/open-question-to-escalation.js';
 import type { OpenQuestion } from '../escalation/open-question.js';
-import { OpenQuestionRegistry } from '../escalation/open-question.js';
+import {
+  OpenQuestionRegistry,
+  type OpenQuestionRegistrySnapshot,
+} from '../escalation/open-question.js';
 import type { EscalationRecord } from '../escalation/human-inquiry.js';
 import { deny } from '../permission/permission-broker.js';
 import type { PermissionPolicyRules } from '../permission/permission-policy.js';
@@ -474,6 +477,7 @@ export async function runConductorSession(
     : undefined;
   const shutdownSignal =
     options.shutdownSignal ?? shutdownController!.signal;
+  const shutdownIntentController = new AbortController();
   const operatorTerminationController = new AbortController();
   const drainedShutdownController = new AbortController();
   const driverShutdownSignal = AbortSignal.any([
@@ -526,8 +530,10 @@ export async function runConductorSession(
       controller.abort();
     });
   };
-  const onShutdownSignal = () =>
+  const onShutdownSignal = () => {
+    shutdownIntentController.abort();
     abortAfterOpenQuestionDrain(drainedShutdownController);
+  };
   shutdownSignal.addEventListener('abort', onShutdownSignal, { once: true });
   if (shutdownSignal.aborted) onShutdownSignal();
   let unregisterProcessSignalHandlers = () => {};
@@ -1047,6 +1053,7 @@ export async function runConductorSession(
   const sendReconnect = {
     conductorAgentFactory,
     conductorOptions,
+    retrySuppressionSignal: shutdownIntentController.signal,
     onAuthReconnectAttempt: ({ agentId }: { agentId: string }) => {
       sessionLogger.emit({
         type: 'conductor.auth.reconnect',
@@ -1079,59 +1086,90 @@ export async function runConductorSession(
   };
 
   let sidecarFlushQueue: Promise<void> = Promise.resolve();
-  flushSidecar = (lifecycle): Promise<void> => {
-    const nextFlush = sidecarFlushQueue.then(async () => {
-      const workers: SessionSidecar['workers'] = {};
-      for (const [name, worker] of workerSessions) {
-        workers[name] = {
-          acpSessionId: worker.acpSessionId,
-          ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
-          ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
-        };
-      }
-      const snapshot = openQuestions.snapshot();
-      const sidecar: SessionSidecar = {
-        version: SESSION_SIDECAR_VERSION,
-        conductorAgentId: conductorHandle.conductor.agentId,
-        conductorBackend,
-        lazyWorkers: activeLazyWorkers,
-        ...(harnessSocketPath ? { harnessSocketPath } : {}),
-        issueUrl: options.issueUrl,
-        repoRoot: options.repoRoot,
-        profile: structuredClone(activeProfile),
-        ...(options.profilePath ? { profilePath: options.profilePath } : {}),
-        openQuestions: snapshot.openQuestions,
-        sequence: snapshot.sequence,
-        workers,
-        mcpConfigDigest,
-        ...(lifecycle ? { lifecycle } : {}),
-        ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
-        updatedAt: Date.now(),
-      };
-      await saveOpenQuestionsStore(
-        openQuestionsStorePath({
-          repoRoot: options.repoRoot,
-          conductorAgentId: conductorHandle.conductor.agentId,
-        }),
-        snapshot,
-      );
-      await saveSessionSidecar(
-        sessionSidecarPath({
-          repoRoot: options.repoRoot,
-          conductorAgentId: conductorHandle.conductor.agentId,
-        }),
-        sidecar,
-      );
-    });
-    sidecarFlushQueue = nextFlush.catch(() => {});
-    return nextFlush;
+  let terminalLifecycle: SessionLifecycle | undefined;
+  const enqueueSidecarWrite = (
+    write: () => Promise<void>,
+  ): Promise<void> => {
+    const nextWrite = sidecarFlushQueue.then(write);
+    sidecarFlushQueue = nextWrite.catch(() => {});
+    return nextWrite;
   };
+  const createSessionSidecar = (
+    snapshot: OpenQuestionRegistrySnapshot,
+    lifecycle?: SessionLifecycle,
+  ): SessionSidecar => {
+    const workers: SessionSidecar['workers'] = {};
+    for (const [name, worker] of workerSessions) {
+      workers[name] = {
+        acpSessionId: worker.acpSessionId,
+        ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
+        ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
+      };
+    }
+    return {
+      version: SESSION_SIDECAR_VERSION,
+      conductorAgentId: conductorHandle.conductor.agentId,
+      conductorBackend,
+      lazyWorkers: activeLazyWorkers,
+      ...(harnessSocketPath ? { harnessSocketPath } : {}),
+      issueUrl: options.issueUrl,
+      repoRoot: options.repoRoot,
+      profile: structuredClone(activeProfile),
+      ...(options.profilePath ? { profilePath: options.profilePath } : {}),
+      openQuestions: snapshot.openQuestions,
+      sequence: snapshot.sequence,
+      workers,
+      mcpConfigDigest,
+      ...((terminalLifecycle ?? lifecycle)
+        ? { lifecycle: terminalLifecycle ?? lifecycle }
+        : {}),
+      ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
+      updatedAt: Date.now(),
+    };
+  };
+  const persistOpenQuestionsSnapshot = async (
+    snapshot: OpenQuestionRegistrySnapshot,
+  ): Promise<void> => {
+    await saveOpenQuestionsStore(
+      openQuestionsStorePath({
+        repoRoot: options.repoRoot,
+        conductorAgentId: conductorHandle.conductor.agentId,
+      }),
+      snapshot,
+    );
+  };
+  const persistSessionSidecar = async (
+    snapshot: OpenQuestionRegistrySnapshot,
+    lifecycle?: SessionLifecycle,
+  ): Promise<void> => {
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot: options.repoRoot,
+        conductorAgentId: conductorHandle.conductor.agentId,
+      }),
+      createSessionSidecar(snapshot, lifecycle),
+    );
+  };
+  flushSidecar = (lifecycle): Promise<void> =>
+    enqueueSidecarWrite(async () => {
+      const snapshot = openQuestions.snapshot();
+      await persistOpenQuestionsSnapshot(snapshot);
+      await persistSessionSidecar(snapshot, lifecycle);
+    });
   const reportSidecarFlushFailure = (error: unknown): void => {
     const detail = error instanceof Error ? error.message : String(error);
     sessionLogger.emit({
       type: 'harness.warning',
       message:
         `Open Question YAML / session sidecar を保存できませんでした。最新状態から再開できず、直前に保存された状態からの再開になる場合があります。 error=${detail}`,
+    });
+  };
+  const reportSessionSidecarWriteFailure = (error: unknown): void => {
+    const detail = error instanceof Error ? error.message : String(error);
+    sessionLogger.emit({
+      type: 'harness.warning',
+      message:
+        `Session sidecar の更新に失敗しました。Open Question YAML の保存は完了しており、sidecar は後続 flush で同期します。 error=${detail}`,
     });
   };
   scheduleSidecarFlush = () => {
@@ -1320,6 +1358,7 @@ export async function runConductorSession(
           sessionLogger.emit({ type: 'session.operator_exit' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedExit = true;
+          shutdownIntentController.abort();
           abortAfterOpenQuestionDrain(operatorTerminationController);
           return false;
         }
@@ -1327,6 +1366,7 @@ export async function runConductorSession(
           sessionLogger.emit({ type: 'session.operator_close' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedClose = true;
+          shutdownIntentController.abort();
           abortAfterOpenQuestionDrain(operatorTerminationController);
           return false;
         }
@@ -1378,40 +1418,106 @@ export async function runConductorSession(
             'Open Question is not available.',
           );
         }
+        let accepted = false;
+        let sidecarWriteError: unknown;
         let dispatchReceipt: Promise<void> | undefined;
-        const accepted = submitOperatorInput({
-          message: answer,
-          targetOpenQuestionId: questionId,
-          conductorTurn: sendCount + 1,
-          openQuestions,
-          escalations,
-          eventQueue,
-          sessionLogger,
-          onEscalated: (record) => options.onEscalated?.(record),
-          onOperatorMessageQueued: (event) => {
-            let receipt!: {
-              resolve: () => void;
-              reject: (error: Error) => void;
-            };
-            dispatchReceipt = new Promise<void>((resolve, reject) => {
-              receipt = {
-                resolve: () => resolve(),
-                reject: (error) => reject(error),
+        let answered: OpenQuestion | undefined;
+        const escalatedRecords: EscalationRecord[] = [];
+
+        await enqueueSidecarWrite(async () => {
+          const stagedOpenQuestions = new OpenQuestionRegistry();
+          stagedOpenQuestions.restore(openQuestions.snapshot());
+          const stagedAccepted = submitOperatorInput({
+            message: answer,
+            targetOpenQuestionId: questionId,
+            conductorTurn: sendCount + 1,
+            openQuestions: stagedOpenQuestions,
+            escalations: [],
+            eventQueue: new SessionEventQueue(),
+            sessionLogger: { emit: () => {} },
+          });
+          const stagedAnswer = stagedOpenQuestions.get(questionId);
+          if (
+            !stagedAccepted ||
+            !stagedAnswer ||
+            stagedAnswer.status !== 'answered'
+          ) {
+            return;
+          }
+
+          // The Open Questions YAML is the durable commit point. Do not expose
+          // the answer in the live Registry or event queue until this succeeds.
+          await persistOpenQuestionsSnapshot(stagedOpenQuestions.snapshot());
+
+          // Another answer path may have won while the atomic YAML write was
+          // in flight. Restore the current Registry snapshot before rejecting.
+          if (openQuestions.get(questionId)?.status !== 'open') {
+            await persistOpenQuestionsSnapshot(openQuestions.snapshot());
+            return;
+          }
+
+          accepted = submitOperatorInput({
+            message: answer,
+            targetOpenQuestionId: questionId,
+            answeredAt: stagedAnswer.answeredAt,
+            conductorTurn: sendCount + 1,
+            openQuestions,
+            escalations,
+            eventQueue,
+            sessionLogger,
+            onEscalated: (record) => escalatedRecords.push(record),
+            onOperatorMessageQueued: (event) => {
+              let receipt!: {
+                resolve: () => void;
+                reject: (error: Error) => void;
               };
-              openQuestionDispatchReceipts.set(event, receipt);
-              pendingOpenQuestionDispatchReceipts.add(receipt);
-            });
-            void dispatchReceipt.catch(() => {});
-          },
+              dispatchReceipt = new Promise<void>((resolve, reject) => {
+                receipt = {
+                  resolve: () => resolve(),
+                  reject: (error) => reject(error),
+                };
+                openQuestionDispatchReceipts.set(event, receipt);
+                pendingOpenQuestionDispatchReceipts.add(receipt);
+              });
+              void dispatchReceipt.catch(() => {});
+            },
+          });
+          answered = openQuestions.get(questionId);
+          if (!accepted || !answered || answered.status !== 'answered') {
+            await persistOpenQuestionsSnapshot(openQuestions.snapshot());
+            accepted = false;
+            return;
+          }
+
+          try {
+            await persistSessionSidecar(openQuestions.snapshot());
+          } catch (error) {
+            // YAML is authoritative and is already durable. Keep the accepted
+            // answer/notification, report the mirror failure, then repair it.
+            sidecarWriteError = error;
+          }
         });
-        const answered = openQuestions.get(questionId);
         if (!accepted || !answered || answered.status !== 'answered') {
           throw new OpenQuestionControlOperationError(
             -32004,
             'Open Question could not be answered.',
           );
         }
-        await flushSidecar();
+        for (const record of escalatedRecords) {
+          try {
+            options.onEscalated?.(record);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            sessionLogger.emit({
+              type: 'harness.warning',
+              message: `Open Question observer callback failed: ${detail}`,
+            });
+          }
+        }
+        if (sidecarWriteError !== undefined) {
+          reportSessionSidecarWriteFailure(sidecarWriteError);
+          scheduleSidecarFlush();
+        }
         if (!dispatchReceipt) {
           throw new OpenQuestionControlOperationError(
             -32603,
@@ -1626,6 +1732,14 @@ export async function runConductorSession(
       });
     }
   } finally {
+    const lifecycle: SessionLifecycle = operatorRequestedClose
+      ? 'closed'
+      : operatorRequestedExit
+        ? 'exited'
+        : shutdownSignal.aborted
+          ? 'interrupted'
+          : 'unknown';
+    terminalLifecycle = lifecycle;
     teardownStarted = true;
     for (const receipt of pendingOpenQuestionDispatchReceipts) {
       receipt.reject(
@@ -1812,13 +1926,6 @@ export async function runConductorSession(
         await emitWorktreeRemoval(sessionLogger, options.repoRoot, workerWorktree);
       }
     } finally {
-      const lifecycle: SessionLifecycle = operatorRequestedClose
-        ? 'closed'
-        : operatorRequestedExit
-          ? 'exited'
-          : shutdownSignal.aborted
-            ? 'interrupted'
-            : 'unknown';
       try {
         emitTeardownPhase('flushSidecar');
         await sessionStateWriteQueue;

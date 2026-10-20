@@ -39,6 +39,8 @@ export interface ConductorSendReconnectOptions
   conductorOptions: ConductorAgentCreateOptions;
   conductorAgentFactory: ConductorAgentFactory;
   signal?: AbortSignal;
+  /** Prevent reconnect/retry as soon as session shutdown is requested. */
+  retrySuppressionSignal?: AbortSignal;
   /** 後方互換用。指定時は auth/transport 両方の attempt に使う。 */
   onReconnectAttempt?: (input: { agentId: string }) => void;
   onAuthReconnectAttempt?: (input: { agentId: string }) => void;
@@ -128,7 +130,11 @@ export async function sendConductorWithReconnect(
     : isConductorSendTransportError(result)
       ? 'transport'
       : undefined;
-  if (!reconnectReason || options.signal?.aborted) {
+  if (
+    !reconnectReason ||
+    options.signal?.aborted ||
+    options.retrySuppressionSignal?.aborted
+  ) {
     return result;
   }
 
@@ -143,7 +149,10 @@ export async function sendConductorWithReconnect(
     return result;
   }
 
-  if (options.signal?.aborted) {
+  if (
+    options.signal?.aborted ||
+    options.retrySuppressionSignal?.aborted
+  ) {
     return result;
   }
 

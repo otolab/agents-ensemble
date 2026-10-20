@@ -52,7 +52,7 @@ type OperatorInputBinding = (
 
 ### 稼働中 harness の Open Question control
 
-`ensemble issue` はセッションごとの UDS listener を持ち、sidecar の `harnessSocketPath` から operator-agent が接続できます。`list_live_open_questions` は稼働中 Registry の未回答一覧を読み、`answer_live_open_question` は質問 ID と operator が選んだ回答を渡します。harness は `submitOperatorInput` / `recordOpenQuestionAnswer` を通して既存の回答・permission invariants を適用し、Registry を更新して `operator.message` 相当を event queue に積みます。回答 handler は YAML と JSON sidecar を flush した後、conductor send の receipt を待ちます。通常は保存と send 完了の両方を確認して成功を返します。終了要求時は listener を閉じ、受理済み request の drain を最大 5 秒待ってから driver を停止します。
+`ensemble issue` はセッションごとの UDS listener を持ち、sidecar の `harnessSocketPath` から operator-agent が接続できます。`list_live_open_questions` は稼働中 Registry の未回答一覧を読み、`answer_live_open_question` は質問 ID と operator が選んだ回答を渡します。harness は既存の `submitOperatorInput` / `recordOpenQuestionAnswer` で回答・permission invariants を適用した候補を作り、Open Questions YAML の保存成功後に live Registry を更新して `operator.message` 相当を event queue に積みます。YAML 保存に失敗した場合は live answer と queue を変更せず、client には汎用 JSON-RPC error `-32603` を返します。YAML は回答の永続化 commit point で、JSON sidecar は mirror です。sidecar 更新だけが失敗した場合は warning を出して後続 flush を試み、保存済み YAML と dispatch は取り消しません。通常の成功応答は YAML 保存と conductor send の receipt 完了を確認して返します。終了要求時は listener を閉じ、受理済み request の drain を最大 5 秒待ってから driver を停止します。shutdown intent は drain 完了を待たずに立ち、grace period 中の transport error でも reconnect / 同一 message retry を抑止します。
 
 終了時に drain が 5 秒を超えると driver を abort します。回答が保存済みでも conductor send の完了を確認できなければ成功扱いにせず、JSON-RPC error `-32005` として次の data を返します。
 
@@ -60,7 +60,7 @@ type OperatorInputBinding = (
 {"outcome":"unknown","answerStatus":"recorded","dispatchStatus":"unknown"}
 ```
 
-この場合、回答は Registry / YAML / sidecar に記録済みですが、conductor への到達は未確認です。再送すると回答済み質問への操作になるため、自動再送はせず、保存状態と session log を確認してから次の操作を決めてください。listener がない・接続できない場合もエラーになり、保存 YAML への自動 fallback はしません。要求送信後、応答を受け取る前に接続が切れた場合は `outcome: unknown` の transport error になります。YAML は引き続き resume と保存済み読み取りの正本です。socket path は停止時に sidecar から外します。
+この場合、回答は Registry / YAML に記録済みで、sidecar は通常は同じ snapshot に更新されますが、conductor への到達は未確認です。再送すると回答済み質問への操作になるため、自動再送はせず、保存状態と session log を確認してから次の操作を決めてください。listener がない・接続できない場合もエラーになり、保存 YAML への自動 fallback はしません。要求送信後、応答を受け取る前に接続が切れた場合は `outcome: unknown` の transport error になります。YAML は引き続き resume と保存済み読み取りの正本です。socket path は停止時に sidecar から外します。
 
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 

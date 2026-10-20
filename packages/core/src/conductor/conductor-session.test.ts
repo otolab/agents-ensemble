@@ -1126,7 +1126,8 @@ describe('runConductorSession resume / shutdown', () => {
         },
       );
 
-      await Promise.all([answerFlushStarted.promise, dispatchStarted.promise]);
+      await answerFlushStarted.promise;
+      expect(sendCount).toBe(1);
       expect(operatorInput!.submit('/close')).toBe(false);
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(sessionSettled).toBe(false);
@@ -1143,6 +1144,7 @@ describe('runConductorSession resume / shutdown', () => {
         expect(persisted?.openQuestions[0]?.status).toBe('answered');
       });
       expect(answerSettled).toBe(false);
+      await dispatchStarted.promise;
       finishDispatch.resolve();
       await expect(answerRequest).resolves.toMatchObject({
         question: {
@@ -1194,10 +1196,20 @@ describe('runConductorSession resume / shutdown', () => {
       let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
       let operatorInput: OperatorInputBindingApi | undefined;
       let sendCount = 0;
+      let lateSendReleased = false;
       const dispatchStarted = createDeferred<void>();
       const finishDispatch = createDeferred<void>();
       const lateDispatchReturned = createDeferred<void>();
+      const lateSidecarFlushCompleted = createDeferred<void>();
       const shutdown = new AbortController();
+      const persistSidecar = sessionSidecarModule.saveSessionSidecar;
+      vi.spyOn(
+        sessionSidecarModule,
+        'saveSessionSidecar',
+      ).mockImplementation(async (path, sidecar) => {
+        await persistSidecar(path, sidecar);
+        if (lateSendReleased) lateSidecarFlushCompleted.resolve();
+      });
 
       mockCreate.mockImplementationOnce(async (agentOptions) => {
         conductorTools = agentOptions.customTools;
@@ -1345,11 +1357,17 @@ describe('runConductorSession resume / shutdown', () => {
         expect(persistedSidecar?.harnessSocketPath).toBeUndefined();
         expect(sendCount).toBe(2);
 
+        lateSendReleased = true;
         finishDispatch.resolve();
         await settleWithin(lateDispatchReturned.promise, 1_000);
-        await drainAsync();
+        await settleWithin(lateSidecarFlushCompleted.promise, 1_000);
         expect(mockResume).not.toHaveBeenCalled();
         expect(sendCount).toBe(2);
+        const sidecarAfterLateSend = await loadSessionSidecar(sidecarPath);
+        expect(sidecarAfterLateSend?.lifecycle).toBe(
+          shutdownMode === 'operator /close' ? 'closed' : 'interrupted',
+        );
+        expect(sidecarAfterLateSend?.harnessSocketPath).toBeUndefined();
       } finally {
         finishDispatch.resolve();
         shutdown.abort();
@@ -1358,6 +1376,268 @@ describe('runConductorSession resume / shutdown', () => {
     },
     20_000,
   );
+
+  it.each(['operator /close', 'shutdown signal'] as const)(
+    'does not retry a transport error during the Open Question drain grace period (%s)',
+    async (shutdownMode) => {
+      let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+      let operatorInput: OperatorInputBindingApi | undefined;
+      let sendCount = 0;
+      const dispatchStarted = createDeferred<void>();
+      const returnTransportError = createDeferred<void>();
+      const shutdown = new AbortController();
+
+      mockCreate.mockImplementationOnce(async (agentOptions) => {
+        conductorTools = agentOptions.customTools;
+        return {
+          agentId: 'agent-test',
+          send: mockSend,
+          close: mockClose,
+          getUsage: createMockConductorGetUsage(),
+        };
+      });
+      mockSend.mockImplementation(async (message: string) => {
+        sendCount += 1;
+        if (sendCount === 1) {
+          await conductorTools!.ask_human!.execute({
+            question: 'Proceed with the release?',
+            responseType: 'yes_no',
+            relatedPermissionId: 'perm-1',
+          });
+          return {
+            runId: 'run-1',
+            status: 'finished',
+            result: 'question recorded',
+          };
+        }
+        expect(message).toContain(
+          '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
+        );
+        dispatchStarted.resolve();
+        await returnTransportError.promise;
+        return {
+          runId: `run-${sendCount}`,
+          status: 'error',
+          error: { message: 'Connection stalled repeatedly' },
+        };
+      });
+
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        shutdownSignal: shutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        bindOperatorInput: (api) => {
+          operatorInput = api;
+          return () => {};
+        },
+      });
+
+      try {
+        const sidecarPath = sessionSidecarPath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        });
+        await vi.waitFor(async () => {
+          expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+        });
+        const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+        const storePath = openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        });
+        await vi.waitFor(async () => {
+          expect((await loadOpenQuestionsStore(storePath))?.openQuestions).toHaveLength(1);
+        });
+        const questionId = (await loadOpenQuestionsStore(storePath))!
+          .openQuestions[0]!.id;
+        const answerOutcome = sendOpenQuestionControlRequest(
+          socketPath!,
+          {
+            method: OPEN_QUESTION_CONTROL_METHODS.answer,
+            params: { questionId, answer: 'yes' },
+          },
+        ).then(
+          () => ({ kind: 'success' as const }),
+          (error: unknown) => ({ kind: 'error' as const, error }),
+        );
+
+        await settleWithin(dispatchStarted.promise, 5_000);
+        if (shutdownMode === 'operator /close') {
+          expect(operatorInput!.submit('/close')).toBe(false);
+        } else {
+          shutdown.abort();
+        }
+        returnTransportError.resolve();
+
+        const [sessionResult, outcome] = await Promise.all([
+          settleWithin(sessionPromise, 5_000),
+          settleWithin(answerOutcome, 5_000),
+        ]);
+        expect(outcome.kind).toBe('error');
+        if (outcome.kind === 'error') {
+          expect(outcome.error).toBeInstanceOf(OpenQuestionControlRemoteError);
+          expect(outcome.error).toMatchObject({
+            rpcCode: -32005,
+            data: {
+              outcome: 'unknown',
+              answerStatus: 'recorded',
+              dispatchStatus: 'unknown',
+            },
+          });
+        }
+        expect(sessionResult.openQuestions).toEqual([
+          expect.objectContaining({
+            id: questionId,
+            status: 'answered',
+            answer: 'yes',
+            answeredBy: 'operator',
+          }),
+        ]);
+        expect(sendCount).toBe(2);
+        expect(mockResume).not.toHaveBeenCalled();
+        const persistedStore = await loadOpenQuestionsStore(storePath);
+        const persistedSidecar = await loadSessionSidecar(sidecarPath);
+        expect(persistedStore?.openQuestions[0]?.status).toBe('answered');
+        expect(persistedSidecar?.openQuestions).toEqual(
+          persistedStore?.openQuestions,
+        );
+      } finally {
+        returnTransportError.resolve();
+        shutdown.abort();
+        await sessionPromise.catch(() => {});
+      }
+    },
+  );
+
+  it('keeps a live answer unapplied and undispatched when YAML persistence fails', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    let operatorInput: OperatorInputBindingApi | undefined;
+    let sendCount = 0;
+    const shutdown = new AbortController();
+    const persistOpenQuestions = openQuestionsStoreModule.saveOpenQuestionsStore;
+    vi.spyOn(
+      openQuestionsStoreModule,
+      'saveOpenQuestionsStore',
+    ).mockImplementation(async (path, snapshot) => {
+      if (snapshot.openQuestions.some(({ status }) => status === 'answered')) {
+        throw new Error('simulated open questions YAML persistence failure');
+      }
+      await persistOpenQuestions(path, snapshot);
+    });
+
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async () => {
+      sendCount += 1;
+      await conductorTools!.ask_human!.execute({
+        question: 'Proceed with the release?',
+        responseType: 'yes_no',
+        relatedPermissionId: 'perm-1',
+      });
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'question recorded',
+      };
+    });
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (api) => {
+        operatorInput = api;
+        return () => {};
+      },
+    });
+
+    try {
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+      });
+      const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+      const storePath = openQuestionsStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        expect((await loadOpenQuestionsStore(storePath))?.openQuestions).toHaveLength(1);
+      });
+      const questionId = (await loadOpenQuestionsStore(storePath))!
+        .openQuestions[0]!.id;
+      const outcome = await sendOpenQuestionControlRequest(socketPath!, {
+        method: OPEN_QUESTION_CONTROL_METHODS.answer,
+        params: { questionId, answer: 'yes' },
+      }).then(
+        () => ({ kind: 'success' as const }),
+        (error: unknown) => ({ kind: 'error' as const, error }),
+      );
+
+      expect(outcome.kind).toBe('error');
+      if (outcome.kind === 'error') {
+        expect(outcome.error).toBeInstanceOf(OpenQuestionControlRemoteError);
+        expect(outcome.error).toMatchObject({
+          rpcCode: -32603,
+          data: undefined,
+          message: 'Open Question operation failed.',
+        });
+      }
+      const liveQuestions = await sendOpenQuestionControlRequest<{
+        questions: Array<{ id: string }>;
+      }>(socketPath!, {
+        method: OPEN_QUESTION_CONTROL_METHODS.list,
+      });
+      expect(liveQuestions.questions).toEqual([
+        expect.objectContaining({ id: questionId }),
+      ]);
+      expect((await loadOpenQuestionsStore(storePath))?.openQuestions[0]).toMatchObject({
+        id: questionId,
+        status: 'open',
+      });
+      expect((await loadSessionSidecar(sidecarPath))?.openQuestions[0]).toMatchObject({
+        id: questionId,
+        status: 'open',
+      });
+      expect(sendCount).toBe(1);
+      expect(emitted.some((event) => event.type === 'operator.input')).toBe(false);
+      expect(operatorInput!.submit('/close')).toBe(false);
+      await expect(sessionPromise).resolves.toMatchObject({
+        openQuestions: [
+          expect.objectContaining({ id: questionId, status: 'open' }),
+        ],
+      });
+    } finally {
+      shutdown.abort();
+      await sessionPromise.catch(() => {});
+    }
+  });
 
   it('registers the GitHub watch tool and persists a tool registration', async () => {
     let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
