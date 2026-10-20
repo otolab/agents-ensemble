@@ -9,6 +9,7 @@ import {
   SessionLogger,
   type SessionLogEvent,
 } from '../../src/conductor/session/session-logger.js';
+import type { OperatorInputBindingApi } from '../../src/conductor/operator-input-binding.js';
 import {
   attachWorker,
   buildWorkerAttachPrompt,
@@ -432,7 +433,7 @@ describe('session resume integration', () => {
     ).toBe(true);
   });
 
-  it('restores tool-call history for permission briefs and lookup after resume', async () => {
+  it('restores tool-call history for permission briefs and lookup after /close and resume', async () => {
     const toolCallUpdates: Array<Record<string, unknown>> =
       permissionRequestFixtures.editPriorToolCallUpdates.map((update) => ({
         ...update,
@@ -442,12 +443,24 @@ describe('session resume integration', () => {
       permissionParams: permissionRequestFixtures.editPermissionIdOnly,
       toolCallUpdatesBeforePermission: toolCallUpdates,
     });
+    const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
     const worktree = {
       ...TEST_WORKTREE,
       path: join(repoRoot, 'worktree'),
     };
     let phase: 'initial' | 'resume' = 'initial';
     let initialWorkerId: string | undefined;
+    const closeForResume = vi.fn().mockResolvedValue(undefined);
+    mockCreate.mockImplementation(async (options, resumeOptions) => {
+      conductorTools = (resumeOptions ?? options).customTools ?? {};
+      return {
+        agentId: RESUME_AGENT_ID,
+        send: mockSend,
+        close: mockClose,
+        closeForResume,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
 
     mockSend.mockImplementation(async (message: string) => {
       if (message.includes('# permission.pending')) {
@@ -537,7 +550,15 @@ describe('session resume integration', () => {
       };
     });
 
-    const firstResult = await runConductorSession({
+    let firstOperatorApi: OperatorInputBindingApi | undefined;
+    const firstPostLoopWait = vi.fn();
+    const firstSessionEvents: SessionLogEvent[] = [];
+    const firstSessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    firstSessionLogger.subscribe((event) => firstSessionEvents.push(event));
+    const firstSessionPromise = runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: PING_PROFILE_BASE,
@@ -549,9 +570,24 @@ describe('session resume integration', () => {
       connectAcp: async () => bridge,
       ownsWorkerAcpConnections: false,
       workerWorktree: worktree,
+      waitForOperatorExit: true,
+      onPostLoopWait: firstPostLoopWait,
+      sessionLogger: firstSessionLogger,
+      bindOperatorInput: (api) => {
+        firstOperatorApi = api;
+      },
     });
+    await vi.waitFor(() => expect(firstPostLoopWait).toHaveBeenCalledOnce());
+    expect(firstOperatorApi!.submit('/close')).toBe(false);
+    const firstResult = await firstSessionPromise;
+
     expect(firstResult.stopReason).toBe('completed');
+    expect(closeForResume).toHaveBeenCalledOnce();
+    expect(firstSessionEvents).toContainEqual({ type: 'session.operator_close' });
     expect(initialWorkerId).toBeTruthy();
+    const initialPrompt = String(mockSend.mock.calls[0]?.[0] ?? '');
+    expect(initialPrompt).toContain('permission 判断待ち');
+    expect(initialPrompt).not.toContain('# permission.pending');
 
     const historyPath = toolCallSnapshotHistoryPath({
       repoRoot,
@@ -590,6 +626,11 @@ describe('session resume integration', () => {
     });
 
     expect(resumedResult.stopReason).toBe('completed');
+    expect(loadSessionSpy).toHaveBeenCalledWith(
+      'fake-session-1',
+      expect.any(String),
+      expect.any(Function),
+    );
   });
 
   it('restores worker session/load with custom workspace acpCwd on resume', async () => {
