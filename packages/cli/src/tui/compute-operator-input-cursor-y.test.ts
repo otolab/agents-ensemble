@@ -19,6 +19,10 @@ import {
 } from './tui-layout-constants.js';
 
 describe('computeInputPaneHeight', () => {
+  it('keeps only borders and the input row when there are no hint lines', () => {
+    expect(computeInputPaneHeight({ hintLineCount: 0 })).toBe(INPUT_PANE_BORDER_ROWS + 1);
+  });
+
   it('includes border rows, hint lines, and the input row', () => {
     expect(computeInputPaneHeight({ hintLineCount: 2 })).toBe(INPUT_PANE_BORDER_ROWS + 2 + 1);
   });

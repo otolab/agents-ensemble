@@ -17,8 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CLI_ENTRY } from './test-helpers.js';
 
 const ISSUE_URL = 'https://github.com/fixture/fixture/issues/1';
-const POST_LOOP_CLOSE_HINT =
-  '追加指示 · /reconnect · /close 保存して閉じる';
+const POST_LOOP_OBSERVATION = '自律作業が一段落しました。';
 
 const PYTHON_PTY_RUNNER = String.raw`
 import errno
@@ -529,10 +528,11 @@ globalThis.fetch = async (input, init) => {
 
         await waitForText(
           () => stripTerminalControls(output),
-          POST_LOOP_CLOSE_HINT,
+          POST_LOOP_OBSERVATION,
           runner,
           45_000,
         );
+        expect(stripTerminalControls(output)).not.toContain('/reconnect · /close');
         runner.stdin?.write('/close');
         await new Promise((resolve) => setTimeout(resolve, 100));
         runner.stdin?.write('\r');

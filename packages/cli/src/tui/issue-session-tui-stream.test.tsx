@@ -154,7 +154,7 @@ describe('IssueSessionTuiStream', () => {
     expect(frame.indexOf('Open questions')).toBeLessThan(frame.indexOf('Operator input'));
     expect(frame.indexOf('Operator input')).toBeLessThan(frame.indexOf('Workers'));
     expect(frame).toContain('inq-1 (1/1) への回答');
-    expect(frame).not.toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(frame).not.toContain('任意入力');
   });
 
   it('keeps operator line and paragraph breaks in stream activity output', () => {
@@ -288,7 +288,7 @@ describe('IssueSessionTuiStream', () => {
     expect(lastFrame() ?? '').toContain('conductor dispatch 保留中（4 件）');
   });
 
-  it('shows the single-line post-loop prompt without waiting status', () => {
+  it('keeps the post-loop input area free of a fixed prompt', () => {
     const viewModel = createTuiViewModel();
     viewModel.setPostLoopWaiting(true);
 
@@ -303,15 +303,15 @@ describe('IssueSessionTuiStream', () => {
 
     const frame = lastFrame() ?? '';
     const operatorInputIndex = frame.indexOf('Operator input');
-    const instructionHintIndex = frame.indexOf('追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
     const workersIndex = frame.indexOf('Workers');
 
     expect(operatorInputIndex).toBeGreaterThanOrEqual(0);
     expect(frame).not.toContain('Open questions');
     expect(frame).not.toContain('(未回答なし)');
-    expect(instructionHintIndex).toBeGreaterThan(operatorInputIndex);
     expect(workersIndex).toBeGreaterThan(operatorInputIndex);
-    expect(frame).toContain('追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(frame).toContain('operator>');
+    expect(frame).not.toContain('追加指示');
+    expect(frame).not.toContain('/reconnect');
     expect(frame).toContain('otolab/agents-ensemble#261');
     expect(frame).not.toContain('post-loop 待機中');
     expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(80);
@@ -435,11 +435,9 @@ describe('IssueSessionTuiStream', () => {
     await flushInkStdin();
     expectCanonicalIssueUrl();
     const postLoopFrame = (lastFrame() ?? '').replace(/\s+/g, ' ');
-    expect(postLoopFrame).toContain('追加指示 ·');
-    expect(postLoopFrame).toContain('/close');
-    expect(postLoopFrame).toContain('保存して閉じる');
-    expect(postLoopFrame).toContain('/exit');
-    expect(postLoopFrame).toContain('掃除して終了');
+    expect(postLoopFrame).toContain('operator>');
+    expect(postLoopFrame).not.toContain('追加指示');
+    expect(postLoopFrame).not.toContain('/reconnect');
 
     viewModel.setShuttingDown(true);
     await flushInkStdin();
@@ -563,7 +561,9 @@ describe('IssueSessionTuiStream', () => {
     viewModel.setPostLoopWaiting(true);
     await flushInkStdin();
     expectCanonicalIssueLink();
-    expect(lastFrame() ?? '').toContain('追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').not.toContain('追加指示');
+    expect(lastFrame() ?? '').not.toContain('/reconnect');
 
     viewModel.setShuttingDown(true);
     await flushInkStdin();
@@ -571,7 +571,7 @@ describe('IssueSessionTuiStream', () => {
     expect(lastFrame() ?? '').toContain('終了しています…');
   });
 
-  it('shows the no-question hint before operator context binds', () => {
+  it('keeps the no-question input area blank before operator context binds', () => {
     const viewModel = createTuiViewModel();
 
     const { lastFrame } = render(
@@ -584,7 +584,9 @@ describe('IssueSessionTuiStream', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(frame).toContain('operator>');
+    expect(frame).not.toContain('任意入力');
+    expect(frame).not.toContain('/reconnect');
     expect(frame).not.toContain('自律ターン');
   });
 
@@ -601,9 +603,11 @@ describe('IssueSessionTuiStream', () => {
     );
 
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').not.toContain('任意入力');
+    expect(lastFrame() ?? '').not.toContain('/reconnect');
     expect(lastFrame() ?? '').toContain('otolab/agents-ensemble#263');
-    expect(lastFrame() ?? '').not.toContain('otolab/agents-ensemble#263 — 任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(lastFrame() ?? '').not.toContain('otolab/agents-ensemble#263 —');
 
     stdin.write('follow-up');
     await flushInkStdin();
@@ -1015,7 +1019,7 @@ describe('IssueSessionTuiStream', () => {
     const initialFrame = lastFrame() ?? '';
     expect(initialFrame).toContain('Open questions');
     expect(initialFrame).toContain('inq-resumed-1');
-    expect(initialFrame).not.toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(initialFrame).not.toContain('任意入力');
 
     if (selectedIndex === 1) {
       stdin.write(INK_TEST_KEYS.shiftDownArrow);
@@ -1031,16 +1035,18 @@ describe('IssueSessionTuiStream', () => {
     });
     if (restoredQuestions.length === 1) {
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+      expect(lastFrame() ?? '').toContain('operator>');
+      expect(lastFrame() ?? '').not.toContain('任意入力');
     } else {
       expect(lastFrame() ?? '').toContain('Open questions');
       expect(lastFrame() ?? '').toContain('inq-resumed-1');
-      expect(lastFrame() ?? '').not.toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+      expect(lastFrame() ?? '').not.toContain('任意入力');
 
       setOperatorQuestions([]);
       await flushInkStdin();
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+      expect(lastFrame() ?? '').toContain('operator>');
+      expect(lastFrame() ?? '').not.toContain('任意入力');
     }
   });
 
