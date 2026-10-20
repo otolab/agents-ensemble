@@ -133,7 +133,11 @@ describe('IssueSessionTuiStream', () => {
     const viewModel = createTuiViewModel();
     viewModel.setDisplayState({
       workers: {
-        implementer: { kind: 'implementer', status: 'running' },
+        implementer: {
+          kind: 'implementer',
+          status: 'running',
+          activity: 'calling: Shell',
+        },
       },
       conductorOutput: null,
       openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Approve?' })],
@@ -150,6 +154,8 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).toContain('[operator] operator ping');
     expect(frame).toContain('[conductor] conductor says hi');
     expect(frame).toContain('Workers');
+    expect(frame).toContain('implementer: running (calling: Shell)');
+    expect(frame).not.toContain('implementer (implementer)');
     expect(frame).toContain('Open questions');
     expect(frame).toContain('Operator input');
     expect(frame).not.toContain('Orchestration');

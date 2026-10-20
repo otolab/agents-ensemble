@@ -6,6 +6,7 @@ import {
   type TuiViewSnapshot,
 } from './tui-view-model.js';
 import type { WorkerDisplayStatus } from '../display/session-display-state.js';
+import { formatWorkerDisplayName } from './worker-display-name.js';
 import {
   formatIssueLabel,
   formatOsc8Link,
@@ -204,10 +205,11 @@ function formatConductorWorkerStatusLine(
     }
     return `conductor: ${worker.status}`;
   }
+  const displayName = formatWorkerDisplayName(name, worker.kind);
   if (worker.status === 'running' && worker.activity) {
-    return `${name} (${worker.kind}): running (${worker.activity})`;
+    return `${displayName}: running (${worker.activity})`;
   }
-  return `${name} (${worker.kind}): ${worker.status}`;
+  return `${displayName}: ${worker.status}`;
 }
 
 function sortWorkerEntries(
