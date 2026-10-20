@@ -371,7 +371,7 @@ describe('executeIssueCommand with the core session', () => {
       isOperatorInputInteractive: (message: string | undefined) =>
         message === undefined,
       isOperatorInputTty: () => true,
-      runIssueSession: runIssueSessionImpl,
+      runIssueSession: runIssueSessionWithTestConfig,
     };
     const pendingUpdate = {
       id: 'issue-comment:42',
@@ -601,7 +601,7 @@ describe('executeIssueCommand with the core session', () => {
       runIssueSession: (
         sessionOptions: Parameters<typeof runIssueSessionImpl>[0],
       ) =>
-        runIssueSessionImpl({
+        runIssueSessionWithTestConfig({
           ...sessionOptions,
           connectAcp,
           disableGitHubMonitor: true,
@@ -714,7 +714,7 @@ describe('executeIssueCommand with the core session', () => {
         isOperatorInputInteractive: (message) => message === undefined,
         isOperatorInputTty: () => true,
         runIssueSession: (sessionOptions) =>
-          runIssueSessionImpl({
+          runIssueSessionWithTestConfig({
             ...sessionOptions,
             workerWorktree: {
               path,
