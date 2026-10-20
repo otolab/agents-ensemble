@@ -38,20 +38,21 @@
 | **WorktreeHelper** | パス・ブランチ名規約（temp dir + git は最小限の fixture） |
 | **PermissionPolicy** | allow/deny 判定（純関数） |
 
-`packages/cli` の表示・TUI・サマリ整形も同様に `src/**/*.test.ts` で unittest する。
+`packages/cli` の表示・TUI・サマリ整形と、`packages/operator-agent` の prompt・sidecar tool・TTY conversation smoke も各 package の `src/**/*.test.ts` で検証する。
 
 ### 配置
 
 ```
 packages/core/src/**/*.test.ts
 packages/cli/src/**/*.test.ts
+packages/operator-agent/src/**/*.test.ts
 ```
 
 ### 実行
 
 ```bash
 pnpm test              # watch（unittest のみ）
-pnpm test:run          # 単発（CI デフォルト）
+pnpm test:run          # workspace 全 package を単発実行（CI デフォルト）
 ```
 
 ### vitest 設定方針
@@ -168,7 +169,7 @@ pnpm test:e2e
 ## コマンド一覧
 
 ```bash
-pnpm test:run           # unittest（CI 必須）
+pnpm test:run           # workspace 全 package の unittest（CI 必須）
 pnpm test:integration   # fake smoke は設定不要、外部依存は前提がある場合に実行
 pnpm test:e2e           # e2e（設定時のみ実行）
 pnpm test:all           # 全レベル（ローカル用）

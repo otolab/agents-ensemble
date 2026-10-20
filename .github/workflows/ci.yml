@@ -40,9 +40,6 @@ jobs:
       - name: Pi conductor integration tests
         run: pnpm --filter @agents-ensemble/core exec vitest run --config vitest.config.integration.ts test/integration/pi-conductor.integration.test.ts test/integration/pi-headless-settings.integration.test.ts
 
-      - name: CLI unit tests
-        run: pnpm --filter @agents-ensemble/cli test:run
-
       - name: Pi TTY MCP teardown e2e
         run: pnpm --filter @agents-ensemble/cli exec vitest run --config vitest.config.e2e.ts test/e2e/issue-pi-tty-exit.e2e.test.ts
 

@@ -1,8 +1,8 @@
 # アーキテクチャ
 
-> **正本:** `ensemble` の現行技術構成（Cursor SDK / Pi conductor + ACP worker）。利用者向け CLI の入口は [cli/README.md](cli/README.md)、設定の正本は [settings.md](settings.md) と [config.md](config.md) です。
+> **正本:** `ensemble` の現行技術構成（operator-agent、Cursor SDK / Pi conductor + ACP worker）。利用者向け CLI の入口は [cli/README.md](cli/README.md)、設定の正本は [settings.md](settings.md) と [config.md](config.md) です。
 
-`ensemble` の技術構成。conductor は Cursor SDK（既定）または Pi を選択し、worker は **ACP** で接続する。複数 agent が **conductor を中心とするスター型**で接続する。
+`ensemble` の技術構成。conductor は Cursor SDK（既定）または Pi を選択し、worker は **ACP** で接続する。operator-agent は同じ埋め込み backend を使う独立プロセスで、保存済みセッション情報を介して conductor と疎に連携する。複数 worker は **conductor を中心とするスター型**で接続する。
 
 設計の大原則（スター型・Issue 紐づけ・遷移の非機械化など）は [design.md](design.md) を正本とする。本文はプロセス分離と通信経路を記述する。
 
@@ -113,6 +113,7 @@ user  →  operator（ロール）  →  conductor  →  workers
 |---------|------|------|
 | **CLI** | Node.js (`packages/cli`) | コマンド解析、環境、終了処理 |
 | **Core** | TypeScript (`packages/core`) | ACP ブリッジ、dispatch、型の共有 |
+| **Operator** | `@agents-ensemble/operator-agent` | TTY 対話、operator prompt、保存済み sidecar の読み取り |
 | **Conductor** | `@cursor/sdk` または Pi 1.x (`pi-coding-agent` / `pi-ai`) | 設定された backend による判断・dispatch 制御の主体 |
 | **Worker** | `agent acp` | Skill に沿った実作業（種別ごとに起動文書・Skill が異なる） |
 | **共有媒体** | GitHub Issue / PR | セッション会話に依存しない状態と履歴 |

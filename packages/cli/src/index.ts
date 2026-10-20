@@ -27,6 +27,7 @@ import {
   type PiModelsSyncResult,
   type PiModelsSyncTarget,
 } from './pi-model-catalog-command.js';
+import { runOperatorAgent } from '@agents-ensemble/operator-agent';
 
 const program = new Command();
 
@@ -34,6 +35,19 @@ program
   .name('ensemble')
   .description('Issue-based agent orchestration')
   .version(readCliPackageVersion());
+
+program
+  .command('operator-agent')
+  .description('Chat with an operator agent about repository session state')
+  .option('--repo-root <path>', 'Repository root for config and saved sessions', process.cwd())
+  .action(async (options: { repoRoot: string }) => {
+    try {
+      await runOperatorAgent({ repoRoot: resolve(options.repoRoot) });
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
 
 program
   .command('issue')

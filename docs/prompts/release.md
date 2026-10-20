@@ -1,6 +1,6 @@
 # リリース手順
 
-> **参照:** `@agents-ensemble/core` と `@agents-ensemble/cli` の changeset・Release PR・npm 公開手順。
+> **参照:** `@agents-ensemble/core`、`@agents-ensemble/cli`、`@agents-ensemble/operator-agent` の changeset・Release PR・npm 公開手順。
 
 フローは [modular-prompt](https://github.com/otolab/modular-prompt) を踏襲する。
 
@@ -28,7 +28,7 @@
 pnpm changeset
 ```
 
-`@agents-ensemble/core` と `@agents-ensemble/cli` は **fixed** グループのため、常に同じバージョンでリリースされる。
+`@agents-ensemble/core` と `@agents-ensemble/cli` は **fixed** グループのため、常に同じバージョンでリリースされる。`@agents-ensemble/operator-agent` は独立したバージョンで管理する。
 
 CI の `changeset-check` が PR に changeset の有無を検証する。ドキュメントのみの変更などでスキップする場合は、コミットメッセージに `[skip-changeset]` を含める。
 

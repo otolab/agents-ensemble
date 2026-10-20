@@ -84,9 +84,9 @@ export {
 } from './conductor-tool-pi-adapter.js';
 
 export {
-  createConductorAgentFactory,
   runConductorSession,
 } from './conductor-session.js';
+export { createConductorAgentFactory } from './conductor-agent-factory.js';
 export {
   ensureCursorSdkProxy,
   ensureCursorSdkRipgrepPath,

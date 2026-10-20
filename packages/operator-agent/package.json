@@ -1,0 +1,45 @@
+{
+  "name": "@agents-ensemble/operator-agent",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Embedded operator-role agent runtime for agents-ensemble",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "prepublishOnly": "pnpm exec tsc --build --force"
+  },
+  "dependencies": {
+    "@agents-ensemble/core": "workspace:*",
+    "@modular-prompt/core": "0.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.10",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/otolab/agents-ensemble.git",
+    "directory": "packages/operator-agent"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
