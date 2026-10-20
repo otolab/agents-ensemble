@@ -107,6 +107,11 @@ export interface ConductorSessionDriverOptions {
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
+  onDispatchBatchSettled?: (input: {
+    events: SessionEvent[];
+    result?: ConductorSendResult;
+    error?: unknown;
+  }) => void;
   onOpenQuestionEnqueued?: (question: OpenQuestion) => void;
   /** `true` のときは自律ループ停止後もイベントを待ち続ける（TTY post-loop 用）。 */
   continueAfterIssueLoopStop?: boolean;
@@ -372,7 +377,7 @@ export async function runConductorSessionDriver(
       triggers: batch.filter(isTriggerSessionEvent).length,
       sources: uniqueSources(batch, dispatchResult.sourceKey),
     });
-    inFlightSend = runEventConductorSend({
+    const dispatchSend = runEventConductorSend({
       message: formatSessionEventsForConductor(batch),
       conductorHandle: options.conductorHandle,
       sendReconnect: options.sendReconnect,
@@ -399,6 +404,23 @@ export async function runConductorSessionDriver(
         options.onSendComplete(info);
       },
     });
+    if (
+      options.onDispatchBatchSettled &&
+      batch.some((event) => event.type === 'operator.message')
+    ) {
+      inFlightSend = dispatchSend.then(
+        (result) => {
+          options.onDispatchBatchSettled?.({ events: batch, result });
+          return result;
+        },
+        (error: unknown) => {
+          options.onDispatchBatchSettled?.({ events: batch, error });
+          throw error;
+        },
+      );
+    } else {
+      inFlightSend = dispatchSend;
+    }
     dispatchBatchState = dispatchBatchStateAfterSend(dispatchResult.sourceKey);
   }
 

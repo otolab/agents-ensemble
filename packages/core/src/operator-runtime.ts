@@ -43,6 +43,7 @@ export {
 export {
   OPEN_QUESTION_CONTROL_METHODS,
   OpenQuestionControlRemoteError,
+  OpenQuestionControlTransportError,
   sendOpenQuestionControlRequest,
 } from './session/open-question-control.js';
 export type {

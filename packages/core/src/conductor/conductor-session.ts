@@ -84,6 +84,7 @@ import { resolvePiConductorProvider } from './conductor-pi-auth.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
+import type { SessionEvent } from './session/session-event.js';
 import {
   bufferDispatchHoldEvents,
   createDispatchHoldState,
@@ -314,6 +315,14 @@ export async function runConductorSession(
   let harnessSocketPath: string | undefined;
   let openQuestionControlServer: OpenQuestionControlServer | undefined;
   const eventQueue = new SessionEventQueue();
+  const openQuestionDispatchReceipts = new WeakMap<
+    SessionEvent,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
+  const pendingOpenQuestionDispatchReceipts = new Set<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }>();
   const dispatchHoldState = createDispatchHoldState();
   const onDispatchHoldChanged = (change: DispatchHoldChange): void => {
     sessionLogger.emit({
@@ -459,11 +468,44 @@ export async function runConductorSession(
   const shutdownSignal =
     options.shutdownSignal ?? shutdownController!.signal;
   const operatorTerminationController = new AbortController();
+  const drainedShutdownController = new AbortController();
   const driverShutdownSignal = AbortSignal.any([
-    shutdownSignal,
+    drainedShutdownController.signal,
     operatorTerminationController.signal,
   ]);
+  const abortAfterOpenQuestionDrain = (
+    controller: AbortController,
+  ): void => {
+    const activeControlServer = openQuestionControlServer;
+    if (!activeControlServer) {
+      controller.abort();
+      return;
+    }
+    const reportDrainFailure = (error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: `Open Question control drain failed: ${detail}`,
+      });
+    };
+    const quiescing = activeControlServer.quiesce();
+    if (!activeControlServer.hasInFlightRequests()) {
+      void quiescing.catch(reportDrainFailure);
+      controller.abort();
+      return;
+    }
+    void quiescing
+      .catch(reportDrainFailure)
+      .finally(() => controller.abort());
+  };
+  const onShutdownSignal = () =>
+    abortAfterOpenQuestionDrain(drainedShutdownController);
+  shutdownSignal.addEventListener('abort', onShutdownSignal, { once: true });
+  if (shutdownSignal.aborted) onShutdownSignal();
   let unregisterProcessSignalHandlers = () => {};
+  const removeShutdownDrainListener = () =>
+    shutdownSignal.removeEventListener('abort', onShutdownSignal);
+  unregisterProcessSignalHandlers = removeShutdownDrainListener;
   if (
     ownsShutdownController &&
     options.registerProcessSignalHandlers !== false
@@ -474,6 +516,7 @@ export async function runConductorSession(
     unregisterProcessSignalHandlers = () => {
       process.off('SIGINT', onSignal);
       process.off('SIGTERM', onSignal);
+      removeShutdownDrainListener();
     };
   }
 
@@ -1249,14 +1292,14 @@ export async function runConductorSession(
           sessionLogger.emit({ type: 'session.operator_exit' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedExit = true;
-          operatorTerminationController.abort();
+          abortAfterOpenQuestionDrain(operatorTerminationController);
           return false;
         }
         if (isOperatorCloseCommand(message)) {
           sessionLogger.emit({ type: 'session.operator_close' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedClose = true;
-          operatorTerminationController.abort();
+          abortAfterOpenQuestionDrain(operatorTerminationController);
           return false;
         }
         if (isOperatorReconnectCommand(message)) {
@@ -1307,6 +1350,7 @@ export async function runConductorSession(
             'Open Question is not available.',
           );
         }
+        let dispatchReceipt: Promise<void> | undefined;
         const accepted = submitOperatorInput({
           message: answer,
           targetOpenQuestionId: questionId,
@@ -1316,6 +1360,21 @@ export async function runConductorSession(
           eventQueue,
           sessionLogger,
           onEscalated: (record) => options.onEscalated?.(record),
+          onOperatorMessageQueued: (event) => {
+            let receipt!: {
+              resolve: () => void;
+              reject: (error: Error) => void;
+            };
+            dispatchReceipt = new Promise<void>((resolve, reject) => {
+              receipt = {
+                resolve: () => resolve(),
+                reject: (error) => reject(error),
+              };
+              openQuestionDispatchReceipts.set(event, receipt);
+              pendingOpenQuestionDispatchReceipts.add(receipt);
+            });
+            void dispatchReceipt.catch(() => {});
+          },
         });
         const answered = openQuestions.get(questionId);
         if (!accepted || !answered || answered.status !== 'answered') {
@@ -1325,6 +1384,13 @@ export async function runConductorSession(
           );
         }
         await flushSidecar();
+        if (!dispatchReceipt) {
+          throw new OpenQuestionControlOperationError(
+            -32603,
+            'The answer was recorded, but its conductor notification was not queued.',
+          );
+        }
+        await dispatchReceipt;
         return answered;
       },
     });
@@ -1393,6 +1459,25 @@ export async function runConductorSession(
         });
       },
       onSendComplete: recordSendComplete,
+      onDispatchBatchSettled: ({ events, result, error }) => {
+        for (const event of events) {
+          if (event.type !== 'operator.message') continue;
+          const receipt = openQuestionDispatchReceipts.get(event);
+          if (!receipt) continue;
+          openQuestionDispatchReceipts.delete(event);
+          pendingOpenQuestionDispatchReceipts.delete(receipt);
+          if (error || result?.status !== 'finished') {
+            receipt.reject(
+              new OpenQuestionControlOperationError(
+                -32005,
+                'The answer was recorded and persisted, but conductor notification could not be confirmed. Do not resubmit the answer; inspect the live session.',
+              ),
+            );
+          } else {
+            receipt.resolve();
+          }
+        }
+      },
       onOpenQuestionEnqueued: (question) => {
         sessionLogger.emit({ type: 'open.question.enqueued', question });
         options.onOpenQuestionEnqueued?.(question);
@@ -1512,6 +1597,15 @@ export async function runConductorSession(
     }
   } finally {
     teardownStarted = true;
+    for (const receipt of pendingOpenQuestionDispatchReceipts) {
+      receipt.reject(
+        new OpenQuestionControlOperationError(
+          -32005,
+          'The answer was recorded and persisted, but the conductor session stopped before notification completed. Do not resubmit the answer; inspect the live session.',
+        ),
+      );
+    }
+    pendingOpenQuestionDispatchReceipts.clear();
     const forceShutdown =
       operatorRequestedExit ||
       operatorRequestedClose ||

@@ -35,6 +35,7 @@ import {
   loadOpenQuestionsStore,
   openQuestionsStorePath,
 } from '../session/open-questions-store.js';
+import * as openQuestionsStoreModule from '../session/open-questions-store.js';
 import {
   OPEN_QUESTION_CONTROL_METHODS,
   sendOpenQuestionControlRequest,
@@ -977,6 +978,193 @@ describe('runConductorSession resume / shutdown', () => {
         code: 'ENOENT',
       });
     } finally {
+      shutdown.abort();
+      await sessionPromise.catch(() => {});
+    }
+  });
+
+  it('drains a live UDS answer through persistence and dispatch before /close', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    let operatorInput: OperatorInputBindingApi | undefined;
+    let sendCount = 0;
+    const dispatchStarted = createDeferred<void>();
+    const finishDispatch = createDeferred<void>();
+    const answerFlushStarted = createDeferred<void>();
+    const finishAnswerFlush = createDeferred<void>();
+    const shutdown = new AbortController();
+    const persistOpenQuestions = openQuestionsStoreModule.saveOpenQuestionsStore;
+    vi.spyOn(
+      openQuestionsStoreModule,
+      'saveOpenQuestionsStore',
+    ).mockImplementation(async (path, snapshot) => {
+      if (snapshot.openQuestions.some(({ status }) => status === 'answered')) {
+        answerFlushStarted.resolve();
+        await finishAnswerFlush.promise;
+      }
+      await persistOpenQuestions(path, snapshot);
+    });
+
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        await conductorTools!.ask_human!.execute({
+          question: 'Proceed with the release?',
+          responseType: 'yes_no',
+          relatedPermissionId: 'perm-1',
+        });
+      } else {
+        dispatchStarted.resolve();
+        await finishDispatch.promise;
+        expect(message).toContain(
+          '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
+        );
+      }
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'done',
+      };
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (api) => {
+        operatorInput = api;
+        return () => {};
+      },
+    });
+    let sessionSettled = false;
+    void sessionPromise.then(
+      () => {
+        sessionSettled = true;
+      },
+      () => {
+        sessionSettled = true;
+      },
+    );
+
+    try {
+      await vi.waitFor(async () => {
+        const sidecar = await loadSessionSidecar(
+          sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        );
+        expect(sidecar?.harnessSocketPath).toBeTruthy();
+      });
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      const sidecar = await loadSessionSidecar(sidecarPath);
+      const socketPath = sidecar?.harnessSocketPath;
+      expect(socketPath).toBeTruthy();
+
+      await vi.waitFor(async () => {
+        const store = await loadOpenQuestionsStore(
+          openQuestionsStorePath({
+            repoRoot,
+            conductorAgentId: 'agent-test',
+          }),
+        );
+        expect(store?.openQuestions).toHaveLength(1);
+      });
+      const store = await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      );
+      const answerRequest = sendOpenQuestionControlRequest<{
+        question: { id: string; status: string; answeredBy: string };
+      }>(socketPath!, {
+        method: OPEN_QUESTION_CONTROL_METHODS.answer,
+        params: {
+          questionId: store!.openQuestions[0]!.id,
+          answer: 'yes',
+        },
+      });
+      let answerSettled = false;
+      void answerRequest.then(
+        () => {
+          answerSettled = true;
+        },
+        () => {
+          answerSettled = true;
+        },
+      );
+
+      await Promise.all([answerFlushStarted.promise, dispatchStarted.promise]);
+      expect(operatorInput!.submit('/close')).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(sessionSettled).toBe(false);
+      expect(answerSettled).toBe(false);
+
+      finishAnswerFlush.resolve();
+      await vi.waitFor(async () => {
+        const persisted = await loadOpenQuestionsStore(
+          openQuestionsStorePath({
+            repoRoot,
+            conductorAgentId: 'agent-test',
+          }),
+        );
+        expect(persisted?.openQuestions[0]?.status).toBe('answered');
+      });
+      expect(answerSettled).toBe(false);
+      finishDispatch.resolve();
+      await expect(answerRequest).resolves.toMatchObject({
+        question: {
+          id: store!.openQuestions[0]!.id,
+          status: 'answered',
+          answeredBy: 'operator',
+        },
+      });
+      await expect(sessionPromise).resolves.toMatchObject({
+        openQuestions: [
+          expect.objectContaining({
+            status: 'answered',
+            answeredBy: 'operator',
+            approved: true,
+          }),
+        ],
+      });
+
+      const persistedStore = await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      );
+      const persistedSidecar = await loadSessionSidecar(sidecarPath);
+      expect(persistedStore?.openQuestions[0]).toMatchObject({
+        status: 'answered',
+        answer: 'yes',
+        answeredBy: 'operator',
+        approved: true,
+      });
+      expect(persistedSidecar?.openQuestions).toEqual(
+        persistedStore?.openQuestions,
+      );
+      expect(sendCount).toBe(2);
+      expect(persistedSidecar?.lifecycle).toBe('closed');
+      expect(persistedSidecar?.harnessSocketPath).toBeUndefined();
+    } finally {
+      finishAnswerFlush.resolve();
+      finishDispatch.resolve();
       shutdown.abort();
       await sessionPromise.catch(() => {});
     }

@@ -1,7 +1,8 @@
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createConnection, createServer, type Server, type Socket } from 'node:net';
+import net from 'node:net';
+import type { Server, Socket } from 'node:net';
 import type { OpenQuestion } from '../escalation/open-question.js';
 
 export const OPEN_QUESTION_CONTROL_METHODS = {
@@ -40,7 +41,20 @@ export interface OpenQuestionControlServerOptions {
 
 export interface OpenQuestionControlServer {
   socketPath: string;
+  hasInFlightRequests: () => boolean;
+  /** Stop accepting requests and wait for accepted requests to settle. */
+  quiesce: () => Promise<void>;
   close: () => Promise<void>;
+}
+
+export class OpenQuestionControlTransportError extends Error {
+  constructor(
+    message: string,
+    public readonly outcome: 'not_sent' | 'unknown',
+  ) {
+    super(message);
+    this.name = 'OpenQuestionControlTransportError';
+  }
 }
 
 export class OpenQuestionControlOperationError extends Error {
@@ -73,13 +87,16 @@ export async function startOpenQuestionControlServer(
   const runtimeDirectory = await mkdtemp(join(tmpdir(), 'ens-oq-'));
   const socketPath = join(runtimeDirectory, 's.sock');
   const sockets = new Set<Socket>();
+  const processingSockets = new Set<Socket>();
+  const activeRequests = new Set<Promise<void>>();
   let closing = false;
+  let quiescePromise: Promise<void> | undefined;
   let closePromise: Promise<void> | undefined;
   let server: Server | undefined;
 
   try {
     await chmod(runtimeDirectory, 0o700);
-    server = createServer((socket) => {
+    server = net.createServer((socket) => {
       if (closing) {
         socket.destroy();
         return;
@@ -115,14 +132,17 @@ export async function startOpenQuestionControlServer(
           );
           return;
         }
-        void handleRequest(line, options).then(
-          (response) => writeResponse(socket, response),
-          () =>
-            writeResponse(
-              socket,
-              errorResponse(null, -32603, 'Open Question operation failed.'),
-            ),
-        );
+        processingSockets.add(socket);
+        const activeRequest = handleRequest(line, options)
+          .catch(() =>
+            errorResponse(null, -32603, 'Open Question operation failed.'),
+          )
+          .then((response) => writeResponse(socket, response))
+          .finally(() => {
+            processingSockets.delete(socket);
+            activeRequests.delete(activeRequest);
+          });
+        activeRequests.add(activeRequest);
       });
     });
 
@@ -130,7 +150,12 @@ export async function startOpenQuestionControlServer(
     await chmod(socketPath, 0o600);
   } catch (error) {
     if (server?.listening) {
-      await closeServer(server, sockets).catch(() => {});
+      await closeServer(
+        server,
+        sockets,
+        processingSockets,
+        activeRequests,
+      ).catch(() => {});
     }
     await rm(runtimeDirectory, { recursive: true, force: true }).catch(() => {});
     throw error;
@@ -139,12 +164,33 @@ export async function startOpenQuestionControlServer(
   const activeServer = server!;
   return {
     socketPath,
+    hasInFlightRequests: () => activeRequests.size > 0,
+    quiesce: () => {
+      if (quiescePromise) return quiescePromise;
+      closing = true;
+      quiescePromise = closeServer(
+        activeServer,
+        sockets,
+        processingSockets,
+        activeRequests,
+      );
+      return quiescePromise;
+    },
     close: () => {
       if (closePromise) return closePromise;
-      closing = true;
-      closePromise = closeServer(activeServer, sockets).finally(async () => {
-        await rm(runtimeDirectory, { recursive: true, force: true });
-      });
+      closePromise = (async () => {
+        try {
+          await (quiescePromise ??
+            (quiescePromise = closeServer(
+              activeServer,
+              sockets,
+              processingSockets,
+              activeRequests,
+            )));
+        } finally {
+          await rm(runtimeDirectory, { recursive: true, force: true });
+        }
+      })();
       return closePromise;
     },
   };
@@ -169,60 +215,119 @@ export async function sendOpenQuestionControlRequest<T>(
   }
 
   return new Promise<T>((resolve, reject) => {
-    const socket = createConnection(socketPath);
+    const socket = net.createConnection(socketPath);
+    let settled = false;
+    let requestSent = false;
     socket.setTimeout(SOCKET_TIMEOUT_MS, () => {
-      socket.destroy(new Error('Open Question control request timed out.'));
+      finishWithTransportError('Open Question control request timed out.');
     });
-    socket.on('error', reject);
 
     let buffer = Buffer.alloc(0);
-    socket.on('connect', () => {
-      socket.write(`${request}\n`);
-    });
-    socket.on('data', (chunk: Buffer) => {
+    const cleanup = () => {
+      socket.setTimeout(0);
+      socket.off('connect', onConnect);
+      socket.off('data', onData);
+      socket.off('end', onEnd);
+      socket.off('close', onClose);
+      socket.off('error', onError);
+    };
+    const settle = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback();
+      socket.destroy();
+    };
+    const finishWithTransportError = (message: string) => {
+      settle(() => {
+        reject(
+          new OpenQuestionControlTransportError(
+            requestSent
+              ? `${message} The request outcome is unknown. If this was an answer, inspect the live session before taking further action.`
+              : message,
+            requestSent ? 'unknown' : 'not_sent',
+          ),
+        );
+      });
+    };
+    const onConnect = () => {
+      requestSent = true;
+      socket.write(`${request}\n`, (error) => {
+        if (error) {
+          finishWithTransportError(
+            `Open Question control request could not be sent: ${error.message}`,
+          );
+        }
+      });
+    };
+    const onEnd = () => {
+      finishWithTransportError(
+        'Open Question control connection ended before a complete response.',
+      );
+    };
+    const onClose = () => {
+      finishWithTransportError(
+        'Open Question control connection closed before a complete response.',
+      );
+    };
+    const onError = (error: Error) => {
+      finishWithTransportError(
+        `Open Question control connection failed: ${error.message}`,
+      );
+    };
+    const onData = (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
       if (buffer.byteLength > MAX_MESSAGE_BYTES) {
-        socket.destroy(new Error('Open Question control response is too large.'));
+        settle(() => {
+          reject(new Error('Open Question control response is too large.'));
+          socket.destroy();
+        });
         return;
       }
       const newlineIndex = buffer.indexOf(0x0a);
       if (newlineIndex < 0) return;
       const line = buffer.subarray(0, newlineIndex).toString('utf8');
-      socket.destroy();
       try {
         const response = JSON.parse(line) as Record<string, unknown>;
         if (
           response.jsonrpc !== JSON_RPC_VERSION ||
           response.id !== requestId
         ) {
-          reject(new Error('Invalid Open Question control response.'));
+          settle(() => reject(new Error('Invalid Open Question control response.')));
           return;
         }
         if (response.error && typeof response.error === 'object') {
           const error = response.error as Record<string, unknown>;
-          reject(
-            new OpenQuestionControlRemoteError(
+          settle(() =>
+            reject(new OpenQuestionControlRemoteError(
               typeof error.code === 'number' ? error.code : -32603,
               typeof error.message === 'string'
                 ? error.message
                 : 'Open Question control request failed.',
-            ),
+            )),
           );
           return;
         }
         if (!Object.hasOwn(response, 'result')) {
-          reject(new Error('Invalid Open Question control response.'));
+          settle(() => reject(new Error('Invalid Open Question control response.')));
           return;
         }
-        resolve(response.result as T);
+        settle(() => resolve(response.result as T));
       } catch (error) {
-        reject(
-          error instanceof Error
-            ? error
-            : new Error('Invalid Open Question control response.'),
+        settle(() =>
+          reject(
+            error instanceof Error
+              ? error
+              : new Error('Invalid Open Question control response.'),
+          ),
         );
       }
-    });
+    };
+    socket.on('connect', onConnect);
+    socket.on('data', onData);
+    socket.on('end', onEnd);
+    socket.on('close', onClose);
+    socket.on('error', onError);
   });
 }
 
@@ -340,18 +445,19 @@ function errorResponse(
   return { jsonrpc: JSON_RPC_VERSION, id, error: { code, message } };
 }
 
-function writeResponse(socket: Socket, response: JsonRpcResponse): void {
-  if (socket.destroyed) return;
+function writeResponse(
+  socket: Socket,
+  response: JsonRpcResponse,
+): Promise<void> {
+  if (socket.destroyed) return Promise.resolve();
   const serialized = JSON.stringify(response) ?? '';
   if (Buffer.byteLength(serialized) > MAX_MESSAGE_BYTES) {
-    socket.end(
-      `${JSON.stringify(
-        errorResponse(response.id, -32603, 'Response is too large.'),
-      )}\n`,
+    return endSocket(
+      socket,
+      `${JSON.stringify(errorResponse(response.id, -32603, 'Response is too large.'))}\n`,
     );
-    return;
   }
-  socket.end(`${serialized}\n`);
+  return endSocket(socket, `${serialized}\n`);
 }
 
 function listen(server: Server, socketPath: string): Promise<void> {
@@ -370,12 +476,41 @@ function listen(server: Server, socketPath: string): Promise<void> {
   });
 }
 
-function closeServer(server: Server, sockets: Set<Socket>): Promise<void> {
+function closeServer(
+  server: Server,
+  sockets: Set<Socket>,
+  processingSockets: Set<Socket>,
+  activeRequests: Set<Promise<void>>,
+): Promise<void> {
   const closed = new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
   });
-  for (const socket of sockets) socket.destroy();
-  return closed;
+  for (const socket of sockets) {
+    if (!processingSockets.has(socket)) socket.destroy();
+  }
+  return Promise.all([closed, ...activeRequests]).then(() => {});
+}
+
+function endSocket(socket: Socket, data: string): Promise<void> {
+  return new Promise((resolve) => {
+    if (socket.destroyed) {
+      resolve();
+      return;
+    }
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      socket.off('finish', finish);
+      socket.off('close', finish);
+      socket.off('error', finish);
+      resolve();
+    };
+    socket.once('finish', finish);
+    socket.once('close', finish);
+    socket.once('error', finish);
+    socket.end(data, finish);
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

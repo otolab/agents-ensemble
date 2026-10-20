@@ -6,6 +6,7 @@ import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OpenQuestionRegistry } from '../escalation/open-question.js';
 import type { SessionLogger } from './session/session-logger.js';
 import type { SessionEventQueue } from './session/session-event-queue.js';
+import type { OperatorMessageEvent } from './session/session-event.js';
 
 export interface SubmitOperatorInputInput {
   message: string;
@@ -16,6 +17,7 @@ export interface SubmitOperatorInputInput {
   eventQueue: SessionEventQueue;
   sessionLogger: SessionLogger;
   onEscalated?: (record: EscalationRecord) => void;
+  onOperatorMessageQueued?: (event: OperatorMessageEvent) => void;
 }
 
 /** オペレータ発話を open question に適用し、conductor キューへ積む。 */
@@ -54,6 +56,8 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
     conductorTurn: input.conductorTurn,
     text,
   });
-  input.eventQueue.enqueue({ type: 'operator.message', text });
+  const event: OperatorMessageEvent = { type: 'operator.message', text };
+  input.onOperatorMessageQueued?.(event);
+  input.eventQueue.enqueue(event);
   return true;
 }

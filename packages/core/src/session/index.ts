@@ -27,6 +27,7 @@ export {
   OPEN_QUESTION_CONTROL_METHODS,
   OpenQuestionControlOperationError,
   OpenQuestionControlRemoteError,
+  OpenQuestionControlTransportError,
   sendOpenQuestionControlRequest,
   startOpenQuestionControlServer,
 } from './open-question-control.js';
