@@ -50,7 +50,12 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       items: [
         (context) =>
           context.workers.length > 0
-            ? context.workers.map((worker) => `- **${worker.name}**: \`${worker.kind}\``).join('\n')
+            ? context.workers
+                .map(
+                  (worker: OperatorPromptContext['workers'][number]) =>
+                    `- **${worker.name}**: \`${worker.kind}\``,
+                )
+                .join('\n')
             : '- profile に worker は登録されていません',
       ],
     },
