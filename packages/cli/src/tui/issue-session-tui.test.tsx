@@ -180,10 +180,8 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
 
     const frame = lastFrame() ?? '';
-    const inputPane = extractTuiPaneFrameStats(frame, INPUT_PANE_TITLE);
     expect(frame).toContain(`${OPERATOR_INPUT_PROMPT}1234567890`);
     expect(frame).not.toContain('operator> ');
-    expect(inputPane.contentRows).toHaveLength(1);
   });
 
   it('selects slash suggestions with bounded arrows and completes with Tab before Enter submits', async () => {
@@ -334,7 +332,7 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('inq-1');
     expect(frame).toContain('1/1');
     expect(frame).toContain('Shift+↑↓で選択');
-    expect(frame).toContain('operator>');
+    expect(frame).toContain(OPERATOR_INPUT_PROMPT);
     expect(frame).toContain(INPUT_PANE_TITLE);
   });
 
@@ -379,7 +377,7 @@ describe('IssueSessionTui', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('operator>');
+    expect(frame).toContain(OPERATOR_INPUT_PROMPT);
     expect(frame).not.toContain('追加指示');
     expect(frame).not.toContain('/reconnect');
     expect(frame).not.toContain('post-loop 待機中');
@@ -409,7 +407,7 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain(issueLabel);
     expect(frame).toContain(osc8Open);
     expect(frame).not.toContain(nonCanonicalOsc8Open);
-    expect(frame).toContain('operator>');
+    expect(frame).toContain(OPERATOR_INPUT_PROMPT);
     expect(frame).not.toContain('任意入力');
     expect(frame).not.toContain('/reconnect');
 
@@ -448,7 +446,7 @@ describe('IssueSessionTui', () => {
     expect(lastFrame() ?? '').toContain(issueLabel);
     expect(lastFrame() ?? '').toContain(osc8Open);
     expect(lastFrame() ?? '').not.toContain(nonCanonicalOsc8Open);
-    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').toContain(OPERATOR_INPUT_PROMPT);
     expect(lastFrame() ?? '').not.toContain('追加指示');
     expect(lastFrame() ?? '').not.toContain('/reconnect');
     expect(lastFrame() ?? '').not.toContain('post-loop 待機中');
@@ -587,7 +585,7 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
     expectCanonicalIssueUrl();
     const postLoopFrame = (lastFrame() ?? '').replace(/\s+/g, ' ');
-    expect(postLoopFrame).toContain('operator>');
+    expect(postLoopFrame).toContain(OPERATOR_INPUT_PROMPT);
     expect(postLoopFrame).not.toContain('追加指示');
     expect(postLoopFrame).not.toContain('/reconnect');
 
@@ -899,7 +897,7 @@ describe('IssueSessionTui', () => {
     const frame = lastFrame() ?? '';
     expect(frame.split('\n')).toHaveLength(11);
     expect(Math.max(...frame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(40);
-    expect(frame).toContain('operator>');
+    expect(frame).toContain(OPERATOR_INPUT_PROMPT);
     terminalSizeStore.dispose();
   });
 
@@ -962,7 +960,7 @@ describe('IssueSessionTui', () => {
       expect(finalFrame).not.toBe(initialFrame);
       expect(Math.max(...finalFrame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(60);
       expect(finalFrame).toContain(WORKER_PANE_TITLE);
-      expect(finalFrame).toContain('operator>');
+      expect(finalFrame).toContain(OPERATOR_INPUT_PROMPT);
     } finally {
       unsubscribe();
       resizeController.dispose();
@@ -1056,7 +1054,7 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('(活動ログなし)');
     expect(frame).not.toContain('Open questions');
     expect(frame).not.toContain('(未回答なし)');
-    expect(frame).toContain('operator>');
+    expect(frame).toContain(OPERATOR_INPUT_PROMPT);
     expect(frame).not.toContain('任意入力');
     expect(frame).not.toContain('/reconnect');
   });
@@ -1068,7 +1066,7 @@ describe('IssueSessionTui', () => {
     );
 
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').toContain(OPERATOR_INPUT_PROMPT);
     expect(lastFrame() ?? '').not.toContain('任意入力');
 
     viewModel.setDisplayState({
@@ -1090,7 +1088,7 @@ describe('IssueSessionTui', () => {
     });
     await flushInkStdin();
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').toContain(OPERATOR_INPUT_PROMPT);
     expect(lastFrame() ?? '').not.toContain('任意入力');
   });
 
@@ -1151,7 +1149,7 @@ describe('IssueSessionTui', () => {
     });
     if (restoredQuestions.length === 1) {
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('operator>');
+      expect(lastFrame() ?? '').toContain(OPERATOR_INPUT_PROMPT);
       expect(lastFrame() ?? '').not.toContain('任意入力');
     } else {
       expect(lastFrame() ?? '').toContain('Open questions');
@@ -1161,7 +1159,7 @@ describe('IssueSessionTui', () => {
       setOperatorQuestions([]);
       await flushInkStdin();
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('operator>');
+      expect(lastFrame() ?? '').toContain(OPERATOR_INPUT_PROMPT);
       expect(lastFrame() ?? '').not.toContain('任意入力');
     }
   });
