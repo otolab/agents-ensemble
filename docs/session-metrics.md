@@ -103,7 +103,7 @@
 
 ### 2.4 TTY 終了サマリ例
 
-`sessionUsage` があるときは、agent ごとに input / output tokens と、その agent が報告した cache 値を同じ行に表示し、最後に `totals.tokens` の input / output だけを合計行として表示する。cache の合計行は出さない。worker の ACP usage がない完了ラウンドは応答文からの推定を行末の `推定` で示す。失敗などで usage round が残らなかった消費分は含まれないが、TTY に脚注は出さない。cache rate は取得できる項目だけ表示し、式は [token-usage-semantics.md §3](token-usage-semantics.md#3-harness-集計の読み方) のとおり。cost / compaction も取得できる項目だけ表示する。
+`sessionUsage` があるときは、agent ごとに input / output tokens、取得できた cache 値、hit rate を同じ行に表示し、最後に `totals.tokens` の input / output だけを合計行として表示する。cache / hit rate の全体行は出さない。worker の ACP usage がない完了ラウンドは応答文からの推定を行末の `推定` で示す。失敗などで usage round が残らなかった消費分は含まれないが、usage ブロック末尾に記録範囲の脚注を出す。cache rate は取得できる項目だけ表示し、式は [token-usage-semantics.md §3.2](token-usage-semantics.md#32-集計値の読み方) のとおり。cost / compaction も取得できる項目だけ表示する。
 
 ```text
 セッション終了 (completed)
@@ -115,6 +115,7 @@
     worker implementer: 新規 input 500 · output 120 · cache read 100 · cache write 0 · hit 33.3% · 推定
     worker reviewer: input 300 · output 200
     合計: input 3k · output 920
+    ※ 記録分のみ。失敗などで未記録の usage は含みません。
   コンテキスト: 1% (100,000 上限)
   課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)
   コンテキスト圧縮: 2 回
@@ -133,6 +134,7 @@ worker がモデル要求後に切断され、token usage が記録されない�
   usage（記録済み）:
     conductor: input 1k · output 100
     合計: input 1k · output 100
+    ※ 記録分のみ。失敗などで未記録の usage は含みません。
   課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)
   未回答 open question: 0
   agentId: agent-1
@@ -142,7 +144,7 @@ worker がモデル要求後に切断され、token usage が記録されない�
 
 正本: `packages/core/src/usage/session-usage-tracker.ts`。conductor 各 `agent.send` は SDK `RunResult.usage`、worker 各 prompt は ACP `usage` または **推定**（`estimateTokenUsageFromText`）。
 
-input / output / cache の source ごとの意味、provider 課金との違い、cache rate と context utilization の読み方は [token-usage-semantics.md](token-usage-semantics.md) を参照してください。
+input / output / cache の source ごとの意味、provider 課金との違い、cache rate と context utilization の読み方は [token-usage-semantics.md §3](token-usage-semantics.md#3-harness-集計の読み方) と [§4.1](token-usage-semantics.md#41-cachehitrate-はトークン比) を参照してください。外部ツールとの field 対応は [§8](token-usage-semantics.md#8-外部ツールとの対応)、TTY / export の整形は [§9](token-usage-semantics.md#9-表示とexportの整形) が正本です。
 
 ### 3.1 セッションサマリ（`SessionUsageSummary`）
 
