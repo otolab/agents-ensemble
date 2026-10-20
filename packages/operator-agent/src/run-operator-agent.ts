@@ -76,6 +76,7 @@ export async function runOperatorAgent(
             config: runtime.config,
           }),
           piSkills: runtime.profile.conductor?.piSkills !== false,
+          piExtensions: false,
         }
       : {}),
     customTools: {

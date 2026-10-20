@@ -453,6 +453,7 @@ async function createPiConductorSession(
   const piSkills = options.piSkills !== false;
   const resources = await loadPiResources({
     ...options,
+    loadExtensions: options.piExtensions !== false,
     loadSkillContents: !piSkills,
   });
   const headlessSettingsOverrides = getPiHeadlessSettingsManagerOverrides(resources.settings);

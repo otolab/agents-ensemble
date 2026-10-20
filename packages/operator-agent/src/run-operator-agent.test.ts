@@ -161,6 +161,7 @@ describe('runOperatorAgent', () => {
         agentDir: join(repoRoot, '.ensemble', 'pi-user'),
         projectDir: join(repoRoot, '.ensemble', 'pi-project'),
       },
+      piExtensions: false,
     });
     expect(agentOptions?.systemPrompt).toContain('operator ロール');
     expect(agentOptions?.systemPrompt).toContain('Profile operator guidance.');

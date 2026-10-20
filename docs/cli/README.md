@@ -82,7 +82,7 @@ cd /path/to/your/repository
 ensemble issue https://github.com/OWNER/REPOSITORY/issues/123
 ```
 
-人間との TTY 対話を operator-agent に委ねる場合は `ensemble operator-agent [--repo-root <path>]` を使います。Issue セッションとは別の agent session で起動し、backend・model・profile・認証は conductor の設定を共有します。Phase 1 では `.ensemble/sessions/` の保存済み sidecar を読み、稼働中 conductor への同期接続や書き戻しは行いません。
+人間との TTY 対話を operator-agent に委ねる場合は `ensemble operator-agent [--repo-root <path>]` を使います。Issue セッションとは別の agent session で起動し、backend・model・profile・認証は conductor の設定を共有します。Pi backend ではユーザー／プロジェクト側の Pi extension を operator session に読み込まず、Phase 1 の read-only 境界を保ちます。`.ensemble/sessions/` の保存済み sidecar を参照できますが、稼働中 conductor への同期接続や書き戻しは行いません。
 
 初回の作業指示は、Issue 参照の後ろに CLI 引数として渡せます。複数の引数はスペース 1 つで結合され、前後の空白は除かれます。
 
