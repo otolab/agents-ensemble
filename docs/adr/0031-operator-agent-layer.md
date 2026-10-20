@@ -71,6 +71,32 @@ operator-agent は **別プロセス・別 agent セッション**だが、Phase
 
 `operator.model` や operator 専用 auth などの **分離は、利用ケースが固まってから**検討する。実装は [#488](https://github.com/otolab/agents-ensemble/issues/488) で conductor 向け `resolve-settings` 相当の再利用を前提とする。
 
+### Phase 1 の LLM ランタイム（ConductorAgent / SDK・Pi。ACP ではない）
+
+operator-agent の LLM は **worker と同じ ACP 経路では立てない**。Issue セッションの conductor と同型の **埋め込み LLM agent** とする（[ADR 0002](0002-star-topology-sdk-conductor-acp-worker.md)、[ADR 0025](0025-conductor-agent-backend-sdk-and-pi.md)）。
+
+| 層 | LLM ランタイム | 備考 |
+|----|----------------|------|
+| **workers** | **ACP**（`agent acp` 等） | 変更なし |
+| **conductor**（`ensemble issue`） | **`ConductorAgent`** — `cursor` → `@cursor/sdk` `Agent`、 `pi` → Pi `createAgentSession` | harness `ConductorSession` 内 |
+| **operator-agent** | **同上** — `createConductorAgentFactory(resolveConductorBackendSetting(...))` 等の **同一 factory 選択** | **別プロセス・別 `agentId`**。`ConductorSession` / Issue sidecar には載せない |
+
+**採用**
+
+- backend / model / 認証の **設定解決は conductor 流用**（上表の Phase 1 設定）。
+- 実装の正本 interface は **`ConductorAgent` + `ConductorAgentFactory`**（`packages/core`）。operator-agent パッケージは **Issue harness 全体（`ConductorSession`）に依存せず**、factory・auth・model 解決・operator 用 `customTools` とプロンプトを組み立てる。
+- **プロンプト**は operator ロール用（Issue の conductor system prompt のコピーではない）。**ツール**も operator 向け（セッション一覧・将来 OQ 等）。repository 直編集の builtin coding tools は Phase 1 では profile の `conductor.builtinTools` 解決に **合わせてよい**（後から operator 専用に切り離し可能）。
+
+**非採用**
+
+| 案 | 理由 |
+|----|------|
+| operator-agent を **ACP** で起動 | conductor を ACP に寄せる方向は [ADR 0025](0025-conductor-agent-backend-sdk-and-pi.md) で既に不採用。監督ロールは長寿命 SDK/Pi が適する |
+| operator 専用 backend 選択（`operator.backend`） | Phase 1 では `conductor.backend` に統一 |
+| `ensemble issue` 内の conductor インスタンスを **共有** | プロセス・寿命・プロンプトが異なる。operator ↔ conductor は非同期チャネルのみ |
+
+MVP で **実装を Cursor SDK のみに限定**してもよいが、**設定は `conductor.backend` を読む**（Pi 対応は factory 追加で揃える）。
+
 ### 現行 `ensemble issue` との共存
 
 - **出荷済み**: 人間が **SessionView**（`operator.message`、Operator input ペイン）で **operator ロール相当**を担う。プロンプト terms の「オペレータ」は当面この経路を指す。
