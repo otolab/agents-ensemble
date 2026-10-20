@@ -52,6 +52,7 @@ import { createPromptWorkerTool } from '../dispatch/prompt-worker-tool.js';
 import { createWorkerStatusTools } from '../dispatch/worker-status-tool.js';
 import { createGetToolCallTool } from '../dispatch/get-tool-call-tool.js';
 import { createSessionUsageTools } from '../dispatch/session-usage-tool.js';
+import { createReportSessionStateTool } from '../dispatch/report-session-state-tool.js';
 import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js';
 import type { ConnectWorkerAcpFn } from '../dispatch/worker-acp-session.js';
 import { parseIssueUrl, type IssueRef } from '../issue/issue-ref.js';
@@ -728,6 +729,8 @@ export async function runConductorSession(
     },
   });
 
+  const reportSessionStateTool = createReportSessionStateTool();
+
   const dispatchHoldTools = createSetDispatchHoldTool({
     state: dispatchHoldState,
     onChanged: onDispatchHoldChanged,
@@ -759,6 +762,7 @@ export async function runConductorSession(
     .registerAll(registerGitHubWatchTools)
     .registerAll(unregisterGitHubWatchTools)
     .registerAll(sessionUsageTools)
+    .registerAll(reportSessionStateTool)
     .registerAll(dispatchHoldTools);
 
   const conductorOptions: ConductorAgentCreateOptions = {

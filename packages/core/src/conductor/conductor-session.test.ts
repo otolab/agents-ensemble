@@ -31,6 +31,7 @@ import type {
   GitHubUpdatePayload,
 } from '../github/github-update-types.js';
 import { createMockConductorGetUsage } from '../testing/mock-conductor-get-usage.js';
+import type { ConductorToolResult } from './conductor-tool.js';
 import type { ConductorAgentCreateOptions } from './conductor-agent.js';
 
 const TEST_ISSUE = {
@@ -331,6 +332,44 @@ describe('runConductorSession resume / shutdown', () => {
       compactionCount: 1,
     });
     expect(usageResult.structuredContent).not.toHaveProperty('cost');
+  });
+
+  it('registers report_session_state and returns its concise snapshot', async () => {
+    let conductorTools: ConductorAgentCreateOptions['customTools'];
+    let statusResult: ConductorToolResult | undefined;
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => {
+      statusResult = await conductorTools!.report_session_state!.execute({
+        statusLine: 'レビュー中：CIテスト待ち',
+      });
+      return {
+        runId: 'run-session-status',
+        status: 'finished',
+        result: 'reported',
+      };
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(conductorTools?.report_session_state).toBeDefined();
+    expect(statusResult?.structuredContent).toEqual({
+      statusLine: 'レビュー中：CIテスト待ち',
+    });
   });
 
   it('adds the user-wide document to the conductor prompt from the shared user root', async () => {
