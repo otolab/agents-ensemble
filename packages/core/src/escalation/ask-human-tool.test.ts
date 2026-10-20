@@ -28,15 +28,9 @@ describe('createAskHumanTool', () => {
     });
   });
 
-  it('adds the linked pending permission summary to Open Question context', async () => {
+  it('keeps conductor context unchanged for a permission-linked question', async () => {
     const registry = new OpenQuestionRegistry();
-    const summary =
-      'permission.pending worker=implementer tool=Edit path=src/example.ts id=perm-123...';
-    const tools = createAskHumanTool({
-      registry,
-      getPermissionSummary: (permissionId) =>
-        permissionId === 'permission-request-123456' ? summary : undefined,
-    });
+    const tools = createAskHumanTool({ registry });
 
     await tools.ask_human.execute({
       question: 'Should I allow this edit?',
@@ -47,27 +41,7 @@ describe('createAskHumanTool', () => {
 
     expect(registry.listOpen()[0]).toMatchObject({
       relatedPermissionId: 'permission-request-123456',
-      context: `${summary}\nThe operator should decide.`,
-    });
-  });
-
-  it('does not duplicate a summary the conductor already quoted in context', async () => {
-    const registry = new OpenQuestionRegistry();
-    const summary =
-      'permission.pending worker=implementer tool=Edit path=src/example.ts id=perm-123...';
-    const tools = createAskHumanTool({
-      registry,
-      getPermissionSummary: () => summary,
-    });
-
-    await tools.ask_human.execute({
-      question: 'Should I allow this edit?',
-      context: `Please decide:\n${summary}`,
-      relatedPermissionId: 'permission-request-123456',
-    });
-
-    expect(registry.listOpen()[0]?.context).toBe(
-      `Please decide:\n${summary}`,
+      context: 'The operator should decide.',
     );
   });
 

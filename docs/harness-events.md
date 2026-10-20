@@ -137,8 +137,10 @@ request に session ID がない場合やスコープが一致しない場合、
 一致する候補を選ぶ。候補を混ぜて返すことはない。permission params と snapshot も混ぜず、
 `get_tool_call` が返すのは後者だけである。
 
-`ask_human` が `relatedPermissionId` を指定した場合、harness はその pending permission の要約を
-Open Question の context にも付加し、TTY の Open questions ペインで質問と request id を対応して確認できる。
+`operatorSummary` は conductor が permission の内容を判断し、必要な質問や `ask_human` の
+context を組み立てるための情報である。context は conductor が記述する。
+`relatedPermissionId` は Open Question と pending permission を関連づけ、`yes_no` の回答から
+permission の `approved` を記録するために使う。
 
 `worker.failed` / `worker.process.stderr` の診断文字列と、`conductor.send` の
 `status=error` は既定でも詳細に残す。正常な `worker.round`、worker state、send lifecycle は
@@ -339,7 +341,7 @@ attach handshake 中に届いた追加指示は queue に積む。まだ cancel 
 | `operator.reconnect` | オペレータが `/reconnect` / `reconnect` を入力 | **なし** | Driver が `close` → `resume(sameId)` を実行。conductor へ送らず、worker / worktree / プロセスには触れない |
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
-| `permission.pending` | permission が保留 | `## permission 判断待ち` | conductor 向け YAML に `request.raw`（params 全文）と `brief`（構造化された判断用情報）を含む。補えない必須情報は `brief.missing` に載せる。`operatorSummary` も互換用に併記し、`ask_human.relatedPermissionId` で Open Question context と連携する |
+| `permission.pending` | permission が保留 | `## permission 判断待ち` | conductor 向け YAML に `request.raw`（params 全文）と `brief`（構造化された判断用情報）を含む。補えない必須情報は `brief.missing` に載せる。`operatorSummary` は conductor が質問や context を組み立てる際の参照情報として併記する。`ask_human.relatedPermissionId` は Open Question と permission を関連づける |
 | `permission.stall` | worker 活動中の pending permission が既定 300s（`permissionDeadlockStallMs`）継続したとき | `## permission 停滞警告` | conductor 向けの低優先度 trigger。同一の連続停滞エピソードでは 1 回だけ。pending の再送ではなく、経過時間・対象 ID・閾値を含む。`harness.warning` は従来どおり operator 向けに出す |
 | `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が commit SHA 単位の CI 集約状態遷移を検知したときだけ載る（同じ SHA・同じ状態の毎 poll 再送はしない。§2.5）。conductor は payload の SHA / failed check 名を手掛かりに必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` / `permission.stall` は dispatch 可） |
 
