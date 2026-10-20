@@ -192,6 +192,9 @@ export function formatIssueSessionSummaryText(summary: SessionSummary): string {
     if (tokenRows.length > 0) {
       lines.push('  usage（記録済み）:');
       lines.push(...tokenRows);
+      lines.push(
+        '    ※ 記録分のみ。失敗などで未記録の usage は含みません。',
+      );
     }
 
     const context = usage.context;

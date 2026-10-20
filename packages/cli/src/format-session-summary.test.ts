@@ -265,6 +265,9 @@ describe('formatIssueSessionSummaryText', () => {
     );
     expect(text).toContain('worker reviewer: input 300 · output 200');
     expect(text).toContain('合計: input 3k · output 920');
+    expect(text).toContain(
+      '※ 記録分のみ。失敗などで未記録の usage は含みません。',
+    );
     expect(text).not.toContain('21.7%');
     expect(text).not.toContain('worker は ACP が usage を返さない');
     expect(text).not.toContain('キャッシュヒット率:');
@@ -272,6 +275,35 @@ describe('formatIssueSessionSummaryText', () => {
       '課金（取得できた conductor 実課金。worker 分は未算出）: $0.42 (raw $0.51)',
     );
     expect(text).toContain('コンテキスト圧縮: 2 回');
+  });
+
+  it('keeps compaction on its own line when token usage rows are absent', () => {
+    const base = createSummary();
+    const { cost: _cost, ...sessionUsage } = base.sessionUsage!;
+    const text = formatIssueSessionSummaryText(
+      createSummary({
+        workerDispatches: [],
+        sessionUsage: {
+          ...sessionUsage,
+          totals: {
+            ...sessionUsage.totals,
+            rounds: 0,
+            roundsWithUsage: 0,
+            tokens: null,
+          },
+          byAgent: {
+            conductor: { rounds: 0, roundsWithUsage: 0, tokens: null },
+            workers: {},
+          },
+          context: { limit: null, usedInputTokens: 0, percent: null },
+          compactionCount: 2,
+        },
+      }),
+    );
+
+    expect(text).toContain('コンテキスト圧縮: 2 回');
+    expect(text).not.toContain('usage（記録済み）:');
+    expect(text).not.toContain('※ 記録分のみ。');
   });
 
   it('omits cost, cache rate, and compaction when unavailable', () => {

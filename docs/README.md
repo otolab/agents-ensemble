@@ -44,7 +44,7 @@
 |------|------|
 | [session-logging.md](session-logging.md) | stdout / stderr / TUI / 終了 JSON の出力チャネルと SessionLogger |
 | [session-metrics.md](session-metrics.md) | 終了サマリ、usage、worker 状態などのメトリクス |
-| [token-usage-semantics.md](token-usage-semantics.md) | LLM usage の意味、provider 課金との違い、harness 集計の注意 |
+| [token-usage-semantics.md](token-usage-semantics.md) | LLM usage の意味、外部ツールとの対応、TTY / export 整形、provider 課金との違い |
 
 ## 設計・アーキテクチャ
 
