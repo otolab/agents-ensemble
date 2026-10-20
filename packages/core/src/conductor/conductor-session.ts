@@ -647,16 +647,6 @@ export async function runConductorSession(
 
   const askHumanTools = createAskHumanTool({
     registry: openQuestions,
-    getPermissionSummary: (permissionId) => {
-      const pending = permissionPipeline.pending.get(permissionId);
-      if (!pending) {
-        return undefined;
-      }
-      const workerLabel =
-        workerSession.runtime.resolveWorkerLabel(pending.workerId) ??
-        pending.workerId;
-      return formatPermissionSummaryForOperator(pending, { workerLabel });
-    },
     onEnqueued: (question) => {
       sessionLogger.emit({ type: 'open.question.enqueued', question });
       options.onOpenQuestionEnqueued?.(question);

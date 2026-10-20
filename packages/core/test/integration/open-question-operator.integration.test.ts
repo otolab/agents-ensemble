@@ -410,7 +410,7 @@ describe('open question / operator flow integration', () => {
     expect(result.stopReason).toBe('completed');
   });
 
-  it('links a Cursor ACP v1 Edit permission summary to the Open Question context', async () => {
+  it('keeps conductor context while linking a permission yes_no answer', async () => {
     const bridge = await createInProcessAcpBridge(undefined, {
       requestPermissionOnPrompt: true,
       permissionParams: permissionRequestFixtures.editCursorAcpV1.params,
@@ -514,12 +514,15 @@ describe('open question / operator flow integration', () => {
       `description="Edit File" id=${pendingId!.slice(0, 8)}...`;
     expect(observedOpenQuestion).toMatchObject({
       relatedPermissionId: pendingId,
-      context: `${expectedSummary}\nThe Edit permission is waiting.`,
+      context: 'The Edit permission is waiting.',
     });
     expect(result.openQuestions).toContainEqual(
       expect.objectContaining({
         relatedPermissionId: pendingId,
-        context: `${expectedSummary}\nThe Edit permission is waiting.`,
+        context: 'The Edit permission is waiting.',
+        answer: 'no',
+        assent: 'no',
+        approved: false,
       }),
     );
   });
