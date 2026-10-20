@@ -5,6 +5,7 @@ import React from 'react';
 import { render as renderInk } from 'ink';
 import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
+import { OPERATOR_INPUT_PROMPT } from './tui-layout-constants.js';
 import {
   createTuiResizeController,
   createTuiTerminalSizeStore,
@@ -261,7 +262,7 @@ describe('tui terminal size', () => {
       expect(outputAfterResize).toContain('Workers');
       expect(outputAfterResize).toContain('Orchestration');
       expect(outputAfterResize).toContain('Operator input');
-      expect(outputAfterResize).toContain('operator>');
+      expect(outputAfterResize).toContain(OPERATOR_INPUT_PROMPT);
       expect(outputAfterResize).toMatch(/╰.*╯/);
       expect(outputAfterResize).toMatch(/└.*┘/);
     } finally {

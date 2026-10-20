@@ -96,7 +96,7 @@ Readline Emacs モードを事実上の共通仕様とみなす。
 | libedit | `~/.editrc` | `bind -e` / `bind -v` |
 | Zsh ZLE | `~/.zshrc` の `bindkey` | Readline 非使用。Emacs モードは `bindkey -e` |
 
-**agents-ensemble 非 TTY 経路**（`bindAsyncOperatorInput`）は Node `readline`。Emacs 風は **Node/OS 依存** で、TUI 入力欄とは別系統。
+**agents-ensemble の TTY readline 経路**（`bindAsyncOperatorInput` / `promptOperatorInput`）は Node `readline`。Emacs 風は **Node/OS 依存** で、Ink TUI 入力欄とは別系統。非 TTY では対話 readline を開かず、有効な CLI 初回メッセージまたは `ENSEMBLE_OPERATOR_MESSAGE` があれば 1 回注入する。
 
 ### 4.2 Python TUI（prompt_toolkit）
 
@@ -155,7 +155,7 @@ Emacs 風を **自前実装** する場合の最小ループ:
 | **ライブラリに委譲** | マルチライン入力が主 | ◎ `react-ink-textarea`（フォーク）が Emacs 風を内蔵 |
 | **薄いラッパー** | ライブラリ + IME 同期だけ自前 | 現状 `OperatorTextArea` + `cursorStart` |
 | **フル自前** | 特殊レイアウト・キーマップ | 非推奨（二重実装・IME リスク） |
-| **Readline 直呼び** | 1 行・同期 REPL のみ | 非 TTY 経路のみ |
+| **Readline 直呼び** | 1 行・同期 REPL のみ | TTY の readline 経路（Ink TUI とは別系統） |
 
 ### 5.2 テスト観点
 
@@ -171,7 +171,8 @@ Emacs 風を **自前実装** する場合の最小ループ:
 |------|----------|----------|
 | TTY + Ink TUI | `OperatorTextArea` → 公開 fork `@otolab/react-ink-textarea`（キルリング / Readline 整合を内蔵） | **ライブラリ内蔵**。`Ctrl+a/e/f/b/d`（`Ctrl+d` はカーソル位置の 1 文字削除）、`Ctrl+p/n`（visual row の上 / 下移動、上端 / 下端は no-op）、`Ctrl+k/u/w/y`、`Alt+b/f/y` をサポート。`Ctrl+r`（履歴逆検索）は **非対応**。 |
 | TTY スクロール | `issue-session-tui.tsx` の `useInput` | `PgUp/PgDn` / `Home`/`End`（入力空時 or Ctrl 修飾）— **編集ショートカットとは別レイヤ**（競合なし） |
-| 非 TTY | `readline` / 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | 有効な CLI 初回メッセージは 1 回だけ注入。`--continue` / `--resume` で無視された CLI メッセージは注入せず、非 TTY では binding なし。readline は OS・Node readline 依存 |
+| TTY + readline 経路 | Node `readline`（`bindAsyncOperatorInput` / `promptOperatorInput`）。Ink TUI の入力欄とは別系統 | Node / OS 依存 |
+| 非 TTY | 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | 有効な CLI 初回メッセージは 1 回だけ注入。`--continue` / `--resume` で無視された CLI メッセージは注入せず、非 TTY では interactive binding なし |
 
 **`useInput` と TextArea の関係**: 活動ログスクロール用 `useInput` は `Home`/`End`/`PgUp`/`PgDn` を扱います。slash 候補が表示されている単一行入力に限り、同じ `useInput` が上下矢印で候補選択を進めます。この間だけ TextArea の `Up` / `Down` action を無効にして二重処理を防ぎます。Tab は TextArea の `onTab` callback から候補補完へ渡し、Enter は TextArea の既存 submit action に残します。候補がないときや複数行入力では上下矢印を含む既存 textarea 操作に戻ります。行編集ショートカット（`Ctrl+a/e/f/b/d/p/n` 等）は引き続き TextArea 内 `useKeyboardInput` が処理し、入力欄に文字があるときはスクロール系は `Ctrl` 修飾時のみ有効。
 

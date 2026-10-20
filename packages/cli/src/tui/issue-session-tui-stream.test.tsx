@@ -11,6 +11,7 @@ import type { OpenQuestion } from '@agents-ensemble/core';
 import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
+import { OPERATOR_INPUT_PROMPT } from './tui-layout-constants.js';
 import {
   createTuiResizeController,
   createTuiTerminalSizeStore,
@@ -119,7 +120,8 @@ describe('IssueSessionTuiStream', () => {
 
     stdin.write(INK_TEST_KEYS.tab);
     await flushInkStdin();
-    expect(lastFrame() ?? '').toContain('operator> /close');
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}/close`);
+    expect(lastFrame() ?? '').not.toContain('operator> ');
     expect(onSubmit).not.toHaveBeenCalled();
 
     stdin.write('\r');
@@ -309,7 +311,7 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).not.toContain('Open questions');
     expect(frame).not.toContain('(未回答なし)');
     expect(workersIndex).toBeGreaterThan(operatorInputIndex);
-    expect(frame).toContain('operator>');
+    expect(frame).toContain(OPERATOR_INPUT_PROMPT);
     expect(frame).not.toContain('追加指示');
     expect(frame).not.toContain('/reconnect');
     expect(frame).toContain('otolab/agents-ensemble#261');
@@ -435,7 +437,7 @@ describe('IssueSessionTuiStream', () => {
     await flushInkStdin();
     expectCanonicalIssueUrl();
     const postLoopFrame = (lastFrame() ?? '').replace(/\s+/g, ' ');
-    expect(postLoopFrame).toContain('operator>');
+    expect(postLoopFrame).toContain(OPERATOR_INPUT_PROMPT);
     expect(postLoopFrame).not.toContain('追加指示');
     expect(postLoopFrame).not.toContain('/reconnect');
 
@@ -561,7 +563,7 @@ describe('IssueSessionTuiStream', () => {
     viewModel.setPostLoopWaiting(true);
     await flushInkStdin();
     expectCanonicalIssueLink();
-    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').toContain(OPERATOR_INPUT_PROMPT);
     expect(lastFrame() ?? '').not.toContain('追加指示');
     expect(lastFrame() ?? '').not.toContain('/reconnect');
 
@@ -584,7 +586,7 @@ describe('IssueSessionTuiStream', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('operator>');
+    expect(frame).toContain(OPERATOR_INPUT_PROMPT);
     expect(frame).not.toContain('任意入力');
     expect(frame).not.toContain('/reconnect');
     expect(frame).not.toContain('自律ターン');
@@ -603,7 +605,7 @@ describe('IssueSessionTuiStream', () => {
     );
 
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').toContain(OPERATOR_INPUT_PROMPT);
     expect(lastFrame() ?? '').not.toContain('任意入力');
     expect(lastFrame() ?? '').not.toContain('/reconnect');
     expect(lastFrame() ?? '').toContain('otolab/agents-ensemble#263');
@@ -791,7 +793,7 @@ describe('IssueSessionTuiStream', () => {
       expect(countHistory(finalFrame)).toBe(1);
       expect(Math.max(...finalFrame.split('\n').map((line) => line.trimEnd().length))).toBeLessThanOrEqual(60);
       expect(finalFrame).toContain('Workers');
-      expect(finalFrame).toContain('operator>');
+      expect(finalFrame).toContain(OPERATOR_INPUT_PROMPT);
     } finally {
       unsubscribe();
       resizeController.dispose();
@@ -1035,7 +1037,7 @@ describe('IssueSessionTuiStream', () => {
     });
     if (restoredQuestions.length === 1) {
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('operator>');
+      expect(lastFrame() ?? '').toContain(OPERATOR_INPUT_PROMPT);
       expect(lastFrame() ?? '').not.toContain('任意入力');
     } else {
       expect(lastFrame() ?? '').toContain('Open questions');
@@ -1045,7 +1047,7 @@ describe('IssueSessionTuiStream', () => {
       setOperatorQuestions([]);
       await flushInkStdin();
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('operator>');
+      expect(lastFrame() ?? '').toContain(OPERATOR_INPUT_PROMPT);
       expect(lastFrame() ?? '').not.toContain('任意入力');
     }
   });

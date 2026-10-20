@@ -36,6 +36,7 @@ import {
   INPUT_PANE_BORDER_COLOR,
   INPUT_PANE_HINT_COLOR,
   MAIN_PANE_TITLE,
+  OPERATOR_INPUT_PROMPT,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
   WORKER_PANE_HEIGHT,
@@ -396,7 +397,7 @@ export function IssueSessionTui({
   // branch while preserving the main-screen layout.
   const liveFrameRows = Math.max(1, terminalRows - 1);
   const contentWidth = usePaneContentWidth(terminalColumns);
-  const operatorPrompt = 'operator> ';
+  const operatorPrompt = OPERATOR_INPUT_PROMPT;
   const maxInputDisplayLines = computeMaxInputDisplayLines(liveFrameRows);
   const openQuestions = getTuiOpenQuestions(snapshot);
   const openQuestionsLayout = useMemo(

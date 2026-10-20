@@ -70,10 +70,10 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
 
 | 内容 | 条件 |
 |------|------|
-| `operator> …` / `conductor> …` | TTY: Ink TUI ペイン。非 TTY + 有効な CLI 初回メッセージ（新規セッション） / env: string backend（`bindAsyncOperatorInput` 経路） |
+| `operator> …` / `conductor> …` | 非 TTY + 有効な CLI 初回メッセージ（新規セッション） / env: string backend。非 TUI の対話ログに付く話者ラベル |
 | **SessionSummary** JSON | 非 TTY 終了時（`--summary-format auto` 既定）。e2e / パイプ向け |
 
-非 TTY では DisplaySink は noop backend（または有効な CLI 初回メッセージ（新規セッション） / env 時のみ string backend）。`--continue` / `--resume` で無視された CLI メッセージは単発メッセージに数えず、message なしと同じ noop backend になる。stdout は **終了サマリ JSON**（`--summary-format auto` 既定）。TTY では Ink TUI が対話を表示する（stdout への逐次 `write` は行わない）。
+TTY の Ink TUI では Operator input 欄の入力プロンプトを pane / stream 内に `> ` と表示します。これは対話ログの `operator>` / `conductor>` という話者ラベルとは別の表示です。非 TTY では DisplaySink は noop backend（または有効な CLI 初回メッセージ（新規セッション） / env 時のみ string backend）です。`--continue` / `--resume` で無視された CLI メッセージは単発メッセージに数えず、message なしと同じ noop backend になります。stdout は **終了サマリ JSON**（`--summary-format auto` 既定）。TTY では Ink TUI が対話を表示する（stdout への逐次 `write` は行わない）。
 
 ### stderr
 

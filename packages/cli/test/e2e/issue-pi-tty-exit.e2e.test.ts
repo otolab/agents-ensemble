@@ -495,7 +495,7 @@ globalThis.fetch = async (input, init) => {
       ptyRunner.stdin?.write('/exit');
       await waitForText(
         () => stripTerminalControls(output),
-        'operator> /exit',
+        '> /exit',
         ptyRunner,
         2_000,
       );

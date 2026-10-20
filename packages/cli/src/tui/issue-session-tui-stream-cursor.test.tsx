@@ -39,7 +39,11 @@ import {
   computeStreamOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
 import { resolveOperatorInputDisplayMode } from './format-operator-context.js';
-import { PANE_PADDING_X, ROUND_BORDER_WIDTH } from './tui-layout-constants.js';
+import {
+  OPERATOR_INPUT_PROMPT,
+  PANE_PADDING_X,
+  ROUND_BORDER_WIDTH,
+} from './tui-layout-constants.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 
 describe('IssueSessionTuiStream IME cursor contract', () => {
@@ -78,7 +82,7 @@ describe('IssueSessionTuiStream IME cursor contract', () => {
       cursorStart?: { x?: number; y: number };
     };
     expect(props.cursorStart).toEqual({
-      x: computeOperatorInputCursorX('operator> '),
+      x: computeOperatorInputCursorX(OPERATOR_INPUT_PROMPT),
       // live frame: input title (1); no fixed no-question hint line
       y: 1,
     });

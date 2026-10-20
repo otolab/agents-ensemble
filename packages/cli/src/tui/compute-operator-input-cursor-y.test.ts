@@ -9,10 +9,12 @@ import {
   computeOrchestrationLogVisibleLineCount,
   computeStreamOperatorInputCursorY,
 } from './compute-operator-input-cursor-y.js';
+import { computeOperatorInputLayout } from './operator-input-layout.js';
 import {
   INPUT_PANE_BORDER_ROWS,
   INPUT_PANE_LEFT_COLUMNS,
   OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+  OPERATOR_INPUT_PROMPT,
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
@@ -31,6 +33,19 @@ describe('computeInputPaneHeight', () => {
     expect(
       computeInputPaneHeight({ hintLineCount: 1, inputDisplayLineCount: 4 }),
     ).toBe(INPUT_PANE_BORDER_ROWS + 1 + 4);
+  });
+
+  it('keeps the pane at one input row when text fits beside the shared prompt', () => {
+    const inputDisplayLineCount = computeOperatorInputLayout(
+      '1234567890',
+      16,
+      OPERATOR_INPUT_PROMPT.length,
+    ).displayLines.length;
+
+    expect(inputDisplayLineCount).toBe(1);
+    expect(
+      computeInputPaneHeight({ hintLineCount: 0, inputDisplayLineCount }),
+    ).toBe(INPUT_PANE_BORDER_ROWS + 1);
   });
 
 });
@@ -109,7 +124,7 @@ describe('computeActivityLogLineCapacity', () => {
 
 describe('computeOperatorInputCursorX', () => {
   it('includes left border, padding, and prompt width', () => {
-    const operatorPrompt = 'operator> ';
+    const operatorPrompt = OPERATOR_INPUT_PROMPT;
     expect(computeOperatorInputCursorX(operatorPrompt)).toBe(
       INPUT_PANE_LEFT_COLUMNS + operatorPrompt.length,
     );
