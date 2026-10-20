@@ -22,6 +22,7 @@ import {
   SESSION_SIDECAR_VERSION,
   sessionSidecarPath,
 } from '../session/session-sidecar.js';
+import { openQuestionsStorePath } from '../session/open-questions-store.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
 import { runConductorSession as runConductorSessionImpl } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
@@ -1560,6 +1561,120 @@ describe('runConductorSession resume / shutdown', () => {
     });
     expect(sidecar?.updatedAt).toBeGreaterThan(0);
   });
+
+  it.each([
+    ['normal completion', 'completed'],
+    ['/close', 'completed'],
+    ['/exit', 'completed'],
+    ['shutdown signal', 'interrupted'],
+    ['conductor error', 'error'],
+  ] as const)(
+    'reports open question persistence failure on %s teardown',
+    async (route, expectedStopReason) => {
+      const openQuestionsPath = openQuestionsStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      // Make the final YAML rename fail after the temporary file is written.
+      await mkdir(openQuestionsPath, { recursive: true });
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await saveSessionSidecar(sidecarPath, {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: 'agent-test',
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [
+          {
+            id: 'inq-1',
+            question: 'Previously saved question',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 1,
+          },
+        ],
+        sequence: 1,
+        workers: {},
+        updatedAt: 1,
+      });
+      const sidecarBeforeFlush = await loadSessionSidecar(sidecarPath);
+
+      mockSend.mockResolvedValue({
+        runId: 'run-1',
+        status:
+          route === 'shutdown signal'
+            ? 'running'
+            : route === 'conductor error'
+              ? 'error'
+              : 'finished',
+        ...(route === 'conductor error'
+          ? { error: { message: 'test conductor failure' } }
+          : { result: 'done' }),
+      });
+
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+      const shutdown = new AbortController();
+      const onPostLoopWait = vi.fn();
+      let operatorApi: OperatorInputBindingApi | undefined;
+      const waitsForOperator = route === '/close' || route === '/exit';
+
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        permissionPipeline: new PermissionPipeline({}),
+        sessionLogger,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: waitsForOperator,
+        onPostLoopWait,
+        shutdownSignal: shutdown.signal,
+        bindOperatorInput: (api) => {
+          operatorApi = api;
+        },
+      });
+
+      if (waitsForOperator) {
+        await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+        expect(operatorApi).toBeDefined();
+        operatorApi!.submit(route);
+      } else if (route === 'shutdown signal') {
+        await vi.waitFor(() =>
+          expect(
+            emitted.some((event) => event.type === 'conductor.send'),
+          ).toBe(true),
+        );
+        shutdown.abort();
+      }
+
+      const result = await sessionPromise;
+
+      expect(result.stopReason).toBe(expectedStopReason);
+      const persistenceWarnings = emitted.filter(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes(
+            'Open Question YAML / session sidecar を保存できませんでした',
+          ),
+      );
+      // recordSendComplete schedules one flush and teardown performs another.
+      expect(persistenceWarnings.length).toBeGreaterThanOrEqual(2);
+      const sidecarAfterFlush = await loadSessionSidecar(sidecarPath);
+      expect(sidecarAfterFlush).toMatchObject({
+        openQuestions: sidecarBeforeFlush?.openQuestions,
+        sequence: sidecarBeforeFlush?.sequence,
+      });
+      expect(sidecarAfterFlush?.updatedAt).toBe(sidecarBeforeFlush?.updatedAt);
+    },
+  );
 
   it('exits immediately after autonomous loop when waitForOperatorExit is false', async () => {
     mockSend.mockResolvedValue({
