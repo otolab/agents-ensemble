@@ -8,7 +8,7 @@ import { cleanup, render } from 'ink-testing-library';
 import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { buildActivityLogDisplayLines } from './activity-log.js';
-import { formatOperatorContextHint } from './format-operator-context.js';
+import { resolveOperatorInputDisplayMode } from './format-operator-context.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import { extractOrchestrationPaneFrameStats, extractTuiPaneFrameStats } from './orchestration-pane-frame.js';
 import { resolveOpenQuestionsPaneLayout } from './open-questions-pane.js';
@@ -26,7 +26,6 @@ import {
   INPUT_PANE_TITLE,
   MAIN_PANE_TITLE,
   OPEN_QUESTIONS_PANE_MIN_HEIGHT,
-  OPERATOR_INPUT_POST_LOOP_HINT,
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
@@ -345,7 +344,7 @@ describe('IssueSessionTui', () => {
     expect(lastFrame() ?? '').toContain('conductor dispatch 保留中（1 件）');
   });
 
-  it('shows post-loop prompt in input area without waiting status', () => {
+  it('keeps the post-loop input area free of a fixed prompt', () => {
     const viewModel = createTuiViewModel();
     viewModel.setPostLoopWaiting(true);
 
@@ -354,7 +353,9 @@ describe('IssueSessionTui', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(frame).toContain('operator>');
+    expect(frame).not.toContain('追加指示');
+    expect(frame).not.toContain('/reconnect');
     expect(frame).not.toContain('post-loop 待機中');
   });
 
@@ -382,8 +383,9 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain(issueLabel);
     expect(frame).toContain(osc8Open);
     expect(frame).not.toContain(nonCanonicalOsc8Open);
-    expect(frame).toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
-    expect(frame).not.toContain(`${issueLabel} — 任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了`);
+    expect(frame).toContain('operator>');
+    expect(frame).not.toContain('任意入力');
+    expect(frame).not.toContain('/reconnect');
 
     viewModel.setDisplayState({
       workers: {},
@@ -420,7 +422,9 @@ describe('IssueSessionTui', () => {
     expect(lastFrame() ?? '').toContain(issueLabel);
     expect(lastFrame() ?? '').toContain(osc8Open);
     expect(lastFrame() ?? '').not.toContain(nonCanonicalOsc8Open);
-    expect(lastFrame() ?? '').toContain('追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').not.toContain('追加指示');
+    expect(lastFrame() ?? '').not.toContain('/reconnect');
     expect(lastFrame() ?? '').not.toContain('post-loop 待機中');
 
     viewModel.setShuttingDown(true);
@@ -557,11 +561,9 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
     expectCanonicalIssueUrl();
     const postLoopFrame = (lastFrame() ?? '').replace(/\s+/g, ' ');
-    expect(postLoopFrame).toContain('追加指示 ·');
-    expect(postLoopFrame).toContain('/close');
-    expect(postLoopFrame).toContain('保存して閉じる');
-    expect(postLoopFrame).toContain('/exit');
-    expect(postLoopFrame).toContain('掃除して終了');
+    expect(postLoopFrame).toContain('operator>');
+    expect(postLoopFrame).not.toContain('追加指示');
+    expect(postLoopFrame).not.toContain('/reconnect');
 
     viewModel.setShuttingDown(true);
     await flushInkStdin();
@@ -684,13 +686,10 @@ describe('IssueSessionTui', () => {
       openQuestions: [],
     });
     const operatorPrompt = 'operator> ';
-    const contentWidth = getPaneContentWidth({
-      columns: terminalColumns,
-      paddingX: PANE_PADDING_X,
-      borderWidth: ROUND_BORDER_WIDTH,
-    });
-    const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
-    const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
+    const hintLineCount = resolveOperatorInputDisplayMode({
+      openQuestions: viewModel.getSnapshot().operatorContext?.openQuestions ?? [],
+    }).hintLines.length;
+    expect(hintLineCount).toBe(0);
     const openQuestionsPaneHeight = 0;
     const expectedInputLineIndex = computeOperatorInputLineIndex({
       terminalRows: liveFrameRows,
@@ -713,7 +712,7 @@ describe('IssueSessionTui', () => {
     expect(lines).toHaveLength(liveFrameRows);
   });
 
-  it('aligns IME cursor coordinates when context hint wraps on a narrow terminal', () => {
+  it('aligns IME cursor coordinates without a fixed hint on a narrow terminal', () => {
     const terminalRows = 24;
     const liveFrameRows = terminalRows - 1;
     const terminalColumns = 40;
@@ -734,13 +733,10 @@ describe('IssueSessionTui', () => {
       openQuestions: [],
     });
     const operatorPrompt = 'operator> ';
-    const contentWidth = getPaneContentWidth({
-      columns: terminalColumns,
-      paddingX: PANE_PADDING_X,
-      borderWidth: ROUND_BORDER_WIDTH,
-    });
-    const contextHint = formatOperatorContextHint(viewModel.getSnapshot().operatorContext);
-    const hintLineCount = wrapTextToWidth(contextHint, contentWidth).length;
+    const hintLineCount = resolveOperatorInputDisplayMode({
+      openQuestions: viewModel.getSnapshot().operatorContext?.openQuestions ?? [],
+    }).hintLines.length;
+    expect(hintLineCount).toBe(0);
     const openQuestionsPaneHeight = 0;
     const expectedInputLineIndex = computeOperatorInputLineIndex({
       terminalRows: liveFrameRows,
@@ -756,7 +752,7 @@ describe('IssueSessionTui', () => {
 
     const lines = (lastFrame() ?? '').split('\n');
     const { lineIndex, inputStartX } = findOperatorInputLine(lines);
-    expect(hintLineCount).toBeGreaterThan(1);
+    expect(hintLineCount).toBe(0);
     expect(lineIndex).toBeGreaterThanOrEqual(0);
     expect(inputStartX).toBe(expectedCursorX);
     expect(lineIndex).toBe(expectedInputLineIndex);
@@ -982,15 +978,7 @@ describe('IssueSessionTui', () => {
         expect(stats.titleOnBorder).toBe(true);
       }
 
-      const contentWidth = getPaneContentWidth({
-        columns: 60,
-        paddingX: PANE_PADDING_X,
-        borderWidth: ROUND_BORDER_WIDTH,
-      });
-      const hintLineCount = wrapTextToWidth(
-        OPERATOR_INPUT_POST_LOOP_HINT,
-        contentWidth,
-      ).length;
+      const hintLineCount = 0;
       const requestedInputPaneHeight = computeInputPaneHeight({
         hintLineCount,
         inputDisplayLineCount: 1,
@@ -1002,10 +990,10 @@ describe('IssueSessionTui', () => {
         inputPaneHeight: requestedInputPaneHeight,
       });
       expect(paneHeights).toEqual({
-        workerPaneHeight: 3,
+        workerPaneHeight: 5,
         activityPaneHeight: 3,
         openQuestionsPaneHeight: 0,
-        inputPaneHeight: 5,
+        inputPaneHeight: 3,
       });
 
       const inputLine = findOperatorInputLine(lines);
@@ -1041,7 +1029,9 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('(活動ログなし)');
     expect(frame).not.toContain('Open questions');
     expect(frame).not.toContain('(未回答なし)');
-    expect(frame).toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(frame).toContain('operator>');
+    expect(frame).not.toContain('任意入力');
+    expect(frame).not.toContain('/reconnect');
   });
 
   it('switches the lower UI between no-question and question modes', async () => {
@@ -1051,7 +1041,8 @@ describe('IssueSessionTui', () => {
     );
 
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').not.toContain('任意入力');
 
     viewModel.setDisplayState({
       workers: {},
@@ -1062,7 +1053,7 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain('Open questions');
     expect(lastFrame() ?? '').toContain('inq-1 (1/1) への回答');
-    expect(lastFrame() ?? '').not.toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(lastFrame() ?? '').not.toContain('任意入力');
 
     viewModel.setDisplayState({
       workers: {},
@@ -1072,7 +1063,8 @@ describe('IssueSessionTui', () => {
     });
     await flushInkStdin();
     expect(lastFrame() ?? '').not.toContain('Open questions');
-    expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(lastFrame() ?? '').toContain('operator>');
+    expect(lastFrame() ?? '').not.toContain('任意入力');
   });
 
   it.each([
@@ -1116,7 +1108,7 @@ describe('IssueSessionTui', () => {
     const initialFrame = lastFrame() ?? '';
     expect(initialFrame).toContain('Open questions');
     expect(initialFrame).toContain('inq-resumed-1');
-    expect(initialFrame).not.toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+    expect(initialFrame).not.toContain('任意入力');
 
     if (selectedIndex === 1) {
       stdin.write(INK_TEST_KEYS.shiftDownArrow);
@@ -1132,16 +1124,18 @@ describe('IssueSessionTui', () => {
     });
     if (restoredQuestions.length === 1) {
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+      expect(lastFrame() ?? '').toContain('operator>');
+      expect(lastFrame() ?? '').not.toContain('任意入力');
     } else {
       expect(lastFrame() ?? '').toContain('Open questions');
       expect(lastFrame() ?? '').toContain('inq-resumed-1');
-      expect(lastFrame() ?? '').not.toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+      expect(lastFrame() ?? '').not.toContain('任意入力');
 
       setOperatorQuestions([]);
       await flushInkStdin();
       expect(lastFrame() ?? '').not.toContain('Open questions');
-      expect(lastFrame() ?? '').toContain('任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了');
+      expect(lastFrame() ?? '').toContain('operator>');
+      expect(lastFrame() ?? '').not.toContain('任意入力');
     }
   });
 

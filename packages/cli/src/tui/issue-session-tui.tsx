@@ -425,7 +425,6 @@ export function IssueSessionTui({
           total: openQuestions.length,
         }
       : undefined,
-    postLoopWaiting: snapshot.postLoopWaiting,
     shuttingDown: snapshot.shuttingDown,
   });
   const openQuestionsPaneHeight =

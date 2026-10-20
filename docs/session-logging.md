@@ -19,11 +19,11 @@ conductor セッションには性質の異なる出力が混在する。
 | **対話** | オペレータ（人間） | `operator>` / `conductor>` のやりとり |
 | **harness テレメトリ** | 開発者・運用者 | worktree 解決、worker ラウンド完了、send 回数 |
 | **exit report** | e2e / CI / スクリプト | 終了時 JSON（`stopReason`, `workerResponses` 等） |
-| **resume 状態** | 次回 `ensemble issue --resume` | sidecar JSON |
+| **resume 状態** | 次回 `ensemble issue --resume` | sidecar JSON と open question YAML |
 
 これらを 1 本の stderr に混ぜると、TTY 利用時に **会話相手が worker に見える**・**conductor の応答が終了まで見えない** といった UX 問題が起きる（#44）。
 
-**原則**: 観測は `SessionLogger` に集約し、**sink** で出力先・フォーマットを分離する。永続化の正本は sidecar（会話本文は SDK / ACP 側）。
+**原則**: 観測は `SessionLogger` に集約し、**sink** で出力先・フォーマットを分離する。resume に必要な harness 状態は sidecar JSON と open question YAML に永続化する（会話本文は SDK / ACP 側）。
 
 `conductor.send` は status によって表示チャネルが分かれる。`status=finished` の `result` は
 conductor が実際に返した応答なので対話チャネル（`conductor>` / TUI 活動ログの
@@ -63,6 +63,7 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
   別経路（SessionLogger 外）:
     sidecar flush → {repoRoot}/.ensemble/sessions/{agentId}.json
     tool-call history flush → {repoRoot}/.ensemble/sessions/{agentId}.tool-calls
+    question flush → {repoRoot}/.ensemble/sessions/{agentId}/open-questions.yaml
 ```
 
 ### stdout
@@ -107,7 +108,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
 
-resume の正本は **sidecar**。終了 JSON の `agentId` は参照用コピー。
+resume 用の harness 状態は sidecar と open question YAML に保存します。open question の正本は YAML で、sidecar JSON の `openQuestions` / `sequence` は移行期間中の互換コピーです。終了 JSON の `agentId` は参照用コピーです。
 
 CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（e2e 互換）。`--summary-format` / `--include-full-response-text` で終了出力を制御する。
 
@@ -178,21 +179,55 @@ permission の ACP variant と抽出優先順位は
 
 ---
 
-## 4. sidecar との関係
+## 4. sidecar と open question YAML
 
-| | SessionSummary（終了 JSON） | sidecar |
+セッション再開用データは `.ensemble/sessions/` に保存します。
+
+```text
+.ensemble/sessions/
+  {conductorAgentId}.json
+  {conductorAgentId}/
+    open-questions.yaml
+```
+
+`open-questions.yaml` は OpenQuestionRegistry 全体のスナップショットです。質問の登録・回答後と終了時に atomic rename で保存します。YAML の形は次のとおりです。
+
+```yaml
+version: 1
+sequence: 3
+openQuestions:
+  - id: inq-1
+    question: "Which release approach?"
+    responseType: choice
+    status: answered
+    source: conductor
+    askedAt: 1735689600000
+    choices:
+      - id: staging
+        label: Staging
+    answer: "Ship to staging first."
+    answeredAt: 1735689700000
+    answeredBy: operator
+    selectedChoice: staging
+```
+
+`responseType` は `yes_no` / `text` / `choice`、`status` は `open` / `answered`、`source` は `conductor` / `max_turns` です。`context`、選択肢、回答時刻、回答者、yes/no の `assent` / permission 関連時の `approved` などは該当する場合に保存します。`sequence` は次に割り当てる `inq-N` ID を復元するために使います。
+
+`--continue` は従来どおり JSON sidecar の `updatedAt` からセッションを選びます。`--resume` / `--continue` の復元時は、YAML があれば質問一覧と sequence にその内容を使います。YAML がまだない既存セッションでは JSON sidecar の `openQuestions` と `sequence` から復元し、YAML をバックフィルします。移行期間中は flush のたびに両方へ同じ質問スナップショットを書きます。YAML が存在していて読み取りまたはスキーマ検証に失敗した場合は resume を中止し、古い可能性がある JSON 側の質問一覧へ黙って切り替えません。
+
+| | SessionSummary（終了 JSON） | sidecar / open question YAML |
 |--|---------------------------|---------|
 | **目的** | 1 回の実行結果の報告 | セッション再開用の harness 状態 |
 | **タイミング** | プロセス終了時に 1 回 | 状態変化時に best-effort flush + 終了時 |
 | **会話本文** | 載せない（worker 応答の要約のみ） | 載せない |
-| **open question** | 終了時の一覧スナップショット | 正本（registry 全体） |
+| **open question** | 終了時の一覧スナップショット | YAML が正本。移行中は JSON sidecar にも同じ一覧を保存 |
 | **worker session** | 載せない | `acpSessionId` を保持 |
 | **tool-call snapshot** | 載せない | 別ファイル `.tool-calls` に保持（TTL / サイズ上限あり） |
 
 tool-call history は sidecar 本体から独立して読み書きし、履歴ファイルの欠損や破損で resume を妨げません。
 保持期限・上限・プライバシー上の扱いは [harness-events.md](harness-events.md) を参照してください。
-詳細は [ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0031](adr/0031-tool-call-snapshot-history.md)、
-および [operator-input.md](operator-input.md) の post-loop / 終了動作を参照してください。
+詳細は [ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0032](adr/0032-tool-call-snapshot-history.md)、
+[operator-input.md](operator-input.md) の post-loop / 終了動作を参照してください。sidecar JSON のスキーマと他の復元状態は ADR 0011 を参照してください。
 
 ---
 

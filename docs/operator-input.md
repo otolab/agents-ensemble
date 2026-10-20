@@ -71,7 +71,7 @@ ensemble issue https://github.com/org/repo/issues/42 "まずテストから始�
 
 セッションの operator input binding 直後に `api.submit(message)` を 1 回だけ呼ぶため、TTY（Ink TUI）と非 TTY のどちらでも、手入力を待たずに `operator.message` として conductor へ届きます。TTY では初回メッセージの有無に関わらず通常の binding として扱い、`session.post_loop_wait` から `/close` または `/exit` まで待機します（`--no-wait` または `session.postLoop.wait: false` を除く）。メッセージ未指定時の TTY 入力の挙動も変わりません。
 
-非 TTY の単発注入は追加入力を提供しないため、終了契約も通常の TTY 入力と異なります。初回メッセージを処理した conductor の `error` は再入力を待たずにエラー終了し、SDK の `cancelled` も terminal status（`stopReason: cancelled`）として終了します。`ask_human` による未回答 open question、または未解決の permission が残った場合も、回答を待つ post-loop へは移らず、その時点でセッションを終了します。dispatch hold 中にこれらの停止条件へ到達した場合も release を待ちません。未回答 question は終了結果・sidecar に残り、未解決 permission は終了処理で拒否されます。TTY の初回メッセージはこの単発終了契約を使わず、post-loop 待機中に追加入力で処理できます。
+非 TTY の単発注入は追加入力を提供しないため、終了契約も通常の TTY 入力と異なります。初回メッセージを処理した conductor の `error` は再入力を待たずにエラー終了し、SDK の `cancelled` も terminal status（`stopReason: cancelled`）として終了します。`ask_human` による未回答 open question、または未解決の permission が残った場合も、回答を待つ post-loop へは移らず、その時点でセッションを終了します。dispatch hold 中にこれらの停止条件へ到達した場合も release を待ちません。未回答 question は終了結果と Open Question YAML に残り、移行期間中は JSON sidecar にも同じ snapshot を保存します。未解決 permission は終了処理で拒否されます。TTY の初回メッセージはこの単発終了契約を使わず、post-loop 待機中に追加入力で処理できます。
 
 CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できません。両方が trim 後に空でない場合は、セッション開始前にエラーになります。これは優先順位ではなく併用禁止です。`--continue` または `--resume` で CLI メッセージを指定した場合は注入せず、stderr に 1 行の警告を出します。`ENSEMBLE_OPERATOR_MESSAGE` は従来どおりそのセッションの binding で解決されます。
 
@@ -85,7 +85,9 @@ TTY の既定は `stream` レイアウトです。従来のペイン分割を使
 
 長時間 TTY セッションでは Ink / React の再描画に伴って Node の User Timing（measure / mark）が蓄積し、約 100 万件に達すると `MaxPerformanceEntryBufferExceededWarning` が出ることがあります。pane / stream 共通の TUI host は稼働中 30 秒ごとに `performance.clearMeasures()` と `performance.clearMarks()` を呼び、終了時にタイマーを解除します。クリアに失敗しても描画は継続します。Node の performance バッファはプロセス共通のため、この処理では同じプロセス内の他の measure / mark も消去されます。
 
-既定の `stream` レイアウトでは、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画せず、post-loop 待機中は Operator input に `/close` と `/exit` の動作を区別した prompt を表示します。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（詳細は [ADR 0015](adr/0015-cli-tui-library.md)）。
+既定の `stream` レイアウトでは、活動ログ（operator / conductor / harness / observation）は Ink の `<Static>` で枠なしに上へ追記され、下部は上から **Open questions（未回答時のみ独立表示）→ Operator input → Workers** の順に固定されます。未回答の open question がないときは独立枠も空状態本文も描画しません。入力欄は `pane` と同じ `react-ink-textarea` の IME 物理カーソル同期を使い、stream の下部 live frame を座標原点として変換窓の位置を計算します。`stream` では活動ログ用のアプリ内スクロールを持たず、端末の scrollback を使います。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされません（詳細は [ADR 0015](adr/0015-cli-tui-library.md)）。
+
+question がないときの pane / stream の Operator input は、通常時・post-loop 待機中とも固定案内を出さず入力欄を表示します。TTY の pane / stream では `/` 入力時にコマンド候補を表示します。stream の scrollback 閲覧中に保留した新着がある場合は、その件数と `End` による復帰案内を引き続き表示します。question があるときの選択・回答案内と、終了処理中の `終了しています…` も表示します。この変更は TTY の pane / stream に限り、readline 経路の1行案内にあるコマンド一覧は維持します。非 TTY では対話入力を開かず、CLI / env の初回メッセージがあれば従来どおり1回だけ送信します。
 
 `pane` では Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
 
@@ -123,11 +125,11 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 | モード | 条件 | 表示と入力 |
 |--------|------|------------|
 | **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の prompt を表示し、Issue 参照と自律ターン数は表示しない。submit は `targetOpenQuestionId` 付きで送信する。 |
-| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input には `任意入力 · /reconnect · /close 保存して閉じる · /exit 掃除して終了` の prompt を表示する。通常の submit は operator メッセージとして送信する。 |
+| **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input は固定案内を出さず、入力欄だけを表示する。通常の submit は operator メッセージとして送信する。 |
 
-resume で sidecar の未回答 question を復元した場合も、`getContext()` が同じ Registry から一覧を返すため、binding 後の pane / stream はモード A として表示する。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使う。
+`--continue` / `--resume` では、`open-questions.yaml` があればその YAML を正本として Registry を復元し、YAML がない legacy session に限って JSON sidecar の `openQuestions` / `sequence` から復元して YAML をバックフィルします。YAML が存在する場合に読み取り・検証に失敗したら resume を中止し、JSON sidecar にはフォールバックしません。復元後は `getContext()` が同じ Registry から未回答 question の一覧を返すため、binding 後の pane / stream はモード A として表示します。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使います。
 
-post-loop 待機中はモード B の prompt を `追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了` に上書きします。終了中は入力を無効化します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
+post-loop 待機中も Operator input はモード B と同じく入力欄だけを表示します。終了中は入力を無効化し、`終了しています…` を表示します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
 
 `stream` の mouse-only scrollbar / native scrollback 操作は、terminal host から viewport state が TTY へ通知されないため keyboard detached として自動検出できません。保護が必要な場合は `PgUp` / `Ctrl+PgUp` で detached を宣言し、`End` / `Ctrl+End` で復帰します。通常の幅変更では既に Static として追記された行は再折り返しされませんが、settled columns shrink では [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って scrollback を reset し、保持済み activity history を新幅で再出力します。
 
@@ -235,13 +237,13 @@ Connection stalled が自動再接続後も続く場合は `/reconnect` を試�
 
 `/close` または `close`（大文字小文字無視・前後空白トリム）は、conductor に送らない一時終了コマンドです。入力直後に `session.operator_close` を emit し、force teardown で処理中 worker prompt を停止して未解決 permission を deny します。attach 済み worker の ACP session ID と cwd は、初回 prompt が完了する前でも runtime の接続一覧から snapshot します。GitHub monitor を停止して最新 cursor と未配送 outbox を sidecar に flush した後、worker と conductor を force stop し、TUI を dispose してプロセスを終了します。正常に完了した `/close` は exit code 0 です。
 
-sidecar には conductor agent ID、worker ACP session ID / cwd、profile、未回答 open question、GitHub monitor cursor / pending update などを保存します。worktree path は保存せず、同じ Issue の `issueUrl` と `repoRoot` から再導出します。`--continue` は既存 conductor ID を使い、保存済み worker ACP session ID / cwd が整合すれば `session/load` します。保存 session を load できない場合は新しい ACP session と bootstrap prompt にフォールバックし、以前の worker transcript は復元されません。
+sidecar には conductor agent ID、worker ACP session ID / cwd、profile、GitHub monitor cursor / pending update などを保存します。Open Question の正本は `.ensemble/sessions/{conductorAgentId}/open-questions.yaml` です。version 1 の YAML に `sequence` と open / answered を含む全 `openQuestions` を保存し、移行期間中は `.ensemble/sessions/{conductorAgentId}.json` にも同じ snapshot を書きます。flush は YAML を先に保存してから JSON sidecar を更新するため、2 ファイルをまたぐ transaction ではありません。YAML の保存に失敗した場合は JSON sidecar も更新せず、warning を表示します。2 ファイルの内容が異なる場合、`--continue` / `--resume` では YAML があれば YAML を採用します。YAML がない legacy session に限り JSON sidecar から復元して YAML をバックフィルし、不正な YAML は古い JSON へフォールバックせず resume を失敗させます。worktree path は保存せず、同じ Issue の `issueUrl` と `repoRoot` から再導出します。`--continue` は既存 conductor ID を使い、保存済み worker ACP session ID / cwd が整合すれば `session/load` します。保存 session を load できない場合は新しい ACP session と bootstrap prompt にフォールバックし、以前の worker transcript は復元されません。
 
 `tool_call` / `tool_call_update` から累積した snapshot は、resume sidecar と別の `.ensemble/sessions/{conductorAgentId}.tool-calls` に保存し、`--continue` / `--resume` 後の permission brief と `get_tool_call` で再利用します。履歴が無い旧 session、読めないファイル、不正な entry は履歴なしとして扱うため、tool-call 履歴の問題だけで session resume が失敗することはありません。履歴は最終更新から 30 日、最大 1,000 件かつ 8 MiB まで保持し、上限時は古い snapshot を削除します。1 件で上限を超える snapshot は保存しません。終了時に flush しますが、予期しないプロセス終了では最後の flush 以降が失われる場合があります。
 
 履歴ファイルはローカルに平文で置かれ、path、command、tool input などを含む可能性があります。`.ensemble/` は gitignore 対象で、ファイル自体は Issue / PR や終了 JSON に含めませんが、再開後に permission brief や `get_tool_call` で conductor へ渡した内容は、選択中 backend の会話に含まれる場合があります。履歴を早期削除するには対象の `.tool-calls` ファイルを削除してください。
 
-GitHub update は conductor send が `finished` で完了した後に限って outbox から ack します。`/close` と send 完了が競合すると、send が完了しても close 中は ack せず、`--continue` 後に再配送します。ack 後に cursor を sidecar へ flush する前の crash でも重複することがあり、配送は at-least-once です。sidecar flush は best effort で、失敗時は warning を表示して終了を続けます。直近の更新が残らず、以前の sidecar から再開するか、有効な sidecar がなければ再開できない場合があります。in-flight conductor send と teardown で deny した permission は保存・再開しません（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0017](adr/0017-conductor-send-lifecycle-events.md)）。
+GitHub update は conductor send が `finished` で完了した後に限って outbox から ack します。`/close` と send 完了が競合すると、send が完了しても close 中は ack せず、`--continue` 後に再配送します。ack 後に cursor を sidecar へ flush する前の crash でも重複することがあり、配送は at-least-once です。終了時の YAML / sidecar flush は best effort で、失敗時は終了経路にかかわらず warning を表示して終了を続けます。直近の更新や Open Question が保存されず、以前のデータから再開するか、有効な sidecar がなければ再開できない場合があります。in-flight conductor send と teardown で deny した permission は保存・再開しません（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0017](adr/0017-conductor-send-lifecycle-events.md)）。
 
 ### `/exit` の即時フィードバック（#170）
 
@@ -258,7 +260,7 @@ cleanup が dirty worktree のためスキップされた場合や、削除に�
 
 ### `/close` の即時フィードバック
 
-`/close` または `close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup を行わず exit code 0 でプロセスを終了します。sidecar flush failure は warning として扱い、`/exit` の cleanup failure を warning のみ・exit 0 とする [#448](https://github.com/otolab/agents-ensemble/issues/448) の契約とは別の条件です。
+`/close` または `close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup を行わず exit code 0 でプロセスを終了します。YAML / sidecar の flush failure は warning として扱い、`/close`・`/exit`・割り込み・通常終了など、どの終了経路でも終了を続けます。`/exit` の cleanup failure を warning のみ・exit 0 とする [#448](https://github.com/otolab/agents-ensemble/issues/448) の契約とは別の条件です。
 
 #### post-loop 開始直後の `/exit`（#200）
 

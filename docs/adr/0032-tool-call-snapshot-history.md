@@ -1,4 +1,4 @@
-# ADR 0031: tool-call snapshot 履歴の永続化
+# ADR 0032: tool-call snapshot 履歴の永続化
 
 - Status: accepted
 - Date: 2026-10-20

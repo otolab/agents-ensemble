@@ -37,7 +37,8 @@
 | **`list_workers`** | conductor ツール（YAML。セッション worker 状態サマリ） |
 | **`get_worker_status`** | conductor ツール（YAML。単一 worker 詳細） |
 | **活動ログ** | TTY Ink Orchestration ペイン（`[harness]` / `[observation]` 等） |
-| **sidecar** | `{repoRoot}/.ensemble/sessions/{agentId}.json`（resume 正本。exit report ではない） |
+| **sidecar** | `{repoRoot}/.ensemble/sessions/{agentId}.json`（resume 用 harness 状態。exit report ではない） |
+| **open question YAML** | `{repoRoot}/.ensemble/sessions/{agentId}/open-questions.yaml`（Registry の正本。sidecar との移行仕様は [session-logging.md](session-logging.md#4-sidecar-と-open-question-yaml)） |
 
 **未取得時** 列: フィールド省略・`null`・エラー・推定のいずれか。終了 JSON と `get_session_usage` の tokens / cache stats / compaction count は同じ `SessionUsageTracker` のスナップショットを使い、conductor cost は同一の `enrichSessionUsageWithCost` 経路で揃える。
 
@@ -301,15 +302,17 @@ TUI 表示語彙 `WorkerDisplayStatus`（`sleep` / `idle` / `running` / `failed`
 
 ---
 
-## 7. sidecar（resume・メトリクス正本ではない）
+## 7. resume 状態（メトリクス正本ではない）
 
-| フィールド | 用途 | exit JSON との関係 |
-|-----------|------|-------------------|
-| `conductorAgentId` | resume キー | 終了 JSON `agentId` と同値コピー |
-| `openQuestions` | 未回答の正本 | 終了 JSON はスナップショット件数のみ |
-| `workers.*.acpSessionId` | worker 再開 | 終了 JSON には載せない |
-| `githubMonitor` | poll カーソル | 終了 JSON には載せない |
-| `sequence` / `updatedAt` | flush 順序 | 終了 JSON には載せない |
+| 保存先 / フィールド | 用途 | exit JSON との関係 |
+|--------------------|------|-------------------|
+| sidecar `conductorAgentId` | resume キー | 終了 JSON `agentId` と同値コピー |
+| YAML `openQuestions` | Registry の正本 | 終了 JSON はスナップショット件数のみ |
+| YAML `sequence` | 次の question ID を復元 | 終了 JSON には載せない |
+| sidecar `openQuestions` / `sequence` | YAML 導入前後の互換コピー | 終了 JSON には載せない |
+| sidecar `workers.*.acpSessionId` | worker 再開 | 終了 JSON には載せない |
+| sidecar `githubMonitor` | poll カーソル | 終了 JSON には載せない |
+| sidecar `updatedAt` | `--continue` のセッション選択 | 終了 JSON には載せない |
 
 ---
 

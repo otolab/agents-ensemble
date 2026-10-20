@@ -18,6 +18,11 @@ export type { GetToolCallToolOptions } from './get-tool-call-tool.js';
 export { createSessionUsageTools } from './session-usage-tool.js';
 export type { SessionUsageToolOptions } from './session-usage-tool.js';
 
+export {
+  createReportSessionStateTool,
+  REPORT_SESSION_STATE_MAX_LENGTH,
+} from './report-session-state-tool.js';
+
 export { yamlToolResult, toStructuredContent } from './yaml-tool-result.js';
 export {
   createSetDispatchHoldTool,

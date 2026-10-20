@@ -87,6 +87,26 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 
 **worker 同士の連携は conductor 経由の dispatch と、Issue / PR 上の記録で行う。**
 
+### Operator 層と Issue セッション
+
+[ADR 0031](adr/0031-operator-agent-layer.md) で合意した **4 層**は次のとおり。
+
+```
+user  →  operator（ロール）  →  conductor  →  workers
+```
+
+| 単位 | 実装の置き場 | 説明 |
+|------|----------------|------|
+| **Issue セッション** | `ensemble issue`（`@agents-ensemble/core` harness） | 1 Issue あたり conductor + workers。スター型は [ADR 0002](adr/0002-star-topology-sdk-conductor-acp-worker.md) のまま |
+| **operator ロール** | 人間（SessionView）または **operator-agent** | conductor 群の監督・エスカレーション・横断判断。**誰がロールを実行するか**が設計上の焦点 |
+| **operator-agent** | `packages/operator-agent`（[#488](https://github.com/otolab/agents-ensemble/issues/488)） | operator ロールの LLM。**ACP ではなく** conductor 同型の **`ConductorAgent`**（`@cursor/sdk` または Pi）。CLI は `ensemble operator-agent`（TTY） |
+
+**接続密度**: **user ↔ operator-agent は密**（同期対話）。**operator-agent ↔ conductor は非同期**（GitHub、`.ensemble/sessions/`、Open Question / 状態のセッションファイル等）。各 conductor プロセスへの常時直結は前提にしない。
+
+現行の `ensemble issue` では、人間が TTY / CLI 経由で conductor を監督する（プロンプト terms の「オペレータ」）。operator-agent はその **代替・補助の実行者**として足す。Open Question の外部連携（[#481](https://github.com/otolab/agents-ensemble/issues/481)）は operator 層の入出力として扱う。
+
+**Phase 1 の設定・ランタイム**: LLM は **worker の ACP ではなく** `createConductorAgentFactory` 経路（`conductor.backend` / `conductor.model`、認証は [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の conductor 席と同経路）。config も conductor 解決を流用。別 `agentId`・operator 用プロンプト／ツール。詳細は [ADR 0031](adr/0031-operator-agent-layer.md)。
+
 ### レイヤー
 
 | レイヤー | 技術 | 役割 |
@@ -117,7 +137,7 @@ conductor の LLM backend は Cursor SDK と Pi 1.x (`createAgentSession`) か�
 | 手段 | 内容 |
 |------|------|
 | `mode: "agent"` | SDK 実行モード（[adr/0006-conductor-agent-mode.md](adr/0006-conductor-agent-mode.md)）。振る舞いの正本は下記プロンプト / materials |
-| `customTools` | conductor 用: `ask_human`, `answer_open_question`, `list_open_questions`, `get_open_question`, `resolve_permission`, `register_github_watch`, `unregister_github_watch`（[ADR 0007](adr/0007-permission-pipeline.md), [ADR 0008](adr/0008-human-dialogue-open-questions.md)）。worker は profile に登録され、ACP attach は eager または初回 `prompt_worker` 時 |
+| `customTools` | conductor 用: `ask_human`, `answer_open_question`, `list_open_questions`, `get_open_question`, `resolve_permission`, `register_github_watch`, `unregister_github_watch`, `report_session_state`。最後の tool は 80 文字以内のオペレータ向け状態一文を受け付け、その場で返す（ファイル永続化なし）。worker は profile に登録され、ACP attach は eager または初回 `prompt_worker` 時 |
 | プロンプト / materials | PromptModule と profile materials で指揮専任・委任方針を明示（conductor の正本） |
 
 conductor は **理解と dispatch に専念**し、ファイル編集・テスト実行は worker の domain とする。
@@ -146,7 +166,7 @@ await using conductor = await Agent.create({
   mode: "agent",
   local: {
     cwd: orchestratorWorkspace,
-    customTools: { ask_human, answer_open_question, list_open_questions, get_open_question, resolve_permission, register_github_watch, unregister_github_watch },
+    customTools: { ask_human, answer_open_question, list_open_questions, get_open_question, resolve_permission, register_github_watch, unregister_github_watch, report_session_state },
   },
 });
 
@@ -169,7 +189,7 @@ await conductor.send(workerStatusUpdate);
 Cursor conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）です。Pi conductor も同じ CLI を backend 分岐付きで使え、`ensemble auth login --provider <id>` は Pi 1.x の `ModelRuntime` に API key または OAuth credential を保存します。Pi の project `auth.json` は読取専用の優先層で、login の書込み先は `~/.ensemble/pi/auth.json` または `conductor.pi.agentDir` の user 層です。project 層の明示的な OAuth credential は refresh 経路を持たないため実行時に拒否し、OAuth は user 層の runtime へ保存します。MCP HTTP OAuth は Pi の MCP extension が別の credential store と対話フローで管理します。`ensemble auth status` / `ensemble models list` は選択 backend の認証・モデルを表示します。worker の ACP は `agent login` で足ります。
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
-- **resume**: 別プロセスから backend 固有の `resume(conductorAgentId)` で再開可能。Cursor は SDK の session、Pi は sidecar の `conductorAgentId` を Pi session id として `.ensemble/pi/sessions/` の JSONL transcript を復元する。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）には open question・profile・worker `acpSessionId`・MCP map digest を保存する。worker の累積 tool-call snapshot は別ファイル（`.ensemble/sessions/{conductorAgentId}.tool-calls`）に保存し、resume 時は stable worker name で新しい runtime `workerId` に結び直して ACP `sessionId` を保持する。tool-call history の欠損・破損は resume を妨げない。保持期限と上限は [harness-events.md](harness-events.md) を参照。resume 時に backend または MCP map が起動時の解決結果と sidecar の値から変わっていれば fail fast する（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)、[ADR 0031](adr/0031-tool-call-snapshot-history.md)）。
+- **resume**: 別プロセスから backend 固有の `resume(conductorAgentId)` で再開可能。Cursor は SDK の session、Pi は sidecar の `conductorAgentId` を Pi session id として `.ensemble/pi/sessions/` の JSONL transcript を復元する。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）には profile・worker `acpSessionId`・MCP map digest などを保存し、OpenQuestionRegistry のスナップショットは `.ensemble/sessions/{conductorAgentId}/open-questions.yaml` に保存する。resume 時は YAML の質問一覧を優先し、YAML がない既存セッションは JSON sidecar から復元して YAML を生成する。移行期間中は両方に同一内容を保存する。worker の累積 tool-call snapshot は別ファイル（`.ensemble/sessions/{conductorAgentId}.tool-calls`）に保存し、resume 時は stable worker name で新しい runtime `workerId` に結び直して ACP `sessionId` を保持する。tool-call history の欠損・破損は resume を妨げない。保持期限と上限は [harness-events.md](harness-events.md) を参照。resume 時に backend または MCP map が起動時の解決結果と sidecar の値から変わっていれば fail fast する（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)、[ADR 0031](adr/0031-operator-agent-layer.md)、[ADR 0032](adr/0032-tool-call-snapshot-history.md)、[session-logging.md](session-logging.md#4-sidecar-と-open-question-yaml)）。
 - **ripgrep**: local agent の ignore scan 用。`ConductorAgent` 起動前に `ensureCursorSdkRipgrepPath()` が `@cursor/sdk-<platform>-<arch>/bin/rg` または PATH の `rg` を `CURSOR_RIPGREP_PATH` に設定する（[#43](https://github.com/otolab/agents-ensemble/issues/43)）。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 - **proxy**: `ConductorAgent` 起動前に `ensureCursorSdkProxy()` が Cursor の `settings.json` を読み、フラット形式の `http.proxy` / `http.noProxy` を `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` へ不足分だけ反映する。ネスト形式も互換入力として扱うが、両方に同じ設定がある場合はフラット形式を優先する。解決順は既存の環境変数 → Cursor settings → 未設定で、標準パスは macOS / Linux / Windows ごとに異なる。`cursor.general.disableHttp2: true` は SDK の `local.useHttp1ForAgent: true` に変換する。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK に対応する公開設定がなく未対応。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 
@@ -466,3 +486,4 @@ ensemble issue https://github.com/org/repo/issues/123
 | [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e の分離 |
 | [session-logging.md](session-logging.md) | SessionLogger・stdout/stderr・終了 JSON |
 | [adr/0008-human-dialogue-open-questions.md](adr/0008-human-dialogue-open-questions.md) | open question / オペレータ対話 |
+| [adr/0031-operator-agent-layer.md](adr/0031-operator-agent-layer.md) | operator 層・operator-agent・接続密度 |

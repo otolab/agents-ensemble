@@ -46,6 +46,10 @@ describe('ensemble prompt modules', () => {
     expect(prompt).toContain('prompt_worker');
     expect(prompt).toContain('resolve_permission');
     expect(prompt).toContain('set_dispatch_hold');
+    expect(prompt).toContain('report_session_state');
+    expect(prompt).toContain(
+      'report_session_state({ statusLine: "レビュー中：CIテスト待ち" })',
+    );
     expect(prompt).toContain('operator.message');
     expect(prompt).toContain('permission.stall');
     expect(prompt).toContain('低優先度');

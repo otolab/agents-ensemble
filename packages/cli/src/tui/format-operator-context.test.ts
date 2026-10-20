@@ -9,11 +9,7 @@ import {
   resolveTuiIssueLinkMode,
   supportsOsc8Hyperlinks,
 } from './format-operator-context.js';
-import {
-  OPERATOR_INPUT_DISCRETIONARY_HINT,
-  OPERATOR_INPUT_POST_LOOP_HINT,
-  OPERATOR_INPUT_SHUTTING_DOWN_HINT,
-} from './tui-layout-constants.js';
+import { OPERATOR_INPUT_SHUTTING_DOWN_HINT } from './tui-layout-constants.js';
 
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/249';
 const NON_CANONICAL_ISSUE_URL = 'http://github.com/otolab/agents-ensemble/issues/249/';
@@ -55,7 +51,7 @@ describe('formatOperatorContextHint', () => {
     expect(hint).toContain('Shift+↑↓で選択');
   });
 
-  it('shows the discretionary no-question prompt without autonomous turn progress', () => {
+  it('uses only the input prompt when no question is open', () => {
     expect(
       formatOperatorContextHint({
         conductorTurn: 1,
@@ -63,10 +59,10 @@ describe('formatOperatorContextHint', () => {
         maxTurns: null,
         openQuestions: [],
       }),
-    ).toBe(OPERATOR_INPUT_DISCRETIONARY_HINT);
+    ).toBe('operator> ');
   });
 
-  it('does not prepend the issue reference to operator input prompts', () => {
+  it('does not add an issue reference to the empty no-question prompt', () => {
     const hint = formatOperatorContextHint(
       {
         conductorTurn: 1,
@@ -77,7 +73,7 @@ describe('formatOperatorContextHint', () => {
       undefined,
     );
 
-    expect(hint).toBe(OPERATOR_INPUT_DISCRETIONARY_HINT);
+    expect(hint).toBe('operator> ');
   });
 
   it('does not add the issue reference when an open question is selected', () => {
@@ -117,27 +113,14 @@ describe('resolveOperatorInputDisplayMode', () => {
     });
     expect(noQuestions).toEqual({
       mode: 'noQuestions',
-      hintLines: [OPERATOR_INPUT_DISCRETIONARY_HINT],
+      hintLines: [],
     });
   });
 
-  it('overrides the no-question prompt during post-loop wait', () => {
+  it('keeps the shutdown prompt when shutting down', () => {
     expect(
       resolveOperatorInputDisplayMode({
         openQuestions: [],
-        postLoopWaiting: true,
-      }),
-    ).toEqual({
-      mode: 'noQuestions',
-      hintLines: [OPERATOR_INPUT_POST_LOOP_HINT],
-    });
-  });
-
-  it('keeps shutdown as the highest-priority prompt override', () => {
-    expect(
-      resolveOperatorInputDisplayMode({
-        openQuestions: [],
-        postLoopWaiting: true,
         shuttingDown: true,
       }),
     ).toEqual({

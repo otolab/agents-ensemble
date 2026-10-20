@@ -9,8 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CLI_ENTRY } from './test-helpers.js';
 
 const ISSUE_URL = 'https://github.com/fixture/fixture/issues/1';
-const POST_LOOP_HINT =
-  '追加指示 · /reconnect · /close 保存して閉じる · /exit 掃除して終了';
+const POST_LOOP_OBSERVATION = '自律作業が一段落しました。';
 const SUMMARY_PREFIX = 'セッション終了 (';
 
 const PYTHON_PTY_RUNNER = String.raw`
@@ -488,10 +487,11 @@ globalThis.fetch = async (input, init) => {
 
       await waitForText(
         () => stripTerminalControls(output),
-        POST_LOOP_HINT,
+        POST_LOOP_OBSERVATION,
         ptyRunner,
         30_000,
       );
+      expect(stripTerminalControls(output)).not.toContain('/reconnect · /close');
       ptyRunner.stdin?.write('/exit');
       await waitForText(
         () => stripTerminalControls(output),

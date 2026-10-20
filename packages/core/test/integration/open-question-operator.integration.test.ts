@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SDKCustomTool } from '@cursor/sdk';
 import yaml from 'js-yaml';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AcpBridge } from '../../src/acp/acp-bridge.js';
@@ -28,6 +30,14 @@ import {
 } from './helpers/conductor-session-assertions.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
 import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
+import {
+  loadOpenQuestionsStore,
+  openQuestionsStorePath,
+} from '../../src/session/open-questions-store.js';
+import {
+  loadSessionSidecar,
+  sessionSidecarPath,
+} from '../../src/session/session-sidecar.js';
 import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -61,6 +71,8 @@ vi.mock('../../src/conductor/cursor-sdk-conductor-agent.js', () => ({
 }));
 
 describe('open question / operator flow integration', () => {
+  let isolatedRepoRoot = '';
+
   beforeEach(() => {
     vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
       issue: TEST_ISSUE,
@@ -91,11 +103,19 @@ describe('open question / operator flow integration', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    if (isolatedRepoRoot) {
+      await rm(isolatedRepoRoot, { recursive: true, force: true });
+      isolatedRepoRoot = '';
+    }
   });
 
   it('delivers operator answer via event queue after ask_human (not follow-up prompt)', async () => {
+    isolatedRepoRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-open-question-'),
+    );
+    const repoRoot = isolatedRepoRoot;
     mockSend
       .mockImplementationOnce(async () => {
         await conductorTools.ask_human!.execute({
@@ -122,7 +142,7 @@ describe('open question / operator flow integration', () => {
 
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
-      repoRoot: REPO_ROOT,
+      repoRoot,
       profile: { workers: [] },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -140,6 +160,25 @@ describe('open question / operator flow integration', () => {
     expect(
       result.openQuestions.find((question) => question.id === 'inq-1')?.status,
     ).toBe('answered');
+    expect(
+      await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: result.agentId,
+        }),
+      ),
+    ).toEqual({
+      sequence: 1,
+      openQuestions: result.openQuestions,
+    });
+    const sidecar = await loadSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: result.agentId,
+      }),
+    );
+    expect(sidecar?.sequence).toBe(1);
+    expect(sidecar?.openQuestions).toEqual(result.openQuestions);
   });
 
   it('records free-text operator answers to choice questions in the event queue', async () => {
