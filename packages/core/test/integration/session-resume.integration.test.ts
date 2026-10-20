@@ -450,7 +450,7 @@ describe('session resume integration', () => {
     let initialWorkerId: string | undefined;
 
     mockSend.mockImplementation(async (message: string) => {
-      if (message.includes('permission 判断待ち')) {
+      if (message.includes('# permission.pending')) {
         const yamlStart = message.indexOf('```yaml\n');
         const yamlEnd = message.indexOf('\n```', yamlStart);
         const pending = yaml.load(
