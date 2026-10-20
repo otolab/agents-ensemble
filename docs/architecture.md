@@ -87,6 +87,26 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 
 **worker 同士の連携は conductor 経由の dispatch と、Issue / PR 上の記録で行う。**
 
+### Operator 層と Issue セッション
+
+[ADR 0031](adr/0031-operator-agent-layer.md) で合意した **4 層**は次のとおり。
+
+```
+user  →  operator（ロール）  →  conductor  →  workers
+```
+
+| 単位 | 実装の置き場 | 説明 |
+|------|----------------|------|
+| **Issue セッション** | `ensemble issue`（`@agents-ensemble/core` harness） | 1 Issue あたり conductor + workers。スター型は [ADR 0002](adr/0002-star-topology-sdk-conductor-acp-worker.md) のまま |
+| **operator ロール** | 人間（SessionView）または **operator-agent** | conductor 群の監督・エスカレーション・横断判断。**誰がロールを実行するか**が設計上の焦点 |
+| **operator-agent** | `packages/operator-agent`（[#488](https://github.com/otolab/agents-ensemble/issues/488)） | operator ロールの LLM。**ACP ではなく** conductor 同型の **`ConductorAgent`**（`@cursor/sdk` または Pi）。CLI は `ensemble operator-agent`（TTY） |
+
+**接続密度**: **user ↔ operator-agent は密**（同期対話）。**operator-agent ↔ conductor は非同期**（GitHub、`.ensemble/sessions/`、Open Question / 状態のセッションファイル等）。各 conductor プロセスへの常時直結は前提にしない。
+
+現行の `ensemble issue` では、人間が TTY / CLI 経由で conductor を監督する（プロンプト terms の「オペレータ」）。operator-agent はその **代替・補助の実行者**として足す。Open Question の外部連携（[#481](https://github.com/otolab/agents-ensemble/issues/481)）は operator 層の入出力として扱う。
+
+**Phase 1 の設定・ランタイム**: LLM は **worker の ACP ではなく** `createConductorAgentFactory` 経路（`conductor.backend` / `conductor.model`、認証は [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の conductor 席と同経路）。config も conductor 解決を流用。別 `agentId`・operator 用プロンプト／ツール。詳細は [ADR 0031](adr/0031-operator-agent-layer.md)。
+
 ### レイヤー
 
 | レイヤー | 技術 | 役割 |
@@ -466,3 +486,4 @@ ensemble issue https://github.com/org/repo/issues/123
 | [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e の分離 |
 | [session-logging.md](session-logging.md) | SessionLogger・stdout/stderr・終了 JSON |
 | [adr/0008-human-dialogue-open-questions.md](adr/0008-human-dialogue-open-questions.md) | open question / オペレータ対話 |
+| [adr/0031-operator-agent-layer.md](adr/0031-operator-agent-layer.md) | operator 層・operator-agent・接続密度 |
