@@ -7,7 +7,10 @@ vi.mock('react-ink-textarea', async () => {
 
 import React, { isValidElement, useState } from 'react';
 import { cleanup, render } from 'ink-testing-library';
-import { OperatorTextArea } from './operator-text-area.js';
+import {
+  getOperatorTextAreaKeybindings,
+  OperatorTextArea,
+} from './operator-text-area.js';
 import { textAreaSpy } from './operator-text-area.test-stub.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import {
@@ -78,7 +81,7 @@ describe('OperatorTextArea (production wrapper)', () => {
     props?.onSubmit?.('hello');
     expect(onSubmit).toHaveBeenCalledWith('hello');
     expect(props?.cursorStart).toBeUndefined();
-    expect(props?.keybindings).toBeUndefined();
+    expect(props?.keybindings).toEqual({ Up: false, Down: false });
   });
 
   it('hands arrows and Tab to an active suggestion menu and forwards controlled cursor state', () => {
@@ -104,6 +107,21 @@ describe('OperatorTextArea (production wrapper)', () => {
     props?.onTab?.(false);
     expect(onTab).toHaveBeenCalledWith(false);
     expect(props?.onSubmit).toBeTypeOf('function');
+  });
+
+  it('disables only arrows that reach a visual-row boundary', () => {
+    const value = 'first\nmiddle\nlast';
+    expect(getOperatorTextAreaKeybindings(value, [1, 2], 40, 0, false)).toBeUndefined();
+    expect(getOperatorTextAreaKeybindings(value, [0, 2], 40, 0, false)).toEqual({
+      Up: false,
+    });
+    expect(getOperatorTextAreaKeybindings(value, [2, 2], 40, 0, false)).toEqual({
+      Down: false,
+    });
+    expect(getOperatorTextAreaKeybindings(value, [1, 2], 40, 0, true)).toEqual({
+      Up: false,
+      Down: false,
+    });
   });
 
   it('forwards cursorStart to TextArea when promptPrefix is set', () => {

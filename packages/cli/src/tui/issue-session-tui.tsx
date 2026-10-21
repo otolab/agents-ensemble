@@ -1,5 +1,6 @@
 import { Box, Text, useBoxMetrics, useInput } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import stringWidth from 'string-width';
 import {
   getTuiOpenQuestions,
   type TuiViewModel,
@@ -67,8 +68,10 @@ import {
 import { computeWorkerPaneHeight, resolvePaneHeights } from './pane-layout.js';
 import {
   computeMaxInputDisplayLines,
+  isCursorAtVisualBoundary,
   trimBlankLinesOnly,
 } from './operator-input-layout.js';
+import { OperatorInputHistory } from './operator-input-history.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 import type { InlineMarkdownSegment } from '../inline-markdown.js';
 import {
@@ -408,6 +411,7 @@ export function IssueSessionTui({
   );
   const [inputValue, setInputValue] = useState('');
   const [inputCursorPosition, setInputCursorPosition] = useState<[number, number]>([0, 0]);
+  const inputHistoryRef = useRef(new OperatorInputHistory());
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
@@ -654,6 +658,58 @@ export function IssueSessionTui({
       }
     }
 
+    if (
+      !snapshot.shuttingDown &&
+      !key.shift &&
+      !key.ctrl &&
+      !key.meta &&
+      key.upArrow &&
+      isCursorAtVisualBoundary(
+        inputValue,
+        inputCursorPosition,
+        contentWidth,
+        stringWidth(operatorPrompt),
+        'up',
+      )
+    ) {
+      const olderValue = inputHistoryRef.current.older(inputValue);
+      if (olderValue !== undefined) {
+        setInputValue(olderValue);
+        const lines = olderValue.split('\n');
+        setInputCursorPosition([lines.length - 1, lines.at(-1)?.length ?? 0]);
+        setSelectedCommandIndex(0);
+        setSelectedAnswerSuggestionIndex(0);
+        setHiddenAnswerSuggestionQuestionId(undefined);
+      }
+      return;
+    }
+
+    if (
+      !snapshot.shuttingDown &&
+      !key.shift &&
+      !key.ctrl &&
+      !key.meta &&
+      key.downArrow &&
+      isCursorAtVisualBoundary(
+        inputValue,
+        inputCursorPosition,
+        contentWidth,
+        stringWidth(operatorPrompt),
+        'down',
+      )
+    ) {
+      const newerValue = inputHistoryRef.current.newer();
+      if (newerValue !== undefined) {
+        setInputValue(newerValue);
+        const lines = newerValue.split('\n');
+        setInputCursorPosition([lines.length - 1, lines.at(-1)?.length ?? 0]);
+        setSelectedCommandIndex(0);
+        setSelectedAnswerSuggestionIndex(0);
+        setHiddenAnswerSuggestionQuestionId(undefined);
+      }
+      return;
+    }
+
     const scrollWithModifier = key.ctrl;
     const scrollWithoutModifier = inputValue.length === 0;
     if (!scrollWithModifier && !scrollWithoutModifier) {
@@ -683,6 +739,7 @@ export function IssueSessionTui({
       return;
     }
 
+    inputHistoryRef.current.abandonDeferredDraftOnInput();
     setInputValue(selectedSuggestion.value);
     setInputCursorPosition([0, selectedSuggestion.value.length]);
     setHiddenAnswerSuggestionQuestionId(selectedQuestion.id);
@@ -711,6 +768,7 @@ export function IssueSessionTui({
         ? { targetOpenQuestionId: selectedQuestion.id }
         : undefined,
     );
+    inputHistoryRef.current.submit(trimmed);
     setInputValue('');
     setInputCursorPosition([0, 0]);
     setSelectedCommandIndex(0);
@@ -720,6 +778,7 @@ export function IssueSessionTui({
   };
 
   const handleInputChange = (value: string) => {
+    inputHistoryRef.current.abandonDeferredDraftOnInput();
     setInputValue(value);
     setSelectedCommandIndex(0);
     setSelectedAnswerSuggestionIndex(0);

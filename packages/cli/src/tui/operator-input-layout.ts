@@ -6,6 +6,8 @@ import {
   INPUT_PANE_MIN_DISPLAY_LINES,
 } from './tui-layout-constants.js';
 
+const inputGraphemeSegmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
+
 export interface OperatorInputDisplayPosition {
   readonly displayLineIndex: number;
   readonly columnInLine: number;
@@ -24,6 +26,103 @@ export function logicalPositionToOffset(value: string, line: number, column: num
     offset += (lines[index]?.length ?? 0) + 1;
   }
   return offset + column;
+}
+
+/** カーソルが入力欄の先頭 / 末尾 visual row にあるかを判定する。 */
+export function isCursorAtVisualBoundary(
+  value: string,
+  cursorPosition: readonly [line: number, column: number] | undefined,
+  contentWidth: number,
+  promptWidth: number,
+  direction: 'up' | 'down',
+): boolean {
+  const cursorOffset = cursorPosition
+    ? logicalPositionToOffset(value, cursorPosition[0], cursorPosition[1])
+    : value.length;
+  const clampedCursorOffset = Math.max(0, Math.min(cursorOffset, value.length));
+  const prefix = value.slice(0, clampedCursorOffset);
+  const cursorLine = prefix.split('\n').length - 1;
+  const cursorLineStart = prefix.lastIndexOf('\n') + 1;
+  const cursorColumn = clampedCursorOffset - cursorLineStart;
+  const visualRows = buildTextAreaVisualRows(value, contentWidth, promptWidth, {
+    line: cursorLine,
+    column: cursorColumn,
+  });
+  let cursorRowIndex = -1;
+  for (let index = 0; index < visualRows.length; index++) {
+    const row = visualRows[index];
+    if (row?.line === cursorLine && row.startColumn <= cursorColumn) {
+      cursorRowIndex = index;
+    }
+  }
+  return direction === 'up'
+    ? cursorRowIndex === 0
+    : cursorRowIndex === visualRows.length - 1;
+}
+
+function buildTextAreaVisualRows(
+  value: string,
+  contentWidth: number,
+  promptWidth: number,
+  cursor: { line: number; column: number },
+): { line: number; startColumn: number }[] {
+  const rows: { line: number; startColumn: number }[] = [];
+  const lines = value.split('\n');
+
+  for (let line = 0; line < lines.length; line++) {
+    const text = lines[line] ?? '';
+    const firstChunkWidth = contentWidth - (line === 0 ? promptWidth : 0);
+    if (firstChunkWidth <= 0 || text.length === 0) {
+      rows.push({ line, startColumn: 0 });
+      continue;
+    }
+
+    let startColumn = 0;
+    let chunkWidth = 0;
+    let chunkText = '';
+    let chunkIndex = 0;
+    let lastChunkWidth = 0;
+    const widthForChunk = () =>
+      Math.max(1, chunkIndex === 0 ? firstChunkWidth : contentWidth);
+    const flushChunk = () => {
+      rows.push({ line, startColumn });
+      lastChunkWidth = chunkWidth;
+      startColumn += chunkText.length;
+      chunkIndex++;
+      chunkWidth = 0;
+      chunkText = '';
+    };
+
+    for (const { segment } of inputGraphemeSegmenter.segment(text)) {
+      const segmentWidth =
+        segment === '\t'
+          ? 1
+          : segment.length === 1 && segment.charCodeAt(0) < 0x20
+            ? 0
+            : stringWidth(segment);
+      if (chunkWidth + segmentWidth > widthForChunk() && chunkText.length > 0) {
+        flushChunk();
+      }
+      chunkText += segment;
+      chunkWidth += segmentWidth;
+    }
+    flushChunk();
+
+    const lastChunkLimit = Math.max(
+      1,
+      chunkIndex <= 1 ? firstChunkWidth : contentWidth,
+    );
+    if (
+      line === cursor.line &&
+      cursor.column === text.length &&
+      cursor.column > 0 &&
+      lastChunkWidth === lastChunkLimit
+    ) {
+      rows.push({ line, startColumn: text.length });
+    }
+  }
+
+  return rows;
 }
 
 /** 先頭・末尾の空白行のみ除去。行内空白と本文中の改行は保持する。 */

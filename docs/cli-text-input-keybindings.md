@@ -174,13 +174,19 @@ Emacs 風を **自前実装** する場合の最小ループ:
 | TTY + readline 経路 | Node `readline`（`bindAsyncOperatorInput` / `promptOperatorInput`）。Ink TUI の入力欄とは別系統 | Node / OS 依存 |
 | 非 TTY | 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | 有効な CLI 初回メッセージは 1 回だけ注入。`--continue` / `--resume` で無視された CLI メッセージは注入せず、非 TTY では interactive binding なし |
 
-**`useInput` と TextArea の関係**: 活動ログスクロール用 `useInput` は `Home`/`End`/`PgUp`/`PgDn` を扱います。Open questions が表示されている場合、Ctrl/Meta を付けない `Shift+PgUp/PgDn`（Ink は Alt も `key.meta` に正規化）は最優先で選択中の question detail の表示窓を折り返し表示 1 行分動かします。このキーは Open questions が見えている間だけ本文スクロールに使い、同じ `Shift+PgUp/PgDn` による活動ログのページスクロール／stream scrollback detach より優先します。pane の plain `PgUp/PgDn` は入力欄が空のとき、`Ctrl+PgUp/PgDn` は入力欄の内容を問わず活動ログ用です。stream は空入力の `PgUp` または `Ctrl+PgUp` で scrollback を離れ、空入力の `End` または `Ctrl+End` で最新へ戻ります。スクロール offset は選択 question が変わると 0 に戻ります。続いて `Shift+↑/↓` が質問選択を扱います。どちらも slash / 回答候補表示中に有効です。textarea フォークの `useKeyboardInput` は矢印に付いた修飾キーを無視して `Up` / `Down` action を処理するため、修飾付き矢印は textarea のカーソル移動と競合します。そのため本文スクロールは PageUp/PageDown の Shift 修飾を使います。slash 候補が表示されている単一行入力に限り、plain `↑/↓` は slash 候補選択に使い、この間だけ TextArea の `Up` / `Down` action を無効にして二重処理を防ぎます。slash 候補がない場合、回答候補表示中の plain `↑/↓` は回答候補選択に使います。それ以外の plain `↑/↓` は TextArea のカーソル移動と境界操作に残します。Tab は TextArea の `onTab` callback から候補補完へ渡し、Enter は TextArea の既存 submit action に残します。行編集ショートカット（`Ctrl+a/e/f/b/d/p/n` 等）は引き続き TextArea 内 `useKeyboardInput` が処理し、Orchestration / stream scrollback は入力欄に文字があるとき `Ctrl` 修飾時のみ有効です。#512 が導入する予定の plain `↑/↓` による入力履歴ともキーが分かれます。
+**`useInput` と TextArea の関係**: `useInput` は活動ログのスクロール操作を扱います。Open questions が表示されている間、Ctrl / Meta を付けない `Shift+PgUp/PgDn`（Ink では Alt も `key.meta` に正規化）は最優先で、選択中の question detail を折り返し表示 1 行分ずつスクロールします。この間の同キーは活動ログのページスクロールや stream scrollback の detach より優先され、質問を `Shift+↑/↓` で切り替えると本文 offset は先頭に戻ります。pane の plain `PgUp/PgDn` は入力欄が空のとき、`Ctrl+PgUp/PgDn` は入力欄の内容を問わず活動ログ用です。stream は空入力の `PgUp` または `Ctrl+PgUp` で scrollback を離れ、空入力の `End` または `Ctrl+End` で最新へ戻ります。
+
+slash 候補が表示されている単一行入力では、plain `↑/↓` を候補選択に使い、その間 TextArea の `Up` / `Down` action を無効にして二重処理を防ぎます。slash 候補がなく回答候補が表示されている場合、plain `↑/↓` は回答候補を選びます。それ以外は TextArea の既存カーソル移動を保ち、visual row の上下端では plain `↑/↓` を送信履歴の移動に使います。候補選択、Open questions 表示中の `Shift+↑/↓` による質問選択は履歴操作より優先です。Tab は TextArea の `onTab` callback から候補補完へ渡し、Enter は既存の submit / 補完動作に残します。行編集ショートカット（`Ctrl+a/e/f/b/d/p/n` 等）は引き続き TextArea 内 `useKeyboardInput` が処理します。入力欄に文字がある場合、Orchestration と stream scrollback の操作には `Ctrl` 修飾を使います。
 
 ### Slash command 候補のキー操作
 
 TTY の pane / stream では単一行の slash command prefix に一致する候補がある間、候補の先頭を初期選択します。plain `↑/↓` で移動し、先頭・末尾では循環しません。Open questions 表示中の `Shift+PgUp/PgDn` はこの候補操作より優先し、選択中 question の本文をスクロールします。`Shift+↑/↓` は質問選択に使います。候補を編集すると先頭選択へ戻ります。Tab は選択中の候補名で入力全体を置き換え、入力カーソルを末尾へ移しますが submit はしません。続けて Enter を押すと、補完後の入力が従来の Operator input submit 経路へ進みます。
 
-候補がないとき、通常入力、複数行入力では候補専用の plain 矢印・Tab 処理を有効にせず、TextArea の既存 keybinding を保ちます。`Shift+PgUp/PgDn` は Open questions 表示中だけ本文スクロールに使い、候補がないときも textarea のキー操作とは競合しません。plain `↑/↓` は候補選択や #512 の入力履歴用に残し、`Ctrl+p/n` の visual row 移動も独立して維持されます。候補表示と折り返し行数は pane の高さ・IME カーソル座標計算に含めます。利用者向けの全体説明は [operator-input.md](operator-input.md) を参照してください。
+### 通常の上下矢印と送信履歴
+
+候補がない通常入力では、複数行の行内・行間移動を維持し、先頭 visual row の `↑` を履歴の older、末尾 visual row の `↓` を newer に割り当てます。履歴をたどり始める前に未送信バッファを退避し、最新側から `↓` でそのドラフトへ戻します。呼び出した過去入力を編集して送信した場合は新しい履歴行として先頭に積み、元の行と退避中のドラフトを保ちます。候補中の矢印、Open questions があるときの `Shift+↑/↓` による質問選択が履歴より優先です。
+
+`Ctrl+p/n` は公開フォークの既存 keymap とテストどおり、visual row の上下移動を維持し、上端 / 下端では no-op のままです。履歴用には通常の `↑/↓` を使います。これは複数行編集の既存操作と Readline 風の履歴期待を両立し、従来テストの `Ctrl+p/n` 契約も保つためです。候補表示と折り返し行数は pane の高さ・IME カーソル座標計算に含めます。利用者向けの全体説明は [operator-input.md](operator-input.md) を参照してください。
 
 **テスト**: `packages/cli/src/tui/operator-text-area-emacs-keys.test.tsx` でフォークキーマップ監査と `useKillRing` 挙動に加え、`operator-text-area-keyboard-harness.tsx` を介した実キー列（`Ctrl+a/e/f/b/d`、`Ctrl+p/n`、`Ctrl+k` + `Ctrl+y`、`Alt+b/f`）を CI で担保する。`Ctrl+p/n` はフォークの `buildVisualRows` を使った multiline 入力で visual row 移動と上下端 no-op を検証する。`ink-testing-library` では実 `TextArea` の measureElement 連鎖が stdin の縦切りを不安定にするため、TextArea 内部の `useKeyboardInput` 配線を再現した React ハーネスで検証する。TTY + 日本語 IME はマージ前の実機ゲート（#186 / #196）。
 
