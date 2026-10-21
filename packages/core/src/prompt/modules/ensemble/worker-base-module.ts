@@ -14,5 +14,12 @@ export const workerBaseModule: PromptModule<EnsembleContext> = {
     '- 手順の細部は Skill（指示があれば）と Issue / PR を source of truth とする',
     '- 気づき・違和感・未解決は解決できなくても Issue に残す',
     '- 操作の許可が必要なときは harness 経由で permission を要求する',
+    {
+      type: 'subsection',
+      title: 'codex-acpへのアドバイス',
+      items: [
+        '- サンドボックス内では認証エラーになるツールがあります(ghなど)が、conductorと相談の上、サンドボックス外での実行に切り替えてください',
+      ],
+    },
   ],
 };
