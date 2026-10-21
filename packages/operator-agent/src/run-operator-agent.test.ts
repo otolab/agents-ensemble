@@ -344,7 +344,7 @@ describe('runOperatorAgent', () => {
     }
 
     expect(sentPrompts).toHaveLength(2);
-    expect(sentPrompts[1]).toContain('## Open Question の更新（2 件）');
+    expect(sentPrompts[1]).toContain('## Open Question 追加（2 件）');
     expect(sentPrompts[1]).toContain('Review the implementation?');
     expect(sentPrompts[1]).toContain('Confirm the test result?');
   });

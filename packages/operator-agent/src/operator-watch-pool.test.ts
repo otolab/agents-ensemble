@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   startOpenQuestionControlServer,
+  type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
 import { createOperatorDispatchQueue } from './operator-dispatch.js';
 import {
@@ -171,6 +172,149 @@ describe('operator watch pool', () => {
       expect(stored.pendingReports[0]?.reportId).not.toBe(firstReportId);
     } finally {
       resumedPool.close();
+    }
+  });
+
+  it('deduplicates live Registry and YAML observations and reports only new open questions', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-dedup-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 0,
+      openQuestions: [],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => liveSnapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeSidecar('live-dedup', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    const writeQuestions = async (
+      sequence: number,
+      questions: Array<Record<string, unknown>>,
+    ) => {
+      await writeOfflineSnapshots('live-dedup', {
+        sequence,
+        questions,
+        statusLine: 'waiting',
+        reportedAt: 20,
+      });
+      await rm(
+        join(
+          repoRoot,
+          '.ensemble',
+          'sessions',
+          'live-dedup',
+          'session-state.yaml',
+        ),
+        { force: true },
+      );
+    };
+    try {
+      await pool.register('live-dedup', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(await pool.pollOnce('live-dedup')).toBe(0);
+
+      const firstQuestion = {
+        id: 'inq-1',
+        question: 'Should we proceed?',
+        responseType: 'yes_no',
+        source: 'conductor',
+        status: 'open',
+        askedAt: 10,
+      };
+      liveSnapshot = { sequence: 1, openQuestions: [firstQuestion] };
+      expect(await pool.pollOnce('live-dedup')).toBe(1);
+
+      // Once the live UDS goes away, the persisted copy of that same
+      // Registry question must not create a second report.
+      await writeSidecar('live-dedup', 2, '/tmp/no-such-ensemble-socket');
+      await writeQuestions(1, [firstQuestion]);
+      expect(await pool.pollOnce('live-dedup')).toBe(0);
+
+      // A status/body update is not a new question. An answered item first
+      // observed in YAML is not an open-question notification either.
+      await writeQuestions(2, [
+        { ...firstQuestion, status: 'answered', question: 'Updated body' },
+        {
+          id: 'inq-2',
+          question: 'Already answered?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'answered',
+          askedAt: 11,
+        },
+      ]);
+      expect(await pool.pollOnce('live-dedup')).toBe(0);
+
+      await writeQuestions(3, [
+        { ...firstQuestion, status: 'answered' },
+        {
+          id: 'inq-2',
+          question: 'Already answered?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'answered',
+          askedAt: 11,
+        },
+        {
+          id: 'inq-3',
+          question: 'New while offline?',
+          responseType: 'choice',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 12,
+        },
+      ]);
+      expect(await pool.pollOnce('live-dedup')).toBe(1);
+      expect(dispatchQueue.pendingEventCount).toBe(2);
+      const report = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      );
+      expect(report?.events.map((event) => event.text)).toEqual([
+        expect.stringContaining('Should we proceed?'),
+        expect.stringContaining('New while offline?'),
+      ]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('keeps Open Question text out of watch poll warning logs', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-logs-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    await writeSidecar('session-private', 1);
+    const secretBody = 'private-question-body-marker';
+    const sessionDir = join(repoRoot, '.ensemble', 'sessions', 'session-private');
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, 'open-questions.yaml'),
+      `version: 1\nsequence: 1\nopenQuestions:\n  - ${secretBody}: [\n`,
+    );
+    const warnings: string[] = [];
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+      onError: (message) => warnings.push(message),
+    });
+    try {
+      await pool.register('session-private', {
+        pollIntervalMs: 250,
+        debounceMs: 0,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings.join('\n')).not.toContain(secretBody);
+    } finally {
+      pool.close();
     }
   });
 

@@ -52,7 +52,7 @@ Transport は Unix domain socket 上の JSON-RPC 2.0 over NDJSON です。1 conn
 
 ### `session.observe`
 
-稼働中 harness の観測 snapshot を返します。operator-agent watch pool は polling のたびにこの method を呼び、質問 sequence と質問ごとの fingerprint、session-state の `reportedAt` を cursor として保存します。記録された socket が到達不能、または古い harness が snapshot method に未対応の場合は、保存済み Open Questions YAML / session-state YAML / legacy sidecar を poll し、報告には観測元を付けます。
+稼働中 harness の観測 snapshot を返します。operator-agent watch pool は polling のたびにこの method を呼び、質問 sequence と質問ごとの fingerprint、session-state の `reportedAt` を cursor として保存します。新しい ID で現在 `open` の質問だけを追加報告し、同じ質問の YAML / sidecar への flush は session ごとの cursor で重複排除します。UDS が利用できる間は Registry snapshot を優先し、記録された socket が到達不能、または古い harness が snapshot method に未対応の場合は、保存済み Open Questions YAML / session-state YAML / legacy sidecar を poll します。報告には観測元を付けます。
 
 Request:
 
@@ -66,7 +66,9 @@ Response:
 {"jsonrpc":"2.0","id":3,"result":{"sequence":2,"openQuestions":[{"id":"inq-1","question":"Proceed?","responseType":"yes_no","source":"conductor","status":"open","askedAt":1792512000000}],"sessionState":{"current":{"statusLine":"CI 待ち","reportedAt":1792512001000},"history":[]}}}
 ```
 
-`openQuestions` は live Registry の全質問（未回答・回答済み）です。`sessionState` は報告がある場合だけ含みます。`sequence` は質問の enqueue cursor で、回答変更の検出には operator-agent が各質問の fingerprint も併用します。この method は読み取り専用で、各 poll は独立した短い JSON-RPC 接続です。
+`openQuestions` は live Registry の全質問（未回答・回答済み）です。`sessionState` は報告がある場合だけ含みます。`sequence` は質問の enqueue cursor で、operator-agent は質問 ID の fingerprint を cursor に保存し、新規 open 質問の判定と YAML / UDS 間の重複排除に使います。session-state report の変更検出には各質問 fingerprint とは別に `reportedAt` を使います。この method は読み取り専用で、各 poll は独立した短い JSON-RPC 接続です。
+
+watch report は既存 operator-agent queue の `open_question:${conductorAgentId}` source と debounce / batch / report hold を通ります。質問本文を含む report は operator-agent への入力であり、複数 session は session ごとに別の batch として Issue URL・conductor ID 付きで整形されます。
 
 ### `open_questions.list`
 

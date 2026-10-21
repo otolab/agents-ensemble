@@ -115,7 +115,7 @@ export function formatOperatorDispatchBatch(
     const event = events[0]!;
     return [
       event.type === 'report' && event.reportType === 'open_question'
-        ? '## Open Question の更新'
+        ? '## Open Question 追加'
         : '## セッション報告',
       '',
       event.text,
@@ -127,7 +127,7 @@ export function formatOperatorDispatchBatch(
       ? `## user 発話（${events.length} 件）`
       : events[0]!.type === 'report' &&
           events[0]!.reportType === 'open_question'
-        ? `## Open Question の更新（${events.length} 件）`
+        ? `## Open Question 追加（${events.length} 件）`
         : `## セッション報告（${events.length} 件）`;
   return [
     title,

@@ -95,7 +95,7 @@ export async function createOperatorWatchPool(
     if (timers.has(watch.conductorAgentId)) return;
     const timer = setInterval(() => {
       void pool.pollOnce(watch.conductorAgentId).catch((error: unknown) => {
-        options.onError?.(errorMessage(error));
+        options.onError?.(formatWatchPollError(watch.conductorAgentId, error));
       });
     }, watch.pollIntervalMs);
     timer.unref();
@@ -172,7 +172,7 @@ export async function createOperatorWatchPool(
         const { snapshot: observation, source } = await readObservation(root, sidecar);
         const previous = state.cursors[id];
         const next = cursorFor(observation);
-        const reports = collectReports(sidecar, observation, previous, next, source)
+        const reports = collectReports(sidecar, observation, previous, source)
           .map((report) => ({
             ...report,
             reportId: randomUUID(),
@@ -362,7 +362,6 @@ function collectReports(
   sidecar: SessionSidecar,
   observation: SessionObservationSnapshot,
   previous: SessionCursor | undefined,
-  next: SessionCursor,
   source: 'uds' | 'sidecar',
 ): Array<{ reportType: 'session_state' | 'open_question'; text: string }> {
   const reports: Array<{
@@ -373,16 +372,19 @@ function collectReports(
   const observationSource =
     source === 'uds' ? '稼働中 UDS' : '保存済み sidecar / YAML';
   for (const question of observation.openQuestions) {
-    const fingerprint = next.questionFingerprints[question.id];
-    if (previous?.questionFingerprints[question.id] === fingerprint) continue;
+    if (
+      question.status !== 'open' ||
+      previous?.questionFingerprints[question.id] !== undefined
+    ) {
+      continue;
+    }
     reports.push({
       reportType: 'open_question',
       text: [
         `対象: ${issue} / 観測元: ${observationSource}`,
-        `質問: ${question.id} / ${question.status} / ${question.responseType}`,
+        `新規追加: ${question.id} / ${question.responseType}`,
         question.question,
         ...(question.context ? [`context: ${question.context}`] : []),
-        ...(question.answer ? [`回答: ${question.answer}`] : []),
       ].join('\n'),
     });
   }
@@ -602,6 +604,8 @@ function isEnoent(error: unknown): boolean {
   );
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function formatWatchPollError(conductorAgentId: string, error: unknown): string {
+  const errorType =
+    error instanceof Error && error.name ? error.name : 'unknown error';
+  return `Failed to poll watched session ${conductorAgentId} (${errorType}).`;
 }

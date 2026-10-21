@@ -122,6 +122,32 @@ describe('operator dispatch batching', () => {
     );
   });
 
+  it('labels Open Question additions and keeps simultaneous sessions distinct', () => {
+    const one = report('session-1', 'open_question', 'Issue 1 / inq-1');
+    const two = report('session-2', 'open_question', 'Issue 2 / inq-1', 1);
+    const first = selectOperatorDispatchBatch(
+      [one, two],
+      { continuationConsumed: false },
+      0,
+    );
+    expect(first?.batch.sourceKey).toBe('open_question:session-1');
+    expect(formatOperatorDispatchBatch(first!.batch.events)).toContain(
+      '## Open Question 追加',
+    );
+    expect(formatOperatorDispatchBatch(first!.batch.events)).toContain(
+      'Issue 1 / inq-1',
+    );
+    const second = selectOperatorDispatchBatch(
+      first!.remaining,
+      { continuationConsumed: false },
+      0,
+    );
+    expect(second?.batch.sourceKey).toBe('open_question:session-2');
+    expect(formatOperatorDispatchBatch(second!.batch.events)).toContain(
+      'Issue 2 / inq-1',
+    );
+  });
+
   it('gives reports from one observation a shared debounce deadline', () => {
     const queue = createOperatorDispatchQueue();
     queue.enqueueReports(
@@ -195,7 +221,7 @@ describe('operator dispatch batching', () => {
     queue.enqueueReport(
       {
         type: 'report',
-        reportType: 'session_state',
+        reportType: 'open_question',
         conductorAgentId: 'one',
         issueUrl: 'https://github.com/example/repo/issues/1',
         text: 'already queued report',
@@ -206,7 +232,7 @@ describe('operator dispatch batching', () => {
     queue.enqueueReport(
       {
         type: 'report',
-        reportType: 'session_state',
+        reportType: 'open_question',
         conductorAgentId: 'one',
         issueUrl: 'https://github.com/example/repo/issues/1',
         text: 'held report',
