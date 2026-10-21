@@ -2,24 +2,6 @@ import type { OperatorMessageDelivery } from './session/session-event.js';
 
 export const OPERATOR_COMMANDS = [
   {
-    id: 'delivery-idle',
-    name: '/idle',
-    aliases: [],
-    description: '自律処理が落ち着いてから届ける',
-  },
-  {
-    id: 'delivery-next',
-    name: '/next',
-    aliases: [],
-    description: '次の dispatch で届ける',
-  },
-  {
-    id: 'delivery-interrupt',
-    name: '/interrupt',
-    aliases: [],
-    description: '実行中の conductor を中断して届ける',
-  },
-  {
     id: 'reconnect',
     name: '/reconnect',
     aliases: ['reconnect'],
@@ -36,6 +18,24 @@ export const OPERATOR_COMMANDS = [
     name: '/close',
     aliases: ['close'],
     description: 'worktree を残してセッションを閉じる',
+  },
+  {
+    id: 'delivery-idle',
+    name: '/idle',
+    aliases: [],
+    description: '自律処理が落ち着いてから届ける',
+  },
+  {
+    id: 'delivery-next',
+    name: '/next',
+    aliases: [],
+    description: '次の dispatch で届ける',
+  },
+  {
+    id: 'delivery-interrupt',
+    name: '/interrupt',
+    aliases: [],
+    description: '実行中の conductor を中断して届ける',
   },
 ] as const;
 

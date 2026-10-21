@@ -8,12 +8,12 @@ import {
 describe('operator command suggestions', () => {
   it('shows the catalog at slash and filters names by case-insensitive prefix', () => {
     expect(getOperatorCommandSuggestions('/').map(({ name }) => name)).toEqual([
-      '/idle',
-      '/next',
-      '/interrupt',
       '/reconnect',
       '/exit',
       '/close',
+      '/idle',
+      '/next',
+      '/interrupt',
     ]);
     expect(getOperatorCommandSuggestions('/ex').map(({ name }) => name)).toEqual([
       '/exit',

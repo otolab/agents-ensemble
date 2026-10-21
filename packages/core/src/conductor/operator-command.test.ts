@@ -10,12 +10,12 @@ describe('operator command catalog', () => {
     expect(
       OPERATOR_COMMANDS.map(({ name, aliases }) => ({ name, aliases })),
     ).toEqual([
-      { name: '/idle', aliases: [] },
-      { name: '/next', aliases: [] },
-      { name: '/interrupt', aliases: [] },
       { name: '/reconnect', aliases: ['reconnect'] },
       { name: '/exit', aliases: ['exit'] },
       { name: '/close', aliases: ['close'] },
+      { name: '/idle', aliases: [] },
+      { name: '/next', aliases: [] },
+      { name: '/interrupt', aliases: [] },
     ]);
   });
 
