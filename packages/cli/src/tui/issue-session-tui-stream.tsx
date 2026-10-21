@@ -50,6 +50,7 @@ import {
 } from './format-operator-context.js';
 import { buildActivityLogDisplayLines, type ActivityLogEntry } from './activity-log.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
+import { computeWorkerPaneHeight } from './pane-layout.js';
 import { resolveStreamPaneHeights } from './stream-layout.js';
 import { TitledBorderPane } from './titled-border-pane.js';
 import {
@@ -211,14 +212,18 @@ export function IssueSessionTuiStream({
   });
   const openQuestionsPaneHeight =
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
+  const workerPaneHeight = computeWorkerPaneHeight(
+    Object.keys(snapshot.displayState.workers).length,
+  );
   const streamPaneHeights = useMemo(
     () =>
       resolveStreamPaneHeights({
         terminalRows,
+        workerPaneHeight,
         openQuestionsPaneHeight,
         inputPaneHeight: desiredInputPaneHeight,
       }),
-    [terminalRows, openQuestionsPaneHeight, desiredInputPaneHeight],
+    [terminalRows, workerPaneHeight, openQuestionsPaneHeight, desiredInputPaneHeight],
   );
   const cursorStart = {
     x: computeOperatorInputCursorX(operatorPrompt),

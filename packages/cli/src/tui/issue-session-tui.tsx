@@ -40,7 +40,6 @@ import {
   OPERATOR_INPUT_PROMPT,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
-  WORKER_PANE_HEIGHT,
   WORKER_PANE_TITLE,
 } from './tui-layout-constants.js';
 import { OperatorTextArea } from './operator-text-area.js';
@@ -61,7 +60,7 @@ import {
   computeOperatorInputCursorY,
   computeOrchestrationLogVisibleLineCount,
 } from './compute-operator-input-cursor-y.js';
-import { resolvePaneHeights } from './pane-layout.js';
+import { computeWorkerPaneHeight, resolvePaneHeights } from './pane-layout.js';
 import {
   computeMaxInputDisplayLines,
   trimBlankLinesOnly,
@@ -234,7 +233,7 @@ function sortWorkerEntries(
 export function WorkerStatusPane({
   workers,
   dispatchHold,
-  height = WORKER_PANE_HEIGHT,
+  height,
   terminalColumns,
   issueUrl,
   issueLinkMode = 'label',
@@ -247,6 +246,7 @@ export function WorkerStatusPane({
   issueLinkMode?: IssueLinkMode;
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
+  const paneHeight = height ?? computeWorkerPaneHeight(entries.length);
   const issueTitleRight = issueUrl ? formatIssueLabel(issueUrl) : undefined;
   const dispatchHoldSuffix =
     dispatchHold && (dispatchHold.hold || dispatchHold.heldEventCount > 0)
@@ -262,7 +262,7 @@ export function WorkerStatusPane({
       borderStyle="round"
       borderColor="cyan"
       paddingX={PANE_PADDING_X}
-      height={height}
+      height={paneHeight}
       terminalColumns={terminalColumns}
     >
       {entries.length === 0 ? (
@@ -453,6 +453,9 @@ export function IssueSessionTui({
   );
   const openQuestionsPaneHeight =
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
+  const workerPaneHeight = computeWorkerPaneHeight(
+    Object.keys(snapshot.displayState.workers).length,
+  );
   const hintLineCount = operatorInputDisplay.hintLines.reduce(
     (lineCount, hintLine) => lineCount + wrapTextToWidth(hintLine, contentWidth).length,
     commandSuggestionLines.length + answerSuggestionLines.length,
@@ -464,9 +467,10 @@ export function IssueSessionTui({
   });
   const paneHeights = resolvePaneHeights({
     liveFrameRows,
+    workerPaneHeight,
     activityPaneHeight:
       liveFrameRows -
-      WORKER_PANE_HEIGHT -
+      workerPaneHeight -
       openQuestionsPaneHeight -
       inputPaneHeight,
     openQuestionsPaneHeight,

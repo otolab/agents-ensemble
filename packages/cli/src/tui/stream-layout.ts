@@ -24,9 +24,9 @@ function shrinkHeight(current: number, minimum: number, amount: number): {
 /**
  * Fit the live panes below Static output while reserving one terminal row.
  * The normal terminal case keeps the requested pane heights unchanged. On a
- * short terminal, content is clipped before the live frame is allowed to
- * become fullscreen-sized. An open-question height of zero omits that
- * independent pane; the empty state may be nested inside the input pane.
+ * short terminal, shrink Workers first, then Open questions and input while
+ * preserving their minimum heights. An open-question height of zero omits
+ * that independent pane; the empty state may be nested inside the input pane.
  */
 export function resolveStreamPaneHeights(params: {
   terminalRows: number;
@@ -35,7 +35,10 @@ export function resolveStreamPaneHeights(params: {
   inputPaneHeight: number;
 }): StreamPaneHeights {
   const frameLimit = Math.max(0, Math.floor(params.terminalRows) - 1);
-  let workerPaneHeight = Math.max(1, params.workerPaneHeight ?? WORKER_PANE_HEIGHT);
+  let workerPaneHeight = Math.max(
+    PANE_BORDER_ROWS,
+    params.workerPaneHeight ?? WORKER_PANE_HEIGHT,
+  );
   let openQuestionsPaneHeight =
     params.openQuestionsPaneHeight > 0
       ? Math.max(PANE_BORDER_ROWS + 1, params.openQuestionsPaneHeight)
@@ -44,10 +47,10 @@ export function resolveStreamPaneHeights(params: {
   let overflow =
     workerPaneHeight + openQuestionsPaneHeight + inputPaneHeight - frameLimit;
 
-  if (overflow > 0 && openQuestionsPaneHeight > 0) {
+  if (overflow > 0) {
     const shrunk = shrinkHeight(
       workerPaneHeight,
-      PANE_BORDER_ROWS + 1,
+      PANE_BORDER_ROWS,
       overflow,
     );
     workerPaneHeight = shrunk.height;

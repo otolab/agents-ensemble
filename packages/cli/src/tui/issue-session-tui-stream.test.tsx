@@ -10,6 +10,7 @@ import { cleanup, render } from 'ink-testing-library';
 import type { OpenQuestion } from '@agents-ensemble/core';
 import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
 import { createTuiViewModel } from './tui-view-model.js';
+import { extractTuiPaneFrameStats } from './orchestration-pane-frame.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import { OPERATOR_INPUT_PROMPT } from './tui-layout-constants.js';
 import {
@@ -282,6 +283,32 @@ describe('IssueSessionTuiStream', () => {
     expect(frame.indexOf('Operator input')).toBeLessThan(frame.indexOf('Workers'));
     expect(frame).toContain('inq-1 (1/1) への回答');
     expect(frame).not.toContain('任意入力');
+  });
+
+  it('sizes the stream Workers pane for conductor and each worker row', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {
+        conductor: { kind: 'conductor', status: 'idle' },
+        implementer: { kind: 'implementer', status: 'running' },
+        reviewer: { kind: 'reviewer', status: 'idle' },
+      },
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? '';
+    const stats = extractTuiPaneFrameStats(frame, 'Workers');
+    expect(stats.contentRows).toHaveLength(3);
+    expect(stats.blankRows).toHaveLength(0);
+    expect(frame).toContain('conductor: idle');
+    expect(frame).toContain('implementer: running');
+    expect(frame).toContain('reviewer: idle');
   });
 
   it('keeps operator line and paragraph breaks in stream activity output', () => {

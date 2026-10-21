@@ -95,6 +95,8 @@ question がないときの pane / stream の Operator input は、通常時・p
 
 `pane` では Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
 
+Workers ペインの高さは内容駆動です。conductor と登録 worker の各状態行、または worker 未登録時の待機表示に合わせて高さを取り、端末内では Open questions・Operator input と Orchestration の最低高さを保てる範囲が上限になります。短い端末や worker 数が多い場合、枠に収まらない状態行はクリップされます。Workers ペイン内のスクロールは行いません。
+
 活動ログは投稿本文の明示的な改行と段落間の空行を表示行として保ち、端末幅に合わせて各行を折り返します。複数行の投稿ではラベルを独立行に置き、本文を次の行から表示します。これは pane と stream の両方に適用されます。pane は可視行数を超えた過去ログをスクロールで確認でき、stream は端末 scrollback に追記します。
 
 Open questions は内容駆動で高さを決めます。選択中 question の `question` / `context` / `choices` は、それぞれ明示的な改行・段落・リスト構造を保って折り返します。非選択 question は question、context、choices の順に最大 2 行まで表示し、続きがある場合は 2 行目の末尾に `…` を付けます。pane / stream とも、まず compact 行を確保し、残りを選択中の detail に割り当てます。通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。選択中の detail が上限を超える場合は、表示できる末尾行に `…` を付けて省略を示します。端末の高さ、または compact 行を確保した残りの本文上限を超える内容はクリップされることがあり、Open questions ペイン内のスクロールは行いません。
