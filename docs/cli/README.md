@@ -86,6 +86,8 @@ ensemble issue https://github.com/OWNER/REPOSITORY/issues/123
 
 operator-agent は既定で前回の operator 会話を再開します。初回起動では新しい session を作り、backend 固有の会話履歴は backend の保存先に、再開に使う backend・repoRoot・agentId は `.ensemble/operator-agent/session.json` に保存します。TTY の EOF、Ctrl+C（SIGINT）、SIGTERM など通常の終了では agent を閉じて再開可能な状態を保ちます。`/exit` または `exit` は連続性を明示的に切り、次回起動を新規 session にします。既存の会話を残したまま新しい会話を始める場合は `ensemble operator-agent --new` を使います。強制終了や電源断では終了時の flush は保証されません。
 
+TTY の会話では `user>` を控えめに、`operator>` をシアンで表示し、operator の本文は次の行から表示します。応答の段落間の空行は保たれ、連続する空行は最大 1 行に整理されます。起動・終了・エラー表示にも同じ余白を設けます。`NO_COLOR` が設定されている場合は色を使いません。
+
 `.ensemble/sessions/` の保存済み sidecar から得られる情報はスナップショットとして読み取り専用です。稼働中 harness への UDS live control が使える場合に限り、`list_live_open_questions` で一覧を取得し、operator が選んだ回答を `answer_live_open_question` で送れます。harness 停止中または接続不能ならライブ操作はエラーになり、保存 YAML への自動 fallback はしません。YAML は保存・resume の正本です。セキュリティとログの扱いは [session logging](../session-logging.md#4-sidecar-と-open-question-yaml) を参照してください。
 
 初回の作業指示は、Issue 参照の後ろに CLI 引数として渡せます。複数の引数はスペース 1 つで結合され、前後の空白は除かれます。
