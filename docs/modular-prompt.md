@@ -13,7 +13,7 @@
 | `baseModule` | conductor + worker 全員 | 常に先頭 |
 | `conductorBaseModule` | conductor のみ | `base` の後 |
 | `workerBaseModule` | worker のみ | `base` の後 |
-| user-wide conductor 文書（`~/.ensemble/AGENTS.md`） | conductor のみ | Issue context の後、profile materials の前 |
+| user-wide 文書（`~/.ensemble/AGENTS.md`） | conductor + worker 全員 | conductor: Issue context の後、profile materials の前。worker: profile materials の前 |
 | profile 起動文書（`agents.<kind>.prompt` / `promptFile`） | 役割ごと | merge で追記（セクション分担） |
 | profile materials（`team.md` 等） | 共通または `kinds` 指定の役割 | 最後に追記（`materials` → Prepared Materials） |
 
@@ -21,7 +21,7 @@ compile 時の context は `EnsembleContext`（`kind`, `issueUrl`, `issueNumber`
 
 profile 起動文書は **PromptModule として merge** される（persona / instructions 等のセクション分担）。profile materials は **Prepared Materials** に載せ、文書があるときは instructions に「文書の役割に応じて参照し、適用される指示に従う」旨を1行追記する。`materials` の `kinds` を省略した項目は全 agent に、`kinds: [implementer]` のように指定した項目は列挙した kind にだけ compile 時に同梱される。ensemble 側に書くべき共通前提を profile に重複させない。**チーム運用**（マージまで持っていく、Issue / PR 正本、投稿の出自、作業単位など）は profile の materials または起動文書に書き、base に置かない。
 
-任意の `~/.ensemble/AGENTS.md` は user の短い運用前提として conductor の Prepared Materials に追加され、profile 選択や Cursor / Pi backend に依存しない。worker prompt には渡さず、project 層や repository-root `AGENTS.md` の自動読み込みもしない。このリポジトリの root `AGENTS.md` は索引、各作業の Skill は手順、profile materials は team / role 定義を担う。user 文書の読み込みに失敗した場合は session 起動を中断する。
+任意の `~/.ensemble/AGENTS.md` は user の短い運用前提として、conductor と全 worker の Prepared Materials に追加され、profile 選択や Cursor / Pi backend に依存しない。conductor では Issue context の後、worker では kind で絞り込んだ profile materials の前に置く。worker system prompt には conductor の Issue context を含めない。project 層や repository-root `AGENTS.md` の自動読み込みもしない。このリポジトリの root `AGENTS.md` は索引、各作業の Skill は手順、profile materials は team / role 定義を担う。user 文書の読み込みに失敗した場合は session 起動を中断する。
 
 ## セクションの分担
 

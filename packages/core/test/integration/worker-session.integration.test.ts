@@ -40,6 +40,11 @@ describe('WorkerSession integration', () => {
         workers: [{ name: 'ping-1', kind: 'ping' }],
         kinds: ['ping'],
       },
+      userInstructions: {
+        id: 'user-instructions',
+        title: 'User instructions (~/.ensemble/AGENTS.md)',
+        content: 'Shared guidance for every worker kind.',
+      },
       connectAcp: async () => bridge,
       ownsWorkerAcpConnections: false,
       decidePermission: () => ({
@@ -59,6 +64,12 @@ describe('WorkerSession integration', () => {
     expect(completed[0]?.name).toBe('ping-1');
     expect(completed[0]?.source).toBe('harness');
     expect(completed[0]?.promptResult.responseText).toBe('pong');
+    expect(completed[0]?.prompt).toContain(
+      '### User instructions (~/.ensemble/AGENTS.md)',
+    );
+    expect(completed[0]?.prompt).toContain(
+      'Shared guidance for every worker kind.',
+    );
     expect(session.runtime.attachedCount).toBe(1);
     expect(session.runtime.getAttached('ping-1')?.session.sessionId).toBeTruthy();
 

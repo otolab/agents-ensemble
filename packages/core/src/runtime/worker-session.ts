@@ -14,6 +14,7 @@ import type { WorkerFailureRecord } from './types.js';
 import { WorkerRuntime } from './worker-runtime.js';
 import type {
   EnsembleSessionState,
+  ResolvedProfileMaterial,
   SessionWorkerSpec,
 } from '../profile/types.js';
 
@@ -28,6 +29,7 @@ export interface WorkerSessionOptions {
   /** 全 worker を登録し、初回 `sendWorkerMessage` で attach する。 */
   lazyWorkers?: boolean;
   sessionState: EnsembleSessionState;
+  userInstructions?: ResolvedProfileMaterial;
   /** resume 時に復元する worker 名 → ACP session 情報。 */
   restoredWorkerSessions?: Record<
     string,
@@ -91,6 +93,9 @@ export class WorkerSession {
     this.runtime = new WorkerRuntime({
       inbox: this.inbox,
       ...(options.repoRoot ? { repoRoot: options.repoRoot } : {}),
+      ...(options.userInstructions
+        ? { userInstructions: options.userInstructions }
+        : {}),
       ...(options.connectAcp ? { connectAcp: options.connectAcp } : {}),
       ...(options.spawn ? { spawn: options.spawn } : {}),
       ...(options.ownsWorkerAcpConnections !== undefined

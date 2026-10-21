@@ -11,7 +11,7 @@
 | テーマ | 正本 | 補足 |
 |--------|------|------|
 | CLI の入口・最小クイックスタート | [cli/README.md](cli/README.md) | npm の `@agents-ensemble/cli` README の生成元 |
-| 設定全体・環境変数・解決順 | [settings.md](settings.md) | CLI / env / config / profile / TUI と user-wide conductor instructions |
+| 設定全体・環境変数・解決順 | [settings.md](settings.md) | CLI / env / config / profile / TUI と user-wide instructions |
 | `config.yaml` の書き方・MCP | [config.md](config.md) | `.ensemble/config.yaml` と `mcp.json` のスキーマ |
 | TUI とオペレータ入力の利用者向け挙動 | [operator-input.md](operator-input.md) | live harness UDS と watch snapshot の利用者向け説明は [live-open-question-control-api.md](live-open-question-control-api.md) |
 | TUI scrollback の検出設計・端末制約 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | native viewport 検出、tmux adapter、A+B の設計境界 |

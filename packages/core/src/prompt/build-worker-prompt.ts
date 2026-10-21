@@ -1,6 +1,9 @@
 import { compile, merge } from '@modular-prompt/core';
 import type { PromptModule } from '@modular-prompt/core';
-import type { EnsembleSessionState } from '../profile/types.js';
+import type {
+  EnsembleSessionState,
+  ResolvedProfileMaterial,
+} from '../profile/types.js';
 import { filterMaterialsForKind } from '../profile/types.js';
 import type { WorkerDispatchContext } from './contexts/kind.js';
 import { ensembleContext } from './contexts/kind.js';
@@ -13,6 +16,7 @@ export interface WorkerPromptOptions {
   kind: string;
   worktreePath?: string;
   sessionState: EnsembleSessionState;
+  userInstructions?: ResolvedProfileMaterial;
   /** profile の `agents.<kind>` から構築した PromptModule。 */
   agentModule?: PromptModule;
 }
@@ -26,7 +30,10 @@ const workerDispatchModule: PromptModule<WorkerDispatchContext> = {
 export function buildWorkerPrompt(options: WorkerPromptOptions): string {
   const profileModule = profilePromptModule({
     agentModule: options.agentModule,
-    materials: filterMaterialsForKind(options.sessionState.materials, options.kind),
+    materials: [
+      ...(options.userInstructions ? [options.userInstructions] : []),
+      ...filterMaterialsForKind(options.sessionState.materials, options.kind),
+    ],
   });
   const module = merge(mergeWorkerSystemPrompt(profileModule), workerDispatchModule);
   return renderCompiledPrompt(

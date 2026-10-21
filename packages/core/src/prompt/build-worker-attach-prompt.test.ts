@@ -23,6 +23,38 @@ describe('buildWorkerAttachPrompt', () => {
     expect(prompt).toContain('attach 済み');
     expect(prompt).toContain('作業指示を待つ');
     expect(prompt).toContain('profile bootstrap');
+    expect(prompt).not.toContain('### User instructions (~/.ensemble/AGENTS.md)');
+  });
+
+  it('places user instructions before kind-filtered profile materials', () => {
+    const prompt = buildWorkerAttachPrompt({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      kind: 'reviewer',
+      sessionState: {
+        workers: [{ name: 'reviewer', kind: 'reviewer' }],
+        kinds: ['reviewer'],
+        materials: [
+          {
+            id: 'reviewer',
+            title: 'Reviewer material',
+            content: 'reviewer-only guidance',
+            kinds: ['reviewer'],
+          },
+        ],
+      },
+      userInstructions: {
+        id: 'user-instructions',
+        title: 'User instructions (~/.ensemble/AGENTS.md)',
+        content: 'Shared guidance for all workers',
+      },
+    });
+
+    expect(prompt).toContain('### User instructions (~/.ensemble/AGENTS.md)');
+    expect(prompt).toContain('Shared guidance for all workers');
+    expect(prompt.indexOf('### User instructions')).toBeLessThan(
+      prompt.indexOf('### Reviewer material'),
+    );
+    expect(prompt).not.toContain('Issue context');
   });
 
   it('marks in-repo mode as a special case in the prompt', () => {
