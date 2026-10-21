@@ -10,6 +10,7 @@ import { AcpClient } from '../../src/acp/acp-client.js';
 import { startFakeAcpServer } from '../../src/acp/testing/fake-acp-server.js';
 import { createInProcessStreamPair } from '../../src/acp/testing/stream-pair.js';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
+import type { OperatorInputBindingApi } from '../../src/conductor/operator-input-binding.js';
 import { SessionLogger, type SessionLogEvent } from '../../src/conductor/session/session-logger.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
@@ -56,12 +57,25 @@ const IMPLEMENTER_PROFILE: Profile = {
   workers: [{ name: 'implementer-1', kind: 'implementer' }],
 };
 
-const { mockSend, mockClose, mockCreate, mockCreateCursorSdkConductorAgentFactory } = vi.hoisted(() => {
+const {
+  mockSend,
+  mockCancel,
+  mockClose,
+  mockCreate,
+  mockCreateCursorSdkConductorAgentFactory,
+} = vi.hoisted(() => {
   const mockSend = vi.fn();
+  const mockCancel = vi.fn().mockResolvedValue(undefined);
   const mockClose = vi.fn().mockResolvedValue(undefined);
   const mockCreate = vi.fn();
   const mockCreateCursorSdkConductorAgentFactory = vi.fn();
-  return { mockSend, mockClose, mockCreate, mockCreateCursorSdkConductorAgentFactory };
+  return {
+    mockSend,
+    mockCancel,
+    mockClose,
+    mockCreate,
+    mockCreateCursorSdkConductorAgentFactory,
+  };
 });
 
 let conductorTools: Record<string, SDKCustomTool> = {};
@@ -85,6 +99,7 @@ describe('open question / operator flow integration', () => {
     vi.spyOn(worktreeModule, 'resolveWorkerWorkspace').mockResolvedValue(TEST_WORKTREE);
 
     mockSend.mockReset();
+    mockCancel.mockReset().mockResolvedValue(undefined);
     mockClose.mockClear();
     mockCreate.mockReset();
     mockCreateCursorSdkConductorAgentFactory.mockReset();
@@ -97,6 +112,7 @@ describe('open question / operator flow integration', () => {
       return {
         agentId: 'agent-test',
         send: mockSend,
+        cancel: mockCancel,
         close: mockClose,
         getUsage: createMockConductorGetUsage(),
       };
@@ -287,6 +303,156 @@ describe('open question / operator flow integration', () => {
         }),
       ]),
     );
+  });
+
+  it('holds an idle operator message during conductor send and dispatches it when idle', async () => {
+    isolatedRepoRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-idle-operator-message-'),
+    );
+    let releaseInitialSend!: () => void;
+    let markInitialSendStarted!: () => void;
+    const initialSendStarted = new Promise<void>((resolve) => {
+      markInitialSendStarted = resolve;
+    });
+    const initialSendFinished = new Promise<void>((resolve) => {
+      releaseInitialSend = resolve;
+    });
+    mockSend
+      .mockImplementationOnce(async () => {
+        markInitialSendStarted();
+        await initialSendFinished;
+        return {
+          runId: 'run-1',
+          status: 'finished',
+          result: 'initial turn complete',
+        };
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'operator message handled',
+      });
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: isolatedRepoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: isolatedRepoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    try {
+      await initialSendStarted;
+      expect(operatorApi).toBeDefined();
+      expect(operatorApi!.submit('wait until the current turn ends', {
+        delivery: 'idle',
+      })).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(mockSend).toHaveBeenCalledTimes(1);
+
+      releaseInitialSend();
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+      expect(String(mockSend.mock.calls[1]![0])).toContain(
+        'wait until the current turn ends',
+      );
+      expect(
+        emitted.find(
+          (event) =>
+            event.type === 'operator.input' &&
+            event.text === 'wait until the current turn ends',
+        ),
+      ).toMatchObject({ delivery: 'idle' });
+
+      operatorApi!.submit('/exit');
+      await sessionPromise;
+    } finally {
+      releaseInitialSend();
+      operatorApi?.submit('/exit');
+      await sessionPromise.catch(() => {});
+    }
+  });
+
+  it('cancels an active conductor run for interrupt delivery and then sends the message', async () => {
+    isolatedRepoRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-interrupt-operator-message-'),
+    );
+    let releaseInitialSend!: () => void;
+    let markInitialSendStarted!: () => void;
+    const initialSendStarted = new Promise<void>((resolve) => {
+      markInitialSendStarted = resolve;
+    });
+    const initialSendFinished = new Promise<void>((resolve) => {
+      releaseInitialSend = resolve;
+    });
+    mockSend
+      .mockImplementationOnce(async () => {
+        markInitialSendStarted();
+        await initialSendFinished;
+        return {
+          runId: 'run-1',
+          status: 'cancelled',
+          result: 'partial turn',
+        };
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'interrupt handled',
+      });
+    mockCancel.mockImplementation(async () => {
+      releaseInitialSend();
+    });
+
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: isolatedRepoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    try {
+      await initialSendStarted;
+      expect(operatorApi).toBeDefined();
+      expect(
+        operatorApi!.submit('stop the current turn and inspect this', {
+          delivery: 'interrupt',
+        }),
+      ).toBe(true);
+      await vi.waitFor(() => expect(mockCancel).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+      expect(String(mockSend.mock.calls[1]![0])).toContain(
+        'stop the current turn and inspect this',
+      );
+
+      operatorApi!.submit('/exit');
+      await sessionPromise;
+    } finally {
+      releaseInitialSend();
+      operatorApi?.submit('/exit');
+      await sessionPromise.catch(() => {});
+    }
   });
 
   it('sends permission.pending event then resolves via resolve_permission', async () => {

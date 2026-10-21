@@ -116,6 +116,10 @@ export {
 } from './operator-command.js';
 export type { OperatorCommandId } from './operator-command.js';
 export {
+  parseOperatorMessageDelivery,
+} from './operator-command.js';
+export type { ParsedOperatorMessageDelivery } from './operator-command.js';
+export {
   reconnectConductorAgent,
   sendConductorWithReconnect,
   isConductorSendTransportError,
@@ -212,6 +216,7 @@ export type {
 export type {
   SessionEvent,
   OperatorMessageEvent,
+  OperatorMessageDelivery,
   OperatorReconnectEvent,
   WorkerCompletedEvent,
   WorkerFailedEvent,

@@ -391,13 +391,13 @@ describe('IssueSessionTui', () => {
 
     stdin.write(INK_TEST_KEYS.downArrow);
     await flushInkStdin();
-    expect(lastFrame() ?? '').toContain('› /close');
+    expect(lastFrame() ?? '').toContain('› /idle');
 
     for (const key of [INK_TEST_KEYS.upArrow, INK_TEST_KEYS.upArrow]) {
       stdin.write(key);
       await flushInkStdin();
     }
-    expect(lastFrame() ?? '').toContain('› /reconnect');
+    expect(lastFrame() ?? '').toContain('› /exit');
 
     stdin.write(INK_TEST_KEYS.upArrow);
     await flushInkStdin();

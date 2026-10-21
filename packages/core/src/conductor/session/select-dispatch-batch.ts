@@ -25,6 +25,8 @@ export interface SelectDispatchBatchInput {
   state: DispatchBatchState;
   autonomousTurns: number;
   maxTurns: number;
+  /** `idle` operator.message を dispatch 対象に含めるか。既定は true。 */
+  allowIdleOperatorMessages?: boolean;
 }
 
 export interface SelectDispatchBatchResult {
@@ -96,8 +98,12 @@ function isDispatchable(
   event: SessionEvent,
   autonomousTurns: number,
   maxTurns: number,
+  allowIdleOperatorMessages = true,
 ): boolean {
   return (
+    (event.type !== 'operator.message' ||
+      event.delivery !== 'idle' ||
+      allowIdleOperatorMessages) &&
     isTriggerSessionEvent(event) &&
     canDispatchConductorSend(event, autonomousTurns, maxTurns)
   );
@@ -163,9 +169,20 @@ function canUseWorkerContinuation(
 export function selectDispatchBatch(
   input: SelectDispatchBatchInput,
 ): SelectDispatchBatchResult | undefined {
-  const { queue, state, autonomousTurns, maxTurns } = input;
+  const {
+    queue,
+    state,
+    autonomousTurns,
+    maxTurns,
+    allowIdleOperatorMessages = true,
+  } = input;
   const eligible = queue.filter((event) =>
-    isDispatchable(event, autonomousTurns, maxTurns),
+    isDispatchable(
+      event,
+      autonomousTurns,
+      maxTurns,
+      allowIdleOperatorMessages,
+    ),
   );
   if (eligible.length === 0) {
     return undefined;
@@ -188,7 +205,14 @@ export function selectDispatchBatch(
     if (eventSourceKey(event) !== chosenKey) {
       return false;
     }
-    if (isDispatchable(event, autonomousTurns, maxTurns)) {
+    if (
+      isDispatchable(
+        event,
+        autonomousTurns,
+        maxTurns,
+        allowIdleOperatorMessages,
+      )
+    ) {
       return true;
     }
     return (

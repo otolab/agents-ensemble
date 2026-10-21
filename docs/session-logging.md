@@ -90,7 +90,7 @@ TTY の Ink TUI では Operator input 欄の入力プロンプトを pane / stre
 
 open question の回答観測は回答全文を残し、`yes_no` には `assent=yes|no|unclear`、`choice` には回答から一意に解決できた場合だけ `selectedChoice` を付けます。自由記述や曖昧な label では `selectedChoice` を付けません。`approved` は permission に関連付いた yes/no のみ出力します。choice 質問の登録観測には ID と label を表示します。
 
-稼働中 UDS control server は JSON-RPC request / response body をアクセスログへ書きません。ただし回答は既存の operator 入力経路を通るため、CLI observation は従来どおり質問本文と回答本文を stderr または TUI 活動ログに表示します。質問・context・回答は sidecar / YAML にも保存され、UDS list response では保存値のまま返します。任意文面の secret や repository 外情報を確実に検出する redaction はありません。機密値を質問・context・回答に含めない運用としてください。
+稼働中 UDS control server は JSON-RPC request / response body をアクセスログへ書きません。ただし回答・operator message は既存の operator 入力経路を通るため、CLI observation は従来どおり質問本文・回答本文・メッセージ本文を stderr または TUI 活動ログに表示します。メッセージの配信モード（`idle` / `next` / `interrupt`）も `operator.input` と TTY 活動ログに記録します。質問・context・回答は sidecar / YAML にも保存され、UDS list response では保存値のまま返します。任意文面の secret や repository 外情報を確実に検出する redaction はありません。機密値を質問・context・回答・メッセージに含めない運用としてください。
 
 `.ensemble/sessions/` とセッション別データ directory は owner-only (`0700`)、JSON sidecar / YAML / socket file は owner read/write (`0600`) にします。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
 

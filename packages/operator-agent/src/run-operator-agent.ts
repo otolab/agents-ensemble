@@ -25,6 +25,7 @@ import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js
 import {
   createAnswerLiveOpenQuestionTool,
   createListLiveOpenQuestionsTool,
+  createSendOperatorMessageTool,
 } from './open-question-control-tools.js';
 import {
   clearOperatorAgentState,
@@ -117,6 +118,7 @@ export async function runOperatorAgent(
       list_operator_sessions: createListOperatorSessionsTool(runtime.repoRoot),
       list_live_open_questions: createListLiveOpenQuestionsTool(runtime.repoRoot),
       answer_live_open_question: createAnswerLiveOpenQuestionTool(runtime.repoRoot),
+      send_operator_message: createSendOperatorMessageTool(runtime.repoRoot),
     },
   };
   const agent = existingState

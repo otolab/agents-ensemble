@@ -16,4 +16,6 @@ export {
   createAnswerLiveOpenQuestionTool,
   createListLiveOpenQuestionsTool,
   LIST_LIVE_OPEN_QUESTIONS_TOOL,
+  createSendOperatorMessageTool,
+  SEND_OPERATOR_MESSAGE_TOOL,
 } from './open-question-control-tools.js';

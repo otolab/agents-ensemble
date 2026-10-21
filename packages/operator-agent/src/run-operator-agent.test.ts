@@ -187,6 +187,7 @@ describe('runOperatorAgent', () => {
       'list_operator_sessions',
       'list_live_open_questions',
       'answer_live_open_question',
+      'send_operator_message',
     ]);
     await expect(
       readFile(join(repoRoot, '.ensemble', 'operator-agent', 'session.json')),
