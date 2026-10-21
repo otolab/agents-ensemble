@@ -1,5 +1,5 @@
 ---
-'@agents-ensemble/operator-agent': minor
+'@agents-ensemble/operator-agent': patch
 ---
 
 operator-agent の session watch が新規 open Open Question を検知し、重複を避けて operator へ報告する。
