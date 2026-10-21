@@ -32,6 +32,14 @@ operator-agent tool の input は次のとおりです。
 
 list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }`）です。answer tool の text content は UDS result (`{ "question": {...} }`) を JSON 表示し、`structuredContent` は `questionId`, `status`, 任意の `answeredBy`, `approved` を持つ object に整形します。これは operator-agent tool wrapper の出力で、UDS wire response とは形が異なります。
 
+## Operator-agent watch state の欠損・破損と復旧
+
+watch pool は `.ensemble/operator-agent/watch-state.json` に watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。
+
+- **state file が存在しない場合:** empty state として起動し、watch pool は空です。保存済み watch 登録・cursor・未 dispatch report は復元されません。監視を再開するには対象 session ごとに `register_session_watch` を実行してください。cursor がないため、再登録後の最初の成功した snapshot は既存 Open Question ID の silent baseline になります。その snapshot にすでに含まれる質問（state 欠損中に追加された質問も含む）は新規通知として replay されません。baseline 後に追加された ID は通常どおり通知されます。
+- **JSON または state schema が不正な場合:** operator-agent の初期化は失敗し、empty state へ黙って置き換えません。保存ファイルを退避してから、有効な backup を戻すか、version と必須 field を修復して再起動してください。state を意図的に破棄する場合も、まず必要ならコピーを保全してください。ファイルを取り除いて再起動すると empty state から始まり、上記の再登録と silent baseline が必要です。
+- **report hold:** hold は watch state には保存されない会話中の状態です。再起動後は解除状態で始まります。
+
 ## Endpoint discovery と lifecycle
 
 operator-agent は JSON sidecar `.ensemble/sessions/{conductorAgentId}.json` の `harnessSocketPath` を読み、接続先を得ます。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、sidecar に記録された値を使ってください。
@@ -52,7 +60,7 @@ Transport は Unix domain socket 上の JSON-RPC 2.0 over NDJSON です。1 conn
 
 ### `session.observe`
 
-稼働中 harness の観測 snapshot を返します。operator-agent watch pool は polling のたびにこの method を呼び、質問 sequence と質問ごとの fingerprint、session-state の `reportedAt` を cursor として保存します。記録された socket が到達不能、または古い harness が snapshot method に未対応の場合は、保存済み Open Questions YAML / session-state YAML / legacy sidecar を poll し、報告には観測元を付けます。
+稼働中 harness の観測 snapshot を返します。operator-agent watch pool は polling のたびにこの method を呼び、質問 sequence と質問ごとの fingerprint、session-state の `reportedAt` を cursor として保存します。watch に保存済み cursor がない場合、初回 snapshot の質問 ID を通知なしで baseline に登録します。以後、新しい ID で現在 `open` の質問だけを追加報告し、同じ質問の YAML / sidecar への flush は session ごとの cursor で重複排除します。UDS が利用できる間は Registry snapshot を優先し、記録された socket が到達不能、または古い harness が snapshot method に未対応の場合は、保存済み Open Questions YAML / session-state YAML / legacy sidecar を poll します。報告には観測元を付けます。
 
 Request:
 
@@ -66,7 +74,9 @@ Response:
 {"jsonrpc":"2.0","id":3,"result":{"sequence":2,"openQuestions":[{"id":"inq-1","question":"Proceed?","responseType":"yes_no","source":"conductor","status":"open","askedAt":1792512000000}],"sessionState":{"current":{"statusLine":"CI 待ち","reportedAt":1792512001000},"history":[]}}}
 ```
 
-`openQuestions` は live Registry の全質問（未回答・回答済み）です。`sessionState` は報告がある場合だけ含みます。`sequence` は質問の enqueue cursor で、回答変更の検出には operator-agent が各質問の fingerprint も併用します。この method は読み取り専用で、各 poll は独立した短い JSON-RPC 接続です。
+`openQuestions` は live Registry の全質問（未回答・回答済み）です。`sessionState` は報告がある場合だけ含みます。`sequence` は質問の enqueue cursor で、operator-agent は質問 ID の fingerprint を cursor に保存し、新規 open 質問の判定と YAML / UDS 間の重複排除に使います。新規 watch または cursor 欠損時は、初回 snapshot にすでに含まれる質問を既存状態として扱い、以後に追加された ID だけを通知します。session-state report の変更検出には各質問 fingerprint とは別に `reportedAt` を使います。この method は読み取り専用で、各 poll は独立した短い JSON-RPC 接続です。
+
+watch report は既存 operator-agent queue の `open_question:${conductorAgentId}` source と debounce / batch / report hold を通ります。質問本文を含む report は operator-agent への入力であり、複数 session は session ごとに別の batch として Issue URL・conductor ID 付きで整形されます。
 
 ### `open_questions.list`
 

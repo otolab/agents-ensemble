@@ -137,7 +137,9 @@ operator-agent は ADR 0014 の dispatch 原則を operator 側の報告に適�
 | 通信方向 | harness queue から conductor へ送る | harness の UDS から operator-agent へ snapshot を報告し、逆方向の `operator.message.send` は既存 conductor queue に enqueue |
 | 実行中 TTY | Issue TUI が `dispatch 保留中（N 件）` を表示 | operator-agent は `報告保留中（N 件）` を表示 |
 
-監視間隔と debounce は watch ごとに `register_session_watch` の `pollIntervalMs` / `debounceMs` で設定する。session ごとの UDS path が記録されているだけでは稼働中と判断せず、接続できた snapshot を live として扱う。poll cursor と未 dispatch report は operator-agent state に保存するため、operator-agent の再起動後は未送信 report を queue に戻す。report hold 自体は会話中だけの状態で、再起動後は解除状態から始まる。
+監視間隔と debounce は watch ごとに `register_session_watch` の `pollIntervalMs` / `debounceMs` で設定する。session ごとの UDS path が記録されているだけでは稼働中と判断せず、接続できた snapshot を live Registry observation として扱う。watch に cursor がない場合、最初の snapshot を通知なしで baseline に記録し、その後に増えた ID のうち `status: open` の質問を検知する。同じ質問の後続 YAML flush は per-session cursor で重複排除する。UDS が使えない間は `open-questions.yaml` と session-state YAML を poll するため、停止中セッションの変更も次回 poll で取り込む。Open Question report は `open_question:${conductorAgentId}` source key で既存 queue の batching / hold を通り、本文には対象 Issue と session ID を付ける。poll cursor と未 dispatch report は operator-agent state に保存するため、operator-agent の再起動後は未送信 report を queue に戻す。report hold 自体は会話中だけの状態で、再起動後は解除状態から始まる。
+
+`.ensemble/operator-agent/watch-state.json` が無い場合、watch pool は空 state で起動し、登録済み watch・cursor・未 dispatch report は失われます。監視再開には watch の再登録が必要で、最初の successful snapshot は既存 OQ ID の silent baseline になります。baseline 時点までに追加された質問は通知として replay されません。JSON / schema が不正なら初期化は失敗し、state を空へリセットしません。復旧手順は [稼働中 harness control API reference](live-open-question-control-api.md#operator-agent-watch-state-の欠損破損と復旧) を参照してください。report hold は永続化されず、再起動後は解除状態です。
 
 watch report を含む `agent.send` は `finished` / `completed` のときだけ成功として acknowledge し、永続 pending から削除する。`cancelled`、`error`、その他完了を確認できない status では report を同じ ID で遅延再 queue し、再起動後も pending から復元する。送信成功後・ack 永続化前の終了では再送と重複が起こりうるため at-least-once であり、受け手は対象 session の現在状態を確認する（設計判断は [ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md)）。
 

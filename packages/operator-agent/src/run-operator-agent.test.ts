@@ -3,7 +3,10 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { startOpenQuestionControlServer } from '@agents-ensemble/core';
+import {
+  startOpenQuestionControlServer,
+  type SessionObservationSnapshot,
+} from '@agents-ensemble/core';
 import type {
   ConductorAgent,
   ConductorAgentCreateOptions,
@@ -221,6 +224,38 @@ describe('runOperatorAgent', () => {
           pollIntervalMs: 250,
           debounceMs: 0,
         });
+        setTimeout(() => {
+          void (async () => {
+            const sessionDir = join(
+              repoRoot,
+              '.ensemble',
+              'sessions',
+              'conductor-one',
+            );
+            await mkdir(sessionDir, { recursive: true });
+            await writeFile(
+              join(sessionDir, 'open-questions.yaml'),
+              [
+                'version: 1',
+                'sequence: 2',
+                'openQuestions:',
+                '  - id: inq-1',
+                '    question: "Approve this operation?"',
+                '    responseType: yes_no',
+                '    source: conductor',
+                '    status: open',
+                '    askedAt: 1',
+                '  - id: inq-2',
+                '    question: "New question while offline?"',
+                '    responseType: text',
+                '    source: conductor',
+                '    status: open',
+                '    askedAt: 2',
+                '',
+              ].join('\n'),
+            );
+          })();
+        }, 350);
         return { runId: 'run-1', status: 'completed', result: 'watch started' };
       },
     });
@@ -250,29 +285,13 @@ describe('runOperatorAgent', () => {
   });
 
   it('sends multiple same-source watch reports in one operator-agent dispatch', async () => {
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 0,
+      openQuestions: [],
+    };
     const liveServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => [],
-      observeSession: async () => ({
-        sequence: 2,
-        openQuestions: [
-          {
-            id: 'inq-2',
-            question: 'Review the implementation?',
-            responseType: 'text',
-            source: 'conductor',
-            status: 'open',
-            askedAt: 2,
-          },
-          {
-            id: 'inq-3',
-            question: 'Confirm the test result?',
-            responseType: 'yes_no',
-            source: 'conductor',
-            status: 'open',
-            askedAt: 3,
-          },
-        ],
-      }),
+      observeSession: async () => liveSnapshot,
       answerOpenQuestion: async () => {
         throw new Error('unused');
       },
@@ -308,6 +327,29 @@ describe('runOperatorAgent', () => {
             pollIntervalMs: 250,
             debounceMs: 0,
           });
+          setTimeout(() => {
+            liveSnapshot = {
+              sequence: 2,
+              openQuestions: [
+                {
+                  id: 'inq-2',
+                  question: 'Review the implementation?',
+                  responseType: 'text',
+                  source: 'conductor',
+                  status: 'open',
+                  askedAt: 2,
+                },
+                {
+                  id: 'inq-3',
+                  question: 'Confirm the test result?',
+                  responseType: 'yes_no',
+                  source: 'conductor',
+                  status: 'open',
+                  askedAt: 3,
+                },
+              ],
+            };
+          }, 350);
         }
         return {
           runId: `run-${sentPrompts.length}`,
@@ -344,27 +386,19 @@ describe('runOperatorAgent', () => {
     }
 
     expect(sentPrompts).toHaveLength(2);
-    expect(sentPrompts[1]).toContain('## Open Question の更新（2 件）');
+    expect(sentPrompts[1]).toContain('## Open Question 追加（2 件）');
     expect(sentPrompts[1]).toContain('Review the implementation?');
     expect(sentPrompts[1]).toContain('Confirm the test result?');
   });
 
   it('retains a cancelled watch report across restart and acknowledges it only after a completed retry', async () => {
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 0,
+      openQuestions: [],
+    };
     const liveServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => [],
-      observeSession: async () => ({
-        sequence: 1,
-        openQuestions: [
-          {
-            id: 'inq-cancelled',
-            question: 'Should this report be retried?',
-            responseType: 'text',
-            source: 'conductor',
-            status: 'open',
-            askedAt: 10,
-          },
-        ],
-      }),
+      observeSession: async () => liveSnapshot,
       answerOpenQuestion: async () => {
         throw new Error('unused');
       },
@@ -401,6 +435,21 @@ describe('runOperatorAgent', () => {
             pollIntervalMs: 250,
             debounceMs: 0,
           });
+          setTimeout(() => {
+            liveSnapshot = {
+              sequence: 1,
+              openQuestions: [
+                {
+                  id: 'inq-cancelled',
+                  question: 'Should this report be retried?',
+                  responseType: 'text',
+                  source: 'conductor',
+                  status: 'open',
+                  askedAt: 10,
+                },
+              ],
+            };
+          }, 350);
           return {
             runId: 'first-user-send',
             status: 'completed',

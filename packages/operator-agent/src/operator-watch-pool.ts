@@ -95,7 +95,7 @@ export async function createOperatorWatchPool(
     if (timers.has(watch.conductorAgentId)) return;
     const timer = setInterval(() => {
       void pool.pollOnce(watch.conductorAgentId).catch((error: unknown) => {
-        options.onError?.(errorMessage(error));
+        options.onError?.(formatWatchPollError(watch.conductorAgentId, error));
       });
     }, watch.pollIntervalMs);
     timer.unref();
@@ -172,7 +172,7 @@ export async function createOperatorWatchPool(
         const { snapshot: observation, source } = await readObservation(root, sidecar);
         const previous = state.cursors[id];
         const next = cursorFor(observation);
-        const reports = collectReports(sidecar, observation, previous, next, source)
+        const reports = collectReports(sidecar, observation, previous, source)
           .map((report) => ({
             ...report,
             reportId: randomUUID(),
@@ -362,7 +362,6 @@ function collectReports(
   sidecar: SessionSidecar,
   observation: SessionObservationSnapshot,
   previous: SessionCursor | undefined,
-  next: SessionCursor,
   source: 'uds' | 'sidecar',
 ): Array<{ reportType: 'session_state' | 'open_question'; text: string }> {
   const reports: Array<{
@@ -373,16 +372,20 @@ function collectReports(
   const observationSource =
     source === 'uds' ? '稼働中 UDS' : '保存済み sidecar / YAML';
   for (const question of observation.openQuestions) {
-    const fingerprint = next.questionFingerprints[question.id];
-    if (previous?.questionFingerprints[question.id] === fingerprint) continue;
+    if (
+      !previous ||
+      question.status !== 'open' ||
+      previous.questionFingerprints[question.id] !== undefined
+    ) {
+      continue;
+    }
     reports.push({
       reportType: 'open_question',
       text: [
         `対象: ${issue} / 観測元: ${observationSource}`,
-        `質問: ${question.id} / ${question.status} / ${question.responseType}`,
+        `新規追加: ${question.id} / ${question.responseType}`,
         question.question,
         ...(question.context ? [`context: ${question.context}`] : []),
-        ...(question.answer ? [`回答: ${question.answer}`] : []),
       ].join('\n'),
     });
   }
@@ -475,21 +478,23 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
         !isRecord(rawCursor) ||
         !Number.isSafeInteger(rawCursor.sequence) ||
         (rawCursor.sequence as number) < 0 ||
-        !isRecord(rawCursor.questionFingerprints) ||
-        !isRecord(rawCursor.statusFingerprints)
+        !isStringRecord(rawCursor.questionFingerprints) ||
+        !isStringRecord(rawCursor.statusFingerprints)
       ) {
         throw new Error(`Invalid operator-agent watch state: cursor ${id}.`);
       }
       cursors[id] = rawCursor as unknown as SessionCursor;
     }
-    const pendingReports = value.pendingReports ?? [];
+    const pendingReports = value.pendingReports;
     if (!Array.isArray(pendingReports)) {
       throw new Error('Invalid operator-agent watch state: pendingReports.');
     }
+    const reportIds = new Set<string>();
     for (const report of pendingReports) {
       if (
         !isRecord(report) ||
         typeof report.reportId !== 'string' ||
+        report.reportId.trim().length === 0 ||
         typeof report.conductorAgentId !== 'string' ||
         typeof report.issueUrl !== 'string' ||
         typeof report.text !== 'string' ||
@@ -498,6 +503,21 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
         typeof report.debounceMs !== 'number'
       ) {
         throw new Error('Invalid operator-agent watch state: pending report.');
+      }
+      if (reportIds.has(report.reportId)) {
+        throw new Error(
+          'Invalid operator-agent watch state: duplicate pending reportId.',
+        );
+      }
+      reportIds.add(report.reportId);
+      if (
+        !Number.isInteger(report.debounceMs) ||
+        report.debounceMs < 0 ||
+        report.debounceMs > MAX_DEBOUNCE_MS
+      ) {
+        throw new Error(
+          'Invalid operator-agent watch state: pending report debounceMs.',
+        );
       }
     }
     return {
@@ -593,6 +613,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every((item) => typeof item === 'string')
+  );
+}
+
 function isEnoent(error: unknown): boolean {
   return (
     typeof error === 'object' &&
@@ -602,6 +629,8 @@ function isEnoent(error: unknown): boolean {
   );
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function formatWatchPollError(conductorAgentId: string, error: unknown): string {
+  const errorType =
+    error instanceof Error && error.name ? error.name : 'unknown error';
+  return `Failed to poll watched session ${conductorAgentId} (${errorType}).`;
 }

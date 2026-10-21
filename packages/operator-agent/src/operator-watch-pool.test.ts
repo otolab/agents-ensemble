@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   startOpenQuestionControlServer,
+  type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
 import { createOperatorDispatchQueue } from './operator-dispatch.js';
 import {
@@ -25,25 +26,26 @@ describe('operator watch pool', () => {
   it('watches multiple sessions through live UDS and persists cursors without replay', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [
+        {
+          id: 'inq-1',
+          question: 'Review the release?',
+          responseType: 'yes_no',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 10,
+        },
+      ],
+      sessionState: {
+        current: { statusLine: 'CI 待ち', reportedAt: 20 },
+        history: [],
+      },
+    };
     const liveServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => [],
-      observeSession: async () => ({
-        sequence: 1,
-        openQuestions: [
-          {
-            id: 'inq-1',
-            question: 'Review the release?',
-            responseType: 'yes_no',
-            source: 'conductor',
-            status: 'open',
-            askedAt: 10,
-          },
-        ],
-        sessionState: {
-          current: { statusLine: 'CI 待ち', reportedAt: 20 },
-          history: [],
-        },
-      }),
+      observeSession: async () => liveSnapshot,
       answerOpenQuestion: async () => {
         throw new Error('unused');
       },
@@ -75,15 +77,60 @@ describe('operator watch pool', () => {
     try {
       await pool.register('live-one', { pollIntervalMs: 60_000, debounceMs: 0 });
       await pool.register('offline-two', { pollIntervalMs: 60_000, debounceMs: 0 });
-      expect(await pool.pollOnce('live-one')).toBe(2);
-      expect(await pool.pollOnce('offline-two')).toBe(2);
+      // Existing questions in a watch's first observation establish a
+      // baseline and do not create Open Question reports.
+      expect(await pool.pollOnce('live-one')).toBe(1);
+      expect(await pool.pollOnce('offline-two')).toBe(1);
+      expect(dispatchQueue.pendingEventCount).toBe(2);
+
+      liveSnapshot = {
+        ...liveSnapshot,
+        sequence: 2,
+        openQuestions: [
+          ...liveSnapshot.openQuestions,
+          {
+            id: 'inq-2',
+            question: 'New live question?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 11,
+          },
+        ],
+      };
+      await writeOfflineSnapshots('offline-two', {
+        sequence: 2,
+        questions: [
+          {
+            id: 'inq-1',
+            question: 'Choose an approach?',
+            responseType: 'choice',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 30,
+          },
+          {
+            id: 'inq-2',
+            question: 'New offline question?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 31,
+          },
+        ],
+        statusLine: 'レビュー中',
+        reportedAt: 40,
+      });
+      expect(await pool.pollOnce('live-one')).toBe(1);
+      expect(await pool.pollOnce('offline-two')).toBe(1);
+      expect(dispatchQueue.pendingEventCount).toBe(4);
 
       const firstBatch = dispatchQueue.takeBatch(
         { continuationConsumed: false },
         Date.now(),
       );
       expect(firstBatch?.sourceKey).toBe('open_question:live-one');
-      expect(firstBatch?.events[0]?.text).toContain('Review the release?');
+      expect(firstBatch?.events[0]?.text).toContain('New live question?');
       expect(dispatchQueue.pendingEventCount).toBe(3);
       await pool.acknowledge(firstBatch!.events);
 
@@ -92,8 +139,8 @@ describe('operator watch pool', () => {
       const stored = JSON.parse(
         await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
       ) as { cursors: Record<string, { sequence: number }> };
-      expect(stored.cursors['live-one']?.sequence).toBe(1);
-      expect(stored.cursors['offline-two']?.sequence).toBe(1);
+      expect(stored.cursors['live-one']?.sequence).toBe(2);
+      expect(stored.cursors['offline-two']?.sequence).toBe(2);
       pool.close();
 
       const resumedQueue = createOperatorDispatchQueue();
@@ -140,11 +187,41 @@ describe('operator watch pool', () => {
       pollIntervalMs: 60_000,
       debounceMs: 0,
     });
-    expect(await firstPool.pollOnce('session-retry')).toBe(2);
+    expect(await firstPool.pollOnce('session-retry')).toBe(1);
+    expect(firstQueue.pendingEventCount).toBe(1);
+    await writeOfflineSnapshots('session-retry', {
+      sequence: 2,
+      questions: [
+        {
+          id: 'inq-1',
+          question: 'Retry after cancellation?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 10,
+        },
+        {
+          id: 'inq-2',
+          question: 'New report to retry?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 11,
+        },
+      ],
+      statusLine: 'waiting',
+      reportedAt: 20,
+    });
+    expect(await firstPool.pollOnce('session-retry')).toBe(1);
     const firstAttempt = firstQueue.takeBatch(
       { continuationConsumed: false },
       Date.now(),
     )!;
+    expect(firstAttempt.events[0]?.type).toBe('report');
+    if (firstAttempt.events[0]?.type === 'report') {
+      expect(firstAttempt.events[0].reportType).toBe('open_question');
+      expect(firstAttempt.events[0].text).toContain('New report to retry?');
+    }
     const firstReportId = firstAttempt.events[0]!.reportId;
     expect(firstReportId).toBeTruthy();
     expect(firstQueue.pendingEventCount).toBe(1);
@@ -171,6 +248,325 @@ describe('operator watch pool', () => {
       expect(stored.pendingReports[0]?.reportId).not.toBe(firstReportId);
     } finally {
       resumedPool.close();
+    }
+  });
+
+  it('uses the first snapshot as a silent baseline for existing open questions', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-baseline-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let snapshot: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [
+        {
+          id: 'inq-1',
+          question: 'Already waiting?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 10,
+        },
+      ],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => snapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeSidecar('session-baseline', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.register('session-baseline', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(await pool.pollOnce('session-baseline')).toBe(0);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+
+      snapshot = {
+        sequence: 2,
+        openQuestions: [
+          ...snapshot.openQuestions,
+          {
+            id: 'inq-2',
+            question: 'Added after watch started?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 20,
+          },
+        ],
+      };
+      expect(await pool.pollOnce('session-baseline')).toBe(1);
+      expect(dispatchQueue.pendingEventCount).toBe(1);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events).toHaveLength(1);
+      expect(batch.events[0]?.type).toBe('report');
+      if (batch.events[0]?.type === 'report') {
+        expect(batch.events[0].reportType).toBe('open_question');
+        expect(batch.events[0].text).toContain('Added after watch started?');
+        expect(batch.events[0].text).not.toContain('Already waiting?');
+      }
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('fails initialization for incomplete or malformed persisted watch state', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-invalid-'));
+    const validState = {
+      version: 1,
+      watches: {},
+      cursors: {
+        'session-one': {
+          sequence: 1,
+          questionFingerprints: { 'inq-1': 'fingerprint' },
+          statusFingerprints: {},
+        },
+      },
+      pendingReports: [],
+    };
+    const invalidStates = [
+      {
+        ...validState,
+        pendingReports: undefined,
+      },
+      {
+        ...validState,
+        pendingReports: null,
+      },
+      {
+        ...validState,
+        cursors: {
+          'session-one': {
+            sequence: 1,
+            questionFingerprints: { 'inq-1': 1 },
+            statusFingerprints: {},
+          },
+        },
+      },
+      {
+        ...validState,
+        cursors: {
+          'session-one': {
+            sequence: 1,
+            questionFingerprints: {},
+            statusFingerprints: { '20': null },
+          },
+        },
+      },
+    ];
+    const statePath = operatorWatchStatePath(repoRoot);
+    await mkdir(join(repoRoot, '.ensemble', 'operator-agent'), {
+      recursive: true,
+    });
+
+    for (const invalidState of invalidStates) {
+      await writeFile(statePath, JSON.stringify(invalidState));
+      await expect(
+        createOperatorWatchPool({
+          repoRoot,
+          dispatchQueue: createOperatorDispatchQueue(),
+        }),
+      ).rejects.toThrow('Invalid operator-agent watch state');
+    }
+  });
+
+  it('rejects duplicate pending report IDs and invalid persisted debounce values', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-reports-'));
+    const validReport = {
+      reportId: 'report-1',
+      reportType: 'open_question',
+      conductorAgentId: 'session-one',
+      issueUrl: 'https://github.com/example/repo/issues/1',
+      text: 'A pending report',
+      debounceMs: 0,
+    };
+    const invalidPendingReports = [
+      [
+        validReport,
+        {
+          ...validReport,
+          conductorAgentId: 'session-two',
+          text: 'Another pending report',
+        },
+      ],
+      [{ ...validReport, reportId: '' }],
+      [{ ...validReport, debounceMs: 1.5 }],
+      [{ ...validReport, debounceMs: -1 }],
+      [{ ...validReport, debounceMs: 10_001 }],
+    ];
+    const statePath = operatorWatchStatePath(repoRoot);
+    await mkdir(join(repoRoot, '.ensemble', 'operator-agent'), {
+      recursive: true,
+    });
+
+    for (const pendingReports of invalidPendingReports) {
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          version: 1,
+          watches: {},
+          cursors: {},
+          pendingReports,
+        }),
+      );
+      await expect(
+        createOperatorWatchPool({
+          repoRoot,
+          dispatchQueue: createOperatorDispatchQueue(),
+        }),
+      ).rejects.toThrow('Invalid operator-agent watch state');
+    }
+  });
+
+  it('deduplicates live Registry and YAML observations and reports only new open questions', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-dedup-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 0,
+      openQuestions: [],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => liveSnapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeSidecar('live-dedup', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    const writeQuestions = async (
+      sequence: number,
+      questions: Array<Record<string, unknown>>,
+    ) => {
+      await writeOfflineSnapshots('live-dedup', {
+        sequence,
+        questions,
+        statusLine: 'waiting',
+        reportedAt: 20,
+      });
+      await rm(
+        join(
+          repoRoot,
+          '.ensemble',
+          'sessions',
+          'live-dedup',
+          'session-state.yaml',
+        ),
+        { force: true },
+      );
+    };
+    try {
+      await pool.register('live-dedup', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(await pool.pollOnce('live-dedup')).toBe(0);
+
+      const firstQuestion = {
+        id: 'inq-1',
+        question: 'Should we proceed?',
+        responseType: 'yes_no',
+        source: 'conductor',
+        status: 'open',
+        askedAt: 10,
+      };
+      liveSnapshot = { sequence: 1, openQuestions: [firstQuestion] };
+      expect(await pool.pollOnce('live-dedup')).toBe(1);
+
+      // Once the live UDS goes away, the persisted copy of that same
+      // Registry question must not create a second report.
+      await writeSidecar('live-dedup', 2, '/tmp/no-such-ensemble-socket');
+      await writeQuestions(1, [firstQuestion]);
+      expect(await pool.pollOnce('live-dedup')).toBe(0);
+
+      // A status/body update is not a new question. An answered item first
+      // observed in YAML is not an open-question notification either.
+      await writeQuestions(2, [
+        { ...firstQuestion, status: 'answered', question: 'Updated body' },
+        {
+          id: 'inq-2',
+          question: 'Already answered?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'answered',
+          askedAt: 11,
+        },
+      ]);
+      expect(await pool.pollOnce('live-dedup')).toBe(0);
+
+      await writeQuestions(3, [
+        { ...firstQuestion, status: 'answered' },
+        {
+          id: 'inq-2',
+          question: 'Already answered?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'answered',
+          askedAt: 11,
+        },
+        {
+          id: 'inq-3',
+          question: 'New while offline?',
+          responseType: 'choice',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 12,
+        },
+      ]);
+      expect(await pool.pollOnce('live-dedup')).toBe(1);
+      expect(dispatchQueue.pendingEventCount).toBe(2);
+      const report = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      );
+      expect(report?.events.map((event) => event.text)).toEqual([
+        expect.stringContaining('Should we proceed?'),
+        expect.stringContaining('New while offline?'),
+      ]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('keeps Open Question text out of watch poll warning logs', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-logs-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    await writeSidecar('session-private', 1);
+    const secretBody = 'private-question-body-marker';
+    const sessionDir = join(repoRoot, '.ensemble', 'sessions', 'session-private');
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      join(sessionDir, 'open-questions.yaml'),
+      `version: 1\nsequence: 1\nopenQuestions:\n  - ${secretBody}: [\n`,
+    );
+    const warnings: string[] = [];
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+      onError: (message) => warnings.push(message),
+    });
+    try {
+      await pool.register('session-private', {
+        pollIntervalMs: 250,
+        debounceMs: 0,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings.join('\n')).not.toContain(secretBody);
+    } finally {
+      pool.close();
     }
   });
 

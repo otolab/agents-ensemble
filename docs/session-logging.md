@@ -92,6 +92,8 @@ open question の回答観測は回答全文を残し、`yes_no` には `assent=
 
 稼働中 UDS control server は JSON-RPC request / response body をアクセスログへ書きません。ただし回答・operator message は既存の operator 入力経路を通るため、CLI observation は従来どおり質問本文・回答本文・メッセージ本文を stderr または TUI 活動ログに表示します。メッセージの配信モード（`idle` / `next` / `interrupt`）も `operator.input` と TTY 活動ログに記録します。質問・context・回答は sidecar / YAML にも保存され、UDS list response では保存値のまま返します。任意文面の secret や repository 外情報を確実に検出する redaction はありません。機密値を質問・context・回答・メッセージに含めない運用としてください。
 
+operator-agent の watch polling 警告には例外本文を含めず、Open Question の質問・context・回答本文をログへ出しません。新規 open 質問の本文は operator-agent への report 入力として渡します。未 dispatch report の永続化先は owner-only (`0700` directory / `0600` file) の `.ensemble/operator-agent/watch-state.json` であり、通常のログとは別ですが、一般的な secret redaction は行いません。
+
 `.ensemble/sessions/` とセッション別データ directory は owner-only (`0700`)、JSON sidecar / YAML / socket file は owner read/write (`0600`) にします。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
 
 TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor の**成功応答**は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。`conductor.send` の error は conductor 活動ログへ追記せず、harness 活動ログだけに障害として追記する。既定の `stream` レイアウトでは `<Static>` と端末 scrollback を使い、`tui.layout: pane` または `ENSEMBLE_TUI_LAYOUT=pane` で Orchestration ペイン内の windowing に戻せる。stream の活動ログは端末表示用で、セッション sidecar や活動ログファイルには永続化しない。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされない（詳細は [operator-input.md](operator-input.md) と [ADR 0015](adr/0015-cli-tui-library.md)）。
