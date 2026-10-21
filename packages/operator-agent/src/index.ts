@@ -17,3 +17,27 @@ export {
   createListLiveOpenQuestionsTool,
   LIST_LIVE_OPEN_QUESTIONS_TOOL,
 } from './open-question-control-tools.js';
+export {
+  createReleaseReportsTool,
+  createSendOperatorMessageTool,
+  createSetReportHoldTool,
+} from './operator-control-tools.js';
+export {
+  createOperatorDispatchQueue,
+  formatOperatorDispatchBatch,
+  operatorEventSourceKey,
+  selectOperatorDispatchBatch,
+} from './operator-dispatch.js';
+export type {
+  OperatorDispatchBatch,
+  OperatorDispatchEvent,
+  OperatorDispatchQueue,
+  OperatorDispatchState,
+} from './operator-dispatch.js';
+export {
+  createOperatorWatchPool,
+  createRegisterSessionWatchTool,
+  createUnregisterSessionWatchTool,
+  operatorWatchStatePath,
+} from './operator-watch-pool.js';
+export type { OperatorWatchPool } from './operator-watch-pool.js';

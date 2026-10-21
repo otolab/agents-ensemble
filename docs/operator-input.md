@@ -52,7 +52,7 @@ type OperatorInputBinding = (
 
 ### 稼働中 harness の Open Question control
 
-稼働中 harness の UDS interface は、一覧取得・回答ともに現在の session だけを扱います。operator-agent は sidecar の `harnessSocketPath` を使う client です。wire schema、answer semantics、保存と acknowledgment、error / unknown outcome、security と運用時の対処は [稼働中 Open Question control API reference](live-open-question-control-api.md) を参照してください。
+Open Question の live list / answer は現在の session だけを扱います。operator-agent は sidecar の `harnessSocketPath` を使う client で、watch snapshot と conductor 宛て `operator.message` も同じ UDS control API を使います。wire schema、answer semantics、message receipt、error / unknown outcome、security と運用時の対処は [稼働中 Open Question control API reference](live-open-question-control-api.md) を参照してください。
 
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 

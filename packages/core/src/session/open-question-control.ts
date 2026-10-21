@@ -4,10 +4,14 @@ import { join } from 'node:path';
 import net from 'node:net';
 import type { Server, Socket } from 'node:net';
 import type { OpenQuestion } from '../escalation/open-question.js';
+import type { OpenQuestionRegistrySnapshot } from '../escalation/open-question.js';
+import type { SessionStateStore } from './session-state-store.js';
 
 export const OPEN_QUESTION_CONTROL_METHODS = {
   list: 'open_questions.list',
   answer: 'open_questions.answer',
+  observe: 'session.observe',
+  operatorMessage: 'operator.message',
 } as const;
 
 const JSON_RPC_VERSION = '2.0';
@@ -32,6 +36,10 @@ export interface OpenQuestionControlAnswerResult {
     Partial<Pick<OpenQuestion, 'answeredBy' | 'approved'>>;
 }
 
+export interface SessionObservationSnapshot extends OpenQuestionRegistrySnapshot {
+  sessionState?: SessionStateStore;
+}
+
 export interface OpenQuestionControlErrorData {
   outcome: 'unknown';
   answerStatus: 'recorded';
@@ -40,9 +48,11 @@ export interface OpenQuestionControlErrorData {
 
 export interface OpenQuestionControlServerOptions {
   listOpenQuestions: () => OpenQuestion[];
+  observeSession?: () => Promise<SessionObservationSnapshot>;
   answerOpenQuestion: (
     input: OpenQuestionControlAnswer,
   ) => Promise<OpenQuestion>;
+  enqueueOperatorMessage?: (text: string) => boolean;
 }
 
 export interface OpenQuestionControlServer {
@@ -251,7 +261,7 @@ export async function sendOpenQuestionControlRequest<T>(
         reject(
           new OpenQuestionControlTransportError(
             requestSent
-              ? `${message} The request outcome is unknown. If this was an answer, inspect the live session before taking further action.`
+              ? `${message} The request outcome is unknown. Do not retry automatically; inspect the live session before taking further action.`
               : message,
             requestSent ? 'unknown' : 'not_sent',
           ),
@@ -389,6 +399,35 @@ async function handleRequest(
           answer,
         });
         return successResponse(requestId, toAnswerResult(question));
+      }
+      case OPEN_QUESTION_CONTROL_METHODS.observe:
+        if (!options.observeSession) {
+          return errorResponse(requestId, -32601, 'Method not found.');
+        }
+        return successResponse(requestId, await options.observeSession());
+      case OPEN_QUESTION_CONTROL_METHODS.operatorMessage: {
+        if (!options.enqueueOperatorMessage) {
+          return errorResponse(requestId, -32601, 'Method not found.');
+        }
+        const text = typeof params.text === 'string' ? params.text.trim() : '';
+        const delivery = params.delivery;
+        if (
+          !text ||
+          (delivery !== undefined && delivery !== 'next')
+        ) {
+          return errorResponse(
+            requestId,
+            -32602,
+            'A non-empty text and optional delivery "next" are required.',
+          );
+        }
+        if (!options.enqueueOperatorMessage(text)) {
+          return errorResponse(requestId, -32000, 'The session is shutting down.');
+        }
+        return successResponse(requestId, {
+          accepted: true,
+          delivery: 'next',
+        });
       }
       default:
         return errorResponse(requestId, -32601, 'Method not found.');

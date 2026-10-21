@@ -6,9 +6,9 @@
 
 - session ごとの listener は、稼働中 `ensemble issue` プロセス内の harness が起動・停止します。
 - operator-agent は client です。listener の起動や停止中 session の回答保存は行いません。
-- API は稼働中 session の未回答 Open Question の一覧取得と回答を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。
+- API は稼働中 session の Open Question 一覧・回答、operator 向け observation snapshot、operator-agent から conductor への明示メッセージを提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。
 
-operator-agent には `list_live_open_questions` と `answer_live_open_question` の tool があります。どちらも `conductorAgentId` を受け取り、`list_operator_sessions` で得た session を選びます。回答 tool はさらに `questionId` と `answer` を要求します。両 tool の入力に未知の field は許可されません。
+operator-agent には `list_live_open_questions` / `answer_live_open_question`、watch pool の `register_session_watch` / `unregister_session_watch`、および `send_operator_message` の tool があります。session を指定する tool は `list_operator_sessions` で得た `conductorAgentId` を受け取ります。回答 tool はさらに `questionId` と `answer` を要求します。各 tool の input schema は未知の field を許可しません。
 
 operator-agent tool の input は次のとおりです。
 
@@ -30,7 +30,7 @@ list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }
 
 operator-agent は JSON sidecar `.ensemble/sessions/{conductorAgentId}.json` の `harnessSocketPath` を読み、接続先を得ます。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、sidecar に記録された値を使ってください。
 
-path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら接続は失敗します。YAML への自動 fallback はありません。
+path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら接続は失敗します。`list_live_open_questions` / `answer_live_open_question` / `send_operator_message` は YAML に fallback しません。watch pool は別途 `session.observe` を試し、UDS が到達不能なら保存 snapshot へ切り替えます。
 
 listener の起動後に `harnessSocketPath` を含む初回 sidecar flush が失敗しても、warning を記録して session は続行し、listener は稼働したままの場合があります。このとき sidecar に新しい path が書かれていなければ client は endpoint を発見・接続できません。別の接続先を探す自動 fallback はありません。
 
@@ -43,6 +43,42 @@ Transport は Unix domain socket 上の JSON-RPC 2.0 over NDJSON です。1 conn
 実装上の上限は request / response あたり1 MiB、client socket timeout は30秒です。server にも request line を受信するまでの socket timeout がありますが、newline を受け取ると解除して handler を実行します。このため server の handler / dispatch 処理時間は30秒では打ち切られません。追加の request を同じ connection に送る interface ではありません。
 
 ## Methods
+
+### `session.observe`
+
+稼働中 harness の観測 snapshot を返します。operator-agent watch pool は polling のたびにこの method を呼び、質問 sequence と質問ごとの fingerprint、session-state の `reportedAt` を cursor として保存します。記録された socket が到達不能、または古い harness が snapshot method に未対応の場合は、保存済み Open Questions YAML / session-state YAML / legacy sidecar を poll し、報告には観測元を付けます。
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"session.observe","params":{}}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{"sequence":2,"openQuestions":[{"id":"inq-1","question":"Proceed?","responseType":"yes_no","source":"conductor","status":"open","askedAt":1792512000000}],"sessionState":{"current":{"statusLine":"CI 待ち","reportedAt":1792512001000},"history":[]}}}
+```
+
+`openQuestions` は live Registry の全質問（未回答・回答済み）です。`sessionState` は報告がある場合だけ含みます。`sequence` は質問の enqueue cursor で、回答変更の検出には operator-agent が各質問の fingerprint も併用します。この method は読み取り専用で、各 poll は独立した短い JSON-RPC 接続です。
+
+### `operator.message`
+
+operator-agent から明示された文章を、稼働中 conductor の通常 `operator.message` queue に追加します。Issue #525 の `next` delivery を使い、省略時も `next` です。これは Open Question 回答 method とは別経路で、一般 operator message として届けます。
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":4,"method":"operator.message","params":{"text":"PR の CI 状況を確認してください","delivery":"next"}}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":4,"result":{"accepted":true,"delivery":"next"}}
+```
+
+`accepted` は event queue への受付を示し、conductor の dispatch 完了確認ではありません。transport outcome が unknown の場合に自動再送すると重複指示になり得るため、同じ文章を自動 retry しないでください。`idle` / `interrupt` delivery はこの endpoint では受け付けません。delivery の意味と将来の mode 拡張は [Issue #525](https://github.com/otolab/agents-ensemble/issues/525) が正本です。
 
 ### `open_questions.list`
 
@@ -131,7 +167,7 @@ YAML save 前に失敗した場合、generic `-32603` に `outcome` data はな�
 - UDS client は request を自動再送しません。client が `connect` event を受け取る前の transport failure だけが `outcome: not_sent` です。`connect` 時点で client は `requestSent` を true にし、その後に `socket.write` が失敗した場合も、response を受け取れない transport failure は `outcome: unknown` です。これらは JSON-RPC response ではなく client 側の transport error で、`unknown` は request 全体が server に届いたことを保証するものではありません。
 - client の30秒 timeout や切断後も、server が request newline を受信して handler を開始済みなら、YAML commit や conductor dispatch が続く場合があります。特に `outcome: unknown` のときは、その時点で YAML に回答が見えないことだけを根拠に再送しないでください。保存・dispatch の結果が不確定なままなので、session の状態とログを確認して運用者が次の操作を判断してください。
 - shutdown intent 後は bounded drain 中も conductor reconnect / 同一 message retry を抑止します。dispatch の完了を確認できない場合は `outcome: unknown` となり、回答は保存済みの可能性があります。
-- listener がない場合に YAML を直接読む・書く fallback、file watch、固定 TCP、GitHub comment 同期、自動解決はありません。
+- live Open Question list / answer / operator message tool は listener がない場合に YAML fallback をしません。watch pool だけが停止中 session の YAML / sidecar を読み取り polling します。YAML への書き込み fallback、filesystem event watch、固定 TCP、GitHub comment 同期、自動解決はありません。
 - `outcome: unknown` の場合、回答を自動再送しないでください。`open-questions.yaml` と保存済み session state / session log を確認して運用者が次の操作を判断します。ただし、その時点で YAML に回答が見つからなくても、元の handler がまだ処理中の可能性があるため、それだけを根拠に再送しないでください。sidecar は mirror のため、YAML と一時的に一致しない可能性があります。
 
 conductor send の通常時の再接続方針は既存 dispatch policy に従います。この UDS client protocol 自体は retry を行わず、shutdown 後に同じ `operator.message` を再 dispatch しません。

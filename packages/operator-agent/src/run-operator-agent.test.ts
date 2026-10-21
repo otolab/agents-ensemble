@@ -170,10 +170,54 @@ describe('runOperatorAgent', () => {
       'list_operator_sessions',
       'list_live_open_questions',
       'answer_live_open_question',
+      'register_session_watch',
+      'unregister_session_watch',
+      'set_report_hold',
+      'release_reports',
+      'send_operator_message',
     ]);
     await expect(
       readFile(join(repoRoot, '.ensemble', 'operator-agent', 'session.json')),
     ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('polls an offline watched session and refreshes the held-report count in the TTY', async () => {
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const fakeAgent = createFakeAgent({
+      send: async () => {
+        await agentOptions!.customTools!.set_report_hold!.execute({ hold: true });
+        await agentOptions!.customTools!.register_session_watch!.execute({
+          conductorAgentId: 'conductor-one',
+          pollIntervalMs: 250,
+          debounceMs: 0,
+        });
+        return { runId: 'run-1', status: 'completed', result: 'watch started' };
+      },
+    });
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return fakeAgent;
+          },
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(output.capturedText()).toContain('user> '));
+    input.write('監視を開始\n');
+    setTimeout(() => input.write('/exit\n'), 750);
+    await run;
+
+    expect(output.capturedText()).toContain('報告保留中（1 件）');
   });
 
   it('resumes the default session after ordinary TTY termination and lets exit clear it', async () => {

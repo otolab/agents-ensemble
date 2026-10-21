@@ -108,6 +108,59 @@ describe('Open Question control UDS', () => {
     await expect(stat(socketPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('provides live observation cursors and queues explicit next operator messages', async () => {
+    const registry = new OpenQuestionRegistry();
+    const question = registry.enqueue({
+      question: 'Continue?',
+      responseType: 'text',
+    });
+    const enqueueOperatorMessage = vi.fn(() => true);
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => registry.listOpen(),
+      observeSession: async () => ({
+        ...registry.snapshot(),
+        sessionState: {
+          current: { statusLine: 'reviewing', reportedAt: 123 },
+          history: [],
+        },
+      }),
+      enqueueOperatorMessage,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+
+    try {
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.observe,
+        }),
+      ).resolves.toEqual({
+        sequence: 1,
+        openQuestions: [question],
+        sessionState: {
+          current: { statusLine: 'reviewing', reportedAt: 123 },
+          history: [],
+        },
+      });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.operatorMessage,
+          params: { text: 'please check this', delivery: 'next' },
+        }),
+      ).resolves.toEqual({ accepted: true, delivery: 'next' });
+      expect(enqueueOperatorMessage).toHaveBeenCalledWith('please check this');
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.operatorMessage,
+          params: { text: 'unsupported mode', delivery: 'interrupt' },
+        }),
+      ).rejects.toMatchObject({ rpcCode: -32602 });
+    } finally {
+      await server.close();
+    }
+  });
+
   it('routes an answer through the handler and returns protocol errors without fallback', async () => {
     const registry = new OpenQuestionRegistry();
     const question = registry.enqueue({

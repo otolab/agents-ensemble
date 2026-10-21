@@ -115,6 +115,7 @@ import {
 import {
   saveSessionStatusLine,
   sessionStateStorePath,
+  loadSessionStateStore,
 } from '../session/session-state-store.js';
 import {
   loadToolCallSnapshotHistory,
@@ -1404,6 +1405,31 @@ export async function runConductorSession(
   try {
     openQuestionControlServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => openQuestions.listOpen(),
+      observeSession: async () => {
+        await sessionStateWriteQueue;
+        const sessionState = await loadSessionStateStore(
+          sessionStateStorePath({
+            repoRoot: options.repoRoot,
+            conductorAgentId: conductorAgent.agentId,
+          }),
+        );
+        return {
+          ...openQuestions.snapshot(),
+          ...(sessionState ? { sessionState } : {}),
+        };
+      },
+      enqueueOperatorMessage: (text) => {
+        if (teardownStarted) return false;
+        const message = text.trim();
+        if (!message) return false;
+        sessionLogger.emit({
+          type: 'operator.input',
+          conductorTurn: sendCount + 1,
+          text: message,
+        });
+        eventQueue.enqueue({ type: 'operator.message', text: message });
+        return true;
+      },
       answerOpenQuestion: async ({ questionId, answer }) => {
         if (teardownStarted) {
           throw new OpenQuestionControlOperationError(

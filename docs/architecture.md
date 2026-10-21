@@ -2,7 +2,7 @@
 
 > **正本:** `ensemble` の現行技術構成（operator-agent、Cursor SDK / Pi conductor + ACP worker）。利用者向け CLI の入口は [cli/README.md](cli/README.md)、設定の正本は [settings.md](settings.md) と [config.md](config.md) です。
 
-`ensemble` の技術構成。conductor は Cursor SDK（既定）または Pi を選択し、worker は **ACP** で接続する。operator-agent は同じ埋め込み backend を使う独立プロセスで、保存済みセッション情報と稼働中 harness の Open Question UDS control API を介して conductor と疎に連携する。複数 worker は **conductor を中心とするスター型**で接続する。
+`ensemble` の技術構成。conductor は Cursor SDK（既定）または Pi を選択し、worker は **ACP** で接続する。operator-agent は同じ埋め込み backend を使う独立プロセスで、複数の Issue session を watch pool で監督する。稼働中 harness の UDS snapshot / message API と、停止中の sidecar / YAML polling を介して conductor と疎に連携する。複数 worker は **conductor を中心とするスター型**で接続する。
 
 設計の大原則（スター型・Issue 紐づけ・遷移の非機械化など）は [design.md](design.md) を正本とする。本文はプロセス分離と通信経路を記述する。
 
@@ -89,7 +89,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 
 ### Operator 層と Issue セッション
 
-[ADR 0031](adr/0031-operator-agent-layer.md) で合意した **4 層**は次のとおり。
+[ADR 0031](adr/0031-operator-agent-layer.md) で合意した **4 層**は次のとおり。複数 session watch と dispatch の役割対応は [ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md) に記録する。
 
 ```
 user  →  operator（ロール）  →  conductor  →  workers
@@ -101,9 +101,9 @@ user  →  operator（ロール）  →  conductor  →  workers
 | **operator ロール** | 人間（SessionView）または **operator-agent** | conductor 群の監督・エスカレーション・横断判断。**誰がロールを実行するか**が設計上の焦点 |
 | **operator-agent** | `packages/operator-agent`（[#488](https://github.com/otolab/agents-ensemble/issues/488)） | operator ロールの LLM。**ACP ではなく** conductor 同型の **`ConductorAgent`**（`@cursor/sdk` または Pi）。CLI は `ensemble operator-agent`（TTY） |
 
-**接続密度**: **user ↔ operator-agent は密**（同期対話）。**operator-agent ↔ conductor は疎**（GitHub、`.ensemble/sessions/`、稼働中セッションの OQ UDS control API）。UDS は Open Question のライブ一覧・回答に限り、常時接続や worker への直接指示は行わない。
+**接続密度**: **user ↔ operator-agent は密**（同期対話）。**operator-agent ↔ conductor は疎**（GitHub、`.ensemble/sessions/`、session ごとの UDS control API）。UDS は Open Question の一覧・回答、観測 snapshot、明示的な `operator.message` を提供する。watch pool は短い UDS request を定期実行し、常時接続や worker への直接指示は行わない。
 
-operator-agent の `list_operator_sessions` は保存済み sidecar と状態 YAML を読み取り、セッションインスタンスごとの statusLine 履歴 / lifecycle で絞り込める。sidecar の `harnessSocketPath` は接続先の索引であり、記録されているだけでは稼働確認にならない。`list_live_open_questions` と `answer_live_open_question` はその path を使って harness に接続し、停止中・到達不能ならエラーを返す。resume 時は再開前に lifecycle を `unknown` として保存し、新しい socket path を記録する。
+operator-agent の `list_operator_sessions` は保存済み sidecar と状態 YAML を読み取り、セッションインスタンスごとの statusLine 履歴 / lifecycle で絞り込める。sidecar の `harnessSocketPath` は接続先の索引であり、記録されているだけでは稼働確認にならない。Open Question の live list / answer と明示 `operator.message` はその path を使って harness に接続し、停止中・到達不能ならエラーを返す。一方、watch pool はライブ `session.observe` が失敗した場合に保存済み YAML / sidecar の読み取りへ切り替える。resume 時は再開前に lifecycle を `unknown` として保存し、新しい socket path を記録する。
 
 現行の `ensemble issue` では、人間が TTY / CLI 経由で conductor を監督する（プロンプト terms の「オペレータ」）。operator-agent はその **代替・補助の実行者**として足す。Open Question の外部連携（[#481](https://github.com/otolab/agents-ensemble/issues/481)）は operator 層の入出力として扱う。
 
@@ -115,11 +115,30 @@ operator-agent の `list_operator_sessions` は保存済み sidecar と状態 YA
 |---------|------|------|
 | **CLI** | Node.js (`packages/cli`) | コマンド解析、環境、終了処理 |
 | **Core** | TypeScript (`packages/core`) | ACP ブリッジ、dispatch、型の共有 |
-| **Operator** | `@agents-ensemble/operator-agent` | TTY 対話、operator prompt、保存済み sidecar の読み取り、稼働中 Open Question の UDS client |
+| **Operator** | `@agents-ensemble/operator-agent` | TTY 対話、operator prompt、複数 session watch pool、稼働中 UDS client、停止中 sidecar / YAML polling |
 | **Conductor** | `@cursor/sdk` または Pi 1.x (`pi-coding-agent` / `pi-ai`) | 設定された backend による判断・dispatch 制御の主体 |
 | **Worker** | `agent acp` | Skill に沿った実作業（種別ごとに起動文書・Skill が異なる） |
 | **共有媒体** | GitHub Issue / PR | セッション会話に依存しない状態と履歴 |
 | **手順の正本** | Skill（dispatch 先の clone / worktree 上） | worker が読む手順 |
+
+### Conductor harness と operator-agent の対応
+
+operator-agent は ADR 0014 の dispatch 原則を operator 側の報告に適用する。Issue harness 全体を operator-agent に依存させず、ConductorSession には UDS の小さな observation / message handler だけを置く。
+
+| 関心 | Conductor harness（Issue session） | operator-agent（複数 session 横断） |
+|------|--------------------------------------|-------------------------------------|
+| 対象 | 1 Issue の worker・permission・GitHub event | watch pool に登録した複数 conductor session |
+| 入力と queue | `SessionEventQueue` が `SessionEvent` を保持 | operator-agent queue が TTY user input と session / Open Question report を保持 |
+| 観測入口 | worker runtime、permission pipeline、GitHub monitor | 稼働中は session UDS `session.observe`、到達不能時は Open Questions YAML・session-state YAML・sidecar poll |
+| cursor / 永続化 | session sequence、GitHub monitor cursor、sidecar | `.ensemble/operator-agent/watch-state.json` に watch 設定・per-session cursor・未 dispatch report を保存 |
+| 束ね dispatch | [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の source key・到着順・優先度で 1 束を 1 `agent.send` | user を最優先、Open Question report、直前 session の一回継続、残り session の到着順で束ねて 1 `agent.send` |
+| hold | `set_dispatch_hold` が conductor 向け trigger を保留し `operator.message` を通す | `set_report_hold` / `release_reports` が自動 report だけを保留し、TTY user input と明示 `send_operator_message` を通す |
+| 通信方向 | harness queue から conductor へ送る | harness の UDS から operator-agent へ snapshot を報告し、逆方向の `operator.message` は conductor queue に enqueue |
+| 実行中 TTY | Issue TUI が `dispatch 保留中（N 件）` を表示 | operator-agent は `報告保留中（N 件）` を表示 |
+
+監視間隔と debounce は watch ごとに `register_session_watch` の `pollIntervalMs` / `debounceMs` で設定する。session ごとの UDS path が記録されているだけでは稼働中と判断せず、接続できた snapshot を live として扱う。poll cursor と未 dispatch report は operator-agent state に保存するため、operator-agent の再起動後は未送信 report を queue に戻す。report hold 自体は会話中だけの状態で、再起動後は解除状態から始まる。
+
+Issue harness 側では `session.observe` が全 Open Question と sequence、完了済み `report_session_state` の保存値を返し、`operator.message` は通常の `operator.message` event として queue に入る。message の `accepted` は queue 受付であり dispatch 完了 ack ではない。delivery は #525 の既定 `next` を使い、`idle` / `interrupt` は同 Issue の正本に従う。
 
 ---
 

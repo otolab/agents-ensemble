@@ -21,7 +21,23 @@ import {
   type ResolvedProfile,
 } from '@agents-ensemble/core/operator-runtime';
 import { operatorBaseModule } from './operator-base-module.js';
+import {
+  createOperatorDispatchQueue,
+  formatOperatorDispatchBatch,
+  type OperatorDispatchState,
+} from './operator-dispatch.js';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
+import {
+  createReleaseReportsTool,
+  createSendOperatorMessageTool,
+  createSetReportHoldTool,
+} from './operator-control-tools.js';
+import {
+  createOperatorWatchPool,
+  createRegisterSessionWatchTool,
+  createUnregisterSessionWatchTool,
+  type OperatorWatchPool,
+} from './operator-watch-pool.js';
 import {
   createAnswerLiveOpenQuestionTool,
   createListLiveOpenQuestionsTool,
@@ -74,6 +90,7 @@ export async function runOperatorAgent(
   const runtime = await resolveOperatorRuntime(options, dependencies);
   const factory =
     dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend);
+  const dispatchQueue = createOperatorDispatchQueue();
   const existingState = options.newSession
     ? undefined
     : await loadOperatorAgentState(runtime.repoRoot);
@@ -91,6 +108,12 @@ export async function runOperatorAgent(
   if (options.newSession) {
     await clearOperatorAgentState(runtime.repoRoot);
   }
+  const watchPool = await createOperatorWatchPool({
+    repoRoot: runtime.repoRoot,
+    dispatchQueue,
+    onError: (message) =>
+      stdout.write(`operator-agent watch warning: ${message}\n`),
+  });
 
   const agentOptions = {
     cwd: runtime.repoRoot,
@@ -112,11 +135,22 @@ export async function runOperatorAgent(
       list_operator_sessions: createListOperatorSessionsTool(runtime.repoRoot),
       list_live_open_questions: createListLiveOpenQuestionsTool(runtime.repoRoot),
       answer_live_open_question: createAnswerLiveOpenQuestionTool(runtime.repoRoot),
+      register_session_watch: createRegisterSessionWatchTool(watchPool),
+      unregister_session_watch: createUnregisterSessionWatchTool(watchPool),
+      set_report_hold: createSetReportHoldTool(dispatchQueue),
+      release_reports: createReleaseReportsTool(dispatchQueue),
+      send_operator_message: createSendOperatorMessageTool(runtime.repoRoot),
     },
   };
-  const agent = existingState
-    ? await factory.resume(existingState.agentId, agentOptions)
-    : await factory.create(agentOptions);
+  let agent: ConductorAgent;
+  try {
+    agent = existingState
+      ? await factory.resume(existingState.agentId, agentOptions)
+      : await factory.create(agentOptions);
+  } catch (error) {
+    watchPool.close();
+    throw error;
+  }
 
   try {
     await saveOperatorAgentState(runtime.repoRoot, {
@@ -131,11 +165,14 @@ export async function runOperatorAgent(
       systemPrompt: runtime.systemPrompt,
       stdin,
       stdout,
+      dispatchQueue,
+      watchPool,
     });
     if (exitContinuity) {
       await clearOperatorAgentState(runtime.repoRoot);
     }
   } finally {
+    watchPool.close();
     await agent.close();
   }
 }
@@ -181,6 +218,8 @@ async function runTtyConversation(options: {
   systemPrompt: string;
   stdin: OperatorAgentInput;
   stdout: OperatorAgentOutput;
+  dispatchQueue: ReturnType<typeof createOperatorDispatchQueue>;
+  watchPool: OperatorWatchPool;
 }): Promise<boolean> {
   const terminal = createInterface({
     input: options.stdin,
@@ -188,9 +227,10 @@ async function runTtyConversation(options: {
     terminal: true,
     crlfDelay: Infinity,
   });
-  const input = terminal[Symbol.asyncIterator]();
   let firstSend = true;
   let stop: () => void = () => {};
+  let exitContinuity = false;
+  let inputEnded = false;
   const stopping = new Promise<void>((resolve) => {
     stop = resolve;
   });
@@ -208,42 +248,101 @@ async function runTtyConversation(options: {
     `operator-agent (${options.backend}) ready — enter /exit to start a fresh session next time.\n`,
   );
 
+  const readInput = async () => {
+    try {
+      for await (const rawLine of terminal) {
+        const message = rawLine.trim();
+        if (!message) continue;
+        if (isOperatorCommand(message, 'exit')) {
+          exitContinuity = true;
+          options.stdout.write('operator-agent session ended.\n');
+          terminal.close();
+          break;
+        }
+        options.dispatchQueue.enqueueUser(message);
+      }
+    } finally {
+      inputEnded = true;
+      options.dispatchQueue.wake();
+    }
+  };
+  const inputTask = readInput();
+  const dispatchState: OperatorDispatchState = {
+    continuationConsumed: false,
+  };
+  let promptVisible = false;
+  let shownHeldCount = -1;
+  let shownHold = false;
+
   try {
     while (true) {
-      options.stdout.write('user> ');
-      const next = await Promise.race([
-        input.next(),
-        stopping.then(() => ({ done: true as const, value: undefined })),
-      ]);
-      if (next.done) return false;
-      const message = next.value.trim();
-      if (!message) continue;
-      if (isOperatorCommand(message, 'exit')) {
-        options.stdout.write('operator-agent session ended.\n');
-        return true;
+      if (inputEnded && options.dispatchQueue.pendingUserCount === 0) {
+        return exitContinuity;
       }
-
+      if (
+        promptVisible &&
+        (shownHeldCount !== options.dispatchQueue.heldEventCount ||
+          shownHold !== options.dispatchQueue.hold)
+      ) {
+        options.stdout.write('\n');
+        promptVisible = false;
+      }
+      if (!promptVisible) {
+        if (options.dispatchQueue.hold || options.dispatchQueue.heldEventCount > 0) {
+          options.stdout.write(
+            `報告保留中（${options.dispatchQueue.heldEventCount} 件）\n`,
+          );
+        }
+        options.stdout.write('user> ');
+        promptVisible = true;
+        shownHeldCount = options.dispatchQueue.heldEventCount;
+        shownHold = options.dispatchQueue.hold;
+      }
+      const batch = options.dispatchQueue.takeBatch(dispatchState);
+      if (!batch) {
+        const readyAt = options.dispatchQueue.nextReadyAt();
+        const waitMs =
+          readyAt === undefined
+            ? undefined
+            : Math.max(0, readyAt - Date.now());
+        const didStop = await Promise.race([
+          options.dispatchQueue.waitForChange(waitMs).then(() => false),
+          stopping.then(() => true),
+        ]);
+        if (didStop) return exitContinuity;
+        continue;
+      }
+      promptVisible = false;
       const prompt =
         options.backend === 'cursor' && firstSend
-          ? `${options.systemPrompt}\n\n## User message\n\n${message}`
-          : message;
+          ? `${options.systemPrompt}\n\n## User message\n\n${formatOperatorDispatchBatch(batch.events)}`
+          : formatOperatorDispatchBatch(batch.events);
       const result = await Promise.race([
         options.agent.send(prompt),
         stopping.then(() => undefined),
       ]);
-      if (!result) return false;
+      if (!result) return exitContinuity;
       firstSend = false;
+      dispatchState.lastDispatchedSourceKey = batch.sourceKey;
+      dispatchState.continuationConsumed = batch.usedContinuation;
       if (result.status === 'error') {
+        for (const event of batch.events) {
+          if (event.type === 'report') options.dispatchQueue.requeue(event, 5_000);
+        }
         options.stdout.write(
           `operator-agent error: ${result.error?.message ?? result.result ?? 'request failed'}\n`,
         );
-      } else if (result.result?.trim()) {
-        options.stdout.write(`operator> ${result.result.trim()}\n`);
       } else {
+        await options.watchPool.acknowledge(batch.events);
+      }
+      if (result.status !== 'error' && result.result?.trim()) {
+        options.stdout.write(`operator> ${result.result.trim()}\n`);
+      } else if (result.status !== 'error') {
         options.stdout.write(`operator-agent completed (status: ${result.status}).\n`);
       }
     }
   } finally {
+    await inputTask.catch(() => {});
     terminal.off('SIGINT', handleInterrupt);
     process.off('SIGINT', handleInterrupt);
     process.off('SIGTERM', handleTermination);
