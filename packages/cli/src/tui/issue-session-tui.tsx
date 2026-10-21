@@ -79,6 +79,10 @@ import {
   type TuiTerminalSizeStore,
 } from './tui-terminal-size.js';
 
+const workerTextGraphemeSegmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
+const workerAnsiSequencePattern =
+  /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001B]*(?:\u0007|\u001B\\)|[@-_])|\u009B[0-?]*[ -/]*[@-~]|\u009D[^\u0007\u009C]*(?:\u0007|\u009C)/g;
+
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string, options?: OperatorInputSubmitOptions) => void;
@@ -223,6 +227,72 @@ function formatConductorWorkerStatusLine(
   return `${displayName}: ${worker.status}`;
 }
 
+function truncateWorkerStatusLine(line: string, width: number): string {
+  if (stringWidth(line) <= width) {
+    return line;
+  }
+
+  const ellipsis = '…';
+  const contentWidth = Math.max(0, width - stringWidth(ellipsis));
+  let visibleWidth = 0;
+  let truncated = '';
+
+  for (const { segment } of workerTextGraphemeSegmenter.segment(line)) {
+    const segmentWidth = stringWidth(segment);
+    if (visibleWidth + segmentWidth > contentWidth) {
+      break;
+    }
+    truncated += segment;
+    visibleWidth += segmentWidth;
+  }
+  return `${truncated}${ellipsis}`;
+}
+
+function stripWorkerAnsiSequences(text: string): string {
+  return text
+    .replace(workerAnsiSequencePattern, '')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
+}
+
+function fitWorkerStatusLine(
+  name: string,
+  worker: { kind: string; status: WorkerDisplayStatus; activity?: string },
+  width: number,
+): string {
+  const safeName = stripWorkerAnsiSequences(name);
+  const safeWorker = {
+    ...worker,
+    kind: stripWorkerAnsiSequences(worker.kind),
+    ...(worker.activity !== undefined
+      ? { activity: stripWorkerAnsiSequences(worker.activity) }
+      : {}),
+  };
+  const line = formatConductorWorkerStatusLine(safeName, safeWorker);
+  if (stringWidth(line) <= width) {
+    return `${line}${' '.repeat(width - stringWidth(line))}`;
+  }
+
+  if (safeWorker.kind === 'conductor') {
+    const truncated = truncateWorkerStatusLine(line, width);
+    return `${truncated}${' '.repeat(Math.max(0, width - stringWidth(truncated)))}`;
+  }
+
+  const statusSuffix = `: ${safeWorker.status}`;
+  const displayName = formatWorkerDisplayName(safeName, safeWorker.kind);
+  const displayNameWidth = width - stringWidth(statusSuffix);
+  let fittedLine = `${truncateWorkerStatusLine(displayName, displayNameWidth)}${statusSuffix}`;
+
+  if (safeWorker.status === 'running' && safeWorker.activity) {
+    const activityWidth = width - stringWidth(fittedLine) - stringWidth(' ()');
+    if (activityWidth > 0) {
+      fittedLine += ` (${truncateWorkerStatusLine(safeWorker.activity, activityWidth)})`;
+    }
+  }
+
+  const fittedWidth = stringWidth(fittedLine);
+  return `${fittedLine}${' '.repeat(Math.max(0, width - fittedWidth))}`;
+}
+
 function sortWorkerEntries(
   entries: [string, { kind: string; status: WorkerDisplayStatus }][],
 ): [string, { kind: string; status: WorkerDisplayStatus }][] {
@@ -254,6 +324,7 @@ export function WorkerStatusPane({
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
   const paneHeight = height ?? computeWorkerPaneHeight(entries.length);
+  const statusLineWidth = usePaneContentWidth(terminalColumns ?? process.stdout.columns ?? 80);
   const issueTitleRight = issueUrl ? formatIssueLabel(issueUrl) : undefined;
   const dispatchHoldSuffix =
     dispatchHold && (dispatchHold.hold || dispatchHold.heldEventCount > 0)
@@ -276,7 +347,7 @@ export function WorkerStatusPane({
         <Text dimColor>(待機中)</Text>
       ) : (
         entries.map(([name, worker]) => (
-          <Text key={name}>{formatConductorWorkerStatusLine(name, worker)}</Text>
+          <Text key={name}>{fitWorkerStatusLine(name, worker, statusLineWidth)}</Text>
         ))
       )}
     </TitledBorderPane>
