@@ -955,7 +955,7 @@ describe('IssueSessionTuiStream', () => {
     expect(onSubmit).toHaveBeenCalledWith('follow-up', undefined);
   });
 
-  it('appends a later activity entry without replacing the earlier static entry', async () => {
+  it('separates changing activity labels in static output and groups same-label entries', async () => {
     const viewModel = createTuiViewModel();
     viewModel.appendActivityLog('harness', 'first');
 
@@ -964,12 +964,30 @@ describe('IssueSessionTuiStream', () => {
     );
     expect(lastFrame() ?? '').toContain('[harness] first');
 
-    viewModel.appendActivityLog('observation', 'second');
+    viewModel.appendActivityLog('harness', 'second');
+    viewModel.appendActivityLog('observation', 'third');
+    viewModel.appendActivityLog('operator', 'fourth');
+    viewModel.appendActivityLog('conductor', 'fifth');
     await flushInkStdin();
 
     const frame = lastFrame() ?? '';
+    const lines = frame.split('\n');
+    const harnessFirst = lines.findIndex((line) => line.includes('[harness] first'));
+    const harnessSecond = lines.findIndex((line) => line.includes('[harness] second'));
+    const observation = lines.findIndex((line) => line.includes('[observation] third'));
+    const operator = lines.findIndex((line) => line.includes('[operator] fourth'));
+    const conductor = lines.findIndex((line) => line.includes('[conductor] fifth'));
+
+    expect(harnessFirst).toBeGreaterThanOrEqual(0);
+    expect(harnessSecond).toBe(harnessFirst + 1);
+    expect(observation).toBe(harnessSecond + 2);
+    expect(operator).toBe(observation + 2);
+    expect(conductor).toBe(operator + 2);
     expect(frame).toContain('[harness] first');
-    expect(frame).toContain('[observation] second');
+    expect(frame).toContain('[harness] second');
+    expect(frame).toContain('[observation] third');
+    expect(frame).toContain('[operator] fourth');
+    expect(frame).toContain('[conductor] fifth');
   });
 
   it('holds new activity while detached and flushes the pending suffix once on End', async () => {

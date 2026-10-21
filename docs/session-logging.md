@@ -96,6 +96,8 @@ open question の回答観測は回答全文を残し、`yes_no` には `assent=
 
 TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor の**成功応答**は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。`conductor.send` の error は conductor 活動ログへ追記せず、harness 活動ログだけに障害として追記する。既定の `stream` レイアウトでは `<Static>` と端末 scrollback を使い、`tui.layout: pane` または `ENSEMBLE_TUI_LAYOUT=pane` で Orchestration ペイン内の windowing に戻せる。stream の活動ログは端末表示用で、セッション sidecar や活動ログファイルには永続化しない。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされない（詳細は [operator-input.md](operator-input.md) と [ADR 0015](adr/0015-cli-tui-library.md)）。
 
+活動ログでは直前の内容エントリとラベルが変わるときに separator を 1 つ挿入し、同じラベルが続くときは自動挿入しない。conductor ブロックの前後には従来どおり separator を置き、境界処理と重なった連続 separator は 1 つに畳む。エントリ本文の段落空行（`\n\n`）は separator と独立して保持する。pane の bounded history では separator も他のエントリと同じく window の件数に含め、stream では活動ログ全体を append-only で保持する。
+
 ### 終了 JSON（SessionSummary）
 
 型名は互換のため `ConductorSessionResult` と同一（`SessionSummary` は deprecated alias）。

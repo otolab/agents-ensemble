@@ -105,18 +105,20 @@ export function createTuiViewModel(options: {
         return;
       }
       const entry = { label, text: trimmed } satisfies ActivityLogEntry;
-      activityLog =
-        activityLogWindowSize === null
-          ? [...activityLog, entry]
-          : appendActivityLogEntry(activityLog, entry, activityLogWindowSize);
+      activityLog = appendActivityLogEntry(
+        activityLog,
+        entry,
+        activityLogWindowSize,
+      );
       notify();
     },
     appendActivityLogSeparator() {
       const entry = { label: 'separator', text: '' } satisfies ActivityLogEntry;
-      activityLog =
-        activityLogWindowSize === null
-          ? [...activityLog, entry]
-          : appendActivityLogEntry(activityLog, entry, activityLogWindowSize);
+      activityLog = appendActivityLogEntry(
+        activityLog,
+        entry,
+        activityLogWindowSize,
+      );
       notify();
     },
     requestActivityLogReplay() {
