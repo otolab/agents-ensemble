@@ -1,5 +1,30 @@
 # @agents-ensemble/operator-agent
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies [4f4088f]
+  - @agents-ensemble/core@0.14.2
+
+## 0.2.1
+
+### Patch Changes
+
+- 126a304: operator-agent に複数 Issue session の watch pool、報告 batching / hold、live UDS observation と operator.message 連携を追加。
+- adf9833: TTY の operator-agent 表示に余白とラベル色を加え、長い応答を読みやすくします。
+- 1362632: operator-agent の会話を既定で再開し、`/exit` と `--new` で連続性を切れるようにします。
+- 78b2987: Add operator message delivery modes and live UDS message sending.
+- 8f21a0e: operator-agent の session watch が新規 open Open Question を検知し、重複を避けて operator へ報告する。
+- b187554: 稼働中 session の UDS から最後の conductor 成功応答を取得する API と operator-agent tool を追加します。
+- Updated dependencies [126a304]
+- Updated dependencies [7a2fdb0]
+- Updated dependencies [e5a39d9]
+- Updated dependencies [78b2987]
+- Updated dependencies [b187554]
+- Updated dependencies [6de3ba6]
+  - @agents-ensemble/core@0.14.1
+
 ## 0.2.0
 
 ### Minor Changes
