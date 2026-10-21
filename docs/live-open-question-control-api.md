@@ -6,9 +6,9 @@
 
 - session ごとの listener は、稼働中 `ensemble issue` プロセス内の harness が起動・停止します。
 - operator-agent は client です。listener の起動や停止中 session の回答保存は行いません。
-- API は稼働中 session の未回答 Open Question の一覧取得と回答を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。
+- API は稼働中 session の未回答 Open Question の一覧取得と回答、および最後の conductor 成功応答の取得を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。
 
-operator-agent には `list_live_open_questions` と `answer_live_open_question` の tool があります。どちらも `conductorAgentId` を受け取り、`list_operator_sessions` で得た session を選びます。回答 tool はさらに `questionId` と `answer` を要求します。両 tool の入力に未知の field は許可されません。
+operator-agent には `list_live_open_questions`、`answer_live_open_question`、`get_last_conductor_message` の tool があります。いずれも `conductorAgentId` を受け取り、`list_operator_sessions` で得た session を選びます。回答 tool はさらに `questionId` と `answer` を要求します。各 tool の入力に未知の field は許可されません。
 
 operator-agent tool の input は次のとおりです。
 
@@ -22,6 +22,12 @@ operator-agent tool の input は次のとおりです。
 
 ```json
 {"conductorAgentId":"agent-123","questionId":"inq-1","answer":"yes"}
+```
+
+`get_last_conductor_message`:
+
+```json
+{"conductorAgentId":"agent-123"}
 ```
 
 list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }`）です。answer tool の text content は UDS result (`{ "question": {...} }`) を JSON 表示し、`structuredContent` は `questionId`, `status`, 任意の `answeredBy`, `approved` を持つ object に整形します。これは operator-agent tool wrapper の出力で、UDS wire response とは形が異なります。
@@ -95,6 +101,36 @@ Response:
 
 受理した回答は既存の `operator.message` 相当として event queue に入り、conductor の通常 dispatch 経路へ渡ります。operator-agent は worker を直接 dispatch しません。
 
+### `session.last_conductor_message.get`
+
+稼働中 harness が保持する最後の成功応答を取得します。読み取り専用で、`session.observe` や Open Questions YAML / sidecar には含めません。セッション内に成功応答がまだない場合は `message: null` です。成功応答の後に失敗または本文なしの send があっても、直前の成功応答を返します。
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"session.last_conductor_message.get","params":{}}
+```
+
+Response（応答あり）:
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{"message":{"text":"回答本文","at":1792512003000,"sendCount":44}}}
+```
+
+Response（応答なし）:
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{"message":null}}
+```
+
+| Field | Type | 意味 |
+|-------|------|------|
+| `message.text` | string | `conductor.send` が `finished` で本文が空でない場合の trim 済み応答本文 |
+| `message.at` | number | harness が send 完了を処理した時刻（Unix epoch milliseconds） |
+| `message.sendCount` | number | 対応する `conductor.send` の通し番号 |
+
+operator の入力、応答履歴、失敗応答は返しません。状態は稼働中プロセスのメモリ内だけにあり、再開した session には引き継がれません。operator-agent tool の `structuredContent` と text content は、UDS result と同じ `{ "message": ... }` です。
+
 ## Persistence、acknowledgment、errors
 
 回答候補は Open Questions YAML に atomic save されてから live Registry と event queue に反映されます。YAML は回答永続化・resume の正本で、JSON sidecar は mirror です。通常の success response は YAML save と conductor dispatch receipt の成功後に返ります。sidecar の flush 成功は success 条件ではありません。回答処理で mirror 更新に失敗すると warning を記録し、後続 flush を一度 schedule して再同期を試みます。これは再同期の保証ではなく、その flush も失敗した場合は warning を記録してこの経路での再試行を終えます。
@@ -140,7 +176,7 @@ conductor send の通常時の再接続方針は既存 dispatch policy に従い
 
 - `.ensemble/sessions/` と session data directory、UDS runtime directory は owner-only (`0700`) です。JSON sidecar、Open Questions YAML、socket は owner read/write (`0600`) です。
 - token 認証はありません。同じ OS user の別 process は socket に接続できる trust boundary です。
-- UDS server は request / response body を access log に出しません。一方、既存 CLI の operator observation は質問本文・回答本文を非 TTY では stderr、TTY では TUI activity log に表示し、sidecar / YAML にも保存します。
+- UDS server は request / response body を access log に出しません。一方、既存 CLI の operator observation は質問本文・回答本文を非 TTY では stderr、TTY では TUI activity log に表示し、sidecar / YAML にも保存します。最後の conductor 応答 API も同じ OS user の client に本文を返します。
 - API は質問・context・choice を保存値のまま返します。自由文中の secret や repository 外情報を検出する一般的な redaction はありません。機密値を質問・context・回答へ含めないでください。詳細は [session-logging.md](session-logging.md) を参照してください。
 
 ## 関連文書

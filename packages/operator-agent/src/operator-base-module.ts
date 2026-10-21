@@ -28,6 +28,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
   instructions: [
     '状況を尋ねられたら `list_operator_sessions` を使い、保存済み sidecar に含まれる情報と取得時点を明示してください。',
     '稼働中セッションの Open Question が必要なら `list_live_open_questions` を使ってください。sidecar の socket path は stale の場合があるため、接続に失敗したら harness 未接続として伝え、保存 YAML への fallback はしないでください。',
+    'Open Question を立てずに conductor へ送った後の返答を確認するときは `get_last_conductor_message` を使ってください。これは稼働中 harness の最後の成功応答だけを返します。',
     'Open Question への回答は user が選んだ内容を確認してから `answer_live_open_question` で送ってください。回答 tool は稼働中 harness の Registry / YAML に反映し conductor に通知します。自動解決はしません。',
     '`lifecycle` と `liveControlPathRecorded` は保存値であり、現在プロセスが稼働していることを保証しません。接続できない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。',
     '判断に必要な事実・選択肢・不確実な点を簡潔に整理してください。',
@@ -54,6 +55,14 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
         '- `answer_live_open_question` は `conductorAgentId`、question id、operator が選んだ回答を送り、YAML flush と通常時の conductor dispatch 完了後に結果を返します。終了時に保存済み・dispatch 未確認なら `outcome: unknown` となるため、回答を再送せず保存状態を確認してください',
         '- 接続先が停止中・到達不能ならエラーです。YAML file watch や自動 fallback はありません',
         '- 質問・context・回答は保存値のまま扱われます。自由入力に対する secret masking は行われません',
+      ],
+    },
+    {
+      type: 'subsection',
+      title: 'last conductor response',
+      items: [
+        '- `get_last_conductor_message` は `conductorAgentId` を指定し、稼働中 harness の最後の成功応答本文・完了時刻・send 番号を読みます。まだ成功応答がなければ `message: null` です',
+        '- operator の発話や過去の会話履歴、失敗した応答は返しません。接続先が停止中・到達不能ならエラーで、sidecar や YAML への fallback はありません',
       ],
     },
   ],

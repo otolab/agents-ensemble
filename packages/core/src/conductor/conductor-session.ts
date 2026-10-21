@@ -130,6 +130,7 @@ import {
 import {
   OpenQuestionControlOperationError,
   startOpenQuestionControlServer,
+  type OpenQuestionControlLastConductorMessage,
   type OpenQuestionControlServer,
 } from '../session/open-question-control.js';
 import type { SessionUsageSummary } from '../usage/types.js';
@@ -324,6 +325,8 @@ export async function runConductorSession(
   const openQuestions = new OpenQuestionRegistry();
   let harnessSocketPath: string | undefined;
   let openQuestionControlServer: OpenQuestionControlServer | undefined;
+  let lastConductorMessage: OpenQuestionControlLastConductorMessage | null =
+    null;
   const eventQueue = new SessionEventQueue();
   const openQuestionDispatchReceipts = new WeakMap<
     SessionEvent,
@@ -1404,6 +1407,7 @@ export async function runConductorSession(
   try {
     openQuestionControlServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => openQuestions.listOpen(),
+      getLastConductorMessage: () => lastConductorMessage,
       answerOpenQuestion: async ({ questionId, answer }) => {
         if (teardownStarted) {
           throw new OpenQuestionControlOperationError(
@@ -1646,6 +1650,14 @@ export async function runConductorSession(
     }): void {
       sendCount = info.sendCount;
       autonomousTurns = info.autonomousTurns;
+      const responseText = info.result?.trim();
+      if (info.status === 'finished' && responseText) {
+        lastConductorMessage = {
+          text: responseText,
+          at: Date.now(),
+          sendCount: info.sendCount,
+        };
+      }
       const githubUpdateIds = info.githubUpdateIds ?? [];
       if (
         info.status === 'finished' &&

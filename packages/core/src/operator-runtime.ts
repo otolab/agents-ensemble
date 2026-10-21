@@ -50,6 +50,7 @@ export {
 export type {
   OpenQuestionControlAnswerResult,
   OpenQuestionControlErrorData,
+  OpenQuestionControlLastConductorMessage,
   OpenQuestionControlListItem,
 } from './session/open-question-control.js';
 export {

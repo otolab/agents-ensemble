@@ -44,6 +44,11 @@ function close(server: Server): Promise<void> {
 describe('Open Question control UDS', () => {
   it('lists live questions over a private socket and removes the socket on close', async () => {
     const registry = new OpenQuestionRegistry();
+    let lastConductorMessage: {
+      text: string;
+      at: number;
+      sendCount: number;
+    } | null = null;
     const question = registry.enqueue({
       question: 'Proceed with the release?',
       responseType: 'yes_no',
@@ -52,6 +57,7 @@ describe('Open Question control UDS', () => {
     });
     const server = await startOpenQuestionControlServer({
       listOpenQuestions: () => registry.listOpen(),
+      getLastConductorMessage: () => lastConductorMessage,
       answerOpenQuestion: async ({ questionId, answer }) => {
         const answered = registry.answer(questionId, {
           answer,
@@ -90,6 +96,29 @@ describe('Open Question control UDS', () => {
       });
       await expect(
         sendOpenQuestionControlRequest(socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.lastConductorMessageGet,
+          params: {},
+        }),
+      ).resolves.toEqual({ message: null });
+      lastConductorMessage = {
+        text: 'Conductor response',
+        at: 1792512003000,
+        sendCount: 44,
+      };
+      await expect(
+        sendOpenQuestionControlRequest(socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.lastConductorMessageGet,
+          params: {},
+        }),
+      ).resolves.toEqual({
+        message: {
+          text: 'Conductor response',
+          at: 1792512003000,
+          sendCount: 44,
+        },
+      });
+      await expect(
+        sendOpenQuestionControlRequest(socketPath, {
           method: OPEN_QUESTION_CONTROL_METHODS.answer,
           params: { questionId: question.id, answer: 'yes' },
         }),
@@ -116,6 +145,7 @@ describe('Open Question control UDS', () => {
     });
     const server = await startOpenQuestionControlServer({
       listOpenQuestions: () => registry.listOpen(),
+      getLastConductorMessage: () => null,
       answerOpenQuestion: async (input) => {
         expect(input).toEqual({ questionId: question.id, answer: 'yes' });
         throw new OpenQuestionControlOperationError(
@@ -154,6 +184,7 @@ describe('Open Question control UDS', () => {
     const registry = new OpenQuestionRegistry();
     const server = await startOpenQuestionControlServer({
       listOpenQuestions: () => registry.listOpen(),
+      getLastConductorMessage: () => null,
       answerOpenQuestion: async () => {
         throw new Error('unexpected answer request');
       },
@@ -231,6 +262,7 @@ describe('Open Question control UDS', () => {
     let answerCount = 0;
     const server = await startOpenQuestionControlServer({
       listOpenQuestions: () => registry.listOpen(),
+      getLastConductorMessage: () => null,
       answerOpenQuestion: async ({ questionId, answer }) => {
         answerCount += 1;
         answerStarted.resolve();
@@ -284,6 +316,7 @@ describe('Open Question control UDS', () => {
     let answerCount = 0;
     const server = await startOpenQuestionControlServer({
       listOpenQuestions: () => registry.listOpen(),
+      getLastConductorMessage: () => null,
       answerOpenQuestion: async ({ questionId, answer }) => {
         answerCount += 1;
         answerStarted.resolve();

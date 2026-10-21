@@ -8,6 +8,7 @@ import type { OpenQuestion } from '../escalation/open-question.js';
 export const OPEN_QUESTION_CONTROL_METHODS = {
   list: 'open_questions.list',
   answer: 'open_questions.answer',
+  lastConductorMessageGet: 'session.last_conductor_message.get',
 } as const;
 
 const JSON_RPC_VERSION = '2.0';
@@ -32,6 +33,12 @@ export interface OpenQuestionControlAnswerResult {
     Partial<Pick<OpenQuestion, 'answeredBy' | 'approved'>>;
 }
 
+export interface OpenQuestionControlLastConductorMessage {
+  text: string;
+  at: number;
+  sendCount: number;
+}
+
 export interface OpenQuestionControlErrorData {
   outcome: 'unknown';
   answerStatus: 'recorded';
@@ -40,6 +47,9 @@ export interface OpenQuestionControlErrorData {
 
 export interface OpenQuestionControlServerOptions {
   listOpenQuestions: () => OpenQuestion[];
+  getLastConductorMessage?: () =>
+    | OpenQuestionControlLastConductorMessage
+    | null;
   answerOpenQuestion: (
     input: OpenQuestionControlAnswer,
   ) => Promise<OpenQuestion>;
@@ -371,6 +381,10 @@ async function handleRequest(
       case OPEN_QUESTION_CONTROL_METHODS.list:
         return successResponse(requestId, {
           questions: options.listOpenQuestions().map(toListItem),
+        });
+      case OPEN_QUESTION_CONTROL_METHODS.lastConductorMessageGet:
+        return successResponse(requestId, {
+          message: options.getLastConductorMessage?.() ?? null,
         });
       case OPEN_QUESTION_CONTROL_METHODS.answer: {
         const questionId =
