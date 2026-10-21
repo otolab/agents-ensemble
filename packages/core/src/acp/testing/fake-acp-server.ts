@@ -6,13 +6,12 @@ import {
   type JsonRpcMessage,
 } from '../json-rpc.js';
 
-import type { LlmUsageSnapshot } from '../types.js';
 import type { PermissionOption } from '../../permission/permission-request.js';
 
 export interface FakeAcpPromptResult {
   stopReason: string;
   message?: string;
-  usage?: LlmUsageSnapshot;
+  usage?: unknown;
 }
 
 export interface FakeAcpServerOptions {
@@ -20,6 +19,8 @@ export interface FakeAcpServerOptions {
   writable: Writable;
   /** Called when authenticate is received. */
   onAuthenticate?: (methodId: string) => void;
+  /** Called when initialize is received. */
+  onInitialize?: (params: unknown) => void;
   /** Emit session/request_permission before responding to session/prompt. */
   requestPermissionOnPrompt?: boolean;
   /** Emit these `session/update` payloads immediately before permission. */
@@ -103,6 +104,7 @@ export class FakeAcpServer {
 
     switch (method) {
       case 'initialize':
+        this.options.onInitialize?.(params);
         this.respond(id, {
           protocolVersion: 1,
           agentCapabilities: { session: {} },
