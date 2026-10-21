@@ -99,10 +99,27 @@ export function preserveActivityLogScrollOffset(
 export function appendActivityLogEntry(
   entries: ActivityLogEntry[],
   entry: ActivityLogEntry,
-  windowSize: number = ACTIVITY_LOG_WINDOW_SIZE,
+  windowSize: number | null = ACTIVITY_LOG_WINDOW_SIZE,
 ): ActivityLogEntry[] {
-  const next = [...entries, entry];
-  if (next.length <= windowSize) {
+  const next = [...entries];
+  const previousEntry = next.at(-1);
+
+  if (entry.label === 'separator') {
+    if (previousEntry?.label !== 'separator') {
+      next.push(entry);
+    }
+  } else {
+    if (
+      previousEntry &&
+      previousEntry.label !== 'separator' &&
+      previousEntry.label !== entry.label
+    ) {
+      next.push({ label: 'separator', text: '' });
+    }
+    next.push(entry);
+  }
+
+  if (windowSize === null || next.length <= windowSize) {
     return next;
   }
   return next.slice(-windowSize);

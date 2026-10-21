@@ -38,6 +38,73 @@ describe('activity-log', () => {
     expect(ACTIVITY_LOG_WINDOW_SIZE).toBe(300);
   });
 
+  it('inserts one separator between changing labels and keeps same-label entries together', () => {
+    let entries: ReturnType<typeof appendActivityLogEntry> = [];
+    for (const entry of [
+      { label: 'harness', text: 'first' },
+      { label: 'harness', text: 'second' },
+      { label: 'observation', text: 'third' },
+      { label: 'operator', text: 'fourth' },
+      { label: 'conductor', text: 'fifth' },
+    ] as const) {
+      entries = appendActivityLogEntry(entries, entry);
+    }
+
+    expect(entries).toEqual([
+      { label: 'harness', text: 'first' },
+      { label: 'harness', text: 'second' },
+      { label: 'separator', text: '' },
+      { label: 'observation', text: 'third' },
+      { label: 'separator', text: '' },
+      { label: 'operator', text: 'fourth' },
+      { label: 'separator', text: '' },
+      { label: 'conductor', text: 'fifth' },
+    ]);
+    expect(
+      buildActivityLogDisplayLines(entries, 80).map((line) => line.layout),
+    ).toEqual([
+      'inline',
+      'inline',
+      'separator',
+      'inline',
+      'separator',
+      'inline',
+      'separator',
+      'inline',
+    ]);
+  });
+
+  it('deduplicates explicit conductor separators and counts separators in the bounded window', () => {
+    let entries = appendActivityLogEntry([], { label: 'harness', text: 'telemetry' });
+    entries = appendActivityLogEntry(entries, { label: 'separator', text: '' });
+    entries = appendActivityLogEntry(entries, { label: 'separator', text: '' });
+    entries = appendActivityLogEntry(
+      entries,
+      { label: 'conductor', text: 'reply' },
+      2,
+    );
+
+    expect(entries).toEqual([
+      { label: 'separator', text: '' },
+      { label: 'conductor', text: 'reply' },
+    ]);
+
+    entries = appendActivityLogEntry(
+      entries,
+      { label: 'separator', text: '' },
+      2,
+    );
+    entries = appendActivityLogEntry(
+      entries,
+      { label: 'separator', text: '' },
+      2,
+    );
+    expect(entries).toEqual([
+      { label: 'conductor', text: 'reply' },
+      { label: 'separator', text: '' },
+    ]);
+  });
+
   it('uses inline layout for a single wrapped body line', () => {
     const lines = buildActivityLogDisplayLines(
       [{ label: 'conductor', text: 'short reply' }],

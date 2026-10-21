@@ -60,7 +60,33 @@ describe('createTuiViewModel activity log', () => {
 
     expect(model.getSnapshot().activityLog).toEqual([
       { label: 'operator', text: 'ping' },
+      { label: 'separator', text: '' },
       { label: 'conductor', text: 'pong' },
+    ]);
+  });
+
+  it('separates alternating activity labels while preserving conductor spacing', () => {
+    const model = createTuiViewModel();
+
+    model.appendActivityLog('harness', 'first');
+    model.appendActivityLog('harness', 'second');
+    model.appendActivityLog('observation', 'third');
+    model.appendActivityLog('operator', 'fourth');
+    model.appendActivityLogSeparator();
+    model.appendActivityLog('conductor', 'fifth');
+    model.appendActivityLogSeparator();
+    model.appendActivityLogSeparator();
+
+    expect(model.getSnapshot().activityLog).toEqual([
+      { label: 'harness', text: 'first' },
+      { label: 'harness', text: 'second' },
+      { label: 'separator', text: '' },
+      { label: 'observation', text: 'third' },
+      { label: 'separator', text: '' },
+      { label: 'operator', text: 'fourth' },
+      { label: 'separator', text: '' },
+      { label: 'conductor', text: 'fifth' },
+      { label: 'separator', text: '' },
     ]);
   });
 
@@ -70,10 +96,12 @@ describe('createTuiViewModel activity log', () => {
     expect(model.getSnapshot().activityLog).toEqual([]);
   });
 
-  it('appends separator entries for conductor spacing', () => {
+  it('does not append duplicate separator entries', () => {
     const model = createTuiViewModel();
     model.appendActivityLogSeparator();
+    model.appendActivityLogSeparator();
     model.appendActivityLog('conductor', 'reply');
+    model.appendActivityLogSeparator();
     model.appendActivityLogSeparator();
 
     expect(model.getSnapshot().activityLog).toEqual([
