@@ -3,6 +3,7 @@ import {
   computeMaxInputDisplayLines,
   computeOperatorInputDisplayLines,
   computeOperatorInputLayout,
+  isCursorAtVisualBoundary,
   mapCursorOffsetToDisplayPosition,
   mapDisplayPositionToCursorOffset,
   sliceVisibleInputDisplayLines,
@@ -72,6 +73,27 @@ describe('cursor mapping', () => {
     expect(layout.displayLines.length).toBeGreaterThan(1);
     expect(layout.lineStartOffsets[0]).toBe(0);
     expect(layout.lineStartOffsets[1]).toBeGreaterThan(0);
+  });
+});
+
+describe('isCursorAtVisualBoundary', () => {
+  it('matches TextArea chunk boundaries, including wrapping at whitespace', () => {
+    expect(isCursorAtVisualBoundary('ab cde', [0, 3], 5, 0, 'up')).toBe(true);
+    expect(isCursorAtVisualBoundary('ab cde', [0, 3], 5, 0, 'down')).toBe(false);
+    expect(isCursorAtVisualBoundary('ab cde', [0, 5], 5, 0, 'down')).toBe(true);
+
+    const value = 'a'.repeat(50);
+    const width = 20;
+
+    expect(isCursorAtVisualBoundary(value, [0, 3], width, 2, 'up')).toBe(true);
+    expect(isCursorAtVisualBoundary(value, [0, 3], width, 2, 'down')).toBe(false);
+    expect(isCursorAtVisualBoundary(value, [0, value.length], width, 2, 'down')).toBe(true);
+  });
+
+  it('keeps explicit multiline cursor movement between the first and last rows', () => {
+    const value = 'first\nmiddle\nlast';
+    expect(isCursorAtVisualBoundary(value, [1, 2], 40, 0, 'up')).toBe(false);
+    expect(isCursorAtVisualBoundary(value, [1, 2], 40, 0, 'down')).toBe(false);
   });
 });
 

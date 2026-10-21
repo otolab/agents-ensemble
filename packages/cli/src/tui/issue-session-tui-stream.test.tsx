@@ -107,6 +107,54 @@ describe('IssueSessionTuiStream', () => {
     expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
   });
 
+  it('navigates submitted history at visual boundaries and restores an edited draft', async () => {
+    const viewModel = createTuiViewModel();
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />,
+    );
+
+    stdin.write('A');
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenCalledWith('A', undefined);
+
+    stdin.write('\u001B[200~line1\nline2\u001B[201~');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write('X');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.home);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}A`);
+
+    stdin.write("'");
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenLastCalledWith("A'", undefined);
+
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}line1X`);
+    expect(lastFrame() ?? '').toContain('line2');
+
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.home);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}A'`);
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}A`);
+  });
+
   it('selects a slash suggestion and Tab completes it without submitting', async () => {
     const viewModel = createTuiViewModel();
     const onSubmit = vi.fn();

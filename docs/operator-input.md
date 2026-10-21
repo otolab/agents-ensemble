@@ -115,6 +115,14 @@ TTY の Ink pane / stream にある Operator input 欄の行頭には `> ` を�
 
 回答の意味付けは既存 core の規則に従います。choice の `selectedChoice` は回答全文が ID・一意な label・候補順の番号に解決できる場合だけ記録され、理由などを追記した回答は従来どおり自由記述として扱われます。yes/no も回答全文から assent を判定し、判定できない追記付き回答は `unclear` になります。
 
+### TTY Operator input の送信履歴
+
+TTY の pane / stream では、Enter で送信した入力をセッション中の履歴として保持します。入力欄の先頭 visual row にカーソルがあるときの `↑` で古い履歴を呼び出し、末尾 visual row にあるときの `↓` で新しい履歴へ進みます。いちばん新しい履歴からさらに `↓` を押すと、履歴を呼び出す前に書いていた未送信ドラフトへ戻ります。
+
+履歴から呼び出した入力を編集して Enter で送信すると、その内容を新しい履歴として先頭に追加します。元の履歴行は変更されず、送信後に `↓` を押せば呼び出し前のドラフトへ戻れます。履歴はその TTY セッション内だけで有効です。
+
+候補表示中の `↑` / `↓` は slash コマンドまたは回答候補の選択を優先し、未回答 open question があるときの `Shift+↑/↓` は質問選択を優先します。複数行入力では、先頭・末尾 visual row に達するまでは `↑` / `↓` でカーソルを移動します。`Ctrl+p/n` は従来どおり visual row の上下移動で、履歴には使いません。キーごとの優先順位は [CLI / TUI の標準ショートカット](cli-text-input-keybindings.md) を参照してください。
+
 ### 表示出力の inline Markdown subset
 
 活動ログと Open questions の `question` / `context` / `choices`、および dialogue / observation の端末出力では、次の inline Markdown だけを表示スタイルへ変換します。

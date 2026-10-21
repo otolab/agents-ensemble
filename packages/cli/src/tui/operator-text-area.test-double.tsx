@@ -8,6 +8,7 @@ import stringWidth from 'string-width';
 import type { OperatorTextAreaProps } from './operator-text-area.js';
 import {
   computeOperatorInputLayout,
+  isCursorAtVisualBoundary,
   logicalPositionToOffset,
   mapCursorOffsetToDisplayPosition,
   sliceVisibleInputDisplayLines,
@@ -118,7 +119,26 @@ export function OperatorTextArea({
         key.upArrow ||
         key.downArrow
       ) {
-        if (suggestionsActive && (key.upArrow || key.downArrow)) {
+        const cursor = cursorPositionFor(value, cursorOffset);
+        if (
+          (suggestionsActive && (key.upArrow || key.downArrow)) ||
+          (key.upArrow &&
+            isCursorAtVisualBoundary(
+              value,
+              cursor,
+              contentWidth,
+              promptWidth,
+              'up',
+            )) ||
+          (key.downArrow &&
+            isCursorAtVisualBoundary(
+              value,
+              cursor,
+              contentWidth,
+              promptWidth,
+              'down',
+            ))
+        ) {
           return;
         }
         const lineStart = value.lastIndexOf('\n', cursorOffset - 1) + 1;

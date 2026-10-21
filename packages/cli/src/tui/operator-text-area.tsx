@@ -2,7 +2,10 @@ import React, { useCallback, useEffect, useMemo } from 'react';
 import { Box, Text } from 'ink';
 import stringWidth from 'string-width';
 import { TextArea, type TKeybindings, type TLinePrefixProps } from 'react-ink-textarea';
-import { computeOperatorInputLayout } from './operator-input-layout.js';
+import {
+  computeOperatorInputLayout,
+  isCursorAtVisualBoundary,
+} from './operator-input-layout.js';
 import { INPUT_PANE_PROMPT_COLOR } from './tui-layout-constants.js';
 
 export interface OperatorTextAreaProps {
@@ -29,6 +32,41 @@ export interface OperatorTextAreaProps {
    * `x` はプロンプト直前の列（`linePrefix` 幅は TextArea 側で加算）、`y` は表示先頭行。
    */
   readonly cursorStart?: { readonly x?: number; readonly y: number };
+}
+
+export function getOperatorTextAreaKeybindings(
+  value: string,
+  cursorPosition: readonly [line: number, column: number] | undefined,
+  contentWidth: number,
+  promptWidth: number,
+  suggestionsActive: boolean,
+): TKeybindings | undefined {
+  if (suggestionsActive) {
+    return { Up: false, Down: false };
+  }
+
+  const cursorAtFirstVisualRow = isCursorAtVisualBoundary(
+    value,
+    cursorPosition,
+    contentWidth,
+    promptWidth,
+    'up',
+  );
+  const cursorAtLastVisualRow = isCursorAtVisualBoundary(
+    value,
+    cursorPosition,
+    contentWidth,
+    promptWidth,
+    'down',
+  );
+  if (!cursorAtFirstVisualRow && !cursorAtLastVisualRow) {
+    return undefined;
+  }
+
+  return {
+    ...(cursorAtFirstVisualRow ? { Up: false } : {}),
+    ...(cursorAtLastVisualRow ? { Down: false } : {}),
+  };
 }
 
 /**
@@ -78,9 +116,13 @@ export function OperatorTextArea({
           y: cursorStart.y,
         }
       : undefined;
-  const keybindings: TKeybindings | undefined = suggestionsActive
-    ? { Up: false, Down: false }
-    : undefined;
+  const keybindings = getOperatorTextAreaKeybindings(
+    value,
+    cursorPosition,
+    contentWidth,
+    promptWidth,
+    suggestionsActive,
+  );
 
   return (
     <Box width={contentWidth} flexDirection="column">
