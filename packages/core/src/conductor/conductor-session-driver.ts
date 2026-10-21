@@ -323,6 +323,7 @@ export async function runConductorSessionDriver(
         maxTurns: options.maxTurns,
         allowIdleOperatorMessages: canDispatchIdleOperatorMessage({
           eventQueue: options.eventQueue,
+          dispatchHoldState,
           workerSession: options.workerSession,
           dispatchBatchState,
           autonomousTurns,
@@ -381,6 +382,7 @@ export async function runConductorSessionDriver(
         canDispatchIdleOperatorMessage: () =>
           canDispatchIdleOperatorMessage({
             eventQueue: options.eventQueue,
+            dispatchHoldState,
             workerSession: options.workerSession,
             dispatchBatchState,
             autonomousTurns,
@@ -669,12 +671,32 @@ async function waitForDispatchBatch(input: {
 
 function canDispatchIdleOperatorMessage(input: {
   eventQueue: SessionEventQueue;
+  dispatchHoldState: DispatchHoldState;
   workerSession: WorkerSession;
   dispatchBatchState: DispatchBatchState;
   autonomousTurns: number;
   maxTurns: number;
 }): boolean {
   if (input.workerSession.runtime.runningCount > 0) {
+    return false;
+  }
+  const heldEvents = input.dispatchHoldState.heldEvents;
+  if (
+    heldEvents.length > 0 &&
+    (heldEvents.every((event) =>
+      canDispatchConductorSend(
+        event,
+        input.autonomousTurns,
+        input.maxTurns,
+      ),
+    ) ||
+      selectDispatchBatch({
+        queue: heldEvents,
+        state: input.dispatchBatchState,
+        autonomousTurns: input.autonomousTurns,
+        maxTurns: input.maxTurns,
+      }) !== undefined)
+  ) {
     return false;
   }
   const nonOperatorTriggers = input.eventQueue.snapshot().filter(

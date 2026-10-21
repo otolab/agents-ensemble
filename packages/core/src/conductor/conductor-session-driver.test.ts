@@ -1118,6 +1118,91 @@ describe('runConductorSessionDriver', () => {
     expect(result.autonomousTurns).toBe(1);
   });
 
+  it('dispatches held autonomous work before idle operator messages after hold release', async () => {
+    const holdState = createDispatchHoldState();
+    const eventQueue = new SessionEventQueue();
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onBeforeRelease: () =>
+        bufferDispatchHoldEvents({
+          state: holdState,
+          eventQueue,
+        }),
+    });
+    const idleMessage = 'wait for held worker outcome';
+    const send = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await holdTool.set_dispatch_hold!.execute({ hold: true });
+        return { runId: 'run-1', status: 'running', result: 'holding' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toBe('release dispatch hold');
+        await holdTool.set_dispatch_hold!.execute({ hold: false });
+        expect(holdState.heldEvents).toHaveLength(1);
+        eventQueue.enqueue({
+          type: 'operator.message',
+          text: idleMessage,
+          delivery: 'idle',
+        });
+        return { runId: 'run-2', status: 'running', result: 'released' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('worker.completed');
+        expect(message).not.toContain(idleMessage);
+        return { runId: 'run-3', status: 'running', result: 'worker processed' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain(idleMessage);
+        return { runId: 'run-4', status: 'finished', result: 'operator handled' };
+      });
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const options = createDriverOptions({
+      eventQueue,
+      conductor,
+      maxTurns: 5,
+      runningCount: 1,
+    });
+    const driverPromise = runConductorSessionDriver({
+      ...options,
+      dispatchHoldState: holdState,
+    });
+
+    await vi.waitFor(() => expect(holdState.dispatchHold).toBe(true));
+    eventQueue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'worker finished',
+      },
+    });
+    await vi.waitFor(() => expect(holdState.heldEvents).toHaveLength(1));
+    options.workerSession.runtime.runningCount = 0;
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'release dispatch hold',
+    });
+
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
+    expect(String(send.mock.calls[2]![0])).not.toContain(idleMessage);
+    expect(String(send.mock.calls[3]![0])).toContain(idleMessage);
+    expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
+    expect(options.onSendComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ workerDispatches: 1 }),
+    );
+    expect(result.autonomousTurns).toBe(0);
+  });
+
   it('collects queued triggers before an in-flight release and flushes one mixed batch', async () => {
     const holdState = createDispatchHoldState();
     const eventQueue = new SessionEventQueue();
