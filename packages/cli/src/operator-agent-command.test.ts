@@ -29,4 +29,16 @@ describe('ensemble operator-agent command', () => {
       'ensemble operator-agent requires an interactive TTY',
     );
   });
+
+  it('documents the explicit fresh-session option in command help', () => {
+    const cliEntry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+    const result = spawnSync(
+      process.execPath,
+      [cliEntry, 'operator-agent', '--help'],
+      { encoding: 'utf8' },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('--new');
+  });
 });

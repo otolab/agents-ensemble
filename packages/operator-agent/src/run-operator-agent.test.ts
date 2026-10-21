@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
@@ -141,9 +141,7 @@ describe('runOperatorAgent', () => {
         agentOptions = options;
         return fakeAgent;
       },
-      resume: async () => {
-        throw new Error('operator-agent sessions are always new');
-      },
+      resume: async () => fakeAgent,
     };
 
     await runOperatorAgent({ repoRoot }, { stdin: input, stdout: output, agentFactory });
@@ -173,6 +171,129 @@ describe('runOperatorAgent', () => {
       'list_live_open_questions',
       'answer_live_open_question',
     ]);
+    await expect(
+      readFile(join(repoRoot, '.ensemble', 'operator-agent', 'session.json')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('resumes the default session after ordinary TTY termination and lets exit clear it', async () => {
+    const create = vi.fn(async () => createFakeAgent({ send: async () => ({
+      runId: 'run-1',
+      status: 'completed',
+      result: 'Saved.',
+    }) }));
+    const resume = vi.fn(async () => createFakeAgent({ send: async () => ({
+      runId: 'run-2',
+      status: 'completed',
+      result: 'Resumed.',
+    }) }));
+    const agentFactory: ConductorAgentFactory = { create, resume };
+
+    await runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: createInput('hello\n'),
+        stdout: createOutput(),
+        agentFactory,
+      },
+    );
+    const statePath = join(repoRoot, '.ensemble', 'operator-agent', 'session.json');
+    const savedState = JSON.parse(await readFile(statePath, 'utf8')) as {
+      version: number;
+      agentId: string;
+      backend: string;
+      repoRoot: string;
+    };
+    expect(savedState).toMatchObject({
+      version: 1,
+      agentId: 'operator-agent-id',
+      backend: 'pi',
+      repoRoot,
+    });
+
+    await runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: createInput('hello again\nEXIT\n'),
+        stdout: createOutput(),
+        agentFactory,
+      },
+    );
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(resume).toHaveBeenCalledOnce();
+    expect(resume).toHaveBeenCalledWith(
+      'operator-agent-id',
+      expect.objectContaining({ cwd: repoRoot }),
+    );
+    await expect(readFile(statePath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('closes the agent and keeps its identity when the process receives SIGTERM', async () => {
+    const previousExitCode = process.exitCode;
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    const agent = createFakeAgent({ send: async () => ({ runId: '', status: 'completed' }) });
+    const close = vi.spyOn(agent, 'close');
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => agent,
+          resume: async () => agent,
+        },
+      },
+    );
+    await new Promise<void>((resolve) => output.once('data', () => resolve()));
+
+    process.emit('SIGTERM');
+    try {
+      await run;
+      expect(process.exitCode).toBe(143);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+
+    expect(close).toHaveBeenCalledOnce();
+    await expect(
+      readFile(join(repoRoot, '.ensemble', 'operator-agent', 'session.json'), 'utf8'),
+    ).resolves.toContain('operator-agent-id');
+  });
+
+  it('starts fresh with --new and replaces the saved session identity', async () => {
+    const statePath = join(repoRoot, '.ensemble', 'operator-agent', 'session.json');
+    await mkdir(join(repoRoot, '.ensemble', 'operator-agent'), { recursive: true });
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        version: 1,
+        agentId: 'old-operator-agent-id',
+        backend: 'pi',
+        repoRoot,
+      }),
+    );
+    const create = vi.fn(async () =>
+      createFakeAgent({ send: async () => ({ runId: 'run-1', status: 'completed' }) }),
+    );
+    const resume = vi.fn();
+
+    await runOperatorAgent(
+      { repoRoot, newSession: true },
+      {
+        stdin: createInput('hello\n'),
+        stdout: createOutput(),
+        agentFactory: { create, resume },
+      },
+    );
+
+    expect(create).toHaveBeenCalledOnce();
+    expect(resume).not.toHaveBeenCalled();
+    await expect(readFile(statePath, 'utf8')).resolves.toContain(
+      'operator-agent-id',
+    );
   });
 
   it('adds the operator prompt to the first Cursor SDK turn', async () => {

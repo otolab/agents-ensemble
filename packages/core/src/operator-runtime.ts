@@ -11,6 +11,7 @@ export {
 export type { ConductorBackend } from './config/types.js';
 export { resolveConductorModelId } from './conductor/resolve-conductor-model-id.js';
 export { createConductorAgentFactory } from './conductor/conductor-agent-factory.js';
+export { isOperatorCommand } from './conductor/operator-command.js';
 export type {
   ConductorAgent,
   ConductorAgentCreateOptions,

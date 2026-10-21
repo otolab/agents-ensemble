@@ -107,6 +107,14 @@ MVP で **実装を Cursor SDK のみに限定**してもよいが、**設定は
 
 Open Question 等の harness 管理データは **agents-ensemble セッションデータ**（repo 配下 `.ensemble/`）の正本とし、operator-agent は **読み書きのクライアント**の一つとする（[ADR 0011](0011-session-sidecar-resume.md) の sidecar を補完するファイルは別 Issue）。
 
+### operator-agent の会話ライフサイクル
+
+operator-agent は operator 側 LLM 会話を既定で継続する。backend 固有の会話履歴は backend の保存機構に委ね、resume に使う `agentId` と backend / `repoRoot` の対応を `.ensemble/operator-agent/session.json` に保存する。初回起動は新規 session を作成し、通常の TTY EOF・SIGINT・SIGTERM では agent を閉じて履歴を flush し、保存した ID を次回の resume に使う。明示的な `--new` は保存 ID を破棄して新規 session を開始する。
+
+`/exit` と既存 operator command catalog の alias `exit` は会話の連続性を切る。終了時に保存 ID を削除し、次回起動では新規 session を作る。これは `ensemble issue` の `/exit`（Issue 側 worktree cleanup）とは異なる役割であり、operator-agent に `/close` を持ち込まない。
+
+保存済み conductor sidecar は harness 状態の読み取り用スナップショットである。そこから得られる情報の参照は harness 未接続でもできるが、Open Question の live list / answer は稼働中 harness の UDS control API が必要で、未接続・到達不能時に保存 YAML へ書き戻さない。
+
 ## Consequences
 
 - **良い**: operator ロールの実行者を差し替え可能。Issue セッションを壊さず横断運用・エスカレーション連携の土台ができる。GitHub 等の既存非同期チャネルを活かせる。

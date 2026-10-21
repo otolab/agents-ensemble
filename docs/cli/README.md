@@ -82,7 +82,11 @@ cd /path/to/your/repository
 ensemble issue https://github.com/OWNER/REPOSITORY/issues/123
 ```
 
-人間との TTY 対話を operator-agent に委ねる場合は `ensemble operator-agent [--repo-root <path>]` を使います。Issue セッションとは別の agent session で起動し、backend・model・profile・認証は conductor の設定を共有します。Pi backend ではユーザー／プロジェクト側の Pi extension を operator session に読み込みません。`.ensemble/sessions/` の保存済み sidecar を参照し、稼働中 harness があれば `list_live_open_questions` で一覧を取得し、operator が選んだ回答を `answer_live_open_question` で送れます。停止中・到達不能ならエラーとなり、YAML への自動 fallback はしません。YAML は保存・resume の正本です。セキュリティとログの扱いは [session logging](../session-logging.md#4-sidecar-と-open-question-yaml) を参照してください。
+人間との TTY 対話を operator-agent に委ねる場合は `ensemble operator-agent [--repo-root <path>]` を使います。Issue セッションとは別の agent session で起動し、backend・model・profile・認証は conductor の設定を共有します。Pi backend ではユーザー／プロジェクト側の Pi extension を operator session に読み込みません。
+
+operator-agent は既定で前回の operator 会話を再開します。初回起動では新しい session を作り、backend 固有の会話履歴は backend の保存先に、再開に使う backend・repoRoot・agentId は `.ensemble/operator-agent/session.json` に保存します。TTY の EOF、Ctrl+C（SIGINT）、SIGTERM など通常の終了では agent を閉じて再開可能な状態を保ちます。`/exit` または `exit` は連続性を明示的に切り、次回起動を新規 session にします。既存の会話を残したまま新しい会話を始める場合は `ensemble operator-agent --new` を使います。強制終了や電源断では終了時の flush は保証されません。
+
+`.ensemble/sessions/` の保存済み sidecar から得られる情報はスナップショットとして読み取り専用です。稼働中 harness への UDS live control が使える場合に限り、`list_live_open_questions` で一覧を取得し、operator が選んだ回答を `answer_live_open_question` で送れます。harness 停止中または接続不能ならライブ操作はエラーになり、保存 YAML への自動 fallback はしません。YAML は保存・resume の正本です。セキュリティとログの扱いは [session logging](../session-logging.md#4-sidecar-と-open-question-yaml) を参照してください。
 
 初回の作業指示は、Issue 参照の後ろに CLI 引数として渡せます。複数の引数はスペース 1 つで結合され、前後の空白は除かれます。
 
