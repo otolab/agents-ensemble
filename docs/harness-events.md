@@ -205,7 +205,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | type | 発火タイミング | stderr 例 | snapshot への影響 |
 |------|----------------|-----------|-------------------|
 | `harness.github.update` | debounce 後に `github.update` をキューへ載せる直前 | `[harness] github.update items=N` | なし |
-| `harness.github.monitor_error` | GitHub API poll 失敗（best-effort。監視は継続。認証失敗時は `[github-auth]` ヒント付き） | `[harness] github.monitor_error ...`（後方互換 1 行。構造化フィールドはイベント型に保持） | なし |
+| `harness.github.monitor_error` | GitHub API poll 失敗（best-effort。監視は継続。認証失敗時は `[github-auth]`、レート制限時は `[github-monitor]` ヒント付き） | `[harness] github.monitor_error ...`（後方互換 1 行。構造化フィールドはイベント型に保持） | なし |
 | `harness.github.monitor_recovered` | retryable エラーを抑止した後、エラーなしの poll が成功したとき | `[harness] github.monitor_recovered suppressed=N` | なし |
 
 `harness.github.monitor_error` の構造化フィールド（[#185](https://github.com/otolab/agents-ensemble/issues/185)）:

@@ -6,10 +6,25 @@ import type { AcpAuthenticateStrategy } from './resolve-acp-auth.js';
 import {
   DEFAULT_PERMISSION_DECISION,
   type AcpPromptBlock,
+  type LlmUsageSnapshot,
   type PermissionHandler,
   type PromptResult,
   type SessionUpdateNotification,
 } from './types.js';
+
+interface AcpWireUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens?: number;
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
+  thoughtTokens?: number;
+}
+
+interface AcpWirePromptResult {
+  stopReason: string;
+  usage?: AcpWireUsage;
+}
 
 export interface AcpClientOptions {
   permissionHandler?: PermissionHandler;
@@ -148,12 +163,12 @@ export class AcpClient {
       const result = (await this.peer.request('session/prompt', {
         sessionId,
         prompt: blocks,
-      })) as PromptResult;
+      })) as AcpWirePromptResult;
       const responseText = responseChunks.join('');
       return {
         ...result,
         responseText: responseText || undefined,
-        usage: result.usage,
+        usage: result.usage ? normalizeAcpUsage(result.usage) : undefined,
       };
     } finally {
       this.promptUpdateHandler = undefined;
@@ -205,6 +220,25 @@ export class AcpClient {
       throw error;
     }
   }
+}
+
+function normalizeAcpUsage(usage: AcpWireUsage): LlmUsageSnapshot {
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    ...(usage.totalTokens !== undefined
+      ? { totalTokens: usage.totalTokens }
+      : {}),
+    ...(typeof usage.cachedReadTokens === 'number'
+      ? { cacheReadTokens: usage.cachedReadTokens }
+      : {}),
+    ...(typeof usage.cachedWriteTokens === 'number'
+      ? { cacheWriteTokens: usage.cachedWriteTokens }
+      : {}),
+    ...(typeof usage.thoughtTokens === 'number'
+      ? { reasoningTokens: usage.thoughtTokens }
+      : {}),
+  };
 }
 
 function optionsClientName(options: AcpClientOptions): string {

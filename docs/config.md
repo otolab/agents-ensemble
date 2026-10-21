@@ -77,9 +77,9 @@ github:
     allowGhAuthTokenFallback: true
   monitor:
     enabled: true
-    debounceMs: 30000
-    pollIntervalMs: 60000
-    activePollIntervalMs: 15000
+    debounceMs: 60000
+    pollIntervalMs: 120000
+    activePollIntervalMs: 60000
     stopPollWaitMs: 5000
 
 tui:
@@ -135,7 +135,7 @@ spawn 解決時、子プロセスへ渡す env は次の順でマージされま
 
 Codex worker の接続先は Codex の provider 設定で定義し、`acp.env.MODEL_PROVIDER` で使う provider ID を選びます。ensemble はこの環境変数を `codex-acp` に渡すだけで、TOML ファイルを選んだり読み込んだりはしません。
 
-`@agentclientprotocol/codex-acp` は `packages/core/package.json` で **1.6.2** に pin されています。この版では、`CODEX_CONFIG` は Codex session config に merge する **JSON オブジェクト文字列**として `JSON.parse` されます。TOML のパスを設定すると JSON parse に失敗します。`MODEL_PROVIDER` は新しい session に渡す **provider ID** で、設定ファイルの選択には使われません。ensemble はいずれの値も `acp.env` から子プロセスへ渡すだけです。
+`@agentclientprotocol/codex-acp` は `packages/core/package.json` で **2.2.2** に pin されています。この版では、`CODEX_CONFIG` は Codex session config に merge する **JSON オブジェクト文字列**として `JSON.parse` されます。TOML のパスを設定すると JSON parse に失敗します。`MODEL_PROVIDER` は新しい session に渡す **provider ID** で、設定ファイルの選択には使われません。ensemble はいずれの値も `acp.env` から子プロセスへ渡すだけです。
 
 Codex の model ID はトップレベルの `model`、provider は `model_provider` で指定し、provider IDに対応する `[model_providers.<id>]` から接続先・API形式・認証方法を読みます。worker では Codex が通常の設定レイヤー（主に `~/.codex/config.toml`）を読み、必要であれば `CODEX_CONFIG` の JSON が session config に加わります。`MODEL_PROVIDER=litellm` だけでは、Codex は別ファイル `litellm.config.toml` を探さず、model IDも選びません。
 
@@ -394,9 +394,9 @@ YAML に未知のキーがあっても **無視する**（警告なし）。将�
 - [settings.md](settings.md) — 全設定層の一覧・解決パターン（本書は config.yaml 詳細）
 - [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) — worker の認証移譲とCodex runtime設定
 - [Codex profiles / custom model providers](https://developers.openai.com/codex/config-advanced#profiles) — Codex CLI profile overlay、`model`、`model_provider` の現行仕様
-- [codex-acp 1.6.2 runtime options](https://github.com/agentclientprotocol/codex-acp/blob/v1.6.2/README.md#runtime-options) — `CODEX_CONFIG` / `MODEL_PROVIDER` の説明
-- [codex-acp 1.6.2 起動処理](https://github.com/agentclientprotocol/codex-acp/blob/v1.6.2/src/index.ts#L640-L680) — 環境変数の parse と ACP 起動時の読み込み
-- [codex-acp 1.6.2 session開始](https://github.com/agentclientprotocol/codex-acp/blob/v1.6.2/src/CodexAcpClient.ts#L3060-L3074) — session config とprovider IDをCodex app-serverへ渡す処理
+- [codex-acp 2.2.2 runtime options](https://github.com/agentclientprotocol/codex-acp/blob/v2.2.2/README.md#runtime-options) — `CODEX_CONFIG` / `MODEL_PROVIDER` の説明
+- [codex-acp 2.2.2 起動処理](https://github.com/agentclientprotocol/codex-acp/blob/v2.2.2/src/index.ts#L90-L99) — 環境変数の parse と ACP 起動時の読み込み
+- [codex-acp 2.2.2 session開始](https://github.com/agentclientprotocol/codex-acp/blob/v2.2.2/src/CodexAcpClient.ts#L745-L755) — session config と provider ID を Codex app-server へ渡す処理
 - [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) — 解決順の設計判断
 - [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) — `.ensemble/` 配下の規約（team-profile）
 - [#223](https://github.com/otolab/agents-ensemble/issues/223) — config 基盤

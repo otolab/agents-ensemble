@@ -5,6 +5,7 @@ vi.mock('./operator-text-area.js', () => import('./operator-text-area.test-doubl
 import React from 'react';
 import { EventEmitter } from 'node:events';
 import { cleanup, render } from 'ink-testing-library';
+import stringWidth from 'string-width';
 import { IssueSessionTui } from './issue-session-tui.js';
 import { createTuiViewModel } from './tui-view-model.js';
 import { buildActivityLogDisplayLines } from './activity-log.js';
@@ -1154,6 +1155,150 @@ describe('IssueSessionTui', () => {
     expect(frame).toContain('implementer: running (calling: Shell)');
     expect(frame).not.toContain('implementer (implementer)');
     expect(frame).toContain('impl (implementer): running (editing files)');
+  });
+
+  it('clears running worker activity on idle transitions within a narrow Workers pane', async () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 40,
+    });
+
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {
+        librarian: {
+          kind: 'librarian',
+          status: 'running',
+          activity: 'calling: Shell',
+        },
+        impl: {
+          kind: 'implementer',
+          status: 'running',
+          activity: '編集中の非常に長い activity の表示幅を確認する',
+        },
+      },
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+    const runningFrame = lastFrame() ?? '';
+    const runningRows = extractTuiPaneFrameStats(runningFrame, WORKER_PANE_TITLE).contentRows;
+    expect(runningRows).toHaveLength(2);
+    expect(runningRows.find((line) => line.includes('librarian'))).toContain(
+      'librarian: running (calling: Shell)',
+    );
+    const runningImplRow = runningRows.find((line) => line.includes('impl (implementer)'));
+    expect(runningImplRow).toContain('impl (implementer): running');
+    expect(runningImplRow).toContain('…');
+    expect(runningRows.every((line) => stringWidth(line) === 40)).toBe(true);
+
+    viewModel.setDisplayState({
+      workers: {
+        librarian: { kind: 'librarian', status: 'idle' },
+        impl: { kind: 'implementer', status: 'idle' },
+      },
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    await flushInkStdin();
+
+    const idleFrame = lastFrame() ?? '';
+    const idleRows = extractTuiPaneFrameStats(idleFrame, WORKER_PANE_TITLE).contentRows;
+    expect(idleRows).toHaveLength(2);
+    expect(idleRows.find((line) => line.includes('librarian'))).toContain('librarian: idle');
+    expect(idleRows.find((line) => line.includes('impl (implementer)'))).toContain(
+      'impl (implementer): idle',
+    );
+    expect(idleFrame).not.toContain('calling: Shell');
+    expect(idleFrame).not.toContain('編集中の');
+    expect(idleRows.every((line) => stringWidth(line) === 40)).toBe(true);
+  });
+
+  it('keeps status visible when a long worker name and kind are truncated at 40 columns', async () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 40,
+    });
+
+    const name = 'worker-name-longer-than-workers-content-width';
+    const kind = 'kind-name-also-much-longer-than-the-content-width';
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {
+        [name]: { kind, status: 'running', activity: 'calling: a very long tool name' },
+      },
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+    const runningRow =
+      extractTuiPaneFrameStats(lastFrame() ?? '', WORKER_PANE_TITLE).contentRows[0] ?? '';
+    expect(runningRow).toContain(': running');
+    expect(runningRow).toContain('…');
+    expect(runningRow).not.toContain(name);
+    expect(stringWidth(runningRow)).toBe(40);
+
+    viewModel.setDisplayState({
+      workers: {
+        [name]: { kind, status: 'idle' },
+      },
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    await flushInkStdin();
+
+    const idleRow =
+      extractTuiPaneFrameStats(lastFrame() ?? '', WORKER_PANE_TITLE).contentRows[0] ?? '';
+    expect(idleRow).toContain(': idle');
+    expect(idleRow).toContain('…');
+    expect(stringWidth(idleRow)).toBe(40);
+  });
+
+  it('strips open SGR and OSC 8 sequences from truncated activity before rendering', () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 40,
+    });
+
+    const activity = [
+      '\u001B[31m',
+      'colored activity '.repeat(8),
+      '\u001B[0m',
+      '\u001B]8;;https://example.com/worker-activity\u0007',
+      'linked activity '.repeat(8),
+      '\u001B]8;;\u0007',
+    ].join('');
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {
+        impl: { kind: 'implementer', status: 'running', activity },
+      },
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+    );
+    const frame = lastFrame() ?? '';
+    const workerRow =
+      extractTuiPaneFrameStats(frame, WORKER_PANE_TITLE).contentRows[0] ?? '';
+    expect(workerRow).toContain(': running');
+    expect(workerRow).toContain('…');
+    expect(stringWidth(workerRow)).toBe(40);
+    expect(frame).not.toContain('\u001B');
+    expect(frame).not.toContain('https://example.com/worker-activity');
   });
 
   it('does not bleed activity log text onto pane border lines', () => {

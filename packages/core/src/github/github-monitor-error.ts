@@ -1,3 +1,4 @@
+import { isGitHubRateLimitError } from './github-auth.js';
 import { GitHubApiError } from './github-client.js';
 import { RunGhError } from './run-gh.js';
 
@@ -13,6 +14,7 @@ export type GitHubMonitorErrorCause =
   | 'parse'
   | 'gh_cli'
   | 'auth'
+  | 'rate_limit'
   | 'network'
   | 'unknown';
 
@@ -63,13 +65,25 @@ export function classifyGitHubMonitorError(
 
   if (error instanceof RunGhError) {
     return {
-      cause: error.cause === 'auth' ? 'auth' : 'gh_cli',
+      cause:
+        error.cause === 'auth'
+          ? 'auth'
+          : error.cause === 'rate_limit'
+            ? 'rate_limit'
+            : 'gh_cli',
       retryable: error.retryable,
       message: error.message,
     };
   }
 
   if (error instanceof GitHubApiError) {
+    if (isGitHubRateLimitError(error)) {
+      return {
+        cause: 'rate_limit',
+        retryable: error.retryable,
+        message: error.message,
+      };
+    }
     return {
       cause: error.status === 401 || error.status === 403 ? 'auth' : 'gh_cli',
       retryable: error.retryable,

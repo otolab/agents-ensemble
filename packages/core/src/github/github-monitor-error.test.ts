@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GitHubApiError } from './github-client.js';
 import {
   classifyGitHubMonitorError,
   safeUpperString,
@@ -35,6 +36,21 @@ describe('classifyGitHubMonitorError', () => {
       cause: 'parse',
       retryable: false,
       message: 'invalid response shape',
+    });
+  });
+
+  it('classifies rate-limited GitHubApiError separately from auth', () => {
+    expect(
+      classifyGitHubMonitorError(
+        new GitHubApiError('GitHub API 403: API rate limit exceeded', {
+          status: 403,
+          retryable: true,
+        }),
+      ),
+    ).toEqual({
+      cause: 'rate_limit',
+      retryable: true,
+      message: 'GitHub API 403: API rate limit exceeded',
     });
   });
 });
