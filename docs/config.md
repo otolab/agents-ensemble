@@ -137,9 +137,9 @@ Codex worker の接続先は Codex の provider 設定で定義し、`acp.env.MO
 
 `@agentclientprotocol/codex-acp` は `packages/core/package.json` で **1.6.2** に pin されています。この版では、`CODEX_CONFIG` は Codex session config に merge する **JSON オブジェクト文字列**として `JSON.parse` されます。TOML のパスを設定すると JSON parse に失敗します。`MODEL_PROVIDER` は新しい session に渡す **provider ID** で、設定ファイルの選択には使われません。ensemble はいずれの値も `acp.env` から子プロセスへ渡すだけです。
 
-Codex の provider は `model_provider` で選択され、そのIDに対応する `[model_providers.<id>]` から接続先・API形式・認証方法を読みます。worker では Codex が通常の設定レイヤー（主に `~/.codex/config.toml`）を読み、必要であれば `CODEX_CONFIG` の JSON が session config に加わります。`MODEL_PROVIDER=litellm` だけでは、Codex は別ファイル `litellm.config.toml` を探しません。
+Codex の model ID はトップレベルの `model`、provider は `model_provider` で指定し、provider IDに対応する `[model_providers.<id>]` から接続先・API形式・認証方法を読みます。worker では Codex が通常の設定レイヤー（主に `~/.codex/config.toml`）を読み、必要であれば `CODEX_CONFIG` の JSON が session config に加わります。`MODEL_PROVIDER=litellm` だけでは、Codex は別ファイル `litellm.config.toml` を探さず、model IDも選びません。
 
-`CODEX_CONFIG` の JSON には `model_provider` や `model_providers` などCodex session configのキーを含められます。ただし `MODEL_PROVIDER` を設定した場合は、codex-acp が新しいsessionの provider IDとしてその値を渡します。provider IDに対応する定義が、Codexの通常configかJSON設定に必要です。また、選択するmodel IDはLiteLLM側で利用可能である必要があります。
+`CODEX_CONFIG` の JSON には `model`、`model_provider`、`model_providers` などCodex session configのキーを含められます。ただし `MODEL_PROVIDER` を設定した場合は、codex-acp が新しいsessionの provider IDとしてその値を別途渡し、JSON内の `model_provider` より優先します。model IDとprovider IDに対応する定義は、それぞれCodexの通常configかJSON設定に必要です。model IDはLiteLLM側で提供されるものを指定してください。
 
 以下の例では秘密値を記載せず、環境変数名を使います。実際の `LITELLM_API_KEY` はシェル等で設定してください。
 
@@ -149,7 +149,8 @@ provider 定義を `~/.codex/config.toml` に置き、ensemble config では pro
 
 ```toml
 # ~/.codex/config.toml
-model_provider = "openai" # Codex CLI の通常利用時の既定
+model = "YOUR_LITELLM_MODEL_ID"
+model_provider = "litellm"
 
 [model_providers.litellm]
 name = "LiteLLM"
@@ -166,7 +167,7 @@ acp:
     MODEL_PROVIDER: litellm
 ```
 
-worker で別 provider を選ぶ場合は、`MODEL_PROVIDER` の値を `config.toml` に定義した provider ID に変更します。Codex CLI 自体の既定 provider を LiteLLM にする場合は、TOML の `model_provider` も `litellm` に設定します。認証値は設定ファイルに書かず、Codex が参照する環境変数で渡してください。
+`model` にはLiteLLM側で提供する実際のmodel IDを指定します。Codex CLI とworkerの両方がこのmodel設定を使います。`MODEL_PROVIDER` はworker sessionで使うproviderだけを選び、model IDは変更しません。別providerへ切り替える場合は、そのproviderでも同じmodel IDが利用できることを確認してください。Codex CLIで別の既定providerを使う場合は、`model_provider` をそのprovider IDにします。認証値は設定ファイルに書かず、Codexが参照する環境変数で渡してください。
 
 #### B. Codex CLI のprofile overlayを使う
 
@@ -174,6 +175,7 @@ Codex CLI の `codex --profile litellm` は、まず `~/.codex/config.toml` を�
 
 ```toml
 # ~/.codex/litellm.config.toml — Codex CLI 用 overlay
+model = "YOUR_LITELLM_MODEL_ID"
 model_provider = "litellm"
 
 [model_providers.litellm]
@@ -191,6 +193,7 @@ env_key = "LITELLM_API_KEY"
 
 ```json
 {
+  "model": "YOUR_LITELLM_MODEL_ID",
   "model_providers": {
     "litellm": {
       "name": "LiteLLM",
@@ -223,8 +226,8 @@ acp:
 
 | 起動方法 | 設定の選択・読み込み | LiteLLM の指定 |
 |----------|--------------------|----------------|
-| `codex --profile litellm` | Codex CLI が `~/.codex/config.toml` に `~/.codex/litellm.config.toml` をoverlay | profileファイルに provider 定義と `model_provider` を記述 |
-| ensemble の Codex worker | `codex-acp` → Codex `app-server`。`--profile` は渡せない。Codex の通常 config とsession設定を利用 | `MODEL_PROVIDER` で provider ID を選択。provider定義は正本 config（A）または `CODEX_CONFIG` JSON（C）で渡す |
+| `codex --profile litellm` | Codex CLI が `~/.codex/config.toml` に `~/.codex/litellm.config.toml` をoverlay | profileファイルに `model`、`model_provider`、provider 定義を記述 |
+| ensemble の Codex worker | `codex-acp` → Codex `app-server`。`--profile` は渡せない。Codex の通常 config とsession設定を利用 | `MODEL_PROVIDER` でprovider IDを選択し、`model` は通常config（A）または `CODEX_CONFIG` JSON（C）で指定 |
 
 `CODEX_CONFIG_PROFILE` によるprofile名指定は Codex 側で未実装です（[openai/codex#38104](https://github.com/openai/codex/issues/38104)）。したがって worker のprofile選択手段としては使えません。
 
@@ -390,9 +393,10 @@ YAML に未知のキーがあっても **無視する**（警告なし）。将�
 - [pi-conductor-setup.md](pi-conductor-setup.md) — Pi conductor の初回セットアップ・認証・復旧（利用者向け正本）
 - [settings.md](settings.md) — 全設定層の一覧・解決パターン（本書は config.yaml 詳細）
 - [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) — worker の認証移譲とCodex runtime設定
-- [Codex profiles](https://developers.openai.com/codex/config-advanced#profiles) — Codex CLI profile overlayの現行仕様
+- [Codex profiles / custom model providers](https://developers.openai.com/codex/config-advanced#profiles) — Codex CLI profile overlay、`model`、`model_provider` の現行仕様
 - [codex-acp 1.6.2 runtime options](https://github.com/agentclientprotocol/codex-acp/blob/v1.6.2/README.md#runtime-options) — `CODEX_CONFIG` / `MODEL_PROVIDER` の説明
 - [codex-acp 1.6.2 起動処理](https://github.com/agentclientprotocol/codex-acp/blob/v1.6.2/src/index.ts#L640-L680) — 環境変数の parse と ACP 起動時の読み込み
+- [codex-acp 1.6.2 session開始](https://github.com/agentclientprotocol/codex-acp/blob/v1.6.2/src/CodexAcpClient.ts#L3060-L3074) — session config とprovider IDをCodex app-serverへ渡す処理
 - [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) — 解決順の設計判断
 - [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) — `.ensemble/` 配下の規約（team-profile）
 - [#223](https://github.com/otolab/agents-ensemble/issues/223) — config 基盤
