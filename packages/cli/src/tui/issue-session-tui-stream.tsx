@@ -9,8 +9,10 @@ import {
 import type { OperatorInputSubmitOptions } from '@agents-ensemble/core';
 import { getTuiOpenQuestions, type TuiViewModel } from './tui-view-model.js';
 import {
+  advanceOpenQuestionsScrollOffset,
   advanceOpenQuestionSelection,
   clampOpenQuestionSelectionIndex,
+  resolveOpenQuestionsPaneViewport,
   resolveOpenQuestionsPaneLayout,
 } from './open-questions-pane.js';
 import {
@@ -18,6 +20,7 @@ import {
   INPUT_PANE_BORDER_COLOR,
   INPUT_PANE_HINT_COLOR,
   OPERATOR_INPUT_PROMPT,
+  PANE_BORDER_ROWS,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
 } from './tui-layout-constants.js';
@@ -132,6 +135,7 @@ export function IssueSessionTuiStream({
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [selectedAnswerSuggestionIndex, setSelectedAnswerSuggestionIndex] = useState(0);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
+  const [openQuestionLinesFromTop, setOpenQuestionLinesFromTop] = useState(0);
   const [hiddenAnswerSuggestionQuestionId, setHiddenAnswerSuggestionQuestionId] =
     useState<string>();
   const [scrollbackState, setScrollbackState] = useState(() =>
@@ -239,6 +243,15 @@ export function IssueSessionTuiStream({
     }),
     [openQuestionsLayout, streamPaneHeights.openQuestionsPaneHeight],
   );
+  const openQuestionViewport = resolveOpenQuestionsPaneViewport({
+    items: openQuestionsLayout.items,
+    selectedIndex: openQuestionsLayout.selectedIndex,
+    visibleLineCount: Math.max(
+      1,
+      streamPaneHeights.openQuestionsPaneHeight - PANE_BORDER_ROWS,
+    ),
+    linesFromTop: openQuestionLinesFromTop,
+  });
   const handleDisplayLineCountChange = useCallback((lineCount: number) => {
     setInputDisplayLineCount(Math.max(1, lineCount));
   }, []);
@@ -248,6 +261,10 @@ export function IssueSessionTuiStream({
       clampOpenQuestionSelectionIndex(current, openQuestions.length),
     );
   }, [openQuestions]);
+
+  useEffect(() => {
+    setOpenQuestionLinesFromTop(0);
+  }, [selectedQuestion?.id]);
 
   useEffect(() => {
     setSelectedAnswerSuggestionIndex(0);
@@ -272,11 +289,38 @@ export function IssueSessionTuiStream({
   };
 
   useInput((_input, key) => {
+    if (openQuestions.length > 0 && key.shift && !key.ctrl && !key.meta) {
+      if (key.pageUp) {
+        setOpenQuestionLinesFromTop((current) =>
+          advanceOpenQuestionsScrollOffset(
+            current,
+            'up',
+            openQuestionViewport.maxLinesFromTop,
+          ),
+        );
+        return;
+      }
+
+      if (key.pageDown) {
+        setOpenQuestionLinesFromTop((current) =>
+          advanceOpenQuestionsScrollOffset(
+            current,
+            'down',
+            openQuestionViewport.maxLinesFromTop,
+          ),
+        );
+        return;
+      }
+    }
+
     if (openQuestions.length > 0 && key.shift) {
       if (key.upArrow) {
         setSelectedQuestionIndex((current) =>
           advanceOpenQuestionSelection(current, 'up', openQuestions.length),
         );
+        if (openQuestions.length > 1) {
+          setOpenQuestionLinesFromTop(0);
+        }
         return;
       }
 
@@ -284,11 +328,14 @@ export function IssueSessionTuiStream({
         setSelectedQuestionIndex((current) =>
           advanceOpenQuestionSelection(current, 'down', openQuestions.length),
         );
+        if (openQuestions.length > 1) {
+          setOpenQuestionLinesFromTop(0);
+        }
         return;
       }
     }
 
-    if (commandSuggestions.length > 0) {
+    if (commandSuggestions.length > 0 && !key.ctrl && !key.shift && !key.meta) {
       if (key.upArrow) {
         setSelectedCommandIndex((current) =>
           advanceOperatorCommandSelection(current, 'up', commandSuggestions.length),
@@ -303,7 +350,7 @@ export function IssueSessionTuiStream({
       }
     }
 
-    if (answerSuggestions.length > 0) {
+    if (answerSuggestions.length > 0 && !key.ctrl && !key.shift && !key.meta) {
       if (key.upArrow) {
         setSelectedAnswerSuggestionIndex((current) =>
           advanceOpenQuestionAnswerSuggestionSelection(
@@ -428,6 +475,7 @@ export function IssueSessionTuiStream({
         {operatorInputDisplay.mode === 'withQuestions' ? (
           <OpenQuestionsPane
             layout={streamOpenQuestionsLayout}
+            viewport={openQuestionViewport}
             terminalColumns={terminalColumns}
             issueLinkMode={issueLinkMode}
           />
