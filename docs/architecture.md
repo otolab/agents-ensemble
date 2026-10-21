@@ -107,7 +107,7 @@ operator-agent の `list_operator_sessions` は保存済み sidecar と状態 YA
 
 現行の `ensemble issue` では、人間が TTY / CLI 経由で conductor を監督する（プロンプト terms の「オペレータ」）。operator-agent はその **代替・補助の実行者**として足す。Open Question の外部連携（[#481](https://github.com/otolab/agents-ensemble/issues/481)）は operator 層の入出力として扱う。
 
-**Phase 1 の設定・ランタイム**: LLM は **worker の ACP ではなく** `createConductorAgentFactory` 経路（`conductor.backend` / `conductor.model`、認証は [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の conductor 席と同経路）。config も conductor 解決を流用。別 `agentId`・operator 用プロンプト／ツール。詳細は [ADR 0031](adr/0031-operator-agent-layer.md)。
+**Phase 1 の設定・ランタイム**: LLM は **worker の ACP ではなく** `createConductorAgentFactory` 経路（`conductor.backend` / `conductor.model`、認証は [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の conductor 席と同経路）。config も conductor 解決を流用。別 `agentId`・operator 用プロンプト／ツール。`ensemble operator-agent` は `.ensemble/operator-agent/session.json` の agent ID を既定で resume し、`/exit` で ID を破棄して次回を新規 session にする。通常の TTY EOF / SIGINT / SIGTERM では backend session を閉じ、ID を保持して再開可能にする。詳細は [ADR 0031](adr/0031-operator-agent-layer.md)。
 
 ### レイヤー
 

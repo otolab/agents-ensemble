@@ -4,6 +4,7 @@ import { compile, merge } from '@modular-prompt/core';
 import {
   createConductorAgentFactory,
   filterMaterialsForKind,
+  isOperatorCommand,
   loadEnsembleConfig,
   loadProfile,
   profilePromptModule,
@@ -25,9 +26,15 @@ import {
   createAnswerLiveOpenQuestionTool,
   createListLiveOpenQuestionsTool,
 } from './open-question-control-tools.js';
+import {
+  clearOperatorAgentState,
+  loadOperatorAgentState,
+  saveOperatorAgentState,
+} from './operator-agent-state.js';
 
 export interface RunOperatorAgentOptions {
   repoRoot?: string;
+  newSession?: boolean;
 }
 
 export interface OperatorAgentInput extends NodeJS.ReadableStream {
@@ -67,7 +74,25 @@ export async function runOperatorAgent(
   const runtime = await resolveOperatorRuntime(options, dependencies);
   const factory =
     dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend);
-  const agent = await factory.create({
+  const existingState = options.newSession
+    ? undefined
+    : await loadOperatorAgentState(runtime.repoRoot);
+  if (existingState && existingState.repoRoot !== runtime.repoRoot) {
+    throw new Error(
+      `Operator-agent session belongs to ${existingState.repoRoot}, not ${runtime.repoRoot}.`,
+    );
+  }
+  if (existingState && existingState.backend !== runtime.backend) {
+    throw new Error(
+      `Operator-agent session uses the ${existingState.backend} backend, but the current configuration selects ${runtime.backend}. ` +
+        'Use --new to start a fresh session.',
+    );
+  }
+  if (options.newSession) {
+    await clearOperatorAgentState(runtime.repoRoot);
+  }
+
+  const agentOptions = {
     cwd: runtime.repoRoot,
     systemPrompt: runtime.systemPrompt,
     modelId: runtime.modelId,
@@ -88,16 +113,28 @@ export async function runOperatorAgent(
       list_live_open_questions: createListLiveOpenQuestionsTool(runtime.repoRoot),
       answer_live_open_question: createAnswerLiveOpenQuestionTool(runtime.repoRoot),
     },
-  });
+  };
+  const agent = existingState
+    ? await factory.resume(existingState.agentId, agentOptions)
+    : await factory.create(agentOptions);
 
   try {
-    await runTtyConversation({
+    await saveOperatorAgentState(runtime.repoRoot, {
+      version: 1,
+      agentId: agent.agentId,
+      backend: runtime.backend,
+      repoRoot: runtime.repoRoot,
+    });
+    const exitContinuity = await runTtyConversation({
       agent,
       backend: runtime.backend,
       systemPrompt: runtime.systemPrompt,
       stdin,
       stdout,
     });
+    if (exitContinuity) {
+      await clearOperatorAgentState(runtime.repoRoot);
+    }
   } finally {
     await agent.close();
   }
@@ -144,7 +181,7 @@ async function runTtyConversation(options: {
   systemPrompt: string;
   stdin: OperatorAgentInput;
   stdout: OperatorAgentOutput;
-}): Promise<void> {
+}): Promise<boolean> {
   const terminal = createInterface({
     input: options.stdin,
     output: options.stdout,
@@ -153,27 +190,48 @@ async function runTtyConversation(options: {
   });
   const input = terminal[Symbol.asyncIterator]();
   let firstSend = true;
+  let stop: () => void = () => {};
+  const stopping = new Promise<void>((resolve) => {
+    stop = resolve;
+  });
+  const requestStop = (exitCode?: number) => {
+    if (exitCode !== undefined) process.exitCode = exitCode;
+    terminal.close();
+    stop();
+  };
+  const handleInterrupt = () => requestStop(130);
+  const handleTermination = () => requestStop(143);
+  terminal.on('SIGINT', handleInterrupt);
+  process.on('SIGINT', handleInterrupt);
+  process.on('SIGTERM', handleTermination);
   options.stdout.write(
-    `operator-agent (${options.backend}) ready — enter /exit to quit.\n`,
+    `operator-agent (${options.backend}) ready — enter /exit to start a fresh session next time.\n`,
   );
 
   try {
     while (true) {
       options.stdout.write('user> ');
-      const next = await input.next();
-      if (next.done) return;
+      const next = await Promise.race([
+        input.next(),
+        stopping.then(() => ({ done: true as const, value: undefined })),
+      ]);
+      if (next.done) return false;
       const message = next.value.trim();
       if (!message) continue;
-      if (message === '/exit') {
+      if (isOperatorCommand(message, 'exit')) {
         options.stdout.write('operator-agent session ended.\n');
-        return;
+        return true;
       }
 
       const prompt =
         options.backend === 'cursor' && firstSend
           ? `${options.systemPrompt}\n\n## User message\n\n${message}`
           : message;
-      const result = await options.agent.send(prompt);
+      const result = await Promise.race([
+        options.agent.send(prompt),
+        stopping.then(() => undefined),
+      ]);
+      if (!result) return false;
       firstSend = false;
       if (result.status === 'error') {
         options.stdout.write(
@@ -186,6 +244,9 @@ async function runTtyConversation(options: {
       }
     }
   } finally {
+    terminal.off('SIGINT', handleInterrupt);
+    process.off('SIGINT', handleInterrupt);
+    process.off('SIGTERM', handleTermination);
     terminal.close();
   }
 }

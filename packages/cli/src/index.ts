@@ -40,9 +40,13 @@ program
   .command('operator-agent')
   .description('Chat with an operator agent about repository session state')
   .option('--repo-root <path>', 'Repository root for config and saved sessions', process.cwd())
-  .action(async (options: { repoRoot: string }) => {
+  .option('--new', 'Start a fresh operator-agent session')
+  .action(async (options: { repoRoot: string; new: boolean }) => {
     try {
-      await runOperatorAgent({ repoRoot: resolve(options.repoRoot) });
+      await runOperatorAgent({
+        repoRoot: resolve(options.repoRoot),
+        newSession: options.new,
+      });
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
       process.exit(1);
