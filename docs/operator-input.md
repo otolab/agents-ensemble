@@ -68,9 +68,9 @@ type OperatorInputBinding = (
 
 operator-agent は `send_operator_message` tool から稼働中 session の UDS control API へ `text` と任意の `delivery` を渡せます。省略時は `next` です。wire schema とエラー応答は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
 
-### 稼働中 harness の Open Question control
+### 稼働中 harness の UDS control
 
-稼働中 harness の UDS interface は、一覧取得・回答・operator message 送信ともに現在の session だけを扱います。operator-agent は sidecar の `harnessSocketPath` を使う client です。wire schema、answer semantics、message 送信の queue acknowledgment、error / unknown outcome、security と運用時の対処は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
+稼働中 harness の UDS interface は、Open Question の一覧・回答、operator message の送信に加え、operator-agent が送った指示の後に最後の conductor 成功応答を読む機能を提供します。いずれも現在の session だけが対象です。成功応答がまだなければ `message: null` を返し、harness 停止中・接続不能時に YAML へ fallback しません。operator-agent は sidecar の `harnessSocketPath` を使う client です。wire schema、answer semantics、message 送信の queue acknowledgment、error / unknown outcome、security と運用時の対処は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
 
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 

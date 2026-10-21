@@ -2,7 +2,7 @@
 
 > **正本:** `ensemble` の現行技術構成（operator-agent、Cursor SDK / Pi conductor + ACP worker）。利用者向け CLI の入口は [cli/README.md](cli/README.md)、設定の正本は [settings.md](settings.md) と [config.md](config.md) です。
 
-`ensemble` の技術構成。conductor は Cursor SDK（既定）または Pi を選択し、worker は **ACP** で接続する。operator-agent は同じ埋め込み backend を使う独立プロセスで、保存済みセッション情報と稼働中 harness の Open Question UDS control API を介して conductor と疎に連携する。複数 worker は **conductor を中心とするスター型**で接続する。
+`ensemble` の技術構成。conductor は Cursor SDK（既定）または Pi を選択し、worker は **ACP** で接続する。operator-agent は同じ埋め込み backend を使う独立プロセスで、保存済みセッション情報と稼働中 harness の UDS control API を介して conductor と疎に連携する。複数 worker は **conductor を中心とするスター型**で接続する。
 
 設計の大原則（スター型・Issue 紐づけ・遷移の非機械化など）は [design.md](design.md) を正本とする。本文はプロセス分離と通信経路を記述する。
 
@@ -101,9 +101,9 @@ user  →  operator（ロール）  →  conductor  →  workers
 | **operator ロール** | 人間（SessionView）または **operator-agent** | conductor 群の監督・エスカレーション・横断判断。**誰がロールを実行するか**が設計上の焦点 |
 | **operator-agent** | `packages/operator-agent`（[#488](https://github.com/otolab/agents-ensemble/issues/488)） | operator ロールの LLM。**ACP ではなく** conductor 同型の **`ConductorAgent`**（`@cursor/sdk` または Pi）。CLI は `ensemble operator-agent`（TTY） |
 
-**接続密度**: **user ↔ operator-agent は密**（同期対話）。**operator-agent ↔ conductor は疎**（GitHub、`.ensemble/sessions/`、稼働中セッションの UDS control API）。UDS は Open Question の一覧・回答と operator message の送信を提供し、常時接続や worker への直接指示は行わない。
+**接続密度**: **user ↔ operator-agent は密**（同期対話）。**operator-agent ↔ conductor は疎**（GitHub、`.ensemble/sessions/`、稼働中セッションの UDS control API）。UDS は Open Question の一覧・回答、operator message の送信、最後の conductor 成功応答の読み取りを提供します。最後の応答は稼働中 session に限り、成功応答がまだなければ `message: null` です。停止・接続不能時に YAML へ fallback しません。常時接続や worker への直接指示も行いません（詳細は [稼働中 harness control API reference](live-open-question-control-api.md)）。
 
-operator-agent の `list_operator_sessions` は保存済み sidecar と状態 YAML を読み取り、セッションインスタンスごとの statusLine 履歴 / lifecycle で絞り込める。sidecar の `harnessSocketPath` は接続先の索引であり、記録されているだけでは稼働確認にならない。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message` はその path を使って harness に接続し、停止中・到達不能ならエラーを返す。resume 時は再開前に lifecycle を `unknown` として保存し、新しい socket path を記録する。
+operator-agent の `list_operator_sessions` は保存済み sidecar と状態 YAML を読み取り、セッションインスタンスごとの statusLine 履歴 / lifecycle で絞り込める。sidecar の `harnessSocketPath` は接続先の索引であり、記録されているだけでは稼働確認にならない。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` はその path を使って harness に接続し、停止中・到達不能ならエラーを返す。resume 時は再開前に lifecycle を `unknown` として保存し、新しい socket path を記録する。
 
 現行の `ensemble issue` では、人間が TTY / CLI 経由で conductor を監督する（プロンプト terms の「オペレータ」）。operator-agent はその **代替・補助の実行者**として足す。Open Question の外部連携（[#481](https://github.com/otolab/agents-ensemble/issues/481)）は operator 層の入出力として扱う。
 
@@ -115,7 +115,7 @@ operator-agent の `list_operator_sessions` は保存済み sidecar と状態 YA
 |---------|------|------|
 | **CLI** | Node.js (`packages/cli`) | コマンド解析、環境、終了処理 |
 | **Core** | TypeScript (`packages/core`) | ACP ブリッジ、dispatch、型の共有 |
-| **Operator** | `@agents-ensemble/operator-agent` | TTY 対話、operator prompt、保存済み sidecar の読み取り、稼働中 Open Question の UDS client |
+| **Operator** | `@agents-ensemble/operator-agent` | TTY 対話、operator prompt、保存済み sidecar の読み取り、稼働中 harness UDS control client |
 | **Conductor** | `@cursor/sdk` または Pi 1.x (`pi-coding-agent` / `pi-ai`) | 設定された backend による判断・dispatch 制御の主体 |
 | **Worker** | `agent acp` | Skill に沿った実作業（種別ごとに起動文書・Skill が異なる） |
 | **共有媒体** | GitHub Issue / PR | セッション会話に依存しない状態と履歴 |
