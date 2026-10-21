@@ -12,6 +12,7 @@ import { resolve } from 'node:path';
 
 export const LIST_LIVE_OPEN_QUESTIONS_TOOL = 'list_live_open_questions';
 export const ANSWER_LIVE_OPEN_QUESTION_TOOL = 'answer_live_open_question';
+export const SEND_OPERATOR_MESSAGE_TOOL = 'send_operator_message';
 
 interface LiveOpenQuestionsResult {
   questions: OpenQuestionControlListItem[];
@@ -112,6 +113,56 @@ export function createAnswerLiveOpenQuestionTool(
   };
 }
 
+/** Send an operator message to a running Issue harness. */
+export function createSendOperatorMessageTool(repoRoot: string): ConductorTool {
+  const root = resolve(repoRoot);
+  return {
+    name: SEND_OPERATOR_MESSAGE_TOOL,
+    description:
+      'Send a message to the conductor of a running Issue session. Use delivery next by default; idle waits until the conductor has no active autonomous work, and interrupt attempts to cancel its current run before dispatch.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conductorAgentId: {
+          type: 'string',
+          description: 'Session id from list_operator_sessions.',
+        },
+        text: {
+          type: 'string',
+          description: 'The operator message to send to the conductor.',
+        },
+        delivery: {
+          type: 'string',
+          enum: ['idle', 'next', 'interrupt'],
+          description: 'Delivery timing; defaults to next.',
+        },
+      },
+      required: ['conductorAgentId', 'text'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const conductorAgentId = requireString(args.conductorAgentId, 'conductorAgentId');
+      const text = requireString(args.text, 'text');
+      const delivery =
+        args.delivery === undefined
+          ? 'next'
+          : requireDelivery(args.delivery);
+      const sidecar = await requireSession(root, conductorAgentId);
+      const result = await sendOpenQuestionControlRequest<{
+        queued: true;
+        delivery: 'idle' | 'next' | 'interrupt';
+      }>(requireSocketPath(sidecar), {
+        method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+        params: { text, delivery },
+      });
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+      };
+    },
+  };
+}
+
 async function requireSession(
   repoRoot: string,
   value: ConductorJsonValue | undefined,
@@ -143,4 +194,13 @@ function requireString(
     throw new Error(`${name} must be a non-empty string.`);
   }
   return value.trim();
+}
+
+function requireDelivery(
+  value: ConductorJsonValue,
+): 'idle' | 'next' | 'interrupt' {
+  if (value === 'idle' || value === 'next' || value === 'interrupt') {
+    return value;
+  }
+  throw new Error('delivery must be idle, next, or interrupt.');
 }

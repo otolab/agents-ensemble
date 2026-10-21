@@ -2,11 +2,9 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  startOpenQuestionControlServer,
-} from '@agents-ensemble/core';
+import { startOpenQuestionControlServer } from '@agents-ensemble/core';
 import { createOperatorDispatchQueue } from './operator-dispatch.js';
-import { createSendOperatorMessageTool } from './operator-control-tools.js';
+import { createSendOperatorMessageTool } from './open-question-control-tools.js';
 
 describe('operator control tools', () => {
   let repoRoot = '';
@@ -19,16 +17,16 @@ describe('operator control tools', () => {
     repoRoot = '';
   });
 
-  it('sends explicit next operator.message through live UDS while reports are held', async () => {
+  it('sends the #525 operator message through live UDS while reports are held', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-control-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
-    const enqueue = vi.fn(() => true);
+    const sendOperatorMessage = vi.fn(() => true);
     const server = await startOpenQuestionControlServer({
       listOpenQuestions: () => [],
       answerOpenQuestion: async () => {
         throw new Error('unused');
       },
-      enqueueOperatorMessage: enqueue,
+      sendOperatorMessage,
     });
     closeServer = () => server.close();
     await writeFile(
@@ -66,11 +64,13 @@ describe('operator control tools', () => {
     });
 
     expect(result.structuredContent).toEqual({
-      conductorAgentId: 'conductor-1',
-      accepted: true,
+      queued: true,
       delivery: 'next',
     });
-    expect(enqueue).toHaveBeenCalledWith('CI を確認してください');
+    expect(sendOperatorMessage).toHaveBeenCalledWith({
+      text: 'CI を確認してください',
+      delivery: 'next',
+    });
     expect(queue.heldEventCount).toBe(1);
     expect(queue.pendingEventCount).toBe(0);
   });

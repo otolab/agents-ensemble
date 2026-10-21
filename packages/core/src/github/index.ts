@@ -27,6 +27,8 @@ export {
   GITHUB_AUTH_HINT,
   hasGitHubAuth,
   isGitHubAuthError,
+  isGitHubRateLimitError,
+  formatGitHubRateLimitRecoveryHint,
 } from './github-auth.js';
 export {
   fetchIssueContext,

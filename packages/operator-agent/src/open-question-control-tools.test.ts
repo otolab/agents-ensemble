@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpenQuestionRegistry } from '../../core/src/escalation/open-question.js';
 import { recordOpenQuestionAnswer } from '../../core/src/escalation/record-open-question-answer.js';
 import {
@@ -16,6 +16,7 @@ import {
 import {
   createAnswerLiveOpenQuestionTool,
   createListLiveOpenQuestionsTool,
+  createSendOperatorMessageTool,
 } from './open-question-control-tools.js';
 
 describe('operator-agent live Open Question tools', () => {
@@ -127,5 +128,64 @@ describe('operator-agent live Open Question tools', () => {
         conductorAgentId: 'agent-offline',
       }),
     ).rejects.toThrow('has no recorded live control socket');
+  });
+
+  it('sends one operator message through the live session UDS', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-send-'));
+    const sendOperatorMessage = vi.fn().mockReturnValue(true);
+    server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      answerOpenQuestion: async () => {
+        throw new Error('unexpected answer');
+      },
+      sendOperatorMessage,
+    });
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-send',
+      }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: 'agent-send',
+        issueUrl: 'https://github.com/org/repo/issues/3',
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        harnessSocketPath: server.socketPath,
+        updatedAt: Date.now(),
+      },
+    );
+
+    const sendTool = createSendOperatorMessageTool(repoRoot);
+    expect(sendTool.inputSchema).toMatchObject({
+      properties: {
+        delivery: { enum: ['idle', 'next', 'interrupt'] },
+      },
+    });
+    const deliveries = [
+      ['idle', 'idle'],
+      ['next', 'next'],
+      ['interrupt', 'interrupt'],
+      [undefined, 'next'],
+    ] as const;
+    for (const [requestedDelivery, expectedDelivery] of deliveries) {
+      const sent = await sendTool.execute({
+        conductorAgentId: 'agent-send',
+        text: `message ${expectedDelivery}`,
+        ...(requestedDelivery ? { delivery: requestedDelivery } : {}),
+      });
+      expect(sent.structuredContent).toEqual({
+        queued: true,
+        delivery: expectedDelivery,
+      });
+    }
+    expect(sendOperatorMessage.mock.calls).toEqual(
+      deliveries.map(([, expectedDelivery]) => [
+        { text: `message ${expectedDelivery}`, delivery: expectedDelivery },
+      ]),
+    );
   });
 });

@@ -331,6 +331,44 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
+  it('aborts an active session prompt when cancel is requested', async () => {
+    let resolvePrompt!: () => void;
+    fakeSession.prompt.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolvePrompt = resolve;
+      }),
+    );
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+    const sendPromise = conductor.send('working');
+
+    await vi.waitFor(() => expect(fakeSession.prompt).toHaveBeenCalledOnce());
+    await conductor.cancel();
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+
+    const finalMessage = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'partial' }],
+      model: 'model-1',
+      stopReason: 'aborted',
+      usage: {
+        input: 1,
+        output: 1,
+        totalTokens: 2,
+        cost: { total: 0.1 },
+      },
+    };
+    fakeSession.state.messages = [finalMessage];
+    sessionListener?.({ type: 'agent_end', messages: [finalMessage] });
+    resolvePrompt();
+
+    await expect(sendPromise).resolves.toMatchObject({ status: 'cancelled' });
+  });
+
   it('closes MCP during session shutdown without launching replacement servers', async () => {
     const conductor = await PiConductorAgent.create({
       cwd,

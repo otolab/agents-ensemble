@@ -29,7 +29,10 @@ interface OperatorInputContext {
 }
 
 interface OperatorInputBindingApi {
-  submit: (message: string) => boolean;
+  submit: (
+    message: string,
+    options?: { targetOpenQuestionId?: string; delivery?: 'idle' | 'next' | 'interrupt' },
+  ) => boolean;
   getContext: () => OperatorInputContext;
 }
 
@@ -45,14 +48,29 @@ type OperatorInputBinding = (
 - `/reconnect` / `reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
 - `/close` / `close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。sidecar を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
 - `/exit` / `exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
+- TTY の通常入力は配信モード prefix を付けられる。`/idle ...`、`/next ...`、`/interrupt ...` を本文先頭に置き、prefix 自体は conductor へ送らない。prefix なしは `next`
 - TTY（Ink TUI）では選択中の open question への回答として `submit` する（`targetOpenQuestionId` オプション）
 - 非 TTY では未回答 1 件のときはプレーンテキストをその open question への回答として解釈する
 - `choice` の選択肢は回答を簡潔にするための候補で、オペレータは自由記述でも回答できる。選択肢 ID / 一意な label / 候補順の 1 始まり番号に一意に解決できる入力には `selectedChoice` を記録し、それ以外は回答全文を保存して `selectedChoice` を付けない。重複する label は自由記述として記録し、候補を推測しない。TTY の Open questions ペインには選択肢を表示する
 - `yes_no` の回答は原文と `assent: yes | no | unclear` を記録する。判定できない回答は否定にせず `unclear` とし、`approved` は permission に関連付けた質問に限って明確な assent から導出する
 
+### オペレータメッセージの配信モード
+
+`operator.message` は `delivery?: 'idle' | 'next' | 'interrupt'` を持ち、省略時は `next` として扱います。SessionLogEvent の `operator.input` にも解決後のモードを記録し、TTY 活動ログでは本文の前に `[idle]` / `[next]` / `[interrupt]` を表示します。
+
+| モード | 動作 |
+|--------|------|
+| `next`（既定） | 現行どおり、次に選ばれる dispatch で最優先に送る。進行中の `agent.send` は完了を待つ |
+| `idle` | キューには積むが、conductor の send 中、worker が動作中、または送信可能な自律イベントが残っている間は選ばない。dispatch hold 自体は待機理由にならず、hold 中は held buffer のイベントがあっても送信できる。hold 解放後に送信可能な held event が残っている場合は、その flush / dispatch を先に行う |
+| `interrupt` | 進行中の conductor run の cancel を試してから送る。cancel が使えない・失敗した場合は警告を記録し、`next` と同じ次回 dispatch にフォールバックする（[#86](https://github.com/otolab/agents-ensemble/issues/86) の最小経路） |
+
+`idle` はセッション終了まで保留する指定ではありません。TTY の post-loop 待機中は Driver が動作を続けており、worker や送信可能なイベントがなければ dispatch されます。max-turns 到達後も operator 入力は dispatch 可能です。実行中 worker があればその終了を待ち、worker event が max-turns で送れない状態まで来たら operator message を先に届けて上限をリセットします。dispatch hold 中も operator message は held buffer に入らず、hold の有効中であること自体は `idle` を止めません。そのため、worker と通常 queue の送信可能イベントがなければ、held buffer に自律イベントが残っていても `idle` message は hold を貫通して送られます。hold 解放後は送信可能な held event を先に flush / dispatch し、残った `idle` message はその処理後に送ります。Open Question 回答経路は引き続き `next` 固定です。
+
+operator-agent は `send_operator_message` tool から稼働中 session の UDS control API へ `text` と任意の `delivery` を渡せます。省略時は `next` です。wire schema とエラー応答は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
+
 ### 稼働中 harness の Open Question control
 
-Open Question の live list / answer は現在の session だけを扱います。operator-agent は sidecar の `harnessSocketPath` を使う client で、watch snapshot と conductor 宛て `operator.message` も同じ UDS control API を使います。wire schema、answer semantics、message receipt、error / unknown outcome、security と運用時の対処は [稼働中 Open Question control API reference](live-open-question-control-api.md) を参照してください。
+稼働中 harness の UDS interface は、Open Question の一覧・回答、watch snapshot、conductor 宛て `operator.message.send` を扱います。operator-agent は sidecar の `harnessSocketPath` を使う client です。通常 message は回答から独立し、queue acknowledgment は処理完了を意味しません。wire schema、answer semantics、message 送信の応答、error / unknown outcome、security と運用時の対処は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
 
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 

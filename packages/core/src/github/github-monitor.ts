@@ -16,9 +16,9 @@ import {
 import type { GitHubUpdateItem, GitHubUpdatePayload } from './github-update-types.js';
 import type { GitHubUpdateKind } from './github-update-types.js';
 
-export const DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS = 30_000;
-export const DEFAULT_GITHUB_MONITOR_POLL_INTERVAL_MS = 60_000;
-export const DEFAULT_GITHUB_MONITOR_ACTIVE_POLL_INTERVAL_MS = 15_000;
+export const DEFAULT_GITHUB_MONITOR_DEBOUNCE_MS = 60_000;
+export const DEFAULT_GITHUB_MONITOR_POLL_INTERVAL_MS = 120_000;
+export const DEFAULT_GITHUB_MONITOR_ACTIVE_POLL_INTERVAL_MS = 60_000;
 /** `stop()` が進行中 poll の完了を待つ上限（ms）。超過時は poll を abort する（#209）。 */
 export const DEFAULT_GITHUB_MONITOR_STOP_POLL_WAIT_MS = 5_000;
 

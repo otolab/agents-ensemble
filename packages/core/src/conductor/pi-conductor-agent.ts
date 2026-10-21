@@ -316,6 +316,12 @@ export class PiConductorAgent implements ConductorAgent {
     return {};
   }
 
+  async cancel(): Promise<void> {
+    if (this.activeSend) {
+      await this.session.abort();
+    }
+  }
+
   /** Resume recompiles and reinstalls the native system prompt on each run. */
   async setSystemPrompt(systemPrompt: string): Promise<void> {
     this.systemPromptRef.value = systemPrompt;

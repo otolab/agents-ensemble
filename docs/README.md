@@ -32,7 +32,7 @@
 | [settings.md](settings.md) | CLI / 環境変数 / config / profile / TUI の設定一覧と解決順（設定全体の正本） |
 | [config.md](config.md) | `.ensemble/config.yaml` の配置・書き方・スキーマ・MCP 設定（config の正本） |
 | [operator-input.md](operator-input.md) | TUI のレイアウト、オペレータ入力、post-loop の利用者向け契約 |
-| [live-open-question-control-api.md](live-open-question-control-api.md) | 稼働中 harness の UDS API（Open Question list / answer、watch snapshot、outbound `operator.message`）、wire schema、ack/error、security |
+| [live-open-question-control-api.md](live-open-question-control-api.md) | 稼働中 harness の UDS API（Open Question list / answer、watch snapshot、outbound `operator.message.send`）、wire schema、ack/error、security |
 | [tui-terminal-compatibility.md](tui-terminal-compatibility.md) | TUI の端末 × layout × resize / IME / scrollback の確認マトリクスと更新手順 |
 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | scrollback 閲覧検出の設計・端末別 C 可否・副作用 |
 | [cli-text-input-keybindings.md](cli-text-input-keybindings.md) | TUI 入力ショートカットの実装階層・対応状況（参照） |

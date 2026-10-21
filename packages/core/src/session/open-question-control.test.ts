@@ -108,13 +108,16 @@ describe('Open Question control UDS', () => {
     await expect(stat(socketPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('provides live observation cursors and queues explicit next operator messages', async () => {
+  it('provides live observation and queues messages through the #525 contract', async () => {
     const registry = new OpenQuestionRegistry();
     const question = registry.enqueue({
       question: 'Continue?',
       responseType: 'text',
     });
-    const enqueueOperatorMessage = vi.fn(() => true);
+    const sendOperatorMessage = vi.fn(() => true);
+    const answerOpenQuestion = vi.fn(async () => {
+      throw new Error('answer path must stay independent');
+    });
     const server = await startOpenQuestionControlServer({
       listOpenQuestions: () => registry.listOpen(),
       observeSession: async () => ({
@@ -124,10 +127,8 @@ describe('Open Question control UDS', () => {
           history: [],
         },
       }),
-      enqueueOperatorMessage,
-      answerOpenQuestion: async () => {
-        throw new Error('unused');
-      },
+      sendOperatorMessage,
+      answerOpenQuestion,
     });
 
     try {
@@ -145,15 +146,39 @@ describe('Open Question control UDS', () => {
       });
       await expect(
         sendOpenQuestionControlRequest(server.socketPath, {
-          method: OPEN_QUESTION_CONTROL_METHODS.operatorMessage,
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
           params: { text: 'please check this', delivery: 'next' },
         }),
-      ).resolves.toEqual({ accepted: true, delivery: 'next' });
-      expect(enqueueOperatorMessage).toHaveBeenCalledWith('please check this');
+      ).resolves.toEqual({ queued: true, delivery: 'next' });
       await expect(
         sendOpenQuestionControlRequest(server.socketPath, {
-          method: OPEN_QUESTION_CONTROL_METHODS.operatorMessage,
-          params: { text: 'unsupported mode', delivery: 'interrupt' },
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'wait for idle', delivery: 'idle' },
+        }),
+      ).resolves.toEqual({ queued: true, delivery: 'idle' });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'interrupt current run', delivery: 'interrupt' },
+        }),
+      ).resolves.toEqual({ queued: true, delivery: 'interrupt' });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'default delivery' },
+        }),
+      ).resolves.toEqual({ queued: true, delivery: 'next' });
+      expect(sendOperatorMessage.mock.calls).toEqual([
+        [{ text: 'please check this', delivery: 'next' }],
+        [{ text: 'wait for idle', delivery: 'idle' }],
+        [{ text: 'interrupt current run', delivery: 'interrupt' }],
+        [{ text: 'default delivery', delivery: 'next' }],
+      ]);
+      expect(answerOpenQuestion).not.toHaveBeenCalled();
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'unsupported mode', delivery: 'later' },
         }),
       ).rejects.toMatchObject({ rpcCode: -32602 });
     } finally {
@@ -198,6 +223,61 @@ describe('Open Question control UDS', () => {
         rpcCode: -32601,
         message: 'Method not found.',
       });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('queues operator messages with an optional delivery mode defaulting to next', async () => {
+    expect(OPEN_QUESTION_CONTROL_METHODS.sendMessage).toBe(
+      'operator.message.send',
+    );
+    expect(
+      Object.values(OPEN_QUESTION_CONTROL_METHODS).filter(
+        (method) => method === 'operator.message.send',
+      ),
+    ).toHaveLength(1);
+    const sendOperatorMessage = vi.fn().mockReturnValue(true);
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      answerOpenQuestion: async () => {
+        throw new Error('unexpected answer request');
+      },
+      sendOperatorMessage,
+    });
+
+    try {
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'wait until idle', delivery: 'idle' },
+        }),
+      ).resolves.toEqual({ queued: true, delivery: 'idle' });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'keep going' },
+        }),
+      ).resolves.toEqual({ queued: true, delivery: 'next' });
+      expect(sendOperatorMessage.mock.calls).toEqual([
+        [{ text: 'wait until idle', delivery: 'idle' }],
+        [{ text: 'keep going', delivery: 'next' }],
+      ]);
+
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'bad mode', delivery: 'later' },
+        }),
+      ).rejects.toMatchObject({
+        rpcCode: -32602,
+      });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: 'operator.message',
+          params: { text: 'legacy duplicate endpoint' },
+        }),
+      ).rejects.toMatchObject({ rpcCode: -32601 });
     } finally {
       await server.close();
     }

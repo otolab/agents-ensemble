@@ -101,9 +101,10 @@ user  →  operator（ロール）  →  conductor  →  workers
 | **operator ロール** | 人間（SessionView）または **operator-agent** | conductor 群の監督・エスカレーション・横断判断。**誰がロールを実行するか**が設計上の焦点 |
 | **operator-agent** | `packages/operator-agent`（[#488](https://github.com/otolab/agents-ensemble/issues/488)） | operator ロールの LLM。**ACP ではなく** conductor 同型の **`ConductorAgent`**（`@cursor/sdk` または Pi）。CLI は `ensemble operator-agent`（TTY） |
 
-**接続密度**: **user ↔ operator-agent は密**（同期対話）。**operator-agent ↔ conductor は疎**（GitHub、`.ensemble/sessions/`、session ごとの UDS control API）。UDS は Open Question の一覧・回答、観測 snapshot、明示的な `operator.message` を提供する。watch pool は短い UDS request を定期実行し、常時接続や worker への直接指示は行わない。
+**接続密度**: **user ↔ operator-agent は密**（同期対話）。**operator-agent ↔ conductor は疎**（GitHub、`.ensemble/sessions/`、session ごとの UDS control API）。UDS は Open Question の一覧・回答、観測 snapshot、明示的な `operator.message.send` を提供する。watch pool は短い UDS request を定期実行し、常時接続や worker への直接指示は行わない。
 
-operator-agent の `list_operator_sessions` は保存済み sidecar と状態 YAML を読み取り、セッションインスタンスごとの statusLine 履歴 / lifecycle で絞り込める。sidecar の `harnessSocketPath` は接続先の索引であり、記録されているだけでは稼働確認にならない。Open Question の live list / answer と明示 `operator.message` はその path を使って harness に接続し、停止中・到達不能ならエラーを返す。一方、watch pool はライブ `session.observe` が失敗した場合に保存済み YAML / sidecar の読み取りへ切り替える。resume 時は再開前に lifecycle を `unknown` として保存し、新しい socket path を記録する。
+operator-agent の `list_operator_sessions` は保存済み sidecar と状態 YAML を読み取り、セッションインスタンスごとの statusLine 履歴 / lifecycle で絞り込める。sidecar の `harnessSocketPath` は接続先の索引であり、記録されているだけでは稼働確認にならない。Open Question の live list / answer、明示 `operator.message.send`、watch 用 `session.observe` はその path を使って harness に接続し、停止中・到達不能ならエラーを返す。watch pool はライブ observation が失敗した場合に保存済み YAML / sidecar の読み取りへ切り替える。resume 時は再開前に lifecycle を `unknown` として保存し、新しい socket path を記録する。
+
 
 現行の `ensemble issue` では、人間が TTY / CLI 経由で conductor を監督する（プロンプト terms の「オペレータ」）。operator-agent はその **代替・補助の実行者**として足す。Open Question の外部連携（[#481](https://github.com/otolab/agents-ensemble/issues/481)）は operator 層の入出力として扱う。
 
@@ -132,13 +133,13 @@ operator-agent は ADR 0014 の dispatch 原則を operator 側の報告に適�
 | 観測入口 | worker runtime、permission pipeline、GitHub monitor | 稼働中は session UDS `session.observe`、到達不能時は Open Questions YAML・session-state YAML・sidecar poll |
 | cursor / 永続化 | session sequence、GitHub monitor cursor、sidecar | `.ensemble/operator-agent/watch-state.json` に watch 設定・per-session cursor・未 dispatch report を保存 |
 | 束ね dispatch | [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の source key・到着順・優先度で 1 束を 1 `agent.send` | user を最優先、Open Question report、直前 session の一回継続、残り session の到着順で束ねて 1 `agent.send` |
-| hold | `set_dispatch_hold` が conductor 向け trigger を保留し `operator.message` を通す | `set_report_hold` / `release_reports` が自動 report だけを保留し、TTY user input と明示 `send_operator_message` を通す |
-| 通信方向 | harness queue から conductor へ送る | harness の UDS から operator-agent へ snapshot を報告し、逆方向の `operator.message` は conductor queue に enqueue |
+| hold | `set_dispatch_hold` が conductor 向け trigger を保留し `operator.message` を通す | `set_report_hold` / `release_reports` が自動 report だけを保留し、TTY user input と `operator.message.send` を通す |
+| 通信方向 | harness queue から conductor へ送る | harness の UDS から operator-agent へ snapshot を報告し、逆方向の `operator.message.send` は既存 conductor queue に enqueue |
 | 実行中 TTY | Issue TUI が `dispatch 保留中（N 件）` を表示 | operator-agent は `報告保留中（N 件）` を表示 |
 
 監視間隔と debounce は watch ごとに `register_session_watch` の `pollIntervalMs` / `debounceMs` で設定する。session ごとの UDS path が記録されているだけでは稼働中と判断せず、接続できた snapshot を live として扱う。poll cursor と未 dispatch report は operator-agent state に保存するため、operator-agent の再起動後は未送信 report を queue に戻す。report hold 自体は会話中だけの状態で、再起動後は解除状態から始まる。
 
-Issue harness 側では `session.observe` が全 Open Question と sequence、完了済み `report_session_state` の保存値を返し、`operator.message` は通常の `operator.message` event として queue に入る。message の `accepted` は queue 受付であり dispatch 完了 ack ではない。delivery は #525 の既定 `next` を使い、`idle` / `interrupt` は同 Issue の正本に従う。
+Issue harness 側では `session.observe` が全 Open Question と sequence、完了済み `report_session_state` の保存値を返す。`operator.message.send` は通常の operator message として既存 queue に入り、`{ queued: true, delivery }` は queue 受付を示す。dispatch 完了 ack ではない。`delivery` は `idle | next | interrupt` で、省略時は `next`（詳細は [Issue #525](https://github.com/otolab/agents-ensemble/issues/525)）。
 
 ---
 
@@ -212,7 +213,7 @@ Cursor conductor の初回セットアップは `ensemble auth login`（`Cursor.
 
 - **長寿命**: 1 Issue あたり 1 conductor session（`agent.send` でターンを重ねる）
 - **resume**: 別プロセスから backend 固有の `resume(conductorAgentId)` で再開可能。Cursor は SDK の session、Pi は sidecar の `conductorAgentId` を Pi session id として `.ensemble/pi/sessions/` の JSONL transcript を復元する。harness sidecar（`.ensemble/sessions/{conductorAgentId}.json`）には profile・worker `acpSessionId`・MCP map digest・teardown lifecycle などを保存し、OpenQuestionRegistry のスナップショットは `.ensemble/sessions/{conductorAgentId}/open-questions.yaml` に保存する。operator status の最新報告と最大 50 件の履歴（状態 YAML は最大 16 KiB）は `.ensemble/sessions/{conductorAgentId}/session-state.yaml` に保存する。resume 時は conductor 再開処理の前に lifecycle を `unknown` として保存し、前回の終了値が残らないようにする。YAML の質問一覧を優先し、YAML がない既存セッションは JSON sidecar から復元して YAML を生成する。移行期間中は両方に同一内容を保存する。worker の累積 tool-call snapshot は別ファイル（`.ensemble/sessions/{conductorAgentId}.tool-calls`）に保存し、resume 時は stable worker name で新しい runtime `workerId` に結び直して ACP `sessionId` を保持する。tool-call history の欠損・破損は resume を妨げない。保持期限と上限は [harness-events.md](harness-events.md) を参照。resume 時に backend または MCP map が起動時の解決結果と sidecar の値から変わっていれば fail fast する（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)、[ADR 0031](adr/0031-operator-agent-layer.md)、[ADR 0032](adr/0032-tool-call-snapshot-history.md)、[session-logging.md](session-logging.md#4-sidecar-と-open-question-yaml)）。
-- **live Open Question control**: `runConductorSession` はセッションごとの UDS listener を所有し、実 path を sidecar `harnessSocketPath` に記録する。短い owner-only runtime directory に socket を置く。回答状態の正本は Open Questions YAML、JSON sidecar は mirror。shutdown 時は受理済み request を最大 5 秒 drain し、期限超過時は driver を abort する。API の schema、ack/error、security と運用手順は [live Open Question control API reference](live-open-question-control-api.md)、設計判断は [ADR 0033](adr/0033-live-open-question-control-uds.md)、[ADR 0035](adr/0035-open-question-shutdown-commit-order.md)、[ADR 0036](adr/0036-live-open-question-answer-contract.md) を参照。
+- **live harness control**: `runConductorSession` はセッションごとの UDS listener を所有し、実 path を sidecar `harnessSocketPath` に記録する。短い owner-only runtime directory に socket を置く。回答状態の正本は Open Questions YAML、JSON sidecar は mirror。operator message は event queue で扱い、回答 YAML には保存しない。shutdown 時は受理済み request を最大 5 秒 drain し、期限超過時は driver を abort する。API の schema、ack/error、security と運用手順は [live harness control API reference](live-open-question-control-api.md)、設計判断は [ADR 0033](adr/0033-live-open-question-control-uds.md)、[ADR 0035](adr/0035-open-question-shutdown-commit-order.md)、[ADR 0036](adr/0036-live-open-question-answer-contract.md) を参照。
 - **ripgrep**: local agent の ignore scan 用。`ConductorAgent` 起動前に `ensureCursorSdkRipgrepPath()` が `@cursor/sdk-<platform>-<arch>/bin/rg` または PATH の `rg` を `CURSOR_RIPGREP_PATH` に設定する（[#43](https://github.com/otolab/agents-ensemble/issues/43)）。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 - **proxy**: `ConductorAgent` 起動前に `ensureCursorSdkProxy()` が Cursor の `settings.json` を読み、フラット形式の `http.proxy` / `http.noProxy` を `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` へ不足分だけ反映する。ネスト形式も互換入力として扱うが、両方に同じ設定がある場合はフラット形式を優先する。解決順は既存の環境変数 → Cursor settings → 未設定で、標準パスは macOS / Linux / Windows ごとに異なる。`cursor.general.disableHttp2: true` は SDK の `local.useHttp1ForAgent: true` に変換する。`http.proxyStrictSSL` と `http.proxySupport: "override"` は SDK に対応する公開設定がなく未対応。設定の利用者向け入口は [settings.md](settings.md) のランタイム設定を参照してください。
 
@@ -348,16 +349,16 @@ worker (ACP)                    conductor (Cursor SDK / Pi)  オペレータ
 - 並列 worker 時は request id / workerId で correlation
 - conductor は harness 状態を **ポーリング待機してはならない**（外部 `Await` 等）。変化は `SessionEventQueue` のみが通知する（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)）。worker prompt ライフサイクルは [harness-events.md](harness-events.md) §2.2（#133: bootstrap 廃止・`source` 統一）
 
-### オペレータ対話（open question）
+### オペレータ対話（open question とメッセージ送信）
 
-Issue session 内で worker に指示し、ユーザへ結果を返す agent は引き続き **conductor**。operator-agent は稼働中 harness の session UDS を介して Open Question の一覧取得・回答、watch 用 snapshot の取得、明示的な outbound `operator.message` の送信を行う。Open Question 回答は回答 API で記録し、明示 message は通常の operator message queue に入れる独立経路である。
+Issue session 内で worker に指示し、ユーザへ結果を返す agent は引き続き **conductor**。operator-agent は稼働中 harness の session UDS を介して Open Question の一覧取得・回答、watch 用 snapshot の取得、明示的な outbound `operator.message.send` の送信を行う。Open Question 回答は回答 API で記録し、通常 message は回答から独立した既存 operator message queue に入り、operator-agent が worker を直接 dispatch することはない。
 
 | レイヤ | 役割 |
 |--------|------|
 | **modular-prompt** | system prompt 文（指揮方針・materials） |
-| **オペレータメッセージ** | `agent.send` の user ターン（CLI TTY / CLI 初回引数 / `ENSEMBLE_OPERATOR_MESSAGE`） |
+| **オペレータメッセージ** | `agent.send` の user ターン（CLI TTY / CLI 初回引数 / `ENSEMBLE_OPERATOR_MESSAGE` / operator-agent UDS） |
 | **OpenQuestionRegistry** | TODO リスト（`inq-N`）。tool で読む |
-| **UDS control API** | Open Question の一覧・回答、watch snapshot、明示 outbound `operator.message` を扱う。回答と message は独立した経路で conductor に届く |
+| **UDS control API** | Open Question の一覧・回答、`session.observe` snapshot、`operator.message.send` を扱う。回答と message は独立し、message は既存 `submitOperatorInput` 経由で event queue に入る |
 | **SDK 会話** | LLM 会話履歴の正本（オペレータ発話・tool 結果を含む） |
 
 **ツール使い分け**
@@ -371,7 +372,9 @@ Issue session 内で worker に指示し、ユーザへ結果を返す agent は
 
 `ask_human` の `responseType` は `text`、`yes_no`、`choice` を指定できます。`yes_no` の回答は全文を保持し、共通パーサーの結果を `assent: yes | no | unclear` として記録します。`approved` は `relatedPermissionId` を持つ `yes_no` に限り、`yes` / `no` から導出します。`choice` は `choices: [{ id, label }]` を回答候補として登録します。オペレータは候補以外の自由記述でも回答でき、回答全文は常に保存されます。ID / 一意な label / 1 始まり番号で一意に解決できた場合だけ option id を `selectedChoice` に記録し、重複 label など曖昧な入力は自由記述として扱います。conductor が `answer_open_question` で代行記録する場合も、候補に解決できない回答を自由記述として記録できます。
 
-稼働中 harness は Open Question の live list / answer、watch pool 用 `session.observe` snapshot、明示 outbound `operator.message` を UDS で提供し、operator-agent は session sidecar から path を得る client です。通常 message は Open Question の回答として記録されず、watch snapshot の取得とも独立しています。wire format、request/result schema、回答 acknowledgement、停止時の unknown outcome、security / privacy は [live Open Question control API reference](live-open-question-control-api.md) を参照してください。
+稼働中 harness は Open Question の live list / answer、watch pool 用 `session.observe` snapshot、`operator.message.send` を UDS で提供し、operator-agent は session sidecar から path を得る client です。通常 message は Open Question の回答として記録されず、watch snapshot の取得とも独立しています。wire format、request/result schema、回答 acknowledgement と `{ queued: true, delivery }` response、停止時の unknown outcome、security / privacy は [live harness control API reference](live-open-question-control-api.md) を参照してください。
+
+オペレータメッセージは `delivery: 'idle' | 'next' | 'interrupt'` を指定でき、省略時は `next` です。TTY は `/idle ...` / `/next ...` / `/interrupt ...` prefix、operator-agent は `send_operator_message` tool から指定します。`idle` は実行中 worker や送信可能な自律イベントの処理が落ち着くまでキューに残り、post-loop でも Driver が送ります。max-turns 後も operator message は送信可能で、dispatch hold は配送可能になった operator message を保留しません。`interrupt` は backend の run cancel を試し、失敗時は `next` と同じ次回 dispatch に戻ります（[#86](https://github.com/otolab/agents-ensemble/issues/86)）。
 
 **ConductorSession ループ**（[ADR 0009](adr/0009-conductor-session-event-queue.md)）
 

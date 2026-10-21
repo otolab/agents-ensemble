@@ -29,7 +29,6 @@ import {
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 import {
   createReleaseReportsTool,
-  createSendOperatorMessageTool,
   createSetReportHoldTool,
 } from './operator-control-tools.js';
 import {
@@ -41,6 +40,7 @@ import {
 import {
   createAnswerLiveOpenQuestionTool,
   createListLiveOpenQuestionsTool,
+  createSendOperatorMessageTool,
 } from './open-question-control-tools.js';
 import {
   clearOperatorAgentState,
@@ -77,6 +77,11 @@ interface OperatorRuntime {
   modelId: string;
   systemPrompt: string;
 }
+
+const ANSI_RESET = '\u001b[0m';
+const ANSI_DIM = '\u001b[2m';
+const ANSI_CYAN = '\u001b[36m';
+const ANSI_RED = '\u001b[31m';
 
 /** Start an operator-role conversation on an interactive terminal. */
 export async function runOperatorAgent(
@@ -167,6 +172,8 @@ export async function runOperatorAgent(
       stdout,
       dispatchQueue,
       watchPool,
+      colorEnabled:
+        Boolean(stdin.isTTY && stdout.isTTY) && process.env.NO_COLOR === undefined,
     });
     if (exitContinuity) {
       await clearOperatorAgentState(runtime.repoRoot);
@@ -220,6 +227,7 @@ async function runTtyConversation(options: {
   stdout: OperatorAgentOutput;
   dispatchQueue: ReturnType<typeof createOperatorDispatchQueue>;
   watchPool: OperatorWatchPool;
+  colorEnabled: boolean;
 }): Promise<boolean> {
   const terminal = createInterface({
     input: options.stdin,
@@ -244,8 +252,12 @@ async function runTtyConversation(options: {
   terminal.on('SIGINT', handleInterrupt);
   process.on('SIGINT', handleInterrupt);
   process.on('SIGTERM', handleTermination);
-  options.stdout.write(
-    `operator-agent (${options.backend}) ready — enter /exit to start a fresh session next time.\n`,
+  writeStatusLine(
+    options.stdout,
+    'operator-agent',
+    `(${options.backend}) ready — enter /exit to start a fresh session next time.`,
+    options.colorEnabled,
+    { leadingBlank: false },
   );
 
   const readInput = async () => {
@@ -255,7 +267,12 @@ async function runTtyConversation(options: {
         if (!message) continue;
         if (isOperatorCommand(message, 'exit')) {
           exitContinuity = true;
-          options.stdout.write('operator-agent session ended.\n');
+          writeStatusLine(
+            options.stdout,
+            'operator-agent',
+            'session ended.',
+            options.colorEnabled,
+          );
           terminal.close();
           break;
         }
@@ -293,7 +310,9 @@ async function runTtyConversation(options: {
             `報告保留中（${options.dispatchQueue.heldEventCount} 件）\n`,
           );
         }
-        options.stdout.write('user> ');
+        options.stdout.write(
+          `${colorize('user>', ANSI_DIM, options.colorEnabled)} `,
+        );
         promptVisible = true;
         shownHeldCount = options.dispatchQueue.heldEventCount;
         shownHold = options.dispatchQueue.hold;
@@ -329,16 +348,28 @@ async function runTtyConversation(options: {
         for (const event of batch.events) {
           if (event.type === 'report') options.dispatchQueue.requeue(event, 5_000);
         }
-        options.stdout.write(
-          `operator-agent error: ${result.error?.message ?? result.result ?? 'request failed'}\n`,
+        writeStatusLine(
+          options.stdout,
+          'operator-agent error:',
+          result.error?.message ?? result.result ?? 'request failed',
+          options.colorEnabled,
+          { color: ANSI_RED },
         );
       } else {
         await options.watchPool.acknowledge(batch.events);
       }
       if (result.status !== 'error' && result.result?.trim()) {
-        options.stdout.write(`operator> ${result.result.trim()}\n`);
+        const response = normalizeOperatorResponse(result.result);
+        options.stdout.write(
+          `\n${colorize('operator>', ANSI_CYAN, options.colorEnabled)}\n${response}\n\n`,
+        );
       } else if (result.status !== 'error') {
-        options.stdout.write(`operator-agent completed (status: ${result.status}).\n`);
+        writeStatusLine(
+          options.stdout,
+          'operator-agent',
+          `completed (status: ${result.status}).`,
+          options.colorEnabled,
+        );
       }
     }
   } finally {
@@ -348,6 +379,26 @@ async function runTtyConversation(options: {
     process.off('SIGTERM', handleTermination);
     terminal.close();
   }
+}
+
+function normalizeOperatorResponse(response: string): string {
+  return response.trim().replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n');
+}
+
+function writeStatusLine(
+  output: OperatorAgentOutput,
+  label: string,
+  detail: string,
+  colorEnabled: boolean,
+  displayOptions: { color?: string; leadingBlank?: boolean } = {},
+): void {
+  const leadingBlank = displayOptions.leadingBlank === false ? '' : '\n';
+  const color = displayOptions.color ?? ANSI_DIM;
+  output.write(`${leadingBlank}${colorize(label, color, colorEnabled)} ${detail}\n\n`);
+}
+
+function colorize(text: string, color: string, enabled: boolean): string {
+  return enabled ? `${color}${text}${ANSI_RESET}` : text;
 }
 
 function assertTty(stdin: OperatorAgentInput, stdout: OperatorAgentOutput): void {

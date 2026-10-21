@@ -6,12 +6,13 @@ import type { Server, Socket } from 'node:net';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OpenQuestionRegistrySnapshot } from '../escalation/open-question.js';
 import type { SessionStateStore } from './session-state-store.js';
+import type { OperatorMessageDelivery } from '../conductor/session/session-event.js';
 
 export const OPEN_QUESTION_CONTROL_METHODS = {
   list: 'open_questions.list',
   answer: 'open_questions.answer',
   observe: 'session.observe',
-  operatorMessage: 'operator.message',
+  sendMessage: 'operator.message.send',
 } as const;
 
 const JSON_RPC_VERSION = '2.0';
@@ -52,7 +53,10 @@ export interface OpenQuestionControlServerOptions {
   answerOpenQuestion: (
     input: OpenQuestionControlAnswer,
   ) => Promise<OpenQuestion>;
-  enqueueOperatorMessage?: (text: string) => boolean;
+  sendOperatorMessage?: (input: {
+    text: string;
+    delivery: OperatorMessageDelivery;
+  }) => boolean | Promise<boolean>;
 }
 
 export interface OpenQuestionControlServer {
@@ -405,29 +409,28 @@ async function handleRequest(
           return errorResponse(requestId, -32601, 'Method not found.');
         }
         return successResponse(requestId, await options.observeSession());
-      case OPEN_QUESTION_CONTROL_METHODS.operatorMessage: {
-        if (!options.enqueueOperatorMessage) {
-          return errorResponse(requestId, -32601, 'Method not found.');
-        }
+      case OPEN_QUESTION_CONTROL_METHODS.sendMessage: {
         const text = typeof params.text === 'string' ? params.text.trim() : '';
-        const delivery = params.delivery;
-        if (
-          !text ||
-          (delivery !== undefined && delivery !== 'next')
-        ) {
+        const delivery = params.delivery ?? 'next';
+        if (!text || !isOperatorMessageDelivery(delivery)) {
           return errorResponse(
             requestId,
             -32602,
-            'A non-empty text and optional delivery "next" are required.',
+            'text must be non-empty and delivery must be idle, next, or interrupt.',
           );
         }
-        if (!options.enqueueOperatorMessage(text)) {
-          return errorResponse(requestId, -32000, 'The session is shutting down.');
+        if (!options.sendOperatorMessage) {
+          return errorResponse(
+            requestId,
+            -32601,
+            'Operator message sending is not available.',
+          );
         }
-        return successResponse(requestId, {
-          accepted: true,
-          delivery: 'next',
-        });
+        const queued = await options.sendOperatorMessage({ text, delivery });
+        if (!queued) {
+          return errorResponse(requestId, -32602, 'Operator message was not accepted.');
+        }
+        return successResponse(requestId, { queued: true, delivery });
       }
       default:
         return errorResponse(requestId, -32601, 'Method not found.');
@@ -443,6 +446,12 @@ async function handleRequest(
     }
     return errorResponse(requestId, -32603, 'Open Question operation failed.');
   }
+}
+
+function isOperatorMessageDelivery(
+  value: unknown,
+): value is OperatorMessageDelivery {
+  return value === 'idle' || value === 'next' || value === 'interrupt';
 }
 
 function toListItem(question: OpenQuestion): OpenQuestionControlListItem {

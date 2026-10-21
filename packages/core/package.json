@@ -48,7 +48,7 @@
   },
   "optionalDependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.70.0",
-    "@agentclientprotocol/codex-acp": "1.6.2",
+    "@agentclientprotocol/codex-acp": "2.2.2",
     "pi-acp": "0.0.33"
   },
   "files": [

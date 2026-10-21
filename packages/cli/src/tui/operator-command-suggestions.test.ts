@@ -11,6 +11,9 @@ describe('operator command suggestions', () => {
       '/reconnect',
       '/exit',
       '/close',
+      '/idle',
+      '/next',
+      '/interrupt',
     ]);
     expect(getOperatorCommandSuggestions('/ex').map(({ name }) => name)).toEqual([
       '/exit',

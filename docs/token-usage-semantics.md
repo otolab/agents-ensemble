@@ -9,11 +9,11 @@
 | 項目 | この文書での意味 |
 |------|------------------|
 | `inputTokens` | backend が input / prompt として報告した件数。harness では非 cache input のバケットとして扱うが、元データの意味は usage source による |
-| `outputTokens` | backend が output / response として報告した件数。reasoning token の扱いは backend による |
+| `outputTokens` | backend が output / response として報告した件数。reasoning が内数か別枠かは backend による |
 | `cacheReadTokens` | backend が cache から読んだ input として報告した件数 |
 | `cacheWriteTokens` | backend が cache に書いた input として報告した件数 |
 | `totalTokens` | backend が返した total。ACP が省略した場合は harness が input と output の和を使い、テキスト推定では推定 input と推定 output の和 |
-| `reasoningTokens` | backend が分離して報告し harness が記録した reasoning 件数。Pi の API では `output` の内数だが、現行 adapter は harness に渡さない |
+| `reasoningTokens` | backend が分離して報告し harness が記録した reasoning 件数。Pi と codex-acp 2.2.2 では `outputTokens` の内数として扱う |
 
 raw backend usage では、cache read / write が `inputTokens` に含まれるか別枠かは一律ではありません。ensemble の排他的バケットとして扱う条件と注意点は §3.3 に示します。source の意味を確かめずに raw fields を足し合わせて総 input を作らないでください。`totalTokens` も別 backend の値と直接比較できる共通の請求単位ではありません。
 
@@ -25,12 +25,14 @@ raw backend usage では、cache read / write が `inputTokens` に含まれる�
 |--------|----------------|-------------------|--------|
 | Cursor SDK (`sdk`) | `@cursor/sdk` の `TokenUsage.inputTokens` / `outputTokens` を記録 | `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens` があれば記録 | SDK が返す各項目をそのまま使う。SDK の `getUsage()` が返す課金値は §3 を参照 |
 | Pi (`sdk`) | `AssistantMessage.usage.input` / `output` を `inputTokens` / `outputTokens` に写す | `cacheRead` / `cacheWrite` があれば写す。Pi の `reasoning` は `output` の内数だが、現行 adapter は harness の `reasoningTokens` に写さない | Pi は複数 provider の API を扱うため、実際の計上範囲は provider による。`usage.cost` はモデル定義の単価からの計算値 |
-| ACP worker (`acp`) | 本リポジトリが `session/prompt` 応答の `usage.inputTokens` / `outputTokens` として受け取った値。`totalTokens` が無ければ harness がこの2項目の和を設定 | 応答に `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens` があれば記録 | ACP preset / agent ごとに報告の有無と意味を確認する必要がある。共通の ACP usage 契約としては扱わない |
+| ACP worker (`acp`) | 本リポジトリが `session/prompt` 応答の `usage.inputTokens` / `outputTokens` として受け取った値。`totalTokens` が無ければ harness がこの2項目の和を設定 | ACP wire の `cachedReadTokens` / `cachedWriteTokens` / `thoughtTokens` を、それぞれ `cacheReadTokens` / `cacheWriteTokens` / `reasoningTokens` に変換して記録 | ACP preset / agent ごとに報告の有無と意味を確認する必要がある。共通の ACP usage 契約としては扱わない |
 | worker テキスト推定 (`estimated`) | prompt と応答テキストそれぞれの UTF‑8 byte 数を 4 で割って切り上げる | cache / reasoning は推定しない | model tokenizer を使わない粗い近似。provider が数えた token 数や課金量ではない |
 
 Cursor SDK は `inputTokens`、`outputTokens`、cache read / write、`totalTokens` を usage として公開します。Pi の `Usage` 型も同様の区分を持ちますが、対応する API や provider は一つではありません。したがって、同じ項目名でも provider をまたいだ意味の同一性は保証されません。[Cursor SDK usage](https://cursor.com/docs/sdk/typescript)、[Pi `Usage` 型 v1.2.0](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/types.ts)
 
 ACP worker の `usage` は `session/prompt` 応答に任意で含まれるデータとして本リポジトリが読み取ります。usage が無い応答は、harness が prompt と応答テキストから推定します。ACP v1 の公式 schema は token usage / cache 計上を共通フィールドとして定義していないため、preset ごとの報告値を provider の usage 定義と照らして読む必要があります（[ACP v1 schema](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/schema/v1/schema.json)、実装上の型は `packages/core/src/acp/types.ts`）。
+
+Codex preset が使う codex-acp 2.2.2 は、wire の `cachedReadTokens` を内部の `cacheReadTokens` に、`cachedWriteTokens` を `cacheWriteTokens` に、`thoughtTokens` を `reasoningTokens` に写します。2.2.2 の Codex usage では `inputTokens` は cache read / write を除いた input、cache counters は別 bucket です。`thoughtTokens` は `outputTokens` に含まれる reasoning の内数です。変換後も `outputTokens` と wire の `totalTokens` はそのまま保ち、`reasoningTokens` をどちらにも足しません。harness は各項目を独立して集計し、wire に `totalTokens` がない場合の既定値だけ `inputTokens + outputTokens` とします（[codex-acp 2.2.2 token usage](https://github.com/agentclientprotocol/codex-acp/blob/v2.2.2/src/TokenCount.ts)、[adapter の変換](../packages/core/src/acp/acp-client.ts)、[集計実装](../packages/core/src/usage/session-usage-tracker.ts)）。
 
 推定値は [estimateTokenUsageFromText](../packages/core/src/usage/estimate-token-usage.ts) が UTF‑8 byte 数から計算します。モデル tokenizer を使わず、画像などの非テキスト入力、内部 tool call、provider が追加する prompt 要素、非表示の reasoning も数えません。完了せず usage が記録されなかった worker ラウンドは、このテキスト推定にも含まれません。
 

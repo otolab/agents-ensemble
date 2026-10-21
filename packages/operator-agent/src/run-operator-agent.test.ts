@@ -22,13 +22,16 @@ describe('runOperatorAgent', () => {
   let closeServers: Array<() => Promise<void>> = [];
   let originalModelEnv: string | undefined;
   let originalProfileEnv: string | undefined;
+  let originalNoColorEnv: string | undefined;
 
   beforeEach(async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-agent-'));
     originalModelEnv = process.env.CONDUCTOR_MODEL_ID;
     originalProfileEnv = process.env.ENSEMBLE_DEFAULT_PROFILE;
+    originalNoColorEnv = process.env.NO_COLOR;
     delete process.env.CONDUCTOR_MODEL_ID;
     delete process.env.ENSEMBLE_DEFAULT_PROFILE;
+    delete process.env.NO_COLOR;
     await mkdir(join(repoRoot, '.ensemble', 'teams', 'smoke'), { recursive: true });
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     await writeFile(
@@ -101,13 +104,18 @@ describe('runOperatorAgent', () => {
     } else {
       process.env.ENSEMBLE_DEFAULT_PROFILE = originalProfileEnv;
     }
+    if (originalNoColorEnv === undefined) {
+      delete process.env.NO_COLOR;
+    } else {
+      process.env.NO_COLOR = originalNoColorEnv;
+    }
     await rm(repoRoot, { recursive: true, force: true });
   });
 
   it('requires both terminal streams before loading config or starting an agent', async () => {
     const loadConfig = vi.fn();
     const input = createInput('hello\n', false);
-    const output = createOutput();
+    const output = createOutput(false);
 
     await expect(
       runOperatorAgent(
@@ -116,6 +124,7 @@ describe('runOperatorAgent', () => {
       ),
     ).rejects.toThrow('requires an interactive TTY');
     expect(loadConfig).not.toHaveBeenCalled();
+    expect(output.capturedText()).not.toContain('\u001b[');
   });
 
   it('runs a Pi-backed TTY conversation with profile prompt and saved session summaries', async () => {
@@ -136,7 +145,8 @@ describe('runOperatorAgent', () => {
         return {
           runId: 'run-1',
           status: 'completed',
-          result: '保存済み sidecar では implementer のセッションが確認できます。',
+          result:
+            '保存済み sidecar では implementer のセッションが確認できます。\n\n\n\nライブ open question も確認できます。',
         };
       },
     });
@@ -152,9 +162,16 @@ describe('runOperatorAgent', () => {
 
     const transcript = output.capturedText();
     expect(sentPrompts).toEqual(['状況を教えて']);
-    expect(transcript).toContain('operator-agent (pi) ready');
-    expect(transcript).toContain('保存済み sidecar では implementer');
-    expect(transcript).toContain('operator-agent session ended.');
+    expect(transcript).toContain(
+      '\u001b[2moperator-agent\u001b[0m (pi) ready — enter /exit to start a fresh session next time.\n\n',
+    );
+    expect(transcript).toContain('\u001b[2muser>\u001b[0m');
+    expect(transcript).toContain(
+      '\u001b[36moperator>\u001b[0m\n保存済み sidecar では implementer のセッションが確認できます。\n\nライブ open question も確認できます。\n\n',
+    );
+    expect(transcript).toContain(
+      '\u001b[2moperator-agent\u001b[0m session ended.\n\n',
+    );
     expect(agentOptions).toMatchObject({
       cwd: repoRoot,
       modelId: 'smoke-model',
@@ -170,6 +187,11 @@ describe('runOperatorAgent', () => {
     expect(agentOptions?.systemPrompt).toContain('answer_live_open_question');
     expect(agentOptions?.systemPrompt).toContain('自動解決はしません');
     expect(agentOptions?.customTools).not.toHaveProperty('prompt_worker');
+    expect(
+      Object.keys(agentOptions?.customTools ?? {}).filter(
+        (toolName) => toolName === 'send_operator_message',
+      ),
+    ).toHaveLength(1);
     expect(Object.keys(agentOptions?.customTools ?? {})).toEqual([
       'list_operator_sessions',
       'list_live_open_questions',
@@ -216,7 +238,9 @@ describe('runOperatorAgent', () => {
       },
     );
 
-    await vi.waitFor(() => expect(output.capturedText()).toContain('user> '));
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+    );
     input.write('監視を開始\n');
     setTimeout(() => input.write('/exit\n'), 750);
     await run;
@@ -307,7 +331,9 @@ describe('runOperatorAgent', () => {
     );
 
     try {
-      await vi.waitFor(() => expect(output.capturedText()).toContain('user> '));
+      await vi.waitFor(() =>
+        expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      );
       input.write('start watching\n');
       await vi.waitFor(() => expect(sentPrompts).toHaveLength(2));
       input.write('/exit\n');
@@ -320,6 +346,67 @@ describe('runOperatorAgent', () => {
     expect(sentPrompts[1]).toContain('## Open Question の更新（2 件）');
     expect(sentPrompts[1]).toContain('Review the implementation?');
     expect(sentPrompts[1]).toContain('Confirm the test result?');
+  });
+
+  it('keeps the TTY transcript free of ANSI escapes when NO_COLOR is set', async () => {
+    process.env.NO_COLOR = '1';
+    const output = createOutput();
+
+    await runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: createInput('hello\n/exit\n'),
+        stdout: output,
+        agentFactory: {
+          create: async () =>
+            createFakeAgent({
+              send: async () => ({
+                runId: 'run-1',
+                status: 'completed',
+                result: 'Plain response.',
+              }),
+            }),
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+
+    const transcript = output.capturedText();
+    expect(transcript).not.toContain('\u001b[');
+    expect(transcript).toContain('user> ');
+    expect(transcript).toContain('operator>\nPlain response.\n\n');
+    expect(transcript).toContain('operator-agent session ended.\n\n');
+  });
+
+  it('gives error rows matching spacing and a colored error label', async () => {
+    const output = createOutput();
+
+    await runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: createInput('hello\n/exit\n'),
+        stdout: output,
+        agentFactory: {
+          create: async () =>
+            createFakeAgent({
+              send: async () => ({
+                runId: 'run-1',
+                status: 'error',
+                error: new Error('Request failed.'),
+              }),
+            }),
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+
+    expect(output.capturedText()).toContain(
+      '\n\u001b[31moperator-agent error:\u001b[0m Request failed.\n\n',
+    );
   });
 
   it('resumes the default session after ordinary TTY termination and lets exit clear it', async () => {
@@ -494,13 +581,15 @@ function createInput(
   return input;
 }
 
-function createOutput(): OperatorAgentOutput & { capturedText: () => string } {
+function createOutput(
+  isTTY = true,
+): OperatorAgentOutput & { capturedText: () => string } {
   const output = new PassThrough() as PassThrough &
     OperatorAgentOutput & { capturedText: () => string };
   const chunks: string[] = [];
   output.on('data', (chunk) => chunks.push(String(chunk)));
   output.capturedText = () => chunks.join('');
-  output.isTTY = true;
+  output.isTTY = isTTY;
   return output;
 }
 
