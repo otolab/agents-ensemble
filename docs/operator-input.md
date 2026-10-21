@@ -61,10 +61,10 @@ type OperatorInputBinding = (
 | モード | 動作 |
 |--------|------|
 | `next`（既定） | 現行どおり、次に選ばれる dispatch で最優先に送る。進行中の `agent.send` は完了を待つ |
-| `idle` | キューには積むが、conductor の send 中、worker が動作中、または送信可能な自律イベントが残っている間は選ばない。自律処理が落ち着いたら通常の operator 優先度で送る |
+| `idle` | キューには積むが、conductor の send 中、worker が動作中、または送信可能な自律イベントが残っている間は選ばない。dispatch hold 自体は待機理由にならず、hold 中は held buffer のイベントがあっても送信できる。hold 解放後に送信可能な held event が残っている場合は、その flush / dispatch を先に行う |
 | `interrupt` | 進行中の conductor run の cancel を試してから送る。cancel が使えない・失敗した場合は警告を記録し、`next` と同じ次回 dispatch にフォールバックする（[#86](https://github.com/otolab/agents-ensemble/issues/86) の最小経路） |
 
-`idle` はセッション終了まで保留する指定ではありません。TTY の post-loop 待機中は Driver が動作を続けており、worker や送信可能なイベントがなければ dispatch されます。max-turns 到達後も operator 入力は dispatch 可能です。実行中 worker があればその終了を待ち、worker event が max-turns で送れない状態まで来たら operator message を先に届けて上限をリセットします。dispatch hold 中も operator message は held buffer に入らず、`idle` の待ち条件を満たした時点で hold を貫通します。Open Question 回答経路は引き続き `next` 固定です。
+`idle` はセッション終了まで保留する指定ではありません。TTY の post-loop 待機中は Driver が動作を続けており、worker や送信可能なイベントがなければ dispatch されます。max-turns 到達後も operator 入力は dispatch 可能です。実行中 worker があればその終了を待ち、worker event が max-turns で送れない状態まで来たら operator message を先に届けて上限をリセットします。dispatch hold 中も operator message は held buffer に入らず、hold の有効中であること自体は `idle` を止めません。そのため、worker と通常 queue の送信可能イベントがなければ、held buffer に自律イベントが残っていても `idle` message は hold を貫通して送られます。hold 解放後は送信可能な held event を先に flush / dispatch し、残った `idle` message はその処理後に送ります。Open Question 回答経路は引き続き `next` 固定です。
 
 operator-agent は `send_operator_message` tool から稼働中 session の UDS control API へ `text` と任意の `delivery` を渡せます。省略時は `next` です。wire schema とエラー応答は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
 

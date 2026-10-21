@@ -682,6 +682,7 @@ function canDispatchIdleOperatorMessage(input: {
   }
   const heldEvents = input.dispatchHoldState.heldEvents;
   if (
+    !input.dispatchHoldState.dispatchHold &&
     heldEvents.length > 0 &&
     (heldEvents.every((event) =>
       canDispatchConductorSend(

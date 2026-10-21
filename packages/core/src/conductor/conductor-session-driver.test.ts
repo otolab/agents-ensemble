@@ -1118,6 +1118,80 @@ describe('runConductorSessionDriver', () => {
     expect(result.autonomousTurns).toBe(1);
   });
 
+  it('allows idle operator messages while dispatch hold remains active', async () => {
+    const holdState = createDispatchHoldState();
+    const eventQueue = new SessionEventQueue();
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onBeforeRelease: () =>
+        bufferDispatchHoldEvents({
+          state: holdState,
+          eventQueue,
+        }),
+    });
+    const shutdown = new AbortController();
+    const idleMessage = 'deliver during the active hold';
+    const send = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await holdTool.set_dispatch_hold!.execute({ hold: true });
+        return { runId: 'run-1', status: 'running', result: 'holding' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain(idleMessage);
+        expect(holdState.dispatchHold).toBe(true);
+        expect(holdState.heldEvents).toHaveLength(1);
+        await holdTool.set_dispatch_hold!.execute({ hold: false });
+        return { runId: 'run-2', status: 'running', result: 'released' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('worker.completed');
+        return { runId: 'run-3', status: 'finished', result: 'worker processed' };
+      });
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const options = createDriverOptions({
+      eventQueue,
+      conductor,
+      maxTurns: 5,
+      runningCount: 1,
+    });
+    const driverPromise = runConductorSessionDriver({
+      ...options,
+      shutdownSignal: shutdown.signal,
+      dispatchHoldState: holdState,
+    });
+
+    await vi.waitFor(() => expect(holdState.dispatchHold).toBe(true));
+    eventQueue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'worker finished',
+      },
+    });
+    await vi.waitFor(() => expect(holdState.heldEvents).toHaveLength(1));
+    options.workerSession.runtime.runningCount = 0;
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: idleMessage,
+      delivery: 'idle',
+    });
+
+    await awaitDriverWithTimeout(driverPromise, shutdown);
+
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(String(send.mock.calls[1]![0])).toContain(idleMessage);
+    expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
+    expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
+  });
+
   it('dispatches held autonomous work before idle operator messages after hold release', async () => {
     const holdState = createDispatchHoldState();
     const eventQueue = new SessionEventQueue();

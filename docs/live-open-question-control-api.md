@@ -125,7 +125,7 @@ Response:
 | `idle` | conductor send 中、worker 実行中、または送信可能な自律イベントが残る間は event queue に保持し、処理が落ち着いた後に送ります。post-loop 待機中と max-turns 到達後も、送信可能になれば dispatch します |
 | `interrupt` | 進行中の conductor run に cancel を試み、cancel 完了後に operator message を優先 dispatch します。backend が cancel を提供しない、または cancel が失敗した場合は warning を記録し、通常の次回 dispatch に戻ります（[#86](https://github.com/otolab/agents-ensemble/issues/86)） |
 
-dispatch hold 中も operator message は hold buffer を通らず、配信可能になれば dispatch します。`idle` は worker と送信可能な自律イベントが落ち着くまで待つため、hold の解除自体を待つ指定ではありません。
+dispatch hold 中も operator message は hold buffer を通りません。hold が有効な間は hold 自体も `idle` の待機理由ではないため、worker と通常 queue の送信可能イベントがなければ、held buffer に自律イベントが残っていても `idle` message を dispatch します。hold 解放後に送信可能な held event が残っている場合は、先に flush / dispatch し、その処理後に `idle` message を送ります。したがって `idle` は hold の解除を待つ指定ではありませんが、解除時点ですでに送信可能な held work があれば、それを追い越す指定でもありません。
 
 ## Persistence、acknowledgment、errors
 
