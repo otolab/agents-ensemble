@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { OpenQuestion } from '@agents-ensemble/core';
 import {
   advanceOpenQuestionSelection,
+  advanceOpenQuestionsScrollOffset,
   buildOpenQuestionListItems,
   clampOpenQuestionSelectionIndex,
   computeMaxOpenQuestionsDisplayLines,
+  resolveOpenQuestionsPaneViewport,
   resolveOpenQuestionsPaneLayout,
 } from './open-questions-pane.js';
 import { OPEN_QUESTIONS_PANE_MIN_HEIGHT } from './tui-layout-constants.js';
@@ -224,6 +226,58 @@ describe('advanceOpenQuestionSelection', () => {
   });
 });
 
+describe('Open questions pane viewport', () => {
+  it('windows the selected full detail and clamps its offset at both ends', () => {
+    const items = buildOpenQuestionListItems(
+      [
+        createQuestion({
+          id: 'inq-long',
+          question: 'Question?',
+          context: Array.from({ length: 8 }, (_, index) => `context-row-${index}`).join('\n'),
+        }),
+      ],
+      0,
+      80,
+    );
+
+    const top = resolveOpenQuestionsPaneViewport({
+      items,
+      selectedIndex: 0,
+      visibleLineCount: 3,
+      linesFromTop: 0,
+    });
+    expect(items[0]?.lines).toHaveLength(9);
+    expect(top.visibleItems[0]?.lines.map((line) => line.map((segment) => segment.text).join('')))
+      .toEqual([
+        '▸ inq-long [text] Question?',
+        '    context-row-0',
+        'context-row-1',
+      ]);
+    expect(top.linesFromTop).toBe(0);
+    expect(top.canScrollUp).toBe(false);
+    expect(top.canScrollDown).toBe(true);
+
+    const bottom = resolveOpenQuestionsPaneViewport({
+      items,
+      selectedIndex: 0,
+      visibleLineCount: 3,
+      linesFromTop: 100,
+    });
+    expect(bottom.visibleItems[0]?.lines.map((line) => line.map((segment) => segment.text).join('')))
+      .toEqual([
+        'context-row-5',
+        'context-row-6',
+        'context-row-7',
+      ]);
+    expect(bottom.linesFromTop).toBe(6);
+    expect(bottom.canScrollUp).toBe(true);
+    expect(bottom.canScrollDown).toBe(false);
+    expect(advanceOpenQuestionsScrollOffset(0, 'up', 6)).toBe(0);
+    expect(advanceOpenQuestionsScrollOffset(0, 'down', 6)).toBe(1);
+    expect(advanceOpenQuestionsScrollOffset(100, 'down', 6)).toBe(6);
+  });
+});
+
 describe('clampOpenQuestionSelectionIndex', () => {
   it('clamps to available questions', () => {
     expect(clampOpenQuestionSelectionIndex(5, 2)).toBe(1);
@@ -288,13 +342,13 @@ describe('resolveOpenQuestionsPaneLayout', () => {
     expect(layout.items[1]?.compact).toBe(true);
     expect(layout.titleText).toContain('1/2');
     expect(layout.contentLineCount).toBe(13);
-    expect(layout.contentLineCount).toBe(
+    expect(layout.contentLineCount).toBeLessThan(
       layout.items.reduce((sum, item) => sum + item.lines.length, 0),
     );
-    expect(layout.items[0]?.lines).toHaveLength(12);
+    expect(layout.items[0]?.lines.length).toBeGreaterThan(12);
     expect(
       layout.items[0]?.lines.at(-1)?.map((segment) => segment.text).join(''),
-    ).toContain('…');
+    ).toContain('context');
   });
 
   it('reserves each non-selected question compact line in the requested height', () => {
@@ -316,9 +370,14 @@ describe('resolveOpenQuestionsPaneLayout', () => {
     expect(layout.items).toHaveLength(3);
     expect(layout.items.slice(1).every((item) => item.compact)).toBe(true);
     expect(layout.items[2]?.lines).toHaveLength(2);
-    expect(layout.contentLineCount).toBe(
-      layout.items.reduce((sum, item) => sum + item.lines.length, 0),
-    );
+    const viewport = resolveOpenQuestionsPaneViewport({
+      items: layout.items,
+      selectedIndex: layout.selectedIndex,
+      visibleLineCount: layout.contentLineCount,
+      linesFromTop: 0,
+    });
+    expect(viewport.contentLineCount).toBe(layout.contentLineCount);
+    expect(viewport.visibleItems.slice(1).every((item) => item.compact)).toBe(true);
   });
 
   it('does not append the discretionary input hint to the title', () => {

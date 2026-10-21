@@ -33,6 +33,15 @@ export interface OpenQuestionsPaneLayout {
   selectedIndex: number;
 }
 
+export interface OpenQuestionsPaneViewport {
+  visibleItems: OpenQuestionListItemRender[];
+  linesFromTop: number;
+  maxLinesFromTop: number;
+  canScrollUp: boolean;
+  canScrollDown: boolean;
+  contentLineCount: number;
+}
+
 const OPEN_QUESTION_COMPACT_MAX_LINES = 2;
 
 /** 端末行数から Open questions 本文の最大表示行数を算出する。 */
@@ -147,52 +156,65 @@ export function countOpenQuestionsDisplayLines(items: OpenQuestionListItemRender
 }
 
 /**
- * Fit selected detail into the content cap while reserving every compact row.
- *
- * Keep the original question order so the selected marker does not jump. When
- * the selected item is too long, only its detail is clipped; compact rows are
- * at most two lines each and remain in the render list.
+ * Window the selected question's full wrapped lines while keeping other
+ * questions in their compact form.
  */
-function fitOpenQuestionItemsToContentLimit(
-  items: OpenQuestionListItemRender[],
-  selectedIndex: number,
-  maxContentLines: number,
-  contentWidth: number,
-): OpenQuestionListItemRender[] {
-  const requestedContentLineCount = countOpenQuestionsDisplayLines(items);
-  if (requestedContentLineCount <= maxContentLines) {
-    return items;
-  }
-
+export function resolveOpenQuestionsPaneViewport(params: {
+  items: OpenQuestionListItemRender[];
+  selectedIndex: number;
+  visibleLineCount: number;
+  linesFromTop: number;
+}): OpenQuestionsPaneViewport {
+  const { items } = params;
+  const selectedIndex = clampOpenQuestionSelectionIndex(
+    params.selectedIndex,
+    items.length,
+  );
   const compactLineCount = items.reduce(
     (sum, item) => sum + (item.compact ? item.lines.length : 0),
     0,
   );
   const selectedItem = items[selectedIndex];
-  if (!selectedItem || selectedItem.compact) {
-    return items;
-  }
+  const visibleLineCount = Math.max(1, Math.floor(params.visibleLineCount));
+  const selectedLineBudget = Math.max(1, visibleLineCount - compactLineCount);
+  const maxLinesFromTop = Math.max(
+    0,
+    (selectedItem?.lines.length ?? 0) - selectedLineBudget,
+  );
+  const linesFromTop = Math.max(
+    0,
+    Math.min(Math.floor(params.linesFromTop), maxLinesFromTop),
+  );
+  const visibleItems = items.map((item, index) =>
+    index === selectedIndex
+      ? {
+          ...item,
+          lines: item.lines.slice(
+            linesFromTop,
+            linesFromTop + selectedLineBudget,
+          ),
+        }
+      : item,
+  );
 
-  // Compact rows have priority. The selected item keeps at least its header
-  // line; if the compact list itself exceeds the cap, the terminal's existing
-  // short/overflow policy remains responsible for the final clipping.
-  const selectedLineBudget = Math.max(1, maxContentLines - compactLineCount);
-  if (selectedItem.lines.length <= selectedLineBudget) {
-    return items;
-  }
+  return {
+    visibleItems,
+    linesFromTop,
+    maxLinesFromTop,
+    canScrollUp: linesFromTop > 0,
+    canScrollDown: linesFromTop < maxLinesFromTop,
+    contentLineCount: countOpenQuestionsDisplayLines(visibleItems),
+  };
+}
 
-  return items.map((item, index) => {
-    if (index !== selectedIndex) {
-      return item;
-    }
-    const lines = item.lines.slice(0, selectedLineBudget);
-    const lastIndex = lines.length - 1;
-    const lastLine = lines[lastIndex];
-    if (lastLine) {
-      lines[lastIndex] = truncateInlineMarkdownLineToWidth(lastLine, contentWidth);
-    }
-    return { ...item, lines };
-  });
+export function advanceOpenQuestionsScrollOffset(
+  linesFromTop: number,
+  direction: 'up' | 'down',
+  maxLinesFromTop: number,
+): number {
+  const current = Math.max(0, Math.min(Math.floor(linesFromTop), maxLinesFromTop));
+  const delta = direction === 'up' ? -1 : 1;
+  return Math.max(0, Math.min(current + delta, maxLinesFromTop));
 }
 
 export function resolveOpenQuestionsPaneLayout(params: {
@@ -222,13 +244,13 @@ export function resolveOpenQuestionsPaneLayout(params: {
     selectedIndex,
     params.contentWidth,
   );
-  const items = fitOpenQuestionItemsToContentLimit(
-    fullItems,
+  const viewport = resolveOpenQuestionsPaneViewport({
+    items: fullItems,
     selectedIndex,
-    maxContentLines,
-    params.contentWidth,
-  );
-  const contentLineCount = Math.max(1, countOpenQuestionsDisplayLines(items));
+    visibleLineCount: maxContentLines,
+    linesFromTop: 0,
+  });
+  const contentLineCount = Math.max(1, viewport.contentLineCount);
 
   const paneHeight = Math.max(
     OPEN_QUESTIONS_PANE_MIN_HEIGHT,
@@ -240,7 +262,7 @@ export function resolveOpenQuestionsPaneLayout(params: {
     titleText,
     titleSuffix,
     contentLineCount,
-    items,
+    items: fullItems,
     selectedIndex,
   };
 }
