@@ -1,5 +1,11 @@
 # @agents-ensemble/core
 
+## 0.14.2
+
+### Patch Changes
+
+- 4f4088f: worker 共通プロンプトに codex-acp サンドボックスと gh 等の実行切り替えの指針を追記する。
+
 ## 0.14.1
 
 ### Patch Changes
