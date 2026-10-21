@@ -35,6 +35,7 @@ interface OperatorSessionSummary {
   reportedAt: number | null;
   statusLineHistory: SessionStateStore['history'];
   lifecycle: SessionLifecycle;
+  liveControlPathRecorded: boolean;
   openQuestionCount: number;
   workers: string[];
   openQuestions: Array<{
@@ -234,6 +235,7 @@ function summarizeSession(
     reportedAt: status?.current.reportedAt ?? null,
     statusLineHistory: status?.history ?? [],
     lifecycle: sidecar.lifecycle ?? 'unknown',
+    liveControlPathRecorded: Boolean(sidecar.harnessSocketPath),
     openQuestionCount: openQuestions.length,
     workers: Object.keys(sidecar.workers).sort(),
     openQuestions: openQuestions.map((question) => ({

@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,7 +31,16 @@ import {
   loadSessionStateStore,
   sessionStateStorePath,
 } from '../session/session-state-store.js';
-import { openQuestionsStorePath } from '../session/open-questions-store.js';
+import {
+  loadOpenQuestionsStore,
+  openQuestionsStorePath,
+} from '../session/open-questions-store.js';
+import * as openQuestionsStoreModule from '../session/open-questions-store.js';
+import {
+  OPEN_QUESTION_CONTROL_METHODS,
+  OpenQuestionControlRemoteError,
+  sendOpenQuestionControlRequest,
+} from '../session/open-question-control.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
 import { runConductorSession as runConductorSessionImpl } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
@@ -130,6 +139,23 @@ function createDeferred<T>(): {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`Promise did not settle within ${timeoutMs}ms.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 async function drainAsync(): Promise<void> {
@@ -806,6 +832,811 @@ describe('runConductorSession resume / shutdown', () => {
       sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
     expect(sidecar?.conductorBackend).toBe('cursor');
+  });
+
+  it('answers a live Open Question through UDS, persists it, and dispatches operator.message', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    let operatorInput: OperatorInputBindingApi | undefined;
+    let sendCount = 0;
+    const receivedOperatorMessage = createDeferred<string>();
+    const shutdown = new AbortController();
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        await conductorTools!.ask_human!.execute({
+          question: 'Proceed with the release?',
+          responseType: 'yes_no',
+          relatedPermissionId: 'perm-1',
+        });
+      } else {
+        receivedOperatorMessage.resolve(message);
+      }
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'done',
+      };
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (api) => {
+        operatorInput = api;
+        return () => {};
+      },
+    });
+
+    try {
+      await vi.waitFor(async () => {
+        const sidecar = await loadSessionSidecar(
+          sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        );
+        expect(sidecar?.harnessSocketPath).toBeTruthy();
+      });
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      const sidecar = await loadSessionSidecar(sidecarPath);
+      const socketPath = sidecar?.harnessSocketPath;
+      expect(socketPath).toBeTruthy();
+
+      let liveList: {
+        questions: Array<{ id: string; question: string }>;
+      } = { questions: [] };
+      await vi.waitFor(async () => {
+        liveList = await sendOpenQuestionControlRequest(socketPath!, {
+          method: OPEN_QUESTION_CONTROL_METHODS.list,
+          params: {},
+        });
+        expect(liveList.questions).toHaveLength(1);
+      });
+      const registryList = await conductorTools!.list_open_questions!.execute({
+        status: 'open',
+      });
+      const registryItems = JSON.parse(
+        registryList.content[0]!.text,
+      ).items as Array<{ id: string; question: string; status: string }>;
+      const liveQuestions = liveList.questions.map(({ id, question }) => ({
+        id,
+        question,
+      }));
+      expect(liveQuestions).toEqual(registryItems.map(({ id, question }) => ({
+        id,
+        question,
+      })));
+
+      await vi.waitFor(async () => {
+        const store = await loadOpenQuestionsStore(
+          openQuestionsStorePath({
+            repoRoot,
+            conductorAgentId: 'agent-test',
+          }),
+        );
+        expect(store?.openQuestions).toHaveLength(1);
+      });
+      const openQuestionsStore = await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      );
+      expect(liveQuestions).toEqual(
+        openQuestionsStore?.openQuestions
+          .filter(({ status }) => status === 'open')
+          .map(({ id, question }) => ({ id, question })),
+      );
+      await sendOpenQuestionControlRequest(socketPath!, {
+        method: OPEN_QUESTION_CONTROL_METHODS.answer,
+        params: { questionId: liveList.questions[0]!.id, answer: 'yes' },
+      });
+
+      const store = await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      );
+      expect(store?.openQuestions[0]).toMatchObject({
+        status: 'answered',
+        answer: 'yes',
+        answeredBy: 'operator',
+        assent: 'yes',
+        approved: true,
+        relatedPermissionId: 'perm-1',
+      });
+      const persistedSidecar = await loadSessionSidecar(sidecarPath);
+      expect(persistedSidecar?.openQuestions).toEqual(store?.openQuestions);
+      expect(persistedSidecar?.harnessSocketPath).toBe(socketPath);
+
+      await expect(receivedOperatorMessage.promise).resolves.toContain(
+        '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
+      );
+      expect(sendCount).toBe(2);
+      expect(
+        await conductorTools!.list_open_questions!.execute({ status: 'open' }),
+      ).toMatchObject({
+        content: [
+          {
+            text: expect.stringContaining('"count": 0'),
+          },
+        ],
+      });
+
+      operatorInput!.submit('/close');
+      await expect(sessionPromise).resolves.toMatchObject({
+        openQuestions: [
+          expect.objectContaining({
+            status: 'answered',
+            answeredBy: 'operator',
+            approved: true,
+          }),
+        ],
+      });
+      const finalSidecar = await loadSessionSidecar(sidecarPath);
+      expect(finalSidecar?.lifecycle).toBe('closed');
+      expect(finalSidecar?.harnessSocketPath).toBeUndefined();
+      await expect(stat(socketPath!)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      shutdown.abort();
+      await sessionPromise.catch(() => {});
+    }
+  });
+
+  it('drains a live UDS answer through persistence and dispatch before /close', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    let operatorInput: OperatorInputBindingApi | undefined;
+    let sendCount = 0;
+    const dispatchStarted = createDeferred<void>();
+    const finishDispatch = createDeferred<void>();
+    const answerFlushStarted = createDeferred<void>();
+    const finishAnswerFlush = createDeferred<void>();
+    const shutdown = new AbortController();
+    const persistOpenQuestions = openQuestionsStoreModule.saveOpenQuestionsStore;
+    vi.spyOn(
+      openQuestionsStoreModule,
+      'saveOpenQuestionsStore',
+    ).mockImplementation(async (path, snapshot) => {
+      if (snapshot.openQuestions.some(({ status }) => status === 'answered')) {
+        answerFlushStarted.resolve();
+        await finishAnswerFlush.promise;
+      }
+      await persistOpenQuestions(path, snapshot);
+    });
+
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        await conductorTools!.ask_human!.execute({
+          question: 'Proceed with the release?',
+          responseType: 'yes_no',
+          relatedPermissionId: 'perm-1',
+        });
+      } else {
+        dispatchStarted.resolve();
+        await finishDispatch.promise;
+        expect(message).toContain(
+          '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
+        );
+      }
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'done',
+      };
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (api) => {
+        operatorInput = api;
+        return () => {};
+      },
+    });
+    let sessionSettled = false;
+    void sessionPromise.then(
+      () => {
+        sessionSettled = true;
+      },
+      () => {
+        sessionSettled = true;
+      },
+    );
+
+    try {
+      await vi.waitFor(async () => {
+        const sidecar = await loadSessionSidecar(
+          sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        );
+        expect(sidecar?.harnessSocketPath).toBeTruthy();
+      });
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      const sidecar = await loadSessionSidecar(sidecarPath);
+      const socketPath = sidecar?.harnessSocketPath;
+      expect(socketPath).toBeTruthy();
+
+      await vi.waitFor(async () => {
+        const store = await loadOpenQuestionsStore(
+          openQuestionsStorePath({
+            repoRoot,
+            conductorAgentId: 'agent-test',
+          }),
+        );
+        expect(store?.openQuestions).toHaveLength(1);
+      });
+      const store = await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      );
+      const answerRequest = sendOpenQuestionControlRequest<{
+        question: { id: string; status: string; answeredBy: string };
+      }>(socketPath!, {
+        method: OPEN_QUESTION_CONTROL_METHODS.answer,
+        params: {
+          questionId: store!.openQuestions[0]!.id,
+          answer: 'yes',
+        },
+      });
+      let answerSettled = false;
+      void answerRequest.then(
+        () => {
+          answerSettled = true;
+        },
+        () => {
+          answerSettled = true;
+        },
+      );
+
+      await answerFlushStarted.promise;
+      expect(sendCount).toBe(1);
+      expect(operatorInput!.submit('/close')).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(sessionSettled).toBe(false);
+      expect(answerSettled).toBe(false);
+
+      finishAnswerFlush.resolve();
+      await vi.waitFor(async () => {
+        const persisted = await loadOpenQuestionsStore(
+          openQuestionsStorePath({
+            repoRoot,
+            conductorAgentId: 'agent-test',
+          }),
+        );
+        expect(persisted?.openQuestions[0]?.status).toBe('answered');
+      });
+      expect(answerSettled).toBe(false);
+      await dispatchStarted.promise;
+      finishDispatch.resolve();
+      await expect(answerRequest).resolves.toMatchObject({
+        question: {
+          id: store!.openQuestions[0]!.id,
+          status: 'answered',
+          answeredBy: 'operator',
+        },
+      });
+      await expect(sessionPromise).resolves.toMatchObject({
+        openQuestions: [
+          expect.objectContaining({
+            status: 'answered',
+            answeredBy: 'operator',
+            approved: true,
+          }),
+        ],
+      });
+
+      const persistedStore = await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        }),
+      );
+      const persistedSidecar = await loadSessionSidecar(sidecarPath);
+      expect(persistedStore?.openQuestions[0]).toMatchObject({
+        status: 'answered',
+        answer: 'yes',
+        answeredBy: 'operator',
+        approved: true,
+      });
+      expect(persistedSidecar?.openQuestions).toEqual(
+        persistedStore?.openQuestions,
+      );
+      expect(sendCount).toBe(2);
+      expect(persistedSidecar?.lifecycle).toBe('closed');
+      expect(persistedSidecar?.harnessSocketPath).toBeUndefined();
+    } finally {
+      finishAnswerFlush.resolve();
+      finishDispatch.resolve();
+      shutdown.abort();
+      await sessionPromise.catch(() => {});
+    }
+  });
+
+  it.each(['operator /close', 'shutdown signal'] as const)(
+    'bounds teardown and reports unknown when UDS answer dispatch never settles (%s)',
+    async (shutdownMode) => {
+      let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+      let operatorInput: OperatorInputBindingApi | undefined;
+      let sendCount = 0;
+      let lateSendReleased = false;
+      const dispatchStarted = createDeferred<void>();
+      const finishDispatch = createDeferred<void>();
+      const lateDispatchReturned = createDeferred<void>();
+      const lateSidecarFlushCompleted = createDeferred<void>();
+      const shutdown = new AbortController();
+      const persistSidecar = sessionSidecarModule.saveSessionSidecar;
+      vi.spyOn(
+        sessionSidecarModule,
+        'saveSessionSidecar',
+      ).mockImplementation(async (path, sidecar) => {
+        await persistSidecar(path, sidecar);
+        if (lateSendReleased) lateSidecarFlushCompleted.resolve();
+      });
+
+      mockCreate.mockImplementationOnce(async (agentOptions) => {
+        conductorTools = agentOptions.customTools;
+        return {
+          agentId: 'agent-test',
+          send: mockSend,
+          close: mockClose,
+          getUsage: createMockConductorGetUsage(),
+        };
+      });
+      mockSend.mockImplementation(async (message: string) => {
+        sendCount += 1;
+        if (sendCount === 1) {
+          await conductorTools!.ask_human!.execute({
+            question: 'Proceed with the release?',
+            responseType: 'yes_no',
+            relatedPermissionId: 'perm-1',
+          });
+        } else {
+          expect(message).toContain(
+            '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
+          );
+          dispatchStarted.resolve();
+          await finishDispatch.promise;
+          lateDispatchReturned.resolve();
+          return {
+            runId: `run-${sendCount}`,
+            status: 'error',
+            error: { message: 'Connection stalled repeatedly' },
+          };
+        }
+        return {
+          runId: `run-${sendCount}`,
+          status: 'finished',
+          result: 'done',
+        };
+      });
+
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        shutdownSignal: shutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        bindOperatorInput: (api) => {
+          operatorInput = api;
+          return () => {};
+        },
+      });
+
+      try {
+        await vi.waitFor(async () => {
+          const sidecar = await loadSessionSidecar(
+            sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+          );
+          expect(sidecar?.harnessSocketPath).toBeTruthy();
+        });
+        const sidecarPath = sessionSidecarPath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        });
+        const socketPath = (
+          await loadSessionSidecar(sidecarPath)
+        )?.harnessSocketPath;
+        expect(socketPath).toBeTruthy();
+
+        const storePath = openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        });
+        await vi.waitFor(async () => {
+          expect(
+            (await loadOpenQuestionsStore(storePath))?.openQuestions,
+          ).toHaveLength(1);
+        });
+        const questionId = (await loadOpenQuestionsStore(storePath))!
+          .openQuestions[0]!.id;
+        const answerOutcome = sendOpenQuestionControlRequest<{
+          question: { id: string; status: string; answeredBy: string };
+        }>(socketPath!, {
+          method: OPEN_QUESTION_CONTROL_METHODS.answer,
+          params: { questionId, answer: 'yes' },
+        }).then(
+          (result) => ({ kind: 'success' as const, result }),
+          (error: unknown) => ({ kind: 'error' as const, error }),
+        );
+
+        await settleWithin(dispatchStarted.promise, 5_000);
+        await vi.waitFor(async () => {
+          expect(
+            (await loadOpenQuestionsStore(storePath))?.openQuestions[0]
+              ?.status,
+          ).toBe('answered');
+        });
+
+        if (shutdownMode === 'operator /close') {
+          expect(operatorInput!.submit('/close')).toBe(false);
+        } else {
+          shutdown.abort();
+        }
+
+        const [sessionResult, outcome] = await Promise.all([
+          settleWithin(sessionPromise, 12_000),
+          settleWithin(answerOutcome, 12_000),
+        ]);
+        expect(outcome.kind).toBe('error');
+        if (outcome.kind === 'error') {
+          expect(outcome.error).toBeInstanceOf(OpenQuestionControlRemoteError);
+          expect(outcome.error).toMatchObject({
+            rpcCode: -32005,
+            data: {
+              outcome: 'unknown',
+              answerStatus: 'recorded',
+              dispatchStatus: 'unknown',
+            },
+          });
+          expect(outcome.error.message.toLowerCase()).toContain(
+            'do not resubmit',
+          );
+        }
+        expect(sessionResult.openQuestions).toEqual([
+          expect.objectContaining({
+            id: questionId,
+            status: 'answered',
+            answer: 'yes',
+            answeredBy: 'operator',
+          }),
+        ]);
+
+        const persistedStore = await loadOpenQuestionsStore(storePath);
+        const persistedSidecar = await loadSessionSidecar(sidecarPath);
+        expect(persistedStore?.openQuestions).toHaveLength(1);
+        expect(persistedStore?.openQuestions[0]).toMatchObject({
+          id: questionId,
+          status: 'answered',
+          answer: 'yes',
+          answeredBy: 'operator',
+        });
+        expect(persistedSidecar?.openQuestions).toEqual(
+          persistedStore?.openQuestions,
+        );
+        expect(persistedSidecar?.harnessSocketPath).toBeUndefined();
+        expect(sendCount).toBe(2);
+
+        lateSendReleased = true;
+        finishDispatch.resolve();
+        await settleWithin(lateDispatchReturned.promise, 1_000);
+        await settleWithin(lateSidecarFlushCompleted.promise, 1_000);
+        expect(mockResume).not.toHaveBeenCalled();
+        expect(sendCount).toBe(2);
+        const sidecarAfterLateSend = await loadSessionSidecar(sidecarPath);
+        expect(sidecarAfterLateSend?.lifecycle).toBe(
+          shutdownMode === 'operator /close' ? 'closed' : 'interrupted',
+        );
+        expect(sidecarAfterLateSend?.harnessSocketPath).toBeUndefined();
+      } finally {
+        finishDispatch.resolve();
+        shutdown.abort();
+        await sessionPromise.catch(() => {});
+      }
+    },
+    20_000,
+  );
+
+  it.each(['operator /close', 'shutdown signal'] as const)(
+    'does not retry a transport error during the Open Question drain grace period (%s)',
+    async (shutdownMode) => {
+      let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+      let operatorInput: OperatorInputBindingApi | undefined;
+      let sendCount = 0;
+      const dispatchStarted = createDeferred<void>();
+      const returnTransportError = createDeferred<void>();
+      const shutdown = new AbortController();
+
+      mockCreate.mockImplementationOnce(async (agentOptions) => {
+        conductorTools = agentOptions.customTools;
+        return {
+          agentId: 'agent-test',
+          send: mockSend,
+          close: mockClose,
+          getUsage: createMockConductorGetUsage(),
+        };
+      });
+      mockSend.mockImplementation(async (message: string) => {
+        sendCount += 1;
+        if (sendCount === 1) {
+          await conductorTools!.ask_human!.execute({
+            question: 'Proceed with the release?',
+            responseType: 'yes_no',
+            relatedPermissionId: 'perm-1',
+          });
+          return {
+            runId: 'run-1',
+            status: 'finished',
+            result: 'question recorded',
+          };
+        }
+        expect(message).toContain(
+          '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
+        );
+        dispatchStarted.resolve();
+        await returnTransportError.promise;
+        return {
+          runId: `run-${sendCount}`,
+          status: 'error',
+          error: { message: 'Connection stalled repeatedly' },
+        };
+      });
+
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        shutdownSignal: shutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        bindOperatorInput: (api) => {
+          operatorInput = api;
+          return () => {};
+        },
+      });
+
+      try {
+        const sidecarPath = sessionSidecarPath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        });
+        await vi.waitFor(async () => {
+          expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+        });
+        const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+        const storePath = openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: 'agent-test',
+        });
+        await vi.waitFor(async () => {
+          expect((await loadOpenQuestionsStore(storePath))?.openQuestions).toHaveLength(1);
+        });
+        const questionId = (await loadOpenQuestionsStore(storePath))!
+          .openQuestions[0]!.id;
+        const answerOutcome = sendOpenQuestionControlRequest(
+          socketPath!,
+          {
+            method: OPEN_QUESTION_CONTROL_METHODS.answer,
+            params: { questionId, answer: 'yes' },
+          },
+        ).then(
+          () => ({ kind: 'success' as const }),
+          (error: unknown) => ({ kind: 'error' as const, error }),
+        );
+
+        await settleWithin(dispatchStarted.promise, 5_000);
+        if (shutdownMode === 'operator /close') {
+          expect(operatorInput!.submit('/close')).toBe(false);
+        } else {
+          shutdown.abort();
+        }
+        returnTransportError.resolve();
+
+        const [sessionResult, outcome] = await Promise.all([
+          settleWithin(sessionPromise, 5_000),
+          settleWithin(answerOutcome, 5_000),
+        ]);
+        expect(outcome.kind).toBe('error');
+        if (outcome.kind === 'error') {
+          expect(outcome.error).toBeInstanceOf(OpenQuestionControlRemoteError);
+          expect(outcome.error).toMatchObject({
+            rpcCode: -32005,
+            data: {
+              outcome: 'unknown',
+              answerStatus: 'recorded',
+              dispatchStatus: 'unknown',
+            },
+          });
+        }
+        expect(sessionResult.openQuestions).toEqual([
+          expect.objectContaining({
+            id: questionId,
+            status: 'answered',
+            answer: 'yes',
+            answeredBy: 'operator',
+          }),
+        ]);
+        expect(sendCount).toBe(2);
+        expect(mockResume).not.toHaveBeenCalled();
+        const persistedStore = await loadOpenQuestionsStore(storePath);
+        const persistedSidecar = await loadSessionSidecar(sidecarPath);
+        expect(persistedStore?.openQuestions[0]?.status).toBe('answered');
+        expect(persistedSidecar?.openQuestions).toEqual(
+          persistedStore?.openQuestions,
+        );
+      } finally {
+        returnTransportError.resolve();
+        shutdown.abort();
+        await sessionPromise.catch(() => {});
+      }
+    },
+  );
+
+  it('keeps a live answer unapplied and undispatched when YAML persistence fails', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    let operatorInput: OperatorInputBindingApi | undefined;
+    let sendCount = 0;
+    const shutdown = new AbortController();
+    const persistOpenQuestions = openQuestionsStoreModule.saveOpenQuestionsStore;
+    vi.spyOn(
+      openQuestionsStoreModule,
+      'saveOpenQuestionsStore',
+    ).mockImplementation(async (path, snapshot) => {
+      if (snapshot.openQuestions.some(({ status }) => status === 'answered')) {
+        throw new Error('simulated open questions YAML persistence failure');
+      }
+      await persistOpenQuestions(path, snapshot);
+    });
+
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async () => {
+      sendCount += 1;
+      await conductorTools!.ask_human!.execute({
+        question: 'Proceed with the release?',
+        responseType: 'yes_no',
+        relatedPermissionId: 'perm-1',
+      });
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'question recorded',
+      };
+    });
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (api) => {
+        operatorInput = api;
+        return () => {};
+      },
+    });
+
+    try {
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+      });
+      const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+      const storePath = openQuestionsStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        expect((await loadOpenQuestionsStore(storePath))?.openQuestions).toHaveLength(1);
+      });
+      const questionId = (await loadOpenQuestionsStore(storePath))!
+        .openQuestions[0]!.id;
+      const outcome = await sendOpenQuestionControlRequest(socketPath!, {
+        method: OPEN_QUESTION_CONTROL_METHODS.answer,
+        params: { questionId, answer: 'yes' },
+      }).then(
+        () => ({ kind: 'success' as const }),
+        (error: unknown) => ({ kind: 'error' as const, error }),
+      );
+
+      expect(outcome.kind).toBe('error');
+      if (outcome.kind === 'error') {
+        expect(outcome.error).toBeInstanceOf(OpenQuestionControlRemoteError);
+        expect(outcome.error).toMatchObject({
+          rpcCode: -32603,
+          data: undefined,
+          message: 'Open Question operation failed.',
+        });
+      }
+      const liveQuestions = await sendOpenQuestionControlRequest<{
+        questions: Array<{ id: string }>;
+      }>(socketPath!, {
+        method: OPEN_QUESTION_CONTROL_METHODS.list,
+      });
+      expect(liveQuestions.questions).toEqual([
+        expect.objectContaining({ id: questionId }),
+      ]);
+      expect((await loadOpenQuestionsStore(storePath))?.openQuestions[0]).toMatchObject({
+        id: questionId,
+        status: 'open',
+      });
+      expect((await loadSessionSidecar(sidecarPath))?.openQuestions[0]).toMatchObject({
+        id: questionId,
+        status: 'open',
+      });
+      expect(sendCount).toBe(1);
+      expect(emitted.some((event) => event.type === 'operator.input')).toBe(false);
+      expect(operatorInput!.submit('/close')).toBe(false);
+      await expect(sessionPromise).resolves.toMatchObject({
+        openQuestions: [
+          expect.objectContaining({ id: questionId, status: 'open' }),
+        ],
+      });
+    } finally {
+      shutdown.abort();
+      await sessionPromise.catch(() => {});
+    }
   });
 
   it('registers the GitHub watch tool and persists a tool registration', async () => {

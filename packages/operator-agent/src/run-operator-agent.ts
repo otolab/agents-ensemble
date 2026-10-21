@@ -21,6 +21,10 @@ import {
 } from '@agents-ensemble/core/operator-runtime';
 import { operatorBaseModule } from './operator-base-module.js';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
+import {
+  createAnswerLiveOpenQuestionTool,
+  createListLiveOpenQuestionsTool,
+} from './open-question-control-tools.js';
 
 export interface RunOperatorAgentOptions {
   repoRoot?: string;
@@ -81,6 +85,8 @@ export async function runOperatorAgent(
       : {}),
     customTools: {
       list_operator_sessions: createListOperatorSessionsTool(runtime.repoRoot),
+      list_live_open_questions: createListLiveOpenQuestionsTool(runtime.repoRoot),
+      answer_live_open_question: createAnswerLiveOpenQuestionTool(runtime.repoRoot),
     },
   });
 

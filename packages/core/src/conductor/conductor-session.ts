@@ -13,7 +13,10 @@ import { createAskHumanTool } from '../escalation/ask-human-tool.js';
 import { createOpenQuestionListTools } from '../escalation/open-question-list-tools.js';
 import { openQuestionToEscalationRecord } from '../escalation/open-question-to-escalation.js';
 import type { OpenQuestion } from '../escalation/open-question.js';
-import { OpenQuestionRegistry } from '../escalation/open-question.js';
+import {
+  OpenQuestionRegistry,
+  type OpenQuestionRegistrySnapshot,
+} from '../escalation/open-question.js';
 import type { EscalationRecord } from '../escalation/human-inquiry.js';
 import { deny } from '../permission/permission-broker.js';
 import type { PermissionPolicyRules } from '../permission/permission-policy.js';
@@ -84,6 +87,7 @@ import { resolvePiConductorProvider } from './conductor-pi-auth.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
+import type { SessionEvent } from './session/session-event.js';
 import {
   bufferDispatchHoldEvents,
   createDispatchHoldState,
@@ -123,6 +127,11 @@ import {
   openQuestionsStorePath,
   saveOpenQuestionsStore,
 } from '../session/open-questions-store.js';
+import {
+  OpenQuestionControlOperationError,
+  startOpenQuestionControlServer,
+  type OpenQuestionControlServer,
+} from '../session/open-question-control.js';
 import type { SessionUsageSummary } from '../usage/types.js';
 import type { PendingPermission } from '../permission/pending-permission.js';
 import { formatPermissionSummaryForOperator } from '../permission/format-permission-summary-for-operator.js';
@@ -274,6 +283,13 @@ export interface ConductorSessionResult {
   sessionUsage?: SessionUsageSummary;
 }
 
+const OPEN_QUESTION_CONTROL_DRAIN_TIMEOUT_MS = 5_000;
+const RECORDED_ANSWER_UNKNOWN_DISPATCH = {
+  outcome: 'unknown',
+  answerStatus: 'recorded',
+  dispatchStatus: 'unknown',
+} as const;
+
 export async function runConductorSession(
   options: RunConductorSessionOptions,
 ): Promise<ConductorSessionResult> {
@@ -306,7 +322,17 @@ export async function runConductorSession(
   }
   const escalations: EscalationRecord[] = [];
   const openQuestions = new OpenQuestionRegistry();
+  let harnessSocketPath: string | undefined;
+  let openQuestionControlServer: OpenQuestionControlServer | undefined;
   const eventQueue = new SessionEventQueue();
+  const openQuestionDispatchReceipts = new WeakMap<
+    SessionEvent,
+    { resolve: () => void; reject: (error: Error) => void }
+  >();
+  const pendingOpenQuestionDispatchReceipts = new Set<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }>();
   const dispatchHoldState = createDispatchHoldState();
   const onDispatchHoldChanged = (change: DispatchHoldChange): void => {
     sessionLogger.emit({
@@ -358,6 +384,7 @@ export async function runConductorSession(
     const sidecar: SessionSidecar = {
       ...loadedSidecar,
       lifecycle: 'unknown',
+      harnessSocketPath: undefined,
       updatedAt: Date.now(),
     };
     await saveSessionSidecar(
@@ -450,12 +477,69 @@ export async function runConductorSession(
     : undefined;
   const shutdownSignal =
     options.shutdownSignal ?? shutdownController!.signal;
+  const shutdownIntentController = new AbortController();
   const operatorTerminationController = new AbortController();
+  const drainedShutdownController = new AbortController();
   const driverShutdownSignal = AbortSignal.any([
-    shutdownSignal,
+    drainedShutdownController.signal,
     operatorTerminationController.signal,
   ]);
+  const abortAfterOpenQuestionDrain = (
+    controller: AbortController,
+  ): void => {
+    const activeControlServer = openQuestionControlServer;
+    if (!activeControlServer) {
+      controller.abort();
+      return;
+    }
+    const reportDrainFailure = (error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: `Open Question control drain failed: ${detail}`,
+      });
+    };
+    const quiescing = activeControlServer.quiesce();
+    if (!activeControlServer.hasInFlightRequests()) {
+      void quiescing.catch(reportDrainFailure);
+      controller.abort();
+      return;
+    }
+    let drainTimeout: ReturnType<typeof setTimeout> | undefined;
+    const drainDeadline = new Promise<'timeout'>((resolve) => {
+      drainTimeout = setTimeout(
+        () => resolve('timeout'),
+        OPEN_QUESTION_CONTROL_DRAIN_TIMEOUT_MS,
+      );
+    });
+    const drainResult = quiescing.then(
+      () => 'drained' as const,
+      (error: unknown) => {
+        reportDrainFailure(error);
+        return 'failed' as const;
+      },
+    );
+    void Promise.race([drainResult, drainDeadline]).then((result) => {
+      if (drainTimeout) clearTimeout(drainTimeout);
+      if (result === 'timeout') {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message: `Open Question control drain exceeded ${OPEN_QUESTION_CONTROL_DRAIN_TIMEOUT_MS}ms; aborting conductor dispatch. Accepted answers may have unknown notification outcomes.`,
+        });
+      }
+      controller.abort();
+    });
+  };
+  const onShutdownSignal = () => {
+    shutdownIntentController.abort();
+    abortAfterOpenQuestionDrain(drainedShutdownController);
+  };
+  shutdownSignal.addEventListener('abort', onShutdownSignal, { once: true });
+  if (shutdownSignal.aborted) onShutdownSignal();
   let unregisterProcessSignalHandlers = () => {};
+  const removeShutdownDrainListener = () =>
+    shutdownSignal.removeEventListener('abort', onShutdownSignal);
+  unregisterProcessSignalHandlers = removeShutdownDrainListener;
   if (
     ownsShutdownController &&
     options.registerProcessSignalHandlers !== false
@@ -466,6 +550,7 @@ export async function runConductorSession(
     unregisterProcessSignalHandlers = () => {
       process.off('SIGINT', onSignal);
       process.off('SIGTERM', onSignal);
+      removeShutdownDrainListener();
     };
   }
 
@@ -968,6 +1053,7 @@ export async function runConductorSession(
   const sendReconnect = {
     conductorAgentFactory,
     conductorOptions,
+    retrySuppressionSignal: shutdownIntentController.signal,
     onAuthReconnectAttempt: ({ agentId }: { agentId: string }) => {
       sessionLogger.emit({
         type: 'conductor.auth.reconnect',
@@ -1000,58 +1086,90 @@ export async function runConductorSession(
   };
 
   let sidecarFlushQueue: Promise<void> = Promise.resolve();
-  flushSidecar = (lifecycle): Promise<void> => {
-    const nextFlush = sidecarFlushQueue.then(async () => {
-      const workers: SessionSidecar['workers'] = {};
-      for (const [name, worker] of workerSessions) {
-        workers[name] = {
-          acpSessionId: worker.acpSessionId,
-          ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
-          ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
-        };
-      }
-      const snapshot = openQuestions.snapshot();
-      const sidecar: SessionSidecar = {
-        version: SESSION_SIDECAR_VERSION,
-        conductorAgentId: conductorHandle.conductor.agentId,
-        conductorBackend,
-        lazyWorkers: activeLazyWorkers,
-        issueUrl: options.issueUrl,
-        repoRoot: options.repoRoot,
-        profile: structuredClone(activeProfile),
-        ...(options.profilePath ? { profilePath: options.profilePath } : {}),
-        openQuestions: snapshot.openQuestions,
-        sequence: snapshot.sequence,
-        workers,
-        mcpConfigDigest,
-        ...(lifecycle ? { lifecycle } : {}),
-        ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
-        updatedAt: Date.now(),
-      };
-      await saveOpenQuestionsStore(
-        openQuestionsStorePath({
-          repoRoot: options.repoRoot,
-          conductorAgentId: conductorHandle.conductor.agentId,
-        }),
-        snapshot,
-      );
-      await saveSessionSidecar(
-        sessionSidecarPath({
-          repoRoot: options.repoRoot,
-          conductorAgentId: conductorHandle.conductor.agentId,
-        }),
-        sidecar,
-      );
-    });
-    sidecarFlushQueue = nextFlush.catch(() => {});
-    return nextFlush;
+  let terminalLifecycle: SessionLifecycle | undefined;
+  const enqueueSidecarWrite = (
+    write: () => Promise<void>,
+  ): Promise<void> => {
+    const nextWrite = sidecarFlushQueue.then(write);
+    sidecarFlushQueue = nextWrite.catch(() => {});
+    return nextWrite;
   };
+  const createSessionSidecar = (
+    snapshot: OpenQuestionRegistrySnapshot,
+    lifecycle?: SessionLifecycle,
+  ): SessionSidecar => {
+    const workers: SessionSidecar['workers'] = {};
+    for (const [name, worker] of workerSessions) {
+      workers[name] = {
+        acpSessionId: worker.acpSessionId,
+        ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
+        ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
+      };
+    }
+    return {
+      version: SESSION_SIDECAR_VERSION,
+      conductorAgentId: conductorHandle.conductor.agentId,
+      conductorBackend,
+      lazyWorkers: activeLazyWorkers,
+      ...(harnessSocketPath ? { harnessSocketPath } : {}),
+      issueUrl: options.issueUrl,
+      repoRoot: options.repoRoot,
+      profile: structuredClone(activeProfile),
+      ...(options.profilePath ? { profilePath: options.profilePath } : {}),
+      openQuestions: snapshot.openQuestions,
+      sequence: snapshot.sequence,
+      workers,
+      mcpConfigDigest,
+      ...((terminalLifecycle ?? lifecycle)
+        ? { lifecycle: terminalLifecycle ?? lifecycle }
+        : {}),
+      ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
+      updatedAt: Date.now(),
+    };
+  };
+  const persistOpenQuestionsSnapshot = async (
+    snapshot: OpenQuestionRegistrySnapshot,
+  ): Promise<void> => {
+    await saveOpenQuestionsStore(
+      openQuestionsStorePath({
+        repoRoot: options.repoRoot,
+        conductorAgentId: conductorHandle.conductor.agentId,
+      }),
+      snapshot,
+    );
+  };
+  const persistSessionSidecar = async (
+    snapshot: OpenQuestionRegistrySnapshot,
+    lifecycle?: SessionLifecycle,
+  ): Promise<void> => {
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot: options.repoRoot,
+        conductorAgentId: conductorHandle.conductor.agentId,
+      }),
+      createSessionSidecar(snapshot, lifecycle),
+    );
+  };
+  flushSidecar = (lifecycle): Promise<void> =>
+    enqueueSidecarWrite(async () => {
+      const snapshot = openQuestions.snapshot();
+      await persistOpenQuestionsSnapshot(snapshot);
+      await persistSessionSidecar(snapshot, lifecycle);
+    });
   const reportSidecarFlushFailure = (error: unknown): void => {
     const detail = error instanceof Error ? error.message : String(error);
     sessionLogger.emit({
       type: 'harness.warning',
       message:
         `Open Question YAML / session sidecar を保存できませんでした。最新状態から再開できず、直前に保存された状態からの再開になる場合があります。 error=${detail}`,
+    });
+  };
+  const reportSessionSidecarWriteFailure = (error: unknown): void => {
+    const detail = error instanceof Error ? error.message : String(error);
+    sessionLogger.emit({
+      type: 'harness.warning',
+      message:
+        `Session sidecar の更新に失敗しました。Open Question YAML の保存は完了しており、sidecar は後続 flush で同期します。 error=${detail}`,
     });
   };
   scheduleSidecarFlush = () => {
@@ -1240,14 +1358,16 @@ export async function runConductorSession(
           sessionLogger.emit({ type: 'session.operator_exit' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedExit = true;
-          operatorTerminationController.abort();
+          shutdownIntentController.abort();
+          abortAfterOpenQuestionDrain(operatorTerminationController);
           return false;
         }
         if (isOperatorCloseCommand(message)) {
           sessionLogger.emit({ type: 'session.operator_close' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedClose = true;
-          operatorTerminationController.abort();
+          shutdownIntentController.abort();
+          abortAfterOpenQuestionDrain(operatorTerminationController);
           return false;
         }
         if (isOperatorReconnectCommand(message)) {
@@ -1282,6 +1402,136 @@ export async function runConductorSession(
   }
 
   try {
+    openQuestionControlServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => openQuestions.listOpen(),
+      answerOpenQuestion: async ({ questionId, answer }) => {
+        if (teardownStarted) {
+          throw new OpenQuestionControlOperationError(
+            -32000,
+            'The session is shutting down.',
+          );
+        }
+        const current = openQuestions.get(questionId);
+        if (!current || current.status !== 'open') {
+          throw new OpenQuestionControlOperationError(
+            -32004,
+            'Open Question is not available.',
+          );
+        }
+        let accepted = false;
+        let sidecarWriteError: unknown;
+        let dispatchReceipt: Promise<void> | undefined;
+        let answered: OpenQuestion | undefined;
+        const escalatedRecords: EscalationRecord[] = [];
+
+        await enqueueSidecarWrite(async () => {
+          const stagedOpenQuestions = new OpenQuestionRegistry();
+          stagedOpenQuestions.restore(openQuestions.snapshot());
+          const stagedAccepted = submitOperatorInput({
+            message: answer,
+            targetOpenQuestionId: questionId,
+            conductorTurn: sendCount + 1,
+            openQuestions: stagedOpenQuestions,
+            escalations: [],
+            eventQueue: new SessionEventQueue(),
+            sessionLogger: { emit: () => {} },
+          });
+          const stagedAnswer = stagedOpenQuestions.get(questionId);
+          if (
+            !stagedAccepted ||
+            !stagedAnswer ||
+            stagedAnswer.status !== 'answered'
+          ) {
+            return;
+          }
+
+          // The Open Questions YAML is the durable commit point. Do not expose
+          // the answer in the live Registry or event queue until this succeeds.
+          await persistOpenQuestionsSnapshot(stagedOpenQuestions.snapshot());
+
+          // Another answer path may have won while the atomic YAML write was
+          // in flight. Restore the current Registry snapshot before rejecting.
+          if (openQuestions.get(questionId)?.status !== 'open') {
+            await persistOpenQuestionsSnapshot(openQuestions.snapshot());
+            return;
+          }
+
+          accepted = submitOperatorInput({
+            message: answer,
+            targetOpenQuestionId: questionId,
+            answeredAt: stagedAnswer.answeredAt,
+            conductorTurn: sendCount + 1,
+            openQuestions,
+            escalations,
+            eventQueue,
+            sessionLogger,
+            onEscalated: (record) => escalatedRecords.push(record),
+            onOperatorMessageQueued: (event) => {
+              let receipt!: {
+                resolve: () => void;
+                reject: (error: Error) => void;
+              };
+              dispatchReceipt = new Promise<void>((resolve, reject) => {
+                receipt = {
+                  resolve: () => resolve(),
+                  reject: (error) => reject(error),
+                };
+                openQuestionDispatchReceipts.set(event, receipt);
+                pendingOpenQuestionDispatchReceipts.add(receipt);
+              });
+              void dispatchReceipt.catch(() => {});
+            },
+          });
+          answered = openQuestions.get(questionId);
+          if (!accepted || !answered || answered.status !== 'answered') {
+            await persistOpenQuestionsSnapshot(openQuestions.snapshot());
+            accepted = false;
+            return;
+          }
+
+          try {
+            await persistSessionSidecar(openQuestions.snapshot());
+          } catch (error) {
+            // YAML is authoritative and is already durable. Keep the accepted
+            // answer/notification, report the mirror failure, then repair it.
+            sidecarWriteError = error;
+          }
+        });
+        if (!accepted || !answered || answered.status !== 'answered') {
+          throw new OpenQuestionControlOperationError(
+            -32004,
+            'Open Question could not be answered.',
+          );
+        }
+        for (const record of escalatedRecords) {
+          try {
+            options.onEscalated?.(record);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            sessionLogger.emit({
+              type: 'harness.warning',
+              message: `Open Question observer callback failed: ${detail}`,
+            });
+          }
+        }
+        if (sidecarWriteError !== undefined) {
+          reportSessionSidecarWriteFailure(sidecarWriteError);
+          scheduleSidecarFlush();
+        }
+        if (!dispatchReceipt) {
+          throw new OpenQuestionControlOperationError(
+            -32603,
+            'The answer was recorded, but its conductor notification was not queued. The outcome is unknown; do not resubmit the answer and inspect the session state.',
+            RECORDED_ANSWER_UNKNOWN_DISPATCH,
+          );
+        }
+        await dispatchReceipt;
+        return answered;
+      },
+    });
+    harnessSocketPath = openQuestionControlServer.socketPath;
+    await flushSidecar().catch(reportSidecarFlushFailure);
+
     const driverResult = await runConductorSessionDriver({
       issueUrl: options.issueUrl,
       initialPrompt:
@@ -1344,6 +1594,26 @@ export async function runConductorSession(
         });
       },
       onSendComplete: recordSendComplete,
+      onDispatchBatchSettled: ({ events, result, error }) => {
+        for (const event of events) {
+          if (event.type !== 'operator.message') continue;
+          const receipt = openQuestionDispatchReceipts.get(event);
+          if (!receipt) continue;
+          openQuestionDispatchReceipts.delete(event);
+          pendingOpenQuestionDispatchReceipts.delete(receipt);
+          if (error || result?.status !== 'finished') {
+            receipt.reject(
+              new OpenQuestionControlOperationError(
+                -32005,
+                'The answer was recorded and persisted, but conductor notification could not be confirmed. The outcome is unknown; do not resubmit the answer and inspect the session state.',
+                RECORDED_ANSWER_UNKNOWN_DISPATCH,
+              ),
+            );
+          } else {
+            receipt.resolve();
+          }
+        }
+      },
       onOpenQuestionEnqueued: (question) => {
         sessionLogger.emit({ type: 'open.question.enqueued', question });
         options.onOpenQuestionEnqueued?.(question);
@@ -1462,7 +1732,25 @@ export async function runConductorSession(
       });
     }
   } finally {
+    const lifecycle: SessionLifecycle = operatorRequestedClose
+      ? 'closed'
+      : operatorRequestedExit
+        ? 'exited'
+        : shutdownSignal.aborted
+          ? 'interrupted'
+          : 'unknown';
+    terminalLifecycle = lifecycle;
     teardownStarted = true;
+    for (const receipt of pendingOpenQuestionDispatchReceipts) {
+      receipt.reject(
+        new OpenQuestionControlOperationError(
+          -32005,
+          'The answer was recorded and persisted, but the conductor session stopped before notification completed. The outcome is unknown; do not resubmit the answer and inspect the session state.',
+          RECORDED_ANSWER_UNKNOWN_DISPATCH,
+        ),
+      );
+    }
+    pendingOpenQuestionDispatchReceipts.clear();
     const forceShutdown =
       operatorRequestedExit ||
       operatorRequestedClose ||
@@ -1494,6 +1782,23 @@ export async function runConductorSession(
     };
 
     try {
+      const activeControlServer = openQuestionControlServer;
+      openQuestionControlServer = undefined;
+      harnessSocketPath = undefined;
+      if (activeControlServer) {
+        emitTeardownPhase('openQuestionControl');
+        const phaseStart = Date.now();
+        try {
+          await activeControlServer.close();
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message: `Open Question control socket cleanup failed: ${detail}`,
+          });
+        }
+        teardownPhases.openQuestionControl = Date.now() - phaseStart;
+      }
       disposeOperatorInput?.();
       if (permissionDeadlockMonitor) {
         emitTeardownPhase('permissionDeadlockMonitor');
@@ -1621,13 +1926,6 @@ export async function runConductorSession(
         await emitWorktreeRemoval(sessionLogger, options.repoRoot, workerWorktree);
       }
     } finally {
-      const lifecycle: SessionLifecycle = operatorRequestedClose
-        ? 'closed'
-        : operatorRequestedExit
-          ? 'exited'
-          : shutdownSignal.aborted
-            ? 'interrupted'
-            : 'unknown';
       try {
         emitTeardownPhase('flushSidecar');
         await sessionStateWriteQueue;

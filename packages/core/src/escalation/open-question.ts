@@ -38,6 +38,7 @@ export interface EnqueueOpenQuestionInput {
 
 export interface AnswerOpenQuestionInput {
   answer: string;
+  answeredAt?: number;
   assent?: YesNoAssent;
   selectedChoice?: string;
   /** @deprecated Approval is derived from assent for permission-linked yes_no questions. */
@@ -99,7 +100,7 @@ export class OpenQuestionRegistry {
         input.assent !== 'unclear'
           ? input.assent === 'yes'
           : undefined,
-      answeredAt: Date.now(),
+      answeredAt: input.answeredAt ?? Date.now(),
       answeredBy: input.answeredBy,
       sourceMessage: input.sourceMessage,
       rationale: input.rationale,

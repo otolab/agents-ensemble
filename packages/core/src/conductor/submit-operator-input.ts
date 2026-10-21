@@ -6,16 +6,19 @@ import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OpenQuestionRegistry } from '../escalation/open-question.js';
 import type { SessionLogger } from './session/session-logger.js';
 import type { SessionEventQueue } from './session/session-event-queue.js';
+import type { OperatorMessageEvent } from './session/session-event.js';
 
 export interface SubmitOperatorInputInput {
   message: string;
   targetOpenQuestionId?: string;
+  answeredAt?: number;
   conductorTurn: number;
   openQuestions: OpenQuestionRegistry;
   escalations: EscalationRecord[];
   eventQueue: SessionEventQueue;
-  sessionLogger: SessionLogger;
+  sessionLogger: Pick<SessionLogger, 'emit'>;
   onEscalated?: (record: EscalationRecord) => void;
+  onOperatorMessageQueued?: (event: OperatorMessageEvent) => void;
 }
 
 /** オペレータ発話を open question に適用し、conductor キューへ積む。 */
@@ -27,6 +30,7 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
 
   const applied = applyOperatorMessage(input.openQuestions, trimmed, {
     targetQuestionId: input.targetOpenQuestionId,
+    answeredAt: input.answeredAt,
   });
   const text =
     applied.answered.length > 0
@@ -54,6 +58,8 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
     conductorTurn: input.conductorTurn,
     text,
   });
-  input.eventQueue.enqueue({ type: 'operator.message', text });
+  const event: OperatorMessageEvent = { type: 'operator.message', text };
+  input.onOperatorMessageQueued?.(event);
+  input.eventQueue.enqueue(event);
   return true;
 }

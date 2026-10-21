@@ -40,6 +40,7 @@ describe('list_operator_sessions', () => {
         reportedAt: number | null;
         statusLineHistory: Array<{ statusLine: string; reportedAt: number }>;
         lifecycle: string;
+        liveControlPathRecorded: boolean;
         openQuestionCount: number;
         workers: string[];
         openQuestions: Array<{ id: string; question: string }>;
@@ -63,6 +64,7 @@ describe('list_operator_sessions', () => {
           reportedAt: expect.any(Number),
           statusLineHistory: [],
           lifecycle: 'closed',
+          liveControlPathRecorded: false,
           openQuestionCount: 1,
           workers: ['implementer'],
           openQuestions: [

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -99,6 +99,31 @@ describe('session sidecar', () => {
     expect(JSON.parse(await readFile(path, 'utf8')).updatedAt).toEqual(
       loaded?.updatedAt,
     );
+  });
+
+  it('records the live socket path and restricts session sidecar permissions', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-sidecar-'));
+    const path = sessionSidecarPath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-live',
+    });
+    await saveSessionSidecar(
+      path,
+      baseSidecar({
+        conductorAgentId: 'agent-live',
+        repoRoot: tempDir,
+        harnessSocketPath: '/tmp/ens-oq-test/s.sock',
+      }),
+    );
+
+    const [fileInfo, directoryInfo, loaded] = await Promise.all([
+      stat(path),
+      stat(sessionSidecarDir(tempDir)),
+      loadSessionSidecar(path),
+    ]);
+    expect(loaded?.harnessSocketPath).toBe('/tmp/ens-oq-test/s.sock');
+    expect(fileInfo.mode & 0o777).toBe(0o600);
+    expect(directoryInfo.mode & 0o777).toBe(0o700);
   });
 
   it('round-trips worker acpSpawn through save and load', async () => {

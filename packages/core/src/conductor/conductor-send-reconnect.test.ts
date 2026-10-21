@@ -167,6 +167,50 @@ describe('sendConductorWithReconnect', () => {
     });
   });
 
+  it('does not retry a transport error after shutdown has aborted the send', async () => {
+    const controller = new AbortController();
+    const send = vi.fn(async () => {
+      controller.abort();
+      return {
+        runId: 'run-1',
+        status: 'error',
+        error: { message: 'Connection stalled repeatedly' },
+      };
+    });
+
+    const result = await sendConductorWithReconnect(createHandle(send), 'answer', {
+      conductorAgentFactory: createFactory(),
+      conductorOptions: createConductorOptions(),
+      signal: controller.signal,
+    });
+
+    expect(result.status).toBe('error');
+    expect(send).toHaveBeenCalledOnce();
+    expect(mockResume).not.toHaveBeenCalled();
+  });
+
+  it('does not reconnect when shutdown intent arrives before a transport error settles', async () => {
+    const shutdownIntent = new AbortController();
+    const send = vi.fn(async () => {
+      shutdownIntent.abort();
+      return {
+        runId: 'run-1',
+        status: 'error' as const,
+        error: { message: 'Connection stalled repeatedly' },
+      };
+    });
+
+    const result = await sendConductorWithReconnect(createHandle(send), 'answer', {
+      conductorAgentFactory: createFactory(),
+      conductorOptions: createConductorOptions(),
+      retrySuppressionSignal: shutdownIntent.signal,
+    });
+
+    expect(result.status).toBe('error');
+    expect(send).toHaveBeenCalledOnce();
+    expect(mockResume).not.toHaveBeenCalled();
+  });
+
   it('does not reconnect for unrelated conductor errors', async () => {
     const result = {
       runId: 'run-1',

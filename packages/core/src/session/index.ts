@@ -24,6 +24,22 @@ export {
 } from './open-questions-store.js';
 export type { OpenQuestionsStoreDocument } from './open-questions-store.js';
 export {
+  OPEN_QUESTION_CONTROL_METHODS,
+  OpenQuestionControlOperationError,
+  OpenQuestionControlRemoteError,
+  OpenQuestionControlTransportError,
+  sendOpenQuestionControlRequest,
+  startOpenQuestionControlServer,
+} from './open-question-control.js';
+export type {
+  OpenQuestionControlAnswerResult,
+  OpenQuestionControlAnswer,
+  OpenQuestionControlErrorData,
+  OpenQuestionControlListItem,
+  OpenQuestionControlServer,
+  OpenQuestionControlServerOptions,
+} from './open-question-control.js';
+export {
   loadSessionStateStore,
   saveSessionStatusLine,
   SESSION_STATE_STORE_MAX_BYTES,

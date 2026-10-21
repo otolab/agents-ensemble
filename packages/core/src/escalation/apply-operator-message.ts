@@ -4,6 +4,8 @@ import { recordOpenQuestionAnswer } from './record-open-question-answer.js';
 export interface ApplyOperatorMessageOptions {
   /** 回答先の open question id（TUI 選択など）。 */
   targetQuestionId?: string;
+  /** Preserve a staged answer timestamp when committing after persistence. */
+  answeredAt?: number;
 }
 
 export interface ApplyOperatorMessageResult {
@@ -27,6 +29,7 @@ export function applyOperatorMessage(
     const answered = recordOpenQuestionAnswer(registry, {
       id: options.targetQuestionId,
       answer: trimmed,
+      answeredAt: options.answeredAt,
       answeredBy: 'operator',
       sourceMessage: trimmed,
     });
@@ -40,6 +43,7 @@ export function applyOperatorMessage(
     const answered = recordOpenQuestionAnswer(registry, {
       id: open[0]!.id,
       answer: trimmed,
+      answeredAt: options?.answeredAt,
       answeredBy: 'operator',
       sourceMessage: trimmed,
     });
