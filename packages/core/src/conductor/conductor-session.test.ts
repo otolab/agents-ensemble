@@ -2636,7 +2636,7 @@ describe('runConductorSession resume / shutdown', () => {
       repoRoot,
       profile: { workers: [] },
       maxTurns: 5,
-      permissionPipeline,
+      permissionPipeline: new PermissionPipeline({}),
       shutdownSignal: shutdown.signal,
       registerProcessSignalHandlers: false,
     });
