@@ -33,7 +33,7 @@ export const INPUT_PANE_HINT_COLOR = 'blue';
 /** Operator input の `> ` プロンプト色。 */
 export const INPUT_PANE_PROMPT_COLOR = 'blue';
 
-/** Worker 状態ペインの固定高さ（枠線込み。タイトルは上枠線埋め込み + サマリ 4 行）。 */
+/** Worker 状態ペインの既定高さ（枠線込み。動的な高さを渡さない利用箇所向け）。 */
 export const WORKER_PANE_HEIGHT = 6;
 
 /**

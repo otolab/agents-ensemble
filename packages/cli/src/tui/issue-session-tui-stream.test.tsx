@@ -10,6 +10,7 @@ import { cleanup, render } from 'ink-testing-library';
 import type { OpenQuestion } from '@agents-ensemble/core';
 import { IssueSessionTuiStream } from './issue-session-tui-stream.js';
 import { createTuiViewModel } from './tui-view-model.js';
+import { extractTuiPaneFrameStats } from './orchestration-pane-frame.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import { OPERATOR_INPUT_PROMPT } from './tui-layout-constants.js';
 import {
@@ -70,6 +71,11 @@ function createOpenQuestion(
 
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/261';
 const NON_CANONICAL_ISSUE_URL = 'http://github.com/otolab/agents-ensemble/issues/261/';
+const LONG_QUESTION_CONTEXT = Array.from(
+  { length: 40 },
+  (_, index) =>
+    `context-line-${String(index).padStart(2, '0')} ${'wrapped segment '.repeat(6)}`,
+).join('\n');
 
 describe('IssueSessionTuiStream', () => {
   beforeEach(() => {
@@ -461,6 +467,32 @@ describe('IssueSessionTuiStream', () => {
     expect(frame.indexOf('Operator input')).toBeLessThan(frame.indexOf('Workers'));
     expect(frame).toContain('inq-1 (1/1) への回答');
     expect(frame).not.toContain('任意入力');
+  });
+
+  it('sizes the stream Workers pane for conductor and each worker row', () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {
+        conductor: { kind: 'conductor', status: 'idle' },
+        implementer: { kind: 'implementer', status: 'running' },
+        reviewer: { kind: 'reviewer', status: 'idle' },
+      },
+      conductorOutput: null,
+      openQuestions: [],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const frame = lastFrame() ?? '';
+    const stats = extractTuiPaneFrameStats(frame, 'Workers');
+    expect(stats.contentRows).toHaveLength(3);
+    expect(stats.blankRows).toHaveLength(0);
+    expect(frame).toContain('conductor: idle');
+    expect(frame).toContain('implementer: running');
+    expect(frame).toContain('reviewer: idle');
   });
 
   it('keeps operator line and paragraph breaks in stream activity output', () => {
@@ -1380,5 +1412,82 @@ describe('IssueSessionTuiStream', () => {
     expect(lastFrame() ?? '').toContain('› /reconnect');
     expect(lastFrame() ?? '').toContain('2/2');
     expect(lastFrame() ?? '').toContain('▸ inq-2');
+  });
+
+  it('scrolls the selected full context from top to bottom without taking suggestion arrows', async () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [
+        createOpenQuestion({
+          id: 'inq-long',
+          question: 'Choose a mode',
+          responseType: 'choice',
+          context: LONG_QUESTION_CONTEXT,
+          choices: [
+            { id: 'safe', label: 'Safe mode' },
+            { id: 'secure', label: 'Secure mode' },
+          ],
+        }),
+        createOpenQuestion({
+          id: 'inq-next',
+          question: 'Anything else?',
+        }),
+      ],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={() => {}} />,
+    );
+
+    const initialFrame = lastFrame() ?? '';
+    expect(initialFrame).toContain('context-line-00');
+    expect(initialFrame).not.toContain('context-line-39');
+    expect(initialFrame).toContain('Shift+PgUp/PgDnで本文スクロール');
+    expect(initialFrame).toContain('で選択) · Shift+PgUp/PgDn');
+    expect(initialFrame).toContain('› safe: Safe mode');
+
+    stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(2));
+    await flushInkStdin();
+    const scrolledFrame = lastFrame() ?? '';
+    expect(scrolledFrame).not.toContain('context-line-00');
+    expect(scrolledFrame).toContain('context-line-01');
+    expect(scrolledFrame).toContain('› safe: Safe mode');
+
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› secure: Secure mode');
+    expect(lastFrame() ?? '').toContain('context-line-01');
+
+    stdin.write('/');
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› /reconnect');
+    stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
+    await flushInkStdin();
+    const bottomFrame = lastFrame() ?? '';
+    expect(bottomFrame).toContain('context-line-39');
+    expect(bottomFrame).not.toContain('context-line-00');
+    expect(bottomFrame).toContain('› /reconnect');
+
+    stdin.write(INK_TEST_KEYS.shiftDownArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('2/2');
+    stdin.write(INK_TEST_KEYS.shiftUpArrow);
+    await flushInkStdin();
+    const resetFrame = lastFrame() ?? '';
+    expect(resetFrame).toContain('1/2');
+    expect(resetFrame).toContain('context-line-00');
+    expect(resetFrame).not.toContain('context-line-39');
+
+    stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('context-line-39');
+    stdin.write(INK_TEST_KEYS.shiftPageUp.repeat(200));
+    await flushInkStdin();
+    const topFrame = lastFrame() ?? '';
+    expect(topFrame).toContain('context-line-00');
+    expect(topFrame).not.toContain('context-line-39');
   });
 });

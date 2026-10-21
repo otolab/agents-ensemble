@@ -1,5 +1,26 @@
 # @agents-ensemble/cli
 
+## 0.14.0
+
+### Minor Changes
+
+- a35de08: セッション終了サマリに開始時刻と経過時間を追加し、TTY 表示にも経過時間を表示します。
+- c3d6c83: 稼働中の Issue harness にセッション単位 UDS control API を追加し、operator-agent から Open Question の一覧取得と回答を行えるようにしました。終了時の dispatch drain は最大 5 秒とし、回答が保存済み・dispatch 未確認の場合は outcome unknown を返し、停止後の再送で二重回答が起きないようにします。
+- 7b32d52: TTY の Open Question（choice / yes_no）で回答候補を表示し、最初の Enter で補完、次の Enter で送信できるようにします。
+
+### Patch Changes
+
+- 6cfb401: TTY の Ink TUI（pane / stream）の Operator input 欄に限り、行頭を `> ` に統一します。Ink を使わない TTY 継続入力（`bindAsyncOperatorInput`）の `operator> ` と、非 TUI の stdout 対話ログに付く `operator>` / `conductor>` の話者ラベルは従来どおりです。
+- 56ec2b5: 利用者向けドキュメントに LLM usage の source 別の意味と、集計・課金上の注意を追加します。
+- 853372e: TTY 終了サマリに記録範囲の短い脚注を追加します。
+- 838c964: TTY 終了サマリで agent ごとの token usage と cache 指標を同じ行にまとめます。
+- 10199e1: Workers ペインで worker 名と kind が同じ場合に重複表示を省きます。
+- Updated dependencies [a35de08]
+- Updated dependencies [c3d6c83]
+- Updated dependencies [c4906d7]
+  - @agents-ensemble/core@0.14.0
+  - @agents-ensemble/operator-agent@0.2.0
+
 ## 0.13.0
 
 ### Minor Changes

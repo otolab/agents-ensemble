@@ -95,9 +95,11 @@ question がないときの pane / stream の Operator input は、通常時・p
 
 `pane` では Workers / Orchestration / Operator input を固定表示し、未回答の open question があるときだけ Open questions ペインをその上に追加します。Orchestration はアプリ内の windowing と `PgUp` / `PgDn` / `End` で操作します。`PgUp` 中に新着 activity log が追記された場合は、表示行数の差分を detached offset に反映して同じログ行を維持します。`End` で最新へ追従します。
 
+Workers ペインの高さは内容駆動です。conductor と登録 worker の各状態行、または worker 未登録時の待機表示に合わせて高さを取り、端末内では Open questions・Operator input と Orchestration の最低高さを保てる範囲が上限になります。短い端末や worker 数が多い場合、枠に収まらない状態行はクリップされます。Workers ペイン内のスクロールは行いません。
+
 活動ログは投稿本文の明示的な改行と段落間の空行を表示行として保ち、端末幅に合わせて各行を折り返します。複数行の投稿ではラベルを独立行に置き、本文を次の行から表示します。これは pane と stream の両方に適用されます。pane は可視行数を超えた過去ログをスクロールで確認でき、stream は端末 scrollback に追記します。
 
-Open questions は内容駆動で高さを決めます。選択中 question の `question` / `context` / `choices` は、それぞれ明示的な改行・段落・リスト構造を保って折り返します。非選択 question は question、context、choices の順に最大 2 行まで表示し、続きがある場合は 2 行目の末尾に `…` を付けます。pane / stream とも、まず compact 行を確保し、残りを選択中の detail に割り当てます。通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。選択中の detail が上限を超える場合は、表示できる末尾行に `…` を付けて省略を示します。端末の高さ、または compact 行を確保した残りの本文上限を超える内容はクリップされることがあり、Open questions ペイン内のスクロールは行いません。
+Open questions は内容駆動で高さを決めます。選択中 question の `question` / `context` / `choices` は、それぞれ明示的な改行・段落・リスト構造を保って折り返し、全表示行を保持します。非選択 question は question、context、choices の順に最大 2 行まで表示し、続きがある場合は 2 行目の末尾に `…` を付けます。pane / stream とも、まず compact 行を確保し、残りを選択中の detail に割り当てます。通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。選択中の detail が表示領域を超える場合は、本文を表示行単位で windowing します。Ctrl と Meta を付けない `Shift+PgUp/PgDn` で選択中 question の本文を 1 表示行ずつ上下にスクロールし、タイトルに操作キーと上下の続きがある方向を示します（Ink の `key.meta` には Alt も正規化されます）。このキーは Open questions が表示されている間、活動ログ操作より優先します。pane では plain `PgUp/PgDn`（入力欄が空のとき）と `Ctrl+PgUp/PgDn`（入力欄の内容を問わず）が活動ログ用に残ります。stream では `PgUp`（入力欄が空のとき）または `Ctrl+PgUp` で scrollback を離れ、`End`（入力欄が空のとき）または `Ctrl+End` で最新へ戻ります。質問を `Shift+↑/↓` で切り替えると本文 offset は先頭へ戻ります。
 
 `stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の live frame に `N 件の新着 · End で最新へ` と表示します。入力欄が空のときの `End`、または入力中の `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。通常の detached 経路では既に Static へ渡した prefix の再送・remount・replay は行いません。settled columns shrink の scrollback recovery だけは [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って terminal reset 後に保持済み activity を再出力します。
 
@@ -105,13 +107,13 @@ TTY の pane / stream では、入力が単一行の slash コマンド prefix �
 
 TTY の Ink pane / stream にある Operator input 欄の行頭には `> ` を表示します。ペインタイトルで入力者が分かるため、行頭に `operator` は重ねて表示しません。Ink を使わない TTY 継続入力（`bindAsyncOperatorInput`）では `operator> ` を維持します。非 TTY では対話 readline を開きません。また、非 TUI の stdout 対話ログに付く `operator>` / `conductor>` は入力プロンプトではなく話者ラベルのため、この変更の対象外です。
 
-候補が出ると先頭の候補が選択状態になり、`›` と強調表示で分かります。上下矢印で選択を移動し、一覧の先頭・末尾ではそれ以上移動しません。入力内容を編集すると先頭候補が選び直されます。Open questions が表示されているときの `Shift+↑/↓` は、従来どおり質問の選択に使います。slash 候補の Tab は選択中のコマンド名で入力欄全体を置き換え、入力カーソルを末尾へ移します。Tab だけでは送信・実行せず、Enter を押すと入力欄の内容を従来どおり submit します。Shift+Tab は補完しません。
+候補が出ると先頭の候補が選択状態になり、`›` と強調表示で分かります。plain `↑/↓` で選択を移動し、一覧の先頭・末尾ではそれ以上移動しません。入力内容を編集すると先頭候補が選び直されます。Open questions が表示されているときは `Shift+PgUp/PgDn` が本文スクロールを最優先し、`Shift+↑/↓` は質問選択に使います。これらの操作は slash 候補・回答候補の表示中も同じです。修飾なしの上下矢印は slash 候補、回答候補、textarea のカーソル操作の順に扱います。slash 候補の Tab は選択中のコマンド名で入力欄全体を置き換え、入力カーソルを末尾へ移しますが、送信はしません。Enter を押すと入力欄の内容を従来どおり submit します。Shift+Tab は補完しません。
 
 候補がない入力、通常の入力、複数行入力では、上下矢印を含む既存の textarea 操作を使います。候補は、候補名の prefix として一致しない slash 付き本文や複数行入力には表示しません。IME 物理カーソルは従来どおり入力欄の caret に追従します。
 
 モード A では、選択中の Open Question が `choice`（選択肢が 1 件以上）または `yes_no` のとき、入力欄が単一行であれば回答候補も表示します。入力が空なら全候補を表示し、入力があれば大文字小文字を区別せず prefix で絞り込みます。`choice` は ID・label・候補順の 1 始まり番号で絞り込み、Enter で補完すると ID が入力欄に入ります。`yes_no` は `yes — はい` / `no — いいえ` を表示し、英語または日本語の prefix で絞り込みます。補完値は `yes` / `no` です。`text` の質問と非 TTY 入力には回答候補を表示しません。
 
-回答候補の上下矢印は候補選択に使い、`Shift+↑/↓` は従来どおり質問選択に使います。slash 入力では slash 候補を優先し、回答候補と同時には表示しません。回答候補が表示中の Enter は選択候補を入力欄へ補完するだけで送信しません。候補を補完した後の Enter は、従来どおり選択中の質問 ID を付けて送信します。Tab も回答候補の補完に使えます。補完後は候補表示を閉じ、追記で入力が変わると prefix に応じて再表示します。
+回答候補の plain `↑/↓` は候補選択に使い、`Shift+↑/↓` は従来どおり質問選択に使います。`Shift+PgUp/PgDn` は候補より優先して選択中本文をスクロールします。slash 入力では slash 候補を優先し、回答候補と同時には表示しません。回答候補が表示中の Enter は選択候補を入力欄へ補完するだけで送信しません。候補を補完した後の Enter は、従来どおり選択中の質問 ID を付けて送信します。Tab も回答候補の補完に使えます。補完後は候補表示を閉じ、追記で入力が変わると prefix に応じて再表示します。
 
 回答の意味付けは既存 core の規則に従います。choice の `selectedChoice` は回答全文が ID・一意な label・候補順の番号に解決できる場合だけ記録され、理由などを追記した回答は従来どおり自由記述として扱われます。yes/no も回答全文から assent を判定し、判定できない追記付き回答は `unclear` になります。
 

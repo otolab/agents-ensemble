@@ -170,15 +170,17 @@ Emacs 風を **自前実装** する場合の最小ループ:
 | 経路 | 入力実装 | Emacs 風 |
 |------|----------|----------|
 | TTY + Ink TUI | `OperatorTextArea` → 公開 fork `@otolab/react-ink-textarea`（キルリング / Readline 整合を内蔵） | **ライブラリ内蔵**。`Ctrl+a/e/f/b/d`（`Ctrl+d` はカーソル位置の 1 文字削除）、`Ctrl+p/n`（visual row の上 / 下移動、上端 / 下端は no-op）、`Ctrl+k/u/w/y`、`Alt+b/f/y` をサポート。`Ctrl+r`（履歴逆検索）は **非対応**。 |
-| TTY スクロール | `issue-session-tui.tsx` の `useInput` | `PgUp/PgDn` / `Home`/`End`（入力空時 or Ctrl 修飾）— **編集ショートカットとは別レイヤ**（競合なし） |
+| TTY スクロール | `issue-session-tui.tsx` / `issue-session-tui-stream.tsx` の `useInput` | Open questions 表示中の Ctrl/Meta なし `Shift+PgUp/PgDn`（Ink では Alt も Meta に正規化）は選択中本文を 1 表示行ずつスクロール。pane 活動ログは `PgUp/PgDn` / `Home`/`End`、stream scrollback は `PgUp` / `End` を使う（入力空時 or Ctrl 修飾） |
 | TTY + readline 経路 | Node `readline`（`bindAsyncOperatorInput` / `promptOperatorInput`）。Ink TUI の入力欄とは別系統 | Node / OS 依存 |
 | 非 TTY | 有効な CLI 初回メッセージ（新規セッション） / `ENSEMBLE_OPERATOR_MESSAGE` | 有効な CLI 初回メッセージは 1 回だけ注入。`--continue` / `--resume` で無視された CLI メッセージは注入せず、非 TTY では interactive binding なし |
 
-**`useInput` と TextArea の関係**: 活動ログスクロール用 `useInput` は `Home`/`End`/`PgUp`/`PgDn` を扱います。slash / 回答候補が表示されている単一行入力に限り、同じ `useInput` が上下矢印で候補選択を進めます。この間は TextArea の `Up` / `Down` action を無効にして二重処理を防ぎます。Tab は TextArea の `onTab` callback から候補補完へ渡し、Enter は TextArea の既存 submit action に残します。候補がないときは通常の上下矢印を TextArea のカーソル移動に使い、visual row の境界では TUI 側の履歴操作へ渡します。行編集ショートカット（`Ctrl+a/e/f/b/d/p/n` 等）は引き続き TextArea 内 `useKeyboardInput` が処理し、入力欄に文字があるときはスクロール系は `Ctrl` 修飾時のみ有効。
+**`useInput` と TextArea の関係**: `useInput` は活動ログのスクロール操作を扱います。Open questions が表示されている間、Ctrl / Meta を付けない `Shift+PgUp/PgDn`（Ink では Alt も `key.meta` に正規化）は最優先で、選択中の question detail を折り返し表示 1 行分ずつスクロールします。この間の同キーは活動ログのページスクロールや stream scrollback の detach より優先され、質問を `Shift+↑/↓` で切り替えると本文 offset は先頭に戻ります。pane の plain `PgUp/PgDn` は入力欄が空のとき、`Ctrl+PgUp/PgDn` は入力欄の内容を問わず活動ログ用です。stream は空入力の `PgUp` または `Ctrl+PgUp` で scrollback を離れ、空入力の `End` または `Ctrl+End` で最新へ戻ります。
+
+slash 候補が表示されている単一行入力では、plain `↑/↓` を候補選択に使い、その間 TextArea の `Up` / `Down` action を無効にして二重処理を防ぎます。slash 候補がなく回答候補が表示されている場合、plain `↑/↓` は回答候補を選びます。それ以外は TextArea の既存カーソル移動を保ち、visual row の上下端では plain `↑/↓` を送信履歴の移動に使います。候補選択、Open questions 表示中の `Shift+↑/↓` による質問選択は履歴操作より優先です。Tab は TextArea の `onTab` callback から候補補完へ渡し、Enter は既存の submit / 補完動作に残します。行編集ショートカット（`Ctrl+a/e/f/b/d/p/n` 等）は引き続き TextArea 内 `useKeyboardInput` が処理します。入力欄に文字がある場合、Orchestration と stream scrollback の操作には `Ctrl` 修飾を使います。
 
 ### Slash command 候補のキー操作
 
-TTY の pane / stream では単一行の slash command prefix に一致する候補がある間、候補の先頭を初期選択します。上下矢印で移動し、先頭・末尾では循環しません。候補を編集すると先頭選択へ戻ります。Tab は選択中の候補名で入力全体を置き換え、入力カーソルを末尾へ移しますが submit はしません。続けて Enter を押すと、補完後の入力が従来の Operator input submit 経路へ進みます。
+TTY の pane / stream では単一行の slash command prefix に一致する候補がある間、候補の先頭を初期選択します。plain `↑/↓` で移動し、先頭・末尾では循環しません。Open questions 表示中の `Shift+PgUp/PgDn` はこの候補操作より優先し、選択中 question の本文をスクロールします。`Shift+↑/↓` は質問選択に使います。候補を編集すると先頭選択へ戻ります。Tab は選択中の候補名で入力全体を置き換え、入力カーソルを末尾へ移しますが submit はしません。続けて Enter を押すと、補完後の入力が従来の Operator input submit 経路へ進みます。
 
 ### 通常の上下矢印と送信履歴
 

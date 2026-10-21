@@ -41,6 +41,10 @@ export const INK_TEST_KEYS = {
   shiftEnter: '\x1b[27;2;13~',
   /** xterm: Ctrl+PageUp */
   ctrlPageUp: '\u001B[5;5~',
+  /** xterm: Shift+PageUp */
+  shiftPageUp: '\u001B[5;2~',
+  /** xterm: Shift+PageDown */
+  shiftPageDown: '\u001B[6;2~',
   /** xterm: Shift+Up */
   shiftUpArrow: '\u001B[1;2A',
   /** xterm: Shift+Down */

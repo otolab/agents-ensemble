@@ -29,9 +29,12 @@ import {
 import type { OperatorInputSubmitOptions } from '@agents-ensemble/core';
 import {
   advanceOpenQuestionSelection,
+  advanceOpenQuestionsScrollOffset,
   clampOpenQuestionSelectionIndex,
+  resolveOpenQuestionsPaneViewport,
   resolveOpenQuestionsPaneLayout,
   type OpenQuestionsPaneLayout,
+  type OpenQuestionsPaneViewport,
 } from './open-questions-pane.js';
 import {
   INPUT_PANE_TITLE,
@@ -39,9 +42,9 @@ import {
   INPUT_PANE_HINT_COLOR,
   MAIN_PANE_TITLE,
   OPERATOR_INPUT_PROMPT,
+  PANE_BORDER_ROWS,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
-  WORKER_PANE_HEIGHT,
   WORKER_PANE_TITLE,
 } from './tui-layout-constants.js';
 import { OperatorTextArea } from './operator-text-area.js';
@@ -62,7 +65,7 @@ import {
   computeOperatorInputCursorY,
   computeOrchestrationLogVisibleLineCount,
 } from './compute-operator-input-cursor-y.js';
-import { resolvePaneHeights } from './pane-layout.js';
+import { computeWorkerPaneHeight, resolvePaneHeights } from './pane-layout.js';
 import {
   computeMaxInputDisplayLines,
   isCursorAtVisualBoundary,
@@ -237,7 +240,7 @@ function sortWorkerEntries(
 export function WorkerStatusPane({
   workers,
   dispatchHold,
-  height = WORKER_PANE_HEIGHT,
+  height,
   terminalColumns,
   issueUrl,
   issueLinkMode = 'label',
@@ -250,6 +253,7 @@ export function WorkerStatusPane({
   issueLinkMode?: IssueLinkMode;
 }) {
   const entries = sortWorkerEntries(Object.entries(workers));
+  const paneHeight = height ?? computeWorkerPaneHeight(entries.length);
   const issueTitleRight = issueUrl ? formatIssueLabel(issueUrl) : undefined;
   const dispatchHoldSuffix =
     dispatchHold && (dispatchHold.hold || dispatchHold.heldEventCount > 0)
@@ -265,7 +269,7 @@ export function WorkerStatusPane({
       borderStyle="round"
       borderColor="cyan"
       paddingX={PANE_PADDING_X}
-      height={height}
+      height={paneHeight}
       terminalColumns={terminalColumns}
     >
       {entries.length === 0 ? (
@@ -344,10 +348,12 @@ function OrchestrationPane({
 
 export function OpenQuestionsPane({
   layout,
+  viewport,
   terminalColumns,
   issueLinkMode = 'label',
 }: {
   layout: OpenQuestionsPaneLayout;
+  viewport: OpenQuestionsPaneViewport;
   terminalColumns?: number;
   issueLinkMode?: IssueLinkMode;
 }) {
@@ -355,10 +361,21 @@ export function OpenQuestionsPane({
     return null;
   }
 
+  const scrollIndicators = `${viewport.canScrollUp ? '↑' : ''}${viewport.canScrollDown ? '↓' : ''}`;
+  const scrollHint =
+    viewport.maxLinesFromTop > 0
+      ? `Shift+PgUp/PgDnで本文スクロール ${scrollIndicators}`
+      : undefined;
+  const titleSuffixParts = [layout.titleSuffix, scrollHint].filter(Boolean);
+  const titleSuffix =
+    titleSuffixParts.length > 0
+      ? ` · ${titleSuffixParts.join(' · ')}`
+      : undefined;
+
   return (
     <TitledBorderPane
       title={layout.titleText}
-      titleSuffix={layout.titleSuffix}
+      titleSuffix={titleSuffix}
       borderStyle="round"
       borderColor="magenta"
       paddingX={PANE_PADDING_X}
@@ -366,7 +383,7 @@ export function OpenQuestionsPane({
       terminalColumns={terminalColumns}
       titleBold={false}
     >
-      {layout.items.flatMap((item) =>
+      {viewport.visibleItems.flatMap((item) =>
         item.lines.map((line, lineIndex) => (
           <Text
             key={`${item.id}-${lineIndex}`}
@@ -400,6 +417,7 @@ export function IssueSessionTui({
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [selectedAnswerSuggestionIndex, setSelectedAnswerSuggestionIndex] = useState(0);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
+  const [openQuestionLinesFromTop, setOpenQuestionLinesFromTop] = useState(0);
   const [hiddenAnswerSuggestionQuestionId, setHiddenAnswerSuggestionQuestionId] =
     useState<string>();
   const previousActivityLogRef = useRef(snapshot.activityLog);
@@ -457,6 +475,9 @@ export function IssueSessionTui({
   );
   const openQuestionsPaneHeight =
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
+  const workerPaneHeight = computeWorkerPaneHeight(
+    Object.keys(snapshot.displayState.workers).length,
+  );
   const hintLineCount = operatorInputDisplay.hintLines.reduce(
     (lineCount, hintLine) => lineCount + wrapTextToWidth(hintLine, contentWidth).length,
     commandSuggestionLines.length + answerSuggestionLines.length,
@@ -468,13 +489,23 @@ export function IssueSessionTui({
   });
   const paneHeights = resolvePaneHeights({
     liveFrameRows,
+    workerPaneHeight,
     activityPaneHeight:
       liveFrameRows -
-      WORKER_PANE_HEIGHT -
+      workerPaneHeight -
       openQuestionsPaneHeight -
       inputPaneHeight,
     openQuestionsPaneHeight,
     inputPaneHeight,
+  });
+  const openQuestionViewport = resolveOpenQuestionsPaneViewport({
+    items: openQuestionsLayout.items,
+    selectedIndex: openQuestionsLayout.selectedIndex,
+    visibleLineCount: Math.max(
+      1,
+      paneHeights.openQuestionsPaneHeight - PANE_BORDER_ROWS,
+    ),
+    linesFromTop: openQuestionLinesFromTop,
   });
   const { activityPaneHeight } = paneHeights;
   const visibleLineCount = computeOrchestrationLogVisibleLineCount(activityPaneHeight);
@@ -526,6 +557,10 @@ export function IssueSessionTui({
   }, [openQuestions]);
 
   useEffect(() => {
+    setOpenQuestionLinesFromTop(0);
+  }, [selectedQuestion?.id]);
+
+  useEffect(() => {
     setSelectedAnswerSuggestionIndex(0);
   }, [selectedQuestion?.id]);
 
@@ -541,22 +576,51 @@ export function IssueSessionTui({
   };
 
   useInput((_input, key) => {
+    if (openQuestions.length > 0 && key.shift && !key.ctrl && !key.meta) {
+      if (key.pageUp) {
+        setOpenQuestionLinesFromTop((current) =>
+          advanceOpenQuestionsScrollOffset(
+            current,
+            'up',
+            openQuestionViewport.maxLinesFromTop,
+          ),
+        );
+        return;
+      }
+      if (key.pageDown) {
+        setOpenQuestionLinesFromTop((current) =>
+          advanceOpenQuestionsScrollOffset(
+            current,
+            'down',
+            openQuestionViewport.maxLinesFromTop,
+          ),
+        );
+        return;
+      }
+    }
+
     if (openQuestions.length > 0 && key.shift) {
       if (key.upArrow) {
         setSelectedQuestionIndex((current) =>
           advanceOpenQuestionSelection(current, 'up', openQuestions.length),
         );
+        if (openQuestions.length > 1) {
+          setOpenQuestionLinesFromTop(0);
+        }
         return;
       }
       if (key.downArrow) {
         setSelectedQuestionIndex((current) =>
           advanceOpenQuestionSelection(current, 'down', openQuestions.length),
         );
+        if (openQuestions.length > 1) {
+          setOpenQuestionLinesFromTop(0);
+        }
         return;
       }
     }
 
-    if (commandSuggestions.length > 0) {
+    if (commandSuggestions.length > 0 && !key.ctrl && !key.shift && !key.meta) {
       if (key.upArrow) {
         setSelectedCommandIndex((current) =>
           advanceOperatorCommandSelection(current, 'up', commandSuggestions.length),
@@ -571,7 +635,7 @@ export function IssueSessionTui({
       }
     }
 
-    if (answerSuggestions.length > 0) {
+    if (answerSuggestions.length > 0 && !key.ctrl && !key.shift && !key.meta) {
       if (key.upArrow) {
         setSelectedAnswerSuggestionIndex((current) =>
           advanceOpenQuestionAnswerSuggestionSelection(
@@ -764,6 +828,7 @@ export function IssueSessionTui({
             ...openQuestionsLayout,
             paneHeight: paneHeights.openQuestionsPaneHeight,
           }}
+          viewport={openQuestionViewport}
           terminalColumns={terminalColumns}
           issueLinkMode={issueLinkMode}
         />

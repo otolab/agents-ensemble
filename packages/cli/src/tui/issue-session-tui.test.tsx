@@ -12,6 +12,7 @@ import { resolveOperatorInputDisplayMode } from './format-operator-context.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import { extractOrchestrationPaneFrameStats, extractTuiPaneFrameStats } from './orchestration-pane-frame.js';
 import { resolveOpenQuestionsPaneLayout } from './open-questions-pane.js';
+import { computeWorkerPaneHeight } from './pane-layout.js';
 import {
   computeActivityLogLineCapacity,
   computeActivityPaneHeight,
@@ -30,7 +31,6 @@ import {
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
-  WORKER_PANE_HEIGHT,
   WORKER_PANE_TITLE,
 } from './tui-layout-constants.js';
 import type { OpenQuestion } from '@agents-ensemble/core';
@@ -91,6 +91,11 @@ function fillScrollableHarnessLog(viewModel: ReturnType<typeof createTuiViewMode
 const SCROLL_HINT = 'PgUp/PgDn でスクロール';
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/249';
 const NON_CANONICAL_ISSUE_URL = 'http://github.com/otolab/agents-ensemble/issues/249/';
+const LONG_QUESTION_CONTEXT = Array.from(
+  { length: 40 },
+  (_, index) =>
+    `context-line-${String(index).padStart(2, '0')} ${'wrapped segment '.repeat(6)}`,
+).join('\n');
 
 function createOpenQuestion(
   overrides: Partial<OpenQuestion> & Pick<OpenQuestion, 'id' | 'question'>,
@@ -1339,15 +1344,18 @@ describe('IssueSessionTui', () => {
         hintLineCount,
         inputDisplayLineCount: 1,
       });
+      const desiredWorkerPaneHeight = computeWorkerPaneHeight(0);
       const paneHeights = resolvePaneHeights({
         liveFrameRows: 11,
-        activityPaneHeight: 11 - WORKER_PANE_HEIGHT - requestedInputPaneHeight,
+        workerPaneHeight: desiredWorkerPaneHeight,
+        activityPaneHeight:
+          11 - desiredWorkerPaneHeight - requestedInputPaneHeight,
         openQuestionsPaneHeight: 0,
         inputPaneHeight: requestedInputPaneHeight,
       });
       expect(paneHeights).toEqual({
-        workerPaneHeight: 5,
-        activityPaneHeight: 3,
+        workerPaneHeight: 3,
+        activityPaneHeight: 5,
         openQuestionsPaneHeight: 0,
         inputPaneHeight: 3,
       });
@@ -1390,6 +1398,39 @@ describe('IssueSessionTui', () => {
     expect(frame).not.toContain('任意入力');
     expect(frame).not.toContain('/reconnect');
   });
+
+  it.each([1, 2, 5])(
+    'sizes the Workers pane without blank rows for %i workers plus conductor',
+    (workerCount) => {
+      const viewModel = createTuiViewModel();
+      const workers: Record<string, { kind: string; status: 'idle' }> = {
+        conductor: { kind: 'conductor', status: 'idle' },
+      };
+      for (let index = 1; index <= workerCount; index++) {
+        workers[`worker-${index}`] = {
+          kind: `worker-${index}`,
+          status: 'idle',
+        };
+      }
+      viewModel.setDisplayState({
+        workers,
+        conductorOutput: null,
+        openQuestions: [],
+        dispatchHold: { hold: false, heldEventCount: 0 },
+      });
+
+      const { lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      const frame = lastFrame() ?? '';
+      const stats = extractTuiPaneFrameStats(frame, WORKER_PANE_TITLE);
+      expect(stats.contentRows).toHaveLength(workerCount + 1);
+      expect(stats.blankRows).toHaveLength(0);
+      expect(frame).toContain('conductor: idle');
+      expect(frame).toContain(`worker-${workerCount}: idle`);
+    },
+  );
 
   it('switches the lower UI between no-question and question modes', async () => {
     const viewModel = createTuiViewModel();
@@ -1794,6 +1835,83 @@ describe('IssueSessionTui', () => {
   });
 
   describe('open questions selection (stdin integration)', () => {
+    it('scrolls the selected full context from top to bottom without taking suggestion arrows', async () => {
+      const viewModel = createTuiViewModel();
+      viewModel.setDisplayState({
+        workers: {},
+        conductorOutput: null,
+        openQuestions: [
+          createOpenQuestion({
+            id: 'inq-long',
+            question: 'Choose a mode',
+            responseType: 'choice',
+            context: LONG_QUESTION_CONTEXT,
+            choices: [
+              { id: 'safe', label: 'Safe mode' },
+              { id: 'secure', label: 'Secure mode' },
+            ],
+          }),
+          createOpenQuestion({
+            id: 'inq-next',
+            question: 'Anything else?',
+          }),
+        ],
+        dispatchHold: { hold: false, heldEventCount: 0 },
+      });
+
+      const { stdin, lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      const initialFrame = lastFrame() ?? '';
+      expect(initialFrame).toContain('context-line-00');
+      expect(initialFrame).not.toContain('context-line-39');
+      expect(initialFrame).toContain('Shift+PgUp/PgDnで本文スクロール');
+      expect(initialFrame).toContain('で選択) · Shift+PgUp/PgDn');
+      expect(initialFrame).toContain('› safe: Safe mode');
+
+      stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(2));
+      await flushInkStdin();
+      const scrolledFrame = lastFrame() ?? '';
+      expect(scrolledFrame).not.toContain('context-line-00');
+      expect(scrolledFrame).toContain('context-line-01');
+      expect(scrolledFrame).toContain('› safe: Safe mode');
+
+      stdin.write(INK_TEST_KEYS.downArrow);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('› secure: Secure mode');
+      expect(lastFrame() ?? '').toContain('context-line-01');
+
+      stdin.write('/');
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('› /reconnect');
+      stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
+      await flushInkStdin();
+      const bottomFrame = lastFrame() ?? '';
+      expect(bottomFrame).toContain('context-line-39');
+      expect(bottomFrame).not.toContain('context-line-00');
+      expect(bottomFrame).toContain('› /reconnect');
+
+      stdin.write(INK_TEST_KEYS.shiftDownArrow);
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('2/2');
+      stdin.write(INK_TEST_KEYS.shiftUpArrow);
+      await flushInkStdin();
+      const resetFrame = lastFrame() ?? '';
+      expect(resetFrame).toContain('1/2');
+      expect(resetFrame).toContain('context-line-00');
+      expect(resetFrame).not.toContain('context-line-39');
+
+      stdin.write(INK_TEST_KEYS.shiftPageDown.repeat(200));
+      await flushInkStdin();
+      expect(lastFrame() ?? '').toContain('context-line-39');
+      stdin.write(INK_TEST_KEYS.shiftPageUp.repeat(200));
+      await flushInkStdin();
+      const topFrame = lastFrame() ?? '';
+      expect(topFrame).toContain('context-line-00');
+      expect(topFrame).not.toContain('context-line-39');
+    });
+
     it('cycles selection with Shift+arrow keys', async () => {
       const viewModel = createTuiViewModel();
       viewModel.setDisplayState({
@@ -1979,7 +2097,7 @@ describe('IssueSessionTui', () => {
 
       const pinnedFrame = lastFrame() ?? '';
       expect(pinnedFrame).toContain('[harness] line-29');
-      expect(pinnedFrame).not.toContain('[harness] line-16');
+      expect(pinnedFrame).not.toContain('[harness] line-14');
       expect(pinnedFrame).not.toContain(SCROLL_HINT);
 
       stdin.write(INK_TEST_KEYS.pageUp);
@@ -1987,7 +2105,7 @@ describe('IssueSessionTui', () => {
 
       const scrolledFrame = lastFrame() ?? '';
       expect(scrolledFrame).toContain(SCROLL_HINT);
-      expect(scrolledFrame).toContain('[harness] line-16');
+      expect(scrolledFrame).toContain('[harness] line-14');
       expect(scrolledFrame).not.toContain('[harness] line-29');
     });
 
@@ -2021,13 +2139,13 @@ describe('IssueSessionTui', () => {
 
       stdin.write(INK_TEST_KEYS.pageUp);
       await flushInkStdin();
-      expect(lastFrame() ?? '').toContain('[harness] line-16');
+      expect(lastFrame() ?? '').toContain('[harness] line-14');
 
       viewModel.appendActivityLog('harness', 'newest-marker');
       await flushInkStdin();
 
       const detachedFrame = lastFrame() ?? '';
-      expect(detachedFrame).toContain('[harness] line-16');
+      expect(detachedFrame).toContain('[harness] line-14');
       expect(detachedFrame).not.toContain('[harness] newest-marker');
 
       stdin.write(INK_TEST_KEYS.end);
@@ -2068,7 +2186,7 @@ describe('IssueSessionTui', () => {
       const ctrlPageUpFrame = lastFrame() ?? '';
       expect(ctrlPageUpFrame).toContain('typed');
       expect(ctrlPageUpFrame).toContain(SCROLL_HINT);
-      expect(ctrlPageUpFrame).toContain('[harness] line-16');
+      expect(ctrlPageUpFrame).toContain('[harness] line-14');
       expect(ctrlPageUpFrame).not.toContain('[harness] line-29');
     });
   });
