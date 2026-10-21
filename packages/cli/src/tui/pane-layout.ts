@@ -1,8 +1,14 @@
 import {
   INPUT_PANE_BORDER_ROWS,
+  OPEN_QUESTIONS_PANE_MIN_HEIGHT,
   PANE_BORDER_ROWS,
   WORKER_PANE_HEIGHT,
 } from './tui-layout-constants.js';
+
+/** Worker status 行数に合わせた Workers ペインの希望高さ（枠線込み）。 */
+export function computeWorkerPaneHeight(workerCount: number): number {
+  return PANE_BORDER_ROWS + Math.max(1, Math.floor(workerCount));
+}
 
 export interface PaneHeights {
   workerPaneHeight: number;
@@ -54,7 +60,10 @@ export function resolvePaneHeights(params: {
   );
   let openQuestionsPaneHeight =
     params.openQuestionsPaneHeight > 0
-      ? Math.max(MIN_TITLED_PANE_HEIGHT, Math.floor(params.openQuestionsPaneHeight))
+      ? Math.max(
+          OPEN_QUESTIONS_PANE_MIN_HEIGHT,
+          Math.floor(params.openQuestionsPaneHeight),
+        )
       : 0;
   let inputPaneHeight = Math.max(
     MIN_INPUT_PANE_HEIGHT,
@@ -91,7 +100,7 @@ export function resolvePaneHeights(params: {
   if (overflow > 0 && openQuestionsPaneHeight > 0) {
     const shrunk = shrinkHeight(
       openQuestionsPaneHeight,
-      MIN_TITLED_PANE_HEIGHT,
+      OPEN_QUESTIONS_PANE_MIN_HEIGHT,
       overflow,
     );
     openQuestionsPaneHeight = shrunk.height;

@@ -1,7 +1,24 @@
 import { describe, expect, it } from 'vitest';
+import { computeWorkerPaneHeight } from './pane-layout.js';
 import { resolveStreamPaneHeights } from './stream-layout.js';
 
 describe('resolveStreamPaneHeights', () => {
+  it('uses content-driven Workers height and keeps question/input minima at 60x12', () => {
+    const heights = resolveStreamPaneHeights({
+      terminalRows: 12,
+      workerPaneHeight: computeWorkerPaneHeight(6),
+      openQuestionsPaneHeight: 4,
+      inputPaneHeight: 3,
+    });
+
+    expect(heights).toEqual({
+      workerPaneHeight: 4,
+      openQuestionsPaneHeight: 4,
+      inputPaneHeight: 3,
+      dynamicFrameHeight: 11,
+    });
+  });
+
   it('omits the independent open-questions pane when its height is zero', () => {
     const heights = resolveStreamPaneHeights({
       terminalRows: 24,

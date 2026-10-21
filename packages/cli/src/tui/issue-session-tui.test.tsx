@@ -12,6 +12,7 @@ import { resolveOperatorInputDisplayMode } from './format-operator-context.js';
 import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import { extractOrchestrationPaneFrameStats, extractTuiPaneFrameStats } from './orchestration-pane-frame.js';
 import { resolveOpenQuestionsPaneLayout } from './open-questions-pane.js';
+import { computeWorkerPaneHeight } from './pane-layout.js';
 import {
   computeActivityLogLineCapacity,
   computeActivityPaneHeight,
@@ -30,7 +31,6 @@ import {
   OPERATOR_INPUT_CURSOR_Y_OFFSET,
   PANE_PADDING_X,
   ROUND_BORDER_WIDTH,
-  WORKER_PANE_HEIGHT,
   WORKER_PANE_TITLE,
 } from './tui-layout-constants.js';
 import type { OpenQuestion } from '@agents-ensemble/core';
@@ -1160,15 +1160,18 @@ describe('IssueSessionTui', () => {
         hintLineCount,
         inputDisplayLineCount: 1,
       });
+      const desiredWorkerPaneHeight = computeWorkerPaneHeight(0);
       const paneHeights = resolvePaneHeights({
         liveFrameRows: 11,
-        activityPaneHeight: 11 - WORKER_PANE_HEIGHT - requestedInputPaneHeight,
+        workerPaneHeight: desiredWorkerPaneHeight,
+        activityPaneHeight:
+          11 - desiredWorkerPaneHeight - requestedInputPaneHeight,
         openQuestionsPaneHeight: 0,
         inputPaneHeight: requestedInputPaneHeight,
       });
       expect(paneHeights).toEqual({
-        workerPaneHeight: 5,
-        activityPaneHeight: 3,
+        workerPaneHeight: 3,
+        activityPaneHeight: 5,
         openQuestionsPaneHeight: 0,
         inputPaneHeight: 3,
       });
@@ -1211,6 +1214,39 @@ describe('IssueSessionTui', () => {
     expect(frame).not.toContain('任意入力');
     expect(frame).not.toContain('/reconnect');
   });
+
+  it.each([1, 2, 5])(
+    'sizes the Workers pane without blank rows for %i workers plus conductor',
+    (workerCount) => {
+      const viewModel = createTuiViewModel();
+      const workers: Record<string, { kind: string; status: 'idle' }> = {
+        conductor: { kind: 'conductor', status: 'idle' },
+      };
+      for (let index = 1; index <= workerCount; index++) {
+        workers[`worker-${index}`] = {
+          kind: `worker-${index}`,
+          status: 'idle',
+        };
+      }
+      viewModel.setDisplayState({
+        workers,
+        conductorOutput: null,
+        openQuestions: [],
+        dispatchHold: { hold: false, heldEventCount: 0 },
+      });
+
+      const { lastFrame } = render(
+        <IssueSessionTui viewModel={viewModel} onSubmit={() => {}} />,
+      );
+
+      const frame = lastFrame() ?? '';
+      const stats = extractTuiPaneFrameStats(frame, WORKER_PANE_TITLE);
+      expect(stats.contentRows).toHaveLength(workerCount + 1);
+      expect(stats.blankRows).toHaveLength(0);
+      expect(frame).toContain('conductor: idle');
+      expect(frame).toContain(`worker-${workerCount}: idle`);
+    },
+  );
 
   it('switches the lower UI between no-question and question modes', async () => {
     const viewModel = createTuiViewModel();
@@ -1800,7 +1836,7 @@ describe('IssueSessionTui', () => {
 
       const pinnedFrame = lastFrame() ?? '';
       expect(pinnedFrame).toContain('[harness] line-29');
-      expect(pinnedFrame).not.toContain('[harness] line-16');
+      expect(pinnedFrame).not.toContain('[harness] line-14');
       expect(pinnedFrame).not.toContain(SCROLL_HINT);
 
       stdin.write(INK_TEST_KEYS.pageUp);
@@ -1808,7 +1844,7 @@ describe('IssueSessionTui', () => {
 
       const scrolledFrame = lastFrame() ?? '';
       expect(scrolledFrame).toContain(SCROLL_HINT);
-      expect(scrolledFrame).toContain('[harness] line-16');
+      expect(scrolledFrame).toContain('[harness] line-14');
       expect(scrolledFrame).not.toContain('[harness] line-29');
     });
 
@@ -1842,13 +1878,13 @@ describe('IssueSessionTui', () => {
 
       stdin.write(INK_TEST_KEYS.pageUp);
       await flushInkStdin();
-      expect(lastFrame() ?? '').toContain('[harness] line-16');
+      expect(lastFrame() ?? '').toContain('[harness] line-14');
 
       viewModel.appendActivityLog('harness', 'newest-marker');
       await flushInkStdin();
 
       const detachedFrame = lastFrame() ?? '';
-      expect(detachedFrame).toContain('[harness] line-16');
+      expect(detachedFrame).toContain('[harness] line-14');
       expect(detachedFrame).not.toContain('[harness] newest-marker');
 
       stdin.write(INK_TEST_KEYS.end);
@@ -1889,7 +1925,7 @@ describe('IssueSessionTui', () => {
       const ctrlPageUpFrame = lastFrame() ?? '';
       expect(ctrlPageUpFrame).toContain('typed');
       expect(ctrlPageUpFrame).toContain(SCROLL_HINT);
-      expect(ctrlPageUpFrame).toContain('[harness] line-16');
+      expect(ctrlPageUpFrame).toContain('[harness] line-14');
       expect(ctrlPageUpFrame).not.toContain('[harness] line-29');
     });
   });
