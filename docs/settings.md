@@ -10,7 +10,7 @@
 | **環境変数** | シェル / CI | 一時上書き・秘密情報・自動化注入 |
 | **project config** | `<repoRoot>/.ensemble/config.yaml` | リポジトリ単位の既定 |
 | **user config** | `~/.ensemble/config.yaml` | マシン全体の既定 |
-| **user conductor instructions** | `~/.ensemble/AGENTS.md` | profile に依存しない conductor 向けの運用前提 |
+| **user instructions** | `~/.ensemble/AGENTS.md` | profile に依存しない conductor / worker 共通の運用前提 |
 | **team profile** | `profile.yaml`（[elements.md](elements.md)） | worker 構成・workspace（**ACP は含まない → [config.md](config.md)**） |
 | **Codex profile** | `~/.codex/config.toml` + `codex --profile` | Codex CLI の profile（ensemble team profile とは無関係） |
 | **MCP** | `.agents/mcp.json` / `~/.ensemble/mcp.json` | conductor 向け MCP（[config.md § MCP](config.md#conductor-mcp-設定mcpjson)） |
@@ -134,7 +134,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | 設定 | ファイル | 解決順 |
 |------|----------|--------|
 | conductor MCP | `.agents/mcp.json` / `~/.ensemble/mcp.json` | project > user（サーバー名単位 merge） |
-| conductor 向け user 文書 | `~/.ensemble/AGENTS.md` | user 固定。project 層なし |
+| user instructions | `~/.ensemble/AGENTS.md` | user 固定。conductor と worker 全員に適用。project 層なし |
 | team profile | `.ensemble/profiles/…` / `--profile` パス | [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) |
 
 ## 一覧 — ランタイム（利用者が「設定」しない）
@@ -149,7 +149,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 
 | やりたいこと | 推奨 |
 |--------------|------|
-| 複数 repo で conductor に共有する短い運用前提 | `~/.ensemble/AGENTS.md`（[modular-prompt の文書の役割](modular-prompt.md)を参照） |
+| 複数 repo で conductor と worker に共有する短い運用前提 | `~/.ensemble/AGENTS.md`（[modular-prompt の文書の役割](modular-prompt.md)を参照） |
 | チーム / 個人の恒久既定（モデル、worktree、monitor） | `~/.ensemble/config.yaml` または project `.ensemble/config.yaml` |
 | CI で 1 ジョブだけ上書き | 環境変数（`CONDUCTOR_MODEL_ID` 等） |
 | 1 回限りの実行 | CLI フラグ（初回メッセージは `ensemble issue <ref> [message...]`） |
