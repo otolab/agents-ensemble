@@ -143,7 +143,10 @@ import { formatPermissionSummaryForOperator } from '../permission/format-permiss
 import { enrichSessionUsageWithCost } from '../usage/enrich-session-usage-cost.js';
 import { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 import type { OperatorInputBinding } from './operator-input-binding.js';
-import { submitOperatorInput } from './submit-operator-input.js';
+import {
+  enqueueOperatorMessage as enqueueOperatorMessageEvent,
+  submitOperatorInput,
+} from './submit-operator-input.js';
 import {
   createGitHubMonitor,
   type GitHubMonitor,
@@ -1356,6 +1359,29 @@ export async function runConductorSession(
   let operatorRequestedClose = false;
   let disposeOperatorInput: (() => void) | undefined;
 
+  const onOperatorMessageQueued = (delivery: OperatorMessageDelivery): void => {
+    scheduleSidecarFlush();
+    if (delivery !== 'interrupt') return;
+
+    const cancel = conductorHandle.conductor.cancel;
+    if (!cancel) {
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message:
+          'Operator interrupt cancellation is unavailable; the message will use normal next dispatch.',
+      });
+      return;
+    }
+    void cancel.call(conductorHandle.conductor).catch((error: unknown) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message:
+          `Operator interrupt cancellation failed; the message will use normal next dispatch: ${detail}`,
+      });
+    });
+  };
+
   const submitOperatorMessage = (input: {
     message: string;
     delivery?: OperatorMessageDelivery;
@@ -1377,27 +1403,24 @@ export async function runConductorSession(
         input.onEscalated ?? ((record) => options.onEscalated?.(record)),
     });
     if (!received) return false;
+    onOperatorMessageQueued(delivery);
+    return true;
+  };
 
-    scheduleSidecarFlush();
-    if (delivery === 'interrupt') {
-      const cancel = conductorHandle.conductor.cancel;
-      if (!cancel) {
-        sessionLogger.emit({
-          type: 'harness.warning',
-          message:
-            'Operator interrupt cancellation is unavailable; the message will use normal next dispatch.',
-        });
-      } else {
-        void cancel.call(conductorHandle.conductor).catch((error: unknown) => {
-          const detail = error instanceof Error ? error.message : String(error);
-          sessionLogger.emit({
-            type: 'harness.warning',
-            message:
-              `Operator interrupt cancellation failed; the message will use normal next dispatch: ${detail}`,
-          });
-        });
-      }
-    }
+  const sendOperatorMessage = (input: {
+    message: string;
+    delivery?: OperatorMessageDelivery;
+  }): boolean => {
+    const delivery = input.delivery ?? 'next';
+    const received = enqueueOperatorMessageEvent({
+      ...input,
+      delivery,
+      conductorTurn: sendCount + 1,
+      eventQueue,
+      sessionLogger,
+    });
+    if (!received) return false;
+    onOperatorMessageQueued(delivery);
     return true;
   };
 
@@ -1458,7 +1481,7 @@ export async function runConductorSession(
             'The session is shutting down.',
           );
         }
-        return submitOperatorMessage({ message: text, delivery });
+        return sendOperatorMessage({ message: text, delivery });
       },
       answerOpenQuestion: async ({ questionId, answer }) => {
         if (teardownStarted) {

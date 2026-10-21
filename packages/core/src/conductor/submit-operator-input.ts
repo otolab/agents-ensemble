@@ -25,6 +25,41 @@ export interface SubmitOperatorInputInput {
   onOperatorMessageQueued?: (event: OperatorMessageEvent) => void;
 }
 
+export interface EnqueueOperatorMessageInput {
+  message: string;
+  delivery?: OperatorMessageDelivery;
+  conductorTurn: number;
+  eventQueue: SessionEventQueue;
+  sessionLogger: Pick<SessionLogger, 'emit'>;
+  onOperatorMessageQueued?: (event: OperatorMessageEvent) => void;
+}
+
+/** キュー受理専用。Open Question や escalation の状態は参照・変更しない。 */
+export function enqueueOperatorMessage(
+  input: EnqueueOperatorMessageInput,
+): boolean {
+  const text = input.message.trim();
+  if (!text) {
+    return false;
+  }
+
+  const delivery = input.delivery ?? 'next';
+  input.sessionLogger.emit({
+    type: 'operator.input',
+    conductorTurn: input.conductorTurn,
+    text,
+    delivery,
+  });
+  const event: OperatorMessageEvent = {
+    type: 'operator.message',
+    text,
+    delivery,
+  };
+  input.onOperatorMessageQueued?.(event);
+  input.eventQueue.enqueue(event);
+  return true;
+}
+
 /** オペレータ発話を open question に適用し、conductor キューへ積む。 */
 export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
   const trimmed = input.message.trim();
@@ -57,18 +92,12 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
     return false;
   }
 
-  input.sessionLogger.emit({
-    type: 'operator.input',
+  return enqueueOperatorMessage({
+    message: text,
+    delivery: input.delivery,
     conductorTurn: input.conductorTurn,
-    text,
-    delivery: input.delivery ?? 'next',
+    eventQueue: input.eventQueue,
+    sessionLogger: input.sessionLogger,
+    onOperatorMessageQueued: input.onOperatorMessageQueued,
   });
-  const event: OperatorMessageEvent = {
-    type: 'operator.message',
-    text,
-    delivery: input.delivery ?? 'next',
-  };
-  input.onOperatorMessageQueued?.(event);
-  input.eventQueue.enqueue(event);
-  return true;
 }
