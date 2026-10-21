@@ -38,9 +38,9 @@ describe('resolveTuiLayoutMode', () => {
             auth: { allowGhAuthTokenFallback: true },
             monitor: {
               enabled: true,
-              debounceMs: 30_000,
-              pollIntervalMs: 60_000,
-              activePollIntervalMs: 15_000,
+              debounceMs: 60_000,
+              pollIntervalMs: 120_000,
+              activePollIntervalMs: 60_000,
               stopPollWaitMs: 5_000,
             },
           },

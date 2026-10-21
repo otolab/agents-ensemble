@@ -256,7 +256,7 @@ export interface HarnessGitHubMonitorErrorEvent {
   phase?: 'issue_comments' | 'pr_search' | 'pr_reviews' | 'pr_review_comments' | 'pr_status_checks';
   prNumber?: number;
   retryable?: boolean;
-  cause?: 'parse' | 'gh_cli' | 'auth' | 'network' | 'unknown';
+  cause?: 'parse' | 'gh_cli' | 'auth' | 'rate_limit' | 'network' | 'unknown';
 }
 
 export interface HarnessGitHubMonitorRecoveredEvent {
