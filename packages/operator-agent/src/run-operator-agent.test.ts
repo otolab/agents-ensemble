@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { startOpenQuestionControlServer } from '@agents-ensemble/core';
 import type {
   ConductorAgent,
   ConductorAgentCreateOptions,
@@ -18,6 +19,7 @@ import {
 
 describe('runOperatorAgent', () => {
   let repoRoot = '';
+  let closeServers: Array<() => Promise<void>> = [];
   let originalModelEnv: string | undefined;
   let originalProfileEnv: string | undefined;
 
@@ -87,6 +89,8 @@ describe('runOperatorAgent', () => {
   });
 
   afterEach(async () => {
+    for (const close of closeServers) await close();
+    closeServers = [];
     if (originalModelEnv === undefined) {
       delete process.env.CONDUCTOR_MODEL_ID;
     } else {
@@ -218,6 +222,104 @@ describe('runOperatorAgent', () => {
     await run;
 
     expect(output.capturedText()).toContain('報告保留中（1 件）');
+  });
+
+  it('sends multiple same-source watch reports in one operator-agent dispatch', async () => {
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 2,
+        openQuestions: [
+          {
+            id: 'inq-2',
+            question: 'Review the implementation?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 2,
+          },
+          {
+            id: 'inq-3',
+            question: 'Confirm the test result?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 3,
+          },
+        ],
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+
+    const sidecarPath = join(
+      repoRoot,
+      '.ensemble',
+      'sessions',
+      'conductor-one.json',
+    );
+    const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({ ...sidecar, harnessSocketPath: liveServer.socketPath }),
+    );
+
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const sentPrompts: string[] = [];
+    const fakeAgent = createFakeAgent({
+      send: async (prompt) => {
+        sentPrompts.push(prompt);
+        if (sentPrompts.length === 1) {
+          await agentOptions!.customTools!.register_session_watch!.execute({
+            conductorAgentId: 'conductor-one',
+            pollIntervalMs: 250,
+            debounceMs: 0,
+          });
+        }
+        return {
+          runId: `run-${sentPrompts.length}`,
+          status: 'completed',
+          result: 'received',
+        };
+      },
+    });
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return fakeAgent;
+          },
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    try {
+      await vi.waitFor(() => expect(output.capturedText()).toContain('user> '));
+      input.write('start watching\n');
+      await vi.waitFor(() => expect(sentPrompts).toHaveLength(2));
+      input.write('/exit\n');
+      await run;
+    } finally {
+      input.end();
+    }
+
+    expect(sentPrompts).toHaveLength(2);
+    expect(sentPrompts[1]).toContain('## Open Question の更新（2 件）');
+    expect(sentPrompts[1]).toContain('Review the implementation?');
+    expect(sentPrompts[1]).toContain('Confirm the test result?');
   });
 
   it('resumes the default session after ordinary TTY termination and lets exit clear it', async () => {
