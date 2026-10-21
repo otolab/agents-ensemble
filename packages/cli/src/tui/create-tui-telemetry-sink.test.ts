@@ -3,7 +3,7 @@ import { createTuiTelemetrySink } from './create-tui-telemetry-sink.js';
 import { createTuiViewModel } from './tui-view-model.js';
 
 describe('createTuiTelemetrySink', () => {
-  it('appends harness and observation events to activity log', () => {
+  it('separates harness from observation entries in the activity log', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);
 
@@ -31,6 +31,7 @@ describe('createTuiTelemetrySink', () => {
         label: 'harness',
         text: 'worker.prompt workers=1 mode=init',
       },
+      { label: 'separator', text: '' },
       {
         label: 'observation',
         text: 'inq-1 [text] Continue?',
@@ -193,7 +194,7 @@ describe('createTuiTelemetrySink', () => {
     ]);
   });
 
-  it('appends transport reconnect to harness and observation activity logs', () => {
+  it('separates harness and observation transport reconnect entries', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel);
 
@@ -209,6 +210,7 @@ describe('createTuiTelemetrySink', () => {
         label: 'harness',
         text: 'conductor.transport.reconnect status=failed agentId=agent-1 error=resume unavailable',
       },
+      { label: 'separator', text: '' },
       {
         label: 'observation',
         text: '[transport] conductor 再接続失敗 agentId=agent-1 error=resume unavailable',
@@ -246,7 +248,7 @@ describe('createTuiTelemetrySink', () => {
     ]);
   });
 
-  it('keeps harness activity visible while dispatch hold is enabled', () => {
+  it('separates observation from harness activity while dispatch hold is enabled', () => {
     const viewModel = createTuiViewModel();
     const sink = createTuiTelemetrySink(viewModel, { verbose: true });
 
@@ -267,6 +269,7 @@ describe('createTuiTelemetrySink', () => {
 
     expect(viewModel.getSnapshot().activityLog).toEqual([
       { label: 'observation', text: 'dispatch hold enabled' },
+      { label: 'separator', text: '' },
       {
         label: 'harness',
         text: 'worker.prompt.completed name=implementer kind=implementer source=harness stopReason=end_turn',
