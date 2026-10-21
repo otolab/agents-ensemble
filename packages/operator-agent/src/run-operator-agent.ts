@@ -278,6 +278,17 @@ async function runTtyConversation(options: {
           terminal.close();
           break;
         }
+        if (isResumeWatchCommand(message)) {
+          const released = options.dispatchQueue.setConversationHold(false);
+          writeStatusLine(
+            options.stdout,
+            'operator-agent',
+            `会話 hold を解除しました（手動 hold: ${options.dispatchQueue.reportHold ? '継続' : '解除'}、監視保留: ${options.dispatchQueue.heldEventCount} 件、dispatch queue に戻した報告: ${released.releasedEventCount} 件）。`,
+            options.colorEnabled,
+          );
+          continue;
+        }
+        options.dispatchQueue.setConversationHold(true);
         options.dispatchQueue.enqueueUser(message);
       }
     } finally {
@@ -291,7 +302,8 @@ async function runTtyConversation(options: {
   };
   let promptVisible = false;
   let shownHeldCount = -1;
-  let shownHold = false;
+  let shownConversationHold = false;
+  let shownReportHold = false;
 
   try {
     while (true) {
@@ -301,23 +313,23 @@ async function runTtyConversation(options: {
       if (
         promptVisible &&
         (shownHeldCount !== options.dispatchQueue.heldEventCount ||
-          shownHold !== options.dispatchQueue.hold)
+          shownConversationHold !== options.dispatchQueue.conversationHold ||
+          shownReportHold !== options.dispatchQueue.reportHold)
       ) {
         options.stdout.write('\n');
         promptVisible = false;
       }
       if (!promptVisible) {
         if (options.dispatchQueue.hold || options.dispatchQueue.heldEventCount > 0) {
-          options.stdout.write(
-            `報告保留中（${options.dispatchQueue.heldEventCount} 件）\n`,
-          );
+          options.stdout.write(`${formatReportHoldStatus(options.dispatchQueue)}\n`);
         }
         options.stdout.write(
           `${colorize('user>', ANSI_DIM, options.colorEnabled)} `,
         );
         promptVisible = true;
         shownHeldCount = options.dispatchQueue.heldEventCount;
-        shownHold = options.dispatchQueue.hold;
+        shownConversationHold = options.dispatchQueue.conversationHold;
+        shownReportHold = options.dispatchQueue.reportHold;
       }
       const batch = options.dispatchQueue.takeBatch(dispatchState);
       if (!batch) {
@@ -384,6 +396,20 @@ async function runTtyConversation(options: {
           options.colorEnabled,
         );
       }
+      if (
+        sendCompleted &&
+        batch.events.some((event) => event.type === 'user') &&
+        options.dispatchQueue.conversationHold &&
+        options.dispatchQueue.pendingUserCount === 0
+      ) {
+        const released = options.dispatchQueue.setConversationHold(false);
+        writeStatusLine(
+          options.stdout,
+          'operator-agent',
+          `会話 hold を解除しました（手動 hold: ${options.dispatchQueue.reportHold ? '継続' : '解除'}、保留報告 ${released.releasedEventCount} 件を dispatch queue に戻しました）。`,
+          options.colorEnabled,
+        );
+      }
     }
   } finally {
     await inputTask.catch(() => {});
@@ -392,6 +418,21 @@ async function runTtyConversation(options: {
     process.off('SIGTERM', handleTermination);
     terminal.close();
   }
+}
+
+function formatReportHoldStatus(
+  queue: ReturnType<typeof createOperatorDispatchQueue>,
+): string {
+  const reasons = [
+    queue.conversationHold ? '会話' : undefined,
+    queue.reportHold ? '手動' : undefined,
+  ].filter((reason): reason is string => reason !== undefined);
+  return `監視報告保留中（${reasons.join('・')} / ${queue.heldEventCount} 件）`;
+}
+
+function isResumeWatchCommand(message: string): boolean {
+  const normalized = message.toLocaleLowerCase();
+  return normalized === '/resume-watch' || normalized === 'resume-watch';
 }
 
 function normalizeOperatorResponse(response: string): string {

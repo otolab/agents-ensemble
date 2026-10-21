@@ -10,7 +10,7 @@ export function createSetReportHoldTool(
   return {
     name: 'set_report_hold',
     description:
-      'Hold or resume automatic reports from watched Issue sessions. User TTY messages and explicit send_operator_message calls continue immediately.',
+      'Enable or disable the manual hold for automatic reports from watched Issue sessions. This hold composes with the automatic conversation hold. User TTY messages and explicit send_operator_message calls continue immediately.',
     inputSchema: {
       type: 'object',
       properties: { hold: { type: 'boolean' } },
@@ -24,6 +24,9 @@ export function createSetReportHoldTool(
       const result = queue.setHold(args.hold);
       return toolResult({
         hold: args.hold,
+        reportHold: queue.reportHold,
+        conversationHold: queue.conversationHold,
+        effectiveHold: queue.hold,
         heldEventCount: result.heldEventCount,
         releasedEventCount: result.releasedEventCount,
       });
@@ -37,13 +40,17 @@ export function createReleaseReportsTool(
   return {
     name: 'release_reports',
     description:
-      'Release all held watched-session reports into the operator dispatch queue. User messages remain highest priority.',
+      'Disable the manual report hold. Reports remain held while the automatic conversation hold is active. User messages remain highest priority.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     execute: async () => {
       const result = queue.setHold(false);
       return toolResult({
         hold: false,
+        reportHold: queue.reportHold,
+        conversationHold: queue.conversationHold,
+        effectiveHold: queue.hold,
         releasedEventCount: result.releasedEventCount,
+        heldEventCount: queue.heldEventCount,
         pendingEventCount: queue.pendingEventCount,
       });
     },

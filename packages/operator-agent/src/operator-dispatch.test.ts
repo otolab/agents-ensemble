@@ -257,6 +257,93 @@ describe('operator dispatch batching', () => {
     ).toEqual(['already queued report', 'held report']);
   });
 
+  it('composes conversation and manual holds with OR semantics', () => {
+    const queue = createOperatorDispatchQueue();
+    queue.setConversationHold(true);
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'session_state',
+        conductorAgentId: 'one',
+        issueUrl: 'https://github.com/example/repo/issues/1',
+        text: 'first report',
+      },
+      0,
+    );
+    queue.setHold(true);
+    expect(queue).toMatchObject({
+      conversationHold: true,
+      reportHold: true,
+      hold: true,
+      heldEventCount: 1,
+    });
+
+    const releasedConversation = queue.setConversationHold(false);
+    expect(releasedConversation).toEqual({
+      heldEventCount: 1,
+      releasedEventCount: 0,
+    });
+    expect(queue.hold).toBe(true);
+    expect(queue.pendingEventCount).toBe(0);
+
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'session_state',
+        conductorAgentId: 'one',
+        issueUrl: 'https://github.com/example/repo/issues/1',
+        text: 'second report',
+      },
+      0,
+    );
+    const releasedManual = queue.setHold(false);
+    expect(releasedManual).toEqual({
+      heldEventCount: 0,
+      releasedEventCount: 2,
+    });
+    expect(queue.hold).toBe(false);
+    expect(
+      queue.takeBatch({ continuationConsumed: false }, Date.now())?.events.map(
+        (event) => event.text,
+      ),
+    ).toEqual(['first report', 'second report']);
+  });
+
+  it('keeps reports held when conversation hold starts during manual hold', () => {
+    const queue = createOperatorDispatchQueue();
+    queue.setHold(true);
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'session_state',
+        conductorAgentId: 'one',
+        issueUrl: 'https://github.com/example/repo/issues/1',
+        text: 'held report',
+      },
+      0,
+    );
+
+    queue.setConversationHold(true);
+    const manualRelease = queue.setHold(false);
+    expect(manualRelease).toEqual({
+      heldEventCount: 1,
+      releasedEventCount: 0,
+    });
+    expect(queue).toMatchObject({
+      conversationHold: true,
+      reportHold: false,
+      hold: true,
+      heldEventCount: 1,
+    });
+    expect(queue.pendingEventCount).toBe(0);
+
+    expect(queue.setConversationHold(false)).toEqual({
+      heldEventCount: 0,
+      releasedEventCount: 1,
+    });
+    expect(queue.pendingEventCount).toBe(1);
+  });
+
   it('does not dispatch reports before their configured debounce deadline', () => {
     const queue = createOperatorDispatchQueue();
     queue.enqueueReport(

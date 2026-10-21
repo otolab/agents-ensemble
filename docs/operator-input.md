@@ -99,6 +99,14 @@ CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できま�
 
 `--continue` / `--resume` では、sidecar の conductor agent を `Agent.resume` で復元するため、新規セッション用の initial conductor send（system prompt + Issue ブリーフィング）は行いません。復元中の worker から届く `permission.pending` などのイベントはキューに保持され、復元済み conductor への最初の入力として通常どおり dispatch されます。これにより、再開直後に worker が許可待ちになっても、initial send の完了を待たずに `resolve_permission` の判断へ進めます。
 
+## operator-agent の会話中の監視 hold
+
+`ensemble operator-agent` では、空でない通常の TTY 入力を受け取った時点で会話 hold を有効にし、登録済み session の自動 watch report が operator-agent の LLM に割り込まないようにします。watch pool の登録や polling は止めず、会話中に得た report は queue に保留します。user 入力は通常どおり最優先で dispatch され、明示的な `send_operator_message` もこの hold の対象外です。既に開始した `agent.send` は取り消しません。
+
+operator-agent の応答が `finished` / `completed` で返り、次の user 入力が queue に残っていなければ会話 hold を自動解除します。応答中に次の user 入力が届いている場合は hold を維持し、その入力への応答が完了して queue が空になった時点で解除します。send が完了扱いにならなかった場合は自動解除せず、TTY の `/resume-watch` で会話 hold だけを手動解除できます。このコマンドは agent に送られず、解除後の次の通常入力で会話 hold が再び有効になります。
+
+`set_report_hold({ hold: true })` / `release_reports` による手動 report hold は会話 hold と独立しています。どちらか一方が有効なら report を保留し、両方が解除されたときに保留分を既存の batching 規則で dispatch queue に戻します。`/resume-watch` は手動 report hold を解除しません。TTY には `監視報告保留中（会話・手動 / N 件）` のように hold の理由と保留件数を表示し、会話 hold の解除時に dispatch queue へ戻した報告数も知らせます。
+
 ## TTY TUI レイアウト
 
 端末ごとの確認済み・未確認・既知制限と、実端末確認結果の更新手順は [TUI 端末互換性マトリクス](tui-terminal-compatibility.md) に記載します。

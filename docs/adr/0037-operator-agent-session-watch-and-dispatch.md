@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-21
-- Related: [ADR 0014](0014-conductor-dispatch-batch-coalescing.md), [ADR 0031](0031-operator-agent-layer.md), [ADR 0033](0033-live-open-question-control-uds.md), [Issue #525](https://github.com/otolab/agents-ensemble/issues/525)
+- Related: [ADR 0014](0014-conductor-dispatch-batch-coalescing.md), [ADR 0031](0031-operator-agent-layer.md), [ADR 0033](0033-live-open-question-control-uds.md), [ADR 0038](0038-operator-agent-conversation-report-hold.md), [Issue #525](https://github.com/otolab/agents-ensemble/issues/525)
 
 ## Context
 
