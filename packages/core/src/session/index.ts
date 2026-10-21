@@ -35,6 +35,7 @@ export type {
   OpenQuestionControlAnswerResult,
   OpenQuestionControlAnswer,
   OpenQuestionControlErrorData,
+  OpenQuestionControlLastConductorMessage,
   OpenQuestionControlListItem,
   OpenQuestionControlServer,
   OpenQuestionControlServerOptions,

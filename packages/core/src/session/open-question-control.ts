@@ -11,6 +11,7 @@ import type { OperatorMessageDelivery } from '../conductor/session/session-event
 export const OPEN_QUESTION_CONTROL_METHODS = {
   list: 'open_questions.list',
   answer: 'open_questions.answer',
+  lastConductorMessageGet: 'session.last_conductor_message.get',
   observe: 'session.observe',
   sendMessage: 'operator.message.send',
 } as const;
@@ -37,6 +38,12 @@ export interface OpenQuestionControlAnswerResult {
     Partial<Pick<OpenQuestion, 'answeredBy' | 'approved'>>;
 }
 
+export interface OpenQuestionControlLastConductorMessage {
+  text: string;
+  at: number;
+  sendCount: number;
+}
+
 export interface SessionObservationSnapshot extends OpenQuestionRegistrySnapshot {
   sessionState?: SessionStateStore;
 }
@@ -49,6 +56,9 @@ export interface OpenQuestionControlErrorData {
 
 export interface OpenQuestionControlServerOptions {
   listOpenQuestions: () => OpenQuestion[];
+  getLastConductorMessage?: () =>
+    | OpenQuestionControlLastConductorMessage
+    | null;
   observeSession?: () => Promise<SessionObservationSnapshot>;
   answerOpenQuestion: (
     input: OpenQuestionControlAnswer,
@@ -385,6 +395,10 @@ async function handleRequest(
       case OPEN_QUESTION_CONTROL_METHODS.list:
         return successResponse(requestId, {
           questions: options.listOpenQuestions().map(toListItem),
+        });
+      case OPEN_QUESTION_CONTROL_METHODS.lastConductorMessageGet:
+        return successResponse(requestId, {
+          message: options.getLastConductorMessage?.() ?? null,
         });
       case OPEN_QUESTION_CONTROL_METHODS.answer: {
         const questionId =

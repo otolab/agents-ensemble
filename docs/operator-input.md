@@ -68,9 +68,9 @@ type OperatorInputBinding = (
 
 operator-agent は `send_operator_message` tool から稼働中 session の UDS control API へ `text` と任意の `delivery` を渡せます。省略時は `next` です。wire schema とエラー応答は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
 
-### 稼働中 harness の Open Question control
+### 稼働中 harness の UDS control
 
-稼働中 harness の UDS interface は、Open Question の一覧・回答、watch snapshot、conductor 宛て `operator.message.send` を扱います。operator-agent は sidecar の `harnessSocketPath` を使う client です。通常 message は回答から独立し、queue acknowledgment は処理完了を意味しません。wire schema、answer semantics、message 送信の応答、error / unknown outcome、security と運用時の対処は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
+稼働中 harness の UDS interface は、Open Question の一覧・回答、watch 用 `session.observe` snapshot、conductor 宛て `operator.message.send`、最後の conductor 成功応答の取得を提供します。watch pool は `session.observe` が到達不能または旧 harness で未対応なら保存済み Open Questions YAML / session-state YAML / sidecar snapshot を poll します。一方、Open Question の個別操作、message 送信、`get_last_conductor_message` は sidecar の `harnessSocketPath` へ直接接続し、停止・接続不能時はエラーで、保存 snapshot へ fallback しません。最後の成功応答がまだなければ `message: null` です。通常 message は Open Question の回答から独立し、queue acknowledgment は処理完了を意味しません。wire schema、answer semantics、response、error / unknown outcome、security と運用時の対処は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
 
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 

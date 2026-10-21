@@ -15,6 +15,7 @@ import {
 } from '../../core/src/session/session-sidecar.js';
 import {
   createAnswerLiveOpenQuestionTool,
+  createGetLastConductorMessageTool,
   createListLiveOpenQuestionsTool,
   createSendOperatorMessageTool,
 } from './open-question-control-tools.js';
@@ -40,6 +41,11 @@ describe('operator-agent live Open Question tools', () => {
     });
     server = await startOpenQuestionControlServer({
       listOpenQuestions: () => registry.listOpen(),
+      getLastConductorMessage: () => ({
+        text: 'The conductor response.',
+        at: 1792512003000,
+        sendCount: 44,
+      }),
       answerOpenQuestion: async ({ questionId, answer }) => {
         const answered = recordOpenQuestionAnswer(registry, {
           id: questionId,
@@ -81,6 +87,22 @@ describe('operator-agent live Open Question tools', () => {
         }),
       ],
     });
+
+    const lastMessage = await createGetLastConductorMessageTool(
+      repoRoot,
+    ).execute({
+      conductorAgentId: 'agent-live',
+    });
+    expect(lastMessage.structuredContent).toEqual({
+      message: {
+        text: 'The conductor response.',
+        at: 1792512003000,
+        sendCount: 44,
+      },
+    });
+    expect(JSON.parse(lastMessage.content[0]!.text)).toEqual(
+      lastMessage.structuredContent,
+    );
 
     const answered = await createAnswerLiveOpenQuestionTool(repoRoot).execute({
       conductorAgentId: 'agent-live',
@@ -125,6 +147,11 @@ describe('operator-agent live Open Question tools', () => {
 
     await expect(
       createListLiveOpenQuestionsTool(repoRoot).execute({
+        conductorAgentId: 'agent-offline',
+      }),
+    ).rejects.toThrow('has no recorded live control socket');
+    await expect(
+      createGetLastConductorMessageTool(repoRoot).execute({
         conductorAgentId: 'agent-offline',
       }),
     ).rejects.toThrow('has no recorded live control socket');

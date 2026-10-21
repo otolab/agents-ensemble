@@ -39,6 +39,10 @@ import {
   loadSessionSidecar,
   sessionSidecarPath,
 } from '../../src/session/session-sidecar.js';
+import {
+  OPEN_QUESTION_CONTROL_METHODS,
+  sendOpenQuestionControlRequest,
+} from '../../src/session/open-question-control.js';
 import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -56,6 +60,17 @@ const IMPLEMENTER_PROFILE: Profile = {
   },
   workers: [{ name: 'implementer-1', kind: 'implementer' }],
 };
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 const {
   mockSend,
@@ -124,6 +139,150 @@ describe('open question / operator flow integration', () => {
     if (isolatedRepoRoot) {
       await rm(isolatedRepoRoot, { recursive: true, force: true });
       isolatedRepoRoot = '';
+    }
+  });
+
+  it('serves only the last successful conductor response from the live session UDS', async () => {
+    isolatedRepoRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-last-conductor-message-'),
+    );
+    const firstSendStarted = deferred<void>();
+    const finishFirstSend = deferred<void>();
+    const secondSendStarted = deferred<void>();
+    const finishSecondSend = deferred<void>();
+    const failedSendRecorded = deferred<void>();
+    const shutdown = new AbortController();
+    let sendCount = 0;
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: isolatedRepoRoot,
+    });
+    const unsubscribe = sessionLogger.subscribe((event) => {
+      if (event.type === 'conductor.send' && event.status === 'error') {
+        failedSendRecorded.resolve();
+      }
+    });
+
+    mockSend.mockImplementation(async () => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        firstSendStarted.resolve();
+        await finishFirstSend.promise;
+        return {
+          runId: 'run-1',
+          status: 'finished',
+          result: '  first conductor response  ',
+        };
+      }
+      if (sendCount === 3) {
+        return {
+          runId: 'run-3',
+          status: 'error',
+          result: 'failed conductor response',
+          error: { message: 'send failed' },
+        };
+      }
+      secondSendStarted.resolve();
+      await finishSecondSend.promise;
+      return {
+        runId: 'run-2',
+        status: 'finished',
+        result: 'second conductor response',
+      };
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot: isolatedRepoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      continueOnConductorError: true,
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      sessionLogger,
+    });
+
+    try {
+      await firstSendStarted.promise;
+      let socketPath: string | undefined;
+      await vi.waitFor(async () => {
+        const sidecar = await loadSessionSidecar(
+          sessionSidecarPath({
+            repoRoot: isolatedRepoRoot,
+            conductorAgentId: 'agent-test',
+          }),
+        );
+        socketPath = sidecar?.harnessSocketPath;
+        expect(socketPath).toBeTruthy();
+      });
+
+      const getLastMessage = () =>
+        sendOpenQuestionControlRequest<{
+          message: { text: string; at: number; sendCount: number } | null;
+        }>(socketPath!, {
+          method: OPEN_QUESTION_CONTROL_METHODS.lastConductorMessageGet,
+          params: {},
+        });
+
+      const sendOperatorMessage = (text: string) =>
+        sendOpenQuestionControlRequest<{
+          queued: true;
+          delivery: 'idle';
+        }>(socketPath!, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text, delivery: 'idle' },
+        });
+
+      await expect(getLastMessage()).resolves.toEqual({ message: null });
+      finishFirstSend.resolve();
+      await vi.waitFor(async () => {
+        await expect(getLastMessage()).resolves.toMatchObject({
+          message: {
+            text: 'first conductor response',
+            sendCount: 1,
+          },
+        });
+      });
+
+      await expect(sendOperatorMessage('Please elaborate.')).resolves.toEqual({
+        queued: true,
+        delivery: 'idle',
+      });
+      await secondSendStarted.promise;
+      const beforeSecondCompletion = await getLastMessage();
+      expect(beforeSecondCompletion.message).toMatchObject({
+        text: 'first conductor response',
+        sendCount: 1,
+      });
+      expect(beforeSecondCompletion.message?.at).toEqual(expect.any(Number));
+
+      finishSecondSend.resolve();
+      await vi.waitFor(async () => {
+        await expect(getLastMessage()).resolves.toMatchObject({
+          message: {
+            text: 'second conductor response',
+            sendCount: 2,
+          },
+        });
+      });
+
+      await expect(sendOperatorMessage('Please try once more.')).resolves.toEqual({
+        queued: true,
+        delivery: 'idle',
+      });
+      await failedSendRecorded.promise;
+      await expect(getLastMessage()).resolves.toMatchObject({
+        message: {
+          text: 'second conductor response',
+          sendCount: 2,
+        },
+      });
+    } finally {
+      shutdown.abort();
+      await sessionPromise.catch(() => {});
+      unsubscribe();
     }
   });
 

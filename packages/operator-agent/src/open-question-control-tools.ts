@@ -3,6 +3,7 @@ import {
   OPEN_QUESTION_CONTROL_METHODS,
   sendOpenQuestionControlRequest,
   type OpenQuestionControlAnswerResult,
+  type OpenQuestionControlLastConductorMessage,
   type OpenQuestionControlListItem,
   type ConductorJsonValue,
   type ConductorTool,
@@ -12,10 +13,15 @@ import { resolve } from 'node:path';
 
 export const LIST_LIVE_OPEN_QUESTIONS_TOOL = 'list_live_open_questions';
 export const ANSWER_LIVE_OPEN_QUESTION_TOOL = 'answer_live_open_question';
+export const GET_LAST_CONDUCTOR_MESSAGE_TOOL = 'get_last_conductor_message';
 export const SEND_OPERATOR_MESSAGE_TOOL = 'send_operator_message';
 
 interface LiveOpenQuestionsResult {
   questions: OpenQuestionControlListItem[];
+}
+
+interface LastConductorMessageResult {
+  message: OpenQuestionControlLastConductorMessage | null;
 }
 
 /** Read Open Questions from an active harness through its session UDS. */
@@ -44,6 +50,44 @@ export function createListLiveOpenQuestionsTool(
         requireSocketPath(sidecar),
         {
           method: OPEN_QUESTION_CONTROL_METHODS.list,
+          params: {},
+        },
+      );
+      const content = JSON.stringify(result, null, 2);
+      return {
+        content: [{ type: 'text', text: content }],
+        structuredContent: result as unknown as Record<string, ConductorJsonValue>,
+      };
+    },
+  };
+}
+
+/** Read the last successful conductor response from an active harness. */
+export function createGetLastConductorMessageTool(
+  repoRoot: string,
+): ConductorTool {
+  const root = resolve(repoRoot);
+  return {
+    name: GET_LAST_CONDUCTOR_MESSAGE_TOOL,
+    description:
+      'Read the last successful conductor response from a running Issue harness over its session Unix socket. This does not read or modify stopped sessions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conductorAgentId: {
+          type: 'string',
+          description: 'Session id from list_operator_sessions.',
+        },
+      },
+      required: ['conductorAgentId'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const sidecar = await requireSession(root, args.conductorAgentId);
+      const result = await sendOpenQuestionControlRequest<LastConductorMessageResult>(
+        requireSocketPath(sidecar),
+        {
+          method: OPEN_QUESTION_CONTROL_METHODS.lastConductorMessageGet,
           params: {},
         },
       );

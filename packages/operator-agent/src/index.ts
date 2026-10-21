@@ -14,7 +14,9 @@ export type { OperatorPromptContext } from './operator-base-module.js';
 export {
   ANSWER_LIVE_OPEN_QUESTION_TOOL,
   createAnswerLiveOpenQuestionTool,
+  createGetLastConductorMessageTool,
   createListLiveOpenQuestionsTool,
+  GET_LAST_CONDUCTOR_MESSAGE_TOOL,
   LIST_LIVE_OPEN_QUESTIONS_TOOL,
   createSendOperatorMessageTool,
   SEND_OPERATOR_MESSAGE_TOOL,
