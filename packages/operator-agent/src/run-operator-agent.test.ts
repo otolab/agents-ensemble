@@ -293,6 +293,160 @@ describe('runOperatorAgent', () => {
     expect(output.capturedText()).toContain('監視報告保留中（会話・手動 / 0 件）');
   });
 
+  it('buffers a live UDS report on conversation hold and dispatches it after the user turn', async () => {
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 0,
+      openQuestions: [],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => liveSnapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+
+    const sidecarPath = join(
+      repoRoot,
+      '.ensemble',
+      'sessions',
+      'conductor-one.json',
+    );
+    const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({ ...sidecar, harnessSocketPath: liveServer.socketPath }),
+    );
+
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    let finishUserTurn!: () => void;
+    let userTurnStarted!: () => void;
+    let reportTurnStarted!: () => void;
+    const userTurnGate = new Promise<void>((resolve) => {
+      finishUserTurn = resolve;
+    });
+    const userStarted = new Promise<void>((resolve) => {
+      userTurnStarted = resolve;
+    });
+    const reportStarted = new Promise<void>((resolve) => {
+      reportTurnStarted = resolve;
+    });
+    const sentPrompts: string[] = [];
+    const fakeAgent = createFakeAgent({
+      send: async (prompt) => {
+        sentPrompts.push(prompt);
+        if (sentPrompts.length === 1) {
+          await agentOptions!.customTools!.register_session_watch!.execute({
+            conductorAgentId: 'conductor-one',
+            pollIntervalMs: 250,
+            debounceMs: 0,
+          });
+          userTurnStarted();
+          await userTurnGate;
+        } else {
+          reportTurnStarted();
+        }
+        return {
+          runId: `run-${sentPrompts.length}`,
+          status: 'completed',
+          result: 'done',
+        };
+      },
+    });
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return fakeAgent;
+          },
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    let runFinished = false;
+    try {
+      await vi.waitFor(() =>
+        expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      );
+      input.write('summarize the live update\n');
+      await userStarted;
+      await vi.waitFor(async () => {
+        const state = JSON.parse(
+          await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        ) as {
+          cursors: Record<string, { sequence: number }>;
+        };
+        expect(state.cursors['conductor-one']?.sequence).toBe(0);
+      });
+
+      liveSnapshot = {
+        sequence: 1,
+        openQuestions: [
+          {
+            id: 'inq-live-report',
+            question: 'Should the operator review this live report?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 2,
+          },
+        ],
+      };
+      await vi.waitFor(async () => {
+        const state = JSON.parse(
+          await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        ) as {
+          cursors: Record<string, { sequence: number }>;
+        };
+        expect(state.cursors['conductor-one']?.sequence).toBe(1);
+        const holdState =
+          await agentOptions!.customTools!.set_report_hold!.execute({
+            hold: false,
+          });
+        expect(holdState.structuredContent).toMatchObject({
+          conversationHold: true,
+          reportHold: false,
+          effectiveHold: true,
+          heldEventCount: 1,
+        });
+      });
+
+      expect(sentPrompts).toHaveLength(1);
+      expect(sentPrompts[0]).toBe('summarize the live update');
+
+      finishUserTurn();
+      await reportStarted;
+      expect(sentPrompts).toHaveLength(2);
+      expect(sentPrompts[1]).toContain(
+        'Should the operator review this live report?',
+      );
+      expect(output.capturedText()).toContain(
+        '会話 hold を解除しました（手動 hold: 解除、保留報告 1 件を dispatch queue に戻しました）。',
+      );
+      input.write('/exit\n');
+      await run;
+      runFinished = true;
+    } finally {
+      if (!runFinished) {
+        finishUserTurn();
+        input.end();
+        await run.catch(() => {});
+      }
+    }
+  });
+
   it('lets /resume-watch clear only conversation hold while manual hold stays active', async () => {
     let liveSnapshot: SessionObservationSnapshot = {
       sequence: 0,
