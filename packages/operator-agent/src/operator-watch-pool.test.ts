@@ -379,6 +379,54 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('rejects duplicate pending report IDs and invalid persisted debounce values', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-reports-'));
+    const validReport = {
+      reportId: 'report-1',
+      reportType: 'open_question',
+      conductorAgentId: 'session-one',
+      issueUrl: 'https://github.com/example/repo/issues/1',
+      text: 'A pending report',
+      debounceMs: 0,
+    };
+    const invalidPendingReports = [
+      [
+        validReport,
+        {
+          ...validReport,
+          conductorAgentId: 'session-two',
+          text: 'Another pending report',
+        },
+      ],
+      [{ ...validReport, reportId: '' }],
+      [{ ...validReport, debounceMs: 1.5 }],
+      [{ ...validReport, debounceMs: -1 }],
+      [{ ...validReport, debounceMs: 10_001 }],
+    ];
+    const statePath = operatorWatchStatePath(repoRoot);
+    await mkdir(join(repoRoot, '.ensemble', 'operator-agent'), {
+      recursive: true,
+    });
+
+    for (const pendingReports of invalidPendingReports) {
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          version: 1,
+          watches: {},
+          cursors: {},
+          pendingReports,
+        }),
+      );
+      await expect(
+        createOperatorWatchPool({
+          repoRoot,
+          dispatchQueue: createOperatorDispatchQueue(),
+        }),
+      ).rejects.toThrow('Invalid operator-agent watch state');
+    }
+  });
+
   it('deduplicates live Registry and YAML observations and reports only new open questions', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-dedup-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });

@@ -489,10 +489,12 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
     if (!Array.isArray(pendingReports)) {
       throw new Error('Invalid operator-agent watch state: pendingReports.');
     }
+    const reportIds = new Set<string>();
     for (const report of pendingReports) {
       if (
         !isRecord(report) ||
         typeof report.reportId !== 'string' ||
+        report.reportId.trim().length === 0 ||
         typeof report.conductorAgentId !== 'string' ||
         typeof report.issueUrl !== 'string' ||
         typeof report.text !== 'string' ||
@@ -501,6 +503,21 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
         typeof report.debounceMs !== 'number'
       ) {
         throw new Error('Invalid operator-agent watch state: pending report.');
+      }
+      if (reportIds.has(report.reportId)) {
+        throw new Error(
+          'Invalid operator-agent watch state: duplicate pending reportId.',
+        );
+      }
+      reportIds.add(report.reportId);
+      if (
+        !Number.isInteger(report.debounceMs) ||
+        report.debounceMs < 0 ||
+        report.debounceMs > MAX_DEBOUNCE_MS
+      ) {
+        throw new Error(
+          'Invalid operator-agent watch state: pending report debounceMs.',
+        );
       }
     }
     return {
