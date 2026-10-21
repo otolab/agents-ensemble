@@ -70,7 +70,7 @@ operator-agent は `send_operator_message` tool から稼働中 session の UDS 
 
 ### 稼働中 harness の Open Question control
 
-稼働中 harness の UDS interface は、一覧取得・回答・operator message 送信ともに現在の session だけを扱います。operator-agent は sidecar の `harnessSocketPath` を使う client です。wire schema、answer semantics、message 送信の queue acknowledgment、error / unknown outcome、security と運用時の対処は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
+稼働中 harness の UDS interface は、Open Question の一覧・回答、watch snapshot、conductor 宛て `operator.message.send` を扱います。operator-agent は sidecar の `harnessSocketPath` を使う client です。通常 message は回答から独立し、queue acknowledgment は処理完了を意味しません。wire schema、answer semantics、message 送信の応答、error / unknown outcome、security と運用時の対処は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
 
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 

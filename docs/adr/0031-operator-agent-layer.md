@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-20
-- Related: [ADR 0008](0008-human-dialogue-open-questions.md), [ADR 0011](0011-session-sidecar-resume.md), [ADR 0002](0002-star-topology-sdk-conductor-acp-worker.md)
+- Related: [ADR 0008](0008-human-dialogue-open-questions.md), [ADR 0011](0011-session-sidecar-resume.md), [ADR 0002](0002-star-topology-sdk-conductor-acp-worker.md), [ADR 0037](0037-operator-agent-session-watch-and-dispatch.md)
 
 ## Context
 

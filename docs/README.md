@@ -13,7 +13,7 @@
 | CLI の入口・最小クイックスタート | [cli/README.md](cli/README.md) | npm の `@agents-ensemble/cli` README の生成元 |
 | 設定全体・環境変数・解決順 | [settings.md](settings.md) | CLI / env / config / profile / TUI と user-wide conductor instructions |
 | `config.yaml` の書き方・MCP | [config.md](config.md) | `.ensemble/config.yaml` と `mcp.json` のスキーマ |
-| TUI とオペレータ入力の利用者向け挙動 | [operator-input.md](operator-input.md) | live harness UDS control API は [live-open-question-control-api.md](live-open-question-control-api.md) |
+| TUI とオペレータ入力の利用者向け挙動 | [operator-input.md](operator-input.md) | 稼働中 harness の Open Question / watch snapshot / outbound message UDS API は [live-open-question-control-api.md](live-open-question-control-api.md) |
 | TUI scrollback の検出設計・端末制約 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | native viewport 検出、tmux adapter、A+B の設計境界 |
 | Pi conductor の初回セットアップ・認証 | [pi-conductor-setup.md](pi-conductor-setup.md) | backend、resource root、provider login、復旧の利用者向け正本。全体設定は [settings.md](settings.md)、resource の詳細は [config.md](config.md) |
 | 認証トークンの全体解決 | [settings.md](settings.md) | Pi の利用者向け導線は [pi-conductor-setup.md](pi-conductor-setup.md)、`config.yaml` の認証関連キーは [config.md](config.md) |
@@ -32,7 +32,7 @@
 | [settings.md](settings.md) | CLI / 環境変数 / config / profile / TUI の設定一覧と解決順（設定全体の正本） |
 | [config.md](config.md) | `.ensemble/config.yaml` の配置・書き方・スキーマ・MCP 設定（config の正本） |
 | [operator-input.md](operator-input.md) | TUI のレイアウト、オペレータ入力、post-loop の利用者向け契約 |
-| [live-open-question-control-api.md](live-open-question-control-api.md) | 稼働中 harness の Open Question / operator message UDS API、wire schema、ack/error、security |
+| [live-open-question-control-api.md](live-open-question-control-api.md) | 稼働中 harness の UDS API（Open Question list / answer、watch snapshot、outbound `operator.message.send`）、wire schema、ack/error、security |
 | [tui-terminal-compatibility.md](tui-terminal-compatibility.md) | TUI の端末 × layout × resize / IME / scrollback の確認マトリクスと更新手順 |
 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | scrollback 閲覧検出の設計・端末別 C 可否・副作用 |
 | [cli-text-input-keybindings.md](cli-text-input-keybindings.md) | TUI 入力ショートカットの実装階層・対応状況（参照） |

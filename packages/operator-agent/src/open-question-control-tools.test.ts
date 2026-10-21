@@ -159,18 +159,33 @@ describe('operator-agent live Open Question tools', () => {
       },
     );
 
-    const sent = await createSendOperatorMessageTool(repoRoot).execute({
-      conductorAgentId: 'agent-send',
-      text: 'please continue after workers settle',
-      delivery: 'idle',
+    const sendTool = createSendOperatorMessageTool(repoRoot);
+    expect(sendTool.inputSchema).toMatchObject({
+      properties: {
+        delivery: { enum: ['idle', 'next', 'interrupt'] },
+      },
     });
-    expect(sent.structuredContent).toEqual({
-      queued: true,
-      delivery: 'idle',
-    });
-    expect(sendOperatorMessage).toHaveBeenCalledWith({
-      text: 'please continue after workers settle',
-      delivery: 'idle',
-    });
+    const deliveries = [
+      ['idle', 'idle'],
+      ['next', 'next'],
+      ['interrupt', 'interrupt'],
+      [undefined, 'next'],
+    ] as const;
+    for (const [requestedDelivery, expectedDelivery] of deliveries) {
+      const sent = await sendTool.execute({
+        conductorAgentId: 'agent-send',
+        text: `message ${expectedDelivery}`,
+        ...(requestedDelivery ? { delivery: requestedDelivery } : {}),
+      });
+      expect(sent.structuredContent).toEqual({
+        queued: true,
+        delivery: expectedDelivery,
+      });
+    }
+    expect(sendOperatorMessage.mock.calls).toEqual(
+      deliveries.map(([, expectedDelivery]) => [
+        { text: `message ${expectedDelivery}`, delivery: expectedDelivery },
+      ]),
+    );
   });
 });

@@ -51,7 +51,13 @@ export type {
   OpenQuestionControlAnswerResult,
   OpenQuestionControlErrorData,
   OpenQuestionControlListItem,
+  SessionObservationSnapshot,
 } from './session/open-question-control.js';
+export {
+  loadOpenQuestionsStore,
+  openQuestionsStorePath,
+} from './session/open-questions-store.js';
+export type { OpenQuestionsStoreDocument } from './session/open-questions-store.js';
 export {
   loadSessionStateStore,
   sessionStateStorePath,
