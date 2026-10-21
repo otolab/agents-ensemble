@@ -32,13 +32,15 @@ operator-agent は JSON sidecar `.ensemble/sessions/{conductorAgentId}.json` の
 
 path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら接続は失敗します。YAML への自動 fallback はありません。
 
+listener の起動後に `harnessSocketPath` を含む初回 sidecar flush が失敗しても、warning を記録して session は続行し、listener は稼働したままの場合があります。このとき sidecar に新しい path が書かれていなければ client は endpoint を発見・接続できません。別の接続先を探す自動 fallback はありません。
+
 停止時は listener が新しい request を受け付けなくなり、受理済み request の処理を最大5秒 drain します。期限内に終わらなければ driver を abort し、server と一時 runtime directory を閉じて削除し、sidecar から `harnessSocketPath` を外します。
 
 ## Wire format
 
 Transport は Unix domain socket 上の JSON-RPC 2.0 over NDJSON です。1 connection につき request は1件、response も1件です。JSON object を1行（末尾に newline）で送り、response の `id` は request の `id` と一致します。request ID は string または finite number、`params` は object です。
 
-実装上の上限は request / response あたり1 MiB、socket timeout は30秒です。追加の request を同じ connection に送る interface ではありません。
+実装上の上限は request / response あたり1 MiB、client socket timeout は30秒です。server にも request line を受信するまでの socket timeout がありますが、newline を受け取ると解除して handler を実行します。このため server の handler / dispatch 処理時間は30秒では打ち切られません。追加の request を同じ connection に送る interface ではありません。
 
 ## Methods
 
@@ -95,7 +97,7 @@ Response:
 
 ## Persistence、acknowledgment、errors
 
-回答候補は Open Questions YAML に atomic save されてから live Registry と event queue に反映されます。YAML は回答永続化・resume の正本で、JSON sidecar は mirror です。通常の success response は YAML save と conductor dispatch receipt の成功後に返ります。sidecar の flush 成功は success 条件ではなく、mirror 更新に失敗した場合は warning と後続 flush で回復します。
+回答候補は Open Questions YAML に atomic save されてから live Registry と event queue に反映されます。YAML は回答永続化・resume の正本で、JSON sidecar は mirror です。通常の success response は YAML save と conductor dispatch receipt の成功後に返ります。sidecar の flush 成功は success 条件ではありません。回答処理で mirror 更新に失敗すると warning を記録し、後続 flush を一度 schedule して再同期を試みます。これは再同期の保証ではなく、その flush も失敗した場合は warning を記録してこの経路での再試行を終えます。
 
 永続化先は `.ensemble/sessions/{conductorAgentId}/open-questions.yaml`、sidecar は `.ensemble/sessions/{conductorAgentId}.json` です。sidecar は `harnessSocketPath` の endpoint index を持ち、Open Question snapshot も互換用 mirror として含みます。
 
@@ -126,10 +128,11 @@ YAML save 前に失敗した場合、generic `-32603` に `outcome` data はな�
 
 ## Retry、fallback と運用
 
-- UDS client は request を自動再送しません。request 送信前の client transport failure は `outcome: not_sent`、送信後に response を受け取れない failure は `outcome: unknown` として扱います。これらは JSON-RPC response ではなく client 側の transport error です。
+- UDS client は request を自動再送しません。client が `connect` event を受け取る前の transport failure だけが `outcome: not_sent` です。`connect` 時点で client は `requestSent` を true にし、その後に `socket.write` が失敗した場合も、response を受け取れない transport failure は `outcome: unknown` です。これらは JSON-RPC response ではなく client 側の transport error で、`unknown` は request 全体が server に届いたことを保証するものではありません。
+- client の30秒 timeout や切断後も、server が request newline を受信して handler を開始済みなら、YAML commit や conductor dispatch が続く場合があります。特に `outcome: unknown` のときは、その時点で YAML に回答が見えないことだけを根拠に再送しないでください。保存・dispatch の結果が不確定なままなので、session の状態とログを確認して運用者が次の操作を判断してください。
 - shutdown intent 後は bounded drain 中も conductor reconnect / 同一 message retry を抑止します。dispatch の完了を確認できない場合は `outcome: unknown` となり、回答は保存済みの可能性があります。
 - listener がない場合に YAML を直接読む・書く fallback、file watch、固定 TCP、GitHub comment 同期、自動解決はありません。
-- outcome が unknown のときは answer を再送せず、まず `open-questions.yaml` と保存済み session state / session log を確認し、その後の操作を判断してください。sidecar は mirror のため、YAML と一時的に一致しない可能性があります。
+- `outcome: unknown` の場合、回答を自動再送しないでください。`open-questions.yaml` と保存済み session state / session log を確認して運用者が次の操作を判断します。ただし、その時点で YAML に回答が見つからなくても、元の handler がまだ処理中の可能性があるため、それだけを根拠に再送しないでください。sidecar は mirror のため、YAML と一時的に一致しない可能性があります。
 
 conductor send の通常時の再接続方針は既存 dispatch policy に従います。この UDS client protocol 自体は retry を行わず、shutdown 後に同じ `operator.message` を再 dispatch しません。
 
