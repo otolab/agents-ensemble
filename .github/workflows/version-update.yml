@@ -32,71 +32,13 @@ jobs:
     - name: Classify release push
       id: changesets
       run: |
-        COMMIT_MSG=$(git log -1 --pretty=%B)
-        SKIP_MARKER=false
-        if [[ "$COMMIT_MSG" =~ \[skip-changeset\] ]]; then
-          SKIP_MARKER=true
-        fi
-
-        HAS_CHANGESETS=false
-        CHANGESET_FILES=(.changeset/*.md)
-        for CHANGESET_FILE in "${CHANGESET_FILES[@]}"; do
-          if [[ -f "$CHANGESET_FILE" && "$CHANGESET_FILE" != ".changeset/README.md" ]]; then
-            HAS_CHANGESETS=true
-            break
-          fi
-        done
-
-        MODE=$(node .github/scripts/release-version-state.mjs \
+        node .github/scripts/release-version-state.mjs \
           "${{ github.event.before }}" \
           "${GITHUB_SHA}" \
-          "$HAS_CHANGESETS" \
-          "$SKIP_MARKER" \
-          "${{ github.event.created }}")
-        echo "Release push classification: $MODE"
-
-        case "$MODE" in
-          apply)
-            echo "skip_changeset=false" >> "$GITHUB_OUTPUT"
-            echo "has_changesets=true" >> "$GITHUB_OUTPUT"
-            echo "already_versioned=false" >> "$GITHUB_OUTPUT"
-            echo "skip_initial=false" >> "$GITHUB_OUTPUT"
-            ;;
-          skip)
-            echo "skip_changeset=true" >> "$GITHUB_OUTPUT"
-            echo "has_changesets=false" >> "$GITHUB_OUTPUT"
-            echo "already_versioned=false" >> "$GITHUB_OUTPUT"
-            echo "skip_initial=false" >> "$GITHUB_OUTPUT"
-            echo "ℹ️ Skipping changeset check (found [skip-changeset] in commit message)"
-            ;;
-          skip_initial)
-            echo "skip_changeset=true" >> "$GITHUB_OUTPUT"
-            echo "has_changesets=false" >> "$GITHUB_OUTPUT"
-            echo "already_versioned=false" >> "$GITHUB_OUTPUT"
-            echo "skip_initial=true" >> "$GITHUB_OUTPUT"
-            echo "ℹ️ Skipping changeset check on the initial release branch push"
-            ;;
-          already_versioned)
-            echo "skip_changeset=false" >> "$GITHUB_OUTPUT"
-            echo "has_changesets=false" >> "$GITHUB_OUTPUT"
-            echo "already_versioned=true" >> "$GITHUB_OUTPUT"
-            echo "skip_initial=false" >> "$GITHUB_OUTPUT"
-            echo "ℹ️ Changesets were applied before this release push; leaving package versions unchanged"
-            ;;
-          missing)
-            echo "skip_changeset=false" >> "$GITHUB_OUTPUT"
-            echo "has_changesets=false" >> "$GITHUB_OUTPUT"
-            echo "already_versioned=false" >> "$GITHUB_OUTPUT"
-            echo "skip_initial=false" >> "$GITHUB_OUTPUT"
-            ;;
-          *)
-            echo "Unexpected release push classification: $MODE"
-            exit 1
-            ;;
-        esac
+          "${{ github.event.created }}"
 
     - name: Apply version updates
-      if: steps.changesets.outputs.has_changesets == 'true'
+      if: steps.changesets.outputs.apply_version_updates == 'true'
       run: |
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         git config --global user.name "github-actions[bot]"
@@ -124,7 +66,7 @@ jobs:
         fi
 
     - name: Update root version only (when skipping changeset)
-      if: steps.changesets.outputs.skip_initial == 'true'
+      if: steps.changesets.outputs.update_root_version == 'true'
       run: |
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
         git config --global user.name "github-actions[bot]"
@@ -150,62 +92,18 @@ jobs:
           exit 1
         fi
 
-    - name: Create or update PR
-      if: steps.changesets.outputs.has_changesets == 'true' || steps.changesets.outputs.skip_changeset == 'true' || steps.changesets.outputs.already_versioned == 'true'
+    - name: Create or find Release PR
+      if: steps.changesets.outputs.create_release_pr == 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         VERSION=$(node -p "require('./package.json').version")
         BRANCH_NAME="${GITHUB_REF#refs/heads/}"
         SKIP_CHANGESET="${{ steps.changesets.outputs.skip_changeset }}"
-
-        PR_NUMBER=$(gh pr list --head "$BRANCH_NAME" --json number -q '.[0].number')
-
-        if [ -z "$PR_NUMBER" ]; then
-          if [ "$SKIP_CHANGESET" = "true" ]; then
-            PR_BODY="## 🚀 Release v$VERSION
-
-        このPRはrelease/$VERSIONブランチからの自動生成です。
-
-        ### 変更内容
-        - ルートパッケージバージョンの更新のみ
-        - ⚠️ changesetスキップモード
-
-        ### マージ後の動作
-        - mainブランチへのマージ時に自動的にnpmへ公開されます
-
-        ### 確認事項
-        - [ ] バージョン番号が正しいか
-        - [ ] すべてのテストがパスしているか"
-          else
-            PR_BODY="## 🚀 Release v$VERSION
-
-        このPRはrelease/$VERSIONブランチからの自動生成です。
-
-        ### 変更内容
-        - パッケージバージョンの更新
-        - CHANGELOGの自動生成
-
-        ### マージ後の動作
-        - mainブランチへのマージ時に自動的にnpmへ公開されます
-
-        ### 確認事項
-        - [ ] CHANGELOGの内容が正しいか
-        - [ ] バージョン番号が正しいか
-        - [ ] すべてのテストがパスしているか"
-          fi
-
-          gh pr create \
-            --base main \
-            --head "$BRANCH_NAME" \
-            --title "Release v$VERSION" \
-            --body "$PR_BODY"
-        else
-          echo "PR #$PR_NUMBER already exists for $BRANCH_NAME"
-        fi
+        node .github/scripts/ensure-release-pr.mjs "$BRANCH_NAME" "$VERSION" "$SKIP_CHANGESET"
 
     - name: No changesets found
-      if: steps.changesets.outputs.has_changesets == 'false' && steps.changesets.outputs.skip_changeset == 'false' && steps.changesets.outputs.already_versioned == 'false'
+      if: steps.changesets.outputs.missing_changesets == 'true'
       run: |
         echo "⚠️ .changesetディレクトリにchangesetファイルが見つかりません"
         echo "リリース前に 'pnpm changeset' で変更内容を記録してください"
