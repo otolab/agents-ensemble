@@ -30,7 +30,7 @@
 - 登録時の poll interval は 250–60000ms、debounce は 0–10000ms の範囲で session ごとに設定する。既定値は 2000ms / 250ms。
 - 稼働中 harness に接続できれば `session.observe` の live Registry sequence / 全 Open Question と session-state を使う。socket path の記録だけでは稼働中と判定しない。
 - UDS が到達不能、または古い harness が snapshot method に未対応なら Open Questions YAML を優先し、YAML がなければ legacy sidecar を使う。session-state YAML も読み取り、report には観測元を表示する。壊れた YAML を sidecar で上書き補完しない。
-- watch 設定、cursor、未 dispatch report は owner-only の operator-agent state に atomic 保存する。再起動時は未 dispatch report を queue に戻す。report hold は一時状態で、再起動時は解除状態から始まる。
+- watch 設定、cursor、未 dispatch report は owner-only の operator-agent state に atomic 保存する。再起動時は未 dispatch report を queue に戻す。`agent.send` が成功した後、対応する report の acknowledge が state に永続化される前に operator-agent が終了すると、再起動時に同じ report が再投入される。このため report delivery は at-least-once であり、重複が起こりうる。受け手は再送された内容を新しい変化と決めつけず、影響のある操作を行う前に対象 session の現在状態を確認する。report hold は一時状態で、再起動時は解除状態から始まる。
 
 ### Dispatch と hold
 
