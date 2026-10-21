@@ -65,9 +65,9 @@ github:
     allowGhAuthTokenFallback: true
   monitor:
     enabled: true
-    debounceMs: 30000
-    pollIntervalMs: 60000
-    activePollIntervalMs: 15000
+    debounceMs: 60000
+    pollIntervalMs: 120000
+    activePollIntervalMs: 60000
     stopPollWaitMs: 5000
 
 tui:
