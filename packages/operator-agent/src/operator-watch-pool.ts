@@ -373,8 +373,9 @@ function collectReports(
     source === 'uds' ? '稼働中 UDS' : '保存済み sidecar / YAML';
   for (const question of observation.openQuestions) {
     if (
+      !previous ||
       question.status !== 'open' ||
-      previous?.questionFingerprints[question.id] !== undefined
+      previous.questionFingerprints[question.id] !== undefined
     ) {
       continue;
     }
