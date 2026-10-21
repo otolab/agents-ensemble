@@ -350,14 +350,14 @@ worker (ACP)                    conductor (Cursor SDK / Pi)  オペレータ
 
 ### オペレータ対話（open question）
 
-Issue session 内で worker に指示し、ユーザへ結果を返す agent は引き続き **conductor**。operator-agent は稼働中 harness の session UDS を介して Open Question の一覧取得・回答を行い、回答を `operator.message` 相当の既存 dispatch として conductor に渡す。
+Issue session 内で worker に指示し、ユーザへ結果を返す agent は引き続き **conductor**。operator-agent は稼働中 harness の session UDS を介して Open Question の一覧取得・回答、watch 用 snapshot の取得、明示的な outbound `operator.message` の送信を行う。Open Question 回答は回答 API で記録し、明示 message は通常の operator message queue に入れる独立経路である。
 
 | レイヤ | 役割 |
 |--------|------|
 | **modular-prompt** | system prompt 文（指揮方針・materials） |
 | **オペレータメッセージ** | `agent.send` の user ターン（CLI TTY / CLI 初回引数 / `ENSEMBLE_OPERATOR_MESSAGE`） |
 | **OpenQuestionRegistry** | TODO リスト（`inq-N`）。tool で読む |
-| **UDS control API** | 稼働中 Registry の open 一覧と operator 回答を扱う。回答は `submitOperatorInput` 経由で event queue に入る |
+| **UDS control API** | Open Question の一覧・回答、watch snapshot、明示 outbound `operator.message` を扱う。回答と message は独立した経路で conductor に届く |
 | **SDK 会話** | LLM 会話履歴の正本（オペレータ発話・tool 結果を含む） |
 
 **ツール使い分け**
@@ -371,7 +371,7 @@ Issue session 内で worker に指示し、ユーザへ結果を返す agent は
 
 `ask_human` の `responseType` は `text`、`yes_no`、`choice` を指定できます。`yes_no` の回答は全文を保持し、共通パーサーの結果を `assent: yes | no | unclear` として記録します。`approved` は `relatedPermissionId` を持つ `yes_no` に限り、`yes` / `no` から導出します。`choice` は `choices: [{ id, label }]` を回答候補として登録します。オペレータは候補以外の自由記述でも回答でき、回答全文は常に保存されます。ID / 一意な label / 1 始まり番号で一意に解決できた場合だけ option id を `selectedChoice` に記録し、重複 label など曖昧な入力は自由記述として扱います。conductor が `answer_open_question` で代行記録する場合も、候補に解決できない回答を自由記述として記録できます。
 
-稼働中 harness は Open Question の live list / answer API を UDS で提供し、operator-agent は session sidecar から path を得る client です。wire format、request/result schema、回答 acknowledgement、停止時の unknown outcome、security / privacy は [live Open Question control API reference](live-open-question-control-api.md) を参照してください。
+稼働中 harness は Open Question の live list / answer、watch pool 用 `session.observe` snapshot、明示 outbound `operator.message` を UDS で提供し、operator-agent は session sidecar から path を得る client です。通常 message は Open Question の回答として記録されず、watch snapshot の取得とも独立しています。wire format、request/result schema、回答 acknowledgement、停止時の unknown outcome、security / privacy は [live Open Question control API reference](live-open-question-control-api.md) を参照してください。
 
 **ConductorSession ループ**（[ADR 0009](adr/0009-conductor-session-event-queue.md)）
 
