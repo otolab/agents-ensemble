@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { startOpenQuestionControlServer } from '@agents-ensemble/core';
 import type {
   ConductorAgent,
   ConductorAgentCreateOptions,
@@ -15,9 +16,11 @@ import {
   type OperatorAgentInput,
   type OperatorAgentOutput,
 } from './run-operator-agent.js';
+import { operatorWatchStatePath } from './operator-watch-pool.js';
 
 describe('runOperatorAgent', () => {
   let repoRoot = '';
+  let closeServers: Array<() => Promise<void>> = [];
   let originalModelEnv: string | undefined;
   let originalProfileEnv: string | undefined;
   let originalNoColorEnv: string | undefined;
@@ -90,6 +93,8 @@ describe('runOperatorAgent', () => {
   });
 
   afterEach(async () => {
+    for (const close of closeServers) await close();
+    closeServers = [];
     if (originalModelEnv === undefined) {
       delete process.env.CONDUCTOR_MODEL_ID;
     } else {
@@ -184,16 +189,308 @@ describe('runOperatorAgent', () => {
     expect(agentOptions?.systemPrompt).toContain('自動解決はしません');
     expect(agentOptions?.systemPrompt).toContain('get_last_conductor_message');
     expect(agentOptions?.customTools).not.toHaveProperty('prompt_worker');
+    expect(
+      Object.keys(agentOptions?.customTools ?? {}).filter(
+        (toolName) => toolName === 'send_operator_message',
+      ),
+    ).toHaveLength(1);
     expect(Object.keys(agentOptions?.customTools ?? {})).toEqual([
       'list_operator_sessions',
       'list_live_open_questions',
       'answer_live_open_question',
       'get_last_conductor_message',
+      'register_session_watch',
+      'unregister_session_watch',
+      'set_report_hold',
+      'release_reports',
       'send_operator_message',
     ]);
     await expect(
       readFile(join(repoRoot, '.ensemble', 'operator-agent', 'session.json')),
     ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('polls an offline watched session and refreshes the held-report count in the TTY', async () => {
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const fakeAgent = createFakeAgent({
+      send: async () => {
+        await agentOptions!.customTools!.set_report_hold!.execute({ hold: true });
+        await agentOptions!.customTools!.register_session_watch!.execute({
+          conductorAgentId: 'conductor-one',
+          pollIntervalMs: 250,
+          debounceMs: 0,
+        });
+        return { runId: 'run-1', status: 'completed', result: 'watch started' };
+      },
+    });
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return fakeAgent;
+          },
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    await vi.waitFor(() =>
+      expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+    );
+    input.write('監視を開始\n');
+    setTimeout(() => input.write('/exit\n'), 750);
+    await run;
+
+    expect(output.capturedText()).toContain('報告保留中（1 件）');
+  });
+
+  it('sends multiple same-source watch reports in one operator-agent dispatch', async () => {
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 2,
+        openQuestions: [
+          {
+            id: 'inq-2',
+            question: 'Review the implementation?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 2,
+          },
+          {
+            id: 'inq-3',
+            question: 'Confirm the test result?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 3,
+          },
+        ],
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+
+    const sidecarPath = join(
+      repoRoot,
+      '.ensemble',
+      'sessions',
+      'conductor-one.json',
+    );
+    const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({ ...sidecar, harnessSocketPath: liveServer.socketPath }),
+    );
+
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const sentPrompts: string[] = [];
+    const fakeAgent = createFakeAgent({
+      send: async (prompt) => {
+        sentPrompts.push(prompt);
+        if (sentPrompts.length === 1) {
+          await agentOptions!.customTools!.register_session_watch!.execute({
+            conductorAgentId: 'conductor-one',
+            pollIntervalMs: 250,
+            debounceMs: 0,
+          });
+        }
+        return {
+          runId: `run-${sentPrompts.length}`,
+          status: 'completed',
+          result: 'received',
+        };
+      },
+    });
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return fakeAgent;
+          },
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    try {
+      await vi.waitFor(() =>
+        expect(output.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      );
+      input.write('start watching\n');
+      await vi.waitFor(() => expect(sentPrompts).toHaveLength(2));
+      input.write('/exit\n');
+      await run;
+    } finally {
+      input.end();
+    }
+
+    expect(sentPrompts).toHaveLength(2);
+    expect(sentPrompts[1]).toContain('## Open Question の更新（2 件）');
+    expect(sentPrompts[1]).toContain('Review the implementation?');
+    expect(sentPrompts[1]).toContain('Confirm the test result?');
+  });
+
+  it('retains a cancelled watch report across restart and acknowledges it only after a completed retry', async () => {
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 1,
+        openQuestions: [
+          {
+            id: 'inq-cancelled',
+            question: 'Should this report be retried?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 10,
+          },
+        ],
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+
+    const sidecarPath = join(
+      repoRoot,
+      '.ensemble',
+      'sessions',
+      'conductor-one.json',
+    );
+    const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({ ...sidecar, harnessSocketPath: liveServer.socketPath }),
+    );
+
+    const statePath = operatorWatchStatePath(repoRoot);
+    const firstInput = new PassThrough() as PassThrough & OperatorAgentInput;
+    firstInput.isTTY = true;
+    const firstOutput = createOutput();
+    let firstAgentOptions: ConductorAgentCreateOptions | undefined;
+    const firstPrompts: string[] = [];
+    const firstAgent = createFakeAgent({
+      send: async (prompt) => {
+        firstPrompts.push(prompt);
+        if (firstPrompts.length === 1) {
+          await firstAgentOptions!.customTools!.register_session_watch!.execute({
+            conductorAgentId: 'conductor-one',
+            pollIntervalMs: 250,
+            debounceMs: 0,
+          });
+          return {
+            runId: 'first-user-send',
+            status: 'completed',
+            result: 'watch registered',
+          };
+        }
+        const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
+          pendingReports: Array<{ reportId: string }>;
+        };
+        expect(saved.pendingReports).toHaveLength(1);
+        return {
+          runId: 'cancelled-report-send',
+          status: 'cancelled',
+          result: 'partial; cancelled',
+        };
+      },
+    });
+    const firstRun = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: firstInput,
+        stdout: firstOutput,
+        agentFactory: {
+          create: async (options) => {
+            firstAgentOptions = options;
+            return firstAgent;
+          },
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+
+    await vi.waitFor(() =>
+      expect(firstOutput.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+    );
+    firstInput.write('watch this session\n');
+    await vi.waitFor(() => expect(firstPrompts).toHaveLength(2));
+    firstInput.end();
+    await firstRun;
+
+    const afterCancelledSend = JSON.parse(
+      await readFile(statePath, 'utf8'),
+    ) as { pendingReports: Array<{ reportId: string }> };
+    expect(afterCancelledSend.pendingReports).toHaveLength(1);
+    expect(firstOutput.capturedText()).toContain(
+      'status=cancelled; watched reports retained for retry.',
+    );
+
+    const retryInput = new PassThrough() as PassThrough & OperatorAgentInput;
+    retryInput.isTTY = true;
+    const retryOutput = createOutput();
+    const retryPrompts: string[] = [];
+    const retryAgent = createFakeAgent({
+      send: async (prompt) => {
+        retryPrompts.push(prompt);
+        return {
+          runId: 'completed-report-retry',
+          status: 'finished',
+          result: 'report handled',
+        };
+      },
+    });
+    const retryRun = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: retryInput,
+        stdout: retryOutput,
+        agentFactory: {
+          create: async () => {
+            throw new Error('saved operator-agent state should resume');
+          },
+          resume: async () => retryAgent,
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(retryPrompts).toHaveLength(1));
+    expect(retryPrompts[0]).toContain('Should this report be retried?');
+    await vi.waitFor(async () => {
+      const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
+        pendingReports: Array<{ reportId: string }>;
+      };
+      expect(saved.pendingReports).toHaveLength(0);
+    });
+    retryInput.write('/exit\n');
+    await retryRun;
   });
 
   it('keeps the TTY transcript free of ANSI escapes when NO_COLOR is set', async () => {

@@ -244,7 +244,25 @@ worker cost は **表示しない（Issue #469 の方針 A）**。ACP の `Promp
 
 ### 3.4 Context compaction 回数
 
-Pi v1.2.0 の `AgentSessionEvent.compaction_end` は成功時に `result` を含み、失敗時は `result: undefined`、中断時は `aborted: true` を通知する（[event type](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L207-L214)、[manual compaction](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L2713-L2735)、[auto compaction](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L3017-L3047)）。Pi conductor は `result` があり、中断・エラーでない `compaction_end` だけを数える。`entry_appended` は通常成功経路では発火しないため counter source に使わない。組み込み Pi backend は `compactionCount` を含め、成功イベントが無いセッションは `0` と表示する。Cursor SDK および差し替え backend factory はこのカウンタを提供しないため、フィールドと TTY 行を出さない。
+TTY の `コンテキスト圧縮: N 回` は、**組み込み Pi conductor で harness が観測した成功 compaction の件数**。`0` は「このカウンターが成功した Pi `compaction_end` を 1 件も受け取らなかった」という意味で、圧縮の試行が無かったことや、失敗・中断を含め圧縮イベントが一切起きなかったことの証明ではない。
+
+Pi v1.2.0 の `AgentSessionEvent.compaction_end` は成功時に `result` を含み、失敗時は `result: undefined`、中断時は `aborted: true` を通知する（[event type](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L207-L214)、[manual compaction](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L2713-L2735)、[auto compaction](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/agent-session.ts#L3017-L3047)）。組み込み Pi backend は `result` があり、`aborted` でなく、`errorMessage` も無い `compaction_end` を受け取るたびにカウンターを 1 増やす。
+
+**この件数に含めないもの**
+
+- `entry_appended` の `compaction` entry。通常の成功通知ではなく、成功判定には `compaction_end` を使う。
+- `compaction_end` に `result` が無い失敗、中断 (`aborted: true`)、エラー (`errorMessage` あり)。
+- イベントが発生しなかった場合。たとえば自動圧縮が無効、設定された条件に未到達、または試行自体が無かった場合。イベントが harness に届かなかった場合も、このカウンターからは判別できない。
+- **worker ACP** 内部のコンテキスト整理。これは conductor の Pi compaction counter とは別の backend / セッションであり、ここには集計しない。
+
+この項目を計測するのは、`conductorBackend === 'pi'` かつ `conductorAgentFactory` の差し替えが無い場合だけ。したがって、カウンターが有効な組み込み Pi backend では成功イベントが 0 件でも `compactionCount: 0` が summary に残り、TTY に `コンテキスト圧縮: 0 回` を表示する。一方、**Cursor SDK とカスタム factory は計測対象外**で、`compactionCount` と TTY 行を出さない。Pi を選択していても factory を注入したセッションは対象外である。行が無いことは 0 回を表すのではなく、このサマリに利用可能なカウンターが無いことを表す。
+
+**「0 回」の自己確認**
+
+1. セッションの `.ensemble/sessions/<agentId>.json` にある `conductorBackend`（古い sidecar で省略されている場合は Cursor 扱い）と起動時の設定を確認する。Pi 選択でもカスタム `conductorAgentFactory` を使う構成なら、このカウンターは有効にならない。Cursor conductor では行が出ないのが想定どおり。
+2. Pi の有効な設定で `compaction.enabled` を確認する。Pi headless conductor が SettingsManager に適用する `compaction.*` は [Pi headless 設定の対応範囲](config.md) の許可項目に限られる。無効なら自動圧縮イベントは期待できない。設定が有効でも、実際に条件へ達したことまではサマリで分からない。
+3. `conductor ターン` と `コンテキスト: N%` を併せて見る。後者は記録された各ラウンドの `inputTokens` 累計を指定 context limit と比べた値で、現在の Pi prompt の占有率や圧縮閾値への到達を表さない（[§3.1 context utilization](#31-セッションサマリ-sessionusagesummary)）。ターンが少ない、または累計が低いなら未到達の可能性があるが、これだけで圧縮の有無は断定できない。
+4. 試行や失敗まで確認するには Pi 側のイベント payload / ログを別途確認する。Pi transcript の compaction entry は手掛かりになるが、harness は compaction の試行・失敗・中断や `compaction_end` payload をログ出力しないため、終了サマリ単独ではそれらを特定できない。イベントを採取できるログがある場合は成功した `compaction_end` とカウンターを照合し、失敗・中断はこの件数に含まれないものとして読む。
 
 ---
 

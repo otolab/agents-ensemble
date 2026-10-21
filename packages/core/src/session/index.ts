@@ -39,6 +39,7 @@ export type {
   OpenQuestionControlListItem,
   OpenQuestionControlServer,
   OpenQuestionControlServerOptions,
+  SessionObservationSnapshot,
 } from './open-question-control.js';
 export {
   loadSessionStateStore,

@@ -364,7 +364,7 @@ describe('runConductorSession resume / shutdown', () => {
       result: 'started',
     });
 
-    await runConductorSession({
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
@@ -379,6 +379,7 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
     expect(mockCreateCursorSdkConductorAgentFactory).not.toHaveBeenCalled();
+    expect(result.sessionUsage?.compactionCount).toBe(0);
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         systemPrompt: expect.stringContaining('body'),
@@ -390,6 +391,28 @@ describe('runConductorSession resume / shutdown', () => {
       expect.any(Object),
     );
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
+  });
+
+  it('does not expose a compaction counter for the Cursor SDK backend', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-cursor-usage',
+      status: 'finished',
+      result: 'done',
+      usage: { inputTokens: 12, outputTokens: 5, totalTokens: 17 },
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreateCursorSdkConductorAgentFactory).toHaveBeenCalledOnce();
+    expect(result.sessionUsage).toBeDefined();
+    expect(result.sessionUsage).not.toHaveProperty('compactionCount');
   });
 
   it('shares Pi tokens and successful compactions with get_session_usage while omitting estimated cost', async () => {
@@ -641,7 +664,7 @@ describe('runConductorSession resume / shutdown', () => {
       result: 'done',
     });
 
-    await runConductorSession({
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { conductor: { backend: 'pi' }, workers: [] },
@@ -651,6 +674,9 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
     });
+
+    expect(result.sessionUsage).toBeDefined();
+    expect(result.sessionUsage).not.toHaveProperty('compactionCount');
 
     const sidecar = await loadSessionSidecar(
       sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
@@ -1932,6 +1958,96 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
     });
+  });
+
+  it('observes a live session and queues an explicit operator.message without answering an Open Question', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    let sendCount = 0;
+    const delivered = createDeferred<string>();
+    const sendCompleted = createDeferred<void>();
+    const shutdown = new AbortController();
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        await conductorTools!.ask_human!.execute({
+          question: 'Proceed with the review?',
+          responseType: 'yes_no',
+        });
+      } else {
+        delivered.resolve(message);
+      }
+      sendCompleted.resolve();
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'done',
+      };
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+    });
+
+    try {
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+      });
+      const socketPath = (await loadSessionSidecar(sidecarPath))!.harnessSocketPath!;
+      const observation = await sendOpenQuestionControlRequest<{
+        sequence: number;
+        openQuestions: Array<{ id: string; status: string }>;
+      }>(socketPath, {
+        method: OPEN_QUESTION_CONTROL_METHODS.observe,
+      });
+      expect(observation).toMatchObject({
+        sequence: 1,
+        openQuestions: [{ id: 'inq-1', status: 'open' }],
+      });
+
+      await expect(
+        sendOpenQuestionControlRequest(socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: {
+            text: 'レビューの進捗を確認してください',
+            delivery: 'next',
+          },
+        }),
+      ).resolves.toEqual({ queued: true, delivery: 'next' });
+      await expect(settleWithin(delivered.promise, 5_000)).resolves.toBe(
+        'レビューの進捗を確認してください',
+      );
+      await settleWithin(sendCompleted.promise, 5_000);
+      const afterMessage = await sendOpenQuestionControlRequest<{
+        openQuestions: Array<{ id: string; status: string }>;
+      }>(socketPath, { method: OPEN_QUESTION_CONTROL_METHODS.observe });
+      expect(afterMessage.openQuestions[0]).toMatchObject({
+        id: 'inq-1',
+        status: 'open',
+      });
+    } finally {
+      shutdown.abort();
+      await sessionPromise;
+    }
   });
 
   it('registers set_dispatch_hold and records hold transitions without sidecar state', async () => {

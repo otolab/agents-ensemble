@@ -120,6 +120,7 @@ import {
 import {
   saveSessionStatusLine,
   sessionStateStorePath,
+  loadSessionStateStore,
 } from '../session/session-state-store.js';
 import {
   loadToolCallSnapshotHistory,
@@ -1478,6 +1479,19 @@ export async function runConductorSession(
     openQuestionControlServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => openQuestions.listOpen(),
       getLastConductorMessage: () => lastConductorMessage,
+      observeSession: async () => {
+        await sessionStateWriteQueue;
+        const sessionState = await loadSessionStateStore(
+          sessionStateStorePath({
+            repoRoot: options.repoRoot,
+            conductorAgentId: conductorAgent.agentId,
+          }),
+        );
+        return {
+          ...openQuestions.snapshot(),
+          ...(sessionState ? { sessionState } : {}),
+        };
+      },
       sendOperatorMessage: ({ text, delivery }) => {
         if (teardownStarted) {
           throw new OpenQuestionControlOperationError(

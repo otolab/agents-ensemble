@@ -88,7 +88,7 @@ operator-agent は既定で前回の operator 会話を再開します。初回�
 
 TTY の会話では `user>` を控えめに、`operator>` をシアンで表示し、operator の本文は次の行から表示します。応答の段落間の空行は保たれ、連続する空行は最大 1 行に整理されます。起動・終了・エラー表示にも同じ余白を設けます。`NO_COLOR` が設定されている場合は色を使いません。
 
-`.ensemble/sessions/` の保存済み sidecar から得られる情報はスナップショットとして読み取り専用です。稼働中 harness への UDS live control が使える場合に限り、`list_live_open_questions` で一覧を取得し、operator が選んだ回答を `answer_live_open_question` で送れます。また `send_operator_message` から conductor へ指示を送り、`next`（既定）・`idle`・`interrupt` の配信時期を指定できます。送った指示の後は `get_last_conductor_message` で最後の conductor 成功応答を確認できます。成功応答がまだない場合は `message: null` です。これらは稼働中 session に限られ、harness 停止中または接続不能ならエラーになり、保存 YAML への自動 fallback はしません。メッセージ送信の成功応答はキュー受理を示し、処理完了の確認ではありません。詳細は [稼働中 harness control API reference](../live-open-question-control-api.md)、セキュリティとログの扱いは [session logging](../session-logging.md#4-sidecar-と-open-question-yaml) を参照してください。
+`.ensemble/sessions/` の保存済み sidecar から得られる情報はスナップショットとして読み取り専用です。複数 session の watch は稼働中 harness の `session.observe` を使い、接続不能または未対応時には保存済み Open Questions YAML / session-state YAML / sidecar を poll して観測元を示します。一方、`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` は稼働中 session の直接 UDS control であり、停止・接続不能時にエラーとなり snapshot へ fallback しません。送った指示の後は `get_last_conductor_message` で最後の conductor 成功応答を確認でき、まだ成功応答がなければ `message: null` です。`send_operator_message` は `next`（既定）・`idle`・`interrupt` を指定できます。成功応答はキュー受理を示し、処理完了の確認ではありません。詳細は [稼働中 harness control API reference](../live-open-question-control-api.md)、セキュリティとログの扱いは [session logging](../session-logging.md#4-sidecar-と-open-question-yaml) を参照してください。
 
 初回の作業指示は、Issue 参照の後ろに CLI 引数として渡せます。複数の引数はスペース 1 つで結合され、前後の空白は除かれます。
 
