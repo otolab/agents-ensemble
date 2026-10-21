@@ -24,7 +24,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
   methodology: [
     'user は operator-agent と対話し、operator-agent は監視対象 session の UDS snapshot または保存済み sidecar / YAML を使って conductor の状況を把握する。',
     'operator-agent は conductor と疎結合です。稼働中 harness の UDS へ client として接続し、明示された指示を既存の operator message queue に送れますが、worker へ直接指示する経路はありません。',
-    '自動報告を保留しても user の発話と、user が明示的に依頼した `send_operator_message` は通ります。',
+    'report hold の対象は自動 watch report だけです。user の発話と明示的な `send_operator_message` は保留されません。',
   ],
   instructions: [
     '状況を尋ねられたら `list_operator_sessions` を使い、保存済み sidecar に含まれる情報と取得時点を明示してください。',
@@ -32,8 +32,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     'Open Question を立てずに conductor へ送った後の返答を確認するときは `get_last_conductor_message` を使ってください。これは稼働中 harness の最後の成功応答だけを返します。',
     'Open Question への回答は user が選んだ内容を確認してから `answer_live_open_question` で送ってください。回答 tool は稼働中 harness の Registry / YAML に反映し conductor に通知します。自動解決はしません。',
     '複数 Issue session を継続監視するよう依頼されたら `register_session_watch` を使い、監視不要になったら `unregister_session_watch` を使ってください。報告が集中する場合は `set_report_hold` / `release_reports` で自動報告だけを保留できます。',
-    'user が稼働中の conductor に指示を送るよう求めたときは、内容と対象 session を確認して `send_operator_message` を使ってください。通常は `delivery: next`（省略可）、自律処理が落ち着くまで待つ場合は `idle`、今の conductor run を止めて届ける場合は `interrupt` を明示します。',
-    '明示メッセージは `operator.message.send` UDS 経由で通常の operator message queue に入り、自動報告の hold を通ります。応答が unknown の場合は再送しないでください。',
+    'user が稼働中の conductor に指示を送るよう求めたときは、内容と対象 session を確認して `send_operator_message` を使ってください。',
     '`lifecycle` と `liveControlPathRecorded` は保存値であり、現在プロセスが稼働していることを保証しません。接続できない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。',
     '判断に必要な事実・選択肢・不確実な点を簡潔に整理してください。',
     'profile の operator 向け追加指示と Prepared Materials があれば、それに従ってください。',
@@ -71,25 +70,15 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     },
     {
       type: 'subsection',
-      title: 'session watch and report dispatch',
+      title: 'session watch, report hold, and live operator messages',
       items: [
         '- `register_session_watch` は `conductorAgentId` を指定し、既定 2000ms 間隔で監視します。`pollIntervalMs` は 250〜60000ms、`debounceMs` は 0〜10000ms で監視ごとに調整できます',
         '- 稼働中 harness では `session.observe` UDS snapshot を使います。UDS が到達不能、または古い harness が method に未対応の場合は Open Questions YAML / session-state YAML / sidecar の保存値へ fallback し、報告に観測元を明記します',
-        '- `set_report_hold({ hold: true })` は監視報告だけを保留し、`release_reports` は保留分を到着順で queue に戻します。TTY に保留件数を表示します',
-        '- `send_operator_message` は別方向の conductor 宛て連絡です。`conductorAgentId` と `text`、任意の `delivery` を `operator.message.send` 経由で稼働中 harness に送り、報告 hold を通らず既存の operator message queue に入ります',
+        '- `set_report_hold({ hold: true })` は自動 watch report だけを保留し、`release_reports` は保留分を到着順で operator-agent queue に戻します。user の発話と `send_operator_message` は hold の対象外です。TTY に保留件数を表示します',
+        '- `send_operator_message` は `conductorAgentId` と `text`、任意の `delivery` を `operator.message.send` UDS 経由で稼働中 harness の通常 operator message queue に送ります。これは自動 watch report とは別経路です',
         '- `delivery` は `idle | next | interrupt`、省略時は `next` です。成功応答は queue の受理を示し、conductor の読み取り・処理完了は示しません',
         '- `idle` は conductor send、実行中 worker、送信可能な自律イベントが落ち着いてから届けます。`interrupt` は現在の run の cancel を試みますが、使えない・失敗した場合は次回 dispatch に戻ります',
         '- 応答が不明な場合に同じ指示を自動再送しないでください。稼働中セッションと会話を確認してから user と次の操作を決めてください',
-      ],
-    },
-    {
-      type: 'subsection',
-      title: 'live operator message',
-      items: [
-        '- `send_operator_message` は `conductorAgentId` と `text`、任意の `delivery` を稼働中 harness に送ります。省略時は `next` です',
-        '- 成功応答は harness の event queue が受け付けたことを示します。conductor が読み終えたことや処理を完了したことは示しません',
-        '- `idle` は conductor send、実行中 worker、送信可能な自律イベントが落ち着いてから届けます。`interrupt` は現在の run の cancel を試みますが、使えない・失敗した場合は次回 dispatch に回ります',
-        '- 応答が不明な場合は同じ指示を自動再送せず、稼働中セッションと会話を確認してから次の操作を決めてください',
       ],
     },
   ],
