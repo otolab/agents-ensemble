@@ -81,7 +81,7 @@ import {
 
 const workerTextGraphemeSegmenter = new Intl.Segmenter('en', { granularity: 'grapheme' });
 const workerAnsiSequencePattern =
-  /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\)|[@-_])/g;
+  /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001B]*(?:\u0007|\u001B\\)|[@-_])|\u009B[0-?]*[ -/]*[@-~]|\u009D[^\u0007\u009C]*(?:\u0007|\u009C)/g;
 
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
@@ -236,33 +236,22 @@ function truncateWorkerStatusLine(line: string, width: number): string {
   const contentWidth = Math.max(0, width - stringWidth(ellipsis));
   let visibleWidth = 0;
   let truncated = '';
-  let cursor = 0;
 
-  const appendText = (text: string): boolean => {
-    for (const { segment } of workerTextGraphemeSegmenter.segment(text)) {
-      const segmentWidth = stringWidth(segment);
-      if (visibleWidth + segmentWidth > contentWidth) {
-        return false;
-      }
-      truncated += segment;
-      visibleWidth += segmentWidth;
+  for (const { segment } of workerTextGraphemeSegmenter.segment(line)) {
+    const segmentWidth = stringWidth(segment);
+    if (visibleWidth + segmentWidth > contentWidth) {
+      break;
     }
-    return true;
-  };
-
-  for (const match of line.matchAll(workerAnsiSequencePattern)) {
-    const sequenceStart = match.index ?? 0;
-    if (!appendText(line.slice(cursor, sequenceStart))) {
-      return `${truncated}${ellipsis}`;
-    }
-    truncated += match[0];
-    cursor = sequenceStart + match[0].length;
-  }
-
-  if (!appendText(line.slice(cursor))) {
-    return `${truncated}${ellipsis}`;
+    truncated += segment;
+    visibleWidth += segmentWidth;
   }
   return `${truncated}${ellipsis}`;
+}
+
+function stripWorkerAnsiSequences(text: string): string {
+  return text
+    .replace(workerAnsiSequencePattern, '')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
 }
 
 function fitWorkerStatusLine(
@@ -270,11 +259,38 @@ function fitWorkerStatusLine(
   worker: { kind: string; status: WorkerDisplayStatus; activity?: string },
   width: number,
 ): string {
-  const line = truncateWorkerStatusLine(
-    formatConductorWorkerStatusLine(name, worker),
-    width,
-  );
-  return `${line}${' '.repeat(Math.max(0, width - stringWidth(line)))}`;
+  const safeName = stripWorkerAnsiSequences(name);
+  const safeWorker = {
+    ...worker,
+    kind: stripWorkerAnsiSequences(worker.kind),
+    ...(worker.activity !== undefined
+      ? { activity: stripWorkerAnsiSequences(worker.activity) }
+      : {}),
+  };
+  const line = formatConductorWorkerStatusLine(safeName, safeWorker);
+  if (stringWidth(line) <= width) {
+    return `${line}${' '.repeat(width - stringWidth(line))}`;
+  }
+
+  if (safeWorker.kind === 'conductor') {
+    const truncated = truncateWorkerStatusLine(line, width);
+    return `${truncated}${' '.repeat(Math.max(0, width - stringWidth(truncated)))}`;
+  }
+
+  const statusSuffix = `: ${safeWorker.status}`;
+  const displayName = formatWorkerDisplayName(safeName, safeWorker.kind);
+  const displayNameWidth = width - stringWidth(statusSuffix);
+  let fittedLine = `${truncateWorkerStatusLine(displayName, displayNameWidth)}${statusSuffix}`;
+
+  if (safeWorker.status === 'running' && safeWorker.activity) {
+    const activityWidth = width - stringWidth(fittedLine) - stringWidth(' ()');
+    if (activityWidth > 0) {
+      fittedLine += ` (${truncateWorkerStatusLine(safeWorker.activity, activityWidth)})`;
+    }
+  }
+
+  const fittedWidth = stringWidth(fittedLine);
+  return `${fittedLine}${' '.repeat(Math.max(0, width - fittedWidth))}`;
 }
 
 function sortWorkerEntries(
