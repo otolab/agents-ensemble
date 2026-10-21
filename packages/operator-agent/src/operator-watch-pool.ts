@@ -478,14 +478,14 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
         !isRecord(rawCursor) ||
         !Number.isSafeInteger(rawCursor.sequence) ||
         (rawCursor.sequence as number) < 0 ||
-        !isRecord(rawCursor.questionFingerprints) ||
-        !isRecord(rawCursor.statusFingerprints)
+        !isStringRecord(rawCursor.questionFingerprints) ||
+        !isStringRecord(rawCursor.statusFingerprints)
       ) {
         throw new Error(`Invalid operator-agent watch state: cursor ${id}.`);
       }
       cursors[id] = rawCursor as unknown as SessionCursor;
     }
-    const pendingReports = value.pendingReports ?? [];
+    const pendingReports = value.pendingReports;
     if (!Array.isArray(pendingReports)) {
       throw new Error('Invalid operator-agent watch state: pendingReports.');
     }
@@ -594,6 +594,13 @@ function requireNonEmptyString(value: string, name: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    isRecord(value) &&
+    Object.values(value).every((item) => typeof item === 'string')
+  );
 }
 
 function isEnoent(error: unknown): boolean {

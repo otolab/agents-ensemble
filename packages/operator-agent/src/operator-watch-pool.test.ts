@@ -319,6 +319,66 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('fails initialization for incomplete or malformed persisted watch state', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-invalid-'));
+    const validState = {
+      version: 1,
+      watches: {},
+      cursors: {
+        'session-one': {
+          sequence: 1,
+          questionFingerprints: { 'inq-1': 'fingerprint' },
+          statusFingerprints: {},
+        },
+      },
+      pendingReports: [],
+    };
+    const invalidStates = [
+      {
+        ...validState,
+        pendingReports: undefined,
+      },
+      {
+        ...validState,
+        pendingReports: null,
+      },
+      {
+        ...validState,
+        cursors: {
+          'session-one': {
+            sequence: 1,
+            questionFingerprints: { 'inq-1': 1 },
+            statusFingerprints: {},
+          },
+        },
+      },
+      {
+        ...validState,
+        cursors: {
+          'session-one': {
+            sequence: 1,
+            questionFingerprints: {},
+            statusFingerprints: { '20': null },
+          },
+        },
+      },
+    ];
+    const statePath = operatorWatchStatePath(repoRoot);
+    await mkdir(join(repoRoot, '.ensemble', 'operator-agent'), {
+      recursive: true,
+    });
+
+    for (const invalidState of invalidStates) {
+      await writeFile(statePath, JSON.stringify(invalidState));
+      await expect(
+        createOperatorWatchPool({
+          repoRoot,
+          dispatchQueue: createOperatorDispatchQueue(),
+        }),
+      ).rejects.toThrow('Invalid operator-agent watch state');
+    }
+  });
+
   it('deduplicates live Registry and YAML observations and reports only new open questions', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-dedup-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });

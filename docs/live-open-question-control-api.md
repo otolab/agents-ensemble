@@ -32,6 +32,14 @@ operator-agent tool の input は次のとおりです。
 
 list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }`）です。answer tool の text content は UDS result (`{ "question": {...} }`) を JSON 表示し、`structuredContent` は `questionId`, `status`, 任意の `answeredBy`, `approved` を持つ object に整形します。これは operator-agent tool wrapper の出力で、UDS wire response とは形が異なります。
 
+## Operator-agent watch state の欠損・破損と復旧
+
+watch pool は `.ensemble/operator-agent/watch-state.json` に watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。
+
+- **state file が存在しない場合:** empty state として起動し、watch pool は空です。保存済み watch 登録・cursor・未 dispatch report は復元されません。監視を再開するには対象 session ごとに `register_session_watch` を実行してください。cursor がないため、再登録後の最初の成功した snapshot は既存 Open Question ID の silent baseline になります。その snapshot にすでに含まれる質問（state 欠損中に追加された質問も含む）は新規通知として replay されません。baseline 後に追加された ID は通常どおり通知されます。
+- **JSON または state schema が不正な場合:** operator-agent の初期化は失敗し、empty state へ黙って置き換えません。保存ファイルを退避してから、有効な backup を戻すか、version と必須 field を修復して再起動してください。state を意図的に破棄する場合も、まず必要ならコピーを保全してください。ファイルを取り除いて再起動すると empty state から始まり、上記の再登録と silent baseline が必要です。
+- **report hold:** hold は watch state には保存されない会話中の状態です。再起動後は解除状態で始まります。
+
 ## Endpoint discovery と lifecycle
 
 operator-agent は JSON sidecar `.ensemble/sessions/{conductorAgentId}.json` の `harnessSocketPath` を読み、接続先を得ます。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、sidecar に記録された値を使ってください。
