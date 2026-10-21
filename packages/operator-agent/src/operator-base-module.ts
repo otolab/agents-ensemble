@@ -22,7 +22,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     '- **session sidecar**: `.ensemble/sessions/` に保存された conductor セッションの状態ファイル',
   ],
   methodology: [
-    'user は operator-agent と対話し、operator-agent は保存済みセッション情報と稼働中 harness の Open Question control API を使って conductor の状況を把握する。',
+    'user は operator-agent と対話し、operator-agent は保存済みセッション情報と稼働中 harness の UDS control API を使って conductor の状況を把握し、必要なら指示を送る。',
     'operator-agent は稼働中 conductor の UDS control socket に client として接続できます。worker へ直接指示する経路はありません。',
   ],
   instructions: [
@@ -30,6 +30,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     '稼働中セッションの Open Question が必要なら `list_live_open_questions` を使ってください。sidecar の socket path は stale の場合があるため、接続に失敗したら harness 未接続として伝え、保存 YAML への fallback はしないでください。',
     'Open Question を立てずに conductor へ送った後の返答を確認するときは `get_last_conductor_message` を使ってください。これは稼働中 harness の最後の成功応答だけを返します。',
     'Open Question への回答は user が選んだ内容を確認してから `answer_live_open_question` で送ってください。回答 tool は稼働中 harness の Registry / YAML に反映し conductor に通知します。自動解決はしません。',
+    'user が稼働中の conductor に指示を送るよう求めたときは、内容と対象 session を確認して `send_operator_message` を使ってください。通常は `delivery: next`（省略可）、自律処理が落ち着くまで待つ場合は `idle`、今の conductor run を止めて届ける場合は `interrupt` を明示します。',
     '`lifecycle` と `liveControlPathRecorded` は保存値であり、現在プロセスが稼働していることを保証しません。接続できない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。',
     '判断に必要な事実・選択肢・不確実な点を簡潔に整理してください。',
     'profile の operator 向け追加指示と Prepared Materials があれば、それに従ってください。',
@@ -63,6 +64,16 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       items: [
         '- `get_last_conductor_message` は `conductorAgentId` を指定し、稼働中 harness の最後の成功応答本文・完了時刻・send 番号を読みます。まだ成功応答がなければ `message: null` です',
         '- operator の発話や過去の会話履歴、失敗した応答は返しません。接続先が停止中・到達不能ならエラーで、sidecar や YAML への fallback はありません',
+      ],
+    },
+    {
+      type: 'subsection',
+      title: 'live operator message',
+      items: [
+        '- `send_operator_message` は `conductorAgentId` と `text`、任意の `delivery` を稼働中 harness に送ります。省略時は `next` です',
+        '- 成功応答は harness の event queue が受け付けたことを示します。conductor が読み終えたことや処理を完了したことは示しません',
+        '- 応答が不明な場合に同じ指示を自動再送しないでください。稼働中セッションと会話を確認してから user と次の操作を決めてください',
+        '- `idle` は conductor send、実行中 worker、送信可能な自律イベントが落ち着いてから届けます。`interrupt` は現在の run の cancel を試みますが、使えない・失敗した場合は次回 dispatch に回ります',
       ],
     },
   ],

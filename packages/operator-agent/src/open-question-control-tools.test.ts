@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpenQuestionRegistry } from '../../core/src/escalation/open-question.js';
 import { recordOpenQuestionAnswer } from '../../core/src/escalation/record-open-question-answer.js';
 import {
@@ -17,6 +17,7 @@ import {
   createAnswerLiveOpenQuestionTool,
   createGetLastConductorMessageTool,
   createListLiveOpenQuestionsTool,
+  createSendOperatorMessageTool,
 } from './open-question-control-tools.js';
 
 describe('operator-agent live Open Question tools', () => {
@@ -154,5 +155,49 @@ describe('operator-agent live Open Question tools', () => {
         conductorAgentId: 'agent-offline',
       }),
     ).rejects.toThrow('has no recorded live control socket');
+  });
+
+  it('sends one operator message through the live session UDS', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-send-'));
+    const sendOperatorMessage = vi.fn().mockReturnValue(true);
+    server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      answerOpenQuestion: async () => {
+        throw new Error('unexpected answer');
+      },
+      sendOperatorMessage,
+    });
+    await saveSessionSidecar(
+      sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-send',
+      }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: 'agent-send',
+        issueUrl: 'https://github.com/org/repo/issues/3',
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        harnessSocketPath: server.socketPath,
+        updatedAt: Date.now(),
+      },
+    );
+
+    const sent = await createSendOperatorMessageTool(repoRoot).execute({
+      conductorAgentId: 'agent-send',
+      text: 'please continue after workers settle',
+      delivery: 'idle',
+    });
+    expect(sent.structuredContent).toEqual({
+      queued: true,
+      delivery: 'idle',
+    });
+    expect(sendOperatorMessage).toHaveBeenCalledWith({
+      text: 'please continue after workers settle',
+      delivery: 'idle',
+    });
   });
 });

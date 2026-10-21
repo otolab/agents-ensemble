@@ -80,6 +80,38 @@ describe('submitOperatorInput', () => {
     expect(escalations[0]?.answer).toBe('approved');
   });
 
+  it('records the resolved delivery mode in both event and session log', () => {
+    const eventQueue = new SessionEventQueue();
+    const sessionLogger = new SessionLogger({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      repoRoot: '/repo',
+    });
+    const emitSpy = vi.spyOn(sessionLogger, 'emit');
+
+    expect(
+      submitOperatorInput({
+        message: 'wait for active work',
+        delivery: 'idle',
+        conductorTurn: 3,
+        openQuestions: new OpenQuestionRegistry(),
+        escalations: [],
+        eventQueue,
+        sessionLogger,
+      }),
+    ).toBe(true);
+    expect(eventQueue.dequeue()).toEqual({
+      type: 'operator.message',
+      text: 'wait for active work',
+      delivery: 'idle',
+    });
+    expect(emitSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'operator.input',
+        delivery: 'idle',
+      }),
+    );
+  });
+
   it('records targeted choice free text instead of sending it as general guidance', () => {
     const registry = new OpenQuestionRegistry();
     registry.enqueue({
@@ -194,10 +226,12 @@ describe('submitOperatorInput', () => {
       type: 'operator.input',
       conductorTurn: 1,
       text: '段落1\n\n段落2',
+      delivery: 'next',
     });
     expect(eventQueue.dequeue()).toEqual({
       type: 'operator.message',
       text: '段落1\n\n段落2',
+      delivery: 'next',
     });
   });
 

@@ -8,8 +8,15 @@ import {
   selectDispatchBatch,
 } from './select-dispatch-batch.js';
 
-function operator(text: string): SessionEvent {
-  return { type: 'operator.message', text };
+function operator(
+  text: string,
+  delivery?: 'idle' | 'next' | 'interrupt',
+): SessionEvent {
+  return {
+    type: 'operator.message',
+    text,
+    ...(delivery ? { delivery } : {}),
+  };
 }
 
 function workerCompleted(name: string): SessionEvent {
@@ -108,6 +115,31 @@ describe('selectDispatchBatch', () => {
     expect(result?.batch.sourceKey).toBe('operator');
     expect(result?.batch.events).toHaveLength(3);
     expect(result?.remainingQueue).toEqual([]);
+  });
+
+  it('keeps idle operator messages queued until they are allowed', () => {
+    const idle = operator('wait for idle', 'idle');
+    const next = operator('next turn', 'next');
+    const queue = [idle, next];
+
+    const blocked = selectDispatchBatch({
+      queue,
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+      allowIdleOperatorMessages: false,
+    });
+    expect(blocked?.batch.events).toEqual([next]);
+    expect(blocked?.remainingQueue).toEqual([idle]);
+
+    const ready = selectDispatchBatch({
+      queue: blocked!.remainingQueue,
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+      allowIdleOperatorMessages: true,
+    });
+    expect(ready?.batch.events).toEqual([idle]);
   });
 
   it('batches all same-worker events in the queue snapshot', () => {

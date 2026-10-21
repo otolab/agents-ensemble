@@ -1,4 +1,5 @@
 import type { OpenQuestion } from '../escalation/open-question.js';
+import type { OperatorMessageDelivery } from './session/session-event.js';
 
 export interface OperatorInputContext {
   /** これから実行する conductor send 番号（1 始まり）。 */
@@ -12,6 +13,8 @@ export interface OperatorInputContext {
 export interface OperatorInputSubmitOptions {
   /** TUI で選択中の open question への回答先。未指定時は従来どおり件数で解釈。 */
   targetOpenQuestionId?: string;
+  /** 配信モード。未指定時は本文先頭の mode prefix、なければ `next`。 */
+  delivery?: OperatorMessageDelivery;
 }
 
 export interface OperatorInputBindingApi {

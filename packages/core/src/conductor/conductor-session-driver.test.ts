@@ -1118,6 +1118,165 @@ describe('runConductorSessionDriver', () => {
     expect(result.autonomousTurns).toBe(1);
   });
 
+  it('allows idle operator messages while dispatch hold remains active', async () => {
+    const holdState = createDispatchHoldState();
+    const eventQueue = new SessionEventQueue();
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onBeforeRelease: () =>
+        bufferDispatchHoldEvents({
+          state: holdState,
+          eventQueue,
+        }),
+    });
+    const shutdown = new AbortController();
+    const idleMessage = 'deliver during the active hold';
+    const send = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await holdTool.set_dispatch_hold!.execute({ hold: true });
+        return { runId: 'run-1', status: 'running', result: 'holding' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain(idleMessage);
+        expect(holdState.dispatchHold).toBe(true);
+        expect(holdState.heldEvents).toHaveLength(1);
+        await holdTool.set_dispatch_hold!.execute({ hold: false });
+        return { runId: 'run-2', status: 'running', result: 'released' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('worker.completed');
+        return { runId: 'run-3', status: 'finished', result: 'worker processed' };
+      });
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const options = createDriverOptions({
+      eventQueue,
+      conductor,
+      maxTurns: 5,
+      runningCount: 1,
+    });
+    const driverPromise = runConductorSessionDriver({
+      ...options,
+      shutdownSignal: shutdown.signal,
+      dispatchHoldState: holdState,
+    });
+
+    await vi.waitFor(() => expect(holdState.dispatchHold).toBe(true));
+    eventQueue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'worker finished',
+      },
+    });
+    await vi.waitFor(() => expect(holdState.heldEvents).toHaveLength(1));
+    options.workerSession.runtime.runningCount = 0;
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: idleMessage,
+      delivery: 'idle',
+    });
+
+    await awaitDriverWithTimeout(driverPromise, shutdown);
+
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(String(send.mock.calls[1]![0])).toContain(idleMessage);
+    expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
+    expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
+  });
+
+  it('dispatches held autonomous work before idle operator messages after hold release', async () => {
+    const holdState = createDispatchHoldState();
+    const eventQueue = new SessionEventQueue();
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onBeforeRelease: () =>
+        bufferDispatchHoldEvents({
+          state: holdState,
+          eventQueue,
+        }),
+    });
+    const idleMessage = 'wait for held worker outcome';
+    const send = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await holdTool.set_dispatch_hold!.execute({ hold: true });
+        return { runId: 'run-1', status: 'running', result: 'holding' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toBe('release dispatch hold');
+        await holdTool.set_dispatch_hold!.execute({ hold: false });
+        expect(holdState.heldEvents).toHaveLength(1);
+        eventQueue.enqueue({
+          type: 'operator.message',
+          text: idleMessage,
+          delivery: 'idle',
+        });
+        return { runId: 'run-2', status: 'running', result: 'released' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('worker.completed');
+        expect(message).not.toContain(idleMessage);
+        return { runId: 'run-3', status: 'running', result: 'worker processed' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain(idleMessage);
+        return { runId: 'run-4', status: 'finished', result: 'operator handled' };
+      });
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const options = createDriverOptions({
+      eventQueue,
+      conductor,
+      maxTurns: 5,
+      runningCount: 1,
+    });
+    const driverPromise = runConductorSessionDriver({
+      ...options,
+      dispatchHoldState: holdState,
+    });
+
+    await vi.waitFor(() => expect(holdState.dispatchHold).toBe(true));
+    eventQueue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'worker finished',
+      },
+    });
+    await vi.waitFor(() => expect(holdState.heldEvents).toHaveLength(1));
+    options.workerSession.runtime.runningCount = 0;
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'release dispatch hold',
+    });
+
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
+    expect(String(send.mock.calls[2]![0])).not.toContain(idleMessage);
+    expect(String(send.mock.calls[3]![0])).toContain(idleMessage);
+    expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
+    expect(options.onSendComplete).toHaveBeenCalledWith(
+      expect.objectContaining({ workerDispatches: 1 }),
+    );
+    expect(result.autonomousTurns).toBe(0);
+  });
+
   it('collects queued triggers before an in-flight release and flushes one mixed batch', async () => {
     const holdState = createDispatchHoldState();
     const eventQueue = new SessionEventQueue();
@@ -1623,6 +1782,71 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('completed');
   });
 
+  it('dispatches idle operator.message at max turns before blocked worker events', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-1',
+        status: 'running',
+        result: 'working',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-2',
+        status: 'finished',
+        result: 'operator resumed',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-3',
+        status: 'finished',
+        result: 'late worker delivered',
+      });
+
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const openQuestions = new OpenQuestionRegistry();
+    const driverPromise = runConductorSessionDriver(
+      createDriverOptions({ eventQueue, conductor, openQuestions, maxTurns: 1 }),
+    );
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    eventQueue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'worker',
+        acpSessionId: 'sess-1',
+        status: 'finished',
+        result: 'late worker',
+      },
+    });
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'wait until autonomous work is idle',
+      delivery: 'idle',
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        openQuestions.listOpen().find((question) => question.source === 'max_turns'),
+      ).toBeDefined(),
+    );
+    const maxTurnsQuestion = openQuestions.listOpen().find(
+      (question) => question.source === 'max_turns',
+    );
+    openQuestions.answer(maxTurnsQuestion!.id, {
+      answer: 'continue',
+      answeredBy: 'operator',
+    });
+
+    const result = await driverPromise;
+
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(String(send.mock.calls[1]![0])).toContain(
+      'wait until autonomous work is idle',
+    );
+    expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
+    expect(result.stopReason).toBe('completed');
+  });
+
   it('stops with interrupted when shutdown signal aborts', async () => {
     const send = vi.fn().mockResolvedValue({
       runId: 'run-1',
@@ -1857,6 +2081,135 @@ describe('runConductorSessionDriver', () => {
     });
 
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
+    await driverPromise;
+  });
+
+  it('holds idle operator input through active worker work, then dispatches it', async () => {
+    let resolveInitialSend!: (value: {
+      runId: string;
+      status: string;
+      result: string;
+    }) => void;
+    const initialSend = new Promise<{
+      runId: string;
+      status: string;
+      result: string;
+    }>((resolve) => {
+      resolveInitialSend = resolve;
+    });
+    let resolveWorkerSend!: (value: {
+      runId: string;
+      status: string;
+      result: string;
+    }) => void;
+    const workerSend = new Promise<{
+      runId: string;
+      status: string;
+      result: string;
+    }>((resolve) => {
+      resolveWorkerSend = resolve;
+    });
+    const send = vi
+      .fn()
+      .mockReturnValueOnce(initialSend)
+      .mockReturnValueOnce(workerSend)
+      .mockResolvedValueOnce({
+        runId: 'run-operator',
+        status: 'finished',
+        result: 'operator handled',
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const options = createDriverOptions({
+      eventQueue,
+      conductor,
+      runningCount: 1,
+      maxTurns: 5,
+    });
+    const driverPromise = runConductorSessionDriver(options);
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'wait until workers settle',
+      delivery: 'idle',
+    });
+    eventQueue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'worker finished',
+      },
+    });
+
+    resolveInitialSend({
+      runId: 'run-initial',
+      status: 'finished',
+      result: 'dispatched work',
+    });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(String(send.mock.calls[1]![0])).toContain('worker.completed');
+    expect(String(send.mock.calls[1]![0])).not.toContain(
+      'wait until workers settle',
+    );
+
+    options.workerSession.runtime.runningCount = 0;
+    resolveWorkerSend({
+      runId: 'run-worker',
+      status: 'finished',
+      result: 'worker acknowledged',
+    });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
+    expect(String(send.mock.calls[2]![0])).toContain(
+      'wait until workers settle',
+    );
+    await driverPromise;
+  });
+
+  it('continues with the queued interrupt message after a run is cancelled', async () => {
+    let resolveInitialSend!: (value: {
+      runId: string;
+      status: string;
+      result: string;
+    }) => void;
+    const initialSend = new Promise<{
+      runId: string;
+      status: string;
+      result: string;
+    }>((resolve) => {
+      resolveInitialSend = resolve;
+    });
+    const send = vi
+      .fn()
+      .mockReturnValueOnce(initialSend)
+      .mockResolvedValueOnce({
+        runId: 'run-operator',
+        status: 'finished',
+        result: 'operator handled',
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const driverPromise = runConductorSessionDriver(
+      createDriverOptions({ eventQueue, conductor }),
+    );
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'stop the current turn',
+      delivery: 'interrupt',
+    });
+    resolveInitialSend({
+      runId: 'run-initial',
+      status: 'cancelled',
+      result: 'partial output',
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(String(send.mock.calls[1]![0])).toContain('stop the current turn');
     await driverPromise;
   });
 

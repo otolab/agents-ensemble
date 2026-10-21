@@ -18,4 +18,6 @@ export {
   createListLiveOpenQuestionsTool,
   GET_LAST_CONDUCTOR_MESSAGE_TOOL,
   LIST_LIVE_OPEN_QUESTIONS_TOOL,
+  createSendOperatorMessageTool,
+  SEND_OPERATOR_MESSAGE_TOOL,
 } from './open-question-control-tools.js';

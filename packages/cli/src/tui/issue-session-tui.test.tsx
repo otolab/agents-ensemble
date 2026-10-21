@@ -391,13 +391,13 @@ describe('IssueSessionTui', () => {
 
     stdin.write(INK_TEST_KEYS.downArrow);
     await flushInkStdin();
-    expect(lastFrame() ?? '').toContain('› /close');
+    expect(lastFrame() ?? '').toContain('› /idle');
 
     for (const key of [INK_TEST_KEYS.upArrow, INK_TEST_KEYS.upArrow]) {
       stdin.write(key);
       await flushInkStdin();
     }
-    expect(lastFrame() ?? '').toContain('› /reconnect');
+    expect(lastFrame() ?? '').toContain('› /exit');
 
     stdin.write(INK_TEST_KEYS.upArrow);
     await flushInkStdin();
@@ -1682,11 +1682,12 @@ describe('IssueSessionTui', () => {
     }
   });
 
-  it('renders all activity log label kinds with distinct markers', () => {
+  it('separates changing activity labels and keeps consecutive harness entries together', () => {
     const viewModel = createTuiViewModel();
-    viewModel.appendActivityLog('operator', 'op');
-    viewModel.appendActivityLog('harness', 'tel');
+    viewModel.appendActivityLog('harness', 'tel-1');
+    viewModel.appendActivityLog('harness', 'tel-2');
     viewModel.appendActivityLog('observation', 'obs');
+    viewModel.appendActivityLog('operator', 'op');
     viewModel.appendActivityLog('conductor', 'cond');
 
     const { lastFrame } = render(
@@ -1694,8 +1695,20 @@ describe('IssueSessionTui', () => {
     );
 
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('[operator] op');
-    expect(frame).toContain('[harness] tel');
+    const lines = frame.split('\n');
+    const harnessFirst = lines.findIndex((line) => line.includes('[harness] tel-1'));
+    const harnessSecond = lines.findIndex((line) => line.includes('[harness] tel-2'));
+    const observation = lines.findIndex((line) => line.includes('[observation] obs'));
+    const operator = lines.findIndex((line) => line.includes('[operator] op'));
+    const conductor = lines.findIndex((line) => line.includes('[conductor] cond'));
+
+    expect(harnessFirst).toBeGreaterThanOrEqual(0);
+    expect(harnessSecond).toBe(harnessFirst + 1);
+    expect(observation).toBe(harnessSecond + 2);
+    expect(operator).toBe(observation + 2);
+    expect(conductor).toBe(operator + 2);
+    expect(frame).toContain('[harness] tel-1');
+    expect(frame).toContain('[harness] tel-2');
     expect(frame).toContain('[observation] obs');
     expect(frame).toContain('[conductor] cond');
   });

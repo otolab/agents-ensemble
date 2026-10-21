@@ -5,6 +5,7 @@ import type { WorkerWorktreeMode } from '../../../worktree/worktree.js';
 import type { IssueLoopStopReason } from '../../session-policy.js';
 import type { PermissionPendingHarnessPayload } from './shared/permission-pending.js';
 import type { WorkerPromptLifecycleSource } from './shared/worker-prompt-source.js';
+import type { OperatorMessageDelivery } from './session-event.js';
 import type {
   WorkerFailureOutcome,
   WorkerRoundOutcome,
@@ -93,6 +94,7 @@ export interface OperatorInputEvent {
   type: 'operator.input';
   conductorTurn: number;
   text: string;
+  delivery?: OperatorMessageDelivery;
 }
 
 /** harness から conductor へ渡す SessionEvent の束を要約する境界イベント。 */

@@ -20,7 +20,10 @@ export type SessionEvent =
 export interface OperatorMessageEvent extends SessionEventDispatchFields {
   type: 'operator.message';
   text: string;
+  delivery?: OperatorMessageDelivery;
 }
+
+export type OperatorMessageDelivery = 'idle' | 'next' | 'interrupt';
 
 /** Conductor に送らず、現在の conductor agent だけを再接続する操作。 */
 export interface OperatorReconnectEvent extends SessionEventDispatchFields {

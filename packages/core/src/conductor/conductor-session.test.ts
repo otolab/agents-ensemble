@@ -3229,6 +3229,252 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
+  it('sends one operator.message over the live session UDS with its delivery mode', async () => {
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const onPostLoopWait = vi.fn();
+    let operatorApi: OperatorInputBindingApi | undefined;
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    try {
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        const sidecar = await loadSessionSidecar(sidecarPath);
+        expect(sidecar?.harnessSocketPath).toBeTruthy();
+      });
+      await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+      const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+
+      await expect(
+        sendOpenQuestionControlRequest<{ queued: true; delivery: string }>(
+          socketPath!,
+          {
+            method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+            params: {
+              text: 'inspect the new operator control path',
+              delivery: 'idle',
+            },
+          },
+        ),
+      ).resolves.toEqual({ queued: true, delivery: 'idle' });
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+      expect(mockSend.mock.calls[1]?.[0]).toBe(
+        'inspect the new operator control path',
+      );
+      expect(
+        emitted.find(
+          (event) =>
+            event.type === 'operator.input' &&
+            event.text === 'inspect the new operator control path',
+        ),
+      ).toMatchObject({ delivery: 'idle' });
+      expect(operatorApi!.submit('/exit')).toBe(false);
+      await sessionPromise;
+    } finally {
+      if (operatorApi) operatorApi.submit('/exit');
+      await sessionPromise.catch(() => {});
+    }
+  });
+
+  it('keeps generic UDS messages separate from a single Open Question answer path', async () => {
+    let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+    let operatorApi: OperatorInputBindingApi | undefined;
+    let sendCount = 0;
+    const genericMessageDispatched = createDeferred<string>();
+    const answerMessageDispatched = createDeferred<string>();
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    const permissionPipeline = new PermissionPipeline({});
+    expect(
+      permissionPipeline.evaluate('perm-1', 'worker-1', {
+        toolName: 'Shell',
+        raw: { command: 'touch protected-file' },
+      }),
+    ).toEqual({ status: 'deferred' });
+    const pendingPermissionsBefore = permissionPipeline.pending.list();
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const onPostLoopWait = vi.fn();
+
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-test',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async (message: string) => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        await conductorTools!.ask_human!.execute({
+          question: 'Approve this permission?',
+          responseType: 'yes_no',
+          relatedPermissionId: 'perm-1',
+        });
+      } else if (sendCount === 2) {
+        genericMessageDispatched.resolve(message);
+      } else {
+        answerMessageDispatched.resolve(message);
+      }
+      return {
+        runId: `run-${sendCount}`,
+        status: 'finished',
+        result: 'done',
+      };
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline,
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    try {
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+      });
+      const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+      expect(socketPath).toBeTruthy();
+
+      const questionsPath = openQuestionsStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        expect((await loadOpenQuestionsStore(questionsPath))?.openQuestions).toHaveLength(1);
+      });
+      const beforeGenericMessage = await loadOpenQuestionsStore(questionsPath);
+      const question = beforeGenericMessage!.openQuestions[0]!;
+      expect(question).toMatchObject({
+        id: 'inq-1',
+        status: 'open',
+        relatedPermissionId: 'perm-1',
+      });
+      expect(question.answer).toBeUndefined();
+      expect(question.approved).toBeUndefined();
+      expect(pendingPermissionsBefore).toHaveLength(1);
+
+      await expect(
+        sendOpenQuestionControlRequest<{ queued: true; delivery: string }>(
+          socketPath!,
+          {
+            method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+            params: {
+              text: 'Please inspect the permission flow.',
+              delivery: 'next',
+            },
+          },
+        ),
+      ).resolves.toEqual({ queued: true, delivery: 'next' });
+      await expect(genericMessageDispatched.promise).resolves.toBe(
+        'Please inspect the permission flow.',
+      );
+
+      const afterGenericMessage = await loadOpenQuestionsStore(questionsPath);
+      expect(afterGenericMessage?.openQuestions).toEqual(
+        beforeGenericMessage?.openQuestions,
+      );
+      expect(afterGenericMessage?.openQuestions[0]).toMatchObject({
+        id: question.id,
+        status: 'open',
+        relatedPermissionId: 'perm-1',
+      });
+      expect(afterGenericMessage?.openQuestions[0]?.answer).toBeUndefined();
+      expect(afterGenericMessage?.openQuestions[0]?.approved).toBeUndefined();
+      expect(permissionPipeline.pending.list()).toEqual(
+        pendingPermissionsBefore,
+      );
+      expect(
+        emitted.filter((event) => event.type === 'escalation.recorded'),
+      ).toHaveLength(0);
+
+      await expect(
+        sendOpenQuestionControlRequest<{
+          question: {
+            id: string;
+            status: string;
+            answeredBy: string;
+            approved?: boolean;
+          };
+        }>(socketPath!, {
+          method: OPEN_QUESTION_CONTROL_METHODS.answer,
+          params: { questionId: question.id, answer: 'yes' },
+        }),
+      ).resolves.toMatchObject({
+        question: {
+          id: question.id,
+          status: 'answered',
+          answeredBy: 'operator',
+          approved: true,
+        },
+      });
+      await expect(answerMessageDispatched.promise).resolves.toContain(
+        '【open question 回答】inq-1: Approve this permission? → yes (by operator)',
+      );
+
+      const afterExplicitAnswer = await loadOpenQuestionsStore(questionsPath);
+      expect(afterExplicitAnswer?.openQuestions[0]).toMatchObject({
+        id: question.id,
+        status: 'answered',
+        answer: 'yes',
+        assent: 'yes',
+        approved: true,
+        relatedPermissionId: 'perm-1',
+      });
+      expect(
+        emitted.filter((event) => event.type === 'escalation.recorded'),
+      ).toHaveLength(1);
+      operatorApi!.submit('/close');
+      await sessionPromise;
+    } finally {
+      operatorApi?.submit('/close');
+      await sessionPromise.catch(() => {});
+    }
+  });
+
   it('removes isolated worktree after post-loop /exit', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-1',

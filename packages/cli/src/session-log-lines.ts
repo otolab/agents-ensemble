@@ -88,7 +88,7 @@ export function formatHarnessLogBody(
       return `session.workers count=${event.workers.length} names=${event.workers.map((worker) => worker.name).join(',')}`;
     case 'operator.input':
       if (!verbose) return undefined;
-      return `operator.input turn=${event.conductorTurn} bytes=${event.text.length}`;
+      return `operator.input delivery=${event.delivery ?? 'next'} turn=${event.conductorTurn} bytes=${event.text.length}`;
     case 'conductor.inbound':
       return `conductor.deliver triggers=${event.triggers} sources=${event.sources.join(',')}`;
     case 'conductor.send.started': {

@@ -4,11 +4,13 @@ import { join } from 'node:path';
 import net from 'node:net';
 import type { Server, Socket } from 'node:net';
 import type { OpenQuestion } from '../escalation/open-question.js';
+import type { OperatorMessageDelivery } from '../conductor/session/session-event.js';
 
 export const OPEN_QUESTION_CONTROL_METHODS = {
   list: 'open_questions.list',
   answer: 'open_questions.answer',
   lastConductorMessageGet: 'session.last_conductor_message.get',
+  sendMessage: 'operator.message.send',
 } as const;
 
 const JSON_RPC_VERSION = '2.0';
@@ -53,6 +55,10 @@ export interface OpenQuestionControlServerOptions {
   answerOpenQuestion: (
     input: OpenQuestionControlAnswer,
   ) => Promise<OpenQuestion>;
+  sendOperatorMessage?: (input: {
+    text: string;
+    delivery: OperatorMessageDelivery;
+  }) => boolean | Promise<boolean>;
 }
 
 export interface OpenQuestionControlServer {
@@ -261,7 +267,7 @@ export async function sendOpenQuestionControlRequest<T>(
         reject(
           new OpenQuestionControlTransportError(
             requestSent
-              ? `${message} The request outcome is unknown. If this was an answer, inspect the live session before taking further action.`
+              ? `${message} The request outcome is unknown. Inspect the live session before repeating the operation.`
               : message,
             requestSent ? 'unknown' : 'not_sent',
           ),
@@ -404,6 +410,29 @@ async function handleRequest(
         });
         return successResponse(requestId, toAnswerResult(question));
       }
+      case OPEN_QUESTION_CONTROL_METHODS.sendMessage: {
+        const text = typeof params.text === 'string' ? params.text.trim() : '';
+        const delivery = params.delivery ?? 'next';
+        if (!text || !isOperatorMessageDelivery(delivery)) {
+          return errorResponse(
+            requestId,
+            -32602,
+            'text must be non-empty and delivery must be idle, next, or interrupt.',
+          );
+        }
+        if (!options.sendOperatorMessage) {
+          return errorResponse(
+            requestId,
+            -32601,
+            'Operator message sending is not available.',
+          );
+        }
+        const queued = await options.sendOperatorMessage({ text, delivery });
+        if (!queued) {
+          return errorResponse(requestId, -32602, 'Operator message was not accepted.');
+        }
+        return successResponse(requestId, { queued: true, delivery });
+      }
       default:
         return errorResponse(requestId, -32601, 'Method not found.');
     }
@@ -418,6 +447,12 @@ async function handleRequest(
     }
     return errorResponse(requestId, -32603, 'Open Question operation failed.');
   }
+}
+
+function isOperatorMessageDelivery(
+  value: unknown,
+): value is OperatorMessageDelivery {
+  return value === 'idle' || value === 'next' || value === 'interrupt';
 }
 
 function toListItem(question: OpenQuestion): OpenQuestionControlListItem {

@@ -180,6 +180,47 @@ describe('Open Question control UDS', () => {
     }
   });
 
+  it('queues operator messages with an optional delivery mode defaulting to next', async () => {
+    const sendOperatorMessage = vi.fn().mockReturnValue(true);
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      answerOpenQuestion: async () => {
+        throw new Error('unexpected answer request');
+      },
+      sendOperatorMessage,
+    });
+
+    try {
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'wait until idle', delivery: 'idle' },
+        }),
+      ).resolves.toEqual({ queued: true, delivery: 'idle' });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'keep going' },
+        }),
+      ).resolves.toEqual({ queued: true, delivery: 'next' });
+      expect(sendOperatorMessage.mock.calls).toEqual([
+        [{ text: 'wait until idle', delivery: 'idle' }],
+        [{ text: 'keep going', delivery: 'next' }],
+      ]);
+
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: 'bad mode', delivery: 'later' },
+        }),
+      ).rejects.toMatchObject({
+        rpcCode: -32602,
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
   it('removes client socket listeners after receiving a response', async () => {
     const registry = new OpenQuestionRegistry();
     const server = await startOpenQuestionControlServer({
