@@ -13,6 +13,7 @@ import {
   type ConnectWorkerAcpFn,
 } from '../dispatch/worker-acp-session.js';
 import type { WorkerPromptSource } from '../dispatch/worker-dispatch.js';
+import type { ResolvedProfileMaterial } from '../profile/types.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import type {
   SendWorkerMessageOptions,
@@ -36,6 +37,7 @@ export interface WorkerRuntimeOptions {
   inbox: ConductorInbox;
   /** harness 表示で workspace パスを repo 相対に要約する際の基準。 */
   repoRoot?: string;
+  userInstructions?: ResolvedProfileMaterial;
   connectAcp?: ConnectWorkerAcpFn;
   spawn?: SpawnAcpProcessOptions;
   /** integration の共有 bridge 注入時は false。 */
@@ -536,6 +538,7 @@ export class WorkerRuntime {
           prompt: started.prompt,
           worktree: started.worktree,
           sessionState: started.sessionState,
+          userInstructions: this.options.userInstructions,
           resolvedWorkspacePath: started.resolvedWorkspacePath,
           expectedResumeAcpCwd: started.expectedResumeAcpCwd,
           resumeAcpSessionId: started.resumeAcpSessionId,

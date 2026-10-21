@@ -653,6 +653,7 @@ export async function runConductorSession(
     workers,
     lazyWorkers: activeLazyWorkers,
     sessionState,
+    ...(userInstructions ? { userInstructions } : {}),
     restoredWorkerSessions: Object.fromEntries(workerSessions),
     permissionPipeline,
     ...(options.connectAcp ? { connectAcp: options.connectAcp } : {}),

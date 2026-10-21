@@ -517,10 +517,24 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
-  it('adds the user-wide document to the conductor prompt from the shared user root', async () => {
+  it('adds the user-wide document to conductor and worker prompts from the shared user root', async () => {
     await writeFile(
       join(userEnsembleRoot, 'AGENTS.md'),
       'Shared operator context for every repository.',
+    );
+    let workerPrompt = '';
+    const promptSession = vi.fn(async (_sessionId: string, prompt: string) => {
+      workerPrompt = prompt;
+      return { stopReason: 'end_turn', responseText: 'ready' };
+    });
+    const connectAcp = vi.fn(async () =>
+      ({
+        newSession: vi.fn().mockResolvedValue('worker-session'),
+        loadSession: vi.fn().mockResolvedValue(undefined),
+        promptSession,
+        cancelSession: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+      }) as unknown as AcpBridge,
     );
     mockSend.mockResolvedValue({
       runId: 'run-user-instructions',
@@ -531,7 +545,17 @@ describe('runConductorSession resume / shutdown', () => {
     await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'main',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      defaultAcp: { defaultAcpCommand: process.execPath },
+      connectAcp,
       permissionPipeline: new PermissionPipeline({}),
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
@@ -548,6 +572,12 @@ describe('runConductorSession resume / shutdown', () => {
       expect.objectContaining({
         systemPrompt: expect.stringContaining('## Prepared Materials'),
       }),
+    );
+    expect(workerPrompt).toContain(
+      '### User instructions (~/.ensemble/AGENTS.md)',
+    );
+    expect(workerPrompt).toContain(
+      'Shared operator context for every repository.',
     );
   });
 

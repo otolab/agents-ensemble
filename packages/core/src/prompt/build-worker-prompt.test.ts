@@ -21,6 +21,7 @@ describe('buildWorkerPrompt', () => {
     expect(prompt).toContain('Issue #1');
     expect(prompt).toContain('profile 固有: respond with pong');
     expect(prompt).toContain('https://github.com/org/repo/issues/1');
+    expect(prompt).not.toContain('### User instructions (~/.ensemble/AGENTS.md)');
   });
 
   it('includes profile materials from session state', () => {
@@ -43,6 +44,37 @@ describe('buildWorkerPrompt', () => {
     expect(prompt).toContain('記載された役割に従って参照し、適用される指示に従う');
     expect(prompt).toContain('## Prepared Materials');
     expect(prompt).toContain('worker team 定義');
+  });
+
+  it('places user instructions before kind-filtered profile materials', () => {
+    const prompt = buildWorkerPrompt({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      kind: 'implementer',
+      sessionState: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+        kinds: ['implementer'],
+        materials: [
+          {
+            id: 'implementer',
+            title: 'Implementer material',
+            content: 'implementer-only guidance',
+            kinds: ['implementer'],
+          },
+        ],
+      },
+      userInstructions: {
+        id: 'user-instructions',
+        title: 'User instructions (~/.ensemble/AGENTS.md)',
+        content: 'Shared guidance for all workers',
+      },
+    });
+
+    expect(prompt).toContain('### User instructions (~/.ensemble/AGENTS.md)');
+    expect(prompt).toContain('Shared guidance for all workers');
+    expect(prompt.indexOf('### User instructions')).toBeLessThan(
+      prompt.indexOf('### Implementer material'),
+    );
+    expect(prompt).not.toContain('Issue context');
   });
 
   it('includes common and matching materials only', () => {

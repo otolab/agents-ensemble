@@ -12,7 +12,7 @@ export interface LoadUserInstructionsOptions {
 }
 
 /**
- * `~/.ensemble/AGENTS.md` を conductor 用 Prepared Material として読む。
+ * `~/.ensemble/AGENTS.md` を conductor と worker 用 Prepared Material として読む。
  * ファイルが無い場合は何も追加しない。存在するが読めない場合は起動を失敗させる。
  */
 export async function loadUserInstructions(

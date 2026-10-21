@@ -3,7 +3,10 @@ import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import type { PermissionHandler } from '../acp/types.js';
-import type { EnsembleSessionState } from '../profile/types.js';
+import type {
+  EnsembleSessionState,
+  ResolvedProfileMaterial,
+} from '../profile/types.js';
 import { buildWorkerAttachPrompt as compileWorkerAttachPrompt } from '../prompt/build-worker-attach-prompt.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
 import {
@@ -27,6 +30,7 @@ export interface AttachWorkerOptions {
   kind: string;
   prompt?: PromptModule;
   sessionState: EnsembleSessionState;
+  userInstructions?: ResolvedProfileMaterial;
   worktree: WorktreeRef;
   resolvedWorkspacePath?: string;
   expectedResumeAcpCwd?: string;
@@ -86,6 +90,7 @@ export function buildWorkerAttachPrompt(
     workspacePath: session.acpCwd,
     worktreeInRepo: session.worktree.inRepo,
     sessionState: options.sessionState,
+    userInstructions: options.userInstructions,
   });
 }
 
