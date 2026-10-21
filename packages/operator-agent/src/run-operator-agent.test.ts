@@ -16,6 +16,7 @@ import {
   type OperatorAgentInput,
   type OperatorAgentOutput,
 } from './run-operator-agent.js';
+import { operatorWatchStatePath } from './operator-watch-pool.js';
 
 describe('runOperatorAgent', () => {
   let repoRoot = '';
@@ -346,6 +347,148 @@ describe('runOperatorAgent', () => {
     expect(sentPrompts[1]).toContain('## Open Question の更新（2 件）');
     expect(sentPrompts[1]).toContain('Review the implementation?');
     expect(sentPrompts[1]).toContain('Confirm the test result?');
+  });
+
+  it('retains a cancelled watch report across restart and acknowledges it only after a completed retry', async () => {
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({
+        sequence: 1,
+        openQuestions: [
+          {
+            id: 'inq-cancelled',
+            question: 'Should this report be retried?',
+            responseType: 'text',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 10,
+          },
+        ],
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+
+    const sidecarPath = join(
+      repoRoot,
+      '.ensemble',
+      'sessions',
+      'conductor-one.json',
+    );
+    const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({ ...sidecar, harnessSocketPath: liveServer.socketPath }),
+    );
+
+    const statePath = operatorWatchStatePath(repoRoot);
+    const firstInput = new PassThrough() as PassThrough & OperatorAgentInput;
+    firstInput.isTTY = true;
+    const firstOutput = createOutput();
+    let firstAgentOptions: ConductorAgentCreateOptions | undefined;
+    const firstPrompts: string[] = [];
+    const firstAgent = createFakeAgent({
+      send: async (prompt) => {
+        firstPrompts.push(prompt);
+        if (firstPrompts.length === 1) {
+          await firstAgentOptions!.customTools!.register_session_watch!.execute({
+            conductorAgentId: 'conductor-one',
+            pollIntervalMs: 250,
+            debounceMs: 0,
+          });
+          return {
+            runId: 'first-user-send',
+            status: 'completed',
+            result: 'watch registered',
+          };
+        }
+        const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
+          pendingReports: Array<{ reportId: string }>;
+        };
+        expect(saved.pendingReports).toHaveLength(1);
+        return {
+          runId: 'cancelled-report-send',
+          status: 'cancelled',
+          result: 'partial; cancelled',
+        };
+      },
+    });
+    const firstRun = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: firstInput,
+        stdout: firstOutput,
+        agentFactory: {
+          create: async (options) => {
+            firstAgentOptions = options;
+            return firstAgent;
+          },
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+
+    await vi.waitFor(() =>
+      expect(firstOutput.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+    );
+    firstInput.write('watch this session\n');
+    await vi.waitFor(() => expect(firstPrompts).toHaveLength(2));
+    firstInput.end();
+    await firstRun;
+
+    const afterCancelledSend = JSON.parse(
+      await readFile(statePath, 'utf8'),
+    ) as { pendingReports: Array<{ reportId: string }> };
+    expect(afterCancelledSend.pendingReports).toHaveLength(1);
+    expect(firstOutput.capturedText()).toContain(
+      'status=cancelled; watched reports retained for retry.',
+    );
+
+    const retryInput = new PassThrough() as PassThrough & OperatorAgentInput;
+    retryInput.isTTY = true;
+    const retryOutput = createOutput();
+    const retryPrompts: string[] = [];
+    const retryAgent = createFakeAgent({
+      send: async (prompt) => {
+        retryPrompts.push(prompt);
+        return {
+          runId: 'completed-report-retry',
+          status: 'finished',
+          result: 'report handled',
+        };
+      },
+    });
+    const retryRun = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: retryInput,
+        stdout: retryOutput,
+        agentFactory: {
+          create: async () => {
+            throw new Error('saved operator-agent state should resume');
+          },
+          resume: async () => retryAgent,
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(retryPrompts).toHaveLength(1));
+    expect(retryPrompts[0]).toContain('Should this report be retried?');
+    await vi.waitFor(async () => {
+      const saved = JSON.parse(await readFile(statePath, 'utf8')) as {
+        pendingReports: Array<{ reportId: string }>;
+      };
+      expect(saved.pendingReports).toHaveLength(0);
+    });
+    retryInput.write('/exit\n');
+    await retryRun;
   });
 
   it('keeps the TTY transcript free of ANSI escapes when NO_COLOR is set', async () => {

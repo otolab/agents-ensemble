@@ -154,6 +154,42 @@ describe('operator dispatch batching', () => {
     ]);
   });
 
+  it('requeues an unconfirmed report with its stable report id', () => {
+    const queue = createOperatorDispatchQueue();
+    queue.enqueueReport(
+      {
+        type: 'report',
+        reportType: 'open_question',
+        reportId: 'report-1',
+        conductorAgentId: 'session-1',
+        issueUrl: 'https://github.com/example/repo/issues/1',
+        text: 'Review the release?',
+      },
+      0,
+    );
+
+    const firstAttempt = queue.takeBatch(
+      { continuationConsumed: false },
+      Date.now(),
+    )!;
+    expect(firstAttempt.events[0]).toMatchObject({ reportId: 'report-1' });
+    queue.requeue(firstAttempt.events[0]!, 5_000);
+
+    expect(queue.pendingEventCount).toBe(1);
+    expect(
+      queue.takeBatch({ continuationConsumed: false }, Date.now()),
+    ).toBeUndefined();
+    const retry = queue.takeBatch(
+      { continuationConsumed: false },
+      queue.nextReadyAt()!,
+    );
+    expect(retry?.events[0]).toMatchObject({
+      type: 'report',
+      reportId: 'report-1',
+      text: 'Review the release?',
+    });
+  });
+
   it('holds automatic reports, lets user speech through, and releases held reports together', () => {
     const queue = createOperatorDispatchQueue();
     queue.enqueueReport(

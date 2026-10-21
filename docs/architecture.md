@@ -139,6 +139,8 @@ operator-agent は ADR 0014 の dispatch 原則を operator 側の報告に適�
 
 監視間隔と debounce は watch ごとに `register_session_watch` の `pollIntervalMs` / `debounceMs` で設定する。session ごとの UDS path が記録されているだけでは稼働中と判断せず、接続できた snapshot を live として扱う。poll cursor と未 dispatch report は operator-agent state に保存するため、operator-agent の再起動後は未送信 report を queue に戻す。report hold 自体は会話中だけの状態で、再起動後は解除状態から始まる。
 
+watch report を含む `agent.send` は `finished` / `completed` のときだけ成功として acknowledge し、永続 pending から削除する。`cancelled`、`error`、その他完了を確認できない status では report を同じ ID で遅延再 queue し、再起動後も pending から復元する。送信成功後・ack 永続化前の終了では再送と重複が起こりうるため at-least-once であり、受け手は対象 session の現在状態を確認する（設計判断は [ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md)）。
+
 Issue harness 側では `session.observe` が全 Open Question と sequence、完了済み `report_session_state` の保存値を返す。`operator.message.send` は通常の operator message として既存 queue に入り、`{ queued: true, delivery }` は queue 受付を示す。dispatch 完了 ack ではない。`delivery` は `idle | next | interrupt` で、省略時は `next`（詳細は [Issue #525](https://github.com/otolab/agents-ensemble/issues/525)）。
 
 ---

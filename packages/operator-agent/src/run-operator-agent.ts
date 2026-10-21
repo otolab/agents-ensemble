@@ -344,26 +344,37 @@ async function runTtyConversation(options: {
       firstSend = false;
       dispatchState.lastDispatchedSourceKey = batch.sourceKey;
       dispatchState.continuationConsumed = batch.usedContinuation;
-      if (result.status === 'error') {
+      const sendCompleted =
+        result.status === 'finished' || result.status === 'completed';
+      if (sendCompleted) {
+        await options.watchPool.acknowledge(batch.events);
+      } else {
         for (const event of batch.events) {
           if (event.type === 'report') options.dispatchQueue.requeue(event, 5_000);
         }
-        writeStatusLine(
-          options.stdout,
-          'operator-agent error:',
-          result.error?.message ?? result.result ?? 'request failed',
-          options.colorEnabled,
-          { color: ANSI_RED },
-        );
-      } else {
-        await options.watchPool.acknowledge(batch.events);
+        if (result.status === 'error') {
+          writeStatusLine(
+            options.stdout,
+            'operator-agent error:',
+            result.error?.message ?? result.result ?? 'request failed',
+            options.colorEnabled,
+            { color: ANSI_RED },
+          );
+        } else {
+          writeStatusLine(
+            options.stdout,
+            'operator-agent send not completed:',
+            `status=${result.status}; watched reports retained for retry.`,
+            options.colorEnabled,
+          );
+        }
       }
-      if (result.status !== 'error' && result.result?.trim()) {
+      if (sendCompleted && result.result?.trim()) {
         const response = normalizeOperatorResponse(result.result);
         options.stdout.write(
           `\n${colorize('operator>', ANSI_CYAN, options.colorEnabled)}\n${response}\n\n`,
         );
-      } else if (result.status !== 'error') {
+      } else if (sendCompleted) {
         writeStatusLine(
           options.stdout,
           'operator-agent',

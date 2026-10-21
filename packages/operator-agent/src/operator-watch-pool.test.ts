@@ -111,6 +111,69 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('restores unacknowledged reports after restart and removes only acknowledged reports', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-retry-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    await writeSidecar('session-retry', 1);
+    await writeOfflineSnapshots('session-retry', {
+      sequence: 1,
+      questions: [
+        {
+          id: 'inq-1',
+          question: 'Retry after cancellation?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 10,
+        },
+      ],
+      statusLine: 'waiting',
+      reportedAt: 20,
+    });
+
+    const firstQueue = createOperatorDispatchQueue();
+    const firstPool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: firstQueue,
+    });
+    await firstPool.register('session-retry', {
+      pollIntervalMs: 60_000,
+      debounceMs: 0,
+    });
+    expect(await firstPool.pollOnce('session-retry')).toBe(2);
+    const firstAttempt = firstQueue.takeBatch(
+      { continuationConsumed: false },
+      Date.now(),
+    )!;
+    const firstReportId = firstAttempt.events[0]!.reportId;
+    expect(firstReportId).toBeTruthy();
+    expect(firstQueue.pendingEventCount).toBe(1);
+    firstPool.close();
+
+    const resumedQueue = createOperatorDispatchQueue();
+    const resumedPool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: resumedQueue,
+    });
+    try {
+      expect(resumedQueue.pendingEventCount).toBe(2);
+      const retry = resumedQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(retry.events[0]?.reportId).toBe(firstReportId);
+
+      await resumedPool.acknowledge(retry.events);
+      const stored = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as { pendingReports: Array<{ reportId: string }> };
+      expect(stored.pendingReports).toHaveLength(1);
+      expect(stored.pendingReports[0]?.reportId).not.toBe(firstReportId);
+    } finally {
+      resumedPool.close();
+    }
+  });
+
   it('registers and removes watches through bounded tools', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-tools-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
