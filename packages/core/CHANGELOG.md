@@ -1,5 +1,16 @@
 # @agents-ensemble/core
 
+## 0.14.1
+
+### Patch Changes
+
+- 126a304: operator-agent に複数 Issue session の watch pool、報告 batching / hold、live UDS observation と operator.message 連携を追加。
+- 7a2fdb0: GitHub monitor の API レート制限を認証エラーと分類し、既定の poll 間隔を延長する。
+- e5a39d9: Codex ACP usage の取り込みに合わせて、依存と usage の説明を更新します。
+- 78b2987: Add operator message delivery modes and live UDS message sending.
+- b187554: 稼働中 session の UDS から最後の conductor 成功応答を取得する API と operator-agent tool を追加します。
+- 6de3ba6: Include `~/.ensemble/AGENTS.md` in worker system prompts.
+
 ## 0.14.0
 
 ### Minor Changes

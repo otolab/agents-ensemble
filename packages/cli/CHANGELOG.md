@@ -1,5 +1,28 @@
 # @agents-ensemble/cli
 
+## 0.14.1
+
+### Patch Changes
+
+- 435c319: TTY pane / stream の Operator input に送信履歴と未送信ドラフトの復元を追加します。
+- 68b7551: TTY 活動ログでラベルが切り替わる境界に空行を入れ、conductor ブロックの余白も保つようにします。
+- be0891b: TTY Workers ペインの高さを conductor と worker の状態行数に合わせて調整します。
+- 1362632: operator-agent の会話を既定で再開し、`/exit` と `--new` で連続性を切れるようにします。
+- 78b2987: Add operator message delivery modes and live UDS message sending.
+- d5823e2: TTY の pane / stream で、選択中 Open Question の本文を `Shift+PgUp/PgDn` でスクロールできるようにしました。質問の切り替えは従来どおり `Shift+↑/↓` です。
+- b29f801: TTY Workers ペインの状態行を表示幅に合わせて切り詰め・パディングし、状態更新後に前の表示が残らないようにします。
+- Updated dependencies [126a304]
+- Updated dependencies [adf9833]
+- Updated dependencies [1362632]
+- Updated dependencies [7a2fdb0]
+- Updated dependencies [e5a39d9]
+- Updated dependencies [78b2987]
+- Updated dependencies [8f21a0e]
+- Updated dependencies [b187554]
+- Updated dependencies [6de3ba6]
+  - @agents-ensemble/core@0.14.1
+  - @agents-ensemble/operator-agent@0.2.1
+
 ## 0.14.0
 
 ### Minor Changes
