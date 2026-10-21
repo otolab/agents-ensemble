@@ -306,6 +306,20 @@ describe('formatIssueSessionSummaryText', () => {
     expect(text).not.toContain('※ 記録分のみ。');
   });
 
+  it('prints zero when the compaction counter is available but has no observations', () => {
+    const base = createSummary();
+    const text = formatIssueSessionSummaryText(
+      createSummary({
+        sessionUsage: {
+          ...base.sessionUsage!,
+          compactionCount: 0,
+        },
+      }),
+    );
+
+    expect(text).toContain('コンテキスト圧縮: 0 回');
+  });
+
   it('omits cost, cache rate, and compaction when unavailable', () => {
     const { cost: _cost, ...sessionUsage } = createSummary().sessionUsage!;
     const text = formatIssueSessionSummaryText(

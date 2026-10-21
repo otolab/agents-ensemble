@@ -364,7 +364,7 @@ describe('runConductorSession resume / shutdown', () => {
       result: 'started',
     });
 
-    await runConductorSession({
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
@@ -379,6 +379,7 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
     expect(mockCreateCursorSdkConductorAgentFactory).not.toHaveBeenCalled();
+    expect(result.sessionUsage?.compactionCount).toBe(0);
     expect(mockCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         systemPrompt: expect.stringContaining('body'),
@@ -390,6 +391,28 @@ describe('runConductorSession resume / shutdown', () => {
       expect.any(Object),
     );
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
+  });
+
+  it('does not expose a compaction counter for the Cursor SDK backend', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-cursor-usage',
+      status: 'finished',
+      result: 'done',
+      usage: { inputTokens: 12, outputTokens: 5, totalTokens: 17 },
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreateCursorSdkConductorAgentFactory).toHaveBeenCalledOnce();
+    expect(result.sessionUsage).toBeDefined();
+    expect(result.sessionUsage).not.toHaveProperty('compactionCount');
   });
 
   it('shares Pi tokens and successful compactions with get_session_usage while omitting estimated cost', async () => {
@@ -641,7 +664,7 @@ describe('runConductorSession resume / shutdown', () => {
       result: 'done',
     });
 
-    await runConductorSession({
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { conductor: { backend: 'pi' }, workers: [] },
@@ -651,6 +674,9 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
     });
+
+    expect(result.sessionUsage).toBeDefined();
+    expect(result.sessionUsage).not.toHaveProperty('compactionCount');
 
     const sidecar = await loadSessionSidecar(
       sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
