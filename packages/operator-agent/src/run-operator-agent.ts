@@ -62,6 +62,11 @@ interface OperatorRuntime {
   systemPrompt: string;
 }
 
+const ANSI_RESET = '\u001b[0m';
+const ANSI_DIM = '\u001b[2m';
+const ANSI_CYAN = '\u001b[36m';
+const ANSI_RED = '\u001b[31m';
+
 /** Start an operator-role conversation on an interactive terminal. */
 export async function runOperatorAgent(
   options: RunOperatorAgentOptions = {},
@@ -131,6 +136,8 @@ export async function runOperatorAgent(
       systemPrompt: runtime.systemPrompt,
       stdin,
       stdout,
+      colorEnabled:
+        Boolean(stdin.isTTY && stdout.isTTY) && process.env.NO_COLOR === undefined,
     });
     if (exitContinuity) {
       await clearOperatorAgentState(runtime.repoRoot);
@@ -181,6 +188,7 @@ async function runTtyConversation(options: {
   systemPrompt: string;
   stdin: OperatorAgentInput;
   stdout: OperatorAgentOutput;
+  colorEnabled: boolean;
 }): Promise<boolean> {
   const terminal = createInterface({
     input: options.stdin,
@@ -204,13 +212,17 @@ async function runTtyConversation(options: {
   terminal.on('SIGINT', handleInterrupt);
   process.on('SIGINT', handleInterrupt);
   process.on('SIGTERM', handleTermination);
-  options.stdout.write(
-    `operator-agent (${options.backend}) ready — enter /exit to start a fresh session next time.\n`,
+  writeStatusLine(
+    options.stdout,
+    'operator-agent',
+    `(${options.backend}) ready — enter /exit to start a fresh session next time.`,
+    options.colorEnabled,
+    { leadingBlank: false },
   );
 
   try {
     while (true) {
-      options.stdout.write('user> ');
+      options.stdout.write(colorize('user>', ANSI_DIM, options.colorEnabled) + ' ');
       const next = await Promise.race([
         input.next(),
         stopping.then(() => ({ done: true as const, value: undefined })),
@@ -219,7 +231,12 @@ async function runTtyConversation(options: {
       const message = next.value.trim();
       if (!message) continue;
       if (isOperatorCommand(message, 'exit')) {
-        options.stdout.write('operator-agent session ended.\n');
+        writeStatusLine(
+          options.stdout,
+          'operator-agent',
+          'session ended.',
+          options.colorEnabled,
+        );
         return true;
       }
 
@@ -234,13 +251,25 @@ async function runTtyConversation(options: {
       if (!result) return false;
       firstSend = false;
       if (result.status === 'error') {
-        options.stdout.write(
-          `operator-agent error: ${result.error?.message ?? result.result ?? 'request failed'}\n`,
+        writeStatusLine(
+          options.stdout,
+          'operator-agent error:',
+          result.error?.message ?? result.result ?? 'request failed',
+          options.colorEnabled,
+          { color: ANSI_RED },
         );
       } else if (result.result?.trim()) {
-        options.stdout.write(`operator> ${result.result.trim()}\n`);
+        const response = normalizeOperatorResponse(result.result);
+        options.stdout.write(
+          `\n${colorize('operator>', ANSI_CYAN, options.colorEnabled)}\n${response}\n\n`,
+        );
       } else {
-        options.stdout.write(`operator-agent completed (status: ${result.status}).\n`);
+        writeStatusLine(
+          options.stdout,
+          'operator-agent',
+          `completed (status: ${result.status}).`,
+          options.colorEnabled,
+        );
       }
     }
   } finally {
@@ -249,6 +278,26 @@ async function runTtyConversation(options: {
     process.off('SIGTERM', handleTermination);
     terminal.close();
   }
+}
+
+function normalizeOperatorResponse(response: string): string {
+  return response.trim().replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n');
+}
+
+function writeStatusLine(
+  output: OperatorAgentOutput,
+  label: string,
+  detail: string,
+  colorEnabled: boolean,
+  displayOptions: { color?: string; leadingBlank?: boolean } = {},
+): void {
+  const leadingBlank = displayOptions.leadingBlank === false ? '' : '\n';
+  const color = displayOptions.color ?? ANSI_DIM;
+  output.write(`${leadingBlank}${colorize(label, color, colorEnabled)} ${detail}\n\n`);
+}
+
+function colorize(text: string, color: string, enabled: boolean): string {
+  return enabled ? `${color}${text}${ANSI_RESET}` : text;
 }
 
 function assertTty(stdin: OperatorAgentInput, stdout: OperatorAgentOutput): void {
