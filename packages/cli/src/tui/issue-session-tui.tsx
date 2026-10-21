@@ -675,6 +675,7 @@ export function IssueSessionTui({
       return;
     }
 
+    inputHistoryRef.current.abandonDeferredDraftOnInput();
     setInputValue(selectedSuggestion.value);
     setInputCursorPosition([0, selectedSuggestion.value.length]);
     setHiddenAnswerSuggestionQuestionId(selectedQuestion.id);

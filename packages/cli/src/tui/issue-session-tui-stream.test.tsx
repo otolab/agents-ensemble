@@ -155,6 +155,137 @@ describe('IssueSessionTuiStream', () => {
     expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}A`);
   });
 
+  it('keeps an Open Question answer completion after a historical submit', async () => {
+    const viewModel = createTuiViewModel();
+    const question = createOpenQuestion({
+      id: 'inq-yes-no',
+      question: 'Proceed?',
+      responseType: 'yes_no',
+    });
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [question],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />,
+    );
+
+    stdin.write('previous input');
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+    stdin.write('unsent draft');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}previous input`);
+
+    stdin.write(' edited');
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenLastCalledWith('previous input edited', {
+      targetOpenQuestionId: question.id,
+    });
+
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}yes`);
+
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}yes`);
+    expect(lastFrame() ?? '').not.toContain(`${OPERATOR_INPUT_PROMPT}unsent draft`);
+
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenLastCalledWith('yes', {
+      targetOpenQuestionId: question.id,
+    });
+  });
+
+  it('moves within a soft-wrapped input and enters history only at its visual boundaries', async () => {
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 44,
+    });
+    const viewModel = createTuiViewModel();
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />,
+    );
+
+    const olderEntry = 'b'.repeat(90);
+    stdin.write(olderEntry);
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+
+    const wrappedDraft = 'a'.repeat(90);
+    stdin.write(wrappedDraft);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write('X');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    stdin.write('Y');
+    await flushInkStdin();
+
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(
+      `${OPERATOR_INPUT_PROMPT}${olderEntry.slice(0, 10)}`,
+    );
+
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+
+    stdin.write('\r');
+    await flushInkStdin();
+    const editedWrappedDraft = onSubmit.mock.calls.at(-1)?.[0] as string;
+    expect(editedWrappedDraft).toHaveLength(wrappedDraft.length + 2);
+    expect(
+      editedWrappedDraft.indexOf('Y') - editedWrappedDraft.indexOf('X'),
+    ).toBeGreaterThan(1);
+    expect(editedWrappedDraft.replace(/[XY]/g, '')).toBe(wrappedDraft);
+
+    stdin.write('pending draft');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}pending draft`);
+
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.upArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(
+      `${OPERATOR_INPUT_PROMPT}${olderEntry.slice(0, 10)}`,
+    );
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenLastCalledWith(olderEntry, undefined);
+  });
+
   it('selects a slash suggestion and Tab completes it without submitting', async () => {
     const viewModel = createTuiViewModel();
     const onSubmit = vi.fn();

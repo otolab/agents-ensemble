@@ -10,6 +10,7 @@ import {
   computeOperatorInputLayout,
   isCursorAtVisualBoundary,
   logicalPositionToOffset,
+  mapDisplayPositionToCursorOffset,
   mapCursorOffsetToDisplayPosition,
   sliceVisibleInputDisplayLines,
 } from './operator-input-layout.js';
@@ -159,25 +160,27 @@ export function OperatorTextArea({
           setCursorOffset(nextOffset);
           onCursorChange?.(cursorPositionFor(value, nextOffset));
         } else if (key.upArrow) {
-          const newlineIndex = value.lastIndexOf('\n', cursorOffset - 1);
-          if (newlineIndex >= 0) {
-            const offsetOnPreviousLine = cursorOffset - (newlineIndex + 1);
-            const previousLineStart = value.lastIndexOf('\n', newlineIndex - 1) + 1;
-            const nextOffset = Math.min(
-              previousLineStart + offsetOnPreviousLine,
-              newlineIndex,
+          const targetDisplayLineIndex = cursorPosition.displayLineIndex - 1;
+          if (targetDisplayLineIndex >= 0) {
+            const nextOffset = mapDisplayPositionToCursorOffset(
+              value,
+              targetDisplayLineIndex,
+              cursorPosition.columnInLine,
+              contentWidth,
+              promptWidth,
             );
             setCursorOffset(nextOffset);
             onCursorChange?.(cursorPositionFor(value, nextOffset));
           }
         } else if (key.downArrow) {
-          const nextLineStart = value.indexOf('\n', cursorOffset);
-          if (nextLineStart >= 0) {
-            const nextLineEndIndex = value.indexOf('\n', nextLineStart + 1);
-            const nextLineEnd = nextLineEndIndex < 0 ? value.length : nextLineEndIndex;
-            const nextOffset = Math.min(
-              nextLineStart + 1 + (cursorOffset - lineStart),
-              nextLineEnd,
+          const targetDisplayLineIndex = cursorPosition.displayLineIndex + 1;
+          if (targetDisplayLineIndex < layout.displayLines.length) {
+            const nextOffset = mapDisplayPositionToCursorOffset(
+              value,
+              targetDisplayLineIndex,
+              cursorPosition.columnInLine,
+              contentWidth,
+              promptWidth,
             );
             setCursorOffset(nextOffset);
             onCursorChange?.(cursorPositionFor(value, nextOffset));
