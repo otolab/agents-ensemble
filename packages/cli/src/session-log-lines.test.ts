@@ -8,6 +8,20 @@ import {
 } from './session-log-lines.js';
 
 describe('session-log-lines', () => {
+  it('includes operator delivery mode in verbose session log rows', () => {
+    expect(
+      formatHarnessLogBody(
+        {
+          type: 'operator.input',
+          conductorTurn: 4,
+          text: 'wait for workers',
+          delivery: 'idle',
+        },
+        { verbose: true },
+      ),
+    ).toBe('operator.input delivery=idle turn=4 bytes=16');
+  });
+
   it('formats permission.pending harness body', () => {
     expect(
       formatHarnessLogBody({

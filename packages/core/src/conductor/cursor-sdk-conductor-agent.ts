@@ -43,6 +43,9 @@ const CURSOR_CODING_TOOLS: ToolName[] = [
 
 /** Cursor SDK implementation of the backend-neutral conductor interface. */
 export class CursorSdkConductorAgent implements ConductorAgent {
+  private activeRun?: Awaited<ReturnType<SDKAgent['send']>>;
+  private pendingRun?: Promise<Awaited<ReturnType<SDKAgent['send']>>>;
+
   private constructor(private readonly agent: SDKAgent) {}
 
   get agentId(): string {
@@ -72,7 +75,7 @@ export class CursorSdkConductorAgent implements ConductorAgent {
   ): Promise<ConductorSendResult> {
     try {
       const pendingRunId = { value: '' };
-      const run = await this.agent.send(prompt, {
+      const pendingRun = this.agent.send(prompt, {
         onDelta: ({ update }) => {
           if (update.type === 'tool-call-started') {
             callbacks?.onToolCallStarted?.({
@@ -83,22 +86,38 @@ export class CursorSdkConductorAgent implements ConductorAgent {
           }
         },
       });
+      this.pendingRun = pendingRun;
+      let run: Awaited<ReturnType<SDKAgent['send']>>;
+      try {
+        run = await pendingRun;
+      } finally {
+        if (this.pendingRun === pendingRun) {
+          this.pendingRun = undefined;
+        }
+      }
       pendingRunId.value = run.id;
-      const result = await run.wait();
-      return {
-        runId: run.id,
-        status: result.status,
-        result: typeof result.result === 'string' ? result.result : undefined,
-        error: result.error
-          ? { message: result.error.message, code: result.error.code }
-          : undefined,
-        usage: result.usage
-          ? toConductorTokenUsage(result.usage)
-          : run.usage
-            ? toConductorTokenUsage(run.usage)
+      this.activeRun = run;
+      try {
+        const result = await run.wait();
+        return {
+          runId: run.id,
+          status: result.status,
+          result: typeof result.result === 'string' ? result.result : undefined,
+          error: result.error
+            ? { message: result.error.message, code: result.error.code }
             : undefined,
-        modelId: result.model?.id,
-      };
+          usage: result.usage
+            ? toConductorTokenUsage(result.usage)
+            : run.usage
+              ? toConductorTokenUsage(run.usage)
+              : undefined,
+          modelId: result.model?.id,
+        };
+      } finally {
+        if (this.activeRun === run) {
+          this.activeRun = undefined;
+        }
+      }
     } catch (error) {
       if (error instanceof AuthenticationError) {
         return {
@@ -114,6 +133,19 @@ export class CursorSdkConductorAgent implements ConductorAgent {
       }
       throw error;
     }
+  }
+
+  async cancel(): Promise<void> {
+    let run = this.activeRun;
+    if (!run && this.pendingRun) {
+      await this.pendingRun;
+      run = this.activeRun;
+    }
+    if (!run) return;
+    if (!run.supports('cancel')) {
+      throw new Error('Cursor SDK run does not support cancellation.');
+    }
+    await run.cancel();
   }
 
   async reload(): Promise<void> {

@@ -292,6 +292,19 @@ export async function runConductorSessionDriver(
       lastSendResult = awaited.value!;
       inFlightSend = undefined;
 
+      if (
+        lastSendResult.status === 'cancelled' &&
+        options.eventQueue.snapshot().some(
+          (event) =>
+            event.type === 'operator.message' &&
+            event.delivery === 'interrupt',
+        )
+      ) {
+        // #525's interrupt cancellation ends only this run. The queued operator
+        // message is the next dispatch; it does not terminate the session.
+        continue;
+      }
+
       const loopState = buildIssueLoopStopInput({
         autonomousTurns,
         maxTurns: options.maxTurns,
@@ -303,7 +316,28 @@ export async function runConductorSessionDriver(
         continueOnConductorError: options.continueOnConductorError,
         stopOnUnansweredInput: options.stopOnUnansweredInput,
       });
-      if (await shouldBreakAfterLoopState(loopState)) {
+      const queuedDispatch = selectDispatchBatch({
+        queue: options.eventQueue.snapshot(),
+        state: dispatchBatchState,
+        autonomousTurns,
+        maxTurns: options.maxTurns,
+        allowIdleOperatorMessages: canDispatchIdleOperatorMessage({
+          eventQueue: options.eventQueue,
+          workerSession: options.workerSession,
+          dispatchBatchState,
+          autonomousTurns,
+          maxTurns: options.maxTurns,
+        }),
+      });
+      const shouldBreak = await shouldBreakAfterLoopState(loopState);
+      const idleOperatorMessageReady = queuedDispatch?.batch.events.some(
+        (event) =>
+          event.type === 'operator.message' && event.delivery === 'idle',
+      );
+      if (
+        shouldBreak &&
+        (!idleOperatorMessageReady || options.stopOnUnansweredInput === true)
+      ) {
         break;
       }
       continue;
@@ -344,6 +378,14 @@ export async function runConductorSessionDriver(
         dispatchHoldState,
         onDispatchHoldChanged: options.onDispatchHoldChanged,
         isPermissionPending: options.isPermissionPending,
+        canDispatchIdleOperatorMessage: () =>
+          canDispatchIdleOperatorMessage({
+            eventQueue: options.eventQueue,
+            workerSession: options.workerSession,
+            dispatchBatchState,
+            autonomousTurns,
+            maxTurns: options.maxTurns,
+          }),
       });
     } catch (error) {
       if (isAbortError(error)) {
@@ -528,6 +570,7 @@ async function waitForDispatchBatch(input: {
   dispatchHoldState: DispatchHoldState;
   onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
   isPermissionPending?: (requestId: string) => boolean;
+  canDispatchIdleOperatorMessage: () => boolean;
 }): Promise<DispatchBatchResult | undefined> {
   for (;;) {
     if (input.dispatchHoldState.dispatchHold) {
@@ -552,6 +595,7 @@ async function waitForDispatchBatch(input: {
       state: input.dispatchBatchState,
       autonomousTurns: input.autonomousTurns,
       maxTurns: input.maxTurns,
+      allowIdleOperatorMessages: input.canDispatchIdleOperatorMessage(),
     });
 
     // operator.message は hold 中も通す。release 後に queue に残った
@@ -621,6 +665,31 @@ async function waitForDispatchBatch(input: {
     // waiter 経由のイベントは queue に載らない。到着順を保つため先頭へ戻す。
     input.eventQueue.prependSilent(incoming);
   }
+}
+
+function canDispatchIdleOperatorMessage(input: {
+  eventQueue: SessionEventQueue;
+  workerSession: WorkerSession;
+  dispatchBatchState: DispatchBatchState;
+  autonomousTurns: number;
+  maxTurns: number;
+}): boolean {
+  if (input.workerSession.runtime.runningCount > 0) {
+    return false;
+  }
+  const nonOperatorTriggers = input.eventQueue.snapshot().filter(
+    (event) =>
+      event.type !== 'operator.message' &&
+      event.type !== 'operator.reconnect',
+  );
+  return (
+    selectDispatchBatch({
+      queue: nonOperatorTriggers,
+      state: input.dispatchBatchState,
+      autonomousTurns: input.autonomousTurns,
+      maxTurns: input.maxTurns,
+    }) === undefined
+  );
 }
 
 function isImmediateDispatchSource(sourceKey: string): boolean {

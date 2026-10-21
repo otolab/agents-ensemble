@@ -3229,6 +3229,79 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
+  it('sends one operator.message over the live session UDS with its delivery mode', async () => {
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const onPostLoopWait = vi.fn();
+    let operatorApi: OperatorInputBindingApi | undefined;
+    mockSend.mockResolvedValue({
+      runId: 'run-1',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    try {
+      const sidecarPath = sessionSidecarPath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      await vi.waitFor(async () => {
+        const sidecar = await loadSessionSidecar(sidecarPath);
+        expect(sidecar?.harnessSocketPath).toBeTruthy();
+      });
+      await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+      const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+
+      await expect(
+        sendOpenQuestionControlRequest<{ queued: true; delivery: string }>(
+          socketPath!,
+          {
+            method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+            params: {
+              text: 'inspect the new operator control path',
+              delivery: 'idle',
+            },
+          },
+        ),
+      ).resolves.toEqual({ queued: true, delivery: 'idle' });
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+      expect(mockSend.mock.calls[1]?.[0]).toBe(
+        'inspect the new operator control path',
+      );
+      expect(
+        emitted.find(
+          (event) =>
+            event.type === 'operator.input' &&
+            event.text === 'inspect the new operator control path',
+        ),
+      ).toMatchObject({ delivery: 'idle' });
+      expect(operatorApi!.submit('/exit')).toBe(false);
+      await sessionPromise;
+    } finally {
+      if (operatorApi) operatorApi.submit('/exit');
+      await sessionPromise.catch(() => {});
+    }
+  });
+
   it('removes isolated worktree after post-loop /exit', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-1',

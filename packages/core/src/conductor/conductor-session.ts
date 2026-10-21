@@ -87,7 +87,11 @@ import { resolvePiConductorProvider } from './conductor-pi-auth.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
-import type { SessionEvent } from './session/session-event.js';
+import type {
+  OperatorMessageDelivery,
+  OperatorMessageEvent,
+  SessionEvent,
+} from './session/session-event.js';
 import {
   bufferDispatchHoldEvents,
   createDispatchHoldState,
@@ -103,6 +107,7 @@ import { runConductorSessionDriver } from './conductor-session-driver.js';
 import { isOperatorExitCommand } from './operator-exit.js';
 import { isOperatorCloseCommand } from './operator-close.js';
 import { isOperatorReconnectCommand } from './operator-reconnect.js';
+import { parseOperatorMessageDelivery } from './operator-command.js';
 import {
   assertSessionSidecarMatches,
   requireSessionSidecarForResume,
@@ -1351,6 +1356,51 @@ export async function runConductorSession(
   let operatorRequestedClose = false;
   let disposeOperatorInput: (() => void) | undefined;
 
+  const submitOperatorMessage = (input: {
+    message: string;
+    delivery?: OperatorMessageDelivery;
+    targetOpenQuestionId?: string;
+    answeredAt?: number;
+    onEscalated?: (record: EscalationRecord) => void;
+    onOperatorMessageQueued?: (event: OperatorMessageEvent) => void;
+  }): boolean => {
+    const delivery = input.delivery ?? 'next';
+    const received = submitOperatorInput({
+      ...input,
+      delivery,
+      conductorTurn: sendCount + 1,
+      openQuestions,
+      escalations,
+      eventQueue,
+      sessionLogger,
+      onEscalated:
+        input.onEscalated ?? ((record) => options.onEscalated?.(record)),
+    });
+    if (!received) return false;
+
+    scheduleSidecarFlush();
+    if (delivery === 'interrupt') {
+      const cancel = conductorHandle.conductor.cancel;
+      if (!cancel) {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            'Operator interrupt cancellation is unavailable; the message will use normal next dispatch.',
+        });
+      } else {
+        void cancel.call(conductorHandle.conductor).catch((error: unknown) => {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message:
+              `Operator interrupt cancellation failed; the message will use normal next dispatch: ${detail}`,
+          });
+        });
+      }
+    }
+    return true;
+  };
+
   if (options.bindOperatorInput) {
     const bindingDispose = options.bindOperatorInput({
       submit: (message, submitOptions) => {
@@ -1374,20 +1424,17 @@ export async function runConductorSession(
           eventQueue.enqueue({ type: 'operator.reconnect' });
           return true;
         }
-        const received = submitOperatorInput({
-          message,
+        const parsed =
+          submitOptions?.targetOpenQuestionId !== undefined
+            ? { message, delivery: 'next' as const }
+            : submitOptions?.delivery === undefined
+              ? parseOperatorMessageDelivery(message)
+              : { message, delivery: submitOptions.delivery };
+        return submitOperatorMessage({
+          message: parsed.message,
+          delivery: parsed.delivery,
           targetOpenQuestionId: submitOptions?.targetOpenQuestionId,
-          conductorTurn: sendCount + 1,
-          openQuestions,
-          escalations,
-          eventQueue,
-          sessionLogger,
-          onEscalated: (record) => options.onEscalated?.(record),
         });
-        if (received) {
-          scheduleSidecarFlush();
-        }
-        return received;
       },
       getContext: () => ({
         conductorTurn: sendCount + 1,
@@ -1404,6 +1451,15 @@ export async function runConductorSession(
   try {
     openQuestionControlServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => openQuestions.listOpen(),
+      sendOperatorMessage: ({ text, delivery }) => {
+        if (teardownStarted) {
+          throw new OpenQuestionControlOperationError(
+            -32000,
+            'The session is shutting down.',
+          );
+        }
+        return submitOperatorMessage({ message: text, delivery });
+      },
       answerOpenQuestion: async ({ questionId, answer }) => {
         if (teardownStarted) {
           throw new OpenQuestionControlOperationError(
@@ -1456,15 +1512,11 @@ export async function runConductorSession(
             return;
           }
 
-          accepted = submitOperatorInput({
+          accepted = submitOperatorMessage({
             message: answer,
+            delivery: 'next',
             targetOpenQuestionId: questionId,
             answeredAt: stagedAnswer.answeredAt,
-            conductorTurn: sendCount + 1,
-            openQuestions,
-            escalations,
-            eventQueue,
-            sessionLogger,
             onEscalated: (record) => escalatedRecords.push(record),
             onOperatorMessageQueued: (event) => {
               let receipt!: {

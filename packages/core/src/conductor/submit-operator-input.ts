@@ -6,11 +6,15 @@ import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OpenQuestionRegistry } from '../escalation/open-question.js';
 import type { SessionLogger } from './session/session-logger.js';
 import type { SessionEventQueue } from './session/session-event-queue.js';
-import type { OperatorMessageEvent } from './session/session-event.js';
+import type {
+  OperatorMessageDelivery,
+  OperatorMessageEvent,
+} from './session/session-event.js';
 
 export interface SubmitOperatorInputInput {
   message: string;
   targetOpenQuestionId?: string;
+  delivery?: OperatorMessageDelivery;
   answeredAt?: number;
   conductorTurn: number;
   openQuestions: OpenQuestionRegistry;
@@ -57,8 +61,13 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
     type: 'operator.input',
     conductorTurn: input.conductorTurn,
     text,
+    delivery: input.delivery ?? 'next',
   });
-  const event: OperatorMessageEvent = { type: 'operator.message', text };
+  const event: OperatorMessageEvent = {
+    type: 'operator.message',
+    text,
+    delivery: input.delivery ?? 'next',
+  };
   input.onOperatorMessageQueued?.(event);
   input.eventQueue.enqueue(event);
   return true;

@@ -1,4 +1,4 @@
-# 稼働中 Open Question control API
+# 稼働中 harness control API
 
 この文書は、稼働中の `ensemble issue` harness が提供する UDS control interface の利用者・integrator 向け reference です。設計判断の履歴は [ADR 0033](adr/0033-live-open-question-control-uds.md)、[ADR 0035](adr/0035-open-question-shutdown-commit-order.md)、[ADR 0036](adr/0036-live-open-question-answer-contract.md) を参照してください。
 
@@ -6,9 +6,9 @@
 
 - session ごとの listener は、稼働中 `ensemble issue` プロセス内の harness が起動・停止します。
 - operator-agent は client です。listener の起動や停止中 session の回答保存は行いません。
-- API は稼働中 session の未回答 Open Question の一覧取得と回答を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。
+- API は稼働中 session の未回答 Open Question の一覧取得・回答、および conductor への operator message 送信を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。
 
-operator-agent には `list_live_open_questions` と `answer_live_open_question` の tool があります。どちらも `conductorAgentId` を受け取り、`list_operator_sessions` で得た session を選びます。回答 tool はさらに `questionId` と `answer` を要求します。両 tool の入力に未知の field は許可されません。
+operator-agent には `list_live_open_questions`、`answer_live_open_question`、`send_operator_message` の tool があります。どれも `conductorAgentId` を受け取り、`list_operator_sessions` で得た session を選びます。回答 tool はさらに `questionId` と `answer`、送信 tool は `text` と任意の `delivery` を要求します。各 tool の入力に未知の field は許可されません。
 
 operator-agent tool の input は次のとおりです。
 
@@ -22,6 +22,12 @@ operator-agent tool の input は次のとおりです。
 
 ```json
 {"conductorAgentId":"agent-123","questionId":"inq-1","answer":"yes"}
+```
+
+`send_operator_message`:
+
+```json
+{"conductorAgentId":"agent-123","text":"Please wait for active work to settle.","delivery":"idle"}
 ```
 
 list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }`）です。answer tool の text content は UDS result (`{ "question": {...} }`) を JSON 表示し、`structuredContent` は `questionId`, `status`, 任意の `answeredBy`, `approved` を持つ object に整形します。これは operator-agent tool wrapper の出力で、UDS wire response とは形が異なります。
@@ -95,6 +101,32 @@ Response:
 
 受理した回答は既存の `operator.message` 相当として event queue に入り、conductor の通常 dispatch 経路へ渡ります。operator-agent は worker を直接 dispatch しません。
 
+### `operator.message.send`
+
+Request の `params.text` は trim 後に空でない string が必要です。`params.delivery` は省略可能で、省略時は `next` です。有効値は `idle`、`next`、`interrupt` です。
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"operator.message.send","params":{"text":"Please wait for active work to settle.","delivery":"idle"}}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":3,"result":{"queued":true,"delivery":"idle"}}
+```
+
+成功 response は message が harness の event queue に受理されたことだけを示します。conductor への dispatch や処理の完了を待ちません。メッセージ本文は session log / TTY 活動ログに記録されますが、Open Questions YAML には保存されません。
+
+| `delivery` | 配信 |
+|------------|------|
+| `next` | 次に選ばれる dispatch で operator message を最優先に送ります。進行中の conductor run は完了を待ちます |
+| `idle` | conductor send 中、worker 実行中、または送信可能な自律イベントが残る間は event queue に保持し、処理が落ち着いた後に送ります。post-loop 待機中と max-turns 到達後も、送信可能になれば dispatch します |
+| `interrupt` | 進行中の conductor run に cancel を試み、cancel 完了後に operator message を優先 dispatch します。backend が cancel を提供しない、または cancel が失敗した場合は warning を記録し、通常の次回 dispatch に戻ります（[#86](https://github.com/otolab/agents-ensemble/issues/86)） |
+
+dispatch hold 中も operator message は hold buffer を通らず、配信可能になれば dispatch します。`idle` は worker と送信可能な自律イベントが落ち着くまで待つため、hold の解除自体を待つ指定ではありません。
+
 ## Persistence、acknowledgment、errors
 
 回答候補は Open Questions YAML に atomic save されてから live Registry と event queue に反映されます。YAML は回答永続化・resume の正本で、JSON sidecar は mirror です。通常の success response は YAML save と conductor dispatch receipt の成功後に返ります。sidecar の flush 成功は success 条件ではありません。回答処理で mirror 更新に失敗すると warning を記録し、後続 flush を一度 schedule して再同期を試みます。これは再同期の保証ではなく、その flush も失敗した場合は warning を記録してこの経路での再試行を終えます。
@@ -112,11 +144,13 @@ JSON-RPC error は次の envelope です。`data` は該当する場合だけ付
 | `-32700` | JSON parse error |
 | `-32600` | 不正 request。過大 request や1 connectionに複数 request を含めた場合を含む |
 | `-32601` | 未対応 method |
-| `-32602` | answer の `questionId` または `answer` が空・不足 |
+| `-32602` | answer の `questionId` / `answer`、または operator message の `text` / `delivery` が不正・不足 |
 | `-32603` | 汎用 operation error。YAML save に失敗した場合はこの error となり、live Registry と event queue は更新されません |
 | `-32000` | session が shutdown 処理中 |
 | `-32004` | question が存在しない、またはすでに回答済み |
 | `-32005` | 保存済み回答の conductor dispatch 完了を確認できない（send failure / shutdown を含む） |
+
+`operator.message.send` は `text` が空、または `delivery` が `idle` / `next` / `interrupt` 以外なら `-32602` を返します。session が shutdown 処理中なら `-32000`、message 送信が利用できない server なら `-32601` です。message 送信の JSON-RPC 成功 response は event queue への受理を確認するだけであり、conductor dispatch の receipt ではありません。
 
 YAML save 前に失敗した場合、generic `-32603` に `outcome` data はなく、回答は live Registry に適用されず conductor に通知されません。回答が YAML に保存された後、dispatch 完了を確認できない場合は成功とみなさず、通常は次の `-32005` error data を返します。
 
@@ -128,9 +162,9 @@ YAML save 前に失敗した場合、generic `-32603` に `outcome` data はな�
 
 ## Retry、fallback と運用
 
-- UDS client は request を自動再送しません。client が `connect` event を受け取る前の transport failure だけが `outcome: not_sent` です。`connect` 時点で client は `requestSent` を true にし、その後に `socket.write` が失敗した場合も、response を受け取れない transport failure は `outcome: unknown` です。これらは JSON-RPC response ではなく client 側の transport error で、`unknown` は request 全体が server に届いたことを保証するものではありません。
+- UDS client は request を自動再送しません。client が `connect` event を受け取る前の transport failure だけが `outcome: not_sent` です。`connect` 時点で client は `requestSent` を true にし、その後に `socket.write` が失敗した場合も、response を受け取れない transport failure は `outcome: unknown` です。これらは JSON-RPC response ではなく client 側の transport error で、`unknown` は request 全体が server に届いたことを保証するものではありません。operator message の場合も、server が受理済みか分からないため、同じ指示をそのまま再送しないでください。
 - client の30秒 timeout や切断後も、server が request newline を受信して handler を開始済みなら、YAML commit や conductor dispatch が続く場合があります。特に `outcome: unknown` のときは、その時点で YAML に回答が見えないことだけを根拠に再送しないでください。保存・dispatch の結果が不確定なままなので、session の状態とログを確認して運用者が次の操作を判断してください。
-- shutdown intent 後は bounded drain 中も conductor reconnect / 同一 message retry を抑止します。dispatch の完了を確認できない場合は `outcome: unknown` となり、回答は保存済みの可能性があります。
+- shutdown intent 後は bounded drain 中も conductor reconnect / 同一 message retry を抑止します。回答 dispatch の完了を確認できない場合は `outcome: unknown` となり、回答は保存済みの可能性があります。operator message の queue 受理 response が返る前に接続が切れた場合も、message が受理済みの可能性があります。
 - listener がない場合に YAML を直接読む・書く fallback、file watch、固定 TCP、GitHub comment 同期、自動解決はありません。
 - `outcome: unknown` の場合、回答を自動再送しないでください。`open-questions.yaml` と保存済み session state / session log を確認して運用者が次の操作を判断します。ただし、その時点で YAML に回答が見つからなくても、元の handler がまだ処理中の可能性があるため、それだけを根拠に再送しないでください。sidecar は mirror のため、YAML と一時的に一致しない可能性があります。
 

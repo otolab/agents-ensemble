@@ -32,7 +32,7 @@
 | 概念 | SessionLogEvent | SessionEvent |
 |------|-----------------|--------------|
 | worker ラウンド完了 | `worker.round`（field: `dispatch`） | `worker.completed`（field: `result`） |
-| オペレータ発話 | `operator.input` | `operator.message` |
+| オペレータ発話 | `operator.input`（解決後の `delivery` を記録） | `operator.message`（任意 `delivery`、省略時 `next`） |
 | GitHub 更新 | `harness.github.update`（件数のみ） | `github.update`（items 全文） |
 
 実装の型グループ定数: `packages/core/src/conductor/session/events/session-log-event-groups.ts`（`ALL_SESSION_LOG_EVENT_TYPES` / `SESSION_EVENT_TYPES`）。
@@ -52,7 +52,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `harness.worktree.removed` | post-loop `/exit` 後、isolated worktree 削除成功 | verbose 時のみ `[harness] worktree.removed path=... branch=...` | なし |
 | `harness.worktree.remove_skipped` | post-loop `/exit` の isolated worktree cleanup で未コミット変更あり等により削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
 | `harness.worktree.remove_failed` | post-loop `/exit` の isolated worktree cleanup で `git worktree remove` の限定リトライ後も失敗 | `[harness] worktree.remove_failed path=... branch=... error=...` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
-| `operator.input` | オペレータ発話をキューに載せる直前 | verbose 時のみ `[harness] operator.input turn=N bytes=...` | なし |
+| `operator.input` | オペレータ発話をキューに載せる直前 | verbose 時のみ `[harness] operator.input delivery=idle\|next\|interrupt turn=N bytes=...` | なし |
 | `conductor.inbound` | harness が `agent.send` へ渡す trigger 束を確定した直前 | `[harness] conductor.deliver triggers=N sources=...` | なし |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | verbose 時のみ `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。例: `conductor: reading`） |
@@ -190,8 +190,8 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 
 | 読者 | 見えるもの | 見えないもの / 注意 |
 |------|------------|--------------------|
-| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` / `permission.stall` と、更新に同梱する接続復旧 inform を含む held event 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator.message は dispatch を貫通する。max-turns により解除後も worker / GitHub が残る間は、残件数を表示する |
-| conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending / permission.stall を含む）と接続復旧 inform は通常 OFF 後に 1 回の `agent.send` へ合成される。max-turns で worker / GitHub が送れない場合は held permission が先に dispatch され、残りは後続の operator 入力後に送られる。operator.message は保留されない |
+| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` / `permission.stall` と、更新に同梱する接続復旧 inform を含む held event 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator message は dispatch hold を貫通し、`idle` は自律処理が落ち着いてから貫通する。活動ログの本文前に `[idle]` / `[next]` / `[interrupt]` を表示する |
+| conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending / permission.stall を含む）と接続復旧 inform は通常 OFF 後に 1 回の `agent.send` へ合成される。max-turns で worker / GitHub が送れない場合は held permission が先に dispatch され、残りは後続の operator 入力後に送られる。配送可能な operator.message は保留されない |
 | 運用・resume | 保留は Driver メモリだけ | sidecar に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
 
 保留は一時的な運用モードであり、teardown flush や crash recovery は提供しない。`/exit`、
@@ -354,7 +354,7 @@ attach handshake 中に届いた追加指示は queue に積む。まだ cancel 
 
 | type | 発火タイミング | conductor への見出し（例） | 備考 |
 |------|----------------|---------------------------|------|
-| `operator.message` | オペレータが `submit` / TTY 入力 | （プレーンテキスト） | max-turns ゲートの対象 |
+| `operator.message` | オペレータが `submit` / TTY / operator-agent UDS | （プレーンテキスト） | `delivery` は省略時 `next`。`idle` は active worker と送信可能な自律イベントが落ち着くまで選択を保留。max-turns 後も送信可能 |
 | `operator.reconnect` | オペレータが `/reconnect` / `reconnect` を入力 | **なし** | Driver が `close` → `resume(sameId)` を実行。conductor へ送らず、worker / worktree / プロセスには触れない |
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |

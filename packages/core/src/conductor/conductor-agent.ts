@@ -85,6 +85,8 @@ export interface ConductorAgent {
     prompt: string,
     callbacks?: ConductorSendCallbacks,
   ): Promise<ConductorSendResult>;
+  /** Cancel the current backend run when supported. */
+  cancel?(): Promise<void>;
   reload(): Promise<void>;
   getUsage(): Promise<ConductorAgentUsage>;
   setSystemPrompt(systemPrompt: string): Promise<void>;
