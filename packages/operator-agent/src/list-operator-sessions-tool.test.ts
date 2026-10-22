@@ -176,7 +176,7 @@ describe('list_operator_sessions', () => {
     );
   });
 
-  it('projects persisted phase separately from live connectivity and flags conflicts', async () => {
+  it('projects persisted phase against live observation time', async () => {
     const issueUrl = 'https://github.com/example/project/issues/561';
     const now = Date.now();
     await writeResumeStore('running', now, issueUrl, {
@@ -186,9 +186,13 @@ describe('list_operator_sessions', () => {
     await writeResumeStore('closed', now - 1, issueUrl, {
       lifecycle: 'closed',
     });
-    await writeResumeStore('exited-live', now - 2, issueUrl, {
+    await writeResumeStore('exited-live', now, issueUrl, {
       harnessPhase: 'exit',
-      modifiedAt: now - 2,
+      modifiedAt: now,
+    });
+    await writeResumeStore('closed-stale-live', now, issueUrl, {
+      harnessPhase: 'close',
+      modifiedAt: now,
     });
     const tool = createListOperatorSessionsTool(repoRoot, (id) => {
       if (id === 'running') {
@@ -202,6 +206,13 @@ describe('list_operator_sessions', () => {
         return {
           connectivity: 'reachable',
           checkedAt: now,
+          unreachableSince: null,
+        };
+      }
+      if (id === 'closed-stale-live') {
+        return {
+          connectivity: 'reachable',
+          checkedAt: now - 1,
           unreachableSince: null,
         };
       }
@@ -219,6 +230,7 @@ describe('list_operator_sessions', () => {
         live: { connectivity: string; checkedAt: number | null };
         posture: string;
         coherence: string;
+        coherenceReasons?: string[];
       }>;
     };
     expect(result.sessions).toEqual(
@@ -249,6 +261,18 @@ describe('list_operator_sessions', () => {
           conductorAgentId: 'exited-live',
           posture: 'indeterminate',
           coherence: 'conflict',
+        }),
+        expect.objectContaining({
+          conductorAgentId: 'closed-stale-live',
+          persisted: {
+            harnessPhase: 'close',
+            modifiedAt: now,
+            source: 'resume_store',
+          },
+          live: { connectivity: 'reachable', checkedAt: now - 1 },
+          posture: 'resume',
+          coherence: 'insufficient_data',
+          coherenceReasons: ['live_observation_predates_phase'],
         }),
       ]),
     );

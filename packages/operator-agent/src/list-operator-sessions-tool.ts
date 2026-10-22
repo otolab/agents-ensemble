@@ -249,6 +249,9 @@ function summarizeSession(
   const harnessPhase =
     resumeStore.harnessPhase ??
     harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle);
+  const persistedModifiedAt = resumeStore.harnessPhase
+    ? (resumeStore.modifiedAt ?? null)
+    : null;
   const live = {
     connectivity: cachedLiveStatus?.connectivity ?? ('unknown' as const),
     checkedAt: cachedLiveStatus?.checkedAt ?? null,
@@ -256,6 +259,8 @@ function summarizeSession(
   const projection = projectSessionPosture(
     harnessPhase,
     live.connectivity,
+    live.checkedAt,
+    persistedModifiedAt,
     cachedLiveStatus?.unreachableSince ?? null,
   );
 
@@ -277,9 +282,7 @@ function summarizeSession(
     liveControlPathRecorded: Boolean(resumeStore.harnessSocketPath),
     persisted: {
       harnessPhase,
-      modifiedAt: resumeStore.harnessPhase
-        ? (resumeStore.modifiedAt ?? null)
-        : null,
+      modifiedAt: persistedModifiedAt,
       source: resumeStore.harnessPhase ? 'resume_store' : 'legacy_lifecycle',
     },
     live,
@@ -306,11 +309,21 @@ const ACTIVE_UNREACHABLE_GRACE_MS = 30_000;
 function projectSessionPosture(
   phase: HarnessPhase | null,
   connectivity: OperatorSessionLiveStatus['connectivity'],
+  checkedAt: number | null,
+  modifiedAt: number | null,
   unreachableSince: number | null,
 ): Pick<
   OperatorSessionSummary,
   'posture' | 'coherence' | 'coherenceReasons'
 > {
+  const liveObservationPredatesPhase =
+    checkedAt !== null &&
+    modifiedAt !== null &&
+    checkedAt < modifiedAt;
+  const projectedConnectivity = liveObservationPredatesPhase
+    ? 'unknown'
+    : connectivity;
+
   if (!phase) {
     return {
       posture: 'indeterminate',
@@ -320,14 +333,14 @@ function projectSessionPosture(
   }
 
   if (phase === 'running' || phase === 'idle') {
-    if (connectivity === 'reachable') {
+    if (projectedConnectivity === 'reachable') {
       return {
         posture: phase === 'running' ? 'interact' : 'watch',
         coherence: 'ok',
       };
     }
     if (
-      connectivity === 'unreachable' &&
+      projectedConnectivity === 'unreachable' &&
       unreachableSince !== null &&
       Date.now() - unreachableSince >= ACTIVE_UNREACHABLE_GRACE_MS
     ) {
@@ -341,25 +354,31 @@ function projectSessionPosture(
       posture: 'indeterminate',
       coherence: 'insufficient_data',
       coherenceReasons: [
-        connectivity === 'unreachable'
-          ? 'active_connectivity_grace'
-          : 'live_connectivity_unknown',
+        liveObservationPredatesPhase
+          ? 'live_observation_predates_phase'
+          : projectedConnectivity === 'unreachable'
+            ? 'active_connectivity_grace'
+            : 'live_connectivity_unknown',
       ],
     };
   }
 
-  if (connectivity === 'reachable') {
+  if (projectedConnectivity === 'reachable') {
     return {
       posture: 'indeterminate',
       coherence: 'conflict',
       coherenceReasons: ['terminal_but_live_control'],
     };
   }
-  if (connectivity === 'unknown') {
+  if (projectedConnectivity === 'unknown') {
     return {
       posture: phase === 'exit' ? 'purge' : 'resume',
       coherence: 'insufficient_data',
-      coherenceReasons: ['terminal_live_connectivity_unknown'],
+      coherenceReasons: [
+        liveObservationPredatesPhase
+          ? 'live_observation_predates_phase'
+          : 'terminal_live_connectivity_unknown',
+      ],
     };
   }
   return {
