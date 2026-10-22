@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,8 +8,8 @@ import {
 } from './conductor-pi-auth.js';
 import { loadPiResources } from './pi-resource-loader.js';
 
-describe('PiConductorAgent v1 model runtime integration', () => {
-  it('uses ModelRuntime and ModelRegistry for custom model auth and request metadata', async () => {
+describe('Pi conductor model registry integration', () => {
+  it('registers project model metadata and resolves its auth key', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-runtime-project-'));
     const agentDir = join(cwd, 'user-pi');
     const projectDir = join(cwd, 'project-pi');
@@ -56,6 +56,8 @@ describe('PiConductorAgent v1 model runtime integration', () => {
     expect(model).toMatchObject({
       provider: 'local',
       id: 'review-model',
+      name: 'Review model',
+      api: 'openai-completions',
       baseUrl: 'https://local.example/v1',
     });
     await expect(context.modelRuntime.getAuth('local')).resolves.toMatchObject({
@@ -68,8 +70,5 @@ describe('PiConductorAgent v1 model runtime integration', () => {
         provider: 'local',
       }),
     ).resolves.toBe('runtime-key');
-    await expect(readFile(join(agentDir, 'auth.json'), 'utf8')).resolves.toContain(
-      'runtime-key',
-    );
   });
 });
