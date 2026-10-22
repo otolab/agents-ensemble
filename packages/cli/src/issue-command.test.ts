@@ -110,41 +110,41 @@ describe('resolveResumeAgentIdFromOptions', () => {
     ).rejects.toThrow('Cannot use --continue and --resume together');
   });
 
-  it('throws when --continue finds no sidecar', async () => {
-    const findLatestSessionSidecarForIssue = vi.fn().mockResolvedValue(undefined);
+  it('throws when --continue finds no saved session resume state', async () => {
+    const findLatestSessionResumeStateForIssue = vi.fn().mockResolvedValue(undefined);
 
     await expect(
       resolveResumeAgentIdFromOptions(
         { continue: true },
         { issueUrl, repoRoot: '/tmp/repo' },
-        { findLatestSessionSidecarForIssue },
+        { findLatestSessionResumeStateForIssue },
       ),
     ).rejects.toThrow(
-      `No session sidecar found for issue ${issueUrl}. Start a new session without --continue.`,
+      `No saved session resume state found for issue ${issueUrl}. Start a new session without --continue.`,
     );
 
-    expect(findLatestSessionSidecarForIssue).toHaveBeenCalledWith({
+    expect(findLatestSessionResumeStateForIssue).toHaveBeenCalledWith({
       repoRoot: '/tmp/repo',
       issueUrl,
     });
   });
 
-  it('returns conductorAgentId from latest sidecar when --continue is set', async () => {
-    const findLatestSessionSidecarForIssue = vi.fn().mockResolvedValue({
+  it('returns conductorAgentId from the latest session resume state when --continue is set', async () => {
+    const findLatestSessionResumeStateForIssue = vi.fn().mockResolvedValue({
       conductorAgentId: 'agent-latest',
     });
 
     const result = await resolveResumeAgentIdFromOptions(
       { continue: true },
       { issueUrl, repoRoot: '/tmp/repo' },
-      { findLatestSessionSidecarForIssue },
+      { findLatestSessionResumeStateForIssue },
     );
 
     expect(result).toEqual({
       resumeAgentId: 'agent-latest',
-      continuedFromSidecar: 'agent-latest',
+      continuedFromResumeState: 'agent-latest',
     });
-    expect(findLatestSessionSidecarForIssue).toHaveBeenCalledWith({
+    expect(findLatestSessionResumeStateForIssue).toHaveBeenCalledWith({
       repoRoot: '/tmp/repo',
       issueUrl,
     });
@@ -230,7 +230,7 @@ describe('executeIssueCommand --continue wiring', () => {
       subscribe: vi.fn(),
       emit,
     }));
-    const findLatestSessionSidecarForIssue = vi.fn().mockResolvedValue({
+    const findLatestSessionResumeStateForIssue = vi.fn().mockResolvedValue({
       conductorAgentId: 'agent-from-continue',
     });
 
@@ -242,7 +242,7 @@ describe('executeIssueCommand --continue wiring', () => {
         runIssueSession,
         loadProfile,
         SessionLogger,
-        findLatestSessionSidecarForIssue,
+        findLatestSessionResumeStateForIssue,
       },
     );
 
@@ -305,7 +305,7 @@ describe('executeIssueCommand initial operator message wiring', () => {
       subscribe: vi.fn(),
       emit: vi.fn(),
     }));
-    const findLatestSessionSidecarForIssue = vi.fn().mockResolvedValue({
+    const findLatestSessionResumeStateForIssue = vi.fn().mockResolvedValue({
       conductorAgentId: 'agent-from-continue',
     });
     const writeStderr = vi.fn();
@@ -323,7 +323,7 @@ describe('executeIssueCommand initial operator message wiring', () => {
         runIssueSession,
         loadProfile,
         SessionLogger,
-        findLatestSessionSidecarForIssue,
+        findLatestSessionResumeStateForIssue,
         writeStderr,
       },
     );

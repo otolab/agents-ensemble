@@ -363,7 +363,7 @@ describe('createGitHubMonitor', () => {
     await monitor.stop();
   });
 
-  it('notifies offline diffs on first poll when sidecar cursor is restored', async () => {
+  it('notifies offline diffs on first poll when saved resume state cursor is restored', async () => {
     const client: GitHubClient = {
       getAuthenticatedUser: vi.fn().mockResolvedValue({ login: 'alice' }),
       getIssue: vi.fn(),

@@ -38,7 +38,7 @@
 | **WorktreeHelper** | パス・ブランチ名規約（temp dir + git は最小限の fixture） |
 | **PermissionPolicy** | allow/deny 判定（純関数） |
 
-`packages/cli` の表示・TUI・サマリ整形と、`packages/operator-agent` の prompt・sidecar tool・TTY conversation smoke も各 package の `src/**/*.test.ts` で検証する。
+`packages/cli` の表示・TUI・サマリ整形と、`packages/operator-agent` の prompt・SessionResumeStore 読み取り tool・TTY conversation smoke も各 package の `src/**/*.test.ts` で検証する。
 
 ### 配置
 
@@ -87,7 +87,7 @@ pnpm test:run          # workspace 全 package を単発実行（CI デフォル
 | **attachWorker / WorkerSession** | bootstrap → 完了コールバック（Fake または実 ACP） |
 | **permission 往復** | `session/request_permission` → 応答 |
 | **conductor session** | SDK conductor + dispatch + operator 入力 |
-| **session resume** | sidecar 復元と worker 再開 |
+| **session resume** | SessionResumeStore 復元と worker 再開 |
 | **GitHub API クライアント** | 実 GitHub API で Issue 取得（トークン設定時のみ） |
 | **team profile / workspace** | profile 解決と ACP cwd |
 

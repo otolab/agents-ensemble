@@ -9,10 +9,10 @@ import {
   type OpenQuestionControlServer,
 } from '../../core/src/session/open-question-control.js';
 import {
-  saveSessionSidecar,
-  sessionSidecarPath,
-  SESSION_SIDECAR_VERSION,
-} from '../../core/src/session/session-sidecar.js';
+  saveSessionResumeState,
+  sessionResumeStorePath,
+  SESSION_RESUME_STATE_VERSION,
+} from '../../core/src/session/session-resume-store.js';
 import {
   createAnswerLiveOpenQuestionTool,
   createGetLastConductorMessageTool,
@@ -31,7 +31,7 @@ describe('operator-agent live Open Question tools', () => {
     repoRoot = undefined;
   });
 
-  it('lists and answers through the socket recorded in the session sidecar', async () => {
+  it('lists and answers through the socket recorded in the session resume state', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-live-'));
     const registry = new OpenQuestionRegistry();
     const question = registry.enqueue({
@@ -56,13 +56,13 @@ describe('operator-agent live Open Question tools', () => {
         return answered;
       },
     });
-    await saveSessionSidecar(
-      sessionSidecarPath({
+    await saveSessionResumeState(
+      sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-live',
       }),
       {
-        version: SESSION_SIDECAR_VERSION,
+        version: SESSION_RESUME_STATE_VERSION,
         conductorAgentId: 'agent-live',
         issueUrl: 'https://github.com/org/repo/issues/1',
         repoRoot,
@@ -127,13 +127,13 @@ describe('operator-agent live Open Question tools', () => {
 
   it('fails when no live socket is recorded instead of reading the YAML snapshot', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-offline-'));
-    await saveSessionSidecar(
-      sessionSidecarPath({
+    await saveSessionResumeState(
+      sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-offline',
       }),
       {
-        version: SESSION_SIDECAR_VERSION,
+        version: SESSION_RESUME_STATE_VERSION,
         conductorAgentId: 'agent-offline',
         issueUrl: 'https://github.com/org/repo/issues/2',
         repoRoot,
@@ -167,13 +167,13 @@ describe('operator-agent live Open Question tools', () => {
       },
       sendOperatorMessage,
     });
-    await saveSessionSidecar(
-      sessionSidecarPath({
+    await saveSessionResumeState(
+      sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-send',
       }),
       {
-        version: SESSION_SIDECAR_VERSION,
+        version: SESSION_RESUME_STATE_VERSION,
         conductorAgentId: 'agent-send',
         issueUrl: 'https://github.com/org/repo/issues/3',
         repoRoot,

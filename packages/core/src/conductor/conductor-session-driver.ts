@@ -124,7 +124,7 @@ export interface ConductorSessionDriverOptions {
     ConductorSessionDriverResult,
     'sendCount' | 'autonomousTurns' | 'lastSendResult'
   > & { lastDispatchesThisTurn: number };
-  /** conductor send 中だけ有効な dispatch 保留状態。sidecar には保存しない。 */
+  /** conductor send 中だけ有効な dispatch 保留状態。SessionResumeStore には保存しない。 */
   dispatchHoldState?: DispatchHoldState;
   /** dispatch 保留の切替・件数変化を TUI/観測へ通知する。 */
   onDispatchHoldChanged?: (change: DispatchHoldChange) => void;

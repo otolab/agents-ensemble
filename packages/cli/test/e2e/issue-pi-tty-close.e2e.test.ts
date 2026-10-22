@@ -553,15 +553,15 @@ globalThis.fetch = async (input, init) => {
       expect(firstRun.summary.stopReason).toBe('completed');
       expect(model.getRequests()).toBeGreaterThanOrEqual(1);
 
-      const sidecarDir = join(repoRoot, '.ensemble', 'sessions');
-      const sidecarNames = (await readdir(sidecarDir)).filter((name) =>
+      const resumeStateDir = join(repoRoot, '.ensemble', 'sessions');
+      const resumeStateNames = (await readdir(resumeStateDir)).filter((name) =>
         name.endsWith('.json'),
       );
-      expect(sidecarNames).toEqual([`${firstRun.summary.agentId}.json`]);
-      const sidecar = JSON.parse(
-        await readFile(join(sidecarDir, sidecarNames[0]!), 'utf8'),
+      expect(resumeStateNames).toEqual([`${firstRun.summary.agentId}.json`]);
+      const resumeState = JSON.parse(
+        await readFile(join(resumeStateDir, resumeStateNames[0]!), 'utf8'),
       ) as { conductorAgentId: string; conductorBackend: string };
-      expect(sidecar).toMatchObject({
+      expect(resumeState).toMatchObject({
         conductorAgentId: firstRun.summary.agentId,
         conductorBackend: 'pi',
       });

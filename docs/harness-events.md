@@ -123,9 +123,9 @@ operatorSummary: <short operator-facing summary>
 ```
 
 `tool_call` と `tool_call_update` は `(workerId, ACP sessionId, toolCallId)` ごとに累積する。
-ID は ACP session をまたいで一意とは限らない。累積した履歴は、resume sidecar 本体とは別の
+ID は ACP session をまたいで一意とは限らない。累積した履歴は、resume SessionResumeStore 本体とは別の
 `.ensemble/sessions/{conductorAgentId}.tool-calls` に JSON で原子的に保存する。
-sidecar と別にすることで、履歴ファイルの欠損や破損が conductor / worker session の resume を妨げない。
+SessionResumeStore と別にすることで、履歴ファイルの欠損や破損が conductor / worker session の resume を妨げない。
 
 履歴は最終更新から 30 日で期限切れになり、1 session あたり最大 1,000 件・8 MiB まで保持する。
 上限を超えるときは古い snapshot を単位ごとに削除し、1 件だけでサイズ上限を超える snapshot は保存しない。
@@ -178,7 +178,7 @@ open question・エスカレーション・CLI 通知。stderr の prefix は従
 | `open.question.enqueued` | open question 登録（`ask_human` / max-turns） | `[open question] inq-N [yes_no] ...` | なし |
 | `escalation.recorded` | open question 回答のエスカレーション記録 | `[operator answer] ... → ...` | なし |
 | `session.worktree.notice` | `--worktree in-repo` 開始時 | `[worktree] 特別モード: ...` | なし |
-| `session.continue` | `--continue` で sidecar から再開時 | `[continue] resuming session: conductorAgentId=...` | なし |
+| `session.continue` | `--continue` で SessionResumeStore から再開時 | `[continue] resuming session: conductorAgentId=...` | なし |
 | `session.post_loop_wait` | 自律的な連続処理が不要になり、TTY post-loop のイベント待機を開始したとき | （post-loop 待機メッセージ） | なし |
 | `session.operator_exit` | オペレータが `/exit` / `exit` を入力した直後（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | （終了フィードバックメッセージ） | なし |
 | `session.operator_close` | オペレータが `/close` / `close` を入力した直後（[#458](https://github.com/otolab/agents-ensemble/issues/458)） | （保存して閉じるフィードバックメッセージ） | なし |
@@ -192,11 +192,11 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 |------|------------|--------------------|
 | オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` / `permission.stall` と、更新に同梱する接続復旧 inform を含む held event 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator message は dispatch hold を貫通し、`idle` は自律処理が落ち着いてから貫通する。活動ログの本文前に `[idle]` / `[next]` / `[interrupt]` を表示する |
 | conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending / permission.stall を含む）と接続復旧 inform は通常 OFF 後に 1 回の `agent.send` へ合成される。max-turns で worker / GitHub が送れない場合は held permission が先に dispatch され、残りは後続の operator 入力後に送られる。配送可能な operator.message は保留されない |
-| 運用・resume | 保留は Driver メモリだけ | sidecar に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
+| 運用・resume | 保留は Driver メモリだけ | SessionResumeStore に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
 
 保留は一時的な運用モードであり、teardown flush や crash recovery は提供しない。`/exit`、
 `/close`、SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが `hold: false` より先に
-起きた場合、Driver 内の held buffer と queue に残る hold 対象 SessionEvent は dispatch / sidecar
+起きた場合、Driver 内の held buffer と queue に残る hold 対象 SessionEvent は dispatch / SessionResumeStore
 保存されず失われる。operator は終了前に `set_dispatch_hold({ hold: false })` を呼び、release
 完了を確認する必要がある。resume は空の hold（`dispatchHold: false`）で始まる。
 
@@ -220,7 +220,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 
 同じフェーズ・PR・原因で続く retryable エラーは、最初の `monitor_error` だけを記録し、以降はクリーンな poll が成功するまで抑止する。復旧時は `monitor_recovered` を1行出して抑止した件数を示す。同時に `harness.connectivity.recovered` を SessionEventQueue に載せる。同じ復旧 poll が GitHub 更新を返した場合は inform として更新束に同梱し、更新がなければ独立した trigger として dispatch する。認証や parse など非 retryable のエラーは抑止せず、poll ごとに記録する。
 
-監視: `packages/core/src/github/github-monitor.ts`。カーソルは sidecar `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。関連 PR は GitHub Search で自動検出するほか、conductor の `register_github_watch` で明示登録でき、`unregister_github_watch` で明示登録を解除できる。明示登録した PR は Search に未反映でも監視され、登録後は即時（in-flight poll 中ならその完了直後）に bootstrap poll を行う。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
+監視: `packages/core/src/github/github-monitor.ts`。カーソルは SessionResumeStore `githubMonitor` に永続化（[ADR 0011](adr/0011-session-sidecar-resume.md)）。関連 PR は GitHub Search で自動検出するほか、conductor の `register_github_watch` で明示登録でき、`unregister_github_watch` で明示登録を解除できる。明示登録した PR は Search に未反映でも監視され、登録後は即時（in-flight poll 中ならその完了直後）に bootstrap poll を行う。debounce（デフォルト 30s）は [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の dispatch 束とは別レイヤ。
 
 **運用制限（#39）**
 
@@ -229,10 +229,10 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | poll 間隔 | 通常 **60s**。いずれかの関連 PR で CI が pending（`QUEUED` / `IN_PROGRESS` 等）なら **15s** |
 | debounce | デフォルト **30s**（`--github-monitor-debounce-ms`）。連続インラインコメント等を 1 通知にまとめる |
 | 初回カーソル poll | **カーソル空の新規セッション**の初回 poll のみ（`initialCursorPoll`）。既存 Issue コメントは通知せずカーソルを進める。worker の init prompt（`startWorkers`）とは無関係 |
-| `--continue` 再開 | sidecar カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
+| `--continue` 再開 | SessionResumeStore カーソルありなら **初回 poll から差分通知**（オフライン中のコメント等を取りこぼさない） |
 | PR 紐づけ | GitHub Search API（`type:pr repo:owner/repo <issueNumber>` 相当）または conductor の `register_github_watch`。Search 失敗時も明示登録済み PR は監視し、**Issue コメント監視も継続** |
 | CI wakeup | GraphQL `statusCheckRollup` の **CheckRun / StatusContext** から、CheckRun は `checkSuite.commit.oid`、StatusContext は `commit.oid` を取得する。SHA を解決できる check だけを内部の `skip | running | failed | complete` に正規化し、commit SHA ごとにグループ化する。集約は `running`（1 件でも running）> `failed`（1 件でも failed）> `completed`（すべて skip / complete）の 3 値。SHA 無し check は集約から除外する。前回の `lastAggregateBySha` と今回の集約状態が変わったときだけ、既存 kind `ci.completed`（意味は SHA 集約状態遷移）として通知し、payload に SHA と failed check 名を載せる。 |
-| CI カーソル | PR ごとの `lastAggregateBySha[sha]` を sidecar に保存する。通知判定は check 名・run id・URL・個別 conclusion の差分ではなく、同じ SHA の集約状態差分だけで行う。同一 SHA・同一状態の再 poll は通知しない。PR 全体の `hasPendingCi` は、その poll で観測した SHA 集約のいずれかが `running` のとき true とし、15s poll を選ぶ。 |
+| CI カーソル | PR ごとの `lastAggregateBySha[sha]` を SessionResumeStore に保存する。通知判定は check 名・run id・URL・個別 conclusion の差分ではなく、同じ SHA の集約状態差分だけで行う。同一 SHA・同一状態の再 poll は通知しない。PR 全体の `hasPendingCi` は、その poll で観測した SHA 集約のいずれかが `running` のとき true とし、15s poll を選ぶ。 |
 | 登録・初検出時の完了済み CI | 成功した bootstrap poll で観測した SHA の集約状態は **baseline のみ**。履歴の通知は行わず、以降の状態遷移（`running→completed` / `running→failed` / `failed→running` を含む）だけを通知する。bootstrap の status poll が失敗した場合は baseline 未確定のため `ciBootstrapPending` を保持し、再試行で最初に非 running の集約状態を観測したときは取りこぼし防止のため通知する。 |
 | 旧 CI カーソルの移行 | 旧 `lastObserved` / `ciChecks` / `pendingCheckNames` / `notifiedCheckNames` は、check 単位状態から SHA 集約状態を安全に復元できないため、resume 時に 1 回だけ破棄する。次の status poll を現行モデルの baseline とし、旧 run identity は引き継がない。 |
 | CI の制限・失敗モード | API poll 失敗時は `harness.github.monitor_error` を出して既存カーソルを維持し、次回 poll で再試行する。bootstrap 中の status poll が失敗した PR では `ciBootstrapPending` を保持し、成功した status snapshot だけで bootstrap 完了にする。SHA 無し check は警告や通知を増やさず除外し、CheckRun / StatusContext 以外の未知の rollup 型は skip。 |
@@ -521,7 +521,7 @@ conductor は `list_workers` の `attachInFlight` / `state: processing` 等を *
 | `stopReason` | `session.stop` |
 | `sessionUsage` | `SessionUsageTracker`（`get_session_usage` と同型。cost は `getUsage()` マージ） |
 
-dispatch hold と held buffer は一時 Driver 状態であり、exit JSON / sidecar には載せない。
+dispatch hold と held buffer は一時 Driver 状態であり、exit JSON / SessionResumeStore には載せない。
 
 フィールドの型・出力先（TTY / JSON / ツール）・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
 

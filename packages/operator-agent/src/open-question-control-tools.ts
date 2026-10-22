@@ -1,5 +1,5 @@
 import {
-  listSessionSidecars,
+  listSessionResumeStates,
   OPEN_QUESTION_CONTROL_METHODS,
   sendOpenQuestionControlRequest,
   type OpenQuestionControlAnswerResult,
@@ -7,7 +7,7 @@ import {
   type OpenQuestionControlListItem,
   type ConductorJsonValue,
   type ConductorTool,
-  type SessionSidecar,
+  type SessionResumeState,
 } from '@agents-ensemble/core/operator-runtime';
 import { resolve } from 'node:path';
 
@@ -45,9 +45,9 @@ export function createListLiveOpenQuestionsTool(
       additionalProperties: false,
     },
     execute: async (args) => {
-      const sidecar = await requireSession(root, args.conductorAgentId);
+      const resumeState = await requireSession(root, args.conductorAgentId);
       const result = await sendOpenQuestionControlRequest<LiveOpenQuestionsResult>(
-        requireSocketPath(sidecar),
+        requireSocketPath(resumeState),
         {
           method: OPEN_QUESTION_CONTROL_METHODS.list,
           params: {},
@@ -83,9 +83,9 @@ export function createGetLastConductorMessageTool(
       additionalProperties: false,
     },
     execute: async (args) => {
-      const sidecar = await requireSession(root, args.conductorAgentId);
+      const resumeState = await requireSession(root, args.conductorAgentId);
       const result = await sendOpenQuestionControlRequest<LastConductorMessageResult>(
-        requireSocketPath(sidecar),
+        requireSocketPath(resumeState),
         {
           method: OPEN_QUESTION_CONTROL_METHODS.lastConductorMessageGet,
           params: {},
@@ -132,9 +132,9 @@ export function createAnswerLiveOpenQuestionTool(
       const conductorAgentId = requireString(args.conductorAgentId, 'conductorAgentId');
       const questionId = requireString(args.questionId, 'questionId');
       const answer = requireString(args.answer, 'answer');
-      const sidecar = await requireSession(root, conductorAgentId);
+      const resumeState = await requireSession(root, conductorAgentId);
       const result = await sendOpenQuestionControlRequest<OpenQuestionControlAnswerResult>(
-        requireSocketPath(sidecar),
+        requireSocketPath(resumeState),
         {
           method: OPEN_QUESTION_CONTROL_METHODS.answer,
           params: { questionId, answer },
@@ -191,11 +191,11 @@ export function createSendOperatorMessageTool(repoRoot: string): ConductorTool {
         args.delivery === undefined
           ? 'next'
           : requireDelivery(args.delivery);
-      const sidecar = await requireSession(root, conductorAgentId);
+      const resumeState = await requireSession(root, conductorAgentId);
       const result = await sendOpenQuestionControlRequest<{
         queued: true;
         delivery: 'idle' | 'next' | 'interrupt';
-      }>(requireSocketPath(sidecar), {
+      }>(requireSocketPath(resumeState), {
         method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
         params: { text, delivery },
       });
@@ -210,24 +210,24 @@ export function createSendOperatorMessageTool(repoRoot: string): ConductorTool {
 async function requireSession(
   repoRoot: string,
   value: ConductorJsonValue | undefined,
-): Promise<SessionSidecar> {
+): Promise<SessionResumeState> {
   const conductorAgentId = requireString(value, 'conductorAgentId');
-  const sidecar = (await listSessionSidecars(repoRoot)).find(
+  const resumeState = (await listSessionResumeStates(repoRoot)).find(
     (candidate) => candidate.conductorAgentId === conductorAgentId,
   );
-  if (!sidecar) {
+  if (!resumeState) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
-  return sidecar;
+  return resumeState;
 }
 
-function requireSocketPath(sidecar: SessionSidecar): string {
-  if (!sidecar.harnessSocketPath) {
+function requireSocketPath(resumeState: SessionResumeState): string {
+  if (!resumeState.harnessSocketPath) {
     throw new Error(
-      `Session ${sidecar.conductorAgentId} has no recorded live control socket.`,
+      `Session ${resumeState.conductorAgentId} has no recorded live control socket.`,
     );
   }
-  return sidecar.harnessSocketPath;
+  return resumeState.harnessSocketPath;
 }
 
 function requireString(

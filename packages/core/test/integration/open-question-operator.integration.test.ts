@@ -36,9 +36,9 @@ import {
   openQuestionsStorePath,
 } from '../../src/session/open-questions-store.js';
 import {
-  loadSessionSidecar,
-  sessionSidecarPath,
-} from '../../src/session/session-sidecar.js';
+  loadSessionResumeState,
+  sessionResumeStorePath,
+} from '../../src/session/session-resume-store.js';
 import {
   OPEN_QUESTION_CONTROL_METHODS,
   sendOpenQuestionControlRequest,
@@ -208,13 +208,13 @@ describe('open question / operator flow integration', () => {
       await firstSendStarted.promise;
       let socketPath: string | undefined;
       await vi.waitFor(async () => {
-        const sidecar = await loadSessionSidecar(
-          sessionSidecarPath({
+        const resumeState = await loadSessionResumeState(
+          sessionResumeStorePath({
             repoRoot: isolatedRepoRoot,
             conductorAgentId: 'agent-test',
           }),
         );
-        socketPath = sidecar?.harnessSocketPath;
+        socketPath = resumeState?.harnessSocketPath;
         expect(socketPath).toBeTruthy();
       });
 
@@ -346,14 +346,14 @@ describe('open question / operator flow integration', () => {
       sequence: 1,
       openQuestions: result.openQuestions,
     });
-    const sidecar = await loadSessionSidecar(
-      sessionSidecarPath({
+    const resumeState = await loadSessionResumeState(
+      sessionResumeStorePath({
         repoRoot,
         conductorAgentId: result.agentId,
       }),
     );
-    expect(sidecar?.sequence).toBe(1);
-    expect(sidecar?.openQuestions).toEqual(result.openQuestions);
+    expect(resumeState?.sequence).toBe(1);
+    expect(resumeState?.openQuestions).toEqual(result.openQuestions);
   });
 
   it('records free-text operator answers to choice questions in the event queue', async () => {
