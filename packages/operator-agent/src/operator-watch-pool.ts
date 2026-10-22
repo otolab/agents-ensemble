@@ -212,6 +212,7 @@ export async function createOperatorWatchPool(
         ),
       };
       const previous = state.messageListeners[id];
+      const previousCursor = state.messageCursors[id];
       state.messageListeners[id] = listener;
       try {
         await persist();
@@ -224,7 +225,29 @@ export async function createOperatorWatchPool(
       if (existingTimer) clearInterval(existingTimer);
       messageTimers.delete(id);
       startMessageTimer(listener);
-      await pool.pollConductorMessagesOnce(id);
+      try {
+        await pool.pollConductorMessagesOnce(id);
+      } catch (error) {
+        const timer = messageTimers.get(id);
+        if (timer) clearInterval(timer);
+        messageTimers.delete(id);
+        if (previous) state.messageListeners[id] = previous;
+        else delete state.messageListeners[id];
+        if (previousCursor === undefined) {
+          delete state.messageCursors[id];
+        }
+        try {
+          await persist();
+        } catch (rollbackError) {
+          if (previous) startMessageTimer(previous);
+          throw new AggregateError(
+            [error, rollbackError],
+            'Conductor message listen registration failed and could not be rolled back.',
+          );
+        }
+        if (previous) startMessageTimer(previous);
+        throw error;
+      }
       return listener;
     },
     async unregisterConductorMessageListen(conductorAgentId) {

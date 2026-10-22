@@ -23,6 +23,7 @@ describe('operator watch pool', () => {
   let closeServers: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
+    vi.useRealTimers();
     for (const close of closeServers) await close();
     closeServers = [];
     if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
@@ -881,6 +882,60 @@ describe('operator watch pool', () => {
       ]);
     } finally {
       pool.close();
+    }
+  });
+
+  it('cleans up the listener and timer when its initial baseline poll fails', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-baseline-error-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => [{
+        text: 'large response',
+        inbound: 'x'.repeat(1_048_576),
+        at: 1_700_000_000_001,
+        sendCount: 1,
+      }],
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      'message-baseline-error',
+      1,
+      liveServer.socketPath,
+    );
+
+    const errors: string[] = [];
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+      onError: (message) => errors.push(message),
+    });
+    vi.useFakeTimers();
+    try {
+      await expect(
+        pool.registerConductorMessageListen('message-baseline-error'),
+      ).rejects.toMatchObject<Partial<OpenQuestionControlRemoteError>>({
+        rpcCode: -32603,
+        message: 'Response is too large.',
+      });
+      expect(pool.listConductorMessageListens()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageListeners: Record<string, unknown>;
+        messageCursors: Record<string, number>;
+      };
+      expect(state.messageListeners).toEqual({});
+      expect(state.messageCursors).toEqual({});
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(errors).toEqual([]);
+    } finally {
+      pool.close();
+      vi.useRealTimers();
     }
   });
 

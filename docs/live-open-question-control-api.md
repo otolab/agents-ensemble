@@ -241,6 +241,8 @@ UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です�
 
 発言 listen は operator-agent が UDS を polling し、独立した `messageCursors` を使います。`register_session_watch` の Open Question / status cursor と混ぜません。harness が停止中、UDS が到達不能、または method 未対応の場合は発言 listen に fallback はありません。通常の session watch の保存 YAML fallback とも別動作です。
 
+新しい listen の登録は、最初の baseline poll が成功してから完了します。baseline 取得に失敗した場合、register は error を返し、その呼び出しで追加した listener と timer を撤去します。既存 listen の設定変更中に poll が失敗した場合は、変更前の listener 設定と timer に戻します。
+
 operator-agent の listen は limit 20 の page から読み始め、aggregate response が 1 MiB を超えた場合は同じ exclusive cursor から limit を下げて再試行します。取得できた複数 page はその poll の debounce report にまとめ、sendCount 昇順で通知します。cursor は取得済み page の最後までだけ進めるため、retry で発言を飛ばしたり並べ替えたりしません。
 
 limit 1 でも単独 response が上限を超える発言に達した場合は `Response is too large.` になります。その poll で先に取得できた発言は queue に残して cursor もその発言まで進め、oversized record 自体は飛ばしません。その record が cursor 以降の bounded history に残る間、listen はそこで止まり、後続発言も通知されません。inbound を切り詰めることはありません。
