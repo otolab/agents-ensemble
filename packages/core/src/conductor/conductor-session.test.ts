@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
@@ -253,11 +254,15 @@ describe('runConductorSession resume / shutdown', () => {
     vi.restoreAllMocks();
   });
 
-  function runConductorSession(
+  async function runConductorSession(
     options: Parameters<typeof runConductorSessionImpl>[0],
   ) {
+    const ensembleConfig =
+      options.ensembleConfig ??
+      (await loadEnsembleConfig(options.repoRoot, { userEnsembleRoot }));
     return runConductorSessionImpl({
       ...options,
+      ensembleConfig,
       mcpConfigOptions: {
         ...options.mcpConfigOptions,
         userEnsembleRoot,
