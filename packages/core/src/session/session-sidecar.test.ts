@@ -246,6 +246,35 @@ describe('session sidecar', () => {
     ).toThrow(/MCP config digest mismatch/);
   });
 
+  it('rejects ensemble config changes on resume', () => {
+    const sidecar = baseSidecar({
+      conductorAgentId: 'agent-config-digest',
+      ensembleConfigDigest: 'old-digest',
+    });
+
+    expect(() =>
+      assertSessionSidecarMatches(sidecar, {
+        conductorAgentId: 'agent-config-digest',
+        issueUrl: sidecar.issueUrl,
+        repoRoot: sidecar.repoRoot,
+        ensembleConfigDigest: 'new-digest',
+      }),
+    ).toThrow(/ensemble config digest mismatch/);
+  });
+
+  it('allows legacy sidecars without an ensemble config digest', () => {
+    const sidecar = baseSidecar({ conductorAgentId: 'agent-config-legacy' });
+
+    expect(() =>
+      assertSessionSidecarMatches(sidecar, {
+        conductorAgentId: 'agent-config-legacy',
+        issueUrl: sidecar.issueUrl,
+        repoRoot: sidecar.repoRoot,
+        ensembleConfigDigest: 'current-digest',
+      }),
+    ).not.toThrow();
+  });
+
   it('rejects MCP resume when a legacy sidecar has no digest', () => {
     const sidecar = baseSidecar({ conductorAgentId: 'agent-mcp-legacy' });
 

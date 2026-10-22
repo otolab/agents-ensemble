@@ -1,7 +1,6 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
-import {
-  loadEnsembleConfig,
-} from '../config/load-ensemble-config.js';
+import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import type { EnsembleConfig } from '../config/types.js';
 import {
   computeMcpConfigDigest,
@@ -308,6 +307,7 @@ export async function runConductorSession(
   });
   const ensembleConfig =
     options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
+  const ensembleConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
   const conductorBackend = resolveConductorBackendSetting({
     profile: options.profile,
     config: ensembleConfig,
@@ -388,7 +388,15 @@ export async function runConductorSession(
       conductorBackend,
       mcpConfigDigest,
       mcpConfigConfigured,
+      ensembleConfigDigest,
     });
+    if (loadedSidecar.ensembleConfigDigest === undefined) {
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message:
+          'Session sidecar has no ensemble config digest; config consistency cannot be verified for this legacy session.',
+      });
+    }
     // A previously completed lifecycle no longer describes this instance once
     // resume begins. Persist unknown before restoring or attaching anything so
     // a crash before the first regular sidecar flush cannot leave stale
@@ -1133,6 +1141,7 @@ export async function runConductorSession(
       sequence: snapshot.sequence,
       workers,
       mcpConfigDigest,
+      ensembleConfigDigest,
       ...((terminalLifecycle ?? lifecycle)
         ? { lifecycle: terminalLifecycle ?? lifecycle }
         : {}),

@@ -1,6 +1,6 @@
 # ADR 0039: 起動時に指定する ensemble config ファイル
 
-- Status: accepted
+- Status: superseded by [0040](0040-ensemble-config-resume-digest.md)
 - Date: 2026-10-22
 
 ## Context

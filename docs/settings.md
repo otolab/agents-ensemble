@@ -29,20 +29,21 @@ config は user → project → `--config` の順に **deep merge** します。
 CLI の項目値 > 環境変数 > --config の指定ファイル > project config > user config > コード default
 ```
 
-`profile.default` / `conductor.model` / `acp.defaultPreset` など。指定ファイルは下位 config に deep merge し、未記載のキーは引き継ぎます。`ensemble issue` と `ensemble operator-agent` が `--config <path>` を受け付けます。これは team profile の `--profile` と別系統で、team profile から config は推測しません。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) と [ADR 0039](adr/0039-explicit-ensemble-config-file.md)。
+`profile.default` / `conductor.model` / `acp.defaultPreset` など。指定ファイルは下位 config に deep merge し、未記載のキーは引き継ぎます。`ensemble issue` と `ensemble operator-agent` が `--config <path>` を受け付けます。これは team profile の `--profile` と別系統で、team profile から config は推測しません。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) と [ADR 0040](adr/0040-ensemble-config-resume-digest.md) を参照してください（[ADR 0039](adr/0039-explicit-ensemble-config-file.md) は resume 方針について ADR 0040 に supersede されています）。
 
 ```sh
 ensemble issue 42 --config ~/.ensemble/litellm.config.yaml
 ensemble operator-agent --config ~/.ensemble/litellm.config.yaml
 ```
 
-`conductor.backend` は、選択した profile の `conductor.backend` を user / project / `--config` の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`profile.conductor.builtinTools` は profile だけで制御し、省略・未指定は有効、`false` のみ built-in coding tools を無効にします。`profile.conductor.piSkills` は Pi backend のみで、Pi 標準の skill discovery を制御し、省略・未指定は有効、`false` で skill 索引を止めます。`config.yaml` や `settings.json.defaultTools` ではこの制御を行いません。`cursor` は Cursor SDK 経路、`pi` は Pi 1.x `createAgentSession` 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、`~/.ensemble/pi` と `<repoRoot>/.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決します。skills は Pi の `DefaultResourceLoader` で索引し、カタログを system prompt に載せて本文は `read` / `/skill:` で読みます。prompts は `/name args` で展開します。themes は headless conductor のため読み込み・project 同名解決のみ行い、TUI 表示には使いません。root は `conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は無視します。`ensemble auth login|logout|status` は backend に分岐し、Pi では provider 単位に `ModelRuntime` を使います。API key は TTY の secret prompt から user 層へ保存し、OAuth は Pi の OAuth flow を stderr 対話で実行します（SSH でも URL / device code を利用できます）。MCP HTTP OAuth は Pi 公式 MCP extension が別の credential store で扱います。resume では sidecar に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
+`conductor.backend` は、選択した profile の `conductor.backend` を user / project / `--config` の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`profile.conductor.builtinTools` は profile だけで制御し、省略・未指定は有効、`false` のみ built-in coding tools を無効にします。`profile.conductor.piSkills` は Pi backend のみで、Pi 標準の skill discovery を制御し、省略・未指定は有効、`false` で skill 索引を止めます。`config.yaml` や `settings.json.defaultTools` ではこの制御を行いません。`cursor` は Cursor SDK 経路、`pi` は Pi 1.x `createAgentSession` 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、`~/.ensemble/pi` と `<repoRoot>/.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決します。skills は Pi の `DefaultResourceLoader` で索引し、カタログを system prompt に載せて本文は `read` / `/skill:` で読みます。prompts は `/name args` で展開します。themes は headless conductor のため読み込み・project 同名解決のみ行い、TUI 表示には使いません。root は `conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は無視します。`ensemble auth login|logout|status` は backend に分岐し、Pi では provider 単位に `ModelRuntime` を使います。API key は TTY の secret prompt から user 層へ保存し、OAuth は Pi の OAuth flow を stderr 対話で実行します（SSH でも URL / device code を利用できます）。MCP HTTP OAuth は Pi 公式 MCP extension が別の credential store で扱います。resume では sidecar に保存した backend と解決済み config digest が一致しない場合、次のエラーで conductor を起動せず失敗します。
 
 ```text
 Session sidecar conductorBackend mismatch: pi !== cursor
+Session sidecar ensemble config digest mismatch: <stored-digest> !== <current-digest>
 ```
 
-旧 sidecar にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `<conductor-cwd>/.ensemble/pi/sessions/` の JSONL に保存されます。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
+旧 sidecar に backend がない場合は、従来どおり `cursor` として扱います。ensemble config digest がない旧 sidecar は警告を出して resume を続けます。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `<conductor-cwd>/.ensemble/pi/sessions/` の JSONL に保存されます。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
 
 ### パターン B — Phase 1 横断（env なし）
 
@@ -60,7 +61,7 @@ worker spawn 時の ACP preset 解決（[ADR 0019](adr/0019-worker-acp-cli-prese
 CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > merged config acp.defaultPreset > cursor
 ```
 
-`acp.env` の正本は config（user → project → `--config` の順に deep merge）。spawn env のマージ順: builtin preset 既定 → merged config `acp.env`。`--config` で ACP 設定を切り替えて既存 session を resume すると、保存済み ACP spawn と不一致になって worker の再 attach が失敗する場合があります。ACP 設定を変えた場合は新しい session を開始してください。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
+`acp.env` の正本は config（user → project → `--config` の順に deep merge）。spawn env のマージ順: builtin preset 既定 → merged config `acp.env`。`--config` を含む解決済み config は sidecar の digest で比較するため、値が変わると worker の再 attach 前に resume を拒否します。ACP 設定を変えた場合は新しい session を開始してください。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
 
 ### パターン D — 実行時入力（env / CLI）
 

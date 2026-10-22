@@ -56,6 +56,8 @@ export interface SessionSidecar {
   githubMonitor?: GitHubMonitorCursor;
   /** Harness-resolved MCP map digest used to reject unsafe resume. */
   mcpConfigDigest?: string;
+  /** Resolved ensemble config digest used to reject resume after config changes. */
+  ensembleConfigDigest?: string;
   /** Last completed process lifecycle; absent legacy values are unknown. */
   lifecycle?: SessionLifecycle;
   /** flush 時刻（Unix ms）。`--continue` で最新セッションを選ぶために使う。 */
@@ -174,6 +176,8 @@ export function assertSessionSidecarMatches(
     mcpConfigDigest?: string;
     /** Whether the current resolved map contains at least one server. */
     mcpConfigConfigured?: boolean;
+    /** Current resolved ensemble config digest. */
+    ensembleConfigDigest?: string;
   },
 ): void {
   if (sidecar.conductorAgentId !== input.conductorAgentId) {
@@ -212,6 +216,15 @@ export function assertSessionSidecarMatches(
       );
     }
   }
+  if (
+    input.ensembleConfigDigest !== undefined &&
+    sidecar.ensembleConfigDigest !== undefined &&
+    sidecar.ensembleConfigDigest !== input.ensembleConfigDigest
+  ) {
+    throw new Error(
+      `Session sidecar ensemble config digest mismatch: ${sidecar.ensembleConfigDigest} !== ${input.ensembleConfigDigest}`,
+    );
+  }
 }
 
 function parseSessionSidecar(value: unknown): SessionSidecar {
@@ -249,6 +262,12 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     typeof record.mcpConfigDigest !== 'string'
   ) {
     throw new Error('Invalid session sidecar: mcpConfigDigest');
+  }
+  if (
+    record.ensembleConfigDigest !== undefined &&
+    typeof record.ensembleConfigDigest !== 'string'
+  ) {
+    throw new Error('Invalid session sidecar: ensembleConfigDigest');
   }
   if (
     record.lazyWorkers !== undefined &&
@@ -322,6 +341,9 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     ...(githubMonitor ? { githubMonitor } : {}),
     ...(typeof record.mcpConfigDigest === 'string'
       ? { mcpConfigDigest: record.mcpConfigDigest }
+      : {}),
+    ...(typeof record.ensembleConfigDigest === 'string'
+      ? { ensembleConfigDigest: record.ensembleConfigDigest }
       : {}),
     ...(record.lifecycle !== undefined
       ? { lifecycle: record.lifecycle as SessionLifecycle }

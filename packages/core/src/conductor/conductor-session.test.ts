@@ -1,8 +1,9 @@
-import { access, mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
+import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import * as issueContextModule from '../github/issue-context.js';
@@ -687,17 +688,30 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
   });
 
-  it('persists the selected profile backend in the sidecar', async () => {
+  it('persists the resolved config digest without config values in the sidecar', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-stub',
       status: 'finished',
       result: 'done',
     });
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        model: 'litellm/model-test',
+        backend: 'pi' as const,
+      },
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        env: { PROVIDER_TOKEN: 'private-test-value' },
+      },
+    };
 
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { conductor: { backend: 'pi' }, workers: [] },
+      ensembleConfig,
       conductorAgentFactory: { create: mockCreate, resume: mockResume },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -712,6 +726,62 @@ describe('runConductorSession resume / shutdown', () => {
       sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
     expect(sidecar?.conductorBackend).toBe('pi');
+    expect(sidecar?.ensembleConfigDigest).toBe(
+      computeEnsembleConfigDigest(ensembleConfig),
+    );
+    expect(
+      await readFile(
+        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        'utf8',
+      ),
+    ).not.toContain('private-test-value');
+  });
+
+  it('fails before resuming when the resolved ensemble config changed', async () => {
+    const agentId = 'resume-config-mismatch';
+    const originalConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        model: 'model-before',
+      },
+    };
+    await saveSessionSidecar(
+      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_SIDECAR_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
+        updatedAt: 0,
+      },
+    );
+
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        ensembleConfig: {
+          ...originalConfig,
+          conductor: {
+            ...originalConfig.conductor,
+            model: 'model-after',
+          },
+        },
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+      }),
+    ).rejects.toThrow(/ensemble config digest mismatch/);
+
+    expect(mockResume).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 
   it('passes resolved MCP configuration to ConductorAgent.resume for explicit resume', async () => {
