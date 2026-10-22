@@ -278,6 +278,68 @@ describe('PiConductorAgent', () => {
     void onStreamText;
   });
 
+  it('sums usage from every assistant message in one send', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+
+    const firstMessage = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'working' }],
+      model: 'model-1',
+      stopReason: 'toolUse',
+      usage: {
+        input: 11,
+        output: 5,
+        totalTokens: 16,
+        cacheRead: 2,
+        cacheWrite: 1,
+        cost: { total: 0.1 },
+      },
+    };
+    const finalMessage = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'complete' }],
+      model: 'model-1',
+      stopReason: 'stop',
+      usage: {
+        input: 13,
+        output: 7,
+        totalTokens: 20,
+        cacheRead: 3,
+        cacheWrite: 4,
+        cost: { total: 0.2 },
+      },
+    };
+    fakeSession.prompt.mockImplementation(async () => {
+      fakeSession.state.messages = [firstMessage, finalMessage];
+      sessionListener?.({
+        type: 'agent_end',
+        messages: [firstMessage, finalMessage],
+        willRetry: false,
+      });
+    });
+
+    const result = await conductor.send('kickoff');
+
+    expect(result).toMatchObject({
+      status: 'finished',
+      result: 'complete',
+      modelId: 'model-1',
+      usage: {
+        inputTokens: 24,
+        outputTokens: 12,
+        totalTokens: 36,
+        cacheReadTokens: 5,
+        cacheWriteTokens: 5,
+      },
+    });
+    await conductor.close();
+  });
+
   it('counts only successful compaction_end events and ignores missing, failed, or aborted results', async () => {
     const onContextCompaction = vi.fn();
     const conductor = await PiConductorAgent.create({
