@@ -6,9 +6,9 @@
 
 - session ごとの listener は、稼働中 `ensemble issue` プロセス内の harness が起動・停止します。
 - operator-agent は client です。listener の起動や停止中 session の回答保存は行いません。
-- API は稼働中 session の Open Question 一覧・回答、watch 用 observation snapshot、operator-agent から conductor への明示メッセージ、最後の conductor 成功応答取得を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。
+- API は稼働中 session の Open Question 一覧・回答、watch 用 observation snapshot、operator-agent から conductor への明示メッセージ、最後の conductor 成功応答取得、成功応答と対応する inbound の bounded list を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。conductor 発言一覧は live harness のメモリ内 ring buffer で、SessionResumeStore・YAML・session log には保存しません。
 
-operator-agent には `list_live_open_questions` / `answer_live_open_question`、watch pool の `register_session_watch` / `unregister_session_watch`、`send_operator_message`、`get_last_conductor_message` の tool があります。session を指定する tool は `list_operator_sessions` で得た `conductorAgentId` を受け取ります。回答 tool は `questionId` と `answer`、送信 tool は `text` と任意の `delivery` を要求します。各 tool の input schema は未知の field を許可しません。
+operator-agent には `list_live_open_questions` / `answer_live_open_question`、watch pool の `register_session_watch` / `unregister_session_watch`、`send_operator_message`、`get_last_conductor_message`、`list_conductor_messages`、`register_conductor_message_listen` / `unregister_conductor_message_listen` の tool があります。session を指定する tool は `list_operator_sessions` で得た `conductorAgentId` を受け取ります。回答 tool は `questionId` と `answer`、送信 tool は `text` と任意の `delivery` を要求します。各 tool の input schema は未知の field を許可しません。
 
 operator-agent tool の input は次のとおりです。
 
@@ -36,6 +36,18 @@ operator-agent tool の input は次のとおりです。
 {"conductorAgentId":"agent-123"}
 ```
 
+`list_conductor_messages`:
+
+```json
+{"conductorAgentId":"agent-123","limit":20,"order":"desc","cursor":44}
+```
+
+`register_conductor_message_listen`:
+
+```json
+{"conductorAgentId":"agent-123","messageDebounceMs":10000}
+```
+
 list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }`）です。answer tool の text content は UDS result (`{ "question": {...} }`) を JSON 表示し、`structuredContent` は `questionId`, `status`, 任意の `answeredBy`, `approved` を持つ object に整形します。これは operator-agent tool wrapper の出力で、UDS wire response とは形が異なります。
 
 ## Operator-agent watch state の欠損・破損と復旧
@@ -50,7 +62,7 @@ watch pool は `.ensemble/operator-agent/watch-state.json` に watch 登録、se
 
 operator-agent は `.ensemble/sessions/{conductorAgentId}.json` にある SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、SessionResumeStore に記録された値を使ってください。
 
-path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら接続は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` は直接 live control であり、YAML / SessionResumeStore へ fallback しません。watch pool のみが `session.observe` を試し、UDS が到達不能または method 未対応なら保存 snapshot へ切り替えます。
+path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら接続は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message`、`list_conductor_messages` は直接 live control であり、YAML / SessionResumeStore へ fallback しません。watch pool の `register_session_watch` のみが `session.observe` を試し、UDS が到達不能または method 未対応なら保存 snapshot へ切り替えます。発言 listen は UDS が利用できない間も保存値へ切り替えず、次の poll で再接続を試します。
 
 listener の起動後に `harnessSocketPath` を含む初回 SessionResumeStore flush が失敗しても、warning を記録して session は続行し、listener は稼働したままの場合があります。このとき SessionResumeStore に新しい path が書かれていなければ client は endpoint を発見・接続できません。別の接続先を探す自動 fallback はありません。
 
@@ -190,6 +202,46 @@ Response（応答なし）:
 | `message.sendCount` | number | 対応する `conductor.send` の通し番号 |
 
 operator の入力、応答履歴、失敗応答は返しません。状態は稼働中プロセスのメモリ内だけにあり、再開した session には引き継がれません。operator-agent tool の `structuredContent` と text content は、UDS result と同じ `{ "message": ... }` です。
+
+### `session.conductor_messages.list`
+
+成功した conductor 応答と、その応答に対応する conductor 向け inbound を一覧します。記録対象は bootstrap の `agent.send` を除く send のうち、`status=finished` かつ trim 後の `result` が空でないものです。`inbound` はその send に渡した `formatSessionEventsForConductor(batch)` の全文です。bootstrap send は compiled `initialPrompt` を送るため対象外です。
+
+稼働中 session ごとに直近 100 件を保持します。これは bounded なプロセス内履歴で、harness 停止時に破棄され、停止後に YAML / sidecar へ fallback しません。
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":5,"method":"session.conductor_messages.list","params":{"limit":20,"order":"desc","cursor":44}}
+```
+
+| Parameter | Type | Default / meaning |
+|-----------|------|-------------------|
+| `limit` | integer 1–100 | 既定 20。返却件数 |
+| `order` | `"asc" \| "desc"` | 既定 `desc`。`sendCount` 順 |
+| `cursor` | integer | 排他的な keyset 境界。`desc` は `sendCount < cursor`、`asc` は `sendCount > cursor` |
+| `before` | integer | 排他的な上限。`sendCount < before` |
+| `after` | integer | 排他的な下限。`sendCount > after` |
+
+`cursor` は `before` / `after` と併用できません。`before` と `after` は併用でき、その場合は両方の排他的境界に挟まれた範囲を返します。`before` / `after` は順序指定とは独立した filter で、結果の並びは `order` に従います。境界パラメータの組み合わせが不正、範囲外の `limit`、不正な `order` は JSON-RPC `-32602` です。
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":5,"result":{"messages":[{"text":"回答本文","inbound":"## Open Question 追加\n...","at":1792512003000,"sendCount":44,"dispatchSource":"operator"}],"hasMore":true}}
+```
+
+`messages` は要求された順序で並びます。`hasMore` は同じ filter の結果に次ページがあることを示します。通常の keyset pagination では、返却末尾の `sendCount` を次の `cursor` に渡してください。`dispatchSource` は識別可能な場合に限って付きます。operator-agent の `list_conductor_messages` は同じページング規約を使います。既存の `get_last_conductor_message` / `session.last_conductor_message.get` は応答本文・`at`・`sendCount` のみを返し、変更しません。
+
+UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です。list の JSON response 全体がこの上限を超えると、部分結果や切り詰めた inbound は返さず、JSON-RPC `-32603` / `Response is too large.` を返します。1件だけの要求でも、その1件の全文 inbound を含む response が上限を超えれば同じ error になります。ページを小さくすると複数件分の超過は避けられますが、単独で上限を超える inbound は取得できません。上限内に収まる場合は inbound 全文を返します。
+
+### 発言 listen と OQ watch の分離
+
+`register_conductor_message_listen` は `conductorAgentId` と任意の `messageDebounceMs`（既定 10,000ms、0–120,000ms）を受け取ります。登録直後の live poll は既存の最新 `sendCount` を baseline とし、その後に増えた発言だけを poll します。window に複数の発言があれば、sendCount 昇順で inbound / response の section を 1 report にまとめます。`unregister_conductor_message_listen` は以後の polling を止めます。
+
+発言 listen は operator-agent が UDS を polling し、独立した `messageCursors` を使います。`register_session_watch` の Open Question / status cursor と混ぜません。harness が停止中、UDS が到達不能、または method 未対応の場合は発言 listen に fallback はありません。通常の session watch の保存 YAML fallback とも別動作です。
+
+list page が 1 MiB を超える場合、poll は `Response is too large.` で失敗し、その poll では cursor を進めません。後続 poll も cursor 以降に同じ oversized page が残っている間は同じ UDS error となり、発言 listen はその session の通知を進められません。inbound を切り詰めたり、その発言を黙って飛ばしたりはしません。
 
 ## Persistence、acknowledgment、errors
 

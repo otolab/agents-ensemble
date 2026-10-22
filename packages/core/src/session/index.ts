@@ -44,6 +44,9 @@ export {
 } from './open-questions-store.js';
 export type { OpenQuestionsStoreDocument } from './open-questions-store.js';
 export {
+  CONDUCTOR_MESSAGE_HISTORY_MAX_ENTRIES,
+  CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
+  CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT,
   OPEN_QUESTION_CONTROL_METHODS,
   OpenQuestionControlOperationError,
   OpenQuestionControlRemoteError,
@@ -54,6 +57,9 @@ export {
 export type {
   OpenQuestionControlAnswerResult,
   OpenQuestionControlAnswer,
+  OpenQuestionControlConductorMessage,
+  OpenQuestionControlConductorMessagesQuery,
+  OpenQuestionControlConductorMessagesResult,
   OpenQuestionControlErrorData,
   OpenQuestionControlLastConductorMessage,
   OpenQuestionControlListItem,

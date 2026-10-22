@@ -7,11 +7,12 @@ export type OperatorDispatchEvent =
     }
   | {
       type: 'report';
-      reportType: 'session_state' | 'open_question';
+      reportType: 'session_state' | 'open_question' | 'conductor_message';
       conductorAgentId: string;
       issueUrl: string;
       text: string;
       reportId?: string;
+      sendCount?: number;
       arrival: number;
       readyAt: number;
     };
@@ -40,6 +41,13 @@ export interface OperatorDispatchQueue {
     >[],
     debounceMs: number,
   ): void;
+  enqueueDebouncedReports(
+    events: readonly Omit<
+      Extract<OperatorDispatchEvent, { type: 'report' }>,
+      'arrival' | 'readyAt'
+    >[],
+    debounceMs: number,
+  ): void;
   requeue(event: OperatorDispatchEvent, delayMs: number): void;
   setConversationHold(hold: boolean): {
     heldEventCount: number;
@@ -60,8 +68,20 @@ export interface OperatorDispatchQueue {
 
 export function operatorEventSourceKey(event: OperatorDispatchEvent): string {
   if (event.type === 'user') return 'user';
+  return reportSourceKey(event);
+}
+
+function reportSourceKey(
+  event: Pick<
+    Extract<OperatorDispatchEvent, { type: 'report' }>,
+    'reportType' | 'conductorAgentId'
+  >,
+): string {
   if (event.reportType === 'open_question') {
     return `open_question:${event.conductorAgentId}`;
+  }
+  if (event.reportType === 'conductor_message') {
+    return `conductor_message:${event.conductorAgentId}`;
   }
   return `session:${event.conductorAgentId}`;
 }
@@ -116,6 +136,26 @@ export function formatOperatorDispatchBatch(
   if (events.length === 0) return '';
   if (events.length === 1 && events[0]!.type === 'user') {
     return events[0]!.text.trim();
+  }
+  if (
+    events.every(
+      (event) => event.type === 'report' && event.reportType === 'conductor_message',
+    )
+  ) {
+    const messages = [...events].sort(
+      (left, right) =>
+        (left.type === 'report' ? left.sendCount ?? 0 : 0) -
+        (right.type === 'report' ? right.sendCount ?? 0 : 0),
+    );
+    if (messages.length === 1) {
+      return ['## Conductor の発言', '', messages[0]!.text].join('\n');
+    }
+    return [
+      `## Conductor の発言（${messages.length} 件）`,
+      ...messages.map((event, index) =>
+        [`### ${index + 1}/${messages.length}`, '', event.text].join('\n'),
+      ),
+    ].join('\n\n');
   }
   if (events.length === 1) {
     const event = events[0]!;
@@ -195,9 +235,26 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
     enqueueReport(event, debounceMs) {
       this.enqueueReports([event], debounceMs);
     },
-    enqueueReports(events, debounceMs) {
+  enqueueReports(events, debounceMs) {
       if (events.length === 0) return;
       const readyAt = Date.now() + Math.max(0, debounceMs);
+      for (const event of events) {
+        const next = { ...event, arrival: arrival++, readyAt };
+        if (isHeld()) held.push(next);
+        else pending.push(next);
+      }
+      notify();
+    },
+    enqueueDebouncedReports(events, debounceMs) {
+      if (events.length === 0) return;
+      const readyAt = Date.now() + Math.max(0, debounceMs);
+      const sourceKeys = new Set(events.map(reportSourceKey));
+      for (const event of pending) {
+        if (sourceKeys.has(operatorEventSourceKey(event))) event.readyAt = readyAt;
+      }
+      for (const event of held) {
+        if (sourceKeys.has(operatorEventSourceKey(event))) event.readyAt = readyAt;
+      }
       for (const event of events) {
         const next = { ...event, arrival: arrival++, readyAt };
         if (isHeld()) held.push(next);

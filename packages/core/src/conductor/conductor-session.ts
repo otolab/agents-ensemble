@@ -134,8 +134,10 @@ import {
   saveOpenQuestionsStore,
 } from '../session/open-questions-store.js';
 import {
+  CONDUCTOR_MESSAGE_HISTORY_MAX_ENTRIES,
   OpenQuestionControlOperationError,
   startOpenQuestionControlServer,
+  type OpenQuestionControlConductorMessage,
   type OpenQuestionControlLastConductorMessage,
   type OpenQuestionControlServer,
 } from '../session/open-question-control.js';
@@ -336,6 +338,7 @@ export async function runConductorSession(
   let openQuestionControlServer: OpenQuestionControlServer | undefined;
   let lastConductorMessage: OpenQuestionControlLastConductorMessage | null =
     null;
+  const conductorMessages: OpenQuestionControlConductorMessage[] = [];
   const eventQueue = new SessionEventQueue();
   const openQuestionDispatchReceipts = new WeakMap<
     SessionEvent,
@@ -1480,6 +1483,7 @@ export async function runConductorSession(
     openQuestionControlServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => openQuestions.listOpen(),
       getLastConductorMessage: () => lastConductorMessage,
+      listConductorMessages: () => conductorMessages,
       observeSession: async () => {
         await sessionStateWriteQueue;
         const sessionState = await loadSessionStateStore(
@@ -1729,6 +1733,8 @@ export async function runConductorSession(
       sendCount: number;
       runId: string;
       status: ConductorSendResult['status'];
+      inbound: string;
+      dispatchSource?: string;
       githubUpdateIds?: string[];
       result?: string;
       error?: ConductorSendResult['error'];
@@ -1742,11 +1748,28 @@ export async function runConductorSession(
       autonomousTurns = info.autonomousTurns;
       const responseText = info.result?.trim();
       if (info.status === 'finished' && responseText) {
+        const at = Date.now();
         lastConductorMessage = {
           text: responseText,
-          at: Date.now(),
+          at,
           sendCount: info.sendCount,
         };
+        if (info.dispatchSource !== 'initial') {
+          conductorMessages.push({
+            text: responseText,
+            inbound: info.inbound,
+            at,
+            sendCount: info.sendCount,
+            ...(info.dispatchSource
+              ? { dispatchSource: info.dispatchSource }
+              : {}),
+          });
+          if (
+            conductorMessages.length > CONDUCTOR_MESSAGE_HISTORY_MAX_ENTRIES
+          ) {
+            conductorMessages.shift();
+          }
+        }
       }
       const githubUpdateIds = info.githubUpdateIds ?? [];
       if (

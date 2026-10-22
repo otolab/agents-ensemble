@@ -6,7 +6,10 @@ import {
   startOpenQuestionControlServer,
   type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
-import { createOperatorDispatchQueue } from './operator-dispatch.js';
+import {
+  createOperatorDispatchQueue,
+  formatOperatorDispatchBatch,
+} from './operator-dispatch.js';
 import {
   createOperatorWatchPool,
   operatorWatchStatePath,
@@ -593,6 +596,142 @@ describe('operator watch pool', () => {
       ).rejects.toThrow('pollIntervalMs must be an integer');
       await expect(pool.unregister('session-one')).resolves.toBe(true);
       expect(pool.list()).toEqual([]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('listens to new conductor messages with a cursor independent from OQ watch', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-listen-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let messages = [3, 4].map((sendCount) => ({
+      text: `response ${sendCount}`,
+      inbound: `inbound ${sendCount}`,
+      at: 1_700_000_000_000 + sendCount,
+      sendCount,
+      dispatchSource: 'operator',
+    }));
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({ sequence: 2, openQuestions: [] }),
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('message-listen-one', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.register('message-listen-one', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      await pool.pollOnce('message-listen-one');
+      await expect(
+        pool.registerConductorMessageListen('message-listen-one'),
+      ).resolves.toMatchObject({
+        conductorAgentId: 'message-listen-one',
+        messageDebounceMs: 10_000,
+      });
+      await pool.registerConductorMessageListen('message-listen-one', {
+        messageDebounceMs: 0,
+      });
+      await expect(
+        pool.registerConductorMessageListen('message-listen-one', {
+          messageDebounceMs: 120_000,
+        }),
+      ).resolves.toMatchObject({ messageDebounceMs: 120_000 });
+      await expect(
+        pool.registerConductorMessageListen('message-listen-one', {
+          messageDebounceMs: 120_001,
+        }),
+      ).rejects.toThrow('messageDebounceMs must be an integer');
+      await pool.registerConductorMessageListen('message-listen-one', {
+        messageDebounceMs: 0,
+      });
+      expect(pool.listConductorMessageListens()).toHaveLength(1);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+
+      const storedPath = operatorWatchStatePath(repoRoot);
+      const baseline = JSON.parse(await readFile(storedPath, 'utf8')) as {
+        cursors: Record<string, { sequence: number }>;
+        messageCursors: Record<string, number>;
+      };
+      expect(baseline.cursors['message-listen-one']?.sequence).toBe(2);
+      expect(baseline.messageCursors['message-listen-one']).toBe(4);
+
+      messages = [
+        ...messages,
+        ...[5, 6].map((sendCount) => ({
+          text: `response ${sendCount}`,
+          inbound: `inbound ${sendCount}`,
+          at: 1_700_000_000_000 + sendCount,
+          sendCount,
+          dispatchSource: 'worker:reviewer',
+        })),
+      ];
+      await expect(
+        pool.pollConductorMessagesOnce('message-listen-one'),
+      ).resolves.toBe(2);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([5, 6]);
+      expect(formatOperatorDispatchBatch(batch.events)).toContain(
+        '### 1/2\n\n対象: https://github.com/example/repo/issues/message-listen-one (message-listen-one)\nsendCount: 5',
+      );
+      const formatted = formatOperatorDispatchBatch(batch.events);
+      expect(formatted.indexOf('sendCount: 5')).toBeLessThan(
+        formatted.indexOf('sendCount: 6'),
+      );
+      expect(formatted).toContain('#### inbound\n\ninbound 5');
+      expect(formatted).toContain('#### response\n\nresponse 6');
+
+      await pool.acknowledge(batch.events);
+      const afterAck = JSON.parse(await readFile(storedPath, 'utf8')) as {
+        messageCursors: Record<string, number>;
+        pendingReports: unknown[];
+      };
+      expect(afterAck.messageCursors['message-listen-one']).toBe(6);
+      expect(afterAck.pendingReports).toEqual([]);
+      await expect(
+        pool.unregisterConductorMessageListen('message-listen-one'),
+      ).resolves.toBe(true);
+      expect(pool.listConductorMessageListens()).toEqual([]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('does not fall back to saved session YAML when conductor-message UDS is absent', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-offline-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    await writeResumeStore('offline-message-session', 1);
+    await writeOfflineSnapshots('offline-message-session', {
+      sequence: 1,
+      questions: [],
+      statusLine: '保存済み状態',
+      reportedAt: 2,
+    });
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.registerConductorMessageListen('offline-message-session', {
+        messageDebounceMs: 0,
+      });
+      await expect(
+        pool.pollConductorMessagesOnce('offline-message-session'),
+      ).resolves.toBe(0);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+      expect(
+        JSON.parse(
+          await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        ).messageCursors['offline-message-session'],
+      ).toBeUndefined();
     } finally {
       pool.close();
     }

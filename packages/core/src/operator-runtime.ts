@@ -49,6 +49,9 @@ export {
 /** @deprecated Use SessionResumeStore; supported for one release only. */
 export type { SessionSidecar } from './session/session-resume-store.js';
 export {
+  CONDUCTOR_MESSAGE_HISTORY_MAX_ENTRIES,
+  CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
+  CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT,
   OPEN_QUESTION_CONTROL_METHODS,
   OpenQuestionControlRemoteError,
   OpenQuestionControlTransportError,
@@ -56,6 +59,9 @@ export {
 } from './session/open-question-control.js';
 export type {
   OpenQuestionControlAnswerResult,
+  OpenQuestionControlConductorMessage,
+  OpenQuestionControlConductorMessagesQuery,
+  OpenQuestionControlConductorMessagesResult,
   OpenQuestionControlErrorData,
   OpenQuestionControlLastConductorMessage,
   OpenQuestionControlListItem,
