@@ -350,10 +350,14 @@ export async function createOperatorWatchPool(
           cursor,
         );
         const messages = readResult.messages;
-        if (messages.length === 0 && readResult.responseSizeError) {
+        if (
+          messages.length === 0 &&
+          readResult.oversizedSendCounts.length === 0 &&
+          readResult.responseSizeError
+        ) {
           throw readResult.responseSizeError;
         }
-        const nextCursor = messages.at(-1)?.sendCount ?? cursor;
+        const nextCursor = readResult.cursor;
         const reports = messages.map((message) => ({
           reportId: randomUUID(),
           reportType: 'conductor_message' as const,
@@ -363,6 +367,21 @@ export async function createOperatorWatchPool(
           debounceMs: listener.messageDebounceMs,
           sendCount: message.sendCount,
         }));
+        if (readResult.oversizedSendCounts.length > 0) {
+          reports.push({
+            reportId: randomUUID(),
+            reportType: 'conductor_message',
+            conductorAgentId: id,
+            issueUrl: resumeStore.issueUrl,
+            text: formatOversizedConductorMessageWarning(
+              resumeStore,
+              readResult.oversizedSendCounts,
+            ),
+            debounceMs: listener.messageDebounceMs,
+            sendCount: readResult.oversizedSendCounts.at(-1)!,
+          });
+        }
+        reports.sort((left, right) => left.sendCount - right.sendCount);
         state.messageCursors[id] = nextCursor;
         if (reports.length > 0) state.pendingReports.push(...reports);
         let persistFailed = false;
@@ -586,9 +605,12 @@ async function readConductorMessagePages(
   cursor: number,
 ): Promise<{
   messages: OpenQuestionControlConductorMessage[];
+  oversizedSendCounts: number[];
+  cursor: number;
   responseSizeError?: OpenQuestionControlRemoteError;
 }> {
   const messages: OpenQuestionControlConductorMessage[] = [];
+  const oversizedSendCounts: number[] = [];
   let after = cursor;
   let limit = CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT;
 
@@ -603,7 +625,24 @@ async function readConductorMessagePages(
     } catch (error) {
       if (!isConductorMessageResponseTooLarge(error)) throw error;
       if (limit === 1) {
-        return { messages, responseSizeError: error };
+        const oversizedSendCount =
+          error.data &&
+          'oversizedSendCount' in error.data &&
+          error.data.oversizedSendCount > after
+            ? error.data.oversizedSendCount
+            : undefined;
+        if (oversizedSendCount === undefined) {
+          return {
+            messages,
+            oversizedSendCounts,
+            cursor: after,
+            responseSizeError: error,
+          };
+        }
+        oversizedSendCounts.push(oversizedSendCount);
+        after = oversizedSendCount;
+        limit = CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT;
+        continue;
       }
       limit = Math.max(1, Math.floor(limit / 2));
       continue;
@@ -612,10 +651,14 @@ async function readConductorMessagePages(
     const nextMessages = page.messages
       .filter((message) => message.sendCount > after)
       .sort((left, right) => left.sendCount - right.sendCount);
-    if (nextMessages.length === 0) return { messages };
+    if (nextMessages.length === 0) {
+      return { messages, oversizedSendCounts, cursor: after };
+    }
     messages.push(...nextMessages);
     after = nextMessages.at(-1)!.sendCount;
-    if (!page.hasMore) return { messages };
+    if (!page.hasMore) {
+      return { messages, oversizedSendCounts, cursor: after };
+    }
   }
 }
 
@@ -648,6 +691,16 @@ function formatConductorMessageReport(
     '#### response',
     '',
     message.text,
+  ].join('\n');
+}
+
+function formatOversizedConductorMessageWarning(
+  resumeStore: SessionResumeStore,
+  sendCounts: readonly number[],
+): string {
+  return [
+    `対象: ${resumeStore.issueUrl} (${resumeStore.conductorAgentId})`,
+    `⚠ ${sendCounts.length}件の発言は単独のUDS responseが1 MiBを超えたため読み取れず、本文を切り詰めずにlistenで読み飛ばしました（sendCount: ${sendCounts.join(', ')}）。`,
   ].join('\n');
 }
 

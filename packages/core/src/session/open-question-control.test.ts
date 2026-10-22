@@ -321,6 +321,7 @@ describe('Open Question control UDS', () => {
         name: 'OpenQuestionControlRemoteError',
         rpcCode: -32603,
         message: 'Response is too large.',
+        data: { oversizedSendCount: 1 },
       });
       expect(listConductorMessages).toHaveBeenCalledOnce();
     } finally {

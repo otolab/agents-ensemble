@@ -233,7 +233,7 @@ Response:
 
 `messages` は要求された順序で並びます。`hasMore` は同じ filter の結果に次ページがあることを示します。通常の keyset pagination では、返却末尾の `sendCount` を次の `cursor` に渡してください。`dispatchSource` は識別可能な場合に限って付きます。operator-agent の `list_conductor_messages` は同じページング規約を使います。既存の `get_last_conductor_message` / `session.last_conductor_message.get` は応答本文・`at`・`sendCount` のみを返し、変更しません。
 
-UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です。list の JSON response 全体がこの上限を超えると、部分結果や切り詰めた inbound は返さず、JSON-RPC `-32603` / `Response is too large.` を返します。1件だけの要求でも、その1件の全文 inbound を含む response が上限を超えれば同じ error になります。ページを小さくすると複数件分の超過は避けられますが、単独で上限を超える inbound は取得できません。上限内に収まる場合は inbound 全文を返します。
+UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です。list の JSON response 全体がこの上限を超えると、部分結果や切り詰めた inbound は返さず、JSON-RPC `-32603` / `Response is too large.` を返します。1件だけの要求でも、その1件の全文 inbound を含む response が上限を超えれば同じ error になります。単独の1件だけが上限超過の原因と特定できる場合、error の `data.oversizedSendCount` にその `sendCount` が付きます。これは listen が cursor を進めるための識別情報で、list の呼び出し自体は引き続き error です。上限内に収まる場合は inbound 全文を返します。
 
 ### 発言 listen と OQ watch の分離
 
@@ -245,7 +245,7 @@ UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です�
 
 operator-agent の listen は limit 20 の page から読み始め、aggregate response が 1 MiB を超えた場合は同じ exclusive cursor から limit を下げて再試行します。取得できた複数 page はその poll の debounce report にまとめ、sendCount 昇順で通知します。cursor は取得済み page の最後までだけ進めるため、retry で発言を飛ばしたり並べ替えたりしません。
 
-limit 1 でも単独 response が上限を超える発言に達した場合は `Response is too large.` になります。その poll で先に取得できた発言は queue に残して cursor もその発言まで進め、oversized record 自体は飛ばしません。その record が cursor 以降の bounded history に残る間、listen はそこで止まり、後続発言も通知されません。inbound を切り詰めることはありません。
+limit 1 でも単独 response が上限を超える発言に達した場合、その発言の `sendCount` を使って listen cursor を安全に進めます。読み取れなかった発言は内容を切り詰めずに読み飛ばし、同じ debounce report に件数と `sendCount` を含む短い warning を1件まとめます。その後も polling を続け、後続の読み取り可能な発言を順序どおり通知します。先に取得した page、読み飛ばした発言、後続 page は同じ report window にまとめられます。list API はこの動作をせず、単独 oversized record を含む response に対して従来どおり明示的な size error を返します。
 
 ## Persistence、acknowledgment、errors
 

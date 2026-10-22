@@ -65,6 +65,8 @@ export type {
   OpenQuestionControlErrorData,
   OpenQuestionControlLastConductorMessage,
   OpenQuestionControlListItem,
+  OpenQuestionControlRemoteErrorData,
+  OversizedConductorMessageErrorData,
   SessionObservationSnapshot,
 } from './session/open-question-control.js';
 export {

@@ -63,6 +63,8 @@ export type {
   OpenQuestionControlErrorData,
   OpenQuestionControlLastConductorMessage,
   OpenQuestionControlListItem,
+  OpenQuestionControlRemoteErrorData,
+  OversizedConductorMessageErrorData,
   OpenQuestionControlServer,
   OpenQuestionControlServerOptions,
   SessionObservationSnapshot,
