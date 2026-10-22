@@ -10,11 +10,12 @@ conductor に渡す MCP 設定もこの config.yaml とは別の JSON ファイ�
 
 | 層 | パス | 優先度 |
 |----|------|--------|
-| 明示指定 | `ensemble issue --config <path>` / `ensemble operator-agent --config <path>` | 高（user/project config に重ねる） |
-| プロジェクト | `<repoRoot>/.ensemble/config.yaml` | user を上書き |
-| ユーザ | `~/.ensemble/config.yaml` | 既定 |
+| プロジェクト | `<repoRoot>/.ensemble/config.yaml` | 選択された user config を上書き |
+| user config（明示指定時） | `--config <path>` | 標準 user config の代わりに読み込む |
+| user config（標準） | `~/.ensemble/config.yaml` | `--config` 未指定時に読み込む |
 
-- 複数ある場合は **deep merge**（user → project → 明示指定の順で後の層が上書き）
+- 設定層は **deep merge**（コード内 default → 選択された user config → project config）。同一キーは後の層が上書きするため、project の値は `--config` の値より優先
+- `--config` 指定時は `~/.ensemble/config.yaml` を読み込まず、指定ファイルを user 層の代替として扱う。project config の読み込み方は変えず、ファイルがあれば引き続き適用する
 - `--config` の相対パスはコマンドを実行したディレクトリを基準に解決し、`~` / `~/...` は home に展開する。指定先が存在しない場合は起動エラー
 - config ファイルが無い場合は **コード内デフォルト**
 - 項目ごとの **環境変数・CLI フラグは、config の各層より優先**
@@ -24,10 +25,10 @@ conductor に渡す MCP 設定もこの config.yaml とは別の JSON ファイ�
 すべての Phase 1 キーで次の順序を **実装・テストで固定**している:
 
 ```
-CLI 明示指定 > 環境変数 > --config の指定ファイル > project .ensemble/config.yaml > user ~/.ensemble/config.yaml > コード内デフォルト
+CLI 明示指定 > 環境変数 > project .ensemble/config.yaml > 選択された user config > コード内デフォルト
 ```
 
-一回の起動だけ別設定を使う場合は、任意の YAML ファイルを指定します。指定ファイルは既定 config に重ねるため、変更したい項目だけを書けます。
+一回の起動で user config を切り替える場合は、任意の YAML ファイルを指定します。指定ファイルは標準 user config の代わりに読み込みます。project config は別層として引き続き適用されるため、同じ項目があれば project の値が優先されます。
 
 ```yaml
 # ~/.ensemble/litellm.config.yaml
@@ -47,17 +48,17 @@ ensemble operator-agent --config ~/.ensemble/litellm.config.yaml
 
 token などの秘密情報はこのファイルへ平文で書かず、provider が参照する環境変数や認証ストアで管理します。
 
-`loadEnsembleConfig(repoRoot, { configPath })` は user → project → 明示指定ファイルの順で merge した `EnsembleConfig` を返す。明示指定ファイルにない項目は下位層から引き継ぎます。各 `resolve*Setting` はその merged config を **config 層**として参照する。
+`loadEnsembleConfig(repoRoot, { configPath })` はコード内 default → 明示指定ファイル（user 層）→ project config の順で merge した `EnsembleConfig` を返します。`configPath` がなければ標準 user config を user 層として使います。明示指定ファイルにない項目はコード内 default から引き継ぎ、project config が同じ項目を指定していれば project の値で上書きします。`--config` は project config の読み込みを切り替えません。各 `resolve*Setting` はその merged config を **config 層**として参照します。
 
-`conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > user / project / 明示指定を merge した `config.conductor.backend` > `cursor` の順で解決します。
+`conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > merged config（project > 選択された user config）> `cursor` の順で解決します。
 
-`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` も `--config` を指定でき、同じ user → project → 明示指定ファイルの loader を使います。`--config` は team profile の `--profile` とは別系統で、profile 名から config ファイルを推測しません。
+`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` も `--config` を指定でき、同じ default → 選択された user config → project config の loader を使います。`--config` は team profile の `--profile` とは別系統で、profile 名から config ファイルを推測しません。
 
 #### resume と config 変更
 
 起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を session sidecar に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` や `acp.env` だけの変更も対象です。worker の ACP spawn fingerprint も env map の digest を保持し、値そのものは sidecar に保存しません。sidecar には config の値やファイルパスを保存しないため、秘密値は平文で残りません。
 
-同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 sidecar は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0040](adr/0040-ensemble-config-resume-digest.md)）。
+同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 sidecar は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0041](adr/0041-explicit-config-replaces-user-layer.md)）。
 
 ## テンプレート
 
@@ -88,7 +89,7 @@ conductor:
 
 acp:
   defaultPreset: codex                # ENSEMBLE_DEFAULT_ACP_CLI 相当
-  env:                                # codex-acp 子プロセス spawn に渡す env（user → project → --config deep merge）
+  env:                                # codex-acp 子プロセス spawn に渡す env（選択された user config → project deep merge）
     MODEL_PROVIDER: litellm           # Codex provider ID。接続設定は Codex config 側
 
 session:
@@ -155,9 +156,9 @@ tui:
 spawn 解決時、子プロセスへ渡す env は次の順でマージされます。
 
 1. **builtin preset 既定** — 例: codex の `INITIAL_AGENT_MODE: agent`
-2. **config `acp.env`** — user → project → 明示 `--config` の deep merge 済み
+2. **config `acp.env`** — 選択された user config（`--config` 指定時は標準 user config を置換）→ project の deep merge 済み
 
-`acp.env` は他キーと同様に deep merge し、後の層（project、明示 `--config`）が同じキーを上書きします。CLI / 環境変数による `acp.env` の個別キー上書きは Phase 1 では未提供。spawn 時は `process.env` を基底に `spawn.env` が上書きする（[ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md)）。
+`acp.env` は他キーと同様に deep merge し、project 層が user 層の値を上書きします。`--config` 指定時は明示ファイルが user 層となり、標準 user config は読み込みません。CLI / 環境変数による `acp.env` の個別キー上書きは Phase 1 では未提供。spawn 時は `process.env` を基底に `spawn.env` が上書きする（[ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md)）。
 
 #### LiteLLM（OpenAI 互換ゲートウェイ）向け config 例
 

@@ -14,7 +14,7 @@ export const ENSEMBLE_CONFIG_FILE = 'config.yaml';
 export interface LoadEnsembleConfigOptions {
   /** テスト用。既定は `~/.ensemble`。 */
   userEnsembleRoot?: string;
-  /** 起動時に明示する追加 config。既定の user/project config の上に merge する。 */
+  /** user config 層の代替ファイル。指定時は標準 user config を読まず、project 層は別途適用する。 */
   configPath?: string;
 }
 
@@ -56,7 +56,9 @@ function mergeConfigLayer(
 }
 
 /**
- * user → project の順で deep merge し、コード内デフォルトをベースに解決する。
+ * 選択された user config → project config の順で deep merge し、
+ * コード内デフォルトをベースに解決する。`configPath` が指定された場合は
+ * 標準 user config の代わりにそのファイルを user 層として読む。
  * どちらのファイルも無い場合は {@link DEFAULT_ENSEMBLE_CONFIG} を返す。
  */
 export async function loadEnsembleConfig(
@@ -65,7 +67,15 @@ export async function loadEnsembleConfig(
 ): Promise<EnsembleConfig> {
   let merged: EnsembleConfig = structuredClone(DEFAULT_ENSEMBLE_CONFIG);
 
-  const userRaw = await readConfigYaml(userConfigPath(options));
+  const explicitPath =
+    options.configPath !== undefined
+      ? resolveConfigPath(options.configPath)
+      : undefined;
+  const selectedUserPath = explicitPath ?? userConfigPath(options);
+  const userRaw = await readConfigYaml(selectedUserPath);
+  if (explicitPath !== undefined && userRaw === undefined) {
+    throw new Error(`Explicit ensemble config file not found: ${explicitPath}`);
+  }
   if (userRaw !== undefined) {
     merged = mergeConfigLayer(merged, parseEnsembleConfig(userRaw));
   }
@@ -73,18 +83,6 @@ export async function loadEnsembleConfig(
   const projectRaw = await readConfigYaml(projectConfigPath(repoRoot));
   if (projectRaw !== undefined) {
     merged = mergeConfigLayer(merged, parseEnsembleConfig(projectRaw));
-  }
-
-  if (options.configPath !== undefined) {
-    const explicitPath = resolveConfigPath(options.configPath);
-    const explicitRaw = await readConfigYaml(explicitPath);
-    if (explicitRaw === undefined) {
-      throw new Error(`Explicit ensemble config file not found: ${explicitPath}`);
-    }
-    merged = mergeConfigLayer(
-      merged,
-      parseEnsembleConfig(explicitRaw),
-    );
   }
 
   return merged;

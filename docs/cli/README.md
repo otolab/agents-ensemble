@@ -82,7 +82,7 @@ cd /path/to/your/repository
 ensemble issue https://github.com/OWNER/REPOSITORY/issues/123
 ```
 
-起動時だけ別の ensemble config を使う場合は `--config <path>` を指定します。user / project config に deep merge され、`~` は home に展開されます。
+起動時だけ user config を差し替える場合は `--config <path>` を指定します。指定時は `~/.ensemble/config.yaml` を読み込まず、指定ファイルを user 層として扱います。project config は引き続き別層で適用され、同じ項目は project 側が優先されます。`~` は home に展開されます。
 
 ```bash
 ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 --config ~/.ensemble/litellm.config.yaml

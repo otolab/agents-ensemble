@@ -1,6 +1,6 @@
 # ADR 0040: resolved ensemble config の resume 整合性
 
-- Status: accepted
+- Status: superseded by [0041](0041-explicit-config-replaces-user-layer.md)
 - Date: 2026-10-22
 - Related: [ADR 0011](0011-session-sidecar-resume.md), [ADR 0039](0039-explicit-ensemble-config-file.md)
 

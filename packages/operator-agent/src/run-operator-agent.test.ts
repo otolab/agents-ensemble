@@ -14,6 +14,7 @@ import type {
   EnsembleConfig,
   ResolvedProfile,
 } from '@agents-ensemble/core/operator-runtime';
+import { loadEnsembleConfig } from '@agents-ensemble/core/operator-runtime';
 import {
   runOperatorAgent,
   type OperatorAgentInput,
@@ -132,11 +133,34 @@ describe('runOperatorAgent', () => {
   });
 
   it('loads an explicitly selected config file', async () => {
+    const userEnsembleRoot = join(repoRoot, '.test-user-ensemble');
+    await mkdir(userEnsembleRoot, { recursive: true });
+    await writeFile(
+      join(userEnsembleRoot, 'config.yaml'),
+      [
+        'conductor:',
+        '  model: standard-user-model',
+        'github:',
+        '  auth:',
+        '    allowGhAuthTokenFallback: false',
+        'acp:',
+        '  env:',
+        '    USER_ONLY: user',
+        '',
+      ].join('\n'),
+    );
     const configPath = join(repoRoot, 'alternate.config.yaml');
     await writeFile(
       configPath,
-      ['conductor:', '  model: alternate-model', ''].join('\n'),
+      [
+        'conductor:',
+        '  model: alternate-model',
+        'tui:',
+        '  layout: pane',
+        '',
+      ].join('\n'),
     );
+    let loadedConfig: EnsembleConfig | undefined;
     let agentOptions: ConductorAgentCreateOptions | undefined;
     const fakeAgent = createFakeAgent({
       send: async () => ({
@@ -162,10 +186,24 @@ describe('runOperatorAgent', () => {
         stdin: createInput('/exit\n'),
         stdout: createOutput(),
         agentFactory,
+        loadConfig: async (root, options) => {
+          loadedConfig = await loadEnsembleConfig(root, {
+            ...options,
+            userEnsembleRoot,
+          });
+          return loadedConfig;
+        },
       },
     );
 
-    expect(agentOptions?.modelId).toBe('alternate-model');
+    expect(loadedConfig).toMatchObject({
+      conductor: { model: 'smoke-model', backend: 'pi' },
+      github: { auth: { allowGhAuthTokenFallback: true } },
+      tui: { layout: 'pane' },
+    });
+    expect(loadedConfig?.acp.env ?? {}).not.toHaveProperty('USER_ONLY');
+    expect(agentOptions?.modelId).toBe('smoke-model');
+    expect(agentOptions?.pi?.agentDir).toBe(join(repoRoot, '.ensemble/pi-user'));
   });
 
   it('runs a Pi-backed TTY conversation with profile prompt and saved session summaries', async () => {

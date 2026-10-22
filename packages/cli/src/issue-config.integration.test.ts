@@ -26,11 +26,27 @@ describe('explicit config in the issue startup path', () => {
     repoRoot = '';
   });
 
-  it('passes the selected model and ACP env from --config into session startup', async () => {
+  it('replaces the user config with --config and keeps project config above it', async () => {
     originalConductorModelId = process.env.CONDUCTOR_MODEL_ID;
     delete process.env.CONDUCTOR_MODEL_ID;
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-issue-config-'));
     await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
+    const userEnsembleRoot = join(repoRoot, '.test-user-ensemble');
+    await mkdir(userEnsembleRoot, { recursive: true });
+    await writeFile(
+      join(userEnsembleRoot, 'config.yaml'),
+      [
+        'conductor:',
+        '  model: standard-user-model',
+        'github:',
+        '  auth:',
+        '    allowGhAuthTokenFallback: false',
+        'acp:',
+        '  env:',
+        '    USER_ONLY: user',
+        '',
+      ].join('\n'),
+    );
     await writeFile(
       join(repoRoot, '.ensemble', 'config.yaml'),
       [
@@ -38,6 +54,7 @@ describe('explicit config in the issue startup path', () => {
         '  model: project-model',
         'acp:',
         '  env:',
+        '    PROJECT_ONLY: project',
         '    MODEL_PROVIDER: project-provider',
         '',
       ].join('\n'),
@@ -51,7 +68,10 @@ describe('explicit config in the issue startup path', () => {
         'acp:',
         '  defaultPreset: codex',
         '  env:',
+        '    EXPLICIT_ONLY: explicit',
         '    MODEL_PROVIDER: litellm',
+        'tui:',
+        '  layout: pane',
         '',
       ].join('\n'),
     );
@@ -75,7 +95,7 @@ describe('explicit config in the issue startup path', () => {
         loadEnsembleConfig: (root, options) =>
           loadEnsembleConfig(root, {
             ...options,
-            userEnsembleRoot: join(repoRoot, '.test-user-ensemble'),
+            userEnsembleRoot,
           }),
         loadProfile: async () =>
           ({
@@ -88,22 +108,31 @@ describe('explicit config in the issue startup path', () => {
     );
 
     expect(sessionOptions).toMatchObject({
-      modelId: 'litellm-model',
+      modelId: 'project-model',
       ensembleConfig: {
-        conductor: { model: 'litellm-model' },
+        conductor: { model: 'project-model' },
+        github: { auth: { allowGhAuthTokenFallback: true } },
         acp: {
           defaultPreset: 'codex',
-          env: { MODEL_PROVIDER: 'litellm' },
+          env: {
+            EXPLICIT_ONLY: 'explicit',
+            PROJECT_ONLY: 'project',
+            MODEL_PROVIDER: 'project-provider',
+          },
         },
+        tui: { layout: 'pane' },
       },
     });
+    expect(sessionOptions?.ensembleConfig?.acp.env ?? {}).not.toHaveProperty('USER_ONLY');
     expect(
       resolveDefaultAcpSpawn(sessionOptions?.defaultAcp),
     ).toMatchObject({
       preset: 'codex',
       env: {
+        EXPLICIT_ONLY: 'explicit',
         INITIAL_AGENT_MODE: 'agent',
-        MODEL_PROVIDER: 'litellm',
+        PROJECT_ONLY: 'project',
+        MODEL_PROVIDER: 'project-provider',
       },
     });
     expect(runIssueSession).toHaveBeenCalledOnce();

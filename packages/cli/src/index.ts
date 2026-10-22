@@ -40,7 +40,10 @@ program
   .command('operator-agent')
   .description('Chat with an operator agent about repository session state')
   .option('--repo-root <path>', 'Repository root for config and saved sessions', process.cwd())
-  .option('--config <path>', 'Additional ensemble config file (merged over user and project config)')
+  .option(
+    '--config <path>',
+    'Use this file instead of ~/.ensemble/config.yaml; project config still applies',
+  )
   .option('--new', 'Start a fresh operator-agent session')
   .action(async (options: { repoRoot: string; config?: string; new: boolean }) => {
     try {
@@ -70,7 +73,7 @@ program
   )
   .option(
     '--config <path>',
-    'Additional ensemble config file (merged over user and project config)',
+    'Use this file instead of ~/.ensemble/config.yaml; project config still applies',
   )
   .option(
     '--conductor-cwd <path>',

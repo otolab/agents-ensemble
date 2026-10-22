@@ -264,19 +264,19 @@ describe('loadEnsembleConfig', () => {
     });
   });
 
-  it('merges an explicit config over project and user config', async () => {
+  it('uses an explicit config as the user layer, then merges project over it', async () => {
     await writeConfig(
       userEnsembleRoot,
-      `conductor:\n  model: user-model\nacp:\n  env:\n    USER_VALUE: user\n    MODEL_PROVIDER: openai\n`,
+      `conductor:\n  model: standard-user-model\ngithub:\n  auth:\n    allowGhAuthTokenFallback: false\nacp:\n  env:\n    USER_ONLY: user\n`,
     );
     await writeConfig(
       join(repoRoot, '.ensemble'),
-      `conductor:\n  backend: pi\nacp:\n  env:\n    PROJECT_VALUE: project\n    MODEL_PROVIDER: project-provider\n`,
+      `conductor:\n  model: project-model\n  backend: pi\nsession:\n  maxTurns:\n    nonTty: 12\nacp:\n  env:\n    PROJECT_ONLY: project\n    MODEL_PROVIDER: project-provider\n`,
     );
     const explicitPath = join(repoRoot, 'litellm.config.yaml');
     await writeFile(
       explicitPath,
-      `conductor:\n  model: litellm-model\nacp:\n  env:\n    MODEL_PROVIDER: litellm\n`,
+      `conductor:\n  model: explicit-model\nsession:\n  maxTurns:\n    tty: 7\nacp:\n  env:\n    EXPLICIT_ONLY: explicit\n    MODEL_PROVIDER: litellm\ntui:\n  layout: pane\n`,
     );
 
     const config = await loadEnsembleConfig(repoRoot, {
@@ -285,14 +285,29 @@ describe('loadEnsembleConfig', () => {
     });
 
     expect(config.conductor).toMatchObject({
-      model: 'litellm-model',
+      model: 'project-model',
       backend: 'pi',
     });
+    expect(config.github.auth.allowGhAuthTokenFallback).toBe(true);
+    expect(config.session.maxTurns).toEqual({ tty: 7, nonTty: 12 });
     expect(config.acp.env).toEqual({
-      USER_VALUE: 'user',
-      PROJECT_VALUE: 'project',
-      MODEL_PROVIDER: 'litellm',
+      PROJECT_ONLY: 'project',
+      EXPLICIT_ONLY: 'explicit',
+      MODEL_PROVIDER: 'project-provider',
     });
+    expect(config.tui.layout).toBe('pane');
+  });
+
+  it('keeps project config active when no explicit user config is selected', async () => {
+    await writeConfig(userEnsembleRoot, `conductor:\n  model: user-model\n`);
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `conductor:\n  model: project-model\n`,
+    );
+
+    const config = await loadEnsembleConfig(repoRoot, { userEnsembleRoot });
+
+    expect(config.conductor.model).toBe('project-model');
   });
 
   it('fails clearly when an explicit config file does not exist', async () => {
