@@ -1254,20 +1254,10 @@ describe('runConductorSession resume / shutdown', () => {
       let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
       let operatorInput: OperatorInputBindingApi | undefined;
       let sendCount = 0;
-      let lateSendReleased = false;
       const dispatchStarted = createDeferred<void>();
       const finishDispatch = createDeferred<void>();
       const lateDispatchReturned = createDeferred<void>();
-      const lateResumeStoreFlushCompleted = createDeferred<void>();
       const shutdown = new AbortController();
-      const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
-      vi.spyOn(
-        sessionResumeStoreModule,
-        'saveSessionResumeStore',
-      ).mockImplementation(async (path, resumeStore) => {
-        await persistResumeStore(path, resumeStore);
-        if (lateSendReleased) lateResumeStoreFlushCompleted.resolve();
-      });
 
       mockCreate.mockImplementationOnce(async (agentOptions) => {
         conductorTools = agentOptions.customTools;
@@ -1415,10 +1405,10 @@ describe('runConductorSession resume / shutdown', () => {
         expect(persistedResumeStore?.harnessSocketPath).toBeUndefined();
         expect(sendCount).toBe(2);
 
-        lateSendReleased = true;
+        const terminalResumeStore = persistedResumeStore;
         finishDispatch.resolve();
         await settleWithin(lateDispatchReturned.promise, 1_000);
-        await settleWithin(lateResumeStoreFlushCompleted.promise, 1_000);
+        await new Promise<void>((resolve) => setImmediate(resolve));
         expect(mockResume).not.toHaveBeenCalled();
         expect(sendCount).toBe(2);
         const resumeStoreAfterLateSend = await loadSessionResumeStore(resumeStorePath);
@@ -1429,7 +1419,10 @@ describe('runConductorSession resume / shutdown', () => {
           shutdownMode === 'operator /close' ? 'close' : 'abort',
         );
         expect(resumeStoreAfterLateSend?.modifiedAt).toBe(
-          resumeStoreAfterLateSend?.updatedAt,
+          terminalResumeStore?.modifiedAt,
+        );
+        expect(resumeStoreAfterLateSend?.updatedAt).toBe(
+          terminalResumeStore?.updatedAt,
         );
         expect(resumeStoreAfterLateSend?.harnessSocketPath).toBeUndefined();
       } finally {
@@ -1877,7 +1870,7 @@ describe('runConductorSession resume / shutdown', () => {
     await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       resumeAgentId: agentId,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),

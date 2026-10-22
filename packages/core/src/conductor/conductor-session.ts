@@ -1190,7 +1190,9 @@ export async function runConductorSession(
     if (terminalResumeStoreFinalFlushQueued && lifecycle === undefined) {
       return sessionResumeStoreWriteQueue;
     }
-    if (lifecycle !== undefined) terminalResumeStoreFinalFlushQueued = true;
+    if (lifecycle !== undefined && lifecycle !== 'unknown') {
+      terminalResumeStoreFinalFlushQueued = true;
+    }
     return enqueueSessionResumeStoreWrite(async () => {
       if (lifecycle !== undefined) {
         terminalLifecycle = lifecycle;
