@@ -1,6 +1,6 @@
 {
   "name": "@agents-ensemble/operator-agent",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "type": "module",
   "description": "Embedded operator-role agent runtime for agents-ensemble",
   "main": "dist/index.js",

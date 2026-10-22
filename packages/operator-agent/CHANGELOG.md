@@ -1,5 +1,25 @@
 # @agents-ensemble/operator-agent
 
+## 0.3.0
+
+### Minor Changes
+
+- 4b0c8aa: 稼働中 harness の conductor 成功応答と対応する inbound を一覧・listen できる API を追加します。
+- bff70e9: operator-agent が user との会話中に watch report の dispatch を自動保留し、会話 hold と手動 report hold を独立して管理するようにしました。
+
+### Patch Changes
+
+- 6e0ebd8: `SessionResumeStore` 名の resume API を追加します。旧 sidecar API は deprecation を明記し、1 リリース限り alias として維持します。
+- f8af5dd: Persist harness activity phases and project session resume state separately from live connectivity. `--continue` now prefers close/abort sessions and skips exit sessions.
+- Updated dependencies [87ccff0]
+- Updated dependencies [4b0c8aa]
+- Updated dependencies [6e0ebd8]
+- Updated dependencies [e798a83]
+- Updated dependencies [f8af5dd]
+- Updated dependencies [8163ff0]
+- Updated dependencies [58a37ce]
+  - @agents-ensemble/core@0.15.0
+
 ## 0.2.2
 
 ### Patch Changes
