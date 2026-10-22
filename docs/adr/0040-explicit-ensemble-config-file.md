@@ -1,6 +1,6 @@
-# ADR 0039: 起動時に指定する ensemble config ファイル
+# ADR 0040: 起動時に指定する ensemble config ファイル
 
-- Status: superseded by [0041](0041-explicit-config-replaces-user-layer.md)
+- Status: superseded by [0042](0042-explicit-config-replaces-user-layer.md)
 - Date: 2026-10-22
 
 ## Context

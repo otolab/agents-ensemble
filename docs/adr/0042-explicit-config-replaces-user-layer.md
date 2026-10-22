@@ -1,12 +1,12 @@
-# ADR 0041: `--config` による user config 層の差し替え
+# ADR 0042: `--config` による user config 層の差し替え
 
 - Status: accepted
 - Date: 2026-10-22
-- Related: [ADR 0020](0020-ensemble-config-setting-resolution.md), [ADR 0039](0039-explicit-ensemble-config-file.md), [ADR 0040](0040-ensemble-config-resume-digest.md)
+- Related: [ADR 0020](0020-ensemble-config-setting-resolution.md), [ADR 0039](0039-session-resume-state-and-operator-projection.md), [ADR 0040](0040-explicit-ensemble-config-file.md), [ADR 0041](0041-ensemble-config-resume-digest.md)
 
 ## Context
 
-ADR 0039 は `--config` を user / project config より高い追加 overlay として定めた。しかし config は user と project で別の層であり、起動時の明示ファイルは user config の切り替えとして扱うのが利用者の意図に合う。標準 user config を残して明示ファイルを重ねると、指定ファイルにない値が標準 user config から意図せず引き継がれる。
+ADR 0040 は `--config` を user / project config より高い追加 overlay として定めた。しかし config は user と project で別の層であり、起動時の明示ファイルは user config の切り替えとして扱うのが利用者の意図に合う。標準 user config を残して明示ファイルを重ねると、指定ファイルにない値が標準 user config から意図せず引き継がれる。
 
 project config の読み込み可否は `--config` とは独立した制御の対象である。現行の loader は project config があれば常に読み込み、`--config` にその挙動を変更させない。
 

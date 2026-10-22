@@ -58,7 +58,7 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を session sidecar に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` や `acp.env` だけの変更も対象です。worker の ACP spawn fingerprint も env map の digest を保持し、値そのものは sidecar に保存しません。sidecar には config の値やファイルパスを保存しないため、秘密値は平文で残りません。
 
-同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 sidecar は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0041](adr/0041-explicit-config-replaces-user-layer.md)）。
+同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 sidecar は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)）。
 
 ## テンプレート
 

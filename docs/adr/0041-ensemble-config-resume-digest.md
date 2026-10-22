@@ -1,12 +1,12 @@
-# ADR 0040: resolved ensemble config の resume 整合性
+# ADR 0041: resolved ensemble config の resume 整合性
 
-- Status: superseded by [0041](0041-explicit-config-replaces-user-layer.md)
+- Status: superseded by [0042](0042-explicit-config-replaces-user-layer.md)
 - Date: 2026-10-22
-- Related: [ADR 0011](0011-session-sidecar-resume.md), [ADR 0039](0039-explicit-ensemble-config-file.md)
+- Related: [ADR 0011](0011-session-sidecar-resume.md), [ADR 0040](0040-explicit-ensemble-config-file.md)
 
 ## Context
 
-ADR 0039 の実装では、起動時に使った config を sidecar に記録せず、`conductor.model` など既存の整合性検査対象外の変更を resume 時に検出できなかった。Issue #547 は MCP digest と同様、起動時の設定を sidecar に記録して不一致を検出するよう求めている。
+ADR 0040 の実装では、起動時に使った config を sidecar に記録せず、`conductor.model` など既存の整合性検査対象外の変更を resume 時に検出できなかった。Issue #547 は MCP digest と同様、起動時の設定を sidecar に記録して不一致を検出するよう求めている。
 
 config には `acp.env` など秘密値を含みうるため、解決済み config の内容やファイルパスは sidecar に保存しない。
 

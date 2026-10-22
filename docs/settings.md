@@ -29,7 +29,7 @@ config は default → 選択された user config → project config の順に 
 CLI の項目値 > 環境変数 > project config > 選択された user config > コード default
 ```
 
-`profile.default` / `conductor.model` / `acp.defaultPreset` など。`--config` 指定時はそのファイルが user 層になり、標準 user config は読み込みません。project config は引き続き適用し、同一キーでは project が優先します。`ensemble issue` と `ensemble operator-agent` が `--config <path>` を受け付けます。これは team profile の `--profile` と別系統で、team profile から config は推測しません。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) と [ADR 0041](adr/0041-explicit-config-replaces-user-layer.md) を参照してください。
+`profile.default` / `conductor.model` / `acp.defaultPreset` など。`--config` 指定時はそのファイルが user 層になり、標準 user config は読み込みません。project config は引き続き適用し、同一キーでは project が優先します。`ensemble issue` と `ensemble operator-agent` が `--config <path>` を受け付けます。これは team profile の `--profile` と別系統で、team profile から config は推測しません。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) と [ADR 0042](adr/0042-explicit-config-replaces-user-layer.md) を参照してください。
 
 ```sh
 ensemble issue 42 --config ~/.ensemble/litellm.config.yaml
