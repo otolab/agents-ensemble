@@ -3,34 +3,34 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  assertSessionResumeStateMatches,
+  assertSessionResumeStoreMatches,
   assertSessionSidecarMatches,
-  findLatestSessionResumeStateForIssue,
+  findLatestSessionResumeStoreForIssue,
   findLatestSessionSidecarForIssue,
   listSessionSidecars,
-  loadSessionResumeState,
+  loadSessionResumeStore,
   loadSessionSidecar,
-  requireSessionResumeStateForResume,
+  requireSessionResumeStoreForResume,
   requireSessionSidecarForResume,
   saveSessionSidecar,
-  saveSessionResumeState,
+  saveSessionResumeStore,
   SESSION_SIDECAR_VERSION,
-  SESSION_RESUME_STATE_VERSION,
+  SESSION_RESUME_STORE_VERSION,
   sessionSidecarDir,
   sessionSidecarPath,
   sessionResumeStoreDir,
   sessionResumeStorePath,
-  SessionResumeStateNotFoundError,
+  SessionResumeStoreNotFoundError,
   SessionSidecarNotFoundError,
-  type SessionResumeState,
+  type SessionResumeStore,
   type SessionSidecar,
 } from './session-resume-store.js';
 
-function baseResumeState(
-  overrides: Partial<SessionResumeState> & Pick<SessionResumeState, 'conductorAgentId'>,
-): SessionResumeState {
+function baseResumeStore(
+  overrides: Partial<SessionResumeStore> & Pick<SessionResumeStore, 'conductorAgentId'>,
+): SessionResumeStore {
   return {
-    version: SESSION_RESUME_STATE_VERSION,
+    version: SESSION_RESUME_STORE_VERSION,
     issueUrl: 'https://github.com/org/repo/issues/1',
     repoRoot: overrides.repoRoot ?? '/repo',
     profile: { workers: [] },
@@ -56,7 +56,7 @@ describe('SessionResumeStore', () => {
       conductorAgentId: 'agent-1',
     });
     expect(path).toBe(join(tempDir, '.ensemble', 'sessions', 'agent-1.json'));
-    const resumeState = baseResumeState({
+    const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-1',
       repoRoot: tempDir,
       profile: {
@@ -86,12 +86,12 @@ describe('SessionResumeStore', () => {
     });
 
     const before = Date.now();
-    await saveSessionResumeState(path, resumeState);
-    const loaded = await loadSessionResumeState(path);
+    await saveSessionResumeStore(path, resumeStore);
+    const loaded = await loadSessionResumeStore(path);
 
     expect(loaded?.updatedAt).toBeGreaterThanOrEqual(before);
     expect(loaded).toMatchObject({
-      ...resumeState,
+      ...resumeStore,
       lazyWorkers: true,
       updatedAt: expect.any(Number),
     });
@@ -119,9 +119,9 @@ describe('SessionResumeStore', () => {
       repoRoot: tempDir,
       conductorAgentId: 'agent-live',
     });
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       path,
-      baseResumeState({
+      baseResumeStore({
         conductorAgentId: 'agent-live',
         repoRoot: tempDir,
         harnessSocketPath: '/tmp/ens-oq-test/s.sock',
@@ -131,7 +131,7 @@ describe('SessionResumeStore', () => {
     const [fileInfo, directoryInfo, loaded] = await Promise.all([
       stat(path),
       stat(sessionResumeStoreDir(tempDir)),
-      loadSessionResumeState(path),
+      loadSessionResumeStore(path),
     ]);
     expect(loaded?.harnessSocketPath).toBe('/tmp/ens-oq-test/s.sock');
     expect(fileInfo.mode & 0o777).toBe(0o600);
@@ -144,7 +144,7 @@ describe('SessionResumeStore', () => {
       repoRoot: tempDir,
       conductorAgentId: 'agent-acp-spawn',
     });
-    const resumeState = baseResumeState({
+    const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-acp-spawn',
       repoRoot: tempDir,
       workers: {
@@ -160,8 +160,8 @@ describe('SessionResumeStore', () => {
       },
     });
 
-    await saveSessionResumeState(path, resumeState);
-    const loaded = await loadSessionResumeState(path);
+    await saveSessionResumeStore(path, resumeStore);
+    const loaded = await loadSessionResumeStore(path);
 
     expect(loaded?.workers.implementer?.acpSpawn).toEqual({
       preset: 'claude',
@@ -181,26 +181,26 @@ describe('SessionResumeStore', () => {
       conductorAgentId: 'legacy-agent',
     });
 
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       closedPath,
-      baseResumeState({
+      baseResumeStore({
         conductorAgentId: 'closed-agent',
         repoRoot: tempDir,
         lifecycle: 'closed',
       }),
     );
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       legacyPath,
-      baseResumeState({
+      baseResumeStore({
         conductorAgentId: 'legacy-agent',
         repoRoot: tempDir,
       }),
     );
 
-    await expect(loadSessionResumeState(closedPath)).resolves.toMatchObject({
+    await expect(loadSessionResumeStore(closedPath)).resolves.toMatchObject({
       lifecycle: 'closed',
     });
-    await expect(loadSessionResumeState(legacyPath)).resolves.not.toHaveProperty(
+    await expect(loadSessionResumeStore(legacyPath)).resolves.not.toHaveProperty(
       'lifecycle',
     );
   });
@@ -211,30 +211,30 @@ describe('SessionResumeStore', () => {
       repoRoot: tempDir,
       conductorAgentId: 'legacy-agent',
     });
-    const legacyResumeState = baseResumeState({
+    const legacyResumeStore = baseResumeStore({
       conductorAgentId: 'legacy-agent',
       repoRoot: tempDir,
     });
     await mkdir(sessionResumeStoreDir(tempDir), { recursive: true });
-    await writeFile(path, `${JSON.stringify(legacyResumeState)}\n`, 'utf8');
+    await writeFile(path, `${JSON.stringify(legacyResumeStore)}\n`, 'utf8');
 
-    const loaded = await loadSessionResumeState(path);
+    const loaded = await loadSessionResumeStore(path);
 
     expect(loaded?.conductorBackend).toBe('cursor');
     expect(loaded?.lazyWorkers).toBeUndefined();
   });
 
   it('rejects a conductor backend mismatch on resume validation', () => {
-    const resumeState = baseResumeState({
+    const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-backend',
       conductorBackend: 'pi',
       repoRoot: '/repo',
     });
 
     expect(() =>
-      assertSessionResumeStateMatches(resumeState, {
+      assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-backend',
-        issueUrl: resumeState.issueUrl,
+        issueUrl: resumeStore.issueUrl,
         repoRoot: '/repo',
         conductorBackend: 'cursor',
       }),
@@ -242,16 +242,16 @@ describe('SessionResumeStore', () => {
   });
 
   it('rejects MCP configuration changes on resume', () => {
-    const resumeState = baseResumeState({
+    const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-mcp-digest',
       mcpConfigDigest: 'old-digest',
     });
 
     expect(() =>
-      assertSessionResumeStateMatches(resumeState, {
+      assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-mcp-digest',
-        issueUrl: resumeState.issueUrl,
-        repoRoot: resumeState.repoRoot,
+        issueUrl: resumeStore.issueUrl,
+        repoRoot: resumeStore.repoRoot,
         mcpConfigDigest: 'new-digest',
         mcpConfigConfigured: true,
       }),
@@ -259,13 +259,13 @@ describe('SessionResumeStore', () => {
   });
 
   it('rejects MCP resume when a legacy record has no digest', () => {
-    const resumeState = baseResumeState({ conductorAgentId: 'agent-mcp-legacy' });
+    const resumeStore = baseResumeStore({ conductorAgentId: 'agent-mcp-legacy' });
 
     expect(() =>
-      assertSessionResumeStateMatches(resumeState, {
+      assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-mcp-legacy',
-        issueUrl: resumeState.issueUrl,
-        repoRoot: resumeState.repoRoot,
+        issueUrl: resumeStore.issueUrl,
+        repoRoot: resumeStore.repoRoot,
         mcpConfigDigest: 'current-digest',
         mcpConfigConfigured: true,
       }),
@@ -273,13 +273,13 @@ describe('SessionResumeStore', () => {
   });
 
   it('rejects mismatched issueUrl on assert', () => {
-    const resumeState = baseResumeState({
+    const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-1',
       repoRoot: '/repo',
     });
 
     expect(() =>
-      assertSessionResumeStateMatches(resumeState, {
+      assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-1',
         issueUrl: 'https://github.com/org/repo/issues/2',
         repoRoot: '/repo',
@@ -287,18 +287,18 @@ describe('SessionResumeStore', () => {
     ).toThrow(/issueUrl mismatch/);
   });
 
-  it('throws SessionResumeStateNotFoundError when the saved state is missing', async () => {
+  it('throws SessionResumeStoreNotFoundError when the saved state is missing', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
 
     await expect(
-      requireSessionResumeStateForResume({
+      requireSessionResumeStoreForResume({
         repoRoot: tempDir,
         conductorAgentId: 'missing-agent',
       }),
-    ).rejects.toThrow(SessionResumeStateNotFoundError);
+    ).rejects.toThrow(SessionResumeStoreNotFoundError);
   });
 
-  it('finds the latest session resume state for an issue by updatedAt', async () => {
+  it('finds the latest session resume store for an issue by updatedAt', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
     const issueUrl = 'https://github.com/org/repo/issues/9';
     const dir = sessionResumeStoreDir(tempDir);
@@ -309,7 +309,7 @@ describe('SessionResumeStore', () => {
       updatedAt: number,
       url = issueUrl,
     ) => {
-      const resumeState = baseResumeState({
+      const resumeStore = baseResumeStore({
         conductorAgentId: agentId,
         repoRoot: tempDir,
         issueUrl: url,
@@ -317,7 +317,7 @@ describe('SessionResumeStore', () => {
       });
       await writeFile(
         join(dir, `${agentId}.json`),
-        `${JSON.stringify(resumeState)}\n`,
+        `${JSON.stringify(resumeStore)}\n`,
         'utf8',
       );
     };
@@ -330,7 +330,7 @@ describe('SessionResumeStore', () => {
       'https://github.com/org/repo/issues/99',
     );
 
-    const latest = await findLatestSessionResumeStateForIssue({
+    const latest = await findLatestSessionResumeStoreForIssue({
       repoRoot: tempDir,
       issueUrl,
     });
@@ -342,13 +342,13 @@ describe('SessionResumeStore', () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
     const options = { repoRoot: tempDir, conductorAgentId: 'legacy-agent' };
     const path = sessionResumeStorePath(options);
-    const state: SessionSidecar = baseResumeState({
+    const state: SessionSidecar = baseResumeStore({
       conductorAgentId: options.conductorAgentId,
       repoRoot: tempDir,
       updatedAt: 123,
     });
 
-    expect(SESSION_SIDECAR_VERSION).toBe(SESSION_RESUME_STATE_VERSION);
+    expect(SESSION_SIDECAR_VERSION).toBe(SESSION_RESUME_STORE_VERSION);
     expect(sessionSidecarDir(tempDir)).toBe(sessionResumeStoreDir(tempDir));
     expect(sessionSidecarPath(options)).toBe(path);
     assertSessionSidecarMatches(state, {

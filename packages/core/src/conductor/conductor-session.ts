@@ -109,13 +109,13 @@ import { isOperatorCloseCommand } from './operator-close.js';
 import { isOperatorReconnectCommand } from './operator-reconnect.js';
 import { parseOperatorMessageDelivery } from './operator-command.js';
 import {
-  assertSessionResumeStateMatches,
-  requireSessionResumeStateForResume,
-  saveSessionResumeState,
-  SESSION_RESUME_STATE_VERSION,
+  assertSessionResumeStoreMatches,
+  requireSessionResumeStoreForResume,
+  saveSessionResumeStore,
+  SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
   type SessionLifecycle,
-  type SessionResumeState,
+  type SessionResumeStore,
 } from '../session/session-resume-store.js';
 import {
   saveSessionStatusLine,
@@ -377,11 +377,11 @@ export async function runConductorSession(
   let toolCallHistoryNeedsRewrite = false;
 
   if (options.resumeAgentId) {
-    const loadedResumeState = await requireSessionResumeStateForResume({
+    const loadedResumeStore = await requireSessionResumeStoreForResume({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
     });
-    assertSessionResumeStateMatches(loadedResumeState, {
+    assertSessionResumeStoreMatches(loadedResumeStore, {
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
       repoRoot: options.repoRoot,
@@ -393,18 +393,18 @@ export async function runConductorSession(
     // resume begins. Persist unknown before restoring or attaching anything so
     // a crash before the first regular SessionResumeStore flush cannot leave stale
     // `closed` / `exited` data behind.
-    const resumeState: SessionResumeState = {
-      ...loadedResumeState,
+    const resumeStore: SessionResumeStore = {
+      ...loadedResumeStore,
       lifecycle: 'unknown',
       harnessSocketPath: undefined,
       updatedAt: Date.now(),
     };
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot: options.repoRoot,
         conductorAgentId: options.resumeAgentId,
       }),
-      resumeState,
+      resumeStore,
     );
     const history = await loadToolCallSnapshotHistory({
       repoRoot: options.repoRoot,
@@ -428,8 +428,8 @@ export async function runConductorSession(
       openQuestions.restore(openQuestionsSnapshot);
     } else {
       const legacySnapshot = {
-        sequence: resumeState.sequence,
-        openQuestions: resumeState.openQuestions,
+        sequence: resumeStore.sequence,
+        openQuestions: resumeStore.openQuestions,
       };
       openQuestions.restore(legacySnapshot);
       try {
@@ -443,11 +443,11 @@ export async function runConductorSession(
         });
       }
     }
-    activeProfile = resumeState.profile;
-    // ResumeStates written before this setting always started every worker eagerly.
-    activeLazyWorkers = resumeState.lazyWorkers ?? false;
-    githubMonitorCursor = resumeState.githubMonitor;
-    for (const [name, worker] of Object.entries(resumeState.workers)) {
+    activeProfile = resumeStore.profile;
+    // ResumeStores written before this setting always started every worker eagerly.
+    activeLazyWorkers = resumeStore.lazyWorkers ?? false;
+    githubMonitorCursor = resumeStore.githubMonitor;
+    for (const [name, worker] of Object.entries(resumeStore.workers)) {
       workerSessions.set(name, {
         acpSessionId: worker.acpSessionId,
         ...(worker.acpCwd ? { acpCwd: worker.acpCwd } : {}),
@@ -570,8 +570,8 @@ export async function runConductorSession(
     options.permissionPipeline ??
     new PermissionPipeline({ policy: options.permissionPolicy });
 
-  let scheduleSessionResumeStateFlush = () => {};
-  let flushSessionResumeState: (lifecycle?: SessionLifecycle) => Promise<void> =
+  let scheduleSessionResumeStoreFlush = () => {};
+  let flushSessionResumeStore: (lifecycle?: SessionLifecycle) => Promise<void> =
     async () => {};
   let scheduleToolCallHistoryFlush = () => {};
   let flushToolCallHistory = async () => {};
@@ -739,7 +739,7 @@ export async function runConductorSession(
           : {}),
       });
       eventQueue.enqueue({ type: 'worker.completed', result });
-      scheduleSessionResumeStateFlush();
+      scheduleSessionResumeStoreFlush();
     },
     onWorkerFailed: (failure) => {
       sessionLogger.emit({ type: 'worker.failed', failure });
@@ -880,7 +880,7 @@ export async function runConductorSession(
       sessionLogger.emit({ type: 'escalation.recorded', record });
       options.onEscalated?.(record);
     }
-    scheduleSessionResumeStateFlush();
+    scheduleSessionResumeStoreFlush();
   };
 
   const askHumanTools = createAskHumanTool({
@@ -888,7 +888,7 @@ export async function runConductorSession(
     onEnqueued: (question) => {
       sessionLogger.emit({ type: 'open.question.enqueued', question });
       options.onOpenQuestionEnqueued?.(question);
-      scheduleSessionResumeStateFlush();
+      scheduleSessionResumeStoreFlush();
     },
   });
 
@@ -942,7 +942,7 @@ export async function runConductorSession(
       // Do not report success to the conductor until the explicit watch is
       // durable. This closes the crash window between the tool result and a
       // later best-effort flush.
-      await flushSessionResumeState();
+      await flushSessionResumeStore();
     },
   });
   const unregisterGitHubWatchTools = createUnregisterGitHubWatchTool({
@@ -953,7 +953,7 @@ export async function runConductorSession(
     },
     onUnregistered: async (prNumber) => {
       githubMonitor?.unregisterPullRequest?.(prNumber);
-      await flushSessionResumeState();
+      await flushSessionResumeStore();
     },
   });
 
@@ -1098,20 +1098,20 @@ export async function runConductorSession(
     },
   };
 
-  let sessionResumeStateWriteQueue: Promise<void> = Promise.resolve();
+  let sessionResumeStoreWriteQueue: Promise<void> = Promise.resolve();
   let terminalLifecycle: SessionLifecycle | undefined;
-  const enqueueSessionResumeStateWrite = (
+  const enqueueSessionResumeStoreWrite = (
     write: () => Promise<void>,
   ): Promise<void> => {
-    const nextWrite = sessionResumeStateWriteQueue.then(write);
-    sessionResumeStateWriteQueue = nextWrite.catch(() => {});
+    const nextWrite = sessionResumeStoreWriteQueue.then(write);
+    sessionResumeStoreWriteQueue = nextWrite.catch(() => {});
     return nextWrite;
   };
-  const createSessionResumeState = (
+  const createSessionResumeStore = (
     snapshot: OpenQuestionRegistrySnapshot,
     lifecycle?: SessionLifecycle,
-  ): SessionResumeState => {
-    const workers: SessionResumeState['workers'] = {};
+  ): SessionResumeStore => {
+    const workers: SessionResumeStore['workers'] = {};
     for (const [name, worker] of workerSessions) {
       workers[name] = {
         acpSessionId: worker.acpSessionId,
@@ -1120,7 +1120,7 @@ export async function runConductorSession(
       };
     }
     return {
-      version: SESSION_RESUME_STATE_VERSION,
+      version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: conductorHandle.conductor.agentId,
       conductorBackend,
       lazyWorkers: activeLazyWorkers,
@@ -1151,25 +1151,25 @@ export async function runConductorSession(
       snapshot,
     );
   };
-  const persistSessionResumeState = async (
+  const persistSessionResumeStore = async (
     snapshot: OpenQuestionRegistrySnapshot,
     lifecycle?: SessionLifecycle,
   ): Promise<void> => {
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot: options.repoRoot,
         conductorAgentId: conductorHandle.conductor.agentId,
       }),
-      createSessionResumeState(snapshot, lifecycle),
+      createSessionResumeStore(snapshot, lifecycle),
     );
   };
-  flushSessionResumeState = (lifecycle): Promise<void> =>
-    enqueueSessionResumeStateWrite(async () => {
+  flushSessionResumeStore = (lifecycle): Promise<void> =>
+    enqueueSessionResumeStoreWrite(async () => {
       const snapshot = openQuestions.snapshot();
       await persistOpenQuestionsSnapshot(snapshot);
-      await persistSessionResumeState(snapshot, lifecycle);
+      await persistSessionResumeStore(snapshot, lifecycle);
     });
-  const reportResumeStateFlushFailure = (error: unknown): void => {
+  const reportResumeStoreFlushFailure = (error: unknown): void => {
     const detail = error instanceof Error ? error.message : String(error);
     sessionLogger.emit({
       type: 'harness.warning',
@@ -1177,7 +1177,7 @@ export async function runConductorSession(
         `Open Question YAML / SessionResumeStore を保存できませんでした。最新状態から再開できず、直前に保存された状態からの再開になる場合があります。 error=${detail}`,
     });
   };
-  const reportSessionResumeStateWriteFailure = (error: unknown): void => {
+  const reportSessionResumeStoreWriteFailure = (error: unknown): void => {
     const detail = error instanceof Error ? error.message : String(error);
     sessionLogger.emit({
       type: 'harness.warning',
@@ -1185,8 +1185,8 @@ export async function runConductorSession(
         `SessionResumeStore の更新に失敗しました。Open Question YAML の保存は完了しており、保存状態は後続 flush で同期します。 error=${detail}`,
     });
   };
-  scheduleSessionResumeStateFlush = () => {
-    void flushSessionResumeState().catch(reportResumeStateFlushFailure);
+  scheduleSessionResumeStoreFlush = () => {
+    void flushSessionResumeStore().catch(reportResumeStoreFlushFailure);
   };
   const toolCallHistoryPath = toolCallSnapshotHistoryPath({
     repoRoot: options.repoRoot,
@@ -1266,7 +1266,7 @@ export async function runConductorSession(
       shutdownSignal,
       onCursorChange: (cursor) => {
         githubMonitorCursor = cursor;
-        scheduleSessionResumeStateFlush();
+        scheduleSessionResumeStoreFlush();
       },
       onUpdate: (payload) => {
         sessionLogger.emit({
@@ -1365,7 +1365,7 @@ export async function runConductorSession(
   let disposeOperatorInput: (() => void) | undefined;
 
   const onOperatorMessageQueued = (delivery: OperatorMessageDelivery): void => {
-    scheduleSessionResumeStateFlush();
+    scheduleSessionResumeStoreFlush();
     if (delivery !== 'interrupt') return;
 
     const cancel = conductorHandle.conductor.cancel;
@@ -1517,12 +1517,12 @@ export async function runConductorSession(
           );
         }
         let accepted = false;
-        let resumeStateWriteError: unknown;
+        let resumeStoreWriteError: unknown;
         let dispatchReceipt: Promise<void> | undefined;
         let answered: OpenQuestion | undefined;
         const escalatedRecords: EscalationRecord[] = [];
 
-        await enqueueSessionResumeStateWrite(async () => {
+        await enqueueSessionResumeStoreWrite(async () => {
           const stagedOpenQuestions = new OpenQuestionRegistry();
           stagedOpenQuestions.restore(openQuestions.snapshot());
           const stagedAccepted = submitOperatorInput({
@@ -1584,11 +1584,11 @@ export async function runConductorSession(
           }
 
           try {
-            await persistSessionResumeState(openQuestions.snapshot());
+            await persistSessionResumeStore(openQuestions.snapshot());
           } catch (error) {
             // YAML is authoritative and is already durable. Keep the accepted
             // answer/notification, report the mirror failure, then repair it.
-            resumeStateWriteError = error;
+            resumeStoreWriteError = error;
           }
         });
         if (!accepted || !answered || answered.status !== 'answered') {
@@ -1608,9 +1608,9 @@ export async function runConductorSession(
             });
           }
         }
-        if (resumeStateWriteError !== undefined) {
-          reportSessionResumeStateWriteFailure(resumeStateWriteError);
-          scheduleSessionResumeStateFlush();
+        if (resumeStoreWriteError !== undefined) {
+          reportSessionResumeStoreWriteFailure(resumeStoreWriteError);
+          scheduleSessionResumeStoreFlush();
         }
         if (!dispatchReceipt) {
           throw new OpenQuestionControlOperationError(
@@ -1624,7 +1624,7 @@ export async function runConductorSession(
       },
     });
     harnessSocketPath = openQuestionControlServer.socketPath;
-    await flushSessionResumeState().catch(reportResumeStateFlushFailure);
+    await flushSessionResumeStore().catch(reportResumeStoreFlushFailure);
 
     const driverResult = await runConductorSessionDriver({
       issueUrl: options.issueUrl,
@@ -1803,7 +1803,7 @@ export async function runConductorSession(
           ),
         });
       }
-      scheduleSessionResumeStateFlush();
+      scheduleSessionResumeStoreFlush();
     }
 
     async function buildResult(): Promise<ConductorSessionResult> {
@@ -1953,12 +1953,12 @@ export async function runConductorSession(
       }
 
       try {
-        emitTeardownPhase('flushSessionResumeState');
+        emitTeardownPhase('flushSessionResumeStore');
         const phaseStart = Date.now();
-        await flushSessionResumeState();
-        teardownPhases.flushSessionResumeState = Date.now() - phaseStart;
+        await flushSessionResumeStore();
+        teardownPhases.flushSessionResumeStore = Date.now() - phaseStart;
       } catch (error) {
-        reportResumeStateFlushFailure(error);
+        reportResumeStoreFlushFailure(error);
       }
       await flushToolCallHistoryBestEffort();
 
@@ -2029,11 +2029,11 @@ export async function runConductorSession(
       }
     } finally {
       try {
-        emitTeardownPhase('flushSessionResumeState');
+        emitTeardownPhase('flushSessionResumeStore');
         await sessionStateWriteQueue;
-        await flushSessionResumeState(lifecycle);
+        await flushSessionResumeStore(lifecycle);
       } catch (error) {
-        reportResumeStateFlushFailure(error);
+        reportResumeStoreFlushFailure(error);
       }
       process.off('SIGINT', onTeardownSignal);
       process.off('SIGTERM', onTeardownSignal);

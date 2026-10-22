@@ -304,7 +304,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     ).not.toThrow();
   });
 
-  it('skips when expected fingerprint is absent (legacy resume state)', () => {
+  it('skips when expected fingerprint is absent (legacy resume store)', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         actual: {
@@ -317,7 +317,7 @@ describe('assertAcpSpawnMatchesResume', () => {
   });
 
   it('accepts a legacy Codex record without env when the current preset provides it', () => {
-    const legacyResumeState = {
+    const legacyResumeStore = {
       preset: 'codex' as const,
       command: 'codex-acp',
       args: [] as string[],
@@ -331,7 +331,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     });
     expect(() =>
       assertAcpSpawnMatchesResume({
-        expected: legacyResumeState,
+        expected: legacyResumeStore,
         actual: acpSpawnFingerprint(currentSpawn),
         workerName: 'implementer',
       }),
@@ -339,7 +339,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     expect(currentSpawn.env).toEqual({ INITIAL_AGENT_MODE: 'agent' });
   });
 
-  it('compares env when saved resume state fingerprint includes env', () => {
+  it('compares env when saved resume store fingerprint includes env', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {

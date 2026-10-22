@@ -1,4 +1,4 @@
-/** @deprecated Use the SessionResumeState exports; retained until the next major release. */
+/** @deprecated Use the SessionResumeStore exports; supported for one release only. */
 export {
   SESSION_SIDECAR_VERSION,
   assertSessionSidecarMatches,
@@ -11,7 +11,7 @@ export {
   sessionSidecarPath,
   SessionSidecarNotFoundError,
 } from './session-resume-store.js';
-/** @deprecated Use SessionResumeState; retained until the next major release. */
+/** @deprecated Use SessionResumeStore; supported for one release only. */
 export type {
   FindLatestSessionSidecarInput,
   SessionSidecar,
@@ -19,22 +19,22 @@ export type {
   WorkerSessionSidecar,
 } from './session-resume-store.js';
 export {
-  SESSION_RESUME_STATE_VERSION,
-  assertSessionResumeStateMatches,
-  findLatestSessionResumeStateForIssue,
-  listSessionResumeStates,
-  loadSessionResumeState,
-  requireSessionResumeStateForResume,
-  saveSessionResumeState,
+  SESSION_RESUME_STORE_VERSION,
+  assertSessionResumeStoreMatches,
+  findLatestSessionResumeStoreForIssue,
+  listSessionResumeStores,
+  loadSessionResumeStore,
+  requireSessionResumeStoreForResume,
+  saveSessionResumeStore,
   sessionResumeStoreDir,
   sessionResumeStorePath,
-  SessionResumeStateNotFoundError,
+  SessionResumeStoreNotFoundError,
 } from './session-resume-store.js';
 export type {
-  FindLatestSessionResumeStateInput,
+  FindLatestSessionResumeStoreInput,
   SessionLifecycle,
-  SessionResumeState,
-  WorkerSessionResumeState,
+  SessionResumeStore,
+  WorkerSessionResumeStore,
 } from './session-resume-store.js';
 export {
   loadOpenQuestionsStore,

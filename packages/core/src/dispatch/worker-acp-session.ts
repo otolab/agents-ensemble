@@ -77,7 +77,7 @@ export async function openWorkerAcpSession(
   ) {
     const label = options.workerName ? `Worker "${options.workerName}"` : 'Worker';
     throw new Error(
-      `${label} resume cwd mismatch: saved resume state has ${options.expectedResumeAcpCwd}, current profile resolves to ${acpCwd}`,
+      `${label} resume cwd mismatch: saved resume store has ${options.expectedResumeAcpCwd}, current profile resolves to ${acpCwd}`,
     );
   }
 

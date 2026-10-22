@@ -258,7 +258,7 @@ export async function resolveMcpServers(
 /**
  * Return a stable digest for the harness-resolved MCP server map.
  *
- * The digest is persisted in a session resume state instead of the map itself so
+ * The digest is persisted in a session resume store instead of the map itself so
  * that credentials and other MCP values are not copied into session state.
  * Object keys are sorted while array order is preserved.
  */

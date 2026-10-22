@@ -307,19 +307,19 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const resumeStatePath = join(
+    const resumeStorePath = join(
       repoRoot,
       '.ensemble',
       'sessions',
       'conductor-one.json',
     );
-    const resumeState = JSON.parse(await readFile(resumeStatePath, 'utf8')) as Record<
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
     >;
     await writeFile(
-      resumeStatePath,
-      JSON.stringify({ ...resumeState, harnessSocketPath: liveServer.socketPath }),
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
     const input = new PassThrough() as PassThrough & OperatorAgentInput;
@@ -461,19 +461,19 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const resumeStatePath = join(
+    const resumeStorePath = join(
       repoRoot,
       '.ensemble',
       'sessions',
       'conductor-one.json',
     );
-    const resumeState = JSON.parse(await readFile(resumeStatePath, 'utf8')) as Record<
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
     >;
     await writeFile(
-      resumeStatePath,
-      JSON.stringify({ ...resumeState, harnessSocketPath: liveServer.socketPath }),
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
     const input = new PassThrough() as PassThrough & OperatorAgentInput;
@@ -697,19 +697,19 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const resumeStatePath = join(
+    const resumeStorePath = join(
       repoRoot,
       '.ensemble',
       'sessions',
       'conductor-one.json',
     );
-    const resumeState = JSON.parse(await readFile(resumeStatePath, 'utf8')) as Record<
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
     >;
     await writeFile(
-      resumeStatePath,
-      JSON.stringify({ ...resumeState, harnessSocketPath: liveServer.socketPath }),
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
     const input = new PassThrough() as PassThrough & OperatorAgentInput;
@@ -804,19 +804,19 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const resumeStatePath = join(
+    const resumeStorePath = join(
       repoRoot,
       '.ensemble',
       'sessions',
       'conductor-one.json',
     );
-    const resumeState = JSON.parse(await readFile(resumeStatePath, 'utf8')) as Record<
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
     >;
     await writeFile(
-      resumeStatePath,
-      JSON.stringify({ ...resumeState, harnessSocketPath: liveServer.socketPath }),
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
     const statePath = operatorWatchStatePath(repoRoot);

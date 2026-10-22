@@ -51,8 +51,8 @@ describe('operator watch pool', () => {
       },
     });
     closeServers.push(() => liveServer.close());
-    await writeResumeState('live-one', 1, liveServer.socketPath);
-    await writeResumeState('offline-two', 2, '/tmp/no-such-ensemble-socket');
+    await writeResumeStore('live-one', 1, liveServer.socketPath);
+    await writeResumeStore('offline-two', 2, '/tmp/no-such-ensemble-socket');
     await writeOfflineSnapshots('offline-two', {
       sequence: 1,
       questions: [
@@ -161,7 +161,7 @@ describe('operator watch pool', () => {
   it('restores unacknowledged reports after restart and removes only acknowledged reports', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-retry-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
-    await writeResumeState('session-retry', 1);
+    await writeResumeStore('session-retry', 1);
     await writeOfflineSnapshots('session-retry', {
       sequence: 1,
       questions: [
@@ -275,7 +275,7 @@ describe('operator watch pool', () => {
       },
     });
     closeServers.push(() => liveServer.close());
-    await writeResumeState('session-baseline', 1, liveServer.socketPath);
+    await writeResumeStore('session-baseline', 1, liveServer.socketPath);
 
     const dispatchQueue = createOperatorDispatchQueue();
     const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
@@ -442,7 +442,7 @@ describe('operator watch pool', () => {
       },
     });
     closeServers.push(() => liveServer.close());
-    await writeResumeState('live-dedup', 1, liveServer.socketPath);
+    await writeResumeStore('live-dedup', 1, liveServer.socketPath);
 
     const dispatchQueue = createOperatorDispatchQueue();
     const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
@@ -487,7 +487,7 @@ describe('operator watch pool', () => {
 
       // Once the live UDS goes away, the persisted copy of that same
       // Registry question must not create a second report.
-      await writeResumeState('live-dedup', 2, '/tmp/no-such-ensemble-socket');
+      await writeResumeStore('live-dedup', 2, '/tmp/no-such-ensemble-socket');
       await writeQuestions(1, [firstQuestion]);
       expect(await pool.pollOnce('live-dedup')).toBe(0);
 
@@ -543,7 +543,7 @@ describe('operator watch pool', () => {
   it('keeps Open Question text out of watch poll warning logs', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-logs-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
-    await writeResumeState('session-private', 1);
+    await writeResumeStore('session-private', 1);
     const secretBody = 'private-question-body-marker';
     const sessionDir = join(repoRoot, '.ensemble', 'sessions', 'session-private');
     await mkdir(sessionDir, { recursive: true });
@@ -573,7 +573,7 @@ describe('operator watch pool', () => {
   it('registers and removes watches through bounded tools', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-tools-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
-    await writeResumeState('session-one', 1);
+    await writeResumeStore('session-one', 1);
     const pool = await createOperatorWatchPool({
       repoRoot,
       dispatchQueue: createOperatorDispatchQueue(),
@@ -598,7 +598,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  async function writeResumeState(
+  async function writeResumeStore(
     agentId: string,
     updatedAt: number,
     harnessSocketPath?: string,

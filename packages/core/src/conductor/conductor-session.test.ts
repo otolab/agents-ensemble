@@ -20,13 +20,13 @@ import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { computeMcpConfigDigest } from '../mcp/load-mcp-config.js';
 import {
-  loadSessionResumeState,
-  saveSessionResumeState,
-  SessionResumeStateNotFoundError,
-  SESSION_RESUME_STATE_VERSION,
+  loadSessionResumeStore,
+  saveSessionResumeStore,
+  SessionResumeStoreNotFoundError,
+  SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
 } from '../session/session-resume-store.js';
-import * as sessionResumeStateModule from '../session/session-resume-store.js';
+import * as sessionResumeStoreModule from '../session/session-resume-store.js';
 import {
   loadSessionStateStore,
   sessionStateStorePath,
@@ -263,7 +263,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
   }
 
-  it('fails fast when resumeAgentId is set but no saved session resume state exists', async () => {
+  it('fails fast when resumeAgentId is set but no saved session resume store exists', async () => {
     await expect(
       runConductorSession({
         issueUrl: TEST_ISSUE.url,
@@ -273,17 +273,17 @@ describe('runConductorSession resume / shutdown', () => {
         permissionPipeline: new PermissionPipeline({}),
         registerProcessSignalHandlers: false,
       }),
-    ).rejects.toThrow(SessionResumeStateNotFoundError);
+    ).rejects.toThrow(SessionResumeStoreNotFoundError);
 
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it('fails fast when the startup backend differs from the saved resume state backend', async () => {
+  it('fails fast when the startup backend differs from the saved resume store backend', async () => {
     const agentId = 'resume-backend-mismatch';
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         conductorBackend: 'pi',
         issueUrl: TEST_ISSUE.url,
@@ -315,12 +315,12 @@ describe('runConductorSession resume / shutdown', () => {
     'clears stale %s lifecycle before resuming the conductor',
     async (lifecycle) => {
       const agentId = `resume-${lifecycle}-lifecycle`;
-      const resumeStatePath = sessionResumeStorePath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: agentId,
       });
-      await saveSessionResumeState(resumeStatePath, {
-        version: SESSION_RESUME_STATE_VERSION,
+      await saveSessionResumeStore(resumeStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -332,9 +332,9 @@ describe('runConductorSession resume / shutdown', () => {
         updatedAt: 1,
       });
       mockResume.mockImplementationOnce(async () => {
-        const persisted = await loadSessionResumeState(resumeStatePath);
+        const persisted = await loadSessionResumeStore(resumeStorePath);
         expect(persisted?.lifecycle).toBe('unknown');
-        throw new Error('simulated crash before first regular session resume state flush');
+        throw new Error('simulated crash before first regular session resume store flush');
       });
 
       await expect(
@@ -347,10 +347,10 @@ describe('runConductorSession resume / shutdown', () => {
           registerProcessSignalHandlers: false,
         }),
       ).rejects.toThrow(
-        'simulated crash before first regular session resume state flush',
+        'simulated crash before first regular session resume store flush',
       );
 
-      await expect(loadSessionResumeState(resumeStatePath)).resolves.toMatchObject({
+      await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
         lifecycle: 'unknown',
         updatedAt: expect.any(Number),
       });
@@ -687,7 +687,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
   });
 
-  it('persists the selected profile backend in the session resume state', async () => {
+  it('persists the selected profile backend in the session resume store', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-stub',
       status: 'finished',
@@ -708,10 +708,10 @@ describe('runConductorSession resume / shutdown', () => {
     expect(result.sessionUsage).toBeDefined();
     expect(result.sessionUsage).not.toHaveProperty('compactionCount');
 
-    const resumeState = await loadSessionResumeState(
+    const resumeStore = await loadSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
-    expect(resumeState?.conductorBackend).toBe('pi');
+    expect(resumeStore?.conductorBackend).toBe('pi');
   });
 
   it('passes resolved MCP configuration to ConductorAgent.resume for explicit resume', async () => {
@@ -729,10 +729,10 @@ describe('runConductorSession resume / shutdown', () => {
         },
       }),
     );
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -801,10 +801,10 @@ describe('runConductorSession resume / shutdown', () => {
         askedAt: 2,
       },
     ];
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -884,10 +884,10 @@ describe('runConductorSession resume / shutdown', () => {
         }),
       }),
     );
-    const resumeState = await loadSessionResumeState(
+    const resumeStore = await loadSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
-    expect(resumeState?.conductorBackend).toBe('cursor');
+    expect(resumeStore?.conductorBackend).toBe('cursor');
   });
 
   it('answers a live Open Question through UDS, persists it, and dispatches operator.message', async () => {
@@ -940,17 +940,17 @@ describe('runConductorSession resume / shutdown', () => {
 
     try {
       await vi.waitFor(async () => {
-        const resumeState = await loadSessionResumeState(
+        const resumeStore = await loadSessionResumeStore(
           sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
         );
-        expect(resumeState?.harnessSocketPath).toBeTruthy();
+        expect(resumeStore?.harnessSocketPath).toBeTruthy();
       });
-      const resumeStatePath = sessionResumeStorePath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
-      const resumeState = await loadSessionResumeState(resumeStatePath);
-      const socketPath = resumeState?.harnessSocketPath;
+      const resumeStore = await loadSessionResumeStore(resumeStorePath);
+      const socketPath = resumeStore?.harnessSocketPath;
       expect(socketPath).toBeTruthy();
 
       let liveList: {
@@ -1017,9 +1017,9 @@ describe('runConductorSession resume / shutdown', () => {
         approved: true,
         relatedPermissionId: 'perm-1',
       });
-      const persistedResumeState = await loadSessionResumeState(resumeStatePath);
-      expect(persistedResumeState?.openQuestions).toEqual(store?.openQuestions);
-      expect(persistedResumeState?.harnessSocketPath).toBe(socketPath);
+      const persistedResumeStore = await loadSessionResumeStore(resumeStorePath);
+      expect(persistedResumeStore?.openQuestions).toEqual(store?.openQuestions);
+      expect(persistedResumeStore?.harnessSocketPath).toBe(socketPath);
 
       await expect(receivedOperatorMessage.promise).resolves.toContain(
         '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
@@ -1045,9 +1045,9 @@ describe('runConductorSession resume / shutdown', () => {
           }),
         ],
       });
-      const finalResumeState = await loadSessionResumeState(resumeStatePath);
-      expect(finalResumeState?.lifecycle).toBe('closed');
-      expect(finalResumeState?.harnessSocketPath).toBeUndefined();
+      const finalResumeStore = await loadSessionResumeStore(resumeStorePath);
+      expect(finalResumeStore?.lifecycle).toBe('closed');
+      expect(finalResumeStore?.harnessSocketPath).toBeUndefined();
       await expect(stat(socketPath!)).rejects.toMatchObject({
         code: 'ENOENT',
       });
@@ -1135,17 +1135,17 @@ describe('runConductorSession resume / shutdown', () => {
 
     try {
       await vi.waitFor(async () => {
-        const resumeState = await loadSessionResumeState(
+        const resumeStore = await loadSessionResumeStore(
           sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
         );
-        expect(resumeState?.harnessSocketPath).toBeTruthy();
+        expect(resumeStore?.harnessSocketPath).toBeTruthy();
       });
-      const resumeStatePath = sessionResumeStorePath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
-      const resumeState = await loadSessionResumeState(resumeStatePath);
-      const socketPath = resumeState?.harnessSocketPath;
+      const resumeStore = await loadSessionResumeStore(resumeStorePath);
+      const socketPath = resumeStore?.harnessSocketPath;
       expect(socketPath).toBeTruthy();
 
       await vi.waitFor(async () => {
@@ -1225,19 +1225,19 @@ describe('runConductorSession resume / shutdown', () => {
           conductorAgentId: 'agent-test',
         }),
       );
-      const persistedResumeState = await loadSessionResumeState(resumeStatePath);
+      const persistedResumeStore = await loadSessionResumeStore(resumeStorePath);
       expect(persistedStore?.openQuestions[0]).toMatchObject({
         status: 'answered',
         answer: 'yes',
         answeredBy: 'operator',
         approved: true,
       });
-      expect(persistedResumeState?.openQuestions).toEqual(
+      expect(persistedResumeStore?.openQuestions).toEqual(
         persistedStore?.openQuestions,
       );
       expect(sendCount).toBe(2);
-      expect(persistedResumeState?.lifecycle).toBe('closed');
-      expect(persistedResumeState?.harnessSocketPath).toBeUndefined();
+      expect(persistedResumeStore?.lifecycle).toBe('closed');
+      expect(persistedResumeStore?.harnessSocketPath).toBeUndefined();
     } finally {
       finishAnswerFlush.resolve();
       finishDispatch.resolve();
@@ -1256,15 +1256,15 @@ describe('runConductorSession resume / shutdown', () => {
       const dispatchStarted = createDeferred<void>();
       const finishDispatch = createDeferred<void>();
       const lateDispatchReturned = createDeferred<void>();
-      const lateResumeStateFlushCompleted = createDeferred<void>();
+      const lateResumeStoreFlushCompleted = createDeferred<void>();
       const shutdown = new AbortController();
-      const persistResumeState = sessionResumeStateModule.saveSessionResumeState;
+      const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
       vi.spyOn(
-        sessionResumeStateModule,
-        'saveSessionResumeState',
-      ).mockImplementation(async (path, resumeState) => {
-        await persistResumeState(path, resumeState);
-        if (lateSendReleased) lateResumeStateFlushCompleted.resolve();
+        sessionResumeStoreModule,
+        'saveSessionResumeStore',
+      ).mockImplementation(async (path, resumeStore) => {
+        await persistResumeStore(path, resumeStore);
+        if (lateSendReleased) lateResumeStoreFlushCompleted.resolve();
       });
 
       mockCreate.mockImplementationOnce(async (agentOptions) => {
@@ -1321,17 +1321,17 @@ describe('runConductorSession resume / shutdown', () => {
 
       try {
         await vi.waitFor(async () => {
-          const resumeState = await loadSessionResumeState(
+          const resumeStore = await loadSessionResumeStore(
             sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
           );
-          expect(resumeState?.harnessSocketPath).toBeTruthy();
+          expect(resumeStore?.harnessSocketPath).toBeTruthy();
         });
-        const resumeStatePath = sessionResumeStorePath({
+        const resumeStorePath = sessionResumeStorePath({
           repoRoot,
           conductorAgentId: 'agent-test',
         });
         const socketPath = (
-          await loadSessionResumeState(resumeStatePath)
+          await loadSessionResumeStore(resumeStorePath)
         )?.harnessSocketPath;
         expect(socketPath).toBeTruthy();
 
@@ -1399,7 +1399,7 @@ describe('runConductorSession resume / shutdown', () => {
         ]);
 
         const persistedStore = await loadOpenQuestionsStore(storePath);
-        const persistedResumeState = await loadSessionResumeState(resumeStatePath);
+        const persistedResumeStore = await loadSessionResumeStore(resumeStorePath);
         expect(persistedStore?.openQuestions).toHaveLength(1);
         expect(persistedStore?.openQuestions[0]).toMatchObject({
           id: questionId,
@@ -1407,23 +1407,23 @@ describe('runConductorSession resume / shutdown', () => {
           answer: 'yes',
           answeredBy: 'operator',
         });
-        expect(persistedResumeState?.openQuestions).toEqual(
+        expect(persistedResumeStore?.openQuestions).toEqual(
           persistedStore?.openQuestions,
         );
-        expect(persistedResumeState?.harnessSocketPath).toBeUndefined();
+        expect(persistedResumeStore?.harnessSocketPath).toBeUndefined();
         expect(sendCount).toBe(2);
 
         lateSendReleased = true;
         finishDispatch.resolve();
         await settleWithin(lateDispatchReturned.promise, 1_000);
-        await settleWithin(lateResumeStateFlushCompleted.promise, 1_000);
+        await settleWithin(lateResumeStoreFlushCompleted.promise, 1_000);
         expect(mockResume).not.toHaveBeenCalled();
         expect(sendCount).toBe(2);
-        const resumeStateAfterLateSend = await loadSessionResumeState(resumeStatePath);
-        expect(resumeStateAfterLateSend?.lifecycle).toBe(
+        const resumeStoreAfterLateSend = await loadSessionResumeStore(resumeStorePath);
+        expect(resumeStoreAfterLateSend?.lifecycle).toBe(
           shutdownMode === 'operator /close' ? 'closed' : 'interrupted',
         );
-        expect(resumeStateAfterLateSend?.harnessSocketPath).toBeUndefined();
+        expect(resumeStoreAfterLateSend?.harnessSocketPath).toBeUndefined();
       } finally {
         finishDispatch.resolve();
         shutdown.abort();
@@ -1494,14 +1494,14 @@ describe('runConductorSession resume / shutdown', () => {
       });
 
       try {
-        const resumeStatePath = sessionResumeStorePath({
+        const resumeStorePath = sessionResumeStorePath({
           repoRoot,
           conductorAgentId: 'agent-test',
         });
         await vi.waitFor(async () => {
-          expect((await loadSessionResumeState(resumeStatePath))?.harnessSocketPath).toBeTruthy();
+          expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath).toBeTruthy();
         });
-        const socketPath = (await loadSessionResumeState(resumeStatePath))?.harnessSocketPath;
+        const socketPath = (await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath;
         const storePath = openQuestionsStorePath({
           repoRoot,
           conductorAgentId: 'agent-test',
@@ -1557,9 +1557,9 @@ describe('runConductorSession resume / shutdown', () => {
         expect(sendCount).toBe(2);
         expect(mockResume).not.toHaveBeenCalled();
         const persistedStore = await loadOpenQuestionsStore(storePath);
-        const persistedResumeState = await loadSessionResumeState(resumeStatePath);
+        const persistedResumeStore = await loadSessionResumeStore(resumeStorePath);
         expect(persistedStore?.openQuestions[0]?.status).toBe('answered');
-        expect(persistedResumeState?.openQuestions).toEqual(
+        expect(persistedResumeStore?.openQuestions).toEqual(
           persistedStore?.openQuestions,
         );
       } finally {
@@ -1631,14 +1631,14 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     try {
-      const resumeStatePath = sessionResumeStorePath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
       await vi.waitFor(async () => {
-        expect((await loadSessionResumeState(resumeStatePath))?.harnessSocketPath).toBeTruthy();
+        expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath).toBeTruthy();
       });
-      const socketPath = (await loadSessionResumeState(resumeStatePath))?.harnessSocketPath;
+      const socketPath = (await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath;
       const storePath = openQuestionsStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
@@ -1677,7 +1677,7 @@ describe('runConductorSession resume / shutdown', () => {
         id: questionId,
         status: 'open',
       });
-      expect((await loadSessionResumeState(resumeStatePath))?.openQuestions[0]).toMatchObject({
+      expect((await loadSessionResumeStore(resumeStorePath))?.openQuestions[0]).toMatchObject({
         id: questionId,
         status: 'open',
       });
@@ -1708,10 +1708,10 @@ describe('runConductorSession resume / shutdown', () => {
     });
     mockSend.mockImplementationOnce(async () => {
       await conductorTools!.register_github_watch!.execute({ prNumber: 354 });
-      const resumeState = await loadSessionResumeState(
+      const resumeStore = await loadSessionResumeStore(
         sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       );
-      expect(resumeState?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+      expect(resumeStore?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
         registeredAt: expect.any(String),
         kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
       });
@@ -1734,28 +1734,28 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(conductorTools?.register_github_watch).toBeDefined();
     expect(conductorTools?.unregister_github_watch).toBeDefined();
-    const resumeState = await loadSessionResumeState(
+    const resumeStore = await loadSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
-    expect(resumeState?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+    expect(resumeStore?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
       registeredAt: expect.any(String),
       kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
     });
   });
 
-  it('retries registration persistence after a session resume state flush failure', async () => {
-    const resumeStatePath = sessionResumeStorePath({
+  it('retries registration persistence after a session resume store flush failure', async () => {
+    const resumeStorePath = sessionResumeStorePath({
       repoRoot,
       conductorAgentId: 'agent-test',
     });
-    let failResumeStateFlush = false;
-    const persistResumeState = sessionResumeStateModule.saveSessionResumeState;
-    vi.spyOn(sessionResumeStateModule, 'saveSessionResumeState').mockImplementation(
-      async (path, resumeState) => {
-        if (failResumeStateFlush && path === resumeStatePath) {
-          throw new Error('simulated session resume state flush failure');
+    let failResumeStoreFlush = false;
+    const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
+    vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
+      async (path, resumeStore) => {
+        if (failResumeStoreFlush && path === resumeStorePath) {
+          throw new Error('simulated session resume store flush failure');
         }
-        await persistResumeState(path, resumeState);
+        await persistResumeStore(path, resumeStore);
       },
     );
 
@@ -1771,14 +1771,14 @@ describe('runConductorSession resume / shutdown', () => {
     });
     mockSend.mockImplementationOnce(async () => {
       const register = conductorTools!.register_github_watch!;
-      failResumeStateFlush = true;
+      failResumeStoreFlush = true;
       await expect(register.execute({ prNumber: 354 })).rejects.toThrow(
-        'simulated session resume state flush failure',
+        'simulated session resume store flush failure',
       );
 
-      const resumeStateAfterFailure = await loadSessionResumeState(resumeStatePath);
+      const resumeStoreAfterFailure = await loadSessionResumeStore(resumeStorePath);
       expect(
-        resumeStateAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
+        resumeStoreAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
       ).toBeUndefined();
       const monitor = mockCreateGitHubMonitor.mock.results[0]!
         .value as GitHubMonitor;
@@ -1786,12 +1786,12 @@ describe('runConductorSession resume / shutdown', () => {
         registeredAt: expect.any(String),
       });
 
-      failResumeStateFlush = false;
+      failResumeStoreFlush = false;
       const retryResult = await register.execute({ prNumber: 354 });
       expect(retryResult.structuredContent).toMatchObject({ ok: true });
-      const resumeStateAfterRetry = await loadSessionResumeState(resumeStatePath);
+      const resumeStoreAfterRetry = await loadSessionResumeStore(resumeStorePath);
       expect(
-        resumeStateAfterRetry?.githubMonitor?.explicitPullRequests,
+        resumeStoreAfterRetry?.githubMonitor?.explicitPullRequests,
       ).toEqual(monitor.getCursor().explicitPullRequests);
       expect(monitor.registerPullRequest).toHaveBeenCalledTimes(2);
 
@@ -1815,10 +1815,10 @@ describe('runConductorSession resume / shutdown', () => {
 
   it('unregisters a resumed GitHub watch and preserves its poll cursor in SessionResumeStore', async () => {
     const agentId = 'resume-agent-with-github-watch';
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -1882,28 +1882,28 @@ describe('runConductorSession resume / shutdown', () => {
     await conductorTools!.unregister_github_watch!.execute({ prNumber: 354 });
     expect(unregisterPullRequest).toHaveBeenCalledWith(354);
     await vi.waitFor(async () => {
-      const resumeState = await loadSessionResumeState(
+      const resumeStore = await loadSessionResumeStore(
         sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       );
-      expect(resumeState?.githubMonitor?.explicitPullRequests).toEqual({});
+      expect(resumeStore?.githubMonitor?.explicitPullRequests).toEqual({});
     });
-    const resumeState = await loadSessionResumeState(
+    const resumeStore = await loadSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
     );
-    expect(resumeState?.githubMonitor?.explicitPullRequests).toEqual({});
-    expect(resumeState?.githubMonitor?.pullRequests?.['354']).toEqual({
+    expect(resumeStore?.githubMonitor?.explicitPullRequests).toEqual({});
+    expect(resumeStore?.githubMonitor?.pullRequests?.['354']).toEqual({
       lastReviewId: '10',
     });
   });
 
-  it('retries unregistration persistence after a session resume state flush failure', async () => {
+  it('retries unregistration persistence after a session resume store flush failure', async () => {
     const agentId = 'resume-agent-with-github-watch-retry';
-    const resumeStatePath = sessionResumeStorePath({
+    const resumeStorePath = sessionResumeStorePath({
       repoRoot,
       conductorAgentId: agentId,
     });
-    await saveSessionResumeState(resumeStatePath, {
-      version: SESSION_RESUME_STATE_VERSION,
+    await saveSessionResumeStore(resumeStorePath, {
+      version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: agentId,
       issueUrl: TEST_ISSUE.url,
       repoRoot,
@@ -1923,14 +1923,14 @@ describe('runConductorSession resume / shutdown', () => {
       updatedAt: 0,
     });
 
-    let failResumeStateFlush = false;
-    const persistResumeState = sessionResumeStateModule.saveSessionResumeState;
-    vi.spyOn(sessionResumeStateModule, 'saveSessionResumeState').mockImplementation(
-      async (path, resumeState) => {
-        if (failResumeStateFlush && path === resumeStatePath) {
-          throw new Error('simulated session resume state flush failure');
+    let failResumeStoreFlush = false;
+    const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
+    vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
+      async (path, resumeStore) => {
+        if (failResumeStoreFlush && path === resumeStorePath) {
+          throw new Error('simulated session resume store flush failure');
         }
-        await persistResumeState(path, resumeState);
+        await persistResumeStore(path, resumeStore);
       },
     );
 
@@ -1946,27 +1946,27 @@ describe('runConductorSession resume / shutdown', () => {
     });
     mockSend.mockImplementationOnce(async () => {
       const unregister = conductorTools!.unregister_github_watch!;
-      failResumeStateFlush = true;
+      failResumeStoreFlush = true;
       await expect(unregister.execute({ prNumber: 354 })).rejects.toThrow(
-        'simulated session resume state flush failure',
+        'simulated session resume store flush failure',
       );
 
-      const resumeStateAfterFailure = await loadSessionResumeState(resumeStatePath);
+      const resumeStoreAfterFailure = await loadSessionResumeStore(resumeStorePath);
       expect(
-        resumeStateAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
+        resumeStoreAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
       ).toMatchObject({ registeredAt: '2026-09-07T05:00:00.000Z' });
       const monitor = mockCreateGitHubMonitor.mock.results[0]!
         .value as GitHubMonitor;
       expect(monitor.getCursor().explicitPullRequests).toEqual({});
 
-      failResumeStateFlush = false;
+      failResumeStoreFlush = false;
       const retryResult = await unregister.execute({ prNumber: 354 });
       expect(retryResult.structuredContent).toMatchObject({ ok: true });
-      const resumeStateAfterRetry = await loadSessionResumeState(resumeStatePath);
-      expect(resumeStateAfterRetry?.githubMonitor?.explicitPullRequests).toEqual(
+      const resumeStoreAfterRetry = await loadSessionResumeStore(resumeStorePath);
+      expect(resumeStoreAfterRetry?.githubMonitor?.explicitPullRequests).toEqual(
         monitor.getCursor().explicitPullRequests,
       );
-      expect(resumeStateAfterRetry?.githubMonitor?.pullRequests?.['354']).toEqual({
+      expect(resumeStoreAfterRetry?.githubMonitor?.pullRequests?.['354']).toEqual({
         lastReviewId: '10',
       });
       expect(monitor.unregisterPullRequest).toHaveBeenCalledTimes(2);
@@ -2035,14 +2035,14 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     try {
-      const resumeStatePath = sessionResumeStorePath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
       await vi.waitFor(async () => {
-        expect((await loadSessionResumeState(resumeStatePath))?.harnessSocketPath).toBeTruthy();
+        expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath).toBeTruthy();
       });
-      const socketPath = (await loadSessionResumeState(resumeStatePath))!.harnessSocketPath!;
+      const socketPath = (await loadSessionResumeStore(resumeStorePath))!.harnessSocketPath!;
       const observation = await sendOpenQuestionControlRequest<{
         sequence: number;
         openQuestions: Array<{ id: string; status: string }>;
@@ -2468,14 +2468,14 @@ describe('runConductorSession resume / shutdown', () => {
       shutdown.abort();
       await sessionPromise;
 
-      const resumeState = await loadSessionResumeState(
+      const resumeStore = await loadSessionResumeStore(
         sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       );
-      expect(resumeState?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+      expect(resumeStore?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
         registeredAt: expect.any(String),
         kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
       });
-      expect(resumeState?.githubMonitor?.pullRequests?.['354']).toMatchObject({
+      expect(resumeStore?.githubMonitor?.pullRequests?.['354']).toMatchObject({
         lastReviewId: '2',
         lastReviewCommentId: '2',
         lastAggregateBySha: {
@@ -2793,17 +2793,17 @@ describe('runConductorSession resume / shutdown', () => {
     const result = await sessionPromise;
     expect(result.stopReason).toBe('interrupted');
 
-    const resumeState = await loadSessionResumeState(
+    const resumeStore = await loadSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
-    expect(resumeState).toMatchObject({
+    expect(resumeStore).toMatchObject({
       conductorAgentId: 'agent-test',
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       sequence: 0,
     });
-    expect(resumeState?.updatedAt).toBeGreaterThan(0);
-    expect(resumeState?.lifecycle).toBe('interrupted');
+    expect(resumeStore?.updatedAt).toBeGreaterThan(0);
+    expect(resumeStore?.lifecycle).toBe('interrupted');
   });
 
   it.each([
@@ -2836,11 +2836,11 @@ describe('runConductorSession resume / shutdown', () => {
       operatorApi!.submit(command);
       await sessionPromise;
 
-      const resumeState = await loadSessionResumeState(
+      const resumeStore = await loadSessionResumeStore(
         sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       );
-      expect(resumeState?.lifecycle).toBe(lifecycle);
-      expect(resumeState?.updatedAt).toBeGreaterThan(0);
+      expect(resumeStore?.lifecycle).toBe(lifecycle);
+      expect(resumeStore?.updatedAt).toBeGreaterThan(0);
     },
   );
 
@@ -2861,7 +2861,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     await expect(
-      loadSessionResumeState(
+      loadSessionResumeStore(
         sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       ),
     ).resolves.toMatchObject({ lifecycle: 'unknown' });
@@ -2882,12 +2882,12 @@ describe('runConductorSession resume / shutdown', () => {
       });
       // Make the final YAML rename fail after the temporary file is written.
       await mkdir(openQuestionsPath, { recursive: true });
-      const resumeStatePath = sessionResumeStorePath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
-      await saveSessionResumeState(resumeStatePath, {
-        version: SESSION_RESUME_STATE_VERSION,
+      await saveSessionResumeStore(resumeStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: 'agent-test',
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -2906,7 +2906,7 @@ describe('runConductorSession resume / shutdown', () => {
         workers: {},
         updatedAt: 1,
       });
-      const resumeStateBeforeFlush = await loadSessionResumeState(resumeStatePath);
+      const resumeStoreBeforeFlush = await loadSessionResumeStore(resumeStorePath);
 
       mockSend.mockResolvedValue({
         runId: 'run-1',
@@ -2967,17 +2967,17 @@ describe('runConductorSession resume / shutdown', () => {
         (event) =>
           event.type === 'harness.warning' &&
           event.message.includes(
-            'Open Question YAML / session resume state を保存できませんでした',
+            'Open Question YAML / session resume store を保存できませんでした',
           ),
       );
       // recordSendComplete schedules one flush and teardown performs another.
       expect(persistenceWarnings.length).toBeGreaterThanOrEqual(2);
-      const resumeStateAfterFlush = await loadSessionResumeState(resumeStatePath);
-      expect(resumeStateAfterFlush).toMatchObject({
-        openQuestions: resumeStateBeforeFlush?.openQuestions,
-        sequence: resumeStateBeforeFlush?.sequence,
+      const resumeStoreAfterFlush = await loadSessionResumeStore(resumeStorePath);
+      expect(resumeStoreAfterFlush).toMatchObject({
+        openQuestions: resumeStoreBeforeFlush?.openQuestions,
+        sequence: resumeStoreBeforeFlush?.sequence,
       });
-      expect(resumeStateAfterFlush?.updatedAt).toBe(resumeStateBeforeFlush?.updatedAt);
+      expect(resumeStoreAfterFlush?.updatedAt).toBe(resumeStoreBeforeFlush?.updatedAt);
     },
   );
 
@@ -3406,16 +3406,16 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     try {
-      const resumeStatePath = sessionResumeStorePath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
       await vi.waitFor(async () => {
-        const resumeState = await loadSessionResumeState(resumeStatePath);
-        expect(resumeState?.harnessSocketPath).toBeTruthy();
+        const resumeStore = await loadSessionResumeStore(resumeStorePath);
+        expect(resumeStore?.harnessSocketPath).toBeTruthy();
       });
       await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
-      const socketPath = (await loadSessionResumeState(resumeStatePath))?.harnessSocketPath;
+      const socketPath = (await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath;
 
       await expect(
         sendOpenQuestionControlRequest<{ queued: true; delivery: string }>(
@@ -3515,14 +3515,14 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     try {
-      const resumeStatePath = sessionResumeStorePath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
       await vi.waitFor(async () => {
-        expect((await loadSessionResumeState(resumeStatePath))?.harnessSocketPath).toBeTruthy();
+        expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath).toBeTruthy();
       });
-      const socketPath = (await loadSessionResumeState(resumeStatePath))?.harnessSocketPath;
+      const socketPath = (await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath;
       expect(socketPath).toBeTruthy();
 
       const questionsPath = openQuestionsStorePath({
@@ -3712,14 +3712,14 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockClose).toHaveBeenCalledOnce();
     expect(emitted).toContainEqual({
       type: 'harness.teardown.phase',
-      phase: 'flushSessionResumeState',
+      phase: 'flushSessionResumeStore',
     });
     expect(emitted).toContainEqual({
       type: 'harness.teardown.phase',
       phase: 'conductor',
     });
     await expect(
-      loadSessionResumeState(
+      loadSessionResumeStore(
         sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       ),
     ).resolves.toMatchObject({
@@ -3828,7 +3828,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(removeSpy).not.toHaveBeenCalled();
     await expect(access(path)).resolves.toBeUndefined();
     await expect(
-      loadSessionResumeState(
+      loadSessionResumeStore(
         sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       ),
     ).resolves.toMatchObject({
@@ -3995,11 +3995,11 @@ describe('runConductorSession resume / shutdown', () => {
     expect(firstBridge.close).toHaveBeenCalledOnce();
     expect(removeSpy).not.toHaveBeenCalled();
     await expect(access(path)).resolves.toBeUndefined();
-    const resumeStatePath = sessionResumeStorePath({
+    const resumeStorePath = sessionResumeStorePath({
       repoRoot,
       conductorAgentId: 'agent-test',
     });
-    await expect(loadSessionResumeState(resumeStatePath)).resolves.toMatchObject({
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
       workers: {
         implementer: {
           acpSessionId: 'worker-session',
@@ -4154,12 +4154,12 @@ describe('runConductorSession resume / shutdown', () => {
     );
     expect(operatorApi).toBeDefined();
     expect(operatorApi!.submit('/close')).toBe(false);
-    const resumeStatePath = sessionResumeStorePath({
+    const resumeStorePath = sessionResumeStorePath({
       repoRoot,
       conductorAgentId: 'agent-test',
     });
     await vi.waitFor(async () => {
-      await expect(loadSessionResumeState(resumeStatePath)).resolves.toMatchObject({
+      await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
         githubMonitor: {
           pendingUpdates: payload.items,
         },
@@ -4178,7 +4178,7 @@ describe('runConductorSession resume / shutdown', () => {
     closeGate.resolve();
     const result = await sessionPromise;
     expect(result.stopReason).toBe('completed');
-    await expect(loadSessionResumeState(resumeStatePath)).resolves.toMatchObject({
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
       githubMonitor: {
         pendingUpdates: payload.items,
       },

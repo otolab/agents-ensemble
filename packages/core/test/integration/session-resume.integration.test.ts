@@ -21,8 +21,8 @@ import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import type { Profile } from '../../src/profile/types.js';
 import {
-  saveSessionResumeState,
-  SESSION_RESUME_STATE_VERSION,
+  saveSessionResumeStore,
+  SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
 } from '../../src/session/session-resume-store.js';
 import {
@@ -118,7 +118,7 @@ describe('session resume integration', () => {
     vi.restoreAllMocks();
   });
 
-  it('restores saved resume state profile, open questions, and worker session/load on resume', async () => {
+  it('restores saved resume store profile, open questions, and worker session/load on resume', async () => {
     const bridge = await createInProcessAcpBridge();
     const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
     const promptSessionSpy = vi.spyOn(bridge, 'promptSession');
@@ -150,24 +150,24 @@ describe('session resume integration', () => {
     loadSessionSpy.mockClear();
     promptSessionSpy.mockClear();
 
-    const resumeStateProfile: Profile = {
+    const resumeStoreProfile: Profile = {
       ...PING_PROFILE_BASE,
-      // Use a different worker name to prove that the saved resume state profile, not
+      // Use a different worker name to prove that the saved resume store profile, not
       // the profile supplied by the resumed CLI invocation, drives resume.
       workers: [{ name: 'resumed-ping', kind: 'ping' }],
     };
 
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
         conductorAgentId: RESUME_AGENT_ID,
       }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
-        profile: resumeStateProfile,
+        profile: resumeStoreProfile,
         openQuestions: [
           {
             id: 'inq-resume-1',
@@ -284,13 +284,13 @@ describe('session resume integration', () => {
   });
 
   it('prefers open questions YAML over the SessionResumeStore snapshot when resuming', async () => {
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
         conductorAgentId: RESUME_AGENT_ID,
       }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -383,13 +383,13 @@ describe('session resume integration', () => {
       repoRoot,
       conductorAgentId: RESUME_AGENT_ID,
     });
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
         conductorAgentId: RESUME_AGENT_ID,
       }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -464,13 +464,13 @@ describe('session resume integration', () => {
     );
     await closeWorkerAcpSession(attached.session);
 
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
         conductorAgentId: RESUME_AGENT_ID,
       }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -861,13 +861,13 @@ describe('session resume integration', () => {
     await closeWorkerAcpSession(attached.session);
     loadSessionSpy.mockClear();
 
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
         conductorAgentId: RESUME_AGENT_ID,
       }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -918,7 +918,7 @@ describe('session resume integration', () => {
     );
   });
 
-  it('fails worker attach on resume when saved resume state acpCwd mismatches profile', async () => {
+  it('fails worker attach on resume when saved resume store acpCwd mismatches profile', async () => {
     const docsDir = join(repoRoot, 'docs-repo');
     await mkdir(docsDir, { recursive: true });
     const bridge = await createInProcessAcpBridge();
@@ -960,13 +960,13 @@ describe('session resume integration', () => {
     const firstDispatch = await runAttachedWorkerPrompt(attached, prompt);
     await closeWorkerAcpSession(attached.session);
 
-    await saveSessionResumeState(
+    await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
         conductorAgentId: RESUME_AGENT_ID,
       }),
       {
-        version: SESSION_RESUME_STATE_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,

@@ -217,7 +217,7 @@ export function assertAcpSpawnMatchesResume(input: {
 
   const label = input.workerName ? `Worker "${input.workerName}"` : 'Worker';
   throw new Error(
-    `${label} resume ACP spawn mismatch: saved resume state has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}`,
+    `${label} resume ACP spawn mismatch: saved resume store has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}`,
   );
 }
 

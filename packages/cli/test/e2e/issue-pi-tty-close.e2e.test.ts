@@ -553,15 +553,15 @@ globalThis.fetch = async (input, init) => {
       expect(firstRun.summary.stopReason).toBe('completed');
       expect(model.getRequests()).toBeGreaterThanOrEqual(1);
 
-      const resumeStateDir = join(repoRoot, '.ensemble', 'sessions');
-      const resumeStateNames = (await readdir(resumeStateDir)).filter((name) =>
+      const resumeStoreDir = join(repoRoot, '.ensemble', 'sessions');
+      const resumeStoreNames = (await readdir(resumeStoreDir)).filter((name) =>
         name.endsWith('.json'),
       );
-      expect(resumeStateNames).toEqual([`${firstRun.summary.agentId}.json`]);
-      const resumeState = JSON.parse(
-        await readFile(join(resumeStateDir, resumeStateNames[0]!), 'utf8'),
+      expect(resumeStoreNames).toEqual([`${firstRun.summary.agentId}.json`]);
+      const resumeStore = JSON.parse(
+        await readFile(join(resumeStoreDir, resumeStoreNames[0]!), 'utf8'),
       ) as { conductorAgentId: string; conductorBackend: string };
-      expect(resumeState).toMatchObject({
+      expect(resumeStore).toMatchObject({
         conductorAgentId: firstRun.summary.agentId,
         conductorBackend: 'pi',
       });

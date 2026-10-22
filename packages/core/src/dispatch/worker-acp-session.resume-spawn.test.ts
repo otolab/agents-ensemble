@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { openWorkerAcpSession } from './worker-acp-session.js';
 
 describe('openWorkerAcpSession resume spawn validation', () => {
-  it('fails attach when saved resume state acpSpawn mismatches current profile', async () => {
+  it('fails attach when saved resume store acpSpawn mismatches current profile', async () => {
     await expect(
       openWorkerAcpSession({
         issueUrl: 'https://github.com/org/repo/issues/1',

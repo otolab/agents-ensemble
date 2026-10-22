@@ -6,10 +6,10 @@ import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import type { ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 
-export const SESSION_RESUME_STATE_VERSION = 1;
+export const SESSION_RESUME_STORE_VERSION = 1;
 
-/** @deprecated Use SESSION_RESUME_STATE_VERSION; retained until the next major release. */
-export const SESSION_SIDECAR_VERSION = SESSION_RESUME_STATE_VERSION;
+/** @deprecated Use SESSION_RESUME_STORE_VERSION; supported for one release only. */
+export const SESSION_SIDECAR_VERSION = SESSION_RESUME_STORE_VERSION;
 
 export type SessionLifecycle =
   | 'closed'
@@ -17,22 +17,22 @@ export type SessionLifecycle =
   | 'interrupted'
   | 'unknown';
 
-export class SessionResumeStateNotFoundError extends Error {
-  readonly code: string = 'SESSION_RESUME_STATE_NOT_FOUND';
+export class SessionResumeStoreNotFoundError extends Error {
+  readonly code: string = 'SESSION_RESUME_STORE_NOT_FOUND';
 
   constructor(
     public readonly conductorAgentId: string,
     public readonly path: string,
   ) {
     super(
-      `Session resume state not found for resume (agentId=${conductorAgentId}, path=${path})`,
+      `Session resume store not found for resume (agentId=${conductorAgentId}, path=${path})`,
     );
-    this.name = 'SessionResumeStateNotFoundError';
+    this.name = 'SessionResumeStoreNotFoundError';
   }
 }
 
-/** @deprecated Use SessionResumeStateNotFoundError; retained until the next major release. */
-export class SessionSidecarNotFoundError extends SessionResumeStateNotFoundError {
+/** @deprecated Use SessionResumeStoreNotFoundError; supported for one release only. */
+export class SessionSidecarNotFoundError extends SessionResumeStoreNotFoundError {
   override readonly code = 'SESSION_SIDECAR_NOT_FOUND';
 
   constructor(conductorAgentId: string, path: string) {
@@ -41,10 +41,10 @@ export class SessionSidecarNotFoundError extends SessionResumeStateNotFoundError
   }
 }
 
-/** @deprecated Use WorkerSessionResumeState; retained until the next major release. */
-export type WorkerSessionSidecar = WorkerSessionResumeState;
+/** @deprecated Use WorkerSessionResumeStore; supported for one release only. */
+export type WorkerSessionSidecar = WorkerSessionResumeStore;
 
-export interface WorkerSessionResumeState {
+export interface WorkerSessionResumeStore {
   acpSessionId: string;
   /** ACP `session/new` / `session/load` に渡した cwd（resume 検証用）。 */
   acpCwd?: string;
@@ -52,8 +52,8 @@ export interface WorkerSessionResumeState {
   acpSpawn?: AcpSpawnFingerprint;
 }
 
-export interface SessionResumeState {
-  version: typeof SESSION_RESUME_STATE_VERSION;
+export interface SessionResumeStore {
+  version: typeof SESSION_RESUME_STORE_VERSION;
   conductorAgentId: string;
   /** 起動時に選択した conductor backend。旧形式の欠落値は cursor。 */
   conductorBackend?: ConductorBackend;
@@ -67,7 +67,7 @@ export interface SessionResumeState {
   profilePath?: string;
   openQuestions: OpenQuestion[];
   sequence: number;
-  workers: Record<string, WorkerSessionResumeState>;
+  workers: Record<string, WorkerSessionResumeStore>;
   /** GitHub 監視カーソルと未配送更新（#39）。 */
   githubMonitor?: GitHubMonitorCursor;
   /** Harness-resolved MCP map digest used to reject unsafe resume. */
@@ -78,23 +78,23 @@ export interface SessionResumeState {
   updatedAt: number;
 }
 
-/** @deprecated Use SessionResumeState; retained until the next major release. */
-export type SessionSidecar = SessionResumeState;
+/** @deprecated Use SessionResumeStore; supported for one release only. */
+export type SessionSidecar = SessionResumeStore;
 
-export interface FindLatestSessionResumeStateInput {
+export interface FindLatestSessionResumeStoreInput {
   repoRoot: string;
   issueUrl: string;
 }
 
-/** @deprecated Use FindLatestSessionResumeStateInput; retained until the next major release. */
-export type FindLatestSessionSidecarInput = FindLatestSessionResumeStateInput;
+/** @deprecated Use FindLatestSessionResumeStoreInput; supported for one release only. */
+export type FindLatestSessionSidecarInput = FindLatestSessionResumeStoreInput;
 
 export interface SessionResumeStorePathOptions {
   repoRoot: string;
   conductorAgentId: string;
 }
 
-/** @deprecated Use SessionResumeStorePathOptions; retained until the next major release. */
+/** @deprecated Use SessionResumeStorePathOptions; supported for one release only. */
 export type SessionSidecarPathOptions = SessionResumeStorePathOptions;
 
 export function sessionResumeStoreDir(repoRoot: string): string {
@@ -105,12 +105,12 @@ export function sessionResumeStorePath(options: SessionResumeStorePathOptions): 
   return join(sessionResumeStoreDir(options.repoRoot), `${options.conductorAgentId}.json`);
 }
 
-export async function loadSessionResumeState(
+export async function loadSessionResumeStore(
   path: string,
-): Promise<SessionResumeState | undefined> {
+): Promise<SessionResumeStore | undefined> {
   try {
     const raw = await readFile(path, 'utf8');
-    return parseSessionResumeState(JSON.parse(raw));
+    return parseSessionResumeStore(JSON.parse(raw));
   } catch (error) {
     if (isEnoent(error)) return undefined;
     throw error;
@@ -118,27 +118,27 @@ export async function loadSessionResumeState(
 }
 
 /** `resumeAgentId` 指定時に SessionResumeStore が無い場合は起動失敗とする。 */
-export async function requireSessionResumeStateForResume(input: {
+export async function requireSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
-}): Promise<SessionResumeState> {
+}): Promise<SessionResumeStore> {
   const path = sessionResumeStorePath(input);
-  const resumeState = await loadSessionResumeState(path);
-  if (!resumeState) {
-    throw new SessionResumeStateNotFoundError(input.conductorAgentId, path);
+  const resumeStore = await loadSessionResumeStore(path);
+  if (!resumeStore) {
+    throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
-  return resumeState;
+  return resumeStore;
 }
 
-/** @deprecated Use requireSessionResumeStateForResume; retained until the next major release. */
+/** @deprecated Use requireSessionResumeStoreForResume; supported for one release only. */
 export async function requireSessionSidecarForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
 }): Promise<SessionSidecar> {
   try {
-    return await requireSessionResumeStateForResume(input);
+    return await requireSessionResumeStoreForResume(input);
   } catch (error) {
-    if (error instanceof SessionResumeStateNotFoundError) {
+    if (error instanceof SessionResumeStoreNotFoundError) {
       throw new SessionSidecarNotFoundError(
         input.conductorAgentId,
         sessionResumeStorePath(input),
@@ -148,12 +148,12 @@ export async function requireSessionSidecarForResume(input: {
   }
 }
 
-export async function saveSessionResumeState(
+export async function saveSessionResumeStore(
   path: string,
-  resumeState: SessionResumeState,
+  resumeStore: SessionResumeStore,
 ): Promise<void> {
-  const parsed = parseSessionResumeState({
-    ...resumeState,
+  const parsed = parseSessionResumeStore({
+    ...resumeStore,
     updatedAt: Date.now(),
   });
   const directory = dirname(path);
@@ -169,12 +169,12 @@ export async function saveSessionResumeState(
   await rename(tempPath, path);
 }
 
-/** @deprecated Use saveSessionResumeState; retained until the next major release. */
-export const saveSessionSidecar = saveSessionResumeState;
+/** @deprecated Use saveSessionResumeStore; supported for one release only. */
+export const saveSessionSidecar = saveSessionResumeStore;
 
-export async function listSessionResumeStates(
+export async function listSessionResumeStores(
   repoRoot: string,
-): Promise<SessionResumeState[]> {
+): Promise<SessionResumeStore[]> {
   const dir = sessionResumeStoreDir(repoRoot);
   let entries: string[];
   try {
@@ -184,40 +184,40 @@ export async function listSessionResumeStates(
     throw error;
   }
 
-  const resumeStates: SessionResumeState[] = [];
+  const resumeStores: SessionResumeStore[] = [];
   for (const entry of entries) {
     if (!entry.endsWith('.json') || entry.endsWith('.tmp')) continue;
-    const resumeState = await loadSessionResumeState(join(dir, entry));
-    if (resumeState) resumeStates.push(resumeState);
+    const resumeStore = await loadSessionResumeStore(join(dir, entry));
+    if (resumeStore) resumeStores.push(resumeStore);
   }
-  return resumeStates;
+  return resumeStores;
 }
 
-/** @deprecated Use listSessionResumeStates; retained until the next major release. */
-export const listSessionSidecars = listSessionResumeStates;
+/** @deprecated Use listSessionResumeStores; supported for one release only. */
+export const listSessionSidecars = listSessionResumeStores;
 
 /** 同一 Issue の SessionResumeStore のうち `updatedAt` が最新のものを返す。 */
-export async function findLatestSessionResumeStateForIssue(
-  input: FindLatestSessionResumeStateInput,
-): Promise<SessionResumeState | undefined> {
-  const matches = (await listSessionResumeStates(input.repoRoot)).filter(
-    (resumeState) =>
-      resumeState.issueUrl === input.issueUrl &&
-      resumeState.repoRoot === input.repoRoot,
+export async function findLatestSessionResumeStoreForIssue(
+  input: FindLatestSessionResumeStoreInput,
+): Promise<SessionResumeStore | undefined> {
+  const matches = (await listSessionResumeStores(input.repoRoot)).filter(
+    (resumeStore) =>
+      resumeStore.issueUrl === input.issueUrl &&
+      resumeStore.repoRoot === input.repoRoot,
   );
   if (matches.length === 0) return undefined;
 
-  return matches.reduce((latest, resumeState) =>
-    resumeState.updatedAt > latest.updatedAt ? resumeState : latest,
+  return matches.reduce((latest, resumeStore) =>
+    resumeStore.updatedAt > latest.updatedAt ? resumeStore : latest,
   );
 }
 
-/** @deprecated Use findLatestSessionResumeStateForIssue; retained until the next major release. */
+/** @deprecated Use findLatestSessionResumeStoreForIssue; supported for one release only. */
 export const findLatestSessionSidecarForIssue =
-  findLatestSessionResumeStateForIssue;
+  findLatestSessionResumeStoreForIssue;
 
-export function assertSessionResumeStateMatches(
-  resumeState: SessionResumeState,
+export function assertSessionResumeStoreMatches(
+  resumeStore: SessionResumeStore,
   input: {
     issueUrl: string;
     repoRoot: string;
@@ -229,104 +229,104 @@ export function assertSessionResumeStateMatches(
     mcpConfigConfigured?: boolean;
   },
 ): void {
-  if (resumeState.conductorAgentId !== input.conductorAgentId) {
+  if (resumeStore.conductorAgentId !== input.conductorAgentId) {
     throw new Error(
-      `Session resume state conductorAgentId mismatch: ${resumeState.conductorAgentId} !== ${input.conductorAgentId}`,
+      `Session resume store conductorAgentId mismatch: ${resumeStore.conductorAgentId} !== ${input.conductorAgentId}`,
     );
   }
-  if (resumeState.issueUrl !== input.issueUrl) {
+  if (resumeStore.issueUrl !== input.issueUrl) {
     throw new Error(
-      `Session resume state issueUrl mismatch: ${resumeState.issueUrl} !== ${input.issueUrl}`,
+      `Session resume store issueUrl mismatch: ${resumeStore.issueUrl} !== ${input.issueUrl}`,
     );
   }
-  if (resumeState.repoRoot !== input.repoRoot) {
+  if (resumeStore.repoRoot !== input.repoRoot) {
     throw new Error(
-      `Session resume state repoRoot mismatch: ${resumeState.repoRoot} !== ${input.repoRoot}`,
+      `Session resume store repoRoot mismatch: ${resumeStore.repoRoot} !== ${input.repoRoot}`,
     );
   }
   if (
     input.conductorBackend !== undefined &&
-    (resumeState.conductorBackend ?? 'cursor') !== input.conductorBackend
+    (resumeStore.conductorBackend ?? 'cursor') !== input.conductorBackend
   ) {
     throw new Error(
-      `Session resume state conductorBackend mismatch: ${resumeState.conductorBackend ?? 'cursor'} !== ${input.conductorBackend}`,
+      `Session resume store conductorBackend mismatch: ${resumeStore.conductorBackend ?? 'cursor'} !== ${input.conductorBackend}`,
     );
   }
   if (input.mcpConfigDigest !== undefined) {
-    if (resumeState.mcpConfigDigest === undefined) {
+    if (resumeStore.mcpConfigDigest === undefined) {
       if (input.mcpConfigConfigured) {
         throw new Error(
-          'Session resume state MCP config digest missing; cannot safely resume with MCP configuration.',
+          'Session resume store MCP config digest missing; cannot safely resume with MCP configuration.',
         );
       }
-    } else if (resumeState.mcpConfigDigest !== input.mcpConfigDigest) {
+    } else if (resumeStore.mcpConfigDigest !== input.mcpConfigDigest) {
       throw new Error(
-        `Session resume state MCP config digest mismatch: ${resumeState.mcpConfigDigest} !== ${input.mcpConfigDigest}`,
+        `Session resume store MCP config digest mismatch: ${resumeStore.mcpConfigDigest} !== ${input.mcpConfigDigest}`,
       );
     }
   }
 }
 
-/** @deprecated Use assertSessionResumeStateMatches; retained until the next major release. */
-export const assertSessionSidecarMatches = assertSessionResumeStateMatches;
+/** @deprecated Use assertSessionResumeStoreMatches; supported for one release only. */
+export const assertSessionSidecarMatches = assertSessionResumeStoreMatches;
 
-/** @deprecated Use sessionResumeStoreDir; retained until the next major release. */
+/** @deprecated Use sessionResumeStoreDir; supported for one release only. */
 export const sessionSidecarDir = sessionResumeStoreDir;
 
-/** @deprecated Use sessionResumeStorePath; retained until the next major release. */
+/** @deprecated Use sessionResumeStorePath; supported for one release only. */
 export const sessionSidecarPath = sessionResumeStorePath;
 
-/** @deprecated Use loadSessionResumeState; retained until the next major release. */
-export const loadSessionSidecar = loadSessionResumeState;
+/** @deprecated Use loadSessionResumeStore; supported for one release only. */
+export const loadSessionSidecar = loadSessionResumeStore;
 
-function parseSessionResumeState(value: unknown): SessionResumeState {
+function parseSessionResumeStore(value: unknown): SessionResumeStore {
   if (!value || typeof value !== 'object') {
-    throw new Error('Invalid session resume state: not an object');
+    throw new Error('Invalid session resume store: not an object');
   }
   const record = value as Record<string, unknown>;
-  if (record.version !== SESSION_RESUME_STATE_VERSION) {
-    throw new Error(`Unsupported session resume state version: ${record.version}`);
+  if (record.version !== SESSION_RESUME_STORE_VERSION) {
+    throw new Error(`Unsupported session resume store version: ${record.version}`);
   }
   if (typeof record.conductorAgentId !== 'string') {
-    throw new Error('Invalid session resume state: conductorAgentId');
+    throw new Error('Invalid session resume store: conductorAgentId');
   }
   const conductorBackend = parseConductorBackend(record.conductorBackend);
   if (typeof record.issueUrl !== 'string') {
-    throw new Error('Invalid session resume state: issueUrl');
+    throw new Error('Invalid session resume store: issueUrl');
   }
   if (typeof record.repoRoot !== 'string') {
-    throw new Error('Invalid session resume state: repoRoot');
+    throw new Error('Invalid session resume store: repoRoot');
   }
   if (!record.profile || typeof record.profile !== 'object') {
-    throw new Error('Invalid session resume state: profile');
+    throw new Error('Invalid session resume store: profile');
   }
   if (!Array.isArray(record.openQuestions)) {
-    throw new Error('Invalid session resume state: openQuestions');
+    throw new Error('Invalid session resume store: openQuestions');
   }
   if (typeof record.sequence !== 'number') {
-    throw new Error('Invalid session resume state: sequence');
+    throw new Error('Invalid session resume store: sequence');
   }
   if (!record.workers || typeof record.workers !== 'object') {
-    throw new Error('Invalid session resume state: workers');
+    throw new Error('Invalid session resume store: workers');
   }
   if (
     record.mcpConfigDigest !== undefined &&
     typeof record.mcpConfigDigest !== 'string'
   ) {
-    throw new Error('Invalid session resume state: mcpConfigDigest');
+    throw new Error('Invalid session resume store: mcpConfigDigest');
   }
   if (
     record.lazyWorkers !== undefined &&
     typeof record.lazyWorkers !== 'boolean'
   ) {
-    throw new Error('Invalid session resume state: lazyWorkers');
+    throw new Error('Invalid session resume store: lazyWorkers');
   }
   if (
     record.harnessSocketPath !== undefined &&
     (typeof record.harnessSocketPath !== 'string' ||
       record.harnessSocketPath.length === 0)
   ) {
-    throw new Error('Invalid session resume state: harnessSocketPath');
+    throw new Error('Invalid session resume store: harnessSocketPath');
   }
   if (
     record.lifecycle !== undefined &&
@@ -335,7 +335,7 @@ function parseSessionResumeState(value: unknown): SessionResumeState {
     record.lifecycle !== 'interrupted' &&
     record.lifecycle !== 'unknown'
   ) {
-    throw new Error('Invalid session resume state: lifecycle');
+    throw new Error('Invalid session resume store: lifecycle');
   }
   const updatedAt =
     typeof record.updatedAt === 'number' ? record.updatedAt : 0;
@@ -345,16 +345,16 @@ function parseSessionResumeState(value: unknown): SessionResumeState {
     githubMonitor = record.githubMonitor as GitHubMonitorCursor;
   }
 
-  const workers: Record<string, WorkerSessionResumeState> = {};
+  const workers: Record<string, WorkerSessionResumeStore> = {};
   for (const [name, entry] of Object.entries(
     record.workers as Record<string, unknown>,
   )) {
     if (!entry || typeof entry !== 'object') {
-      throw new Error(`Invalid session resume state worker entry: ${name}`);
+      throw new Error(`Invalid session resume store worker entry: ${name}`);
     }
     const worker = entry as Record<string, unknown>;
     if (typeof worker.acpSessionId !== 'string') {
-      throw new Error(`Invalid session resume state worker acpSessionId: ${name}`);
+      throw new Error(`Invalid session resume store worker acpSessionId: ${name}`);
     }
     workers[name] = {
       acpSessionId: worker.acpSessionId,
@@ -366,7 +366,7 @@ function parseSessionResumeState(value: unknown): SessionResumeState {
   }
 
   return {
-    version: SESSION_RESUME_STATE_VERSION,
+    version: SESSION_RESUME_STORE_VERSION,
     conductorAgentId: record.conductorAgentId,
     conductorBackend,
     ...(typeof record.lazyWorkers === 'boolean'
@@ -403,7 +403,7 @@ function parseConductorBackend(value: unknown): ConductorBackend {
   if (value === 'cursor' || value === 'pi') {
     return value;
   }
-  throw new Error('Invalid session resume state: conductorBackend');
+  throw new Error('Invalid session resume store: conductorBackend');
 }
 
 function isEnoent(error: unknown): boolean {
@@ -421,24 +421,24 @@ function parseAcpSpawnFingerprint(
 ): AcpSpawnFingerprint | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (!raw || typeof raw !== 'object') {
-    throw new Error(`Invalid session resume state worker acpSpawn: ${workerName}`);
+    throw new Error(`Invalid session resume store worker acpSpawn: ${workerName}`);
   }
   const record = raw as Record<string, unknown>;
   if (typeof record.preset !== 'string' || typeof record.command !== 'string') {
-    throw new Error(`Invalid session resume state worker acpSpawn: ${workerName}`);
+    throw new Error(`Invalid session resume store worker acpSpawn: ${workerName}`);
   }
   if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== 'string')) {
-    throw new Error(`Invalid session resume state worker acpSpawn args: ${workerName}`);
+    throw new Error(`Invalid session resume store worker acpSpawn args: ${workerName}`);
   }
   let env: Record<string, string> | undefined;
   if (record.env !== undefined) {
     if (!record.env || typeof record.env !== 'object' || Array.isArray(record.env)) {
-      throw new Error(`Invalid session resume state worker acpSpawn env: ${workerName}`);
+      throw new Error(`Invalid session resume store worker acpSpawn env: ${workerName}`);
     }
     env = {};
     for (const [key, value] of Object.entries(record.env)) {
       if (typeof value !== 'string') {
-        throw new Error(`Invalid session resume state worker acpSpawn env.${key}: ${workerName}`);
+        throw new Error(`Invalid session resume store worker acpSpawn env.${key}: ${workerName}`);
       }
       env[key] = value;
     }

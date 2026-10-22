@@ -43,7 +43,7 @@ export function toolCallSnapshotHistoryPath(input: {
 }
 
 /**
- * Read the optional history independently from the required session resume state.
+ * Read the optional history independently from the required session resume store.
  * Invalid history is discarded locally so it cannot prevent session resume.
  */
 export async function loadToolCallSnapshotHistory(input: {

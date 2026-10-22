@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
-  listSessionResumeStates,
+  listSessionResumeStores,
   loadOpenQuestionsStore,
   loadSessionStateStore,
   openQuestionsStorePath,
@@ -14,7 +14,7 @@ import {
   type ConductorJsonValue,
   type ConductorTool,
   type SessionObservationSnapshot,
-  type SessionResumeState,
+  type SessionResumeStore,
 } from '@agents-ensemble/core/operator-runtime';
 import type {
   OperatorDispatchEvent,
@@ -104,10 +104,10 @@ export async function createOperatorWatchPool(
   const pool: OperatorWatchPool = {
     async register(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const resumeState = (await listSessionResumeStates(root)).find(
+      const resumeStore = (await listSessionResumeStores(root)).find(
         (candidate) => candidate.conductorAgentId === id,
       );
-      if (!resumeState) throw new Error(`No saved session found for ${id}.`);
+      if (!resumeStore) throw new Error(`No saved session found for ${id}.`);
       const watch = {
         conductorAgentId: id,
         pollIntervalMs: parseBoundedInteger(
@@ -165,19 +165,19 @@ export async function createOperatorWatchPool(
       if (!watch || closed || polling.has(id)) return 0;
       polling.add(id);
       try {
-        const resumeState = (await listSessionResumeStates(root)).find(
+        const resumeStore = (await listSessionResumeStores(root)).find(
           (candidate) => candidate.conductorAgentId === id,
         );
-        if (!resumeState) return 0;
-        const { snapshot: observation, source } = await readObservation(root, resumeState);
+        if (!resumeStore) return 0;
+        const { snapshot: observation, source } = await readObservation(root, resumeStore);
         const previous = state.cursors[id];
         const next = cursorFor(observation);
-        const reports = collectReports(resumeState, observation, previous, source)
+        const reports = collectReports(resumeStore, observation, previous, source)
           .map((report) => ({
             ...report,
             reportId: randomUUID(),
             conductorAgentId: id,
-            issueUrl: resumeState.issueUrl,
+            issueUrl: resumeStore.issueUrl,
             debounceMs: watch.debounceMs,
           }));
         const cursorChanged = hash(previous ?? null) !== hash(next);
@@ -199,7 +199,7 @@ export async function createOperatorWatchPool(
             reportId: report.reportId,
             reportType: report.reportType,
             conductorAgentId: id,
-            issueUrl: resumeState.issueUrl,
+            issueUrl: resumeStore.issueUrl,
             text: report.text,
           })),
           watch.debounceMs,
@@ -313,16 +313,16 @@ export function createUnregisterSessionWatchTool(
 
 async function readObservation(
   repoRoot: string,
-  resumeState: SessionResumeState,
+  resumeStore: SessionResumeStore,
 ): Promise<{
   snapshot: SessionObservationSnapshot;
   source: 'uds' | 'resume_store';
 }> {
-  if (resumeState.harnessSocketPath) {
+  if (resumeStore.harnessSocketPath) {
     try {
       return {
         snapshot: await sendOpenQuestionControlRequest<SessionObservationSnapshot>(
-          resumeState.harnessSocketPath,
+          resumeStore.harnessSocketPath,
           { method: OPEN_QUESTION_CONTROL_METHODS.observe },
         ),
         source: 'uds',
@@ -343,15 +343,15 @@ async function readObservation(
     }
   }
   const questions = await loadOpenQuestionsStore(
-    openQuestionsStorePath({ repoRoot, conductorAgentId: resumeState.conductorAgentId }),
+    openQuestionsStorePath({ repoRoot, conductorAgentId: resumeStore.conductorAgentId }),
   );
   const sessionState = await loadSessionStateStore(
-    sessionStateStorePath({ repoRoot, conductorAgentId: resumeState.conductorAgentId }),
+    sessionStateStorePath({ repoRoot, conductorAgentId: resumeStore.conductorAgentId }),
   );
   return {
     snapshot: {
-      sequence: questions?.sequence ?? resumeState.sequence,
-      openQuestions: questions?.openQuestions ?? resumeState.openQuestions,
+      sequence: questions?.sequence ?? resumeStore.sequence,
+      openQuestions: questions?.openQuestions ?? resumeStore.openQuestions,
       ...(sessionState ? { sessionState } : {}),
     },
     source: 'resume_store',
@@ -359,7 +359,7 @@ async function readObservation(
 }
 
 function collectReports(
-  resumeState: SessionResumeState,
+  resumeStore: SessionResumeStore,
   observation: SessionObservationSnapshot,
   previous: SessionCursor | undefined,
   source: 'uds' | 'resume_store',
@@ -368,7 +368,7 @@ function collectReports(
     reportType: 'session_state' | 'open_question';
     text: string;
   }> = [];
-  const issue = `${resumeState.issueUrl} (${resumeState.conductorAgentId})`;
+  const issue = `${resumeStore.issueUrl} (${resumeStore.conductorAgentId})`;
   const observationSource =
     source === 'uds' ? '稼働中 UDS' : '保存済み SessionResumeStore / YAML';
   for (const question of observation.openQuestions) {

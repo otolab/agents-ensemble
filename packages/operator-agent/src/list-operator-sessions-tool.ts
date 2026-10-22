@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import {
-  listSessionResumeStates,
+  listSessionResumeStores,
   loadSessionStateStore,
   parseIssueUrl,
   sessionStateStorePath,
@@ -8,7 +8,7 @@ import {
   type ConductorTool,
   type SessionLifecycle,
   type SessionStateStore,
-  type SessionResumeState,
+  type SessionResumeStore,
 } from '@agents-ensemble/core/operator-runtime';
 
 export const LIST_OPERATOR_SESSIONS_TOOL = 'list_operator_sessions';
@@ -89,35 +89,35 @@ export function createListOperatorSessionsTool(repoRoot: string): ConductorTool 
       const hasStatusLine = resolveHasStatusLine(args.hasStatusLine);
       const lifecycle = resolveLifecycle(args.lifecycle);
       const dataAsOf = new Date().toISOString();
-      const resumeStates = await listSessionResumeStates(root);
+      const resumeStores = await listSessionResumeStores(root);
       const snapshots = await Promise.all(
-        resumeStates.map(async (resumeState) => ({
-          resumeState,
-          status: await loadStatusLine(root, resumeState),
+        resumeStores.map(async (resumeStore) => ({
+          resumeStore,
+          status: await loadStatusLine(root, resumeStore),
         })),
       );
-      const filtered = snapshots.filter(({ resumeState, status }) => {
+      const filtered = snapshots.filter(({ resumeStore, status }) => {
         if (
           hasStatusLine !== undefined &&
           Boolean(status) !== hasStatusLine
         ) {
           return false;
         }
-        const sessionLifecycle = resumeState.lifecycle ?? 'unknown';
+        const sessionLifecycle = resumeStore.lifecycle ?? 'unknown';
         return lifecycle === undefined || sessionLifecycle === lifecycle;
       });
       filtered.sort((left, right) => {
         const direction = sort === 'updatedAtDesc' ? -1 : 1;
         return (
-          direction * (left.resumeState.updatedAt - right.resumeState.updatedAt) ||
-          left.resumeState.conductorAgentId.localeCompare(
-            right.resumeState.conductorAgentId,
+          direction * (left.resumeStore.updatedAt - right.resumeStore.updatedAt) ||
+          left.resumeStore.conductorAgentId.localeCompare(
+            right.resumeStore.conductorAgentId,
           )
         );
       });
       const sessions = filtered
         .slice(0, limit)
-        .map(({ resumeState, status }) => summarizeSession(resumeState, status));
+        .map(({ resumeStore, status }) => summarizeSession(resumeStore, status));
       const payload = {
         repoRoot: root,
         dataAsOf,
@@ -185,13 +185,13 @@ function resolveLifecycle(
 
 async function loadStatusLine(
   repoRoot: string,
-  resumeState: SessionResumeState,
+  resumeStore: SessionResumeStore,
 ): Promise<SessionStateStore | undefined> {
   try {
     return await loadSessionStateStore(
       sessionStateStorePath({
         repoRoot,
-        conductorAgentId: resumeState.conductorAgentId,
+        conductorAgentId: resumeStore.conductorAgentId,
       }),
     );
   } catch {
@@ -202,12 +202,12 @@ async function loadStatusLine(
 }
 
 function summarizeSession(
-  resumeState: SessionResumeState,
+  resumeStore: SessionResumeStore,
   status: SessionStateStore | undefined,
 ): OperatorSessionSummary {
   let issueRef: OperatorSessionSummary['issueRef'] = null;
   try {
-    const parsed = parseIssueUrl(resumeState.issueUrl);
+    const parsed = parseIssueUrl(resumeStore.issueUrl);
     issueRef = {
       owner: parsed.owner,
       repo: parsed.repo,
@@ -216,28 +216,28 @@ function summarizeSession(
   } catch {
     // Keep the original issueUrl visible for legacy or externally produced data.
   }
-  const openQuestions = resumeState.openQuestions.filter(
+  const openQuestions = resumeStore.openQuestions.filter(
     (question) => question.status === 'open',
   );
 
   return {
-    agentId: resumeState.conductorAgentId,
-    conductorAgentId: resumeState.conductorAgentId,
+    agentId: resumeStore.conductorAgentId,
+    conductorAgentId: resumeStore.conductorAgentId,
     issueRef,
-    issueUrl: resumeState.issueUrl,
-    conductorBackend: resumeState.conductorBackend ?? 'cursor',
+    issueUrl: resumeStore.issueUrl,
+    conductorBackend: resumeStore.conductorBackend ?? 'cursor',
     profile:
-      resumeState.profile.meta?.title ??
-      resumeState.profilePath ??
+      resumeStore.profile.meta?.title ??
+      resumeStore.profilePath ??
       'unknown',
-    updatedAt: resumeState.updatedAt,
+    updatedAt: resumeStore.updatedAt,
     statusLine: status?.current.statusLine ?? null,
     reportedAt: status?.current.reportedAt ?? null,
     statusLineHistory: status?.history ?? [],
-    lifecycle: resumeState.lifecycle ?? 'unknown',
-    liveControlPathRecorded: Boolean(resumeState.harnessSocketPath),
+    lifecycle: resumeStore.lifecycle ?? 'unknown',
+    liveControlPathRecorded: Boolean(resumeStore.harnessSocketPath),
     openQuestionCount: openQuestions.length,
-    workers: Object.keys(resumeState.workers).sort(),
+    workers: Object.keys(resumeStore.workers).sort(),
     openQuestions: openQuestions.map((question) => ({
       id: question.id,
       question: question.question,
@@ -247,7 +247,7 @@ function summarizeSession(
         ? { relatedPermissionId: question.relatedPermissionId }
         : {}),
     })),
-    answeredQuestionCount: resumeState.openQuestions.filter(
+    answeredQuestionCount: resumeStore.openQuestions.filter(
       (question) => question.status === 'answered',
     ).length,
   };

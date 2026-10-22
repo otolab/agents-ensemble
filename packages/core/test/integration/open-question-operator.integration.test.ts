@@ -36,7 +36,7 @@ import {
   openQuestionsStorePath,
 } from '../../src/session/open-questions-store.js';
 import {
-  loadSessionResumeState,
+  loadSessionResumeStore,
   sessionResumeStorePath,
 } from '../../src/session/session-resume-store.js';
 import {
@@ -208,13 +208,13 @@ describe('open question / operator flow integration', () => {
       await firstSendStarted.promise;
       let socketPath: string | undefined;
       await vi.waitFor(async () => {
-        const resumeState = await loadSessionResumeState(
+        const resumeStore = await loadSessionResumeStore(
           sessionResumeStorePath({
             repoRoot: isolatedRepoRoot,
             conductorAgentId: 'agent-test',
           }),
         );
-        socketPath = resumeState?.harnessSocketPath;
+        socketPath = resumeStore?.harnessSocketPath;
         expect(socketPath).toBeTruthy();
       });
 
@@ -346,14 +346,14 @@ describe('open question / operator flow integration', () => {
       sequence: 1,
       openQuestions: result.openQuestions,
     });
-    const resumeState = await loadSessionResumeState(
+    const resumeStore = await loadSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
         conductorAgentId: result.agentId,
       }),
     );
-    expect(resumeState?.sequence).toBe(1);
-    expect(resumeState?.openQuestions).toEqual(result.openQuestions);
+    expect(resumeStore?.sequence).toBe(1);
+    expect(resumeStore?.openQuestions).toEqual(result.openQuestions);
   });
 
   it('records free-text operator answers to choice questions in the event queue', async () => {

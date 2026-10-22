@@ -34,7 +34,7 @@ describe('tool-call snapshot history', () => {
     repoRoot = '';
   });
 
-  it('round-trips a history file without making it a session resume state', async () => {
+  it('round-trips a history file without making it a session resume store', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
