@@ -51,7 +51,7 @@ pnpm test:integration
 pnpm test:e2e
 ```
 
-integration は三つの経路に分かれる。`session-resume.integration.test.ts` や `pi-conductor.integration.test.ts` のような fake / in-process 経路は外部認証なしで実行できる。`conductor-agent.integration.test.ts` と `issue-session.integration.test.ts` は実 Cursor SDK 経路で、Cursor の保存済みログインまたは `CURSOR_API_KEY` がある場合に実行され、integration 共通 setup が一時 HOME に状態を隔離する（認証がない場合やサンドボックスで一時 HOME を作成・書き込みできない場合は理由付きで skip）。CI の既定 integration は認証不要の `session-resume.integration.test.ts` と `pi-conductor.integration.test.ts` をファイル指定で実行し、実 SDK 経路は実行しない。
+integration は fake / in-process、実 ACP、実 Cursor SDK の経路に分かれる。`session-resume.integration.test.ts` や `pi-conductor.integration.test.ts` は fake / in-process 経路の例で、外部認証なしで実行できる。`conductor-agent.integration.test.ts` と `issue-session.integration.test.ts` は実 Cursor SDK 経路で、Cursor の保存済みログインまたは `CURSOR_API_KEY` がある場合に実行され、integration 共通 setup が一時 HOME に状態を隔離する（認証がない場合やサンドボックスで一時 HOME を作成・書き込みできない場合は理由付きで skip）。CI で常時実行する integration suite の一覧と前提条件は [testing-strategy.md](testing-strategy.md) を参照する。
 
 Ink / React / `ink-testing-library` の更新、または TUI の resize 配線を変更する場合は、3 系統の回帰ゲートと判定基準を [Ink / React アップグレード回帰手順](tui-ink-upgrade.md) に従って確認する。
 
