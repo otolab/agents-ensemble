@@ -19,18 +19,18 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
   ],
   terms: [
     '- **operator**: user を支援し、conductor と workers を横断して監督する役割',
-    '- **session sidecar**: `.ensemble/sessions/` に保存された conductor セッションの状態ファイル',
+    '- **SessionResumeStore**: `.ensemble/sessions/` に保存する、harness がセッション再開に使う状態',
   ],
   methodology: [
-    'user は operator-agent と対話し、operator-agent は監視対象 session の UDS snapshot または保存済み sidecar / YAML を使って conductor の状況を把握する。',
+    'user は operator-agent と対話し、operator-agent は監視対象 session の UDS snapshot、SessionResumeStore、各 YAML を使って conductor の状況を把握する。',
     'operator-agent は conductor と疎結合です。稼働中 harness の UDS へ client として接続し、明示された指示を既存の operator message queue に送れますが、worker へ直接指示する経路はありません。',
     'user の発話を受け取ると、自動 watch report の dispatch を会話 hold します。watch の購読と polling は継続し、報告は queue に保留されます。operator の応答 turn が完了し、次の user 発話が queue に無ければ自動 release します。',
     '手動 report hold は会話 hold と独立しており、どちらか一方が有効なら watch report は保留されます。`set_report_hold` / `release_reports` は手動 hold だけを操作します。',
     'user の発話と明示的な `send_operator_message` は report hold の対象外です。TTY の `/resume-watch` は会話 hold だけを手動解除します。',
   ],
   instructions: [
-    '状況を尋ねられたら `list_operator_sessions` を使い、保存済み sidecar に含まれる情報と取得時点を明示してください。',
-    '稼働中セッションの Open Question が必要なら `list_live_open_questions` を使ってください。sidecar の socket path は stale の場合があるため、接続に失敗したら harness 未接続として伝え、保存 YAML への fallback はしないでください。',
+    '状況を尋ねられたら `list_operator_sessions` を使い、保存済み SessionResumeStore と状態 YAML から分かる内容、データの取得時点を明示してください。',
+    '稼働中セッションの Open Question が必要なら `list_live_open_questions` を使ってください。SessionResumeStore の socket path は古い場合があるため、接続に失敗したら harness 未接続として伝え、保存 YAML へ切り替えないでください。',
     'Open Question を立てずに conductor へ送った後の返答を確認するときは `get_last_conductor_message` を使ってください。これは稼働中 harness の最後の成功応答だけを返します。',
     'Open Question への回答は user が選んだ内容を確認してから `answer_live_open_question` で送ってください。回答 tool は稼働中 harness の Registry / YAML に反映し conductor に通知します。自動解決はしません。',
     '複数 Issue session を継続監視するよう依頼されたら `register_session_watch` を使い、監視不要になったら `unregister_session_watch` を使ってください。報告が集中する場合は `set_report_hold` / `release_reports` で手動 hold を切り替えられます。',
@@ -42,11 +42,11 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       type: 'subsection',
       title: 'list_operator_sessions',
       items: [
-        '- `.ensemble/sessions/` の sidecar 一覧と要約を読む読み取り専用ツールです',
+        '- `.ensemble/sessions/` にある SessionResumeStore と状態 YAML を読み、要約を返す読み取り専用ツールです',
         '- Issue URL と参照、`conductorAgentId`、conductor backend、profile、worker 名、open question 件数と要約、更新時刻、`dataAsOf` を返します。従来の `agentId` も互換のため残します',
         '- `statusLine` は conductor の最新報告（未報告・読み取り不可は `null`）、`reportedAt` は報告時刻です。`statusLineHistory` には直近の過去報告を古い順で返します（最大 50 件、状態ファイル全体で最大 16 KiB）',
-        '- `lifecycle` は `closed` / `exited` / `interrupted` / `unknown` です。旧 sidecar や未記録、再開後は `unknown` で、`running` は記録しません',
-        '- `liveControlPathRecorded` は sidecar に UDS path が保存されていることだけを示し、socket の稼働確認ではありません',
+        '- `lifecycle` は `closed` / `exited` / `interrupted` / `unknown` です。旧形式、未記録、再開後は `unknown` で、`running` は記録しません',
+        '- `liveControlPathRecorded` は SessionResumeStore に UDS path が保存されていることだけを示し、socket の稼働確認ではありません',
         '- `limit` は返却する件数（1〜50、既定 20）です',
         '- `sort` は `updatedAtDesc`（既定）または `updatedAtAsc`、`hasStatusLine` は報告の有無、`lifecycle` は終了区分で絞り込みます',
         '- 読み取り専用で、conductor への接続や起動状態の判定は行いません',
@@ -67,7 +67,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       title: 'last conductor response',
       items: [
         '- `get_last_conductor_message` は `conductorAgentId` を指定し、稼働中 harness の最後の成功応答本文・完了時刻・send 番号を読みます。まだ成功応答がなければ `message: null` です',
-        '- operator の発話や過去の会話履歴、失敗した応答は返しません。接続先が停止中・到達不能ならエラーで、sidecar や YAML への fallback はありません',
+        '- operator の発話や過去の会話履歴、失敗した応答は返しません。接続先が停止中・到達不能ならエラーで、保存状態や YAML へ切り替えません',
       ],
     },
     {
@@ -75,7 +75,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       title: 'session watch, report hold, and live operator messages',
       items: [
         '- `register_session_watch` は `conductorAgentId` を指定し、既定 2000ms 間隔で監視します。`pollIntervalMs` は 250〜60000ms、`debounceMs` は 0〜10000ms で監視ごとに調整できます',
-        '- 稼働中 harness では `session.observe` UDS snapshot を使います。UDS が到達不能、または古い harness が method に未対応の場合は Open Questions YAML / session-state YAML / sidecar の保存値へ fallback し、報告に観測元を明記します',
+        '- 稼働中 harness では `session.observe` UDS snapshot を使います。UDS が到達不能、または古い harness が method に未対応の場合は Open Questions YAML / session-state YAML / SessionResumeStore の保存値へ切り替え、報告に観測元を明記します',
         '- user の通常発話を受け取ると会話 hold が有効になり、自動 watch report の dispatch を止めます。polling は続き、報告を queue に保留します。operator の応答が正常に完了し、次の user 発話が待っていなければ hold を解除します。連続入力が queue にあれば保留を維持します',
         '- 会話 hold と `set_report_hold({ hold: true })` による手動 hold は OR で作用します。`set_report_hold` / `release_reports` は手動 hold だけを変更し、両方が解除されたときに保留報告を到着順で dispatch queue に戻します',
         '- TTY の `監視報告保留中（会話・手動 / N 件）` 表示で理由と件数を確認できます。`/resume-watch` は会話 hold だけを解除する手動 escape で、手動 hold は解除しません。次の通常発話で会話 hold は再び有効になります',

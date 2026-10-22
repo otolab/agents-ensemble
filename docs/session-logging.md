@@ -19,12 +19,12 @@ conductor セッションには性質の異なる出力が混在する。
 | **対話** | オペレータ（人間） | `operator>` / `conductor>` のやりとり |
 | **harness テレメトリ** | 開発者・運用者 | worktree 解決、worker ラウンド完了、send 回数 |
 | **exit report** | e2e / CI / スクリプト | 終了時 JSON（`stopReason`, `workerResponses` 等） |
-| **resume 状態** | 次回 `ensemble issue --resume` | sidecar JSON と open question YAML |
-| **operator 状態** | `list_operator_sessions` | sidecar lifecycle と session-state YAML |
+| **resume 状態** | 次回 `ensemble issue --resume` | SessionResumeStore JSON と open question YAML |
+| **operator 状態** | `list_operator_sessions` | SessionResumeStore の `lifecycle` と session-state YAML |
 
 これらを 1 本の stderr に混ぜると、TTY 利用時に **会話相手が worker に見える**・**conductor の応答が終了まで見えない** といった UX 問題が起きる（#44）。
 
-**原則**: 観測は `SessionLogger` に集約し、**sink** で出力先・フォーマットを分離する。resume に必要な harness 状態は sidecar JSON と open question YAML に永続化し、operator 向けの statusLine は session-state YAML に保存する（会話本文は SDK / ACP 側）。
+**原則**: 観測は `SessionLogger` に集約し、**sink** で出力先・フォーマットを分離する。resume に必要な harness 状態は SessionResumeStore（JSON）と open question YAML に永続化し、operator 向けの statusLine は session-state YAML に保存する（会話本文は SDK / ACP 側）。
 
 `conductor.send` は status によって表示チャネルが分かれる。`status=finished` の `result` は
 conductor が実際に返した応答なので対話チャネル（`conductor>` / TUI 活動ログの
@@ -62,7 +62,7 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
 └─────────────────────────────────────────────────────────────┘
 
   別経路（SessionLogger 外）:
-    sidecar flush → {repoRoot}/.ensemble/sessions/{agentId}.json
+    SessionResumeStore への flush → {repoRoot}/.ensemble/sessions/{agentId}.json
     tool-call history flush → {repoRoot}/.ensemble/sessions/{agentId}.tool-calls
     question flush → {repoRoot}/.ensemble/sessions/{agentId}/open-questions.yaml
     operator status → {repoRoot}/.ensemble/sessions/{agentId}/session-state.yaml
@@ -90,13 +90,13 @@ TTY の Ink TUI では Operator input 欄の入力プロンプトを pane / stre
 
 open question の回答観測は回答全文を残し、`yes_no` には `assent=yes|no|unclear`、`choice` には回答から一意に解決できた場合だけ `selectedChoice` を付けます。自由記述や曖昧な label では `selectedChoice` を付けません。`approved` は permission に関連付いた yes/no のみ出力します。choice 質問の登録観測には ID と label を表示します。
 
-稼働中 UDS control server は JSON-RPC request / response body をアクセスログへ書きません。ただし回答・operator message は既存の operator 入力経路を通るため、CLI observation は従来どおり質問本文・回答本文・メッセージ本文を stderr または TUI 活動ログに表示します。メッセージの配信モード（`idle` / `next` / `interrupt`）も `operator.input` と TTY 活動ログに記録します。質問・context・回答は sidecar / YAML にも保存され、UDS list response では保存値のまま返します。任意文面の secret や repository 外情報を確実に検出する redaction はありません。機密値を質問・context・回答・メッセージに含めない運用としてください。
+稼働中 UDS control server は JSON-RPC request / response body をアクセスログへ書きません。ただし回答・operator message は既存の operator 入力経路を通るため、CLI observation は従来どおり質問本文・回答本文・メッセージ本文を stderr または TUI 活動ログに表示します。メッセージの配信モード（`idle` / `next` / `interrupt`）も `operator.input` と TTY 活動ログに記録します。質問・context・回答は SessionResumeStore と YAML にも保存され、UDS list response では保存値のまま返します。任意文面の secret や repository 外情報を確実に検出する redaction はありません。機密値を質問・context・回答・メッセージに含めない運用としてください。
 
 operator-agent の watch polling 警告には例外本文を含めず、Open Question の質問・context・回答本文をログへ出しません。新規 open 質問の本文は operator-agent への report 入力として渡します。未 dispatch report の永続化先は owner-only (`0700` directory / `0600` file) の `.ensemble/operator-agent/watch-state.json` であり、通常のログとは別ですが、一般的な secret redaction は行いません。
 
-`.ensemble/sessions/` とセッション別データ directory は owner-only (`0700`)、JSON sidecar / YAML / socket file は owner read/write (`0600`) にします。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
+`.ensemble/sessions/` とセッション別データ directory は owner-only (`0700`)、SessionResumeStore の JSON / YAML / socket file は owner read/write (`0600`) にします。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
 
-TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor の**成功応答**は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。`conductor.send` の error は conductor 活動ログへ追記せず、harness 活動ログだけに障害として追記する。既定の `stream` レイアウトでは `<Static>` と端末 scrollback を使い、`tui.layout: pane` または `ENSEMBLE_TUI_LAYOUT=pane` で Orchestration ペイン内の windowing に戻せる。stream の活動ログは端末表示用で、セッション sidecar や活動ログファイルには永続化しない。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされない（詳細は [operator-input.md](operator-input.md) と [ADR 0015](adr/0015-cli-tui-library.md)）。
+TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor の**成功応答**は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。`conductor.send` の error は conductor 活動ログへ追記せず、harness 活動ログだけに障害として追記する。既定の `stream` レイアウトでは `<Static>` と端末 scrollback を使い、`tui.layout: pane` または `ENSEMBLE_TUI_LAYOUT=pane` で Orchestration ペイン内の windowing に戻せる。stream の活動ログは端末表示用で、SessionResumeStore や活動ログファイルには永続化しない。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされない（詳細は [operator-input.md](operator-input.md) と [ADR 0015](adr/0015-cli-tui-library.md)）。
 
 活動ログでは直前の内容エントリとラベルが変わるときに separator を 1 つ挿入し、同じラベルが続くときは自動挿入しない。conductor ブロックの前後には従来どおり separator を置き、境界処理と重なった連続 separator は 1 つに畳む。エントリ本文の段落空行（`\n\n`）は separator と独立して保持する。pane の bounded history では separator も他のエントリと同じく window の件数に含め、stream では活動ログ全体を append-only で保持する。
 
@@ -119,7 +119,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
 `durationMs` は終了 snapshot を作る時点で算出するため、その後に実行する resource teardown や worktree cleanup の時間は含みません。teardown の所要時間は `harness.teardown.durationMs` として別に記録します。
 
-resume 用の harness 状態は sidecar と open question YAML に保存します。open question の正本は YAML で、sidecar JSON の `openQuestions` / `sequence` は移行期間中の互換コピーです。operator 向け statusLine は別の session-state YAML に保存します。終了 JSON の `agentId` は参照用コピーです。
+resume 用の harness 状態は SessionResumeStore と open question YAML に保存します。open question の正本は YAML で、SessionResumeStore JSON の `openQuestions` / `sequence` は移行期間中の互換コピーです。operator 向け statusLine は別の session-state YAML に保存します。終了 JSON の `agentId` は参照用コピーです。
 
 CLI の JSON 形状は `packages/cli/src/format-session-summary.ts` が定義（e2e 互換）。`--summary-format` / `--include-full-response-text` で終了出力を制御する。
 
@@ -186,11 +186,13 @@ CLI formatter で診断情報を保つ。通常は境界要約・障害系だけ
 permission の ACP variant と抽出優先順位は
 [harness-events.md §2.1.1](harness-events.md#211-オペレータ向け-representation) を参照。
 
-表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question・dispatch 保留状態のイベント投影を保持する。TTY の Ink TUI（`packages/cli/src/tui/`）は `pane` / `stream` とも、operator binding 後は `getContext().openQuestions`（`OpenQuestionRegistry` の `listOpen()` スナップショット）を未回答一覧の正本として使い、binding 前だけ display state をフォールバックにする。これにより sidecar resume 後も復元済み question を表示できる（#94、#257、#263）。
+表示 state（`SessionDisplayState`）は worker 状態・conductor 直近出力・未回答 open question・dispatch 保留状態のイベント投影を保持する。TTY の Ink TUI（`packages/cli/src/tui/`）は `pane` / `stream` とも、operator binding 後は `getContext().openQuestions`（`OpenQuestionRegistry` の `listOpen()` スナップショット）を未回答一覧の正本として使い、binding 前だけ display state をフォールバックにする。これにより SessionResumeStore から再開した後も復元済み question を表示できる（#94、#257、#263）。
 
 ---
 
-## 4. sidecar と open question YAML
+## 4. SessionResumeStore と open question YAML
+
+SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`.ensemble/sessions/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
 
 セッション再開用データは `.ensemble/sessions/` に保存します。
 
@@ -239,24 +241,24 @@ openQuestions:
 
 `responseType` は `yes_no` / `text` / `choice`、`status` は `open` / `answered`、`source` は `conductor` / `max_turns` です。`context`、選択肢、回答時刻、回答者、yes/no の `assent` / permission 関連時の `approved` などは該当する場合に保存します。`sequence` は次に割り当てる `inq-N` ID を復元するために使います。
 
-`--continue` は従来どおり JSON sidecar の `updatedAt` からセッションを選びます。`--resume` / `--continue` の復元時は、YAML があれば質問一覧と sequence にその内容を使います。YAML がまだない既存セッションでは JSON sidecar の `openQuestions` と `sequence` から復元し、YAML をバックフィルします。移行期間中は flush のたびに両方へ同じ質問スナップショットを書きます。YAML が存在していて読み取りまたはスキーマ検証に失敗した場合は resume を中止し、古い可能性がある JSON 側の質問一覧へ黙って切り替えません。
+`--continue` は SessionResumeStore の `updatedAt` が最も新しいセッションを選びます。`--resume` / `--continue` の復元時は、YAML があれば質問一覧と sequence にその内容を使います。YAML がまだない旧形式のセッションでは SessionResumeStore の `openQuestions` と `sequence` から復元し、YAML をバックフィルします。移行期間中は flush のたびに両方へ同じ質問スナップショットを書きます。YAML が存在していて読み取りまたはスキーマ検証に失敗した場合は resume を中止し、古い可能性がある SessionResumeStore 内の質問一覧へ黙って切り替えません。
 
-JSON sidecar の `lifecycle` は最後に完了した teardown の区分です。`/close` は `closed`、`/exit` は isolated worktree の cleanup 試行後に `exited`、SIGINT / SIGTERM による終了は `interrupted` を最終 sidecar flush で記録します。それ以外の通常終了は `unknown` です。古い sidecar で値がない場合も `unknown` として扱います。既存 sidecar を resume する際は conductor の再開処理に入る前に `unknown` を atomic に保存し、resume 後に flush する前のクラッシュで前回 teardown の値が残らないようにします。Phase 1 は `running` を記録しないため、この値は現在プロセスが稼働中かどうかを示しません。operator-agent は sidecar と session-state の読み取りだけを行い、conductor に接続しません。
+`lifecycle` は SessionResumeStore に記録する、最後に完了した teardown の区分です。`/close` は `closed`、`/exit` は isolated worktree の cleanup 試行後に `exited`、SIGINT / SIGTERM による終了は最終 flush で `interrupted` を記録します。それ以外の通常終了は `unknown` です。旧形式の SessionResumeStore で値がない場合も `unknown` として扱います。保存済みの状態からセッションを再開する際は、conductor の再開処理に入る前に `unknown` を atomic に保存し、再開後に次の flush を行う前にクラッシュしても前回の teardown 区分が残らないようにします。Phase 1 は `running` を記録しないため、この値は現在プロセスが稼働中かどうかを示しません。operator-agent は SessionResumeStore と session-state の読み取りだけを行い、conductor に接続しません。
 
-| | SessionSummary（終了 JSON） | sidecar / session YAML |
+| | SessionSummary（終了 JSON） | SessionResumeStore / session YAML |
 |--|---------------------------|---------|
 | **目的** | 1 回の実行結果の報告 | セッション再開用の harness 状態 |
 | **タイミング** | プロセス終了時に 1 回 | 状態変化時に best-effort flush + 終了時 |
 | **会話本文** | 載せない（worker 応答の要約のみ） | 載せない |
-| **open question** | 終了時の一覧スナップショット | YAML が正本。移行中は JSON sidecar にも同じ一覧を保存 |
-| **operator 状態** | 載せない | `session-state.yaml` に最新 statusLine と上限付き履歴、JSON sidecar に lifecycle を保存 |
+| **open question** | 終了時の一覧スナップショット | YAML が正本。移行中は SessionResumeStore にも同じ一覧を保存 |
+| **operator 状態** | 載せない | `session-state.yaml` に最新 statusLine と上限付き履歴、SessionResumeStore に `lifecycle` を保存 |
 | **worker session** | 載せない | `acpSessionId` を保持 |
 | **tool-call snapshot** | 載せない | 別ファイル `.tool-calls` に保持（TTL / サイズ上限あり） |
 
-tool-call history は sidecar 本体から独立して読み書きし、履歴ファイルの欠損や破損で resume を妨げません。
+tool-call history は SessionResumeStore とは別に読み書きし、履歴ファイルの欠損や破損で resume を妨げません。
 保持期限・上限・プライバシー上の扱いは [harness-events.md](harness-events.md) を参照してください。
-詳細は [ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0032](adr/0032-tool-call-snapshot-history.md)、
-[operator-input.md](operator-input.md) の post-loop / 終了動作を参照してください。sidecar JSON のスキーマと他の復元状態は ADR 0011 を参照してください。
+詳細は [ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0032](adr/0032-tool-call-snapshot-history.md)、[ADR 0039](adr/0039-session-resume-state-and-operator-projection.md)、
+[operator-input.md](operator-input.md) の post-loop / 終了動作を参照してください。SessionResumeStore JSON のスキーマと他の復元状態は ADR 0011 を参照してください。
 
 ---
 

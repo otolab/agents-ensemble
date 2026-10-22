@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import {
-  findLatestSessionSidecarForIssue,
+  findLatestSessionResumeStoreForIssue,
   loadEnsembleConfig,
   loadProfile,
   resolveConductorModelId,
@@ -58,13 +58,13 @@ export interface IssueCommandDeps {
   loadProfile?: typeof loadProfile;
   loadEnsembleConfig?: typeof loadEnsembleConfig;
   SessionLogger?: typeof SessionLogger;
-  findLatestSessionSidecarForIssue?: typeof findLatestSessionSidecarForIssue;
+  findLatestSessionResumeStoreForIssue?: typeof findLatestSessionResumeStoreForIssue;
   writeStderr?: (message: string) => void;
 }
 
 export interface ResolveResumeAgentIdResult {
   resumeAgentId?: string;
-  continuedFromSidecar?: string;
+  continuedFromResumeStore?: string;
 }
 
 /** `ensemble issue` の結果をプロセス終了コードへ変換する。 */
@@ -78,7 +78,7 @@ export function issueCommandExitCode(
 export async function resolveResumeAgentIdFromOptions(
   options: Pick<IssueCommandOptions, 'resume' | 'continue'>,
   context: { issueUrl: string; repoRoot: string },
-  deps: Pick<IssueCommandDeps, 'findLatestSessionSidecarForIssue'> = {},
+  deps: Pick<IssueCommandDeps, 'findLatestSessionResumeStoreForIssue'> = {},
 ): Promise<ResolveResumeAgentIdResult> {
   if (options.resume && options.continue) {
     throw new Error('Cannot use --continue and --resume together');
@@ -91,20 +91,20 @@ export async function resolveResumeAgentIdFromOptions(
   }
 
   const findLatest =
-    deps.findLatestSessionSidecarForIssue ?? findLatestSessionSidecarForIssue;
-  const sidecar = await findLatest({
+    deps.findLatestSessionResumeStoreForIssue ?? findLatestSessionResumeStoreForIssue;
+  const resumeStore = await findLatest({
     repoRoot: context.repoRoot,
     issueUrl: context.issueUrl,
   });
-  if (!sidecar) {
+  if (!resumeStore) {
     throw new Error(
-      `No session sidecar found for issue ${context.issueUrl}. Start a new session without --continue.`,
+      `No saved session resume store found for issue ${context.issueUrl}. Start a new session without --continue.`,
     );
   }
 
   return {
-    resumeAgentId: sidecar.conductorAgentId,
-    continuedFromSidecar: sidecar.conductorAgentId,
+    resumeAgentId: resumeStore.conductorAgentId,
+    continuedFromResumeStore: resumeStore.conductorAgentId,
   };
 }
 
@@ -162,7 +162,7 @@ export async function executeIssueCommand(
     cwd: repoRoot,
     config: ensembleConfig,
   });
-  const { resumeAgentId, continuedFromSidecar } = await resolveResumeAgentIdFromOptions(
+  const { resumeAgentId, continuedFromResumeStore } = await resolveResumeAgentIdFromOptions(
     options,
     { issueUrl, repoRoot },
     deps,
@@ -210,10 +210,10 @@ export async function executeIssueCommand(
   if (workerWorktreeMode === 'in_repo') {
     sessionLogger.emit({ type: 'session.worktree.notice', mode: workerWorktreeMode });
   }
-  if (continuedFromSidecar) {
+  if (continuedFromResumeStore) {
     sessionLogger.emit({
       type: 'session.continue',
-      conductorAgentId: continuedFromSidecar,
+      conductorAgentId: continuedFromResumeStore,
     });
   }
 

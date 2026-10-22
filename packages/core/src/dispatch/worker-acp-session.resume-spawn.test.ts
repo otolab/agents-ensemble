@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { openWorkerAcpSession } from './worker-acp-session.js';
 
 describe('openWorkerAcpSession resume spawn validation', () => {
-  it('fails attach when sidecar acpSpawn mismatches current profile', async () => {
+  it('fails attach when saved resume store acpSpawn mismatches current profile', async () => {
     await expect(
       openWorkerAcpSession({
         issueUrl: 'https://github.com/org/repo/issues/1',
@@ -33,7 +33,7 @@ describe('openWorkerAcpSession resume spawn validation', () => {
     ).rejects.toThrow(/resume ACP spawn mismatch/);
   });
 
-  it('fails attach when sidecar pi acpSpawn mismatches current profile', async () => {
+  it('fails attach when saved Pi ACP spawn data mismatches the current profile', async () => {
     await expect(
       openWorkerAcpSession({
         issueUrl: 'https://github.com/org/repo/issues/1',

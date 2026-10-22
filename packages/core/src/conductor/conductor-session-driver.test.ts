@@ -777,7 +777,7 @@ describe('runConductorSessionDriver', () => {
       shutdownSignal: shutdown.signal,
       dispatchHoldState: holdState,
       skipInitialSend: true,
-      resumeState: {
+      resumeStore: {
         sendCount: 1,
         autonomousTurns: 1,
         lastDispatchesThisTurn: 0,

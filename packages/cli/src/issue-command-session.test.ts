@@ -107,9 +107,9 @@ import { DEFAULT_ENSEMBLE_CONFIG } from '../../core/src/config/defaults.js';
 import { runIssueSession as runIssueSessionImpl } from '../../core/src/conductor/issue-session.js';
 import { runGit } from '../../core/src/git/run-git.js';
 import {
-  loadSessionSidecar,
-  sessionSidecarPath,
-} from '../../core/src/session/session-sidecar.js';
+  loadSessionResumeStore,
+  sessionResumeStorePath,
+} from '../../core/src/session/session-resume-store.js';
 import {
   openQuestionsStorePath,
   saveOpenQuestionsStore,
@@ -337,7 +337,7 @@ describe('executeIssueCommand with the core session', () => {
     );
   });
 
-  it('closes a TTY session and resumes it from the sidecar with --continue', async () => {
+  it('closes a TTY session and resumes it from SessionResumeStore with --continue', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-1',
       status: 'finished',
@@ -466,14 +466,14 @@ describe('executeIssueCommand with the core session', () => {
     expect(closedTui.telemetrySink).toHaveBeenCalledWith({
       type: 'session.operator_close',
     });
-    const sidecarPath = join(
+    const resumeStorePath = join(
       repoRoot,
       '.ensemble',
       'sessions',
       'agent-test.json',
     );
-    const closeSidecar = JSON.parse(await readFile(sidecarPath, 'utf8'));
-    expect(closeSidecar.githubMonitor.pendingUpdates).toEqual([pendingUpdate]);
+    const closeResumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8'));
+    expect(closeResumeStore.githubMonitor.pendingUpdates).toEqual([pendingUpdate]);
     expect(closeAcknowledge).not.toHaveBeenCalled();
     await saveOpenQuestionsStore(
       openQuestionsStorePath({
@@ -538,10 +538,10 @@ describe('executeIssueCommand with the core session', () => {
     );
     expect(mockClose).toHaveBeenCalledTimes(2);
     expect(mockTuiDispose).toHaveBeenCalledTimes(2);
-    const continuedSidecar = JSON.parse(
-      await readFile(sidecarPath, 'utf8'),
+    const continuedResumeStore = JSON.parse(
+      await readFile(resumeStorePath, 'utf8'),
     );
-    expect(continuedSidecar.githubMonitor.pendingUpdates).toBeUndefined();
+    expect(continuedResumeStore.githubMonitor.pendingUpdates).toBeUndefined();
     await rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -627,8 +627,8 @@ describe('executeIssueCommand with the core session', () => {
       expect(firstBridge.close).toHaveBeenCalledOnce();
       await expect(access(worktreePath)).resolves.toBeUndefined();
       await expect(
-        loadSessionSidecar(
-          sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        loadSessionResumeStore(
+          sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
         ),
       ).resolves.toMatchObject({
         workers: {

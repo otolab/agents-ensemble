@@ -16,10 +16,10 @@ describe('list_operator_sessions', () => {
     await rm(repoRoot, { recursive: true, force: true });
   });
 
-  it('returns recent sidecar summaries with open-question and worker details', async () => {
+  it('returns recent SessionResumeStore summaries with open-question and worker details', async () => {
     const issueUrl = 'https://github.com/example/project/issues/1';
-    await writeSidecar('older', 10, issueUrl);
-    await writeSidecar('newer', 20, issueUrl, {
+    await writeResumeStore('older', 10, issueUrl);
+    await writeResumeStore('newer', 20, issueUrl, {
       lifecycle: 'closed',
       statusLine: '実装中：レビュー待ち',
     });
@@ -86,12 +86,12 @@ describe('list_operator_sessions', () => {
 
   it('filters per conductor instance by statusLine and lifecycle and keeps legacy sessions unknown', async () => {
     const issueUrl = 'https://github.com/example/project/issues/1';
-    await writeSidecar('legacy', 10, issueUrl);
-    await writeSidecar('closed', 20, issueUrl, {
+    await writeResumeStore('legacy', 10, issueUrl);
+    await writeResumeStore('closed', 20, issueUrl, {
       lifecycle: 'closed',
       statusLine: 'CI 確認中',
     });
-    await writeSidecar('exited', 30, issueUrl, { lifecycle: 'exited' });
+    await writeResumeStore('exited', 30, issueUrl, { lifecycle: 'exited' });
     const tool = createListOperatorSessionsTool(repoRoot);
 
     const reported = JSON.parse(
@@ -128,7 +128,7 @@ describe('list_operator_sessions', () => {
 
   it('returns bounded statusLine history through the existing list tool', async () => {
     const issueUrl = 'https://github.com/example/project/issues/499';
-    await writeSidecar('history', 30, issueUrl, {
+    await writeResumeStore('history', 30, issueUrl, {
       statusLine: '最新の報告',
     });
     await writeFile(
@@ -210,7 +210,7 @@ describe('list_operator_sessions', () => {
     );
   });
 
-  async function writeSidecar(
+  async function writeResumeStore(
     agentId: string,
     updatedAt: number,
     issueUrl: string,

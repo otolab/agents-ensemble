@@ -74,7 +74,7 @@ program
   .option('--resume <agentId>', 'Resume a previous conductor agent')
   .option(
     '--continue',
-    'Resume the latest session for this issue (uses sidecar with newest updatedAt)',
+    'Resume the latest session for this issue (uses the saved session state with the newest updatedAt)',
   )
   .option(
     '--profile <name>',

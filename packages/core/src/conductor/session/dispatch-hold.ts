@@ -2,7 +2,7 @@ import type { SessionEvent } from './session-event.js';
 import { isTriggerSessionEvent } from './dispatch-mode.js';
 import type { SessionEventQueue } from './session-event-queue.js';
 
-/** Driver 内だけで生存する dispatch 保留状態。sidecar には保存しない。 */
+/** Driver 内だけで生存する dispatch 保留状態。SessionResumeStore には保存しない。 */
 export interface DispatchHoldState {
   dispatchHold: boolean;
   /** 保留中の trigger と、それに同梱する接続復旧 inform（operator 入力を除く）。到着順を維持する。 */

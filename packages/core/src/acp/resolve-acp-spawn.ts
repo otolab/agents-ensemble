@@ -21,7 +21,7 @@ export interface ResolvedAcpSpawn {
   authenticate?: AcpAuthenticateStrategy;
 }
 
-/** resume 検証用。sidecar に保存する最小フィンガープリント。 */
+/** resume 検証用。SessionResumeStore に保存する最小フィンガープリント。 */
 export interface AcpSpawnFingerprint {
   preset: AcpPresetId;
   command: string;
@@ -217,7 +217,7 @@ export function assertAcpSpawnMatchesResume(input: {
 
   const label = input.workerName ? `Worker "${input.workerName}"` : 'Worker';
   throw new Error(
-    `${label} resume ACP spawn mismatch: sidecar has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}`,
+    `${label} resume ACP spawn mismatch: saved resume store has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}`,
   );
 }
 
@@ -257,7 +257,7 @@ function envMapsEqual(
   return leftKeys.every((key) => left?.[key] === right?.[key]);
 }
 
-/** Legacy sidecar（env 未保存）では env 比較をスキップし preset/command/args のみ照合する。 */
+/** 旧形式の SessionResumeStore（env 未保存）では env 比較をスキップし preset/command/args のみ照合する。 */
 function envMapsEqualForResume(
   expected?: Record<string, string>,
   actual?: Record<string, string>,

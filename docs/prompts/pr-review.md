@@ -36,7 +36,7 @@
 |------|------|
 | 停止経路 | 正常終了だけでなく、利用者が実際に使う停止（例: SIGINT）でも状態が一貫して片付くこと |
 | 再開の一貫性 | harness 状態と SDK / ACP 状態が食い違う「半分 resume」を黙って進めないこと |
-| 欠損時の扱い | sidecar 不在・復元失敗時は、operator と conductor の両方に整合した通知、または起動失敗 |
+| 欠損時の扱い | SessionResumeStore 不在・復元失敗時は、operator と conductor の両方に整合した通知、または起動失敗 |
 | 利用者向けドキュメント | CLI 変更・出力変更は [README.md](../../README.md) または [docs/cli/README.md](../cli/README.md) に反映（architecture が README を参照している場合は必須） |
 
 非永続にする状態（例: pending permission）があるなら、**accepted risk** として ADR に理由・失敗モード・運用上の制限を書く。「スコープ外」の一言だけでは不十分。

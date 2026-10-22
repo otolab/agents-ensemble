@@ -46,7 +46,7 @@ type OperatorInputBinding = (
 - 空文字は無視（`false` を返す）
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
 - `/reconnect` / `reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
-- `/close` / `close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。sidecar を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
+- `/close` / `close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。SessionResumeStore を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
 - `/exit` / `exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
 - TTY の通常入力は配信モード prefix を付けられる。`/idle ...`、`/next ...`、`/interrupt ...` を本文先頭に置き、prefix 自体は conductor へ送らない。prefix なしは `next`
 - TTY（Ink TUI）では選択中の open question への回答として `submit` する（`targetOpenQuestionId` オプション）
@@ -70,7 +70,7 @@ operator-agent は `send_operator_message` tool から稼働中 session の UDS 
 
 ### 稼働中 harness の UDS control
 
-稼働中 harness の UDS interface は、Open Question の一覧・回答、watch 用 `session.observe` snapshot、conductor 宛て `operator.message.send`、最後の conductor 成功応答の取得を提供します。watch pool は `session.observe` が到達不能または旧 harness で未対応なら保存済み Open Questions YAML / session-state YAML / sidecar snapshot を poll します。一方、Open Question の個別操作、message 送信、`get_last_conductor_message` は sidecar の `harnessSocketPath` へ直接接続し、停止・接続不能時はエラーで、保存 snapshot へ fallback しません。最後の成功応答がまだなければ `message: null` です。通常 message は Open Question の回答から独立し、queue acknowledgment は処理完了を意味しません。wire schema、answer semantics、response、error / unknown outcome、security と運用時の対処は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
+稼働中 harness の UDS interface は、Open Question の一覧・回答、watch 用 `session.observe` snapshot、conductor 宛て `operator.message.send`、最後の conductor 成功応答の取得を提供します。watch pool は `session.observe` が到達不能または旧 harness で未対応なら、Open Questions YAML / session-state YAML / SessionResumeStore に保存された情報を読みます。一方、Open Question の個別操作、message 送信、`get_last_conductor_message` は SessionResumeStore に記録された `harnessSocketPath` へ直接接続し、停止・接続不能時はエラーで、保存済み情報へ fallback しません。最後の成功応答がまだなければ `message: null` です。通常 message は Open Question の回答から独立し、queue acknowledgment は処理完了を意味しません。wire schema、answer semantics、response、error / unknown outcome、security と運用時の対処は [稼働中 harness control API reference](live-open-question-control-api.md) を参照してください。
 
 View は **ブロックしない**。ループの待機は Driver が `waitForDispatchBatch`（内部で `selectDispatchBatch` + `SessionEventQueue.waitForEvent`）で行う。到着済みの同一メンバーイベントは [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) に従い 1 束にまとめてから `agent.send` する。
 
@@ -93,11 +93,11 @@ ensemble issue https://github.com/org/repo/issues/42 "まずテストから始�
 
 セッションの operator input binding 直後に `api.submit(message)` を 1 回だけ呼ぶため、TTY（Ink TUI）と非 TTY のどちらでも、手入力を待たずに `operator.message` として conductor へ届きます。TTY では初回メッセージの有無に関わらず通常の binding として扱い、`session.post_loop_wait` から `/close` または `/exit` まで待機します（`--no-wait` または `session.postLoop.wait: false` を除く）。メッセージ未指定時の TTY 入力の挙動も変わりません。
 
-非 TTY の単発注入は追加入力を提供しないため、終了契約も通常の TTY 入力と異なります。初回メッセージを処理した conductor の `error` は再入力を待たずにエラー終了し、SDK の `cancelled` も terminal status（`stopReason: cancelled`）として終了します。`ask_human` による未回答 open question、または未解決の permission が残った場合も、回答を待つ post-loop へは移らず、その時点でセッションを終了します。dispatch hold 中にこれらの停止条件へ到達した場合も release を待ちません。未回答 question は終了結果と Open Question YAML に残り、移行期間中は JSON sidecar にも同じ snapshot を保存します。未解決 permission は終了処理で拒否されます。TTY の初回メッセージはこの単発終了契約を使わず、post-loop 待機中に追加入力で処理できます。
+非 TTY の単発注入は追加入力を提供しないため、終了契約も通常の TTY 入力と異なります。初回メッセージを処理した conductor の `error` は再入力を待たずにエラー終了し、SDK の `cancelled` も terminal status（`stopReason: cancelled`）として終了します。`ask_human` による未回答 open question、または未解決の permission が残った場合も、回答を待つ post-loop へは移らず、その時点でセッションを終了します。dispatch hold 中にこれらの停止条件へ到達した場合も release を待ちません。未回答 question は終了結果と Open Question YAML に残り、移行期間中は SessionResumeStore にも同じ snapshot を保存します。未解決 permission は終了処理で拒否されます。TTY の初回メッセージはこの単発終了契約を使わず、post-loop 待機中に追加入力で処理できます。
 
 CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できません。両方が trim 後に空でない場合は、セッション開始前にエラーになります。これは優先順位ではなく併用禁止です。`--continue` または `--resume` で CLI メッセージを指定した場合は注入せず、stderr に 1 行の警告を出します。`ENSEMBLE_OPERATOR_MESSAGE` は従来どおりそのセッションの binding で解決されます。
 
-`--continue` / `--resume` では、sidecar の conductor agent を `Agent.resume` で復元するため、新規セッション用の initial conductor send（system prompt + Issue ブリーフィング）は行いません。復元中の worker から届く `permission.pending` などのイベントはキューに保持され、復元済み conductor への最初の入力として通常どおり dispatch されます。これにより、再開直後に worker が許可待ちになっても、initial send の完了を待たずに `resolve_permission` の判断へ進めます。
+`--continue` / `--resume` では、SessionResumeStore に記録された conductor agent を `Agent.resume` で復元するため、新規セッション用の initial conductor send（system prompt + Issue ブリーフィング）は行いません。復元中の worker から届く `permission.pending` などのイベントはキューに保持され、復元済み conductor への最初の入力として通常どおり dispatch されます。これにより、再開直後に worker が許可待ちになっても、initial send の完了を待たずに `resolve_permission` の判断へ進めます。
 
 ## operator-agent の会話中の監視 hold
 
@@ -175,7 +175,7 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 | **A: question あり** | `getContext().openQuestions.length > 0` | Open questions ペインを表示。Operator input には選択中 question への回答、`Shift+↑↓`、Enter 送信の prompt を表示し、Issue 参照と自律ターン数は表示しない。choice / yes_no の回答候補が表示中は最初の Enter で補完し、次の Enter で `targetOpenQuestionId` 付き送信を行う。 |
 | **B: question なし** | `getContext().openQuestions.length === 0` | Open questions ペインを高さ 0 として省略。Operator input は固定案内を出さず、入力欄だけを表示する。通常の submit は operator メッセージとして送信する。 |
 
-`--continue` / `--resume` では、`open-questions.yaml` があればその YAML を正本として Registry を復元し、YAML がない legacy session に限って JSON sidecar の `openQuestions` / `sequence` から復元して YAML をバックフィルします。YAML が存在する場合に読み取り・検証に失敗したら resume を中止し、JSON sidecar にはフォールバックしません。復元後は `getContext()` が同じ Registry から未回答 question の一覧を返すため、binding 後の pane / stream はモード A として表示します。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使います。
+`--continue` / `--resume` では、`open-questions.yaml` があればその YAML を正本として Registry を復元し、YAML がまだない旧形式の session に限って SessionResumeStore の `openQuestions` / `sequence` から復元して YAML をバックフィルします。YAML が存在する場合に読み取り・検証に失敗したら resume を中止し、SessionResumeStore にはフォールバックしません。復元後は `getContext()` が同じ Registry から未回答 question の一覧を返すため、binding 後の pane / stream はモード A として表示します。表示 reducer の `openQuestions` は live event と binding 前フォールバック用の投影であり、resume 後の判定・選択・submit target は Registry スナップショットと一致する binding context を使います。
 
 post-loop 待機中も Operator input はモード B と同じく入力欄だけを表示します。終了中は入力を無効化し、`終了しています…` を表示します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
 
@@ -283,17 +283,17 @@ Connection stalled が自動再接続後も続く場合は `/reconnect` を試�
 
 ### `/close` — worktree を残してセッションを閉じる
 
-`/close` または `close`（大文字小文字無視・前後空白トリム）は、conductor に送らない一時終了コマンドです。入力直後に `session.operator_close` を emit し、force teardown で処理中 worker prompt を停止して未解決 permission を deny します。attach 済み worker の ACP session ID と cwd は、初回 prompt が完了する前でも runtime の接続一覧から snapshot します。GitHub monitor を停止して最新 cursor と未配送 outbox を sidecar に flush した後、worker と conductor を force stop し、TUI を dispose してプロセスを終了します。正常に完了した `/close` は exit code 0 です。
+`/close` または `close`（大文字小文字無視・前後空白トリム）は、conductor に送らない一時終了コマンドです。入力直後に `session.operator_close` を emit し、force teardown で処理中 worker prompt を停止して未解決 permission を deny します。attach 済み worker の ACP session ID と cwd は、初回 prompt が完了する前でも runtime の接続一覧から snapshot します。GitHub monitor を停止して最新 cursor と未配送 outbox を SessionResumeStore に flush した後、worker と conductor を force stop し、TUI を dispose してプロセスを終了します。正常に完了した `/close` は exit code 0 です。
 
-sidecar には conductor agent ID、worker ACP session ID / cwd、profile、GitHub monitor cursor / pending update などを保存します。Open Question の正本は `.ensemble/sessions/{conductorAgentId}/open-questions.yaml` です。version 1 の YAML に `sequence` と open / answered を含む全 `openQuestions` を保存し、移行期間中は `.ensemble/sessions/{conductorAgentId}.json` にも同じ snapshot を書きます。flush は YAML を先に保存してから JSON sidecar を更新するため、2 ファイルをまたぐ transaction ではありません。YAML の保存に失敗した場合は JSON sidecar も更新せず、warning を表示します。2 ファイルの内容が異なる場合、`--continue` / `--resume` では YAML があれば YAML を採用します。YAML がない legacy session に限り JSON sidecar から復元して YAML をバックフィルし、不正な YAML は古い JSON へフォールバックせず resume を失敗させます。worktree path は保存せず、同じ Issue の `issueUrl` と `repoRoot` から再導出します。`--continue` は既存 conductor ID を使い、保存済み worker ACP session ID / cwd が整合すれば `session/load` します。保存 session を load できない場合は新しい ACP session と bootstrap prompt にフォールバックし、以前の worker transcript は復元されません。
+SessionResumeStore には conductor agent ID、worker ACP session ID / cwd、profile、GitHub monitor cursor / pending update などを保存します。Open Question の正本は `.ensemble/sessions/{conductorAgentId}/open-questions.yaml` です。version 1 の YAML に `sequence` と open / answered を含む全 `openQuestions` を保存し、移行期間中は `.ensemble/sessions/{conductorAgentId}.json` にも同じ snapshot を書きます。flush は YAML を先に保存してから SessionResumeStore を更新するため、2 ファイルをまたぐ transaction ではありません。YAML の保存に失敗した場合は SessionResumeStore も更新せず、warning を表示します。2 ファイルの内容が異なる場合、`--continue` / `--resume` では YAML があれば YAML を採用します。YAML がまだない旧形式のセッションに限り SessionResumeStore から復元して YAML をバックフィルし、不正な YAML は古い保存状態へ fallback せず resume を失敗させます。worktree path は保存せず、同じ Issue の `issueUrl` と `repoRoot` から再導出します。`--continue` は既存 conductor ID を使い、保存済み worker ACP session ID / cwd が整合すれば `session/load` します。保存 session を load できない場合は新しい ACP session と bootstrap prompt にフォールバックし、以前の worker transcript は復元されません。
 
-`report_session_state` の最新 1 行は `.ensemble/sessions/{conductorAgentId}/session-state.yaml` に報告時刻とともに atomic rename で保存し、過去の報告も最大 50 件・ファイル全体 16 KiB まで保持します。`list_operator_sessions` は最新値のほか `statusLineHistory` を古い順に返します。異なる conductor agent ID は、同じ Issue のセッションでも別の状態として一覧に残ります。最終 sidecar flush では lifecycle も記録し、`/close` は `closed`、`/exit` は worktree cleanup 試行後に `exited`、SIGINT / SIGTERM は `interrupted` とします。既存 sidecar を resume するときは、再開処理に入る前に `unknown` を保存します。通常完了と lifecycle 未記録の旧 sidecar も `unknown` です。Phase 1 では `running` を記録しないため、operator-agent の一覧は保存済みスナップショットであり、現在の稼働状態を示しません。
+`report_session_state` の最新 1 行は `.ensemble/sessions/{conductorAgentId}/session-state.yaml` に報告時刻とともに atomic rename で保存し、過去の報告も最大 50 件・ファイル全体 16 KiB まで保持します。`list_operator_sessions` は最新値のほか `statusLineHistory` を古い順に返します。異なる conductor agent ID は、同じ Issue のセッションでも別の状態として一覧に残ります。最終 flush では SessionResumeStore に `lifecycle` も記録し、`/close` は `closed`、`/exit` は worktree cleanup 試行後に `exited`、SIGINT / SIGTERM は `interrupted` とします。保存済みの状態からセッションを再開するときは、再開処理に入る前に `unknown` を保存します。通常完了時と `lifecycle` が未記録の旧形式では `unknown` として扱います。Phase 1 では `running` を記録しないため、operator-agent の一覧は保存済みスナップショットであり、現在の稼働状態を示しません。
 
-`tool_call` / `tool_call_update` から累積した snapshot は、resume sidecar と別の `.ensemble/sessions/{conductorAgentId}.tool-calls` に保存し、`--continue` / `--resume` 後の permission brief と `get_tool_call` で再利用します。履歴が無い旧 session、読めないファイル、不正な entry は履歴なしとして扱うため、tool-call 履歴の問題だけで session resume が失敗することはありません。履歴は最終更新から 30 日、最大 1,000 件かつ 8 MiB まで保持し、上限時は古い snapshot を削除します。1 件で上限を超える snapshot は保存しません。終了時に flush しますが、予期しないプロセス終了では最後の flush 以降が失われる場合があります。
+`tool_call` / `tool_call_update` から累積した snapshot は、SessionResumeStore とは別の `.ensemble/sessions/{conductorAgentId}.tool-calls` に保存し、`--continue` / `--resume` 後の permission brief と `get_tool_call` で再利用します。履歴が無い旧 session、読めないファイル、不正な entry は履歴なしとして扱うため、tool-call 履歴の問題だけで session resume が失敗することはありません。履歴は最終更新から 30 日、最大 1,000 件かつ 8 MiB まで保持し、上限時は古い snapshot を削除します。1 件で上限を超える snapshot は保存しません。終了時に flush しますが、予期しないプロセス終了では最後の flush 以降が失われる場合があります。
 
 履歴ファイルはローカルに平文で置かれ、path、command、tool input などを含む可能性があります。`.ensemble/` は gitignore 対象で、ファイル自体は Issue / PR や終了 JSON に含めませんが、再開後に permission brief や `get_tool_call` で conductor へ渡した内容は、選択中 backend の会話に含まれる場合があります。履歴を早期削除するには対象の `.tool-calls` ファイルを削除してください。
 
-GitHub update は conductor send が `finished` で完了した後に限って outbox から ack します。`/close` と send 完了が競合すると、send が完了しても close 中は ack せず、`--continue` 後に再配送します。ack 後に cursor を sidecar へ flush する前の crash でも重複することがあり、配送は at-least-once です。終了時の YAML / sidecar flush は best effort で、失敗時は終了経路にかかわらず warning を表示して終了を続けます。直近の更新や Open Question が保存されず、以前のデータから再開するか、有効な sidecar がなければ再開できない場合があります。in-flight conductor send と teardown で deny した permission は保存・再開しません（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0017](adr/0017-conductor-send-lifecycle-events.md)）。
+GitHub update は conductor send が `finished` で完了した後に限って outbox から ack します。`/close` と send 完了が競合すると、send が完了しても close 中は ack せず、`--continue` 後に再配送します。ack 後に cursor を SessionResumeStore へ flush する前の crash でも重複することがあり、配送は at-least-once です。終了時の YAML / SessionResumeStore の flush は best effort で、失敗時は終了経路にかかわらず warning を表示して終了を続けます。直近の更新や Open Question が保存されず、以前の状態から再開するか、有効な SessionResumeStore がなければ再開できない場合があります。in-flight conductor send と teardown で deny した permission は保存・再開しません（[ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0017](adr/0017-conductor-send-lifecycle-events.md)）。
 
 ### `/exit` の即時フィードバック（#170）
 
@@ -310,7 +310,7 @@ cleanup が dirty worktree のためスキップされた場合や、削除に�
 
 ### `/close` の即時フィードバック
 
-`/close` または `close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup を行わず exit code 0 でプロセスを終了します。YAML / sidecar の flush failure は warning として扱い、`/close`・`/exit`・割り込み・通常終了など、どの終了経路でも終了を続けます。`/exit` の cleanup failure を warning のみ・exit 0 とする [#448](https://github.com/otolab/agents-ensemble/issues/448) の契約とは別の条件です。
+`/close` または `close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup を行わず exit code 0 でプロセスを終了します。YAML / SessionResumeStore の flush failure は warning として扱い、`/close`・`/exit`・割り込み・通常終了など、どの終了経路でも終了を続けます。`/exit` の cleanup failure を warning のみ・exit 0 とする [#448](https://github.com/otolab/agents-ensemble/issues/448) の契約とは別の条件です。
 
 #### post-loop 開始直後の `/exit`（#200）
 
@@ -322,7 +322,7 @@ cleanup が dirty worktree のためスキップされた場合や、削除に�
 |------|------------|----------------|
 | `/exit` / `/close` 直後 | 専用イベントで TUI は終了フィードバック・入力無効化 | 活動ログ / 入力ヒント |
 | `buildResult` | 明示 `/exit` / `/close` / interrupt 時は `getUsage().cost` 取得をスキップ（SDK 応答待ちで teardown を止めない） | なし |
-| `finally` teardown（停止フェーズ） | `/close` は処理中 worker prompt を cancel し、permission を deny、attach 済み ACP session ID / cwd を snapshot してから monitor を停止し、その cursor / outbox を sidecar に flush する。続いて worker と conductor を force stop する。Pi は MCP を無効にして reload し、stdio MCP child を閉じてから session を dispose する。worker ACP child は stdin EOF 後 500ms 待ち、SIGTERM 後 5s、SIGKILL 後最大 2s の回収を試みる。`/exit` は cursor を flush してから worker / conductor / monitor を停止する | `harness.teardown.phase` で段階表示。完了時 `harness.teardown`（1s 超または force 時） |
+| `finally` teardown（停止フェーズ） | `/close` は処理中 worker prompt を cancel し、permission を deny、attach 済み ACP session ID / cwd を snapshot してから monitor を停止し、その cursor / outbox を SessionResumeStore に flush する。続いて worker と conductor を force stop する。Pi は MCP を無効にして reload し、stdio MCP child を閉じてから session を dispose する。worker ACP child は stdin EOF 後 500ms 待ち、SIGTERM 後 5s、SIGKILL 後最大 2s の回収を試みる。`/exit` は cursor を flush してから worker / conductor / monitor を停止する | `harness.teardown.phase` で段階表示。完了時 `harness.teardown`（1s 超または force 時） |
 | GitHub monitor `stop`（停止フェーズ内・accepted risk） | poll 実行中に `/exit` または `/close` すると `stop()` は完了を待つ | 5s まで待ち、超過時 poll を abort。その後最大 500ms 待って teardown を続ける（#209） |
 | isolated worktree 削除（停止フェーズ後） | 正常 `/exit` のみ clean worktree の削除を試みる。`/close` と Ctrl+C/SIGINT は削除しない。未コミット変更時は削除を拒否し、一時的な失敗は初回＋100ms／250ms の最大 3 回まで再試行 | `/exit` では成功時 `harness.worktree.removed`。dirty / 最終失敗時は診断と手動復旧方法を表示 |
 

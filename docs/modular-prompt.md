@@ -48,7 +48,7 @@ modular-prompt の標準セクションのうち、ensemble で主に使うも�
 載せない:
 
 - **判断**, **作業** など、文脈なしでも通じる一般語
-- harness の実装語（**bootstrap**, ACP, sidecar など）
+- harness の実装語（**bootstrap**, ACP, SessionResumeStore など）
 - 中立な役割分担の説明（→ `methodology`）
 - 特定ロールへの命令・手順（→ `instructions`）
 
