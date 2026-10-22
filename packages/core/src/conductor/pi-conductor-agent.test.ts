@@ -278,7 +278,7 @@ describe('PiConductorAgent', () => {
     void onStreamText;
   });
 
-  it('sums usage from every assistant message in one send', async () => {
+  it('sums usage across agent_end events and resets it between sends', async () => {
     const conductor = await PiConductorAgent.create({
       cwd,
       pi: { agentDir },
@@ -289,8 +289,9 @@ describe('PiConductorAgent', () => {
     const firstMessage = {
       role: 'assistant',
       content: [{ type: 'text', text: 'working' }],
-      model: 'model-1',
-      stopReason: 'toolUse',
+      model: 'intermediate-model',
+      stopReason: 'error',
+      errorMessage: 'temporary failure',
       usage: {
         input: 11,
         output: 5,
@@ -303,7 +304,7 @@ describe('PiConductorAgent', () => {
     const finalMessage = {
       role: 'assistant',
       content: [{ type: 'text', text: 'complete' }],
-      model: 'model-1',
+      model: 'final-model',
       stopReason: 'stop',
       usage: {
         input: 13,
@@ -314,13 +315,58 @@ describe('PiConductorAgent', () => {
         cost: { total: 0.2 },
       },
     };
+    const toolResult = {
+      role: 'toolResult',
+      usage: {
+        input: 100,
+        output: 100,
+        totalTokens: 200,
+        cacheRead: 100,
+        cacheWrite: 100,
+        cost: { total: 10 },
+      },
+    };
+    const nextSendMessage = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'next send' }],
+      model: 'next-model',
+      stopReason: 'stop',
+      usage: {
+        input: 3,
+        output: 2,
+        totalTokens: 5,
+        cacheRead: 1,
+        cacheWrite: 2,
+        cost: { total: 0.05 },
+      },
+    };
+    let sendCount = 0;
     fakeSession.prompt.mockImplementation(async () => {
-      fakeSession.state.messages = [firstMessage, finalMessage];
-      sessionListener?.({
-        type: 'agent_end',
-        messages: [firstMessage, finalMessage],
-        willRetry: false,
-      });
+      if (sendCount++ === 0) {
+        fakeSession.state.messages = [firstMessage, toolResult, finalMessage];
+        sessionListener?.({
+          type: 'agent_end',
+          messages: [firstMessage, toolResult],
+          willRetry: true,
+        });
+        sessionListener?.({
+          type: 'agent_end',
+          messages: [finalMessage],
+          willRetry: false,
+        });
+      } else {
+        fakeSession.state.messages = [
+          firstMessage,
+          toolResult,
+          finalMessage,
+          nextSendMessage,
+        ];
+        sessionListener?.({
+          type: 'agent_end',
+          messages: [nextSendMessage],
+          willRetry: false,
+        });
+      }
     });
 
     const result = await conductor.send('kickoff');
@@ -328,13 +374,27 @@ describe('PiConductorAgent', () => {
     expect(result).toMatchObject({
       status: 'finished',
       result: 'complete',
-      modelId: 'model-1',
+      modelId: 'final-model',
       usage: {
         inputTokens: 24,
         outputTokens: 12,
         totalTokens: 36,
         cacheReadTokens: 5,
         cacheWriteTokens: 5,
+      },
+    });
+
+    const nextResult = await conductor.send('next');
+    expect(nextResult).toMatchObject({
+      status: 'finished',
+      result: 'next send',
+      modelId: 'next-model',
+      usage: {
+        inputTokens: 3,
+        outputTokens: 2,
+        totalTokens: 5,
+        cacheReadTokens: 1,
+        cacheWriteTokens: 2,
       },
     });
     await conductor.close();
