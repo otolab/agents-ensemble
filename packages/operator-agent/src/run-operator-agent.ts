@@ -51,6 +51,7 @@ import {
 
 export interface RunOperatorAgentOptions {
   repoRoot?: string;
+  configPath?: string;
   newSession?: boolean;
 }
 
@@ -191,7 +192,9 @@ async function resolveOperatorRuntime(
   dependencies: RunOperatorAgentDependencies,
 ): Promise<OperatorRuntime> {
   const repoRoot = resolve(options.repoRoot ?? process.cwd());
-  const config = await (dependencies.loadConfig ?? loadEnsembleConfig)(repoRoot);
+  const config = await (dependencies.loadConfig ?? loadEnsembleConfig)(repoRoot, {
+    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+  });
   const { profile, profilePath } = await (dependencies.loadProfile ?? loadProfile)({
     cwd: repoRoot,
     config,

@@ -40,11 +40,13 @@ program
   .command('operator-agent')
   .description('Chat with an operator agent about repository session state')
   .option('--repo-root <path>', 'Repository root for config and saved sessions', process.cwd())
+  .option('--config <path>', 'Additional ensemble config file (merged over user and project config)')
   .option('--new', 'Start a fresh operator-agent session')
-  .action(async (options: { repoRoot: string; new: boolean }) => {
+  .action(async (options: { repoRoot: string; config?: string; new: boolean }) => {
     try {
       await runOperatorAgent({
         repoRoot: resolve(options.repoRoot),
+        configPath: options.config,
         newSession: options.new,
       });
     } catch (error) {
@@ -65,6 +67,10 @@ program
     '--repo-root <path>',
     'Path to the local git clone for worker worktrees',
     process.cwd(),
+  )
+  .option(
+    '--config <path>',
+    'Additional ensemble config file (merged over user and project config)',
   )
   .option(
     '--conductor-cwd <path>',
@@ -142,6 +148,7 @@ program
       options: {
         repoRoot: string;
         conductorCwd: string;
+        config?: string;
         resume?: string;
         continue?: boolean;
         profile?: string;
@@ -166,6 +173,7 @@ program
         const issueUrl = await resolveIssueUrl(issueRef, repoRoot);
         const result = await executeIssueCommand(issueUrl, {
           ...options,
+          configPath: options.config,
           initialOperatorMessage: normalizeInitialOperatorMessage(messageParts),
           defaultAcpArgs: options.defaultAcpArg,
         });

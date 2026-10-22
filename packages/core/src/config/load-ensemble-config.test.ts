@@ -263,4 +263,43 @@ describe('loadEnsembleConfig', () => {
       CODEX_CONFIG: '/project/litellm.config.toml',
     });
   });
+
+  it('merges an explicit config over project and user config', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      `conductor:\n  model: user-model\nacp:\n  env:\n    USER_VALUE: user\n    MODEL_PROVIDER: openai\n`,
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `conductor:\n  backend: pi\nacp:\n  env:\n    PROJECT_VALUE: project\n    MODEL_PROVIDER: project-provider\n`,
+    );
+    const explicitPath = join(repoRoot, 'litellm.config.yaml');
+    await writeFile(
+      explicitPath,
+      `conductor:\n  model: litellm-model\nacp:\n  env:\n    MODEL_PROVIDER: litellm\n`,
+    );
+
+    const config = await loadEnsembleConfig(repoRoot, {
+      userEnsembleRoot,
+      configPath: explicitPath,
+    });
+
+    expect(config.conductor).toMatchObject({
+      model: 'litellm-model',
+      backend: 'pi',
+    });
+    expect(config.acp.env).toEqual({
+      USER_VALUE: 'user',
+      PROJECT_VALUE: 'project',
+      MODEL_PROVIDER: 'litellm',
+    });
+  });
+
+  it('fails clearly when an explicit config file does not exist', async () => {
+    const missingPath = join(repoRoot, 'missing.config.yaml');
+
+    await expect(
+      loadEnsembleConfig(repoRoot, { userEnsembleRoot, configPath: missingPath }),
+    ).rejects.toThrow(`Explicit ensemble config file not found: ${missingPath}`);
+  });
 });

@@ -131,6 +131,43 @@ describe('runOperatorAgent', () => {
     expect(output.capturedText()).not.toContain('\u001b[');
   });
 
+  it('loads an explicitly selected config file', async () => {
+    const configPath = join(repoRoot, 'alternate.config.yaml');
+    await writeFile(
+      configPath,
+      ['conductor:', '  model: alternate-model', ''].join('\n'),
+    );
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const fakeAgent = createFakeAgent({
+      send: async () => ({
+        runId: 'unused',
+        status: 'completed',
+        result: '',
+      }),
+    });
+    const agentFactory: ConductorAgentFactory = {
+      create: async (options) => {
+        agentOptions = options;
+        return fakeAgent;
+      },
+      resume: async (_agentId, options) => {
+        agentOptions = options;
+        return fakeAgent;
+      },
+    };
+
+    await runOperatorAgent(
+      { repoRoot, configPath, newSession: true },
+      {
+        stdin: createInput('/exit\n'),
+        stdout: createOutput(),
+        agentFactory,
+      },
+    );
+
+    expect(agentOptions?.modelId).toBe('alternate-model');
+  });
+
   it('runs a Pi-backed TTY conversation with profile prompt and saved session summaries', async () => {
     const input = createInput('状況を教えて\n/exit\n');
     const output = createOutput();

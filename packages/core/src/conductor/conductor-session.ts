@@ -184,7 +184,7 @@ export interface RunConductorSessionOptions {
   issueUrl: string;
   repoRoot: string;
   conductorCwd?: string;
-  /** テスト用。未指定時は loadEnsembleConfig(repoRoot) で解決する。 */
+  /** 呼び出し元で解決済みの config。未指定時は loadEnsembleConfig(repoRoot) で解決する。 */
   ensembleConfig?: EnsembleConfig;
   /** MCP 設定の解決オプション。未指定時は `~/.ensemble` を参照する。 */
   mcpConfigOptions?: LoadMcpConfigOptions;

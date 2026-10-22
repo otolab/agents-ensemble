@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import yaml from 'js-yaml';
 import { ENSEMBLE_DIR } from '../profile/profile-paths.js';
 import { deepMerge } from './deep-merge.js';
@@ -14,6 +14,8 @@ export const ENSEMBLE_CONFIG_FILE = 'config.yaml';
 export interface LoadEnsembleConfigOptions {
   /** テスト用。既定は `~/.ensemble`。 */
   userEnsembleRoot?: string;
+  /** 起動時に明示する追加 config。既定の user/project config の上に merge する。 */
+  configPath?: string;
 }
 
 function userConfigPath(options: LoadEnsembleConfigOptions): string {
@@ -23,6 +25,16 @@ function userConfigPath(options: LoadEnsembleConfigOptions): string {
 
 function projectConfigPath(repoRoot: string): string {
   return join(repoRoot, ENSEMBLE_DIR, ENSEMBLE_CONFIG_FILE);
+}
+
+function resolveConfigPath(path: string): string {
+  const expanded =
+    path === '~'
+      ? homedir()
+      : path.startsWith('~/')
+        ? join(homedir(), path.slice(2))
+        : path;
+  return isAbsolute(expanded) ? expanded : resolve(expanded);
 }
 
 async function readConfigYaml(path: string): Promise<unknown | undefined> {
@@ -61,6 +73,18 @@ export async function loadEnsembleConfig(
   const projectRaw = await readConfigYaml(projectConfigPath(repoRoot));
   if (projectRaw !== undefined) {
     merged = mergeConfigLayer(merged, parseEnsembleConfig(projectRaw));
+  }
+
+  if (options.configPath !== undefined) {
+    const explicitPath = resolveConfigPath(options.configPath);
+    const explicitRaw = await readConfigYaml(explicitPath);
+    if (explicitRaw === undefined) {
+      throw new Error(`Explicit ensemble config file not found: ${explicitPath}`);
+    }
+    merged = mergeConfigLayer(
+      merged,
+      parseEnsembleConfig(explicitRaw),
+    );
   }
 
   return merged;

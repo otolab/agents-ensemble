@@ -110,6 +110,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0036](0036-live-open-question-answer-contract.md) | 稼働中 Open Question の回答応答条件 | accepted |
 | [0037](0037-operator-agent-session-watch-and-dispatch.md) | operator-agent の session watch と report dispatch | accepted |
 | [0038](0038-operator-agent-conversation-report-hold.md) | operator-agent の会話中に watch report を保留する | accepted |
+| [0039](0039-explicit-ensemble-config-file.md) | 起動時に指定する ensemble config ファイル | accepted |
 
 ## 追加するとき
 
