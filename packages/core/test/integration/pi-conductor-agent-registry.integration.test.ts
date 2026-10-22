@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 import {
   createPiConductorAuthContext,
   resolvePiConductorApiKey,
-} from './conductor-pi-auth.js';
-import { loadPiResources } from './pi-resource-loader.js';
+} from '../../src/conductor/conductor-pi-auth.js';
+import { loadPiResources } from '../../src/conductor/pi-resource-loader.js';
 
 describe('PiConductorAgent v1 model runtime integration', () => {
   it('uses ModelRuntime and ModelRegistry for custom model auth and request metadata', async () => {
