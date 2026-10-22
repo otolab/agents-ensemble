@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import yaml from 'js-yaml';
 import { ENSEMBLE_DIR } from '../profile/profile-paths.js';
 import { deepMerge } from './deep-merge.js';
@@ -14,6 +14,8 @@ export const ENSEMBLE_CONFIG_FILE = 'config.yaml';
 export interface LoadEnsembleConfigOptions {
   /** テスト用。既定は `~/.ensemble`。 */
   userEnsembleRoot?: string;
+  /** project config の解決状況を出力する。既定は stderr。 */
+  writeStderr?: (message: string) => void;
 }
 
 function userConfigPath(options: LoadEnsembleConfigOptions): string {
@@ -22,7 +24,7 @@ function userConfigPath(options: LoadEnsembleConfigOptions): string {
 }
 
 function projectConfigPath(repoRoot: string): string {
-  return join(repoRoot, ENSEMBLE_DIR, ENSEMBLE_CONFIG_FILE);
+  return resolve(repoRoot, ENSEMBLE_DIR, ENSEMBLE_CONFIG_FILE);
 }
 
 async function readConfigYaml(path: string): Promise<unknown | undefined> {
@@ -51,6 +53,9 @@ export async function loadEnsembleConfig(
   repoRoot: string,
   options: LoadEnsembleConfigOptions = {},
 ): Promise<EnsembleConfig> {
+  const writeStderr =
+    options.writeStderr ??
+    ((message: string) => void process.stderr.write(`${message}\n`));
   let merged: EnsembleConfig = structuredClone(DEFAULT_ENSEMBLE_CONFIG);
 
   const userRaw = await readConfigYaml(userConfigPath(options));
@@ -58,9 +63,19 @@ export async function loadEnsembleConfig(
     merged = mergeConfigLayer(merged, parseEnsembleConfig(userRaw));
   }
 
-  const projectRaw = await readConfigYaml(projectConfigPath(repoRoot));
-  if (projectRaw !== undefined) {
-    merged = mergeConfigLayer(merged, parseEnsembleConfig(projectRaw));
+  const projectPath = projectConfigPath(repoRoot);
+  if (!merged.config.loadProjectConfig) {
+    writeStderr('ensemble: project config をスキップしました（user 設定）');
+  } else {
+    const projectRaw = await readConfigYaml(projectPath);
+    if (projectRaw !== undefined) {
+      const projectLayer = parseEnsembleConfig(projectRaw);
+      // config.loadProjectConfig は user 層だけが決める。project YAML の
+      // 同名キーは設定全体へも merge せず、user / default の値を保つ。
+      delete projectLayer.config;
+      merged = mergeConfigLayer(merged, projectLayer);
+      writeStderr(`ensemble: project config を読み込みました: ${projectPath}`);
+    }
   }
 
   return merged;

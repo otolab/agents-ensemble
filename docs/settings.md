@@ -99,7 +99,7 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 | 監視 debounce | `github.monitor.debounceMs` | — | `--github-monitor-debounce-ms` | `30000` | B |
 | poll 間隔 | `github.monitor.pollIntervalMs` 他 | — | — | 各定数 | B |
 
-テンプレート: [`config.example.yaml`](../config.example.yaml)。`ensemble issue` 起動時（GitHub monitor より前）に `loadEnsembleConfig(repoRoot)` で読み込む。
+テンプレート: [`config.example.yaml`](../config.example.yaml)。`ensemble issue` 起動時（GitHub monitor より前）に `loadEnsembleConfig(repoRoot)` で読み込む。user 設定の `config.loadProjectConfig: false` で project 層を無効にでき、project config の読み込み・スキップは同 loader を使う起動経路で stderr に表示する。詳細は [config.md](config.md#配置と解決順) を参照。
 
 ## 一覧 — TUI / オペレータ UI
 

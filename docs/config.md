@@ -10,12 +10,17 @@ conductor に渡す MCP 設定もこの config.yaml とは別の JSON ファイ�
 
 | 層 | パス | 優先度 |
 |----|------|--------|
-| プロジェクト | `<repoRoot>/.ensemble/config.yaml` | 高（上書き） |
+| プロジェクト | `<repoRoot>/.ensemble/config.yaml` | 高（読み込み有効時） |
 | ユーザ | `~/.ensemble/config.yaml` | 低（既定） |
 
-- 両方ある場合は **deep merge**（プロジェクトがユーザを上書き）
+- 両方あり、読み込みが有効な場合は **deep merge**（プロジェクトがユーザを上書き）
+- user 設定で project 層を無効にした場合は **user 設定のみ**
 - どちらも無い場合は **コード内デフォルト**
 - **環境変数・CLI フラグは config より優先**（明示上書き）
+
+ユーザ設定の `config.loadProjectConfig: false` を指定すると、project config を読み込まず user 設定だけで解決します。既定値は `true` です。この制御キーは `~/.ensemble/config.yaml` でのみ有効で、project 側に同じキーを書いても無視されます。project config を読み込んだ場合は絶対パスを、user 設定でスキップした場合はその旨を起動時に stderr へ表示します。project config が無く、読み込みが有効な場合は表示しません。
+
+これは [#547 の名前付き config 切り替え](https://github.com/otolab/agents-ensemble/issues/547) とは別の設定です。`config.loadProjectConfig` は既定の project 層を読むかどうかを選びます。#547 は名前付き config や明示ファイルを選び、モデル・ACP などの設定内容を切り替える仕組みを扱います。
 
 ### 設定項目ごとの解決順（Phase 1）
 
@@ -48,6 +53,9 @@ cp config.example.yaml ~/.ensemble/config.yaml
 ```yaml
 profile:
   default: implementer-and-reviewer-v2 # ENSEMBLE_DEFAULT_PROFILE 相当
+
+config:
+  loadProjectConfig: true              # user config のみ有効。false で project config を無視
 
 conductor:
   backend: pi                        # cursor（既定） | pi
@@ -91,6 +99,7 @@ tui:
 
 | キー | 意味 | CLI 上書き | env 上書き |
 |------|------|-----------|-----------|
+| `config.loadProjectConfig` | project `.ensemble/config.yaml` を読み込むか（既定: `true`、user config のみ有効） | — | — |
 | `profile.default` | 既定 team profile（名前またはパス） | `--profile` | `ENSEMBLE_DEFAULT_PROFILE` |
 | `conductor.model` | conductor モデル id | `--model` | `CONDUCTOR_MODEL_ID` |
 | `conductor.verbose` | harness 詳細 telemetry の表示 | `--verbose` | `CONDUCTOR_VERBOSE` |
@@ -109,6 +118,8 @@ tui:
 | `github.monitor.enabled` | Issue / PR 監視 | `--no-github-monitor` | — |
 | `github.monitor.debounceMs` | 更新 debounce | `--github-monitor-debounce-ms` | — |
 | `github.monitor.pollIntervalMs` 他 | poll 間隔（コード内既定のみ） | — | — |
+
+`config.loadProjectConfig` は config の merge 対象を決めるメタ設定です。project YAML の値は、設定結果にも project config の読み込み判断にも使われません。
 
 ### ACP spawn env（`acp.env`）
 
