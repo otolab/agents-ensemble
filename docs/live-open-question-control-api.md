@@ -237,7 +237,7 @@ UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です�
 
 ### 発言 listen と OQ watch の分離
 
-`register_conductor_message_listen` は `conductorAgentId` と任意の `messageDebounceMs`（既定 10,000ms、0–120,000ms）を受け取ります。登録直後の live poll は既存の最新 `sendCount` を baseline とし、その後に増えた発言だけを poll します。window に複数の発言があれば、sendCount 昇順で inbound / response の section を 1 report にまとめます。`unregister_conductor_message_listen` は以後の polling を止めます。
+`register_conductor_message_listen` は `conductorAgentId` と任意の `messageDebounceMs`（既定 10,000ms、0–120,000ms）を受け取ります。登録直後の live poll は既存の最新 `sendCount` を baseline とし、その後に増えた発言だけを poll します。baseline の最新 record が単独で上限を超える場合は、size error の `data.oversizedSendCount` を使ってその record を silent baseline に含め、登録を完了します。debounce window に複数の発言があれば、sendCount 昇順で inbound / response の section を 1 report にまとめます。`unregister_conductor_message_listen` は以後の polling を止めます。
 
 発言 listen は operator-agent が UDS を polling し、独立した `messageCursors` を使います。`register_session_watch` の Open Question / status cursor と混ぜません。harness が停止中、UDS が到達不能、または method 未対応の場合は発言 listen に fallback はありません。通常の session watch の保存 YAML fallback とも別動作です。
 
@@ -245,7 +245,7 @@ UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です�
 
 operator-agent の listen は limit 20 の page から読み始め、aggregate response が 1 MiB を超えた場合は同じ exclusive cursor から limit を下げて再試行します。取得できた複数 page はその poll の debounce report にまとめ、sendCount 昇順で通知します。cursor は取得済み page の最後までだけ進めるため、retry で発言を飛ばしたり並べ替えたりしません。
 
-limit 1 でも単独 response が上限を超える発言に達した場合、その発言の `sendCount` を使って listen cursor を安全に進めます。読み取れなかった発言は内容を切り詰めずに読み飛ばし、同じ debounce report に件数と `sendCount` を含む短い warning を1件まとめます。その後も polling を続け、後続の読み取り可能な発言を順序どおり通知します。先に取得した page、読み飛ばした発言、後続 page は同じ report window にまとめられます。list API はこの動作をせず、単独 oversized record を含む response に対して従来どおり明示的な size error を返します。
+limit 1 でも単独 response が上限を超える発言に達した場合、その発言の `sendCount` を使って listen cursor を安全に進めます。読み取れなかった発言は内容を切り詰めずに読み飛ばし、同じ debounce window に複数 poll で見つかったものも含め、report ごとに件数と `sendCount` を列挙した warning section 1つにまとめます。その後も polling を続け、後続の読み取り可能な発言を順序どおり通知します。先に取得した page、読み飛ばした発言、後続 page は同じ report window にまとめられます。list API はこの動作をせず、単独 oversized record を含む response に対して従来どおり明示的な size error を返します。
 
 ## Persistence、acknowledgment、errors
 

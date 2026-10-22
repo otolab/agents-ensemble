@@ -13,6 +13,7 @@ export type OperatorDispatchEvent =
       text: string;
       reportId?: string;
       sendCount?: number;
+      oversizedSendCounts?: number[];
       arrival: number;
       readyAt: number;
     };
@@ -142,7 +143,35 @@ export function formatOperatorDispatchBatch(
       (event) => event.type === 'report' && event.reportType === 'conductor_message',
     )
   ) {
-    const messages = [...events].sort(
+    const reports = events.filter(
+      (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+        event.type === 'report' && event.reportType === 'conductor_message',
+    );
+    const oversizedWarnings = reports.filter(
+      (event) => (event.oversizedSendCounts?.length ?? 0) > 0,
+    );
+    const oversizedSendCounts = [
+      ...new Set(
+        oversizedWarnings.flatMap((event) => event.oversizedSendCounts ?? []),
+      ),
+    ].sort((left, right) => left - right);
+    const messages = reports.filter(
+      (event) => (event.oversizedSendCounts?.length ?? 0) === 0,
+    );
+    if (oversizedSendCounts.length > 0) {
+      const warning = oversizedWarnings[0]!;
+      messages.push({
+        ...warning,
+        text: formatOversizedConductorMessageWarning(
+          warning.issueUrl,
+          warning.conductorAgentId,
+          oversizedSendCounts,
+        ),
+        sendCount: oversizedSendCounts.at(-1)!,
+        oversizedSendCounts,
+      });
+    }
+    messages.sort(
       (left, right) =>
         (left.type === 'report' ? left.sendCount ?? 0 : 0) -
         (right.type === 'report' ? right.sendCount ?? 0 : 0),
@@ -182,6 +211,17 @@ export function formatOperatorDispatchBatch(
       [`### ${index + 1}/${events.length}`, '', event.text].join('\n'),
     ),
   ].join('\n\n');
+}
+
+export function formatOversizedConductorMessageWarning(
+  issueUrl: string,
+  conductorAgentId: string,
+  sendCounts: readonly number[],
+): string {
+  return [
+    `対象: ${issueUrl} (${conductorAgentId})`,
+    `⚠ ${sendCounts.length}件の発言は単独のUDS responseが1 MiBを超えたため読み取れず、本文を切り詰めずにlistenで読み飛ばしました（sendCount: ${sendCounts.join(', ')}）。`,
+  ].join('\n');
 }
 
 export function createOperatorDispatchQueue(): OperatorDispatchQueue {

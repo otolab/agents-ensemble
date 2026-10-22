@@ -22,6 +22,7 @@ import type {
   OperatorDispatchEvent,
   OperatorDispatchQueue,
 } from './operator-dispatch.js';
+import { formatOversizedConductorMessageWarning } from './operator-dispatch.js';
 
 const WATCH_STATE_VERSION = 1;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
@@ -63,6 +64,7 @@ interface OperatorWatchState {
     text: string;
     debounceMs: number;
     sendCount?: number;
+    oversizedSendCounts?: number[];
   }>;
 }
 
@@ -337,11 +339,9 @@ export async function createOperatorWatchPool(
         if (!resumeStore?.harnessSocketPath) return 0;
         const cursor = state.messageCursors[id];
         if (cursor === undefined) {
-          const baseline = await readConductorMessages(
+          state.messageCursors[id] = await readConductorMessageBaseline(
             resumeStore.harnessSocketPath,
-            { limit: 1, order: 'desc' },
           );
-          state.messageCursors[id] = baseline.messages[0]?.sendCount ?? 0;
           await persist();
           return 0;
         }
@@ -358,7 +358,7 @@ export async function createOperatorWatchPool(
           throw readResult.responseSizeError;
         }
         const nextCursor = readResult.cursor;
-        const reports = messages.map((message) => ({
+        const reports: OperatorWatchState['pendingReports'] = messages.map((message) => ({
           reportId: randomUUID(),
           reportType: 'conductor_message' as const,
           conductorAgentId: id,
@@ -374,14 +374,19 @@ export async function createOperatorWatchPool(
             conductorAgentId: id,
             issueUrl: resumeStore.issueUrl,
             text: formatOversizedConductorMessageWarning(
-              resumeStore,
+              resumeStore.issueUrl,
+              id,
               readResult.oversizedSendCounts,
             ),
             debounceMs: listener.messageDebounceMs,
             sendCount: readResult.oversizedSendCounts.at(-1)!,
+            oversizedSendCounts: readResult.oversizedSendCounts,
           });
         }
-        reports.sort((left, right) => left.sendCount - right.sendCount);
+        reports.sort(
+          (left, right) =>
+            (left.sendCount ?? 0) - (right.sendCount ?? 0),
+        );
         state.messageCursors[id] = nextCursor;
         if (reports.length > 0) state.pendingReports.push(...reports);
         let persistFailed = false;
@@ -403,6 +408,7 @@ export async function createOperatorWatchPool(
             issueUrl: resumeStore.issueUrl,
             text: report.text,
             sendCount: report.sendCount,
+            oversizedSendCounts: report.oversizedSendCounts,
           })),
           listener.messageDebounceMs,
         );
@@ -447,6 +453,8 @@ export async function createOperatorWatchPool(
         conductorAgentId: report.conductorAgentId,
         issueUrl: report.issueUrl,
         text: report.text,
+        sendCount: report.sendCount,
+        oversizedSendCounts: report.oversizedSendCounts,
       }],
       0,
     );
@@ -600,6 +608,20 @@ async function readConductorMessages(
   });
 }
 
+async function readConductorMessageBaseline(socketPath: string): Promise<number> {
+  try {
+    const baseline = await readConductorMessages(socketPath, {
+      limit: 1,
+      order: 'desc',
+    });
+    return baseline.messages[0]?.sendCount ?? 0;
+  } catch (error) {
+    const oversizedSendCount = oversizedConductorMessageSendCount(error);
+    if (oversizedSendCount !== undefined) return oversizedSendCount;
+    throw error;
+  }
+}
+
 async function readConductorMessagePages(
   socketPath: string,
   cursor: number,
@@ -626,12 +648,11 @@ async function readConductorMessagePages(
       if (!isConductorMessageResponseTooLarge(error)) throw error;
       if (limit === 1) {
         const oversizedSendCount =
-          error.data &&
-          'oversizedSendCount' in error.data &&
-          error.data.oversizedSendCount > after
-            ? error.data.oversizedSendCount
-            : undefined;
-        if (oversizedSendCount === undefined) {
+          oversizedConductorMessageSendCount(error);
+        if (
+          oversizedSendCount === undefined ||
+          oversizedSendCount <= after
+        ) {
           return {
             messages,
             oversizedSendCounts,
@@ -672,6 +693,19 @@ function isConductorMessageResponseTooLarge(
   );
 }
 
+function oversizedConductorMessageSendCount(
+  error: unknown,
+): number | undefined {
+  if (
+    !isConductorMessageResponseTooLarge(error) ||
+    !error.data ||
+    !('oversizedSendCount' in error.data)
+  ) {
+    return undefined;
+  }
+  return error.data.oversizedSendCount;
+}
+
 function formatConductorMessageReport(
   resumeStore: SessionResumeStore,
   message: OpenQuestionControlConductorMessage,
@@ -691,16 +725,6 @@ function formatConductorMessageReport(
     '#### response',
     '',
     message.text,
-  ].join('\n');
-}
-
-function formatOversizedConductorMessageWarning(
-  resumeStore: SessionResumeStore,
-  sendCounts: readonly number[],
-): string {
-  return [
-    `対象: ${resumeStore.issueUrl} (${resumeStore.conductorAgentId})`,
-    `⚠ ${sendCounts.length}件の発言は単独のUDS responseが1 MiBを超えたため読み取れず、本文を切り詰めずにlistenで読み飛ばしました（sendCount: ${sendCounts.join(', ')}）。`,
   ].join('\n');
 }
 
@@ -944,6 +968,21 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
       ) {
         throw new Error(
           'Invalid operator-agent watch state: pending conductor message report.',
+        );
+      }
+      if (
+        report.oversizedSendCounts !== undefined &&
+        (report.reportType !== 'conductor_message' ||
+          !Array.isArray(report.oversizedSendCounts) ||
+          report.oversizedSendCounts.length === 0 ||
+          report.oversizedSendCounts.some(
+            (sendCount) =>
+              !Number.isSafeInteger(sendCount) ||
+              (sendCount as number) < 0,
+          ))
+      ) {
+        throw new Error(
+          'Invalid operator-agent watch state: oversized conductor message report.',
         );
       }
       if (reportIds.has(report.reportId)) {

@@ -77,8 +77,8 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       title: 'conductor message history and listen',
       items: [
         '- `list_conductor_messages` は成功応答本文と、その send に渡された全文 inbound を返します。既定は最新20件・sendCount降順で、cursor境界は排他的です。response が1 MiBを超えると `Response is too large.` になり、1件だけでも inbound 全文が上限を超えれば取得できません。list は全文を切り詰めず、直近100件を超える過去分は参照できません',
-        '- `register_conductor_message_listen` は現在の最新 sendCount を baseline にし、それより後の成功応答を通知します。窓内の複数発言は sendCount 昇順で inbound / response をまとめます',
-        '- listen は一覧 page が1 MiBを超えると limit を下げて同じ cursor から再試行します。単独で1 MiBを超える発言は切り詰めずに読み飛ばし、件数と sendCount を示す warning を発言と同じ debounce report にまとめます。その後の読み取り可能な発言も順序どおり通知します',
+        '- `register_conductor_message_listen` は現在の最新 sendCount を baseline にし、それより後の成功応答を通知します。最新 baseline が単独で上限を超える場合も、error の sendCount を使って登録を完了します。窓内の複数発言は sendCount 昇順で inbound / response をまとめます',
+        '- listen は一覧 page が1 MiBを超えると limit を下げて同じ cursor から再試行します。単独で1 MiBを超える発言は切り詰めずに読み飛ばし、同じ debounce window の複数 poll で見つかった oversized 発言を件数と sendCount 付きの warning section 1つにまとめます。その後の読み取り可能な発言も順序どおり通知します',
         '- list は oversized response を明示的な size error として返します。listen だけが error に含まれる sendCount を使って unreadable record を越えて polling を続けます',
         '- `messageDebounceMs` は既定10,000ms、0〜120,000msです。`register_session_watch` の `debounceMs` とは別設定で、Open Question cursorとも独立しています',
         '- `unregister_conductor_message_listen` は以後の発言 polling を解除します。稼働中 UDS が利用できない場合に保存 YAML / sidecar へ fallback はしません',
