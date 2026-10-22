@@ -138,7 +138,10 @@ export async function runOperatorAgent(
         }
       : {}),
     customTools: {
-      list_operator_sessions: createListOperatorSessionsTool(runtime.repoRoot),
+      list_operator_sessions: createListOperatorSessionsTool(
+        runtime.repoRoot,
+        (conductorAgentId) => watchPool.getLiveStatus(conductorAgentId),
+      ),
       list_live_open_questions: createListLiveOpenQuestionsTool(runtime.repoRoot),
       answer_live_open_question: createAnswerLiveOpenQuestionTool(runtime.repoRoot),
       get_last_conductor_message: createGetLastConductorMessageTool(runtime.repoRoot),

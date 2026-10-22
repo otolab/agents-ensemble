@@ -176,6 +176,117 @@ describe('list_operator_sessions', () => {
     );
   });
 
+  it('projects persisted phase separately from live connectivity and flags conflicts', async () => {
+    const issueUrl = 'https://github.com/example/project/issues/561';
+    const now = Date.now();
+    await writeResumeStore('running', now, issueUrl, {
+      harnessPhase: 'running',
+      modifiedAt: now,
+    });
+    await writeResumeStore('closed', now - 1, issueUrl, {
+      lifecycle: 'closed',
+    });
+    await writeResumeStore('exited-live', now - 2, issueUrl, {
+      harnessPhase: 'exit',
+      modifiedAt: now - 2,
+    });
+    const tool = createListOperatorSessionsTool(repoRoot, (id) => {
+      if (id === 'running') {
+        return {
+          connectivity: 'reachable',
+          checkedAt: now,
+          unreachableSince: null,
+        };
+      }
+      if (id === 'exited-live') {
+        return {
+          connectivity: 'reachable',
+          checkedAt: now,
+          unreachableSince: null,
+        };
+      }
+      return undefined;
+    });
+
+    const result = JSON.parse((await tool.execute({})).content[0]!.text) as {
+      sessions: Array<{
+        conductorAgentId: string;
+        persisted: {
+          harnessPhase: string | null;
+          modifiedAt: number | null;
+          source: string;
+        };
+        live: { connectivity: string; checkedAt: number | null };
+        posture: string;
+        coherence: string;
+      }>;
+    };
+    expect(result.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          conductorAgentId: 'running',
+          persisted: {
+            harnessPhase: 'running',
+            modifiedAt: now,
+            source: 'resume_store',
+          },
+          live: { connectivity: 'reachable', checkedAt: now },
+          posture: 'interact',
+          coherence: 'ok',
+        }),
+        expect.objectContaining({
+          conductorAgentId: 'closed',
+          persisted: {
+            harnessPhase: 'close',
+            modifiedAt: null,
+            source: 'legacy_lifecycle',
+          },
+          live: { connectivity: 'unknown', checkedAt: null },
+          posture: 'resume',
+          coherence: 'insufficient_data',
+        }),
+        expect.objectContaining({
+          conductorAgentId: 'exited-live',
+          posture: 'indeterminate',
+          coherence: 'conflict',
+        }),
+      ]),
+    );
+  });
+
+  it('waits through the unreachable grace window before reporting a conflict', async () => {
+    const issueUrl = 'https://github.com/example/project/issues/562';
+    const now = Date.now();
+    await writeResumeStore('stale-running', now, issueUrl, {
+      harnessPhase: 'running',
+      modifiedAt: now,
+    });
+    const tool = createListOperatorSessionsTool(repoRoot, () => ({
+      connectivity: 'unreachable',
+      checkedAt: now,
+      unreachableSince: now - 29_000,
+    }));
+    const duringGrace = JSON.parse(
+      (await tool.execute({})).content[0]!.text,
+    ) as { sessions: Array<{ coherence: string }> };
+    expect(duringGrace.sessions[0]?.coherence).toBe('insufficient_data');
+
+    const afterGrace = createListOperatorSessionsTool(repoRoot, () => ({
+      connectivity: 'unreachable',
+      checkedAt: now,
+      unreachableSince: now - 31_000,
+    }));
+    const conflicted = JSON.parse(
+      (await afterGrace.execute({})).content[0]!.text,
+    ) as {
+      sessions: Array<{ posture: string; coherence: string }>;
+    };
+    expect(conflicted.sessions[0]).toMatchObject({
+      posture: 'indeterminate',
+      coherence: 'conflict',
+    });
+  });
+
   it('returns an empty result when this repository has no session directory', async () => {
     const emptyRepoRoot = await mkdtemp(join(tmpdir(), 'ensemble-empty-sessions-'));
     try {
@@ -216,6 +327,8 @@ describe('list_operator_sessions', () => {
     issueUrl: string,
     options: {
       lifecycle?: 'closed' | 'exited' | 'interrupted' | 'unknown';
+      harnessPhase?: 'running' | 'idle' | 'close' | 'abort' | 'exit';
+      modifiedAt?: number;
       statusLine?: string;
     } = {},
   ): Promise<void> {
@@ -227,6 +340,12 @@ describe('list_operator_sessions', () => {
         issueUrl,
         repoRoot,
         ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
+        ...(options.harnessPhase
+          ? { harnessPhase: options.harnessPhase }
+          : {}),
+        ...(options.modifiedAt !== undefined
+          ? { modifiedAt: options.modifiedAt }
+          : {}),
         profile: {
           meta: { title: 'Example team' },
           workers: [],

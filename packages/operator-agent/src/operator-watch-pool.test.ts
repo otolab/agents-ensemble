@@ -81,6 +81,16 @@ describe('operator watch pool', () => {
       // baseline and do not create Open Question reports.
       expect(await pool.pollOnce('live-one')).toBe(1);
       expect(await pool.pollOnce('offline-two')).toBe(1);
+      expect(pool.getLiveStatus('live-one')).toMatchObject({
+        connectivity: 'reachable',
+        checkedAt: expect.any(Number),
+        unreachableSince: null,
+      });
+      expect(pool.getLiveStatus('offline-two')).toMatchObject({
+        connectivity: 'unreachable',
+        checkedAt: expect.any(Number),
+        unreachableSince: expect.any(Number),
+      });
       expect(dispatchQueue.pendingEventCount).toBe(2);
 
       liveSnapshot = {

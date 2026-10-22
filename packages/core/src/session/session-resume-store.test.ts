@@ -205,6 +205,29 @@ describe('SessionResumeStore', () => {
     );
   });
 
+  it('persists the harness phase and aligns modifiedAt with updatedAt', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'active-agent',
+    });
+
+    await saveSessionResumeStore(path, {
+      ...baseResumeStore({
+        conductorAgentId: 'active-agent',
+        repoRoot: tempDir,
+        updatedAt: 1,
+      }),
+      harnessPhase: 'running',
+      modifiedAt: 1,
+    });
+
+    const saved = await loadSessionResumeStore(path);
+    expect(saved?.harnessPhase).toBe('running');
+    expect(saved?.modifiedAt).toBe(saved?.updatedAt);
+    expect(saved?.modifiedAt).toBeGreaterThan(1);
+  });
+
   it('assumes cursor for a legacy record without conductorBackend', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
     const path = sessionResumeStorePath({
@@ -336,6 +359,55 @@ describe('SessionResumeStore', () => {
     });
 
     expect(latest?.conductorAgentId).toBe('agent-new');
+  });
+
+  it('prefers close or abort candidates and excludes exit for --continue', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    const issueUrl = 'https://github.com/org/repo/issues/9';
+    const dir = sessionResumeStoreDir(tempDir);
+    await mkdir(dir, { recursive: true });
+    const write = async (
+      agentId: string,
+      updatedAt: number,
+      phase: SessionResumeStore['harnessPhase'] = undefined,
+      lifecycle?: NonNullable<SessionResumeStore['lifecycle']>,
+    ) => {
+      const resumeStore = baseResumeStore({
+        conductorAgentId: agentId,
+        repoRoot: tempDir,
+        issueUrl,
+        updatedAt,
+      });
+      await writeFile(
+        join(dir, `${agentId}.json`),
+        `${JSON.stringify({
+          ...resumeStore,
+          harnessPhase: phase,
+          ...(lifecycle ? { lifecycle } : {}),
+        })}\n`,
+        'utf8',
+      );
+    };
+
+    await write('recent-idle', 500, 'idle');
+    await write('older-closed', 200, 'close', 'closed');
+    await write('newer-exit', 900, 'exit', 'exited');
+    await write('legacy-abort', 250, undefined, 'interrupted');
+
+    await expect(
+      findLatestSessionResumeStoreForIssue({ repoRoot: tempDir, issueUrl }),
+    ).resolves.toMatchObject({ conductorAgentId: 'legacy-abort' });
+
+    await write('older-closed', 200, 'exit', 'exited');
+    await write('legacy-abort', 250, 'exit', 'exited');
+    await expect(
+      findLatestSessionResumeStoreForIssue({ repoRoot: tempDir, issueUrl }),
+    ).resolves.toMatchObject({ conductorAgentId: 'recent-idle' });
+
+    await write('recent-idle', 500, 'exit', 'exited');
+    await expect(
+      findLatestSessionResumeStoreForIssue({ repoRoot: tempDir, issueUrl }),
+    ).resolves.toBeUndefined();
   });
 
   it('keeps deprecated sidecar API aliases compatible through the deprecation period', async () => {

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import {
   listSessionResumeStores,
+  harnessPhaseFromLegacyLifecycle,
   loadSessionStateStore,
   parseIssueUrl,
   sessionStateStorePath,
@@ -9,7 +10,9 @@ import {
   type SessionLifecycle,
   type SessionStateStore,
   type SessionResumeStore,
+  type HarnessPhase,
 } from '@agents-ensemble/core/operator-runtime';
+import type { OperatorSessionLiveStatus } from './operator-watch-pool.js';
 
 export const LIST_OPERATOR_SESSIONS_TOOL = 'list_operator_sessions';
 
@@ -36,6 +39,18 @@ interface OperatorSessionSummary {
   statusLineHistory: SessionStateStore['history'];
   lifecycle: SessionLifecycle;
   liveControlPathRecorded: boolean;
+  persisted: {
+    harnessPhase: HarnessPhase | null;
+    modifiedAt: number | null;
+    source: 'resume_store' | 'legacy_lifecycle';
+  };
+  live: {
+    connectivity: OperatorSessionLiveStatus['connectivity'];
+    checkedAt: number | null;
+  };
+  posture: 'watch' | 'interact' | 'resume' | 'purge' | 'indeterminate';
+  coherence: 'ok' | 'conflict' | 'insufficient_data';
+  coherenceReasons?: string[];
   openQuestionCount: number;
   workers: string[];
   openQuestions: Array<{
@@ -51,7 +66,12 @@ interface OperatorSessionSummary {
 type SessionSort = 'updatedAtDesc' | 'updatedAtAsc';
 
 /** Build a read-only tool over this repository's saved conductor session data. */
-export function createListOperatorSessionsTool(repoRoot: string): ConductorTool {
+export function createListOperatorSessionsTool(
+  repoRoot: string,
+  getLiveStatus?: (
+    conductorAgentId: string,
+  ) => OperatorSessionLiveStatus | undefined,
+): ConductorTool {
   const root = resolve(repoRoot);
   return {
     name: LIST_OPERATOR_SESSIONS_TOOL,
@@ -117,7 +137,13 @@ export function createListOperatorSessionsTool(repoRoot: string): ConductorTool 
       });
       const sessions = filtered
         .slice(0, limit)
-        .map(({ resumeStore, status }) => summarizeSession(resumeStore, status));
+        .map(({ resumeStore, status }) =>
+          summarizeSession(
+            resumeStore,
+            status,
+            getLiveStatus?.(resumeStore.conductorAgentId),
+          ),
+        );
       const payload = {
         repoRoot: root,
         dataAsOf,
@@ -204,6 +230,7 @@ async function loadStatusLine(
 function summarizeSession(
   resumeStore: SessionResumeStore,
   status: SessionStateStore | undefined,
+  cachedLiveStatus?: OperatorSessionLiveStatus,
 ): OperatorSessionSummary {
   let issueRef: OperatorSessionSummary['issueRef'] = null;
   try {
@@ -218,6 +245,18 @@ function summarizeSession(
   }
   const openQuestions = resumeStore.openQuestions.filter(
     (question) => question.status === 'open',
+  );
+  const harnessPhase =
+    resumeStore.harnessPhase ??
+    harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle);
+  const live = {
+    connectivity: cachedLiveStatus?.connectivity ?? ('unknown' as const),
+    checkedAt: cachedLiveStatus?.checkedAt ?? null,
+  };
+  const projection = projectSessionPosture(
+    harnessPhase,
+    live.connectivity,
+    cachedLiveStatus?.unreachableSince ?? null,
   );
 
   return {
@@ -236,6 +275,15 @@ function summarizeSession(
     statusLineHistory: status?.history ?? [],
     lifecycle: resumeStore.lifecycle ?? 'unknown',
     liveControlPathRecorded: Boolean(resumeStore.harnessSocketPath),
+    persisted: {
+      harnessPhase,
+      modifiedAt: resumeStore.harnessPhase
+        ? (resumeStore.modifiedAt ?? null)
+        : null,
+      source: resumeStore.harnessPhase ? 'resume_store' : 'legacy_lifecycle',
+    },
+    live,
+    ...projection,
     openQuestionCount: openQuestions.length,
     workers: Object.keys(resumeStore.workers).sort(),
     openQuestions: openQuestions.map((question) => ({
@@ -250,5 +298,72 @@ function summarizeSession(
     answeredQuestionCount: resumeStore.openQuestions.filter(
       (question) => question.status === 'answered',
     ).length,
+  };
+}
+
+const ACTIVE_UNREACHABLE_GRACE_MS = 30_000;
+
+function projectSessionPosture(
+  phase: HarnessPhase | null,
+  connectivity: OperatorSessionLiveStatus['connectivity'],
+  unreachableSince: number | null,
+): Pick<
+  OperatorSessionSummary,
+  'posture' | 'coherence' | 'coherenceReasons'
+> {
+  if (!phase) {
+    return {
+      posture: 'indeterminate',
+      coherence: 'insufficient_data',
+      coherenceReasons: ['phase_unavailable'],
+    };
+  }
+
+  if (phase === 'running' || phase === 'idle') {
+    if (connectivity === 'reachable') {
+      return {
+        posture: phase === 'running' ? 'interact' : 'watch',
+        coherence: 'ok',
+      };
+    }
+    if (
+      connectivity === 'unreachable' &&
+      unreachableSince !== null &&
+      Date.now() - unreachableSince >= ACTIVE_UNREACHABLE_GRACE_MS
+    ) {
+      return {
+        posture: 'indeterminate',
+        coherence: 'conflict',
+        coherenceReasons: ['active_but_unreachable'],
+      };
+    }
+    return {
+      posture: 'indeterminate',
+      coherence: 'insufficient_data',
+      coherenceReasons: [
+        connectivity === 'unreachable'
+          ? 'active_connectivity_grace'
+          : 'live_connectivity_unknown',
+      ],
+    };
+  }
+
+  if (connectivity === 'reachable') {
+    return {
+      posture: 'indeterminate',
+      coherence: 'conflict',
+      coherenceReasons: ['terminal_but_live_control'],
+    };
+  }
+  if (connectivity === 'unknown') {
+    return {
+      posture: phase === 'exit' ? 'purge' : 'resume',
+      coherence: 'insufficient_data',
+      coherenceReasons: ['terminal_live_connectivity_unknown'],
+    };
+  }
+  return {
+    posture: phase === 'exit' ? 'purge' : 'resume',
+    coherence: 'ok',
   };
 }

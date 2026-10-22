@@ -17,6 +17,23 @@ export type SessionLifecycle =
   | 'interrupted'
   | 'unknown';
 
+export type HarnessPhase = 'running' | 'idle' | 'close' | 'abort' | 'exit';
+
+export function harnessPhaseFromLegacyLifecycle(
+  lifecycle: SessionLifecycle | undefined,
+): HarnessPhase | null {
+  switch (lifecycle) {
+    case 'closed':
+      return 'close';
+    case 'exited':
+      return 'exit';
+    case 'interrupted':
+      return 'abort';
+    default:
+      return null;
+  }
+}
+
 export class SessionResumeStoreNotFoundError extends Error {
   readonly code: string = 'SESSION_RESUME_STORE_NOT_FOUND';
 
@@ -74,6 +91,10 @@ export interface SessionResumeStore {
   mcpConfigDigest?: string;
   /** Last completed process lifecycle; absent legacy values are unknown. */
   lifecycle?: SessionLifecycle;
+  /** Harness-owned activity / teardown phase. */
+  harnessPhase?: HarnessPhase;
+  /** Unix ms for the latest harness activity or phase transition. */
+  modifiedAt?: number;
   /** flush 時刻（Unix ms）。`--continue` で最新セッションを選ぶために使う。 */
   updatedAt: number;
 }
@@ -152,9 +173,20 @@ export async function saveSessionResumeStore(
   path: string,
   resumeStore: SessionResumeStore,
 ): Promise<void> {
+  const updatedAt =
+    resumeStore.harnessPhase !== undefined &&
+    resumeStore.harnessPhase !== 'running' &&
+    resumeStore.harnessPhase !== 'idle' &&
+    resumeStore.modifiedAt !== undefined
+      ? resumeStore.modifiedAt
+      : Date.now();
   const parsed = parseSessionResumeStore({
     ...resumeStore,
-    updatedAt: Date.now(),
+    updatedAt,
+    ...(resumeStore.harnessPhase === 'running' ||
+    resumeStore.harnessPhase === 'idle'
+      ? { modifiedAt: updatedAt }
+      : {}),
   });
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -196,20 +228,38 @@ export async function listSessionResumeStores(
 /** @deprecated Use listSessionResumeStores; supported for one release only. */
 export const listSessionSidecars = listSessionResumeStores;
 
-/** 同一 Issue の SessionResumeStore のうち `updatedAt` が最新のものを返す。 */
+/**
+ * 同一 Issue では close / abort を優先し、exit を除外したうえで
+ * updatedAt が最も新しい SessionResumeStore を返す。
+ */
 export async function findLatestSessionResumeStoreForIssue(
   input: FindLatestSessionResumeStoreInput,
 ): Promise<SessionResumeStore | undefined> {
   const matches = (await listSessionResumeStores(input.repoRoot)).filter(
     (resumeStore) =>
       resumeStore.issueUrl === input.issueUrl &&
-      resumeStore.repoRoot === input.repoRoot,
+      resumeStore.repoRoot === input.repoRoot &&
+      (resumeStore.harnessPhase ??
+        harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle)) !== 'exit',
   );
   if (matches.length === 0) return undefined;
 
-  return matches.reduce((latest, resumeStore) =>
-    resumeStore.updatedAt > latest.updatedAt ? resumeStore : latest,
-  );
+  return matches.reduce((selected, resumeStore) => {
+    const selectedPhase =
+      selected.harnessPhase ??
+      harnessPhaseFromLegacyLifecycle(selected.lifecycle);
+    const resumeStorePhase =
+      resumeStore.harnessPhase ??
+      harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle);
+    const selectedPriority =
+      selectedPhase === 'close' || selectedPhase === 'abort' ? 1 : 0;
+    const resumeStorePriority =
+      resumeStorePhase === 'close' || resumeStorePhase === 'abort' ? 1 : 0;
+    if (resumeStorePriority !== selectedPriority) {
+      return resumeStorePriority > selectedPriority ? resumeStore : selected;
+    }
+    return resumeStore.updatedAt > selected.updatedAt ? resumeStore : selected;
+  });
 }
 
 /** @deprecated Use findLatestSessionResumeStoreForIssue; supported for one release only. */
@@ -337,6 +387,23 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
   ) {
     throw new Error('Invalid session resume store: lifecycle');
   }
+  if (
+    record.harnessPhase !== undefined &&
+    record.harnessPhase !== 'running' &&
+    record.harnessPhase !== 'idle' &&
+    record.harnessPhase !== 'close' &&
+    record.harnessPhase !== 'abort' &&
+    record.harnessPhase !== 'exit'
+  ) {
+    throw new Error('Invalid session resume store: harnessPhase');
+  }
+  if (
+    record.modifiedAt !== undefined &&
+    (typeof record.modifiedAt !== 'number' ||
+      !Number.isFinite(record.modifiedAt))
+  ) {
+    throw new Error('Invalid session resume store: modifiedAt');
+  }
   const updatedAt =
     typeof record.updatedAt === 'number' ? record.updatedAt : 0;
 
@@ -390,6 +457,12 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
       : {}),
     ...(record.lifecycle !== undefined
       ? { lifecycle: record.lifecycle as SessionLifecycle }
+      : {}),
+    ...(record.harnessPhase !== undefined
+      ? { harnessPhase: record.harnessPhase as HarnessPhase }
+      : {}),
+    ...(typeof record.modifiedAt === 'number'
+      ? { modifiedAt: record.modifiedAt }
       : {}),
     updatedAt,
   };

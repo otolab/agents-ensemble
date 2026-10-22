@@ -37,7 +37,9 @@ export { profilePromptModule } from './prompt/modules/shared/profile-prompt-modu
 export { renderCompiledPrompt } from './prompt/render-compiled-prompt.js';
 export {
   loadSessionResumeStore,
+  harnessPhaseFromLegacyLifecycle,
   listSessionResumeStores,
+  type HarnessPhase,
   type SessionLifecycle,
   type SessionResumeStore,
 } from './session/session-resume-store.js';
