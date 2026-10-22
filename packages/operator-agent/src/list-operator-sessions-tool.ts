@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import {
-  listSessionSidecars,
+  listSessionResumeStores,
   loadSessionStateStore,
   parseIssueUrl,
   sessionStateStorePath,
@@ -8,7 +8,7 @@ import {
   type ConductorTool,
   type SessionLifecycle,
   type SessionStateStore,
-  type SessionSidecar,
+  type SessionResumeStore,
 } from '@agents-ensemble/core/operator-runtime';
 
 export const LIST_OPERATOR_SESSIONS_TOOL = 'list_operator_sessions';
@@ -56,7 +56,7 @@ export function createListOperatorSessionsTool(repoRoot: string): ConductorTool 
   return {
     name: LIST_OPERATOR_SESSIONS_TOOL,
     description:
-      'Read saved conductor session sidecars and session state under <repoRoot>/.ensemble/sessions. The results are snapshots, not live process status.',
+      'Read saved SessionResumeStore records and session state under <repoRoot>/.ensemble/sessions. The results are snapshots, not live process status.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -69,7 +69,7 @@ export function createListOperatorSessionsTool(repoRoot: string): ConductorTool 
         sort: {
           type: 'string',
           enum: ['updatedAtDesc', 'updatedAtAsc'],
-          description: 'Sort by sidecar updatedAt (default updatedAtDesc).',
+          description: 'Sort by the SessionResumeStore updatedAt value (default updatedAtDesc).',
         },
         hasStatusLine: {
           type: 'boolean',
@@ -89,35 +89,35 @@ export function createListOperatorSessionsTool(repoRoot: string): ConductorTool 
       const hasStatusLine = resolveHasStatusLine(args.hasStatusLine);
       const lifecycle = resolveLifecycle(args.lifecycle);
       const dataAsOf = new Date().toISOString();
-      const sidecars = await listSessionSidecars(root);
+      const resumeStores = await listSessionResumeStores(root);
       const snapshots = await Promise.all(
-        sidecars.map(async (sidecar) => ({
-          sidecar,
-          status: await loadStatusLine(root, sidecar),
+        resumeStores.map(async (resumeStore) => ({
+          resumeStore,
+          status: await loadStatusLine(root, resumeStore),
         })),
       );
-      const filtered = snapshots.filter(({ sidecar, status }) => {
+      const filtered = snapshots.filter(({ resumeStore, status }) => {
         if (
           hasStatusLine !== undefined &&
           Boolean(status) !== hasStatusLine
         ) {
           return false;
         }
-        const sessionLifecycle = sidecar.lifecycle ?? 'unknown';
+        const sessionLifecycle = resumeStore.lifecycle ?? 'unknown';
         return lifecycle === undefined || sessionLifecycle === lifecycle;
       });
       filtered.sort((left, right) => {
         const direction = sort === 'updatedAtDesc' ? -1 : 1;
         return (
-          direction * (left.sidecar.updatedAt - right.sidecar.updatedAt) ||
-          left.sidecar.conductorAgentId.localeCompare(
-            right.sidecar.conductorAgentId,
+          direction * (left.resumeStore.updatedAt - right.resumeStore.updatedAt) ||
+          left.resumeStore.conductorAgentId.localeCompare(
+            right.resumeStore.conductorAgentId,
           )
         );
       });
       const sessions = filtered
         .slice(0, limit)
-        .map(({ sidecar, status }) => summarizeSession(sidecar, status));
+        .map(({ resumeStore, status }) => summarizeSession(resumeStore, status));
       const payload = {
         repoRoot: root,
         dataAsOf,
@@ -185,29 +185,29 @@ function resolveLifecycle(
 
 async function loadStatusLine(
   repoRoot: string,
-  sidecar: SessionSidecar,
+  resumeStore: SessionResumeStore,
 ): Promise<SessionStateStore | undefined> {
   try {
     return await loadSessionStateStore(
       sessionStateStorePath({
         repoRoot,
-        conductorAgentId: sidecar.conductorAgentId,
+        conductorAgentId: resumeStore.conductorAgentId,
       }),
     );
   } catch {
     // Status reporting is an optional operator snapshot. A missing, partial, or
-    // unsupported file must not make the older sidecar unavailable.
+    // unsupported file must not hide an otherwise readable session.
     return undefined;
   }
 }
 
 function summarizeSession(
-  sidecar: SessionSidecar,
+  resumeStore: SessionResumeStore,
   status: SessionStateStore | undefined,
 ): OperatorSessionSummary {
   let issueRef: OperatorSessionSummary['issueRef'] = null;
   try {
-    const parsed = parseIssueUrl(sidecar.issueUrl);
+    const parsed = parseIssueUrl(resumeStore.issueUrl);
     issueRef = {
       owner: parsed.owner,
       repo: parsed.repo,
@@ -216,28 +216,28 @@ function summarizeSession(
   } catch {
     // Keep the original issueUrl visible for legacy or externally produced data.
   }
-  const openQuestions = sidecar.openQuestions.filter(
+  const openQuestions = resumeStore.openQuestions.filter(
     (question) => question.status === 'open',
   );
 
   return {
-    agentId: sidecar.conductorAgentId,
-    conductorAgentId: sidecar.conductorAgentId,
+    agentId: resumeStore.conductorAgentId,
+    conductorAgentId: resumeStore.conductorAgentId,
     issueRef,
-    issueUrl: sidecar.issueUrl,
-    conductorBackend: sidecar.conductorBackend ?? 'cursor',
+    issueUrl: resumeStore.issueUrl,
+    conductorBackend: resumeStore.conductorBackend ?? 'cursor',
     profile:
-      sidecar.profile.meta?.title ??
-      sidecar.profilePath ??
+      resumeStore.profile.meta?.title ??
+      resumeStore.profilePath ??
       'unknown',
-    updatedAt: sidecar.updatedAt,
+    updatedAt: resumeStore.updatedAt,
     statusLine: status?.current.statusLine ?? null,
     reportedAt: status?.current.reportedAt ?? null,
     statusLineHistory: status?.history ?? [],
-    lifecycle: sidecar.lifecycle ?? 'unknown',
-    liveControlPathRecorded: Boolean(sidecar.harnessSocketPath),
+    lifecycle: resumeStore.lifecycle ?? 'unknown',
+    liveControlPathRecorded: Boolean(resumeStore.harnessSocketPath),
     openQuestionCount: openQuestions.length,
-    workers: Object.keys(sidecar.workers).sort(),
+    workers: Object.keys(resumeStore.workers).sort(),
     openQuestions: openQuestions.map((question) => ({
       id: question.id,
       question: question.question,
@@ -247,7 +247,7 @@ function summarizeSession(
         ? { relatedPermissionId: question.relatedPermissionId }
         : {}),
     })),
-    answeredQuestionCount: sidecar.openQuestions.filter(
+    answeredQuestionCount: resumeStore.openQuestions.filter(
       (question) => question.status === 'answered',
     ).length,
   };

@@ -38,9 +38,9 @@ export interface OpenWorkerAcpSessionOptions {
   /** ACP spawn / session cwd。未指定時は `worktree.path`。 */
   acpCwd?: string;
   workerName?: string;
-  /** resume 時に sidecar が記録した cwd。不一致なら attach 失敗。 */
+  /** resume 時に SessionResumeStore に記録した cwd。不一致なら attach 失敗。 */
   expectedResumeAcpCwd?: string;
-  /** resume 時に sidecar が記録した ACP spawn。不一致なら attach 失敗。 */
+  /** resume 時に SessionResumeStore に記録した ACP spawn。不一致なら attach 失敗。 */
   expectedResumeAcpSpawn?: AcpSpawnFingerprint;
   /** 現在の profile / CLI から解決した ACP spawn（resume 検証用）。 */
   currentAcpSpawn?: AcpSpawnFingerprint;
@@ -77,7 +77,7 @@ export async function openWorkerAcpSession(
   ) {
     const label = options.workerName ? `Worker "${options.workerName}"` : 'Worker';
     throw new Error(
-      `${label} resume cwd mismatch: sidecar has ${options.expectedResumeAcpCwd}, current profile resolves to ${acpCwd}`,
+      `${label} resume cwd mismatch: saved resume store has ${options.expectedResumeAcpCwd}, current profile resolves to ${acpCwd}`,
     );
   }
 

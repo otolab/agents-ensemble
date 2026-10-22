@@ -8,7 +8,7 @@ Issue #101 の設計メモ。
 
 `@cursor/sdk` の local agent は長時間アイドルや sleep/wakeup 後、短命 access token の失効により次の `agent.send()` が `UNAUTHENTICATED` 相当で失敗することがある。API key 自体は有効で、`Agent.resume(sameId)` ですぐ復旧する（[Cursor forum #163819](https://forum.cursor.com/t/idle-local-agent-grpc-connection-returns-error-not-logged-in-authenticationerror-instead-of-networkerror-after-15-minutes/163819)）。
 
-agents-ensemble の conductor は長寿命 `ConductorAgent` 1 本を保持する。worker（ACP）は別プロセスで sidecar に `acpSessionId` を保存するため、conductor 接続だけが切れても worker は生存しうる。
+agents-ensemble の conductor は長寿命 `ConductorAgent` 1 本を保持する。worker（ACP）は別プロセスで SessionResumeStore に `acpSessionId` を保存するため、conductor 接続だけが切れても worker は生存しうる。
 
 ## 採用方式
 
@@ -21,7 +21,7 @@ send が auth-like error のとき:
 **非採用**
 
 - `agent.reload()` — filesystem config（hooks / MCP / subagents）の再読込のみ。gRPC / token の張り直しではない。
-- `Agent.create()` — 新 `agentId` になり resume / sidecar モデルと不整合。
+- `Agent.create()` — 新 `agentId` になり resume / SessionResumeStore モデルと不整合。
 
 実装: `packages/core/src/conductor/conductor-send-reconnect.ts`（driver の全 send 経路から呼ぶ）。
 

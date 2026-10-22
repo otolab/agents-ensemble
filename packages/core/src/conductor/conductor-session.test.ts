@@ -23,13 +23,13 @@ import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { computeMcpConfigDigest } from '../mcp/load-mcp-config.js';
 import {
-  loadSessionSidecar,
-  saveSessionSidecar,
-  SessionSidecarNotFoundError,
-  SESSION_SIDECAR_VERSION,
-  sessionSidecarPath,
-} from '../session/session-sidecar.js';
-import * as sessionSidecarModule from '../session/session-sidecar.js';
+  loadSessionResumeStore,
+  saveSessionResumeStore,
+  SessionResumeStoreNotFoundError,
+  SESSION_RESUME_STORE_VERSION,
+  sessionResumeStorePath,
+} from '../session/session-resume-store.js';
+import * as sessionResumeStoreModule from '../session/session-resume-store.js';
 import {
   loadSessionStateStore,
   sessionStateStorePath,
@@ -270,7 +270,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
   }
 
-  it('fails fast when resumeAgentId is set but sidecar is missing', async () => {
+  it('fails fast when resumeAgentId is set but no saved session resume store exists', async () => {
     await expect(
       runConductorSession({
         issueUrl: TEST_ISSUE.url,
@@ -280,17 +280,17 @@ describe('runConductorSession resume / shutdown', () => {
         permissionPipeline: new PermissionPipeline({}),
         registerProcessSignalHandlers: false,
       }),
-    ).rejects.toThrow(SessionSidecarNotFoundError);
+    ).rejects.toThrow(SessionResumeStoreNotFoundError);
 
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it('fails fast when the startup backend differs from the sidecar backend', async () => {
+  it('fails fast when the startup backend differs from the saved resume store backend', async () => {
     const agentId = 'resume-backend-mismatch';
-    await saveSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       {
-        version: SESSION_SIDECAR_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         conductorBackend: 'pi',
         issueUrl: TEST_ISSUE.url,
@@ -322,12 +322,12 @@ describe('runConductorSession resume / shutdown', () => {
     'clears stale %s lifecycle before resuming the conductor',
     async (lifecycle) => {
       const agentId = `resume-${lifecycle}-lifecycle`;
-      const sidecarPath = sessionSidecarPath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: agentId,
       });
-      await saveSessionSidecar(sidecarPath, {
-        version: SESSION_SIDECAR_VERSION,
+      await saveSessionResumeStore(resumeStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -339,9 +339,9 @@ describe('runConductorSession resume / shutdown', () => {
         updatedAt: 1,
       });
       mockResume.mockImplementationOnce(async () => {
-        const persisted = await loadSessionSidecar(sidecarPath);
+        const persisted = await loadSessionResumeStore(resumeStorePath);
         expect(persisted?.lifecycle).toBe('unknown');
-        throw new Error('simulated crash before first regular sidecar flush');
+        throw new Error('simulated crash before first regular session resume store flush');
       });
 
       await expect(
@@ -354,10 +354,10 @@ describe('runConductorSession resume / shutdown', () => {
           registerProcessSignalHandlers: false,
         }),
       ).rejects.toThrow(
-        'simulated crash before first regular sidecar flush',
+        'simulated crash before first regular session resume store flush',
       );
 
-      await expect(loadSessionSidecar(sidecarPath)).resolves.toMatchObject({
+      await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
         lifecycle: 'unknown',
         updatedAt: expect.any(Number),
       });
@@ -694,9 +694,36 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
   });
 
-  it('persists the resolved config digest without config values in the sidecar', async () => {
+  it('persists the selected profile backend in the session resume store', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-stub',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      conductorAgentFactory: { create: mockCreate, resume: mockResume },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(result.sessionUsage).toBeDefined();
+    expect(result.sessionUsage).not.toHaveProperty('compactionCount');
+
+    const resumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
+    );
+    expect(resumeStore?.conductorBackend).toBe('pi');
+  });
+
+  it('persists the resolved config digest without config values in the resume store', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-config-digest',
       status: 'finished',
       result: 'done',
     });
@@ -713,34 +740,26 @@ describe('runConductorSession resume / shutdown', () => {
       },
     };
 
-    const result = await runConductorSession({
+    await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { conductor: { backend: 'pi' }, workers: [] },
       ensembleConfig,
-      conductorAgentFactory: { create: mockCreate, resume: mockResume },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
     });
 
-    expect(result.sessionUsage).toBeDefined();
-    expect(result.sessionUsage).not.toHaveProperty('compactionCount');
-
-    const sidecar = await loadSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
-    );
-    expect(sidecar?.conductorBackend).toBe('pi');
-    expect(sidecar?.ensembleConfigDigest).toBe(
+    const path = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: 'agent-test',
+    });
+    const resumeStore = await loadSessionResumeStore(path);
+    expect(resumeStore?.ensembleConfigDigest).toBe(
       computeEnsembleConfigDigest(ensembleConfig),
     );
-    expect(
-      await readFile(
-        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
-        'utf8',
-      ),
-    ).not.toContain('private-test-value');
+    expect(await readFile(path, 'utf8')).not.toContain('private-test-value');
   });
 
   it('fails before resuming when the resolved ensemble config changed', async () => {
@@ -752,10 +771,10 @@ describe('runConductorSession resume / shutdown', () => {
         model: 'model-before',
       },
     };
-    await saveSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       {
-        version: SESSION_SIDECAR_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -805,10 +824,10 @@ describe('runConductorSession resume / shutdown', () => {
         },
       }),
     );
-    await saveSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       {
-        version: SESSION_SIDECAR_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -877,10 +896,10 @@ describe('runConductorSession resume / shutdown', () => {
         askedAt: 2,
       },
     ];
-    await saveSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       {
-        version: SESSION_SIDECAR_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -960,10 +979,10 @@ describe('runConductorSession resume / shutdown', () => {
         }),
       }),
     );
-    const sidecar = await loadSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+    const resumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
-    expect(sidecar?.conductorBackend).toBe('cursor');
+    expect(resumeStore?.conductorBackend).toBe('cursor');
   });
 
   it('answers a live Open Question through UDS, persists it, and dispatches operator.message', async () => {
@@ -1016,17 +1035,17 @@ describe('runConductorSession resume / shutdown', () => {
 
     try {
       await vi.waitFor(async () => {
-        const sidecar = await loadSessionSidecar(
-          sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        const resumeStore = await loadSessionResumeStore(
+          sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
         );
-        expect(sidecar?.harnessSocketPath).toBeTruthy();
+        expect(resumeStore?.harnessSocketPath).toBeTruthy();
       });
-      const sidecarPath = sessionSidecarPath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
-      const sidecar = await loadSessionSidecar(sidecarPath);
-      const socketPath = sidecar?.harnessSocketPath;
+      const resumeStore = await loadSessionResumeStore(resumeStorePath);
+      const socketPath = resumeStore?.harnessSocketPath;
       expect(socketPath).toBeTruthy();
 
       let liveList: {
@@ -1093,9 +1112,9 @@ describe('runConductorSession resume / shutdown', () => {
         approved: true,
         relatedPermissionId: 'perm-1',
       });
-      const persistedSidecar = await loadSessionSidecar(sidecarPath);
-      expect(persistedSidecar?.openQuestions).toEqual(store?.openQuestions);
-      expect(persistedSidecar?.harnessSocketPath).toBe(socketPath);
+      const persistedResumeStore = await loadSessionResumeStore(resumeStorePath);
+      expect(persistedResumeStore?.openQuestions).toEqual(store?.openQuestions);
+      expect(persistedResumeStore?.harnessSocketPath).toBe(socketPath);
 
       await expect(receivedOperatorMessage.promise).resolves.toContain(
         '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
@@ -1121,9 +1140,9 @@ describe('runConductorSession resume / shutdown', () => {
           }),
         ],
       });
-      const finalSidecar = await loadSessionSidecar(sidecarPath);
-      expect(finalSidecar?.lifecycle).toBe('closed');
-      expect(finalSidecar?.harnessSocketPath).toBeUndefined();
+      const finalResumeStore = await loadSessionResumeStore(resumeStorePath);
+      expect(finalResumeStore?.lifecycle).toBe('closed');
+      expect(finalResumeStore?.harnessSocketPath).toBeUndefined();
       await expect(stat(socketPath!)).rejects.toMatchObject({
         code: 'ENOENT',
       });
@@ -1211,17 +1230,17 @@ describe('runConductorSession resume / shutdown', () => {
 
     try {
       await vi.waitFor(async () => {
-        const sidecar = await loadSessionSidecar(
-          sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        const resumeStore = await loadSessionResumeStore(
+          sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
         );
-        expect(sidecar?.harnessSocketPath).toBeTruthy();
+        expect(resumeStore?.harnessSocketPath).toBeTruthy();
       });
-      const sidecarPath = sessionSidecarPath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
-      const sidecar = await loadSessionSidecar(sidecarPath);
-      const socketPath = sidecar?.harnessSocketPath;
+      const resumeStore = await loadSessionResumeStore(resumeStorePath);
+      const socketPath = resumeStore?.harnessSocketPath;
       expect(socketPath).toBeTruthy();
 
       await vi.waitFor(async () => {
@@ -1301,19 +1320,19 @@ describe('runConductorSession resume / shutdown', () => {
           conductorAgentId: 'agent-test',
         }),
       );
-      const persistedSidecar = await loadSessionSidecar(sidecarPath);
+      const persistedResumeStore = await loadSessionResumeStore(resumeStorePath);
       expect(persistedStore?.openQuestions[0]).toMatchObject({
         status: 'answered',
         answer: 'yes',
         answeredBy: 'operator',
         approved: true,
       });
-      expect(persistedSidecar?.openQuestions).toEqual(
+      expect(persistedResumeStore?.openQuestions).toEqual(
         persistedStore?.openQuestions,
       );
       expect(sendCount).toBe(2);
-      expect(persistedSidecar?.lifecycle).toBe('closed');
-      expect(persistedSidecar?.harnessSocketPath).toBeUndefined();
+      expect(persistedResumeStore?.lifecycle).toBe('closed');
+      expect(persistedResumeStore?.harnessSocketPath).toBeUndefined();
     } finally {
       finishAnswerFlush.resolve();
       finishDispatch.resolve();
@@ -1332,15 +1351,15 @@ describe('runConductorSession resume / shutdown', () => {
       const dispatchStarted = createDeferred<void>();
       const finishDispatch = createDeferred<void>();
       const lateDispatchReturned = createDeferred<void>();
-      const lateSidecarFlushCompleted = createDeferred<void>();
+      const lateResumeStoreFlushCompleted = createDeferred<void>();
       const shutdown = new AbortController();
-      const persistSidecar = sessionSidecarModule.saveSessionSidecar;
+      const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
       vi.spyOn(
-        sessionSidecarModule,
-        'saveSessionSidecar',
-      ).mockImplementation(async (path, sidecar) => {
-        await persistSidecar(path, sidecar);
-        if (lateSendReleased) lateSidecarFlushCompleted.resolve();
+        sessionResumeStoreModule,
+        'saveSessionResumeStore',
+      ).mockImplementation(async (path, resumeStore) => {
+        await persistResumeStore(path, resumeStore);
+        if (lateSendReleased) lateResumeStoreFlushCompleted.resolve();
       });
 
       mockCreate.mockImplementationOnce(async (agentOptions) => {
@@ -1397,17 +1416,17 @@ describe('runConductorSession resume / shutdown', () => {
 
       try {
         await vi.waitFor(async () => {
-          const sidecar = await loadSessionSidecar(
-            sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+          const resumeStore = await loadSessionResumeStore(
+            sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
           );
-          expect(sidecar?.harnessSocketPath).toBeTruthy();
+          expect(resumeStore?.harnessSocketPath).toBeTruthy();
         });
-        const sidecarPath = sessionSidecarPath({
+        const resumeStorePath = sessionResumeStorePath({
           repoRoot,
           conductorAgentId: 'agent-test',
         });
         const socketPath = (
-          await loadSessionSidecar(sidecarPath)
+          await loadSessionResumeStore(resumeStorePath)
         )?.harnessSocketPath;
         expect(socketPath).toBeTruthy();
 
@@ -1475,7 +1494,7 @@ describe('runConductorSession resume / shutdown', () => {
         ]);
 
         const persistedStore = await loadOpenQuestionsStore(storePath);
-        const persistedSidecar = await loadSessionSidecar(sidecarPath);
+        const persistedResumeStore = await loadSessionResumeStore(resumeStorePath);
         expect(persistedStore?.openQuestions).toHaveLength(1);
         expect(persistedStore?.openQuestions[0]).toMatchObject({
           id: questionId,
@@ -1483,23 +1502,23 @@ describe('runConductorSession resume / shutdown', () => {
           answer: 'yes',
           answeredBy: 'operator',
         });
-        expect(persistedSidecar?.openQuestions).toEqual(
+        expect(persistedResumeStore?.openQuestions).toEqual(
           persistedStore?.openQuestions,
         );
-        expect(persistedSidecar?.harnessSocketPath).toBeUndefined();
+        expect(persistedResumeStore?.harnessSocketPath).toBeUndefined();
         expect(sendCount).toBe(2);
 
         lateSendReleased = true;
         finishDispatch.resolve();
         await settleWithin(lateDispatchReturned.promise, 1_000);
-        await settleWithin(lateSidecarFlushCompleted.promise, 1_000);
+        await settleWithin(lateResumeStoreFlushCompleted.promise, 1_000);
         expect(mockResume).not.toHaveBeenCalled();
         expect(sendCount).toBe(2);
-        const sidecarAfterLateSend = await loadSessionSidecar(sidecarPath);
-        expect(sidecarAfterLateSend?.lifecycle).toBe(
+        const resumeStoreAfterLateSend = await loadSessionResumeStore(resumeStorePath);
+        expect(resumeStoreAfterLateSend?.lifecycle).toBe(
           shutdownMode === 'operator /close' ? 'closed' : 'interrupted',
         );
-        expect(sidecarAfterLateSend?.harnessSocketPath).toBeUndefined();
+        expect(resumeStoreAfterLateSend?.harnessSocketPath).toBeUndefined();
       } finally {
         finishDispatch.resolve();
         shutdown.abort();
@@ -1570,14 +1589,14 @@ describe('runConductorSession resume / shutdown', () => {
       });
 
       try {
-        const sidecarPath = sessionSidecarPath({
+        const resumeStorePath = sessionResumeStorePath({
           repoRoot,
           conductorAgentId: 'agent-test',
         });
         await vi.waitFor(async () => {
-          expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+          expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath).toBeTruthy();
         });
-        const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+        const socketPath = (await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath;
         const storePath = openQuestionsStorePath({
           repoRoot,
           conductorAgentId: 'agent-test',
@@ -1633,9 +1652,9 @@ describe('runConductorSession resume / shutdown', () => {
         expect(sendCount).toBe(2);
         expect(mockResume).not.toHaveBeenCalled();
         const persistedStore = await loadOpenQuestionsStore(storePath);
-        const persistedSidecar = await loadSessionSidecar(sidecarPath);
+        const persistedResumeStore = await loadSessionResumeStore(resumeStorePath);
         expect(persistedStore?.openQuestions[0]?.status).toBe('answered');
-        expect(persistedSidecar?.openQuestions).toEqual(
+        expect(persistedResumeStore?.openQuestions).toEqual(
           persistedStore?.openQuestions,
         );
       } finally {
@@ -1707,14 +1726,14 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     try {
-      const sidecarPath = sessionSidecarPath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
       await vi.waitFor(async () => {
-        expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+        expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath).toBeTruthy();
       });
-      const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+      const socketPath = (await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath;
       const storePath = openQuestionsStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
@@ -1753,7 +1772,7 @@ describe('runConductorSession resume / shutdown', () => {
         id: questionId,
         status: 'open',
       });
-      expect((await loadSessionSidecar(sidecarPath))?.openQuestions[0]).toMatchObject({
+      expect((await loadSessionResumeStore(resumeStorePath))?.openQuestions[0]).toMatchObject({
         id: questionId,
         status: 'open',
       });
@@ -1784,10 +1803,10 @@ describe('runConductorSession resume / shutdown', () => {
     });
     mockSend.mockImplementationOnce(async () => {
       await conductorTools!.register_github_watch!.execute({ prNumber: 354 });
-      const sidecar = await loadSessionSidecar(
-        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      const resumeStore = await loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       );
-      expect(sidecar?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+      expect(resumeStore?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
         registeredAt: expect.any(String),
         kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
       });
@@ -1810,28 +1829,28 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(conductorTools?.register_github_watch).toBeDefined();
     expect(conductorTools?.unregister_github_watch).toBeDefined();
-    const sidecar = await loadSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+    const resumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
-    expect(sidecar?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+    expect(resumeStore?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
       registeredAt: expect.any(String),
       kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
     });
   });
 
-  it('retries registration persistence after a sidecar flush failure', async () => {
-    const sidecarPath = sessionSidecarPath({
+  it('retries registration persistence after a session resume store flush failure', async () => {
+    const resumeStorePath = sessionResumeStorePath({
       repoRoot,
       conductorAgentId: 'agent-test',
     });
-    let failSidecarFlush = false;
-    const persistSidecar = sessionSidecarModule.saveSessionSidecar;
-    vi.spyOn(sessionSidecarModule, 'saveSessionSidecar').mockImplementation(
-      async (path, sidecar) => {
-        if (failSidecarFlush && path === sidecarPath) {
-          throw new Error('simulated sidecar flush failure');
+    let failResumeStoreFlush = false;
+    const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
+    vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
+      async (path, resumeStore) => {
+        if (failResumeStoreFlush && path === resumeStorePath) {
+          throw new Error('simulated session resume store flush failure');
         }
-        await persistSidecar(path, sidecar);
+        await persistResumeStore(path, resumeStore);
       },
     );
 
@@ -1847,14 +1866,14 @@ describe('runConductorSession resume / shutdown', () => {
     });
     mockSend.mockImplementationOnce(async () => {
       const register = conductorTools!.register_github_watch!;
-      failSidecarFlush = true;
+      failResumeStoreFlush = true;
       await expect(register.execute({ prNumber: 354 })).rejects.toThrow(
-        'simulated sidecar flush failure',
+        'simulated session resume store flush failure',
       );
 
-      const sidecarAfterFailure = await loadSessionSidecar(sidecarPath);
+      const resumeStoreAfterFailure = await loadSessionResumeStore(resumeStorePath);
       expect(
-        sidecarAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
+        resumeStoreAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
       ).toBeUndefined();
       const monitor = mockCreateGitHubMonitor.mock.results[0]!
         .value as GitHubMonitor;
@@ -1862,12 +1881,12 @@ describe('runConductorSession resume / shutdown', () => {
         registeredAt: expect.any(String),
       });
 
-      failSidecarFlush = false;
+      failResumeStoreFlush = false;
       const retryResult = await register.execute({ prNumber: 354 });
       expect(retryResult.structuredContent).toMatchObject({ ok: true });
-      const sidecarAfterRetry = await loadSessionSidecar(sidecarPath);
+      const resumeStoreAfterRetry = await loadSessionResumeStore(resumeStorePath);
       expect(
-        sidecarAfterRetry?.githubMonitor?.explicitPullRequests,
+        resumeStoreAfterRetry?.githubMonitor?.explicitPullRequests,
       ).toEqual(monitor.getCursor().explicitPullRequests);
       expect(monitor.registerPullRequest).toHaveBeenCalledTimes(2);
 
@@ -1889,12 +1908,12 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
-  it('unregisters a resumed GitHub watch and preserves its poll cursor in the sidecar', async () => {
+  it('unregisters a resumed GitHub watch and preserves its poll cursor in SessionResumeStore', async () => {
     const agentId = 'resume-agent-with-github-watch';
-    await saveSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       {
-        version: SESSION_SIDECAR_VERSION,
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: agentId,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -1958,28 +1977,28 @@ describe('runConductorSession resume / shutdown', () => {
     await conductorTools!.unregister_github_watch!.execute({ prNumber: 354 });
     expect(unregisterPullRequest).toHaveBeenCalledWith(354);
     await vi.waitFor(async () => {
-      const sidecar = await loadSessionSidecar(
-        sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+      const resumeStore = await loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
       );
-      expect(sidecar?.githubMonitor?.explicitPullRequests).toEqual({});
+      expect(resumeStore?.githubMonitor?.explicitPullRequests).toEqual({});
     });
-    const sidecar = await loadSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: agentId }),
+    const resumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
     );
-    expect(sidecar?.githubMonitor?.explicitPullRequests).toEqual({});
-    expect(sidecar?.githubMonitor?.pullRequests?.['354']).toEqual({
+    expect(resumeStore?.githubMonitor?.explicitPullRequests).toEqual({});
+    expect(resumeStore?.githubMonitor?.pullRequests?.['354']).toEqual({
       lastReviewId: '10',
     });
   });
 
-  it('retries unregistration persistence after a sidecar flush failure', async () => {
+  it('retries unregistration persistence after a session resume store flush failure', async () => {
     const agentId = 'resume-agent-with-github-watch-retry';
-    const sidecarPath = sessionSidecarPath({
+    const resumeStorePath = sessionResumeStorePath({
       repoRoot,
       conductorAgentId: agentId,
     });
-    await saveSessionSidecar(sidecarPath, {
-      version: SESSION_SIDECAR_VERSION,
+    await saveSessionResumeStore(resumeStorePath, {
+      version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: agentId,
       issueUrl: TEST_ISSUE.url,
       repoRoot,
@@ -1999,14 +2018,14 @@ describe('runConductorSession resume / shutdown', () => {
       updatedAt: 0,
     });
 
-    let failSidecarFlush = false;
-    const persistSidecar = sessionSidecarModule.saveSessionSidecar;
-    vi.spyOn(sessionSidecarModule, 'saveSessionSidecar').mockImplementation(
-      async (path, sidecar) => {
-        if (failSidecarFlush && path === sidecarPath) {
-          throw new Error('simulated sidecar flush failure');
+    let failResumeStoreFlush = false;
+    const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
+    vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
+      async (path, resumeStore) => {
+        if (failResumeStoreFlush && path === resumeStorePath) {
+          throw new Error('simulated session resume store flush failure');
         }
-        await persistSidecar(path, sidecar);
+        await persistResumeStore(path, resumeStore);
       },
     );
 
@@ -2022,27 +2041,27 @@ describe('runConductorSession resume / shutdown', () => {
     });
     mockSend.mockImplementationOnce(async () => {
       const unregister = conductorTools!.unregister_github_watch!;
-      failSidecarFlush = true;
+      failResumeStoreFlush = true;
       await expect(unregister.execute({ prNumber: 354 })).rejects.toThrow(
-        'simulated sidecar flush failure',
+        'simulated session resume store flush failure',
       );
 
-      const sidecarAfterFailure = await loadSessionSidecar(sidecarPath);
+      const resumeStoreAfterFailure = await loadSessionResumeStore(resumeStorePath);
       expect(
-        sidecarAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
+        resumeStoreAfterFailure?.githubMonitor?.explicitPullRequests?.['354'],
       ).toMatchObject({ registeredAt: '2026-09-07T05:00:00.000Z' });
       const monitor = mockCreateGitHubMonitor.mock.results[0]!
         .value as GitHubMonitor;
       expect(monitor.getCursor().explicitPullRequests).toEqual({});
 
-      failSidecarFlush = false;
+      failResumeStoreFlush = false;
       const retryResult = await unregister.execute({ prNumber: 354 });
       expect(retryResult.structuredContent).toMatchObject({ ok: true });
-      const sidecarAfterRetry = await loadSessionSidecar(sidecarPath);
-      expect(sidecarAfterRetry?.githubMonitor?.explicitPullRequests).toEqual(
+      const resumeStoreAfterRetry = await loadSessionResumeStore(resumeStorePath);
+      expect(resumeStoreAfterRetry?.githubMonitor?.explicitPullRequests).toEqual(
         monitor.getCursor().explicitPullRequests,
       );
-      expect(sidecarAfterRetry?.githubMonitor?.pullRequests?.['354']).toEqual({
+      expect(resumeStoreAfterRetry?.githubMonitor?.pullRequests?.['354']).toEqual({
         lastReviewId: '10',
       });
       expect(monitor.unregisterPullRequest).toHaveBeenCalledTimes(2);
@@ -2111,14 +2130,14 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     try {
-      const sidecarPath = sessionSidecarPath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
       await vi.waitFor(async () => {
-        expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+        expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath).toBeTruthy();
       });
-      const socketPath = (await loadSessionSidecar(sidecarPath))!.harnessSocketPath!;
+      const socketPath = (await loadSessionResumeStore(resumeStorePath))!.harnessSocketPath!;
       const observation = await sendOpenQuestionControlRequest<{
         sequence: number;
         openQuestions: Array<{ id: string; status: string }>;
@@ -2156,7 +2175,7 @@ describe('runConductorSession resume / shutdown', () => {
     }
   });
 
-  it('registers set_dispatch_hold and records hold transitions without sidecar state', async () => {
+  it('registers set_dispatch_hold and records hold transitions without saved session state', async () => {
     let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
     const sessionLogger = new SessionLogger({
       issueUrl: TEST_ISSUE.url,
@@ -2544,14 +2563,14 @@ describe('runConductorSession resume / shutdown', () => {
       shutdown.abort();
       await sessionPromise;
 
-      const sidecar = await loadSessionSidecar(
-        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      const resumeStore = await loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       );
-      expect(sidecar?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
+      expect(resumeStore?.githubMonitor?.explicitPullRequests?.['354']).toMatchObject({
         registeredAt: expect.any(String),
         kinds: ['pr.review', 'pr.review_comment', 'ci.completed'],
       });
-      expect(sidecar?.githubMonitor?.pullRequests?.['354']).toMatchObject({
+      expect(resumeStore?.githubMonitor?.pullRequests?.['354']).toMatchObject({
         lastReviewId: '2',
         lastReviewCommentId: '2',
         lastAggregateBySha: {
@@ -2844,7 +2863,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(emitted.some((event) => event.type === 'operator.input')).toBe(false);
   });
 
-  it('flushes sidecar on shutdown signal while waiting for events', async () => {
+  it('flushes SessionResumeStore on shutdown signal while waiting for events', async () => {
     const shutdown = new AbortController();
 
     mockSend.mockResolvedValueOnce({
@@ -2869,24 +2888,24 @@ describe('runConductorSession resume / shutdown', () => {
     const result = await sessionPromise;
     expect(result.stopReason).toBe('interrupted');
 
-    const sidecar = await loadSessionSidecar(
-      sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+    const resumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
-    expect(sidecar).toMatchObject({
+    expect(resumeStore).toMatchObject({
       conductorAgentId: 'agent-test',
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       sequence: 0,
     });
-    expect(sidecar?.updatedAt).toBeGreaterThan(0);
-    expect(sidecar?.lifecycle).toBe('interrupted');
+    expect(resumeStore?.updatedAt).toBeGreaterThan(0);
+    expect(resumeStore?.lifecycle).toBe('interrupted');
   });
 
   it.each([
     ['/close', 'closed'],
     ['/exit', 'exited'],
   ] as const)(
-    'records %s lifecycle in the final resume sidecar flush',
+    'records %s lifecycle in the final SessionResumeStore flush',
     async (command, lifecycle) => {
       mockSend.mockResolvedValue({
         runId: `run-${lifecycle}`,
@@ -2912,11 +2931,11 @@ describe('runConductorSession resume / shutdown', () => {
       operatorApi!.submit(command);
       await sessionPromise;
 
-      const sidecar = await loadSessionSidecar(
-        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      const resumeStore = await loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       );
-      expect(sidecar?.lifecycle).toBe(lifecycle);
-      expect(sidecar?.updatedAt).toBeGreaterThan(0);
+      expect(resumeStore?.lifecycle).toBe(lifecycle);
+      expect(resumeStore?.updatedAt).toBeGreaterThan(0);
     },
   );
 
@@ -2937,8 +2956,8 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     await expect(
-      loadSessionSidecar(
-        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       ),
     ).resolves.toMatchObject({ lifecycle: 'unknown' });
   });
@@ -2958,12 +2977,12 @@ describe('runConductorSession resume / shutdown', () => {
       });
       // Make the final YAML rename fail after the temporary file is written.
       await mkdir(openQuestionsPath, { recursive: true });
-      const sidecarPath = sessionSidecarPath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
-      await saveSessionSidecar(sidecarPath, {
-        version: SESSION_SIDECAR_VERSION,
+      await saveSessionResumeStore(resumeStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: 'agent-test',
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -2982,7 +3001,7 @@ describe('runConductorSession resume / shutdown', () => {
         workers: {},
         updatedAt: 1,
       });
-      const sidecarBeforeFlush = await loadSessionSidecar(sidecarPath);
+      const resumeStoreBeforeFlush = await loadSessionResumeStore(resumeStorePath);
 
       mockSend.mockResolvedValue({
         runId: 'run-1',
@@ -3043,17 +3062,17 @@ describe('runConductorSession resume / shutdown', () => {
         (event) =>
           event.type === 'harness.warning' &&
           event.message.includes(
-            'Open Question YAML / session sidecar を保存できませんでした',
+            'Open Question YAML / SessionResumeStore を保存できませんでした',
           ),
       );
       // recordSendComplete schedules one flush and teardown performs another.
       expect(persistenceWarnings.length).toBeGreaterThanOrEqual(2);
-      const sidecarAfterFlush = await loadSessionSidecar(sidecarPath);
-      expect(sidecarAfterFlush).toMatchObject({
-        openQuestions: sidecarBeforeFlush?.openQuestions,
-        sequence: sidecarBeforeFlush?.sequence,
+      const resumeStoreAfterFlush = await loadSessionResumeStore(resumeStorePath);
+      expect(resumeStoreAfterFlush).toMatchObject({
+        openQuestions: resumeStoreBeforeFlush?.openQuestions,
+        sequence: resumeStoreBeforeFlush?.sequence,
       });
-      expect(sidecarAfterFlush?.updatedAt).toBe(sidecarBeforeFlush?.updatedAt);
+      expect(resumeStoreAfterFlush?.updatedAt).toBe(resumeStoreBeforeFlush?.updatedAt);
     },
   );
 
@@ -3482,16 +3501,16 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     try {
-      const sidecarPath = sessionSidecarPath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
       await vi.waitFor(async () => {
-        const sidecar = await loadSessionSidecar(sidecarPath);
-        expect(sidecar?.harnessSocketPath).toBeTruthy();
+        const resumeStore = await loadSessionResumeStore(resumeStorePath);
+        expect(resumeStore?.harnessSocketPath).toBeTruthy();
       });
       await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
-      const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+      const socketPath = (await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath;
 
       await expect(
         sendOpenQuestionControlRequest<{ queued: true; delivery: string }>(
@@ -3591,14 +3610,14 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     try {
-      const sidecarPath = sessionSidecarPath({
+      const resumeStorePath = sessionResumeStorePath({
         repoRoot,
         conductorAgentId: 'agent-test',
       });
       await vi.waitFor(async () => {
-        expect((await loadSessionSidecar(sidecarPath))?.harnessSocketPath).toBeTruthy();
+        expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath).toBeTruthy();
       });
-      const socketPath = (await loadSessionSidecar(sidecarPath))?.harnessSocketPath;
+      const socketPath = (await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath;
       expect(socketPath).toBeTruthy();
 
       const questionsPath = openQuestionsStorePath({
@@ -3788,15 +3807,15 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockClose).toHaveBeenCalledOnce();
     expect(emitted).toContainEqual({
       type: 'harness.teardown.phase',
-      phase: 'flushSidecar',
+      phase: 'flushSessionResumeStore',
     });
     expect(emitted).toContainEqual({
       type: 'harness.teardown.phase',
       phase: 'conductor',
     });
     await expect(
-      loadSessionSidecar(
-        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+      loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       ),
     ).resolves.toMatchObject({
       conductorAgentId: 'agent-test',
@@ -3805,7 +3824,15 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
-  it('closes with a resumable sidecar and leaves the isolated worktree intact', async () => {
+  it('closes with resumable session state and leaves the isolated worktree intact', async () => {
+    const secretMarker = 'WORKER_ACP_SECRET_MARKER';
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        env: { API_TOKEN: secretMarker },
+      },
+    };
     mockSend.mockResolvedValue({
       runId: 'run-1',
       status: 'finished',
@@ -3845,14 +3872,6 @@ describe('runConductorSession resume / shutdown', () => {
       .fn()
       .mockResolvedValueOnce(firstBridge)
       .mockResolvedValueOnce(resumedBridge);
-    const secretMarker = 'WORKER_ACP_SECRET_MARKER';
-    const ensembleConfig = {
-      ...DEFAULT_ENSEMBLE_CONFIG,
-      acp: {
-        ...DEFAULT_ENSEMBLE_CONFIG.acp,
-        env: { API_TOKEN: secretMarker },
-      },
-    };
     mockSend.mockImplementationOnce(async () => {
       await conductorTools!.prompt_worker!.execute({
         worker: 'implementer',
@@ -3915,23 +3934,9 @@ describe('runConductorSession resume / shutdown', () => {
     expect(result.stopReason).toBe('completed');
     expect(removeSpy).not.toHaveBeenCalled();
     await expect(access(path)).resolves.toBeUndefined();
-    const sidecarPath = sessionSidecarPath({
-      repoRoot,
-      conductorAgentId: 'agent-test',
-    });
-    const sidecarText = await readFile(sidecarPath, 'utf8');
-    const savedSidecar = await loadSessionSidecar(sidecarPath);
-    expect(savedSidecar?.workers.implementer?.acpSpawn).toMatchObject({
-      preset: 'custom',
-      command: process.execPath,
-      args: [],
-      envDigest: computeAcpSpawnEnvDigest({ API_TOKEN: secretMarker }),
-    });
-    expect(sidecarText).not.toContain(secretMarker);
-    expect(JSON.stringify(emitted)).not.toContain(secretMarker);
     await expect(
-      loadSessionSidecar(
-        sidecarPath,
+      loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       ),
     ).resolves.toMatchObject({
       conductorAgentId: 'agent-test',
@@ -3944,6 +3949,19 @@ describe('runConductorSession resume / shutdown', () => {
         },
       },
     });
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: 'agent-test',
+    });
+    const resumeStore = await loadSessionResumeStore(resumeStorePath);
+    expect(resumeStore?.workers.implementer?.acpSpawn).toMatchObject({
+      preset: 'custom',
+      command: process.execPath,
+      args: [],
+      envDigest: computeAcpSpawnEnvDigest({ API_TOKEN: secretMarker }),
+    });
+    expect(await readFile(resumeStorePath, 'utf8')).not.toContain(secretMarker);
+    expect(JSON.stringify(emitted)).not.toContain(secretMarker);
     expect(emitted).toContainEqual({ type: 'session.operator_close' });
     expect(emitted).not.toContainEqual({ type: 'session.operator_exit' });
     expect(
@@ -4101,11 +4119,11 @@ describe('runConductorSession resume / shutdown', () => {
     expect(firstBridge.close).toHaveBeenCalledOnce();
     expect(removeSpy).not.toHaveBeenCalled();
     await expect(access(path)).resolves.toBeUndefined();
-    const sidecarPath = sessionSidecarPath({
+    const resumeStorePath = sessionResumeStorePath({
       repoRoot,
       conductorAgentId: 'agent-test',
     });
-    await expect(loadSessionSidecar(sidecarPath)).resolves.toMatchObject({
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
       workers: {
         implementer: {
           acpSessionId: 'worker-session',
@@ -4115,7 +4133,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     // Complete only after force shutdown has removed the resident. Its late
-    // result must not be needed to make the sidecar resumable.
+    // The result must not be needed to make the saved session resumable.
     firstPrompt.resolve({
       stopReason: 'cancelled',
       responseText: '',
@@ -4260,12 +4278,12 @@ describe('runConductorSession resume / shutdown', () => {
     );
     expect(operatorApi).toBeDefined();
     expect(operatorApi!.submit('/close')).toBe(false);
-    const sidecarPath = sessionSidecarPath({
+    const resumeStorePath = sessionResumeStorePath({
       repoRoot,
       conductorAgentId: 'agent-test',
     });
     await vi.waitFor(async () => {
-      await expect(loadSessionSidecar(sidecarPath)).resolves.toMatchObject({
+      await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
         githubMonitor: {
           pendingUpdates: payload.items,
         },
@@ -4284,7 +4302,7 @@ describe('runConductorSession resume / shutdown', () => {
     closeGate.resolve();
     const result = await sessionPromise;
     expect(result.stopReason).toBe('completed');
-    await expect(loadSessionSidecar(sidecarPath)).resolves.toMatchObject({
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
       githubMonitor: {
         pendingUpdates: payload.items,
       },

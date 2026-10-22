@@ -17,7 +17,7 @@ Issue #320 の対象は、`ENSEMBLE_TUI_LAYOUT=stream` で terminal scrollback �
 |------|------|-----|
 | **(a) TTY native** | CLI が標準または端末固有の escape sequence を TTY へ送り、viewport state を応答で得る | VT/xterm の DSR、端末固有 query |
 | **(b) subprocess poll** | CLI と同じ pane/session 内から multiplexer の CLI を subprocess として呼び、host state を定期取得する | tmux `display-message` |
-| **(c) external sidecar** | terminal host の API/RPC/extension を別プロセスが監視し、CLI へ IPC する | iTerm2 Python API、terminal UI extension |
+| **(c) external terminal helper** | terminal host の API/RPC/extension を別プロセスが監視し、CLI へ IPC する | iTerm2 Python API、terminal UI extension |
 
 ## 表示モデルの前提
 
@@ -70,12 +70,12 @@ Issue #320 の対象は、`ENSEMBLE_TUI_LAYOUT=stream` で terminal scrollback �
 | 端末 / 経路 | tier | CLI 単体の判定 | 検出手段 | 根拠 | 制限 |
 |--------------|------|----------------|----------|------|------|
 | tmux 3.6a | (b) subprocess poll | **可能**（tmux pane 内） | `display-message` の `pane_in_mode`, `scroll_position`, `pane_mode` | [tmux(1) formats](https://man7.org/linux/man-pages/man1/tmux.1.html) と下記実証 | tmux copy mode の状態であり、外側 terminal の native scrollback ではない |
-| iTerm2 | (a) 不可、(c) **可能** | TTY escape だけでは不可 | Python API `SessionLineInfo.first_visible_line_number` | [iTerm2 Python API Session](https://iterm2.com/python-api/session.html) | Python API の有効化、Unix socket、cookie/Automation permission、RPC sidecar が必要 |
+| iTerm2 | (a) 不可、(c) **可能** | TTY escape だけでは不可 | Python API `SessionLineInfo.first_visible_line_number` | [iTerm2 Python API Session](https://iterm2.com/python-api/session.html) | Python API の有効化、Unix socket、cookie/Automation permission、RPC helper が必要 |
 | xterm / 標準 VT | (a) 不可 | 不可 | DSR/CPR は cursor row/column のみ | [xterm control sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) | proprietary protocol を端末別に追加しても共通契約にならない |
 | VS Code integrated terminal | CLI は不可、host 側 (c) は理論上可能 | 不可 | 内部 xterm.js の `buffer.active.viewportY` / `onScroll` | [xterm.js IBuffer](https://xtermjs.org/docs/api/terminal/interfaces/ibuffer/)、[Terminal API](https://code.visualstudio.com/api/references/vscode-api#Terminal) | VS Code の通常 extension API は既存 terminal の xterm instance/viewport を公開しない。host extension は別 scope |
 | Windows Terminal / ConPTY | CLI は不可 | 不可 | ConPTY の UTF-8 stream と VT sequence。host UI が viewport を所有 | [Pseudoconsoles](https://learn.microsoft.com/en-us/windows/console/pseudoconsoles)、[VT sequences](https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences) | classic console の screen-buffer window API と Windows Terminal の terminal-owned scrollback は別物。既存 UI の公開 callback は未確認 |
-| kitty | CLI は不可、sidecar (c) は不完全 | 直接の位置取得は不可 | remote control `get-text` の `screen`/`all`、`scroll-window` | [kitty remote-control protocol](https://sw.kovidgoyal.net/kitty/rc_protocol/) | viewport offset field がなく、内容比較による推定は不安定。remote control の許可/認証が必要 |
-| WezTerm | CLI は不可、sidecar (c) は不完全 | 直接の位置取得は不可 | `wezterm cli get-text` の画面/scrollback 範囲 | [wezterm cli get-text](https://wezterm.org/cli/cli/get-text.html) | current viewport offset の API ではなく、内容比較・mux server・poll latency が残る |
+| kitty | CLI は不可、external helper (c) は不完全 | 直接の位置取得は不可 | remote control `get-text` の `screen`/`all`、`scroll-window` | [kitty remote-control protocol](https://sw.kovidgoyal.net/kitty/rc_protocol/) | viewport offset field がなく、内容比較による推定は不安定。remote control の許可/認証が必要 |
+| WezTerm | CLI は不可、external helper (c) は不完全 | 直接の位置取得は不可 | `wezterm cli get-text` の画面/scrollback 範囲 | [wezterm cli get-text](https://wezterm.org/cli/cli/get-text.html) | current viewport offset の API ではなく、内容比較・mux server・poll latency が残る |
 
 ここでの「不可」は scrollback を表示できないという意味ではない。CLI と terminal host の標準 TTY/PTY channel に、利用者の viewport state が返らないという意味である。
 
@@ -122,13 +122,13 @@ macOS 上で同じ `display-message` subprocess を出力破棄して計測し�
 
 `pane_in_mode=1` だけでは copy mode の bottom (`scroll_position=0`) や choose mode 等を含み得る。少なくとも `pane_in_mode=1`、`pane_mode`、`scroll_position` を組み合わせ、selection/choose mode を detached とみなすかは実装時に固定する必要がある。
 
-## iTerm2 の sidecar 境界
+## iTerm2 の external helper 境界
 
 iTerm2 の proprietary escape-code 一覧には device/version、color、title、user variable 等はあるが、scrollback viewport の current offset query はない。[iTerm2 proprietary escape codes](https://iterm2.com/documentation-escape-codes.html) も、非標準 code は tmux/screen で正しく動かない可能性があると注意している。よって **iTerm2 の CLI 単体 C は不可**である。
 
-Python API には `Session.async_get_line_info()` と `SessionLineInfo.first_visible_line_number` があり、「現在 onscreen に表示される最初の行」「ユーザーの scroll で変化」と定義されている。これは C の必要情報を提供するが、TTY response ではなく、iTerm2 の API socket を読む sidecar tier (c) である。
+Python API には `Session.async_get_line_info()` と `SessionLineInfo.first_visible_line_number` があり、「現在 onscreen に表示される最初の行」「ユーザーの scroll で変化」と定義されている。これは C の必要情報を提供するが、TTY response ではなく、iTerm2 の API socket を読む external helper tier (c) である。
 
-最小 sidecar は「対象 session の discovery → `first_visible_line_number` の定期 RPC poll → CLI への IPC」となる。Python API は既定で無効で、設定で有効化した Unix domain socket、cookie、macOS Automation permission が必要である。[Python API Security](https://stage.iterm2.com/python-api-auth.html) によれば、外部 program が cookie を得る経路にも Automation permission が関係する。したがって iTerm2 対応を C' に含めるなら、session ID discovery、複数 split pane、RPC reconnect、権限 UI、iTerm2 内 tmux の二重 viewport を別途スコープ化する必要がある。
+最小 helper は「対象 session の discovery → `first_visible_line_number` の定期 RPC poll → CLI への IPC」となる。Python API は既定で無効で、設定で有効化した Unix domain socket、cookie、macOS Automation permission が必要である。[Python API Security](https://stage.iterm2.com/python-api-auth.html) によれば、外部 program が cookie を得る経路にも Automation permission が関係する。したがって iTerm2 対応を C' に含めるなら、session ID discovery、複数 split pane、RPC reconnect、権限 UI、iTerm2 内 tmux の二重 viewport を別途スコープ化する必要がある。
 
 ## 推奨方針と境界
 
@@ -142,7 +142,7 @@ C' は、A+B の state machine に detector event を注入する **将来の tm
 4. detector は pending/flush を直接所有せず、A+B の reducer/state machine に event を渡す。
 5. fake detector の unit test と、tmux 3.6a 以上・mouse on/off・copy mode・新着出力中の PTY smoke を分ける。
 
-iTerm2 sidecar は API の値だけなら有望だが、C' の初回 adapter に同梱しない。配布・権限・IPC・session lifecycle まで含むため、別 Issue の設計判断とする。kitty/WezTerm の text capture は viewport offset を返さず、内容比較の heuristic に留まるため、現時点の C' 候補から除外する。
+iTerm2 helper は API の値だけなら有望だが、C' の初回 adapter に同梱しない。配布・権限・IPC・session lifecycle まで含むため、別 Issue の設計判断とする。kitty/WezTerm の text capture は viewport offset を返さず、内容比較の heuristic に留まるため、現時点の C' 候補から除外する。
 
 ## 残る制限
 

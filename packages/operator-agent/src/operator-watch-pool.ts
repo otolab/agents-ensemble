@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
-  listSessionSidecars,
+  listSessionResumeStores,
   loadOpenQuestionsStore,
   loadSessionStateStore,
   openQuestionsStorePath,
@@ -14,7 +14,7 @@ import {
   type ConductorJsonValue,
   type ConductorTool,
   type SessionObservationSnapshot,
-  type SessionSidecar,
+  type SessionResumeStore,
 } from '@agents-ensemble/core/operator-runtime';
 import type {
   OperatorDispatchEvent,
@@ -104,10 +104,10 @@ export async function createOperatorWatchPool(
   const pool: OperatorWatchPool = {
     async register(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const sidecar = (await listSessionSidecars(root)).find(
+      const resumeStore = (await listSessionResumeStores(root)).find(
         (candidate) => candidate.conductorAgentId === id,
       );
-      if (!sidecar) throw new Error(`No saved session found for ${id}.`);
+      if (!resumeStore) throw new Error(`No saved session found for ${id}.`);
       const watch = {
         conductorAgentId: id,
         pollIntervalMs: parseBoundedInteger(
@@ -165,19 +165,19 @@ export async function createOperatorWatchPool(
       if (!watch || closed || polling.has(id)) return 0;
       polling.add(id);
       try {
-        const sidecar = (await listSessionSidecars(root)).find(
+        const resumeStore = (await listSessionResumeStores(root)).find(
           (candidate) => candidate.conductorAgentId === id,
         );
-        if (!sidecar) return 0;
-        const { snapshot: observation, source } = await readObservation(root, sidecar);
+        if (!resumeStore) return 0;
+        const { snapshot: observation, source } = await readObservation(root, resumeStore);
         const previous = state.cursors[id];
         const next = cursorFor(observation);
-        const reports = collectReports(sidecar, observation, previous, source)
+        const reports = collectReports(resumeStore, observation, previous, source)
           .map((report) => ({
             ...report,
             reportId: randomUUID(),
             conductorAgentId: id,
-            issueUrl: sidecar.issueUrl,
+            issueUrl: resumeStore.issueUrl,
             debounceMs: watch.debounceMs,
           }));
         const cursorChanged = hash(previous ?? null) !== hash(next);
@@ -199,7 +199,7 @@ export async function createOperatorWatchPool(
             reportId: report.reportId,
             reportType: report.reportType,
             conductorAgentId: id,
-            issueUrl: sidecar.issueUrl,
+            issueUrl: resumeStore.issueUrl,
             text: report.text,
           })),
           watch.debounceMs,
@@ -254,7 +254,7 @@ export function createRegisterSessionWatchTool(
   return {
     name: 'register_session_watch',
     description:
-      'Add a saved Issue session to the operator watch pool. Polling uses the live harness UDS when available and saved YAML/sidecar files while it is offline.',
+      'Add a saved Issue session to the operator watch pool. Polling uses the live harness UDS when available and the saved SessionResumeStore/YAML when it is offline.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -313,16 +313,16 @@ export function createUnregisterSessionWatchTool(
 
 async function readObservation(
   repoRoot: string,
-  sidecar: SessionSidecar,
+  resumeStore: SessionResumeStore,
 ): Promise<{
   snapshot: SessionObservationSnapshot;
-  source: 'uds' | 'sidecar';
+  source: 'uds' | 'resume_store';
 }> {
-  if (sidecar.harnessSocketPath) {
+  if (resumeStore.harnessSocketPath) {
     try {
       return {
         snapshot: await sendOpenQuestionControlRequest<SessionObservationSnapshot>(
-          sidecar.harnessSocketPath,
+          resumeStore.harnessSocketPath,
           { method: OPEN_QUESTION_CONTROL_METHODS.observe },
         ),
         source: 'uds',
@@ -343,34 +343,34 @@ async function readObservation(
     }
   }
   const questions = await loadOpenQuestionsStore(
-    openQuestionsStorePath({ repoRoot, conductorAgentId: sidecar.conductorAgentId }),
+    openQuestionsStorePath({ repoRoot, conductorAgentId: resumeStore.conductorAgentId }),
   );
   const sessionState = await loadSessionStateStore(
-    sessionStateStorePath({ repoRoot, conductorAgentId: sidecar.conductorAgentId }),
+    sessionStateStorePath({ repoRoot, conductorAgentId: resumeStore.conductorAgentId }),
   );
   return {
     snapshot: {
-      sequence: questions?.sequence ?? sidecar.sequence,
-      openQuestions: questions?.openQuestions ?? sidecar.openQuestions,
+      sequence: questions?.sequence ?? resumeStore.sequence,
+      openQuestions: questions?.openQuestions ?? resumeStore.openQuestions,
       ...(sessionState ? { sessionState } : {}),
     },
-    source: 'sidecar',
+    source: 'resume_store',
   };
 }
 
 function collectReports(
-  sidecar: SessionSidecar,
+  resumeStore: SessionResumeStore,
   observation: SessionObservationSnapshot,
   previous: SessionCursor | undefined,
-  source: 'uds' | 'sidecar',
+  source: 'uds' | 'resume_store',
 ): Array<{ reportType: 'session_state' | 'open_question'; text: string }> {
   const reports: Array<{
     reportType: 'session_state' | 'open_question';
     text: string;
   }> = [];
-  const issue = `${sidecar.issueUrl} (${sidecar.conductorAgentId})`;
+  const issue = `${resumeStore.issueUrl} (${resumeStore.conductorAgentId})`;
   const observationSource =
-    source === 'uds' ? '稼働中 UDS' : '保存済み sidecar / YAML';
+    source === 'uds' ? '稼働中 UDS' : '保存済み SessionResumeStore / YAML';
   for (const question of observation.openQuestions) {
     if (
       !previous ||

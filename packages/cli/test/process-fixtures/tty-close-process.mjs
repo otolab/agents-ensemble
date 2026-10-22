@@ -180,16 +180,16 @@ try {
   if (!worktrees.includes(`worktree ${registeredWorktreePath}\n`)) {
     throw new Error('TTY /close removed the Issue worktree registration');
   }
-  const sidecarPath = join(
+  const resumeStorePath = join(
     repoRoot,
     '.ensemble',
     'sessions',
     'close-process-agent.json',
   );
-  const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8'));
+  const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8'));
   if (
-    sidecar.workers?.implementer?.acpSessionId !== 'tty-worker-session' ||
-    sidecar.workers?.implementer?.acpCwd !== workerWorktreePath
+    resumeStore.workers?.implementer?.acpSessionId !== 'tty-worker-session' ||
+    resumeStore.workers?.implementer?.acpCwd !== workerWorktreePath
   ) {
     throw new Error('TTY /close did not persist the worker ACP session');
   }

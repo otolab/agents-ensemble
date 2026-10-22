@@ -36,11 +36,18 @@ export {
 export { profilePromptModule } from './prompt/modules/shared/profile-prompt-module.js';
 export { renderCompiledPrompt } from './prompt/render-compiled-prompt.js';
 export {
-  loadSessionSidecar,
-  listSessionSidecars,
+  loadSessionResumeStore,
+  listSessionResumeStores,
   type SessionLifecycle,
-  type SessionSidecar,
-} from './session/session-sidecar.js';
+  type SessionResumeStore,
+} from './session/session-resume-store.js';
+/** @deprecated Use the SessionResumeStore exports; supported for one release only. */
+export {
+  listSessionSidecars,
+  loadSessionSidecar,
+} from './session/session-resume-store.js';
+/** @deprecated Use SessionResumeStore; supported for one release only. */
+export type { SessionSidecar } from './session/session-resume-store.js';
 export {
   OPEN_QUESTION_CONTROL_METHODS,
   OpenQuestionControlRemoteError,

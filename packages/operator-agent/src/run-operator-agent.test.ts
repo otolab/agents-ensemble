@@ -225,7 +225,7 @@ describe('runOperatorAgent', () => {
           runId: 'run-1',
           status: 'completed',
           result:
-            '保存済み sidecar では implementer のセッションが確認できます。\n\n\n\nライブ open question も確認できます。',
+            '保存済み SessionResumeStore から implementer のセッション情報を確認できます。\n\n\n\nライブ open question も確認できます。',
         };
       },
     });
@@ -246,7 +246,7 @@ describe('runOperatorAgent', () => {
     );
     expect(transcript).toContain('\u001b[2muser>\u001b[0m');
     expect(transcript).toContain(
-      '\u001b[36moperator>\u001b[0m\n保存済み sidecar では implementer のセッションが確認できます。\n\nライブ open question も確認できます。\n\n',
+      '\u001b[36moperator>\u001b[0m\n保存済み SessionResumeStore から implementer のセッション情報を確認できます。\n\nライブ open question も確認できます。\n\n',
     );
     expect(transcript).toContain('会話 hold を解除しました');
     expect(transcript).toContain(
@@ -382,19 +382,19 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const sidecarPath = join(
+    const resumeStorePath = join(
       repoRoot,
       '.ensemble',
       'sessions',
       'conductor-one.json',
     );
-    const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as Record<
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
     >;
     await writeFile(
-      sidecarPath,
-      JSON.stringify({ ...sidecar, harnessSocketPath: liveServer.socketPath }),
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
     const input = new PassThrough() as PassThrough & OperatorAgentInput;
@@ -536,19 +536,19 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const sidecarPath = join(
+    const resumeStorePath = join(
       repoRoot,
       '.ensemble',
       'sessions',
       'conductor-one.json',
     );
-    const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as Record<
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
     >;
     await writeFile(
-      sidecarPath,
-      JSON.stringify({ ...sidecar, harnessSocketPath: liveServer.socketPath }),
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
     const input = new PassThrough() as PassThrough & OperatorAgentInput;
@@ -772,19 +772,19 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const sidecarPath = join(
+    const resumeStorePath = join(
       repoRoot,
       '.ensemble',
       'sessions',
       'conductor-one.json',
     );
-    const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as Record<
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
     >;
     await writeFile(
-      sidecarPath,
-      JSON.stringify({ ...sidecar, harnessSocketPath: liveServer.socketPath }),
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
     const input = new PassThrough() as PassThrough & OperatorAgentInput;
@@ -879,19 +879,19 @@ describe('runOperatorAgent', () => {
     });
     closeServers.push(() => liveServer.close());
 
-    const sidecarPath = join(
+    const resumeStorePath = join(
       repoRoot,
       '.ensemble',
       'sessions',
       'conductor-one.json',
     );
-    const sidecar = JSON.parse(await readFile(sidecarPath, 'utf8')) as Record<
+    const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8')) as Record<
       string,
       unknown
     >;
     await writeFile(
-      sidecarPath,
-      JSON.stringify({ ...sidecar, harnessSocketPath: liveServer.socketPath }),
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
     );
 
     const statePath = operatorWatchStatePath(repoRoot);

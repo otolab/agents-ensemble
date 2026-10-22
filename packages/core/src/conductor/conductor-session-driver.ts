@@ -120,11 +120,11 @@ export interface ConductorSessionDriverOptions {
   /** 既存の conductor 会話を再開するときは初回 `agent.send`（system + ブリーフィング）を省略する。 */
   skipInitialSend?: boolean;
   /** `skipInitialSend` 時に引き継ぐ Driver 状態。 */
-  resumeState?: Pick<
+  resumeStore?: Pick<
     ConductorSessionDriverResult,
     'sendCount' | 'autonomousTurns' | 'lastSendResult'
   > & { lastDispatchesThisTurn: number };
-  /** conductor send 中だけ有効な dispatch 保留状態。sidecar には保存しない。 */
+  /** conductor send 中だけ有効な dispatch 保留状態。SessionResumeStore には保存しない。 */
   dispatchHoldState?: DispatchHoldState;
   /** dispatch 保留の切替・件数変化を TUI/観測へ通知する。 */
   onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
@@ -149,12 +149,12 @@ export interface ConductorSessionDriverResult {
 export async function runConductorSessionDriver(
   options: ConductorSessionDriverOptions,
 ): Promise<ConductorSessionDriverResult> {
-  let sendCount = options.resumeState?.sendCount ?? 0;
-  let lastDispatchesThisTurn = options.resumeState?.lastDispatchesThisTurn ?? 0;
-  let autonomousTurns = options.resumeState?.autonomousTurns ?? 0;
+  let sendCount = options.resumeStore?.sendCount ?? 0;
+  let lastDispatchesThisTurn = options.resumeStore?.lastDispatchesThisTurn ?? 0;
+  let autonomousTurns = options.resumeStore?.autonomousTurns ?? 0;
   let dispatchBatchState: DispatchBatchState = {};
   let stopReason: IssueLoopStopReason = 'completed';
-  let lastSendResult: ConductorSendResult = options.resumeState?.lastSendResult ?? {
+  let lastSendResult: ConductorSendResult = options.resumeStore?.lastSendResult ?? {
     runId: '',
     status: 'finished',
   };

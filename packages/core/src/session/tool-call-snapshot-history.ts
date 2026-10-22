@@ -15,7 +15,7 @@ import {
   TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS,
   type StoredToolCallSnapshot,
 } from '../runtime/tool-call-snapshot-registry.js';
-import { sessionSidecarDir } from './session-sidecar.js';
+import { sessionResumeStoreDir } from './session-resume-store.js';
 
 const TOOL_CALL_SNAPSHOT_HISTORY_VERSION = 1;
 const TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX = '.tool-calls';
@@ -37,13 +37,13 @@ export function toolCallSnapshotHistoryPath(input: {
   conductorAgentId: string;
 }): string {
   return join(
-    sessionSidecarDir(input.repoRoot),
+    sessionResumeStoreDir(input.repoRoot),
     `${input.conductorAgentId}${TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX}`,
   );
 }
 
 /**
- * Read the optional history independently from the required resume sidecar.
+ * Read the optional history independently from the required session resume store.
  * Invalid history is discarded locally so it cannot prevent session resume.
  */
 export async function loadToolCallSnapshotHistory(input: {
@@ -191,7 +191,7 @@ export async function pruneExpiredToolCallSnapshotHistoryFiles(
   repoRoot: string,
   now = Date.now(),
 ): Promise<PruneToolCallSnapshotHistoryResult> {
-  const dir = sessionSidecarDir(repoRoot);
+  const dir = sessionResumeStoreDir(repoRoot);
   let entries: string[];
   try {
     entries = await readdir(dir);

@@ -9,7 +9,10 @@ import {
 import type { ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 
-export const SESSION_SIDECAR_VERSION = 1;
+export const SESSION_RESUME_STORE_VERSION = 1;
+
+/** @deprecated Use SESSION_RESUME_STORE_VERSION; supported for one release only. */
+export const SESSION_SIDECAR_VERSION = SESSION_RESUME_STORE_VERSION;
 
 export type SessionLifecycle =
   | 'closed'
@@ -17,34 +20,47 @@ export type SessionLifecycle =
   | 'interrupted'
   | 'unknown';
 
-export class SessionSidecarNotFoundError extends Error {
-  readonly code = 'SESSION_SIDECAR_NOT_FOUND';
+export class SessionResumeStoreNotFoundError extends Error {
+  readonly code: string = 'SESSION_RESUME_STORE_NOT_FOUND';
 
   constructor(
     public readonly conductorAgentId: string,
     public readonly path: string,
   ) {
     super(
-      `Session sidecar not found for resume (agentId=${conductorAgentId}, path=${path})`,
+      `Session resume store not found for resume (agentId=${conductorAgentId}, path=${path})`,
     );
+    this.name = 'SessionResumeStoreNotFoundError';
+  }
+}
+
+/** @deprecated Use SessionResumeStoreNotFoundError; supported for one release only. */
+export class SessionSidecarNotFoundError extends SessionResumeStoreNotFoundError {
+  override readonly code = 'SESSION_SIDECAR_NOT_FOUND';
+
+  constructor(conductorAgentId: string, path: string) {
+    super(conductorAgentId, path);
     this.name = 'SessionSidecarNotFoundError';
   }
 }
 
-export interface WorkerSessionSidecar {
+/** @deprecated Use WorkerSessionResumeStore; supported for one release only. */
+export type WorkerSessionSidecar = WorkerSessionResumeStore;
+
+export interface WorkerSessionResumeStore {
   acpSessionId: string;
   /** ACP `session/new` / `session/load` に渡した cwd（resume 検証用）。 */
   acpCwd?: string;
-  /** resume 用 ACP spawn fingerprint（env は canonical digest のみ保存）。 */
+  /** resume 時の ACP spawn fingerprint（env は canonical digest のみ保存）。 */
   acpSpawn?: AcpSpawnFingerprint;
 }
 
-export interface SessionSidecar {
-  version: typeof SESSION_SIDECAR_VERSION;
+export interface SessionResumeStore {
+  version: typeof SESSION_RESUME_STORE_VERSION;
   conductorAgentId: string;
-  /** 起動時に選択した conductor backend。旧 sidecar の欠落値は cursor。 */
+  /** 起動時に選択した conductor backend。旧形式の欠落値は cursor。 */
   conductorBackend?: ConductorBackend;
-  /** 初回 `prompt_worker` まで ACP attach を遅延する。旧 sidecar は eager。 */
+  /** 初回 `prompt_worker` まで ACP attach を遅延する。旧形式は eager。 */
   lazyWorkers?: boolean;
   /** 稼働中 session の local control socket。teardown 時に除去する。 */
   harnessSocketPath?: string;
@@ -54,7 +70,7 @@ export interface SessionSidecar {
   profilePath?: string;
   openQuestions: OpenQuestion[];
   sequence: number;
-  workers: Record<string, WorkerSessionSidecar>;
+  workers: Record<string, WorkerSessionResumeStore>;
   /** GitHub 監視カーソルと未配送更新（#39）。 */
   githubMonitor?: GitHubMonitorCursor;
   /** Harness-resolved MCP map digest used to reject unsafe resume. */
@@ -67,55 +83,82 @@ export interface SessionSidecar {
   updatedAt: number;
 }
 
-export interface FindLatestSessionSidecarInput {
+/** @deprecated Use SessionResumeStore; supported for one release only. */
+export type SessionSidecar = SessionResumeStore;
+
+export interface FindLatestSessionResumeStoreInput {
   repoRoot: string;
   issueUrl: string;
 }
 
-export interface SessionSidecarPathOptions {
+/** @deprecated Use FindLatestSessionResumeStoreInput; supported for one release only. */
+export type FindLatestSessionSidecarInput = FindLatestSessionResumeStoreInput;
+
+export interface SessionResumeStorePathOptions {
   repoRoot: string;
   conductorAgentId: string;
 }
 
-export function sessionSidecarDir(repoRoot: string): string {
+/** @deprecated Use SessionResumeStorePathOptions; supported for one release only. */
+export type SessionSidecarPathOptions = SessionResumeStorePathOptions;
+
+export function sessionResumeStoreDir(repoRoot: string): string {
   return join(repoRoot, '.ensemble', 'sessions');
 }
 
-export function sessionSidecarPath(options: SessionSidecarPathOptions): string {
-  return join(sessionSidecarDir(options.repoRoot), `${options.conductorAgentId}.json`);
+export function sessionResumeStorePath(options: SessionResumeStorePathOptions): string {
+  return join(sessionResumeStoreDir(options.repoRoot), `${options.conductorAgentId}.json`);
 }
 
-export async function loadSessionSidecar(
+export async function loadSessionResumeStore(
   path: string,
-): Promise<SessionSidecar | undefined> {
+): Promise<SessionResumeStore | undefined> {
   try {
     const raw = await readFile(path, 'utf8');
-    return parseSessionSidecar(JSON.parse(raw));
+    return parseSessionResumeStore(JSON.parse(raw));
   } catch (error) {
     if (isEnoent(error)) return undefined;
     throw error;
   }
 }
 
-/** `resumeAgentId` 指定時に sidecar が無い場合は起動失敗とする。 */
+/** `resumeAgentId` 指定時に SessionResumeStore が無い場合は起動失敗とする。 */
+export async function requireSessionResumeStoreForResume(input: {
+  repoRoot: string;
+  conductorAgentId: string;
+}): Promise<SessionResumeStore> {
+  const path = sessionResumeStorePath(input);
+  const resumeStore = await loadSessionResumeStore(path);
+  if (!resumeStore) {
+    throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
+  }
+  return resumeStore;
+}
+
+/** @deprecated Use requireSessionResumeStoreForResume; supported for one release only. */
 export async function requireSessionSidecarForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
 }): Promise<SessionSidecar> {
-  const path = sessionSidecarPath(input);
-  const sidecar = await loadSessionSidecar(path);
-  if (!sidecar) {
-    throw new SessionSidecarNotFoundError(input.conductorAgentId, path);
+  try {
+    return await requireSessionResumeStoreForResume(input);
+  } catch (error) {
+    if (error instanceof SessionResumeStoreNotFoundError) {
+      throw new SessionSidecarNotFoundError(
+        input.conductorAgentId,
+        sessionResumeStorePath(input),
+      );
+    }
+    throw error;
   }
-  return sidecar;
 }
 
-export async function saveSessionSidecar(
+export async function saveSessionResumeStore(
   path: string,
-  sidecar: SessionSidecar,
+  resumeStore: SessionResumeStore,
 ): Promise<void> {
-  const parsed = parseSessionSidecar({
-    ...sidecar,
+  const parsed = parseSessionResumeStore({
+    ...resumeStore,
     updatedAt: Date.now(),
   });
   const directory = dirname(path);
@@ -131,10 +174,13 @@ export async function saveSessionSidecar(
   await rename(tempPath, path);
 }
 
-export async function listSessionSidecars(
+/** @deprecated Use saveSessionResumeStore; supported for one release only. */
+export const saveSessionSidecar = saveSessionResumeStore;
+
+export async function listSessionResumeStores(
   repoRoot: string,
-): Promise<SessionSidecar[]> {
-  const dir = sessionSidecarDir(repoRoot);
+): Promise<SessionResumeStore[]> {
+  const dir = sessionResumeStoreDir(repoRoot);
   let entries: string[];
   try {
     entries = await readdir(dir);
@@ -143,33 +189,40 @@ export async function listSessionSidecars(
     throw error;
   }
 
-  const sidecars: SessionSidecar[] = [];
+  const resumeStores: SessionResumeStore[] = [];
   for (const entry of entries) {
     if (!entry.endsWith('.json') || entry.endsWith('.tmp')) continue;
-    const sidecar = await loadSessionSidecar(join(dir, entry));
-    if (sidecar) sidecars.push(sidecar);
+    const resumeStore = await loadSessionResumeStore(join(dir, entry));
+    if (resumeStore) resumeStores.push(resumeStore);
   }
-  return sidecars;
+  return resumeStores;
 }
 
-/** 同一 Issue の sidecar のうち `updatedAt` が最新のものを返す。 */
-export async function findLatestSessionSidecarForIssue(
-  input: FindLatestSessionSidecarInput,
-): Promise<SessionSidecar | undefined> {
-  const matches = (await listSessionSidecars(input.repoRoot)).filter(
-    (sidecar) =>
-      sidecar.issueUrl === input.issueUrl &&
-      sidecar.repoRoot === input.repoRoot,
+/** @deprecated Use listSessionResumeStores; supported for one release only. */
+export const listSessionSidecars = listSessionResumeStores;
+
+/** 同一 Issue の SessionResumeStore のうち `updatedAt` が最新のものを返す。 */
+export async function findLatestSessionResumeStoreForIssue(
+  input: FindLatestSessionResumeStoreInput,
+): Promise<SessionResumeStore | undefined> {
+  const matches = (await listSessionResumeStores(input.repoRoot)).filter(
+    (resumeStore) =>
+      resumeStore.issueUrl === input.issueUrl &&
+      resumeStore.repoRoot === input.repoRoot,
   );
   if (matches.length === 0) return undefined;
 
-  return matches.reduce((latest, sidecar) =>
-    sidecar.updatedAt > latest.updatedAt ? sidecar : latest,
+  return matches.reduce((latest, resumeStore) =>
+    resumeStore.updatedAt > latest.updatedAt ? resumeStore : latest,
   );
 }
 
-export function assertSessionSidecarMatches(
-  sidecar: SessionSidecar,
+/** @deprecated Use findLatestSessionResumeStoreForIssue; supported for one release only. */
+export const findLatestSessionSidecarForIssue =
+  findLatestSessionResumeStoreForIssue;
+
+export function assertSessionResumeStoreMatches(
+  resumeStore: SessionResumeStore,
   input: {
     issueUrl: string;
     repoRoot: string;
@@ -183,107 +236,119 @@ export function assertSessionSidecarMatches(
     ensembleConfigDigest?: string;
   },
 ): void {
-  if (sidecar.conductorAgentId !== input.conductorAgentId) {
+  if (resumeStore.conductorAgentId !== input.conductorAgentId) {
     throw new Error(
-      `Session sidecar conductorAgentId mismatch: ${sidecar.conductorAgentId} !== ${input.conductorAgentId}`,
+      `Session resume store conductorAgentId mismatch: ${resumeStore.conductorAgentId} !== ${input.conductorAgentId}`,
     );
   }
-  if (sidecar.issueUrl !== input.issueUrl) {
+  if (resumeStore.issueUrl !== input.issueUrl) {
     throw new Error(
-      `Session sidecar issueUrl mismatch: ${sidecar.issueUrl} !== ${input.issueUrl}`,
+      `Session resume store issueUrl mismatch: ${resumeStore.issueUrl} !== ${input.issueUrl}`,
     );
   }
-  if (sidecar.repoRoot !== input.repoRoot) {
+  if (resumeStore.repoRoot !== input.repoRoot) {
     throw new Error(
-      `Session sidecar repoRoot mismatch: ${sidecar.repoRoot} !== ${input.repoRoot}`,
+      `Session resume store repoRoot mismatch: ${resumeStore.repoRoot} !== ${input.repoRoot}`,
     );
   }
   if (
     input.conductorBackend !== undefined &&
-    (sidecar.conductorBackend ?? 'cursor') !== input.conductorBackend
+    (resumeStore.conductorBackend ?? 'cursor') !== input.conductorBackend
   ) {
     throw new Error(
-      `Session sidecar conductorBackend mismatch: ${sidecar.conductorBackend ?? 'cursor'} !== ${input.conductorBackend}`,
+      `Session resume store conductorBackend mismatch: ${resumeStore.conductorBackend ?? 'cursor'} !== ${input.conductorBackend}`,
     );
   }
   if (input.mcpConfigDigest !== undefined) {
-    if (sidecar.mcpConfigDigest === undefined) {
+    if (resumeStore.mcpConfigDigest === undefined) {
       if (input.mcpConfigConfigured) {
         throw new Error(
-          'Session sidecar MCP config digest missing; cannot safely resume with MCP configuration.',
+          'Session resume store MCP config digest missing; cannot safely resume with MCP configuration.',
         );
       }
-    } else if (sidecar.mcpConfigDigest !== input.mcpConfigDigest) {
+    } else if (resumeStore.mcpConfigDigest !== input.mcpConfigDigest) {
       throw new Error(
-        `Session sidecar MCP config digest mismatch: ${sidecar.mcpConfigDigest} !== ${input.mcpConfigDigest}`,
+        `Session resume store MCP config digest mismatch: ${resumeStore.mcpConfigDigest} !== ${input.mcpConfigDigest}`,
       );
     }
   }
   if (
     input.ensembleConfigDigest !== undefined &&
-    sidecar.ensembleConfigDigest !== undefined &&
-    sidecar.ensembleConfigDigest !== input.ensembleConfigDigest
+    resumeStore.ensembleConfigDigest !== undefined &&
+    resumeStore.ensembleConfigDigest !== input.ensembleConfigDigest
   ) {
     throw new Error(
-      `Session sidecar ensemble config digest mismatch: ${sidecar.ensembleConfigDigest} !== ${input.ensembleConfigDigest}`,
+      `Session resume store ensemble config digest mismatch: ${resumeStore.ensembleConfigDigest} !== ${input.ensembleConfigDigest}`,
     );
   }
 }
 
-function parseSessionSidecar(value: unknown): SessionSidecar {
+/** @deprecated Use assertSessionResumeStoreMatches; supported for one release only. */
+export const assertSessionSidecarMatches = assertSessionResumeStoreMatches;
+
+/** @deprecated Use sessionResumeStoreDir; supported for one release only. */
+export const sessionSidecarDir = sessionResumeStoreDir;
+
+/** @deprecated Use sessionResumeStorePath; supported for one release only. */
+export const sessionSidecarPath = sessionResumeStorePath;
+
+/** @deprecated Use loadSessionResumeStore; supported for one release only. */
+export const loadSessionSidecar = loadSessionResumeStore;
+
+function parseSessionResumeStore(value: unknown): SessionResumeStore {
   if (!value || typeof value !== 'object') {
-    throw new Error('Invalid session sidecar: not an object');
+    throw new Error('Invalid session resume store: not an object');
   }
   const record = value as Record<string, unknown>;
-  if (record.version !== SESSION_SIDECAR_VERSION) {
-    throw new Error(`Unsupported session sidecar version: ${record.version}`);
+  if (record.version !== SESSION_RESUME_STORE_VERSION) {
+    throw new Error(`Unsupported session resume store version: ${record.version}`);
   }
   if (typeof record.conductorAgentId !== 'string') {
-    throw new Error('Invalid session sidecar: conductorAgentId');
+    throw new Error('Invalid session resume store: conductorAgentId');
   }
   const conductorBackend = parseConductorBackend(record.conductorBackend);
   if (typeof record.issueUrl !== 'string') {
-    throw new Error('Invalid session sidecar: issueUrl');
+    throw new Error('Invalid session resume store: issueUrl');
   }
   if (typeof record.repoRoot !== 'string') {
-    throw new Error('Invalid session sidecar: repoRoot');
+    throw new Error('Invalid session resume store: repoRoot');
   }
   if (!record.profile || typeof record.profile !== 'object') {
-    throw new Error('Invalid session sidecar: profile');
+    throw new Error('Invalid session resume store: profile');
   }
   if (!Array.isArray(record.openQuestions)) {
-    throw new Error('Invalid session sidecar: openQuestions');
+    throw new Error('Invalid session resume store: openQuestions');
   }
   if (typeof record.sequence !== 'number') {
-    throw new Error('Invalid session sidecar: sequence');
+    throw new Error('Invalid session resume store: sequence');
   }
   if (!record.workers || typeof record.workers !== 'object') {
-    throw new Error('Invalid session sidecar: workers');
+    throw new Error('Invalid session resume store: workers');
   }
   if (
     record.mcpConfigDigest !== undefined &&
     typeof record.mcpConfigDigest !== 'string'
   ) {
-    throw new Error('Invalid session sidecar: mcpConfigDigest');
+    throw new Error('Invalid session resume store: mcpConfigDigest');
   }
   if (
     record.ensembleConfigDigest !== undefined &&
     typeof record.ensembleConfigDigest !== 'string'
   ) {
-    throw new Error('Invalid session sidecar: ensembleConfigDigest');
+    throw new Error('Invalid session resume store: ensembleConfigDigest');
   }
   if (
     record.lazyWorkers !== undefined &&
     typeof record.lazyWorkers !== 'boolean'
   ) {
-    throw new Error('Invalid session sidecar: lazyWorkers');
+    throw new Error('Invalid session resume store: lazyWorkers');
   }
   if (
     record.harnessSocketPath !== undefined &&
     (typeof record.harnessSocketPath !== 'string' ||
       record.harnessSocketPath.length === 0)
   ) {
-    throw new Error('Invalid session sidecar: harnessSocketPath');
+    throw new Error('Invalid session resume store: harnessSocketPath');
   }
   if (
     record.lifecycle !== undefined &&
@@ -292,7 +357,7 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     record.lifecycle !== 'interrupted' &&
     record.lifecycle !== 'unknown'
   ) {
-    throw new Error('Invalid session sidecar: lifecycle');
+    throw new Error('Invalid session resume store: lifecycle');
   }
   const updatedAt =
     typeof record.updatedAt === 'number' ? record.updatedAt : 0;
@@ -302,16 +367,16 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
     githubMonitor = record.githubMonitor as GitHubMonitorCursor;
   }
 
-  const workers: Record<string, WorkerSessionSidecar> = {};
+  const workers: Record<string, WorkerSessionResumeStore> = {};
   for (const [name, entry] of Object.entries(
     record.workers as Record<string, unknown>,
   )) {
     if (!entry || typeof entry !== 'object') {
-      throw new Error(`Invalid session sidecar worker entry: ${name}`);
+      throw new Error(`Invalid session resume store worker entry: ${name}`);
     }
     const worker = entry as Record<string, unknown>;
     if (typeof worker.acpSessionId !== 'string') {
-      throw new Error(`Invalid session sidecar worker acpSessionId: ${name}`);
+      throw new Error(`Invalid session resume store worker acpSessionId: ${name}`);
     }
     workers[name] = {
       acpSessionId: worker.acpSessionId,
@@ -323,7 +388,7 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
   }
 
   return {
-    version: SESSION_SIDECAR_VERSION,
+    version: SESSION_RESUME_STORE_VERSION,
     conductorAgentId: record.conductorAgentId,
     conductorBackend,
     ...(typeof record.lazyWorkers === 'boolean'
@@ -357,13 +422,13 @@ function parseSessionSidecar(value: unknown): SessionSidecar {
 
 function parseConductorBackend(value: unknown): ConductorBackend {
   if (value === undefined) {
-    // Sidecars written before backend selection used Cursor SDK unconditionally.
+    // Older SessionResumeStore records used Cursor SDK unconditionally.
     return 'cursor';
   }
   if (value === 'cursor' || value === 'pi') {
     return value;
   }
-  throw new Error('Invalid session sidecar: conductorBackend');
+  throw new Error('Invalid session resume store: conductorBackend');
 }
 
 function isEnoent(error: unknown): boolean {
@@ -381,14 +446,14 @@ function parseAcpSpawnFingerprint(
 ): AcpSpawnFingerprint | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (!raw || typeof raw !== 'object') {
-    throw new Error(`Invalid session sidecar worker acpSpawn: ${workerName}`);
+    throw new Error(`Invalid session resume store worker acpSpawn: ${workerName}`);
   }
   const record = raw as Record<string, unknown>;
   if (typeof record.preset !== 'string' || typeof record.command !== 'string') {
-    throw new Error(`Invalid session sidecar worker acpSpawn: ${workerName}`);
+    throw new Error(`Invalid session resume store worker acpSpawn: ${workerName}`);
   }
   if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== 'string')) {
-    throw new Error(`Invalid session sidecar worker acpSpawn args: ${workerName}`);
+    throw new Error(`Invalid session resume store worker acpSpawn args: ${workerName}`);
   }
   let envDigest: string | undefined;
   if (record.envDigest !== undefined) {
@@ -397,30 +462,29 @@ function parseAcpSpawnFingerprint(
       !/^[a-f0-9]{64}$/.test(record.envDigest)
     ) {
       throw new Error(
-        `Invalid session sidecar worker acpSpawn envDigest: ${workerName}`,
+        `Invalid session resume store worker acpSpawn envDigest: ${workerName}`,
       );
     }
     envDigest = record.envDigest;
   }
   if (record.env !== undefined) {
     if (!record.env || typeof record.env !== 'object' || Array.isArray(record.env)) {
-      throw new Error(`Invalid session sidecar worker acpSpawn env: ${workerName}`);
+      throw new Error(`Invalid session resume store worker acpSpawn env: ${workerName}`);
     }
     const legacyEnv: Record<string, string> = {};
     for (const [key, value] of Object.entries(record.env)) {
       if (typeof value !== 'string') {
-        throw new Error(`Invalid session sidecar worker acpSpawn env.${key}: ${workerName}`);
+        throw new Error(`Invalid session resume store worker acpSpawn env.${key}: ${workerName}`);
       }
       legacyEnv[key] = value;
     }
     if (Object.keys(legacyEnv).length > 0) {
       if (envDigest !== undefined) {
         throw new Error(
-          `Invalid session sidecar worker acpSpawn env: duplicate env and envDigest for ${workerName}`,
+          `Invalid session resume store worker acpSpawn env: duplicate env and envDigest for ${workerName}`,
         );
       }
-      // Older sidecars stored env values directly. Convert them in memory so
-      // resume comparison remains possible and subsequent saves redact them.
+      // Redact values from legacy records while keeping resume comparison possible.
       envDigest = computeAcpSpawnEnvDigest(legacyEnv);
     }
   }

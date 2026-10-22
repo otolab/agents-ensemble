@@ -56,9 +56,9 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 #### resume と config 変更
 
-起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を session sidecar に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` や `acp.env` だけの変更も対象です。worker の ACP spawn fingerprint も env map の digest を保持し、値そのものは sidecar に保存しません。sidecar には config の値やファイルパスを保存しないため、秘密値は平文で残りません。
+起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` や `acp.env` だけの変更も対象です。worker の ACP spawn fingerprint も env map の digest を保持し、値そのものは保存しません。SessionResumeStore には config の値やファイルパスを保存しないため、秘密値は平文で残りません。
 
-同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 sidecar は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)）。
+同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 resume state は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)）。
 
 ## テンプレート
 
@@ -262,7 +262,7 @@ acp:
 
 #### resume と `acp.env` 変更
 
-`acp.env` を含む解決済み config の変更は、通常は session sidecar の config digest 比較で worker の再 attach 前に検出されます。digest のない旧 sidecar では config 一致を検証できないため warning を出して resume を続けますが、worker の ACP spawn fingerprint（[ADR 0011](adr/0011-session-sidecar-resume.md)）があれば再 attach 時にも spawn を照合します。fingerprint は env map の digest だけを持ち、環境変数の値は保存しません。env を変えたあと続けるには新規セッションを開始してください。
+`acp.env` を含む解決済み config の変更は、通常は SessionResumeStore の config digest 比較で worker の再 attach 前に検出されます。digest のない旧 resume state では config 一致を検証できないため warning を出して resume を続けますが、worker の ACP spawn fingerprint（[ADR 0011](adr/0011-session-sidecar-resume.md)）があれば再 attach 時にも spawn を照合します。fingerprint は env map の digest だけを持ち、環境変数の値は保存しません。env を変えたあと続けるには新規セッションを開始してください。
 
 ### Pi resource root
 
@@ -361,7 +361,7 @@ conductor の system prompt の基底は modular-prompt のコンパイル結果
 
 **config 未作成時**は従来どおり env とコード default のみが効く（後方互換）。
 
-`session.lazyWorkers` は既定 `false` です。`true` にすると profile の全 worker を session に登録して TUI / `list_workers` に `sleeping` と表示し、初回の通常 `prompt_worker` で対象 worker だけを attach / init します。init prompt 完了後に最初の instruction を別ラウンドで送り、その後はセッション終了まで常駐します。resume は sidecar に保存した設定を使い、ACP session のある worker は再 attach、まだ使っていない worker は sleeping のままにします。lazy 設定のない旧 sidecar は eager として扱います。
+`session.lazyWorkers` は既定 `false` です。`true` にすると profile の全 worker を session に登録して TUI / `list_workers` に `sleeping` と表示し、初回の通常 `prompt_worker` で対象 worker だけを attach / init します。init prompt 完了後に最初の instruction を別ラウンドで送り、その後はセッション終了まで常駐します。resume は SessionResumeStore に保存した設定を使い、ACP session のある worker は再 attach、まだ使っていない worker は sleeping のままにします。lazy 設定のない旧 SessionResumeStore は eager として扱います。
 
 ### team profile `acp` の削除
 
@@ -401,7 +401,7 @@ MCP 設定は次の 2 層から読み込み、`mcpServers` のサーバー名単
 }
 ```
 
-解決済み設定は conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では Pi 1.x の `DefaultResourceLoader` に `createMcpExtension({ loadConfig })` を extension factory として登録し、`createAgentSession` の起動時に注入する。Pi 側で `.pi/mcp.json` へ同期・コピー・symlink は行わず、resume 時も harness が解決した同じ map を再注入する。sidecar にはこの map の canonical SHA-256 digest だけを保存し、resume 時に現在の digest と比較するため、設定変更は新しい session を要求する。digest に秘密値そのものは保存しない。MCP 接続の管理、tool discovery、OAuth、resource tools は Pi 公式 extension に委ね、core は MCP client/transport を実装しない。
+解決済み設定は conductor の両 backend に同じ map として渡す。Cursor SDK では `Agent.create` / `Agent.resume` の inline MCP として、Pi では Pi 1.x の `DefaultResourceLoader` に `createMcpExtension({ loadConfig })` を extension factory として登録し、`createAgentSession` の起動時に注入する。Pi 側で `.pi/mcp.json` へ同期・コピー・symlink は行わず、resume 時も harness が解決した同じ map を再注入する。SessionResumeStore にはこの map の canonical SHA-256 digest だけを保存し、resume 時に現在の digest と比較するため、設定変更は新しい session を要求する。digest に秘密値そのものは保存しない。MCP 接続の管理、tool discovery、OAuth、resource tools は Pi 公式 extension に委ね、core は MCP client/transport を実装しない。
 
 `env` / `headers` / `cwd` は harness 境界で Cursor 形式の placeholder を解決してから Pi 公式 extension に渡す。`${env:VAR}` は現在の process environment の値、`${workspaceFolder}` / `${workspaceFolderBasename}` は conductor の cwd へ変換し、値が見つからない placeholder は literal のまま渡さず明確なエラーにする。Pi 標準の `$VAR` / `${VAR}` は公式 resolver に委ねる。Pi は `stdio` と Streamable HTTP (`http`) をサポートするが、shared `mcp.json` の `sse` 定義は Pi 1.x ではサポートしないため、Pi conductor の起動時に明確なエラーにする。HTTP の `auth` (`CLIENT_ID` / `CLIENT_SECRET` / `scopes`) は Pi の MCP OAuth 設定へ渡され、認可フローと credential 保存は公式 extension が管理する。`.cursor/mcp.json` や `.pi/mcp.json` へのコピー・symlink、`settings.json` の書き換えは行わず、ACP worker にはこの設定を渡さない。MCP server tool は公式名 `mcp__<server>__<tool>`（長すぎる・衝突する場合は Pi の hash suffix）で公開される。resources がある場合は公式の `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` が提供される。`codemode` / `tool_search` の exposure は公式 extension の設定に従う。
 

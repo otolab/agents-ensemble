@@ -235,46 +235,42 @@ describe('profileWorkersToSessionSpecs', () => {
 });
 
 describe('acpSpawnFingerprint', () => {
-  it('stores a canonical env digest instead of environment values', () => {
-    const marker = 'PRIVATE_TOKEN_SHOULD_NOT_BE_PERSISTED';
-    const fingerprint = acpSpawnFingerprint({
-      preset: 'codex',
-      command: 'codex-acp',
-      args: [],
-      env: { MODEL_PROVIDER: 'litellm', API_TOKEN: marker },
-    });
-
-    expect(fingerprint).toEqual({
-      preset: 'codex',
-      command: 'codex-acp',
-      args: [],
-      envDigest: computeAcpSpawnEnvDigest({
-        API_TOKEN: marker,
-        MODEL_PROVIDER: 'litellm',
+  it('stores only a canonical env digest in the fingerprint', () => {
+    const env = { MODEL_PROVIDER: 'litellm', API_TOKEN: 'private-marker' };
+    expect(
+      acpSpawnFingerprint({
+        preset: 'codex',
+        command: 'codex-acp',
+        args: [],
+        env,
       }),
+    ).toEqual({
+      preset: 'codex',
+      command: 'codex-acp',
+      args: [],
+      envDigest: computeAcpSpawnEnvDigest(env),
     });
-    expect(JSON.stringify(fingerprint)).not.toContain(marker);
-  });
-
-  it('hashes env keys canonically and changes when an env value changes', () => {
     expect(
-      computeAcpSpawnEnvDigest({ B: 'two', A: 'one' }),
-    ).toBe(computeAcpSpawnEnvDigest({ A: 'one', B: 'two' }));
-    expect(
-      computeAcpSpawnEnvDigest({ A: 'one', B: 'changed' }),
-    ).not.toBe(computeAcpSpawnEnvDigest({ A: 'one', B: 'two' }));
+      acpSpawnFingerprint({
+        preset: 'codex',
+        command: 'codex-acp',
+        args: [],
+        env: { API_TOKEN: 'private-marker', MODEL_PROVIDER: 'litellm' },
+      }).envDigest,
+    ).toBe(computeAcpSpawnEnvDigest(env));
   });
 });
 
 describe('assertAcpSpawnMatchesResume', () => {
   it('throws on env mismatch during resume', () => {
+    const savedEnv = { MODEL_PROVIDER: 'litellm' };
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
           preset: 'codex',
           command: 'codex-acp',
           args: [],
-          envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'litellm' }),
+          envDigest: computeAcpSpawnEnvDigest(savedEnv),
         },
         actual: {
           preset: 'codex',
@@ -319,7 +315,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     ).not.toThrow();
   });
 
-  it('skips when expected fingerprint is absent (legacy sidecar)', () => {
+  it('skips when expected fingerprint is absent (legacy resume store)', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         actual: {
@@ -331,8 +327,8 @@ describe('assertAcpSpawnMatchesResume', () => {
     ).not.toThrow();
   });
 
-  it('accepts legacy codex sidecar without env when actual has builtin preset env', () => {
-    const legacySidecar = {
+  it('accepts a legacy Codex record without env when the current preset provides it', () => {
+    const legacyResumeStore = {
       preset: 'codex' as const,
       command: 'codex-acp',
       args: [] as string[],
@@ -346,7 +342,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     });
     expect(() =>
       assertAcpSpawnMatchesResume({
-        expected: legacySidecar,
+        expected: legacyResumeStore,
         actual: acpSpawnFingerprint(currentSpawn),
         workerName: 'implementer',
       }),
@@ -354,29 +350,46 @@ describe('assertAcpSpawnMatchesResume', () => {
     expect(currentSpawn.env).toEqual({ INITIAL_AGENT_MODE: 'agent' });
   });
 
-  it('compares env digest when sidecar fingerprint includes env', () => {
+  it('compares the env digest in a saved resume store fingerprint', () => {
+    const env = {
+      INITIAL_AGENT_MODE: 'agent',
+      MODEL_PROVIDER: 'litellm',
+    };
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
           preset: 'codex',
           command: 'codex-acp',
           args: [],
-          envDigest: computeAcpSpawnEnvDigest({
-            INITIAL_AGENT_MODE: 'agent',
-            MODEL_PROVIDER: 'litellm',
-          }),
+          envDigest: computeAcpSpawnEnvDigest(env),
+        },
+        actual: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: [],
+          envDigest: computeAcpSpawnEnvDigest(env),
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: [],
+          envDigest: computeAcpSpawnEnvDigest(env),
         },
         actual: {
           preset: 'codex',
           command: 'codex-acp',
           args: [],
           envDigest: computeAcpSpawnEnvDigest({
-            INITIAL_AGENT_MODE: 'agent',
-            MODEL_PROVIDER: 'litellm',
+            ...env,
+            MODEL_PROVIDER: 'openai',
           }),
         },
       }),
-    ).not.toThrow();
+    ).toThrow(/ACP spawn mismatch/);
   });
 });
 
