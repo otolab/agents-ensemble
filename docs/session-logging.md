@@ -241,9 +241,11 @@ openQuestions:
 
 `responseType` は `yes_no` / `text` / `choice`、`status` は `open` / `answered`、`source` は `conductor` / `max_turns` です。`context`、選択肢、回答時刻、回答者、yes/no の `assent` / permission 関連時の `approved` などは該当する場合に保存します。`sequence` は次に割り当てる `inq-N` ID を復元するために使います。
 
-`--continue` は SessionResumeStore の `updatedAt` が最も新しいセッションを選びます。`--resume` / `--continue` の復元時は、YAML があれば質問一覧と sequence にその内容を使います。YAML がまだない旧形式のセッションでは SessionResumeStore の `openQuestions` と `sequence` から復元し、YAML をバックフィルします。移行期間中は flush のたびに両方へ同じ質問スナップショットを書きます。YAML が存在していて読み取りまたはスキーマ検証に失敗した場合は resume を中止し、古い可能性がある SessionResumeStore 内の質問一覧へ黙って切り替えません。
+`--continue` は同じ Issue の候補から `close` / `abort` を優先し、`exit` は候補から除外します。優先候補が複数ある場合は `updatedAt` が新しいものを選びます。候補がなければ `exit` 以外から最新を選びます。旧 SessionResumeStore は `lifecycle` の `closed→close`、`interrupted→abort`、`exited→exit` を読み替えます。`--resume` / `--continue` の復元時は、YAML があれば質問一覧と sequence にその内容を使います。YAML がまだない旧形式のセッションでは SessionResumeStore の `openQuestions` と `sequence` から復元し、YAML をバックフィルします。移行期間中は flush のたびに両方へ同じ質問スナップショットを書きます。YAML が存在していて読み取りまたはスキーマ検証に失敗した場合は resume を中止し、古い可能性がある SessionResumeStore 内の質問一覧へ黙って切り替えません。
 
-`lifecycle` は SessionResumeStore に記録する、最後に完了した teardown の区分です。`/close` は `closed`、`/exit` は isolated worktree の cleanup 試行後に `exited`、SIGINT / SIGTERM による終了は最終 flush で `interrupted` を記録します。それ以外の通常終了は `unknown` です。旧形式の SessionResumeStore で値がない場合も `unknown` として扱います。保存済みの状態からセッションを再開する際は、conductor の再開処理に入る前に `unknown` を atomic に保存し、再開後に次の flush を行う前にクラッシュしても前回の teardown 区分が残らないようにします。Phase 1 は `running` を記録しないため、この値は現在プロセスが稼働中かどうかを示しません。operator-agent は SessionResumeStore と session-state の読み取りだけを行い、conductor に接続しません。
+`harnessPhase` は harness が最後に保存した位相です。conductor send または worker prompt の in-flight があれば `running`、両方が idle の状態を 250ms 保つと `idle` を保存します。開始時は即時に `running` を flush し、短い作業の間に phase が頻繁に揺れないよう `idle` のみ debounce します。`close` / `abort` / `exit` は teardown 完了後に最終 flush し、terminal phase は後続 flush で上書きしません。通常の非TTY終了は旧 `unknown` 相当として `harnessPhase` / `modifiedAt` を持たず、`lifecycle: unknown` を記録します。新旧クライアントの移行中は JSON に `lifecycle` も書き続け、teardown 区分は `closed` / `exited` / `interrupted` / `unknown` の従来値を保ちます。旧形式の `lifecycle` は `closed→close`、`exited→exit`、`interrupted→abort` と読み替え、`unknown` は位相不明として扱います。
+
+`modifiedAt` は SessionResumeStore を harness が保存するたびに更新し、同じ書き込みの `updatedAt` と同じ Unix ms にします。これにより resume 用状態の flush と phase 遷移の鮮度を表します。`session-state.yaml` の `reportedAt` は conductor が operator 向け statusLine を報告した時刻であり、別の情報です。SessionResumeStore の `modifiedAt` / `updatedAt` は `/close`・`/exit`・signal teardown の最終 flush でも揃います。operator-agent の一覧は毎回 UDS probe をせず、watch pool の直近 10 秒以内の観測がある場合だけ `live.connectivity` に載せます。`live.checkedAt < persisted.modifiedAt` の古い観測は保存phaseとの整合判定に使わず、`coherence: insufficient_data` とします。同じ時刻か新しい観測なら現在のphaseとの判定に使い、terminal phaseと `reachable` は `conflict` です。watch で `running` / `idle` の接続失敗が30秒続く場合も `coherence: conflict`、30秒未満またはlive未観測なら `insufficient_data` とします。通常一覧の `unknown` は未確認を意味し、停止中とは限りません。
 
 | | SessionSummary（終了 JSON） | SessionResumeStore / session YAML |
 |--|---------------------------|---------|
@@ -251,7 +253,7 @@ openQuestions:
 | **タイミング** | プロセス終了時に 1 回 | 状態変化時に best-effort flush + 終了時 |
 | **会話本文** | 載せない（worker 応答の要約のみ） | 載せない |
 | **open question** | 終了時の一覧スナップショット | YAML が正本。移行中は SessionResumeStore にも同じ一覧を保存 |
-| **operator 状態** | 載せない | `session-state.yaml` に最新 statusLine と上限付き履歴、SessionResumeStore に `lifecycle` を保存 |
+| **operator 状態** | 載せない | `session-state.yaml` に最新 statusLine と上限付き履歴、SessionResumeStore に `harnessPhase` / `modifiedAt` と互換用 `lifecycle` を保存 |
 | **worker session** | 載せない | `acpSessionId` を保持 |
 | **tool-call snapshot** | 載せない | 別ファイル `.tool-calls` に保持（TTL / サイズ上限あり） |
 

@@ -119,6 +119,7 @@ import {
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
+  type HarnessPhase,
   type SessionLifecycle,
   type SessionResumeStore,
 } from '../session/session-resume-store.js';
@@ -340,6 +341,12 @@ export async function runConductorSession(
   const escalations: EscalationRecord[] = [];
   const openQuestions = new OpenQuestionRegistry();
   let harnessSocketPath: string | undefined;
+  let harnessPhase: HarnessPhase | undefined;
+  let harnessModifiedAt: number | undefined;
+  let reportHarnessActivity: (
+    kind: 'conductor' | 'worker',
+    active: boolean,
+  ) => void = () => {};
   let openQuestionControlServer: OpenQuestionControlServer | undefined;
   let lastConductorMessage: OpenQuestionControlLastConductorMessage | null =
     null;
@@ -405,9 +412,13 @@ export async function runConductorSession(
     const resumeStore: SessionResumeStore = {
       ...loadedResumeStore,
       lifecycle: 'unknown',
+      harnessPhase: 'running',
+      modifiedAt: Date.now(),
       harnessSocketPath: undefined,
       updatedAt: Date.now(),
     };
+    harnessPhase = 'running';
+    harnessModifiedAt = resumeStore.modifiedAt;
     await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot: options.repoRoot,
@@ -757,6 +768,7 @@ export async function runConductorSession(
     onPromptTelemetry: (event) => {
       switch (event.phase) {
         case 'started':
+          reportHarnessActivity('worker', true);
           sessionLogger.emit({
             type: 'harness.worker.prompt.started',
             name: event.name,
@@ -766,6 +778,7 @@ export async function runConductorSession(
           });
           break;
         case 'completed':
+          reportHarnessActivity('worker', false);
           sessionLogger.emit({
             type: 'harness.worker.prompt.completed',
             name: event.name,
@@ -776,6 +789,7 @@ export async function runConductorSession(
           });
           break;
         case 'failed':
+          reportHarnessActivity('worker', false);
           sessionLogger.emit({
             type: 'harness.worker.prompt.failed',
             name: event.name,
@@ -1109,6 +1123,7 @@ export async function runConductorSession(
 
   let sessionResumeStoreWriteQueue: Promise<void> = Promise.resolve();
   let terminalLifecycle: SessionLifecycle | undefined;
+  let terminalResumeStoreFinalFlushQueued = false;
   const enqueueSessionResumeStoreWrite = (
     write: () => Promise<void>,
   ): Promise<void> => {
@@ -1128,6 +1143,12 @@ export async function runConductorSession(
         ...(worker.acpSpawn ? { acpSpawn: worker.acpSpawn } : {}),
       };
     }
+    const persistedLifecycle =
+      terminalLifecycle ??
+      lifecycle ??
+      (harnessPhase === 'running' || harnessPhase === 'idle'
+        ? 'unknown'
+        : undefined);
     return {
       version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: conductorHandle.conductor.agentId,
@@ -1138,13 +1159,15 @@ export async function runConductorSession(
       repoRoot: options.repoRoot,
       profile: structuredClone(activeProfile),
       ...(options.profilePath ? { profilePath: options.profilePath } : {}),
+      ...(harnessPhase ? { harnessPhase } : {}),
+      ...(harnessModifiedAt !== undefined
+        ? { modifiedAt: harnessModifiedAt }
+        : {}),
       openQuestions: snapshot.openQuestions,
       sequence: snapshot.sequence,
       workers,
       mcpConfigDigest,
-      ...((terminalLifecycle ?? lifecycle)
-        ? { lifecycle: terminalLifecycle ?? lifecycle }
-        : {}),
+      ...(persistedLifecycle ? { lifecycle: persistedLifecycle } : {}),
       ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
       updatedAt: Date.now(),
     };
@@ -1172,12 +1195,31 @@ export async function runConductorSession(
       createSessionResumeStore(snapshot, lifecycle),
     );
   };
-  flushSessionResumeStore = (lifecycle): Promise<void> =>
-    enqueueSessionResumeStoreWrite(async () => {
+  flushSessionResumeStore = (lifecycle): Promise<void> => {
+    if (terminalResumeStoreFinalFlushQueued && lifecycle === undefined) {
+      return sessionResumeStoreWriteQueue;
+    }
+    if (lifecycle !== undefined && lifecycle !== 'unknown') {
+      terminalResumeStoreFinalFlushQueued = true;
+    }
+    return enqueueSessionResumeStoreWrite(async () => {
+      if (lifecycle !== undefined) {
+        terminalLifecycle = lifecycle;
+        harnessPhase =
+          lifecycle === 'closed'
+            ? 'close'
+            : lifecycle === 'exited'
+              ? 'exit'
+              : lifecycle === 'interrupted'
+                ? 'abort'
+                : undefined;
+        harnessModifiedAt = harnessPhase ? Date.now() : undefined;
+      }
       const snapshot = openQuestions.snapshot();
       await persistOpenQuestionsSnapshot(snapshot);
       await persistSessionResumeStore(snapshot, lifecycle);
     });
+  };
   const reportResumeStoreFlushFailure = (error: unknown): void => {
     const detail = error instanceof Error ? error.message : String(error);
     sessionLogger.emit({
@@ -1196,6 +1238,39 @@ export async function runConductorSession(
   };
   scheduleSessionResumeStoreFlush = () => {
     void flushSessionResumeStore().catch(reportResumeStoreFlushFailure);
+  };
+  let conductorSendCount = 0;
+  let workerPromptCount = 0;
+  let idlePhaseTimer: ReturnType<typeof setTimeout> | undefined;
+  const persistHarnessPhase = (phase: HarnessPhase | undefined): void => {
+    if (teardownStarted || harnessPhase === phase) return;
+    if (idlePhaseTimer) {
+      clearTimeout(idlePhaseTimer);
+      idlePhaseTimer = undefined;
+    }
+    harnessPhase = phase;
+    harnessModifiedAt = Date.now();
+    void flushSessionResumeStore().catch(reportResumeStoreFlushFailure);
+  };
+  reportHarnessActivity = (kind, active) => {
+    if (teardownStarted) return;
+    if (kind === 'conductor') {
+      conductorSendCount = Math.max(0, conductorSendCount + (active ? 1 : -1));
+    } else {
+      workerPromptCount = Math.max(0, workerPromptCount + (active ? 1 : -1));
+    }
+    if (conductorSendCount + workerPromptCount > 0) {
+      persistHarnessPhase('running');
+      return;
+    }
+    if (idlePhaseTimer || harnessPhase === 'idle') return;
+    idlePhaseTimer = setTimeout(() => {
+      idlePhaseTimer = undefined;
+      if (conductorSendCount + workerPromptCount === 0) {
+        persistHarnessPhase('idle');
+      }
+    }, 250);
+    idlePhaseTimer.unref?.();
   };
   const toolCallHistoryPath = toolCallSnapshotHistoryPath({
     repoRoot: options.repoRoot,
@@ -1701,6 +1776,7 @@ export async function runConductorSession(
       // session briefing.
       skipInitialSend: Boolean(options.resumeAgentId),
       onSendStarted: (info) => {
+        reportHarnessActivity('conductor', true);
         sessionLogger.emit({
           type: 'conductor.send.started',
           sendCount: info.sendCount,
@@ -1807,6 +1883,7 @@ export async function runConductorSession(
         workerDispatches: info.workerDispatches,
         workerFailures: info.workerFailures,
       });
+      reportHarnessActivity('conductor', false);
       outboundWorkersThisSend.clear();
       if (
         isConductorSendAuthError({
@@ -1869,8 +1946,11 @@ export async function runConductorSession(
         : shutdownSignal.aborted
           ? 'interrupted'
           : 'unknown';
-    terminalLifecycle = lifecycle;
     teardownStarted = true;
+    if (idlePhaseTimer) {
+      clearTimeout(idlePhaseTimer);
+      idlePhaseTimer = undefined;
+    }
     for (const receipt of pendingOpenQuestionDispatchReceipts) {
       receipt.reject(
         new OpenQuestionControlOperationError(
