@@ -1,5 +1,20 @@
 # @agents-ensemble/core
 
+## 0.15.0
+
+### Minor Changes
+
+- 4b0c8aa: 稼働中 harness の conductor 成功応答と対応する inbound を一覧・listen できる API を追加します。
+- 6e0ebd8: `SessionResumeStore` 名の resume API を追加します。旧 sidecar API は deprecation を明記し、1 リリース限り alias として維持します。
+- f8af5dd: Persist harness activity phases and project session resume state separately from live connectivity. `--continue` now prefers close/abort sessions and skips exit sessions.
+
+### Patch Changes
+
+- 87ccff0: dispatch hold が続くとき、operator 向けに held event 件数を含む定期 reminder を表示する。
+- e798a83: Pi conductor が 1 回の send 内の assistant usage を合算して返すようにしました。
+- 8163ff0: user config から project config の読み込みを無効化できるようにし、読み込み状況を起動時に表示します。
+- 58a37ce: worker 共通プロンプトに git add/commit のサンドボックス外実行と conductor 代行依頼の指針を追記する。
+
 ## 0.14.2
 
 ### Patch Changes
