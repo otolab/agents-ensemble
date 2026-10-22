@@ -1,12 +1,18 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  OPEN_QUESTION_CONTROL_METHODS,
+  OpenQuestionControlRemoteError,
+  sendOpenQuestionControlRequest,
   startOpenQuestionControlServer,
   type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
-import { createOperatorDispatchQueue } from './operator-dispatch.js';
+import {
+  createOperatorDispatchQueue,
+  formatOperatorDispatchBatch,
+} from './operator-dispatch.js';
 import {
   createOperatorWatchPool,
   operatorWatchStatePath,
@@ -17,6 +23,7 @@ describe('operator watch pool', () => {
   let closeServers: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
+    vi.useRealTimers();
     for (const close of closeServers) await close();
     closeServers = [];
     if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
@@ -603,6 +610,739 @@ describe('operator watch pool', () => {
       ).rejects.toThrow('pollIntervalMs must be an integer');
       await expect(pool.unregister('session-one')).resolves.toBe(true);
       expect(pool.list()).toEqual([]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('listens to new conductor messages with a cursor independent from OQ watch', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-listen-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let messages = [3, 4].map((sendCount) => ({
+      text: `response ${sendCount}`,
+      inbound: `inbound ${sendCount}`,
+      at: 1_700_000_000_000 + sendCount,
+      sendCount,
+      dispatchSource: 'operator',
+    }));
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => ({ sequence: 2, openQuestions: [] }),
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('message-listen-one', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.register('message-listen-one', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      await pool.pollOnce('message-listen-one');
+      await expect(
+        pool.registerConductorMessageListen('message-listen-one'),
+      ).resolves.toMatchObject({
+        conductorAgentId: 'message-listen-one',
+        messageDebounceMs: 10_000,
+      });
+      await pool.registerConductorMessageListen('message-listen-one', {
+        messageDebounceMs: 0,
+      });
+      await expect(
+        pool.registerConductorMessageListen('message-listen-one', {
+          messageDebounceMs: 120_000,
+        }),
+      ).resolves.toMatchObject({ messageDebounceMs: 120_000 });
+      await expect(
+        pool.registerConductorMessageListen('message-listen-one', {
+          messageDebounceMs: 120_001,
+        }),
+      ).rejects.toThrow('messageDebounceMs must be an integer');
+      await pool.registerConductorMessageListen('message-listen-one', {
+        messageDebounceMs: 0,
+      });
+      expect(pool.listConductorMessageListens()).toHaveLength(1);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+
+      const storedPath = operatorWatchStatePath(repoRoot);
+      const baseline = JSON.parse(await readFile(storedPath, 'utf8')) as {
+        cursors: Record<string, { sequence: number }>;
+        messageCursors: Record<string, number>;
+      };
+      expect(baseline.cursors['message-listen-one']?.sequence).toBe(2);
+      expect(baseline.messageCursors['message-listen-one']).toBe(4);
+
+      messages = [
+        ...messages,
+        ...[5, 6].map((sendCount) => ({
+          text: `response ${sendCount}`,
+          inbound: `inbound ${sendCount}`,
+          at: 1_700_000_000_000 + sendCount,
+          sendCount,
+          dispatchSource: 'worker:reviewer',
+        })),
+      ];
+      await expect(
+        pool.pollConductorMessagesOnce('message-listen-one'),
+      ).resolves.toBe(2);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([5, 6]);
+      expect(formatOperatorDispatchBatch(batch.events)).toContain(
+        '### 1/2\n\n対象: https://github.com/example/repo/issues/message-listen-one (message-listen-one)\nsendCount: 5',
+      );
+      const formatted = formatOperatorDispatchBatch(batch.events);
+      expect(formatted.indexOf('sendCount: 5')).toBeLessThan(
+        formatted.indexOf('sendCount: 6'),
+      );
+      expect(formatted).toContain('#### inbound\n\ninbound 5');
+      expect(formatted).toContain('#### response\n\nresponse 6');
+
+      await pool.acknowledge(batch.events);
+      const afterAck = JSON.parse(await readFile(storedPath, 'utf8')) as {
+        messageCursors: Record<string, number>;
+        pendingReports: unknown[];
+      };
+      expect(afterAck.messageCursors['message-listen-one']).toBe(6);
+      expect(afterAck.pendingReports).toEqual([]);
+      await expect(
+        pool.unregisterConductorMessageListen('message-listen-one'),
+      ).resolves.toBe(true);
+      expect(pool.listConductorMessageListens()).toEqual([]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('recovers from aggregate oversized pages by fetching complete messages in order', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-pages-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const baselineMessage = {
+      text: 'baseline',
+      inbound: 'baseline inbound',
+      at: 1_700_000_000_004,
+      sendCount: 4,
+    };
+    let messages = [baselineMessage];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('message-pages-one', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.registerConductorMessageListen('message-pages-one', {
+        messageDebounceMs: 0,
+      });
+
+      const inbound = 'i'.repeat(300 * 1024);
+      messages = [
+        baselineMessage,
+        ...[5, 6, 7, 8].map((sendCount) => ({
+          text: `response ${sendCount}`,
+          inbound,
+          at: 1_700_000_000_000 + sendCount,
+          sendCount,
+        })),
+      ];
+
+      await expect(
+        sendOpenQuestionControlRequest(liveServer.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { limit: 1, order: 'asc', after: 4 },
+        }),
+      ).resolves.toEqual({
+        messages: [messages[1]],
+        hasMore: true,
+      });
+      await expect(
+        sendOpenQuestionControlRequest(liveServer.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { limit: 4, order: 'asc', after: 4 },
+        }),
+      ).rejects.toMatchObject<Partial<OpenQuestionControlRemoteError>>({
+        rpcCode: -32603,
+        message: 'Response is too large.',
+      });
+
+      await expect(
+        pool.pollConductorMessagesOnce('message-pages-one'),
+      ).resolves.toBe(4);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([
+        5, 6, 7, 8,
+      ]);
+      expect(batch.events).toHaveLength(4);
+      for (const event of batch.events) {
+        expect(event.type).toBe('report');
+        if (event.type === 'report') {
+          expect(event.text).toContain(`#### inbound\n\n${inbound}`);
+        }
+      }
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageCursors: Record<string, number>;
+        pendingReports: Array<{ sendCount?: number }>;
+      };
+      expect(state.messageCursors['message-pages-one']).toBe(8);
+      expect(state.pendingReports.map((report) => report.sendCount)).toEqual([
+        5, 6, 7, 8,
+      ]);
+      await expect(
+        pool.pollConductorMessagesOnce('message-pages-one'),
+      ).resolves.toBe(0);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('skips one oversized message and continues notifying later messages in order', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-partial-pages-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const baselineMessage = {
+      text: 'baseline',
+      inbound: 'baseline inbound',
+      at: 1_700_000_000_004,
+      sendCount: 4,
+    };
+    let messages = [baselineMessage];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('message-partial-pages', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.registerConductorMessageListen('message-partial-pages', {
+        messageDebounceMs: 0,
+      });
+      const inbound = 'i'.repeat(300 * 1024);
+      messages = [
+        baselineMessage,
+        ...[5, 6].map((sendCount) => ({
+          text: `response ${sendCount}`,
+          inbound,
+          at: 1_700_000_000_000 + sendCount,
+          sendCount,
+        })),
+        {
+          text: 'single oversized response',
+          inbound: 'x'.repeat(1_048_576),
+          at: 1_700_000_000_007,
+          sendCount: 7,
+        },
+        {
+          text: 'response 8',
+          inbound: 'inbound 8',
+          at: 1_700_000_000_008,
+          sendCount: 8,
+        },
+      ];
+
+      await expect(
+        pool.pollConductorMessagesOnce('message-partial-pages'),
+      ).resolves.toBe(4);
+
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([
+        5, 6, 7, 8,
+      ]);
+      const groupedReport = formatOperatorDispatchBatch(batch.events);
+      expect(groupedReport).toContain('sendCount: 7');
+      expect(groupedReport.indexOf('sendCount: 7')).toBeLessThan(
+        groupedReport.indexOf('sendCount: 8'),
+      );
+      for (const event of batch.events) {
+        if (event.type === 'report') {
+          if (event.sendCount === 7) {
+            expect(event.text).toContain(
+              '1件の発言は単独のUDS responseが1 MiBを超えたため読み取れず',
+            );
+            expect(event.text).toContain('sendCount: 7');
+          } else if (event.sendCount === 5 || event.sendCount === 6) {
+            expect(event.text).toContain(`#### inbound\n\n${inbound}`);
+          } else {
+            expect(event.text).toContain('#### inbound\n\ninbound 8');
+          }
+        }
+      }
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageCursors: Record<string, number>;
+        pendingReports: Array<{ sendCount?: number }>;
+      };
+      expect(state.messageCursors['message-partial-pages']).toBe(8);
+      expect(state.pendingReports.map((report) => report.sendCount)).toEqual([
+        5, 6, 7, 8,
+      ]);
+      await expect(
+        pool.pollConductorMessagesOnce('message-partial-pages'),
+      ).resolves.toBe(0);
+
+      messages.push({
+        text: 'response 9',
+        inbound: 'inbound 9',
+        at: 1_700_000_000_009,
+        sendCount: 9,
+      });
+      await expect(
+        pool.pollConductorMessagesOnce('message-partial-pages'),
+      ).resolves.toBe(1);
+      const laterBatch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(laterBatch.events.map((event) => event.sendCount)).toEqual([9]);
+      expect(laterBatch.events[0]?.text).toContain('inbound 9');
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('groups several oversized messages into one warning and continues in order', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-multiple-oversized-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const baselineMessage = {
+      text: 'baseline',
+      inbound: 'baseline inbound',
+      at: 1_700_000_000_004,
+      sendCount: 4,
+    };
+    let messages = [baselineMessage];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      'message-multiple-oversized',
+      1,
+      liveServer.socketPath,
+    );
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.registerConductorMessageListen('message-multiple-oversized', {
+        messageDebounceMs: 0,
+      });
+      messages = [
+        baselineMessage,
+        ...[5, 6].map((sendCount) => ({
+          text: `oversized response ${sendCount}`,
+          inbound: 'x'.repeat(1_048_576),
+          at: 1_700_000_000_000 + sendCount,
+          sendCount,
+        })),
+        {
+          text: 'response 7',
+          inbound: 'inbound 7',
+          at: 1_700_000_000_007,
+          sendCount: 7,
+        },
+        {
+          text: 'oversized response 8',
+          inbound: 'y'.repeat(1_048_576),
+          at: 1_700_000_000_008,
+          sendCount: 8,
+        },
+        {
+          text: 'response 9',
+          inbound: 'inbound 9',
+          at: 1_700_000_000_009,
+          sendCount: 9,
+        },
+      ];
+
+      await expect(
+        pool.pollConductorMessagesOnce('message-multiple-oversized'),
+      ).resolves.toBe(3);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([7, 8, 9]);
+      const warningReports = batch.events.filter(
+        (event) =>
+          event.type === 'report' &&
+          event.text.includes('発言は単独のUDS responseが1 MiBを超えたため読み取れず'),
+      );
+      expect(warningReports).toHaveLength(1);
+      expect(warningReports[0]?.text).toContain('3件');
+      expect(warningReports[0]?.text).toContain('sendCount: 5, 6, 8');
+      const groupedReport = formatOperatorDispatchBatch(batch.events);
+      expect((groupedReport.match(/⚠/g) ?? [])).toHaveLength(1);
+      expect(groupedReport.indexOf('sendCount: 7')).toBeLessThan(
+        groupedReport.indexOf('sendCount: 5, 6, 8'),
+      );
+      expect(groupedReport.indexOf('sendCount: 5, 6, 8')).toBeLessThan(
+        groupedReport.indexOf('sendCount: 9'),
+      );
+      expect(batch.events[0]?.text).toContain('inbound 7');
+      expect(batch.events[2]?.text).toContain('inbound 9');
+
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageCursors: Record<string, number>;
+        pendingReports: Array<{ sendCount?: number }>;
+      };
+      expect(state.messageCursors['message-multiple-oversized']).toBe(9);
+      expect(state.pendingReports.map((report) => report.sendCount)).toEqual([
+        7, 8, 9,
+      ]);
+      await expect(
+        pool.pollConductorMessagesOnce('message-multiple-oversized'),
+      ).resolves.toBe(0);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('coalesces oversized warnings across polls in one debounce window', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-warning-window-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const baselineMessage = {
+      text: 'baseline',
+      inbound: 'baseline inbound',
+      at: 1_700_000_000_001,
+      sendCount: 1,
+    };
+    let messages = [baselineMessage];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      'message-warning-window',
+      1,
+      liveServer.socketPath,
+    );
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    vi.useFakeTimers();
+    try {
+      await pool.registerConductorMessageListen('message-warning-window', {
+        messageDebounceMs: 10_000,
+      });
+
+      messages = [
+        baselineMessage,
+        {
+          text: 'oversized response 2',
+          inbound: 'x'.repeat(1_048_576),
+          at: 1_700_000_000_002,
+          sendCount: 2,
+        },
+      ];
+      await expect(
+        pool.pollConductorMessagesOnce('message-warning-window'),
+      ).resolves.toBe(1);
+      expect(
+        dispatchQueue.takeBatch({ continuationConsumed: false }, Date.now()),
+      ).toBeUndefined();
+
+      vi.setSystemTime(Date.now() + 5_000);
+      messages = [
+        ...messages,
+        {
+          text: 'oversized response 3',
+          inbound: 'y'.repeat(1_048_576),
+          at: 1_700_000_000_003,
+          sendCount: 3,
+        },
+        {
+          text: 'readable response 4',
+          inbound: 'readable inbound 4',
+          at: 1_700_000_000_004,
+          sendCount: 4,
+        },
+      ];
+      await expect(
+        pool.pollConductorMessagesOnce('message-warning-window'),
+      ).resolves.toBe(2);
+      expect(
+        dispatchQueue.takeBatch({ continuationConsumed: false }, Date.now()),
+      ).toBeUndefined();
+
+      vi.setSystemTime(Date.now() + 10_000);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([2, 3, 4]);
+      const formatted = formatOperatorDispatchBatch(batch.events);
+      expect((formatted.match(/⚠/g) ?? [])).toHaveLength(1);
+      expect(formatted).toContain('2件');
+      expect(formatted).toContain('sendCount: 2, 3');
+      expect(formatted).toContain('readable inbound 4');
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageCursors: Record<string, number>;
+        pendingReports: Array<{ sendCount?: number }>;
+      };
+      expect(state.messageCursors['message-warning-window']).toBe(4);
+      expect(state.pendingReports.map((report) => report.sendCount)).toEqual([
+        2, 3, 4,
+      ]);
+    } finally {
+      pool.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('cleans up the listener and timer when its initial baseline poll fails', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-baseline-error-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => {
+        throw new Error('simulated baseline poll failure');
+      },
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      'message-baseline-error',
+      1,
+      liveServer.socketPath,
+    );
+
+    const errors: string[] = [];
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+      onError: (message) => errors.push(message),
+    });
+    vi.useFakeTimers();
+    try {
+      await expect(
+        pool.registerConductorMessageListen('message-baseline-error'),
+      ).rejects.toMatchObject<Partial<OpenQuestionControlRemoteError>>({
+        rpcCode: -32603,
+        message: 'Open Question operation failed.',
+      });
+      expect(pool.listConductorMessageListens()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageListeners: Record<string, unknown>;
+        messageCursors: Record<string, number>;
+      };
+      expect(state.messageListeners).toEqual({});
+      expect(state.messageCursors).toEqual({});
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(errors).toEqual([]);
+    } finally {
+      pool.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses an oversized-aware silent baseline and then delivers later readable messages', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-oversized-baseline-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let messages = [5, 6].map((sendCount) => ({
+      text: `oversized response ${sendCount}`,
+      inbound: 'x'.repeat(1_048_576),
+      at: 1_700_000_000_000 + sendCount,
+      sendCount,
+    }));
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      'message-oversized-baseline',
+      1,
+      liveServer.socketPath,
+    );
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await expect(
+        pool.registerConductorMessageListen('message-oversized-baseline', {
+          messageDebounceMs: 0,
+        }),
+      ).resolves.toMatchObject({
+        conductorAgentId: 'message-oversized-baseline',
+        messageDebounceMs: 0,
+      });
+      expect(pool.listConductorMessageListens()).toHaveLength(1);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+      const baselineState = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as { messageCursors: Record<string, number> };
+      expect(baselineState.messageCursors['message-oversized-baseline']).toBe(6);
+
+      messages = [
+        ...messages,
+        {
+          text: 'later readable response',
+          inbound: 'later readable inbound',
+          at: 1_700_000_000_007,
+          sendCount: 7,
+        },
+      ];
+      await expect(
+        pool.pollConductorMessagesOnce('message-oversized-baseline'),
+      ).resolves.toBe(1);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([7]);
+      expect(batch.events[0]?.text).toContain('later readable inbound');
+      expect(batch.events[0]?.text).not.toContain('sendCount: 5');
+      expect(batch.events[0]?.text).not.toContain('sendCount: 6');
+      await expect(
+        pool.pollConductorMessagesOnce('message-oversized-baseline'),
+      ).resolves.toBe(0);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('restores the previous listener config and timer when re-registration polling fails', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-reregister-error-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let failPolling = false;
+    const messages = [{
+      text: 'baseline response',
+      inbound: 'baseline inbound',
+      at: 1_700_000_000_001,
+      sendCount: 1,
+    }];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => {
+        if (failPolling) throw new Error('simulated baseline poll failure');
+        return messages;
+      },
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      'message-reregister-error',
+      1,
+      liveServer.socketPath,
+    );
+
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    vi.useFakeTimers();
+    try {
+      const previousConfig = await pool.registerConductorMessageListen(
+        'message-reregister-error',
+        { messageDebounceMs: 3_000 },
+      );
+      expect(vi.getTimerCount()).toBe(1);
+
+      failPolling = true;
+      await expect(
+        pool.registerConductorMessageListen('message-reregister-error', {
+          messageDebounceMs: 9_000,
+        }),
+      ).rejects.toMatchObject<Partial<OpenQuestionControlRemoteError>>({
+        rpcCode: -32603,
+        message: 'Open Question operation failed.',
+      });
+
+      expect(pool.listConductorMessageListens()).toEqual([previousConfig]);
+      expect(vi.getTimerCount()).toBe(1);
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageListeners: Record<string, {
+          conductorAgentId: string;
+          messageDebounceMs: number;
+        }>;
+        messageCursors: Record<string, number>;
+      };
+      expect(state.messageListeners['message-reregister-error']).toEqual(
+        previousConfig,
+      );
+      expect(state.messageCursors['message-reregister-error']).toBe(1);
+    } finally {
+      pool.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not fall back to saved session YAML when conductor-message UDS is absent', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-offline-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    await writeResumeStore('offline-message-session', 1);
+    await writeOfflineSnapshots('offline-message-session', {
+      sequence: 1,
+      questions: [],
+      statusLine: '保存済み状態',
+      reportedAt: 2,
+    });
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.registerConductorMessageListen('offline-message-session', {
+        messageDebounceMs: 0,
+      });
+      await expect(
+        pool.pollConductorMessagesOnce('offline-message-session'),
+      ).resolves.toBe(0);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+      expect(
+        JSON.parse(
+          await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+        ).messageCursors['offline-message-session'],
+      ).toBeUndefined();
     } finally {
       pool.close();
     }

@@ -257,6 +257,8 @@ openQuestions:
 | **worker session** | 載せない | `acpSessionId` を保持 |
 | **tool-call snapshot** | 載せない | 別ファイル `.tool-calls` に保持（TTL / サイズ上限あり） |
 
+稼働中 harness の `session.conductor_messages.list` は、bootstrap send を除く成功応答と対応する formatted inbound を最大 100 件、プロセスメモリ内だけに保持します。これは会話 transcript や SessionResumeStore ではなく、停止後は参照できません。最後の応答だけを返す `session.last_conductor_message.get` は従来どおりの単独 projection です。
+
 tool-call history は SessionResumeStore とは別に読み書きし、履歴ファイルの欠損や破損で resume を妨げません。
 保持期限・上限・プライバシー上の扱いは [harness-events.md](harness-events.md) を参照してください。
 詳細は [ADR 0011](adr/0011-session-sidecar-resume.md)、[ADR 0032](adr/0032-tool-call-snapshot-history.md)、[ADR 0039](adr/0039-session-resume-state-and-operator-projection.md)、

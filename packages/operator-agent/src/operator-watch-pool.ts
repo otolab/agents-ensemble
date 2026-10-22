@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
+  CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
   listSessionResumeStores,
   loadOpenQuestionsStore,
   loadSessionStateStore,
@@ -11,6 +12,7 @@ import {
   OpenQuestionControlTransportError,
   sendOpenQuestionControlRequest,
   sessionStateStorePath,
+  type OpenQuestionControlConductorMessage,
   type ConductorJsonValue,
   type ConductorTool,
   type SessionObservationSnapshot,
@@ -20,12 +22,16 @@ import type {
   OperatorDispatchEvent,
   OperatorDispatchQueue,
 } from './operator-dispatch.js';
+import { formatOversizedConductorMessageWarning } from './operator-dispatch.js';
 
 const WATCH_STATE_VERSION = 1;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const MIN_POLL_INTERVAL_MS = 250;
 const MAX_POLL_INTERVAL_MS = 60_000;
 const MAX_DEBOUNCE_MS = 10_000;
+const DEFAULT_MESSAGE_DEBOUNCE_MS = 10_000;
+const MAX_MESSAGE_DEBOUNCE_MS = 120_000;
+const MESSAGE_POLL_INTERVAL_MS = 2_000;
 
 interface WatchConfig {
   conductorAgentId: string;
@@ -39,6 +45,11 @@ interface SessionCursor {
   statusFingerprints: Record<string, string>;
 }
 
+export interface ConductorMessageListenConfig {
+  conductorAgentId: string;
+  messageDebounceMs: number;
+}
+
 export interface OperatorSessionLiveStatus {
   connectivity: 'reachable' | 'unreachable' | 'unknown';
   checkedAt: number | null;
@@ -49,13 +60,17 @@ interface OperatorWatchState {
   version: typeof WATCH_STATE_VERSION;
   watches: Record<string, WatchConfig>;
   cursors: Record<string, SessionCursor>;
+  messageListeners: Record<string, ConductorMessageListenConfig>;
+  messageCursors: Record<string, number>;
   pendingReports: Array<{
     reportId: string;
-    reportType: 'session_state' | 'open_question';
+    reportType: 'session_state' | 'open_question' | 'conductor_message';
     conductorAgentId: string;
     issueUrl: string;
     text: string;
     debounceMs: number;
+    sendCount?: number;
+    oversizedSendCounts?: number[];
   }>;
 }
 
@@ -66,7 +81,14 @@ export interface OperatorWatchPool {
   ): Promise<WatchConfig>;
   unregister(conductorAgentId: string): Promise<boolean>;
   list(): WatchConfig[];
+  registerConductorMessageListen(
+    conductorAgentId: string,
+    options?: { messageDebounceMs?: number },
+  ): Promise<ConductorMessageListenConfig>;
+  unregisterConductorMessageListen(conductorAgentId: string): Promise<boolean>;
+  listConductorMessageListens(): ConductorMessageListenConfig[];
   pollOnce(conductorAgentId: string): Promise<number>;
+  pollConductorMessagesOnce(conductorAgentId: string): Promise<number>;
   getLiveStatus(conductorAgentId: string): OperatorSessionLiveStatus | undefined;
   acknowledge(events: readonly OperatorDispatchEvent[]): Promise<void>;
   close(): void;
@@ -90,6 +112,8 @@ export async function createOperatorWatchPool(
   const state = await loadWatchState(path);
   const timers = new Map<string, NodeJS.Timeout>();
   const polling = new Set<string>();
+  const messageTimers = new Map<string, NodeJS.Timeout>();
+  const messagePolling = new Set<string>();
   const liveStatuses = new Map<string, OperatorSessionLiveStatus>();
   let closed = false;
   let persistQueue = Promise.resolve();
@@ -108,6 +132,20 @@ export async function createOperatorWatchPool(
     }, watch.pollIntervalMs);
     timer.unref();
     timers.set(watch.conductorAgentId, timer);
+  };
+  const startMessageTimer = (listener: ConductorMessageListenConfig) => {
+    if (messageTimers.has(listener.conductorAgentId)) return;
+    const timer = setInterval(() => {
+      void pool
+        .pollConductorMessagesOnce(listener.conductorAgentId)
+        .catch((error: unknown) => {
+          options.onError?.(
+            formatConductorMessagePollError(listener.conductorAgentId, error),
+          );
+        });
+    }, MESSAGE_POLL_INTERVAL_MS);
+    timer.unref();
+    messageTimers.set(listener.conductorAgentId, timer);
   };
   const pool: OperatorWatchPool = {
     async register(conductorAgentId, input = {}) {
@@ -166,6 +204,85 @@ export async function createOperatorWatchPool(
     },
     list() {
       return Object.values(state.watches).map((watch) => ({ ...watch }));
+    },
+    async registerConductorMessageListen(conductorAgentId, input = {}) {
+      const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
+      const resumeStore = (await listSessionResumeStores(root)).find(
+        (candidate) => candidate.conductorAgentId === id,
+      );
+      if (!resumeStore) throw new Error(`No saved session found for ${id}.`);
+      const listener = {
+        conductorAgentId: id,
+        messageDebounceMs: parseBoundedInteger(
+          input.messageDebounceMs,
+          DEFAULT_MESSAGE_DEBOUNCE_MS,
+          0,
+          MAX_MESSAGE_DEBOUNCE_MS,
+          'messageDebounceMs',
+        ),
+      };
+      const previous = state.messageListeners[id];
+      const previousCursor = state.messageCursors[id];
+      state.messageListeners[id] = listener;
+      try {
+        await persist();
+      } catch (error) {
+        if (previous) state.messageListeners[id] = previous;
+        else delete state.messageListeners[id];
+        throw error;
+      }
+      const existingTimer = messageTimers.get(id);
+      if (existingTimer) clearInterval(existingTimer);
+      messageTimers.delete(id);
+      startMessageTimer(listener);
+      try {
+        await pool.pollConductorMessagesOnce(id);
+      } catch (error) {
+        const timer = messageTimers.get(id);
+        if (timer) clearInterval(timer);
+        messageTimers.delete(id);
+        if (previous) state.messageListeners[id] = previous;
+        else delete state.messageListeners[id];
+        if (previousCursor === undefined) {
+          delete state.messageCursors[id];
+        }
+        try {
+          await persist();
+        } catch (rollbackError) {
+          if (previous) startMessageTimer(previous);
+          throw new AggregateError(
+            [error, rollbackError],
+            'Conductor message listen registration failed and could not be rolled back.',
+          );
+        }
+        if (previous) startMessageTimer(previous);
+        throw error;
+      }
+      return listener;
+    },
+    async unregisterConductorMessageListen(conductorAgentId) {
+      const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
+      const previous = state.messageListeners[id];
+      if (!previous) return false;
+      delete state.messageListeners[id];
+      const previousCursor = state.messageCursors[id];
+      delete state.messageCursors[id];
+      try {
+        await persist();
+      } catch (error) {
+        state.messageListeners[id] = previous;
+        if (previousCursor !== undefined) state.messageCursors[id] = previousCursor;
+        throw error;
+      }
+      const timer = messageTimers.get(id);
+      if (timer) clearInterval(timer);
+      messageTimers.delete(id);
+      return true;
+    },
+    listConductorMessageListens() {
+      return Object.values(state.messageListeners).map((listener) => ({
+        ...listener,
+      }));
     },
     getLiveStatus(conductorAgentId) {
       const status = liveStatuses.get(conductorAgentId);
@@ -240,6 +357,100 @@ export async function createOperatorWatchPool(
         polling.delete(id);
       }
     },
+    async pollConductorMessagesOnce(conductorAgentId) {
+      const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
+      const listener = state.messageListeners[id];
+      if (!listener || closed || messagePolling.has(id)) return 0;
+      messagePolling.add(id);
+      try {
+        const resumeStore = (await listSessionResumeStores(root)).find(
+          (candidate) => candidate.conductorAgentId === id,
+        );
+        if (!resumeStore?.harnessSocketPath) return 0;
+        const cursor = state.messageCursors[id];
+        if (cursor === undefined) {
+          state.messageCursors[id] = await readConductorMessageBaseline(
+            resumeStore.harnessSocketPath,
+          );
+          await persist();
+          return 0;
+        }
+        const readResult = await readConductorMessagePages(
+          resumeStore.harnessSocketPath,
+          cursor,
+        );
+        const messages = readResult.messages;
+        if (
+          messages.length === 0 &&
+          readResult.oversizedSendCounts.length === 0 &&
+          readResult.responseSizeError
+        ) {
+          throw readResult.responseSizeError;
+        }
+        const nextCursor = readResult.cursor;
+        const reports: OperatorWatchState['pendingReports'] = messages.map((message) => ({
+          reportId: randomUUID(),
+          reportType: 'conductor_message' as const,
+          conductorAgentId: id,
+          issueUrl: resumeStore.issueUrl,
+          text: formatConductorMessageReport(resumeStore, message),
+          debounceMs: listener.messageDebounceMs,
+          sendCount: message.sendCount,
+        }));
+        if (readResult.oversizedSendCounts.length > 0) {
+          reports.push({
+            reportId: randomUUID(),
+            reportType: 'conductor_message',
+            conductorAgentId: id,
+            issueUrl: resumeStore.issueUrl,
+            text: formatOversizedConductorMessageWarning(
+              resumeStore.issueUrl,
+              id,
+              readResult.oversizedSendCounts,
+            ),
+            debounceMs: listener.messageDebounceMs,
+            sendCount: readResult.oversizedSendCounts.at(-1)!,
+            oversizedSendCounts: readResult.oversizedSendCounts,
+          });
+        }
+        reports.sort(
+          (left, right) =>
+            (left.sendCount ?? 0) - (right.sendCount ?? 0),
+        );
+        state.messageCursors[id] = nextCursor;
+        if (reports.length > 0) state.pendingReports.push(...reports);
+        let persistFailed = false;
+        let persistenceError: unknown;
+        if (reports.length > 0 || nextCursor !== cursor) {
+          try {
+            await persist();
+          } catch (error) {
+            persistFailed = true;
+            persistenceError = error;
+          }
+        }
+        options.dispatchQueue.enqueueDebouncedReports(
+          reports.map((report) => ({
+            type: 'report',
+            reportId: report.reportId,
+            reportType: report.reportType,
+            conductorAgentId: id,
+            issueUrl: resumeStore.issueUrl,
+            text: report.text,
+            sendCount: report.sendCount,
+            oversizedSendCounts: report.oversizedSendCounts,
+          })),
+          listener.messageDebounceMs,
+        );
+        if (persistFailed) throw persistenceError;
+        if (readResult.responseSizeError) {
+          throw readResult.responseSizeError;
+        }
+        return reports.length;
+      } finally {
+        messagePolling.delete(id);
+      }
+    },
     async acknowledge(events) {
       const acknowledged = new Set(
         events.flatMap((event) =>
@@ -258,6 +469,8 @@ export async function createOperatorWatchPool(
       closed = true;
       for (const timer of timers.values()) clearInterval(timer);
       timers.clear();
+      for (const timer of messageTimers.values()) clearInterval(timer);
+      messageTimers.clear();
     },
   };
 
@@ -270,11 +483,16 @@ export async function createOperatorWatchPool(
         conductorAgentId: report.conductorAgentId,
         issueUrl: report.issueUrl,
         text: report.text,
+        sendCount: report.sendCount,
+        oversizedSendCounts: report.oversizedSendCounts,
       }],
       0,
     );
   }
   for (const watch of pool.list()) startTimer(watch);
+  for (const listener of pool.listConductorMessageListens()) {
+    startMessageTimer(listener);
+  }
   return pool;
 }
 
@@ -339,6 +557,205 @@ export function createUnregisterSessionWatchTool(
       return toolResult({ conductorAgentId, removed });
     },
   };
+}
+
+export function createRegisterConductorMessageListenTool(
+  pool: OperatorWatchPool,
+): ConductorTool {
+  return {
+    name: 'register_conductor_message_listen',
+    description:
+      'Listen for new successful conductor responses from a running Issue session. The first live poll establishes a baseline; subsequent messages are polled over UDS and debounced into one report. No offline fallback is used.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conductorAgentId: { type: 'string' },
+        messageDebounceMs: {
+          type: 'integer',
+          minimum: 0,
+          maximum: MAX_MESSAGE_DEBOUNCE_MS,
+          description:
+            'Quiet period in milliseconds before nearby conductor responses are reported (default 10000).',
+        },
+      },
+      required: ['conductorAgentId'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const listener = await pool.registerConductorMessageListen(
+        requireToolString(args.conductorAgentId, 'conductorAgentId'),
+        {
+          messageDebounceMs: optionalNumber(
+            args.messageDebounceMs,
+            'messageDebounceMs',
+          ),
+        },
+      );
+      return toolResult(listener as unknown as ConductorJsonValue);
+    },
+  };
+}
+
+export function createUnregisterConductorMessageListenTool(
+  pool: OperatorWatchPool,
+): ConductorTool {
+  return {
+    name: 'unregister_conductor_message_listen',
+    description: 'Stop listening for conductor responses from an Issue session.',
+    inputSchema: {
+      type: 'object',
+      properties: { conductorAgentId: { type: 'string' } },
+      required: ['conductorAgentId'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const conductorAgentId = requireToolString(
+        args.conductorAgentId,
+        'conductorAgentId',
+      );
+      const removed = await pool.unregisterConductorMessageListen(
+        conductorAgentId,
+      );
+      return toolResult({ conductorAgentId, removed });
+    },
+  };
+}
+
+async function readConductorMessages(
+  socketPath: string,
+  params: {
+    limit: number;
+    order: 'asc' | 'desc';
+    after?: number;
+  },
+): Promise<{
+  messages: OpenQuestionControlConductorMessage[];
+  hasMore: boolean;
+}> {
+  return sendOpenQuestionControlRequest(socketPath, {
+    method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+    params,
+  });
+}
+
+async function readConductorMessageBaseline(socketPath: string): Promise<number> {
+  try {
+    const baseline = await readConductorMessages(socketPath, {
+      limit: 1,
+      order: 'desc',
+    });
+    return baseline.messages[0]?.sendCount ?? 0;
+  } catch (error) {
+    const oversizedSendCount = oversizedConductorMessageSendCount(error);
+    if (oversizedSendCount !== undefined) return oversizedSendCount;
+    throw error;
+  }
+}
+
+async function readConductorMessagePages(
+  socketPath: string,
+  cursor: number,
+): Promise<{
+  messages: OpenQuestionControlConductorMessage[];
+  oversizedSendCounts: number[];
+  cursor: number;
+  responseSizeError?: OpenQuestionControlRemoteError;
+}> {
+  const messages: OpenQuestionControlConductorMessage[] = [];
+  const oversizedSendCounts: number[] = [];
+  let after = cursor;
+  let limit = CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT;
+
+  while (true) {
+    let page: Awaited<ReturnType<typeof readConductorMessages>>;
+    try {
+      page = await readConductorMessages(socketPath, {
+        limit,
+        order: 'asc',
+        after,
+      });
+    } catch (error) {
+      if (!isConductorMessageResponseTooLarge(error)) throw error;
+      if (limit === 1) {
+        const oversizedSendCount =
+          oversizedConductorMessageSendCount(error);
+        if (
+          oversizedSendCount === undefined ||
+          oversizedSendCount <= after
+        ) {
+          return {
+            messages,
+            oversizedSendCounts,
+            cursor: after,
+            responseSizeError: error,
+          };
+        }
+        oversizedSendCounts.push(oversizedSendCount);
+        after = oversizedSendCount;
+        limit = CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT;
+        continue;
+      }
+      limit = Math.max(1, Math.floor(limit / 2));
+      continue;
+    }
+
+    const nextMessages = page.messages
+      .filter((message) => message.sendCount > after)
+      .sort((left, right) => left.sendCount - right.sendCount);
+    if (nextMessages.length === 0) {
+      return { messages, oversizedSendCounts, cursor: after };
+    }
+    messages.push(...nextMessages);
+    after = nextMessages.at(-1)!.sendCount;
+    if (!page.hasMore) {
+      return { messages, oversizedSendCounts, cursor: after };
+    }
+  }
+}
+
+function isConductorMessageResponseTooLarge(
+  error: unknown,
+): error is OpenQuestionControlRemoteError {
+  return (
+    error instanceof OpenQuestionControlRemoteError &&
+    error.rpcCode === -32603 &&
+    error.message === 'Response is too large.'
+  );
+}
+
+function oversizedConductorMessageSendCount(
+  error: unknown,
+): number | undefined {
+  if (
+    !isConductorMessageResponseTooLarge(error) ||
+    !error.data ||
+    !('oversizedSendCount' in error.data)
+  ) {
+    return undefined;
+  }
+  return error.data.oversizedSendCount;
+}
+
+function formatConductorMessageReport(
+  resumeStore: SessionResumeStore,
+  message: OpenQuestionControlConductorMessage,
+): string {
+  return [
+    `対象: ${resumeStore.issueUrl} (${resumeStore.conductorAgentId})`,
+    `sendCount: ${message.sendCount}`,
+    `at: ${new Date(message.at).toISOString()}`,
+    ...(message.dispatchSource
+      ? [`dispatchSource: ${message.dispatchSource}`]
+      : []),
+    '',
+    '#### inbound',
+    '',
+    message.inbound,
+    '',
+    '#### response',
+    '',
+    message.text,
+  ].join('\n');
 }
 
 async function readObservation(
@@ -543,6 +960,45 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
       }
       cursors[id] = rawCursor as unknown as SessionCursor;
     }
+    const rawListeners = value.messageListeners ?? {};
+    if (!isRecord(rawListeners)) {
+      throw new Error('Invalid operator-agent watch state: messageListeners.');
+    }
+    const messageListeners: Record<string, ConductorMessageListenConfig> = {};
+    for (const [id, rawListener] of Object.entries(rawListeners)) {
+      if (
+        !isRecord(rawListener) ||
+        rawListener.conductorAgentId !== id ||
+        typeof rawListener.messageDebounceMs !== 'number'
+      ) {
+        throw new Error(
+          `Invalid operator-agent watch state: message listener ${id}.`,
+        );
+      }
+      messageListeners[id] = {
+        conductorAgentId: id,
+        messageDebounceMs: parseBoundedInteger(
+          rawListener.messageDebounceMs,
+          DEFAULT_MESSAGE_DEBOUNCE_MS,
+          0,
+          MAX_MESSAGE_DEBOUNCE_MS,
+          'messageDebounceMs',
+        ),
+      };
+    }
+    const rawMessageCursors = value.messageCursors ?? {};
+    if (!isRecord(rawMessageCursors)) {
+      throw new Error('Invalid operator-agent watch state: messageCursors.');
+    }
+    const messageCursors: Record<string, number> = {};
+    for (const [id, cursor] of Object.entries(rawMessageCursors)) {
+      if (!Number.isSafeInteger(cursor) || (cursor as number) < 0) {
+        throw new Error(
+          `Invalid operator-agent watch state: message cursor ${id}.`,
+        );
+      }
+      messageCursors[id] = cursor as number;
+    }
     const pendingReports = value.pendingReports;
     if (!Array.isArray(pendingReports)) {
       throw new Error('Invalid operator-agent watch state: pendingReports.');
@@ -557,10 +1013,35 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
         typeof report.issueUrl !== 'string' ||
         typeof report.text !== 'string' ||
         (report.reportType !== 'session_state' &&
-          report.reportType !== 'open_question') ||
+          report.reportType !== 'open_question' &&
+          report.reportType !== 'conductor_message') ||
         typeof report.debounceMs !== 'number'
       ) {
         throw new Error('Invalid operator-agent watch state: pending report.');
+      }
+      if (
+        report.reportType === 'conductor_message' &&
+        (!Number.isSafeInteger(report.sendCount) ||
+          (report.sendCount as number) < 0)
+      ) {
+        throw new Error(
+          'Invalid operator-agent watch state: pending conductor message report.',
+        );
+      }
+      if (
+        report.oversizedSendCounts !== undefined &&
+        (report.reportType !== 'conductor_message' ||
+          !Array.isArray(report.oversizedSendCounts) ||
+          report.oversizedSendCounts.length === 0 ||
+          report.oversizedSendCounts.some(
+            (sendCount) =>
+              !Number.isSafeInteger(sendCount) ||
+              (sendCount as number) < 0,
+          ))
+      ) {
+        throw new Error(
+          'Invalid operator-agent watch state: oversized conductor message report.',
+        );
       }
       if (reportIds.has(report.reportId)) {
         throw new Error(
@@ -571,7 +1052,10 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
       if (
         !Number.isInteger(report.debounceMs) ||
         report.debounceMs < 0 ||
-        report.debounceMs > MAX_DEBOUNCE_MS
+        report.debounceMs >
+          (report.reportType === 'conductor_message'
+            ? MAX_MESSAGE_DEBOUNCE_MS
+            : MAX_DEBOUNCE_MS)
       ) {
         throw new Error(
           'Invalid operator-agent watch state: pending report debounceMs.',
@@ -582,6 +1066,8 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
       version: WATCH_STATE_VERSION,
       watches,
       cursors,
+      messageListeners,
+      messageCursors,
       pendingReports: pendingReports as OperatorWatchState['pendingReports'],
     };
   } catch (error) {
@@ -590,6 +1076,8 @@ async function loadWatchState(path: string): Promise<OperatorWatchState> {
         version: WATCH_STATE_VERSION,
         watches: {},
         cursors: {},
+        messageListeners: {},
+        messageCursors: {},
         pendingReports: [],
       };
     }
@@ -691,4 +1179,13 @@ function formatWatchPollError(conductorAgentId: string, error: unknown): string 
   const errorType =
     error instanceof Error && error.name ? error.name : 'unknown error';
   return `Failed to poll watched session ${conductorAgentId} (${errorType}).`;
+}
+
+function formatConductorMessagePollError(
+  conductorAgentId: string,
+  error: unknown,
+): string {
+  const errorType =
+    error instanceof Error && error.name ? error.name : 'unknown error';
+  return `Failed to poll conductor messages for session ${conductorAgentId} (${errorType}).`;
 }

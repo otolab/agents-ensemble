@@ -33,13 +33,16 @@ import {
 } from './operator-control-tools.js';
 import {
   createOperatorWatchPool,
+  createRegisterConductorMessageListenTool,
   createRegisterSessionWatchTool,
+  createUnregisterConductorMessageListenTool,
   createUnregisterSessionWatchTool,
   type OperatorWatchPool,
 } from './operator-watch-pool.js';
 import {
   createAnswerLiveOpenQuestionTool,
   createGetLastConductorMessageTool,
+  createListConductorMessagesTool,
   createListLiveOpenQuestionsTool,
   createSendOperatorMessageTool,
 } from './open-question-control-tools.js';
@@ -145,8 +148,13 @@ export async function runOperatorAgent(
       list_live_open_questions: createListLiveOpenQuestionsTool(runtime.repoRoot),
       answer_live_open_question: createAnswerLiveOpenQuestionTool(runtime.repoRoot),
       get_last_conductor_message: createGetLastConductorMessageTool(runtime.repoRoot),
+      list_conductor_messages: createListConductorMessagesTool(runtime.repoRoot),
       register_session_watch: createRegisterSessionWatchTool(watchPool),
       unregister_session_watch: createUnregisterSessionWatchTool(watchPool),
+      register_conductor_message_listen:
+        createRegisterConductorMessageListenTool(watchPool),
+      unregister_conductor_message_listen:
+        createUnregisterConductorMessageListenTool(watchPool),
       set_report_hold: createSetReportHoldTool(dispatchQueue),
       release_reports: createReleaseReportsTool(dispatchQueue),
       send_operator_message: createSendOperatorMessageTool(runtime.repoRoot),

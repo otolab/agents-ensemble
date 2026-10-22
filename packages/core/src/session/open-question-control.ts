@@ -12,6 +12,7 @@ export const OPEN_QUESTION_CONTROL_METHODS = {
   list: 'open_questions.list',
   answer: 'open_questions.answer',
   lastConductorMessageGet: 'session.last_conductor_message.get',
+  conductorMessagesList: 'session.conductor_messages.list',
   observe: 'session.observe',
   sendMessage: 'operator.message.send',
 } as const;
@@ -19,6 +20,9 @@ export const OPEN_QUESTION_CONTROL_METHODS = {
 const JSON_RPC_VERSION = '2.0';
 const MAX_MESSAGE_BYTES = 1_048_576;
 const SOCKET_TIMEOUT_MS = 30_000;
+export const CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT = 20;
+export const CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT = 100;
+export const CONDUCTOR_MESSAGE_HISTORY_MAX_ENTRIES = 100;
 
 export interface OpenQuestionControlAnswer {
   questionId: string;
@@ -44,6 +48,25 @@ export interface OpenQuestionControlLastConductorMessage {
   sendCount: number;
 }
 
+export interface OpenQuestionControlConductorMessage
+  extends OpenQuestionControlLastConductorMessage {
+  inbound: string;
+  dispatchSource?: string;
+}
+
+export interface OpenQuestionControlConductorMessagesQuery {
+  limit: number;
+  order: 'asc' | 'desc';
+  cursor?: number;
+  before?: number;
+  after?: number;
+}
+
+export interface OpenQuestionControlConductorMessagesResult {
+  messages: OpenQuestionControlConductorMessage[];
+  hasMore: boolean;
+}
+
 export interface SessionObservationSnapshot extends OpenQuestionRegistrySnapshot {
   sessionState?: SessionStateStore;
 }
@@ -54,11 +77,20 @@ export interface OpenQuestionControlErrorData {
   dispatchStatus: 'unknown';
 }
 
+export interface OversizedConductorMessageErrorData {
+  oversizedSendCount: number;
+}
+
+export type OpenQuestionControlRemoteErrorData =
+  | OpenQuestionControlErrorData
+  | OversizedConductorMessageErrorData;
+
 export interface OpenQuestionControlServerOptions {
   listOpenQuestions: () => OpenQuestion[];
   getLastConductorMessage?: () =>
     | OpenQuestionControlLastConductorMessage
     | null;
+  listConductorMessages?: () => OpenQuestionControlConductorMessage[];
   observeSession?: () => Promise<SessionObservationSnapshot>;
   answerOpenQuestion: (
     input: OpenQuestionControlAnswer,
@@ -102,7 +134,7 @@ export class OpenQuestionControlRemoteError extends Error {
   constructor(
     public readonly rpcCode: number,
     message: string,
-    public readonly data?: OpenQuestionControlErrorData,
+    public readonly data?: OpenQuestionControlRemoteErrorData,
   ) {
     super(message);
     this.name = 'OpenQuestionControlRemoteError';
@@ -400,6 +432,23 @@ async function handleRequest(
         return successResponse(requestId, {
           message: options.getLastConductorMessage?.() ?? null,
         });
+      case OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList: {
+        if (!options.listConductorMessages) {
+          return errorResponse(requestId, -32601, 'Method not found.');
+        }
+        const query = parseConductorMessagesQuery(params);
+        if (!query) {
+          return errorResponse(
+            requestId,
+            -32602,
+            'Invalid conductor message list parameters.',
+          );
+        }
+        return successResponse(
+          requestId,
+          listConductorMessages(options.listConductorMessages(), query),
+        );
+      }
       case OPEN_QUESTION_CONTROL_METHODS.answer: {
         const questionId =
           typeof params.questionId === 'string' ? params.questionId.trim() : '';
@@ -509,7 +558,68 @@ interface JsonRpcResponse {
   error?: {
     code: number;
     message: string;
-    data?: OpenQuestionControlErrorData;
+    data?: OpenQuestionControlRemoteErrorData;
+  };
+}
+
+function parseConductorMessagesQuery(
+  params: Record<string, unknown>,
+): OpenQuestionControlConductorMessagesQuery | undefined {
+  const limit = params.limit ?? CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT;
+  const order = params.order ?? 'desc';
+  if (
+    !Number.isInteger(limit) ||
+    (limit as number) < 1 ||
+    (limit as number) > CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT ||
+    (order !== 'asc' && order !== 'desc')
+  ) {
+    return undefined;
+  }
+  const bounds = ['cursor', 'before', 'after'].filter((key) =>
+    Object.hasOwn(params, key),
+  );
+  if (
+    bounds.length > 2 ||
+    (bounds.includes('cursor') && bounds.length > 1)
+  ) {
+    return undefined;
+  }
+  for (const key of bounds) {
+    const value = params[key];
+    if (!Number.isSafeInteger(value) || (value as number) < 0) {
+      return undefined;
+    }
+  }
+  return {
+    limit: limit as number,
+    order,
+    ...(params.cursor !== undefined ? { cursor: params.cursor as number } : {}),
+    ...(params.before !== undefined ? { before: params.before as number } : {}),
+    ...(params.after !== undefined ? { after: params.after as number } : {}),
+  };
+}
+
+function listConductorMessages(
+  messages: OpenQuestionControlConductorMessage[],
+  query: OpenQuestionControlConductorMessagesQuery,
+): OpenQuestionControlConductorMessagesResult {
+  const direction = query.order === 'asc' ? 1 : -1;
+  const matching = messages
+    .filter((message) => {
+      if (query.cursor !== undefined) {
+        return query.order === 'desc'
+          ? message.sendCount < query.cursor
+          : message.sendCount > query.cursor;
+      }
+      return (
+        (query.before === undefined || message.sendCount < query.before) &&
+        (query.after === undefined || message.sendCount > query.after)
+      );
+    })
+    .sort((left, right) => direction * (left.sendCount - right.sendCount));
+  return {
+    messages: matching.slice(0, query.limit),
+    hasMore: matching.length > query.limit,
   };
 }
 
@@ -521,7 +631,7 @@ function errorResponse(
   id: string | number | null,
   code: number,
   message: string,
-  data?: OpenQuestionControlErrorData,
+  data?: OpenQuestionControlRemoteErrorData,
 ): JsonRpcResponse {
   return {
     jsonrpc: JSON_RPC_VERSION,
@@ -532,20 +642,28 @@ function errorResponse(
 
 function parseOpenQuestionControlErrorData(
   value: unknown,
-): OpenQuestionControlErrorData | undefined {
+): OpenQuestionControlRemoteErrorData | undefined {
+  if (!isRecord(value)) return undefined;
   if (
-    !isRecord(value) ||
-    value.outcome !== 'unknown' ||
-    value.answerStatus !== 'recorded' ||
-    value.dispatchStatus !== 'unknown'
+    Number.isSafeInteger(value.oversizedSendCount) &&
+    (value.oversizedSendCount as number) >= 0
   ) {
-    return undefined;
+    return {
+      oversizedSendCount: value.oversizedSendCount as number,
+    };
   }
-  return {
-    outcome: 'unknown',
-    answerStatus: 'recorded',
-    dispatchStatus: 'unknown',
-  };
+  if (
+    value.outcome === 'unknown' &&
+    value.answerStatus === 'recorded' &&
+    value.dispatchStatus === 'unknown'
+  ) {
+    return {
+      outcome: 'unknown',
+      answerStatus: 'recorded',
+      dispatchStatus: 'unknown',
+    };
+  }
+  return undefined;
 }
 
 function writeResponse(
@@ -555,12 +673,41 @@ function writeResponse(
   if (socket.destroyed) return Promise.resolve();
   const serialized = JSON.stringify(response) ?? '';
   if (Buffer.byteLength(serialized) > MAX_MESSAGE_BYTES) {
+    const oversizedSendCount = singleOversizedConductorMessageSendCount(
+      response.result,
+    );
     return endSocket(
       socket,
-      `${JSON.stringify(errorResponse(response.id, -32603, 'Response is too large.'))}\n`,
+      `${JSON.stringify(errorResponse(
+        response.id,
+        -32603,
+        'Response is too large.',
+        oversizedSendCount === undefined
+          ? undefined
+          : { oversizedSendCount },
+      ))}\n`,
     );
   }
   return endSocket(socket, `${serialized}\n`);
+}
+
+function singleOversizedConductorMessageSendCount(
+  result: unknown,
+): number | undefined {
+  if (!isRecord(result) || !Array.isArray(result.messages)) return undefined;
+  if (result.messages.length !== 1) return undefined;
+  const [message] = result.messages;
+  if (
+    !isRecord(message) ||
+    typeof message.text !== 'string' ||
+    typeof message.inbound !== 'string' ||
+    typeof message.at !== 'number' ||
+    !Number.isSafeInteger(message.sendCount) ||
+    (message.sendCount as number) < 0
+  ) {
+    return undefined;
+  }
+  return message.sendCount as number;
 }
 
 function listen(server: Server, socketPath: string): Promise<void> {

@@ -215,6 +215,120 @@ describe('Open Question control UDS', () => {
     }
   });
 
+  it('lists conductor messages with exclusive sendCount pagination boundaries', async () => {
+    const messages = [1, 2, 3].map((sendCount) => ({
+      text: `response ${sendCount}`,
+      inbound: `inbound ${sendCount}`,
+      at: 100 + sendCount,
+      sendCount,
+    }));
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      getLastConductorMessage: () => ({
+        text: 'response 3',
+        at: 103,
+        sendCount: 3,
+      }),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+
+    try {
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+        }),
+      ).resolves.toEqual({
+        messages: [messages[2], messages[1], messages[0]],
+        hasMore: false,
+      });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { limit: 1, order: 'asc' },
+        }),
+      ).resolves.toEqual({
+        messages: [messages[0]],
+        hasMore: true,
+      });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { limit: 2, order: 'desc', cursor: 3 },
+        }),
+      ).resolves.toEqual({
+        messages: [messages[1], messages[0]],
+        hasMore: false,
+      });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { before: 3 },
+        }),
+      ).resolves.toMatchObject({
+        messages: [messages[1], messages[0]],
+      });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { after: 1, before: 3, order: 'asc' },
+        }),
+      ).resolves.toMatchObject({
+        messages: [messages[1]],
+      });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { cursor: 2, before: 3 },
+        }),
+      ).rejects.toMatchObject({ rpcCode: -32602 });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.lastConductorMessageGet,
+        }),
+      ).resolves.toEqual({
+        message: { text: 'response 3', at: 103, sendCount: 3 },
+      });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('returns the existing size error when one conductor inbound exceeds the UDS response limit', async () => {
+    const listConductorMessages = vi.fn(() => [{
+      text: 'response',
+      inbound: 'x'.repeat(1_048_576),
+      at: 100,
+      sendCount: 1,
+    }]);
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+
+    try {
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { limit: 1 },
+        }),
+      ).rejects.toMatchObject<Partial<OpenQuestionControlRemoteError>>({
+        name: 'OpenQuestionControlRemoteError',
+        rpcCode: -32603,
+        message: 'Response is too large.',
+        data: { oversizedSendCount: 1 },
+      });
+      expect(listConductorMessages).toHaveBeenCalledOnce();
+    } finally {
+      await server.close();
+    }
+  });
+
   it('routes an answer through the handler and returns protocol errors without fallback', async () => {
     const registry = new OpenQuestionRegistry();
     const question = registry.enqueue({
