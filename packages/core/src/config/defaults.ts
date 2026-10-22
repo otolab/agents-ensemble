@@ -11,6 +11,9 @@ export const DEFAULT_SESSION_MAX_TURNS_NON_TTY = 5;
 export const DEFAULT_CONDUCTOR_BACKEND: ConductorBackend = 'cursor';
 
 export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = {
+  config: {
+    loadProjectConfig: true,
+  },
   profile: {},
   conductor: {
     model: 'default',

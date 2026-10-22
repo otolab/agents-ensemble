@@ -4,8 +4,9 @@ import {
 } from '../acp/resolve-acp-spawn.js';
 import type { WorkerWorktreeMode } from '../worktree/worktree.js';
 import type {
-  EnsembleAcpConfig,
   ConductorBackend,
+  EnsembleAcpConfig,
+  EnsembleConfigControlConfig,
   EnsembleConductorConfig,
   EnsembleConfig,
   EnsembleConfigLayer,
@@ -62,6 +63,17 @@ function parseProfileConfig(raw: unknown): EnsembleProfileConfig | undefined {
   }
   const defaultProfile = readString(obj.default);
   return defaultProfile ? { default: defaultProfile } : {};
+}
+
+function parseConfigControlConfig(
+  raw: unknown,
+): EnsembleConfigControlConfig | undefined {
+  const obj = readObject(raw);
+  if (!obj) {
+    return undefined;
+  }
+  const loadProjectConfig = readBoolean(obj.loadProjectConfig);
+  return loadProjectConfig === undefined ? undefined : { loadProjectConfig };
 }
 
 function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined {
@@ -299,6 +311,11 @@ export function parseEnsembleConfig(raw: unknown): EnsembleConfigLayer {
 
   const root = raw as Record<string, unknown>;
   const result: EnsembleConfigLayer = {};
+
+  const config = parseConfigControlConfig(root.config);
+  if (config !== undefined) {
+    result.config = config;
+  }
 
   const profile = parseProfileConfig(root.profile);
   if (profile !== undefined) {

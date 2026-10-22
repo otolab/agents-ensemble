@@ -42,6 +42,7 @@ export type {
   ResolveStringSettingOptions,
 } from './resolve-settings.js';
 export type {
+  EnsembleConfigControlConfig,
   EnsembleAcpConfig,
   ConductorBackend,
   EnsembleConductorConfig,

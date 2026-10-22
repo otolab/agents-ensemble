@@ -3,7 +3,7 @@
  * and the embedded backend without depending on the Issue session harness.
  */
 export { loadEnsembleConfig } from './config/load-ensemble-config.js';
-export type { EnsembleConfig } from './config/types.js';
+export type { EnsembleConfig, EnsembleConfigControlConfig } from './config/types.js';
 export {
   resolveConductorBackendSetting,
   resolveConductorPiResourcePaths,

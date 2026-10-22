@@ -6,6 +6,11 @@ export interface EnsembleProfileConfig {
   default?: string;
 }
 
+export interface EnsembleConfigControlConfig {
+  /** user config で project `.ensemble/config.yaml` の読み込みを無効にする。 */
+  loadProjectConfig: boolean;
+}
+
 export type ConductorBackend = 'cursor' | 'pi';
 
 export interface EnsembleConductorPiConfig {
@@ -85,6 +90,7 @@ export interface EnsembleTuiConfig {
 }
 
 export interface EnsembleConfig {
+  config: EnsembleConfigControlConfig;
   profile: EnsembleProfileConfig;
   conductor: EnsembleConductorConfig;
   acp: EnsembleAcpConfig;
