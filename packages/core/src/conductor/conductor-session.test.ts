@@ -2967,7 +2967,7 @@ describe('runConductorSession resume / shutdown', () => {
         (event) =>
           event.type === 'harness.warning' &&
           event.message.includes(
-            'Open Question YAML / session resume store を保存できませんでした',
+            'Open Question YAML / SessionResumeStore を保存できませんでした',
           ),
       );
       // recordSendComplete schedules one flush and teardown performs another.
