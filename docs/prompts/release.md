@@ -50,16 +50,33 @@ git checkout -b release/1.0.0   # または release/v1.0.0
 git push -u origin release/1.0.0
 ```
 
-**重要**: ブランチ名 `release/X.Y.Z` のバージョンが、ルート `package.json` のバージョンになる。子パッケージのバージョンは changeset の内容に従う。
+初回 push 時点では changeset ファイルを残しておく。`Version Update` が changeset を適用し、各パッケージの CHANGELOG と lockfile を更新して release ブランチへ push する。ブランチ名 `release/X.Y.Z` の版はルート `package.json` に使い、公開パッケージの版は changeset に従う。
 
 ### 3. CI による自動処理
 
-`release/*` への push 後、version-update が次を実行する。
+changeset が残っている状態で `release/*` に push すると、`Version Update` が次を実行する。
 
 1. `pnpm changeset version`
-2. ルート `package.json` をブランチ名のバージョンに更新
+2. ルート `package.json` を release ブランチ名のバージョンに更新
 3. `pnpm-lock.yaml` を更新してコミット・push
-4. main 向け Release PR を作成
+4. main 向け Release PR を作成または確認
+
+Release PR が開いている間に main へ追加変更が入り、changeset も追加された場合は、release ブランチへ main を取り込んだ後、ローカルで changeset を適用してから push する。
+
+```bash
+git checkout release/1.0.0
+git fetch origin
+git merge origin/main
+pnpm changeset version
+pnpm install --lockfile-only
+git add .changeset packages pnpm-lock.yaml
+git commit -m "chore: apply changesets on release branch"
+git push
+```
+
+この push では、変更された公開パッケージの version と各 CHANGELOG が push 前から更新されていることを `Version Update` が確認する。changeset の適用済みと判定した場合、workflow は package version・ルート version・lockfile を書き換えず、Release PR の作成または確認を行う。更新対象の全パッケージで version と CHANGELOG の変更が確認できない場合は、適用済みとは扱わず、changeset 未記録として失敗する。
+
+`[skip-changeset]` を使う場合、初回の release ブランチ push ではルート version のみをブランチ名に合わせる。ブランチ作成後の push ではルート version を書き換えない。特に公開パッケージの version と CHANGELOG が同じ push で更新されている場合は、changeset 適用済みとしてすべての version をそのまま保つ。これにより release ブランチ名の版で、より新しいルート version を上書きしない。
 
 ### 4. PR のレビューとマージ
 
