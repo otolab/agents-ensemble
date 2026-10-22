@@ -198,6 +198,17 @@ export type {
   DispatchHoldState,
 } from './session/dispatch-hold.js';
 export {
+  createDispatchHoldReminderMonitor,
+  DEFAULT_DISPATCH_HOLD_REMINDER_MS,
+  DEFAULT_DISPATCH_HOLD_REMINDER_POLL_MS,
+  formatDispatchHoldReminderMessage,
+} from './session/dispatch-hold-reminder-monitor.js';
+export type {
+  DispatchHoldReminderMonitor,
+  DispatchHoldReminderOptions,
+  DispatchHoldReminderSnapshot,
+} from './session/dispatch-hold-reminder-monitor.js';
+export {
   canTriggerConductorDispatch,
   isTriggerSessionEvent,
   sessionEventDispatchMode,

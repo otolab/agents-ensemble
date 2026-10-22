@@ -43,6 +43,10 @@ backend を選んだ後の主経路は共通です。リポジトリのディレ
 
 `ensemble issue` の `--permission-deadlock-stall-ms <n>` で、worker の permission が停滞したときに警告・conductor 通知を出すまでの時間を上書きできます。既定値は **`300_000ms`（300 秒）**です。設定値の解決順と API 名は [設定値リファレンス](https://github.com/otolab/agents-ensemble/blob/main/docs/settings.md) を参照してください。poll 間隔と worker UI の挙動はこのオプションでは変更しません。
 
+## dispatch hold reminder の間隔
+
+dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer の件数と解除を促す reminder を operator 向け telemetry として表示します。`ensemble issue` の `--dispatch-hold-reminder-ms <n>` で間隔を上書きできます。通知のみで、自動解除はしません。詳細と API 名は [設定値リファレンス](https://github.com/otolab/agents-ensemble/blob/main/docs/settings.md) を参照してください。
+
 ## 最小クイックスタート
 
 初回だけ、worker・選択した conductor backend・GitHub API の認証を準備します。

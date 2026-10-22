@@ -99,6 +99,11 @@ import {
   type DispatchHoldChange,
 } from './session/dispatch-hold.js';
 import {
+  createDispatchHoldReminderMonitor,
+  formatDispatchHoldReminderMessage,
+  type DispatchHoldReminderMonitor,
+} from './session/dispatch-hold-reminder-monitor.js';
+import {
   operatorInputMaxTurns,
   resolveMaxTurns,
   type IssueLoopStopReason,
@@ -269,6 +274,8 @@ export interface RunConductorSessionOptions {
   permissionDeadlockStallMs?: number;
   /** デッドロック検知の poll 間隔（ms）。デフォルト 5s。 */
   permissionDeadlockPollMs?: number;
+  /** dispatch hold の operator 向けリマインド間隔（ms）。デフォルト 30 分。 */
+  dispatchHoldReminderMs?: number;
 }
 
 export interface ConductorSessionResult {
@@ -346,6 +353,7 @@ export async function runConductorSession(
     reject: (error: Error) => void;
   }>();
   const dispatchHoldState = createDispatchHoldState();
+  let dispatchHoldReminderMonitor: DispatchHoldReminderMonitor | undefined;
   const onDispatchHoldChanged = (change: DispatchHoldChange): void => {
     sessionLogger.emit({
       type: 'conductor.dispatch_hold',
@@ -356,6 +364,7 @@ export async function runConductorSession(
         ? { flushedEventCount: change.flushedEventCount }
         : {}),
     });
+    dispatchHoldReminderMonitor?.onHoldChanged(change.hold);
   };
   let activeProfile = options.profile;
   let activeLazyWorkers = ensembleConfig.session.lazyWorkers;
@@ -1326,6 +1335,25 @@ export async function runConductorSession(
     githubMonitor.start();
   }
 
+  dispatchHoldReminderMonitor = createDispatchHoldReminderMonitor({
+    getSnapshot: () => ({
+      hold: dispatchHoldState.dispatchHold,
+      heldEventCount: dispatchHoldState.heldEvents.length,
+    }),
+    onReminder: ({ heldEventCount }) => {
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: formatDispatchHoldReminderMessage(
+          heldEventCount,
+          options.dispatchHoldReminderMs,
+        ),
+      });
+    },
+    reminderIntervalMs: options.dispatchHoldReminderMs,
+    shutdownSignal,
+  });
+  dispatchHoldReminderMonitor.start();
+
   let permissionDeadlockMonitor: PermissionDeadlockMonitor | undefined;
   if (!options.disablePermissionDeadlockMonitor) {
     permissionDeadlockMonitor = createPermissionDeadlockMonitor({
@@ -1902,6 +1930,10 @@ export async function runConductorSession(
         teardownPhases.openQuestionControl = Date.now() - phaseStart;
       }
       disposeOperatorInput?.();
+      if (dispatchHoldReminderMonitor) {
+        emitTeardownPhase('dispatchHoldReminderMonitor');
+        dispatchHoldReminderMonitor.stop();
+      }
       if (permissionDeadlockMonitor) {
         emitTeardownPhase('permissionDeadlockMonitor');
         permissionDeadlockMonitor.stop();
