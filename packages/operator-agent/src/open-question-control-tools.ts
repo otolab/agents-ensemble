@@ -1,8 +1,11 @@
 import {
+  CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
+  CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT,
   listSessionResumeStores,
   OPEN_QUESTION_CONTROL_METHODS,
   sendOpenQuestionControlRequest,
   type OpenQuestionControlAnswerResult,
+  type OpenQuestionControlConductorMessagesResult,
   type OpenQuestionControlLastConductorMessage,
   type OpenQuestionControlListItem,
   type ConductorJsonValue,
@@ -14,6 +17,7 @@ import { resolve } from 'node:path';
 export const LIST_LIVE_OPEN_QUESTIONS_TOOL = 'list_live_open_questions';
 export const ANSWER_LIVE_OPEN_QUESTION_TOOL = 'answer_live_open_question';
 export const GET_LAST_CONDUCTOR_MESSAGE_TOOL = 'get_last_conductor_message';
+export const LIST_CONDUCTOR_MESSAGES_TOOL = 'list_conductor_messages';
 export const SEND_OPERATOR_MESSAGE_TOOL = 'send_operator_message';
 
 interface LiveOpenQuestionsResult {
@@ -22,6 +26,88 @@ interface LiveOpenQuestionsResult {
 
 interface LastConductorMessageResult {
   message: OpenQuestionControlLastConductorMessage | null;
+}
+
+/** Read successful conductor responses and their matching inbound batches. */
+export function createListConductorMessagesTool(repoRoot: string): ConductorTool {
+  const root = resolve(repoRoot);
+  return {
+    name: LIST_CONDUCTOR_MESSAGES_TOOL,
+    description:
+      'List successful conductor responses and the full formatted inbound batch they answered from a running Issue harness. Defaults to the latest 20 in descending sendCount order. Use the last message sendCount as an exclusive cursor to continue paging. This does not read stopped sessions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conductorAgentId: {
+          type: 'string',
+          description: 'Session id from list_operator_sessions.',
+        },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT,
+          description: `Number of messages to return (default ${CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT}, maximum ${CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT}).`,
+        },
+        order: {
+          type: 'string',
+          enum: ['asc', 'desc'],
+          description: 'Sort by sendCount; defaults to desc.',
+        },
+        cursor: {
+          type: 'integer',
+          minimum: 0,
+          description:
+            'Exclusive keyset boundary; with desc returns smaller sendCount values, with asc returns larger values. Cannot be combined with before or after.',
+        },
+        before: {
+          type: 'integer',
+          minimum: 0,
+          description: 'Return only messages with sendCount below this value.',
+        },
+        after: {
+          type: 'integer',
+          minimum: 0,
+          description: 'Return only messages with sendCount above this value.',
+        },
+      },
+      required: ['conductorAgentId'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const conductorAgentId = requireString(
+        args.conductorAgentId,
+        'conductorAgentId',
+      );
+      const resumeStore = await requireSession(root, conductorAgentId);
+      const params: Record<string, unknown> = {};
+      if (args.limit !== undefined) params.limit = optionalNumber(args.limit, 'limit');
+      if (args.order !== undefined) params.order = requireOrder(args.order);
+      if (args.cursor !== undefined) {
+        params.cursor = optionalNumber(args.cursor, 'cursor');
+      }
+      if (args.before !== undefined) {
+        params.before = optionalNumber(args.before, 'before');
+      }
+      if (args.after !== undefined) {
+        params.after = optionalNumber(args.after, 'after');
+      }
+      const result =
+        await sendOpenQuestionControlRequest<OpenQuestionControlConductorMessagesResult>(
+          requireSocketPath(resumeStore),
+          {
+            method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+            params,
+          },
+        );
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<
+          string,
+          ConductorJsonValue
+        >,
+      };
+    },
+  };
 }
 
 /** Read Open Questions from an active harness through its session UDS. */
@@ -247,4 +333,19 @@ function requireDelivery(
     return value;
   }
   throw new Error('delivery must be idle, next, or interrupt.');
+}
+
+function requireOrder(value: ConductorJsonValue): 'asc' | 'desc' {
+  if (value === 'asc' || value === 'desc') return value;
+  throw new Error('order must be asc or desc.');
+}
+
+function optionalNumber(
+  value: ConductorJsonValue,
+  name: string,
+): number {
+  if (typeof value !== 'number') {
+    throw new Error(`${name} must be an integer.`);
+  }
+  return value;
 }

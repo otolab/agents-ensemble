@@ -16,6 +16,7 @@ import {
 import {
   createAnswerLiveOpenQuestionTool,
   createGetLastConductorMessageTool,
+  createListConductorMessagesTool,
   createListLiveOpenQuestionsTool,
   createSendOperatorMessageTool,
 } from './open-question-control-tools.js';
@@ -46,6 +47,15 @@ describe('operator-agent live Open Question tools', () => {
         at: 1792512003000,
         sendCount: 44,
       }),
+      listConductorMessages: () => [
+        {
+          text: 'The conductor response.',
+          inbound: 'The full formatted inbound context.',
+          at: 1792512003000,
+          sendCount: 44,
+          dispatchSource: 'operator',
+        },
+      ],
       answerOpenQuestion: async ({ questionId, answer }) => {
         const answered = recordOpenQuestionAnswer(registry, {
           id: questionId,
@@ -104,6 +114,29 @@ describe('operator-agent live Open Question tools', () => {
       lastMessage.structuredContent,
     );
 
+    const messageHistory = await createListConductorMessagesTool(
+      repoRoot,
+    ).execute({
+      conductorAgentId: 'agent-live',
+      limit: 1,
+      order: 'asc',
+    });
+    expect(messageHistory.structuredContent).toEqual({
+      messages: [
+        {
+          text: 'The conductor response.',
+          inbound: 'The full formatted inbound context.',
+          at: 1792512003000,
+          sendCount: 44,
+          dispatchSource: 'operator',
+        },
+      ],
+      hasMore: false,
+    });
+    expect(JSON.parse(messageHistory.content[0]!.text)).toEqual(
+      messageHistory.structuredContent,
+    );
+
     const answered = await createAnswerLiveOpenQuestionTool(repoRoot).execute({
       conductorAgentId: 'agent-live',
       questionId: question.id,
@@ -152,6 +185,11 @@ describe('operator-agent live Open Question tools', () => {
     ).rejects.toThrow('has no recorded live control socket');
     await expect(
       createGetLastConductorMessageTool(repoRoot).execute({
+        conductorAgentId: 'agent-offline',
+      }),
+    ).rejects.toThrow('has no recorded live control socket');
+    await expect(
+      createListConductorMessagesTool(repoRoot).execute({
         conductorAgentId: 'agent-offline',
       }),
     ).rejects.toThrow('has no recorded live control socket');

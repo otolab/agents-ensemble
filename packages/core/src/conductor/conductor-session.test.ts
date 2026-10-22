@@ -1991,7 +1991,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
-  it('observes a live session and queues an explicit operator.message without answering an Open Question', async () => {
+  it('excludes the bootstrap send and records a later operator message with formatted inbound', async () => {
     let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
     let sendCount = 0;
     const delivered = createDeferred<string>();
@@ -2055,6 +2055,20 @@ describe('runConductorSession resume / shutdown', () => {
         openQuestions: [{ id: 'inq-1', status: 'open' }],
       });
 
+      await settleWithin(sendCompleted.promise, 5_000);
+      await expect(
+        sendOpenQuestionControlRequest(socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+        }),
+      ).resolves.toEqual({ messages: [], hasMore: false });
+      await expect(
+        sendOpenQuestionControlRequest(socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.lastConductorMessageGet,
+        }),
+      ).resolves.toEqual({
+        message: { text: 'done', at: expect.any(Number), sendCount: 1 },
+      });
+
       await expect(
         sendOpenQuestionControlRequest(socketPath, {
           method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
@@ -2068,6 +2082,29 @@ describe('runConductorSession resume / shutdown', () => {
         'レビューの進捗を確認してください',
       );
       await settleWithin(sendCompleted.promise, 5_000);
+      const messages = await sendOpenQuestionControlRequest<{
+        messages: Array<{
+          text: string;
+          inbound: string;
+          sendCount: number;
+          dispatchSource?: string;
+        }>;
+        hasMore: boolean;
+      }>(socketPath, {
+        method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+        params: { limit: 10, order: 'asc' },
+      });
+      expect(messages).toEqual({
+        messages: [
+          expect.objectContaining({
+            text: 'done',
+            inbound: 'レビューの進捗を確認してください',
+            sendCount: 2,
+            dispatchSource: 'operator',
+          }),
+        ],
+        hasMore: false,
+      });
       const afterMessage = await sendOpenQuestionControlRequest<{
         openQuestions: Array<{ id: string; status: string }>;
       }>(socketPath, { method: OPEN_QUESTION_CONTROL_METHODS.observe });

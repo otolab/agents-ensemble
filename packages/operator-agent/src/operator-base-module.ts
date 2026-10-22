@@ -31,7 +31,9 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
   instructions: [
     '`list_operator_sessions` の応答では、SessionResumeStore の保存値と `live.connectivity` による観測結果を区別してください。`unknown` は未確認であり、停止中を意味しません。',
     '稼働中セッションの Open Question が必要なら `list_live_open_questions` を使ってください。SessionResumeStore の socket path は古い場合があるため、接続に失敗したら harness 未接続として伝え、保存 YAML へ切り替えないでください。',
-    'Open Question を立てずに conductor へ送った後の返答を確認するときは `get_last_conductor_message` を使ってください。これは稼働中 harness の最後の成功応答だけを返します。',
+    'Open Question を立てずに conductor へ送った後、直近の返答だけを確認するときは `get_last_conductor_message` を使ってください。これは inbound を含まず、稼働中 harness の最後の成功応答・時刻・send 番号を返します。対応する inbound 文脈や履歴が必要なら `list_conductor_messages` を使ってください。',
+    'conductor の発言と対応する inbound の履歴が必要なら `list_conductor_messages` を使ってください。既定では新しい順の20件を返し、sendCount cursor で続きへ遡れます。これは稼働中 harness の直近100件だけで、停止後の履歴はありません。',
+    '特定 session の今後の conductor 発言を継続的に受け取るよう依頼されたら `register_conductor_message_listen` を使い、不要になったら `unregister_conductor_message_listen` を使ってください。`messageDebounceMs` は既定10秒、0〜120秒で調整できます。このlisten cursorは `register_session_watch` のOpen Question cursorから独立しています。',
     'Open Question への回答は user が選んだ内容を確認してから `answer_live_open_question` で送ってください。回答 tool は稼働中 harness の Registry / YAML に反映し conductor に通知します。自動解決はしません。',
     '複数 Issue session を継続監視するよう依頼されたら `register_session_watch` を使い、監視不要になったら `unregister_session_watch` を使ってください。報告が集中する場合は `set_report_hold` / `release_reports` で手動 hold を切り替えられます。',
     'user が稼働中の conductor に指示を送るよう求めたときは、内容と対象 session を確認して `send_operator_message` を使ってください。',
@@ -69,8 +71,21 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       type: 'subsection',
       title: 'last conductor response',
       items: [
-        '- `get_last_conductor_message` は `conductorAgentId` を指定し、稼働中 harness の最後の成功応答本文・完了時刻・send 番号を読みます。まだ成功応答がなければ `message: null` です',
+        '- `get_last_conductor_message` は `conductorAgentId` を指定し、稼働中 harness の最後の成功応答本文・完了時刻・send 番号を読みます。inbound と過去分は含みません。まだ成功応答がなければ `message: null` です',
         '- operator の発話や過去の会話履歴、失敗した応答は返しません。接続先が停止中・到達不能ならエラーで、保存状態や YAML へ切り替えません',
+      ],
+    },
+    {
+      type: 'subsection',
+      title: 'conductor message history and listen',
+      items: [
+        '- `list_conductor_messages` は成功応答本文と、その send に渡された全文 inbound を返します。既定は最新20件・sendCount降順で、cursor境界は排他的です。response が1 MiBを超えると `Response is too large.` になり、1件だけでも inbound 全文が上限を超えれば取得できません。list は全文を切り詰めず、直近100件を超える過去分は参照できません',
+        '- `register_conductor_message_listen` は現在の最新 sendCount を baseline にし、それより後の成功応答を通知します。最新 baseline が単独で上限を超える場合も、error の sendCount を使って登録を完了します。窓内の複数発言は sendCount 昇順で inbound / response をまとめます',
+        '- listen は一覧 page が1 MiBを超えると limit を下げて同じ cursor から再試行します。単独で1 MiBを超える発言は切り詰めずに読み飛ばし、同じ debounce window の複数 poll で見つかった oversized 発言を件数と sendCount 付きの warning section 1つにまとめます。その後の読み取り可能な発言も順序どおり通知します',
+        '- list は oversized response を明示的な size error として返します。listen だけが error に含まれる sendCount を使って unreadable record を越えて polling を続けます',
+        '- `messageDebounceMs` は既定10,000ms、0〜120,000msです。`register_session_watch` の `debounceMs` とは別設定で、Open Question cursorとも独立しています',
+        '- `unregister_conductor_message_listen` は以後の発言 polling を解除します。稼働中 UDS が利用できない場合に保存 YAML / sidecar へ fallback はしません',
+        '- 初回 bootstrap prompt への返答は一覧・listen対象外です。`get_last_conductor_message` は引き続きその成功応答も含む最後の1件を返し、inboundは追加されません',
       ],
     },
     {
