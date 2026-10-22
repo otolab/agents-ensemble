@@ -89,7 +89,7 @@ CONDUCTOR_MODE は **行動原則**、agents-ensemble はその **Issue フロ�
 
 ### Operator 層と Issue セッション
 
-[ADR 0031](adr/0031-operator-agent-layer.md) で合意した **4 層**は次のとおり。複数 session watch と dispatch の役割対応は [ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md) に記録する。
+[ADR 0031](adr/0031-operator-agent-layer.md) で合意した **4 層**は次のとおり。複数 session watch と dispatch の役割対応は [ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md)、operator-agent の会話 hold は [ADR 0038](adr/0038-operator-agent-conversation-report-hold.md) に記録する。
 
 ```
 user  →  operator（ロール）  →  conductor  →  workers
@@ -132,15 +132,17 @@ operator-agent は ADR 0014 の dispatch 原則を operator 側の報告に適�
 | 観測入口 | worker runtime、permission pipeline、GitHub monitor | 稼働中は session UDS `session.observe`、到達不能時は Open Questions YAML・session-state YAML・sidecar poll |
 | cursor / 永続化 | session sequence、GitHub monitor cursor、sidecar | `.ensemble/operator-agent/watch-state.json` に watch 設定・per-session cursor・未 dispatch report を保存 |
 | 束ね dispatch | [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の source key・到着順・優先度で 1 束を 1 `agent.send` | user を最優先、Open Question report、直前 session の一回継続、残り session の到着順で束ねて 1 `agent.send` |
-| hold | `set_dispatch_hold` が conductor 向け trigger を保留し `operator.message` を通す | `set_report_hold` / `release_reports` が自動 report だけを保留し、TTY user input と `operator.message.send` を通す |
+| hold | `set_dispatch_hold` が conductor 向け trigger を保留し `operator.message` を通す | 会話 hold と `set_report_hold` による手動 hold の OR で自動 report を保留し、TTY user input と `operator.message.send` を通す |
 | 通信方向 | harness queue から conductor へ送る | harness の UDS から operator-agent へ snapshot を報告し、逆方向の `operator.message.send` は既存 conductor queue に enqueue |
-| 実行中 TTY | Issue TUI が `dispatch 保留中（N 件）` を表示 | operator-agent は `報告保留中（N 件）` を表示 |
+| 実行中 TTY | Issue TUI が `dispatch 保留中（N 件）` を表示 | operator-agent は hold の理由（会話 / 手動）と保留件数を表示 |
 
-監視間隔と debounce は watch ごとに `register_session_watch` の `pollIntervalMs` / `debounceMs` で設定する。session ごとの UDS path が記録されているだけでは稼働中と判断せず、接続できた snapshot を live Registry observation として扱う。watch に cursor がない場合、最初の snapshot を通知なしで baseline に記録し、その後に増えた ID のうち `status: open` の質問を検知する。同じ質問の後続 YAML flush は per-session cursor で重複排除する。UDS が使えない間は `open-questions.yaml` と session-state YAML を poll するため、停止中セッションの変更も次回 poll で取り込む。Open Question report は `open_question:${conductorAgentId}` source key で既存 queue の batching / hold を通り、本文には対象 Issue と session ID を付ける。poll cursor と未 dispatch report は operator-agent state に保存するため、operator-agent の再起動後は未送信 report を queue に戻す。report hold 自体は会話中だけの状態で、再起動後は解除状態から始まる。
+監視間隔と debounce は watch ごとに `register_session_watch` の `pollIntervalMs` / `debounceMs` で設定する。session ごとの UDS path が記録されているだけでは稼働中と判断せず、接続できた snapshot を live Registry observation として扱う。watch に cursor がない場合、最初の snapshot を通知なしで baseline に記録し、その後に増えた ID のうち `status: open` の質問を検知する。同じ質問の後続 YAML flush は per-session cursor で重複排除する。UDS が使えない間は `open-questions.yaml` と session-state YAML を poll するため、停止中セッションの変更も次回 poll で取り込む。Open Question report は `open_question:${conductorAgentId}` source key で既存 queue の batching / hold を通り、本文には対象 Issue と session ID を付ける。poll cursor と未 dispatch report は operator-agent state に保存するため、operator-agent の再起動後は未送信 report を queue に戻す。
 
-`.ensemble/operator-agent/watch-state.json` が無い場合、watch pool は空 state で起動し、登録済み watch・cursor・未 dispatch report は失われます。監視再開には watch の再登録が必要で、最初の successful snapshot は既存 OQ ID の silent baseline になります。baseline 時点までに追加された質問は通知として replay されません。JSON / schema が不正なら初期化は失敗し、state を空へリセットしません。復旧手順は [稼働中 harness control API reference](live-open-question-control-api.md#operator-agent-watch-state-の欠損破損と復旧) を参照してください。report hold は永続化されず、再起動後は解除状態です。
+TTY user input が始まると自動の会話 hold が有効になり、watch polling を続けながら report dispatch を保留する。operator の応答が `finished` / `completed` で戻り、次の user input が queue に無い場合に自動解除する。連続入力が queue に残る間は hold を維持し、`/resume-watch` は会話 hold だけを手動解除する。手動 report hold と会話 hold は独立しており、いずれかが有効なら保留する。
 
-watch report を含む `agent.send` は `finished` / `completed` のときだけ成功として acknowledge し、永続 pending から削除する。`cancelled`、`error`、その他完了を確認できない status では report を同じ ID で遅延再 queue し、再起動後も pending から復元する。送信成功後・ack 永続化前の終了では再送と重複が起こりうるため at-least-once であり、受け手は対象 session の現在状態を確認する（設計判断は [ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md)）。
+`.ensemble/operator-agent/watch-state.json` が無い場合、watch pool は空 state で起動し、登録済み watch・cursor・未 dispatch report は失われます。監視再開には watch の再登録が必要で、最初の successful snapshot は既存 OQ ID の silent baseline になります。baseline 時点までに追加された質問は通知として replay されません。JSON / schema が不正なら初期化は失敗し、state を空へリセットしません。復旧手順は [稼働中 harness control API reference](live-open-question-control-api.md#operator-agent-watch-state-の欠損破損と復旧) を参照してください。手動・会話 report hold は永続化されず、再起動後はどちらも解除状態です。
+
+watch report を含む `agent.send` は `finished` / `completed` のときだけ成功として acknowledge し、永続 pending から削除する。`cancelled`、`error`、その他完了を確認できない status では report を同じ ID で遅延再 queue し、再起動後も pending から復元する。送信成功後・ack 永続化前の終了では再送と重複が起こりうるため at-least-once であり、受け手は対象 session の現在状態を確認する（設計判断は [ADR 0037](adr/0037-operator-agent-session-watch-and-dispatch.md)、[ADR 0038](adr/0038-operator-agent-conversation-report-hold.md)）。
 
 Issue harness 側では `session.observe` が全 Open Question と sequence、完了済み `report_session_state` の保存値を返す。`operator.message.send` は通常の operator message として既存 queue に入り、`{ queued: true, delivery }` は queue 受付を示す。dispatch 完了 ack ではない。`delivery` は `idle | next | interrupt` で、省略時は `next`（詳細は [Issue #525](https://github.com/otolab/agents-ensemble/issues/525)）。
 

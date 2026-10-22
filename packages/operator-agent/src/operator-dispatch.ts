@@ -41,6 +41,10 @@ export interface OperatorDispatchQueue {
     debounceMs: number,
   ): void;
   requeue(event: OperatorDispatchEvent, delayMs: number): void;
+  setConversationHold(hold: boolean): {
+    heldEventCount: number;
+    releasedEventCount: number;
+  };
   setHold(hold: boolean): { heldEventCount: number; releasedEventCount: number };
   takeBatch(state: OperatorDispatchState, now?: number): OperatorDispatchBatch | undefined;
   nextReadyAt(): number | undefined;
@@ -49,6 +53,8 @@ export interface OperatorDispatchQueue {
   readonly heldEventCount: number;
   readonly pendingEventCount: number;
   readonly pendingUserCount: number;
+  readonly conversationHold: boolean;
+  readonly reportHold: boolean;
   readonly hold: boolean;
 }
 
@@ -142,7 +148,33 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
   let arrival = 0;
   let held: Extract<OperatorDispatchEvent, { type: 'report' }>[] = [];
   let pending: OperatorDispatchEvent[] = [];
-  let hold = false;
+  let conversationHold = false;
+  let reportHold = false;
+  const isHeld = () => conversationHold || reportHold;
+  const updateHold = (
+    previousHold: boolean,
+  ): { heldEventCount: number; releasedEventCount: number } => {
+    const hold = isHeld();
+    if (previousHold === hold) {
+      notify();
+      return { heldEventCount: held.length, releasedEventCount: 0 };
+    }
+    if (hold) {
+      const reports = pending.filter(
+        (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
+          event.type === 'report',
+      );
+      held.push(...reports);
+      pending = pending.filter((event) => event.type === 'user');
+      notify();
+      return { heldEventCount: held.length, releasedEventCount: 0 };
+    }
+    const releasedEventCount = held.length;
+    pending = [...pending, ...held].sort((left, right) => left.arrival - right.arrival);
+    held = [];
+    notify();
+    return { heldEventCount: 0, releasedEventCount };
+  };
   const listeners = new Set<() => void>();
   const notify = () => {
     for (const listener of [...listeners]) listener();
@@ -168,7 +200,7 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       const readyAt = Date.now() + Math.max(0, debounceMs);
       for (const event of events) {
         const next = { ...event, arrival: arrival++, readyAt };
-        if (hold) held.push(next);
+        if (isHeld()) held.push(next);
         else pending.push(next);
       }
       notify();
@@ -182,31 +214,20 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
           arrival: arrival++,
           readyAt: Date.now() + Math.max(0, delayMs),
         };
-        if (hold) held.push(next);
+        if (isHeld()) held.push(next);
         else pending.push(next);
       }
       notify();
     },
+    setConversationHold(nextHold) {
+      const previousHold = isHeld();
+      conversationHold = nextHold;
+      return updateHold(previousHold);
+    },
     setHold(nextHold) {
-      if (hold === nextHold) {
-        return { heldEventCount: held.length, releasedEventCount: 0 };
-      }
-      hold = nextHold;
-      if (hold) {
-        const reports = pending.filter(
-          (event): event is Extract<OperatorDispatchEvent, { type: 'report' }> =>
-            event.type === 'report',
-        );
-        held.push(...reports);
-        pending = pending.filter((event) => event.type === 'user');
-        notify();
-        return { heldEventCount: held.length, releasedEventCount: 0 };
-      }
-      const releasedEventCount = held.length;
-      pending = [...pending, ...held].sort((left, right) => left.arrival - right.arrival);
-      held = [];
-      notify();
-      return { heldEventCount: 0, releasedEventCount };
+      const previousHold = isHeld();
+      reportHold = nextHold;
+      return updateHold(previousHold);
     },
     takeBatch(state, now = Date.now()) {
       const selected = selectOperatorDispatchBatch(pending, state, now);
@@ -246,8 +267,14 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
     get pendingUserCount() {
       return pending.filter((event) => event.type === 'user').length;
     },
+    get conversationHold() {
+      return conversationHold;
+    },
+    get reportHold() {
+      return reportHold;
+    },
     get hold() {
-      return hold;
+      return isHeld();
     },
   };
 }
