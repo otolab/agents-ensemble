@@ -7,6 +7,10 @@
 # 実運用の config は gitignore 対象。token 等の秘密情報は書かないこと。
 # 詳細: docs/config.md
 
+config:
+  # user ~/.ensemble/config.yaml のみ有効。false で project config を読まない
+  loadProjectConfig: true
+
 profile:
   # --profile 未指定時の team profile（名前またはパス）
   default: implementer-and-reviewer-v2

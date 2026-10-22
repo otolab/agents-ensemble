@@ -352,6 +352,8 @@ describe('runConductorSession resume / shutdown', () => {
 
       await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
         lifecycle: 'unknown',
+        harnessPhase: 'running',
+        modifiedAt: expect.any(Number),
         updatedAt: expect.any(Number),
       });
     },
@@ -1252,20 +1254,10 @@ describe('runConductorSession resume / shutdown', () => {
       let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
       let operatorInput: OperatorInputBindingApi | undefined;
       let sendCount = 0;
-      let lateSendReleased = false;
       const dispatchStarted = createDeferred<void>();
       const finishDispatch = createDeferred<void>();
       const lateDispatchReturned = createDeferred<void>();
-      const lateResumeStoreFlushCompleted = createDeferred<void>();
       const shutdown = new AbortController();
-      const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
-      vi.spyOn(
-        sessionResumeStoreModule,
-        'saveSessionResumeStore',
-      ).mockImplementation(async (path, resumeStore) => {
-        await persistResumeStore(path, resumeStore);
-        if (lateSendReleased) lateResumeStoreFlushCompleted.resolve();
-      });
 
       mockCreate.mockImplementationOnce(async (agentOptions) => {
         conductorTools = agentOptions.customTools;
@@ -1413,15 +1405,24 @@ describe('runConductorSession resume / shutdown', () => {
         expect(persistedResumeStore?.harnessSocketPath).toBeUndefined();
         expect(sendCount).toBe(2);
 
-        lateSendReleased = true;
+        const terminalResumeStore = persistedResumeStore;
         finishDispatch.resolve();
         await settleWithin(lateDispatchReturned.promise, 1_000);
-        await settleWithin(lateResumeStoreFlushCompleted.promise, 1_000);
+        await new Promise<void>((resolve) => setImmediate(resolve));
         expect(mockResume).not.toHaveBeenCalled();
         expect(sendCount).toBe(2);
         const resumeStoreAfterLateSend = await loadSessionResumeStore(resumeStorePath);
         expect(resumeStoreAfterLateSend?.lifecycle).toBe(
           shutdownMode === 'operator /close' ? 'closed' : 'interrupted',
+        );
+        expect(resumeStoreAfterLateSend?.harnessPhase).toBe(
+          shutdownMode === 'operator /close' ? 'close' : 'abort',
+        );
+        expect(resumeStoreAfterLateSend?.modifiedAt).toBe(
+          terminalResumeStore?.modifiedAt,
+        );
+        expect(resumeStoreAfterLateSend?.updatedAt).toBe(
+          terminalResumeStore?.updatedAt,
         );
         expect(resumeStoreAfterLateSend?.harnessSocketPath).toBeUndefined();
       } finally {
@@ -1869,7 +1870,7 @@ describe('runConductorSession resume / shutdown', () => {
     await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       resumeAgentId: agentId,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -2173,6 +2174,65 @@ describe('runConductorSession resume / shutdown', () => {
         },
       ]),
     );
+  });
+
+  it('emits a dispatch hold reminder as operator telemetry without another conductor send', async () => {
+    vi.useFakeTimers();
+    try {
+      let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      const events: SessionLogEvent[] = [];
+      sessionLogger.subscribe((event) => events.push(event));
+      mockCreate.mockImplementationOnce(async (agentOptions) => {
+        conductorTools = agentOptions.customTools;
+        return {
+          agentId: 'agent-test',
+          send: mockSend,
+          close: mockClose,
+          getUsage: createMockConductorGetUsage(),
+        };
+      });
+      mockSend.mockImplementationOnce(async () => {
+        await conductorTools!.set_dispatch_hold!.execute({ hold: true });
+        await vi.advanceTimersByTimeAsync(30_000);
+        return {
+          runId: 'run-1',
+          status: 'finished',
+          result: 'done',
+        };
+      });
+
+      await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        sessionLogger,
+        dispatchHoldReminderMs: 30_000,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      expect(events).toContainEqual({
+        type: 'harness.warning',
+        message: expect.stringContaining('現在 0 件あります'),
+      });
+      expect(events.filter((event) => event.type === 'conductor.dispatch_hold')).toEqual([
+        {
+          type: 'conductor.dispatch_hold',
+          status: 'enabled',
+          hold: true,
+          heldEventCount: 0,
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('records GitHub monitor recovery summaries in the session log', async () => {
@@ -2841,6 +2901,69 @@ describe('runConductorSession resume / shutdown', () => {
     });
     expect(resumeStore?.updatedAt).toBeGreaterThan(0);
     expect(resumeStore?.lifecycle).toBe('interrupted');
+    expect(resumeStore?.harnessPhase).toBe('abort');
+    expect(resumeStore?.modifiedAt).toBe(resumeStore?.updatedAt);
+  });
+
+  it('persists running during conductor send and idle after all in-flight work settles', async () => {
+    let resolveSend: ((result: {
+      runId: string;
+      status: 'finished';
+      result: string;
+    }) => void) | undefined;
+    mockSend.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSend = resolve;
+        }),
+    );
+    const onPostLoopWait = vi.fn();
+    let operatorApi: OperatorInputBindingApi | undefined;
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: 'agent-test',
+    });
+
+    await vi.waitFor(async () => {
+      expect((await loadSessionResumeStore(resumeStorePath))?.harnessPhase).toBe(
+        'running',
+      );
+    });
+    resolveSend!({
+      runId: 'run-phase',
+      status: 'finished',
+      result: 'waiting for operator',
+    });
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+    await vi.waitFor(
+      async () =>
+        expect((await loadSessionResumeStore(resumeStorePath))?.harnessPhase).toBe(
+          'idle',
+        ),
+      { timeout: 2_000 },
+    );
+    const idleStore = await loadSessionResumeStore(resumeStorePath);
+    expect(idleStore?.modifiedAt).toBe(idleStore?.updatedAt);
+
+    operatorApi!.submit('/close');
+    await sessionPromise;
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      harnessPhase: 'close',
+      lifecycle: 'closed',
+      modifiedAt: expect.any(Number),
+    });
   });
 
   it.each([
@@ -2877,6 +3000,10 @@ describe('runConductorSession resume / shutdown', () => {
         sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
       );
       expect(resumeStore?.lifecycle).toBe(lifecycle);
+      expect(resumeStore?.harnessPhase).toBe(
+        lifecycle === 'closed' ? 'close' : 'exit',
+      );
+      expect(resumeStore?.modifiedAt).toBe(resumeStore?.updatedAt);
       expect(resumeStore?.updatedAt).toBeGreaterThan(0);
     },
   );
@@ -2897,11 +3024,12 @@ describe('runConductorSession resume / shutdown', () => {
       waitForOperatorExit: false,
     });
 
-    await expect(
-      loadSessionResumeStore(
-        sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
-      ),
-    ).resolves.toMatchObject({ lifecycle: 'unknown' });
+    const resumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
+    );
+    expect(resumeStore?.lifecycle).toBe('unknown');
+    expect(resumeStore).not.toHaveProperty('harnessPhase');
+    expect(resumeStore).not.toHaveProperty('modifiedAt');
   });
 
   it.each([
@@ -4022,8 +4150,17 @@ describe('runConductorSession resume / shutdown', () => {
       },
     });
 
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: 'agent-test',
+    });
     await vi.waitFor(() => expect(firstBridge.promptSession).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(operatorApi).toBeDefined());
+    await vi.waitFor(async () =>
+      expect((await loadSessionResumeStore(resumeStorePath))?.harnessPhase).toBe(
+        'running',
+      ),
+    );
     expect(operatorApi!.submit('/close')).toBe(false);
     const closeResult = await sessionPromise;
 
@@ -4032,11 +4169,8 @@ describe('runConductorSession resume / shutdown', () => {
     expect(firstBridge.close).toHaveBeenCalledOnce();
     expect(removeSpy).not.toHaveBeenCalled();
     await expect(access(path)).resolves.toBeUndefined();
-    const resumeStorePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: 'agent-test',
-    });
     await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      harnessPhase: 'close',
       workers: {
         implementer: {
           acpSessionId: 'worker-session',
@@ -4044,6 +4178,7 @@ describe('runConductorSession resume / shutdown', () => {
         },
       },
     });
+    const terminalResumeStore = await loadSessionResumeStore(resumeStorePath);
 
     // Complete only after force shutdown has removed the resident. Its late
     // The result must not be needed to make the saved session resumable.
@@ -4052,6 +4187,11 @@ describe('runConductorSession resume / shutdown', () => {
       responseText: '',
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      harnessPhase: terminalResumeStore?.harnessPhase,
+      modifiedAt: terminalResumeStore?.modifiedAt,
+      updatedAt: terminalResumeStore?.updatedAt,
+    });
 
     const sendsBeforeContinue = mockSend.mock.calls.length;
     let continuedOperatorApi: OperatorInputBindingApi | undefined;

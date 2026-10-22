@@ -3,7 +3,7 @@
  * and the embedded backend without depending on the Issue session harness.
  */
 export { loadEnsembleConfig } from './config/load-ensemble-config.js';
-export type { EnsembleConfig } from './config/types.js';
+export type { EnsembleConfig, EnsembleConfigControlConfig } from './config/types.js';
 export {
   resolveConductorBackendSetting,
   resolveConductorPiResourcePaths,
@@ -37,7 +37,9 @@ export { profilePromptModule } from './prompt/modules/shared/profile-prompt-modu
 export { renderCompiledPrompt } from './prompt/render-compiled-prompt.js';
 export {
   loadSessionResumeStore,
+  harnessPhaseFromLegacyLifecycle,
   listSessionResumeStores,
+  type HarnessPhase,
   type SessionLifecycle,
   type SessionResumeStore,
 } from './session/session-resume-store.js';

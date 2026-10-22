@@ -50,6 +50,12 @@ export interface ConductorMessageListenConfig {
   messageDebounceMs: number;
 }
 
+export interface OperatorSessionLiveStatus {
+  connectivity: 'reachable' | 'unreachable' | 'unknown';
+  checkedAt: number | null;
+  unreachableSince: number | null;
+}
+
 interface OperatorWatchState {
   version: typeof WATCH_STATE_VERSION;
   watches: Record<string, WatchConfig>;
@@ -83,6 +89,7 @@ export interface OperatorWatchPool {
   listConductorMessageListens(): ConductorMessageListenConfig[];
   pollOnce(conductorAgentId: string): Promise<number>;
   pollConductorMessagesOnce(conductorAgentId: string): Promise<number>;
+  getLiveStatus(conductorAgentId: string): OperatorSessionLiveStatus | undefined;
   acknowledge(events: readonly OperatorDispatchEvent[]): Promise<void>;
   close(): void;
 }
@@ -107,6 +114,7 @@ export async function createOperatorWatchPool(
   const polling = new Set<string>();
   const messageTimers = new Map<string, NodeJS.Timeout>();
   const messagePolling = new Set<string>();
+  const liveStatuses = new Map<string, OperatorSessionLiveStatus>();
   let closed = false;
   let persistQueue = Promise.resolve();
 
@@ -276,6 +284,12 @@ export async function createOperatorWatchPool(
         ...listener,
       }));
     },
+    getLiveStatus(conductorAgentId) {
+      const status = liveStatuses.get(conductorAgentId);
+      if (!status || status.checkedAt === null) return undefined;
+      if (Date.now() - status.checkedAt > 10_000) return undefined;
+      return { ...status };
+    },
     async pollOnce(conductorAgentId) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
       const watch = state.watches[id];
@@ -286,7 +300,23 @@ export async function createOperatorWatchPool(
           (candidate) => candidate.conductorAgentId === id,
         );
         if (!resumeStore) return 0;
-        const { snapshot: observation, source } = await readObservation(root, resumeStore);
+        const {
+          snapshot: observation,
+          source,
+          connectivity,
+        } = await readObservation(root, resumeStore);
+        const previousLiveStatus = liveStatuses.get(id);
+        const checkedAt = Date.now();
+        liveStatuses.set(id, {
+          connectivity,
+          checkedAt: connectivity === 'unknown' ? null : checkedAt,
+          unreachableSince:
+            connectivity === 'unreachable'
+              ? previousLiveStatus?.connectivity === 'unreachable'
+                ? previousLiveStatus.unreachableSince ?? checkedAt
+                : checkedAt
+              : null,
+        });
         const previous = state.cursors[id];
         const next = cursorFor(observation);
         const reports = collectReports(resumeStore, observation, previous, source)
@@ -734,6 +764,7 @@ async function readObservation(
 ): Promise<{
   snapshot: SessionObservationSnapshot;
   source: 'uds' | 'resume_store';
+  connectivity: OperatorSessionLiveStatus['connectivity'];
 }> {
   if (resumeStore.harnessSocketPath) {
     try {
@@ -743,6 +774,7 @@ async function readObservation(
           { method: OPEN_QUESTION_CONTROL_METHODS.observe },
         ),
         source: 'uds',
+        connectivity: 'reachable',
       };
     } catch (error) {
       if (
@@ -757,6 +789,31 @@ async function readObservation(
       // A recorded socket path is only an index. When it is stale/unreachable,
       // or an older server does not implement snapshots, mark persisted data
       // as the observation source instead of presenting it as live.
+      const connectivity =
+        error instanceof OpenQuestionControlTransportError
+          ? 'unreachable'
+          : 'unknown';
+      const questions = await loadOpenQuestionsStore(
+        openQuestionsStorePath({
+          repoRoot,
+          conductorAgentId: resumeStore.conductorAgentId,
+        }),
+      );
+      const sessionState = await loadSessionStateStore(
+        sessionStateStorePath({
+          repoRoot,
+          conductorAgentId: resumeStore.conductorAgentId,
+        }),
+      );
+      return {
+        snapshot: {
+          sequence: questions?.sequence ?? resumeStore.sequence,
+          openQuestions: questions?.openQuestions ?? resumeStore.openQuestions,
+          ...(sessionState ? { sessionState } : {}),
+        },
+        source: 'resume_store',
+        connectivity,
+      };
     }
   }
   const questions = await loadOpenQuestionsStore(
@@ -772,6 +829,7 @@ async function readObservation(
       ...(sessionState ? { sessionState } : {}),
     },
     source: 'resume_store',
+    connectivity: 'unknown',
   };
 }
 

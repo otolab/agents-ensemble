@@ -63,8 +63,10 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 | 設定 | 環境変数 | config | CLI / API | コード default | 解決 |
 |------|----------|--------|-----------|----------------|------|
 | permission 停滞警告閾値 | — | — | `--permission-deadlock-stall-ms` / `RunConductorSessionOptions.permissionDeadlockStallMs` | `300_000ms`（300s） | 明示指定 > core default |
+| dispatch hold reminder 間隔 | — | — | `--dispatch-hold-reminder-ms` / `RunConductorSessionOptions.dispatchHoldReminderMs` | `1_800_000ms`（30 分） | 明示指定 > core default |
 
 `permissionDeadlockPollMs` は `5_000ms`（5s）のままで、この実行時設定の対象外です。
+dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時設定の対象外です。
 
 ### パターン E — 認証（config は可否のみ）
 
@@ -97,7 +99,7 @@ config キーなし。CI・スクリプト・端末検出、または 1 回限�
 | 監視 debounce | `github.monitor.debounceMs` | — | `--github-monitor-debounce-ms` | `30000` | B |
 | poll 間隔 | `github.monitor.pollIntervalMs` 他 | — | — | 各定数 | B |
 
-テンプレート: [`config.example.yaml`](../config.example.yaml)。`ensemble issue` 起動時（GitHub monitor より前）に `loadEnsembleConfig(repoRoot)` で読み込む。
+テンプレート: [`config.example.yaml`](../config.example.yaml)。`ensemble issue` 起動時（GitHub monitor より前）に `loadEnsembleConfig(repoRoot)` で読み込む。user 設定の `config.loadProjectConfig: false` で project 層を無効にでき、project config の読み込み・スキップは同 loader を使う起動経路で stderr に表示する。詳細は [config.md](config.md#配置と解決順) を参照。
 
 ## 一覧 — TUI / オペレータ UI
 

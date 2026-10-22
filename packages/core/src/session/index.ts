@@ -22,6 +22,7 @@ export {
   SESSION_RESUME_STORE_VERSION,
   assertSessionResumeStoreMatches,
   findLatestSessionResumeStoreForIssue,
+  harnessPhaseFromLegacyLifecycle,
   listSessionResumeStores,
   loadSessionResumeStore,
   requireSessionResumeStoreForResume,
@@ -32,6 +33,7 @@ export {
 } from './session-resume-store.js';
 export type {
   FindLatestSessionResumeStoreInput,
+  HarnessPhase,
   SessionLifecycle,
   SessionResumeStore,
   WorkerSessionResumeStore,
