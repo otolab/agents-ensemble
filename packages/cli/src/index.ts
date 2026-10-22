@@ -3,6 +3,7 @@
 import { resolve } from 'node:path';
 import { Command, Option } from 'commander';
 import {
+  DEFAULT_DISPATCH_HOLD_REMINDER_MS,
   DEFAULT_PERMISSION_DEADLOCK_STALL_MS,
   listConductorModels,
   resolveIssueUrl,
@@ -127,6 +128,11 @@ program
     (value) => Number.parseInt(value, 10),
   )
   .option(
+    '--dispatch-hold-reminder-ms <n>',
+    `Dispatch hold operator reminder interval in milliseconds (default: ${DEFAULT_DISPATCH_HOLD_REMINDER_MS})`,
+    (value) => Number.parseInt(value, 10),
+  )
+  .option(
     '--summary-format <format>',
     'Exit summary format: auto (TTY=text, non-TTY=json), json, or text',
     'auto',
@@ -157,6 +163,7 @@ program
         githubMonitor?: boolean;
         githubMonitorDebounceMs?: number;
         permissionDeadlockStallMs?: number;
+        dispatchHoldReminderMs?: number;
         summaryFormat?: string;
         includeFullResponseText?: boolean;
       },

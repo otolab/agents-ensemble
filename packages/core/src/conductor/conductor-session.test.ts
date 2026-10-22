@@ -2138,6 +2138,65 @@ describe('runConductorSession resume / shutdown', () => {
     );
   });
 
+  it('emits a dispatch hold reminder as operator telemetry without another conductor send', async () => {
+    vi.useFakeTimers();
+    try {
+      let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      const events: SessionLogEvent[] = [];
+      sessionLogger.subscribe((event) => events.push(event));
+      mockCreate.mockImplementationOnce(async (agentOptions) => {
+        conductorTools = agentOptions.customTools;
+        return {
+          agentId: 'agent-test',
+          send: mockSend,
+          close: mockClose,
+          getUsage: createMockConductorGetUsage(),
+        };
+      });
+      mockSend.mockImplementationOnce(async () => {
+        await conductorTools!.set_dispatch_hold!.execute({ hold: true });
+        await vi.advanceTimersByTimeAsync(30_000);
+        return {
+          runId: 'run-1',
+          status: 'finished',
+          result: 'done',
+        };
+      });
+
+      await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        sessionLogger,
+        dispatchHoldReminderMs: 30_000,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      expect(events).toContainEqual({
+        type: 'harness.warning',
+        message: expect.stringContaining('現在 0 件あります'),
+      });
+      expect(events.filter((event) => event.type === 'conductor.dispatch_hold')).toEqual([
+        {
+          type: 'conductor.dispatch_hold',
+          status: 'enabled',
+          hold: true,
+          heldEventCount: 0,
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('records GitHub monitor recovery summaries in the session log', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-github-recovery',
