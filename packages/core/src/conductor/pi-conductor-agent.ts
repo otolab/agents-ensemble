@@ -67,6 +67,7 @@ interface PiSendState {
   runId: string;
   callbacks?: ConductorSendCallbacks;
   finalMessage?: AssistantMessage;
+  usage?: ConductorTokenUsage;
 }
 
 interface PiMcpStartupState {
@@ -263,7 +264,7 @@ export class PiConductorAgent implements ConductorAgent {
       ...(finalMessage.errorMessage
         ? { error: { message: finalMessage.errorMessage } }
         : {}),
-      usage: toConductorTokenUsage(finalMessage.usage),
+      usage: state.usage ?? toConductorTokenUsage(finalMessage.usage),
       modelId: finalMessage.model || this.modelId,
     };
   }
@@ -430,6 +431,14 @@ export class PiConductorAgent implements ConductorAgent {
 
     if (event.type === 'agent_end' && activeSend) {
       activeSend.finalMessage = lastAssistantMessage(event.messages);
+      for (const message of event.messages) {
+        if (message.role === 'assistant') {
+          activeSend.usage = addConductorTokenUsage(
+            activeSend.usage,
+            message.usage,
+          );
+        }
+      }
     }
   }
 }
@@ -1110,6 +1119,24 @@ function toConductorTokenUsage(usage: AssistantMessage['usage']): ConductorToken
     totalTokens: usage.totalTokens,
     cacheReadTokens: usage.cacheRead,
     cacheWriteTokens: usage.cacheWrite,
+  };
+}
+
+function addConductorTokenUsage(
+  current: ConductorTokenUsage | undefined,
+  usage: AssistantMessage['usage'],
+): ConductorTokenUsage {
+  const next = toConductorTokenUsage(usage);
+  if (!current) return next;
+
+  return {
+    inputTokens: current.inputTokens + next.inputTokens,
+    outputTokens: current.outputTokens + next.outputTokens,
+    totalTokens: current.totalTokens + next.totalTokens,
+    cacheReadTokens:
+      (current.cacheReadTokens ?? 0) + (next.cacheReadTokens ?? 0),
+    cacheWriteTokens:
+      (current.cacheWriteTokens ?? 0) + (next.cacheWriteTokens ?? 0),
   };
 }
 
