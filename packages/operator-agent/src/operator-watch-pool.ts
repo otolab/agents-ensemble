@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
+  CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
   listSessionResumeStores,
   loadOpenQuestionsStore,
   loadSessionStateStore,
@@ -321,14 +322,14 @@ export async function createOperatorWatchPool(
           await persist();
           return 0;
         }
-        const page = await readConductorMessages(resumeStore.harnessSocketPath, {
-          limit: 100,
-          order: 'asc',
-          after: cursor,
-        });
-        const messages = page.messages
-          .filter((message) => message.sendCount > cursor)
-          .sort((left, right) => left.sendCount - right.sendCount);
+        const readResult = await readConductorMessagePages(
+          resumeStore.harnessSocketPath,
+          cursor,
+        );
+        const messages = readResult.messages;
+        if (messages.length === 0 && readResult.responseSizeError) {
+          throw readResult.responseSizeError;
+        }
         const nextCursor = messages.at(-1)?.sendCount ?? cursor;
         const reports = messages.map((message) => ({
           reportId: randomUUID(),
@@ -364,6 +365,9 @@ export async function createOperatorWatchPool(
           listener.messageDebounceMs,
         );
         if (persistFailed) throw persistenceError;
+        if (readResult.responseSizeError) {
+          throw readResult.responseSizeError;
+        }
         return reports.length;
       } finally {
         messagePolling.delete(id);
@@ -552,6 +556,54 @@ async function readConductorMessages(
     method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
     params,
   });
+}
+
+async function readConductorMessagePages(
+  socketPath: string,
+  cursor: number,
+): Promise<{
+  messages: OpenQuestionControlConductorMessage[];
+  responseSizeError?: OpenQuestionControlRemoteError;
+}> {
+  const messages: OpenQuestionControlConductorMessage[] = [];
+  let after = cursor;
+  let limit = CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT;
+
+  while (true) {
+    let page: Awaited<ReturnType<typeof readConductorMessages>>;
+    try {
+      page = await readConductorMessages(socketPath, {
+        limit,
+        order: 'asc',
+        after,
+      });
+    } catch (error) {
+      if (!isConductorMessageResponseTooLarge(error)) throw error;
+      if (limit === 1) {
+        return { messages, responseSizeError: error };
+      }
+      limit = Math.max(1, Math.floor(limit / 2));
+      continue;
+    }
+
+    const nextMessages = page.messages
+      .filter((message) => message.sendCount > after)
+      .sort((left, right) => left.sendCount - right.sendCount);
+    if (nextMessages.length === 0) return { messages };
+    messages.push(...nextMessages);
+    after = nextMessages.at(-1)!.sendCount;
+    if (!page.hasMore) return { messages };
+  }
+}
+
+function isConductorMessageResponseTooLarge(
+  error: unknown,
+): error is OpenQuestionControlRemoteError {
+  return (
+    error instanceof OpenQuestionControlRemoteError &&
+    error.rpcCode === -32603 &&
+    error.message === 'Response is too large.'
+  );
 }
 
 function formatConductorMessageReport(

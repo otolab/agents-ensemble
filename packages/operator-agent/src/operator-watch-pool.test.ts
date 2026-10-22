@@ -1,8 +1,11 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  OPEN_QUESTION_CONTROL_METHODS,
+  OpenQuestionControlRemoteError,
+  sendOpenQuestionControlRequest,
   startOpenQuestionControlServer,
   type SessionObservationSnapshot,
 } from '@agents-ensemble/core';
@@ -702,6 +705,180 @@ describe('operator watch pool', () => {
         pool.unregisterConductorMessageListen('message-listen-one'),
       ).resolves.toBe(true);
       expect(pool.listConductorMessageListens()).toEqual([]);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('recovers from aggregate oversized pages by fetching complete messages in order', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-pages-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const baselineMessage = {
+      text: 'baseline',
+      inbound: 'baseline inbound',
+      at: 1_700_000_000_004,
+      sendCount: 4,
+    };
+    let messages = [baselineMessage];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('message-pages-one', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.registerConductorMessageListen('message-pages-one', {
+        messageDebounceMs: 0,
+      });
+
+      const inbound = 'i'.repeat(300 * 1024);
+      messages = [
+        baselineMessage,
+        ...[5, 6, 7, 8].map((sendCount) => ({
+          text: `response ${sendCount}`,
+          inbound,
+          at: 1_700_000_000_000 + sendCount,
+          sendCount,
+        })),
+      ];
+
+      await expect(
+        sendOpenQuestionControlRequest(liveServer.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { limit: 1, order: 'asc', after: 4 },
+        }),
+      ).resolves.toEqual({
+        messages: [messages[1]],
+        hasMore: true,
+      });
+      await expect(
+        sendOpenQuestionControlRequest(liveServer.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
+          params: { limit: 4, order: 'asc', after: 4 },
+        }),
+      ).rejects.toMatchObject<Partial<OpenQuestionControlRemoteError>>({
+        rpcCode: -32603,
+        message: 'Response is too large.',
+      });
+
+      await expect(
+        pool.pollConductorMessagesOnce('message-pages-one'),
+      ).resolves.toBe(4);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([
+        5, 6, 7, 8,
+      ]);
+      expect(batch.events).toHaveLength(4);
+      for (const event of batch.events) {
+        expect(event.type).toBe('report');
+        if (event.type === 'report') {
+          expect(event.text).toContain(`#### inbound\n\n${inbound}`);
+        }
+      }
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageCursors: Record<string, number>;
+        pendingReports: Array<{ sendCount?: number }>;
+      };
+      expect(state.messageCursors['message-pages-one']).toBe(8);
+      expect(state.pendingReports.map((report) => report.sendCount)).toEqual([
+        5, 6, 7, 8,
+      ]);
+      await expect(
+        pool.pollConductorMessagesOnce('message-pages-one'),
+      ).resolves.toBe(0);
+      expect(dispatchQueue.pendingEventCount).toBe(0);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('queues pages collected before a single oversized message without skipping the blocker', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-partial-pages-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const baselineMessage = {
+      text: 'baseline',
+      inbound: 'baseline inbound',
+      at: 1_700_000_000_004,
+      sendCount: 4,
+    };
+    let messages = [baselineMessage];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('message-partial-pages', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.registerConductorMessageListen('message-partial-pages', {
+        messageDebounceMs: 0,
+      });
+      const inbound = 'i'.repeat(300 * 1024);
+      messages = [
+        baselineMessage,
+        ...[5, 6].map((sendCount) => ({
+          text: `response ${sendCount}`,
+          inbound,
+          at: 1_700_000_000_000 + sendCount,
+          sendCount,
+        })),
+        {
+          text: 'single oversized response',
+          inbound: 'x'.repeat(1_048_576),
+          at: 1_700_000_000_007,
+          sendCount: 7,
+        },
+        {
+          text: 'response 8',
+          inbound: 'inbound 8',
+          at: 1_700_000_000_008,
+          sendCount: 8,
+        },
+      ];
+
+      await expect(
+        pool.pollConductorMessagesOnce('message-partial-pages'),
+      ).rejects.toMatchObject<Partial<OpenQuestionControlRemoteError>>({
+        rpcCode: -32603,
+        message: 'Response is too large.',
+      });
+
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([5, 6]);
+      for (const event of batch.events) {
+        if (event.type === 'report') {
+          expect(event.text).toContain(`#### inbound\n\n${inbound}`);
+        }
+      }
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageCursors: Record<string, number>;
+        pendingReports: Array<{ sendCount?: number }>;
+      };
+      expect(state.messageCursors['message-partial-pages']).toBe(6);
+      expect(state.pendingReports.map((report) => report.sendCount)).toEqual([
+        5, 6,
+      ]);
     } finally {
       pool.close();
     }
