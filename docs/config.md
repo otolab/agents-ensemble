@@ -55,7 +55,7 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 #### resume と config 変更
 
-起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を session sidecar に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` や `acp.env` だけの変更も対象です。sidecar には config の値やファイルパスを保存しないため、秘密値は平文で残りません。
+起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を session sidecar に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` や `acp.env` だけの変更も対象です。worker の ACP spawn fingerprint も env map の digest を保持し、値そのものは sidecar に保存しません。sidecar には config の値やファイルパスを保存しないため、秘密値は平文で残りません。
 
 同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 sidecar は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0040](adr/0040-ensemble-config-resume-digest.md)）。
 
@@ -261,7 +261,7 @@ acp:
 
 #### resume と `acp.env` 変更
 
-`acp.env` を含む解決済み config の変更は、通常は session sidecar の config digest 比較で worker の再 attach 前に検出されます。digest のない旧 sidecar では config 一致を検証できないため warning を出して resume を続けますが、worker の ACP spawn fingerprint（[ADR 0011](adr/0011-session-sidecar-resume.md)）に保存値がある場合は再 attach 時にも照合されます。env を変えたあと続けるには新規セッションを開始してください。
+`acp.env` を含む解決済み config の変更は、通常は session sidecar の config digest 比較で worker の再 attach 前に検出されます。digest のない旧 sidecar では config 一致を検証できないため warning を出して resume を続けますが、worker の ACP spawn fingerprint（[ADR 0011](adr/0011-session-sidecar-resume.md)）があれば再 attach 時にも spawn を照合します。fingerprint は env map の digest だけを持ち、環境変数の値は保存しません。env を変えたあと続けるには新規セッションを開始してください。
 
 ### Pi resource root
 

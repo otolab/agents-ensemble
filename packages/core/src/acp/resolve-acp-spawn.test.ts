@@ -3,6 +3,7 @@ import {
   ENSEMBLE_DEFAULT_ACP_CLI_ENV,
   acpSpawnFingerprint,
   assertAcpSpawnMatchesResume,
+  computeAcpSpawnEnvDigest,
   mergeAcpSpawnEnv,
   resolveBuiltinAcpPreset,
   resolveDefaultAcpSpawn,
@@ -234,20 +235,34 @@ describe('profileWorkersToSessionSpecs', () => {
 });
 
 describe('acpSpawnFingerprint', () => {
-  it('includes env in fingerprint', () => {
-    expect(
-      acpSpawnFingerprint({
-        preset: 'codex',
-        command: 'codex-acp',
-        args: [],
-        env: { MODEL_PROVIDER: 'litellm' },
-      }),
-    ).toEqual({
+  it('stores a canonical env digest instead of environment values', () => {
+    const marker = 'PRIVATE_TOKEN_SHOULD_NOT_BE_PERSISTED';
+    const fingerprint = acpSpawnFingerprint({
       preset: 'codex',
       command: 'codex-acp',
       args: [],
-      env: { MODEL_PROVIDER: 'litellm' },
+      env: { MODEL_PROVIDER: 'litellm', API_TOKEN: marker },
     });
+
+    expect(fingerprint).toEqual({
+      preset: 'codex',
+      command: 'codex-acp',
+      args: [],
+      envDigest: computeAcpSpawnEnvDigest({
+        API_TOKEN: marker,
+        MODEL_PROVIDER: 'litellm',
+      }),
+    });
+    expect(JSON.stringify(fingerprint)).not.toContain(marker);
+  });
+
+  it('hashes env keys canonically and changes when an env value changes', () => {
+    expect(
+      computeAcpSpawnEnvDigest({ B: 'two', A: 'one' }),
+    ).toBe(computeAcpSpawnEnvDigest({ A: 'one', B: 'two' }));
+    expect(
+      computeAcpSpawnEnvDigest({ A: 'one', B: 'changed' }),
+    ).not.toBe(computeAcpSpawnEnvDigest({ A: 'one', B: 'two' }));
   });
 });
 
@@ -259,13 +274,13 @@ describe('assertAcpSpawnMatchesResume', () => {
           preset: 'codex',
           command: 'codex-acp',
           args: [],
-          env: { MODEL_PROVIDER: 'litellm' },
+          envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'litellm' }),
         },
         actual: {
           preset: 'codex',
           command: 'codex-acp',
           args: [],
-          env: { MODEL_PROVIDER: 'openai' },
+          envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'openai' }),
         },
       }),
     ).toThrow(/resume ACP spawn mismatch/);
@@ -339,20 +354,26 @@ describe('assertAcpSpawnMatchesResume', () => {
     expect(currentSpawn.env).toEqual({ INITIAL_AGENT_MODE: 'agent' });
   });
 
-  it('compares env when sidecar fingerprint includes env', () => {
+  it('compares env digest when sidecar fingerprint includes env', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
           preset: 'codex',
           command: 'codex-acp',
           args: [],
-          env: { INITIAL_AGENT_MODE: 'agent', MODEL_PROVIDER: 'litellm' },
+          envDigest: computeAcpSpawnEnvDigest({
+            INITIAL_AGENT_MODE: 'agent',
+            MODEL_PROVIDER: 'litellm',
+          }),
         },
         actual: {
           preset: 'codex',
           command: 'codex-acp',
           args: [],
-          env: { INITIAL_AGENT_MODE: 'agent', MODEL_PROVIDER: 'litellm' },
+          envDigest: computeAcpSpawnEnvDigest({
+            INITIAL_AGENT_MODE: 'agent',
+            MODEL_PROVIDER: 'litellm',
+          }),
         },
       }),
     ).not.toThrow();

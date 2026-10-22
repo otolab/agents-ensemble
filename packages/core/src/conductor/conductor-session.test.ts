@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import * as issueContextModule from '../github/issue-context.js';
@@ -3839,6 +3840,14 @@ describe('runConductorSession resume / shutdown', () => {
       .fn()
       .mockResolvedValueOnce(firstBridge)
       .mockResolvedValueOnce(resumedBridge);
+    const secretMarker = 'WORKER_ACP_SECRET_MARKER';
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        env: { API_TOKEN: secretMarker },
+      },
+    };
     mockSend.mockImplementationOnce(async () => {
       await conductorTools!.prompt_worker!.execute({
         worker: 'implementer',
@@ -3871,7 +3880,11 @@ describe('runConductorSession resume / shutdown', () => {
       profile: {
         workers: [{ name: 'implementer', kind: 'implementer' }],
       },
-      defaultAcp: { defaultAcpCommand: process.execPath },
+      ensembleConfig,
+      defaultAcp: {
+        defaultAcpCommand: process.execPath,
+        config: ensembleConfig,
+      },
       disableGitHubMonitor: true,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -3897,9 +3910,23 @@ describe('runConductorSession resume / shutdown', () => {
     expect(result.stopReason).toBe('completed');
     expect(removeSpy).not.toHaveBeenCalled();
     await expect(access(path)).resolves.toBeUndefined();
+    const sidecarPath = sessionSidecarPath({
+      repoRoot,
+      conductorAgentId: 'agent-test',
+    });
+    const sidecarText = await readFile(sidecarPath, 'utf8');
+    const savedSidecar = await loadSessionSidecar(sidecarPath);
+    expect(savedSidecar?.workers.implementer?.acpSpawn).toMatchObject({
+      preset: 'custom',
+      command: process.execPath,
+      args: [],
+      envDigest: computeAcpSpawnEnvDigest({ API_TOKEN: secretMarker }),
+    });
+    expect(sidecarText).not.toContain(secretMarker);
+    expect(JSON.stringify(emitted)).not.toContain(secretMarker);
     await expect(
       loadSessionSidecar(
-        sessionSidecarPath({ repoRoot, conductorAgentId: 'agent-test' }),
+        sidecarPath,
       ),
     ).resolves.toMatchObject({
       conductorAgentId: 'agent-test',
@@ -3951,7 +3978,11 @@ describe('runConductorSession resume / shutdown', () => {
       repoRoot,
       profile: { workers: [] },
       resumeAgentId: 'agent-test',
-      defaultAcp: { defaultAcpCommand: process.execPath },
+      ensembleConfig,
+      defaultAcp: {
+        defaultAcpCommand: process.execPath,
+        config: ensembleConfig,
+      },
       disableGitHubMonitor: true,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),

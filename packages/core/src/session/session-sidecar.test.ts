@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
 import {
   assertSessionSidecarMatches,
   findLatestSessionSidecarForIssue,
@@ -143,6 +144,7 @@ describe('session sidecar', () => {
             preset: 'claude',
             command: 'claude-agent-acp',
             args: [],
+            envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'litellm' }),
           },
         },
       },
@@ -155,7 +157,49 @@ describe('session sidecar', () => {
       preset: 'claude',
       command: 'claude-agent-acp',
       args: [],
+      envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'litellm' }),
     });
+  });
+
+  it('converts legacy ACP env values to a digest when reading and saving', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-sidecar-'));
+    const path = sessionSidecarPath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-legacy-acp-env',
+    });
+    const marker = 'LEGACY_ACP_SECRET_MARKER';
+    const legacySidecar = {
+      ...baseSidecar({
+        conductorAgentId: 'agent-legacy-acp-env',
+        repoRoot: tempDir,
+      }),
+      workers: {
+        implementer: {
+          acpSessionId: 'sess-legacy',
+          acpSpawn: {
+            preset: 'custom',
+            command: 'custom-acp',
+            args: [],
+            env: { API_TOKEN: marker },
+          },
+        },
+      },
+    };
+    await mkdir(sessionSidecarDir(tempDir), { recursive: true });
+    await writeFile(path, `${JSON.stringify(legacySidecar)}\n`, 'utf8');
+
+    const loaded = await loadSessionSidecar(path);
+
+    expect(loaded?.workers.implementer?.acpSpawn).toEqual({
+      preset: 'custom',
+      command: 'custom-acp',
+      args: [],
+      envDigest: computeAcpSpawnEnvDigest({ API_TOKEN: marker }),
+    });
+    expect(JSON.stringify(loaded)).not.toContain(marker);
+
+    await saveSessionSidecar(path, loaded!);
+    expect(await readFile(path, 'utf8')).not.toContain(marker);
   });
 
   it('round-trips teardown lifecycle while legacy sidecars remain unset', async () => {

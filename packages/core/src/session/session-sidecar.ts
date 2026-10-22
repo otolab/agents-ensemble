@@ -2,7 +2,10 @@ import { chmod, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/prom
 import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
-import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
+import {
+  computeAcpSpawnEnvDigest,
+  type AcpSpawnFingerprint,
+} from '../acp/resolve-acp-spawn.js';
 import type { ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 
@@ -32,7 +35,7 @@ export interface WorkerSessionSidecar {
   acpSessionId: string;
   /** ACP `session/new` / `session/load` に渡した cwd（resume 検証用）。 */
   acpCwd?: string;
-  /** resume 時の ACP spawn フィンガープリント（preset + command + args）。 */
+  /** resume 用 ACP spawn fingerprint（env は canonical digest のみ保存）。 */
   acpSpawn?: AcpSpawnFingerprint;
 }
 
@@ -387,26 +390,44 @@ function parseAcpSpawnFingerprint(
   if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== 'string')) {
     throw new Error(`Invalid session sidecar worker acpSpawn args: ${workerName}`);
   }
-  let env: Record<string, string> | undefined;
+  let envDigest: string | undefined;
+  if (record.envDigest !== undefined) {
+    if (
+      typeof record.envDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(record.envDigest)
+    ) {
+      throw new Error(
+        `Invalid session sidecar worker acpSpawn envDigest: ${workerName}`,
+      );
+    }
+    envDigest = record.envDigest;
+  }
   if (record.env !== undefined) {
     if (!record.env || typeof record.env !== 'object' || Array.isArray(record.env)) {
       throw new Error(`Invalid session sidecar worker acpSpawn env: ${workerName}`);
     }
-    env = {};
+    const legacyEnv: Record<string, string> = {};
     for (const [key, value] of Object.entries(record.env)) {
       if (typeof value !== 'string') {
         throw new Error(`Invalid session sidecar worker acpSpawn env.${key}: ${workerName}`);
       }
-      env[key] = value;
+      legacyEnv[key] = value;
     }
-    if (Object.keys(env).length === 0) {
-      env = undefined;
+    if (Object.keys(legacyEnv).length > 0) {
+      if (envDigest !== undefined) {
+        throw new Error(
+          `Invalid session sidecar worker acpSpawn env: duplicate env and envDigest for ${workerName}`,
+        );
+      }
+      // Older sidecars stored env values directly. Convert them in memory so
+      // resume comparison remains possible and subsequent saves redact them.
+      envDigest = computeAcpSpawnEnvDigest(legacyEnv);
     }
   }
   return {
     preset: record.preset as AcpSpawnFingerprint['preset'],
     command: record.command,
     args: record.args,
-    ...(env ? { env } : {}),
+    ...(envDigest ? { envDigest } : {}),
   };
 }
