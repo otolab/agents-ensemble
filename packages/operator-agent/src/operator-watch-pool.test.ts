@@ -939,6 +939,80 @@ describe('operator watch pool', () => {
     }
   });
 
+  it('restores the previous listener config and timer when re-registration polling fails', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-reregister-error-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let messages = [{
+      text: 'baseline response',
+      inbound: 'baseline inbound',
+      at: 1_700_000_000_001,
+      sendCount: 1,
+    }];
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      listConductorMessages: () => messages,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore(
+      'message-reregister-error',
+      1,
+      liveServer.socketPath,
+    );
+
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    vi.useFakeTimers();
+    try {
+      const previousConfig = await pool.registerConductorMessageListen(
+        'message-reregister-error',
+        { messageDebounceMs: 3_000 },
+      );
+      expect(vi.getTimerCount()).toBe(1);
+
+      messages = [
+        ...messages,
+        {
+          text: 'oversized response',
+          inbound: 'x'.repeat(1_048_576),
+          at: 1_700_000_000_002,
+          sendCount: 2,
+        },
+      ];
+      await expect(
+        pool.registerConductorMessageListen('message-reregister-error', {
+          messageDebounceMs: 9_000,
+        }),
+      ).rejects.toMatchObject<Partial<OpenQuestionControlRemoteError>>({
+        rpcCode: -32603,
+        message: 'Response is too large.',
+      });
+
+      expect(pool.listConductorMessageListens()).toEqual([previousConfig]);
+      expect(vi.getTimerCount()).toBe(1);
+      const state = JSON.parse(
+        await readFile(operatorWatchStatePath(repoRoot), 'utf8'),
+      ) as {
+        messageListeners: Record<string, {
+          conductorAgentId: string;
+          messageDebounceMs: number;
+        }>;
+        messageCursors: Record<string, number>;
+      };
+      expect(state.messageListeners['message-reregister-error']).toEqual(
+        previousConfig,
+      );
+      expect(state.messageCursors['message-reregister-error']).toBe(1);
+    } finally {
+      pool.close();
+      vi.useRealTimers();
+    }
+  });
+
   it('does not fall back to saved session YAML when conductor-message UDS is absent', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-message-offline-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
