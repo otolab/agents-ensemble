@@ -150,6 +150,36 @@ describe('listConductorProviderHistory', () => {
         query: { limit: 20, order: 'desc' },
       }),
     ).resolves.toEqual({ messages: [], hasMore: false });
+
+    const postUpgradeTurn = appendPiTurn(manager, {
+      inbound: 'inbound recorded after upgrade',
+      toolOutput: 'POST_UPGRADE_TOOL_SECRET',
+      response: 'response recorded after upgrade',
+      sendCount: 1,
+      dispatchSource: 'operator',
+    });
+    const result = await listConductorProviderHistory({
+      backend: 'pi',
+      conductorAgentId: 'legacy-pi-history-agent',
+      cwd: tempDir,
+      query: { limit: 20, order: 'desc' },
+    });
+
+    expect(result).toEqual({
+      messages: [
+        {
+          backend: 'pi',
+          providerId: postUpgradeTurn.responseEntryId,
+          at: 1_800_000_000_001,
+          text: 'response recorded after upgrade',
+          inbound: 'inbound recorded after upgrade',
+          sendCount: 1,
+          dispatchSource: 'operator',
+        },
+      ],
+      hasMore: false,
+    });
+    expect(JSON.stringify(result)).not.toContain('legacy');
   });
 
   it('uses Cursor run API pagination, excludes bootstrap and unsuccessful runs, and exposes only user/final text', async () => {
