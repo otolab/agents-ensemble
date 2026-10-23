@@ -1,4 +1,4 @@
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join } from 'node:path';
@@ -16,9 +16,19 @@ export function resolveBundledAcpBin(
   try {
     const require = createRequire(fromModuleUrl);
     const { packageName, binName } = ACP_PRESET_OPTIONAL_PACKAGES[preset];
-    const coreEntry = require.resolve('@agents-ensemble/core');
+    const coreSearchPaths = require.resolve.paths('@agents-ensemble/core');
+    const corePackageDirectory = coreSearchPaths
+      ?.map((nodeModulesPath) =>
+        join(nodeModulesPath, '@agents-ensemble', 'core'),
+      )
+      .find((packageDirectory) =>
+        existsSync(join(packageDirectory, 'package.json')),
+      );
+    if (!corePackageDirectory) {
+      return undefined;
+    }
     const packageJsonPath = require.resolve(`${packageName}/package.json`, {
-      paths: [dirname(coreEntry)],
+      paths: [corePackageDirectory],
     });
     const packageDirectory = dirname(packageJsonPath);
     const pkg = require(packageJsonPath) as {
