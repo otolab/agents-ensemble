@@ -1,16 +1,17 @@
 import {
   mkdir,
-  mkdtemp,
+  mkdtemp as createTempDir,
   readdir,
   readFile,
   rm,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   loadSessionStateStore,
+  legacySessionStateStorePath,
   saveSessionStatusLine,
   SESSION_STATE_STORE_MAX_BYTES,
   sessionStateStorePath,
@@ -23,11 +24,18 @@ describe('session state store', () => {
 
   afterEach(async () => {
     if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
+    vi.unstubAllEnvs();
     repoRoot = '';
   });
 
+  async function createHome(prefix: string): Promise<string> {
+    const directory = await createTempDir(join(tmpdir(), prefix));
+    vi.stubEnv('HOME', directory);
+    return directory;
+  }
+
   it('atomically persists and reads back the latest statusLine for one agent', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-session-state-'));
+    repoRoot = await createHome('ensemble-session-state-');
     const path = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-1',
@@ -47,12 +55,12 @@ describe('session state store', () => {
     );
     expect(await readFile(path, 'utf8')).toContain('current:');
     await expect(
-      readdir(join(repoRoot, '.ensemble', 'sessions', 'agent-1')),
+      readdir(dirname(path)),
     ).resolves.toEqual(['session-state.yaml']);
   });
 
   it('keeps status state isolated by conductorAgentId', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-session-state-'));
+    repoRoot = await createHome('ensemble-session-state-');
     const first = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-first',
@@ -77,7 +85,7 @@ describe('session state store', () => {
   });
 
   it('returns undefined when no state was written and rejects malformed YAML', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-session-state-'));
+    repoRoot = await createHome('ensemble-session-state-');
     const path = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-1',
@@ -96,14 +104,12 @@ describe('session state store', () => {
   });
 
   it('reads legacy current-only files and retains the prior report on migration', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-session-state-'));
+    repoRoot = await createHome('ensemble-session-state-');
     const path = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-legacy',
     });
-    await mkdir(join(repoRoot, '.ensemble', 'sessions', 'agent-legacy'), {
-      recursive: true,
-    });
+    await mkdir(dirname(path), { recursive: true });
     await writeFile(
       path,
       'version: 1\nstatusLine: "legacy report"\nreportedAt: 10\n',
@@ -121,8 +127,46 @@ describe('session state store', () => {
     });
   });
 
+  it('moves legacy project status into the user store without losing history on the next report', async () => {
+    repoRoot = await createHome('ensemble-session-state-');
+    const options = {
+      repoRoot,
+      conductorAgentId: 'agent-project-legacy',
+    };
+    const path = sessionStateStorePath(options);
+    const legacyPath = legacySessionStateStorePath(options);
+    await mkdir(dirname(legacyPath), { recursive: true });
+    await writeFile(
+      legacyPath,
+      [
+        'version: 2',
+        'current:',
+        '  statusLine: "legacy report"',
+        '  reportedAt: 10',
+        'history:',
+        '  - statusLine: "older report"',
+        '    reportedAt: 5',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    await saveSessionStatusLine(path, 'new report', 20, legacyPath);
+
+    await expect(loadSessionStateStore(path)).resolves.toEqual({
+      current: { statusLine: 'new report', reportedAt: 20 },
+      history: [
+        { statusLine: 'older report', reportedAt: 5 },
+        { statusLine: 'legacy report', reportedAt: 10 },
+      ],
+    });
+    await expect(loadSessionStateStore(legacyPath)).resolves.toMatchObject({
+      current: { statusLine: 'legacy report', reportedAt: 10 },
+    });
+  });
+
   it('keeps history within both the entry-count and serialized-size limits', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-session-state-'));
+    repoRoot = await createHome('ensemble-session-state-');
     const path = sessionStateStorePath({
       repoRoot,
       conductorAgentId: 'agent-bounded',

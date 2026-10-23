@@ -19,7 +19,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
   ],
   terms: [
     '- **operator**: user を支援し、conductor と workers を横断して監督する役割',
-    '- **SessionResumeStore**: `.ensemble/sessions/` に保存する、harness がセッション再開に使う状態',
+    '- **SessionResumeStore**: `~/.ensemble/sessions/<repoKey>/` に保存する、harness がセッション再開に使う状態',
   ],
   methodology: [
     'user は operator-agent と対話し、operator-agent は監視対象 session の UDS snapshot、SessionResumeStore、各 YAML を使って conductor の状況を把握する。',
@@ -45,7 +45,7 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       type: 'subsection',
       title: 'list_operator_sessions',
       items: [
-        '- `.ensemble/sessions/` にある SessionResumeStore と状態 YAML を読み、watch が直近に観測した live connectivity があれば添える読み取り専用ツールです。一覧取得のたびに UDS probe はしません',
+        '- `~/.ensemble/sessions/<repoKey>/` にある SessionResumeStore と状態 YAML を読みます。旧 project `.ensemble/sessions/` も移行互換のため読み取ります。watch が直近に観測した live connectivity があれば添える読み取り専用ツールです。一覧取得のたびに UDS probe はしません',
         '- Issue URL と参照、`conductorAgentId`、conductor backend、profile、worker 名、open question 件数と要約、更新時刻、`dataAsOf` を返します。従来の `agentId` も互換のため残します',
         '- `statusLine` は conductor の最新報告（未報告・読み取り不可は `null`）、`reportedAt` は報告時刻です。`statusLineHistory` には直近の過去報告を古い順で返します（最大 50 件、状態ファイル全体で最大 16 KiB）',
         '- `persisted.harnessPhase` は最後に保存した `running` / `idle` / `close` / `abort` / `exit`、`persisted.modifiedAt` は harness 状態の更新時刻です。旧形式は `lifecycle` から読み替えられる場合があります',

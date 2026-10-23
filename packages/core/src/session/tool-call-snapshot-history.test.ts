@@ -1,7 +1,7 @@
-import { access, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdtemp as createTempDir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { StoredToolCallSnapshot } from '../runtime/tool-call-snapshot-registry.js';
 import {
   TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES,
@@ -31,11 +31,20 @@ describe('tool-call snapshot history', () => {
 
   afterEach(async () => {
     if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
+    vi.unstubAllEnvs();
     repoRoot = '';
   });
 
+  async function createHome(): Promise<string> {
+    const directory = await createTempDir(
+      join(tmpdir(), 'ensemble-tool-calls-'),
+    );
+    vi.stubEnv('HOME', directory);
+    return directory;
+  }
+
   it('round-trips a history file without making it a session resume store', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    repoRoot = await createHome();
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: 'agent-1',
@@ -54,7 +63,7 @@ describe('tool-call snapshot history', () => {
   });
 
   it('treats absent and corrupt history as optional data', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    repoRoot = await createHome();
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: 'agent-1',
@@ -81,7 +90,7 @@ describe('tool-call snapshot history', () => {
   });
 
   it('skips malformed entries while preserving valid history', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    repoRoot = await createHome();
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: 'agent-1',
@@ -110,7 +119,7 @@ describe('tool-call snapshot history', () => {
   });
 
   it('skips future-dated entries and marks the history for rewrite', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    repoRoot = await createHome();
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: 'agent-future-entry',
@@ -140,7 +149,7 @@ describe('tool-call snapshot history', () => {
   });
 
   it('discards legacy history formats without failing the session', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    repoRoot = await createHome();
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: 'agent-legacy',
@@ -172,7 +181,7 @@ describe('tool-call snapshot history', () => {
   });
 
   it('rejects a history larger than the configured file limit', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    repoRoot = await createHome();
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: 'agent-too-large',
@@ -189,7 +198,7 @@ describe('tool-call snapshot history', () => {
   });
 
   it('drops expired entries and deletes empty history files', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    repoRoot = await createHome();
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: 'agent-expired',
@@ -214,7 +223,7 @@ describe('tool-call snapshot history', () => {
   });
 
   it('removes inactive history files after the retention window', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    repoRoot = await createHome();
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: 'agent-inactive',
@@ -230,7 +239,7 @@ describe('tool-call snapshot history', () => {
   });
 
   it('removes expired atomic-write temp files', async () => {
-    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-tool-calls-'));
+    repoRoot = await createHome();
     const path = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: 'agent-stale-temp',

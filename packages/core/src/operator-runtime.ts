@@ -3,6 +3,11 @@
  * and the embedded backend without depending on the Issue session harness.
  */
 export { loadEnsembleConfig } from './config/load-ensemble-config.js';
+export {
+  resolveEnsemblePaths,
+  type EnsemblePaths,
+  type ResolveEnsemblePathsOptions,
+} from './ensemble-paths.js';
 export type { EnsembleConfig, EnsembleConfigControlConfig } from './config/types.js';
 export {
   resolveConductorBackendSetting,
@@ -73,11 +78,13 @@ export type {
 } from './session/open-question-control.js';
 export {
   loadOpenQuestionsStore,
+  legacyOpenQuestionsStorePath,
   openQuestionsStorePath,
 } from './session/open-questions-store.js';
 export type { OpenQuestionsStoreDocument } from './session/open-questions-store.js';
 export {
   loadSessionStateStore,
+  legacySessionStateStorePath,
   sessionStateStorePath,
   type SessionStateStore,
   type SessionStatusLine,

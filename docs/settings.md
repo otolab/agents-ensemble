@@ -19,6 +19,8 @@
 
 config は default → 選択された user config → project config（読み込み有効時）の順に **deep merge** します。`--config <path>` を指定した場合は明示ファイルを user config 層として使い、標準 user config は読み込みません。project config は `config.loadProjectConfig` が有効な場合に適用され、同じキーは project config が優先します。この toggle は選択された user config から解決するため、明示ファイルにも指定できます。秘密情報（token 本体）は **config に平文で書かない**（[config.md](config.md)）。
 
+セッションの再開状態、Open Question / operator status YAML、tool-call 履歴、operator-agent の watch 状態、Pi transcript は `~/.ensemble/` に repo ごとに保存します。repoKey は正規化した絶対 `repoRoot` の SHA-256 です。project `.ensemble/` は team profile と repo 固有 config / Pi resources を置く層です。isolated worktree は Git の repo 登録に加え、現行の解決・再利用処理が project-local path を前提とするため `<repoRoot>/.ensemble/worktrees/issue-N` に残します。配置・旧保存先からの移行方針は [ADR 0044](adr/0044-user-scoped-runtime-storage.md) を参照してください。
+
 ## 解決パターン
 
 すべての項目が同じ順序ではない。実装は `packages/core/src/config/resolve-settings.ts` の `resolve*Setting` か、各機能の専用解決関数に従う。
@@ -46,7 +48,7 @@ user 層の差し替えは [ADR 0042](adr/0042-explicit-config-replaces-user-lay
 Session resume state conductorBackend mismatch: pi !== cursor
 ```
 
-旧 SessionResumeStore にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `<conductor-cwd>/.ensemble/pi/sessions/` の JSONL に保存されます。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
+旧 SessionResumeStore にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `~/.ensemble/sessions/<repoKey>/pi/` の JSONL に保存されます。旧 `<conductorCwd>/.ensemble/pi/sessions/` は再開時に読み取り、user 側へ移行します。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
 
 SessionResumeStore には起動時の実効 ensemble config の canonical SHA-256 digest も保存します。resume 時に digest が異なる場合は conductor の再開前に拒否し、digest を持たない旧 store は警告後に従来どおり再開します。config 値やファイルパスは保存しません。ACP spawn env も canonical digest のみを保存し、値は記録しません。
 

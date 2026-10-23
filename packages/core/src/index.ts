@@ -2,6 +2,7 @@
 
 export const PACKAGE_NAME = '@agents-ensemble/core';
 
+export * from './ensemble-paths.js';
 export * from './config/index.js';
 export * from './mcp/index.js';
 export * from './acp/index.js';

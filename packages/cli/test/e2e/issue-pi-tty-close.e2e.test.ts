@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
+import { resolveEnsemblePaths } from '@agents-ensemble/core';
 import { CLI_ENTRY } from './test-helpers.js';
 
 const ISSUE_URL = 'https://github.com/fixture/fixture/issues/1';
@@ -553,7 +554,10 @@ globalThis.fetch = async (input, init) => {
       expect(firstRun.summary.stopReason).toBe('completed');
       expect(model.getRequests()).toBeGreaterThanOrEqual(1);
 
-      const resumeStoreDir = join(repoRoot, '.ensemble', 'sessions');
+      const resumeStoreDir = resolveEnsemblePaths({
+        repoRoot,
+        home: env.HOME,
+      }).sessionsDir;
       const resumeStoreNames = (await readdir(resumeStoreDir)).filter((name) =>
         name.endsWith('.json'),
       );

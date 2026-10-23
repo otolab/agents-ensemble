@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
+  legacyOpenQuestionsStorePath,
+  legacySessionStateStorePath,
   listSessionResumeStores,
   loadOpenQuestionsStore,
   loadSessionStateStore,
@@ -12,6 +14,7 @@ import {
   OpenQuestionControlTransportError,
   sendOpenQuestionControlRequest,
   sessionStateStorePath,
+  resolveEnsemblePaths,
   type OpenQuestionControlConductorMessage,
   type ConductorJsonValue,
   type ConductorTool,
@@ -101,7 +104,7 @@ export interface CreateOperatorWatchPoolOptions {
 }
 
 export function operatorWatchStatePath(repoRoot: string): string {
-  return join(repoRoot, '.ensemble', 'operator-agent', 'watch-state.json');
+  return resolveEnsemblePaths({ repoRoot }).operatorWatchStatePath;
 }
 
 export async function createOperatorWatchPool(
@@ -109,7 +112,13 @@ export async function createOperatorWatchPool(
 ): Promise<OperatorWatchPool> {
   const root = options.repoRoot;
   const path = operatorWatchStatePath(root);
-  const state = await loadWatchState(path);
+  const paths = resolveEnsemblePaths({ repoRoot: root });
+  const legacyPath = paths.legacyOperatorWatchStatePath;
+  let state = await loadWatchState(path);
+  if (!(await pathExists(path)) && (await pathExists(legacyPath))) {
+    state = await loadWatchState(legacyPath);
+    await saveWatchState(path, state);
+  }
   const timers = new Map<string, NodeJS.Timeout>();
   const polling = new Set<string>();
   const messageTimers = new Map<string, NodeJS.Timeout>();
@@ -793,17 +802,13 @@ async function readObservation(
         error instanceof OpenQuestionControlTransportError
           ? 'unreachable'
           : 'unknown';
-      const questions = await loadOpenQuestionsStore(
-        openQuestionsStorePath({
-          repoRoot,
-          conductorAgentId: resumeStore.conductorAgentId,
-        }),
+      const questions = await loadPersistedOpenQuestions(
+        repoRoot,
+        resumeStore.conductorAgentId,
       );
-      const sessionState = await loadSessionStateStore(
-        sessionStateStorePath({
-          repoRoot,
-          conductorAgentId: resumeStore.conductorAgentId,
-        }),
+      const sessionState = await loadPersistedSessionState(
+        repoRoot,
+        resumeStore.conductorAgentId,
       );
       return {
         snapshot: {
@@ -816,11 +821,13 @@ async function readObservation(
       };
     }
   }
-  const questions = await loadOpenQuestionsStore(
-    openQuestionsStorePath({ repoRoot, conductorAgentId: resumeStore.conductorAgentId }),
+  const questions = await loadPersistedOpenQuestions(
+    repoRoot,
+    resumeStore.conductorAgentId,
   );
-  const sessionState = await loadSessionStateStore(
-    sessionStateStorePath({ repoRoot, conductorAgentId: resumeStore.conductorAgentId }),
+  const sessionState = await loadPersistedSessionState(
+    repoRoot,
+    resumeStore.conductorAgentId,
   );
   return {
     snapshot: {
@@ -831,6 +838,38 @@ async function readObservation(
     source: 'resume_store',
     connectivity: 'unknown',
   };
+}
+
+async function loadPersistedOpenQuestions(
+  repoRoot: string,
+  conductorAgentId: string,
+) {
+  const input = { repoRoot, conductorAgentId };
+  return (
+    (await loadOpenQuestionsStore(openQuestionsStorePath(input))) ??
+    (await loadOpenQuestionsStore(legacyOpenQuestionsStorePath(input)))
+  );
+}
+
+async function loadPersistedSessionState(
+  repoRoot: string,
+  conductorAgentId: string,
+) {
+  const input = { repoRoot, conductorAgentId };
+  return (
+    (await loadSessionStateStore(sessionStateStorePath(input))) ??
+    (await loadSessionStateStore(legacySessionStateStorePath(input)))
+  );
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (error) {
+    if (isEnoent(error)) return false;
+    throw error;
+  }
 }
 
 function collectReports(

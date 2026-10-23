@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   OPEN_QUESTION_CONTROL_METHODS,
   OpenQuestionControlRemoteError,
@@ -20,7 +20,13 @@ import {
 
 describe('operator watch pool', () => {
   let repoRoot = '';
+  let homeRoot = '';
   let closeServers: Array<() => Promise<void>> = [];
+
+  beforeEach(async () => {
+    homeRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-home-'));
+    vi.stubEnv('HOME', homeRoot);
+  });
 
   afterEach(async () => {
     vi.useRealTimers();
@@ -28,6 +34,57 @@ describe('operator watch pool', () => {
     closeServers = [];
     if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
     repoRoot = '';
+    if (homeRoot) await rm(homeRoot, { recursive: true, force: true });
+    homeRoot = '';
+    vi.unstubAllEnvs();
+  });
+
+  it('migrates legacy project watch state into the user-scoped repository directory', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-legacy-'));
+    const legacyPath = join(
+      repoRoot,
+      '.ensemble',
+      'operator-agent',
+      'watch-state.json',
+    );
+    const legacyState = {
+      version: 1,
+      watches: {
+        'session-one': {
+          conductorAgentId: 'session-one',
+          pollIntervalMs: 60_000,
+          debounceMs: 0,
+        },
+      },
+      cursors: {},
+      pendingReports: [],
+    };
+    await mkdir(dirname(legacyPath), { recursive: true });
+    await writeFile(legacyPath, JSON.stringify(legacyState), 'utf8');
+
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      expect(pool.list()).toEqual([
+        {
+          conductorAgentId: 'session-one',
+          pollIntervalMs: 60_000,
+          debounceMs: 0,
+        },
+      ]);
+      expect(
+        JSON.parse(await readFile(operatorWatchStatePath(repoRoot), 'utf8')),
+      ).toEqual({
+        ...legacyState,
+        messageListeners: {},
+        messageCursors: {},
+      });
+      expect(JSON.parse(await readFile(legacyPath, 'utf8'))).toEqual(legacyState);
+    } finally {
+      pool.close();
+    }
   });
 
   it('watches multiple sessions through live UDS and persists cursors without replay', async () => {
@@ -381,9 +438,7 @@ describe('operator watch pool', () => {
       },
     ];
     const statePath = operatorWatchStatePath(repoRoot);
-    await mkdir(join(repoRoot, '.ensemble', 'operator-agent'), {
-      recursive: true,
-    });
+    await mkdir(dirname(statePath), { recursive: true });
 
     for (const invalidState of invalidStates) {
       await writeFile(statePath, JSON.stringify(invalidState));
@@ -421,9 +476,7 @@ describe('operator watch pool', () => {
       [{ ...validReport, debounceMs: 10_001 }],
     ];
     const statePath = operatorWatchStatePath(repoRoot);
-    await mkdir(join(repoRoot, '.ensemble', 'operator-agent'), {
-      recursive: true,
-    });
+    await mkdir(dirname(statePath), { recursive: true });
 
     for (const pendingReports of invalidPendingReports) {
       await writeFile(

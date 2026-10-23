@@ -334,7 +334,7 @@ Pi の `settings.md` にあるが headless conductor が適用しないキーは
 | `defaultTools` / `codemode.*` | `defaultTools` は headless conductor では無視します。built-in coding tools は profile の `conductor.builtinTools`（省略・未指定は有効、`false` のみ無効）で制御し、`config.yaml` には同キーを設けません。 |
 | `packages` | Pi package の install・解決。package が提供する resource は自動導入しません。 |
 | `enableSkillCommands` | skill command の登録 toggle。読み込んだ skill の `/skill:<name>` 展開可否はこのキーで変更できません。 |
-| `sessionDir` | Pi の settings にある session 保存先は conductor では変更できません。transcript は常に harness が `<repoRoot>/.ensemble/pi/sessions/` で管理します。 |
+| `sessionDir` | Pi の settings にある session 保存先は conductor では変更できません。transcript は `~/.ensemble/sessions/<repoKey>/pi/` に保存し、旧 `<conductorCwd>/.ensemble/pi/sessions/` から再開時に移行します。 |
 | `theme` / `quietStartup` / `tuiMode` / `fullscreen*` / `terminal.*` / `images.*` / `markdown.*` | headless conductor の TUI・terminal 表示 |
 | `transport` / `httpProxy` / `httpIdleTimeoutMs` / `websocketConnectTimeoutMs` / `retry.*` / `shellPath` / `shellCommandPrefix` / `npmCommand` | Pi coding-agent の network、shell、package runtime |
 | `collapseChangelog` / `enableInstallTelemetry` / `enableAnalytics` / `warnings.*` | coding-agent の update、telemetry、UI warning |

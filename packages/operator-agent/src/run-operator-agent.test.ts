@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,6 +21,7 @@ import {
   type OperatorAgentOutput,
 } from './run-operator-agent.js';
 import { operatorWatchStatePath } from './operator-watch-pool.js';
+import { operatorAgentStatePath } from './operator-agent-state.js';
 
 describe('runOperatorAgent', () => {
   let repoRoot = '';
@@ -31,6 +32,7 @@ describe('runOperatorAgent', () => {
 
   beforeEach(async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-agent-'));
+    vi.stubEnv('HOME', repoRoot);
     originalModelEnv = process.env.CONDUCTOR_MODEL_ID;
     originalProfileEnv = process.env.ENSEMBLE_DEFAULT_PROFILE;
     originalNoColorEnv = process.env.NO_COLOR;
@@ -115,6 +117,7 @@ describe('runOperatorAgent', () => {
       process.env.NO_COLOR = originalNoColorEnv;
     }
     await rm(repoRoot, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   it('requires both terminal streams before loading config or starting an agent', async () => {
@@ -292,7 +295,7 @@ describe('runOperatorAgent', () => {
       'send_operator_message',
     ]);
     await expect(
-      readFile(join(repoRoot, '.ensemble', 'operator-agent', 'session.json')),
+      readFile(operatorAgentStatePath(repoRoot)),
     ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -1103,7 +1106,7 @@ describe('runOperatorAgent', () => {
         agentFactory,
       },
     );
-    const statePath = join(repoRoot, '.ensemble', 'operator-agent', 'session.json');
+    const statePath = operatorAgentStatePath(repoRoot);
     const savedState = JSON.parse(await readFile(statePath, 'utf8')) as {
       version: number;
       agentId: string;
@@ -1165,15 +1168,21 @@ describe('runOperatorAgent', () => {
 
     expect(close).toHaveBeenCalledOnce();
     await expect(
-      readFile(join(repoRoot, '.ensemble', 'operator-agent', 'session.json'), 'utf8'),
+      readFile(operatorAgentStatePath(repoRoot), 'utf8'),
     ).resolves.toContain('operator-agent-id');
   });
 
   it('starts fresh with --new and replaces the saved session identity', async () => {
-    const statePath = join(repoRoot, '.ensemble', 'operator-agent', 'session.json');
-    await mkdir(join(repoRoot, '.ensemble', 'operator-agent'), { recursive: true });
+    const statePath = operatorAgentStatePath(repoRoot);
+    const legacyStatePath = join(
+      repoRoot,
+      '.ensemble',
+      'operator-agent',
+      'session.json',
+    );
+    await mkdir(dirname(legacyStatePath), { recursive: true });
     await writeFile(
-      statePath,
+      legacyStatePath,
       JSON.stringify({
         version: 1,
         agentId: 'old-operator-agent-id',
@@ -1200,6 +1209,9 @@ describe('runOperatorAgent', () => {
     await expect(readFile(statePath, 'utf8')).resolves.toContain(
       'operator-agent-id',
     );
+    await expect(readFile(legacyStatePath, 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('adds the operator prompt to the first Cursor SDK turn', async () => {

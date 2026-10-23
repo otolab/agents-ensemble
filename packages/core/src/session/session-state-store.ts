@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import yaml from 'js-yaml';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 export const SESSION_STATE_STORE_VERSION = 2;
 export const SESSION_STATUS_LINE_MAX_LENGTH = 80;
@@ -27,13 +28,17 @@ export interface SessionStateStore {
 export function sessionStateStorePath(
   options: SessionStatePathOptions,
 ): string {
-  return join(
-    options.repoRoot,
-    '.ensemble',
-    'sessions',
+  return resolveEnsemblePaths({ repoRoot: options.repoRoot }).sessionStatePath(
     options.conductorAgentId,
-    'session-state.yaml',
   );
+}
+
+export function legacySessionStateStorePath(
+  options: SessionStatePathOptions,
+): string {
+  return resolveEnsemblePaths({
+    repoRoot: options.repoRoot,
+  }).legacySessionStatePath(options.conductorAgentId);
 }
 
 export async function loadSessionStateStore(
@@ -57,9 +62,12 @@ export async function saveSessionStatusLine(
   path: string,
   statusLine: string,
   reportedAt = Date.now(),
+  legacyPath?: string,
 ): Promise<void> {
   const current = parseSessionStatusLine({ statusLine, reportedAt });
-  const existing = await loadSessionStateStore(path);
+  const existing =
+    (await loadSessionStateStore(path)) ??
+    (legacyPath ? await loadSessionStateStore(legacyPath) : undefined);
   const next = {
     current,
     history: boundHistory(
@@ -71,10 +79,16 @@ export async function saveSessionStatusLine(
     ),
   };
 
-  await mkdir(dirname(path), { recursive: true });
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
   const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await writeFile(tempPath, serializeSessionStateStore(next), 'utf8');
+    await writeFile(tempPath, serializeSessionStateStore(next), {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    await chmod(tempPath, 0o600);
     await rename(tempPath, path);
   } catch (error) {
     // A failed rename must not leave temporary state that looks like a store.
