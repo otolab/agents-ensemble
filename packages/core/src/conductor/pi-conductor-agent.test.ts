@@ -56,9 +56,11 @@ vi.mock('@earendil-works/pi-coding-agent', async () => {
 });
 
 import {
+  createPiConductorAgentFactory,
   PiConductorAgent,
   resolvePiModelConfig,
 } from './pi-conductor-agent.js';
+import { sendConductorWithReconnect } from './conductor-send-reconnect.js';
 
 describe('PiConductorAgent', () => {
   let cwd = '';
@@ -1065,6 +1067,100 @@ describe('PiConductorAgent', () => {
       },
     });
     await conductor.close();
+  });
+
+  it('recovers a Pi !command credential after 401 by resuming and retrying the same prompt', async () => {
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    const keyFile = join(cwd, 'dynamic-key.txt');
+    await writeFile(keyFile, 'expired-key');
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            apiKey: `!cat ${keyFile}`,
+            authHeader: true,
+            models: [{ id: 'review-model', name: 'Review model' }],
+          },
+        },
+      }),
+    );
+    mockGetModel.mockReturnValue(undefined);
+    mockSessionManagerFindById.mockReturnValue('/tmp/pi-dynamic-auth.jsonl');
+
+    const prompts: string[] = [];
+    fakeSession.prompt.mockImplementation(async (prompt: string) => {
+      prompts.push(prompt);
+      const sessionOptions = mockCreateAgentSession.mock.calls.at(-1)![0];
+      const authorization = sessionOptions.model.headers.Authorization;
+      if (authorization === 'Bearer expired-key') {
+        await writeFile(keyFile, 'fresh-key');
+        throw new Error(
+          'litellm API error (401): Your client does not have permission',
+        );
+      }
+
+      expect(authorization).toBe('Bearer fresh-key');
+      const finalMessage = {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Recovered with fresh auth.' }],
+        model: 'review-model',
+        stopReason: 'stop',
+        usage: {
+          input: 1,
+          output: 1,
+          totalTokens: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: { total: 0 },
+        },
+      };
+      fakeSession.state.messages = [finalMessage];
+      sessionListener?.({
+        type: 'agent_end',
+        messages: [finalMessage],
+        willRetry: false,
+      });
+    });
+
+    const factory = createPiConductorAgentFactory();
+    const conductorOptions = {
+      cwd,
+      pi: { agentDir, projectDir },
+      modelId: 'local/review-model',
+      systemPrompt: 'operator auth regression',
+    };
+    const handle = {
+      conductor: await factory.create(conductorOptions),
+    };
+    const result = await sendConductorWithReconnect(
+      handle,
+      'same prompt after expired credential',
+      {
+        conductorAgentFactory: factory,
+        conductorOptions,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: 'finished',
+      result: 'Recovered with fresh auth.',
+    });
+    expect(prompts).toEqual([
+      'same prompt after expired credential',
+      'same prompt after expired credential',
+    ]);
+    expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
+    expect(mockCreateAgentSession.mock.calls[0]![0].model.headers).toEqual({
+      Authorization: 'Bearer expired-key',
+    });
+    expect(mockCreateAgentSession.mock.calls[1]![0].model.headers).toEqual({
+      Authorization: 'Bearer fresh-key',
+    });
+    await handle.conductor.close();
   });
 
   it('reports a failed custom models.json !command through create', async () => {
