@@ -233,7 +233,7 @@ Response:
 {"jsonrpc":"2.0","id":5,"result":{"messages":[{"text":"回答本文","inbound":"## Open Question 追加\n...","at":1792512003000,"sendCount":44,"dispatchSource":"operator"}],"hasMore":true}}
 ```
 
-`messages` は要求された順序で並びます。`hasMore` は同じ filter の結果に次ページがあることを示します。通常の keyset pagination では、返却末尾の `sendCount` を次の `cursor` に渡してください。`dispatchSource` は識別可能な場合に限って付きます。operator-agent の `list_conductor_messages` は同じページング規約を使います。既存の `get_last_conductor_message` / `session.last_conductor_message.get` は応答本文・`at`・`sendCount` のみを返し、変更しません。
+`messages` は要求された順序で並びます。`hasMore` は同じ filter の結果に次ページがあることを示します。通常の keyset pagination では、返却末尾の `sendCount` を次の `cursor` に渡してください。`dispatchSource` は識別可能な場合に限って付きます。operator-agent の `list_conductor_messages` は provider history 上の別 API で、`providerId` string cursor を使います。既存の `get_last_conductor_message` / `session.last_conductor_message.get` は応答本文・`at`・`sendCount` のみを返し、変更しません。
 
 UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です。list の JSON response 全体がこの上限を超えると、部分結果や切り詰めた inbound は返さず、JSON-RPC `-32603` / `Response is too large.` を返します。1件だけの要求でも、その1件の全文 inbound を含む response が上限を超えれば同じ error になります。単独の1件だけが上限超過の原因と特定できる場合、error の `data.oversizedSendCount` にその `sendCount` が付きます。これは listen が cursor を進めるための識別情報で、list の呼び出し自体は引き続き error です。上限内に収まる場合は inbound 全文を返します。
 
@@ -254,7 +254,7 @@ limit 1 でも単独 response が上限を超える発言に達した場合、�
 operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / cwd を使い、SDK が保存した local session history から最大 100 件を読みます。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。
 
 - **共通 filter:** user inbound と final assistant response だけを返します。system prompt、tool call / result、thinking、その他 provider event は出力しません。bootstrap、失敗・cancelled・running・空 response は対象外です。inbound の secret redaction は行わず、既存の同一 OS user access boundary が適用されます。
-- **Pi 1.2.0:** active branch の user / assistant entry ID を custom metadata から引き、保存済み本文を再構成します。metadata に本文は複製せず、LLM context にも入りません。順序は active branch の履歴順、`at` は harness が記録した send 完了時刻（Unix ms）、`providerId` は final assistant entry ID です。別 branch に移った発言は一覧から外れます。初回 `initial` send は marker を作りません。
+- **Pi 1.2.0:** active branch の user / assistant entry ID を custom metadata から引き、保存済み本文を再構成します。metadata に本文は複製せず、LLM context にも入りません。順序は active branch の履歴順、`at` は harness が記録した send 完了時刻（Unix ms）、`providerId` は final assistant entry ID です。別 branch に移った発言は一覧から外れます。初回 `initial` send は marker を作りません。機能導入前のPi sessionは過去のtranscriptを遡ってmarker付けしません。そのため、session内で一覧に出るのはcustom metadataを記録したsendだけです。markerが一件もないsessionは、session fileを正常に読める限りエラーではなく、空一覧（`messages: []`, `hasMore: false`）を返します。
 - **Cursor 1.0.27:** pinned `Agent.listRuns()` / `Agent.getRun()` と run の `conversation()` から再構成し、cursor pagination で直近 100 件を選びます。順序は SDK run order、`at` は run 作成時刻（Unix ms）、`providerId` は run ID、取得できる場合は `requestId` も返します。新規 session は bootstrap run ID を SessionResumeStore に保存します。これを持たない既存 session では先頭 run を bootstrap とみなします。Cursor は `sendCount` / `dispatchSource` を提供しないため、それらの field は返しません。
 - **ページング:** `order` は provider history order の `asc` / `desc`、`cursor` は返却行の `providerId` を使う排他的境界です。`hasMore` は保持対象の直近 100 件内に次ページがある場合に true です。Pi の `sendCount` / `dispatchSource` は harness metadata で、Cursor の provider ID / request ID と共通通し番号ではありません。
 - **retention:** Pi JSONL と Cursor local store の保持・削除期間は SDK / local store の管理に委ねます。今回、長期保持や削除保証は追加しません。Pi では active branch と marker が参照する entry が必要です。Cursor では対象 run と conversation が必要です。

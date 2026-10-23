@@ -115,6 +115,43 @@ describe('listConductorProviderHistory', () => {
     ).toBe(false);
   });
 
+  it('does not backfill pre-feature Pi transcripts without history markers', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-legacy-'));
+    const sessionDir = join(tempDir, PI_SESSION_ROOT);
+    const manager = SessionManager.create(tempDir, sessionDir, {
+      id: 'legacy-pi-history-agent',
+    });
+    manager.appendMessage({
+      role: 'user',
+      content: 'legacy inbound',
+      timestamp: Date.now(),
+    });
+    manager.appendMessage({
+      role: 'assistant',
+      content: 'legacy response',
+      timestamp: Date.now(),
+    });
+
+    expect(
+      manager
+        .getBranch()
+        .some(
+          (entry) =>
+            entry.type === 'custom' &&
+            entry.customType === PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE,
+        ),
+    ).toBe(false);
+
+    await expect(
+      listConductorProviderHistory({
+        backend: 'pi',
+        conductorAgentId: 'legacy-pi-history-agent',
+        cwd: tempDir,
+        query: { limit: 20, order: 'desc' },
+      }),
+    ).resolves.toEqual({ messages: [], hasMore: false });
+  });
+
   it('uses Cursor run API pagination, excludes bootstrap and unsuccessful runs, and exposes only user/final text', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-cursor-history-'));
     const run1 = cursorRun(
