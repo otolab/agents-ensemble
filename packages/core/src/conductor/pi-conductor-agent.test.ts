@@ -94,7 +94,11 @@ describe('PiConductorAgent', () => {
       abort: vi.fn().mockResolvedValue(undefined),
       dispose: vi.fn(),
     };
-    fakeSessionManager = {};
+    fakeSessionManager = {
+      getBranch: vi.fn(() => []),
+      appendCustomEntry: vi.fn(),
+    };
+    fakeSession.sessionManager = fakeSessionManager;
     mockSessionManagerCreate.mockReset();
     mockSessionManagerCreate.mockReturnValue(fakeSessionManager);
     mockSessionManagerFindById.mockReset();
@@ -404,6 +408,175 @@ describe('PiConductorAgent', () => {
     });
     await conductor.close();
   });
+
+  it('records only successful non-bootstrap final responses as ID-only custom metadata', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+    const branchEntry = (id: string, role: 'user' | 'assistant', text: string) => ({
+      type: 'message',
+      id,
+      message: {
+        role,
+        content: [
+          ...(role === 'assistant'
+            ? [
+                { type: 'thinking', thinking: 'THINKING_SECRET' },
+                {
+                  type: 'toolCall',
+                  id: 'tool-1',
+                  name: 'shell',
+                  arguments: { command: 'TOOL_SECRET' },
+                },
+              ]
+            : []),
+          { type: 'text', text },
+        ],
+      },
+    });
+    const inbound = branchEntry('user-entry', 'user', 'formatted inbound');
+    const response = branchEntry('assistant-entry', 'assistant', 'final answer');
+    fakeSessionManager.getBranch.mockReturnValue([inbound, response]);
+    fakeSession.prompt.mockImplementation(async () => {
+      const finalMessage = {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'THINKING_SECRET' },
+          {
+            type: 'toolCall',
+            id: 'tool-1',
+            name: 'shell',
+            arguments: { command: 'TOOL_SECRET' },
+          },
+          { type: 'text', text: 'final answer' },
+        ],
+        model: 'model-1',
+        stopReason: 'stop',
+        usage: { input: 1, output: 1, totalTokens: 2 },
+      };
+      fakeSession.state.messages = [finalMessage];
+      sessionListener?.({ type: 'agent_end', messages: [finalMessage] });
+    });
+
+    const result = await conductor.send('formatted inbound', {
+      history: { sendCount: 9, dispatchSource: 'worker:reviewer' },
+    });
+    expect(result).toMatchObject({ status: 'finished', result: 'final answer' });
+    expect(fakeSessionManager.appendCustomEntry).toHaveBeenCalledOnce();
+    expect(fakeSessionManager.appendCustomEntry).toHaveBeenCalledWith(
+      'agents-ensemble/conductor-message-history/v1',
+      {
+        inboundEntryId: 'user-entry',
+        responseEntryId: 'assistant-entry',
+        completedAt: expect.any(Number),
+        sendCount: 9,
+        dispatchSource: 'worker:reviewer',
+      },
+    );
+    const metadata = JSON.stringify(
+      fakeSessionManager.appendCustomEntry.mock.calls[0],
+    );
+    expect(metadata).not.toContain('formatted inbound');
+    expect(metadata).not.toContain('final answer');
+    expect(metadata).not.toContain('TOOL_SECRET');
+    expect(metadata).not.toContain('THINKING_SECRET');
+    await conductor.close();
+  });
+
+  it('does not persist an in-progress send before its final response arrives', async () => {
+    let finishPrompt!: () => void;
+    fakeSession.prompt.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishPrompt = resolve;
+      }),
+    );
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+    const send = conductor.send('in progress', {
+      history: { sendCount: 2, dispatchSource: 'operator' },
+    });
+
+    await vi.waitFor(() => expect(fakeSession.prompt).toHaveBeenCalledOnce());
+    expect(fakeSessionManager.appendCustomEntry).not.toHaveBeenCalled();
+
+    const finalMessage = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'finished answer' }],
+      model: 'model-1',
+      stopReason: 'stop',
+      usage: { input: 1, output: 1, totalTokens: 2 },
+    };
+    fakeSessionManager.getBranch.mockReturnValue([
+      {
+        type: 'message',
+        id: 'in-progress-user',
+        message: { role: 'user', content: 'in progress' },
+      },
+      {
+        type: 'message',
+        id: 'in-progress-response',
+        message: { role: 'assistant', content: 'finished answer' },
+      },
+    ]);
+    fakeSession.state.messages = [finalMessage];
+    sessionListener?.({ type: 'agent_end', messages: [finalMessage] });
+    finishPrompt();
+
+    await expect(send).resolves.toMatchObject({
+      status: 'finished',
+      result: 'finished answer',
+    });
+    expect(fakeSessionManager.appendCustomEntry).toHaveBeenCalledOnce();
+    await conductor.close();
+  });
+
+  it.each([
+    ['failed', 'error', 'partial response'],
+    ['cancelled', 'aborted', 'partial response'],
+    ['empty', 'stop', ''],
+    ['bootstrap', 'stop', 'bootstrap response'],
+  ] as const)(
+    'does not persist %s responses in the durable list',
+    async (caseName, stopReason, responseText) => {
+      const conductor = await PiConductorAgent.create({
+        cwd,
+        pi: { agentDir },
+        modelId: 'anthropic/model-1',
+        systemPrompt: 'system',
+      });
+      fakeSessionManager.appendCustomEntry.mockClear();
+      fakeSession.prompt.mockImplementation(async () => {
+        const finalMessage = {
+          role: 'assistant',
+          content: responseText
+            ? [{ type: 'text', text: responseText }]
+            : [],
+          model: 'model-1',
+          stopReason,
+          usage: { input: 1, output: 1, totalTokens: 2 },
+        };
+        fakeSession.state.messages = [finalMessage];
+        sessionListener?.({ type: 'agent_end', messages: [finalMessage] });
+      });
+
+      await conductor.send('prompt', {
+        history: {
+          sendCount: 1,
+          dispatchSource: caseName === 'bootstrap' ? 'initial' : 'operator',
+        },
+      });
+
+      expect(fakeSessionManager.appendCustomEntry).not.toHaveBeenCalled();
+      await conductor.close();
+    },
+  );
 
   it('counts only successful compaction_end events and ignores missing, failed, or aborted results', async () => {
     const onContextCompaction = vi.fn();

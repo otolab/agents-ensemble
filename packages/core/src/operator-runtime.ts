@@ -16,6 +16,13 @@ export {
 export type { ConductorBackend } from './config/types.js';
 export { resolveConductorModelId } from './conductor/resolve-conductor-model-id.js';
 export { createConductorAgentFactory } from './conductor/conductor-agent-factory.js';
+export {
+  CONDUCTOR_PROVIDER_HISTORY_LIMIT,
+  listConductorProviderHistory,
+  type ConductorProviderHistoryMessage,
+  type ConductorProviderHistoryQuery,
+  type ConductorProviderHistoryResult,
+} from './conductor/conductor-history.js';
 export { isOperatorCommand } from './conductor/operator-command.js';
 export {
   formatConductorAuthRecoveryHint,

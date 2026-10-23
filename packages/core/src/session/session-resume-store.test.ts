@@ -78,6 +78,8 @@ describe('SessionResumeStore', () => {
       workers: {
         implementer: { acpSessionId: 'sess-1', acpCwd: '/repo/docs' },
       },
+      conductorCwd: '/repo/.ensemble/worktrees/issue-1',
+      cursorBootstrapRunId: 'run-bootstrap-1',
       lazyWorkers: true,
       githubMonitor: {
         pullRequests: {},
@@ -298,6 +300,8 @@ describe('SessionResumeStore', () => {
 
     expect(loaded?.conductorBackend).toBe('cursor');
     expect(loaded?.lazyWorkers).toBeUndefined();
+    expect(loaded).not.toHaveProperty('conductorCwd');
+    expect(loaded).not.toHaveProperty('cursorBootstrapRunId');
   });
 
   it('rejects a conductor backend mismatch on resume validation', () => {

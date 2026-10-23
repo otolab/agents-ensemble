@@ -80,6 +80,11 @@ export interface ConductorToolCallStartedInfo {
 
 export interface ConductorSendCallbacks {
   onToolCallStarted?: (info: ConductorToolCallStartedInfo) => void;
+  /** Harness metadata used by provider history projections; never sent to the model. */
+  history?: {
+    sendCount: number;
+    dispatchSource?: string;
+  };
 }
 
 /** Backend-neutral conductor session handle used by the harness. */

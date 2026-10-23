@@ -78,6 +78,10 @@ export interface SessionResumeStore {
   conductorAgentId: string;
   /** 起動時に選択した conductor backend。旧形式の欠落値は cursor。 */
   conductorBackend?: ConductorBackend;
+  /** Conductor SDK session を作成した working directory。 */
+  conductorCwd?: string;
+  /** Cursor local run API で bootstrap run を除外するための ID。 */
+  cursorBootstrapRunId?: string;
   /** 初回 `prompt_worker` まで ACP attach を遅延する。旧形式は eager。 */
   lazyWorkers?: boolean;
   /** 稼働中 session の local control socket。teardown 時に除去する。 */
@@ -459,6 +463,20 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     throw new Error('Invalid session resume store: harnessSocketPath');
   }
   if (
+    record.conductorCwd !== undefined &&
+    (typeof record.conductorCwd !== 'string' ||
+      record.conductorCwd.trim() === '')
+  ) {
+    throw new Error('Invalid session resume store: conductorCwd');
+  }
+  if (
+    record.cursorBootstrapRunId !== undefined &&
+    (typeof record.cursorBootstrapRunId !== 'string' ||
+      record.cursorBootstrapRunId.trim() === '')
+  ) {
+    throw new Error('Invalid session resume store: cursorBootstrapRunId');
+  }
+  if (
     record.lifecycle !== undefined &&
     record.lifecycle !== 'closed' &&
     record.lifecycle !== 'exited' &&
@@ -516,6 +534,12 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     version: SESSION_RESUME_STORE_VERSION,
     conductorAgentId: record.conductorAgentId,
     conductorBackend,
+    ...(typeof record.conductorCwd === 'string'
+      ? { conductorCwd: record.conductorCwd }
+      : {}),
+    ...(typeof record.cursorBootstrapRunId === 'string'
+      ? { cursorBootstrapRunId: record.cursorBootstrapRunId }
+      : {}),
     ...(typeof record.lazyWorkers === 'boolean'
       ? { lazyWorkers: record.lazyWorkers }
       : {}),

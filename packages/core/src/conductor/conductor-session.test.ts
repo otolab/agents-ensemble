@@ -399,7 +399,9 @@ describe('runConductorSession resume / shutdown', () => {
     );
     expect(mockSend).toHaveBeenCalledWith(
       expect.stringContaining(TEST_ISSUE.url),
-      expect.any(Object),
+      expect.objectContaining({
+        history: { sendCount: 1, dispatchSource: 'initial' },
+      }),
     );
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
   });
@@ -725,6 +727,37 @@ describe('runConductorSession resume / shutdown', () => {
     expect(resumeStore?.conductorBackend).toBe('pi');
   });
 
+  it('persists the Cursor bootstrap run ID and conductor cwd for provider history', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-cursor-bootstrap',
+      status: 'finished',
+      result: 'started',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'cursor' },
+      },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    const cursorResumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
+    );
+    expect(cursorResumeStore).toMatchObject({
+      conductorBackend: 'cursor',
+      conductorCwd: expect.any(String),
+      cursorBootstrapRunId: 'run-cursor-bootstrap',
+    });
+  });
+
   it('persists the resolved config digest without config values in the resume store', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-config-digest',
@@ -780,21 +813,18 @@ describe('runConductorSession resume / shutdown', () => {
       repoRoot,
       conductorAgentId: agentId,
     });
-    await saveSessionResumeStore(
-      resumeStorePath,
-      {
-        version: SESSION_RESUME_STORE_VERSION,
-        conductorAgentId: agentId,
-        issueUrl: TEST_ISSUE.url,
-        repoRoot,
-        profile: { workers: [] },
-        openQuestions: [],
-        sequence: 0,
-        workers: {},
-        ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
-        updatedAt: 0,
-      },
-    );
+    await saveSessionResumeStore(resumeStorePath, {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
+      updatedAt: 0,
+    });
     const legacyResumeStore = JSON.parse(
       await readFile(resumeStorePath, 'utf8'),
     ) as {

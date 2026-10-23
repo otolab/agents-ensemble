@@ -123,6 +123,7 @@ export async function sendConductorWithReconnect(
 ): Promise<ConductorSendResult> {
   const sendCallbacks: ConductorSendCallbacks = {
     onToolCallStarted: options.onToolCallStarted,
+    history: options.history,
   };
   const result = await handle.conductor.send(message, sendCallbacks);
   const reconnectReason = isConductorSendAuthError(result)
