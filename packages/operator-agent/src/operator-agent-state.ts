@@ -1,6 +1,9 @@
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import type { ConductorBackend } from '@agents-ensemble/core/operator-runtime';
+import { dirname } from 'node:path';
+import {
+  resolveEnsemblePaths,
+  type ConductorBackend,
+} from '@agents-ensemble/core/operator-runtime';
 
 export const OPERATOR_AGENT_STATE_VERSION = 1;
 
@@ -12,22 +15,34 @@ export interface OperatorAgentState {
 }
 
 export function operatorAgentStatePath(repoRoot: string): string {
-  return join(repoRoot, '.ensemble', 'operator-agent', 'session.json');
+  return resolveEnsemblePaths({ repoRoot }).operatorAgentSessionPath;
 }
 
 export async function loadOperatorAgentState(
   repoRoot: string,
 ): Promise<OperatorAgentState | undefined> {
-  const path = operatorAgentStatePath(repoRoot);
+  const paths = resolveEnsemblePaths({ repoRoot });
+  const path = paths.operatorAgentSessionPath;
+  let sourcePath = path;
   let raw: string;
   try {
     raw = await readFile(path, 'utf8');
   } catch (error) {
-    if (isEnoent(error)) return undefined;
-    throw error;
+    if (!isEnoent(error)) throw error;
+    try {
+      sourcePath = paths.legacyOperatorAgentSessionPath;
+      raw = await readFile(sourcePath, 'utf8');
+    } catch (legacyError) {
+      if (isEnoent(legacyError)) return undefined;
+      throw legacyError;
+    }
   }
 
-  return parseOperatorAgentState(JSON.parse(raw) as unknown);
+  const state = parseOperatorAgentState(JSON.parse(raw) as unknown);
+  if (sourcePath !== path) {
+    await saveOperatorAgentState(repoRoot, state);
+  }
+  return state;
 }
 
 export async function saveOperatorAgentState(
@@ -49,7 +64,11 @@ export async function saveOperatorAgentState(
 }
 
 export async function clearOperatorAgentState(repoRoot: string): Promise<void> {
-  await rm(operatorAgentStatePath(repoRoot), { force: true });
+  const paths = resolveEnsemblePaths({ repoRoot });
+  await Promise.all([
+    rm(paths.operatorAgentSessionPath, { force: true }),
+    rm(paths.legacyOperatorAgentSessionPath, { force: true }),
+  ]);
 }
 
 function parseOperatorAgentState(value: unknown): OperatorAgentState {

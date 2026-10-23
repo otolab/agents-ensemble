@@ -1,13 +1,14 @@
-import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
 import {
   assertSessionResumeStoreMatches,
   assertSessionSidecarMatches,
   findLatestSessionResumeStoreForIssue,
   findLatestSessionSidecarForIssue,
+  legacySessionResumeStoreDir,
   listSessionSidecars,
   loadSessionResumeStore,
   loadSessionSidecar,
@@ -46,17 +47,27 @@ function baseResumeStore(
 describe('SessionResumeStore', () => {
   let tempDir = '';
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
     tempDir = '';
   });
 
+  async function createHome(prefix: string): Promise<string> {
+    const directory = await mkdtemp(join(tmpdir(), prefix));
+    vi.stubEnv('HOME', directory);
+    return directory;
+  }
+
   it('round-trips through the filesystem and sets updatedAt on save', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-1',
     });
-    expect(path).toBe(join(tempDir, '.ensemble', 'sessions', 'agent-1.json'));
+    expect(path).toBe(
+      join(sessionResumeStoreDir(tempDir), 'agent-1.json'),
+    );
     const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-1',
       repoRoot: tempDir,
@@ -115,7 +126,7 @@ describe('SessionResumeStore', () => {
   });
 
   it('records the live socket path and restricts SessionResumeStore permissions', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-live',
@@ -140,7 +151,7 @@ describe('SessionResumeStore', () => {
   });
 
   it('round-trips worker acpSpawn through save and load', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-acp-spawn',
@@ -172,7 +183,7 @@ describe('SessionResumeStore', () => {
   });
 
   it('redacts legacy ACP env values when reading and saving a resume store', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-legacy-acp-env',
@@ -213,7 +224,7 @@ describe('SessionResumeStore', () => {
   });
 
   it('round-trips teardown lifecycle and leaves it unset for legacy records', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const closedPath = sessionResumeStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'closed-agent',
@@ -248,7 +259,7 @@ describe('SessionResumeStore', () => {
   });
 
   it('persists the harness phase and aligns modifiedAt with updatedAt', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'active-agent',
@@ -271,7 +282,7 @@ describe('SessionResumeStore', () => {
   });
 
   it('assumes cursor for a legacy record without conductorBackend', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'legacy-agent',
@@ -384,7 +395,7 @@ describe('SessionResumeStore', () => {
   });
 
   it('throws SessionResumeStoreNotFoundError when the saved state is missing', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
 
     await expect(
       requireSessionResumeStoreForResume({
@@ -395,7 +406,7 @@ describe('SessionResumeStore', () => {
   });
 
   it('finds the latest session resume store for an issue by updatedAt', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const issueUrl = 'https://github.com/org/repo/issues/9';
     const dir = sessionResumeStoreDir(tempDir);
     await mkdir(dir, { recursive: true });
@@ -435,7 +446,7 @@ describe('SessionResumeStore', () => {
   });
 
   it('prefers close or abort candidates and excludes exit for --continue', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const issueUrl = 'https://github.com/org/repo/issues/9';
     const dir = sessionResumeStoreDir(tempDir);
     await mkdir(dir, { recursive: true });
@@ -483,8 +494,51 @@ describe('SessionResumeStore', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('reads a legacy project SessionResumeStore and migrates it into the user-scoped repo directory', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const agentId = 'legacy-project-agent';
+    const legacyPath = join(
+      legacySessionResumeStoreDir(tempDir),
+      `${agentId}.json`,
+    );
+    await mkdir(legacySessionResumeStoreDir(tempDir), { recursive: true });
+    await writeFile(
+      legacyPath,
+      `${JSON.stringify(
+        baseResumeStore({
+          conductorAgentId: agentId,
+          repoRoot: tempDir,
+          updatedAt: 123,
+        }),
+      )}\n`,
+      'utf8',
+    );
+
+    await expect(
+      findLatestSessionResumeStoreForIssue({
+        repoRoot: tempDir,
+        issueUrl: 'https://github.com/org/repo/issues/1',
+      }),
+    ).resolves.toMatchObject({ conductorAgentId: agentId });
+
+    const migrated = await requireSessionResumeStoreForResume({
+      repoRoot: tempDir,
+      conductorAgentId: agentId,
+    });
+    expect(migrated.updatedAt).toBe(123);
+    await expect(
+      readFile(
+        sessionResumeStorePath({
+          repoRoot: tempDir,
+          conductorAgentId: agentId,
+        }),
+        'utf8',
+      ),
+    ).resolves.toContain(agentId);
+  });
+
   it('keeps deprecated sidecar API aliases compatible through the deprecation period', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    tempDir = await createHome('ensemble-session-resume-store-');
     const options = { repoRoot: tempDir, conductorAgentId: 'legacy-agent' };
     const path = sessionResumeStorePath(options);
     const state: SessionSidecar = baseResumeStore({

@@ -38,8 +38,8 @@
 | **`list_workers`** | conductor ツール（YAML。セッション worker 状態サマリ） |
 | **`get_worker_status`** | conductor ツール（YAML。単一 worker 詳細） |
 | **活動ログ** | TTY Ink Orchestration ペイン（`[harness]` / `[observation]` 等） |
-| **SessionResumeStore** | `{repoRoot}/.ensemble/sessions/{agentId}.json`（resume 用 harness 状態。exit report ではない） |
-| **open question YAML** | `{repoRoot}/.ensemble/sessions/{agentId}/open-questions.yaml`（Registry の正本。SessionResumeStore との移行仕様は [session-logging.md](session-logging.md#4-sessionresumestore-と-open-question-yaml)） |
+| **SessionResumeStore** | `~/.ensemble/sessions/<repoKey>/{agentId}.json`（resume 用 harness 状態。exit report ではない） |
+| **open question YAML** | `~/.ensemble/sessions/<repoKey>/{agentId}/open-questions.yaml`（Registry の正本。SessionResumeStore との移行仕様は [session-logging.md](session-logging.md#4-sessionresumestore-と-open-question-yaml)） |
 
 **未取得時** 列: フィールド省略・`null`・エラー・推定のいずれか。終了 JSON と `get_session_usage` の tokens / cache stats / compaction count は同じ `SessionUsageTracker` のスナップショットを使い、conductor cost は同一の `enrichSessionUsageWithCost` 経路で揃える。
 
@@ -259,7 +259,7 @@ Pi v1.2.0 の `AgentSessionEvent.compaction_end` は成功時に `result` を含
 
 **「0 回」の自己確認**
 
-1. セッションの `.ensemble/sessions/<agentId>.json` にある `conductorBackend`（古い SessionResumeStore で省略されている場合は Cursor 扱い）と起動時の設定を確認する。Pi 選択でもカスタム `conductorAgentFactory` を使う構成なら、このカウンターは有効にならない。Cursor conductor では行が出ないのが想定どおり。
+1. セッションの `~/.ensemble/sessions/<repoKey>/<agentId>.json` にある `conductorBackend`（古い SessionResumeStore で省略されている場合は Cursor 扱い）と起動時の設定を確認する。Pi 選択でもカスタム `conductorAgentFactory` を使う構成なら、このカウンターは有効にならない。Cursor conductor では行が出ないのが想定どおり。
 2. Pi の有効な設定で `compaction.enabled` を確認する。Pi headless conductor が SettingsManager に適用する `compaction.*` は [Pi headless 設定の対応範囲](config.md) の許可項目に限られる。無効なら自動圧縮イベントは期待できない。設定が有効でも、実際に条件へ達したことまではサマリで分からない。
 3. `conductor ターン` と `コンテキスト: N%` を併せて見る。後者は記録された各ラウンドの `inputTokens` 累計を指定 context limit と比べた値で、現在の Pi prompt の占有率や圧縮閾値への到達を表さない（[§3.1 context utilization](#31-セッションサマリ-sessionusagesummary)）。ターンが少ない、または累計が低いなら未到達の可能性があるが、これだけで圧縮の有無は断定できない。
 4. 試行や失敗まで確認するには Pi 側のイベント payload / ログを別途確認する。Pi transcript の compaction entry は手掛かりになるが、harness は compaction の試行・失敗・中断や `compaction_end` payload をログ出力しないため、終了サマリ単独ではそれらを特定できない。イベントを採取できるログがある場合は成功した `compaction_end` とカウンターを照合し、失敗・中断はこの件数に含まれないものとして読む。

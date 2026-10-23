@@ -1,10 +1,11 @@
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import yaml from 'js-yaml';
 import type {
   OpenQuestion,
   OpenQuestionRegistrySnapshot,
 } from '../escalation/open-question.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 export const OPEN_QUESTIONS_STORE_VERSION = 1;
 
@@ -17,13 +18,18 @@ export function openQuestionsStorePath(input: {
   repoRoot: string;
   conductorAgentId: string;
 }): string {
-  return join(
-    input.repoRoot,
-    '.ensemble',
-    'sessions',
+  return resolveEnsemblePaths({ repoRoot: input.repoRoot }).openQuestionsPath(
     input.conductorAgentId,
-    'open-questions.yaml',
   );
+}
+
+export function legacyOpenQuestionsStorePath(input: {
+  repoRoot: string;
+  conductorAgentId: string;
+}): string {
+  return resolveEnsemblePaths({
+    repoRoot: input.repoRoot,
+  }).legacyOpenQuestionsPath(input.conductorAgentId);
 }
 
 export async function loadOpenQuestionsStore(

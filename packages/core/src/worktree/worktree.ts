@@ -3,6 +3,7 @@ import { realpath } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { IssueRef } from '../issue/issue-ref.js';
 import { runGit } from '../git/run-git.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 /** `isolated`: Issue 専用 worktree（既定）。`in_repo`: メイン worktree で直接作業する特別モード。 */
 export type WorkerWorktreeMode = 'isolated' | 'in_repo';
@@ -23,7 +24,10 @@ export function workerWorktreePath(
   repoRoot: string,
   issue: Pick<IssueRef, 'number'>,
 ): string {
-  return join(repoRoot, '.ensemble', 'worktrees', `issue-${issue.number}`);
+  return join(
+    resolveEnsemblePaths({ repoRoot }).worktreesDir,
+    `issue-${issue.number}`,
+  );
 }
 
 export async function resolveWorkerWorktree(
@@ -71,7 +75,9 @@ export async function createWorkerWorktree(
 
   const branch = workerBranchName(issue);
   const path = resolve(workerWorktreePath(repoRoot, issue));
-  await mkdir(join(repoRoot, '.ensemble', 'worktrees'), { recursive: true });
+  await mkdir(resolveEnsemblePaths({ repoRoot }).worktreesDir, {
+    recursive: true,
+  });
 
   const branchExists = await gitBranchExists(repoRoot, branch);
   const startPoint = branchExists

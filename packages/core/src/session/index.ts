@@ -40,6 +40,7 @@ export type {
 } from './session-resume-store.js';
 export {
   loadOpenQuestionsStore,
+  legacyOpenQuestionsStorePath,
   OPEN_QUESTIONS_STORE_VERSION,
   openQuestionsStorePath,
   saveOpenQuestionsStore,
@@ -73,6 +74,7 @@ export type {
 } from './open-question-control.js';
 export {
   loadSessionStateStore,
+  legacySessionStateStorePath,
   saveSessionStatusLine,
   SESSION_STATE_STORE_MAX_BYTES,
   SESSION_STATE_STORE_VERSION,

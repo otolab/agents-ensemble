@@ -62,10 +62,10 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
 └─────────────────────────────────────────────────────────────┘
 
   別経路（SessionLogger 外）:
-    SessionResumeStore への flush → {repoRoot}/.ensemble/sessions/{agentId}.json
-    tool-call history flush → {repoRoot}/.ensemble/sessions/{agentId}.tool-calls
-    question flush → {repoRoot}/.ensemble/sessions/{agentId}/open-questions.yaml
-    operator status → {repoRoot}/.ensemble/sessions/{agentId}/session-state.yaml
+    SessionResumeStore への flush → ~/.ensemble/sessions/<repoKey>/{agentId}.json
+    tool-call history flush → ~/.ensemble/sessions/<repoKey>/{agentId}.tool-calls
+    question flush → ~/.ensemble/sessions/<repoKey>/{agentId}/open-questions.yaml
+    operator status → ~/.ensemble/sessions/<repoKey>/{agentId}/session-state.yaml
 ```
 
 ### stdout
@@ -92,9 +92,9 @@ open question の回答観測は回答全文を残し、`yes_no` には `assent=
 
 稼働中 UDS control server は JSON-RPC request / response body をアクセスログへ書きません。ただし回答・operator message は既存の operator 入力経路を通るため、CLI observation は従来どおり質問本文・回答本文・メッセージ本文を stderr または TUI 活動ログに表示します。メッセージの配信モード（`idle` / `next` / `interrupt`）も `operator.input` と TTY 活動ログに記録します。質問・context・回答は SessionResumeStore と YAML にも保存され、UDS list response では保存値のまま返します。任意文面の secret や repository 外情報を確実に検出する redaction はありません。機密値を質問・context・回答・メッセージに含めない運用としてください。
 
-operator-agent の watch polling 警告には例外本文を含めず、Open Question の質問・context・回答本文をログへ出しません。新規 open 質問の本文は operator-agent への report 入力として渡します。未 dispatch report の永続化先は owner-only (`0700` directory / `0600` file) の `.ensemble/operator-agent/watch-state.json` であり、通常のログとは別ですが、一般的な secret redaction は行いません。
+operator-agent の watch polling 警告には例外本文を含めず、Open Question の質問・context・回答本文をログへ出しません。新規 open 質問の本文は operator-agent への report 入力として渡します。未 dispatch report の永続化先は owner-only (`0700` directory / `0600` file) の `~/.ensemble/operator-agent/<repoKey>/watch-state.json` であり、通常のログとは別ですが、一般的な secret redaction は行いません。
 
-`.ensemble/sessions/` とセッション別データ directory は owner-only (`0700`)、SessionResumeStore の JSON / YAML / socket file は owner read/write (`0600`) にします。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
+`~/.ensemble/sessions/<repoKey>/` とセッション別データ directory は owner-only (`0700`)、SessionResumeStore の JSON / YAML / socket file は owner read/write (`0600`) にします。project `.ensemble/sessions/` にある既存データは読み取り fallback として扱います。`--resume` / `--continue` では SessionResumeStore と open-question YAML を user 側へ移し、tool-call 履歴は読み込み時にコピーします。session-state YAML は operator の読み取り fallback を保ち、次回報告時に履歴を引き継いで user 側へ書きます。operator-agent の session / watch state と Pi transcript も、それぞれの読み込み・再開時に user 側へ移します。旧ファイルは自動削除しません。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
 
 TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor の**成功応答**は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。`conductor.send` の error は conductor 活動ログへ追記せず、harness 活動ログだけに障害として追記する。既定の `stream` レイアウトでは `<Static>` と端末 scrollback を使い、`tui.layout: pane` または `ENSEMBLE_TUI_LAYOUT=pane` で Orchestration ペイン内の windowing に戻せる。stream の活動ログは端末表示用で、SessionResumeStore や活動ログファイルには永続化しない。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされない（詳細は [operator-input.md](operator-input.md) と [ADR 0015](adr/0015-cli-tui-library.md)）。
 
@@ -192,17 +192,28 @@ permission の ACP variant と抽出優先順位は
 
 ## 4. SessionResumeStore と open question YAML
 
-SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`.ensemble/sessions/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
+SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
 
-セッション再開用データは `.ensemble/sessions/` に保存します。
+セッション再開用データは `packages/core` の `resolveEnsemblePaths({ repoRoot })` で解決し、repo ごとに user 側へ保存します。`repoKey` は正規化した絶対 `repoRoot` の SHA-256 です。
 
 ```text
-.ensemble/sessions/
+~/.ensemble/sessions/<repoKey>/
   {conductorAgentId}.json
   {conductorAgentId}/
     open-questions.yaml
     session-state.yaml
+  {conductorAgentId}.tool-calls
+  pi/
+
+~/.ensemble/operator-agent/<repoKey>/
+  session.json
+  watch-state.json
+  pi-sessions/
 ```
+
+Pi の conductor transcript は `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き `<repoRoot>/.ensemble/pi/` から読みます。operator-agent は保存済み SessionResumeStore と YAML を同じ repoKey の user 側 directory から読みます。
+
+旧 `<repoRoot>/.ensemble/sessions/`、`.ensemble/operator-agent/`、`<conductorCwd>/.ensemble/pi/sessions/` のデータは読み取り fallback します。SessionResumeStore と open-question YAML、tool-call 履歴、operator-agent state / watch state、Pi transcript は利用に応じて user 側へ移します。session-state YAML は fallback で読み、次の status 報告で履歴を引き継いで user 側へ書きます。旧ファイルは自動削除しません。Issue 用 Git worktree は元 repo に登録され、現行の解決・再利用処理が project-local path を前提とするため、例外として `<repoRoot>/.ensemble/worktrees/issue-N` に残します。配置判断の詳細は [ADR 0044](adr/0044-user-scoped-runtime-storage.md) を参照してください。
 
 `session-state.yaml` は `report_session_state` が登録した最新の statusLine と過去の報告をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。`current` が最新値、`history` は過去の値を古い順に並べた一覧です。履歴は最大 50 件、ファイル全体は最大 16 KiB で、上限を超える場合は古い履歴から削除します。
 

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -60,6 +60,7 @@ import {
   PiConductorAgent,
   resolvePiModelConfig,
 } from './pi-conductor-agent.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { sendConductorWithReconnect } from './conductor-send-reconnect.js';
 
 describe('PiConductorAgent', () => {
@@ -72,6 +73,7 @@ describe('PiConductorAgent', () => {
 
   beforeEach(async () => {
     cwd = await mkdtemp(join(tmpdir(), 'pi-conductor-project-'));
+    vi.stubEnv('HOME', cwd);
     agentDir = join(cwd, 'user-pi');
     await mkdir(agentDir, { recursive: true });
     await writeFile(
@@ -132,6 +134,7 @@ describe('PiConductorAgent', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('creates a Pi 1.x AgentSession and injects the resolved MCP map into the official extension', async () => {
@@ -645,6 +648,7 @@ describe('PiConductorAgent', () => {
   it('resumes through SessionManager with the same conductor id and refreshes the prompt path', async () => {
     mockSessionManagerFindById.mockReturnValue('/tmp/pi-session.jsonl');
     const projectDir = join(cwd, '.ensemble', 'pi');
+    const sessionDir = resolveEnsemblePaths({ repoRoot: cwd }).piSessionsDir;
     await mkdir(projectDir, { recursive: true });
     await writeFile(
       join(projectDir, 'settings.json'),
@@ -663,11 +667,11 @@ describe('PiConductorAgent', () => {
     expect(mockSessionManagerFindById).toHaveBeenCalledWith(
       cwd,
       'session-392',
-      join(cwd, '.ensemble/pi/sessions'),
+      sessionDir,
     );
     expect(mockSessionManagerOpen).toHaveBeenCalledWith(
       '/tmp/pi-session.jsonl',
-      join(cwd, '.ensemble/pi/sessions'),
+      sessionDir,
       cwd,
     );
     expect(mockCreateAgentSession.mock.calls[0]![0].sessionStartEvent).toMatchObject({
@@ -681,6 +685,48 @@ describe('PiConductorAgent', () => {
       id: 'model-1',
     })).toMatchObject({ enabled: false, reserveTokens: 2_000 });
     expect(settingsManager.getSettings()).not.toHaveProperty('sessionDir');
+    await conductor.close();
+  });
+
+  it('copies a legacy project Pi transcript into the user-scoped session directory before resume', async () => {
+    const legacySessionDir = join(cwd, '.ensemble', 'pi', 'sessions');
+    const userSessionDir = resolveEnsemblePaths({
+      repoRoot: cwd,
+    }).piSessionsDir;
+    const legacySessionFile = join(legacySessionDir, 'legacy-session.jsonl');
+    await mkdir(legacySessionDir, { recursive: true });
+    await writeFile(legacySessionFile, '{"type":"session"}\n', 'utf8');
+    mockSessionManagerFindById.mockImplementation(
+      (_cwd: string, _sessionId: string, sessionDir: string) =>
+        sessionDir === legacySessionDir ? legacySessionFile : undefined,
+    );
+
+    const conductor = await PiConductorAgent.resume('legacy-session', {
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'recompiled system prompt',
+    });
+
+    const migratedFile = join(userSessionDir, 'legacy-session.jsonl');
+    expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
+      1,
+      cwd,
+      'legacy-session',
+      userSessionDir,
+    );
+    expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
+      2,
+      cwd,
+      'legacy-session',
+      legacySessionDir,
+    );
+    expect(await readFile(migratedFile, 'utf8')).toBe('{"type":"session"}\n');
+    expect(mockSessionManagerOpen).toHaveBeenCalledWith(
+      migratedFile,
+      userSessionDir,
+      cwd,
+    );
     await conductor.close();
   });
 
@@ -767,7 +813,7 @@ describe('PiConductorAgent', () => {
     expect(settingsManager.getSettings()).not.toHaveProperty('sessionDir');
     expect(mockSessionManagerCreate).toHaveBeenCalledWith(
       cwd,
-      join(cwd, '.ensemble/pi/sessions'),
+      resolveEnsemblePaths({ repoRoot: cwd }).piSessionsDir,
       expect.objectContaining({ id: expect.any(String) }),
     );
 

@@ -17,6 +17,7 @@ import {
   resolveConductorBackendSetting,
   resolveConductorModelId,
   resolveConductorPiResourcePaths,
+  resolveEnsemblePaths,
   sendConductorWithReconnect,
   sessionStateFromProfile,
   type ConductorAgent,
@@ -151,6 +152,12 @@ export async function runOperatorAgent(
             repoRoot: runtime.repoRoot,
             config: runtime.config,
           }),
+          sessionDir: resolveEnsemblePaths({
+            repoRoot: runtime.repoRoot,
+          }).operatorPiSessionsDir,
+          legacySessionDir: resolveEnsemblePaths({
+            repoRoot: runtime.repoRoot,
+          }).legacyPiSessionsDir,
           piSkills: runtime.profile.conductor?.piSkills !== false,
           piExtensions: false,
         }

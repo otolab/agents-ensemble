@@ -26,6 +26,10 @@ export interface ConductorAgentCreateOptions {
   mcpServers?: McpServerConfigMap;
   /** Pi-only resource root overrides; ignored by other backends. */
   pi?: ConductorPiResourceOptions;
+  /** Pi-only session transcript directory resolved by the harness. */
+  sessionDir?: string;
+  /** Pi-only legacy transcript directory used for resume migration. */
+  legacySessionDir?: string;
   customTools?: ConductorToolSet;
   onStreamText?: (text: string) => void;
 }

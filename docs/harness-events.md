@@ -126,7 +126,7 @@ operatorSummary: <short operator-facing summary>
 
 `tool_call` と `tool_call_update` は `(workerId, ACP sessionId, toolCallId)` ごとに累積する。
 ID は ACP session をまたいで一意とは限らない。累積した履歴は、resume SessionResumeStore 本体とは別の
-`.ensemble/sessions/{conductorAgentId}.tool-calls` に JSON で原子的に保存する。
+`~/.ensemble/sessions/<repoKey>/{conductorAgentId}.tool-calls` に JSON で原子的に保存する。
 SessionResumeStore と別にすることで、履歴ファイルの欠損や破損が conductor / worker session の resume を妨げない。
 
 履歴は最終更新から 30 日で期限切れになり、1 session あたり最大 1,000 件・8 MiB まで保持する。
