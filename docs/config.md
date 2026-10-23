@@ -10,25 +10,32 @@ conductor に渡す MCP 設定もこの config.yaml とは別の JSON ファイ�
 
 | 層 | パス | 優先度 |
 |----|------|--------|
-| プロジェクト | `<repoRoot>/.ensemble/config.yaml` | 選択された user config を上書き |
-| user config（明示指定時） | `--config <path>` | 標準 user config の代わりに読み込む |
-| user config（標準） | `~/.ensemble/config.yaml` | `--config` 未指定時に読み込む |
+| プロジェクト | `<repoRoot>/.ensemble/config.yaml` | 読み込み有効時に選択された user config を上書き |
+| user config（明示指定時） | `--config <path>` | 標準 user config の代わりに user 層として読み込む |
+| user config（標準） | `~/.ensemble/config.yaml` | `--config` 未指定時に user 層として読み込む |
 
-- 設定層は **deep merge**（コード内 default → 選択された user config → project config）。同一キーは後の層が上書きするため、project の値は `--config` の値より優先
-- `--config` 指定時は `~/.ensemble/config.yaml` を読み込まず、指定ファイルを user 層の代替として扱う。project config の読み込み方は変えず、ファイルがあれば引き続き適用する
+- 設定層は **deep merge**（コード内 default → 選択された user config → project config）。project config の読み込みが有効な場合、同一キーは project 側が優先
+- `--config` 指定時は `~/.ensemble/config.yaml` を読み込まず、指定ファイルを user 層の代替として扱う
+- project config の読み込み可否は選択された user config の `config.loadProjectConfig` で制御する。`--config` は標準 user config の値を引き継がないため、明示ファイルにこのキーがなければ default の `true` が使われる
 - `--config` の相対パスはコマンドを実行したディレクトリを基準に解決し、`~` / `~/...` は home に展開する。指定先が存在しない場合は起動エラー
 - config ファイルが無い場合は **コード内デフォルト**
 - 項目ごとの **環境変数・CLI フラグは、config の各層より優先**
+
+選択された user config の `config.loadProjectConfig: false` を指定すると、project config を読み込まず user 層までで解決します。既定値は `true` です。この制御キーは user 層でのみ有効で、project 側に同じキーを書いても無視されます。`--config` を使う場合は明示ファイル内の値が有効になり、標準 `~/.ensemble/config.yaml` の toggle は読み込まれません。project config を読み込んだ場合は絶対パスを、user 設定でスキップした場合はその旨を起動時に stderr へ表示します。project config が無く、読み込みが有効な場合は表示しません。
+
+`config.loadProjectConfig` は project 層を読むかどうかを選び、`--config <path>` は user 層に使うファイルを選びます。両者は独立しており、明示ファイルを指定しただけでは project config の読み込み可否は変わりません。
 
 ### 設定項目ごとの解決順（Phase 1）
 
 すべての Phase 1 キーで次の順序を **実装・テストで固定**している:
 
 ```
-CLI 明示指定 > 環境変数 > project .ensemble/config.yaml > 選択された user config > コード内デフォルト
+CLI 明示指定 > 環境変数 > project .ensemble/config.yaml（読み込み有効時） > 選択された user config > コード内デフォルト
 ```
 
-一回の起動で user config を切り替える場合は、任意の YAML ファイルを指定します。指定ファイルは標準 user config の代わりに読み込みます。project config は別層として引き続き適用されるため、同じ項目があれば project の値が優先されます。
+project 層が無効な場合は、CLI 明示指定 > 環境変数 > 選択された user config > コード内デフォルトで解決します。
+
+一回の起動で user config を切り替える場合は、任意の YAML ファイルを指定します。指定ファイルは標準 user config の代わりに読み込みます。project config は別層として適用され、同じ項目があれば project の値が優先されます（project 層を無効にする場合は、選択された user config で `config.loadProjectConfig: false` を指定します）。
 
 ```yaml
 # ~/.ensemble/litellm.config.yaml
@@ -48,15 +55,15 @@ ensemble operator-agent --config ~/.ensemble/litellm.config.yaml
 
 token などの秘密情報はこのファイルへ平文で書かず、provider が参照する環境変数や認証ストアで管理します。
 
-`loadEnsembleConfig(repoRoot, { configPath })` はコード内 default → 明示指定ファイル（user 層）→ project config の順で merge した `EnsembleConfig` を返します。`configPath` がなければ標準 user config を user 層として使います。明示指定ファイルにない項目はコード内 default から引き継ぎ、project config が同じ項目を指定していれば project の値で上書きします。`--config` は project config の読み込みを切り替えません。各 `resolve*Setting` はその merged config を **config 層**として参照します。
+`loadEnsembleConfig(repoRoot, { configPath })` はコード内 default → 選択された user config → project config（読み込み有効時）の順で merge した `EnsembleConfig` を返します。`configPath` がなければ標準 user config を user 層として使います。明示指定ファイルにない項目はコード内 default から引き継ぐため、標準 user config の値は漏れません。`config.loadProjectConfig` は選択された user config から解決し、明示ファイルにも指定できます。project config 内の同名キーは無視されます。各 `resolve*Setting` はその merged config を **config 層**として参照します。
 
 `conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > merged config（project > 選択された user config）> `cursor` の順で解決します。
 
-`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` も `--config` を指定でき、同じ default → 選択された user config → project config の loader を使います。`--config` は team profile の `--profile` とは別系統で、profile 名から config ファイルを推測しません。
+`ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` も `--config` を指定でき、同じ default → 選択された user config → project config（読み込み有効時）の loader を使います。`--config` は team profile の `--profile` とは別系統で、profile 名から config ファイルを推測しません。
 
 #### resume と config 変更
 
-起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` や `acp.env` だけの変更も対象です。worker の ACP spawn fingerprint も env map の digest を保持し、値そのものは保存しません。SessionResumeStore には config の値やファイルパスを保存しないため、秘密値は平文で残りません。
+起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` や `acp.env` だけの変更も対象です。worker の ACP spawn fingerprint も env map の digest を保持し、値そのものは保存しません。旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。新しい SessionResumeStore には config の値やファイルパスを保存しません。
 
 同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 resume state は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)）。
 
@@ -77,6 +84,9 @@ cp config.example.yaml ~/.ensemble/config.yaml
 ```yaml
 profile:
   default: implementer-and-reviewer-v2 # ENSEMBLE_DEFAULT_PROFILE 相当
+
+config:
+  loadProjectConfig: true              # 選択された user config で制御。false で project config を無視
 
 conductor:
   backend: pi                        # cursor（既定） | pi
@@ -120,6 +130,7 @@ tui:
 
 | キー | 意味 | CLI 上書き | env 上書き |
 |------|------|-----------|-----------|
+| `config.loadProjectConfig` | project `.ensemble/config.yaml` を読み込むか（既定: `true`、選択された user config のみ有効） | — | — |
 | `profile.default` | 既定 team profile（名前またはパス） | `--profile` | `ENSEMBLE_DEFAULT_PROFILE` |
 | `conductor.model` | conductor モデル id | `--model` | `CONDUCTOR_MODEL_ID` |
 | `conductor.verbose` | harness 詳細 telemetry の表示 | `--verbose` | `CONDUCTOR_VERBOSE` |
@@ -138,6 +149,8 @@ tui:
 | `github.monitor.enabled` | Issue / PR 監視 | `--no-github-monitor` | — |
 | `github.monitor.debounceMs` | 更新 debounce | `--github-monitor-debounce-ms` | — |
 | `github.monitor.pollIntervalMs` 他 | poll 間隔（コード内既定のみ） | — | — |
+
+`config.loadProjectConfig` は config の merge 対象を決めるメタ設定です。project YAML の値は、設定結果にも project config の読み込み判断にも使われません。`--config` 指定時は、その明示ファイルが選択された user config なので、このキーもそこから解決します。
 
 ### ACP spawn env（`acp.env`）
 

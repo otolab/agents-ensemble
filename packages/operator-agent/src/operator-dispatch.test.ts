@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createOperatorDispatchQueue,
   formatOperatorDispatchBatch,
@@ -8,9 +8,11 @@ import {
 
 function report(
   conductorAgentId: string,
-  reportType: 'session_state' | 'open_question' = 'session_state',
+  reportType: 'session_state' | 'open_question' | 'conductor_message' =
+    'session_state',
   text = conductorAgentId,
   arrival = 0,
+  sendCount?: number,
 ): OperatorDispatchEvent {
   return {
     type: 'report',
@@ -18,6 +20,7 @@ function report(
     conductorAgentId,
     issueUrl: `https://github.com/example/repo/issues/${conductorAgentId}`,
     text,
+    ...(sendCount !== undefined ? { sendCount } : {}),
     arrival,
     readyAt: 0,
   };
@@ -178,6 +181,64 @@ describe('operator dispatch batching', () => {
       'first update',
       'second update',
     ]);
+  });
+
+  it('extends conductor-message debounce and formats a window by sendCount', () => {
+    const queue = createOperatorDispatchQueue();
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValueOnce(1_000).mockReturnValueOnce(9_000);
+    queue.enqueueDebouncedReports(
+      [
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'send 12\n#### inbound\ncontext 12\n#### response\nreply 12',
+          sendCount: 12,
+        },
+      ],
+      10_000,
+    );
+    queue.enqueueDebouncedReports(
+      [
+        {
+          type: 'report',
+          reportType: 'conductor_message',
+          conductorAgentId: 'session-1',
+          issueUrl: 'https://github.com/example/repo/issues/1',
+          text: 'send 11\n#### inbound\ncontext 11\n#### response\nreply 11',
+          sendCount: 11,
+        },
+      ],
+      10_000,
+    );
+
+    try {
+      expect(
+        queue.takeBatch({ continuationConsumed: false }, 10_999),
+      ).toBeUndefined();
+      const batch = queue.takeBatch(
+        { continuationConsumed: false },
+        19_000,
+      )!;
+      expect(batch.events.map((event) => event.sendCount)).toEqual([12, 11]);
+      expect(formatOperatorDispatchBatch(batch.events)).toBe(
+        [
+          '## Conductor の発言（2 件）',
+          '',
+          '### 1/2',
+          '',
+          'send 11\n#### inbound\ncontext 11\n#### response\nreply 11',
+          '',
+          '### 2/2',
+          '',
+          'send 12\n#### inbound\ncontext 12\n#### response\nreply 12',
+        ].join('\n'),
+      );
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('requeues an unconfirmed report with its stable report id', () => {

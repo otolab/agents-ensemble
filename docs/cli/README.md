@@ -43,6 +43,10 @@ backend を選んだ後の主経路は共通です。リポジトリのディレ
 
 `ensemble issue` の `--permission-deadlock-stall-ms <n>` で、worker の permission が停滞したときに警告・conductor 通知を出すまでの時間を上書きできます。既定値は **`300_000ms`（300 秒）**です。設定値の解決順と API 名は [設定値リファレンス](https://github.com/otolab/agents-ensemble/blob/main/docs/settings.md) を参照してください。poll 間隔と worker UI の挙動はこのオプションでは変更しません。
 
+## dispatch hold reminder の間隔
+
+dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer の件数と解除を促す reminder を operator 向け telemetry として表示します。`ensemble issue` の `--dispatch-hold-reminder-ms <n>` で間隔を上書きできます。通知のみで、自動解除はしません。詳細と API 名は [設定値リファレンス](https://github.com/otolab/agents-ensemble/blob/main/docs/settings.md) を参照してください。
+
 ## 最小クイックスタート
 
 初回だけ、worker・選択した conductor backend・GitHub API の認証を準備します。
@@ -94,7 +98,7 @@ operator-agent は既定で前回の operator 会話を再開します。初回�
 
 TTY の会話では `user>` を控えめに、`operator>` をシアンで表示し、operator の本文は次の行から表示します。応答の段落間の空行は保たれ、連続する空行は最大 1 行に整理されます。起動・終了・エラー表示にも同じ余白を設けます。`NO_COLOR` が設定されている場合は色を使いません。
 
-`.ensemble/sessions/` の保存済み SessionResumeStore から得られる情報はスナップショットとして読み取り専用です。複数 session の watch は稼働中 harness の `session.observe` を使い、接続不能または未対応時には保存済み Open Questions YAML / session-state YAML / SessionResumeStore を poll して観測元を示します。一方、`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` は稼働中 session の直接 UDS control であり、停止・接続不能時にエラーとなり snapshot へ fallback しません。送った指示の後は `get_last_conductor_message` で最後の conductor 成功応答を確認でき、まだ成功応答がなければ `message: null` です。`send_operator_message` は `next`（既定）・`idle`・`interrupt` を指定できます。成功応答はキュー受理を示し、処理完了の確認ではありません。詳細は [稼働中 harness control API reference](../live-open-question-control-api.md)、セキュリティとログの扱いは [session logging](../session-logging.md#4-sessionresumestore-と-open-question-yaml) を参照してください。
+`.ensemble/sessions/` の保存済み SessionResumeStore から得られる情報はスナップショットとして読み取り専用です。複数 session の watch は稼働中 harness の `session.observe` を使い、接続不能または未対応時には保存済み Open Questions YAML / session-state YAML / SessionResumeStore を poll して観測元を示します。一方、`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message`、`list_conductor_messages` は稼働中 session の直接 UDS control であり、停止・接続不能時にエラーとなり snapshot へ fallback しません。`get_last_conductor_message` は最後の応答だけ、`list_conductor_messages` は直近100件を上限とする履歴から応答と対応する全文 inbound を返します。発言を継続受信する場合は `register_conductor_message_listen` / `unregister_conductor_message_listen` を使います。送った指示の後は `get_last_conductor_message` で最後の conductor 成功応答を確認でき、まだ成功応答がなければ `message: null` です。`send_operator_message` は `next`（既定）・`idle`・`interrupt` を指定できます。成功応答はキュー受理を示し、処理完了の確認ではありません。詳細は [稼働中 harness control API reference](../live-open-question-control-api.md)、セキュリティとログの扱いは [session logging](../session-logging.md#4-sessionresumestore-と-open-question-yaml) を参照してください。
 
 初回の作業指示は、Issue 参照の後ろに CLI 引数として渡せます。複数の引数はスペース 1 つで結合され、前後の空白は除かれます。
 
@@ -105,7 +109,7 @@ ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 "まずテスト�
 
 これは TTY / 非 TTY の両方で、セッション開始後に 1 回だけ `operator.message` として conductor へ送られます。CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は併用できず、両方が空でない場合は起動エラーになります。`--continue` / `--resume` では CLI メッセージは注入されず、stderr に警告が出ます。詳細は [オペレータ入力](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) と [設定値リファレンス](https://github.com/otolab/agents-ensemble/blob/main/docs/settings.md) を参照してください。
 
-TTY で worktree とセッション状態を残してプロセスを閉じるには `/close` を入力します。正常に閉じると exit code 0 で終了し、再開するときは同じ Issue に `--continue` を付けます。`/exit` は isolated worktree の cleanup を試みて終了します（cleanup に失敗しても warning のみで exit code は 0、[#448](https://github.com/otolab/agents-ensemble/issues/448)）。Ctrl+C / SIGINT は `interrupted` として中断し、worktree cleanup を行いません。詳しくは [オペレータ入力](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) を参照してください。
+TTY で worktree とセッション状態を残してプロセスを閉じるには `/close` を入力します。正常に閉じると exit code 0 で終了し、再開するときは同じ Issue に `--continue` を付けます。同じ Issue に複数の保存 session がある場合、`--continue` は `close` / `abort` を優先し、`exit` は候補から除外します。選択規則の詳細は [SessionResumeStore の記録](../session-logging.md#4-sessionresumestore-と-open-question-yaml) を参照してください。`/exit` は isolated worktree の cleanup を試みて終了します（cleanup に失敗しても warning のみで exit code は 0、[#448](https://github.com/otolab/agents-ensemble/issues/448)）。Ctrl+C / SIGINT は `interrupted` として中断し、worktree cleanup を行いません。詳しくは [オペレータ入力](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) を参照してください。
 
 ## 利用者向け doc
 

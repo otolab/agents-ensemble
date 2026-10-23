@@ -62,7 +62,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `worker.failed` | worker attach / prompt 失敗。該当 worker の pending permission は conductor への通知前に deny | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `permission.cleanup` | worker failure / teardown で pending permission を deny・解消した直後 | `[harness] permission.cleanup reason=worker.failed worker=... count=... ids=...` | なし |
-| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続）。GitHub 認証トークン未解決時（#222） | `[harness] warning: ...`（permission デッドロック / GitHub 認証不足） | なし。permission デッドロック時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue |
+| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) デッドロック検知（worker 活動中 + pending permission が閾値継続）。GitHub 認証トークン未解決時（#222）。dispatch hold reminder（既定 30 分ごと） | `[harness] warning: ...`（permission デッドロック / GitHub 認証不足 / dispatch hold reminder） | なし。permission デッドロック時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue。dispatch hold reminder は operator 向けのみ |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
 | `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
 | `conductor.auth.recovery` | 自動再接続失敗後の復旧ヒント | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
@@ -71,6 +71,8 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `harness.teardown` | `runConductorSession` の worker/ACP・conductor 停止後、isolated worktree 削除前（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
 | `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | verbose 時のみ `[harness] teardown.phase <name>` | なし |
 | `conductor.dispatch_hold` | conductor が `set_dispatch_hold` を呼んだとき、または held trigger（`permission.pending` / `permission.stall` を含む）の件数が変化したとき | `dispatch hold enabled` / `released (flushed N events)`（observation） | TUI の保留状態と件数を更新。解除後も未送信の held trigger があれば残数を表示 |
+
+conductor 発言の live history は SessionLogEvent ではなく UDS control API の別 projection です。bootstrap send を除く成功した `agent.send` について、send 本文と対応する `formatSessionEventsForConductor(batch)` 全文を session ごとの最新 100 件だけメモリに保持します。詳細は [live-open-question-control-api.md](live-open-question-control-api.md) を参照してください。
 
 ### 2.1.1 オペレータ向け representation
 
@@ -193,6 +195,13 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 | オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` / `permission.stall` と、更新に同梱する接続復旧 inform を含む held event 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator message は dispatch hold を貫通し、`idle` は自律処理が落ち着いてから貫通する。活動ログの本文前に `[idle]` / `[next]` / `[interrupt]` を表示する |
 | conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending / permission.stall を含む）と接続復旧 inform は通常 OFF 後に 1 回の `agent.send` へ合成される。max-turns で worker / GitHub が送れない場合は held permission が先に dispatch され、残りは後続の operator 入力後に送られる。配送可能な operator.message は保留されない |
 | 運用・resume | 保留は Driver メモリだけ | SessionResumeStore に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
+
+dispatch hold が継続すると、harness は既定 **30 分間隔**（初回も hold 開始から約 30 分後、poll は 5 秒間隔）で
+`harness.warning` を出す。通知には `DispatchHoldChange.heldEventCount` と同じ定義の件数（held buffer の全件数）を含め、
+オペレータに可能なら `set_dispatch_hold({ hold: false })` で解除するよう促す。hold を解除すると reminder の計時をリセットし、
+次の hold は新しい episode として数え直す。閾値は CLI の `--dispatch-hold-reminder-ms` または
+`RunConductorSessionOptions.dispatchHoldReminderMs` で上書きできる。通知は TTY の harness 活動ログと非 TTY の stderr に表示し、
+conductor の `SessionEvent` / `agent.send` には載せない。自動解除はしない。hold 中の `operator.message` の配送も従来どおり。
 
 保留は一時的な運用モードであり、teardown flush や crash recovery は提供しない。`/exit`、
 `/close`、SIGINT/SIGTERM、conductor send failure、プロセス crash のいずれかが `hold: false` より先に

@@ -69,6 +69,9 @@ export interface ConductorSendCompleteInfo {
   sendCount: number;
   runId: string;
   status: ConductorSendResult['status'];
+  /** Exact user message passed to this agent.send. */
+  inbound: string;
+  dispatchSource?: string;
   /** GitHub update IDs included in this send; used to acknowledge the durable outbox. */
   githubUpdateIds?: string[];
   result?: string;
@@ -542,6 +545,8 @@ function runEventConductorSend(input: {
       sendCount: nextSendCount,
       runId: sendResult.runId,
       status: sendResult.status,
+      inbound: input.message,
+      dispatchSource: input.dispatchSource,
       result: sendResult.result,
       error: sendResult.error,
       usage: sendResult.usage,

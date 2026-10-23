@@ -1,5 +1,26 @@
 # @agents-ensemble/cli
 
+## 0.15.0
+
+### Minor Changes
+
+- f8af5dd: Persist harness activity phases and project session resume state separately from live connectivity. `--continue` now prefers close/abort sessions and skips exit sessions.
+
+### Patch Changes
+
+- 87ccff0: dispatch hold が続くとき、operator 向けに held event 件数を含む定期 reminder を表示する。
+- 8163ff0: user config から project config の読み込みを無効化できるようにし、読み込み状況を起動時に表示します。
+- Updated dependencies [87ccff0]
+- Updated dependencies [4b0c8aa]
+- Updated dependencies [6e0ebd8]
+- Updated dependencies [e798a83]
+- Updated dependencies [bff70e9]
+- Updated dependencies [f8af5dd]
+- Updated dependencies [8163ff0]
+- Updated dependencies [58a37ce]
+  - @agents-ensemble/core@0.15.0
+  - @agents-ensemble/operator-agent@0.3.0
+
 ## 0.14.2
 
 ### Patch Changes

@@ -20,6 +20,23 @@ export type SessionLifecycle =
   | 'interrupted'
   | 'unknown';
 
+export type HarnessPhase = 'running' | 'idle' | 'close' | 'abort' | 'exit';
+
+export function harnessPhaseFromLegacyLifecycle(
+  lifecycle: SessionLifecycle | undefined,
+): HarnessPhase | null {
+  switch (lifecycle) {
+    case 'closed':
+      return 'close';
+    case 'exited':
+      return 'exit';
+    case 'interrupted':
+      return 'abort';
+    default:
+      return null;
+  }
+}
+
 export class SessionResumeStoreNotFoundError extends Error {
   readonly code: string = 'SESSION_RESUME_STORE_NOT_FOUND';
 
@@ -79,6 +96,10 @@ export interface SessionResumeStore {
   ensembleConfigDigest?: string;
   /** Last completed process lifecycle; absent legacy values are unknown. */
   lifecycle?: SessionLifecycle;
+  /** Harness-owned activity / teardown phase. */
+  harnessPhase?: HarnessPhase;
+  /** Unix ms for the latest harness activity or phase transition. */
+  modifiedAt?: number;
   /** flush 時刻（Unix ms）。`--continue` で最新セッションを選ぶために使う。 */
   updatedAt: number;
 }
@@ -113,9 +134,28 @@ export function sessionResumeStorePath(options: SessionResumeStorePathOptions): 
 export async function loadSessionResumeStore(
   path: string,
 ): Promise<SessionResumeStore | undefined> {
+  const loaded = await readSessionResumeStore(path);
+  return loaded?.resumeStore;
+}
+
+async function readSessionResumeStore(
+  path: string,
+): Promise<
+  | {
+      resumeStore: SessionResumeStore;
+      hasLegacyAcpSpawnEnv: boolean;
+      rawValue: unknown;
+    }
+  | undefined
+> {
   try {
     const raw = await readFile(path, 'utf8');
-    return parseSessionResumeStore(JSON.parse(raw));
+    const value: unknown = JSON.parse(raw);
+    return {
+      resumeStore: parseSessionResumeStore(value),
+      hasLegacyAcpSpawnEnv: containsLegacyAcpSpawnEnv(value),
+      rawValue: value,
+    };
   } catch (error) {
     if (isEnoent(error)) return undefined;
     throw error;
@@ -128,11 +168,19 @@ export async function requireSessionResumeStoreForResume(input: {
   conductorAgentId: string;
 }): Promise<SessionResumeStore> {
   const path = sessionResumeStorePath(input);
-  const resumeStore = await loadSessionResumeStore(path);
-  if (!resumeStore) {
+  const loaded = await readSessionResumeStore(path);
+  if (!loaded) {
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
-  return resumeStore;
+  if (loaded.hasLegacyAcpSpawnEnv) {
+    // Scrub pre-digest env values before resume validation can reject the
+    // session and bypass its normal first write.
+    await writeSessionResumeStoreFile(
+      path,
+      redactLegacyAcpSpawnEnv(loaded.rawValue, loaded.resumeStore),
+    );
+  }
+  return loaded.resumeStore;
 }
 
 /** @deprecated Use requireSessionResumeStoreForResume; supported for one release only. */
@@ -157,17 +205,35 @@ export async function saveSessionResumeStore(
   path: string,
   resumeStore: SessionResumeStore,
 ): Promise<void> {
+  const updatedAt =
+    resumeStore.harnessPhase !== undefined &&
+    resumeStore.harnessPhase !== 'running' &&
+    resumeStore.harnessPhase !== 'idle' &&
+    resumeStore.modifiedAt !== undefined
+      ? resumeStore.modifiedAt
+      : Date.now();
   const parsed = parseSessionResumeStore({
     ...resumeStore,
-    updatedAt: Date.now(),
+    updatedAt,
+    ...(resumeStore.harnessPhase === 'running' ||
+    resumeStore.harnessPhase === 'idle'
+      ? { modifiedAt: updatedAt }
+      : {}),
   });
+  await writeSessionResumeStoreFile(path, parsed);
+}
+
+async function writeSessionResumeStoreFile(
+  path: string,
+  value: unknown,
+): Promise<void> {
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
   const tempPath = `${path}.tmp`;
   await writeFile(
     tempPath,
-    `${JSON.stringify(parsed, null, 2)}\n`,
+    `${JSON.stringify(value, null, 2)}\n`,
     { encoding: 'utf8', mode: 0o600 },
   );
   await chmod(tempPath, 0o600);
@@ -201,20 +267,38 @@ export async function listSessionResumeStores(
 /** @deprecated Use listSessionResumeStores; supported for one release only. */
 export const listSessionSidecars = listSessionResumeStores;
 
-/** 同一 Issue の SessionResumeStore のうち `updatedAt` が最新のものを返す。 */
+/**
+ * 同一 Issue では close / abort を優先し、exit を除外したうえで
+ * updatedAt が最も新しい SessionResumeStore を返す。
+ */
 export async function findLatestSessionResumeStoreForIssue(
   input: FindLatestSessionResumeStoreInput,
 ): Promise<SessionResumeStore | undefined> {
   const matches = (await listSessionResumeStores(input.repoRoot)).filter(
     (resumeStore) =>
       resumeStore.issueUrl === input.issueUrl &&
-      resumeStore.repoRoot === input.repoRoot,
+      resumeStore.repoRoot === input.repoRoot &&
+      (resumeStore.harnessPhase ??
+        harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle)) !== 'exit',
   );
   if (matches.length === 0) return undefined;
 
-  return matches.reduce((latest, resumeStore) =>
-    resumeStore.updatedAt > latest.updatedAt ? resumeStore : latest,
-  );
+  return matches.reduce((selected, resumeStore) => {
+    const selectedPhase =
+      selected.harnessPhase ??
+      harnessPhaseFromLegacyLifecycle(selected.lifecycle);
+    const resumeStorePhase =
+      resumeStore.harnessPhase ??
+      harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle);
+    const selectedPriority =
+      selectedPhase === 'close' || selectedPhase === 'abort' ? 1 : 0;
+    const resumeStorePriority =
+      resumeStorePhase === 'close' || resumeStorePhase === 'abort' ? 1 : 0;
+    if (resumeStorePriority !== selectedPriority) {
+      return resumeStorePriority > selectedPriority ? resumeStore : selected;
+    }
+    return resumeStore.updatedAt > selected.updatedAt ? resumeStore : selected;
+  });
 }
 
 /** @deprecated Use findLatestSessionResumeStoreForIssue; supported for one release only. */
@@ -359,6 +443,23 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
   ) {
     throw new Error('Invalid session resume store: lifecycle');
   }
+  if (
+    record.harnessPhase !== undefined &&
+    record.harnessPhase !== 'running' &&
+    record.harnessPhase !== 'idle' &&
+    record.harnessPhase !== 'close' &&
+    record.harnessPhase !== 'abort' &&
+    record.harnessPhase !== 'exit'
+  ) {
+    throw new Error('Invalid session resume store: harnessPhase');
+  }
+  if (
+    record.modifiedAt !== undefined &&
+    (typeof record.modifiedAt !== 'number' ||
+      !Number.isFinite(record.modifiedAt))
+  ) {
+    throw new Error('Invalid session resume store: modifiedAt');
+  }
   const updatedAt =
     typeof record.updatedAt === 'number' ? record.updatedAt : 0;
 
@@ -416,6 +517,12 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     ...(record.lifecycle !== undefined
       ? { lifecycle: record.lifecycle as SessionLifecycle }
       : {}),
+    ...(record.harnessPhase !== undefined
+      ? { harnessPhase: record.harnessPhase as HarnessPhase }
+      : {}),
+    ...(typeof record.modifiedAt === 'number'
+      ? { modifiedAt: record.modifiedAt }
+      : {}),
     updatedAt,
   };
 }
@@ -438,6 +545,50 @@ function isEnoent(error: unknown): boolean {
     'code' in error &&
     (error as NodeJS.ErrnoException).code === 'ENOENT'
   );
+}
+
+function containsLegacyAcpSpawnEnv(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || !('workers' in value)) return false;
+  const workers = (value as { workers?: unknown }).workers;
+  if (!workers || typeof workers !== 'object' || Array.isArray(workers)) {
+    return false;
+  }
+  return Object.values(workers).some((worker) => {
+    if (!worker || typeof worker !== 'object' || !('acpSpawn' in worker)) {
+      return false;
+    }
+    const acpSpawn = (worker as { acpSpawn?: unknown }).acpSpawn;
+    if (!acpSpawn || typeof acpSpawn !== 'object' || !('env' in acpSpawn)) {
+      return false;
+    }
+    const env = (acpSpawn as { env?: unknown }).env;
+    return (
+      !!env &&
+      typeof env === 'object' &&
+      !Array.isArray(env) &&
+      Object.keys(env).length > 0
+    );
+  });
+}
+
+function redactLegacyAcpSpawnEnv(
+  value: unknown,
+  parsed: SessionResumeStore,
+): unknown {
+  const record = value as Record<string, unknown>;
+  const rawWorkers = record.workers as Record<string, unknown>;
+  const workers: Record<string, unknown> = { ...rawWorkers };
+  for (const [name, rawWorker] of Object.entries(rawWorkers)) {
+    const worker = rawWorker as Record<string, unknown>;
+    if (!worker.acpSpawn || typeof worker.acpSpawn !== 'object') continue;
+    const acpSpawn = { ...(worker.acpSpawn as Record<string, unknown>) };
+    if (!('env' in acpSpawn)) continue;
+    delete acpSpawn.env;
+    const envDigest = parsed.workers[name]?.acpSpawn?.envDigest;
+    if (envDigest) acpSpawn.envDigest = envDigest;
+    workers[name] = { ...worker, acpSpawn };
+  }
+  return { ...record, workers };
 }
 
 function parseAcpSpawnFingerprint(

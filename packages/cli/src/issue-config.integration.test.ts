@@ -36,6 +36,8 @@ describe('explicit config in the issue startup path', () => {
     await writeFile(
       join(userEnsembleRoot, 'config.yaml'),
       [
+        'config:',
+        '  loadProjectConfig: false',
         'conductor:',
         '  model: standard-user-model',
         'github:',

@@ -50,6 +50,8 @@ export interface IssueCommandOptions {
   githubMonitorDebounceMs?: number;
   /** permission 停滞警告の閾値（ms）。未指定時は core の既定値を使う。 */
   permissionDeadlockStallMs?: number;
+  /** dispatch hold リマインド間隔（ms）。未指定時は core の既定値を使う。 */
+  dispatchHoldReminderMs?: number;
 }
 
 export interface IssueCommandDeps {
@@ -266,6 +268,9 @@ export async function executeIssueCommand(
       githubMonitorDebounceMs,
       ...(options.permissionDeadlockStallMs !== undefined
         ? { permissionDeadlockStallMs: options.permissionDeadlockStallMs }
+        : {}),
+      ...(options.dispatchHoldReminderMs !== undefined
+        ? { dispatchHoldReminderMs: options.dispatchHoldReminderMs }
         : {}),
       ...(defaultAcp ? { defaultAcp: { ...defaultAcp, config: ensembleConfig } } : { defaultAcp: { config: ensembleConfig } }),
       ...(interactive

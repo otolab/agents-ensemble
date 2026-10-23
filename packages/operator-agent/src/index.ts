@@ -15,8 +15,10 @@ export {
   ANSWER_LIVE_OPEN_QUESTION_TOOL,
   createAnswerLiveOpenQuestionTool,
   createGetLastConductorMessageTool,
+  createListConductorMessagesTool,
   createListLiveOpenQuestionsTool,
   GET_LAST_CONDUCTOR_MESSAGE_TOOL,
+  LIST_CONDUCTOR_MESSAGES_TOOL,
   LIST_LIVE_OPEN_QUESTIONS_TOOL,
   createSendOperatorMessageTool,
   SEND_OPERATOR_MESSAGE_TOOL,
@@ -39,8 +41,13 @@ export type {
 } from './operator-dispatch.js';
 export {
   createOperatorWatchPool,
+  createRegisterConductorMessageListenTool,
   createRegisterSessionWatchTool,
+  createUnregisterConductorMessageListenTool,
   createUnregisterSessionWatchTool,
   operatorWatchStatePath,
 } from './operator-watch-pool.js';
-export type { OperatorWatchPool } from './operator-watch-pool.js';
+export type {
+  ConductorMessageListenConfig,
+  OperatorWatchPool,
+} from './operator-watch-pool.js';

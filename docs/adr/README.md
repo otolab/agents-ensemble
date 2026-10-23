@@ -114,6 +114,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0040](0040-explicit-ensemble-config-file.md) | 起動時に指定する ensemble config ファイル | superseded → [0042](0042-explicit-config-replaces-user-layer.md) |
 | [0041](0041-ensemble-config-resume-digest.md) | resolved ensemble config の resume 整合性 | superseded → [0042](0042-explicit-config-replaces-user-layer.md) |
 | [0042](0042-explicit-config-replaces-user-layer.md) | `--config` による user config 層の差し替え | accepted |
+| [0043](0043-explicit-user-config-and-project-toggle.md) | 明示 user config と project load toggle の併用 | accepted |
 
 ## 追加するとき
 
