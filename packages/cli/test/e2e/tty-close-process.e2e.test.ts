@@ -97,7 +97,7 @@ describe('TTY /close process lifecycle', () => {
     'accepts /close through a real TTY and exits after production teardown',
     async () => {
       const fixturePath = fileURLToPath(
-        new URL('../test/process-fixtures/tty-close-process.mjs', import.meta.url),
+        new URL('../process-fixtures/tty-close-process.mjs', import.meta.url),
       );
       const childResult = await new Promise<{
         code: number | null;
