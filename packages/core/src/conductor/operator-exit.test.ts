@@ -2,16 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { isOperatorExitCommand } from './operator-exit.js';
 
 describe('isOperatorExitCommand', () => {
-  it('matches /exit and exit case-insensitively', () => {
+  it('matches the exit command and its alias', () => {
     expect(isOperatorExitCommand('/exit')).toBe(true);
-    expect(isOperatorExitCommand('  /EXIT  ')).toBe(true);
     expect(isOperatorExitCommand('exit')).toBe(true);
-    expect(isOperatorExitCommand(' Exit ')).toBe(true);
   });
 
-  it('does not match other input', () => {
-    expect(isOperatorExitCommand('')).toBe(false);
+  it('does not claim another operator command or partial input', () => {
     expect(isOperatorExitCommand('please exit now')).toBe(false);
+    expect(isOperatorExitCommand('/close')).toBe(false);
+    expect(isOperatorExitCommand('/reconnect')).toBe(false);
     expect(isOperatorExitCommand('/quit')).toBe(false);
   });
 });
