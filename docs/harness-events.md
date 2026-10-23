@@ -72,7 +72,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | verbose 時のみ `[harness] teardown.phase <name>` | なし |
 | `conductor.dispatch_hold` | conductor が `set_dispatch_hold` を呼んだとき、または held trigger（`permission.pending` / `permission.stall` を含む）の件数が変化したとき | `dispatch hold enabled` / `released (flushed N events)`（observation） | TUI の保留状態と件数を更新。解除後も未送信の held trigger があれば残数を表示 |
 
-conductor 発言の live history は SessionLogEvent ではなく UDS control API の別 projection です。bootstrap send を除く成功した `agent.send` について、send 本文と対応する `formatSessionEventsForConductor(batch)` 全文を session ごとの最新 100 件だけメモリに保持します。詳細は [live-open-question-control-api.md](live-open-question-control-api.md) を参照してください。
+conductor 発言の live history は SessionLogEvent ではなく UDS control API の別 projection です。bootstrap send を除く成功した `agent.send` について、send 本文と対応する `formatSessionEventsForConductor(batch)` 全文を session ごとの最新 100 件だけメモリに保持します。これは listen の稼働中通知と UDS list method が使う一時履歴です。operator-agent の `list_conductor_messages` は provider session history を別途読み、停止後も直近100件を返します。詳細は [live-open-question-control-api.md](live-open-question-control-api.md) を参照してください。
 
 ### 2.1.1 オペレータ向け representation
 

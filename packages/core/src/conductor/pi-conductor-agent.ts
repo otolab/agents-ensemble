@@ -24,6 +24,7 @@ import {
   type ExtensionUIContext,
   type LoadedMcpConfig,
   type McpServerConfig as PiMcpServerConfig,
+  type SessionMessageEntry,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import {
@@ -62,12 +63,15 @@ import type { McpServerConfigMap } from '../mcp/load-mcp-config.js';
 
 /** Project-local Pi transcript storage used by the conductor backend. */
 export const PI_SESSION_ROOT = '.ensemble/pi/sessions';
+export const PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE =
+  'agents-ensemble/conductor-message-history/v1';
 
 interface PiSendState {
   runId: string;
   callbacks?: ConductorSendCallbacks;
   finalMessage?: AssistantMessage;
   usage?: ConductorTokenUsage;
+  history?: ConductorSendCallbacks['history'];
 }
 
 interface PiMcpStartupState {
@@ -223,7 +227,11 @@ export class PiConductorAgent implements ConductorAgent {
       };
     }
 
-    const state: PiSendState = { runId, callbacks };
+    const state: PiSendState = {
+      runId,
+      callbacks,
+      ...(callbacks?.history ? { history: callbacks.history } : {}),
+    };
     this.activeSend = state;
     try {
       await this.session.prompt(
@@ -257,10 +265,23 @@ export class PiConductorAgent implements ConductorAgent {
     }
 
     const status = statusFromStopReason(finalMessage.stopReason);
+    const result = assistantText(finalMessage) || undefined;
+    if (
+      status === 'finished' &&
+      result?.trim() &&
+      state.history &&
+      state.history.dispatchSource !== 'initial'
+    ) {
+      appendPiConductorMessageHistory(this.session.sessionManager, {
+        history: state.history,
+        responseText: result,
+        completedAt: Date.now(),
+      });
+    }
     return {
       runId,
       status,
-      result: assistantText(finalMessage) || undefined,
+      result,
       ...(finalMessage.errorMessage
         ? { error: { message: finalMessage.errorMessage } }
         : {}),
@@ -441,6 +462,70 @@ export class PiConductorAgent implements ConductorAgent {
       }
     }
   }
+}
+
+function appendPiConductorMessageHistory(
+  sessionManager: SessionManager,
+  input: {
+    history: NonNullable<ConductorSendCallbacks['history']>;
+    responseText: string;
+    completedAt: number;
+  },
+): void {
+  const branch = sessionManager.getBranch();
+  let assistantIndex = -1;
+  let assistantEntry: SessionMessageEntry | undefined;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (
+      entry?.type === 'message' &&
+      entry.message.role === 'assistant' &&
+      piMessageText(entry).trim() === input.responseText.trim()
+    ) {
+      assistantIndex = index;
+      assistantEntry = entry;
+      break;
+    }
+  }
+  if (!assistantEntry) {
+    throw new Error(
+      'Pi conductor history could not locate the final assistant entry on the active branch.',
+    );
+  }
+
+  let userEntry: SessionMessageEntry | undefined;
+  for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (entry?.type === 'message' && entry.message.role === 'user') {
+      userEntry = entry;
+      break;
+    }
+  }
+  if (!userEntry) {
+    throw new Error(
+      'Pi conductor history could not locate the matching user entry on the active branch.',
+    );
+  }
+
+  sessionManager.appendCustomEntry(PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE, {
+    inboundEntryId: userEntry.id,
+    responseEntryId: assistantEntry.id,
+    completedAt: input.completedAt,
+    sendCount: input.history.sendCount,
+    ...(input.history.dispatchSource
+      ? { dispatchSource: input.history.dispatchSource }
+      : {}),
+  });
+}
+
+function piMessageText(entry: SessionMessageEntry): string {
+  const message = entry.message;
+  if (message.role !== 'user' && message.role !== 'assistant') return '';
+  if (typeof message.content === 'string') return message.content;
+  return message.content
+    .filter((content) => content.type === 'text')
+    .map((content) => content.text)
+    .join('');
 }
 
 /** Create the Pi conductor backend factory. */

@@ -527,6 +527,10 @@ function runEventConductorSend(input: {
     {
       ...input.sendReconnect,
       signal: input.signal,
+      history: {
+        sendCount: nextSendCount,
+        ...(input.dispatchSource ? { dispatchSource: input.dispatchSource } : {}),
+      },
       onToolCallStarted: (info) => {
         input.onSendProgress?.({
           sendCount: nextSendCount,

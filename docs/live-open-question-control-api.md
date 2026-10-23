@@ -6,7 +6,7 @@
 
 - session ごとの listener は、稼働中 `ensemble issue` プロセス内の harness が起動・停止します。
 - operator-agent は client です。listener の起動や停止中 session の回答保存は行いません。
-- API は稼働中 session の Open Question 一覧・回答、watch 用 observation snapshot、operator-agent から conductor への明示メッセージ、最後の conductor 成功応答取得、成功応答と対応する inbound の bounded list を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。conductor 発言一覧は live harness のメモリ内 ring buffer で、SessionResumeStore・YAML・session log には保存しません。
+- API は稼働中 session の Open Question 一覧・回答、watch 用 observation snapshot、operator-agent から conductor への明示メッセージ、最後の conductor 成功応答取得、成功応答と対応する inbound の bounded list を提供します。質問の保存・resume の正本は引き続き Open Questions YAML です。UDS の `session.conductor_messages.list` は稼働中 harness のメモリ内 ring buffer を使います。一方、operator-agent tool の `list_conductor_messages` は provider session history を直接読み、停止後も利用できます。
 
 operator-agent には `list_live_open_questions` / `answer_live_open_question`、watch pool の `register_session_watch` / `unregister_session_watch`、`send_operator_message`、`get_last_conductor_message`、`list_conductor_messages`、`register_conductor_message_listen` / `unregister_conductor_message_listen` の tool があります。session を指定する tool は `list_operator_sessions` で得た `conductorAgentId` を受け取ります。回答 tool は `questionId` と `answer`、送信 tool は `text` と任意の `delivery` を要求します。各 tool の input schema は未知の field を許可しません。
 
@@ -39,8 +39,10 @@ operator-agent tool の input は次のとおりです。
 `list_conductor_messages`:
 
 ```json
-{"conductorAgentId":"agent-123","limit":20,"order":"desc","cursor":44}
+{"conductorAgentId":"agent-123","limit":20,"order":"desc","cursor":"provider-run-or-entry-id"}
 ```
+
+tool は SessionResumeStore に保存した conductor backend / cwd から provider history を読みます。返却件数は直近 100 件が上限で、`cursor` は返却した `providerId` を指定する排他的な境界です。UDS method の integer `sendCount` cursor とは別の pagination 契約です。
 
 `register_conductor_message_listen`:
 
@@ -62,7 +64,7 @@ watch pool は `.ensemble/operator-agent/watch-state.json` に watch 登録、se
 
 operator-agent は `.ensemble/sessions/{conductorAgentId}.json` にある SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、SessionResumeStore に記録された値を使ってください。
 
-path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら接続は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message`、`list_conductor_messages` は直接 live control であり、YAML / SessionResumeStore へ fallback しません。watch pool の `register_session_watch` のみが `session.observe` を試し、UDS が到達不能または method 未対応なら保存 snapshot へ切り替えます。発言 listen は UDS が利用できない間も保存値へ切り替えず、次の poll で再接続を試します。
+path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら UDS request は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` と発言 listen は直接 live control であり、保存 YAML へ fallback しません。operator-agent tool の `list_conductor_messages` はこの UDS 経路を使わず、SessionResumeStore の session ID / backend / cwd から provider history を読みます。watch pool の `register_session_watch` のみが `session.observe` を試し、UDS が到達不能または method 未対応なら保存 snapshot へ切り替えます。発言 listen は UDS が利用できない間も保存値へ切り替えず、次の poll で再接続を試します。
 
 listener の起動後に `harnessSocketPath` を含む初回 SessionResumeStore flush が失敗しても、warning を記録して session は続行し、listener は稼働したままの場合があります。このとき SessionResumeStore に新しい path が書かれていなければ client は endpoint を発見・接続できません。別の接続先を探す自動 fallback はありません。
 
@@ -207,7 +209,7 @@ operator の入力、応答履歴、失敗応答は返しません。状態は�
 
 成功した conductor 応答と、その応答に対応する conductor 向け inbound を一覧します。記録対象は bootstrap の `agent.send` を除く send のうち、`status=finished` かつ trim 後の `result` が空でないものです。`inbound` はその send に渡した `formatSessionEventsForConductor(batch)` の全文です。bootstrap send は compiled `initialPrompt` を送るため対象外です。
 
-稼働中 session ごとに直近 100 件を保持します。これは bounded なプロセス内履歴で、harness 停止時に破棄され、停止後に YAML / sidecar へ fallback しません。
+稼働中 session ごとに直近 100 件を保持します。これは bounded なプロセス内履歴で、harness 停止時に破棄されます。この UDS method は停止後に YAML / sidecar へ fallback しません。operator-agent tool の `list_conductor_messages` は別の provider history projection であり、停止後の取得方法と出力は次節のとおりです。
 
 Request:
 
@@ -246,6 +248,18 @@ UDS response の上限は従来どおり **1,048,576 bytes（1 MiB）** です�
 operator-agent の listen は limit 20 の page から読み始め、aggregate response が 1 MiB を超えた場合は同じ exclusive cursor から limit を下げて再試行します。取得できた複数 page はその poll の debounce report にまとめ、sendCount 昇順で通知します。cursor は取得済み page の最後までだけ進めるため、retry で発言を飛ばしたり並べ替えたりしません。
 
 limit 1 でも単独 response が上限を超える発言に達した場合、その発言の `sendCount` を使って listen cursor を安全に進めます。読み取れなかった発言は内容を切り詰めずに読み飛ばし、同じ debounce window に複数 poll で見つかったものも含め、report ごとに件数と `sendCount` を列挙した warning section 1つにまとめます。その後も polling を続け、後続の読み取り可能な発言を順序どおり通知します。先に取得した page、読み飛ばした発言、後続 page は同じ report window にまとめられます。list API はこの動作をせず、単独 oversized record を含む response に対して従来どおり明示的な size error を返します。
+
+### operator-agent の provider history list
+
+operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / cwd を使い、SDK が保存した local session history から最大 100 件を読みます。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。
+
+- **共通 filter:** user inbound と final assistant response だけを返します。system prompt、tool call / result、thinking、その他 provider event は出力しません。bootstrap、失敗・cancelled・running・空 response は対象外です。inbound の secret redaction は行わず、既存の同一 OS user access boundary が適用されます。
+- **Pi 1.2.0:** active branch の user / assistant entry ID を custom metadata から引き、保存済み本文を再構成します。metadata に本文は複製せず、LLM context にも入りません。順序は active branch の履歴順、`at` は harness が記録した send 完了時刻（Unix ms）、`providerId` は final assistant entry ID です。別 branch に移った発言は一覧から外れます。初回 `initial` send は marker を作りません。
+- **Cursor 1.0.27:** pinned `Agent.listRuns()` / `Agent.getRun()` と run の `conversation()` から再構成し、cursor pagination で直近 100 件を選びます。順序は SDK run order、`at` は run 作成時刻（Unix ms）、`providerId` は run ID、取得できる場合は `requestId` も返します。新規 session は bootstrap run ID を SessionResumeStore に保存します。これを持たない既存 session では先頭 run を bootstrap とみなします。Cursor は `sendCount` / `dispatchSource` を提供しないため、それらの field は返しません。
+- **ページング:** `order` は provider history order の `asc` / `desc`、`cursor` は返却行の `providerId` を使う排他的境界です。`hasMore` は保持対象の直近 100 件内に次ページがある場合に true です。Pi の `sendCount` / `dispatchSource` は harness metadata で、Cursor の provider ID / request ID と共通通し番号ではありません。
+- **retention:** Pi JSONL と Cursor local store の保持・削除期間は SDK / local store の管理に委ねます。今回、長期保持や削除保証は追加しません。Pi では active branch と marker が参照する entry が必要です。Cursor では対象 run と conversation が必要です。
+
+この tool の出力は UDS `session.conductor_messages.list` の integer `sendCount` pagination / 1 MiB response 契約とは別です。`get_last_conductor_message` と終了 JSON は引き続き既存経路・既存形式を使います。
 
 ## Persistence、acknowledgment、errors
 

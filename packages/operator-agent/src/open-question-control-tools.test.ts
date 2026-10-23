@@ -2,6 +2,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+const { mockListConductorProviderHistory } = vi.hoisted(() => ({
+  mockListConductorProviderHistory: vi.fn(),
+}));
+vi.mock('@agents-ensemble/core/operator-runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agents-ensemble/core/operator-runtime')>()),
+  listConductorProviderHistory: mockListConductorProviderHistory,
+}));
 import { OpenQuestionRegistry } from '../../core/src/escalation/open-question.js';
 import { recordOpenQuestionAnswer } from '../../core/src/escalation/record-open-question-answer.js';
 import {
@@ -32,8 +39,23 @@ describe('operator-agent live Open Question tools', () => {
     repoRoot = undefined;
   });
 
-  it('lists and answers through the socket recorded in the session resume store', async () => {
+  it('routes history lists to provider storage and other live controls through the socket', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-live-'));
+    const conductorCwd = join(repoRoot, 'conductor-cwd');
+    mockListConductorProviderHistory.mockReset().mockResolvedValue({
+      messages: [
+        {
+          backend: 'pi',
+          providerId: 'response-agent-live',
+          text: 'The conductor response.',
+          inbound: 'The full formatted inbound context.',
+          at: 1792512003000,
+          sendCount: 44,
+          dispatchSource: 'operator',
+        },
+      ],
+      hasMore: false,
+    });
     const registry = new OpenQuestionRegistry();
     const question = registry.enqueue({
       question: 'Proceed?',
@@ -47,15 +69,9 @@ describe('operator-agent live Open Question tools', () => {
         at: 1792512003000,
         sendCount: 44,
       }),
-      listConductorMessages: () => [
-        {
-          text: 'The conductor response.',
-          inbound: 'The full formatted inbound context.',
-          at: 1792512003000,
-          sendCount: 44,
-          dispatchSource: 'operator',
-        },
-      ],
+      listConductorMessages: () => {
+        throw new Error('list_conductor_messages must read provider history');
+      },
       answerOpenQuestion: async ({ questionId, answer }) => {
         const answered = recordOpenQuestionAnswer(registry, {
           id: questionId,
@@ -80,6 +96,8 @@ describe('operator-agent live Open Question tools', () => {
         openQuestions: [question],
         sequence: 1,
         workers: {},
+        conductorBackend: 'pi',
+        conductorCwd,
         harnessSocketPath: server.socketPath,
         updatedAt: Date.now(),
       },
@@ -124,6 +142,8 @@ describe('operator-agent live Open Question tools', () => {
     expect(messageHistory.structuredContent).toEqual({
       messages: [
         {
+          backend: 'pi',
+          providerId: 'response-agent-live',
           text: 'The conductor response.',
           inbound: 'The full formatted inbound context.',
           at: 1792512003000,
@@ -136,6 +156,12 @@ describe('operator-agent live Open Question tools', () => {
     expect(JSON.parse(messageHistory.content[0]!.text)).toEqual(
       messageHistory.structuredContent,
     );
+    expect(mockListConductorProviderHistory).toHaveBeenCalledWith({
+      backend: 'pi',
+      conductorAgentId: 'agent-live',
+      cwd: conductorCwd,
+      query: { limit: 1, order: 'asc' },
+    });
 
     const answered = await createAnswerLiveOpenQuestionTool(repoRoot).execute({
       conductorAgentId: 'agent-live',
@@ -158,8 +184,20 @@ describe('operator-agent live Open Question tools', () => {
     });
   });
 
-  it('fails when no live socket is recorded instead of reading the YAML snapshot', async () => {
+  it('reads provider history without a live socket while last-message still requires the socket', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-offline-'));
+    const conductorCwd = join(repoRoot, 'provider-cwd');
+    mockListConductorProviderHistory.mockReset().mockResolvedValue({
+      messages: [
+        {
+          backend: 'pi',
+          providerId: 'response-agent-offline',
+          text: 'The conductor response.',
+          inbound: 'The full formatted inbound context.',
+        },
+      ],
+      hasMore: false,
+    });
     await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
@@ -174,10 +212,32 @@ describe('operator-agent live Open Question tools', () => {
         openQuestions: [],
         sequence: 0,
         workers: {},
+        conductorBackend: 'pi',
+        conductorCwd,
         updatedAt: Date.now(),
       },
     );
 
+    const history = await createListConductorMessagesTool(repoRoot).execute({
+      conductorAgentId: 'agent-offline',
+    });
+    expect(history.structuredContent).toMatchObject({
+      messages: [
+        {
+          backend: 'pi',
+          providerId: 'response-agent-offline',
+          text: 'The conductor response.',
+          inbound: 'The full formatted inbound context.',
+        },
+      ],
+      hasMore: false,
+    });
+    expect(mockListConductorProviderHistory).toHaveBeenCalledWith({
+      backend: 'pi',
+      conductorAgentId: 'agent-offline',
+      cwd: conductorCwd,
+      query: { limit: 20, order: 'desc' },
+    });
     await expect(
       createListLiveOpenQuestionsTool(repoRoot).execute({
         conductorAgentId: 'agent-offline',
@@ -190,9 +250,10 @@ describe('operator-agent live Open Question tools', () => {
     ).rejects.toThrow('has no recorded live control socket');
     await expect(
       createListConductorMessagesTool(repoRoot).execute({
-        conductorAgentId: 'agent-offline',
+        conductorAgentId: 'not-in-this-repository',
       }),
-    ).rejects.toThrow('has no recorded live control socket');
+    ).rejects.toThrow('No saved session found for not-in-this-repository.');
+    expect(mockListConductorProviderHistory).toHaveBeenCalledOnce();
   });
 
   it('sends one operator message through the live session UDS', async () => {

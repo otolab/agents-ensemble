@@ -386,6 +386,7 @@ export async function runConductorSession(
   let githubMonitor: GitHubMonitor | undefined;
   const pendingGitHubRecoveries: number[] = [];
   const conductorCwd = options.conductorCwd ?? process.cwd();
+  let cursorBootstrapRunId: string | undefined;
   const mcpServers = await resolveMcpServers(
     options.repoRoot,
     options.mcpConfigOptions,
@@ -420,6 +421,7 @@ export async function runConductorSession(
       harnessSocketPath: undefined,
       updatedAt: Date.now(),
     };
+    cursorBootstrapRunId = loadedResumeStore.cursorBootstrapRunId;
     harnessPhase = 'running';
     harnessModifiedAt = resumeStore.modifiedAt;
     await saveSessionResumeStore(
@@ -1156,6 +1158,10 @@ export async function runConductorSession(
       version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: conductorHandle.conductor.agentId,
       conductorBackend,
+      conductorCwd,
+      ...(cursorBootstrapRunId
+        ? { cursorBootstrapRunId }
+        : {}),
       lazyWorkers: activeLazyWorkers,
       ...(harnessSocketPath ? { harnessSocketPath } : {}),
       issueUrl: options.issueUrl,
@@ -1850,6 +1856,15 @@ export async function runConductorSession(
     }): void {
       sendCount = info.sendCount;
       autonomousTurns = info.autonomousTurns;
+      if (
+        conductorBackend === 'cursor' &&
+        info.dispatchSource === 'initial' &&
+        info.runId &&
+        cursorBootstrapRunId === undefined
+      ) {
+        cursorBootstrapRunId = info.runId;
+        scheduleSessionResumeStoreFlush();
+      }
       const responseText = info.result?.trim();
       if (info.status === 'finished' && responseText) {
         const at = Date.now();

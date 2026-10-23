@@ -390,7 +390,9 @@ describe('runConductorSession resume / shutdown', () => {
     );
     expect(mockSend).toHaveBeenCalledWith(
       expect.stringContaining(TEST_ISSUE.url),
-      expect.any(Object),
+      expect.objectContaining({
+        history: { sendCount: 1, dispatchSource: 'initial' },
+      }),
     );
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
   });
@@ -714,6 +716,37 @@ describe('runConductorSession resume / shutdown', () => {
       sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
     expect(resumeStore?.conductorBackend).toBe('pi');
+  });
+
+  it('persists the Cursor bootstrap run ID and conductor cwd for provider history', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-cursor-bootstrap',
+      status: 'finished',
+      result: 'started',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'cursor' },
+      },
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    const resumeStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
+    );
+    expect(resumeStore).toMatchObject({
+      conductorBackend: 'cursor',
+      conductorCwd: expect.any(String),
+      cursorBootstrapRunId: 'run-cursor-bootstrap',
+    });
   });
 
   it('passes resolved MCP configuration to ConductorAgent.resume for explicit resume', async () => {

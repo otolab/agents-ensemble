@@ -1,11 +1,11 @@
 import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
-  CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT,
+  CONDUCTOR_PROVIDER_HISTORY_LIMIT,
+  listConductorProviderHistory,
   listSessionResumeStores,
   OPEN_QUESTION_CONTROL_METHODS,
   sendOpenQuestionControlRequest,
   type OpenQuestionControlAnswerResult,
-  type OpenQuestionControlConductorMessagesResult,
   type OpenQuestionControlLastConductorMessage,
   type OpenQuestionControlListItem,
   type ConductorJsonValue,
@@ -28,13 +28,13 @@ interface LastConductorMessageResult {
   message: OpenQuestionControlLastConductorMessage | null;
 }
 
-/** Read successful conductor responses and their matching inbound batches. */
+/** Read selected user prompts and final responses from provider session history. */
 export function createListConductorMessagesTool(repoRoot: string): ConductorTool {
   const root = resolve(repoRoot);
   return {
     name: LIST_CONDUCTOR_MESSAGES_TOOL,
     description:
-      'List successful conductor responses and the full formatted inbound batch they answered from a running Issue harness. Defaults to the latest 20 in descending sendCount order. Use the last message sendCount as an exclusive cursor to continue paging. This does not read stopped sessions.',
+      'List up to 100 recent user prompts and final conductor responses from provider session history, including after the Issue harness stops. Defaults to 20 in descending provider order. Pass a returned providerId as an exclusive cursor to continue paging.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -45,29 +45,18 @@ export function createListConductorMessagesTool(repoRoot: string): ConductorTool
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT,
-          description: `Number of messages to return (default ${CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT}, maximum ${CONDUCTOR_MESSAGE_PAGE_MAX_LIMIT}).`,
+          maximum: CONDUCTOR_PROVIDER_HISTORY_LIMIT,
+          description: `Number of messages to return (default ${CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT}, maximum ${CONDUCTOR_PROVIDER_HISTORY_LIMIT}).`,
         },
         order: {
           type: 'string',
           enum: ['asc', 'desc'],
-          description: 'Sort by sendCount; defaults to desc.',
+          description: 'Sort by provider history order; defaults to desc.',
         },
         cursor: {
-          type: 'integer',
-          minimum: 0,
+          type: 'string',
           description:
-            'Exclusive keyset boundary; with desc returns smaller sendCount values, with asc returns larger values. Cannot be combined with before or after.',
-        },
-        before: {
-          type: 'integer',
-          minimum: 0,
-          description: 'Return only messages with sendCount below this value.',
-        },
-        after: {
-          type: 'integer',
-          minimum: 0,
-          description: 'Return only messages with sendCount above this value.',
+            'Exclusive providerId boundary from a returned message.',
         },
       },
       required: ['conductorAgentId'],
@@ -79,26 +68,35 @@ export function createListConductorMessagesTool(repoRoot: string): ConductorTool
         'conductorAgentId',
       );
       const resumeStore = await requireSession(root, conductorAgentId);
-      const params: Record<string, unknown> = {};
-      if (args.limit !== undefined) params.limit = optionalNumber(args.limit, 'limit');
-      if (args.order !== undefined) params.order = requireOrder(args.order);
-      if (args.cursor !== undefined) {
-        params.cursor = optionalNumber(args.cursor, 'cursor');
-      }
-      if (args.before !== undefined) {
-        params.before = optionalNumber(args.before, 'before');
-      }
-      if (args.after !== undefined) {
-        params.after = optionalNumber(args.after, 'after');
-      }
-      const result =
-        await sendOpenQuestionControlRequest<OpenQuestionControlConductorMessagesResult>(
-          requireSocketPath(resumeStore),
-          {
-            method: OPEN_QUESTION_CONTROL_METHODS.conductorMessagesList,
-            params,
-          },
+      const backend = resumeStore.conductorBackend ?? 'cursor';
+      const limit =
+        args.limit === undefined
+          ? CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT
+          : optionalInteger(args.limit, 'limit');
+      if (limit < 1 || limit > CONDUCTOR_PROVIDER_HISTORY_LIMIT) {
+        throw new Error(
+          `limit must be an integer between 1 and ${CONDUCTOR_PROVIDER_HISTORY_LIMIT}.`,
         );
+      }
+      const order =
+        args.order === undefined ? 'desc' : requireOrder(args.order);
+      const cursor =
+        args.cursor === undefined
+          ? undefined
+          : requireString(args.cursor, 'cursor');
+      const result = await listConductorProviderHistory({
+        backend,
+        conductorAgentId,
+        cwd: resumeStore.conductorCwd ?? resumeStore.repoRoot,
+        ...(resumeStore.cursorBootstrapRunId
+          ? { cursorBootstrapRunId: resumeStore.cursorBootstrapRunId }
+          : {}),
+        query: {
+          limit,
+          order,
+          ...(cursor ? { cursor } : {}),
+        },
+      });
       return {
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         structuredContent: result as unknown as Record<
@@ -348,4 +346,15 @@ function optionalNumber(
     throw new Error(`${name} must be an integer.`);
   }
   return value;
+}
+
+function optionalInteger(
+  value: ConductorJsonValue,
+  name: string,
+): number {
+  const number = optionalNumber(value, name);
+  if (!Number.isSafeInteger(number)) {
+    throw new Error(`${name} must be an integer.`);
+  }
+  return number;
 }
