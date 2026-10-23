@@ -30,7 +30,7 @@ describe('ensemble operator-agent command', () => {
     );
   });
 
-  it('documents the explicit fresh-session option in command help', () => {
+  it('documents config selection and the explicit fresh-session option', () => {
     const cliEntry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
     const result = spawnSync(
       process.execPath,
@@ -40,5 +40,6 @@ describe('ensemble operator-agent command', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('--new');
+    expect(result.stdout).toContain('--config <path>');
   });
 });

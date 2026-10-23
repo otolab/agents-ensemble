@@ -1,192 +1,116 @@
 # テスト戦略
 
-> **正本:** agents-ensemble の unittest / integration / e2e の分類・配置・実行方針。
+> **正本:** agents-ensemble のテスト分類・配置・実行条件と、CI が常時実行する範囲。
 
-[architecture.md](architecture.md) に基づき、**unittest / integration / e2e を明示的に分離**する。参考: [modular-prompt の TESTING_STRATEGY.md](https://github.com/otolab/modular-prompt/blob/main/docs/TESTING_STRATEGY.md)。
+テストレベルはファイル名と配置で明示する。Vitest の include/exclude、package scripts、CI コマンドもこの分類に合わせる。レベルごとの目的を分け、同じ振る舞いの重複は、低レベルの詳細検証と上位レベルの少数の契約 smoke のように、境界を確認する理由がある場合に限る。
 
-## 原則
+## テストレベルと命名
 
-1. **下位レイヤから積む** — transport / client の unittest を先に固め、integration → e2e の順で厚くする
-2. **CI は unittest と認証不要の integration smoke を必須** — PR / main の CI では `session-resume.integration.test.ts` と `pi-conductor.integration.test.ts` を実行する。実 Cursor SDK integration と e2e は既定 CI に含めず、専用環境で設定・認証が不足する場合は `skip` とする
-3. **外部依存は境界で切る** — `agent acp` / GitHub API / `@cursor/sdk` は unittest ではモック or Fake
-4. **レベルごとに責務を分ける** — 下表の定義に従い、同じ振る舞いを複数レベルで重複検証しない
+| レベル | 命名・配置 | 主な境界 |
+|--------|------------|----------|
+| **unit** | `packages/*/src/**/*.test.ts[x]` | モジュールや package 内の状態・変換。Fake / mock を使い、実 ACP・Cursor SDK・GitHub API には接続しない |
+| **integration** | `packages/core/test/integration/**/*.integration.test.ts` | core API、複数モジュール、Fake ACP、または設定された実 ACP / Cursor SDK の接続 |
+| **e2e** | `packages/cli/test/e2e/**/*.e2e.test.ts` | `ensemble` CLI を入口にしたユーザー操作とプロセス終了までの確認 |
+| **補助 Node test** | `.github/scripts/*.test.mjs`、`scripts/pi/*.test.mjs` | Vitest workspace 外の Node.js スクリプトの検証。実行コマンドとCI範囲は個別に記録する |
 
-## テストレベルの定義
+`*.integration.test.ts` と `*.e2e.test.ts` は `src/` に置かない。unit 設定は両 suffix を明示的に除外し、integration / e2e 設定はそれぞれのディレクトリと suffix の組だけを含める。
 
-| レベル | 入口 | 外部プロセス | 主な目的 |
-|--------|------|-------------|----------|
-| **unittest** | モジュール直接 | 使わない | パース、状態遷移、純関数、Fake transport |
-| **integration** | core API | 実 `agent acp` 等（設定時） | モジュール接続、stdio 通信、session ライフサイクル |
-| **e2e** | `ensemble` CLI | CLI 経由で実依存 | Issue URL 入力から終了 JSON までの縦切り |
+少数の unit test は、process 管理関数を確かめるために `process.execPath` で短命な Node fixture を起動する。また CLI の version / TTY 前提チェックはビルド済み CLI を子プロセスで呼ぶ。対象が単一の process helper または CLI gate で、実ACP・外部サービス・Issue workflow を通さないため unit suite に含める。実ACPを起動するもの、PTY 上で実 CLI のセッションを動かすものは integration / e2e に置く。
 
----
+`packages/cli/src/issue-command-session.test.ts` と `packages/core/src/conductor/conductor-session.test.ts` は複数モジュールを接続するが、Fake ACP / conductor / TUI を注入して package 内の session orchestration を直接検証するため unit suite に含める。前者は一時 Git repository と Git worktree、後者はローカル UDS を使う。実 executable・ACP backend・外部 service まで通すテストとの境界は e2e / integration に置き、これらは「in-process orchestration smoke」としての明示的な例外とする。
 
-## 1. ユニットテスト
+## Workspace と実行コマンド
 
-**定義**: 単一モジュールの振る舞いを検証。**外部プロセス・ネットワーク・実 `agent acp` は使わない。**
+| workspace / 領域 | 種別 | 実行コマンド | PR / main CI 常時実行 | 追加条件 |
+|------------------|------|--------------|----------------------|----------|
+| `@agents-ensemble/core` | unit | `pnpm --filter @agents-ensemble/core test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Git、一時ディレクトリ、ローカル UDS。子プロセスは制御された Node fixture のみ |
+| `@agents-ensemble/core` | integration | `pnpm --filter @agents-ensemble/core test:integration` | 一部のみ。下記「CI 常時実行範囲」を参照 | Fake / in-process suite は追加設定不要。実 `agent acp` suite は `test-acp.yaml` と利用可能な `agent` が必要。Cursor SDK suite は認証、ネットワーク、書き込み可能な隔離 HOME が必要 |
+| `@agents-ensemble/core` | e2e | なし | なし | 現在 core に e2e suite はない。Vitest e2e config と package script は設けない |
+| `@agents-ensemble/cli` | unit | `pnpm --filter @agents-ensemble/cli test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Git、一時ディレクトリ、ローカル UDS。ビルド済み CLI を起動するテストがあるため、単独実行前に `pnpm build` が必要 |
+| `@agents-ensemble/cli` | e2e | `pnpm --filter @agents-ensemble/cli test:e2e` | 一部のみ。PTY suites を個別に実行 | 先に `pnpm build` が必要。PTY suites は POSIX と Python 3 の標準 `pty` モジュールが必要。Pi TTY suites は localhost bind と Git も使う。Issue workflow suite は `test-acp.yaml`、Issue URL、repo、conductor 認証、利用可能な ACP 実行環境が必要 |
+| `@agents-ensemble/operator-agent` | unit | `pnpm --filter @agents-ensemble/operator-agent test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、一時ディレクトリ、ローカル UDS。外部 agent / service は不要 |
+| `.github/scripts` | Node test | `pnpm test:release-workflow` | はい | Node.js 22 と Git。テスト用の一時 Git repository を使い、GitHub には接続しない |
+| `scripts/pi` | Node test | `node --test scripts/pi/cached-auth.test.mjs` | いいえ | Node.js。Linux 固有の PID namespace / procfs を検証する2ケースは非Linuxで skip。CI 対応は Issue #475 の範囲 |
 
-### 対象（`packages/core` 中心）
-
-| モジュール | 検証内容 |
-|-----------|---------|
-| **JsonRpcTransport** | stdio バッファリング、メッセージ境界、request/response 対応 |
-| **AcpClient** | メソッド呼び出しの組み立て（transport はモック） |
-| **FakeAcpServer** | 決まった JSON-RPC 応答を返すテスト用サーバ |
-| **SessionRunner** | `session/update` シーケンスの解釈、完了検知（Fake 使用） |
-| **共有型** | URL パース、ロール enum 等 |
-| **PromptBuilder** | ロール別起動文の組み立て |
-| **WorktreeHelper** | パス・ブランチ名規約（temp dir + git は最小限の fixture） |
-| **PermissionPolicy** | allow/deny 判定（純関数） |
-
-`packages/cli` の表示・TUI・サマリ整形と、`packages/operator-agent` の prompt・SessionResumeStore 読み取り tool・TTY conversation smoke も各 package の `src/**/*.test.ts` で検証する。
-
-### 配置
-
-```
-packages/core/src/**/*.test.ts
-packages/cli/src/**/*.test.ts
-packages/operator-agent/src/**/*.test.ts
-```
-
-### 実行
+Root scripts:
 
 ```bash
-pnpm test              # watch（unittest のみ）
-pnpm test:run          # workspace 全 package を単発実行（CI デフォルト）
+pnpm test              # core の Vitest watch
+pnpm test:run          # 各 workspace の test:run を一括実行（CI の unit suite）
+pnpm test:release-workflow
+pnpm test:integration  # core integration 全体。設定済み実依存 suite を含む
+pnpm test:e2e          # CLI e2e 全体。Issue workflow suite は設定・認証時のみ実行
+pnpm test:all          # test:run → test:integration → test:e2e
 ```
 
-### vitest 設定方針
+`pnpm test:all` にはビルドが含まれない。CLI の dist を使う unit / e2e も通す場合は、先に `pnpm build` を実行する。
 
-- `test/integration/**` と `test/e2e/**` を **exclude**
-- タイムアウト: 10 秒程度
-- 並列実行: 可（プロセス・GPU 依存なし）
+## Vitest 設定
 
-### モック方針
+| 設定 | include | exclude / 補足 |
+|------|---------|----------------|
+| `packages/core/vitest.config.ts` | `src/**/*.test.ts` | `*.integration.test.ts`、`*.e2e.test.ts` と `test/integration/**`、`test/e2e/**` を除外 |
+| `packages/core/vitest.config.integration.ts` | `test/integration/**/*.integration.test.ts` | e2e suffix を除外。直列実行、60 秒 timeout |
+| `packages/cli/vitest.config.ts` | `src/**/*.test.ts`、`src/**/*.test.tsx` | integration / e2e suffix と `test/e2e/**` を除外 |
+| `packages/cli/vitest.config.e2e.ts` | `test/e2e/**/*.e2e.test.ts` | 直列実行、最大5分 timeout |
+| `packages/operator-agent/vitest.config.ts` | `src/**/*.test.ts` | integration / e2e suffix を除外 |
 
-| テストレベル | `agent acp` / SDK | transport / 通信 |
-|------------|------------------|----------------|
-| unittest | 使わない | Fake / モック transport |
-| integration | fake / in-process smoke、実 `agent acp`、または実 Cursor SDK | Fake transport、実 stdio、または SDK 接続（シナリオ別） |
-| e2e | 実プロセス（CLI 経由） | 実 stdio |
+integration / e2e は副作用のあるプロセスや共有状態を避けるため直列実行する。unit suite 内の子プロセス fixture は各テストが自分で起動・終了し、ネットワークサービスや認証状態を共有しない。
 
-**モックすべきもの（unittest）**: 子プロセス、`agent` バイナリ、ネットワーク、GitHub API クライアント、SDK Agent
+## 外部環境を使うテスト
 
-**実装を直接テストすべきもの（unittest）**: パース、状態遷移、エラーメッセージ、プロンプト文字列
+| 対象 | 分類 | 前提と実行範囲 |
+|------|------|----------------|
+| `packages/core/src/acp/acp-client.test.ts`、`process-stream-capture.test.ts` | unit の process-helper fixture | Node.js 子プロセスをテスト自身が起動する。agent / ACP / network は不要。unit suite としてPR / main CIで実行 |
+| `packages/cli/src/cli-version.test.ts`、`operator-agent-command.test.ts` | unit の CLI gate smoke | ビルド済み `packages/cli/dist/index.js` を起動する。CI は先に `pnpm build` を実行。GitHub / ACP 接続は不要 |
+| core / cli / operator-agent の session orchestration tests | unit の in-process orchestration smoke | Fake ACP / conductor / TUI と一時 repository、ローカル UDS を使う。Git と UDS が使えるCI環境で常時実行し、実 ACP / 外部 service には接続しない |
+| core `test/integration` の Fake / in-process suites | integration | 一時ファイル、Fake ACP、または Node の ACP fixture を利用する。外部認証なしでローカル実行可能。CI では指定 suite のみ常時実行 |
+| `acp-bridge.integration.test.ts` | integration | `test-acp.yaml` と、そこに指定する利用可能な `agent` / ACP backend が必要。設定ファイルがなければ suite を skip。設定済みで実行不能な場合は失敗として扱う |
+| `conductor-agent.integration.test.ts`、`issue-session.integration.test.ts` | integration | 実 Cursor SDK、認証（`CURSOR_API_KEY` または SDK login）、ネットワーク、隔離 HOME 用の一時書き込み領域が必要。認証がない、または隔離 HOME を準備できない場合は suite を skip |
+| `packages/cli/test/e2e/issue.e2e.test.ts` | e2e | `packages/core/test/integration/test-acp.yaml` に有効な `issueUrl` と `repoRoot` があり、conductor 認証と GitHub API 認証（`GITHUB_TOKEN` / `GH_TOKEN` または設定済み `gh` fallback）が使える場合に実行。agent / ACP backend とネットワークも必要 |
+| CLI の TTY process / Pi TTY e2e | e2e | Python 3 の標準 `pty`、POSIX process group、localhost bind、Git が必要。PTY 非対応の Windows では該当テストを skip。PR / main のUbuntu runnerでは実行 |
+| `scripts/pi/cached-auth.test.mjs` | 補助 Node test | Linux PID namespace と procfs に関する2ケースだけ非Linuxで skip。スクリプト suite 自体は明示コマンドで実行し、CI では実行しない（Issue #475 の範囲） |
 
----
+PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites はモデル応答と GitHub API に localhost の fixture server を使い、Git で一時 repository を用意する。`tty-close-process.e2e.test.ts` は fake GitHub / ACP 応答と一時 Git repository を使う。いずれも Python 3 の `pty` と POSIX process group が必要。`issue-pi-tty-exit.e2e.test.ts` は `/exit` 後の自然終了と stdio MCP child 回収、`issue-pi-tty-close.e2e.test.ts` は `/close`・child 回収・保存済み Pi session の `--continue`、`tty-close-process.e2e.test.ts` は CLI session teardown・worker child 終了・worktree 保持を確認する。
 
-## 2. 統合テスト
+## 明示的な skip の記録
 
-**定義**: **複数モジュールの接続**、fake / in-process transport の連携、または **外部プロセス（`agent acp`）・実 Cursor SDK との実通信**を検証。fake smoke は認証不要で CI の既定対象、実 ACP / SDK integration はローカル実行時に前提不足なら skip する。ユーザー入口（CLI）は使わない。
+環境条件による `skip` / `skipIf` は、テストまたはこの表に次の3点を残す。
 
-### 対象
+1. **必要条件** — 環境変数、設定ファイル、認証、OS / 実行環境
+2. **理由** — 条件が欠けたときに実行できない外部境界
+3. **解除方法** — 条件を満たして再実行する手順。恒常的に解消できない依存なら追跡 Issue
 
-| シナリオ | 検証内容 |
-|---------|---------|
-| **AcpBridge ライフサイクル** | spawn → initialize → authenticate → session/new → session/prompt → update 購読 → 終了 |
-| **attachWorker / WorkerSession** | bootstrap → 完了コールバック（Fake または実 ACP） |
-| **permission 往復** | `session/request_permission` → 応答 |
-| **conductor session** | SDK conductor + dispatch + operator 入力 |
-| **session resume** | SessionResumeStore 復元と worker 再開 |
-| **GitHub API クライアント** | 実 GitHub API で Issue 取得（トークン設定時のみ） |
-| **team profile / workspace** | profile 解決と ACP cwd |
+| skip / guard | 必要条件・理由 | 解除方法 / 追跡 |
+|--------------|----------------|------------------|
+| Cursor SDK integration の `describe.skipIf` | Cursor 認証、ネットワーク、書き込み可能な隔離 HOME がないと実接続できない。`ENSEMBLE_CURSOR_SDK_INTEGRATION_SKIP` は理由付きで明示的に skip する override | 認証を設定し一時 HOME を作成できる環境で実行し、override を設定している場合は unset。カスタム HOME を使う場合は `ENSEMBLE_INTEGRATION_HOME` に認証済みの隔離 HOME を指定 |
+| `acp-bridge.integration.test.ts` の `describe.skipIf` | `test-acp.yaml` がない場合、選択された実 ACP backend を起動できない | example からローカル設定を作り `agent` と backend を用意して該当 suite を実行 |
+| `issue.e2e.test.ts` の `describe.skipIf` | Issue / repository 設定または conductor 認証がない場合、Issue workflow を実行できない | `test-acp.yaml` と認証を設定して `pnpm test:e2e` を実行 |
+| `cli-version.test.ts` の `describe.skipIf` | package 単独の unit 実行時に build artifact がない場合、dist CLI を起動できない | `pnpm build` 後に再実行。CI は build 済みのためこの skip に入らない |
+| CLI TTY e2e の Windows `skipIf` | Python 標準 `pty` と POSIX process group に依存し、Windows では同じ PTY 条件を提供できない | Python 3 `pty` を備えた POSIX 環境で実行。CI は Ubuntu |
+| `scripts/pi/cached-auth.test.mjs` の Linux 条件 skip | PID namespace / procfs の Linux 挙動を直接検証する2ケース | Linux 上で `node --test scripts/pi/cached-auth.test.mjs` を実行。CI 導入・対応は Issue #475 |
 
-### 配置
+棚卸し時点で、前提と再実行方法が上記のように定まった skip は意図的なものだった。不要な skip は見つからなかった。新しい環境 skip を加える場合、理由のない恒久 skip にせず、前提・理由・解除方法と必要なら追跡 Issue を同じ変更で記録する。
 
-```
-packages/core/test/integration/**/*.integration.test.ts
-packages/core/test/fixtures/**
-packages/core/test/integration/test-acp.yaml.example
-```
+## CI 常時実行範囲
 
-### 実行
+`.github/workflows/ci.yml` は pull request と `main` push で次を実行する。
 
-```bash
-pnpm test:integration  # fake smoke は設定不要、外部依存は前提がある場合に実行
-```
+| CI step | 実行対象 |
+|---------|----------|
+| Build | `pnpm build` |
+| Unit tests | `pnpm test:run` — core / cli / operator-agent の全 unit suite |
+| Release workflow tests | `pnpm test:release-workflow` — `.github/scripts` の Node test |
+| Session resume integration | `test/integration/session-resume.integration.test.ts` |
+| Operator usage integration | `test/integration/usage-operator.integration.test.ts` |
+| Pi conductor integration | `pi-conductor.integration.test.ts`、`pi-headless-settings.integration.test.ts`、`pi-conductor-agent-registry.integration.test.ts` |
+| CLI TTY e2e | `tty-close-process.e2e.test.ts`、`issue-pi-tty-exit.e2e.test.ts`、`issue-pi-tty-close.e2e.test.ts` |
 
-`pnpm test:integration` は fake / in-process smoke と、前提が揃った場合の実 ACP / 実 Cursor SDK integration をまとめて実行する。
-
-### スキップ条件
-
-- `session-resume.integration.test.ts` と `pi-conductor.integration.test.ts` は fake / in-process smoke であり、`test-acp.yaml`、`agent` CLI、Cursor 認証を必要とせず、CI でも実行する。
-- Fake / in-process ACP を注入して `runConductorSession` を呼ぶテストでは、`defaultAcp: { defaultAcpCommand: process.execPath }` を渡すか、既存の `IN_PROCESS_DEFAULT_ACP` helper を使う。`connectAcp` の差し替えだけでは worker setup 時の ACP prerequisite check を通らない。
-- 実 `agent acp` を起動する integration は `test-acp.yaml` と `agent` が必要で、どちらかがない場合は対象 suite を `describe.skipIf` でスキップする。
-- 実 Cursor SDK を使う `conductor-agent.integration.test.ts` と `issue-session.integration.test.ts` は Cursor 認証とネットワークを必要とする。認証がない、または隔離 HOME を作成・書き込みできない場合は、理由付きでスキップする。
-
-### vitest 設定方針
-
-- `include`: `**/test/integration/**/*.integration.test.ts` のみ
-- タイムアウト: 60 秒以上（session 待ち）
-- **逐次実行推奨**（`fileParallelism: false`）— 複数 `agent acp` の同時起動を避ける
-
----
-
-## 3. E2E テスト
-
-**定義**: **ユーザー入口（`ensemble` CLI）から**、Issue URL 入力〜セッション終了までを検証。
-
-### 対象
-
-| シナリオ | 検証内容 |
-|---------|---------|
-| **smoke** | `ensemble issue` — conductor + worker 連携、終了 JSON の必須フィールド |
-| **operator 入力** | `ENSEMBLE_OPERATOR_MESSAGE` による post-loop 入力 |
-| **roundtrip** | worker メッセージの往復（profile 別 fixture） |
-| **Pi TTY `/exit` teardown** | 実 CLI を PTY で起動し、Pi + stdio MCP の `/exit` 後にサマリーから 3 秒以内の自然終了と MCP PID 回収を確認 |
-| **Pi TTY `/close` / resume** | 実 CLI を PTY で起動し、`/close` 後の自然終了・stdio MCP PID 回収と保存済み Pi session の `--continue` を確認。worker の同一 worktree / ACP session 再開は CLI session unit test で確認 |
-
-### 配置
-
-```
-packages/cli/test/e2e/**/*.e2e.test.ts
-packages/cli/test/e2e/fixtures/**
-```
-
-### 実行
-
-```bash
-pnpm test:e2e
-```
-
-### 前提・スキップ
-
-- `issue-pi-tty-exit.e2e.test.ts` は `/exit` cleanup 後の自然終了と Pi stdio MCP child 回収を検証する。`issue-pi-tty-close.e2e.test.ts` は `/close` の自然終了・child 回収・保存済み Pi session の `--continue` を検証する。両 fixture はローカル fake model / GitHub 応答を使い、外部認証や `test-acp.yaml` は不要。Python 3 の標準 `pty` モジュールと localhost bind が必要で、Windows では skip する。
-- その他の対象 conductor backend の認証（Cursor は `CURSOR_API_KEY` / `ensemble auth login`、Pi は `ensemble auth login --provider <id>` または Pi `auth.json`）
-- `test-acp.yaml` + テスト用 Issue URL（または専用テスト repo）
-- GitHub API トークン（`GITHUB_TOKEN` / `GH_TOKEN`。実 Issue を触る場合）
-
-上記の認証・外部サービス前提がある e2e は、未設定時に skip。
-
-### vitest 設定方針
-
-- `include`: `**/test/e2e/**` のみ
-- タイムアウト: 数分（LLM + ACP 待ち）
-- 逐次実行必須
-
----
-
-## コマンド一覧
-
-```bash
-pnpm test:run           # workspace 全 package の unittest（CI 必須）
-pnpm test:integration   # fake smoke は設定不要、外部依存は前提がある場合に実行
-pnpm test:e2e           # e2e（設定時のみ実行）
-pnpm test:all           # 全レベル（ローカル用）
-```
-
-## CI 戦略
-
-| トリガー | unittest | integration | e2e |
-|---------|----------|-------------|-----|
-| PR | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | Pi TTY `/exit` teardown と `/close` / resume process e2e（認証不要） |
-| main | 必須 | `session-resume.integration.test.ts` + `pi-conductor.integration.test.ts`（認証不要） | Pi TTY `/exit` teardown と `/close` / resume process e2e（認証不要） |
-| 手動 / nightly | 必須 | 推奨 | 任意 |
-| リリース前 | 必須 | 必須（設定ある場合） | 推奨 |
+常時実行の integration / e2e は Fake またはローカル fixture を使い、Cursor / GitHub 認証や `test-acp.yaml` を要求しない。PTY suite には Ubuntu runner 上の Python 3 `pty`、POSIX process group、Git が必要であり、Pi TTY suites は localhost bind も使う。Issue workflow 全体、実 ACP、実 Cursor SDK の suite は通常 CI の対象外。`.github/scripts` の Node tests は対象だが、`scripts/pi/cached-auth.test.mjs` は対象外である。
 
 ## 参照
 
-- [modular-prompt: TESTING_STRATEGY.md](https://github.com/otolab/modular-prompt/blob/main/docs/TESTING_STRATEGY.md)
-- [modular-prompt: vitest.config.ts](https://github.com/otolab/modular-prompt/blob/main/packages/driver/vitest.config.ts) — unittest から integration/e2e を exclude する例
+- [development.md](development.md) — 開発環境・テスト実行
 - [architecture.md §4](architecture.md) — ACP 起動パターン
-- [development.md](development.md) — ローカルでの実行手順
+- [modular-prompt: TESTING_STRATEGY.md](https://github.com/otolab/modular-prompt/blob/main/docs/TESTING_STRATEGY.md)
+- [modular-prompt: vitest.config.ts](https://github.com/otolab/modular-prompt/blob/main/packages/driver/vitest.config.ts)

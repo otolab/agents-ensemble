@@ -284,6 +284,116 @@ describe('loadEnsembleConfig', () => {
     });
   });
 
+  it('uses an explicit config as the user layer, then merges project over it', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      `conductor:\n  model: standard-user-model\ngithub:\n  auth:\n    allowGhAuthTokenFallback: false\nacp:\n  env:\n    USER_ONLY: user\n`,
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `conductor:\n  model: project-model\n  backend: pi\nsession:\n  maxTurns:\n    nonTty: 12\nacp:\n  env:\n    PROJECT_ONLY: project\n    MODEL_PROVIDER: project-provider\n`,
+    );
+    const explicitPath = join(repoRoot, 'litellm.config.yaml');
+    await writeFile(
+      explicitPath,
+      `conductor:\n  model: explicit-model\nsession:\n  maxTurns:\n    tty: 7\nacp:\n  env:\n    EXPLICIT_ONLY: explicit\n    MODEL_PROVIDER: litellm\ntui:\n  layout: pane\n`,
+    );
+
+    const config = await loadEnsembleConfig(repoRoot, {
+      userEnsembleRoot,
+      configPath: explicitPath,
+    });
+
+    expect(config.conductor).toMatchObject({
+      model: 'project-model',
+      backend: 'pi',
+    });
+    expect(config.github.auth.allowGhAuthTokenFallback).toBe(true);
+    expect(config.session.maxTurns).toEqual({ tty: 7, nonTty: 12 });
+    expect(config.acp.env).toEqual({
+      PROJECT_ONLY: 'project',
+      EXPLICIT_ONLY: 'explicit',
+      MODEL_PROVIDER: 'project-provider',
+    });
+    expect(config.tui.layout).toBe('pane');
+  });
+
+  it('keeps project config active when no explicit user config is selected', async () => {
+    await writeConfig(userEnsembleRoot, `conductor:\n  model: user-model\n`);
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `conductor:\n  model: project-model\n`,
+    );
+
+    const config = await loadEnsembleConfig(repoRoot, { userEnsembleRoot });
+
+    expect(config.conductor.model).toBe('project-model');
+  });
+
+  it('fails clearly when an explicit config file does not exist', async () => {
+    const missingPath = join(repoRoot, 'missing.config.yaml');
+
+    await expect(
+      loadEnsembleConfig(repoRoot, { userEnsembleRoot, configPath: missingPath }),
+    ).rejects.toThrow(`Explicit ensemble config file not found: ${missingPath}`);
+  });
+
+  it('uses the explicit user config loadProjectConfig value to skip the project layer', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      `config:\n  loadProjectConfig: true\nconductor:\n  model: standard-user-model\n`,
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `config:\n  loadProjectConfig: true\nconductor:\n  model: project-model\n`,
+    );
+    const explicitPath = join(repoRoot, 'litellm.config.yaml');
+    await writeFile(
+      explicitPath,
+      `config:\n  loadProjectConfig: false\nconductor:\n  model: explicit-model\n`,
+    );
+
+    const config = await loadEnsembleConfig(repoRoot, {
+      userEnsembleRoot,
+      configPath: explicitPath,
+      writeStderr: (message) => output.push(message),
+    });
+
+    expect(config.config.loadProjectConfig).toBe(false);
+    expect(config.conductor.model).toBe('explicit-model');
+    expect(output).toEqual([
+      'ensemble: project config をスキップしました（user 設定）',
+    ]);
+  });
+
+  it('does not inherit the standard user project-load toggle when an explicit config omits it', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      `config:\n  loadProjectConfig: false\nconductor:\n  model: standard-user-model\n`,
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `conductor:\n  model: project-model\n`,
+    );
+    const explicitPath = join(repoRoot, 'litellm.config.yaml');
+    await writeFile(
+      explicitPath,
+      `conductor:\n  model: explicit-model\n`,
+    );
+
+    const config = await loadEnsembleConfig(repoRoot, {
+      userEnsembleRoot,
+      configPath: explicitPath,
+      writeStderr: (message) => output.push(message),
+    });
+
+    expect(config.config.loadProjectConfig).toBe(true);
+    expect(config.conductor.model).toBe('project-model');
+    expect(output).toEqual([
+      `ensemble: project config を読み込みました: ${join(repoRoot, '.ensemble', ENSEMBLE_CONFIG_FILE)}`,
+    ]);
+  });
+
   it('skips project config when disabled in user config, even if project config opts in', async () => {
     await writeConfig(
       userEnsembleRoot,

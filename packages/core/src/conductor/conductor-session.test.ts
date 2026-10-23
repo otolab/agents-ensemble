@@ -1,8 +1,11 @@
-import { access, mkdir, mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
+import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
+import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import * as issueContextModule from '../github/issue-context.js';
@@ -251,11 +254,15 @@ describe('runConductorSession resume / shutdown', () => {
     vi.restoreAllMocks();
   });
 
-  function runConductorSession(
+  async function runConductorSession(
     options: Parameters<typeof runConductorSessionImpl>[0],
   ) {
+    const ensembleConfig =
+      options.ensembleConfig ??
+      (await loadEnsembleConfig(options.repoRoot, { userEnsembleRoot }));
     return runConductorSessionImpl({
       ...options,
+      ensembleConfig,
       mcpConfigOptions: {
         ...options.mcpConfigOptions,
         userEnsembleRoot,
@@ -739,13 +746,135 @@ describe('runConductorSession resume / shutdown', () => {
       waitForOperatorExit: false,
     });
 
-    const resumeStore = await loadSessionResumeStore(
+    const cursorResumeStore = await loadSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
     );
-    expect(resumeStore).toMatchObject({
+    expect(cursorResumeStore).toMatchObject({
       conductorBackend: 'cursor',
       conductorCwd: expect.any(String),
       cursorBootstrapRunId: 'run-cursor-bootstrap',
+    });
+  });
+
+  it('persists the resolved config digest without config values in the resume store', async () => {
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-config-digest',
+      status: 'finished',
+      result: 'done',
+    });
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        model: 'litellm/model-test',
+        backend: 'pi' as const,
+      },
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        env: { PROVIDER_TOKEN: 'private-test-value' },
+      },
+    };
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      ensembleConfig,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    const path = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: 'agent-test',
+    });
+    const resumeStore = await loadSessionResumeStore(path);
+    expect(resumeStore?.ensembleConfigDigest).toBe(
+      computeEnsembleConfigDigest(ensembleConfig),
+    );
+    expect(await readFile(path, 'utf8')).not.toContain('private-test-value');
+  });
+
+  it('fails before resuming when the resolved ensemble config changed', async () => {
+    const agentId = 'resume-config-mismatch';
+    const legacySecretMarker = 'LEGACY_WORKER_ACP_SECRET_MARKER';
+    const originalConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        model: 'model-before',
+      },
+    };
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await saveSessionResumeStore(resumeStorePath, {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
+      updatedAt: 0,
+    });
+    const legacyResumeStore = JSON.parse(
+      await readFile(resumeStorePath, 'utf8'),
+    ) as {
+      updatedAt: number;
+      workers: Record<string, Record<string, unknown>>;
+    };
+    legacyResumeStore.workers.implementer = {
+      acpSessionId: 'legacy-worker-session',
+      acpSpawn: {
+        preset: 'custom',
+        command: 'custom-acp',
+        args: [],
+        env: { API_TOKEN: legacySecretMarker },
+      },
+    };
+    await writeFile(resumeStorePath, JSON.stringify(legacyResumeStore));
+    const updatedAtBeforeMigration = legacyResumeStore.updatedAt;
+
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        ensembleConfig: {
+          ...originalConfig,
+          conductor: {
+            ...originalConfig.conductor,
+            model: 'model-after',
+          },
+        },
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+      }),
+    ).rejects.toThrow(/ensemble config digest mismatch/);
+
+    expect(mockResume).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+    const migratedResumeStoreText = await readFile(resumeStorePath, 'utf8');
+    expect(migratedResumeStoreText).not.toContain(legacySecretMarker);
+    expect(JSON.parse(migratedResumeStoreText)).toMatchObject({
+      updatedAt: updatedAtBeforeMigration,
+      workers: {
+        implementer: {
+          acpSessionId: 'legacy-worker-session',
+          acpSpawn: {
+            envDigest: computeAcpSpawnEnvDigest({
+              API_TOKEN: legacySecretMarker,
+            }),
+          },
+        },
+      },
     });
   });
 
@@ -3928,6 +4057,14 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it('closes with resumable session state and leaves the isolated worktree intact', async () => {
+    const secretMarker = 'WORKER_ACP_SECRET_MARKER';
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        env: { API_TOKEN: secretMarker },
+      },
+    };
     mockSend.mockResolvedValue({
       runId: 'run-1',
       status: 'finished',
@@ -3999,7 +4136,11 @@ describe('runConductorSession resume / shutdown', () => {
       profile: {
         workers: [{ name: 'implementer', kind: 'implementer' }],
       },
-      defaultAcp: { defaultAcpCommand: process.execPath },
+      ensembleConfig,
+      defaultAcp: {
+        defaultAcpCommand: process.execPath,
+        config: ensembleConfig,
+      },
       disableGitHubMonitor: true,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -4040,6 +4181,19 @@ describe('runConductorSession resume / shutdown', () => {
         },
       },
     });
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: 'agent-test',
+    });
+    const resumeStore = await loadSessionResumeStore(resumeStorePath);
+    expect(resumeStore?.workers.implementer?.acpSpawn).toMatchObject({
+      preset: 'custom',
+      command: process.execPath,
+      args: [],
+      envDigest: computeAcpSpawnEnvDigest({ API_TOKEN: secretMarker }),
+    });
+    expect(await readFile(resumeStorePath, 'utf8')).not.toContain(secretMarker);
+    expect(JSON.stringify(emitted)).not.toContain(secretMarker);
     expect(emitted).toContainEqual({ type: 'session.operator_close' });
     expect(emitted).not.toContainEqual({ type: 'session.operator_exit' });
     expect(
@@ -4079,7 +4233,11 @@ describe('runConductorSession resume / shutdown', () => {
       repoRoot,
       profile: { workers: [] },
       resumeAgentId: 'agent-test',
-      defaultAcp: { defaultAcpCommand: process.execPath },
+      ensembleConfig,
+      defaultAcp: {
+        defaultAcpCommand: process.execPath,
+        config: ensembleConfig,
+      },
       disableGitHubMonitor: true,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),

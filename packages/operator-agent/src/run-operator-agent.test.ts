@@ -14,6 +14,7 @@ import type {
   EnsembleConfig,
   ResolvedProfile,
 } from '@agents-ensemble/core/operator-runtime';
+import { loadEnsembleConfig } from '@agents-ensemble/core/operator-runtime';
 import {
   runOperatorAgent,
   type OperatorAgentInput,
@@ -129,6 +130,82 @@ describe('runOperatorAgent', () => {
     ).rejects.toThrow('requires an interactive TTY');
     expect(loadConfig).not.toHaveBeenCalled();
     expect(output.capturedText()).not.toContain('\u001b[');
+  });
+
+  it('loads an explicitly selected config file', async () => {
+    const userEnsembleRoot = join(repoRoot, '.test-user-ensemble');
+    await mkdir(userEnsembleRoot, { recursive: true });
+    await writeFile(
+      join(userEnsembleRoot, 'config.yaml'),
+      [
+        'config:',
+        '  loadProjectConfig: false',
+        'conductor:',
+        '  model: standard-user-model',
+        'github:',
+        '  auth:',
+        '    allowGhAuthTokenFallback: false',
+        'acp:',
+        '  env:',
+        '    USER_ONLY: user',
+        '',
+      ].join('\n'),
+    );
+    const configPath = join(repoRoot, 'alternate.config.yaml');
+    await writeFile(
+      configPath,
+      [
+        'conductor:',
+        '  model: alternate-model',
+        'tui:',
+        '  layout: pane',
+        '',
+      ].join('\n'),
+    );
+    let loadedConfig: EnsembleConfig | undefined;
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const fakeAgent = createFakeAgent({
+      send: async () => ({
+        runId: 'unused',
+        status: 'completed',
+        result: '',
+      }),
+    });
+    const agentFactory: ConductorAgentFactory = {
+      create: async (options) => {
+        agentOptions = options;
+        return fakeAgent;
+      },
+      resume: async (_agentId, options) => {
+        agentOptions = options;
+        return fakeAgent;
+      },
+    };
+
+    await runOperatorAgent(
+      { repoRoot, configPath, newSession: true },
+      {
+        stdin: createInput('/exit\n'),
+        stdout: createOutput(),
+        agentFactory,
+        loadConfig: async (root, options) => {
+          loadedConfig = await loadEnsembleConfig(root, {
+            ...options,
+            userEnsembleRoot,
+          });
+          return loadedConfig;
+        },
+      },
+    );
+
+    expect(loadedConfig).toMatchObject({
+      conductor: { model: 'smoke-model', backend: 'pi' },
+      github: { auth: { allowGhAuthTokenFallback: true } },
+      tui: { layout: 'pane' },
+    });
+    expect(loadedConfig?.acp.env ?? {}).not.toHaveProperty('USER_ONLY');
+    expect(agentOptions?.modelId).toBe('smoke-model');
+    expect(agentOptions?.pi?.agentDir).toBe(join(repoRoot, '.ensemble/pi-user'));
   });
 
   it('runs a Pi-backed TTY conversation with profile prompt and saved session summaries', async () => {
@@ -1003,6 +1080,155 @@ describe('runOperatorAgent', () => {
     expect(output.capturedText()).toContain(
       '\n\u001b[31moperator-agent error:\u001b[0m Request failed.\n\n',
     );
+  });
+
+  it('reconnects operator-agent on 401 and retries the same prompt once', async () => {
+    await mkdir(join(repoRoot, '.ensemble', 'pi-project'), { recursive: true });
+    await writeFile(
+      join(repoRoot, '.ensemble', 'pi-project', 'settings.json'),
+      JSON.stringify({ defaultProvider: 'litellm' }),
+    );
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const prompts: string[] = [];
+    const initialAgent = createFakeAgent({
+      send: async (prompt) => {
+        prompts.push(prompt);
+        return {
+          runId: 'run-401',
+          status: 'error',
+          error: {
+            message:
+              'litellm API error (401): Your client does not have permission to the requested URL',
+          },
+        };
+      },
+    });
+    const resumedAgent = createFakeAgent({
+      send: async (prompt) => {
+        prompts.push(prompt);
+        return { runId: 'run-recovered', status: 'completed', result: 'Recovered.' };
+      },
+    });
+    const resume = vi.fn(async () => resumedAgent);
+
+    await runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: createInput('check status\n/exit\n'),
+        stdout,
+        stderr,
+        agentFactory: {
+          create: async () => initialAgent,
+          resume,
+        },
+      },
+    );
+
+    expect(resume).toHaveBeenCalledOnce();
+    expect(resume).toHaveBeenCalledWith(
+      'operator-agent-id',
+      expect.objectContaining({
+        cwd: repoRoot,
+        modelId: 'smoke-model',
+      }),
+    );
+    expect(prompts).toEqual(['check status', 'check status']);
+    expect(stdout.capturedText()).toContain('Recovered.');
+    expect(stderr.capturedText()).toBe('');
+  });
+
+  it('intercepts reconnect commands and reports each resume result without sending them', async () => {
+    const stdout = createOutput();
+    const stdin = new PassThrough() as PassThrough & OperatorAgentInput;
+    stdin.isTTY = true;
+    const send = vi.fn(async () => ({
+      runId: 'run-1',
+      status: 'completed',
+      result: 'Ready.',
+    }));
+    const initialAgent = createFakeAgent({ send });
+    const resumedAgents = [
+      createFakeAgent({ send: async () => ({ runId: '', status: 'completed' }) }),
+      createFakeAgent({ send: async () => ({ runId: '', status: 'completed' }) }),
+    ];
+    const resume = vi
+      .fn()
+      .mockResolvedValueOnce(resumedAgents[0])
+      .mockRejectedValueOnce(new Error('resume unavailable'));
+
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin,
+        stdout,
+        agentFactory: {
+          create: async () => initialAgent,
+          resume,
+        },
+      },
+    );
+
+    await vi.waitFor(() =>
+      expect(stdout.capturedText()).toContain('operator-agent\u001b[0m (pi) ready'),
+    );
+    stdin.write('/reconnect\n');
+    await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+    stdin.write('reconnect\n');
+    await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(2));
+    stdin.write('/exit\n');
+    await run;
+
+    expect(resume).toHaveBeenCalledTimes(2);
+    expect(resume).toHaveBeenNthCalledWith(
+      1,
+      'operator-agent-id',
+      expect.objectContaining({ cwd: repoRoot, modelId: 'smoke-model' }),
+    );
+    expect(resume).toHaveBeenNthCalledWith(
+      2,
+      'operator-agent-id',
+      expect.objectContaining({ cwd: repoRoot, modelId: 'smoke-model' }),
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(stdout.capturedText()).toContain('conductor に再接続しました。');
+    expect(stdout.capturedText()).toContain('conductor の再接続に失敗しました。');
+  });
+
+  it('prints Pi auth recovery steps to stderr when reconnect and retry still fail', async () => {
+    const projectDir = join(repoRoot, '.ensemble', 'pi-project');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'litellm' }),
+    );
+    const stderr = createOutput();
+    const authFailure = {
+      runId: 'run-401',
+      status: 'error',
+      error: { message: 'litellm API error (401): Unauthorized' },
+    };
+    const agent = createFakeAgent({ send: async () => authFailure });
+    const resume = vi.fn(async () => createFakeAgent({ send: async () => authFailure }));
+
+    await runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: createInput('check status\n/exit\n'),
+        stdout: createOutput(),
+        stderr,
+        agentFactory: { create: async () => agent, resume },
+      },
+    );
+
+    expect(resume).toHaveBeenCalledOnce();
+    expect(stderr.capturedText()).toContain('provider=litellm');
+    expect(stderr.capturedText()).toContain(
+      'ensemble auth login --provider litellm',
+    );
+    expect(stderr.capturedText()).toContain('LITELLM_API_KEY');
+    expect(stderr.capturedText()).toContain('ensemble operator-agent');
+    expect(stderr.capturedText()).not.toContain('ensemble issue');
   });
 
   it('resumes the default session after ordinary TTY termination and lets exit clear it', async () => {

@@ -32,6 +32,7 @@ export interface IssueCommandOptions {
   conductorCwd: string;
   resume?: string;
   continue?: boolean;
+  configPath?: string;
   profile?: string;
   model?: string;
   verbose?: boolean;
@@ -148,7 +149,9 @@ export async function executeIssueCommand(
   );
 
   const repoRoot = resolve(options.repoRoot);
-  const ensembleConfig = await loadConfig(repoRoot);
+  const ensembleConfig = await loadConfig(repoRoot, {
+    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+  });
   const conductorVerbose = resolveConductorVerboseSetting({
     cliVerbose: options.verbose,
     config: ensembleConfig,
@@ -254,6 +257,7 @@ export async function executeIssueCommand(
       repoRoot,
       conductorCwd: resolve(options.conductorCwd),
       resumeAgentId,
+      ensembleConfig,
       profile,
       profilePath,
       modelId: resolveConductorModelId(options.model, { config: ensembleConfig }),

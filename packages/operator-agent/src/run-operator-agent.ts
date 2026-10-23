@@ -4,17 +4,24 @@ import { compile, merge } from '@modular-prompt/core';
 import {
   createConductorAgentFactory,
   filterMaterialsForKind,
+  formatConductorAuthRecoveryHint,
+  isConductorSendAuthError,
   isOperatorCommand,
   loadEnsembleConfig,
   loadProfile,
   profilePromptModule,
+  reconnectConductorAgent,
   renderCompiledPrompt,
+  resolvePiConductorProvider,
   resolveAgentPromptModule,
   resolveConductorBackendSetting,
   resolveConductorModelId,
   resolveConductorPiResourcePaths,
+  sendConductorWithReconnect,
   sessionStateFromProfile,
   type ConductorAgent,
+  type ConductorAgentCreateOptions,
+  type ConductorAgentHandle,
   type ConductorAgentFactory,
   type ConductorBackend,
   type EnsembleConfig,
@@ -54,6 +61,7 @@ import {
 
 export interface RunOperatorAgentOptions {
   repoRoot?: string;
+  configPath?: string;
   newSession?: boolean;
 }
 
@@ -68,6 +76,7 @@ export interface OperatorAgentOutput extends NodeJS.WritableStream {
 export interface RunOperatorAgentDependencies {
   stdin?: OperatorAgentInput;
   stdout?: OperatorAgentOutput;
+  stderr?: OperatorAgentOutput;
   loadConfig?: typeof loadEnsembleConfig;
   loadProfile?: typeof loadProfile;
   agentFactory?: ConductorAgentFactory;
@@ -82,6 +91,11 @@ interface OperatorRuntime {
   systemPrompt: string;
 }
 
+interface OperatorAgentHandle extends ConductorAgentHandle {
+  factory: ConductorAgentFactory;
+  agentOptions: ConductorAgentCreateOptions;
+}
+
 const ANSI_RESET = '\u001b[0m';
 const ANSI_DIM = '\u001b[2m';
 const ANSI_CYAN = '\u001b[36m';
@@ -94,6 +108,7 @@ export async function runOperatorAgent(
 ): Promise<void> {
   const stdin = dependencies.stdin ?? process.stdin;
   const stdout = dependencies.stdout ?? process.stdout;
+  const stderr = dependencies.stderr ?? process.stderr;
   assertTty(stdin, stdout);
 
   const runtime = await resolveOperatorRuntime(options, dependencies);
@@ -170,6 +185,11 @@ export async function runOperatorAgent(
     throw error;
   }
 
+  const agentHandle: OperatorAgentHandle = {
+    conductor: agent,
+    factory,
+    agentOptions,
+  };
   try {
     await saveOperatorAgentState(runtime.repoRoot, {
       version: 1,
@@ -178,11 +198,12 @@ export async function runOperatorAgent(
       repoRoot: runtime.repoRoot,
     });
     const exitContinuity = await runTtyConversation({
-      agent,
+      agentHandle,
       backend: runtime.backend,
       systemPrompt: runtime.systemPrompt,
       stdin,
       stdout,
+      stderr,
       dispatchQueue,
       watchPool,
       colorEnabled:
@@ -193,7 +214,7 @@ export async function runOperatorAgent(
     }
   } finally {
     watchPool.close();
-    await agent.close();
+    await agentHandle.conductor.close();
   }
 }
 
@@ -202,7 +223,9 @@ async function resolveOperatorRuntime(
   dependencies: RunOperatorAgentDependencies,
 ): Promise<OperatorRuntime> {
   const repoRoot = resolve(options.repoRoot ?? process.cwd());
-  const config = await (dependencies.loadConfig ?? loadEnsembleConfig)(repoRoot);
+  const config = await (dependencies.loadConfig ?? loadEnsembleConfig)(repoRoot, {
+    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+  });
   const { profile, profilePath } = await (dependencies.loadProfile ?? loadProfile)({
     cwd: repoRoot,
     config,
@@ -233,11 +256,12 @@ async function resolveOperatorRuntime(
 }
 
 async function runTtyConversation(options: {
-  agent: ConductorAgent;
+  agentHandle: OperatorAgentHandle;
   backend: ConductorBackend;
   systemPrompt: string;
   stdin: OperatorAgentInput;
   stdout: OperatorAgentOutput;
+  stderr: OperatorAgentOutput;
   dispatchQueue: ReturnType<typeof createOperatorDispatchQueue>;
   watchPool: OperatorWatchPool;
   colorEnabled: boolean;
@@ -252,6 +276,7 @@ async function runTtyConversation(options: {
   let stop: () => void = () => {};
   let exitContinuity = false;
   let inputEnded = false;
+  let pendingReconnects = 0;
   const stopping = new Promise<void>((resolve) => {
     stop = resolve;
   });
@@ -289,6 +314,11 @@ async function runTtyConversation(options: {
           terminal.close();
           break;
         }
+        if (isOperatorCommand(message, 'reconnect')) {
+          pendingReconnects += 1;
+          options.dispatchQueue.wake();
+          continue;
+        }
         if (isResumeWatchCommand(message)) {
           const released = options.dispatchQueue.setConversationHold(false);
           writeStatusLine(
@@ -318,8 +348,36 @@ async function runTtyConversation(options: {
 
   try {
     while (true) {
-      if (inputEnded && options.dispatchQueue.pendingUserCount === 0) {
+      if (
+        inputEnded &&
+        options.dispatchQueue.pendingUserCount === 0 &&
+        pendingReconnects === 0
+      ) {
         return exitContinuity;
+      }
+      if (pendingReconnects > 0) {
+        pendingReconnects -= 1;
+        try {
+          await reconnectConductorAgent(options.agentHandle, {
+            conductorAgentFactory: options.agentHandle.factory,
+            conductorOptions: options.agentHandle.agentOptions,
+          });
+          writeStatusLine(
+            options.stdout,
+            'operator-agent',
+            'conductor に再接続しました。',
+            options.colorEnabled,
+          );
+        } catch {
+          writeStatusLine(
+            options.stdout,
+            'operator-agent',
+            'conductor の再接続に失敗しました。',
+            options.colorEnabled,
+            { color: ANSI_RED },
+          );
+        }
+        continue;
       }
       if (
         promptVisible &&
@@ -362,7 +420,14 @@ async function runTtyConversation(options: {
           ? `${options.systemPrompt}\n\n## User message\n\n${formatOperatorDispatchBatch(batch.events)}`
           : formatOperatorDispatchBatch(batch.events);
       const result = await Promise.race([
-        options.agent.send(prompt),
+        sendConductorWithReconnect(
+          options.agentHandle,
+          prompt,
+          {
+            conductorAgentFactory: options.agentHandle.factory,
+            conductorOptions: options.agentHandle.agentOptions,
+          },
+        ),
         stopping.then(() => undefined),
       ]);
       if (!result) return exitContinuity;
@@ -385,6 +450,29 @@ async function runTtyConversation(options: {
             options.colorEnabled,
             { color: ANSI_RED },
           );
+          if (
+            options.backend === 'pi' &&
+            isConductorSendAuthError(result)
+          ) {
+            const provider =
+              (await resolvePiConductorProvider({
+                cwd: options.agentHandle.agentOptions.cwd,
+                modelId: options.agentHandle.agentOptions.modelId,
+                pi: options.agentHandle.agentOptions.pi,
+              }).catch(() => undefined)) || undefined;
+            options.stderr.write(
+              `${formatConductorAuthRecoveryHint(
+                options.agentHandle.conductor.agentId,
+                {
+                  backend: 'pi',
+                  provider,
+                  pi: options.agentHandle.agentOptions.pi,
+                  resumeInstruction:
+                    '認証設定を直した後に `ensemble operator-agent` を再起動してください。',
+                },
+              )}\n`,
+            );
+          }
         } else {
           writeStatusLine(
             options.stdout,

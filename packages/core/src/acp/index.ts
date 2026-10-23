@@ -65,6 +65,7 @@ export {
   resolveWorkerAcpSpawn,
   resolveWorkerAcpSpawns,
   acpSpawnFingerprint,
+  computeAcpSpawnEnvDigest,
   assertAcpSpawnMatchesResume,
   resolvedAcpSpawnToOptions,
   listBuiltinAcpPresetIds,

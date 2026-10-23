@@ -1,7 +1,6 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
-import {
-  loadEnsembleConfig,
-} from '../config/load-ensemble-config.js';
+import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import type { EnsembleConfig } from '../config/types.js';
 import {
   computeMcpConfigDigest,
@@ -192,7 +191,7 @@ export interface RunConductorSessionOptions {
   issueUrl: string;
   repoRoot: string;
   conductorCwd?: string;
-  /** テスト用。未指定時は loadEnsembleConfig(repoRoot) で解決する。 */
+  /** 呼び出し元で解決済みの config。未指定時は loadEnsembleConfig(repoRoot) で解決する。 */
   ensembleConfig?: EnsembleConfig;
   /** MCP 設定の解決オプション。未指定時は `~/.ensemble` を参照する。 */
   mcpConfigOptions?: LoadMcpConfigOptions;
@@ -318,6 +317,7 @@ export async function runConductorSession(
   });
   const ensembleConfig =
     options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
+  const ensembleConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
   const conductorBackend = resolveConductorBackendSetting({
     profile: options.profile,
     config: ensembleConfig,
@@ -408,7 +408,15 @@ export async function runConductorSession(
       conductorBackend,
       mcpConfigDigest,
       mcpConfigConfigured,
+      ensembleConfigDigest,
     });
+    if (loadedResumeStore.ensembleConfigDigest === undefined) {
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message:
+          'SessionResumeStore has no ensemble config digest; config consistency cannot be verified for this legacy session.',
+      });
+    }
     // A previously completed lifecycle no longer describes this instance once
     // resume begins. Persist unknown before restoring or attaching anything so
     // a crash before the first regular SessionResumeStore flush cannot leave stale
@@ -1176,6 +1184,7 @@ export async function runConductorSession(
       sequence: snapshot.sequence,
       workers,
       mcpConfigDigest,
+      ensembleConfigDigest,
       ...(persistedLifecycle ? { lifecycle: persistedLifecycle } : {}),
       ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
       updatedAt: Date.now(),
