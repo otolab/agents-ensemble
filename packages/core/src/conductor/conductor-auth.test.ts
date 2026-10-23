@@ -121,6 +121,19 @@ describe('formatConductorAuthRecoveryHint', () => {
     expect(hint).not.toContain('ensemble auth logout');
   });
 
+  it('allows a caller to replace the default issue resume instruction', () => {
+    const hint = formatConductorAuthRecoveryHint('operator-agent-1', {
+      backend: 'pi',
+      provider: 'litellm',
+      resumeInstruction:
+        '認証設定を直した後に `ensemble operator-agent` を再起動してください。',
+    });
+
+    expect(hint).toContain('provider=litellm');
+    expect(hint).toContain('ensemble operator-agent');
+    expect(hint).not.toContain('ensemble issue');
+  });
+
   it.each([
     ['anthropic', 'ANTHROPIC_OAUTH_TOKEN'],
     ['anthropic', 'ANTHROPIC_API_KEY'],

@@ -45,6 +45,8 @@ export interface ConductorAuthRecoveryOptions {
   backend?: ConductorBackend;
   pi?: { agentDir?: string };
   provider?: string;
+  /** Optional caller-specific action after the credential has been repaired. */
+  resumeInstruction?: string;
 }
 
 /** Resolve the auth facade's backend using the same rule as conductor startup. */
@@ -110,11 +112,14 @@ export function formatConductorAuthRecoveryHint(
   if (resolveConductorAuthBackend(options) === 'pi') {
     const provider = options.provider ?? '<provider>';
     const agentDir = options.pi?.agentDir ?? '~/.ensemble/pi';
+    const resumeInstruction =
+      options.resumeInstruction ??
+      `ensemble issue ... ${resume} で再試行できます。`;
     return (
       `[auth] Pi 認証エラー（provider=${provider}）。` +
       `ensemble auth login --provider ${provider} を実行するか、${agentDir}/auth.json または ` +
       `環境変数 ${formatPiProviderEnvHint(provider)} を確認してください。` +
-      `ensemble issue ... ${resume} で再試行できます。`
+      resumeInstruction
     );
   }
 
