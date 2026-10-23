@@ -277,6 +277,8 @@ Pi の send が missing key、401、unauthorized などを返すと、harness �
 
 再接続の in-process retry、auth error の判定、backend 固有 hint の設計は [conductor-auth-reconnect.md](conductor-auth-reconnect.md) が正本です。
 
+`ensemble operator-agent` も `ensemble issue` と同じく、Pi の `!command` を含む resource を読み直すため、401 / auth-like error の後に同じ入力を一度だけ自動 retry します。TTY で `/reconnect` または `reconnect` を入力すると、LLM へ送らず現在の agent を同じ ID で再接続します。`ensemble issue` の `/reconnect` と同じ操作です。retry 後も認証エラーが続く場合は stderr の Pi 向け hint に従って認証設定を直し、`ensemble operator-agent` を再起動してください。
+
 ## 参照
 
 - [設定値リファレンス](settings.md) — backend、設定層、全体の解決順

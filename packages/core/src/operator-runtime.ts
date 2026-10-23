@@ -17,6 +17,20 @@ export type { ConductorBackend } from './config/types.js';
 export { resolveConductorModelId } from './conductor/resolve-conductor-model-id.js';
 export { createConductorAgentFactory } from './conductor/conductor-agent-factory.js';
 export { isOperatorCommand } from './conductor/operator-command.js';
+export {
+  formatConductorAuthRecoveryHint,
+  isConductorSendAuthError,
+} from './conductor/conductor-auth.js';
+export { resolvePiConductorProvider } from './conductor/conductor-pi-auth.js';
+export {
+  reconnectConductorAgent,
+  sendConductorWithReconnect,
+} from './conductor/conductor-send-reconnect.js';
+export type {
+  ConductorAgentHandle,
+  ConductorReconnectCompleteInfo,
+  ConductorSendReconnectOptions,
+} from './conductor/conductor-send-reconnect.js';
 export type {
   ConductorAgent,
   ConductorAgentCreateOptions,
