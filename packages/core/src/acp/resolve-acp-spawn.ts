@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { SpawnAcpProcessOptions } from './acp-process.js';
 import {
   resolveAcpAuthenticateStrategy,
@@ -26,8 +27,8 @@ export interface AcpSpawnFingerprint {
   preset: AcpPresetId;
   command: string;
   args: string[];
-  /** spawn に渡す env（builtin preset → config `acp.env` のマージ結果）。 */
-  env?: Record<string, string>;
+  /** spawn env の canonical SHA-256。値そのものは保存しない。 */
+  envDigest?: string;
 }
 
 export interface DefaultAcpResolutionOptions {
@@ -190,8 +191,20 @@ export function acpSpawnFingerprint(spawn: ResolvedAcpSpawn): AcpSpawnFingerprin
     preset: spawn.preset,
     command: spawn.command,
     args: [...spawn.args],
-    ...(spawn.env && Object.keys(spawn.env).length > 0 ? { env: { ...spawn.env } } : {}),
+    ...(spawn.env && Object.keys(spawn.env).length > 0
+      ? { envDigest: computeAcpSpawnEnvDigest(spawn.env) }
+      : {}),
   };
+}
+
+/** Hash a canonical env map so resume can compare it without persisting values. */
+export function computeAcpSpawnEnvDigest(env: Record<string, string>): string {
+  const canonicalEnv = Object.fromEntries(
+    Object.keys(env)
+      .sort()
+      .map((key) => [key, env[key]]),
+  );
+  return createHash('sha256').update(JSON.stringify(canonicalEnv)).digest('hex');
 }
 
 export function formatAcpSpawnFingerprint(spawn: AcpSpawnFingerprint): string {
@@ -211,7 +224,8 @@ export function assertAcpSpawnMatchesResume(input: {
     input.expected.preset === actual.preset &&
     input.expected.command === actual.command &&
     arraysEqual(input.expected.args, actual.args) &&
-    envMapsEqualForResume(input.expected.env, actual.env);
+    (input.expected.envDigest === undefined ||
+      input.expected.envDigest === actual.envDigest);
 
   if (same) return;
 
@@ -243,27 +257,4 @@ export function resolvedAcpSpawnToOptions(
 
 function arraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function envMapsEqual(
-  left?: Record<string, string>,
-  right?: Record<string, string>,
-): boolean {
-  const leftKeys = Object.keys(left ?? {}).sort();
-  const rightKeys = Object.keys(right ?? {}).sort();
-  if (!arraysEqual(leftKeys, rightKeys)) {
-    return false;
-  }
-  return leftKeys.every((key) => left?.[key] === right?.[key]);
-}
-
-/** 旧形式の SessionResumeStore（env 未保存）では env 比較をスキップし preset/command/args のみ照合する。 */
-function envMapsEqualForResume(
-  expected?: Record<string, string>,
-  actual?: Record<string, string>,
-): boolean {
-  if (!expected || Object.keys(expected).length === 0) {
-    return true;
-  }
-  return envMapsEqual(expected, actual);
 }

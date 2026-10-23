@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
 import {
   assertSessionResumeStoreMatches,
   assertSessionSidecarMatches,
@@ -170,6 +171,47 @@ describe('SessionResumeStore', () => {
     });
   });
 
+  it('redacts legacy ACP env values when reading and saving a resume store', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-legacy-acp-env',
+    });
+    const marker = 'LEGACY_ACP_SECRET_MARKER';
+    const legacyResumeStore = {
+      ...baseResumeStore({
+        conductorAgentId: 'agent-legacy-acp-env',
+        repoRoot: tempDir,
+      }),
+      workers: {
+        implementer: {
+          acpSessionId: 'sess-legacy',
+          acpSpawn: {
+            preset: 'custom',
+            command: 'custom-acp',
+            args: [],
+            env: { API_TOKEN: marker },
+          },
+        },
+      },
+    };
+    await mkdir(sessionResumeStoreDir(tempDir), { recursive: true });
+    await writeFile(path, `${JSON.stringify(legacyResumeStore)}\n`, 'utf8');
+
+    const loaded = await loadSessionResumeStore(path);
+
+    expect(loaded?.workers.implementer?.acpSpawn).toEqual({
+      preset: 'custom',
+      command: 'custom-acp',
+      args: [],
+      envDigest: computeAcpSpawnEnvDigest({ API_TOKEN: marker }),
+    });
+    expect(JSON.stringify(loaded)).not.toContain(marker);
+
+    await saveSessionResumeStore(path, loaded!);
+    expect(await readFile(path, 'utf8')).not.toContain(marker);
+  });
+
   it('round-trips teardown lifecycle and leaves it unset for legacy records', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-session-resume-store-'));
     const closedPath = sessionResumeStorePath({
@@ -293,6 +335,37 @@ describe('SessionResumeStore', () => {
         mcpConfigConfigured: true,
       }),
     ).toThrow(/MCP config digest missing/);
+  });
+
+  it('rejects ensemble config changes on resume', () => {
+    const resumeStore = baseResumeStore({
+      conductorAgentId: 'agent-config-digest',
+      ensembleConfigDigest: 'old-digest',
+    });
+
+    expect(() =>
+      assertSessionResumeStoreMatches(resumeStore, {
+        conductorAgentId: 'agent-config-digest',
+        issueUrl: resumeStore.issueUrl,
+        repoRoot: resumeStore.repoRoot,
+        ensembleConfigDigest: 'new-digest',
+      }),
+    ).toThrow(/ensemble config digest mismatch/);
+  });
+
+  it('allows legacy resume stores without an ensemble config digest', () => {
+    const resumeStore = baseResumeStore({
+      conductorAgentId: 'agent-config-legacy',
+    });
+
+    expect(() =>
+      assertSessionResumeStoreMatches(resumeStore, {
+        conductorAgentId: 'agent-config-legacy',
+        issueUrl: resumeStore.issueUrl,
+        repoRoot: resumeStore.repoRoot,
+        ensembleConfigDigest: 'current-digest',
+      }),
+    ).not.toThrow();
   });
 
   it('rejects mismatched issueUrl on assert', () => {

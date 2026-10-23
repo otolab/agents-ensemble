@@ -8,6 +8,7 @@
 |----|------|------|
 | **CLI フラグ** | `ensemble issue` 等 | invocation 単位の明示上書き |
 | **環境変数** | シェル / CI | 一時上書き・秘密情報・自動化注入 |
+| **明示 user config** | `--config <path>` | 指定時は標準 user config の代わりに使う |
 | **project config** | `<repoRoot>/.ensemble/config.yaml` | リポジトリ単位の既定 |
 | **user config** | `~/.ensemble/config.yaml` | マシン全体の既定 |
 | **user instructions** | `~/.ensemble/AGENTS.md` | profile に依存しない conductor / worker 共通の運用前提 |
@@ -16,7 +17,7 @@
 | **MCP** | `.agents/mcp.json` / `~/.ensemble/mcp.json` | conductor 向け MCP（[config.md § MCP](config.md#conductor-mcp-設定mcpjson)） |
 | **コード default** | `packages/core/src/config/defaults.ts` 等 | config 未作成時のフォールバック |
 
-project / user config は **deep merge**（project が user を上書き）。秘密情報（token 本体）は **config に平文で書かない**（[config.md](config.md)）。
+config は default → 選択された user config → project config（読み込み有効時）の順に **deep merge** します。`--config <path>` を指定した場合は明示ファイルを user config 層として使い、標準 user config は読み込みません。project config は `config.loadProjectConfig` が有効な場合に適用され、同じキーは project config が優先します。この toggle は選択された user config から解決するため、明示ファイルにも指定できます。秘密情報（token 本体）は **config に平文で書かない**（[config.md](config.md)）。
 
 ## 解決パターン
 
@@ -25,10 +26,19 @@ project / user config は **deep merge**（project が user を上書き）。�
 ### パターン A — Phase 1 横断（env あり）
 
 ```
-CLI > 環境変数 > project config > user config > コード default
+CLI > 環境変数 > project config（読み込み有効時） > 選択された user config > コード default
 ```
 
 `profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
+
+`ensemble issue` と `ensemble operator-agent` は `--config <path>` を受け付けます。指定したファイルが user config 層を置き換え、標準 user config は読み込みません。project config の読み込みは独立して `config.loadProjectConfig` で制御し、同一キーでは project config が優先されます。明示ファイルに toggle がなければ default の `true` が使われます。team profile の `--profile` とは別系統です。
+
+```sh
+ensemble issue 42 --config ~/.ensemble/litellm.config.yaml
+ensemble operator-agent --config ~/.ensemble/litellm.config.yaml
+```
+
+user 層の差し替えは [ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)、project toggle との組み合わせは [ADR 0043](adr/0043-explicit-user-config-and-project-toggle.md) に記録しています。
 
 `conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`profile.conductor.builtinTools` は profile だけで制御し、省略・未指定は有効、`false` のみ built-in coding tools を無効にします。`profile.conductor.piSkills` は Pi backend のみで、Pi 標準の skill discovery を制御し、省略・未指定は有効、`false` で skill 索引を止めます。`config.yaml` や `settings.json.defaultTools` ではこの制御を行いません。`cursor` は Cursor SDK 経路、`pi` は Pi 1.x `createAgentSession` 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、`~/.ensemble/pi` と `<repoRoot>/.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決します。skills は Pi の `DefaultResourceLoader` で索引し、カタログを system prompt に載せて本文は `read` / `/skill:` で読みます。prompts は `/name args` で展開します。themes は headless conductor のため読み込み・project 同名解決のみ行い、TUI 表示には使いません。root は `conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は無視します。`ensemble auth login|logout|status` は backend に分岐し、Pi では provider 単位に `ModelRuntime` を使います。API key は TTY の secret prompt から user 層へ保存し、OAuth は Pi の OAuth flow を stderr 対話で実行します（SSH でも URL / device code を利用できます）。MCP HTTP OAuth は Pi 公式 MCP extension が別の credential store で扱います。resume では SessionResumeStore に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
 
@@ -37,6 +47,8 @@ Session resume state conductorBackend mismatch: pi !== cursor
 ```
 
 旧 SessionResumeStore にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `<conductor-cwd>/.ensemble/pi/sessions/` の JSONL に保存されます。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
+
+SessionResumeStore には起動時の実効 ensemble config の canonical SHA-256 digest も保存します。resume 時に digest が異なる場合は conductor の再開前に拒否し、digest を持たない旧 store は警告後に従来どおり再開します。config 値やファイルパスは保存しません。ACP spawn env も canonical digest のみを保存し、値は記録しません。
 
 ### パターン B — Phase 1 横断（env なし）
 
@@ -54,7 +66,7 @@ worker spawn 時の ACP preset 解決（[ADR 0019](adr/0019-worker-acp-cli-prese
 CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
 ```
 
-`acp.env` の正本は config（user → project deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
+`acp.env` の正本は config（選択された user config → project の順に deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。SessionResumeStore には ACP env map の canonical digest のみを保存し、環境変数の値は記録しません。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
 
 ### パターン D — 実行時入力（env / CLI）
 
@@ -88,7 +100,7 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 | Pi user resource root | `conductor.pi.agentDir` | — | — | `~/.ensemble/pi` | config |
 | Pi project resource root | `conductor.pi.projectDir` | — | — | `<repoRoot>/.ensemble/pi` | config |
 | worker ACP preset（profile 未指定 worker） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
-| worker ACP spawn env | `acp.env` | — | — | — | config deep merge |
+| worker ACP spawn env | `acp.env` | — | — | — | 選択された user config → project deep merge |
 | Issue worktree | `session.worktree` | — | `--worktree` | `isolated` | B |
 | worker ACP lazy attach | `session.lazyWorkers` | — | — | `false` | B |
 | 自律ターン上限（TTY） | `session.maxTurns.tty` | — | `--max-turns` / `--no-max-turns` | `0`（無制限） | B |
@@ -99,7 +111,7 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 | 監視 debounce | `github.monitor.debounceMs` | — | `--github-monitor-debounce-ms` | `30000` | B |
 | poll 間隔 | `github.monitor.pollIntervalMs` 他 | — | — | 各定数 | B |
 
-テンプレート: [`config.example.yaml`](../config.example.yaml)。`ensemble issue` 起動時（GitHub monitor より前）に `loadEnsembleConfig(repoRoot)` で読み込む。user 設定の `config.loadProjectConfig: false` で project 層を無効にでき、project config の読み込み・スキップは同 loader を使う起動経路で stderr に表示する。詳細は [config.md](config.md#配置と解決順) を参照。
+テンプレート: [`config.example.yaml`](../config.example.yaml)。`ensemble issue` 起動時（GitHub monitor より前）に `loadEnsembleConfig(repoRoot)` で読み込む。選択された user 設定（標準 user config または `--config` の明示ファイル）の `config.loadProjectConfig: false` で project 層を無効にでき、project config の読み込み・スキップは同 loader を使う起動経路で stderr に表示する。詳細は [config.md](config.md#配置と解決順) を参照。
 
 ## 一覧 — TUI / オペレータ UI
 

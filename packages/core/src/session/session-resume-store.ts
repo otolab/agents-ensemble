@@ -2,7 +2,10 @@ import { chmod, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/prom
 import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
-import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
+import {
+  computeAcpSpawnEnvDigest,
+  type AcpSpawnFingerprint,
+} from '../acp/resolve-acp-spawn.js';
 import type { ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 
@@ -65,7 +68,7 @@ export interface WorkerSessionResumeStore {
   acpSessionId: string;
   /** ACP `session/new` / `session/load` に渡した cwd（resume 検証用）。 */
   acpCwd?: string;
-  /** resume 時の ACP spawn フィンガープリント（preset + command + args）。 */
+  /** resume 時の ACP spawn fingerprint（env は canonical digest のみ保存）。 */
   acpSpawn?: AcpSpawnFingerprint;
 }
 
@@ -89,6 +92,8 @@ export interface SessionResumeStore {
   githubMonitor?: GitHubMonitorCursor;
   /** Harness-resolved MCP map digest used to reject unsafe resume. */
   mcpConfigDigest?: string;
+  /** Resolved ensemble config digest used to reject resume after config changes. */
+  ensembleConfigDigest?: string;
   /** Last completed process lifecycle; absent legacy values are unknown. */
   lifecycle?: SessionLifecycle;
   /** Harness-owned activity / teardown phase. */
@@ -129,9 +134,28 @@ export function sessionResumeStorePath(options: SessionResumeStorePathOptions): 
 export async function loadSessionResumeStore(
   path: string,
 ): Promise<SessionResumeStore | undefined> {
+  const loaded = await readSessionResumeStore(path);
+  return loaded?.resumeStore;
+}
+
+async function readSessionResumeStore(
+  path: string,
+): Promise<
+  | {
+      resumeStore: SessionResumeStore;
+      hasLegacyAcpSpawnEnv: boolean;
+      rawValue: unknown;
+    }
+  | undefined
+> {
   try {
     const raw = await readFile(path, 'utf8');
-    return parseSessionResumeStore(JSON.parse(raw));
+    const value: unknown = JSON.parse(raw);
+    return {
+      resumeStore: parseSessionResumeStore(value),
+      hasLegacyAcpSpawnEnv: containsLegacyAcpSpawnEnv(value),
+      rawValue: value,
+    };
   } catch (error) {
     if (isEnoent(error)) return undefined;
     throw error;
@@ -144,11 +168,19 @@ export async function requireSessionResumeStoreForResume(input: {
   conductorAgentId: string;
 }): Promise<SessionResumeStore> {
   const path = sessionResumeStorePath(input);
-  const resumeStore = await loadSessionResumeStore(path);
-  if (!resumeStore) {
+  const loaded = await readSessionResumeStore(path);
+  if (!loaded) {
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
-  return resumeStore;
+  if (loaded.hasLegacyAcpSpawnEnv) {
+    // Scrub pre-digest env values before resume validation can reject the
+    // session and bypass its normal first write.
+    await writeSessionResumeStoreFile(
+      path,
+      redactLegacyAcpSpawnEnv(loaded.rawValue, loaded.resumeStore),
+    );
+  }
+  return loaded.resumeStore;
 }
 
 /** @deprecated Use requireSessionResumeStoreForResume; supported for one release only. */
@@ -188,13 +220,20 @@ export async function saveSessionResumeStore(
       ? { modifiedAt: updatedAt }
       : {}),
   });
+  await writeSessionResumeStoreFile(path, parsed);
+}
+
+async function writeSessionResumeStoreFile(
+  path: string,
+  value: unknown,
+): Promise<void> {
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
   const tempPath = `${path}.tmp`;
   await writeFile(
     tempPath,
-    `${JSON.stringify(parsed, null, 2)}\n`,
+    `${JSON.stringify(value, null, 2)}\n`,
     { encoding: 'utf8', mode: 0o600 },
   );
   await chmod(tempPath, 0o600);
@@ -277,6 +316,8 @@ export function assertSessionResumeStoreMatches(
     mcpConfigDigest?: string;
     /** Whether the current resolved map contains at least one server. */
     mcpConfigConfigured?: boolean;
+    /** Current resolved ensemble config digest. */
+    ensembleConfigDigest?: string;
   },
 ): void {
   if (resumeStore.conductorAgentId !== input.conductorAgentId) {
@@ -314,6 +355,15 @@ export function assertSessionResumeStoreMatches(
         `Session resume store MCP config digest mismatch: ${resumeStore.mcpConfigDigest} !== ${input.mcpConfigDigest}`,
       );
     }
+  }
+  if (
+    input.ensembleConfigDigest !== undefined &&
+    resumeStore.ensembleConfigDigest !== undefined &&
+    resumeStore.ensembleConfigDigest !== input.ensembleConfigDigest
+  ) {
+    throw new Error(
+      `Session resume store ensemble config digest mismatch: ${resumeStore.ensembleConfigDigest} !== ${input.ensembleConfigDigest}`,
+    );
   }
 }
 
@@ -364,6 +414,12 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     typeof record.mcpConfigDigest !== 'string'
   ) {
     throw new Error('Invalid session resume store: mcpConfigDigest');
+  }
+  if (
+    record.ensembleConfigDigest !== undefined &&
+    typeof record.ensembleConfigDigest !== 'string'
+  ) {
+    throw new Error('Invalid session resume store: ensembleConfigDigest');
   }
   if (
     record.lazyWorkers !== undefined &&
@@ -455,6 +511,9 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     ...(typeof record.mcpConfigDigest === 'string'
       ? { mcpConfigDigest: record.mcpConfigDigest }
       : {}),
+    ...(typeof record.ensembleConfigDigest === 'string'
+      ? { ensembleConfigDigest: record.ensembleConfigDigest }
+      : {}),
     ...(record.lifecycle !== undefined
       ? { lifecycle: record.lifecycle as SessionLifecycle }
       : {}),
@@ -488,6 +547,50 @@ function isEnoent(error: unknown): boolean {
   );
 }
 
+function containsLegacyAcpSpawnEnv(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || !('workers' in value)) return false;
+  const workers = (value as { workers?: unknown }).workers;
+  if (!workers || typeof workers !== 'object' || Array.isArray(workers)) {
+    return false;
+  }
+  return Object.values(workers).some((worker) => {
+    if (!worker || typeof worker !== 'object' || !('acpSpawn' in worker)) {
+      return false;
+    }
+    const acpSpawn = (worker as { acpSpawn?: unknown }).acpSpawn;
+    if (!acpSpawn || typeof acpSpawn !== 'object' || !('env' in acpSpawn)) {
+      return false;
+    }
+    const env = (acpSpawn as { env?: unknown }).env;
+    return (
+      !!env &&
+      typeof env === 'object' &&
+      !Array.isArray(env) &&
+      Object.keys(env).length > 0
+    );
+  });
+}
+
+function redactLegacyAcpSpawnEnv(
+  value: unknown,
+  parsed: SessionResumeStore,
+): unknown {
+  const record = value as Record<string, unknown>;
+  const rawWorkers = record.workers as Record<string, unknown>;
+  const workers: Record<string, unknown> = { ...rawWorkers };
+  for (const [name, rawWorker] of Object.entries(rawWorkers)) {
+    const worker = rawWorker as Record<string, unknown>;
+    if (!worker.acpSpawn || typeof worker.acpSpawn !== 'object') continue;
+    const acpSpawn = { ...(worker.acpSpawn as Record<string, unknown>) };
+    if (!('env' in acpSpawn)) continue;
+    delete acpSpawn.env;
+    const envDigest = parsed.workers[name]?.acpSpawn?.envDigest;
+    if (envDigest) acpSpawn.envDigest = envDigest;
+    workers[name] = { ...worker, acpSpawn };
+  }
+  return { ...record, workers };
+}
+
 function parseAcpSpawnFingerprint(
   raw: unknown,
   workerName: string,
@@ -503,26 +606,43 @@ function parseAcpSpawnFingerprint(
   if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== 'string')) {
     throw new Error(`Invalid session resume store worker acpSpawn args: ${workerName}`);
   }
-  let env: Record<string, string> | undefined;
+  let envDigest: string | undefined;
+  if (record.envDigest !== undefined) {
+    if (
+      typeof record.envDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(record.envDigest)
+    ) {
+      throw new Error(
+        `Invalid session resume store worker acpSpawn envDigest: ${workerName}`,
+      );
+    }
+    envDigest = record.envDigest;
+  }
   if (record.env !== undefined) {
     if (!record.env || typeof record.env !== 'object' || Array.isArray(record.env)) {
       throw new Error(`Invalid session resume store worker acpSpawn env: ${workerName}`);
     }
-    env = {};
+    const legacyEnv: Record<string, string> = {};
     for (const [key, value] of Object.entries(record.env)) {
       if (typeof value !== 'string') {
         throw new Error(`Invalid session resume store worker acpSpawn env.${key}: ${workerName}`);
       }
-      env[key] = value;
+      legacyEnv[key] = value;
     }
-    if (Object.keys(env).length === 0) {
-      env = undefined;
+    if (Object.keys(legacyEnv).length > 0) {
+      if (envDigest !== undefined) {
+        throw new Error(
+          `Invalid session resume store worker acpSpawn env: duplicate env and envDigest for ${workerName}`,
+        );
+      }
+      // Redact values from legacy records while keeping resume comparison possible.
+      envDigest = computeAcpSpawnEnvDigest(legacyEnv);
     }
   }
   return {
     preset: record.preset as AcpSpawnFingerprint['preset'],
     command: record.command,
     args: record.args,
-    ...(env ? { env } : {}),
+    ...(envDigest ? { envDigest } : {}),
   };
 }
