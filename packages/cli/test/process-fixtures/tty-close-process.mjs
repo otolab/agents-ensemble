@@ -7,12 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { executeIssueCommand } from '../../dist/issue-command.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../../../core/dist/config/defaults.js';
 import { runConductorSession } from '../../../core/dist/conductor/conductor-session.js';
+import { resolveEnsemblePaths } from '../../../core/dist/ensemble-paths.js';
 
 const issueUrl = 'https://github.com/org/repo/issues/1';
 const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-close-process-'));
 const userEnsembleRoot = await mkdtemp(
   join(tmpdir(), 'ensemble-close-process-user-'),
 );
+process.env.HOME = userEnsembleRoot;
 execFileSync('git', ['init'], { cwd: repoRoot, stdio: 'ignore' });
 execFileSync('git', ['config', 'user.email', 'tty-close@example.test'], {
   cwd: repoRoot,
@@ -180,12 +182,10 @@ try {
   if (!worktrees.includes(`worktree ${registeredWorktreePath}\n`)) {
     throw new Error('TTY /close removed the Issue worktree registration');
   }
-  const resumeStorePath = join(
+  const resumeStorePath = resolveEnsemblePaths({
     repoRoot,
-    '.ensemble',
-    'sessions',
-    'close-process-agent.json',
-  );
+    home: userEnsembleRoot,
+  }).sessionResumeStorePath('close-process-agent');
   const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8'));
   if (
     resumeStore.workers?.implementer?.acpSessionId !== 'tty-worker-session' ||

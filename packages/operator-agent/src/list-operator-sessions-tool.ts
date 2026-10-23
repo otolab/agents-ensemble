@@ -3,6 +3,7 @@ import {
   listSessionResumeStores,
   harnessPhaseFromLegacyLifecycle,
   loadSessionStateStore,
+  legacySessionStateStorePath,
   parseIssueUrl,
   sessionStateStorePath,
   type ConductorJsonValue,
@@ -76,7 +77,7 @@ export function createListOperatorSessionsTool(
   return {
     name: LIST_OPERATOR_SESSIONS_TOOL,
     description:
-      'Read saved SessionResumeStore records and session state under <repoRoot>/.ensemble/sessions. The results are snapshots, not live process status.',
+      'Read saved SessionResumeStore records and session state from the user-scoped repository session store. The results are snapshots, not live process status.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -214,11 +215,13 @@ async function loadStatusLine(
   resumeStore: SessionResumeStore,
 ): Promise<SessionStateStore | undefined> {
   try {
-    return await loadSessionStateStore(
-      sessionStateStorePath({
-        repoRoot,
-        conductorAgentId: resumeStore.conductorAgentId,
-      }),
+    const input = {
+      repoRoot,
+      conductorAgentId: resumeStore.conductorAgentId,
+    };
+    return (
+      (await loadSessionStateStore(sessionStateStorePath(input))) ??
+      (await loadSessionStateStore(legacySessionStateStorePath(input)))
     );
   } catch {
     // Status reporting is an optional operator snapshot. A missing, partial, or

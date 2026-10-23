@@ -80,6 +80,7 @@ describe('session resume integration', () => {
 
   beforeEach(async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-resume-'));
+    vi.stubEnv('HOME', repoRoot);
 
     vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
       issue: TEST_ISSUE,
@@ -116,6 +117,7 @@ describe('session resume integration', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('restores saved resume store profile, open questions, and worker session/load on resume', async () => {

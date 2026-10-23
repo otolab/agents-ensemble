@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp as createTempDir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import {
   loadOpenQuestionsStore,
@@ -15,11 +15,20 @@ describe('open questions store', () => {
 
   afterEach(async () => {
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
     tempDir = '';
   });
 
+  async function createHome(): Promise<string> {
+    const directory = await createTempDir(
+      join(tmpdir(), 'ensemble-open-questions-'),
+    );
+    vi.stubEnv('HOME', directory);
+    return directory;
+  }
+
   it('round-trips the registry snapshot and preserves sequence for future IDs', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
+    tempDir = await createHome();
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-1',
@@ -73,7 +82,7 @@ describe('open questions store', () => {
   });
 
   it('preserves question IDs without the registry-generated inq-N form', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
+    tempDir = await createHome();
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-custom-id',
@@ -98,7 +107,7 @@ describe('open questions store', () => {
   });
 
   it('returns undefined when the YAML store does not exist', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
+    tempDir = await createHome();
 
     await expect(
       loadOpenQuestionsStore(
@@ -111,7 +120,7 @@ describe('open questions store', () => {
   });
 
   it('rejects unsupported versions and malformed questions', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
+    tempDir = await createHome();
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-invalid',
@@ -138,7 +147,7 @@ describe('open questions store', () => {
   });
 
   it('rejects a sequence behind an existing question ID before restore can overwrite it', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
+    tempDir = await createHome();
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-sequence-mismatch',
@@ -166,7 +175,7 @@ describe('open questions store', () => {
   });
 
   it('rejects duplicate IDs that would overwrite each other during restore', async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-open-questions-'));
+    tempDir = await createHome();
     const path = openQuestionsStorePath({
       repoRoot: tempDir,
       conductorAgentId: 'agent-duplicate-id',

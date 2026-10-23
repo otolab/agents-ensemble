@@ -126,6 +126,7 @@ import {
   saveSessionStatusLine,
   sessionStateStorePath,
   loadSessionStateStore,
+  legacySessionStateStorePath,
 } from '../session/session-state-store.js';
 import {
   loadToolCallSnapshotHistory,
@@ -135,6 +136,7 @@ import {
 } from '../session/tool-call-snapshot-history.js';
 import {
   loadOpenQuestionsStore,
+  legacyOpenQuestionsStorePath,
   openQuestionsStorePath,
   saveOpenQuestionsStore,
 } from '../session/open-questions-store.js';
@@ -180,6 +182,7 @@ import { createRegisterGitHubWatchTool } from '../github/register-github-watch-t
 import { createUnregisterGitHubWatchTool } from '../github/unregister-github-watch-tool.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import { loadUserInstructions } from '../prompt/load-user-instructions.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 export type { OperatorInputContext } from './operator-input-binding.js';
 export type {
@@ -455,8 +458,26 @@ export async function runConductorSession(
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
     });
-    const openQuestionsSnapshot =
-      await loadOpenQuestionsStore(openQuestionsPath);
+    let openQuestionsSnapshot = await loadOpenQuestionsStore(openQuestionsPath);
+    if (!openQuestionsSnapshot) {
+      const legacyPath = legacyOpenQuestionsStorePath({
+        repoRoot: options.repoRoot,
+        conductorAgentId: options.resumeAgentId,
+      });
+      openQuestionsSnapshot = await loadOpenQuestionsStore(legacyPath);
+      if (openQuestionsSnapshot) {
+        try {
+          await saveOpenQuestionsStore(openQuestionsPath, openQuestionsSnapshot);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message:
+              `旧保存先の open question を user 保存先へ移行できませんでした。今回のセッションでは旧 YAML を読み込みます。 error=${detail}`,
+          });
+        }
+      }
+    }
     if (openQuestionsSnapshot) {
       openQuestions.restore(openQuestionsSnapshot);
     } else {
@@ -1017,6 +1038,11 @@ export async function runConductorSession(
             conductorAgentId: conductorAgent.agentId,
           }),
           statusLine,
+          undefined,
+          legacySessionStateStorePath({
+            repoRoot: options.repoRoot,
+            conductorAgentId: conductorAgent.agentId,
+          }),
         ),
       );
       sessionStateWriteQueue = write.catch(() => {});
@@ -1073,6 +1099,12 @@ export async function runConductorSession(
             repoRoot: options.repoRoot,
             config: ensembleConfig,
           }),
+          sessionDir: resolveEnsemblePaths({
+            repoRoot: options.repoRoot,
+          }).piSessionsDir,
+          legacySessionDir: resolveEnsemblePaths({
+            repoRoot: options.repoRoot,
+          }).legacyPiSessionsDirForCwd(conductorCwd),
         }
       : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
@@ -1609,7 +1641,13 @@ export async function runConductorSession(
             repoRoot: options.repoRoot,
             conductorAgentId: conductorAgent.agentId,
           }),
-        );
+        ) ??
+          await loadSessionStateStore(
+            legacySessionStateStorePath({
+              repoRoot: options.repoRoot,
+              conductorAgentId: conductorAgent.agentId,
+            }),
+          );
         return {
           ...openQuestions.snapshot(),
           ...(sessionState ? { sessionState } : {}),

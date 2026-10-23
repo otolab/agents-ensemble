@@ -54,7 +54,7 @@ list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }
 
 ## Operator-agent watch state の欠損・破損と復旧
 
-watch pool は `.ensemble/operator-agent/watch-state.json` に watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。
+watch pool は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。旧 project `.ensemble/operator-agent/watch-state.json` は読み込み時に移行します。
 
 - **state file が存在しない場合:** empty state として起動し、watch pool は空です。保存済み watch 登録・cursor・未 dispatch report は復元されません。監視を再開するには対象 session ごとに `register_session_watch` を実行してください。cursor がないため、再登録後の最初の成功した snapshot は既存 Open Question ID の silent baseline になります。その snapshot にすでに含まれる質問（state 欠損中に追加された質問も含む）は新規通知として replay されません。baseline 後に追加された ID は通常どおり通知されます。
 - **JSON または state schema が不正な場合:** operator-agent の初期化は失敗し、empty state へ黙って置き換えません。保存ファイルを退避してから、有効な backup を戻すか、version と必須 field を修復して再起動してください。state を意図的に破棄する場合も、まず必要ならコピーを保全してください。ファイルを取り除いて再起動すると empty state から始まり、上記の再登録と silent baseline が必要です。
@@ -62,7 +62,7 @@ watch pool は `.ensemble/operator-agent/watch-state.json` に watch 登録、se
 
 ## Endpoint discovery と lifecycle
 
-operator-agent は `.ensemble/sessions/{conductorAgentId}.json` にある SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、SessionResumeStore に記録された値を使ってください。
+operator-agent は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json` にある SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、SessionResumeStore に記録された値を使ってください。
 
 path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら UDS request は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` と発言 listen は直接 live control であり、保存 YAML へ fallback しません。operator-agent tool の `list_conductor_messages` はこの UDS 経路を使わず、SessionResumeStore の session ID / backend / cwd から provider history を読みます。watch pool の `register_session_watch` のみが `session.observe` を試し、UDS が到達不能または method 未対応なら保存 snapshot へ切り替えます。発言 listen は UDS が利用できない間も保存値へ切り替えず、次の poll で再接続を試します。
 
@@ -265,7 +265,7 @@ operator-agent tool の `list_conductor_messages` は稼働中・停止後とも
 
 回答候補は Open Questions YAML に atomic save されてから live Registry と event queue に反映されます。YAML は回答永続化・resume の正本で、SessionResumeStore は JSON mirror として更新されます。通常の success response は YAML save と conductor dispatch receipt の成功後に返ります。SessionResumeStore の flush 成功は success 条件ではありません。回答処理で mirror 更新に失敗すると warning を記録し、後続 flush を一度 schedule して再同期を試みます。これは再同期の保証ではなく、その flush も失敗した場合は warning を記録してこの経路での再試行を終えます。
 
-永続化先は `.ensemble/sessions/{conductorAgentId}/open-questions.yaml`、SessionResumeStore は `.ensemble/sessions/{conductorAgentId}.json` です。SessionResumeStore は `harnessSocketPath` の endpoint index を持ち、Open Question snapshot も互換用 mirror として含みます。
+永続化先は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}/open-questions.yaml`、SessionResumeStore は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json` です。SessionResumeStore は `harnessSocketPath` の endpoint index を持ち、Open Question snapshot も互換用 mirror として含みます。
 
 JSON-RPC error は次の envelope です。`data` は該当する場合だけ付きます。
 
@@ -307,7 +307,7 @@ conductor send の通常時の再接続方針は既存 dispatch policy に従い
 
 ## Security と privacy
 
-- `.ensemble/sessions/` と session data directory、UDS runtime directory は owner-only (`0700`) です。SessionResumeStore の JSON、Open Questions YAML、socket は owner read/write (`0600`) です。
+- `~/.ensemble/sessions/<repoKey>/` と session data directory、UDS runtime directory は owner-only (`0700`) です。SessionResumeStore の JSON、Open Questions YAML、socket は owner read/write (`0600`) です。
 - token 認証はありません。同じ OS user の別 process は socket に接続できる trust boundary です。
 - UDS server は request / response body を access log に出しません。一方、既存 CLI の operator observation は質問本文・回答本文を非 TTY では stderr、TTY では TUI activity log に表示し、SessionResumeStore / YAML にも保存します。最後の conductor 応答 API も同じ OS user の client に本文を返します。
 - API は質問・context・choice を保存値のまま返します。自由文中の secret や repository 外情報を検出する一般的な redaction はありません。機密値を質問・context・回答へ含めないでください。詳細は [session-logging.md](session-logging.md) を参照してください。

@@ -173,6 +173,7 @@ describe('runConductorSession resume / shutdown', () => {
   beforeEach(async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-conductor-'));
     userEnsembleRoot = await mkdtemp(join(tmpdir(), 'ensemble-conductor-user-'));
+    vi.stubEnv('HOME', userEnsembleRoot);
 
     vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
       issue: TEST_ISSUE,
@@ -252,6 +253,7 @@ describe('runConductorSession resume / shutdown', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   async function runConductorSession(

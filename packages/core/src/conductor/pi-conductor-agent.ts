@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
+import { chmod, copyFile, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import {
   type AgentMessage,
@@ -27,6 +29,7 @@ import {
   type SessionMessageEntry,
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import {
   createPiConductorAuthContext,
   resolvePiConductorApiKey,
@@ -563,15 +566,39 @@ async function createPiConductorSession(
     await authContext.modelRuntime.setRuntimeApiKey(resolved.provider, options.apiKey);
   }
 
-  const sessionDir = join(options.cwd, PI_SESSION_ROOT);
+  const sessionDir =
+    options.sessionDir ??
+    resolveEnsemblePaths({ repoRoot: options.cwd }).piSessionsDir;
+  const legacySessionDir =
+    options.legacySessionDir ?? join(options.cwd, PI_SESSION_ROOT);
+  await mkdir(sessionDir, { recursive: true, mode: 0o700 });
+  await chmod(sessionDir, 0o700);
   let sessionManager: SessionManager;
   let previousSessionFile: string | undefined;
   if (reason === 'resume') {
     previousSessionFile = SessionManager.findById(options.cwd, agentId, sessionDir);
+    if (!previousSessionFile && legacySessionDir !== sessionDir) {
+      const legacyFile = SessionManager.findById(
+        options.cwd,
+        agentId,
+        legacySessionDir,
+      );
+      if (legacyFile) {
+        await mkdir(sessionDir, { recursive: true, mode: 0o700 });
+        const migratedFile = join(sessionDir, basename(legacyFile));
+        try {
+          await copyFile(legacyFile, migratedFile, constants.COPYFILE_EXCL);
+        } catch (error) {
+          if (!isAlreadyExists(error)) throw error;
+        }
+        await chmod(migratedFile, 0o600);
+        previousSessionFile = migratedFile;
+      }
+    }
     if (!previousSessionFile) {
       throw new Error(
         `Pi session not found for resume (sessionId=${agentId}, cwd=${options.cwd}, ` +
-          `sessionsRoot=${PI_SESSION_ROOT})`,
+          `sessionsRoot=${sessionDir})`,
       );
     }
     sessionManager = SessionManager.open(
@@ -700,6 +727,14 @@ async function createPiConductorSession(
       'Pi conductor startup failed and session cleanup was incomplete.',
     );
   }
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    (error as NodeJS.ErrnoException).code === 'EEXIST'
+  );
 }
 
 function applyPiHeadlessSettings(

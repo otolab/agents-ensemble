@@ -179,7 +179,11 @@ function createDeferred<T>(): {
 }
 
 describe('executeIssueCommand with the core session', () => {
-  beforeEach(() => {
+  let homeRoot = '';
+
+  beforeEach(async () => {
+    homeRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-session-home-'));
+    vi.stubEnv('HOME', homeRoot);
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
     mockClose.mockClear();
     mockCreate.mockReset();
@@ -230,9 +234,12 @@ describe('executeIssueCommand with the core session', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    if (homeRoot) await rm(homeRoot, { recursive: true, force: true });
+    homeRoot = '';
   });
 
   it.each([
@@ -466,12 +473,10 @@ describe('executeIssueCommand with the core session', () => {
     expect(closedTui.telemetrySink).toHaveBeenCalledWith({
       type: 'session.operator_close',
     });
-    const resumeStorePath = join(
+    const resumeStorePath = sessionResumeStorePath({
       repoRoot,
-      '.ensemble',
-      'sessions',
-      'agent-test.json',
-    );
+      conductorAgentId: 'agent-test',
+    });
     const closeResumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8'));
     expect(closeResumeStore.githubMonitor.pendingUpdates).toEqual([pendingUpdate]);
     expect(closeAcknowledge).not.toHaveBeenCalled();

@@ -8,6 +8,7 @@ import {
 } from '../acp/resolve-acp-spawn.js';
 import type { ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 export const SESSION_RESUME_STORE_VERSION = 1;
 
@@ -128,11 +129,25 @@ export interface SessionResumeStorePathOptions {
 export type SessionSidecarPathOptions = SessionResumeStorePathOptions;
 
 export function sessionResumeStoreDir(repoRoot: string): string {
-  return join(repoRoot, '.ensemble', 'sessions');
+  return resolveEnsemblePaths({ repoRoot }).sessionsDir;
+}
+
+export function legacySessionResumeStoreDir(repoRoot: string): string {
+  return resolveEnsemblePaths({ repoRoot }).legacySessionsDir;
+}
+
+export function legacySessionResumeStorePath(
+  options: SessionResumeStorePathOptions,
+): string {
+  return resolveEnsemblePaths({
+    repoRoot: options.repoRoot,
+  }).legacySessionResumeStorePath(options.conductorAgentId);
 }
 
 export function sessionResumeStorePath(options: SessionResumeStorePathOptions): string {
-  return join(sessionResumeStoreDir(options.repoRoot), `${options.conductorAgentId}.json`);
+  return resolveEnsemblePaths({
+    repoRoot: options.repoRoot,
+  }).sessionResumeStorePath(options.conductorAgentId);
 }
 
 export async function loadSessionResumeStore(
@@ -172,7 +187,12 @@ export async function requireSessionResumeStoreForResume(input: {
   conductorAgentId: string;
 }): Promise<SessionResumeStore> {
   const path = sessionResumeStorePath(input);
-  const loaded = await readSessionResumeStore(path);
+  let loaded = await readSessionResumeStore(path);
+  let sourcePath = path;
+  if (!loaded) {
+    sourcePath = legacySessionResumeStorePath(input);
+    loaded = await readSessionResumeStore(sourcePath);
+  }
   if (!loaded) {
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
@@ -180,9 +200,12 @@ export async function requireSessionResumeStoreForResume(input: {
     // Scrub pre-digest env values before resume validation can reject the
     // session and bypass its normal first write.
     await writeSessionResumeStoreFile(
-      path,
+      sourcePath,
       redactLegacyAcpSpawnEnv(loaded.rawValue, loaded.resumeStore),
     );
+  }
+  if (sourcePath !== path) {
+    await writeSessionResumeStoreFile(path, loaded.resumeStore);
   }
   return loaded.resumeStore;
 }
@@ -250,22 +273,23 @@ export const saveSessionSidecar = saveSessionResumeStore;
 export async function listSessionResumeStores(
   repoRoot: string,
 ): Promise<SessionResumeStore[]> {
-  const dir = sessionResumeStoreDir(repoRoot);
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch (error) {
-    if (isEnoent(error)) return [];
-    throw error;
+  const paths = resolveEnsemblePaths({ repoRoot });
+  const byAgentId = new Map<string, SessionResumeStore>();
+  for (const dir of [paths.legacySessionsDir, paths.sessionsDir]) {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.json') || entry.endsWith('.tmp')) continue;
+      const resumeStore = await loadSessionResumeStore(join(dir, entry));
+      if (resumeStore) byAgentId.set(resumeStore.conductorAgentId, resumeStore);
+    }
   }
-
-  const resumeStores: SessionResumeStore[] = [];
-  for (const entry of entries) {
-    if (!entry.endsWith('.json') || entry.endsWith('.tmp')) continue;
-    const resumeStore = await loadSessionResumeStore(join(dir, entry));
-    if (resumeStore) resumeStores.push(resumeStore);
-  }
-  return resumeStores;
+  return [...byAgentId.values()];
 }
 
 /** @deprecated Use listSessionResumeStores; supported for one release only. */

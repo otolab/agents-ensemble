@@ -1,7 +1,8 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sessionResumeStorePath, sessionStateStorePath } from '@agents-ensemble/core';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 
 describe('list_operator_sessions', () => {
@@ -9,11 +10,13 @@ describe('list_operator_sessions', () => {
 
   beforeEach(async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-sessions-'));
+    vi.stubEnv('HOME', repoRoot);
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
   });
 
   afterEach(async () => {
     await rm(repoRoot, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   it('returns recent SessionResumeStore summaries with open-question and worker details', async () => {
@@ -132,13 +135,10 @@ describe('list_operator_sessions', () => {
       statusLine: '最新の報告',
     });
     await writeFile(
-      join(
+      sessionStateStorePath({
         repoRoot,
-        '.ensemble',
-        'sessions',
-        'history',
-        'session-state.yaml',
-      ),
+        conductorAgentId: 'history',
+      }),
       [
         'version: 2',
         'current:',
@@ -356,8 +356,13 @@ describe('list_operator_sessions', () => {
       statusLine?: string;
     } = {},
   ): Promise<void> {
+    const path = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await mkdir(dirname(path), { recursive: true });
     await writeFile(
-      join(repoRoot, '.ensemble', 'sessions', `${agentId}.json`),
+      path,
       JSON.stringify({
         version: 1,
         conductorAgentId: agentId,
@@ -402,15 +407,13 @@ describe('list_operator_sessions', () => {
       }),
     );
     if (options.statusLine) {
-      const stateDir = join(
+      const statePath = sessionStateStorePath({
         repoRoot,
-        '.ensemble',
-        'sessions',
-        agentId,
-      );
-      await mkdir(stateDir, { recursive: true });
+        conductorAgentId: agentId,
+      });
+      await mkdir(dirname(statePath), { recursive: true });
       await writeFile(
-        join(stateDir, 'session-state.yaml'),
+        statePath,
         `version: 1\nstatusLine: "${options.statusLine}"\nreportedAt: ${updatedAt + 1}\n`,
       );
     }

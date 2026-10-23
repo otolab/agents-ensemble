@@ -1,4 +1,5 @@
 import {
+  chmod,
   mkdir,
   readdir,
   readFile,
@@ -15,7 +16,7 @@ import {
   TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS,
   type StoredToolCallSnapshot,
 } from '../runtime/tool-call-snapshot-registry.js';
-import { sessionResumeStoreDir } from './session-resume-store.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 const TOOL_CALL_SNAPSHOT_HISTORY_VERSION = 1;
 const TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX = '.tool-calls';
@@ -36,9 +37,8 @@ export function toolCallSnapshotHistoryPath(input: {
   repoRoot: string;
   conductorAgentId: string;
 }): string {
-  return join(
-    sessionResumeStoreDir(input.repoRoot),
-    `${input.conductorAgentId}${TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX}`,
+  return resolveEnsemblePaths({ repoRoot: input.repoRoot }).toolCallHistoryPath(
+    input.conductorAgentId,
   );
 }
 
@@ -52,11 +52,21 @@ export async function loadToolCallSnapshotHistory(input: {
   now?: number;
 }): Promise<LoadToolCallSnapshotHistoryResult> {
   const path = toolCallSnapshotHistoryPath(input);
+  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
+  const legacyPath = paths.legacyToolCallHistoryPath(input.conductorAgentId);
+  let sourcePath = path;
   let raw: string;
   try {
-    const fileInfo = await stat(path);
+    let fileInfo: Awaited<ReturnType<typeof stat>>;
+    try {
+      fileInfo = await stat(path);
+    } catch (error) {
+      if (!isEnoent(error)) throw error;
+      sourcePath = legacyPath;
+      fileInfo = await stat(sourcePath);
+    }
     if (fileInfo.size > TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES) {
-      await removeHistoryFile(path);
+      await removeHistoryFile(sourcePath);
       return {
         entries: [],
         needsRewrite: false,
@@ -64,7 +74,7 @@ export async function loadToolCallSnapshotHistory(input: {
           'tool-call snapshot history exceeds the size limit and was discarded',
       };
     }
-    raw = await readFile(path, 'utf8');
+    raw = await readFile(sourcePath, 'utf8');
   } catch (error) {
     if (isEnoent(error)) {
       return { entries: [], needsRewrite: false };
@@ -77,7 +87,7 @@ export async function loadToolCallSnapshotHistory(input: {
   }
 
   if (Buffer.byteLength(raw, 'utf8') > TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES) {
-    await removeHistoryFile(path);
+    await removeHistoryFile(sourcePath);
     return {
       entries: [],
       needsRewrite: false,
@@ -90,7 +100,7 @@ export async function loadToolCallSnapshotHistory(input: {
   try {
     value = JSON.parse(raw);
   } catch {
-    await removeHistoryFile(path);
+    await removeHistoryFile(sourcePath);
     return {
       entries: [],
       needsRewrite: false,
@@ -103,7 +113,7 @@ export async function loadToolCallSnapshotHistory(input: {
     value.version !== TOOL_CALL_SNAPSHOT_HISTORY_VERSION ||
     !Array.isArray(value.snapshots)
   ) {
-    await removeHistoryFile(path);
+    await removeHistoryFile(sourcePath);
     return {
       entries: [],
       needsRewrite: false,
@@ -141,6 +151,15 @@ export async function loadToolCallSnapshotHistory(input: {
   );
   if (retained.length !== entries.length) needsRewrite = true;
 
+  if (sourcePath !== path && retained.length > 0) {
+    try {
+      await saveToolCallSnapshotHistory(path, retained);
+    } catch {
+      // Legacy history is optional; an unsuccessful migration must not make
+      // the session resume fail.
+    }
+  }
+
   return {
     entries: retained,
     needsRewrite,
@@ -172,10 +191,13 @@ export async function saveToolCallSnapshotHistory(
     version: TOOL_CALL_SNAPSHOT_HISTORY_VERSION,
     snapshots,
   });
-  await mkdir(dirname(path), { recursive: true });
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
   const tempPath = `${path}.tmp`;
   try {
-    await writeFile(tempPath, serialized, 'utf8');
+    await writeFile(tempPath, serialized, { encoding: 'utf8', mode: 0o600 });
+    await chmod(tempPath, 0o600);
     await rename(tempPath, path);
   } catch (error) {
     await removeHistoryFile(tempPath);
@@ -191,33 +213,35 @@ export async function pruneExpiredToolCallSnapshotHistoryFiles(
   repoRoot: string,
   now = Date.now(),
 ): Promise<PruneToolCallSnapshotHistoryResult> {
-  const dir = sessionResumeStoreDir(repoRoot);
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch (error) {
-    if (isEnoent(error)) return { removedCount: 0, failedCount: 0 };
-    return { removedCount: 0, failedCount: 1 };
-  }
-
   let removedCount = 0;
   let failedCount = 0;
   const cutoff = now - TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS;
-  for (const entry of entries) {
-    if (
-      !entry.endsWith(TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX) &&
-      !entry.endsWith(`${TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX}.tmp`)
-    ) {
+  const paths = resolveEnsemblePaths({ repoRoot });
+  for (const dir of [paths.sessionsDir, paths.legacySessionsDir]) {
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      failedCount += 1;
       continue;
     }
-    const path = join(dir, entry);
-    try {
-      const fileInfo = await stat(path);
-      if (!fileInfo.isFile() || fileInfo.mtimeMs > cutoff) continue;
-      await rm(path, { force: true });
-      removedCount += 1;
-    } catch (error) {
-      if (!isEnoent(error)) failedCount += 1;
+    for (const entry of entries) {
+      if (
+        !entry.endsWith(TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX) &&
+        !entry.endsWith(`${TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX}.tmp`)
+      ) {
+        continue;
+      }
+      const path = join(dir, entry);
+      try {
+        const fileInfo = await stat(path);
+        if (!fileInfo.isFile() || fileInfo.mtimeMs > cutoff) continue;
+        await rm(path, { force: true });
+        removedCount += 1;
+      } catch (error) {
+        if (!isEnoent(error)) failedCount += 1;
+      }
     }
   }
   return { removedCount, failedCount };
