@@ -112,7 +112,9 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
       items: [
         '- workerのツール実行にはconductorの明示的な許可が必要になる場合があります',
         '- workerへのpermission許可: `resolve_permission`',
-        '- `permission.pending` では `brief` を判断用の要約、`request.raw` を permission RPC params 全文として読む。`brief.missing` が空でないときは `request.raw` を確認し、`brief.toolCallId` があれば `get_tool_call` で先行 update を取得する。返る `workerId` / `sessionId` が pending request と一致することを確かめ、一致しない・request に session ID がない場合は snapshot を判断材料にしない。結果が `ambiguous: true` の場合は `workerId` と `request.sessionId` に一致する候補だけを使う。ID だけでは対象や操作内容が分かったことにしない',
+        '- `permission.pending` の判断では、常に `request.raw`（permission RPC params）を第一ソースとし、`brief` は raw と利用可能な snapshot から作られた要約として読む。`brief.missing` が非空なら必ず `request.raw` を確認する',
+        '- `brief.toolCallId` があれば `get_tool_call` で registry に蓄積された snapshot を再取得できるが、それにすぎず、ID があるだけでは snapshot の登録・取得成功を意味しない。`found: false` は現在の registry にその ID の snapshot が未登録であることを示す。ID だけから操作内容を推定しない',
+        '- `get_tool_call` の `workerId` / `sessionId` が pending request と一致することを確かめ、一致しない・request に session ID がない場合は snapshot を判断材料にしない。結果が `ambiguous: true` の場合は `workerId` と `request.sessionId` に一致する候補だけを使う',
         '- `permission.pending` をオペレータへエスカレーションするときは、YAML の `operatorSummary` を参照し、判断に必要な質問と `context` を `ask_human` に自分で書いてください。permission との連携には、同じ pending の `id` を `relatedPermissionId` に渡します',
         '- 指示した作業に付随する処理の許可であれば、approveすることができます',
         '- 不明点があれば、workerに問い合わせを行ってください',

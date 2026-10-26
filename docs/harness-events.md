@@ -103,6 +103,8 @@ conductor 向け `permission.pending` YAML には判断用の `brief` と、ACP
 `brief.missing` に列挙するため、ID だけの要求が操作内容まで判明した扱いにはならない。
 従来の `operatorSummary` も互換用・エスカレーション用として併記する。
 
+`tool_call` / `tool_call_update` が permission より先に届く保証はなく、`request.raw` に操作の詳細が揃わない場合もある。`toolCallId` による snapshot の照合は補完情報の取得であり、ID だけで snapshot や操作内容を確認できたとは扱わない。`get_tool_call` の `found: false` は、現在の registry に該当 snapshot が未登録であることを示す。
+
 ```yaml
 id: <pending id>
 workerId: <internal worker id>
