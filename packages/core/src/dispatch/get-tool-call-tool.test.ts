@@ -46,6 +46,11 @@ describe('createGetToolCallTool', () => {
     expect(result.structuredContent).toEqual({
       found: false,
       toolCallId: 'call-missing',
+      reason: 'no_matching_snapshot',
+      suggestedReads: [
+        'permission.pending.request.raw',
+        'permission.pending.brief.missing',
+      ],
     });
   });
 

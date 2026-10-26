@@ -682,6 +682,11 @@ describe('session resume integration', () => {
           expect(futureSnapshot.structuredContent).toMatchObject({
             found: false,
             toolCallId: 'call-future-updated-at',
+            reason: 'no_matching_snapshot',
+            suggestedReads: [
+              'permission.pending.request.raw',
+              'permission.pending.brief.missing',
+            ],
           });
         }
 
