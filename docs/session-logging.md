@@ -98,6 +98,8 @@ operator-agent の watch polling 警告には例外本文を含めず、Open Que
 
 TTY + Ink 時は harness / observation イベントを **stderr に書かず**、`createTuiTelemetrySink` 経由で Ink の活動ログに `[harness]` / `[observation]` ラベル付きで追記する。operator / conductor の**成功応答**は DisplaySink → Ink backend が `[operator]` / `[conductor]` として同じ活動ログへ追記する。`conductor.send` の error は conductor 活動ログへ追記せず、harness 活動ログだけに障害として追記する。既定の `stream` レイアウトでは `<Static>` と端末 scrollback を使い、`tui.layout: pane` または `ENSEMBLE_TUI_LAYOUT=pane` で Orchestration ペイン内の windowing に戻せる。stream の活動ログは端末表示用で、SessionResumeStore や活動ログファイルには永続化しない。scrollback 閲覧中に新着ログで末尾へ戻る場合があり、通常の幅変更では既追記行は再折り返しされない（詳細は [operator-input.md](operator-input.md) と [ADR 0015](adr/0015-cli-tui-library.md)）。
 
+`ensemble operator-agent` の TTY も同じチャネルの読み方を使う。対話は `user>` / `operator>`、監視・dispatch の状態や障害は `[harness]`、起動・終了・再接続などの運用通知は `[observation]` として stdout に表示する。監視報告 hold は有効状態・理由・保留件数を `[harness]` の同じ形式で状態変化時に更新する。これは SessionLogger の sink ではなく、readline ベースの独立した operator-agent 表示である。
+
 活動ログでは直前の内容エントリとラベルが変わるときに separator を 1 つ挿入し、同じラベルが続くときは自動挿入しない。conductor ブロックの前後には従来どおり separator を置き、境界処理と重なった連続 separator は 1 つに畳む。エントリ本文の段落空行（`\n\n`）は separator と独立して保持する。pane の bounded history では separator も他のエントリと同じく window の件数に含め、stream では活動ログ全体を append-only で保持する。
 
 ### 終了 JSON（SessionSummary）

@@ -247,16 +247,23 @@ describe('runOperatorAgent', () => {
     const transcript = output.capturedText();
     expect(sentPrompts).toEqual(['状況を教えて']);
     expect(transcript).toContain(
-      '\u001b[2moperator-agent\u001b[0m (pi) ready — enter /exit to start a fresh session next time.\n\n',
+      '\u001b[2m[observation]\u001b[0m (pi) ready — enter /exit to start a fresh session next time.',
     );
     expect(transcript).toContain('\u001b[2muser>\u001b[0m');
     expect(transcript).toContain(
       '\u001b[36moperator>\u001b[0m\n保存済み SessionResumeStore から implementer のセッション情報を確認できます。\n\nライブ open question も確認できます。\n\n',
     );
-    expect(transcript).toContain('会話 hold を解除しました');
     expect(transcript).toContain(
-      '\u001b[2moperator-agent\u001b[0m session ended.\n\n',
+      '\u001b[2m[harness]\u001b[0m 監視報告: 保留（理由: 会話、保留件数: 0 件）',
     );
+    expect(transcript).toContain(
+      '\u001b[2m[harness]\u001b[0m 監視報告: 解除（理由: なし、保留件数: 0 件）',
+    );
+    expect(transcript).toContain(
+      '\u001b[2m[observation]\u001b[0m session ended.',
+    );
+    expect(transcript).not.toMatch(/(?:^|\n)> /);
+    expect(transcript).not.toContain('operator-agent 会話 hold');
     expect(agentOptions).toMatchObject({
       cwd: repoRoot,
       modelId: 'smoke-model',
@@ -375,7 +382,9 @@ describe('runOperatorAgent', () => {
     expect(sentPrompts[0]).toBe('first turn');
     expect(sentPrompts[1]).toBe('second turn');
     expect(sentPrompts.join('\n')).not.toContain('/resume-watch');
-    expect(output.capturedText()).toContain('監視報告保留中（会話・手動 / 0 件）');
+    expect(output.capturedText()).toContain(
+      '監視報告: 保留（理由: 会話・手動、保留件数: 0 件）',
+    );
   });
 
   it('buffers a live UDS report on conversation hold and dispatches it after the user turn', async () => {
@@ -518,7 +527,7 @@ describe('runOperatorAgent', () => {
         'Should the operator review this live report?',
       );
       expect(output.capturedText()).toContain(
-        '会話 hold を解除しました（手動 hold: 解除、保留報告 1 件を dispatch queue に戻しました）。',
+        '監視報告: 解除（理由: なし、保留件数: 0 件）',
       );
       input.write('/exit\n');
       await run;
@@ -662,13 +671,15 @@ describe('runOperatorAgent', () => {
       input.write('/resume-watch\n');
       await vi.waitFor(() =>
         expect(output.capturedText()).toContain(
-          '会話 hold を解除しました（手動 hold: 継続、監視保留: 1 件、dispatch queue に戻した報告: 0 件）。',
+          '監視報告: 保留（理由: 手動、保留件数: 1 件）',
         ),
       );
       expect(sentPrompts).toHaveLength(1);
       finishFirstTurn();
       await vi.waitFor(() =>
-        expect(output.capturedText()).toContain('監視報告保留中（手動 / 1 件）'),
+        expect(output.capturedText()).toContain(
+          '監視報告: 保留（理由: 手動、保留件数: 1 件）',
+        ),
       );
       const releaseResult =
         await agentOptions!.customTools!.release_reports!.execute({});
@@ -692,7 +703,9 @@ describe('runOperatorAgent', () => {
 
     expect(sentPrompts).toHaveLength(2);
     expect(sentPrompts.join('\n')).not.toContain('/resume-watch');
-    expect(output.capturedText()).toContain('監視報告保留中（手動 / 1 件）');
+    expect(output.capturedText()).toContain(
+      '監視報告: 保留（理由: 手動、保留件数: 1 件）',
+    );
   });
 
   it('polls an offline watched session and refreshes the held-report count in the TTY', async () => {
@@ -765,7 +778,9 @@ describe('runOperatorAgent', () => {
     setTimeout(() => input.write('/exit\n'), 750);
     await run;
 
-    expect(output.capturedText()).toContain('監視報告保留中（手動 / 1 件）');
+    expect(output.capturedText()).toContain(
+      '監視報告: 保留（理由: 手動、保留件数: 1 件）',
+    );
   });
 
   it('sends multiple same-source watch reports in one operator-agent dispatch', async () => {
@@ -981,7 +996,7 @@ describe('runOperatorAgent', () => {
     ) as { pendingReports: Array<{ reportId: string }> };
     expect(afterCancelledSend.pendingReports).toHaveLength(1);
     expect(firstOutput.capturedText()).toContain(
-      'status=cancelled; watched reports retained for retry.',
+      'send not completed (status=cancelled); watched reports retained for retry.',
     );
 
     const retryInput = new PassThrough() as PassThrough & OperatorAgentInput;
@@ -1050,10 +1065,11 @@ describe('runOperatorAgent', () => {
     );
 
     const transcript = output.capturedText();
-    expect(transcript).not.toContain('\u001b[');
+    expect(transcript).not.toMatch(/\u001b\[(?:2|31|36)m/);
     expect(transcript).toContain('user> ');
+    expect(transcript).not.toMatch(/(?:^|\n)> /);
     expect(transcript).toContain('operator>\nPlain response.\n\n');
-    expect(transcript).toContain('operator-agent session ended.\n\n');
+    expect(transcript).toContain('[observation] session ended.');
   });
 
   it('gives error rows matching spacing and a colored error label', async () => {
@@ -1081,7 +1097,7 @@ describe('runOperatorAgent', () => {
     );
 
     expect(output.capturedText()).toContain(
-      '\n\u001b[31moperator-agent error:\u001b[0m Request failed.\n\n',
+      '\u001b[31m[harness]\u001b[0m Request failed.',
     );
   });
 
@@ -1173,7 +1189,7 @@ describe('runOperatorAgent', () => {
     );
 
     await vi.waitFor(() =>
-      expect(stdout.capturedText()).toContain('operator-agent\u001b[0m (pi) ready'),
+      expect(stdout.capturedText()).toContain('\u001b[0m (pi) ready'),
     );
     stdin.write('/reconnect\n');
     await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
