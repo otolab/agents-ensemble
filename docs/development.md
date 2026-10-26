@@ -44,7 +44,7 @@ pnpm install --frozen-lockfile
 # unittest（CI 必須）
 pnpm test:run
 
-# integration（fake / in-process smoke は設定不要、実 agent acp 経路は test-acp.yaml が必要）
+# integration（fake / in-process smoke は設定不要、実 agent acp 経路は test-acp.yaml と利用可能な agent command が必要）
 pnpm test:integration
 
 # CLI 縦切り e2e（実 ACP 設定を使うシナリオと、認証不要の Pi + stdio MCP PTY teardown fixture）
@@ -62,7 +62,7 @@ cp packages/core/test/integration/test-acp.yaml.example \
    packages/core/test/integration/test-acp.yaml
 ```
 
-`test-acp.yaml` が必要な実 agent ACP e2e は `issueUrl` / `repoRoot` などを環境に合わせて編集してから実行する。認証や外部サービスを含む前提は [testing-strategy.md](testing-strategy.md) に記載している。Pi + stdio MCP の TTY `/exit` teardown と `/close` resume の process fixture はローカル fake model / GitHub 応答を使い、外部認証は不要。Python 3 の標準 `pty` モジュールと localhost bind が必要で、Windows では skip する。
+`test-acp.yaml` が必要な実 agent ACP integration / e2e は、設定ファイルに指定した `agentCommand`（省略時は PATH 上の `agent`）が実行可能であることも必要とする。CLI suite は `issueUrl` / `repoRoot` なども環境に合わせて設定してから実行する。skip 条件と再実行方法を含む詳細は [testing-strategy.md](testing-strategy.md) に記載している。Pi + stdio MCP の TTY `/exit` teardown と `/close` resume の process fixture はローカル fake model / GitHub 応答を使い、外部認証は不要。Python 3 の標準 `pty` モジュールと localhost bind が必要で、Windows では skip する。
 
 ローカルセッションを確認する場合は、ビルド後に次を実行する。詳細なオプションや利用者向け手順は [cli/README.md](cli/README.md) を参照する。
 

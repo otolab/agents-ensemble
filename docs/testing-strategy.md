@@ -24,7 +24,7 @@
 | workspace / 領域 | 種別 | 実行コマンド | PR / main CI 常時実行 | 追加条件 |
 |------------------|------|--------------|----------------------|----------|
 | `@agents-ensemble/core` | unit | `pnpm --filter @agents-ensemble/core test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Git、一時ディレクトリ、ローカル UDS。子プロセスは制御された Node fixture のみ |
-| `@agents-ensemble/core` | integration | `pnpm --filter @agents-ensemble/core test:integration` | 一部のみ。下記「CI 常時実行範囲」を参照 | Fake / in-process suite は追加設定不要。実 `agent acp` suite は `test-acp.yaml` と利用可能な `agent` が必要。Cursor SDK suite は認証、ネットワーク、書き込み可能な隔離 HOME が必要 |
+| `@agents-ensemble/core` | integration | `pnpm --filter @agents-ensemble/core test:integration` | 一部のみ。下記「CI 常時実行範囲」を参照 | Fake / in-process suite は追加設定不要。実 `agent acp` suite は `test-acp.yaml` と、設定された `agentCommand`（省略時は PATH 上の `agent`）が必要。Cursor SDK suite は認証、ネットワーク、書き込み可能な隔離 HOME が必要 |
 | `@agents-ensemble/core` | e2e | なし | なし | 現在 core に e2e suite はない。Vitest e2e config と package script は設けない |
 | `@agents-ensemble/cli` | unit | `pnpm --filter @agents-ensemble/cli test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Git、一時ディレクトリ、ローカル UDS。ビルド済み CLI を起動するテストがあるため、単独実行前に `pnpm build` が必要 |
 | `@agents-ensemble/cli` | e2e | `pnpm --filter @agents-ensemble/cli test:e2e` | 一部のみ。PTY suites を個別に実行 | 先に `pnpm build` が必要。PTY suites は POSIX と Python 3 の標準 `pty` モジュールが必要。Pi TTY suites は localhost bind と Git も使う。Issue workflow suite は `test-acp.yaml`、Issue URL、repo、conductor 認証、利用可能な ACP 実行環境が必要 |
@@ -65,7 +65,7 @@ integration / e2e は副作用のあるプロセスや共有状態を避ける�
 | `packages/cli/src/cli-version.test.ts`、`operator-agent-command.test.ts` | unit の CLI gate smoke | ビルド済み `packages/cli/dist/index.js` を起動する。CI は先に `pnpm build` を実行。GitHub / ACP 接続は不要 |
 | core / cli / operator-agent の session orchestration tests | unit の in-process orchestration smoke | Fake ACP / conductor / TUI と一時 repository、ローカル UDS を使う。Git と UDS が使えるCI環境で常時実行し、実 ACP / 外部 service には接続しない |
 | core `test/integration` の Fake / in-process suites | integration | 一時ファイル、Fake ACP、または Node の ACP fixture を利用する。外部認証なしでローカル実行可能。CI では指定 suite のみ常時実行 |
-| `acp-bridge.integration.test.ts` | integration | `test-acp.yaml` と、そこに指定する利用可能な `agent` / ACP backend が必要。設定ファイルがなければ suite を skip。設定済みで実行不能な場合は失敗として扱う |
+| `acp-bridge.integration.test.ts` | integration | `test-acp.yaml` と、そこに指定する実行可能な `agentCommand` / ACP backend が必要。設定ファイルがない場合、または agent command が見つからない・実行できない場合は理由を表示して suite を skip。前提が揃った状態で backend 接続に失敗した場合は失敗として扱う |
 | `conductor-agent.integration.test.ts`、`issue-session.integration.test.ts` | integration | 実 Cursor SDK、認証（`CURSOR_API_KEY` または SDK login）、ネットワーク、隔離 HOME 用の一時書き込み領域が必要。認証がない、または隔離 HOME を準備できない場合は suite を skip |
 | `packages/cli/test/e2e/issue.e2e.test.ts` | e2e | `packages/core/test/integration/test-acp.yaml` に有効な `issueUrl` と `repoRoot` があり、conductor 認証と GitHub API 認証（`GITHUB_TOKEN` / `GH_TOKEN` または設定済み `gh` fallback）が使える場合に実行。agent / ACP backend とネットワークも必要 |
 | CLI の TTY process / Pi TTY e2e | e2e | Python 3 の標準 `pty`、POSIX process group、localhost bind、Git が必要。PTY 非対応の Windows では該当テストを skip。PR / main のUbuntu runnerでは実行 |
@@ -84,9 +84,10 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | skip / guard | 必要条件・理由 | 解除方法 / 追跡 |
 |--------------|----------------|------------------|
 | Cursor SDK integration の `describe.skipIf` | Cursor 認証、ネットワーク、書き込み可能な隔離 HOME がないと実接続できない。`ENSEMBLE_CURSOR_SDK_INTEGRATION_SKIP` は理由付きで明示的に skip する override | 認証を設定し一時 HOME を作成できる環境で実行し、override を設定している場合は unset。カスタム HOME を使う場合は `ENSEMBLE_INTEGRATION_HOME` に認証済みの隔離 HOME を指定 |
-| `acp-bridge.integration.test.ts` の `describe.skipIf` | `test-acp.yaml` がない場合、選択された実 ACP backend を起動できない | example からローカル設定を作り `agent` と backend を用意して該当 suite を実行 |
+| `acp-bridge.integration.test.ts` の `describe.skipIf` | `test-acp.yaml` がない場合、または設定された `agentCommand`（省略時は PATH 上の `agent`）を見つけられない・実行できない場合、実 ACP backend を起動できない。skip 時は不足条件を suite 名に表示する | example からローカル設定を作り、`agentCommand` を PATH 上に用意するか実行可能なパスに設定して、該当 suite を実行 |
 | `issue.e2e.test.ts` の `describe.skipIf` | Issue / repository 設定または conductor 認証がない場合、Issue workflow を実行できない | `test-acp.yaml` と認証を設定して `pnpm test:e2e` を実行 |
 | `cli-version.test.ts` の `describe.skipIf` | package 単独の unit 実行時に build artifact がない場合、dist CLI を起動できない | `pnpm build` 後に再実行。CI は build 済みのためこの skip に入らない |
+| `resolve-bundled-acp-bin.test.ts` の optional preset ごとの `describe.skipIf` | 対応する ACP optional dependency がインストールされていない場合、その package 内の実行ファイル解決だけは確認できない。optional package 不在時の fallback は別テストで検証する | optional dependency を含めて `pnpm install` し、対象 workspace の unit suite を再実行 |
 | CLI TTY e2e の Windows `skipIf` | Python 標準 `pty` と POSIX process group に依存し、Windows では同じ PTY 条件を提供できない | Python 3 `pty` を備えた POSIX 環境で実行。CI は Ubuntu |
 | `scripts/pi/cached-auth.test.mjs` の Linux 条件 skip | PID namespace / procfs の Linux 挙動を直接検証する2ケース | Linux 上で `node --test scripts/pi/cached-auth.test.mjs` を実行。CI 導入・対応は Issue #475 |
 

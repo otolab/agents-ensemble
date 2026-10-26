@@ -1,9 +1,15 @@
 /**
  * Integration / e2e 用 ACP テスト設定。
- * test-acp.yaml が無い場合は describe.skipIf でスキップする。
+ * 設定ファイルか ACP agent command が使えない場合は理由つきで skip する。
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import {
+  accessSync,
+  constants,
+  existsSync,
+  readFileSync,
+  statSync,
+} from 'node:fs';
+import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import { resolveConductorModelId } from '../../src/conductor/resolve-conductor-model-id.js';
@@ -43,8 +49,72 @@ export function loadAcpTestConfig(): AcpTestConfig | undefined {
   return _config;
 }
 
-export function hasAcpTestConfig(): boolean {
-  return loadAcpTestConfig() != null;
+export function getAcpTestConfigSkipReason(
+  config: AcpTestConfig | undefined,
+  isCommandAvailable: (
+    command: string,
+    cwd: string,
+  ) => boolean = isAcpAgentCommandAvailable,
+): string | undefined {
+  if (!config) {
+    return 'test-acp.yaml is missing; copy test-acp.yaml.example and configure it.';
+  }
+
+  const command = config.agentCommand ?? 'agent';
+  if (!isCommandAvailable(command, config.cwd ?? process.cwd())) {
+    return `ACP agent command "${command}" is unavailable or not executable; install it or set agentCommand in test-acp.yaml.`;
+  }
+
+  return undefined;
+}
+
+export function isAcpAgentCommandAvailable(
+  command: string,
+  cwd = process.cwd(),
+  pathValue = process.env.PATH,
+): boolean {
+  const hasPathSeparator = command.includes(sep) || command.includes('/');
+  const candidates = hasPathSeparator || isAbsolute(command)
+    ? [resolve(cwd, command)]
+    : pathValue === undefined
+      ? []
+      : pathValue
+          .split(delimiter)
+          .map((directory) => resolve(directory || cwd, command));
+
+  const extensions =
+    process.platform === 'win32'
+      ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM').split(';')
+      : [''];
+
+  return candidates.some((candidate) => {
+    const hasKnownExtension = extensions.some(
+      (extension) =>
+        extension !== '' &&
+        candidate.toLowerCase().endsWith(extension.toLowerCase()),
+    );
+    const candidatesWithExtensions = hasKnownExtension
+      ? [candidate]
+      : [
+          candidate,
+          ...extensions
+            .filter(Boolean)
+            .map((extension) => candidate + extension),
+        ];
+
+    return candidatesWithExtensions.some((executablePath) => {
+      try {
+        // accessSync(X_OK) checks both existence and executable permission on POSIX.
+        if (!statSync(executablePath).isFile()) return false;
+        if (process.platform !== 'win32') {
+          accessSync(executablePath, constants.X_OK);
+        }
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  });
 }
 
 export function getAcpTestConfig(): AcpTestConfig {
@@ -61,3 +131,7 @@ export function getAcpTestConfig(): AcpTestConfig {
 export function getConductorModelId(): string {
   return resolveConductorModelId(loadAcpTestConfig()?.conductorModelId);
 }
+
+export const acpTestConfigSkipReason = getAcpTestConfigSkipReason(
+  loadAcpTestConfig(),
+);
