@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ENSEMBLE_DIR } from '../profile/profile-paths.js';
+import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import type { ResolvedProfileMaterial } from '../profile/types.js';
 
 export const USER_INSTRUCTIONS_FILE = 'AGENTS.md';
@@ -18,7 +17,9 @@ export interface LoadUserInstructionsOptions {
 export async function loadUserInstructions(
   options: LoadUserInstructionsOptions = {},
 ): Promise<ResolvedProfileMaterial | undefined> {
-  const root = options.userEnsembleRoot ?? join(homedir(), ENSEMBLE_DIR);
+  const root = resolveUserEnsembleRoot({
+    userEnsembleRoot: options.userEnsembleRoot,
+  });
   const path = join(root, USER_INSTRUCTIONS_FILE);
   let content: string;
 

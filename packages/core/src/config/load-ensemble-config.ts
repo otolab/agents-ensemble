@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import yaml from 'js-yaml';
 import { ENSEMBLE_DIR } from '../profile/profile-paths.js';
+import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { deepMerge } from './deep-merge.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
 import { parseEnsembleConfig } from './parse-config.js';
@@ -21,7 +22,9 @@ export interface LoadEnsembleConfigOptions {
 }
 
 function userConfigPath(options: LoadEnsembleConfigOptions): string {
-  const root = options.userEnsembleRoot ?? join(homedir(), ENSEMBLE_DIR);
+  const root = resolveUserEnsembleRoot({
+    userEnsembleRoot: options.userEnsembleRoot,
+  });
   return join(root, ENSEMBLE_CONFIG_FILE);
 }
 

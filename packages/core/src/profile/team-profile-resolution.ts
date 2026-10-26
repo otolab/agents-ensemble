@@ -1,8 +1,8 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 import yaml from 'js-yaml';
+import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import {
   bundledProfilePath,
   bundledProfilesRoot,
@@ -59,7 +59,9 @@ export interface TeamProfileResolutionOptions {
 }
 
 function userEnsembleRoot(options: TeamProfileResolutionOptions): string {
-  return options.userEnsembleRoot ?? join(homedir(), ENSEMBLE_DIR);
+  return resolveUserEnsembleRoot({
+    userEnsembleRoot: options.userEnsembleRoot,
+  });
 }
 
 function projectTeamsRoot(repoRoot: string): string {

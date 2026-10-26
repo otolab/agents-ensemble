@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { ENSEMBLE_DIR } from '../profile/profile-paths.js';
+import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 
 export const MCP_CONFIG_FILE = 'mcp.json';
 export const PROJECT_MCP_CONFIG_DIR = '.agents';
@@ -45,7 +44,9 @@ export interface LoadMcpConfigOptions {
 }
 
 function userMcpConfigPath(options: LoadMcpConfigOptions): string {
-  const root = options.userEnsembleRoot ?? join(homedir(), ENSEMBLE_DIR);
+  const root = resolveUserEnsembleRoot({
+    userEnsembleRoot: options.userEnsembleRoot,
+  });
   return join(root, MCP_CONFIG_FILE);
 }
 
