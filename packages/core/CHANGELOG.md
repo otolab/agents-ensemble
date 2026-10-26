@@ -1,5 +1,24 @@
 # @agents-ensemble/core
 
+## 0.16.0
+
+### Minor Changes
+
+- 9841ba8: repo 単位のセッション状態、operator-agent 状態、Pi transcript を `~/.ensemble/` 配下へ保存します。旧 project 保存先からの再開・読み取り互換と、`resolveEnsemblePaths` API を追加しました。
+- d771eb8: `ensemble issue` と `ensemble operator-agent` で `--config <path>` を指定し、標準 user config を指定ファイルに差し替えて起動できるようにしました。project config は独立した層として引き続き適用され、同じ項目では project 側が優先されます。
+
+  session sidecar には解決済み config の digest を記録し、resume 時に設定変更を検出します。
+  worker ACP fingerprint は env の digest のみを保持し、環境変数の値を sidecar に残しません。
+
+- 3bbabef: Build operator-agent conductor message history from saved provider sessions and keep it available after process restarts.
+
+### Patch Changes
+
+- f97b815: operator-agent が Pi の認証エラー後に同じ入力を一度再試行し、TTY の `/reconnect` を専用の再接続操作として扱うようになりました。
+- dc3db7b: `ENSEMBLE_USER_ROOT` で user 層の設定と session storage の保存先を指定できるようにしました。未指定時の既定値と、呼び出し側から明示された user root はこれまでどおりです。
+- 2462261: `permission.pending` の判断では `request.raw` を第一ソースとして扱うよう conductor 向けの指示を明確にし、`get_tool_call` が snapshot 未登録時に参照先を返すようにしました。
+- 5e92c4c: Fix resolution of bundled ACP binaries when the core package exposes only ESM entry points.
+
 ## 0.15.0
 
 ### Minor Changes
