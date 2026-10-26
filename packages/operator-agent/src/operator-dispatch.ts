@@ -186,12 +186,35 @@ export function formatOperatorDispatchBatch(
       ),
     ].join('\n\n');
   }
+  if (
+    events.every(
+      (event) => event.type === 'report' && event.reportType === 'open_question',
+    )
+  ) {
+    const hasLifecycleChange = events.some(
+      (event) =>
+        event.type === 'report' &&
+        (event.text.includes('\n解決:') ||
+          event.text.includes('\n一覧から消失:')),
+    );
+    const title = hasLifecycleChange
+      ? 'Open Question の変化'
+      : 'Open Question 追加';
+    if (events.length === 1) {
+      return [`## ${title}`, '', events[0]!.text].join('\n');
+    }
+    return [
+      `## ${title}（${events.length} 件）`,
+      '',
+      ...events.map((event, index) =>
+        [`### ${index + 1}/${events.length}`, '', event.text].join('\n'),
+      ),
+    ].join('\n\n');
+  }
   if (events.length === 1) {
     const event = events[0]!;
     return [
-      event.type === 'report' && event.reportType === 'open_question'
-        ? '## Open Question 追加'
-        : '## セッション報告',
+      '## セッション報告',
       '',
       event.text,
     ].join('\n');
@@ -200,10 +223,7 @@ export function formatOperatorDispatchBatch(
   const title =
     events[0]!.type === 'user'
       ? `## user 発話（${events.length} 件）`
-      : events[0]!.type === 'report' &&
-          events[0]!.reportType === 'open_question'
-        ? `## Open Question 追加（${events.length} 件）`
-        : `## セッション報告（${events.length} 件）`;
+      : `## セッション報告（${events.length} 件）`;
   return [
     title,
     '',
