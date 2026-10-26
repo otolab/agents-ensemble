@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
 import { join, normalize, resolve } from 'node:path';
+import { resolveUserEnsembleRoot } from './resolve-user-ensemble-root.js';
 
 export interface ResolveEnsemblePathsOptions {
   repoRoot: string;
   /** Override the OS home directory, primarily for isolated tests. */
   home?: string;
+  /** Override the user-level Ensemble directory, primarily for isolated tests. */
+  userEnsembleRoot?: string;
 }
 
 /**
@@ -19,8 +21,14 @@ export function resolveEnsemblePaths(
   options: ResolveEnsemblePathsOptions,
 ) {
   const repoRoot = normalize(resolve(options.repoRoot));
-  const home = normalize(resolve(options.home ?? homedir()));
-  const userRoot = join(home, '.ensemble');
+  const userRoot = normalize(
+    resolve(
+      resolveUserEnsembleRoot({
+        home: options.home,
+        userEnsembleRoot: options.userEnsembleRoot,
+      }),
+    ),
+  );
   const projectRoot = join(repoRoot, '.ensemble');
   const repoKey = createHash('sha256').update(repoRoot).digest('hex');
   const sessionsRoot = join(userRoot, 'sessions');

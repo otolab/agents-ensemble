@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveEnsemblePaths } from './ensemble-paths.js';
 
 describe('resolveEnsemblePaths', () => {
@@ -10,6 +10,7 @@ describe('resolveEnsemblePaths', () => {
   afterEach(async () => {
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
     tempDir = '';
+    vi.unstubAllEnvs();
   });
 
   it('partitions user runtime paths by normalized repository root and retains the worktree exception', async () => {
@@ -59,5 +60,16 @@ describe('resolveEnsemblePaths', () => {
       home: join(tempDir, 'home'),
     });
     expect(otherCheckout.repoKey).not.toBe(paths.repoKey);
+  });
+
+  it('uses ENSEMBLE_USER_ROOT for user runtime paths', () => {
+    vi.stubEnv('ENSEMBLE_USER_ROOT', '/tmp/ensemble-user-root');
+
+    const paths = resolveEnsemblePaths({ repoRoot: '/tmp/project' });
+
+    expect(paths.userRoot).toBe('/tmp/ensemble-user-root');
+    expect(paths.sessionsDir).toBe(
+      join('/tmp/ensemble-user-root', 'sessions', paths.repoKey),
+    );
   });
 });

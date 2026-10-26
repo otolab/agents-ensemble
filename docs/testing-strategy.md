@@ -28,7 +28,7 @@
 | `@agents-ensemble/core` | e2e | なし | なし | 現在 core に e2e suite はない。Vitest e2e config と package script は設けない |
 | `@agents-ensemble/cli` | unit | `pnpm --filter @agents-ensemble/cli test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Git、一時ディレクトリ、ローカル UDS。ビルド済み CLI を起動するテストがあるため、単独実行前に `pnpm build` が必要 |
 | `@agents-ensemble/cli` | e2e | `pnpm --filter @agents-ensemble/cli test:e2e` | 一部のみ。PTY suites を個別に実行 | 先に `pnpm build` が必要。PTY suites は POSIX と Python 3 の標準 `pty` モジュールが必要。Pi TTY suites は localhost bind と Git も使う。Issue workflow suite は `test-acp.yaml`、Issue URL、repo、conductor 認証、利用可能な ACP 実行環境が必要 |
-| `@agents-ensemble/operator-agent` | unit | `pnpm --filter @agents-ensemble/operator-agent test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、一時ディレクトリ、ローカル UDS。外部 agent / service は不要 |
+| `@agents-ensemble/operator-agent` | unit | `pnpm --filter @agents-ensemble/operator-agent test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、事前の core build、書き込み可能な repository `.tmp/`、ローカル UDS。外部 agent / service は不要 |
 | `.github/scripts` | Node test | `pnpm test:release-workflow` | はい | Node.js 22 と Git。テスト用の一時 Git repository を使い、GitHub には接続しない |
 | `scripts/pi` | Node test | `node --test scripts/pi/cached-auth.test.mjs` | いいえ | Node.js。Linux 固有の PID namespace / procfs を検証する2ケースは非Linuxで skip。CI 対応は Issue #475 の範囲 |
 
@@ -45,6 +45,8 @@ pnpm test:all          # test:run → test:integration → test:e2e
 
 `pnpm test:all` にはビルドが含まれない。CLI の dist を使う unit / e2e も通す場合は、先に `pnpm build` を実行する。
 
+`@agents-ensemble/operator-agent` は `@agents-ensemble/core` の package export を通じて `dist` を読み込む。package 単独で実行する場合は、先に `pnpm --filter @agents-ensemble/core build` を実行する。Vitest setup は `ENSEMBLE_USER_ROOT` と scratch filesystem probe を repository の無視対象 `.tmp/` 以下へ分離する。Node の `TMPDIR` は上書きしない。既定の絶対 temp path を保つことで、テストが作る一時 repository の path semantics を維持し、深い worktree から UDS socket を作る際の path 長超過も避ける。UDS probe はその `TMPDIR` 上で行う。
+
 ## Vitest 設定
 
 | 設定 | include | exclude / 補足 |
@@ -53,7 +55,9 @@ pnpm test:all          # test:run → test:integration → test:e2e
 | `packages/core/vitest.config.integration.ts` | `test/integration/**/*.integration.test.ts` | e2e suffix を除外。直列実行、60 秒 timeout |
 | `packages/cli/vitest.config.ts` | `src/**/*.test.ts`、`src/**/*.test.tsx` | integration / e2e suffix と `test/e2e/**` を除外 |
 | `packages/cli/vitest.config.e2e.ts` | `test/e2e/**/*.e2e.test.ts` | 直列実行、最大5分 timeout |
-| `packages/operator-agent/vitest.config.ts` | `src/**/*.test.ts` | integration / e2e suffix を除外 |
+| `packages/operator-agent/vitest.config.ts` | `src/**/*.test.ts`、`test/**/*.test.ts` | integration / e2e suffix を除外 |
+
+operator-agent の setup file は、テスト開始前に core package export が `ENSEMBLE_USER_ROOT` を反映すること、scratch filesystem への書き込み、Unix domain socket の listen / close を確認する。UDS または filesystem の確認に失敗した場合は必要条件と `TMPDIR` / `ENSEMBLE_USER_ROOT` の場所をエラーに含めて suite を止める。core の export がない、または古い build が環境変数を反映しない場合は `pnpm --filter @agents-ensemble/core build` を案内する。これらの失敗は test assertion の実行前に報告される。
 
 integration / e2e は副作用のあるプロセスや共有状態を避けるため直列実行する。unit suite 内の子プロセス fixture は各テストが自分で起動・終了し、ネットワークサービスや認証状態を共有しない。
 
