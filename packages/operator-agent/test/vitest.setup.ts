@@ -1,85 +1,121 @@
 import { once } from 'node:events';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll } from 'vitest';
+import {
+  createTestDirectories,
+  environmentFailure,
+  withProbeCleanup,
+} from './setup-diagnostics.js';
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = resolve(packageRoot, '../..');
 const scratchRoot = join(repositoryRoot, '.tmp', 'operator-agent-vitest');
 const userRoot = join(scratchRoot, `user-${process.pid}`);
+const platformTempDirectory = tmpdir();
 
-function failureCode(error: unknown): string {
-  if (error && typeof error === 'object' && 'code' in error) {
-    return String(error.code);
+async function verifyWorkspaceScratch(): Promise<void> {
+  const probePrefix = join(scratchRoot, 'oa-fs-');
+  let probeDirectory: string;
+  try {
+    probeDirectory = await mkdtemp(probePrefix);
+  } catch (error) {
+    throw environmentFailure(
+      'workspace scratch filesystem',
+      error,
+      probePrefix,
+      platformTempDirectory,
+      userRoot,
+    );
   }
-  return 'unknown error';
-}
 
-function failureMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function throwEnvironmentFailure(
-  area:
-    | 'workspace scratch filesystem'
-    | 'platform temporary filesystem'
-    | 'Unix domain sockets',
-  error: unknown,
-): never {
-  throw new Error(
-    `operator-agent tests cannot use the ${area} (${failureCode(error)}): ${failureMessage(error)}. ` +
-      `They require a writable repository .tmp/ directory and Unix domain socket support. ` +
-      `The test setup uses the platform TMPDIR=${tmpdir()} and ENSEMBLE_USER_ROOT=${userRoot}; ` +
-      'check filesystem permissions and sandbox/CI socket restrictions.',
-    { cause: error },
+  const probePath = join(probeDirectory, 'probe');
+  await withProbeCleanup(
+    async () => {
+      try {
+        await writeFile(probePath, '');
+      } catch (error) {
+        throw environmentFailure(
+          'workspace scratch filesystem',
+          error,
+          probePath,
+          platformTempDirectory,
+          userRoot,
+        );
+      }
+    },
+    () => rm(probeDirectory, { recursive: true, force: true }),
+    (error) =>
+      environmentFailure(
+        'workspace scratch filesystem',
+        error,
+        probeDirectory,
+        platformTempDirectory,
+        userRoot,
+      ),
   );
 }
 
-async function verifyWorkspaceScratch(): Promise<void> {
-  let probeDirectory: string | undefined;
-  try {
-    probeDirectory = await mkdtemp(join(scratchRoot, 'oa-fs-'));
-    await writeFile(join(probeDirectory, 'probe'), '');
-  } catch (error) {
-    throwEnvironmentFailure('workspace scratch filesystem', error);
-  } finally {
-    if (probeDirectory) {
-      await rm(probeDirectory, { recursive: true, force: true });
-    }
-  }
-}
-
 async function verifyUnixDomainSockets(): Promise<void> {
-  let probeDirectory: string | undefined;
+  const probePrefix = join(tmpdir(), 'oa-uds-');
+  let probeDirectory: string;
   let server: net.Server | undefined;
   try {
-    probeDirectory = await mkdtemp(join(tmpdir(), 'oa-uds-'));
+    probeDirectory = await mkdtemp(probePrefix);
   } catch (error) {
-    throwEnvironmentFailure('platform temporary filesystem', error);
+    throw environmentFailure(
+      'platform temporary filesystem',
+      error,
+      probePrefix,
+      platformTempDirectory,
+      userRoot,
+    );
   }
 
-  try {
-    const socketPath = join(probeDirectory, 's');
-    server = net.createServer();
-    const listening = once(server, 'listening');
-    server.listen(socketPath);
-    await listening;
-    await new Promise<void>((resolveClose, rejectClose) => {
-      server!.close((error) => (error ? rejectClose(error) : resolveClose()));
-    });
-  } catch (error) {
-    throwEnvironmentFailure('Unix domain sockets', error);
-  } finally {
-    if (server?.listening) {
-      await new Promise<void>((resolveClose) => server!.close(() => resolveClose()));
-    }
-    if (probeDirectory) {
-      await rm(probeDirectory, { recursive: true, force: true });
-    }
-  }
+  const socketPath = join(probeDirectory, 's');
+  await withProbeCleanup(
+    async () => {
+      try {
+        server = net.createServer();
+        const listening = once(server, 'listening');
+        server.listen(socketPath);
+        await listening;
+        await new Promise<void>((resolveClose, rejectClose) => {
+          server!.close((error) => (error ? rejectClose(error) : resolveClose()));
+        });
+      } catch (error) {
+        throw environmentFailure(
+          'Unix domain sockets',
+          error,
+          socketPath,
+          platformTempDirectory,
+          userRoot,
+        );
+      }
+    },
+    async () => {
+      try {
+        if (server?.listening) {
+          await new Promise<void>((resolveClose) =>
+            server!.close(() => resolveClose()),
+          );
+        }
+      } finally {
+        await rm(probeDirectory, { recursive: true, force: true });
+      }
+    },
+    (error) =>
+      environmentFailure(
+        'platform temporary filesystem',
+        error,
+        probeDirectory,
+        platformTempDirectory,
+        userRoot,
+      ),
+  );
 }
 
 async function verifyCoreBuild(): Promise<void> {
@@ -113,8 +149,7 @@ async function verifyCoreBuild(): Promise<void> {
 }
 
 try {
-  await mkdir(scratchRoot, { recursive: true });
-  await mkdir(userRoot, { recursive: true });
+  await createTestDirectories(scratchRoot, userRoot, platformTempDirectory);
   process.env.ENSEMBLE_USER_ROOT = userRoot;
 
   await verifyCoreBuild();

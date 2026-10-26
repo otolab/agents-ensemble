@@ -55,7 +55,7 @@ pnpm test:all          # test:run → test:integration → test:e2e
 | `packages/core/vitest.config.integration.ts` | `test/integration/**/*.integration.test.ts` | e2e suffix を除外。直列実行、60 秒 timeout |
 | `packages/cli/vitest.config.ts` | `src/**/*.test.ts`、`src/**/*.test.tsx` | integration / e2e suffix と `test/e2e/**` を除外 |
 | `packages/cli/vitest.config.e2e.ts` | `test/e2e/**/*.e2e.test.ts` | 直列実行、最大5分 timeout |
-| `packages/operator-agent/vitest.config.ts` | `src/**/*.test.ts` | integration / e2e suffix を除外 |
+| `packages/operator-agent/vitest.config.ts` | `src/**/*.test.ts`、`test/**/*.test.ts` | integration / e2e suffix を除外 |
 
 operator-agent の setup file は、テスト開始前に core package export が `ENSEMBLE_USER_ROOT` を反映すること、scratch filesystem への書き込み、Unix domain socket の listen / close を確認する。UDS または filesystem の確認に失敗した場合は必要条件と `TMPDIR` / `ENSEMBLE_USER_ROOT` の場所をエラーに含めて suite を止める。core の export がない、または古い build が環境変数を反映しない場合は `pnpm --filter @agents-ensemble/core build` を案内する。これらの失敗は test assertion の実行前に報告される。
 
