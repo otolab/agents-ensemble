@@ -1,5 +1,29 @@
 # @agents-ensemble/cli
 
+## 0.16.0
+
+### Minor Changes
+
+- 9841ba8: repo 単位のセッション状態、operator-agent 状態、Pi transcript を `~/.ensemble/` 配下へ保存します。旧 project 保存先からの再開・読み取り互換と、`resolveEnsemblePaths` API を追加しました。
+- d771eb8: `ensemble issue` と `ensemble operator-agent` で `--config <path>` を指定し、標準 user config を指定ファイルに差し替えて起動できるようにしました。project config は独立した層として引き続き適用され、同じ項目では project 側が優先されます。
+
+  session sidecar には解決済み config の digest を記録し、resume 時に設定変更を検出します。
+  worker ACP fingerprint は env の digest のみを保持し、環境変数の値を sidecar に残しません。
+
+### Patch Changes
+
+- Updated dependencies [f97b815]
+- Updated dependencies [9841ba8]
+- Updated dependencies [dc3db7b]
+- Updated dependencies [d771eb8]
+- Updated dependencies [3bbabef]
+- Updated dependencies [2462261]
+- Updated dependencies [5e92c4c]
+- Updated dependencies [f90e0f1]
+- Updated dependencies [3ec2925]
+  - @agents-ensemble/operator-agent@0.4.0
+  - @agents-ensemble/core@0.16.0
+
 ## 0.15.0
 
 ### Minor Changes
