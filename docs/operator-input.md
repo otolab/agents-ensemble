@@ -105,7 +105,7 @@ CLI メッセージと `ENSEMBLE_OPERATOR_MESSAGE` は同時に指定できま�
 
 operator-agent の応答が `finished` / `completed` で返り、次の user 入力が queue に残っていなければ会話 hold を自動解除します。応答中に次の user 入力が届いている場合は hold を維持し、その入力への応答が完了して queue が空になった時点で解除します。send が完了扱いにならなかった場合は自動解除せず、TTY の `/resume-watch` で会話 hold だけを手動解除できます。このコマンドは agent に送られず、解除後の次の通常入力で会話 hold が再び有効になります。
 
-`set_report_hold({ hold: true })` / `release_reports` による手動 report hold は会話 hold と独立しています。どちらか一方が有効なら report を保留し、両方が解除されたときに保留分を既存の batching 規則で dispatch queue に戻します。`/resume-watch` は手動 report hold を解除しません。TTY には `監視報告保留中（会話・手動 / N 件）` のように hold の理由と保留件数を表示し、会話 hold の解除時に dispatch queue へ戻した報告数も知らせます。
+`set_report_hold({ hold: true })` / `release_reports` による手動 report hold は会話 hold と独立しています。どちらか一方が有効なら report を保留し、両方が解除されたときに保留分を既存の batching 規則で dispatch queue に戻します。`/resume-watch` は手動 report hold を解除しません。TTY では hold の状態・理由・保留件数を `[harness] 監視報告: 保留（理由: …、保留件数: N 件）` または `[harness] 監視報告: 解除（理由: なし、保留件数: 0 件）` と表示します。会話 hold / 手動 hold の有効状態、理由、保留件数が変わった時点で同じ形式の行を更新します。
 
 ## TTY TUI レイアウト
 

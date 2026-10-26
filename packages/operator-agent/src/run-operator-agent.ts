@@ -1,4 +1,4 @@
-import { createInterface } from 'node:readline';
+import { clearLine, createInterface, cursorTo } from 'node:readline';
 import { resolve } from 'node:path';
 import { compile, merge } from '@modular-prompt/core';
 import {
@@ -97,6 +97,11 @@ interface OperatorAgentHandle extends ConductorAgentHandle {
   agentOptions: ConductorAgentCreateOptions;
 }
 
+interface OperatorTtyChannels {
+  harness(detail: string, options?: { color?: string }): void;
+  observation(detail: string, options?: { color?: string }): void;
+}
+
 const ANSI_RESET = '\u001b[0m';
 const ANSI_DIM = '\u001b[2m';
 const ANSI_CYAN = '\u001b[36m';
@@ -116,6 +121,10 @@ export async function runOperatorAgent(
   const factory =
     dependencies.agentFactory ?? createConductorAgentFactory(runtime.backend);
   const dispatchQueue = createOperatorDispatchQueue();
+  const ttyChannels: OperatorTtyChannels = {
+    harness: (detail) => stdout.write(`\n[harness] ${detail}\n\n`),
+    observation: (detail) => stdout.write(`\n[observation] ${detail}\n\n`),
+  };
   const existingState = options.newSession
     ? undefined
     : await loadOperatorAgentState(runtime.repoRoot);
@@ -137,7 +146,7 @@ export async function runOperatorAgent(
     repoRoot: runtime.repoRoot,
     dispatchQueue,
     onError: (message) =>
-      stdout.write(`operator-agent watch warning: ${message}\n`),
+      ttyChannels.harness(`watch warning: ${message}`),
   });
 
   const agentOptions = {
@@ -213,6 +222,7 @@ export async function runOperatorAgent(
       stderr,
       dispatchQueue,
       watchPool,
+      ttyChannels,
       colorEnabled:
         Boolean(stdin.isTTY && stdout.isTTY) && process.env.NO_COLOR === undefined,
     });
@@ -271,6 +281,7 @@ async function runTtyConversation(options: {
   stderr: OperatorAgentOutput;
   dispatchQueue: ReturnType<typeof createOperatorDispatchQueue>;
   watchPool: OperatorWatchPool;
+  ttyChannels: OperatorTtyChannels;
   colorEnabled: boolean;
 }): Promise<boolean> {
   const terminal = createInterface({
@@ -279,11 +290,15 @@ async function runTtyConversation(options: {
     terminal: true,
     crlfDelay: Infinity,
   });
+  terminal.setPrompt(`${colorize('user>', ANSI_DIM, options.colorEnabled)} `);
   let firstSend = true;
   let stop: () => void = () => {};
   let exitContinuity = false;
   let inputEnded = false;
   let pendingReconnects = 0;
+  let promptVisible = false;
+  let terminalClosed = false;
+  let shownHoldStatus = formatReportHoldStatus(options.dispatchQueue);
   const stopping = new Promise<void>((resolve) => {
     stop = resolve;
   });
@@ -292,19 +307,48 @@ async function runTtyConversation(options: {
     terminal.close();
     stop();
   };
+  const writeChannelLine = (
+    channel: keyof OperatorTtyChannels,
+    detail: string,
+    displayOptions: { color?: string; leadingBlank?: boolean } = {},
+  ) => {
+    const color = displayOptions.color ?? ANSI_DIM;
+    const line = `${colorize(`[${channel}]`, color, options.colorEnabled)} ${detail}`;
+    if (promptVisible) {
+      clearLine(options.stdout, 0);
+      cursorTo(options.stdout, 0);
+      options.stdout.write(`${line}\n\n`);
+      terminal.prompt(true);
+    } else {
+      options.stdout.write(
+        `${displayOptions.leadingBlank === false ? '' : '\n'}${line}\n\n`,
+      );
+    }
+  };
+  options.ttyChannels.harness = (detail, displayOptions) =>
+    writeChannelLine('harness', detail, displayOptions);
+  options.ttyChannels.observation = (detail, displayOptions) =>
+    writeChannelLine('observation', detail, displayOptions);
+  const unsubscribeHoldChanges = options.dispatchQueue.subscribe(() => {
+    const nextStatus = formatReportHoldStatus(options.dispatchQueue);
+    if (nextStatus === shownHoldStatus) return;
+    shownHoldStatus = nextStatus;
+    writeChannelLine('harness', nextStatus);
+  });
   const handleInterrupt = () => requestStop(130);
   const handleTermination = () => requestStop(143);
   terminal.on('SIGINT', handleInterrupt);
+  terminal.on('close', () => {
+    promptVisible = false;
+    terminalClosed = true;
+  });
   process.on('SIGINT', handleInterrupt);
   process.on('SIGTERM', handleTermination);
-  writeStatusLine(
-    options.stdout,
-    'operator-agent',
+  writeChannelLine(
+    'observation',
     `(${options.backend}) ready — enter /exit to start a fresh session next time.`,
-    options.colorEnabled,
     { leadingBlank: false },
   );
-
   const readInput = async () => {
     try {
       for await (const rawLine of terminal) {
@@ -312,12 +356,10 @@ async function runTtyConversation(options: {
         if (!message) continue;
         if (isOperatorCommand(message, 'exit')) {
           exitContinuity = true;
-          writeStatusLine(
-            options.stdout,
-            'operator-agent',
-            'session ended.',
-            options.colorEnabled,
-          );
+          clearLine(options.stdout, 0);
+          cursorTo(options.stdout, 0);
+          promptVisible = false;
+          writeChannelLine('observation', 'session ended.');
           terminal.close();
           break;
         }
@@ -327,13 +369,7 @@ async function runTtyConversation(options: {
           continue;
         }
         if (isResumeWatchCommand(message)) {
-          const released = options.dispatchQueue.setConversationHold(false);
-          writeStatusLine(
-            options.stdout,
-            'operator-agent',
-            `会話 hold を解除しました（手動 hold: ${options.dispatchQueue.reportHold ? '継続' : '解除'}、監視保留: ${options.dispatchQueue.heldEventCount} 件、dispatch queue に戻した報告: ${released.releasedEventCount} 件）。`,
-            options.colorEnabled,
-          );
+          options.dispatchQueue.setConversationHold(false);
           continue;
         }
         options.dispatchQueue.setConversationHold(true);
@@ -345,13 +381,13 @@ async function runTtyConversation(options: {
     }
   };
   const inputTask = readInput();
+  if (!terminalClosed) {
+    terminal.prompt();
+    promptVisible = true;
+  }
   const dispatchState: OperatorDispatchState = {
     continuationConsumed: false,
   };
-  let promptVisible = false;
-  let shownHeldCount = -1;
-  let shownConversationHold = false;
-  let shownReportHold = false;
 
   try {
     while (true) {
@@ -369,43 +405,13 @@ async function runTtyConversation(options: {
             conductorAgentFactory: options.agentHandle.factory,
             conductorOptions: options.agentHandle.agentOptions,
           });
-          writeStatusLine(
-            options.stdout,
-            'operator-agent',
-            'conductor に再接続しました。',
-            options.colorEnabled,
-          );
+          writeChannelLine('observation', 'conductor に再接続しました。');
         } catch {
-          writeStatusLine(
-            options.stdout,
-            'operator-agent',
-            'conductor の再接続に失敗しました。',
-            options.colorEnabled,
-            { color: ANSI_RED },
-          );
+          writeChannelLine('harness', 'conductor の再接続に失敗しました。', {
+            color: ANSI_RED,
+          });
         }
         continue;
-      }
-      if (
-        promptVisible &&
-        (shownHeldCount !== options.dispatchQueue.heldEventCount ||
-          shownConversationHold !== options.dispatchQueue.conversationHold ||
-          shownReportHold !== options.dispatchQueue.reportHold)
-      ) {
-        options.stdout.write('\n');
-        promptVisible = false;
-      }
-      if (!promptVisible) {
-        if (options.dispatchQueue.hold || options.dispatchQueue.heldEventCount > 0) {
-          options.stdout.write(`${formatReportHoldStatus(options.dispatchQueue)}\n`);
-        }
-        options.stdout.write(
-          `${colorize('user>', ANSI_DIM, options.colorEnabled)} `,
-        );
-        promptVisible = true;
-        shownHeldCount = options.dispatchQueue.heldEventCount;
-        shownConversationHold = options.dispatchQueue.conversationHold;
-        shownReportHold = options.dispatchQueue.reportHold;
       }
       const batch = options.dispatchQueue.takeBatch(dispatchState);
       if (!batch) {
@@ -421,7 +427,6 @@ async function runTtyConversation(options: {
         if (didStop) return exitContinuity;
         continue;
       }
-      promptVisible = false;
       const prompt =
         options.backend === 'cursor' && firstSend
           ? `${options.systemPrompt}\n\n## User message\n\n${formatOperatorDispatchBatch(batch.events)}`
@@ -450,11 +455,9 @@ async function runTtyConversation(options: {
           if (event.type === 'report') options.dispatchQueue.requeue(event, 5_000);
         }
         if (result.status === 'error') {
-          writeStatusLine(
-            options.stdout,
-            'operator-agent error:',
+          writeChannelLine(
+            'harness',
             result.error?.message ?? result.result ?? 'request failed',
-            options.colorEnabled,
             { color: ANSI_RED },
           );
           if (
@@ -481,26 +484,22 @@ async function runTtyConversation(options: {
             );
           }
         } else {
-          writeStatusLine(
-            options.stdout,
-            'operator-agent send not completed:',
-            `status=${result.status}; watched reports retained for retry.`,
-            options.colorEnabled,
+          writeChannelLine(
+            'harness',
+            `send not completed (status=${result.status}); watched reports retained for retry.`,
           );
         }
       }
       if (sendCompleted && result.result?.trim()) {
         const response = normalizeOperatorResponse(result.result);
+        clearLine(options.stdout, 0);
+        cursorTo(options.stdout, 0);
         options.stdout.write(
           `\n${colorize('operator>', ANSI_CYAN, options.colorEnabled)}\n${response}\n\n`,
         );
+        if (promptVisible) terminal.prompt(true);
       } else if (sendCompleted) {
-        writeStatusLine(
-          options.stdout,
-          'operator-agent',
-          `completed (status: ${result.status}).`,
-          options.colorEnabled,
-        );
+        writeChannelLine('observation', `completed (status: ${result.status}).`);
       }
       if (
         sendCompleted &&
@@ -508,13 +507,7 @@ async function runTtyConversation(options: {
         options.dispatchQueue.conversationHold &&
         options.dispatchQueue.pendingUserCount === 0
       ) {
-        const released = options.dispatchQueue.setConversationHold(false);
-        writeStatusLine(
-          options.stdout,
-          'operator-agent',
-          `会話 hold を解除しました（手動 hold: ${options.dispatchQueue.reportHold ? '継続' : '解除'}、保留報告 ${released.releasedEventCount} 件を dispatch queue に戻しました）。`,
-          options.colorEnabled,
-        );
+        options.dispatchQueue.setConversationHold(false);
       }
     }
   } finally {
@@ -523,6 +516,8 @@ async function runTtyConversation(options: {
     process.off('SIGINT', handleInterrupt);
     process.off('SIGTERM', handleTermination);
     terminal.close();
+    promptVisible = false;
+    unsubscribeHoldChanges();
   }
 }
 
@@ -533,7 +528,10 @@ function formatReportHoldStatus(
     queue.conversationHold ? '会話' : undefined,
     queue.reportHold ? '手動' : undefined,
   ].filter((reason): reason is string => reason !== undefined);
-  return `監視報告保留中（${reasons.join('・')} / ${queue.heldEventCount} 件）`;
+  return [
+    `監視報告: ${queue.hold ? '保留' : '解除'}`,
+    `（理由: ${reasons.join('・') || 'なし'}、保留件数: ${queue.heldEventCount} 件）`,
+  ].join('');
 }
 
 function isResumeWatchCommand(message: string): boolean {
@@ -543,18 +541,6 @@ function isResumeWatchCommand(message: string): boolean {
 
 function normalizeOperatorResponse(response: string): string {
   return response.trim().replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n');
-}
-
-function writeStatusLine(
-  output: OperatorAgentOutput,
-  label: string,
-  detail: string,
-  colorEnabled: boolean,
-  displayOptions: { color?: string; leadingBlank?: boolean } = {},
-): void {
-  const leadingBlank = displayOptions.leadingBlank === false ? '' : '\n';
-  const color = displayOptions.color ?? ANSI_DIM;
-  output.write(`${leadingBlank}${colorize(label, color, colorEnabled)} ${detail}\n\n`);
 }
 
 function colorize(text: string, color: string, enabled: boolean): string {

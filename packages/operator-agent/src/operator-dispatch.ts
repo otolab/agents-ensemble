@@ -30,6 +30,7 @@ export interface OperatorDispatchBatch {
 }
 
 export interface OperatorDispatchQueue {
+  subscribe(listener: () => void): () => void;
   enqueueUser(text: string): void;
   enqueueReport(
     event: Omit<Extract<OperatorDispatchEvent, { type: 'report' }>, 'arrival' | 'readyAt'>,
@@ -281,6 +282,10 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
   };
 
   return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     enqueueUser(text) {
       const trimmed = text.trim();
       if (!trimmed) return;
