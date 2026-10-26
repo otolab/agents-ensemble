@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { AcpBridge } from '../../src/acp/acp-bridge.js';
-import { hasAcpTestConfig, getAcpTestConfig } from './test-config.js';
+import {
+  acpTestConfigSkipReason,
+  getAcpTestConfig,
+} from './test-config.js';
 
-describe.skipIf(!hasAcpTestConfig())('AcpBridge integration', () => {
+const SUITE_NAME = acpTestConfigSkipReason
+  ? `AcpBridge integration (skipped: ${acpTestConfigSkipReason})`
+  : 'AcpBridge integration';
+
+describe.skipIf(acpTestConfigSkipReason !== undefined)(SUITE_NAME, () => {
   it('runs a session against real agent acp', async () => {
     const config = getAcpTestConfig();
     const bridge = await AcpBridge.connect({
