@@ -80,7 +80,7 @@ Transport は Unix domain socket 上の JSON-RPC 2.0 over NDJSON です。1 conn
 
 ### `session.observe`
 
-稼働中 harness の観測 snapshot を返します。operator-agent watch pool は polling のたびにこの method を呼び、質問 sequence と質問ごとの fingerprint、session-state の `reportedAt` を cursor として保存します。watch に保存済み cursor がない場合、初回 snapshot の質問 ID を通知なしで baseline に登録します。以後、新しい ID で現在 `open` の質問だけを追加報告し、同じ質問の YAML / SessionResumeStore への flush は session ごとの cursor で重複排除します。UDS が利用できる間は Registry snapshot を優先し、記録された socket が到達不能、または古い harness が snapshot method に未対応の場合は、保存済み Open Questions YAML / session-state YAML / legacy SessionResumeStore を poll します。報告には観測元を付けます。
+稼働中 harness の観測 snapshot を返します。operator-agent watch pool は polling のたびにこの method を呼びます。初回 snapshot は Open Question cursor に限って silent baseline とし、既存質問の OQ report は生成しません。session-state report は別の `reportedAt` cursor で管理するため、session-state を含む初回 poll では最新状態を報告することがあります。以後は新しい open 質問、既知質問の `open → answered`、前回 open だった ID の一覧からの消失を差分報告します。UDS が利用できる間は Registry snapshot を優先し、記録された socket が到達不能、または古い harness が snapshot method に未対応の場合は、保存済み Open Questions YAML / session-state YAML / legacy SessionResumeStore を poll します。report には観測元 `稼働中 UDS` または `保存済み SessionResumeStore / YAML` を付け、同一質問の UDS / YAML 間の再観測は cursor で重複排除します。
 
 Request:
 
@@ -94,7 +94,13 @@ Response:
 {"jsonrpc":"2.0","id":3,"result":{"sequence":2,"openQuestions":[{"id":"inq-1","question":"Proceed?","responseType":"yes_no","source":"conductor","status":"open","askedAt":1792512000000}],"sessionState":{"current":{"statusLine":"CI 待ち","reportedAt":1792512001000},"history":[]}}}
 ```
 
-`openQuestions` は live Registry の全質問（未回答・回答済み）です。`sessionState` は報告がある場合だけ含みます。`sequence` は質問の enqueue cursor で、operator-agent は質問 ID の fingerprint を cursor に保存し、新規 open 質問の判定と YAML / UDS 間の重複排除に使います。新規 watch または cursor 欠損時は、初回 snapshot にすでに含まれる質問を既存状態として扱い、以後に追加された ID だけを通知します。session-state report の変更検出には各質問 fingerprint とは別に `reportedAt` を使います。この method は読み取り専用で、各 poll は独立した短い JSON-RPC 接続です。
+`openQuestions` は live Registry の全質問（未回答・回答済み）です。`sessionState` は報告がある場合だけ含みます。`sequence` は質問の enqueue cursor です。operator-agent は質問 ID ごとの fingerprint に加え、直近の質問文・status・`askedAt` を cursor に保存し、状態差分と UDS / YAML 間の重複排除に使います。Open Question cursor がないときは初回 snapshot 内の質問を silent baseline とします。これは Open Question report だけに適用され、session-state report は別 cursor で判定されます。その後、未登録 ID の `open` 質問を新規追加として、既知 ID の `open → answered` を回答として報告します。前回 `open` だった ID が次の snapshot から消えた場合も一覧からの消失を報告します。回答済みで初めて観測した ID は解決報告せず、既知 ID の回答遷移を新規追加として二重計上しません。
+
+新規 open report には question ID・response type・質問文と、あれば context を含めます。回答 report には question ID、短く整えた質問文と、snapshot にある `answer` / `assent` / `selectedChoice` / `answeredBy` / `answeredAt` を含めます。長い質問・回答文はそれぞれ最大240文字に整えます。`answeredBy: operator` は記録された operator ロールを示すだけで、人間の operator と operator-agent のどちらが回答したかは特定できません。`answeredBy: conductor` の場合は conductor 側の操作と説明できます。これらの値がない場合も、回答主体を推測しません。
+
+消失 report は ID と直近 cursor に保存された質問文を示しますが、消えたことだけから回答済み・解決済みとは判断せず、回答や回答者も推測しません。旧形式の cursor でも、回答済み snapshot から回答情報を除いた状態が保存済み fingerprint と一致すれば `open → answered` を検出できます。一方、旧 cursor には質問文・status が保存されていないため、そこからの消失は前回 status 不明として報告され、質問文を復元できない場合があります。同じ poll で複数の追加・回答・消失を検知した場合は質問 ID 順に並べ、番号付き section でまとめます。
+
+live UDS を使った report には稼働中 UDS、UDS が到達不能または未対応で保存 snapshot に切り替えた report には保存済み SessionResumeStore / YAML という観測元を付けます。session-state report の変更検出には各質問 fingerprint とは独立した `reportedAt` cursor を使います。初回 poll では snapshot に session-state があれば最新の status を1件報告し、以後は `reportedAt` ごとに内容の変化を検出して報告します。この method は読み取り専用で、各 poll は独立した短い JSON-RPC 接続です。
 
 watch report は既存 operator-agent queue の `open_question:${conductorAgentId}` source と debounce / batch / report hold を通ります。質問本文を含む report は operator-agent への入力であり、複数 session は session ごとに別の batch として Issue URL・conductor ID 付きで整形されます。
 

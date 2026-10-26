@@ -15,6 +15,7 @@ import {
 } from './operator-dispatch.js';
 import {
   createOperatorWatchPool,
+  createRegisterSessionWatchTool,
   operatorWatchStatePath,
 } from './operator-watch-pool.js';
 
@@ -497,7 +498,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('deduplicates live Registry and YAML observations and reports only new open questions', async () => {
+  it('deduplicates live Registry and YAML observations and reports question transitions once', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-dedup-'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     let liveSnapshot: SessionObservationSnapshot = {
@@ -561,10 +562,17 @@ describe('operator watch pool', () => {
       await writeQuestions(1, [firstQuestion]);
       expect(await pool.pollOnce('live-dedup')).toBe(0);
 
-      // A status/body update is not a new question. An answered item first
-      // observed in YAML is not an open-question notification either.
+      // A known open question becoming answered is a resolution report.
+      // An answered item first observed in YAML is not a new-open report.
       await writeQuestions(2, [
-        { ...firstQuestion, status: 'answered', question: 'Updated body' },
+        {
+          ...firstQuestion,
+          status: 'answered',
+          answer: 'Proceed with the staged rollout.',
+          assent: 'yes',
+          answeredBy: 'operator',
+          answeredAt: 25,
+        },
         {
           id: 'inq-2',
           question: 'Already answered?',
@@ -574,10 +582,17 @@ describe('operator watch pool', () => {
           askedAt: 11,
         },
       ]);
-      expect(await pool.pollOnce('live-dedup')).toBe(0);
+      expect(await pool.pollOnce('live-dedup')).toBe(1);
 
       await writeQuestions(3, [
-        { ...firstQuestion, status: 'answered' },
+        {
+          ...firstQuestion,
+          status: 'answered',
+          answer: 'Proceed with the staged rollout.',
+          assent: 'yes',
+          answeredBy: 'operator',
+          answeredAt: 25,
+        },
         {
           id: 'inq-2',
           question: 'Already answered?',
@@ -596,15 +611,154 @@ describe('operator watch pool', () => {
         },
       ]);
       expect(await pool.pollOnce('live-dedup')).toBe(1);
-      expect(dispatchQueue.pendingEventCount).toBe(2);
+      await writeQuestions(4, [
+        {
+          ...firstQuestion,
+          status: 'answered',
+          answer: 'Proceed with the staged rollout.',
+          assent: 'yes',
+          answeredBy: 'operator',
+          answeredAt: 25,
+        },
+        {
+          id: 'inq-2',
+          question: 'Already answered?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'answered',
+          askedAt: 11,
+        },
+      ]);
+      expect(await pool.pollOnce('live-dedup')).toBe(1);
+      expect(dispatchQueue.pendingEventCount).toBe(4);
       const report = dispatchQueue.takeBatch(
         { continuationConsumed: false },
         Date.now(),
       );
       expect(report?.events.map((event) => event.text)).toEqual([
         expect.stringContaining('Should we proceed?'),
+        expect.stringContaining('解決: inq-1'),
         expect.stringContaining('New while offline?'),
+        expect.stringContaining('一覧から消失: inq-3'),
       ]);
+      expect(report?.events[1]?.text).toContain('Proceed with the staged rollout.');
+      expect(report?.events[1]?.text).toContain('賛否: yes');
+      expect(report?.events[1]?.text).toContain('answeredBy: operator');
+      expect(report?.events[1]?.text).toContain('answeredAt:');
+      expect(report?.events[1]?.text).toContain(
+        '保存済み SessionResumeStore / YAML',
+      );
+      expect(report?.events[2]?.text).toContain('新規追加: inq-3');
+      expect(report?.events[3]?.text).toContain(
+        '回答・回答者: 今回の snapshot では確認できません',
+      );
+      expect(report?.events[3]?.text).toContain(
+        '保存済み SessionResumeStore / YAML',
+      );
+      const formattedReport = formatOperatorDispatchBatch(report!.events);
+      expect(formattedReport).toContain('## Open Question の変化（4 件）');
+      expect(formattedReport.indexOf('解決: inq-1')).toBeLessThan(
+        formattedReport.indexOf('新規追加: inq-3'),
+      );
+      expect(formattedReport.indexOf('新規追加: inq-3')).toBeLessThan(
+        formattedReport.indexOf('一覧から消失: inq-3'),
+      );
+      expect(report?.events[1]?.text).not.toContain('新規追加: inq-1');
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('reports live open-to-answered, disappearance, and new-open changes in question order', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-lifecycle-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    let snapshot: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [
+        {
+          id: 'inq-1',
+          question: 'Which rollout strategy?',
+          responseType: 'choice',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 10,
+        },
+        {
+          id: 'inq-2',
+          question: 'Which environment?',
+          responseType: 'choice',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 11,
+        },
+      ],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => snapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+    await writeResumeStore('session-lifecycle', 1, liveServer.socketPath);
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.register('session-lifecycle', {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(await pool.pollOnce('session-lifecycle')).toBe(0);
+
+      snapshot = {
+        sequence: 2,
+        openQuestions: [
+          {
+            id: 'inq-1',
+            question: 'Which rollout strategy?',
+            responseType: 'choice',
+            source: 'conductor',
+            status: 'answered',
+            askedAt: 10,
+            answer: 'Deploy to canary, then all regions.',
+            selectedChoice: 'canary',
+            answeredBy: 'operator',
+            answeredAt: 20,
+          },
+          {
+            id: 'inq-3',
+            question: 'Notify the release channel?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 30,
+          },
+        ],
+      };
+      expect(await pool.pollOnce('session-lifecycle')).toBe(3);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      )!;
+      expect(batch.events).toHaveLength(3);
+      const report = formatOperatorDispatchBatch(batch.events);
+      expect(report).toContain('## Open Question の変化（3 件）');
+      expect(report).toContain('観測元: 稼働中 UDS');
+      expect(report).toContain('質問: Which rollout strategy?');
+      expect(report).toContain('回答: Deploy to canary, then all regions.');
+      expect(report).toContain('answeredBy: operator');
+      expect(report).toContain('選択肢: canary');
+      expect(report).toContain('一覧から消失: inq-2');
+      expect(report).toContain('新規追加: inq-3');
+      expect(report.indexOf('解決: inq-1')).toBeLessThan(
+        report.indexOf('一覧から消失: inq-2'),
+      );
+      expect(report.indexOf('一覧から消失: inq-2')).toBeLessThan(
+        report.indexOf('新規追加: inq-3'),
+      );
+      expect(await pool.pollOnce('session-lifecycle')).toBe(0);
     } finally {
       pool.close();
     }
@@ -653,6 +807,9 @@ describe('operator watch pool', () => {
         pollIntervalMs: 500,
         debounceMs: 1_000,
       });
+      expect(
+        createRegisterSessionWatchTool(pool).description,
+      ).toContain('open-to-answered transitions');
       expect(watch).toMatchObject({
         conductorAgentId: 'session-one',
         pollIntervalMs: 500,
@@ -1442,11 +1599,26 @@ describe('operator watch pool', () => {
         'openQuestions:',
         ...input.questions.flatMap((question) => [
           `  - id: ${question.id}`,
-          `    question: "${question.question}"`,
+          `    question: ${JSON.stringify(question.question)}`,
           `    responseType: ${question.responseType}`,
           `    source: ${question.source}`,
           `    status: ${question.status}`,
           `    askedAt: ${question.askedAt}`,
+          ...(typeof question.answer === 'string'
+            ? [`    answer: ${JSON.stringify(question.answer)}`]
+            : []),
+          ...(typeof question.assent === 'string'
+            ? [`    assent: ${question.assent}`]
+            : []),
+          ...(typeof question.selectedChoice === 'string'
+            ? [`    selectedChoice: ${JSON.stringify(question.selectedChoice)}`]
+            : []),
+          ...(typeof question.answeredBy === 'string'
+            ? [`    answeredBy: ${question.answeredBy}`]
+            : []),
+          ...(typeof question.answeredAt === 'number'
+            ? [`    answeredAt: ${question.answeredAt}`]
+            : []),
         ]),
         '',
       ].join('\n'),

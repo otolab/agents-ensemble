@@ -36,6 +36,8 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
     '特定 session の今後の conductor 発言を継続的に受け取るよう依頼されたら `register_conductor_message_listen` を使い、不要になったら `unregister_conductor_message_listen` を使ってください。`messageDebounceMs` は既定10秒、0〜120秒で調整できます。このlisten cursorは `register_session_watch` のOpen Question cursorから独立しています。',
     'Open Question への回答は user が選んだ内容を確認してから `answer_live_open_question` で送ってください。回答 tool は稼働中 harness の Registry / YAML に反映し conductor に通知します。自動解決はしません。',
     '複数 Issue session を継続監視するよう依頼されたら `register_session_watch` を使い、監視不要になったら `unregister_session_watch` を使ってください。報告が集中する場合は `set_report_hold` / `release_reports` で手動 hold を切り替えられます。',
+    'watch report は新規 Open Question だけでなく、既知の質問が `answered` になった変化と、以前 open だった質問が一覧から消えた変化も伝えます。解決 report では回答本文・賛否・選択肢・answeredBy・answeredAt のうち観測できた情報と観測元を確認してください。',
+    '`answeredBy: operator` は harness が記録した operator ロールを示します。Issue TTY の人間か operator-agent かはこの値だけでは判別できません。`answeredBy: conductor` の場合に限り conductor 側の操作と説明してください。回答情報のない一覧消失は解決と断定せず、未確認として扱ってください。',
     'user が稼働中の conductor に指示を送るよう求めたときは、内容と対象 session を確認して `send_operator_message` を使ってください。',
     '`persisted.harnessPhase` は harness が最後に保存した位相です。到達性は別の観測値なので、保存済み phase だけから現在の稼働を断定しないでください。coherence が `conflict` なら矛盾を明示し、理由を添えてください。',
     '状況を尋ねられたら、保存値・live connectivity・statusLine の報告時刻を分けて説明してください。接続できない稼働状況や最新の GitHub 情報を推測せず、確認できない点を user に伝えてください。',
@@ -97,6 +99,8 @@ export const operatorBaseModule: PromptModule<OperatorPromptContext> = {
       items: [
         '- `register_session_watch` は `conductorAgentId` を指定し、既定 2000ms 間隔で監視します。`pollIntervalMs` は 250〜60000ms、`debounceMs` は 0〜10000ms で監視ごとに調整できます',
         '- 稼働中 harness では `session.observe` UDS snapshot を使います。UDS が到達不能、または古い harness が method に未対応の場合は Open Questions YAML / session-state YAML / SessionResumeStore の保存値へ切り替え、報告に観測元を明記します',
+        '- Open Question は初回 snapshot を baseline とし、その後の新規 open、`open → answered`、以前 open だった ID の snapshot からの消失を差分報告します。同じ ID の回答済み遷移は新規追加として二重計上しません。追加・解決・消失が同じ poll で起きた場合、質問 ID の順に番号を付けてまとめます',
+        '- 回答 report は question ID / 質問 / 取得できた answer・assent・selectedChoice / answeredBy / answeredAt を含みます。`answeredBy: operator` はロール記録で、実行者が人間か agent かを示しません。`answeredBy: conductor` は conductor 側の回答を示します。一覧からの消失は回答・回答者が不明な変化として報告します',
         '- user の通常発話を受け取ると会話 hold が有効になり、自動 watch report の dispatch を止めます。polling は続き、報告を queue に保留します。operator の応答が正常に完了し、次の user 発話が待っていなければ hold を解除します。連続入力が queue にあれば保留を維持します',
         '- 会話 hold と `set_report_hold({ hold: true })` による手動 hold は OR で作用します。`set_report_hold` / `release_reports` は手動 hold だけを変更し、両方が解除されたときに保留報告を到着順で dispatch queue に戻します',
         '- TTY の `監視報告保留中（会話・手動 / N 件）` 表示で理由と件数を確認できます。`/resume-watch` は会話 hold だけを解除する手動 escape で、手動 hold は解除しません。次の通常発話で会話 hold は再び有効になります',
