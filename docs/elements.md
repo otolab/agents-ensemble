@@ -58,7 +58,7 @@ team-profile は **チーム体制・役割分担・起動文書**の正本（Sk
 
 ### ensemble 共通設定（config.yaml）
 
-harness 横断設定（profile 既定・**ACP（preset・env）**・session 既定・GitHub 認証 / monitor 等）の正本。team-profile とは別ファイル。解決順と全キー: [config.md](config.md)、設計判断: [ADR 0020](adr/0020-ensemble-config-setting-resolution.md)。
+harness 横断設定（profile 既定・**ACP（preset・env・model catalog / tag mapping）**・session 既定・GitHub 認証 / monitor 等）の正本。team-profile とは別ファイル。解決順と全キー: [config.md](config.md)、設計判断: [ADR 0020](adr/0020-ensemble-config-setting-resolution.md)。
 
 **Codex profile**（`codex --profile litellm` 等）は Codex CLI の世界の用語であり、ensemble の team profile とは無関係。LiteLLM 等の worker ACP 設定は `config.yaml` の `acp` 系に書く（[config.md § ACP spawn env](config.md#acp-spawn-envacpenv)）。
 
@@ -68,7 +68,8 @@ harness 横断設定（profile 既定・**ACP（preset・env）**・session 既�
 - `agents.<kind>` … agent の modular-prompt 拡張（`prompt` インライン / `promptFile` 外部 YAML）。未指定時は ensemble base のみ
 - `workers` … セッションに登録する worker（`name` + `kind`）。ACP attach は `session.lazyWorkers` によりセッション開始時または初回指示時に行う。`- ping` は name=kind の省略形
 - `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。`~` / `~/...` は homedir() で展開。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準
-- team profile に **ACP 設定はない**（`acp` / `workers[].acp` は削除済み。正本は [ensemble config](config.md) の `acp.defaultPreset` / `acp.env`）
+- `workers[].modelTag` … **任意**。その worker インスタンスが使う ACP model tier（`high` / `default` / `low` / `fast`）。省略時と kind 文字列 shorthand は `default`。worker 名や kind ごとの model ID は profile に書かない
+- team profile に preset / spawn env / model ID の直書きはない。旧 `acp` / `workers[].acp` は引き続きエラー。ACP preset・spawn env・model catalog・tag mapping の正本は [ensemble config](config.md) の `acp` 設定
 - `conductor` … **任意**。`backend`（`cursor` | `pi`）、`builtinTools`、`piSkills`（Pi backend のみ）を指定。`builtinTools` / `piSkills` は省略・未指定は有効、`false` のみ無効。制御の正本は profile であり、`config.yaml` や worker ACP には同キーを設けない
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む
 

@@ -13,6 +13,9 @@ export interface EnsembleConfigControlConfig {
 
 export type ConductorBackend = 'cursor' | 'pi';
 
+/** ACP worker model tiers selected by each team-profile worker entry. */
+export type AcpModelTag = 'high' | 'default' | 'low' | 'fast';
+
 export interface EnsembleConductorPiConfig {
   /** Pi の user resource root。絶対パスまたは repoRoot 基準の相対パス。 */
   agentDir?: string;
@@ -36,6 +39,10 @@ export interface EnsembleAcpConfig {
   defaultPreset: BuiltinAcpPresetId;
   /** codex-acp 等の子プロセス spawn に渡す env（user → project deep merge）。 */
   env?: Record<string, string>;
+  /** 環境ごとの ACP model ID catalog。tag mapping から参照する。 */
+  models?: Record<string, string>;
+  /** profile worker の modelTag から models key への共通 mapping。 */
+  tags?: Partial<Record<AcpModelTag, string>>;
 }
 
 export interface EnsembleSessionMaxTurnsConfig {

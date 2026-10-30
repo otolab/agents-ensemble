@@ -654,6 +654,7 @@ export async function runConductorSession(
       workers.map((worker) =>
         resolveWorkerAcpSpawn({
           defaultOptions: options.defaultAcp,
+          modelTag: worker.modelTag,
         }),
       ),
     );
@@ -2350,6 +2351,7 @@ function finalizeSessionWorkerSpecs(
   for (const worker of workers) {
     const resolved = resolveWorkerAcpSpawn({
       defaultOptions: defaultAcp,
+      modelTag: worker.modelTag,
     });
     const finalized = finalizeResolvedAcpSpawn(resolved);
     worker.spawn = resolvedAcpSpawnToOptions(finalized, worker.spawn);

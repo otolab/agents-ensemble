@@ -14,8 +14,10 @@ agents:
 workers:
   - name: implementer
     kind: implementer
+    modelTag: high
   - name: reviewer
     kind: reviewer
+    modelTag: default
 
 materials:
   - id: team-common

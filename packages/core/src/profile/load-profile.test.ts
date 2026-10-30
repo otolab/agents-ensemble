@@ -42,6 +42,25 @@ describe('normalizeProfileWorker', () => {
       kind: 'worker',
     });
   });
+
+  it.each(['high', 'default', 'low', 'fast'] as const)(
+    'accepts modelTag %s on a worker object',
+    (modelTag) => {
+      expect(
+        normalizeProfileWorker(
+          { name: 'main', kind: 'worker', modelTag },
+          'test',
+          0,
+        ),
+      ).toEqual({ name: 'main', kind: 'worker', modelTag });
+    },
+  );
+
+  it.each(['urgent', '', null, 1])('rejects invalid modelTag %s', (modelTag) => {
+    expect(() =>
+      normalizeProfileWorker({ kind: 'worker', modelTag }, 'test', 0),
+    ).toThrow(/modelTag.*high \| default \| low \| fast/);
+  });
 });
 
 describe('loadProfileFromFile', () => {
@@ -173,6 +192,18 @@ workers:
     );
 
     await expect(loadProfileFromFile(path)).rejects.toThrow(/"acp" is removed from team profile/);
+  });
+
+  it('rejects legacy worker acp.env alongside modelTag', async () => {
+    const path = join(dir, 'profile-worker-acp-env.yaml');
+    await writeFile(
+      path,
+      `workers:\n  - name: implementer\n    kind: implementer\n    modelTag: high\n    acp:\n      env:\n        MODEL: old-value\n`,
+    );
+
+    await expect(loadProfileFromFile(path)).rejects.toThrow(
+      /"acp" is removed from team profile/,
+    );
   });
 
   it('resolves worker workspace paths from profile and repo root', async () => {
@@ -423,24 +454,36 @@ describe('profileWorkersToSessionSpecs', () => {
       {
         name: 'ping-1',
         kind: 'ping',
+        modelTag: 'default',
         prompt: { instructions: ['pong'] },
         spawn: {
           command: 'agent',
           args: ['acp'],
           authenticate: { kind: 'method', methodId: 'cursor_login' },
         },
-        acpFingerprint: { preset: 'cursor', command: 'agent', args: ['acp'] },
+        acpFingerprint: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['acp'],
+          modelTag: 'default',
+        },
       },
       {
         name: 'main',
         kind: 'other',
+        modelTag: 'default',
         prompt: { instructions: ['fallback'] },
         spawn: {
           command: 'agent',
           args: ['acp'],
           authenticate: { kind: 'method', methodId: 'cursor_login' },
         },
-        acpFingerprint: { preset: 'cursor', command: 'agent', args: ['acp'] },
+        acpFingerprint: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['acp'],
+          modelTag: 'default',
+        },
       },
     ]);
   });

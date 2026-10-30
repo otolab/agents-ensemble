@@ -6,7 +6,7 @@ import {
   computeAcpSpawnEnvDigest,
   type AcpSpawnFingerprint,
 } from '../acp/resolve-acp-spawn.js';
-import type { ConductorBackend } from '../config/types.js';
+import type { AcpModelTag, ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
@@ -654,6 +654,28 @@ function parseAcpSpawnFingerprint(
   if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== 'string')) {
     throw new Error(`Invalid session resume store worker acpSpawn args: ${workerName}`);
   }
+  const validModelTags: AcpModelTag[] = ['high', 'default', 'low', 'fast'];
+  let modelTag: AcpModelTag | undefined;
+  if (record.modelTag !== undefined) {
+    if (
+      typeof record.modelTag !== 'string' ||
+      !validModelTags.includes(record.modelTag as AcpModelTag)
+    ) {
+      throw new Error(
+        `Invalid session resume store worker acpSpawn modelTag: ${workerName}`,
+      );
+    }
+    modelTag = record.modelTag as AcpModelTag;
+  }
+  let model: string | undefined;
+  if (record.model !== undefined) {
+    if (typeof record.model !== 'string' || record.model.length === 0) {
+      throw new Error(
+        `Invalid session resume store worker acpSpawn model: ${workerName}`,
+      );
+    }
+    model = record.model;
+  }
   let envDigest: string | undefined;
   if (record.envDigest !== undefined) {
     if (
@@ -691,6 +713,8 @@ function parseAcpSpawnFingerprint(
     preset: record.preset as AcpSpawnFingerprint['preset'],
     command: record.command,
     args: record.args,
+    ...(modelTag !== undefined ? { modelTag } : {}),
+    ...(model !== undefined ? { model } : {}),
     ...(envDigest ? { envDigest } : {}),
   };
 }

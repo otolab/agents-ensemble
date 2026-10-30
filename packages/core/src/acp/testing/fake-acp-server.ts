@@ -21,6 +21,10 @@ export interface FakeAcpServerOptions {
   onAuthenticate?: (methodId: string) => void;
   /** Called when initialize is received. */
   onInitialize?: (params: unknown) => void;
+  /** Called when session/new is received. */
+  onNewSession?: (params: unknown) => void;
+  /** Called when session/load is received. */
+  onLoadSession?: (params: unknown) => void;
   /** Emit session/request_permission before responding to session/prompt. */
   requestPermissionOnPrompt?: boolean;
   /** Emit these `session/update` payloads immediately before permission. */
@@ -120,6 +124,7 @@ export class FakeAcpServer {
       }
 
       case 'session/new': {
+        this.options.onNewSession?.(params);
         this.sessionCounter += 1;
         const sessionId = `fake-session-${this.sessionCounter}`;
         this.sessions.add(sessionId);
@@ -128,6 +133,7 @@ export class FakeAcpServer {
       }
 
       case 'session/load': {
+        this.options.onLoadSession?.(params);
         const sessionId = (params as { sessionId?: string })?.sessionId ?? '';
         if (!this.sessions.has(sessionId)) {
           this.respondError(id, {

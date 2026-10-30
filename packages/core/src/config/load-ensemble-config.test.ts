@@ -98,6 +98,8 @@ describe('parseEnsembleConfig', () => {
         acp: {
           defaultPreset: 'claude',
           env: { MODEL_PROVIDER: 'litellm' },
+          models: { opus: 'provider/opus', sonnet: 'provider/sonnet' },
+          tags: { high: 'opus', default: 'sonnet', low: 'sonnet' },
         },
         session: {
           worktree: 'in-repo',
@@ -124,7 +126,12 @@ describe('parseEnsembleConfig', () => {
         verbose: true,
         pi: { agentDir: '~/.ensemble/pi', projectDir: '.ensemble/pi' },
       },
-      acp: { defaultPreset: 'claude', env: { MODEL_PROVIDER: 'litellm' } },
+      acp: {
+        defaultPreset: 'claude',
+        env: { MODEL_PROVIDER: 'litellm' },
+        models: { opus: 'provider/opus', sonnet: 'provider/sonnet' },
+        tags: { high: 'opus', default: 'sonnet', low: 'sonnet' },
+      },
       session: {
         worktree: 'in_repo',
         lazyWorkers: true,
@@ -281,6 +288,29 @@ describe('loadEnsembleConfig', () => {
     expect(config.acp.env).toEqual({
       MODEL_PROVIDER: 'litellm',
       CODEX_CONFIG: '/project/litellm.config.toml',
+    });
+  });
+
+  it('deep merges ACP model catalog and tag mappings across user and project config', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      `acp:\n  models:\n    opus: provider/opus\n    sonnet: provider/sonnet\n  tags:\n    high: opus\n    default: sonnet\n`,
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `acp:\n  models:\n    opus: project/opus\n  tags:\n    low: sonnet\n`,
+    );
+
+    const config = await loadConfig();
+
+    expect(config.acp.models).toEqual({
+      opus: 'project/opus',
+      sonnet: 'provider/sonnet',
+    });
+    expect(config.acp.tags).toEqual({
+      high: 'opus',
+      default: 'sonnet',
+      low: 'sonnet',
     });
   });
 

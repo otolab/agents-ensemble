@@ -5,6 +5,7 @@ import {
 import type { WorkerWorktreeMode } from '../worktree/worktree.js';
 import type {
   ConductorBackend,
+  AcpModelTag,
   EnsembleAcpConfig,
   EnsembleConfigControlConfig,
   EnsembleConductorConfig,
@@ -142,6 +143,38 @@ function parseStringMap(
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
+const ACP_MODEL_TAGS: readonly AcpModelTag[] = [
+  'high',
+  'default',
+  'low',
+  'fast',
+];
+
+function parseAcpModels(raw: unknown): Record<string, string> | undefined {
+  const obj = readObject(raw);
+  if (!obj) return undefined;
+  const models: Record<string, string> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const modelKey = key.trim();
+    const modelId = readString(value);
+    if (modelKey && modelId) models[modelKey] = modelId;
+  }
+  return Object.keys(models).length > 0 ? models : undefined;
+}
+
+function parseAcpTags(
+  raw: unknown,
+): Partial<Record<AcpModelTag, string>> | undefined {
+  const obj = readObject(raw);
+  if (!obj) return undefined;
+  const tags: Partial<Record<AcpModelTag, string>> = {};
+  for (const tag of ACP_MODEL_TAGS) {
+    const modelKey = readString(obj[tag]);
+    if (modelKey) tags[tag] = modelKey;
+  }
+  return Object.keys(tags).length > 0 ? tags : undefined;
+}
+
 function parseAcpConfig(raw: unknown): Partial<EnsembleAcpConfig> | undefined {
   const obj = readObject(raw);
   if (!obj) {
@@ -149,14 +182,23 @@ function parseAcpConfig(raw: unknown): Partial<EnsembleAcpConfig> | undefined {
   }
   const preset = readString(obj.defaultPreset);
   const env = parseStringMap(obj.env, 'acp.env');
+  const models = parseAcpModels(obj.models);
+  const tags = parseAcpTags(obj.tags);
   const validPreset =
     preset && isBuiltinAcpPresetId(preset) ? (preset as BuiltinAcpPresetId) : undefined;
-  if (validPreset === undefined && env === undefined) {
+  if (
+    validPreset === undefined &&
+    env === undefined &&
+    models === undefined &&
+    tags === undefined
+  ) {
     return undefined;
   }
   return {
     ...(validPreset !== undefined ? { defaultPreset: validPreset } : {}),
     ...(env !== undefined ? { env } : {}),
+    ...(models !== undefined ? { models } : {}),
+    ...(tags !== undefined ? { tags } : {}),
   };
 }
 
