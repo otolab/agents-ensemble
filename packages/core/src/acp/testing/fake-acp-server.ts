@@ -17,10 +17,16 @@ export interface FakeAcpPromptResult {
 export interface FakeAcpServerOptions {
   readable: Readable;
   writable: Writable;
+  /** Session ids persisted by a previous fake process and accepted by `session/load`. */
+  initialSessions?: string[];
   /** Called when authenticate is received. */
   onAuthenticate?: (methodId: string) => void;
   /** Called when initialize is received. */
   onInitialize?: (params: unknown) => void;
+  /** Called when session/new is received. */
+  onNewSession?: (params: unknown) => void;
+  /** Called when session/load is received. */
+  onLoadSession?: (params: unknown) => void;
   /** Emit session/request_permission before responding to session/prompt. */
   requestPermissionOnPrompt?: boolean;
   /** Emit these `session/update` payloads immediately before permission. */
@@ -46,7 +52,7 @@ export interface FakeAcpServerOptions {
 export class FakeAcpServer {
   private readonly lineBuffer = new NdJsonLineBuffer();
   private sessionCounter = 0;
-  private readonly sessions = new Set<string>();
+  private readonly sessions: Set<string>;
   private readonly pendingCancels = new Map<string, () => void>();
   private permissionRequestCounter = 0;
   private running = false;
@@ -55,7 +61,9 @@ export class FakeAcpServer {
     () => void
   >();
 
-  constructor(private readonly options: FakeAcpServerOptions) {}
+  constructor(private readonly options: FakeAcpServerOptions) {
+    this.sessions = new Set(options.initialSessions);
+  }
 
   start(): void {
     if (this.running) return;
@@ -120,6 +128,7 @@ export class FakeAcpServer {
       }
 
       case 'session/new': {
+        this.options.onNewSession?.(params);
         this.sessionCounter += 1;
         const sessionId = `fake-session-${this.sessionCounter}`;
         this.sessions.add(sessionId);
@@ -128,6 +137,7 @@ export class FakeAcpServer {
       }
 
       case 'session/load': {
+        this.options.onLoadSession?.(params);
         const sessionId = (params as { sessionId?: string })?.sessionId ?? '';
         if (!this.sessions.has(sessionId)) {
           this.respondError(id, {

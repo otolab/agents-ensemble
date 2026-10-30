@@ -166,6 +166,40 @@ describe('AcpClient', () => {
     await client.close();
   });
 
+  it('passes preset session metadata to new and resumed ACP sessions', async () => {
+    const streams = createInProcessStreamPair();
+    const onNewSession = vi.fn();
+    const onLoadSession = vi.fn();
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      onNewSession,
+      onLoadSession,
+    });
+    const sessionMeta = {
+      claudeCode: { options: { settings: { model: 'provider/opus' } } },
+    };
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      { sessionMeta },
+    );
+
+    await client.connect();
+    const sessionId = await client.newSession('/tmp');
+    await client.loadSession(sessionId, '/tmp');
+
+    expect(onNewSession).toHaveBeenCalledWith(
+      expect.objectContaining({ _meta: sessionMeta }),
+    );
+    expect(onLoadSession).toHaveBeenCalledWith(
+      expect.objectContaining({ _meta: sessionMeta }),
+    );
+    await client.close();
+  });
+
   it('skips authenticate when strategy is skip', async () => {
     const streams = createInProcessStreamPair();
     const authenticateSpy = vi.fn();

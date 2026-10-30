@@ -45,12 +45,23 @@ conductor:
     # その session は再利用せず、resume/create で再作成してください。
 
 acp:
-  # profile / worker に acp 未指定時の built-in preset
+  # 全 worker に適用する built-in preset。profile の acp 指定は受け付けない
   defaultPreset: cursor
   # codex-acp 等 spawn 時の env（user → project deep merge）。LiteLLM 例は docs/config.md
   # env:
   #   MODEL_PROVIDER: litellm
-  #   CODEX_CONFIG: ~/.codex/litellm.config.toml
+  #   CODEX_CONFIG: '{"approval_policy":"on-request"}'
+  # model ID は環境ごとに設定し、profile には tier（modelTag）だけを書く
+  models:
+    high: YOUR_HIGH_MODEL_ID
+    standard: YOUR_DEFAULT_MODEL_ID
+    lightweight: YOUR_LOW_MODEL_ID
+    fast: YOUR_FAST_MODEL_ID
+  tags:
+    high: high
+    default: standard
+    low: lightweight
+    fast: fast
 
 session:
   # isolated: Issue 専用 worktree（既定） / in-repo: メイン worktree で直接作業

@@ -5,6 +5,7 @@ import type {
   DefaultAcpResolutionOptions,
 } from '../acp/resolve-acp-spawn.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
+import type { AcpModelTag } from '../config/types.js';
 import {
   acpSpawnFingerprint,
   resolveWorkerAcpSpawn,
@@ -38,6 +39,8 @@ export interface ProfileWorkerRefObject {
   /** セッション内の識別名（一意）。省略時は kind と同じ。 */
   name?: string;
   kind: string;
+  /** ACP model tier. Defaults to `default`. */
+  modelTag?: AcpModelTag;
   /**
    * その worker の ACP 起動 cwd（Issue worktree とは別概念）。
    * profile ディレクトリまたは repo-root 基準の相対パス、または絶対パス。
@@ -49,6 +52,8 @@ export interface ProfileWorkerRefObject {
 export interface ProfileWorkerEntry {
   name: string;
   kind: string;
+  /** ACP model tier selected by this worker instance. */
+  modelTag?: AcpModelTag;
   /** profile YAML の raw 値。 */
   workspace?: string;
   /** `loadProfile` 後に解決された絶対パス。 */
@@ -111,6 +116,7 @@ export interface ResolvedProfile extends Omit<Profile, 'agents'> {
 export interface SessionWorkerSpec {
   name: string;
   kind: string;
+  modelTag: AcpModelTag;
   prompt?: PromptModule;
   resolvedWorkspacePath?: string;
   /** worker attach 時の ACP spawn オプション（command/args/env）。 */
@@ -127,7 +133,14 @@ export interface EnsembleSessionState {
 }
 
 export const PROFILE_ACP_REMOVED_ERROR =
-  '"acp" is removed from team profile; use .ensemble/config.yaml acp.defaultPreset and acp.env';
+  '"acp" is removed from team profile; use .ensemble/config.yaml acp.defaultPreset and acp.env (worker model tiers use modelTag)';
+
+const PROFILE_MODEL_TAGS: readonly AcpModelTag[] = [
+  'high',
+  'default',
+  'low',
+  'fast',
+];
 
 export function resolvedProfileMaterials(
   materials?: ProfileMaterial[],
@@ -187,7 +200,10 @@ export function normalizeProfileWorker(
   }
 
   if (entry && typeof entry === 'object' && 'kind' in entry) {
-    const worker = entry as ProfileWorkerRefObject & { acp?: unknown };
+    const worker = entry as ProfileWorkerRefObject & {
+      acp?: unknown;
+      modelTag?: unknown;
+    };
     if (!worker.kind) {
       throw new Error(`Invalid profile worker[${index}] in ${label}: needs "kind"`);
     }
@@ -196,9 +212,22 @@ export function normalizeProfileWorker(
         `Invalid profile worker[${index}] in ${label}: ${PROFILE_ACP_REMOVED_ERROR}`,
       );
     }
+    const modelTag =
+      worker.modelTag === undefined ? 'default' : worker.modelTag;
+    if (
+      typeof modelTag !== 'string' ||
+      !PROFILE_MODEL_TAGS.includes(modelTag as AcpModelTag)
+    ) {
+      throw new Error(
+        `Invalid profile worker[${index}] in ${label}: "modelTag" must be one of ${PROFILE_MODEL_TAGS.join(' | ')}`,
+      );
+    }
     return {
       name: worker.name ?? worker.kind,
       kind: worker.kind,
+      ...(worker.modelTag !== undefined
+        ? { modelTag: modelTag as AcpModelTag }
+        : {}),
       ...(typeof worker.workspace === 'string' && worker.workspace.length > 0
         ? { workspace: worker.workspace }
         : {}),
@@ -206,7 +235,7 @@ export function normalizeProfileWorker(
   }
 
   throw new Error(
-    `Invalid profile worker[${index}] in ${label}: expected kind string or { name?, kind, workspace? }`,
+    `Invalid profile worker[${index}] in ${label}: expected kind string or { name?, kind, modelTag?, workspace? }`,
   );
 }
 
@@ -238,17 +267,24 @@ export function profileWorkersToSessionSpecs(
     spawnBase?: SpawnAcpProcessOptions;
   },
 ): SessionWorkerSpec[] {
-  const resolved = resolveWorkerAcpSpawn({ defaultOptions: options?.defaultAcp });
-  return profile.workers.map((worker) => ({
-    name: worker.name,
-    kind: worker.kind,
-    prompt: resolveAgentPromptModule(worker.kind, profile.agents),
-    ...(worker.resolvedWorkspacePath
-      ? { resolvedWorkspacePath: worker.resolvedWorkspacePath }
-      : {}),
-    spawn: resolvedAcpSpawnToOptions(resolved, options?.spawnBase),
-    acpFingerprint: acpSpawnFingerprint(resolved),
-  }));
+  return profile.workers.map((worker) => {
+    const modelTag = worker.modelTag ?? 'default';
+    const resolved = resolveWorkerAcpSpawn({
+      defaultOptions: options?.defaultAcp,
+      modelTag,
+    });
+    return {
+      name: worker.name,
+      kind: worker.kind,
+      modelTag,
+      prompt: resolveAgentPromptModule(worker.kind, profile.agents),
+      ...(worker.resolvedWorkspacePath
+        ? { resolvedWorkspacePath: worker.resolvedWorkspacePath }
+        : {}),
+      spawn: resolvedAcpSpawnToOptions(resolved, options?.spawnBase),
+      acpFingerprint: acpSpawnFingerprint(resolved),
+    };
+  });
 }
 
 /** kind に対応する profile agent module。agents[kind] → agents.default → undefined。 */

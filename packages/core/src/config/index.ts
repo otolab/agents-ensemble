@@ -44,6 +44,7 @@ export type {
 export type {
   EnsembleConfigControlConfig,
   EnsembleAcpConfig,
+  AcpModelTag,
   ConductorBackend,
   EnsembleConductorConfig,
   EnsembleConductorPiConfig,

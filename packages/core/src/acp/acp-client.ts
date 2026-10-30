@@ -32,6 +32,8 @@ export interface AcpClientOptions {
   clientVersion?: string;
   /** preset 解決結果。未指定時は Cursor 互換の `cursor_login`。 */
   authenticate?: AcpAuthenticateStrategy;
+  /** Preset-specific metadata passed to session/new and session/load. */
+  sessionMeta?: Record<string, unknown>;
   /** Set when backed by a child process (for cleanup). */
   childProcess?: ChildProcess;
   /** 子プロセス stderr capture の drain（close 時に呼ぶ）。 */
@@ -116,6 +118,7 @@ export class AcpClient {
     const result = (await this.peer.request('session/new', {
       cwd,
       mcpServers,
+      ...(this.options.sessionMeta ? { _meta: this.options.sessionMeta } : {}),
     })) as { sessionId: string };
     return result.sessionId;
   }
@@ -129,6 +132,7 @@ export class AcpClient {
       sessionId,
       cwd,
       mcpServers,
+      ...(this.options.sessionMeta ? { _meta: this.options.sessionMeta } : {}),
     });
   }
 
