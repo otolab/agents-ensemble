@@ -45,7 +45,7 @@ conductor:
     # その session は再利用せず、resume/create で再作成してください。
 
 acp:
-  # profile / worker に acp 未指定時の built-in preset
+  # 全 worker に適用する built-in preset。profile の acp 指定は受け付けない
   defaultPreset: cursor
   # codex-acp 等 spawn 時の env（user → project deep merge）。LiteLLM 例は docs/config.md
   # env:

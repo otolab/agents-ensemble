@@ -232,7 +232,7 @@ export interface RunConductorSessionOptions {
   onPostLoopWait?: () => void;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
   connectAcp?: ConnectWorkerAcpFn;
-  /** profile / worker に ACP 未指定時のデフォルト解決（CLI > env > cursor）。 */
+  /** 全 worker 共通の preset 解決（CLI > env > config > cursor）。 */
   defaultAcp?: DefaultAcpResolutionOptions;
   /**
    * Conductor が worker 向け作業ディレクトリをどう用意するか。

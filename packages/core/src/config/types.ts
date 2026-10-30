@@ -35,7 +35,7 @@ export interface EnsembleConductorConfig {
 }
 
 export interface EnsembleAcpConfig {
-  /** profile / worker に ACP 未指定時の built-in preset。 */
+  /** 全 worker に適用する built-in preset。 */
   defaultPreset: BuiltinAcpPresetId;
   /** codex-acp 等の子プロセス spawn に渡す env（user → project deep merge）。 */
   env?: Record<string, string>;

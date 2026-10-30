@@ -17,6 +17,8 @@ export interface FakeAcpPromptResult {
 export interface FakeAcpServerOptions {
   readable: Readable;
   writable: Writable;
+  /** Session ids persisted by a previous fake process and accepted by `session/load`. */
+  initialSessions?: string[];
   /** Called when authenticate is received. */
   onAuthenticate?: (methodId: string) => void;
   /** Called when initialize is received. */
@@ -50,7 +52,7 @@ export interface FakeAcpServerOptions {
 export class FakeAcpServer {
   private readonly lineBuffer = new NdJsonLineBuffer();
   private sessionCounter = 0;
-  private readonly sessions = new Set<string>();
+  private readonly sessions: Set<string>;
   private readonly pendingCancels = new Map<string, () => void>();
   private permissionRequestCounter = 0;
   private running = false;
@@ -59,7 +61,9 @@ export class FakeAcpServer {
     () => void
   >();
 
-  constructor(private readonly options: FakeAcpServerOptions) {}
+  constructor(private readonly options: FakeAcpServerOptions) {
+    this.sessions = new Set(options.initialSessions);
+  }
 
   start(): void {
     if (this.running) return;
