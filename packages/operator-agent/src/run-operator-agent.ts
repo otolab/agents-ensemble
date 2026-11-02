@@ -431,6 +431,7 @@ async function runTtyConversation(options: {
         options.backend === 'cursor' && firstSend
           ? `${options.systemPrompt}\n\n## User message\n\n${formatOperatorDispatchBatch(batch.events)}`
           : formatOperatorDispatchBatch(batch.events);
+      writeChannelLine('harness', 'operator: 処理中');
       const result = await Promise.race([
         sendConductorWithReconnect(
           options.agentHandle,
@@ -438,6 +439,12 @@ async function runTtyConversation(options: {
           {
             conductorAgentFactory: options.agentHandle.factory,
             conductorOptions: options.agentHandle.agentOptions,
+            onToolCallStarted: ({ tool }) => {
+              writeChannelLine(
+                'harness',
+                `operator: calling ${formatOperatorToolName(tool)}`,
+              );
+            },
           },
         ),
         stopping.then(() => undefined),
@@ -541,6 +548,10 @@ function isResumeWatchCommand(message: string): boolean {
 
 function normalizeOperatorResponse(response: string): string {
   return response.trim().replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n');
+}
+
+function formatOperatorToolName(tool: string): string {
+  return tool.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim() || 'unknown';
 }
 
 function colorize(text: string, color: string, enabled: boolean): string {

@@ -306,6 +306,71 @@ describe('runOperatorAgent', () => {
     ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('shows send and tool activity while preserving the TTY prompt', async () => {
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const output = createOutput();
+    let finishSend:
+      | ((result: Awaited<ReturnType<ConductorAgent['send']>>) => void)
+      | undefined;
+    const fakeAgent = createFakeAgent({
+      send: async (_prompt, callbacks) => {
+        callbacks?.onToolCallStarted?.({
+          runId: 'run-1',
+          tool: 'list_operator_sessions',
+          callId: 'call-1',
+        });
+        return await new Promise<
+          Awaited<ReturnType<ConductorAgent['send']>>
+        >((resolve) => {
+          finishSend = resolve;
+        });
+      },
+    });
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout: output,
+        agentFactory: {
+          create: async () => fakeAgent,
+          resume: async () => fakeAgent,
+        },
+      },
+    );
+
+    input.write('hello\n');
+    await vi.waitFor(() => expect(finishSend).toBeTypeOf('function'));
+
+    const pendingTranscript = output.capturedText();
+    expect(pendingTranscript).toContain(
+      '\u001b[2m[harness]\u001b[0m operator: 処理中',
+    );
+    expect(pendingTranscript).toContain(
+      '\u001b[2m[harness]\u001b[0m operator: calling list_operator_sessions',
+    );
+    expect(pendingTranscript.lastIndexOf('user>')).toBeGreaterThan(
+      pendingTranscript.indexOf('operator: calling list_operator_sessions'),
+    );
+    expect(pendingTranscript).not.toContain('operator>\n');
+
+    finishSend!({
+      runId: 'run-1',
+      status: 'completed',
+      result: 'Done.',
+    });
+    await vi.waitFor(() => {
+      const transcript = output.capturedText();
+      const responseLabel = transcript.indexOf('\u001b[36moperator>\u001b[0m');
+      const responseBody = transcript.indexOf('Done.');
+      expect(responseLabel).toBeGreaterThan(-1);
+      expect(responseBody).toBeGreaterThan(responseLabel);
+    });
+    input.write('/exit\n');
+    input.end();
+    await run;
+  });
+
   it('keeps the conversation hold through consecutive user turns', async () => {
     const input = new PassThrough() as PassThrough & OperatorAgentInput;
     input.isTTY = true;
@@ -1067,6 +1132,7 @@ describe('runOperatorAgent', () => {
     const transcript = output.capturedText();
     expect(transcript).not.toMatch(/\u001b\[(?:2|31|36)m/);
     expect(transcript).toContain('user> ');
+    expect(transcript).toContain('[harness] operator: 処理中');
     expect(transcript).not.toMatch(/(?:^|\n)> /);
     expect(transcript).toContain('operator>\nPlain response.\n\n');
     expect(transcript).toContain('[observation] session ended.');
