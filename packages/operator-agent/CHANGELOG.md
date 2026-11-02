@@ -1,5 +1,14 @@
 # @agents-ensemble/operator-agent
 
+## 0.4.2
+
+### Patch Changes
+
+- 3c0c02d: 一括移行で ResumeStore と sidecar を canonical slug 側へ非破壊で複製し、移行済み session では slug を正本として選びます。YAML と operator state も選択 location に沿って読み書きし、重複診断と UDS watch / live tool の経路を保ちます。
+- 4ff353f: TTY の operator-agent に応答生成中と tool 開始時の活動表示を追加します。
+- Updated dependencies [3c0c02d]
+  - @agents-ensemble/core@0.17.1
+
 ## 0.4.1
 
 ### Patch Changes
