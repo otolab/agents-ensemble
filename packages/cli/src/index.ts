@@ -111,11 +111,11 @@ program
   )
   .option(
     '--default-acp-cli <preset>',
-    'Default ACP CLI preset for workers without profile acp (cursor | claude | codex | pi)',
+    'Default ACP CLI preset applied to all workers (cursor | claude | codex | pi)',
   )
   .option(
     '--default-acp-command <cmd>',
-    'Default custom ACP command (profile acp unset workers only; overrides --default-acp-cli)',
+    'Default custom ACP command for all workers (overrides --default-acp-cli)',
   )
   .option(
     '--default-acp-arg <arg>',

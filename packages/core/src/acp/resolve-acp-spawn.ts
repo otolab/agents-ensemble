@@ -4,7 +4,7 @@ import {
   resolveAcpAuthenticateStrategy,
   type AcpAuthenticateStrategy,
 } from './resolve-acp-auth.js';
-import type { EnsembleConfig } from '../config/types.js';
+import type { AcpModelTag, EnsembleConfig } from '../config/types.js';
 
 /** Built-in ACP preset id（Phase 1）。拡張時は adapter / capability を別途追加可能。 */
 export type BuiltinAcpPresetId = 'cursor' | 'claude' | 'codex' | 'pi';
@@ -20,6 +20,11 @@ export interface ResolvedAcpSpawn {
   args: string[];
   env?: Record<string, string>;
   authenticate?: AcpAuthenticateStrategy;
+  /** Effective profile tier and environment-specific model ID. */
+  modelTag?: AcpModelTag;
+  model?: string;
+  /** Preset-specific session metadata, currently used by Claude ACP. */
+  sessionMeta?: Record<string, unknown>;
 }
 
 /** resume 検証用。SessionResumeStore に保存する最小フィンガープリント。 */
@@ -29,6 +34,10 @@ export interface AcpSpawnFingerprint {
   args: string[];
   /** spawn env の canonical SHA-256。値そのものは保存しない。 */
   envDigest?: string;
+  /** Worker tier used to resolve this process. */
+  modelTag?: AcpModelTag;
+  /** Resolved ACP model ID (model IDs are not credentials). */
+  model?: string;
 }
 
 export interface DefaultAcpResolutionOptions {
@@ -170,18 +179,43 @@ export function resolveDefaultAcpSpawn(
 
 export function resolveWorkerAcpSpawn(input?: {
   defaultOptions?: DefaultAcpResolutionOptions;
+  modelTag?: AcpModelTag;
 }): ResolvedAcpSpawn {
-  return resolveDefaultAcpSpawn(input?.defaultOptions);
+  const modelTag = input?.modelTag ?? 'default';
+  const spawn = resolveDefaultAcpSpawn(input?.defaultOptions);
+  const modelKey = input?.defaultOptions?.config?.acp.tags?.[modelTag];
+  if (!modelKey) {
+    return { ...spawn, modelTag };
+  }
+
+  const model = input?.defaultOptions?.config?.acp.models?.[modelKey];
+  if (!model) {
+    throw new Error(
+      `ACP model tag "${modelTag}" references undefined acp.models key "${modelKey}"`,
+    );
+  }
+
+  return injectAcpModel(
+    spawn,
+    modelTag,
+    model,
+    input?.defaultOptions?.env ?? process.env,
+  );
 }
 
 export function resolveWorkerAcpSpawns(input: {
-  workers: Array<{ name: string }>;
+  workers: Array<{ name: string; modelTag?: AcpModelTag }>;
   defaultOptions?: DefaultAcpResolutionOptions;
 }): Map<string, ResolvedAcpSpawn> {
-  const spawn = resolveDefaultAcpSpawn(input.defaultOptions);
   const result = new Map<string, ResolvedAcpSpawn>();
   for (const worker of input.workers) {
-    result.set(worker.name, spawn);
+    result.set(
+      worker.name,
+      resolveWorkerAcpSpawn({
+        defaultOptions: input.defaultOptions,
+        modelTag: worker.modelTag,
+      }),
+    );
   }
   return result;
 }
@@ -191,6 +225,8 @@ export function acpSpawnFingerprint(spawn: ResolvedAcpSpawn): AcpSpawnFingerprin
     preset: spawn.preset,
     command: spawn.command,
     args: [...spawn.args],
+    ...(spawn.modelTag !== undefined ? { modelTag: spawn.modelTag } : {}),
+    ...(spawn.model !== undefined ? { model: spawn.model } : {}),
     ...(spawn.env && Object.keys(spawn.env).length > 0
       ? { envDigest: computeAcpSpawnEnvDigest(spawn.env) }
       : {}),
@@ -209,7 +245,12 @@ export function computeAcpSpawnEnvDigest(env: Record<string, string>): string {
 
 export function formatAcpSpawnFingerprint(spawn: AcpSpawnFingerprint): string {
   const args = spawn.args.length > 0 ? ` ${spawn.args.join(' ')}` : '';
-  return `${spawn.preset} (${spawn.command}${args})`;
+  const model = spawn.model
+    ? `, modelTag=${spawn.modelTag ?? 'unknown'}, model=${spawn.model}`
+    : spawn.modelTag
+      ? `, modelTag=${spawn.modelTag}`
+      : '';
+  return `${spawn.preset} (${spawn.command}${args}${model})`;
 }
 
 export function assertAcpSpawnMatchesResume(input: {
@@ -224,6 +265,10 @@ export function assertAcpSpawnMatchesResume(input: {
     input.expected.preset === actual.preset &&
     input.expected.command === actual.command &&
     arraysEqual(input.expected.args, actual.args) &&
+    (input.expected.modelTag === undefined ||
+      input.expected.modelTag === actual.modelTag) &&
+    (input.expected.model === undefined ||
+      input.expected.model === actual.model) &&
     (input.expected.envDigest === undefined ||
       input.expected.envDigest === actual.envDigest);
 
@@ -244,6 +289,7 @@ export function resolvedAcpSpawnToOptions(
     command: spawn.command,
     args: [...spawn.args],
     authenticate: spawn.authenticate ?? resolveAcpAuthenticateStrategy(spawn),
+    ...(spawn.sessionMeta ? { sessionMeta: spawn.sessionMeta } : {}),
     ...(spawn.env
       ? {
           env: {
@@ -253,6 +299,66 @@ export function resolvedAcpSpawnToOptions(
         }
       : {}),
   };
+}
+
+function injectAcpModel(
+  spawn: ResolvedAcpSpawn,
+  modelTag: AcpModelTag,
+  model: string,
+  processEnv: NodeJS.ProcessEnv,
+): ResolvedAcpSpawn {
+  switch (spawn.preset) {
+    case 'cursor':
+      return {
+        ...spawn,
+        args: ['--model', model, ...spawn.args],
+        modelTag,
+        model,
+      };
+    case 'claude':
+      return {
+        ...spawn,
+        modelTag,
+        model,
+        sessionMeta: {
+          ...(spawn.sessionMeta ?? {}),
+          claudeCode: {
+            options: {
+              settings: { model },
+            },
+          },
+        },
+      };
+    case 'codex': {
+      const env = { ...(spawn.env ?? {}) };
+      let sessionConfig: Record<string, unknown> = {};
+      const existing =
+        env.CODEX_CONFIG ?? processEnv.CODEX_CONFIG;
+      if (existing !== undefined) {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(existing);
+        } catch {
+          throw new Error(
+            'ACP model injection for codex requires acp.env.CODEX_CONFIG to be a JSON object',
+          );
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error(
+            'ACP model injection for codex requires acp.env.CODEX_CONFIG to be a JSON object',
+          );
+        }
+        sessionConfig = parsed as Record<string, unknown>;
+      }
+      env.CODEX_CONFIG = JSON.stringify({ ...sessionConfig, model });
+      return { ...spawn, env, modelTag, model };
+    }
+    case 'pi':
+    case 'custom':
+      throw new Error(
+        `ACP preset "${spawn.preset}" does not support configured model injection (worker modelTag "${modelTag}", model "${model}")`,
+      );
+  }
 }
 
 function arraysEqual(left: string[], right: string[]): boolean {

@@ -10,7 +10,10 @@ import {
   resolveWorkerAcpSpawn,
   resolveWorkerAcpSpawns,
 } from './resolve-acp-spawn.js';
-import { profileWorkersToSessionSpecs } from '../profile/types.js';
+import {
+  normalizeProfileWorker,
+  profileWorkersToSessionSpecs,
+} from '../profile/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 
 describe('resolveDefaultAcpSpawn', () => {
@@ -203,6 +206,162 @@ describe('resolveWorkerAcpSpawn', () => {
       }),
     ).toMatchObject({ preset: 'claude', command: 'claude-agent-acp' });
   });
+
+  it('resolves each worker tag through the shared config catalog', () => {
+    const workers = resolveWorkerAcpSpawns({
+      workers: [
+        { name: 'implementer', modelTag: 'high' },
+        { name: 'reviewer' },
+      ],
+      defaultOptions: {
+        defaultAcpCli: 'codex',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            models: { opus: 'gateway/opus', sonnet: 'gateway/sonnet' },
+            tags: { high: 'opus', default: 'sonnet' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(workers.get('implementer')).toMatchObject({
+      preset: 'codex',
+      modelTag: 'high',
+      model: 'gateway/opus',
+      env: {
+        INITIAL_AGENT_MODE: 'agent',
+        CODEX_CONFIG: '{"model":"gateway/opus"}',
+      },
+    });
+    expect(workers.get('reviewer')).toMatchObject({
+      preset: 'codex',
+      modelTag: 'default',
+      model: 'gateway/sonnet',
+      env: {
+        INITIAL_AGENT_MODE: 'agent',
+        CODEX_CONFIG: '{"model":"gateway/sonnet"}',
+      },
+    });
+  });
+
+  it('rejects tags that reference an undefined model key before spawn', () => {
+    expect(() =>
+      resolveWorkerAcpSpawn({
+        modelTag: 'high',
+        defaultOptions: {
+          config: {
+            acp: {
+              defaultPreset: 'codex',
+              tags: { high: 'missing' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      }),
+    ).toThrow(/undefined acp\.models key "missing"/);
+  });
+
+  it('leaves the preset default in place when the worker tag has no mapping', () => {
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'high',
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            models: { standard: 'cursor/standard' },
+            tags: { default: 'standard' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      preset: 'cursor',
+      args: ['acp'],
+      modelTag: 'high',
+    });
+    expect(resolved.model).toBeUndefined();
+  });
+
+  it('rejects model injection for unsupported presets before spawn', () => {
+    expect(() =>
+      resolveWorkerAcpSpawn({
+        modelTag: 'high',
+        defaultOptions: {
+          defaultAcpCli: 'pi',
+          config: {
+            acp: {
+              defaultPreset: 'cursor',
+              models: { opus: 'gateway/opus' },
+              tags: { high: 'opus' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      }),
+    ).toThrow(/preset "pi" does not support configured model injection/);
+  });
+
+  it.each([
+    {
+      preset: 'cursor' as const,
+      expected: { args: ['--model', 'gateway/opus', 'acp'] },
+    },
+    {
+      preset: 'claude' as const,
+      expected: {
+        sessionMeta: {
+          claudeCode: { options: { settings: { model: 'gateway/opus' } } },
+        },
+      },
+    },
+    {
+      preset: 'codex' as const,
+      expected: { env: { CODEX_CONFIG: '{"model":"gateway/opus"}' } },
+    },
+  ])('injects a configured model for $preset', ({ preset, expected }) => {
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'high',
+      defaultOptions: {
+        defaultAcpCli: preset,
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            models: { opus: 'gateway/opus' },
+            tags: { high: 'opus' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+    expect(resolved).toMatchObject({
+      preset,
+      modelTag: 'high',
+      model: 'gateway/opus',
+      ...expected,
+    });
+  });
+
+  it('merges a model into the existing Codex session config', () => {
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'high',
+      defaultOptions: {
+        defaultAcpCli: 'codex',
+        config: {
+          acp: {
+            defaultPreset: 'codex',
+            env: { CODEX_CONFIG: '{"approval_policy":"on-request"}' },
+            models: { opus: 'gateway/opus' },
+            tags: { high: 'opus' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(JSON.parse(resolved.env?.CODEX_CONFIG ?? '{}')).toEqual({
+      approval_policy: 'on-request',
+      model: 'gateway/opus',
+    });
+  });
 });
 
 describe('profileWorkersToSessionSpecs', () => {
@@ -229,8 +388,66 @@ describe('profileWorkersToSessionSpecs', () => {
       authenticate: { kind: 'skip' },
       env: { INITIAL_AGENT_MODE: 'agent' },
     });
-    expect(specs[0]?.acpFingerprint?.preset).toBe('codex');
-    expect(specs[1]?.acpFingerprint?.preset).toBe('codex');
+    expect(specs[0]?.acpFingerprint).toMatchObject({
+      preset: 'codex',
+      modelTag: 'default',
+    });
+    expect(specs[1]?.acpFingerprint).toMatchObject({
+      preset: 'codex',
+      modelTag: 'default',
+    });
+  });
+
+  it('resolves different model tiers per worker while shorthand uses default', () => {
+    const specs = profileWorkersToSessionSpecs(
+      {
+        workers: [
+          { name: 'implementer', kind: 'implementer', modelTag: 'high' },
+          normalizeProfileWorker('reviewer', 'test profile', 1),
+        ],
+      },
+      {
+        defaultAcp: {
+          defaultAcpCli: 'cursor',
+          config: {
+            acp: {
+              defaultPreset: 'cursor',
+              models: { strong: 'cursor/strong', standard: 'cursor/standard' },
+              tags: { high: 'strong', default: 'standard' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      },
+    );
+
+    expect(specs.map(({ modelTag, spawn, acpFingerprint }) => ({
+      modelTag,
+      args: spawn?.args,
+      fingerprint: acpFingerprint,
+    }))).toEqual([
+      {
+        modelTag: 'high',
+        args: ['--model', 'cursor/strong', 'acp'],
+        fingerprint: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['--model', 'cursor/strong', 'acp'],
+          modelTag: 'high',
+          model: 'cursor/strong',
+        },
+      },
+      {
+        modelTag: 'default',
+        args: ['--model', 'cursor/standard', 'acp'],
+        fingerprint: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['--model', 'cursor/standard', 'acp'],
+          modelTag: 'default',
+          model: 'cursor/standard',
+        },
+      },
+    ]);
   });
 });
 
@@ -258,6 +475,40 @@ describe('acpSpawnFingerprint', () => {
         env: { API_TOKEN: 'private-marker', MODEL_PROVIDER: 'litellm' },
       }).envDigest,
     ).toBe(computeAcpSpawnEnvDigest(env));
+  });
+
+  it('includes worker modelTag and resolved model in resume fingerprint', () => {
+    const high = resolveWorkerAcpSpawn({
+      modelTag: 'high',
+      defaultOptions: {
+        config: {
+          acp: {
+            defaultPreset: 'claude',
+            models: { shared: 'provider/shared' },
+            tags: { high: 'shared', default: 'shared' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+    const standard = resolveWorkerAcpSpawn({
+      modelTag: 'default',
+      defaultOptions: {
+        config: {
+          acp: {
+            defaultPreset: 'claude',
+            models: { shared: 'provider/shared' },
+            tags: { high: 'shared', default: 'shared' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: acpSpawnFingerprint(high),
+        actual: acpSpawnFingerprint(standard),
+        workerName: 'implementer',
+      }),
+    ).toThrow(/resume ACP spawn mismatch/);
   });
 });
 

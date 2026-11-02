@@ -63,7 +63,7 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 #### resume と config 変更
 
-起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` や `acp.env` だけの変更も対象です。worker の ACP spawn fingerprint も env map の digest を保持し、値そのものは保存しません。旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。新しい SessionResumeStore には config の値やファイルパスを保存しません。
+起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model`、`acp.env`、model catalog / tag mapping の変更も対象です。worker の ACP spawn fingerprint には照合に必要な worker ごとの `modelTag` と解決済み model ID（credential ではない値）を記録し、env map は digest のみを保持します。旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。SessionResumeStore には config 全体や env map の平文、config ファイルのパスは保存しません。解決済み model ID は worker fingerprint に限って保存します。
 
 同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 resume state は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)）。
 
@@ -101,6 +101,15 @@ acp:
   defaultPreset: codex                # ENSEMBLE_DEFAULT_ACP_CLI 相当
   env:                                # codex-acp 子プロセス spawn に渡す env（選択された user config → project deep merge）
     MODEL_PROVIDER: litellm           # Codex provider ID。接続設定は Codex config 側
+  models:                             # 環境固有の model ID catalog
+    opus: YOUR_OPUS_MODEL_ID
+    sonnet: YOUR_SONNET_MODEL_ID
+    haiku: YOUR_HAIKU_MODEL_ID
+  tags:                               # profile の modelTag → models key
+    high: opus
+    default: sonnet
+    low: sonnet
+    fast: haiku
 
 session:
   worktree: isolated                  # --worktree 既定（isolated | in-repo）
@@ -139,6 +148,8 @@ tui:
 | `conductor.pi.projectDir` | Pi project resource root のパス上書き | — | — |
 | `acp.defaultPreset` | worker ACP built-in preset | `--default-acp-cli` 等 | `ENSEMBLE_DEFAULT_ACP_CLI` |
 | `acp.env` | codex-acp 等 spawn 時の env（string map） | — | — |
+| `acp.models` | 環境固有の model key → model ID | — | — |
+| `acp.tags` | model tag → `acp.models` key（全 worker 共通） | — | — |
 | `session.worktree` | worker workspace モード | `--worktree` | — |
 | `session.lazyWorkers` | 初回 `prompt_worker` まで worker ACP attach を遅延 | — | — |
 | `session.maxTurns.tty` / `nonTty` | 自律ターン上限 | `--max-turns` / `--no-max-turns` | — |
@@ -152,16 +163,58 @@ tui:
 
 `config.loadProjectConfig` は config の merge 対象を決めるメタ設定です。project YAML の値は、設定結果にも project config の読み込み判断にも使われません。`--config` 指定時は、その明示ファイルが選択された user config なので、このキーもそこから解決します。
 
+### ACP model tag と model catalog
+
+model ID と tag mapping は環境ごとの `.ensemble/config.yaml` に置きます。team profile は `workers[]` の各 worker インスタンスに `modelTag` だけを指定します。
+
+```yaml
+# config.yaml
+acp:
+  models:
+    opus: YOUR_OPUS_MODEL_ID
+    sonnet: YOUR_SONNET_MODEL_ID
+  tags:
+    high: opus
+    default: sonnet
+```
+
+```yaml
+# profile.yaml
+workers:
+  - name: implementer
+    kind: implementer
+    modelTag: high
+  - name: reviewer
+    kind: reviewer
+    modelTag: default
+  - researcher # 文字列 shorthand も default tag
+```
+
+`models` と `tags` は user config → project config の順に deep merge します。同じ key は project 側が優先されるため、profile の tier 配分を変えずに環境ごとの model ID を差し替えられます。config の `tags` に選択した tag がなければ ACP preset の既定 model を使います。tag が存在しても参照先 key が `models` にない場合は起動前にエラーにします。
+
+worker 名・kind ごとの model 表は設けません。profile へ書ける model 関連の値は固定語彙の `modelTag` のみで、preset・spawn env・model ID は引き続き config 側が正本です。
+
+model ID は preset ごとの方法で渡します。
+
+| preset | model の渡し方 |
+|--------|----------------|
+| `cursor` | `agent --model <model-id> acp` |
+| `claude` | ACP `session/new` / `session/load` の Claude settings metadata |
+| `codex` | `CODEX_CONFIG` JSON の `model`。既存の JSON session config は保持 |
+| `pi` / `custom` | model 注入非対応。tag が model ID に解決された場合は ACP process 起動前にエラー |
+
+tag mapping がない場合は従来どおり各 preset の native default に委ねるため、段階的に tag を割り当てられます。`codex` で model mapping を使う場合、`acp.env.CODEX_CONFIG` は JSON object 文字列にしてください。model ID は harness が注入し、他の session config key は保持します。
+
 ### ACP spawn env（`acp.env`）
 
-`acp.env` は codex-acp 等の子プロセス spawn 時に渡す環境変数の正本です。**team profile に ACP 設定はない**（`acp` / `workers[].acp` を YAML に書くと load 時エラー）。
+`acp.env` は codex-acp 等の子プロセス spawn 時に渡す環境変数の正本です。team profile に preset / env の直書きはありません（`acp` / `workers[].acp` を YAML に書くと load 時エラー）。worker ごとのモデル tier は profile `workers[].modelTag` で選びますが、model ID と mapping は `acp.models` / `acp.tags` に置きます。
 
 #### 設定レイヤーの用語（混同防止）
 
 | レイヤー | 正本 | 扱うもの |
 |----------|------|----------|
-| **team profile** | `profile.yaml` / `--profile` | conductor と workers（kind・workspace・Skill 素材など）。**ACP はこのレイヤーに属さない** |
-| **ensemble config** | `.ensemble/config.yaml` | ACP（preset・`env`）、session・GitHub・conductor model 等 |
+| **team profile** | `profile.yaml` / `--profile` | conductor と workers（kind・workspace・`modelTag`・Skill 素材など）。modelTag は worker の tier 選択のみ |
+| **ensemble config** | `.ensemble/config.yaml` | ACP（preset・`env`・model ID catalog・tag mapping）、session・GitHub・conductor model 等 |
 | **Codex profile** | `~/.codex/config.toml` + `codex --profile <name>` | Codex CLI の世界の profile（ensemble team profile とは無関係） |
 
 #### env のマージ順（後勝ち）
@@ -384,7 +437,7 @@ team profile の `acp` / `workers[].acp` は **削除済み**。YAML に残す�
 2. `acp.env` / `workers[].acp.env` → `acp.env`（user / project の適切な層へ）
 3. profile 側の `acp` ブロックを削除
 
-worker 単位の ACP 切り替えは将来の config 側設計とし、現状は横断 `defaultPreset` + `env` を正本とする。
+worker 単位の ACP preset 切り替えは対象外です。tier 配分は profile の `workers[].modelTag`、環境固有の model ID は config の `acp.models` / `acp.tags` で設定します。
 
 ## Conductor MCP 設定（mcp.json）
 

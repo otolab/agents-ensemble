@@ -169,6 +169,8 @@ describe('SessionResumeStore', () => {
             preset: 'claude',
             command: 'claude-agent-acp',
             args: [],
+            modelTag: 'high',
+            model: 'provider/opus',
           },
         },
       },
@@ -181,6 +183,8 @@ describe('SessionResumeStore', () => {
       preset: 'claude',
       command: 'claude-agent-acp',
       args: [],
+      modelTag: 'high',
+      model: 'provider/opus',
     });
   });
 

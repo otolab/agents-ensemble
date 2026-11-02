@@ -116,6 +116,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0042](0042-explicit-config-replaces-user-layer.md) | `--config` による user config 層の差し替え | accepted |
 | [0043](0043-explicit-user-config-and-project-toggle.md) | 明示 user config と project load toggle の併用 | accepted |
 | [0044](0044-user-scoped-runtime-storage.md) | repo 単位のランタイム状態を user 層へ配置 | accepted |
+| [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | accepted |
 
 ## 追加するとき
 
