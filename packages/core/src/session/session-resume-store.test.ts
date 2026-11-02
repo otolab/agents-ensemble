@@ -1,13 +1,15 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import {
   assertSessionResumeStoreMatches,
   assertSessionSidecarMatches,
   findLatestSessionResumeStoreForIssue,
   findLatestSessionSidecarForIssue,
+  findSessionResumeStore,
   legacySessionResumeStoreDir,
   listSessionSidecars,
   loadSessionResumeStore,
@@ -411,6 +413,97 @@ describe('SessionResumeStore', () => {
         conductorAgentId: 'missing-agent',
       }),
     ).rejects.toThrow(SessionResumeStoreNotFoundError);
+  });
+
+  it('prefers the canonical slug store over duplicate hash and project files and reports the selected paths', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const agentId = 'duplicate-agent';
+    const issueUrl = 'https://github.com/org/repo/issues/9';
+    const paths = resolveEnsemblePaths({ repoRoot: tempDir });
+    const hashPath = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: agentId,
+    });
+    const slugPath = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
+    const projectPath = join(paths.legacySessionsDir, `${agentId}.json`);
+    const hashStore = baseResumeStore({
+      conductorAgentId: agentId,
+      repoRoot: tempDir,
+      issueUrl,
+      updatedAt: 900,
+    });
+    const slugStore = baseResumeStore({
+      conductorAgentId: agentId,
+      repoRoot: tempDir,
+      issueUrl,
+      harnessSocketPath: '/tmp/ens-oq-live/s.sock',
+      updatedAt: 100,
+    });
+    const projectStore = baseResumeStore({
+      conductorAgentId: agentId,
+      repoRoot: tempDir,
+      issueUrl,
+      updatedAt: 1_000,
+    });
+    for (const [path, store] of [
+      [hashPath, hashStore],
+      [slugPath, slugStore],
+      [projectPath, projectStore],
+    ] as const) {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify(store)}\n`, 'utf8');
+    }
+    const diagnostics: Array<{
+      selectedPath: string;
+      candidates: Array<{ path: string; hasHarnessSocketPath: boolean }>;
+    }> = [];
+
+    const selected = await findSessionResumeStore(tempDir, agentId, {
+      onDuplicate: (diagnostic) => diagnostics.push(diagnostic),
+    });
+
+    expect(selected).toMatchObject({
+      path: slugPath,
+      location: 'canonical-slug',
+      resumeStore: { harnessSocketPath: '/tmp/ens-oq-live/s.sock' },
+    });
+    expect(diagnostics).toMatchObject([
+      {
+        conductorAgentId: agentId,
+        selectedPath: slugPath,
+        selectedLocation: 'canonical-slug',
+        candidates: [
+          {
+            path: slugPath,
+            location: 'canonical-slug',
+            hasHarnessSocketPath: true,
+          },
+          {
+            path: hashPath,
+            location: 'user-path-hash',
+            hasHarnessSocketPath: false,
+          },
+          {
+            path: projectPath,
+            location: 'project-legacy',
+            hasHarnessSocketPath: false,
+          },
+        ],
+      },
+    ]);
+    await expect(
+      requireSessionResumeStoreForResume({
+        repoRoot: tempDir,
+        conductorAgentId: agentId,
+      }),
+    ).resolves.toMatchObject({
+      harnessSocketPath: '/tmp/ens-oq-live/s.sock',
+    });
+    await expect(
+      readFile(hashPath, 'utf8').then((raw) =>
+        JSON.parse(raw).updatedAt as number,
+      ),
+    ).resolves.toBe(900);
   });
 
   it('finds the latest session resume store for an issue by updatedAt', async () => {

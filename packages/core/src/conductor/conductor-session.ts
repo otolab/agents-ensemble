@@ -114,12 +114,13 @@ import { isOperatorReconnectCommand } from './operator-reconnect.js';
 import { parseOperatorMessageDelivery } from './operator-command.js';
 import {
   assertSessionResumeStoreMatches,
-  requireSessionResumeStoreForResume,
+  requireLocatedSessionResumeStoreForResume,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
   type HarnessPhase,
   type SessionLifecycle,
+  type SessionResumeStoreLocation,
   type SessionResumeStore,
 } from '../session/session-resume-store.js';
 import {
@@ -387,6 +388,8 @@ export async function runConductorSession(
   >();
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
   let githubMonitor: GitHubMonitor | undefined;
+  let activeResumeStorePath: string | undefined;
+  let activeStoreLocation: SessionResumeStoreLocation = 'user-path-hash';
   const pendingGitHubRecoveries: number[] = [];
   const conductorCwd = options.conductorCwd ?? process.cwd();
   let cursorBootstrapRunId: string | undefined;
@@ -400,10 +403,14 @@ export async function runConductorSession(
   let toolCallHistoryNeedsRewrite = false;
 
   if (options.resumeAgentId) {
-    const loadedResumeStore = await requireSessionResumeStoreForResume({
+    const locatedResumeStore =
+      await requireLocatedSessionResumeStoreForResume({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
     });
+    const loadedResumeStore = locatedResumeStore.resumeStore;
+    activeResumeStorePath = locatedResumeStore.path;
+    activeStoreLocation = locatedResumeStore.location;
     assertSessionResumeStoreMatches(loadedResumeStore, {
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
@@ -436,10 +443,7 @@ export async function runConductorSession(
     harnessPhase = 'running';
     harnessModifiedAt = resumeStore.modifiedAt;
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot: options.repoRoot,
-        conductorAgentId: options.resumeAgentId,
-      }),
+      activeResumeStorePath,
       resumeStore,
     );
     const history = await loadToolCallSnapshotHistory({
@@ -457,14 +461,30 @@ export async function runConductorSession(
     const openQuestionsPath = openQuestionsStorePath({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
+      issueUrl: options.issueUrl,
+      location: activeStoreLocation,
     });
     let openQuestionsSnapshot = await loadOpenQuestionsStore(openQuestionsPath);
     if (!openQuestionsSnapshot) {
-      const legacyPath = legacyOpenQuestionsStorePath({
-        repoRoot: options.repoRoot,
-        conductorAgentId: options.resumeAgentId,
-      });
-      openQuestionsSnapshot = await loadOpenQuestionsStore(legacyPath);
+      const fallbackPaths = [
+        ...(activeStoreLocation === 'canonical-slug'
+          ? [
+              openQuestionsStorePath({
+                repoRoot: options.repoRoot,
+                conductorAgentId: options.resumeAgentId,
+                location: 'user-path-hash',
+              }),
+            ]
+          : []),
+        legacyOpenQuestionsStorePath({
+          repoRoot: options.repoRoot,
+          conductorAgentId: options.resumeAgentId,
+        }),
+      ];
+      for (const fallbackPath of fallbackPaths) {
+        openQuestionsSnapshot = await loadOpenQuestionsStore(fallbackPath);
+        if (openQuestionsSnapshot) break;
+      }
       if (openQuestionsSnapshot) {
         try {
           await saveOpenQuestionsStore(openQuestionsPath, openQuestionsSnapshot);
@@ -1037,13 +1057,26 @@ export async function runConductorSession(
           sessionStateStorePath({
             repoRoot: options.repoRoot,
             conductorAgentId: conductorAgent.agentId,
+            issueUrl: options.issueUrl,
+            location: activeStoreLocation,
           }),
           statusLine,
           undefined,
-          legacySessionStateStorePath({
-            repoRoot: options.repoRoot,
-            conductorAgentId: conductorAgent.agentId,
-          }),
+          [
+            ...(activeStoreLocation === 'canonical-slug'
+              ? [
+                  sessionStateStorePath({
+                    repoRoot: options.repoRoot,
+                    conductorAgentId: conductorAgent.agentId,
+                    location: 'user-path-hash',
+                  }),
+                ]
+              : []),
+            legacySessionStateStorePath({
+              repoRoot: options.repoRoot,
+              conductorAgentId: conductorAgent.agentId,
+            }),
+          ],
         ),
       );
       sessionStateWriteQueue = write.catch(() => {});
@@ -1131,6 +1164,10 @@ export async function runConductorSession(
     ? await conductorAgentFactory.resume(options.resumeAgentId, conductorOptions)
     : await conductorAgentFactory.create(conductorOptions);
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
+  activeResumeStorePath ??= sessionResumeStorePath({
+    repoRoot: options.repoRoot,
+    conductorAgentId: conductorAgent.agentId,
+  });
   // Keep auth/transport reconnects on the same backend factory as the session.
   const sendReconnect = {
     conductorAgentFactory,
@@ -1230,6 +1267,8 @@ export async function runConductorSession(
       openQuestionsStorePath({
         repoRoot: options.repoRoot,
         conductorAgentId: conductorHandle.conductor.agentId,
+        issueUrl: options.issueUrl,
+        location: activeStoreLocation,
       }),
       snapshot,
     );
@@ -1239,10 +1278,7 @@ export async function runConductorSession(
     lifecycle?: SessionLifecycle,
   ): Promise<void> => {
     await saveSessionResumeStore(
-      sessionResumeStorePath({
-        repoRoot: options.repoRoot,
-        conductorAgentId: conductorHandle.conductor.agentId,
-      }),
+      activeResumeStorePath!,
       createSessionResumeStore(snapshot, lifecycle),
     );
   };
@@ -1637,18 +1673,32 @@ export async function runConductorSession(
       listConductorMessages: () => conductorMessages,
       observeSession: async () => {
         await sessionStateWriteQueue;
-        const sessionState = await loadSessionStateStore(
-          sessionStateStorePath({
+        const currentStatePath = sessionStateStorePath({
+          repoRoot: options.repoRoot,
+          conductorAgentId: conductorAgent.agentId,
+          issueUrl: options.issueUrl,
+          location: activeStoreLocation,
+        });
+        const fallbackStatePaths = [
+          ...(activeStoreLocation === 'canonical-slug'
+            ? [
+                sessionStateStorePath({
+                  repoRoot: options.repoRoot,
+                  conductorAgentId: conductorAgent.agentId,
+                  location: 'user-path-hash',
+                }),
+              ]
+            : []),
+          legacySessionStateStorePath({
             repoRoot: options.repoRoot,
             conductorAgentId: conductorAgent.agentId,
           }),
-        ) ??
-          await loadSessionStateStore(
-            legacySessionStateStorePath({
-              repoRoot: options.repoRoot,
-              conductorAgentId: conductorAgent.agentId,
-            }),
-          );
+        ];
+        let sessionState = await loadSessionStateStore(currentStatePath);
+        for (const fallbackPath of fallbackStatePaths) {
+          if (sessionState) break;
+          sessionState = await loadSessionStateStore(fallbackPath);
+        }
         return {
           ...openQuestions.snapshot(),
           ...(sessionState ? { sessionState } : {}),

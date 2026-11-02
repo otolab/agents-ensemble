@@ -28,6 +28,39 @@ describe('resolveEnsemblePaths', () => {
     expect(paths.sessionResumeStorePath('agent-a')).toBe(
       join(paths.sessionsDir, 'agent-a.json'),
     );
+    expect(
+      paths.canonicalSessionResumeStorePath(
+        'https://github.com/Org/Repo/issues/1',
+        'agent-a',
+      ),
+    ).toBe(
+      join(
+        tempDir,
+        'home',
+        '.ensemble',
+        'sessions',
+        'github.com',
+        'org',
+        'repo',
+        'agent-a.json',
+      ),
+    );
+    expect(
+      paths.canonicalOperatorAgentSessionPath(
+        'https://github.com/org/repo/issues/1',
+      ),
+    ).toBe(
+      join(
+        tempDir,
+        'home',
+        '.ensemble',
+        'operator-agent',
+        'github.com',
+        'org',
+        'repo',
+        'session.json',
+      ),
+    );
     expect(paths.legacySessionResumeStorePath('agent-a')).toBe(
       join(repoRoot, '.ensemble', 'sessions', 'agent-a.json'),
     );

@@ -5,12 +5,14 @@ import {
   loadSessionStateStore,
   legacySessionStateStorePath,
   parseIssueUrl,
+  resolveEnsemblePaths,
   sessionStateStorePath,
   type ConductorJsonValue,
   type ConductorTool,
   type SessionLifecycle,
   type SessionStateStore,
   type SessionResumeStore,
+  type SessionResumeStoreDuplicateDiagnostic,
   type HarnessPhase,
 } from '@agents-ensemble/core/operator-runtime';
 import type { OperatorSessionLiveStatus } from './operator-watch-pool.js';
@@ -72,6 +74,7 @@ export function createListOperatorSessionsTool(
   getLiveStatus?: (
     conductorAgentId: string,
   ) => OperatorSessionLiveStatus | undefined,
+  onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void,
 ): ConductorTool {
   const root = resolve(repoRoot);
   return {
@@ -110,7 +113,9 @@ export function createListOperatorSessionsTool(
       const hasStatusLine = resolveHasStatusLine(args.hasStatusLine);
       const lifecycle = resolveLifecycle(args.lifecycle);
       const dataAsOf = new Date().toISOString();
-      const resumeStores = await listSessionResumeStores(root);
+      const resumeStores = await listSessionResumeStores(root, {
+        onDuplicate,
+      });
       const snapshots = await Promise.all(
         resumeStores.map(async (resumeStore) => ({
           resumeStore,
@@ -215,14 +220,33 @@ async function loadStatusLine(
   resumeStore: SessionResumeStore,
 ): Promise<SessionStateStore | undefined> {
   try {
-    const input = {
-      repoRoot,
-      conductorAgentId: resumeStore.conductorAgentId,
-    };
-    return (
-      (await loadSessionStateStore(sessionStateStorePath(input))) ??
-      (await loadSessionStateStore(legacySessionStateStorePath(input)))
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const candidates: string[] = [];
+    try {
+      candidates.push(
+        paths.canonicalSessionStatePath(
+          resumeStore.issueUrl,
+          resumeStore.conductorAgentId,
+        ),
+      );
+    } catch {
+      // Invalid or legacy issue URLs still use hash/project fallback paths.
+    }
+    candidates.push(
+      sessionStateStorePath({
+        repoRoot,
+        conductorAgentId: resumeStore.conductorAgentId,
+      }),
+      legacySessionStateStorePath({
+        repoRoot,
+        conductorAgentId: resumeStore.conductorAgentId,
+      }),
     );
+    for (const path of candidates) {
+      const status = await loadSessionStateStore(path);
+      if (status) return status;
+    }
+    return undefined;
   } catch {
     // Status reporting is an optional operator snapshot. A missing, partial, or
     // unsupported file must not hide an otherwise readable session.

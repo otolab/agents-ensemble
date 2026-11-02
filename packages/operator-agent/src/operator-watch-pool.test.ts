@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   OPEN_QUESTION_CONTROL_METHODS,
   OpenQuestionControlRemoteError,
+  findSessionResumeStore,
+  resolveEnsemblePaths,
   sendOpenQuestionControlRequest,
   startOpenQuestionControlServer,
   type SessionObservationSnapshot,
@@ -83,6 +85,61 @@ describe('operator watch pool', () => {
         messageCursors: {},
       });
       expect(JSON.parse(await readFile(legacyPath, 'utf8'))).toEqual(legacyState);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('continues an existing slug-keyed watch state without reading or overwriting the stale hash copy', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-slug-state-'));
+    await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
+    const agentId = '607';
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const issueUrl = `https://github.com/example/watch-state/issues/${agentId}`;
+    await writeResumeStore(agentId, 1, undefined, issueUrl);
+    const canonicalPath = paths.canonicalOperatorWatchStatePath(issueUrl);
+    const hashPath = paths.operatorWatchStatePath;
+    const state = (pollIntervalMs: number) => ({
+      version: 1,
+      watches: {
+        [agentId]: {
+          conductorAgentId: agentId,
+          pollIntervalMs,
+          debounceMs: 0,
+        },
+      },
+      cursors: {},
+      pendingReports: [],
+    });
+    await mkdir(dirname(canonicalPath), { recursive: true });
+    await mkdir(dirname(hashPath), { recursive: true });
+    await writeFile(canonicalPath, JSON.stringify(state(30_000)), 'utf8');
+    await writeFile(hashPath, JSON.stringify(state(50_000)), 'utf8');
+
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      expect(pool.list()).toEqual([
+        {
+          conductorAgentId: agentId,
+          pollIntervalMs: 30_000,
+          debounceMs: 0,
+        },
+      ]);
+      await pool.register(agentId, {
+        pollIntervalMs: 60_000,
+        debounceMs: 0,
+      });
+      expect(
+        JSON.parse(await readFile(canonicalPath, 'utf8')).watches[agentId]
+          .pollIntervalMs,
+      ).toBe(60_000);
+      expect(
+        JSON.parse(await readFile(hashPath, 'utf8')).watches[agentId]
+          .pollIntervalMs,
+      ).toBe(50_000);
     } finally {
       pool.close();
     }
@@ -228,6 +285,211 @@ describe('operator watch pool', () => {
       } finally {
         resumedPool.close();
       }
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('watches through the slug socket when a duplicate path-hash store has no socket', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-duplicate-'));
+    const agentId = 'duplicate-live-session';
+    const issueUrl = 'https://github.com/example/live-socket/issues/607';
+    const paths = resolveEnsemblePaths({ repoRoot });
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 1,
+      openQuestions: [
+        {
+          id: 'inq-live',
+          question: 'Observed from the active harness?',
+          responseType: 'text',
+          source: 'conductor',
+          status: 'open',
+          askedAt: 10,
+        },
+      ],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => liveSnapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+
+    const hashPath = join(paths.sessionsDir, `${agentId}.json`);
+    const slugPath = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
+    const hashStore = {
+      version: 1,
+      conductorAgentId: agentId,
+      issueUrl,
+      repoRoot,
+      profile: { workers: [], agents: {} },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      updatedAt: 900,
+    };
+    const slugStore = {
+      ...hashStore,
+      harnessSocketPath: liveServer.socketPath,
+      updatedAt: 100,
+    };
+    await mkdir(dirname(hashPath), { recursive: true });
+    await mkdir(dirname(slugPath), { recursive: true });
+    await writeFile(hashPath, JSON.stringify(hashStore), 'utf8');
+    await writeFile(slugPath, JSON.stringify(slugStore), 'utf8');
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const diagnostics: string[] = [];
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue,
+      onError: (message) => diagnostics.push(message),
+    });
+    try {
+      await pool.register(agentId, { pollIntervalMs: 60_000, debounceMs: 0 });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toContain(`selected canonical-slug=${slugPath}`);
+      expect(diagnostics[0]).toContain(`${hashPath} (harnessSocketPath=absent)`);
+      expect(diagnostics[0]).toContain(`${slugPath} (harnessSocketPath=present)`);
+      await pool.pollOnce(agentId);
+      expect(pool.getLiveStatus(agentId)).toMatchObject({
+        connectivity: 'reachable',
+      });
+
+      liveSnapshot = {
+        sequence: 2,
+        openQuestions: [
+          ...liveSnapshot.openQuestions,
+          {
+            id: 'inq-live-new',
+            question: 'A later question from the live harness?',
+            responseType: 'yes_no',
+            source: 'conductor',
+            status: 'open',
+            askedAt: 20,
+          },
+        ],
+      };
+      await expect(pool.pollOnce(agentId)).resolves.toBe(1);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      );
+      expect(batch?.events[0]).toMatchObject({
+        type: 'report',
+        reportType: 'open_question',
+      });
+      expect(batch?.events[0]?.type === 'report' && batch.events[0].text).toContain(
+        'A later question from the live harness?',
+      );
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('uses canonical slug YAML for snapshot watch fallback when duplicate hash YAML is stale', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-slug-yaml-'));
+    const agentId = 'duplicate-offline-session';
+    const issueUrl = 'https://github.com/example/offline-yaml/issues/608';
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const resumeStore = {
+      version: 1,
+      conductorAgentId: agentId,
+      issueUrl,
+      repoRoot,
+      profile: { workers: [], agents: {} },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      updatedAt: 1,
+    };
+    const hashPath = join(paths.sessionsDir, `${agentId}.json`);
+    const slugPath = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
+    await mkdir(dirname(hashPath), { recursive: true });
+    await mkdir(dirname(slugPath), { recursive: true });
+    await writeFile(hashPath, JSON.stringify(resumeStore), 'utf8');
+    await writeFile(slugPath, JSON.stringify(resumeStore), 'utf8');
+
+    const hashYamlPath = join(
+      paths.sessionsDir,
+      agentId,
+      'open-questions.yaml',
+    );
+    const slugYamlPath = paths.canonicalOpenQuestionsPath(issueUrl, agentId);
+    await mkdir(dirname(hashYamlPath), { recursive: true });
+    await mkdir(dirname(slugYamlPath), { recursive: true });
+    await writeFile(
+      hashYamlPath,
+      [
+        'version: 1',
+        'sequence: 1',
+        'openQuestions:',
+        '  - id: inq-1',
+        '    question: stale hash question',
+        '    responseType: text',
+        '    source: conductor',
+        '    status: open',
+        '    askedAt: 1',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const writeSlugQuestions = async (sequence: number, questions: string[]) => {
+      await writeFile(
+        slugYamlPath,
+        [
+          'version: 1',
+          `sequence: ${sequence}`,
+          'openQuestions:',
+          ...questions.flatMap((question, index) => [
+            `  - id: inq-${index + 1}`,
+            `    question: ${JSON.stringify(question)}`,
+            '    responseType: text',
+            '    source: conductor',
+            '    status: open',
+            `    askedAt: ${index + 1}`,
+          ]),
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+    };
+    await writeSlugQuestions(1, ['initial canonical question']);
+
+    await expect(
+      findSessionResumeStore(repoRoot, agentId),
+    ).resolves.toMatchObject({
+      resumeStore: { issueUrl, conductorAgentId: agentId },
+      location: 'canonical-slug',
+    });
+    const dispatchQueue = createOperatorDispatchQueue();
+    const diagnostics: string[] = [];
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue,
+      onError: (message) => diagnostics.push(message),
+    });
+    try {
+      await pool.register(agentId, { pollIntervalMs: 60_000, debounceMs: 0 });
+      expect(await pool.pollOnce(agentId)).toBe(0);
+      expect(diagnostics[0]).toContain(
+        `selected canonical-slug=${slugPath}`,
+      );
+      await writeSlugQuestions(2, [
+        'initial canonical question',
+        'new canonical slug question',
+      ]);
+      expect(await pool.pollOnce(agentId)).toBe(1);
+      const batch = dispatchQueue.takeBatch(
+        { continuationConsumed: false },
+        Date.now(),
+      );
+      expect(diagnostics.join('\n')).toContain(`${agentId}.json`);
+      expect(batch?.events[0]?.type === 'report' && batch.events[0].text).toContain(
+        'new canonical slug question',
+      );
     } finally {
       pool.close();
     }
@@ -1562,13 +1824,14 @@ describe('operator watch pool', () => {
     agentId: string,
     updatedAt: number,
     harnessSocketPath?: string,
+    issueUrl = `https://github.com/example/repo/issues/${agentId}`,
   ) {
     await writeFile(
       join(repoRoot, '.ensemble', 'sessions', `${agentId}.json`),
       JSON.stringify({
         version: 1,
         conductorAgentId: agentId,
-        issueUrl: `https://github.com/example/repo/issues/${agentId}`,
+        issueUrl,
         repoRoot,
         ...(harnessSocketPath ? { harnessSocketPath } : {}),
         profile: { workers: [], agents: {} },

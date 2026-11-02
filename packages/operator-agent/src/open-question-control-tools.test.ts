@@ -1,7 +1,8 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
 const { mockListConductorProviderHistory } = vi.hoisted(() => ({
   mockListConductorProviderHistory: vi.fn(),
 }));
@@ -254,6 +255,91 @@ describe('operator-agent live Open Question tools', () => {
       }),
     ).rejects.toThrow('No saved session found for not-in-this-repository.');
     expect(mockListConductorProviderHistory).toHaveBeenCalledOnce();
+  });
+
+  it('uses the live canonical slug store when a duplicate hash store has no socket', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-duplicate-'));
+    const sendOperatorMessage = vi.fn().mockReturnValue(true);
+    const registry = new OpenQuestionRegistry();
+    const question = registry.enqueue({
+      question: 'Use the live harness?',
+      responseType: 'yes_no',
+    });
+    server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => registry.listOpen(),
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+      sendOperatorMessage,
+    });
+    const agentId = 'agent-duplicate';
+    const issueUrl = 'https://github.com/org/repo/issues/4';
+    const hashPath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await saveSessionResumeStore(hashPath, {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: agentId,
+      issueUrl,
+      repoRoot,
+      profile: { workers: [] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      updatedAt: Date.now(),
+    });
+    const slugPath = resolveEnsemblePaths({ repoRoot })
+      .canonicalSessionResumeStorePath(issueUrl, agentId);
+    await mkdir(dirname(slugPath), { recursive: true });
+    const staleHash = JSON.parse(await readFile(hashPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      slugPath,
+      `${JSON.stringify({
+        ...staleHash,
+        harnessSocketPath: server.socketPath,
+        openQuestions: [question],
+        sequence: 1,
+      })}\n`,
+      'utf8',
+    );
+
+    const diagnostics: unknown[] = [];
+    const listed = await createListLiveOpenQuestionsTool(
+      repoRoot,
+      (diagnostic) => diagnostics.push(diagnostic),
+    ).execute({
+      conductorAgentId: agentId,
+    });
+    expect(diagnostics).toMatchObject([
+      {
+        selectedPath: slugPath,
+        selectedLocation: 'canonical-slug',
+        candidates: [
+          { path: slugPath, hasHarnessSocketPath: true },
+          { path: hashPath, hasHarnessSocketPath: false },
+        ],
+      },
+    ]);
+    expect(listed.structuredContent).toMatchObject({
+      questions: [expect.objectContaining({ id: question.id })],
+    });
+
+    const sent = await createSendOperatorMessageTool(repoRoot).execute({
+      conductorAgentId: agentId,
+      text: 'Please continue.',
+    });
+    expect(sent.structuredContent).toEqual({
+      queued: true,
+      delivery: 'next',
+    });
+    expect(sendOperatorMessage).toHaveBeenCalledWith({
+      text: 'Please continue.',
+      delivery: 'next',
+    });
   });
 
   it('sends one operator message through the live session UDS', async () => {

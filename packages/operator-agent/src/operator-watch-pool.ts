@@ -3,6 +3,7 @@ import { access, chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promi
 import { dirname, join } from 'node:path';
 import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
+  findSessionResumeStore,
   legacyOpenQuestionsStorePath,
   legacySessionStateStorePath,
   listSessionResumeStores,
@@ -19,6 +20,7 @@ import {
   type ConductorJsonValue,
   type ConductorTool,
   type SessionObservationSnapshot,
+  type SessionResumeStoreDuplicateDiagnostic,
   type SessionResumeStore,
 } from '@agents-ensemble/core/operator-runtime';
 import type {
@@ -115,19 +117,48 @@ export async function createOperatorWatchPool(
   options: CreateOperatorWatchPoolOptions,
 ): Promise<OperatorWatchPool> {
   const root = options.repoRoot;
-  const path = operatorWatchStatePath(root);
   const paths = resolveEnsemblePaths({ repoRoot: root });
-  const legacyPath = paths.legacyOperatorWatchStatePath;
-  let state = await loadWatchState(path);
-  if (!(await pathExists(path)) && (await pathExists(legacyPath))) {
-    state = await loadWatchState(legacyPath);
-    await saveWatchState(path, state);
+  const resumeStores = await listSessionResumeStores(root);
+  const canonicalIssueUrl = resumeStores[0]?.issueUrl;
+  let canonicalPath: string | undefined;
+  if (canonicalIssueUrl) {
+    try {
+      canonicalPath =
+        paths.canonicalOperatorWatchStatePath(canonicalIssueUrl);
+    } catch {
+      // Legacy/invalid issue URLs keep using hash and project paths.
+    }
   }
+  const hashPath = paths.operatorWatchStatePath;
+  const legacyPath = paths.legacyOperatorWatchStatePath;
+  const path =
+    canonicalPath && (await pathExists(canonicalPath))
+      ? canonicalPath
+      : hashPath;
+  let sourcePath = path;
+  if (!(await pathExists(sourcePath))) {
+    if (await pathExists(hashPath)) {
+      sourcePath = hashPath;
+    } else if (await pathExists(legacyPath)) {
+      sourcePath = legacyPath;
+    }
+  }
+  let state = await loadWatchState(sourcePath);
+  if (sourcePath !== path) await saveWatchState(path, state);
   const timers = new Map<string, NodeJS.Timeout>();
   const polling = new Set<string>();
   const messageTimers = new Map<string, NodeJS.Timeout>();
   const messagePolling = new Set<string>();
   const liveStatuses = new Map<string, OperatorSessionLiveStatus>();
+  const reportedResumeStoreDuplicates = new Set<string>();
+  const onResumeStoreDuplicate = (
+    diagnostic: SessionResumeStoreDuplicateDiagnostic,
+  ) => {
+    const signature = JSON.stringify(diagnostic);
+    if (reportedResumeStoreDuplicates.has(signature)) return;
+    reportedResumeStoreDuplicates.add(signature);
+    options.onError?.(formatResumeStoreDuplicateDiagnostic(diagnostic));
+  };
   let closed = false;
   let persistQueue = Promise.resolve();
 
@@ -163,10 +194,10 @@ export async function createOperatorWatchPool(
   const pool: OperatorWatchPool = {
     async register(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const resumeStore = (await listSessionResumeStores(root)).find(
-        (candidate) => candidate.conductorAgentId === id,
-      );
-      if (!resumeStore) throw new Error(`No saved session found for ${id}.`);
+      const located = await findSessionResumeStore(root, id, {
+        onDuplicate: onResumeStoreDuplicate,
+      });
+      if (!located) throw new Error(`No saved session found for ${id}.`);
       const watch = {
         conductorAgentId: id,
         pollIntervalMs: parseBoundedInteger(
@@ -220,10 +251,10 @@ export async function createOperatorWatchPool(
     },
     async registerConductorMessageListen(conductorAgentId, input = {}) {
       const id = requireNonEmptyString(conductorAgentId, 'conductorAgentId');
-      const resumeStore = (await listSessionResumeStores(root)).find(
-        (candidate) => candidate.conductorAgentId === id,
-      );
-      if (!resumeStore) throw new Error(`No saved session found for ${id}.`);
+      const located = await findSessionResumeStore(root, id, {
+        onDuplicate: onResumeStoreDuplicate,
+      });
+      if (!located) throw new Error(`No saved session found for ${id}.`);
       const listener = {
         conductorAgentId: id,
         messageDebounceMs: parseBoundedInteger(
@@ -309,10 +340,11 @@ export async function createOperatorWatchPool(
       if (!watch || closed || polling.has(id)) return 0;
       polling.add(id);
       try {
-        const resumeStore = (await listSessionResumeStores(root)).find(
-          (candidate) => candidate.conductorAgentId === id,
-        );
-        if (!resumeStore) return 0;
+        const located = await findSessionResumeStore(root, id, {
+          onDuplicate: onResumeStoreDuplicate,
+        });
+        if (!located) return 0;
+        const resumeStore = located.resumeStore;
         const {
           snapshot: observation,
           source,
@@ -376,9 +408,10 @@ export async function createOperatorWatchPool(
       if (!listener || closed || messagePolling.has(id)) return 0;
       messagePolling.add(id);
       try {
-        const resumeStore = (await listSessionResumeStores(root)).find(
-          (candidate) => candidate.conductorAgentId === id,
-        );
+        const located = await findSessionResumeStore(root, id, {
+          onDuplicate: onResumeStoreDuplicate,
+        });
+        const resumeStore = located?.resumeStore;
         if (!resumeStore?.harnessSocketPath) return 0;
         const cursor = state.messageCursors[id];
         if (cursor === undefined) {
@@ -808,11 +841,11 @@ async function readObservation(
           : 'unknown';
       const questions = await loadPersistedOpenQuestions(
         repoRoot,
-        resumeStore.conductorAgentId,
+        resumeStore,
       );
       const sessionState = await loadPersistedSessionState(
         repoRoot,
-        resumeStore.conductorAgentId,
+        resumeStore,
       );
       return {
         snapshot: {
@@ -827,11 +860,11 @@ async function readObservation(
   }
   const questions = await loadPersistedOpenQuestions(
     repoRoot,
-    resumeStore.conductorAgentId,
+    resumeStore,
   );
   const sessionState = await loadPersistedSessionState(
     repoRoot,
-    resumeStore.conductorAgentId,
+    resumeStore,
   );
   return {
     snapshot: {
@@ -846,24 +879,66 @@ async function readObservation(
 
 async function loadPersistedOpenQuestions(
   repoRoot: string,
-  conductorAgentId: string,
+  resumeStore: SessionResumeStore,
 ) {
-  const input = { repoRoot, conductorAgentId };
-  return (
-    (await loadOpenQuestionsStore(openQuestionsStorePath(input))) ??
-    (await loadOpenQuestionsStore(legacyOpenQuestionsStorePath(input)))
-  );
+  const paths = resolveEnsemblePaths({ repoRoot });
+  const candidates = [
+    safeCanonicalPath(() =>
+      paths.canonicalOpenQuestionsPath(
+        resumeStore.issueUrl,
+        resumeStore.conductorAgentId,
+      ),
+    ),
+    openQuestionsStorePath({
+      repoRoot,
+      conductorAgentId: resumeStore.conductorAgentId,
+    }),
+    legacyOpenQuestionsStorePath({
+      repoRoot,
+      conductorAgentId: resumeStore.conductorAgentId,
+    }),
+  ].filter((path): path is string => path !== undefined);
+  for (const path of candidates) {
+    const snapshot = await loadOpenQuestionsStore(path);
+    if (snapshot) return snapshot;
+  }
+  return undefined;
 }
 
 async function loadPersistedSessionState(
   repoRoot: string,
-  conductorAgentId: string,
+  resumeStore: SessionResumeStore,
 ) {
-  const input = { repoRoot, conductorAgentId };
-  return (
-    (await loadSessionStateStore(sessionStateStorePath(input))) ??
-    (await loadSessionStateStore(legacySessionStateStorePath(input)))
-  );
+  const paths = resolveEnsemblePaths({ repoRoot });
+  const candidates = [
+    safeCanonicalPath(() =>
+      paths.canonicalSessionStatePath(
+        resumeStore.issueUrl,
+        resumeStore.conductorAgentId,
+      ),
+    ),
+    sessionStateStorePath({
+      repoRoot,
+      conductorAgentId: resumeStore.conductorAgentId,
+    }),
+    legacySessionStateStorePath({
+      repoRoot,
+      conductorAgentId: resumeStore.conductorAgentId,
+    }),
+  ].filter((path): path is string => path !== undefined);
+  for (const path of candidates) {
+    const state = await loadSessionStateStore(path);
+    if (state) return state;
+  }
+  return undefined;
+}
+
+function safeCanonicalPath(resolvePath: () => string): string | undefined {
+  try {
+    return resolvePath();
+  } catch {
+    return undefined;
+  }
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -1392,6 +1467,26 @@ function isEnoent(error: unknown): boolean {
     error !== null &&
     'code' in error &&
     (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+function formatResumeStoreDuplicateDiagnostic(
+  diagnostic: SessionResumeStoreDuplicateDiagnostic,
+): string {
+  const candidates = diagnostic.candidates
+    .map(
+      (candidate) =>
+        `${candidate.location}=${candidate.path} (harnessSocketPath=${candidate.hasHarnessSocketPath ? 'present' : 'absent'})`,
+    )
+    .join('; ');
+  const selected = diagnostic.candidates.find(
+    (candidate) => candidate.path === diagnostic.selectedPath,
+  );
+  return (
+    `duplicate SessionResumeStore for ${diagnostic.conductorAgentId}; ` +
+    `selected ${diagnostic.selectedLocation}=${diagnostic.selectedPath} ` +
+    `(harnessSocketPath=${selected?.hasHarnessSocketPath ? 'present' : 'absent'}); ` +
+    `candidates: ${candidates}`
   );
 }
 

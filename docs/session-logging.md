@@ -213,9 +213,11 @@ SessionResumeStore は、harness がセッション再開に必要な情報を�
   pi-sessions/
 ```
 
-Pi の conductor transcript は `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き `<repoRoot>/.ensemble/pi/` から読みます。operator-agent は保存済み SessionResumeStore と YAML を同じ repoKey の user 側 directory から読みます。
+Pi の conductor transcript は `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き `<repoRoot>/.ensemble/pi/` から読みます。operator-agent は保存済み SessionResumeStore と YAML を通常は同じ repoKey の user 側 directory から読みます。同一 session の slug 側データもあれば、そちらを優先します。
 
 旧 `<repoRoot>/.ensemble/sessions/`、`.ensemble/operator-agent/`、`<conductorCwd>/.ensemble/pi/sessions/` のデータは読み取り fallback します。SessionResumeStore と open-question YAML、tool-call 履歴、operator-agent state / watch state、Pi transcript は利用に応じて user 側へ移します。session-state YAML は fallback で読み、次の status 報告で履歴を引き継いで user 側へ書きます。旧ファイルは自動削除しません。Issue 用 Git worktree は元 repo に登録され、現行の解決・再利用処理が project-local path を前提とするため、例外として `<repoRoot>/.ensemble/worktrees/issue-N` に残します。配置判断の詳細は [ADR 0044](adr/0044-user-scoped-runtime-storage.md) を参照してください。
+
+ADR 0044 の path-hash と、移行済みデータの `~/.ensemble/sessions/github.com/<owner>/<repo>/` slug directory に同じ SessionResumeStore が残っている場合は slug 側を優先します。resume 後の SessionResumeStore と YAML flush も選択した slug 側へ続けます。operator-agent の slug-keyed session / watch state も、ファイルが存在する場合はそちらを継続して使います。古い重複ファイルは削除せず、operator TTY の `[harness]` 診断に選択 path と socket の有無を出します。
 
 `session-state.yaml` は `report_session_state` が登録した最新の statusLine と過去の報告をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。`current` が最新値、`history` は過去の値を古い順に並べた一覧です。履歴は最大 50 件、ファイル全体は最大 16 KiB で、上限を超える場合は古い履歴から削除します。
 

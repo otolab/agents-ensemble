@@ -60,9 +60,17 @@ watch pool は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch
 - **JSON または state schema が不正な場合:** operator-agent の初期化は失敗し、empty state へ黙って置き換えません。保存ファイルを退避してから、有効な backup を戻すか、version と必須 field を修復して再起動してください。state を意図的に破棄する場合も、まず必要ならコピーを保全してください。ファイルを取り除いて再起動すると empty state から始まり、上記の再登録と silent baseline が必要です。
 - **report hold:** hold は watch state には保存されない会話中の状態です。再起動後は解除状態で始まります。
 
+## 複数の保存先に同じ SessionResumeStore がある場合
+
+通常の保存先は ADR 0044 どおり `~/.ensemble/sessions/<repoKey>/` です。旧データの移行で同じ `conductorAgentId` の JSON が複数の場所にある場合、operator は `~/.ensemble/sessions/github.com/<owner>/<repo>/` の slug 側、path-hash 側、project `.ensemble/sessions/` の順で選びます。slug 側を選んで session を resume した場合、harness はその JSON と対応する Open Questions / session-state YAML を同じ slug 側へ更新します。
+
+operator-agent の session / watch state も、slug 側のファイルがすでにあればそれを読み書きします。slug 側がなければ従来どおり path-hash 側を使い、project legacy は最後の fallback として読み込みます。これにより stale な hash copy が既存 slug state を隠しません。
+
+重複を検出すると operator TTY の `[harness]` に、選択した path と各候補の `harnessSocketPath` の有無を表示します。重複 JSON や state file は自動削除・上書きしません。`scripts/migrate-project-ensemble-runtime-to-user.mjs` は project legacy から path-hash への移行を行うため、残った hash copy の扱いはこの選択規則に従います。
+
 ## Endpoint discovery と lifecycle
 
-operator-agent は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json` にある SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、SessionResumeStore に記録された値を使ってください。
+operator-agent は `listSessionResumeStores` が選んだ SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。通常は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json` ですが、同じ session の canonical slug 側と重複していれば slug 側を使います。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、選択した SessionResumeStore に記録された値を使ってください。
 
 path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら UDS request は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` と発言 listen は直接 live control であり、保存 YAML へ fallback しません。operator-agent tool の `list_conductor_messages` はこの UDS 経路を使わず、SessionResumeStore の session ID / backend / cwd から provider history を読みます。watch pool の `register_session_watch` のみが `session.observe` を試し、UDS が到達不能または method 未対応なら保存 snapshot へ切り替えます。発言 listen は UDS が利用できない間も保存値へ切り替えず、次の poll で再接続を試します。
 

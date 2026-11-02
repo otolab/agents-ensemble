@@ -6,6 +6,7 @@ import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import * as issueContextModule from '../github/issue-context.js';
@@ -285,6 +286,58 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow(SessionResumeStoreNotFoundError);
 
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('resumes from the canonical slug store and flushes it without rewriting the stale hash copy', async () => {
+    const agentId = 'resume-canonical-slug';
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const hashPath = paths.sessionResumeStorePath(agentId);
+    const slugPath = paths.canonicalSessionResumeStorePath(
+      TEST_ISSUE.url,
+      agentId,
+    );
+    const hashStore = {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      lifecycle: 'closed' as const,
+      updatedAt: 100,
+    };
+    await saveSessionResumeStore(hashPath, hashStore);
+    const staleHashStore = await loadSessionResumeStore(hashPath);
+    await saveSessionResumeStore(slugPath, {
+      ...hashStore,
+      lifecycle: 'exited',
+      updatedAt: 1,
+    });
+
+    mockResume.mockImplementationOnce(async () => {
+      await expect(loadSessionResumeStore(slugPath)).resolves.toMatchObject({
+        lifecycle: 'unknown',
+        harnessPhase: 'running',
+        updatedAt: expect.any(Number),
+      });
+      await expect(loadSessionResumeStore(hashPath)).resolves.toEqual(
+        staleHashStore,
+      );
+      throw new Error('stop after canonical store flush');
+    });
+
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+      }),
+    ).rejects.toThrow('stop after canonical store flush');
   });
 
   it('fails fast when the startup backend differs from the saved resume store backend', async () => {
