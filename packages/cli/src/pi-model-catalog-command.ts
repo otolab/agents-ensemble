@@ -35,7 +35,46 @@ export interface RunPiModelsSyncOptions extends ConductorCommandOptions {
   fetchImpl?: typeof fetch;
 }
 
+export async function runPiModelsRemote(
+  options: RunPiModelsSyncOptions,
+): Promise<{ provider: string; ids: string[] }> {
+  const result = await comparePiModels(options);
+  return {
+    provider: result.provider,
+    ids: [...result.apiOnly.map((model) => model.id), ...result.shared].sort(),
+  };
+}
+
+export async function runPiModelsDiff(
+  options: RunPiModelsSyncOptions,
+): Promise<{ provider: string; apiOnly: string[]; jsonOnly: string[]; shared: string[] }> {
+  const result = await comparePiModels(options);
+  return {
+    provider: result.provider,
+    apiOnly: result.apiOnly.map((model) => model.id),
+    jsonOnly: result.jsonOnly,
+    shared: result.shared,
+  };
+}
+
+export async function runPiModelsAdd(
+  options: RunPiModelsSyncOptions,
+  id: string,
+): Promise<PiModelsSyncResult> {
+  return runPiModelsCatalog({ ...options, add: [id] });
+}
+
 export async function runPiModelsSync(
+  options: RunPiModelsSyncOptions,
+): Promise<PiModelsSyncResult> {
+  return runPiModelsCatalog(options);
+}
+
+async function comparePiModels(options: RunPiModelsSyncOptions): Promise<PiModelsSyncResult> {
+  return runPiModelsCatalog({ ...options, add: [] });
+}
+
+async function runPiModelsCatalog(
   options: RunPiModelsSyncOptions,
 ): Promise<PiModelsSyncResult> {
   const provider = options.provider?.trim();
@@ -46,13 +85,11 @@ export async function runPiModelsSync(
   if (requestedIds.some((id) => !id)) {
     throw new Error('Model IDs passed to --add must not be empty.');
   }
-  if (requestedIds.length > 0 && !options.target) {
-    throw new Error('Pass --target project or --target user when adding models.');
-  }
+  const target = options.target ?? 'user';
 
   const context = await resolveConductorCommandContext(options);
   if (context.auth.backend !== 'pi' || !context.auth.pi) {
-    throw new Error('Model catalog sync requires the Pi conductor backend.');
+    throw new Error('Model catalog commands require the Pi conductor backend.');
   }
 
   const piOptions = context.auth.pi;
@@ -116,7 +153,7 @@ export async function runPiModelsSync(
   }
 
   const targetRoot =
-    options.target === 'project'
+    target === 'project'
       ? resources.roots.projectDir
       : resources.roots.agentDir;
   const targetPath = join(targetRoot, 'models.json');
@@ -135,7 +172,7 @@ export async function runPiModelsSync(
 
   const projectLayerConfig = resources.modelsLayers.at(-1)?.providers[provider];
   if (
-    options.target === 'user' &&
+    target === 'user' &&
     resources.roots.agentDir !== resources.roots.projectDir &&
     projectLayerConfig?.models !== undefined &&
     requestedIds.some((id) => !jsonIds.has(id))
@@ -147,7 +184,7 @@ export async function runPiModelsSync(
 
   const effectiveIds = new Set(jsonIds);
   const modelsForWrite =
-    options.target === 'project'
+    target === 'project'
       ? [...jsonModels]
       : [...targetModels];
   for (const id of requestedIds) {

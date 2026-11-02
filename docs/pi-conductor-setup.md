@@ -99,27 +99,32 @@ ensemble models list --provider <provider-id>
 
 ### OpenAI 互換 provider の catalog を比較・追加する
 
-LiteLLM など、`models.json` に OpenAI 互換 endpoint として設定した provider は、明示的に `models sync` を実行して `/v1/models` catalog を確認できます。provider には `api: "openai-completions"` など Pi の OpenAI 互換 `api` と `baseUrl` が必要です。`baseUrl` は Pi の API base URL（通常は末尾が `/v1`）を指定してください。末尾が `/v1` なら `/models`、それ以外なら `/v1/models` を追加して取得します。
+LiteLLM など、`models.json` に OpenAI 互換 endpoint として設定した Pi provider は、明示的に `models remote`、`diff`、`add` を実行して `/v1/models` catalog を利用できます。provider には `api: "openai-completions"` など Pi の OpenAI 互換 `api` と `baseUrl` が必要です。`baseUrl` は Pi の API base URL（通常は末尾が `/v1`）を指定してください。末尾が `/v1` なら `/models`、それ以外なら `/v1/models` を追加して取得します。
 
 ```bash
+# リモート catalog の ID 一覧
+ensemble models remote --provider litellm
+
 # API only / JSON only / 両方にある ID を表示（models.json は変更しない）
-ensemble models sync --provider litellm
+ensemble models diff --provider litellm
 
 # API にある ID を選んで user models.json に追加
-ensemble models sync --provider litellm --target user --add gpt-6-luna
+ensemble models add gpt-6-luna --provider litellm
 
 # project models.json に追加
-ensemble models sync --provider litellm --target project --add gpt-6-luna
+ensemble models add gpt-6-luna --provider litellm --target project
 
 # 同じ比較結果を機械処理する
-ensemble models sync --provider litellm --json
+ensemble models diff --provider litellm --json
 ```
 
-追加時は `--add <id>` を繰り返して複数 ID を指定できます。書込先は `--target project|user` で明示してください。project は `conductor.pi.projectDir`（既定 `<repoRoot>/.ensemble/pi`）、user は `conductor.pi.agentDir`（既定 `~/.ensemble/pi`）にある `models.json` です。既存の provider 設定と model 定義は残し、同じ ID がすでに有効なら更新せずスキップします。API にない ID の削除や既存定義の force update は行いません。
+`add` は ID を 1 件ずつ指定します。書込先は省略時 user で、project へ書く場合は `--target project` を指定します。project は `conductor.pi.projectDir`（既定 `<repoRoot>/.ensemble/pi`）、user は `conductor.pi.agentDir`（既定 `~/.ensemble/pi`）にある `models.json` です。既存の provider 設定と model 定義は残し、同じ ID がすでに有効なら更新せずスキップします。API にない ID の削除や既存定義の force update は行いません。
+
+従来の `models sync` は非推奨ですが、互換性のため少なくとも 1 リリースは利用できます。比較には `models diff`、追加には `models add` を使ってください。従来の `sync --add` も書込先の省略時は user です。
 
 user の `models.json` に追加しても、project の同じ provider に `models` 配列がある場合は Pi の project 優先により user 配列が隠れます。その場合はコマンドが書込前に停止するので、`--target project` を選んでください。
 
-このコマンドは Pi provider の `baseUrl`、`apiKey`（環境変数参照や `!command` を含む）、`authHeader` と既存の Pi credential 解決を使って catalog を取得します。認証情報、header、provider の応答本文は出力しません。ネットワーク接続は `models sync` の明示実行時だけで、conductor の通常の `ModelRuntime` は引き続き `allowModelNetwork: false` です。
+これらのコマンドは Pi provider の `baseUrl`、`apiKey`（環境変数参照や `!command` を含む）、`authHeader` と既存の Pi credential 解決を使って catalog を取得します。認証情報、header、provider の応答本文は出力しません。ネットワーク接続は `models remote` / `diff` / `add` / 旧 `sync` の明示実行時だけで、conductor の通常の `ModelRuntime` は引き続き `allowModelNetwork: false` です。
 
 API が `max_input_tokens` を返す場合は、追加する Pi model の `contextWindow` にその整数値を設定します。Pi の `contextWindow` はモデルの入力コンテキスト上限として使われます。この値は provider が返した上限の取り込みであり、Pi の出力上限 `maxTokens` は設定しません。endpoint 側の値が不正または欠落していれば `contextWindow` は省略され、Pi の既定値が使われます。
 

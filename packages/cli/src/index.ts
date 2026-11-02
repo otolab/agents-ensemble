@@ -10,7 +10,7 @@ import {
 } from '@agents-ensemble/core';
 import { readCliPackageVersion } from './cli-version.js';
 import { executeIssueCommand, issueCommandExitCode } from './issue-command.js';
-import { formatModelsListJson, formatModelsListText } from './format-models-list.js';
+import { formatModelsListJson, formatModelsListNote, formatModelsListText } from './format-models-list.js';
 import { isOperatorInputTty } from './prompt-operator-input.js';
 import { resolveIssueSummaryFormat } from './resolve-summary-format.js';
 import { writeIssueSessionSummary } from './write-issue-session-summary.js';
@@ -24,6 +24,9 @@ import {
   type ConductorCommandOptions,
 } from './conductor-auth-command.js';
 import {
+  runPiModelsAdd,
+  runPiModelsDiff,
+  runPiModelsRemote,
   runPiModelsSync,
   type PiModelsSyncResult,
   type PiModelsSyncTarget,
@@ -319,19 +322,83 @@ addConductorCommandOptions(models.command('list'))
         return;
       }
       console.log(formatModelsListText(catalog));
-      console.error(
-        '\n注: 一覧は API カタログです。team 設定で実行時にブロックされる場合があります。',
-      );
+      console.error(formatModelsListNote(context.auth.backend ?? 'cursor'));
     } catch (error) {
       console.error(error instanceof Error ? error.message : error);
       process.exit(1);
     }
   });
 
-addConductorCommandOptions(models.command('sync'))
-  .description('Compare a configured Pi provider catalog and add selected models')
+addConductorCommandOptions(models.command('remote'))
+  .description('List IDs from a configured Pi provider remote catalog')
+  .option('--json', 'Output JSON')
+  .action(async (options: ConductorCommandOptions & { json?: boolean }) => {
+    try {
+      const result = await runPiModelsRemote(options);
+      console.log(options.json ? JSON.stringify(result, null, 2) : result.ids.join('\n'));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+addConductorCommandOptions(models.command('diff'))
+  .description('Compare remote and configured Pi model IDs')
+  .option('--json', 'Output JSON')
+  .action(async (options: ConductorCommandOptions & { json?: boolean }) => {
+    try {
+      const result = await runPiModelsDiff(options);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      const lines = [`Pi provider: ${result.provider}`];
+      appendModelGroup(lines, 'API only', result.apiOnly);
+      appendModelGroup(lines, 'JSON only', result.jsonOnly);
+      appendModelGroup(lines, 'Both', result.shared);
+      console.log(lines.join('\n'));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+addConductorCommandOptions(models.command('add'))
+  .description('Add one remote Pi model ID to models.json')
+  .argument('<id>', 'Remote model ID to add')
+  .allowExcessArguments(false)
   .addOption(
-    new Option('--target <layer>', 'models.json layer to update when adding IDs')
+    new Option('--target <layer>', 'models.json layer to update (default: user)')
+      .choices(['project', 'user']),
+  )
+  .option('--json', 'Output JSON')
+  .action(
+    async (id: string, options: ConductorCommandOptions & { target?: PiModelsSyncTarget; json?: boolean }) => {
+      try {
+        const result = await runPiModelsAdd(options, id);
+        if (options.json) {
+          console.log(JSON.stringify({
+            provider: result.provider,
+            added: result.added,
+            skipped: result.skipped,
+            ...(result.targetPath ? { targetPath: result.targetPath } : {}),
+          }, null, 2));
+          return;
+        }
+        console.log(result.added.length > 0
+          ? `Added ${id} to ${result.targetPath}`
+          : `Already present; preserved: ${id}`);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
+addConductorCommandOptions(models.command('sync'))
+  .description('Deprecated: use models diff and models add instead')
+  .addOption(
+    new Option('--target <layer>', 'models.json layer to update when adding IDs (default: user)')
       .choices(['project', 'user']),
   )
   .option(
@@ -349,6 +416,7 @@ addConductorCommandOptions(models.command('sync'))
         json?: boolean;
       },
     ) => {
+      console.error('Warning: models sync is deprecated; use models diff and models add instead.');
       try {
         const result = await runPiModelsSync(options);
         if (options.json) {

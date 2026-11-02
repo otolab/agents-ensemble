@@ -5,6 +5,12 @@ export interface ModelsListEntry {
   aliases?: string[];
 }
 
+export function formatModelsListNote(backend: 'pi' | 'cursor'): string {
+  return backend === 'pi'
+    ? '\n注: 一覧は認証済み Pi provider のローカル model registry です。team 設定で実行時にブロックされる場合があります。remote catalog は models remote で確認できます。'
+    : '\n注: 一覧は Cursor SDK カタログです。team 設定で実行時にブロックされる場合があります。';
+}
+
 export function formatModelsListText(models: ModelsListEntry[]): string {
   if (models.length === 0) {
     return '（利用可能なモデルはありません）';
