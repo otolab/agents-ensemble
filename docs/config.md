@@ -177,7 +177,11 @@ spawn 解決時、子プロセスへ渡す env は次の順でマージされま
 
 Codex worker の接続先は Codex の provider 設定で定義し、`acp.env.MODEL_PROVIDER` で使う provider ID を選びます。ensemble はこの環境変数を `codex-acp` に渡すだけで、TOML ファイルを選んだり読み込んだりはしません。
 
-`@agentclientprotocol/codex-acp` は `packages/core/package.json` で **2.3.0** に pin されています。この版でも、`CODEX_CONFIG` は Codex session config に merge する **JSON オブジェクト文字列**として `JSON.parse` されます。TOML のパスを設定すると JSON parse に失敗します。`MODEL_PROVIDER` は新しい session に渡す **provider ID** で、設定ファイルの選択には使われません。`INITIAL_AGENT_MODE` は初期の承認・sandbox mode を選び、Codex preset の既定 `agent` は workspace-write + on-request です（有効な mode ID は `read-only`、`workspace-write`、`agent`、`agent-full-access`）。空または未知の mode ID は既定の `agent` に戻ります。ensemble はこれらの値を解釈せず、`acp.env` から子プロセスへ渡します。
+`@agentclientprotocol/codex-acp` は `packages/core/package.json` で **2.3.0** に pin されています。この版でも、`CODEX_CONFIG` は Codex session config に merge する **JSON オブジェクト文字列**として `JSON.parse` されます。TOML のパスを設定すると JSON parse に失敗します。`MODEL_PROVIDER` は新しい session に渡す **provider ID** で、設定ファイルの選択には使われません。`INITIAL_AGENT_MODE` は初期の承認・sandbox mode を選びます。有効な mode ID は `read-only`、`workspace-write`、`agent`、`agent-full-access` で、空または未知の値は既定の `agent` に戻ります。ensemble はこれらの値を解釈せず、`acp.env` から子プロセスへ渡します。
+
+2.3.0 の既定 `agent` と明示的な `workspace-write` は、どちらも `approvalPolicy=on-request` かつ `workspaceWrite` sandbox ですが、approval reviewer が異なります。`agent` は `auto_review` で Codex 側が審査し、明示 `workspace-write` は `user` で client 側に判断を求めます。そのため `on-request` だけから、すべての確認が ACP `session/request_permission` として harness に届くとは限りません。`user` reviewer は client に review を委ねますが、ACP permission request が実際に発生するかは個別の操作・審査によります。今回の `workspace-write` 試行では ACP request が届き、`auto_review` の `agent` 試行では届きませんでした。これは approval の振り分けの違いであり、両 mode の sandbox policy はどちらも `workspaceWrite` です。詳細は [codex-acp 2.3.0 の mode 定義](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/AgentMode.ts)を参照してください。
+
+今回の 2.3.0 / ACP v1 harness smoke では、既定 `agent` は permission request なしで tool update 4 件を返し、marker file の作成まで観測しました。session log は `on-request` / `auto_review` / `workspace-write` でしたが、個別の auto-review 判断は記録されていません。また probe path が Codex の writable roots 外だったことも確認できていないため、この結果だけで sandbox 境界の通過や bypass を結論づけることはできません。一方、`INITIAL_AGENT_MODE=workspace-write` を明示した試行では ACP permission request 1 件を受け、harness が `reject_once` を返すと prompt は `cancelled` となり、marker は作成されませんでした。これはその試行で ACP 経由の拒否を確認した結果であり、他 mode・path の sandbox 挙動まで証明するものではありません。
 
 Codex の model ID はトップレベルの `model`、provider は `model_provider` で指定し、provider IDに対応する `[model_providers.<id>]` から接続先・API形式・認証方法を読みます。worker では Codex が通常の設定レイヤー（主に `~/.codex/config.toml`）を読み、必要であれば `CODEX_CONFIG` の JSON が session config に加わります。`MODEL_PROVIDER=litellm` だけでは、Codex は別ファイル `litellm.config.toml` を探さず、model IDも選びません。
 
@@ -438,7 +442,7 @@ YAML に未知のキーがあっても **無視する**（警告なし）。将�
 - [Codex profiles / custom model providers](https://developers.openai.com/codex/config-advanced#profiles) — Codex CLI profile overlay、`model`、`model_provider` の現行仕様
 - [codex-acp 2.3.0 runtime options](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/README.md#runtime-options) — `INITIAL_AGENT_MODE` / `CODEX_CONFIG` / `MODEL_PROVIDER` などの説明
 - [codex-acp 2.3.0 起動処理](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/index.ts#L38-L64) — 環境変数の parse と Codex app-server 設定への受け渡し
-- [codex-acp 2.3.0 初期 mode](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/AgentMode.ts#L35-L90) — mode ID ごとの承認・sandbox 設定
+- [codex-acp 2.3.0 mode 定義](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/AgentMode.ts) — reviewer と mode ID ごとの承認・sandbox 設定
 - [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) — 解決順の設計判断
 - [ADR 0018](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0018-team-profile-four-layer-resolution.md) — `.ensemble/` 配下の規約（team-profile）
 - [#223](https://github.com/otolab/agents-ensemble/issues/223) — config 基盤
