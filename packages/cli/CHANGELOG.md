@@ -1,5 +1,14 @@
 # @agents-ensemble/cli
 
+## 0.17.0
+
+### Patch Changes
+
+- Updated dependencies [26a133c]
+- Updated dependencies [5299f44]
+  - @agents-ensemble/core@0.17.0
+  - @agents-ensemble/operator-agent@0.4.1
+
 ## 0.16.0
 
 ### Minor Changes
