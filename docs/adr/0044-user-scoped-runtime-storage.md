@@ -1,6 +1,6 @@
 # ADR 0044: repo 単位のランタイム状態を user 層へ配置する
 
-- Status: accepted
+- Status: superseded by [0046](0046-migrated-session-canonical-slug-mirrors.md)
 - Date: 2026-10-23
 
 ## Context

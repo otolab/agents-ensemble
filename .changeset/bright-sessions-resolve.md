@@ -3,4 +3,4 @@
 "@agents-ensemble/operator-agent": patch
 ---
 
-移行後に path-hash 側の古い SessionResumeStore が残っていても canonical slug 側を選び、選択先と socket 記録の有無を operator に知らせます。
+一括移行で ResumeStore と sidecar を canonical slug 側へ非破壊で複製し、移行済み session では slug を正本として選びます。YAML と operator state も選択 location に沿って読み書きし、重複診断と UDS watch / live tool の経路を保ちます。
