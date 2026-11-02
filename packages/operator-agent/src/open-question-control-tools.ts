@@ -1,8 +1,8 @@
 import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
   CONDUCTOR_PROVIDER_HISTORY_LIMIT,
+  findSessionResumeStore,
   listConductorProviderHistory,
-  listSessionResumeStores,
   OPEN_QUESTION_CONTROL_METHODS,
   sendOpenQuestionControlRequest,
   type OpenQuestionControlAnswerResult,
@@ -10,9 +10,14 @@ import {
   type OpenQuestionControlListItem,
   type ConductorJsonValue,
   type ConductorTool,
+  type SessionResumeStoreDuplicateDiagnostic,
   type SessionResumeStore,
 } from '@agents-ensemble/core/operator-runtime';
 import { resolve } from 'node:path';
+
+type SessionResumeStoreDiagnosticHandler = (
+  diagnostic: SessionResumeStoreDuplicateDiagnostic,
+) => void;
 
 export const LIST_LIVE_OPEN_QUESTIONS_TOOL = 'list_live_open_questions';
 export const ANSWER_LIVE_OPEN_QUESTION_TOOL = 'answer_live_open_question';
@@ -29,7 +34,10 @@ interface LastConductorMessageResult {
 }
 
 /** Read selected user prompts and final responses from provider session history. */
-export function createListConductorMessagesTool(repoRoot: string): ConductorTool {
+export function createListConductorMessagesTool(
+  repoRoot: string,
+  onDuplicate?: SessionResumeStoreDiagnosticHandler,
+): ConductorTool {
   const root = resolve(repoRoot);
   return {
     name: LIST_CONDUCTOR_MESSAGES_TOOL,
@@ -67,7 +75,7 @@ export function createListConductorMessagesTool(repoRoot: string): ConductorTool
         args.conductorAgentId,
         'conductorAgentId',
       );
-      const resumeStore = await requireSession(root, conductorAgentId);
+      const resumeStore = await requireSession(root, conductorAgentId, onDuplicate);
       const backend = resumeStore.conductorBackend ?? 'cursor';
       const limit =
         args.limit === undefined
@@ -111,6 +119,7 @@ export function createListConductorMessagesTool(repoRoot: string): ConductorTool
 /** Read Open Questions from an active harness through its session UDS. */
 export function createListLiveOpenQuestionsTool(
   repoRoot: string,
+  onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): ConductorTool {
   const root = resolve(repoRoot);
   return {
@@ -129,7 +138,11 @@ export function createListLiveOpenQuestionsTool(
       additionalProperties: false,
     },
     execute: async (args) => {
-      const resumeStore = await requireSession(root, args.conductorAgentId);
+      const resumeStore = await requireSession(
+        root,
+        args.conductorAgentId,
+        onDuplicate,
+      );
       const result = await sendOpenQuestionControlRequest<LiveOpenQuestionsResult>(
         requireSocketPath(resumeStore),
         {
@@ -149,6 +162,7 @@ export function createListLiveOpenQuestionsTool(
 /** Read the last successful conductor response from an active harness. */
 export function createGetLastConductorMessageTool(
   repoRoot: string,
+  onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): ConductorTool {
   const root = resolve(repoRoot);
   return {
@@ -167,7 +181,11 @@ export function createGetLastConductorMessageTool(
       additionalProperties: false,
     },
     execute: async (args) => {
-      const resumeStore = await requireSession(root, args.conductorAgentId);
+      const resumeStore = await requireSession(
+        root,
+        args.conductorAgentId,
+        onDuplicate,
+      );
       const result = await sendOpenQuestionControlRequest<LastConductorMessageResult>(
         requireSocketPath(resumeStore),
         {
@@ -187,6 +205,7 @@ export function createGetLastConductorMessageTool(
 /** Submit an explicit operator answer to the owning active harness. */
 export function createAnswerLiveOpenQuestionTool(
   repoRoot: string,
+  onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): ConductorTool {
   const root = resolve(repoRoot);
   return {
@@ -216,7 +235,11 @@ export function createAnswerLiveOpenQuestionTool(
       const conductorAgentId = requireString(args.conductorAgentId, 'conductorAgentId');
       const questionId = requireString(args.questionId, 'questionId');
       const answer = requireString(args.answer, 'answer');
-      const resumeStore = await requireSession(root, conductorAgentId);
+      const resumeStore = await requireSession(
+        root,
+        conductorAgentId,
+        onDuplicate,
+      );
       const result = await sendOpenQuestionControlRequest<OpenQuestionControlAnswerResult>(
         requireSocketPath(resumeStore),
         {
@@ -242,7 +265,10 @@ export function createAnswerLiveOpenQuestionTool(
 }
 
 /** Send an operator message to a running Issue harness. */
-export function createSendOperatorMessageTool(repoRoot: string): ConductorTool {
+export function createSendOperatorMessageTool(
+  repoRoot: string,
+  onDuplicate?: SessionResumeStoreDiagnosticHandler,
+): ConductorTool {
   const root = resolve(repoRoot);
   return {
     name: SEND_OPERATOR_MESSAGE_TOOL,
@@ -275,7 +301,11 @@ export function createSendOperatorMessageTool(repoRoot: string): ConductorTool {
         args.delivery === undefined
           ? 'next'
           : requireDelivery(args.delivery);
-      const resumeStore = await requireSession(root, conductorAgentId);
+      const resumeStore = await requireSession(
+        root,
+        conductorAgentId,
+        onDuplicate,
+      );
       const result = await sendOpenQuestionControlRequest<{
         queued: true;
         delivery: 'idle' | 'next' | 'interrupt';
@@ -294,15 +324,18 @@ export function createSendOperatorMessageTool(repoRoot: string): ConductorTool {
 async function requireSession(
   repoRoot: string,
   value: ConductorJsonValue | undefined,
+  onDuplicate?: SessionResumeStoreDiagnosticHandler,
 ): Promise<SessionResumeStore> {
   const conductorAgentId = requireString(value, 'conductorAgentId');
-  const resumeStore = (await listSessionResumeStores(repoRoot)).find(
-    (candidate) => candidate.conductorAgentId === conductorAgentId,
+  const located = await findSessionResumeStore(
+    repoRoot,
+    conductorAgentId,
+    { onDuplicate },
   );
-  if (!resumeStore) {
+  if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
-  return resumeStore;
+  return located.resumeStore;
 }
 
 function requireSocketPath(resumeStore: SessionResumeStore): string {

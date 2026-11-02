@@ -1,11 +1,12 @@
 import { access, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
 import * as issueContextModule from '../github/issue-context.js';
@@ -285,6 +286,274 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow(SessionResumeStoreNotFoundError);
 
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('resumes from the canonical slug store and flushes it without rewriting the stale hash copy', async () => {
+    const agentId = 'resume-canonical-slug';
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const hashPath = paths.sessionResumeStorePath(agentId);
+    const slugPath = paths.canonicalSessionResumeStorePath(
+      TEST_ISSUE.url,
+      agentId,
+    );
+    const hashStore = {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      lifecycle: 'closed' as const,
+      updatedAt: 100,
+    };
+    await saveSessionResumeStore(hashPath, hashStore);
+    const staleHashStore = await loadSessionResumeStore(hashPath);
+    await saveSessionResumeStore(slugPath, {
+      ...hashStore,
+      lifecycle: 'exited',
+      updatedAt: 1,
+    });
+
+    mockResume.mockImplementationOnce(async () => {
+      await expect(loadSessionResumeStore(slugPath)).resolves.toMatchObject({
+        lifecycle: 'unknown',
+        harnessPhase: 'running',
+        updatedAt: expect.any(Number),
+      });
+      await expect(loadSessionResumeStore(hashPath)).resolves.toEqual(
+        staleHashStore,
+      );
+      throw new Error('stop after canonical store flush');
+    });
+
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+      }),
+    ).rejects.toThrow('stop after canonical store flush');
+  });
+
+  it('resumes a hash-only store with its own YAML and ignores orphan slug snapshots', async () => {
+    const agentId = 'resume-hash-location-snapshot';
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const hashPath = paths.sessionResumeStorePath(agentId);
+    const slugOpenQuestionsPath = paths.canonicalOpenQuestionsPath(
+      TEST_ISSUE.url,
+      agentId,
+    );
+    const hashOpenQuestionsPath = paths.openQuestionsPath(agentId);
+    const slugSessionStatePath = paths.canonicalSessionStatePath(
+      TEST_ISSUE.url,
+      agentId,
+    );
+    // The resumed backend reports its provider session ID separately from the
+    // harness conductorAgentId used by the ResumeStore and question snapshot.
+    const hashSessionStatePath = paths.sessionStatePath('agent-test');
+    await saveSessionResumeStore(hashPath, {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      updatedAt: 1,
+    });
+    const writeQuestionSnapshot = async (path: string, id: string, text: string) => {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(
+        path,
+        [
+          'version: 1',
+          'sequence: 2',
+          'openQuestions:',
+          `  - id: ${id}`,
+          `    question: ${JSON.stringify(text)}`,
+          '    responseType: text',
+          '    source: conductor',
+          '    status: open',
+          '    askedAt: 1',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+    };
+    await writeQuestionSnapshot(
+      slugOpenQuestionsPath,
+      'inq-1',
+      'orphan slug question',
+    );
+    await writeQuestionSnapshot(
+      hashOpenQuestionsPath,
+      'inq-2',
+      'selected hash question',
+    );
+    const writeSessionState = async (path: string, statusLine: string) => {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(
+        path,
+        [
+          'version: 2',
+          'current:',
+          `  statusLine: ${JSON.stringify(statusLine)}`,
+          '  reportedAt: 2',
+          'history: []',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+    };
+    await writeSessionState(slugSessionStatePath, 'orphan slug status');
+    await writeSessionState(hashSessionStatePath, 'selected hash status');
+
+    let restoredAtBinding: ReturnType<OperatorInputBindingApi['getContext']>['openQuestions'] = [];
+    let observation:
+      | {
+          openQuestions: Array<{ id: string; question: string }>;
+          sessionState?: { current: { statusLine: string } };
+        }
+      | undefined;
+    mockSend.mockImplementationOnce(async () => {
+      const selectedStore = await loadSessionResumeStore(hashPath);
+      expect(selectedStore?.harnessSocketPath).toBeTruthy();
+      observation = await sendOpenQuestionControlRequest<NonNullable<typeof observation>>(
+        selectedStore!.harnessSocketPath!,
+        { method: OPEN_QUESTION_CONTROL_METHODS.observe },
+      );
+      return {
+        runId: 'run-hash-location-snapshot',
+        status: 'finished',
+        result: 'snapshot restored',
+      };
+    });
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: agentId,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      bindOperatorInput: (api) => {
+        restoredAtBinding = api.getContext().openQuestions;
+        api.submit('inspect the restored snapshot');
+      },
+    });
+
+    expect(restoredAtBinding).toEqual([
+      expect.objectContaining({
+        id: 'inq-2',
+        question: 'selected hash question',
+      }),
+    ]);
+    expect(observation?.openQuestions).toEqual([
+      expect.objectContaining({
+        id: 'inq-2',
+        question: 'selected hash question',
+      }),
+    ]);
+    expect(observation?.sessionState?.current.statusLine).toBe(
+      'selected hash status',
+    );
+  });
+
+  it('continues a slug resume after its first harness socket flush fails without exposing a stale hash endpoint', async () => {
+    const agentId = 'resume-slug-first-socket-flush-failure';
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const hashPath = paths.sessionResumeStorePath(agentId);
+    const slugPath = paths.canonicalSessionResumeStorePath(
+      TEST_ISSUE.url,
+      agentId,
+    );
+    const hashStore = {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      lifecycle: 'closed' as const,
+      updatedAt: 100,
+    };
+    await saveSessionResumeStore(hashPath, hashStore);
+    const staleHashStore = await loadSessionResumeStore(hashPath);
+    await saveSessionResumeStore(slugPath, {
+      ...hashStore,
+      lifecycle: 'closed',
+      updatedAt: 101,
+    });
+
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
+    let firstSocketFlush: {
+      path: string;
+      storeHadSocket: boolean;
+      selectedStoreBeforeFlushHadSocket: boolean;
+    } | undefined;
+    vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
+      async (path, resumeStore) => {
+        if (!firstSocketFlush && resumeStore.harnessSocketPath) {
+          const selectedBeforeFlush = await loadSessionResumeStore(path);
+          const previousHash = await loadSessionResumeStore(hashPath);
+          firstSocketFlush = {
+            path,
+            storeHadSocket: true,
+            selectedStoreBeforeFlushHadSocket:
+              selectedBeforeFlush?.harnessSocketPath !== undefined,
+          };
+          expect(previousHash).toEqual(staleHashStore);
+          throw new Error('simulated first slug socket flush failure');
+        }
+        await persistResumeStore(path, resumeStore);
+      },
+    );
+    mockSend.mockResolvedValueOnce({
+      runId: 'run-slug-socket-flush-failure',
+      status: 'finished',
+      result: 'continued after the socket flush warning',
+    });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: agentId,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      sessionLogger,
+    });
+
+    expect(firstSocketFlush).toEqual({
+      path: slugPath,
+      storeHadSocket: true,
+      selectedStoreBeforeFlushHadSocket: false,
+    });
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes('simulated first slug socket flush failure'),
+      ),
+    ).toBe(true);
+    await expect(loadSessionResumeStore(hashPath)).resolves.toEqual(
+      staleHashStore,
+    );
   });
 
   it('fails fast when the startup backend differs from the saved resume store backend', async () => {

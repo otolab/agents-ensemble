@@ -2,8 +2,10 @@
 /**
  * 使い捨て: project `.ensemble/` に残っているランタイム状態を user 層へ移す。
  *
- * 0.16.0 の `resolveEnsemblePaths` / ADR 0044 と同じ配置先を使う。
- * アプリ本体は読み取り fallback + 利用時コピーだが、旧ファイルをまとめて片付けたいとき用。
+ * 0.16.0 の `resolveEnsemblePaths` / ADR 0044 と同じ path-hash 配置を使う。
+ * SessionResumeStore と sidecar は移行後に canonical slug 側へも複製し、
+ * 移行済み session に限って slug を正本として選べるようにする。
+ * path-hash と既存 slug のファイルは削除・上書きしない。
  *
  *   node scripts/migrate-project-ensemble-runtime-to-user.mjs --repo-root /path/to/repo
  *   node scripts/migrate-project-ensemble-runtime-to-user.mjs --dry-run
@@ -17,6 +19,7 @@ import {
   chmod,
   copyFile,
   mkdir,
+  readFile,
   readdir,
   rename,
   stat,
@@ -26,6 +29,8 @@ import { basename, dirname, join, normalize, resolve } from 'node:path';
 
 const ENSEMBLE_USER_ROOT_ENV = 'ENSEMBLE_USER_ROOT';
 const SIDEcar_FILES = new Set(['open-questions.yaml', 'session-state.yaml']);
+const ISSUE_URL_RE =
+  /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/;
 
 function usage() {
   process.stderr.write(
@@ -173,6 +178,77 @@ async function migrateLegacySessionsDir(paths, dryRun, log) {
   }
 }
 
+function canonicalSessionDirectory(paths, issueUrl) {
+  if (typeof issueUrl !== 'string') return undefined;
+  const match = ISSUE_URL_RE.exec(issueUrl.trim());
+  if (!match) return undefined;
+  const owner = match[1].toLowerCase();
+  const repository = match[2].replace(/\.git$/u, '').toLowerCase();
+  if (
+    [owner, repository].some(
+      (segment) =>
+        segment === '.' ||
+        segment === '..' ||
+        !/^[a-z0-9_.-]+$/u.test(segment),
+    )
+  ) {
+    return undefined;
+  }
+  return join(paths.userRoot, 'sessions', 'github.com', owner, repository);
+}
+
+async function mirrorMigratedSessionStores(paths, dryRun, log) {
+  let entries;
+  try {
+    entries = await readdir(paths.sessionsDir, { withFileTypes: true });
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') return;
+    throw error;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const sourcePath = join(paths.sessionsDir, entry.name);
+    let resumeStore;
+    try {
+      resumeStore = JSON.parse(await readFile(sourcePath, 'utf8'));
+    } catch {
+      log(`skip slug mirror (invalid JSON): ${sourcePath}`);
+      continue;
+    }
+    const agentId = entry.name.slice(0, -'.json'.length);
+    if (
+      !resumeStore ||
+      typeof resumeStore !== 'object' ||
+      resumeStore.conductorAgentId !== agentId ||
+      typeof resumeStore.repoRoot !== 'string' ||
+      normalize(resolve(resumeStore.repoRoot)) !== paths.normalizedRepoRoot
+    ) {
+      continue;
+    }
+    const slugDir = canonicalSessionDirectory(paths, resumeStore.issueUrl);
+    if (!slugDir) continue;
+
+    const slugStorePath = join(slugDir, entry.name);
+    const canonicalStoreAlreadyExists = await pathExists(slugStorePath);
+    await copyFileIfMissing(
+      sourcePath,
+      slugStorePath,
+      dryRun,
+      log,
+    );
+    if (canonicalStoreAlreadyExists) continue;
+    for (const fileName of SIDEcar_FILES) {
+      await copyFileIfMissing(
+        join(paths.sessionsDir, agentId, fileName),
+        join(slugDir, agentId, fileName),
+        dryRun,
+        log,
+      );
+    }
+  }
+}
+
 async function migratePiTranscripts(paths, dryRun, log) {
   const { legacyPiSessionsDir, piSessionsDir, operatorPiSessionsDir } = paths;
   if (!(await pathExists(legacyPiSessionsDir))) {
@@ -234,6 +310,7 @@ async function main() {
   if (dryRun) log('(dry-run)');
 
   await migrateLegacySessionsDir(paths, dryRun, log);
+  await mirrorMigratedSessionStores(paths, dryRun, log);
   await migratePiTranscripts(paths, dryRun, log);
   await migrateOperatorAgentState(paths, dryRun, log);
 

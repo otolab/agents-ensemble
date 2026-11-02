@@ -6,6 +6,7 @@ import type {
   OpenQuestionRegistrySnapshot,
 } from '../escalation/open-question.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import type { SessionResumeStoreLocation } from './session-resume-store.js';
 
 export const OPEN_QUESTIONS_STORE_VERSION = 1;
 
@@ -17,10 +18,19 @@ export interface OpenQuestionsStoreDocument
 export function openQuestionsStorePath(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl?: string;
+  location?: SessionResumeStoreLocation;
 }): string {
-  return resolveEnsemblePaths({ repoRoot: input.repoRoot }).openQuestionsPath(
-    input.conductorAgentId,
-  );
+  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
+  if (input.location === 'canonical-slug') {
+    if (!input.issueUrl) {
+      throw new Error(
+        'issueUrl is required for a canonical-slug open questions path.',
+      );
+    }
+    return paths.canonicalOpenQuestionsPath(input.issueUrl, input.conductorAgentId);
+  }
+  return paths.openQuestionsPath(input.conductorAgentId);
 }
 
 export function legacyOpenQuestionsStorePath(input: {

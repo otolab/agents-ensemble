@@ -213,9 +213,11 @@ SessionResumeStore は、harness がセッション再開に必要な情報を�
   pi-sessions/
 ```
 
-Pi の conductor transcript は `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き `<repoRoot>/.ensemble/pi/` から読みます。operator-agent は保存済み SessionResumeStore と YAML を同じ repoKey の user 側 directory から読みます。
+Pi の conductor transcript は `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き `<repoRoot>/.ensemble/pi/` から読みます。operator-agent は保存済み SessionResumeStore と YAML を選択された repository location に沿って読みます。slug が選ばれた session では slug → path-hash → project legacy、hash が選ばれた session では hash → project legacy の順で YAML を探します。hash-only session の orphan slug YAML は参照しません。
 
 旧 `<repoRoot>/.ensemble/sessions/`、`.ensemble/operator-agent/`、`<conductorCwd>/.ensemble/pi/sessions/` のデータは読み取り fallback します。SessionResumeStore と open-question YAML、tool-call 履歴、operator-agent state / watch state、Pi transcript は利用に応じて user 側へ移します。session-state YAML は fallback で読み、次の status 報告で履歴を引き継いで user 側へ書きます。旧ファイルは自動削除しません。Issue 用 Git worktree は元 repo に登録され、現行の解決・再利用処理が project-local path を前提とするため、例外として `<repoRoot>/.ensemble/worktrees/issue-N` に残します。配置判断の詳細は [ADR 0044](adr/0044-user-scoped-runtime-storage.md) を参照してください。
+
+ADR 0044 の path-hash と canonical slug directory に同じ SessionResumeStore が残っている場合は slug 側を優先します。ADR 0046 のとおり project runtime の一括移行時は、path-hash への移行後に該当する JSON と sidecar を slug 側へ未作成の場合だけ複製します。この移行を通った session に限り slug を正本として扱い、resume 後の SessionResumeStore と YAML flush も slug 側へ続けます。新規 session の通常保存先は path-hash のままです。operator-agent の session / watch state は選択済み ResumeStore が一意の slug に揃う場合に slug 側を使い、path-hash や project legacy から読み込んだ state は slug 側へ複製します。path-hash の重複ファイルは削除・退避せず、operator TTY の `[harness]` 診断には選択 path と socket の有無を出します。
 
 `session-state.yaml` は `report_session_state` が登録した最新の statusLine と過去の報告をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。`current` が最新値、`history` は過去の値を古い順に並べた一覧です。履歴は最大 50 件、ファイル全体は最大 16 KiB で、上限を超える場合は古い履歴から削除します。
 

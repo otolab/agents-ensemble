@@ -1,5 +1,6 @@
+import type { Dirent } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import {
@@ -125,6 +126,28 @@ export interface SessionResumeStorePathOptions {
   conductorAgentId: string;
 }
 
+export type SessionResumeStoreLocation =
+  | 'canonical-slug'
+  | 'user-path-hash'
+  | 'project-legacy';
+
+export interface LocatedSessionResumeStore {
+  resumeStore: SessionResumeStore;
+  path: string;
+  location: SessionResumeStoreLocation;
+}
+
+export interface SessionResumeStoreDuplicateDiagnostic {
+  conductorAgentId: string;
+  selectedPath: string;
+  selectedLocation: SessionResumeStoreLocation;
+  candidates: Array<{
+    path: string;
+    location: SessionResumeStoreLocation;
+    hasHarnessSocketPath: boolean;
+  }>;
+}
+
 /** @deprecated Use SessionResumeStorePathOptions; supported for one release only. */
 export type SessionSidecarPathOptions = SessionResumeStorePathOptions;
 
@@ -186,28 +209,52 @@ export async function requireSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
 }): Promise<SessionResumeStore> {
-  const path = sessionResumeStorePath(input);
-  let loaded = await readSessionResumeStore(path);
-  let sourcePath = path;
-  if (!loaded) {
-    sourcePath = legacySessionResumeStorePath(input);
-    loaded = await readSessionResumeStore(sourcePath);
-  }
-  if (!loaded) {
+  const located = await requireLocatedSessionResumeStoreForResume(input);
+  return located.resumeStore;
+}
+
+export async function requireLocatedSessionResumeStoreForResume(input: {
+  repoRoot: string;
+  conductorAgentId: string;
+  onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+}): Promise<LocatedSessionResumeStore> {
+  const locations = await listSessionResumeStoreLocations(input.repoRoot, {
+    onDuplicate: input.onDuplicate,
+  });
+  const located = locations.find(
+    (candidate) =>
+      candidate.resumeStore.conductorAgentId === input.conductorAgentId,
+  );
+  if (!located) {
+    const path = sessionResumeStorePath(input);
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
+  }
+
+  const loaded = await readSessionResumeStore(located.path);
+  if (!loaded) {
+    throw new SessionResumeStoreNotFoundError(
+      input.conductorAgentId,
+      located.path,
+    );
   }
   if (loaded.hasLegacyAcpSpawnEnv) {
     // Scrub pre-digest env values before resume validation can reject the
     // session and bypass its normal first write.
     await writeSessionResumeStoreFile(
-      sourcePath,
+      located.path,
       redactLegacyAcpSpawnEnv(loaded.rawValue, loaded.resumeStore),
     );
   }
-  if (sourcePath !== path) {
-    await writeSessionResumeStoreFile(path, loaded.resumeStore);
+  if (located.location === 'project-legacy') {
+    const migratedPath = sessionResumeStorePath(input);
+    await writeSessionResumeStoreFile(migratedPath, loaded.resumeStore);
+    return {
+      resumeStore: loaded.resumeStore,
+      path: migratedPath,
+      location: 'user-path-hash',
+    };
   }
-  return loaded.resumeStore;
+  return { ...located, resumeStore: loaded.resumeStore };
 }
 
 /** @deprecated Use requireSessionResumeStoreForResume; supported for one release only. */
@@ -272,24 +319,180 @@ export const saveSessionSidecar = saveSessionResumeStore;
 
 export async function listSessionResumeStores(
   repoRoot: string,
+  options: {
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
 ): Promise<SessionResumeStore[]> {
+  return (await listLocatedSessionResumeStores(repoRoot, options)).map(
+    ({ resumeStore }) => resumeStore,
+  );
+}
+
+export async function listLocatedSessionResumeStores(
+  repoRoot: string,
+  options: {
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<LocatedSessionResumeStore[]> {
+  return listSessionResumeStoreLocations(repoRoot, options);
+}
+
+export async function findSessionResumeStore(
+  repoRoot: string,
+  conductorAgentId: string,
+  options: {
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<LocatedSessionResumeStore | undefined> {
+  return (await listLocatedSessionResumeStores(repoRoot, options)).find(
+    (candidate) =>
+      candidate.resumeStore.conductorAgentId === conductorAgentId,
+  );
+}
+
+async function listSessionResumeStoreLocations(
+  repoRoot: string,
+  options: {
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<LocatedSessionResumeStore[]> {
   const paths = resolveEnsemblePaths({ repoRoot });
-  const byAgentId = new Map<string, SessionResumeStore>();
-  for (const dir of [paths.legacySessionsDir, paths.sessionsDir]) {
-    let entries: string[];
+  const candidates: LocatedSessionResumeStore[] = [];
+  const visited = new Set<string>();
+
+  const readDirectory = async (
+    dir: string,
+    location: SessionResumeStoreLocation,
+    slugRoot?: string,
+  ) => {
+    let entries: Dirent[];
     try {
-      entries = await readdir(dir);
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if (isEnoent(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const path = join(dir, entry.name);
+      if (visited.has(path)) continue;
+      visited.add(path);
+      const resumeStore = await loadSessionResumeStore(path);
+      if (!resumeStore) continue;
+      if (
+        slugRoot &&
+        (resolve(resumeStore.repoRoot) !== paths.repoRoot ||
+          canonicalSessionDirectory(paths, resumeStore.issueUrl) !== slugRoot)
+      ) {
+        continue;
+      }
+      candidates.push({ resumeStore, path, location });
+    }
+  };
+
+  // The current path-hash and project-local directories are bounded and remain
+  // the discovery roots for legacy data.
+  await readDirectory(paths.sessionsDir, 'user-path-hash');
+  await readDirectory(paths.legacySessionsDir, 'project-legacy');
+
+  // Slug stores are keyed by GitHub repository identity. Search only the
+  // host/owner/repository depth and validate repoRoot before accepting a file.
+  let hosts: Dirent[];
+  try {
+    hosts = await readdir(paths.sessionsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (!isEnoent(error)) throw error;
+    hosts = [];
+  }
+  for (const host of hosts) {
+    if (
+      !host.isDirectory() ||
+      /^[a-f0-9]{64}$/u.test(host.name) ||
+      host.name === 'pi'
+    ) {
+      continue;
+    }
+    let owners: Dirent[];
+    try {
+      owners = await readdir(join(paths.sessionsRoot, host.name), {
+        withFileTypes: true,
+      });
     } catch (error) {
       if (isEnoent(error)) continue;
       throw error;
     }
-    for (const entry of entries) {
-      if (!entry.endsWith('.json') || entry.endsWith('.tmp')) continue;
-      const resumeStore = await loadSessionResumeStore(join(dir, entry));
-      if (resumeStore) byAgentId.set(resumeStore.conductorAgentId, resumeStore);
+    for (const owner of owners) {
+      if (!owner.isDirectory()) continue;
+      let repositories: Dirent[];
+      try {
+        repositories = await readdir(
+          join(paths.sessionsRoot, host.name, owner.name),
+          { withFileTypes: true },
+        );
+      } catch (error) {
+        if (isEnoent(error)) continue;
+        throw error;
+      }
+      for (const repository of repositories) {
+        if (!repository.isDirectory()) continue;
+        const slugRoot = join(
+          paths.sessionsRoot,
+          host.name,
+          owner.name,
+          repository.name,
+        );
+        await readDirectory(slugRoot, 'canonical-slug', slugRoot);
+      }
     }
   }
-  return [...byAgentId.values()];
+
+  const byAgentId = new Map<string, LocatedSessionResumeStore[]>();
+  for (const candidate of candidates) {
+    const matching = byAgentId.get(candidate.resumeStore.conductorAgentId) ?? [];
+    matching.push(candidate);
+    byAgentId.set(candidate.resumeStore.conductorAgentId, matching);
+  }
+
+  const locationPriority: Record<SessionResumeStoreLocation, number> = {
+    'canonical-slug': 0,
+    'user-path-hash': 1,
+    'project-legacy': 2,
+  };
+  const selected: LocatedSessionResumeStore[] = [];
+  for (const [conductorAgentId, matches] of byAgentId) {
+    matches.sort(
+      (left, right) =>
+        locationPriority[left.location] - locationPriority[right.location] ||
+        right.resumeStore.updatedAt - left.resumeStore.updatedAt,
+    );
+    const chosen = matches[0]!;
+    selected.push(chosen);
+    if (matches.length > 1) {
+      options.onDuplicate?.({
+        conductorAgentId,
+        selectedPath: chosen.path,
+        selectedLocation: chosen.location,
+        candidates: matches.map((candidate) => ({
+          path: candidate.path,
+          location: candidate.location,
+          hasHarnessSocketPath:
+            candidate.resumeStore.harnessSocketPath !== undefined,
+        })),
+      });
+    }
+  }
+  return selected;
+}
+
+function canonicalSessionDirectory(
+  paths: ReturnType<typeof resolveEnsemblePaths>,
+  issueUrl: string,
+): string | undefined {
+  try {
+    return paths.canonicalRepoSessionsDir(issueUrl);
+  } catch {
+    return undefined;
+  }
 }
 
 /** @deprecated Use listSessionResumeStores; supported for one release only. */

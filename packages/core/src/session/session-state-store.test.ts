@@ -165,6 +165,36 @@ describe('session state store', () => {
     });
   });
 
+  it('writes slug-keyed session state while carrying forward a path-hash snapshot', async () => {
+    repoRoot = await createHome('ensemble-session-state-slug-');
+    const options = {
+      repoRoot,
+      conductorAgentId: 'agent-slug',
+      issueUrl: 'https://github.com/org/repo/issues/607',
+    };
+    const hashPath = sessionStateStorePath(options);
+    const slugPath = sessionStateStorePath({
+      ...options,
+      location: 'canonical-slug',
+    });
+    await mkdir(dirname(hashPath), { recursive: true });
+    await writeFile(
+      hashPath,
+      'version: 1\nstatusLine: "hash report"\nreportedAt: 10\n',
+      'utf8',
+    );
+
+    await saveSessionStatusLine(slugPath, 'slug report', 20, [hashPath]);
+
+    await expect(loadSessionStateStore(slugPath)).resolves.toEqual({
+      current: { statusLine: 'slug report', reportedAt: 20 },
+      history: [{ statusLine: 'hash report', reportedAt: 10 }],
+    });
+    await expect(loadSessionStateStore(hashPath)).resolves.toMatchObject({
+      current: { statusLine: 'hash report', reportedAt: 10 },
+    });
+  });
+
   it('keeps history within both the entry-count and serialized-size limits', async () => {
     repoRoot = await createHome('ensemble-session-state-');
     const path = sessionStateStorePath({

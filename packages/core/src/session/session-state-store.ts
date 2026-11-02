@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promi
 import { dirname } from 'node:path';
 import yaml from 'js-yaml';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import type { SessionResumeStoreLocation } from './session-resume-store.js';
 
 export const SESSION_STATE_STORE_VERSION = 2;
 export const SESSION_STATUS_LINE_MAX_LENGTH = 80;
@@ -12,6 +13,8 @@ export const SESSION_STATE_STORE_MAX_BYTES = 16 * 1024;
 export interface SessionStatePathOptions {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl?: string;
+  location?: SessionResumeStoreLocation;
 }
 
 export interface SessionStatusLine {
@@ -28,9 +31,16 @@ export interface SessionStateStore {
 export function sessionStateStorePath(
   options: SessionStatePathOptions,
 ): string {
-  return resolveEnsemblePaths({ repoRoot: options.repoRoot }).sessionStatePath(
-    options.conductorAgentId,
-  );
+  const paths = resolveEnsemblePaths({ repoRoot: options.repoRoot });
+  if (options.location === 'canonical-slug') {
+    if (!options.issueUrl) {
+      throw new Error(
+        'issueUrl is required for a canonical-slug session state path.',
+      );
+    }
+    return paths.canonicalSessionStatePath(options.issueUrl, options.conductorAgentId);
+  }
+  return paths.sessionStatePath(options.conductorAgentId);
 }
 
 export function legacySessionStateStorePath(
@@ -62,12 +72,17 @@ export async function saveSessionStatusLine(
   path: string,
   statusLine: string,
   reportedAt = Date.now(),
-  legacyPath?: string,
+  fallbackPaths?: string | readonly string[],
 ): Promise<void> {
   const current = parseSessionStatusLine({ statusLine, reportedAt });
-  const existing =
-    (await loadSessionStateStore(path)) ??
-    (legacyPath ? await loadSessionStateStore(legacyPath) : undefined);
+  let existing = await loadSessionStateStore(path);
+  const paths = typeof fallbackPaths === 'string'
+    ? [fallbackPaths]
+    : (fallbackPaths ?? []);
+  for (const fallbackPath of paths) {
+    if (existing) break;
+    existing = await loadSessionStateStore(fallbackPath);
+  }
   const next = {
     current,
     history: boundHistory(

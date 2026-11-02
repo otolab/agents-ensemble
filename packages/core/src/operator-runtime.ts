@@ -64,9 +64,14 @@ export { renderCompiledPrompt } from './prompt/render-compiled-prompt.js';
 export {
   loadSessionResumeStore,
   harnessPhaseFromLegacyLifecycle,
+  findSessionResumeStore,
+  listLocatedSessionResumeStores,
   listSessionResumeStores,
   type HarnessPhase,
+  type LocatedSessionResumeStore,
   type SessionLifecycle,
+  type SessionResumeStoreDuplicateDiagnostic,
+  type SessionResumeStoreLocation,
   type SessionResumeStore,
 } from './session/session-resume-store.js';
 /** @deprecated Use the SessionResumeStore exports; supported for one release only. */

@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import {
-  listSessionResumeStores,
+  listLocatedSessionResumeStores,
   harnessPhaseFromLegacyLifecycle,
   loadSessionStateStore,
   legacySessionStateStorePath,
@@ -10,7 +10,9 @@ import {
   type ConductorTool,
   type SessionLifecycle,
   type SessionStateStore,
+  type LocatedSessionResumeStore,
   type SessionResumeStore,
+  type SessionResumeStoreDuplicateDiagnostic,
   type HarnessPhase,
 } from '@agents-ensemble/core/operator-runtime';
 import type { OperatorSessionLiveStatus } from './operator-watch-pool.js';
@@ -72,6 +74,7 @@ export function createListOperatorSessionsTool(
   getLiveStatus?: (
     conductorAgentId: string,
   ) => OperatorSessionLiveStatus | undefined,
+  onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void,
 ): ConductorTool {
   const root = resolve(repoRoot);
   return {
@@ -110,11 +113,13 @@ export function createListOperatorSessionsTool(
       const hasStatusLine = resolveHasStatusLine(args.hasStatusLine);
       const lifecycle = resolveLifecycle(args.lifecycle);
       const dataAsOf = new Date().toISOString();
-      const resumeStores = await listSessionResumeStores(root);
+      const resumeStores = await listLocatedSessionResumeStores(root, {
+        onDuplicate,
+      });
       const snapshots = await Promise.all(
-        resumeStores.map(async (resumeStore) => ({
-          resumeStore,
-          status: await loadStatusLine(root, resumeStore),
+        resumeStores.map(async (located) => ({
+          resumeStore: located.resumeStore,
+          status: await loadStatusLine(root, located),
         })),
       );
       const filtered = snapshots.filter(({ resumeStore, status }) => {
@@ -212,17 +217,36 @@ function resolveLifecycle(
 
 async function loadStatusLine(
   repoRoot: string,
-  resumeStore: SessionResumeStore,
+  located: LocatedSessionResumeStore,
 ): Promise<SessionStateStore | undefined> {
   try {
-    const input = {
+    const { resumeStore, location } = located;
+    const statePath = (selectedLocation: 'canonical-slug' | 'user-path-hash') =>
+      sessionStateStorePath({
+        repoRoot,
+        conductorAgentId: resumeStore.conductorAgentId,
+        issueUrl: resumeStore.issueUrl,
+        location: selectedLocation,
+      });
+    const legacyPath = legacySessionStateStorePath({
       repoRoot,
       conductorAgentId: resumeStore.conductorAgentId,
-    };
-    return (
-      (await loadSessionStateStore(sessionStateStorePath(input))) ??
-      (await loadSessionStateStore(legacySessionStateStorePath(input)))
-    );
+    });
+    const candidates =
+      location === 'canonical-slug'
+        ? [
+            statePath('canonical-slug'),
+            statePath('user-path-hash'),
+            legacyPath,
+          ]
+        : location === 'user-path-hash'
+          ? [statePath('user-path-hash'), legacyPath]
+          : [legacyPath];
+    for (const path of candidates) {
+      const status = await loadSessionStateStore(path);
+      if (status) return status;
+    }
+    return undefined;
   } catch {
     // Status reporting is an optional operator snapshot. A missing, partial, or
     // unsupported file must not hide an otherwise readable session.

@@ -27,6 +27,7 @@ import {
   type ConductorBackend,
   type EnsembleConfig,
   type ResolvedProfile,
+  type SessionResumeStoreDuplicateDiagnostic,
 } from '@agents-ensemble/core/operator-runtime';
 import { operatorBaseModule } from './operator-base-module.js';
 import {
@@ -125,6 +126,25 @@ export async function runOperatorAgent(
     harness: (detail) => stdout.write(`\n[harness] ${detail}\n\n`),
     observation: (detail) => stdout.write(`\n[observation] ${detail}\n\n`),
   };
+  const reportResumeStoreDuplicate = (
+    diagnostic: SessionResumeStoreDuplicateDiagnostic,
+  ) => {
+    const candidates = diagnostic.candidates
+      .map(
+        (candidate) =>
+          `${candidate.location}=${candidate.path} (harnessSocketPath=${candidate.hasHarnessSocketPath ? 'present' : 'absent'})`,
+      )
+      .join('; ');
+    const selected = diagnostic.candidates.find(
+      (candidate) => candidate.path === diagnostic.selectedPath,
+    );
+    ttyChannels.harness(
+      `duplicate SessionResumeStore for ${diagnostic.conductorAgentId}; ` +
+        `selected ${diagnostic.selectedLocation}=${diagnostic.selectedPath} ` +
+        `(harnessSocketPath=${selected?.hasHarnessSocketPath ? 'present' : 'absent'}); ` +
+        `candidates: ${candidates}`,
+    );
+  };
   const existingState = options.newSession
     ? undefined
     : await loadOperatorAgentState(runtime.repoRoot);
@@ -175,11 +195,24 @@ export async function runOperatorAgent(
       list_operator_sessions: createListOperatorSessionsTool(
         runtime.repoRoot,
         (conductorAgentId) => watchPool.getLiveStatus(conductorAgentId),
+        reportResumeStoreDuplicate,
       ),
-      list_live_open_questions: createListLiveOpenQuestionsTool(runtime.repoRoot),
-      answer_live_open_question: createAnswerLiveOpenQuestionTool(runtime.repoRoot),
-      get_last_conductor_message: createGetLastConductorMessageTool(runtime.repoRoot),
-      list_conductor_messages: createListConductorMessagesTool(runtime.repoRoot),
+      list_live_open_questions: createListLiveOpenQuestionsTool(
+        runtime.repoRoot,
+        reportResumeStoreDuplicate,
+      ),
+      answer_live_open_question: createAnswerLiveOpenQuestionTool(
+        runtime.repoRoot,
+        reportResumeStoreDuplicate,
+      ),
+      get_last_conductor_message: createGetLastConductorMessageTool(
+        runtime.repoRoot,
+        reportResumeStoreDuplicate,
+      ),
+      list_conductor_messages: createListConductorMessagesTool(
+        runtime.repoRoot,
+        reportResumeStoreDuplicate,
+      ),
       register_session_watch: createRegisterSessionWatchTool(watchPool),
       unregister_session_watch: createUnregisterSessionWatchTool(watchPool),
       register_conductor_message_listen:
@@ -188,7 +221,10 @@ export async function runOperatorAgent(
         createUnregisterConductorMessageListenTool(watchPool),
       set_report_hold: createSetReportHoldTool(dispatchQueue),
       release_reports: createReleaseReportsTool(dispatchQueue),
-      send_operator_message: createSendOperatorMessageTool(runtime.repoRoot),
+      send_operator_message: createSendOperatorMessageTool(
+        runtime.repoRoot,
+        reportResumeStoreDuplicate,
+      ),
     },
   };
   let agent: ConductorAgent;

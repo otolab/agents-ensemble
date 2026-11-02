@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { join, normalize, resolve } from 'node:path';
+import { join, normalize, resolve, sep } from 'node:path';
+import { parseIssueUrl } from './issue/issue-ref.js';
 import { resolveUserEnsembleRoot } from './resolve-user-ensemble-root.js';
 
 export interface ResolveEnsemblePathsOptions {
@@ -35,6 +36,40 @@ export function resolveEnsemblePaths(
   const sessionsDir = join(sessionsRoot, repoKey);
   const sessionDataDir = (conductorAgentId: string) =>
     join(sessionsDir, conductorAgentId);
+  const canonicalRepoSlug = (issueUrl: string) => {
+    const issue = parseIssueUrl(issueUrl);
+    if (
+      [issue.owner, issue.repo].some(
+        (segment) =>
+          segment === '.' ||
+          segment === '..' ||
+          !/^[A-Za-z0-9_.-]+$/u.test(segment),
+      )
+    ) {
+      throw new Error('Invalid GitHub repository path in Issue URL.');
+    }
+    return join(
+      'github.com',
+      issue.owner.toLowerCase(),
+      issue.repo.toLowerCase(),
+    );
+  };
+  const canonicalRepoSessionsDir = (issueUrl: string) => {
+    const directory = resolve(
+      sessionsRoot,
+      canonicalRepoSlug(issueUrl),
+    );
+    if (!directory.startsWith(`${resolve(sessionsRoot)}${sep}`)) {
+      throw new Error('Invalid GitHub repository path in Issue URL.');
+    }
+    return directory;
+  };
+  const canonicalSessionDataDir = (
+    issueUrl: string,
+    conductorAgentId: string,
+  ) => join(canonicalRepoSessionsDir(issueUrl), conductorAgentId);
+  const canonicalOperatorAgentDir = (issueUrl: string) =>
+    join(userRoot, 'operator-agent', canonicalRepoSlug(issueUrl));
 
   return {
     repoRoot,
@@ -43,6 +78,36 @@ export function resolveEnsemblePaths(
     projectRoot,
     sessionsRoot,
     sessionsDir,
+    canonicalRepoSessionsDir,
+    canonicalSessionResumeStorePath: (
+      issueUrl: string,
+      conductorAgentId: string,
+    ) =>
+      join(
+        canonicalRepoSessionsDir(issueUrl),
+        `${conductorAgentId}.json`,
+      ),
+    canonicalOpenQuestionsPath: (
+      issueUrl: string,
+      conductorAgentId: string,
+    ) =>
+      join(
+        canonicalSessionDataDir(issueUrl, conductorAgentId),
+        'open-questions.yaml',
+      ),
+    canonicalSessionStatePath: (
+      issueUrl: string,
+      conductorAgentId: string,
+    ) =>
+      join(
+        canonicalSessionDataDir(issueUrl, conductorAgentId),
+        'session-state.yaml',
+      ),
+    canonicalOperatorAgentDir,
+    canonicalOperatorAgentSessionPath: (issueUrl: string) =>
+      join(canonicalOperatorAgentDir(issueUrl), 'session.json'),
+    canonicalOperatorWatchStatePath: (issueUrl: string) =>
+      join(canonicalOperatorAgentDir(issueUrl), 'watch-state.json'),
     legacySessionsDir: join(projectRoot, 'sessions'),
     legacySessionResumeStorePath: (conductorAgentId: string) =>
       join(projectRoot, 'sessions', `${conductorAgentId}.json`),
