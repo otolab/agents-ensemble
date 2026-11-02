@@ -1,10 +1,12 @@
-import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import {
-  listSessionResumeStores,
-  resolveEnsemblePaths,
   type ConductorBackend,
 } from '@agents-ensemble/core/operator-runtime';
+import {
+  operatorRepositoryStatePath,
+  resolveOperatorRepositoryStatePaths,
+} from './operator-state-paths.js';
 
 export const OPERATOR_AGENT_STATE_VERSION = 1;
 
@@ -15,26 +17,23 @@ export interface OperatorAgentState {
   repoRoot: string;
 }
 
-export function operatorAgentStatePath(repoRoot: string): string {
-  return resolveEnsemblePaths({ repoRoot }).operatorAgentSessionPath;
+export function operatorAgentStatePath(
+  repoRoot: string,
+  options: {
+    location?: 'canonical-slug' | 'user-path-hash';
+    issueUrl?: string;
+  } = {},
+): string {
+  return operatorRepositoryStatePath(repoRoot, 'session', options);
 }
 
 export async function loadOperatorAgentState(
   repoRoot: string,
 ): Promise<OperatorAgentState | undefined> {
-  const paths = resolveEnsemblePaths({ repoRoot });
-  const canonicalPath = await canonicalOperatorSessionPath(repoRoot, paths);
-  const canonicalExists = canonicalPath
-    ? await pathExists(canonicalPath)
-    : false;
-  const candidates = [
-    ...(canonicalExists && canonicalPath ? [canonicalPath] : []),
-    paths.operatorAgentSessionPath,
-    paths.legacyOperatorAgentSessionPath,
-  ];
+  const paths = await resolveOperatorRepositoryStatePaths(repoRoot, 'session');
   let sourcePath: string | undefined;
   let raw: string | undefined;
-  for (const candidate of candidates) {
+  for (const candidate of paths.readPaths) {
     try {
       raw = await readFile(candidate, 'utf8');
       sourcePath = candidate;
@@ -46,11 +45,7 @@ export async function loadOperatorAgentState(
   if (raw === undefined || sourcePath === undefined) return undefined;
 
   const state = parseOperatorAgentState(JSON.parse(raw) as unknown);
-  const destinationPath =
-    canonicalExists && canonicalPath
-      ? canonicalPath
-      : paths.operatorAgentSessionPath;
-  if (sourcePath !== destinationPath) {
+  if (sourcePath !== paths.targetPath) {
     await saveOperatorAgentState(repoRoot, state);
   }
   return state;
@@ -61,12 +56,9 @@ export async function saveOperatorAgentState(
   state: OperatorAgentState,
 ): Promise<void> {
   const validated = parseOperatorAgentState(state);
-  const paths = resolveEnsemblePaths({ repoRoot });
-  const canonicalPath = await canonicalOperatorSessionPath(repoRoot, paths);
-  const path =
-    canonicalPath && (await pathExists(canonicalPath))
-      ? canonicalPath
-      : paths.operatorAgentSessionPath;
+  const path = (
+    await resolveOperatorRepositoryStatePaths(repoRoot, 'session')
+  ).targetPath;
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
@@ -80,39 +72,10 @@ export async function saveOperatorAgentState(
 }
 
 export async function clearOperatorAgentState(repoRoot: string): Promise<void> {
-  const paths = resolveEnsemblePaths({ repoRoot });
-  const canonicalPath = await canonicalOperatorSessionPath(repoRoot, paths);
-  await Promise.all([
-    rm(paths.operatorAgentSessionPath, { force: true }),
-    rm(paths.legacyOperatorAgentSessionPath, { force: true }),
-    ...(canonicalPath
-      ? [rm(canonicalPath, { force: true })]
-      : []),
-  ]);
-}
-
-async function canonicalOperatorSessionPath(
-  repoRoot: string,
-  paths: ReturnType<typeof resolveEnsemblePaths>,
-): Promise<string | undefined> {
-  const stores = await listSessionResumeStores(repoRoot);
-  const issueUrl = stores[0]?.issueUrl;
-  if (!issueUrl) return undefined;
-  try {
-    return paths.canonicalOperatorAgentSessionPath(issueUrl);
-  } catch {
-    return undefined;
-  }
-}
-
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch (error) {
-    if (isEnoent(error)) return false;
-    throw error;
-  }
+  const paths = await resolveOperatorRepositoryStatePaths(repoRoot, 'session');
+  await Promise.all(
+    paths.readPaths.map((path) => rm(path, { force: true })),
+  );
 }
 
 function parseOperatorAgentState(value: unknown): OperatorAgentState {

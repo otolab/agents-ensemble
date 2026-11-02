@@ -62,17 +62,19 @@ watch pool は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch
 
 ## 複数の保存先に同じ SessionResumeStore がある場合
 
-通常の保存先は ADR 0044 どおり `~/.ensemble/sessions/<repoKey>/` です。旧データの移行で同じ `conductorAgentId` の JSON が複数の場所にある場合、operator は `~/.ensemble/sessions/github.com/<owner>/<repo>/` の slug 側、path-hash 側、project `.ensemble/sessions/` の順で選びます。slug 側を選んで session を resume した場合、harness はその JSON と対応する Open Questions / session-state YAML を同じ slug 側へ更新します。
+通常の保存先は [ADR 0046](adr/0046-migrated-session-canonical-slug-mirrors.md) に記録したとおり `~/.ensemble/sessions/<repoKey>/` です。ADR 0044 の path-hash 方針を維持しつつ、project `.ensemble/` からの一括移行では JSON と sidecar をまず path-hash 側へ移し、その後 GitHub Issue URL が有効な ResumeStore と対応する Open Questions / session-state YAML を canonical slug 側へ、宛先が未作成の場合だけ複製します。path-hash 側は削除・退避せず残します。この移行を通った session に限り slug 側を正本として扱い、resume 後の JSON と YAML も slug 側へ更新します。新規 session の通常保存先は引き続き path-hash です。
 
-operator-agent の session / watch state も、slug 側のファイルがすでにあればそれを読み書きします。slug 側がなければ従来どおり path-hash 側を使い、project legacy は最後の fallback として読み込みます。これにより stale な hash copy が既存 slug state を隠しません。
+同じ `conductorAgentId` の JSON が複数の場所にある場合、operator / harness は `~/.ensemble/sessions/github.com/<owner>/<repo>/` の slug 側、path-hash 側、project `.ensemble/sessions/` の順で ResumeStore を選びます。sidecar の探索も選択 location に合わせます。slug 選択時は slug → path-hash → project legacy の順、path-hash 選択時は path-hash → project legacy の順、project legacy 選択時は project legacy のみを読みます。hash-only session に残った orphan slug YAML が、選択中の ResumeStore より優先されることはありません。
 
-重複を検出すると operator TTY の `[harness]` に、選択した path と各候補の `harnessSocketPath` の有無を表示します。重複 JSON や state file は自動削除・上書きしません。`scripts/migrate-project-ensemble-runtime-to-user.mjs` は project legacy から path-hash への移行を行うため、残った hash copy の扱いはこの選択規則に従います。
+operator-agent の session / watch state は、対象 repository の選択済み ResumeStore がすべて同じ canonical slug にあり、その slug が一意に決まる場合は slug-keyed state を使います。state がまだなければ path-hash、次に project legacy を読み、読み込んだ値を slug 側へ複製します。それ以外（hash-only、legacy、複数 slug が混在する場合）は path-hash を使い、project legacy を fallback とします。state の読み込み・保存先は ResumeStore location から決め、ディレクトリ列挙順には依存しません。
+
+重複を検出すると operator TTY の `[harness]` に、選択した path と各候補の `harnessSocketPath` の有無を表示します。migration は既存の slug JSON / YAML を上書きせず、hash copy も削除・退避しません。`scripts/migrate-project-ensemble-runtime-to-user.mjs` は既に path-hash へ移行済みの session に対して再実行しても slug mirror を作成できます。
 
 ## Endpoint discovery と lifecycle
 
 operator-agent は `listSessionResumeStores` が選んだ SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。通常は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json` ですが、同じ session の canonical slug 側と重複していれば slug 側を使います。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、選択した SessionResumeStore に記録された値を使ってください。
 
-path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら UDS request は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` と発言 listen は直接 live control であり、保存 YAML へ fallback しません。operator-agent tool の `list_conductor_messages` はこの UDS 経路を使わず、SessionResumeStore の session ID / backend / cwd から provider history を読みます。watch pool の `register_session_watch` のみが `session.observe` を試し、UDS が到達不能または method 未対応なら保存 snapshot へ切り替えます。発言 listen は UDS が利用できない間も保存値へ切り替えず、次の poll で再接続を試します。
+path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら UDS request は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` と発言 listen は直接 live control であり、保存 YAML へ fallback しません。operator-agent tool の `list_conductor_messages` はこの UDS 経路を使わず、SessionResumeStore の session ID / backend / cwd から provider history を読みます。watch pool の `register_session_watch` のみが `session.observe` を試し、UDS が到達不能または method 未対応なら選択した ResumeStore location に対応する保存 snapshot へ切り替えます。発言 listen は UDS が利用できない間も保存値へ切り替えず、次の poll で再接続を試します。
 
 listener の起動後に `harnessSocketPath` を含む初回 SessionResumeStore flush が失敗しても、warning を記録して session は続行し、listener は稼働したままの場合があります。このとき SessionResumeStore に新しい path が書かれていなければ client は endpoint を発見・接続できません。別の接続先を探す自動 fallback はありません。
 

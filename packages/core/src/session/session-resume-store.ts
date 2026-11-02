@@ -323,9 +323,18 @@ export async function listSessionResumeStores(
     onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
   } = {},
 ): Promise<SessionResumeStore[]> {
-  return (await listSessionResumeStoreLocations(repoRoot, options)).map(
+  return (await listLocatedSessionResumeStores(repoRoot, options)).map(
     ({ resumeStore }) => resumeStore,
   );
+}
+
+export async function listLocatedSessionResumeStores(
+  repoRoot: string,
+  options: {
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<LocatedSessionResumeStore[]> {
+  return listSessionResumeStoreLocations(repoRoot, options);
 }
 
 export async function findSessionResumeStore(
@@ -335,7 +344,7 @@ export async function findSessionResumeStore(
     onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
   } = {},
 ): Promise<LocatedSessionResumeStore | undefined> {
-  return (await listSessionResumeStoreLocations(repoRoot, options)).find(
+  return (await listLocatedSessionResumeStores(repoRoot, options)).find(
     (candidate) =>
       candidate.resumeStore.conductorAgentId === conductorAgentId,
   );

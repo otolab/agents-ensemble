@@ -1,8 +1,12 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sessionResumeStorePath, sessionStateStorePath } from '@agents-ensemble/core';
+import {
+  resolveEnsemblePaths,
+  sessionResumeStorePath,
+  sessionStateStorePath,
+} from '@agents-ensemble/core';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
 
 describe('list_operator_sessions', () => {
@@ -173,6 +177,62 @@ describe('list_operator_sessions', () => {
           { statusLine: '前の報告', reportedAt: 20 },
         ],
       }),
+    );
+  });
+
+  it('loads status YAML according to the selected ResumeStore location and its fallback', async () => {
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const hashIssueUrl = 'https://github.com/example/hash-list/issues/607';
+    const slugIssueUrl = 'https://github.com/example/slug-list/issues/607';
+    await writeResumeStore('hash-selected', 10, hashIssueUrl, {
+      statusLine: 'hash snapshot',
+    });
+    const hashSlugYaml = paths.canonicalSessionStatePath(
+      hashIssueUrl,
+      'hash-selected',
+    );
+    await mkdir(dirname(hashSlugYaml), { recursive: true });
+    await writeFile(
+      hashSlugYaml,
+      'version: 1\nstatusLine: "orphan slug snapshot"\nreportedAt: 11\n',
+      'utf8',
+    );
+
+    await writeResumeStore('slug-selected', 20, slugIssueUrl, {
+      statusLine: 'hash fallback snapshot',
+    });
+    const hashStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: 'slug-selected',
+    });
+    const slugStorePath = paths.canonicalSessionResumeStorePath(
+      slugIssueUrl,
+      'slug-selected',
+    );
+    await mkdir(dirname(slugStorePath), { recursive: true });
+    await writeFile(
+      slugStorePath,
+      await readFile(hashStorePath, 'utf8'),
+      'utf8',
+    );
+
+    const result = JSON.parse(
+      (await createListOperatorSessionsTool(repoRoot).execute({})).content[0]!
+        .text,
+    ) as {
+      sessions: Array<{ conductorAgentId: string; statusLine: string | null }>;
+    };
+    expect(result.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          conductorAgentId: 'hash-selected',
+          statusLine: 'hash snapshot',
+        }),
+        expect.objectContaining({
+          conductorAgentId: 'slug-selected',
+          statusLine: 'hash fallback snapshot',
+        }),
+      ]),
     );
   });
 

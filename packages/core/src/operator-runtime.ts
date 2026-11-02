@@ -65,6 +65,7 @@ export {
   loadSessionResumeStore,
   harnessPhaseFromLegacyLifecycle,
   findSessionResumeStore,
+  listLocatedSessionResumeStores,
   listSessionResumeStores,
   type HarnessPhase,
   type LocatedSessionResumeStore,

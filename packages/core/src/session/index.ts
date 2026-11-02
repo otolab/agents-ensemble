@@ -24,6 +24,7 @@ export {
   findLatestSessionResumeStoreForIssue,
   findSessionResumeStore,
   harnessPhaseFromLegacyLifecycle,
+  listLocatedSessionResumeStores,
   listSessionResumeStores,
   loadSessionResumeStore,
   requireLocatedSessionResumeStoreForResume,

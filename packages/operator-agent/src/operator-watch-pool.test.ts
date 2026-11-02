@@ -95,8 +95,21 @@ describe('operator watch pool', () => {
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
     const agentId = '607';
     const paths = resolveEnsemblePaths({ repoRoot });
-    const issueUrl = `https://github.com/example/watch-state/issues/${agentId}`;
+    const issueUrl = 'https://github.com/example/watch-state/issues/607';
     await writeResumeStore(agentId, 1, undefined, issueUrl);
+    const slugResumeStorePath = paths.canonicalSessionResumeStorePath(
+      issueUrl,
+      agentId,
+    );
+    await mkdir(dirname(slugResumeStorePath), { recursive: true });
+    await writeFile(
+      slugResumeStorePath,
+      await readFile(
+        join(repoRoot, '.ensemble', 'sessions', `${agentId}.json`),
+        'utf8',
+      ),
+      'utf8',
+    );
     const canonicalPath = paths.canonicalOperatorWatchStatePath(issueUrl);
     const hashPath = paths.operatorWatchStatePath;
     const state = (pollIntervalMs: number) => ({
@@ -140,6 +153,71 @@ describe('operator watch pool', () => {
         JSON.parse(await readFile(hashPath, 'utf8')).watches[agentId]
           .pollIntervalMs,
       ).toBe(50_000);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('moves hash watch state to the selected slug key on load and keeps the hash copy', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-state-migrate-'));
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const agentId = 'watch-state-migrate';
+    const issueUrl = 'https://github.com/example/watch-state-migrate/issues/607';
+    const slugStorePath = paths.canonicalSessionResumeStorePath(issueUrl, agentId);
+    await mkdir(dirname(slugStorePath), { recursive: true });
+    await writeFile(
+      slugStorePath,
+      JSON.stringify({
+        version: 1,
+        conductorAgentId: agentId,
+        issueUrl,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        updatedAt: 1,
+      }),
+      'utf8',
+    );
+    const state = {
+      version: 1,
+      watches: {
+        [agentId]: {
+          conductorAgentId: agentId,
+          pollIntervalMs: 30_000,
+          debounceMs: 0,
+        },
+      },
+      cursors: {},
+      pendingReports: [],
+    };
+    const hashStatePath = paths.operatorWatchStatePath;
+    const slugStatePath = operatorWatchStatePath(repoRoot, {
+      location: 'canonical-slug',
+      issueUrl,
+    });
+    await mkdir(dirname(hashStatePath), { recursive: true });
+    await writeFile(hashStatePath, JSON.stringify(state), 'utf8');
+
+    const pool = await createOperatorWatchPool({
+      repoRoot,
+      dispatchQueue: createOperatorDispatchQueue(),
+    });
+    try {
+      expect(pool.list()).toEqual([
+        {
+          conductorAgentId: agentId,
+          pollIntervalMs: 30_000,
+          debounceMs: 0,
+        },
+      ]);
+      await expect(
+        readFile(slugStatePath, 'utf8').then((text) => JSON.parse(text)),
+      ).resolves.toMatchObject(state);
+      await expect(
+        readFile(hashStatePath, 'utf8').then((text) => JSON.parse(text)),
+      ).resolves.toMatchObject(state);
     } finally {
       pool.close();
     }
@@ -489,6 +567,127 @@ describe('operator watch pool', () => {
       expect(diagnostics.join('\n')).toContain(`${agentId}.json`);
       expect(batch?.events[0]?.type === 'report' && batch.events[0].text).toContain(
         'new canonical slug question',
+      );
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('uses only snapshot fallbacks consistent with the selected ResumeStore location', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-location-yaml-'));
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const slugIssueUrl = 'https://github.com/example/slug-fallback/issues/607';
+    const hashIssueUrl = 'https://github.com/example/hash-fallback/issues/608';
+    const slugAgentId = 'slug-fallback';
+    const hashAgentId = 'hash-fallback';
+    const makeResumeStore = (agentId: string, issueUrl: string) => ({
+      version: 1,
+      conductorAgentId: agentId,
+      issueUrl,
+      repoRoot,
+      profile: { workers: [], agents: {} },
+      openQuestions: [],
+      sequence: 0,
+      workers: {},
+      updatedAt: 1,
+    });
+    const writeStore = async (path: string, agentId: string, issueUrl: string) => {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(
+        path,
+        JSON.stringify(makeResumeStore(agentId, issueUrl)),
+        'utf8',
+      );
+    };
+    const writeQuestions = async (
+      path: string,
+      questions: Array<{ id: string; question: string }>,
+    ) => {
+      const sequence = Math.max(
+        ...questions.map(({ id }) => Number(id.slice('inq-'.length))),
+      );
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(
+        path,
+        [
+          'version: 1',
+          `sequence: ${sequence}`,
+          'openQuestions:',
+          ...questions.flatMap(({ id, question }, index) => [
+            `  - id: ${id}`,
+            `    question: ${JSON.stringify(question)}`,
+            '    responseType: text',
+            '    source: conductor',
+            '    status: open',
+            `    askedAt: ${index + 1}`,
+          ]),
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+    };
+
+    const slugStorePath = paths.canonicalSessionResumeStorePath(
+      slugIssueUrl,
+      slugAgentId,
+    );
+    await writeStore(slugStorePath, slugAgentId, slugIssueUrl);
+    await writeQuestions(
+      paths.openQuestionsPath(slugAgentId),
+      [{ id: 'inq-1', question: 'hash fallback for selected slug' }],
+    );
+
+    const hashStorePath = paths.sessionResumeStorePath(hashAgentId);
+    await writeStore(hashStorePath, hashAgentId, hashIssueUrl);
+    await writeQuestions(
+      paths.canonicalOpenQuestionsPath(hashIssueUrl, hashAgentId),
+      [{ id: 'inq-1', question: 'orphan slug must be ignored for selected hash' }],
+    );
+    await writeQuestions(
+      paths.openQuestionsPath(hashAgentId),
+      [{ id: 'inq-1', question: 'hash snapshot for selected hash' }],
+    );
+
+    const dispatchQueue = createOperatorDispatchQueue();
+    const pool = await createOperatorWatchPool({ repoRoot, dispatchQueue });
+    try {
+      await pool.register(slugAgentId, { pollIntervalMs: 60_000, debounceMs: 0 });
+      await pool.register(hashAgentId, { pollIntervalMs: 60_000, debounceMs: 0 });
+      await expect(pool.pollOnce(slugAgentId)).resolves.toBe(0);
+      await expect(pool.pollOnce(hashAgentId)).resolves.toBe(0);
+      await writeQuestions(
+        paths.openQuestionsPath(slugAgentId),
+        [
+          { id: 'inq-1', question: 'hash fallback for selected slug' },
+          { id: 'inq-2', question: 'new hash fallback for selected slug' },
+        ],
+      );
+      await writeQuestions(
+        paths.openQuestionsPath(hashAgentId),
+        [
+          { id: 'inq-1', question: 'hash snapshot for selected hash' },
+          { id: 'inq-2', question: 'new hash snapshot for selected hash' },
+        ],
+      );
+      await expect(pool.pollOnce(slugAgentId)).resolves.toBe(1);
+      await expect(pool.pollOnce(hashAgentId)).resolves.toBe(1);
+      const reports = [0, 1]
+        .flatMap(() =>
+          dispatchQueue.takeBatch(
+            { continuationConsumed: false },
+            Date.now(),
+          )?.events ?? [],
+        )
+        .filter((event) => event.type === 'report')
+        .map((event) => event.type === 'report' ? event.text : '');
+      expect(reports).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('new hash fallback for selected slug'),
+          expect.stringContaining('new hash snapshot for selected hash'),
+        ]),
+      );
+      expect(reports?.join('\n')).not.toContain(
+        'orphan slug must be ignored for selected hash',
       );
     } finally {
       pool.close();
