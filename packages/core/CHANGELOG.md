@@ -1,5 +1,15 @@
 # @agents-ensemble/core
 
+## 0.17.0
+
+### Minor Changes
+
+- 5299f44: Add per-worker ACP model tags and config-backed model ID mappings.
+
+### Patch Changes
+
+- 26a133c: Update the bundled Codex ACP adapter to 2.3.0.
+
 ## 0.16.0
 
 ### Minor Changes
