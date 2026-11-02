@@ -119,6 +119,70 @@ describe('formatIssueSessionSummaryJson', () => {
     expect(json.sessionUsage.cost.scope).toBe('conductor-only');
   });
 
+  it('keeps reasoning usage in exit JSON while TTY rows show cache fields only', () => {
+    const base = createSummary();
+    const dispatch = base.workerDispatches[0]!;
+    const sessionUsage = {
+      ...base.sessionUsage!,
+      byAgent: {
+        ...base.sessionUsage!.byAgent,
+        workers: {
+          implementer: {
+            rounds: 1,
+            roundsWithUsage: 1,
+            tokens: {
+              inputTokens: 80,
+              outputTokens: 20,
+              totalTokens: 100,
+              reasoningTokens: 7,
+              cacheReadTokens: 10,
+              cacheWriteTokens: 2,
+            },
+          },
+        },
+      },
+      cacheStats: {
+        totals: { cacheReadTokens: 10, cacheWriteTokens: 2 },
+        byAgent: {
+          conductor: null,
+          workers: {
+            implementer: { cacheReadTokens: 10, cacheWriteTokens: 2 },
+          },
+        },
+      },
+    };
+    const summary = createSummary({
+      workerDispatches: [
+        {
+          ...dispatch,
+          promptResult: {
+            ...dispatch.promptResult,
+            usage: {
+              inputTokens: 80,
+              outputTokens: 20,
+              totalTokens: 100,
+              reasoningTokens: 7,
+              cacheReadTokens: 10,
+              cacheWriteTokens: 2,
+            },
+          },
+        },
+      ],
+      sessionUsage,
+    });
+
+    const json = JSON.parse(formatIssueSessionSummaryJson(summary));
+    const text = formatIssueSessionSummaryText(summary);
+
+    expect(
+      json.sessionUsage.byAgent.workers.implementer.tokens.reasoningTokens,
+    ).toBe(7);
+    expect(text).toContain(
+      'worker implementer: 新規 input 80 · output 20 · cache read 10 · cache write 2',
+    );
+    expect(text).not.toContain('reasoning');
+  });
+
   it('truncates long responses in preview', () => {
     const longText = 'x'.repeat(DEFAULT_RESPONSE_PREVIEW_LENGTH + 10);
     const json = JSON.parse(
