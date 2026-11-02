@@ -212,7 +212,7 @@ program
     },
   );
 
-function addConductorCommandOptions(command: Command): Command {
+function addConductorCommandOptions(command: Command, catalog = false): Command {
   return command
     .option(
       '--repo-root <path>',
@@ -220,8 +220,14 @@ function addConductorCommandOptions(command: Command): Command {
       process.cwd(),
     )
     .option('--profile <name>', 'Team profile used to resolve conductor.backend')
-    .option('--provider <id>', 'Pi provider (default: settings.json defaultProvider)')
-    .option('--model-id <id>', 'Pi model id used to infer the provider');
+    .option(
+      '--provider <id>',
+      catalog ? 'Required: configured Pi provider ID' : 'Pi provider (default: settings.json defaultProvider)',
+    )
+    .option(
+      '--model-id <id>',
+      catalog ? 'Pi model id (does not select the catalog provider)' : 'Pi model id used to infer the provider',
+    );
 }
 
 const auth = program.command('auth').description('Conductor authentication');
@@ -329,7 +335,7 @@ addConductorCommandOptions(models.command('list'))
     }
   });
 
-addConductorCommandOptions(models.command('remote'))
+addConductorCommandOptions(models.command('remote'), true)
   .description('List IDs from a configured Pi provider remote catalog')
   .option('--json', 'Output JSON')
   .action(async (options: ConductorCommandOptions & { json?: boolean }) => {
@@ -342,7 +348,7 @@ addConductorCommandOptions(models.command('remote'))
     }
   });
 
-addConductorCommandOptions(models.command('diff'))
+addConductorCommandOptions(models.command('diff'), true)
   .description('Compare remote and configured Pi model IDs')
   .option('--json', 'Output JSON')
   .action(async (options: ConductorCommandOptions & { json?: boolean }) => {
@@ -363,7 +369,7 @@ addConductorCommandOptions(models.command('diff'))
     }
   });
 
-addConductorCommandOptions(models.command('add'))
+addConductorCommandOptions(models.command('add'), true)
   .description('Add one remote Pi model ID to models.json')
   .argument('<id>', 'Remote model ID to add')
   .allowExcessArguments(false)
@@ -395,7 +401,7 @@ addConductorCommandOptions(models.command('add'))
     },
   );
 
-addConductorCommandOptions(models.command('sync'))
+addConductorCommandOptions(models.command('sync'), true)
   .description('Deprecated: use models diff and models add instead')
   .addOption(
     new Option('--target <layer>', 'models.json layer to update when adding IDs (default: user)')

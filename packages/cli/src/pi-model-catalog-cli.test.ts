@@ -32,14 +32,7 @@ describe('ensemble models catalog CLI', () => {
         },
       },
     }));
-    await writeFile(preload, `
-      const originalFetch = globalThis.fetch;
-      globalThis.fetch = async (input, init) => String(input).startsWith('https://litellm.example/')
-        ? Response.json({ data: [{ id: 'remote-model', max_input_tokens: 64000 }] })
-        : String(input).startsWith('data:')
-          ? originalFetch(input, init)
-          : Promise.reject(new Error('Unexpected network request'));
-    `);
+    await setRemoteModels([{ id: 'remote-model', max_input_tokens: 64000 }]);
   });
 
   afterEach(async () => {
@@ -51,6 +44,17 @@ describe('ensemble models catalog CLI', () => {
       '--import', pathToFileURL(preload).href, cliEntry, 'models', ...args,
       '--repo-root', repoRoot,
     ], { encoding: 'utf8', env: { ...process.env, HOME: repoRoot } });
+  }
+
+  async function setRemoteModels(models: Array<{ id: string; max_input_tokens?: number }>) {
+    await writeFile(preload, `
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (input, init) => String(input).startsWith('https://litellm.example/')
+        ? Response.json({ data: ${JSON.stringify(models)} })
+        : String(input).startsWith('data:')
+          ? originalFetch(input, init)
+          : Promise.reject(new Error('Unexpected network request'));
+    `);
   }
 
   it('exposes the new commands without rm or bulk add', () => {
@@ -100,6 +104,52 @@ describe('ensemble models catalog CLI', () => {
     expect(sync.stderr).toContain('deprecated');
     expect(JSON.parse(sync.stdout).added).toEqual(['remote-model']);
     await expect(readFile(join(repoRoot, 'user-pi', 'models.json'), 'utf8')).resolves.toContain('remote-model');
+  });
+
+  it.each([
+    ['remote', []],
+    ['diff', []],
+    ['add', ['remote-model']],
+    ['sync', []],
+  ])('%s documents and enforces an explicit provider', async (command, args) => {
+    await writeFile(join(repoRoot, 'project-pi', 'settings.json'), JSON.stringify({
+      defaultProvider: 'litellm',
+    }));
+    const help = run(command, '--help');
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('Required: configured Pi provider ID');
+    expect(help.stdout).toContain('does not select the catalog provider');
+    expect(help.stdout).not.toContain('defaultProvider');
+    expect(help.stdout).not.toContain('used to infer the provider');
+
+    for (const modelOptions of [[], ['--model-id', 'litellm/remote-model']]) {
+      const result = run(command, ...args, ...modelOptions);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('Pass --provider <id>');
+    }
+  });
+
+  it('validates every repeated sync ID before writing and preserves repeatable adds', async () => {
+    await setRemoteModels([{ id: 'first' }, { id: 'second', max_input_tokens: 64000 }]);
+    const userPath = join(repoRoot, 'user-pi', 'models.json');
+    const rejected = run('sync', '--provider', 'litellm', '--add', 'first', '--add', 'missing');
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain('not in the API catalog: missing');
+    await expect(readFile(userPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const added = run('sync', '--provider', 'litellm', '--add', 'first', '--add', 'second', '--json');
+    expect(added.status).toBe(0);
+    expect(added.stderr).toContain('deprecated');
+    expect(JSON.parse(added.stdout).added).toEqual(['first', 'second']);
+    const contents = await readFile(userPath, 'utf8');
+    expect(JSON.parse(contents).providers.litellm.models).toEqual([
+      { id: 'first' },
+      { id: 'second', contextWindow: 64000 },
+    ]);
+
+    const rejectedAgain = run('sync', '--provider', 'litellm', '--add', 'second', '--add', 'missing');
+    expect(rejectedAgain.status).toBe(1);
+    expect(await readFile(userPath, 'utf8')).toBe(contents);
   });
 
   it('rejects a hidden user addition before writing and permits an explicit project addition', async () => {
