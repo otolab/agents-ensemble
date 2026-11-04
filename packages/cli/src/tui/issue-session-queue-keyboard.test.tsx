@@ -55,7 +55,7 @@ describe.each([['pane', IssueSessionTui], ['stream', IssueSessionTuiStream]] as 
       expect(value).toBe('one\ntwo\nsix');
       expect(cursor).toEqual([2, 3]);
       expect(lastFrame()).toContain('Message queue (1-4/6)');
-      stdin.write('\u001b[6;6~');
+      stdin.write('\x07');
       await flushInkStdin();
       expect(lastFrame()).toContain('Message queue (2-5/6)');
       expect(value).toBe('one\ntwo\nsix');
@@ -63,7 +63,7 @@ describe.each([['pane', IssueSessionTui], ['stream', IssueSessionTuiStream]] as 
       stdin.write('X');
       await flushInkStdin();
       expect(value).toBe('one\ntwo\nsixX');
-      stdin.write('\u001b[5;6~');
+      stdin.write('\x14');
       await flushInkStdin();
       expect(lastFrame()).toContain('Message queue (1-4/6)');
       stdin.write('Y');

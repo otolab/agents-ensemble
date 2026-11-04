@@ -95,6 +95,68 @@ describe('IssueSessionTuiStream', () => {
     vi.restoreAllMocks();
   });
 
+  it('moves relative to the visible queue position after messages are dispatched', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    const viewModel = createTuiViewModel();
+    const messages = Array.from({ length: 12 }, (_, index) => ({
+      text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+    }));
+    const context = { conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'text' })],
+      queuedMessages: messages };
+    viewModel.setOperatorContext(context);
+    const { stdin, lastFrame } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    for (let index = 0; index < 8; index++) {
+      stdin.write('\x07');
+      await flushInkStdin();
+    }
+    viewModel.setOperatorContext({ ...context, queuedMessages: messages.slice(0, 4) });
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-3');
+    stdin.write('\x14');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-2');
+  });
+
+  it('shows answer and queue controls at 40x12, including the slash fallback', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 40 });
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-2', question: '次の質問', responseType: 'yes_no' })],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => index === 0 ? {
+        text: '【open question 回答】inq-1: 長い質問 → いいえ (by operator)',
+        delivery: 'next' as const, openQuestionAnswer: true, answerPreview: 'inq-1: いいえ',
+      } : { text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false }),
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('inq-1: いいえ');
+    expect(lastFrame()).toContain('Q:^T< >^G');
+    expect(lastFrame()).toContain('/q-/q+');
+    stdin.write('\x07');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-1');
+    stdin.write('\x14');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('inq-1: いいえ');
+    stdin.write('/q+');
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-1');
+    expect(onSubmit).not.toHaveBeenCalled();
+    stdin.write('/q-');
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('inq-1: いいえ');
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('keeps the selected answer suggestion visible alongside the queue on 80x15', async () => {
     Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 15 });
     const viewModel = createTuiViewModel();
@@ -109,10 +171,14 @@ describe('IssueSessionTuiStream', () => {
     await flushInkStdin();
     expect(lastFrame()).toContain('pending-0');
     expect(lastFrame()).toContain('› yes');
+    stdin.write('\x07');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-1');
+    expect(lastFrame()).toContain('› yes');
     stdin.write(INK_TEST_KEYS.downArrow);
     await flushInkStdin();
     expect(lastFrame()).toContain('› no');
-    expect(lastFrame()).toContain('pending-0');
+    expect(lastFrame()).toContain('pending-1');
   });
 
   it('fits a question, long queue, suggestions and multiline input into 80x12', async () => {
@@ -133,7 +199,7 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).toContain(OPERATOR_INPUT_PROMPT);
     expect(frame).not.toContain('> ssage');
     expect(frame.split('\n').find((line) => line.includes('pending-0'))).not.toContain('> ');
-    stdin.write('\u001B[6;6~');
+    stdin.write('\x07');
     await flushInkStdin();
     expect(lastFrame()).toContain('pending-1');
     stdin.write('y');
@@ -175,7 +241,7 @@ describe('IssueSessionTuiStream', () => {
     const { stdin, lastFrame } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={vi.fn()} />);
     await flushInkStdin();
     expect(lastFrame()).toContain('Message queue (1-4/6)');
-    stdin.write('\u001B[6;6~');
+    stdin.write('\x07');
     await flushInkStdin();
     expect(lastFrame()).toContain('Message queue (2-5/6)');
     expect(lastFrame()).toContain('item-4');
@@ -1109,6 +1175,87 @@ describe('IssueSessionTuiStream', () => {
     expect(frame).toContain('[observation] third');
     expect(frame).toContain('[operator] fourth');
     expect(frame).toContain('[conductor] fifth');
+  });
+
+  it.each([80, 40])('keeps the unread indicator visible with a question and queue at %ix12', async (columns) => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, value: columns });
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'yes_no' })],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => ({
+        text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+      })),
+    });
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={vi.fn()} />,
+    );
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.pageUp);
+    await flushInkStdin();
+    viewModel.appendActivityLog('conductor', 'new conductor message');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('新着1 ^End');
+    expect(lastFrame()).toContain('Q:^T< >^G');
+    expect(lastFrame()).not.toContain('new conductor message');
+    viewModel.appendActivityLog('conductor', 'second message');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('新着2 ^End');
+    stdin.write(INK_TEST_KEYS.end);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('new conductor message');
+    expect(lastFrame()).toContain('second message');
+    expect(lastFrame()).not.toContain('新着2 ^End');
+  });
+
+  it('returns to new activity with Ctrl+End while preserving the draft', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5, openQuestions: [],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => ({
+        text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+      })),
+    });
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={vi.fn()} />,
+    );
+    stdin.write(INK_TEST_KEYS.ctrlPageUp);
+    await flushInkStdin();
+    stdin.write('draft');
+    await flushInkStdin();
+    viewModel.appendActivityLog('conductor', 'new activity');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('新着1 ^End');
+    stdin.write('\u001b[1;5F');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('new activity');
+    expect(lastFrame()).toContain('draft');
+    expect(lastFrame()).not.toContain('新着1 ^End');
+  });
+
+  it('keeps the unread recovery and queue controls visible for a large pending count', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 40 });
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5, openQuestions: [],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => ({
+        text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+      })),
+    });
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={vi.fn()} />,
+    );
+    stdin.write(INK_TEST_KEYS.pageUp);
+    await flushInkStdin();
+    for (let index = 0; index < 1000; index++) {
+      viewModel.appendActivityLog('conductor', `pending ${index}`);
+    }
+    await flushInkStdin();
+    expect(lastFrame()).toContain('新着999+ ^End');
+    expect(lastFrame()).toContain('Q:^T< >^G');
   });
 
   it('holds new activity while detached and flushes the pending suffix once on End', async () => {

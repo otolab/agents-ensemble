@@ -208,6 +208,7 @@ export function IssueSessionTuiStream({
   const pendingActivityCount = scrollbackState.detached
     ? Math.max(0, snapshot.activityLog.length - committedActivityCount)
     : 0;
+  const pendingActivityLabel = pendingActivityCount > 999 ? '999+' : String(pendingActivityCount);
   const scrollbackHint =
     pendingActivityCount > 0
       ? `${pendingActivityCount} 件の新着 · End で最新へ`
@@ -321,17 +322,22 @@ export function IssueSessionTuiStream({
     );
   };
 
-  useInput((_input, key) => {
+  const moveQueue = (direction: 'previous' | 'next') => {
+    const maxOffset = Math.max(0, queuedMessages.length - messageQueuePageSize(inputLayout.queueRows));
+    setQueueOffset((current) => {
+      const visibleOffset = Math.max(0, Math.min(current, maxOffset));
+      return Math.max(0, Math.min(
+        visibleOffset + (direction === 'previous' ? -1 : 1), maxOffset,
+      ));
+    });
+  };
+
+  useInput((input, key) => {
     if (
-      key.ctrl && key.shift && !key.meta && (key.pageUp || key.pageDown) &&
+      key.ctrl && !key.shift && !key.meta && (input === 't' || input === 'g') &&
       queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
     ) {
-      setQueueOffset((current) =>
-        Math.max(0, Math.min(
-          current + (key.pageUp ? -1 : 1),
-          queuedMessages.length - messageQueuePageSize(inputLayout.queueRows),
-        )),
-      );
+      moveQueue(input === 't' ? 'previous' : 'next');
       return;
     }
     if (openQuestions.length > 0 && key.shift && !key.ctrl && !key.meta) {
@@ -505,6 +511,15 @@ export function IssueSessionTuiStream({
       return;
     }
 
+    const command = trimBlankLinesOnly(value);
+    if (command === '/q-' || command === '/q+') {
+      moveQueue(command === '/q-' ? 'previous' : 'next');
+      setInputValue('');
+      setInputCursorPosition([0, 0]);
+      setInputDisplayLineCount(1);
+      return;
+    }
+
     if (suggestionsVisible && answerSuggestions.length > 0) {
       applyAnswerSuggestion();
       return;
@@ -581,9 +596,13 @@ export function IssueSessionTuiStream({
           />
         ) : null}
         <TitledBorderPane
-          title={INPUT_PANE_TITLE}
-          titleSuffix={queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
-            ? ' — Ctrl+Shift+PgUp/PgDn: queue' : undefined}
+          title={terminalColumns < 44 && pendingActivityCount > 0 &&
+            queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
+            ? 'Input' : INPUT_PANE_TITLE}
+          titleSuffix={`${pendingActivityCount > 0 ? ` 新着${pendingActivityLabel} ^End` : ''}${
+            queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
+              ? ` Q:^T< >^G${pendingActivityCount === 0 || terminalColumns >= 48 ? ' /q-/q+' : ''}` : ''
+          }`}
           borderStyle="single"
           borderColor={INPUT_PANE_BORDER_COLOR}
           paddingX={PANE_PADDING_X}

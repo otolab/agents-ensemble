@@ -77,7 +77,7 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 ### `getContext()`
 
-未回答 Open Question と、harness の event queue に残る未 dispatch の operator message を返す。TTY の pane / stream では入力欄の直上に読み取り専用の Message queue を表示し、空なら隠す。各行は `message` または Open Question の `answer` と delivery を示す。本文は改行を畳み、幅を超えた部分は省略する。回答は質問 ID と回答本文を優先して表示する。行数が多いときは表示範囲と件数を示し、Ctrl+Shift+PageUp/PageDown で一覧を移動する。TTY と UDS / operator-agent からの enqueue、dispatch に合わせて更新する。
+未回答 Open Question と、harness の event queue に残る未 dispatch の operator message を返す。TTY の pane / stream では入力欄の直上に読み取り専用の Message queue を表示し、空なら隠す。各行は `message` または Open Question の `answer` と delivery を示す。本文は改行を畳み、幅を超えた部分は省略する。回答は質問 ID と回答本文を優先して表示する。行数が多いときは表示範囲と件数を示し、Ctrl+T（前）/ Ctrl+G（次）で一覧を移動する。入力欄の枠には `Q:^T< >^G` と表示する。端末側でこれらのキーを使用する場合、入力欄で `/q-` / `/q+` を送信しても移動できる（conductor には送られない）。TTY と UDS / operator-agent からの enqueue、dispatch に合わせて更新する。
 
 画面が短いときは入力行とキューを優先し、案内や候補の表示行を減らす。候補を表示できない場合、候補の選択操作は無効になり、入力した内容をそのまま送信する。
 
@@ -132,7 +132,7 @@ Workers ペインの高さは内容駆動です。conductor と登録 worker の
 
 Open questions は内容駆動で高さを決めます。選択中 question の `question` / `context` / `choices` は、それぞれ明示的な改行・段落・リスト構造を保って折り返し、全表示行を保持します。非選択 question は question、context、choices の順に最大 2 行まで表示し、続きがある場合は 2 行目の末尾に `…` を付けます。pane / stream とも、まず compact 行を確保し、残りを選択中の detail に割り当てます。通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。選択中の detail が表示領域を超える場合は、本文を表示行単位で windowing します。Ctrl と Meta を付けない `Shift+PgUp/PgDn` で選択中 question の本文を 1 表示行ずつ上下にスクロールし、タイトルに操作キーと上下の続きがある方向を示します（Ink の `key.meta` には Alt も正規化されます）。このキーは Open questions が表示されている間、活動ログ操作より優先します。pane では plain `PgUp/PgDn`（入力欄が空のとき）と `Ctrl+PgUp/PgDn`（入力欄の内容を問わず）が活動ログ用に残ります。stream では `PgUp`（入力欄が空のとき）または `Ctrl+PgUp` で scrollback を離れ、`End`（入力欄が空のとき）または `Ctrl+End` で最新へ戻ります。質問を `Shift+↑/↓` で切り替えると本文 offset は先頭へ戻ります。
 
-`stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の live frame に `N 件の新着 · End で最新へ` と表示します。入力欄が空のときの `End`、または入力中の `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。通常の detached 経路では既に Static へ渡した prefix の再送・remount・replay は行いません。settled columns shrink の scrollback recovery だけは [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って terminal reset 後に保持済み activity を再出力します。
+`stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の枠に `新着N ^End`（Ctrl+End）を表示します。余裕があれば本文にも新着件数と案内を表示します。入力欄が空のときの `End`、または入力中の `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。通常の detached 経路では既に Static へ渡した prefix の再送・remount・replay は行いません。settled columns shrink の scrollback recovery だけは [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って terminal reset 後に保持済み activity を再出力します。
 
 TTY の pane / stream では、入力が単一行の slash コマンド prefix の間、Operator input ペイン内に候補と短い説明を表示します。先頭の空白またはタブは無視し、`/` に続く名前を大文字小文字を区別せず prefix 一致で絞り込みます（例: `/ex` は `/exit`、`/cl` は `/close`）。オペレータ入力で専用処理されるコマンドだけを候補に出し、別名は表示しません。
 

@@ -673,17 +673,22 @@ export function IssueSessionTui({
     );
   };
 
-  useInput((_input, key) => {
+  const moveQueue = (direction: 'previous' | 'next') => {
+    const maxOffset = Math.max(0, queuedMessages.length - messageQueuePageSize(inputLayout.queueRows));
+    setQueueOffset((current) => {
+      const visibleOffset = Math.max(0, Math.min(current, maxOffset));
+      return Math.max(0, Math.min(
+        visibleOffset + (direction === 'previous' ? -1 : 1), maxOffset,
+      ));
+    });
+  };
+
+  useInput((input, key) => {
     if (
-      key.ctrl && key.shift && !key.meta && (key.pageUp || key.pageDown) &&
+      key.ctrl && !key.shift && !key.meta && (input === 't' || input === 'g') &&
       queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
     ) {
-      setQueueOffset((current) =>
-        Math.max(0, Math.min(
-          current + (key.pageUp ? -1 : 1),
-          queuedMessages.length - messageQueuePageSize(inputLayout.queueRows),
-        )),
-      );
+      moveQueue(input === 't' ? 'previous' : 'next');
       return;
     }
     if (openQuestions.length > 0 && key.shift && !key.ctrl && !key.meta) {
@@ -862,6 +867,15 @@ export function IssueSessionTui({
       return;
     }
 
+    const command = trimBlankLinesOnly(value);
+    if (command === '/q-' || command === '/q+') {
+      moveQueue(command === '/q-' ? 'previous' : 'next');
+      setInputValue('');
+      setInputCursorPosition([0, 0]);
+      setInputDisplayLineCount(1);
+      return;
+    }
+
     if (suggestionsVisible && answerSuggestions.length > 0) {
       applyAnswerSuggestion();
       return;
@@ -946,7 +960,7 @@ export function IssueSessionTui({
       <TitledBorderPane
         title={INPUT_PANE_TITLE}
         titleSuffix={queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
-          ? ' — Ctrl+Shift+PgUp/PgDn: queue' : undefined}
+          ? ' Q:^T< >^G /q-/q+' : undefined}
         borderStyle="single"
         borderColor={INPUT_PANE_BORDER_COLOR}
         paddingX={PANE_PADDING_X}

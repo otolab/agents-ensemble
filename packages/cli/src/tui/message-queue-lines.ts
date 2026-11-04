@@ -14,14 +14,15 @@ export function messageQueueLines(
   const shown = messages.slice(start, start + limit);
   const lines = shown.map((message, index) => {
     const text = (message.answerPreview ?? message.text).replace(/\s+/gu, ' ').trim();
-    const prefix = maxRows === 1 ? `Queue ${start + index + 1}/${messages.length} ` : '';
-    const line = `${prefix}${message.openQuestionAnswer ? 'answer' : 'message'} ${message.delivery} │ ${text}`;
+    const prefix = maxRows === 1 ? `Q${start + index + 1}/${messages.length} ` : '';
+    const separator = maxRows === 1 ? ' ' : ' │ ';
+    const line = `${prefix}${message.openQuestionAnswer ? 'answer' : 'message'} ${message.delivery}${separator}${text}`;
     const wrapped = wrapTextToWidth(line, Math.max(1, width - 1));
     return wrapped.length > 1 ? `${wrapped[0]}…` : wrapped[0];
   });
   if (maxRows === 1) return lines;
   const title = messages.length > limit
-    ? `Message queue (${start + 1}-${start + shown.length}/${messages.length}) Ctrl+Shift+PgUp/PgDn`
+    ? `Message queue (${start + 1}-${start + shown.length}/${messages.length})`
     : `Message queue (${messages.length})`;
   return [wrapTextToWidth(title, Math.max(1, width))[0], ...lines];
 }
