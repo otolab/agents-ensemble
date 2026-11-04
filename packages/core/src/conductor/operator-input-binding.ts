@@ -13,6 +13,7 @@ export interface OperatorInputContext {
     text: string;
     delivery: OperatorMessageDelivery;
     openQuestionAnswer: boolean;
+    answerPreview?: string;
   }>;
 }
 

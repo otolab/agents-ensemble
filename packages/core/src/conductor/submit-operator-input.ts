@@ -33,6 +33,7 @@ export interface EnqueueOperatorMessageInput {
   sessionLogger: Pick<SessionLogger, 'emit'>;
   onOperatorMessageQueued?: (event: OperatorMessageEvent) => void;
   openQuestionAnswer?: boolean;
+  answerPreview?: string;
 }
 
 /** キュー受理専用。Open Question や escalation の状態は参照・変更しない。 */
@@ -50,6 +51,7 @@ export function enqueueOperatorMessage(
     text,
     delivery,
     ...(input.openQuestionAnswer ? { openQuestionAnswer: true } : {}),
+    ...(input.answerPreview ? { answerPreview: input.answerPreview } : {}),
   };
   input.onOperatorMessageQueued?.(event);
   input.eventQueue.enqueue(event);
@@ -102,5 +104,8 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
     sessionLogger: input.sessionLogger,
     onOperatorMessageQueued: input.onOperatorMessageQueued,
     openQuestionAnswer: applied.answered.length > 0,
+    answerPreview: applied.answered
+      .map((question) => `${question.id}: ${question.answer ?? ''}`)
+      .join(' / ') || undefined,
   });
 }

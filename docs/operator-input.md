@@ -26,7 +26,7 @@ interface OperatorInputContext {
   autonomousTurns: number;
   maxTurns: number | null;    // 無制限時は null
   openQuestions: OpenQuestion[];
-  queuedMessages?: Array<{ text: string; delivery: 'idle' | 'next' | 'interrupt'; openQuestionAnswer: boolean }>;
+  queuedMessages?: Array<{ text: string; delivery: 'idle' | 'next' | 'interrupt'; openQuestionAnswer: boolean; answerPreview?: string }>;
 }
 
 interface OperatorInputBindingApi {
@@ -77,7 +77,9 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 ### `getContext()`
 
-未回答 Open Question と、harness の event queue に残る未 dispatch の operator message を返す。TTY の pane / stream では入力欄の直上に読み取り専用の Message queue を表示し、空なら隠す。各行は `message` または Open Question の `answer` と delivery を示す。本文は改行を畳み、幅を超えた部分は省略する。行数が多いときは表示範囲と件数を示し、Ctrl+↑/↓ で一覧を移動する。TTY と UDS / operator-agent からの enqueue、dispatch に合わせて更新する。
+未回答 Open Question と、harness の event queue に残る未 dispatch の operator message を返す。TTY の pane / stream では入力欄の直上に読み取り専用の Message queue を表示し、空なら隠す。各行は `message` または Open Question の `answer` と delivery を示す。本文は改行を畳み、幅を超えた部分は省略する。回答は質問 ID と回答本文を優先して表示する。行数が多いときは表示範囲と件数を示し、Ctrl+Shift+PageUp/PageDown で一覧を移動する。TTY と UDS / operator-agent からの enqueue、dispatch に合わせて更新する。
+
+画面が短いときは入力行とキューを優先し、案内や候補の表示行を減らす。候補を表示できない場合、候補の選択操作は無効になり、入力した内容をそのまま送信する。
 
 ### 戻り値
 

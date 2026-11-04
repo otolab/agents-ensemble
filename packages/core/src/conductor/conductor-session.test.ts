@@ -1257,6 +1257,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     let operatorContext: ReturnType<OperatorInputBindingApi['getContext']> | undefined;
+    let queuedAnswers: ReturnType<OperatorInputBindingApi['getContext']>['queuedMessages'];
     await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
@@ -1271,11 +1272,16 @@ describe('runConductorSession resume / shutdown', () => {
         for (const question of restoredQuestions) {
           api.submit('answer', { targetOpenQuestionId: question.id });
         }
+        queuedAnswers = api.getContext().queuedMessages;
         return () => {};
       },
     });
 
     expect(operatorContext?.openQuestions).toEqual(restoredQuestions);
+    expect(queuedAnswers).toEqual([
+      expect.objectContaining({ openQuestionAnswer: true, answerPreview: 'inq-1: answer' }),
+      expect.objectContaining({ openQuestionAnswer: true, answerPreview: 'inq-2: answer' }),
+    ]);
   });
 
   it('passes project MCP configuration to the conductor options', async () => {
@@ -1331,6 +1337,13 @@ describe('runConductorSession resume / shutdown', () => {
     let sendCount = 0;
     const receivedOperatorMessage = createDeferred<string>();
     const shutdown = new AbortController();
+    const queuedAnswers: NonNullable<ReturnType<OperatorInputBindingApi['getContext']>['queuedMessages']> = [];
+    const sessionLogger = new SessionLogger({ issueUrl: TEST_ISSUE.url, repoRoot });
+    sessionLogger.subscribe((event) => {
+      if (event.type === 'operator.input' || event.type === 'operator.queue.changed') {
+        queuedAnswers.push(...(operatorInput?.getContext().queuedMessages ?? []));
+      }
+    });
     mockCreate.mockImplementationOnce(async (agentOptions) => {
       conductorTools = agentOptions.customTools;
       return {
@@ -1364,6 +1377,7 @@ describe('runConductorSession resume / shutdown', () => {
       profile: { workers: [] },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
       shutdownSignal: shutdown.signal,
       registerProcessSignalHandlers: false,
       waitForOperatorExit: true,
@@ -1459,6 +1473,10 @@ describe('runConductorSession resume / shutdown', () => {
       await expect(receivedOperatorMessage.promise).resolves.toContain(
         '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
       );
+      expect(queuedAnswers).toContainEqual(expect.objectContaining({
+        openQuestionAnswer: true,
+        answerPreview: 'inq-1: yes',
+      }));
       expect(sendCount).toBe(2);
       expect(
         await conductorTools!.list_open_questions!.execute({ status: 'open' }),

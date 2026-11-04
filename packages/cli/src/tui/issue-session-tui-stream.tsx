@@ -41,7 +41,6 @@ import {
   ActivityLogDisplayLineRow,
   OpenQuestionsPane,
   WorkerStatusPane,
-  WrappedTextLines,
 } from './issue-session-tui.js';
 import {
   computeInputPaneHeight,
@@ -64,6 +63,7 @@ import { computeWorkerPaneHeight } from './pane-layout.js';
 import { resolveStreamPaneHeights } from './stream-layout.js';
 import { TitledBorderPane } from './titled-border-pane.js';
 import { messageQueueLines, messageQueuePageSize } from './message-queue-lines.js';
+import { resolveInputContentLayout } from './input-content-layout.js';
 import {
   useTuiTerminalSize,
   type TuiTerminalSizeStore,
@@ -215,18 +215,15 @@ export function IssueSessionTuiStream({
   const contextHintLines = scrollbackHint
     ? [scrollbackHint, ...operatorInputDisplay.hintLines]
     : operatorInputDisplay.hintLines;
-  const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const queuedMessages = snapshot.operatorContext?.queuedMessages ?? [];
-  const queueLines = messageQueueLines(
-    queuedMessages, contentWidth, terminalRows, queueOffset,
-  );
-  const hintLineCount = contextHintLines.reduce(
-    (lineCount, line) => lineCount + wrapTextToWidth(line, contentWidth).length,
-    commandSuggestionLines.length + answerSuggestionLines.length + queueLines.length,
-  );
+  const desiredQueueRows = queuedMessages.length === 0 ? 0 :
+    1 + Math.min(queuedMessages.length, Math.max(1, Math.floor(terminalRows / 4) - 2));
+  const hintLines = contextHintLines.flatMap((line) => wrapTextToWidth(line, contentWidth));
+  const suggestionLines = [...commandSuggestionLines, ...answerSuggestionLines];
+  const desiredInputLines = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const desiredInputPaneHeight = computeInputPaneHeight({
-    hintLineCount,
-    inputDisplayLineCount: visibleInputDisplayLineCount,
+    hintLineCount: hintLines.length + suggestionLines.length + desiredQueueRows,
+    inputDisplayLineCount: desiredInputLines,
   });
   const openQuestionsPaneHeight =
     operatorInputDisplay.mode === 'withQuestions' ? openQuestionsLayout.paneHeight : 0;
@@ -243,6 +240,28 @@ export function IssueSessionTuiStream({
       }),
     [terminalRows, workerPaneHeight, openQuestionsPaneHeight, desiredInputPaneHeight],
   );
+  const inputLayout = resolveInputContentLayout({
+    paneHeight: streamPaneHeights.inputPaneHeight,
+    inputLines: desiredInputLines,
+    hasQueue: queuedMessages.length > 0,
+    desiredQueueRows,
+    hintLines: hintLines.length,
+    suggestionLines: suggestionLines.length,
+  });
+  const queueLines = messageQueueLines(
+    queuedMessages, contentWidth, inputLayout.queueRows, queueOffset,
+  );
+  const visibleHints = hintLines.slice(0, inputLayout.hintLines);
+  const selectedSuggestion = suggestionLines.findIndex((line) => line.isSelected);
+  const suggestionStart = Math.max(0, Math.min(
+    selectedSuggestion, suggestionLines.length - inputLayout.suggestionLines,
+  ));
+  const visibleSuggestions = suggestionLines.slice(
+    suggestionStart, suggestionStart + inputLayout.suggestionLines,
+  );
+  const suggestionsVisible = visibleSuggestions.length > 0;
+  const hintLineCount = visibleHints.length + visibleSuggestions.length + queueLines.length;
+  const visibleInputDisplayLineCount = inputLayout.inputLines;
   const cursorStart = {
     x: computeOperatorInputCursorX(operatorPrompt),
     y: computeStreamOperatorInputCursorY({
@@ -304,13 +323,13 @@ export function IssueSessionTuiStream({
 
   useInput((_input, key) => {
     if (
-      key.ctrl && !key.shift && !key.meta && (key.upArrow || key.downArrow) &&
-      queuedMessages.length > messageQueuePageSize(terminalRows)
+      key.ctrl && key.shift && !key.meta && (key.pageUp || key.pageDown) &&
+      queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
     ) {
       setQueueOffset((current) =>
         Math.max(0, Math.min(
-          current + (key.upArrow ? -1 : 1),
-          queuedMessages.length - messageQueuePageSize(terminalRows),
+          current + (key.pageUp ? -1 : 1),
+          queuedMessages.length - messageQueuePageSize(inputLayout.queueRows),
         )),
       );
       return;
@@ -361,7 +380,7 @@ export function IssueSessionTuiStream({
       }
     }
 
-    if (commandSuggestions.length > 0 && !key.ctrl && !key.shift && !key.meta) {
+    if (suggestionsVisible && commandSuggestions.length > 0 && !key.ctrl && !key.shift && !key.meta) {
       if (key.upArrow) {
         setSelectedCommandIndex((current) =>
           advanceOperatorCommandSelection(current, 'up', commandSuggestions.length),
@@ -376,7 +395,7 @@ export function IssueSessionTuiStream({
       }
     }
 
-    if (answerSuggestions.length > 0 && !key.ctrl && !key.shift && !key.meta) {
+    if (suggestionsVisible && answerSuggestions.length > 0 && !key.ctrl && !key.shift && !key.meta) {
       if (key.upArrow) {
         setSelectedAnswerSuggestionIndex((current) =>
           advanceOpenQuestionAnswerSuggestionSelection(
@@ -486,7 +505,7 @@ export function IssueSessionTuiStream({
       return;
     }
 
-    if (answerSuggestions.length > 0) {
+    if (suggestionsVisible && answerSuggestions.length > 0) {
       applyAnswerSuggestion();
       return;
     }
@@ -563,32 +582,20 @@ export function IssueSessionTuiStream({
         ) : null}
         <TitledBorderPane
           title={INPUT_PANE_TITLE}
+          titleSuffix={queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
+            ? ' — Ctrl+Shift+PgUp/PgDn: queue' : undefined}
           borderStyle="single"
           borderColor={INPUT_PANE_BORDER_COLOR}
           paddingX={PANE_PADDING_X}
           height={streamPaneHeights.inputPaneHeight}
           terminalColumns={terminalColumns}
         >
-          {contextHintLines.map((line, index) => (
-            <WrappedTextLines
-              key={`context-hint-${index}`}
-              text={line}
-              width={contentWidth}
-              color={INPUT_PANE_HINT_COLOR}
-            />
+          {visibleHints.map((line, index) => (
+            <Text key={`context-hint-${index}`} color={INPUT_PANE_HINT_COLOR}>{line}</Text>
           ))}
-          {commandSuggestionLines.map((line) => (
+          {visibleSuggestions.map((line) => (
             <Text
-              key={`operator-command-suggestion-${line.id}`}
-              color={line.isSelected ? 'cyan' : INPUT_PANE_HINT_COLOR}
-              bold={line.isSelected}
-            >
-              {line.text}
-            </Text>
-          ))}
-          {answerSuggestionLines.map((line) => (
-            <Text
-              key={`open-question-answer-suggestion-${line.id}`}
+              key={`suggestion-${line.id}`}
               color={line.isSelected ? 'cyan' : INPUT_PANE_HINT_COLOR}
               bold={line.isSelected}
             >
@@ -607,13 +614,13 @@ export function IssueSessionTuiStream({
             focus={!snapshot.shuttingDown}
             contentWidth={contentWidth}
             promptPrefix={operatorPrompt}
-            maxDisplayLines={maxInputDisplayLines}
+            maxDisplayLines={visibleInputDisplayLineCount}
             onDisplayLineCountChange={handleDisplayLineCountChange}
             suggestionsActive={
-              commandSuggestions.length > 0 || answerSuggestions.length > 0
+              suggestionsVisible
             }
             onTab={
-              commandSuggestions.length > 0 || answerSuggestions.length > 0
+              suggestionsVisible
                 ? handleSuggestionTab
                 : undefined
             }

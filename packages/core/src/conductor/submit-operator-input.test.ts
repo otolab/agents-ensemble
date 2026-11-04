@@ -9,7 +9,7 @@ describe('submitOperatorInput', () => {
     const registry = new OpenQuestionRegistry();
     registry.enqueue({
       id: 'inq-1',
-      question: 'Continue?',
+      question: 'この変更を本番環境に反映する前に、追加の確認を行いますか？',
       responseType: 'free_text',
       source: 'ask_human',
       status: 'open',
@@ -25,7 +25,7 @@ describe('submitOperatorInput', () => {
     const escalations: Array<{ question: string; answer: string }> = [];
 
     const received = submitOperatorInput({
-      message: 'yes, continue',
+      message: 'いいえ',
       conductorTurn: 2,
       openQuestions: registry,
       escalations,
@@ -38,20 +38,21 @@ describe('submitOperatorInput', () => {
       expect.objectContaining({
         type: 'operator.input',
         conductorTurn: 2,
-        text: expect.stringContaining('yes, continue'),
+        text: expect.stringContaining('いいえ'),
       }),
     );
     expect(eventQueue.dequeue()).toEqual(
       expect.objectContaining({
         type: 'operator.message',
-        text: expect.stringContaining('yes, continue'),
+        text: expect.stringContaining('いいえ'),
         delivery: 'next',
         openQuestionAnswer: true,
+        answerPreview: 'inq-1: いいえ',
       }),
     );
     expect(registry.listOpen()).toHaveLength(0);
     expect(escalations).toHaveLength(1);
-    expect(escalations[0]?.answer).toBe('yes, continue');
+    expect(escalations[0]?.answer).toBe('いいえ');
   });
 
   it('answers the targeted open question when targetOpenQuestionId is set', () => {

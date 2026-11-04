@@ -1665,6 +1665,7 @@ export async function runConductorSession(
                 text: event.text,
                 delivery: event.delivery ?? 'next',
                 openQuestionAnswer: event.openQuestionAnswer === true,
+                ...(event.answerPreview ? { answerPreview: event.answerPreview } : {}),
               }]
             : [],
         ),
