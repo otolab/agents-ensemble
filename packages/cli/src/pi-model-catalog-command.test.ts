@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listPiConductorModels } from '@agents-ensemble/core';
 import { describe, expect, it } from 'vitest';
-import { runPiModelsSync } from './pi-model-catalog-command.js';
+import {
+  runPiModelsAdd,
+  runPiModelsDiff,
+  runPiModelsRemote,
+  runPiModelsSync,
+} from './pi-model-catalog-command.js';
 
 describe('Pi model catalog sync command', () => {
   it('compares catalogs, imports selected IDs, and exposes them to a fresh registry', async () => {
@@ -135,14 +140,12 @@ describe('Pi model catalog sync command', () => {
     const userModelsPath = join(fixture.agentDir, 'models.json');
 
     await expect(
-      runPiModelsSync({
+      runPiModelsAdd({
         repoRoot: fixture.repoRoot,
         provider: 'litellm',
-        target: 'user',
-        add: ['new-model'],
         fetchImpl: (async () =>
           Response.json({ data: [{ id: 'existing-model' }, { id: 'new-model' }] })) as typeof fetch,
-      }),
+      }, ['new-model']),
     ).rejects.toThrow(/Project models\.json replaces the user model list/);
     await expect(readFile(userModelsPath, 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
@@ -155,16 +158,14 @@ describe('Pi model catalog sync command', () => {
     });
     const userModelsPath = join(fixture.agentDir, 'models.json');
 
-    const result = await runPiModelsSync({
+    const result = await runPiModelsAdd({
       repoRoot: fixture.repoRoot,
       provider: 'litellm',
-      target: 'user',
-      add: ['new-model'],
       fetchImpl: (async () =>
         Response.json({
           data: [{ id: 'new-model', max_input_tokens: 64000 }],
         })) as typeof fetch,
-    });
+    }, ['new-model']);
 
     expect(result.added).toEqual(['new-model']);
     const saved = JSON.parse(await readFile(userModelsPath, 'utf8'));
@@ -184,7 +185,7 @@ describe('Pi model catalog sync command', () => {
     );
   });
 
-  it('requires an explicit target when adding IDs and preserves existing selections', async () => {
+  it('preserves existing selections and guards default user sync imports', async () => {
     const fixture = await createFixture({
       projectModels: [{ id: 'existing-model' }],
       apiKey: 'catalog-secret',
@@ -201,7 +202,7 @@ describe('Pi model catalog sync command', () => {
         add: ['new-model'],
         fetchImpl,
       }),
-    ).rejects.toThrow(/Pass --target project or --target user/);
+    ).rejects.toThrow(/Project models\.json replaces the user model list/);
 
     const result = await runPiModelsSync({
       repoRoot: fixture.repoRoot,
@@ -212,6 +213,45 @@ describe('Pi model catalog sync command', () => {
     });
     expect(result.skipped).toEqual(['existing-model']);
     expect(result.added).toEqual([]);
+  });
+
+  it('uses the same catalog for read-only remote IDs and ID-only diff', async () => {
+    const fixture = await createFixture({
+      projectModels: [{ id: 'existing-model' }, { id: 'local-only' }],
+      apiKey: 'catalog-secret',
+    });
+    const before = await readFile(fixture.projectModelsPath, 'utf8');
+    const options = {
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      fetchImpl: (async () => Response.json({
+        data: [{ id: 'existing-model', max_input_tokens: 10 }, { id: 'remote-only', max_input_tokens: 20 }],
+      })) as typeof fetch,
+    };
+    await expect(runPiModelsRemote(options)).resolves.toEqual({
+      provider: 'litellm',
+      ids: ['existing-model', 'remote-only'],
+    });
+    await expect(runPiModelsDiff(options)).resolves.toEqual({
+      provider: 'litellm',
+      apiOnly: ['remote-only'],
+      jsonOnly: ['local-only'],
+      shared: ['existing-model'],
+    });
+    expect(await readFile(fixture.projectModelsPath, 'utf8')).toBe(before);
+  });
+
+  it('defaults legacy sync additions to user and rejects unknown IDs', async () => {
+    const fixture = await createFixture({ apiKey: 'catalog-secret' });
+    const options = {
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      fetchImpl: (async () => Response.json({ data: [{ id: 'remote-model' }] })) as typeof fetch,
+    };
+    await expect(runPiModelsAdd(options, ['missing'])).rejects.toThrow(/not in the API catalog/);
+    const result = await runPiModelsSync({ ...options, add: ['remote-model'] });
+    expect(result.targetPath).toBe(join(fixture.agentDir, 'models.json'));
+    expect(result.added).toEqual(['remote-model']);
   });
 });
 

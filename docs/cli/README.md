@@ -25,7 +25,7 @@ conductor:
   backend: pi
 ```
 
-Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の user root は `~/.ensemble/pi/`、project root は `<repoRoot>/.ensemble/pi/` が既定で、`conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。
+Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の model catalog を扱う `models remote` / `diff` / `add` と旧 `sync` からの移行も同ガイドを参照してください。Pi の user root は `~/.ensemble/pi/`、project root は `<repoRoot>/.ensemble/pi/` が既定で、`conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。
 
 Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
