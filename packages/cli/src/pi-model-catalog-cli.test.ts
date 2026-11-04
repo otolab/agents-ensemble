@@ -57,14 +57,17 @@ describe('ensemble models catalog CLI', () => {
     `);
   }
 
-  it('exposes the new commands without rm or bulk add', () => {
+  it('exposes the new commands and requires explicit IDs', () => {
     const help = run('--help');
     expect(help.status).toBe(0);
     for (const name of ['list', 'remote', 'diff', 'add', 'sync']) {
       expect(help.stdout).toContain(name);
     }
     expect(help.stdout).not.toMatch(/\brm\b/);
-    expect(run('add', 'one', 'two', '--provider', 'litellm').status).not.toBe(0);
+    const addHelp = run('add', '--help');
+    expect(addHelp.stdout).toContain('<id...>');
+    expect(addHelp.stdout).toContain('Remote model IDs to add');
+    expect(run('add', '--provider', 'litellm').status).not.toBe(0);
   });
 
   it('lists remote IDs, compares IDs, and adds one ID to user models', async () => {
@@ -152,18 +155,70 @@ describe('ensemble models catalog CLI', () => {
     expect(await readFile(userPath, 'utf8')).toBe(contents);
   });
 
+  it('adds multiple explicit IDs with the same result as repeated sync options', async () => {
+    await setRemoteModels([{ id: 'first' }, { id: 'second', max_input_tokens: 64000 }]);
+    const userPath = join(repoRoot, 'user-pi', 'models.json');
+    const added = run('add', 'first', 'second', '--provider', 'litellm', '--json');
+    expect(added.status).toBe(0);
+    const result = JSON.parse(added.stdout);
+    expect(result.added).toEqual(['first', 'second']);
+    expect(result.skipped).toEqual([]);
+    expect(result.targetPath).toBe(userPath);
+    const contents = await readFile(userPath, 'utf8');
+    expect(JSON.parse(contents).providers.litellm.models).toEqual([
+      { id: 'first' },
+      { id: 'second', contextWindow: 64000 },
+    ]);
+    await rm(userPath);
+    const sync = run('sync', '--provider', 'litellm', '--add', 'first', '--add', 'second', '--json');
+    expect(sync.status).toBe(0);
+    const syncResult = JSON.parse(sync.stdout);
+    expect(syncResult.added).toEqual(result.added);
+    expect(syncResult.skipped).toEqual(result.skipped);
+    expect(syncResult.targetPath).toBe(result.targetPath);
+    expect(await readFile(userPath, 'utf8')).toBe(contents);
+  });
+
+  it('rejects mixed unknown IDs without writing and reports added and skipped IDs', async () => {
+    await setRemoteModels([{ id: 'first' }, { id: 'second' }]);
+    const userPath = join(repoRoot, 'user-pi', 'models.json');
+    const rejected = run('add', 'first', 'missing', '--provider', 'litellm');
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain('not in the API catalog: missing');
+    await expect(readFile(userPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const first = run('add', 'first', '--provider', 'litellm');
+    expect(first.status).toBe(0);
+    const contents = await readFile(userPath, 'utf8');
+    const rejectedAgain = run('add', 'first', 'second', 'missing', '--provider', 'litellm');
+    expect(rejectedAgain.status).toBe(1);
+    expect(await readFile(userPath, 'utf8')).toBe(contents);
+
+    const added = run('add', 'first', 'second', 'second', '--provider', 'litellm');
+    expect(added.status).toBe(0);
+    expect(added.stdout).toContain('Added second to');
+    expect(added.stdout).toContain('Already present; preserved: first');
+    expect(JSON.parse(await readFile(userPath, 'utf8')).providers.litellm.models)
+      .toEqual([{ id: 'first' }, { id: 'second' }]);
+  });
+
   it('rejects a hidden user addition before writing and permits an explicit project addition', async () => {
+    await setRemoteModels([{ id: 'local-model' }, { id: 'remote-model', max_input_tokens: 64000 }]);
     const projectPath = join(repoRoot, 'project-pi', 'models.json');
     const project = JSON.parse(await readFile(projectPath, 'utf8'));
     project.providers.litellm.models = [{ id: 'local-model' }];
     await writeFile(projectPath, JSON.stringify(project));
-    const rejected = run('add', 'remote-model', '--provider', 'litellm');
+    const rejected = run('add', 'local-model', 'remote-model', '--provider', 'litellm');
     expect(rejected.status).toBe(1);
     expect(rejected.stderr).toContain('Project models.json replaces the user model list');
     await expect(readFile(join(repoRoot, 'user-pi', 'models.json'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
-    const added = run('add', 'remote-model', '--provider', 'litellm', '--target', 'project');
+    const added = run('add', 'local-model', 'remote-model', '--provider', 'litellm', '--target', 'project', '--json');
     expect(added.status).toBe(0);
+    expect(JSON.parse(added.stdout)).toMatchObject({
+      added: ['remote-model'],
+      skipped: ['local-model'],
+    });
     const saved = JSON.parse(await readFile(projectPath, 'utf8'));
     expect(saved.providers.litellm.models).toEqual([
       { id: 'local-model' },

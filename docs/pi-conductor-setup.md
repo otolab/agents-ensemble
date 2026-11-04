@@ -108,8 +108,8 @@ ensemble models remote --provider litellm
 # API only / JSON only / 両方にある ID を表示（models.json は変更しない）
 ensemble models diff --provider litellm
 
-# API にある ID を選んで user models.json に追加
-ensemble models add gpt-6-luna --provider litellm
+# API にある ID を明示して user models.json に追加
+ensemble models add gpt-6-luna gpt-6-sol --provider litellm
 
 # project models.json に追加
 ensemble models add gpt-6-luna --provider litellm --target project
@@ -118,9 +118,9 @@ ensemble models add gpt-6-luna --provider litellm --target project
 ensemble models diff --provider litellm --json
 ```
 
-`add` は ID を 1 件ずつ指定します。書込先は省略時 user で、project へ書く場合は `--target project` を指定します。project は `conductor.pi.projectDir`（既定 `<repoRoot>/.ensemble/pi`）、user は `conductor.pi.agentDir`（既定 `~/.ensemble/pi`）にある `models.json` です。既存の provider 設定と model 定義は残し、同じ ID がすでに有効なら更新せずスキップします。API にない ID の削除や既存定義の force update は行いません。
+`add` は追加したい ID を 1 件以上明示します。複数 ID を指定した場合はすべてが API に存在することを確認してから書き込み、不明な ID があれば何も追加しません。catalog の全件を自動追加する機能ではありません。書込先は省略時 user で、project へ書く場合は `--target project` を指定します。project は `conductor.pi.projectDir`（既定 `<repoRoot>/.ensemble/pi`）、user は `conductor.pi.agentDir`（既定 `~/.ensemble/pi`）にある `models.json` です。既存の provider 設定と model 定義は残し、同じ ID がすでに有効なら更新せずスキップします。API にない ID の削除や既存定義の force update は行いません。
 
-従来の `models sync` は非推奨ですが、互換性のため少なくとも 1 リリースは利用できます。比較には `models diff`、追加には `models add` を使ってください。従来の `sync --add` も書込先の省略時は user です。
+従来の `models sync` は非推奨ですが、互換性のため少なくとも 1 リリースは利用できます。比較には `models diff`、追加には `models add` を使ってください。複数 ID を追加する `sync --add first --add second` は `add first second` に移行できます。どちらも全 ID を検証してから書き込み、書込先の省略時は user です。
 
 user の `models.json` に追加しても、project の同じ provider に `models` 配列がある場合は Pi の project 優先により user 配列が隠れます。その場合はコマンドが書込前に停止するので、`--target project` を選んでください。
 

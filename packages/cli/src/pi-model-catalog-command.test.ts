@@ -145,7 +145,7 @@ describe('Pi model catalog sync command', () => {
         provider: 'litellm',
         fetchImpl: (async () =>
           Response.json({ data: [{ id: 'existing-model' }, { id: 'new-model' }] })) as typeof fetch,
-      }, 'new-model'),
+      }, ['new-model']),
     ).rejects.toThrow(/Project models\.json replaces the user model list/);
     await expect(readFile(userModelsPath, 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
@@ -165,7 +165,7 @@ describe('Pi model catalog sync command', () => {
         Response.json({
           data: [{ id: 'new-model', max_input_tokens: 64000 }],
         })) as typeof fetch,
-    }, 'new-model');
+    }, ['new-model']);
 
     expect(result.added).toEqual(['new-model']);
     const saved = JSON.parse(await readFile(userModelsPath, 'utf8'));
@@ -248,7 +248,7 @@ describe('Pi model catalog sync command', () => {
       provider: 'litellm',
       fetchImpl: (async () => Response.json({ data: [{ id: 'remote-model' }] })) as typeof fetch,
     };
-    await expect(runPiModelsAdd(options, 'missing')).rejects.toThrow(/not in the API catalog/);
+    await expect(runPiModelsAdd(options, ['missing'])).rejects.toThrow(/not in the API catalog/);
     const result = await runPiModelsSync({ ...options, add: ['remote-model'] });
     expect(result.targetPath).toBe(join(fixture.agentDir, 'models.json'));
     expect(result.added).toEqual(['remote-model']);

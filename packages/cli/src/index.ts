@@ -370,18 +370,17 @@ addConductorCommandOptions(models.command('diff'), true)
   });
 
 addConductorCommandOptions(models.command('add'), true)
-  .description('Add one remote Pi model ID to models.json')
-  .argument('<id>', 'Remote model ID to add')
-  .allowExcessArguments(false)
+  .description('Add explicitly selected remote Pi model IDs to models.json')
+  .argument('<id...>', 'Remote model IDs to add')
   .addOption(
     new Option('--target <layer>', 'models.json layer to update (default: user)')
       .choices(['project', 'user']),
   )
   .option('--json', 'Output JSON')
   .action(
-    async (id: string, options: ConductorCommandOptions & { target?: PiModelsSyncTarget; json?: boolean }) => {
+    async (ids: string[], options: ConductorCommandOptions & { target?: PiModelsSyncTarget; json?: boolean }) => {
       try {
-        const result = await runPiModelsAdd(options, id);
+        const result = await runPiModelsAdd(options, ids);
         if (options.json) {
           console.log(JSON.stringify({
             provider: result.provider,
@@ -391,9 +390,12 @@ addConductorCommandOptions(models.command('add'), true)
           }, null, 2));
           return;
         }
-        console.log(result.added.length > 0
-          ? `Added ${id} to ${result.targetPath}`
-          : `Already present; preserved: ${id}`);
+        if (result.added.length > 0) {
+          console.log(`Added ${result.added.join(', ')} to ${result.targetPath}`);
+        }
+        if (result.skipped.length > 0) {
+          console.log(`Already present; preserved: ${result.skipped.join(', ')}`);
+        }
       } catch (error) {
         console.error(error instanceof Error ? error.message : error);
         process.exit(1);

@@ -59,9 +59,9 @@ export async function runPiModelsDiff(
 
 export async function runPiModelsAdd(
   options: RunPiModelsSyncOptions,
-  id: string,
+  ids: string[],
 ): Promise<PiModelsSyncResult> {
-  return runPiModelsCatalog({ ...options, add: [id] });
+  return runPiModelsCatalog({ ...options, add: ids });
 }
 
 export async function runPiModelsSync(
@@ -83,7 +83,7 @@ async function runPiModelsCatalog(
   }
   const requestedIds = [...new Set((options.add ?? []).map((id) => id.trim()))];
   if (requestedIds.some((id) => !id)) {
-    throw new Error('Model IDs passed to --add must not be empty.');
+    throw new Error('Model IDs must not be empty.');
   }
   const target = options.target ?? 'user';
 
