@@ -122,6 +122,18 @@ ensemble models diff --provider litellm --json
 
 従来の `models sync` は非推奨ですが、互換性のため少なくとも 1 リリースは利用できます。比較には `models diff`、追加には `models add` を使ってください。複数 ID を追加する `sync --add first --add second` は `add first second` に移行できます。どちらも全 ID を検証してから書き込み、書込先の省略時は user です。
 
+機械処理で `sync --json` から `diff --json` に移行する場合は、コマンドだけでなく出力の読み取り方も変更してください。
+
+| フィールド | `sync --json` | `diff --json` |
+|---|---|---|
+| `provider` | provider ID の文字列 | 同じ |
+| `apiOnly` | `{ id, maxInputTokens? }` の配列 | ID の文字列配列 |
+| `jsonOnly` / `shared` | ID の文字列配列 | 同じ |
+| `added` / `skipped` | 追加・スキップした ID の文字列配列 | なし |
+| `targetPath` | 追加して書き込んだ場合のみ、書込先の文字列 | なし |
+
+例えば `sync` の `.apiOnly[].id` は、`diff` では `.apiOnly[]` です。`maxInputTokens` は API の `max_input_tokens` が正の安全な整数の場合に `sync` の `apiOnly` に含まれますが、`diff` には含まれません。互換形やこの値が必要なスクリプトは、非推奨期間中は引き続き `sync --json` を使えます。非推奨警告は stderr に出力されます。追加結果を取得する場合は `add --json` の `added` / `skipped` と、書込み時のみ含まれる `targetPath` を利用してください。
+
 user の `models.json` に追加しても、project の同じ provider に `models` 配列がある場合は Pi の project 優先により user 配列が隠れます。その場合はコマンドが書込前に停止するので、`--target project` を選んでください。
 
 これらのコマンドは Pi provider の `baseUrl`、`apiKey`（環境変数参照や `!command` を含む）、`authHeader` と既存の Pi credential 解決を使って catalog を取得します。認証情報、header、provider の応答本文は出力しません。ネットワーク接続は `models remote` / `diff` / `add` / 旧 `sync` の明示実行時だけで、conductor の通常の `ModelRuntime` は引き続き `allowModelNetwork: false` です。

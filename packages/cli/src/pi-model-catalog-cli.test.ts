@@ -109,6 +109,40 @@ describe('ensemble models catalog CLI', () => {
     await expect(readFile(join(repoRoot, 'user-pi', 'models.json'), 'utf8')).resolves.toContain('remote-model');
   });
 
+  it('preserves the sync JSON shape while diff returns only IDs', async () => {
+    const projectPath = join(repoRoot, 'project-pi', 'models.json');
+    const project = JSON.parse(await readFile(projectPath, 'utf8'));
+    project.providers.litellm.models = [{ id: 'shared' }, { id: 'local-only' }];
+    await writeFile(projectPath, JSON.stringify(project));
+    await setRemoteModels([
+      { id: 'shared' },
+      { id: 'remote-with-limit', max_input_tokens: 64000 },
+      { id: 'remote-without-limit' },
+    ]);
+    const diff = run('diff', '--provider', 'litellm', '--json');
+    const sync = run('sync', '--provider', 'litellm', '--json');
+    expect(diff.status).toBe(0);
+    expect(sync.status).toBe(0);
+    expect(sync.stderr).toContain('deprecated');
+    expect(JSON.parse(diff.stdout)).toEqual({
+      provider: 'litellm',
+      apiOnly: ['remote-with-limit', 'remote-without-limit'],
+      jsonOnly: ['local-only'],
+      shared: ['shared'],
+    });
+    expect(JSON.parse(sync.stdout)).toEqual({
+      provider: 'litellm',
+      apiOnly: [
+        { id: 'remote-with-limit', maxInputTokens: 64000 },
+        { id: 'remote-without-limit' },
+      ],
+      jsonOnly: ['local-only'],
+      shared: ['shared'],
+      added: [],
+      skipped: [],
+    });
+  });
+
   it.each([
     ['remote', []],
     ['diff', []],
