@@ -211,7 +211,7 @@ export function IssueSessionTuiStream({
   const pendingActivityLabel = pendingActivityCount > 999 ? '999+' : String(pendingActivityCount);
   const scrollbackHint =
     pendingActivityCount > 0
-      ? `${pendingActivityCount} 件の新着 · End で最新へ`
+      ? `${pendingActivityCount} 件の新着 · Ctrl+L で最新へ`
       : undefined;
   const contextHintLines = scrollbackHint
     ? [scrollbackHint, ...operatorInputDisplay.hintLines]
@@ -322,10 +322,11 @@ export function IssueSessionTuiStream({
     );
   };
 
-  const moveQueue = (direction: 'previous' | 'next') => {
+  const moveQueue = (direction: 'previous' | 'next', wrap = false) => {
     const maxOffset = Math.max(0, queuedMessages.length - messageQueuePageSize(inputLayout.queueRows));
     setQueueOffset((current) => {
       const visibleOffset = Math.max(0, Math.min(current, maxOffset));
+      if (wrap && direction === 'next' && visibleOffset === maxOffset) return 0;
       return Math.max(0, Math.min(
         visibleOffset + (direction === 'previous' ? -1 : 1), maxOffset,
       ));
@@ -333,11 +334,15 @@ export function IssueSessionTuiStream({
   };
 
   useInput((input, key) => {
+    if (key.ctrl && !key.shift && !key.meta && input === 'r') {
+      handleSubmit(inputValue, true);
+      return;
+    }
     if (
-      key.ctrl && !key.shift && !key.meta && (input === 't' || input === 'g') &&
+      key.ctrl && !key.shift && !key.meta && (input === 't' || input === 'g' || input === 'o') &&
       queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
     ) {
-      moveQueue(input === 't' ? 'previous' : 'next');
+      moveQueue(input === 't' ? 'previous' : 'next', input === 'o');
       return;
     }
     if (openQuestions.length > 0 && key.shift && !key.ctrl && !key.meta) {
@@ -476,6 +481,11 @@ export function IssueSessionTuiStream({
       return;
     }
 
+    if (key.ctrl && !key.shift && !key.meta && input === 'l') {
+      dispatchScrollbackEvent({ type: 'follow', source: 'keyboard' });
+      return;
+    }
+
     const scrollWithModifier = key.ctrl;
     const scrollWithoutModifier = inputValue.length === 0;
     if (!scrollWithModifier && !scrollWithoutModifier) {
@@ -506,21 +516,12 @@ export function IssueSessionTuiStream({
     setInputDisplayLineCount(1);
   };
 
-  const handleSubmit = (value: string) => {
+  const handleSubmit = (value: string, literal = false) => {
     if (snapshot.shuttingDown) {
       return;
     }
 
-    const command = trimBlankLinesOnly(value);
-    if (command === '/q-' || command === '/q+') {
-      moveQueue(command === '/q-' ? 'previous' : 'next');
-      setInputValue('');
-      setInputCursorPosition([0, 0]);
-      setInputDisplayLineCount(1);
-      return;
-    }
-
-    if (suggestionsVisible && answerSuggestions.length > 0) {
+    if (!literal && suggestionsVisible && answerSuggestions.length > 0) {
       applyAnswerSuggestion();
       return;
     }
@@ -532,9 +533,11 @@ export function IssueSessionTuiStream({
 
     onSubmit(
       trimmed,
-      selectedQuestion && openQuestions.length > 0
-        ? { targetOpenQuestionId: selectedQuestion.id }
-        : undefined,
+      literal
+        ? { literal: true, ...(selectedQuestion && openQuestions.length > 0 ? { targetOpenQuestionId: selectedQuestion.id } : {}) }
+        : selectedQuestion && openQuestions.length > 0
+          ? { targetOpenQuestionId: selectedQuestion.id }
+          : undefined,
     );
     inputHistoryRef.current.submit(trimmed);
     setInputValue('');
@@ -598,11 +601,11 @@ export function IssueSessionTuiStream({
         <TitledBorderPane
           title={terminalColumns < 44 && pendingActivityCount > 0 &&
             queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
-            ? 'Input' : INPUT_PANE_TITLE}
-          titleSuffix={`${pendingActivityCount > 0 ? ` 新着${pendingActivityLabel} ^End` : ''}${
+            ? 'In' : INPUT_PANE_TITLE}
+          titleSuffix={`${pendingActivityCount > 0 ? ` 新着${pendingActivityLabel} ^L` : ''}${
             queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
-              ? ` Q:^T< >^G${pendingActivityCount === 0 || terminalColumns >= 48 ? ' /q-/q+' : ''}` : ''
-          }`}
+              ? ' Q:^T< ^O>' : ''
+          } ^R=raw`}
           borderStyle="single"
           borderColor={INPUT_PANE_BORDER_COLOR}
           paddingX={PANE_PADDING_X}

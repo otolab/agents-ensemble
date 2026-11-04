@@ -1622,7 +1622,7 @@ export async function runConductorSession(
   if (options.bindOperatorInput) {
     const bindingDispose = options.bindOperatorInput({
       submit: (message, submitOptions) => {
-        if (isOperatorExitCommand(message)) {
+        if (!submitOptions?.literal && isOperatorExitCommand(message)) {
           sessionLogger.emit({ type: 'session.operator_exit' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedExit = true;
@@ -1630,7 +1630,7 @@ export async function runConductorSession(
           abortAfterOpenQuestionDrain(operatorTerminationController);
           return false;
         }
-        if (isOperatorCloseCommand(message)) {
+        if (!submitOptions?.literal && isOperatorCloseCommand(message)) {
           sessionLogger.emit({ type: 'session.operator_close' });
           workerSession.runtime.cancelAllActivePrompts();
           operatorRequestedClose = true;
@@ -1638,13 +1638,13 @@ export async function runConductorSession(
           abortAfterOpenQuestionDrain(operatorTerminationController);
           return false;
         }
-        if (isOperatorReconnectCommand(message)) {
+        if (!submitOptions?.literal && isOperatorReconnectCommand(message)) {
           eventQueue.enqueue({ type: 'operator.reconnect' });
           return true;
         }
         const parsed =
-          submitOptions?.targetOpenQuestionId !== undefined
-            ? { message, delivery: 'next' as const }
+          submitOptions?.literal || submitOptions?.targetOpenQuestionId !== undefined
+            ? { message, delivery: submitOptions?.delivery ?? 'next' as const }
             : submitOptions?.delivery === undefined
               ? parseOperatorMessageDelivery(message)
               : { message, delivery: submitOptions.delivery };

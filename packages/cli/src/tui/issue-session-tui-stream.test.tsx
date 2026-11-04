@@ -119,7 +119,7 @@ describe('IssueSessionTuiStream', () => {
     expect(lastFrame()).toContain('pending-2');
   });
 
-  it('shows answer and queue controls at 40x12, including the slash fallback', async () => {
+  it('shows answer and queue controls at 40x12, including the alternative queue key', async () => {
     Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
     Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 40 });
     const viewModel = createTuiViewModel();
@@ -135,26 +135,61 @@ describe('IssueSessionTuiStream', () => {
     const { stdin, lastFrame } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />);
     await flushInkStdin();
     expect(lastFrame()).toContain('inq-1: いいえ');
-    expect(lastFrame()).toContain('Q:^T< >^G');
-    expect(lastFrame()).toContain('/q-/q+');
+    expect(lastFrame()).toContain('Q:^T< ^O>');
     stdin.write('\x07');
     await flushInkStdin();
     expect(lastFrame()).toContain('pending-1');
     stdin.write('\x14');
     await flushInkStdin();
     expect(lastFrame()).toContain('inq-1: いいえ');
-    stdin.write('/q+');
-    await flushInkStdin();
-    stdin.write('\r');
+    stdin.write('\x0f');
     await flushInkStdin();
     expect(lastFrame()).toContain('pending-1');
     expect(onSubmit).not.toHaveBeenCalled();
-    stdin.write('/q-');
+  });
+
+  it.each([0, 6])('submits /q+ and /q- as messages or text answers with %i queued', async (queueSize) => {
+    for (const question of [false, true]) {
+      const viewModel = createTuiViewModel();
+      viewModel.setOperatorContext({
+        conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+        openQuestions: question ? [createOpenQuestion({ id: 'inq-1', question: 'Path?', responseType: 'text' })] : [],
+        queuedMessages: Array.from({ length: queueSize }, (_, index) => ({
+          text: `pending-${index}`, delivery: 'next' as const, openQuestionAnswer: false,
+        })),
+      });
+      const onSubmit = vi.fn();
+      const { stdin } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />);
+      await flushInkStdin();
+      for (const text of ['/q+', '/q-']) {
+        stdin.write(text);
+        await flushInkStdin();
+        stdin.write('\r');
+        await flushInkStdin();
+        expect(onSubmit).toHaveBeenLastCalledWith(text, question ? { targetOpenQuestionId: 'inq-1' } : undefined);
+      }
+      cleanup();
+    }
+  });
+
+  it.each([false, true])('Ctrl+R sends commands literally with question=%s', async (question) => {
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: question ? [createOpenQuestion({ id: 'inq-1', question: 'Path?', responseType: 'text' })] : [],
+      queuedMessages: [],
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />);
     await flushInkStdin();
-    stdin.write('\r');
-    await flushInkStdin();
-    expect(lastFrame()).toContain('inq-1: いいえ');
-    expect(onSubmit).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain('^R=raw');
+    for (const text of ['/exit', '/next abc', '/q+']) {
+      stdin.write(text);
+      await flushInkStdin();
+      stdin.write('\x12');
+      await flushInkStdin();
+      expect(onSubmit).toHaveBeenLastCalledWith(text, question ? { literal: true, targetOpenQuestionId: 'inq-1' } : { literal: true });
+    }
   });
 
   it('keeps the selected answer suggestion visible alongside the queue on 80x15', async () => {
@@ -1196,17 +1231,17 @@ describe('IssueSessionTuiStream', () => {
     await flushInkStdin();
     viewModel.appendActivityLog('conductor', 'new conductor message');
     await flushInkStdin();
-    expect(lastFrame()).toContain('新着1 ^End');
-    expect(lastFrame()).toContain('Q:^T< >^G');
+    expect(lastFrame()).toContain('新着1 ^L');
+    expect(lastFrame()).toContain('Q:^T< ^O>');
     expect(lastFrame()).not.toContain('new conductor message');
     viewModel.appendActivityLog('conductor', 'second message');
     await flushInkStdin();
-    expect(lastFrame()).toContain('新着2 ^End');
+    expect(lastFrame()).toContain('新着2 ^L');
     stdin.write(INK_TEST_KEYS.end);
     await flushInkStdin();
     expect(lastFrame()).toContain('new conductor message');
     expect(lastFrame()).toContain('second message');
-    expect(lastFrame()).not.toContain('新着2 ^End');
+    expect(lastFrame()).not.toContain('新着2 ^L');
   });
 
   it('returns to new activity with Ctrl+End while preserving the draft', async () => {
@@ -1227,12 +1262,51 @@ describe('IssueSessionTuiStream', () => {
     await flushInkStdin();
     viewModel.appendActivityLog('conductor', 'new activity');
     await flushInkStdin();
-    expect(lastFrame()).toContain('新着1 ^End');
+    expect(lastFrame()).toContain('新着1 ^L');
     stdin.write('\u001b[1;5F');
     await flushInkStdin();
     expect(lastFrame()).toContain('new activity');
     expect(lastFrame()).toContain('draft');
-    expect(lastFrame()).not.toContain('新着1 ^End');
+    expect(lastFrame()).not.toContain('新着1 ^L');
+  });
+
+  it('uses Ctrl+L to follow while retaining the draft and selected answer candidate', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 24 });
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Choose?', responseType: 'choice', choices: [
+        { id: 'safe', label: 'Safe mode' }, { id: 'secure', label: 'Secure mode' },
+      ] })],
+      queuedMessages: Array.from({ length: 6 }, (_, index) => ({
+        text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+      })),
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />);
+    stdin.write(INK_TEST_KEYS.ctrlPageUp);
+    await flushInkStdin();
+    stdin.write('s');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('› secure: Secure mode');
+    viewModel.appendActivityLog('conductor', 'new activity via ctrl-l');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('新着1 ^L');
+    expect(lastFrame()).toContain('› secure: Secure mode');
+    stdin.write('\x0f');
+    await flushInkStdin();
+    stdin.write('\x0c');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('new activity via ctrl-l');
+    expect(lastFrame()).toContain('› secure: Secure mode');
+    expect(lastFrame()).toContain('s');
+    expect(onSubmit).not.toHaveBeenCalled();
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain('secure');
   });
 
   it('keeps the unread recovery and queue controls visible for a large pending count', async () => {
@@ -1254,8 +1328,9 @@ describe('IssueSessionTuiStream', () => {
       viewModel.appendActivityLog('conductor', `pending ${index}`);
     }
     await flushInkStdin();
-    expect(lastFrame()).toContain('新着999+ ^End');
-    expect(lastFrame()).toContain('Q:^T< >^G');
+    expect(lastFrame()).toContain('新着999+ ^L');
+    expect(lastFrame()).toContain('Q:^T< ^O>');
+    expect(lastFrame()).toContain('^R=raw');
   });
 
   it('holds new activity while detached and flushes the pending suffix once on End', async () => {
@@ -1276,7 +1351,7 @@ describe('IssueSessionTuiStream', () => {
     const detachedFrame = lastFrame() ?? '';
     expect(detachedFrame).not.toContain('[harness] pending-one');
     expect(detachedFrame).not.toContain('[harness] pending-two');
-    expect(detachedFrame).toContain('2 件の新着 · End で最新へ');
+    expect(detachedFrame).toContain('2 件の新着 · Ctrl+L で最新へ');
 
     stdin.write(INK_TEST_KEYS.end);
     await flushInkStdin();
@@ -1286,7 +1361,7 @@ describe('IssueSessionTuiStream', () => {
     expect(followedFrame).toContain('[harness] pending-two');
     expect((followedFrame.match(/\[harness\] pending-one/g) ?? []).length).toBe(1);
     expect((followedFrame.match(/\[harness\] pending-two/g) ?? []).length).toBe(1);
-    expect(followedFrame).not.toContain('2 件の新着 · End で最新へ');
+    expect(followedFrame).not.toContain('2 件の新着 · Ctrl+L で最新へ');
   });
 
   it('requires Ctrl+PgUp while input has text, matching the pane key contract', async () => {
@@ -1315,7 +1390,7 @@ describe('IssueSessionTuiStream', () => {
     const detachedFrame = lastFrame() ?? '';
     expect(detachedFrame).toContain('typed');
     expect(detachedFrame).not.toContain('[harness] ctrl-page-up-pending');
-    expect(detachedFrame).toContain('1 件の新着 · End で最新へ');
+    expect(detachedFrame).toContain('1 件の新着 · Ctrl+L で最新へ');
   });
 
   it('settles the live frame without replaying stream Static history', async () => {

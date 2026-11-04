@@ -5,6 +5,25 @@ import { SessionLogger } from './session/session-logger.js';
 import { submitOperatorInput } from './submit-operator-input.js';
 
 describe('submitOperatorInput', () => {
+  it.each(['/q+', '/q-'])('enqueues %s as ordinary text and as a targeted answer', (message) => {
+    for (const isAnswer of [false, true]) {
+      const registry = new OpenQuestionRegistry();
+      if (isAnswer) registry.enqueue({ id: 'inq-1', question: 'Path?', responseType: 'text' });
+      const eventQueue = new SessionEventQueue();
+      expect(submitOperatorInput({
+        message, targetOpenQuestionId: isAnswer ? 'inq-1' : undefined,
+        conductorTurn: 1, openQuestions: registry, escalations: [], eventQueue,
+        sessionLogger: new SessionLogger({ issueUrl: 'https://github.com/org/repo/issues/1', repoRoot: '/repo' }),
+      })).toBe(true);
+      if (isAnswer) {
+        expect(registry.get('inq-1')).toMatchObject({ status: 'answered', answer: message });
+        expect(eventQueue.dequeue()).toMatchObject({ openQuestionAnswer: true, answerPreview: `inq-1: ${message}` });
+      } else {
+        expect(eventQueue.dequeue()).toMatchObject({ text: message, delivery: 'next' });
+      }
+    }
+  });
+
   it('enqueues operator.message and records escalation for answered open question', () => {
     const registry = new OpenQuestionRegistry();
     registry.enqueue({

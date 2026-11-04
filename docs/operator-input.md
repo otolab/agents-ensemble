@@ -77,7 +77,7 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 ### `getContext()`
 
-未回答 Open Question と、harness の event queue に残る未 dispatch の operator message を返す。TTY の pane / stream では入力欄の直上に読み取り専用の Message queue を表示し、空なら隠す。各行は `message` または Open Question の `answer` と delivery を示す。本文は改行を畳み、幅を超えた部分は省略する。回答は質問 ID と回答本文を優先して表示する。行数が多いときは表示範囲と件数を示し、Ctrl+T（前）/ Ctrl+G（次）で一覧を移動する。入力欄の枠には `Q:^T< >^G` と表示する。端末側でこれらのキーを使用する場合、入力欄で `/q-` / `/q+` を送信しても移動できる（conductor には送られない）。TTY と UDS / operator-agent からの enqueue、dispatch に合わせて更新する。
+未回答 Open Question と、harness の event queue に残る未 dispatch の operator message を返す。TTY の pane / stream では入力欄の直上に読み取り専用の Message queue を表示し、空なら隠す。各行は `message` または Open Question の `answer` と delivery を示す。本文は改行を畳み、幅を超えた部分は省略する。回答は質問 ID と回答本文を優先して表示する。行数が多いときは表示範囲と件数を示し、Ctrl+T（前）/ Ctrl+G（次）で一覧を移動する。Ctrl+O でも次へ進み、末尾から先頭へ戻れる。入力枠の `Q:^T< ^O>` は Ctrl+T と Ctrl+O を表す。操作中も下書きと候補は保持する。`/q-` / `/q+` はキュー操作として予約せず、通常の本文や自由回答として送信できる。VS Code の Windows / Linux では Ctrl+G が端末側に使われることがあり、Ctrl+O または VS Code の Ctrl+Alt+G を使える。Windows の Ctrl+End も端末側に使われるため、stream の復帰には Ctrl+L を使える。これらの代替キーも端末や拡張機能の設定によって横取りされる場合がある。TTY と UDS / operator-agent からの enqueue、dispatch に合わせて更新する。
 
 画面が短いときは入力行とキューを優先し、案内や候補の表示行を減らす。候補を表示できない場合、候補の選択操作は無効になり、入力した内容をそのまま送信する。
 
@@ -130,9 +130,11 @@ Workers ペインの高さは内容駆動です。conductor と登録 worker の
 
 活動ログは投稿本文の明示的な改行と段落間の空行を表示行として保ち、端末幅に合わせて各行を折り返します。複数行の投稿ではラベルを独立行に置き、本文を次の行から表示します。これは pane と stream の両方に適用されます。pane は可視行数を超えた過去ログをスクロールで確認でき、stream は端末 scrollback に追記します。
 
-Open questions は内容駆動で高さを決めます。選択中 question の `question` / `context` / `choices` は、それぞれ明示的な改行・段落・リスト構造を保って折り返し、全表示行を保持します。非選択 question は question、context、choices の順に最大 2 行まで表示し、続きがある場合は 2 行目の末尾に `…` を付けます。pane / stream とも、まず compact 行を確保し、残りを選択中の detail に割り当てます。通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。選択中の detail が表示領域を超える場合は、本文を表示行単位で windowing します。Ctrl と Meta を付けない `Shift+PgUp/PgDn` で選択中 question の本文を 1 表示行ずつ上下にスクロールし、タイトルに操作キーと上下の続きがある方向を示します（Ink の `key.meta` には Alt も正規化されます）。このキーは Open questions が表示されている間、活動ログ操作より優先します。pane では plain `PgUp/PgDn`（入力欄が空のとき）と `Ctrl+PgUp/PgDn`（入力欄の内容を問わず）が活動ログ用に残ります。stream では `PgUp`（入力欄が空のとき）または `Ctrl+PgUp` で scrollback を離れ、`End`（入力欄が空のとき）または `Ctrl+End` で最新へ戻ります。質問を `Shift+↑/↓` で切り替えると本文 offset は先頭へ戻ります。
+Open questions は内容駆動で高さを決めます。選択中 question の `question` / `context` / `choices` は、それぞれ明示的な改行・段落・リスト構造を保って折り返し、全表示行を保持します。非選択 question は question、context、choices の順に最大 2 行まで表示し、続きがある場合は 2 行目の末尾に `…` を付けます。pane / stream とも、まず compact 行を確保し、残りを選択中の detail に割り当てます。通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。選択中の detail が表示領域を超える場合は、本文を表示行単位で windowing します。Ctrl と Meta を付けない `Shift+PgUp/PgDn` で選択中 question の本文を 1 表示行ずつ上下にスクロールし、タイトルに操作キーと上下の続きがある方向を示します（Ink の `key.meta` には Alt も正規化されます）。このキーは Open questions が表示されている間、活動ログ操作より優先します。pane では plain `PgUp/PgDn`（入力欄が空のとき）と `Ctrl+PgUp/PgDn`（入力欄の内容を問わず）が活動ログ用に残ります。stream では `PgUp`（入力欄が空のとき）または `Ctrl+PgUp` で scrollback を離れ、`End`（入力欄が空のとき）、`Ctrl+End` または `Ctrl+L` で最新へ戻ります。質問を `Shift+↑/↓` で切り替えると本文 offset は先頭へ戻ります。
 
-`stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の枠に `新着N ^End`（Ctrl+End）を表示します。余裕があれば本文にも新着件数と案内を表示します。入力欄が空のときの `End`、または入力中の `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。通常の detached 経路では既に Static へ渡した prefix の再送・remount・replay は行いません。settled columns shrink の scrollback recovery だけは [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って terminal reset 後に保持済み activity を再出力します。
+`stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の枠に `新着N ^L`（Ctrl+L）を表示します。余裕があれば本文にも新着件数と案内を表示します。入力欄が空のときの `End`、または下書きの有無にかかわらず `Ctrl+L` / `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。通常の detached 経路では既に Static へ渡した prefix の再送・remount・replay は行いません。settled columns shrink の scrollback recovery だけは [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って terminal reset 後に保持済み activity を再出力します。
+
+TTY の入力枠にある `^R=raw` は Ctrl+R で本文として送信する操作を表します。`/exit` や `/next ...` のような専用コマンド・delivery prefix に一致する本文も、解釈せず通常 message または選択中の質問への回答として送れます。Enter は従来どおりコマンドと候補を扱います。前後の空白は既存の送信処理に従って除去されます。VS Code の accessibility mode では Ctrl+R が端末側に割り当てられるため、Ctrl+Alt+R で Ctrl+R を端末へ送れます。その他の端末や独自設定が横取りする場合はキー割り当ての変更が必要です。
 
 TTY の pane / stream では、入力が単一行の slash コマンド prefix の間、Operator input ペイン内に候補と短い説明を表示します。先頭の空白またはタブは無視し、`/` に続く名前を大文字小文字を区別せず prefix 一致で絞り込みます（例: `/ex` は `/exit`、`/cl` は `/close`）。オペレータ入力で専用処理されるコマンドだけを候補に出し、別名は表示しません。
 
@@ -184,7 +186,7 @@ pane / stream とも、下部の表示は open question の有無で次の2モ�
 
 post-loop 待機中も Operator input はモード B と同じく入力欄だけを表示します。終了中は入力を無効化し、`終了しています…` を表示します。Operator input には session status（Issue 参照、post-loop 待機など）を載せず、Workers ペイン上枠の右端に Issue リンクを表示します。
 
-`stream` の mouse-only scrollbar / native scrollback 操作は、terminal host から viewport state が TTY へ通知されないため keyboard detached として自動検出できません。保護が必要な場合は `PgUp` / `Ctrl+PgUp` で detached を宣言し、`End` / `Ctrl+End` で復帰します。通常の幅変更では既に Static として追記された行は再折り返しされませんが、settled columns shrink では [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って scrollback を reset し、保持済み activity history を新幅で再出力します。
+`stream` の mouse-only scrollbar / native scrollback 操作は、terminal host から viewport state が TTY へ通知されないため keyboard detached として自動検出できません。保護が必要な場合は `PgUp` / `Ctrl+PgUp` で detached を宣言し、`End` / `Ctrl+End` / `Ctrl+L` で復帰します。通常の幅変更では既に Static として追記された行は再折り返しされませんが、settled columns shrink では [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って scrollback を reset し、保持済み activity history を新幅で再出力します。
 
 TTY の pane / stream は、Ink の resize 通知を通常 100ms の settle window にまとめ、columns の連続した縮小では**最後の縮小イベントから 250ms**の quiet-period が終わるまで中間幅の live frame 更新を保留します。この時間は最初の縮小イベントからの絶対上限ではありません。TUI の `terminalSizeStore` は settled した実際の端末幅を使って幅・高さ・live frame と IME cursor の座標を再計算します。一方、Ink に渡す stdout proxy の `columns` は縮小中の high-water mark を保ち、幅が増えたときに更新します（`rows` も既存どおり high-water mark）。そのため、縮小後は Ink の viewport と TUI の実幅が意図的に異なることがあります。pane は Ink の fullscreen clear 分岐を避けるため live frame の末尾 1 行を安全余白として予約し、最終サイズで再レイアウトします。固定ペインの余剰行は短い端末で先に縮め、Orchestration はタイトル上枠と下枠を保てる最小 2 行まで compact します。これにより 60×12（live frame 11 行）への resize でも、no-question モードは各ペインのタイトル・上下枠と Operator input 行を維持します。さらに短い端末ではログ・Worker 状態・open question 本文がクリップされることがあり、全ペインの本文表示は保証しません。
 

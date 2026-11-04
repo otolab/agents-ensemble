@@ -1270,7 +1270,10 @@ describe('runConductorSession resume / shutdown', () => {
       bindOperatorInput: (api) => {
         operatorContext = api.getContext();
         for (const question of restoredQuestions) {
-          api.submit('answer', { targetOpenQuestionId: question.id });
+          api.submit('/exit', { targetOpenQuestionId: question.id, literal: true });
+        }
+        for (const text of ['/exit', '/close', '/reconnect', '/next keep', '/q+']) {
+          api.submit(text, { literal: true });
         }
         queuedAnswers = api.getContext().queuedMessages;
         return () => {};
@@ -1279,8 +1282,10 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(operatorContext?.openQuestions).toEqual(restoredQuestions);
     expect(queuedAnswers).toEqual([
-      expect.objectContaining({ openQuestionAnswer: true, answerPreview: 'inq-1: answer' }),
-      expect.objectContaining({ openQuestionAnswer: true, answerPreview: 'inq-2: answer' }),
+      expect.objectContaining({ openQuestionAnswer: true, answerPreview: 'inq-1: /exit' }),
+      expect.objectContaining({ openQuestionAnswer: true, answerPreview: 'inq-2: /exit' }),
+      ...['/exit', '/close', '/reconnect', '/next keep', '/q+'].map((text) =>
+        expect.objectContaining({ text, delivery: 'next', openQuestionAnswer: false })),
     ]);
   });
 

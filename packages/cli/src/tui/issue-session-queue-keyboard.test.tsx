@@ -7,7 +7,7 @@ import {
   OperatorTextAreaKeyboardHarness,
   type ForkKeyboardModules,
 } from './operator-text-area-keyboard-harness.js';
-import { flushInkStdin } from './ink-test-keys.js';
+import { flushInkStdin, INK_TEST_KEYS } from './ink-test-keys.js';
 import type { OperatorTextAreaProps } from './operator-text-area.js';
 
 let modules: ForkKeyboardModules;
@@ -55,11 +55,33 @@ describe.each([['pane', IssueSessionTui], ['stream', IssueSessionTuiStream]] as 
       expect(value).toBe('one\ntwo\nsix');
       expect(cursor).toEqual([2, 3]);
       expect(lastFrame()).toContain('Message queue (1-4/6)');
-      stdin.write('\x07');
+      if (_layout === 'stream') {
+        stdin.write(INK_TEST_KEYS.ctrlPageUp);
+        await flushInkStdin();
+        viewModel.appendActivityLog('conductor', 'new while editing');
+        await flushInkStdin();
+        expect(lastFrame()).toContain('新着1 ^L');
+        stdin.write('\x0c');
+        await flushInkStdin();
+        expect(lastFrame()).toContain('new while editing');
+        expect(value).toBe('one\ntwo\nsix');
+        expect(cursor).toEqual([2, 3]);
+      }
+      stdin.write('\x0f');
       await flushInkStdin();
       expect(lastFrame()).toContain('Message queue (2-5/6)');
       expect(value).toBe('one\ntwo\nsix');
       expect(cursor).toEqual([2, 3]);
+      // Ctrl+O cycles to the beginning, even with a multiline draft.
+      for (let index = 0; index < 2; index++) {
+        stdin.write('\x0f');
+        await flushInkStdin();
+      }
+      expect(lastFrame()).toContain('Message queue (1-4/6)');
+      expect(value).toBe('one\ntwo\nsix');
+      expect(cursor).toEqual([2, 3]);
+      stdin.write('\x07');
+      await flushInkStdin();
       stdin.write('X');
       await flushInkStdin();
       expect(value).toBe('one\ntwo\nsixX');

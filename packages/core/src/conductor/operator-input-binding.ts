@@ -20,6 +20,8 @@ export interface OperatorInputContext {
 export interface OperatorInputSubmitOptions {
   /** TUI で選択中の open question への回答先。未指定時は従来どおり件数で解釈。 */
   targetOpenQuestionId?: string;
+  /** コマンドや delivery prefix と解釈せず、本文として送信する。 */
+  literal?: boolean;
   /** 配信モード。未指定時は本文先頭の mode prefix、なければ `next`。 */
   delivery?: OperatorMessageDelivery;
 }
