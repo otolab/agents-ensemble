@@ -85,6 +85,24 @@ ensemble auth login --provider <oauth-provider-id>
 
 OAuth login も TTY が必要です。Pi 1.x の `ModelRuntime.login` が認証を行い、URL、device code、進捗、追加 prompt は stderr に出します。SSH では表示された URL / device code を別のブラウザで使えます。OAuth credential は user runtime に保存され、conductor の各 request で runtime が必要に応じて refresh します。
 
+OpenAI provider（`openai`）の ChatGPT OAuth は installation ごとの UUID（device ID）を必要とします。login 時に user resource root の `settings.json` から `deviceId` を取得し、未作成なら生成して保存します。同じ `conductor.pi.agentDir` で login をやり直すと同じ ID が使われ、agentDir を変えると別の installation として ID が作られます。値を手で設定する必要はありません。
+
+ChatGPT OAuth を使わない場合は、次の方法があります。
+
+| 方法 | 手順 |
+|------|------|
+| OpenAI API key | `OPENAI_API_KEY` を設定すると、Pi runtime が request 時に API key として使います。`ensemble auth login --provider openai` は OAuth login を選ぶため、API key を保存する用途には使わないでください。OpenAI 公式の model ID を選びます。 |
+| Pi CLI で先に OAuth login | Pi CLI の agent directory を ensemble と同じ `conductor.pi.agentDir` に合わせ、Pi CLI の `/login` から `openai` provider に login します。credential は共有の `auth.json` に保存されるため、ensemble はその credential で request を送れます。 |
+| LiteLLM | 既存の `models.json` にある LiteLLM provider を引き続き使います。ChatGPT OAuth の device ID は不要です。 |
+
+Pi CLI の既定 agent directory は `~/.pi/agent`、ensemble の既定 user root は `~/.ensemble/pi` です。共有するには Pi CLI 起動時に directory を指定します。
+
+```bash
+PI_CODING_AGENT_DIR="$HOME/.ensemble/pi" pi
+```
+
+`conductor.pi.agentDir` を変更している場合は、その値と同じ directory を `PI_CODING_AGENT_DIR` に指定してください。
+
 project 層の `auth.json` にある OAuth entry は refresh 対象になりません。project の明示的な OAuth credential は実行時に拒否されるため、project 側の stale entry を除去または置き換えたうえで、`ensemble auth login --provider <oauth-provider-id>` を user 層に実行してください。login は project `auth.json` を上書きしません。
 
 ### 4. 状態と model を確認する

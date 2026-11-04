@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import {
   ModelRegistry,
   ModelRuntime,
+  SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 import {
   findEnvKeys,
@@ -119,10 +120,15 @@ export async function loginPiConductor(
         `Pi provider "${provider}" uses OAuth. Run this command from a TTY so the OAuth login flow can interact with you.`,
       );
     }
+    const roots = resolvePiResourceRoots(options);
     await context.modelRuntime.login(
       provider,
       'oauth',
       toPiAuthInteraction(options.oauthCallbacks),
+      {
+        getDeviceId: () =>
+          SettingsManager.create(options.cwd, roots.agentDir).getOrCreateDeviceId(),
+      },
     );
     return {
       backend: 'pi',
