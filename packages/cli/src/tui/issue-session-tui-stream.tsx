@@ -334,10 +334,6 @@ export function IssueSessionTuiStream({
   };
 
   useInput((input, key) => {
-    if (key.ctrl && !key.shift && !key.meta && input === 'r') {
-      handleSubmit(inputValue, true);
-      return;
-    }
     if (
       key.ctrl && !key.shift && !key.meta && (input === 't' || input === 'g' || input === 'o') &&
       queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
@@ -516,12 +512,12 @@ export function IssueSessionTuiStream({
     setInputDisplayLineCount(1);
   };
 
-  const handleSubmit = (value: string, literal = false) => {
+  const handleSubmit = (value: string) => {
     if (snapshot.shuttingDown) {
       return;
     }
 
-    if (!literal && suggestionsVisible && answerSuggestions.length > 0) {
+    if (suggestionsVisible && answerSuggestions.length > 0) {
       applyAnswerSuggestion();
       return;
     }
@@ -533,11 +529,9 @@ export function IssueSessionTuiStream({
 
     onSubmit(
       trimmed,
-      literal
-        ? { literal: true, ...(selectedQuestion && openQuestions.length > 0 ? { targetOpenQuestionId: selectedQuestion.id } : {}) }
-        : selectedQuestion && openQuestions.length > 0
-          ? { targetOpenQuestionId: selectedQuestion.id }
-          : undefined,
+      selectedQuestion && openQuestions.length > 0
+        ? { targetOpenQuestionId: selectedQuestion.id }
+        : undefined,
     );
     inputHistoryRef.current.submit(trimmed);
     setInputValue('');
@@ -601,11 +595,11 @@ export function IssueSessionTuiStream({
         <TitledBorderPane
           title={terminalColumns < 44 && pendingActivityCount > 0 &&
             queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
-            ? 'In' : INPUT_PANE_TITLE}
+            ? 'Input' : INPUT_PANE_TITLE}
           titleSuffix={`${pendingActivityCount > 0 ? ` 新着${pendingActivityLabel} ^L` : ''}${
             queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
               ? ' Q:^T< ^O>' : ''
-          } ^R=raw`}
+          }`}
           borderStyle="single"
           borderColor={INPUT_PANE_BORDER_COLOR}
           paddingX={PANE_PADDING_X}

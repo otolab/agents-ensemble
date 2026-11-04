@@ -172,24 +172,70 @@ describe('IssueSessionTuiStream', () => {
     }
   });
 
-  it.each([false, true])('Ctrl+R sends commands literally with question=%s', async (question) => {
+  it.each([false, true])('Ctrl+R leaves a draft intact without submitting, question=%s', async (question) => {
     const viewModel = createTuiViewModel();
     viewModel.setOperatorContext({
       conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
-      openQuestions: question ? [createOpenQuestion({ id: 'inq-1', question: 'Path?', responseType: 'text' })] : [],
+      openQuestions: question ? [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'yes_no' })] : [],
       queuedMessages: [],
     });
     const onSubmit = vi.fn();
     const { stdin, lastFrame } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />);
+    stdin.write(question ? 'y' : 'draft');
     await flushInkStdin();
-    expect(lastFrame()).toContain('^R=raw');
-    for (const text of ['/exit', '/next abc', '/q+']) {
-      stdin.write(text);
+    if (question) expect(lastFrame()).toContain('yes');
+    stdin.write('\x12');
+    await flushInkStdin();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain(question ? 'y' : 'draft');
+    if (question) expect(lastFrame()).toContain('yes');
+    stdin.write('\r');
+    await flushInkStdin();
+    if (question) {
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(lastFrame()).toContain('yes');
+      stdin.write('\r');
       await flushInkStdin();
-      stdin.write('\x12');
-      await flushInkStdin();
-      expect(onSubmit).toHaveBeenLastCalledWith(text, question ? { literal: true, targetOpenQuestionId: 'inq-1' } : { literal: true });
+      expect(onSubmit).toHaveBeenCalledWith('yes', { targetOpenQuestionId: 'inq-1' });
+    } else {
+      expect(onSubmit).toHaveBeenCalledWith('draft', undefined);
     }
+  });
+
+  it('does not submit Ctrl+R on a 32x12 screen with a question and queue', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 32 });
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'yes_no' })],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => ({
+        text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+      })),
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<IssueSessionTuiStream viewModel={viewModel} onSubmit={onSubmit} />);
+    stdin.write(INK_TEST_KEYS.pageUp);
+    await flushInkStdin();
+    viewModel.appendActivityLog('conductor', 'pending');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('新着1 ^L');
+    stdin.write('y');
+    await flushInkStdin();
+    stdin.write('\x12');
+    await flushInkStdin();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain('> y');
+    expect(lastFrame()).not.toContain('^R');
+    const suggestionVisible = (lastFrame() ?? '').includes('› yes');
+    stdin.write('\r');
+    await flushInkStdin();
+    if (suggestionVisible) {
+      expect(onSubmit).not.toHaveBeenCalled();
+      stdin.write('\r');
+      await flushInkStdin();
+    }
+    expect(onSubmit).toHaveBeenCalledWith(suggestionVisible ? 'yes' : 'y', { targetOpenQuestionId: 'inq-1' });
   });
 
   it('keeps the selected answer suggestion visible alongside the queue on 80x15', async () => {
@@ -1330,7 +1376,6 @@ describe('IssueSessionTuiStream', () => {
     await flushInkStdin();
     expect(lastFrame()).toContain('新着999+ ^L');
     expect(lastFrame()).toContain('Q:^T< ^O>');
-    expect(lastFrame()).toContain('^R=raw');
   });
 
   it('holds new activity while detached and flushes the pending suffix once on End', async () => {

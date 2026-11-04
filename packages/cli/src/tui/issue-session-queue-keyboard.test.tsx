@@ -54,6 +54,10 @@ describe.each([['pane', IssueSessionTui], ['stream', IssueSessionTuiStream]] as 
       }
       expect(value).toBe('one\ntwo\nsix');
       expect(cursor).toEqual([2, 3]);
+      stdin.write('\x12');
+      await flushInkStdin();
+      expect(value).toBe('one\ntwo\nsix');
+      expect(cursor).toEqual([2, 3]);
       expect(lastFrame()).toContain('Message queue (1-4/6)');
       if (_layout === 'stream') {
         stdin.write(INK_TEST_KEYS.ctrlPageUp);

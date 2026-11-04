@@ -685,10 +685,6 @@ export function IssueSessionTui({
   };
 
   useInput((input, key) => {
-    if (key.ctrl && !key.shift && !key.meta && input === 'r') {
-      handleSubmit(inputValue, true);
-      return;
-    }
     if (
       key.ctrl && !key.shift && !key.meta && (input === 't' || input === 'g' || input === 'o') &&
       queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
@@ -867,12 +863,12 @@ export function IssueSessionTui({
     setInputDisplayLineCount(1);
   };
 
-  const handleSubmit = (value: string, literal = false) => {
+  const handleSubmit = (value: string) => {
     if (snapshot.shuttingDown) {
       return;
     }
 
-    if (!literal && suggestionsVisible && answerSuggestions.length > 0) {
+    if (suggestionsVisible && answerSuggestions.length > 0) {
       applyAnswerSuggestion();
       return;
     }
@@ -884,11 +880,9 @@ export function IssueSessionTui({
 
     onSubmit(
       trimmed,
-      literal
-        ? { literal: true, ...(selectedQuestion && openQuestions.length > 0 ? { targetOpenQuestionId: selectedQuestion.id } : {}) }
-        : selectedQuestion && openQuestions.length > 0
-          ? { targetOpenQuestionId: selectedQuestion.id }
-          : undefined,
+      selectedQuestion && openQuestions.length > 0
+        ? { targetOpenQuestionId: selectedQuestion.id }
+        : undefined,
     );
     inputHistoryRef.current.submit(trimmed);
     setInputValue('');
@@ -957,8 +951,8 @@ export function IssueSessionTui({
       ) : null}
       <TitledBorderPane
         title={INPUT_PANE_TITLE}
-        titleSuffix={`${queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
-          ? ' Q:^T< ^O>' : ''} ^R=raw`}
+        titleSuffix={queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
+          ? ' Q:^T< ^O>' : undefined}
         borderStyle="single"
         borderColor={INPUT_PANE_BORDER_COLOR}
         paddingX={PANE_PADDING_X}
