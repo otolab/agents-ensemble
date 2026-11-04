@@ -143,6 +143,55 @@ describe('ensemble models catalog CLI', () => {
     });
   });
 
+  it('reports the pre-add comparison in sync JSON and the post-add state in diff', () => {
+    const before = run('diff', '--provider', 'litellm', '--json');
+    expect(before.status).toBe(0);
+    expect(JSON.parse(before.stdout)).toEqual({
+      provider: 'litellm', apiOnly: ['remote-model'], jsonOnly: [], shared: [],
+    });
+
+    const sync = run('sync', '--provider', 'litellm', '--add', 'remote-model', '--json');
+    expect(sync.status).toBe(0);
+    expect(JSON.parse(sync.stdout)).toEqual({
+      provider: 'litellm',
+      apiOnly: [{ id: 'remote-model', maxInputTokens: 64000 }],
+      jsonOnly: [],
+      shared: [],
+      added: ['remote-model'],
+      skipped: [],
+      targetPath: join(repoRoot, 'user-pi', 'models.json'),
+    });
+
+    const after = run('diff', '--provider', 'litellm', '--json');
+    expect(after.status).toBe(0);
+    expect(JSON.parse(after.stdout)).toEqual({
+      provider: 'litellm', apiOnly: [], jsonOnly: [], shared: ['remote-model'],
+    });
+  });
+
+  it('compares before add and reports the added ID as shared afterwards', () => {
+    const before = run('diff', '--provider', 'litellm', '--json');
+    expect(before.status).toBe(0);
+    expect(JSON.parse(before.stdout)).toEqual({
+      provider: 'litellm', apiOnly: ['remote-model'], jsonOnly: [], shared: [],
+    });
+
+    const added = run('add', 'remote-model', '--provider', 'litellm', '--json');
+    expect(added.status).toBe(0);
+    expect(JSON.parse(added.stdout)).toEqual({
+      provider: 'litellm',
+      added: ['remote-model'],
+      skipped: [],
+      targetPath: join(repoRoot, 'user-pi', 'models.json'),
+    });
+
+    const after = run('diff', '--provider', 'litellm', '--json');
+    expect(after.status).toBe(0);
+    expect(JSON.parse(after.stdout)).toEqual({
+      provider: 'litellm', apiOnly: [], jsonOnly: [], shared: ['remote-model'],
+    });
+  });
+
   it.each([
     ['remote', []],
     ['diff', []],

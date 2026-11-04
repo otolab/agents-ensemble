@@ -134,6 +134,10 @@ ensemble models diff --provider litellm --json
 
 例えば `sync` の `.apiOnly[].id` は、`diff` では `.apiOnly[]` です。`maxInputTokens` は API の `max_input_tokens` が正の安全な整数の場合に `sync` の `apiOnly` に含まれますが、`diff` には含まれません。互換形やこの値が必要なスクリプトは、非推奨期間中は引き続き `sync --json` を使えます。非推奨警告は stderr に出力されます。追加結果を取得する場合は `add --json` の `added` / `skipped` と、書込み時のみ含まれる `targetPath` を利用してください。
 
+`sync --add ... --json` の `apiOnly` / `jsonOnly` / `shared` は、**追加前**の models.json と API を比較した結果です。`added` / `skipped` はその比較後に行う追加の結果です。新コマンドで追加前の差分が必要な場合は、`diff --json` を `add` より先に実行してください。追加後に `diff` を実行すると、追加された ID は通常 `apiOnly` から `shared` に移るため、旧 `sync` が返した比較結果とは異なります。
+
+ただし `diff` と `add` は別々に catalog を取得するため、間に catalog や models.json が変わることがあります。旧 `sync` の一度の取得・比較・追加と同じ snapshot になる保証はありません。旧 JSON をそのまま必要とする場合は、非推奨期間中の `sync --add ... --json` を使ってください。
+
 user の `models.json` に追加しても、project の同じ provider に `models` 配列がある場合は Pi の project 優先により user 配列が隠れます。その場合はコマンドが書込前に停止するので、`--target project` を選んでください。
 
 これらのコマンドは Pi provider の `baseUrl`、`apiKey`（環境変数参照や `!command` を含む）、`authHeader` と既存の Pi credential 解決を使って catalog を取得します。認証情報、header、provider の応答本文は出力しません。ネットワーク接続は `models remote` / `diff` / `add` / 旧 `sync` の明示実行時だけで、conductor の通常の `ModelRuntime` は引き続き `allowModelNetwork: false` です。
