@@ -21,6 +21,8 @@ export interface OperatorMessageEvent extends SessionEventDispatchFields {
   type: 'operator.message';
   text: string;
   delivery?: OperatorMessageDelivery;
+  /** Open Question の回答を含む入力。 */
+  openQuestionAnswer?: boolean;
 }
 
 export type OperatorMessageDelivery = 'idle' | 'next' | 'interrupt';

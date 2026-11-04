@@ -11,6 +11,8 @@ export const HARNESS_TELEMETRY_EVENT_TYPES = [
   'harness.worker.state',
   'harness.session.workers',
   'operator.input',
+  'operator.queue.changed',
+  'operator.dispatched',
   'conductor.inbound',
   'conductor.send.started',
   'conductor.send.progress',

@@ -1659,6 +1659,15 @@ export async function runConductorSession(
         autonomousTurns,
         maxTurns: operatorInputMaxTurns(maxTurns),
         openQuestions: openQuestions.listOpen(),
+        queuedMessages: eventQueue.snapshot().flatMap((event) =>
+          event.type === 'operator.message'
+            ? [{
+                text: event.text,
+                delivery: event.delivery ?? 'next',
+                openQuestionAnswer: event.openQuestionAnswer === true,
+              }]
+            : [],
+        ),
       }),
     });
     if (typeof bindingDispose === 'function') {
@@ -1877,6 +1886,16 @@ export async function runConductorSession(
           triggers: info.triggers,
           sources: info.sources,
         });
+      },
+      onOperatorQueueChanged: () => {
+        sessionLogger.emit({ type: 'operator.queue.changed' });
+      },
+      onOperatorDispatched: (events) => {
+        for (const event of events) {
+          if (event.type === 'operator.message') {
+            sessionLogger.emit({ type: 'operator.dispatched', text: event.text });
+          }
+        }
       },
       // Agent.resume already retains the conductor conversation. Worker
       // startup happens before the driver, so resume events (including

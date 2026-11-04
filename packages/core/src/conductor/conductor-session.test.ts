@@ -3973,6 +3973,56 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
+  it('exposes a UDS message while queued and emits dispatch only when the send starts', async () => {
+    const initial = createDeferred<{ runId: string; status: string; result: string }>();
+    mockSend.mockReturnValueOnce(initial.promise).mockResolvedValue({
+      runId: 'operator-run', status: 'finished', result: 'done',
+    });
+    let api: OperatorInputBindingApi | undefined;
+    const events: SessionLogEvent[] = [];
+    const snapshots: Array<ReturnType<OperatorInputBindingApi['getContext']>> = [];
+    const logger = new SessionLogger({ issueUrl: TEST_ISSUE.url, repoRoot });
+    logger.subscribe((event) => {
+      events.push(event);
+      if (api && (event.type === 'operator.input' || event.type === 'operator.dispatched')) {
+        snapshots.push(api.getContext());
+      }
+    });
+    const session = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+      maxTurns: 5, permissionPipeline: new PermissionPipeline({}),
+      sessionLogger: logger, registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    try {
+      const storePath = sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' });
+      await vi.waitFor(async () => {
+        expect((await loadSessionResumeStore(storePath))?.harnessSocketPath).toBeTruthy();
+        expect(mockSend).toHaveBeenCalledTimes(1);
+      });
+      const socketPath = (await loadSessionResumeStore(storePath))!.harnessSocketPath!;
+      await sendOpenQuestionControlRequest(socketPath, {
+        method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+        params: { text: 'queued over UDS', delivery: 'idle' },
+      });
+      expect(api!.getContext().queuedMessages).toEqual([
+        { text: 'queued over UDS', delivery: 'idle', openQuestionAnswer: false },
+      ]);
+      expect(events.some((event) => event.type === 'operator.dispatched')).toBe(false);
+      initial.resolve({ runId: 'initial', status: 'finished', result: 'done' });
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+      expect(events.filter((event) => event.type === 'operator.dispatched')).toEqual([
+        { type: 'operator.dispatched', text: 'queued over UDS' },
+      ]);
+      expect(snapshots.at(-1)?.queuedMessages).toEqual([]);
+    } finally {
+      initial.resolve({ runId: 'initial', status: 'finished', result: 'done' });
+      api?.submit('/exit');
+      await session;
+    }
+  });
+
   it('sends one operator.message over the live session UDS with its delivery mode', async () => {
     const emitted: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({

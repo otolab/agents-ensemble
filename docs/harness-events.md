@@ -52,7 +52,9 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `harness.worktree.removed` | post-loop `/exit` 後、isolated worktree 削除成功 | verbose 時のみ `[harness] worktree.removed path=... branch=...` | なし |
 | `harness.worktree.remove_skipped` | post-loop `/exit` の isolated worktree cleanup で未コミット変更あり等により削除拒否 | `[harness] worktree.remove_skipped path=... branch=... reason=dirty` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
 | `harness.worktree.remove_failed` | post-loop `/exit` の isolated worktree cleanup で `git worktree remove` の限定リトライ後も失敗 | `[harness] worktree.remove_failed path=... branch=... error=...` に加え、利用者向け `[worktree] ⚠️` warning（TTY 活動ログ / 非 TTY stderr） | なし |
-| `operator.input` | オペレータ発話をキューに載せる直前 | verbose 時のみ `[harness] operator.input delivery=idle\|next\|interrupt turn=N bytes=...` | なし |
+| `operator.input` | オペレータ発話をキューに受理したとき | verbose 時のみ `[harness] operator.input delivery=idle\|next\|interrupt turn=N bytes=...` | なし |
+| `operator.queue.changed` | waiter から operator message をキューに戻したとき | TUI のキューを更新 | なし |
+| `operator.dispatched` | operator message を conductor へ dispatch するとき | TUI 活動ログに本文を表示 | なし |
 | `conductor.inbound` | harness が `agent.send` へ渡す trigger 束を確定した直前 | `[harness] conductor.deliver triggers=N sources=...` | なし |
 | `conductor.send.started` | 各 `agent.send` 開始直前 | verbose 時のみ `[harness] conductor.send.started n=N source=...` | なし（TUI Workers ペインで `conductor: thinking`） |
 | `conductor.send.progress` | conductor ターン中の SDK ツール開始 | **なし**（log 相当。活動ログ / stderr には出さない [#161](https://github.com/otolab/agents-ensemble/issues/161)） | なし（TUI: 活動ヒントのみ。例: `conductor: reading`） |
@@ -194,7 +196,7 @@ CLI 整形: `createObservationSink()`（`packages/cli/src/session-sinks.ts`）�
 
 | 読者 | 見えるもの | 見えないもの / 注意 |
 |------|------------|--------------------|
-| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` / `permission.stall` と、更新に同梱する接続復旧 inform を含む held event 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator message は dispatch hold を貫通し、`idle` は自律処理が落ち着いてから貫通する。活動ログの本文前に `[idle]` / `[next]` / `[interrupt]` を表示する |
+| オペレータ（TTY） | Workers ペインに `conductor dispatch 保留中（N 件）`（`N` は `permission.pending` / `permission.stall` と、更新に同梱する接続復旧 inform を含む held event 件数）、活動ログに `[observation] dispatch hold enabled` / `released (flushed N events)` | `[harness]` 行は抑制されない。permission.pending の活動ログも通常どおり表示される。operator message は dispatch hold を貫通し、`idle` は自律処理が落ち着いてから貫通する。入力欄直上の Message queue に未 dispatch の operator message と delivery を表示する。活動ログは dispatch 時に本文のみ表示する |
 | conductor | `set_dispatch_hold` の YAML 結果（ON は状態、OFF は flush 件数と `sendScheduled`） | held trigger（permission.pending / permission.stall を含む）と接続復旧 inform は通常 OFF 後に 1 回の `agent.send` へ合成される。max-turns で worker / GitHub が送れない場合は held permission が先に dispatch され、残りは後続の operator 入力後に送られる。配送可能な operator.message は保留されない |
 | 運用・resume | 保留は Driver メモリだけ | SessionResumeStore に保留状態・held buffer は保存しない。resume は保留 OFF で開始する。release 前に終了すると未 flush events は失われる |
 

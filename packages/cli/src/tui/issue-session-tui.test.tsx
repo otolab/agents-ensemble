@@ -145,6 +145,57 @@ describe('IssueSessionTui', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps the input visible with a queued message on a short terminal', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5, openQuestions: [],
+      queuedMessages: [{ text: 'pending', delivery: 'next', openQuestionAnswer: false }],
+    });
+    const { lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending');
+    expect(lastFrame()).toContain(OPERATOR_INPUT_PROMPT);
+  });
+
+  it('scrolls a longer message queue without losing its count', async () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5, openQuestions: [],
+      queuedMessages: Array.from({ length: 6 }, (_, index) => ({
+        text: `item-${index}`, delivery: 'next' as const, openQuestionAnswer: false,
+      })),
+    });
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('Message queue (1-4/6)');
+    stdin.write('\u001B[1;5B');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('Message queue (2-5/6)');
+    expect(lastFrame()).toContain('item-4');
+  });
+
+  it('shows and clears the pending message queue above the input', async () => {
+    const viewModel = createTuiViewModel();
+    const context = { conductorTurn: 1, autonomousTurns: 0, maxTurns: 5, openQuestions: [],
+      queuedMessages: [
+        { text: 'waiting for idle', delivery: 'idle' as const, openQuestionAnswer: false },
+        { text: 'answer text', delivery: 'next' as const, openQuestionAnswer: true },
+      ],
+    };
+    viewModel.setOperatorContext(context);
+    const { lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Message queue (2)');
+    expect(frame).toContain('message idle │ waiting for idle');
+    expect(frame).toContain('answer next │ answer text');
+    expect(frame.indexOf('answer next')).toBeLessThan(frame.lastIndexOf(OPERATOR_INPUT_PROMPT));
+    viewModel.setOperatorContext({ ...context, queuedMessages: [] });
+    await flushInkStdin();
+    expect(lastFrame()).not.toContain('Message queue');
+  });
+
   it('shows slash command suggestions in the input pane and submits the typed text unchanged', async () => {
     const viewModel = createTuiViewModel();
     const onSubmit = vi.fn();

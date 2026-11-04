@@ -107,6 +107,8 @@ export interface ConductorSessionDriverOptions {
   workerFailures: WorkerFailureRecord[];
   /** `agent.send` 直前の harness → conductor 境界要約。 */
   onConductorInbound?: (info: ConductorInboundInfo) => void;
+  onOperatorQueueChanged?: () => void;
+  onOperatorDispatched?: (events: SessionEvent[]) => void;
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
@@ -381,6 +383,7 @@ export async function runConductorSessionDriver(
         signal: options.shutdownSignal,
         dispatchHoldState,
         onDispatchHoldChanged: options.onDispatchHoldChanged,
+        onOperatorQueueChanged: options.onOperatorQueueChanged,
         isPermissionPending: options.isPermissionPending,
         canDispatchIdleOperatorMessage: () =>
           canDispatchIdleOperatorMessage({
@@ -421,6 +424,7 @@ export async function runConductorSessionDriver(
       autonomousTurns,
     );
     const { workerDispatches, workerFailures } = countWorkerOutcomesInBatch(batch);
+    options.onOperatorDispatched?.(batch);
     options.onConductorInbound?.({
       triggers: batch.filter(isTriggerSessionEvent).length,
       sources: uniqueSources(batch, dispatchResult.sourceKey),
@@ -580,6 +584,7 @@ async function waitForDispatchBatch(input: {
   signal?: AbortSignal;
   dispatchHoldState: DispatchHoldState;
   onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
+  onOperatorQueueChanged?: () => void;
   isPermissionPending?: (requestId: string) => boolean;
   canDispatchIdleOperatorMessage: () => boolean;
 }): Promise<DispatchBatchResult | undefined> {
@@ -675,6 +680,7 @@ async function waitForDispatchBatch(input: {
     });
     // waiter 経由のイベントは queue に載らない。到着順を保つため先頭へ戻す。
     input.eventQueue.prependSilent(incoming);
+    if (incoming.type === 'operator.message') input.onOperatorQueueChanged?.();
   }
 }
 

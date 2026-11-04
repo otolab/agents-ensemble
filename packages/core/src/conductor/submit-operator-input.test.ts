@@ -45,6 +45,8 @@ describe('submitOperatorInput', () => {
       expect.objectContaining({
         type: 'operator.message',
         text: expect.stringContaining('yes, continue'),
+        delivery: 'next',
+        openQuestionAnswer: true,
       }),
     );
     expect(registry.listOpen()).toHaveLength(0);

@@ -97,6 +97,16 @@ export interface OperatorInputEvent {
   delivery?: OperatorMessageDelivery;
 }
 
+/** UI のキュー更新、または conductor へ渡された operator message。 */
+export interface OperatorQueueChangedEvent {
+  type: 'operator.queue.changed';
+}
+
+export interface OperatorDispatchedEvent {
+  type: 'operator.dispatched';
+  text: string;
+}
+
 /** harness から conductor へ渡す SessionEvent の束を要約する境界イベント。 */
 export interface ConductorInboundEvent {
   type: 'conductor.inbound';
@@ -284,6 +294,8 @@ export type SessionLogEvent =
   | HarnessWorkerStateEvent
   | HarnessSessionWorkersEvent
   | OperatorInputEvent
+  | OperatorQueueChangedEvent
+  | OperatorDispatchedEvent
   | ConductorInboundEvent
   | ConductorSendStartedEvent
   | ConductorSendProgressEvent

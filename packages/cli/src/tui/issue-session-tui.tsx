@@ -59,6 +59,7 @@ import {
   getOpenQuestionAnswerSuggestions,
 } from './open-question-answer-suggestions.js';
 import { TitledBorderPane } from './titled-border-pane.js';
+import { messageQueueLines, messageQueuePageSize } from './message-queue-lines.js';
 import {
   computeInputPaneHeight,
   computeOperatorInputCursorX,
@@ -481,6 +482,7 @@ export function IssueSessionTui({
     viewModel.getSnapshot,
   );
   const [inputValue, setInputValue] = useState('');
+  const [queueOffset, setQueueOffset] = useState(0);
   const [inputCursorPosition, setInputCursorPosition] = useState<[number, number]>([0, 0]);
   const inputHistoryRef = useRef(new OperatorInputHistory());
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
@@ -549,9 +551,13 @@ export function IssueSessionTui({
   const workerPaneHeight = computeWorkerPaneHeight(
     Object.keys(snapshot.displayState.workers).length,
   );
+  const queuedMessages = snapshot.operatorContext?.queuedMessages ?? [];
+  const queueLines = messageQueueLines(
+    queuedMessages, contentWidth, terminalRows, queueOffset,
+  );
   const hintLineCount = operatorInputDisplay.hintLines.reduce(
     (lineCount, hintLine) => lineCount + wrapTextToWidth(hintLine, contentWidth).length,
-    commandSuggestionLines.length + answerSuggestionLines.length,
+    commandSuggestionLines.length + answerSuggestionLines.length + queueLines.length,
   );
   const visibleInputDisplayLineCount = Math.min(inputDisplayLineCount, maxInputDisplayLines);
   const inputPaneHeight = computeInputPaneHeight({
@@ -647,6 +653,18 @@ export function IssueSessionTui({
   };
 
   useInput((_input, key) => {
+    if (
+      key.ctrl && !key.shift && !key.meta && (key.upArrow || key.downArrow) &&
+      queuedMessages.length > messageQueuePageSize(terminalRows)
+    ) {
+      setQueueOffset((current) =>
+        Math.max(0, Math.min(
+          current + (key.upArrow ? -1 : 1),
+          queuedMessages.length - messageQueuePageSize(terminalRows),
+        )),
+      );
+      return;
+    }
     if (openQuestions.length > 0 && key.shift && !key.ctrl && !key.meta) {
       if (key.pageUp) {
         setOpenQuestionLinesFromTop((current) =>
@@ -936,6 +954,11 @@ export function IssueSessionTui({
             bold={line.isSelected}
           >
             {line.text}
+          </Text>
+        ))}
+        {queueLines.map((line, index) => (
+          <Text key={`message-queue-${index}`} color={INPUT_PANE_HINT_COLOR}>
+            {line}
           </Text>
         ))}
         <OperatorTextArea

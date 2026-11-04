@@ -26,6 +26,7 @@ interface OperatorInputContext {
   autonomousTurns: number;
   maxTurns: number | null;    // 無制限時は null
   openQuestions: OpenQuestion[];
+  queuedMessages?: Array<{ text: string; delivery: 'idle' | 'next' | 'interrupt'; openQuestionAnswer: boolean }>;
 }
 
 interface OperatorInputBindingApi {
@@ -56,7 +57,7 @@ type OperatorInputBinding = (
 
 ### オペレータメッセージの配信モード
 
-`operator.message` は `delivery?: 'idle' | 'next' | 'interrupt'` を持ち、省略時は `next` として扱います。SessionLogEvent の `operator.input` にも解決後のモードを記録し、TTY 活動ログでは本文の前に `[idle]` / `[next]` / `[interrupt]` を表示します。
+`operator.message` は `delivery?: 'idle' | 'next' | 'interrupt'` を持ち、省略時は `next` として扱います。SessionLogEvent の `operator.input` は enqueue 時に解決後のモードを記録します。TTY の活動ログは conductor への dispatch 時に本文を表示し、delivery は付けません。
 
 | モード | 動作 |
 |--------|------|
@@ -76,7 +77,7 @@ View は **ブロックしない**。ループの待機は Driver が `waitForDi
 
 ### `getContext()`
 
-プロンプト直前の案内（未回答 open question 一覧など）に使う。CLI では `notifyOperatorInputReprompt` 経由で TTY 表示を更新する。
+未回答 Open Question と、harness の event queue に残る未 dispatch の operator message を返す。TTY の pane / stream では入力欄の直上に読み取り専用の Message queue を表示し、空なら隠す。各行は `message` または Open Question の `answer` と delivery を示す。本文は改行を畳み、幅を超えた部分は省略する。行数が多いときは表示範囲と件数を示し、Ctrl+↑/↓ で一覧を移動する。TTY と UDS / operator-agent からの enqueue、dispatch に合わせて更新する。
 
 ### 戻り値
 
