@@ -86,6 +86,12 @@ cd /path/to/your/repository
 ensemble issue https://github.com/OWNER/REPOSITORY/issues/123
 ```
 
+Issue セッションで conductor に reasoning / thinking level を明示する場合は `--reasoning <level>` を指定します。選択した backend と model が値に対応しないと起動前にエラーになります。config・環境変数を含む優先順位と backend ごとの対応値は [設定値リファレンス](../settings.md) と [ensemble 共通設定](../config.md#conductor-reasoning) を参照してください。
+
+```bash
+ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 --reasoning high
+```
+
 起動時だけ user config を差し替える場合は `--config <path>` を指定します。指定時は `~/.ensemble/config.yaml` を読み込まず、指定ファイルを user 層として扱います。project config は引き続き別層で適用され、同じ項目は project 側が優先されます。`~` は home に展開されます。
 
 ```bash
