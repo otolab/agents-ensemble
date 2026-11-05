@@ -129,6 +129,88 @@ describe('SessionResumeStore', () => {
     );
   });
 
+  it.each(['full', 'resume-feasibility'] as const)(
+    'round-trips the %s config digest scheme',
+    async (ensembleConfigDigestScheme) => {
+      tempDir = await createHome('ensemble-session-resume-store-scheme-');
+      const path = sessionResumeStorePath({
+        repoRoot: tempDir,
+        conductorAgentId: `agent-${ensembleConfigDigestScheme}`,
+      });
+      await saveSessionResumeStore(
+        path,
+        baseResumeStore({
+          conductorAgentId: `agent-${ensembleConfigDigestScheme}`,
+          repoRoot: tempDir,
+          ensembleConfigDigestScheme,
+          ensembleConfigDigest: 'a'.repeat(64),
+        }),
+      );
+
+      await expect(loadSessionResumeStore(path)).resolves.toMatchObject({
+        ensembleConfigDigestScheme,
+        ensembleConfigDigest: 'a'.repeat(64),
+      });
+    },
+  );
+
+  it('rejects unknown schemes and resume-feasibility stores without a digest', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-invalid-scheme-');
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-invalid-scheme',
+    });
+    await mkdir(dirname(path), { recursive: true });
+
+    const base = baseResumeStore({
+      conductorAgentId: 'agent-invalid-scheme',
+      repoRoot: tempDir,
+    });
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...base,
+        ensembleConfigDigestScheme: 'future-scheme',
+        ensembleConfigDigest: 'a'.repeat(64),
+      }),
+      'utf8',
+    );
+    await expect(loadSessionResumeStore(path)).rejects.toThrow(
+      /Unsupported session resume store ensembleConfigDigestScheme/,
+    );
+
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...base,
+        ensembleConfigDigestScheme: 'resume-feasibility',
+      }),
+      'utf8',
+    );
+    await expect(loadSessionResumeStore(path)).rejects.toThrow(
+      /resume-feasibility scheme requires ensembleConfigDigest/,
+    );
+  });
+
+  it('keeps scheme-less stores without a digest as legacy unverifiable data', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-no-digest-');
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-no-digest',
+    });
+    await saveSessionResumeStore(
+      path,
+      baseResumeStore({
+        conductorAgentId: 'agent-no-digest',
+        repoRoot: tempDir,
+      }),
+    );
+
+    const loaded = await loadSessionResumeStore(path);
+    expect(loaded?.ensembleConfigDigestScheme).toBeUndefined();
+    expect(loaded?.ensembleConfigDigest).toBeUndefined();
+  });
+
   it('records the live socket path and restricts SessionResumeStore permissions', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const path = sessionResumeStorePath({
