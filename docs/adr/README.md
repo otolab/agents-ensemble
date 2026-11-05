@@ -113,12 +113,13 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0039](0039-session-resume-state-and-operator-projection.md) | SessionResumeStore・harness phase・operator 投影（到達性・coherence） | accepted |
 | [0040](0040-explicit-ensemble-config-file.md) | 起動時に指定する ensemble config ファイル | superseded → [0042](0042-explicit-config-replaces-user-layer.md) |
 | [0041](0041-ensemble-config-resume-digest.md) | resolved ensemble config の resume 整合性 | superseded → [0042](0042-explicit-config-replaces-user-layer.md) |
-| [0042](0042-explicit-config-replaces-user-layer.md) | `--config` による user config 層の差し替え | accepted |
+| [0042](0042-explicit-config-replaces-user-layer.md) | `--config` による user config 層の差し替え | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest 方針のみ） |
 | [0043](0043-explicit-user-config-and-project-toggle.md) | 明示 user config と project load toggle の併用 | accepted |
 | [0044](0044-user-scoped-runtime-storage.md) | repo 単位のランタイム状態を user 層へ配置 | superseded → [0046](0046-migrated-session-canonical-slug-mirrors.md) |
 | [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning 指定のみ） |
 | [0046](0046-migrated-session-canonical-slug-mirrors.md) | 移行済みセッションの canonical slug mirror | accepted |
-| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | accepted |
+| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume 照合のみ） |
+| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | accepted |
 
 ## 追加するとき
 

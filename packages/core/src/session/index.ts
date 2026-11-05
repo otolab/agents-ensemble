@@ -35,6 +35,7 @@ export {
   SessionResumeStoreNotFoundError,
 } from './session-resume-store.js';
 export type {
+  EnsembleConfigDigestScheme,
   FindLatestSessionResumeStoreInput,
   HarnessPhase,
   LocatedSessionResumeStore,

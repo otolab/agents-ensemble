@@ -1,6 +1,6 @@
 # ADR 0042: `--config` による user config 層の差し替え
 
-- Status: accepted
+- Status: superseded by [0048](0048-session-resume-feasibility-config-digest.md) (resume digest policy only; config resolution remains in force)
 - Date: 2026-10-22
 - Related: [ADR 0020](0020-ensemble-config-setting-resolution.md), [ADR 0039](0039-session-resume-state-and-operator-projection.md), [ADR 0040](0040-explicit-ensemble-config-file.md), [ADR 0041](0041-ensemble-config-resume-digest.md)
 

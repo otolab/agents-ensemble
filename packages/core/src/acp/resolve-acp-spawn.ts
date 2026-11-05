@@ -31,16 +31,16 @@ export interface ResolvedAcpSpawn {
   sessionMeta?: Record<string, unknown>;
 }
 
-/** resume 検証用。SessionResumeStore に保存する最小フィンガープリント。 */
+/** SessionResumeStore に保存する ACP spawn 情報。resume 判定では preset と custom command/args を使う。 */
 export interface AcpSpawnFingerprint {
   preset: AcpPresetId;
   command: string;
   args: string[];
-  /** spawn env の canonical SHA-256。値そのものは保存しない。 */
+  /** 診断用 spawn env の canonical SHA-256。resume 判定では比較しない。 */
   envDigest?: string;
-  /** Worker tier used to resolve this process. */
+  /** spawn 解決時の worker tier。resume 判定では比較しない。 */
   modelTag?: AcpModelTag;
-  /** Resolved ACP model ID (model IDs are not credentials). */
+  /** 解決済み ACP model ID。resume 判定では比較しない。 */
   model?: string;
 }
 
@@ -241,7 +241,7 @@ export function acpSpawnFingerprint(spawn: ResolvedAcpSpawn): AcpSpawnFingerprin
   };
 }
 
-/** Hash a canonical env map so resume can compare it without persisting values. */
+/** Hash a canonical env map for diagnostics without persisting its values. */
 export function computeAcpSpawnEnvDigest(env: Record<string, string>): string {
   const canonicalEnv = Object.fromEntries(
     Object.keys(env)
@@ -252,13 +252,9 @@ export function computeAcpSpawnEnvDigest(env: Record<string, string>): string {
 }
 
 export function formatAcpSpawnFingerprint(spawn: AcpSpawnFingerprint): string {
+  if (spawn.preset !== 'custom') return spawn.preset;
   const args = spawn.args.length > 0 ? ` ${spawn.args.join(' ')}` : '';
-  const model = spawn.model
-    ? `, modelTag=${spawn.modelTag ?? 'unknown'}, model=${spawn.model}`
-    : spawn.modelTag
-      ? `, modelTag=${spawn.modelTag}`
-      : '';
-  return `${spawn.preset} (${spawn.command}${args}${model})`;
+  return `custom (${spawn.command}${args})`;
 }
 
 export function assertAcpSpawnMatchesResume(input: {
@@ -271,23 +267,15 @@ export function assertAcpSpawnMatchesResume(input: {
   const actual = input.actual;
   const same =
     input.expected.preset === actual.preset &&
-    input.expected.command === actual.command &&
-    arraysEqual(input.expected.args, actual.args) &&
-    (input.expected.modelTag === undefined ||
-      input.expected.modelTag === actual.modelTag) &&
-    (input.expected.model === undefined ||
-      input.expected.model === actual.model) &&
-    (input.expected.envDigest === undefined ||
-      input.expected.envDigest === actual.envDigest);
+    (input.expected.preset !== 'custom' ||
+      (input.expected.command === actual.command &&
+        arraysEqual(input.expected.args, actual.args)));
 
   if (same) return;
 
   const label = input.workerName ? `Worker "${input.workerName}"` : 'Worker';
-  const envMismatch =
-    input.expected.envDigest !== undefined &&
-    input.expected.envDigest !== actual.envDigest;
   throw new Error(
-    `${label} resume ACP spawn mismatch: saved resume store has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}${envMismatch ? '; spawn environment differs' : ''}`,
+    `${label} resume ACP spawn mismatch: saved resume store has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}`,
   );
 }
 
