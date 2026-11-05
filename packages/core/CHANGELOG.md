@@ -1,5 +1,11 @@
 # @agents-ensemble/core
 
+## 0.18.0
+
+### Minor Changes
+
+- f22a92a: worker の ACP model catalog で Codex の reasoning effort を指定できるようにする。
+
 ## 0.17.2
 
 ### Patch Changes
