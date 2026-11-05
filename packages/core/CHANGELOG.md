@@ -1,5 +1,12 @@
 # @agents-ensemble/core
 
+## 0.17.2
+
+### Patch Changes
+
+- 75b87d3: Pi の ChatGPT OAuth login に user `settings.json` の device ID を渡します。
+- 3f3055f: Show pending operator messages and delivery modes above the TUI input, and log messages when dispatched to the conductor.
+
 ## 0.17.1
 
 ### Patch Changes
