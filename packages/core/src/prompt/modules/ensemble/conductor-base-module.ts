@@ -94,7 +94,6 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '- オペレータの「起動状況」「誰が動いているか」等は **作業指示ではない**。`list_workers` / `get_worker_status` で harness 状態を読む',
         '- 一覧: `list_workers`（sleeping・attach 中・idle・processing・失敗、キュー深さ、`runningCount`、失敗件数）',
         '- 詳細: `get_worker_status`（1 worker のキュー要約、preempt/cancel 中か）',
-        '- 状態照会に `prompt_worker` を使わない。Issue / PR を読まず tool 結果で答える',
       ],
     },
     {
