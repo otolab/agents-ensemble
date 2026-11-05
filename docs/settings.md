@@ -52,7 +52,7 @@ Session resume state conductorBackend mismatch: pi !== cursor
 
 旧 SessionResumeStore にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `~/.ensemble/sessions/<repoKey>/pi/` の JSONL に保存されます。旧 `<conductorCwd>/.ensemble/pi/sessions/` は再開時に読み取り、user 側へ移行します。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
 
-SessionResumeStore には起動時の実効 ensemble config の canonical SHA-256 digest も保存します。resume 時に digest が異なる場合は conductor の再開前に拒否し、digest を持たない旧 store は警告後に従来どおり再開します。config 値やファイルパスは保存しません。ACP spawn env も canonical digest のみを保存し、値は記録しません。
+SessionResumeStore には `ensembleConfigDigestScheme` と config digest を保存します。新しい session の `resume-feasibility` digest が含むのは merge 後の `session.worktree` と `acp.defaultPreset` だけです。旧 sidecar は scheme 省略 / `full` として全 `EnsembleConfig` を比較し、resume・再保存後も scheme と digest の意味を維持します。旧 store で digest が欠けていれば warning 後に照合を省き、欠如を保ちます。v2 scheme で digest が欠けている場合や未知の scheme は拒否します。config 値やファイルパスは保存しません。ACP spawn fingerprint は preset、custom preset の command / args を照合し、modelTag / model / env digest は resume 判定に使いません。env digest は値を記録せず保持します。詳細は [config.md § resume と config 変更](config.md#resume-と-config-変更) と [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md) を参照してください。
 
 resume では config の変更を digest で検出します。`modelId` と環境変数は invocation 単位の上書きとして各 run で再解決します。
 
@@ -72,7 +72,7 @@ worker spawn 時の ACP preset 解決（[ADR 0019](adr/0019-worker-acp-cli-prese
 CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
 ```
 
-`acp.env` の正本は config（選択された user config → project の順に deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。SessionResumeStore には ACP env map の canonical digest のみを保存し、環境変数の値は記録しません。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
+`acp.env` の正本は config（選択された user config → project の順に deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。SessionResumeStore には ACP env map の canonical digest のみを保存しますが、resume の可否判定には使いません。環境変数の値は記録しません。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
 
 worker の `modelTag` は `acp.tags` と `acp.models` を経由して解決します。catalog は文字列 shorthand と、reasoning を指定できる構造化形式を併用できます。
 

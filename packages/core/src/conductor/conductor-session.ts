@@ -1,5 +1,8 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
-import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import {
+  computeEnsembleConfigDigest,
+  computeResumeFeasibilityConfigDigest,
+} from '../config/ensemble-config-digest.js';
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import type { EnsembleConfig } from '../config/types.js';
 import {
@@ -121,6 +124,7 @@ import {
   type HarnessPhase,
   type SessionLifecycle,
   type SessionResumeStoreLocation,
+  type EnsembleConfigDigestScheme,
   type SessionResumeStore,
 } from '../session/session-resume-store.js';
 import {
@@ -335,7 +339,10 @@ export async function runConductorSession(
   });
   const ensembleConfig =
     options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
-  const ensembleConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
+  let ensembleConfigDigestScheme: EnsembleConfigDigestScheme | undefined =
+    'resume-feasibility';
+  let ensembleConfigDigest: string | undefined =
+    computeResumeFeasibilityConfigDigest(ensembleConfig);
   const resolvedConductorModelId = resolveConductorModelId(options.modelId, {
     config: ensembleConfig,
   });
@@ -442,6 +449,13 @@ export async function runConductorSession(
     const loadedResumeStore = locatedResumeStore.resumeStore;
     activeResumeStorePath = locatedResumeStore.path;
     activeStoreLocation = locatedResumeStore.location;
+    const savedConfigDigestScheme =
+      loadedResumeStore.ensembleConfigDigestScheme;
+    const effectiveConfigDigestScheme = savedConfigDigestScheme ?? 'full';
+    const currentEnsembleConfigDigest =
+      effectiveConfigDigestScheme === 'resume-feasibility'
+        ? computeResumeFeasibilityConfigDigest(ensembleConfig)
+        : computeEnsembleConfigDigest(ensembleConfig);
     assertSessionResumeStoreMatches(loadedResumeStore, {
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
@@ -449,7 +463,7 @@ export async function runConductorSession(
       conductorBackend,
       mcpConfigDigest,
       mcpConfigConfigured,
-      ensembleConfigDigest,
+      ensembleConfigDigest: currentEnsembleConfigDigest,
     });
     if (loadedResumeStore.ensembleConfigDigest === undefined) {
       sessionLogger.emit({
@@ -458,6 +472,11 @@ export async function runConductorSession(
           'SessionResumeStore has no ensemble config digest; config consistency cannot be verified for this legacy session.',
       });
     }
+    // Keep the persisted scheme and digest paired across resume and flush.
+    // Legacy stores without a digest remain unverifiable until a new session
+    // is started; a resume must not silently relabel their existing state.
+    ensembleConfigDigestScheme = savedConfigDigestScheme;
+    ensembleConfigDigest = loadedResumeStore.ensembleConfigDigest;
     // A previously completed lifecycle no longer describes this instance once
     // resume begins. Persist unknown before restoring or attaching anything so
     // a crash before the first regular SessionResumeStore flush cannot leave stale
@@ -1285,7 +1304,12 @@ export async function runConductorSession(
       sequence: snapshot.sequence,
       workers,
       mcpConfigDigest,
-      ensembleConfigDigest,
+      ...(ensembleConfigDigestScheme !== undefined
+        ? { ensembleConfigDigestScheme }
+        : {}),
+      ...(ensembleConfigDigest !== undefined
+        ? { ensembleConfigDigest }
+        : {}),
       ...(persistedLifecycle ? { lifecycle: persistedLifecycle } : {}),
       ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
       updatedAt: Date.now(),

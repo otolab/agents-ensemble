@@ -3,9 +3,16 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
-import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import {
+  computeEnsembleConfigDigest,
+  computeResumeFeasibilityConfigDigest,
+} from '../config/ensemble-config-digest.js';
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
-import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
+import {
+  acpSpawnFingerprint,
+  computeAcpSpawnEnvDigest,
+  resolveWorkerAcpSpawn,
+} from '../acp/resolve-acp-spawn.js';
 import * as acpBinModule from '../acp/resolve-bundled-acp-bin.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
@@ -1069,7 +1076,8 @@ describe('runConductorSession resume / shutdown', () => {
           model: 'config-model',
         },
       };
-      const expectedConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
+      const expectedConfigDigest =
+        computeResumeFeasibilityConfigDigest(ensembleConfig);
       const customFactory = { create: mockCreate, resume: mockResume };
       const commonOptions = {
         issueUrl: TEST_ISSUE.url,
@@ -1524,7 +1532,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
-  it('persists the resolved config digest without config values in the resume store', async () => {
+  it('persists the v2 resume-feasibility digest without config values', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-config-digest',
       status: 'finished',
@@ -1559,92 +1567,447 @@ describe('runConductorSession resume / shutdown', () => {
       conductorAgentId: 'agent-test',
     });
     const resumeStore = await loadSessionResumeStore(path);
+    expect(resumeStore?.ensembleConfigDigestScheme).toBe(
+      'resume-feasibility',
+    );
     expect(resumeStore?.ensembleConfigDigest).toBe(
-      computeEnsembleConfigDigest(ensembleConfig),
+      computeResumeFeasibilityConfigDigest(ensembleConfig),
     );
     expect(await readFile(path, 'utf8')).not.toContain('private-test-value');
   });
 
-  it('fails before resuming when the resolved ensemble config changed', async () => {
-    const agentId = 'resume-config-mismatch';
-    const legacySecretMarker = 'LEGACY_WORKER_ACP_SECRET_MARKER';
+  it.each([undefined, 'full'] as const)(
+    'keeps scheme-less and explicit full sidecars on the legacy whole-config digest (%s)',
+    async (ensembleConfigDigestScheme) => {
+      const agentId = 'resume-config-mismatch';
+      const legacySecretMarker = 'LEGACY_WORKER_ACP_SECRET_MARKER';
+      const originalConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          model: 'model-before',
+        },
+      };
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: agentId,
+      });
+      await saveSessionResumeStore(resumeStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        ...(ensembleConfigDigestScheme
+          ? { ensembleConfigDigestScheme }
+          : {}),
+        ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
+        updatedAt: 0,
+      });
+      const legacyResumeStore = JSON.parse(
+        await readFile(resumeStorePath, 'utf8'),
+      ) as {
+        updatedAt: number;
+        workers: Record<string, Record<string, unknown>>;
+      };
+      legacyResumeStore.workers.implementer = {
+        acpSessionId: 'legacy-worker-session',
+        acpSpawn: {
+          preset: 'custom',
+          command: 'custom-acp',
+          args: [],
+          env: { API_TOKEN: legacySecretMarker },
+        },
+      };
+      await writeFile(resumeStorePath, JSON.stringify(legacyResumeStore));
+      const updatedAtBeforeMigration = legacyResumeStore.updatedAt;
+
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          ensembleConfig: {
+            ...originalConfig,
+            conductor: {
+              ...originalConfig.conductor,
+              model: 'model-after',
+            },
+          },
+          resumeAgentId: agentId,
+          permissionPipeline: new PermissionPipeline({}),
+          registerProcessSignalHandlers: false,
+        }),
+      ).rejects.toThrow(/ensemble config digest mismatch/);
+
+      expect(mockResume).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+      const migratedResumeStoreText = await readFile(resumeStorePath, 'utf8');
+      expect(migratedResumeStoreText).not.toContain(legacySecretMarker);
+      expect(JSON.parse(migratedResumeStoreText)).toMatchObject({
+        updatedAt: updatedAtBeforeMigration,
+        ...(ensembleConfigDigestScheme
+          ? { ensembleConfigDigestScheme }
+          : {}),
+        ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
+        workers: {
+          implementer: {
+            acpSessionId: 'legacy-worker-session',
+            acpSpawn: {
+              envDigest: computeAcpSpawnEnvDigest({
+                API_TOKEN: legacySecretMarker,
+              }),
+            },
+          },
+        },
+      });
+    },
+  );
+
+  it('resumes through the mocked ACP load path after model and env config changes', async () => {
+    const agentId = 'resume-feasibility-neutral-config-changes';
     const originalConfig = {
       ...DEFAULT_ENSEMBLE_CONFIG,
       conductor: {
         ...DEFAULT_ENSEMBLE_CONFIG.conductor,
-        model: 'model-before',
+        model: 'conductor-model-before',
+      },
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        defaultPreset: 'codex' as const,
+        env: { MODEL_PROVIDER: 'provider-before' },
+        models: {
+          strong: { model: 'provider/model-before', reasoning: 'low' },
+        },
+        tags: { high: 'strong' },
       },
     };
-    const resumeStorePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: agentId,
+    const changedConfig = {
+      ...originalConfig,
+      conductor: {
+        ...originalConfig.conductor,
+        model: 'conductor-model-after',
+      },
+      acp: {
+        ...originalConfig.acp,
+        env: { MODEL_PROVIDER: 'provider-after' },
+        models: {
+          strong: { model: 'provider/model-after', reasoning: 'high' },
+        },
+      },
+    };
+    const expectedSpawn = acpSpawnFingerprint(
+      resolveWorkerAcpSpawn({
+        modelTag: 'high',
+        defaultOptions: { config: originalConfig, env: {} },
+      }),
+    );
+    const currentSpawn = acpSpawnFingerprint(
+      resolveWorkerAcpSpawn({
+        modelTag: 'high',
+        defaultOptions: { config: changedConfig, env: {} },
+      }),
+    );
+    expect(expectedSpawn.model).not.toBe(currentSpawn.model);
+    expect(expectedSpawn.envDigest).not.toBe(currentSpawn.envDigest);
+    expect(computeResumeFeasibilityConfigDigest(changedConfig)).toBe(
+      computeResumeFeasibilityConfigDigest(originalConfig),
+    );
+
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: {
+          workers: [
+            { name: 'implementer', kind: 'implementer', modelTag: 'high' },
+          ],
+        },
+        openQuestions: [],
+        sequence: 0,
+        workers: {
+          implementer: {
+            acpSessionId: 'saved-worker-session',
+            acpCwd: repoRoot,
+            acpSpawn: expectedSpawn,
+          },
+        },
+        ensembleConfigDigestScheme: 'resume-feasibility',
+        ensembleConfigDigest:
+          computeResumeFeasibilityConfigDigest(originalConfig),
+        updatedAt: 0,
+      },
+    );
+
+    const loadSession = vi.fn().mockResolvedValue(undefined);
+    const promptSession = vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      responseText: 'resumed worker',
     });
-    await saveSessionResumeStore(resumeStorePath, {
-      version: SESSION_RESUME_STORE_VERSION,
-      conductorAgentId: agentId,
+    const bridge = {
+      loadSession,
+      newSession: vi.fn(),
+      promptSession,
+      cancelSession: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi.fn().mockResolvedValue(bridge);
+    mockSend.mockResolvedValue({
+      runId: 'run-neutral-config-resume',
+      status: 'finished',
+      result: 'done',
+    });
+    mockResume.mockImplementationOnce(async () => ({
+      agentId,
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
-      openQuestions: [],
-      sequence: 0,
-      workers: {},
-      ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
-      updatedAt: 0,
-    });
-    const legacyResumeStore = JSON.parse(
-      await readFile(resumeStorePath, 'utf8'),
-    ) as {
-      updatedAt: number;
-      workers: Record<string, Record<string, unknown>>;
-    };
-    legacyResumeStore.workers.implementer = {
-      acpSessionId: 'legacy-worker-session',
-      acpSpawn: {
-        preset: 'custom',
-        command: 'custom-acp',
-        args: [],
-        env: { API_TOKEN: legacySecretMarker },
+      ensembleConfig: changedConfig,
+      defaultAcp: { config: changedConfig, env: {} },
+      resumeAgentId: agentId,
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
       },
-    };
-    await writeFile(resumeStorePath, JSON.stringify(legacyResumeStore));
-    const updatedAtBeforeMigration = legacyResumeStore.updatedAt;
+      connectAcp,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
 
-    await expect(
-      runConductorSession({
-        issueUrl: TEST_ISSUE.url,
-        repoRoot,
-        profile: { workers: [] },
-        ensembleConfig: {
-          ...originalConfig,
-          conductor: {
-            ...originalConfig.conductor,
-            model: 'model-after',
-          },
-        },
-        resumeAgentId: agentId,
-        permissionPipeline: new PermissionPipeline({}),
-        registerProcessSignalHandlers: false,
-      }),
-    ).rejects.toThrow(/ensemble config digest mismatch/);
-
-    expect(mockResume).not.toHaveBeenCalled();
-    expect(mockCreate).not.toHaveBeenCalled();
-    const migratedResumeStoreText = await readFile(resumeStorePath, 'utf8');
-    expect(migratedResumeStoreText).not.toContain(legacySecretMarker);
-    expect(JSON.parse(migratedResumeStoreText)).toMatchObject({
-      updatedAt: updatedAtBeforeMigration,
+    expect(result.stopReason).toBe('completed');
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(connectAcp).toHaveBeenCalledOnce();
+    expect(loadSession).toHaveBeenCalledWith(
+      'saved-worker-session',
+      repoRoot,
+      expect.any(Function),
+    );
+    const resumedStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+    );
+    expect(resumedStore).toMatchObject({
+      ensembleConfigDigestScheme: 'resume-feasibility',
+      ensembleConfigDigest:
+        computeResumeFeasibilityConfigDigest(originalConfig),
+      profile: {
+        workers: [
+          { name: 'implementer', kind: 'implementer', modelTag: 'high' },
+        ],
+      },
       workers: {
         implementer: {
-          acpSessionId: 'legacy-worker-session',
-          acpSpawn: {
-            envDigest: computeAcpSpawnEnvDigest({
-              API_TOKEN: legacySecretMarker,
-            }),
-          },
+          acpSessionId: 'saved-worker-session',
+          acpCwd: repoRoot,
         },
       },
     });
   });
+
+  it.each([
+    {
+      path: 'session.worktree',
+      change: (config: typeof DEFAULT_ENSEMBLE_CONFIG) => ({
+        ...config,
+        session: { ...config.session, worktree: 'in-repo' as const },
+      }),
+    },
+    {
+      path: 'acp.defaultPreset',
+      change: (config: typeof DEFAULT_ENSEMBLE_CONFIG) => ({
+        ...config,
+        acp: { ...config.acp, defaultPreset: 'claude' as const },
+      }),
+    },
+  ])(
+    'rejects a resume-feasibility critical change to $path before conductor resume',
+    async ({ change }) => {
+      const agentId = 'resume-feasibility-critical-change';
+      const originalConfig = DEFAULT_ENSEMBLE_CONFIG;
+      await saveSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+        {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          ensembleConfigDigestScheme: 'resume-feasibility',
+          ensembleConfigDigest:
+            computeResumeFeasibilityConfigDigest(originalConfig),
+          updatedAt: 0,
+        },
+      );
+
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          ensembleConfig: change(originalConfig),
+          resumeAgentId: agentId,
+          permissionPipeline: new PermissionPipeline({}),
+          registerProcessSignalHandlers: false,
+        }),
+      ).rejects.toThrow(/ensemble config digest mismatch/);
+      expect(mockResume).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, 'full'] as const)(
+    'preserves the legacy whole-config digest when scheme is %s and the session resumes',
+    async (ensembleConfigDigestScheme) => {
+      const agentId = 'resume-full-digest-preserved';
+      const ensembleConfig = DEFAULT_ENSEMBLE_CONFIG;
+      const ensembleConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
+      await saveSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+        {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          ...(ensembleConfigDigestScheme
+            ? { ensembleConfigDigestScheme }
+            : {}),
+          ensembleConfigDigest,
+          updatedAt: 0,
+        },
+      );
+      mockSend.mockResolvedValue({
+        runId: 'run-full-digest-resume',
+        status: 'finished',
+        result: 'done',
+      });
+      mockResume.mockImplementationOnce(async () => ({
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      }));
+
+      await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        ensembleConfig,
+        resumeAgentId: agentId,
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+
+      const resumedStore = await loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+      );
+      expect(resumedStore?.ensembleConfigDigestScheme).toBe(
+        ensembleConfigDigestScheme,
+      );
+      expect(resumedStore?.ensembleConfigDigest).toBe(ensembleConfigDigest);
+    },
+  );
+
+  it.each([undefined, 'full'] as const)(
+    'warns and preserves the missing digest when legacy scheme is %s',
+    async (ensembleConfigDigestScheme) => {
+      const agentId = 'resume-no-config-digest';
+      await saveSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+        {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          ...(ensembleConfigDigestScheme
+            ? { ensembleConfigDigestScheme }
+            : {}),
+          updatedAt: 0,
+        },
+      );
+      mockSend.mockResolvedValue({
+        runId: 'run-no-config-digest-resume',
+        status: 'finished',
+        result: 'done',
+      });
+      mockResume.mockImplementationOnce(async () => ({
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      }));
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+
+      await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        ensembleConfig: {
+          ...DEFAULT_ENSEMBLE_CONFIG,
+          session: {
+            ...DEFAULT_ENSEMBLE_CONFIG.session,
+            worktree: 'in-repo',
+          },
+        },
+        resumeAgentId: agentId,
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        sessionLogger,
+      });
+
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: 'harness.warning',
+          message: expect.stringContaining(
+            'SessionResumeStore has no ensemble config digest',
+          ),
+        }),
+      );
+      const resumedStore = await loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+      );
+      expect(resumedStore?.ensembleConfigDigestScheme).toBe(
+        ensembleConfigDigestScheme,
+      );
+      expect(resumedStore?.ensembleConfigDigest).toBeUndefined();
+    },
+  );
 
   it('passes resolved MCP configuration to ConductorAgent.resume for explicit resume', async () => {
     const agentId = 'resume-agent';
