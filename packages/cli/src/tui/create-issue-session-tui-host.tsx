@@ -47,11 +47,8 @@ function createInkDisplayBackend(
     render(state, _previousState, event: SessionLogEvent) {
       viewModel.setDisplayState(state);
 
-      if (event.type === 'operator.input') {
-        viewModel.appendActivityLog(
-          'operator',
-          `[${event.delivery ?? 'next'}] ${event.text}`,
-        );
+      if (event.type === 'operator.dispatched') {
+        viewModel.appendActivityLog('operator', event.text);
       }
 
       const conductorBody = formatConductorActivityBody(event);

@@ -1159,10 +1159,16 @@ describe('runConductorSessionDriver', () => {
       maxTurns: 5,
       runningCount: 1,
     });
+    const dispatched = vi.fn();
     const driverPromise = runConductorSessionDriver({
       ...options,
       shutdownSignal: shutdown.signal,
       dispatchHoldState: holdState,
+      onOperatorDispatched: (events) => {
+        if (events.some((event) => event.type === 'operator.message')) {
+          dispatched(holdState.dispatchHold, eventQueue.snapshot());
+        }
+      },
     });
 
     await vi.waitFor(() => expect(holdState.dispatchHold).toBe(true));
@@ -1189,6 +1195,7 @@ describe('runConductorSessionDriver', () => {
     expect(send).toHaveBeenCalledTimes(3);
     expect(String(send.mock.calls[1]![0])).toContain(idleMessage);
     expect(String(send.mock.calls[2]![0])).toContain('worker.completed');
+    expect(dispatched).toHaveBeenCalledWith(true, []);
     expect(holdState).toEqual({ dispatchHold: false, heldEvents: [] });
   });
 
@@ -2084,6 +2091,37 @@ describe('runConductorSessionDriver', () => {
     await driverPromise;
   });
 
+  it('notifies the view when an idle message arrives through a queue waiter', async () => {
+    const shutdown = new AbortController();
+    const eventQueue = new SessionEventQueue();
+    const send = vi.fn().mockResolvedValue({
+      runId: 'initial', status: 'finished', result: 'working',
+    });
+    const options = createDriverOptions({
+      eventQueue,
+      conductor: { agentId: 'agent', send, close: vi.fn() } as unknown as ConductorAgent,
+      runningCount: 1,
+    });
+    const snapshots: unknown[] = [];
+    const driver = runConductorSessionDriver({
+      ...options,
+      shutdownSignal: shutdown.signal,
+      onOperatorQueueChanged: () => snapshots.push(eventQueue.snapshot()),
+    });
+    try {
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(options.onSendComplete).toHaveBeenCalled());
+      eventQueue.enqueue({ type: 'operator.message', text: 'wait', delivery: 'idle' });
+      await vi.waitFor(() => expect(snapshots).toContainEqual([
+        { type: 'operator.message', text: 'wait', delivery: 'idle' },
+      ]));
+      expect(send).toHaveBeenCalledTimes(1);
+    } finally {
+      shutdown.abort();
+      await driver;
+    }
+  });
+
   it('holds idle operator input through active worker work, then dispatches it', async () => {
     let resolveInitialSend!: (value: {
       runId: string;
@@ -2126,7 +2164,15 @@ describe('runConductorSessionDriver', () => {
       runningCount: 1,
       maxTurns: 5,
     });
-    const driverPromise = runConductorSessionDriver(options);
+    const dispatched = vi.fn();
+    const driverPromise = runConductorSessionDriver({
+      ...options,
+      onOperatorDispatched: (events) => {
+        if (events.some((event) => event.type === 'operator.message')) {
+          dispatched(events, eventQueue.snapshot());
+        }
+      },
+    });
 
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
     eventQueue.enqueue({
@@ -2155,6 +2201,10 @@ describe('runConductorSessionDriver', () => {
     expect(String(send.mock.calls[1]![0])).not.toContain(
       'wait until workers settle',
     );
+    expect(eventQueue.snapshot()).toContainEqual({
+      type: 'operator.message', text: 'wait until workers settle', delivery: 'idle',
+    });
+    expect(dispatched).not.toHaveBeenCalled();
 
     options.workerSession.runtime.runningCount = 0;
     resolveWorkerSend({
@@ -2165,6 +2215,10 @@ describe('runConductorSessionDriver', () => {
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
     expect(String(send.mock.calls[2]![0])).toContain(
       'wait until workers settle',
+    );
+    expect(dispatched).toHaveBeenCalledWith(
+      [expect.objectContaining({ type: 'operator.message', delivery: 'idle' })],
+      [],
     );
     await driverPromise;
   });

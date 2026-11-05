@@ -11,6 +11,8 @@ export interface CreateSessionDisplaySinkOptions {
 function shouldRender(event: SessionLogEvent): boolean {
   return (
     event.type === 'operator.input' ||
+    event.type === 'operator.queue.changed' ||
+    event.type === 'operator.dispatched' ||
     event.type === 'conductor.send.started' ||
     event.type === 'conductor.send' ||
     event.type === 'conductor.dispatch_hold' ||

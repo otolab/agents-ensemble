@@ -5,11 +5,30 @@ import { SessionLogger } from './session/session-logger.js';
 import { submitOperatorInput } from './submit-operator-input.js';
 
 describe('submitOperatorInput', () => {
+  it.each(['/q+', '/q-'])('enqueues %s as ordinary text and as a targeted answer', (message) => {
+    for (const isAnswer of [false, true]) {
+      const registry = new OpenQuestionRegistry();
+      if (isAnswer) registry.enqueue({ id: 'inq-1', question: 'Path?', responseType: 'text' });
+      const eventQueue = new SessionEventQueue();
+      expect(submitOperatorInput({
+        message, targetOpenQuestionId: isAnswer ? 'inq-1' : undefined,
+        conductorTurn: 1, openQuestions: registry, escalations: [], eventQueue,
+        sessionLogger: new SessionLogger({ issueUrl: 'https://github.com/org/repo/issues/1', repoRoot: '/repo' }),
+      })).toBe(true);
+      if (isAnswer) {
+        expect(registry.get('inq-1')).toMatchObject({ status: 'answered', answer: message });
+        expect(eventQueue.dequeue()).toMatchObject({ openQuestionAnswer: true, answerPreview: `inq-1: ${message}` });
+      } else {
+        expect(eventQueue.dequeue()).toMatchObject({ text: message, delivery: 'next' });
+      }
+    }
+  });
+
   it('enqueues operator.message and records escalation for answered open question', () => {
     const registry = new OpenQuestionRegistry();
     registry.enqueue({
       id: 'inq-1',
-      question: 'Continue?',
+      question: 'この変更を本番環境に反映する前に、追加の確認を行いますか？',
       responseType: 'free_text',
       source: 'ask_human',
       status: 'open',
@@ -25,7 +44,7 @@ describe('submitOperatorInput', () => {
     const escalations: Array<{ question: string; answer: string }> = [];
 
     const received = submitOperatorInput({
-      message: 'yes, continue',
+      message: 'いいえ',
       conductorTurn: 2,
       openQuestions: registry,
       escalations,
@@ -38,18 +57,21 @@ describe('submitOperatorInput', () => {
       expect.objectContaining({
         type: 'operator.input',
         conductorTurn: 2,
-        text: expect.stringContaining('yes, continue'),
+        text: expect.stringContaining('いいえ'),
       }),
     );
     expect(eventQueue.dequeue()).toEqual(
       expect.objectContaining({
         type: 'operator.message',
-        text: expect.stringContaining('yes, continue'),
+        text: expect.stringContaining('いいえ'),
+        delivery: 'next',
+        openQuestionAnswer: true,
+        answerPreview: 'inq-1: いいえ',
       }),
     );
     expect(registry.listOpen()).toHaveLength(0);
     expect(escalations).toHaveLength(1);
-    expect(escalations[0]?.answer).toBe('yes, continue');
+    expect(escalations[0]?.answer).toBe('いいえ');
   });
 
   it('answers the targeted open question when targetOpenQuestionId is set', () => {

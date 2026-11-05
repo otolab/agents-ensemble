@@ -145,6 +145,284 @@ describe('IssueSessionTui', () => {
     vi.restoreAllMocks();
   });
 
+  it('moves relative to the visible queue position after messages are dispatched', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    const viewModel = createTuiViewModel();
+    const messages = Array.from({ length: 12 }, (_, index) => ({
+      text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+    }));
+    const context = { conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'text' })],
+      queuedMessages: messages };
+    viewModel.setOperatorContext(context);
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    for (let index = 0; index < 8; index++) {
+      stdin.write('\x07');
+      await flushInkStdin();
+    }
+    viewModel.setOperatorContext({ ...context, queuedMessages: messages.slice(0, 4) });
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-3');
+    stdin.write('\x14');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-2');
+  });
+
+  it('shows answer and queue controls at 40x12, including the alternative queue key', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 40 });
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-2', question: '次の質問', responseType: 'yes_no' })],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => index === 0 ? {
+        text: '【open question 回答】inq-1: 長い質問 → いいえ (by operator)',
+        delivery: 'next' as const, openQuestionAnswer: true, answerPreview: 'inq-1: いいえ',
+      } : { text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false }),
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('inq-1: いいえ');
+    expect(lastFrame()).toContain('Q:^T< ^O>');
+    stdin.write('\x07');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-1');
+    stdin.write('\x14');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('inq-1: いいえ');
+    stdin.write('\x0f');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-1');
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 6])('submits /q+ and /q- as messages or text answers with %i queued', async (queueSize) => {
+    for (const question of [false, true]) {
+      const viewModel = createTuiViewModel();
+      viewModel.setOperatorContext({
+        conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+        openQuestions: question ? [createOpenQuestion({ id: 'inq-1', question: 'Path?', responseType: 'text' })] : [],
+        queuedMessages: Array.from({ length: queueSize }, (_, index) => ({
+          text: `pending-${index}`, delivery: 'next' as const, openQuestionAnswer: false,
+        })),
+      });
+      const onSubmit = vi.fn();
+      const { stdin } = render(<IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />);
+      await flushInkStdin();
+      for (const text of ['/q+', '/q-']) {
+        stdin.write(text);
+        await flushInkStdin();
+        stdin.write('\r');
+        await flushInkStdin();
+        expect(onSubmit).toHaveBeenLastCalledWith(text, question ? { targetOpenQuestionId: 'inq-1' } : undefined);
+      }
+      cleanup();
+    }
+  });
+
+  it.each([false, true])('Ctrl+R leaves a draft intact without submitting, question=%s', async (question) => {
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: question ? [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'yes_no' })] : [],
+      queuedMessages: [],
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />);
+    stdin.write(question ? 'y' : 'draft');
+    await flushInkStdin();
+    if (question) expect(lastFrame()).toContain('yes');
+    stdin.write('\x12');
+    await flushInkStdin();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain(question ? 'y' : 'draft');
+    if (question) expect(lastFrame()).toContain('yes');
+    stdin.write('\r');
+    await flushInkStdin();
+    if (question) {
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(lastFrame()).toContain('yes');
+      stdin.write('\r');
+      await flushInkStdin();
+      expect(onSubmit).toHaveBeenCalledWith('yes', { targetOpenQuestionId: 'inq-1' });
+    } else {
+      expect(onSubmit).toHaveBeenCalledWith('draft', undefined);
+    }
+  });
+
+  it('does not submit Ctrl+R on a 32x12 screen with a question and queue', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    Object.defineProperty(process.stdout, 'columns', { configurable: true, value: 32 });
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'yes_no' })],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => ({
+        text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+      })),
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />);
+    stdin.write('y');
+    await flushInkStdin();
+    stdin.write('\x12');
+    await flushInkStdin();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain('> y');
+    expect(lastFrame()).not.toContain('^R');
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenCalledWith('y', { targetOpenQuestionId: 'inq-1' });
+  });
+
+  it('keeps the selected answer suggestion visible alongside the queue on 80x15', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 15 });
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'yes_no' })],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => ({
+        text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+      })),
+    });
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-0');
+    expect(lastFrame()).toContain('› yes');
+    stdin.write('\x07');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-1');
+    expect(lastFrame()).toContain('› yes');
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('› no');
+    expect(lastFrame()).toContain('pending-1');
+  });
+
+  it('fits a question, long queue, suggestions and multiline input into 80x12', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'yes_no' })],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => ({
+        text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+      })),
+    });
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    let frame = lastFrame() ?? '';
+    expect(frame).toContain('Proceed?');
+    expect(frame).toContain('pending-0');
+    expect(frame).toContain(OPERATOR_INPUT_PROMPT);
+    expect(frame).not.toContain('> ssage');
+    expect(frame.split('\n').find((line) => line.includes('pending-0'))).not.toContain('> ');
+    stdin.write('\x07');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending-1');
+    stdin.write('y');
+    await flushInkStdin();
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('pending-1');
+    expect(frame).toContain('> y');
+    stdin.write(INK_TEST_KEYS.shiftEnter);
+    await flushInkStdin();
+    stdin.write('second');
+    await flushInkStdin();
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('pending-1');
+    expect(frame).toContain('second');
+    expect(frame.split('\n').find((line) => line.includes('pending-1'))).not.toContain('second');
+  });
+
+  it('submits the typed answer when a short pane cannot show suggestions', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5,
+      openQuestions: [createOpenQuestion({ id: 'inq-1', question: 'Proceed?', responseType: 'yes_no' })],
+      queuedMessages: Array.from({ length: 12 }, (_, index) => ({
+        text: `pending-${index}`, delivery: 'idle' as const, openQuestionAnswer: false,
+      })),
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />);
+    await flushInkStdin();
+    expect(lastFrame()).not.toContain('› yes');
+    stdin.write('y');
+    await flushInkStdin();
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenCalledWith('y', { targetOpenQuestionId: 'inq-1' });
+  });
+
+  it('keeps the input visible with a queued message on a short terminal', async () => {
+    Object.defineProperty(process.stdout, 'rows', { configurable: true, value: 12 });
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5, openQuestions: [],
+      queuedMessages: [{ text: 'pending', delivery: 'next', openQuestionAnswer: false }],
+    });
+    const { lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('pending');
+    expect(lastFrame()).toContain(OPERATOR_INPUT_PROMPT);
+  });
+
+  it('scrolls a longer message queue without losing its count', async () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5, openQuestions: [],
+      queuedMessages: Array.from({ length: 6 }, (_, index) => ({
+        text: `item-${index}`, delivery: 'next' as const, openQuestionAnswer: false,
+      })),
+    });
+    const { stdin, lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('Message queue (1-4/6)');
+    stdin.write('\x07');
+    await flushInkStdin();
+    expect(lastFrame()).toContain('Message queue (2-5/6)');
+    expect(lastFrame()).toContain('item-4');
+  });
+
+  it('shows a short answer with its question ID instead of the long dispatch report', async () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setOperatorContext({
+      conductorTurn: 1, autonomousTurns: 0, maxTurns: 5, openQuestions: [],
+      queuedMessages: [{
+        text: '【open question 回答】inq-1: ' + '長い日本語の質問'.repeat(12) + ' → いいえ (by operator)',
+        delivery: 'next', openQuestionAnswer: true, answerPreview: 'inq-1: いいえ',
+      }],
+    });
+    const { lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    expect(lastFrame()).toContain('answer next │ inq-1: いいえ');
+  });
+
+  it('shows and clears the pending message queue above the input', async () => {
+    const viewModel = createTuiViewModel();
+    const context = { conductorTurn: 1, autonomousTurns: 0, maxTurns: 5, openQuestions: [],
+      queuedMessages: [
+        { text: 'waiting for idle', delivery: 'idle' as const, openQuestionAnswer: false },
+        { text: 'answer text', delivery: 'next' as const, openQuestionAnswer: true },
+      ],
+    };
+    viewModel.setOperatorContext(context);
+    const { lastFrame } = render(<IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />);
+    await flushInkStdin();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Message queue (2)');
+    expect(frame).toContain('message idle │ waiting for idle');
+    expect(frame).toContain('answer next │ answer text');
+    expect(frame.indexOf('answer next')).toBeLessThan(frame.lastIndexOf(OPERATOR_INPUT_PROMPT));
+    viewModel.setOperatorContext({ ...context, queuedMessages: [] });
+    await flushInkStdin();
+    expect(lastFrame()).not.toContain('Message queue');
+  });
+
   it('shows slash command suggestions in the input pane and submits the typed text unchanged', async () => {
     const viewModel = createTuiViewModel();
     const onSubmit = vi.fn();

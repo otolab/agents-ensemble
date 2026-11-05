@@ -17,7 +17,7 @@ describe('session event type groups', () => {
   it('lists every SessionLogEvent type exactly once', () => {
     const types = new Set(ALL_SESSION_LOG_EVENT_TYPES);
     expect(types.size).toBe(ALL_SESSION_LOG_EVENT_TYPES.length);
-    expect(types.size).toBe(40);
+    expect(types.size).toBe(42);
   });
 
   it('lists every SessionEvent type exactly once', () => {
@@ -124,6 +124,10 @@ describe('session event type groups', () => {
           };
         case 'operator.input':
           return { type, conductorTurn: 1, text: 'hi' };
+        case 'operator.queue.changed':
+          return { type };
+        case 'operator.dispatched':
+          return { type, text: 'hi' };
         case 'conductor.inbound':
           return { type, triggers: 1, sources: ['initial'] };
         case 'conductor.send.started':

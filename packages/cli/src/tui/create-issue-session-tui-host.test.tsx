@@ -226,6 +226,23 @@ describe('createIssueSessionTuiHost', () => {
     expect(mockUnmount).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['pane', 'stream'])('logs only dispatched messages in %s layout', (layout) => {
+    const host = createIssueSessionTuiHost(undefined, { env: { ENSEMBLE_TUI_LAYOUT: layout } });
+    const element = mockRender.mock.calls[0]?.[0] as {
+      props: { viewModel: { getSnapshot: () => { activityLog: Array<{ text: string }> } } };
+    };
+    const state = INITIAL_SESSION_DISPLAY_STATE;
+    host.displayBackend.render(state, state, {
+      type: 'operator.input', conductorTurn: 1, text: 'waiting', delivery: 'idle',
+    });
+    expect(element.props.viewModel.getSnapshot().activityLog).toEqual([]);
+    host.displayBackend.render(state, state, { type: 'operator.dispatched', text: 'waiting' });
+    expect(element.props.viewModel.getSnapshot().activityLog).toEqual([
+      expect.objectContaining({ text: 'waiting' }),
+    ]);
+    host.dispose();
+  });
+
   it('uses stream layout by default', () => {
     const host = createIssueSessionTuiHost(undefined, { env: {} });
     const renderedElement = mockRender.mock.calls[0]?.[0] as {

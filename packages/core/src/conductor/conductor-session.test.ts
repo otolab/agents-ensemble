@@ -1257,6 +1257,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     let operatorContext: ReturnType<OperatorInputBindingApi['getContext']> | undefined;
+    let queuedAnswers: ReturnType<OperatorInputBindingApi['getContext']>['queuedMessages'];
     await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
@@ -1271,12 +1272,117 @@ describe('runConductorSession resume / shutdown', () => {
         for (const question of restoredQuestions) {
           api.submit('answer', { targetOpenQuestionId: question.id });
         }
+        queuedAnswers = api.getContext().queuedMessages;
         return () => {};
       },
     });
 
     expect(operatorContext?.openQuestions).toEqual(restoredQuestions);
+    expect(queuedAnswers).toEqual([
+      expect.objectContaining({ openQuestionAnswer: true, answerPreview: 'inq-1: answer' }),
+      expect.objectContaining({ openQuestionAnswer: true, answerPreview: 'inq-2: answer' }),
+    ]);
   });
+
+  it('keeps targeted answers at next and preserves general message delivery and interrupt cancellation', async () => {
+    const agentId = 'resume-delivery-regression';
+    const questions = ['inq-1', 'inq-2'].map((id, index) => ({
+      id, question: `Question ${index + 1}?`, responseType: 'text' as const,
+      source: 'conductor' as const, status: 'open' as const, askedAt: index + 1,
+    }));
+    await saveSessionResumeStore(sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }), {
+      version: SESSION_RESUME_STORE_VERSION, conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+      openQuestions: questions, sequence: questions.length, workers: {}, updatedAt: 0,
+    });
+    const activeSend = createDeferred<{ runId: string; status: string; result: string }>();
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    mockSend.mockReturnValueOnce(activeSend.promise).mockResolvedValue({
+      runId: 'next', status: 'finished', result: 'done',
+    });
+    mockResume.mockResolvedValue({
+      agentId, send: mockSend, cancel, close: mockClose, getUsage: createMockConductorGetUsage(),
+    });
+    let api: OperatorInputBindingApi | undefined;
+    const session = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] }, resumeAgentId: agentId,
+      maxTurns: 5, permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false, waitForOperatorExit: true,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    try {
+      await vi.waitFor(() => expect(api).toBeDefined());
+      expect(api!.submit('start active send')).toBe(true);
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+      expect(api!.submit('ordinary idle', { delivery: 'idle' })).toBe(true);
+      expect(api!.submit('missing target', { targetOpenQuestionId: 'missing', delivery: 'interrupt' })).toBe(true);
+      expect(api!.submit('first answer', { targetOpenQuestionId: 'inq-1', delivery: 'idle' })).toBe(true);
+      expect(api!.submit('second answer', { targetOpenQuestionId: 'inq-2', delivery: 'interrupt' })).toBe(true);
+      expect(api!.getContext().openQuestions).toEqual([]);
+      expect(api!.getContext().queuedMessages).toEqual([
+        expect.objectContaining({ text: 'ordinary idle', delivery: 'idle', openQuestionAnswer: false }),
+        expect.objectContaining({ text: 'missing target', delivery: 'next', openQuestionAnswer: false }),
+        expect.objectContaining({ delivery: 'next', openQuestionAnswer: true, answerPreview: 'inq-1: first answer' }),
+        expect.objectContaining({ delivery: 'next', openQuestionAnswer: true, answerPreview: 'inq-2: second answer' }),
+      ]);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(api!.submit('ordinary interrupt', { delivery: 'interrupt' })).toBe(true);
+      expect(api!.getContext().queuedMessages).toContainEqual(
+        expect.objectContaining({ text: 'ordinary interrupt', delivery: 'interrupt', openQuestionAnswer: false }),
+      );
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      activeSend.resolve({ runId: 'active', status: 'finished', result: 'done' });
+      api?.submit('/exit');
+      await session;
+    }
+  });
+
+  it.each(['idle', 'interrupt'] as const)(
+    'preserves %s delivery for an implicitly answered single question', async (delivery) => {
+      const agentId = `resume-implicit-${delivery}`;
+      await saveSessionResumeStore(sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }), {
+        version: SESSION_RESUME_STORE_VERSION, conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+        openQuestions: [{
+          id: 'inq-1', question: 'Question?', responseType: 'text',
+          source: 'conductor', status: 'open', askedAt: 1,
+        }],
+        sequence: 1, workers: {}, updatedAt: 0,
+      });
+      const activeSend = createDeferred<{ runId: string; status: string; result: string }>();
+      const cancel = vi.fn().mockResolvedValue(undefined);
+      mockSend.mockReturnValueOnce(activeSend.promise).mockResolvedValue({
+        runId: 'next', status: 'finished', result: 'done',
+      });
+      mockResume.mockResolvedValue({
+        agentId, send: mockSend, cancel, close: mockClose, getUsage: createMockConductorGetUsage(),
+      });
+      let api: OperatorInputBindingApi | undefined;
+      const session = runConductorSession({
+        issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] }, resumeAgentId: agentId,
+        maxTurns: 5, permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false, waitForOperatorExit: true,
+        bindOperatorInput: (binding) => { api = binding; },
+      });
+      try {
+        await vi.waitFor(() => expect(api).toBeDefined());
+        // A missing explicit target leaves the sole question open while starting a send.
+        expect(api!.submit('start', { targetOpenQuestionId: 'missing' })).toBe(true);
+        await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
+        expect(api!.submit('implicit answer', { delivery })).toBe(true);
+        expect(api!.getContext().openQuestions).toEqual([]);
+        expect(api!.getContext().queuedMessages).toEqual([
+          expect.objectContaining({ delivery, openQuestionAnswer: true, answerPreview: 'inq-1: implicit answer' }),
+        ]);
+        expect(cancel).toHaveBeenCalledTimes(delivery === 'interrupt' ? 1 : 0);
+      } finally {
+        activeSend.resolve({ runId: 'active', status: 'finished', result: 'done' });
+        api?.submit('/exit');
+        await session;
+      }
+    },
+  );
 
   it('passes project MCP configuration to the conductor options', async () => {
     const projectMcpRoot = join(repoRoot, '.agents');
@@ -1331,6 +1437,13 @@ describe('runConductorSession resume / shutdown', () => {
     let sendCount = 0;
     const receivedOperatorMessage = createDeferred<string>();
     const shutdown = new AbortController();
+    const queuedAnswers: NonNullable<ReturnType<OperatorInputBindingApi['getContext']>['queuedMessages']> = [];
+    const sessionLogger = new SessionLogger({ issueUrl: TEST_ISSUE.url, repoRoot });
+    sessionLogger.subscribe((event) => {
+      if (event.type === 'operator.input' || event.type === 'operator.queue.changed') {
+        queuedAnswers.push(...(operatorInput?.getContext().queuedMessages ?? []));
+      }
+    });
     mockCreate.mockImplementationOnce(async (agentOptions) => {
       conductorTools = agentOptions.customTools;
       return {
@@ -1364,6 +1477,7 @@ describe('runConductorSession resume / shutdown', () => {
       profile: { workers: [] },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
       shutdownSignal: shutdown.signal,
       registerProcessSignalHandlers: false,
       waitForOperatorExit: true,
@@ -1459,6 +1573,10 @@ describe('runConductorSession resume / shutdown', () => {
       await expect(receivedOperatorMessage.promise).resolves.toContain(
         '【open question 回答】inq-1: Proceed with the release? → yes (by operator)',
       );
+      expect(queuedAnswers).toContainEqual(expect.objectContaining({
+        openQuestionAnswer: true,
+        answerPreview: 'inq-1: yes',
+      }));
       expect(sendCount).toBe(2);
       expect(
         await conductorTools!.list_open_questions!.execute({ status: 'open' }),
@@ -3971,6 +4089,56 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(result.stopReason).toBe('completed');
     expect(mockSend).toHaveBeenCalledTimes(2);
+  });
+
+  it('exposes a UDS message while queued and emits dispatch only when the send starts', async () => {
+    const initial = createDeferred<{ runId: string; status: string; result: string }>();
+    mockSend.mockReturnValueOnce(initial.promise).mockResolvedValue({
+      runId: 'operator-run', status: 'finished', result: 'done',
+    });
+    let api: OperatorInputBindingApi | undefined;
+    const events: SessionLogEvent[] = [];
+    const snapshots: Array<ReturnType<OperatorInputBindingApi['getContext']>> = [];
+    const logger = new SessionLogger({ issueUrl: TEST_ISSUE.url, repoRoot });
+    logger.subscribe((event) => {
+      events.push(event);
+      if (api && (event.type === 'operator.input' || event.type === 'operator.dispatched')) {
+        snapshots.push(api.getContext());
+      }
+    });
+    const session = runConductorSession({
+      issueUrl: TEST_ISSUE.url, repoRoot, profile: { workers: [] },
+      maxTurns: 5, permissionPipeline: new PermissionPipeline({}),
+      sessionLogger: logger, registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      bindOperatorInput: (binding) => { api = binding; },
+    });
+    try {
+      const storePath = sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' });
+      await vi.waitFor(async () => {
+        expect((await loadSessionResumeStore(storePath))?.harnessSocketPath).toBeTruthy();
+        expect(mockSend).toHaveBeenCalledTimes(1);
+      });
+      const socketPath = (await loadSessionResumeStore(storePath))!.harnessSocketPath!;
+      await sendOpenQuestionControlRequest(socketPath, {
+        method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+        params: { text: 'queued over UDS', delivery: 'idle' },
+      });
+      expect(api!.getContext().queuedMessages).toEqual([
+        { text: 'queued over UDS', delivery: 'idle', openQuestionAnswer: false },
+      ]);
+      expect(events.some((event) => event.type === 'operator.dispatched')).toBe(false);
+      initial.resolve({ runId: 'initial', status: 'finished', result: 'done' });
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
+      expect(events.filter((event) => event.type === 'operator.dispatched')).toEqual([
+        { type: 'operator.dispatched', text: 'queued over UDS' },
+      ]);
+      expect(snapshots.at(-1)?.queuedMessages).toEqual([]);
+    } finally {
+      initial.resolve({ runId: 'initial', status: 'finished', result: 'done' });
+      api?.submit('/exit');
+      await session;
+    }
   });
 
   it('sends one operator.message over the live session UDS with its delivery mode', async () => {

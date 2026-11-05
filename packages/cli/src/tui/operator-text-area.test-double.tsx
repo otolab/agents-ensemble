@@ -104,6 +104,9 @@ export function OperatorTextArea({
       if (!focus) {
         return;
       }
+      if (key.ctrl && (input === 't' || input === 'g' || input === 'o' || input === 'l' || input === 'r' || key.end)) {
+        return;
+      }
       if (key.tab) {
         if (suggestionsActive) {
           onTab?.(!!key.shift);

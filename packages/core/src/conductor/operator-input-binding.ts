@@ -8,6 +8,13 @@ export interface OperatorInputContext {
   /** 無制限時は `null`。 */
   maxTurns: number | null;
   openQuestions: OpenQuestion[];
+  /** harness queue に残る未 dispatch の operator message。 */
+  queuedMessages?: Array<{
+    text: string;
+    delivery: OperatorMessageDelivery;
+    openQuestionAnswer: boolean;
+    answerPreview?: string;
+  }>;
 }
 
 export interface OperatorInputSubmitOptions {
