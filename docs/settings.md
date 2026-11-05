@@ -33,7 +33,7 @@ CLI > 環境変数 > project config（読み込み有効時） > 選択された
 
 `profile.default` / `conductor.model` / `conductor.reasoning` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
-`conductor.reasoning` は `--reasoning` > `CONDUCTOR_REASONING` > merged config の順で解決します。どの層にも値がなければ値を渡さず、Pi / Cursor の backend 既定に任せます。Pi は選択 model が対応する native thinking level を検証し、Cursor は SDK model catalog から対応 parameter を一意に特定できる場合に適用します。値・未対応時の扱いは [config.md § Conductor reasoning](config.md#conductor-reasoning) を参照してください。
+`conductor.reasoning` は `ensemble issue` で `--reasoning` > `CONDUCTOR_REASONING` > merged config、`ensemble operator-agent` で `CONDUCTOR_REASONING` > merged config の順に解決します。両方のコマンドが同じ config / env 値を使い、値がなければ reasoning を渡さず Pi / Cursor の既定に任せます。Pi は選択 model が対応する native thinking level を検証し、Cursor は SDK model catalog から対応 parameter を一意に特定できる場合に適用します。値・未対応時の扱いは [config.md § Conductor reasoning](config.md#conductor-reasoning) を参照してください。
 
 `ensemble issue` と `ensemble operator-agent` は `--config <path>` を受け付けます。指定したファイルが user config 層を置き換え、標準 user config は読み込みません。project config の読み込みは独立して `config.loadProjectConfig` で制御し、同一キーでは project config が優先されます。明示ファイルに toggle がなければ default の `true` が使われます。team profile の `--profile` とは別系統です。
 
@@ -113,8 +113,8 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 | 設定 | config キー | 環境変数 | CLI | コード default | 解決 |
 |------|-------------|----------|-----|----------------|------|
 | 既定 team profile | `profile.default` | `ENSEMBLE_DEFAULT_PROFILE` | `--profile` | 同梱 `implementer-and-reviewer-v2` | A |
-| conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | `--model` | `default` | A |
-| conductor reasoning | `conductor.reasoning` | `CONDUCTOR_REASONING` | `--reasoning` | backend 既定（明示値なし） | A |
+| conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | `ensemble issue --model` | `default` | A |
+| conductor reasoning | `conductor.reasoning` | `CONDUCTOR_REASONING` | `ensemble issue --reasoning` | backend 既定（明示値なし） | A |
 | conductor 詳細 telemetry | `conductor.verbose` | `CONDUCTOR_VERBOSE` | `--verbose` | `false` | A |
 | conductor backend | `conductor.backend` | — | — | `cursor` | profile > config > default |
 | Pi user resource root | `conductor.pi.agentDir` | — | — | `~/.ensemble/pi` | config |

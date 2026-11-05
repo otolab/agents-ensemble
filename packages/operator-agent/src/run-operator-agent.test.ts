@@ -27,6 +27,7 @@ describe('runOperatorAgent', () => {
   let repoRoot = '';
   let closeServers: Array<() => Promise<void>> = [];
   let originalModelEnv: string | undefined;
+  let originalReasoningEnv: string | undefined;
   let originalProfileEnv: string | undefined;
   let originalNoColorEnv: string | undefined;
 
@@ -34,9 +35,11 @@ describe('runOperatorAgent', () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-agent-'));
     vi.stubEnv('HOME', repoRoot);
     originalModelEnv = process.env.CONDUCTOR_MODEL_ID;
+    originalReasoningEnv = process.env.CONDUCTOR_REASONING;
     originalProfileEnv = process.env.ENSEMBLE_DEFAULT_PROFILE;
     originalNoColorEnv = process.env.NO_COLOR;
     delete process.env.CONDUCTOR_MODEL_ID;
+    delete process.env.CONDUCTOR_REASONING;
     delete process.env.ENSEMBLE_DEFAULT_PROFILE;
     delete process.env.NO_COLOR;
     await mkdir(join(repoRoot, '.ensemble', 'teams', 'smoke'), { recursive: true });
@@ -105,6 +108,11 @@ describe('runOperatorAgent', () => {
       delete process.env.CONDUCTOR_MODEL_ID;
     } else {
       process.env.CONDUCTOR_MODEL_ID = originalModelEnv;
+    }
+    if (originalReasoningEnv === undefined) {
+      delete process.env.CONDUCTOR_REASONING;
+    } else {
+      process.env.CONDUCTOR_REASONING = originalReasoningEnv;
     }
     if (originalProfileEnv === undefined) {
       delete process.env.ENSEMBLE_DEFAULT_PROFILE;
@@ -211,6 +219,194 @@ describe('runOperatorAgent', () => {
     expect(agentOptions?.pi?.agentDir).toBe(join(repoRoot, '.ensemble/pi-user'));
   });
 
+  it.each([
+    {
+      backend: 'pi' as const,
+      configReasoning: 'high',
+      envReasoning: undefined,
+      expectedReasoning: 'high',
+    },
+    {
+      backend: 'cursor' as const,
+      configReasoning: 'low',
+      envReasoning: 'high',
+      expectedReasoning: 'high',
+    },
+  ])(
+    'resolves config / environment reasoning for $backend before agent creation',
+    async ({ backend, configReasoning, envReasoning, expectedReasoning }) => {
+      await writeFile(
+        join(repoRoot, '.ensemble', 'config.yaml'),
+        [
+          'conductor:',
+          `  backend: ${backend}`,
+          `  model: ${backend === 'pi' ? 'smoke-model' : 'cursor-model'}`,
+          `  reasoning: ${configReasoning}`,
+          '',
+        ].join('\n'),
+      );
+      if (envReasoning === undefined) {
+        delete process.env.CONDUCTOR_REASONING;
+      } else {
+        process.env.CONDUCTOR_REASONING = envReasoning;
+      }
+
+      let agentOptions: ConductorAgentCreateOptions | undefined;
+      const fakeAgent = createFakeAgent({
+        send: async () => ({
+          runId: 'unused',
+          status: 'completed',
+          result: '',
+        }),
+      });
+      const agentFactory: ConductorAgentFactory = {
+        create: async (options) => {
+          agentOptions = options;
+          return fakeAgent;
+        },
+        resume: async () => {
+          throw new Error('not used');
+        },
+      };
+
+      await runOperatorAgent(
+        { repoRoot, newSession: true },
+        {
+          stdin: createInput('/exit\n'),
+          stdout: createOutput(),
+          agentFactory,
+        },
+      );
+
+      expect(agentOptions).toMatchObject({
+        modelId: backend === 'pi' ? 'smoke-model' : 'cursor-model',
+        reasoning: expectedReasoning,
+      });
+      if (backend === 'pi') {
+        expect(agentOptions?.pi).toBeDefined();
+      } else {
+        expect(agentOptions).not.toHaveProperty('pi');
+      }
+    },
+  );
+
+  it.each([
+    {
+      backend: 'pi' as const,
+      configReasoning: 'low',
+      envReasoning: 'medium',
+      expectedReasoning: 'medium',
+    },
+    {
+      backend: 'cursor' as const,
+      configReasoning: 'high',
+      envReasoning: undefined,
+      expectedReasoning: 'high',
+    },
+  ])(
+    'passes the resolved $backend reasoning to the resume factory',
+    async ({ backend, configReasoning, envReasoning, expectedReasoning }) => {
+      await writeFile(
+        join(repoRoot, '.ensemble', 'config.yaml'),
+        [
+          'conductor:',
+          `  backend: ${backend}`,
+          `  model: ${backend === 'pi' ? 'smoke-model' : 'cursor-model'}`,
+          `  reasoning: ${configReasoning}`,
+          '',
+        ].join('\n'),
+      );
+      if (envReasoning !== undefined) {
+        process.env.CONDUCTOR_REASONING = envReasoning;
+      }
+      const statePath = operatorAgentStatePath(repoRoot);
+      await mkdir(dirname(statePath), { recursive: true });
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          version: 1,
+          agentId: 'saved-operator-agent',
+          backend,
+          repoRoot,
+        }),
+      );
+
+      let resumedOptions: ConductorAgentCreateOptions | undefined;
+      const fakeAgent = createFakeAgent({
+        send: async () => ({
+          runId: 'unused',
+          status: 'completed',
+          result: '',
+        }),
+      });
+      const agentFactory: ConductorAgentFactory = {
+        create: async () => {
+          throw new Error('saved operator-agent state should resume');
+        },
+        resume: async (_agentId, options) => {
+          resumedOptions = options;
+          return fakeAgent;
+        },
+      };
+
+      await runOperatorAgent(
+        { repoRoot },
+        {
+          stdin: createInput('/exit\n'),
+          stdout: createOutput(),
+          agentFactory,
+        },
+      );
+
+      expect(resumedOptions).toMatchObject({
+        modelId: backend === 'pi' ? 'smoke-model' : 'cursor-model',
+        reasoning: expectedReasoning,
+      });
+    },
+  );
+
+  it.each(['pi', 'cursor'] as const)(
+    'leaves %s reasoning unset when config and environment omit it',
+    async (backend) => {
+      await writeFile(
+        join(repoRoot, '.ensemble', 'config.yaml'),
+        [
+          'conductor:',
+          `  backend: ${backend}`,
+          `  model: ${backend === 'pi' ? 'smoke-model' : 'cursor-model'}`,
+          '',
+        ].join('\n'),
+      );
+      let agentOptions: ConductorAgentCreateOptions | undefined;
+      const fakeAgent = createFakeAgent({
+        send: async () => ({
+          runId: 'unused',
+          status: 'completed',
+          result: '',
+        }),
+      });
+
+      await runOperatorAgent(
+        { repoRoot, newSession: true },
+        {
+          stdin: createInput('/exit\n'),
+          stdout: createOutput(),
+          agentFactory: {
+            create: async (options) => {
+              agentOptions = options;
+              return fakeAgent;
+            },
+            resume: async () => {
+              throw new Error('not used');
+            },
+          },
+        },
+      );
+
+      expect(agentOptions).not.toHaveProperty('reasoning');
+    },
+  );
+
   it('runs a Pi-backed TTY conversation with profile prompt and saved session summaries', async () => {
     const input = createInput('状況を教えて\n/exit\n');
     const output = createOutput();
@@ -274,6 +470,7 @@ describe('runOperatorAgent', () => {
       },
       piExtensions: false,
     });
+    expect(agentOptions).not.toHaveProperty('reasoning');
     expect(agentOptions?.systemPrompt).toContain('operator ロール');
     expect(agentOptions?.systemPrompt).toContain('Profile operator guidance.');
     expect(agentOptions?.systemPrompt).toContain('answer_live_open_question');

@@ -63,9 +63,9 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 #### resume と config 変更
 
-起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` / `conductor.reasoning`、`acp.env`、model catalog の `reasoning` を含む変更や tag mapping の変更も対象です。worker の ACP spawn fingerprint には worker ごとの `modelTag` と解決済み model ID（credential ではない値）を記録し、env map は digest のみを保持します。Codex の `reasoning` は `CODEX_CONFIG` に含まれるため、この env digest でも照合します。
+`ensemble issue` の起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` / `conductor.reasoning`、`acp.env`、model catalog の `reasoning` を含む変更や tag mapping の変更も対象です。worker の ACP spawn fingerprint には worker ごとの `modelTag` と解決済み model ID（credential ではない値）を記録し、env map は digest のみを保持します。Codex の `reasoning` は `CODEX_CONFIG` に含まれるため、この env digest でも照合します。
 
-`--model` / `CONDUCTOR_MODEL_ID` と同様、`--reasoning` / `CONDUCTOR_REASONING` による上書きは merged config の digest には含まれません。resume 時もその時点の CLI / env 値が優先されます。
+`ensemble issue` の `--model` / `CONDUCTOR_MODEL_ID` と同様、`--reasoning` / `CONDUCTOR_REASONING` による上書きは merged config の digest には含まれません。resume 時もその時点の CLI / env 値が優先されます。`ensemble operator-agent` も共通の config と `CONDUCTOR_REASONING` を使い、保存 session の resume ごとにその時点の値を agent に渡します。
 
 旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。SessionResumeStore には config 全体や env map の平文、config ファイルのパスは保存しません。解決済み model ID は worker fingerprint に限って保存します。
 
@@ -148,8 +148,8 @@ tui:
 |------|------|-----------|-----------|
 | `config.loadProjectConfig` | project `.ensemble/config.yaml` を読み込むか（既定: `true`、選択された user config のみ有効） | — | — |
 | `profile.default` | 既定 team profile（名前またはパス） | `--profile` | `ENSEMBLE_DEFAULT_PROFILE` |
-| `conductor.model` | conductor モデル id | `--model` | `CONDUCTOR_MODEL_ID` |
-| `conductor.reasoning` | conductor reasoning / thinking level | `--reasoning` | `CONDUCTOR_REASONING` |
+| `conductor.model` | conductor モデル id | `ensemble issue --model` | `CONDUCTOR_MODEL_ID` |
+| `conductor.reasoning` | conductor reasoning / thinking level | `ensemble issue --reasoning` | `CONDUCTOR_REASONING` |
 | `conductor.verbose` | harness 詳細 telemetry の表示 | `--verbose` | `CONDUCTOR_VERBOSE` |
 | `conductor.backend` | conductor LLM backend（`cursor` / `pi`） | — | — |
 | `conductor.pi.agentDir` | Pi user resource root のパス上書き | — | — |
@@ -173,9 +173,9 @@ tui:
 
 ### Conductor reasoning
 
-`conductor.reasoning` は空でない文字列です。値は固定 enum にせず、選択した backend と model が受け付ける値かを起動時に検証します。解決順は `--reasoning` > `CONDUCTOR_REASONING` > merged config > backend の既定値です。未指定なら reasoning を明示せず、backend に既定の選択を任せます。
+`conductor.reasoning` は空でない文字列です。`ensemble issue` と `ensemble operator-agent` が共有し、値は固定 enum にせず、選択した backend と model が受け付ける値かを起動時に検証します。`ensemble issue` では `--reasoning` > `CONDUCTOR_REASONING` > merged config の順、`ensemble operator-agent` では `CONDUCTOR_REASONING` > merged config の順で解決します。どちらも未指定なら reasoning を明示せず、backend に既定の選択を任せます。適用範囲と CLI override の境界は [ADR 0049](adr/0049-operator-agent-conductor-reasoning.md) を参照してください。
 
-- **Pi**: 指定値を Pi 1.x `createAgentSession({ thinkingLevel })` に渡します。Pi の native level は `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` です。選択 model の対応 level を session 作成前に確認し、未知・未対応値はエラーにします。provider 固有のリクエスト値への変換は Pi model の `thinkingLevelMap` と Pi の provider adapter に委ねます。現在の Pi 1.2.0 は Google Gemini 4 を thinking-level API として扱わないため、`google-generative-ai` / `google-vertex` の Gemini 4 model に reasoning を明示した場合も session 作成前にエラーにします。値を省略した場合、`settings.json` の `defaultThinkingLevel` は従来どおり headless conductor で読みません。
+- **Pi**: 指定値を Pi 1.x `createAgentSession({ thinkingLevel })` に渡します。Pi の native level は `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` です。選択 model の対応 level を session 作成前に確認し、未知・未対応値はエラーにします。provider 固有のリクエスト値への変換は Pi model の `thinkingLevelMap` と Pi の provider adapter に委ねます。現在の Pi 1.2.0 は Google Gemini 4 を thinking-level API として扱わないため、`google-generative-ai` / `google-vertex` の Gemini 4 model に reasoning を明示した場合も session 作成前にエラーにします。値を省略した場合、`settings.json` の `defaultThinkingLevel` は従来どおり headless conductor / operator-agent で読みません。
 - **Cursor**: [Cursor SDK の model parameter catalog](https://cursor.com/docs/sdk/typescript#model-parameters) を照会し、選択 model の reasoning / thinking / effort parameter と値を特定して `ModelSelection.params` に渡します。parameter ID と値は model / account ごとに異なるため、catalog 上で一意に対応しない値や候補は agent の create / resume 前にエラーにします。値を省略したときは catalog を照会せず、SDK の既定に任せます。
 
 終了サマリの `sessionModels.conductor.configuredReasoning` は優先順位解決後の指定値です。provider が実際に適用した値を読み戻した結果ではありません。型・表示の詳細は [session-metrics.md](session-metrics.md#231-モデル構成sessionmodels) を参照してください。
@@ -406,7 +406,7 @@ headless conductor の設定正本は常に `~/.ensemble/pi/settings.json` と `
 - **reload**: Pi `AgentSession.reload()` の後に、create 時に解決した同じ settings-manager スナップショットを再適用します。実行中の `.ensemble/pi/settings.json` の変更を hot reload する契約ではないため、設定変更を反映するには `resume` または新しい create が必要です。`AgentSession.reload()` または snapshot の再適用が失敗した場合は、snapshot の復元を試みた後、session を close / dispose して unusable とします。失敗が 1 つだけで close / dispose が成功した場合はその元のエラーを reject し、reload と snapshot 復元の両方、または close / dispose の cleanup error も発生した場合は `AggregateError` を reject します。`AggregateError.errors` には発生した元の reload / snapshot エラーと cleanup error が含まれます。失敗した session は send で再利用せず、同じ transcript を続ける場合も `resume`、新しい作業なら create で再作成してください。
 - **resume**: 新しい Pi session を作るため `.ensemble/pi` を再読込し、create と同じチャネル適用を行ってから既存 transcript を開きます。resume でも `<cwd>/.pi/settings.json` は読みません。
 
-Pi の `settings.md` にあるが headless conductor が適用しないキーは、Pi SDK の SettingsManager へ渡さず、拒否せず警告なしで無視します。`defaultThinkingLevel` を無視する契約は Pi settings に対するものです。明示的な conductor reasoning は ensemble config の `conductor.reasoning` から指定します。
+Pi の `settings.md` にあるが headless conductor / operator-agent が適用しないキーは、Pi SDK の SettingsManager へ渡さず、拒否せず警告なしで無視します。`defaultThinkingLevel` を無視する契約は Pi settings に対するものです。明示的な reasoning は ensemble config の `conductor.reasoning` から指定します。
 
 | 無視するキー（または prefix） | 適用されない挙動 |
 |------------------------------|------------------|

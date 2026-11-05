@@ -120,6 +120,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0046](0046-migrated-session-canonical-slug-mirrors.md) | 移行済みセッションの canonical slug mirror | accepted |
 | [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | accepted |
 | [0048](0048-conductor-reasoning-backends.md) | conductor reasoning を backend ごとに適用する | accepted |
+| [0049](0049-operator-agent-conductor-reasoning.md) | operator-agent に conductor reasoning を適用する | accepted |
 
 ## 追加するとき
 
