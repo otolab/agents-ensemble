@@ -107,6 +107,10 @@
 | `sessionModels.conductor` | `{ backend, configuredModelId, lastUsedModelId? }` | config / CLI / 最後の conductor send | 同上 | — |
 | `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
 
+`configuredModelId` は CLI・環境変数・ensemble config の優先順で解決した設定値で、Pi の `settings.json` にある既定モデルは含まれない。`lastUsedModelId` は最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
+
+worker は未 attach の lazy worker も含め、セッションに登録された順に出力する。`model` は `modelTag` の対応付けから解決し ACP 起動設定に注入した ID で、注入しない場合は省略する。実際に ACP が使用したモデルを確認した値ではない。TTY では注入した ID を「起動設定」、省略時は「モデル注入なし」と表示する。存在しない model key の参照や、モデル注入に未対応の preset への指定は起動前にエラーとなり、終了サマリは生成されない。
+
 ---
 
 ### 2.4 TTY 終了サマリ例
@@ -118,6 +122,10 @@
   経過時間: 2分15秒
   conductor ターン: 3
   worker ラウンド: 3 完了 / 0 失敗
+  モデル:
+    conductor (pi): 設定 default · 報告 fixture-model
+    worker implementer (implementer, codex): modelTag high · 起動設定 gpt-6.1-terra
+    worker reviewer (reviewer, codex): modelTag default · モデル注入なし
   usage（記録済み）:
     conductor: 新規 input 2k · output 600 · cache read 400 · cache write 20 · hit 20%
     worker implementer: 新規 input 500 · output 120 · cache read 100 · cache write 0 · hit 33.3% · 推定
@@ -139,6 +147,9 @@ worker がモデル要求後に切断され、token usage が記録されない�
 セッション終了 (completed)
   conductor ターン: 1
   worker ラウンド: 0 完了 / 1 失敗
+  モデル:
+    conductor (cursor): 設定 default · 報告なし
+    worker implementer (implementer, codex): modelTag high · 起動設定 gpt-6.1-terra
   usage（記録済み）:
     conductor: input 1k · output 100
     合計: input 1k · output 100

@@ -140,25 +140,24 @@ function formatElapsedTime(durationMs: number): string {
   return `${seconds}秒`;
 }
 
-function formatWorkerModelLine(worker: SessionSummary['sessionModels']['workers'][number]): string {
+function formatWorkerModelLine(
+  worker: SessionSummary['sessionModels']['workers'][number],
+): string {
   const model =
     worker.model != null
-      ? `${worker.modelTag} → ${worker.model}`
-      : `${worker.modelTag}（${worker.acpPreset} 既定）`;
-  return `    worker ${worker.name}: ${model}`;
+      ? `modelTag ${worker.modelTag} · 起動設定 ${worker.model}`
+      : `modelTag ${worker.modelTag} · モデル注入なし`;
+  return `    worker ${worker.name} (${worker.kind}, ${worker.acpPreset}): ${model}`;
 }
 
 function formatConductorModelLine(
   conductor: SessionSummary['sessionModels']['conductor'],
 ): string {
   const configured = conductor.configuredModelId;
-  const used = conductor.lastUsedModelId;
-  const detail =
-    used && used !== configured
-      ? `設定 ${configured} · 使用 ${used}`
-      : used
-        ? `使用 ${used}`
-        : `設定 ${configured}`;
+  const reported = conductor.lastUsedModelId;
+  const detail = reported
+    ? `設定 ${configured} · 報告 ${reported}`
+    : `設定 ${configured} · 報告なし`;
   return `    conductor (${conductor.backend}): ${detail}`;
 }
 
@@ -172,14 +171,11 @@ export function formatIssueSessionSummaryText(summary: SessionSummary): string {
     `  worker ラウンド: ${summary.workerDispatches.length} 完了 / ${summary.workerFailures.length} 失敗`,
   );
 
-  const modelLines = [
+  lines.push('  モデル:');
+  lines.push(
     formatConductorModelLine(summary.sessionModels.conductor),
     ...summary.sessionModels.workers.map(formatWorkerModelLine),
-  ];
-  if (modelLines.length > 0) {
-    lines.push('  モデル:');
-    lines.push(...modelLines);
-  }
+  );
 
   const usage = summary.sessionUsage;
   if (usage) {

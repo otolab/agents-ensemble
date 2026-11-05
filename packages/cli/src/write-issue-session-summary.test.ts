@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildSessionModelsSummary,
+  DEFAULT_ENSEMBLE_CONFIG,
+  profileWorkersToSessionSpecs,
+  SessionLogger,
   SessionUsageTracker,
   type ConductorSessionResult,
 } from '@agents-ensemble/core';
@@ -40,6 +44,7 @@ describe('writeIssueSessionSummary', () => {
     expect(logSpy).toHaveBeenCalledOnce();
     expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toMatchObject({
       agentId: 'agent-1',
+      sessionModels: BASE_SESSION_MODELS,
     });
     expect(errorSpy).not.toHaveBeenCalled();
   });
@@ -52,7 +57,64 @@ describe('writeIssueSessionSummary', () => {
 
     expect(errorSpy).toHaveBeenCalledOnce();
     expect(String(errorSpy.mock.calls[0]?.[0])).toContain('セッション終了');
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain(
+      'conductor (cursor): 設定 default · 報告なし',
+    );
     expect(logSpy).not.toHaveBeenCalled();
+  });
+
+  it('writes a resolved model snapshot to both output formats', () => {
+    const config = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        defaultPreset: 'codex' as const,
+        tags: { high: 'strong' },
+        models: { strong: 'worker-model' },
+      },
+    };
+    const workers = profileWorkersToSessionSpecs(
+      { workers: [{ name: 'worker-1', kind: 'implementer', modelTag: 'high' }] },
+      { defaultAcp: { config, env: {} } },
+    );
+    const tracker = new SessionUsageTracker();
+    tracker.recordConductorRound({
+      runId: 'run-1', status: 'finished', modelId: 'reported-conductor',
+    });
+    const sessionModels = buildSessionModelsSummary({
+      backend: 'pi',
+      explicitConductorModelId: 'configured-conductor',
+      env: {},
+      config,
+      workers,
+      usageTracker: tracker,
+    });
+    const logger = new SessionLogger({
+      issueUrl: BASE_SUMMARY.issueUrl, repoRoot: BASE_SUMMARY.repoRoot,
+    });
+    logger.finish('completed');
+    const result = logger.snapshot({
+      agentId: 'agent-1', escalations: [], openQuestions: [], sessionModels,
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    writeIssueSessionSummary(result, { format: 'json' });
+    writeIssueSessionSummary(result, { format: 'text' });
+
+    expect(JSON.parse(String(logSpy.mock.calls[0]?.[0])).sessionModels).toEqual({
+      conductor: {
+        backend: 'pi',
+        configuredModelId: 'configured-conductor',
+        lastUsedModelId: 'reported-conductor',
+      },
+      workers: [{
+        name: 'worker-1', kind: 'implementer', modelTag: 'high',
+        acpPreset: 'codex', model: 'worker-model',
+      }],
+    });
+    const text = String(errorSpy.mock.calls[0]?.[0]);
+    expect(text).toContain('conductor (pi): 設定 configured-conductor · 報告 reported-conductor');
+    expect(text).toContain('worker worker-1 (implementer, codex): modelTag high · 起動設定 worker-model');
   });
 
   it('writes tracker metrics from a ConductorSessionResult through the text formatter', () => {

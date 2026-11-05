@@ -141,6 +141,23 @@ describe('PiConductorAgent', () => {
     vi.unstubAllEnvs();
   });
 
+  it('reports the selected model when a prompt fails before a response', async () => {
+    fakeSession.prompt.mockRejectedValueOnce(new Error('fixture failure'));
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+
+    await expect(conductor.send('kickoff')).resolves.toMatchObject({
+      status: 'error',
+      error: { message: 'fixture failure' },
+      modelId: 'model-1',
+    });
+    await conductor.close();
+  });
+
   it('creates a Pi 1.x AgentSession and injects the resolved MCP map into the official extension', async () => {
     const mcpServers = {
       representative: {
