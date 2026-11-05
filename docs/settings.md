@@ -33,6 +33,8 @@ CLI > 環境変数 > project config（読み込み有効時） > 選択された
 
 `profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
+conductor model は `ensemble issue --model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default の順で解決します。`runConductorSession` の直接呼び出しでも同じ選択値を conductor factory の create / resume に渡します。既定値は Cursor では Auto、Pi では Pi resource の `settings.json` にある既定モデルです。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を使います。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、その優先順位を保てるようにします。
+
 `ensemble issue` と `ensemble operator-agent` は `--config <path>` を受け付けます。指定したファイルが user config 層を置き換え、標準 user config は読み込みません。project config の読み込みは独立して `config.loadProjectConfig` で制御し、同一キーでは project config が優先されます。明示ファイルに toggle がなければ default の `true` が使われます。team profile の `--profile` とは別系統です。
 
 ```sh
@@ -51,6 +53,8 @@ Session resume state conductorBackend mismatch: pi !== cursor
 旧 SessionResumeStore にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `~/.ensemble/sessions/<repoKey>/pi/` の JSONL に保存されます。旧 `<conductorCwd>/.ensemble/pi/sessions/` は再開時に読み取り、user 側へ移行します。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
 
 SessionResumeStore には `ensembleConfigDigestScheme` と config digest を保存します。新しい session の `resume-feasibility` digest が含むのは merge 後の `session.worktree` と `acp.defaultPreset` だけです。旧 sidecar は scheme 省略 / `full` として全 `EnsembleConfig` を比較し、resume・再保存後も scheme と digest の意味を維持します。旧 store で digest が欠けていれば warning 後に照合を省き、欠如を保ちます。v2 scheme で digest が欠けている場合や未知の scheme は拒否します。config 値やファイルパスは保存しません。ACP spawn fingerprint は preset、custom preset の command / args を照合し、modelTag / model / env digest は resume 判定に使いません。env digest は値を記録せず保持します。詳細は [config.md § resume と config 変更](config.md#resume-と-config-変更) と [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md) を参照してください。
+
+resume では config の変更を digest で検出します。`modelId` と環境変数は invocation 単位の上書きとして各 run で再解決します。
 
 ### パターン B — Phase 1 横断（env なし）
 

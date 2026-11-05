@@ -65,6 +65,10 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 新しい session は SessionResumeStore に `ensembleConfigDigestScheme: resume-feasibility` と digest を記録します。digest 対象は merge 後の `session.worktree` と `acp.defaultPreset` だけです。これらの値が変わると conductor の resume 前に拒否します。その他の `EnsembleConfig` key は neutral で、model・model catalog・reasoning・env・TUI・monitor などを変えても v2 digest は変わりません。全 key の分類は [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md) を参照してください。
 
+conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default です。直接 API でも同じ優先順で選択し、Cursor / Pi の組み込み factory には解決値を create / resume 時に渡します。custom factory では互換性を保つため、config または code default から `default` が選ばれた場合は `modelId: undefined` を渡し、factory 自身の既定値に委ねます。一方、CLI / API の明示値または `CONDUCTOR_MODEL_ID` が `default` / `auto` を選んだ場合は `'default'` を渡し、その invocation override を保ちます。詳しくは[設定全体の解決順](settings.md)を参照してください。
+
+resume 時も `modelId` と環境変数は invocation 単位で再解決します。新しい `resume-feasibility` digest は `conductor.model` を対象外とするため、model 設定の変更だけでは resume を拒否しません。scheme のない旧 sidecar と `full` sidecar は従来どおり config 全体を照合するため、変更が resume を拒否することがあります。
+
 ACP spawn fingerprint は preset を照合し、preset が `custom` の場合は command / args も照合します。`modelTag`、model ID、env digest は resume 拒否理由にしません。sidecar profile の復元と worker `acpCwd` の照合、conductor backend、MCP digest、session identity の検証は引き続き行います。
 
 scheme がない旧 sidecar と `full` sidecar は、従来の `EnsembleConfig` 全体 hash で比較します。そのため neutral な設定変更でも resume が拒否されることがあります。resume・再保存しても旧 scheme と digest はそのまま保ちます。scheme 省略 / `full` で digest がない旧 store は warning を出して設定一致の検証を省略し、欠如したまま保存します。`resume-feasibility` に digest がない sidecar と未知の scheme は不正データとして拒否します。

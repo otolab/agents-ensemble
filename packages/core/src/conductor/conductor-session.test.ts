@@ -811,7 +811,7 @@ describe('runConductorSession resume / shutdown', () => {
     },
   );
 
-  it('reports the config model even when a direct API call passes no modelId to the factory', async () => {
+  it('passes the config model to the factory when a direct API call omits modelId', async () => {
     stubUnusedControlServer();
     vi.stubEnv('CONDUCTOR_MODEL_ID', undefined);
     mockSend.mockResolvedValue({
@@ -835,11 +835,310 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(result.stopReason).toBe('completed');
     expect(mockCreate).toHaveBeenCalledOnce();
-    expect(mockCreate.mock.calls[0]?.[0].modelId).toBeUndefined();
+    expect(mockCreate.mock.calls[0]?.[0].modelId).toBe('configured-only-model');
     expect(result.sessionModels.conductor).toStrictEqual({
       backend: 'cursor', configuredModelId: 'configured-only-model',
     });
   });
+
+  it.each([
+    {
+      factoryKind: 'Cursor explicit override',
+      backend: 'cursor' as const,
+      useCustomFactory: false,
+      apiModelId: 'api-model',
+      envModelId: 'env-model',
+      configModelId: 'config-model',
+      expectedFactoryModelId: 'api-model',
+      expectedConfiguredModelId: 'api-model',
+    },
+    {
+      factoryKind: 'Pi environment override',
+      backend: 'pi' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: 'anthropic/env-model',
+      configModelId: 'anthropic/config-model',
+      expectedFactoryModelId: 'anthropic/env-model',
+      expectedConfiguredModelId: 'anthropic/env-model',
+    },
+    {
+      factoryKind: 'custom factory environment override',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: undefined,
+      envModelId: 'env-model',
+      configModelId: 'config-model',
+      expectedFactoryModelId: 'env-model',
+      expectedConfiguredModelId: 'env-model',
+    },
+    {
+      factoryKind: 'custom factory config',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'custom-config-model',
+      expectedFactoryModelId: 'custom-config-model',
+      expectedConfiguredModelId: 'custom-config-model',
+    },
+    {
+      factoryKind: 'custom factory backend default',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'default',
+      expectedFactoryModelId: undefined,
+      expectedConfiguredModelId: 'default',
+    },
+    {
+      factoryKind: 'custom factory explicit backend default',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: 'default',
+      envModelId: 'env-model',
+      configModelId: 'config-model',
+      expectedFactoryModelId: 'default',
+      expectedConfiguredModelId: 'default',
+    },
+    {
+      factoryKind: 'custom factory environment backend default',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: undefined,
+      envModelId: 'auto',
+      configModelId: 'config-model',
+      expectedFactoryModelId: 'default',
+      expectedConfiguredModelId: 'default',
+    },
+    {
+      factoryKind: 'Cursor config',
+      backend: 'cursor' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'cursor-config-model',
+      expectedFactoryModelId: 'cursor-config-model',
+      expectedConfiguredModelId: 'cursor-config-model',
+    },
+    {
+      factoryKind: 'Pi config',
+      backend: 'pi' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'anthropic/pi-config-model',
+      expectedFactoryModelId: 'anthropic/pi-config-model',
+      expectedConfiguredModelId: 'anthropic/pi-config-model',
+    },
+    {
+      factoryKind: 'Cursor backend default',
+      backend: 'cursor' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'default',
+      expectedFactoryModelId: 'default',
+      expectedConfiguredModelId: 'default',
+    },
+    {
+      factoryKind: 'Pi backend default',
+      backend: 'pi' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'default',
+      expectedFactoryModelId: 'default',
+      expectedConfiguredModelId: 'default',
+    },
+  ])(
+    'resolves $factoryKind consistently for create and resume',
+    async ({
+      factoryKind,
+      backend,
+      useCustomFactory,
+      apiModelId,
+      envModelId,
+      configModelId,
+      expectedFactoryModelId,
+      expectedConfiguredModelId,
+    }) => {
+      stubUnusedControlServer();
+      vi.stubEnv('CONDUCTOR_MODEL_ID', envModelId);
+      mockSend.mockResolvedValue({
+        runId: `run-${factoryKind}-model`,
+        status: 'finished',
+        result: 'done',
+      });
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend,
+          model: configModelId,
+        },
+      };
+      const profile = { conductor: { backend }, workers: [] };
+      const customFactory =
+        useCustomFactory
+          ? { create: mockCreate, resume: mockResume }
+          : undefined;
+
+      const initial = await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        ...(apiModelId !== undefined ? { modelId: apiModelId } : {}),
+        ...(customFactory ? { conductorAgentFactory: customFactory } : {}),
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+
+      if (!useCustomFactory && backend === 'cursor') {
+        expect(mockCreateCursorSdkConductorAgentFactory).toHaveBeenCalledOnce();
+      } else if (!useCustomFactory && backend === 'pi') {
+        expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
+      }
+      expect(mockCreate.mock.calls[0]?.[0].modelId).toBe(
+        expectedFactoryModelId,
+      );
+      expect(initial.sessionModels.conductor.configuredModelId).toBe(
+        expectedConfiguredModelId,
+      );
+
+      await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        resumeAgentId: initial.agentId,
+        ...(apiModelId !== undefined ? { modelId: apiModelId } : {}),
+        ...(customFactory ? { conductorAgentFactory: customFactory } : {}),
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        bindOperatorInput: (api) => {
+          api.submit('/exit');
+        },
+      });
+
+      expect(mockResume).toHaveBeenCalledOnce();
+      expect(mockResume.mock.calls[0]?.[1].modelId).toBe(
+        expectedFactoryModelId,
+      );
+    },
+  );
+
+  it.each([
+    {
+      overrideSource: 'API modelId',
+      initialApiModelId: 'initial-api-model',
+      resumeApiModelId: 'resumed-api-model',
+      initialEnvModelId: 'lower-priority-env-model',
+      resumeEnvModelId: 'lower-priority-env-model',
+      expectedInitialModelId: 'initial-api-model',
+      expectedResumeModelId: 'resumed-api-model',
+    },
+    {
+      overrideSource: 'CONDUCTOR_MODEL_ID',
+      initialApiModelId: undefined,
+      resumeApiModelId: undefined,
+      initialEnvModelId: 'initial-env-model',
+      resumeEnvModelId: 'resumed-env-model',
+      expectedInitialModelId: 'initial-env-model',
+      expectedResumeModelId: 'resumed-env-model',
+    },
+  ])(
+    're-resolves changed $overrideSource on resume with the same config digest',
+    async ({
+      initialApiModelId,
+      resumeApiModelId,
+      initialEnvModelId,
+      resumeEnvModelId,
+      expectedInitialModelId,
+      expectedResumeModelId,
+    }) => {
+      stubUnusedControlServer();
+      vi.stubEnv('CONDUCTOR_MODEL_ID', initialEnvModelId);
+      mockSend.mockResolvedValue({
+        runId: 'run-changed-model-override',
+        status: 'finished',
+        result: 'done',
+      });
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'cursor' as const,
+          model: 'config-model',
+        },
+      };
+      const expectedConfigDigest =
+        computeResumeFeasibilityConfigDigest(ensembleConfig);
+      const customFactory = { create: mockCreate, resume: mockResume };
+      const commonOptions = {
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { conductor: { backend: 'cursor' as const }, workers: [] },
+        ensembleConfig,
+        conductorAgentFactory: customFactory,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      };
+
+      const initial = await runConductorSession({
+        ...commonOptions,
+        ...(initialApiModelId !== undefined
+          ? { modelId: initialApiModelId }
+          : {}),
+      });
+
+      expect(mockCreate).toHaveBeenCalledOnce();
+      expect(mockCreate.mock.calls[0]?.[0].modelId).toBe(
+        expectedInitialModelId,
+      );
+      const initialResumeStore = await loadSessionResumeStore(
+        sessionResumeStorePath({
+          repoRoot,
+          conductorAgentId: initial.agentId,
+        }),
+      );
+      expect(initialResumeStore?.ensembleConfigDigest).toBe(
+        expectedConfigDigest,
+      );
+
+      vi.stubEnv('CONDUCTOR_MODEL_ID', resumeEnvModelId);
+      const resumed = await runConductorSession({
+        ...commonOptions,
+        resumeAgentId: initial.agentId,
+        ...(resumeApiModelId !== undefined
+          ? { modelId: resumeApiModelId }
+          : {}),
+        bindOperatorInput: (api) => {
+          api.submit('/exit');
+        },
+      });
+
+      expect(resumed.stopReason).toBe('completed');
+      expect(mockResume).toHaveBeenCalledOnce();
+      expect(mockResume.mock.calls[0]?.[1].modelId).toBe(
+        expectedResumeModelId,
+      );
+      const resumedResumeStore = await loadSessionResumeStore(
+        sessionResumeStorePath({
+          repoRoot,
+          conductorAgentId: initial.agentId,
+        }),
+      );
+      expect(resumedResumeStore?.ensembleConfigDigest).toBe(
+        expectedConfigDigest,
+      );
+    },
+  );
 
   it('does not carry a reported model across resume when the new run has no send', async () => {
     stubUnusedControlServer();

@@ -176,6 +176,11 @@ import {
   resolveConductorPiResourcePaths,
   resolveGitHubMonitorEnabled,
 } from '../config/resolve-settings.js';
+import {
+  CONDUCTOR_MODEL_ID_ENV,
+  DEFAULT_CONDUCTOR_MODEL_ID,
+  resolveConductorModelId,
+} from './resolve-conductor-model-id.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import {
   formatGitHubErrorMessage,
@@ -214,6 +219,9 @@ export interface RunConductorSessionOptions {
   /** Optional factory override. Without it, `conductor.backend` selects the factory. */
   conductorAgentFactory?: ConductorAgentFactory;
   apiKey?: string;
+  /**
+   * Explicit model override. Resolution order: modelId > CONDUCTOR_MODEL_ID > config > backend default.
+   */
   modelId?: string;
   maxTurns?: number;
   permissionPolicy?: PermissionPolicyRules;
@@ -335,6 +343,23 @@ export async function runConductorSession(
     'resume-feasibility';
   let ensembleConfigDigest: string | undefined =
     computeResumeFeasibilityConfigDigest(ensembleConfig);
+  const resolvedConductorModelId = resolveConductorModelId(options.modelId, {
+    config: ensembleConfig,
+  });
+  const hasInvocationModelOverride = Boolean(
+    options.modelId?.trim() ||
+      process.env[CONDUCTOR_MODEL_ID_ENV]?.trim(),
+  );
+  // Built-in factories understand `default` as their backend default. For a
+  // custom factory, preserve the optional contract when the default comes
+  // from config/code defaults. Keep an invocation-level `default` sentinel so
+  // the factory can honor it over its own lower-priority defaults.
+  const conductorFactoryModelId =
+    options.conductorAgentFactory &&
+    resolvedConductorModelId === DEFAULT_CONDUCTOR_MODEL_ID &&
+    !hasInvocationModelOverride
+      ? undefined
+      : resolvedConductorModelId;
   const conductorBackend = resolveConductorBackendSetting({
     profile: options.profile,
     config: ensembleConfig,
@@ -1151,7 +1176,7 @@ export async function runConductorSession(
       ? { piSkills: activeProfile.conductor?.piSkills !== false }
       : {}),
     apiKey: options.apiKey,
-    modelId: options.modelId,
+    modelId: conductorFactoryModelId,
     ...(conductorBackend === 'pi'
       ? {
           pi: resolveConductorPiResourcePaths({
@@ -2118,7 +2143,7 @@ export async function runConductorSession(
         openQuestions: openQuestions.list(),
         sessionModels: buildSessionModelsSummary({
           backend: conductorBackend,
-          explicitConductorModelId: options.modelId,
+          explicitConductorModelId: resolvedConductorModelId,
           config: ensembleConfig,
           workers,
           usageTracker: sessionUsageTracker,
