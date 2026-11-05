@@ -116,6 +116,7 @@ export class SessionLogger {
     agentId: string;
     escalations: EscalationRecord[];
     openQuestions: OpenQuestion[];
+    sessionModels: SessionSummary['sessionModels'];
     sessionUsage?: SessionSummary['sessionUsage'];
   }): SessionSummary {
     return {
@@ -133,6 +134,7 @@ export class SessionLogger {
       workerFailures: [...this.workerFailures],
       escalations: [...input.escalations],
       openQuestions: [...input.openQuestions],
+      sessionModels: input.sessionModels,
       ...(input.sessionUsage ? { sessionUsage: input.sessionUsage } : {}),
     };
   }

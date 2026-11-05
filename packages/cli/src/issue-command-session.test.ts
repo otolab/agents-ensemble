@@ -1,4 +1,4 @@
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -102,6 +102,8 @@ vi.mock('./tui/create-issue-session-tui-host.js', () => ({
 }));
 
 import { executeIssueCommand, issueCommandExitCode } from './issue-command.js';
+import { resolveIssueSummaryFormat } from './resolve-summary-format.js';
+import { writeIssueSessionSummary } from './write-issue-session-summary.js';
 import type { AcpBridge } from '../../core/src/acp/acp-bridge.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../../core/src/config/defaults.js';
 import { runIssueSession as runIssueSessionImpl } from '../../core/src/conductor/issue-session.js';
@@ -240,6 +242,86 @@ describe('executeIssueCommand with the core session', () => {
     vi.unstubAllEnvs();
     if (homeRoot) await rm(homeRoot, { recursive: true, force: true });
     homeRoot = '';
+  });
+
+  it('writes a real session result with unreported and unmapped models to both CLI channels', async () => {
+    const repoRoot = join(homeRoot, 'repo');
+    await mkdir(repoRoot);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(homeRoot, 'user-ensemble'));
+    vi.stubEnv('CONDUCTOR_MODEL_ID', '');
+    const config = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      session: { ...DEFAULT_ENSEMBLE_CONFIG.session, lazyWorkers: true },
+    };
+    const connectAcp = vi.fn(async () => {
+      throw new Error('lazy worker should not attach');
+    });
+    mockSend.mockResolvedValue({ runId: 'run-1', status: 'finished', result: 'done' });
+
+    const result = await executeIssueCommand(
+      issueUrl,
+      {
+        repoRoot,
+        conductorCwd: repoRoot,
+        worktree: 'in_repo',
+        githubMonitor: false,
+        noWait: true,
+        defaultAcpCommand: process.execPath,
+      },
+      {
+        isOperatorInputInteractive: () => false,
+        isOperatorInputTty: () => false,
+        loadEnsembleConfig: async () => config,
+        loadProfile: async () => ({
+          profile: { workers: [{ name: 'reviewer', kind: 'reviewer' }] },
+          profilePath: join(repoRoot, 'profile.yaml'),
+        }),
+        runIssueSession: (options) => runIssueSessionImpl({
+          ...options,
+          mcpConfigOptions: { userEnsembleRoot: join(homeRoot, 'user-ensemble') },
+          workerWorktree: {
+            path: repoRoot,
+            branch: 'main',
+            issue: { owner: 'org', repo: 'repo', number: 1, url: issueUrl },
+            inRepo: true,
+          },
+          connectAcp,
+          registerProcessSignalHandlers: false,
+        }),
+        writeStderr: () => {},
+      },
+    );
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(connectAcp).not.toHaveBeenCalled();
+    expect(result.sessionModels).toEqual({
+      conductor: { backend: 'cursor', configuredModelId: 'default' },
+      workers: [{
+        name: 'reviewer', kind: 'reviewer', modelTag: 'default', acpPreset: 'custom',
+      }],
+    });
+
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    writeIssueSessionSummary(result, {
+      format: resolveIssueSummaryFormat({ isTty: false }),
+    });
+
+    expect(stdout).toHaveBeenCalledOnce();
+    expect(stderr).not.toHaveBeenCalled();
+    expect(JSON.parse(String(stdout.mock.calls[0]?.[0])).sessionModels)
+      .toEqual(result.sessionModels);
+
+    stdout.mockClear();
+    writeIssueSessionSummary(result, {
+      format: resolveIssueSummaryFormat({ isTty: true }),
+    });
+    expect(stdout).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledOnce();
+    const text = String(stderr.mock.calls[0]?.[0]);
+    expect(text).toContain('conductor (cursor): 設定 default · 報告なし');
+    expect(text).toContain('worker reviewer (reviewer, custom): modelTag default · モデル注入なし');
   });
 
   it.each([

@@ -6,6 +6,7 @@ import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
 import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
+import * as acpBinModule from '../acp/resolve-bundled-acp-bin.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
 import type { PermissionDecision, PermissionHandler } from '../acp/types.js';
@@ -45,6 +46,7 @@ import {
   OpenQuestionControlRemoteError,
   sendOpenQuestionControlRequest,
 } from '../session/open-question-control.js';
+import * as openQuestionControlModule from '../session/open-question-control.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
 import { runConductorSession as runConductorSessionImpl } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
@@ -271,6 +273,16 @@ describe('runConductorSession resume / shutdown', () => {
         userEnsembleRoot,
       },
     });
+  }
+
+  function stubUnusedControlServer() {
+    vi.spyOn(openQuestionControlModule, 'startOpenQuestionControlServer')
+      .mockResolvedValue({
+        socketPath: join(repoRoot, 'unused-control.sock'),
+        hasInFlightRequests: () => false,
+        quiesce: async () => {},
+        close: async () => {},
+      });
   }
 
   it('fails fast when resumeAgentId is set but no saved session resume store exists', async () => {
@@ -673,6 +685,193 @@ describe('runConductorSession resume / shutdown', () => {
       }),
     );
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
+  });
+
+  it.each([false, true])(
+    'returns resolved worker and conductor models with lazyWorkers=%s',
+    async (lazyWorkers) => {
+      stubUnusedControlServer();
+      vi.spyOn(acpBinModule, 'resolveBundledAcpBin')
+        .mockReturnValue(process.execPath);
+      vi.spyOn(acpBinModule, 'resolveAcpBin').mockReturnValue(process.execPath);
+      const config = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        acp: {
+          defaultPreset: 'codex' as const,
+          tags: { high: 'strong' },
+          models: { strong: 'worker-model' },
+        },
+        session: { ...DEFAULT_ENSEMBLE_CONFIG.session, lazyWorkers },
+      };
+      const connectAcp = vi.fn(async () => ({
+        newSession: vi.fn().mockResolvedValue('worker-session'),
+        loadSession: vi.fn().mockResolvedValue(undefined),
+        promptSession: vi.fn().mockResolvedValue({
+          stopReason: 'end_turn',
+          responseText: 'ready',
+        }),
+        cancelSession: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+      }) as unknown as AcpBridge);
+      mockSend.mockResolvedValue({
+        runId: 'run-models',
+        status: 'finished',
+        result: 'done',
+        modelId: 'reported-conductor',
+      });
+
+      const result = await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: {
+          workers: [
+            { name: 'worker-1', kind: 'implementer', modelTag: 'high' },
+            { name: 'reviewer', kind: 'reviewer' },
+          ],
+        },
+        ensembleConfig: config,
+        modelId: 'configured-conductor',
+        defaultAcp: { config, env: {} },
+        workerWorktree: {
+          path: repoRoot,
+          branch: 'main',
+          issue: TEST_ISSUE,
+          inRepo: true,
+        },
+        connectAcp,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+
+      expect(result.stopReason).toBe('completed');
+      expect(result.sessionModels).toEqual({
+        conductor: {
+          backend: 'cursor',
+          configuredModelId: 'configured-conductor',
+          lastUsedModelId: 'reported-conductor',
+        },
+        workers: [
+          {
+            name: 'worker-1',
+            kind: 'implementer',
+            modelTag: 'high',
+            acpPreset: 'codex',
+            model: 'worker-model',
+          },
+          {
+            name: 'reviewer',
+            kind: 'reviewer',
+            modelTag: 'default',
+            acpPreset: 'codex',
+          },
+        ],
+      });
+      expect(connectAcp).toHaveBeenCalledTimes(lazyWorkers ? 0 : 2);
+    },
+  );
+
+  it.each([undefined, 'reported-on-error'])(
+    'returns model configuration when the failed conductor send reports %s',
+    async (reportedModel) => {
+      stubUnusedControlServer();
+      mockSend.mockResolvedValue({
+        runId: 'run-failed',
+        status: 'error',
+        error: { message: 'fixture send failed' },
+        modelId: reportedModel,
+      });
+
+      const result = await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        modelId: 'configured-conductor',
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+
+      expect(result.stopReason).toBe('error');
+      expect(result.sessionModels).toEqual({
+        conductor: {
+          backend: 'cursor',
+          configuredModelId: 'configured-conductor',
+          ...(reportedModel ? { lastUsedModelId: reportedModel } : {}),
+        },
+        workers: [],
+      });
+    },
+  );
+
+  it('reports the config model even when a direct API call passes no modelId to the factory', async () => {
+    stubUnusedControlServer();
+    vi.stubEnv('CONDUCTOR_MODEL_ID', undefined);
+    mockSend.mockResolvedValue({
+      runId: 'run-config-only', status: 'finished', result: 'done',
+    });
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          model: 'configured-only-model',
+        },
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockCreate).toHaveBeenCalledOnce();
+    expect(mockCreate.mock.calls[0]?.[0].modelId).toBeUndefined();
+    expect(result.sessionModels.conductor).toStrictEqual({
+      backend: 'cursor', configuredModelId: 'configured-only-model',
+    });
+  });
+
+  it('does not carry a reported model across resume when the new run has no send', async () => {
+    stubUnusedControlServer();
+    mockSend.mockResolvedValueOnce({
+      runId: 'run-before-resume',
+      status: 'finished',
+      result: 'done',
+      modelId: 'reported-before-resume',
+    });
+    const initial = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      modelId: 'configured-conductor',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+    expect(initial.sessionModels.conductor.lastUsedModelId).toBe('reported-before-resume');
+    mockSend.mockClear();
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: initial.agentId,
+      modelId: 'configured-conductor',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      bindOperatorInput: (api) => { api.submit('/exit'); },
+    });
+
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(result.sessionModels).toStrictEqual({
+      conductor: { backend: 'cursor', configuredModelId: 'configured-conductor' },
+      workers: [],
+    });
   });
 
   it('does not expose a compaction counter for the Cursor SDK backend', async () => {

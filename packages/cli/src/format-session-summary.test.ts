@@ -7,6 +7,11 @@ import {
   truncateResponsePreview,
 } from './format-session-summary.js';
 
+const DEFAULT_SESSION_MODELS: SessionSummary['sessionModels'] = {
+  conductor: { backend: 'cursor', configuredModelId: 'default' },
+  workers: [],
+};
+
 function createSummary(
   overrides: Partial<SessionSummary> = {},
 ): SessionSummary {
@@ -19,6 +24,7 @@ function createSummary(
     sendCount: 3,
     stopReason: 'completed',
     lastRunStatus: 'finished',
+    sessionModels: DEFAULT_SESSION_MODELS,
     workerDispatches: [
       {
         name: 'implementer',
@@ -78,6 +84,59 @@ function createSummary(
 }
 
 describe('formatIssueSessionSummaryJson', () => {
+  it('includes sessionModels', () => {
+    const json = JSON.parse(
+      formatIssueSessionSummaryJson(
+        createSummary({
+          sessionModels: {
+            conductor: {
+              backend: 'pi',
+              configuredModelId: 'default',
+              lastUsedModelId: 'gpt-6-luna',
+            },
+            workers: [
+              {
+                name: 'implementer',
+                kind: 'implementer',
+                modelTag: 'high',
+                acpPreset: 'codex',
+                model: 'gpt-6.1-terra',
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    expect(json.sessionModels).toEqual({
+      conductor: {
+        backend: 'pi',
+        configuredModelId: 'default',
+        lastUsedModelId: 'gpt-6-luna',
+      },
+      workers: [{
+        name: 'implementer',
+        kind: 'implementer',
+        modelTag: 'high',
+        acpPreset: 'codex',
+        model: 'gpt-6.1-terra',
+      }],
+    });
+  });
+
+  it('keeps the model summary when no model was reported or injected', () => {
+    const summary = createSummary({
+      sessionModels: {
+        conductor: { backend: 'cursor', configuredModelId: 'default' },
+        workers: [{
+          name: 'reviewer', kind: 'reviewer', modelTag: 'default', acpPreset: 'custom',
+        }],
+      },
+    });
+
+    expect(JSON.parse(formatIssueSessionSummaryJson(summary)).sessionModels)
+      .toEqual(summary.sessionModels);
+  });
+
   it('includes sessionUsage and responsePreview by default', () => {
     const json = JSON.parse(formatIssueSessionSummaryJson(createSummary()));
     expect(json.startedAt).toBe(1_750_000_000_000);
@@ -215,12 +274,64 @@ describe('formatIssueSessionSummaryJson', () => {
 });
 
 describe('formatIssueSessionSummaryText', () => {
+  it('renders configured and reported models with each worker kind and preset', () => {
+    const text = formatIssueSessionSummaryText(createSummary({
+      sessionModels: {
+        conductor: {
+          backend: 'pi', configuredModelId: 'default', lastUsedModelId: 'used-model',
+        },
+        workers: [
+          {
+            name: 'worker-1', kind: 'implementer', modelTag: 'high',
+            acpPreset: 'codex', model: 'worker-model',
+          },
+          { name: 'reviewer', kind: 'reviewer', modelTag: 'default', acpPreset: 'custom' },
+        ],
+      },
+    }));
+
+    expect(text).toContain('conductor (pi): 設定 default · 報告 used-model');
+    expect(text).toContain('worker worker-1 (implementer, codex): modelTag high · 起動設定 worker-model');
+    expect(text).toContain('worker reviewer (reviewer, custom): modelTag default · モデル注入なし');
+  });
+
+  it('distinguishes the configured and reported values even when they match', () => {
+    const text = formatIssueSessionSummaryText(createSummary({
+      sessionModels: {
+        conductor: {
+          backend: 'cursor', configuredModelId: 'same-model', lastUsedModelId: 'same-model',
+        },
+        workers: [],
+      },
+    }));
+
+    expect(text).toContain('conductor (cursor): 設定 same-model · 報告 same-model');
+  });
+
+  it('labels the model reported by a failed send as a report', () => {
+    const text = formatIssueSessionSummaryText(createSummary({
+      stopReason: 'error',
+      lastRunStatus: 'error',
+      sessionModels: {
+        conductor: {
+          backend: 'pi', configuredModelId: 'default', lastUsedModelId: 'selected-model',
+        },
+        workers: [],
+      },
+    }));
+
+    expect(text).toContain('conductor (pi): 設定 default · 報告 selected-model');
+    expect(text).not.toContain('使用 selected-model');
+  });
+
   it('renders recorded total and conductor token rows with conductor actual cost', () => {
     const text = formatIssueSessionSummaryText(createSummary());
     expect(text).toContain('セッション終了 (completed)');
     expect(text).toContain('経過時間: 1分23秒');
     expect(text).toContain('conductor ターン: 3');
     expect(text).toContain('worker ラウンド: 1 完了 / 0 失敗');
+    expect(text).toContain('  モデル:');
+    expect(text).toContain('conductor (cursor): 設定 default · 報告なし');
     expect(text).toContain('usage（記録済み）:');
     expect(text).toContain('conductor: input 1k · output 300');
     expect(text).toContain('合計: input 1k · output 340');

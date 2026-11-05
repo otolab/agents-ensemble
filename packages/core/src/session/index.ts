@@ -93,3 +93,11 @@ export type {
   SessionStatePathOptions,
   SessionStatusLine,
 } from './session-state-store.js';
+export {
+  buildSessionModelsSummary,
+} from './build-session-models-summary.js';
+export type {
+  SessionConductorModelSummary,
+  SessionModelsSummary,
+  SessionWorkerModelSummary,
+} from './build-session-models-summary.js';

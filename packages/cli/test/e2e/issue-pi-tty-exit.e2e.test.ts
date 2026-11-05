@@ -1,9 +1,9 @@
 import { createServer, type Server } from 'node:http';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { once } from 'node:events';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CLI_ENTRY } from './test-helpers.js';
@@ -274,7 +274,7 @@ describe('Pi conductor TTY /exit process lifecycle', () => {
   });
 
   it.skipIf(process.platform === 'win32')(
-    'naturally exits after TTY /exit and reaps its Pi stdio MCP child',
+    'writes model summaries for TTY and non-TTY exits and reaps Pi MCP children',
     async () => {
       const model = await startFixtureModelServer();
       modelServer = model.server;
@@ -513,6 +513,10 @@ globalThis.fetch = async (input, init) => {
       expect(exit).toEqual({ code: 0, signal: null });
       expect(Date.now() - summarySeenAt).toBeLessThan(3_000);
       expect(stripTerminalControls(output)).toContain('セッション終了 (completed)');
+      expect(stripTerminalControls(output)).toContain('  モデル:');
+      expect(stripTerminalControls(output)).toContain(
+        'conductor (pi): 設定 default · 報告 fixture-model',
+      );
       expect(model.requests).toBeGreaterThan(0);
 
       const pids = (await readFile(pidFile, 'utf8'))
@@ -526,6 +530,108 @@ globalThis.fetch = async (input, init) => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       expect(await processIsAlive(pids[0]!)).toBe(false);
+
+      // Exercise the default non-TTY JSON path with lazy workers. The fake
+      // executable satisfies preset validation; no ACP process is attached.
+      const binDir = join(fixtureRoot, 'bin');
+      await mkdir(binDir);
+      const workerStartedPath = join(fixtureRoot, 'worker-started');
+      env.ACP_FIXTURE_MARKER = workerStartedPath;
+      await writeFile(
+        join(binDir, 'agent'),
+        '#!/bin/sh\nprintf started > "$ACP_FIXTURE_MARKER"\nexit 99\n',
+        { mode: 0o755 },
+      );
+      env.PATH = `${binDir}${delimiter}${env.PATH}`;
+      execFileSync('git', ['init', '--quiet', '--initial-branch=main', repoRoot], { env });
+      execFileSync('git', [
+        '-C', repoRoot, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+        'commit', '--allow-empty', '--quiet', '-m', 'fixture',
+      ], { env });
+      await writeFile(
+        join(repoRoot, '.ensemble', 'config.yaml'),
+        [
+          'conductor:',
+          '  backend: pi',
+          `  pi:\n    agentDir: ${JSON.stringify(agentDir)}`,
+          `    projectDir: ${JSON.stringify(projectDir)}`,
+          'github:',
+          '  auth:',
+          '    allowGhAuthTokenFallback: false',
+          '  monitor:',
+          '    enabled: false',
+          'acp:',
+          '  defaultPreset: cursor',
+          '  tags:',
+          '    high: fixture',
+          '  models:',
+          '    fixture: worker-fixture-model',
+          'session:',
+          '  worktree: in_repo',
+          '  lazyWorkers: true',
+          '  postLoop:',
+          '    wait: false',
+          '',
+        ].join('\n'),
+      );
+      await writeFile(
+        profilePath,
+        [
+          'workers:',
+          '  - name: implementer',
+          '    kind: implementer',
+          '    modelTag: high',
+          '  - name: reviewer',
+          '    kind: reviewer',
+          '',
+        ].join('\n'),
+      );
+
+      const requestsBeforeJsonRun = model.requests;
+      ptyRunner = spawn(
+        process.execPath,
+        [
+          '--import', bootstrapPath,
+          CLI_ENTRY, 'issue', ISSUE_URL,
+          '--repo-root', repoRoot,
+          '--conductor-cwd', repoRoot,
+          '--profile', profilePath,
+          '--worktree', 'in_repo',
+          '--no-github-monitor',
+          '--no-wait',
+        ],
+        { env, stdio: ['ignore', 'pipe', 'pipe'] },
+      );
+      let stdout = '';
+      let stderr = '';
+      ptyRunner.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      ptyRunner.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      const streamsClosed = once(ptyRunner, 'close');
+      const jsonExit = await waitForProcessExit(ptyRunner, 30_000);
+      await streamsClosed;
+
+      expect(jsonExit, stderr).toEqual({ code: 0, signal: null });
+      expect(model.requests).toBeGreaterThan(requestsBeforeJsonRun);
+      const json = JSON.parse(stdout);
+      expect(json.sessionModels).toEqual({
+        conductor: {
+          backend: 'pi', configuredModelId: 'default', lastUsedModelId: 'fixture-model',
+        },
+        workers: [
+          {
+            name: 'implementer', kind: 'implementer', modelTag: 'high',
+            acpPreset: 'cursor', model: 'worker-fixture-model',
+          },
+          { name: 'reviewer', kind: 'reviewer', modelTag: 'default', acpPreset: 'cursor' },
+        ],
+      });
+      expect(json.workerFailureCount).toBe(0);
+      expect(existsSync(workerStartedPath)).toBe(false);
+
+      const allPids = (await readFile(pidFile, 'utf8'))
+        .trim().split(/\s+/).filter(Boolean).map(Number);
+      expect(allPids).toHaveLength(2);
+      expect(await processIsAlive(allPids[1]!)).toBe(false);
     },
     45_000,
   );

@@ -99,6 +99,22 @@
 | `escalationCount` | `number` | CLI 導出 | 終了 JSON・TTY テキスト | `0` |
 | `openQuestionCount` | `number` | CLI 導出（未回答は別途フィルタ可） | 終了 JSON・TTY テキスト | `0` |
 
+### 2.3.1 モデル構成（`sessionModels`）
+
+| フィールド | 型 | ソース | 出力先 | 未取得時 |
+|-----------|-----|--------|--------|----------|
+| `sessionModels` | `SessionModelsSummary` | 終了時 `buildSessionModelsSummary` | 終了 JSON・TTY テキスト | なし（常に設定） |
+| `sessionModels.conductor` | `{ backend, configuredModelId, lastUsedModelId? }` | config / CLI / 最後の conductor send | 同上 | — |
+| `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
+
+`configuredModelId` は CLI・環境変数・ensemble config の優先順で解決した設定値で、Pi の `settings.json` にある既定モデルは含まれない。CLI はこの解決値を `modelId` として conductor に渡す。
+
+直接 API で `runConductorSession` を呼び、`modelId` と `CONDUCTOR_MODEL_ID` を指定せず `ensembleConfig.conductor.model` だけを設定した場合、`configuredModelId` には config の値が入るが、conductor factory には `modelId: undefined` が渡る。Cursor は既定値、Pi は Pi の設定からモデルを選ぶため、サマリの設定値と factory が選択するモデルは一致するとは限らない。
+
+`lastUsedModelId` は、今回の `runConductorSession` 呼び出し内で最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。resume 前の run の報告は引き継がないため、再開後に send せず終了した場合も省略する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
+
+worker は未 attach の lazy worker も含め、セッションに登録された順に出力する。`model` は `modelTag` の対応付けから解決し ACP 起動設定に注入した ID で、注入しない場合は省略する。実際に ACP が使用したモデルを確認した値ではない。TTY では注入した ID を「起動設定」、省略時は「モデル注入なし」と表示する。存在しない model key の参照や、モデル注入に未対応の preset への指定は起動前にエラーとなり、終了サマリは生成されない。
+
 ---
 
 ### 2.4 TTY 終了サマリ例
@@ -110,6 +126,10 @@
   経過時間: 2分15秒
   conductor ターン: 3
   worker ラウンド: 3 完了 / 0 失敗
+  モデル:
+    conductor (pi): 設定 default · 報告 fixture-model
+    worker implementer (implementer, codex): modelTag high · 起動設定 gpt-6.1-terra
+    worker reviewer (reviewer, codex): modelTag default · モデル注入なし
   usage（記録済み）:
     conductor: 新規 input 2k · output 600 · cache read 400 · cache write 20 · hit 20%
     worker implementer: 新規 input 500 · output 120 · cache read 100 · cache write 0 · hit 33.3% · 推定
@@ -129,8 +149,12 @@ worker がモデル要求後に切断され、token usage が記録されない�
 
 ```text
 セッション終了 (completed)
+  経過時間: 8秒
   conductor ターン: 1
   worker ラウンド: 0 完了 / 1 失敗
+  モデル:
+    conductor (cursor): 設定 default · 報告なし
+    worker implementer (implementer, codex): modelTag high · 起動設定 gpt-6.1-terra
   usage（記録済み）:
     conductor: input 1k · output 100
     合計: input 1k · output 100
