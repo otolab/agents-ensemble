@@ -879,6 +879,27 @@ function parseAcpSpawnFingerprint(
     }
     model = record.model;
   }
+  let reasoning: string | undefined;
+  if (record.reasoning !== undefined) {
+    if (typeof record.reasoning !== 'string' || record.reasoning.length === 0) {
+      throw new Error(
+        `Invalid session resume store worker acpSpawn reasoning: ${workerName}`,
+      );
+    }
+    reasoning = record.reasoning;
+  }
+  let modelProviderDigest: string | undefined;
+  if (record.modelProviderDigest !== undefined) {
+    if (
+      typeof record.modelProviderDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(record.modelProviderDigest)
+    ) {
+      throw new Error(
+        `Invalid session resume store worker acpSpawn modelProviderDigest: ${workerName}`,
+      );
+    }
+    modelProviderDigest = record.modelProviderDigest;
+  }
   let envDigest: string | undefined;
   if (record.envDigest !== undefined) {
     if (
@@ -918,6 +939,8 @@ function parseAcpSpawnFingerprint(
     args: record.args,
     ...(modelTag !== undefined ? { modelTag } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    ...(modelProviderDigest !== undefined ? { modelProviderDigest } : {}),
     ...(envDigest ? { envDigest } : {}),
   };
 }

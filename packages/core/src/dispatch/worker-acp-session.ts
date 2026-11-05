@@ -1,3 +1,4 @@
+import { AcpSessionConfigOptionError } from '../acp/acp-client.js';
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import { AcpBridge } from '../acp/acp-bridge.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
@@ -114,19 +115,31 @@ export async function openWorkerAcpSession(
   }
 
   let sessionId = options.resumeAcpSessionId;
-  if (sessionId) {
-    try {
-      await bridge.loadSession(
-        sessionId,
-        acpCwd,
-        options.permissionHandler,
-      );
-    } catch {
-      sessionId = undefined;
+  try {
+    if (sessionId) {
+      try {
+        await bridge.loadSession(
+          sessionId,
+          acpCwd,
+          options.permissionHandler,
+        );
+      } catch (error) {
+        if (error instanceof AcpSessionConfigOptionError) throw error;
+        sessionId = undefined;
+      }
     }
-  }
-  if (!sessionId) {
-    sessionId = await bridge.newSession(acpCwd);
+    if (!sessionId) {
+      sessionId = await bridge.newSession(acpCwd);
+    }
+  } catch (error) {
+    if (ownsBridge && bridge) {
+      try {
+        await bridge.close();
+      } catch {
+        // Keep the session initialization error as the primary failure.
+      }
+    }
+    throw error;
   }
 
   return {

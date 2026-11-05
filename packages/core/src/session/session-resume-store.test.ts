@@ -168,11 +168,14 @@ describe('SessionResumeStore', () => {
           acpSessionId: 'sess-1',
           acpCwd: '/repo/worktree',
           acpSpawn: {
-            preset: 'claude',
-            command: 'claude-agent-acp',
+            preset: 'codex',
+            command: 'codex-acp',
             args: [],
             modelTag: 'high',
             model: 'provider/opus',
+            reasoning: 'high',
+            modelProviderDigest: 'b'.repeat(64),
+            envDigest: 'a'.repeat(64),
           },
         },
       },
@@ -182,11 +185,52 @@ describe('SessionResumeStore', () => {
     const loaded = await loadSessionResumeStore(path);
 
     expect(loaded?.workers.implementer?.acpSpawn).toEqual({
-      preset: 'claude',
-      command: 'claude-agent-acp',
+      preset: 'codex',
+      command: 'codex-acp',
       args: [],
       modelTag: 'high',
       model: 'provider/opus',
+      reasoning: 'high',
+      modelProviderDigest: 'b'.repeat(64),
+      envDigest: 'a'.repeat(64),
+    });
+  });
+
+  it('loads an older worker fingerprint without reasoning or provider digest fields', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-legacy-reasoning-');
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-legacy-reasoning',
+    });
+    const resumeStore = baseResumeStore({
+      conductorAgentId: 'agent-legacy-reasoning',
+      repoRoot: tempDir,
+      workers: {
+        implementer: {
+          acpSessionId: 'sess-legacy-reasoning',
+          acpCwd: '/repo/worktree',
+          acpSpawn: {
+            preset: 'codex',
+            command: 'codex-acp',
+            args: [],
+            modelTag: 'high',
+            model: 'provider/opus',
+            envDigest: 'a'.repeat(64),
+          },
+        },
+      },
+    });
+
+    await saveSessionResumeStore(path, resumeStore);
+    const loaded = await loadSessionResumeStore(path);
+
+    expect(loaded?.workers.implementer?.acpSpawn).toEqual({
+      preset: 'codex',
+      command: 'codex-acp',
+      args: [],
+      modelTag: 'high',
+      model: 'provider/opus',
+      envDigest: 'a'.repeat(64),
     });
   });
 

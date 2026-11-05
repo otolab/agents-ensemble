@@ -1,4 +1,9 @@
-import { AcpClient, type AcpClientOptions, type SessionUpdateHandler } from './acp-client.js';
+import {
+  AcpClient,
+  AcpSessionConfigOptionError,
+  type AcpClientOptions,
+  type SessionUpdateHandler,
+} from './acp-client.js';
 import { spawnAcpProcess, type SpawnAcpProcessOptions } from './acp-process.js';
 import type { PermissionHandler, PromptResult } from './types.js';
 
@@ -101,7 +106,8 @@ export class AcpBridge {
         } else {
           await this.loadSession(sessionId, options.cwd);
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof AcpSessionConfigOptionError) throw error;
         sessionId = undefined;
       }
     }

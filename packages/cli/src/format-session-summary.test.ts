@@ -101,6 +101,7 @@ describe('formatIssueSessionSummaryJson', () => {
                 modelTag: 'high',
                 acpPreset: 'codex',
                 model: 'gpt-6.1-terra',
+                reasoning: 'high',
               },
             ],
           },
@@ -119,6 +120,7 @@ describe('formatIssueSessionSummaryJson', () => {
         modelTag: 'high',
         acpPreset: 'codex',
         model: 'gpt-6.1-terra',
+        reasoning: 'high',
       }],
     });
   });
@@ -283,7 +285,7 @@ describe('formatIssueSessionSummaryText', () => {
         workers: [
           {
             name: 'worker-1', kind: 'implementer', modelTag: 'high',
-            acpPreset: 'codex', model: 'worker-model',
+            acpPreset: 'codex', model: 'worker-model', reasoning: 'high',
           },
           { name: 'reviewer', kind: 'reviewer', modelTag: 'default', acpPreset: 'custom' },
         ],
@@ -291,7 +293,7 @@ describe('formatIssueSessionSummaryText', () => {
     }));
 
     expect(text).toContain('conductor (pi): 設定 default · 報告 used-model');
-    expect(text).toContain('worker worker-1 (implementer, codex): modelTag high · 起動設定 worker-model');
+    expect(text).toContain('worker worker-1 (implementer, codex): modelTag high · 起動設定 worker-model · 推論設定 high');
     expect(text).toContain('worker reviewer (reviewer, custom): modelTag default · モデル注入なし');
   });
 

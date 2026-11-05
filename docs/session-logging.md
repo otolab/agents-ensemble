@@ -116,11 +116,11 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 | harness 参照用 | `agentId`, `issueUrl`, `repoRoot` |
 | 終了時スナップショット | `escalations`, `openQuestions` |
 | LLM usage | `sessionUsage`（`get_session_usage` と同型。cache stats / compaction count は計測可能な場合のみ、cost は conductor の実課金データがある場合のみ `scope: conductor-only` でマージ） |
-| モデル構成 | `sessionModels`（conductor の backend・設定 model ID・最後の send が報告した model ID、各 worker の名前・kind・`modelTag`・ACP preset・起動設定に注入した model ID） |
+| モデル構成 | `sessionModels`（conductor の backend・設定 model ID・最後の send が報告した model ID、各 worker の名前・kind・`modelTag`・ACP preset・起動設定に注入した model ID / reasoning） |
 | worker 応答要約 | `workerResponses[].responsePreview`（全文は `--include-full-response-text`） |
 
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
-`sessionModels` は usage が取得できない場合も出力する。TTY の終了テキストは stderr に conductor の設定値・最終 send の報告値と、各 worker のモデル行を表示する。send の報告値は失敗時にも含まれることがあり、worker の model ID は ACP 起動設定への注入値である。いずれも実際にモデルが使用されたことを保証するものではない。
+`sessionModels` は usage が取得できない場合も出力する。TTY の終了テキストは stderr に conductor の設定値・最終 send の報告値と、各 worker のモデル・推論設定を表示する。send の報告値は失敗時にも含まれることがあり、worker の `model` / `reasoning` は preset の設定経路に渡した値である。ACP option を使う preset は attach 時に候補と設定後の値を照合するが、セッション中の変更や実際のモデル動作を保証する記録ではない。
 `durationMs` は終了 snapshot を作る時点で算出するため、その後に実行する resource teardown や worktree cleanup の時間は含みません。teardown の所要時間は `harness.teardown.durationMs` として別に記録します。
 
 resume 用の harness 状態は SessionResumeStore と open question YAML に保存します。open question の正本は YAML で、SessionResumeStore JSON の `openQuestions` / `sequence` は移行期間中の互換コピーです。operator 向け statusLine は別の session-state YAML に保存します。終了 JSON の `agentId` は参照用コピーです。

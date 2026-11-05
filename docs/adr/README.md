@@ -118,7 +118,8 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0044](0044-user-scoped-runtime-storage.md) | repo 単位のランタイム状態を user 層へ配置 | superseded → [0046](0046-migrated-session-canonical-slug-mirrors.md) |
 | [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning 指定のみ） |
 | [0046](0046-migrated-session-canonical-slug-mirrors.md) | 移行済みセッションの canonical slug mirror | accepted |
-| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | accepted |
+| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0048](0048-acp-model-injection-by-preset.md) |
+| [0048](0048-acp-model-injection-by-preset.md) | worker ACP model / reasoning の preset 別注入 | accepted |
 
 ## 追加するとき
 

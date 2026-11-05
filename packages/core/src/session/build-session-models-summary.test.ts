@@ -19,7 +19,9 @@ describe('buildSessionModelsSummary', () => {
       acp: {
         defaultPreset: 'codex' as const,
         tags: { high: 'strong' },
-        models: { strong: 'gpt-6.1-terra' },
+        models: {
+          strong: { model: 'gpt-6.1-terra', reasoning: 'high' },
+        },
       },
     };
     const workers = profileWorkersToSessionSpecs(
@@ -53,6 +55,7 @@ describe('buildSessionModelsSummary', () => {
           modelTag: 'high',
           acpPreset: 'codex',
           model: 'gpt-6.1-terra',
+          reasoning: 'high',
         },
         {
           name: 'reviewer',

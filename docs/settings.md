@@ -83,7 +83,7 @@ acp:
     default: standard
 ```
 
-`reasoning` は `codex` で `CODEX_CONFIG.model_reasoning_effort` に渡します。`cursor` / `claude` では選択されたエントリに指定があればエラーとなり、`pi` / `custom` は model 注入自体に対応しません。マージの詳細と省略時の扱いは [config.md § ACP model tag と model catalog](config.md#acp-model-tag-と-model-catalog) を参照してください。
+`model` / `reasoning` の渡し方は preset ごとに異なります。`cursor` は CLI model ID と `effort`、`claude` は Claude settings metadata と `model` / `effort`、`codex` は `CODEX_CONFIG`、`pi` は ACP の `model` / `thought_level` option を使います。Cursor の Fast / non-Fast は model ID 側の選択で、`reasoning` とは別です。`custom` には汎用の model 注入経路がないため、tag が catalog に解決された場合は spawn 前にエラーになります。harness は ACP が広告する候補と設定後の現在値を確認し、指定値が適用されたことを確かめてから prompt を送ります。マージ・resume の詳細と省略時の扱いは [config.md § ACP model tag と model catalog](config.md#acp-model-tag-と-model-catalog) を参照してください。
 
 ### パターン D — 実行時入力（env / CLI）
 

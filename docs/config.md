@@ -63,7 +63,7 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 #### resume と config 変更
 
-起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model`、`acp.env`、model catalog の `reasoning` を含む変更や tag mapping の変更も対象です。worker の ACP spawn fingerprint には worker ごとの `modelTag` と解決済み model ID（credential ではない値）を記録し、env map は digest のみを保持します。Codex の `reasoning` は `CODEX_CONFIG` に含まれるため、この env digest でも照合します。
+起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model`、`acp.env`、model catalog の `model` / `reasoning` や tag mapping の変更も対象です。worker の ACP spawn fingerprint には worker ごとの `modelTag`、解決済み model ID、reasoning を記録し、env map は digest のみを保持します。Codex は `CODEX_CONFIG` の env digest に加え、継承値を含む実効 `MODEL_PROVIDER` も専用 digest で照合します。旧 fingerprint に新しい任意フィールドがない場合は、従来どおりその項目を比較しません。
 
 旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。SessionResumeStore には config 全体や env map の平文、config ファイルのパスは保存しません。解決済み model ID は worker fingerprint に限って保存します。
 
@@ -106,7 +106,7 @@ acp:
   models:                             # 環境固有の model catalog
     opus:
       model: YOUR_OPUS_MODEL_ID
-      reasoning: high                 # 任意。codex preset のみ対応
+      reasoning: high                 # 任意。対応する ACP preset に渡す
     sonnet: YOUR_SONNET_MODEL_ID
     haiku: YOUR_HAIKU_MODEL_ID
   tags:                               # profile の modelTag → models key
@@ -205,16 +205,25 @@ config の `tags` に選択した tag がなければ ACP preset の既定 model
 
 worker 名・kind ごとの model 表は設けません。profile へ書ける model 関連の値は固定語彙の `modelTag` のみで、preset・spawn env・model ID は引き続き config 側が正本です。
 
-model ID と reasoning は preset ごとの方法で渡します。
+model ID と reasoning は preset ごとの公式または実証済み経路で渡します。
 
 | preset | model の渡し方 | catalog の `reasoning` |
 |--------|----------------|------------------------|
-| `cursor` | `agent --model <model-id> acp` | 未対応。選択されたエントリに指定があれば起動前にエラー |
-| `claude` | ACP `session/new` / `session/load` の Claude settings metadata | 未対応。選択されたエントリに指定があれば起動前にエラー |
+| `cursor` | `agent --model <model-id> acp` と initialize の `clientCapabilities._meta.parameterizedModelPicker: true` | ACP config option `effort` |
+| `claude` | session metadata の Claude settings に加え、`model` config option を session 作成・load 後に設定 | ACP config option `effort` |
 | `codex` | `CODEX_CONFIG` JSON の `model` | 同じ JSON の `model_reasoning_effort` に指定値を設定 |
-| `pi` / `custom` | model 注入非対応。tag が model ID に解決された場合は起動前にエラー | model 注入と同様に非対応 |
+| `pi` | ACP config option `model`。値は `provider/model-id` 形式 | ACP config option `thought_level` |
+| `custom` | 汎用の注入契約なし。tag が model ID に解決された場合は spawn 前にエラー | model 注入と同様に非対応 |
 
-tag mapping がない場合は従来どおり各 preset の native default に委ねるため、段階的に tag を割り当てられます。`codex` の model mapping では、既存の `CODEX_CONFIG` があれば JSON object 文字列である必要があります。`acp.env` の値は親プロセスの同名環境変数より優先されます。harness は `model` と、指定された場合だけ `model_reasoning_effort` を上書きし、他の JSON キーを保持します。catalog に `reasoning` がない場合、既存の `CODEX_CONFIG` にある値も保持し、そこにもなければ Codex の既定に委ねます。
+`cursor` の model ID は Cursor CLI が受け付ける ID、`claude` と `pi` の model ID は各 ACP session config option が広告する値を指定します。Pi ACP adapter は `provider/model-id` を広告し、model と thinking level を session 単位で設定します（[`pi-acp` 0.0.33](https://github.com/svkozak/pi-acp/blob/v0.0.33/src/acp/agent.ts)）。ただし thinking level は model が対応する範囲に限られます。Pi 0.85.1 の issue #9768 では、`set_thinking_level` が成功を返しても `get_state` が古い値を返し続ける事例が報告されています。投稿では非同期の設定更新を待たずに RPC 応答する実装が原因候補に挙がり、maintainer は model が level を clamp する可能性にも触れています。この issue は completed で閉じられていますが、harness は成功応答だけを信用せず、設定後の値が一致しない場合は最初の prompt より前に attach を失敗させます（[Pi issue #9768](https://github.com/earendil-works/pi/issues/9768)）。Claude は model metadata だけでは SDK 側の設定で値が戻る可能性があるため、session 作成・load 後にも `model` と必要な `effort` を設定します（[`claude-agent-acp` 0.70.0](https://github.com/agentclientprotocol/claude-agent-acp/blob/v0.70.0/src/acp-agent.ts)）。
+
+ACP v1 の session config option は session 作成・load 時に現在値と候補を広告し、`session/set_config_option` の応答で設定後の全 option を返します（[ACP v1 仕様](https://agentclientprotocol.com/protocol/v1/session-config-options)）。harness は広告された候補に指定値があることを確かめ、設定後の `currentValue` が要求値と一致することも確認してから最初の prompt を許可します。option がない、値が候補にない、設定応答が値の変更を確認できない場合は attach を失敗させます。resume でも同じ設定を再適用し、設定の不一致を新規 session への fallback で隠しません。
+
+Cursor CLI の `--model` で reasoning suffix が落ちる報告に対し、Cursor の担当者は後日、最新 CLI では反映されるはずだと案内しています（[Cursor forum #159748](https://forum.cursor.com/t/cursor-cli-agent-model-ignores-reasoning-thinking-level-suffix/159748)）。また、ACP の model variant が意図せず Fast に切り替わる別報告では、担当者が `clientCapabilities._meta.parameterizedModelPicker: true` と `effort` / `fast` の session config option を案内しました。報告者はこの capability を付けた直接 ACP 接続で、指定した非 Fast model と `effort=high`、`fast=false` が `session/new` に反映されることを確認しています（[Cursor forum #174835](https://forum.cursor.com/t/cursor-cli-acp-reports-grok-4-6-fast-despite-explicitly-selecting-the-listed-non-fast-model/174835)）。この repository でも `cursor` preset の model mapping がある場合は capability を送り、`reasoning` は ACP が広告した `effort` 値に設定します。Fast / non-Fast の選択は Cursor の model ID に委ねます。catalog に独立した Fast 設定はなく、`reasoning` からは切り替えません。候補がなければ fail fast します。
+
+tag mapping がない場合は従来どおり各 preset の native default に委ねるため、段階的に tag を割り当てられます。`codex` の model mapping では、既存の `CODEX_CONFIG` があれば JSON object 文字列である必要があります。`acp.env` の値は親プロセスの同名環境変数より優先されます。Codex ACP では `MODEL_PROVIDER` が `CODEX_CONFIG.model_provider` より優先され、どちらもなければ Codex の設定に委ねられます。harness は `model` と、指定された場合だけ `model_reasoning_effort` を上書きし、他の JSON キーを保持します。catalog に `reasoning` がない場合、既存の `CODEX_CONFIG` にある値も保持し、そこにもなければ Codex の既定に委ねます。`MODEL_PROVIDER` の値そのものは保存せず、resume fingerprint には hash のみを保持します。
+
+`reasoning` は空でない文字列として扱い、preset 間で共通の enum は設けません。実際に指定値が使えるかは adapter が広告する option 候補で判定します。`custom` は command 任意のため汎用経路を仮定せず、tag が model catalog に解決された場合は [model catalog の設定](#acp-model-tag-と-model-catalog) と [ADR 0048](adr/0048-acp-model-injection-by-preset.md) を示して spawn 前に失敗します。`acp.env` は引き続き custom command に渡せます。
 
 ### ACP spawn env（`acp.env`）
 

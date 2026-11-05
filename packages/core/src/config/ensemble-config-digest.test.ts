@@ -46,7 +46,7 @@ describe('computeEnsembleConfigDigest', () => {
     expect(digest).not.toContain('private-test-value');
   });
 
-  it('includes configured ACP model reasoning in the resume digest', () => {
+  it('includes configured ACP model and reasoning in the resume digest', () => {
     const config: EnsembleConfig = {
       ...DEFAULT_ENSEMBLE_CONFIG,
       acp: {
@@ -55,14 +55,26 @@ describe('computeEnsembleConfigDigest', () => {
         tags: { default: 'standard' },
       },
     };
-    const changed: EnsembleConfig = {
+    const changedReasoning: EnsembleConfig = {
       ...config,
       acp: {
         ...config.acp,
         models: { standard: { model: 'gateway/model', reasoning: 'high' } },
       },
     };
+    const changedModel: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        models: { standard: { model: 'gateway/other-model', reasoning: 'low' } },
+      },
+    };
 
-    expect(computeEnsembleConfigDigest(config)).not.toBe(computeEnsembleConfigDigest(changed));
+    expect(computeEnsembleConfigDigest(config)).not.toBe(
+      computeEnsembleConfigDigest(changedReasoning),
+    );
+    expect(computeEnsembleConfigDigest(config)).not.toBe(
+      computeEnsembleConfigDigest(changedModel),
+    );
   });
 });
