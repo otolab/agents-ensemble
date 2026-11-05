@@ -127,12 +127,18 @@ describe('Pi conductor authentication', () => {
     ).resolves.toBe('user-key');
   });
 
-  it('delegates OAuth login to the Pi runtime callbacks', async () => {
+  it('provides a persistent device ID to Pi OAuth login', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
     const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
+    const deviceIds: string[] = [];
     const login = vi
       .spyOn(ModelRuntime.prototype, 'login')
-      .mockResolvedValue(undefined);
+      .mockImplementation(async (_provider, _method, _interaction, loginOptions) => {
+        if (!loginOptions?.getDeviceId) {
+          throw new Error('OAuth login did not receive getDeviceId');
+        }
+        deviceIds.push(await loginOptions.getDeviceId());
+      });
     const callbacks = {
       onAuth: vi.fn(),
       onDeviceCode: vi.fn(),
@@ -140,23 +146,36 @@ describe('Pi conductor authentication', () => {
       onSelect: vi.fn().mockResolvedValue('option'),
     };
 
-    await expect(
-      loginPiConductor({
-        cwd,
-        pi: { agentDir },
-        provider: 'anthropic',
-        oauthCallbacks: callbacks,
-      }),
-    ).resolves.toMatchObject({
-      backend: 'pi',
-      provider: 'anthropic',
-      method: 'oauth',
-    });
+    const options = {
+      cwd,
+      pi: { agentDir },
+      provider: 'openai',
+      oauthCallbacks: callbacks,
+    };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(loginPiConductor(options)).resolves.toMatchObject({
+        backend: 'pi',
+        provider: 'openai',
+        method: 'oauth',
+      });
+    }
+
+    expect(login).toHaveBeenCalledTimes(2);
     expect(login).toHaveBeenCalledWith(
-      'anthropic',
+      'openai',
       'oauth',
       expect.objectContaining({ prompt: expect.any(Function), notify: expect.any(Function) }),
+      expect.objectContaining({ getDeviceId: expect.any(Function) }),
     );
+    expect(deviceIds).toHaveLength(2);
+    expect(deviceIds[0]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(deviceIds[1]).toBe(deviceIds[0]);
+    const settings = JSON.parse(
+      await readFile(join(agentDir, 'settings.json'), 'utf8'),
+    ) as { deviceId?: string };
+    expect(settings.deviceId).toBe(deviceIds[0]);
   });
 
   it('asks the Pi runtime for the key at request time so OAuth refresh can take effect', async () => {
