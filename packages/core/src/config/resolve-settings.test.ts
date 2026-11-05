@@ -3,6 +3,7 @@ import { ENSEMBLE_DEFAULT_ACP_CLI_ENV } from '../acp/resolve-acp-spawn.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
 import {
   CONDUCTOR_MODEL_ID_ENV,
+  CONDUCTOR_REASONING_ENV,
   CONDUCTOR_VERBOSE_ENV,
   ENSEMBLE_DEFAULT_PROFILE_ENV,
   FORCE_HYPERLINK_ENV,
@@ -10,6 +11,7 @@ import {
   resolveConductorBackendSetting,
   resolveConductorPiResourcePaths,
   resolveConductorModelSetting,
+  resolveConductorReasoningSetting,
   resolveConductorVerboseSetting,
   resolveDefaultAcpPresetSetting,
   resolveForceHyperlinkSetting,
@@ -194,6 +196,47 @@ describe('resolveConductorModelSetting', () => {
     process.env[CONDUCTOR_MODEL_ID_ENV] = 'auto';
     expect(resolveConductorModelSetting({ env: process.env })).toBe('default');
     delete process.env[CONDUCTOR_MODEL_ID_ENV];
+  });
+});
+
+describe('resolveConductorReasoningSetting', () => {
+  const config: EnsembleConfig = {
+    ...projectConfig,
+    conductor: { ...projectConfig.conductor, reasoning: 'config-level' },
+  };
+
+  it('follows CLI > env > config without adding a default', () => {
+    expect(
+      resolveConductorReasoningSetting({
+        cliReasoning: 'cli-level',
+        env: { [CONDUCTOR_REASONING_ENV]: 'env-level' },
+        config,
+      }),
+    ).toBe('cli-level');
+    expect(
+      resolveConductorReasoningSetting({
+        env: { [CONDUCTOR_REASONING_ENV]: 'env-level' },
+        config,
+      }),
+    ).toBe('env-level');
+    expect(resolveConductorReasoningSetting({ config })).toBe('config-level');
+    expect(resolveConductorReasoningSetting({ config: projectConfig })).toBeUndefined();
+  });
+
+  it('treats blank CLI and environment values as unset, like conductor.model', () => {
+    expect(
+      resolveConductorReasoningSetting({
+        cliReasoning: '  ',
+        env: { [CONDUCTOR_REASONING_ENV]: ' env-level ' },
+        config,
+      }),
+    ).toBe('env-level');
+    expect(
+      resolveConductorReasoningSetting({
+        env: { [CONDUCTOR_REASONING_ENV]: '  ' },
+        config,
+      }),
+    ).toBe('config-level');
   });
 });
 

@@ -687,6 +687,42 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
   });
 
+  it('passes the resolved conductor reasoning to the backend and session summary', async () => {
+    vi.stubEnv('CONDUCTOR_REASONING', 'env-level');
+    mockSend.mockResolvedValue({
+      runId: 'run-reasoning',
+      status: 'finished',
+      result: 'started',
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'pi',
+          reasoning: 'config-level',
+        },
+      },
+      reasoning: 'cli-level',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: 'cli-level' }),
+    );
+    expect(result.sessionModels.conductor).toEqual({
+      backend: 'pi',
+      configuredModelId: 'default',
+      configuredReasoning: 'cli-level',
+    });
+  });
+
   it.each([false, true])(
     'returns resolved worker and conductor models with lazyWorkers=%s',
     async (lazyWorkers) => {

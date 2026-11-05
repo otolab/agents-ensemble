@@ -65,4 +65,22 @@ describe('computeEnsembleConfigDigest', () => {
 
     expect(computeEnsembleConfigDigest(config)).not.toBe(computeEnsembleConfigDigest(changed));
   });
+
+  it('includes conductor reasoning in the resume digest', () => {
+    const config: EnsembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        reasoning: 'low',
+      },
+    };
+    const changed: EnsembleConfig = {
+      ...config,
+      conductor: { ...config.conductor, reasoning: 'high' },
+    };
+
+    expect(computeEnsembleConfigDigest(config)).not.toBe(
+      computeEnsembleConfigDigest(changed),
+    );
+  });
 });

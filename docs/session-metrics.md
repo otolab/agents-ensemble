@@ -104,10 +104,12 @@
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
 | `sessionModels` | `SessionModelsSummary` | 終了時 `buildSessionModelsSummary` | 終了 JSON・TTY テキスト | なし（常に設定） |
-| `sessionModels.conductor` | `{ backend, configuredModelId, lastUsedModelId? }` | config / CLI / 最後の conductor send | 同上 | — |
+| `sessionModels.conductor` | `{ backend, configuredModelId, configuredReasoning?, lastUsedModelId? }` | config / CLI / env / 最後の conductor send | 同上 | reasoning 未指定時は省略 |
 | `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
 
 `configuredModelId` は CLI・環境変数・ensemble config の優先順で解決した設定値で、Pi の `settings.json` にある既定モデルは含まれない。CLI はこの解決値を `modelId` として conductor に渡す。
+
+`configuredReasoning` は `--reasoning` > `CONDUCTOR_REASONING` > merged config で解決した指定値です。未指定なら省略します。これは SDK / provider が最終的に適用した値の報告ではありません。Pi は選択 model が対応する値か確認し、Cursor は利用者の model catalog から parameter を解決してから conductor を起動します。
 
 直接 API で `runConductorSession` を呼び、`modelId` と `CONDUCTOR_MODEL_ID` を指定せず `ensembleConfig.conductor.model` だけを設定した場合、`configuredModelId` には config の値が入るが、conductor factory には `modelId: undefined` が渡る。Cursor は既定値、Pi は Pi の設定からモデルを選ぶため、サマリの設定値と factory が選択するモデルは一致するとは限らない。
 
@@ -127,7 +129,7 @@ worker は未 attach の lazy worker も含め、セッションに登録され�
   conductor ターン: 3
   worker ラウンド: 3 完了 / 0 失敗
   モデル:
-    conductor (pi): 設定 default · 報告 fixture-model
+    conductor (pi): 設定 default · reasoning high · 報告 fixture-model
     worker implementer (implementer, codex): modelTag high · 起動設定 gpt-6.1-terra
     worker reviewer (reviewer, codex): modelTag default · モデル注入なし
   usage（記録済み）:

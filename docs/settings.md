@@ -31,7 +31,9 @@ config は default → 選択された user config → project config（読み�
 CLI > 環境変数 > project config（読み込み有効時） > 選択された user config > コード default
 ```
 
-`profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
+`profile.default` / `conductor.model` / `conductor.reasoning` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
+
+`conductor.reasoning` は `--reasoning` > `CONDUCTOR_REASONING` > merged config の順で解決します。どの層にも値がなければ値を渡さず、Pi / Cursor の backend 既定に任せます。Pi は選択 model が対応する native thinking level を検証し、Cursor は SDK model catalog から対応 parameter を一意に特定できる場合に適用します。値・未対応時の扱いは [config.md § Conductor reasoning](config.md#conductor-reasoning) を参照してください。
 
 `ensemble issue` と `ensemble operator-agent` は `--config <path>` を受け付けます。指定したファイルが user config 層を置き換え、標準 user config は読み込みません。project config の読み込みは独立して `config.loadProjectConfig` で制御し、同一キーでは project config が優先されます。明示ファイルに toggle がなければ default の `true` が使われます。team profile の `--profile` とは別系統です。
 
@@ -112,6 +114,7 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 |------|-------------|----------|-----|----------------|------|
 | 既定 team profile | `profile.default` | `ENSEMBLE_DEFAULT_PROFILE` | `--profile` | 同梱 `implementer-and-reviewer-v2` | A |
 | conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | `--model` | `default` | A |
+| conductor reasoning | `conductor.reasoning` | `CONDUCTOR_REASONING` | `--reasoning` | backend 既定（明示値なし） | A |
 | conductor 詳細 telemetry | `conductor.verbose` | `CONDUCTOR_VERBOSE` | `--verbose` | `false` | A |
 | conductor backend | `conductor.backend` | — | — | `cursor` | profile > config > default |
 | Pi user resource root | `conductor.pi.agentDir` | — | — | `~/.ensemble/pi` | config |
@@ -204,7 +207,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | `TERM` / `TERM_PROGRAM` / `CI` 等 | TTY / CI の実行環境を検出する値 |
 | `CURSOR_RIPGREP_PATH` | SDK 起動時に利用する内部ツールの明示指定 |
 
-`profile.default`、`conductor.model`、`conductor.backend`、`acp.defaultPreset`、`session.*`、`github.monitor.*`、`tui.*` のように config キーがある設定は、上の env-only 表ではなく本書の設定一覧と [config.md](config.md) に記載しています。env は invocation 単位の上書きとして残る場合があります。
+`profile.default`、`conductor.model`、`conductor.reasoning`、`conductor.backend`、`acp.defaultPreset`、`session.*`、`github.monitor.*`、`tui.*` のように config キーがある設定は、上の env-only 表ではなく本書の設定一覧と [config.md](config.md) に記載しています。env は invocation 単位の上書きとして残る場合があります。
 
 ## 既知のギャップ
 

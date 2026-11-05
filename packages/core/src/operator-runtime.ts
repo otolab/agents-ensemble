@@ -15,6 +15,10 @@ export {
 } from './config/resolve-settings.js';
 export type { ConductorBackend } from './config/types.js';
 export { resolveConductorModelId } from './conductor/resolve-conductor-model-id.js';
+export {
+  CONDUCTOR_REASONING_ENV,
+  resolveConductorReasoning,
+} from './conductor/resolve-conductor-reasoning.js';
 export { createConductorAgentFactory } from './conductor/conductor-agent-factory.js';
 export {
   CONDUCTOR_PROVIDER_HISTORY_LIMIT,

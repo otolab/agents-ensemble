@@ -883,12 +883,18 @@ describe('executeIssueCommand maxTurns wiring', () => {
 
 describe('executeIssueCommand conductor model wiring', () => {
   const originalConductorModelId = process.env.CONDUCTOR_MODEL_ID;
+  const originalConductorReasoning = process.env.CONDUCTOR_REASONING;
 
   afterEach(() => {
     if (originalConductorModelId === undefined) {
       delete process.env.CONDUCTOR_MODEL_ID;
     } else {
       process.env.CONDUCTOR_MODEL_ID = originalConductorModelId;
+    }
+    if (originalConductorReasoning === undefined) {
+      delete process.env.CONDUCTOR_REASONING;
+    } else {
+      process.env.CONDUCTOR_REASONING = originalConductorReasoning;
     }
   });
 
@@ -939,6 +945,56 @@ describe('executeIssueCommand conductor model wiring', () => {
 
     expect(runIssueSession).toHaveBeenCalledWith(
       expect.objectContaining({ modelId: 'cli-model' }),
+    );
+  });
+
+  it('passes CONDUCTOR_REASONING to runIssueSession when --reasoning is omitted', async () => {
+    process.env.CONDUCTOR_REASONING = 'env-level';
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand(issueUrl, baseOptions, {
+      isOperatorInputInteractive: () => false,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: 'env-level' }),
+    );
+  });
+
+  it('prefers CLI --reasoning over CONDUCTOR_REASONING', async () => {
+    process.env.CONDUCTOR_REASONING = 'env-level';
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand(
+      issueUrl,
+      { ...baseOptions, reasoning: 'cli-level' },
+      {
+        isOperatorInputInteractive: () => false,
+        runIssueSession,
+        loadProfile,
+        SessionLogger,
+      },
+    );
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: 'cli-level' }),
     );
   });
 });

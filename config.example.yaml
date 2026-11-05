@@ -21,6 +21,9 @@ conductor:
   backend: pi
   # conductor モデル id（CLI --model / CONDUCTOR_MODEL_ID より優先度低）
   model: default
+  # reasoning は任意。指定値は選択した backend / model が検証します。
+  # CLI --reasoning / CONDUCTOR_REASONING で上書きできます。
+  # reasoning: high
   # harness の詳細 telemetry（CLI --verbose / CONDUCTOR_VERBOSE より優先度低）
   verbose: false
   # Pi backend の resource root（任意。パスだけを上書きする）
@@ -36,8 +39,9 @@ conductor:
     # fallback・resource path・compaction.*・branchSummary.*）だけが有効です。
     # compaction / branchSummary は user → project の deep merge で適用します。
     # sessionDir は無視され、transcript は harness の
-    # <repoRoot>/.ensemble/pi/sessions/ が正本です。thinking / packages /
-    # TUI 等の Pi coding-agent 設定は警告なしで無視します。
+    # <repoRoot>/.ensemble/pi/sessions/ が正本です。settings.json の
+    # defaultThinkingLevel は無視され、thinking は conductor.reasoning で指定します。
+    # packages / TUI 等の Pi coding-agent 設定は警告なしで無視します。
     # Pi 標準の <repoRoot>/.pi/settings.json は headless conductor では読みません。
     # reload は起動時スナップショットを再適用し、設定変更の反映は resume/create で行います。
     # reload または snapshot 復元に失敗した session は close/dispose され unusable になります。

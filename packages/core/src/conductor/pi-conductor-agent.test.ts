@@ -192,6 +192,7 @@ describe('PiConductorAgent', () => {
       provider: 'anthropic',
       id: 'model-1',
     });
+    expect(sessionOptions).not.toHaveProperty('thinkingLevel');
     expect(sessionOptions).not.toHaveProperty('noTools');
     expect(sessionOptions.customTools).toEqual([
       expect.objectContaining({ name: 'prompt_worker' }),
@@ -835,8 +836,138 @@ describe('PiConductorAgent', () => {
     await expect(conductorPromise).rejects.toThrow(/SSE.*Pi 1\.0.*stdio.*HTTP/i);
   });
 
+  it('passes an explicitly supported reasoning level to the Pi session', async () => {
+    mockGetModel.mockReturnValue({
+      id: 'model-1',
+      name: 'Model 1',
+      provider: 'anthropic',
+      api: 'anthropic-messages',
+      baseUrl: 'https://example.invalid',
+      reasoning: true,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      reasoning: 'high',
+      systemPrompt: 'system',
+    });
+
+    expect(mockCreateAgentSession.mock.calls[0]![0].thinkingLevel).toBe('high');
+    await conductor.close();
+  });
+
+  it('allows extended Pi levels only when the model maps them', async () => {
+    mockGetModel.mockReturnValue({
+      id: 'model-1',
+      name: 'Model 1',
+      provider: 'anthropic',
+      api: 'anthropic-messages',
+      baseUrl: 'https://example.invalid',
+      reasoning: true,
+      thinkingLevelMap: { max: 'high' },
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      reasoning: 'max',
+      systemPrompt: 'system',
+    });
+
+    expect(mockCreateAgentSession.mock.calls[0]![0].thinkingLevel).toBe('max');
+    await conductor.close();
+  });
+
+  it('rejects an unknown Pi reasoning value before creating the transcript session', async () => {
+    await expect(
+      PiConductorAgent.create({
+        cwd,
+        pi: { agentDir },
+        modelId: 'anthropic/model-1',
+        reasoning: 'ultra',
+        systemPrompt: 'system',
+      }),
+    ).rejects.toThrow(/Pi conductor reasoning "ultra" is invalid/);
+
+    expect(mockSessionManagerCreate).not.toHaveBeenCalled();
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects a Pi reasoning value the selected model cannot represent', async () => {
+    await expect(
+      PiConductorAgent.create({
+        cwd,
+        pi: { agentDir },
+        modelId: 'anthropic/model-1',
+        reasoning: 'high',
+        systemPrompt: 'system',
+      }),
+    ).rejects.toThrow(/does not support reasoning level "high".*Supported levels: off/);
+
+    expect(mockSessionManagerCreate).not.toHaveBeenCalled();
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { api: 'google-generative-ai', provider: 'google' },
+    { api: 'google-vertex', provider: 'google-vertex' },
+  ])(
+    'rejects explicit reasoning for Gemini 4 on $api before creating a transcript session',
+    async ({ api, provider }) => {
+      mockGetModel.mockReturnValue({
+        id: 'gemini-4-argon',
+        name: 'Gemini 4 Argon',
+        provider,
+        api,
+        baseUrl: 'https://example.invalid',
+        reasoning: true,
+        thinkingLevelMap: { high: 'high' },
+        input: ['text'],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+      });
+
+      await expect(
+        PiConductorAgent.create({
+          cwd,
+          pi: { agentDir },
+          modelId: `${provider}/gemini-4-argon`,
+          reasoning: 'high',
+          systemPrompt: 'system',
+        }),
+      ).rejects.toThrow(/cannot be applied to Google Gemini 4 model.*Pi 1\.2\.0/);
+
+      expect(mockSessionManagerCreate).not.toHaveBeenCalled();
+      expect(mockCreateAgentSession).not.toHaveBeenCalled();
+    },
+  );
+
   it('resumes through SessionManager with the same conductor id and refreshes the prompt path', async () => {
     mockSessionManagerFindById.mockReturnValue('/tmp/pi-session.jsonl');
+    mockGetModel.mockReturnValue({
+      id: 'model-1',
+      name: 'Model 1',
+      provider: 'anthropic',
+      api: 'anthropic-messages',
+      baseUrl: 'https://example.invalid',
+      reasoning: true,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
     const projectDir = join(cwd, '.ensemble', 'pi');
     const sessionDir = resolveEnsemblePaths({ repoRoot: cwd }).piSessionsDir;
     await mkdir(projectDir, { recursive: true });
@@ -851,6 +982,7 @@ describe('PiConductorAgent', () => {
       cwd,
       pi: { agentDir, projectDir },
       modelId: 'anthropic/model-1',
+      reasoning: 'medium',
       systemPrompt: 'recompiled system prompt',
     });
 
@@ -869,6 +1001,7 @@ describe('PiConductorAgent', () => {
       reason: 'resume',
       previousSessionFile: '/tmp/pi-session.jsonl',
     });
+    expect(mockCreateAgentSession.mock.calls[0]![0].thinkingLevel).toBe('medium');
     const settingsManager = mockCreateAgentSession.mock.calls[0]![0].settingsManager;
     expect(settingsManager.getCompactionSettings({
       provider: 'anthropic',

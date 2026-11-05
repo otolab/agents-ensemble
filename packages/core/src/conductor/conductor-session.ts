@@ -78,6 +78,7 @@ import type {
 import type { ConductorSendResult } from './conductor-agent.js';
 import { ConductorToolRegistry } from './conductor-tool.js';
 import { createConductorAgentFactory } from './conductor-agent-factory.js';
+import { resolveConductorReasoning } from './resolve-conductor-reasoning.js';
 import {
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
@@ -211,6 +212,8 @@ export interface RunConductorSessionOptions {
   conductorAgentFactory?: ConductorAgentFactory;
   apiKey?: string;
   modelId?: string;
+  /** CLI / caller override. Environment and merged config are resolved when omitted. */
+  reasoning?: string;
   maxTurns?: number;
   permissionPolicy?: PermissionPolicyRules;
   permissionPipeline?: PermissionPipeline;
@@ -328,6 +331,9 @@ export async function runConductorSession(
   const ensembleConfig =
     options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
   const ensembleConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
+  const conductorReasoning = resolveConductorReasoning(options.reasoning, {
+    config: ensembleConfig,
+  });
   const conductorBackend = resolveConductorBackendSetting({
     profile: options.profile,
     config: ensembleConfig,
@@ -1133,6 +1139,9 @@ export async function runConductorSession(
       : {}),
     apiKey: options.apiKey,
     modelId: options.modelId,
+    ...(conductorReasoning !== undefined
+      ? { reasoning: conductorReasoning }
+      : {}),
     ...(conductorBackend === 'pi'
       ? {
           pi: resolveConductorPiResourcePaths({
@@ -2095,6 +2104,7 @@ export async function runConductorSession(
         sessionModels: buildSessionModelsSummary({
           backend: conductorBackend,
           explicitConductorModelId: options.modelId,
+          explicitConductorReasoning: conductorReasoning,
           config: ensembleConfig,
           workers,
           usageTracker: sessionUsageTracker,

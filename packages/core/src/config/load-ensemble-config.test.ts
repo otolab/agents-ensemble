@@ -117,6 +117,15 @@ describe('parseEnsembleConfig', () => {
     },
   );
 
+  it.each([null, '', '  ', 42, false, {}])(
+    'rejects invalid configured conductor reasoning %s instead of silently dropping it',
+    (reasoning) => {
+      expect(() =>
+        parseEnsembleConfig({ conductor: { reasoning } }),
+      ).toThrow(/conductor\.reasoning must be a non-empty string/);
+    },
+  );
+
   it('rejects an invalid model ID inside a structured entry', () => {
     expect(() =>
       parseEnsembleConfig({ acp: { models: { high: { model: '', reasoning: 'high' } } } }),
@@ -129,6 +138,7 @@ describe('parseEnsembleConfig', () => {
         profile: { default: 'my-team' },
         conductor: {
           model: 'composer-2.5',
+          reasoning: ' high ',
           backend: 'pi',
           verbose: true,
           pi: { agentDir: '~/.ensemble/pi', projectDir: '.ensemble/pi' },
@@ -160,6 +170,7 @@ describe('parseEnsembleConfig', () => {
       profile: { default: 'my-team' },
       conductor: {
         model: 'composer-2.5',
+        reasoning: 'high',
         backend: 'pi',
         verbose: true,
         pi: { agentDir: '~/.ensemble/pi', projectDir: '.ensemble/pi' },
@@ -371,6 +382,16 @@ describe('loadEnsembleConfig', () => {
       unchanged: 'provider/legacy',
     });
     expect(config.acp.tags).toEqual({ high: 'shared', default: 'structured' });
+  });
+
+  it('merges conductor reasoning from user config and project config', async () => {
+    await writeConfig(userEnsembleRoot, 'conductor:\n  reasoning: low\n');
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      'conductor:\n  reasoning: high\n',
+    );
+
+    expect((await loadConfig()).conductor.reasoning).toBe('high');
   });
 
   it('preserves the resume digest of an unchanged legacy shorthand config', async () => {

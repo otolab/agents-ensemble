@@ -5,12 +5,15 @@ import type {
   EnsembleConfig,
 } from '../config/types.js';
 import { resolveConductorModelId } from '../conductor/resolve-conductor-model-id.js';
+import { resolveConductorReasoning } from '../conductor/resolve-conductor-reasoning.js';
 import type { SessionWorkerSpec } from '../profile/types.js';
 import type { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 export interface SessionConductorModelSummary {
   backend: ConductorBackend;
   /** config / CLI / env から解決した conductor model id。 */
   configuredModelId: string;
+  /** CLI / env / config から解決した reasoning level。backend に適用されたことの報告ではない。 */
+  configuredReasoning?: string;
   /** 最後に conductor send で報告された model id（あれば）。 */
   lastUsedModelId?: string;
 }
@@ -32,6 +35,7 @@ export interface SessionModelsSummary {
 export function buildSessionModelsSummary(input: {
   backend: ConductorBackend;
   explicitConductorModelId?: string;
+  explicitConductorReasoning?: string;
   config?: EnsembleConfig;
   env?: NodeJS.ProcessEnv;
   workers: SessionWorkerSpec[];
@@ -40,6 +44,13 @@ export function buildSessionModelsSummary(input: {
   const lastConductorRound = input.usageTracker.getLatestRound({
     agent: 'conductor',
   });
+  const configuredReasoning = resolveConductorReasoning(
+    input.explicitConductorReasoning,
+    {
+      config: input.config,
+      env: input.env,
+    },
+  );
 
   return {
     conductor: {
@@ -48,6 +59,7 @@ export function buildSessionModelsSummary(input: {
         config: input.config,
         env: input.env,
       }),
+      ...(configuredReasoning !== undefined ? { configuredReasoning } : {}),
       ...(lastConductorRound?.modelId
         ? { lastUsedModelId: lastConductorRound.modelId }
         : {}),

@@ -83,11 +83,16 @@ function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined
     return undefined;
   }
   const model = readString(obj.model);
+  const reasoning = readString(obj.reasoning);
+  if (obj.reasoning !== undefined && reasoning === undefined) {
+    throw new Error('conductor.reasoning must be a non-empty string');
+  }
   const backend = parseConductorBackend(obj.backend);
   const verbose = readBoolean(obj.verbose);
   const pi = parseConductorPiConfig(obj.pi);
   if (
     model === undefined &&
+    reasoning === undefined &&
     backend === undefined &&
     verbose === undefined &&
     pi === undefined
@@ -96,6 +101,7 @@ function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined
   }
   return {
     ...(model !== undefined ? { model } : {}),
+    ...(reasoning !== undefined ? { reasoning } : {}),
     ...(backend !== undefined ? { backend } : {}),
     ...(verbose !== undefined ? { verbose } : {}),
     ...(pi !== undefined ? { pi } : {}),

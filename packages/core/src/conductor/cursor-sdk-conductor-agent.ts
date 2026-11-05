@@ -2,8 +2,11 @@ import {
   Agent,
   AuthenticationError,
   CursorAgentError,
+  Cursor,
   type AgentOptions,
   type McpServerConfig,
+  type ModelListItem,
+  type ModelSelection,
   type SDKAgent,
   type ToolName,
 } from '@cursor/sdk';
@@ -56,7 +59,7 @@ export class CursorSdkConductorAgent implements ConductorAgent {
     options: ConductorAgentCreateOptions,
   ): Promise<CursorSdkConductorAgent> {
     ensureCursorSdkEnv();
-    const agent = await Agent.create(buildAgentOptions(options));
+    const agent = await Agent.create(await buildAgentOptions(options));
     return new CursorSdkConductorAgent(agent);
   }
 
@@ -65,7 +68,7 @@ export class CursorSdkConductorAgent implements ConductorAgent {
     options: ConductorAgentCreateOptions,
   ): Promise<CursorSdkConductorAgent> {
     ensureCursorSdkEnv();
-    const agent = await Agent.resume(agentId, buildAgentOptions(options));
+    const agent = await Agent.resume(agentId, await buildAgentOptions(options));
     return new CursorSdkConductorAgent(agent);
   }
 
@@ -191,12 +194,29 @@ function ensureCursorSdkEnv(): void {
   ensureCursorSdkRipgrepPath();
 }
 
-function buildAgentOptions(options: ConductorAgentCreateOptions): AgentOptions {
+async function buildAgentOptions(
+  options: ConductorAgentCreateOptions,
+): Promise<AgentOptions> {
   const apiKey = resolveConductorApiKey(options.apiKey);
+  const modelId = resolveConductorModelId(options.modelId);
+  const model: ModelSelection = { id: modelId };
+  if (options.reasoning !== undefined) {
+    if (!options.reasoning.trim()) {
+      throw new Error('Cursor conductor reasoning must be a non-empty string.');
+    }
+    const models = await Cursor.models.list(
+      apiKey !== undefined ? { apiKey } : {},
+    );
+    model.params = resolveCursorReasoningParameters(
+      models,
+      modelId,
+      options.reasoning,
+    );
+  }
 
   return {
     ...(apiKey !== undefined ? { apiKey } : {}),
-    model: { id: resolveConductorModelId(options.modelId) },
+    model,
     mode: 'agent',
     ...(options.builtinTools === false
       ? { disallowedTools: CURSOR_CODING_TOOLS }
@@ -211,6 +231,103 @@ function buildAgentOptions(options: ConductorAgentCreateOptions): AgentOptions {
         : undefined,
     },
   };
+}
+
+function resolveCursorReasoningParameters(
+  models: ModelListItem[],
+  modelId: string,
+  value: string,
+): NonNullable<ModelSelection['params']> {
+  const reasoning = value.trim();
+  if (!reasoning) {
+    throw new Error('Cursor conductor reasoning must be a non-empty string.');
+  }
+
+  const exactMatches = models.filter((candidate) => candidate.id === modelId);
+  const aliasMatches =
+    exactMatches.length === 0
+      ? models.filter((candidate) => candidate.aliases?.includes(modelId))
+      : [];
+  const model =
+    exactMatches.length === 1
+      ? exactMatches[0]
+      : exactMatches.length > 1
+        ? undefined
+        : aliasMatches.length === 1
+          ? aliasMatches[0]
+          : undefined;
+  if (!model) {
+    if (exactMatches.length > 1 || aliasMatches.length > 1) {
+      throw new Error(
+        `Cursor model "${modelId}" matches multiple entries in Cursor.models.list(); ` +
+          `cannot validate conductor.reasoning "${reasoning}".`,
+      );
+    }
+    throw new Error(
+      `Cursor model "${modelId}" was not returned by Cursor.models.list(); ` +
+        `cannot validate conductor.reasoning "${reasoning}".`,
+    );
+  }
+
+  const reasoningParameters = (model.parameters ?? []).filter((parameter) =>
+    isCursorReasoningParameter(parameter.id, parameter.displayName),
+  );
+  const variantParameters =
+    reasoningParameters.length === 0
+      ? (model.variants ?? []).flatMap((variant) =>
+          variant.params
+            .filter((parameter) => isCursorReasoningParameter(parameter.id))
+            .map(({ id, value }) => ({ id, value })),
+        )
+      : [];
+  if (reasoningParameters.length === 0 && variantParameters.length === 0) {
+    throw new Error(
+      `Cursor model "${modelId}" has no identifiable reasoning parameter in Cursor.models.list(); ` +
+        `cannot apply conductor.reasoning "${reasoning}".`,
+    );
+  }
+
+  const normalizedReasoning = reasoning.toLowerCase();
+  const matches =
+    reasoningParameters.length > 0
+      ? reasoningParameters.flatMap((parameter) =>
+          parameter.values
+            .filter(
+              (option) =>
+                option.value.trim().toLowerCase() === normalizedReasoning ||
+                option.displayName?.trim().toLowerCase() === normalizedReasoning,
+            )
+            .map((option) => ({ id: parameter.id, value: option.value })),
+        )
+      : variantParameters
+          .filter(
+            (parameter) =>
+              parameter.value.trim().toLowerCase() === normalizedReasoning,
+          )
+          .map(({ id, value }) => ({ id, value }));
+  const uniqueMatches = [
+    ...new Map(matches.map((match) => [`${match.id}\0${match.value}`, match])).values(),
+  ];
+  if (uniqueMatches.length !== 1) {
+    const parameterIds = [
+      ...new Set([
+        ...reasoningParameters.map(({ id }) => id),
+        ...variantParameters.map(({ id }) => id),
+      ]),
+    ].join(', ');
+    const reason =
+      uniqueMatches.length === 0
+        ? `does not support reasoning value "${reasoning}"`
+        : `has ambiguous reasoning parameters for value "${reasoning}"`;
+    throw new Error(
+      `Cursor model "${modelId}" ${reason} (parameters: ${parameterIds}).`,
+    );
+  }
+  return uniqueMatches;
+}
+
+function isCursorReasoningParameter(id: string, displayName?: string): boolean {
+  return /reason|think|effort/i.test(`${id} ${displayName ?? ''}`);
 }
 
 function toConductorTokenUsage(usage: {

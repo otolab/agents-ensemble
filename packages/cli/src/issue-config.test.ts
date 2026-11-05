@@ -14,6 +14,7 @@ import { executeIssueCommand } from './issue-command.js';
 describe('explicit config in the issue startup path', () => {
   let repoRoot = '';
   let originalConductorModelId: string | undefined;
+  let originalConductorReasoning: string | undefined;
 
   afterEach(async () => {
     if (originalConductorModelId === undefined) {
@@ -21,14 +22,22 @@ describe('explicit config in the issue startup path', () => {
     } else {
       process.env.CONDUCTOR_MODEL_ID = originalConductorModelId;
     }
+    if (originalConductorReasoning === undefined) {
+      delete process.env.CONDUCTOR_REASONING;
+    } else {
+      process.env.CONDUCTOR_REASONING = originalConductorReasoning;
+    }
     originalConductorModelId = undefined;
+    originalConductorReasoning = undefined;
     if (repoRoot) await rm(repoRoot, { recursive: true, force: true });
     repoRoot = '';
   });
 
   it('replaces the user config with --config and keeps project config above it', async () => {
     originalConductorModelId = process.env.CONDUCTOR_MODEL_ID;
+    originalConductorReasoning = process.env.CONDUCTOR_REASONING;
     delete process.env.CONDUCTOR_MODEL_ID;
+    delete process.env.CONDUCTOR_REASONING;
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-issue-config-'));
     await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
     const userEnsembleRoot = join(repoRoot, '.test-user-ensemble');
@@ -54,6 +63,7 @@ describe('explicit config in the issue startup path', () => {
       [
         'conductor:',
         '  model: project-model',
+        '  reasoning: high',
         'acp:',
         '  env:',
         '    PROJECT_ONLY: project',
@@ -67,6 +77,7 @@ describe('explicit config in the issue startup path', () => {
       [
         'conductor:',
         '  model: litellm-model',
+        '  reasoning: low',
         'acp:',
         '  defaultPreset: codex',
         '  env:',
@@ -111,8 +122,9 @@ describe('explicit config in the issue startup path', () => {
 
     expect(sessionOptions).toMatchObject({
       modelId: 'project-model',
+      reasoning: 'high',
       ensembleConfig: {
-        conductor: { model: 'project-model' },
+        conductor: { model: 'project-model', reasoning: 'high' },
         github: { auth: { allowGhAuthTokenFallback: true } },
         acp: {
           defaultPreset: 'codex',

@@ -23,6 +23,8 @@ export interface ConductorAgentCreateOptions {
   onContextCompaction?: () => void;
   apiKey?: string;
   modelId?: string;
+  /** Resolved conductor reasoning / thinking level; each backend validates its own support. */
+  reasoning?: string;
   mcpServers?: McpServerConfigMap;
   /** Pi-only resource root overrides; ignored by other backends. */
   pi?: ConductorPiResourceOptions;

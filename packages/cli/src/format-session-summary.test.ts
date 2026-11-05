@@ -92,6 +92,7 @@ describe('formatIssueSessionSummaryJson', () => {
             conductor: {
               backend: 'pi',
               configuredModelId: 'default',
+              configuredReasoning: 'high',
               lastUsedModelId: 'gpt-6-luna',
             },
             workers: [
@@ -111,6 +112,7 @@ describe('formatIssueSessionSummaryJson', () => {
       conductor: {
         backend: 'pi',
         configuredModelId: 'default',
+        configuredReasoning: 'high',
         lastUsedModelId: 'gpt-6-luna',
       },
       workers: [{
@@ -278,7 +280,10 @@ describe('formatIssueSessionSummaryText', () => {
     const text = formatIssueSessionSummaryText(createSummary({
       sessionModels: {
         conductor: {
-          backend: 'pi', configuredModelId: 'default', lastUsedModelId: 'used-model',
+          backend: 'pi',
+          configuredModelId: 'default',
+          configuredReasoning: 'high',
+          lastUsedModelId: 'used-model',
         },
         workers: [
           {
@@ -290,7 +295,9 @@ describe('formatIssueSessionSummaryText', () => {
       },
     }));
 
-    expect(text).toContain('conductor (pi): 設定 default · 報告 used-model');
+    expect(text).toContain(
+      'conductor (pi): 設定 default · reasoning high · 報告 used-model',
+    );
     expect(text).toContain('worker worker-1 (implementer, codex): modelTag high · 起動設定 worker-model');
     expect(text).toContain('worker reviewer (reviewer, custom): modelTag default · モデル注入なし');
   });
