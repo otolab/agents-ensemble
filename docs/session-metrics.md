@@ -145,6 +145,7 @@ worker がモデル要求後に切断され、token usage が記録されない�
 
 ```text
 セッション終了 (completed)
+  経過時間: 8秒
   conductor ターン: 1
   worker ラウンド: 0 完了 / 1 失敗
   モデル:
