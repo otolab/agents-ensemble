@@ -107,7 +107,11 @@
 | `sessionModels.conductor` | `{ backend, configuredModelId, lastUsedModelId? }` | config / CLI / 最後の conductor send | 同上 | — |
 | `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
 
-`configuredModelId` は CLI・環境変数・ensemble config の優先順で解決した設定値で、Pi の `settings.json` にある既定モデルは含まれない。`lastUsedModelId` は最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
+`configuredModelId` は CLI・環境変数・ensemble config の優先順で解決した設定値で、Pi の `settings.json` にある既定モデルは含まれない。CLI はこの解決値を `modelId` として conductor に渡す。
+
+直接 API で `runConductorSession` を呼び、`modelId` と `CONDUCTOR_MODEL_ID` を指定せず `ensembleConfig.conductor.model` だけを設定した場合、`configuredModelId` には config の値が入るが、conductor factory には `modelId: undefined` が渡る。Cursor は既定値、Pi は Pi の設定からモデルを選ぶため、サマリの設定値と factory が選択するモデルは一致するとは限らない。
+
+`lastUsedModelId` は、今回の `runConductorSession` 呼び出し内で最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。resume 前の run の報告は引き継がないため、再開後に send せず終了した場合も省略する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
 
 worker は未 attach の lazy worker も含め、セッションに登録された順に出力する。`model` は `modelTag` の対応付けから解決し ACP 起動設定に注入した ID で、注入しない場合は省略する。実際に ACP が使用したモデルを確認した値ではない。TTY では注入した ID を「起動設定」、省略時は「モデル注入なし」と表示する。存在しない model key の参照や、モデル注入に未対応の preset への指定は起動前にエラーとなり、終了サマリは生成されない。
 

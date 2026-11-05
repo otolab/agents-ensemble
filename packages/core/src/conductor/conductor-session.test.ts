@@ -804,29 +804,61 @@ describe('runConductorSession resume / shutdown', () => {
     },
   );
 
-  it('returns model configuration when a resumed session exits without a send', async () => {
+  it('reports the config model even when a direct API call passes no modelId to the factory', async () => {
     stubUnusedControlServer();
-    const agentId = 'resume-without-send-models';
-    await saveSessionResumeStore(
-      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
-      {
-        version: SESSION_RESUME_STORE_VERSION,
-        conductorAgentId: agentId,
-        issueUrl: TEST_ISSUE.url,
-        repoRoot,
-        profile: { workers: [] },
-        openQuestions: [],
-        sequence: 0,
-        workers: {},
-        updatedAt: 1,
+    vi.stubEnv('CONDUCTOR_MODEL_ID', undefined);
+    mockSend.mockResolvedValue({
+      runId: 'run-config-only', status: 'finished', result: 'done',
+    });
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          model: 'configured-only-model',
+        },
       },
-    );
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockCreate).toHaveBeenCalledOnce();
+    expect(mockCreate.mock.calls[0]?.[0].modelId).toBeUndefined();
+    expect(result.sessionModels.conductor).toStrictEqual({
+      backend: 'cursor', configuredModelId: 'configured-only-model',
+    });
+  });
+
+  it('does not carry a reported model across resume when the new run has no send', async () => {
+    stubUnusedControlServer();
+    mockSend.mockResolvedValueOnce({
+      runId: 'run-before-resume',
+      status: 'finished',
+      result: 'done',
+      modelId: 'reported-before-resume',
+    });
+    const initial = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      modelId: 'configured-conductor',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+    expect(initial.sessionModels.conductor.lastUsedModelId).toBe('reported-before-resume');
+    mockSend.mockClear();
 
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
-      resumeAgentId: agentId,
+      resumeAgentId: initial.agentId,
       modelId: 'configured-conductor',
       permissionPipeline: new PermissionPipeline({}),
       registerProcessSignalHandlers: false,
@@ -835,7 +867,8 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     expect(mockSend).not.toHaveBeenCalled();
-    expect(result.sessionModels).toEqual({
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(result.sessionModels).toStrictEqual({
       conductor: { backend: 'cursor', configuredModelId: 'configured-conductor' },
       workers: [],
     });
