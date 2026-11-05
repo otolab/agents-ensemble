@@ -105,7 +105,7 @@
 |-----------|-----|--------|--------|----------|
 | `sessionModels` | `SessionModelsSummary` | 終了時 `buildSessionModelsSummary` | 終了 JSON・TTY テキスト | なし（常に設定） |
 | `sessionModels.conductor` | `{ backend, configuredModelId, lastUsedModelId? }` | config / CLI / 最後の conductor send | 同上 | — |
-| `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model?, reasoning? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
+| `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model?, reasoning?, cursorFast? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
 
 `configuredModelId` は CLI・環境変数・ensemble config の優先順で解決した設定値で、Pi の `settings.json` にある既定モデルは含まれない。CLI はこの解決値を `modelId` として conductor に渡す。
 
@@ -113,7 +113,7 @@
 
 `lastUsedModelId` は、今回の `runConductorSession` 呼び出し内で最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。resume 前の run の報告は引き継がないため、再開後に send せず終了した場合も省略する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
 
-worker は未 attach の lazy worker も含め、セッションに登録された順に出力する。`model` は `modelTag` の対応付けから解決し ACP 起動設定に注入した ID で、注入しない場合は省略する。`reasoning` は preset の設定経路に渡した値である。ACP option を使う preset では attach 時に候補と設定後の値を照合するが、いずれもセッション中の変更や実際のモデル動作を記録したものではない。TTY では `model` を「起動設定」、`reasoning` を「推論設定」と表示する。存在しない model key の参照や、モデル注入に未対応の preset への指定は起動前にエラーとなり、終了サマリは生成されない。
+worker は未 attach の lazy worker も含め、セッションに登録された順に出力する。`model` は `modelTag` の対応付けから解決し ACP 起動設定に注入した ID で、注入しない場合は省略する。`reasoning` と明示した `cursorFast` は preset の設定経路に渡した値である。ACP option を使う preset では attach 時に候補と設定後の値を照合するが、いずれもセッション中の変更や実際のモデル動作を記録したものではない。TTY では `model` を「起動設定」、`reasoning` を「推論設定」、`cursorFast` を Cursor の fast mode として表示する。存在しない model key の参照や、モデル注入に未対応の preset への指定は起動前にエラーとなり、終了サマリは生成されない。
 
 ---
 

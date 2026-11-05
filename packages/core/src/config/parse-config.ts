@@ -169,16 +169,21 @@ function parseAcpModels(
     if (!entry) continue;
     const model = readString(entry.model);
     const reasoning = readString(entry.reasoning);
+    const cursorFast = entry.cursorFast;
     if (entry.model !== undefined && !model) {
       throw new Error(`acp.models.${modelKey}.model must be a non-empty string`);
     }
     if (entry.reasoning !== undefined && !reasoning) {
       throw new Error(`acp.models.${modelKey}.reasoning must be a non-empty string`);
     }
-    if (model || reasoning) {
+    if (cursorFast !== undefined && typeof cursorFast !== 'boolean') {
+      throw new Error(`acp.models.${modelKey}.cursorFast must be a boolean`);
+    }
+    if (model || reasoning || cursorFast !== undefined) {
       models[modelKey] = {
         ...(model ? { model } : {}),
         ...(reasoning ? { reasoning } : {}),
+        ...(cursorFast !== undefined ? { cursorFast } : {}),
       };
     }
   }

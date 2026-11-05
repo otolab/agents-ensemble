@@ -1,6 +1,6 @@
 # ADR 0048: worker ACP の model / reasoning 注入を preset ごとに扱う
 
-- Status: accepted
+- Status: superseded by [0049](0049-worker-acp-cursor-fast-option.md)（Cursor の Fast / non-Fast 指定のみ）
 - Date: 2026-11-05
 - Related: [ADR 0019](0019-worker-acp-cli-presets.md), [ADR 0045](0045-worker-acp-model-tags.md), [ADR 0047](0047-worker-acp-model-reasoning.md), [Issue #630](https://github.com/otolab/agents-ensemble/issues/630)
 

@@ -67,6 +67,47 @@ describe('buildSessionModelsSummary', () => {
     });
   });
 
+  it('includes an explicit Cursor fast setting', () => {
+    const config = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        defaultPreset: 'cursor' as const,
+        tags: { high: 'selected' },
+        models: {
+          selected: {
+            model: 'cursor-grok-4.6-high',
+            reasoning: 'high',
+            cursorFast: false,
+          },
+        },
+      },
+    };
+    const workers = profileWorkersToSessionSpecs(
+      { workers: [{ name: 'worker-1', kind: 'implementer', modelTag: 'high' }] },
+      { defaultAcp: { config, env: {} } },
+    );
+
+    expect(
+      buildSessionModelsSummary({
+        backend: 'cursor',
+        config,
+        env: {},
+        workers,
+        usageTracker: new SessionUsageTracker(),
+      }).workers,
+    ).toEqual([
+      {
+        name: 'worker-1',
+        kind: 'implementer',
+        modelTag: 'high',
+        acpPreset: 'cursor',
+        model: 'cursor-grok-4.6-high',
+        reasoning: 'high',
+        cursorFast: false,
+      },
+    ]);
+  });
+
   it.each([
     { explicit: 'cli-model', env: 'env-model', expected: 'cli-model' },
     { explicit: undefined, env: 'env-model', expected: 'env-model' },

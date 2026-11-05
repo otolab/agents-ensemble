@@ -22,6 +22,8 @@ const ACP_MODEL_CATALOG_DOC_URL =
   'https://github.com/otolab/agents-ensemble/blob/main/docs/config.md#acp-model-tag-と-model-catalog';
 const ACP_MODEL_CATALOG_ADR_URL =
   'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0048-acp-model-injection-by-preset.md';
+const ACP_CURSOR_FAST_ADR_URL =
+  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0049-worker-acp-cursor-fast-option.md';
 
 /** spawn 解決結果。 */
 export interface ResolvedAcpSpawn {
@@ -34,6 +36,7 @@ export interface ResolvedAcpSpawn {
   modelTag?: AcpModelTag;
   model?: string;
   reasoning?: string;
+  cursorFast?: boolean;
   /** Hash of the effective Codex MODEL_PROVIDER, including inherited values. */
   modelProviderDigest?: string;
   /** Preset-specific session metadata, currently used by Claude ACP. */
@@ -57,6 +60,8 @@ export interface AcpSpawnFingerprint {
   model?: string;
   /** Configured reasoning effort; not a credential. */
   reasoning?: string;
+  /** Configured Cursor ACP fast option, when explicitly set. */
+  cursorFast?: boolean;
   /** Hash of the effective Codex MODEL_PROVIDER, including inherited values. */
   modelProviderDigest?: string;
 }
@@ -265,6 +270,7 @@ export function acpSpawnFingerprint(spawn: ResolvedAcpSpawn): AcpSpawnFingerprin
     ...(spawn.modelTag !== undefined ? { modelTag: spawn.modelTag } : {}),
     ...(spawn.model !== undefined ? { model: spawn.model } : {}),
     ...(spawn.reasoning !== undefined ? { reasoning: spawn.reasoning } : {}),
+    ...(spawn.cursorFast !== undefined ? { cursorFast: spawn.cursorFast } : {}),
     ...(spawn.modelProviderDigest !== undefined
       ? { modelProviderDigest: spawn.modelProviderDigest }
       : {}),
@@ -296,6 +302,7 @@ export function formatAcpSpawnFingerprint(spawn: AcpSpawnFingerprint): string {
     ...(spawn.modelTag !== undefined ? [`modelTag=${spawn.modelTag}`] : []),
     ...(spawn.model !== undefined ? [`model=${spawn.model}`] : []),
     ...(spawn.reasoning !== undefined ? [`reasoning=${spawn.reasoning}`] : []),
+    ...(spawn.cursorFast !== undefined ? [`cursorFast=${spawn.cursorFast}`] : []),
   ];
   return `${spawn.preset} (${spawn.command}${args}${details.length > 0 ? `, ${details.join(', ')}` : ''})`;
 }
@@ -318,6 +325,8 @@ export function assertAcpSpawnMatchesResume(input: {
       input.expected.model === actual.model) &&
     (input.expected.reasoning === undefined ||
       input.expected.reasoning === actual.reasoning) &&
+    (input.expected.cursorFast === undefined ||
+      input.expected.cursorFast === actual.cursorFast) &&
     (input.expected.modelProviderDigest === undefined ||
       input.expected.modelProviderDigest === actual.modelProviderDigest) &&
     (input.expected.envDigest === undefined ||
@@ -332,12 +341,16 @@ export function assertAcpSpawnMatchesResume(input: {
   const reasoningMismatch =
     input.expected.reasoning !== undefined &&
     input.expected.reasoning !== actual.reasoning;
+  const cursorFastMismatch =
+    input.expected.cursorFast !== undefined &&
+    input.expected.cursorFast !== actual.cursorFast;
   const modelProviderMismatch =
     input.expected.modelProviderDigest !== undefined &&
     input.expected.modelProviderDigest !== actual.modelProviderDigest;
   const mismatchDetails = [
     ...(envMismatch ? ['spawn environment differs'] : []),
     ...(reasoningMismatch ? ['reasoning effort differs'] : []),
+    ...(cursorFastMismatch ? ['Cursor fast mode differs'] : []),
     ...(modelProviderMismatch ? ['Codex model provider differs'] : []),
   ];
   throw new Error(
@@ -378,7 +391,16 @@ function injectAcpModel(
   definition: AcpModelDefinition,
   processEnv: NodeJS.ProcessEnv,
 ): ResolvedAcpSpawn {
-  const { model, reasoning } = definition;
+  const { model, reasoning, cursorFast } = definition;
+  if (
+    cursorFast !== undefined &&
+    spawn.preset !== 'cursor' &&
+    spawn.preset !== 'custom'
+  ) {
+    throw new Error(
+      `acp.models entry cursorFast is supported only by the "cursor" ACP preset (worker modelTag "${modelTag}"). See ${ACP_MODEL_CATALOG_DOC_URL} and ${ACP_CURSOR_FAST_ADR_URL}`,
+    );
+  }
   switch (spawn.preset) {
     case 'cursor':
       return {
@@ -390,11 +412,17 @@ function injectAcpModel(
           ...(spawn.clientCapabilitiesMeta ?? {}),
           parameterizedModelPicker: true,
         },
-        ...(reasoning !== undefined
+        ...(reasoning !== undefined ? { reasoning } : {}),
+        ...(cursorFast !== undefined ? { cursorFast } : {}),
+        ...(cursorFast !== undefined || reasoning !== undefined
           ? {
-              reasoning,
               sessionConfigOptionOverrides: [
-                { id: 'effort', value: reasoning },
+                ...(cursorFast !== undefined
+                  ? [{ id: 'fast', value: String(cursorFast) }]
+                  : []),
+                ...(reasoning !== undefined
+                  ? [{ id: 'effort', value: reasoning }]
+                  : []),
               ],
             }
           : {}),
@@ -471,7 +499,7 @@ function injectAcpModel(
       };
     case 'custom':
       throw new Error(
-        `ACP preset "custom" does not support configured model injection (worker modelTag "${modelTag}", model "${model}"). See ${ACP_MODEL_CATALOG_DOC_URL} and ${ACP_MODEL_CATALOG_ADR_URL}`,
+        `ACP preset "custom" does not support configured model injection (worker modelTag "${modelTag}", model "${model}"). See ${ACP_MODEL_CATALOG_DOC_URL} and ${ACP_MODEL_CATALOG_ADR_URL}${cursorFast !== undefined ? `, ${ACP_CURSOR_FAST_ADR_URL}` : ''}`,
       );
   }
 }

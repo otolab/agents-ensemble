@@ -70,7 +70,7 @@ CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > curs
 
 `acp.env` の正本は config（選択された user config → project の順に deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。SessionResumeStore には ACP env map の canonical digest のみを保存し、環境変数の値は記録しません。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
 
-worker の `modelTag` は `acp.tags` と `acp.models` を経由して解決します。catalog は文字列 shorthand と、reasoning を指定できる構造化形式を併用できます。
+worker の `modelTag` は `acp.tags` と `acp.models` を経由して解決します。catalog は文字列 shorthand と、`reasoning` や Cursor 専用の `cursorFast` を指定できる構造化形式を併用できます。
 
 ```yaml
 acp:
@@ -83,7 +83,7 @@ acp:
     default: standard
 ```
 
-`model` / `reasoning` の渡し方は preset ごとに異なります。`cursor` は CLI model ID と `effort`、`claude` は Claude settings metadata と `model` / `effort`、`codex` は `CODEX_CONFIG`、`pi` は ACP の `model` / `thought_level` option を使います。Cursor の Fast / non-Fast は model ID 側の選択で、`reasoning` とは別です。`custom` には汎用の model 注入経路がないため、tag が catalog に解決された場合は spawn 前にエラーになります。harness は ACP が広告する候補と設定後の現在値を確認し、指定値が適用されたことを確かめてから prompt を送ります。マージ・resume の詳細と省略時の扱いは [config.md § ACP model tag と model catalog](config.md#acp-model-tag-と-model-catalog) を参照してください。
+`model` / `reasoning` の渡し方は preset ごとに異なります。`cursor` は CLI model ID と ACP の `effort`、`claude` は Claude settings metadata と ACP の `model` / `effort`、`codex` は `CODEX_CONFIG`、`pi` は ACP の `model` / `thought_level` option を使います。Cursor の Fast / non-Fast は `cursorFast` で明示し、`reasoning` とは別に ACP の `fast` option へ渡します。省略時は Cursor の選択に委ねます。`custom` には汎用の model 注入経路がないため、tag が catalog に解決された場合は spawn 前にエラーになります。harness は ACP が広告する候補と設定後の現在値を確認し、指定値が適用されたことを確かめてから prompt を送ります。マージ・resume の詳細と省略時の扱いは [config.md § ACP model tag と model catalog](config.md#acp-model-tag-と-model-catalog) を参照してください。
 
 ### パターン D — 実行時入力（env / CLI）
 
@@ -118,7 +118,7 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 | Pi project resource root | `conductor.pi.projectDir` | — | — | `<repoRoot>/.ensemble/pi` | config |
 | worker ACP preset（全 worker 共通） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
 | worker ACP spawn env | `acp.env` | — | — | — | 選択された user config → project deep merge |
-| worker model tier / model・reasoning | `workers[].modelTag` / `acp.tags`・`acp.models` | — | — | `default` tag | profile の tag を config の catalog で解決。reasoning は preset に依存 |
+| worker model tier / model・reasoning・Cursor fast | `workers[].modelTag` / `acp.tags`・`acp.models` | — | — | `default` tag | profile の tag を config の catalog で解決。reasoning と Cursor fast は preset に依存 |
 | Issue worktree | `session.worktree` | — | `--worktree` | `isolated` | B |
 | worker ACP lazy attach | `session.lazyWorkers` | — | — | `false` | B |
 | 自律ターン上限（TTY） | `session.maxTurns.tty` | — | `--max-turns` / `--no-max-turns` | `0`（無制限） | B |

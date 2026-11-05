@@ -46,12 +46,18 @@ describe('computeEnsembleConfigDigest', () => {
     expect(digest).not.toContain('private-test-value');
   });
 
-  it('includes configured ACP model and reasoning in the resume digest', () => {
+  it('includes configured ACP model, reasoning, and Cursor fast setting in the resume digest', () => {
     const config: EnsembleConfig = {
       ...DEFAULT_ENSEMBLE_CONFIG,
       acp: {
         ...DEFAULT_ENSEMBLE_CONFIG.acp,
-        models: { standard: { model: 'gateway/model', reasoning: 'low' } },
+        models: {
+          standard: {
+            model: 'gateway/model',
+            reasoning: 'low',
+            cursorFast: false,
+          },
+        },
         tags: { default: 'standard' },
       },
     };
@@ -59,14 +65,39 @@ describe('computeEnsembleConfigDigest', () => {
       ...config,
       acp: {
         ...config.acp,
-        models: { standard: { model: 'gateway/model', reasoning: 'high' } },
+        models: {
+          standard: {
+            model: 'gateway/model',
+            reasoning: 'high',
+            cursorFast: false,
+          },
+        },
       },
     };
     const changedModel: EnsembleConfig = {
       ...config,
       acp: {
         ...config.acp,
-        models: { standard: { model: 'gateway/other-model', reasoning: 'low' } },
+        models: {
+          standard: {
+            model: 'gateway/other-model',
+            reasoning: 'low',
+            cursorFast: false,
+          },
+        },
+      },
+    };
+    const changedCursorFast: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        models: {
+          standard: {
+            model: 'gateway/model',
+            reasoning: 'low',
+            cursorFast: true,
+          },
+        },
       },
     };
 
@@ -75,6 +106,9 @@ describe('computeEnsembleConfigDigest', () => {
     );
     expect(computeEnsembleConfigDigest(config)).not.toBe(
       computeEnsembleConfigDigest(changedModel),
+    );
+    expect(computeEnsembleConfigDigest(config)).not.toBe(
+      computeEnsembleConfigDigest(changedCursorFast),
     );
   });
 });

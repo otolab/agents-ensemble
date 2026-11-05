@@ -24,6 +24,8 @@ export interface SessionWorkerModelSummary {
   model?: string;
   /** Configured reasoning effort, when the preset accepts it. */
   reasoning?: string;
+  /** Explicit Cursor ACP fast setting, when configured. */
+  cursorFast?: boolean;
 }
 
 export interface SessionModelsSummary {
@@ -64,6 +66,9 @@ export function buildSessionModelsSummary(input: {
         : {}),
       ...(worker.acpFingerprint?.reasoning
         ? { reasoning: worker.acpFingerprint.reasoning }
+        : {}),
+      ...(worker.acpFingerprint?.cursorFast !== undefined
+        ? { cursorFast: worker.acpFingerprint.cursorFast }
         : {}),
     })),
   };

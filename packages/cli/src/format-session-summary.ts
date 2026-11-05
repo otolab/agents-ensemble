@@ -149,7 +149,11 @@ function formatWorkerModelLine(
       : `modelTag ${worker.modelTag} · モデル注入なし`;
   const reasoning =
     worker.reasoning != null ? ` · 推論設定 ${worker.reasoning}` : '';
-  return `    worker ${worker.name} (${worker.kind}, ${worker.acpPreset}): ${model}${reasoning}`;
+  const cursorFast =
+    worker.cursorFast !== undefined
+      ? ` · Cursor fast ${worker.cursorFast ? '有効' : '無効'}`
+      : '';
+  return `    worker ${worker.name} (${worker.kind}, ${worker.acpPreset}): ${model}${reasoning}${cursorFast}`;
 }
 
 function formatConductorModelLine(

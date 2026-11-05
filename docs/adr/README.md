@@ -119,7 +119,8 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning 指定のみ） |
 | [0046](0046-migrated-session-canonical-slug-mirrors.md) | 移行済みセッションの canonical slug mirror | accepted |
 | [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0048](0048-acp-model-injection-by-preset.md) |
-| [0048](0048-acp-model-injection-by-preset.md) | worker ACP model / reasoning の preset 別注入 | accepted |
+| [0048](0048-acp-model-injection-by-preset.md) | worker ACP model / reasoning の preset 別注入 | superseded → [0049](0049-worker-acp-cursor-fast-option.md)（Cursor の Fast / non-Fast 指定のみ） |
+| [0049](0049-worker-acp-cursor-fast-option.md) | worker ACP の Cursor fast mode 明示設定 | accepted |
 
 ## 追加するとき
 

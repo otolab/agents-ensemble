@@ -888,6 +888,15 @@ function parseAcpSpawnFingerprint(
     }
     reasoning = record.reasoning;
   }
+  let cursorFast: boolean | undefined;
+  if (record.cursorFast !== undefined) {
+    if (typeof record.cursorFast !== 'boolean') {
+      throw new Error(
+        `Invalid session resume store worker acpSpawn cursorFast: ${workerName}`,
+      );
+    }
+    cursorFast = record.cursorFast;
+  }
   let modelProviderDigest: string | undefined;
   if (record.modelProviderDigest !== undefined) {
     if (
@@ -940,6 +949,7 @@ function parseAcpSpawnFingerprint(
     ...(modelTag !== undefined ? { modelTag } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(reasoning !== undefined ? { reasoning } : {}),
+    ...(cursorFast !== undefined ? { cursorFast } : {}),
     ...(modelProviderDigest !== undefined ? { modelProviderDigest } : {}),
     ...(envDigest ? { envDigest } : {}),
   };

@@ -391,7 +391,13 @@ describe('ACP model tag attach and resume', () => {
         env: {},
         config: {
           acp: {
-            models: { selected: { model, reasoning: 'high' } },
+            models: {
+              selected: {
+                model,
+                reasoning: 'high',
+                ...(preset === 'cursor' ? { cursorFast: false } : {}),
+              },
+            },
             tags: { high: 'selected' },
           },
         } as import('../config/types.js').EnsembleConfig,
@@ -401,7 +407,10 @@ describe('ACP model tag attach and resume', () => {
     const fingerprint = acpSpawnFingerprint(resolved);
     const overrides =
       preset === 'cursor'
-        ? [{ id: 'effort', value: 'high' }]
+        ? [
+            { id: 'fast', value: 'false' },
+            { id: 'effort', value: 'high' },
+          ]
         : [
             { id: 'model', value: model },
             { id: 'thought_level', value: 'high' },
@@ -410,7 +419,11 @@ describe('ACP model tag attach and resume', () => {
       ({ id, value }) => `session/set_config_option:${id}=${value}`,
     );
     expect(spawn.sessionConfigOptionOverrides).toEqual(overrides);
-    expect(fingerprint).toMatchObject({ model, reasoning: 'high' });
+    expect(fingerprint).toMatchObject({
+      model,
+      reasoning: 'high',
+      ...(preset === 'cursor' ? { cursorFast: false } : {}),
+    });
     if (preset === 'cursor') {
       expect(spawn.args).toEqual(['--model', model, 'acp']);
       expect(spawn.clientCapabilitiesMeta).toEqual({
@@ -449,6 +462,15 @@ describe('ACP model tag attach and resume', () => {
         const sessionConfigOptions =
           preset === 'cursor'
             ? [
+                {
+                  id: 'fast',
+                  type: 'select',
+                  currentValue: 'true',
+                  options: [
+                    { value: 'true', name: 'Fast' },
+                    { value: 'false', name: 'Standard' },
+                  ],
+                },
                 {
                   id: 'effort',
                   type: 'select',

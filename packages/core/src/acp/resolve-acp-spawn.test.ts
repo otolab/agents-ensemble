@@ -215,6 +215,7 @@ describe('resolveWorkerAcpSpawn', () => {
       ],
       defaultOptions: {
         defaultAcpCli: 'codex',
+        env: {},
         config: {
           acp: {
             defaultPreset: 'cursor',
@@ -341,6 +342,7 @@ describe('resolveWorkerAcpSpawn', () => {
       modelTag: 'high',
       defaultOptions: {
         defaultAcpCli: preset,
+        env: {},
         config: {
           acp: {
             defaultPreset: 'cursor',
@@ -596,6 +598,63 @@ describe('resolveWorkerAcpSpawn', () => {
       reasoning: 'high',
       ...expected,
     });
+  });
+
+  it('sets Cursor fast mode separately from reasoning and rejects the field on other presets', () => {
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'high',
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        env: {},
+        config: {
+          acp: {
+            models: {
+              selected: {
+                model: 'cursor-grok-4.6-high',
+                reasoning: 'high',
+                cursorFast: false,
+              },
+            },
+            tags: { high: 'selected' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      model: 'cursor-grok-4.6-high',
+      reasoning: 'high',
+      cursorFast: false,
+      clientCapabilitiesMeta: { parameterizedModelPicker: true },
+      sessionConfigOptionOverrides: [
+        { id: 'fast', value: 'false' },
+        { id: 'effort', value: 'high' },
+      ],
+    });
+    expect(acpSpawnFingerprint(resolved)).toMatchObject({
+      model: 'cursor-grok-4.6-high',
+      reasoning: 'high',
+      cursorFast: false,
+    });
+
+    expect(() =>
+      resolveWorkerAcpSpawn({
+        defaultOptions: {
+          defaultAcpCli: 'codex',
+          env: {},
+          config: {
+            acp: {
+              models: {
+                selected: { model: 'gateway/model', cursorFast: false },
+              },
+              tags: { default: 'selected' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      }),
+    ).toThrow(
+      /cursorFast is supported only by the "cursor" ACP preset.*0049-worker-acp-cursor-fast-option\.md/,
+    );
   });
 
   it.each([
@@ -921,6 +980,27 @@ describe('assertAcpSpawnMatchesResume', () => {
         },
       }),
     ).toThrow(/resume ACP spawn mismatch.*reasoning effort differs/);
+  });
+
+  it('rejects a change in the saved Cursor fast mode during resume', () => {
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['--model', 'cursor-grok-4.6-high', 'acp'],
+          model: 'cursor-grok-4.6-high',
+          cursorFast: false,
+        },
+        actual: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['--model', 'cursor-grok-4.6-high', 'acp'],
+          model: 'cursor-grok-4.6-high',
+          cursorFast: true,
+        },
+      }),
+    ).toThrow(/resume ACP spawn mismatch.*Cursor fast mode differs/);
   });
 
   it('skips when expected fingerprint is absent (legacy resume store)', () => {

@@ -65,7 +65,7 @@ function mergeConfigLayer(
   base: MergedConfig,
   layer: EnsembleConfigLayer,
 ): MergedConfig {
-  // A structured override may add reasoning to a shorthand from a lower layer.
+  // A structured override may add attributes to a shorthand from a lower layer.
   // Expand only entries being overlaid; unchanged shorthands retain their form
   // so existing resolved-config digests stay compatible with resume stores.
   const baseModels = base.acp.models;

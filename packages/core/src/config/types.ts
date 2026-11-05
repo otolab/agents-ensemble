@@ -20,6 +20,8 @@ export type AcpModelTag = 'high' | 'default' | 'low' | 'fast';
 export interface AcpModelDefinition {
   model: string;
   reasoning?: string;
+  /** Cursor ACP の `fast` option。未指定なら agent の選択を使う。 */
+  cursorFast?: boolean;
 }
 
 export type AcpModelCatalogEntry = string | AcpModelDefinition;

@@ -196,6 +196,44 @@ describe('SessionResumeStore', () => {
     });
   });
 
+  it('round-trips an explicitly configured Cursor fast mode, including false', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-cursor-fast-');
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-cursor-fast',
+    });
+    const resumeStore = baseResumeStore({
+      conductorAgentId: 'agent-cursor-fast',
+      repoRoot: tempDir,
+      workers: {
+        implementer: {
+          acpSessionId: 'sess-cursor-fast',
+          acpCwd: '/repo/worktree',
+          acpSpawn: {
+            preset: 'cursor',
+            command: 'agent',
+            args: ['--model', 'cursor-grok-4.6-high', 'acp'],
+            modelTag: 'high',
+            model: 'cursor-grok-4.6-high',
+            reasoning: 'high',
+            cursorFast: false,
+          },
+        },
+      },
+    });
+
+    await saveSessionResumeStore(path, resumeStore);
+    const loaded = await loadSessionResumeStore(path);
+
+    expect(loaded?.workers.implementer?.acpSpawn).toMatchObject({
+      preset: 'cursor',
+      command: 'agent',
+      model: 'cursor-grok-4.6-high',
+      reasoning: 'high',
+      cursorFast: false,
+    });
+  });
+
   it('loads an older worker fingerprint without reasoning or provider digest fields', async () => {
     tempDir = await createHome('ensemble-session-resume-store-legacy-reasoning-');
     const path = sessionResumeStorePath({
