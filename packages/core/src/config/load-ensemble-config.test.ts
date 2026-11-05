@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
 import { deepMerge } from './deep-merge.js';
+import { computeEnsembleConfigDigest } from './ensemble-config-digest.js';
 import { loadEnsembleConfig, ENSEMBLE_CONFIG_FILE } from './load-ensemble-config.js';
 import { parseEnsembleConfig } from './parse-config.js';
 
@@ -83,6 +84,43 @@ describe('parseEnsembleConfig', () => {
     expect(
       parseEnsembleConfig({ conductor: { backend: 'unsupported' } }),
     ).toEqual({});
+  });
+
+  it('parses shorthand, structured, and partial ACP model entries', () => {
+    expect(
+      parseEnsembleConfig({
+        acp: {
+          models: {
+            fast: ' provider/fast ',
+            high: { model: ' provider/large ', reasoning: ' high ' },
+            override: { reasoning: 'low' },
+          },
+        },
+      }),
+    ).toEqual({
+      acp: {
+        models: {
+          fast: 'provider/fast',
+          high: { model: 'provider/large', reasoning: 'high' },
+          override: { reasoning: 'low' },
+        },
+      },
+    });
+  });
+
+  it.each([null, '', '  ', 42, false])(
+    'rejects invalid configured model reasoning %s instead of silently dropping it',
+    (reasoning) => {
+      expect(() =>
+        parseEnsembleConfig({ acp: { models: { high: { model: 'm', reasoning } } } }),
+      ).toThrow(/acp\.models\.high\.reasoning must be a non-empty string/);
+    },
+  );
+
+  it('rejects an invalid model ID inside a structured entry', () => {
+    expect(() =>
+      parseEnsembleConfig({ acp: { models: { high: { model: '', reasoning: 'high' } } } }),
+    ).toThrow(/acp\.models\.high\.model must be a non-empty string/);
   });
 
   it('parses Phase 1 keys', () => {
@@ -312,6 +350,63 @@ describe('loadEnsembleConfig', () => {
       default: 'sonnet',
       low: 'sonnet',
     });
+  });
+
+  it('merges structured model attributes across layers and lets shorthand replace an entry', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      `acp:\n  models:\n    shared: provider/shared\n    structured:\n      model: provider/large\n      reasoning: low\n    replace:\n      model: provider/old\n      reasoning: high\n    unchanged: provider/legacy\n  tags:\n    high: shared\n`,
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      `acp:\n  models:\n    shared:\n      reasoning: high\n    structured:\n      model: project/large\n    replace: project/default\n  tags:\n    default: structured\n`,
+    );
+
+    const config = await loadConfig();
+
+    expect(config.acp.models).toEqual({
+      shared: { model: 'provider/shared', reasoning: 'high' },
+      structured: { model: 'project/large', reasoning: 'low' },
+      replace: 'project/default',
+      unchanged: 'provider/legacy',
+    });
+    expect(config.acp.tags).toEqual({ high: 'shared', default: 'structured' });
+  });
+
+  it('preserves the resume digest of an unchanged legacy shorthand config', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      'acp:\n  models:\n    standard: provider/model\n  tags:\n    default: standard\n',
+    );
+
+    const config = await loadConfig();
+    const legacyConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        models: { standard: 'provider/model' },
+        tags: { default: 'standard' },
+      },
+    };
+
+    expect(computeEnsembleConfigDigest(config)).toBe(computeEnsembleConfigDigest(legacyConfig));
+  });
+
+  it('accepts a model ID supplied by a higher layer', async () => {
+    await writeConfig(userEnsembleRoot, `acp:\n  models:\n    shared:\n      reasoning: high\n`);
+    await writeConfig(join(repoRoot, '.ensemble'), `acp:\n  models:\n    shared:\n      model: project/model\n`);
+
+    expect((await loadConfig()).acp.models).toEqual({
+      shared: { model: 'project/model', reasoning: 'high' },
+    });
+  });
+
+  it('rejects a structured entry with no model after merging', async () => {
+    await writeConfig(userEnsembleRoot, `acp:\n  models:\n    shared:\n      reasoning: high\n`);
+
+    await expect(loadConfig()).rejects.toThrow(
+      /acp\.models\.shared\.model is required after config layers are merged/,
+    );
   });
 
   it('uses an explicit config as the user layer, then merges project over it', async () => {

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,13 +8,42 @@ import { AcpClient } from './acp-client.js';
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import { profileWorkersToSessionSpecs } from '../profile/types.js';
 import { loadProfileFromFile } from '../profile/load-profile.js';
-import { attachWorker } from '../dispatch/attach-worker.js';
+import { attachWorker, runAttachedWorkerPrompt } from '../dispatch/attach-worker.js';
+import { closeWorkerAcpSession } from '../dispatch/worker-acp-session.js';
 import type { SessionWorkerSpec } from '../profile/types.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
 import { createInProcessStreamPair } from './testing/stream-pair.js';
 import { startFakeAcpServer, type FakeAcpServer } from './testing/fake-acp-server.js';
 
 const ISSUE_URL = 'https://github.com/org/repo/issues/603';
+
+// A real child process observes the resolved spawn env and speaks enough ACP
+// to exercise new, prompt, and load without an external model or credentials.
+const CAPTURE_ACP_PROCESS = [
+  'const fs = require("node:fs");',
+  'const config = JSON.parse(process.env.CODEX_CONFIG);',
+  'let buffer = "";',
+  'process.stdin.setEncoding("utf8");',
+  'process.stdin.on("data", (chunk) => {',
+  '  buffer += chunk;',
+  '  while (buffer.includes("\\n")) {',
+  '    const end = buffer.indexOf("\\n");',
+  '    const message = JSON.parse(buffer.slice(0, end));',
+  '    buffer = buffer.slice(end + 1);',
+  '    if (message.id === undefined) continue;',
+  '    if (message.method === "session/new" || message.method === "session/load") {',
+  '      fs.appendFileSync(process.env.CAPTURE_FILE, JSON.stringify({ method: message.method, config }) + "\\n");',
+  '    }',
+  '    const result = message.method === "initialize"',
+  '      ? { protocolVersion: 1, agentCapabilities: {} }',
+  '      : message.method === "session/new"',
+  '        ? { sessionId: "captured-session" }',
+  '        : message.method === "session/prompt"',
+  '          ? { stopReason: "end_turn" } : {};',
+  '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\\n");',
+  '  }',
+  '});',
+].join('\n');
 
 type SessionParams = {
   _meta?: {
@@ -256,6 +285,128 @@ describe('ACP model tag attach and resume', () => {
       await Promise.all(bridges.map((bridge) => bridge.close()));
       for (const server of servers) server.stop();
     }
+  });
+
+  it('passes merged Codex reasoning to the worker process and checks it on resume', async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'ensemble-model-reasoning-'));
+    const reasoningIssueUrl = 'https://github.com/org/repo/issues/622';
+    const repoRoot = join(tempRoot, 'repo');
+    const userRoot = join(tempRoot, 'user');
+    const projectDir = join(repoRoot, '.ensemble');
+    const profilePath = join(tempRoot, 'profile.yaml');
+    const capturePath = join(tempRoot, 'capture.jsonl');
+    await Promise.all([
+      mkdir(projectDir, { recursive: true }),
+      mkdir(userRoot, { recursive: true }),
+    ]);
+    await writeFile(join(userRoot, 'config.yaml'), [
+      'acp:',
+      '  defaultPreset: codex',
+      '  env:',
+      `    CODEX_CONFIG: '{"approval_policy":"on-request","model_reasoning_effort":"medium"}'`,
+      '  models:',
+      '    high-model:',
+      '      model: gateway/shared',
+      '      reasoning: low',
+      '    standard: gateway/standard',
+      '  tags:',
+      '    high: high-model',
+      '    default: standard',
+      '',
+    ].join('\n'));
+    const projectPath = join(projectDir, 'config.yaml');
+    await writeFile(projectPath, 'acp:\n  models:\n    high-model:\n      reasoning: high\n');
+    await writeFile(profilePath, [
+      'workers:',
+      '  - name: implementer',
+      '    kind: implementer',
+      '    modelTag: high',
+      '  - reviewer',
+      '',
+    ].join('\n'));
+
+    const profile = await loadProfileFromFile(profilePath, { repoRoot });
+    const loadSpecs = async () => {
+      const config = await loadEnsembleConfig(repoRoot, {
+        userEnsembleRoot: userRoot,
+        writeStderr: vi.fn(),
+      });
+      return profileWorkersToSessionSpecs(profile, { defaultAcp: { config, env: {} } });
+    };
+    const specs = await loadSpecs();
+    const worktree: WorktreeRef = {
+      path: repoRoot,
+      branch: 'ensemble/issue-622',
+      issue: { owner: 'org', repo: 'repo', number: 622, url: reasoningIssueUrl },
+      inRepo: true,
+    };
+    const sessionState = {
+      workers: profile.workers.map(({ name, kind }) => ({ name, kind })),
+      kinds: profile.workers.map(({ kind }) => kind),
+    };
+    const attach = (spec: SessionWorkerSpec, resume?: SessionWorkerSpec) =>
+      attachWorker({
+        name: spec.name,
+        kind: spec.kind,
+        issueUrl: reasoningIssueUrl,
+        worktree,
+        sessionState,
+        spawn: {
+          ...spec.spawn,
+          command: process.execPath,
+          args: ['-e', CAPTURE_ACP_PROCESS],
+          env: { ...spec.spawn?.env, CAPTURE_FILE: capturePath },
+        },
+        currentAcpSpawn: spec.acpFingerprint,
+        ...(resume ? {
+          expectedResumeAcpSpawn: resume.acpFingerprint,
+          resumeAcpSessionId: 'captured-session',
+        } : {}),
+      });
+    const captured = async () => (await readFile(capturePath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+
+    for (const spec of specs) {
+      const worker = await attach(spec);
+      try {
+        expect((await runAttachedWorkerPrompt(worker, 'test')).promptResult.stopReason).toBe('end_turn');
+      } finally {
+        await closeWorkerAcpSession(worker.session);
+      }
+    }
+    expect(await captured()).toEqual([
+      {
+        method: 'session/new',
+        config: {
+          approval_policy: 'on-request',
+          model: 'gateway/shared',
+          model_reasoning_effort: 'high',
+        },
+      },
+      {
+        method: 'session/new',
+        config: {
+          approval_policy: 'on-request',
+          model: 'gateway/standard',
+          model_reasoning_effort: 'medium',
+        },
+      },
+    ]);
+
+    const original = specs[0]!;
+    await writeFile(projectPath, 'acp:\n  models:\n    high-model:\n      reasoning: xhigh\n');
+    const changed = (await loadSpecs())[0]!;
+    await expect(attach(changed, original)).rejects.toThrow(/resume ACP spawn mismatch/);
+    expect(await captured()).toHaveLength(2);
+
+    const resumed = await attach(original, original);
+    await closeWorkerAcpSession(resumed.session);
+    expect((await captured())[2]).toMatchObject({
+      method: 'session/load',
+      config: { model: 'gateway/shared', model_reasoning_effort: 'high' },
+    });
   });
 });
 

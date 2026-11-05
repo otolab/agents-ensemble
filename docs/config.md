@@ -63,9 +63,11 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 #### resume と config 変更
 
-起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model`、`acp.env`、model catalog / tag mapping の変更も対象です。worker の ACP spawn fingerprint には照合に必要な worker ごとの `modelTag` と解決済み model ID（credential ではない値）を記録し、env map は digest のみを保持します。旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。SessionResumeStore には config 全体や env map の平文、config ファイルのパスは保存しません。解決済み model ID は worker fingerprint に限って保存します。
+起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model`、`acp.env`、model catalog の `reasoning` を含む変更や tag mapping の変更も対象です。worker の ACP spawn fingerprint には worker ごとの `modelTag` と解決済み model ID（credential ではない値）を記録し、env map は digest のみを保持します。Codex の `reasoning` は `CODEX_CONFIG` に含まれるため、この env digest でも照合します。
 
-同じ実効設定なら config ファイルの場所や YAML 内のキー順が変わっても resume できます。digest を持たない旧 resume state は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)）。
+旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。SessionResumeStore には config 全体や env map の平文、config ファイルのパスは保存しません。解決済み model ID は worker fingerprint に限って保存します。
+
+同じ解決済み config ならファイルの場所や YAML 内のキー順が変わっても resume できます。model catalog の文字列 shorthand と構造化エントリは、同じ model ID を指していても config の形が異なるため、書き換えると digest も変わります。digest を持たない旧 resume state は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)）。
 
 ## テンプレート
 
@@ -101,8 +103,10 @@ acp:
   defaultPreset: codex                # ENSEMBLE_DEFAULT_ACP_CLI 相当
   env:                                # codex-acp 子プロセス spawn に渡す env（選択された user config → project deep merge）
     MODEL_PROVIDER: litellm           # Codex provider ID。接続設定は Codex config 側
-  models:                             # 環境固有の model ID catalog
-    opus: YOUR_OPUS_MODEL_ID
+  models:                             # 環境固有の model catalog
+    opus:
+      model: YOUR_OPUS_MODEL_ID
+      reasoning: high                 # 任意。codex preset のみ対応
     sonnet: YOUR_SONNET_MODEL_ID
     haiku: YOUR_HAIKU_MODEL_ID
   tags:                               # profile の modelTag → models key
@@ -148,7 +152,7 @@ tui:
 | `conductor.pi.projectDir` | Pi project resource root のパス上書き | — | — |
 | `acp.defaultPreset` | worker ACP built-in preset | `--default-acp-cli` 等 | `ENSEMBLE_DEFAULT_ACP_CLI` |
 | `acp.env` | codex-acp 等 spawn 時の env（string map） | — | — |
-| `acp.models` | 環境固有の model key → model ID | — | — |
+| `acp.models` | model key → model ID または `{ model, reasoning? }` | — | — |
 | `acp.tags` | model tag → `acp.models` key（全 worker 共通） | — | — |
 | `session.worktree` | worker workspace モード | `--worktree` | — |
 | `session.lazyWorkers` | 初回 `prompt_worker` まで worker ACP attach を遅延 | — | — |
@@ -165,13 +169,16 @@ tui:
 
 ### ACP model tag と model catalog
 
-model ID と tag mapping は環境ごとの `.ensemble/config.yaml` に置きます。team profile は `workers[]` の各 worker インスタンスに `modelTag` だけを指定します。
+model ID・任意の reasoning と tag mapping は環境ごとの `.ensemble/config.yaml` に置きます。team profile は `workers[]` の各 worker インスタンスに `modelTag` だけを指定します。
 
 ```yaml
 # config.yaml
 acp:
+  defaultPreset: codex
   models:
-    opus: YOUR_OPUS_MODEL_ID
+    opus:
+      model: YOUR_OPUS_MODEL_ID
+      reasoning: high
     sonnet: YOUR_SONNET_MODEL_ID
   tags:
     high: opus
@@ -190,20 +197,24 @@ workers:
   - researcher # 文字列 shorthand も default tag
 ```
 
-`models` と `tags` は user config → project config の順に deep merge します。同じ key は project 側が優先されるため、profile の tier 配分を変えずに環境ごとの model ID を差し替えられます。config の `tags` に選択した tag がなければ ACP preset の既定 model を使います。tag が存在しても参照先 key が `models` にない場合は起動前にエラーにします。
+model catalog は従来どおり model ID の文字列で指定できます。構造化エントリには `model` と任意の `reasoning` を指定します。どちらも空でない文字列です。Codex の `reasoning` には `low`、`medium`、`high`、`xhigh`、`max`、`ultra` などがありますが、対応値は model と client に依存します（[Codex 設定リファレンス](https://developers.openai.com/codex/config-reference/)）。ensemble は値の一覧を固定せず Codex に渡します。設定として受け付けられても、利用する model がその値に対応するとは限りません。
+
+`models` と `tags` は user config → project config の順に deep merge します。構造化エントリの `model` と `reasoning` も個別にマージします。例えば user 側の `opus: YOUR_OPUS_MODEL_ID` に対して project 側で `opus: { reasoning: high }` と書くと、model ID を引き継いで reasoning を追加できます。逆に project 側で文字列 shorthand を指定すると、user 側のエントリ全体を置き換え、user 側の `reasoning` も消します。`model` または `reasoning` を指定した構造化エントリの最終結果に `model` がない場合や、指定した値が空文字列・文字列以外の場合はエラーです。
+
+config の `tags` に選択した tag がなければ ACP preset の既定 model を使います。tag が存在しても参照先 key が `models` にない場合は起動前にエラーにします。
 
 worker 名・kind ごとの model 表は設けません。profile へ書ける model 関連の値は固定語彙の `modelTag` のみで、preset・spawn env・model ID は引き続き config 側が正本です。
 
-model ID は preset ごとの方法で渡します。
+model ID と reasoning は preset ごとの方法で渡します。
 
-| preset | model の渡し方 |
-|--------|----------------|
-| `cursor` | `agent --model <model-id> acp` |
-| `claude` | ACP `session/new` / `session/load` の Claude settings metadata |
-| `codex` | `CODEX_CONFIG` JSON の `model`。既存の JSON session config は保持 |
-| `pi` / `custom` | model 注入非対応。tag が model ID に解決された場合は ACP process 起動前にエラー |
+| preset | model の渡し方 | catalog の `reasoning` |
+|--------|----------------|------------------------|
+| `cursor` | `agent --model <model-id> acp` | 未対応。選択されたエントリに指定があれば起動前にエラー |
+| `claude` | ACP `session/new` / `session/load` の Claude settings metadata | 未対応。選択されたエントリに指定があれば起動前にエラー |
+| `codex` | `CODEX_CONFIG` JSON の `model` | 同じ JSON の `model_reasoning_effort` に指定値を設定 |
+| `pi` / `custom` | model 注入非対応。tag が model ID に解決された場合は起動前にエラー | model 注入と同様に非対応 |
 
-tag mapping がない場合は従来どおり各 preset の native default に委ねるため、段階的に tag を割り当てられます。`codex` で model mapping を使う場合、`acp.env.CODEX_CONFIG` は JSON object 文字列にしてください。model ID は harness が注入し、他の session config key は保持します。
+tag mapping がない場合は従来どおり各 preset の native default に委ねるため、段階的に tag を割り当てられます。`codex` の model mapping では、既存の `CODEX_CONFIG` があれば JSON object 文字列である必要があります。`acp.env` の値は親プロセスの同名環境変数より優先されます。harness は `model` と、指定された場合だけ `model_reasoning_effort` を上書きし、他の JSON キーを保持します。catalog に `reasoning` がない場合、既存の `CODEX_CONFIG` にある値も保持し、そこにもなければ Codex の既定に委ねます。
 
 ### ACP spawn env（`acp.env`）
 
@@ -485,7 +496,7 @@ JSON が不正、または `mcpServers` / サーバー定義の形式が不正�
 
 ## スキーマ外キー
 
-YAML に未知のキーがあっても **無視する**（警告なし）。将来のスキーマ拡張用に残してよい。既知キーで型が合わない値も **該当キーのみ**無視し、下位層またはデフォルトにフォールバックする。
+YAML に未知のキーがあっても **無視する**（警告なし）。将来のスキーマ拡張用に残してよい。既知キーで型が合わない値も原則 **該当キーのみ**無視し、下位層またはデフォルトにフォールバックする。ただし、構造化した `acp.models` エントリの `model` / `reasoning` は、指定された値が無効ならエラーにする。
 
 ## 関連
 

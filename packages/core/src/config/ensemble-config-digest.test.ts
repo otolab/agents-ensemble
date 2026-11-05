@@ -45,4 +45,24 @@ describe('computeEnsembleConfigDigest', () => {
     expect(digest).not.toBe(changed);
     expect(digest).not.toContain('private-test-value');
   });
+
+  it('includes configured ACP model reasoning in the resume digest', () => {
+    const config: EnsembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        models: { standard: { model: 'gateway/model', reasoning: 'low' } },
+        tags: { default: 'standard' },
+      },
+    };
+    const changed: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        models: { standard: { model: 'gateway/model', reasoning: 'high' } },
+      },
+    };
+
+    expect(computeEnsembleConfigDigest(config)).not.toBe(computeEnsembleConfigDigest(changed));
+  });
 });

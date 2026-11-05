@@ -362,6 +362,143 @@ describe('resolveWorkerAcpSpawn', () => {
       model: 'gateway/opus',
     });
   });
+
+  it('overrides Codex model and effort while preserving the rest of CODEX_CONFIG', () => {
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'high',
+      defaultOptions: {
+        env: { CODEX_CONFIG: '{"source":"parent"}' },
+        config: {
+          acp: {
+            defaultPreset: 'codex',
+            env: {
+              CODEX_CONFIG: JSON.stringify({
+                model: 'old-model',
+                model_reasoning_effort: 'low',
+                approval_policy: 'on-request',
+                model_providers: { gateway: { base_url: 'https://example.test' } },
+              }),
+            },
+            models: { high: { model: 'gateway/opus', reasoning: 'high' } },
+            tags: { high: 'high' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(JSON.parse(resolved.env?.CODEX_CONFIG ?? '{}')).toEqual({
+      model: 'gateway/opus',
+      model_reasoning_effort: 'high',
+      approval_policy: 'on-request',
+      model_providers: { gateway: { base_url: 'https://example.test' } },
+    });
+  });
+
+  it.each([
+    'gateway/opus',
+    { model: 'gateway/opus' },
+  ])('keeps inherited Codex effort when the catalog entry has no reasoning: %s', (entry) => {
+    const resolved = resolveWorkerAcpSpawn({
+      defaultOptions: {
+        env: { CODEX_CONFIG: '{"model_reasoning_effort":"medium","other":true}' },
+        config: {
+          acp: {
+            defaultPreset: 'codex',
+            models: { standard: entry },
+            tags: { default: 'standard' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(JSON.parse(resolved.env?.CODEX_CONFIG ?? '{}')).toEqual({
+      model: 'gateway/opus',
+      model_reasoning_effort: 'medium',
+      other: true,
+    });
+  });
+
+  it.each(['not-json', 'null', '[]', '"string"'])('rejects invalid Codex JSON %s before spawn', (value) => {
+    expect(() =>
+      resolveWorkerAcpSpawn({
+        defaultOptions: {
+          env: { CODEX_CONFIG: value },
+          config: {
+            acp: {
+              defaultPreset: 'codex',
+              models: { high: { model: 'gateway/opus', reasoning: 'high' } },
+              tags: { default: 'high' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      }),
+    ).toThrow(/CODEX_CONFIG to be a JSON object/);
+  });
+
+  it.each(['cursor', 'claude'] as const)(
+    'rejects configured reasoning for %s rather than silently ignoring it',
+    (preset) => {
+      expect(() =>
+        resolveWorkerAcpSpawn({
+          defaultOptions: {
+            env: {},
+            config: {
+              acp: {
+                defaultPreset: preset,
+                models: { high: { model: 'gateway/opus', reasoning: 'high' } },
+                tags: { default: 'high' },
+              },
+            } as import('../config/types.js').EnsembleConfig,
+          },
+        }),
+      ).toThrow(new RegExp(`preset "${preset}" does not support configured reasoning injection`));
+    },
+  );
+
+  it.each([
+    { defaultAcpCli: 'cursor' },
+    { defaultAcpCli: 'claude' },
+    { defaultAcpCli: 'pi' },
+    { defaultAcpCommand: 'custom-agent' },
+  ])('uses the native default when the selected tag is unmapped', (options) => {
+    const resolved = resolveWorkerAcpSpawn({
+      defaultOptions: {
+        ...options,
+        env: {},
+        config: {
+          acp: {
+            defaultPreset: 'codex',
+            models: { high: { model: 'gateway/opus', reasoning: 'high' } },
+            tags: { high: 'high' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved.modelTag).toBe('default');
+    expect(resolved.model).toBeUndefined();
+  });
+
+  it.each([
+    { defaultAcpCli: 'pi' },
+    { defaultAcpCommand: 'custom-agent' },
+  ])('rejects model injection for unsupported preset $defaultAcpCli$defaultAcpCommand', (options) => {
+    expect(() =>
+      resolveWorkerAcpSpawn({
+        defaultOptions: {
+          ...options,
+          env: {},
+          config: {
+            acp: {
+              defaultPreset: 'codex',
+              models: { high: { model: 'gateway/opus', reasoning: 'high' } },
+              tags: { default: 'high' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      }),
+    ).toThrow(/does not support configured model injection/);
+  });
 });
 
 describe('profileWorkersToSessionSpecs', () => {
@@ -509,6 +646,33 @@ describe('acpSpawnFingerprint', () => {
         workerName: 'implementer',
       }),
     ).toThrow(/resume ACP spawn mismatch/);
+  });
+
+  it('detects a change in Codex reasoning through the existing env digest', () => {
+    const resolve = (reasoning: string) =>
+      resolveWorkerAcpSpawn({
+        defaultOptions: {
+          env: {},
+          config: {
+            acp: {
+              defaultPreset: 'codex',
+              models: { shared: { model: 'gateway/shared', reasoning } },
+              tags: { default: 'shared' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      });
+    const saved = acpSpawnFingerprint(resolve('low'));
+    const same = acpSpawnFingerprint(resolve('low'));
+    const changed = acpSpawnFingerprint(resolve('high'));
+
+    expect(saved.envDigest).toBe(same.envDigest);
+    expect(saved.envDigest).not.toBe(changed.envDigest);
+    expect(() => assertAcpSpawnMatchesResume({ expected: saved, actual: same })).not.toThrow();
+    expect(() => assertAcpSpawnMatchesResume({ expected: saved, actual: changed })).toThrow(
+      /resume ACP spawn mismatch.*spawn environment differs/,
+    );
+    expect(saved).not.toHaveProperty('reasoning');
   });
 });
 

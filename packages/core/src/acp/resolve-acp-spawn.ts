@@ -4,7 +4,11 @@ import {
   resolveAcpAuthenticateStrategy,
   type AcpAuthenticateStrategy,
 } from './resolve-acp-auth.js';
-import type { AcpModelTag, EnsembleConfig } from '../config/types.js';
+import type {
+  AcpModelDefinition,
+  AcpModelTag,
+  EnsembleConfig,
+} from '../config/types.js';
 
 /** Built-in ACP preset id（Phase 1）。拡張時は adapter / capability を別途追加可能。 */
 export type BuiltinAcpPresetId = 'cursor' | 'claude' | 'codex' | 'pi';
@@ -188,17 +192,21 @@ export function resolveWorkerAcpSpawn(input?: {
     return { ...spawn, modelTag };
   }
 
-  const model = input?.defaultOptions?.config?.acp.models?.[modelKey];
-  if (!model) {
+  const entry = input?.defaultOptions?.config?.acp.models?.[modelKey];
+  if (!entry) {
     throw new Error(
       `ACP model tag "${modelTag}" references undefined acp.models key "${modelKey}"`,
     );
+  }
+  const definition = typeof entry === 'string' ? { model: entry } : entry;
+  if (!definition.model) {
+    throw new Error(`acp.models.${modelKey}.model is required`);
   }
 
   return injectAcpModel(
     spawn,
     modelTag,
-    model,
+    definition,
     input?.defaultOptions?.env ?? process.env,
   );
 }
@@ -275,8 +283,11 @@ export function assertAcpSpawnMatchesResume(input: {
   if (same) return;
 
   const label = input.workerName ? `Worker "${input.workerName}"` : 'Worker';
+  const envMismatch =
+    input.expected.envDigest !== undefined &&
+    input.expected.envDigest !== actual.envDigest;
   throw new Error(
-    `${label} resume ACP spawn mismatch: saved resume store has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}`,
+    `${label} resume ACP spawn mismatch: saved resume store has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}${envMismatch ? '; spawn environment differs' : ''}`,
   );
 }
 
@@ -304,11 +315,17 @@ export function resolvedAcpSpawnToOptions(
 function injectAcpModel(
   spawn: ResolvedAcpSpawn,
   modelTag: AcpModelTag,
-  model: string,
+  definition: AcpModelDefinition,
   processEnv: NodeJS.ProcessEnv,
 ): ResolvedAcpSpawn {
+  const { model, reasoning } = definition;
   switch (spawn.preset) {
     case 'cursor':
+      if (reasoning !== undefined) {
+        throw new Error(
+          `ACP preset "cursor" does not support configured reasoning injection (worker modelTag "${modelTag}")`,
+        );
+      }
       return {
         ...spawn,
         args: ['--model', model, ...spawn.args],
@@ -316,6 +333,11 @@ function injectAcpModel(
         model,
       };
     case 'claude':
+      if (reasoning !== undefined) {
+        throw new Error(
+          `ACP preset "claude" does not support configured reasoning injection (worker modelTag "${modelTag}")`,
+        );
+      }
       return {
         ...spawn,
         modelTag,
@@ -350,7 +372,11 @@ function injectAcpModel(
         }
         sessionConfig = parsed as Record<string, unknown>;
       }
-      env.CODEX_CONFIG = JSON.stringify({ ...sessionConfig, model });
+      env.CODEX_CONFIG = JSON.stringify({
+        ...sessionConfig,
+        model,
+        ...(reasoning !== undefined ? { model_reasoning_effort: reasoning } : {}),
+      });
       return { ...spawn, env, modelTag, model };
     }
     case 'pi':

@@ -5,8 +5,8 @@ import {
 import type { WorkerWorktreeMode } from '../worktree/worktree.js';
 import type {
   ConductorBackend,
+  AcpModelCatalogLayerEntry,
   AcpModelTag,
-  EnsembleAcpConfig,
   EnsembleConfigControlConfig,
   EnsembleConductorConfig,
   EnsembleConfig,
@@ -150,14 +150,37 @@ const ACP_MODEL_TAGS: readonly AcpModelTag[] = [
   'fast',
 ];
 
-function parseAcpModels(raw: unknown): Record<string, string> | undefined {
+function parseAcpModels(
+  raw: unknown,
+): Record<string, AcpModelCatalogLayerEntry> | undefined {
   const obj = readObject(raw);
   if (!obj) return undefined;
-  const models: Record<string, string> = {};
+  const models: Record<string, AcpModelCatalogLayerEntry> = {};
   for (const [key, value] of Object.entries(obj)) {
     const modelKey = key.trim();
+    if (!modelKey) continue;
     const modelId = readString(value);
-    if (modelKey && modelId) models[modelKey] = modelId;
+    if (modelId) {
+      models[modelKey] = modelId;
+      continue;
+    }
+
+    const entry = readObject(value);
+    if (!entry) continue;
+    const model = readString(entry.model);
+    const reasoning = readString(entry.reasoning);
+    if (entry.model !== undefined && !model) {
+      throw new Error(`acp.models.${modelKey}.model must be a non-empty string`);
+    }
+    if (entry.reasoning !== undefined && !reasoning) {
+      throw new Error(`acp.models.${modelKey}.reasoning must be a non-empty string`);
+    }
+    if (model || reasoning) {
+      models[modelKey] = {
+        ...(model ? { model } : {}),
+        ...(reasoning ? { reasoning } : {}),
+      };
+    }
   }
   return Object.keys(models).length > 0 ? models : undefined;
 }
@@ -175,7 +198,7 @@ function parseAcpTags(
   return Object.keys(tags).length > 0 ? tags : undefined;
 }
 
-function parseAcpConfig(raw: unknown): Partial<EnsembleAcpConfig> | undefined {
+function parseAcpConfig(raw: unknown): EnsembleConfigLayer['acp'] {
   const obj = readObject(raw);
   if (!obj) {
     return undefined;
@@ -344,7 +367,7 @@ function parseTuiConfig(raw: unknown): EnsembleTuiConfig | undefined {
 
 /**
  * YAML から既知スキーマのみ抽出する。未知キーは無視（将来拡張用）。
- * 無効な型の既知キーは無視し、下位層 / デフォルトにフォールバックする。
+ * 無効な型の既知キーは原則無視する。構造化 ACP model の不正値はエラーにする。
  */
 export function parseEnsembleConfig(raw: unknown): EnsembleConfigLayer {
   if (!raw || typeof raw !== 'object') {

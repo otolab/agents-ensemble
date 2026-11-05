@@ -37,6 +37,9 @@ jobs:
       - name: Session resume integration tests
         run: pnpm --filter @agents-ensemble/core exec vitest run --config vitest.config.integration.ts test/integration/session-resume.integration.test.ts
 
+      - name: Codex model reasoning integration test
+        run: pnpm --filter @agents-ensemble/core exec vitest run --config vitest.config.integration.ts test/integration/codex-model-reasoning.integration.test.ts
+
       - name: Operator usage integration test
         run: pnpm --filter @agents-ensemble/core exec vitest run --config vitest.config.integration.ts test/integration/usage-operator.integration.test.ts
 
