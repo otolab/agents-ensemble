@@ -14,7 +14,7 @@ agents:
 workers:
   - name: implementer
     kind: implementer
-    modelTag: high
+    modelTag: default
   - name: reviewer
     kind: reviewer
     modelTag: default
