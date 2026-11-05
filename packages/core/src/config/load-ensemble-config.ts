@@ -8,7 +8,12 @@ import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { deepMerge } from './deep-merge.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
 import { parseEnsembleConfig } from './parse-config.js';
-import type { EnsembleConfig, EnsembleConfigLayer } from './types.js';
+import type {
+  AcpModelCatalogLayerEntry,
+  EnsembleAcpConfig,
+  EnsembleConfig,
+  EnsembleConfigLayer,
+} from './types.js';
 
 export const ENSEMBLE_CONFIG_FILE = 'config.yaml';
 
@@ -50,14 +55,42 @@ async function readConfigYaml(path: string): Promise<unknown | undefined> {
   return yaml.load(raw);
 }
 
+type MergedConfig = Omit<EnsembleConfig, 'acp'> & {
+  acp: Omit<EnsembleAcpConfig, 'models'> & {
+    models?: Record<string, AcpModelCatalogLayerEntry>;
+  };
+};
+
 function mergeConfigLayer(
-  base: EnsembleConfig,
+  base: MergedConfig,
   layer: EnsembleConfigLayer,
-): EnsembleConfig {
+): MergedConfig {
+  // A structured override may add reasoning to a shorthand from a lower layer.
+  // Expand only entries being overlaid; unchanged shorthands retain their form
+  // so existing resolved-config digests stay compatible with resume stores.
+  const baseModels = base.acp.models;
+  if (baseModels && layer.acp?.models) {
+    const expandedModels = { ...baseModels };
+    for (const [key, override] of Object.entries(layer.acp.models)) {
+      const existing = baseModels[key];
+      if (typeof existing === 'string' && typeof override !== 'string') {
+        expandedModels[key] = { model: existing };
+      }
+    }
+    base = { ...base, acp: { ...base.acp, models: expandedModels } };
+  }
   return deepMerge(
     base as unknown as Record<string, unknown>,
     layer as unknown as Record<string, unknown>,
-  ) as unknown as EnsembleConfig;
+  ) as unknown as MergedConfig;
+}
+
+function assertCompleteModels(config: MergedConfig): asserts config is EnsembleConfig {
+  for (const [key, entry] of Object.entries(config.acp.models ?? {})) {
+    if (typeof entry !== 'string' && !entry.model) {
+      throw new Error(`acp.models.${key}.model is required after config layers are merged`);
+    }
+  }
 }
 
 /**
@@ -74,7 +107,7 @@ export async function loadEnsembleConfig(
   const writeStderr =
     options.writeStderr ??
     ((message: string) => void process.stderr.write(`${message}\n`));
-  let merged: EnsembleConfig = structuredClone(DEFAULT_ENSEMBLE_CONFIG);
+  let merged: MergedConfig = structuredClone(DEFAULT_ENSEMBLE_CONFIG);
 
   const explicitPath =
     options.configPath !== undefined
@@ -104,5 +137,6 @@ export async function loadEnsembleConfig(
     }
   }
 
+  assertCompleteModels(merged);
   return merged;
 }

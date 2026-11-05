@@ -24,7 +24,7 @@
 | workspace / 領域 | 種別 | 実行コマンド | PR / main CI 常時実行 | 追加条件 |
 |------------------|------|--------------|----------------------|----------|
 | `@agents-ensemble/core` | unit | `pnpm --filter @agents-ensemble/core test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Git、一時ディレクトリ、ローカル UDS。子プロセスは制御された Node fixture のみ |
-| `@agents-ensemble/core` | integration | `pnpm --filter @agents-ensemble/core test:integration` | 一部のみ。下記「CI 常時実行範囲」を参照 | Fake / in-process suite は追加設定不要。実 `agent acp` suite は `test-acp.yaml` と、設定された `agentCommand`（省略時は PATH 上の `agent`）が必要。Cursor SDK suite は認証、ネットワーク、書き込み可能な隔離 HOME が必要 |
+| `@agents-ensemble/core` | integration | `pnpm --filter @agents-ensemble/core test:integration` | 一部のみ。下記「CI 常時実行範囲」を参照 | Fake / in-process suite は追加設定不要。Codex の設定検証は optional の codex-acp と Codex 本体を使い、実認証は不要。実 `agent acp` suite は `test-acp.yaml` と、設定された `agentCommand`（省略時は PATH 上の `agent`）が必要。Cursor SDK suite は認証、ネットワーク、書き込み可能な隔離 HOME が必要 |
 | `@agents-ensemble/core` | e2e | なし | なし | 現在 core に e2e suite はない。Vitest e2e config と package script は設けない |
 | `@agents-ensemble/cli` | unit | `pnpm --filter @agents-ensemble/cli test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Git、一時ディレクトリ、ローカル UDS。ビルド済み CLI を起動するテストがあるため、単独実行前に `pnpm build` が必要 |
 | `@agents-ensemble/cli` | e2e | `pnpm --filter @agents-ensemble/cli test:e2e` | 一部のみ。PTY suites を個別に実行 | 先に `pnpm build` が必要。PTY suites は POSIX と Python 3 の標準 `pty` モジュールが必要。Pi TTY suites は localhost bind と Git も使う。Issue workflow suite は `test-acp.yaml`、Issue URL、repo、conductor 認証、利用可能な ACP 実行環境が必要 |
@@ -69,6 +69,7 @@ integration / e2e は副作用のあるプロセスや共有状態を避ける�
 | `packages/cli/src/cli-version.test.ts`、`operator-agent-command.test.ts` | unit の CLI gate smoke | ビルド済み `packages/cli/dist/index.js` を起動する。CI は先に `pnpm build` を実行。GitHub / ACP 接続は不要 |
 | core / cli / operator-agent の session orchestration tests | unit の in-process orchestration smoke | Fake ACP / conductor / TUI と一時 repository、ローカル UDS を使う。Git と UDS が使えるCI環境で常時実行し、実 ACP / 外部 service には接続しない |
 | core `test/integration` の Fake / in-process suites | integration | 一時ファイル、Fake ACP、または Node の ACP fixture を利用する。外部認証なしでローカル実行可能。CI では指定 suite のみ常時実行 |
+| `codex-model-reasoning.integration.test.ts` | integration | 固定版 codex-acp と Codex 本体を一時 HOME で起動する。ダミー認証と接続不能なローカル provider を使い、モデルへの問い合わせは行わない。optional dependency がない場合は理由付きで skip。CI でも実行 |
 | `acp-bridge.integration.test.ts` | integration | `test-acp.yaml` と、そこに指定する実行可能な `agentCommand` / ACP backend が必要。設定ファイルがない場合、または agent command が見つからない・実行できない場合は理由を表示して suite を skip。前提が揃った状態で backend 接続に失敗した場合は失敗として扱う |
 | `conductor-agent.integration.test.ts`、`issue-session.integration.test.ts` | integration | 実 Cursor SDK、認証（`CURSOR_API_KEY` または SDK login）、ネットワーク、隔離 HOME 用の一時書き込み領域が必要。認証がない、または隔離 HOME を準備できない場合は suite を skip |
 | `packages/cli/test/e2e/issue.e2e.test.ts` | e2e | `packages/core/test/integration/test-acp.yaml` に有効な `issueUrl` と `repoRoot` があり、conductor 認証と GitHub API 認証（`GITHUB_TOKEN` / `GH_TOKEN` または設定済み `gh` fallback）が使える場合に実行。agent / ACP backend とネットワークも必要 |
@@ -88,6 +89,7 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | skip / guard | 必要条件・理由 | 解除方法 / 追跡 |
 |--------------|----------------|------------------|
 | Cursor SDK integration の `describe.skipIf` | Cursor 認証、ネットワーク、書き込み可能な隔離 HOME がないと実接続できない。`ENSEMBLE_CURSOR_SDK_INTEGRATION_SKIP` は理由付きで明示的に skip する override | 認証を設定し一時 HOME を作成できる環境で実行し、override を設定している場合は unset。カスタム HOME を使う場合は `ENSEMBLE_INTEGRATION_HOME` に認証済みの隔離 HOME を指定 |
+| `codex-model-reasoning.integration.test.ts` の `describe.skipIf` | codex-acp または Codex の optional dependency がなければ、実 adapter と app-server への設定適用を確認できない | optional dependency を含めて `pnpm install` し、対象 suite を再実行 |
 | `acp-bridge.integration.test.ts` の `describe.skipIf` | `test-acp.yaml` がない場合、または設定された `agentCommand`（省略時は PATH 上の `agent`）を見つけられない・実行できない場合、実 ACP backend を起動できない。skip 時は不足条件を suite 名に表示する | example からローカル設定を作り、`agentCommand` を PATH 上に用意するか実行可能なパスに設定して、該当 suite を実行 |
 | `issue.e2e.test.ts` の `describe.skipIf` | Issue / repository 設定または conductor 認証がない場合、Issue workflow を実行できない | `test-acp.yaml` と認証を設定して `pnpm test:e2e` を実行 |
 | `cli-version.test.ts` の `describe.skipIf` | package 単独の unit 実行時に build artifact がない場合、dist CLI を起動できない | `pnpm build` 後に再実行。CI は build 済みのためこの skip に入らない |
@@ -107,11 +109,12 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | Unit tests | `pnpm test:run` — core / cli / operator-agent の全 unit suite |
 | Release workflow tests | `pnpm test:release-workflow` — `.github/scripts` の Node test |
 | Session resume integration | `test/integration/session-resume.integration.test.ts` |
+| Codex model reasoning integration | `test/integration/codex-model-reasoning.integration.test.ts` |
 | Operator usage integration | `test/integration/usage-operator.integration.test.ts` |
 | Pi conductor integration | `pi-conductor.integration.test.ts`、`pi-headless-settings.integration.test.ts`、`pi-conductor-agent-registry.integration.test.ts` |
 | CLI TTY e2e | `tty-close-process.e2e.test.ts`、`issue-pi-tty-exit.e2e.test.ts`、`issue-pi-tty-close.e2e.test.ts` |
 
-常時実行の integration / e2e は Fake またはローカル fixture を使い、Cursor / GitHub 認証や `test-acp.yaml` を要求しない。PTY suite には Ubuntu runner 上の Python 3 `pty`、POSIX process group、Git が必要であり、Pi TTY suites は localhost bind も使う。Issue workflow 全体、実 ACP、実 Cursor SDK の suite は通常 CI の対象外。`.github/scripts` の Node tests は対象だが、`scripts/pi/cached-auth.test.mjs` は対象外である。
+常時実行の integration / e2e は Fake、ローカル fixture、または隔離された Codex を使い、Cursor / GitHub 認証や `test-acp.yaml` を要求しない。PTY suite には Ubuntu runner 上の Python 3 `pty`、POSIX process group、Git が必要であり、Pi TTY suites は localhost bind も使う。Issue workflow 全体、外部サービスへ接続する実 ACP、実 Cursor SDK の suite は通常 CI の対象外。`.github/scripts` の Node tests は対象だが、`scripts/pi/cached-auth.test.mjs` は対象外である。
 
 ## 参照
 

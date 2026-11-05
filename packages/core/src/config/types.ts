@@ -16,6 +16,17 @@ export type ConductorBackend = 'cursor' | 'pi';
 /** ACP worker model tiers selected by each team-profile worker entry. */
 export type AcpModelTag = 'high' | 'default' | 'low' | 'fast';
 
+/** Model catalog entry after all config layers have been merged. */
+export interface AcpModelDefinition {
+  model: string;
+  reasoning?: string;
+}
+
+export type AcpModelCatalogEntry = string | AcpModelDefinition;
+
+/** A single config layer may override only one attribute of an entry. */
+export type AcpModelCatalogLayerEntry = string | Partial<AcpModelDefinition>;
+
 export interface EnsembleConductorPiConfig {
   /** Pi の user resource root。絶対パスまたは repoRoot 基準の相対パス。 */
   agentDir?: string;
@@ -39,8 +50,8 @@ export interface EnsembleAcpConfig {
   defaultPreset: BuiltinAcpPresetId;
   /** codex-acp 等の子プロセス spawn に渡す env（user → project deep merge）。 */
   env?: Record<string, string>;
-  /** 環境ごとの ACP model ID catalog。tag mapping から参照する。 */
-  models?: Record<string, string>;
+  /** 環境ごとの ACP model catalog。tag mapping から参照する。 */
+  models?: Record<string, AcpModelCatalogEntry>;
   /** profile worker の modelTag から models key への共通 mapping。 */
   tags?: Partial<Record<AcpModelTag, string>>;
 }
@@ -107,6 +118,12 @@ export interface EnsembleConfig {
 }
 
 /** YAML 1 層分の parse 結果（deep merge 前）。各セクションは部分指定可。 */
-export type EnsembleConfigLayer = {
+type PartialEnsembleConfig = {
   [K in keyof EnsembleConfig]?: Partial<EnsembleConfig[K]>;
+};
+
+export type EnsembleConfigLayer = Omit<PartialEnsembleConfig, 'acp'> & {
+  acp?: Omit<Partial<EnsembleAcpConfig>, 'models'> & {
+    models?: Record<string, AcpModelCatalogLayerEntry>;
+  };
 };

@@ -1,6 +1,6 @@
 # ADR 0045: worker ACP model tag と環境別 model catalog
 
-- Status: accepted
+- Status: superseded by [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning 指定のみ）
 - Date: 2026-10-30
 - Related: [ADR 0019](0019-worker-acp-cli-presets.md), [ADR 0020](0020-ensemble-config-setting-resolution.md), [ADR 0042](0042-explicit-config-replaces-user-layer.md)
 
