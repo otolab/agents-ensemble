@@ -81,6 +81,7 @@ vi.mock('../github/resolve-github-auth-token.js', () => ({
 }));
 
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
+import type { AcpBridge } from '../acp/acp-bridge.js';
 import { SessionLogger } from './session/session-logger.js';
 import { runIssueSession as runIssueSessionImpl } from './issue-session.js';
 import { createCursorSdkConductorAgentFactory } from './cursor-sdk-conductor-agent.js';
@@ -314,6 +315,122 @@ describe('Issue startup conductor reasoning backend wiring', () => {
         configuredReasoning: 'high',
       });
       expect(mockFetchIssueContext).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    {
+      backend: 'pi' as const,
+      modelId: 'anthropic/model-1',
+      reasoning: 'ultra',
+      expectedError: /Pi conductor reasoning "ultra" is invalid/,
+    },
+    {
+      backend: 'cursor' as const,
+      modelId: 'cursor-model',
+      reasoning: 'high',
+      expectedError: /does not support reasoning value "high"/,
+    },
+  ])(
+    'cleans up an eager Issue startup when the $backend adapter rejects its reasoning setting',
+    async ({ backend, modelId, reasoning, expectedError }) => {
+      await writeFile(
+        join(repoRoot, '.ensemble', 'config.yaml'),
+        [
+          'conductor:',
+          `  backend: ${backend}`,
+          `  model: ${modelId}`,
+          `  reasoning: ${reasoning}`,
+          '',
+        ].join('\n'),
+      );
+      if (backend === 'cursor') {
+        mockCursorModelList.mockResolvedValue([
+          {
+            id: 'cursor-model',
+            displayName: 'Cursor model',
+            parameters: [
+              {
+                id: 'reasoning_effort',
+                displayName: 'Reasoning effort',
+                values: [{ value: 'low' }],
+              },
+            ],
+          },
+        ]);
+      }
+
+      const connectAcp = vi.fn(async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('worker-session'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession: vi.fn().mockResolvedValue({
+            stopReason: 'end_turn',
+            responseText: 'ready',
+          }),
+          cancelSession: vi.fn().mockResolvedValue(undefined),
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+      );
+      const signalListenersBefore = {
+        sigint: process.listeners('SIGINT'),
+        sigterm: process.listeners('SIGTERM'),
+      };
+
+      await expect(
+        executeIssueCommand(
+          issueUrl,
+          {
+            repoRoot,
+            conductorCwd: repoRoot,
+            worktree: 'in_repo',
+            noWait: true,
+            githubMonitor: false,
+          },
+          {
+            isOperatorInputInteractive: () => false,
+            isOperatorInputTty: () => false,
+            loadEnsembleConfig: (root, options) =>
+              loadEnsembleConfig(root, {
+                ...options,
+                userEnsembleRoot,
+                writeStderr: () => {},
+              }),
+            loadProfile: async () => ({
+              profile: {
+                workers: [{ name: 'implementer', kind: 'implementer' }],
+              },
+              profilePath: 'reasoning-fail-fast-test',
+            }),
+            runIssueSession: (options) =>
+              runIssueSessionImpl({
+                ...options,
+                mcpConfigOptions: { userEnsembleRoot },
+                workerWorktree: {
+                  path: repoRoot,
+                  branch: 'test',
+                  issue,
+                  inRepo: true,
+                },
+                connectAcp,
+                registerProcessSignalHandlers: true,
+              }),
+            SessionLogger,
+            writeStderr: () => {},
+          },
+        ),
+      ).rejects.toThrow(expectedError);
+
+      expect(connectAcp).not.toHaveBeenCalled();
+      expect(process.listeners('SIGINT')).toEqual(signalListenersBefore.sigint);
+      expect(process.listeners('SIGTERM')).toEqual(signalListenersBefore.sigterm);
+      if (backend === 'pi') {
+        expect(mockPiSessionManagerCreate).not.toHaveBeenCalled();
+        expect(mockPiCreateAgentSession).not.toHaveBeenCalled();
+      } else {
+        expect(mockCursorModelList).toHaveBeenCalledOnce();
+        expect(mockCursorAgentCreate).not.toHaveBeenCalled();
+      }
     },
   );
 });

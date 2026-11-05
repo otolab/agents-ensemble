@@ -322,8 +322,62 @@ const RECORDED_ANSWER_UNKNOWN_DISPATCH = {
   dispatchStatus: 'unknown',
 } as const;
 
+type StartupCleanupAction = () => void | Promise<void>;
+
+/** Acquired resources are released here until the session teardown takes ownership. */
+class StartupCleanupGuard {
+  private readonly actions: StartupCleanupAction[] = [];
+  private handedOff = false;
+  private reportCleanupError: (error: unknown) => void = () => {};
+
+  add(action: StartupCleanupAction): void {
+    if (this.handedOff) {
+      throw new Error('Cannot register startup cleanup after session handoff');
+    }
+    this.actions.push(action);
+  }
+
+  setErrorReporter(report: (error: unknown) => void): void {
+    this.reportCleanupError = report;
+  }
+
+  handoff(): void {
+    this.handedOff = true;
+    this.actions.length = 0;
+  }
+
+  async cleanup(): Promise<void> {
+    if (this.handedOff) return;
+    this.handedOff = true;
+    for (const action of this.actions.reverse()) {
+      try {
+        await action();
+      } catch (error) {
+        try {
+          this.reportCleanupError(error);
+        } catch {
+          // Keep the startup error as the rejection reason if reporting fails.
+        }
+      }
+    }
+  }
+}
+
 export async function runConductorSession(
   options: RunConductorSessionOptions,
+): Promise<ConductorSessionResult> {
+  const startupCleanup = new StartupCleanupGuard();
+  try {
+    return await runConductorSessionWithStartupGuard(options, startupCleanup);
+  } catch (error) {
+    await startupCleanup.cleanup();
+    throw error;
+  }
+}
+
+async function runConductorSessionWithStartupGuard(
+  options: RunConductorSessionOptions,
+  startupCleanup: StartupCleanupGuard,
 ): Promise<ConductorSessionResult> {
   const userInstructions = await loadUserInstructions({
     userEnsembleRoot: options.mcpConfigOptions?.userEnsembleRoot,
@@ -345,6 +399,13 @@ export async function runConductorSession(
       issueUrl: options.issueUrl,
       repoRoot: options.repoRoot,
     });
+  startupCleanup.setErrorReporter((error) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    sessionLogger.emit({
+      type: 'harness.warning',
+      message: `起動失敗後の後始末に失敗しました: ${detail}`,
+    });
+  });
   attachLegacySessionCallbacks(sessionLogger, options);
   const expiredHistory = await pruneExpiredToolCallSnapshotHistoryFiles(
     options.repoRoot,
@@ -402,6 +463,7 @@ export async function runConductorSession(
   let githubMonitor: GitHubMonitor | undefined;
   let activeResumeStorePath: string | undefined;
   let activeStoreLocation: SessionResumeStoreLocation = 'user-path-hash';
+  let drainStartupResumeStoreWrites = async () => {};
   const pendingGitHubRecoveries: number[] = [];
   const conductorCwd = options.conductorCwd ?? process.cwd();
   let cursorBootstrapRunId: string | undefined;
@@ -441,8 +503,9 @@ export async function runConductorSession(
     }
     // A previously completed lifecycle no longer describes this instance once
     // resume begins. Persist unknown before restoring or attaching anything so
-    // a crash before the first regular SessionResumeStore flush cannot leave stale
-    // `closed` / `exited` data behind.
+    // a crash during backend resume cannot leave stale `closed` / `exited` data
+    // behind. If initialization rejects cleanly, startup cleanup restores the
+    // previous record.
     const resumeStore: SessionResumeStore = {
       ...loadedResumeStore,
       lifecycle: 'unknown',
@@ -454,10 +517,20 @@ export async function runConductorSession(
     cursorBootstrapRunId = loadedResumeStore.cursorBootstrapRunId;
     harnessPhase = 'running';
     harnessModifiedAt = resumeStore.modifiedAt;
+    let resumeStoreActivationCommitted = false;
+    startupCleanup.add(async () => {
+      if (!resumeStoreActivationCommitted) return;
+      await drainStartupResumeStoreWrites();
+      await saveSessionResumeStore(
+        locatedResumeStore.path,
+        loadedResumeStore,
+      );
+    });
     await saveSessionResumeStore(
       activeResumeStorePath,
       resumeStore,
     );
+    resumeStoreActivationCommitted = true;
     const history = await loadToolCallSnapshotHistory({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
@@ -632,24 +705,24 @@ export async function runConductorSession(
     shutdownIntentController.abort();
     abortAfterOpenQuestionDrain(drainedShutdownController);
   };
-  shutdownSignal.addEventListener('abort', onShutdownSignal, { once: true });
-  if (shutdownSignal.aborted) onShutdownSignal();
   let unregisterProcessSignalHandlers = () => {};
   const removeShutdownDrainListener = () =>
     shutdownSignal.removeEventListener('abort', onShutdownSignal);
-  unregisterProcessSignalHandlers = removeShutdownDrainListener;
+  const onSignal = () => shutdownController!.abort();
+  unregisterProcessSignalHandlers = () => {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+    removeShutdownDrainListener();
+  };
+  startupCleanup.add(() => unregisterProcessSignalHandlers());
+  shutdownSignal.addEventListener('abort', onShutdownSignal, { once: true });
+  if (shutdownSignal.aborted) onShutdownSignal();
   if (
     ownsShutdownController &&
     options.registerProcessSignalHandlers !== false
   ) {
-    const onSignal = () => shutdownController!.abort();
     process.once('SIGINT', onSignal);
     process.once('SIGTERM', onSignal);
-    unregisterProcessSignalHandlers = () => {
-      process.off('SIGINT', onSignal);
-      process.off('SIGTERM', onSignal);
-      removeShutdownDrainListener();
-    };
   }
 
   const permissionPipeline =
@@ -932,36 +1005,7 @@ export async function runConductorSession(
       });
     },
   });
-
-  if (workers.length > 0 && !activeLazyWorkers) {
-    sessionLogger.emit({
-      type: 'harness.worker.bootstrap',
-      workers: workers.map((worker) => ({
-        name: worker.name,
-        kind: worker.kind,
-      })),
-      mode: 'init',
-    });
-  }
-  workerSession.startWorkers();
-  if (resumeToolCallSnapshots.length > 0) {
-    const workerIdsByName = new Map<string, string>();
-    workers.forEach((worker, index) => {
-      const workerId = workerSession.startedWorkerIds[index];
-      if (workerId) workerIdsByName.set(worker.name, workerId);
-    });
-    const restoreResult = toolCallSnapshots.restore(
-      resumeToolCallSnapshots,
-      workerIdsByName,
-    );
-    if (restoreResult.skippedCount > 0) {
-      toolCallHistoryDirty = true;
-      sessionLogger.emit({
-        type: 'harness.warning',
-        message: `${restoreResult.skippedCount} tool-call snapshot entr${restoreResult.skippedCount === 1 ? 'y was' : 'ies were'} skipped because its worker is no longer available or its data is invalid.`,
-      });
-    }
-  }
+  startupCleanup.add(() => workerSession.stop({ force: true }));
 
   const recordAnsweredQuestion = (answered: OpenQuestion) => {
     const record = openQuestionToEscalationRecord(answered);
@@ -1178,6 +1222,13 @@ export async function runConductorSession(
   conductorAgent = options.resumeAgentId
     ? await conductorAgentFactory.resume(options.resumeAgentId, conductorOptions)
     : await conductorAgentFactory.create(conductorOptions);
+  startupCleanup.add(async () => {
+    if (options.resumeAgentId && conductorAgent.closeForResume) {
+      await conductorAgent.closeForResume();
+    } else {
+      await conductorAgent.close();
+    }
+  });
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
   activeResumeStorePath ??= sessionResumeStorePath({
     repoRoot: options.repoRoot,
@@ -1220,6 +1271,9 @@ export async function runConductorSession(
   };
 
   let sessionResumeStoreWriteQueue: Promise<void> = Promise.resolve();
+  drainStartupResumeStoreWrites = async () => {
+    await sessionResumeStoreWriteQueue;
+  };
   let terminalLifecycle: SessionLifecycle | undefined;
   let terminalResumeStoreFinalFlushQueued = false;
   const enqueueSessionResumeStoreWrite = (
@@ -1426,8 +1480,6 @@ export async function runConductorSession(
       emitToolCallHistoryFlushWarning();
     }
   };
-  if (toolCallHistoryDirty) scheduleToolCallHistoryFlush();
-
   let sendCount = 0;
   let autonomousTurns = 0;
 
@@ -1509,6 +1561,9 @@ export async function runConductorSession(
         }
       },
     });
+    startupCleanup.add(async () => {
+      await githubMonitor?.stop();
+    });
     githubMonitor.start();
   }
 
@@ -1529,6 +1584,7 @@ export async function runConductorSession(
     reminderIntervalMs: options.dispatchHoldReminderMs,
     shutdownSignal,
   });
+  startupCleanup.add(() => dispatchHoldReminderMonitor!.stop());
   dispatchHoldReminderMonitor.start();
 
   let permissionDeadlockMonitor: PermissionDeadlockMonitor | undefined;
@@ -1559,6 +1615,7 @@ export async function runConductorSession(
       pollIntervalMs: options.permissionDeadlockPollMs,
       shutdownSignal,
     });
+    startupCleanup.add(() => permissionDeadlockMonitor!.stop());
     permissionDeadlockMonitor.start();
   }
 
@@ -1688,10 +1745,43 @@ export async function runConductorSession(
     });
     if (typeof bindingDispose === 'function') {
       disposeOperatorInput = bindingDispose;
+      startupCleanup.add(() => disposeOperatorInput?.());
     }
   }
 
   try {
+    startupCleanup.handoff();
+    if (workers.length > 0 && !activeLazyWorkers) {
+      sessionLogger.emit({
+        type: 'harness.worker.bootstrap',
+        workers: workers.map((worker) => ({
+          name: worker.name,
+          kind: worker.kind,
+        })),
+        mode: 'init',
+      });
+    }
+    workerSession.startWorkers();
+    if (resumeToolCallSnapshots.length > 0) {
+      const workerIdsByName = new Map<string, string>();
+      workers.forEach((worker, index) => {
+        const workerId = workerSession.startedWorkerIds[index];
+        if (workerId) workerIdsByName.set(worker.name, workerId);
+      });
+      const restoreResult = toolCallSnapshots.restore(
+        resumeToolCallSnapshots,
+        workerIdsByName,
+      );
+      if (restoreResult.skippedCount > 0) {
+        toolCallHistoryDirty = true;
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message: `${restoreResult.skippedCount} tool-call snapshot entr${restoreResult.skippedCount === 1 ? 'y was' : 'ies were'} skipped because its worker is no longer available or its data is invalid.`,
+        });
+      }
+    }
+    if (toolCallHistoryDirty) scheduleToolCallHistoryFlush();
+
     openQuestionControlServer = await startOpenQuestionControlServer({
       listOpenQuestions: () => openQuestions.listOpen(),
       getLastConductorMessage: () => lastConductorMessage,

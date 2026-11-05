@@ -31,6 +31,7 @@ import {
   SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
 } from '../session/session-resume-store.js';
+import { WorkerSession } from '../runtime/worker-session.js';
 import * as sessionResumeStoreModule from '../session/session-resume-store.js';
 import {
   loadSessionStateStore,
@@ -602,7 +603,7 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it.each(['closed', 'exited'] as const)(
-    'clears stale %s lifecycle before resuming the conductor',
+    'marks stale %s lifecycle active during resume and restores it when startup rejects',
     async (lifecycle) => {
       const agentId = `resume-${lifecycle}-lifecycle`;
       const resumeStorePath = sessionResumeStorePath({
@@ -640,12 +641,10 @@ describe('runConductorSession resume / shutdown', () => {
         'simulated crash before first regular session resume store flush',
       );
 
-      await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
-        lifecycle: 'unknown',
-        harnessPhase: 'running',
-        modifiedAt: expect.any(Number),
-        updatedAt: expect.any(Number),
-      });
+      const restoredResumeStore =
+        await loadSessionResumeStore(resumeStorePath);
+      expect(restoredResumeStore?.lifecycle).toBe(lifecycle);
+      expect(restoredResumeStore?.harnessPhase).not.toBe('running');
     },
   );
 
@@ -722,6 +721,114 @@ describe('runConductorSession resume / shutdown', () => {
       configuredReasoning: 'cli-level',
     });
   });
+
+  it.each([
+    { backend: 'pi' as const, mode: 'create' as const },
+    { backend: 'cursor' as const, mode: 'create' as const },
+    { backend: 'pi' as const, mode: 'resume' as const },
+    { backend: 'cursor' as const, mode: 'resume' as const },
+  ])(
+    'cleans up startup resources when the $backend $mode rejects',
+    async ({ backend, mode }) => {
+      const agentId = `resume-${backend}-startup-failure`;
+      const profile = {
+        conductor: { backend },
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      };
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend,
+          reasoning: 'high',
+        },
+      };
+      const failure = new Error(`${backend} reasoning fail-fast`);
+      if (mode === 'create') {
+        mockCreate.mockRejectedValueOnce(failure);
+      } else {
+        mockResume.mockRejectedValueOnce(failure);
+        await saveSessionResumeStore(
+          sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+          {
+            version: SESSION_RESUME_STORE_VERSION,
+            conductorAgentId: agentId,
+            conductorBackend: backend,
+            issueUrl: TEST_ISSUE.url,
+            repoRoot,
+            profile,
+            openQuestions: [],
+            sequence: 0,
+            workers: {},
+            mcpConfigDigest: computeMcpConfigDigest({}),
+            ensembleConfigDigest:
+              computeEnsembleConfigDigest(ensembleConfig),
+            lifecycle: 'closed',
+            harnessPhase: 'close',
+            updatedAt: 1,
+          },
+        );
+      }
+
+      const connectAcp = vi.fn(async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('worker-session'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession: vi.fn().mockResolvedValue({
+            stopReason: 'end_turn',
+            responseText: 'ready',
+          }),
+          cancelSession: vi.fn().mockResolvedValue(undefined),
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+      );
+      const startWorkers = vi.spyOn(WorkerSession.prototype, 'startWorkers');
+      const stopWorkers = vi.spyOn(WorkerSession.prototype, 'stop');
+      const signalListenersBefore = {
+        sigint: process.listeners('SIGINT'),
+        sigterm: process.listeners('SIGTERM'),
+      };
+
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile,
+          ensembleConfig,
+          ...(mode === 'resume' ? { resumeAgentId: agentId } : {}),
+          permissionPipeline: new PermissionPipeline({}),
+          workerWorktree: {
+            path: repoRoot,
+            branch: 'main',
+            issue: TEST_ISSUE,
+            inRepo: true,
+          },
+          defaultAcp: { defaultAcpCommand: process.execPath },
+          connectAcp,
+          waitForOperatorExit: false,
+        }),
+      ).rejects.toThrow(failure.message);
+
+      expect(startWorkers).not.toHaveBeenCalled();
+      expect(stopWorkers).toHaveBeenCalledOnce();
+      expect(stopWorkers).toHaveBeenCalledWith({ force: true });
+      expect(connectAcp).not.toHaveBeenCalled();
+      expect(process.listeners('SIGINT')).toEqual(signalListenersBefore.sigint);
+      expect(process.listeners('SIGTERM')).toEqual(signalListenersBefore.sigterm);
+      if (mode === 'resume') {
+        const restoredResumeStore = await loadSessionResumeStore(
+          sessionResumeStorePath({
+            repoRoot,
+            conductorAgentId: agentId,
+          }),
+        );
+        expect(restoredResumeStore).toMatchObject({
+          lifecycle: 'closed',
+          harnessPhase: 'close',
+        });
+      }
+    },
+  );
 
   it.each([false, true])(
     'returns resolved worker and conductor models with lazyWorkers=%s',
