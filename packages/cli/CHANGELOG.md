@@ -1,5 +1,16 @@
 # @agents-ensemble/cli
 
+## 0.17.2
+
+### Patch Changes
+
+- 2941523: モデルカタログの操作を `models remote`、`diff`、`add` に分け、従来の `sync` を非推奨の互換入口として維持します。モデル追加先は省略時に user 層になります。
+- 3f3055f: Show pending operator messages and delivery modes above the TUI input, and log messages when dispatched to the conductor.
+- Updated dependencies [75b87d3]
+- Updated dependencies [3f3055f]
+  - @agents-ensemble/core@0.17.2
+  - @agents-ensemble/operator-agent@0.4.3
+
 ## 0.17.1
 
 ### Patch Changes
