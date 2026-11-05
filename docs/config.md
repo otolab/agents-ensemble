@@ -65,6 +65,8 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model`、`acp.env`、model catalog の `reasoning` を含む変更や tag mapping の変更も対象です。worker の ACP spawn fingerprint には worker ごとの `modelTag` と解決済み model ID（credential ではない値）を記録し、env map は digest のみを保持します。Codex の `reasoning` は `CODEX_CONFIG` に含まれるため、この env digest でも照合します。
 
+conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default です。直接 API の create / resume にも解決値を渡します。resume 時も `modelId` と環境変数は invocation 単位で解決し直しますが、config 自体が変わっていれば既存の digest 検証で resume を拒否します。
+
 旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。SessionResumeStore には config 全体や env map の平文、config ファイルのパスは保存しません。解決済み model ID は worker fingerprint に限って保存します。
 
 同じ解決済み config ならファイルの場所や YAML 内のキー順が変わっても resume できます。model catalog の文字列 shorthand と構造化エントリは、同じ model ID を指していても config の形が異なるため、書き換えると digest も変わります。digest を持たない旧 resume state は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)）。

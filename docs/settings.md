@@ -33,6 +33,8 @@ CLI > 環境変数 > project config（読み込み有効時） > 選択された
 
 `profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
+conductor model は `ensemble issue --model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default の順で解決します。`runConductorSession` の直接呼び出しでも同じ選択値を conductor factory の create / resume に渡します。既定値は Cursor では Auto、Pi では Pi resource の `settings.json` にある既定モデルです。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を使います。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、その優先順位を保てるようにします。
+
 `ensemble issue` と `ensemble operator-agent` は `--config <path>` を受け付けます。指定したファイルが user config 層を置き換え、標準 user config は読み込みません。project config の読み込みは独立して `config.loadProjectConfig` で制御し、同一キーでは project config が優先されます。明示ファイルに toggle がなければ default の `true` が使われます。team profile の `--profile` とは別系統です。
 
 ```sh
@@ -51,6 +53,8 @@ Session resume state conductorBackend mismatch: pi !== cursor
 旧 SessionResumeStore にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `~/.ensemble/sessions/<repoKey>/pi/` の JSONL に保存されます。旧 `<conductorCwd>/.ensemble/pi/sessions/` は再開時に読み取り、user 側へ移行します。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
 
 SessionResumeStore には起動時の実効 ensemble config の canonical SHA-256 digest も保存します。resume 時に digest が異なる場合は conductor の再開前に拒否し、digest を持たない旧 store は警告後に従来どおり再開します。config 値やファイルパスは保存しません。ACP spawn env も canonical digest のみを保存し、値は記録しません。
+
+resume では config の変更を digest で検出します。`modelId` と環境変数は invocation 単位の上書きとして各 run で再解決します。
 
 ### パターン B — Phase 1 横断（env なし）
 
