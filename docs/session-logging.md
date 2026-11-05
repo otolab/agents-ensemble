@@ -116,6 +116,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 | harness 参照用 | `agentId`, `issueUrl`, `repoRoot` |
 | 終了時スナップショット | `escalations`, `openQuestions` |
 | LLM usage | `sessionUsage`（`get_session_usage` と同型。cache stats / compaction count は計測可能な場合のみ、cost は conductor の実課金データがある場合のみ `scope: conductor-only` でマージ） |
+| モデル構成 | `sessionModels`（conductor の設定/使用 model id、各 worker の `modelTag`・解決済み ACP model ID・preset） |
 | worker 応答要約 | `workerResponses[].responsePreview`（全文は `--include-full-response-text`） |
 
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。

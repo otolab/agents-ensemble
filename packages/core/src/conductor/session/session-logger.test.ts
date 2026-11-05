@@ -25,6 +25,11 @@ const TEST_DISPATCH = {
   acpSessionId: 'sess-1',
 };
 
+const EMPTY_SESSION_MODELS = {
+  conductor: { backend: 'cursor' as const, configuredModelId: 'default' },
+  workers: [],
+};
+
 describe('SessionLogger', () => {
   it('records the start time and elapsed time in its summary snapshot', () => {
     const now = vi.spyOn(Date, 'now');
@@ -40,6 +45,7 @@ describe('SessionLogger', () => {
         agentId: 'agent-1',
         escalations: [],
         openQuestions: [],
+        sessionModels: EMPTY_SESSION_MODELS,
       });
 
       expect(summary.startedAt).toBe(1_750_000_000_000);
@@ -81,6 +87,7 @@ describe('SessionLogger', () => {
       agentId: 'agent-1',
       escalations: [],
       openQuestions: [],
+      sessionModels: EMPTY_SESSION_MODELS,
     });
 
     expect(events).toEqual([
@@ -125,6 +132,7 @@ describe('SessionLogger', () => {
       agentId: 'agent-1',
       escalations: [],
       openQuestions: [],
+      sessionModels: EMPTY_SESSION_MODELS,
     });
 
     expect(summary.sendCount).toBe(2);
@@ -174,6 +182,7 @@ describe('SessionLogger', () => {
       agentId: 'agent-1',
       escalations: [],
       openQuestions: [],
+      sessionModels: EMPTY_SESSION_MODELS,
     });
     expect(summary.sendCount).toBe(1);
     expect(summary.lastResult).toBe('done');
@@ -209,6 +218,7 @@ describe('SessionLogger', () => {
         agentId: 'agent-1',
         escalations: [],
         openQuestions: [],
+        sessionModels: EMPTY_SESSION_MODELS,
       }),
     ).toMatchObject({
       sendCount: 0,

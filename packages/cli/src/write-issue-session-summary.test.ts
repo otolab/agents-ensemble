@@ -5,6 +5,11 @@ import {
 } from '@agents-ensemble/core';
 import { writeIssueSessionSummary } from './write-issue-session-summary.js';
 
+const BASE_SESSION_MODELS = {
+  conductor: { backend: 'cursor', configuredModelId: 'default' },
+  workers: [],
+} satisfies ConductorSessionResult['sessionModels'];
+
 const BASE_SUMMARY = {
   agentId: 'agent-1',
   issueUrl: 'https://github.com/org/repo/issues/1',
@@ -14,6 +19,7 @@ const BASE_SUMMARY = {
   sendCount: 1,
   stopReason: 'completed',
   lastRunStatus: 'finished',
+  sessionModels: BASE_SESSION_MODELS,
   workerDispatches: [],
   workerFailures: [],
   escalations: [],

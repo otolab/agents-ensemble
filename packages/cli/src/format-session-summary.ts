@@ -47,6 +47,7 @@ export function formatIssueSessionSummaryJson(
       escalationCount: summary.escalations.length,
       openQuestionCount: summary.openQuestions.length,
       ...(summary.sessionUsage ? { sessionUsage: summary.sessionUsage } : {}),
+      sessionModels: summary.sessionModels,
       workerResponses: summary.workerDispatches.map((dispatch) => {
         const responseText = dispatch.promptResult.responseText ?? '';
         const entry: Record<string, unknown> = {
@@ -139,6 +140,28 @@ function formatElapsedTime(durationMs: number): string {
   return `${seconds}秒`;
 }
 
+function formatWorkerModelLine(worker: SessionSummary['sessionModels']['workers'][number]): string {
+  const model =
+    worker.model != null
+      ? `${worker.modelTag} → ${worker.model}`
+      : `${worker.modelTag}（${worker.acpPreset} 既定）`;
+  return `    worker ${worker.name}: ${model}`;
+}
+
+function formatConductorModelLine(
+  conductor: SessionSummary['sessionModels']['conductor'],
+): string {
+  const configured = conductor.configuredModelId;
+  const used = conductor.lastUsedModelId;
+  const detail =
+    used && used !== configured
+      ? `設定 ${configured} · 使用 ${used}`
+      : used
+        ? `使用 ${used}`
+        : `設定 ${configured}`;
+  return `    conductor (${conductor.backend}): ${detail}`;
+}
+
 /** TTY 終了時の人間向けサマリ（1 画面程度）。 */
 export function formatIssueSessionSummaryText(summary: SessionSummary): string {
   const lines: string[] = [];
@@ -148,6 +171,15 @@ export function formatIssueSessionSummaryText(summary: SessionSummary): string {
   lines.push(
     `  worker ラウンド: ${summary.workerDispatches.length} 完了 / ${summary.workerFailures.length} 失敗`,
   );
+
+  const modelLines = [
+    formatConductorModelLine(summary.sessionModels.conductor),
+    ...summary.sessionModels.workers.map(formatWorkerModelLine),
+  ];
+  if (modelLines.length > 0) {
+    lines.push('  モデル:');
+    lines.push(...modelLines);
+  }
 
   const usage = summary.sessionUsage;
   if (usage) {

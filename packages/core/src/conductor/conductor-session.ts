@@ -124,6 +124,10 @@ import {
   type SessionResumeStore,
 } from '../session/session-resume-store.js';
 import {
+  buildSessionModelsSummary,
+  type SessionModelsSummary,
+} from '../session/build-session-models-summary.js';
+import {
   saveSessionStatusLine,
   sessionStateStorePath,
   loadSessionStateStore,
@@ -304,6 +308,8 @@ export interface ConductorSessionResult {
   openQuestions: OpenQuestion[];
   /** harness が蓄積した LLM usage サマリ（ラウンド無しのときは省略）。 */
   sessionUsage?: SessionUsageSummary;
+  /** 終了時点の conductor / worker モデル構成。 */
+  sessionModels: SessionModelsSummary;
 }
 
 const OPEN_QUESTION_CONTROL_DRAIN_TIMEOUT_MS = 5_000;
@@ -2086,6 +2092,13 @@ export async function runConductorSession(
         agentId: conductorHandle.conductor.agentId,
         escalations,
         openQuestions: openQuestions.list(),
+        sessionModels: buildSessionModelsSummary({
+          backend: conductorBackend,
+          explicitConductorModelId: options.modelId,
+          config: ensembleConfig,
+          workers,
+          usageTracker: sessionUsageTracker,
+        }),
         sessionUsage:
           sessionUsage.totals.rounds > 0 ||
           sessionUsage.cost != null ||

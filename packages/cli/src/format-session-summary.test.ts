@@ -7,6 +7,11 @@ import {
   truncateResponsePreview,
 } from './format-session-summary.js';
 
+const DEFAULT_SESSION_MODELS: SessionSummary['sessionModels'] = {
+  conductor: { backend: 'cursor', configuredModelId: 'default' },
+  workers: [],
+};
+
 function createSummary(
   overrides: Partial<SessionSummary> = {},
 ): SessionSummary {
@@ -19,6 +24,7 @@ function createSummary(
     sendCount: 3,
     stopReason: 'completed',
     lastRunStatus: 'finished',
+    sessionModels: DEFAULT_SESSION_MODELS,
     workerDispatches: [
       {
         name: 'implementer',
@@ -78,6 +84,33 @@ function createSummary(
 }
 
 describe('formatIssueSessionSummaryJson', () => {
+  it('includes sessionModels', () => {
+    const json = JSON.parse(
+      formatIssueSessionSummaryJson(
+        createSummary({
+          sessionModels: {
+            conductor: {
+              backend: 'pi',
+              configuredModelId: 'default',
+              lastUsedModelId: 'gpt-6-luna',
+            },
+            workers: [
+              {
+                name: 'implementer',
+                kind: 'implementer',
+                modelTag: 'high',
+                acpPreset: 'codex',
+                model: 'gpt-6.1-terra',
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    expect(json.sessionModels.conductor.lastUsedModelId).toBe('gpt-6-luna');
+    expect(json.sessionModels.workers[0].model).toBe('gpt-6.1-terra');
+  });
+
   it('includes sessionUsage and responsePreview by default', () => {
     const json = JSON.parse(formatIssueSessionSummaryJson(createSummary()));
     expect(json.startedAt).toBe(1_750_000_000_000);
@@ -221,6 +254,8 @@ describe('formatIssueSessionSummaryText', () => {
     expect(text).toContain('経過時間: 1分23秒');
     expect(text).toContain('conductor ターン: 3');
     expect(text).toContain('worker ラウンド: 1 完了 / 0 失敗');
+    expect(text).toContain('  モデル:');
+    expect(text).toContain('conductor (cursor): 設定 default');
     expect(text).toContain('usage（記録済み）:');
     expect(text).toContain('conductor: input 1k · output 300');
     expect(text).toContain('合計: input 1k · output 340');

@@ -99,6 +99,14 @@
 | `escalationCount` | `number` | CLI 導出 | 終了 JSON・TTY テキスト | `0` |
 | `openQuestionCount` | `number` | CLI 導出（未回答は別途フィルタ可） | 終了 JSON・TTY テキスト | `0` |
 
+### 2.3.1 モデル構成（`sessionModels`）
+
+| フィールド | 型 | ソース | 出力先 | 未取得時 |
+|-----------|-----|--------|--------|----------|
+| `sessionModels` | `SessionModelsSummary` | 終了時 `buildSessionModelsSummary` | 終了 JSON・TTY テキスト | なし（常に設定） |
+| `sessionModels.conductor` | `{ backend, configuredModelId, lastUsedModelId? }` | config / CLI / 最後の conductor send | 同上 | — |
+| `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
+
 ---
 
 ### 2.4 TTY 終了サマリ例
