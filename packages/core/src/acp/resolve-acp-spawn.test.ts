@@ -313,7 +313,6 @@ describe('resolveWorkerAcpSpawn', () => {
       preset: 'cursor' as const,
       expected: {
         args: ['--model', 'gateway/opus', 'acp'],
-        clientCapabilitiesMeta: { parameterizedModelPicker: true },
       },
     },
     {
@@ -358,6 +357,49 @@ describe('resolveWorkerAcpSpawn', () => {
       model: 'gateway/opus',
       ...expected,
     });
+    if (preset === 'cursor') {
+      expect(resolved.clientCapabilitiesMeta).toBeUndefined();
+    }
+  });
+
+  it('advertises Cursor parameterized model options only for an explicit option override', () => {
+    const resolve = (definition: {
+      model: string;
+      reasoning?: string;
+      cursorFast?: boolean;
+    }) =>
+      resolveWorkerAcpSpawn({
+        defaultOptions: {
+          defaultAcpCli: 'cursor',
+          env: {},
+          config: {
+            acp: {
+              models: { selected: definition },
+              tags: { default: 'selected' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      });
+
+    const modelOnly = resolve({ model: 'cursor-grok-4.6-high' });
+    expect(modelOnly.args).toEqual([
+      '--model',
+      'cursor-grok-4.6-high',
+      'acp',
+    ]);
+    expect(modelOnly.clientCapabilitiesMeta).toBeUndefined();
+    expect(modelOnly.sessionConfigOptionOverrides).toBeUndefined();
+
+    expect(resolve({ model: 'cursor-grok-4.6-high', reasoning: 'high' }))
+      .toMatchObject({
+        clientCapabilitiesMeta: { parameterizedModelPicker: true },
+        sessionConfigOptionOverrides: [{ id: 'effort', value: 'high' }],
+      });
+    expect(resolve({ model: 'cursor-grok-4.6-high', cursorFast: false }))
+      .toMatchObject({
+        clientCapabilitiesMeta: { parameterizedModelPicker: true },
+        sessionConfigOptionOverrides: [{ id: 'fast', value: 'false' }],
+      });
   });
 
   it('merges a model into the existing Codex session config', () => {
@@ -764,7 +806,7 @@ describe('profileWorkersToSessionSpecs', () => {
       {
         modelTag: 'high',
         args: ['--model', 'cursor/strong', 'acp'],
-        clientCapabilitiesMeta: { parameterizedModelPicker: true },
+        clientCapabilitiesMeta: undefined,
         fingerprint: {
           preset: 'cursor',
           command: 'agent',
@@ -776,7 +818,7 @@ describe('profileWorkersToSessionSpecs', () => {
       {
         modelTag: 'default',
         args: ['--model', 'cursor/standard', 'acp'],
-        clientCapabilitiesMeta: { parameterizedModelPicker: true },
+        clientCapabilitiesMeta: undefined,
         fingerprint: {
           preset: 'cursor',
           command: 'agent',

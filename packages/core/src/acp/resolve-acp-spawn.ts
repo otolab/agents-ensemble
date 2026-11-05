@@ -408,10 +408,14 @@ function injectAcpModel(
         args: ['--model', model, ...spawn.args],
         modelTag,
         model,
-        clientCapabilitiesMeta: {
-          ...(spawn.clientCapabilitiesMeta ?? {}),
-          parameterizedModelPicker: true,
-        },
+        ...(reasoning !== undefined || cursorFast !== undefined
+          ? {
+              clientCapabilitiesMeta: {
+                ...(spawn.clientCapabilitiesMeta ?? {}),
+                parameterizedModelPicker: true,
+              },
+            }
+          : {}),
         ...(reasoning !== undefined ? { reasoning } : {}),
         ...(cursorFast !== undefined ? { cursorFast } : {}),
         ...(cursorFast !== undefined || reasoning !== undefined
