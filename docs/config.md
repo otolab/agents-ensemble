@@ -65,7 +65,7 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model`、`acp.env`、model catalog の `reasoning` を含む変更や tag mapping の変更も対象です。worker の ACP spawn fingerprint には worker ごとの `modelTag` と解決済み model ID（credential ではない値）を記録し、env map は digest のみを保持します。Codex の `reasoning` は `CODEX_CONFIG` に含まれるため、この env digest でも照合します。
 
-conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default です。直接 API の create / resume にも解決値を渡します。resume 時も `modelId` と環境変数は invocation 単位で解決し直しますが、config 自体が変わっていれば既存の digest 検証で resume を拒否します。
+conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default です。直接 API でも同じ優先順で選択し、Cursor / Pi の組み込み factory には解決値を create / resume 時に渡します。custom factory では互換性を保つため、config または code default から `default` が選ばれた場合は `modelId: undefined` を渡し、factory 自身の既定値に委ねます。一方、CLI / API の明示値または `CONDUCTOR_MODEL_ID` が `default` / `auto` を選んだ場合は `'default'` を渡し、その invocation override を保ちます。詳しくは[設定全体の解決順](settings.md)を参照してください。resume 時も `modelId` と環境変数は invocation 単位で解決し直しますが、config 自体が変わっていれば既存の digest 検証で resume を拒否します。
 
 旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。SessionResumeStore には config 全体や env map の平文、config ファイルのパスは保存しません。解決済み model ID は worker fingerprint に限って保存します。
 
