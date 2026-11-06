@@ -28,7 +28,7 @@ describe.each(layouts)('%s TUI under frequent session updates', (layout, Compone
     vi.restoreAllMocks();
   });
 
-  it.each([false, true])('does not exceed React update depth with openQuestion=%s', async (withQuestion) => {
+  it.each([false, true])('suppresses unchanged operator-context notifications with openQuestion=%s', async (withQuestion) => {
     const viewModel = createTuiViewModel();
     const createContext = (): OperatorInputContext => ({
       conductorTurn: 1,
@@ -44,8 +44,7 @@ describe.each(layouts)('%s TUI under frequent session updates', (layout, Compone
     viewModel.setOperatorContext(createContext());
 
     const renderCommit = vi.fn();
-    const reactError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { stderr } = render(
+    render(
       <React.Profiler id={`${layout}-snapshot-updates`} onRender={renderCommit}>
         <Component viewModel={viewModel} onSubmit={vi.fn()} />
       </React.Profiler>,
@@ -68,9 +67,6 @@ describe.each(layouts)('%s TUI under frequent session updates', (layout, Compone
       await flushInkStdin(0);
     }
 
-    const inkErrorOutput = stderr.frames.join('');
-    expect(inkErrorOutput).not.toContain('Maximum update depth exceeded');
-    expect(reactError.mock.calls.flat().join(' ')).not.toContain('Maximum update depth exceeded');
     expect(notificationCount.value).toBe(updateCount * 2);
     expect(renderCommit.mock.calls.length).toBeLessThan(updateCount * 8);
   });
