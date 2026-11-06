@@ -15,6 +15,7 @@ const INITIAL_ANSWER =
   '\n回答欄を編集中にセッション状態が更新されても、この下書きが残ることを確認します。';
 const POST_RESIZE_SUFFIX = '\n幅を変えた後にも日本語で追記します。';
 const SHIFT_ENTER = '\u001b[27;2;13~';
+const ACCUMULATED_HISTORY_SIZE = 512;
 const EVENT_BURST_SIZE = 512;
 
 const PYTHON_PTY_RUNNER = String.raw`
@@ -127,6 +128,26 @@ function fixtureRequestContains(request: FixtureRequest, fragment: string): bool
   );
 }
 
+function fixtureRequestHasQuestionAnswer(
+  request: FixtureRequest,
+  answerFragments: readonly string[],
+): boolean {
+  return (
+    request.messages?.some((message) => {
+      const candidateRequest = { messages: [message] };
+      return (
+        fixtureRequestContains(
+          candidateRequest,
+          `【open question 回答】${TARGET_QUESTION_ID}:`,
+        ) &&
+        answerFragments.every((fragment) =>
+          fixtureRequestContains(candidateRequest, fragment),
+        )
+      );
+    }) ?? false
+  );
+}
+
 function createFixtureToolCall(
   index: number,
   name: string,
@@ -151,15 +172,13 @@ function countOccurrences(value: string, fragment: string): number {
   return value.split(fragment).length - 1;
 }
 
-async function typeText(
-  child: ChildProcess,
-  value: string,
-  intervalMs: number,
-): Promise<void> {
-  for (const character of value) {
-    child.stdin?.write(character);
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+// This sends UTF-8 text after composition has been committed. The PTY test
+// does not simulate an operating system or terminal emulator's IME UI.
+function writeCommittedText(child: ChildProcess, value: string): void {
+  if (!child.stdin || child.stdin.destroyed) {
+    throw new Error('The PTY input stream is not available.');
   }
+  child.stdin.write(value, 'utf8');
 }
 
 function createFixtureChatChunk(
@@ -204,17 +223,21 @@ async function startFixtureModelServer(): Promise<{
 
       if (requests.length === 1) {
         response.write(`data: ${JSON.stringify(createFixtureChatChunk({ role: 'assistant' }))}\n\n`);
-        const historyEvents = Array.from({ length: 32 }, (_, index) =>
-          createFixtureToolCall(
-            index,
-            'set_dispatch_hold',
-            { hold: index % 2 === 0 },
-          ),
+        const historyEvents = Array.from(
+          { length: ACCUMULATED_HISTORY_SIZE },
+          (_, index) =>
+            createFixtureToolCall(
+              index,
+              'set_dispatch_hold',
+              { hold: index % 2 === 0 },
+            ),
         );
         const initialToolCalls = [
           ...historyEvents,
-          createFixtureToolCall(32, 'set_dispatch_hold', { hold: true }),
-          createFixtureToolCall(33, 'ask_human', {
+          createFixtureToolCall(ACCUMULATED_HISTORY_SIZE, 'set_dispatch_hold', {
+            hold: true,
+          }),
+          createFixtureToolCall(ACCUMULATED_HISTORY_SIZE + 1, 'ask_human', {
             question: '回答欄の入力と表示を確認してください。',
             responseType: 'text',
           }),
@@ -244,16 +267,19 @@ async function startFixtureModelServer(): Promise<{
         response.write(
           `data: ${JSON.stringify(createFixtureChatChunk({}, 'tool_calls'))}\n\n`,
         );
+      } else if (requests.length === 3) {
+        response.write(`data: ${JSON.stringify(createFixtureChatChunk({ role: 'assistant' }))}\n\n`);
+        response.write(
+          `data: ${JSON.stringify(
+            createFixtureChatChunk({ content: 'Fixture event burst finished.' }),
+          )}\n\n`,
+        );
+        response.write(`data: ${JSON.stringify(createFixtureChatChunk({}, 'stop'))}\n\n`);
       } else {
         response.write(`data: ${JSON.stringify(createFixtureChatChunk({ role: 'assistant' }))}\n\n`);
         response.write(
           `data: ${JSON.stringify(
-            createFixtureChatChunk({
-              content:
-                requests.length === 3
-                  ? 'Fixture event burst finished.'
-                  : 'Fixture operator answer received.',
-            }),
+            createFixtureChatChunk({ content: 'Fixture operator answer received.' }),
           )}\n\n`,
         );
         response.write(`data: ${JSON.stringify(createFixtureChatChunk({}, 'stop'))}\n\n`);
@@ -381,7 +407,7 @@ describe('Pi + stream issue session through a real PTY', () => {
   });
 
   it.skipIf(process.platform === 'win32')(
-    'keeps typed Japanese Open Question input through accumulated Pi events and resize',
+    'keeps committed multiline Japanese input through Pi events and PTY resize',
     async () => {
       const model = await startFixtureModelServer();
       modelServer = model.server;
@@ -614,15 +640,19 @@ globalThis.fetch = async (input, init) => {
       if (!initialFirstLine || !initialSecondLine) {
         throw new Error('The Japanese Open Question fixture answer must have two lines.');
       }
-      await typeText(ptyRunner, initialFirstLine, 4);
+      writeCommittedText(ptyRunner, initialFirstLine);
+      await waitForText(
+        normalizedOutput,
+        initialFirstLine.slice(-4),
+        ptyRunner,
+        3_000,
+      );
       ptyRunner.stdin?.write(SHIFT_ENTER);
+      await new Promise((resolve) => setTimeout(resolve, 50));
       const secondLineCharacters = Array.from(initialSecondLine);
       const secondLineSplit = Math.floor(secondLineCharacters.length / 2);
-      await typeText(
-        ptyRunner,
-        secondLineCharacters.slice(0, secondLineSplit).join(''),
-        8,
-      );
+      const committedPrefix = secondLineCharacters.slice(0, secondLineSplit).join('');
+      writeCommittedText(ptyRunner, committedPrefix);
       await waitForText(
         normalizedOutput,
         'セッション状態が更新',
@@ -635,11 +665,14 @@ globalThis.fetch = async (input, init) => {
       );
       model.releaseEventBurst();
       ptyRunner.kill('SIGUSR1');
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      await typeText(
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const committedSuffix = secondLineCharacters.slice(secondLineSplit).join('');
+      writeCommittedText(ptyRunner, committedSuffix);
+      await waitForText(
+        normalizedOutput,
+        committedSuffix.slice(-4),
         ptyRunner,
-        secondLineCharacters.slice(secondLineSplit).join(''),
-        8,
+        3_000,
       );
       await waitFor(
         () => model.requests.length >= 3,
@@ -656,58 +689,70 @@ globalThis.fetch = async (input, init) => {
         EVENT_BURST_SIZE / 4,
       );
 
-      const postResizeLine = POST_RESIZE_SUFFIX.slice(1);
-      ptyRunner.stdin?.write(SHIFT_ENTER);
-      await typeText(ptyRunner, postResizeLine, 8);
-      await waitForText(normalizedOutput, '後にも日本語で', ptyRunner, 3_000);
-      ptyRunner.stdin?.write('\r');
-      await waitFor(
-        () => model.requests.length >= 4,
-        ptyRunner,
-        'Pi to request a response after the submitted Japanese answer',
-        10_000,
-        normalizedOutput,
-      );
       const answerFragments = [
         initialFirstLine,
         initialSecondLine,
         POST_RESIZE_SUFFIX.slice(1),
       ];
+      const postResizeLine = POST_RESIZE_SUFFIX.slice(1);
+      ptyRunner.stdin?.write(SHIFT_ENTER);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      writeCommittedText(ptyRunner, postResizeLine);
+      await waitForText(
+        normalizedOutput,
+        postResizeLine.slice(-4),
+        ptyRunner,
+        3_000,
+      );
+      ptyRunner.stdin?.write('\r');
+      await waitFor(
+        () =>
+          model.requests.some((request) =>
+            fixtureRequestHasQuestionAnswer(request, answerFragments),
+          ),
+        ptyRunner,
+        'Pi to send the submitted answer with its question ID',
+        30_000,
+        () =>
+          JSON.stringify(
+            {
+              requests: model.requests.map((request, index) => ({
+                index,
+                messageCount: request.messages?.length ?? 0,
+                hasQuestionAnswer: fixtureRequestHasQuestionAnswer(
+                  request,
+                  answerFragments,
+                ),
+                hasAnySubmittedFragment: answerFragments.some((fragment) =>
+                  fixtureRequestContains(request, fragment),
+                ),
+                answerFragmentPresence: answerFragments.map((fragment) =>
+                  fixtureRequestContains(request, fragment),
+                ),
+                hasExpectedEnvelope: fixtureRequestContains(
+                  request,
+                  `【open question 回答】${TARGET_QUESTION_ID}:`,
+                ),
+              })),
+            },
+          ),
+      );
       const answerRequest = model.requests.find((request) =>
-        answerFragments.every((fragment) =>
-          fixtureRequestContains(request, fragment),
-        ),
+        fixtureRequestHasQuestionAnswer(request, answerFragments),
       );
       const answerMessage = answerRequest?.messages?.find((message) => {
-        const candidateRequest = { messages: [message] };
-        return (
-          fixtureRequestContains(
-            candidateRequest,
-            `【open question 回答】${TARGET_QUESTION_ID}:`,
-          ) &&
-          answerFragments.every((fragment) =>
-            fixtureRequestContains(candidateRequest, fragment),
-          )
+        return fixtureRequestHasQuestionAnswer(
+          { messages: [message] },
+          answerFragments,
         );
       });
       const requestSummaries = model.requests.map((request, index) => ({
         index,
-        roles: request.messages?.map((message) => message.role),
-        answerFragments: answerFragments.map((fragment) =>
-          fixtureRequestContains(request, fragment),
+        messageCount: request.messages?.length ?? 0,
+        hasQuestionAnswer: fixtureRequestHasQuestionAnswer(
+          request,
+          answerFragments,
         ),
-        hasAnswerEnvelope: request.messages?.some((message) => {
-          const candidateRequest = { messages: [message] };
-          return (
-            fixtureRequestContains(
-              candidateRequest,
-              `【open question 回答】${TARGET_QUESTION_ID}:`,
-            ) &&
-            answerFragments.every((fragment) =>
-              fixtureRequestContains(candidateRequest, fragment),
-            )
-          );
-        }),
       }));
       expect(answerMessage, JSON.stringify(requestSummaries)).toBeDefined();
 
