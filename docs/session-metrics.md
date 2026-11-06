@@ -104,20 +104,20 @@
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
 | `sessionModels` | `SessionModelsSummary` | 終了時 `buildSessionModelsSummary` | 終了 JSON・TTY テキスト | なし（常に設定） |
-| `sessionModels.conductor` | `{ backend, configuredModelId, configuredReasoning?, lastUsedModelId? }` | config / CLI / env / 最後の conductor send | 同上 | reasoning 未指定時は省略 |
-| `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
+| `sessionModels.conductor` | `{ backend, configuredModelId, configuredReasoning?, lastUsedModelId? }` | CLI / API / config / env / 最後の conductor send | 同上 | reasoning 未指定時は省略 |
+| `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model?, reasoning?, cursorFast? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
 
 `configuredModelId` は CLI / API の明示値、環境変数、ensemble config、backend default の優先順で解決した値です。CLI と `runConductorSession` はこの値を conductor factory の create / resume に渡します。Pi の `settings.json` にある既定モデルは含みません。
 
 直接 API でも `modelId` > `CONDUCTOR_MODEL_ID` > `ensembleConfig.conductor.model` > backend default の順に解決します。`default` / `auto` は backend の既定選択を表し、Cursor は Auto、Pi は Pi resource の `settings.json` にある既定モデルを使います。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を選べるようにします。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、上位の選択を保ちます。いずれの場合も `configuredModelId: "default"` だけでは custom factory が選んだ具体的な model ID までは分かりません。
 
-`configuredReasoning` は Issue 起動では `--reasoning` > `CONDUCTOR_REASONING` > merged config、operator-agent では `CONDUCTOR_REASONING` > merged config で解決した指定値です。未指定なら省略します。これは SDK / provider が最終的に適用した値の報告ではありません。Pi は選択 model が対応する値か確認し、Cursor は利用者の model catalog から parameter を解決してから conductor を起動します。
+`configuredReasoning` は Issue 起動と直接 API では明示した `--reasoning` / `RunConductorSessionOptions.reasoning` > `CONDUCTOR_REASONING` > merged config、operator-agent では `CONDUCTOR_REASONING` > merged config で解決した指定値です。未指定なら省略します。これは SDK / provider が最終的に適用した値の報告ではありません。Pi は選択 model が対応する値か確認し、Cursor は利用者の model catalog から parameter を解決してから conductor を起動します。
 
-resume では `modelId` と `reasoning` を invocation ごとに再解決します。新しい `resume-feasibility` digest はどちらの config 変更も対象にしません。旧 sidecar の scheme 省略 / `full` digest は従来どおり config 全体を比較します。
+resume では `modelId` と `reasoning` を invocation ごとに再解決します。新しい `resume-feasibility` digest は `session.worktree` / `acp.defaultPreset` だけを比較し、`conductor.model` / `conductor.reasoning` は対象外です。旧 sidecar の scheme 省略 / `full` digest は従来どおり config 全体を比較するため、model / reasoning / env の変更で拒否されることがあります。worker の model / reasoning / Cursor fast / env 情報は診断用 digest / fingerprint に記録しますが、新しい resume 判定では比較しません。
 
 `lastUsedModelId` は、今回の `runConductorSession` 呼び出し内で最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。resume 前の run の報告は引き継がないため、再開後に send せず終了した場合も省略する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
 
-worker は未 attach の lazy worker も含め、セッションに登録された順に出力する。`model` は `modelTag` の対応付けから解決し ACP 起動設定に注入した ID で、注入しない場合は省略する。実際に ACP が使用したモデルを確認した値ではない。TTY では注入した ID を「起動設定」、省略時は「モデル注入なし」と表示する。存在しない model key の参照や、モデル注入に未対応の preset への指定は起動前にエラーとなり、終了サマリは生成されない。
+worker は未 attach の lazy worker も含め、セッションに登録された順に出力する。`model` は `modelTag` から解決して ACP 起動時に渡した要求値で、注入しない場合は省略する。Cursor では公式 CLI `--model` option へ渡す値で、この pass-through が ensemble の model-only 契約です。`reasoning` と明示した `cursorFast` も preset に渡した設定値です。ACP option の `currentValue` は adapter の報告値であり、実際に推論に使われた model / variant の記録ではありません。サマリは runtime model の attestation を示さず、その attestation も model-only 契約の条件にしません。TTY では `model` を「起動設定」、`reasoning` を「推論設定」、`cursorFast` を Cursor の fast mode として表示する。Cursor の明示 reasoning / fast、存在しない model key、モデル注入に未対応の preset は起動前にエラーとなり、終了サマリは生成されない。
 
 ---
 

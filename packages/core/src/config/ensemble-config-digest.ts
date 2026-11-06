@@ -72,6 +72,18 @@ export function computeEnsembleConfigDigest(config: EnsembleConfig): string {
 }
 
 /**
+ * Return a stable digest for worker ACP model routing inputs. Values such as
+ * API tokens may be present in `acp.env`; only the digest is persisted.
+ */
+export function computeAcpModelConfigDigest(config: EnsembleConfig): string {
+  return computeCanonicalDigest({
+    env: config.acp.env,
+    models: config.acp.models,
+    tags: config.acp.tags,
+  });
+}
+
+/**
  * Return a stable digest for the config values that determine whether an
  * existing session can be reconnected (scheme v2).
  */

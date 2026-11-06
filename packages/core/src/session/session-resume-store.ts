@@ -104,6 +104,8 @@ export interface SessionResumeStore {
   ensembleConfigDigestScheme?: EnsembleConfigDigestScheme;
   /** Config digest used to check resume compatibility for its recorded scheme. */
   ensembleConfigDigest?: string;
+  /** Original ACP model-routing config digest for diagnostics; never a resume gate. */
+  acpModelConfigDigest?: string;
   /** Last completed process lifecycle; absent legacy values are unknown. */
   lifecycle?: SessionLifecycle;
   /** Harness-owned activity / teardown phase. */
@@ -656,6 +658,13 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
   ) {
     throw new Error('Invalid session resume store: ensembleConfigDigest');
   }
+  if (
+    record.acpModelConfigDigest !== undefined &&
+    (typeof record.acpModelConfigDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(record.acpModelConfigDigest))
+  ) {
+    throw new Error('Invalid session resume store: acpModelConfigDigest');
+  }
   const ensembleConfigDigestScheme = parseEnsembleConfigDigestScheme(
     record.ensembleConfigDigestScheme,
   );
@@ -783,6 +792,9 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     ...(typeof record.ensembleConfigDigest === 'string'
       ? { ensembleConfigDigest: record.ensembleConfigDigest }
       : {}),
+    ...(typeof record.acpModelConfigDigest === 'string'
+      ? { acpModelConfigDigest: record.acpModelConfigDigest }
+      : {}),
     ...(record.lifecycle !== undefined
       ? { lifecycle: record.lifecycle as SessionLifecycle }
       : {}),
@@ -907,6 +919,36 @@ function parseAcpSpawnFingerprint(
     }
     model = record.model;
   }
+  let reasoning: string | undefined;
+  if (record.reasoning !== undefined) {
+    if (typeof record.reasoning !== 'string' || record.reasoning.length === 0) {
+      throw new Error(
+        `Invalid session resume store worker acpSpawn reasoning: ${workerName}`,
+      );
+    }
+    reasoning = record.reasoning;
+  }
+  let cursorFast: boolean | undefined;
+  if (record.cursorFast !== undefined) {
+    if (typeof record.cursorFast !== 'boolean') {
+      throw new Error(
+        `Invalid session resume store worker acpSpawn cursorFast: ${workerName}`,
+      );
+    }
+    cursorFast = record.cursorFast;
+  }
+  let modelProviderDigest: string | undefined;
+  if (record.modelProviderDigest !== undefined) {
+    if (
+      typeof record.modelProviderDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(record.modelProviderDigest)
+    ) {
+      throw new Error(
+        `Invalid session resume store worker acpSpawn modelProviderDigest: ${workerName}`,
+      );
+    }
+    modelProviderDigest = record.modelProviderDigest;
+  }
   let envDigest: string | undefined;
   if (record.envDigest !== undefined) {
     if (
@@ -946,6 +988,9 @@ function parseAcpSpawnFingerprint(
     args: record.args,
     ...(modelTag !== undefined ? { modelTag } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    ...(cursorFast !== undefined ? { cursorFast } : {}),
+    ...(modelProviderDigest !== undefined ? { modelProviderDigest } : {}),
     ...(envDigest ? { envDigest } : {}),
   };
 }

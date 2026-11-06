@@ -1,4 +1,9 @@
-import { AcpClient, type AcpClientOptions, type SessionUpdateHandler } from './acp-client.js';
+import {
+  AcpClient,
+  AcpSessionConfigOptionError,
+  type AcpClientOptions,
+  type SessionUpdateHandler,
+} from './acp-client.js';
 import { spawnAcpProcess, type SpawnAcpProcessOptions } from './acp-process.js';
 import type { PermissionHandler, PromptResult } from './types.js';
 
@@ -7,7 +12,11 @@ export interface AcpBridgeConnectOptions extends SpawnAcpProcessOptions {}
 export interface AcpBridgeRunSessionOptions {
   cwd: string;
   prompt: string;
-  /** 指定時は `session/load` で復元してから prompt する。失敗時は新規 session。 */
+  /**
+   * 指定した ID で `session/load` を試みる。通常の load 失敗時は新しい
+   * session を作って prompt を続行するが、ACP config-option の検証・適用
+   * エラーは伝播させ、新しい session は作らない。
+   */
   resumeSessionId?: string;
   onUpdate?: SessionUpdateHandler;
   /** 注入 bridge 利用時も worker ごとの handler を渡せる。 */
@@ -101,7 +110,8 @@ export class AcpBridge {
         } else {
           await this.loadSession(sessionId, options.cwd);
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof AcpSessionConfigOptionError) throw error;
         sessionId = undefined;
       }
     }

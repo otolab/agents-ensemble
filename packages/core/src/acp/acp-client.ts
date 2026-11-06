@@ -32,12 +32,28 @@ export interface AcpClientOptions {
   clientVersion?: string;
   /** preset 解決結果。未指定時は Cursor 互換の `cursor_login`。 */
   authenticate?: AcpAuthenticateStrategy;
+  /** ACP client capabilities metadata used by preset-specific extensions. */
+  clientCapabilitiesMeta?: Record<string, unknown>;
   /** Preset-specific metadata passed to session/new and session/load. */
   sessionMeta?: Record<string, unknown>;
+  /** Apply documented preset config options after session/new and session/load. */
+  sessionConfigOptionOverrides?: AcpSessionConfigOptionOverride[];
   /** Set when backed by a child process (for cleanup). */
   childProcess?: ChildProcess;
   /** 子プロセス stderr capture の drain（close 時に呼ぶ）。 */
   drainChildStderr?: () => Promise<void>;
+}
+
+export interface AcpSessionConfigOptionOverride {
+  id: string;
+  value: string;
+}
+
+export class AcpSessionConfigOptionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AcpSessionConfigOptionError';
+  }
 }
 
 export type SessionUpdateHandler = (
@@ -91,6 +107,9 @@ export class AcpClient {
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
+        ...(this.options.clientCapabilitiesMeta
+          ? { _meta: this.options.clientCapabilitiesMeta }
+          : {}),
       },
       clientInfo: {
         name: optionsClientName(this.options),
@@ -119,7 +138,11 @@ export class AcpClient {
       cwd,
       mcpServers,
       ...(this.options.sessionMeta ? { _meta: this.options.sessionMeta } : {}),
-    })) as { sessionId: string };
+    })) as { sessionId: string; configOptions?: unknown };
+    await this.applySessionConfigOptionOverrides(
+      result.sessionId,
+      result.configOptions,
+    );
     return result.sessionId;
   }
 
@@ -128,12 +151,61 @@ export class AcpClient {
     cwd: string,
     mcpServers: unknown[] = [],
   ): Promise<void> {
-    await this.peer.request('session/load', {
+    const result = (await this.peer.request('session/load', {
       sessionId,
       cwd,
       mcpServers,
       ...(this.options.sessionMeta ? { _meta: this.options.sessionMeta } : {}),
-    });
+    })) as { configOptions?: unknown };
+    await this.applySessionConfigOptionOverrides(sessionId, result.configOptions);
+  }
+
+  private async applySessionConfigOptionOverrides(
+    sessionId: string,
+    rawConfigOptions: unknown,
+  ): Promise<void> {
+    const overrides = this.options.sessionConfigOptionOverrides ?? [];
+    if (overrides.length === 0) return;
+
+    let configOptions = readSessionConfigOptions(rawConfigOptions);
+    for (const override of overrides) {
+      const option = findSessionConfigOption(configOptions, override.id);
+      const currentValue = option.currentValue;
+      if (typeof currentValue !== 'string') {
+        throw new AcpSessionConfigOptionError(
+          `ACP agent returned an invalid currentValue for session config option "${override.id}"`,
+        );
+      }
+      if (currentValue === override.value) continue;
+
+      const availableValues = readSessionConfigOptionValues(option.options);
+      if (!availableValues.includes(override.value)) {
+        throw new AcpSessionConfigOptionError(
+          `ACP agent does not advertise "${override.value}" for session config option "${override.id}" (available: ${availableValues.join(', ') || 'none'})`,
+        );
+      }
+
+      let response: { configOptions?: unknown };
+      try {
+        response = (await this.peer.request('session/set_config_option', {
+          sessionId,
+          configId: override.id,
+          value: override.value,
+        })) as { configOptions?: unknown };
+      } catch (error) {
+        throw new AcpSessionConfigOptionError(
+          `ACP agent failed to set session config option "${override.id}" to "${override.value}": ${errorMessage(error)}`,
+        );
+      }
+
+      configOptions = readSessionConfigOptions(response.configOptions);
+      const updatedOption = findSessionConfigOption(configOptions, override.id);
+      if (updatedOption.currentValue !== override.value) {
+        throw new AcpSessionConfigOptionError(
+          `ACP agent acknowledged session config option "${override.id}" but reported currentValue ${formatConfigOptionValue(updatedOption.currentValue)} instead of "${override.value}"`,
+        );
+      }
+    }
   }
 
   /** 進行中の `session/prompt` を中止する（ACP `session/cancel` notification）。 */
@@ -224,6 +296,58 @@ export class AcpClient {
       throw error;
     }
   }
+}
+
+function readSessionConfigOptions(
+  value: unknown,
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) {
+    throw new AcpSessionConfigOptionError(
+      'ACP agent did not return session config options required by the configured worker model',
+    );
+  }
+  return value.filter(
+    (option): option is Record<string, unknown> =>
+      option !== null && typeof option === 'object' && !Array.isArray(option),
+  );
+}
+
+function findSessionConfigOption(
+  options: Array<Record<string, unknown>>,
+  id: string,
+): Record<string, unknown> {
+  const matches = options.filter((option) => option.id === id);
+  if (matches.length !== 1) {
+    throw new AcpSessionConfigOptionError(
+      matches.length === 0
+        ? `ACP agent did not advertise configured session option "${id}"`
+        : `ACP agent advertised configured session option "${id}" more than once`,
+    );
+  }
+  return matches[0]!;
+}
+
+function readSessionConfigOptionValues(value: unknown): string[] {
+  const values: string[] = [];
+  const visit = (items: unknown[]): void => {
+    for (const item of items) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const option = item as Record<string, unknown>;
+      if (typeof option.value === 'string') values.push(option.value);
+      if (Array.isArray(option.options)) visit(option.options);
+    }
+  };
+  if (Array.isArray(value)) visit(value);
+  return values;
+}
+
+function formatConfigOptionValue(value: unknown): string {
+  if (typeof value === 'string') return JSON.stringify(value);
+  return JSON.stringify(value) ?? String(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function normalizeAcpUsage(usage: AcpWireUsage): LlmUsageSnapshot {

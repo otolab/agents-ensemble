@@ -27,6 +27,14 @@ export interface FakeAcpServerOptions {
   onNewSession?: (params: unknown) => void;
   /** Called when session/load is received. */
   onLoadSession?: (params: unknown) => void;
+  /** Config options advertised by session/new and session/load. */
+  sessionConfigOptions?: Array<Record<string, unknown>>;
+  /** Called when session/set_config_option is received. Return options to override the default update. */
+  onSetConfigOption?: (params: {
+    sessionId: string;
+    configId: string;
+    value: string;
+  }) => Array<Record<string, unknown>> | void;
   /** Emit session/request_permission before responding to session/prompt. */
   requestPermissionOnPrompt?: boolean;
   /** Emit these `session/update` payloads immediately before permission. */
@@ -53,6 +61,7 @@ export class FakeAcpServer {
   private readonly lineBuffer = new NdJsonLineBuffer();
   private sessionCounter = 0;
   private readonly sessions: Set<string>;
+  private configOptions: Array<Record<string, unknown>>;
   private readonly pendingCancels = new Map<string, () => void>();
   private permissionRequestCounter = 0;
   private running = false;
@@ -63,6 +72,9 @@ export class FakeAcpServer {
 
   constructor(private readonly options: FakeAcpServerOptions) {
     this.sessions = new Set(options.initialSessions);
+    this.configOptions = options.sessionConfigOptions?.map((option) => ({
+      ...option,
+    })) ?? [];
   }
 
   start(): void {
@@ -132,7 +144,12 @@ export class FakeAcpServer {
         this.sessionCounter += 1;
         const sessionId = `fake-session-${this.sessionCounter}`;
         this.sessions.add(sessionId);
-        this.respond(id, { sessionId });
+        this.respond(id, {
+          sessionId,
+          ...(this.options.sessionConfigOptions
+            ? { configOptions: this.configOptions }
+            : {}),
+        });
         break;
       }
 
@@ -151,7 +168,31 @@ export class FakeAcpServer {
             currentModeId: 'agent',
             availableModes: [{ id: 'agent', name: 'Agent' }],
           },
+          ...(this.options.sessionConfigOptions
+            ? { configOptions: this.configOptions }
+            : {}),
         });
+        break;
+      }
+
+      case 'session/set_config_option': {
+        const config = params as {
+          sessionId?: string;
+          configId?: string;
+          value?: string;
+        };
+        const sessionId = config.sessionId ?? '';
+        const configId = config.configId ?? '';
+        const value = config.value ?? '';
+        const overriddenOptions = this.options.onSetConfigOption?.({
+          sessionId,
+          configId,
+          value,
+        });
+        this.configOptions = overriddenOptions ?? this.configOptions.map((option) =>
+          option.id === configId ? { ...option, currentValue: value } : option,
+        );
+        this.respond(id, { configOptions: this.configOptions });
         break;
       }
 

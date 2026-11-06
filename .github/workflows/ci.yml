@@ -40,6 +40,20 @@ jobs:
       - name: Codex model reasoning integration test
         run: pnpm --filter @agents-ensemble/core exec vitest run --config vitest.config.integration.ts test/integration/codex-model-reasoning.integration.test.ts
 
+      - name: Claude and Pi worker ACP adapter integration tests
+        run: |
+          pnpm --filter @agents-ensemble/core exec node --input-type=module -e '
+            for (const adapter of [
+              "@agentclientprotocol/claude-agent-acp/dist/index.js",
+              "pi-acp",
+            ]) {
+              await import.meta.resolve(adapter);
+            }
+          '
+          pnpm --filter @agents-ensemble/core exec vitest run \
+            --config vitest.config.integration.ts \
+            test/integration/worker-model-reasoning-adapters.integration.test.ts
+
       - name: Operator usage integration test
         run: pnpm --filter @agents-ensemble/core exec vitest run --config vitest.config.integration.ts test/integration/usage-operator.integration.test.ts
 

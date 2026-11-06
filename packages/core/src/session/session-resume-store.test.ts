@@ -144,12 +144,14 @@ describe('SessionResumeStore', () => {
           repoRoot: tempDir,
           ensembleConfigDigestScheme,
           ensembleConfigDigest: 'a'.repeat(64),
+          acpModelConfigDigest: 'b'.repeat(64),
         }),
       );
 
       await expect(loadSessionResumeStore(path)).resolves.toMatchObject({
         ensembleConfigDigestScheme,
         ensembleConfigDigest: 'a'.repeat(64),
+        acpModelConfigDigest: 'b'.repeat(64),
       });
     },
   );
@@ -190,6 +192,18 @@ describe('SessionResumeStore', () => {
     await expect(loadSessionResumeStore(path)).rejects.toThrow(
       /resume-feasibility scheme requires ensembleConfigDigest/,
     );
+
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...base,
+        acpModelConfigDigest: 'not-a-sha256-digest',
+      }),
+      'utf8',
+    );
+    await expect(loadSessionResumeStore(path)).rejects.toThrow(
+      /Invalid session resume store: acpModelConfigDigest/,
+    );
   });
 
   it('keeps scheme-less stores without a digest as legacy unverifiable data', async () => {
@@ -209,6 +223,7 @@ describe('SessionResumeStore', () => {
     const loaded = await loadSessionResumeStore(path);
     expect(loaded?.ensembleConfigDigestScheme).toBeUndefined();
     expect(loaded?.ensembleConfigDigest).toBeUndefined();
+    expect(loaded?.acpModelConfigDigest).toBeUndefined();
   });
 
   it('records the live socket path and restricts SessionResumeStore permissions', async () => {
@@ -250,11 +265,14 @@ describe('SessionResumeStore', () => {
           acpSessionId: 'sess-1',
           acpCwd: '/repo/worktree',
           acpSpawn: {
-            preset: 'claude',
-            command: 'claude-agent-acp',
+            preset: 'codex',
+            command: 'codex-acp',
             args: [],
             modelTag: 'high',
             model: 'provider/opus',
+            reasoning: 'high',
+            modelProviderDigest: 'b'.repeat(64),
+            envDigest: 'a'.repeat(64),
           },
         },
       },
@@ -264,11 +282,90 @@ describe('SessionResumeStore', () => {
     const loaded = await loadSessionResumeStore(path);
 
     expect(loaded?.workers.implementer?.acpSpawn).toEqual({
-      preset: 'claude',
-      command: 'claude-agent-acp',
+      preset: 'codex',
+      command: 'codex-acp',
       args: [],
       modelTag: 'high',
       model: 'provider/opus',
+      reasoning: 'high',
+      modelProviderDigest: 'b'.repeat(64),
+      envDigest: 'a'.repeat(64),
+    });
+  });
+
+  it('round-trips an explicitly configured Cursor fast mode, including false', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-cursor-fast-');
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-cursor-fast',
+    });
+    const resumeStore = baseResumeStore({
+      conductorAgentId: 'agent-cursor-fast',
+      repoRoot: tempDir,
+      workers: {
+        implementer: {
+          acpSessionId: 'sess-cursor-fast',
+          acpCwd: '/repo/worktree',
+          acpSpawn: {
+            preset: 'cursor',
+            command: 'agent',
+            args: ['--model', 'cursor-grok-4.6-high', 'acp'],
+            modelTag: 'high',
+            model: 'cursor-grok-4.6-high',
+            reasoning: 'high',
+            cursorFast: false,
+          },
+        },
+      },
+    });
+
+    await saveSessionResumeStore(path, resumeStore);
+    const loaded = await loadSessionResumeStore(path);
+
+    expect(loaded?.workers.implementer?.acpSpawn).toMatchObject({
+      preset: 'cursor',
+      command: 'agent',
+      model: 'cursor-grok-4.6-high',
+      reasoning: 'high',
+      cursorFast: false,
+    });
+  });
+
+  it('loads an older worker fingerprint without reasoning or provider digest fields', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-legacy-reasoning-');
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-legacy-reasoning',
+    });
+    const resumeStore = baseResumeStore({
+      conductorAgentId: 'agent-legacy-reasoning',
+      repoRoot: tempDir,
+      workers: {
+        implementer: {
+          acpSessionId: 'sess-legacy-reasoning',
+          acpCwd: '/repo/worktree',
+          acpSpawn: {
+            preset: 'codex',
+            command: 'codex-acp',
+            args: [],
+            modelTag: 'high',
+            model: 'provider/opus',
+            envDigest: 'a'.repeat(64),
+          },
+        },
+      },
+    });
+
+    await saveSessionResumeStore(path, resumeStore);
+    const loaded = await loadSessionResumeStore(path);
+
+    expect(loaded?.workers.implementer?.acpSpawn).toEqual({
+      preset: 'codex',
+      command: 'codex-acp',
+      args: [],
+      modelTag: 'high',
+      model: 'provider/opus',
+      envDigest: 'a'.repeat(64),
     });
   });
 
@@ -454,6 +551,21 @@ describe('SessionResumeStore', () => {
         ensembleConfigDigest: 'new-digest',
       }),
     ).toThrow(/ensemble config digest mismatch/);
+  });
+
+  it('treats a saved ACP model configuration digest as diagnostic metadata', () => {
+    const resumeStore = baseResumeStore({
+      conductorAgentId: 'agent-acp-model-digest',
+      acpModelConfigDigest: 'a'.repeat(64),
+    });
+
+    expect(() =>
+      assertSessionResumeStoreMatches(resumeStore, {
+        conductorAgentId: 'agent-acp-model-digest',
+        issueUrl: resumeStore.issueUrl,
+        repoRoot: resumeStore.repoRoot,
+      }),
+    ).not.toThrow();
   });
 
   it('allows legacy resume stores without an ensemble config digest', () => {

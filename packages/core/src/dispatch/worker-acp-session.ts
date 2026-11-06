@@ -1,3 +1,4 @@
+import { AcpSessionConfigOptionError } from '../acp/acp-client.js';
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import { AcpBridge } from '../acp/acp-bridge.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
@@ -40,7 +41,7 @@ export interface OpenWorkerAcpSessionOptions {
   workerName?: string;
   /** resume 時に SessionResumeStore に記録した cwd。不一致なら attach 失敗。 */
   expectedResumeAcpCwd?: string;
-  /** resume 時に SessionResumeStore に記録した ACP spawn。不一致なら attach 失敗。 */
+  /** resume 時に SessionResumeStore に記録した ACP spawn metadata。 */
   expectedResumeAcpSpawn?: AcpSpawnFingerprint;
   /** 現在の profile / CLI から解決した ACP spawn（resume 検証用）。 */
   currentAcpSpawn?: AcpSpawnFingerprint;
@@ -114,19 +115,31 @@ export async function openWorkerAcpSession(
   }
 
   let sessionId = options.resumeAcpSessionId;
-  if (sessionId) {
-    try {
-      await bridge.loadSession(
-        sessionId,
-        acpCwd,
-        options.permissionHandler,
-      );
-    } catch {
-      sessionId = undefined;
+  try {
+    if (sessionId) {
+      try {
+        await bridge.loadSession(
+          sessionId,
+          acpCwd,
+          options.permissionHandler,
+        );
+      } catch (error) {
+        if (error instanceof AcpSessionConfigOptionError) throw error;
+        sessionId = undefined;
+      }
     }
-  }
-  if (!sessionId) {
-    sessionId = await bridge.newSession(acpCwd);
+    if (!sessionId) {
+      sessionId = await bridge.newSession(acpCwd);
+    }
+  } catch (error) {
+    if (ownsBridge && bridge) {
+      try {
+        await bridge.close();
+      } catch {
+        // Keep the session initialization error as the primary failure.
+      }
+    }
+    throw error;
   }
 
   return {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from './defaults.js';
 import {
+  computeAcpModelConfigDigest,
   computeEnsembleConfigDigest,
   computeResumeFeasibilityConfigDigest,
   RESUME_FEASIBILITY_CONFIG_CLASSIFICATION,
@@ -92,24 +93,142 @@ describe('computeEnsembleConfigDigest', () => {
     expect(digest).not.toContain('private-test-value');
   });
 
-  it('includes configured ACP model reasoning in the full config digest', () => {
+  it('includes configured ACP model, reasoning, and Cursor fast setting in the full config digest', () => {
     const config: EnsembleConfig = {
       ...DEFAULT_ENSEMBLE_CONFIG,
       acp: {
         ...DEFAULT_ENSEMBLE_CONFIG.acp,
-        models: { standard: { model: 'gateway/model', reasoning: 'low' } },
+        models: {
+          standard: {
+            model: 'gateway/model',
+            reasoning: 'low',
+            cursorFast: false,
+          },
+        },
         tags: { default: 'standard' },
       },
     };
-    const changed: EnsembleConfig = {
+    const changedReasoning: EnsembleConfig = {
       ...config,
       acp: {
         ...config.acp,
-        models: { standard: { model: 'gateway/model', reasoning: 'high' } },
+        models: {
+          standard: {
+            model: 'gateway/model',
+            reasoning: 'high',
+            cursorFast: false,
+          },
+        },
+      },
+    };
+    const changedModel: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        models: {
+          standard: {
+            model: 'gateway/other-model',
+            reasoning: 'low',
+            cursorFast: false,
+          },
+        },
+      },
+    };
+    const changedCursorFast: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        models: {
+          standard: {
+            model: 'gateway/model',
+            reasoning: 'low',
+            cursorFast: true,
+          },
+        },
       },
     };
 
-    expect(computeEnsembleConfigDigest(config)).not.toBe(computeEnsembleConfigDigest(changed));
+    expect(computeEnsembleConfigDigest(config)).not.toBe(
+      computeEnsembleConfigDigest(changedReasoning),
+    );
+    expect(computeEnsembleConfigDigest(config)).not.toBe(
+      computeEnsembleConfigDigest(changedModel),
+    );
+    expect(computeEnsembleConfigDigest(config)).not.toBe(
+      computeEnsembleConfigDigest(changedCursorFast),
+    );
+  });
+});
+
+describe('computeAcpModelConfigDigest', () => {
+  it('tracks model routing inputs canonically without exposing env values', () => {
+    const config: EnsembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        env: { MODEL_PROVIDER: 'litellm', API_TOKEN: 'private-test-value' },
+        models: {
+          strong: {
+            model: 'gateway/model-a',
+            reasoning: 'high',
+            cursorFast: false,
+          },
+        },
+        tags: { high: 'strong' },
+      },
+    };
+    const digest = computeAcpModelConfigDigest(config);
+    const reordered = computeAcpModelConfigDigest(
+      reverseObjectKeys(config) as EnsembleConfig,
+    );
+    const changedReasoning: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        models: {
+          strong: {
+            model: 'gateway/model-a',
+            reasoning: 'low',
+            cursorFast: false,
+          },
+        },
+      },
+    };
+    const changedModel: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        models: {
+          strong: {
+            model: 'gateway/model-b',
+            reasoning: 'high',
+            cursorFast: false,
+          },
+        },
+      },
+    };
+    const changedEnv: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        env: { MODEL_PROVIDER: 'openai', API_TOKEN: 'private-test-value' },
+      },
+    };
+    const changedTag: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        tags: { high: 'another-model' },
+      },
+    };
+
+    expect(digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(digest).toBe(reordered);
+    expect(digest).not.toContain('private-test-value');
+    expect(digest).not.toBe(computeAcpModelConfigDigest(changedReasoning));
+    expect(digest).not.toBe(computeAcpModelConfigDigest(changedModel));
+    expect(digest).not.toBe(computeAcpModelConfigDigest(changedEnv));
+    expect(digest).not.toBe(computeAcpModelConfigDigest(changedTag));
   });
 
   it('keeps conductor reasoning out of the resume digest and in the legacy full digest', () => {

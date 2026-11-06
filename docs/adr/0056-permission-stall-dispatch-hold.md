@@ -1,4 +1,4 @@
-# ADR 0052: dispatch hold 中の permission stall 回復通知
+# ADR 0056: dispatch hold 中の permission stall 回復通知
 
 - Status: accepted
 - Date: 2026-11-06
