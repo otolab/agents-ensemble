@@ -506,6 +506,7 @@ export function IssueSessionTui({
   const operatorPrompt = OPERATOR_INPUT_PROMPT;
   const maxInputDisplayLines = computeMaxInputDisplayLines(liveFrameRows);
   const openQuestions = getTuiOpenQuestions(snapshot);
+  const openQuestionCount = openQuestions.length;
   const openQuestionsLayout = useMemo(
     () =>
       resolveOpenQuestionsPaneLayout({
@@ -650,9 +651,10 @@ export function IssueSessionTui({
 
   useEffect(() => {
     setSelectedQuestionIndex((current) =>
-      clampOpenQuestionSelectionIndex(current, openQuestions.length),
+      clampOpenQuestionSelectionIndex(current, openQuestionCount),
     );
-  }, [openQuestions]);
+    // The selection clamp depends on the count; list snapshots can be new arrays per event.
+  }, [openQuestionCount]);
 
   useEffect(() => {
     setOpenQuestionLinesFromTop(0);

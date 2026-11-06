@@ -151,3 +151,45 @@ describe('createTuiViewModel activity log', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('createTuiViewModel operator context', () => {
+  it('reuses the context when refreshed snapshot contents are unchanged', () => {
+    const model = createTuiViewModel();
+    const queuedMessage = {
+      text: 'pending message',
+      delivery: 'next' as const,
+      openQuestionAnswer: false,
+      answerPreview: undefined,
+    };
+    const context = {
+      conductorTurn: 2,
+      autonomousTurns: 1,
+      maxTurns: 5,
+      openQuestions: [RESTORED_QUESTION],
+      queuedMessages: [queuedMessage],
+    };
+    model.setOperatorContext(context);
+    const listener = vi.fn();
+    model.subscribe(listener);
+
+    model.setOperatorContext({
+      ...context,
+      openQuestions: [...context.openQuestions],
+      queuedMessages: [{ ...queuedMessage }],
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(model.getSnapshot().operatorContext).toBe(context);
+
+    model.setOperatorContext({
+      ...context,
+      openQuestions: [...context.openQuestions],
+      queuedMessages: [{ ...queuedMessage, text: 'changed message' }],
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(model.getSnapshot().operatorContext?.queuedMessages?.[0]?.text).toBe(
+      'changed message',
+    );
+  });
+});

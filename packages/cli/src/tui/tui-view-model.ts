@@ -31,6 +31,53 @@ export function getTuiOpenQuestions(
   return snapshot.operatorContext?.openQuestions ?? snapshot.displayState.openQuestions;
 }
 
+function sameOperatorContext(
+  left: OperatorInputContext | undefined,
+  right: OperatorInputContext | undefined,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (
+    !left ||
+    !right ||
+    left.conductorTurn !== right.conductorTurn ||
+    left.autonomousTurns !== right.autonomousTurns ||
+    left.maxTurns !== right.maxTurns ||
+    left.openQuestions.length !== right.openQuestions.length
+  ) {
+    return false;
+  }
+
+  for (let index = 0; index < left.openQuestions.length; index += 1) {
+    if (left.openQuestions[index] !== right.openQuestions[index]) {
+      return false;
+    }
+  }
+
+  const leftQueue = left.queuedMessages ?? [];
+  const rightQueue = right.queuedMessages ?? [];
+  if (leftQueue.length !== rightQueue.length) {
+    return false;
+  }
+  for (let index = 0; index < leftQueue.length; index += 1) {
+    const leftMessage = leftQueue[index];
+    const rightMessage = rightQueue[index];
+    if (
+      !leftMessage ||
+      !rightMessage ||
+      leftMessage.text !== rightMessage.text ||
+      leftMessage.delivery !== rightMessage.delivery ||
+      leftMessage.openQuestionAnswer !== rightMessage.openQuestionAnswer ||
+      leftMessage.answerPreview !== rightMessage.answerPreview
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export interface TuiViewModel {
   subscribe: (listener: () => void) => () => void;
   getSnapshot: () => TuiViewSnapshot;
@@ -140,6 +187,10 @@ export function createTuiViewModel(options: {
       notify();
     },
     setOperatorContext(context) {
+      // getContext() rebuilds list and queue arrays for every session event.
+      if (sameOperatorContext(operatorContext, context)) {
+        return;
+      }
       operatorContext = context;
       notify();
     },
