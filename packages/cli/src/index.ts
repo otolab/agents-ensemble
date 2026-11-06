@@ -95,6 +95,10 @@ program
   )
   .option('--model <id>', 'Conductor model id (default: config conductor.model, else default)')
   .option(
+    '--reasoning <level>',
+    'Conductor reasoning / thinking level (default: config conductor.reasoning, else backend default)',
+  )
+  .option(
     '--verbose',
     'Show detailed harness telemetry (default: config conductor.verbose or false)',
   )
@@ -165,6 +169,7 @@ program
         continue?: boolean;
         profile?: string;
         model?: string;
+        reasoning?: string;
         verbose?: boolean;
         maxTurns?: number;
         noMaxTurns?: boolean;

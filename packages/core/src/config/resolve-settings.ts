@@ -16,6 +16,9 @@ export const ENSEMBLE_DEFAULT_PROFILE_ENV = 'ENSEMBLE_DEFAULT_PROFILE';
 /** conductor モデル id（`resolve-conductor-model-id` と共有）。 */
 export const CONDUCTOR_MODEL_ID_ENV = 'CONDUCTOR_MODEL_ID';
 
+/** conductor reasoning / thinking level（`resolve-conductor-reasoning` と共有）。 */
+export const CONDUCTOR_REASONING_ENV = 'CONDUCTOR_REASONING';
+
 /** conductor の詳細 harness telemetry 表示（`ensemble issue --verbose` と共有）。 */
 export const CONDUCTOR_VERBOSE_ENV = 'CONDUCTOR_VERBOSE';
 
@@ -136,6 +139,19 @@ export function resolveConductorModelSetting(options: {
     defaultValue: DEFAULT_ENSEMBLE_CONFIG.conductor.model,
   });
   return normalizeConductorModelId(resolved ?? DEFAULT_ENSEMBLE_CONFIG.conductor.model);
+}
+
+/** conductor reasoning を解決する。指定がない場合は backend の既定に委ねる。 */
+export function resolveConductorReasoningSetting(options: {
+  cliReasoning?: string;
+  env?: NodeJS.ProcessEnv;
+  config?: EnsembleConfig;
+}): string | undefined {
+  return resolveStringSetting({
+    cli: options.cliReasoning,
+    env: options.env?.[CONDUCTOR_REASONING_ENV],
+    config: options.config?.conductor.reasoning,
+  });
 }
 
 /** 解決順: CLI `--verbose` > `CONDUCTOR_VERBOSE` > config > false。 */

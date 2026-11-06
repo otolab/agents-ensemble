@@ -92,6 +92,7 @@ describe('formatIssueSessionSummaryJson', () => {
             conductor: {
               backend: 'pi',
               configuredModelId: 'default',
+              configuredReasoning: 'high',
               lastUsedModelId: 'gpt-6-luna',
             },
             workers: [
@@ -113,6 +114,7 @@ describe('formatIssueSessionSummaryJson', () => {
       conductor: {
         backend: 'pi',
         configuredModelId: 'default',
+        configuredReasoning: 'high',
         lastUsedModelId: 'gpt-6-luna',
       },
       workers: [{
@@ -282,7 +284,10 @@ describe('formatIssueSessionSummaryText', () => {
     const text = formatIssueSessionSummaryText(createSummary({
       sessionModels: {
         conductor: {
-          backend: 'pi', configuredModelId: 'default', lastUsedModelId: 'used-model',
+          backend: 'pi',
+          configuredModelId: 'default',
+          configuredReasoning: 'high',
+          lastUsedModelId: 'used-model',
         },
         workers: [
           {
@@ -290,13 +295,22 @@ describe('formatIssueSessionSummaryText', () => {
             acpPreset: 'cursor', model: 'cursor-grok-4.6-high', reasoning: 'high',
             cursorFast: false,
           },
+          {
+            name: 'codex-worker', kind: 'implementer', modelTag: 'high',
+            acpPreset: 'codex', model: 'worker-model',
+          },
           { name: 'reviewer', kind: 'reviewer', modelTag: 'default', acpPreset: 'custom' },
         ],
       },
     }));
 
-    expect(text).toContain('conductor (pi): 設定 default · 報告 used-model');
+    expect(text).toContain(
+      'conductor (pi): 設定 default · reasoning high · 報告 used-model',
+    );
     expect(text).toContain('worker worker-1 (implementer, cursor): modelTag high · 起動設定 cursor-grok-4.6-high · 推論設定 high · Cursor fast 無効');
+    expect(text).toContain(
+      'worker codex-worker (implementer, codex): modelTag high · 起動設定 worker-model',
+    );
     expect(text).toContain('worker reviewer (reviewer, custom): modelTag default · モデル注入なし');
   });
 

@@ -21,9 +21,9 @@ export const ENSEMBLE_DEFAULT_ACP_CLI_ENV = 'ENSEMBLE_DEFAULT_ACP_CLI';
 const ACP_MODEL_CATALOG_DOC_URL =
   'https://github.com/otolab/agents-ensemble/blob/main/docs/config.md#acp-model-tag-と-model-catalog';
 const ACP_MODEL_CATALOG_ADR_URL =
-  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0049-acp-model-injection-by-preset.md';
+  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0052-acp-model-injection-by-preset.md';
 const ACP_CURSOR_FAST_ADR_URL =
-  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0051-cursor-acp-runtime-verification.md';
+  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0054-cursor-acp-runtime-verification.md';
 
 /** spawn 解決結果。 */
 export interface ResolvedAcpSpawn {

@@ -118,11 +118,14 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0044](0044-user-scoped-runtime-storage.md) | repo 単位のランタイム状態を user 層へ配置 | superseded → [0046](0046-migrated-session-canonical-slug-mirrors.md) |
 | [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning 指定のみ） |
 | [0046](0046-migrated-session-canonical-slug-mirrors.md) | 移行済みセッションの canonical slug mirror | accepted |
-| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0049](0049-acp-model-injection-by-preset.md)（model / reasoning routing） |
-| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | accepted |
-| [0049](0049-acp-model-injection-by-preset.md) | worker ACP model / reasoning の preset 別注入 | superseded → [0051](0051-cursor-acp-runtime-verification.md)（Cursor の runtime 制約のみ。その他 preset は継続） |
-| [0050](0050-worker-acp-cursor-fast-option.md) | worker ACP の Cursor fast mode 明示設定 | superseded → [0051](0051-cursor-acp-runtime-verification.md)（Cursor の明示 option は fail fast、model-only は CLI への要求） |
-| [0051](0051-cursor-acp-runtime-verification.md) | Cursor ACP の未検証 runtime と resume metadata の扱い | accepted |
+| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest） / [0052](0052-acp-model-injection-by-preset.md)（worker routing） |
+| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（`conductor.reasoning` の分類のみ） |
+| [0049](0049-conductor-reasoning-backends.md) | conductor reasoning を backend ごとに適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
+| [0050](0050-operator-agent-conductor-reasoning.md) | operator-agent に conductor reasoning を適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
+| [0051](0051-conductor-reasoning-resume-digest.md) | conductor reasoning と resume-feasibility digest | accepted |
+| [0052](0052-acp-model-injection-by-preset.md) | worker ACP model / reasoning の preset 別注入 | superseded → [0054](0054-cursor-acp-runtime-verification.md)（Cursor の runtime 制約のみ。その他 preset は継続） |
+| [0053](0053-worker-acp-cursor-fast-option.md) | worker ACP の Cursor fast mode 明示設定 | superseded → [0054](0054-cursor-acp-runtime-verification.md)（Cursor の明示 option は fail fast、model-only は CLI への要求） |
+| [0054](0054-cursor-acp-runtime-verification.md) | Cursor ACP の未検証 runtime と resume metadata の扱い | accepted |
 
 ## 追加するとき
 

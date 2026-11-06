@@ -83,6 +83,7 @@ describe('writeIssueSessionSummary', () => {
     const sessionModels = buildSessionModelsSummary({
       backend: 'pi',
       explicitConductorModelId: 'configured-conductor',
+      explicitConductorReasoning: 'high',
       env: {},
       config,
       workers,
@@ -105,6 +106,7 @@ describe('writeIssueSessionSummary', () => {
       conductor: {
         backend: 'pi',
         configuredModelId: 'configured-conductor',
+        configuredReasoning: 'high',
         lastUsedModelId: 'reported-conductor',
       },
       workers: [{
@@ -113,7 +115,9 @@ describe('writeIssueSessionSummary', () => {
       }],
     });
     const text = String(errorSpy.mock.calls[0]?.[0]);
-    expect(text).toContain('conductor (pi): 設定 configured-conductor · 報告 reported-conductor');
+    expect(text).toContain(
+      'conductor (pi): 設定 configured-conductor · reasoning high · 報告 reported-conductor',
+    );
     expect(text).toContain('worker worker-1 (implementer, codex): modelTag high · 起動設定 worker-model');
   });
 

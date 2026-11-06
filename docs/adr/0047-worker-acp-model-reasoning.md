@@ -1,6 +1,6 @@
 # ADR 0047: worker ACP model catalog の reasoning
 
-- Status: superseded by [0049](0049-acp-model-injection-by-preset.md) (model / reasoning routing; resume compatibility is recorded separately in [0048](0048-session-resume-feasibility-config-digest.md))
+- Status: superseded by [0048](0048-session-resume-feasibility-config-digest.md) (resume digest) and [0052](0052-acp-model-injection-by-preset.md) (worker model / reasoning routing)
 - Date: 2026-11-05
 - Related: [ADR 0045](0045-worker-acp-model-tags.md), [ADR 0042](0042-explicit-config-replaces-user-layer.md), [Issue #616](https://github.com/otolab/agents-ensemble/issues/616), [Issue #622](https://github.com/otolab/agents-ensemble/issues/622)
 

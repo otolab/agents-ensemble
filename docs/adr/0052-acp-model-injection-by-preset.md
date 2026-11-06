@@ -1,6 +1,6 @@
-# ADR 0049: worker ACP の model / reasoning 注入を preset ごとに扱う
+# ADR 0052: worker ACP の model / reasoning 注入を preset ごとに扱う
 
-- Status: superseded by [0051](0051-cursor-acp-runtime-verification.md)（Cursor の runtime 制約のみ。その他の preset は継続）
+- Status: superseded by [0054](0054-cursor-acp-runtime-verification.md)（Cursor の runtime 制約のみ。その他の preset は継続）
 - Date: 2026-11-05
 - Related: [ADR 0019](0019-worker-acp-cli-presets.md), [ADR 0045](0045-worker-acp-model-tags.md), [ADR 0047](0047-worker-acp-model-reasoning.md), [Issue #630](https://github.com/otolab/agents-ensemble/issues/630)
 

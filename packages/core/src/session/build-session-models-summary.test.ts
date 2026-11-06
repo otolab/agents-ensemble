@@ -126,6 +126,44 @@ describe('buildSessionModelsSummary', () => {
     },
   );
 
+  it.each([
+    {
+      explicit: 'cli-level',
+      env: 'env-level',
+      config: 'config-level',
+      expected: 'cli-level',
+    },
+    {
+      explicit: undefined,
+      env: 'env-level',
+      config: 'config-level',
+      expected: 'env-level',
+    },
+    {
+      explicit: undefined,
+      env: undefined,
+      config: 'config-level',
+      expected: 'config-level',
+    },
+  ])(
+    'records conductor reasoning resolved from CLI, env, or config',
+    ({ explicit, env, config, expected }) => {
+      const summary = buildSessionModelsSummary({
+        backend: 'pi',
+        explicitConductorReasoning: explicit,
+        env: env ? { CONDUCTOR_REASONING: env } : {},
+        config: {
+          ...DEFAULT_ENSEMBLE_CONFIG,
+          conductor: { model: 'configured-model', reasoning: config },
+        },
+        workers: [],
+        usageTracker: new SessionUsageTracker(),
+      });
+
+      expect(summary.conductor.configuredReasoning).toBe(expected);
+    },
+  );
+
   it('uses only the final conductor send, even when a worker ran later', () => {
     const tracker = new SessionUsageTracker();
     tracker.recordConductorRound({

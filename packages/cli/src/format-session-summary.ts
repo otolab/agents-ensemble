@@ -160,10 +160,14 @@ function formatConductorModelLine(
   conductor: SessionSummary['sessionModels']['conductor'],
 ): string {
   const configured = conductor.configuredModelId;
+  const reasoning = conductor.configuredReasoning;
   const reported = conductor.lastUsedModelId;
+  const configuredDetail = reasoning
+    ? `設定 ${configured} · reasoning ${reasoning}`
+    : `設定 ${configured}`;
   const detail = reported
-    ? `設定 ${configured} · 報告 ${reported}`
-    : `設定 ${configured} · 報告なし`;
+    ? `${configuredDetail} · 報告 ${reported}`
+    : `${configuredDetail} · 報告なし`;
   return `    conductor (${conductor.backend}): ${detail}`;
 }
 

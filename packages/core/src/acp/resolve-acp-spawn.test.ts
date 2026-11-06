@@ -648,7 +648,7 @@ describe('resolveWorkerAcpSpawn', () => {
         },
       }),
     ).toThrow(
-      /cursorFast is supported only by the "cursor" ACP preset.*0051-cursor-acp-runtime-verification\.md/,
+      /cursorFast is supported only by the "cursor" ACP preset.*0054-cursor-acp-runtime-verification\.md/,
     );
   });
 
@@ -690,7 +690,7 @@ describe('resolveWorkerAcpSpawn', () => {
           } as import('../config/types.js').EnsembleConfig,
         },
       }),
-    ).toThrow(/does not support configured model injection.*docs\/config\.md.*0049-acp-model-injection-by-preset\.md/);
+    ).toThrow(/does not support configured model injection.*docs\/config\.md.*0052-acp-model-injection-by-preset\.md/);
   });
 });
 

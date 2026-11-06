@@ -1,6 +1,6 @@
 # ADR 0048: Session resume feasibility と config digest
 
-- Status: accepted
+- Status: superseded by [0051](0051-conductor-reasoning-resume-digest.md) (classification of `conductor.reasoning` only)
 - Date: 2026-11-05
 - Related: [ADR 0011](0011-session-sidecar-resume.md), [ADR 0042](0042-explicit-config-replaces-user-layer.md), [ADR 0047](0047-worker-acp-model-reasoning.md), [Issue #616](https://github.com/otolab/agents-ensemble/issues/616)
 

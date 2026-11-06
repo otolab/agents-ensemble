@@ -230,6 +230,27 @@ describe('computeAcpModelConfigDigest', () => {
     expect(digest).not.toBe(computeAcpModelConfigDigest(changedEnv));
     expect(digest).not.toBe(computeAcpModelConfigDigest(changedTag));
   });
+
+  it('keeps conductor reasoning out of the resume digest and in the legacy full digest', () => {
+    const config: EnsembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        reasoning: 'low',
+      },
+    };
+    const changed: EnsembleConfig = {
+      ...config,
+      conductor: { ...config.conductor, reasoning: 'high' },
+    };
+
+    expect(computeResumeFeasibilityConfigDigest(config)).toBe(
+      computeResumeFeasibilityConfigDigest(changed),
+    );
+    expect(computeEnsembleConfigDigest(config)).not.toBe(
+      computeEnsembleConfigDigest(changed),
+    );
+  });
 });
 
 describe('computeResumeFeasibilityConfigDigest', () => {
