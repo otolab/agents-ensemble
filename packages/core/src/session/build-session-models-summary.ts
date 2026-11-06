@@ -25,6 +25,10 @@ export interface SessionWorkerModelSummary {
   acpPreset: AcpPresetId;
   /** tag mapping から解決した ACP model ID（注入できた場合のみ）。 */
   model?: string;
+  /** Configured reasoning effort, when the preset accepts it. */
+  reasoning?: string;
+  /** Explicit Cursor ACP fast setting, when configured. */
+  cursorFast?: boolean;
 }
 
 export interface SessionModelsSummary {
@@ -71,6 +75,12 @@ export function buildSessionModelsSummary(input: {
       acpPreset: worker.acpFingerprint?.preset ?? 'cursor',
       ...(worker.acpFingerprint?.model
         ? { model: worker.acpFingerprint.model }
+        : {}),
+      ...(worker.acpFingerprint?.reasoning
+        ? { reasoning: worker.acpFingerprint.reasoning }
+        : {}),
+      ...(worker.acpFingerprint?.cursorFast !== undefined
+        ? { cursorFast: worker.acpFingerprint.cursorFast }
         : {}),
     })),
   };

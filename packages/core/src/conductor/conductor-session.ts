@@ -1,5 +1,6 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import {
+  computeAcpModelConfigDigest,
   computeEnsembleConfigDigest,
   computeResumeFeasibilityConfigDigest,
 } from '../config/ensemble-config-digest.js';
@@ -411,6 +412,8 @@ async function runConductorSessionWithStartupGuard(
     'resume-feasibility';
   let ensembleConfigDigest: string | undefined =
     computeResumeFeasibilityConfigDigest(ensembleConfig);
+  let acpModelConfigDigest: string | undefined =
+    computeAcpModelConfigDigest(ensembleConfig);
   const resolvedConductorModelId = resolveConductorModelId(options.modelId, {
     config: ensembleConfig,
   });
@@ -551,11 +554,28 @@ async function runConductorSessionWithStartupGuard(
           'SessionResumeStore has no ensemble config digest; config consistency cannot be verified for this legacy session.',
       });
     }
+    const hasComparableLegacyFullDigest =
+      effectiveConfigDigestScheme === 'full' &&
+      loadedResumeStore.ensembleConfigDigest !== undefined;
+    if (
+      loadedResumeStore.acpModelConfigDigest === undefined &&
+      !hasComparableLegacyFullDigest
+    ) {
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message:
+          'SessionResumeStore has no ACP model config digest; this diagnostic metadata is unavailable and will not be backfilled. Resume is not blocked by its absence.',
+      });
+    }
     // Keep the persisted scheme and digest paired across resume and flush.
     // Legacy stores without a digest remain unverifiable until a new session
     // is started; a resume must not silently relabel their existing state.
     ensembleConfigDigestScheme = savedConfigDigestScheme;
     ensembleConfigDigest = loadedResumeStore.ensembleConfigDigest;
+    // This digest describes the config used when the session was first
+    // recorded. Keep it as diagnostic metadata; model changes do not gate
+    // resume, and a missing legacy value must not be backfilled.
+    acpModelConfigDigest = loadedResumeStore.acpModelConfigDigest;
     // A previously completed lifecycle no longer describes this instance once
     // resume begins. Persist unknown before restoring or attaching anything so
     // a crash during backend resume cannot leave stale `closed` / `exited` data
@@ -1407,6 +1427,9 @@ async function runConductorSessionWithStartupGuard(
         : {}),
       ...(ensembleConfigDigest !== undefined
         ? { ensembleConfigDigest }
+        : {}),
+      ...(acpModelConfigDigest !== undefined
+        ? { acpModelConfigDigest }
         : {}),
       ...(persistedLifecycle ? { lifecycle: persistedLifecycle } : {}),
       ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),

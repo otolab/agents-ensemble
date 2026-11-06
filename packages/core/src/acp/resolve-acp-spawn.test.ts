@@ -285,28 +285,35 @@ describe('resolveWorkerAcpSpawn', () => {
     expect(resolved.model).toBeUndefined();
   });
 
-  it('rejects model injection for unsupported presets before spawn', () => {
-    expect(() =>
+  it('injects a Pi model through its ACP session config option', () => {
+    expect(
       resolveWorkerAcpSpawn({
         modelTag: 'high',
         defaultOptions: {
           defaultAcpCli: 'pi',
+          env: {},
           config: {
             acp: {
-              defaultPreset: 'cursor',
               models: { opus: 'gateway/opus' },
               tags: { high: 'opus' },
             },
           } as import('../config/types.js').EnsembleConfig,
         },
       }),
-    ).toThrow(/preset "pi" does not support configured model injection/);
+    ).toMatchObject({
+      preset: 'pi',
+      modelTag: 'high',
+      model: 'gateway/opus',
+      sessionConfigOptionOverrides: [{ id: 'model', value: 'gateway/opus' }],
+    });
   });
 
   it.each([
     {
       preset: 'cursor' as const,
-      expected: { args: ['--model', 'gateway/opus', 'acp'] },
+      expected: {
+        args: ['--model', 'gateway/opus', 'acp'],
+      },
     },
     {
       preset: 'claude' as const,
@@ -314,11 +321,20 @@ describe('resolveWorkerAcpSpawn', () => {
         sessionMeta: {
           claudeCode: { options: { settings: { model: 'gateway/opus' } } },
         },
+        sessionConfigOptionOverrides: [
+          { id: 'model', value: 'gateway/opus' },
+        ],
       },
     },
     {
       preset: 'codex' as const,
       expected: { env: { CODEX_CONFIG: '{"model":"gateway/opus"}' } },
+    },
+    {
+      preset: 'pi' as const,
+      expected: {
+        sessionConfigOptionOverrides: [{ id: 'model', value: 'gateway/opus' }],
+      },
     },
   ])('injects a configured model for $preset', ({ preset, expected }) => {
     const resolved = resolveWorkerAcpSpawn({
@@ -341,6 +357,45 @@ describe('resolveWorkerAcpSpawn', () => {
       model: 'gateway/opus',
       ...expected,
     });
+    if (preset === 'cursor') {
+      expect(resolved.clientCapabilitiesMeta).toBeUndefined();
+    }
+  });
+
+  it('keeps Cursor defaults when cursorFast is omitted and fails fast on unverified options', () => {
+    const resolve = (definition: {
+      model: string;
+      reasoning?: string;
+      cursorFast?: boolean;
+    }) =>
+      resolveWorkerAcpSpawn({
+        defaultOptions: {
+          defaultAcpCli: 'cursor',
+          env: {},
+          config: {
+            acp: {
+              models: { selected: definition },
+              tags: { default: 'selected' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      });
+
+    const modelOnly = resolve({ model: 'cursor-grok-4.6-high' });
+    expect(modelOnly.args).toEqual([
+      '--model',
+      'cursor-grok-4.6-high',
+      'acp',
+    ]);
+    expect(modelOnly.clientCapabilitiesMeta).toBeUndefined();
+    expect(modelOnly.sessionConfigOptionOverrides).toBeUndefined();
+
+    expect(() =>
+      resolve({ model: 'cursor-grok-4.6-high', reasoning: 'high' }),
+    ).toThrow(/Cursor ACP cannot verify.*reasoning.*runtime model/);
+    expect(() =>
+      resolve({ model: 'cursor-grok-4.6-high', cursorFast: false }),
+    ).toThrow(/Cursor ACP cannot verify.*cursorFast.*runtime model/);
   });
 
   it('merges a model into the existing Codex session config', () => {
@@ -396,6 +451,104 @@ describe('resolveWorkerAcpSpawn', () => {
     });
   });
 
+  it('preserves MODEL_PROVIDER precedence and fingerprints inherited providers separately', () => {
+    const resolve = (provider: string, configProvider?: string) =>
+      resolveWorkerAcpSpawn({
+        modelTag: 'high',
+        defaultOptions: {
+          env: {
+            MODEL_PROVIDER: provider,
+            CODEX_CONFIG: JSON.stringify({ model_provider: 'codex-config-provider' }),
+          },
+          config: {
+            acp: {
+              defaultPreset: 'codex',
+              ...(configProvider
+                ? { env: { MODEL_PROVIDER: configProvider } }
+                : {}),
+              models: { high: { model: 'gateway/opus', reasoning: 'high' } },
+              tags: { high: 'high' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      });
+
+    const inherited = resolve('ambient-provider');
+    const configured = resolve('ambient-provider', 'config-provider');
+    const inheritedFingerprint = acpSpawnFingerprint(inherited);
+    const changedFingerprint = acpSpawnFingerprint(
+      resolve('different-provider'),
+    );
+    const configuredFingerprint = acpSpawnFingerprint(configured);
+
+    expect(inherited.env?.MODEL_PROVIDER).toBeUndefined();
+    expect(configured.env?.MODEL_PROVIDER).toBe('config-provider');
+    expect(JSON.parse(inherited.env?.CODEX_CONFIG ?? '{}')).toEqual({
+      model_provider: 'codex-config-provider',
+      model: 'gateway/opus',
+      model_reasoning_effort: 'high',
+    });
+    expect(inheritedFingerprint.envDigest).toBeDefined();
+    expect(inheritedFingerprint.envDigest).toBe(changedFingerprint.envDigest);
+    expect(inheritedFingerprint.modelProviderDigest).not.toBe(
+      changedFingerprint.modelProviderDigest,
+    );
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: inheritedFingerprint,
+        actual: changedFingerprint,
+      }),
+    ).not.toThrow();
+    expect(configuredFingerprint.modelProviderDigest).toBe(
+      acpSpawnFingerprint(resolve('another-ambient-provider', 'config-provider'))
+        .modelProviderDigest,
+    );
+    expect(configuredFingerprint.envDigest).not.toBe(inheritedFingerprint.envDigest);
+  });
+
+  it('fingerprints MODEL_PROVIDER being added to or removed from a resumed worker', () => {
+    const config = {
+      acp: {
+        defaultPreset: 'codex',
+        models: { high: { model: 'gateway/opus', reasoning: 'high' } },
+        tags: { high: 'high' },
+      },
+    } as import('../config/types.js').EnsembleConfig;
+    const resolve = (modelProvider?: string) =>
+      resolveWorkerAcpSpawn({
+        modelTag: 'high',
+        defaultOptions: {
+          env: {
+            CODEX_CONFIG: JSON.stringify({ model_provider: 'codex-config-provider' }),
+            ...(modelProvider !== undefined
+              ? { MODEL_PROVIDER: modelProvider }
+              : {}),
+          },
+          config,
+        },
+      });
+
+    const withoutProvider = acpSpawnFingerprint(resolve());
+    const withProvider = acpSpawnFingerprint(resolve('ambient-provider'));
+
+    expect(withoutProvider.modelProviderDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(withoutProvider.modelProviderDigest).not.toBe(
+      withProvider.modelProviderDigest,
+    );
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: withoutProvider,
+        actual: withProvider,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: withProvider,
+        actual: withoutProvider,
+      }),
+    ).not.toThrow();
+  });
+
   it.each([
     'gateway/opus',
     { model: 'gateway/opus' },
@@ -437,25 +590,67 @@ describe('resolveWorkerAcpSpawn', () => {
     ).toThrow(/CODEX_CONFIG to be a JSON object/);
   });
 
-  it.each(['cursor', 'claude'] as const)(
-    'rejects configured reasoning for %s rather than silently ignoring it',
-    (preset) => {
-      expect(() =>
-        resolveWorkerAcpSpawn({
-          defaultOptions: {
-            env: {},
-            config: {
-              acp: {
-                defaultPreset: preset,
-                models: { high: { model: 'gateway/opus', reasoning: 'high' } },
-                tags: { default: 'high' },
-              },
-            } as import('../config/types.js').EnsembleConfig,
-          },
-        }),
-      ).toThrow(new RegExp(`preset "${preset}" does not support configured reasoning injection`));
+  it.each([
+    {
+      preset: 'claude' as const,
+      expected: {
+        sessionConfigOptionOverrides: [
+          { id: 'model', value: 'gateway/opus' },
+          { id: 'effort', value: 'high' },
+        ],
+      },
     },
-  );
+    {
+      preset: 'pi' as const,
+      expected: {
+        sessionConfigOptionOverrides: [
+          { id: 'model', value: 'gateway/opus' },
+          { id: 'thought_level', value: 'high' },
+        ],
+      },
+    },
+  ])('resolves configured reasoning for $preset', ({ preset, expected }) => {
+    const resolved = resolveWorkerAcpSpawn({
+      defaultOptions: {
+        env: {},
+        config: {
+          acp: {
+            defaultPreset: preset,
+            models: { high: { model: 'gateway/opus', reasoning: 'high' } },
+            tags: { default: 'high' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+    expect(resolved).toMatchObject({
+      preset,
+      modelTag: 'default',
+      model: 'gateway/opus',
+      reasoning: 'high',
+      ...expected,
+    });
+  });
+
+  it('rejects cursorFast for non-Cursor presets', () => {
+    expect(() =>
+      resolveWorkerAcpSpawn({
+        defaultOptions: {
+          defaultAcpCli: 'codex',
+          env: {},
+          config: {
+            acp: {
+              models: {
+                selected: { model: 'gateway/model', cursorFast: false },
+              },
+              tags: { default: 'selected' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      }),
+    ).toThrow(
+      /cursorFast is supported only by the "cursor" ACP preset.*0054-cursor-acp-runtime-verification\.md/,
+    );
+  });
 
   it.each([
     { defaultAcpCli: 'cursor' },
@@ -481,25 +676,21 @@ describe('resolveWorkerAcpSpawn', () => {
     expect(resolved.model).toBeUndefined();
   });
 
-  it.each([
-    { defaultAcpCli: 'pi' },
-    { defaultAcpCommand: 'custom-agent' },
-  ])('rejects model injection for unsupported preset $defaultAcpCli$defaultAcpCommand', (options) => {
+  it('rejects model injection for custom before spawn with documentation links', () => {
     expect(() =>
       resolveWorkerAcpSpawn({
         defaultOptions: {
-          ...options,
+          defaultAcpCommand: 'custom-agent',
           env: {},
           config: {
             acp: {
-              defaultPreset: 'codex',
               models: { high: { model: 'gateway/opus', reasoning: 'high' } },
               tags: { default: 'high' },
             },
           } as import('../config/types.js').EnsembleConfig,
         },
       }),
-    ).toThrow(/does not support configured model injection/);
+    ).toThrow(/does not support configured model injection.*docs\/config\.md.*0052-acp-model-injection-by-preset\.md/);
   });
 });
 
@@ -562,11 +753,13 @@ describe('profileWorkersToSessionSpecs', () => {
     expect(specs.map(({ modelTag, spawn, acpFingerprint }) => ({
       modelTag,
       args: spawn?.args,
+      clientCapabilitiesMeta: spawn?.clientCapabilitiesMeta,
       fingerprint: acpFingerprint,
     }))).toEqual([
       {
         modelTag: 'high',
         args: ['--model', 'cursor/strong', 'acp'],
+        clientCapabilitiesMeta: undefined,
         fingerprint: {
           preset: 'cursor',
           command: 'agent',
@@ -578,6 +771,7 @@ describe('profileWorkersToSessionSpecs', () => {
       {
         modelTag: 'default',
         args: ['--model', 'cursor/standard', 'acp'],
+        clientCapabilitiesMeta: undefined,
         fingerprint: {
           preset: 'cursor',
           command: 'agent',
@@ -616,7 +810,7 @@ describe('acpSpawnFingerprint', () => {
     ).toBe(computeAcpSpawnEnvDigest(env));
   });
 
-  it('retains worker model metadata without using it to reject resume', () => {
+  it('records worker modelTag changes without rejecting resume', () => {
     const high = resolveWorkerAcpSpawn({
       modelTag: 'high',
       defaultOptions: {
@@ -641,16 +835,20 @@ describe('acpSpawnFingerprint', () => {
         } as import('../config/types.js').EnsembleConfig,
       },
     });
+    const expected = acpSpawnFingerprint(high);
+    const actual = acpSpawnFingerprint(standard);
+    expect(expected.modelTag).toBe('high');
+    expect(actual.modelTag).toBe('default');
     expect(() =>
       assertAcpSpawnMatchesResume({
-        expected: acpSpawnFingerprint(high),
-        actual: acpSpawnFingerprint(standard),
+        expected,
+        actual,
         workerName: 'implementer',
       }),
     ).not.toThrow();
   });
 
-  it('does not reject a reasoning change represented in the spawn env digest', () => {
+  it('records a Codex reasoning change in the spawn env digest without rejecting resume', () => {
     const resolve = (reasoning: string) =>
       resolveWorkerAcpSpawn({
         defaultOptions: {
@@ -670,32 +868,88 @@ describe('acpSpawnFingerprint', () => {
 
     expect(saved.envDigest).toBe(same.envDigest);
     expect(saved.envDigest).not.toBe(changed.envDigest);
+    expect(saved.reasoning).toBe('low');
     expect(() => assertAcpSpawnMatchesResume({ expected: saved, actual: same })).not.toThrow();
-    expect(() => assertAcpSpawnMatchesResume({ expected: saved, actual: changed })).not.toThrow();
-    expect(saved).not.toHaveProperty('reasoning');
+    expect(() =>
+      assertAcpSpawnMatchesResume({ expected: saved, actual: changed }),
+    ).not.toThrow();
+  });
+
+  it('accepts a legacy Codex fingerprint without reasoning or provider digest fields', () => {
+    const spawn = resolveWorkerAcpSpawn({
+      defaultOptions: {
+        env: { MODEL_PROVIDER: 'legacy-provider' },
+        config: {
+          acp: {
+            defaultPreset: 'codex',
+            models: { shared: { model: 'gateway/shared', reasoning: 'high' } },
+            tags: { default: 'shared' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+    const current = acpSpawnFingerprint(spawn);
+    const legacy = {
+      preset: current.preset,
+      command: current.command,
+      args: current.args,
+      modelTag: current.modelTag,
+      model: current.model,
+      envDigest: current.envDigest,
+    };
+
+    expect(() =>
+      assertAcpSpawnMatchesResume({ expected: legacy, actual: current }),
+    ).not.toThrow();
   });
 });
 
 describe('assertAcpSpawnMatchesResume', () => {
-  it('ignores env digest, modelTag, model, and built-in model args during resume', () => {
-    const savedEnv = { MODEL_PROVIDER: 'litellm' };
+  it('records built-in model and env fields without using them to reject resume', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
           preset: 'codex',
           command: 'codex-acp',
           args: ['--model', 'old-model'],
-          envDigest: computeAcpSpawnEnvDigest(savedEnv),
+          envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'litellm' }),
+          modelProviderDigest: 'a'.repeat(64),
           modelTag: 'high',
           model: 'old-model',
+          reasoning: 'low',
+          cursorFast: false,
         },
         actual: {
           preset: 'codex',
           command: 'codex-acp',
           args: ['--model', 'new-model'],
           envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'openai' }),
+          modelProviderDigest: 'b'.repeat(64),
           modelTag: 'low',
           model: 'new-model',
+          reasoning: 'high',
+          cursorFast: true,
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: ['--model', 'old-model'],
+          modelTag: 'high',
+          model: 'model',
+          reasoning: 'high',
+        },
+        actual: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: ['--model', 'new-model'],
+          modelTag: 'high',
+          model: 'model',
+          reasoning: 'high',
         },
       }),
     ).not.toThrow();
@@ -719,7 +973,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     ).toThrow(/resume ACP spawn mismatch/);
   });
 
-  it('compares custom command and args while ignoring model and env metadata', () => {
+  it('compares custom command and args while allowing model and env changes', () => {
     const expected: ReturnType<typeof acpSpawnFingerprint> = {
       preset: 'custom',
       command: 'custom-acp',
@@ -769,6 +1023,50 @@ describe('assertAcpSpawnMatchesResume', () => {
     ).not.toThrow();
   });
 
+  it('records a change in the saved reasoning effort without rejecting resume', () => {
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: {
+          preset: 'claude',
+          command: 'claude-agent-acp',
+          args: [],
+          modelTag: 'high',
+          model: 'provider/opus',
+          reasoning: 'low',
+        },
+        actual: {
+          preset: 'claude',
+          command: 'claude-agent-acp',
+          args: [],
+          modelTag: 'high',
+          model: 'provider/opus',
+          reasoning: 'high',
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it('records a change in the saved Cursor fast mode without rejecting resume', () => {
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['--model', 'cursor-grok-4.6-high', 'acp'],
+          model: 'cursor-grok-4.6-high',
+          cursorFast: false,
+        },
+        actual: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['--model', 'cursor-grok-4.6-high', 'acp'],
+          model: 'cursor-grok-4.6-high',
+          cursorFast: true,
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it('skips when expected fingerprint is absent (legacy resume store)', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
@@ -804,7 +1102,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     expect(currentSpawn.env).toEqual({ INITIAL_AGENT_MODE: 'agent' });
   });
 
-  it('does not reject on env digest changes in a saved resume store fingerprint', () => {
+  it('records env digest changes in a saved resume store fingerprint', () => {
     const env = {
       INITIAL_AGENT_MODE: 'agent',
       MODEL_PROVIDER: 'litellm',
@@ -825,6 +1123,18 @@ describe('assertAcpSpawnMatchesResume', () => {
         },
       }),
     ).not.toThrow();
+    const changedEnvFingerprint = {
+      preset: 'codex' as const,
+      command: 'codex-acp',
+      args: [],
+      envDigest: computeAcpSpawnEnvDigest({
+        ...env,
+        MODEL_PROVIDER: 'openai',
+      }),
+    };
+    expect(changedEnvFingerprint.envDigest).not.toBe(
+      computeAcpSpawnEnvDigest(env),
+    );
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
@@ -833,15 +1143,7 @@ describe('assertAcpSpawnMatchesResume', () => {
           args: [],
           envDigest: computeAcpSpawnEnvDigest(env),
         },
-        actual: {
-          preset: 'codex',
-          command: 'codex-acp',
-          args: [],
-          envDigest: computeAcpSpawnEnvDigest({
-            ...env,
-            MODEL_PROVIDER: 'openai',
-          }),
-        },
+        actual: changedEnvFingerprint,
       }),
     ).not.toThrow();
   });

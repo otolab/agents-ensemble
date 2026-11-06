@@ -19,7 +19,9 @@ describe('buildSessionModelsSummary', () => {
       acp: {
         defaultPreset: 'codex' as const,
         tags: { high: 'strong' },
-        models: { strong: 'gpt-6.1-terra' },
+        models: {
+          strong: { model: 'gpt-6.1-terra', reasoning: 'high' },
+        },
       },
     };
     const workers = profileWorkersToSessionSpecs(
@@ -53,6 +55,7 @@ describe('buildSessionModelsSummary', () => {
           modelTag: 'high',
           acpPreset: 'codex',
           model: 'gpt-6.1-terra',
+          reasoning: 'high',
         },
         {
           name: 'reviewer',
@@ -62,6 +65,39 @@ describe('buildSessionModelsSummary', () => {
         },
       ],
     });
+  });
+
+  it('records the Cursor model request without unattested option values', () => {
+    const config = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        defaultPreset: 'cursor' as const,
+        tags: { high: 'selected' },
+        models: { selected: 'cursor-grok-4.6-high' },
+      },
+    };
+    const workers = profileWorkersToSessionSpecs(
+      { workers: [{ name: 'worker-1', kind: 'implementer', modelTag: 'high' }] },
+      { defaultAcp: { config, env: {} } },
+    );
+
+    expect(
+      buildSessionModelsSummary({
+        backend: 'cursor',
+        config,
+        env: {},
+        workers,
+        usageTracker: new SessionUsageTracker(),
+      }).workers,
+    ).toEqual([
+      {
+        name: 'worker-1',
+        kind: 'implementer',
+        modelTag: 'high',
+        acpPreset: 'cursor',
+        model: 'cursor-grok-4.6-high',
+      },
+    ]);
   });
 
   it.each([

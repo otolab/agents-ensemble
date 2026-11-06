@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { SpawnAcpProcessOptions } from './acp-process.js';
+import type { AcpSessionConfigOptionOverride } from './acp-client.js';
 import {
   resolveAcpAuthenticateStrategy,
   type AcpAuthenticateStrategy,
@@ -17,6 +18,13 @@ export type AcpPresetId = BuiltinAcpPresetId | 'custom';
 
 export const ENSEMBLE_DEFAULT_ACP_CLI_ENV = 'ENSEMBLE_DEFAULT_ACP_CLI';
 
+const ACP_MODEL_CATALOG_DOC_URL =
+  'https://github.com/otolab/agents-ensemble/blob/main/docs/config.md#acp-model-tag-と-model-catalog';
+const ACP_MODEL_CATALOG_ADR_URL =
+  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0052-acp-model-injection-by-preset.md';
+const ACP_CURSOR_FAST_ADR_URL =
+  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0054-cursor-acp-runtime-verification.md';
+
 /** spawn 解決結果。 */
 export interface ResolvedAcpSpawn {
   preset: AcpPresetId;
@@ -27,21 +35,38 @@ export interface ResolvedAcpSpawn {
   /** Effective profile tier and environment-specific model ID. */
   modelTag?: AcpModelTag;
   model?: string;
+  reasoning?: string;
+  cursorFast?: boolean;
+  /** Hash of the effective Codex MODEL_PROVIDER, including inherited values. */
+  modelProviderDigest?: string;
   /** Preset-specific session metadata, currently used by Claude ACP. */
   sessionMeta?: Record<string, unknown>;
+  /** Metadata sent in ACP initialize.clientCapabilities._meta. */
+  clientCapabilitiesMeta?: Record<string, unknown>;
+  /** ACP session config options to set after session/new or session/load. */
+  sessionConfigOptionOverrides?: AcpSessionConfigOptionOverride[];
 }
 
-/** SessionResumeStore に保存する ACP spawn 情報。resume 判定では preset と custom command/args を使う。 */
+/**
+ * Resume metadata. Model and environment fields are retained for diagnostics;
+ * compatibility checks compare the preset and, for custom, command and args.
+ */
 export interface AcpSpawnFingerprint {
   preset: AcpPresetId;
   command: string;
   args: string[];
-  /** 診断用 spawn env の canonical SHA-256。resume 判定では比較しない。 */
+  /** spawn env の canonical SHA-256。値そのものは保存しない。 */
   envDigest?: string;
-  /** spawn 解決時の worker tier。resume 判定では比較しない。 */
+  /** Worker tier used to resolve this process. */
   modelTag?: AcpModelTag;
-  /** 解決済み ACP model ID。resume 判定では比較しない。 */
+  /** Resolved ACP model ID (model IDs are not credentials). */
   model?: string;
+  /** Configured reasoning effort; not a credential. */
+  reasoning?: string;
+  /** Configured Cursor ACP fast option, when explicitly set. */
+  cursorFast?: boolean;
+  /** Hash of the effective Codex MODEL_PROVIDER, including inherited values. */
+  modelProviderDigest?: string;
 }
 
 export interface DefaultAcpResolutionOptions {
@@ -187,9 +212,21 @@ export function resolveWorkerAcpSpawn(input?: {
 }): ResolvedAcpSpawn {
   const modelTag = input?.modelTag ?? 'default';
   const spawn = resolveDefaultAcpSpawn(input?.defaultOptions);
+  const processEnv = input?.defaultOptions?.env ?? process.env;
+  const modelProvider =
+    spawn.preset === 'codex'
+      ? spawn.env?.MODEL_PROVIDER ?? processEnv.MODEL_PROVIDER
+      : undefined;
+  const spawnWithProviderFingerprint =
+    spawn.preset === 'codex'
+      ? {
+          ...spawn,
+          modelProviderDigest: computeCodexModelProviderDigest(modelProvider),
+        }
+      : spawn;
   const modelKey = input?.defaultOptions?.config?.acp.tags?.[modelTag];
   if (!modelKey) {
-    return { ...spawn, modelTag };
+    return { ...spawnWithProviderFingerprint, modelTag };
   }
 
   const entry = input?.defaultOptions?.config?.acp.models?.[modelKey];
@@ -204,10 +241,10 @@ export function resolveWorkerAcpSpawn(input?: {
   }
 
   return injectAcpModel(
-    spawn,
+    spawnWithProviderFingerprint,
     modelTag,
     definition,
-    input?.defaultOptions?.env ?? process.env,
+    processEnv,
   );
 }
 
@@ -235,13 +272,18 @@ export function acpSpawnFingerprint(spawn: ResolvedAcpSpawn): AcpSpawnFingerprin
     args: [...spawn.args],
     ...(spawn.modelTag !== undefined ? { modelTag: spawn.modelTag } : {}),
     ...(spawn.model !== undefined ? { model: spawn.model } : {}),
+    ...(spawn.reasoning !== undefined ? { reasoning: spawn.reasoning } : {}),
+    ...(spawn.cursorFast !== undefined ? { cursorFast: spawn.cursorFast } : {}),
+    ...(spawn.modelProviderDigest !== undefined
+      ? { modelProviderDigest: spawn.modelProviderDigest }
+      : {}),
     ...(spawn.env && Object.keys(spawn.env).length > 0
       ? { envDigest: computeAcpSpawnEnvDigest(spawn.env) }
       : {}),
   };
 }
 
-/** Hash a canonical env map for diagnostics without persisting its values. */
+/** Hash a canonical env map for persisted diagnostics without exposing values. */
 export function computeAcpSpawnEnvDigest(env: Record<string, string>): string {
   const canonicalEnv = Object.fromEntries(
     Object.keys(env)
@@ -251,10 +293,21 @@ export function computeAcpSpawnEnvDigest(env: Record<string, string>): string {
   return createHash('sha256').update(JSON.stringify(canonicalEnv)).digest('hex');
 }
 
+function computeCodexModelProviderDigest(modelProvider: string | undefined): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ modelProvider: modelProvider ?? null }))
+    .digest('hex');
+}
+
 export function formatAcpSpawnFingerprint(spawn: AcpSpawnFingerprint): string {
-  if (spawn.preset !== 'custom') return spawn.preset;
   const args = spawn.args.length > 0 ? ` ${spawn.args.join(' ')}` : '';
-  return `custom (${spawn.command}${args})`;
+  const details = [
+    ...(spawn.modelTag !== undefined ? [`modelTag=${spawn.modelTag}`] : []),
+    ...(spawn.model !== undefined ? [`model=${spawn.model}`] : []),
+    ...(spawn.reasoning !== undefined ? [`reasoning=${spawn.reasoning}`] : []),
+    ...(spawn.cursorFast !== undefined ? [`cursorFast=${spawn.cursorFast}`] : []),
+  ];
+  return `${spawn.preset} (${spawn.command}${args}${details.length > 0 ? `, ${details.join(', ')}` : ''})`;
 }
 
 export function assertAcpSpawnMatchesResume(input: {
@@ -265,17 +318,21 @@ export function assertAcpSpawnMatchesResume(input: {
   if (!input.expected) return;
 
   const actual = input.actual;
-  const same =
-    input.expected.preset === actual.preset &&
-    (input.expected.preset !== 'custom' ||
-      (input.expected.command === actual.command &&
-        arraysEqual(input.expected.args, actual.args)));
+  const presetMismatch = input.expected.preset !== actual.preset;
+  const customSpawnMismatch =
+    input.expected.preset === 'custom' &&
+    (input.expected.command !== actual.command ||
+      !arraysEqual(input.expected.args, actual.args));
 
-  if (same) return;
+  if (!presetMismatch && !customSpawnMismatch) return;
 
   const label = input.workerName ? `Worker "${input.workerName}"` : 'Worker';
+  const mismatchDetails = [
+    ...(presetMismatch ? ['ACP preset differs'] : []),
+    ...(customSpawnMismatch ? ['custom ACP command or arguments differ'] : []),
+  ];
   throw new Error(
-    `${label} resume ACP spawn mismatch: saved resume store has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}`,
+    `${label} resume ACP spawn mismatch: saved resume store has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}${mismatchDetails.length > 0 ? `; ${mismatchDetails.join('; ')}` : ''}`,
   );
 }
 
@@ -289,6 +346,12 @@ export function resolvedAcpSpawnToOptions(
     args: [...spawn.args],
     authenticate: spawn.authenticate ?? resolveAcpAuthenticateStrategy(spawn),
     ...(spawn.sessionMeta ? { sessionMeta: spawn.sessionMeta } : {}),
+    ...(spawn.clientCapabilitiesMeta
+      ? { clientCapabilitiesMeta: spawn.clientCapabilitiesMeta }
+      : {}),
+    ...(spawn.sessionConfigOptionOverrides
+      ? { sessionConfigOptionOverrides: spawn.sessionConfigOptionOverrides }
+      : {}),
     ...(spawn.env
       ? {
           env: {
@@ -306,12 +369,25 @@ function injectAcpModel(
   definition: AcpModelDefinition,
   processEnv: NodeJS.ProcessEnv,
 ): ResolvedAcpSpawn {
-  const { model, reasoning } = definition;
+  const { model, reasoning, cursorFast } = definition;
+  if (
+    cursorFast !== undefined &&
+    spawn.preset !== 'cursor' &&
+    spawn.preset !== 'custom'
+  ) {
+    throw new Error(
+      `acp.models entry cursorFast is supported only by the "cursor" ACP preset (worker modelTag "${modelTag}"). See ${ACP_MODEL_CATALOG_DOC_URL} and ${ACP_CURSOR_FAST_ADR_URL}`,
+    );
+  }
   switch (spawn.preset) {
-    case 'cursor':
-      if (reasoning !== undefined) {
+    case 'cursor': {
+      const unsupportedOptions = [
+        ...(reasoning !== undefined ? ['reasoning'] : []),
+        ...(cursorFast !== undefined ? ['cursorFast'] : []),
+      ];
+      if (unsupportedOptions.length > 0) {
         throw new Error(
-          `ACP preset "cursor" does not support configured reasoning injection (worker modelTag "${modelTag}")`,
+          `Cursor ACP cannot verify that configured ${unsupportedOptions.join(' and ')} reaches the runtime model; the available ACP response only reports session configuration. Refusing to start worker modelTag "${modelTag}". See ${ACP_MODEL_CATALOG_DOC_URL} and ${ACP_CURSOR_FAST_ADR_URL}`,
         );
       }
       return {
@@ -320,16 +396,21 @@ function injectAcpModel(
         modelTag,
         model,
       };
+    }
     case 'claude':
-      if (reasoning !== undefined) {
-        throw new Error(
-          `ACP preset "claude" does not support configured reasoning injection (worker modelTag "${modelTag}")`,
-        );
-      }
       return {
         ...spawn,
         modelTag,
         model,
+        ...(reasoning !== undefined
+          ? { reasoning }
+          : {}),
+        sessionConfigOptionOverrides: [
+          { id: 'model', value: model },
+          ...(reasoning !== undefined
+            ? [{ id: 'effort', value: reasoning }]
+            : []),
+        ],
         sessionMeta: {
           ...(spawn.sessionMeta ?? {}),
           claudeCode: {
@@ -365,12 +446,30 @@ function injectAcpModel(
         model,
         ...(reasoning !== undefined ? { model_reasoning_effort: reasoning } : {}),
       });
-      return { ...spawn, env, modelTag, model };
+      return {
+        ...spawn,
+        env,
+        modelTag,
+        model,
+        ...(reasoning !== undefined ? { reasoning } : {}),
+      };
     }
     case 'pi':
+      return {
+        ...spawn,
+        modelTag,
+        model,
+        ...(reasoning !== undefined ? { reasoning } : {}),
+        sessionConfigOptionOverrides: [
+          { id: 'model', value: model },
+          ...(reasoning !== undefined
+            ? [{ id: 'thought_level', value: reasoning }]
+            : []),
+        ],
+      };
     case 'custom':
       throw new Error(
-        `ACP preset "${spawn.preset}" does not support configured model injection (worker modelTag "${modelTag}", model "${model}")`,
+        `ACP preset "custom" does not support configured model injection (worker modelTag "${modelTag}", model "${model}"). See ${ACP_MODEL_CATALOG_DOC_URL} and ${ACP_MODEL_CATALOG_ADR_URL}${cursorFast !== undefined ? `, ${ACP_CURSOR_FAST_ADR_URL}` : ''}`,
       );
   }
 }

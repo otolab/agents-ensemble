@@ -200,6 +200,257 @@ describe('AcpClient', () => {
     await client.close();
   });
 
+  it('advertises client capabilities metadata and applies config overrides after session/new', async () => {
+    const streams = createInProcessStreamPair();
+    const onInitialize = vi.fn();
+    const onSetConfigOption = vi.fn();
+    const sessionConfigOptions = [
+      {
+        id: 'model',
+        type: 'select',
+        currentValue: 'provider/old',
+        options: [
+          { value: 'provider/old', name: 'Old' },
+          { value: 'provider/new', name: 'New' },
+        ],
+      },
+      {
+        id: 'effort',
+        type: 'select',
+        currentValue: 'low',
+        options: [
+          { value: 'low', name: 'Low' },
+          { value: 'high', name: 'High' },
+        ],
+      },
+    ];
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      onInitialize,
+      onSetConfigOption,
+      sessionConfigOptions,
+    });
+
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      {
+        authenticate: { kind: 'skip' },
+        clientCapabilitiesMeta: { parameterizedModelPicker: true },
+        sessionConfigOptionOverrides: [
+          { id: 'model', value: 'provider/new' },
+          { id: 'effort', value: 'high' },
+        ],
+      },
+    );
+
+    await client.connect();
+    const sessionId = await client.newSession('/tmp');
+
+    expect(onInitialize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientCapabilities: expect.objectContaining({
+          _meta: { parameterizedModelPicker: true },
+        }),
+      }),
+    );
+    expect(onSetConfigOption.mock.calls).toEqual([
+      [{ sessionId, configId: 'model', value: 'provider/new' }],
+      [{ sessionId, configId: 'effort', value: 'high' }],
+    ]);
+
+    await client.close();
+  });
+
+  it('applies advertised config overrides after session/load', async () => {
+    const streams = createInProcessStreamPair();
+    const onLoadSession = vi.fn();
+    const onSetConfigOption = vi.fn();
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      initialSessions: ['resume-session'],
+      onLoadSession,
+      onSetConfigOption,
+      sessionConfigOptions: [
+        {
+          id: 'thought_level',
+          type: 'select',
+          currentValue: 'medium',
+          options: [
+            { value: 'medium', name: 'Medium' },
+            { value: 'high', name: 'High' },
+          ],
+        },
+      ],
+    });
+
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      {
+        authenticate: { kind: 'skip' },
+        sessionConfigOptionOverrides: [
+          { id: 'thought_level', value: 'high' },
+        ],
+      },
+    );
+
+    await client.connect();
+    await client.loadSession('resume-session', '/tmp');
+
+    expect(onLoadSession).toHaveBeenCalledOnce();
+    expect(onSetConfigOption).toHaveBeenCalledWith({
+      sessionId: 'resume-session',
+      configId: 'thought_level',
+      value: 'high',
+    });
+
+    await client.close();
+  });
+
+  it('sets an advertised value when the adapter currentValue is outside the selectable options', async () => {
+    const streams = createInProcessStreamPair();
+    const onSetConfigOption = vi.fn();
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      onSetConfigOption,
+      sessionConfigOptions: [
+        {
+          id: 'model',
+          type: 'select',
+          currentValue: 'provider/hidden-model',
+          options: [{ value: 'provider/catalog-model', name: 'Catalog model' }],
+        },
+      ],
+    });
+
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      {
+        authenticate: { kind: 'skip' },
+        sessionConfigOptionOverrides: [
+          { id: 'model', value: 'provider/catalog-model' },
+        ],
+      },
+    );
+
+    await client.connect();
+    await client.newSession('/tmp');
+
+    expect(onSetConfigOption).toHaveBeenCalledWith({
+      sessionId: 'fake-session-1',
+      configId: 'model',
+      value: 'provider/catalog-model',
+    });
+
+    await client.close();
+  });
+
+  it('fails before prompting when an ACP agent does not advertise the configured value', async () => {
+    const streams = createInProcessStreamPair();
+    const onPrompt = vi.fn();
+    const onSetConfigOption = vi.fn();
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      onPrompt,
+      onSetConfigOption,
+      sessionConfigOptions: [
+        {
+          id: 'effort',
+          type: 'select',
+          currentValue: 'low',
+          options: [{ value: 'low', name: 'Low' }],
+        },
+      ],
+    });
+
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      {
+        authenticate: { kind: 'skip' },
+        sessionConfigOptionOverrides: [{ id: 'effort', value: 'high' }],
+      },
+    );
+
+    await client.connect();
+    await expect(client.newSession('/tmp')).rejects.toThrow(
+      /does not advertise "high" for session config option "effort"/,
+    );
+    expect(onSetConfigOption).not.toHaveBeenCalled();
+    expect(onPrompt).not.toHaveBeenCalled();
+
+    await client.close();
+  });
+
+  it('fails when the setter response does not confirm the requested current value', async () => {
+    const streams = createInProcessStreamPair();
+    const onSetConfigOption = vi.fn();
+    startFakeAcpServer({
+      readable: streams.serverReadable,
+      writable: streams.serverWritable,
+      sessionConfigOptions: [
+        {
+          id: 'thought_level',
+          type: 'select',
+          currentValue: 'medium',
+          options: [
+            { value: 'medium', name: 'Medium' },
+            { value: 'low', name: 'Low' },
+          ],
+        },
+      ],
+      onSetConfigOption: ({ configId }) => {
+        onSetConfigOption(configId);
+        return [
+          {
+            id: configId,
+            type: 'select',
+            currentValue: 'medium',
+            options: [
+              { value: 'medium', name: 'Medium' },
+              { value: 'low', name: 'Low' },
+            ],
+          },
+        ];
+      },
+    });
+
+    const client = AcpClient.create(
+      {
+        readable: streams.clientReadable,
+        writable: streams.clientWritable,
+      },
+      {
+        authenticate: { kind: 'skip' },
+        sessionConfigOptionOverrides: [
+          { id: 'thought_level', value: 'low' },
+        ],
+      },
+    );
+
+    await client.connect();
+    await expect(client.newSession('/tmp')).rejects.toThrow(
+      /reported currentValue "medium" instead of "low"/,
+    );
+    expect(onSetConfigOption).toHaveBeenCalledOnce();
+
+    await client.close();
+  });
+
   it('skips authenticate when strategy is skip', async () => {
     const streams = createInProcessStreamPair();
     const authenticateSpy = vi.fn();

@@ -93,7 +93,7 @@ describe('parseEnsembleConfig', () => {
           models: {
             fast: ' provider/fast ',
             high: { model: ' provider/large ', reasoning: ' high ' },
-            override: { reasoning: 'low' },
+            override: { reasoning: 'low', cursorFast: false },
           },
         },
       }),
@@ -102,7 +102,7 @@ describe('parseEnsembleConfig', () => {
         models: {
           fast: 'provider/fast',
           high: { model: 'provider/large', reasoning: 'high' },
-          override: { reasoning: 'low' },
+          override: { reasoning: 'low', cursorFast: false },
         },
       },
     });
@@ -114,6 +114,17 @@ describe('parseEnsembleConfig', () => {
       expect(() =>
         parseEnsembleConfig({ acp: { models: { high: { model: 'm', reasoning } } } }),
       ).toThrow(/acp\.models\.high\.reasoning must be a non-empty string/);
+    },
+  );
+
+  it.each([null, '', 'false', 0])(
+    'rejects invalid configured Cursor fast option %s',
+    (cursorFast) => {
+      expect(() =>
+        parseEnsembleConfig({
+          acp: { models: { high: { model: 'm', cursorFast } } },
+        }),
+      ).toThrow(/acp\.models\.high\.cursorFast must be a boolean/);
     },
   );
 
@@ -370,13 +381,13 @@ describe('loadEnsembleConfig', () => {
     );
     await writeConfig(
       join(repoRoot, '.ensemble'),
-      `acp:\n  models:\n    shared:\n      reasoning: high\n    structured:\n      model: project/large\n    replace: project/default\n  tags:\n    default: structured\n`,
+      `acp:\n  models:\n    shared:\n      reasoning: high\n      cursorFast: false\n    structured:\n      model: project/large\n    replace: project/default\n  tags:\n    default: structured\n`,
     );
 
     const config = await loadConfig();
 
     expect(config.acp.models).toEqual({
-      shared: { model: 'provider/shared', reasoning: 'high' },
+      shared: { model: 'provider/shared', reasoning: 'high', cursorFast: false },
       structured: { model: 'project/large', reasoning: 'low' },
       replace: 'project/default',
       unchanged: 'provider/legacy',

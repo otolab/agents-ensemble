@@ -54,9 +54,9 @@ Session resume state conductorBackend mismatch: pi !== cursor
 
 旧 SessionResumeStore にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `~/.ensemble/sessions/<repoKey>/pi/` の JSONL に保存されます。旧 `<conductorCwd>/.ensemble/pi/sessions/` は再開時に読み取り、user 側へ移行します。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
 
-SessionResumeStore には `ensembleConfigDigestScheme` と config digest を保存します。新しい session の `resume-feasibility` digest が含むのは merge 後の `session.worktree` と `acp.defaultPreset` だけです。旧 sidecar は scheme 省略 / `full` として全 `EnsembleConfig` を比較し、resume・再保存後も scheme と digest の意味を維持します。旧 store で digest が欠けていれば warning 後に照合を省き、欠如を保ちます。v2 scheme で digest が欠けている場合や未知の scheme は拒否します。config 値やファイルパスは保存しません。ACP spawn fingerprint は preset、custom preset の command / args を照合し、modelTag / model / env digest は resume 判定に使いません。env digest は値を記録せず保持します。詳細は [config.md § resume と config 変更](config.md#resume-と-config-変更) と [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md) を参照してください。
+SessionResumeStore には `ensembleConfigDigestScheme` と config digest を保存します。新しい session の `resume-feasibility` digest が含むのは merge 後の `session.worktree` と `acp.defaultPreset` です。`acpModelConfigDigest` と worker spawn fingerprint は model / reasoning / Cursor fast / env の診断情報を保持しますが、resume 判定では比較しません。fingerprint では preset を照合し、`custom` の場合だけ command / args も照合します。旧 sidecar は scheme 省略 / `full` として全 `EnsembleConfig` を比較するため、従来どおり config 変更が resume を拒否する場合があります。resume・再保存後も旧 scheme と digest の意味を保ちます。旧 `resume-feasibility` store で ACP model digest が欠ける場合は warning を出しますが、resume は止めず、digest もバックフィルしません。scheme 省略 / `full` で config digest が欠けていれば従来どおり warning 後に全体照合を省きます。未知の scheme と `resume-feasibility` scheme の digest 欠落は拒否します。config 値や file path は保存しません。詳細は [config.md § resume と config 変更](config.md#resume-と-config-変更)、[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[conductor.reasoning の分類](adr/0051-conductor-reasoning-resume-digest.md)、[Cursor runtime と worker metadata](adr/0054-cursor-acp-runtime-verification.md)、[Cursor model-only CLI 契約](adr/0055-cursor-model-only-cli-contract.md) を参照してください。
 
-新しい `resume-feasibility` digest は `conductor.model` / `conductor.reasoning` を対象外にするため、これらの config 変更だけでは resume を拒否しません。各 run でその時点の CLI / 環境変数 / merged config を解決し直します。scheme のない旧 sidecar と `full` sidecar は従来どおり config 全体を比較するため、model / reasoning の config 変更で resume が拒否されることがあります。
+新しい `resume-feasibility` digest は `conductor.model` / `conductor.reasoning` を対象外にするため、これらの config 変更だけでは resume を拒否しません。Issue の `--model` / `--reasoning` と `CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` は各 run で再解決します。scheme のない旧 sidecar と `full` sidecar は従来どおり config 全体を比較するため、model / reasoning / env の config 変更で resume が拒否されることがあります。
 
 ### パターン B — Phase 1 横断（env なし）
 
@@ -74,9 +74,9 @@ worker spawn 時の ACP preset 解決（[ADR 0019](adr/0019-worker-acp-cli-prese
 CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
 ```
 
-`acp.env` の正本は config（選択された user config → project の順に deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。SessionResumeStore には ACP env map の canonical digest のみを保存しますが、resume の可否判定には使いません。環境変数の値は記録しません。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
+`acp.env` の正本は config（選択された user config → project の順に deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。SessionResumeStore には env map の digest のみを保存します。新しい `resume-feasibility` sidecar ではこの digest を診断情報として保持しますが、resume の拒否判定には使いません。scheme 省略 / `full` の旧 sidecar は従来の全体 config digest を比較するため、config に含まれる env 変更で拒否されることがあります。環境変数の値は記録しません。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
 
-worker の `modelTag` は `acp.tags` と `acp.models` を経由して解決します。catalog は文字列 shorthand と、reasoning を指定できる構造化形式を併用できます。
+worker の `modelTag` は `acp.tags` と `acp.models` を経由して解決します。catalog は文字列 shorthand と、`reasoning` や Cursor 専用の `cursorFast` を指定できる構造化形式を併用できます。
 
 ```yaml
 acp:
@@ -89,7 +89,7 @@ acp:
     default: standard
 ```
 
-`reasoning` は `codex` で `CODEX_CONFIG.model_reasoning_effort` に渡します。`cursor` / `claude` では選択されたエントリに指定があればエラーとなり、`pi` / `custom` は model 注入自体に対応しません。マージの詳細と省略時の扱いは [config.md § ACP model tag と model catalog](config.md#acp-model-tag-と-model-catalog) を参照してください。
+`model` / `reasoning` の渡し方は preset ごとに異なります。Cursor の model-only 経路は、公式 CLI option `--model` に解決済み model ID をそのまま渡すことです。この pass-through を ensemble の契約とし、ACP response や内部 runtime model の attestation は求めません。別 field の `reasoning` / `cursorFast` を明示すると spawn 前に fail fast します。省略時は initialize capability や setter を送らず、Cursor CLI の model variant 既定に委ねます。model ID 内の reasoning suffix の扱いは別途確認が必要で、確認済みとは表示しません。`claude` は Claude settings metadata と ACP の `model` / `effort`、`codex` は `CODEX_CONFIG`、`pi` は ACP の `model` / `thought_level` option を使います。ACP option の `currentValue` は Agent の報告値であり runtime model の attestation ではありません。`custom` には汎用の model 注入経路がないため、tag が catalog に解決された場合は spawn 前にエラーになります。詳細は [config.md § ACP model tag と model catalog](config.md#acp-model-tag-と-model-catalog)、[ADR 0055](adr/0055-cursor-model-only-cli-contract.md) を参照してください。
 
 ### パターン D — 実行時入力（env / CLI）
 
@@ -125,7 +125,7 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 | Pi project resource root | `conductor.pi.projectDir` | — | — | `<repoRoot>/.ensemble/pi` | config |
 | worker ACP preset（全 worker 共通） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
 | worker ACP spawn env | `acp.env` | — | — | — | 選択された user config → project deep merge |
-| worker model tier / model・reasoning | `workers[].modelTag` / `acp.tags`・`acp.models` | — | — | `default` tag | profile の tag を config の catalog で解決。reasoning は preset に依存 |
+| worker model tier / model・reasoning・Cursor fast | `workers[].modelTag` / `acp.tags`・`acp.models` | — | — | `default` tag | profile の tag を config の catalog で解決。reasoning は preset ごとに異なり、Cursor の明示 reasoning / fast は fail fast |
 | Issue worktree | `session.worktree` | — | `--worktree` | `isolated` | B |
 | worker ACP lazy attach | `session.lazyWorkers` | — | — | `false` | B |
 | 自律ターン上限（TTY） | `session.maxTurns.tty` | — | `--max-turns` / `--no-max-turns` | `0`（無制限） | B |
