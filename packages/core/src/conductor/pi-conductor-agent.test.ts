@@ -60,7 +60,22 @@ import {
   PiConductorAgent,
   resolvePiModelConfig,
 } from './pi-conductor-agent.js';
+import { isConductorAgentFactoryCleanupIncomplete } from './conductor-agent-factory-cleanup.js';
+import { runConductorSession } from './conductor-session.js';
+import { SessionLogger } from './session/session-logger.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
+import { computeResumeFeasibilityConfigDigest } from '../config/ensemble-config-digest.js';
+import { computeMcpConfigDigest } from '../mcp/load-mcp-config.js';
+import { PermissionPipeline } from '../permission/permission-pipeline.js';
+import {
+  loadSessionResumeStore,
+  saveSessionResumeStore,
+  SESSION_RESUME_STORE_VERSION,
+  sessionResumeStorePath,
+} from '../session/session-resume-store.js';
+import * as issueContextModule from '../github/issue-context.js';
+import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import { sendConductorWithReconnect } from './conductor-send-reconnect.js';
 
 describe('PiConductorAgent', () => {
@@ -1301,6 +1316,179 @@ describe('PiConductorAgent', () => {
     });
     await expect(conductor.close()).rejects.toBe(cleanupError);
   });
+
+  it.each([
+    { mode: 'create', cleanupFails: true },
+    { mode: 'resume', cleanupFails: true },
+    { mode: 'resume', cleanupFails: false },
+  ] as const)(
+    'preserves Pi partial-startup cleanup behavior for $mode (cleanupFails=$cleanupFails)',
+    async ({ mode, cleanupFails }) => {
+      const issueUrl = 'https://github.com/org/repo/issues/1';
+      const agentId = 'pi-startup-cleanup-incomplete';
+      const projectDir = join(cwd, 'project-pi');
+      const mcpServers = {
+        fixture: {
+          type: 'stdio' as const,
+          command: 'fixture-mcp',
+        },
+      };
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'pi' as const,
+          pi: { agentDir, projectDir },
+        },
+      };
+      const profile = {
+        conductor: { backend: 'pi' as const },
+        workers: [],
+      };
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot: cwd,
+        conductorAgentId: agentId,
+      });
+      await mkdir(join(cwd, '.agents'), { recursive: true });
+      await writeFile(
+        join(cwd, '.agents', 'mcp.json'),
+        JSON.stringify({ mcpServers }),
+      );
+
+      if (mode === 'resume') {
+        await saveSessionResumeStore(resumeStorePath, {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          conductorBackend: 'pi',
+          issueUrl,
+          repoRoot: cwd,
+          profile,
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          mcpConfigDigest: computeMcpConfigDigest(mcpServers),
+          ensembleConfigDigestScheme: 'resume-feasibility',
+          ensembleConfigDigest:
+            computeResumeFeasibilityConfigDigest(ensembleConfig),
+          lifecycle: 'closed',
+          harnessPhase: 'close',
+          updatedAt: 1,
+        });
+        mockSessionManagerFindById.mockReturnValue(
+          join(cwd, 'previous-session.jsonl'),
+        );
+      }
+
+      const startupFailure = new Error('fixture MCP extension startup failed');
+      const reloadFailure = new Error('fixture Pi reload cleanup failed');
+      const disposeFailure = new Error('fixture Pi dispose cleanup failed');
+      fakeSession.bindExtensions.mockImplementation(
+        async ({ onError }: { onError: (error: unknown) => void }) => {
+          onError({
+            extensionPath: 'fixture/mcp-extension',
+            event: 'session_start',
+            error: startupFailure.message,
+          });
+        },
+      );
+      if (cleanupFails) {
+        fakeSession.reload.mockRejectedValueOnce(reloadFailure);
+        fakeSession.dispose.mockImplementationOnce(() => {
+          throw disposeFailure;
+        });
+      }
+
+      vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
+        issue: { owner: 'org', repo: 'repo', number: 1, url: issueUrl },
+        title: 'Test',
+        body: 'Issue body',
+        state: 'OPEN',
+        labels: [],
+        comments: [],
+      });
+      vi.spyOn(resolveGitHubAuthTokenModule, 'resolveGitHubAuthToken')
+        .mockResolvedValue({ token: 'test-github-token', source: 'GITHUB_TOKEN' });
+
+      const emitted: unknown[] = [];
+      const sessionLogger = new SessionLogger({ issueUrl, repoRoot: cwd });
+      sessionLogger.subscribe((event) => emitted.push(event));
+      const signalListenersBefore = {
+        sigint: process.listeners('SIGINT'),
+        sigterm: process.listeners('SIGTERM'),
+      };
+
+      const startupError = await runConductorSession({
+        issueUrl,
+        repoRoot: cwd,
+        conductorCwd: cwd,
+        ensembleConfig,
+        profile,
+        conductorAgentFactory: createPiConductorAgentFactory(),
+        ...(mode === 'resume' ? { resumeAgentId: agentId } : {}),
+        mcpConfigOptions: { userEnsembleRoot: join(cwd, 'user-ensemble') },
+        permissionPipeline: new PermissionPipeline({}),
+        disableGitHubMonitor: true,
+        waitForOperatorExit: false,
+        sessionLogger,
+      }).catch((error: unknown) => error);
+
+      if (cleanupFails) {
+        expect(startupError).toBeInstanceOf(AggregateError);
+        expect(isConductorAgentFactoryCleanupIncomplete(startupError)).toBe(true);
+        expect((startupError as AggregateError).errors).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              message: expect.stringContaining(startupFailure.message),
+            }),
+            reloadFailure,
+            disposeFailure,
+          ]),
+        );
+        expect(emitted).toContainEqual(
+          expect.objectContaining({
+            type: 'harness.warning',
+            message: expect.stringContaining(
+              '起動失敗後の後始末に失敗しました',
+            ),
+          }),
+        );
+      } else {
+        expect(startupError).toBeInstanceOf(Error);
+        expect(startupError).not.toBeInstanceOf(AggregateError);
+        expect(isConductorAgentFactoryCleanupIncomplete(startupError)).toBe(false);
+        expect(startupError).toMatchObject({
+          message: expect.stringContaining(startupFailure.message),
+        });
+      }
+      expect(mockCreateAgentSession).toHaveBeenCalledOnce();
+      expect(fakeSession.reload).toHaveBeenCalledOnce();
+      expect(fakeSession.dispose).toHaveBeenCalledOnce();
+      if (mode === 'resume') {
+        if (cleanupFails) {
+          expect(emitted).toContainEqual(
+            expect.objectContaining({
+              type: 'harness.warning',
+              message: expect.stringContaining(
+                '再開記録を unknown/running のまま保ちます',
+              ),
+            }),
+          );
+        }
+      }
+      expect(process.listeners('SIGINT')).toEqual(signalListenersBefore.sigint);
+      expect(process.listeners('SIGTERM')).toEqual(signalListenersBefore.sigterm);
+
+      if (mode === 'resume') {
+        await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+          lifecycle: cleanupFails ? 'unknown' : 'closed',
+          harnessPhase: cleanupFails ? 'running' : 'close',
+          ensembleConfigDigestScheme: 'resume-feasibility',
+          ensembleConfigDigest:
+            computeResumeFeasibilityConfigDigest(ensembleConfig),
+        });
+      }
+    },
+  );
 
   it('closes the session and returns a snapshot restore error', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');

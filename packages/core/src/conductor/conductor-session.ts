@@ -79,6 +79,7 @@ import type {
   ConductorAgentFactory,
 } from './conductor-agent.js';
 import type { ConductorSendResult } from './conductor-agent.js';
+import { isConductorAgentFactoryCleanupIncomplete } from './conductor-agent-factory-cleanup.js';
 import { ConductorToolRegistry } from './conductor-tool.js';
 import { createConductorAgentFactory } from './conductor-agent-factory.js';
 import { resolveConductorReasoning } from './resolve-conductor-reasoning.js';
@@ -358,6 +359,15 @@ class StartupCleanupGuard {
     this.reportCleanupError = report;
   }
 
+  recordCleanupFailure(error: unknown): void {
+    this.cleanupFailed = true;
+    try {
+      this.reportCleanupError(error);
+    } catch {
+      // Keep the startup error as the rejection reason if reporting fails.
+    }
+  }
+
   handoff(): void {
     this.handedOff = true;
     this.actions.length = 0;
@@ -370,12 +380,7 @@ class StartupCleanupGuard {
       try {
         await action();
       } catch (error) {
-        this.cleanupFailed = true;
-        try {
-          this.reportCleanupError(error);
-        } catch {
-          // Keep the startup error as the rejection reason if reporting fails.
-        }
+        this.recordCleanupFailure(error);
       }
     }
   }
@@ -1280,9 +1285,19 @@ async function runConductorSessionWithStartupGuard(
       : undefined;
 
   shutdownSignal.throwIfAborted();
-  conductorAgent = options.resumeAgentId
-    ? await conductorAgentFactory.resume(options.resumeAgentId, conductorOptions)
-    : await conductorAgentFactory.create(conductorOptions);
+  try {
+    conductorAgent = options.resumeAgentId
+      ? await conductorAgentFactory.resume(
+          options.resumeAgentId,
+          conductorOptions,
+        )
+      : await conductorAgentFactory.create(conductorOptions);
+  } catch (error) {
+    if (isConductorAgentFactoryCleanupIncomplete(error)) {
+      startupCleanup.recordCleanupFailure(error);
+    }
+    throw error;
+  }
   startupCleanup.add(async () => {
     if (options.resumeAgentId && conductorAgent.closeForResume) {
       await conductorAgent.closeForResume();

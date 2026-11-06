@@ -48,6 +48,7 @@ import type {
   ConductorSendResult,
   ConductorTokenUsage,
 } from './conductor-agent.js';
+import { markConductorAgentFactoryCleanupIncomplete } from './conductor-agent-factory-cleanup.js';
 import { toPiCodingAgentTools } from './conductor-tool-pi-adapter.js';
 import {
   getPiHeadlessSettingsManagerOverrides,
@@ -782,9 +783,11 @@ async function createPiConductorSession(
       cleanupErrors.push(cleanupError);
     }
     if (cleanupErrors.length === 0) throw error;
-    throw new AggregateError(
-      [error, ...cleanupErrors],
-      'Pi conductor startup failed and session cleanup was incomplete.',
+    throw markConductorAgentFactoryCleanupIncomplete(
+      new AggregateError(
+        [error, ...cleanupErrors],
+        'Pi conductor startup failed and session cleanup was incomplete.',
+      ),
     );
   }
 }
