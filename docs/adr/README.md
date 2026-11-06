@@ -98,7 +98,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0024](0024-tui-shrink-coalesce.md) | TUI columns 縮小時の live frame coalesce | accepted |
 | [0025](0025-conductor-agent-backend-sdk-and-pi.md) | conductor LLM backend（Cursor SDK と Pi）の併存 | proposed |
 | [0026](0026-tui-stream-shrink-recovery.md) | stream 縮小時 scrollback 再同期 | accepted |
-| [0027](0027-permission-stall-notification.md) | permission 停滞通知の低優先度 dispatch | accepted |
+| [0027](0027-permission-stall-notification.md) | permission 停滞通知の低優先度 dispatch | superseded → [0052](0052-permission-stall-dispatch-hold.md)（dispatch hold の扱いのみ） |
 | [0028](0028-authentication-delegation-and-ensemble-auth.md) | 認証の管理方針（worker 移譲・conductor と ensemble auth） | accepted |
 | [0029](0029-lazy-worker-attach.md) | worker ACP lazy attach | accepted |
 | [0030](0030-tty-close-lifecycle.md) | TTY `/close` の再開可能な終了契約 | accepted |
@@ -123,6 +123,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0049](0049-conductor-reasoning-backends.md) | conductor reasoning を backend ごとに適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
 | [0050](0050-operator-agent-conductor-reasoning.md) | operator-agent に conductor reasoning を適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
 | [0051](0051-conductor-reasoning-resume-digest.md) | conductor reasoning と resume-feasibility digest | accepted |
+| [0052](0052-permission-stall-dispatch-hold.md) | dispatch hold 中の permission stall 回復通知 | accepted |
 
 ## 追加するとき
 

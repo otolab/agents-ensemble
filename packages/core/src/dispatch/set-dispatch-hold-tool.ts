@@ -22,10 +22,11 @@ export function createSetDispatchHoldTool(
       description: [
         'Temporarily hold trigger SessionEvents before dispatching them to the conductor.',
         '`hold: true` is useful while reading an Issue/PR or coordinating several workers; held events are kept in arrival order.',
-        '`operator.message` always bypasses the hold; `permission.pending` is held like other trigger events, and low-priority `permission.stall` is also a hold target.',
-        'Normal dispatch prioritizes `permission.pending` and other actionable operator input over `permission.stall`.',
+        '`operator.message` bypasses the hold, and `operator.reconnect` is handled by the driver. `permission.pending` and other work triggers are held; the low-priority `permission.stall` recovery signal bypasses the hold after its configured threshold.',
+        'Among eligible events, operator input and `permission.pending` take precedence; worker outcomes and `github.update` also come before the low-priority `permission.stall`. A held `permission.pending` is not eligible until release.',
+        'The stall signal has no raw request details and does not release the hold; release explicitly if you need to inspect a held permission.',
         'Events already queued before release are collected before the flush count is returned.',
-        '`hold: false` releases the held trigger events, including permission.pending and permission.stall, for dispatch. Normally they arrive as one combined conductor send; after max-turns, permission may still be sent first for recovery while blocked worker events remain held.',
+        '`hold: false` releases the held trigger events, including `permission.pending`, for dispatch. Normally they arrive as one combined conductor send; after max-turns, permission events can still dispatch for recovery while worker/GitHub events remain blocked.',
       ].join(' '),
       inputSchema: {
         type: 'object',
@@ -33,7 +34,7 @@ export function createSetDispatchHoldTool(
           hold: {
             type: 'boolean',
             description:
-              'true to hold worker/GitHub/permission.pending/permission.stall trigger events, false to release and flush them; permission.pending normally has priority over low-priority permission.stall, which may still arrive after max-turns for permission recovery',
+              'true to hold work and permission.pending triggers; low-priority permission.stall bypasses the hold after its configured threshold without releasing it. The stall signal has no raw request details, so release to inspect a held permission.pending when needed. false releases held events; permission can still dispatch after max-turns for recovery',
           },
         },
         required: ['hold'],

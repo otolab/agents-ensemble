@@ -52,6 +52,8 @@ describe('ensemble prompt modules', () => {
     );
     expect(prompt).toContain('operator.message');
     expect(prompt).toContain('permission.stall');
+    expect(prompt).toContain('hold 中も届く');
+    expect(prompt).toContain('hold を解除して pending を受け取り');
     expect(prompt).toContain('低優先度');
     expect(prompt).toContain('max-turns');
     expect(prompt).toContain('conductor が決められないことはオペレータが最終判断する');

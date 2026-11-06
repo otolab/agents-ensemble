@@ -614,10 +614,9 @@ async function waitForDispatchBatch(input: {
       allowIdleOperatorMessages: input.canDispatchIdleOperatorMessage(),
     });
 
-    // operator.message は hold 中も通す。release 後に queue に残った
-    // permission.pending / permission.stall も held flush より先に通す。held
-    // buffer 内の permission 系イベントは max-turns で worker が止まっていても
-    // 下の分岐で救済する。
+    // operator.message は hold 中も通す。permission.stall も hold 対象外の
+    // 低優先度回復通知として queue に残る。release 後は held buffer の
+    // permission.pending を worker より先に選び、max-turns 到達後も dispatch する。
     if (selected && isImmediateDispatchSource(selected.batch.sourceKey)) {
       input.eventQueue.replaceQueue(selected.remainingQueue);
       return {
@@ -645,9 +644,8 @@ async function waitForDispatchBatch(input: {
         };
       }
 
-      // max-turns blocks worker/GitHub events, but permission events remain
-      // dispatchable. Reuse the normal batch selector so held permissions and
-      // stall notices are selected with the same priority and batching rules as queued events.
+      // max-turns blocks worker/GitHub events, but held permission.pending events
+      // remain dispatchable. Reuse the normal selector to preserve their priority.
       const selectedHeld = selectDispatchBatch({
         queue: heldEvents,
         state: input.dispatchBatchState,

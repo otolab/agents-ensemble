@@ -10,7 +10,7 @@ function toolText(result: { content: Array<{ text?: string }> }): string {
 }
 
 describe('createSetDispatchHoldTool', () => {
-  it('documents permission stall priority, hold, and max-turn recovery', () => {
+  it('documents permission stall bypass, priority, and max-turn recovery', () => {
     const tools = createSetDispatchHoldTool({ state: createDispatchHoldState() });
     const tool = tools.set_dispatch_hold!;
     const holdDescription = String(
@@ -20,9 +20,14 @@ describe('createSetDispatchHoldTool', () => {
 
     expect(tool.description).toContain('permission.stall');
     expect(tool.description).toContain('permission.pending');
+    expect(tool.description).toContain('bypasses the hold');
+    expect(tool.description).toContain('does not release the hold');
+    expect(tool.description).toContain('worker outcomes and `github.update`');
     expect(tool.description).toContain('max-turns');
     expect(holdDescription).toContain('permission.stall');
     expect(holdDescription).toContain('permission.pending');
+    expect(holdDescription).toContain('bypasses the hold');
+    expect(holdDescription).toContain('raw request details');
     expect(holdDescription).toContain('max-turns');
   });
 
