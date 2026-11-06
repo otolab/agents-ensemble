@@ -1,8 +1,8 @@
-# ADR 0049: operator-agent に conductor reasoning を適用する
+# ADR 0050: operator-agent に conductor reasoning を適用する
 
-- Status: accepted
+- Status: superseded by [0051](0051-conductor-reasoning-resume-digest.md) (resume digest policy only)
 - Date: 2026-11-05
-- Related: [ADR 0031](0031-operator-agent-layer.md), [ADR 0048](0048-conductor-reasoning-backends.md), [Issue #629](https://github.com/otolab/agents-ensemble/issues/629)
+- Related: [ADR 0031](0031-operator-agent-layer.md), [ADR 0049](0049-conductor-reasoning-backends.md), [Issue #629](https://github.com/otolab/agents-ensemble/issues/629)
 
 ## Context
 
@@ -15,7 +15,7 @@ operator-agent 専用の reasoning 設定や CLI override を設けると、同�
 - `conductor.reasoning` は Issue conductor と operator-agent の両方に適用する。
 - `ensemble issue` は `--reasoning` > `CONDUCTOR_REASONING` > merged config の順、operator-agent は `CONDUCTOR_REASONING` > merged config の順で解決する。CLI option は Issue 起動の invocation override として扱う。
 - 解決後の値を共通 `ConductorAgentCreateOptions.reasoning` に含め、create / resume で選択された Pi または Cursor factory に渡す。未指定の場合は field 自体を含めず、従来どおり backend の既定に委ねる。
-- Pi と Cursor の値検証・適用方法・unsupported model 時の fail-fast は [ADR 0048](0048-conductor-reasoning-backends.md) の契約を共有する。operator-agent に固有の adapter や reasoning namespace は追加しない。
+- Pi と Cursor の値検証・適用方法・unsupported model 時の fail-fast は [ADR 0049](0049-conductor-reasoning-backends.md) の契約を共有する。operator-agent に固有の adapter や reasoning namespace は追加しない。
 
 ## Consequences
 

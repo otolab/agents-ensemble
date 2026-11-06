@@ -1,5 +1,8 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
-import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import {
+  computeEnsembleConfigDigest,
+  computeResumeFeasibilityConfigDigest,
+} from '../config/ensemble-config-digest.js';
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import type { EnsembleConfig } from '../config/types.js';
 import {
@@ -122,6 +125,7 @@ import {
   type HarnessPhase,
   type SessionLifecycle,
   type SessionResumeStoreLocation,
+  type EnsembleConfigDigestScheme,
   type SessionResumeStore,
 } from '../session/session-resume-store.js';
 import {
@@ -173,6 +177,11 @@ import {
   resolveConductorPiResourcePaths,
   resolveGitHubMonitorEnabled,
 } from '../config/resolve-settings.js';
+import {
+  CONDUCTOR_MODEL_ID_ENV,
+  DEFAULT_CONDUCTOR_MODEL_ID,
+  resolveConductorModelId,
+} from './resolve-conductor-model-id.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import {
   formatGitHubErrorMessage,
@@ -211,6 +220,9 @@ export interface RunConductorSessionOptions {
   /** Optional factory override. Without it, `conductor.backend` selects the factory. */
   conductorAgentFactory?: ConductorAgentFactory;
   apiKey?: string;
+  /**
+   * Explicit model override. Resolution order: modelId > CONDUCTOR_MODEL_ID > config > backend default.
+   */
   modelId?: string;
   /** CLI / caller override. Environment and merged config are resolved when omitted. */
   reasoning?: string;
@@ -328,7 +340,12 @@ type StartupCleanupAction = () => void | Promise<void>;
 class StartupCleanupGuard {
   private readonly actions: StartupCleanupAction[] = [];
   private handedOff = false;
+  private cleanupFailed = false;
   private reportCleanupError: (error: unknown) => void = () => {};
+
+  get hasFailures(): boolean {
+    return this.cleanupFailed;
+  }
 
   add(action: StartupCleanupAction): void {
     if (this.handedOff) {
@@ -353,6 +370,7 @@ class StartupCleanupGuard {
       try {
         await action();
       } catch (error) {
+        this.cleanupFailed = true;
         try {
           this.reportCleanupError(error);
         } catch {
@@ -384,7 +402,27 @@ async function runConductorSessionWithStartupGuard(
   });
   const ensembleConfig =
     options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
-  const ensembleConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
+  let ensembleConfigDigestScheme: EnsembleConfigDigestScheme | undefined =
+    'resume-feasibility';
+  let ensembleConfigDigest: string | undefined =
+    computeResumeFeasibilityConfigDigest(ensembleConfig);
+  const resolvedConductorModelId = resolveConductorModelId(options.modelId, {
+    config: ensembleConfig,
+  });
+  const hasInvocationModelOverride = Boolean(
+    options.modelId?.trim() ||
+      process.env[CONDUCTOR_MODEL_ID_ENV]?.trim(),
+  );
+  // Built-in factories understand `default` as their backend default. For a
+  // custom factory, preserve the optional contract when the default comes
+  // from config/code defaults. Keep an invocation-level `default` sentinel so
+  // the factory can honor it over its own lower-priority defaults.
+  const conductorFactoryModelId =
+    options.conductorAgentFactory &&
+    resolvedConductorModelId === DEFAULT_CONDUCTOR_MODEL_ID &&
+    !hasInvocationModelOverride
+      ? undefined
+      : resolvedConductorModelId;
   const conductorReasoning = resolveConductorReasoning(options.reasoning, {
     config: ensembleConfig,
   });
@@ -485,6 +523,13 @@ async function runConductorSessionWithStartupGuard(
     const loadedResumeStore = locatedResumeStore.resumeStore;
     activeResumeStorePath = locatedResumeStore.path;
     activeStoreLocation = locatedResumeStore.location;
+    const savedConfigDigestScheme =
+      loadedResumeStore.ensembleConfigDigestScheme;
+    const effectiveConfigDigestScheme = savedConfigDigestScheme ?? 'full';
+    const currentEnsembleConfigDigest =
+      effectiveConfigDigestScheme === 'resume-feasibility'
+        ? computeResumeFeasibilityConfigDigest(ensembleConfig)
+        : computeEnsembleConfigDigest(ensembleConfig);
     assertSessionResumeStoreMatches(loadedResumeStore, {
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
@@ -492,7 +537,7 @@ async function runConductorSessionWithStartupGuard(
       conductorBackend,
       mcpConfigDigest,
       mcpConfigConfigured,
-      ensembleConfigDigest,
+      ensembleConfigDigest: currentEnsembleConfigDigest,
     });
     if (loadedResumeStore.ensembleConfigDigest === undefined) {
       sessionLogger.emit({
@@ -501,11 +546,18 @@ async function runConductorSessionWithStartupGuard(
           'SessionResumeStore has no ensemble config digest; config consistency cannot be verified for this legacy session.',
       });
     }
+    // Keep the persisted scheme and digest paired across resume and flush.
+    // Legacy stores without a digest remain unverifiable until a new session
+    // is started; a resume must not silently relabel their existing state.
+    ensembleConfigDigestScheme = savedConfigDigestScheme;
+    ensembleConfigDigest = loadedResumeStore.ensembleConfigDigest;
     // A previously completed lifecycle no longer describes this instance once
     // resume begins. Persist unknown before restoring or attaching anything so
     // a crash during backend resume cannot leave stale `closed` / `exited` data
-    // behind. If initialization rejects cleanly, startup cleanup restores the
-    // previous record.
+    // behind. Startup cleanup restores the previous record only if every
+    // acquired resource is released successfully; otherwise keep this record
+    // marked unknown/running so it does not claim a possibly active session is
+    // closed.
     const resumeStore: SessionResumeStore = {
       ...loadedResumeStore,
       lifecycle: 'unknown',
@@ -521,6 +573,14 @@ async function runConductorSessionWithStartupGuard(
     startupCleanup.add(async () => {
       if (!resumeStoreActivationCommitted) return;
       await drainStartupResumeStoreWrites();
+      if (startupCleanup.hasFailures) {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            '起動失敗後の後始末が完了しなかったため、再開記録を unknown/running のまま保ちます。',
+        });
+        return;
+      }
       await saveSessionResumeStore(
         locatedResumeStore.path,
         loadedResumeStore,
@@ -1182,7 +1242,7 @@ async function runConductorSessionWithStartupGuard(
       ? { piSkills: activeProfile.conductor?.piSkills !== false }
       : {}),
     apiKey: options.apiKey,
-    modelId: options.modelId,
+    modelId: conductorFactoryModelId,
     ...(conductorReasoning !== undefined
       ? { reasoning: conductorReasoning }
       : {}),
@@ -1219,6 +1279,7 @@ async function runConductorSessionWithStartupGuard(
         })) || undefined
       : undefined;
 
+  shutdownSignal.throwIfAborted();
   conductorAgent = options.resumeAgentId
     ? await conductorAgentFactory.resume(options.resumeAgentId, conductorOptions)
     : await conductorAgentFactory.create(conductorOptions);
@@ -1229,6 +1290,9 @@ async function runConductorSessionWithStartupGuard(
       await conductorAgent.close();
     }
   });
+  // Factories may not be abortable while pending. Register the returned agent
+  // before checking shutdown so a late success is still closed by the guard.
+  shutdownSignal.throwIfAborted();
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
   activeResumeStorePath ??= sessionResumeStorePath({
     repoRoot: options.repoRoot,
@@ -1323,7 +1387,12 @@ async function runConductorSessionWithStartupGuard(
       sequence: snapshot.sequence,
       workers,
       mcpConfigDigest,
-      ensembleConfigDigest,
+      ...(ensembleConfigDigestScheme !== undefined
+        ? { ensembleConfigDigestScheme }
+        : {}),
+      ...(ensembleConfigDigest !== undefined
+        ? { ensembleConfigDigest }
+        : {}),
       ...(persistedLifecycle ? { lifecycle: persistedLifecycle } : {}),
       ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
       updatedAt: Date.now(),
@@ -1750,7 +1819,6 @@ async function runConductorSessionWithStartupGuard(
   }
 
   try {
-    startupCleanup.handoff();
     if (workers.length > 0 && !activeLazyWorkers) {
       sessionLogger.emit({
         type: 'harness.worker.bootstrap',
@@ -1761,6 +1829,10 @@ async function runConductorSessionWithStartupGuard(
         mode: 'init',
       });
     }
+    // Keep startup cleanup active through startup logging and the final
+    // shutdown check. No await follows before workers start.
+    shutdownSignal.throwIfAborted();
+    startupCleanup.handoff();
     workerSession.startWorkers();
     if (resumeToolCallSnapshots.length > 0) {
       const workerIdsByName = new Map<string, string>();
@@ -2193,7 +2265,7 @@ async function runConductorSessionWithStartupGuard(
         openQuestions: openQuestions.list(),
         sessionModels: buildSessionModelsSummary({
           backend: conductorBackend,
-          explicitConductorModelId: options.modelId,
+          explicitConductorModelId: resolvedConductorModelId,
           explicitConductorReasoning: conductorReasoning,
           config: ensembleConfig,
           workers,

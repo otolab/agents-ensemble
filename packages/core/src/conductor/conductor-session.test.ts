@@ -3,9 +3,16 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
-import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import {
+  computeEnsembleConfigDigest,
+  computeResumeFeasibilityConfigDigest,
+} from '../config/ensemble-config-digest.js';
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
-import { computeAcpSpawnEnvDigest } from '../acp/resolve-acp-spawn.js';
+import {
+  acpSpawnFingerprint,
+  computeAcpSpawnEnvDigest,
+  resolveWorkerAcpSpawn,
+} from '../acp/resolve-acp-spawn.js';
 import * as acpBinModule from '../acp/resolve-bundled-acp-bin.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
@@ -830,6 +837,289 @@ describe('runConductorSession resume / shutdown', () => {
     },
   );
 
+  it.each(['create', 'resume'] as const)(
+    'does not start eager workers when shutdown arrives during a pending backend %s',
+    async (mode) => {
+      const agentId = `resume-shutdown-during-${mode}-factory`;
+      const backend = 'cursor' as const;
+      const profile = {
+        conductor: { backend },
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      };
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend,
+        },
+      };
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: agentId,
+      });
+      if (mode === 'resume') {
+        await saveSessionResumeStore(resumeStorePath, {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          conductorBackend: backend,
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile,
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          mcpConfigDigest: computeMcpConfigDigest({}),
+          ensembleConfigDigestScheme: 'resume-feasibility',
+          ensembleConfigDigest:
+            computeResumeFeasibilityConfigDigest(ensembleConfig),
+          lifecycle: 'closed',
+          harnessPhase: 'close',
+          updatedAt: 1,
+        });
+      }
+
+      const factoryStarted = createDeferred<void>();
+      const factoryResult = createDeferred<{
+        agentId: string;
+        send: typeof mockSend;
+        close: typeof mockClose;
+        closeForResume: ReturnType<typeof vi.fn>;
+        getUsage: ReturnType<typeof createMockConductorGetUsage>;
+      }>();
+      const close = vi.fn().mockResolvedValue(undefined);
+      const closeForResume = vi.fn().mockResolvedValue(undefined);
+      const agent = {
+        agentId,
+        send: mockSend,
+        close,
+        closeForResume,
+        getUsage: createMockConductorGetUsage(),
+      };
+      const factory = mode === 'resume' ? mockResume : mockCreate;
+      factory.mockImplementationOnce(async () => {
+        factoryStarted.resolve();
+        return factoryResult.promise;
+      });
+
+      const connectAcp = vi.fn();
+      const startWorkers = vi.spyOn(WorkerSession.prototype, 'startWorkers');
+      const stopWorkers = vi.spyOn(WorkerSession.prototype, 'stop');
+      const shutdown = new AbortController();
+      const signalListenersBefore = {
+        sigint: process.listeners('SIGINT'),
+        sigterm: process.listeners('SIGTERM'),
+      };
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+
+      const startup = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        conductorAgentFactory: { create: mockCreate, resume: mockResume },
+        ...(mode === 'resume' ? { resumeAgentId: agentId } : {}),
+        permissionPipeline: new PermissionPipeline({}),
+        workerWorktree: {
+          path: repoRoot,
+          branch: 'main',
+          issue: TEST_ISSUE,
+          inRepo: true,
+        },
+        defaultAcp: { defaultAcpCommand: process.execPath },
+        connectAcp,
+        shutdownSignal: shutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        sessionLogger,
+      });
+
+      await settleWithin(factoryStarted.promise, 2_000);
+      shutdown.abort();
+      await drainAsync();
+      factoryResult.resolve(agent);
+
+      await expect(startup).rejects.toThrow(/aborted/i);
+
+      expect(factory).toHaveBeenCalledOnce();
+      expect(closeForResume).toHaveBeenCalledTimes(mode === 'resume' ? 1 : 0);
+      expect(close).toHaveBeenCalledTimes(mode === 'create' ? 1 : 0);
+      expect(startWorkers).not.toHaveBeenCalled();
+      expect(stopWorkers).toHaveBeenCalledWith({ force: true });
+      expect(connectAcp).not.toHaveBeenCalled();
+      expect(
+        emitted.some((event) => event.type === 'harness.worker.bootstrap'),
+      ).toBe(false);
+      expect(process.listeners('SIGINT')).toEqual(signalListenersBefore.sigint);
+      expect(process.listeners('SIGTERM')).toEqual(signalListenersBefore.sigterm);
+
+      if (mode === 'resume') {
+        await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+          lifecycle: 'closed',
+          harnessPhase: 'close',
+          ensembleConfigDigestScheme: 'resume-feasibility',
+          ensembleConfigDigest:
+            computeResumeFeasibilityConfigDigest(ensembleConfig),
+        });
+      }
+    },
+  );
+
+  it.each([
+    { failure: 'backend cleanup', closeFails: true },
+    { failure: 'resume record rollback write', closeFails: false },
+  ])(
+    'keeps the resume record unknown/running when $failure fails',
+    async ({ closeFails }) => {
+      const agentId = `resume-shutdown-cleanup-failure-${closeFails}`;
+      const backend = 'cursor' as const;
+      const profile = {
+        conductor: { backend },
+        workers: [],
+      };
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend,
+        },
+      };
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: agentId,
+      });
+      await saveSessionResumeStore(resumeStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        conductorBackend: backend,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        mcpConfigDigest: computeMcpConfigDigest({}),
+        ensembleConfigDigestScheme: 'resume-feasibility',
+        ensembleConfigDigest:
+          computeResumeFeasibilityConfigDigest(ensembleConfig),
+        lifecycle: 'closed',
+        harnessPhase: 'close',
+        updatedAt: 1,
+      });
+
+      const factoryStarted = createDeferred<void>();
+      const factoryResult = createDeferred<{
+        agentId: string;
+        send: typeof mockSend;
+        close: typeof mockClose;
+        closeForResume: ReturnType<typeof vi.fn>;
+        getUsage: ReturnType<typeof createMockConductorGetUsage>;
+      }>();
+      const closeFailure = new Error('simulated backend cleanup failure');
+      const rollbackFailure = new Error('simulated resume store rollback failure');
+      const closeForResume = closeFails
+        ? vi.fn().mockRejectedValue(closeFailure)
+        : vi.fn().mockResolvedValue(undefined);
+      const agent = {
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        closeForResume,
+        getUsage: createMockConductorGetUsage(),
+      };
+      mockResume.mockImplementationOnce(async () => {
+        factoryStarted.resolve();
+        return factoryResult.promise;
+      });
+
+      const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
+      let rollbackAttempted = false;
+      vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore')
+        .mockImplementation(async (path, resumeStore) => {
+          if (
+            path === resumeStorePath &&
+            resumeStore.lifecycle === 'closed' &&
+            resumeStore.harnessPhase === 'close'
+          ) {
+            rollbackAttempted = true;
+            if (!closeFails) throw rollbackFailure;
+          }
+          await persistResumeStore(path, resumeStore);
+        });
+
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+      const shutdown = new AbortController();
+      const signalListenersBefore = {
+        sigint: process.listeners('SIGINT'),
+        sigterm: process.listeners('SIGTERM'),
+      };
+      const startup = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        conductorAgentFactory: { create: mockCreate, resume: mockResume },
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        shutdownSignal: shutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        sessionLogger,
+      });
+
+      await settleWithin(factoryStarted.promise, 2_000);
+      shutdown.abort();
+      await drainAsync();
+      factoryResult.resolve(agent);
+
+      await expect(startup).rejects.toThrow(/aborted/i);
+
+      expect(closeForResume).toHaveBeenCalledOnce();
+      expect(rollbackAttempted).toBe(!closeFails);
+      if (closeFails) {
+        expect(emitted).toContainEqual(
+          expect.objectContaining({
+            type: 'harness.warning',
+            message: expect.stringContaining(closeFailure.message),
+          }),
+        );
+        expect(emitted).toContainEqual(
+          expect.objectContaining({
+            type: 'harness.warning',
+            message: expect.stringContaining(
+              '再開記録を unknown/running のまま保ちます',
+            ),
+          }),
+        );
+      } else {
+        expect(emitted).toContainEqual(
+          expect.objectContaining({
+            type: 'harness.warning',
+            message: expect.stringContaining(rollbackFailure.message),
+          }),
+        );
+      }
+      await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+        lifecycle: 'unknown',
+        harnessPhase: 'running',
+        ensembleConfigDigestScheme: 'resume-feasibility',
+        ensembleConfigDigest:
+          computeResumeFeasibilityConfigDigest(ensembleConfig),
+      });
+      expect(process.listeners('SIGINT')).toEqual(signalListenersBefore.sigint);
+      expect(process.listeners('SIGTERM')).toEqual(signalListenersBefore.sigterm);
+    },
+  );
+
   it.each([false, true])(
     'returns resolved worker and conductor models with lazyWorkers=%s',
     async (lazyWorkers) => {
@@ -947,7 +1237,7 @@ describe('runConductorSession resume / shutdown', () => {
     },
   );
 
-  it('reports the config model even when a direct API call passes no modelId to the factory', async () => {
+  it('passes the config model to the factory when a direct API call omits modelId', async () => {
     stubUnusedControlServer();
     vi.stubEnv('CONDUCTOR_MODEL_ID', undefined);
     mockSend.mockResolvedValue({
@@ -971,11 +1261,310 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(result.stopReason).toBe('completed');
     expect(mockCreate).toHaveBeenCalledOnce();
-    expect(mockCreate.mock.calls[0]?.[0].modelId).toBeUndefined();
+    expect(mockCreate.mock.calls[0]?.[0].modelId).toBe('configured-only-model');
     expect(result.sessionModels.conductor).toStrictEqual({
       backend: 'cursor', configuredModelId: 'configured-only-model',
     });
   });
+
+  it.each([
+    {
+      factoryKind: 'Cursor explicit override',
+      backend: 'cursor' as const,
+      useCustomFactory: false,
+      apiModelId: 'api-model',
+      envModelId: 'env-model',
+      configModelId: 'config-model',
+      expectedFactoryModelId: 'api-model',
+      expectedConfiguredModelId: 'api-model',
+    },
+    {
+      factoryKind: 'Pi environment override',
+      backend: 'pi' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: 'anthropic/env-model',
+      configModelId: 'anthropic/config-model',
+      expectedFactoryModelId: 'anthropic/env-model',
+      expectedConfiguredModelId: 'anthropic/env-model',
+    },
+    {
+      factoryKind: 'custom factory environment override',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: undefined,
+      envModelId: 'env-model',
+      configModelId: 'config-model',
+      expectedFactoryModelId: 'env-model',
+      expectedConfiguredModelId: 'env-model',
+    },
+    {
+      factoryKind: 'custom factory config',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'custom-config-model',
+      expectedFactoryModelId: 'custom-config-model',
+      expectedConfiguredModelId: 'custom-config-model',
+    },
+    {
+      factoryKind: 'custom factory backend default',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'default',
+      expectedFactoryModelId: undefined,
+      expectedConfiguredModelId: 'default',
+    },
+    {
+      factoryKind: 'custom factory explicit backend default',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: 'default',
+      envModelId: 'env-model',
+      configModelId: 'config-model',
+      expectedFactoryModelId: 'default',
+      expectedConfiguredModelId: 'default',
+    },
+    {
+      factoryKind: 'custom factory environment backend default',
+      backend: 'cursor' as const,
+      useCustomFactory: true,
+      apiModelId: undefined,
+      envModelId: 'auto',
+      configModelId: 'config-model',
+      expectedFactoryModelId: 'default',
+      expectedConfiguredModelId: 'default',
+    },
+    {
+      factoryKind: 'Cursor config',
+      backend: 'cursor' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'cursor-config-model',
+      expectedFactoryModelId: 'cursor-config-model',
+      expectedConfiguredModelId: 'cursor-config-model',
+    },
+    {
+      factoryKind: 'Pi config',
+      backend: 'pi' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'anthropic/pi-config-model',
+      expectedFactoryModelId: 'anthropic/pi-config-model',
+      expectedConfiguredModelId: 'anthropic/pi-config-model',
+    },
+    {
+      factoryKind: 'Cursor backend default',
+      backend: 'cursor' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'default',
+      expectedFactoryModelId: 'default',
+      expectedConfiguredModelId: 'default',
+    },
+    {
+      factoryKind: 'Pi backend default',
+      backend: 'pi' as const,
+      useCustomFactory: false,
+      apiModelId: undefined,
+      envModelId: '',
+      configModelId: 'default',
+      expectedFactoryModelId: 'default',
+      expectedConfiguredModelId: 'default',
+    },
+  ])(
+    'resolves $factoryKind consistently for create and resume',
+    async ({
+      factoryKind,
+      backend,
+      useCustomFactory,
+      apiModelId,
+      envModelId,
+      configModelId,
+      expectedFactoryModelId,
+      expectedConfiguredModelId,
+    }) => {
+      stubUnusedControlServer();
+      vi.stubEnv('CONDUCTOR_MODEL_ID', envModelId);
+      mockSend.mockResolvedValue({
+        runId: `run-${factoryKind}-model`,
+        status: 'finished',
+        result: 'done',
+      });
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend,
+          model: configModelId,
+        },
+      };
+      const profile = { conductor: { backend }, workers: [] };
+      const customFactory =
+        useCustomFactory
+          ? { create: mockCreate, resume: mockResume }
+          : undefined;
+
+      const initial = await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        ...(apiModelId !== undefined ? { modelId: apiModelId } : {}),
+        ...(customFactory ? { conductorAgentFactory: customFactory } : {}),
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+
+      if (!useCustomFactory && backend === 'cursor') {
+        expect(mockCreateCursorSdkConductorAgentFactory).toHaveBeenCalledOnce();
+      } else if (!useCustomFactory && backend === 'pi') {
+        expect(mockCreatePiConductorAgentFactory).toHaveBeenCalledOnce();
+      }
+      expect(mockCreate.mock.calls[0]?.[0].modelId).toBe(
+        expectedFactoryModelId,
+      );
+      expect(initial.sessionModels.conductor.configuredModelId).toBe(
+        expectedConfiguredModelId,
+      );
+
+      await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        resumeAgentId: initial.agentId,
+        ...(apiModelId !== undefined ? { modelId: apiModelId } : {}),
+        ...(customFactory ? { conductorAgentFactory: customFactory } : {}),
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        bindOperatorInput: (api) => {
+          api.submit('/exit');
+        },
+      });
+
+      expect(mockResume).toHaveBeenCalledOnce();
+      expect(mockResume.mock.calls[0]?.[1].modelId).toBe(
+        expectedFactoryModelId,
+      );
+    },
+  );
+
+  it.each([
+    {
+      overrideSource: 'API modelId',
+      initialApiModelId: 'initial-api-model',
+      resumeApiModelId: 'resumed-api-model',
+      initialEnvModelId: 'lower-priority-env-model',
+      resumeEnvModelId: 'lower-priority-env-model',
+      expectedInitialModelId: 'initial-api-model',
+      expectedResumeModelId: 'resumed-api-model',
+    },
+    {
+      overrideSource: 'CONDUCTOR_MODEL_ID',
+      initialApiModelId: undefined,
+      resumeApiModelId: undefined,
+      initialEnvModelId: 'initial-env-model',
+      resumeEnvModelId: 'resumed-env-model',
+      expectedInitialModelId: 'initial-env-model',
+      expectedResumeModelId: 'resumed-env-model',
+    },
+  ])(
+    're-resolves changed $overrideSource on resume with the same config digest',
+    async ({
+      initialApiModelId,
+      resumeApiModelId,
+      initialEnvModelId,
+      resumeEnvModelId,
+      expectedInitialModelId,
+      expectedResumeModelId,
+    }) => {
+      stubUnusedControlServer();
+      vi.stubEnv('CONDUCTOR_MODEL_ID', initialEnvModelId);
+      mockSend.mockResolvedValue({
+        runId: 'run-changed-model-override',
+        status: 'finished',
+        result: 'done',
+      });
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'cursor' as const,
+          model: 'config-model',
+        },
+      };
+      const expectedConfigDigest =
+        computeResumeFeasibilityConfigDigest(ensembleConfig);
+      const customFactory = { create: mockCreate, resume: mockResume };
+      const commonOptions = {
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { conductor: { backend: 'cursor' as const }, workers: [] },
+        ensembleConfig,
+        conductorAgentFactory: customFactory,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      };
+
+      const initial = await runConductorSession({
+        ...commonOptions,
+        ...(initialApiModelId !== undefined
+          ? { modelId: initialApiModelId }
+          : {}),
+      });
+
+      expect(mockCreate).toHaveBeenCalledOnce();
+      expect(mockCreate.mock.calls[0]?.[0].modelId).toBe(
+        expectedInitialModelId,
+      );
+      const initialResumeStore = await loadSessionResumeStore(
+        sessionResumeStorePath({
+          repoRoot,
+          conductorAgentId: initial.agentId,
+        }),
+      );
+      expect(initialResumeStore?.ensembleConfigDigest).toBe(
+        expectedConfigDigest,
+      );
+
+      vi.stubEnv('CONDUCTOR_MODEL_ID', resumeEnvModelId);
+      const resumed = await runConductorSession({
+        ...commonOptions,
+        resumeAgentId: initial.agentId,
+        ...(resumeApiModelId !== undefined
+          ? { modelId: resumeApiModelId }
+          : {}),
+        bindOperatorInput: (api) => {
+          api.submit('/exit');
+        },
+      });
+
+      expect(resumed.stopReason).toBe('completed');
+      expect(mockResume).toHaveBeenCalledOnce();
+      expect(mockResume.mock.calls[0]?.[1].modelId).toBe(
+        expectedResumeModelId,
+      );
+      const resumedResumeStore = await loadSessionResumeStore(
+        sessionResumeStorePath({
+          repoRoot,
+          conductorAgentId: initial.agentId,
+        }),
+      );
+      expect(resumedResumeStore?.ensembleConfigDigest).toBe(
+        expectedConfigDigest,
+      );
+    },
+  );
 
   it('does not carry a reported model across resume when the new run has no send', async () => {
     stubUnusedControlServer();
@@ -1369,7 +1958,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
-  it('persists the resolved config digest without config values in the resume store', async () => {
+  it('persists the v2 resume-feasibility digest without config values', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-config-digest',
       status: 'finished',
@@ -1404,92 +1993,453 @@ describe('runConductorSession resume / shutdown', () => {
       conductorAgentId: 'agent-test',
     });
     const resumeStore = await loadSessionResumeStore(path);
+    expect(resumeStore?.ensembleConfigDigestScheme).toBe(
+      'resume-feasibility',
+    );
     expect(resumeStore?.ensembleConfigDigest).toBe(
-      computeEnsembleConfigDigest(ensembleConfig),
+      computeResumeFeasibilityConfigDigest(ensembleConfig),
     );
     expect(await readFile(path, 'utf8')).not.toContain('private-test-value');
   });
 
-  it('fails before resuming when the resolved ensemble config changed', async () => {
-    const agentId = 'resume-config-mismatch';
-    const legacySecretMarker = 'LEGACY_WORKER_ACP_SECRET_MARKER';
+  it.each([undefined, 'full'] as const)(
+    'rejects a conductor reasoning change for scheme-less and full sidecars (%s)',
+    async (ensembleConfigDigestScheme) => {
+      const agentId = 'resume-config-mismatch';
+      const legacySecretMarker = 'LEGACY_WORKER_ACP_SECRET_MARKER';
+      const originalConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          model: 'model-before',
+          reasoning: 'low',
+        },
+      };
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: agentId,
+      });
+      await saveSessionResumeStore(resumeStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        ...(ensembleConfigDigestScheme
+          ? { ensembleConfigDigestScheme }
+          : {}),
+        ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
+        updatedAt: 0,
+      });
+      const legacyResumeStore = JSON.parse(
+        await readFile(resumeStorePath, 'utf8'),
+      ) as {
+        updatedAt: number;
+        workers: Record<string, Record<string, unknown>>;
+      };
+      legacyResumeStore.workers.implementer = {
+        acpSessionId: 'legacy-worker-session',
+        acpSpawn: {
+          preset: 'custom',
+          command: 'custom-acp',
+          args: [],
+          env: { API_TOKEN: legacySecretMarker },
+        },
+      };
+      await writeFile(resumeStorePath, JSON.stringify(legacyResumeStore));
+      const updatedAtBeforeMigration = legacyResumeStore.updatedAt;
+
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          ensembleConfig: {
+            ...originalConfig,
+            conductor: {
+              ...originalConfig.conductor,
+            reasoning: 'high',
+            },
+          },
+          resumeAgentId: agentId,
+          permissionPipeline: new PermissionPipeline({}),
+          registerProcessSignalHandlers: false,
+        }),
+      ).rejects.toThrow(/ensemble config digest mismatch/);
+
+      expect(mockResume).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+      const migratedResumeStoreText = await readFile(resumeStorePath, 'utf8');
+      expect(migratedResumeStoreText).not.toContain(legacySecretMarker);
+      expect(JSON.parse(migratedResumeStoreText)).toMatchObject({
+        updatedAt: updatedAtBeforeMigration,
+        ...(ensembleConfigDigestScheme
+          ? { ensembleConfigDigestScheme }
+          : {}),
+        ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
+        workers: {
+          implementer: {
+            acpSessionId: 'legacy-worker-session',
+            acpSpawn: {
+              envDigest: computeAcpSpawnEnvDigest({
+                API_TOKEN: legacySecretMarker,
+              }),
+            },
+          },
+        },
+      });
+    },
+  );
+
+  it('resumes through the mocked ACP load path after reasoning and env config changes', async () => {
+    const agentId = 'resume-feasibility-neutral-config-changes';
     const originalConfig = {
       ...DEFAULT_ENSEMBLE_CONFIG,
       conductor: {
         ...DEFAULT_ENSEMBLE_CONFIG.conductor,
-        model: 'model-before',
+        model: 'conductor-model',
+        reasoning: 'low',
+      },
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        defaultPreset: 'codex' as const,
+        env: { MODEL_PROVIDER: 'provider-before' },
+        models: {
+          strong: { model: 'provider/model-before', reasoning: 'low' },
+        },
+        tags: { high: 'strong' },
       },
     };
-    const resumeStorePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: agentId,
+    const changedConfig = {
+      ...originalConfig,
+      conductor: {
+        ...originalConfig.conductor,
+        reasoning: 'high',
+      },
+      acp: {
+        ...originalConfig.acp,
+        env: { MODEL_PROVIDER: 'provider-after' },
+        models: {
+          strong: { model: 'provider/model-after', reasoning: 'high' },
+        },
+      },
+    };
+    const expectedSpawn = acpSpawnFingerprint(
+      resolveWorkerAcpSpawn({
+        modelTag: 'high',
+        defaultOptions: { config: originalConfig, env: {} },
+      }),
+    );
+    const currentSpawn = acpSpawnFingerprint(
+      resolveWorkerAcpSpawn({
+        modelTag: 'high',
+        defaultOptions: { config: changedConfig, env: {} },
+      }),
+    );
+    expect(expectedSpawn.model).not.toBe(currentSpawn.model);
+    expect(expectedSpawn.envDigest).not.toBe(currentSpawn.envDigest);
+    expect(computeResumeFeasibilityConfigDigest(changedConfig)).toBe(
+      computeResumeFeasibilityConfigDigest(originalConfig),
+    );
+
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: {
+          workers: [
+            { name: 'implementer', kind: 'implementer', modelTag: 'high' },
+          ],
+        },
+        openQuestions: [],
+        sequence: 0,
+        workers: {
+          implementer: {
+            acpSessionId: 'saved-worker-session',
+            acpCwd: repoRoot,
+            acpSpawn: expectedSpawn,
+          },
+        },
+        ensembleConfigDigestScheme: 'resume-feasibility',
+        ensembleConfigDigest:
+          computeResumeFeasibilityConfigDigest(originalConfig),
+        updatedAt: 0,
+      },
+    );
+
+    const loadSession = vi.fn().mockResolvedValue(undefined);
+    const promptSession = vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      responseText: 'resumed worker',
     });
-    await saveSessionResumeStore(resumeStorePath, {
-      version: SESSION_RESUME_STORE_VERSION,
-      conductorAgentId: agentId,
+    const bridge = {
+      loadSession,
+      newSession: vi.fn(),
+      promptSession,
+      cancelSession: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi.fn().mockResolvedValue(bridge);
+    mockSend.mockResolvedValue({
+      runId: 'run-neutral-config-resume',
+      status: 'finished',
+      result: 'done',
+    });
+    mockResume.mockImplementationOnce(async () => ({
+      agentId,
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
-      openQuestions: [],
-      sequence: 0,
-      workers: {},
-      ensembleConfigDigest: computeEnsembleConfigDigest(originalConfig),
-      updatedAt: 0,
-    });
-    const legacyResumeStore = JSON.parse(
-      await readFile(resumeStorePath, 'utf8'),
-    ) as {
-      updatedAt: number;
-      workers: Record<string, Record<string, unknown>>;
-    };
-    legacyResumeStore.workers.implementer = {
-      acpSessionId: 'legacy-worker-session',
-      acpSpawn: {
-        preset: 'custom',
-        command: 'custom-acp',
-        args: [],
-        env: { API_TOKEN: legacySecretMarker },
+      ensembleConfig: changedConfig,
+      defaultAcp: { config: changedConfig, env: {} },
+      resumeAgentId: agentId,
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
       },
-    };
-    await writeFile(resumeStorePath, JSON.stringify(legacyResumeStore));
-    const updatedAtBeforeMigration = legacyResumeStore.updatedAt;
+      connectAcp,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
 
-    await expect(
-      runConductorSession({
-        issueUrl: TEST_ISSUE.url,
-        repoRoot,
-        profile: { workers: [] },
-        ensembleConfig: {
-          ...originalConfig,
-          conductor: {
-            ...originalConfig.conductor,
-            model: 'model-after',
-          },
-        },
-        resumeAgentId: agentId,
-        permissionPipeline: new PermissionPipeline({}),
-        registerProcessSignalHandlers: false,
-      }),
-    ).rejects.toThrow(/ensemble config digest mismatch/);
-
-    expect(mockResume).not.toHaveBeenCalled();
-    expect(mockCreate).not.toHaveBeenCalled();
-    const migratedResumeStoreText = await readFile(resumeStorePath, 'utf8');
-    expect(migratedResumeStoreText).not.toContain(legacySecretMarker);
-    expect(JSON.parse(migratedResumeStoreText)).toMatchObject({
-      updatedAt: updatedAtBeforeMigration,
+    expect(result.stopReason).toBe('completed');
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(mockResume.mock.calls[0]?.[1]).toMatchObject({
+      modelId: expect.any(String),
+      reasoning: 'high',
+    });
+    expect(connectAcp).toHaveBeenCalledOnce();
+    expect(loadSession).toHaveBeenCalledWith(
+      'saved-worker-session',
+      repoRoot,
+      expect.any(Function),
+    );
+    const resumedStore = await loadSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+    );
+    expect(resumedStore).toMatchObject({
+      ensembleConfigDigestScheme: 'resume-feasibility',
+      ensembleConfigDigest:
+        computeResumeFeasibilityConfigDigest(originalConfig),
+      profile: {
+        workers: [
+          { name: 'implementer', kind: 'implementer', modelTag: 'high' },
+        ],
+      },
       workers: {
         implementer: {
-          acpSessionId: 'legacy-worker-session',
-          acpSpawn: {
-            envDigest: computeAcpSpawnEnvDigest({
-              API_TOKEN: legacySecretMarker,
-            }),
-          },
+          acpSessionId: 'saved-worker-session',
+          acpCwd: repoRoot,
         },
       },
     });
   });
+
+  it.each([
+    {
+      path: 'session.worktree',
+      change: (config: typeof DEFAULT_ENSEMBLE_CONFIG) => ({
+        ...config,
+        session: { ...config.session, worktree: 'in-repo' as const },
+      }),
+    },
+    {
+      path: 'acp.defaultPreset',
+      change: (config: typeof DEFAULT_ENSEMBLE_CONFIG) => ({
+        ...config,
+        acp: { ...config.acp, defaultPreset: 'claude' as const },
+      }),
+    },
+  ])(
+    'rejects a resume-feasibility critical change to $path before conductor resume',
+    async ({ change }) => {
+      const agentId = 'resume-feasibility-critical-change';
+      const originalConfig = DEFAULT_ENSEMBLE_CONFIG;
+      await saveSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+        {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          ensembleConfigDigestScheme: 'resume-feasibility',
+          ensembleConfigDigest:
+            computeResumeFeasibilityConfigDigest(originalConfig),
+          updatedAt: 0,
+        },
+      );
+
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          ensembleConfig: change(originalConfig),
+          resumeAgentId: agentId,
+          permissionPipeline: new PermissionPipeline({}),
+          registerProcessSignalHandlers: false,
+        }),
+      ).rejects.toThrow(/ensemble config digest mismatch/);
+      expect(mockResume).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, 'full'] as const)(
+    'preserves the legacy whole-config digest when scheme is %s and the session resumes',
+    async (ensembleConfigDigestScheme) => {
+      const agentId = 'resume-full-digest-preserved';
+      const ensembleConfig = DEFAULT_ENSEMBLE_CONFIG;
+      const ensembleConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
+      await saveSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+        {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          ...(ensembleConfigDigestScheme
+            ? { ensembleConfigDigestScheme }
+            : {}),
+          ensembleConfigDigest,
+          updatedAt: 0,
+        },
+      );
+      mockSend.mockResolvedValue({
+        runId: 'run-full-digest-resume',
+        status: 'finished',
+        result: 'done',
+      });
+      mockResume.mockImplementationOnce(async () => ({
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      }));
+
+      await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        ensembleConfig,
+        resumeAgentId: agentId,
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+
+      const resumedStore = await loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+      );
+      expect(resumedStore?.ensembleConfigDigestScheme).toBe(
+        ensembleConfigDigestScheme,
+      );
+      expect(resumedStore?.ensembleConfigDigest).toBe(ensembleConfigDigest);
+    },
+  );
+
+  it.each([undefined, 'full'] as const)(
+    'warns and preserves the missing digest when legacy scheme is %s',
+    async (ensembleConfigDigestScheme) => {
+      const agentId = 'resume-no-config-digest';
+      await saveSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+        {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile: { workers: [] },
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          ...(ensembleConfigDigestScheme
+            ? { ensembleConfigDigestScheme }
+            : {}),
+          updatedAt: 0,
+        },
+      );
+      mockSend.mockResolvedValue({
+        runId: 'run-no-config-digest-resume',
+        status: 'finished',
+        result: 'done',
+      });
+      mockResume.mockImplementationOnce(async () => ({
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      }));
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+
+      await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        ensembleConfig: {
+          ...DEFAULT_ENSEMBLE_CONFIG,
+          session: {
+            ...DEFAULT_ENSEMBLE_CONFIG.session,
+            worktree: 'in-repo',
+          },
+        },
+        resumeAgentId: agentId,
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        sessionLogger,
+      });
+
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          type: 'harness.warning',
+          message: expect.stringContaining(
+            'SessionResumeStore has no ensemble config digest',
+          ),
+        }),
+      );
+      const resumedStore = await loadSessionResumeStore(
+        sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+      );
+      expect(resumedStore?.ensembleConfigDigestScheme).toBe(
+        ensembleConfigDigestScheme,
+      );
+      expect(resumedStore?.ensembleConfigDigest).toBeUndefined();
+    },
+  );
 
   it('passes resolved MCP configuration to ConductorAgent.resume for explicit resume', async () => {
     const agentId = 'resume-agent';

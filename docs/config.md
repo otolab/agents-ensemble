@@ -63,13 +63,17 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 #### resume と config 変更
 
-`ensemble issue` の起動時に解決した `EnsembleConfig` 全体の canonical SHA-256 digest を SessionResumeStore に記録します。resume 時に現在の config と digest が異なる場合は、conductor agent の resume 前にエラーにします。`conductor.model` / `conductor.reasoning`、`acp.env`、model catalog の `reasoning` を含む変更や tag mapping の変更も対象です。worker の ACP spawn fingerprint には worker ごとの `modelTag` と解決済み model ID（credential ではない値）を記録し、env map は digest のみを保持します。Codex の `reasoning` は `CODEX_CONFIG` に含まれるため、この env digest でも照合します。
+新しい session は SessionResumeStore に `ensembleConfigDigestScheme: resume-feasibility` と digest を記録します。digest 対象は merge 後の `session.worktree` と `acp.defaultPreset` だけです。これらの値が変わると conductor の resume 前に拒否します。その他の `EnsembleConfig` key は neutral で、model・model catalog・reasoning・env・TUI・monitor などを変えても v2 digest は変わりません。全 key の分類は [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md) を参照してください。
 
-`ensemble issue` の `--model` / `CONDUCTOR_MODEL_ID` と同様、`--reasoning` / `CONDUCTOR_REASONING` による上書きは merged config の digest には含まれません。resume 時もその時点の CLI / env 値が優先されます。`ensemble operator-agent` も共通の config と `CONDUCTOR_REASONING` を使い、保存 session の resume ごとにその時点の値を agent に渡します。
+`conductor.model` と `conductor.reasoning` は `resume-feasibility` digest の対象外です。これらの config 値を変えても resume は拒否されず、再開時に最新の merged config を使います。Issue session の `--model` / `--reasoning` と `CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` は digest に含めず、resume ごとに再解決します。operator-agent は専用 CLI option を持たず、`CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` > merged config の順で解決します。
 
-旧 SessionResumeStore に平文 env map が残っている場合は、resume 整合性の検証前に値を digest へ置換して原子的に書き戻します。そのため config digest mismatch で resume を拒否する場合も、既存の平文値をファイルに残しません。SessionResumeStore には config 全体や env map の平文、config ファイルのパスは保存しません。解決済み model ID は worker fingerprint に限って保存します。
+conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default です。直接 API でも同じ優先順で選択し、Cursor / Pi の組み込み factory には解決値を create / resume 時に渡します。custom factory では互換性を保つため、config または code default から `default` が選ばれた場合は `modelId: undefined` を渡し、factory 自身の既定値に委ねます。一方、CLI / API の明示値または `CONDUCTOR_MODEL_ID` が `default` / `auto` を選んだ場合は `'default'` を渡し、その invocation override を保ちます。詳しくは[設定全体の解決順](settings.md)を参照してください。
 
-同じ解決済み config ならファイルの場所や YAML 内のキー順が変わっても resume できます。model catalog の文字列 shorthand と構造化エントリは、同じ model ID を指していても config の形が異なるため、書き換えると digest も変わります。digest を持たない旧 resume state は互換性のため resume できますが、設定の一致は検証できない旨を warning で知らせます。設定を切り替えて作業を続ける場合は新しい session を開始してください（[ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)）。
+ACP spawn fingerprint は preset を照合し、preset が `custom` の場合は command / args も照合します。`modelTag`、model ID、env digest は resume 拒否理由にしません。sidecar profile の復元と worker `acpCwd` の照合、conductor backend、MCP digest、session identity の検証は引き続き行います。
+
+scheme がない旧 sidecar と `full` sidecar は、従来の `EnsembleConfig` 全体 hash で比較します。そのため neutral な設定変更でも resume が拒否されることがあります。resume・再保存しても旧 scheme と digest はそのまま保ちます。scheme 省略 / `full` で digest がない旧 store は warning を出して設定一致の検証を省略し、欠如したまま保存します。`resume-feasibility` に digest がない sidecar と未知の scheme は不正データとして拒否します。
+
+hash には merge 後の値を使い、設定ファイルのパスや秘密値を sidecar に保存しません。旧 sidecar の平文 ACP env は resume 検証前に digest へ置き換えて書き戻します。neutral な config 変更で `full` digest が一致しなくなった旧 session は自動移行せず、新しい session を開始してください（[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[`conductor.reasoning` の分類](adr/0051-conductor-reasoning-resume-digest.md)）。
 
 ## テンプレート
 
@@ -173,7 +177,7 @@ tui:
 
 ### Conductor reasoning
 
-`conductor.reasoning` は空でない文字列です。`ensemble issue` と `ensemble operator-agent` が共有し、値は固定 enum にせず、選択した backend と model が受け付ける値かを起動時に検証します。`ensemble issue` では `--reasoning` > `CONDUCTOR_REASONING` > merged config の順、`ensemble operator-agent` では `CONDUCTOR_REASONING` > merged config の順で解決します。どちらも未指定なら reasoning を明示せず、backend に既定の選択を任せます。適用範囲と CLI override の境界は [ADR 0049](adr/0049-operator-agent-conductor-reasoning.md) を参照してください。
+`conductor.reasoning` は空でない文字列です。`ensemble issue` と `ensemble operator-agent` が共有し、値は固定 enum にせず、選択した backend と model が受け付ける値かを起動時に検証します。`ensemble issue` では `--reasoning` > `CONDUCTOR_REASONING` > merged config の順、`ensemble operator-agent` では `CONDUCTOR_REASONING` > merged config の順で解決します。どちらも未指定なら reasoning を明示せず、backend に既定の選択を任せます。適用範囲と CLI override の境界は [ADR 0050](adr/0050-operator-agent-conductor-reasoning.md) を参照してください。
 
 - **Pi**: 指定値を Pi 1.x `createAgentSession({ thinkingLevel })` に渡します。Pi の native level は `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` です。選択 model の対応 level を session 作成前に確認し、未知・未対応値はエラーにします。provider 固有のリクエスト値への変換は Pi model の `thinkingLevelMap` と Pi の provider adapter に委ねます。現在の Pi 1.2.0 は Google Gemini 4 を thinking-level API として扱わないため、`google-generative-ai` / `google-vertex` の Gemini 4 model に reasoning を明示した場合も session 作成前にエラーにします。値を省略した場合、`settings.json` の `defaultThinkingLevel` は従来どおり headless conductor / operator-agent で読みません。
 - **Cursor**: [Cursor SDK の model parameter catalog](https://cursor.com/docs/sdk/typescript#model-parameters) を照会し、選択 model の reasoning / thinking / effort parameter と値を特定して `ModelSelection.params` に渡します。parameter ID と値は model / account ごとに異なるため、catalog 上で一意に対応しない値や候補は agent の create / resume 前にエラーにします。値を省略したときは catalog を照会せず、SDK の既定に任せます。
@@ -356,7 +360,7 @@ acp:
 
 #### resume と `acp.env` 変更
 
-`acp.env` を含む解決済み config の変更は、通常は SessionResumeStore の config digest 比較で worker の再 attach 前に検出されます。digest のない旧 resume state では config 一致を検証できないため warning を出して resume を続けますが、worker の ACP spawn fingerprint（[ADR 0011](adr/0011-session-sidecar-resume.md)）があれば再 attach 時にも spawn を照合します。fingerprint は env map の digest だけを持ち、環境変数の値は保存しません。env を変えたあと続けるには新規セッションを開始してください。
+v2 の resume-feasibility digest は `acp.env` を含みません。worker ACP spawn fingerprint に env digest は残りますが、resume 時には比較しません。model、reasoning、tag mapping、env の変更だけでは v2 resume を拒否しません。preset の変更は config digest で、custom preset の command / args の変更は spawn fingerprint で拒否します。scheme がない旧 sidecar / `full` sidecar は全 config を比較するため、これらの変更で拒否される場合があります。resume 時の照合と旧 sidecar の扱いは [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md) を参照してください。
 
 ### Pi resource root
 

@@ -215,6 +215,7 @@ describe('resolveWorkerAcpSpawn', () => {
       ],
       defaultOptions: {
         defaultAcpCli: 'codex',
+        env: {},
         config: {
           acp: {
             defaultPreset: 'cursor',
@@ -324,6 +325,7 @@ describe('resolveWorkerAcpSpawn', () => {
       modelTag: 'high',
       defaultOptions: {
         defaultAcpCli: preset,
+        env: {},
         config: {
           acp: {
             defaultPreset: 'cursor',
@@ -614,7 +616,7 @@ describe('acpSpawnFingerprint', () => {
     ).toBe(computeAcpSpawnEnvDigest(env));
   });
 
-  it('includes worker modelTag and resolved model in resume fingerprint', () => {
+  it('retains worker model metadata without using it to reject resume', () => {
     const high = resolveWorkerAcpSpawn({
       modelTag: 'high',
       defaultOptions: {
@@ -645,10 +647,10 @@ describe('acpSpawnFingerprint', () => {
         actual: acpSpawnFingerprint(standard),
         workerName: 'implementer',
       }),
-    ).toThrow(/resume ACP spawn mismatch/);
+    ).not.toThrow();
   });
 
-  it('detects a change in Codex reasoning through the existing env digest', () => {
+  it('does not reject a reasoning change represented in the spawn env digest', () => {
     const resolve = (reasoning: string) =>
       resolveWorkerAcpSpawn({
         defaultOptions: {
@@ -669,35 +671,37 @@ describe('acpSpawnFingerprint', () => {
     expect(saved.envDigest).toBe(same.envDigest);
     expect(saved.envDigest).not.toBe(changed.envDigest);
     expect(() => assertAcpSpawnMatchesResume({ expected: saved, actual: same })).not.toThrow();
-    expect(() => assertAcpSpawnMatchesResume({ expected: saved, actual: changed })).toThrow(
-      /resume ACP spawn mismatch.*spawn environment differs/,
-    );
+    expect(() => assertAcpSpawnMatchesResume({ expected: saved, actual: changed })).not.toThrow();
     expect(saved).not.toHaveProperty('reasoning');
   });
 });
 
 describe('assertAcpSpawnMatchesResume', () => {
-  it('throws on env mismatch during resume', () => {
+  it('ignores env digest, modelTag, model, and built-in model args during resume', () => {
     const savedEnv = { MODEL_PROVIDER: 'litellm' };
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
           preset: 'codex',
           command: 'codex-acp',
-          args: [],
+          args: ['--model', 'old-model'],
           envDigest: computeAcpSpawnEnvDigest(savedEnv),
+          modelTag: 'high',
+          model: 'old-model',
         },
         actual: {
           preset: 'codex',
           command: 'codex-acp',
-          args: [],
+          args: ['--model', 'new-model'],
           envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'openai' }),
+          modelTag: 'low',
+          model: 'new-model',
         },
       }),
-    ).toThrow(/resume ACP spawn mismatch/);
+    ).not.toThrow();
   });
 
-  it('throws on preset/command mismatch during resume', () => {
+  it('throws when the preset changes', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: acpSpawnFingerprint({
@@ -711,6 +715,41 @@ describe('assertAcpSpawnMatchesResume', () => {
           args: [],
         },
         workerName: 'implementer',
+      }),
+    ).toThrow(/resume ACP spawn mismatch/);
+  });
+
+  it('compares custom command and args while ignoring model and env metadata', () => {
+    const expected: ReturnType<typeof acpSpawnFingerprint> = {
+      preset: 'custom',
+      command: 'custom-acp',
+      args: ['--model', 'before'],
+      envDigest: computeAcpSpawnEnvDigest({ TOKEN: 'before' }),
+      modelTag: 'high',
+      model: 'before',
+    };
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected,
+        actual: {
+          ...expected,
+          envDigest: computeAcpSpawnEnvDigest({ TOKEN: 'after' }),
+          modelTag: 'low',
+          model: 'after',
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected,
+        actual: { ...expected, args: ['--model', 'after'] },
+      }),
+    ).toThrow(/resume ACP spawn mismatch/);
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected,
+        actual: { ...expected, command: 'different-acp' },
       }),
     ).toThrow(/resume ACP spawn mismatch/);
   });
@@ -765,7 +804,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     expect(currentSpawn.env).toEqual({ INITIAL_AGENT_MODE: 'agent' });
   });
 
-  it('compares the env digest in a saved resume store fingerprint', () => {
+  it('does not reject on env digest changes in a saved resume store fingerprint', () => {
     const env = {
       INITIAL_AGENT_MODE: 'agent',
       MODEL_PROVIDER: 'litellm',
@@ -804,7 +843,7 @@ describe('assertAcpSpawnMatchesResume', () => {
           }),
         },
       }),
-    ).toThrow(/ACP spawn mismatch/);
+    ).not.toThrow();
   });
 });
 

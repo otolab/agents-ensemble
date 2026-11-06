@@ -22,6 +22,10 @@ export interface ConductorAgentCreateOptions {
   /** Pi backend only: called when `compaction_end` reports a successful compaction. */
   onContextCompaction?: () => void;
   apiKey?: string;
+  /**
+   * Resolved model override. `default` selects the backend default; omission
+   * lets custom factories keep their existing default.
+   */
   modelId?: string;
   /** Resolved conductor reasoning / thinking level; each backend validates its own support. */
   reasoning?: string;

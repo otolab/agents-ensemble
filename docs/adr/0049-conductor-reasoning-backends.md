@@ -1,6 +1,6 @@
-# ADR 0048: conductor reasoning を backend ごとに適用する
+# ADR 0049: conductor reasoning を backend ごとに適用する
 
-- Status: accepted
+- Status: superseded by [0051](0051-conductor-reasoning-resume-digest.md) (resume digest policy only)
 - Date: 2026-11-05
 - Related: [ADR 0047](0047-worker-acp-model-reasoning.md), [ADR 0025](0025-conductor-agent-backend-sdk-and-pi.md), [Issue #629](https://github.com/otolab/agents-ensemble/issues/629)
 

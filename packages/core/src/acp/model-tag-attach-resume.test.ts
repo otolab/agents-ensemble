@@ -67,7 +67,7 @@ describe('ACP model tag attach and resume', () => {
     }
   });
 
-  it('passes each resolved model to session/new and session/load, and rejects a changed model before load', async () => {
+  it('passes resolved models to session/new and resumes after a model change', async () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'ensemble-model-tag-attach-'));
     const repoRoot = join(tempRoot, 'repo');
     const userRoot = join(tempRoot, 'user');
@@ -230,26 +230,32 @@ describe('ACP model tag attach and resume', () => {
       const changedImplementer = changedSpecs.find(
         (spec) => spec.name === 'implementer',
       )!;
-      const mismatchConnector = createFakeConnector([
+      expect(changedImplementer.acpFingerprint?.model).not.toBe(
+        specsByName.get('implementer')?.acpFingerprint?.model,
+      );
+      const changedModelConnector = createFakeConnector([
         savedSessions.get('implementer')!,
       ]);
-      await expect(
-        attachWorker({
-          name: changedImplementer.name,
-          issueUrl: ISSUE_URL,
-          kind: changedImplementer.kind,
-          worktree,
-          sessionState,
-          spawn: changedImplementer.spawn,
-          expectedResumeAcpSpawn:
-            specsByName.get('implementer')?.acpFingerprint,
-          currentAcpSpawn: changedImplementer.acpFingerprint,
-          resumeAcpSessionId: savedSessions.get('implementer'),
-          connectAcp: mismatchConnector,
-        }),
-      ).rejects.toThrow(/resume ACP spawn mismatch/);
-      expect(mismatchConnector).not.toHaveBeenCalled();
-      expect(wireEvents.some((event) => event.method === 'session/load')).toBe(false);
+      const changedModelResume = await attachWorker({
+        name: changedImplementer.name,
+        issueUrl: ISSUE_URL,
+        kind: changedImplementer.kind,
+        worktree,
+        sessionState,
+        spawn: changedImplementer.spawn,
+        expectedResumeAcpSpawn:
+          specsByName.get('implementer')?.acpFingerprint,
+        currentAcpSpawn: changedImplementer.acpFingerprint,
+        resumeAcpSessionId: savedSessions.get('implementer'),
+        connectAcp: changedModelConnector,
+      });
+      expect(changedModelResume.session.sessionId).toBe(
+        savedSessions.get('implementer'),
+      );
+      expect(changedModelConnector).toHaveBeenCalledOnce();
+      expect(
+        wireEvents.filter((event) => event.method === 'session/load'),
+      ).toHaveLength(1);
 
       await writeFile(
         projectConfigPath,
@@ -278,16 +284,16 @@ describe('ACP model tag attach and resume', () => {
         connectAcp: resumeConnector,
       });
       expect(resumed.session.sessionId).toBe(savedSessionId);
-      const loadCall = wireEvents.find((event) => event.method === 'session/load');
-      expect(loadCall).toBeDefined();
-      expect(getClaudeModel(loadCall?.params)).toBe('gateway/project-opus');
+      expect(
+        wireEvents.filter((event) => event.method === 'session/load'),
+      ).toHaveLength(2);
     } finally {
       await Promise.all(bridges.map((bridge) => bridge.close()));
       for (const server of servers) server.stop();
     }
   });
 
-  it('passes merged Codex reasoning to the worker process and checks it on resume', async () => {
+  it('passes merged Codex reasoning to the worker process and allows reasoning changes on resume', async () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'ensemble-model-reasoning-'));
     const reasoningIssueUrl = 'https://github.com/org/repo/issues/622';
     const repoRoot = join(tempRoot, 'repo');
@@ -398,12 +404,17 @@ describe('ACP model tag attach and resume', () => {
     const original = specs[0]!;
     await writeFile(projectPath, 'acp:\n  models:\n    high-model:\n      reasoning: xhigh\n');
     const changed = (await loadSpecs())[0]!;
-    await expect(attach(changed, original)).rejects.toThrow(/resume ACP spawn mismatch/);
-    expect(await captured()).toHaveLength(2);
+    const changedResume = await attach(changed, original);
+    await closeWorkerAcpSession(changedResume.session);
+    expect(await captured()).toHaveLength(3);
+    expect((await captured())[2]).toMatchObject({
+      method: 'session/load',
+      config: { model: 'gateway/shared', model_reasoning_effort: 'xhigh' },
+    });
 
     const resumed = await attach(original, original);
     await closeWorkerAcpSession(resumed.session);
-    expect((await captured())[2]).toMatchObject({
+    expect((await captured())[3]).toMatchObject({
       method: 'session/load',
       config: { model: 'gateway/shared', model_reasoning_effort: 'high' },
     });

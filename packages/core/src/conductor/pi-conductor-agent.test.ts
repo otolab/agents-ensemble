@@ -158,6 +158,31 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
+  it.each(['create', 'resume'] as const)(
+    'uses the Pi settings default model when %s receives the backend default',
+    async (operation) => {
+      if (operation === 'resume') {
+        mockSessionManagerFindById.mockReturnValue('/tmp/pi-default-session.jsonl');
+      }
+      const options = {
+        cwd,
+        pi: { agentDir },
+        modelId: 'default',
+        systemPrompt: 'system',
+      };
+      const conductor =
+        operation === 'create'
+          ? await PiConductorAgent.create(options)
+          : await PiConductorAgent.resume('pi-default-session', options);
+
+      expect(mockCreateAgentSession.mock.calls[0]?.[0].model).toMatchObject({
+        provider: 'anthropic',
+        id: 'model-1',
+      });
+      await conductor.close();
+    },
+  );
+
   it('creates a Pi 1.x AgentSession and injects the resolved MCP map into the official extension', async () => {
     const mcpServers = {
       representative: {
