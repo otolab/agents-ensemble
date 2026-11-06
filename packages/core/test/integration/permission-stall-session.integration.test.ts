@@ -163,8 +163,9 @@ describe('permission stall session integration', () => {
         return;
       }
       releaseScheduled = true;
-      // Let the monitor finish onStall and the Driver buffer it first so both
-      // permission events plus the max-turn-blocked worker event are held.
+      // Let the monitor finish onStall and the Driver buffer holdable events
+      // first. The worker event and permission.pending are held; permission.stall
+      // stays dispatchable and must not contribute to the release flush count.
       setTimeout(() => {
         void conductorTools!.set_dispatch_hold!
           .execute({ hold: false })
@@ -287,12 +288,13 @@ describe('permission stall session integration', () => {
     expect(pendingResolved).toBe(true);
     expect(completedWorkerRoundSeen).toBe(true);
 
-    expect(inboundSources).toEqual(
-      expect.arrayContaining([
-        ['permission'],
-        ['permission.stall'],
-      ]),
+    const dispatchedSources = inboundSources.filter(
+      (sources) => !sources.includes('initial'),
     );
+    expect(dispatchedSources).toEqual([
+      ['permission'],
+      ['permission.stall'],
+    ]);
     expect(
       inboundSources.some((sources) =>
         sources.some((source) => source.startsWith('worker:')),
@@ -305,7 +307,13 @@ describe('permission stall session integration', () => {
         expect.objectContaining({
           status: 'released',
           hold: false,
-          flushedEventCount: 3,
+          heldEventCount: 2,
+          flushedEventCount: 2,
+        }),
+        expect.objectContaining({
+          status: 'updated',
+          hold: false,
+          heldEventCount: 1,
         }),
       ]),
     );
