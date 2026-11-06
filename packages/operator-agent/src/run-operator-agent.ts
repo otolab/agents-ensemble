@@ -17,6 +17,7 @@ import {
   resolveConductorBackendSetting,
   resolveConductorModelId,
   resolveConductorPiResourcePaths,
+  resolveConductorReasoning,
   resolveEnsemblePaths,
   sendConductorWithReconnect,
   sessionStateFromProfile,
@@ -90,6 +91,7 @@ interface OperatorRuntime {
   profile: ResolvedProfile;
   backend: ConductorBackend;
   modelId: string;
+  reasoning?: string;
   systemPrompt: string;
 }
 
@@ -173,6 +175,9 @@ export async function runOperatorAgent(
     cwd: runtime.repoRoot,
     systemPrompt: runtime.systemPrompt,
     modelId: runtime.modelId,
+    ...(runtime.reasoning !== undefined
+      ? { reasoning: runtime.reasoning }
+      : {}),
     // The operator role has no repository editing or shell tools in Phase 1.
     builtinTools: false,
     ...(runtime.backend === 'pi'
@@ -285,6 +290,7 @@ async function resolveOperatorRuntime(
   });
   const backend = resolveConductorBackendSetting({ profile, config });
   const modelId = resolveConductorModelId(undefined, { config });
+  const reasoning = resolveConductorReasoning(undefined, { config });
   const sessionState = sessionStateFromProfile(profile);
   const profileModule = profilePromptModule({
     agentModule: resolveAgentPromptModule('operator', profile.agents),
@@ -305,7 +311,15 @@ async function resolveOperatorRuntime(
     ),
   );
 
-  return { repoRoot, config, profile, backend, modelId, systemPrompt };
+  return {
+    repoRoot,
+    config,
+    profile,
+    backend,
+    modelId,
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    systemPrompt,
+  };
 }
 
 async function runTtyConversation(options: {

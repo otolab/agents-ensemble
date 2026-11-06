@@ -31,7 +31,9 @@ config は default → 選択された user config → project config（読み�
 CLI > 環境変数 > project config（読み込み有効時） > 選択された user config > コード default
 ```
 
-`profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
+`profile.default` / `conductor.model` / `conductor.reasoning` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
+
+`conductor.reasoning` は `ensemble issue` で `--reasoning` > `CONDUCTOR_REASONING` > merged config、`ensemble operator-agent` で `CONDUCTOR_REASONING` > merged config の順に解決します。両方のコマンドが同じ config / env 値を使い、値がなければ reasoning を渡さず Pi / Cursor の既定に任せます。Pi は選択 model が対応する native thinking level を検証し、Cursor は SDK model catalog から対応 parameter を一意に特定できる場合に適用します。値・未対応時の扱いは [config.md § Conductor reasoning](config.md#conductor-reasoning) を参照してください。
 
 conductor model は `ensemble issue --model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default の順で解決します。`runConductorSession` の直接呼び出しでも同じ選択値を conductor factory の create / resume に渡します。既定値は Cursor では Auto、Pi では Pi resource の `settings.json` にある既定モデルです。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を使います。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、その優先順位を保てるようにします。
 
@@ -54,7 +56,7 @@ Session resume state conductorBackend mismatch: pi !== cursor
 
 SessionResumeStore には `ensembleConfigDigestScheme` と config digest を保存します。新しい session の `resume-feasibility` digest が含むのは merge 後の `session.worktree` と `acp.defaultPreset` だけです。旧 sidecar は scheme 省略 / `full` として全 `EnsembleConfig` を比較し、resume・再保存後も scheme と digest の意味を維持します。旧 store で digest が欠けていれば warning 後に照合を省き、欠如を保ちます。v2 scheme で digest が欠けている場合や未知の scheme は拒否します。config 値やファイルパスは保存しません。ACP spawn fingerprint は preset、custom preset の command / args を照合し、modelTag / model / env digest は resume 判定に使いません。env digest は値を記録せず保持します。詳細は [config.md § resume と config 変更](config.md#resume-と-config-変更) と [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md) を参照してください。
 
-resume では config の変更を digest で検出します。`modelId` と環境変数は invocation 単位の上書きとして各 run で再解決します。
+新しい `resume-feasibility` digest は `conductor.model` / `conductor.reasoning` を対象外にするため、これらの config 変更だけでは resume を拒否しません。各 run でその時点の CLI / 環境変数 / merged config を解決し直します。scheme のない旧 sidecar と `full` sidecar は従来どおり config 全体を比較するため、model / reasoning の config 変更で resume が拒否されることがあります。
 
 ### パターン B — Phase 1 横断（env なし）
 
@@ -115,7 +117,8 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 | 設定 | config キー | 環境変数 | CLI | コード default | 解決 |
 |------|-------------|----------|-----|----------------|------|
 | 既定 team profile | `profile.default` | `ENSEMBLE_DEFAULT_PROFILE` | `--profile` | 同梱 `implementer-and-reviewer-v2` | A |
-| conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | `--model` | `default` | A |
+| conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | `ensemble issue --model` | `default` | A |
+| conductor reasoning | `conductor.reasoning` | `CONDUCTOR_REASONING` | `ensemble issue --reasoning` | backend 既定（明示値なし） | A |
 | conductor 詳細 telemetry | `conductor.verbose` | `CONDUCTOR_VERBOSE` | `--verbose` | `false` | A |
 | conductor backend | `conductor.backend` | — | — | `cursor` | profile > config > default |
 | Pi user resource root | `conductor.pi.agentDir` | — | — | `~/.ensemble/pi` | config |
@@ -208,7 +211,7 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 | `TERM` / `TERM_PROGRAM` / `CI` 等 | TTY / CI の実行環境を検出する値 |
 | `CURSOR_RIPGREP_PATH` | SDK 起動時に利用する内部ツールの明示指定 |
 
-`profile.default`、`conductor.model`、`conductor.backend`、`acp.defaultPreset`、`session.*`、`github.monitor.*`、`tui.*` のように config キーがある設定は、上の env-only 表ではなく本書の設定一覧と [config.md](config.md) に記載しています。env は invocation 単位の上書きとして残る場合があります。
+`profile.default`、`conductor.model`、`conductor.reasoning`、`conductor.backend`、`acp.defaultPreset`、`session.*`、`github.monitor.*`、`tui.*` のように config キーがある設定は、上の env-only 表ではなく本書の設定一覧と [config.md](config.md) に記載しています。env は invocation 単位の上書きとして残る場合があります。
 
 ## 既知のギャップ
 

@@ -119,7 +119,10 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning 指定のみ） |
 | [0046](0046-migrated-session-canonical-slug-mirrors.md) | 移行済みセッションの canonical slug mirror | accepted |
 | [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume 照合のみ） |
-| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | accepted |
+| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（`conductor.reasoning` の分類のみ） |
+| [0049](0049-conductor-reasoning-backends.md) | conductor reasoning を backend ごとに適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
+| [0050](0050-operator-agent-conductor-reasoning.md) | operator-agent に conductor reasoning を適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
+| [0051](0051-conductor-reasoning-resume-digest.md) | conductor reasoning と resume-feasibility digest | accepted |
 
 ## 追加するとき
 

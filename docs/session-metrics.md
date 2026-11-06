@@ -104,14 +104,16 @@
 | フィールド | 型 | ソース | 出力先 | 未取得時 |
 |-----------|-----|--------|--------|----------|
 | `sessionModels` | `SessionModelsSummary` | 終了時 `buildSessionModelsSummary` | 終了 JSON・TTY テキスト | なし（常に設定） |
-| `sessionModels.conductor` | `{ backend, configuredModelId, lastUsedModelId? }` | CLI / API / env / config / 最後の conductor send | 同上 | — |
+| `sessionModels.conductor` | `{ backend, configuredModelId, configuredReasoning?, lastUsedModelId? }` | config / CLI / env / 最後の conductor send | 同上 | reasoning 未指定時は省略 |
 | `sessionModels.workers[]` | `{ name, kind, modelTag, acpPreset, model? }` | profile + ACP spawn fingerprint | 同上 | worker 無し時 `[]` |
 
 `configuredModelId` は CLI / API の明示値、環境変数、ensemble config、backend default の優先順で解決した値です。CLI と `runConductorSession` はこの値を conductor factory の create / resume に渡します。Pi の `settings.json` にある既定モデルは含みません。
 
 直接 API でも `modelId` > `CONDUCTOR_MODEL_ID` > `ensembleConfig.conductor.model` > backend default の順に解決します。`default` / `auto` は backend の既定選択を表し、Cursor は Auto、Pi は Pi resource の `settings.json` にある既定モデルを使います。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を選べるようにします。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、上位の選択を保ちます。いずれの場合も `configuredModelId: "default"` だけでは custom factory が選んだ具体的な model ID までは分かりません。
 
-resume では ensemble config の digest が変わると conductor factory を呼ぶ前に拒否します。`modelId` と `CONDUCTOR_MODEL_ID` は invocation 単位の上書きとして各 run で再解決されます。
+`configuredReasoning` は Issue 起動では `--reasoning` > `CONDUCTOR_REASONING` > merged config、operator-agent では `CONDUCTOR_REASONING` > merged config で解決した指定値です。未指定なら省略します。これは SDK / provider が最終的に適用した値の報告ではありません。Pi は選択 model が対応する値か確認し、Cursor は利用者の model catalog から parameter を解決してから conductor を起動します。
+
+resume では `modelId` と `reasoning` を invocation ごとに再解決します。新しい `resume-feasibility` digest はどちらの config 変更も対象にしません。旧 sidecar の scheme 省略 / `full` digest は従来どおり config 全体を比較します。
 
 `lastUsedModelId` は、今回の `runConductorSession` 呼び出し内で最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。resume 前の run の報告は引き継がないため、再開後に send せず終了した場合も省略する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
 
@@ -129,7 +131,7 @@ worker は未 attach の lazy worker も含め、セッションに登録され�
   conductor ターン: 3
   worker ラウンド: 3 完了 / 0 失敗
   モデル:
-    conductor (pi): 設定 default · 報告 fixture-model
+    conductor (pi): 設定 default · reasoning high · 報告 fixture-model
     worker implementer (implementer, codex): modelTag high · 起動設定 gpt-6.1-terra
     worker reviewer (reviewer, codex): modelTag default · モデル注入なし
   usage（記録済み）:

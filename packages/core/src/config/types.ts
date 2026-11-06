@@ -37,6 +37,8 @@ export interface EnsembleConductorPiConfig {
 export interface EnsembleConductorConfig {
   /** conductor モデル id（`auto` は `default` と同義）。 */
   model: string;
+  /** conductor reasoning / thinking level（対応値は選択した backend / model に依存）。 */
+  reasoning?: string;
   /** conductor LLM backend（未指定時は `cursor`）。 */
   backend?: ConductorBackend;
   /** harness の詳細 telemetry を人間向け出力へ表示するか。 */

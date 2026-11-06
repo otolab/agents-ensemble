@@ -5,13 +5,18 @@ import { basename, join } from 'node:path';
 import {
   type AgentMessage,
   type AgentTool,
+  type ThinkingLevel,
 } from '@earendil-works/pi-agent-core';
 import {
   getModel,
   getModels,
   getProviders,
 } from '@earendil-works/pi-ai/compat';
-import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
+import {
+  getSupportedThinkingLevels,
+  type AssistantMessage,
+  type Model,
+} from '@earendil-works/pi-ai';
 import {
   createAgentSession,
   createCodemodeExtension,
@@ -43,6 +48,7 @@ import type {
   ConductorSendResult,
   ConductorTokenUsage,
 } from './conductor-agent.js';
+import { markConductorAgentFactoryCleanupIncomplete } from './conductor-agent-factory-cleanup.js';
 import { toPiCodingAgentTools } from './conductor-tool-pi-adapter.js';
 import {
   getPiHeadlessSettingsManagerOverrides,
@@ -86,6 +92,15 @@ interface PiMcpLifecycleState {
 }
 
 const PI_MCP_STARTUP_OBSERVATION_MS = 2_000;
+const PI_THINKING_LEVELS: readonly ThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
 
 export interface PiResolvedModel {
   provider: string;
@@ -539,6 +554,42 @@ export function createPiConductorAgentFactory(): ConductorAgentFactory {
   };
 }
 
+function resolvePiConductorThinkingLevel(
+  model: Model<any>,
+  provider: string,
+  modelId: string,
+  value: string,
+): ThinkingLevel {
+  const reasoning = value.trim();
+  if (!reasoning) {
+    throw new Error('Pi conductor reasoning must be a non-empty string.');
+  }
+  if (!PI_THINKING_LEVELS.includes(reasoning as ThinkingLevel)) {
+    throw new Error(
+      `Pi conductor reasoning "${reasoning}" is invalid. Supported Pi levels: ${PI_THINKING_LEVELS.join(', ')}.`,
+    );
+  }
+
+  if (
+    (model.api === 'google-generative-ai' || model.api === 'google-vertex') &&
+    /^gemini-4(?:[.-]|$)/i.test(model.id)
+  ) {
+    throw new Error(
+      `Pi conductor reasoning cannot be applied to Google Gemini 4 model "${provider}/${modelId}" with Pi 1.2.0: ` +
+        'the Google adapter does not select Gemini’s thinkingLevel request format for Gemini 4.',
+    );
+  }
+
+  const supportedLevels = getSupportedThinkingLevels(model);
+  if (!supportedLevels.includes(reasoning as ThinkingLevel)) {
+    throw new Error(
+      `Pi conductor model "${provider}/${modelId}" does not support reasoning level "${reasoning}". ` +
+        `Supported levels: ${supportedLevels.join(', ')}.`,
+    );
+  }
+  return reasoning as ThinkingLevel;
+}
+
 type PiSessionStartReason = 'startup' | 'resume';
 
 async function createPiConductorSession(
@@ -562,6 +613,15 @@ async function createPiConductorSession(
   const headlessSettingsOverrides = getPiHeadlessSettingsManagerOverrides(resources.settings);
   const authContext = await createPiConductorAuthContext(options, resources);
   const resolved = await resolvePiModelConfigFromResources(options, resources, authContext);
+  const thinkingLevel =
+    options.reasoning !== undefined
+      ? resolvePiConductorThinkingLevel(
+          resolved.model,
+          resolved.provider,
+          resolved.modelId,
+          options.reasoning,
+        )
+      : undefined;
   if (options.apiKey !== undefined) {
     await authContext.modelRuntime.setRuntimeApiKey(resolved.provider, options.apiKey);
   }
@@ -660,6 +720,7 @@ async function createPiConductorSession(
       agentDir: authContext.agentDir,
       modelRuntime: authContext.modelRuntime,
       model: resolved.model,
+      ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
       sessionManager,
       settingsManager,
       resourceLoader,
@@ -722,9 +783,11 @@ async function createPiConductorSession(
       cleanupErrors.push(cleanupError);
     }
     if (cleanupErrors.length === 0) throw error;
-    throw new AggregateError(
-      [error, ...cleanupErrors],
-      'Pi conductor startup failed and session cleanup was incomplete.',
+    throw markConductorAgentFactoryCleanupIncomplete(
+      new AggregateError(
+        [error, ...cleanupErrors],
+        'Pi conductor startup failed and session cleanup was incomplete.',
+      ),
     );
   }
 }

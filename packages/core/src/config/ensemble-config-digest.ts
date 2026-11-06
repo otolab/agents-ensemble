@@ -30,6 +30,7 @@ export const RESUME_FEASIBILITY_CONFIG_CLASSIFICATION = {
   'config.loadProjectConfig': 'neutral',
   'profile.default': 'neutral',
   'conductor.model': 'neutral',
+  'conductor.reasoning': 'neutral',
   'conductor.backend': 'neutral',
   'conductor.verbose': 'neutral',
   'conductor.pi.agentDir': 'neutral',

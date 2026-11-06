@@ -215,6 +215,7 @@ describe('resolveWorkerAcpSpawn', () => {
       ],
       defaultOptions: {
         defaultAcpCli: 'codex',
+        env: {},
         config: {
           acp: {
             defaultPreset: 'cursor',
@@ -324,6 +325,7 @@ describe('resolveWorkerAcpSpawn', () => {
       modelTag: 'high',
       defaultOptions: {
         defaultAcpCli: preset,
+        env: {},
         config: {
           acp: {
             defaultPreset: 'cursor',

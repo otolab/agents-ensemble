@@ -38,6 +38,7 @@ import {
   SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
 } from '../session/session-resume-store.js';
+import { WorkerSession } from '../runtime/worker-session.js';
 import * as sessionResumeStoreModule from '../session/session-resume-store.js';
 import {
   loadSessionStateStore,
@@ -609,7 +610,7 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it.each(['closed', 'exited'] as const)(
-    'clears stale %s lifecycle before resuming the conductor',
+    'marks stale %s lifecycle active during resume and restores it when startup rejects',
     async (lifecycle) => {
       const agentId = `resume-${lifecycle}-lifecycle`;
       const resumeStorePath = sessionResumeStorePath({
@@ -647,12 +648,10 @@ describe('runConductorSession resume / shutdown', () => {
         'simulated crash before first regular session resume store flush',
       );
 
-      await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
-        lifecycle: 'unknown',
-        harnessPhase: 'running',
-        modifiedAt: expect.any(Number),
-        updatedAt: expect.any(Number),
-      });
+      const restoredResumeStore =
+        await loadSessionResumeStore(resumeStorePath);
+      expect(restoredResumeStore?.lifecycle).toBe(lifecycle);
+      expect(restoredResumeStore?.harnessPhase).not.toBe('running');
     },
   );
 
@@ -693,6 +692,433 @@ describe('runConductorSession resume / shutdown', () => {
     );
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
   });
+
+  it('passes the resolved conductor reasoning to the backend and session summary', async () => {
+    vi.stubEnv('CONDUCTOR_REASONING', 'env-level');
+    mockSend.mockResolvedValue({
+      runId: 'run-reasoning',
+      status: 'finished',
+      result: 'started',
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'pi',
+          reasoning: 'config-level',
+        },
+      },
+      reasoning: 'cli-level',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(mockCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ reasoning: 'cli-level' }),
+    );
+    expect(result.sessionModels.conductor).toEqual({
+      backend: 'pi',
+      configuredModelId: 'default',
+      configuredReasoning: 'cli-level',
+    });
+  });
+
+  it.each([
+    { backend: 'pi' as const, mode: 'create' as const },
+    { backend: 'cursor' as const, mode: 'create' as const },
+    { backend: 'pi' as const, mode: 'resume' as const },
+    { backend: 'cursor' as const, mode: 'resume' as const },
+  ])(
+    'cleans up startup resources when the $backend $mode rejects',
+    async ({ backend, mode }) => {
+      const agentId = `resume-${backend}-startup-failure`;
+      const profile = {
+        conductor: { backend },
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      };
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend,
+          reasoning: 'high',
+        },
+      };
+      const failure = new Error(`${backend} reasoning fail-fast`);
+      if (mode === 'create') {
+        mockCreate.mockRejectedValueOnce(failure);
+      } else {
+        mockResume.mockRejectedValueOnce(failure);
+        await saveSessionResumeStore(
+          sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+          {
+            version: SESSION_RESUME_STORE_VERSION,
+            conductorAgentId: agentId,
+            conductorBackend: backend,
+            issueUrl: TEST_ISSUE.url,
+            repoRoot,
+            profile,
+            openQuestions: [],
+            sequence: 0,
+            workers: {},
+            mcpConfigDigest: computeMcpConfigDigest({}),
+            ensembleConfigDigest:
+              computeEnsembleConfigDigest(ensembleConfig),
+            lifecycle: 'closed',
+            harnessPhase: 'close',
+            updatedAt: 1,
+          },
+        );
+      }
+
+      const connectAcp = vi.fn(async () =>
+        ({
+          newSession: vi.fn().mockResolvedValue('worker-session'),
+          loadSession: vi.fn().mockResolvedValue(undefined),
+          promptSession: vi.fn().mockResolvedValue({
+            stopReason: 'end_turn',
+            responseText: 'ready',
+          }),
+          cancelSession: vi.fn().mockResolvedValue(undefined),
+          close: vi.fn().mockResolvedValue(undefined),
+        }) as unknown as AcpBridge,
+      );
+      const startWorkers = vi.spyOn(WorkerSession.prototype, 'startWorkers');
+      const stopWorkers = vi.spyOn(WorkerSession.prototype, 'stop');
+      const signalListenersBefore = {
+        sigint: process.listeners('SIGINT'),
+        sigterm: process.listeners('SIGTERM'),
+      };
+
+      await expect(
+        runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile,
+          ensembleConfig,
+          ...(mode === 'resume' ? { resumeAgentId: agentId } : {}),
+          permissionPipeline: new PermissionPipeline({}),
+          workerWorktree: {
+            path: repoRoot,
+            branch: 'main',
+            issue: TEST_ISSUE,
+            inRepo: true,
+          },
+          defaultAcp: { defaultAcpCommand: process.execPath },
+          connectAcp,
+          waitForOperatorExit: false,
+        }),
+      ).rejects.toThrow(failure.message);
+
+      expect(startWorkers).not.toHaveBeenCalled();
+      expect(stopWorkers).toHaveBeenCalledOnce();
+      expect(stopWorkers).toHaveBeenCalledWith({ force: true });
+      expect(connectAcp).not.toHaveBeenCalled();
+      expect(process.listeners('SIGINT')).toEqual(signalListenersBefore.sigint);
+      expect(process.listeners('SIGTERM')).toEqual(signalListenersBefore.sigterm);
+      if (mode === 'resume') {
+        const restoredResumeStore = await loadSessionResumeStore(
+          sessionResumeStorePath({
+            repoRoot,
+            conductorAgentId: agentId,
+          }),
+        );
+        expect(restoredResumeStore).toMatchObject({
+          lifecycle: 'closed',
+          harnessPhase: 'close',
+        });
+      }
+    },
+  );
+
+  it.each(['create', 'resume'] as const)(
+    'does not start eager workers when shutdown arrives during a pending backend %s',
+    async (mode) => {
+      const agentId = `resume-shutdown-during-${mode}-factory`;
+      const backend = 'cursor' as const;
+      const profile = {
+        conductor: { backend },
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      };
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend,
+        },
+      };
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: agentId,
+      });
+      if (mode === 'resume') {
+        await saveSessionResumeStore(resumeStorePath, {
+          version: SESSION_RESUME_STORE_VERSION,
+          conductorAgentId: agentId,
+          conductorBackend: backend,
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile,
+          openQuestions: [],
+          sequence: 0,
+          workers: {},
+          mcpConfigDigest: computeMcpConfigDigest({}),
+          ensembleConfigDigestScheme: 'resume-feasibility',
+          ensembleConfigDigest:
+            computeResumeFeasibilityConfigDigest(ensembleConfig),
+          lifecycle: 'closed',
+          harnessPhase: 'close',
+          updatedAt: 1,
+        });
+      }
+
+      const factoryStarted = createDeferred<void>();
+      const factoryResult = createDeferred<{
+        agentId: string;
+        send: typeof mockSend;
+        close: typeof mockClose;
+        closeForResume: ReturnType<typeof vi.fn>;
+        getUsage: ReturnType<typeof createMockConductorGetUsage>;
+      }>();
+      const close = vi.fn().mockResolvedValue(undefined);
+      const closeForResume = vi.fn().mockResolvedValue(undefined);
+      const agent = {
+        agentId,
+        send: mockSend,
+        close,
+        closeForResume,
+        getUsage: createMockConductorGetUsage(),
+      };
+      const factory = mode === 'resume' ? mockResume : mockCreate;
+      factory.mockImplementationOnce(async () => {
+        factoryStarted.resolve();
+        return factoryResult.promise;
+      });
+
+      const connectAcp = vi.fn();
+      const startWorkers = vi.spyOn(WorkerSession.prototype, 'startWorkers');
+      const stopWorkers = vi.spyOn(WorkerSession.prototype, 'stop');
+      const shutdown = new AbortController();
+      const signalListenersBefore = {
+        sigint: process.listeners('SIGINT'),
+        sigterm: process.listeners('SIGTERM'),
+      };
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+
+      const startup = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        conductorAgentFactory: { create: mockCreate, resume: mockResume },
+        ...(mode === 'resume' ? { resumeAgentId: agentId } : {}),
+        permissionPipeline: new PermissionPipeline({}),
+        workerWorktree: {
+          path: repoRoot,
+          branch: 'main',
+          issue: TEST_ISSUE,
+          inRepo: true,
+        },
+        defaultAcp: { defaultAcpCommand: process.execPath },
+        connectAcp,
+        shutdownSignal: shutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        sessionLogger,
+      });
+
+      await settleWithin(factoryStarted.promise, 2_000);
+      shutdown.abort();
+      await drainAsync();
+      factoryResult.resolve(agent);
+
+      await expect(startup).rejects.toThrow(/aborted/i);
+
+      expect(factory).toHaveBeenCalledOnce();
+      expect(closeForResume).toHaveBeenCalledTimes(mode === 'resume' ? 1 : 0);
+      expect(close).toHaveBeenCalledTimes(mode === 'create' ? 1 : 0);
+      expect(startWorkers).not.toHaveBeenCalled();
+      expect(stopWorkers).toHaveBeenCalledWith({ force: true });
+      expect(connectAcp).not.toHaveBeenCalled();
+      expect(
+        emitted.some((event) => event.type === 'harness.worker.bootstrap'),
+      ).toBe(false);
+      expect(process.listeners('SIGINT')).toEqual(signalListenersBefore.sigint);
+      expect(process.listeners('SIGTERM')).toEqual(signalListenersBefore.sigterm);
+
+      if (mode === 'resume') {
+        await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+          lifecycle: 'closed',
+          harnessPhase: 'close',
+          ensembleConfigDigestScheme: 'resume-feasibility',
+          ensembleConfigDigest:
+            computeResumeFeasibilityConfigDigest(ensembleConfig),
+        });
+      }
+    },
+  );
+
+  it.each([
+    { failure: 'backend cleanup', closeFails: true },
+    { failure: 'resume record rollback write', closeFails: false },
+  ])(
+    'keeps the resume record unknown/running when $failure fails',
+    async ({ closeFails }) => {
+      const agentId = `resume-shutdown-cleanup-failure-${closeFails}`;
+      const backend = 'cursor' as const;
+      const profile = {
+        conductor: { backend },
+        workers: [],
+      };
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend,
+        },
+      };
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: agentId,
+      });
+      await saveSessionResumeStore(resumeStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        conductorBackend: backend,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        mcpConfigDigest: computeMcpConfigDigest({}),
+        ensembleConfigDigestScheme: 'resume-feasibility',
+        ensembleConfigDigest:
+          computeResumeFeasibilityConfigDigest(ensembleConfig),
+        lifecycle: 'closed',
+        harnessPhase: 'close',
+        updatedAt: 1,
+      });
+
+      const factoryStarted = createDeferred<void>();
+      const factoryResult = createDeferred<{
+        agentId: string;
+        send: typeof mockSend;
+        close: typeof mockClose;
+        closeForResume: ReturnType<typeof vi.fn>;
+        getUsage: ReturnType<typeof createMockConductorGetUsage>;
+      }>();
+      const closeFailure = new Error('simulated backend cleanup failure');
+      const rollbackFailure = new Error('simulated resume store rollback failure');
+      const closeForResume = closeFails
+        ? vi.fn().mockRejectedValue(closeFailure)
+        : vi.fn().mockResolvedValue(undefined);
+      const agent = {
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        closeForResume,
+        getUsage: createMockConductorGetUsage(),
+      };
+      mockResume.mockImplementationOnce(async () => {
+        factoryStarted.resolve();
+        return factoryResult.promise;
+      });
+
+      const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
+      let rollbackAttempted = false;
+      vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore')
+        .mockImplementation(async (path, resumeStore) => {
+          if (
+            path === resumeStorePath &&
+            resumeStore.lifecycle === 'closed' &&
+            resumeStore.harnessPhase === 'close'
+          ) {
+            rollbackAttempted = true;
+            if (!closeFails) throw rollbackFailure;
+          }
+          await persistResumeStore(path, resumeStore);
+        });
+
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+      const shutdown = new AbortController();
+      const signalListenersBefore = {
+        sigint: process.listeners('SIGINT'),
+        sigterm: process.listeners('SIGTERM'),
+      };
+      const startup = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        conductorAgentFactory: { create: mockCreate, resume: mockResume },
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        shutdownSignal: shutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        sessionLogger,
+      });
+
+      await settleWithin(factoryStarted.promise, 2_000);
+      shutdown.abort();
+      await drainAsync();
+      factoryResult.resolve(agent);
+
+      await expect(startup).rejects.toThrow(/aborted/i);
+
+      expect(closeForResume).toHaveBeenCalledOnce();
+      expect(rollbackAttempted).toBe(!closeFails);
+      if (closeFails) {
+        expect(emitted).toContainEqual(
+          expect.objectContaining({
+            type: 'harness.warning',
+            message: expect.stringContaining(closeFailure.message),
+          }),
+        );
+        expect(emitted).toContainEqual(
+          expect.objectContaining({
+            type: 'harness.warning',
+            message: expect.stringContaining(
+              '再開記録を unknown/running のまま保ちます',
+            ),
+          }),
+        );
+      } else {
+        expect(emitted).toContainEqual(
+          expect.objectContaining({
+            type: 'harness.warning',
+            message: expect.stringContaining(rollbackFailure.message),
+          }),
+        );
+      }
+      await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+        lifecycle: 'unknown',
+        harnessPhase: 'running',
+        ensembleConfigDigestScheme: 'resume-feasibility',
+        ensembleConfigDigest:
+          computeResumeFeasibilityConfigDigest(ensembleConfig),
+      });
+      expect(process.listeners('SIGINT')).toEqual(signalListenersBefore.sigint);
+      expect(process.listeners('SIGTERM')).toEqual(signalListenersBefore.sigterm);
+    },
+  );
 
   it.each([false, true])(
     'returns resolved worker and conductor models with lazyWorkers=%s',
@@ -1577,7 +2003,7 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it.each([undefined, 'full'] as const)(
-    'keeps scheme-less and explicit full sidecars on the legacy whole-config digest (%s)',
+    'rejects a conductor reasoning change for scheme-less and full sidecars (%s)',
     async (ensembleConfigDigestScheme) => {
       const agentId = 'resume-config-mismatch';
       const legacySecretMarker = 'LEGACY_WORKER_ACP_SECRET_MARKER';
@@ -1586,6 +2012,7 @@ describe('runConductorSession resume / shutdown', () => {
         conductor: {
           ...DEFAULT_ENSEMBLE_CONFIG.conductor,
           model: 'model-before',
+          reasoning: 'low',
         },
       };
       const resumeStorePath = sessionResumeStorePath({
@@ -1634,7 +2061,7 @@ describe('runConductorSession resume / shutdown', () => {
             ...originalConfig,
             conductor: {
               ...originalConfig.conductor,
-              model: 'model-after',
+            reasoning: 'high',
             },
           },
           resumeAgentId: agentId,
@@ -1667,13 +2094,14 @@ describe('runConductorSession resume / shutdown', () => {
     },
   );
 
-  it('resumes through the mocked ACP load path after model and env config changes', async () => {
+  it('resumes through the mocked ACP load path after reasoning and env config changes', async () => {
     const agentId = 'resume-feasibility-neutral-config-changes';
     const originalConfig = {
       ...DEFAULT_ENSEMBLE_CONFIG,
       conductor: {
         ...DEFAULT_ENSEMBLE_CONFIG.conductor,
-        model: 'conductor-model-before',
+        model: 'conductor-model',
+        reasoning: 'low',
       },
       acp: {
         ...DEFAULT_ENSEMBLE_CONFIG.acp,
@@ -1689,7 +2117,7 @@ describe('runConductorSession resume / shutdown', () => {
       ...originalConfig,
       conductor: {
         ...originalConfig.conductor,
-        model: 'conductor-model-after',
+        reasoning: 'high',
       },
       acp: {
         ...originalConfig.acp,
@@ -1794,6 +2222,10 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(result.stopReason).toBe('completed');
     expect(mockResume).toHaveBeenCalledOnce();
+    expect(mockResume.mock.calls[0]?.[1]).toMatchObject({
+      modelId: expect.any(String),
+      reasoning: 'high',
+    });
     expect(connectAcp).toHaveBeenCalledOnce();
     expect(loadSession).toHaveBeenCalledWith(
       'saved-worker-session',

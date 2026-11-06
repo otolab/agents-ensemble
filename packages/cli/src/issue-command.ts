@@ -4,6 +4,7 @@ import {
   loadEnsembleConfig,
   loadProfile,
   resolveConductorModelId,
+  resolveConductorReasoning,
   resolveConductorVerboseSetting,
   resolveGitHubMonitorDebounceMs,
   resolveGitHubMonitorEnabled,
@@ -35,6 +36,7 @@ export interface IssueCommandOptions {
   configPath?: string;
   profile?: string;
   model?: string;
+  reasoning?: string;
   verbose?: boolean;
   maxTurns?: number;
   noMaxTurns?: boolean;
@@ -152,6 +154,9 @@ export async function executeIssueCommand(
   const ensembleConfig = await loadConfig(repoRoot, {
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
   });
+  const conductorReasoning = resolveConductorReasoning(options.reasoning, {
+    config: ensembleConfig,
+  });
   const conductorVerbose = resolveConductorVerboseSetting({
     cliVerbose: options.verbose,
     config: ensembleConfig,
@@ -261,6 +266,9 @@ export async function executeIssueCommand(
       profile,
       profilePath,
       modelId: resolveConductorModelId(options.model, { config: ensembleConfig }),
+      ...(conductorReasoning !== undefined
+        ? { reasoning: conductorReasoning }
+        : {}),
       maxTurns,
       workerWorktreeMode,
       sessionLogger,

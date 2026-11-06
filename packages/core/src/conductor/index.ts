@@ -280,6 +280,10 @@ export {
   normalizeConductorModelId,
   resolveConductorModelId,
 } from './resolve-conductor-model-id.js';
+export {
+  CONDUCTOR_REASONING_ENV,
+  resolveConductorReasoning,
+} from './resolve-conductor-reasoning.js';
 
 export { listConductorModels } from './list-conductor-models.js';
 export type { ListConductorModelsOptions } from './list-conductor-models.js';
