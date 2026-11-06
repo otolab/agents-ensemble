@@ -1,6 +1,6 @@
 # ADR 0054: Cursor ACP の未検証 runtime と resume metadata の扱い
 
-- Status: accepted
+- Status: superseded by [0055](0055-cursor-model-only-cli-contract.md)（Cursor model-only の受け入れ境界のみ。runtime 情報の限界、reasoning / fast の扱い、resume 方針は継続）
 - Date: 2026-11-05
 - Related: [ADR 0048](0048-session-resume-feasibility-config-digest.md), [ADR 0052](0052-acp-model-injection-by-preset.md), [ADR 0053](0053-worker-acp-cursor-fast-option.md), [Issue #616](https://github.com/otolab/agents-ensemble/issues/616), [Issue #630](https://github.com/otolab/agents-ensemble/issues/630)
 

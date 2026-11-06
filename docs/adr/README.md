@@ -125,7 +125,8 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0051](0051-conductor-reasoning-resume-digest.md) | conductor reasoning と resume-feasibility digest | accepted |
 | [0052](0052-acp-model-injection-by-preset.md) | worker ACP model / reasoning の preset 別注入 | superseded → [0054](0054-cursor-acp-runtime-verification.md)（Cursor の runtime 制約のみ。その他 preset は継続） |
 | [0053](0053-worker-acp-cursor-fast-option.md) | worker ACP の Cursor fast mode 明示設定 | superseded → [0054](0054-cursor-acp-runtime-verification.md)（Cursor の明示 option は fail fast、model-only は CLI への要求） |
-| [0054](0054-cursor-acp-runtime-verification.md) | Cursor ACP の未検証 runtime と resume metadata の扱い | accepted |
+| [0054](0054-cursor-acp-runtime-verification.md) | Cursor ACP の未検証 runtime と resume metadata の扱い | superseded → [0055](0055-cursor-model-only-cli-contract.md)（Cursor model-only の受け入れ境界のみ） |
+| [0055](0055-cursor-model-only-cli-contract.md) | Cursor worker の model-only 指定を公式 CLI 契約で受け入れる | accepted |
 
 ## 追加するとき
 

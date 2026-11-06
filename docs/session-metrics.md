@@ -117,7 +117,7 @@ resume では `modelId` と `reasoning` を invocation ごとに再解決しま�
 
 `lastUsedModelId` は、今回の `runConductorSession` 呼び出し内で最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。resume 前の run の報告は引き継がないため、再開後に send せず終了した場合も省略する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
 
-worker は未 attach の lazy worker も含め、セッションに登録された順に出力する。`model` は `modelTag` から解決して ACP 起動時に渡した要求値で、注入しない場合は省略する。`reasoning` と明示した `cursorFast` も preset に渡した設定値である。ACP option の `currentValue` は adapter の報告値であり、実際に推論に使われた model / variant の記録ではない。特に Cursor の model-only 指定は `--model` への要求を示すだけで、runtime model の attestation ではない。TTY では `model` を「起動設定」、`reasoning` を「推論設定」、`cursorFast` を Cursor の fast mode として表示する。Cursor の明示 reasoning / fast、存在しない model key、モデル注入に未対応の preset は起動前にエラーとなり、終了サマリは生成されない。
+worker は未 attach の lazy worker も含め、セッションに登録された順に出力する。`model` は `modelTag` から解決して ACP 起動時に渡した要求値で、注入しない場合は省略する。Cursor では公式 CLI `--model` option へ渡す値で、この pass-through が ensemble の model-only 契約です。`reasoning` と明示した `cursorFast` も preset に渡した設定値です。ACP option の `currentValue` は adapter の報告値であり、実際に推論に使われた model / variant の記録ではありません。サマリは runtime model の attestation を示さず、その attestation も model-only 契約の条件にしません。TTY では `model` を「起動設定」、`reasoning` を「推論設定」、`cursorFast` を Cursor の fast mode として表示する。Cursor の明示 reasoning / fast、存在しない model key、モデル注入に未対応の preset は起動前にエラーとなり、終了サマリは生成されない。
 
 ---
 
