@@ -386,6 +386,7 @@ describe('Issue startup conductor reasoning backend wiring', () => {
             worktree: 'in_repo',
             noWait: true,
             githubMonitor: false,
+            defaultAcpCommand: process.execPath,
           },
           {
             isOperatorInputInteractive: () => false,
