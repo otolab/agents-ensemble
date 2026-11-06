@@ -14,7 +14,7 @@ export type DispatchHoldChangeStatus = 'enabled' | 'updated' | 'released';
 export interface DispatchHoldChange {
   status: DispatchHoldChangeStatus;
   hold: boolean;
-  /** held buffer に積まれた trigger の全件数（permission.pending / permission.stall を含む）。 */
+  /** held buffer に積まれた trigger の件数（permission.pending は含み、permission.stall は含まない）。 */
   heldEventCount: number;
   flushedEventCount?: number;
 }
@@ -121,6 +121,7 @@ function isHoldableDispatchEvent(event: SessionEvent): boolean {
     event.type === 'harness.connectivity.recovered' ||
     (isTriggerSessionEvent(event) &&
       event.type !== 'operator.message' &&
-      event.type !== 'operator.reconnect')
+      event.type !== 'operator.reconnect' &&
+      event.type !== 'permission.stall')
   );
 }

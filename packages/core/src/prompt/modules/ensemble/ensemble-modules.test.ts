@@ -52,7 +52,11 @@ describe('ensemble prompt modules', () => {
     );
     expect(prompt).toContain('operator.message');
     expect(prompt).toContain('permission.stall');
+    expect(prompt).toContain('hold 中も届く');
+    expect(prompt).toContain('hold を解除して pending を受け取り');
     expect(prompt).toContain('低優先度');
+    expect(prompt).toContain('単独の `harness.connectivity.recovered` は stall より後');
+    expect(prompt).toContain('`github.update` の優先度に従う');
     expect(prompt).toContain('max-turns');
     expect(prompt).toContain('conductor が決められないことはオペレータが最終判断する');
     expect(prompt).not.toContain('permission を要求する');

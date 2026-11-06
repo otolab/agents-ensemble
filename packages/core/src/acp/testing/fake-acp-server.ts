@@ -37,6 +37,8 @@ export interface FakeAcpServerOptions {
   }) => Array<Record<string, unknown>> | void;
   /** Emit session/request_permission before responding to session/prompt. */
   requestPermissionOnPrompt?: boolean;
+  /** Let session/prompt finish while its permission request remains pending. */
+  permissionRequestDoesNotBlockPrompt?: boolean;
   /** Emit these `session/update` payloads immediately before permission. */
   toolCallUpdatesBeforePermission?: Array<Record<string, unknown>>;
   /** Options to advertise in a fake session/request_permission request. */
@@ -207,7 +209,10 @@ export class FakeAcpServer {
           for (const update of this.options.toolCallUpdatesBeforePermission ?? []) {
             this.notify('session/update', { sessionId, update });
           }
-          await this.requestPermissionAndWait(sessionId);
+          const permissionResponse = this.requestPermissionAndWait(sessionId);
+          if (!this.options.permissionRequestDoesNotBlockPrompt) {
+            await permissionResponse;
+          }
         }
 
         const cancelPromise = new Promise<FakeAcpPromptResult>((resolve) => {

@@ -1,4 +1,5 @@
 import type { PermissionPipeline } from './permission-pipeline.js';
+import type { PendingPermission } from './pending-permission.js';
 
 /** pending permission が継続したとみなす閾値（ms）。Issue #416 / harness-events.md §6。 */
 export const DEFAULT_PERMISSION_DEADLOCK_STALL_MS = 300_000;
@@ -6,6 +7,7 @@ export const DEFAULT_PERMISSION_DEADLOCK_STALL_MS = 300_000;
 /** デッドロック検知の poll 間隔（ms）。 */
 export const DEFAULT_PERMISSION_DEADLOCK_POLL_MS = 5_000;
 
+/** @deprecated Worker activity no longer gates pending permission stall detection. */
 export interface PermissionDeadlockActivitySnapshot {
   attachInFlight: number;
   hasProcessingWorker: boolean;
@@ -23,7 +25,11 @@ export interface PermissionDeadlockStall {
 
 export interface PermissionDeadlockMonitorOptions {
   pipeline: PermissionPipeline;
-  getActivitySnapshot: () => PermissionDeadlockActivitySnapshot;
+  /**
+   * @deprecated Pending permission alone determines stall risk. Retained for
+   * source compatibility with existing monitor callers.
+   */
+  getActivitySnapshot?: () => PermissionDeadlockActivitySnapshot;
   onWarning: (message: string) => void;
   /** `harness.warning` と同じ検知時に conductor 通知を受け取る。 */
   onStall?: (stall: PermissionDeadlockStall) => void;
@@ -42,17 +48,17 @@ export function formatPermissionDeadlockWarningMessage(
   stallThresholdMs: number = DEFAULT_PERMISSION_DEADLOCK_STALL_MS,
 ): string {
   const seconds = Math.round(stallThresholdMs / 1000);
-  return `init prompt / prompt 実行中の permission が未解消のまま ${seconds}s 以上継続しています。conductor が resolve_permission していない可能性（ADR 0016 参照）`;
+  return `worker の permission が未解消のまま ${seconds}s 以上継続しています。conductor が resolve_permission していない可能性（ADR 0016 参照）`;
 }
 
 export function isPermissionDeadlockRisk(
-  activity: PermissionDeadlockActivitySnapshot,
+  _activity: PermissionDeadlockActivitySnapshot,
   pendingCount: number,
 ): boolean {
-  if (pendingCount === 0) {
-    return false;
-  }
-  return activity.attachInFlight > 0 || activity.hasProcessingWorker;
+  // A permission can arrive just after its ACP prompt reports idle. It remains
+  // unresolved until the conductor acts, so worker/attach activity is not a
+  // reliable gate for the recovery notification.
+  return pendingCount > 0;
 }
 
 export function createPermissionDeadlockMonitor(
@@ -68,6 +74,7 @@ export function createPermissionDeadlockMonitor(
   let stopped = false;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let warnedForCurrentStall = false;
+  let warnedPendingEntries = new Set<PendingPermission>();
 
   const schedulePoll = () => {
     if (stopped || !started) return;
@@ -85,13 +92,19 @@ export function createPermissionDeadlockMonitor(
     const pending = options.pipeline.pending.list();
     if (pending.length === 0) {
       warnedForCurrentStall = false;
+      warnedPendingEntries.clear();
       return;
     }
 
-    const activity = options.getActivitySnapshot();
-    if (!isPermissionDeadlockRisk(activity, pending.length)) {
+    if (
+      warnedForCurrentStall &&
+      !pending.some((entry) => warnedPendingEntries.has(entry))
+    ) {
+      // A request can be resolved and replaced between polls, so the monitor
+      // may never observe an empty snapshot. Entry identity marks a new episode
+      // even if an ACP peer reuses the same request ID.
       warnedForCurrentStall = false;
-      return;
+      warnedPendingEntries.clear();
     }
 
     const oldestPermissionCreatedAt = Math.min(
@@ -107,6 +120,7 @@ export function createPermissionDeadlockMonitor(
     }
 
     warnedForCurrentStall = true;
+    warnedPendingEntries = new Set(pending);
     const message = formatPermissionDeadlockWarningMessage(stallThresholdMs);
     options.onWarning(message);
     options.onStall?.({
@@ -128,6 +142,7 @@ export function createPermissionDeadlockMonitor(
       clearTimeout(pollTimer);
       pollTimer = undefined;
     }
+    warnedPendingEntries.clear();
   };
 
   const onAbort = () => {

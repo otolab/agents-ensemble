@@ -1469,6 +1469,108 @@ describe('runConductorSessionDriver', () => {
     expect(result.sendCount).toBe(3);
   });
 
+  it('dispatches permission.stall during hold at max turns and releases pending ahead of held work', async () => {
+    const holdState = createDispatchHoldState();
+    const holdChanges: DispatchHoldChange[] = [];
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const permissionPipeline = new PermissionPipeline({});
+    const pendingEvent = createPendingPermissionEvent(
+      permissionPipeline,
+      'permission-stalled',
+    );
+    const workerEvent = {
+      type: 'worker.completed' as const,
+      result: {
+        name: 'implementer',
+        acpSessionId: 'sess-1',
+        status: 'finished' as const,
+        result: 'work finished',
+      },
+    };
+    const holdTool = createSetDispatchHoldTool({
+      state: holdState,
+      onChanged: (change) => holdChanges.push(change),
+      onBeforeRelease: () =>
+        bufferDispatchHoldEvents({
+          state: holdState,
+          eventQueue,
+          onChanged: (change) => holdChanges.push(change),
+        }),
+    });
+    await holdTool.set_dispatch_hold!.execute({ hold: true });
+    eventQueue.enqueue(workerEvent);
+    eventQueue.enqueue(pendingEvent);
+    eventQueue.enqueue({
+      type: 'permission.stall',
+      message: 'permission stalled for a long time',
+      pendingPermissionIds: [pendingEvent.permission.id],
+      pendingPermissionCount: 1,
+      oldestPermissionCreatedAt: pendingEvent.permission.createdAt,
+      stallAgeMs: 300_000,
+      stallThresholdMs: 300_000,
+    });
+
+    const send = vi
+      .fn()
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('permission.stall');
+        expect(message).not.toContain('permission.pending');
+        expect(holdState.dispatchHold).toBe(true);
+        expect(holdState.heldEvents).toEqual([workerEvent, pendingEvent]);
+        await holdTool.set_dispatch_hold!.execute({ hold: false });
+        return { runId: 'run-stall', status: 'running', result: 'released for recovery' };
+      })
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('permission.pending');
+        expect(message).not.toContain('worker.completed');
+        expect(holdState.dispatchHold).toBe(false);
+        expect(holdState.heldEvents).toEqual([workerEvent]);
+        return { runId: 'run-pending', status: 'running', result: 'permission handled' };
+      });
+    const conductor = { agentId: 'agent-1', send, close: vi.fn() } as unknown as ConductorAgent;
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({
+        eventQueue,
+        conductor,
+        permissionPipeline,
+        isPermissionPending: (requestId) =>
+          permissionPipeline.pending.get(requestId) !== undefined,
+        maxTurns: 1,
+        runningCount: 1,
+      }),
+      dispatchHoldState: holdState,
+      onDispatchHoldChanged: (change) => holdChanges.push(change),
+      skipInitialSend: true,
+      resumeStore: {
+        sendCount: 1,
+        autonomousTurns: 1,
+        lastSendResult: { runId: 'run-before-hold', status: 'running' },
+        lastDispatchesThisTurn: 0,
+      },
+      shutdownSignal: shutdown.signal,
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    shutdown.abort();
+    const result = await awaitDriverWithTimeout(driverPromise, shutdown);
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(String(send.mock.calls[0]![0])).toContain('permission.stall');
+    expect(String(send.mock.calls[1]![0])).toContain('permission.pending');
+    expect(result.stopReason).toBe('interrupted');
+    expect(holdChanges).toContainEqual({
+      status: 'released',
+      hold: false,
+      heldEventCount: 2,
+      flushedEventCount: 2,
+    });
+    expect(holdState).toEqual({
+      dispatchHold: false,
+      heldEvents: [workerEvent],
+    });
+  });
+
   it('holds same-poll GitHub recovery with its update and flushes once released', async () => {
     const holdState = createDispatchHoldState();
     const eventQueue = new SessionEventQueue();

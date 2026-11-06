@@ -1,6 +1,6 @@
 # ADR 0027: permission 停滞通知の低優先度 dispatch
 
-- Status: accepted
+- Status: superseded in part by [0056](0056-permission-stall-dispatch-hold.md) (dispatch hold behavior) and [0057](0057-permission-stall-idle-detection.md) (activity gate only)
 - Date: 2026-10-09
 - Related: Issue [#416](https://github.com/otolab/agents-ensemble/issues/416), [ADR 0009](0009-conductor-session-event-queue.md), [ADR 0014](0014-conductor-dispatch-batch-coalescing.md), [ADR 0016](0016-bootstrap-permission-conductor-wait.md)
 
