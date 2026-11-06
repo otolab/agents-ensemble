@@ -1698,12 +1698,6 @@ async function runConductorSessionWithStartupGuard(
   if (!options.disablePermissionDeadlockMonitor) {
     permissionDeadlockMonitor = createPermissionDeadlockMonitor({
       pipeline: permissionPipeline,
-      getActivitySnapshot: () => ({
-        attachInFlight: workerSession.runtime.attachInFlightCount,
-        hasProcessingWorker: workerSession.runtime
-          .listWorkerStatuses()
-          .some((worker) => worker.state === 'processing'),
-      }),
       onWarning: (message) => {
         sessionLogger.emit({ type: 'harness.warning', message });
       },

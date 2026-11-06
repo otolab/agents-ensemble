@@ -17,6 +17,8 @@ export const PING_SYSTEM_PROMPT =
 export interface InProcessAcpBridgeOptions {
   /** Fake ACP が session/prompt 前に session/request_permission を送る */
   requestPermissionOnPrompt?: boolean;
+  /** permission が未解決でも Fake ACP の session/prompt を完了させる */
+  permissionRequestDoesNotBlockPrompt?: boolean;
   /** 実際の ACP permission params と同じ形を通す fixture。 */
   permissionParams?: Record<string, unknown>;
   /** permission request の直前に送る tool-call update fixture。 */
@@ -36,6 +38,8 @@ export async function createInProcessAcpBridge(
     readable: streams.serverReadable,
     writable: streams.serverWritable,
     requestPermissionOnPrompt: options?.requestPermissionOnPrompt,
+    permissionRequestDoesNotBlockPrompt:
+      options?.permissionRequestDoesNotBlockPrompt,
     permissionParams: options?.permissionParams,
     toolCallUpdatesBeforePermission: options?.toolCallUpdatesBeforePermission,
     onPrompt: onPrompt ?? (async ({ notify, sessionId }) => {

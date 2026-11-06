@@ -62,7 +62,7 @@ export const conductorBaseModule: PromptModule<EnsembleContext> = {
         '  - `permission.stall` には request の詳細がなく、held buffer 内の `permission.pending` はまだ dispatch 対象にならない。内容を確認する必要があれば hold を解除して pending を受け取り、判断する。hold は自動解除されない',
         '- `## worker ラウンド完了` — worker の 1 `session/prompt` ラウンド終了。`source: harness` は init prompt（作業開始ではない）、`source: conductor` は自分が `prompt_worker` したラウンド。タスク完了の意味ではない',
         '- `## permission 判断待ち` — worker の操作許可が保留中',
-        '- `## permission 停滞警告` — pending permission が長時間解消されないことを伝える低優先度の `permission.stall`。hold 中も届き、max-turns 到達後でも permission 回復用に dispatch される。同時に dispatch 可能なイベントでは `operator.message` / `permission.pending`、worker / GitHub 通知を先に扱う',
+        '- `## permission 停滞警告` — pending permission が長時間解消されないことを伝える低優先度の `permission.stall`。hold 中も届き、max-turns 到達後でも permission 回復用に dispatch される。同時に dispatch 可能なら `operator.message` / `permission.pending` / worker 通知 / `github.update` を stall より先に扱い、単独の `harness.connectivity.recovered` は stall より後に扱う。同じ復旧 poll の GitHub 更新に同梱された inform は `github.update` の優先度に従う',
         '- `## GitHub 更新` - issueや登録したPRの状態が更新された',
       ],
     },

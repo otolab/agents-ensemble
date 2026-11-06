@@ -37,6 +37,10 @@ const PERMISSION_PROFILE: Profile = {
   ],
 };
 
+const IDLE_PERMISSION_PROFILE: Profile = {
+  workers: [{ name: 'permission-worker', kind: 'implementer' }],
+};
+
 function createDeferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T | PromiseLike<T>) => void;
@@ -319,6 +323,210 @@ describe('permission stall session integration', () => {
     );
     expect(
       emitted.filter((event) => event.type === 'harness.warning'),
+    ).toHaveLength(1);
+  }, 20_000);
+
+  it('recovers a held permission after its worker and attach are idle', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-idle-permission-stall-'));
+    vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
+      issue: TEST_ISSUE,
+      title: 'Idle permission stall integration',
+      body: 'body',
+      state: 'OPEN',
+      labels: [],
+      comments: [],
+    });
+    vi.spyOn(
+      resolveGitHubAuthTokenModule,
+      'resolveGitHubAuthToken',
+    ).mockResolvedValue({
+      token: 'test-github-token',
+      source: 'GITHUB_TOKEN',
+    });
+
+    const permissionBridge = await createInProcessAcpBridge(
+      async ({ notify, sessionId }) => {
+        notify('session/update', {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'fake worker completed' },
+          },
+        });
+        return { stopReason: 'end_turn' };
+      },
+      {
+        requestPermissionOnPrompt: true,
+        permissionRequestDoesNotBlockPrompt: true,
+      },
+    );
+
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    const emitted: SessionLogEvent[] = [];
+    const permissionWarnings: SessionLogEvent[] = [];
+    const pendingEvents: Array<
+      Extract<SessionLogEvent, { type: 'permission.pending' }>
+    > = [];
+    const inboundSources: string[][] = [];
+    const holdEvents: Array<
+      Extract<SessionLogEvent, { type: 'conductor.dispatch_hold' }>
+    > = [];
+    const workerStates = new Map<string, string>();
+    let workerStatesAtWarning: Map<string, string> | undefined;
+    const sentMessages: string[] = [];
+    let conductorTools: ConductorAgentCreateOptions['customTools'];
+    let operatorApi: OperatorInputBindingApi | undefined;
+    let pendingResolved = false;
+    let holdReleasedByConductor = false;
+    const permissionPipeline = new PermissionPipeline({});
+
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+      if (event.type === 'harness.worker.state') {
+        workerStates.set(event.name, event.state);
+      }
+      if (event.type === 'permission.pending') {
+        pendingEvents.push(event);
+      }
+      if (
+        event.type === 'harness.warning' &&
+        event.message.includes('permission が未解消')
+      ) {
+        permissionWarnings.push(event);
+        workerStatesAtWarning = new Map(workerStates);
+      }
+      if (event.type === 'conductor.inbound') {
+        inboundSources.push(event.sources);
+      }
+      if (event.type === 'conductor.dispatch_hold') {
+        holdEvents.push(event);
+      }
+    });
+
+    const conductorAgentFactory = createFakeConductorFactory({
+      onTools: (options) => {
+        conductorTools = options.customTools;
+      },
+      onSend: async (message) => {
+        sentMessages.push(message);
+
+        if (sentMessages.length === 1) {
+          await conductorTools!.set_dispatch_hold!.execute({ hold: true });
+          return;
+        }
+
+        if (message.includes('## permission 停滞警告')) {
+          expect(workerStatesAtWarning?.get('permission-worker')).toBe('idle');
+          expect(permissionPipeline.pending.size).toBe(1);
+          await conductorTools!.set_dispatch_hold!.execute({ hold: false });
+          holdReleasedByConductor = true;
+          return;
+        }
+
+        if (message.includes('## permission 判断待ち')) {
+          const pending = pendingEvents[0];
+          expect(pending).toBeDefined();
+          await conductorTools!.resolve_permission!.execute({
+            requestId: pending!.permission.id,
+            decision: 'allow',
+          });
+          pendingResolved = true;
+          setTimeout(() => operatorApi?.submit('/exit'), 0);
+        }
+      },
+    });
+
+    const safetyExit = setTimeout(() => operatorApi?.submit('/exit'), 4_000);
+    let result: Awaited<ReturnType<typeof runConductorSession>>;
+    try {
+      result = await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
+        profile: IDLE_PERMISSION_PROFILE,
+        defaultAcp: IN_PROCESS_DEFAULT_ACP,
+        workerWorktree: {
+          path: repoRoot,
+          branch: 'main',
+          issue: TEST_ISSUE,
+          inRepo: true,
+        },
+        conductorAgentFactory,
+        connectAcp: async () => permissionBridge,
+        permissionPipeline,
+        ownsWorkerAcpConnections: true,
+        disableGitHubMonitor: true,
+        permissionDeadlockStallMs: 1_000,
+        permissionDeadlockPollMs: 10,
+        maxTurns: 1,
+        waitForOperatorExit: true,
+        registerProcessSignalHandlers: false,
+        sessionLogger,
+        bindOperatorInput: (api) => {
+          operatorApi = api;
+        },
+      });
+    } finally {
+      clearTimeout(safetyExit);
+    }
+
+    expect(result.stopReason).toBe('completed');
+    expect(pendingEvents).toHaveLength(1);
+    expect(permissionWarnings).toHaveLength(1);
+    expect(workerStatesAtWarning).toEqual(
+      new Map([['permission-worker', 'idle']]),
+    );
+    expect(holdReleasedByConductor).toBe(true);
+    expect(pendingResolved).toBe(true);
+    const eventMessages = sentMessages.slice(1);
+    expect(
+      eventMessages.filter((message) =>
+        message.includes('## permission 停滞警告'),
+      ),
+    ).toHaveLength(1);
+    expect(
+      eventMessages.filter((message) =>
+        message.includes('## permission 判断待ち'),
+      ),
+    ).toHaveLength(1);
+
+    const dispatchedSources = inboundSources.filter(
+      (sources) => !sources.includes('initial'),
+    );
+    expect(dispatchedSources).toEqual([
+      ['permission.stall'],
+      ['permission'],
+    ]);
+    expect(
+      inboundSources.some((sources) =>
+        sources.some((source) => source.startsWith('worker:')),
+      ),
+    ).toBe(false);
+    expect(holdEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'enabled', hold: true }),
+        expect.objectContaining({
+          status: 'released',
+          hold: false,
+          heldEventCount: 2,
+          flushedEventCount: 2,
+        }),
+        expect.objectContaining({
+          status: 'updated',
+          hold: false,
+          heldEventCount: 1,
+        }),
+      ]),
+    );
+    expect(
+      emitted.filter(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes('permission が未解消'),
+      ),
     ).toHaveLength(1);
   }, 20_000);
 });

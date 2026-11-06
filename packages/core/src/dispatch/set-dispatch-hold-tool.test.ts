@@ -23,6 +23,12 @@ describe('createSetDispatchHoldTool', () => {
     expect(tool.description).toContain('bypasses the hold');
     expect(tool.description).toContain('does not release the hold');
     expect(tool.description).toContain('worker outcomes and `github.update`');
+    expect(tool.description).toContain(
+      'standalone `harness.connectivity.recovered` trigger follows the stall',
+    );
+    expect(tool.description).toContain(
+      'recovery inform is bundled with `github.update`',
+    );
     expect(tool.description).toContain('max-turns');
     expect(holdDescription).toContain('permission.stall');
     expect(holdDescription).toContain('permission.pending');

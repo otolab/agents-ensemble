@@ -23,7 +23,7 @@ export function createSetDispatchHoldTool(
         'Temporarily hold trigger SessionEvents before dispatching them to the conductor.',
         '`hold: true` is useful while reading an Issue/PR or coordinating several workers; held events are kept in arrival order.',
         '`operator.message` bypasses the hold, and `operator.reconnect` is handled by the driver. `permission.pending` and other work triggers are held; the low-priority `permission.stall` recovery signal bypasses the hold after its configured threshold.',
-        'Among eligible events, operator input and `permission.pending` take precedence; worker outcomes and `github.update` also come before the low-priority `permission.stall`. A held `permission.pending` is not eligible until release.',
+        'Among eligible events, operator input and `permission.pending` take precedence; worker outcomes and `github.update` also come before the low-priority `permission.stall`. A standalone `harness.connectivity.recovered` trigger follows the stall. If a recovery poll includes GitHub updates, its recovery inform is bundled with `github.update` and follows the update batch priority. A held `permission.pending` is not eligible until release.',
         'The stall signal has no raw request details and does not release the hold; release explicitly if you need to inspect a held permission.',
         'Events already queued before release are collected before the flush count is returned.',
         '`hold: false` releases the held trigger events, including `permission.pending`, for dispatch. Normally they arrive as one combined conductor send; after max-turns, permission events can still dispatch for recovery while worker/GitHub events remain blocked.',

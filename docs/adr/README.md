@@ -98,7 +98,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0024](0024-tui-shrink-coalesce.md) | TUI columns 縮小時の live frame coalesce | accepted |
 | [0025](0025-conductor-agent-backend-sdk-and-pi.md) | conductor LLM backend（Cursor SDK と Pi）の併存 | proposed |
 | [0026](0026-tui-stream-shrink-recovery.md) | stream 縮小時 scrollback 再同期 | accepted |
-| [0027](0027-permission-stall-notification.md) | permission 停滞通知の低優先度 dispatch | superseded → [0056](0056-permission-stall-dispatch-hold.md)（dispatch hold の扱いのみ） |
+| [0027](0027-permission-stall-notification.md) | permission 停滞通知の低優先度 dispatch | superseded in part → [0056](0056-permission-stall-dispatch-hold.md)（dispatch hold） / [0057](0057-permission-stall-idle-detection.md)（activity gate） |
 | [0028](0028-authentication-delegation-and-ensemble-auth.md) | 認証の管理方針（worker 移譲・conductor と ensemble auth） | accepted |
 | [0029](0029-lazy-worker-attach.md) | worker ACP lazy attach | accepted |
 | [0030](0030-tty-close-lifecycle.md) | TTY `/close` の再開可能な終了契約 | accepted |
@@ -128,6 +128,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0054](0054-cursor-acp-runtime-verification.md) | Cursor ACP の未検証 runtime と resume metadata の扱い | superseded → [0055](0055-cursor-model-only-cli-contract.md)（Cursor model-only の受け入れ境界のみ） |
 | [0055](0055-cursor-model-only-cli-contract.md) | Cursor worker の model-only 指定を公式 CLI 契約で受け入れる | accepted |
 | [0056](0056-permission-stall-dispatch-hold.md) | dispatch hold 中の permission stall 回復通知 | accepted |
+| [0057](0057-permission-stall-idle-detection.md) | idle worker 中も pending permission の停滞を検知 | accepted |
 
 ## 追加するとき
 
