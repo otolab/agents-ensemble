@@ -121,7 +121,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0049](0049-acp-model-injection-by-preset.md)（model / reasoning routing） |
 | [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | accepted |
 | [0049](0049-acp-model-injection-by-preset.md) | worker ACP model / reasoning の preset 別注入 | superseded → [0051](0051-cursor-acp-runtime-verification.md)（Cursor の runtime 制約のみ。その他 preset は継続） |
-| [0050](0050-worker-acp-cursor-fast-option.md) | worker ACP の Cursor fast mode 明示設定 | superseded → [0051](0051-cursor-acp-runtime-verification.md)（Cursor の runtime 未検証時の扱いのみ） |
+| [0050](0050-worker-acp-cursor-fast-option.md) | worker ACP の Cursor fast mode 明示設定 | superseded → [0051](0051-cursor-acp-runtime-verification.md)（Cursor の明示 option は fail fast、model-only は CLI への要求） |
 | [0051](0051-cursor-acp-runtime-verification.md) | Cursor ACP の未検証 runtime と resume metadata の扱い | accepted |
 
 ## 追加するとき

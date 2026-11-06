@@ -111,7 +111,7 @@
 
 直接 API でも `modelId` > `CONDUCTOR_MODEL_ID` > `ensembleConfig.conductor.model` > backend default の順に解決します。`default` / `auto` は backend の既定選択を表し、Cursor は Auto、Pi は Pi resource の `settings.json` にある既定モデルを使います。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を選べるようにします。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、上位の選択を保ちます。いずれの場合も `configuredModelId: "default"` だけでは custom factory が選んだ具体的な model ID までは分かりません。
 
-resume では ensemble config の digest が変わると conductor factory を呼ぶ前に拒否します。`modelId` と `CONDUCTOR_MODEL_ID` は invocation 単位の上書きとして各 run で再解決されます。
+新しい sidecar は `resume-feasibility` digest で `session.worktree` / `acp.defaultPreset` を照合し、不一致なら conductor factory の resume 前に拒否します。scheme のない旧 sidecar / `full` sidecar は全 config digest を維持するため、model / reasoning / env を含む config 変更で拒否されることがあります。`modelId` と `CONDUCTOR_MODEL_ID` は invocation 単位の上書きとして各 run で再解決されます。
 
 `lastUsedModelId` は、今回の `runConductorSession` 呼び出し内で最後の conductor send が model ID を報告した場合だけ含む。最後の send が報告しなければ、それ以前の値は使わず省略し、TTY には「報告なし」と表示する。resume 前の run の報告は引き継がないため、再開後に send せず終了した場合も省略する。Pi は失敗時にも選択済みの model ID を報告することがあるため、報告値だけではモデルが実際に使用されたとは判断できない。
 

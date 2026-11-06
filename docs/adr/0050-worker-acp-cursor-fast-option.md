@@ -1,6 +1,6 @@
 # ADR 0050: worker ACP の Cursor fast mode を明示設定する
 
-- Status: superseded by [0051](0051-cursor-acp-runtime-verification.md)（Cursor の runtime 未検証時の扱いのみ）
+- Status: superseded by [0051](0051-cursor-acp-runtime-verification.md)（Cursor の option 適用方針を更新。明示した `reasoning` / `cursorFast` は fail fast、model-only は CLI への要求として扱う）
 - Date: 2026-11-05
 - Related: [ADR 0049](0049-acp-model-injection-by-preset.md), [Issue #630](https://github.com/otolab/agents-ensemble/issues/630)
 
