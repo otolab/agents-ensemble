@@ -1,5 +1,21 @@
 # @agents-ensemble/core
 
+## 0.19.0
+
+### Minor Changes
+
+- 76ca1ec: Codex・Claude・Pi の worker ACP preset では、model catalog の model / reasoning を各 adapter の経路に渡します。Cursor の model-only 指定は、公式 CLI option `--model <model>` に catalog の値をそのまま渡すところまでを ensemble の契約とします。これは Cursor 内部で実際に選ばれた推論先を attestation するものではなく、その確認を毎回の受け入れ条件にはしません。model ID に reasoning suffix が含まれる場合の具体的な挙動は未検証で、forum #159748 の確認を [Issue #638](https://github.com/otolab/agents-ensemble/issues/638) に残しています。Cursor で別の `reasoning` または `cursorFast` を明示すると、独立した設定経路がないため worker の起動前に失敗します。`cursorFast` を省略した場合は picker capability と `fast` setter を送らず、Cursor CLI の既定選択に任せます。実際に選ばれる variant は未確認です。
+- 02744e3: conductor.reasoning を設定・実行時に解決し、Pi / Cursor backend の対応状況に応じて適用または fail fast する機能を追加します。operator-agent にも共通の config / 環境変数を適用します。
+- a8e1c32: セッション終了サマリに `sessionModels` を追加し、conductor / 各 worker の model 構成を TTY テキストと終了 JSON に出力します。
+
+### Patch Changes
+
+- 44aec4a: `runConductorSession` が CLI と同じ優先順で conductor model を解決し、factory の create / resume に適用します。
+- 031392d: 同梱 profile implementer-and-reviewer-v2 の implementer worker を default model tier に揃える。
+- 11244d9: dispatch hold 中や worker が idle になった後も、長時間停滞した permission の回復通知を conductor へ届けます。
+- 8043c1b: conductor / worker の base プロンプトと team-conductor materials を調整する。
+- f1966ef: Session resume は worktree mode と ACP preset の変更を検出し、model や env の変更は resume 拒否理由にしないようにします。旧 sidecar は従来の digest scheme を保ちます。
+
 ## 0.18.0
 
 ### Minor Changes

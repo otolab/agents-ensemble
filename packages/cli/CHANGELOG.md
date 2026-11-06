@@ -1,5 +1,24 @@
 # @agents-ensemble/cli
 
+## 0.19.0
+
+### Minor Changes
+
+- 02744e3: conductor.reasoning を設定・実行時に解決し、Pi / Cursor backend の対応状況に応じて適用または fail fast する機能を追加します。operator-agent にも共通の config / 環境変数を適用します。
+
+### Patch Changes
+
+- Updated dependencies [76ca1ec]
+- Updated dependencies [02744e3]
+- Updated dependencies [44aec4a]
+- Updated dependencies [031392d]
+- Updated dependencies [11244d9]
+- Updated dependencies [8043c1b]
+- Updated dependencies [a8e1c32]
+- Updated dependencies [f1966ef]
+  - @agents-ensemble/core@0.19.0
+  - @agents-ensemble/operator-agent@0.4.5
+
 ## 0.18.0
 
 ### Minor Changes
