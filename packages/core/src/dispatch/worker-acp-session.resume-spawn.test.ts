@@ -65,9 +65,10 @@ describe('openWorkerAcpSession resume spawn validation', () => {
     ).rejects.toThrow(/resume ACP spawn mismatch/);
   });
 
-  it('fails attach when the saved reasoning effort differs from the current profile', async () => {
-    await expect(
-      openWorkerAcpSession({
+  it('loads the saved session when its model reasoning metadata differs', async () => {
+    const loadSession = vi.fn().mockResolvedValue(undefined);
+    const newSession = vi.fn().mockResolvedValue('unexpected-new-session');
+    const opened = await openWorkerAcpSession({
         issueUrl: 'https://github.com/org/repo/issues/1',
         worktree: {
           path: '/tmp/worktree',
@@ -98,8 +99,21 @@ describe('openWorkerAcpSession resume spawn validation', () => {
           model: 'provider/opus',
           reasoning: 'high',
         },
-      }),
-    ).rejects.toThrow(/resume ACP spawn mismatch.*reasoning effort differs/);
+        bridge: {
+          loadSession,
+          newSession,
+          close: vi.fn(),
+        } as never,
+      });
+
+    expect(opened.sessionId).toBe('session-1');
+    expect(loadSession).toHaveBeenCalledOnce();
+    expect(loadSession).toHaveBeenCalledWith(
+      'session-1',
+      '/tmp/worktree',
+      undefined,
+    );
+    expect(newSession).not.toHaveBeenCalled();
   });
 
   it('accepts an older saved fingerprint without a reasoning field', async () => {

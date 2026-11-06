@@ -120,7 +120,7 @@ TTY + Ink 時は harness / observation イベントを **stderr に書かず**�
 | worker 応答要約 | `workerResponses[].responsePreview`（全文は `--include-full-response-text`） |
 
 フィールドごとの型・ソース・ツールとの対応・未取得時の扱いは [session-metrics.md](session-metrics.md) を正本とする。
-`sessionModels` は usage が取得できない場合も出力する。TTY の終了テキストは stderr に conductor の設定値・最終 send の報告値と、各 worker のモデル・推論・Cursor fast 設定を表示する。send の報告値は失敗時にも含まれることがあり、worker の `model` / `reasoning` / `cursorFast` は preset の設定経路に渡した値である。ACP option を使う preset は attach 時に候補と設定後の値を照合するが、セッション中の変更や実際のモデル動作を保証する記録ではない。
+`sessionModels` は usage が取得できない場合も出力する。TTY の終了テキストは stderr に conductor の設定値・最終 send の報告値と、各 worker のモデル・推論・Cursor fast 設定を表示する。send の報告値は失敗時にも含まれることがあり、worker の `model` / `reasoning` / `cursorFast` は preset の設定経路に渡した値である。ACP option の `currentValue` は adapter の報告値で、attach 時に候補と設定後の値を照合しても、runtime model や実際の推論動作を証明するものではない。
 `durationMs` は終了 snapshot を作る時点で算出するため、その後に実行する resource teardown や worktree cleanup の時間は含みません。teardown の所要時間は `harness.teardown.durationMs` として別に記録します。
 
 resume 用の harness 状態は SessionResumeStore と open question YAML に保存します。open question の正本は YAML で、SessionResumeStore JSON の `openQuestions` / `sequence` は移行期間中の互換コピーです。operator 向け statusLine は別の session-state YAML に保存します。終了 JSON の `agentId` は参照用コピーです。

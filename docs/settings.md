@@ -33,6 +33,8 @@ CLI > 環境変数 > project config（読み込み有効時） > 選択された
 
 `profile.default` / `conductor.model` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
+conductor model は `ensemble issue --model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default の順で解決します。`runConductorSession` の直接呼び出しでも同じ選択値を conductor factory の create / resume に渡します。既定値は Cursor では Auto、Pi では Pi resource の `settings.json` にある既定モデルです。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を使います。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、その優先順位を保てるようにします。
+
 `ensemble issue` と `ensemble operator-agent` は `--config <path>` を受け付けます。指定したファイルが user config 層を置き換え、標準 user config は読み込みません。project config の読み込みは独立して `config.loadProjectConfig` で制御し、同一キーでは project config が優先されます。明示ファイルに toggle がなければ default の `true` が使われます。team profile の `--profile` とは別系統です。
 
 ```sh
@@ -50,7 +52,9 @@ Session resume state conductorBackend mismatch: pi !== cursor
 
 旧 SessionResumeStore にこのフィールドがない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `~/.ensemble/sessions/<repoKey>/pi/` の JSONL に保存されます。旧 `<conductorCwd>/.ensemble/pi/sessions/` は再開時に読み取り、user 側へ移行します。`--continue` / `--resume` ではその transcript を復元し、Issue context から compiled `systemPrompt` を毎回再コンパイルして native system prompt に再注入します。
 
-SessionResumeStore には起動時の実効 ensemble config の canonical SHA-256 digest も保存します。resume 時に digest が異なる場合は conductor の再開前に拒否し、digest を持たない旧 store は警告後に従来どおり再開します。config 値やファイルパスは保存しません。ACP spawn env も canonical digest のみを保存し、値は記録しません。
+SessionResumeStore には `ensembleConfigDigestScheme` と config digest を保存します。新しい session の `resume-feasibility` digest が含むのは merge 後の `session.worktree` と `acp.defaultPreset` です。`acpModelConfigDigest` と worker spawn fingerprint は model / reasoning / env の診断情報を保持しますが、resume 判定では比較しません。fingerprint では preset を照合し、`custom` の場合だけ command / args も照合します。旧 sidecar は scheme 省略 / `full` として全 `EnsembleConfig` を比較するため、従来どおり config 変更が resume を拒否する場合があります。resume・再保存後も旧 scheme と digest の意味を保ちます。旧 `resume-feasibility` store で ACP model digest が欠ける場合は warning を出しますが、resume は止めず、digest もバックフィルしません。scheme 省略 / `full` で config digest が欠けていれば従来どおり warning 後に全体照合を省きます。未知の scheme と `resume-feasibility` scheme の digest 欠落は拒否します。config 値や file path は保存しません。詳細は [config.md § resume と config 変更](config.md#resume-と-config-変更)、[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[ADR 0051](adr/0051-cursor-acp-runtime-verification.md) を参照してください。
+
+resume 時は sidecar に保存した scheme に対応する config digest を照合します。`modelId` と環境変数は invocation 単位の上書きとして各 run で再解決します。
 
 ### パターン B — Phase 1 横断（env なし）
 
@@ -68,7 +72,7 @@ worker spawn 時の ACP preset 解決（[ADR 0019](adr/0019-worker-acp-cli-prese
 CLI --default-acp-* > ENSEMBLE_DEFAULT_ACP_CLI > config acp.defaultPreset > cursor
 ```
 
-`acp.env` の正本は config（選択された user config → project の順に deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。SessionResumeStore には ACP env map の canonical digest のみを保存し、環境変数の値は記録しません。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
+`acp.env` の正本は config（選択された user config → project の順に deep merge）。spawn env のマージ順: builtin preset 既定 → config `acp.env`。SessionResumeStore には env map の digest のみを保存します。新しい `resume-feasibility` sidecar ではこの digest を診断情報として保持しますが、resume の拒否判定には使いません。scheme 省略 / `full` の旧 sidecar は従来の全体 config digest を比較するため、config に含まれる env 変更で拒否されることがあります。環境変数の値は記録しません。詳細は [config.md § ACP spawn env](config.md#acp-spawn-envacpenv)。
 
 worker の `modelTag` は `acp.tags` と `acp.models` を経由して解決します。catalog は文字列 shorthand と、`reasoning` や Cursor 専用の `cursorFast` を指定できる構造化形式を併用できます。
 
@@ -83,7 +87,7 @@ acp:
     default: standard
 ```
 
-`model` / `reasoning` の渡し方は preset ごとに異なります。`cursor` は CLI model ID と ACP の `effort`、`claude` は Claude settings metadata と ACP の `model` / `effort`、`codex` は `CODEX_CONFIG`、`pi` は ACP の `model` / `thought_level` option を使います。Cursor の Fast / non-Fast は `cursorFast` で明示し、`reasoning` とは別に ACP の `fast` option へ渡します。省略時は Cursor の選択に委ねます。`custom` には汎用の model 注入経路がないため、tag が catalog に解決された場合は spawn 前にエラーになります。harness は ACP が広告する候補と設定後の現在値を確認し、指定値が適用されたことを確かめてから prompt を送ります。マージ・resume の詳細と省略時の扱いは [config.md § ACP model tag と model catalog](config.md#acp-model-tag-と-model-catalog) を参照してください。
+`model` / `reasoning` の渡し方は preset ごとに異なります。`cursor` は CLI の `--model` に要求値を渡しますが、ACP response は実際の推論先を保証しません。Cursor で reasoning または `cursorFast` を明示すると spawn 前に fail fast します。省略時は initialize capability や setter を送らず、Cursor CLI の model variant 既定に委ねます。`claude` は Claude settings metadata と ACP の `model` / `effort`、`codex` は `CODEX_CONFIG`、`pi` は ACP の `model` / `thought_level` option を使います。ACP option の `currentValue` は Agent の報告値であり runtime model の attestation ではありません。`custom` には汎用の model 注入経路がないため、tag が catalog に解決された場合は spawn 前にエラーになります。詳細は [config.md § ACP model tag と model catalog](config.md#acp-model-tag-と-model-catalog) を参照してください。
 
 ### パターン D — 実行時入力（env / CLI）
 
@@ -118,7 +122,7 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 | Pi project resource root | `conductor.pi.projectDir` | — | — | `<repoRoot>/.ensemble/pi` | config |
 | worker ACP preset（全 worker 共通） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
 | worker ACP spawn env | `acp.env` | — | — | — | 選択された user config → project deep merge |
-| worker model tier / model・reasoning・Cursor fast | `workers[].modelTag` / `acp.tags`・`acp.models` | — | — | `default` tag | profile の tag を config の catalog で解決。reasoning と Cursor fast は preset に依存 |
+| worker model tier / model・reasoning・Cursor fast | `workers[].modelTag` / `acp.tags`・`acp.models` | — | — | `default` tag | profile の tag を config の catalog で解決。reasoning は preset ごとに異なり、Cursor の明示 reasoning / fast は fail fast |
 | Issue worktree | `session.worktree` | — | `--worktree` | `isolated` | B |
 | worker ACP lazy attach | `session.lazyWorkers` | — | — | `false` | B |
 | 自律ターン上限（TTY） | `session.maxTurns.tty` | — | `--max-turns` / `--no-max-turns` | `0`（無制限） | B |

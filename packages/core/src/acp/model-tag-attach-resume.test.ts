@@ -72,7 +72,7 @@ describe('ACP model tag attach and resume', () => {
     }
   });
 
-  it('passes each resolved model to session/new and session/load, and rejects a changed model before load', async () => {
+  it('passes each resolved model to session/new and session/load without rejecting model changes', async () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'ensemble-model-tag-attach-'));
     const repoRoot = join(tempRoot, 'repo');
     const userRoot = join(tempRoot, 'user');
@@ -301,26 +301,44 @@ describe('ACP model tag attach and resume', () => {
       const changedImplementer = changedSpecs.find(
         (spec) => spec.name === 'implementer',
       )!;
-      const mismatchConnector = createFakeConnector([
+      const changedModelConnector = createFakeConnector([
         savedSessions.get('implementer')!,
       ]);
-      await expect(
-        attachWorker({
-          name: changedImplementer.name,
-          issueUrl: ISSUE_URL,
-          kind: changedImplementer.kind,
-          worktree,
-          sessionState,
-          spawn: changedImplementer.spawn,
-          expectedResumeAcpSpawn:
-            specsByName.get('implementer')?.acpFingerprint,
-          currentAcpSpawn: changedImplementer.acpFingerprint,
-          resumeAcpSessionId: savedSessions.get('implementer'),
-          connectAcp: mismatchConnector,
-        }),
-      ).rejects.toThrow(/resume ACP spawn mismatch/);
-      expect(mismatchConnector).not.toHaveBeenCalled();
-      expect(wireEvents.some((event) => event.method === 'session/load')).toBe(false);
+      const changedResume = await attachWorker({
+        name: changedImplementer.name,
+        issueUrl: ISSUE_URL,
+        kind: changedImplementer.kind,
+        worktree,
+        sessionState,
+        spawn: changedImplementer.spawn,
+        expectedResumeAcpSpawn:
+          specsByName.get('implementer')?.acpFingerprint,
+        currentAcpSpawn: changedImplementer.acpFingerprint,
+        resumeAcpSessionId: savedSessions.get('implementer'),
+        connectAcp: changedModelConnector,
+      });
+      expect(changedModelConnector).toHaveBeenCalledOnce();
+      expect(changedResume.session.sessionId).toBe(
+        savedSessions.get('implementer'),
+      );
+      const changedLoadCall = wireEvents.find(
+        (event) => event.method === 'session/load',
+      );
+      expect(getClaudeModel(changedLoadCall?.params)).toBe(
+        'gateway/changed-opus',
+      );
+      expect(wireConfigEvents.slice(-2)).toEqual([
+        {
+          sessionId: savedSessions.get('implementer'),
+          configId: 'model',
+          value: 'gateway/changed-opus',
+        },
+        {
+          sessionId: savedSessions.get('implementer'),
+          configId: 'effort',
+          value: 'low',
+        },
+      ]);
 
       await writeFile(
         projectConfigPath,
@@ -377,13 +395,9 @@ describe('ACP model tag attach and resume', () => {
     }
   });
 
-  it.each([
-    { preset: 'cursor' as const, model: 'cursor-gpt-5.5-extra-high' },
-    { preset: 'pi' as const, model: 'openai/gpt-5.5' },
-  ])('applies $preset model and reasoning on attach and resume', async ({
-    preset,
-    model,
-  }) => {
+  it('applies Pi model and reasoning on attach and resume', async () => {
+    const preset = 'pi' as const;
+    const model = 'openai/gpt-5.5';
     const resolved = resolveWorkerAcpSpawn({
       modelTag: 'high',
       defaultOptions: {
@@ -392,11 +406,7 @@ describe('ACP model tag attach and resume', () => {
         config: {
           acp: {
             models: {
-              selected: {
-                model,
-                reasoning: 'high',
-                ...(preset === 'cursor' ? { cursorFast: false } : {}),
-              },
+              selected: { model, reasoning: 'high' },
             },
             tags: { high: 'selected' },
           },
@@ -405,31 +415,15 @@ describe('ACP model tag attach and resume', () => {
     });
     const spawn = resolvedAcpSpawnToOptions(resolved);
     const fingerprint = acpSpawnFingerprint(resolved);
-    const overrides =
-      preset === 'cursor'
-        ? [
-            { id: 'fast', value: 'false' },
-            { id: 'effort', value: 'high' },
-          ]
-        : [
-            { id: 'model', value: model },
-            { id: 'thought_level', value: 'high' },
-          ];
+    const overrides = [
+      { id: 'model', value: model },
+      { id: 'thought_level', value: 'high' },
+    ];
     const expectedOverrides = overrides.map(
       ({ id, value }) => `session/set_config_option:${id}=${value}`,
     );
     expect(spawn.sessionConfigOptionOverrides).toEqual(overrides);
-    expect(fingerprint).toMatchObject({
-      model,
-      reasoning: 'high',
-      ...(preset === 'cursor' ? { cursorFast: false } : {}),
-    });
-    if (preset === 'cursor') {
-      expect(spawn.args).toEqual(['--model', model, 'acp']);
-      expect(spawn.clientCapabilitiesMeta).toEqual({
-        parameterizedModelPicker: true,
-      });
-    }
+    expect(fingerprint).toMatchObject({ model, reasoning: 'high' });
 
     const worktree: WorktreeRef = {
       path: process.cwd(),
@@ -446,10 +440,7 @@ describe('ACP model tag attach and resume', () => {
       workers: [{ name: 'implementer', kind: 'implementer' }],
       kinds: ['implementer'],
     };
-    const connections: Array<{
-      events: string[];
-      initializeParams: unknown[];
-    }> = [];
+    const connections: Array<{ events: string[] }> = [];
     const bridges: AcpBridge[] = [];
     const servers: FakeAcpServer[] = [];
     const createFakeConnector = (initialSessions: string[] = []) =>
@@ -457,60 +448,35 @@ describe('ACP model tag attach and resume', () => {
         spawn?: SessionWorkerSpec['spawn'];
       }) => {
         const streams = createInProcessStreamPair();
-        const connection = { events: [] as string[], initializeParams: [] as unknown[] };
+        const connection = { events: [] as string[] };
         connections.push(connection);
-        const sessionConfigOptions =
-          preset === 'cursor'
-            ? [
-                {
-                  id: 'fast',
-                  type: 'select',
-                  currentValue: 'true',
-                  options: [
-                    { value: 'true', name: 'Fast' },
-                    { value: 'false', name: 'Standard' },
-                  ],
-                },
-                {
-                  id: 'effort',
-                  type: 'select',
-                  currentValue: 'medium',
-                  options: [
-                    { value: 'medium', name: 'Medium' },
-                    { value: 'high', name: 'High' },
-                  ],
-                },
-              ]
-            : [
-                {
-                  id: 'model',
-                  type: 'select',
-                  currentValue: 'openai/default',
-                  options: [
-                    { value: 'openai/default', name: 'Default' },
-                    { value: model, name: model },
-                  ],
-                },
-                {
-                  id: 'thought_level',
-                  type: 'select',
-                  currentValue: 'medium',
-                  options: [
-                    { value: 'medium', name: 'Medium' },
-                    { value: 'high', name: 'High' },
-                  ],
-                },
-              ];
+        const sessionConfigOptions = [
+          {
+            id: 'model',
+            type: 'select',
+            currentValue: 'openai/default',
+            options: [
+              { value: 'openai/default', name: 'Default' },
+              { value: model, name: model },
+            ],
+          },
+          {
+            id: 'thought_level',
+            type: 'select',
+            currentValue: 'medium',
+            options: [
+              { value: 'medium', name: 'Medium' },
+              { value: 'high', name: 'High' },
+            ],
+          },
+        ];
         servers.push(
           startFakeAcpServer({
             readable: streams.serverReadable,
             writable: streams.serverWritable,
             initialSessions,
             sessionConfigOptions,
-            onInitialize: (params) => {
-              connection.events.push('initialize');
-              connection.initializeParams.push(params);
-            },
+            onInitialize: () => connection.events.push('initialize'),
             onNewSession: () => connection.events.push('session/new'),
             onLoadSession: () => connection.events.push('session/load'),
             onSetConfigOption: ({ configId, value }) => {
@@ -560,13 +526,6 @@ describe('ACP model tag attach and resume', () => {
         'session/new',
         ...expectedOverrides,
       ]);
-      if (preset === 'cursor') {
-        expect(connections[0]?.initializeParams[0]).toMatchObject({
-          clientCapabilities: {
-            _meta: { parameterizedModelPicker: true },
-          },
-        });
-      }
       expect(
         (await runAttachedWorkerPrompt(attached, 'new session')).promptResult
           .stopReason,
@@ -713,12 +672,19 @@ describe('ACP model tag attach and resume', () => {
     const original = specs[0]!;
     await writeFile(projectPath, 'acp:\n  models:\n    high-model:\n      reasoning: xhigh\n');
     const changed = (await loadSpecs())[0]!;
-    await expect(attach(changed, original)).rejects.toThrow(/resume ACP spawn mismatch/);
-    expect(await captured()).toHaveLength(2);
+    const changedResume = await attach(changed, original);
+    await closeWorkerAcpSession(changedResume.session);
+    expect((await captured())[2]).toMatchObject({
+      method: 'session/load',
+      config: {
+        model: 'gateway/shared',
+        model_reasoning_effort: 'xhigh',
+      },
+    });
 
     const resumed = await attach(original, original);
     await closeWorkerAcpSession(resumed.session);
-    expect((await captured())[2]).toMatchObject({
+    expect((await captured())[3]).toMatchObject({
       method: 'session/load',
       config: { model: 'gateway/shared', model_reasoning_effort: 'high' },
     });

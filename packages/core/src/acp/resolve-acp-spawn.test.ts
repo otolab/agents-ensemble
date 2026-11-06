@@ -362,7 +362,7 @@ describe('resolveWorkerAcpSpawn', () => {
     }
   });
 
-  it('advertises Cursor parameterized model options only for an explicit option override', () => {
+  it('keeps Cursor defaults when cursorFast is omitted and fails fast on unverified options', () => {
     const resolve = (definition: {
       model: string;
       reasoning?: string;
@@ -390,16 +390,12 @@ describe('resolveWorkerAcpSpawn', () => {
     expect(modelOnly.clientCapabilitiesMeta).toBeUndefined();
     expect(modelOnly.sessionConfigOptionOverrides).toBeUndefined();
 
-    expect(resolve({ model: 'cursor-grok-4.6-high', reasoning: 'high' }))
-      .toMatchObject({
-        clientCapabilitiesMeta: { parameterizedModelPicker: true },
-        sessionConfigOptionOverrides: [{ id: 'effort', value: 'high' }],
-      });
-    expect(resolve({ model: 'cursor-grok-4.6-high', cursorFast: false }))
-      .toMatchObject({
-        clientCapabilitiesMeta: { parameterizedModelPicker: true },
-        sessionConfigOptionOverrides: [{ id: 'fast', value: 'false' }],
-      });
+    expect(() =>
+      resolve({ model: 'cursor-grok-4.6-high', reasoning: 'high' }),
+    ).toThrow(/Cursor ACP cannot verify.*reasoning.*runtime model/);
+    expect(() =>
+      resolve({ model: 'cursor-grok-4.6-high', cursorFast: false }),
+    ).toThrow(/Cursor ACP cannot verify.*cursorFast.*runtime model/);
   });
 
   it('merges a model into the existing Codex session config', () => {
@@ -502,7 +498,7 @@ describe('resolveWorkerAcpSpawn', () => {
         expected: inheritedFingerprint,
         actual: changedFingerprint,
       }),
-    ).toThrow(/Codex model provider differs/);
+    ).not.toThrow();
     expect(configuredFingerprint.modelProviderDigest).toBe(
       acpSpawnFingerprint(resolve('another-ambient-provider', 'config-provider'))
         .modelProviderDigest,
@@ -544,13 +540,13 @@ describe('resolveWorkerAcpSpawn', () => {
         expected: withoutProvider,
         actual: withProvider,
       }),
-    ).toThrow(/Codex model provider differs/);
+    ).not.toThrow();
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: withProvider,
         actual: withoutProvider,
       }),
-    ).toThrow(/Codex model provider differs/);
+    ).not.toThrow();
   });
 
   it.each([
@@ -596,13 +592,6 @@ describe('resolveWorkerAcpSpawn', () => {
 
   it.each([
     {
-      preset: 'cursor' as const,
-      expected: {
-        clientCapabilitiesMeta: { parameterizedModelPicker: true },
-        sessionConfigOptionOverrides: [{ id: 'effort', value: 'high' }],
-      },
-    },
-    {
       preset: 'claude' as const,
       expected: {
         sessionConfigOptionOverrides: [
@@ -642,43 +631,7 @@ describe('resolveWorkerAcpSpawn', () => {
     });
   });
 
-  it('sets Cursor fast mode separately from reasoning and rejects the field on other presets', () => {
-    const resolved = resolveWorkerAcpSpawn({
-      modelTag: 'high',
-      defaultOptions: {
-        defaultAcpCli: 'cursor',
-        env: {},
-        config: {
-          acp: {
-            models: {
-              selected: {
-                model: 'cursor-grok-4.6-high',
-                reasoning: 'high',
-                cursorFast: false,
-              },
-            },
-            tags: { high: 'selected' },
-          },
-        } as import('../config/types.js').EnsembleConfig,
-      },
-    });
-
-    expect(resolved).toMatchObject({
-      model: 'cursor-grok-4.6-high',
-      reasoning: 'high',
-      cursorFast: false,
-      clientCapabilitiesMeta: { parameterizedModelPicker: true },
-      sessionConfigOptionOverrides: [
-        { id: 'fast', value: 'false' },
-        { id: 'effort', value: 'high' },
-      ],
-    });
-    expect(acpSpawnFingerprint(resolved)).toMatchObject({
-      model: 'cursor-grok-4.6-high',
-      reasoning: 'high',
-      cursorFast: false,
-    });
-
+  it('rejects cursorFast for non-Cursor presets', () => {
     expect(() =>
       resolveWorkerAcpSpawn({
         defaultOptions: {
@@ -695,7 +648,7 @@ describe('resolveWorkerAcpSpawn', () => {
         },
       }),
     ).toThrow(
-      /cursorFast is supported only by the "cursor" ACP preset.*0049-worker-acp-cursor-fast-option\.md/,
+      /cursorFast is supported only by the "cursor" ACP preset.*0051-cursor-acp-runtime-verification\.md/,
     );
   });
 
@@ -737,7 +690,7 @@ describe('resolveWorkerAcpSpawn', () => {
           } as import('../config/types.js').EnsembleConfig,
         },
       }),
-    ).toThrow(/does not support configured model injection.*docs\/config\.md.*0048-acp-model-injection-by-preset\.md/);
+    ).toThrow(/does not support configured model injection.*docs\/config\.md.*0049-acp-model-injection-by-preset\.md/);
   });
 });
 
@@ -857,7 +810,7 @@ describe('acpSpawnFingerprint', () => {
     ).toBe(computeAcpSpawnEnvDigest(env));
   });
 
-  it('includes worker modelTag and resolved model in resume fingerprint', () => {
+  it('records worker modelTag changes without rejecting resume', () => {
     const high = resolveWorkerAcpSpawn({
       modelTag: 'high',
       defaultOptions: {
@@ -882,16 +835,20 @@ describe('acpSpawnFingerprint', () => {
         } as import('../config/types.js').EnsembleConfig,
       },
     });
+    const expected = acpSpawnFingerprint(high);
+    const actual = acpSpawnFingerprint(standard);
+    expect(expected.modelTag).toBe('high');
+    expect(actual.modelTag).toBe('default');
     expect(() =>
       assertAcpSpawnMatchesResume({
-        expected: acpSpawnFingerprint(high),
-        actual: acpSpawnFingerprint(standard),
+        expected,
+        actual,
         workerName: 'implementer',
       }),
-    ).toThrow(/resume ACP spawn mismatch/);
+    ).not.toThrow();
   });
 
-  it('detects a change in Codex reasoning through its spawn env digest', () => {
+  it('records a Codex reasoning change in the spawn env digest without rejecting resume', () => {
     const resolve = (reasoning: string) =>
       resolveWorkerAcpSpawn({
         defaultOptions: {
@@ -913,9 +870,9 @@ describe('acpSpawnFingerprint', () => {
     expect(saved.envDigest).not.toBe(changed.envDigest);
     expect(saved.reasoning).toBe('low');
     expect(() => assertAcpSpawnMatchesResume({ expected: saved, actual: same })).not.toThrow();
-    expect(() => assertAcpSpawnMatchesResume({ expected: saved, actual: changed })).toThrow(
-      /resume ACP spawn mismatch.*spawn environment differs/,
-    );
+    expect(() =>
+      assertAcpSpawnMatchesResume({ expected: saved, actual: changed }),
+    ).not.toThrow();
   });
 
   it('accepts a legacy Codex fingerprint without reasoning or provider digest fields', () => {
@@ -948,27 +905,57 @@ describe('acpSpawnFingerprint', () => {
 });
 
 describe('assertAcpSpawnMatchesResume', () => {
-  it('throws on env mismatch during resume', () => {
-    const savedEnv = { MODEL_PROVIDER: 'litellm' };
+  it('records built-in model and env fields without using them to reject resume', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
           preset: 'codex',
           command: 'codex-acp',
-          args: [],
-          envDigest: computeAcpSpawnEnvDigest(savedEnv),
+          args: ['--model', 'old-model'],
+          envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'litellm' }),
+          modelProviderDigest: 'a'.repeat(64),
+          modelTag: 'high',
+          model: 'old-model',
+          reasoning: 'low',
+          cursorFast: false,
         },
         actual: {
           preset: 'codex',
           command: 'codex-acp',
-          args: [],
+          args: ['--model', 'new-model'],
           envDigest: computeAcpSpawnEnvDigest({ MODEL_PROVIDER: 'openai' }),
+          modelProviderDigest: 'b'.repeat(64),
+          modelTag: 'low',
+          model: 'new-model',
+          reasoning: 'high',
+          cursorFast: true,
         },
       }),
-    ).toThrow(/resume ACP spawn mismatch/);
+    ).not.toThrow();
+
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: ['--model', 'old-model'],
+          modelTag: 'high',
+          model: 'model',
+          reasoning: 'high',
+        },
+        actual: {
+          preset: 'codex',
+          command: 'codex-acp',
+          args: ['--model', 'new-model'],
+          modelTag: 'high',
+          model: 'model',
+          reasoning: 'high',
+        },
+      }),
+    ).not.toThrow();
   });
 
-  it('throws on preset/command mismatch during resume', () => {
+  it('throws when the preset changes', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: acpSpawnFingerprint({
@@ -982,6 +969,41 @@ describe('assertAcpSpawnMatchesResume', () => {
           args: [],
         },
         workerName: 'implementer',
+      }),
+    ).toThrow(/resume ACP spawn mismatch/);
+  });
+
+  it('compares custom command and args while allowing model and env changes', () => {
+    const expected: ReturnType<typeof acpSpawnFingerprint> = {
+      preset: 'custom',
+      command: 'custom-acp',
+      args: ['--model', 'before'],
+      envDigest: computeAcpSpawnEnvDigest({ TOKEN: 'before' }),
+      modelTag: 'high',
+      model: 'before',
+    };
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected,
+        actual: {
+          ...expected,
+          envDigest: computeAcpSpawnEnvDigest({ TOKEN: 'after' }),
+          modelTag: 'low',
+          model: 'after',
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected,
+        actual: { ...expected, args: ['--model', 'after'] },
+      }),
+    ).toThrow(/resume ACP spawn mismatch/);
+    expect(() =>
+      assertAcpSpawnMatchesResume({
+        expected,
+        actual: { ...expected, command: 'different-acp' },
       }),
     ).toThrow(/resume ACP spawn mismatch/);
   });
@@ -1001,7 +1023,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     ).not.toThrow();
   });
 
-  it('rejects a change in the saved reasoning effort during resume', () => {
+  it('records a change in the saved reasoning effort without rejecting resume', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
@@ -1021,10 +1043,10 @@ describe('assertAcpSpawnMatchesResume', () => {
           reasoning: 'high',
         },
       }),
-    ).toThrow(/resume ACP spawn mismatch.*reasoning effort differs/);
+    ).not.toThrow();
   });
 
-  it('rejects a change in the saved Cursor fast mode during resume', () => {
+  it('records a change in the saved Cursor fast mode without rejecting resume', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
@@ -1042,7 +1064,7 @@ describe('assertAcpSpawnMatchesResume', () => {
           cursorFast: true,
         },
       }),
-    ).toThrow(/resume ACP spawn mismatch.*Cursor fast mode differs/);
+    ).not.toThrow();
   });
 
   it('skips when expected fingerprint is absent (legacy resume store)', () => {
@@ -1080,7 +1102,7 @@ describe('assertAcpSpawnMatchesResume', () => {
     expect(currentSpawn.env).toEqual({ INITIAL_AGENT_MODE: 'agent' });
   });
 
-  it('compares the env digest in a saved resume store fingerprint', () => {
+  it('records env digest changes in a saved resume store fingerprint', () => {
     const env = {
       INITIAL_AGENT_MODE: 'agent',
       MODEL_PROVIDER: 'litellm',
@@ -1101,6 +1123,18 @@ describe('assertAcpSpawnMatchesResume', () => {
         },
       }),
     ).not.toThrow();
+    const changedEnvFingerprint = {
+      preset: 'codex' as const,
+      command: 'codex-acp',
+      args: [],
+      envDigest: computeAcpSpawnEnvDigest({
+        ...env,
+        MODEL_PROVIDER: 'openai',
+      }),
+    };
+    expect(changedEnvFingerprint.envDigest).not.toBe(
+      computeAcpSpawnEnvDigest(env),
+    );
     expect(() =>
       assertAcpSpawnMatchesResume({
         expected: {
@@ -1109,17 +1143,9 @@ describe('assertAcpSpawnMatchesResume', () => {
           args: [],
           envDigest: computeAcpSpawnEnvDigest(env),
         },
-        actual: {
-          preset: 'codex',
-          command: 'codex-acp',
-          args: [],
-          envDigest: computeAcpSpawnEnvDigest({
-            ...env,
-            MODEL_PROVIDER: 'openai',
-          }),
-        },
+        actual: changedEnvFingerprint,
       }),
-    ).toThrow(/ACP spawn mismatch/);
+    ).not.toThrow();
   });
 });
 

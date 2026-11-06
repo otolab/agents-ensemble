@@ -1,6 +1,6 @@
-# ADR 0048: worker ACP の model / reasoning 注入を preset ごとに扱う
+# ADR 0049: worker ACP の model / reasoning 注入を preset ごとに扱う
 
-- Status: superseded by [0049](0049-worker-acp-cursor-fast-option.md)（Cursor の Fast / non-Fast 指定のみ）
+- Status: superseded by [0051](0051-cursor-acp-runtime-verification.md)（Cursor の runtime 制約のみ。その他の preset は継続）
 - Date: 2026-11-05
 - Related: [ADR 0019](0019-worker-acp-cli-presets.md), [ADR 0045](0045-worker-acp-model-tags.md), [ADR 0047](0047-worker-acp-model-reasoning.md), [Issue #630](https://github.com/otolab/agents-ensemble/issues/630)
 
@@ -26,7 +26,7 @@ Cursor の CLI が model ID の reasoning suffix を無視する報告（[forum 
 
 Codex の既存 precedence は変えない。`codex-acp` 2.3.0 は `MODEL_PROVIDER` を `CodexAcpClient` に別途渡し、provider 解決では `CODEX_CONFIG.model_provider` より優先する（[起動処理](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/index.ts)、[provider 解決](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/CodexAcpClient.ts)）。catalog による `CODEX_CONFIG` merge とその env digest は維持する。継承値の変更も検出できるよう、effective `MODEL_PROVIDER` は値を保存せず、未設定状態を含めて専用 digest にする。
 
-resume の `EnsembleConfig` digest で catalog の `model` / `reasoning` を比較し、worker の ACP spawn fingerprint にも解決済み model と reasoning を含める。新しい Codex fingerprint は `MODEL_PROVIDER` digest も持つ。旧 resume store にこれら任意フィールドがない場合は従来の互換規則に従い、その項目の比較を省略する。
+resume metadata には catalog の `model` / `reasoning` と Codex の `MODEL_PROVIDER` digest を残すが、ADR 0048 / Issue #616 に従い新しい `resume-feasibility` sidecar の拒否条件にはしない。scheme 省略 / `full` の旧 sidecar は保存済み full config digest の従来動作を維持する。
 
 ## Consequences
 

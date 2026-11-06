@@ -13,6 +13,8 @@ import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 export const SESSION_RESUME_STORE_VERSION = 1;
 
+export type EnsembleConfigDigestScheme = 'full' | 'resume-feasibility';
+
 /** @deprecated Use SESSION_RESUME_STORE_VERSION; supported for one release only. */
 export const SESSION_SIDECAR_VERSION = SESSION_RESUME_STORE_VERSION;
 
@@ -98,8 +100,12 @@ export interface SessionResumeStore {
   githubMonitor?: GitHubMonitorCursor;
   /** Harness-resolved MCP map digest used to reject unsafe resume. */
   mcpConfigDigest?: string;
-  /** Resolved ensemble config digest used to reject resume after config changes. */
+  /** Config digest comparison scheme; omitted legacy values mean `full`. */
+  ensembleConfigDigestScheme?: EnsembleConfigDigestScheme;
+  /** Config digest used to check resume compatibility for its recorded scheme. */
   ensembleConfigDigest?: string;
+  /** Original ACP model-routing config digest for diagnostics; never a resume gate. */
+  acpModelConfigDigest?: string;
   /** Last completed process lifecycle; absent legacy values are unknown. */
   lifecycle?: SessionLifecycle;
   /** Harness-owned activity / teardown phase. */
@@ -547,7 +553,7 @@ export function assertSessionResumeStoreMatches(
     mcpConfigDigest?: string;
     /** Whether the current resolved map contains at least one server. */
     mcpConfigConfigured?: boolean;
-    /** Current resolved ensemble config digest. */
+    /** Current config digest computed with the resume store's recorded scheme. */
     ensembleConfigDigest?: string;
   },
 ): void {
@@ -651,6 +657,24 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     typeof record.ensembleConfigDigest !== 'string'
   ) {
     throw new Error('Invalid session resume store: ensembleConfigDigest');
+  }
+  if (
+    record.acpModelConfigDigest !== undefined &&
+    (typeof record.acpModelConfigDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(record.acpModelConfigDigest))
+  ) {
+    throw new Error('Invalid session resume store: acpModelConfigDigest');
+  }
+  const ensembleConfigDigestScheme = parseEnsembleConfigDigestScheme(
+    record.ensembleConfigDigestScheme,
+  );
+  if (
+    ensembleConfigDigestScheme === 'resume-feasibility' &&
+    record.ensembleConfigDigest === undefined
+  ) {
+    throw new Error(
+      'Invalid session resume store: resume-feasibility scheme requires ensembleConfigDigest',
+    );
   }
   if (
     record.lazyWorkers !== undefined &&
@@ -762,8 +786,14 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     ...(typeof record.mcpConfigDigest === 'string'
       ? { mcpConfigDigest: record.mcpConfigDigest }
       : {}),
+    ...(ensembleConfigDigestScheme !== undefined
+      ? { ensembleConfigDigestScheme }
+      : {}),
     ...(typeof record.ensembleConfigDigest === 'string'
       ? { ensembleConfigDigest: record.ensembleConfigDigest }
+      : {}),
+    ...(typeof record.acpModelConfigDigest === 'string'
+      ? { acpModelConfigDigest: record.acpModelConfigDigest }
       : {}),
     ...(record.lifecycle !== undefined
       ? { lifecycle: record.lifecycle as SessionLifecycle }
@@ -776,6 +806,16 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
       : {}),
     updatedAt,
   };
+}
+
+function parseEnsembleConfigDigestScheme(
+  value: unknown,
+): EnsembleConfigDigestScheme | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'full' || value === 'resume-feasibility') return value;
+  throw new Error(
+    `Unsupported session resume store ensembleConfigDigestScheme: ${String(value)}`,
+  );
 }
 
 function parseConductorBackend(value: unknown): ConductorBackend {

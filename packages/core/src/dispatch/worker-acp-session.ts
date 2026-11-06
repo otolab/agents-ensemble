@@ -41,7 +41,7 @@ export interface OpenWorkerAcpSessionOptions {
   workerName?: string;
   /** resume 時に SessionResumeStore に記録した cwd。不一致なら attach 失敗。 */
   expectedResumeAcpCwd?: string;
-  /** resume 時に SessionResumeStore に記録した ACP spawn。不一致なら attach 失敗。 */
+  /** resume 時に SessionResumeStore に記録した ACP spawn metadata。 */
   expectedResumeAcpSpawn?: AcpSpawnFingerprint;
   /** 現在の profile / CLI から解決した ACP spawn（resume 検証用）。 */
   currentAcpSpawn?: AcpSpawnFingerprint;

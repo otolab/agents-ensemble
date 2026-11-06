@@ -67,19 +67,13 @@ describe('buildSessionModelsSummary', () => {
     });
   });
 
-  it('includes an explicit Cursor fast setting', () => {
+  it('records the Cursor model request without unattested option values', () => {
     const config = {
       ...DEFAULT_ENSEMBLE_CONFIG,
       acp: {
         defaultPreset: 'cursor' as const,
         tags: { high: 'selected' },
-        models: {
-          selected: {
-            model: 'cursor-grok-4.6-high',
-            reasoning: 'high',
-            cursorFast: false,
-          },
-        },
+        models: { selected: 'cursor-grok-4.6-high' },
       },
     };
     const workers = profileWorkersToSessionSpecs(
@@ -102,8 +96,6 @@ describe('buildSessionModelsSummary', () => {
         modelTag: 'high',
         acpPreset: 'cursor',
         model: 'cursor-grok-4.6-high',
-        reasoning: 'high',
-        cursorFast: false,
       },
     ]);
   });

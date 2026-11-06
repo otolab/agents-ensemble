@@ -53,7 +53,7 @@ profile の `conductor.piSkills`（省略時は有効）が `true` のとき、c
 }
 ```
 
-`defaultModel` に `<provider-id>/<model-id>` を指定することもできます。選択中の model を `conductor.model` または `ensemble issue --model <provider>/<model>` で明示した場合は、それが Pi の設定より優先されます。provider を省略しても、model id から一意に決まる場合は推測されます。
+`defaultModel` に `<provider-id>/<model-id>` を指定することもできます。選択中の model を `conductor.model`、`ensemble issue --model <provider>/<model>`、または `runConductorSession({ modelId })` で明示した場合は、それが Pi の設定より優先されます。provider を省略しても、model id から一意に決まる場合は推測されます。CLI と直接 API の優先順は [設定値リファレンス](settings.md#解決パターン)を参照してください。
 
 provider を確実に指定して認証する場合は、次のようにします。
 

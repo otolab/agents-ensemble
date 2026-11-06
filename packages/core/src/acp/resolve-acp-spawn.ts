@@ -21,9 +21,9 @@ export const ENSEMBLE_DEFAULT_ACP_CLI_ENV = 'ENSEMBLE_DEFAULT_ACP_CLI';
 const ACP_MODEL_CATALOG_DOC_URL =
   'https://github.com/otolab/agents-ensemble/blob/main/docs/config.md#acp-model-tag-と-model-catalog';
 const ACP_MODEL_CATALOG_ADR_URL =
-  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0048-acp-model-injection-by-preset.md';
+  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0049-acp-model-injection-by-preset.md';
 const ACP_CURSOR_FAST_ADR_URL =
-  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0049-worker-acp-cursor-fast-option.md';
+  'https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0051-cursor-acp-runtime-verification.md';
 
 /** spawn 解決結果。 */
 export interface ResolvedAcpSpawn {
@@ -47,7 +47,10 @@ export interface ResolvedAcpSpawn {
   sessionConfigOptionOverrides?: AcpSessionConfigOptionOverride[];
 }
 
-/** resume 検証用。SessionResumeStore に保存する最小フィンガープリント。 */
+/**
+ * Resume metadata. Model and environment fields are retained for diagnostics;
+ * compatibility checks compare the preset and, for custom, command and args.
+ */
 export interface AcpSpawnFingerprint {
   preset: AcpPresetId;
   command: string;
@@ -280,7 +283,7 @@ export function acpSpawnFingerprint(spawn: ResolvedAcpSpawn): AcpSpawnFingerprin
   };
 }
 
-/** Hash a canonical env map so resume can compare it without persisting values. */
+/** Hash a canonical env map for persisted diagnostics without exposing values. */
 export function computeAcpSpawnEnvDigest(env: Record<string, string>): string {
   const canonicalEnv = Object.fromEntries(
     Object.keys(env)
@@ -315,43 +318,18 @@ export function assertAcpSpawnMatchesResume(input: {
   if (!input.expected) return;
 
   const actual = input.actual;
-  const same =
-    input.expected.preset === actual.preset &&
-    input.expected.command === actual.command &&
-    arraysEqual(input.expected.args, actual.args) &&
-    (input.expected.modelTag === undefined ||
-      input.expected.modelTag === actual.modelTag) &&
-    (input.expected.model === undefined ||
-      input.expected.model === actual.model) &&
-    (input.expected.reasoning === undefined ||
-      input.expected.reasoning === actual.reasoning) &&
-    (input.expected.cursorFast === undefined ||
-      input.expected.cursorFast === actual.cursorFast) &&
-    (input.expected.modelProviderDigest === undefined ||
-      input.expected.modelProviderDigest === actual.modelProviderDigest) &&
-    (input.expected.envDigest === undefined ||
-      input.expected.envDigest === actual.envDigest);
+  const presetMismatch = input.expected.preset !== actual.preset;
+  const customSpawnMismatch =
+    input.expected.preset === 'custom' &&
+    (input.expected.command !== actual.command ||
+      !arraysEqual(input.expected.args, actual.args));
 
-  if (same) return;
+  if (!presetMismatch && !customSpawnMismatch) return;
 
   const label = input.workerName ? `Worker "${input.workerName}"` : 'Worker';
-  const envMismatch =
-    input.expected.envDigest !== undefined &&
-    input.expected.envDigest !== actual.envDigest;
-  const reasoningMismatch =
-    input.expected.reasoning !== undefined &&
-    input.expected.reasoning !== actual.reasoning;
-  const cursorFastMismatch =
-    input.expected.cursorFast !== undefined &&
-    input.expected.cursorFast !== actual.cursorFast;
-  const modelProviderMismatch =
-    input.expected.modelProviderDigest !== undefined &&
-    input.expected.modelProviderDigest !== actual.modelProviderDigest;
   const mismatchDetails = [
-    ...(envMismatch ? ['spawn environment differs'] : []),
-    ...(reasoningMismatch ? ['reasoning effort differs'] : []),
-    ...(cursorFastMismatch ? ['Cursor fast mode differs'] : []),
-    ...(modelProviderMismatch ? ['Codex model provider differs'] : []),
+    ...(presetMismatch ? ['ACP preset differs'] : []),
+    ...(customSpawnMismatch ? ['custom ACP command or arguments differ'] : []),
   ];
   throw new Error(
     `${label} resume ACP spawn mismatch: saved resume store has ${formatAcpSpawnFingerprint(input.expected)}, current profile resolves to ${formatAcpSpawnFingerprint(actual)}${mismatchDetails.length > 0 ? `; ${mismatchDetails.join('; ')}` : ''}`,
@@ -402,35 +380,23 @@ function injectAcpModel(
     );
   }
   switch (spawn.preset) {
-    case 'cursor':
+    case 'cursor': {
+      const unsupportedOptions = [
+        ...(reasoning !== undefined ? ['reasoning'] : []),
+        ...(cursorFast !== undefined ? ['cursorFast'] : []),
+      ];
+      if (unsupportedOptions.length > 0) {
+        throw new Error(
+          `Cursor ACP cannot verify that configured ${unsupportedOptions.join(' and ')} reaches the runtime model; the available ACP response only reports session configuration. Refusing to start worker modelTag "${modelTag}". See ${ACP_MODEL_CATALOG_DOC_URL} and ${ACP_CURSOR_FAST_ADR_URL}`,
+        );
+      }
       return {
         ...spawn,
         args: ['--model', model, ...spawn.args],
         modelTag,
         model,
-        ...(reasoning !== undefined || cursorFast !== undefined
-          ? {
-              clientCapabilitiesMeta: {
-                ...(spawn.clientCapabilitiesMeta ?? {}),
-                parameterizedModelPicker: true,
-              },
-            }
-          : {}),
-        ...(reasoning !== undefined ? { reasoning } : {}),
-        ...(cursorFast !== undefined ? { cursorFast } : {}),
-        ...(cursorFast !== undefined || reasoning !== undefined
-          ? {
-              sessionConfigOptionOverrides: [
-                ...(cursorFast !== undefined
-                  ? [{ id: 'fast', value: String(cursorFast) }]
-                  : []),
-                ...(reasoning !== undefined
-                  ? [{ id: 'effort', value: reasoning }]
-                  : []),
-              ],
-            }
-          : {}),
       };
+    }
     case 'claude':
       return {
         ...spawn,

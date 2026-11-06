@@ -1,5 +1,9 @@
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
-import { computeEnsembleConfigDigest } from '../config/ensemble-config-digest.js';
+import {
+  computeAcpModelConfigDigest,
+  computeEnsembleConfigDigest,
+  computeResumeFeasibilityConfigDigest,
+} from '../config/ensemble-config-digest.js';
 import { loadEnsembleConfig } from '../config/load-ensemble-config.js';
 import type { EnsembleConfig } from '../config/types.js';
 import {
@@ -121,6 +125,7 @@ import {
   type HarnessPhase,
   type SessionLifecycle,
   type SessionResumeStoreLocation,
+  type EnsembleConfigDigestScheme,
   type SessionResumeStore,
 } from '../session/session-resume-store.js';
 import {
@@ -172,6 +177,11 @@ import {
   resolveConductorPiResourcePaths,
   resolveGitHubMonitorEnabled,
 } from '../config/resolve-settings.js';
+import {
+  CONDUCTOR_MODEL_ID_ENV,
+  DEFAULT_CONDUCTOR_MODEL_ID,
+  resolveConductorModelId,
+} from './resolve-conductor-model-id.js';
 import { GitHubMonitorError } from '../github/github-monitor-error.js';
 import {
   formatGitHubErrorMessage,
@@ -210,6 +220,9 @@ export interface RunConductorSessionOptions {
   /** Optional factory override. Without it, `conductor.backend` selects the factory. */
   conductorAgentFactory?: ConductorAgentFactory;
   apiKey?: string;
+  /**
+   * Explicit model override. Resolution order: modelId > CONDUCTOR_MODEL_ID > config > backend default.
+   */
   modelId?: string;
   maxTurns?: number;
   permissionPolicy?: PermissionPolicyRules;
@@ -327,7 +340,29 @@ export async function runConductorSession(
   });
   const ensembleConfig =
     options.ensembleConfig ?? (await loadEnsembleConfig(options.repoRoot));
-  const ensembleConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
+  let ensembleConfigDigestScheme: EnsembleConfigDigestScheme | undefined =
+    'resume-feasibility';
+  let ensembleConfigDigest: string | undefined =
+    computeResumeFeasibilityConfigDigest(ensembleConfig);
+  let acpModelConfigDigest: string | undefined =
+    computeAcpModelConfigDigest(ensembleConfig);
+  const resolvedConductorModelId = resolveConductorModelId(options.modelId, {
+    config: ensembleConfig,
+  });
+  const hasInvocationModelOverride = Boolean(
+    options.modelId?.trim() ||
+      process.env[CONDUCTOR_MODEL_ID_ENV]?.trim(),
+  );
+  // Built-in factories understand `default` as their backend default. For a
+  // custom factory, preserve the optional contract when the default comes
+  // from config/code defaults. Keep an invocation-level `default` sentinel so
+  // the factory can honor it over its own lower-priority defaults.
+  const conductorFactoryModelId =
+    options.conductorAgentFactory &&
+    resolvedConductorModelId === DEFAULT_CONDUCTOR_MODEL_ID &&
+    !hasInvocationModelOverride
+      ? undefined
+      : resolvedConductorModelId;
   const conductorBackend = resolveConductorBackendSetting({
     profile: options.profile,
     config: ensembleConfig,
@@ -417,6 +452,13 @@ export async function runConductorSession(
     const loadedResumeStore = locatedResumeStore.resumeStore;
     activeResumeStorePath = locatedResumeStore.path;
     activeStoreLocation = locatedResumeStore.location;
+    const savedConfigDigestScheme =
+      loadedResumeStore.ensembleConfigDigestScheme;
+    const effectiveConfigDigestScheme = savedConfigDigestScheme ?? 'full';
+    const currentEnsembleConfigDigest =
+      effectiveConfigDigestScheme === 'resume-feasibility'
+        ? computeResumeFeasibilityConfigDigest(ensembleConfig)
+        : computeEnsembleConfigDigest(ensembleConfig);
     assertSessionResumeStoreMatches(loadedResumeStore, {
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
@@ -424,7 +466,7 @@ export async function runConductorSession(
       conductorBackend,
       mcpConfigDigest,
       mcpConfigConfigured,
-      ensembleConfigDigest,
+      ensembleConfigDigest: currentEnsembleConfigDigest,
     });
     if (loadedResumeStore.ensembleConfigDigest === undefined) {
       sessionLogger.emit({
@@ -433,6 +475,28 @@ export async function runConductorSession(
           'SessionResumeStore has no ensemble config digest; config consistency cannot be verified for this legacy session.',
       });
     }
+    const hasComparableLegacyFullDigest =
+      effectiveConfigDigestScheme === 'full' &&
+      loadedResumeStore.ensembleConfigDigest !== undefined;
+    if (
+      loadedResumeStore.acpModelConfigDigest === undefined &&
+      !hasComparableLegacyFullDigest
+    ) {
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message:
+          'SessionResumeStore has no ACP model config digest; this diagnostic metadata is unavailable and will not be backfilled. Resume is not blocked by its absence.',
+      });
+    }
+    // Keep the persisted scheme and digest paired across resume and flush.
+    // Legacy stores without a digest remain unverifiable until a new session
+    // is started; a resume must not silently relabel their existing state.
+    ensembleConfigDigestScheme = savedConfigDigestScheme;
+    ensembleConfigDigest = loadedResumeStore.ensembleConfigDigest;
+    // This digest describes the config used when the session was first
+    // recorded. Keep it as diagnostic metadata; model changes do not gate
+    // resume, and a missing legacy value must not be backfilled.
+    acpModelConfigDigest = loadedResumeStore.acpModelConfigDigest;
     // A previously completed lifecycle no longer describes this instance once
     // resume begins. Persist unknown before restoring or attaching anything so
     // a crash before the first regular SessionResumeStore flush cannot leave stale
@@ -1132,7 +1196,7 @@ export async function runConductorSession(
       ? { piSkills: activeProfile.conductor?.piSkills !== false }
       : {}),
     apiKey: options.apiKey,
-    modelId: options.modelId,
+    modelId: conductorFactoryModelId,
     ...(conductorBackend === 'pi'
       ? {
           pi: resolveConductorPiResourcePaths({
@@ -1260,7 +1324,15 @@ export async function runConductorSession(
       sequence: snapshot.sequence,
       workers,
       mcpConfigDigest,
-      ensembleConfigDigest,
+      ...(ensembleConfigDigestScheme !== undefined
+        ? { ensembleConfigDigestScheme }
+        : {}),
+      ...(ensembleConfigDigest !== undefined
+        ? { ensembleConfigDigest }
+        : {}),
+      ...(acpModelConfigDigest !== undefined
+        ? { acpModelConfigDigest }
+        : {}),
       ...(persistedLifecycle ? { lifecycle: persistedLifecycle } : {}),
       ...(githubMonitorCursor ? { githubMonitor: githubMonitorCursor } : {}),
       updatedAt: Date.now(),
@@ -2094,7 +2166,7 @@ export async function runConductorSession(
         openQuestions: openQuestions.list(),
         sessionModels: buildSessionModelsSummary({
           backend: conductorBackend,
-          explicitConductorModelId: options.modelId,
+          explicitConductorModelId: resolvedConductorModelId,
           config: ensembleConfig,
           workers,
           usageTracker: sessionUsageTracker,
