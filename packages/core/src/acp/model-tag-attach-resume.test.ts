@@ -201,9 +201,10 @@ describe('ACP model tag attach and resume', () => {
               {
                 id: 'effort',
                 type: 'select',
-                currentValue: 'low',
+                currentValue: 'medium',
                 options: [
                   { value: 'low', name: 'Low' },
+                  { value: 'medium', name: 'Medium' },
                   { value: 'high', name: 'High' },
                 ],
               },
@@ -374,7 +375,9 @@ describe('ACP model tag attach and resume', () => {
         connectAcp: resumeConnector,
       });
       expect(resumed.session.sessionId).toBe(savedSessionId);
-      const loadCall = wireEvents.find((event) => event.method === 'session/load');
+      const loadCall = wireEvents
+        .filter((event) => event.method === 'session/load')
+        .at(-1);
       expect(loadCall).toBeDefined();
       expect(getClaudeModel(loadCall?.params)).toBe('gateway/project-opus');
       expect(wireConfigEvents.slice(-2)).toEqual([
