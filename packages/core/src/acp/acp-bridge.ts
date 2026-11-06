@@ -12,7 +12,11 @@ export interface AcpBridgeConnectOptions extends SpawnAcpProcessOptions {}
 export interface AcpBridgeRunSessionOptions {
   cwd: string;
   prompt: string;
-  /** 指定時は `session/load` で復元してから prompt する。失敗時は新規 session。 */
+  /**
+   * 指定した ID で `session/load` を試みる。通常の load 失敗時は新しい
+   * session を作って prompt を続行するが、ACP config-option の検証・適用
+   * エラーは伝播させ、新しい session は作らない。
+   */
   resumeSessionId?: string;
   onUpdate?: SessionUpdateHandler;
   /** 注入 bridge 利用時も worker ごとの handler を渡せる。 */
