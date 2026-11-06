@@ -1688,6 +1688,10 @@ describe('runConductorSession resume / shutdown', () => {
         },
         tags: { high: 'strong' },
       },
+      session: {
+        ...DEFAULT_ENSEMBLE_CONFIG.session,
+        worktree: 'in-repo' as const,
+      },
     };
     const changedConfig = {
       ...originalConfig,
@@ -1716,6 +1720,7 @@ describe('runConductorSession resume / shutdown', () => {
       }),
     );
     expect(expectedSpawn.model).not.toBe(currentSpawn.model);
+    expect(expectedSpawn.reasoning).not.toBe(currentSpawn.reasoning);
     expect(expectedSpawn.envDigest).not.toBe(currentSpawn.envDigest);
     expect(computeResumeFeasibilityConfigDigest(changedConfig)).toBe(
       computeResumeFeasibilityConfigDigest(originalConfig),
@@ -1770,12 +1775,19 @@ describe('runConductorSession resume / shutdown', () => {
       result: 'done',
     });
 
+    stubUnusedControlServer();
     await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
       ensembleConfig: changedConfig,
       defaultAcp: { config: changedConfig, env: {} },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
       resumeAgentId: agentId,
       connectAcp,
       maxTurns: 5,
@@ -1896,6 +1908,7 @@ describe('runConductorSession resume / shutdown', () => {
         getUsage: createMockConductorGetUsage(),
       }));
 
+      stubUnusedControlServer();
       await runConductorSession({
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -1957,6 +1970,7 @@ describe('runConductorSession resume / shutdown', () => {
       });
       sessionLogger.subscribe((event) => emitted.push(event));
 
+      stubUnusedControlServer();
       await runConductorSession({
         issueUrl: TEST_ISSUE.url,
         repoRoot,
@@ -2033,6 +2047,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
     sessionLogger.subscribe((event) => emitted.push(event));
 
+    stubUnusedControlServer();
     await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
