@@ -110,11 +110,14 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | Release workflow tests | `pnpm test:release-workflow` — `.github/scripts` の Node test |
 | Session resume integration | `test/integration/session-resume.integration.test.ts` |
 | Codex model reasoning integration | `test/integration/codex-model-reasoning.integration.test.ts` |
+| Claude and Pi worker ACP adapter integration tests | `test/integration/worker-model-reasoning-adapters.integration.test.ts`（Claude ACP 0.70.0 / `pi-acp` 0.0.33） |
 | Operator usage integration | `test/integration/usage-operator.integration.test.ts` |
 | Pi conductor integration | `pi-conductor.integration.test.ts`、`pi-headless-settings.integration.test.ts`、`pi-conductor-agent-registry.integration.test.ts` |
 | CLI TTY e2e | `tty-close-process.e2e.test.ts`、`issue-pi-tty-exit.e2e.test.ts`、`issue-pi-tty-close.e2e.test.ts` |
 
 常時実行の integration / e2e は Fake、ローカル fixture、または隔離された Codex を使い、Cursor / GitHub 認証や `test-acp.yaml` を要求しない。PTY suite には Ubuntu runner 上の Python 3 `pty`、POSIX process group、Git が必要であり、Pi TTY suites は localhost bind も使う。Issue workflow 全体、外部サービスへ接続する実 ACP、実 Cursor SDK の suite は通常 CI の対象外。`.github/scripts` の Node tests は対象だが、`scripts/pi/cached-auth.test.mjs` は対象外である。
+
+Claude / Pi worker adapter suite は、依存関係 install 後に core workspace から optional adapter package の `@agentclientprotocol/claude-agent-acp/dist/index.js` と `pi-acp` の両方が `import.meta.resolve` できることを CI step が確認してから実行する。suite は実 adapter と fake Claude SDK / Pi CLI を使い、`session/new`・`session/load` 時に model と推論レベル（Claude の `effortLevel` / Pi の `thinkingLevel`）が適用されることを確かめる。LLM 呼び出しや provider 認証は不要。CI は Ubuntu / Node.js 22 で両方を実行する。ローカルで adapter package がない場合は該当 suite を skip し、Pi suite は Windows でも skip する。
 
 ## 参照
 
