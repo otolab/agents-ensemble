@@ -1,4 +1,5 @@
 import type { PermissionPipeline } from './permission-pipeline.js';
+import type { PendingPermission } from './pending-permission.js';
 
 /** pending permission が継続したとみなす閾値（ms）。Issue #416 / harness-events.md §6。 */
 export const DEFAULT_PERMISSION_DEADLOCK_STALL_MS = 300_000;
@@ -73,6 +74,7 @@ export function createPermissionDeadlockMonitor(
   let stopped = false;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   let warnedForCurrentStall = false;
+  let warnedPendingEntries = new Set<PendingPermission>();
 
   const schedulePoll = () => {
     if (stopped || !started) return;
@@ -90,7 +92,19 @@ export function createPermissionDeadlockMonitor(
     const pending = options.pipeline.pending.list();
     if (pending.length === 0) {
       warnedForCurrentStall = false;
+      warnedPendingEntries.clear();
       return;
+    }
+
+    if (
+      warnedForCurrentStall &&
+      !pending.some((entry) => warnedPendingEntries.has(entry))
+    ) {
+      // A request can be resolved and replaced between polls, so the monitor
+      // may never observe an empty snapshot. Entry identity marks a new episode
+      // even if an ACP peer reuses the same request ID.
+      warnedForCurrentStall = false;
+      warnedPendingEntries.clear();
     }
 
     const oldestPermissionCreatedAt = Math.min(
@@ -106,6 +120,7 @@ export function createPermissionDeadlockMonitor(
     }
 
     warnedForCurrentStall = true;
+    warnedPendingEntries = new Set(pending);
     const message = formatPermissionDeadlockWarningMessage(stallThresholdMs);
     options.onWarning(message);
     options.onStall?.({
@@ -127,6 +142,7 @@ export function createPermissionDeadlockMonitor(
       clearTimeout(pollTimer);
       pollTimer = undefined;
     }
+    warnedPendingEntries.clear();
   };
 
   const onAbort = () => {

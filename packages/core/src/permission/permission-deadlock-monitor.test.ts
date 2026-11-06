@@ -178,6 +178,113 @@ describe('createPermissionDeadlockMonitor', () => {
     expect(stalls).toHaveLength(2);
   });
 
+  it.each([
+    { scenario: 'a different request ID', replacementId: 'perm-2' },
+    { scenario: 'the same request ID', replacementId: 'perm-1' },
+  ])(
+    'warns again when $scenario replaces the pending request between polls',
+    ({ replacementId }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+
+      const pending = new PendingPermissionRegistry();
+      const pipeline = new PermissionPipeline({ pending });
+      const addPending = (id: string) => {
+        pending.add({
+          id,
+          workerId: 'worker-1',
+          createdAt: Date.now(),
+          request: parsePermissionRequest({ toolName: 'Shell', raw: {} }),
+        });
+      };
+      addPending('perm-1');
+
+      const warnings: string[] = [];
+      const stalls: Array<{
+        pendingPermissionIds: string[];
+        oldestPermissionCreatedAt: number;
+      }> = [];
+      const monitor = createPermissionDeadlockMonitor({
+        pipeline,
+        onWarning: (message) => warnings.push(message),
+        onStall: (stall) => stalls.push(stall),
+        stallThresholdMs: 1_000,
+        pollIntervalMs: 100,
+        now: () => Date.now(),
+      });
+
+      monitor.start();
+      vi.advanceTimersByTime(1_000);
+      // Replace the request before the next poll; the monitor never sees empty.
+      pending.take('perm-1');
+      addPending(replacementId);
+      vi.advanceTimersByTime(1_000);
+      vi.advanceTimersByTime(2_000);
+      monitor.stop();
+
+      expect(warnings).toHaveLength(2);
+      expect(
+        stalls.map(({ pendingPermissionIds, oldestPermissionCreatedAt }) => ({
+          pendingPermissionIds,
+          oldestPermissionCreatedAt,
+        })),
+      ).toEqual([
+        { pendingPermissionIds: ['perm-1'], oldestPermissionCreatedAt: 0 },
+        {
+          pendingPermissionIds: [replacementId],
+          oldestPermissionCreatedAt: 1_000,
+        },
+      ]);
+    },
+  );
+
+  it('keeps overlapping requests in one episode and re-notifies for remaining new requests', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+
+    const pending = new PendingPermissionRegistry();
+    const pipeline = new PermissionPipeline({ pending });
+    const addPending = (id: string) => {
+      pending.add({
+        id,
+        workerId: 'worker-1',
+        createdAt: Date.now(),
+        request: parsePermissionRequest({ toolName: 'Shell', raw: {} }),
+      });
+    };
+    addPending('perm-1');
+    addPending('perm-2');
+
+    const warnings: string[] = [];
+    const stalls: Array<{ pendingPermissionIds: string[] }> = [];
+    const monitor = createPermissionDeadlockMonitor({
+      pipeline,
+      onWarning: (message) => warnings.push(message),
+      onStall: (stall) => stalls.push(stall),
+      stallThresholdMs: 1_000,
+      pollIntervalMs: 100,
+      now: () => Date.now(),
+    });
+
+    monitor.start();
+    vi.advanceTimersByTime(1_000);
+    addPending('perm-3');
+    pending.take('perm-1');
+    vi.advanceTimersByTime(1_000);
+    expect(stalls).toHaveLength(1);
+
+    pending.take('perm-2');
+    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(1_000);
+    monitor.stop();
+
+    expect(warnings).toHaveLength(2);
+    expect(stalls.map((stall) => stall.pendingPermissionIds)).toEqual([
+      ['perm-1', 'perm-2'],
+      ['perm-3'],
+    ]);
+  });
+
   it('does not warn when there is no pending permission', () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
