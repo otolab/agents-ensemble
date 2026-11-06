@@ -678,16 +678,38 @@ globalThis.fetch = async (input, init) => {
           fixtureRequestContains(request, fragment),
         ),
       );
+      const answerMessage = answerRequest?.messages?.find((message) => {
+        const candidateRequest = { messages: [message] };
+        return (
+          fixtureRequestContains(
+            candidateRequest,
+            `【open question 回答】${TARGET_QUESTION_ID}:`,
+          ) &&
+          answerFragments.every((fragment) =>
+            fixtureRequestContains(candidateRequest, fragment),
+          )
+        );
+      });
       const requestSummaries = model.requests.map((request, index) => ({
         index,
         roles: request.messages?.map((message) => message.role),
         answerFragments: answerFragments.map((fragment) =>
           fixtureRequestContains(request, fragment),
         ),
-        hasQuestionId: fixtureRequestContains(request, TARGET_QUESTION_ID),
+        hasAnswerEnvelope: request.messages?.some((message) => {
+          const candidateRequest = { messages: [message] };
+          return (
+            fixtureRequestContains(
+              candidateRequest,
+              `【open question 回答】${TARGET_QUESTION_ID}:`,
+            ) &&
+            answerFragments.every((fragment) =>
+              fixtureRequestContains(candidateRequest, fragment),
+            )
+          );
+        }),
       }));
-      expect(answerRequest, JSON.stringify(requestSummaries)).toBeDefined();
-      expect(JSON.stringify(answerRequest)).toContain(TARGET_QUESTION_ID);
+      expect(answerMessage, JSON.stringify(requestSummaries)).toBeDefined();
 
       ptyRunner.stdin?.write('/exit');
       await waitForText(normalizedOutput, '> /exit', ptyRunner, 3_000);
