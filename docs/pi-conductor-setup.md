@@ -164,7 +164,7 @@ LiteLLM v1.108.3 では、`/v1/models` はcallerのkey/team aliasを使って公
 
 `models add` / `models sync` は provider ID が `litellm` の場合に限り、既存の fetch と認証 header を使って `/model_group/info` も GET します。`baseUrl` が `/v1` で終わる場合は、その suffix を外した host / path prefix に endpoint を付けます。新しい API client は不要です。追加 endpoint の取得失敗・不正な response は warning に記録し、従来の `/v1/models` による追加処理を続けます。この場合 reasoning metadata は取り込みません。`models remote` と `models diff` は ID 比較だけを行うため、この追加 endpoint は呼びません。
 
-LiteLLM の公開 schema に `efficency` / `efficiency` という field はありません。このIssueでは文脈上 “effort” の誤記と解し、reasoning の有無と強さを表す `supports_reasoning` / `supported_reasoning_efforts` を Pi の `reasoning` / `thinkingLevelMap` に対応させます。`supports_fast_mode` は reasoning effort とは別の capability です。Pi の [`PiModelDefinition`](../packages/core/src/conductor/pi-resource-loader.ts) に speed tier の field がなく、LiteLLM 側でも Codex native catalog は別形式のため、ここでは同期しません。LiteLLM group metadata の input/output 単価だけでは Pi の `cost` に必要な cache read/write 料金も埋められません。これらは次の表のとおり同期しません。
+LiteLLM の `supported_reasoning_efforts` は Pi の `thinkingLevelMap` に同期します。以下は現行実装の同期対象外です。
 
 | source | field | 同期しない理由 |
 |---|---|---|
@@ -172,6 +172,7 @@ LiteLLM の公開 schema に `efficency` / `efficiency` という field はあ�
 | LiteLLM `GET /model_group/info` | `input_cost_per_token` / `output_cost_per_token` | Pi の `cost` に必要な cache read / write 単価がこの response にない。欠損を 0 として書くと cost estimate を誤らせる |
 | LiteLLM `GET /model_group/info` | `max_output_tokens` | Pi の `maxTokens` に自動同期しない。既存の出力上限設定を維持する |
 | LiteLLM `GET /model_group/info` / provider catalog（値がある場合） | `providers`、`mode`、`name` / `display_name`、`description`、modalities、その他 capability flags | conductor の reasoning validation に使わず、Pi field への写像も定めていない |
+| — | 独立した efficiency metric | この同期では対応する source field と Pi field の mapping を定義していない |
 | OpenAI 互換 `GET /v1/models` | `max_output_tokens`、`owned_by`、`created` | 出力上限や表示 metadata の自動変更はこの同期対象外。既存 Pi 設定を保持する |
 | Codex 用 `GET /v1/models?client_version=...` | `models[]` | `/model_group/info` が必要な LiteLLM reasoning effort を提供するため、Codex 固有 catalog を別途取り込まない |
 
