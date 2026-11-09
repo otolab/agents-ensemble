@@ -280,6 +280,50 @@ describe('ensemble models catalog CLI', () => {
     ]);
   });
 
+  it('warns instead of guessing reasoning metadata for LiteLLM caller aliases', async () => {
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models-caller-alias.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { data: unknown[] };
+    const modelGroups = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-model-group-info-caller-alias.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    await setRemoteModels(modelsCatalog.data, 'litellm', modelGroups);
+
+    const result = run(
+      'add',
+      'team-key-alias',
+      '--provider',
+      'litellm',
+      '--target',
+      'project',
+      '--json',
+    );
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.added).toEqual(['team-key-alias']);
+    expect(output.metadataWarnings).toHaveLength(1);
+    expect(output.metadataWarnings[0]).toContain(
+      'no exact model_group row for requested /v1/models ID(s): team-key-alias',
+    );
+    expect(output.metadataWarnings[0]).toContain(
+      'reasoning metadata was not synchronized and no alias mapping was inferred',
+    );
+    expect(result.stderr).toContain('Warning: LiteLLM GET /model_group/info');
+
+    const projectModels = JSON.parse(
+      await readFile(join(repoRoot, 'project-pi', 'models.json'), 'utf8'),
+    );
+    expect(projectModels.providers.litellm.models).toEqual([
+      { id: 'team-key-alias', contextWindow: 65536 },
+    ]);
+  });
+
   it('keeps sync JSON usable while warning and defaulting additions to user', async () => {
     const compare = run('sync', '--provider', 'litellm', '--json');
     expect(compare.status).toBe(0);

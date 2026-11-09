@@ -59,6 +59,9 @@ interface PiModelCatalogEndpointSource {
   addModelIds: boolean;
   required: boolean;
   fieldSources: readonly PiModelCatalogFieldSourceRegistration[];
+  formatUnmatchedRequestedModelIdsWarning?: (
+    ids: readonly string[],
+  ) => string;
 }
 
 const PI_MODEL_CATALOG_ENDPOINTS: readonly PiModelCatalogEndpointSource[] = [
@@ -86,6 +89,8 @@ const PI_MODEL_CATALOG_ENDPOINTS: readonly PiModelCatalogEndpointSource[] = [
     addModelIds: false,
     required: false,
     fieldSources: [{ id: 'litellm-model-group-info' }],
+    formatUnmatchedRequestedModelIdsWarning: (ids) =>
+      `LiteLLM GET /model_group/info has no exact model_group row for requested /v1/models ID(s): ${ids.join(', ')}. A caller/team alias may not include its canonical target in the API response; reasoning metadata was not synchronized and no alias mapping was inferred.`,
   },
 ];
 
@@ -255,6 +260,7 @@ async function runPiModelsCatalog(
     apiKey,
     fetchImpl: options.fetchImpl ?? fetch,
     includeSupplementaryMetadata,
+    requestedModelIds: requestedIds,
   });
   const jsonModels = providerConfig.models ?? [];
   const jsonIds = new Set(jsonModels.map((model) => model.id));
@@ -356,6 +362,7 @@ async function fetchPiRemoteModels(options: {
   apiKey?: string;
   fetchImpl: typeof fetch;
   includeSupplementaryMetadata: boolean;
+  requestedModelIds: readonly string[];
 }): Promise<{ models: PiRemoteModel[]; metadataWarnings: string[] }> {
   const headers = new Headers();
   for (const [name, value] of Object.entries(options.config.headers ?? {})) {
@@ -445,6 +452,29 @@ async function fetchPiRemoteModels(options: {
       continue;
     }
 
+    if (source.formatUnmatchedRequestedModelIdsWarning) {
+      const sourceModelIds = readCatalogModelIds(rows, source.modelIdField);
+      const hasReasoningMetadata = rows.some(
+        (value) =>
+          isRecord(value) &&
+          (typeof value.supports_reasoning === 'boolean' ||
+            Array.isArray(value.supported_reasoning_efforts)),
+      );
+      const unmatchedRequestedModelIds = options.requestedModelIds.filter(
+        (id) => models.has(id) && !sourceModelIds.has(id),
+      );
+      if (
+        hasReasoningMetadata &&
+        unmatchedRequestedModelIds.length > 0
+      ) {
+        metadataWarnings.push(
+          source.formatUnmatchedRequestedModelIdsWarning(
+            unmatchedRequestedModelIds,
+          ),
+        );
+      }
+    }
+
     mergePiModelCatalogRows(models, rows, source, fieldSources);
   }
 
@@ -460,6 +490,21 @@ function readDataRows(payload: unknown): unknown[] | undefined {
   return isRecord(payload) && Array.isArray(payload.data)
     ? payload.data
     : undefined;
+}
+
+function readCatalogModelIds(
+  rows: unknown[],
+  field: string,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const value of rows) {
+    if (!isRecord(value)) continue;
+    const id = value[field];
+    if (typeof id === 'string' && id.trim() !== '') {
+      ids.add(id.trim());
+    }
+  }
+  return ids;
 }
 
 function mergePiModelCatalogRows(
