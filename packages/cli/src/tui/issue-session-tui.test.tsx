@@ -714,6 +714,11 @@ describe('IssueSessionTui', () => {
       prefix: 's',
       completedValue: 'secure',
       expectedSuggestion: 'safe: Safe mode',
+      expectedCandidates: [
+        'safe: Safe mode',
+        'secure: Secure mode',
+        'fast: Fast mode',
+      ],
       hasMultipleSuggestions: true,
     },
     {
@@ -726,6 +731,7 @@ describe('IssueSessionTui', () => {
       prefix: 'n',
       completedValue: 'no',
       expectedSuggestion: 'no — いいえ',
+      expectedCandidates: ['yes — はい', 'no — いいえ'],
       hasMultipleSuggestions: false,
     },
   ])(
@@ -735,6 +741,7 @@ describe('IssueSessionTui', () => {
       prefix,
       completedValue,
       expectedSuggestion,
+      expectedCandidates,
       hasMultipleSuggestions,
     }) => {
       const viewModel = createTuiViewModel();
@@ -754,6 +761,16 @@ describe('IssueSessionTui', () => {
       const { stdin, lastFrame } = render(
         <IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />,
       );
+
+      const initialFrame = lastFrame() ?? '';
+      const operatorInputStart = initialFrame.indexOf('Operator input');
+      expect(operatorInputStart).toBeGreaterThanOrEqual(0);
+      const openQuestionsText = initialFrame.slice(0, operatorInputStart);
+      const operatorInputText = initialFrame.slice(operatorInputStart);
+      for (const candidate of expectedCandidates) {
+        expect(openQuestionsText).not.toContain(candidate);
+        expect(operatorInputText).toContain(candidate);
+      }
 
       stdin.write(prefix);
       await flushInkStdin();
@@ -791,6 +808,46 @@ describe('IssueSessionTui', () => {
       );
     },
   );
+
+  it('completes a choice with Tab and submits it with Enter in pane mode', async () => {
+    const viewModel = createTuiViewModel();
+    const question = createOpenQuestion({
+      id: 'inq-choice',
+      question: 'Choose a mode',
+      responseType: 'choice',
+      choices: [
+        { id: 'safe', label: 'Safe mode' },
+        { id: 'secure', label: 'Secure mode' },
+      ],
+    });
+    viewModel.setDisplayState({
+      workers: {},
+      conductorOutput: null,
+      openQuestions: [question],
+      dispatchHold: { hold: false, heldEventCount: 0 },
+    });
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={onSubmit} />,
+    );
+
+    stdin.write('s');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› secure: Secure mode');
+
+    stdin.write(INK_TEST_KEYS.tab);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain(`${OPERATOR_INPUT_PROMPT}secure`);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    stdin.write('\r');
+    await flushInkStdin();
+    expect(onSubmit).toHaveBeenCalledWith('secure', {
+      targetOpenQuestionId: question.id,
+    });
+  });
 
   it('prioritizes slash suggestions over answer suggestions in pane mode', async () => {
     const viewModel = createTuiViewModel();

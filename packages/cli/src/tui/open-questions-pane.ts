@@ -95,16 +95,6 @@ function buildQuestionDetailLines(
       ),
     );
   }
-  if (question.choices) {
-    for (const choice of question.choices) {
-      lines.push(
-        ...wrapInlineMarkdownToWidth(
-          buildPrefixedSegments(`    ${choice.id}: `, choice.label),
-          contentWidth,
-        ),
-      );
-    }
-  }
   return lines;
 }
 
