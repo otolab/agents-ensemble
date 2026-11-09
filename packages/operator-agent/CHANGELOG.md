@@ -1,5 +1,11 @@
 # @agents-ensemble/operator-agent
 
+## 0.4.6
+
+### Patch Changes
+
+- @agents-ensemble/core@0.20.0
+
 ## 0.4.5
 
 ### Patch Changes

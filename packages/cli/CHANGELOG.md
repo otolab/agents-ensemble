@@ -1,5 +1,17 @@
 # @agents-ensemble/cli
 
+## 0.20.0
+
+### Minor Changes
+
+- d8cb433: Import reasoning metadata from Pi model catalogs and add an opt-in metadata refresh for existing models.
+
+### Patch Changes
+
+- 40b0d22: choice 型 open question の選択肢表示を Operator input に集約
+  - @agents-ensemble/core@0.20.0
+  - @agents-ensemble/operator-agent@0.4.6
+
 ## 0.19.0
 
 ### Minor Changes
