@@ -381,9 +381,20 @@ addConductorCommandOptions(models.command('add'), true)
     new Option('--target <layer>', 'models.json layer to update (default: user)')
       .choices(['project', 'user']),
   )
+  .option(
+    '--refresh-metadata',
+    'Refresh reasoning metadata for existing models when the API provides it',
+  )
   .option('--json', 'Output JSON')
   .action(
-    async (ids: string[], options: ConductorCommandOptions & { target?: PiModelsSyncTarget; json?: boolean }) => {
+    async (
+      ids: string[],
+      options: ConductorCommandOptions & {
+        target?: PiModelsSyncTarget;
+        refreshMetadata?: boolean;
+        json?: boolean;
+      },
+    ) => {
       try {
         const result = await runPiModelsAdd(options, ids);
         if (options.json) {
@@ -391,12 +402,20 @@ addConductorCommandOptions(models.command('add'), true)
             provider: result.provider,
             added: result.added,
             skipped: result.skipped,
+            ...(result.refreshed.length > 0
+              ? { refreshed: result.refreshed }
+              : {}),
             ...(result.targetPath ? { targetPath: result.targetPath } : {}),
           }, null, 2));
           return;
         }
         if (result.added.length > 0) {
           console.log(`Added ${result.added.join(', ')} to ${result.targetPath}`);
+        }
+        if (result.refreshed.length > 0) {
+          console.log(
+            `Refreshed reasoning metadata for ${result.refreshed.join(', ')} in ${result.targetPath}`,
+          );
         }
         if (result.skipped.length > 0) {
           console.log(`Already present; preserved: ${result.skipped.join(', ')}`);

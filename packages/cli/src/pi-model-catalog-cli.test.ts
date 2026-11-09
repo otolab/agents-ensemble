@@ -46,7 +46,7 @@ describe('ensemble models catalog CLI', () => {
     ], { encoding: 'utf8', env: { ...process.env, HOME: repoRoot } });
   }
 
-  async function setRemoteModels(models: Array<{ id: string; max_input_tokens?: number }>) {
+  async function setRemoteModels(models: unknown[]) {
     await writeFile(preload, `
       const originalFetch = globalThis.fetch;
       globalThis.fetch = async (input, init) => String(input).startsWith('https://litellm.example/')
@@ -67,6 +67,7 @@ describe('ensemble models catalog CLI', () => {
     const addHelp = run('add', '--help');
     expect(addHelp.stdout).toContain('<id...>');
     expect(addHelp.stdout).toContain('Remote model IDs to add');
+    expect(addHelp.stdout).toContain('--refresh-metadata');
     expect(run('add', '--provider', 'litellm').status).not.toBe(0);
   });
 
@@ -91,6 +92,110 @@ describe('ensemble models catalog CLI', () => {
     expect(list.stdout).toContain('remote-model');
     expect(list.stderr).toContain('model registry');
     expect(list.stderr).toContain('team 設定');
+  });
+
+  it('imports reasoning metadata and refreshes only API-supplied fields', async () => {
+    const catalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/pi-model-catalog-reasoning.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { data: unknown[] };
+    await setRemoteModels(catalog.data);
+
+    const userModelsPath = join(repoRoot, 'user-pi', 'models.json');
+    const added = run(
+      'add',
+      'limited-reasoning',
+      'plain',
+      '--provider',
+      'litellm',
+      '--json',
+    );
+    expect(added.status).toBe(0);
+    expect(JSON.parse(added.stdout).added).toEqual([
+      'limited-reasoning',
+      'plain',
+    ]);
+
+    const models = JSON.parse(await readFile(userModelsPath, 'utf8'));
+    expect(models.providers.litellm.models).toEqual([
+      {
+        id: 'limited-reasoning',
+        contextWindow: 9216,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: null,
+          max: 'max',
+        },
+      },
+      { id: 'plain', contextWindow: 64000 },
+    ]);
+
+    models.providers.litellm.models = [
+      {
+        id: 'limited-reasoning',
+        name: 'Hand edited name',
+        contextWindow: 12345,
+        reasoning: false,
+        thinkingLevelMap: { high: 'manual-high' },
+      },
+      {
+        id: 'plain',
+        name: 'Manual plain model',
+        contextWindow: 23456,
+        reasoning: true,
+        thinkingLevelMap: { low: 'manual-low' },
+      },
+    ];
+    await writeFile(userModelsPath, JSON.stringify(models));
+
+    const refreshed = run(
+      'add',
+      'limited-reasoning',
+      'plain',
+      '--provider',
+      'litellm',
+      '--refresh-metadata',
+      '--json',
+    );
+    expect(refreshed.status).toBe(0);
+    expect(JSON.parse(refreshed.stdout)).toMatchObject({
+      refreshed: ['limited-reasoning'],
+      skipped: ['plain'],
+      targetPath: userModelsPath,
+    });
+
+    const saved = JSON.parse(await readFile(userModelsPath, 'utf8'));
+    expect(saved.providers.litellm.models).toEqual([
+      {
+        id: 'limited-reasoning',
+        name: 'Hand edited name',
+        contextWindow: 12345,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: null,
+          max: 'max',
+        },
+      },
+      {
+        id: 'plain',
+        name: 'Manual plain model',
+        contextWindow: 23456,
+        reasoning: true,
+        thinkingLevelMap: { low: 'manual-low' },
+      },
+    ]);
   });
 
   it('keeps sync JSON usable while warning and defaulting additions to user', async () => {

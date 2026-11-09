@@ -12,9 +12,21 @@ import { resolveConductorCommandContext } from './conductor-auth-command.js';
 
 export type PiModelsSyncTarget = 'project' | 'user';
 
+const PI_THINKING_LEVELS = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+
 export interface PiRemoteModel {
   id: string;
   maxInputTokens?: number;
+  reasoning?: boolean;
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 export interface PiModelsSyncResult {
@@ -24,6 +36,7 @@ export interface PiModelsSyncResult {
   shared: string[];
   added: string[];
   skipped: string[];
+  refreshed: string[];
   targetPath?: string;
 }
 
@@ -31,6 +44,7 @@ export interface RunPiModelsSyncOptions extends ConductorCommandOptions {
   provider?: string;
   target?: PiModelsSyncTarget;
   add?: string[];
+  refreshMetadata?: boolean;
   /** Injectable only for tests; production uses the global fetch implementation. */
   fetchImpl?: typeof fetch;
 }
@@ -141,6 +155,7 @@ async function runPiModelsCatalog(
     shared,
     added: [],
     skipped: [],
+    refreshed: [],
   };
 
   if (requestedIds.length === 0) return result;
@@ -188,15 +203,31 @@ async function runPiModelsCatalog(
       ? [...jsonModels]
       : [...targetModels];
   for (const id of requestedIds) {
+    const remoteModel = apiModels.find((model) => model.id === id)!;
     if (effectiveIds.has(id)) {
-      result.skipped.push(id);
+      const existingIndex = modelsForWrite.findIndex((model) => model.id === id);
+      const refreshedModel =
+        options.refreshMetadata && existingIndex >= 0
+          ? refreshPiReasoningMetadata(modelsForWrite[existingIndex]!, remoteModel)
+          : undefined;
+      if (refreshedModel) {
+        modelsForWrite[existingIndex] = refreshedModel;
+        result.refreshed.push(id);
+      } else {
+        result.skipped.push(id);
+      }
       continue;
     }
-    const remoteModel = apiModels.find((model) => model.id === id)!;
     const definition: PiModelDefinition = {
       id,
       ...(remoteModel.maxInputTokens !== undefined
         ? { contextWindow: remoteModel.maxInputTokens }
+        : {}),
+      ...(remoteModel.reasoning !== undefined
+        ? { reasoning: remoteModel.reasoning }
+        : {}),
+      ...(remoteModel.thinkingLevelMap !== undefined
+        ? { thinkingLevelMap: remoteModel.thinkingLevelMap }
         : {}),
     };
     modelsForWrite.push(definition);
@@ -204,7 +235,7 @@ async function runPiModelsCatalog(
     result.added.push(id);
   }
 
-  if (result.added.length > 0) {
+  if (result.added.length > 0 || result.refreshed.length > 0) {
     targetProviderConfig.models = modelsForWrite;
     targetProviders[provider] = targetProviderConfig;
     targetModelsFile.providers = targetProviders;
@@ -278,12 +309,112 @@ async function fetchPiRemoteModels(options: {
       item.max_input_tokens > 0
         ? item.max_input_tokens
         : undefined;
+    const reasoningMetadata = parsePiRemoteReasoningMetadata(item);
     models.set(id, {
       id,
       ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
+      ...reasoningMetadata,
     });
   }
   return [...models.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function parsePiRemoteReasoningMetadata(
+  item: Record<string, any>,
+): Pick<PiRemoteModel, 'reasoning' | 'thinkingLevelMap'> {
+  const providerLevels = readPiRemoteReasoningLevels(item);
+  const reasoning =
+    typeof item.reasoning === 'boolean'
+      ? item.reasoning
+      : providerLevels !== undefined
+        ? providerLevels.some((level) => level !== 'off' && level !== 'none')
+        : undefined;
+
+  if (providerLevels === undefined) {
+    return reasoning === undefined ? {} : { reasoning };
+  }
+
+  const supportedLevels = new Set(providerLevels);
+  const thinkingLevelMap: Record<string, string | null> = {};
+  for (const level of PI_THINKING_LEVELS) {
+    if (level === 'off') {
+      thinkingLevelMap.off = supportedLevels.has('off')
+        ? 'off'
+        : supportedLevels.has('none')
+          ? 'none'
+          : null;
+    } else {
+      thinkingLevelMap[level] = supportedLevels.has(level) ? level : null;
+    }
+  }
+
+  return {
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    thinkingLevelMap,
+  };
+}
+
+function readPiRemoteReasoningLevels(
+  item: Record<string, any>,
+): string[] | undefined {
+  // Some /v1/models catalogs use Codex-style { effort } entries; others expose
+  // the same values as a plain reasoning_levels string array.
+  if (Array.isArray(item.supported_reasoning_levels)) {
+    const levels = item.supported_reasoning_levels.map((entry: unknown) =>
+      isRecord(entry) && typeof entry.effort === 'string'
+        ? entry.effort.trim()
+        : undefined,
+    );
+    if (levels.every((level: string | undefined) => level !== undefined && level !== '')) {
+      return levels as string[];
+    }
+  }
+
+  if (Array.isArray(item.reasoning_levels)) {
+    const levels = item.reasoning_levels.map((level: unknown) =>
+      typeof level === 'string' ? level.trim() : undefined,
+    );
+    if (levels.every((level: string | undefined) => level !== undefined && level !== '')) {
+      return levels as string[];
+    }
+  }
+
+  return undefined;
+}
+
+function refreshPiReasoningMetadata(
+  existing: PiModelDefinition,
+  remote: PiRemoteModel,
+): PiModelDefinition | undefined {
+  let changed = false;
+  const refreshed: PiModelDefinition = { ...existing };
+
+  if (remote.reasoning !== undefined && remote.reasoning !== existing.reasoning) {
+    refreshed.reasoning = remote.reasoning;
+    changed = true;
+  }
+  if (
+    remote.thinkingLevelMap !== undefined &&
+    !sameThinkingLevelMap(existing.thinkingLevelMap, remote.thinkingLevelMap)
+  ) {
+    refreshed.thinkingLevelMap = remote.thinkingLevelMap;
+    changed = true;
+  }
+
+  return changed ? refreshed : undefined;
+}
+
+function sameThinkingLevelMap(
+  left: Record<string, string | null> | undefined,
+  right: Record<string, string | null>,
+): boolean {
+  if (!left) return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    rightKeys.every((key) => left[key] === right[key])
+  );
 }
 
 function buildModelsUrl(baseUrl: string): string {

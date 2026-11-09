@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listPiConductorModels } from '@agents-ensemble/core';
+import { listPiConductorModels, PiConductorAgent } from '@agents-ensemble/core';
 import { describe, expect, it } from 'vitest';
 import {
   runPiModelsAdd,
@@ -82,6 +82,145 @@ describe('Pi model catalog sync command', () => {
         expect.objectContaining({ id: 'litellm/new-limited', provider: 'litellm' }),
       ]),
     );
+  });
+
+  it('imports explicit reasoning metadata and passes conductor pre-session validation', async () => {
+    const fixture = await createFixture({ apiKey: 'catalog-test-key' });
+    const catalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/pi-model-catalog-reasoning.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const userModelsPath = join(fixture.agentDir, 'models.json');
+    const systemPromptPath = join(fixture.repoRoot, 'system.md');
+    await writeFile(systemPromptPath, 'test prompt');
+
+    const result = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      fetchImpl: (async () => Response.json(catalog)) as typeof fetch,
+    }, ['limited-reasoning', 'string-levels', 'plain']);
+
+    expect(result.added).toEqual(['limited-reasoning', 'string-levels', 'plain']);
+    const saved = JSON.parse(await readFile(userModelsPath, 'utf8'));
+    expect(saved.providers.litellm.models).toEqual([
+      {
+        id: 'limited-reasoning',
+        contextWindow: 9216,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: null,
+          max: 'max',
+        },
+      },
+      {
+        id: 'string-levels',
+        contextWindow: 8192,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'off',
+          minimal: 'minimal',
+          low: null,
+          medium: 'medium',
+          high: null,
+          xhigh: 'xhigh',
+          max: null,
+        },
+      },
+      { id: 'plain', contextWindow: 64000 },
+    ]);
+
+    const conductor = await PiConductorAgent.create({
+      cwd: fixture.repoRoot,
+      pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+      modelId: 'litellm/limited-reasoning',
+      reasoning: 'low',
+      systemPrompt: systemPromptPath,
+      sessionDir: join(fixture.repoRoot, '.ensemble', 'pi-sessions'),
+    });
+    await conductor.close();
+  });
+
+  it('leaves existing models alone by default and refreshes only supplied reasoning metadata', async () => {
+    const fixture = await createFixture({
+      apiKey: 'catalog-test-key',
+      projectModels: [
+        {
+          id: 'limited-reasoning',
+          name: 'Hand edited name',
+          contextWindow: 12345,
+          reasoning: false,
+          thinkingLevelMap: { high: 'manual-high' },
+        },
+        {
+          id: 'plain',
+          name: 'Manual plain model',
+          contextWindow: 23456,
+          reasoning: true,
+          thinkingLevelMap: { low: 'manual-low' },
+        },
+      ],
+    });
+    const catalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/pi-model-catalog-reasoning.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const fetchImpl = (async () => Response.json(catalog)) as typeof fetch;
+    const original = await readFile(fixture.projectModelsPath, 'utf8');
+
+    const defaultResult = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      target: 'project',
+      fetchImpl,
+    }, ['limited-reasoning', 'plain']);
+
+    expect(defaultResult.skipped).toEqual(['limited-reasoning', 'plain']);
+    expect(await readFile(fixture.projectModelsPath, 'utf8')).toBe(original);
+
+    const refreshResult = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      target: 'project',
+      refreshMetadata: true,
+      fetchImpl,
+    }, ['limited-reasoning', 'plain']);
+
+    expect(refreshResult.refreshed).toEqual(['limited-reasoning']);
+    expect(refreshResult.skipped).toEqual(['plain']);
+    const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
+    expect(saved.providers.litellm.models).toEqual([
+      {
+        id: 'limited-reasoning',
+        name: 'Hand edited name',
+        contextWindow: 12345,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: null,
+          max: 'max',
+        },
+      },
+      {
+        id: 'plain',
+        name: 'Manual plain model',
+        contextWindow: 23456,
+        reasoning: true,
+        thinkingLevelMap: { low: 'manual-low' },
+      },
+    ]);
   });
 
   it('does not expose credentials or provider response bodies on request failure', async () => {
@@ -256,7 +395,13 @@ describe('Pi model catalog sync command', () => {
 });
 
 async function createFixture(options: {
-  projectModels?: Array<{ id: string; name?: string }>;
+  projectModels?: Array<{
+    id: string;
+    name?: string;
+    contextWindow?: number;
+    reasoning?: boolean;
+    thinkingLevelMap?: Record<string, string | null>;
+  }>;
   apiKey: string;
   authHeader?: boolean;
 }) {

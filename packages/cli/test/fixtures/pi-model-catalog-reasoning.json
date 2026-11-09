@@ -1,0 +1,42 @@
+{
+  "data": [
+    {
+      "id": "limited-reasoning",
+      "max_input_tokens": 9216,
+      "reasoning": true,
+      "supported_reasoning_levels": [
+        {
+          "effort": "none",
+          "description": "No reasoning"
+        },
+        {
+          "effort": "minimal"
+        },
+        {
+          "effort": "low"
+        },
+        {
+          "effort": "high"
+        },
+        {
+          "effort": "max"
+        }
+      ]
+    },
+    {
+      "id": "string-levels",
+      "max_input_tokens": 8192,
+      "reasoning": true,
+      "reasoning_levels": [
+        "off",
+        "minimal",
+        "medium",
+        "xhigh"
+      ]
+    },
+    {
+      "id": "plain",
+      "max_input_tokens": 64000
+    }
+  ]
+}

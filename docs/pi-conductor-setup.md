@@ -136,7 +136,22 @@ ensemble models add gpt-6-luna --provider litellm --target project
 ensemble models diff --provider litellm --json
 ```
 
-`add` は追加したい ID を 1 件以上明示します。複数 ID を指定した場合はすべてが API に存在することを確認してから書き込み、不明な ID があれば何も追加しません。catalog の全件を自動追加する機能ではありません。書込先は省略時 user で、project へ書く場合は `--target project` を指定します。project は `conductor.pi.projectDir`（既定 `<repoRoot>/.ensemble/pi`）、user は `conductor.pi.agentDir`（既定 `~/.ensemble/pi`）にある `models.json` です。既存の provider 設定と model 定義は残し、同じ ID がすでに有効なら更新せずスキップします。API にない ID の削除や既存定義の force update は行いません。
+`add` は追加したい ID を 1 件以上明示します。複数 ID を指定した場合はすべてが API に存在することを確認してから書き込み、不明な ID があれば何も追加しません。catalog の全件を自動追加する機能ではありません。書込先は省略時 user で、project へ書く場合は `--target project` を指定します。project は `conductor.pi.projectDir`（既定 `<repoRoot>/.ensemble/pi`）、user は `conductor.pi.agentDir`（既定 `~/.ensemble/pi`）にある `models.json` です。既存の provider 設定と model 定義は残し、同じ ID は既定で更新せずスキップします。既存行を更新する場合は `--refresh-metadata` を指定してください。この場合も API が実際に返した reasoning metadata だけを更新し、API にない手編集値や `contextWindow` など他の項目は保持します。reasoning metadata が返らない既存行は変更しません。API にない ID の削除や、それ以外の既存定義の force update は行いません。
+
+`/v1/models` の各 model row から同期する項目は次のとおりです。
+
+| API field | Pi `models.json` | 扱い |
+|---|---|---|
+| `id` | `id` | 選択した model ID をそのまま保存 |
+| `max_input_tokens` | `contextWindow` | 正の安全な整数だけ。新規追加時に設定 |
+| `reasoning` | `reasoning` | boolean の場合に保存 |
+| `supported_reasoning_levels`（`{ effort }[]`）または `reasoning_levels`（`string[]`） | `thinkingLevelMap` | `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` を同名で対応。provider 値 `none` は Pi の `off` に対応し、一覧にない Pi level は `null` |
+| `name` / `display_name` / `description` | — | 同期しない |
+| `max_output_tokens` | — (`maxTokens`) | 同期しない |
+| `pricing` / `cost` | — (`cost`) | 同期しない |
+| `modalities` / `input_modalities`、その他の任意 metadata | — | 同期しない |
+
+level list があり `reasoning` boolean が省略されている場合は、`off` / `none` 以外の値が含まれるかを `reasoning` に反映します。既知の Pi level と一致しない provider 値から近い level を推測することはありません。LiteLLM upstream の `supported_reasoning_efforts` は [別 endpoint の `/model_group/info`](https://github.com/BerriAI/litellm/pull/37897) が返す値です。また LiteLLM の Codex native catalog は [`/v1/models?client_version=...`](https://github.com/BerriAI/litellm-docs/blob/main/docs/proxy/client_setup/codex_cli.md) で別形式になります。このコマンドは標準の `/v1/models` を取得して OpenAI 形式の `data` を読むため、LiteLLM がその応答に reasoning metadata を独自追加していない限り同期対象になりません。
 
 従来の `models sync` は非推奨ですが、互換性のため少なくとも 1 リリースは利用できます。比較には `models diff`、追加には `models add` を使ってください。複数 ID を追加する `sync --add first --add second` は `add first second` に移行できます。どちらも全 ID を検証してから書き込み、書込先の省略時は user です。
 
@@ -145,12 +160,12 @@ ensemble models diff --provider litellm --json
 | フィールド | `sync --json` | `diff --json` |
 |---|---|---|
 | `provider` | provider ID の文字列 | 同じ |
-| `apiOnly` | `{ id, maxInputTokens? }` の配列 | ID の文字列配列 |
+| `apiOnly` | `{ id, maxInputTokens?, reasoning?, thinkingLevelMap? }` の配列 | ID の文字列配列 |
 | `jsonOnly` / `shared` | ID の文字列配列 | 同じ |
 | `added` / `skipped` | 追加・スキップした ID の文字列配列 | なし |
 | `targetPath` | 追加して書き込んだ場合のみ、書込先の文字列 | なし |
 
-例えば `sync` の `.apiOnly[].id` は、`diff` では `.apiOnly[]` です。`maxInputTokens` は API の `max_input_tokens` が正の安全な整数の場合に `sync` の `apiOnly` に含まれますが、`diff` には含まれません。互換形やこの値が必要なスクリプトは、非推奨期間中は引き続き `sync --json` を使えます。非推奨警告は stderr に出力されます。追加結果を取得する場合は `add --json` の `added` / `skipped` と、書込み時のみ含まれる `targetPath` を利用してください。
+例えば `sync` の `.apiOnly[].id` は、`diff` では `.apiOnly[]` です。`maxInputTokens` は API の `max_input_tokens` が正の安全な整数の場合に `sync` の `apiOnly` に含まれますが、`diff` には含まれません。互換形やこの値が必要なスクリプトは、非推奨期間中は引き続き `sync --json` を使えます。非推奨警告は stderr に出力されます。追加結果を取得する場合は `add --json` の `added` / `skipped`、`--refresh-metadata` による更新結果がある場合は `refreshed`、書込み時のみ含まれる `targetPath` を利用してください。
 
 `sync --add ... --json` の `apiOnly` / `jsonOnly` / `shared` は、**追加前**の models.json と API を比較した結果です。`added` / `skipped` はその比較後に行う追加の結果です。新コマンドで追加前の差分が必要な場合は、`diff --json` を `add` より先に実行してください。追加後に `diff` を実行すると、追加された ID は通常 `apiOnly` から `shared` に移るため、旧 `sync` が返した比較結果とは異なります。
 
