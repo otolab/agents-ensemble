@@ -383,7 +383,7 @@ addConductorCommandOptions(models.command('add'), true)
   )
   .option(
     '--refresh-metadata',
-    'Refresh reasoning metadata for existing models when the API provides it',
+    'Refresh API-supplied metadata for existing models',
   )
   .option('--json', 'Output JSON')
   .action(
@@ -397,6 +397,9 @@ addConductorCommandOptions(models.command('add'), true)
     ) => {
       try {
         const result = await runPiModelsAdd(options, ids);
+        for (const warning of result.metadataWarnings ?? []) {
+          console.error(`Warning: ${warning}`);
+        }
         if (options.json) {
           console.log(JSON.stringify({
             provider: result.provider,
@@ -404,6 +407,9 @@ addConductorCommandOptions(models.command('add'), true)
             skipped: result.skipped,
             ...(result.refreshed.length > 0
               ? { refreshed: result.refreshed }
+              : {}),
+            ...(result.metadataWarnings
+              ? { metadataWarnings: result.metadataWarnings }
               : {}),
             ...(result.targetPath ? { targetPath: result.targetPath } : {}),
           }, null, 2));
@@ -414,7 +420,7 @@ addConductorCommandOptions(models.command('add'), true)
         }
         if (result.refreshed.length > 0) {
           console.log(
-            `Refreshed reasoning metadata for ${result.refreshed.join(', ')} in ${result.targetPath}`,
+            `Refreshed model metadata for ${result.refreshed.join(', ')} in ${result.targetPath}`,
           );
         }
         if (result.skipped.length > 0) {
@@ -451,6 +457,9 @@ addConductorCommandOptions(models.command('sync'), true)
       console.error('Warning: models sync is deprecated; use models diff and models add instead.');
       try {
         const result = await runPiModelsSync(options);
+        for (const warning of result.metadataWarnings ?? []) {
+          console.error(`Warning: ${warning}`);
+        }
         if (options.json) {
           console.log(formatPiModelsSyncJson(result));
           return;
@@ -497,6 +506,9 @@ function formatPiModelsSyncJson(result: PiModelsSyncResult): string {
       shared: result.shared,
       added: result.added,
       skipped: result.skipped,
+      ...(result.metadataWarnings
+        ? { metadataWarnings: result.metadataWarnings }
+        : {}),
       ...(result.targetPath ? { targetPath: result.targetPath } : {}),
     },
     null,

@@ -51,15 +51,26 @@ describe('ensemble models catalog CLI', () => {
     ], { encoding: 'utf8', env: { ...process.env, HOME: repoRoot } });
   }
 
-  async function setRemoteModels(models: unknown[], provider = 'litellm') {
+  async function setRemoteModels(
+    models: unknown[],
+    provider = 'litellm',
+    modelGroupInfo: unknown = { data: [] },
+  ) {
     const catalogUrl = `https://${provider}.example/v1/models`;
+    const modelGroupInfoUrl = `https://${provider}.example/model_group/info`;
     await writeFile(preload, `
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = async (input, init) => String(input) === ${JSON.stringify(catalogUrl)}
-        ? Response.json({ data: ${JSON.stringify(models)} })
-        : String(input).startsWith('data:')
+      globalThis.fetch = async (input, init) => {
+        if (String(input) === ${JSON.stringify(catalogUrl)}) {
+          return Response.json({ data: ${JSON.stringify(models)} });
+        }
+        if (String(input) === ${JSON.stringify(modelGroupInfoUrl)}) {
+          return Response.json(${JSON.stringify(modelGroupInfo)});
+        }
+        return String(input).startsWith('data:')
           ? originalFetch(input, init)
           : Promise.reject(new Error('Unexpected network request'));
+      };
     `);
   }
 
@@ -217,6 +228,54 @@ describe('ensemble models catalog CLI', () => {
         contextWindow: 23456,
         reasoning: true,
         thinkingLevelMap: { low: 'manual-low' },
+      },
+    ]);
+  });
+
+  it('imports LiteLLM model-group metadata through the CLI', async () => {
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { data: unknown[] };
+    const modelGroups = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-model-group-info.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    await setRemoteModels(modelsCatalog.data, 'litellm', modelGroups);
+
+    const result = run(
+      'add',
+      'gpt-6.1-terra',
+      '--provider',
+      'litellm',
+      '--target',
+      'project',
+      '--json',
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).added).toEqual(['gpt-6.1-terra']);
+
+    const projectModels = JSON.parse(
+      await readFile(join(repoRoot, 'project-pi', 'models.json'), 'utf8'),
+    );
+    expect(projectModels.providers.litellm.models).toEqual([
+      {
+        id: 'gpt-6.1-terra',
+        contextWindow: 196608,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: 'xhigh',
+          max: 'max',
+        },
       },
     ]);
   });

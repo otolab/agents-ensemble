@@ -22,6 +22,117 @@ const PI_THINKING_LEVELS = [
   'max',
 ] as const;
 
+type PiRemoteModelField = keyof Omit<PiRemoteModel, 'id'>;
+type PiModelCatalogFieldSource =
+  | 'openai-v1-models'
+  | 'magpie-v1-models-reasoning'
+  | 'litellm-model-group-info';
+type PiModelCatalogEndpointId = 'openai-v1-models' | 'litellm-model-group-info';
+type PiModelCatalogRow = Record<string, unknown>;
+type PiModelCatalogFieldReader = (
+  row: PiModelCatalogRow,
+) => unknown | undefined;
+type PiModelCatalogRowsReader = (payload: unknown) => unknown[] | undefined;
+
+interface PiModelCatalogFieldSourceRegistration {
+  id: PiModelCatalogFieldSource;
+  providerIds?: readonly string[];
+}
+
+interface PiModelCatalogFieldSync {
+  remoteField: PiRemoteModelField;
+  piField: Exclude<keyof PiModelDefinition, 'id'>;
+  add: boolean;
+  refreshExisting: boolean;
+  sources: Partial<
+    Record<PiModelCatalogFieldSource, PiModelCatalogFieldReader>
+  >;
+  isEqual: (left: unknown, right: unknown) => boolean;
+}
+
+interface PiModelCatalogEndpointSource {
+  id: PiModelCatalogEndpointId;
+  providerIds?: readonly string[];
+  buildUrl: (baseUrl: string) => string;
+  readRows: PiModelCatalogRowsReader;
+  modelIdField: string;
+  addModelIds: boolean;
+  required: boolean;
+  fieldSources: readonly PiModelCatalogFieldSourceRegistration[];
+}
+
+const PI_MODEL_CATALOG_ENDPOINTS: readonly PiModelCatalogEndpointSource[] = [
+  {
+    id: 'openai-v1-models',
+    buildUrl: buildModelsUrl,
+    readRows: readDataRows,
+    modelIdField: 'id',
+    addModelIds: true,
+    required: true,
+    fieldSources: [
+      { id: 'openai-v1-models' },
+      {
+        id: 'magpie-v1-models-reasoning',
+        providerIds: ['magpie'],
+      },
+    ],
+  },
+  {
+    id: 'litellm-model-group-info',
+    providerIds: ['litellm'],
+    buildUrl: buildLiteLlmModelGroupInfoUrl,
+    readRows: readDataRows,
+    modelIdField: 'model_group',
+    addModelIds: false,
+    required: false,
+    fieldSources: [{ id: 'litellm-model-group-info' }],
+  },
+];
+
+const PI_MODEL_CATALOG_FIELD_SYNC: readonly PiModelCatalogFieldSync[] = [
+  {
+    remoteField: 'maxInputTokens',
+    piField: 'contextWindow',
+    add: true,
+    refreshExisting: false,
+    sources: {
+      'openai-v1-models': (row) =>
+        typeof row.max_input_tokens === 'number' &&
+        Number.isSafeInteger(row.max_input_tokens) &&
+        row.max_input_tokens > 0
+          ? row.max_input_tokens
+          : undefined,
+    },
+    isEqual: Object.is,
+  },
+  {
+    remoteField: 'reasoning',
+    piField: 'reasoning',
+    add: true,
+    refreshExisting: true,
+    sources: {
+      'magpie-v1-models-reasoning': readMagpieReasoning,
+      'litellm-model-group-info': readLiteLlmReasoning,
+    },
+    isEqual: Object.is,
+  },
+  {
+    remoteField: 'thinkingLevelMap',
+    piField: 'thinkingLevelMap',
+    add: true,
+    refreshExisting: true,
+    sources: {
+      'magpie-v1-models-reasoning': (row) =>
+        mapProviderThinkingLevels(readMagpieReasoningLevels(row)),
+      'litellm-model-group-info': (row) =>
+        mapProviderThinkingLevels(
+          readStringArrayField(row, 'supported_reasoning_efforts'),
+        ),
+    },
+    isEqual: sameThinkingLevelMap,
+  },
+];
+
 export interface PiRemoteModel {
   id: string;
   maxInputTokens?: number;
@@ -37,6 +148,7 @@ export interface PiModelsSyncResult {
   added: string[];
   skipped: string[];
   refreshed: string[];
+  metadataWarnings?: string[];
   targetPath?: string;
 }
 
@@ -85,11 +197,12 @@ export async function runPiModelsSync(
 }
 
 async function comparePiModels(options: RunPiModelsSyncOptions): Promise<PiModelsSyncResult> {
-  return runPiModelsCatalog({ ...options, add: [] });
+  return runPiModelsCatalog({ ...options, add: [] }, false);
 }
 
 async function runPiModelsCatalog(
   options: RunPiModelsSyncOptions,
+  includeSupplementaryMetadata = true,
 ): Promise<PiModelsSyncResult> {
   const provider = options.provider?.trim();
   if (!provider) {
@@ -136,11 +249,12 @@ async function runPiModelsCatalog(
     throw new Error(`Could not resolve credentials for Pi provider "${provider}".`);
   }
 
-  const apiModels = await fetchPiRemoteModels({
+  const { models: apiModels, metadataWarnings } = await fetchPiRemoteModels({
     provider,
     config: providerConfig,
     apiKey,
     fetchImpl: options.fetchImpl ?? fetch,
+    includeSupplementaryMetadata,
   });
   const jsonModels = providerConfig.models ?? [];
   const jsonIds = new Set(jsonModels.map((model) => model.id));
@@ -156,6 +270,7 @@ async function runPiModelsCatalog(
     added: [],
     skipped: [],
     refreshed: [],
+    ...(metadataWarnings.length > 0 ? { metadataWarnings } : {}),
   };
 
   if (requestedIds.length === 0) return result;
@@ -208,7 +323,7 @@ async function runPiModelsCatalog(
       const existingIndex = modelsForWrite.findIndex((model) => model.id === id);
       const refreshedModel =
         options.refreshMetadata && existingIndex >= 0
-          ? refreshPiReasoningMetadata(modelsForWrite[existingIndex]!, remoteModel)
+          ? refreshPiModelMetadata(modelsForWrite[existingIndex]!, remoteModel)
           : undefined;
       if (refreshedModel) {
         modelsForWrite[existingIndex] = refreshedModel;
@@ -218,18 +333,7 @@ async function runPiModelsCatalog(
       }
       continue;
     }
-    const definition: PiModelDefinition = {
-      id,
-      ...(remoteModel.maxInputTokens !== undefined
-        ? { contextWindow: remoteModel.maxInputTokens }
-        : {}),
-      ...(remoteModel.reasoning !== undefined
-        ? { reasoning: remoteModel.reasoning }
-        : {}),
-      ...(remoteModel.thinkingLevelMap !== undefined
-        ? { thinkingLevelMap: remoteModel.thinkingLevelMap }
-        : {}),
-    };
+    const definition = createPiModelDefinition(remoteModel);
     modelsForWrite.push(definition);
     effectiveIds.add(id);
     result.added.push(id);
@@ -251,8 +355,8 @@ async function fetchPiRemoteModels(options: {
   config: PiProviderConfig;
   apiKey?: string;
   fetchImpl: typeof fetch;
-}): Promise<PiRemoteModel[]> {
-  const url = buildModelsUrl(options.config.baseUrl!);
+  includeSupplementaryMetadata: boolean;
+}): Promise<{ models: PiRemoteModel[]; metadataWarnings: string[] }> {
   const headers = new Headers();
   for (const [name, value] of Object.entries(options.config.headers ?? {})) {
     if (typeof value === 'string') headers.set(name, value);
@@ -266,102 +370,161 @@ async function fetchPiRemoteModels(options: {
     headers.set('authorization', `Bearer ${options.apiKey}`);
   }
 
-  let response: Response;
-  try {
-    response = await options.fetchImpl(url, {
-      method: 'GET',
-      headers,
-      signal: AbortSignal.timeout(30_000),
-    });
-  } catch {
-    throw new Error(
-      `Could not fetch the model catalog for Pi provider "${options.provider}". Check its endpoint and network access.`,
-    );
-  }
-  if (!response.ok) {
-    throw new Error(
-      `Model catalog request for Pi provider "${options.provider}" failed with HTTP ${response.status}.`,
-    );
-  }
-
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new Error(
-      `Pi provider "${options.provider}" returned an invalid model catalog response.`,
-    );
-  }
-  if (!isRecord(payload) || !Array.isArray(payload.data)) {
-    throw new Error(
-      `Pi provider "${options.provider}" returned an invalid model catalog response.`,
-    );
-  }
-
   const models = new Map<string, PiRemoteModel>();
-  for (const item of payload.data) {
-    if (!isRecord(item) || typeof item.id !== 'string' || item.id.trim() === '') continue;
-    const id = item.id.trim();
-    if (models.has(id)) continue;
-    const maxInputTokens =
-      typeof item.max_input_tokens === 'number' &&
-      Number.isSafeInteger(item.max_input_tokens) &&
-      item.max_input_tokens > 0
-        ? item.max_input_tokens
-        : undefined;
-    const reasoningMetadata = parsePiRemoteReasoningMetadata(item);
-    models.set(id, {
-      id,
-      ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
-      ...reasoningMetadata,
-    });
-  }
-  return [...models.values()].sort((left, right) => left.id.localeCompare(right.id));
-}
+  const metadataWarnings: string[] = [];
+  const sources = PI_MODEL_CATALOG_ENDPOINTS.filter((source) => {
+    if (source.required) return true;
+    return (
+      options.includeSupplementaryMetadata &&
+      source.providerIds?.includes(options.provider) === true
+    );
+  });
 
-function parsePiRemoteReasoningMetadata(
-  item: Record<string, any>,
-): Pick<PiRemoteModel, 'reasoning' | 'thinkingLevelMap'> {
-  const providerLevels = readPiRemoteReasoningLevels(item);
-  const reasoning =
-    typeof item.reasoning === 'boolean'
-      ? item.reasoning
-      : providerLevels !== undefined
-        ? providerLevels.some((level) => level !== 'off' && level !== 'none')
-        : undefined;
-
-  if (providerLevels === undefined) {
-    return reasoning === undefined ? {} : { reasoning };
-  }
-
-  const supportedLevels = new Set(providerLevels);
-  const thinkingLevelMap: Record<string, string | null> = {};
-  for (const level of PI_THINKING_LEVELS) {
-    if (level === 'off') {
-      thinkingLevelMap.off = supportedLevels.has('off')
-        ? 'off'
-        : supportedLevels.has('none')
-          ? 'none'
-          : null;
-    } else {
-      thinkingLevelMap[level] = supportedLevels.has(level) ? level : null;
+  for (const source of sources) {
+    const fieldSources = source.fieldSources
+      .filter(
+        (fieldSource) =>
+          fieldSource.providerIds === undefined ||
+          fieldSource.providerIds.includes(options.provider),
+      )
+      .map((fieldSource) => fieldSource.id);
+    let response: Response;
+    try {
+      response = await options.fetchImpl(source.buildUrl(options.config.baseUrl!), {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch {
+      if (source.required) {
+        throw new Error(
+          `Could not fetch the model catalog for Pi provider "${options.provider}". Check its endpoint and network access.`,
+        );
+      }
+      metadataWarnings.push(
+        'Could not fetch LiteLLM metadata from GET /model_group/info; continuing with the available /v1/models fields only.',
+      );
+      continue;
     }
+    if (!response.ok) {
+      if (source.required) {
+        throw new Error(
+          `Model catalog request for Pi provider "${options.provider}" failed with HTTP ${response.status}.`,
+        );
+      }
+      metadataWarnings.push(
+        `LiteLLM GET /model_group/info returned HTTP ${response.status}; continuing with the available /v1/models fields only.`,
+      );
+      continue;
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      if (source.required) {
+        throw new Error(
+          `Pi provider "${options.provider}" returned an invalid model catalog response.`,
+        );
+      }
+      metadataWarnings.push(
+        'LiteLLM GET /model_group/info returned invalid JSON; continuing with the available /v1/models fields only.',
+      );
+      continue;
+    }
+    const rows = source.readRows(payload);
+    if (rows === undefined) {
+      if (source.required) {
+        throw new Error(
+          `Pi provider "${options.provider}" returned an invalid model catalog response.`,
+        );
+      }
+      metadataWarnings.push(
+        'LiteLLM GET /model_group/info returned an invalid catalog shape; continuing with the available /v1/models fields only.',
+      );
+      continue;
+    }
+
+    mergePiModelCatalogRows(models, rows, source, fieldSources);
   }
 
   return {
-    ...(reasoning !== undefined ? { reasoning } : {}),
-    thinkingLevelMap,
+    models: [...models.values()].sort((left, right) =>
+      left.id.localeCompare(right.id),
+    ),
+    metadataWarnings,
   };
 }
 
-function readPiRemoteReasoningLevels(
-  item: Record<string, any>,
+function readDataRows(payload: unknown): unknown[] | undefined {
+  return isRecord(payload) && Array.isArray(payload.data)
+    ? payload.data
+    : undefined;
+}
+
+function mergePiModelCatalogRows(
+  models: Map<string, PiRemoteModel>,
+  rows: unknown[],
+  source: PiModelCatalogEndpointSource,
+  fieldSources: readonly PiModelCatalogFieldSource[],
+): void {
+  for (const value of rows) {
+    if (!isRecord(value)) continue;
+    const rawId = value[source.modelIdField];
+    if (typeof rawId !== 'string' || rawId.trim() === '') continue;
+    const id = rawId.trim();
+    const existing = models.get(id);
+    if (source.addModelIds) {
+      // Preserve the existing /v1/models rule: the first row for an ID wins.
+      if (existing) continue;
+      models.set(id, {
+        id,
+        ...readPiRemoteModelFields(value, fieldSources),
+      });
+      continue;
+    }
+    if (!existing) continue;
+    const fields = readPiRemoteModelFields(value, fieldSources);
+    if (Object.keys(fields).length > 0) {
+      models.set(id, { ...existing, ...fields });
+    }
+  }
+}
+
+function readPiRemoteModelFields(
+  row: PiModelCatalogRow,
+  sources: readonly PiModelCatalogFieldSource[],
+): Partial<Omit<PiRemoteModel, 'id'>> {
+  const fields: Record<string, unknown> = {};
+  for (const source of sources) {
+    for (const sync of PI_MODEL_CATALOG_FIELD_SYNC) {
+      const reader = sync.sources[source];
+      if (!reader) continue;
+      const value = reader(row);
+      if (value !== undefined) {
+        fields[sync.remoteField] = value;
+      }
+    }
+  }
+  return fields as Partial<Omit<PiRemoteModel, 'id'>>;
+}
+
+function readMagpieReasoning(row: PiModelCatalogRow): boolean | undefined {
+  if (typeof row.reasoning === 'boolean') return row.reasoning;
+  const levels = readMagpieReasoningLevels(row);
+  return levels === undefined
+    ? undefined
+    : levels.some((level) => level !== 'off' && level !== 'none');
+}
+
+function readMagpieReasoningLevels(
+  row: PiModelCatalogRow,
 ): string[] | undefined {
-  // Magpie's standard /v1/models rows expose both forms with the same values.
-  // Prefer the structured list, and accept its documented flat representation
-  // when a catalog supplies that field without the structured list.
-  if (Array.isArray(item.supported_reasoning_levels)) {
-    const levels = item.supported_reasoning_levels.map((entry: unknown) =>
+  // Magpie's OpenAI-compatible /v1/models extension publishes both forms.
+  // Prefer the structured list, and accept its flat form when it is the only
+  // valid representation in a row.
+  if (Array.isArray(row.supported_reasoning_levels)) {
+    const levels = row.supported_reasoning_levels.map((entry: unknown) =>
       isRecord(entry) && typeof entry.effort === 'string'
         ? entry.effort.trim()
         : undefined,
@@ -371,8 +534,8 @@ function readPiRemoteReasoningLevels(
     }
   }
 
-  if (Array.isArray(item.reasoning_levels)) {
-    const levels = item.reasoning_levels.map((level: unknown) =>
+  if (Array.isArray(row.reasoning_levels)) {
+    const levels = row.reasoning_levels.map((level: unknown) =>
       typeof level === 'string' ? level.trim() : undefined,
     );
     if (levels.every((level: string | undefined) => level !== undefined && level !== '')) {
@@ -383,22 +546,74 @@ function readPiRemoteReasoningLevels(
   return undefined;
 }
 
-function refreshPiReasoningMetadata(
+function readLiteLlmReasoning(row: PiModelCatalogRow): boolean | undefined {
+  if (typeof row.supports_reasoning === 'boolean') {
+    return row.supports_reasoning;
+  }
+  const efforts = readStringArrayField(row, 'supported_reasoning_efforts');
+  return efforts === undefined
+    ? undefined
+    : efforts.some((effort) => effort !== 'off' && effort !== 'none');
+}
+
+function readStringArrayField(
+  row: PiModelCatalogRow,
+  field: string,
+): string[] | undefined {
+  const value = row[field];
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.map((entry: unknown) =>
+    typeof entry === 'string' ? entry.trim() : undefined,
+  );
+  return strings.every((entry) => entry !== undefined && entry !== '')
+    ? strings as string[]
+    : undefined;
+}
+
+function mapProviderThinkingLevels(
+  providerLevels: string[] | undefined,
+): Record<string, string | null> | undefined {
+  if (providerLevels === undefined) return undefined;
+  const supportedLevels = new Set(providerLevels);
+  const thinkingLevelMap: Record<string, string | null> = {};
+  for (const level of PI_THINKING_LEVELS) {
+    const providerLevel = supportedLevels.has(level)
+      ? level
+      : level === 'off' && supportedLevels.has('none')
+        ? 'none'
+        : undefined;
+    thinkingLevelMap[level] = providerLevel ?? null;
+  }
+  return thinkingLevelMap;
+}
+
+function createPiModelDefinition(remote: PiRemoteModel): PiModelDefinition {
+  const definition: PiModelDefinition = { id: remote.id };
+  for (const sync of PI_MODEL_CATALOG_FIELD_SYNC) {
+    if (!sync.add) continue;
+    const value = remote[sync.remoteField];
+    if (value !== undefined) {
+      Object.assign(definition, { [sync.piField]: value });
+    }
+  }
+  return definition;
+}
+
+function refreshPiModelMetadata(
   existing: PiModelDefinition,
   remote: PiRemoteModel,
 ): PiModelDefinition | undefined {
   let changed = false;
   const refreshed: PiModelDefinition = { ...existing };
 
-  if (remote.reasoning !== undefined && remote.reasoning !== existing.reasoning) {
-    refreshed.reasoning = remote.reasoning;
-    changed = true;
-  }
-  if (
-    remote.thinkingLevelMap !== undefined &&
-    !sameThinkingLevelMap(existing.thinkingLevelMap, remote.thinkingLevelMap)
-  ) {
-    refreshed.thinkingLevelMap = remote.thinkingLevelMap;
+  for (const sync of PI_MODEL_CATALOG_FIELD_SYNC) {
+    if (!sync.refreshExisting) continue;
+    const remoteValue = remote[sync.remoteField];
+    const existingValue = existing[sync.piField];
+    if (remoteValue === undefined || sync.isEqual(existingValue, remoteValue)) {
+      continue;
+    }
+    Object.assign(refreshed, { [sync.piField]: remoteValue });
     changed = true;
   }
 
@@ -406,10 +621,10 @@ function refreshPiReasoningMetadata(
 }
 
 function sameThinkingLevelMap(
-  left: Record<string, string | null> | undefined,
-  right: Record<string, string | null>,
+  left: unknown,
+  right: unknown,
 ): boolean {
-  if (!left) return false;
+  if (!isRecord(left) || !isRecord(right)) return false;
   const leftKeys = Object.keys(left);
   const rightKeys = Object.keys(right);
   return (
@@ -419,6 +634,21 @@ function sameThinkingLevelMap(
 }
 
 function buildModelsUrl(baseUrl: string): string {
+  const url = parsePiProviderBaseUrl(baseUrl);
+  const path = url.pathname.replace(/\/+$/, '');
+  const apiPath = /\/v1$/i.test(path) ? path : `${path}/v1`;
+  url.pathname = `${apiPath}/models`;
+  return url.toString();
+}
+
+function buildLiteLlmModelGroupInfoUrl(baseUrl: string): string {
+  const url = parsePiProviderBaseUrl(baseUrl);
+  const path = url.pathname.replace(/\/+$/, '').replace(/\/v1$/i, '');
+  url.pathname = `${path}/model_group/info`;
+  return url.toString();
+}
+
+function parsePiProviderBaseUrl(baseUrl: string): URL {
   let url: URL;
   try {
     url = new URL(baseUrl);
@@ -428,10 +658,7 @@ function buildModelsUrl(baseUrl: string): string {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error('Pi provider baseUrl must use HTTP or HTTPS.');
   }
-  const path = url.pathname.replace(/\/+$/, '');
-  const apiPath = /\/v1$/i.test(path) ? path : `${path}/v1`;
-  url.pathname = `${apiPath}/models`;
-  return url.toString();
+  return url;
 }
 
 async function readModelsFile(path: string): Promise<Record<string, unknown>> {
