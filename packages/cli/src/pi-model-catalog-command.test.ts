@@ -84,29 +84,48 @@ describe('Pi model catalog sync command', () => {
     );
   });
 
-  it('imports explicit reasoning metadata and passes conductor pre-session validation', async () => {
-    const fixture = await createFixture({ apiKey: 'catalog-test-key' });
+  it('imports Magpie /v1/models reasoning metadata and passes conductor pre-session validation', async () => {
+    const fixture = await createFixture({
+      apiKey: 'catalog-test-key',
+      providerId: 'magpie',
+    });
     const catalog = JSON.parse(
       await readFile(
-        new URL('../test/fixtures/pi-model-catalog-reasoning.json', import.meta.url),
+        new URL('../test/fixtures/magpie-v1-models-reasoning.json', import.meta.url),
         'utf8',
       ),
     );
+    for (const model of catalog.data) {
+      expect(model.reasoning).toEqual(expect.any(Boolean));
+      expect(model.reasoning_levels).toEqual(
+        model.supported_reasoning_levels.map(
+          (level: { effort: string }) => level.effort,
+        ),
+      );
+    }
     const userModelsPath = join(fixture.agentDir, 'models.json');
     const systemPromptPath = join(fixture.repoRoot, 'system.md');
     await writeFile(systemPromptPath, 'test prompt');
+    const requestUrls: string[] = [];
 
     const result = await runPiModelsAdd({
       repoRoot: fixture.repoRoot,
-      provider: 'litellm',
-      fetchImpl: (async () => Response.json(catalog)) as typeof fetch,
-    }, ['limited-reasoning', 'string-levels', 'plain']);
+      provider: fixture.providerId,
+      fetchImpl: (async (input) => {
+        requestUrls.push(String(input));
+        return Response.json(catalog);
+      }) as typeof fetch,
+    }, ['openai/limited-reasoning', 'openai/medium-reasoning']);
 
-    expect(result.added).toEqual(['limited-reasoning', 'string-levels', 'plain']);
+    expect(requestUrls).toEqual(['https://magpie.example/v1/models']);
+    expect(result.added).toEqual([
+      'openai/limited-reasoning',
+      'openai/medium-reasoning',
+    ]);
     const saved = JSON.parse(await readFile(userModelsPath, 'utf8'));
-    expect(saved.providers.litellm.models).toEqual([
+    expect(saved.providers.magpie.models).toEqual([
       {
-        id: 'limited-reasoning',
+        id: 'openai/limited-reasoning',
         contextWindow: 9216,
         reasoning: true,
         thinkingLevelMap: {
@@ -120,11 +139,11 @@ describe('Pi model catalog sync command', () => {
         },
       },
       {
-        id: 'string-levels',
+        id: 'openai/medium-reasoning',
         contextWindow: 8192,
         reasoning: true,
         thinkingLevelMap: {
-          off: 'off',
+          off: null,
           minimal: 'minimal',
           low: null,
           medium: 'medium',
@@ -133,13 +152,12 @@ describe('Pi model catalog sync command', () => {
           max: null,
         },
       },
-      { id: 'plain', contextWindow: 64000 },
     ]);
 
     const conductor = await PiConductorAgent.create({
       cwd: fixture.repoRoot,
       pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
-      modelId: 'litellm/limited-reasoning',
+      modelId: 'magpie/openai/limited-reasoning',
       reasoning: 'low',
       systemPrompt: systemPromptPath,
       sessionDir: join(fixture.repoRoot, '.ensemble', 'pi-sessions'),
@@ -150,16 +168,17 @@ describe('Pi model catalog sync command', () => {
   it('leaves existing models alone by default and refreshes only supplied reasoning metadata', async () => {
     const fixture = await createFixture({
       apiKey: 'catalog-test-key',
+      providerId: 'magpie',
       projectModels: [
         {
-          id: 'limited-reasoning',
+          id: 'openai/limited-reasoning',
           name: 'Hand edited name',
           contextWindow: 12345,
           reasoning: false,
           thinkingLevelMap: { high: 'manual-high' },
         },
         {
-          id: 'plain',
+          id: 'openai/plain',
           name: 'Manual plain model',
           contextWindow: 23456,
           reasoning: true,
@@ -169,37 +188,45 @@ describe('Pi model catalog sync command', () => {
     });
     const catalog = JSON.parse(
       await readFile(
-        new URL('../test/fixtures/pi-model-catalog-reasoning.json', import.meta.url),
+        new URL('../test/fixtures/magpie-v1-models-reasoning.json', import.meta.url),
         'utf8',
       ),
     );
-    const fetchImpl = (async () => Response.json(catalog)) as typeof fetch;
+    const fetchImpl = (async () =>
+      Response.json({
+        // This mock-only row exercises a catalog that omits optional reasoning
+        // metadata; Magpie's documented rows advertise both level fields.
+        data: [...catalog.data, { id: 'openai/plain', max_input_tokens: 64000 }],
+      })) as typeof fetch;
     const original = await readFile(fixture.projectModelsPath, 'utf8');
 
     const defaultResult = await runPiModelsAdd({
       repoRoot: fixture.repoRoot,
-      provider: 'litellm',
+      provider: fixture.providerId,
       target: 'project',
       fetchImpl,
-    }, ['limited-reasoning', 'plain']);
+    }, ['openai/limited-reasoning', 'openai/plain']);
 
-    expect(defaultResult.skipped).toEqual(['limited-reasoning', 'plain']);
+    expect(defaultResult.skipped).toEqual([
+      'openai/limited-reasoning',
+      'openai/plain',
+    ]);
     expect(await readFile(fixture.projectModelsPath, 'utf8')).toBe(original);
 
     const refreshResult = await runPiModelsAdd({
       repoRoot: fixture.repoRoot,
-      provider: 'litellm',
+      provider: fixture.providerId,
       target: 'project',
       refreshMetadata: true,
       fetchImpl,
-    }, ['limited-reasoning', 'plain']);
+    }, ['openai/limited-reasoning', 'openai/plain']);
 
-    expect(refreshResult.refreshed).toEqual(['limited-reasoning']);
-    expect(refreshResult.skipped).toEqual(['plain']);
+    expect(refreshResult.refreshed).toEqual(['openai/limited-reasoning']);
+    expect(refreshResult.skipped).toEqual(['openai/plain']);
     const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
-    expect(saved.providers.litellm.models).toEqual([
+    expect(saved.providers.magpie.models).toEqual([
       {
-        id: 'limited-reasoning',
+        id: 'openai/limited-reasoning',
         name: 'Hand edited name',
         contextWindow: 12345,
         reasoning: true,
@@ -214,7 +241,7 @@ describe('Pi model catalog sync command', () => {
         },
       },
       {
-        id: 'plain',
+        id: 'openai/plain',
         name: 'Manual plain model',
         contextWindow: 23456,
         reasoning: true,
@@ -395,6 +422,7 @@ describe('Pi model catalog sync command', () => {
 });
 
 async function createFixture(options: {
+  providerId?: string;
   projectModels?: Array<{
     id: string;
     name?: string;
@@ -406,6 +434,12 @@ async function createFixture(options: {
   authHeader?: boolean;
 }) {
   const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-model-catalog-'));
+  const providerId = options.providerId ?? 'litellm';
+  const providerName = providerId === 'litellm'
+    ? 'LiteLLM'
+    : providerId === 'magpie'
+      ? 'Magpie'
+      : providerId;
   const agentDir = join(repoRoot, 'user-pi');
   const projectDir = join(repoRoot, 'project-pi');
   const projectModelsPath = join(projectDir, 'models.json');
@@ -427,10 +461,10 @@ async function createFixture(options: {
     JSON.stringify(
       {
         providers: {
-          litellm: {
-            name: 'LiteLLM',
+          [providerId]: {
+            name: providerName,
             api: 'openai-completions',
-            baseUrl: 'https://litellm.example/v1',
+            baseUrl: `https://${providerId}.example/v1`,
             apiKey: options.apiKey,
             authHeader: options.authHeader ?? true,
             ...(options.projectModels ? { models: options.projectModels } : {}),
@@ -441,5 +475,5 @@ async function createFixture(options: {
       2,
     ),
   );
-  return { repoRoot, agentDir, projectDir, projectModelsPath };
+  return { repoRoot, agentDir, projectDir, projectModelsPath, providerId };
 }

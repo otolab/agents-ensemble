@@ -357,8 +357,9 @@ function parsePiRemoteReasoningMetadata(
 function readPiRemoteReasoningLevels(
   item: Record<string, any>,
 ): string[] | undefined {
-  // Some /v1/models catalogs use Codex-style { effort } entries; others expose
-  // the same values as a plain reasoning_levels string array.
+  // Magpie's standard /v1/models rows expose both forms with the same values.
+  // Prefer the structured list, and accept its documented flat representation
+  // when a catalog supplies that field without the structured list.
   if (Array.isArray(item.supported_reasoning_levels)) {
     const levels = item.supported_reasoning_levels.map((entry: unknown) =>
       isRecord(entry) && typeof entry.effort === 'string'

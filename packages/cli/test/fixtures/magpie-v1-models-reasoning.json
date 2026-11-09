@@ -1,0 +1,64 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "openai/limited-reasoning",
+      "object": "model",
+      "type": "model",
+      "created": 0,
+      "created_at": "2025-01-01T00:00:00Z",
+      "owned_by": "openai",
+      "display_name": "Limited reasoning",
+      "reasoning": true,
+      "supported_reasoning_levels": [
+        {
+          "effort": "none"
+        },
+        {
+          "effort": "minimal"
+        },
+        {
+          "effort": "low"
+        },
+        {
+          "effort": "high"
+        },
+        {
+          "effort": "max"
+        }
+      ],
+      "reasoning_levels": ["none", "minimal", "low", "high", "max"],
+      "context_window": 9216,
+      "context_length": 9216,
+      "max_input_tokens": 9216,
+      "max_output_tokens": 2048,
+      "tool_call": true,
+      "supported_parameters": ["tools", "tool_choice", "reasoning"]
+    },
+    {
+      "id": "openai/medium-reasoning",
+      "object": "model",
+      "type": "model",
+      "created": 0,
+      "created_at": "2025-01-01T00:00:00Z",
+      "owned_by": "openai",
+      "display_name": "Medium reasoning",
+      "reasoning": true,
+      "supported_reasoning_levels": [
+        { "effort": "minimal" },
+        { "effort": "medium" },
+        { "effort": "xhigh" }
+      ],
+      "reasoning_levels": ["minimal", "medium", "xhigh"],
+      "context_window": 8192,
+      "context_length": 8192,
+      "max_input_tokens": 8192,
+      "max_output_tokens": 2048,
+      "tool_call": true,
+      "supported_parameters": ["tools", "tool_choice", "reasoning"]
+    }
+  ],
+  "has_more": false,
+  "first_id": "openai/limited-reasoning",
+  "last_id": "openai/medium-reasoning"
+}

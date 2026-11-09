@@ -145,13 +145,17 @@ ensemble models diff --provider litellm --json
 | `id` | `id` | 選択した model ID をそのまま保存 |
 | `max_input_tokens` | `contextWindow` | 正の安全な整数だけ。新規追加時に設定 |
 | `reasoning` | `reasoning` | boolean の場合に保存 |
-| `supported_reasoning_levels`（`{ effort }[]`）または `reasoning_levels`（`string[]`） | `thinkingLevelMap` | `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` を同名で対応。provider 値 `none` は Pi の `off` に対応し、一覧にない Pi level は `null` |
-| `name` / `display_name` / `description` | — | 同期しない |
+| `supported_reasoning_levels`（`{ effort }[]`）と `reasoning_levels`（`string[]`） | `thinkingLevelMap` | Magpie は同じ level 一覧を両方の形で返す。`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` を同名で対応し、provider 値 `none` は Pi の `off` に対応する。一覧にない Pi level は `null` |
+| `display_name` / `owned_by` / `name` / `description` | — | 同期しない |
+| `context_window` / `context_length` | — | `contextWindow` は `max_input_tokens` から設定 |
 | `max_output_tokens` | — (`maxTokens`) | 同期しない |
-| `pricing` / `cost` | — (`cost`) | 同期しない |
-| `modalities` / `input_modalities`、その他の任意 metadata | — | 同期しない |
+| `pricing` / `cost` / `modalities` / `input_modalities` / その他の任意 metadata | — | 同期しない |
 
-level list があり `reasoning` boolean が省略されている場合は、`off` / `none` 以外の値が含まれるかを `reasoning` に反映します。既知の Pi level と一致しない provider 値から近い level を推測することはありません。LiteLLM upstream の `supported_reasoning_efforts` は [別 endpoint の `/model_group/info`](https://github.com/BerriAI/litellm/pull/37897) が返す値です。また LiteLLM の Codex native catalog は [`/v1/models?client_version=...`](https://github.com/BerriAI/litellm-docs/blob/main/docs/proxy/client_setup/codex_cli.md) で別形式になります。このコマンドは標準の `/v1/models` を取得して OpenAI 形式の `data` を読むため、LiteLLM がその応答に reasoning metadata を独自追加していない限り同期対象になりません。
+reasoning metadata の根拠は、Magpie が OpenAI 互換の通常 `GET /v1/models` に載せる拡張です。応答は `{ object: "list", data: [...] }` で、各 row に `reasoning`、`supported_reasoning_levels`（`{ effort }` の配列）、同じ level を並べた `reasoning_levels`（文字列配列）が含まれます。Magpie の[統合ガイド](https://github.com/yetone/magpie/blob/main/docs/integrating.md)と、[`GET /v1/models` の route](https://github.com/yetone/magpie/blob/main/internal/gateway/gateway.go#L914-L916)、[row の metadata fields](https://github.com/yetone/magpie/blob/main/internal/gateway/gateway.go#L1263-L1284)、[response envelope](https://github.com/yetone/magpie/blob/main/internal/gateway/gateway.go#L1645-L1649)、[上流の reasoning catalog test](https://github.com/yetone/magpie/blob/main/internal/gateway/gateway_test.go#L987-L1065)で確認できます。fixture と CLI test もこの通常の `data[]` response を使います。
+
+level list があり `reasoning` boolean が省略されている場合は、`off` / `none` 以外の値が含まれるかを `reasoning` に反映します。既知の Pi level と一致しない provider 値から近い level を推測することはありません。
+
+LiteLLM の `supported_reasoning_efforts` は [別 endpoint の `/model_group/info`](https://github.com/BerriAI/litellm/pull/37897) にあります。Codex native catalog も [`client_version` を指定した別形式](https://github.com/BerriAI/litellm-docs/blob/main/docs/proxy/client_setup/codex_cli.md)で、どちらもこのコマンドでは読みません。これらの拡張 reasoning fields を返さない `/v1/models` row は、従来どおり `id` と `max_input_tokens` 由来の `contextWindow` のみを同期します。
 
 従来の `models sync` は非推奨ですが、互換性のため少なくとも 1 リリースは利用できます。比較には `models diff`、追加には `models add` を使ってください。複数 ID を追加する `sync --add first --add second` は `add first second` に移行できます。どちらも全 ID を検証してから書き込み、書込先の省略時は user です。
 

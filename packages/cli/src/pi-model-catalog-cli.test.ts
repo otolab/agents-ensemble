@@ -30,6 +30,11 @@ describe('ensemble models catalog CLI', () => {
           baseUrl: 'https://litellm.example/v1',
           apiKey: 'test-key',
         },
+        magpie: {
+          api: 'openai-completions',
+          baseUrl: 'https://magpie.example/v1',
+          apiKey: 'test-key',
+        },
       },
     }));
     await setRemoteModels([{ id: 'remote-model', max_input_tokens: 64000 }]);
@@ -46,10 +51,11 @@ describe('ensemble models catalog CLI', () => {
     ], { encoding: 'utf8', env: { ...process.env, HOME: repoRoot } });
   }
 
-  async function setRemoteModels(models: unknown[]) {
+  async function setRemoteModels(models: unknown[], provider = 'litellm') {
+    const catalogUrl = `https://${provider}.example/v1/models`;
     await writeFile(preload, `
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = async (input, init) => String(input).startsWith('https://litellm.example/')
+      globalThis.fetch = async (input, init) => String(input) === ${JSON.stringify(catalogUrl)}
         ? Response.json({ data: ${JSON.stringify(models)} })
         : String(input).startsWith('data:')
           ? originalFetch(input, init)
@@ -94,34 +100,34 @@ describe('ensemble models catalog CLI', () => {
     expect(list.stderr).toContain('team 設定');
   });
 
-  it('imports reasoning metadata and refreshes only API-supplied fields', async () => {
+  it('imports Magpie /v1/models reasoning metadata and refreshes only API-supplied fields', async () => {
     const catalog = JSON.parse(
       await readFile(
-        new URL('../test/fixtures/pi-model-catalog-reasoning.json', import.meta.url),
+        new URL('../test/fixtures/magpie-v1-models-reasoning.json', import.meta.url),
         'utf8',
       ),
     ) as { data: unknown[] };
-    await setRemoteModels(catalog.data);
+    await setRemoteModels(catalog.data, 'magpie');
 
     const userModelsPath = join(repoRoot, 'user-pi', 'models.json');
     const added = run(
       'add',
-      'limited-reasoning',
-      'plain',
+      'openai/limited-reasoning',
+      'openai/medium-reasoning',
       '--provider',
-      'litellm',
+      'magpie',
       '--json',
     );
     expect(added.status).toBe(0);
     expect(JSON.parse(added.stdout).added).toEqual([
-      'limited-reasoning',
-      'plain',
+      'openai/limited-reasoning',
+      'openai/medium-reasoning',
     ]);
 
     const models = JSON.parse(await readFile(userModelsPath, 'utf8'));
-    expect(models.providers.litellm.models).toEqual([
+    expect(models.providers.magpie.models).toEqual([
       {
-        id: 'limited-reasoning',
+        id: 'openai/limited-reasoning',
         contextWindow: 9216,
         reasoning: true,
         thinkingLevelMap: {
@@ -134,19 +140,32 @@ describe('ensemble models catalog CLI', () => {
           max: 'max',
         },
       },
-      { id: 'plain', contextWindow: 64000 },
+      {
+        id: 'openai/medium-reasoning',
+        contextWindow: 8192,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: 'minimal',
+          low: null,
+          medium: 'medium',
+          high: null,
+          xhigh: 'xhigh',
+          max: null,
+        },
+      },
     ]);
 
-    models.providers.litellm.models = [
+    models.providers.magpie.models = [
       {
-        id: 'limited-reasoning',
+        id: 'openai/limited-reasoning',
         name: 'Hand edited name',
         contextWindow: 12345,
         reasoning: false,
         thinkingLevelMap: { high: 'manual-high' },
       },
       {
-        id: 'plain',
+        id: 'openai/plain',
         name: 'Manual plain model',
         contextWindow: 23456,
         reasoning: true,
@@ -154,27 +173,31 @@ describe('ensemble models catalog CLI', () => {
       },
     ];
     await writeFile(userModelsPath, JSON.stringify(models));
+    await setRemoteModels([
+      ...catalog.data,
+      { id: 'openai/plain', max_input_tokens: 64000 },
+    ], 'magpie');
 
     const refreshed = run(
       'add',
-      'limited-reasoning',
-      'plain',
+      'openai/limited-reasoning',
+      'openai/plain',
       '--provider',
-      'litellm',
+      'magpie',
       '--refresh-metadata',
       '--json',
     );
     expect(refreshed.status).toBe(0);
     expect(JSON.parse(refreshed.stdout)).toMatchObject({
-      refreshed: ['limited-reasoning'],
-      skipped: ['plain'],
+      refreshed: ['openai/limited-reasoning'],
+      skipped: ['openai/plain'],
       targetPath: userModelsPath,
     });
 
     const saved = JSON.parse(await readFile(userModelsPath, 'utf8'));
-    expect(saved.providers.litellm.models).toEqual([
+    expect(saved.providers.magpie.models).toEqual([
       {
-        id: 'limited-reasoning',
+        id: 'openai/limited-reasoning',
         name: 'Hand edited name',
         contextWindow: 12345,
         reasoning: true,
@@ -189,7 +212,7 @@ describe('ensemble models catalog CLI', () => {
         },
       },
       {
-        id: 'plain',
+        id: 'openai/plain',
         name: 'Manual plain model',
         contextWindow: 23456,
         reasoning: true,
