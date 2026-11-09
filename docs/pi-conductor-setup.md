@@ -136,7 +136,55 @@ ensemble models add gpt-6-luna --provider litellm --target project
 ensemble models diff --provider litellm --json
 ```
 
-`add` は追加したい ID を 1 件以上明示します。複数 ID を指定した場合はすべてが API に存在することを確認してから書き込み、不明な ID があれば何も追加しません。catalog の全件を自動追加する機能ではありません。書込先は省略時 user で、project へ書く場合は `--target project` を指定します。project は `conductor.pi.projectDir`（既定 `<repoRoot>/.ensemble/pi`）、user は `conductor.pi.agentDir`（既定 `~/.ensemble/pi`）にある `models.json` です。既存の provider 設定と model 定義は残し、同じ ID がすでに有効なら更新せずスキップします。API にない ID の削除や既存定義の force update は行いません。
+`add` は追加したい ID を 1 件以上明示します。複数 ID を指定した場合はすべてが API に存在することを確認してから書き込み、不明な ID があれば何も追加しません。catalog の全件を自動追加する機能ではありません。書込先は省略時 user で、project へ書く場合は `--target project` を指定します。project は `conductor.pi.projectDir`（既定 `<repoRoot>/.ensemble/pi`）、user は `conductor.pi.agentDir`（既定 `~/.ensemble/pi`）にある `models.json` です。
+
+既存 ID は既定で変更せず、`--refresh-metadata` を指定した場合だけ、API から取得できた metadata を field ごとに更新します。LiteLLM の `supported_reasoning_efforts: null` または省略は不明として map を作らず、既存の手編集値も残します。`[]` は既知の空集合なので `thinkingLevelMap` の全 level を `null` にしますが、それだけでは `reasoning: false` を設定しません。`supports_reasoning: false` は schema default と明示値を response 上で区別できないため、否定の根拠に使いません。`supports_reasoning: true` は `reasoning: true` に反映し、effort list が不明なら既存の level map は保持します。`contextWindow`、model 名、`maxTokens`、`cost`、header など既存の項目は refresh でも保持します。
+
+`models add` と非推奨の `models sync` が同期する field は次のとおりです。実装では endpoint と provider ごとに source を登録し、Pi field・追加時の扱い・refresh 対象を一つの field registry で管理します。
+
+| provider / source | API field | Pi `models.json` | 扱い |
+|---|---|---|---|
+| OpenAI 互換 `GET /v1/models` | `data[].id` | `id` | 明示選択した ID を保存。LiteLLM group metadata の join key にも使う |
+| OpenAI 互換 `GET /v1/models` | `data[].max_input_tokens`（provider が返す場合） | `contextWindow` | 正の安全な整数だけ。新規追加時に設定し、既存行の refresh では更新しない |
+| Magpie `GET /v1/models` 拡張 | `reasoning` | `reasoning` | boolean を保存。省略時は effort 一覧から推定 |
+| Magpie `GET /v1/models` 拡張 | `supported_reasoning_levels`（`{ effort }[]`）または `reasoning_levels`（`string[]`） | `thinkingLevelMap` | Pi native の `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` を完全一致で対応。provider 値 `none` は `off` に対応し、未対応 level は `null` |
+| LiteLLM (`provider: litellm`) `GET /model_group/info` | `data[].model_group` | — | `/v1/models` の `id` と完全一致する行だけを結合し、追加対象 ID は増やさない。reasoning fieldを含む応答で一致しない追加対象があれば、理由を推定せず warning を出す |
+| LiteLLM `GET /model_group/info` | `supports_reasoning: true` | `reasoning: true` | `false` は schema default と明示値を区別できないため同期しない。effort list に `off` / `none` 以外の値があれば `reasoning: true` の根拠にもする |
+| LiteLLM `GET /model_group/info` | `supported_reasoning_efforts`（`string[]` / `null`） | `thinkingLevelMap` | `null` / 省略時は不明として map を作らない。`[]` は全 level を `null` にする。値がある場合は Pi native level に完全一致で写し、`none` は `off`、一覧にない level は `null` |
+
+### LiteLLM の reasoning metadata
+
+以下の LiteLLM source link は、tag `v1.108.3` が参照する commit [`b7d579f`](https://github.com/BerriAI/litellm/commit/b7d579fab2818968322ef96e5b8e98dc8178fafc) に固定しています。引用範囲はこの commit の file blob と照合しています。
+
+LiteLLM v1.108.3 の通常 [`GET /v1/models` route](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/proxy/proxy_server.py#L11835-L12098) は OpenAI 互換の `{ object: "list", data: [...] }` を返します。row schema の [`ModelInfoResponse`](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/types/proxy/model_listing.py#L12-L25) に reasoning field はありません。`client_version` が指定された場合の Codex 固有 response shape も同じ route に記載されています。
+
+reasoning metadata は [`GET /model_group/info` route](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/proxy/proxy_server.py#L17254-L17481) から取得します。route の group builder ([`get_model_group_info`](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/proxy/proxy_server.py#L17217-L17248)) は `ModelGroupInfoProxy.model_validate(_model_group_info.model_dump())` で group object を組み立て、`data[]` で返します。response model [`ModelGroupInfoProxy`](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/types/proxy/management_endpoints/model_management_endpoints.py#L11-L15) は [`ModelGroupInfo` schema](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/types/router.py#L925-L959) を継承します。schema 上、`supports_reasoning` は default `false`、`supported_reasoning_efforts` は nullable な tuple です。initializer は `supports_reasoning: null` も `false` に正規化します。
+
+Router は deployment の `supports_reasoning: true` を見つけたときだけ group field を `true` にします。group-level の集約は [`_set_model_group_info`](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/router.py#L11704-L11968) が行います。response には「明示設定か default か」の出所情報が残りません。そのため `supports_reasoning: false` だけでは unsupported を確定できません。importer は `true` を肯定の根拠とし、`false` は `reasoning: false` に同期しません。この区別を API から復元できない点は LiteLLM v1.108.3 の contract 上の制約です。
+
+`supported_reasoning_efforts` は deployment 間の共通集合です。上流 resolver の [`resolve_supported_reasoning_efforts`](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/router_utils/reasoning_effort_capability.py#L153-L195) では、対応 effort が分かっていて空なら `[]`、effort 情報を確定できなければ `null` になります。したがって `false` と `null` の組合せは `reasoning` / `thinkingLevelMap` のいずれも更新せず、`false` と `[]` の組合せは map だけを全 `null` にします。effort list に `off` / `none` 以外の値があれば、`supports_reasoning` が schema default の `false` でも、その list を positive signal として `reasoning: true` を同期します。
+
+LiteLLM v1.108.3 では、`/v1/models` は caller の key/team alias に応じて公開 ID を組み立て、内部の metadata lookup ID とは別の `data[].id` を返す場合があります。route は [`caller_alias_maps`](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/proxy/common_utils/model_listing_utils.py#L207-L217) と [`alias_listing_entries`](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/proxy/common_utils/model_listing_utils.py#L320-L342) を使い、公開 ID と metadata lookup ID を分けます。その response row schema には canonical group への参照がありません（[`ModelInfoResponse`](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/types/proxy/model_listing.py#L12-L25)）。
+
+`/model_group/info` の `data[]` は `model_group` などを持つ group object を返します。route は [`TeamModelNameTranslator`](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/proxy/common_utils/model_listing_utils.py#L383-L436) で group の公開名を導出し、listing callback の非表示判定にだけ使います（[response filter](https://github.com/BerriAI/litellm/blob/b7d579fab2818968322ef96e5b8e98dc8178fafc/litellm/proxy/proxy_server.py#L17467-L17481)）。公開名を response の独立した field として返すわけではありません。response に caller alias の対応表も含まれないため、両 endpoint は `id` と `model_group` の完全一致で結合します。一致しない ID については、metadata endpoint が reasoning field を返している場合に `models add` が warning を stderr と JSON に出し、reasoning metadata を同期しません。context など `/v1/models` 由来の情報は引き続き追加します。候補が 1 件だけの場合や token limit が一致する場合も、alias 先は推測しません。alias 用の reasoning 設定が必要なら、`models.json` に手動で記述してください。
+
+`model_group` と `/v1/models` の `id` を結合しても、`/v1/models` にないgroupは追加しません。必要なreasoning fieldが `/model_group/info` にあるため、Codex 専用catalogを読む必要はありません。
+
+`models add` / `models sync` は provider ID が `litellm` の場合に限り、既存の fetch と認証 header を使って `/model_group/info` も GET します。`baseUrl` が `/v1` で終わる場合は、その suffix を外した host / path prefix に endpoint を付けます。新しい API client は不要です。追加 endpoint の取得失敗・不正な response は warning に記録し、従来の `/v1/models` による追加処理を続けます。この場合 reasoning metadata は取り込みません。`models remote` と `models diff` は ID 比較だけを行うため、この追加 endpoint は呼びません。
+
+LiteLLM の `supported_reasoning_efforts` は Pi の `thinkingLevelMap` に同期します。以下は現行実装の同期対象外です。
+
+| source | field | 同期しない理由 |
+|---|---|---|
+| LiteLLM `GET /model_group/info` | `supports_fast_mode` | Pi の `models.json` に対応する fast-mode field がない |
+| LiteLLM `GET /model_group/info` | `input_cost_per_token` / `output_cost_per_token` | Pi の `cost` に必要な cache read / write 単価がこの response にない。欠損を 0 として書くと cost estimate を誤らせる |
+| LiteLLM `GET /model_group/info` | `max_output_tokens` | Pi の `maxTokens` に自動同期しない。既存の出力上限設定を維持する |
+| LiteLLM `GET /model_group/info` / provider catalog（値がある場合） | `providers`、`mode`、`name` / `display_name`、`description`、modalities、その他 capability flags | conductor の reasoning validation に使わず、Pi field への写像も定めていない |
+| — | 独立した efficiency metric | この同期では対応する source field と Pi field の mapping を定義していない |
+| OpenAI 互換 `GET /v1/models` | `max_output_tokens`、`owned_by`、`created` | 出力上限や表示 metadata の自動変更はこの同期対象外。既存 Pi 設定を保持する |
+| Codex 用 `GET /v1/models?client_version=...` | `models[]` | `/model_group/info` が必要な LiteLLM reasoning effort を提供するため、Codex 固有 catalog を別途取り込まない |
+
+Magpie の `/v1/models` reasoning 拡張の shape は、[統合ガイド](https://github.com/yetone/magpie/blob/main/docs/integrating.md)、[`GET /v1/models` route](https://github.com/yetone/magpie/blob/main/internal/gateway/gateway.go#L914-L916)、[row の metadata fields](https://github.com/yetone/magpie/blob/main/internal/gateway/gateway.go#L1263-L1284)、[response envelope](https://github.com/yetone/magpie/blob/main/internal/gateway/gateway.go#L1645-L1649)、[reasoning catalog test](https://github.com/yetone/magpie/blob/main/internal/gateway/gateway_test.go#L987-L1065)で確認できます。reasoning field を返さない provider は従来どおり ID と `max_input_tokens` 由来の `contextWindow` だけを同期します。
 
 従来の `models sync` は非推奨ですが、互換性のため少なくとも 1 リリースは利用できます。比較には `models diff`、追加には `models add` を使ってください。複数 ID を追加する `sync --add first --add second` は `add first second` に移行できます。どちらも全 ID を検証してから書き込み、書込先の省略時は user です。
 
@@ -145,12 +193,14 @@ ensemble models diff --provider litellm --json
 | フィールド | `sync --json` | `diff --json` |
 |---|---|---|
 | `provider` | provider ID の文字列 | 同じ |
-| `apiOnly` | `{ id, maxInputTokens? }` の配列 | ID の文字列配列 |
+| `apiOnly` | `{ id, maxInputTokens?, reasoning?, thinkingLevelMap? }` の配列 | ID の文字列配列 |
 | `jsonOnly` / `shared` | ID の文字列配列 | 同じ |
 | `added` / `skipped` | 追加・スキップした ID の文字列配列 | なし |
+| `refreshed` | metadata を更新した ID の文字列配列 | なし |
+| `metadataWarnings` | 補助 metadata endpoint が使えなかった場合のみ | なし |
 | `targetPath` | 追加して書き込んだ場合のみ、書込先の文字列 | なし |
 
-例えば `sync` の `.apiOnly[].id` は、`diff` では `.apiOnly[]` です。`maxInputTokens` は API の `max_input_tokens` が正の安全な整数の場合に `sync` の `apiOnly` に含まれますが、`diff` には含まれません。互換形やこの値が必要なスクリプトは、非推奨期間中は引き続き `sync --json` を使えます。非推奨警告は stderr に出力されます。追加結果を取得する場合は `add --json` の `added` / `skipped` と、書込み時のみ含まれる `targetPath` を利用してください。
+例えば `sync` の `.apiOnly[].id` は、`diff` では `.apiOnly[]` です。`maxInputTokens` は API の `max_input_tokens` が正の安全な整数の場合に `sync` の `apiOnly` に含まれますが、`diff` には含まれません。互換形やこの値が必要なスクリプトは、非推奨期間中は引き続き `sync --json` を使えます。非推奨警告は stderr に出力されます。追加結果を取得する場合は `add --json` の `added` / `skipped`、`--refresh-metadata` による更新結果がある場合は `refreshed`、書込み時のみ含まれる `targetPath` を利用してください。
 
 `sync --add ... --json` の `apiOnly` / `jsonOnly` / `shared` は、**追加前**の models.json と API を比較した結果です。`added` / `skipped` はその比較後に行う追加の結果です。新コマンドで追加前の差分が必要な場合は、`diff --json` を `add` より先に実行してください。追加後に `diff` を実行すると、追加された ID は通常 `apiOnly` から `shared` に移るため、旧 `sync` が返した比較結果とは異なります。
 

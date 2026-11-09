@@ -30,6 +30,11 @@ describe('ensemble models catalog CLI', () => {
           baseUrl: 'https://litellm.example/v1',
           apiKey: 'test-key',
         },
+        magpie: {
+          api: 'openai-completions',
+          baseUrl: 'https://magpie.example/v1',
+          apiKey: 'test-key',
+        },
       },
     }));
     await setRemoteModels([{ id: 'remote-model', max_input_tokens: 64000 }]);
@@ -46,14 +51,26 @@ describe('ensemble models catalog CLI', () => {
     ], { encoding: 'utf8', env: { ...process.env, HOME: repoRoot } });
   }
 
-  async function setRemoteModels(models: Array<{ id: string; max_input_tokens?: number }>) {
+  async function setRemoteModels(
+    models: unknown[],
+    provider = 'litellm',
+    modelGroupInfo: unknown = { data: [] },
+  ) {
+    const catalogUrl = `https://${provider}.example/v1/models`;
+    const modelGroupInfoUrl = `https://${provider}.example/model_group/info`;
     await writeFile(preload, `
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = async (input, init) => String(input).startsWith('https://litellm.example/')
-        ? Response.json({ data: ${JSON.stringify(models)} })
-        : String(input).startsWith('data:')
+      globalThis.fetch = async (input, init) => {
+        if (String(input) === ${JSON.stringify(catalogUrl)}) {
+          return Response.json({ data: ${JSON.stringify(models)} });
+        }
+        if (String(input) === ${JSON.stringify(modelGroupInfoUrl)}) {
+          return Response.json(${JSON.stringify(modelGroupInfo)});
+        }
+        return String(input).startsWith('data:')
           ? originalFetch(input, init)
           : Promise.reject(new Error('Unexpected network request'));
+      };
     `);
   }
 
@@ -67,6 +84,7 @@ describe('ensemble models catalog CLI', () => {
     const addHelp = run('add', '--help');
     expect(addHelp.stdout).toContain('<id...>');
     expect(addHelp.stdout).toContain('Remote model IDs to add');
+    expect(addHelp.stdout).toContain('--refresh-metadata');
     expect(run('add', '--provider', 'litellm').status).not.toBe(0);
   });
 
@@ -91,6 +109,242 @@ describe('ensemble models catalog CLI', () => {
     expect(list.stdout).toContain('remote-model');
     expect(list.stderr).toContain('model registry');
     expect(list.stderr).toContain('team 設定');
+  });
+
+  it('imports Magpie /v1/models reasoning metadata and refreshes only API-supplied fields', async () => {
+    const catalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/magpie-v1-models-reasoning.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { data: unknown[] };
+    await setRemoteModels(catalog.data, 'magpie');
+
+    const userModelsPath = join(repoRoot, 'user-pi', 'models.json');
+    const added = run(
+      'add',
+      'openai/limited-reasoning',
+      'openai/medium-reasoning',
+      '--provider',
+      'magpie',
+      '--json',
+    );
+    expect(added.status).toBe(0);
+    expect(JSON.parse(added.stdout).added).toEqual([
+      'openai/limited-reasoning',
+      'openai/medium-reasoning',
+    ]);
+
+    const models = JSON.parse(await readFile(userModelsPath, 'utf8'));
+    expect(models.providers.magpie.models).toEqual([
+      {
+        id: 'openai/limited-reasoning',
+        contextWindow: 9216,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: null,
+          max: 'max',
+        },
+      },
+      {
+        id: 'openai/medium-reasoning',
+        contextWindow: 8192,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: 'minimal',
+          low: null,
+          medium: 'medium',
+          high: null,
+          xhigh: 'xhigh',
+          max: null,
+        },
+      },
+    ]);
+
+    models.providers.magpie.models = [
+      {
+        id: 'openai/limited-reasoning',
+        name: 'Hand edited name',
+        contextWindow: 12345,
+        reasoning: false,
+        thinkingLevelMap: { high: 'manual-high' },
+      },
+      {
+        id: 'openai/plain',
+        name: 'Manual plain model',
+        contextWindow: 23456,
+        reasoning: true,
+        thinkingLevelMap: { low: 'manual-low' },
+      },
+    ];
+    await writeFile(userModelsPath, JSON.stringify(models));
+    await setRemoteModels([
+      ...catalog.data,
+      { id: 'openai/plain', max_input_tokens: 64000 },
+    ], 'magpie');
+
+    const refreshed = run(
+      'add',
+      'openai/limited-reasoning',
+      'openai/plain',
+      '--provider',
+      'magpie',
+      '--refresh-metadata',
+      '--json',
+    );
+    expect(refreshed.status).toBe(0);
+    expect(JSON.parse(refreshed.stdout)).toMatchObject({
+      refreshed: ['openai/limited-reasoning'],
+      skipped: ['openai/plain'],
+      targetPath: userModelsPath,
+    });
+
+    const saved = JSON.parse(await readFile(userModelsPath, 'utf8'));
+    expect(saved.providers.magpie.models).toEqual([
+      {
+        id: 'openai/limited-reasoning',
+        name: 'Hand edited name',
+        contextWindow: 12345,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: null,
+          max: 'max',
+        },
+      },
+      {
+        id: 'openai/plain',
+        name: 'Manual plain model',
+        contextWindow: 23456,
+        reasoning: true,
+        thinkingLevelMap: { low: 'manual-low' },
+      },
+    ]);
+  });
+
+  it('imports LiteLLM model-group metadata through the CLI', async () => {
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { data: unknown[] };
+    const modelGroups = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-model-group-info.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    await setRemoteModels(modelsCatalog.data, 'litellm', modelGroups);
+
+    const result = run(
+      'add',
+      'gpt-6.1-terra',
+      'gpt-6.1-plain',
+      'gpt-6.1-false-empty-efforts',
+      '--provider',
+      'litellm',
+      '--target',
+      'project',
+      '--json',
+    );
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).added).toEqual([
+      'gpt-6.1-terra',
+      'gpt-6.1-plain',
+      'gpt-6.1-false-empty-efforts',
+    ]);
+
+    const projectModels = JSON.parse(
+      await readFile(join(repoRoot, 'project-pi', 'models.json'), 'utf8'),
+    );
+    expect(projectModels.providers.litellm.models).toEqual([
+      {
+        id: 'gpt-6.1-terra',
+        contextWindow: 196608,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: 'xhigh',
+          max: 'max',
+        },
+      },
+      {
+        id: 'gpt-6.1-plain',
+        contextWindow: 65536,
+      },
+      {
+        id: 'gpt-6.1-false-empty-efforts',
+        contextWindow: 45000,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
+    ]);
+  });
+
+  it('warns instead of guessing reasoning metadata for LiteLLM caller aliases', async () => {
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models-caller-alias.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { data: unknown[] };
+    const modelGroups = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-model-group-info-caller-alias.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    await setRemoteModels(modelsCatalog.data, 'litellm', modelGroups);
+
+    const result = run(
+      'add',
+      'team-key-alias',
+      '--provider',
+      'litellm',
+      '--target',
+      'project',
+      '--json',
+    );
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.added).toEqual(['team-key-alias']);
+    expect(output.metadataWarnings).toHaveLength(1);
+    expect(output.metadataWarnings[0]).toContain(
+      'no exact model_group row for requested /v1/models ID(s): team-key-alias',
+    );
+    expect(output.metadataWarnings[0]).toContain(
+      'reasoning metadata was not synchronized and no alias mapping was inferred',
+    );
+    expect(result.stderr).toContain('Warning: LiteLLM GET /model_group/info');
+
+    const projectModels = JSON.parse(
+      await readFile(join(repoRoot, 'project-pi', 'models.json'), 'utf8'),
+    );
+    expect(projectModels.providers.litellm.models).toEqual([
+      { id: 'team-key-alias', contextWindow: 65536 },
+    ]);
   });
 
   it('keeps sync JSON usable while warning and defaulting additions to user', async () => {

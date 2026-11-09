@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "model_group": "canonical-model-a",
+      "providers": ["openai"],
+      "max_input_tokens": 65536,
+      "max_output_tokens": 8192,
+      "supports_reasoning": true,
+      "supported_reasoning_efforts": ["low"]
+    },
+    {
+      "model_group": "canonical-model-b",
+      "providers": ["openai"],
+      "max_input_tokens": 65536,
+      "max_output_tokens": 8192,
+      "supports_reasoning": true,
+      "supported_reasoning_efforts": ["high"]
+    }
+  ]
+}

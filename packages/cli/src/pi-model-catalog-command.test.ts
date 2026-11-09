@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listPiConductorModels } from '@agents-ensemble/core';
+import { listPiConductorModels, PiConductorAgent } from '@agents-ensemble/core';
 import { describe, expect, it } from 'vitest';
 import {
   runPiModelsAdd,
@@ -27,10 +27,14 @@ describe('Pi model catalog sync command', () => {
       target: 'project',
       add: ['new-limited'],
       fetchImpl: (async (input, init) => {
+        const url = String(input);
         requests.push({
-          url: String(input),
+          url,
           authorization: new Headers(init?.headers).get('authorization'),
         });
+        if (url === 'https://litellm.example/model_group/info') {
+          return Response.json({ data: [] });
+        }
         return Response.json({
           data: [
             { id: 'existing-model' },
@@ -47,6 +51,10 @@ describe('Pi model catalog sync command', () => {
     expect(requests).toEqual([
       {
         url: 'https://litellm.example/v1/models',
+        authorization: 'Bearer catalog-secret',
+      },
+      {
+        url: 'https://litellm.example/model_group/info',
         authorization: 'Bearer catalog-secret',
       },
     ]);
@@ -82,6 +90,606 @@ describe('Pi model catalog sync command', () => {
         expect.objectContaining({ id: 'litellm/new-limited', provider: 'litellm' }),
       ]),
     );
+  });
+
+  it('imports the LiteLLM model-group contract and passes conductor pre-session validation', async () => {
+    const fixture = await createFixture({
+      apiKey: 'catalog-test-key',
+      providerId: 'litellm',
+    });
+    // The LiteLLM fixtures use the `/model_group/info` data[] contract.
+    // `supports_reasoning: false` is ambiguous by itself; `null` efforts are
+    // unknown, while [] is a known empty effort set.
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const modelGroups = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-model-group-info.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const systemPromptPath = join(fixture.repoRoot, 'system.md');
+    await writeFile(systemPromptPath, 'test prompt');
+    const requests: Array<{ url: string; authorization: string | null }> = [];
+
+    const result = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      target: 'project',
+      fetchImpl: (async (input, init) => {
+        const url = String(input);
+        requests.push({
+          url,
+          authorization: new Headers(init?.headers).get('authorization'),
+        });
+        return Response.json(
+          url === 'https://litellm.example/model_group/info'
+            ? modelGroups
+            : modelsCatalog,
+        );
+      }) as typeof fetch,
+    }, [
+      'gpt-6.1-terra',
+      'gpt-6.1-plain',
+      'gpt-6.1-no-common-effort',
+      'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-false-with-effort',
+    ]);
+
+    expect(requests).toEqual([
+      {
+        url: 'https://litellm.example/v1/models',
+        authorization: 'Bearer catalog-test-key',
+      },
+      {
+        url: 'https://litellm.example/model_group/info',
+        authorization: 'Bearer catalog-test-key',
+      },
+    ]);
+    expect(result.added).toEqual([
+      'gpt-6.1-terra',
+      'gpt-6.1-plain',
+      'gpt-6.1-no-common-effort',
+      'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-false-with-effort',
+    ]);
+
+    const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
+    expect(saved.providers.litellm.models).toEqual([
+      {
+        id: 'gpt-6.1-terra',
+        contextWindow: 196608,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: 'xhigh',
+          max: 'max',
+        },
+      },
+      {
+        id: 'gpt-6.1-plain',
+        contextWindow: 65536,
+      },
+      {
+        id: 'gpt-6.1-no-common-effort',
+        contextWindow: 32768,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
+      {
+        id: 'gpt-6.1-efforts-unknown',
+        reasoning: true,
+      },
+      {
+        id: 'gpt-6.1-false-empty-efforts',
+        contextWindow: 45000,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
+      {
+        id: 'gpt-6.1-false-with-effort',
+        contextWindow: 48000,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: 'low',
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
+    ]);
+    expect(result.apiOnly.map((model) => model.id)).toEqual([
+      'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-false-with-effort',
+      'gpt-6.1-no-common-effort',
+      'gpt-6.1-plain',
+      'gpt-6.1-terra',
+    ]);
+
+    const conductor = await PiConductorAgent.create({
+      cwd: fixture.repoRoot,
+      pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+      modelId: 'litellm/gpt-6.1-terra',
+      reasoning: 'low',
+      systemPrompt: systemPromptPath,
+      sessionDir: join(fixture.repoRoot, '.ensemble', 'pi-sessions'),
+    });
+    await conductor.close();
+  });
+
+  it('does not treat LiteLLM false as authoritative and refreshes only supplied fields', async () => {
+    const fixture = await createFixture({
+      apiKey: 'catalog-test-key',
+      providerId: 'litellm',
+      projectModels: [
+        {
+          id: 'gpt-6.1-plain',
+          name: 'Manual unknown model',
+          contextWindow: 12345,
+          reasoning: true,
+          thinkingLevelMap: { high: 'manual-high' },
+        },
+        {
+          id: 'gpt-6.1-false-empty-efforts',
+          name: 'Manual empty-effort model',
+          contextWindow: 23456,
+          reasoning: true,
+          thinkingLevelMap: { high: 'manual-high' },
+        },
+        {
+          id: 'gpt-6.1-efforts-unknown',
+          name: 'Manual known-reasoning model',
+          contextWindow: 34567,
+          reasoning: false,
+          thinkingLevelMap: { low: 'manual-low' },
+        },
+        {
+          id: 'gpt-6.1-false-with-effort',
+          name: 'Manual provider-effort model',
+          contextWindow: 45678,
+          reasoning: false,
+          thinkingLevelMap: { high: 'manual-high' },
+        },
+      ],
+    });
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const modelGroups = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-model-group-info.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const result = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      target: 'project',
+      refreshMetadata: true,
+      fetchImpl: (async (input) =>
+        Response.json(
+          String(input) === 'https://litellm.example/model_group/info'
+            ? modelGroups
+            : modelsCatalog,
+        )) as typeof fetch,
+    }, [
+      'gpt-6.1-plain',
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-with-effort',
+    ]);
+
+    expect(result.refreshed).toEqual([
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-with-effort',
+    ]);
+    expect(result.skipped).toEqual(['gpt-6.1-plain']);
+    const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
+    expect(saved.providers.litellm.models).toEqual([
+      {
+        id: 'gpt-6.1-plain',
+        name: 'Manual unknown model',
+        contextWindow: 12345,
+        reasoning: true,
+        thinkingLevelMap: { high: 'manual-high' },
+      },
+      {
+        id: 'gpt-6.1-false-empty-efforts',
+        name: 'Manual empty-effort model',
+        contextWindow: 23456,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
+      {
+        id: 'gpt-6.1-efforts-unknown',
+        name: 'Manual known-reasoning model',
+        contextWindow: 34567,
+        reasoning: true,
+        thinkingLevelMap: { low: 'manual-low' },
+      },
+      {
+        id: 'gpt-6.1-false-with-effort',
+        name: 'Manual provider-effort model',
+        contextWindow: 45678,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: 'low',
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
+    ]);
+  });
+
+  it('does not treat LiteLLM model groups absent from /v1/models as addable IDs', async () => {
+    const fixture = await createFixture({
+      apiKey: 'catalog-test-key',
+      providerId: 'litellm',
+    });
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const modelGroups = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-model-group-info.json', import.meta.url),
+        'utf8',
+      ),
+    );
+
+    await expect(
+      runPiModelsAdd({
+        repoRoot: fixture.repoRoot,
+        provider: 'litellm',
+        target: 'project',
+        fetchImpl: (async (input) =>
+          Response.json(
+            String(input) === 'https://litellm.example/model_group/info'
+              ? modelGroups
+              : modelsCatalog,
+          )) as typeof fetch,
+      }, ['not-in-v1-models']),
+    ).rejects.toThrow(
+      'Cannot add model IDs that are not in the API catalog: not-in-v1-models.',
+    );
+
+    const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
+    expect(saved.providers.litellm.models).toBeUndefined();
+  });
+
+  it('imports Magpie /v1/models reasoning metadata and passes conductor pre-session validation', async () => {
+    const fixture = await createFixture({
+      apiKey: 'catalog-test-key',
+      providerId: 'magpie',
+    });
+    const catalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/magpie-v1-models-reasoning.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    for (const model of catalog.data) {
+      expect(model.reasoning).toEqual(expect.any(Boolean));
+      expect(model.reasoning_levels).toEqual(
+        model.supported_reasoning_levels.map(
+          (level: { effort: string }) => level.effort,
+        ),
+      );
+    }
+    const userModelsPath = join(fixture.agentDir, 'models.json');
+    const systemPromptPath = join(fixture.repoRoot, 'system.md');
+    await writeFile(systemPromptPath, 'test prompt');
+    const requestUrls: string[] = [];
+
+    const result = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: fixture.providerId,
+      fetchImpl: (async (input) => {
+        requestUrls.push(String(input));
+        return Response.json(catalog);
+      }) as typeof fetch,
+    }, ['openai/limited-reasoning', 'openai/medium-reasoning']);
+
+    expect(requestUrls).toEqual(['https://magpie.example/v1/models']);
+    expect(result.added).toEqual([
+      'openai/limited-reasoning',
+      'openai/medium-reasoning',
+    ]);
+    const saved = JSON.parse(await readFile(userModelsPath, 'utf8'));
+    expect(saved.providers.magpie.models).toEqual([
+      {
+        id: 'openai/limited-reasoning',
+        contextWindow: 9216,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: null,
+          max: 'max',
+        },
+      },
+      {
+        id: 'openai/medium-reasoning',
+        contextWindow: 8192,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: 'minimal',
+          low: null,
+          medium: 'medium',
+          high: null,
+          xhigh: 'xhigh',
+          max: null,
+        },
+      },
+    ]);
+
+    const conductor = await PiConductorAgent.create({
+      cwd: fixture.repoRoot,
+      pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+      modelId: 'magpie/openai/limited-reasoning',
+      reasoning: 'low',
+      systemPrompt: systemPromptPath,
+      sessionDir: join(fixture.repoRoot, '.ensemble', 'pi-sessions'),
+    });
+    await conductor.close();
+  });
+
+  it('refreshes only API-supplied LiteLLM metadata and keeps existing model settings', async () => {
+    const fixture = await createFixture({
+      apiKey: 'catalog-test-key',
+      projectModels: [
+        {
+          id: 'gpt-6.1-terra',
+          name: 'Hand edited name',
+          contextWindow: 12345,
+          maxTokens: 4096,
+          reasoning: false,
+          thinkingLevelMap: { high: 'manual-high' },
+          headers: { 'x-manual': 'keep' },
+        },
+        {
+          id: 'gpt-6.1-plain',
+          name: 'Manual plain model',
+          contextWindow: 23456,
+          reasoning: true,
+          thinkingLevelMap: { low: 'manual-low' },
+        },
+      ],
+    });
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const modelGroups = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-model-group-info.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const fetchImpl = (async (input) =>
+      Response.json(
+        String(input) === 'https://litellm.example/model_group/info'
+          ? modelGroups
+          : modelsCatalog,
+      )) as typeof fetch;
+    const original = await readFile(fixture.projectModelsPath, 'utf8');
+
+    const defaultResult = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      target: 'project',
+      fetchImpl,
+    }, ['gpt-6.1-terra', 'gpt-6.1-plain']);
+
+    expect(defaultResult.skipped).toEqual(['gpt-6.1-terra', 'gpt-6.1-plain']);
+    expect(await readFile(fixture.projectModelsPath, 'utf8')).toBe(original);
+
+    const refreshResult = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      target: 'project',
+      refreshMetadata: true,
+      fetchImpl,
+    }, ['gpt-6.1-terra', 'gpt-6.1-plain']);
+
+    expect(refreshResult.refreshed).toEqual(['gpt-6.1-terra']);
+    expect(refreshResult.skipped).toEqual(['gpt-6.1-plain']);
+    const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
+    expect(saved.providers.litellm.models).toEqual([
+      {
+        id: 'gpt-6.1-terra',
+        name: 'Hand edited name',
+        contextWindow: 12345,
+        maxTokens: 4096,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: 'xhigh',
+          max: 'max',
+        },
+        headers: { 'x-manual': 'keep' },
+      },
+      {
+        id: 'gpt-6.1-plain',
+        name: 'Manual plain model',
+        contextWindow: 23456,
+        reasoning: true,
+        thinkingLevelMap: { low: 'manual-low' },
+      },
+    ]);
+  });
+
+  it('continues using /v1/models when LiteLLM model-group metadata is unavailable', async () => {
+    const fixture = await createFixture({ apiKey: 'catalog-test-key' });
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models.json', import.meta.url),
+        'utf8',
+      ),
+    );
+
+    const result = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      target: 'project',
+      fetchImpl: (async (input) => {
+        if (String(input) === 'https://litellm.example/model_group/info') {
+          return new Response('forbidden', { status: 403 });
+        }
+        return Response.json(modelsCatalog);
+      }) as typeof fetch,
+    }, ['gpt-6.1-terra']);
+
+    expect(result.added).toEqual(['gpt-6.1-terra']);
+    expect(result.metadataWarnings).toEqual([
+      'LiteLLM GET /model_group/info returned HTTP 403; continuing with the available /v1/models fields only.',
+    ]);
+    const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
+    expect(saved.providers.litellm.models).toEqual([
+      { id: 'gpt-6.1-terra', contextWindow: 196608 },
+    ]);
+  });
+
+  it('leaves existing models alone by default and refreshes only supplied reasoning metadata', async () => {
+    const fixture = await createFixture({
+      apiKey: 'catalog-test-key',
+      providerId: 'magpie',
+      projectModels: [
+        {
+          id: 'openai/limited-reasoning',
+          name: 'Hand edited name',
+          contextWindow: 12345,
+          reasoning: false,
+          thinkingLevelMap: { high: 'manual-high' },
+        },
+        {
+          id: 'openai/plain',
+          name: 'Manual plain model',
+          contextWindow: 23456,
+          reasoning: true,
+          thinkingLevelMap: { low: 'manual-low' },
+        },
+      ],
+    });
+    const catalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/magpie-v1-models-reasoning.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const fetchImpl = (async () =>
+      Response.json({
+        // This mock-only row exercises a catalog that omits optional reasoning
+        // metadata; Magpie's documented rows advertise both level fields.
+        data: [...catalog.data, { id: 'openai/plain', max_input_tokens: 64000 }],
+      })) as typeof fetch;
+    const original = await readFile(fixture.projectModelsPath, 'utf8');
+
+    const defaultResult = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: fixture.providerId,
+      target: 'project',
+      fetchImpl,
+    }, ['openai/limited-reasoning', 'openai/plain']);
+
+    expect(defaultResult.skipped).toEqual([
+      'openai/limited-reasoning',
+      'openai/plain',
+    ]);
+    expect(await readFile(fixture.projectModelsPath, 'utf8')).toBe(original);
+
+    const refreshResult = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: fixture.providerId,
+      target: 'project',
+      refreshMetadata: true,
+      fetchImpl,
+    }, ['openai/limited-reasoning', 'openai/plain']);
+
+    expect(refreshResult.refreshed).toEqual(['openai/limited-reasoning']);
+    expect(refreshResult.skipped).toEqual(['openai/plain']);
+    const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
+    expect(saved.providers.magpie.models).toEqual([
+      {
+        id: 'openai/limited-reasoning',
+        name: 'Hand edited name',
+        contextWindow: 12345,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: 'none',
+          minimal: 'minimal',
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: null,
+          max: 'max',
+        },
+      },
+      {
+        id: 'openai/plain',
+        name: 'Manual plain model',
+        contextWindow: 23456,
+        reasoning: true,
+        thinkingLevelMap: { low: 'manual-low' },
+      },
+    ]);
   });
 
   it('does not expose credentials or provider response bodies on request failure', async () => {
@@ -256,11 +864,26 @@ describe('Pi model catalog sync command', () => {
 });
 
 async function createFixture(options: {
-  projectModels?: Array<{ id: string; name?: string }>;
+  providerId?: string;
+  projectModels?: Array<{
+    id: string;
+    name?: string;
+    contextWindow?: number;
+    maxTokens?: number;
+    reasoning?: boolean;
+    thinkingLevelMap?: Record<string, string | null>;
+    headers?: Record<string, string>;
+  }>;
   apiKey: string;
   authHeader?: boolean;
 }) {
   const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-model-catalog-'));
+  const providerId = options.providerId ?? 'litellm';
+  const providerName = providerId === 'litellm'
+    ? 'LiteLLM'
+    : providerId === 'magpie'
+      ? 'Magpie'
+      : providerId;
   const agentDir = join(repoRoot, 'user-pi');
   const projectDir = join(repoRoot, 'project-pi');
   const projectModelsPath = join(projectDir, 'models.json');
@@ -282,10 +905,10 @@ async function createFixture(options: {
     JSON.stringify(
       {
         providers: {
-          litellm: {
-            name: 'LiteLLM',
+          [providerId]: {
+            name: providerName,
             api: 'openai-completions',
-            baseUrl: 'https://litellm.example/v1',
+            baseUrl: `https://${providerId}.example/v1`,
             apiKey: options.apiKey,
             authHeader: options.authHeader ?? true,
             ...(options.projectModels ? { models: options.projectModels } : {}),
@@ -296,5 +919,5 @@ async function createFixture(options: {
       2,
     ),
   );
-  return { repoRoot, agentDir, projectDir, projectModelsPath };
+  return { repoRoot, agentDir, projectDir, projectModelsPath, providerId };
 }

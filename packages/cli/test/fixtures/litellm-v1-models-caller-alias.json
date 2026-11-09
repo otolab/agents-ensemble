@@ -1,0 +1,13 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "team-key-alias",
+      "object": "model",
+      "created": 1783555200,
+      "owned_by": "litellm",
+      "max_input_tokens": 65536,
+      "max_output_tokens": 8192
+    }
+  ]
+}

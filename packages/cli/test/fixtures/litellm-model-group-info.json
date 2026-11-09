@@ -1,0 +1,62 @@
+{
+  "data": [
+    {
+      "model_group": "gpt-6.1-terra",
+      "providers": ["openai"],
+      "max_input_tokens": 196608,
+      "max_output_tokens": 32768,
+      "input_cost_per_token": 0.00000175,
+      "output_cost_per_token": 0.000014,
+      "mode": "chat",
+      "supports_reasoning": true,
+      "supports_fast_mode": true,
+      "supported_reasoning_efforts": ["none", "minimal", "low", "high", "xhigh", "max"],
+      "supported_openai_params": ["reasoning_effort"]
+    },
+    {
+      "model_group": "gpt-6.1-plain",
+      "providers": ["openai"],
+      "max_input_tokens": 65536,
+      "max_output_tokens": 8192,
+      "input_cost_per_token": 0,
+      "output_cost_per_token": 0,
+      "mode": "chat",
+      "supports_reasoning": false,
+      "supports_fast_mode": false,
+      "supported_reasoning_efforts": null,
+      "supported_openai_params": []
+    },
+    {
+      "model_group": "gpt-6.1-no-common-effort",
+      "providers": ["openai", "anthropic"],
+      "max_input_tokens": 32768,
+      "max_output_tokens": 8192,
+      "supports_reasoning": true,
+      "supported_reasoning_efforts": []
+    },
+    {
+      "model_group": "gpt-6.1-efforts-unknown",
+      "providers": ["openai"],
+      "supports_reasoning": true,
+      "supported_reasoning_efforts": null
+    },
+    {
+      "model_group": "gpt-6.1-false-empty-efforts",
+      "providers": ["openai"],
+      "supports_reasoning": false,
+      "supported_reasoning_efforts": []
+    },
+    {
+      "model_group": "gpt-6.1-false-with-effort",
+      "providers": ["openai"],
+      "supports_reasoning": false,
+      "supported_reasoning_efforts": ["low"]
+    },
+    {
+      "model_group": "not-in-v1-models",
+      "providers": ["anthropic"],
+      "supports_reasoning": true,
+      "supported_reasoning_efforts": ["low", "medium"]
+    }
+  ]
+}

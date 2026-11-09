@@ -1,0 +1,49 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-6.1-terra",
+      "object": "model",
+      "created": 1783555200,
+      "owned_by": "litellm",
+      "max_input_tokens": 196608,
+      "max_output_tokens": 32768
+    },
+    {
+      "id": "gpt-6.1-plain",
+      "object": "model",
+      "created": 1783555200,
+      "owned_by": "litellm",
+      "max_input_tokens": 65536,
+      "max_output_tokens": 8192
+    },
+    {
+      "id": "gpt-6.1-no-common-effort",
+      "object": "model",
+      "created": 1783555200,
+      "owned_by": "litellm",
+      "max_input_tokens": 32768,
+      "max_output_tokens": 8192
+    },
+    {
+      "id": "gpt-6.1-efforts-unknown",
+      "object": "model",
+      "created": 1783555200,
+      "owned_by": "litellm"
+    },
+    {
+      "id": "gpt-6.1-false-empty-efforts",
+      "object": "model",
+      "created": 1783555200,
+      "owned_by": "litellm",
+      "max_input_tokens": 45000
+    },
+    {
+      "id": "gpt-6.1-false-with-effort",
+      "object": "model",
+      "created": 1783555200,
+      "owned_by": "litellm",
+      "max_input_tokens": 48000
+    }
+  ]
+}
