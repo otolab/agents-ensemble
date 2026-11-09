@@ -250,6 +250,8 @@ describe('ensemble models catalog CLI', () => {
     const result = run(
       'add',
       'gpt-6.1-terra',
+      'gpt-6.1-plain',
+      'gpt-6.1-false-empty-efforts',
       '--provider',
       'litellm',
       '--target',
@@ -257,7 +259,11 @@ describe('ensemble models catalog CLI', () => {
       '--json',
     );
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout).added).toEqual(['gpt-6.1-terra']);
+    expect(JSON.parse(result.stdout).added).toEqual([
+      'gpt-6.1-terra',
+      'gpt-6.1-plain',
+      'gpt-6.1-false-empty-efforts',
+    ]);
 
     const projectModels = JSON.parse(
       await readFile(join(repoRoot, 'project-pi', 'models.json'), 'utf8'),
@@ -275,6 +281,23 @@ describe('ensemble models catalog CLI', () => {
           high: 'high',
           xhigh: 'xhigh',
           max: 'max',
+        },
+      },
+      {
+        id: 'gpt-6.1-plain',
+        contextWindow: 65536,
+      },
+      {
+        id: 'gpt-6.1-false-empty-efforts',
+        contextWindow: 45000,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
         },
       },
     ]);

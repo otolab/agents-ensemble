@@ -30,6 +30,20 @@
       "object": "model",
       "created": 1783555200,
       "owned_by": "litellm"
+    },
+    {
+      "id": "gpt-6.1-false-empty-efforts",
+      "object": "model",
+      "created": 1783555200,
+      "owned_by": "litellm",
+      "max_input_tokens": 45000
+    },
+    {
+      "id": "gpt-6.1-false-with-effort",
+      "object": "model",
+      "created": 1783555200,
+      "owned_by": "litellm",
+      "max_input_tokens": 48000
     }
   ]
 }

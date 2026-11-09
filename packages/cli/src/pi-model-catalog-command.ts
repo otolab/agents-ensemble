@@ -592,13 +592,15 @@ function readMagpieReasoningLevels(
 }
 
 function readLiteLlmReasoning(row: PiModelCatalogRow): boolean | undefined {
-  if (typeof row.supports_reasoning === 'boolean') {
-    return row.supports_reasoning;
-  }
+  // LiteLLM v1.108.3 defaults this group boolean to false and does not retain
+  // whether false came from model metadata or the schema/aggregation default.
+  // Only true is affirmative on its own; a listed non-off effort is also
+  // affirmative evidence. Null/empty effort data cannot prove reasoning:false.
+  if (row.supports_reasoning === true) return true;
   const efforts = readStringArrayField(row, 'supported_reasoning_efforts');
-  return efforts === undefined
-    ? undefined
-    : efforts.some((effort) => effort !== 'off' && effort !== 'none');
+  return efforts?.some((effort) => effort !== 'off' && effort !== 'none')
+    ? true
+    : undefined;
 }
 
 function readStringArrayField(

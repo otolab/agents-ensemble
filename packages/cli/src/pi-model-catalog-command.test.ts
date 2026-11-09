@@ -98,7 +98,8 @@ describe('Pi model catalog sync command', () => {
       providerId: 'litellm',
     });
     // The LiteLLM fixtures use the `/model_group/info` data[] contract.
-    // `null` means effort support is unknown; [] is a known empty set.
+    // `supports_reasoning: false` is ambiguous by itself; `null` efforts are
+    // unknown, while [] is a known empty effort set.
     const modelsCatalog = JSON.parse(
       await readFile(
         new URL('../test/fixtures/litellm-v1-models.json', import.meta.url),
@@ -136,6 +137,8 @@ describe('Pi model catalog sync command', () => {
       'gpt-6.1-plain',
       'gpt-6.1-no-common-effort',
       'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-false-with-effort',
     ]);
 
     expect(requests).toEqual([
@@ -153,6 +156,8 @@ describe('Pi model catalog sync command', () => {
       'gpt-6.1-plain',
       'gpt-6.1-no-common-effort',
       'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-false-with-effort',
     ]);
 
     const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
@@ -174,7 +179,6 @@ describe('Pi model catalog sync command', () => {
       {
         id: 'gpt-6.1-plain',
         contextWindow: 65536,
-        reasoning: false,
       },
       {
         id: 'gpt-6.1-no-common-effort',
@@ -194,9 +198,38 @@ describe('Pi model catalog sync command', () => {
         id: 'gpt-6.1-efforts-unknown',
         reasoning: true,
       },
+      {
+        id: 'gpt-6.1-false-empty-efforts',
+        contextWindow: 45000,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
+      {
+        id: 'gpt-6.1-false-with-effort',
+        contextWindow: 48000,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: 'low',
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
     ]);
     expect(result.apiOnly.map((model) => model.id)).toEqual([
       'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-false-with-effort',
       'gpt-6.1-no-common-effort',
       'gpt-6.1-plain',
       'gpt-6.1-terra',
@@ -211,6 +244,126 @@ describe('Pi model catalog sync command', () => {
       sessionDir: join(fixture.repoRoot, '.ensemble', 'pi-sessions'),
     });
     await conductor.close();
+  });
+
+  it('does not treat LiteLLM false as authoritative and refreshes only supplied fields', async () => {
+    const fixture = await createFixture({
+      apiKey: 'catalog-test-key',
+      providerId: 'litellm',
+      projectModels: [
+        {
+          id: 'gpt-6.1-plain',
+          name: 'Manual unknown model',
+          contextWindow: 12345,
+          reasoning: true,
+          thinkingLevelMap: { high: 'manual-high' },
+        },
+        {
+          id: 'gpt-6.1-false-empty-efforts',
+          name: 'Manual empty-effort model',
+          contextWindow: 23456,
+          reasoning: true,
+          thinkingLevelMap: { high: 'manual-high' },
+        },
+        {
+          id: 'gpt-6.1-efforts-unknown',
+          name: 'Manual known-reasoning model',
+          contextWindow: 34567,
+          reasoning: false,
+          thinkingLevelMap: { low: 'manual-low' },
+        },
+        {
+          id: 'gpt-6.1-false-with-effort',
+          name: 'Manual provider-effort model',
+          contextWindow: 45678,
+          reasoning: false,
+          thinkingLevelMap: { high: 'manual-high' },
+        },
+      ],
+    });
+    const modelsCatalog = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-v1-models.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const modelGroups = JSON.parse(
+      await readFile(
+        new URL('../test/fixtures/litellm-model-group-info.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const result = await runPiModelsAdd({
+      repoRoot: fixture.repoRoot,
+      provider: 'litellm',
+      target: 'project',
+      refreshMetadata: true,
+      fetchImpl: (async (input) =>
+        Response.json(
+          String(input) === 'https://litellm.example/model_group/info'
+            ? modelGroups
+            : modelsCatalog,
+        )) as typeof fetch,
+    }, [
+      'gpt-6.1-plain',
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-with-effort',
+    ]);
+
+    expect(result.refreshed).toEqual([
+      'gpt-6.1-false-empty-efforts',
+      'gpt-6.1-efforts-unknown',
+      'gpt-6.1-false-with-effort',
+    ]);
+    expect(result.skipped).toEqual(['gpt-6.1-plain']);
+    const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
+    expect(saved.providers.litellm.models).toEqual([
+      {
+        id: 'gpt-6.1-plain',
+        name: 'Manual unknown model',
+        contextWindow: 12345,
+        reasoning: true,
+        thinkingLevelMap: { high: 'manual-high' },
+      },
+      {
+        id: 'gpt-6.1-false-empty-efforts',
+        name: 'Manual empty-effort model',
+        contextWindow: 23456,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
+      {
+        id: 'gpt-6.1-efforts-unknown',
+        name: 'Manual known-reasoning model',
+        contextWindow: 34567,
+        reasoning: true,
+        thinkingLevelMap: { low: 'manual-low' },
+      },
+      {
+        id: 'gpt-6.1-false-with-effort',
+        name: 'Manual provider-effort model',
+        contextWindow: 45678,
+        reasoning: true,
+        thinkingLevelMap: {
+          off: null,
+          minimal: null,
+          low: 'low',
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      },
+    ]);
   });
 
   it('does not treat LiteLLM model groups absent from /v1/models as addable IDs', async () => {
@@ -392,8 +545,8 @@ describe('Pi model catalog sync command', () => {
       fetchImpl,
     }, ['gpt-6.1-terra', 'gpt-6.1-plain']);
 
-    expect(refreshResult.refreshed).toEqual(['gpt-6.1-terra', 'gpt-6.1-plain']);
-    expect(refreshResult.skipped).toEqual([]);
+    expect(refreshResult.refreshed).toEqual(['gpt-6.1-terra']);
+    expect(refreshResult.skipped).toEqual(['gpt-6.1-plain']);
     const saved = JSON.parse(await readFile(fixture.projectModelsPath, 'utf8'));
     expect(saved.providers.litellm.models).toEqual([
       {
@@ -417,7 +570,7 @@ describe('Pi model catalog sync command', () => {
         id: 'gpt-6.1-plain',
         name: 'Manual plain model',
         contextWindow: 23456,
-        reasoning: false,
+        reasoning: true,
         thinkingLevelMap: { low: 'manual-low' },
       },
     ]);

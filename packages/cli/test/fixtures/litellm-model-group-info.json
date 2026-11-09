@@ -41,6 +41,18 @@
       "supported_reasoning_efforts": null
     },
     {
+      "model_group": "gpt-6.1-false-empty-efforts",
+      "providers": ["openai"],
+      "supports_reasoning": false,
+      "supported_reasoning_efforts": []
+    },
+    {
+      "model_group": "gpt-6.1-false-with-effort",
+      "providers": ["openai"],
+      "supports_reasoning": false,
+      "supported_reasoning_efforts": ["low"]
+    },
+    {
       "model_group": "not-in-v1-models",
       "providers": ["anthropic"],
       "supports_reasoning": true,
