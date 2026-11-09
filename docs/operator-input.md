@@ -52,7 +52,7 @@ type OperatorInputBinding = (
 - TTY の通常入力は配信モード prefix を付けられる。`/idle ...`、`/next ...`、`/interrupt ...` を本文先頭に置き、prefix 自体は conductor へ送らない。prefix なしは `next`
 - TTY（Ink TUI）では選択中の open question への回答として `submit` する（`targetOpenQuestionId` オプション）
 - 非 TTY では未回答 1 件のときはプレーンテキストをその open question への回答として解釈する
-- `choice` の選択肢は回答を簡潔にするための候補で、オペレータは自由記述でも回答できる。選択肢 ID / 一意な label / 候補順の 1 始まり番号に一意に解決できる入力には `selectedChoice` を記録し、それ以外は回答全文を保存して `selectedChoice` を付けない。重複する label は自由記述として記録し、候補を推測しない。TTY の Open questions ペインには選択肢を表示する
+- `choice` の選択肢は回答を簡潔にするための候補で、オペレータは自由記述でも回答できる。選択肢 ID / 一意な label / 候補順の 1 始まり番号に一意に解決できる入力には `selectedChoice` を記録し、それ以外は回答全文を保存して `selectedChoice` を付けない。重複する label は自由記述として記録し、候補を推測しない。TTY では選択肢を Operator input の候補として表示し、Open questions ペインには表示しない
 - `yes_no` の回答は原文と `assent: yes | no | unclear` を記録する。判定できない回答は否定にせず `unclear` とし、`approved` は permission に関連付けた質問に限って明確な assent から導出する
 
 ### オペレータメッセージの配信モード
@@ -130,7 +130,7 @@ Workers ペインの高さは内容駆動です。conductor と登録 worker の
 
 活動ログは投稿本文の明示的な改行と段落間の空行を表示行として保ち、端末幅に合わせて各行を折り返します。複数行の投稿ではラベルを独立行に置き、本文を次の行から表示します。これは pane と stream の両方に適用されます。pane は可視行数を超えた過去ログをスクロールで確認でき、stream は端末 scrollback に追記します。
 
-Open questions は内容駆動で高さを決めます。選択中 question の `question` / `context` / `choices` は、それぞれ明示的な改行・段落・リスト構造を保って折り返し、全表示行を保持します。非選択 question は question、context、choices の順に最大 2 行まで表示し、続きがある場合は 2 行目の末尾に `…` を付けます。pane / stream とも、まず compact 行を確保し、残りを選択中の detail に割り当てます。通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。選択中の detail が表示領域を超える場合は、本文を表示行単位で windowing します。Ctrl と Meta を付けない `Shift+PgUp/PgDn` で選択中 question の本文を 1 表示行ずつ上下にスクロールし、タイトルに操作キーと上下の続きがある方向を示します（Ink の `key.meta` には Alt も正規化されます）。このキーは Open questions が表示されている間、活動ログ操作より優先します。pane では plain `PgUp/PgDn`（入力欄が空のとき）と `Ctrl+PgUp/PgDn`（入力欄の内容を問わず）が活動ログ用に残ります。stream では `PgUp`（入力欄が空のとき）または `Ctrl+PgUp` で scrollback を離れ、`End`（入力欄が空のとき）、`Ctrl+End` または `Ctrl+L` で最新へ戻ります。質問を `Shift+↑/↓` で切り替えると本文 offset は先頭へ戻ります。
+Open questions は内容駆動で高さを決めます。選択中 question の `question` / `context` は、それぞれ明示的な改行・段落・リスト構造を保って折り返し、全表示行を保持します。非選択 question は question、context の順に最大 2 行まで表示し、続きがある場合は 2 行目の末尾に `…` を付けます。pane / stream とも、まず compact 行を確保し、残りを選択中の detail に割り当てます。通常の 80×24 程度では質問本文と compact 行を読める範囲を確保します。選択中の detail が表示領域を超える場合は、本文を表示行単位で windowing します。Ctrl と Meta を付けない `Shift+PgUp/PgDn` で選択中 question の本文を 1 表示行ずつ上下にスクロールし、タイトルに操作キーと上下の続きがある方向を示します（Ink の `key.meta` には Alt も正規化されます）。このキーは Open questions が表示されている間、活動ログ操作より優先します。pane では plain `PgUp/PgDn`（入力欄が空のとき）と `Ctrl+PgUp/PgDn`（入力欄の内容を問わず）が活動ログ用に残ります。stream では `PgUp`（入力欄が空のとき）または `Ctrl+PgUp` で scrollback を離れ、`End`（入力欄が空のとき）、`Ctrl+End` または `Ctrl+L` で最新へ戻ります。質問を `Shift+↑/↓` で切り替えると本文 offset は先頭へ戻ります。
 
 `stream` では、入力欄が空のときの `PgUp`、または入力中の `Ctrl+PgUp` で keyboard detached を宣言します。detached 中の新着 activity log は `<Static>` へ渡さず pending として保持し、Operator input の枠に `新着N ^L`（Ctrl+L）を表示します。余裕があれば本文にも新着件数と案内を表示します。入力欄が空のときの `End`、または下書きの有無にかかわらず `Ctrl+L` / `Ctrl+End` で pending を到着順に一度だけ追記して follow に戻ります。通常の detached 経路では既に Static へ渡した prefix の再送・remount・replay は行いません。settled columns shrink の scrollback recovery だけは [ADR 0026](adr/0026-tui-stream-shrink-recovery.md) に従って terminal reset 後に保持済み activity を再出力します。
 
@@ -158,7 +158,7 @@ TTY の pane / stream では、Enter で送信した入力をセッション中�
 
 ### 表示出力の inline Markdown subset
 
-活動ログと Open questions の `question` / `context` / `choices`、および dialogue / observation の端末出力では、次の inline Markdown だけを表示スタイルへ変換します。
+活動ログと Open questions の `question` / `context`、および dialogue / observation の端末出力では、次の inline Markdown だけを表示スタイルへ変換します。
 
 | 記法 | TUI | 端末出力 |
 |------|-----|----------|

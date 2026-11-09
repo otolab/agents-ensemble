@@ -99,7 +99,7 @@ describe('buildOpenQuestionListItems', () => {
     expect(rendered).toContain('id=perm-123...');
   });
 
-  it('shows choice ids and labels for the selected question', () => {
+  it('does not show choice ids or labels for the selected question', () => {
     const [item] = buildOpenQuestionListItems(
       [
         createQuestion({
@@ -117,11 +117,12 @@ describe('buildOpenQuestionListItems', () => {
     );
 
     const rendered = item?.lines.flat().map((segment) => segment.text).join('');
-    expect(rendered?.replace(/\s+/gu, ' ')).toContain('A: Ship now');
-    expect(rendered?.replace(/\s+/gu, ' ')).toContain('B: Wait for review');
+    expect(rendered).toContain('inq-choice [choice] Which approach?');
+    expect(rendered).not.toContain('A: Ship now');
+    expect(rendered).not.toContain('B: Wait for review');
   });
 
-  it('preserves selected question, context, and choice line breaks', () => {
+  it('preserves selected question and context line breaks without choice lines', () => {
     const [item] = buildOpenQuestionListItems(
       [
         createQuestion({
@@ -141,12 +142,10 @@ describe('buildOpenQuestionListItems', () => {
       'Question line two',
       '    Context line one',
       'Context line two',
-      '    A: Choice line one',
-      'Choice line two',
     ]);
   });
 
-  it('shows up to two compact lines and marks omitted question, context, or choice text', () => {
+  it('shows up to two compact question or context lines without choice text', () => {
     const items = buildOpenQuestionListItems(
       [
         createQuestion({ id: 'inq-selected', question: 'Selected?' }),
@@ -179,7 +178,6 @@ describe('buildOpenQuestionListItems', () => {
       ],
       [
         '  inq-choice [choice] Choice?',
-        '    A: Choice line one…',
       ],
       [
         '  inq-context [text] Context?',
