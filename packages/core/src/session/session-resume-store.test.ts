@@ -81,6 +81,7 @@ describe('SessionResumeStore', () => {
         implementer: { acpSessionId: 'sess-1', acpCwd: '/repo/docs' },
       },
       conductorCwd: '/repo/.ensemble/worktrees/issue-1',
+      createdHarnessCliVersion: '0.19.0',
       cursorBootstrapRunId: 'run-bootstrap-1',
       lazyWorkers: true,
       githubMonitor: {
@@ -127,6 +128,37 @@ describe('SessionResumeStore', () => {
     expect(JSON.parse(await readFile(path, 'utf8')).updatedAt).toEqual(
       loaded?.updatedAt,
     );
+    expect(
+      JSON.parse(await readFile(path, 'utf8')).createdHarnessCliVersion,
+    ).toBe('0.19.0');
+  });
+
+  it('loads and saves a legacy fixture without backfilling its CLI version', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-legacy-');
+    const legacyStore = JSON.parse(
+      await readFile(
+        new URL(
+          '../../test/fixtures/session-resume-store-v1-legacy.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as SessionResumeStore;
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: legacyStore.conductorAgentId,
+    });
+
+    await saveSessionResumeStore(path, { ...legacyStore, repoRoot: tempDir });
+
+    const loaded = await loadSessionResumeStore(path);
+    const persisted = JSON.parse(await readFile(path, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(loaded).not.toHaveProperty('createdHarnessCliVersion');
+    expect(persisted).not.toHaveProperty('createdHarnessCliVersion');
+    expect(persisted.version).toBe(SESSION_RESUME_STORE_VERSION);
   });
 
   it.each(['full', 'resume-feasibility'] as const)(

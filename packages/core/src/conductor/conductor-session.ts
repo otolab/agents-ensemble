@@ -219,6 +219,8 @@ export interface RunConductorSessionOptions {
   profile: ResolvedProfile;
   profilePath?: string;
   resumeAgentId?: string;
+  /** 新規 Store に記録する CLI package version。resume 時は保存済み値を使う。 */
+  cliPackageVersion?: string;
   /** Optional factory override. Without it, `conductor.backend` selects the factory. */
   conductorAgentFactory?: ConductorAgentFactory;
   apiKey?: string;
@@ -508,6 +510,7 @@ async function runConductorSessionWithStartupGuard(
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
   let githubMonitor: GitHubMonitor | undefined;
   let activeResumeStorePath: string | undefined;
+  let createdHarnessCliVersion = options.cliPackageVersion;
   let activeStoreLocation: SessionResumeStoreLocation = 'user-path-hash';
   let drainStartupResumeStoreWrites = async () => {};
   const pendingGitHubRecoveries: number[] = [];
@@ -529,6 +532,8 @@ async function runConductorSessionWithStartupGuard(
       conductorAgentId: options.resumeAgentId,
     });
     const loadedResumeStore = locatedResumeStore.resumeStore;
+    // A resume keeps its origin version; a legacy store stays without one.
+    createdHarnessCliVersion = loadedResumeStore.createdHarnessCliVersion;
     activeResumeStorePath = locatedResumeStore.path;
     activeStoreLocation = locatedResumeStore.location;
     const savedConfigDigestScheme =
@@ -1404,6 +1409,9 @@ async function runConductorSessionWithStartupGuard(
       version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: conductorHandle.conductor.agentId,
       conductorBackend,
+      ...(createdHarnessCliVersion !== undefined
+        ? { createdHarnessCliVersion }
+        : {}),
       conductorCwd,
       ...(cursorBootstrapRunId
         ? { cursorBootstrapRunId }

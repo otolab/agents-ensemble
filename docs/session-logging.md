@@ -200,6 +200,8 @@ permission の ACP variant と抽出優先順位は
 
 SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
 
+新規の `ensemble issue` は、初回 flush から `createdHarnessCliVersion` に `@agents-ensemble/cli` の package version を記録します。`--continue` / `--resume` は作成時の値を保持し、旧 Store で値が欠けている場合は欠落したまま扱います。この値は SessionResumeStore の schema version とは別です。
+
 セッション再開用データは `packages/core` の `resolveEnsemblePaths({ repoRoot })` で解決し、repo ごとに user 側へ保存します。`repoKey` は正規化した絶対 `repoRoot` の SHA-256 です。
 
 ```text
