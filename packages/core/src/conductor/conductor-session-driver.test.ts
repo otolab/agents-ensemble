@@ -1271,26 +1271,26 @@ describe('runConductorSessionDriver', () => {
         status: 'finished',
         result: 'ready',
       })
-      .mockResolvedValueOnce(authError);
-    const automaticRetrySend = vi.fn().mockImplementation(
-      async (
-        _prompt: string,
-        callbacks?: {
-          onToolCallStarted?: (info: {
-            runId: string;
-            tool: string;
-            callId: string;
-          }) => void;
+      .mockImplementationOnce(
+        async (
+          _prompt: string,
+          callbacks?: {
+            onToolCallStarted?: (info: {
+              runId: string;
+              tool: string;
+              callId: string;
+            }) => void;
+          },
+        ) => {
+          callbacks?.onToolCallStarted?.({
+            runId: 'run-partial',
+            tool: 'prompt_worker',
+            callId: 'call-1',
+          });
+          return authError;
         },
-      ) => {
-        callbacks?.onToolCallStarted?.({
-          runId: 'run-partial',
-          tool: 'prompt_worker',
-          callId: 'call-1',
-        });
-        return authError;
-      },
-    );
+      );
+    const automaticRetrySend = vi.fn();
     const afterReconnectSend = vi.fn().mockResolvedValue({
       runId: 'run-fresh',
       status: 'finished',
@@ -1329,12 +1329,14 @@ describe('runConductorSessionDriver', () => {
       type: 'operator.message',
       text: 'perform work that may run tools',
     });
-    await vi.waitFor(() => expect(automaticRetrySend).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
       expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(2),
     );
 
     const failedPrompt = originalSend.mock.calls[1]![0] as string;
+    expect(automaticRetrySend).not.toHaveBeenCalled();
+    expect(eventQueue.isEmpty()).toBe(true);
+
     eventQueue.enqueue({ type: 'operator.reconnect' });
     await vi.waitFor(() => expect(mockResume).toHaveBeenCalledTimes(2));
     expect(afterReconnectSend).not.toHaveBeenCalled();
@@ -1352,6 +1354,109 @@ describe('runConductorSessionDriver', () => {
     shutdown.abort();
     const result = await driverPromise;
     expect(result.stopReason).toBe('interrupted');
+  });
+
+  it('does not restore a failed Pi recovery batch after /close or Ctrl+C and resume', async () => {
+    const authError = {
+      runId: 'run-auth-error',
+      status: 'error' as const,
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+    };
+    const originalSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-initial',
+        status: 'finished',
+        result: 'ready',
+      })
+      .mockResolvedValueOnce(authError);
+    const automaticRetrySend = vi.fn().mockResolvedValue(authError);
+    const firstEventQueue = new SessionEventQueue();
+    const firstShutdown = new AbortController();
+    const firstConductor = {
+      agentId: 'agent-1',
+      send: originalSend,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const firstDriverOptions = createDriverOptions({
+      eventQueue: firstEventQueue,
+      conductor: firstConductor,
+    });
+    const firstLoopStopped = vi.fn();
+
+    mockResume.mockResolvedValueOnce({
+      agentId: 'agent-1',
+      send: automaticRetrySend,
+      close: vi.fn(),
+    });
+
+    const firstDriverPromise = runConductorSessionDriver({
+      ...firstDriverOptions,
+      shutdownSignal: firstShutdown.signal,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+      onIssueLoopStop: firstLoopStopped,
+    });
+
+    await vi.waitFor(() => expect(firstLoopStopped).toHaveBeenCalledOnce());
+    firstEventQueue.enqueue({
+      type: 'operator.message',
+      text: 'dispatch that may need recovery',
+    });
+    await vi.waitFor(() => expect(automaticRetrySend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(firstDriverOptions.onSendComplete).toHaveBeenCalledTimes(2),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(firstEventQueue.isEmpty()).toBe(true);
+
+    // Both /close and Ctrl+C stop this driver; a resumed driver gets a new queue.
+    firstShutdown.abort();
+    const firstResult = await firstDriverPromise;
+    expect(firstResult.stopReason).toBe('interrupted');
+
+    const resumedSend = vi.fn().mockResolvedValue({
+      runId: 'run-after-resume',
+      status: 'finished',
+      result: 'continued after operator instruction',
+    });
+    const resumedEventQueue = new SessionEventQueue();
+    const resumedShutdown = new AbortController();
+    const resumedConductor = {
+      agentId: 'agent-1',
+      send: resumedSend,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const resumedDriverOptions = createDriverOptions({
+      eventQueue: resumedEventQueue,
+      conductor: resumedConductor,
+    });
+    const resumedLoopStopped = vi.fn();
+    const resumedDriverPromise = runConductorSessionDriver({
+      ...resumedDriverOptions,
+      shutdownSignal: resumedShutdown.signal,
+      skipInitialSend: true,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+      onIssueLoopStop: resumedLoopStopped,
+    });
+
+    await vi.waitFor(() => expect(resumedLoopStopped).toHaveBeenCalledOnce());
+    expect(resumedEventQueue.isEmpty()).toBe(true);
+    expect(resumedSend).not.toHaveBeenCalled();
+
+    resumedEventQueue.enqueue({
+      type: 'operator.message',
+      text: 'inspect the current state and continue unfinished work',
+    });
+    await vi.waitFor(() => expect(resumedSend).toHaveBeenCalledOnce());
+    expect(resumedSend.mock.calls[0]![0]).toContain(
+      'inspect the current state and continue unfinished work',
+    );
+
+    resumedShutdown.abort();
+    const resumedResult = await resumedDriverPromise;
+    expect(resumedResult.stopReason).toBe('interrupted');
   });
 
   it('continues after transport reconnect without replaying an ambiguous failed batch', async () => {

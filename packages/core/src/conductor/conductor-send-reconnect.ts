@@ -112,17 +112,21 @@ export function isConductorSendTransportError(
 }
 
 /**
- * send 経路の auth/transport error 時に同一 agentId で in-process 再接続し、prompt を再試行する。
- * close → resume(sameId) → retry（各 send につき 1 回）。resume に失敗した場合は元の
- * error 結果を返し、呼び出し元の continueOnConductorError 契約を維持する。
+ * send 経路の auth/transport error 時に同一 agentId で in-process 再接続する。
+ * tool 開始通知がなければ同じ prompt を 1 回だけ再試行する。tool が始まっていた場合は
+ * 副作用の重複を避けて再送せず、元の error 結果を返す。
  */
 export async function sendConductorWithReconnect(
   handle: ConductorAgentHandle,
   message: string,
   options: ConductorSendReconnectOptions & ConductorSendCallbacks,
 ): Promise<ConductorSendResult> {
+  let toolCallStarted = false;
   const sendCallbacks: ConductorSendCallbacks = {
-    onToolCallStarted: options.onToolCallStarted,
+    onToolCallStarted: (info) => {
+      toolCallStarted = true;
+      options.onToolCallStarted?.(info);
+    },
     history: options.history,
   };
   const result = await handle.conductor.send(message, sendCallbacks);
@@ -152,7 +156,8 @@ export async function sendConductorWithReconnect(
 
   if (
     options.signal?.aborted ||
-    options.retrySuppressionSignal?.aborted
+    options.retrySuppressionSignal?.aborted ||
+    toolCallStarted
   ) {
     return result;
   }

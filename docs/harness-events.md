@@ -67,7 +67,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) pending permission が閾値まで継続したとき（worker / attach の活動状態は問わない）。GitHub 認証トークン未解決時（#222）。dispatch hold reminder（既定 30 分ごと） | `[harness] warning: ...`（permission 停滞 / GitHub 認証不足 / dispatch hold reminder） | なし。permission 停滞時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue。dispatch hold reminder は operator 向けのみ |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
 | `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
-| `conductor.auth.recovery` | 自動再接続失敗後の復旧ヒント | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
+| `conductor.auth.recovery` | 最終 `send` 結果が auth error のとき。resume / retry の失敗や、tool 開始後に同一 prompt retry を抑止した場合を含む | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
 | `conductor.transport.reconnect` | transport 自動再接続、または `/reconnect` の `resume(sameId)` | `[harness] conductor.transport.reconnect status=attempt\|succeeded\|failed agentId=...` / `[transport] ...` | なし（失敗時も auth hint は出さない） |
 | `session.stop` | セッション終了直前 | 異常終了時は既定でも `[harness] session.stop reason=...`。正常完了は verbose 時のみ | `stopReason` を確定 |
 | `harness.teardown` | `runConductorSession` の worker/ACP・conductor 停止後、isolated worktree 削除前（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |

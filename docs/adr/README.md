@@ -129,6 +129,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0055](0055-cursor-model-only-cli-contract.md) | Cursor worker の model-only 指定を公式 CLI 契約で受け入れる | accepted |
 | [0056](0056-permission-stall-dispatch-hold.md) | dispatch hold 中の permission stall 回復通知 | accepted |
 | [0057](0057-permission-stall-idle-detection.md) | idle worker 中も pending permission の停滞を検知 | accepted |
+| [0058](0058-pi-send-recovery-replay-boundary.md) | Pi send recovery の再送境界 | accepted |
 
 ## 追加するとき
 

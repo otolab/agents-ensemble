@@ -134,7 +134,7 @@ export function formatConductorAuthRecoveryHint(
     const agentDir = options.pi?.agentDir ?? '~/.ensemble/pi';
     const resumeInstruction =
       options.resumeInstruction ??
-      `ensemble issue ... ${resume} で再試行できます。`;
+      `認証設定を直した後、同じ TTY では /reconnect を試してください。再送されない場合や tool が始まっていた場合は状態を確認し、新しい operator message で未完了分を伝えてください。process 終了後は ensemble issue ... ${resume} で session を再開できます。`;
     return (
       `[auth] Pi 認証エラー（provider=${provider}）。` +
       `ensemble auth login --provider ${provider} を実行するか、${agentDir}/auth.json または ` +

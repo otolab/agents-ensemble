@@ -355,18 +355,22 @@ Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalo
 
 ### 実行中の 401 / auth error
 
-Pi の send が missing key、401、unauthorized などの認証エラーを返すと、harness は同じ agent ID で接続を張り直し、同じ prompt を 1 回だけ自動再試行します。再試行後も失敗した場合は provider 固有の復旧 hint を表示します。hint には次の情報が含まれます。
+Pi の send が missing key、401、unauthorized などの認証エラーを返すと、harness は同じ agent ID で接続を張り直します。同じ send 中に tool call が始まっていなければ同じ prompt を 1 回だけ自動再試行し、tool が始まっていた場合は副作用の重複を避けて再送しません。send の最終結果が auth error の場合は provider 固有の復旧 hint を表示します。
+
+hint には次の情報が含まれます。
 
 - `ensemble auth login --provider <provider-id>`
 - `agentDir/auth.json`（既定 `~/.ensemble/pi/auth.json`）
 - Pi が認識する provider 固有の環境変数名（例: Anthropic は `ANTHROPIC_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`、OpenAI は `OPENAI_API_KEY`、GitHub Copilot は `COPILOT_GITHUB_TOKEN`）
-- 現在の conductor を再試行する `--resume <agentId>`（または `--continue`）
+- 稼働中 TTY では `/reconnect`、状態確認後に新しい operator message。process 終了後は `--resume <agentId>`（または `--continue`）で session を再開し、新しい message を送る
 
-実行中の `ensemble issue` で `API key auth failed for provider ...: Failed to resolve API key ...` が出た場合、該当する provider request の前に key resolver が失敗しています。Pi は同じ send 内で tool round ごとに key を解決するため、先行する tool の副作用がありうる点には注意してください。認証 helper を直した後に `/reconnect` すると、send 中に tool call が始まっていない batch だけを再キューします。tool call が始まっていた場合や、transport error など結果が曖昧な場合は重複実行を避けて再送しません。現在の状態を確認し、新しい operator message で未完了の作業を伝えてください。プロセス終了後なら終了 JSON / hint の agent id で `--resume` します。
+実行中の `ensemble issue` で `API key auth failed for provider ...: Failed to resolve API key ...` が出た場合、該当する provider request の前に key resolver が失敗しています。Pi は同じ send 内で tool round ごとに key を解決するため、先行する tool の副作用がありうる点には注意してください。tool call 開始後は自動経路でも同じ prompt を再送しません。認証 helper を直した後に `/reconnect` すると、初回 send と自動 retry のどちらでも tool call が始まっていない batch だけを再キューします。同じ event の手動再キューは同一 process 中 1 回までです。tool call が始まっていた場合や、transport error など結果が曖昧な場合は重複実行を避けて再送しません。現在の状態を確認し、新しい operator message で未完了の作業を伝えてください。
+
+`/close` または Ctrl+C で process を止めると、失敗 batch と event queue は SessionResumeStore に保存されず、`--continue` / `--resume` 後も自動再生されません。再開後は conductor / worker の状態を確認し、未完了分だけを新しい operator message で伝えてください。Ctrl+C の sidecar flush は best effort です。max-turns 到達後も `/reconnect` 自体は使えますが、再キューされた worker event は通常の max-turns 制限を受けます。新しい operator message で上限をリセットしてから dispatch される場合があります。
 
 再接続の in-process retry、auth error の判定、backend 固有 hint の設計は [conductor-auth-reconnect.md](conductor-auth-reconnect.md) が正本です。
 
-`ensemble operator-agent` も `ensemble issue` と自動 send retry helper を共有し、auth / transport error の後に同じ agent ID で再接続して同じ prompt を 1 回だけ再送します。ただし、TTY の手動 `/reconnect` は operator-agent 自身の agent を close / resume する control 操作で、失敗した operator-agent prompt は再送しません。`ensemble issue` の driver にある Pi resolver failure batch の再キューも operator-agent には適用されません。
+`ensemble operator-agent` も `ensemble issue` と自動 send retry helper を共有し、auth / transport error の後に同じ agent ID で再接続します。tool call が始まっていない send だけ同じ prompt を 1 回再送し、tool が始まっていれば再送しません。TTY の手動 `/reconnect` は operator-agent 自身の agent を close / resume する control 操作で、失敗した operator-agent prompt は再送しません。`ensemble issue` の driver にある Pi resolver failure batch の再キューも operator-agent には適用されません。
 
 operator-agent が `send_operator_message` を呼ぶと、稼働中 Issue session の UDS 経由で新しい `operator.message` が queue に入ります。これは明示的な tool 呼び出しであり、どの reconnect 操作も自動では行いません。Issue session の TUI で `[operator]` として表示される文面も、実際に dispatch された `operator.message` の内容です。`conductor.transport.reconnect` の成功ログだけでは、手動操作か自動 reconnect か、また prompt が再送されたかは判別できません。retry 後も認証エラーが続く場合は stderr の Pi 向け hint に従って認証設定を直し、`ensemble operator-agent` を再起動してください。
 

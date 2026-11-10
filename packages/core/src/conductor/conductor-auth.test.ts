@@ -178,6 +178,8 @@ describe('formatConductorAuthRecoveryHint', () => {
     expect(hint).toContain('ensemble auth login --provider anthropic');
     expect(hint).toContain('/tmp/ensemble-pi/auth.json');
     expect(hint).toContain('--resume agent-1');
+    expect(hint).toContain('/reconnect');
+    expect(hint).toContain('新しい operator message');
     expect(hint).not.toContain('ensemble auth logout');
   });
 

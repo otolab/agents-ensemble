@@ -107,6 +107,73 @@ describe('sendConductorWithReconnect', () => {
     expect(handle.conductor.send).toBe(secondSend);
   });
 
+  it.each([
+    {
+      kind: 'auth',
+      result: {
+        runId: 'run-auth-error',
+        status: 'error' as const,
+        error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+      },
+    },
+    {
+      kind: 'transport',
+      result: {
+        runId: 'run-transport-error',
+        status: 'error' as const,
+        error: { message: 'Connection stalled repeatedly' },
+      },
+    },
+  ])(
+    'resumes but does not replay the prompt after a tool starts ($kind)',
+    async ({ result }) => {
+      const firstSend = vi.fn(
+        async (
+          _message: string,
+          callbacks?: {
+            onToolCallStarted?: (info: {
+              runId: string;
+              tool: string;
+              callId: string;
+            }) => void;
+          },
+        ) => {
+          callbacks?.onToolCallStarted?.({
+            runId: 'run-with-tool',
+            tool: 'prompt_worker',
+            callId: 'call-1',
+          });
+          return result;
+        },
+      );
+      const resumedSend = vi.fn();
+      const handle = createHandle(firstSend);
+      mockResume.mockResolvedValue({
+        agentId: 'agent-1',
+        send: resumedSend,
+        close: mockClose,
+      });
+      const onToolCallStarted = vi.fn();
+
+      await expect(
+        sendConductorWithReconnect(handle, 'dispatch with possible side effects', {
+          conductorAgentFactory: createFactory(),
+          conductorOptions: createConductorOptions(),
+          onToolCallStarted,
+        }),
+      ).resolves.toEqual(result);
+
+      expect(firstSend).toHaveBeenCalledOnce();
+      expect(mockResume).toHaveBeenCalledWith('agent-1', createConductorOptions());
+      expect(onToolCallStarted).toHaveBeenCalledWith({
+        runId: 'run-with-tool',
+        tool: 'prompt_worker',
+        callId: 'call-1',
+      });
+      expect(resumedSend).not.toHaveBeenCalled();
+    },
+  );
+
   it('returns auth error after resume retry fails', async () => {
     const failingSend = vi.fn().mockResolvedValue({
       runId: '',
