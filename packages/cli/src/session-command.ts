@@ -4,12 +4,14 @@ import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
   CONDUCTOR_PROVIDER_HISTORY_LIMIT,
   findSessionResumeStore,
+  getWorkerSessionHistoryReaderSupport,
   harnessPhaseFromLegacyLifecycle,
   listConductorProviderHistory,
   listLocatedSessionResumeStores,
   loadOpenQuestionsStore,
   loadSessionStateStore,
   parseIssueUrl,
+  readWorkerSessionHistory,
   sessionSnapshotPaths,
   type ConductorBackend,
   type ConductorProviderHistoryMessage,
@@ -18,6 +20,8 @@ import {
   type SessionLifecycle,
   type SessionResumeStore,
   type SessionResumeStoreLocation,
+  type WorkerSessionHistoryReaderSupport,
+  type WorkerSessionHistoryResult,
 } from '@agents-ensemble/core/operator-runtime';
 
 export interface SessionListEntry {
@@ -41,6 +45,9 @@ export interface SessionListResult {
 export interface SessionShowResult {
   repoRoot: string;
   session: SessionListEntry;
+  workerReaders: Array<
+    WorkerSessionHistoryReaderSupport & { worker: string }
+  >;
   paths: {
     sessionResumeStore: string;
   };
@@ -72,6 +79,8 @@ export interface SessionMessagesResult {
   messages: ConductorProviderHistoryMessage[];
   hasMore: boolean;
 }
+
+export type SessionWorkerMessagesResult = WorkerSessionHistoryResult;
 
 export async function listSavedSessions(input: {
   repoRoot: string;
@@ -125,10 +134,19 @@ export async function showSavedSession(input: {
     loadOpenQuestionsSummary(repoRoot, located),
     loadSessionStateSummary(repoRoot, located),
   ]);
+  const workerReaders = Object.entries(located.resumeStore.workers)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([worker, workerResumeStore]) => ({
+      worker,
+      ...getWorkerSessionHistoryReaderSupport(
+        workerResumeStore.acpSpawn?.preset,
+      ),
+    }));
 
   return {
     repoRoot,
     session: summarizeSession(located.resumeStore, located.location),
+    workerReaders,
     paths: {
       sessionResumeStore: located.path,
     },
@@ -137,6 +155,18 @@ export async function showSavedSession(input: {
       sessionState,
     },
   };
+}
+
+export async function readSavedSessionWorkerMessages(input: {
+  repoRoot: string;
+  conductorAgentId: string;
+  workerName: string;
+}): Promise<SessionWorkerMessagesResult> {
+  return readWorkerSessionHistory({
+    repoRoot: input.repoRoot,
+    conductorAgentId: input.conductorAgentId,
+    workerName: input.workerName,
+  });
 }
 
 export async function listSavedSessionMessages(input: {
@@ -232,9 +262,7 @@ export function formatSessionShowText(result: SessionShowResult): string {
     `Issue: ${session.issueUrl}`,
     `更新: ${formatTimestamp(session.updatedAt)}`,
     `状態: ${session.harnessPhase ?? session.lifecycle}`,
-    `workers: ${
-      session.workers.length > 0 ? session.workers.join(', ') : 'なし'
-    }`,
+    formatWorkerReaders(result.workerReaders),
     `SessionResumeStore: ${result.paths.sessionResumeStore}`,
     formatOpenQuestionsSummary(questions),
     formatSessionStateSummary(state),
@@ -273,6 +301,38 @@ export function formatSessionMessagesText(
   return lines.join('\n');
 }
 
+export function formatSessionWorkerMessagesText(
+  result: SessionWorkerMessagesResult,
+): string {
+  const color = outputChalk();
+  const title = `${result.conductorAgentId} / ${result.worker} (${
+    result.preset ?? 'preset不明'
+  })`;
+  if (result.status !== 'supported') {
+    return [
+      `${color.bold(title)} — ${formatWorkerHistoryStatus(result.status)}`,
+      ...(result.reason ? [`理由: ${result.reason}`] : []),
+    ].join('\n');
+  }
+  if (result.messages.length === 0) {
+    return `${color.bold(title)}: 表示できる会話履歴はありません。`;
+  }
+
+  const lines = [
+    `${color.bold(title)} (${result.reader ?? 'reader不明'})`,
+  ];
+  for (const message of result.messages) {
+    lines.push(
+      '',
+      `${color.dim(
+        message.at === undefined ? '時刻不明' : formatTimestamp(message.at),
+      )}  ${message.role}  providerId: ${message.providerId}`,
+      ...indentLines(message.text),
+    );
+  }
+  return lines.join('\n');
+}
+
 function summarizeSession(
   resumeStore: SessionResumeStore,
   location: SessionResumeStoreLocation,
@@ -290,6 +350,37 @@ function summarizeSession(
     workers: Object.keys(resumeStore.workers).sort(),
     location,
   };
+}
+
+function formatWorkerReaders(
+  workers: SessionShowResult['workerReaders'],
+): string {
+  if (workers.length === 0) return 'workers: なし';
+  const color = outputChalk();
+  return [
+    'workers:',
+    ...workers.map((worker) => {
+      const preset = worker.preset ?? 'preset不明';
+      const status =
+        worker.status === 'supported'
+          ? `読取対応 (${worker.reader})`
+          : `未対応: ${worker.reason}`;
+      return `  ${color.bold(worker.worker)} (${preset}): ${status}`;
+    }),
+  ].join('\n');
+}
+
+function formatWorkerHistoryStatus(
+  status: SessionWorkerMessagesResult['status'],
+): string {
+  switch (status) {
+    case 'unsupported':
+      return '履歴読取は未対応です';
+    case 'unavailable':
+      return '履歴を利用できません';
+    case 'supported':
+      return '履歴読取に対応しています';
+  }
 }
 
 async function loadOpenQuestionsSummary(

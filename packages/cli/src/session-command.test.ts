@@ -1,4 +1,5 @@
 import {
+  copyFile,
   mkdir,
   mkdtemp,
   rm,
@@ -20,11 +21,14 @@ import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
 const PI_SESSION_ROOT = '.ensemble/pi/sessions';
 const PI_HISTORY_ENTRY_TYPE = 'agents-ensemble/conductor-message-history/v1';
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/653';
+const WORKER_PI_SESSION_ID = 'pi-acp-worker-fixture-session';
+const WORKER_PI_CWD = '/tmp/pi-acp-worker-fixture';
 
 describe('ensemble session commands', () => {
   let tempRoot = '';
   let repoRoot = '';
   let userRoot = '';
+  let homeRoot = '';
   let conductorAgentId = '';
   let conductorCwd = '';
 
@@ -32,9 +36,11 @@ describe('ensemble session commands', () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'ensemble-session-cli-'));
     repoRoot = join(tempRoot, 'repository');
     userRoot = join(tempRoot, 'user-ensemble');
+    homeRoot = join(tempRoot, 'home');
     conductorAgentId = 'session-fixture-653';
     conductorCwd = join(tempRoot, 'conductor');
     await mkdir(repoRoot, { recursive: true });
+    await mkdir(homeRoot, { recursive: true });
     await mkdir(conductorCwd, { recursive: true });
     await writeResumeStore();
     await writeRelatedYaml();
@@ -46,6 +52,7 @@ describe('ensemble session commands', () => {
     tempRoot = '';
     repoRoot = '';
     userRoot = '';
+    homeRoot = '';
     conductorCwd = '';
   });
 
@@ -56,6 +63,7 @@ describe('ensemble session commands', () => {
     expect(result.stdout).toContain('list');
     expect(result.stdout).toContain('show');
     expect(result.stdout).toContain('messages');
+    expect(result.stdout).toContain('workers');
     expect(result.stdout).toContain('without starting an agent');
   });
 
@@ -65,6 +73,17 @@ describe('ensemble session commands', () => {
     expect(result.status).toBe(0);
     const help = result.stdout.replace(/\s+/gu, ' ');
     expect(help).toContain('raw saved conductor provider history');
+    expect(help).toContain('may contain secrets');
+  });
+
+  it('documents the worker messages options and raw transcript warning', () => {
+    const result = runCli(['session', 'workers', 'messages', '--help']);
+
+    expect(result.status).toBe(0);
+    const help = result.stdout.replace(/\s+/gu, ' ');
+    expect(help).toContain('--worker <name>');
+    expect(help).toContain('--json');
+    expect(help).toContain('currently Pi');
     expect(help).toContain('may contain secrets');
   });
 
@@ -141,6 +160,14 @@ describe('ensemble session commands', () => {
         historyCount: 1,
       },
     });
+    expect(output.workerReaders).toMatchObject([
+      {
+        worker: 'implementer',
+        preset: 'custom',
+        status: 'unsupported',
+        reason: expect.stringContaining('未対応'),
+      },
+    ]);
     for (const secret of [
       'SESSION_ENV_SECRET',
       'ACP_SESSION_SECRET',
@@ -151,6 +178,16 @@ describe('ensemble session commands', () => {
     ]) {
       expect(result.stdout).not.toContain(secret);
     }
+
+    const text = runCli([
+      'session',
+      'show',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+    ]);
+    expect(text.status).toBe(0);
+    expect(text.stdout).toContain('implementer (custom): 未対応');
   });
 
   it('reads provider history from the local Pi fixture and omits tool and thinking content', () => {
@@ -203,6 +240,144 @@ describe('ensemble session commands', () => {
     expect(text.stdout).not.toContain('THINKING_SECRET');
   });
 
+  it('reads Pi ACP worker messages from the fixture in JSON and text', async () => {
+    await writeResumeStore({
+      preset: 'pi',
+      acpCwd: WORKER_PI_CWD,
+      acpSessionId: WORKER_PI_SESSION_ID,
+    });
+    await writePiAcpWorkerHistory();
+
+    const json = runCli([
+      'session',
+      'workers',
+      'messages',
+      conductorAgentId,
+      '--worker',
+      'implementer',
+      '--repo-root',
+      repoRoot,
+      '--json',
+    ]);
+    expect(json.status).toBe(0);
+    const output = JSON.parse(json.stdout);
+    expect(output).toMatchObject({
+      conductorAgentId,
+      worker: 'implementer',
+      preset: 'pi',
+      reader: 'pi-acp-jsonl',
+      status: 'supported',
+      messages: [
+        {
+          source: 'worker:implementer',
+          providerId: 'root-user',
+          role: 'user',
+          text: 'Earlier worker request remains on the active branch.',
+        },
+        {
+          source: 'worker:implementer',
+          providerId: 'current-user',
+          role: 'user',
+          text: 'Pi ACP fixture user message.',
+        },
+        {
+          source: 'worker:implementer',
+          providerId: 'current-assistant',
+          role: 'assistant',
+          text: 'Pi ACP fixture assistant reply.',
+        },
+      ],
+    });
+    expect(json.stdout).not.toContain('Abandoned branch');
+    expect(json.stdout).not.toContain('TOOL_SECRET');
+    expect(json.stdout).not.toContain('THINKING_SECRET');
+
+    const text = runCli([
+      'session',
+      'workers',
+      'messages',
+      conductorAgentId,
+      '--worker',
+      'implementer',
+      '--repo-root',
+      repoRoot,
+    ]);
+    expect(text.status).toBe(0);
+    expect(text.stdout).toContain('(pi-acp-jsonl)');
+    expect(text.stdout).toContain('user');
+    expect(text.stdout).toContain('assistant');
+    expect(text.stdout).toContain('Pi ACP fixture assistant reply.');
+    expect(text.stdout).not.toContain('TOOL_SECRET');
+    expect(text.stdout).not.toContain('THINKING_SECRET');
+
+    const show = runCli([
+      'session',
+      'show',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--json',
+    ]);
+    expect(JSON.parse(show.stdout).workerReaders).toMatchObject([
+      {
+        worker: 'implementer',
+        preset: 'pi',
+        status: 'supported',
+        reader: 'pi-acp-jsonl',
+      },
+    ]);
+  });
+
+  it('returns unsupported JSON with exit code 2 for an unhandled preset', () => {
+    const result = runCli([
+      'session',
+      'workers',
+      'messages',
+      conductorAgentId,
+      '--worker',
+      'implementer',
+      '--repo-root',
+      repoRoot,
+      '--json',
+    ]);
+
+    expect(result.status).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      preset: 'custom',
+      status: 'unsupported',
+      reason: expect.stringContaining('custom'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable JSON with exit code 1 when Pi transcript data is missing', async () => {
+    await writeResumeStore({
+      preset: 'pi',
+      acpCwd: WORKER_PI_CWD,
+      acpSessionId: WORKER_PI_SESSION_ID,
+    });
+
+    const result = runCli([
+      'session',
+      'workers',
+      'messages',
+      conductorAgentId,
+      '--worker',
+      'implementer',
+      '--repo-root',
+      repoRoot,
+      '--json',
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      preset: 'pi',
+      status: 'unavailable',
+      reason: expect.stringContaining('session map が見つかりません'),
+      messages: [],
+    });
+  });
+
   it('honors NO_COLOR even when FORCE_COLOR is set', () => {
     const result = runCli(
       ['session', 'list', '--repo-root', repoRoot],
@@ -213,9 +388,16 @@ describe('ensemble session commands', () => {
     expect(result.stdout).not.toMatch(/\u001b\[/u);
   });
 
-  async function writeResumeStore(): Promise<void> {
+  async function writeResumeStore(
+    options: {
+      preset?: 'pi' | 'custom';
+      acpCwd?: string;
+      acpSessionId?: string;
+    } = {},
+  ): Promise<void> {
     const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
     const path = paths.sessionResumeStorePath(conductorAgentId);
+    const preset = options.preset ?? 'custom';
     await mkdir(dirname(path), { recursive: true });
     await writeFile(
       path,
@@ -235,10 +417,11 @@ describe('ensemble session commands', () => {
           sequence: 0,
           workers: {
             implementer: {
-              acpSessionId: 'ACP_SESSION_SECRET',
+              acpSessionId: options.acpSessionId ?? 'ACP_SESSION_SECRET',
+              ...(options.acpCwd ? { acpCwd: options.acpCwd } : {}),
               acpSpawn: {
-                preset: 'custom',
-                command: 'fixture-acp',
+                preset,
+                command: preset === 'pi' ? 'pi-acp' : 'fixture-acp',
                 args: [],
                 env: { API_TOKEN: 'SESSION_ENV_SECRET' },
               },
@@ -247,6 +430,48 @@ describe('ensemble session commands', () => {
           lifecycle: 'closed',
           harnessPhase: 'close',
           updatedAt: 1_800_000_000_010,
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+  }
+
+  async function writePiAcpWorkerHistory(): Promise<void> {
+    const transcriptPath = join(
+      homeRoot,
+      '.pi',
+      'agent',
+      'sessions',
+      'pi-acp-worker-session.jsonl',
+    );
+    await mkdir(dirname(transcriptPath), { recursive: true });
+    await copyFile(
+      fileURLToPath(
+        new URL(
+          '../../core/test/fixtures/pi-acp-worker-session.jsonl',
+          import.meta.url,
+        ),
+      ),
+      transcriptPath,
+    );
+
+    const mapPath = join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
+    await mkdir(dirname(mapPath), { recursive: true });
+    await writeFile(
+      mapPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          sessions: {
+            [WORKER_PI_SESSION_ID]: {
+              sessionId: WORKER_PI_SESSION_ID,
+              cwd: WORKER_PI_CWD,
+              sessionFile: transcriptPath,
+              updatedAt: '2027-01-15T08:00:00.000Z',
+            },
+          },
         },
         null,
         2,
@@ -380,6 +605,7 @@ describe('ensemble session commands', () => {
       env: {
         ...process.env,
         ...extraEnv,
+        HOME: homeRoot,
         ENSEMBLE_USER_ROOT: userRoot,
       },
       timeout: 10_000,

@@ -123,5 +123,16 @@ export {
   sessionSnapshotPaths,
   type SessionSnapshotKind,
 } from './session/session-snapshot-paths.js';
+export {
+  getWorkerSessionHistoryReaderSupport,
+  readWorkerSessionHistory,
+  type WorkerSessionHistoryMessage,
+  type WorkerSessionHistoryMessageRole,
+  type WorkerSessionHistoryReader,
+  type WorkerSessionHistoryReaderInput,
+  type WorkerSessionHistoryReaderStatus,
+  type WorkerSessionHistoryReaderSupport,
+  type WorkerSessionHistoryResult,
+} from './session/worker-session-history.js';
 export { parseIssueUrl } from './issue/issue-ref.js';
 export type { IssueRef } from './issue/issue-ref.js';
