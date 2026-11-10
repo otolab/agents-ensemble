@@ -212,7 +212,7 @@ SessionResumeStore は、harness がセッション再開に必要な情報を�
 
 worker 履歴も保存された本文をそのまま返します。text / JSON のいずれも redaction しないため、秘密値や repository 内の非公開情報が stdout に出る可能性があります。pipe / redirect 先を含め、生データとして扱ってください。
 
-`ensemble session timeline` は SessionResumeStore と最大100件の conductor provider history を読みます。任意の `--summary <path>` は `ensemble issue --summary-format json` で保存した SessionSummary JSON、`--harness-log <path>` は保存済み stderr log を追加します。log reader は `conductor.send` と `conductor.transport.reconnect` の行を認識します。Pi の `sendCount` は harness process ごとにリセットされ、resume 前後で再利用されます。そのため、対象 SessionSummary の `startedAt` / `durationMs` の範囲にある provider history だけを send 番号で照合します。summary を読めない場合は provider history を別に表示し、send 番号では結び付けません。Cursor も共通の send 番号を持たないため別表示します。
+`ensemble session timeline` は SessionResumeStore と最大100件の conductor provider history を読みます。任意の `--summary <path>` は `ensemble issue --summary-format json` で保存した SessionSummary JSON、`--harness-log <path>` は保存済み stderr log を追加します。log reader は `conductor.send` と `conductor.transport.reconnect` の行を認識します。Pi の `sendCount` は harness process ごとにリセットされ、resume 前後で再利用されます。そのため、対象 SessionSummary の `startedAt` より後、`startedAt + durationMs` より前に完了した provider history だけを send 番号で照合します。開始・終了時刻ちょうどの履歴は隣接 run と区別できないため相関せず、別枠に表示します。summary を読めない場合は provider history を別に表示し、send 番号では結び付けません。Cursor も共通の send 番号を持たないため別表示します。
 
 通常の SessionLogEvent 履歴は永続化されません。summary / log が未指定または読取不能ならその source 状態を示し、reconnect を補って表示しません。Pi の provider history reader が返すのは成功した inbound / response pair です。対応する pair がない表示は gap の存在を示すだけで、raw transcript に未対応 entry があるかや欠落の原因は証明しません。captured log に run ID や時刻はないため、summary と同じ process の stderr を指定してください。reconnect 行には provider history と共有する event ID や時刻がなく、send 行に対する配置はファイル内の行順だけを示します。
 

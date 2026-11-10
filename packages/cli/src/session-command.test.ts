@@ -150,7 +150,8 @@ describe('ensemble session commands', () => {
       sessionLogEvents: { status: 'not-persisted' },
       sendCorrelation: {
         status: 'available',
-        basis: 'Pi sendCount within SessionSummary time window',
+        basis:
+          'Pi sendCount strictly inside SessionSummary time window; boundaries excluded as ambiguous',
       },
     });
     expect(output.sendTimeline).toMatchObject([
@@ -289,6 +290,124 @@ describe('ensemble session commands', () => {
       },
     ]);
     expect(unboundedLog.gaps).toEqual([]);
+  });
+
+  it('keeps Pi history on SessionSummary boundaries uncorrelated in JSON and text', async () => {
+    conductorAgentId = 'session-fixture-655-boundaries';
+    await writeResumeStore();
+    const startedAt = 1_800_000_100_000;
+    const durationMs = 1_000;
+    const endedAt = startedAt + durationMs;
+    const summaryPath = join(tempRoot, 'session-summary.json');
+    await writePiHistory([
+      {
+        sendCount: 1,
+        dispatchSource: 'worker:reviewer',
+        completedAt: startedAt,
+        inbound: 'Prior run entry at the resumed run start boundary.',
+        response: 'Prior run response at the start boundary.',
+      },
+      {
+        sendCount: 1,
+        dispatchSource: 'operator',
+        completedAt: startedAt + 1,
+        inbound: 'Current run entry inside the summary window.',
+        response: 'Current run response inside the summary window.',
+      },
+      {
+        sendCount: 1,
+        dispatchSource: 'worker:implementer',
+        completedAt: endedAt,
+        inbound: 'Following run entry at the previous run end boundary.',
+        response: 'Following run response at the end boundary.',
+      },
+    ]);
+    await writeFile(
+      summaryPath,
+      `${JSON.stringify({
+        agentId: conductorAgentId,
+        issueUrl: ISSUE_URL,
+        repoRoot,
+        startedAt,
+        durationMs,
+        sendCount: 1,
+        lastRunStatus: 'finished',
+      })}\n`,
+      'utf8',
+    );
+
+    const json = runCli([
+      'session',
+      'timeline',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--summary',
+      summaryPath,
+      '--json',
+    ]);
+
+    expect(json.status).toBe(0);
+    const output = JSON.parse(json.stdout);
+    expect(output.sources.sendCorrelation).toMatchObject({
+      status: 'available',
+      basis:
+        'Pi sendCount strictly inside SessionSummary time window; boundaries excluded as ambiguous',
+    });
+    expect(output.sendTimeline).toMatchObject([
+      {
+        sendCount: 1,
+        providerPairStatus: 'available',
+        providerMessages: [
+          {
+            inbound: 'Current run entry inside the summary window.',
+            text: 'Current run response inside the summary window.',
+          },
+        ],
+      },
+    ]);
+    expect(output.uncorrelatedProviderMessages).toMatchObject([
+      {
+        at: startedAt,
+        sendCount: 1,
+        inbound: 'Prior run entry at the resumed run start boundary.',
+      },
+      {
+        at: endedAt,
+        sendCount: 1,
+        inbound: 'Following run entry at the previous run end boundary.',
+      },
+    ]);
+    expect(output.gaps).toEqual([]);
+
+    const text = runCli([
+      'session',
+      'timeline',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--summary',
+      summaryPath,
+    ]);
+
+    expect(text.status).toBe(0);
+    expect(text.stdout).toContain(
+      '開始・終了時刻ちょうどは曖昧なため除外',
+    );
+    const [timelineText, uncorrelatedText] = text.stdout.split(
+      '今回の run と send 番号を照合していない provider history:',
+    );
+    expect(timelineText).toContain(
+      'Current run entry inside the summary window.',
+    );
+    expect(timelineText).not.toContain('Prior run entry at the resumed run');
+    expect(timelineText).not.toContain('Following run entry at the previous run');
+    expect(uncorrelatedText).toContain(
+      'Prior run entry at the resumed run start boundary.',
+    );
+    expect(uncorrelatedText).toContain(
+      'Following run entry at the previous run end boundary.',
+    );
   });
 
   it('reports missing provider, summary, and harness log sources explicitly', async () => {

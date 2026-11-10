@@ -112,7 +112,7 @@ export interface SessionTimelineResult {
     sendCorrelation:
       | {
           status: 'available';
-          basis: 'Pi sendCount within SessionSummary time window';
+          basis: 'Pi sendCount strictly inside SessionSummary time window; boundaries excluded as ambiguous';
         }
       | { status: 'unavailable'; reason: string };
   };
@@ -260,7 +260,8 @@ export async function readSavedSessionTimeline(input: {
             ? providerCorrelationAvailable
               ? {
                   status: 'available',
-                  basis: 'Pi sendCount within SessionSummary time window',
+                  basis:
+                    'Pi sendCount strictly inside SessionSummary time window; boundaries excluded as ambiguous',
                 }
               : {
                   status: 'unavailable',
@@ -315,7 +316,7 @@ export function formatSessionTimelineText(
     `  SessionSummary: ${formatOptionalSource(summary)}`,
     `  captured harness log: ${formatOptionalSource(harnessLog)}`,
     `  SessionLogEvent 履歴: 永続化されていません`,
-    `  send 番号の照合: ${result.sources.sendCorrelation.status === 'available' ? 'Pi sendCount で照合' : result.sources.sendCorrelation.reason}`,
+    `  send 番号の照合: ${result.sources.sendCorrelation.status === 'available' ? 'Pi sendCount で照合（SessionSummary の開始・終了時刻ちょうどは曖昧なため除外）' : result.sources.sendCorrelation.reason}`,
     '',
     'Timeline:',
   ];
@@ -767,10 +768,11 @@ function isWithinSessionSummaryWindow(
   summary: SessionTimelineSummary,
 ): boolean {
   const endAt = summary.startedAt + summary.durationMs;
+  // Millisecond timestamps cannot distinguish adjacent runs at either edge.
   return (
     message.at !== undefined &&
-    message.at >= summary.startedAt &&
-    message.at <= endAt
+    message.at > summary.startedAt &&
+    message.at < endAt
   );
 }
 
