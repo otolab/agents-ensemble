@@ -112,7 +112,7 @@ export interface SessionTimelineResult {
     sendCorrelation:
       | {
           status: 'available';
-          basis: 'Pi sendCount strictly inside SessionSummary time window; boundaries excluded as ambiguous';
+          basis: 'Pi sendCount strictly inside a Date.now-derived SessionSummary window; boundaries excluded as ambiguous; assumes non-overlapping processes and a stable wall clock';
         }
       | { status: 'unavailable'; reason: string };
   };
@@ -261,12 +261,12 @@ export async function readSavedSessionTimeline(input: {
               ? {
                   status: 'available',
                   basis:
-                    'Pi sendCount strictly inside SessionSummary time window; boundaries excluded as ambiguous',
+                    'Pi sendCount strictly inside a Date.now-derived SessionSummary window; boundaries excluded as ambiguous; assumes non-overlapping processes and a stable wall clock',
                 }
               : {
                   status: 'unavailable',
                   reason:
-                    'Pi sendCount は run ごとに再利用されます。対象 run の時間帯を示す SessionSummary がないため provider history と照合しません。',
+                    'Pi sendCount は run ごとに再利用されます。対象 run の有効な時間窓を示す SessionSummary がないため provider history と照合しません。',
                 }
             : {
                 status: 'unavailable',
@@ -316,7 +316,7 @@ export function formatSessionTimelineText(
     `  SessionSummary: ${formatOptionalSource(summary)}`,
     `  captured harness log: ${formatOptionalSource(harnessLog)}`,
     `  SessionLogEvent 履歴: 永続化されていません`,
-    `  send 番号の照合: ${result.sources.sendCorrelation.status === 'available' ? 'Pi sendCount で照合（SessionSummary の開始・終了時刻ちょうどは曖昧なため除外）' : result.sources.sendCorrelation.reason}`,
+    `  send 番号の照合: ${result.sources.sendCorrelation.status === 'available' ? 'Pi sendCount で照合（境界は除外。process の重複がなく、システム時計が安定している前提）' : result.sources.sendCorrelation.reason}`,
     '',
     'Timeline:',
   ];
@@ -719,18 +719,70 @@ function parseSessionSummary(
       reason: 'SessionSummary の repoRoot が保存 session と一致しません。',
     };
   }
-  if (
-    !isFiniteNumber(value.startedAt) ||
-    !isFiniteNumber(value.durationMs) ||
-    value.durationMs < 0 ||
-    !Number.isFinite(value.startedAt + value.durationMs) ||
-    !Number.isSafeInteger(value.sendCount) ||
-    (value.sendCount as number) < 0 ||
-    typeof value.lastRunStatus !== 'string'
-  ) {
+  if (!Object.hasOwn(value, 'startedAt')) {
+    return { reason: 'SessionSummary に startedAt がありません。' };
+  }
+  const startedAt = value.startedAt;
+  if (!isFiniteNumber(startedAt)) {
+    return {
+      reason: 'SessionSummary の startedAt は数値である必要があります。',
+    };
+  }
+  if (!isDateNowTimestamp(startedAt)) {
     return {
       reason:
-        'SessionSummary に startedAt / durationMs / sendCount / lastRunStatus がありません。',
+        'SessionSummary の startedAt は Date.now() で表せる整数の Unix epoch ms ではありません。',
+    };
+  }
+
+  if (!Object.hasOwn(value, 'durationMs')) {
+    return { reason: 'SessionSummary に durationMs がありません。' };
+  }
+  const durationMs = value.durationMs;
+  if (!isFiniteNumber(durationMs)) {
+    return {
+      reason: 'SessionSummary の durationMs は数値である必要があります。',
+    };
+  }
+  if (durationMs < 0) {
+    return {
+      reason:
+        'SessionSummary の durationMs が負のため、開始後の時間窓として解釈できません。',
+    };
+  }
+  if (!Number.isSafeInteger(durationMs)) {
+    return {
+      reason:
+        'SessionSummary の durationMs はミリ秒精度を保てる安全な整数ではありません。',
+    };
+  }
+
+  const endedAt = startedAt + durationMs;
+  if (!isDateNowTimestamp(endedAt)) {
+    return {
+      reason:
+        'SessionSummary の時間窓終端 startedAt + durationMs は Date.now() で表せる整数の Unix epoch ms ではありません。',
+    };
+  }
+
+  if (!Object.hasOwn(value, 'sendCount')) {
+    return { reason: 'SessionSummary に sendCount がありません。' };
+  }
+  const sendCount = value.sendCount;
+  if (!Number.isSafeInteger(sendCount) || (sendCount as number) < 0) {
+    return {
+      reason:
+        'SessionSummary の sendCount は 0 以上の安全な整数ではありません。',
+    };
+  }
+
+  if (!Object.hasOwn(value, 'lastRunStatus')) {
+    return { reason: 'SessionSummary に lastRunStatus がありません。' };
+  }
+  const lastRunStatus = value.lastRunStatus;
+  if (typeof lastRunStatus !== 'string') {
+    return {
+      reason: 'SessionSummary の lastRunStatus は文字列ではありません。',
     };
   }
   if (
@@ -745,10 +797,10 @@ function parseSessionSummary(
 
   return {
     summary: {
-      startedAt: value.startedAt,
-      durationMs: value.durationMs,
-      sendCount: value.sendCount as number,
-      lastRunStatus: value.lastRunStatus,
+      startedAt,
+      durationMs,
+      sendCount: sendCount as number,
+      lastRunStatus,
       ...(isRecord(value.lastError)
         ? {
             lastError: {
@@ -985,6 +1037,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isDateNowTimestamp(value: number): boolean {
+  return (
+    Number.isSafeInteger(value) &&
+    new Date(value).getTime() === value
+  );
 }
 
 function stripAnsi(value: string): string {

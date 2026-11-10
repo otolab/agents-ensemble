@@ -151,7 +151,7 @@ describe('ensemble session commands', () => {
       sendCorrelation: {
         status: 'available',
         basis:
-          'Pi sendCount strictly inside SessionSummary time window; boundaries excluded as ambiguous',
+          'Pi sendCount strictly inside a Date.now-derived SessionSummary window; boundaries excluded as ambiguous; assumes non-overlapping processes and a stable wall clock',
       },
     });
     expect(output.sendTimeline).toMatchObject([
@@ -352,7 +352,7 @@ describe('ensemble session commands', () => {
     expect(output.sources.sendCorrelation).toMatchObject({
       status: 'available',
       basis:
-        'Pi sendCount strictly inside SessionSummary time window; boundaries excluded as ambiguous',
+        'Pi sendCount strictly inside a Date.now-derived SessionSummary window; boundaries excluded as ambiguous; assumes non-overlapping processes and a stable wall clock',
     });
     expect(output.sendTimeline).toMatchObject([
       {
@@ -392,7 +392,7 @@ describe('ensemble session commands', () => {
 
     expect(text.status).toBe(0);
     expect(text.stdout).toContain(
-      '開始・終了時刻ちょうどは曖昧なため除外',
+      'send 番号の照合: Pi sendCount で照合（境界は除外。process の重複がなく、システム時計が安定している前提）',
     );
     const [timelineText, uncorrelatedText] = text.stdout.split(
       '今回の run と send 番号を照合していない provider history:',
@@ -492,6 +492,13 @@ describe('ensemble session commands', () => {
   });
 
   it('marks malformed and invalid SessionSummary sources unavailable in JSON and text', async () => {
+    const baseSummary = {
+      agentId: conductorAgentId,
+      issueUrl: ISSUE_URL,
+      repoRoot,
+      sendCount: 1,
+      lastRunStatus: 'finished',
+    };
     const invalidSummaries = [
       {
         name: 'malformed',
@@ -499,18 +506,44 @@ describe('ensemble session commands', () => {
         reason: '有効な JSON ではありません。',
       },
       {
-        name: 'invalid-schema',
+        name: 'negative-duration',
         content: JSON.stringify({
-          agentId: conductorAgentId,
-          issueUrl: ISSUE_URL,
-          repoRoot,
+          ...baseSummary,
           startedAt: 1_800_000_000_000,
           durationMs: -1,
-          sendCount: 1,
-          lastRunStatus: 'finished',
         }),
         reason:
-          'SessionSummary に startedAt / durationMs / sendCount / lastRunStatus がありません。',
+          'SessionSummary の durationMs が負のため、開始後の時間窓として解釈できません。',
+      },
+      {
+        name: 'unrepresentable-duration',
+        content: JSON.stringify({
+          ...baseSummary,
+          startedAt: 0,
+          durationMs: 1e100,
+        }),
+        reason:
+          'SessionSummary の durationMs はミリ秒精度を保てる安全な整数ではありません。',
+      },
+      {
+        name: 'fractional-started-at',
+        content: JSON.stringify({
+          ...baseSummary,
+          startedAt: 1_800_000_000_000.5,
+          durationMs: 100,
+        }),
+        reason:
+          'SessionSummary の startedAt は Date.now() で表せる整数の Unix epoch ms ではありません。',
+      },
+      {
+        name: 'unrepresentable-end',
+        content: JSON.stringify({
+          ...baseSummary,
+          startedAt: 8_640_000_000_000_000,
+          durationMs: 1,
+        }),
+        reason:
+          'SessionSummary の時間窓終端 startedAt + durationMs は Date.now() で表せる整数の Unix epoch ms ではありません。',
       },
     ];
 
@@ -539,11 +572,18 @@ describe('ensemble session commands', () => {
         path: summaryPath,
         reason: invalidSummary.reason,
       });
-      expect(output.sources.sendCorrelation.status).toBe('unavailable');
+      expect(output.sources.sendCorrelation).toMatchObject({
+        status: 'unavailable',
+        reason:
+          'Pi sendCount は run ごとに再利用されます。対象 run の有効な時間窓を示す SessionSummary がないため provider history と照合しません。',
+      });
       expect(output.sessionSummary).toBeNull();
       expect(output.sendTimeline).toEqual([]);
       expect(output.uncorrelatedProviderMessages).toMatchObject([
-        { sendCount: 1 },
+        {
+          sendCount: 1,
+          inbound: 'Local fixture inbound api_key=fixture-api-key-653',
+        },
       ]);
 
       const text = runCli([
@@ -561,7 +601,19 @@ describe('ensemble session commands', () => {
         `SessionSummary: 読取不能: ${invalidSummary.reason}`,
       );
       expect(text.stdout).toContain(
+        'send 番号の照合: Pi sendCount は run ごとに再利用されます。対象 run の有効な時間窓を示す SessionSummary がないため provider history と照合しません。',
+      );
+      expect(text.stdout).toContain(
         '今回の run と send 番号を照合していない provider history:',
+      );
+      const [timelineText, uncorrelatedText] = text.stdout.split(
+        '今回の run と send 番号を照合していない provider history:',
+      );
+      expect(timelineText).not.toContain(
+        'Local fixture inbound api_key=fixture-api-key-653',
+      );
+      expect(uncorrelatedText).toContain(
+        'Local fixture inbound api_key=fixture-api-key-653',
       );
     }
   });
