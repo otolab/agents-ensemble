@@ -4,17 +4,13 @@ import { dirname, join } from 'node:path';
 import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
   findSessionResumeStore,
-  legacyOpenQuestionsStorePath,
-  legacySessionStateStorePath,
   loadOpenQuestionsStore,
   loadSessionStateStore,
-  openQuestionsStorePath,
   OPEN_QUESTION_CONTROL_METHODS,
   OpenQuestionControlRemoteError,
   OpenQuestionControlTransportError,
   sendOpenQuestionControlRequest,
-  sessionStateStorePath,
-  resolveEnsemblePaths,
+  sessionSnapshotPaths,
   type OpenQuestionControlConductorMessage,
   type ConductorJsonValue,
   type ConductorTool,
@@ -22,7 +18,6 @@ import {
   type SessionResumeStoreDuplicateDiagnostic,
   type LocatedSessionResumeStore,
   type SessionResumeStore,
-  type SessionResumeStoreLocation,
 } from '@agents-ensemble/core/operator-runtime';
 import {
   operatorRepositoryStatePath,
@@ -886,45 +881,6 @@ async function loadPersistedSessionState(
     if (state) return state;
   }
   return undefined;
-}
-
-function sessionSnapshotPaths(
-  repoRoot: string,
-  located: LocatedSessionResumeStore,
-  kind: 'open-questions' | 'session-state',
-): string[] {
-  const { resumeStore, location } = located;
-  const userPath = (selectedLocation: SessionResumeStoreLocation) =>
-    kind === 'open-questions'
-      ? openQuestionsStorePath({
-          repoRoot,
-          conductorAgentId: resumeStore.conductorAgentId,
-          issueUrl: resumeStore.issueUrl,
-          location: selectedLocation,
-        })
-      : sessionStateStorePath({
-          repoRoot,
-          conductorAgentId: resumeStore.conductorAgentId,
-          issueUrl: resumeStore.issueUrl,
-          location: selectedLocation,
-        });
-  const legacyPath =
-    kind === 'open-questions'
-      ? legacyOpenQuestionsStorePath({
-          repoRoot,
-          conductorAgentId: resumeStore.conductorAgentId,
-        })
-      : legacySessionStateStorePath({
-          repoRoot,
-          conductorAgentId: resumeStore.conductorAgentId,
-        });
-  if (location === 'canonical-slug') {
-    return [userPath('canonical-slug'), userPath('user-path-hash'), legacyPath];
-  }
-  if (location === 'user-path-hash') {
-    return [userPath('user-path-hash'), legacyPath];
-  }
-  return [legacyPath];
 }
 
 async function pathExists(path: string): Promise<boolean> {

@@ -119,5 +119,9 @@ export {
   type SessionStateStore,
   type SessionStatusLine,
 } from './session/session-state-store.js';
+export {
+  sessionSnapshotPaths,
+  type SessionSnapshotKind,
+} from './session/session-snapshot-paths.js';
 export { parseIssueUrl } from './issue/issue-ref.js';
 export type { IssueRef } from './issue/issue-ref.js';

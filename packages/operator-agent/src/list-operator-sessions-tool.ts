@@ -3,9 +3,8 @@ import {
   listLocatedSessionResumeStores,
   harnessPhaseFromLegacyLifecycle,
   loadSessionStateStore,
-  legacySessionStateStorePath,
   parseIssueUrl,
-  sessionStateStorePath,
+  sessionSnapshotPaths,
   type ConductorJsonValue,
   type ConductorTool,
   type SessionLifecycle,
@@ -220,29 +219,11 @@ async function loadStatusLine(
   located: LocatedSessionResumeStore,
 ): Promise<SessionStateStore | undefined> {
   try {
-    const { resumeStore, location } = located;
-    const statePath = (selectedLocation: 'canonical-slug' | 'user-path-hash') =>
-      sessionStateStorePath({
-        repoRoot,
-        conductorAgentId: resumeStore.conductorAgentId,
-        issueUrl: resumeStore.issueUrl,
-        location: selectedLocation,
-      });
-    const legacyPath = legacySessionStateStorePath({
+    for (const path of sessionSnapshotPaths(
       repoRoot,
-      conductorAgentId: resumeStore.conductorAgentId,
-    });
-    const candidates =
-      location === 'canonical-slug'
-        ? [
-            statePath('canonical-slug'),
-            statePath('user-path-hash'),
-            legacyPath,
-          ]
-        : location === 'user-path-hash'
-          ? [statePath('user-path-hash'), legacyPath]
-          : [legacyPath];
-    for (const path of candidates) {
+      located,
+      'session-state',
+    )) {
       const status = await loadSessionStateStore(path);
       if (status) return status;
     }
