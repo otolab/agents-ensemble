@@ -9,6 +9,7 @@ describe('operator command suggestions', () => {
   it('shows the catalog at slash and filters names by case-insensitive prefix', () => {
     expect(getOperatorCommandSuggestions('/').map(({ name }) => name)).toEqual([
       '/reconnect',
+      '/recovery',
       '/exit',
       '/close',
       '/idle',
@@ -20,9 +21,11 @@ describe('operator command suggestions', () => {
     ]);
     expect(getOperatorCommandSuggestions('/RE').map(({ name }) => name)).toEqual([
       '/reconnect',
+      '/recovery',
     ]);
     expect(getOperatorCommandSuggestions('/RECO').map(({ name }) => name)).toEqual([
       '/reconnect',
+      '/recovery',
     ]);
     expect(getOperatorCommandSuggestions('/cl').map(({ name }) => name)).toEqual([
       '/close',
