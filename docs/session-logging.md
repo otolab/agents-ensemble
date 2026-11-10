@@ -24,6 +24,7 @@ conductor セッションには性質の異なる出力が混在する。
 | **保存 session の CLI 閲覧** | `ensemble session list/show` | SessionResumeStore の要約と関連 YAML の件数・時刻 |
 | **conductor 履歴の CLI 閲覧** | `ensemble session messages` | provider session history |
 | **worker 履歴の CLI 閲覧** | `ensemble session workers messages` | Pi ACP transcript |
+| **障害調査 timeline** | `ensemble session timeline` | ResumeStore / provider history と、任意の終了サマリ・captured harness log の send 番号照合 |
 
 これらを 1 本の stderr に混ぜると、TTY 利用時に **会話相手が worker に見える**・**conductor の応答が終了まで見えない** といった UX 問題が起きる（#44）。
 
@@ -210,6 +211,12 @@ SessionResumeStore は、harness がセッション再開に必要な情報を�
 `ensemble session workers messages <conductorAgentId> --worker <name>` は、SessionResumeStore の ACP session ID と cwd を Pi ACP の CLI process の home にある `~/.pi/pi-acp/session-map.json` と照合し、参照先 JSONL を Pi `SessionManager` の active branch として読みます。ACP process を起動せず、`session/load` による再接続もしません。共通 message 形は `source` / `providerId` / `role` / `at` / `text` です。`pi` preset では user / assistant の本文を出し、tool result、thinking など会話本文以外の entry は含めません。現時点の reader は Pi ACP のみです。`cursor` / `codex` / `claude` / `custom` など他 preset と preset 欠落の旧 Store は `unsupported`、保存 map や transcript を解決・照合できない Pi session は `unavailable` になります。worker 起動時だけ別 `HOME` を使った場合、その値は ResumeStore に保存されないため reader から探索できません。
 
 worker 履歴も保存された本文をそのまま返します。text / JSON のいずれも redaction しないため、秘密値や repository 内の非公開情報が stdout に出る可能性があります。pipe / redirect 先を含め、生データとして扱ってください。
+
+`ensemble session timeline` は SessionResumeStore と最大100件の conductor provider history を読みます。任意の `--summary <path>` は `ensemble issue --summary-format json` で保存した SessionSummary JSON、`--harness-log <path>` は保存済み stderr log を追加します。log reader は `conductor.send` と `conductor.transport.reconnect` の行を認識します。Pi の `sendCount` は harness process ごとにリセットされ、resume 前後で再利用されます。そのため、対象 SessionSummary の `startedAt` より後、`startedAt + durationMs` より前に完了した provider history だけを send 番号で照合します。開始・終了時刻ちょうどの履歴は隣接 run と区別できないため相関せず、別枠に表示します。相関前に、SessionLogger の生成側契約（開始が `Date.now()`、`durationMs` が終了時の `Date.now() - startedAt`）と整合するか検査します。相関に必要なミリ秒精度を保つため、開始と導出した終了時刻が整数 Unix epoch ms として表せ、`durationMs` が非負の安全な整数である場合だけ有効です。契約や精度に合わない値は理由を示して `unavailable` とし、provider history を send 番号で結び付けません。Cursor も共通の send 番号を持たないため別表示します。
+
+通常の SessionLogEvent 履歴は永続化されません。summary / log が未指定・読取不能・不正な JSON / schema・保存 session との不一致なら source 状態と理由を示し、reconnect を補って表示しません。Pi の provider history reader が返すのは成功した inbound / response pair です。対応する pair がない表示は gap の存在を示すだけで、raw transcript に未対応 entry があるかや欠落の原因は証明しません。captured log に run ID や時刻はないため、summary と同じ process の stderr を指定してください。reconnect 行には provider history と共有する event ID や時刻がなく、send 行に対する配置はファイル内の行順だけを示します。
+
+SessionSummary と provider history の時刻だけでは run / process を一意に識別できません。時間相関は同じ session の process が重ならず、実行中にシステム時計が大きく変わらない前提ですが、この条件を CLI は検証できません。特に前向きの時計変更は妥当な時刻範囲に見える duration を作ることがあり、単調時計や run ID の記録がない現状では判別できません。その可能性がある調査では、send 番号の時間相関を同一 run の証明として扱わないでください。
 
 新規の `ensemble issue` は、初回 flush から `createdHarnessCliVersion` に `@agents-ensemble/cli` の package version を記録します。`--continue` / `--resume` は作成時の値を保持し、旧 Store で値が欠けている場合は欠落したまま扱います。この値は SessionResumeStore の schema version とは別です。
 

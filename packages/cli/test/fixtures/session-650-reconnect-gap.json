@@ -1,0 +1,37 @@
+{
+  "summary": {
+    "agentId": "session-fixture-650",
+    "issueUrl": "https://github.com/otolab/agents-ensemble/issues/650",
+    "repoRoot": "/fixture/karte-io-systems",
+    "startedAt": 1800000000000,
+    "durationMs": 60000,
+    "sendCount": 99,
+    "stopReason": "completed",
+    "lastRunStatus": "error",
+    "lastError": {
+      "message": "Provider authentication failed (fixture; redacted)"
+    }
+  },
+  "providerHistory": [
+    {
+      "sendCount": 99,
+      "dispatchSource": "worker:reviewer",
+      "completedAt": 1799999999000,
+      "inbound": "A send #99 from the previous harness process.",
+      "response": "Previous process response; not part of this run."
+    },
+    {
+      "sendCount": 98,
+      "dispatchSource": "worker:implementer",
+      "completedAt": 1800000000123,
+      "inbound": "Continue the diagnosis after implementer completed.",
+      "response": "Inspecting the saved provider history around the failed send."
+    }
+  ],
+  "harnessLog": [
+    "[harness] conductor.deliver triggers=1 sources=worker:implementer",
+    "[harness] conductor.send n=99 status=error workerDone=1 workerFailed=0 error=Provider authentication failed (fixture; redacted)",
+    "[harness] conductor.transport.reconnect status=attempt agentId=session-fixture-650",
+    "[harness] conductor.transport.reconnect status=succeeded agentId=session-fixture-650"
+  ]
+}

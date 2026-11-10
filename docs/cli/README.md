@@ -121,6 +121,11 @@ ensemble session messages <conductorAgentId>
 
 # Pi ACP worker の会話履歴を見る
 ensemble session workers messages <conductorAgentId> --worker implementer
+
+# 保存データ・終了サマリ・captured stderr を send 番号で照合する
+ensemble session timeline <conductorAgentId> \
+  --summary session-summary.json \
+  --harness-log harness.log
 ```
 
 `--repo-root <path>` は各 subcommand で指定できます（既定値は現在のディレクトリ）。各 subcommand の `--json` は JSON を出力します。テキスト表示は `NO_COLOR` が空でない値に設定されていると色を使いません。
@@ -134,6 +139,18 @@ ensemble session workers messages <conductorAgentId> --worker implementer
 `cursor`、`codex`、`claude`、`custom` など `pi` 以外の preset、および preset が保存されていない旧 SessionResumeStore は `unsupported` と理由を表示し、終了コード 2 を返します。Pi の session map / transcript が見つからない、または保存済み session と照合できない場合は `unavailable` と理由を返し、終了コード 1 で終了します。JSON ではどちらも `status` と `reason` を確認できます。
 
 worker 起動時だけ別の `HOME` を指定していた場合、ResumeStore には環境変数の値が残らないため、その home の session map は探索できず `unavailable` になることがあります。
+
+`timeline` は SessionResumeStore、conductor provider history、および任意の SessionSummary JSON / 保存済み harness stderr log を読みます。SessionSummary は `ensemble issue --summary-format json` の終了出力をファイルへ保存したものを `--summary <path>` で指定します。`--harness-log <path>` には、`[harness] conductor.send n=... status=...` と `[harness] conductor.transport.reconnect status=...` を含む stderr log を指定できます。これらのファイルは harness が自動保存するものではありません。データ源の未指定・読取不能・不正な JSON / schema・session 不一致は JSON / text に source 状態と理由を表示し、対象行がない log は認識件数 0 として示します。
+
+Pi の provider history には `sendCount` がありますが、番号は harness process ごとに 0 から始まるため、resume をまたぐと再利用されます。誤った対応付けを避けるため、対象 session と一致する SessionSummary が読めた場合だけ、summary の `startedAt` より後、`startedAt + durationMs` より前に完了した Pi history を send 番号で照合します。開始・終了時刻と同じミリ秒の履歴は隣接 run と区別できないため照合せず、別枠に表示します。時間窓は生成元 SessionLogger の契約（開始が `Date.now()`、`durationMs` が終了時の `Date.now() - startedAt`）と照合します。相関に使うのは、`startedAt` と導出した終了時刻が `Date.now()` で表せる整数 Unix epoch ms で、`durationMs` が非負の安全な整数としてミリ秒精度を保てる場合だけです。契約や精度に合わない値は理由付きで `unavailable` とし、send 番号では照合しません。Cursor history には同じ番号がないので、時間と provider ID を別々に表示します。provider history は最大100件で、さらに古い履歴は表示されません。
+
+この時間相関は、同じ session の process が重ならず、実行中にシステム時計が大きく変わらない前提です。SessionSummary と provider history には run / process ID や単調時計の時刻がないため、CLI は process の重複や時計の変更を検出できません。負の duration や表現できない時刻は相関を止めますが、前向きの時計変更で生じた範囲内の時間窓は判別できないことがあります。重複実行や時計変更の可能性がある調査では、時間相関を同一 run の証明として扱わないでください。
+
+`--harness-log` には対象 run 1 回分の stderr を指定してください。log に run ID や時刻はないため、指定したログが summary と同じ process のものか CLI は検証できません。reconnect 行は直前に記録された send 行とのファイル内の順序を示すだけで、共通 event ID による対応付けや因果関係を表すものではありません。
+
+Timeline の provider history は成功した user inbound / final response の組を返します。sendCount に対応する組が見つからなくても、raw provider transcript に未対応 entry がないことや、その原因が error / reconnect であることまでは断定できません。通常の保存先には全 SessionLogEvent の履歴がないため、captured log を指定していない場合、reconnect の実行状況は `not-provided` / `not-persisted` として示されます。
+
+`timeline` は provider history と SessionSummary の `lastError` を出力する場合があります。`messages` / `workers messages` と同じく秘密値の redaction はしないため、ローカルの信頼できる端末で使い、結果を共有する前にサニタイズしてください。
 
 `messages` はローカルの信頼できる端末でのデバッグに使ってください。stdout の pipe / redirect 先も生データを受け取ります。結果を Issue / PR、ログ、集計・蓄積先へ転記・保存する前に、利用側でサニタイズしてください。機密値を会話へ入力しない既存の運用方針も引き続き有効ですが、過去の入力を出力時に保護する保証ではありません。
 

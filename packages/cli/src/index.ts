@@ -27,6 +27,10 @@ import {
   showSavedSession,
 } from './session-command.js';
 import {
+  formatSessionTimelineText,
+  readSavedSessionTimeline,
+} from './session-timeline.js';
+import {
   runConductorAuthStatus,
   runConductorLogin,
   runConductorLogout,
@@ -236,6 +240,55 @@ sessionWorkers
         );
         if (result.status === 'unsupported') process.exitCode = 2;
         if (result.status === 'unavailable') process.exitCode = 1;
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
+session
+  .command('timeline')
+  .description(
+    'Correlate saved provider history with an optional SessionSummary and captured harness log (may contain secrets)',
+  )
+  .argument('<conductorAgentId>', 'Conductor session id')
+  .option(
+    '--repo-root <path>',
+    'Repository root for saved sessions',
+    process.cwd(),
+  )
+  .option(
+    '--summary <path>',
+    'Read an existing SessionSummary JSON file',
+  )
+  .option(
+    '--harness-log <path>',
+    'Read a captured stderr log for conductor send and reconnect rows',
+  )
+  .option('--json', 'Output JSON')
+  .action(
+    async (
+      conductorAgentId: string,
+      options: {
+        repoRoot: string;
+        summary?: string;
+        harnessLog?: string;
+        json?: boolean;
+      },
+    ) => {
+      try {
+        const result = await readSavedSessionTimeline({
+          repoRoot: options.repoRoot,
+          conductorAgentId,
+          summaryPath: options.summary,
+          harnessLogPath: options.harnessLog,
+        });
+        console.log(
+          options.json
+            ? JSON.stringify(result, null, 2)
+            : formatSessionTimelineText(result),
+        );
       } catch (error) {
         console.error(error instanceof Error ? error.message : error);
         process.exit(1);
