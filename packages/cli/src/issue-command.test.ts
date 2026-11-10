@@ -52,6 +52,7 @@ import {
   resolveIssueSessionMaxTurns,
   resolveResumeAgentIdFromOptions,
 } from './issue-command.js';
+import { readCliPackageVersion } from './cli-version.js';
 
 const baseOptions = {
   repoRoot: '/tmp/repo',
@@ -91,6 +92,33 @@ function createFakeConductorRunIssueSession(
     return { stopReason: 'completed' };
   });
 }
+
+describe('executeIssueCommand CLI version wiring', () => {
+  it('passes the CLI package version to a new core session', async () => {
+    const runIssueSession = vi.fn().mockResolvedValue({ stopReason: 'completed' });
+    const loadProfile = vi.fn().mockResolvedValue({
+      profile: { workers: [] },
+      profilePath: '/tmp/profile.yaml',
+    });
+    const SessionLogger = vi.fn().mockImplementation(() => ({
+      subscribe: vi.fn(),
+    }));
+
+    await executeIssueCommand(issueUrl, baseOptions, {
+      isOperatorInputInteractive: () => false,
+      isOperatorInputTty: () => false,
+      runIssueSession,
+      loadProfile,
+      SessionLogger,
+    });
+
+    expect(runIssueSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cliPackageVersion: readCliPackageVersion(),
+      }),
+    );
+  });
+});
 
 describe('resolveResumeAgentIdFromOptions', () => {
   it('returns explicit --resume agent id', async () => {

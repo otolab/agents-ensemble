@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "conductorAgentId": "legacy-session",
+  "issueUrl": "https://github.com/org/repo/issues/1",
+  "repoRoot": "/legacy/repo",
+  "profile": {
+    "workers": []
+  },
+  "openQuestions": [],
+  "sequence": 0,
+  "workers": {},
+  "updatedAt": 1
+}

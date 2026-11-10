@@ -23,6 +23,7 @@ import { createSessionDisplaySink } from './display/create-session-display-sink.
 import { selectSessionDisplayBackend } from './display/select-session-display-backend.js';
 import { createHarnessSink, createObservationSink } from './session-sinks.js';
 import { createIssueSessionTuiHost } from './tui/create-issue-session-tui-host.js';
+import { readCliPackageVersion } from './cli-version.js';
 import {
   normalizeInitialOperatorMessage,
   resolveInitialOperatorMessage,
@@ -261,6 +262,7 @@ export async function executeIssueCommand(
       issueUrl,
       repoRoot,
       conductorCwd: resolve(options.conductorCwd),
+      cliPackageVersion: readCliPackageVersion(),
       resumeAgentId,
       ensembleConfig,
       profile,

@@ -38,6 +38,7 @@ import {
   SessionResumeStoreNotFoundError,
   SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
+  type SessionResumeStore,
 } from '../session/session-resume-store.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import * as sessionResumeStoreModule from '../session/session-resume-store.js';
@@ -307,6 +308,107 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow(SessionResumeStoreNotFoundError);
 
     expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('records the creating CLI version and preserves it across resume', async () => {
+    stubUnusedControlServer();
+    mockSend.mockResolvedValue({
+      runId: 'run-cli-version',
+      status: 'finished',
+      result: 'done',
+    });
+    const persistedVersions: (string | undefined)[] = [];
+    const persistResumeStore = sessionResumeStoreModule.saveSessionResumeStore;
+    vi.spyOn(sessionResumeStoreModule, 'saveSessionResumeStore').mockImplementation(
+      async (path, resumeStore) => {
+        persistedVersions.push(resumeStore.createdHarnessCliVersion);
+        await persistResumeStore(path, resumeStore);
+      },
+    );
+    const initial = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      cliPackageVersion: '0.20.0-created',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: initial.agentId,
+    });
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      version: SESSION_RESUME_STORE_VERSION,
+      createdHarnessCliVersion: '0.20.0-created',
+    });
+    expect(persistedVersions[0]).toBe('0.20.0-created');
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: initial.agentId,
+      cliPackageVersion: '0.21.0-resumed',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      bindOperatorInput: (api) => {
+        api.submit('/exit');
+      },
+    });
+
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      createdHarnessCliVersion: '0.20.0-created',
+    });
+  });
+
+  it('resumes a legacy fixture without backfilling its missing CLI version', async () => {
+    stubUnusedControlServer();
+    const agentId = 'resume-legacy-cli-version';
+    const legacyStore = JSON.parse(
+      await readFile(
+        new URL(
+          '../../test/fixtures/session-resume-store-v1-legacy.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as SessionResumeStore;
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await saveSessionResumeStore(resumeStorePath, {
+      ...legacyStore,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    mockSend.mockResolvedValue({
+      runId: 'run-legacy-cli-version',
+      status: 'finished',
+      result: 'done',
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      resumeAgentId: agentId,
+      cliPackageVersion: '0.21.0-current',
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      bindOperatorInput: (api) => {
+        api.submit('/exit');
+      },
+    });
+
+    expect(result.stopReason).toBe('completed');
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.not.toHaveProperty(
+      'createdHarnessCliVersion',
+    );
   });
 
   it('resumes from the canonical slug store and flushes it without rewriting the stale hash copy', async () => {
