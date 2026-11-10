@@ -8,6 +8,7 @@ export type {
   PermissionPendingEvent,
   PermissionStallEvent,
   HarnessConnectivityRecoveredEvent,
+  ConductorRecoveryReportEvent,
   GitHubUpdateEvent,
 } from './session-event.js';
 

@@ -3,6 +3,7 @@ import { stdin as input, stderr, stdout as output } from 'node:process';
 import type { OperatorInputBindingApi, OperatorInputContext } from '@agents-ensemble/core';
 import { formatIssueReference } from './tui/format-operator-context.js';
 import { resolveInitialOperatorMessage } from './operator-message.js';
+import { executePiAuthRecoveryCommand } from './operator-recovery-command.js';
 
 let activeReprompt: (() => void) | undefined;
 
@@ -55,7 +56,7 @@ export function bindAsyncOperatorInput(
   }
 
   stderr.write(
-    '\nオペレータ入力: 任意のタイミングで入力して Enter。conductor は継続します（/reconnect、/close 保存して閉じる、/exit 掃除して終了）。\n',
+    '\nオペレータ入力: 任意のタイミングで入力して Enter。conductor は継続します（/reconnect、/recovery、/close 保存して閉じる、/exit 掃除して終了）。\n',
   );
 
   const rl = readline.createInterface({ input, output, terminal: true });
@@ -69,7 +70,18 @@ export function bindAsyncOperatorInput(
   const onLine = (line: string) => {
     const trimmed = line.trim();
     if (trimmed) {
-      api.submit(trimmed);
+      const recoveryCommand = executePiAuthRecoveryCommand(api, trimmed, {
+        canDisplaySensitiveContent: stderr.isTTY === true,
+      });
+      if (recoveryCommand.handled) {
+        if (recoveryCommand.inspection) {
+          stderr.write(
+            `\n${recoveryCommand.inspection.title}\n${recoveryCommand.inspection.text}\n\n`,
+          );
+        }
+      } else {
+        api.submit(trimmed);
+      }
     }
     showPrompt();
   };

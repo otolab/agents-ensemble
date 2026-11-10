@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SessionEvent } from './session/session-event.js';
 import {
   autonomousTurnsAfterConductorSend,
   autonomousTurnsAfterConductorBatch,
@@ -229,6 +230,40 @@ describe('canDispatchConductorSend', () => {
     ).toBe(true);
   });
 
+  it('allows a one-shot recovery report at max turns', () => {
+    const report: SessionEvent = {
+      type: 'conductor.recovery.report',
+      recoveryId: 'pi-auth-recovery-1',
+      failedDispatch: {
+        sendCount: 1,
+        runId: 'run-1',
+        sourceKey: 'worker:implementer',
+        eventTypes: ['worker.completed'],
+        eventCount: 1,
+        eventReferences: [
+          {
+            eventIndex: 1,
+            type: 'worker.completed',
+            reference: 'worker:implementer:implementer',
+          },
+        ],
+        eventReferencesTruncated: false,
+      },
+      failure: {
+        kind: 'pi_api_key_resolution',
+        automaticRetryAttempts: 1,
+        toolCallStarted: false,
+      },
+      reconnect: {
+        kind: 'manual',
+        succeeded: true,
+      },
+    };
+    expect(
+      canDispatchConductorSend(report, 5, 5),
+    ).toBe(true);
+  });
+
   it('blocks worker.completed at max turns', () => {
     expect(
       canDispatchConductorSend(
@@ -314,6 +349,40 @@ describe('autonomousTurnsAfterConductorBatch', () => {
         2,
       ),
     ).toBe(3);
+  });
+
+  it('does not count a standalone recovery report as an autonomous turn', () => {
+    const report: SessionEvent = {
+      type: 'conductor.recovery.report',
+      recoveryId: 'pi-auth-recovery-1',
+      failedDispatch: {
+        sendCount: 1,
+        runId: 'run-1',
+        sourceKey: 'worker:implementer',
+        eventTypes: ['worker.completed'],
+        eventCount: 1,
+        eventReferences: [
+          {
+            eventIndex: 1,
+            type: 'worker.completed',
+            reference: 'worker:implementer:implementer',
+          },
+        ],
+        eventReferencesTruncated: false,
+      },
+      failure: {
+        kind: 'pi_api_key_resolution',
+        automaticRetryAttempts: 1,
+        toolCallStarted: false,
+      },
+      reconnect: {
+        kind: 'manual',
+        succeeded: true,
+      },
+    };
+    expect(
+      autonomousTurnsAfterConductorBatch([report], 5),
+    ).toBe(5);
   });
 });
 

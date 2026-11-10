@@ -134,6 +134,6 @@ describe('IssueSessionTuiStream IME cursor contract', () => {
 
     stdin.write(INK_TEST_KEYS.downArrow);
     await flushInkStdin();
-    expect(lastFrame() ?? '').toContain('› /exit');
+    expect(lastFrame() ?? '').toContain('› /recovery');
   });
 });

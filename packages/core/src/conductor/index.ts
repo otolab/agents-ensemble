@@ -105,6 +105,17 @@ export type {
   OperatorInputContext,
   OperatorInputSubmitOptions,
 } from './operator-input-binding.js';
+export {
+  PiAuthRecoverySnapshotStore,
+  PI_AUTH_RECOVERY_SNAPSHOT_LIMIT,
+  PI_AUTH_RECOVERY_SNAPSHOT_TTL_MS,
+} from './pi-auth-recovery-snapshot-store.js';
+export type {
+  PiAuthRecoverySnapshot,
+  PiAuthRecoverySnapshotCandidate,
+  PiAuthRecoverySnapshotStoreAddResult,
+  PiAuthRecoverySnapshotSummary,
+} from './pi-auth-recovery-snapshot-store.js';
 export { submitOperatorInput } from './submit-operator-input.js';
 export type { SubmitOperatorInputInput } from './submit-operator-input.js';
 export { isOperatorExitCommand } from './operator-exit.js';
@@ -234,6 +245,7 @@ export type {
   PermissionPendingEvent,
   PermissionStallEvent,
   HarnessConnectivityRecoveredEvent,
+  ConductorRecoveryReportEvent,
   GitHubUpdateEvent,
   SessionEventDispatchFields,
 } from './session/session-event.js';

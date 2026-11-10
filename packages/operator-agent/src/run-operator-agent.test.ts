@@ -1477,6 +1477,71 @@ describe('runOperatorAgent', () => {
     expect(stdout.capturedText()).toContain('conductor の再接続に失敗しました。');
   });
 
+  it('does not replay a failed operator-agent prompt after manual reconnect', async () => {
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const stdin = new PassThrough() as PassThrough & OperatorAgentInput;
+    stdin.isTTY = true;
+    const prompt = 'check status after reconnect';
+    const authFailure = {
+      runId: 'run-auth',
+      status: 'error',
+      error: {
+        code: 'auth',
+        message:
+          'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs',
+      },
+    };
+    const firstSend = vi.fn(async (message: string) => {
+      expect(message).toContain(prompt);
+      return authFailure;
+    });
+    const automaticRetrySend = vi.fn(async (message: string) => {
+      expect(message).toContain(prompt);
+      return authFailure;
+    });
+    const manualReconnectSend = vi.fn(async () => ({
+      runId: 'unexpected',
+      status: 'completed',
+      result: 'unexpected replay',
+    }));
+    const resume = vi
+      .fn()
+      .mockResolvedValueOnce(createFakeAgent({ send: automaticRetrySend }))
+      .mockResolvedValueOnce(createFakeAgent({ send: manualReconnectSend }));
+
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin,
+        stdout,
+        stderr,
+        agentFactory: {
+          create: async () => createFakeAgent({ send: firstSend }),
+          resume,
+        },
+      },
+    );
+
+    stdin.write(`${prompt}\n`);
+    await vi.waitFor(() => expect(stderr.capturedText()).toContain('[auth] Pi 認証エラー'));
+    expect(firstSend).toHaveBeenCalledOnce();
+    expect(automaticRetrySend).toHaveBeenCalledOnce();
+    expect(resume).toHaveBeenCalledOnce();
+
+    stdin.write('/reconnect\n');
+    await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(2));
+    expect(manualReconnectSend).not.toHaveBeenCalled();
+
+    stdin.write('/exit\n');
+    await run;
+
+    expect(firstSend).toHaveBeenCalledOnce();
+    expect(automaticRetrySend).toHaveBeenCalledOnce();
+    expect(manualReconnectSend).not.toHaveBeenCalled();
+    expect(stderr.capturedText()).toContain('ensemble operator-agent');
+  });
+
   it('prints Pi auth recovery steps to stderr when reconnect and retry still fail', async () => {
     const projectDir = join(repoRoot, '.ensemble', 'pi-project');
     await mkdir(projectDir, { recursive: true });

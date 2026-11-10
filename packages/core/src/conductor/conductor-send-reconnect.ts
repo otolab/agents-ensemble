@@ -18,6 +18,12 @@ export interface ConductorReconnectCompleteInfo {
   error?: string;
 }
 
+export interface ConductorAutomaticRetryInfo {
+  /** 同一 prompt の自動 retry は1回だけ。 */
+  attempt: 1;
+  reason: 'auth' | 'transport';
+}
+
 export interface ConductorReconnectCallbacks {
   onReconnectAttempt?: (input: { agentId: string }) => void;
   onReconnectComplete?: (input: ConductorReconnectCompleteInfo) => void;
@@ -47,7 +53,13 @@ export interface ConductorSendReconnectOptions
   onTransportReconnectAttempt?: (input: { agentId: string }) => void;
   onAuthReconnectComplete?: (input: ConductorReconnectCompleteInfo) => void;
   onTransportReconnectComplete?: (input: ConductorReconnectCompleteInfo) => void;
+  /** 自動 retry を行う場合、その直前に一度だけ呼び出す。 */
+  onAutomaticRetry?: (input: ConductorAutomaticRetryInfo) => void;
 }
+
+// resume に失敗した時点で旧 agent は close 済み。次の operator reconnect では
+// 同じ handle を再度 close せず、resume を再試行する。
+const closedForReconnect = new WeakSet<ConductorAgentHandle>();
 
 /** close → factory.resume(sameId) で in-process の agent を差し替える。 */
 export async function reconnectConductorAgent(
@@ -74,11 +86,15 @@ export async function reconnectConductorAgent(
   }
 
   try {
-    await handle.conductor.close();
+    if (!closedForReconnect.has(handle)) {
+      await handle.conductor.close();
+      closedForReconnect.add(handle);
+    }
     handle.conductor = await conductorAgentFactory.resume(
       agentId,
       conductorOptions,
     );
+    closedForReconnect.delete(handle);
     options.onReconnectComplete?.({ agentId, success: true });
     return agentId;
   } catch (error) {
@@ -112,17 +128,21 @@ export function isConductorSendTransportError(
 }
 
 /**
- * send 経路の auth/transport error 時に同一 agentId で in-process 再接続し、prompt を再試行する。
- * close → resume(sameId) → retry（各 send につき 1 回）。resume に失敗した場合は元の
- * error 結果を返し、呼び出し元の continueOnConductorError 契約を維持する。
+ * send 経路の auth/transport error 時に同一 agentId で in-process 再接続する。
+ * tool 開始通知がなければ同じ prompt を 1 回だけ再試行する。tool が始まっていた場合は
+ * 副作用の重複を避けて再送せず、元の error 結果を返す。
  */
 export async function sendConductorWithReconnect(
   handle: ConductorAgentHandle,
   message: string,
   options: ConductorSendReconnectOptions & ConductorSendCallbacks,
 ): Promise<ConductorSendResult> {
+  let toolCallStarted = false;
   const sendCallbacks: ConductorSendCallbacks = {
-    onToolCallStarted: options.onToolCallStarted,
+    onToolCallStarted: (info) => {
+      toolCallStarted = true;
+      options.onToolCallStarted?.(info);
+    },
     history: options.history,
   };
   const result = await handle.conductor.send(message, sendCallbacks);
@@ -152,11 +172,16 @@ export async function sendConductorWithReconnect(
 
   if (
     options.signal?.aborted ||
-    options.retrySuppressionSignal?.aborted
+    options.retrySuppressionSignal?.aborted ||
+    toolCallStarted
   ) {
     return result;
   }
 
+  options.onAutomaticRetry?.({
+    attempt: 1,
+    reason: reconnectReason,
+  });
   return handle.conductor.send(message, sendCallbacks);
 }
 

@@ -6,8 +6,15 @@ import type { PermissionPipeline } from '../permission/permission-pipeline.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import type { WorkerSession } from '../runtime/worker-session.js';
 import type { ConductorSendResult } from './conductor-agent.js';
+import { isPiApiKeyResolutionFailure } from './conductor-auth.js';
+import type {
+  PiAuthRecoverySnapshotStore,
+  PiAuthRecoverySnapshotSummary,
+} from './pi-auth-recovery-snapshot-store.js';
 import type {
   ConductorAgentHandle,
+  ConductorAutomaticRetryInfo,
+  ConductorReconnectCompleteInfo,
   ConductorSendReconnectOptions,
 } from './conductor-send-reconnect.js';
 import {
@@ -16,7 +23,10 @@ import {
 } from './conductor-send-reconnect.js';
 import { formatSessionEventsForConductor } from './session/format-session-event.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
-import type { SessionEvent } from './session/session-event.js';
+import type {
+  ConductorRecoveryReportEvent,
+  SessionEvent,
+} from './session/session-event.js';
 import {
   bufferDispatchHoldEvents,
   createDispatchHoldState,
@@ -48,7 +58,7 @@ import {
 export interface ConductorSendStartedInfo {
   /** これから実行する send の通し番号（1 始まり）。 */
   sendCount: number;
-  /** dispatch 束の source key（`operator` / `permission` / `permission.stall` / `worker:*` / `initial`）。 */
+  /** dispatch 束の source key（`operator` / `permission` / `permission.stall` / `worker:*` / `conductor.recovery.report` / `initial`）。 */
   dispatchSource?: string;
 }
 
@@ -137,6 +147,13 @@ export interface ConductorSessionDriverOptions {
   resetOutboundDispatchesThisSend?: () => void;
   /** `prompt_worker` 等の outbound dispatch 件数（ループ停止判定向け）。 */
   getOutboundDispatchesThisSend?: () => number;
+  /** Failed dispatch の本文を operator-only の process 内 snapshot に保存する。 */
+  piAuthRecoverySnapshotStore?: PiAuthRecoverySnapshotStore;
+  /** Snapshot の保存・上限 eviction を本文なしで通知する。 */
+  onPiAuthRecoverySnapshotStored?: (input: {
+    snapshot: PiAuthRecoverySnapshotSummary;
+    evictedRecoveryIds: string[];
+  }) => void;
 }
 
 export interface ConductorSessionDriverResult {
@@ -167,6 +184,15 @@ export async function runConductorSessionDriver(
   let postLoopWaiting = false;
   const dispatchHoldState =
     options.dispatchHoldState ?? createDispatchHoldState();
+  let conductorAvailable = true;
+  let pendingAuthRecoveryCandidate: PiAuthRecoveryCandidate | undefined;
+  let pendingRecoveryReport: ConductorRecoveryReportEvent | undefined;
+  const sendReconnect = withAgentAvailabilityCallbacks(
+    options.sendReconnect,
+    (available) => {
+      conductorAvailable = available;
+    },
+  );
 
   const hasDispatchableWorkerOutcome = (): boolean =>
     selectDispatchBatch({
@@ -241,7 +267,7 @@ export async function runConductorSessionDriver(
       // fetched and compiled the prompt itself.
       message: await Promise.resolve(options.initialPrompt),
       conductorHandle: options.conductorHandle,
-      sendReconnect: options.sendReconnect,
+      sendReconnect,
       signal: options.shutdownSignal,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
@@ -263,6 +289,11 @@ export async function runConductorSessionDriver(
   }
 
   while (true) {
+    if (options.shutdownSignal.aborted) {
+      stopReason = 'interrupted';
+      break;
+    }
+
     if (options.isPermissionPending) {
       pruneStalePermissionEvents({
         state: dispatchHoldState,
@@ -291,6 +322,10 @@ export async function runConductorSessionDriver(
     if (inFlightSend) {
       const awaited = await awaitWithAbort(inFlightSend, options.shutdownSignal);
       if (awaited.aborted) {
+        stopReason = 'interrupted';
+        break;
+      }
+      if (options.shutdownSignal.aborted) {
         stopReason = 'interrupted';
         break;
       }
@@ -385,6 +420,8 @@ export async function runConductorSessionDriver(
         onDispatchHoldChanged: options.onDispatchHoldChanged,
         onOperatorQueueChanged: options.onOperatorQueueChanged,
         isPermissionPending: options.isPermissionPending,
+        isConductorAvailable: () => conductorAvailable,
+        hasPendingRecoveryReport: () => pendingRecoveryReport !== undefined,
         canDispatchIdleOperatorMessage: () =>
           canDispatchIdleOperatorMessage({
             eventQueue: options.eventQueue,
@@ -406,8 +443,12 @@ export async function runConductorSessionDriver(
     if (!dispatchResult) {
       continue;
     }
+    if (options.shutdownSignal.aborted) {
+      stopReason = 'interrupted';
+      break;
+    }
 
-    const { events: batch, selected } = dispatchResult;
+    const { events: selectedBatch, selected } = dispatchResult;
     postLoopWaiting = false;
     if (selected) {
       dispatchBatchState = markContinuationConsumed(dispatchBatchState, selected);
@@ -415,10 +456,33 @@ export async function runConductorSessionDriver(
 
     if (dispatchResult.sourceKey === 'operator.reconnect') {
       dispatchBatchState = dispatchBatchStateAfterSend(dispatchResult.sourceKey);
-      await runOperatorReconnect(options);
+      const reconnected = await runOperatorReconnect(options);
+      conductorAvailable = reconnected;
+      if (reconnected && !options.shutdownSignal.aborted) {
+        // 再接続の await 中に届いた reconnect は今回の成功で満たされた。
+        // 新しい handle を重ねて close / resume しないよう、ここでまとめて消費する。
+        options.eventQueue.findSendEvents(
+          (event) => event.type === 'operator.reconnect',
+        );
+        if (pendingAuthRecoveryCandidate) {
+          pendingRecoveryReport = {
+            type: 'conductor.recovery.report',
+            ...pendingAuthRecoveryCandidate,
+            reconnect: { kind: 'manual', succeeded: true },
+          };
+          pendingAuthRecoveryCandidate = undefined;
+        }
+      }
       continue;
     }
 
+    const recoveryReport = pendingRecoveryReport;
+    const batch = recoveryReport
+      ? [recoveryReport, ...selectedBatch]
+      : selectedBatch;
+    const originalEvents = batch.filter(
+      (event) => event.type !== 'conductor.recovery.report',
+    );
     const autonomousTurnsAfter = autonomousTurnsAfterConductorBatch(
       batch,
       autonomousTurns,
@@ -429,10 +493,20 @@ export async function runConductorSessionDriver(
       triggers: batch.filter(isTriggerSessionEvent).length,
       sources: uniqueSources(batch, dispatchResult.sourceKey),
     });
+    // 通常 send を開始したら未報告 candidate は失効する。
+    // 準備済み report はこの send に一度だけ加え、開始時に消費して replay しない。
+    const message = formatSessionEventsForConductor(batch);
+    const recoverySnapshotContent = recoveryReport
+      ? formatSessionEventsForConductor(originalEvents)
+      : message;
+    pendingRecoveryReport = undefined;
+    pendingAuthRecoveryCandidate = undefined;
+    let dispatchHadToolCalls = false;
+    let automaticRetryAttempts: 0 | 1 = 0;
     const dispatchSend = runEventConductorSend({
-      message: formatSessionEventsForConductor(batch),
+      message,
       conductorHandle: options.conductorHandle,
-      sendReconnect: options.sendReconnect,
+      sendReconnect,
       signal: options.shutdownSignal,
       workerDispatches: options.workerDispatches,
       workerFailures: options.workerFailures,
@@ -449,13 +523,41 @@ export async function runConductorSessionDriver(
       resetOutboundDispatchesThisSend: options.resetOutboundDispatchesThisSend,
       getOutboundDispatchesThisSend: options.getOutboundDispatchesThisSend,
       onSendStarted: options.onSendStarted,
-      onSendProgress: options.onSendProgress,
+      onSendProgress: (info) => {
+        dispatchHadToolCalls = true;
+        options.onSendProgress?.(info);
+      },
+      onAutomaticRetryAttempt: ({ attempt }) => {
+        automaticRetryAttempts = attempt;
+      },
       onSendComplete: (info) => {
         sendCount = info.sendCount;
         lastDispatchesThisTurn = info.conductorDispatchesThisTurn;
         autonomousTurns = info.autonomousTurns;
         options.onSendComplete(info);
       },
+    }).then((result) => {
+      if (isPiApiKeyResolutionFailure(result) && originalEvents.length > 0) {
+        // Pi は1回の send で複数回 auth を解決するため、後続の失敗から
+        // 先行 tool round に副作用がなかったとは判断できない。
+        // event は再送せず、report 用 candidate と operator-only snapshot を別々に保持する。
+        pendingAuthRecoveryCandidate = createPiAuthRecoveryCandidate({
+          events: originalEvents,
+          sendCount,
+          runId: result.runId,
+          sourceKey: dispatchResult.sourceKey,
+          automaticRetryAttempts,
+          toolCallStarted: dispatchHadToolCalls,
+        });
+        const storedSnapshot = options.piAuthRecoverySnapshotStore?.add(
+          pendingAuthRecoveryCandidate,
+          recoverySnapshotContent,
+        );
+        if (storedSnapshot) {
+          options.onPiAuthRecoverySnapshotStored?.(storedSnapshot);
+        }
+      }
+      return result;
     });
     if (
       options.onDispatchBatchSettled &&
@@ -495,6 +597,132 @@ function uniqueSources(batch: SessionEvent[], fallback: string): string[] {
   return sources.length > 0 ? sources : [fallback];
 }
 
+type PiAuthRecoveryCandidate = Pick<
+  ConductorRecoveryReportEvent,
+  'recoveryId' | 'failedDispatch' | 'failure'
+>;
+
+const MAX_RECOVERY_EVENT_REFERENCES = 20;
+
+function createPiAuthRecoveryCandidate(input: {
+  events: SessionEvent[];
+  sendCount: number;
+  runId: string;
+  sourceKey: string;
+  automaticRetryAttempts: 0 | 1;
+  toolCallStarted: boolean;
+}): PiAuthRecoveryCandidate {
+  const eventReferences = input.events.map((event, index) => ({
+    eventIndex: index + 1,
+    ...recoveryEventReference(event),
+  }));
+  return {
+    recoveryId: `pi-auth-recovery-${input.sendCount}`,
+    failedDispatch: {
+      sendCount: input.sendCount,
+      runId: input.runId,
+      sourceKey: input.sourceKey,
+      eventTypes: [...new Set(input.events.map((event) => event.type))],
+      eventCount: input.events.length,
+      eventReferences: eventReferences.slice(0, MAX_RECOVERY_EVENT_REFERENCES),
+      eventReferencesTruncated:
+        eventReferences.length > MAX_RECOVERY_EVENT_REFERENCES,
+    },
+    failure: {
+      kind: 'pi_api_key_resolution',
+      automaticRetryAttempts: input.automaticRetryAttempts,
+      toolCallStarted: input.toolCallStarted,
+    },
+  };
+}
+
+function recoveryEventReference(
+  event: SessionEvent,
+): { type: string; reference?: string } {
+  switch (event.type) {
+    case 'operator.message':
+      return {
+        type: event.type,
+        reference: `delivery:${event.delivery ?? 'next'}`,
+      };
+    case 'operator.reconnect':
+      return { type: event.type };
+    case 'worker.completed':
+      return {
+        type: event.type,
+        reference: `worker:${event.result.name}:${event.result.kind}`,
+      };
+    case 'worker.failed':
+      return {
+        type: event.type,
+        reference: `worker:${event.failure.name}:${event.failure.kind}`,
+      };
+    case 'permission.pending':
+      return {
+        type: event.type,
+        reference: `permission:${event.permission.id}`,
+      };
+    case 'permission.stall':
+      return {
+        type: event.type,
+        reference: summarizeRecoveryReferences(
+          'permissions',
+          event.pendingPermissionIds,
+        ),
+      };
+    case 'harness.connectivity.recovered':
+      return {
+        type: event.type,
+        reference: `${event.source}:${event.suppressedErrorCount}`,
+      };
+    case 'conductor.recovery.report':
+      return {
+        type: event.type,
+        reference: `recovery:${event.recoveryId}`,
+      };
+    case 'github.update':
+      return {
+        type: event.type,
+        reference: summarizeRecoveryReferences(
+          'items',
+          event.items.map((item) => item.id),
+        ),
+      };
+    default: {
+      const _exhaustive: never = event;
+      return { type: String(_exhaustive) };
+    }
+  }
+}
+
+function summarizeRecoveryReferences(prefix: string, values: string[]): string {
+  const sampleCount = 5;
+  const sample = values.slice(0, sampleCount).join(',');
+  const remaining = values.length - sampleCount;
+  return `${prefix}:${sample}${remaining > 0 ? `,+${remaining} more` : ''}`;
+}
+
+function withAgentAvailabilityCallbacks(
+  options: ConductorSendReconnectOptions,
+  onAvailabilityChanged: (available: boolean) => void,
+): ConductorSendReconnectOptions {
+  return {
+    ...options,
+    onAuthReconnectComplete: (info: ConductorReconnectCompleteInfo) => {
+      onAvailabilityChanged(info.success);
+      (options.onAuthReconnectComplete ?? options.onReconnectComplete)?.(info);
+    },
+    onTransportReconnectComplete: (
+      info: ConductorReconnectCompleteInfo,
+    ) => {
+      onAvailabilityChanged(info.success);
+      (options.onTransportReconnectComplete ?? options.onReconnectComplete)?.(
+        info,
+      );
+    },
+  };
+}
+
 function runEventConductorSend(input: {
   message: string;
   conductorHandle: ConductorAgentHandle;
@@ -512,6 +740,7 @@ function runEventConductorSend(input: {
   getOutboundDispatchesThisSend?: () => number;
   onSendStarted?: (info: ConductorSendStartedInfo) => void;
   onSendProgress?: (info: ConductorSendProgressInfo) => void;
+  onAutomaticRetryAttempt?: (info: ConductorAutomaticRetryInfo) => void;
   onSendComplete: (info: ConductorSendCompleteInfo) => void;
 }): Promise<ConductorSendResult> {
   const workersBefore = input.workerDispatches.length;
@@ -541,6 +770,10 @@ function runEventConductorSend(input: {
           runId: info.runId,
           tool: info.tool,
         });
+      },
+      onAutomaticRetry: (info) => {
+        input.onAutomaticRetryAttempt?.(info);
+        input.sendReconnect.onAutomaticRetry?.(info);
       },
     },
   ).then((sendResult) => {
@@ -586,9 +819,48 @@ async function waitForDispatchBatch(input: {
   onDispatchHoldChanged?: (change: DispatchHoldChange) => void;
   onOperatorQueueChanged?: () => void;
   isPermissionPending?: (requestId: string) => boolean;
+  isConductorAvailable: () => boolean;
+  hasPendingRecoveryReport: () => boolean;
   canDispatchIdleOperatorMessage: () => boolean;
 }): Promise<DispatchBatchResult | undefined> {
   for (;;) {
+    if (!input.isConductorAvailable()) {
+      const queuedReconnects = input.eventQueue.findSendEvents(
+        (event) => event.type === 'operator.reconnect',
+      );
+      if (queuedReconnects.length > 0) {
+        if (
+          input.eventQueue
+            .snapshot()
+            .some((event) => event.type === 'operator.message')
+        ) {
+          input.onOperatorQueueChanged?.();
+        }
+        return {
+          events: queuedReconnects,
+          sourceKey: 'operator.reconnect',
+        };
+      }
+
+      const reconnect = await input.eventQueue.waitForMatchingEvent(
+        (event) => event.type === 'operator.reconnect',
+        input.signal,
+      );
+      const reconnects = [
+        reconnect,
+        ...input.eventQueue.findSendEvents(
+          (event) => event.type === 'operator.reconnect',
+        ),
+      ];
+      if (input.eventQueue.snapshot().some((event) => event.type === 'operator.message')) {
+        input.onOperatorQueueChanged?.();
+      }
+      return {
+        events: reconnects,
+        sourceKey: 'operator.reconnect',
+      };
+    }
+
     if (input.dispatchHoldState.dispatchHold) {
       bufferDispatchHoldEvents({
         state: input.dispatchHoldState,
@@ -672,6 +944,26 @@ async function waitForDispatchBatch(input: {
       };
     }
 
+    const hasDeferredIdleOperatorMessage =
+      input.eventQueue
+        .snapshot()
+        .some(
+          (event) =>
+            event.type === 'operator.message' && event.delivery === 'idle',
+        ) && !input.canDispatchIdleOperatorMessage();
+    // report 単独 send で dispatch hold を迂回しない。hold 解除後は held event が
+    // maxTurns で保留中でも、この有限の通知は送れる。
+    if (
+      input.hasPendingRecoveryReport() &&
+      !input.dispatchHoldState.dispatchHold &&
+      !hasDeferredIdleOperatorMessage
+    ) {
+      return {
+        events: [],
+        sourceKey: 'conductor.recovery.report',
+      };
+    }
+
     const hadQueued = input.eventQueue.size > 0;
     const incoming = await input.eventQueue.waitForEvent(input.signal, {
       onlyNew: hadQueued,
@@ -739,7 +1031,7 @@ function isImmediateDispatchSource(sourceKey: string): boolean {
 /** `/reconnect` は conductor へ送らず、直近 send 完了後に agent だけ差し替える。 */
 async function runOperatorReconnect(
   options: ConductorSessionDriverOptions,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await reconnectConductorAgent(options.conductorHandle, {
       conductorAgentFactory: options.sendReconnect.conductorAgentFactory,
@@ -751,9 +1043,11 @@ async function runOperatorReconnect(
         options.sendReconnect.onTransportReconnectComplete ??
         options.sendReconnect.onReconnectComplete,
     });
+    return true;
   } catch {
     // Reconnect failures are observable through the callback above. Keep the
     // session alive so the operator can retry or submit another message.
+    return false;
   }
 }
 

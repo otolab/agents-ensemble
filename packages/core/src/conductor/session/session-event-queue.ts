@@ -3,7 +3,11 @@ import type { SessionEvent } from './session-event.js';
 /** ConductorSession の単一イベント列（旧 inbox + conductor Queue の統合）。 */
 export class SessionEventQueue {
   private readonly queue: SessionEvent[] = [];
-  private readonly waiters: Array<(event: SessionEvent) => void> = [];
+  private readonly waiters: Array<{
+    accept: (event: SessionEvent) => boolean;
+    resolve: (event: SessionEvent) => void;
+    reject: (error: DOMException) => void;
+  }> = [];
 
   get size(): number {
     return this.queue.length;
@@ -14,9 +18,12 @@ export class SessionEventQueue {
   }
 
   enqueue(event: SessionEvent): void {
-    const waiter = this.waiters.shift();
-    if (waiter) {
-      waiter(event);
+    const waiterIndex = this.waiters.findIndex((waiter) =>
+      waiter.accept(event),
+    );
+    if (waiterIndex >= 0) {
+      const [waiter] = this.waiters.splice(waiterIndex, 1);
+      waiter!.resolve(event);
       return;
     }
     this.queue.push(event);
@@ -54,6 +61,17 @@ export class SessionEventQueue {
       return undefined;
     }
     return this.queue.splice(index, 1)[0];
+  }
+
+  /** 条件に合う send event をすべて取り出し、残りの順序を保つ。 */
+  findSendEvents(accept: (event: SessionEvent) => boolean): SessionEvent[] {
+    const matched: SessionEvent[] = [];
+    const retained: SessionEvent[] = [];
+    for (const event of this.queue) {
+      (accept(event) ? matched : retained).push(event);
+    }
+    this.replaceQueue(retained);
+    return matched;
   }
 
   /**
@@ -95,14 +113,45 @@ export class SessionEventQueue {
     if (signal?.aborted) {
       throw new DOMException('Session event wait aborted', 'AbortError');
     }
+    return this.waitForIncomingEvent(() => true, signal);
+  }
+
+  /**
+   * 条件に合う event を1件待つ。ほかの queue event は消費・並べ替えしない。
+   * これにより conductor が close 済みの間も `/reconnect` を待ちながら、
+   * その間に届く message や worker outcome を保持できる。
+   */
+  async waitForMatchingEvent(
+    accept: (event: SessionEvent) => boolean,
+    signal?: AbortSignal,
+  ): Promise<SessionEvent> {
+    const index = this.queue.findIndex(accept);
+    if (index >= 0) {
+      return this.queue.splice(index, 1)[0]!;
+    }
+    return this.waitForIncomingEvent(accept, signal);
+  }
+
+  private waitForIncomingEvent(
+    accept: (event: SessionEvent) => boolean,
+    signal?: AbortSignal,
+  ): Promise<SessionEvent> {
+    if (signal?.aborted) {
+      return Promise.reject(
+        new DOMException('Session event wait aborted', 'AbortError'),
+      );
+    }
     return new Promise((resolve, reject) => {
+      const waiter = {
+        accept,
+        resolve,
+        reject: (error: DOMException) => reject(error),
+      };
       const onAbort = () => {
         cleanup();
-        reject(new DOMException('Session event wait aborted', 'AbortError'));
-      };
-      const waiter = (event: SessionEvent) => {
-        cleanup();
-        resolve(event);
+        waiter.reject(
+          new DOMException('Session event wait aborted', 'AbortError'),
+        );
       };
       const cleanup = () => {
         signal?.removeEventListener('abort', onAbort);
@@ -110,6 +159,11 @@ export class SessionEventQueue {
         if (index >= 0) {
           this.waiters.splice(index, 1);
         }
+      };
+      const originalResolve = waiter.resolve;
+      waiter.resolve = (event) => {
+        cleanup();
+        originalResolve(event);
       };
       signal?.addEventListener('abort', onAbort);
       this.waiters.push(waiter);

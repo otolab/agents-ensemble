@@ -43,6 +43,7 @@ const STATIC_SOURCE_PRIORITY: Record<string, number> = {
   github: 3,
   'permission.stall': 4,
   'github.recovered': 5,
+  'conductor.recovery.report': 0,
 };
 
 /** セッションイベントの dispatch ソース key を返す。 */
@@ -64,6 +65,8 @@ export function eventSourceKey(event: SessionEvent): DispatchSourceKey {
       return 'github';
     case 'harness.connectivity.recovered':
       return 'github';
+    case 'conductor.recovery.report':
+      return 'conductor.recovery.report';
     default: {
       const _exhaustive: never = event;
       return String(_exhaustive);
@@ -89,6 +92,8 @@ function staticEventPriority(event: SessionEvent): number {
       return STATIC_SOURCE_PRIORITY.github;
     case 'harness.connectivity.recovered':
       return STATIC_SOURCE_PRIORITY['github.recovered'];
+    case 'conductor.recovery.report':
+      return STATIC_SOURCE_PRIORITY['conductor.recovery.report'];
     default:
       return Number.MAX_SAFE_INTEGER;
   }

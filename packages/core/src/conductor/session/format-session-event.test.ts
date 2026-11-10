@@ -277,4 +277,67 @@ describe('formatSessionEventForConductor', () => {
     expect(message).toContain('# github.update');
     expect(message).toContain('new comment');
   });
+
+  it('formats a safe Pi recovery report as a standalone or batched event', () => {
+    const report = {
+      type: 'conductor.recovery.report' as const,
+      recoveryId: 'pi-auth-recovery-12',
+      failedDispatch: {
+        sendCount: 12,
+        runId: 'run-failed-12',
+        sourceKey: 'worker:implementer',
+        eventTypes: ['worker.completed'],
+        eventCount: 1,
+        eventReferences: [
+          {
+            eventIndex: 1,
+            type: 'worker.completed',
+            reference: 'worker:implementer:implementer',
+          },
+        ],
+        eventReferencesTruncated: false,
+      },
+      failure: {
+        kind: 'pi_api_key_resolution' as const,
+        automaticRetryAttempts: 1 as const,
+        toolCallStarted: true,
+      },
+      reconnect: {
+        kind: 'manual' as const,
+        succeeded: true as const,
+      },
+    };
+
+    const standalone = formatSessionEventForConductor(report);
+    const batched = formatSessionEventsForConductor([
+      report,
+      { type: 'operator.message', text: 'check current state' },
+    ]);
+
+    for (const message of [standalone, batched]) {
+      expect(message).toContain('conductor.recovery.report');
+      expect(message).toContain('recoveryId: pi-auth-recovery-12');
+      expect(message).toContain('runId: run-failed-12');
+      expect(message).toContain(
+        'eventIndex: 1',
+      );
+      expect(message).toContain(
+        'reference: worker:implementer:implementer',
+      );
+      expect(message).toContain('automaticRetryAttempts: 1');
+      expect(message).toContain('toolCallStarted: true');
+      expect(message).toContain(
+        '失敗した入力や結果が曖昧な tool を再実行しないでください',
+      );
+      expect(message).toContain(
+        'この dispatch に新しい operator 入力があればその指示に従ってください',
+      );
+      expect(message).toContain(
+        '元の入力が Pi transcript に残っている保証もありません',
+      );
+      expect(message).not.toContain('cached-auth.mjs');
+      expect(message).not.toContain('secret-token');
+      expect(message).not.toContain('original operator message body');
+    }
+  });
 });

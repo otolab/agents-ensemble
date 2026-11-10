@@ -1,5 +1,9 @@
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OperatorMessageDelivery } from './session/session-event.js';
+import type {
+  PiAuthRecoverySnapshot,
+  PiAuthRecoverySnapshotSummary,
+} from './pi-auth-recovery-snapshot-store.js';
 
 export interface OperatorInputContext {
   /** これから実行する conductor send 番号（1 始まり）。 */
@@ -27,6 +31,12 @@ export interface OperatorInputSubmitOptions {
 export interface OperatorInputBindingApi {
   submit: (message: string, options?: OperatorInputSubmitOptions) => boolean;
   getContext: () => OperatorInputContext;
+  /** Process-local recovery payloads; available only to the bound operator UI. */
+  listPiAuthRecoverySnapshots?: () => PiAuthRecoverySnapshotSummary[];
+  getPiAuthRecoverySnapshot?: (
+    recoveryId: string,
+  ) => PiAuthRecoverySnapshot | undefined;
+  clearPiAuthRecoverySnapshot?: (recoveryId: string) => boolean;
 }
 
 /** 非ブロッキングのオペレータ入力源。戻り値で購読を解除する。 */

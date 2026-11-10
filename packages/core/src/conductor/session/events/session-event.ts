@@ -15,6 +15,7 @@ export type SessionEvent =
   | PermissionPendingEvent
   | PermissionStallEvent
   | HarnessConnectivityRecoveredEvent
+  | ConductorRecoveryReportEvent
   | GitHubUpdateEvent;
 
 export interface OperatorMessageEvent extends SessionEventDispatchFields {
@@ -67,6 +68,37 @@ export interface HarnessConnectivityRecoveredEvent
   type: 'harness.connectivity.recovered';
   source: 'github_monitor';
   suppressedErrorCount: number;
+}
+
+/** 手動 reconnect 後に Pi の auth failure を伝える安全な一回限りの context。 */
+export interface ConductorRecoveryReportEvent
+  extends SessionEventDispatchFields {
+  type: 'conductor.recovery.report';
+  recoveryId: string;
+  failedDispatch: {
+    sendCount: number;
+    runId: string;
+    sourceKey: string;
+    eventTypes: string[];
+    eventCount: number;
+    eventReferences: Array<{
+      /** failed dispatch 内の1始まりの位置。同じ参照が重なっても位置を保つ。 */
+      eventIndex: number;
+      type: string;
+      /** 機密を含まない照合用の参照。元 event の本文は保持しない。 */
+      reference?: string;
+    }>;
+    eventReferencesTruncated: boolean;
+  };
+  failure: {
+    kind: 'pi_api_key_resolution';
+    automaticRetryAttempts: 0 | 1;
+    toolCallStarted: boolean;
+  };
+  reconnect: {
+    kind: 'manual';
+    succeeded: true;
+  };
 }
 
 export interface GitHubUpdateEvent extends SessionEventDispatchFields {

@@ -8,6 +8,7 @@ import {
   type ActivityLogLabel,
 } from './activity-log.js';
 import { trimBlankLinesOnly } from './operator-input-layout.js';
+import type { OperatorRecoveryInspection } from '../operator-recovery-command.js';
 
 export interface TuiViewSnapshot {
   displayState: SessionDisplayState;
@@ -16,6 +17,7 @@ export interface TuiViewSnapshot {
   postLoopWaiting: boolean;
   shuttingDown: boolean;
   operatorContext: OperatorInputContext | undefined;
+  recoveryInspection: OperatorRecoveryInspection | undefined;
 }
 
 /**
@@ -41,6 +43,9 @@ export interface TuiViewModel {
   setPostLoopWaiting: (waiting: boolean) => void;
   setShuttingDown: (shuttingDown: boolean) => void;
   setOperatorContext: (context: OperatorInputContext | undefined) => void;
+  setRecoveryInspection: (
+    inspection: OperatorRecoveryInspection | undefined,
+  ) => void;
 }
 
 export function createTuiViewModel(options: {
@@ -57,6 +62,7 @@ export function createTuiViewModel(options: {
   let postLoopWaiting = false;
   let shuttingDown = false;
   let operatorContext: OperatorInputContext | undefined;
+  let recoveryInspection: OperatorRecoveryInspection | undefined;
   let snapshot: TuiViewSnapshot = {
     displayState,
     activityLog,
@@ -64,6 +70,7 @@ export function createTuiViewModel(options: {
     postLoopWaiting,
     shuttingDown,
     operatorContext,
+    recoveryInspection,
   };
   const listeners = new Set<() => void>();
 
@@ -75,6 +82,7 @@ export function createTuiViewModel(options: {
       postLoopWaiting,
       shuttingDown,
       operatorContext,
+      recoveryInspection,
     };
   };
 
@@ -141,6 +149,10 @@ export function createTuiViewModel(options: {
     },
     setOperatorContext(context) {
       operatorContext = context;
+      notify();
+    },
+    setRecoveryInspection(inspection) {
+      recoveryInspection = inspection;
       notify();
     },
   };

@@ -20,7 +20,10 @@ vi.mock('./operator-text-area.js', () => ({
 
 import { createIssueSessionTuiHost } from './create-issue-session-tui-host.js';
 import { INITIAL_SESSION_DISPLAY_STATE } from '../display/session-display-state.js';
-import type { OpenQuestion } from '@agents-ensemble/core';
+import type {
+  OpenQuestion,
+  OperatorInputBindingApi,
+} from '@agents-ensemble/core';
 import { DEFAULT_ENSEMBLE_CONFIG } from '@agents-ensemble/core';
 
 describe('createIssueSessionTuiHost', () => {
@@ -352,6 +355,170 @@ describe('createIssueSessionTuiHost', () => {
     expect(submit).not.toHaveBeenCalled();
     dispose?.();
     host.dispose();
+  });
+
+  it('shows a recovery snapshot only in the local inspection view and clears it before a new instruction', () => {
+    const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    try {
+      const host = createIssueSessionTuiHost();
+      const submit = vi.fn(() => true);
+      const api: OperatorInputBindingApi = {
+        submit,
+        getContext: () => ({
+          conductorTurn: 13,
+          autonomousTurns: 0,
+          maxTurns: null,
+          openQuestions: [],
+        }),
+        listPiAuthRecoverySnapshots: () => [],
+        getPiAuthRecoverySnapshot: vi.fn(() => ({
+          recoveryId: 'pi-auth-recovery-12',
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 60_000,
+          failedDispatch: {
+            sendCount: 12,
+            runId: 'run-12',
+            sourceKey: 'operator',
+            eventTypes: ['operator.message'],
+            eventCount: 1,
+            eventReferences: [],
+            eventReferencesTruncated: false,
+          },
+          failure: {
+            kind: 'pi_api_key_resolution' as const,
+            automaticRetryAttempts: 1 as const,
+            toolCallStarted: false as const,
+          },
+          content: 'private operator task body',
+          contentBytes: 27,
+        })),
+        clearPiAuthRecoverySnapshot: () => false,
+      };
+      const renderedElement = mockRender.mock.calls[0]?.[0] as {
+        props: {
+          onSubmit: (text: string) => void;
+          viewModel: {
+            getSnapshot: () => {
+              activityLog: unknown[];
+              recoveryInspection: { text: string } | undefined;
+            };
+          };
+        };
+      };
+
+      const dispose = host.bindOperatorInput(api);
+      renderedElement.props.onSubmit('/recovery show pi-auth-recovery-12');
+
+      expect(
+        renderedElement.props.viewModel.getSnapshot().recoveryInspection?.text,
+      ).toContain('private operator task body');
+      expect(renderedElement.props.viewModel.getSnapshot().activityLog).toEqual(
+        [],
+      );
+      expect(submit).not.toHaveBeenCalled();
+
+      renderedElement.props.onSubmit('continue after checking current state');
+      expect(submit).toHaveBeenCalledWith(
+        'continue after checking current state',
+        undefined,
+      );
+      expect(
+        renderedElement.props.viewModel.getSnapshot().recoveryInspection,
+      ).toBeUndefined();
+      expect(renderedElement.props.viewModel.getSnapshot().activityLog).toEqual(
+        [],
+      );
+
+      dispose?.();
+      host.dispose();
+    } finally {
+      if (stdoutIsTty) {
+        Object.defineProperty(process.stdout, 'isTTY', stdoutIsTty);
+      } else {
+        Reflect.deleteProperty(process.stdout, 'isTTY');
+      }
+    }
+  });
+
+  it('hides the sensitive inspection pane when its snapshot expires or the binding is disposed', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'));
+    const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    try {
+      const host = createIssueSessionTuiHost();
+      const renderedElement = mockRender.mock.calls[0]?.[0] as {
+        props: {
+          onSubmit: (text: string) => void;
+          viewModel: {
+            getSnapshot: () => {
+              recoveryInspection: { text: string } | undefined;
+            };
+          };
+        };
+      };
+      const dispose = host.bindOperatorInput({
+        submit: vi.fn(() => true),
+        getContext: () => ({
+          conductorTurn: 1,
+          autonomousTurns: 0,
+          maxTurns: null,
+          openQuestions: [],
+        }),
+        listPiAuthRecoverySnapshots: () => [],
+        getPiAuthRecoverySnapshot: () => ({
+          recoveryId: 'pi-auth-recovery-1',
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 100,
+          failedDispatch: {
+            sendCount: 1,
+            runId: 'run-1',
+            sourceKey: 'operator',
+            eventTypes: ['operator.message'],
+            eventCount: 1,
+            eventReferences: [],
+            eventReferencesTruncated: false,
+          },
+          failure: {
+            kind: 'pi_api_key_resolution',
+            automaticRetryAttempts: 0,
+            toolCallStarted: false,
+          },
+          content: 'sensitive content',
+          contentBytes: 17,
+        }),
+        clearPiAuthRecoverySnapshot: () => false,
+      });
+
+      renderedElement.props.onSubmit('/recovery show pi-auth-recovery-1');
+      expect(
+        renderedElement.props.viewModel.getSnapshot().recoveryInspection,
+      ).toBeDefined();
+      vi.advanceTimersByTime(100);
+      expect(
+        renderedElement.props.viewModel.getSnapshot().recoveryInspection,
+      ).toBeUndefined();
+
+      renderedElement.props.onSubmit('/recovery show pi-auth-recovery-1');
+      dispose?.();
+      expect(
+        renderedElement.props.viewModel.getSnapshot().recoveryInspection,
+      ).toBeUndefined();
+      host.dispose();
+    } finally {
+      if (stdoutIsTty) {
+        Object.defineProperty(process.stdout, 'isTTY', stdoutIsTty);
+      } else {
+        Reflect.deleteProperty(process.stdout, 'isTTY');
+      }
+    }
   });
 
   it('submits ENSEMBLE_OPERATOR_MESSAGE once and keeps the Ink input binding', () => {

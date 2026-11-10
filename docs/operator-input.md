@@ -14,7 +14,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
 | **SessionView** | TTY Ink TUI / CLI 引数 / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
-データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect`、`/close`、`/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
+データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect`、`/recovery`、`/close`、`/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
 
 ## View 契約: `OperatorInputBinding`
 
@@ -35,6 +35,10 @@ interface OperatorInputBindingApi {
     options?: { targetOpenQuestionId?: string; delivery?: 'idle' | 'next' | 'interrupt' },
   ) => boolean;
   getContext: () => OperatorInputContext;
+  // process 内 recovery snapshot の一覧・取得・削除（TTY binding 用）
+  listPiAuthRecoverySnapshots?: () => PiAuthRecoverySnapshotSummary[];
+  getPiAuthRecoverySnapshot?: (recoveryId: string) => PiAuthRecoverySnapshot | undefined;
+  clearPiAuthRecoverySnapshot?: (recoveryId: string) => boolean;
 }
 
 type OperatorInputBinding = (
@@ -47,6 +51,7 @@ type OperatorInputBinding = (
 - 空文字は無視（`false` を返す）
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
 - `/reconnect` / `reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
+- `/recovery ...` は binding 内で一覧・表示・削除を行い、`submit` や conductor dispatch には渡さない
 - `/close` / `close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。SessionResumeStore を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
 - `/exit` / `exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
 - TTY の通常入力は配信モード prefix を付けられる。`/idle ...`、`/next ...`、`/interrupt ...` を本文先頭に置き、prefix 自体は conductor へ送らない。prefix なしは `next`
@@ -271,7 +276,7 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 | イベント | ターン残あり | max-turns 到達後 |
 |----------|------------|----------------|
 | `operator.message` | dispatch。オペレータ入力として自律ターン数をリセット | dispatch（`operator.message` は常に許可） |
-| `operator.reconnect` | dispatch。直近の send 完了後に conductor を close → `resume(sameId)`。worker / worktree / プロセスは変更しない | conductor へメッセージとして送らない。max-turns 到達後も許可 |
+| `operator.reconnect` | dispatch 制御。コマンド自体は prompt にせず、直近の send 完了後に conductor を close → `resume(sameId)`。Pi の resolver failure で終わった候補があれば、成功後の次の dispatch に安全な recovery report を一度だけ含める。失敗 batch は再キューしない | `/reconnect` 自体は prompt として送らず、max-turns 到達後も許可。report 単独 send は有限の回復通知として許可し、自律 turn 数は変えない。hold 中は単独 send せず、解除後は max-turns で待機中の held worker event が残っていても report を送れる。worker event は既存の max-turns 制限を受ける |
 | `permission.pending` | dispatch | dispatch（permission 判断を優先） |
 | `permission.stall` | dispatch（低優先度。`operator.message` / `permission.pending` を先に選択） | dispatch（permission 回復用の例外。`operator.message` / `permission.pending` の後） |
 | `github.update` | dispatch。状況把握ターンとして自律ターンを 1 消費 | enqueue のみ。dispatch しない |
@@ -280,15 +285,76 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 ### `/reconnect` — conductor transport の手動再接続
 
-`/reconnect` または `reconnect`（大文字小文字無視・前後空白トリム）は、conductor との対話に載せない専用コマンドです。直近の `conductor.send` が完了（成功・エラーを含む）した後、現在の agent を `close` し、同じ `agentId` で `resume` します。再接続そのものは prompt を再送せず、次の operator 入力や worker/GitHub 通知から新しい agent を使います。worker、worktree、プロセスは触りません。
+`/reconnect` または `reconnect`（大文字小文字無視・前後空白トリム）は、conductor との対話に載せない専用コマンドです。直近の `conductor.send` が完了（成功・エラーを含む）した後、現在の agent を `close` し、同じ `agentId` で `resume` します。コマンド自体は prompt を送りません。
+
+Pi の API key resolver failure（`error.code === "auth"` かつ
+`API key auth failed for provider ...: Failed to resolve API key ...`）で send が終わった場合、driver は
+失敗 batch を再キューせず、手動復旧用の候補を一つ保持します。候補には `sendCount`、`runId`、
+`sourceKey`、event type / count、最大20件の安全な event 参照、自動 retry 回数、tool 開始有無を含めます。
+参照の超過分は `eventReferencesTruncated` で示します。
+認証 error 本文、shell command / path、operator message 本文、worker の prompt / 結果、permission の raw
+payload は含めません。event に共通の永続 ID はないため、これらは既存の event と dispatch を照合する
+ための手掛かりです。
+
+手動 `/reconnect` 成功時に候補を一回限りの `conductor.recovery.report` へ変え、次に選ばれる dispatch の
+先頭へ含めます。再接続の await 中に届いた operator / worker event は queue に順序どおり残り、成功後の
+dispatch に report と一緒に送ります。通常入力がなければ report 自体を一回だけ送ります。元の失敗 batch
+はどの場合も再投入しません。report は send 開始時に消費します。report を含む send は通常の send 内自動
+retry の対象で、tool が始まっていなければ同じ prompt を一度だけ再送します。これは report event の再投入
+ではありません。別個の遅れた通知としての再投入はしません。send 自体の error / auth hint は通常どおり
+operator に返ります。新しい実入力を含む send が Pi resolver failure で終わった場合だけ、その最新
+dispatch の候補へ置き換えます。
+
+手動 reconnect 前に operator message や worker event など別の通常 send が始まると、古い候補は破棄します。
+その send が同じ resolver failure で終わった場合は新しい候補になります。operator message と `/reconnect`
+が同時に待っていれば、既存の優先順位で operator message が先に処理されます。reconnect が失敗した場合、
+その `/reconnect` は消費しますが、候補と通常 event は process 内に保持します。旧 agent は closed /
+unavailable と扱い、通常 event を dispatch せず次の `/reconnect` を待ちます。再接続に成功すれば、
+report と保持中の input は既存 selector の次の dispatch に進みます。
+
+Pi は send 内で複数回 API key を解決するため、resolver failure が先行 tool 実行の後に返る可能性があります。
+初回 send または自動 retry のどちらかで tool が始まっていれば、同じ prompt の自動 retry は行いません。
+手動 recovery report は tool 開始有無も伝えますが失敗 batch 自体は再送しません。conductor は worker /
+worktree の状態を確認し、tool の副作用や元の operator 意図を特定できない場合は operator に確認します。
+transport error など結果が曖昧な失敗は Pi resolver report の候補にしません。
+
+この report は `ensemble issue` の driver に限った復旧動作です。`ensemble operator-agent` の手動
+`/reconnect` は agent の close / resume のみで、失敗した operator-agent prompt の再送や recovery report の
+注入はしません。send 内の自動 retry は両経路で共有します。両者の違いは
+[conductor 認証再接続](conductor-auth-reconnect.md) を参照してください。
 
 成功・失敗は `conductor.transport.reconnect` として harness / observation に表示されます。失敗してもセッションは継続し、もう一度 `/reconnect` または通常の入力を受け付けます。send 中の in-flight 中断は行いません。
 
+recovery candidate / report と `SessionEventQueue` は process 内だけにあります。`/close` または Ctrl+C で終了すると queue と未送信 report は破棄され、`--continue` / `--resume` は失敗 batch / report を自動再生しません。Pi transcript に元入力が残る保証もありません。再開後はまず conductor / worker / worktree の状態を確認し、未完了分だけを新しい operator message で伝えてください。task の文脈が分からない場合は operator に確認してください。queue の永続化は stable event identity、atomic な送信境界、副作用の重複排除が必要なため、現在の resume 契約には含めません。
+
 Connection stalled が自動再接続後も続く場合は `/reconnect` を試してください。worktree を残したままプロセスを終了するには `/close` を使います（次節）。Ctrl+C も cleanup を行いませんが、終了結果は `interrupted` になります。`/exit` は isolated worktree の cleanup を試みます。プロセスを維持したまま conductor を再接続する場合は `/reconnect` を使います。
+
+### `/recovery` — 失敗 dispatch の内容を確認する
+
+最終的な Pi API key resolver failure で通常 dispatch が失敗すると、driver は失敗 batch を再投入せず、その時点の dispatch 内容を session 専用の process-local recovery inbox に保存します。保存対象は conductor に渡した形式の event 内容です。operator message、worker result、permission の raw payload、GitHub update などを含む場合があり、一般的な secret redaction はありません。send 内の自動 retry がある場合は、最終結果が対象 failure になった後にだけ保存します。synthetic な `conductor.recovery.report` は対象外です。
+
+TTY の operator input binding で次を実行します。
+
+```text
+/recovery list
+/recovery show <recoveryId>
+/recovery clear <recoveryId>
+/recovery hide
+```
+
+`list` は本文を出さず、ID、send 番号、event type / 件数、source、byte 数、tool 開始 callback の観測有無、retry 回数、期限を表示します。本文を読むには ID を指定した `show` が必要です。CLI は対話 TTY でのみ本文を取得・表示し、escape sequence / terminal control / bidi 制御文字を可視表記へ変換します。snapshot API は local な in-process operator binding にだけ渡し、UDS / operator-agent からは参照できません。独自の operator binding は信頼された同一 process 内のコードとして扱います。
+
+本文は最大4 dispatch、failure から30分まで保持し、上限では最古の snapshot を削除します。内容を切り詰めないため、単一 dispatch の byte 上限はありません。event payload 自体に byte 上限がないので、保持件数と時間は制限しますが、最大メモリ量は保証できません。`clear` は inbox から参照を外しますが、JavaScript runtime の memory を完全消去する保証はなく、pending recovery report の metadata や provider transcript にも影響しません。
+
+`show` は内容を conductor に再送しません。本文をそのまま再入力すると、すでに起きた副作用が重なる可能性があります。表示後は worker / worktree の現在状態と実行済み副作用を確認し、続ける場合は確認できた未完了分だけを新しい operator message として入力してください。`toolCallStarted: false` は callback を観測しなかったことを示すだけで、副作用がなかった証明ではありません。TUI の `hide` または Escape は表示 pane を閉じます。短い端末では本文を読める領域を確保するため一時的に入力欄を隠し、Escape で戻ります。readline / TUI のどちらも表示済みの端末履歴を消去する保証はありません。terminal recording・画面共有・端末 capture による漏えいも防げません。
+
+`/close`、`/exit`、Ctrl+C、process 終了では snapshot を破棄します。SessionResumeStore や Pi transcript への保存はせず、`--continue` / `--resume` 後に復元しません。期限切れや FIFO eviction の後も復元できません。
 
 ### `/close` — worktree を残してセッションを閉じる
 
 `/close` または `close`（大文字小文字無視・前後空白トリム）は、conductor に送らない一時終了コマンドです。入力直後に `session.operator_close` を emit し、force teardown で処理中 worker prompt を停止して未解決 permission を deny します。attach 済み worker の ACP session ID と cwd は、初回 prompt が完了する前でも runtime の接続一覧から snapshot します。GitHub monitor を停止して最新 cursor と未配送 outbox を SessionResumeStore に flush した後、worker と conductor を force stop し、TUI を dispose してプロセスを終了します。正常に完了した `/close` は exit code 0 です。
+
+この flush に conductor send 中の batch、SessionDriver の状態、recovery candidate / report は含まれません。Ctrl+C / SIGINT も同じく event queue を保存しません（SessionResumeStore の flush は best effort）。再開後に失敗 batch や report は自動再生されないため、状態を確認して新しい operator message で未完了分を伝えてください。
 
 SessionResumeStore には conductor agent ID、worker ACP session ID / cwd、profile、GitHub monitor cursor / pending update などを保存します。Open Question の正本は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}/open-questions.yaml` です。version 1 の YAML に `sequence` と open / answered を含む全 `openQuestions` を保存し、互換 mirror として `~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json` にも同じ snapshot を書きます。flush は YAML を先に保存してから SessionResumeStore を更新するため、2 ファイルをまたぐ transaction ではありません。YAML の保存に失敗した場合は SessionResumeStore も更新せず、warning を表示します。2 ファイルの内容が異なる場合、`--continue` / `--resume` では YAML があれば YAML を採用します。YAML がまだない旧形式のセッションに限り SessionResumeStore から復元して YAML をバックフィルし、不正な YAML は古い保存状態へ fallback せず resume を失敗させます。旧 `<repoRoot>/.ensemble/sessions/` は resume 時に fallback 読み込みし、user 側へ移行します。worktree path は保存せず、同じ Issue の `issueUrl` と `repoRoot` から再導出します。`--continue` は既存 conductor ID を使い、保存済み worker ACP session ID / cwd が整合すれば `session/load` します。通常の `session/load` 失敗時は新しい ACP session に切り替えて bootstrap prompt を送り、以前の worker transcript は復元されません。一方、resume 時に model / reasoning 等の ACP config option を検証・適用できない場合は attach を失敗させ、新しい session や bootstrap prompt へは進みません。
 

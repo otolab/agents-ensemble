@@ -166,6 +166,7 @@ import { formatPermissionSummaryForOperator } from '../permission/format-permiss
 import { enrichSessionUsageWithCost } from '../usage/enrich-session-usage-cost.js';
 import { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 import type { OperatorInputBinding } from './operator-input-binding.js';
+import { PiAuthRecoverySnapshotStore } from './pi-auth-recovery-snapshot-store.js';
 import {
   enqueueOperatorMessage as enqueueOperatorMessageEvent,
   submitOperatorInput,
@@ -479,6 +480,8 @@ async function runConductorSessionWithStartupGuard(
     null;
   const conductorMessages: OpenQuestionControlConductorMessage[] = [];
   const eventQueue = new SessionEventQueue();
+  const piAuthRecoverySnapshotStore = new PiAuthRecoverySnapshotStore();
+  startupCleanup.add(() => piAuthRecoverySnapshotStore.dispose());
   const openQuestionDispatchReceipts = new WeakMap<
     SessionEvent,
     { resolve: () => void; reject: (error: Error) => void }
@@ -1851,6 +1854,12 @@ async function runConductorSessionWithStartupGuard(
             : [],
         ),
       }),
+      listPiAuthRecoverySnapshots: () =>
+        piAuthRecoverySnapshotStore.list(),
+      getPiAuthRecoverySnapshot: (recoveryId) =>
+        piAuthRecoverySnapshotStore.get(recoveryId),
+      clearPiAuthRecoverySnapshot: (recoveryId) =>
+        piAuthRecoverySnapshotStore.remove(recoveryId),
     });
     if (typeof bindingDispose === 'function') {
       disposeOperatorInput = bindingDispose;
@@ -2073,6 +2082,7 @@ async function runConductorSessionWithStartupGuard(
       conductorHandle,
       sendReconnect,
       eventQueue,
+      piAuthRecoverySnapshotStore,
       dispatchHoldState,
       onDispatchHoldChanged,
       resetOutboundDispatchesThisSend: () => {
@@ -2137,6 +2147,15 @@ async function runConductorSessionWithStartupGuard(
         });
       },
       onSendComplete: recordSendComplete,
+      onPiAuthRecoverySnapshotStored: ({ snapshot, evictedRecoveryIds }) => {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            evictedRecoveryIds.length > 0
+              ? `Pi recovery inbox reached its four-dispatch limit; evicted ${evictedRecoveryIds.join(', ')}. Snapshot ${snapshot.recoveryId} remains available for local TTY inspection until ${new Date(snapshot.expiresAt).toISOString()}.`
+              : `Pi authentication failure snapshot ${snapshot.recoveryId} is available for local TTY inspection until ${new Date(snapshot.expiresAt).toISOString()}. Use /recovery list, then /recovery show <id>.`,
+        });
+      },
       onDispatchBatchSettled: ({ events, result, error }) => {
         for (const event of events) {
           if (event.type !== 'operator.message') continue;
@@ -2320,6 +2339,9 @@ async function runConductorSessionWithStartupGuard(
       });
     }
   } finally {
+    disposeOperatorInput?.();
+    disposeOperatorInput = undefined;
+    piAuthRecoverySnapshotStore.dispose();
     const lifecycle: SessionLifecycle = operatorRequestedClose
       ? 'closed'
       : operatorRequestedExit
@@ -2390,7 +2412,6 @@ async function runConductorSessionWithStartupGuard(
         }
         teardownPhases.openQuestionControl = Date.now() - phaseStart;
       }
-      disposeOperatorInput?.();
       if (dispatchHoldReminderMonitor) {
         emitTeardownPhase('dispatchHoldReminderMonitor');
         dispatchHoldReminderMonitor.stop();

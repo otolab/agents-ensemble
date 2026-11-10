@@ -89,7 +89,8 @@ export function canDispatchConductorSend(
     event.type === 'operator.message' ||
     event.type === 'operator.reconnect' ||
     event.type === 'permission.pending' ||
-    event.type === 'permission.stall'
+    event.type === 'permission.stall' ||
+    event.type === 'conductor.recovery.report'
   ) {
     return true;
   }
@@ -115,7 +116,13 @@ export function autonomousTurnsAfterConductorBatch(
   events: SessionEvent[],
   autonomousTurns: number,
 ): number {
-  if (events.every((event) => event.type === 'operator.reconnect')) {
+  if (
+    events.every(
+      (event) =>
+        event.type === 'operator.reconnect' ||
+        event.type === 'conductor.recovery.report',
+    )
+  ) {
     return autonomousTurns;
   }
   if (events.some((event) => event.type === 'operator.message')) {
