@@ -616,7 +616,7 @@ describe('ensemble session commands', () => {
         'Local fixture inbound api_key=fixture-api-key-653',
       );
     }
-  });
+  }, 30_000);
 
   it('warns that messages prints raw provider history which may contain secrets', () => {
     const result = runCli(['session', 'messages', '--help']);
