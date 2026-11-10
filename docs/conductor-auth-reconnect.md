@@ -67,6 +67,14 @@ resume 自体は conductor agent の差し替えだけを行います。再キ�
 同じ event の手動再キューは現在の driver process 中 1 回までです。再キュー後も失敗した場合は
 再び戻さず、状態を確認して新しい operator message で未完了分だけを伝えてください。
 
+失敗 batch の候補は、その後に通常の conductor send が始まるまで有効です。先に operator message
+や worker event など別の dispatch が始まった場合、古い候補はその時点で破棄します。その新しい
+send 自体が同じ Pi resolver failure で終われば、その batch を新しい候補として登録します。
+`/reconnect` は prompt を送らない制御操作なので候補を失効させず、再接続に失敗した場合も候補は
+残ります。operator message と `/reconnect` が同時にキューにあるときは、既存の優先順位で
+operator message が先に送られます。その send 開始時に候補が破棄されるため、後続の `/reconnect`
+が古い batch を再投入することはありません。
+
 手動再キュー候補と `SessionEventQueue` はメモリ上にあり、SessionResumeStore には保存しません。
 候補が再キューされる前でも、queue に戻った後でも、`/close` または Ctrl+C で process を止めると
 再開後に自動再生されません。`--continue` / `--resume` で agent を再開できた場合も、現在の状態を

@@ -366,6 +366,8 @@ hint には次の情報が含まれます。
 
 実行中の `ensemble issue` で `API key auth failed for provider ...: Failed to resolve API key ...` が出た場合、該当する provider request の前に key resolver が失敗しています。Pi は同じ send 内で tool round ごとに key を解決するため、先行する tool の副作用がありうる点には注意してください。tool call 開始後は自動経路でも同じ prompt を再送しません。認証 helper を直した後に `/reconnect` すると、初回 send と自動 retry のどちらでも tool call が始まっていない batch だけを再キューします。同じ event の手動再キューは同一 process 中 1 回までです。tool call が始まっていた場合や、transport error など結果が曖昧な場合は重複実行を避けて再送しません。現在の状態を確認し、新しい operator message で未完了の作業を伝えてください。
 
+この失敗 batch の候補は、次の通常 conductor send が始まるまで有効です。operator message と `/reconnect` が同時に待っている場合は message が先に送られ、その send 開始時に古い候補が破棄されます。新しい send 自体が同じ resolver failure で終われば、その batch が新しい候補になります。
+
 `/close` または Ctrl+C で process を止めると、失敗 batch と event queue は SessionResumeStore に保存されず、`--continue` / `--resume` 後も自動再生されません。再開後は conductor / worker の状態を確認し、未完了分だけを新しい operator message で伝えてください。Ctrl+C の sidecar flush は best effort です。max-turns 到達後も `/reconnect` 自体は使えますが、再キューされた worker event は通常の max-turns 制限を受けます。新しい operator message で上限をリセットしてから dispatch される場合があります。
 
 再接続の in-process retry、auth error の判定、backend 固有 hint の設計は [conductor-auth-reconnect.md](conductor-auth-reconnect.md) が正本です。

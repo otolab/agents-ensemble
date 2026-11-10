@@ -1073,6 +1073,119 @@ describe('runConductorSessionDriver', () => {
     expect(result.stopReason).toBe('interrupted');
   });
 
+  it('expires a failed Pi recovery batch after a newer operator send before reconnect', async () => {
+    const authError = {
+      runId: 'run-auth-error',
+      status: 'error' as const,
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+    };
+    const dispatchOrder: string[] = [];
+    const initialSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-initial',
+        status: 'finished' as const,
+        result: 'ready',
+      })
+      .mockResolvedValueOnce(authError);
+    const resumedSend = vi
+      .fn()
+      .mockResolvedValueOnce(authError)
+      .mockImplementationOnce(async (message: string) => {
+        expect(message).toContain('continue from the latest state');
+        dispatchOrder.push('operator.message');
+        return {
+          runId: 'run-after-operator',
+          status: 'finished' as const,
+          result: 'continued',
+        };
+      });
+    const manualReconnectSend = vi.fn().mockImplementation(async () => {
+      dispatchOrder.push('stale recovery batch');
+      return {
+        runId: 'run-stale-recovery',
+        status: 'finished' as const,
+        result: 'stale batch replayed',
+      };
+    });
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const conductor = {
+      agentId: 'agent-1',
+      send: initialSend,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const driverOptions = createDriverOptions({ eventQueue, conductor });
+    const onTransportReconnectComplete = vi.fn(() => {
+      dispatchOrder.push('manual reconnect');
+    });
+    driverOptions.sendReconnect.onTransportReconnectComplete =
+      onTransportReconnectComplete;
+
+    mockResume
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: resumedSend,
+        close: vi.fn(),
+      })
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: manualReconnectSend,
+        close: vi.fn(),
+      });
+
+    const driverPromise = runConductorSessionDriver({
+      ...driverOptions,
+      shutdownSignal: shutdown.signal,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+    });
+
+    await vi.waitFor(() => expect(initialSend).toHaveBeenCalledOnce());
+    eventQueue.enqueue({
+      type: 'worker.completed',
+      result: {
+        name: 'implementer',
+        acpSessionId: 'worker-session',
+        status: 'finished',
+        result: 'work completed',
+      },
+    });
+    await vi.waitFor(() =>
+      expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(2),
+    );
+
+    const failedPrompt = initialSend.mock.calls[1]![0] as string;
+    expect(resumedSend).toHaveBeenCalledWith(failedPrompt, expect.any(Object));
+    expect(eventQueue.isEmpty()).toBe(true);
+
+    // Both controls are pending together. The existing selector must deliver
+    // the newer operator message before the reconnect control.
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'continue from the latest state',
+    });
+    eventQueue.enqueue({ type: 'operator.reconnect' });
+    await vi.waitFor(() => expect(resumedSend).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() =>
+      expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(3),
+    );
+    await vi.waitFor(() =>
+      expect(onTransportReconnectComplete).toHaveBeenCalledOnce(),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(resumedSend.mock.calls[1]![0]).not.toBe(failedPrompt);
+    expect(dispatchOrder).toEqual(['operator.message', 'manual reconnect']);
+    expect(manualReconnectSend).not.toHaveBeenCalled();
+    expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(3);
+    expect(mockResume).toHaveBeenCalledTimes(2);
+
+    shutdown.abort();
+    const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
+  });
+
   it('does not requeue the same Pi API-key dispatch after its manual retry fails', async () => {
     const authError = {
       runId: 'run-auth-error',

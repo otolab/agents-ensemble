@@ -447,6 +447,10 @@ export async function runConductorSessionDriver(
       triggers: batch.filter(isTriggerSessionEvent).length,
       sources: uniqueSources(batch, dispatchResult.sourceKey),
     });
+    // A newer send may already incorporate or supersede the work in these
+    // candidates. Keep them only until the next send starts; a manual
+    // reconnect is handled above and can still requeue them before then.
+    pendingAuthRecoveryBatches.length = 0;
     let dispatchHadToolCalls = false; // Prevent replay if the send may have side effects.
     const dispatchSend = runEventConductorSend({
       message: formatSessionEventsForConductor(batch),

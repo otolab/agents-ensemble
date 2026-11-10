@@ -293,6 +293,11 @@ dispatch batch は、resume 成功後に driver が 1 回だけ再キューし�
 一度までです。再送も失敗した場合はその event を再度キューへ戻さず、状態を確認してから新しい
 operator message で続行してください。
 
+再キュー候補は、次の通常 conductor send が始まるまで有効です。operator message や worker event など
+別の send が先に始まると古い候補は破棄され、その send が同じ Pi resolver failure で終わった場合だけ
+新しい候補になります。`/reconnect` 自体は prompt を送らないため候補を失効させません。operator message と
+`/reconnect` が同時に待っている場合は operator message が先に送られ、古い候補はそこで破棄されます。
+
 この再キューは `ensemble issue` の driver に限った復旧動作です。`ensemble operator-agent` の
 手動 `/reconnect` は agent の close / resume のみで、失敗した operator-agent prompt は再送しません。
 両者の経路は [conductor 認証再接続](conductor-auth-reconnect.md) を参照してください。
