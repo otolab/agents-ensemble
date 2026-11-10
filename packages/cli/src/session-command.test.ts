@@ -2,6 +2,7 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
+  readFile,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -65,6 +66,310 @@ describe('ensemble session commands', () => {
     expect(result.stdout).toContain('messages');
     expect(result.stdout).toContain('workers');
     expect(result.stdout).toContain('without starting an agent');
+  });
+
+  it('documents the timeline inputs and raw diagnostic output', () => {
+    const result = runCli(['session', 'timeline', '--help']);
+
+    expect(result.status).toBe(0);
+    const help = result.stdout.replace(/\s+/gu, ' ');
+    expect(help).toContain('--summary <path>');
+    expect(help).toContain('--harness-log <path>');
+    expect(help).toContain('may contain secrets');
+  });
+
+  it('shows the Issue 650 reconnect gap without inventing a transcript pair', async () => {
+    const fixturePath = fileURLToPath(
+      new URL('../test/fixtures/session-650-reconnect-gap.json', import.meta.url),
+    );
+    const fixture = JSON.parse(await readFile(fixturePath, 'utf8')) as {
+      summary: {
+        agentId: string;
+        issueUrl: string;
+        repoRoot: string;
+        startedAt: number;
+        durationMs: number;
+        sendCount: number;
+        lastRunStatus: string;
+        lastError: { message: string };
+      };
+      providerHistory: Array<{
+        sendCount: number;
+        dispatchSource: string;
+        completedAt: number;
+        inbound: string;
+        response: string;
+      }>;
+      harnessLog: string[];
+    };
+    conductorAgentId = fixture.summary.agentId;
+    await writeResumeStore({ issueUrl: fixture.summary.issueUrl });
+    await writePiHistory(fixture.providerHistory);
+
+    const summaryPath = join(tempRoot, 'session-summary.json');
+    const harnessLogPath = join(tempRoot, 'harness.log');
+    await writeFile(
+      summaryPath,
+      `${JSON.stringify(
+        { ...fixture.summary, repoRoot },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+    await writeFile(harnessLogPath, `${fixture.harnessLog.join('\n')}\n`, 'utf8');
+
+    const result = runCli([
+      'session',
+      'timeline',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--summary',
+      summaryPath,
+      '--harness-log',
+      harnessLogPath,
+      '--json',
+    ]);
+
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.sources).toMatchObject({
+      providerHistory: {
+        status: 'available',
+        backend: 'pi',
+        count: 2,
+        hasMore: false,
+      },
+      sessionSummary: { status: 'available', path: summaryPath },
+      harnessLog: {
+        status: 'available',
+        path: harnessLogPath,
+        recognizedEventCount: 3,
+      },
+      sessionLogEvents: { status: 'not-persisted' },
+      sendCorrelation: {
+        status: 'available',
+        basis: 'Pi sendCount within SessionSummary time window',
+      },
+    });
+    expect(output.sendTimeline).toMatchObject([
+      {
+        sendCount: 98,
+        providerPairStatus: 'available',
+        providerMessages: [
+          {
+            dispatchSource: 'worker:implementer',
+            inbound:
+              'Continue the diagnosis after implementer completed.',
+            text: 'Inspecting the saved provider history around the failed send.',
+          },
+        ],
+      },
+      {
+        sendCount: 99,
+        providerPairStatus: 'not-found',
+        providerMessages: [],
+        harnessEvents: [
+          {
+            kind: 'conductor.send',
+            line: 2,
+            status: 'error',
+          },
+          {
+            kind: 'conductor.transport.reconnect',
+            line: 3,
+            status: 'attempt',
+            previousSendCountInLog: 99,
+          },
+          {
+            kind: 'conductor.transport.reconnect',
+            line: 4,
+            status: 'succeeded',
+            previousSendCountInLog: 99,
+          },
+        ],
+        summary: {
+          sendCount: 99,
+          lastRunStatus: 'error',
+        },
+      },
+    ]);
+    expect(output.gaps).toMatchObject([
+      {
+        missingFromSendCount: 99,
+        missingThroughSendCount: 99,
+        evidence: expect.arrayContaining([
+          'harness log line 2: send #99 status=error',
+          'harness log line 3: transport reconnect attempt',
+          'SessionSummary: send #99 status=error',
+        ]),
+        explanation: expect.stringContaining(
+          'raw transcript に未対応 entry があるか',
+        ),
+      },
+    ]);
+    expect(output.uncorrelatedProviderMessages).toMatchObject([
+      {
+        sendCount: 99,
+        inbound: 'A send #99 from the previous harness process.',
+        text: 'Previous process response; not part of this run.',
+      },
+    ]);
+
+    const text = runCli([
+      'session',
+      'timeline',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--summary',
+      summaryPath,
+      '--harness-log',
+      harnessLogPath,
+    ]);
+    expect(text.status).toBe(0);
+    expect(text.stdout).toContain('send #98');
+    expect(text.stdout).toContain('send #99');
+    expect(text.stdout).toContain('conductor.send n=99 status=error');
+    expect(text.stdout).toContain(
+      'conductor.transport.reconnect status=succeeded',
+    );
+    expect(text.stdout).toContain(
+      'provider history: send #99 に対応する inbound / response pair は見つかりません。',
+    );
+    expect(text.stdout).toContain(
+      '今回の run と send 番号を照合していない provider history:',
+    );
+    expect(text.stdout).toContain('sendCount=99');
+    expect(text.stdout).toContain('raw transcript に未対応 entry があるか');
+
+    const withoutOptionalSources = runCli([
+      'session',
+      'timeline',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--json',
+    ]);
+    const withoutSummary = JSON.parse(withoutOptionalSources.stdout);
+    expect(withoutSummary.sources).toMatchObject({
+      sessionSummary: { status: 'not-provided' },
+      harnessLog: { status: 'not-provided' },
+      sessionLogEvents: { status: 'not-persisted' },
+      sendCorrelation: {
+        status: 'unavailable',
+        reason: expect.stringContaining('run ごとに再利用'),
+      },
+    });
+    expect(withoutSummary.sendTimeline).toEqual([]);
+    expect(withoutSummary.uncorrelatedProviderMessages).toHaveLength(2);
+
+    const logWithoutSummary = runCli([
+      'session',
+      'timeline',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--harness-log',
+      harnessLogPath,
+      '--json',
+    ]);
+    const unboundedLog = JSON.parse(logWithoutSummary.stdout);
+    expect(unboundedLog.sendTimeline).toMatchObject([
+      {
+        sendCount: 99,
+        providerPairStatus: 'not-correlatable',
+        providerMessages: [],
+        harnessEvents: [
+          { kind: 'conductor.send', status: 'error' },
+          { kind: 'conductor.transport.reconnect', status: 'attempt' },
+          { kind: 'conductor.transport.reconnect', status: 'succeeded' },
+        ],
+      },
+    ]);
+    expect(unboundedLog.gaps).toEqual([]);
+  });
+
+  it('reports missing provider, summary, and harness log sources explicitly', async () => {
+    await rm(join(conductorCwd, PI_SESSION_ROOT), {
+      recursive: true,
+      force: true,
+    });
+    const result = runCli([
+      'session',
+      'timeline',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--summary',
+      join(tempRoot, 'missing-summary.json'),
+      '--harness-log',
+      join(tempRoot, 'missing-harness.log'),
+      '--json',
+    ]);
+
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.sources).toMatchObject({
+      providerHistory: {
+        status: 'unavailable',
+        backend: 'pi',
+        reason: expect.stringContaining('Provider history is unavailable'),
+      },
+      sessionSummary: {
+        status: 'unavailable',
+        reason: expect.stringContaining('ENOENT'),
+      },
+      harnessLog: {
+        status: 'unavailable',
+        reason: expect.stringContaining('ENOENT'),
+      },
+      sessionLogEvents: { status: 'not-persisted' },
+      sendCorrelation: { status: 'unavailable' },
+    });
+    expect(output.sendTimeline).toEqual([]);
+    expect(output.gaps).toEqual([]);
+  });
+
+  it('rejects a SessionSummary from another repository root', async () => {
+    const summaryPath = join(tempRoot, 'session-summary.json');
+    await writeFile(
+      summaryPath,
+      `${JSON.stringify({
+        agentId: conductorAgentId,
+        issueUrl: ISSUE_URL,
+        repoRoot: join(tempRoot, 'other-repository'),
+        startedAt: 1_800_000_000_000,
+        durationMs: 100,
+        sendCount: 1,
+        lastRunStatus: 'finished',
+      })}\n`,
+      'utf8',
+    );
+
+    const result = runCli([
+      'session',
+      'timeline',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--summary',
+      summaryPath,
+      '--json',
+    ]);
+
+    expect(result.status).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.sources.sessionSummary).toMatchObject({
+      status: 'unavailable',
+      path: summaryPath,
+      reason: expect.stringContaining('repoRoot'),
+    });
+    expect(output.sendTimeline).toEqual([]);
+    expect(output.uncorrelatedProviderMessages).toMatchObject([
+      { sendCount: 1 },
+    ]);
   });
 
   it('warns that messages prints raw provider history which may contain secrets', () => {
@@ -393,6 +698,7 @@ describe('ensemble session commands', () => {
       preset?: 'pi' | 'custom';
       acpCwd?: string;
       acpSessionId?: string;
+      issueUrl?: string;
     } = {},
   ): Promise<void> {
     const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
@@ -408,7 +714,7 @@ describe('ensemble session commands', () => {
           conductorBackend: 'pi',
           conductorCwd,
           harnessSocketPath: join(tempRoot, 'missing-harness.sock'),
-          issueUrl: ISSUE_URL,
+          issueUrl: options.issueUrl ?? ISSUE_URL,
           repoRoot,
           profile: {
             workers: [{ name: 'implementer', kind: 'implementer' }],
@@ -525,7 +831,15 @@ describe('ensemble session commands', () => {
     );
   }
 
-  async function writePiHistory(): Promise<void> {
+  async function writePiHistory(
+    entries?: Array<{
+      sendCount: number;
+      dispatchSource: string;
+      completedAt: number;
+      inbound: string;
+      response: string;
+    }>,
+  ): Promise<void> {
     const piPackageEntry = new URL(
       '../../core/node_modules/@earendil-works/pi-coding-agent/dist/index.js',
       import.meta.url,
@@ -535,6 +849,34 @@ describe('ensemble session commands', () => {
     const manager = SessionManager.create(conductorCwd, sessionDir, {
       id: conductorAgentId,
     });
+    if (entries) {
+      for (const entry of entries) {
+        const inboundEntryId = manager.appendMessage({
+          role: 'user',
+          content: [{ type: 'text', text: entry.inbound }],
+          timestamp: entry.completedAt - 2,
+        });
+        const responseEntryId = manager.appendMessage({
+          role: 'assistant',
+          content: [{ type: 'text', text: entry.response }],
+          api: 'anthropic-messages',
+          provider: 'anthropic',
+          model: 'fixture-model',
+          usage: {},
+          stopReason: 'stop',
+          timestamp: entry.completedAt - 1,
+        });
+        manager.appendCustomEntry(PI_HISTORY_ENTRY_TYPE, {
+          inboundEntryId,
+          responseEntryId,
+          completedAt: entry.completedAt,
+          sendCount: entry.sendCount,
+          dispatchSource: entry.dispatchSource,
+        });
+      }
+      return;
+    }
+
     const inboundEntryId = manager.appendMessage({
       role: 'user',
       content: [
