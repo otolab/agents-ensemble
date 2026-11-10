@@ -1,8 +1,9 @@
 import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
+import { extname, isAbsolute, join, resolve } from 'node:path';
 import {
   SessionManager,
+  parseSessionEntries,
   type SessionMessageEntry,
 } from '@earendil-works/pi-coding-agent';
 import { findSessionResumeStore } from './session-resume-store.js';
@@ -260,24 +261,53 @@ async function readPiAcpSessionHistory(
     );
   }
 
+  let transcript: string;
+  try {
+    transcript = await readFile(session.sessionFile, 'utf8');
+  } catch (error) {
+    if (isEnoent(error)) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Pi ACP session map が指す transcript file が見つかりません。',
+      );
+    }
+    throw new WorkerSessionHistoryUnavailableError(
+      'Pi ACP transcript file を読み取れませんでした。',
+    );
+  }
+
+  const entries = parseSessionEntries(transcript);
+  const header = getPiSessionHeader(entries[0]);
+  if (!header) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Pi ACP transcript に有効な session header がありません。',
+    );
+  }
+  if (header.id !== input.acpSessionId) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Pi ACP transcript の session ID が保存状態と一致しません。',
+    );
+  }
+  if (
+    !isAbsolute(header.cwd) ||
+    resolve(header.cwd) !== resolve(input.acpCwd)
+  ) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Pi ACP transcript header の cwd が保存状態と一致しません。',
+    );
+  }
+
   let sessionManager: SessionManager;
   try {
-    sessionManager = SessionManager.open(
-      session.sessionFile,
-      dirname(session.sessionFile),
-      input.acpCwd,
-    );
+    // `open()` persists empty-session initialization and legacy migrations.
+    sessionManager = SessionManager.inMemory(header.cwd, undefined, entries);
   } catch {
     throw new WorkerSessionHistoryUnavailableError(
       'Pi ACP transcript を Pi session format として読み取れませんでした。',
     );
   }
-  if (
-    sessionManager.getSessionId() !== input.acpSessionId ||
-    resolve(sessionManager.getCwd()) !== resolve(input.acpCwd)
-  ) {
+  if (sessionManager.getSessionId() !== input.acpSessionId) {
     throw new WorkerSessionHistoryUnavailableError(
-      'Pi ACP transcript の session ID または cwd が保存状態と一致しません。',
+      'Pi ACP transcript の session ID が保存状態と一致しません。',
     );
   }
 
@@ -308,6 +338,22 @@ async function readPiAcpSessionHistory(
         },
       ];
     });
+}
+
+function getPiSessionHeader(
+  value: unknown,
+): { id: string; cwd: string } | undefined {
+  if (
+    !isRecord(value) ||
+    value.type !== 'session' ||
+    typeof value.id !== 'string' ||
+    !value.id.trim() ||
+    typeof value.cwd !== 'string' ||
+    !value.cwd.trim()
+  ) {
+    return undefined;
+  }
+  return { id: value.id, cwd: value.cwd };
 }
 
 function findPiAcpSessionMapEntry(

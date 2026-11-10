@@ -2,6 +2,7 @@ import {
   copyFile,
   mkdtemp,
   mkdir,
+  readFile,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -119,6 +120,109 @@ describe('worker session history', () => {
     expect(JSON.stringify(result)).not.toContain('THINKING_SECRET');
   });
 
+  it('does not change an empty Pi transcript while reading it', async () => {
+    const transcriptPath = await writePiAcpSessionMap({
+      transcriptContent: '',
+    });
+    const before = await readFile(transcriptPath, 'utf8');
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('session header'),
+      messages: [],
+    });
+    expect(await readFile(transcriptPath, 'utf8')).toBe(before);
+  });
+
+  it('reads a legacy Pi v1 transcript in memory without rewriting it', async () => {
+    const legacyTranscript = [
+      JSON.stringify({
+        type: 'session',
+        version: 1,
+        id: ACP_SESSION_ID,
+        timestamp: '2027-01-15T08:00:00.000Z',
+        cwd: ACP_CWD,
+      }),
+      JSON.stringify({
+        type: 'message',
+        timestamp: '2027-01-15T08:00:01.000Z',
+        message: {
+          role: 'user',
+          content: 'Legacy Pi user message.',
+          timestamp: 1_800_000_000_001,
+        },
+      }),
+      JSON.stringify({
+        type: 'message',
+        timestamp: '2027-01-15T08:00:02.000Z',
+        message: {
+          role: 'assistant',
+          content: 'Legacy Pi assistant reply.',
+          timestamp: 1_800_000_000_002,
+        },
+      }),
+    ].join('\n');
+    const transcriptPath = await writePiAcpSessionMap({
+      transcriptContent: legacyTranscript,
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'supported',
+      messages: [
+        { role: 'user', text: 'Legacy Pi user message.' },
+        { role: 'assistant', text: 'Legacy Pi assistant reply.' },
+      ],
+    });
+    expect(await readFile(transcriptPath, 'utf8')).toBe(legacyTranscript);
+  });
+
+  it('rejects a transcript whose header cwd differs from the saved cwd', async () => {
+    const fixture = await readFile(FIXTURE_PATH, 'utf8');
+    const [headerLine, ...remainingLines] = fixture.split('\n');
+    const transcriptHeader = JSON.parse(headerLine ?? '') as {
+      cwd: string;
+    };
+    const transcript = [
+      JSON.stringify({
+        ...transcriptHeader,
+        cwd: '/tmp/pi-acp-different-cwd',
+      }),
+      ...remainingLines,
+    ].join('\n');
+    const transcriptPath = await writePiAcpSessionMap({
+      transcriptContent: transcript,
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('transcript header の cwd'),
+      messages: [],
+    });
+    expect(await readFile(transcriptPath, 'utf8')).toBe(transcript);
+  });
+
+  it('returns unavailable for a malformed Pi transcript header', async () => {
+    const transcriptPath = await writePiAcpSessionMap({
+      transcriptContent: 'not json\n',
+    });
+    const before = await readFile(transcriptPath, 'utf8');
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('有効な session header'),
+      messages: [],
+    });
+    expect(await readFile(transcriptPath, 'utf8')).toBe(before);
+  });
+
   it('returns unavailable when the Pi ACP map has no entry for the saved session', async () => {
     const result = await readHistory();
 
@@ -126,6 +230,30 @@ describe('worker session history', () => {
       preset: 'pi',
       status: 'unavailable',
       reason: expect.stringContaining('session map が見つかりません'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable when the Pi ACP map cwd differs from the saved cwd', async () => {
+    await writePiAcpSessionMap({ mapCwd: '/tmp/pi-acp-other-map-cwd' });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('session map の cwd'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable when the Pi ACP map points to a missing transcript', async () => {
+    await writePiAcpSessionMap({ writeTranscript: false });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('transcript file が見つかりません'),
       messages: [],
     });
   });
@@ -195,7 +323,13 @@ describe('worker session history', () => {
     await saveSessionResumeStore(path, resumeStore);
   }
 
-  async function writePiAcpSessionMap(): Promise<void> {
+  async function writePiAcpSessionMap(
+    options: {
+      mapCwd?: string;
+      transcriptContent?: string;
+      writeTranscript?: boolean;
+    } = {},
+  ): Promise<string> {
     const transcriptPath = join(
       homeRoot,
       '.pi',
@@ -203,8 +337,14 @@ describe('worker session history', () => {
       'sessions',
       'pi-acp-worker-session.jsonl',
     );
-    await mkdir(dirname(transcriptPath), { recursive: true });
-    await copyFile(FIXTURE_PATH, transcriptPath);
+    if (options.writeTranscript !== false) {
+      await mkdir(dirname(transcriptPath), { recursive: true });
+      if (options.transcriptContent === undefined) {
+        await copyFile(FIXTURE_PATH, transcriptPath);
+      } else {
+        await writeFile(transcriptPath, options.transcriptContent, 'utf8');
+      }
+    }
 
     const mapPath = join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
     await mkdir(dirname(mapPath), { recursive: true });
@@ -216,7 +356,7 @@ describe('worker session history', () => {
           sessions: {
             [ACP_SESSION_ID]: {
               sessionId: ACP_SESSION_ID,
-              cwd: ACP_CWD,
+              cwd: options.mapCwd ?? ACP_CWD,
               sessionFile: transcriptPath,
               updatedAt: '2027-01-15T08:00:00.000Z',
             },
@@ -227,5 +367,6 @@ describe('worker session history', () => {
       )}\n`,
       'utf8',
     );
+    return transcriptPath;
   }
 });
