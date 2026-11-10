@@ -6,8 +6,9 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises';
+import type { Transform } from 'node:stream';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   afterEach,
@@ -34,6 +35,12 @@ const ACP_CWD = '/tmp/pi-acp-worker-fixture';
 const FIXTURE_PATH = fileURLToPath(
   new URL('../../test/fixtures/pi-acp-worker-session.jsonl', import.meta.url),
 );
+const CODEX_SESSION_ID = '019a4b21-9c0e-7a44-b9ad-6a8df4fa7720';
+const CODEX_CWD = '/tmp/codex-acp-worker-fixture';
+const CODEX_FILENAME_TIMESTAMP = '2026-11-09T14-03-00';
+const CODEX_FIXTURE_PATH = fileURLToPath(
+  new URL('../../test/fixtures/codex-cli-worker-rollout.jsonl', import.meta.url),
+);
 
 describe('worker session history', () => {
   let tempRoot = '';
@@ -50,6 +57,7 @@ describe('worker session history', () => {
     await mkdir(homeRoot, { recursive: true });
     vi.stubEnv('HOME', homeRoot);
     vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
+    vi.stubEnv('CODEX_HOME', '');
     await writeResumeStore('pi');
   });
 
@@ -68,15 +76,249 @@ describe('worker session history', () => {
       status: 'supported',
       reader: 'pi-acp-jsonl',
     });
-    expect(getWorkerSessionHistoryReaderSupport('codex')).toMatchObject({
+    expect(getWorkerSessionHistoryReaderSupport('codex')).toEqual({
       preset: 'codex',
-      status: 'unsupported',
-      reason: expect.stringContaining('未対応'),
+      status: 'supported',
+      reader: 'codex-cli-rollout-jsonl',
     });
     expect(getWorkerSessionHistoryReaderSupport(undefined)).toMatchObject({
       preset: null,
       status: 'unsupported',
       reason: expect.stringContaining('preset がない'),
+    });
+  });
+
+  it('reads user and assistant text from a Codex CLI rollout only', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+    await writeCodexAcpRollout();
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      conductorAgentId: CONDUCTOR_AGENT_ID,
+      worker: WORKER_NAME,
+      preset: 'codex',
+      status: 'supported',
+      reader: 'codex-cli-rollout-jsonl',
+      messages: [
+        {
+          source: 'worker:implementer',
+          providerId: 'codex:2',
+          role: 'user',
+          at: Date.parse('2026-11-09T14:03:01.001Z'),
+          text: 'Codex ACP fixture user message.',
+        },
+        {
+          source: 'worker:implementer',
+          providerId: 'codex:5',
+          role: 'assistant',
+          at: Date.parse('2026-11-09T14:03:03.000Z'),
+          text: 'Codex ACP fixture assistant reply.',
+        },
+      ],
+    });
+    for (const hiddenContent of [
+      'This display event is not the canonical transcript message.',
+      'IMAGE_SECRET',
+      'REASONING_SECRET',
+      'TOOL_SECRET',
+      'REFUSAL_SECRET',
+    ]) {
+      expect(JSON.stringify(result)).not.toContain(hiddenContent);
+    }
+  });
+
+  it('returns unavailable when the Codex rollout is missing', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'codex',
+      status: 'unavailable',
+      reason: expect.stringContaining('rollout が見つかりません'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable when the Codex rollout contains malformed JSONL', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+    await writeCodexAcpRollout({
+      content: '{"timestamp":"2026-11-09T14:03:00.000Z","type":"session_meta"',
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('不正な行'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable when the Codex rollout session ID differs', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+    const fixture = await readFile(CODEX_FIXTURE_PATH, 'utf8');
+    const mismatchedFixture = fixture.replace(
+      `"id":"${CODEX_SESSION_ID}"`,
+      '"id":"019a4b21-9c0e-7a44-b9ad-6a8df4fa7721"',
+    );
+    await writeCodexAcpRollout({ content: mismatchedFixture });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('session ID が保存状態と一致しません'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable when the Codex rollout cwd differs', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+    const fixture = await readFile(CODEX_FIXTURE_PATH, 'utf8');
+    await writeCodexAcpRollout({
+      content: fixture.replaceAll(CODEX_CWD, '/tmp/codex-acp-other-cwd'),
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('cwd が保存状態と一致しません'),
+      messages: [],
+    });
+  });
+
+  it('returns unavailable when active and archived Codex rollouts are ambiguous', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+    await writeCodexAcpRollout();
+    await writeCodexAcpRollout({
+      archived: true,
+      fileName: `rollout-${CODEX_FILENAME_TIMESTAMP}-${CODEX_SESSION_ID}_019a4b21-9c0e-7a44-b9ad-6a8df4fa7721.jsonl`,
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      reason: expect.stringContaining('rollout が複数'),
+      messages: [],
+    });
+  });
+
+  it('reads an archived Codex revert rollout by its thread ID', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+    await writeCodexAcpRollout({
+      archived: true,
+      fileName: `rollout-${CODEX_FILENAME_TIMESTAMP}-${CODEX_SESSION_ID}_019a4b21-9c0e-7a44-b9ad-6a8df4fa7721.jsonl`,
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'supported',
+      messages: [
+        { role: 'user', text: 'Codex ACP fixture user message.' },
+        { role: 'assistant', text: 'Codex ACP fixture assistant reply.' },
+      ],
+    });
+  });
+
+  it('prefers the plain Codex rollout over a compressed sibling', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+    await writeCodexAcpRollout();
+    const fixture = await readFile(CODEX_FIXTURE_PATH, 'utf8');
+    await writeCodexAcpRollout({
+      compressed: true,
+      content: fixture.replace(
+        'Codex ACP fixture user message.',
+        'Compressed sibling must not win.',
+      ),
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      status: 'supported',
+      messages: [
+        { role: 'user', text: 'Codex ACP fixture user message.' },
+        { role: 'assistant', text: 'Codex ACP fixture assistant reply.' },
+      ],
+    });
+  });
+
+  it('uses absolute and cwd-relative CODEX_HOME values', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+    const customCodexHome = join(tempRoot, 'custom-codex-home');
+    vi.stubEnv('CODEX_HOME', customCodexHome);
+    await writeCodexAcpRollout({ codexHome: customCodexHome });
+
+    const configuredHomeResult = await readHistory();
+    expect(configuredHomeResult.status).toBe('supported');
+
+    vi.stubEnv('CODEX_HOME', relative(process.cwd(), customCodexHome));
+    const relativeHomeResult = await readHistory();
+    expect(relativeHomeResult.status).toBe('supported');
+  });
+
+  it('reads compressed Codex rollouts when Node supports zstd', async () => {
+    await writeResumeStore('codex', {
+      acpSessionId: CODEX_SESSION_ID,
+      acpCwd: CODEX_CWD,
+    });
+    const zlib = await import('node:zlib');
+    const createZstdDecompress = (
+      zlib as unknown as {
+        createZstdDecompress?: () => Transform;
+      }
+    ).createZstdDecompress;
+    const compressedPath = await writeCodexAcpRollout({ compressed: true });
+
+    const result = await readHistory();
+
+    if (!createZstdDecompress) {
+      expect(result).toMatchObject({
+        status: 'unavailable',
+        reason: expect.stringContaining('zstd に対応していません'),
+        messages: [],
+      });
+      return;
+    }
+    expect(compressedPath).toMatch(/\.jsonl\.zst$/u);
+    expect(result).toMatchObject({
+      status: 'supported',
+      messages: [
+        { role: 'user', text: 'Codex ACP fixture user message.' },
+        { role: 'assistant', text: 'Codex ACP fixture assistant reply.' },
+      ],
     });
   });
 
@@ -287,7 +529,8 @@ describe('worker session history', () => {
   }
 
   async function writeResumeStore(
-    preset: 'pi' | 'custom' | undefined,
+    preset: 'pi' | 'codex' | 'custom' | undefined,
+    workerSession: { acpSessionId?: string; acpCwd?: string } = {},
   ): Promise<void> {
     const resumeStore: SessionResumeStore = {
       version: 1,
@@ -301,13 +544,18 @@ describe('worker session history', () => {
       sequence: 0,
       workers: {
         [WORKER_NAME]: {
-          acpSessionId: ACP_SESSION_ID,
-          acpCwd: ACP_CWD,
+          acpSessionId: workerSession.acpSessionId ?? ACP_SESSION_ID,
+          acpCwd: workerSession.acpCwd ?? ACP_CWD,
           ...(preset
             ? {
                 acpSpawn: {
                   preset,
-                  command: 'pi-acp',
+                  command:
+                    preset === 'pi'
+                      ? 'pi-acp'
+                      : preset === 'codex'
+                        ? 'codex-acp'
+                        : 'fixture-acp',
                   args: [],
                 },
               }
@@ -321,6 +569,58 @@ describe('worker session history', () => {
     );
     await mkdir(dirname(path), { recursive: true });
     await saveSessionResumeStore(path, resumeStore);
+  }
+
+  async function writeCodexAcpRollout(
+    options: {
+      codexHome?: string;
+      archived?: boolean;
+      fileName?: string;
+      content?: string;
+      compressed?: boolean;
+    } = {},
+  ): Promise<string> {
+    const codexHome = options.codexHome ?? join(homeRoot, '.codex');
+    const fileName =
+      options.fileName ??
+      `rollout-${CODEX_FILENAME_TIMESTAMP}-${CODEX_SESSION_ID}${
+        options.compressed ? '.jsonl.zst' : '.jsonl'
+      }`;
+    const rolloutPath = join(
+      codexHome,
+      options.archived ? 'archived_sessions' : 'sessions',
+      ...(options.archived ? [] : ['2026', '11', '09']),
+      fileName,
+    );
+    await mkdir(dirname(rolloutPath), { recursive: true });
+
+    const content =
+      options.content ?? (await readFile(CODEX_FIXTURE_PATH, 'utf8'));
+    await writeFile(
+      rolloutPath,
+      options.compressed ? await compressZstd(content) : content,
+    );
+    return rolloutPath;
+  }
+
+  async function compressZstd(content: string): Promise<Buffer> {
+    const zlib = await import('node:zlib');
+    const createZstdCompress = (
+      zlib as unknown as {
+        createZstdCompress?: () => Transform;
+      }
+    ).createZstdCompress;
+    if (!createZstdCompress) return Buffer.from(content);
+
+    const compressor = createZstdCompress();
+    const chunks: Buffer[] = [];
+    const compressed = new Promise<Buffer>((resolve, reject) => {
+      compressor.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+      compressor.once('error', reject);
+      compressor.once('end', () => resolve(Buffer.concat(chunks)));
+    });
+    compressor.end(content);
+    return compressed;
   }
 
   async function writePiAcpSessionMap(

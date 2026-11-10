@@ -1,6 +1,9 @@
-import { readFile, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
+import type { Readable, Transform } from 'node:stream';
 import {
   SessionManager,
   parseSessionEntries,
@@ -54,6 +57,9 @@ export interface WorkerSessionHistoryResult
 }
 
 const PI_ACP_JSONL_READER_ID = 'pi-acp-jsonl';
+const CODEX_CLI_ROLLOUT_READER_ID = 'codex-cli-rollout-jsonl';
+const CODEX_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 const workerSessionHistoryReaders = new Map<
   string,
@@ -65,6 +71,14 @@ const workerSessionHistoryReaders = new Map<
       id: PI_ACP_JSONL_READER_ID,
       preset: 'pi',
       read: readPiAcpSessionHistory,
+    },
+  ],
+  [
+    'codex',
+    {
+      id: CODEX_CLI_ROLLOUT_READER_ID,
+      preset: 'codex',
+      read: readCodexAcpSessionHistory,
     },
   ],
 ]);
@@ -338,6 +352,334 @@ async function readPiAcpSessionHistory(
         },
       ];
     });
+}
+
+async function readCodexAcpSessionHistory(
+  input: WorkerSessionHistoryReaderInput,
+): Promise<WorkerSessionHistoryMessage[]> {
+  const sessionId = input.acpSessionId.trim();
+  if (!sessionId) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'SessionResumeStore に Codex ACP session ID がありません。',
+    );
+  }
+  if (!isAbsolute(input.acpCwd)) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'SessionResumeStore に有効な Codex ACP cwd がありません。',
+    );
+  }
+
+  const codexHome = resolveCodexHome();
+  const rolloutPath = await findCodexAcpRollout(codexHome, sessionId);
+  if (!rolloutPath) {
+    throw new WorkerSessionHistoryUnavailableError(
+      '現在の Codex home に対象 session の rollout が見つかりません。',
+    );
+  }
+
+  let decompressor: Transform | undefined;
+  if (rolloutPath.endsWith('.jsonl.zst')) {
+    const zlib = await import('node:zlib');
+    const createZstdDecompress = (
+      zlib as unknown as {
+        createZstdDecompress?: () => Transform;
+      }
+    ).createZstdDecompress;
+    if (!createZstdDecompress) {
+      throw new WorkerSessionHistoryUnavailableError(
+        '現在の Node.js は Codex の圧縮 rollout（zstd）に対応していません。',
+      );
+    }
+    decompressor = createZstdDecompress();
+  }
+
+  const sourceStream = createReadStream(rolloutPath);
+  const inputStream: Readable = decompressor
+    ? sourceStream.pipe(decompressor)
+    : sourceStream;
+  let streamError: unknown;
+  const recordStreamError = (error: Error): void => {
+    streamError ??= error;
+  };
+  sourceStream.on('error', (error) => {
+    recordStreamError(error);
+    if (decompressor) decompressor.destroy(error);
+  });
+  if (decompressor) decompressor.on('error', recordStreamError);
+
+  try {
+    const lines = createInterface({
+      input: inputStream,
+      crlfDelay: Infinity,
+    });
+    let header:
+      | {
+          id: string;
+          cwd: string;
+        }
+      | undefined;
+    let lineNumber = 0;
+    const messages: WorkerSessionHistoryMessage[] = [];
+
+    try {
+      for await (const line of lines) {
+        lineNumber += 1;
+        if (!line.trim()) continue;
+
+        let envelope: unknown;
+        try {
+          envelope = JSON.parse(line);
+        } catch {
+          throw new WorkerSessionHistoryUnavailableError(
+            'Codex CLI rollout の JSONL に不正な行があります。',
+          );
+        }
+
+        if (!header) {
+          header = getCodexSessionHeader(envelope);
+          if (!header) {
+            throw new WorkerSessionHistoryUnavailableError(
+              'Codex CLI rollout に有効な session_meta がありません。',
+            );
+          }
+          if (header.id !== sessionId) {
+            throw new WorkerSessionHistoryUnavailableError(
+              'Codex CLI rollout の session ID が保存状態と一致しません。',
+            );
+          }
+          if (
+            !isAbsolute(header.cwd) ||
+            resolve(header.cwd) !== resolve(input.acpCwd)
+          ) {
+            throw new WorkerSessionHistoryUnavailableError(
+              'Codex CLI rollout の cwd が保存状態と一致しません。',
+            );
+          }
+          continue;
+        }
+
+        const message = codexRolloutMessage(
+          envelope,
+          input.workerName,
+          lineNumber,
+        );
+        if (message) messages.push(message);
+      }
+    } finally {
+      lines.close();
+    }
+
+    if (streamError) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Codex CLI rollout を読み取れませんでした。',
+      );
+    }
+    if (!header) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Codex CLI rollout に有効な session_meta がありません。',
+      );
+    }
+    return messages;
+  } catch (error) {
+    if (error instanceof WorkerSessionHistoryUnavailableError) throw error;
+    throw new WorkerSessionHistoryUnavailableError(
+      'Codex CLI rollout を読み取れませんでした。',
+    );
+  } finally {
+    decompressor?.destroy();
+    sourceStream.destroy();
+  }
+}
+
+function resolveCodexHome(): string {
+  const configuredHome = process.env.CODEX_HOME;
+  if (configuredHome) {
+    return resolve(configuredHome);
+  }
+  return join(homedir(), '.codex');
+}
+
+interface CodexAcpRolloutCandidate {
+  path: string;
+}
+
+async function findCodexAcpRollout(
+  codexHome: string,
+  sessionId: string,
+): Promise<string | undefined> {
+  const candidates: CodexAcpRolloutCandidate[] = [];
+  for (const directoryName of ['sessions', 'archived_sessions']) {
+    const directory = join(codexHome, directoryName);
+    await collectCodexAcpRolloutCandidates(directory, sessionId, candidates);
+  }
+  if (candidates.length > 1) {
+    throw new WorkerSessionHistoryUnavailableError(
+      'Codex CLI store に同じ session ID の rollout が複数あり、対象を一意に決められません。',
+    );
+  }
+  return candidates[0]?.path;
+}
+
+async function collectCodexAcpRolloutCandidates(
+  directory: string,
+  sessionId: string,
+  candidates: CodexAcpRolloutCandidate[],
+): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (isEnoent(error)) return;
+    throw new WorkerSessionHistoryUnavailableError(
+      'Codex CLI store を探索できませんでした。',
+    );
+  }
+
+  const plainRolloutNames = new Set(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+      .map((entry) => entry.name),
+  );
+
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await collectCodexAcpRolloutCandidates(path, sessionId, candidates);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+
+    const plainFileName = codexRolloutPlainFileName(entry.name);
+    if (
+      !plainFileName ||
+      (entry.name.endsWith('.jsonl.zst') &&
+        plainRolloutNames.has(plainFileName))
+    ) {
+      continue;
+    }
+
+    const threadId = codexThreadIdFromRolloutFileName(entry.name);
+    if (threadId !== sessionId) continue;
+
+    candidates.push({ path });
+  }
+}
+
+function codexRolloutPlainFileName(fileName: string): string | undefined {
+  if (fileName.endsWith('.jsonl.zst')) return fileName.slice(0, -4);
+  if (fileName.endsWith('.jsonl')) return fileName;
+  return undefined;
+}
+
+function codexThreadIdFromRolloutFileName(
+  fileName: string,
+): string | undefined {
+  const plainFileName = codexRolloutPlainFileName(fileName);
+  if (!plainFileName) return undefined;
+
+  const baseName = plainFileName.slice(0, -'.jsonl'.length);
+  if (!baseName.startsWith('rollout-')) return undefined;
+  const identity = baseName.slice('rollout-'.length);
+  const timestamp = identity.slice(0, 19);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}$/u.test(timestamp) ||
+    identity[19] !== '-'
+  ) {
+    return undefined;
+  }
+
+  const rolloutIds = identity.slice(20);
+  const separator = rolloutIds.indexOf('_');
+  const threadId =
+    separator < 0 ? rolloutIds : rolloutIds.slice(0, separator);
+  const rolloutId =
+    separator < 0 ? threadId : rolloutIds.slice(separator + 1);
+  if (!threadId || (separator >= 0 && !rolloutIds.slice(separator + 1))) {
+    return undefined;
+  }
+  if (
+    !CODEX_UUID_PATTERN.test(threadId) ||
+    !CODEX_UUID_PATTERN.test(rolloutId) ||
+    !isCodexRolloutTimestamp(timestamp)
+  ) {
+    return undefined;
+  }
+  return threadId;
+}
+
+function isCodexRolloutTimestamp(value: string): boolean {
+  const isoTimestamp = `${value.slice(0, 10)}T${value.slice(11, 13)}:${value.slice(14, 16)}:${value.slice(17, 19)}Z`;
+  const timestamp = new Date(isoTimestamp);
+  return (
+    Number.isFinite(timestamp.getTime()) &&
+    timestamp.toISOString().slice(0, 19).replaceAll(':', '-') === value
+  );
+}
+
+function getCodexSessionHeader(
+  value: unknown,
+): { id: string; cwd: string } | undefined {
+  if (
+    !isRecord(value) ||
+    value.type !== 'session_meta' ||
+    !isRecord(value.payload) ||
+    typeof value.payload.id !== 'string' ||
+    !value.payload.id.trim() ||
+    typeof value.payload.cwd !== 'string' ||
+    !value.payload.cwd.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    id: value.payload.id,
+    cwd: value.payload.cwd,
+  };
+}
+
+function codexRolloutMessage(
+  value: unknown,
+  workerName: string,
+  lineNumber: number,
+): WorkerSessionHistoryMessage | undefined {
+  if (
+    !isRecord(value) ||
+    value.type !== 'response_item' ||
+    !isRecord(value.payload) ||
+    value.payload.type !== 'message' ||
+    (value.payload.role !== 'user' && value.payload.role !== 'assistant')
+  ) {
+    return undefined;
+  }
+  const text = extractCodexMessageText(value.payload.content);
+  if (!text.trim()) return undefined;
+  const ordinal = value.ordinal;
+  const providerId =
+    typeof ordinal === 'number' && Number.isSafeInteger(ordinal)
+      ? `codex:${ordinal}`
+      : `codex:${lineNumber}`;
+  const timestamp =
+    typeof value.timestamp === 'string' ? Date.parse(value.timestamp) : NaN;
+  return {
+    source: `worker:${workerName}`,
+    providerId,
+    role: value.payload.role,
+    ...(Number.isFinite(timestamp) ? { at: timestamp } : {}),
+    text,
+  };
+}
+
+function extractCodexMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .filter(
+      (block): block is { type: string; text: string } =>
+        isRecord(block) &&
+        (block.type === 'input_text' || block.type === 'output_text') &&
+        typeof block.text === 'string',
+    )
+    .map((block) => block.text)
+    .join('');
 }
 
 function getPiSessionHeader(

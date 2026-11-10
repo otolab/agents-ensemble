@@ -24,6 +24,11 @@ const PI_HISTORY_ENTRY_TYPE = 'agents-ensemble/conductor-message-history/v1';
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/653';
 const WORKER_PI_SESSION_ID = 'pi-acp-worker-fixture-session';
 const WORKER_PI_CWD = '/tmp/pi-acp-worker-fixture';
+const WORKER_CODEX_SESSION_ID = '019a4b21-9c0e-7a44-b9ad-6a8df4fa7720';
+const WORKER_CODEX_CWD = '/tmp/codex-acp-worker-fixture';
+const WORKER_CODEX_FILENAME_TIMESTAMP = '2026-11-09T14-03-00';
+const CODEX_MODEL_PROVIDER_DIGEST_SECRET = 'a'.repeat(64);
+const ACP_MODEL_CONFIG_DIGEST_SECRET = 'b'.repeat(64);
 
 describe('ensemble session commands', () => {
   let tempRoot = '';
@@ -634,7 +639,7 @@ describe('ensemble session commands', () => {
     const help = result.stdout.replace(/\s+/gu, ' ');
     expect(help).toContain('--worker <name>');
     expect(help).toContain('--json');
-    expect(help).toContain('currently Pi');
+    expect(help).toContain('currently Pi and Codex');
     expect(help).toContain('may contain secrets');
   });
 
@@ -879,6 +884,100 @@ describe('ensemble session commands', () => {
     ]);
   });
 
+  it('reads Codex ACP worker messages and reports support in session show', async () => {
+    await writeResumeStore({
+      preset: 'codex',
+      acpCwd: WORKER_CODEX_CWD,
+      acpSessionId: WORKER_CODEX_SESSION_ID,
+    });
+    await writeCodexAcpWorkerHistory();
+    const codexHome = join(homeRoot, '.codex');
+
+    const json = runCli(
+      [
+        'session',
+        'workers',
+        'messages',
+        conductorAgentId,
+        '--worker',
+        'implementer',
+        '--repo-root',
+        repoRoot,
+        '--json',
+      ],
+      { CODEX_HOME: codexHome },
+    );
+    expect(json.status).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      conductorAgentId,
+      worker: 'implementer',
+      preset: 'codex',
+      reader: 'codex-cli-rollout-jsonl',
+      status: 'supported',
+      messages: [
+        {
+          source: 'worker:implementer',
+          providerId: 'codex:2',
+          role: 'user',
+          text: 'Codex ACP fixture user message.',
+        },
+        {
+          source: 'worker:implementer',
+          providerId: 'codex:5',
+          role: 'assistant',
+          text: 'Codex ACP fixture assistant reply.',
+        },
+      ],
+    });
+    for (const hiddenContent of [
+      'This display event is not the canonical transcript message.',
+      'IMAGE_SECRET',
+      'REASONING_SECRET',
+      'TOOL_SECRET',
+      'REFUSAL_SECRET',
+    ]) {
+      expect(json.stdout).not.toContain(hiddenContent);
+    }
+
+    const text = runCli(
+      [
+        'session',
+        'workers',
+        'messages',
+        conductorAgentId,
+        '--worker',
+        'implementer',
+        '--repo-root',
+        repoRoot,
+      ],
+      { CODEX_HOME: codexHome },
+    );
+    expect(text.status).toBe(0);
+    expect(text.stdout).toContain('(codex-cli-rollout-jsonl)');
+    expect(text.stdout).toContain('Codex ACP fixture assistant reply.');
+
+    const show = runCli([
+      'session',
+      'show',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--json',
+    ]);
+    expect(show.status).toBe(0);
+    expect(JSON.parse(show.stdout).workerReaders).toMatchObject([
+      {
+        worker: 'implementer',
+        preset: 'codex',
+        status: 'supported',
+        reader: 'codex-cli-rollout-jsonl',
+      },
+    ]);
+    expect(show.stdout).not.toContain(CODEX_MODEL_PROVIDER_DIGEST_SECRET);
+    expect(show.stdout).not.toContain(ACP_MODEL_CONFIG_DIGEST_SECRET);
+    expect(show.stdout).not.toContain('SESSION_ENV_SECRET');
+  });
+
   it('returns unsupported JSON with exit code 2 for an unhandled preset', () => {
     const result = runCli([
       'session',
@@ -929,6 +1028,37 @@ describe('ensemble session commands', () => {
     });
   });
 
+  it('returns unavailable JSON when the Codex rollout is missing', async () => {
+    await writeResumeStore({
+      preset: 'codex',
+      acpCwd: WORKER_CODEX_CWD,
+      acpSessionId: WORKER_CODEX_SESSION_ID,
+    });
+
+    const result = runCli(
+      [
+        'session',
+        'workers',
+        'messages',
+        conductorAgentId,
+        '--worker',
+        'implementer',
+        '--repo-root',
+        repoRoot,
+        '--json',
+      ],
+      { CODEX_HOME: join(homeRoot, '.codex') },
+    );
+
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      preset: 'codex',
+      status: 'unavailable',
+      reason: expect.stringContaining('rollout が見つかりません'),
+      messages: [],
+    });
+  });
+
   it('honors NO_COLOR even when FORCE_COLOR is set', () => {
     const result = runCli(
       ['session', 'list', '--repo-root', repoRoot],
@@ -941,7 +1071,7 @@ describe('ensemble session commands', () => {
 
   async function writeResumeStore(
     options: {
-      preset?: 'pi' | 'custom';
+      preset?: 'pi' | 'codex' | 'custom';
       acpCwd?: string;
       acpSessionId?: string;
       issueUrl?: string;
@@ -973,12 +1103,27 @@ describe('ensemble session commands', () => {
               ...(options.acpCwd ? { acpCwd: options.acpCwd } : {}),
               acpSpawn: {
                 preset,
-                command: preset === 'pi' ? 'pi-acp' : 'fixture-acp',
+                command:
+                  preset === 'pi'
+                    ? 'pi-acp'
+                    : preset === 'codex'
+                      ? 'codex-acp'
+                      : 'fixture-acp',
                 args: [],
                 env: { API_TOKEN: 'SESSION_ENV_SECRET' },
+                ...(preset === 'codex'
+                  ? {
+                      modelProviderDigest: CODEX_MODEL_PROVIDER_DIGEST_SECRET,
+                    }
+                  : {}),
               },
             },
           },
+          ...(preset === 'codex'
+            ? {
+                acpModelConfigDigest: ACP_MODEL_CONFIG_DIGEST_SECRET,
+              }
+            : {}),
           lifecycle: 'closed',
           harnessPhase: 'close',
           updatedAt: 1_800_000_000_010,
@@ -1029,6 +1174,28 @@ describe('ensemble session commands', () => {
         2,
       )}\n`,
       'utf8',
+    );
+  }
+
+  async function writeCodexAcpWorkerHistory(): Promise<void> {
+    const codexHome = join(homeRoot, '.codex');
+    const rolloutPath = join(
+      codexHome,
+      'sessions',
+      '2026',
+      '11',
+      '09',
+      `rollout-${WORKER_CODEX_FILENAME_TIMESTAMP}-${WORKER_CODEX_SESSION_ID}.jsonl`,
+    );
+    await mkdir(dirname(rolloutPath), { recursive: true });
+    await copyFile(
+      fileURLToPath(
+        new URL(
+          '../../core/test/fixtures/codex-cli-worker-rollout.jsonl',
+          import.meta.url,
+        ),
+      ),
+      rolloutPath,
     );
   }
 

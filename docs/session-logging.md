@@ -23,7 +23,7 @@ conductor セッションには性質の異なる出力が混在する。
 | **operator 状態** | `list_operator_sessions` | SessionResumeStore の `lifecycle` と session-state YAML |
 | **保存 session の CLI 閲覧** | `ensemble session list/show` | SessionResumeStore の要約と関連 YAML の件数・時刻 |
 | **conductor 履歴の CLI 閲覧** | `ensemble session messages` | provider session history |
-| **worker 履歴の CLI 閲覧** | `ensemble session workers messages` | Pi ACP transcript |
+| **worker 履歴の CLI 閲覧** | `ensemble session workers messages` | Pi / Codex ACP transcript |
 | **障害調査 timeline** | `ensemble session timeline` | ResumeStore / provider history と、任意の終了サマリ・captured harness log の send 番号照合 |
 
 これらを 1 本の stderr に混ぜると、TTY 利用時に **会話相手が worker に見える**・**conductor の応答が終了まで見えない** といった UX 問題が起きる（#44）。
@@ -208,7 +208,11 @@ SessionResumeStore は、harness がセッション再開に必要な情報を�
 
 `ensemble session messages` は operator-agent の `list_conductor_messages` と同じ `listConductorProviderHistory` を使い、provider が保存した user inbound / final response の本文をそのまま返すローカルデバッグ表示です。テキストと JSON の両方で redaction は行いません。会話本文に秘密値や repository 内の非公開情報があれば、そのまま stdout に出ます。pipe / redirect 先も生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。構造化された SessionResumeStore の秘密値保護は、この会話本文には適用されません。core API から後段へ渡す前に sanitizer を適用する契約は [provider history list API](live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
 
-`ensemble session workers messages <conductorAgentId> --worker <name>` は、SessionResumeStore の ACP session ID と cwd を Pi ACP の CLI process の home にある `~/.pi/pi-acp/session-map.json` と照合し、参照先 JSONL を Pi `SessionManager` の active branch として読みます。ACP process を起動せず、`session/load` による再接続もしません。共通 message 形は `source` / `providerId` / `role` / `at` / `text` です。`pi` preset では user / assistant の本文を出し、tool result、thinking など会話本文以外の entry は含めません。現時点の reader は Pi ACP のみです。`cursor` / `codex` / `claude` / `custom` など他 preset と preset 欠落の旧 Store は `unsupported`、保存 map や transcript を解決・照合できない Pi session は `unavailable` になります。worker 起動時だけ別 `HOME` を使った場合、その値は ResumeStore に保存されないため reader から探索できません。
+`ensemble session workers messages <conductorAgentId> --worker <name>` は、SessionResumeStore に保存された ACP session ID / cwd を使い、ローカルの worker transcript を読みます。ACP process の起動、`session/load` による再接続、Codex state DB の参照は行いません。共通 message 形は `source` / `providerId` / `role` / `at` / `text` です。
+
+Pi ACP（`pi`）は CLI process の home にある `~/.pi/pi-acp/session-map.json` から transcript を解決し、Pi `SessionManager` の active branch を読みます。Codex ACP（`codex`）は `$CODEX_HOME`（未設定なら `~/.codex`）の `sessions/YYYY/MM/DD/rollout-<timestamp>-<thread-id>[_<rollout-id>].jsonl` と `archived_sessions/` を探索します。相対 `CODEX_HOME` は reader を実行する CLI process の current working directory を基準に解決します。Codex ACP の session ID は thread ID であり、rollout の `session_meta.payload.id` と `cwd` を保存値に照合します。同一 basename の `.jsonl` と `.jsonl.zst` がある場合は `.jsonl` を優先し、圧縮 rollout は Node.js の zstd 解凍 API が使える場合に読みます。
+
+両 preset とも user / assistant の本文だけを共通形へ正規化し、tool result、reasoning、その他の会話本文以外の entry は含めません。同じ Codex thread ID の rollout が複数見つかる場合は、履歴を誤選択しないよう `unavailable` とします。`cursor` / `claude` / `custom` など未対応 preset と preset 欠落の旧 Store は `unsupported`、保存データの欠落・破損・session ID / cwd の不一致・保存先の曖昧さは `unavailable` になります。worker 起動時だけ別 `HOME` / `CODEX_HOME` を使った場合、ResumeStore に残るのは spawn env の digest だけなので、その home の場所は復元できません。reader は現在の CLI process が参照する `CODEX_HOME`、または現在の home の `~/.codex` を探索するため、保存時の home が異なると transcript を見つけられないことがあります。
 
 worker 履歴も保存された本文をそのまま返します。text / JSON のいずれも redaction しないため、秘密値や repository 内の非公開情報が stdout に出る可能性があります。pipe / redirect 先を含め、生データとして扱ってください。
 
