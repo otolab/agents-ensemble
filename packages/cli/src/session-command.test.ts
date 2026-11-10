@@ -491,6 +491,81 @@ describe('ensemble session commands', () => {
     ]);
   });
 
+  it('marks malformed and invalid SessionSummary sources unavailable in JSON and text', async () => {
+    const invalidSummaries = [
+      {
+        name: 'malformed',
+        content: '{"agentId":',
+        reason: '有効な JSON ではありません。',
+      },
+      {
+        name: 'invalid-schema',
+        content: JSON.stringify({
+          agentId: conductorAgentId,
+          issueUrl: ISSUE_URL,
+          repoRoot,
+          startedAt: 1_800_000_000_000,
+          durationMs: -1,
+          sendCount: 1,
+          lastRunStatus: 'finished',
+        }),
+        reason:
+          'SessionSummary に startedAt / durationMs / sendCount / lastRunStatus がありません。',
+      },
+    ];
+
+    for (const invalidSummary of invalidSummaries) {
+      const summaryPath = join(
+        tempRoot,
+        `session-summary-${invalidSummary.name}.json`,
+      );
+      await writeFile(summaryPath, `${invalidSummary.content}\n`, 'utf8');
+
+      const json = runCli([
+        'session',
+        'timeline',
+        conductorAgentId,
+        '--repo-root',
+        repoRoot,
+        '--summary',
+        summaryPath,
+        '--json',
+      ]);
+
+      expect(json.status).toBe(0);
+      const output = JSON.parse(json.stdout);
+      expect(output.sources.sessionSummary).toMatchObject({
+        status: 'unavailable',
+        path: summaryPath,
+        reason: invalidSummary.reason,
+      });
+      expect(output.sources.sendCorrelation.status).toBe('unavailable');
+      expect(output.sessionSummary).toBeNull();
+      expect(output.sendTimeline).toEqual([]);
+      expect(output.uncorrelatedProviderMessages).toMatchObject([
+        { sendCount: 1 },
+      ]);
+
+      const text = runCli([
+        'session',
+        'timeline',
+        conductorAgentId,
+        '--repo-root',
+        repoRoot,
+        '--summary',
+        summaryPath,
+      ]);
+
+      expect(text.status).toBe(0);
+      expect(text.stdout).toContain(
+        `SessionSummary: 読取不能: ${invalidSummary.reason}`,
+      );
+      expect(text.stdout).toContain(
+        '今回の run と send 番号を照合していない provider history:',
+      );
+    }
+  });
+
   it('warns that messages prints raw provider history which may contain secrets', () => {
     const result = runCli(['session', 'messages', '--help']);
 

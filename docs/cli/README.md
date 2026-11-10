@@ -140,7 +140,7 @@ ensemble session timeline <conductorAgentId> \
 
 worker 起動時だけ別の `HOME` を指定していた場合、ResumeStore には環境変数の値が残らないため、その home の session map は探索できず `unavailable` になることがあります。
 
-`timeline` は SessionResumeStore、conductor provider history、および任意の SessionSummary JSON / 保存済み harness stderr log を読みます。SessionSummary は `ensemble issue --summary-format json` の終了出力をファイルへ保存したものを `--summary <path>` で指定します。`--harness-log <path>` には、`[harness] conductor.send n=... status=...` と `[harness] conductor.transport.reconnect status=...` を含む stderr log を指定できます。これらのファイルは harness が自動保存するものではありません。データ源を指定しなかった場合、読めない場合、対象行がない場合は JSON / text に状態を表示します。
+`timeline` は SessionResumeStore、conductor provider history、および任意の SessionSummary JSON / 保存済み harness stderr log を読みます。SessionSummary は `ensemble issue --summary-format json` の終了出力をファイルへ保存したものを `--summary <path>` で指定します。`--harness-log <path>` には、`[harness] conductor.send n=... status=...` と `[harness] conductor.transport.reconnect status=...` を含む stderr log を指定できます。これらのファイルは harness が自動保存するものではありません。データ源の未指定・読取不能・不正な JSON / schema・session 不一致は JSON / text に source 状態と理由を表示し、対象行がない log は認識件数 0 として示します。
 
 Pi の provider history には `sendCount` がありますが、番号は harness process ごとに 0 から始まるため、resume をまたぐと再利用されます。誤った対応付けを避けるため、対象 session と一致する SessionSummary が読めた場合だけ、summary の `startedAt` より後、`startedAt + durationMs` より前に完了した Pi history を send 番号で照合します。開始・終了時刻と同じミリ秒の履歴は隣接 run と区別できないため照合せず、別枠に表示します。summary が無い・読めない場合は provider history を別に表示し、send 番号では結び付けません。Cursor history には同じ番号がないので、時間と provider ID を別々に表示します。provider history は最大100件で、さらに古い履歴は表示されません。
 
