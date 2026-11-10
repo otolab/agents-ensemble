@@ -271,7 +271,7 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 | イベント | ターン残あり | max-turns 到達後 |
 |----------|------------|----------------|
 | `operator.message` | dispatch。オペレータ入力として自律ターン数をリセット | dispatch（`operator.message` は常に許可） |
-| `operator.reconnect` | dispatch。直近の send 完了後に conductor を close → `resume(sameId)`。条件を満たす認証失敗 batch は再キューする。resume 自体は worker / worktree / プロセスを変更しない | `/reconnect` 自体は prompt として送らない。max-turns 到達後も許可 |
+| `operator.reconnect` | dispatch。コマンド自体は prompt にせず、直近の send 完了後に conductor を close → `resume(sameId)`。resume 成功後、Pi の API key resolver failure で終わり、初回 send と自動 retry のどちらでも tool call が始まっていない batch だけを 1 回再キューする | `/reconnect` 自体は prompt として送らない。max-turns 到達後も許可 |
 | `permission.pending` | dispatch | dispatch（permission 判断を優先） |
 | `permission.stall` | dispatch（低優先度。`operator.message` / `permission.pending` を先に選択） | dispatch（permission 回復用の例外。`operator.message` / `permission.pending` の後） |
 | `github.update` | dispatch。状況把握ターンとして自律ターンを 1 消費 | enqueue のみ。dispatch しない |
@@ -284,12 +284,18 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 Pi の API key resolver failure（`error.code === "auth"` かつ
 `API key auth failed for provider ...: Failed to resolve API key ...`）で終わった
-dispatch batch は、resume 成功後に再キューします。ただし、その send 中に tool call が一度でも
-始まっていた場合は再キューしません。resolver failure は該当する provider request の前に起きますが、
-Pi は tool round ごとに API key を解決するため、先行する tool の副作用までは否定できません。
-transport error など処理結果が曖昧な失敗も batch を再送しません。その場合は現在の状態を確認し、
-新しい operator message で未完了の作業を伝えてください。
-resume 自体は conductor agent の差し替えだけを行います。再キューされた batch は通常の dispatch として処理されます。
+dispatch batch は、resume 成功後に driver が 1 回だけ再キューします。ただし、初回 send と
+その自動 retry のどちらかで tool call が始まっていた場合は再キューしません。resolver failure
+自体は該当する provider request より前に起きますが、Pi は tool round ごとに API key を解決するため、
+先行する tool の副作用までは否定できないからです。transport error など処理結果が曖昧な失敗も
+再送しません。その場合は現在の状態を確認し、新しい operator message で未完了の作業を伝えてください。
+再キューされた batch は通常の dispatch として処理されます。同じ event の手動再キューは session 中
+一度までです。再送も失敗した場合はその event を再度キューへ戻さず、状態を確認してから新しい
+operator message で続行してください。
+
+この再キューは `ensemble issue` の driver に限った復旧動作です。`ensemble operator-agent` の
+手動 `/reconnect` は agent の close / resume のみで、失敗した operator-agent prompt は再送しません。
+両者の経路は [conductor 認証再接続](conductor-auth-reconnect.md) を参照してください。
 
 成功・失敗は `conductor.transport.reconnect` として harness / observation に表示されます。失敗してもセッションは継続し、もう一度 `/reconnect` または通常の入力を受け付けます。send 中の in-flight 中断は行いません。
 

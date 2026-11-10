@@ -169,6 +169,7 @@ export async function runConductorSessionDriver(
   const dispatchHoldState =
     options.dispatchHoldState ?? createDispatchHoldState();
   const pendingAuthRecoveryBatches: SessionEvent[][] = [];
+  const manuallyRequeuedAuthRecoveryEvents = new WeakSet<SessionEvent>();
 
   const requeuePendingAuthRecoveryBatches = (): void => {
     const events = pendingAuthRecoveryBatches.splice(0).flat();
@@ -176,6 +177,7 @@ export async function runConductorSessionDriver(
       return;
     }
     for (const event of events.reverse()) {
+      manuallyRequeuedAuthRecoveryEvents.add(event);
       options.eventQueue.prependSilent(event);
     }
     options.onOperatorQueueChanged?.();
@@ -477,13 +479,18 @@ export async function runConductorSessionDriver(
         options.onSendComplete(info);
       },
     }).then((result) => {
+      const notPreviouslyRequeued = batch.filter(
+        (event) => !manuallyRequeuedAuthRecoveryEvents.has(event),
+      );
       if (
         isPiApiKeyResolutionFailure(result) &&
-        !dispatchHadToolCalls
+        !dispatchHadToolCalls &&
+        notPreviouslyRequeued.length > 0
       ) {
         // Pi may resolve auth for several model requests in one send. A later
         // resolver failure does not prove an earlier tool round had no effects.
-        pendingAuthRecoveryBatches.push(batch);
+        // A manual reconnect may requeue each event only once per session.
+        pendingAuthRecoveryBatches.push(notPreviouslyRequeued);
       }
       return result;
     });

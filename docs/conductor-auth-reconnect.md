@@ -68,6 +68,28 @@ stall が続き、worktree を残したままプロセスを終了したい場�
 セッション結果は `interrupted` になります。`/exit` は isolated worktree の cleanup を
 試みます。プロセスを維持して conductor だけ再接続する場合は `/reconnect` を使います。
 
+### reconnect 経路の境界
+
+| 経路 | 対象 | 再接続後 |
+|------|------|----------|
+| send 中の自動 reconnect | `ensemble issue` と `ensemble operator-agent` の通常 send | auth / transport error を受けた send の中で `resume(sameId)` し、同じ prompt を 1 回だけ再送します。resume 失敗または再送失敗は通常の send error として呼び出し元へ返します |
+| 手動 `/reconnect` | `ensemble issue` の `operator.reconnect` | コマンド自体は prompt を送りません。成功後、Pi の API key resolver failure で終わり、初回 send と自動 retry のどちらでも tool call が始まっていない batch に限り、driver がその event を session 中 1 回だけ再キューします |
+| 手動 `/reconnect` | `ensemble operator-agent` の TTY command | operator-agent 自身の agent を `close` → `resume(sameId)` します。失敗した operator-agent prompt は再送しません |
+
+手動再キュー後の send も失敗した場合、同じ event は再びキューへ戻しません。現在の状態を確認し、
+必要なら認証を直した後、新しい operator message で未完了の作業を伝えてください。
+
+`ensemble issue` と `ensemble operator-agent` は自動 send retry の helper を共有しますが、
+手動 reconnect の後処理は別です。operator-agent の `send_operator_message` は、明示的な tool
+呼び出しで Issue session の UDS に新しい `operator.message` を送る経路です。どの reconnect
+経路もこの tool を自動実行しません。
+
+`conductor.transport.reconnect` は transport error 後の自動 reconnect と手動 `/reconnect` の
+両方で使われます。イベント payload に発火元は含まれず、手動操作の `operator.reconnect` も
+専用の SessionLogEvent としては記録されません。そのため `status=succeeded` の行だけでは
+どちらの経路か、prompt が再送されたかは分かりません。Issue #650 のログ抜粋も発火元を
+特定できる情報がなく、手動操作だったとは断定できません。
+
 ## 制限
 
 | 経路 | 挙動 |

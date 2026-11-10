@@ -366,7 +366,9 @@ Pi の send が missing key、401、unauthorized などの認証エラーを返�
 
 再接続の in-process retry、auth error の判定、backend 固有 hint の設計は [conductor-auth-reconnect.md](conductor-auth-reconnect.md) が正本です。
 
-`ensemble operator-agent` も `ensemble issue` と同じく、Pi の `!command` を含む resource を読み直すため、401 / auth-like error の後に同じ入力を一度だけ自動 retry します。TTY で `/reconnect` または `reconnect` を入力すると、LLM へ送らず現在の agent を同じ ID で再接続します。`ensemble issue` の `/reconnect` と同じ操作です。retry 後も認証エラーが続く場合は stderr の Pi 向け hint に従って認証設定を直し、`ensemble operator-agent` を再起動してください。
+`ensemble operator-agent` も `ensemble issue` と自動 send retry helper を共有し、auth / transport error の後に同じ agent ID で再接続して同じ prompt を 1 回だけ再送します。ただし、TTY の手動 `/reconnect` は operator-agent 自身の agent を close / resume する control 操作で、失敗した operator-agent prompt は再送しません。`ensemble issue` の driver にある Pi resolver failure batch の再キューも operator-agent には適用されません。
+
+operator-agent が `send_operator_message` を呼ぶと、稼働中 Issue session の UDS 経由で新しい `operator.message` が queue に入ります。これは明示的な tool 呼び出しであり、どの reconnect 操作も自動では行いません。Issue session の TUI で `[operator]` として表示される文面も、実際に dispatch された `operator.message` の内容です。`conductor.transport.reconnect` の成功ログだけでは、手動操作か自動 reconnect か、また prompt が再送されたかは判別できません。retry 後も認証エラーが続く場合は stderr の Pi 向け hint に従って認証設定を直し、`ensemble operator-agent` を再起動してください。
 
 ## 参照
 
