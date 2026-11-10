@@ -17,6 +17,7 @@ import {
   type AssistantMessage,
   type Model,
 } from '@earendil-works/pi-ai';
+import { ModelsError } from '@earendil-works/pi-ai/models';
 import {
   createAgentSession,
   createCodemodeExtension,
@@ -265,7 +266,10 @@ export class PiConductorAgent implements ConductorAgent {
       return {
         runId,
         status: 'error',
-        error: { message: errorMessage(error) },
+        error: {
+          message: errorMessage(error),
+          ...(error instanceof ModelsError ? { code: error.code } : {}),
+        },
         modelId: this.modelId,
       };
     } finally {

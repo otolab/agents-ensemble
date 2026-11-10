@@ -21,6 +21,9 @@ const TEST_ISSUE = {
   url: 'https://github.com/org/repo/issues/1',
 };
 
+const PI_API_KEY_RESOLUTION_ERROR =
+  'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs -- gcloud auth print-identity-token';
+
 const { mockResume, mockCreate } = vi.hoisted(() => ({
   mockResume: vi.fn(),
   mockCreate: vi.fn(),
@@ -972,6 +975,363 @@ describe('runConductorSessionDriver', () => {
       'continue after reconnect',
       expect.any(Object),
     );
+
+    shutdown.abort();
+    const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
+  });
+
+  it('requeues a failed Pi API-key dispatch once after manual reconnect', async () => {
+    const authError = {
+      runId: 'run-auth-error',
+      status: 'error',
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+    };
+    const originalSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-initial',
+        status: 'finished',
+        result: 'ready',
+      })
+      .mockResolvedValueOnce(authError);
+    const automaticRetrySend = vi.fn().mockResolvedValue(authError);
+    const manualRecoverySend = vi.fn().mockResolvedValue({
+      runId: 'run-manual-recovery',
+      status: 'finished',
+      result: 'recovered',
+    });
+    const originalClose = vi.fn();
+    const automaticRetryClose = vi.fn();
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const conductor = {
+      agentId: 'agent-1',
+      send: originalSend,
+      close: originalClose,
+    } as unknown as ConductorAgent;
+    const driverOptions = createDriverOptions({ eventQueue, conductor });
+    const onOperatorQueueChanged = vi.fn();
+
+    mockResume
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: automaticRetrySend,
+        close: automaticRetryClose,
+      })
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: manualRecoverySend,
+        close: vi.fn(),
+      });
+
+    const driverPromise = runConductorSessionDriver({
+      ...driverOptions,
+      shutdownSignal: shutdown.signal,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+      onOperatorQueueChanged,
+    });
+
+    await vi.waitFor(() => expect(originalSend).toHaveBeenCalledOnce());
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'dispatch the pending work',
+    });
+    await vi.waitFor(() => expect(automaticRetrySend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(2),
+    );
+
+    const queueChangesBeforeReconnect = onOperatorQueueChanged.mock.calls.length;
+    const failedPrompt = originalSend.mock.calls[1]![0] as string;
+    expect(originalSend).toHaveBeenCalledTimes(2);
+    expect(automaticRetrySend).toHaveBeenCalledWith(
+      failedPrompt,
+      expect.any(Object),
+    );
+    expect(eventQueue.isEmpty()).toBe(true);
+
+    eventQueue.enqueue({ type: 'operator.reconnect' });
+    await vi.waitFor(() => expect(manualRecoverySend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(3),
+    );
+
+    expect(mockResume).toHaveBeenCalledTimes(2);
+    expect(manualRecoverySend).toHaveBeenCalledWith(
+      failedPrompt,
+      expect.any(Object),
+    );
+    expect(onOperatorQueueChanged).toHaveBeenCalledTimes(
+      queueChangesBeforeReconnect + 1,
+    );
+    expect(eventQueue.isEmpty()).toBe(true);
+
+    shutdown.abort();
+    const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
+  });
+
+  it('continues dispatching after a successful transport retry', async () => {
+    const transportError = {
+      runId: 'run-transport-error',
+      status: 'error',
+      error: { message: 'Connection stalled repeatedly' },
+    };
+    const originalSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-initial',
+        status: 'finished',
+        result: 'ready',
+      })
+      .mockResolvedValueOnce(transportError);
+    const resumedSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-transport-retry',
+        status: 'finished',
+        result: 'recovered',
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-after-reconnect',
+        status: 'finished',
+        result: 'continued',
+      });
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const conductor = {
+      agentId: 'agent-1',
+      send: originalSend,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const driverOptions = createDriverOptions({ eventQueue, conductor });
+
+    mockResume.mockResolvedValue({
+      agentId: 'agent-1',
+      send: resumedSend,
+      close: vi.fn(),
+    });
+
+    const driverPromise = runConductorSessionDriver({
+      ...driverOptions,
+      shutdownSignal: shutdown.signal,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+    });
+
+    await vi.waitFor(() => expect(originalSend).toHaveBeenCalledOnce());
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'recover the in-flight dispatch',
+    });
+    await vi.waitFor(() => expect(resumedSend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(2),
+    );
+
+    const failedPrompt = originalSend.mock.calls[1]![0] as string;
+    expect(resumedSend).toHaveBeenNthCalledWith(
+      1,
+      failedPrompt,
+      expect.any(Object),
+    );
+
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'send another request after recovery',
+    });
+    await vi.waitFor(() => expect(resumedSend).toHaveBeenCalledTimes(2));
+    expect(resumedSend.mock.calls[1]![0]).toContain(
+      'send another request after recovery',
+    );
+    expect(resumedSend.mock.calls[1]![0]).not.toBe(failedPrompt);
+
+    shutdown.abort();
+    const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
+  });
+
+  it('does not requeue a Pi API-key failure when a tool already started', async () => {
+    const authError = {
+      runId: 'run-auth-error',
+      status: 'error',
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+    };
+    const originalSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-initial',
+        status: 'finished',
+        result: 'ready',
+      })
+      .mockResolvedValueOnce(authError);
+    const automaticRetrySend = vi.fn().mockImplementation(
+      async (
+        _prompt: string,
+        callbacks?: {
+          onToolCallStarted?: (info: {
+            runId: string;
+            tool: string;
+            callId: string;
+          }) => void;
+        },
+      ) => {
+        callbacks?.onToolCallStarted?.({
+          runId: 'run-partial',
+          tool: 'prompt_worker',
+          callId: 'call-1',
+        });
+        return authError;
+      },
+    );
+    const afterReconnectSend = vi.fn().mockResolvedValue({
+      runId: 'run-fresh',
+      status: 'finished',
+      result: 'continued after state check',
+    });
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const conductor = {
+      agentId: 'agent-1',
+      send: originalSend,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const driverOptions = createDriverOptions({ eventQueue, conductor });
+
+    mockResume
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: automaticRetrySend,
+        close: vi.fn(),
+      })
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: afterReconnectSend,
+        close: vi.fn(),
+      });
+
+    const driverPromise = runConductorSessionDriver({
+      ...driverOptions,
+      shutdownSignal: shutdown.signal,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+    });
+
+    await vi.waitFor(() => expect(originalSend).toHaveBeenCalledOnce());
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'perform work that may run tools',
+    });
+    await vi.waitFor(() => expect(automaticRetrySend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(2),
+    );
+
+    const failedPrompt = originalSend.mock.calls[1]![0] as string;
+    eventQueue.enqueue({ type: 'operator.reconnect' });
+    await vi.waitFor(() => expect(mockResume).toHaveBeenCalledTimes(2));
+    expect(afterReconnectSend).not.toHaveBeenCalled();
+
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'inspect current state and continue only unfinished work',
+    });
+    await vi.waitFor(() => expect(afterReconnectSend).toHaveBeenCalledOnce());
+    expect(afterReconnectSend.mock.calls[0]![0]).toContain(
+      'inspect current state and continue only unfinished work',
+    );
+    expect(afterReconnectSend.mock.calls[0]![0]).not.toBe(failedPrompt);
+
+    shutdown.abort();
+    const result = await driverPromise;
+    expect(result.stopReason).toBe('interrupted');
+  });
+
+  it('continues after transport reconnect without replaying an ambiguous failed batch', async () => {
+    const transportError = {
+      runId: 'run-transport-error',
+      status: 'error',
+      error: { message: 'Connection stalled repeatedly' },
+    };
+    const originalSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-initial',
+        status: 'finished',
+        result: 'ready',
+      })
+      .mockResolvedValueOnce(transportError);
+    const automaticRetrySend = vi.fn().mockResolvedValue(transportError);
+    const afterReconnectSend = vi.fn().mockResolvedValue({
+      runId: 'run-after-reconnect',
+      status: 'finished',
+      result: 'continued',
+    });
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const conductor = {
+      agentId: 'agent-1',
+      send: originalSend,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const driverOptions = createDriverOptions({ eventQueue, conductor });
+    const onTransportReconnectComplete = vi.fn();
+
+    mockResume
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: automaticRetrySend,
+        close: vi.fn(),
+      })
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: afterReconnectSend,
+        close: vi.fn(),
+      });
+
+    const driverPromise = runConductorSessionDriver({
+      ...driverOptions,
+      shutdownSignal: shutdown.signal,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+      sendReconnect: {
+        ...driverOptions.sendReconnect,
+        onTransportReconnectComplete,
+      },
+    });
+
+    await vi.waitFor(() => expect(originalSend).toHaveBeenCalledOnce());
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'possibly completed remote work',
+    });
+    await vi.waitFor(() => expect(automaticRetrySend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(2),
+    );
+    const ambiguousPrompt = originalSend.mock.calls[1]![0] as string;
+    expect(automaticRetrySend).toHaveBeenCalledWith(
+      ambiguousPrompt,
+      expect.any(Object),
+    );
+
+    eventQueue.enqueue({ type: 'operator.reconnect' });
+    await vi.waitFor(() =>
+      expect(onTransportReconnectComplete).toHaveBeenCalledTimes(2),
+    );
+    expect(afterReconnectSend).not.toHaveBeenCalled();
+
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'send a fresh operator request',
+    });
+    await vi.waitFor(() => expect(afterReconnectSend).toHaveBeenCalledOnce());
+    expect(afterReconnectSend.mock.calls[0]![0]).toContain(
+      'send a fresh operator request',
+    );
+    expect(afterReconnectSend.mock.calls[0]![0]).not.toBe(ambiguousPrompt);
 
     shutdown.abort();
     const result = await driverPromise;

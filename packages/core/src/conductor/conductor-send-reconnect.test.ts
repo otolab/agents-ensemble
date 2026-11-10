@@ -21,6 +21,9 @@ import {
   type ConductorAgentHandle,
 } from './conductor-send-reconnect.js';
 
+const PI_API_KEY_RESOLUTION_ERROR =
+  'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs -- gcloud auth print-identity-token';
+
 function createHandle(send: ReturnType<typeof vi.fn>): ConductorAgentHandle {
   return {
     conductor: {
@@ -58,7 +61,7 @@ describe('sendConductorWithReconnect', () => {
     const firstSend = vi.fn().mockResolvedValue({
       runId: '',
       status: 'error',
-      error: { message: 'Authentication error' },
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
     });
     const secondSend = vi.fn().mockResolvedValue({
       runId: 'run-2',
@@ -87,6 +90,9 @@ describe('sendConductorWithReconnect', () => {
     });
 
     expect(mockClose).toHaveBeenCalledOnce();
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(firstSend).toHaveBeenCalledOnce();
+    expect(secondSend).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledWith('agent-1', {
       cwd: '/repo',
       systemPrompt: 'system prompt',
@@ -105,7 +111,7 @@ describe('sendConductorWithReconnect', () => {
     const failingSend = vi.fn().mockResolvedValue({
       runId: '',
       status: 'error',
-      error: { message: 'not logged in' },
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
     });
     const handle = createHandle(failingSend);
     mockResume.mockImplementation(async () => ({
@@ -120,6 +126,7 @@ describe('sendConductorWithReconnect', () => {
     });
 
     expect(mockResume).toHaveBeenCalledOnce();
+    expect(failingSend).toHaveBeenCalledTimes(2);
     expect(result.status).toBe('error');
   });
 

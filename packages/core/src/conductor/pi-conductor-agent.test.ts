@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ModelsError } from '@earendil-works/pi-ai/models';
 
 const {
   mockCreateAgentSession,
@@ -168,6 +169,37 @@ describe('PiConductorAgent', () => {
     await expect(conductor.send('kickoff')).resolves.toMatchObject({
       status: 'error',
       error: { message: 'fixture failure' },
+      modelId: 'model-1',
+    });
+    await conductor.close();
+  });
+
+  it('preserves Pi ModelsError auth codes and resolver details in send results', async () => {
+    fakeSession.prompt.mockRejectedValueOnce(
+      new ModelsError(
+        'auth',
+        'API key auth failed for provider litellm',
+        {
+          cause: new Error(
+            'Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs',
+          ),
+        },
+      ),
+    );
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+
+    await expect(conductor.send('kickoff')).resolves.toMatchObject({
+      status: 'error',
+      error: {
+        code: 'auth',
+        message:
+          'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs',
+      },
       modelId: 'model-1',
     });
     await conductor.close();

@@ -6,6 +6,7 @@ import type { PermissionPipeline } from '../permission/permission-pipeline.js';
 import type { WorkerFailureRecord } from '../runtime/types.js';
 import type { WorkerSession } from '../runtime/worker-session.js';
 import type { ConductorSendResult } from './conductor-agent.js';
+import { isPiApiKeyResolutionFailure } from './conductor-auth.js';
 import type {
   ConductorAgentHandle,
   ConductorSendReconnectOptions,
@@ -167,6 +168,18 @@ export async function runConductorSessionDriver(
   let postLoopWaiting = false;
   const dispatchHoldState =
     options.dispatchHoldState ?? createDispatchHoldState();
+  const pendingAuthRecoveryBatches: SessionEvent[][] = [];
+
+  const requeuePendingAuthRecoveryBatches = (): void => {
+    const events = pendingAuthRecoveryBatches.splice(0).flat();
+    if (events.length === 0) {
+      return;
+    }
+    for (const event of events.reverse()) {
+      options.eventQueue.prependSilent(event);
+    }
+    options.onOperatorQueueChanged?.();
+  };
 
   const hasDispatchableWorkerOutcome = (): boolean =>
     selectDispatchBatch({
@@ -415,7 +428,10 @@ export async function runConductorSessionDriver(
 
     if (dispatchResult.sourceKey === 'operator.reconnect') {
       dispatchBatchState = dispatchBatchStateAfterSend(dispatchResult.sourceKey);
-      await runOperatorReconnect(options);
+      const reconnected = await runOperatorReconnect(options);
+      if (reconnected && !options.shutdownSignal.aborted) {
+        requeuePendingAuthRecoveryBatches();
+      }
       continue;
     }
 
@@ -429,6 +445,7 @@ export async function runConductorSessionDriver(
       triggers: batch.filter(isTriggerSessionEvent).length,
       sources: uniqueSources(batch, dispatchResult.sourceKey),
     });
+    let dispatchHadToolCalls = false; // Prevent replay if the send may have side effects.
     const dispatchSend = runEventConductorSend({
       message: formatSessionEventsForConductor(batch),
       conductorHandle: options.conductorHandle,
@@ -449,13 +466,26 @@ export async function runConductorSessionDriver(
       resetOutboundDispatchesThisSend: options.resetOutboundDispatchesThisSend,
       getOutboundDispatchesThisSend: options.getOutboundDispatchesThisSend,
       onSendStarted: options.onSendStarted,
-      onSendProgress: options.onSendProgress,
+      onSendProgress: (info) => {
+        dispatchHadToolCalls = true;
+        options.onSendProgress?.(info);
+      },
       onSendComplete: (info) => {
         sendCount = info.sendCount;
         lastDispatchesThisTurn = info.conductorDispatchesThisTurn;
         autonomousTurns = info.autonomousTurns;
         options.onSendComplete(info);
       },
+    }).then((result) => {
+      if (
+        isPiApiKeyResolutionFailure(result) &&
+        !dispatchHadToolCalls
+      ) {
+        // Pi may resolve auth for several model requests in one send. A later
+        // resolver failure does not prove an earlier tool round had no effects.
+        pendingAuthRecoveryBatches.push(batch);
+      }
+      return result;
     });
     if (
       options.onDispatchBatchSettled &&
@@ -739,7 +769,7 @@ function isImmediateDispatchSource(sourceKey: string): boolean {
 /** `/reconnect` は conductor へ送らず、直近 send 完了後に agent だけ差し替える。 */
 async function runOperatorReconnect(
   options: ConductorSessionDriverOptions,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await reconnectConductorAgent(options.conductorHandle, {
       conductorAgentFactory: options.sendReconnect.conductorAgentFactory,
@@ -751,9 +781,11 @@ async function runOperatorReconnect(
         options.sendReconnect.onTransportReconnectComplete ??
         options.sendReconnect.onReconnectComplete,
     });
+    return true;
   } catch {
     // Reconnect failures are observable through the callback above. Keep the
     // session alive so the operator can retry or submit another message.
+    return false;
   }
 }
 

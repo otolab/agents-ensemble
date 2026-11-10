@@ -27,10 +27,13 @@ send が auth-like error のとき:
 
 ## auth-like error の検知
 
-1. 既存 `isConductorAuthError(message)` — 明示的な認証メッセージ
-2. **保守的 bare heuristic** — `status: "error"` かつ `error.message` も `result` も空（SDK idle 後の既知症状）。明示的な非 auth `error.code` がある場合は除外。
+1. 既存 `isConductorAuthError(message)` — 明示的な認証メッセージ。Pi の API key 解決失敗 `API key auth failed for provider ...` も含む
+2. backend の error code — Pi 1.2.0 の `ModelsError.code === "auth"` を adapter が `ConductorSendResult.error.code` に保持する
+3. **保守的 bare heuristic** — `status: "error"` かつ `error.message` も `result` も空（SDK idle 後の既知症状）。明示的な非 auth `error.code` がある場合は除外。
 
 誤検知リスク: 他の原因でも message 欠落の error になりうる。その場合は 1 回だけ resume+retry し、失敗すれば従来の `[auth]` ヒントへフォールバック。
+
+Pi 1.2.0 は `apiKey.resolve()` の失敗を `ModelsError("auth", "API key auth failed for provider ...")` に包み、cause の詳細も message に含める。これは provider request 前の失敗です（[auth resolver](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/auth/resolve.ts#L947-L969)、[ModelsError](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/utils/models-error.ts#L219-L245)）。adapter は `auth` code を保持し、同じ send 内で同一 prompt を 1 回だけ再試行します。2 回目も失敗した場合は `conductor.auth.recovery` と provider 固有 hint を出します。
 
 ## イベント
 
@@ -49,7 +52,16 @@ send が auth-like error のとき:
 この経路では `conductor.transport.reconnect` を attempt / success / failure の各状態で
 emit し、auth の `[auth]` recovery hint は表示しない。オペレータは `/reconnect`（または
 `reconnect`）で同じ `resume(sameId)` を手動実行できる。手動操作は直近 send の完了後に
-行い、worker、worktree、プロセス、conductor へのコマンド送信には影響しない。
+行います。`/reconnect` 自体は prompt を送信しません。
+
+Pi の API key resolver failure（`error.code === "auth"` かつ
+`API key auth failed for provider ...: Failed to resolve API key ...`）で send が終わった場合、
+手動 resume の成功後に失敗した dispatch batch を再キューします。ただし、その send 中に
+tool call が一度でも始まっていた場合は再キューしません。resolver failure は該当する provider
+request より前に起きますが、Pi は同じ send の tool round ごとに API key を解決するため、
+その前の round で tool が動いた可能性までは否定できないからです。transport error など処理結果が
+曖昧な batch も再送しません。いずれも状態を確認してから新しい operator message で続行してください。
+resume 自体は conductor agent の差し替えだけを行います。再キューされた batch は通常の dispatch として処理されます。
 
 stall が続き、worktree を残したままプロセスを終了したい場合は `/close` の後に
 `ensemble issue <same> --continue` で再開します。Ctrl+C も worktree を削除しませんが、
@@ -60,7 +72,7 @@ stall が続き、worktree を残したままプロセスを終了したい場�
 
 | 経路 | 挙動 |
 |------|------|
-| TTY / 非 TTY | いずれも in-process `resume` + 1 回再試行のみ |
+| TTY / 非 TTY | auth / transport error ごとに in-process `resume` + 1 回再試行。TTY の手動 `/reconnect` は、tool call が始まる前に Pi の API key resolver failure で終わった batch を再キュー |
 | `CURSOR_API_KEY` | 環境変数モードの挙動は変更しない（#58）。hint は key ローテーション案内 |
 | Pi backend | 各 send の Pi 1.x `ModelRuntime.getAuth(provider)` で stored API key / OAuth token を解決する。期限切れ OAuth token は Pi の refresh 処理に委ね、失敗時は provider-specific hint を表示 |
 | 起動時 `create` / `resume` auth 失敗 | スコープ外（別 Issue 候補） |

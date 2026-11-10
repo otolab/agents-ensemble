@@ -271,7 +271,7 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 | イベント | ターン残あり | max-turns 到達後 |
 |----------|------------|----------------|
 | `operator.message` | dispatch。オペレータ入力として自律ターン数をリセット | dispatch（`operator.message` は常に許可） |
-| `operator.reconnect` | dispatch。直近の send 完了後に conductor を close → `resume(sameId)`。worker / worktree / プロセスは変更しない | conductor へメッセージとして送らない。max-turns 到達後も許可 |
+| `operator.reconnect` | dispatch。直近の send 完了後に conductor を close → `resume(sameId)`。条件を満たす認証失敗 batch は再キューする。resume 自体は worker / worktree / プロセスを変更しない | `/reconnect` 自体は prompt として送らない。max-turns 到達後も許可 |
 | `permission.pending` | dispatch | dispatch（permission 判断を優先） |
 | `permission.stall` | dispatch（低優先度。`operator.message` / `permission.pending` を先に選択） | dispatch（permission 回復用の例外。`operator.message` / `permission.pending` の後） |
 | `github.update` | dispatch。状況把握ターンとして自律ターンを 1 消費 | enqueue のみ。dispatch しない |
@@ -280,7 +280,16 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 ### `/reconnect` — conductor transport の手動再接続
 
-`/reconnect` または `reconnect`（大文字小文字無視・前後空白トリム）は、conductor との対話に載せない専用コマンドです。直近の `conductor.send` が完了（成功・エラーを含む）した後、現在の agent を `close` し、同じ `agentId` で `resume` します。再接続そのものは prompt を再送せず、次の operator 入力や worker/GitHub 通知から新しい agent を使います。worker、worktree、プロセスは触りません。
+`/reconnect` または `reconnect`（大文字小文字無視・前後空白トリム）は、conductor との対話に載せない専用コマンドです。直近の `conductor.send` が完了（成功・エラーを含む）した後、現在の agent を `close` し、同じ `agentId` で `resume` します。コマンド自体は prompt を送りません。
+
+Pi の API key resolver failure（`error.code === "auth"` かつ
+`API key auth failed for provider ...: Failed to resolve API key ...`）で終わった
+dispatch batch は、resume 成功後に再キューします。ただし、その send 中に tool call が一度でも
+始まっていた場合は再キューしません。resolver failure は該当する provider request の前に起きますが、
+Pi は tool round ごとに API key を解決するため、先行する tool の副作用までは否定できません。
+transport error など処理結果が曖昧な失敗も batch を再送しません。その場合は現在の状態を確認し、
+新しい operator message で未完了の作業を伝えてください。
+resume 自体は conductor agent の差し替えだけを行います。再キューされた batch は通常の dispatch として処理されます。
 
 成功・失敗は `conductor.transport.reconnect` として harness / observation に表示されます。失敗してもセッションは継続し、もう一度 `/reconnect` または通常の入力を受け付けます。send 中の in-flight 中断は行いません。
 

@@ -4630,7 +4630,7 @@ describe('runConductorSession resume / shutdown', () => {
     );
   });
 
-  it('emits a Pi provider-specific recovery hint for SDK auth failures', async () => {
+  it('retries a Pi API-key resolution failure once and emits a provider-specific recovery hint', async () => {
     await mkdir(join(repoRoot, '.ensemble', 'pi'), { recursive: true });
     await writeFile(
       join(repoRoot, '.ensemble', 'pi', 'settings.json'),
@@ -4649,10 +4649,14 @@ describe('runConductorSession resume / shutdown', () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-auth',
       status: 'error',
-      error: { message: 'No API key for provider: anthropic' },
+      error: {
+        code: 'auth',
+        message:
+          'API key auth failed for provider anthropic: Failed to resolve API key for provider "anthropic" from shell command: cached-auth.mjs -- gcloud auth print-identity-token',
+      },
     });
 
-    await runConductorSession({
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
@@ -4665,6 +4669,10 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
     });
+
+    expect(result.stopReason).toBe('error');
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(mockResume).toHaveBeenCalledOnce();
 
     const recovery = emitted.find(
       (event): event is Extract<SessionLogEvent, { type: 'conductor.auth.recovery' }> =>

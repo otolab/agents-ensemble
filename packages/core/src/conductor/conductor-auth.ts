@@ -65,7 +65,7 @@ export function resolveConductorAuthBackend(
 
 /** RunResult.error 等の message が conductor 認証失敗か判定する。 */
 export function isConductorAuthError(message: string): boolean {
-  return /authentication error|not logged in|invalid api key|no api key(?: for provider)?\s*[: ]|unauthenticated|unauthorized|\b(?:http\s*)?401\b|try logging out/i.test(
+  return /authentication error|not logged in|invalid api key|api key auth failed for provider|no api key(?: for provider)?\s*[: ]|unauthenticated|unauthorized|\b(?:http\s*)?401\b|try logging out/i.test(
     message,
   );
 }
@@ -96,10 +96,30 @@ export function isConductorSendAuthError(result: ConductorSendResult): boolean {
   if (result.status !== 'error') {
     return false;
   }
+  if (result.error?.code?.trim().toLowerCase() === 'auth') {
+    return true;
+  }
   if (isConductorAuthError(result.error?.message ?? '')) {
     return true;
   }
   return isBareConductorSendAuthError(result);
+}
+
+/** Pi の API key 解決が provider request 前に失敗した結果か。 */
+export function isPiApiKeyResolutionFailure(
+  result: ConductorSendResult,
+): boolean {
+  if (
+    result.status !== 'error' ||
+    result.error?.code?.trim().toLowerCase() !== 'auth'
+  ) {
+    return false;
+  }
+  const message = result.error.message;
+  return (
+    /api key auth failed for provider\b/i.test(message) &&
+    /failed to resolve api key for (?:pi )?provider\b/i.test(message)
+  );
 }
 
 /** auth エラー時に stderr へ出す短い復旧手順。 */

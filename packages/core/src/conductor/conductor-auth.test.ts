@@ -22,8 +22,12 @@ import {
   isBareConductorSendAuthError,
   isConductorAuthError,
   isConductorSendAuthError,
+  isPiApiKeyResolutionFailure,
   logoutConductor,
 } from './conductor-auth.js';
+
+const PI_API_KEY_RESOLUTION_ERROR =
+  'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs -- gcloud auth print-identity-token';
 
 describe('isConductorAuthError', () => {
   it('detects Authentication error message', () => {
@@ -43,6 +47,10 @@ describe('isConductorAuthError', () => {
     '401 Unauthorized',
   ])('detects Pi provider auth failure: %s', (message) => {
     expect(isConductorAuthError(message)).toBe(true);
+  });
+
+  it('detects the Pi API-key resolver failure reported in Issue #650', () => {
+    expect(isConductorAuthError(PI_API_KEY_RESOLUTION_ERROR)).toBe(true);
   });
 });
 
@@ -85,6 +93,58 @@ describe('isConductorSendAuthError', () => {
         status: 'error',
       }),
     ).toBe(true);
+  });
+
+  it('detects Pi ModelsError auth code even when its message changes', () => {
+    expect(
+      isConductorSendAuthError({
+        runId: 'run-pi-auth',
+        status: 'error',
+        error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe('isPiApiKeyResolutionFailure', () => {
+  it('detects a Pi auth resolver failure before a provider request', () => {
+    expect(
+      isPiApiKeyResolutionFailure({
+        runId: 'run-pi-auth',
+        status: 'error',
+        error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+      }),
+    ).toBe(true);
+  });
+
+  it('does not treat other auth failures as safely replayable', () => {
+    expect(
+      isPiApiKeyResolutionFailure({
+        runId: 'run-pi-auth',
+        status: 'error',
+        error: { code: 'auth', message: '401 Unauthorized' },
+      }),
+    ).toBe(false);
+    expect(
+      isPiApiKeyResolutionFailure({
+        runId: 'run-pi-auth',
+        status: 'error',
+        error: {
+          code: 'auth',
+          message: 'API key auth failed for provider litellm',
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPiApiKeyResolutionFailure({
+        runId: 'run-pi-auth',
+        status: 'error',
+        error: {
+          message:
+            'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm"',
+        },
+      }),
+    ).toBe(false);
   });
 });
 

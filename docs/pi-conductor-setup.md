@@ -355,14 +355,14 @@ Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalo
 
 ### 実行中の 401 / auth error
 
-Pi の send が missing key、401、unauthorized などを返すと、harness は provider 固有の復旧 hint を表示します。hint には次の情報が含まれます。
+Pi の send が missing key、401、unauthorized などの認証エラーを返すと、harness は同じ agent ID で接続を張り直し、同じ prompt を 1 回だけ自動再試行します。再試行後も失敗した場合は provider 固有の復旧 hint を表示します。hint には次の情報が含まれます。
 
 - `ensemble auth login --provider <provider-id>`
 - `agentDir/auth.json`（既定 `~/.ensemble/pi/auth.json`）
 - Pi が認識する provider 固有の環境変数名（例: Anthropic は `ANTHROPIC_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`、OpenAI は `OPENAI_API_KEY`、GitHub Copilot は `COPILOT_GITHUB_TOKEN`）
 - 現在の conductor を再試行する `--resume <agentId>`（または `--continue`）
 
-認証を直した後、終了 JSON や hint に示された agent id を使って再開します。
+実行中の `ensemble issue` で `API key auth failed for provider ...: Failed to resolve API key ...` が出た場合、該当する provider request の前に key resolver が失敗しています。Pi は同じ send 内で tool round ごとに key を解決するため、先行する tool の副作用がありうる点には注意してください。認証 helper を直した後に `/reconnect` すると、send 中に tool call が始まっていない batch だけを再キューします。tool call が始まっていた場合や、transport error など結果が曖昧な場合は重複実行を避けて再送しません。現在の状態を確認し、新しい operator message で未完了の作業を伝えてください。プロセス終了後なら終了 JSON / hint の agent id で `--resume` します。
 
 再接続の in-process retry、auth error の判定、backend 固有 hint の設計は [conductor-auth-reconnect.md](conductor-auth-reconnect.md) が正本です。
 
