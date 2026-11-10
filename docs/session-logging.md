@@ -202,7 +202,9 @@ permission の ACP variant と抽出優先順位は
 
 SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
 
-`ensemble session list/show` は core の SessionResumeStore / YAML 読取 API を使う読み取り専用 CLI です。harness への接続や agent 起動は行わず、`show` は sidecar の許可したメタデータと YAML の要約だけを返します。`ensemble session messages` は operator-agent の `list_conductor_messages` と同じ `listConductorProviderHistory` を使い、provider 履歴の user inbound / final response を読みます。会話本文に含まれる任意の秘密値を自動判定する redaction はありません。
+`ensemble session list/show` は core の SessionResumeStore / YAML 読取 API を使う読み取り専用 CLI です。harness への接続や agent 起動は行わず、sidecar は許可したメタデータだけ、YAML は件数・時刻だけを表示します。旧形式の SessionResumeStore に残る ACP 環境変数の平文値も読取 API が除外します。
+
+`ensemble session messages` は operator-agent の `list_conductor_messages` と同じ `listConductorProviderHistory` を使い、provider が保存した user inbound / final response の本文をそのまま返すローカルデバッグ表示です。テキストと JSON の両方で redaction は行いません。会話本文に秘密値や repository 内の非公開情報があれば、そのまま stdout に出ます。pipe / redirect 先も生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。構造化された SessionResumeStore の秘密値保護は、この会話本文には適用されません。
 
 新規の `ensemble issue` は、初回 flush から `createdHarnessCliVersion` に `@agents-ensemble/cli` の package version を記録します。`--continue` / `--resume` は作成時の値を保持し、旧 Store で値が欠けている場合は欠落したまま扱います。この値は SessionResumeStore の schema version とは別です。
 

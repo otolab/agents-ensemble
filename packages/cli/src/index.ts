@@ -141,7 +141,9 @@ session
 
 session
   .command('messages')
-  .description('Show saved conductor provider history')
+  .description(
+    'Show raw saved conductor provider history for local debugging (may contain secrets)',
+  )
   .argument('<conductorAgentId>', 'Conductor session id')
   .option(
     '--repo-root <path>',

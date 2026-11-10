@@ -59,6 +59,15 @@ describe('ensemble session commands', () => {
     expect(result.stdout).toContain('without starting an agent');
   });
 
+  it('warns that messages prints raw provider history which may contain secrets', () => {
+    const result = runCli(['session', 'messages', '--help']);
+
+    expect(result.status).toBe(0);
+    const help = result.stdout.replace(/\s+/gu, ' ');
+    expect(help).toContain('raw saved conductor provider history');
+    expect(help).toContain('may contain secrets');
+  });
+
   it('lists and filters local session fixtures without exposing stored secrets', () => {
     const result = runCli([
       'session',
@@ -163,13 +172,15 @@ describe('ensemble session commands', () => {
       messages: [
         {
           backend: 'pi',
-          inbound: 'Local fixture inbound',
-          text: 'Local fixture response',
+          inbound: 'Local fixture inbound api_key=fixture-api-key-653',
+          text: 'Local fixture response token=fixture-token-653',
           sendCount: 1,
           dispatchSource: 'operator',
         },
       ],
     });
+    expect(json.stdout).toContain('fixture-api-key-653');
+    expect(json.stdout).toContain('fixture-token-653');
     expect(json.stdout).not.toContain('TOOL_SECRET');
     expect(json.stdout).not.toContain('THINKING_SECRET');
 
@@ -182,8 +193,14 @@ describe('ensemble session commands', () => {
     ]);
     expect(text.status).toBe(0);
     expect(text.stdout).toContain('operator → conductor');
-    expect(text.stdout).toContain('Local fixture response');
+    expect(text.stdout).toContain(
+      'Local fixture inbound api_key=fixture-api-key-653',
+    );
+    expect(text.stdout).toContain(
+      'Local fixture response token=fixture-token-653',
+    );
     expect(text.stdout).not.toContain('TOOL_SECRET');
+    expect(text.stdout).not.toContain('THINKING_SECRET');
   });
 
   it('honors NO_COLOR even when FORCE_COLOR is set', () => {
@@ -295,7 +312,12 @@ describe('ensemble session commands', () => {
     });
     const inboundEntryId = manager.appendMessage({
       role: 'user',
-      content: [{ type: 'text', text: 'Local fixture inbound' }],
+      content: [
+        {
+          type: 'text',
+          text: 'Local fixture inbound api_key=fixture-api-key-653',
+        },
+      ],
       timestamp: 1_800_000_000_000,
     });
     manager.appendMessage({
@@ -326,7 +348,12 @@ describe('ensemble session commands', () => {
     });
     const responseEntryId = manager.appendMessage({
       role: 'assistant',
-      content: [{ type: 'text', text: 'Local fixture response' }],
+      content: [
+        {
+          type: 'text',
+          text: 'Local fixture response token=fixture-token-653',
+        },
+      ],
       api: 'anthropic-messages',
       provider: 'anthropic',
       model: 'fixture-model',
