@@ -11,6 +11,7 @@ describe('operator command catalog', () => {
       OPERATOR_COMMANDS.map(({ name, aliases }) => ({ name, aliases })),
     ).toEqual([
       { name: '/reconnect', aliases: ['reconnect'] },
+      { name: '/recovery', aliases: [] },
       { name: '/exit', aliases: ['exit'] },
       { name: '/close', aliases: ['close'] },
       { name: '/idle', aliases: [] },

@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { fakeRl, mockCreateInterface, stderrWrites } = vi.hoisted(() => {
+const { fakeRl, mockCreateInterface, stderrWrites, stderrTty } = vi.hoisted(() => {
   const stderrWrites: string[] = [];
   const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+  const stderrTty = { value: true };
   const fakeRl = {
     setPrompt: vi.fn(),
     prompt: vi.fn(),
@@ -33,6 +34,7 @@ const { fakeRl, mockCreateInterface, stderrWrites } = vi.hoisted(() => {
     fakeRl,
     mockCreateInterface: vi.fn(() => fakeRl),
     stderrWrites,
+    stderrTty,
   };
 });
 
@@ -46,6 +48,9 @@ vi.mock('node:process', async (importOriginal) => {
     ...actual,
     stderr: {
       ...actual.stderr,
+      get isTTY() {
+        return stderrTty.value;
+      },
       write: (chunk: string) => {
         stderrWrites.push(chunk);
         return true;
@@ -63,6 +68,7 @@ import type { OpenQuestion } from '@agents-ensemble/core';
 describe('bindAsyncOperatorInput', () => {
   beforeEach(() => {
     mockCreateInterface.mockClear();
+    stderrTty.value = true;
     fakeRl.setPrompt.mockClear();
     fakeRl.prompt.mockClear();
     fakeRl.close.mockClear();
@@ -142,7 +148,7 @@ describe('bindAsyncOperatorInput', () => {
     });
 
     expect(stderrWrites.join('')).toContain(
-      '/reconnect、/close 保存して閉じる、/exit 掃除して終了',
+      '/reconnect、/recovery、/close 保存して閉じる、/exit 掃除して終了',
     );
     expect(mockCreateInterface).toHaveBeenCalledTimes(1);
     fakeRl.emit('line', '  ping  ');
@@ -152,6 +158,96 @@ describe('bindAsyncOperatorInput', () => {
 
     dispose();
     expect(fakeRl.close).toHaveBeenCalled();
+  });
+
+  it('inspects recovery content locally without submitting it to the conductor', () => {
+    delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+    Object.defineProperty(process.stdin, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    const submit = vi.fn(() => true);
+    const getPiAuthRecoverySnapshot = vi.fn(() => ({
+      recoveryId: 'pi-auth-recovery-12',
+      createdAt: 1_800_000_000_000,
+      expiresAt: 1_800_001_800_000,
+      failedDispatch: {
+        sendCount: 12,
+        runId: 'run-12',
+        sourceKey: 'operator',
+        eventTypes: ['operator.message'],
+        eventCount: 1,
+        eventReferences: [],
+        eventReferencesTruncated: false,
+      },
+      failure: {
+        kind: 'pi_api_key_resolution' as const,
+        automaticRetryAttempts: 1 as const,
+        toolCallStarted: false,
+      },
+      content: 'private task body',
+      contentBytes: 17,
+    }));
+
+    const dispose = bindAsyncOperatorInput(
+      {
+        submit,
+        getContext: () => ({
+          conductorTurn: 13,
+          autonomousTurns: 0,
+          maxTurns: null,
+          openQuestions: [],
+        }),
+        listPiAuthRecoverySnapshots: () => [],
+        getPiAuthRecoverySnapshot,
+        clearPiAuthRecoverySnapshot: () => false,
+      },
+    );
+
+    stderrWrites.length = 0;
+    fakeRl.emit('line', '/recovery show pi-auth-recovery-12');
+
+    expect(getPiAuthRecoverySnapshot).toHaveBeenCalledWith(
+      'pi-auth-recovery-12',
+    );
+    expect(submit).not.toHaveBeenCalled();
+    expect(stderrWrites.join('')).toContain('private task body');
+
+    dispose();
+  });
+
+  it('refuses to print recovery payloads when stderr is not a TTY', () => {
+    delete process.env.ENSEMBLE_OPERATOR_MESSAGE;
+    Object.defineProperty(process.stdin, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    stderrTty.value = false;
+    const submit = vi.fn(() => true);
+    const getPiAuthRecoverySnapshot = vi.fn();
+
+    const dispose = bindAsyncOperatorInput({
+      submit,
+      getContext: () => ({
+        conductorTurn: 1,
+        autonomousTurns: 0,
+        maxTurns: null,
+        openQuestions: [],
+      }),
+      listPiAuthRecoverySnapshots: () => [],
+      getPiAuthRecoverySnapshot,
+      clearPiAuthRecoverySnapshot: () => false,
+    });
+    stderrWrites.length = 0;
+
+    fakeRl.emit('line', '/recovery show pi-auth-recovery-1');
+
+    expect(getPiAuthRecoverySnapshot).not.toHaveBeenCalled();
+    expect(stderrWrites.join('')).toContain('対話 TTY 上でのみ表示');
+    expect(stderrWrites.join('')).not.toContain('private task body');
+    expect(submit).not.toHaveBeenCalled();
+
+    dispose();
   });
 
   it('writes input-required notice before prompt when open questions exist', () => {

@@ -64,7 +64,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `worker.failed` | worker attach / prompt 失敗。該当 worker の pending permission は conductor への通知前に deny | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `permission.cleanup` | worker failure / teardown で pending permission を deny・解消した直後 | `[harness] permission.cleanup reason=worker.failed worker=... count=... ids=...` | なし |
-| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) pending permission が閾値まで継続したとき（worker / attach の活動状態は問わない）。GitHub 認証トークン未解決時（#222）。dispatch hold reminder（既定 30 分ごと） | `[harness] warning: ...`（permission 停滞 / GitHub 認証不足 / dispatch hold reminder） | なし。permission 停滞時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue。dispatch hold reminder は operator 向けのみ |
+| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) pending permission が閾値まで継続したとき（worker / attach の活動状態は問わない）。GitHub 認証トークン未解決時（#222）。dispatch hold reminder（既定 30 分ごと）。Pi recovery snapshot の保存・FIFO eviction | `[harness] warning: ...`（permission 停滞 / GitHub 認証不足 / dispatch hold reminder / Pi recovery snapshot ID・期限・eviction ID） | なし。permission 停滞時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue。dispatch hold reminder は operator 向けのみ。recovery snapshot warning に event 本文は含めない |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
 | `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
 | `conductor.auth.recovery` | 最終 `send` 結果が auth error のとき。resume / retry の失敗や、tool 開始後に同一 prompt retry を抑止した場合を含む | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
@@ -78,6 +78,12 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 SessionEventQueue 内で扱う control event で、手動入力時にも専用の SessionLogEvent は出しません。
 そのため `status=succeeded` のログだけでは手動 `/reconnect` と transport error 後の自動 reconnect
 を区別できず、prompt 再送の有無も示しません。発火元を特定できないログは unknown として扱います。
+
+Pi auth recovery snapshot の本文は SessionLogEvent に載せません。failure 時の `harness.warning` には
+snapshot ID / expiry と eviction ID だけを出し、本文は TTY の `/recovery show <recoveryId>` で明示表示した
+ときだけ terminal output に現れます。元の `operator.input` / `operator.dispatched` や `worker.round`
+イベントの既存 payload とは別の一時 store です。保持の privacy、上限、寿命、process 終了時の破棄は
+[operator-input.md](operator-input.md) を参照してください。
 
 conductor 発言の live history は SessionLogEvent ではなく UDS control API の別 projection です。bootstrap send を除く成功した `agent.send` について、send 本文と対応する `formatSessionEventsForConductor(batch)` 全文を session ごとの最新 100 件だけメモリに保持します。これは listen の稼働中通知と UDS list method が使う一時履歴です。operator-agent の `list_conductor_messages` は provider session history を別途読み、停止後も直近100件を返します。詳細は [live-open-question-control-api.md](live-open-question-control-api.md) を参照してください。
 

@@ -381,6 +381,57 @@ describe('IssueSessionTuiStream', () => {
     expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
   });
 
+  it('shows recovery content outside the stream activity log and hides it with Escape', async () => {
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.setRecoveryInspection({
+      title: 'Sensitive recovery content · pi-auth-recovery-12',
+      text: 'private worker result',
+      recoveryId: 'pi-auth-recovery-12',
+      expiresAt: Date.now() + 60_000,
+      sensitive: true,
+    });
+    const { stdin, lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={vi.fn()} />,
+    );
+    await flushInkStdin();
+
+    expect(lastFrame() ?? '').toContain('private worker result');
+    expect(lastFrame() ?? '').toContain('Esc で閉じる');
+    expect(viewModel.getSnapshot().activityLog).toEqual([]);
+
+    stdin.write('\u001b');
+    await flushInkStdin();
+    expect(lastFrame() ?? '').not.toContain('private worker result');
+    expect(viewModel.getSnapshot().recoveryInspection).toBeUndefined();
+    expect(viewModel.getSnapshot().activityLog).toEqual([]);
+  });
+
+  it('fits the recovery pane into a short stream terminal', async () => {
+    Object.defineProperty(process.stdout, 'rows', {
+      configurable: true,
+      value: 6,
+    });
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 40,
+    });
+    const viewModel = createTuiViewModel({ activityLogWindowSize: null });
+    viewModel.setRecoveryInspection({
+      title: 'Sensitive recovery content',
+      text: 'private task '.repeat(40),
+      sensitive: true,
+    });
+    const { lastFrame } = render(
+      <IssueSessionTuiStream viewModel={viewModel} onSubmit={vi.fn()} />,
+    );
+    await flushInkStdin();
+
+    expect(lastFrame() ?? '').toContain('Sensitive recovery content');
+    expect(lastFrame() ?? '').toContain('private task');
+    expect((lastFrame() ?? '').split('\n').length).toBeLessThanOrEqual(6);
+    expect(viewModel.getSnapshot().activityLog).toEqual([]);
+  });
+
   it('navigates submitted history at visual boundaries and restores an edited draft', async () => {
     const viewModel = createTuiViewModel();
     const onSubmit = vi.fn();

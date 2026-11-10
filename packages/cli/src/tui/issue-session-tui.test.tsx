@@ -436,6 +436,7 @@ describe('IssueSessionTui', () => {
     expect(allCommandsFrame).toContain(`${OPERATOR_INPUT_PROMPT}/`);
     expect(allCommandsFrame).not.toContain('operator> ');
     expect(allCommandsFrame).toContain('/reconnect — conductor を再接続');
+    expect(allCommandsFrame).toContain('/recovery — Pi の失敗 dispatch を確認');
     expect(allCommandsFrame).toContain('/exit — セッションを終了');
 
     stdin.write('ex');
@@ -448,6 +449,57 @@ describe('IssueSessionTui', () => {
     stdin.write('\r');
     await flushInkStdin();
     expect(onSubmit).toHaveBeenCalledWith('/ex', undefined);
+  });
+
+  it('shows recovery content outside the activity log and hides it with Escape', async () => {
+    const viewModel = createTuiViewModel();
+    viewModel.setRecoveryInspection({
+      title: 'Sensitive recovery content · pi-auth-recovery-12',
+      text: 'private operator task body',
+      recoveryId: 'pi-auth-recovery-12',
+      expiresAt: Date.now() + 60_000,
+      sensitive: true,
+    });
+    const { stdin, lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />,
+    );
+    await flushInkStdin();
+
+    expect(lastFrame() ?? '').toContain('private operator task body');
+    expect(lastFrame() ?? '').toContain('Esc で閉じる');
+    expect(viewModel.getSnapshot().activityLog).toEqual([]);
+
+    stdin.write('\u001b');
+    await flushInkStdin();
+    expect(lastFrame() ?? '').not.toContain('private operator task body');
+    expect(viewModel.getSnapshot().recoveryInspection).toBeUndefined();
+    expect(viewModel.getSnapshot().activityLog).toEqual([]);
+  });
+
+  it('keeps a recovery inspection within a short pane terminal', async () => {
+    Object.defineProperty(process.stdout, 'rows', {
+      configurable: true,
+      value: 6,
+    });
+    Object.defineProperty(process.stdout, 'columns', {
+      configurable: true,
+      value: 40,
+    });
+    const viewModel = createTuiViewModel();
+    viewModel.setRecoveryInspection({
+      title: 'Sensitive recovery content',
+      text: 'private task '.repeat(40),
+      sensitive: true,
+    });
+    const { lastFrame } = render(
+      <IssueSessionTui viewModel={viewModel} onSubmit={vi.fn()} />,
+    );
+    await flushInkStdin();
+
+    expect(lastFrame() ?? '').toContain('Sensitive recovery content');
+    expect(lastFrame() ?? '').toContain('private task');
+    expect((lastFrame() ?? '').split('\n').length).toBeLessThanOrEqual(6);
+    expect(viewModel.getSnapshot().activityLog).toEqual([]);
   });
 
   it('navigates submitted history at visual boundaries and restores an edited draft', async () => {
@@ -658,10 +710,11 @@ describe('IssueSessionTui', () => {
     await flushInkStdin();
     expect(lastFrame() ?? '').toContain('› /reconnect');
 
-    for (const key of [
-      INK_TEST_KEYS.downArrow,
-      INK_TEST_KEYS.downArrow,
-    ]) {
+    stdin.write(INK_TEST_KEYS.downArrow);
+    await flushInkStdin();
+    expect(lastFrame() ?? '').toContain('› /recovery');
+
+    for (const key of [INK_TEST_KEYS.downArrow, INK_TEST_KEYS.downArrow]) {
       stdin.write(key);
       await flushInkStdin();
     }
@@ -679,7 +732,7 @@ describe('IssueSessionTui', () => {
 
     stdin.write(INK_TEST_KEYS.upArrow);
     await flushInkStdin();
-    expect(lastFrame() ?? '').toContain('› /reconnect');
+    expect(lastFrame() ?? '').toContain('› /recovery');
 
     for (const key of [
       INK_TEST_KEYS.downArrow,
@@ -881,6 +934,8 @@ describe('IssueSessionTui', () => {
     );
 
     stdin.write('/');
+    await flushInkStdin();
+    stdin.write(INK_TEST_KEYS.downArrow);
     await flushInkStdin();
     stdin.write(INK_TEST_KEYS.downArrow);
     await flushInkStdin();

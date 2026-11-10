@@ -4684,6 +4684,105 @@ describe('runConductorSession resume / shutdown', () => {
     expect(recovery?.hint).not.toContain('ensemble auth logout');
   });
 
+  it('keeps failed event content operator-only and drops it when /close ends the process', async () => {
+    await mkdir(join(repoRoot, '.ensemble', 'pi'), { recursive: true });
+    await writeFile(
+      join(repoRoot, '.ensemble', 'pi', 'settings.json'),
+      JSON.stringify({
+        defaultProvider: 'anthropic',
+        defaultModel: 'model-1',
+      }),
+    );
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    const onPostLoopWait = vi.fn();
+    const retrySend = vi.fn().mockResolvedValue({
+      runId: 'run-after-resume',
+      status: 'error',
+      error: {
+        code: 'auth',
+        message:
+          'API key auth failed for provider anthropic: Failed to resolve API key for provider "anthropic" from shell command: /private/secret/cached-auth.mjs',
+      },
+    });
+    let operatorApi: OperatorInputBindingApi | undefined;
+
+    stubUnusedControlServer();
+    mockSend
+      .mockResolvedValueOnce({
+        runId: 'run-initial',
+        status: 'finished',
+        result: 'ready',
+      })
+      .mockResolvedValue({
+        runId: 'run-pi-auth',
+        status: 'error',
+        error: {
+          code: 'auth',
+          message:
+            'API key auth failed for provider anthropic: Failed to resolve API key for provider "anthropic" from shell command: /private/secret/cached-auth.mjs',
+        },
+      });
+    mockResume.mockResolvedValue({
+      agentId: 'agent-test',
+      send: retrySend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    });
+
+    const sessionPromise = runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: true,
+      continueOnConductorError: true,
+      onPostLoopWait,
+      bindOperatorInput: (api) => {
+        operatorApi = api;
+      },
+    });
+
+    await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
+    const privateInstruction = 'private operator recovery instruction';
+    expect(operatorApi!.submit(privateInstruction)).toBe(true);
+    await vi.waitFor(() => expect(retrySend).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(operatorApi!.listPiAuthRecoverySnapshots?.()).toHaveLength(1),
+    );
+
+    const retained = operatorApi!.getPiAuthRecoverySnapshot?.(
+      'pi-auth-recovery-2',
+    );
+    expect(retained?.content).toContain(privateInstruction);
+    expect(retained?.content).not.toContain('/private/secret/cached-auth.mjs');
+    expect(
+      emitted.find(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes('Pi authentication failure snapshot'),
+      )?.message,
+    ).not.toContain(privateInstruction);
+
+    expect(operatorApi!.submit('/close')).toBe(false);
+    const result = await sessionPromise;
+    expect(operatorApi!.listPiAuthRecoverySnapshots?.()).toEqual([]);
+    expect(
+      operatorApi!.getPiAuthRecoverySnapshot?.('pi-auth-recovery-2'),
+    ).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain(privateInstruction);
+  });
+
   it('recovers transport stalls without auth reconnect or recovery hints', async () => {
     const emitted: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({

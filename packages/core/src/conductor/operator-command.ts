@@ -8,6 +8,12 @@ export const OPERATOR_COMMANDS = [
     description: 'conductor を再接続',
   },
   {
+    id: 'recovery',
+    name: '/recovery',
+    aliases: [],
+    description: 'Pi の失敗 dispatch を確認',
+  },
+  {
     id: 'exit',
     name: '/exit',
     aliases: ['exit'],

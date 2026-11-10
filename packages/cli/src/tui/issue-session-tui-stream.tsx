@@ -57,11 +57,19 @@ import {
   resolveOperatorInputDisplayMode,
   type IssueLinkMode,
 } from './format-operator-context.js';
-import { buildActivityLogDisplayLines, type ActivityLogEntry } from './activity-log.js';
+import {
+  advanceActivityLogScrollOffset,
+  buildActivityLogDisplayLines,
+  type ActivityLogEntry,
+} from './activity-log.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
 import { computeWorkerPaneHeight } from './pane-layout.js';
 import { resolveStreamPaneHeights } from './stream-layout.js';
 import { TitledBorderPane } from './titled-border-pane.js';
+import {
+  buildRecoveryInspectionLines,
+  RecoveryInspectionPane,
+} from './recovery-inspection-pane.js';
 import { messageQueueLines, messageQueuePageSize } from './message-queue-lines.js';
 import { resolveInputContentLayout } from './input-content-layout.js';
 import {
@@ -77,6 +85,7 @@ import {
 export interface IssueSessionTuiStreamProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string, options?: OperatorInputSubmitOptions) => void;
+  onRecoveryInspectionDismiss?: () => void;
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
   terminalSizeStore?: TuiTerminalSizeStore;
@@ -127,6 +136,7 @@ function StaticActivityLog({
 export function IssueSessionTuiStream({
   viewModel,
   onSubmit,
+  onRecoveryInspectionDismiss,
   issueUrl,
   issueLinkMode = 'osc8',
   terminalSizeStore,
@@ -142,6 +152,7 @@ export function IssueSessionTuiStream({
   const [inputCursorPosition, setInputCursorPosition] = useState<[number, number]>([0, 0]);
   const inputHistoryRef = useRef(new OperatorInputHistory());
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
+  const [recoveryLinesFromBottom, setRecoveryLinesFromBottom] = useState(0);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [selectedAnswerSuggestionIndex, setSelectedAnswerSuggestionIndex] = useState(0);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
@@ -231,16 +242,36 @@ export function IssueSessionTuiStream({
   const workerPaneHeight = computeWorkerPaneHeight(
     Object.keys(snapshot.displayState.workers).length,
   );
+  const compactRecoveryInspection =
+    snapshot.recoveryInspection !== undefined &&
+    terminalRows - 1 < PANE_BORDER_ROWS * 2 + 2;
   const streamPaneHeights = useMemo(
     () =>
       resolveStreamPaneHeights({
         terminalRows,
-        workerPaneHeight,
-        openQuestionsPaneHeight,
+        workerPaneHeight: snapshot.recoveryInspection ? 0 : workerPaneHeight,
+        openQuestionsPaneHeight: snapshot.recoveryInspection
+          ? 0
+          : openQuestionsPaneHeight,
         inputPaneHeight: desiredInputPaneHeight,
       }),
-    [terminalRows, workerPaneHeight, openQuestionsPaneHeight, desiredInputPaneHeight],
+    [
+      terminalRows,
+      workerPaneHeight,
+      openQuestionsPaneHeight,
+      desiredInputPaneHeight,
+      snapshot.recoveryInspection,
+    ],
   );
+  const recoveryPaneHeight = snapshot.recoveryInspection
+    ? compactRecoveryInspection
+      ? Math.max(0, terminalRows - 1)
+      : Math.max(0, terminalRows - 1 - streamPaneHeights.inputPaneHeight)
+    : 0;
+  const dynamicFrameHeight = snapshot.recoveryInspection
+    ? recoveryPaneHeight +
+      (compactRecoveryInspection ? 0 : streamPaneHeights.inputPaneHeight)
+    : streamPaneHeights.dynamicFrameHeight;
   const inputLayout = resolveInputContentLayout({
     paneHeight: streamPaneHeights.inputPaneHeight,
     inputLines: desiredInputLines,
@@ -273,16 +304,22 @@ export function IssueSessionTuiStream({
   const streamOpenQuestionsLayout = useMemo(
     () => ({
       ...openQuestionsLayout,
-      paneHeight: streamPaneHeights.openQuestionsPaneHeight,
+      paneHeight: snapshot.recoveryInspection
+        ? 0
+        : streamPaneHeights.openQuestionsPaneHeight,
     }),
-    [openQuestionsLayout, streamPaneHeights.openQuestionsPaneHeight],
+    [
+      openQuestionsLayout,
+      streamPaneHeights.openQuestionsPaneHeight,
+      snapshot.recoveryInspection,
+    ],
   );
   const openQuestionViewport = resolveOpenQuestionsPaneViewport({
     items: openQuestionsLayout.items,
     selectedIndex: openQuestionsLayout.selectedIndex,
     visibleLineCount: Math.max(
       1,
-      streamPaneHeights.openQuestionsPaneHeight - PANE_BORDER_ROWS,
+      streamOpenQuestionsLayout.paneHeight - PANE_BORDER_ROWS,
     ),
     linesFromTop: openQuestionLinesFromTop,
   });
@@ -303,6 +340,10 @@ export function IssueSessionTuiStream({
   useEffect(() => {
     setSelectedAnswerSuggestionIndex(0);
   }, [selectedQuestion?.id]);
+
+  useEffect(() => {
+    setRecoveryLinesFromBottom(0);
+  }, [snapshot.recoveryInspection?.title, snapshot.recoveryInspection?.text]);
 
   useEffect(() => {
     if (!scrollbackEvent) {
@@ -334,6 +375,37 @@ export function IssueSessionTuiStream({
   };
 
   useInput((input, key) => {
+    if (snapshot.recoveryInspection && key.escape) {
+      if (onRecoveryInspectionDismiss) {
+        onRecoveryInspectionDismiss();
+      } else {
+        viewModel.setRecoveryInspection(undefined);
+      }
+      setRecoveryLinesFromBottom(0);
+      return;
+    }
+    if (snapshot.recoveryInspection && (key.pageUp || key.pageDown)) {
+      const recoveryLineCount = buildRecoveryInspectionLines(
+        snapshot.recoveryInspection,
+        contentWidth,
+      ).length;
+      const visibleLineCount = Math.max(
+        1,
+        recoveryPaneHeight - PANE_BORDER_ROWS,
+      );
+      setRecoveryLinesFromBottom((current) =>
+        advanceActivityLogScrollOffset(
+          current,
+          key.pageUp ? 'pageUp' : 'pageDown',
+          visibleLineCount,
+          Math.max(0, recoveryLineCount - visibleLineCount),
+        ),
+      );
+      return;
+    }
+    if (compactRecoveryInspection) {
+      return;
+    }
     if (
       key.ctrl && !key.shift && !key.meta && (input === 't' || input === 'g' || input === 'o') &&
       queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
@@ -580,11 +652,22 @@ export function IssueSessionTuiStream({
       <Box
         flexDirection="column"
         width={terminalColumns}
-        height={streamPaneHeights.dynamicFrameHeight}
+        height={dynamicFrameHeight}
         overflowX="visible"
         overflowY="hidden"
       >
-        {operatorInputDisplay.mode === 'withQuestions' ? (
+        {snapshot.recoveryInspection ? (
+          <RecoveryInspectionPane
+            inspection={snapshot.recoveryInspection}
+            height={recoveryPaneHeight}
+            terminalColumns={terminalColumns}
+            visibleLineCount={Math.max(
+              1,
+              recoveryPaneHeight - PANE_BORDER_ROWS,
+            )}
+            linesFromBottom={recoveryLinesFromBottom}
+          />
+        ) : operatorInputDisplay.mode === 'withQuestions' ? (
           <OpenQuestionsPane
             layout={streamOpenQuestionsLayout}
             viewport={openQuestionViewport}
@@ -592,67 +675,71 @@ export function IssueSessionTuiStream({
             issueLinkMode={issueLinkMode}
           />
         ) : null}
-        <TitledBorderPane
-          title={terminalColumns < 44 && pendingActivityCount > 0 &&
-            queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
-            ? 'Input' : INPUT_PANE_TITLE}
-          titleSuffix={`${pendingActivityCount > 0 ? ` 新着${pendingActivityLabel} ^L` : ''}${
-            queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
-              ? ' Q:^T< ^O>' : ''
-          }`}
-          borderStyle="single"
-          borderColor={INPUT_PANE_BORDER_COLOR}
-          paddingX={PANE_PADDING_X}
-          height={streamPaneHeights.inputPaneHeight}
-          terminalColumns={terminalColumns}
-        >
-          {visibleHints.map((line, index) => (
-            <Text key={`context-hint-${index}`} color={INPUT_PANE_HINT_COLOR}>{line}</Text>
-          ))}
-          {visibleSuggestions.map((line) => (
-            <Text
-              key={`suggestion-${line.id}`}
-              color={line.isSelected ? 'cyan' : INPUT_PANE_HINT_COLOR}
-              bold={line.isSelected}
-            >
-              {line.text}
-            </Text>
-          ))}
-          {queueLines.map((line, index) => (
-            <Text key={`message-queue-${index}`} color={INPUT_PANE_HINT_COLOR}>
-              {line}
-            </Text>
-          ))}
-          <OperatorTextArea
-            value={inputValue}
-            onChange={handleInputChange}
-            onSubmit={handleSubmit}
-            focus={!snapshot.shuttingDown}
-            contentWidth={contentWidth}
-            promptPrefix={operatorPrompt}
-            maxDisplayLines={visibleInputDisplayLineCount}
-            onDisplayLineCountChange={handleDisplayLineCountChange}
-            suggestionsActive={
-              suggestionsVisible
-            }
-            onTab={
-              suggestionsVisible
-                ? handleSuggestionTab
-                : undefined
-            }
-            cursorPosition={inputCursorPosition}
-            onCursorChange={setInputCursorPosition}
-            cursorStart={cursorStart}
+        {compactRecoveryInspection ? null : (
+          <TitledBorderPane
+            title={terminalColumns < 44 && pendingActivityCount > 0 &&
+              queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
+              ? 'Input' : INPUT_PANE_TITLE}
+            titleSuffix={`${pendingActivityCount > 0 ? ` 新着${pendingActivityLabel} ^L` : ''}${
+              queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
+                ? ' Q:^T< ^O>' : ''
+            }`}
+            borderStyle="single"
+            borderColor={INPUT_PANE_BORDER_COLOR}
+            paddingX={PANE_PADDING_X}
+            height={streamPaneHeights.inputPaneHeight}
+            terminalColumns={terminalColumns}
+          >
+            {visibleHints.map((line, index) => (
+              <Text key={`context-hint-${index}`} color={INPUT_PANE_HINT_COLOR}>{line}</Text>
+            ))}
+            {visibleSuggestions.map((line) => (
+              <Text
+                key={`suggestion-${line.id}`}
+                color={line.isSelected ? 'cyan' : INPUT_PANE_HINT_COLOR}
+                bold={line.isSelected}
+              >
+                {line.text}
+              </Text>
+            ))}
+            {queueLines.map((line, index) => (
+              <Text key={`message-queue-${index}`} color={INPUT_PANE_HINT_COLOR}>
+                {line}
+              </Text>
+            ))}
+            <OperatorTextArea
+              value={inputValue}
+              onChange={handleInputChange}
+              onSubmit={handleSubmit}
+              focus={!snapshot.shuttingDown}
+              contentWidth={contentWidth}
+              promptPrefix={operatorPrompt}
+              maxDisplayLines={visibleInputDisplayLineCount}
+              onDisplayLineCountChange={handleDisplayLineCountChange}
+              suggestionsActive={
+                suggestionsVisible
+              }
+              onTab={
+                suggestionsVisible
+                  ? handleSuggestionTab
+                  : undefined
+              }
+              cursorPosition={inputCursorPosition}
+              onCursorChange={setInputCursorPosition}
+              cursorStart={cursorStart}
+            />
+          </TitledBorderPane>
+        )}
+        {snapshot.recoveryInspection ? null : (
+          <WorkerStatusPane
+            workers={snapshot.displayState.workers}
+            dispatchHold={snapshot.displayState.dispatchHold}
+            height={streamPaneHeights.workerPaneHeight}
+            terminalColumns={terminalColumns}
+            issueUrl={issueUrl}
+            issueLinkMode={issueLinkMode}
           />
-        </TitledBorderPane>
-        <WorkerStatusPane
-          workers={snapshot.displayState.workers}
-          dispatchHold={snapshot.displayState.dispatchHold}
-          height={streamPaneHeights.workerPaneHeight}
-          terminalColumns={terminalColumns}
-          issueUrl={issueUrl}
-          issueLinkMode={issueLinkMode}
-        />
+        )}
       </Box>
     </>
   );

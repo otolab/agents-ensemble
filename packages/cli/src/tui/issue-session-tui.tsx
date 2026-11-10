@@ -75,6 +75,10 @@ import {
 } from './operator-input-layout.js';
 import { OperatorInputHistory } from './operator-input-history.js';
 import { getPaneContentWidth, wrapTextToWidth } from './wrap-text-to-width.js';
+import {
+  buildRecoveryInspectionLines,
+  RecoveryInspectionPane,
+} from './recovery-inspection-pane.js';
 import type { InlineMarkdownSegment } from '../inline-markdown.js';
 import {
   useTuiTerminalSize,
@@ -88,6 +92,7 @@ const workerAnsiSequencePattern =
 export interface IssueSessionTuiProps {
   viewModel: TuiViewModel;
   onSubmit: (text: string, options?: OperatorInputSubmitOptions) => void;
+  onRecoveryInspectionDismiss?: () => void;
   issueUrl?: string;
   issueLinkMode?: IssueLinkMode;
   terminalSizeStore?: TuiTerminalSizeStore;
@@ -473,6 +478,7 @@ export function OpenQuestionsPane({
 export function IssueSessionTui({
   viewModel,
   onSubmit,
+  onRecoveryInspectionDismiss,
   issueUrl,
   issueLinkMode = 'osc8',
   terminalSizeStore,
@@ -488,6 +494,7 @@ export function IssueSessionTui({
   const inputHistoryRef = useRef(new OperatorInputHistory());
   const [inputDisplayLineCount, setInputDisplayLineCount] = useState(1);
   const [linesFromBottom, setLinesFromBottom] = useState(0);
+  const [recoveryLinesFromBottom, setRecoveryLinesFromBottom] = useState(0);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [selectedAnswerSuggestionIndex, setSelectedAnswerSuggestionIndex] = useState(0);
   const [selectedQuestionIndex, setSelectedQuestionIndex] = useState(0);
@@ -607,6 +614,13 @@ export function IssueSessionTui({
   });
   const { activityPaneHeight } = paneHeights;
   const visibleLineCount = computeOrchestrationLogVisibleLineCount(activityPaneHeight);
+  const recoveryPaneHeight = snapshot.recoveryInspection
+    ? liveFrameRows < PANE_BORDER_ROWS * 2 + 2
+      ? liveFrameRows
+      : activityPaneHeight
+    : activityPaneHeight;
+  const recoveryVisibleLineCount =
+    computeOrchestrationLogVisibleLineCount(recoveryPaneHeight);
   const displayLineCount = useMemo(
     () => buildActivityLogDisplayLines(snapshot.activityLog, contentWidth).length,
     [snapshot.activityLog, contentWidth],
@@ -659,10 +673,29 @@ export function IssueSessionTui({
   }, [selectedQuestion?.id]);
 
   useEffect(() => {
+    setRecoveryLinesFromBottom(0);
+  }, [snapshot.recoveryInspection?.title, snapshot.recoveryInspection?.text]);
+
+  useEffect(() => {
     setSelectedAnswerSuggestionIndex(0);
   }, [selectedQuestion?.id]);
 
   const applyScrollAction = (action: ActivityLogScrollAction) => {
+    if (snapshot.recoveryInspection) {
+      const recoveryLineCount = buildRecoveryInspectionLines(
+        snapshot.recoveryInspection,
+        contentWidth,
+      ).length;
+      setRecoveryLinesFromBottom((current) =>
+        advanceActivityLogScrollOffset(
+          current,
+          action,
+          recoveryVisibleLineCount,
+          Math.max(0, recoveryLineCount - recoveryVisibleLineCount),
+        ),
+      );
+      return;
+    }
     setLinesFromBottom((current) =>
       advanceActivityLogScrollOffset(
         current,
@@ -685,6 +718,37 @@ export function IssueSessionTui({
   };
 
   useInput((input, key) => {
+    if (
+      snapshot.recoveryInspection &&
+      liveFrameRows < PANE_BORDER_ROWS * 2 + 2
+    ) {
+      if (key.escape) {
+        if (onRecoveryInspectionDismiss) {
+          onRecoveryInspectionDismiss();
+        } else {
+          viewModel.setRecoveryInspection(undefined);
+        }
+        setRecoveryLinesFromBottom(0);
+      } else if (key.pageUp) {
+        applyScrollAction('pageUp');
+      } else if (key.pageDown) {
+        applyScrollAction('pageDown');
+      } else if (key.home) {
+        applyScrollAction('home');
+      } else if (key.end) {
+        applyScrollAction('end');
+      }
+      return;
+    }
+    if (snapshot.recoveryInspection && key.escape) {
+      if (onRecoveryInspectionDismiss) {
+        onRecoveryInspectionDismiss();
+      } else {
+        viewModel.setRecoveryInspection(undefined);
+      }
+      setRecoveryLinesFromBottom(0);
+      return;
+    }
     if (
       key.ctrl && !key.shift && !key.meta && (input === 't' || input === 'g' || input === 'o') &&
       queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
@@ -922,82 +986,105 @@ export function IssueSessionTui({
 
   return (
     <Box flexDirection="column" width={terminalColumns} height={liveFrameRows}>
-      <WorkerStatusPane
-        workers={snapshot.displayState.workers}
-        dispatchHold={snapshot.displayState.dispatchHold}
-        height={paneHeights.workerPaneHeight}
-        terminalColumns={terminalColumns}
-        issueUrl={issueUrl}
-        issueLinkMode={issueLinkMode}
-      />
-      <OrchestrationPane
-        activityLog={snapshot.activityLog}
-        contentWidth={contentWidth}
-        paneHeight={paneHeights.activityPaneHeight}
-        linesFromBottom={linesFromBottom}
-        terminalColumns={terminalColumns}
-        issueLinkMode={issueLinkMode}
-      />
-      {operatorInputDisplay.mode === 'withQuestions' ? (
-        <OpenQuestionsPane
-          layout={{
-            ...openQuestionsLayout,
-            paneHeight: paneHeights.openQuestionsPaneHeight,
-          }}
-          viewport={openQuestionViewport}
+      {snapshot.recoveryInspection &&
+      liveFrameRows < PANE_BORDER_ROWS * 2 + 2 ? (
+        <RecoveryInspectionPane
+          inspection={snapshot.recoveryInspection}
+          height={liveFrameRows}
           terminalColumns={terminalColumns}
-          issueLinkMode={issueLinkMode}
+          visibleLineCount={recoveryVisibleLineCount}
+          linesFromBottom={recoveryLinesFromBottom}
         />
-      ) : null}
-      <TitledBorderPane
-        title={INPUT_PANE_TITLE}
-        titleSuffix={queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
-          ? ' Q:^T< ^O>' : undefined}
-        borderStyle="single"
-        borderColor={INPUT_PANE_BORDER_COLOR}
-        paddingX={PANE_PADDING_X}
-        height={paneHeights.inputPaneHeight}
-        terminalColumns={terminalColumns}
-      >
-        {visibleHints.map((hintLine, index) => (
-          <Text key={`context-hint-${index}`} color={INPUT_PANE_HINT_COLOR}>{hintLine}</Text>
-        ))}
-        {visibleSuggestions.map((line) => (
-          <Text
-            key={`suggestion-${line.id}`}
-            color={line.isSelected ? 'cyan' : INPUT_PANE_HINT_COLOR}
-            bold={line.isSelected}
+      ) : (
+        <>
+          <WorkerStatusPane
+            workers={snapshot.displayState.workers}
+            dispatchHold={snapshot.displayState.dispatchHold}
+            height={paneHeights.workerPaneHeight}
+            terminalColumns={terminalColumns}
+            issueUrl={issueUrl}
+            issueLinkMode={issueLinkMode}
+          />
+          {snapshot.recoveryInspection ? (
+            <RecoveryInspectionPane
+              inspection={snapshot.recoveryInspection}
+              height={recoveryPaneHeight}
+              terminalColumns={terminalColumns}
+              visibleLineCount={recoveryVisibleLineCount}
+              linesFromBottom={recoveryLinesFromBottom}
+            />
+          ) : (
+            <OrchestrationPane
+              activityLog={snapshot.activityLog}
+              contentWidth={contentWidth}
+              paneHeight={paneHeights.activityPaneHeight}
+              linesFromBottom={linesFromBottom}
+              terminalColumns={terminalColumns}
+              issueLinkMode={issueLinkMode}
+            />
+          )}
+          {operatorInputDisplay.mode === 'withQuestions' ? (
+            <OpenQuestionsPane
+              layout={{
+                ...openQuestionsLayout,
+                paneHeight: paneHeights.openQuestionsPaneHeight,
+              }}
+              viewport={openQuestionViewport}
+              terminalColumns={terminalColumns}
+              issueLinkMode={issueLinkMode}
+            />
+          ) : null}
+          <TitledBorderPane
+            title={INPUT_PANE_TITLE}
+            titleSuffix={queuedMessages.length > messageQueuePageSize(inputLayout.queueRows)
+              ? ' Q:^T< ^O>' : undefined}
+            borderStyle="single"
+            borderColor={INPUT_PANE_BORDER_COLOR}
+            paddingX={PANE_PADDING_X}
+            height={paneHeights.inputPaneHeight}
+            terminalColumns={terminalColumns}
           >
-            {line.text}
-          </Text>
-        ))}
-        {queueLines.map((line, index) => (
-          <Text key={`message-queue-${index}`} color={INPUT_PANE_HINT_COLOR}>
-            {line}
-          </Text>
-        ))}
-        <OperatorTextArea
-          value={inputValue}
-          onChange={handleInputChange}
-          onSubmit={handleSubmit}
-          focus={!snapshot.shuttingDown}
-          contentWidth={contentWidth}
-          promptPrefix={operatorPrompt}
-          maxDisplayLines={visibleInputDisplayLineCount}
-          onDisplayLineCountChange={handleDisplayLineCountChange}
-          suggestionsActive={
-            suggestionsVisible
-          }
-          onTab={
-            suggestionsVisible
-              ? handleSuggestionTab
-              : undefined
-          }
-          cursorPosition={inputCursorPosition}
-          onCursorChange={setInputCursorPosition}
-          cursorStart={cursorStart}
-        />
-      </TitledBorderPane>
+            {visibleHints.map((hintLine, index) => (
+              <Text key={`context-hint-${index}`} color={INPUT_PANE_HINT_COLOR}>{hintLine}</Text>
+            ))}
+            {visibleSuggestions.map((line) => (
+              <Text
+                key={`suggestion-${line.id}`}
+                color={line.isSelected ? 'cyan' : INPUT_PANE_HINT_COLOR}
+                bold={line.isSelected}
+              >
+                {line.text}
+              </Text>
+            ))}
+            {queueLines.map((line, index) => (
+              <Text key={`message-queue-${index}`} color={INPUT_PANE_HINT_COLOR}>
+                {line}
+              </Text>
+            ))}
+            <OperatorTextArea
+              value={inputValue}
+              onChange={handleInputChange}
+              onSubmit={handleSubmit}
+              focus={!snapshot.shuttingDown}
+              contentWidth={contentWidth}
+              promptPrefix={operatorPrompt}
+              maxDisplayLines={visibleInputDisplayLineCount}
+              onDisplayLineCountChange={handleDisplayLineCountChange}
+              suggestionsActive={
+                suggestionsVisible
+              }
+              onTab={
+                suggestionsVisible
+                  ? handleSuggestionTab
+                  : undefined
+              }
+              cursorPosition={inputCursorPosition}
+              onCursorChange={setInputCursorPosition}
+              cursorStart={cursorStart}
+            />
+          </TitledBorderPane>
+        </>
+      )}
     </Box>
   );
 }

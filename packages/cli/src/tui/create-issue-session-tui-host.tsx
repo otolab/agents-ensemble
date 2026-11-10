@@ -22,6 +22,10 @@ import {
 } from './tui-terminal-size.js';
 import { createTuiResizeRecovery } from './tui-resize-recovery.js';
 import { resolveInitialOperatorMessage } from '../operator-message.js';
+import {
+  executePiAuthRecoveryCommand,
+  type OperatorRecoveryInspection,
+} from '../operator-recovery-command.js';
 
 const PERFORMANCE_ENTRY_CLEAR_INTERVAL_MS = 30_000;
 
@@ -67,6 +71,10 @@ function createBindTuiOperatorInput(
     current: ((text: string, options?: OperatorInputSubmitOptions) => void) | undefined;
   },
   apiRef: { current: OperatorInputBindingApi | undefined },
+  setRecoveryInspection: (
+    inspection: OperatorRecoveryInspection | undefined,
+  ) => void,
+  hideRecoveryInspection: () => void,
   initialOperatorMessage?: string,
 ): OperatorInputBinding {
   return (api: OperatorInputBindingApi) => {
@@ -82,6 +90,14 @@ function createBindTuiOperatorInput(
     onSubmitRef.current = (text: string, options?: OperatorInputSubmitOptions) => {
       const trimmed = trimBlankLinesOnly(text);
       if (trimmed) {
+        const recoveryCommand = executePiAuthRecoveryCommand(api, trimmed, {
+          canDisplaySensitiveContent: process.stdout.isTTY === true,
+        });
+        if (recoveryCommand.handled) {
+          setRecoveryInspection(recoveryCommand.inspection);
+          return;
+        }
+        hideRecoveryInspection();
         api.submit(trimmed, options);
       }
     };
@@ -98,6 +114,7 @@ function createBindTuiOperatorInput(
       if (apiRef.current === api) {
         apiRef.current = undefined;
         onSubmitRef.current = undefined;
+        hideRecoveryInspection();
         viewModel.setOperatorContext(undefined);
       }
     };
@@ -120,6 +137,29 @@ export function createIssueSessionTuiHost(
     // existing bounded in-memory window; stream mode retains the scrollback.
     activityLogWindowSize: layoutMode === 'stream' ? null : undefined,
   });
+  let recoveryInspectionTimer: ReturnType<typeof setTimeout> | undefined;
+  let activeRecoveryInspection: OperatorRecoveryInspection | undefined;
+  const setRecoveryInspection = (
+    inspection: OperatorRecoveryInspection | undefined,
+  ) => {
+    if (recoveryInspectionTimer !== undefined) {
+      clearTimeout(recoveryInspectionTimer);
+      recoveryInspectionTimer = undefined;
+    }
+    activeRecoveryInspection = inspection;
+    viewModel.setRecoveryInspection(inspection);
+    if (inspection?.sensitive && inspection.expiresAt !== undefined) {
+      recoveryInspectionTimer = setTimeout(() => {
+        recoveryInspectionTimer = undefined;
+        if (activeRecoveryInspection === inspection) {
+          activeRecoveryInspection = undefined;
+          viewModel.setRecoveryInspection(undefined);
+        }
+      }, Math.max(0, inspection.expiresAt - Date.now()));
+      recoveryInspectionTimer.unref?.();
+    }
+  };
+  const hideRecoveryInspection = () => setRecoveryInspection(undefined);
   const inkRef: { current: ReturnType<typeof render> | undefined } = {
     current: undefined,
   };
@@ -165,6 +205,7 @@ export function createIssueSessionTuiHost(
     onSubmit: (text: string, options?: OperatorInputSubmitOptions) => {
       onSubmitRef.current?.(text, options);
     },
+    onRecoveryInspectionDismiss: hideRecoveryInspection,
   };
   const ink = render(
     layoutMode === 'stream' ? (
@@ -184,6 +225,8 @@ export function createIssueSessionTuiHost(
     viewModel,
     onSubmitRef,
     apiRef,
+    setRecoveryInspection,
+    hideRecoveryInspection,
     options.initialOperatorMessage,
   );
   const telemetrySink = createTuiTelemetrySink(viewModel, {
@@ -221,6 +264,9 @@ export function createIssueSessionTuiHost(
       }
     },
     dispose: () => {
+      hideRecoveryInspection();
+      onSubmitRef.current = undefined;
+      apiRef.current = undefined;
       clearInterval(performanceEntryClearInterval);
       resizeRecovery.dispose();
       ink.unmount();

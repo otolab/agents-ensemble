@@ -8,6 +8,10 @@ import type { WorkerSession } from '../runtime/worker-session.js';
 import type { ConductorSendResult } from './conductor-agent.js';
 import { isPiApiKeyResolutionFailure } from './conductor-auth.js';
 import type {
+  PiAuthRecoverySnapshotStore,
+  PiAuthRecoverySnapshotSummary,
+} from './pi-auth-recovery-snapshot-store.js';
+import type {
   ConductorAgentHandle,
   ConductorAutomaticRetryInfo,
   ConductorReconnectCompleteInfo,
@@ -143,6 +147,13 @@ export interface ConductorSessionDriverOptions {
   resetOutboundDispatchesThisSend?: () => void;
   /** `prompt_worker` 等の outbound dispatch 件数（ループ停止判定向け）。 */
   getOutboundDispatchesThisSend?: () => number;
+  /** Failed dispatch の本文を operator-only の process 内 snapshot に保存する。 */
+  piAuthRecoverySnapshotStore?: PiAuthRecoverySnapshotStore;
+  /** Snapshot の保存・上限 eviction を本文なしで通知する。 */
+  onPiAuthRecoverySnapshotStored?: (input: {
+    snapshot: PiAuthRecoverySnapshotSummary;
+    evictedRecoveryIds: string[];
+  }) => void;
 }
 
 export interface ConductorSessionDriverResult {
@@ -469,6 +480,9 @@ export async function runConductorSessionDriver(
     const batch = recoveryReport
       ? [recoveryReport, ...selectedBatch]
       : selectedBatch;
+    const originalEvents = batch.filter(
+      (event) => event.type !== 'conductor.recovery.report',
+    );
     const autonomousTurnsAfter = autonomousTurnsAfterConductorBatch(
       batch,
       autonomousTurns,
@@ -482,6 +496,9 @@ export async function runConductorSessionDriver(
     // 通常 send を開始したら未報告 candidate は失効する。
     // 準備済み report はこの send に一度だけ加え、開始時に消費して replay しない。
     const message = formatSessionEventsForConductor(batch);
+    const recoverySnapshotContent = recoveryReport
+      ? formatSessionEventsForConductor(originalEvents)
+      : message;
     pendingRecoveryReport = undefined;
     pendingAuthRecoveryCandidate = undefined;
     let dispatchHadToolCalls = false;
@@ -520,13 +537,10 @@ export async function runConductorSessionDriver(
         options.onSendComplete(info);
       },
     }).then((result) => {
-      const originalEvents = batch.filter(
-        (event) => event.type !== 'conductor.recovery.report',
-      );
       if (isPiApiKeyResolutionFailure(result) && originalEvents.length > 0) {
         // Pi は1回の send で複数回 auth を解決するため、後続の失敗から
         // 先行 tool round に副作用がなかったとは判断できない。
-        // event は再送せず、機密を除いた一回限りの report candidate だけを保持する。
+        // event は再送せず、report 用 candidate と operator-only snapshot を別々に保持する。
         pendingAuthRecoveryCandidate = createPiAuthRecoveryCandidate({
           events: originalEvents,
           sendCount,
@@ -535,6 +549,13 @@ export async function runConductorSessionDriver(
           automaticRetryAttempts,
           toolCallStarted: dispatchHadToolCalls,
         });
+        const storedSnapshot = options.piAuthRecoverySnapshotStore?.add(
+          pendingAuthRecoveryCandidate,
+          recoverySnapshotContent,
+        );
+        if (storedSnapshot) {
+          options.onPiAuthRecoverySnapshotStored?.(storedSnapshot);
+        }
       }
       return result;
     });

@@ -5,6 +5,7 @@ import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../escalation/enqueue-max-turns-qu
 import type { ConductorAgent } from './conductor-agent.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
+import { PiAuthRecoverySnapshotStore } from './pi-auth-recovery-snapshot-store.js';
 import { createSetDispatchHoldTool } from '../dispatch/set-dispatch-hold-tool.js';
 import {
   bufferDispatchHoldEvents,
@@ -979,6 +980,147 @@ describe('runConductorSessionDriver', () => {
     shutdown.abort();
     const result = await driverPromise;
     expect(result.stopReason).toBe('interrupted');
+  });
+
+  it('retains each failed dispatch body for explicit operator inspection', async () => {
+    const authError = (runId: string) => ({
+      runId,
+      status: 'error' as const,
+      error: {
+        code: 'auth',
+        message:
+          'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: /private/secret/cached-auth.mjs',
+      },
+    });
+    const initialSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-initial',
+        status: 'finished' as const,
+        result: 'ready',
+      })
+      .mockResolvedValueOnce(authError('run-worker-failure'));
+    const workerEvent = {
+      type: 'worker.completed' as const,
+      result: {
+        name: 'implementer',
+        kind: 'implementer',
+        issue: TEST_ISSUE,
+        worktree: {
+          path: '/tmp/issue-650',
+          branch: 'ensemble/issue-650',
+          issue: TEST_ISSUE,
+        },
+        prompt: 'private worker instruction',
+        promptResult: {
+          stopReason: 'end_turn',
+          result: 'private worker result',
+        },
+        acpSessionId: 'worker-session-1',
+        source: 'harness',
+      },
+    };
+    const retrySend = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        // Keep the pre-send body even if an event object changes while the
+        // provider call is in flight.
+        workerEvent.result.prompt = 'mutated after dispatch started';
+        return authError('run-worker-retry-failure');
+      })
+      .mockResolvedValueOnce(authError('run-operator-failure'));
+    const finalRetrySend = vi
+      .fn()
+      .mockResolvedValue(authError('run-operator-retry-failure'));
+    const conductor = {
+      agentId: 'agent-1',
+      send: initialSend,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const store = new PiAuthRecoverySnapshotStore();
+    const onSnapshotStored = vi.fn();
+    const driverOptions = createDriverOptions({ eventQueue, conductor });
+
+    mockResume
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: retrySend,
+        close: vi.fn(),
+      })
+      .mockResolvedValueOnce({
+        agentId: 'agent-1',
+        send: finalRetrySend,
+        close: vi.fn(),
+      });
+
+    const driverPromise = runConductorSessionDriver({
+      ...driverOptions,
+      shutdownSignal: shutdown.signal,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+      piAuthRecoverySnapshotStore: store,
+      onPiAuthRecoverySnapshotStored: onSnapshotStored,
+    });
+
+    try {
+      await vi.waitFor(() => expect(initialSend).toHaveBeenCalledOnce());
+      eventQueue.enqueue(workerEvent);
+      await vi.waitFor(() => expect(retrySend).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(2),
+      );
+
+      const workerSnapshotId = 'pi-auth-recovery-2';
+      const workerSnapshot = store.get(workerSnapshotId);
+      expect(workerSnapshot?.content).toContain('private worker instruction');
+      expect(workerSnapshot?.content).not.toContain(
+        'mutated after dispatch started',
+      );
+      expect(workerSnapshot?.content).toContain('private worker result');
+      expect(workerSnapshot?.content).not.toContain('/private/secret/cached-auth.mjs');
+
+      eventQueue.enqueue({
+        type: 'operator.message',
+        text: 'private operator instruction',
+      });
+      await vi.waitFor(() => expect(finalRetrySend).toHaveBeenCalledOnce());
+      await vi.waitFor(() =>
+        expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(3),
+      );
+
+      const operatorSnapshotId = 'pi-auth-recovery-3';
+      const operatorSnapshot = store.get(operatorSnapshotId);
+      expect(operatorSnapshot?.content).toContain(
+        'private operator instruction',
+      );
+      expect(operatorSnapshot?.content).not.toContain(
+        '/private/secret/cached-auth.mjs',
+      );
+      expect(store.list().map((entry) => entry.recoveryId)).toEqual([
+        workerSnapshotId,
+        operatorSnapshotId,
+      ]);
+      expect(onSnapshotStored).toHaveBeenCalledTimes(2);
+      expect(onSnapshotStored).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          snapshot: expect.objectContaining({
+            recoveryId: workerSnapshotId,
+            eventTypes: ['worker.completed'],
+          }),
+          evictedRecoveryIds: [],
+        }),
+      );
+      expect(onSnapshotStored.mock.calls[0]![0].snapshot).not.toHaveProperty(
+        'content',
+      );
+    } finally {
+      shutdown.abort();
+      await driverPromise;
+      store.dispose();
+    }
   });
 
   it('reports a failed Pi dispatch once with input received during manual reconnect', async () => {

@@ -14,7 +14,7 @@ ConductorSession の **View 層**契約。入力・表示はここに閉じ、�
 | **SessionDriver** | イベントキュー消費・max-turns 登録・`agent.send` | `conductor-session-driver.ts` |
 | **SessionView** | TTY Ink TUI / CLI 引数 / env からのオペレータ入力 | CLI `createIssueSessionTuiHost` / `bindAsyncOperatorInput` |
 
-データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect`、`/close`、`/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
+データの正本: **イベントキュー**（`SessionEventQueue`）と **OpenQuestionRegistry**。通常の View 入力は `submit` で `operator.message` をキューへ積む。`/reconnect`、`/recovery`、`/close`、`/exit` は conductor へ送らない専用コマンドとして SessionView の binding で intercept する。TTY の pane / stream は、未回答 open question について `OperatorInputBindingApi.getContext().openQuestions`（Registry の `listOpen()` スナップショット）を表示状態の正本として使う。binding 前の初回描画だけは、イベント reducer の表示 state をフォールバックにする。
 
 ## View 契約: `OperatorInputBinding`
 
@@ -35,6 +35,10 @@ interface OperatorInputBindingApi {
     options?: { targetOpenQuestionId?: string; delivery?: 'idle' | 'next' | 'interrupt' },
   ) => boolean;
   getContext: () => OperatorInputContext;
+  // process 内 recovery snapshot の一覧・取得・削除（TTY binding 用）
+  listPiAuthRecoverySnapshots?: () => PiAuthRecoverySnapshotSummary[];
+  getPiAuthRecoverySnapshot?: (recoveryId: string) => PiAuthRecoverySnapshot | undefined;
+  clearPiAuthRecoverySnapshot?: (recoveryId: string) => boolean;
 }
 
 type OperatorInputBinding = (
@@ -47,6 +51,7 @@ type OperatorInputBinding = (
 - 空文字は無視（`false` を返す）
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
 - `/reconnect` / `reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
+- `/recovery ...` は binding 内で一覧・表示・削除を行い、`submit` や conductor dispatch には渡さない
 - `/close` / `close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。SessionResumeStore を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
 - `/exit` / `exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
 - TTY の通常入力は配信モード prefix を付けられる。`/idle ...`、`/next ...`、`/interrupt ...` を本文先頭に置き、prefix 自体は conductor へ送らない。prefix なしは `next`
@@ -323,6 +328,27 @@ transport error など結果が曖昧な失敗は Pi resolver report の候補�
 recovery candidate / report と `SessionEventQueue` は process 内だけにあります。`/close` または Ctrl+C で終了すると queue と未送信 report は破棄され、`--continue` / `--resume` は失敗 batch / report を自動再生しません。Pi transcript に元入力が残る保証もありません。再開後はまず conductor / worker / worktree の状態を確認し、未完了分だけを新しい operator message で伝えてください。task の文脈が分からない場合は operator に確認してください。queue の永続化は stable event identity、atomic な送信境界、副作用の重複排除が必要なため、現在の resume 契約には含めません。
 
 Connection stalled が自動再接続後も続く場合は `/reconnect` を試してください。worktree を残したままプロセスを終了するには `/close` を使います（次節）。Ctrl+C も cleanup を行いませんが、終了結果は `interrupted` になります。`/exit` は isolated worktree の cleanup を試みます。プロセスを維持したまま conductor を再接続する場合は `/reconnect` を使います。
+
+### `/recovery` — 失敗 dispatch の内容を確認する
+
+最終的な Pi API key resolver failure で通常 dispatch が失敗すると、driver は失敗 batch を再投入せず、その時点の dispatch 内容を session 専用の process-local recovery inbox に保存します。保存対象は conductor に渡した形式の event 内容です。operator message、worker result、permission の raw payload、GitHub update などを含む場合があり、一般的な secret redaction はありません。send 内の自動 retry がある場合は、最終結果が対象 failure になった後にだけ保存します。synthetic な `conductor.recovery.report` は対象外です。
+
+TTY の operator input binding で次を実行します。
+
+```text
+/recovery list
+/recovery show <recoveryId>
+/recovery clear <recoveryId>
+/recovery hide
+```
+
+`list` は本文を出さず、ID、send 番号、event type / 件数、source、byte 数、tool 開始 callback の観測有無、retry 回数、期限を表示します。本文を読むには ID を指定した `show` が必要です。CLI は対話 TTY でのみ本文を取得・表示し、escape sequence / terminal control / bidi 制御文字を可視表記へ変換します。snapshot API は local な in-process operator binding にだけ渡し、UDS / operator-agent からは参照できません。独自の operator binding は信頼された同一 process 内のコードとして扱います。
+
+本文は最大4 dispatch、failure から30分まで保持し、上限では最古の snapshot を削除します。内容を切り詰めないため、単一 dispatch の byte 上限はありません。event payload 自体に byte 上限がないので、保持件数と時間は制限しますが、最大メモリ量は保証できません。`clear` は inbox から参照を外しますが、JavaScript runtime の memory を完全消去する保証はなく、pending recovery report の metadata や provider transcript にも影響しません。
+
+`show` は内容を conductor に再送しません。本文をそのまま再入力すると、すでに起きた副作用が重なる可能性があります。表示後は worker / worktree の現在状態と実行済み副作用を確認し、続ける場合は確認できた未完了分だけを新しい operator message として入力してください。`toolCallStarted: false` は callback を観測しなかったことを示すだけで、副作用がなかった証明ではありません。TUI の `hide` または Escape は表示 pane を閉じます。短い端末では本文を読める領域を確保するため一時的に入力欄を隠し、Escape で戻ります。readline / TUI のどちらも表示済みの端末履歴を消去する保証はありません。terminal recording・画面共有・端末 capture による漏えいも防げません。
+
+`/close`、`/exit`、Ctrl+C、process 終了では snapshot を破棄します。SessionResumeStore や Pi transcript への保存はせず、`--continue` / `--resume` 後に復元しません。期限切れや FIFO eviction の後も復元できません。
 
 ### `/close` — worktree を残してセッションを閉じる
 

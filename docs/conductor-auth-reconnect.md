@@ -16,7 +16,7 @@ send が auth-like error のとき:
 
 `close` → `ConductorAgentFactory.resume(sameId)` → send 再試行（1 回）
 
-tool 開始通知があった場合は、同じ prompt の再送を行わず元の error を返す。それ以外は同じ prompt を 1 回だけ再試行する。まだ auth error が残る場合は PR #99 互換の backend 固有 `[auth]` ヒントへフォールバックする。Cursor は手動 `logout` → `login`、Pi は `ensemble auth login --provider <provider>` または project/user auth の確認を案内し、project 層の OAuth credential は stale token を使わず user 層へ移すよう案内する。TTY が継続中なら認証修復後に `/reconnect` を試すか、状態確認後に新しい operator message を送る。process 終了後は `--resume` / `--continue` で session を再開し、新しい message から作業を続ける。in-process での自動 `login` は行わない（オペレータ方針）。
+tool 開始通知があった場合は、同じ prompt の再送を行わず元の error を返す。それ以外は同じ prompt を 1 回だけ再試行する。まだ auth error が残る場合は PR #99 互換の backend 固有 `[auth]` ヒントへフォールバックする。Cursor は手動 `logout` → `login`、Pi は `ensemble auth login --provider <provider>` または project/user auth の確認を案内し、project 層の OAuth credential は stale token を使わず user 層へ移すよう案内する。Pi API-key resolver failure で通常 dispatch が最終失敗した場合、稼働中 TTY では `/recovery list` / `/recovery show <id>` から失敗 dispatch の内容を operator が確認できます。本文は conductor へ再送しません。認証を修復した後に `/reconnect` し、再接続後は現在の状態と副作用を確認して、未完了と判断できた分だけを新しい operator message で指示してください。process 終了後は `--resume` / `--continue` で session を再開できますが、snapshot や未送信 event は復元しません。in-process での自動 `login` は行わない（オペレータ方針）。
 
 **非採用**
 
@@ -62,10 +62,17 @@ emit し、auth の `[auth]` recovery hint は表示しない。オペレータ�
 `runId`、`sourceKey`、event type / count、最大20件の安全な event 参照、自動 retry 回数、初回 send / retry 中に
 `onToolCallStarted` callback を受け取ったかを記録します。tool 開始 callback の有無は Pi transcript から推測しません。
 参照には failed dispatch 内の 1-based `eventIndex` を付け、同じ種別・参照の event も区別します。
-参照の超過分は `eventReferencesTruncated` で示します。
-認証 error の本文、shell command / path、operator 入力、worker の prompt / 結果、permission の raw
-payload は載せません。event に共通の永続 ID はないため、`eventIndex` と参照はこの dispatch 内の照合用で、
-元の task 本文を復元するものではありません。
+参照の超過分は `eventReferencesTruncated` で示します。この候補と conductor 向け report には、認証 error の本文、
+shell command / path、operator 入力、worker の prompt / 結果、permission の raw payload は載せません。
+report の参照は failed dispatch 内の照合用で、元 task 本文の復元には使えません。
+
+一方、同じ最終 failure の元 `SessionEvent[]` は、手動確認用の別 snapshot として保存します。snapshot は
+synthetic な `conductor.recovery.report` を除く、実際に conductor へ渡した formatted dispatch 本文です。
+report candidate の失効・送信とは独立し、後続 send が始まって report candidate が失効しても、snapshot は
+明示削除・期限切れ・FIFO eviction・session 終了まで確認できます。新しい candidate は、その後の send が
+対象 Pi resolver failure で終わった場合にだけ作ります。
+event に共通の永続 ID はないため、`eventIndex` と参照は report 内の照合用で、元の task 本文を復元するものでは
+ありません。全文を確認できるのは operator-only snapshot の方です。
 
 operator が `/reconnect` を実行すると、agent を `close` して同じ ID で `resume` します。これは
 prompt を送らない制御操作です。resume 成功時に候補があれば、一回限りの
@@ -106,6 +113,33 @@ resolver failure を返す場合があります。このため、初回 send / �
 `toolCallStarted` を載せて conductor に現在の状態を確認させます。副作用や元の operator 意図を特定
 できなければ、推測せず operator に確認します。transport error など resolver failure 以外の曖昧な失敗は
 この report 候補にしません。
+
+### operator 専用の process-local snapshot
+
+Issue session の local operator binding は `/recovery list`、`/recovery show <recoveryId>`、
+`/recovery clear <recoveryId>`、`/recovery hide` を処理します。`list` は識別情報だけを表示し、
+本文は明示的な `show` でのみ取得します。CLI は対話 TTY でのみ内容を取得・表示します。本機能は
+snapshot 本文を conductor、SessionLogEvent / activity log、終了 summary、SessionResumeStore、UDS へ追加しません。
+snapshot 用 API は
+同一 process 内の operator binding だけが受け取ります。operator-agent や UDS method には公開しません。
+
+snapshot は機密を含み得る自由文・permission の raw payload・path などをそのまま保持し、一般的な secret
+redaction は行いません。表示時に terminal control / bidi 制御文字を可視表記に変えますが、TTY 上の表示は
+画面共有・端末録画・capture から保護されません。通常の既存ログ契約も別に残ります。たとえば
+`operator.input` / `operator.dispatched` は本文を持つ live event で、`worker.round` の worker 結果は既存の
+session summary に蓄積されます。この機能が追加で snapshot 本文をログへ emit することはありません。
+
+session ごとに最大4 dispatch、failure から30分だけ保持し、上限では最古を FIFO で削除します。内容は
+切り詰めず、単一 dispatch の byte 上限は設けません。元 event に byte 上限がないため、保持件数と寿命は
+制限できますが、snapshot の最大メモリ量は保証できません。`clear` は inbox から参照を外します。
+JavaScript runtime による完全な memory zeroization は保証せず、metadata-only の report candidate を
+取り消す操作でもありません。`hide` / Escape は TUI 表示だけを閉じます。readline 経路の表示済み
+scrollback は消去できません。
+
+`show` は確認用であり、再送・再実行を行いません。operator は現在の worker / worktree 状態と副作用を
+調べ、必要なら新しい `operator.message` を入力します。`toolCallStarted: false` も副作用不存在の証明では
+ありません。`/close`、`/exit`、Ctrl+C、crash では snapshot を破棄し、`--continue` / `--resume` へは
+持ち越しません。transcript に残っていない内容を session 終了後まで復元する保証はありません。
 
 candidate / report と `SessionEventQueue` はメモリ上だけにあり、SessionResumeStore には保存しません。
 `/close` または Ctrl+C で process を止めると queue と未送信 report は失われます。Pi transcript に元入力が

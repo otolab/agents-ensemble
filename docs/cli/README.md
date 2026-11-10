@@ -117,6 +117,8 @@ ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 "まずテスト�
 
 TTY で worktree とセッション状態を残してプロセスを閉じるには `/close` を入力します。正常に閉じると exit code 0 で終了し、再開するときは同じ Issue に `--continue` を付けます。同じ Issue に複数の保存 session がある場合、`--continue` は `close` / `abort` を優先し、`exit` は候補から除外します。選択規則の詳細は [SessionResumeStore の記録](../session-logging.md#4-sessionresumestore-と-open-question-yaml) を参照してください。`/exit` は isolated worktree の cleanup を試みて終了します（cleanup に失敗しても warning のみで exit code は 0、[#448](https://github.com/otolab/agents-ensemble/issues/448)）。Ctrl+C / SIGINT は `interrupted` として中断し、worktree cleanup を行いません。詳しくは [オペレータ入力](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) を参照してください。
 
+Pi API-key resolver failure 後に元 dispatch を確認するには、同じ TTY session で `/recovery list` と `/recovery show <recoveryId>` を使います。表示内容は再送されず、secret を含む可能性があるため、確認後は現在の状態を踏まえて未完了分だけを新しい指示にしてください。保持期間と表示上の制約は [オペレータ入力](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md) に記載しています。
+
 ## 利用者向け doc
 
 設定・TUI・認証の詳細は README に重複させず、次の正本を参照してください。
