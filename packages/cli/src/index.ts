@@ -20,8 +20,10 @@ import {
   formatSessionListText,
   formatSessionMessagesText,
   formatSessionShowText,
+  formatSessionWorkerMessagesText,
   listSavedSessionMessages,
   listSavedSessions,
+  readSavedSessionWorkerMessages,
   showSavedSession,
 } from './session-command.js';
 import {
@@ -72,7 +74,9 @@ program
 
 const session = program
   .command('session')
-  .description('Read saved conductor session data without starting an agent');
+  .description(
+    'Read saved conductor and worker session data without starting an agent',
+  );
 
 session
   .command('list')
@@ -186,6 +190,52 @@ session
             ? JSON.stringify(result, null, 2)
             : formatSessionMessagesText(result),
         );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
+const sessionWorkers = session
+  .command('workers')
+  .description('Read saved worker ACP session data');
+
+sessionWorkers
+  .command('messages')
+  .description(
+    'Read saved worker history for supported ACP presets (currently Pi; may contain secrets)',
+  )
+  .argument('<conductorAgentId>', 'Conductor session id')
+  .requiredOption('--worker <name>', 'Worker name from the saved session')
+  .option(
+    '--repo-root <path>',
+    'Repository root for saved sessions',
+    process.cwd(),
+  )
+  .option('--json', 'Output JSON')
+  .action(
+    async (
+      conductorAgentId: string,
+      options: {
+        worker: string;
+        repoRoot: string;
+        json?: boolean;
+      },
+    ) => {
+      try {
+        const result = await readSavedSessionWorkerMessages({
+          repoRoot: options.repoRoot,
+          conductorAgentId,
+          workerName: options.worker,
+        });
+        console.log(
+          options.json
+            ? JSON.stringify(result, null, 2)
+            : formatSessionWorkerMessagesText(result),
+        );
+        if (result.status === 'unsupported') process.exitCode = 2;
+        if (result.status === 'unavailable') process.exitCode = 1;
       } catch (error) {
         console.error(error instanceof Error ? error.message : error);
         process.exit(1);

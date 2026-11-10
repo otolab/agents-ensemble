@@ -23,6 +23,7 @@ conductor セッションには性質の異なる出力が混在する。
 | **operator 状態** | `list_operator_sessions` | SessionResumeStore の `lifecycle` と session-state YAML |
 | **保存 session の CLI 閲覧** | `ensemble session list/show` | SessionResumeStore の要約と関連 YAML の件数・時刻 |
 | **conductor 履歴の CLI 閲覧** | `ensemble session messages` | provider session history |
+| **worker 履歴の CLI 閲覧** | `ensemble session workers messages` | Pi ACP transcript |
 
 これらを 1 本の stderr に混ぜると、TTY 利用時に **会話相手が worker に見える**・**conductor の応答が終了まで見えない** といった UX 問題が起きる（#44）。
 
@@ -202,9 +203,13 @@ permission の ACP variant と抽出優先順位は
 
 SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
 
-`ensemble session list/show` は core の SessionResumeStore / YAML 読取 API を使う読み取り専用 CLI です。harness への接続や agent 起動は行わず、sidecar は許可したメタデータだけ、YAML は件数・時刻だけを表示します。旧形式の SessionResumeStore に残る ACP 環境変数の平文値も読取 API が除外します。
+`ensemble session list/show` は core の SessionResumeStore / YAML 読取 API を使う読み取り専用 CLI です。harness への接続や agent 起動は行わず、sidecar は許可したメタデータだけ、YAML は件数・時刻だけを表示します。旧形式の SessionResumeStore に残る ACP 環境変数の平文値も読取 API が除外します。`show` の `workerReaders` は、保存 preset に対応する transcript reader の有無と未対応理由を worker ごとに示します。transcript の保存先が現在読めるかどうかは、この表示では確認しません。
 
 `ensemble session messages` は operator-agent の `list_conductor_messages` と同じ `listConductorProviderHistory` を使い、provider が保存した user inbound / final response の本文をそのまま返すローカルデバッグ表示です。テキストと JSON の両方で redaction は行いません。会話本文に秘密値や repository 内の非公開情報があれば、そのまま stdout に出ます。pipe / redirect 先も生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。構造化された SessionResumeStore の秘密値保護は、この会話本文には適用されません。
+
+`ensemble session workers messages <conductorAgentId> --worker <name>` は、SessionResumeStore の ACP session ID と cwd を Pi ACP の CLI process の home にある `~/.pi/pi-acp/session-map.json` と照合し、参照先 JSONL を Pi `SessionManager` の active branch として読みます。ACP process を起動せず、`session/load` による再接続もしません。共通 message 形は `source` / `providerId` / `role` / `at` / `text` です。`pi` preset では user / assistant の本文を出し、tool result、thinking など会話本文以外の entry は含めません。現時点の reader は Pi ACP のみです。`cursor` / `codex` / `claude` / `custom` など他 preset と preset 欠落の旧 Store は `unsupported`、保存 map や transcript を解決・照合できない Pi session は `unavailable` になります。worker 起動時だけ別 `HOME` を使った場合、その値は ResumeStore に保存されないため reader から探索できません。
+
+worker 履歴も保存された本文をそのまま返します。text / JSON のいずれも redaction しないため、秘密値や repository 内の非公開情報が stdout に出る可能性があります。pipe / redirect 先を含め、生データとして扱ってください。
 
 新規の `ensemble issue` は、初回 flush から `createdHarnessCliVersion` に `@agents-ensemble/cli` の package version を記録します。`--continue` / `--resume` は作成時の値を保持し、旧 Store で値が欠けている場合は欠落したまま扱います。この値は SessionResumeStore の schema version とは別です。
 

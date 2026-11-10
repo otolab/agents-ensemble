@@ -99,6 +99,17 @@ export {
   type SessionSnapshotKind,
 } from './session-snapshot-paths.js';
 export {
+  getWorkerSessionHistoryReaderSupport,
+  readWorkerSessionHistory,
+  type WorkerSessionHistoryMessage,
+  type WorkerSessionHistoryMessageRole,
+  type WorkerSessionHistoryReader,
+  type WorkerSessionHistoryReaderInput,
+  type WorkerSessionHistoryReaderStatus,
+  type WorkerSessionHistoryReaderSupport,
+  type WorkerSessionHistoryResult,
+} from './worker-session-history.js';
+export {
   buildSessionModelsSummary,
 } from './build-session-models-summary.js';
 export type {

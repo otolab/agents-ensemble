@@ -104,7 +104,7 @@ operator-agent は既定で前回の operator 会話を再開します。初回�
 
 ## 保存済み session の閲覧
 
-`ensemble session` は、保存済み conductor session をローカルから読み取る CLI です。agent との会話、harness の起動、session への接続は行いません。`operator-agent` が LLM と対話し、複数 session の監視や conductor への操作を担うのに対し、`ensemble session` は保存データを表示するだけです。
+`ensemble session` は、保存済み conductor / worker session をローカルから読み取る CLI です。agent との会話、harness や ACP の起動、session への再接続は行いません。`operator-agent` が LLM と対話し、複数 session の監視や conductor への操作を担うのに対し、`ensemble session` は保存データを表示するだけです。
 
 ```bash
 # 現在の repository の保存 session を一覧する
@@ -118,17 +118,26 @@ ensemble session show <conductorAgentId>
 
 # Pi / Cursor の conductor 会話履歴を見る
 ensemble session messages <conductorAgentId>
+
+# Pi ACP worker の会話履歴を見る
+ensemble session workers messages <conductorAgentId> --worker implementer
 ```
 
 `--repo-root <path>` は各 subcommand で指定できます（既定値は現在のディレクトリ）。各 subcommand の `--json` は JSON を出力します。テキスト表示は `NO_COLOR` が空でない値に設定されていると色を使いません。
 
-`list` は SessionResumeStore の要約を更新時刻の新しい順に返します。`show` は sidecar の許可したメタデータ、sidecar と関連 YAML のパス、Open Questions の件数、session-state の報告時刻・履歴件数を表示します。
+`list` は SessionResumeStore の要約を更新時刻の新しい順に返します。`show` は sidecar の許可したメタデータ、sidecar と関連 YAML のパス、Open Questions の件数、session-state の報告時刻・履歴件数を表示します。worker ごとに保存 preset と transcript reader の対応状況も表示します。ここで示すのは preset に対する reader の有無で、transcript file が現在読み取れるかまでは確認しません。
 
 `messages` は保存 session の `conductorAgentId` を指定し、operator-agent の `list_conductor_messages` と同じ core provider-history API を使うデバッグ用コマンドです。既定では新しい履歴から20件、最大100件を表示します。`--limit <n>`、`--order asc|desc`、`--cursor <providerId>` でページを指定できます。返すのは user inbound と conductor の最終応答で、tool output や thinking は含みません。本文は保存値のまま出力し、テキスト表示も `--json` もサニタイズしません。API key・token・password などを会話に入力していた場合、その値も出力されます。
 
+`workers messages` は保存済み ACP session を `--worker <name>` で指定します。現在オフラインで読めるのは Pi ACP preset（`pi`）の transcript です。CLI process の home にある `~/.pi/pi-acp/session-map.json` から保存 session ID に対応する JSONL を解決し、active branch の user / assistant 本文を出します。tool result、thinking、その他の content block は含みません。ACP process の起動や `session/load` は行いません。
+
+`cursor`、`codex`、`claude`、`custom` など `pi` 以外の preset、および preset が保存されていない旧 SessionResumeStore は `unsupported` と理由を表示し、終了コード 2 を返します。Pi の session map / transcript が見つからない、または保存済み session と照合できない場合は `unavailable` と理由を返し、終了コード 1 で終了します。JSON ではどちらも `status` と `reason` を確認できます。
+
+worker 起動時だけ別の `HOME` を指定していた場合、ResumeStore には環境変数の値が残らないため、その home の session map は探索できず `unavailable` になることがあります。
+
 `messages` はローカルの信頼できる端末でのデバッグに使ってください。stdout の pipe / redirect 先も生データを受け取ります。結果を Issue / PR、ログ、集計・蓄積先へ転記・保存する前に、利用側でサニタイズしてください。機密値を会話へ入力しない既存の運用方針も引き続き有効ですが、過去の入力を出力時に保護する保証ではありません。
 
-`list` / `show` は保存済みデータの構造化ビューです。許可した sidecar メタデータと YAML の件数・時刻だけを表示し、質問・statusLine・profile 本文や worker session ID は出しません。旧形式に残る ACP 環境変数の平文値も SessionResumeStore の読取 API が除外します。この保護は `messages` の会話本文には適用されません。
+`list` / `show` は保存済みデータの構造化ビューです。許可した sidecar メタデータと YAML の件数・時刻だけを表示し、質問・statusLine・profile 本文や worker session ID は出しません。旧形式に残る ACP 環境変数の平文値も SessionResumeStore の読取 API が除外します。この保護は `messages` と `workers messages` の会話本文には適用されません。
 
 TTY の表示は `ensemble issue` と同じチャネル規約に沿います。`user>` / `operator>` は対話、`[harness]` は watch・dispatch・hold の状態と障害、`[observation]` は起動・終了・再接続などの運用通知です。`user>` は控えめに、`operator>` はシアンで表示し、operator の本文は次の行から表示します。監視報告 hold は理由と保留件数を `[harness]` の同じ形式で、状態が変わったときに更新します。`NO_COLOR` が設定されている場合は色を使いません。チャネルの詳細は [セッションロギング](../session-logging.md) を参照してください。
 
