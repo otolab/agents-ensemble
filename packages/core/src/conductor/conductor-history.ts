@@ -34,6 +34,18 @@ export interface ConductorProviderHistoryResult {
   hasMore: boolean;
 }
 
+/** Free-text fields in each returned provider-history message. */
+export type ConductorProviderHistoryTextField = 'inbound' | 'text';
+
+/**
+ * Caller-provided transformation for provider-history free text.
+ * It does not guarantee that secrets are detected or removed.
+ */
+export type ConductorProviderHistorySanitizer = (
+  value: string,
+  field: ConductorProviderHistoryTextField,
+) => string | Promise<string>;
+
 /** Read the latest eligible user/final-response pairs from a provider session. */
 export async function listConductorProviderHistory(input: {
   backend: ConductorBackend;
@@ -41,6 +53,8 @@ export async function listConductorProviderHistory(input: {
   cwd: string;
   cursorBootstrapRunId?: string;
   query: ConductorProviderHistoryQuery;
+  /** Optional post-page text transformation; omitted to preserve raw values. */
+  sanitizer?: ConductorProviderHistorySanitizer;
 }): Promise<ConductorProviderHistoryResult> {
   let history: ConductorProviderHistoryMessage[];
   try {
@@ -67,10 +81,53 @@ export async function listConductorProviderHistory(input: {
     }
     matching = ordered.slice(cursorIndex + 1);
   }
+  const messages = matching.slice(0, input.query.limit);
   return {
-    messages: matching.slice(0, input.query.limit),
+    messages:
+      input.sanitizer === undefined
+        ? messages
+        : await sanitizeProviderHistoryMessages(
+            messages,
+            input.sanitizer,
+            input.conductorAgentId,
+            input.backend,
+          ),
     hasMore: matching.length > input.query.limit,
   };
+}
+
+async function sanitizeProviderHistoryMessages(
+  messages: ConductorProviderHistoryMessage[],
+  sanitizer: ConductorProviderHistorySanitizer,
+  conductorAgentId: string,
+  backend: ConductorBackend,
+): Promise<ConductorProviderHistoryMessage[]> {
+  const sanitized: ConductorProviderHistoryMessage[] = [];
+  try {
+    if (typeof sanitizer !== 'function') {
+      throw new Error('The provider history sanitizer is not a function.');
+    }
+    for (const message of messages) {
+      const inbound = await sanitizer(message.inbound, 'inbound');
+      if (typeof inbound !== 'string') {
+        throw new Error(
+          'The provider history sanitizer returned a non-string value.',
+        );
+      }
+      const text = await sanitizer(message.text, 'text');
+      if (typeof text !== 'string') {
+        throw new Error(
+          'The provider history sanitizer returned a non-string value.',
+        );
+      }
+      sanitized.push({ ...message, inbound, text });
+    }
+  } catch {
+    throw new Error(
+      `Provider history sanitizer failed for conductor session ${conductorAgentId} (${backend}).`,
+    );
+  }
+  return sanitized;
 }
 
 function readPiConductorHistory(input: {

@@ -26,6 +26,8 @@ export {
   type ConductorProviderHistoryMessage,
   type ConductorProviderHistoryQuery,
   type ConductorProviderHistoryResult,
+  type ConductorProviderHistorySanitizer,
+  type ConductorProviderHistoryTextField,
 } from './conductor/conductor-history.js';
 export { isOperatorCommand } from './conductor/operator-command.js';
 export {
