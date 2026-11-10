@@ -23,7 +23,7 @@ describe('session event type groups', () => {
   it('lists every SessionEvent type exactly once', () => {
     const types = new Set(SESSION_EVENT_TYPES);
     expect(types.size).toBe(SESSION_EVENT_TYPES.length);
-    expect(types.size).toBe(8);
+    expect(types.size).toBe(9);
   });
 
   it('accepts minimal payloads for each SessionLogEvent type', () => {
@@ -292,6 +292,35 @@ describe('session event type groups', () => {
             type,
             source: 'github_monitor',
             suppressedErrorCount: 3,
+          };
+        case 'conductor.recovery.report':
+          return {
+            type,
+            recoveryId: 'pi-auth-recovery-1',
+            failedDispatch: {
+              sendCount: 1,
+              runId: 'run-1',
+              sourceKey: 'worker:implementer',
+              eventTypes: ['worker.completed'],
+              eventCount: 1,
+              eventReferences: [
+                {
+                  eventIndex: 1,
+                  type: 'worker.completed',
+                  reference: 'worker:implementer:implementer',
+                },
+              ],
+              eventReferencesTruncated: false,
+            },
+            failure: {
+              kind: 'pi_api_key_resolution',
+              automaticRetryAttempts: 1,
+              toolCallStarted: false,
+            },
+            reconnect: {
+              kind: 'manual',
+              succeeded: true,
+            },
           };
         case 'github.update':
           return { type, items: [] };

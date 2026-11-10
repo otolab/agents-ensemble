@@ -1,6 +1,6 @@
 # ADR 0058: Pi send recovery の再送境界
 
-- Status: accepted
+- Status: superseded by [0059](0059-pi-recovery-report-after-manual-reconnect.md)
 - Date: 2026-11-10
 - Related: [Issue #650](https://github.com/otolab/agents-ensemble/issues/650), [PR #651](https://github.com/otolab/agents-ensemble/pull/651), [ADR 0017](0017-conductor-send-lifecycle-events.md), [ADR 0030](0030-tty-close-lifecycle.md)
 

@@ -18,6 +18,12 @@ export interface ConductorReconnectCompleteInfo {
   error?: string;
 }
 
+export interface ConductorAutomaticRetryInfo {
+  /** 同一 prompt の自動 retry は1回だけ。 */
+  attempt: 1;
+  reason: 'auth' | 'transport';
+}
+
 export interface ConductorReconnectCallbacks {
   onReconnectAttempt?: (input: { agentId: string }) => void;
   onReconnectComplete?: (input: ConductorReconnectCompleteInfo) => void;
@@ -47,7 +53,13 @@ export interface ConductorSendReconnectOptions
   onTransportReconnectAttempt?: (input: { agentId: string }) => void;
   onAuthReconnectComplete?: (input: ConductorReconnectCompleteInfo) => void;
   onTransportReconnectComplete?: (input: ConductorReconnectCompleteInfo) => void;
+  /** 自動 retry を行う場合、その直前に一度だけ呼び出す。 */
+  onAutomaticRetry?: (input: ConductorAutomaticRetryInfo) => void;
 }
+
+// resume に失敗した時点で旧 agent は close 済み。次の operator reconnect では
+// 同じ handle を再度 close せず、resume を再試行する。
+const closedForReconnect = new WeakSet<ConductorAgentHandle>();
 
 /** close → factory.resume(sameId) で in-process の agent を差し替える。 */
 export async function reconnectConductorAgent(
@@ -74,11 +86,15 @@ export async function reconnectConductorAgent(
   }
 
   try {
-    await handle.conductor.close();
+    if (!closedForReconnect.has(handle)) {
+      await handle.conductor.close();
+      closedForReconnect.add(handle);
+    }
     handle.conductor = await conductorAgentFactory.resume(
       agentId,
       conductorOptions,
     );
+    closedForReconnect.delete(handle);
     options.onReconnectComplete?.({ agentId, success: true });
     return agentId;
   } catch (error) {
@@ -162,6 +178,10 @@ export async function sendConductorWithReconnect(
     return result;
   }
 
+  options.onAutomaticRetry?.({
+    attempt: 1,
+    reason: reconnectReason,
+  });
   return handle.conductor.send(message, sendCallbacks);
 }
 

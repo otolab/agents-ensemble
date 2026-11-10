@@ -364,15 +364,19 @@ hint には次の情報が含まれます。
 - Pi が認識する provider 固有の環境変数名（例: Anthropic は `ANTHROPIC_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`、OpenAI は `OPENAI_API_KEY`、GitHub Copilot は `COPILOT_GITHUB_TOKEN`）
 - 稼働中 TTY では `/reconnect`、状態確認後に新しい operator message。process 終了後は `--resume <agentId>`（または `--continue`）で session を再開し、新しい message を送る
 
-実行中の `ensemble issue` で `API key auth failed for provider ...: Failed to resolve API key ...` が出た場合、該当する provider request の前に key resolver が失敗しています。Pi は同じ send 内で tool round ごとに key を解決するため、先行する tool の副作用がありうる点には注意してください。tool call 開始後は自動経路でも同じ prompt を再送しません。認証 helper を直した後に `/reconnect` すると、初回 send と自動 retry のどちらでも tool call が始まっていない batch だけを再キューします。同じ event の手動再キューは同一 process 中 1 回までです。tool call が始まっていた場合や、transport error など結果が曖昧な場合は重複実行を避けて再送しません。現在の状態を確認し、新しい operator message で未完了の作業を伝えてください。
+実行中の `ensemble issue` で通常の event dispatch が `API key auth failed for provider ...: Failed to resolve API key ...` という最終結果になった場合、harness は手動復旧用の report 候補を一つ保持します。候補に残すのは `sendCount`、`runId`、`sourceKey`、event type / count、最大20件の安全な event 参照、自動 retry 回数、初回 send / retry 中に `onToolCallStarted` callback を受け取ったかです。tool 開始 callback の有無は Pi transcript から推測しません。参照の超過分は `eventReferencesTruncated` で示します。認証 error の本文、shell command / path、operator message、worker prompt / 結果、permission の raw payload は載せません。event に共通の永続 ID はないため、この参照は既存 dispatch を照合する手掛かりです。
 
-この失敗 batch の候補は、次の通常 conductor send が始まるまで有効です。operator message と `/reconnect` が同時に待っている場合は message が先に送られ、その send 開始時に古い候補が破棄されます。新しい send 自体が同じ resolver failure で終われば、その batch が新しい候補になります。
+認証設定を直して `/reconnect` すると、成功後に候補を `conductor.recovery.report` として次の dispatch に一度だけ含めます。reconnect の await 中に届いた operator / worker input は queue に残り、report と同じ send にまとまります。入力がなければ report 単独を一回送ります。失敗 batch 自体は再キューしません。report は send 開始時に消費し、send が失敗しても別個の通知として再投入しません。report を含む send にも通常の send 内自動 retry が適用されますが、tool が始まっていない場合の 1 回に限られます。これは手動復旧の再送ではありません。
 
-`/close` または Ctrl+C で process を止めると、失敗 batch と event queue は SessionResumeStore に保存されず、`--continue` / `--resume` 後も自動再生されません。再開後は conductor / worker の状態を確認し、未完了分だけを新しい operator message で伝えてください。Ctrl+C の sidecar flush は best effort です。max-turns 到達後も `/reconnect` 自体は使えますが、再キューされた worker event は通常の max-turns 制限を受けます。新しい operator message で上限をリセットしてから dispatch される場合があります。
+候補がある状態で手動 reconnect 前に別の通常 send が始まれば、古い候補を破棄します。その send が再び Pi resolver failure で終わったときだけ、最新 dispatch の候補へ置き換えます。resume が失敗すると `/reconnect` 自体は消費しますが、候補と通常 input は process 内に保持します。旧 agent は closed / unavailable となり、通常 input は dispatch せず queue に残して次の `/reconnect` を待ちます。Pi は同じ send の後続 model request 前に resolver failure を返す場合があるため、tool がすでに始まっていたときも report 候補には `toolCallStarted: true` を記録しますが、元の prompt は再送しません。transport error など結果が曖昧な失敗は Pi resolver report の候補にしません。
+
+report は dispatch hold を解除せず、hold 中の単独 send を起こしません。hold 中は既存規則で送信できる operator message や `permission.stall` が選ばれた場合に限り、その束へ report を含めます。`permission.pending` や通常の worker / GitHub event は hold の対象です。max-turns 後の report 単独 send は有限の回復通知として許しますが、自律 turn 数は変えません。worker event は通常の max-turns 制限を受けます。
+
+`/close` または Ctrl+C で process を止めると、candidate / report と event queue は SessionResumeStore に保存されず、`--continue` / `--resume` 後も自動再生されません。Pi transcript に元入力が残っている保証もありません。再開後は conductor / worker / worktree の現在の状態を確認し、未完了分だけを新しい operator message で伝えてください。元の作業内容や tool 副作用が分からない場合は operator に確認してください。Ctrl+C の sidecar flush は best effort です。
 
 再接続の in-process retry、auth error の判定、backend 固有 hint の設計は [conductor-auth-reconnect.md](conductor-auth-reconnect.md) が正本です。
 
-`ensemble operator-agent` も `ensemble issue` と自動 send retry helper を共有し、auth / transport error の後に同じ agent ID で再接続します。tool call が始まっていない send だけ同じ prompt を 1 回再送し、tool が始まっていれば再送しません。TTY の手動 `/reconnect` は operator-agent 自身の agent を close / resume する control 操作で、失敗した operator-agent prompt は再送しません。`ensemble issue` の driver にある Pi resolver failure batch の再キューも operator-agent には適用されません。
+`ensemble operator-agent` も `ensemble issue` と自動 send retry helper を共有し、auth / transport error の後に同じ agent ID で再接続します。tool call が始まっていない send だけ同じ prompt を 1 回再送し、tool が始まっていれば再送しません。TTY の手動 `/reconnect` は operator-agent 自身の agent を close / resume する control 操作で、失敗した operator-agent prompt の再送や Issue session 用 recovery report の注入はしません。
 
 operator-agent が `send_operator_message` を呼ぶと、稼働中 Issue session の UDS 経由で新しい `operator.message` が queue に入ります。これは明示的な tool 呼び出しであり、どの reconnect 操作も自動では行いません。Issue session の TUI で `[operator]` として表示される文面も、実際に dispatch された `operator.message` の内容です。`conductor.transport.reconnect` の成功ログだけでは、手動操作か自動 reconnect か、また prompt が再送されたかは判別できません。retry 後も認証エラーが続く場合は stderr の Pi 向け hint に従って認証設定を直し、`ensemble operator-agent` を再起動してください。
 

@@ -234,6 +234,7 @@ export type {
   PermissionPendingEvent,
   PermissionStallEvent,
   HarnessConnectivityRecoveredEvent,
+  ConductorRecoveryReportEvent,
   GitHubUpdateEvent,
   SessionEventDispatchFields,
 } from './session/session-event.js';

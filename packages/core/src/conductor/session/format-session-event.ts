@@ -47,6 +47,12 @@ function formatSingleSessionEventForConductor(event: SessionEvent): string {
         '',
         formatEventBodyForConductor(event),
       ].join('\n');
+    case 'conductor.recovery.report':
+      return [
+        '## Pi 認証失敗後の復旧報告',
+        '',
+        formatConductorRecoveryReportBody(event),
+      ].join('\n');
     case 'github.update':
       return [
         '## GitHub 更新',
@@ -104,6 +110,13 @@ function formatEventBodyForConductor(event: SessionEvent): string {
         source: event.source,
         suppressedErrorCount: event.suppressedErrorCount,
       });
+    case 'conductor.recovery.report':
+      return fencedYaml('conductor.recovery.report', {
+        recoveryId: event.recoveryId,
+        failedDispatch: event.failedDispatch,
+        failure: event.failure,
+        reconnect: event.reconnect,
+      });
     case 'github.update':
       // `ci.completed` items carry the commit-SHA aggregate state in the
       // generic GitHub update YAML; preserve those fields for conductor
@@ -119,10 +132,32 @@ function formatEventBodyForConductor(event: SessionEvent): string {
 function formatBatchedSessionEventsForConductor(events: SessionEvent[]): string {
   const heading = batchHeadingForEvents(events);
   const sections = events.map((event, index) => {
-    const body = formatEventBodyForConductor(event);
+    const body =
+      event.type === 'conductor.recovery.report'
+        ? [
+            '#### Pi 認証失敗後の復旧報告',
+            '',
+            formatConductorRecoveryReportBody(event),
+          ].join('\n')
+        : formatEventBodyForConductor(event);
     return [`### ${index + 1}/${events.length}`, '', body].join('\n');
   });
   return [heading, '', ...sections].join('\n\n');
+}
+
+function formatConductorRecoveryReportBody(
+  event: Extract<SessionEvent, { type: 'conductor.recovery.report' }>,
+): string {
+  return [
+    formatEventBodyForConductor(event),
+    [
+      'この報告は失敗した入力の再送指示ではありません。元の入力が Pi transcript に残っている保証もありません。',
+      '`recoveryId` と `failedDispatch` は失敗を照合する手掛かりです。',
+      '失敗した入力や結果が曖昧な tool を再実行しないでください。',
+      'Issue と worker / worktree の現在の状態を確認し、この dispatch に新しい operator 入力があればその指示に従ってください。',
+      '元の task 本文や tool の副作用を特定できず、新しい operator 入力にも作業指示がない場合は、作業を推測せず operator に確認してください。',
+    ].join('\n\n'),
+  ].join('\n\n');
 }
 
 function batchHeadingForEvents(events: SessionEvent[]): string {
