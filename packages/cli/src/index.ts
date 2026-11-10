@@ -17,6 +17,14 @@ import { writeIssueSessionSummary } from './write-issue-session-summary.js';
 import { formatProfilesListJson, formatProfilesListText } from './format-profiles-list.js';
 import { normalizeInitialOperatorMessage } from './operator-message.js';
 import {
+  formatSessionListText,
+  formatSessionMessagesText,
+  formatSessionShowText,
+  listSavedSessionMessages,
+  listSavedSessions,
+  showSavedSession,
+} from './session-command.js';
+import {
   runConductorAuthStatus,
   runConductorLogin,
   runConductorLogout,
@@ -61,6 +69,127 @@ program
       process.exit(1);
     }
   });
+
+const session = program
+  .command('session')
+  .description('Read saved conductor session data without starting an agent');
+
+session
+  .command('list')
+  .description('List saved sessions for a repository')
+  .option(
+    '--repo-root <path>',
+    'Repository root for saved sessions',
+    process.cwd(),
+  )
+  .option('--issue-url <url>', 'Filter by GitHub Issue URL')
+  .option('--json', 'Output JSON')
+  .action(
+    async (options: {
+      repoRoot: string;
+      issueUrl?: string;
+      json?: boolean;
+    }) => {
+      try {
+        const result = await listSavedSessions({
+          repoRoot: options.repoRoot,
+          issueUrl: options.issueUrl,
+        });
+        console.log(
+          options.json
+            ? JSON.stringify(result, null, 2)
+            : formatSessionListText(result),
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
+session
+  .command('show')
+  .description('Show saved session metadata and related YAML summaries')
+  .argument('<conductorAgentId>', 'Conductor session id')
+  .option(
+    '--repo-root <path>',
+    'Repository root for saved sessions',
+    process.cwd(),
+  )
+  .option('--json', 'Output JSON')
+  .action(
+    async (
+      conductorAgentId: string,
+      options: { repoRoot: string; json?: boolean },
+    ) => {
+      try {
+        const result = await showSavedSession({
+          repoRoot: options.repoRoot,
+          conductorAgentId,
+        });
+        console.log(
+          options.json
+            ? JSON.stringify(result, null, 2)
+            : formatSessionShowText(result),
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
+
+session
+  .command('messages')
+  .description('Show saved conductor provider history')
+  .argument('<conductorAgentId>', 'Conductor session id')
+  .option(
+    '--repo-root <path>',
+    'Repository root for saved sessions',
+    process.cwd(),
+  )
+  .option(
+    '--limit <n>',
+    'Number of messages to return (default: 20, maximum: 100)',
+    parseSessionLimit,
+  )
+  .option(
+    '--order <order>',
+    'Provider order: asc or desc (default: desc)',
+    'desc',
+  )
+  .option('--cursor <providerId>', 'Exclusive provider history cursor')
+  .option('--json', 'Output JSON')
+  .action(
+    async (
+      conductorAgentId: string,
+      options: {
+        repoRoot: string;
+        limit?: number;
+        order: string;
+        cursor?: string;
+        json?: boolean;
+      },
+    ) => {
+      try {
+        const result = await listSavedSessionMessages({
+          repoRoot: options.repoRoot,
+          conductorAgentId,
+          limit: options.limit,
+          order: parseSessionMessageOrder(options.order),
+          cursor: options.cursor,
+        });
+        console.log(
+          options.json
+            ? JSON.stringify(result, null, 2)
+            : formatSessionMessagesText(result),
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
+  );
 
 program
   .command('issue')
@@ -537,5 +666,18 @@ profiles
       process.exit(1);
     }
   });
+
+function parseSessionLimit(value: string): number {
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit)) {
+    throw new Error('limit must be an integer.');
+  }
+  return limit;
+}
+
+function parseSessionMessageOrder(value: string): 'asc' | 'desc' {
+  if (value === 'asc' || value === 'desc') return value;
+  throw new Error('order must be asc or desc.');
+}
 
 program.parse();

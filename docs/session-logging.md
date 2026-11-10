@@ -21,6 +21,8 @@ conductor セッションには性質の異なる出力が混在する。
 | **exit report** | e2e / CI / スクリプト | 終了時 JSON（`stopReason`, `workerResponses` 等） |
 | **resume 状態** | 次回 `ensemble issue --resume` | SessionResumeStore JSON と open question YAML |
 | **operator 状態** | `list_operator_sessions` | SessionResumeStore の `lifecycle` と session-state YAML |
+| **保存 session の CLI 閲覧** | `ensemble session list/show` | SessionResumeStore の要約と関連 YAML の件数・時刻 |
+| **conductor 履歴の CLI 閲覧** | `ensemble session messages` | provider session history |
 
 これらを 1 本の stderr に混ぜると、TTY 利用時に **会話相手が worker に見える**・**conductor の応答が終了まで見えない** といった UX 問題が起きる（#44）。
 
@@ -199,6 +201,8 @@ permission の ACP variant と抽出優先順位は
 ## 4. SessionResumeStore と open question YAML
 
 SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
+
+`ensemble session list/show` は core の SessionResumeStore / YAML 読取 API を使う読み取り専用 CLI です。harness への接続や agent 起動は行わず、`show` は sidecar の許可したメタデータと YAML の要約だけを返します。`ensemble session messages` は operator-agent の `list_conductor_messages` と同じ `listConductorProviderHistory` を使い、provider 履歴の user inbound / final response を読みます。会話本文に含まれる任意の秘密値を自動判定する redaction はありません。
 
 新規の `ensemble issue` は、初回 flush から `createdHarnessCliVersion` に `@agents-ensemble/cli` の package version を記録します。`--continue` / `--resume` は作成時の値を保持し、旧 Store で値が欠けている場合は欠落したまま扱います。この値は SessionResumeStore の schema version とは別です。
 

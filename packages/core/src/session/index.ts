@@ -95,6 +95,10 @@ export type {
   SessionStatusLine,
 } from './session-state-store.js';
 export {
+  sessionSnapshotPaths,
+  type SessionSnapshotKind,
+} from './session-snapshot-paths.js';
+export {
   buildSessionModelsSummary,
 } from './build-session-models-summary.js';
 export type {
