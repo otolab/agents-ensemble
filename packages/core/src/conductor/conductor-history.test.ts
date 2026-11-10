@@ -14,7 +14,10 @@ vi.mock('@cursor/sdk', () => ({
 
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import type { Run } from '@cursor/sdk';
-import { listConductorProviderHistory } from './conductor-history.js';
+import {
+  listConductorProviderHistory,
+  type ConductorProviderHistorySanitizer,
+} from './conductor-history.js';
 import {
   PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE,
   PI_SESSION_ROOT,
@@ -113,6 +116,121 @@ describe('listConductorProviderHistory', () => {
           ),
         ),
     ).toBe(false);
+  });
+
+  it('keeps the default result raw and sanitizes only returned text fields when requested', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-sanitizer-'));
+    const sessionDir = join(tempDir, PI_SESSION_ROOT);
+    const manager = SessionManager.create(tempDir, sessionDir, {
+      id: 'pi-history-sanitizer-agent',
+    });
+    appendPiTurn(manager, {
+      inbound: 'older inbound secret-old',
+      toolOutput: 'OLDER_TOOL_SECRET',
+      response: 'older response secret-old',
+      sendCount: 1,
+      dispatchSource: 'operator',
+    });
+    appendPiTurn(manager, {
+      inbound: 'current inbound secret-current',
+      toolOutput: 'CURRENT_TOOL_SECRET',
+      response: 'current response secret-current',
+      sendCount: 2,
+      dispatchSource: 'worker:implementer',
+    });
+
+    const input = {
+      backend: 'pi' as const,
+      conductorAgentId: 'pi-history-sanitizer-agent',
+      cwd: tempDir,
+      query: { limit: 1, order: 'desc' as const },
+    };
+    const raw = await listConductorProviderHistory(input);
+    const sanitizer: ConductorProviderHistorySanitizer = vi.fn(
+      async (value: string, field: 'inbound' | 'text') =>
+        `${field}: ${value.replace(/secret-[a-z]+/gu, '[redacted]')}`,
+    );
+
+    const sanitized = await listConductorProviderHistory({
+      ...input,
+      sanitizer,
+    });
+
+    expect(sanitized).toEqual({
+      messages: [
+        {
+          ...raw.messages[0],
+          inbound: 'inbound: current inbound [redacted]',
+          text: 'text: current response [redacted]',
+        },
+      ],
+      hasMore: true,
+    });
+    expect(sanitizer).toHaveBeenNthCalledWith(
+      1,
+      'current inbound secret-current',
+      'inbound',
+    );
+    expect(sanitizer).toHaveBeenNthCalledWith(
+      2,
+      'current response secret-current',
+      'text',
+    );
+    expect(sanitizer).toHaveBeenCalledTimes(2);
+    expect(raw.messages[0]).toMatchObject({
+      inbound: 'current inbound secret-current',
+      text: 'current response secret-current',
+    });
+    expect(JSON.stringify(sanitized)).not.toContain('secret-current');
+    expect(JSON.stringify(sanitized)).not.toContain('OLDER_TOOL_SECRET');
+  });
+
+  it('does not return provider text when the requested sanitizer fails', async () => {
+    tempDir = await mkdtemp(
+      join(tmpdir(), 'ensemble-pi-history-sanitizer-error-'),
+    );
+    const manager = SessionManager.create(
+      tempDir,
+      join(tempDir, PI_SESSION_ROOT),
+      { id: 'pi-history-sanitizer-error-agent' },
+    );
+    appendPiTurn(manager, {
+      inbound: 'inbound sanitizer-error-secret',
+      toolOutput: 'TOOL_SECRET',
+      response: 'response sanitizer-error-secret',
+      sendCount: 1,
+      dispatchSource: 'operator',
+    });
+
+    const error = await listConductorProviderHistory({
+      backend: 'pi',
+      conductorAgentId: 'pi-history-sanitizer-error-agent',
+      cwd: tempDir,
+      query: { limit: 20, order: 'desc' },
+      sanitizer: async () => {
+        throw new Error('SANITIZER_SECRET');
+      },
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'Provider history sanitizer failed for conductor session pi-history-sanitizer-error-agent (pi).',
+    );
+    expect((error as Error).message).not.toContain('SANITIZER_SECRET');
+    expect((error as Error).message).not.toContain('sanitizer-error-secret');
+
+    const invalidReturn = await listConductorProviderHistory({
+      backend: 'pi',
+      conductorAgentId: 'pi-history-sanitizer-error-agent',
+      cwd: tempDir,
+      query: { limit: 20, order: 'desc' },
+      sanitizer: (() => 42) as unknown as ConductorProviderHistorySanitizer,
+    }).catch((caught: unknown) => caught);
+
+    expect(invalidReturn).toBeInstanceOf(Error);
+    expect((invalidReturn as Error).message).toBe(
+      'Provider history sanitizer failed for conductor session pi-history-sanitizer-error-agent (pi).',
+    );
   });
 
   it('does not backfill pre-feature Pi transcripts without history markers', async () => {

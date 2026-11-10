@@ -270,6 +270,27 @@ limit 1 でも単独 response が上限を超える発言に達した場合、�
 operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / cwd を使い、SDK が保存した local session history から最大 100 件を読みます。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。
 
 - **共通 filter:** user inbound と final assistant response だけを返します。system prompt、tool call / result、thinking、その他 provider event は出力しません。bootstrap、失敗・cancelled・running・空 response は対象外です。inbound / final response の本文は保存値のままで、secret redaction は行いません。`ensemble session messages` もこの本文をそのままローカル出力します。秘密値を含む可能性のある生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。既存の同一 OS user access boundary も適用されます。
+- **利用側の sanitizer:** `@agents-ensemble/core/operator-runtime` の `listConductorProviderHistory` は、呼び出しごとに任意の `sanitizer(value, field)` を受け取れます。`field` は自由文の `inbound` または `text` です。provider history の選択とページングの後、返却する各 message のこの2 field だけに適用します。`backend`、`providerId` / `requestId`、`at`、`sendCount` / `dispatchSource`、`hasMore` は変えず、元の message も変更しません。省略時は従来どおり保存値を返します。sanitizer が throw / reject するか文字列以外を返すと、raw 値へフォールバックせず、本文を含まないエラーで呼び出し全体が失敗し、途中までの結果も返しません。ページを分けて読む場合は各呼び出しに sanitizer を渡してください。`session messages` と operator-agent の `list_conductor_messages` は渡さないため、引き続き raw 出力です。
+- **限界:** callback は未加工の本文を受け取ります。自由文の秘密値を完全に見つける保証はなく、どの値を検出・置換できるかは利用側の実装に依存します。callback 自身が本文をログ・保存・転送すれば、この API の適用境界外です。本文以外の metadata に秘密値が含まれる場合も sanitizer の対象外です。後段で利用する場合は、返却された結果を集計・蓄積へ渡してください。
+
+```ts
+import {
+  listConductorProviderHistory,
+  type ConductorProviderHistorySanitizer,
+} from '@agents-ensemble/core/operator-runtime';
+
+const sanitizer: ConductorProviderHistorySanitizer = (value, field) =>
+  sanitizeForStorage(value, field);
+const history = await listConductorProviderHistory({
+  backend,
+  conductorAgentId,
+  cwd,
+  query: { limit: 20, order: 'desc' },
+  sanitizer,
+});
+await aggregateOrStore(history);
+```
+
 - **Pi 1.2.0:** active branch の user / assistant entry ID を custom metadata から引き、保存済み本文を再構成します。metadata に本文は複製せず、LLM context にも入りません。順序は active branch の履歴順、`at` は harness が記録した send 完了時刻（Unix ms）、`providerId` は final assistant entry ID です。別 branch に移った発言は一覧から外れます。初回 `initial` send は marker を作りません。機能導入前のPi sessionは過去のtranscriptを遡ってmarker付けしません。そのため、導入後にcustom metadata markerが記録されたsendだけが一覧に出ます。markerが一件もないsessionは、session fileを正常に読める限りエラーではなく、空一覧（`messages: []`, `hasMore: false`）を返します。
 - **Cursor 1.0.27:** pinned `Agent.listRuns()` / `Agent.getRun()` と run の `conversation()` から再構成し、cursor pagination で直近 100 件を選びます。順序は SDK run order、`at` は run 作成時刻（Unix ms）、`providerId` は run ID、取得できる場合は `requestId` も返します。新規 session は bootstrap run ID を SessionResumeStore に保存します。これを持たない既存 session では先頭 run を bootstrap とみなします。Cursor は `sendCount` / `dispatchSource` を提供しないため、それらの field は返しません。
 - **ページング:** `order` は provider history order の `asc` / `desc`、`cursor` は返却行の `providerId` を使う排他的境界です。`hasMore` は保持対象の直近 100 件内に次ページがある場合に true です。Pi の `sendCount` / `dispatchSource` は harness metadata で、Cursor の provider ID / request ID と共通通し番号ではありません。
