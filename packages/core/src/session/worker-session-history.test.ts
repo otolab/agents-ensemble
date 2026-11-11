@@ -8,7 +8,7 @@ import {
 } from 'node:fs/promises';
 import type { Transform } from 'node:stream';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   afterEach,
@@ -272,21 +272,39 @@ describe('worker session history', () => {
     });
   });
 
-  it('uses absolute and cwd-relative CODEX_HOME values', async () => {
+  it('resolves absolute and relative CODEX_HOME values from the correct cwd', async () => {
+    const workerCwd = join(tempRoot, 'worker-cwd');
+    const cliCwd = process.cwd();
+    const customCodexHome = join(tempRoot, 'custom-codex-home');
+
+    await mkdir(workerCwd, { recursive: true });
     await writeResumeStore('codex', {
       acpSessionId: CODEX_SESSION_ID,
-      acpCwd: CODEX_CWD,
+      acpCwd: workerCwd,
     });
-    const customCodexHome = join(tempRoot, 'custom-codex-home');
+
     vi.stubEnv('CODEX_HOME', customCodexHome);
-    await writeCodexAcpRollout({ codexHome: customCodexHome });
+    const fixture = await readFile(CODEX_FIXTURE_PATH, 'utf8');
+    await writeCodexAcpRollout({
+      codexHome: customCodexHome,
+      content: fixture.replaceAll(CODEX_CWD, workerCwd),
+    });
 
     const configuredHomeResult = await readHistory();
     expect(configuredHomeResult.status).toBe('supported');
 
-    vi.stubEnv('CODEX_HOME', relative(process.cwd(), customCodexHome));
+    const relativeCodexHome = relative(workerCwd, customCodexHome);
+    expect(resolve(workerCwd, relativeCodexHome)).toBe(customCodexHome);
+    expect(resolve(cliCwd, relativeCodexHome)).not.toBe(customCodexHome);
+    vi.stubEnv('CODEX_HOME', relativeCodexHome);
     const relativeHomeResult = await readHistory();
-    expect(relativeHomeResult.status).toBe('supported');
+    expect(relativeHomeResult).toMatchObject({
+      status: 'supported',
+      messages: [
+        { role: 'user', text: 'Codex ACP fixture user message.' },
+        { role: 'assistant', text: 'Codex ACP fixture assistant reply.' },
+      ],
+    });
   });
 
   it('reads compressed Codex rollouts when Node supports zstd', async () => {

@@ -369,7 +369,7 @@ async function readCodexAcpSessionHistory(
     );
   }
 
-  const codexHome = resolveCodexHome();
+  const codexHome = resolveCodexHome(input.acpCwd);
   const rolloutPath = await findCodexAcpRollout(codexHome, sessionId);
   if (!rolloutPath) {
     throw new WorkerSessionHistoryUnavailableError(
@@ -491,10 +491,10 @@ async function readCodexAcpSessionHistory(
   }
 }
 
-function resolveCodexHome(): string {
+function resolveCodexHome(acpCwd: string): string {
   const configuredHome = process.env.CODEX_HOME;
   if (configuredHome) {
-    return resolve(configuredHome);
+    return resolve(acpCwd, configuredHome);
   }
   return join(homedir(), '.codex');
 }
