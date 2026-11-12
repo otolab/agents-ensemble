@@ -116,6 +116,9 @@ ensemble session list --issue-url https://github.com/OWNER/REPOSITORY/issues/123
 # sidecar と関連 YAML の場所・要約を見る
 ensemble session show <conductorAgentId>
 
+# session をまとめてオフライン調査する
+ensemble session export <conductorAgentId> --output ./session-bundle
+
 # Pi / Cursor の conductor 会話履歴を見る
 ensemble session messages <conductorAgentId>
 
@@ -132,7 +135,19 @@ ensemble session timeline <conductorAgentId> \
 
 `list` は SessionResumeStore の要約を更新時刻の新しい順に返します。`show` は sidecar の許可したメタデータ、sidecar と関連 YAML のパス、Open Questions の件数、session-state の報告時刻・履歴件数を表示します。worker ごとに保存 preset と transcript reader の対応状況も表示します。ここで示すのは preset に対する reader の有無で、transcript file が現在読み取れるかまでは確認しません。
 
-`messages` は保存 session の `conductorAgentId` を指定し、operator-agent の `list_conductor_messages` と同じ core provider-history API を使うデバッグ用コマンドです。Pi の transcript は SessionResumeStore の `repoRoot` を基準に user 層 `~/.ensemble/sessions/<repoKey>/pi/`（user root を変更している場合はその配下）を先に探し、対象 session がなければ保存済み `conductorCwd` の `.ensemble/pi/sessions/` を読みます。Pi `SessionManager` の cwd には `conductorCwd` を使います。既定では新しい履歴から20件、最大100件を表示します。`--limit <n>`、`--order asc|desc`、`--cursor <providerId>` でページを指定できます。返すのは user inbound と conductor の最終応答で、tool output や thinking は含みません。本文は保存値のまま出力し、テキスト表示も `--json` もサニタイズしません。API key・token・password などを会話に入力していた場合、その値も出力されます。`messages` は raw debug 経路を保ち、sanitizer の CLI option は設けていません。アプリから core API を使う場合は、返却前に `inbound` / `text` へ利用側の sanitizer を渡せます。適用境界、エラー時の動作、秘密値保護の限界は [provider history list の API 契約](../live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
+長い session の横断調査・共有・スクリプト化では `session export` を使い、bundle をオフライン調査の正本にしてください。`list` / `show` と live の `messages` / `workers messages` / `timeline` は必要な箇所を素早く確かめる quick peek 用です。
+
+`export` は読み取り専用で、`--output <dir>` に新しい bundle directory を作ります。既存の出力先は上書きせず、エラーにします。`manifest.json` は session ID・Issue URL・`repoRoot`・`conductorCwd`・backend・worker / preset・ensemble / CLI version を記録し、入力ごとの状態、bundle 内相対 path、byte size、SHA-256 を一覧します。manifest 自体は自己参照を避けるため hash 一覧から除外します。
+
+bundle には SessionResumeStore の raw JSON、ハーネスの `session-state.yaml` / `open-questions.yaml`、各 worker の全文 reader 結果 JSON（`messages` の 100 件制限なし）を収録します。worker JSON には元 transcript の絶対 path も含まれます。Pi conductor は `repoRoot` 基準の user 層 transcript を優先し、見つからない場合は `conductorCwd` 配下の legacy `.ensemble/pi/sessions/` を探して raw JSONL をコピーします。Cursor conductor は SDK から取得できた run metadata と conversation snapshot を `conductor/cursor-runs.json` に収録します。`--include-tool-calls` を指定すると `.tool-calls` もコピーし、`--summary <path>` / `--harness-log <path>` を指定すると、それぞれの入力を bundle に含めます。これらの相対 path は CLI を実行した directory 基準です。
+
+export は raw のままコピーし、API key・token・password、会話中の秘密値や tool 出力を自動 redaction しません。bundle と manifest の絶対 source path は機密情報として扱ってください。Issue / PR・ログ・集計先へ載せる前に利用者側でサニタイズしてください。
+
+出力 directory と file の権限は OS によって異なります。POSIX では directory に `0700`、file に `0600` の mode bits を設定します。Windows では Node.js の `fs` mode で変更できるのは書き込み権限だけで、owner / group / others を区別できません。exporter も Windows ACL を設定・検証しません。新しく作成する bundle は親 directory から継承される ACL に従うため、owner-only は保証されません。Windows で使う場合は、意図した利用者だけにアクセスを許す ACL を設定した保存先を選び、必要に応じて ACL を確認してください（[Node.js `fs` の file modes](https://nodejs.org/download/release/latest-jod/docs/api/fs.html#file-modes)、[Windows file security](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)）。
+
+raw copy では symlink と通常 file 以外の source を追いません。任意 source、補助 YAML、Pi / Cursor / worker transcript が見つからない・読めない場合も bundle は作成し、manifest に status と warning を残します。ResumeStore が見つからない場合は export error です。harness phase が `running` / `idle` の session は process が稼働中の best-effort snapshot として warning を記録し、export 結果の status は `partial` になります。ファイル間の同時点性や Pi JSONL の書き込み競合がないことは保証しません。
+
+`messages` は保存 session の `conductorAgentId` を指定し、operator-agent の `list_conductor_messages` と同じ core provider-history API を使う quick peek 用コマンドです。Pi の transcript は SessionResumeStore の `repoRoot` を基準に user 層 `~/.ensemble/sessions/<repoKey>/pi/`（user root を変更している場合はその配下）を先に探し、対象 session がなければ保存済み `conductorCwd` の `.ensemble/pi/sessions/` を読みます。Pi `SessionManager` の cwd には `conductorCwd` を使います。既定では新しい履歴から20件、最大100件を表示します。`--limit <n>`、`--order asc|desc`、`--cursor <providerId>` でページを指定できます。返すのは user inbound と conductor の最終応答で、tool output や thinking は含みません。本文は保存値のまま出力し、テキスト表示も `--json` もサニタイズしません。API key・token・password などを会話に入力していた場合、その値も出力されます。`messages` は raw debug 経路を保ち、sanitizer の CLI option は設けていません。アプリから core API を使う場合は、返却前に `inbound` / `text` へ利用側の sanitizer を渡せます。適用境界、エラー時の動作、秘密値保護の限界は [provider history list の API 契約](../live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
 
 `workers messages` は保存済み ACP session を `--worker <name>` で指定します。現在オフラインで読めるのは Pi ACP（`pi`）と Codex ACP（`codex`）です。Pi は CLI process の home にある `~/.pi/pi-acp/session-map.json` から保存 session ID に対応する JSONL を解決し、active branch の user / assistant 本文を出します。
 

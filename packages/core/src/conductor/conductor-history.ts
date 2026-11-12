@@ -4,8 +4,8 @@ import {
   type SessionMessageEntry,
 } from '@earendil-works/pi-coding-agent';
 import type { ConductorBackend } from '../config/types.js';
-import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE } from './pi-conductor-agent.js';
+import { findPiConductorSessionFile } from './pi-conductor-session-file.js';
 
 export const CONDUCTOR_PROVIDER_HISTORY_LIMIT = 100;
 
@@ -135,30 +135,22 @@ function readPiConductorHistory(input: {
   repoRoot?: string;
 }): ConductorProviderHistoryMessage[] {
   const cwd = input.cwd;
-  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot ?? cwd });
-  let sessionFile: string | undefined;
-  let sessionDir: string | undefined;
-  for (const candidateDir of new Set([
-    paths.piSessionsDir,
-    paths.legacyPiSessionsDirForCwd(cwd),
-  ])) {
-    sessionFile = SessionManager.findById(
-      cwd,
-      input.conductorAgentId,
-      candidateDir,
-    );
-    if (sessionFile) {
-      sessionDir = candidateDir;
-      break;
-    }
-  }
-  if (!sessionFile || !sessionDir) {
+  const location = findPiConductorSessionFile({
+    conductorAgentId: input.conductorAgentId,
+    cwd,
+    repoRoot: input.repoRoot,
+  });
+  if (!location) {
     throw new Error('The Pi provider session is missing or unreadable.');
   }
 
   let session: SessionManager;
   try {
-    session = SessionManager.open(sessionFile, sessionDir, cwd);
+    session = SessionManager.open(
+      location.sessionFile,
+      location.sessionDir,
+      cwd,
+    );
   } catch {
     throw new Error('The Pi provider session could not be read.');
   }

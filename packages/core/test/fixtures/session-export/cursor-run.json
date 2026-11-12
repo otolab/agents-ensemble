@@ -1,0 +1,23 @@
+{
+  "metadata": {
+    "agentId": "session-export-worktree-fixture",
+    "id": "cursor-run-1",
+    "status": "finished",
+    "requestId": "cursor-request-1",
+    "createdAt": 1800000000000,
+    "result": "cursor fixture response"
+  },
+  "conversation": [
+    {
+      "type": "agentConversationTurn",
+      "turn": {
+        "userMessage": {
+          "text": "cursor fixture inbound"
+        },
+        "assistantMessage": {
+          "text": "cursor fixture response"
+        }
+      }
+    }
+  ]
+}
