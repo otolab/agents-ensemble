@@ -1,5 +1,18 @@
 # @agents-ensemble/operator-agent
 
+## 0.4.7
+
+### Patch Changes
+
+- 93378b2: Add read-only saved-session path discovery and `ensemble session list`, `show`, and `messages` commands.
+- Updated dependencies [93378b2]
+- Updated dependencies [85dba07]
+- Updated dependencies [870b7ff]
+- Updated dependencies [50312e7]
+- Updated dependencies [14ccd1d]
+- Updated dependencies [13f137f]
+  - @agents-ensemble/core@0.21.0
+
 ## 0.4.6
 
 ### Patch Changes

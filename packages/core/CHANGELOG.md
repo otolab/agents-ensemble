@@ -1,5 +1,19 @@
 # @agents-ensemble/core
 
+## 0.21.0
+
+### Minor Changes
+
+- 93378b2: Add read-only saved-session path discovery and `ensemble session list`, `show`, and `messages` commands.
+- 870b7ff: `listConductorProviderHistory` に、自由文の利用側 sanitizer を差し込める契約を追加しました。
+- 50312e7: 新規 Issue session の SessionResumeStore に、作成時の CLI package version を記録します。
+- 13f137f: Pi ACP worker の保存 transcript を CLI から読み取れるようにします。
+
+### Patch Changes
+
+- 85dba07: `ensemble session workers messages` が Codex ACP worker のローカル transcript を読み取れるようになりました。
+- 14ccd1d: Pi の API key 認証失敗を分類し、失敗 dispatch の内容を TTY で確認できる recovery inbox と、失敗 dispatch を再送しない安全な recovery report を追加します。
+
 ## 0.20.0
 
 ## 0.19.0
