@@ -1,14 +1,11 @@
-import { join } from 'node:path';
 import { Agent, type Run } from '@cursor/sdk';
 import {
   SessionManager,
   type SessionMessageEntry,
 } from '@earendil-works/pi-coding-agent';
 import type { ConductorBackend } from '../config/types.js';
-import {
-  PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE,
-  PI_SESSION_ROOT,
-} from './pi-conductor-agent.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { PI_CONDUCTOR_MESSAGE_HISTORY_ENTRY_TYPE } from './pi-conductor-agent.js';
 
 export const CONDUCTOR_PROVIDER_HISTORY_LIMIT = 100;
 
@@ -51,6 +48,8 @@ export async function listConductorProviderHistory(input: {
   backend: ConductorBackend;
   conductorAgentId: string;
   cwd: string;
+  /** Repository root for Pi's user-level transcript path; defaults to cwd. */
+  repoRoot?: string;
   cursorBootstrapRunId?: string;
   query: ConductorProviderHistoryQuery;
   /** Optional post-page text transformation; omitted to preserve raw values. */
@@ -133,15 +132,27 @@ async function sanitizeProviderHistoryMessages(
 function readPiConductorHistory(input: {
   conductorAgentId: string;
   cwd: string;
+  repoRoot?: string;
 }): ConductorProviderHistoryMessage[] {
   const cwd = input.cwd;
-  const sessionDir = join(cwd, PI_SESSION_ROOT);
-  const sessionFile = SessionManager.findById(
-    cwd,
-    input.conductorAgentId,
-    sessionDir,
-  );
-  if (!sessionFile) {
+  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot ?? cwd });
+  let sessionFile: string | undefined;
+  let sessionDir: string | undefined;
+  for (const candidateDir of new Set([
+    paths.piSessionsDir,
+    paths.legacyPiSessionsDirForCwd(cwd),
+  ])) {
+    sessionFile = SessionManager.findById(
+      cwd,
+      input.conductorAgentId,
+      candidateDir,
+    );
+    if (sessionFile) {
+      sessionDir = candidateDir;
+      break;
+    }
+  }
+  if (!sessionFile || !sessionDir) {
     throw new Error('The Pi provider session is missing or unreadable.');
   }
 

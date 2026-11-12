@@ -19,7 +19,6 @@ import {
 } from 'vitest';
 import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
 
-const PI_SESSION_ROOT = '.ensemble/pi/sessions';
 const PI_HISTORY_ENTRY_TYPE = 'agents-ensemble/conductor-message-history/v1';
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/653';
 const WORKER_PI_SESSION_ID = 'pi-acp-worker-fixture-session';
@@ -416,10 +415,13 @@ describe('ensemble session commands', () => {
   });
 
   it('reports missing provider, summary, and harness log sources explicitly', async () => {
-    await rm(join(conductorCwd, PI_SESSION_ROOT), {
-      recursive: true,
-      force: true,
-    });
+    await rm(
+      resolveEnsemblePaths({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+      }).piSessionsDir,
+      { recursive: true, force: true },
+    );
     const result = runCli([
       'session',
       'timeline',
@@ -796,6 +798,24 @@ describe('ensemble session commands', () => {
     expect(text.stdout).not.toContain('THINKING_SECRET');
   });
 
+  it.each(['running', 'exit'] as const)(
+    'reads non-empty Pi provider history while the saved session is %s',
+    async (harnessPhase) => {
+      await writeResumeStore({ harnessPhase });
+      const result = runCli([
+        'session',
+        'messages',
+        conductorAgentId,
+        '--repo-root',
+        repoRoot,
+        '--json',
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).messages).toHaveLength(1);
+    },
+  );
+
   it('reads Pi ACP worker messages from the fixture in JSON and text', async () => {
     await writeResumeStore({
       preset: 'pi',
@@ -1075,6 +1095,7 @@ describe('ensemble session commands', () => {
       acpCwd?: string;
       acpSessionId?: string;
       issueUrl?: string;
+      harnessPhase?: 'running' | 'exit';
     } = {},
   ): Promise<void> {
     const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
@@ -1124,8 +1145,8 @@ describe('ensemble session commands', () => {
                 acpModelConfigDigest: ACP_MODEL_CONFIG_DIGEST_SECRET,
               }
             : {}),
-          lifecycle: 'closed',
-          harnessPhase: 'close',
+          lifecycle: options.harnessPhase === 'exit' ? 'exited' : 'closed',
+          harnessPhase: options.harnessPhase ?? 'close',
           updatedAt: 1_800_000_000_010,
         },
         null,
@@ -1258,7 +1279,10 @@ describe('ensemble session commands', () => {
       import.meta.url,
     );
     const { SessionManager } = await import(piPackageEntry.href);
-    const sessionDir = join(conductorCwd, PI_SESSION_ROOT);
+    const sessionDir = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+    }).piSessionsDir;
     const manager = SessionManager.create(conductorCwd, sessionDir, {
       id: conductorAgentId,
     });
