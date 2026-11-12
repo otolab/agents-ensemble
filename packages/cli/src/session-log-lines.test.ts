@@ -360,7 +360,7 @@ describe('session-log-lines', () => {
         type: 'conductor.auth.reconnect',
         agentId: 'agent-1',
       }),
-    ).toBe('[auth] conductor 再接続を試行 agentId=agent-1');
+    ).toBe('[auth] conductor 再接続試行 agentId=agent-1');
   });
 
   it('formats transport reconnect without an auth hint', () => {
@@ -375,10 +375,10 @@ describe('session-log-lines', () => {
       'conductor.transport.reconnect status=failed agentId=agent-1 error=resume unavailable',
     );
     expect(formatObservationLogBody(event)).toBe(
-      '[transport] conductor 再接続失敗 agentId=agent-1 error=resume unavailable',
+      '[transport] conductor 再接続失敗 agentId=agent-1 source=automatic error=resume unavailable',
     );
     expect(formatObservationStderrLine(event)).toBe(
-      '[transport] conductor 再接続失敗 agentId=agent-1 error=resume unavailable',
+      '[transport] conductor 再接続失敗 agentId=agent-1 source=automatic error=resume unavailable',
     );
     expect(formatObservationStderrLine(event)).not.toContain('[auth]');
   });

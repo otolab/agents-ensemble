@@ -57,7 +57,7 @@ describe('sendConductorWithReconnect', () => {
     expect(mockResume).not.toHaveBeenCalled();
   });
 
-  it('resumes same agentId and retries once on auth-like error', async () => {
+  it('resumes the same agentId but does not replay an auth-failed prompt', async () => {
     const firstSend = vi.fn().mockResolvedValue({
       runId: '',
       status: 'error',
@@ -94,7 +94,7 @@ describe('sendConductorWithReconnect', () => {
     expect(mockClose).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledOnce();
     expect(firstSend).toHaveBeenCalledOnce();
-    expect(secondSend).toHaveBeenCalledOnce();
+    expect(secondSend).not.toHaveBeenCalled();
     expect(mockResume).toHaveBeenCalledWith('agent-1', {
       cwd: '/repo',
       systemPrompt: 'system prompt',
@@ -103,13 +103,12 @@ describe('sendConductorWithReconnect', () => {
         docs: { type: 'http', url: 'https://example.test/mcp' },
       },
     });
-    expect(secondSend).toHaveBeenCalledWith('hello', expect.any(Object));
-    expect(onReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
-    expect(onAutomaticRetry).toHaveBeenCalledWith({
-      attempt: 1,
-      reason: 'auth',
+    expect(onReconnectAttempt).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      source: 'automatic',
     });
-    expect(result.status).toBe('finished');
+    expect(onAutomaticRetry).not.toHaveBeenCalled();
+    expect(result.status).toBe('error');
     expect(handle.conductor.send).toBe(secondSend);
   });
 
@@ -183,7 +182,7 @@ describe('sendConductorWithReconnect', () => {
     },
   );
 
-  it('returns auth error after resume retry fails', async () => {
+  it('returns auth error after resume without retrying the prompt', async () => {
     const failingSend = vi.fn().mockResolvedValue({
       runId: '',
       status: 'error',
@@ -204,15 +203,12 @@ describe('sendConductorWithReconnect', () => {
     });
 
     expect(mockResume).toHaveBeenCalledOnce();
-    expect(failingSend).toHaveBeenCalledTimes(2);
-    expect(onAutomaticRetry).toHaveBeenCalledWith({
-      attempt: 1,
-      reason: 'auth',
-    });
+    expect(failingSend).toHaveBeenCalledOnce();
+    expect(onAutomaticRetry).not.toHaveBeenCalled();
     expect(result.status).toBe('error');
   });
 
-  it('reconnects and retries once on a transport stall', async () => {
+  it('reconnects on a transport stall without replaying the prompt', async () => {
     const firstSend = vi.fn().mockResolvedValue({
       runId: 'run-1',
       status: 'error',
@@ -241,18 +237,23 @@ describe('sendConductorWithReconnect', () => {
       onTransportReconnectComplete,
     });
 
-    expect(result.status).toBe('finished');
+    expect(result.status).toBe('error');
     expect(mockClose).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledWith('agent-1', {
       cwd: '/repo',
       systemPrompt: 'system prompt',
     });
-    expect(secondSend).toHaveBeenCalledWith('same prompt', expect.any(Object));
+    expect(firstSend).toHaveBeenCalledOnce();
+    expect(secondSend).not.toHaveBeenCalled();
     expect(onAuthReconnectAttempt).not.toHaveBeenCalled();
-    expect(onTransportReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
+    expect(onTransportReconnectAttempt).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      source: 'automatic',
+    });
     expect(onTransportReconnectComplete).toHaveBeenCalledWith({
       agentId: 'agent-1',
       success: true,
+      source: 'automatic',
     });
   });
 
@@ -341,6 +342,7 @@ describe('sendConductorWithReconnect', () => {
     expect(onTransportReconnectComplete).toHaveBeenCalledWith({
       agentId: 'agent-1',
       success: false,
+      source: 'automatic',
       error: 'resume unavailable',
     });
   });
@@ -372,7 +374,10 @@ describe('reconnectConductorAgent', () => {
       }),
     ).resolves.toBe('agent-1');
 
-    expect(onReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
+    expect(onReconnectAttempt).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      source: 'manual',
+    });
     expect(mockClose).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledWith('agent-1', {
       cwd: '/repo',

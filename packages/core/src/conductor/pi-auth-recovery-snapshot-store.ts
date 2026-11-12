@@ -41,7 +41,10 @@ interface StoredSnapshot {
   expiryTimer: ReturnType<typeof setTimeout>;
 }
 
-/** Final Pi resolver failures kept for explicit, local operator inspection. */
+/**
+ * @deprecated Retained for source compatibility. Built-in workflows use
+ * ConductorRecoveryInbox and no longer instantiate this legacy store.
+ */
 export class PiAuthRecoverySnapshotStore {
   private readonly snapshots = new Map<string, StoredSnapshot>();
   private disposed = false;

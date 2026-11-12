@@ -1364,60 +1364,232 @@ describe('runOperatorAgent', () => {
     );
   });
 
-  it('reconnects operator-agent on 401 and retries the same prompt once', async () => {
-    await mkdir(join(repoRoot, '.ensemble', 'pi-project'), { recursive: true });
-    await writeFile(
-      join(repoRoot, '.ensemble', 'pi-project', 'settings.json'),
-      JSON.stringify({ defaultProvider: 'litellm' }),
-    );
+  it('keeps only authored input after a failed first Cursor send and waits for confirmation', async () => {
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
     const stdout = createOutput();
     const stderr = createOutput();
-    const prompts: string[] = [];
-    const initialAgent = createFakeAgent({
-      send: async (prompt) => {
-        prompts.push(prompt);
-        return {
-          runId: 'run-401',
-          status: 'error',
-          error: {
-            message:
-              'litellm API error (401): Your client does not have permission to the requested URL',
-          },
-        };
-      },
+    const config: EnsembleConfig = {
+      profile: { default: 'unused' },
+      conductor: { backend: 'cursor', model: 'cursor-model' },
+    } as EnsembleConfig;
+    const profile: ResolvedProfile = {
+      workers: [],
+      agents: {},
+    };
+    const authoredInput = 'check status after reconnect';
+    const followupInput = 'continue only the unfinished work';
+    const sentPrompts: string[] = [];
+    const initialSend = vi.fn(async (prompt: string) => {
+      sentPrompts.push(prompt);
+      return {
+        runId: 'run-auth',
+        status: 'error',
+        error: {
+          code: 'auth',
+          message:
+            'API key auth failed for provider cursor: authentication failed',
+        },
+      };
     });
-    const resumedAgent = createFakeAgent({
-      send: async (prompt) => {
-        prompts.push(prompt);
-        return { runId: 'run-recovered', status: 'completed', result: 'Recovered.' };
-      },
+    const automaticResumeSend = vi.fn(async (prompt: string) => {
+      sentPrompts.push(prompt);
+      return {
+        runId: 'unexpected-retry',
+        status: 'completed',
+        result: 'unexpected replay',
+      };
     });
-    const resume = vi.fn(async () => resumedAgent);
+    const manualResumeSend = vi.fn(async (prompt: string) => {
+      sentPrompts.push(prompt);
+      return {
+        runId: 'run-followup',
+        status: 'completed',
+        result: 'Follow-up handled.',
+      };
+    });
+    const resume = vi
+      .fn()
+      .mockResolvedValueOnce(
+        createFakeAgent({ send: automaticResumeSend }),
+      )
+      .mockResolvedValueOnce(createFakeAgent({ send: manualResumeSend }));
 
-    await runOperatorAgent(
+    const run = runOperatorAgent(
       { repoRoot },
       {
-        stdin: createInput('check status\n/exit\n'),
+        stdin: input,
         stdout,
         stderr,
+        loadConfig: async () => config,
+        loadProfile: async () => ({ profile, profilePath: 'test-profile' }),
         agentFactory: {
-          create: async () => initialAgent,
+          create: async () => createFakeAgent({ send: initialSend }),
           resume,
         },
       },
     );
 
-    expect(resume).toHaveBeenCalledOnce();
-    expect(resume).toHaveBeenCalledWith(
-      'operator-agent-id',
-      expect.objectContaining({
-        cwd: repoRoot,
-        modelId: 'smoke-model',
-      }),
+    let exited = false;
+    try {
+      await vi.waitFor(() =>
+        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      );
+      input.write(`${authoredInput}\n`);
+      await vi.waitFor(() => {
+        expect(resume).toHaveBeenCalledOnce();
+        expect(stdout.capturedText()).toContain(
+          'operator send が未完了です (status=error, failure=auth)',
+        );
+      });
+
+      expect(initialSend).toHaveBeenCalledOnce();
+      expect(sentPrompts[0]).toContain(
+        'agents-ensemble の operator ロール',
+      );
+      expect(sentPrompts[0]).toContain('## User message');
+      expect(sentPrompts[0]).toContain(authoredInput);
+      expect(automaticResumeSend).not.toHaveBeenCalled();
+      expect(stdout.capturedText()).toContain(
+        'source=automatic',
+      );
+
+      input.write('/recovery list\n');
+      input.write('/recovery show conductor-recovery-1\n');
+      await vi.waitFor(() =>
+        expect(stdout.capturedText()).toContain(
+          'Sensitive recovery content · conductor-recovery-1',
+        ),
+      );
+      const showStart = stdout.capturedText().indexOf(
+        'Sensitive recovery content · conductor-recovery-1',
+      );
+      const recoveryDisplay = stdout.capturedText().slice(showStart);
+      expect(recoveryDisplay).toContain(authoredInput);
+      expect(recoveryDisplay).not.toContain(
+        'agents-ensemble の operator ロール',
+      );
+      expect(recoveryDisplay).not.toContain('Profile operator guidance.');
+
+      input.write(`${followupInput}\n`);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(manualResumeSend).not.toHaveBeenCalled();
+      input.write('/reconnect\n');
+      await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(2));
+      expect(manualResumeSend).not.toHaveBeenCalled();
+      expect(stdout.capturedText()).toContain(
+        'source=manual failure=auth',
+      );
+
+      input.write('/recovery continue\n');
+      await vi.waitFor(() => expect(manualResumeSend).toHaveBeenCalledOnce());
+      expect(sentPrompts).toHaveLength(2);
+      expect(sentPrompts[1]).toContain(followupInput);
+      expect(sentPrompts[1]).not.toContain(authoredInput);
+      expect(stdout.capturedText()).toContain('Follow-up handled.');
+
+      input.write('/exit\n');
+      await run;
+      exited = true;
+    } finally {
+      if (!exited) input.write('/exit\n');
+      input.end();
+      await run.catch(() => {});
+    }
+  });
+
+  it('treats a rejected send as unknown until reconnect and explicit confirmation', async () => {
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const config: EnsembleConfig = {
+      profile: { default: 'unused' },
+      conductor: { backend: 'cursor', model: 'cursor-model' },
+    } as EnsembleConfig;
+    const profile: ResolvedProfile = {
+      workers: [],
+      agents: {},
+    };
+    const authoredInput = 'possibly completed task';
+    const followupInput = 'inspect current state and continue unfinished work';
+    const rawError = 'ambiguous provider rejection with secret-token';
+    const rejectedSend = vi
+      .fn()
+      .mockRejectedValue(new Error(rawError));
+    const followupSend = vi.fn(async (message: string) => {
+      expect(message).toContain(followupInput);
+      expect(message).not.toContain(authoredInput);
+      return {
+        runId: 'run-followup',
+        status: 'completed',
+        result: 'Follow-up handled.',
+      };
+    });
+    const resume = vi.fn(async () =>
+      createFakeAgent({ send: followupSend }),
     );
-    expect(prompts).toEqual(['check status', 'check status']);
-    expect(stdout.capturedText()).toContain('Recovered.');
-    expect(stderr.capturedText()).toBe('');
+
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout,
+        stderr,
+        loadConfig: async () => config,
+        loadProfile: async () => ({ profile, profilePath: 'test-profile' }),
+        agentFactory: {
+          create: async () => createFakeAgent({ send: rejectedSend }),
+          resume,
+        },
+      },
+    );
+
+    let exited = false;
+    try {
+      await vi.waitFor(() =>
+        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      );
+      input.write(`${authoredInput}\n`);
+      await vi.waitFor(() => {
+        expect(stdout.capturedText()).toContain(
+          'operator send が未完了です (status=send_rejected, failure=send_rejected)',
+        );
+        expect(stdout.capturedText()).toContain(
+          '明示的に /reconnect するまで conductor への送信を停止します。',
+        );
+      });
+
+      expect(rejectedSend).toHaveBeenCalledOnce();
+      expect(resume).not.toHaveBeenCalled();
+      expect(stdout.capturedText()).not.toContain(rawError);
+      expect(stderr.capturedText()).not.toContain(rawError);
+
+      input.write(`${followupInput}\n`);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(followupSend).not.toHaveBeenCalled();
+
+      input.write('/reconnect\n');
+      await vi.waitFor(() => {
+        expect(resume).toHaveBeenCalledOnce();
+        expect(stdout.capturedText()).toContain(
+          'source=manual failure=send_rejected',
+        );
+      });
+      expect(followupSend).not.toHaveBeenCalled();
+
+      input.write('/recovery continue\n');
+      await vi.waitFor(() => expect(followupSend).toHaveBeenCalledOnce());
+      expect(stdout.capturedText()).toContain('Follow-up handled.');
+
+      input.write('/exit\n');
+      await run;
+      exited = true;
+    } finally {
+      if (!exited) input.write('/exit\n');
+      input.end();
+      await run.catch(() => {});
+    }
   });
 
   it('intercepts reconnect commands and reports each resume result without sending them', async () => {
@@ -1500,11 +1672,16 @@ describe('runOperatorAgent', () => {
       expect(message).toContain(prompt);
       return authFailure;
     });
-    const manualReconnectSend = vi.fn(async () => ({
-      runId: 'unexpected',
-      status: 'completed',
-      result: 'unexpected replay',
-    }));
+    const followup = 'continue only the unfinished work';
+    const manualReconnectSend = vi.fn(async (message: string) => {
+      expect(message).toContain(followup);
+      expect(message).not.toContain(prompt);
+      return {
+        runId: 'run-followup',
+        status: 'completed',
+        result: 'Follow-up handled.',
+      };
+    });
     const resume = vi
       .fn()
       .mockResolvedValueOnce(createFakeAgent({ send: automaticRetrySend }))
@@ -1523,26 +1700,34 @@ describe('runOperatorAgent', () => {
       },
     );
 
+    await vi.waitFor(() =>
+      expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+    );
     stdin.write(`${prompt}\n`);
     await vi.waitFor(() => expect(stderr.capturedText()).toContain('[auth] Pi 認証エラー'));
     expect(firstSend).toHaveBeenCalledOnce();
-    expect(automaticRetrySend).toHaveBeenCalledOnce();
+    expect(automaticRetrySend).not.toHaveBeenCalled();
     expect(resume).toHaveBeenCalledOnce();
+    expect(stdout.capturedText()).toContain('operator send が未完了です');
 
     stdin.write('/reconnect\n');
     await vi.waitFor(() => expect(resume).toHaveBeenCalledTimes(2));
     expect(manualReconnectSend).not.toHaveBeenCalled();
 
+    stdin.write('/recovery continue\n');
+    stdin.write(`${followup}\n`);
+    await vi.waitFor(() => expect(manualReconnectSend).toHaveBeenCalledOnce());
+
     stdin.write('/exit\n');
     await run;
 
     expect(firstSend).toHaveBeenCalledOnce();
-    expect(automaticRetrySend).toHaveBeenCalledOnce();
-    expect(manualReconnectSend).not.toHaveBeenCalled();
+    expect(automaticRetrySend).not.toHaveBeenCalled();
+    expect(manualReconnectSend).toHaveBeenCalledOnce();
     expect(stderr.capturedText()).toContain('ensemble operator-agent');
   });
 
-  it('prints Pi auth recovery steps to stderr when reconnect and retry still fail', async () => {
+  it('prints Pi auth recovery steps to stderr after reconnect when the send still fails', async () => {
     const projectDir = join(repoRoot, '.ensemble', 'pi-project');
     await mkdir(projectDir, { recursive: true });
     await writeFile(

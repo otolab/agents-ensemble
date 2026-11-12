@@ -1,5 +1,6 @@
 import type { SessionEvent } from './session-event.js';
 import { canDispatchConductorSend } from '../session-policy.js';
+import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from '../conductor-recovery-inbox.js';
 import {
   isTriggerSessionEvent,
   sessionEventDispatchMode,
@@ -27,6 +28,8 @@ export interface SelectDispatchBatchInput {
   maxTurns: number;
   /** `idle` operator.message を dispatch 対象に含めるか。既定は true。 */
   allowIdleOperatorMessages?: boolean;
+  /** Operator batches can be split at the recovery inbox admission limit. */
+  maxOperatorInputBytes?: number;
 }
 
 export interface SelectDispatchBatchResult {
@@ -180,6 +183,7 @@ export function selectDispatchBatch(
     autonomousTurns,
     maxTurns,
     allowIdleOperatorMessages = true,
+    maxOperatorInputBytes,
   } = input;
   const eligible = queue.filter((event) =>
     isDispatchable(
@@ -206,7 +210,7 @@ export function selectDispatchBatch(
     chosenKey = pickStaticSourceKey(queue, eligible);
   }
 
-  const batchEvents = queue.filter((event) => {
+  let batchEvents = queue.filter((event) => {
     if (eventSourceKey(event) !== chosenKey) {
       return false;
     }
@@ -225,6 +229,34 @@ export function selectDispatchBatch(
       canDispatchConductorSend(event, autonomousTurns, maxTurns)
     );
   });
+  const operatorInputByteLimit =
+    maxOperatorInputBytes ?? CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT;
+  if (chosenKey === 'operator' && operatorInputByteLimit >= 0) {
+    const boundedEvents: SessionEvent[] = [];
+    let inputBytes = 0;
+    for (const event of batchEvents) {
+      if (event.type !== 'operator.message') break;
+      const eventBytes = Buffer.byteLength(
+        event.operatorInput ?? event.text,
+        'utf8',
+      );
+      if (eventBytes > operatorInputByteLimit) {
+        break;
+      }
+      if (
+        boundedEvents.length > 0 &&
+        inputBytes + eventBytes > operatorInputByteLimit
+      ) {
+        break;
+      }
+      boundedEvents.push(event);
+      inputBytes += eventBytes;
+    }
+    batchEvents = boundedEvents;
+  }
+  if (batchEvents.length === 0) {
+    return undefined;
+  }
   const batchSet = new Set(batchEvents);
   const remainingQueue = queue.filter((event) => !batchSet.has(event));
 

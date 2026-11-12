@@ -213,7 +213,7 @@ describe('createTuiTelemetrySink', () => {
       { label: 'separator', text: '' },
       {
         label: 'observation',
-        text: '[transport] conductor 再接続失敗 agentId=agent-1 error=resume unavailable',
+        text: '[transport] conductor 再接続失敗 agentId=agent-1 source=automatic error=resume unavailable',
       },
     ]);
   });

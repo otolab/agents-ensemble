@@ -21,6 +21,8 @@ export type SessionEvent =
 export interface OperatorMessageEvent extends SessionEventDispatchFields {
   type: 'operator.message';
   text: string;
+  /** Original operator-authored text when `text` also includes harness context. */
+  operatorInput?: string;
   delivery?: OperatorMessageDelivery;
   /** Open Question の回答を含む入力。 */
   openQuestionAnswer?: boolean;
@@ -70,7 +72,10 @@ export interface HarnessConnectivityRecoveredEvent
   suppressedErrorCount: number;
 }
 
-/** 手動 reconnect 後に Pi の auth failure を伝える安全な一回限りの context。 */
+/**
+ * @deprecated Legacy model-facing recovery event retained for compatibility.
+ * Built-in workflows use a local operator warning and do not enqueue it.
+ */
 export interface ConductorRecoveryReportEvent
   extends SessionEventDispatchFields {
   type: 'conductor.recovery.report';

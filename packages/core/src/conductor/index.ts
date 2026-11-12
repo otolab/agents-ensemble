@@ -105,6 +105,37 @@ export type {
   OperatorInputContext,
   OperatorInputSubmitOptions,
 } from './operator-input-binding.js';
+export { ConductorDispatchLifecycle } from './conductor-dispatch-lifecycle.js';
+export type {
+  ConductorDispatchLease,
+  ConductorDispatchState,
+  ConductorReconnectLease,
+} from './conductor-dispatch-lifecycle.js';
+export {
+  CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
+  CONDUCTOR_RECOVERY_SNAPSHOT_LIMIT,
+  CONDUCTOR_RECOVERY_SNAPSHOT_TTL_MS,
+  CONDUCTOR_RECOVERY_TOTAL_BYTE_LIMIT,
+  ConductorRecoveryInbox,
+} from './conductor-recovery-inbox.js';
+export type {
+  ConductorRecoveryAttemptMetadata,
+  ConductorRecoveryBackend,
+  ConductorRecoveryFailureClass,
+  ConductorRecoveryReconnect,
+  ConductorRecoveryReservation,
+  ConductorRecoveryReservationResult,
+  ConductorRecoverySnapshot,
+  ConductorRecoverySnapshotSummary,
+  ConductorRecoveryWorkflow,
+} from './conductor-recovery-inbox.js';
+export { executeRecoveryInboxCommand } from './recovery-inbox-command.js';
+export type {
+  ExecuteRecoveryInboxCommandOptions,
+  OperatorRecoveryInspection,
+  RecoveryInboxCommandApi,
+  RecoveryInboxCommandResult,
+} from './recovery-inbox-command.js';
 export {
   PiAuthRecoverySnapshotStore,
   PI_AUTH_RECOVERY_SNAPSHOT_LIMIT,
@@ -116,8 +147,15 @@ export type {
   PiAuthRecoverySnapshotStoreAddResult,
   PiAuthRecoverySnapshotSummary,
 } from './pi-auth-recovery-snapshot-store.js';
-export { submitOperatorInput } from './submit-operator-input.js';
-export type { SubmitOperatorInputInput } from './submit-operator-input.js';
+export {
+  enqueueOperatorMessage,
+  isOperatorInputWithinRecoveryLimit,
+  submitOperatorInput,
+} from './submit-operator-input.js';
+export type {
+  EnqueueOperatorMessageInput,
+  SubmitOperatorInputInput,
+} from './submit-operator-input.js';
 export { isOperatorExitCommand } from './operator-exit.js';
 export { isOperatorCloseCommand } from './operator-close.js';
 export { isOperatorReconnectCommand } from './operator-reconnect.js';

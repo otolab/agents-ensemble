@@ -1,9 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { fakeRl, mockCreateInterface, stderrWrites, stderrTty } = vi.hoisted(() => {
+const {
+  fakeRl,
+  mockCreateInterface,
+  stderrWrites,
+  stderrTty,
+  stdoutTty,
+} = vi.hoisted(() => {
   const stderrWrites: string[] = [];
   const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
   const stderrTty = { value: true };
+  const stdoutTty = { value: true };
   const fakeRl = {
     setPrompt: vi.fn(),
     prompt: vi.fn(),
@@ -35,6 +42,7 @@ const { fakeRl, mockCreateInterface, stderrWrites, stderrTty } = vi.hoisted(() =
     mockCreateInterface: vi.fn(() => fakeRl),
     stderrWrites,
     stderrTty,
+    stdoutTty,
   };
 });
 
@@ -56,6 +64,12 @@ vi.mock('node:process', async (importOriginal) => {
         return true;
       },
     },
+    stdout: {
+      ...actual.stdout,
+      get isTTY() {
+        return stdoutTty.value;
+      },
+    },
   };
 });
 
@@ -63,12 +77,16 @@ import {
   bindAsyncOperatorInput,
   notifyOperatorInputReprompt,
 } from './async-operator-input.js';
-import type { OpenQuestion } from '@agents-ensemble/core';
+import type {
+  ConductorRecoverySnapshot,
+  OpenQuestion,
+} from '@agents-ensemble/core';
 
 describe('bindAsyncOperatorInput', () => {
   beforeEach(() => {
     mockCreateInterface.mockClear();
     stderrTty.value = true;
+    stdoutTty.value = true;
     fakeRl.setPrompt.mockClear();
     fakeRl.prompt.mockClear();
     fakeRl.close.mockClear();
@@ -167,27 +185,28 @@ describe('bindAsyncOperatorInput', () => {
       value: true,
     });
     const submit = vi.fn(() => true);
-    const getPiAuthRecoverySnapshot = vi.fn(() => ({
-      recoveryId: 'pi-auth-recovery-12',
+    const getRecoverySnapshot = vi.fn(() => ({
+      recoveryId: 'conductor-recovery-12',
       createdAt: 1_800_000_000_000,
       expiresAt: 1_800_001_800_000,
-      failedDispatch: {
-        sendCount: 12,
-        runId: 'run-12',
-        sourceKey: 'operator',
-        eventTypes: ['operator.message'],
-        eventCount: 1,
-        eventReferences: [],
-        eventReferencesTruncated: false,
+      sendCount: 12,
+      workflow: 'issue' as const,
+      backend: 'pi' as const,
+      runId: 'run-12',
+      sourceKey: 'operator',
+      eventTypes: ['operator.message'],
+      status: 'error',
+      failureClass: 'auth' as const,
+      automaticReconnect: {
+        reason: 'auth' as const,
+        succeeded: true,
       },
-      failure: {
-        kind: 'pi_api_key_resolution' as const,
-        automaticRetryAttempts: 1 as const,
-        toolCallStarted: false,
-      },
-      content: 'private task body',
+      automaticRetryAttempts: 0 as const,
+      toolCallStarted: false,
+      inputTexts: ['private task body'],
+      inputCount: 1,
       contentBytes: 17,
-    }));
+    } satisfies ConductorRecoverySnapshot));
 
     const dispose = bindAsyncOperatorInput(
       {
@@ -198,17 +217,17 @@ describe('bindAsyncOperatorInput', () => {
           maxTurns: null,
           openQuestions: [],
         }),
-        listPiAuthRecoverySnapshots: () => [],
-        getPiAuthRecoverySnapshot,
-        clearPiAuthRecoverySnapshot: () => false,
+        listRecoverySnapshots: () => [],
+        getRecoverySnapshot,
+        clearRecoverySnapshot: () => false,
       },
     );
 
     stderrWrites.length = 0;
-    fakeRl.emit('line', '/recovery show pi-auth-recovery-12');
+    fakeRl.emit('line', '/recovery show conductor-recovery-12');
 
-    expect(getPiAuthRecoverySnapshot).toHaveBeenCalledWith(
-      'pi-auth-recovery-12',
+    expect(getRecoverySnapshot).toHaveBeenCalledWith(
+      'conductor-recovery-12',
     );
     expect(submit).not.toHaveBeenCalled();
     expect(stderrWrites.join('')).toContain('private task body');
@@ -223,8 +242,9 @@ describe('bindAsyncOperatorInput', () => {
       value: true,
     });
     stderrTty.value = false;
+    stdoutTty.value = true;
     const submit = vi.fn(() => true);
-    const getPiAuthRecoverySnapshot = vi.fn();
+    const getRecoverySnapshot = vi.fn();
 
     const dispose = bindAsyncOperatorInput({
       submit,
@@ -234,15 +254,15 @@ describe('bindAsyncOperatorInput', () => {
         maxTurns: null,
         openQuestions: [],
       }),
-      listPiAuthRecoverySnapshots: () => [],
-      getPiAuthRecoverySnapshot,
-      clearPiAuthRecoverySnapshot: () => false,
+      listRecoverySnapshots: () => [],
+      getRecoverySnapshot,
+      clearRecoverySnapshot: () => false,
     });
     stderrWrites.length = 0;
 
-    fakeRl.emit('line', '/recovery show pi-auth-recovery-1');
+    fakeRl.emit('line', '/recovery show conductor-recovery-1');
 
-    expect(getPiAuthRecoverySnapshot).not.toHaveBeenCalled();
+    expect(getRecoverySnapshot).not.toHaveBeenCalled();
     expect(stderrWrites.join('')).toContain('対話 TTY 上でのみ表示');
     expect(stderrWrites.join('')).not.toContain('private task body');
     expect(submit).not.toHaveBeenCalled();

@@ -175,13 +175,17 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | なし（sink のみ） |
 | `session.stop` | セッション終了直前 | `stopReason` を確定 |
 
-Pi auth recovery の operator-only snapshot は `SessionLogger` と別の process-local store に置きます。
-snapshot 本文を持つ新しい `SessionLogEvent` は発行せず、SessionSummary の専用 field や SessionResumeStore にも
-加えません。failure の `harness.warning` は ID / expiry / eviction ID だけです。これは既存 event の扱いを
-変えるものではありません。`operator.input` / `operator.dispatched` は本文を持つ live event であり、
-`worker.round` の worker result は既存どおり SessionLogger / session summary に蓄積されます。明示的な
-`/recovery show` は TTY に内容を表示するため、terminal capture / recording からは保護されません。
-snapshot の保持条件と確認手順は [operator-input.md](operator-input.md) を参照してください。
+Conductor recovery inbox は `SessionLogger` と別の process-local store です。対話 TTY に限り、失敗した
+dispatch に含まれる operator-authored input を保持します。snapshot 本文を持つ新しい `SessionLogEvent` は
+発行せず、SessionSummary、SessionResumeStore、UDS response、conductor send にも追加しません。未完了 send の
+`harness.warning` は status / failure class / attempt ID / snapshot ID と操作案内だけを示し、本文や raw error
+を含めません。非 TTY では本文を保存せず、同一 process 内でも確認できない旨を本文なしで知らせます。
+
+これは既存 event の扱いを変えるものではありません。`operator.input` / `operator.dispatched` は従来どおり
+operator message の本文を扱い、`worker.round` の worker result は従来どおり SessionLogger / session summary に
+蓄積されます。ここで防ぐのは recovery snapshot を新たな保存先へ複製することです。明示的な
+`/recovery show` は TTY に内容を表示するため、terminal capture / recording からは保護されません。snapshot の
+保持条件と確認手順は [operator-input.md](operator-input.md) を参照してください。
 
 ### 組み込み sink（CLI）
 

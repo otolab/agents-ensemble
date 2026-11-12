@@ -4649,7 +4649,7 @@ describe('runConductorSession resume / shutdown', () => {
     ).toBe(true);
   });
 
-  it('recovers in-process via resume without auth recovery hint', async () => {
+  it('resumes after an auth failure without replaying the initial prompt', async () => {
     const projectMcpRoot = join(repoRoot, '.agents');
     await mkdir(projectMcpRoot, { recursive: true });
     await writeFile(
@@ -4672,11 +4672,7 @@ describe('runConductorSession resume / shutdown', () => {
       emitted.push(event);
     });
     const shutdown = new AbortController();
-    const mockSendAfterResume = vi.fn().mockResolvedValue({
-      runId: 'run-2',
-      status: 'running',
-      result: 'recovered',
-    });
+    const mockSendAfterResume = vi.fn();
 
     mockSend.mockResolvedValueOnce({
       runId: 'run-1',
@@ -4696,7 +4692,7 @@ describe('runConductorSession resume / shutdown', () => {
       getUsage: createMockConductorGetUsage(),
     }));
 
-    const sessionPromise = runConductorSession({
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
@@ -4707,13 +4703,11 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
     });
 
-    await vi.waitFor(() => expect(mockSendAfterResume).toHaveBeenCalled());
-    shutdown.abort();
-    await sessionPromise;
+    expect(result.stopReason).toBe('error');
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(mockSendAfterResume).not.toHaveBeenCalled();
 
-    expect(
-      emitted.some((event) => event.type === 'conductor.auth.recovery'),
-    ).toBe(false);
+    expect(emitted.some((event) => event.type === 'conductor.auth.recovery')).toBe(true);
     expect(
       emitted.some(
         (event) => event.type === 'conductor.auth.reconnect',
@@ -4732,7 +4726,7 @@ describe('runConductorSession resume / shutdown', () => {
     );
   });
 
-  it('retries a Pi API-key resolution failure once and emits a provider-specific recovery hint', async () => {
+  it('resumes after a Pi API-key resolution failure without replay and emits a provider-specific hint', async () => {
     await mkdir(join(repoRoot, '.ensemble', 'pi'), { recursive: true });
     await writeFile(
       join(repoRoot, '.ensemble', 'pi', 'settings.json'),
@@ -4773,7 +4767,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     expect(result.stopReason).toBe('error');
-    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(mockSend).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledOnce();
 
     const recovery = emitted.find(
@@ -4786,7 +4780,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(recovery?.hint).not.toContain('ensemble auth logout');
   });
 
-  it('keeps failed event content operator-only and drops it when /close ends the process', async () => {
+  it('keeps only operator-authored failed input in the TTY inbox and drops it on /close', async () => {
     await mkdir(join(repoRoot, '.ensemble', 'pi'), { recursive: true });
     await writeFile(
       join(repoRoot, '.ensemble', 'pi', 'settings.json'),
@@ -4802,15 +4796,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
     sessionLogger.subscribe((event) => emitted.push(event));
     const onPostLoopWait = vi.fn();
-    const retrySend = vi.fn().mockResolvedValue({
-      runId: 'run-after-resume',
-      status: 'error',
-      error: {
-        code: 'auth',
-        message:
-          'API key auth failed for provider anthropic: Failed to resolve API key for provider "anthropic" from shell command: /private/secret/cached-auth.mjs',
-      },
-    });
+    const retrySend = vi.fn();
     let operatorApi: OperatorInputBindingApi | undefined;
 
     stubUnusedControlServer();
@@ -4849,6 +4835,7 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
       waitForOperatorExit: true,
       continueOnConductorError: true,
+      operatorCanInspectRecovery: true,
       onPostLoopWait,
       bindOperatorInput: (api) => {
         operatorApi = api;
@@ -4858,34 +4845,38 @@ describe('runConductorSession resume / shutdown', () => {
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
     const privateInstruction = 'private operator recovery instruction';
     expect(operatorApi!.submit(privateInstruction)).toBe(true);
-    await vi.waitFor(() => expect(retrySend).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
-      expect(operatorApi!.listPiAuthRecoverySnapshots?.()).toHaveLength(1),
+      expect(operatorApi!.listRecoverySnapshots?.()).toHaveLength(1),
     );
 
-    const retained = operatorApi!.getPiAuthRecoverySnapshot?.(
-      'pi-auth-recovery-2',
+    const summary = operatorApi!.listRecoverySnapshots?.()[0];
+    const retained = operatorApi!.getRecoverySnapshot?.(
+      summary!.recoveryId,
     );
-    expect(retained?.content).toContain(privateInstruction);
-    expect(retained?.content).not.toContain('/private/secret/cached-auth.mjs');
+    expect(retained?.inputTexts).toEqual([privateInstruction]);
+    expect(retained?.failureClass).toBe('auth');
+    expect(JSON.stringify(retained)).not.toContain(
+      '/private/secret/cached-auth.mjs',
+    );
+    expect(retrySend).not.toHaveBeenCalled();
     expect(
       emitted.find(
         (event) =>
           event.type === 'harness.warning' &&
-          event.message.includes('Pi authentication failure snapshot'),
+          event.message.includes('/recovery continue'),
       )?.message,
     ).not.toContain(privateInstruction);
 
     expect(operatorApi!.submit('/close')).toBe(false);
     const result = await sessionPromise;
-    expect(operatorApi!.listPiAuthRecoverySnapshots?.()).toEqual([]);
+    expect(operatorApi!.listRecoverySnapshots?.()).toEqual([]);
     expect(
-      operatorApi!.getPiAuthRecoverySnapshot?.('pi-auth-recovery-2'),
+      operatorApi!.getRecoverySnapshot?.(summary!.recoveryId),
     ).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain(privateInstruction);
   });
 
-  it('recovers transport stalls without auth reconnect or recovery hints', async () => {
+  it('reconnects after a transport stall without replaying the ambiguous prompt', async () => {
     const emitted: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({
       issueUrl: TEST_ISSUE.url,
@@ -4919,12 +4910,9 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
     });
 
-    expect(result.stopReason).toBe('completed');
+    expect(result.stopReason).toBe('error');
     expect(mockSend).toHaveBeenCalledOnce();
-    expect(resumedSend).toHaveBeenCalledWith(
-      expect.stringContaining('作業フローの連鎖'),
-      expect.any(Object),
-    );
+    expect(resumedSend).not.toHaveBeenCalled();
     expect(
       emitted
         .filter((event) => event.type === 'conductor.transport.reconnect')

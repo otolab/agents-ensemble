@@ -5,6 +5,7 @@ import {
   selectOperatorDispatchBatch,
   type OperatorDispatchEvent,
 } from './operator-dispatch.js';
+import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from '@agents-ensemble/core/operator-runtime';
 
 function report(
   conductorAgentId: string,
@@ -123,6 +124,58 @@ describe('operator dispatch batching', () => {
     expect(formatOperatorDispatchBatch(selected!.batch.events)).toContain(
       '### 2/2\n\nsecond',
     );
+  });
+
+  it('splits user batches by UTF-8 byte budget without mixing watch reports', () => {
+    const firstUser: OperatorDispatchEvent = {
+      type: 'user',
+      text: '1234',
+      arrival: 0,
+      readyAt: 0,
+    };
+    const watchedReport = report('session-1', 'open_question', 'watch report', 1);
+    const secondUser: OperatorDispatchEvent = {
+      type: 'user',
+      text: '56',
+      arrival: 2,
+      readyAt: 0,
+    };
+
+    const first = selectOperatorDispatchBatch(
+      [firstUser, watchedReport, secondUser],
+      { continuationConsumed: false },
+      0,
+      5,
+    );
+    expect(first?.batch.events).toEqual([firstUser]);
+    expect(first?.remaining).toEqual([watchedReport, secondUser]);
+
+    const second = selectOperatorDispatchBatch(
+      first!.remaining,
+      { continuationConsumed: false },
+      0,
+      5,
+    );
+    expect(second?.batch.events).toEqual([secondUser]);
+    expect(second?.remaining).toEqual([watchedReport]);
+
+    const reportBatch = selectOperatorDispatchBatch(
+      second!.remaining,
+      { continuationConsumed: false },
+      0,
+      5,
+    );
+    expect(reportBatch?.batch.events).toEqual([watchedReport]);
+  });
+
+  it('rejects user input above the recovery admission limit before enqueue', () => {
+    const queue = createOperatorDispatchQueue();
+    const oversized = 'x'.repeat(CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT + 1);
+
+    expect(queue.enqueueUser(oversized)).toBe(false);
+    expect(queue.pendingUserCount).toBe(0);
+    expect(queue.enqueueUser('within limit')).toBe(true);
+    expect(queue.pendingUserCount).toBe(1);
   });
 
   it('labels Open Question additions and keeps simultaneous sessions distinct', () => {

@@ -1,3 +1,5 @@
+import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from '@agents-ensemble/core/operator-runtime';
+
 export type OperatorDispatchEvent =
   | {
       type: 'user';
@@ -31,7 +33,7 @@ export interface OperatorDispatchBatch {
 
 export interface OperatorDispatchQueue {
   subscribe(listener: () => void): () => void;
-  enqueueUser(text: string): void;
+  enqueueUser(text: string): boolean;
   enqueueReport(
     event: Omit<Extract<OperatorDispatchEvent, { type: 'report' }>, 'arrival' | 'readyAt'>,
     debounceMs: number,
@@ -56,6 +58,11 @@ export interface OperatorDispatchQueue {
     releasedEventCount: number;
   };
   setHold(hold: boolean): { heldEventCount: number; releasedEventCount: number };
+  selectBatch(
+    state: OperatorDispatchState,
+    now?: number,
+  ): OperatorDispatchBatch | undefined;
+  commitBatch(batch: OperatorDispatchBatch): boolean;
   takeBatch(state: OperatorDispatchState, now?: number): OperatorDispatchBatch | undefined;
   nextReadyAt(): number | undefined;
   waitForChange(timeoutMs?: number): Promise<void>;
@@ -92,6 +99,7 @@ export function selectOperatorDispatchBatch(
   queue: readonly OperatorDispatchEvent[],
   state: OperatorDispatchState,
   now = Date.now(),
+  maxUserInputBytes = CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
 ): { batch: OperatorDispatchBatch; remaining: OperatorDispatchEvent[] } | undefined {
   const ready = queue.filter((event) => event.readyAt <= now);
   if (ready.length === 0) return undefined;
@@ -122,9 +130,25 @@ export function selectOperatorDispatchBatch(
     }
   }
 
-  const events = ready.filter(
+  let events = ready.filter(
     (event) => operatorEventSourceKey(event) === sourceKey,
   );
+  if (sourceKey === 'user') {
+    const bounded: OperatorDispatchEvent[] = [];
+    let inputBytes = 0;
+    for (const event of events) {
+      if (event.type !== 'user') break;
+      const eventBytes = Buffer.byteLength(event.text, 'utf8');
+      if (eventBytes > maxUserInputBytes) break;
+      if (bounded.length > 0 && inputBytes + eventBytes > maxUserInputBytes) {
+        break;
+      }
+      bounded.push(event);
+      inputBytes += eventBytes;
+    }
+    events = bounded;
+    if (events.length === 0) return undefined;
+  }
   const selected = new Set(events);
   return {
     batch: { sourceKey, events, usedContinuation },
@@ -288,7 +312,12 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
     },
     enqueueUser(text) {
       const trimmed = text.trim();
-      if (!trimmed) return;
+      if (
+        !trimmed ||
+        Buffer.byteLength(trimmed, 'utf8') > CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT
+      ) {
+        return false;
+      }
       pending.push({
         type: 'user',
         text: trimmed,
@@ -296,6 +325,7 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
         readyAt: 0,
       });
       notify();
+      return true;
     },
     enqueueReport(event, debounceMs) {
       this.enqueueReports([event], debounceMs);
@@ -351,11 +381,23 @@ export function createOperatorDispatchQueue(): OperatorDispatchQueue {
       reportHold = nextHold;
       return updateHold(previousHold);
     },
-    takeBatch(state, now = Date.now()) {
+    selectBatch(state, now = Date.now()) {
       const selected = selectOperatorDispatchBatch(pending, state, now);
-      if (!selected) return undefined;
-      pending = selected.remaining;
-      return selected.batch;
+      return selected?.batch;
+    },
+    commitBatch(batch) {
+      const selected = new Set(batch.events);
+      const previousLength = pending.length;
+      pending = pending.filter((event) => !selected.has(event));
+      if (pending.length === previousLength) return false;
+      notify();
+      return true;
+    },
+    takeBatch(state, now = Date.now()) {
+      const batch = this.selectBatch(state, now);
+      if (!batch) return undefined;
+      this.commitBatch(batch);
+      return batch;
     },
     nextReadyAt() {
       return pending.reduce<number | undefined>(

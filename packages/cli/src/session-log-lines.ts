@@ -103,6 +103,9 @@ export function formatHarnessLogBody(
       return undefined;
     case 'conductor.transport.reconnect': {
       let line = `conductor.transport.reconnect status=${event.status} agentId=${event.agentId}`;
+      if (event.source) {
+        line += ` source=${event.source}`;
+      }
       if (event.error) {
         line += ` error=${event.error}`;
       }
@@ -220,8 +223,15 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
       return undefined;
     case 'conductor.auth.recovery':
       return event.hint;
-    case 'conductor.auth.reconnect':
-      return `[auth] conductor 再接続を試行 agentId=${event.agentId}`;
+    case 'conductor.auth.reconnect': {
+      const status =
+        event.status === 'succeeded'
+          ? '成功'
+          : event.status === 'failed'
+            ? '失敗'
+            : '試行';
+      return `[auth] conductor 再接続${status} agentId=${event.agentId}${event.source ? ` source=${event.source}` : ''}${event.error ? ` error=${event.error}` : ''}`;
+    }
     case 'conductor.transport.reconnect': {
       const action =
         event.status === 'attempt'
@@ -229,7 +239,9 @@ export function formatObservationLogBody(event: SessionLogEvent): string | undef
           : event.status === 'succeeded'
             ? '成功'
             : '失敗';
-      return `[transport] conductor 再接続${action} agentId=${event.agentId}${event.error ? ` error=${event.error}` : ''}`;
+      const source = event.source ?? 'automatic';
+      const kind = source === 'manual' ? 'manual' : 'transport';
+      return `[${kind}] conductor 再接続${action} agentId=${event.agentId} source=${source}${event.error ? ` error=${event.error}` : ''}`;
     }
     default:
       return undefined;

@@ -3,7 +3,7 @@ import { stdin as input, stderr, stdout as output } from 'node:process';
 import type { OperatorInputBindingApi, OperatorInputContext } from '@agents-ensemble/core';
 import { formatIssueReference } from './tui/format-operator-context.js';
 import { resolveInitialOperatorMessage } from './operator-message.js';
-import { executePiAuthRecoveryCommand } from './operator-recovery-command.js';
+import { executeRecoveryInboxCommand } from './operator-recovery-command.js';
 
 let activeReprompt: (() => void) | undefined;
 
@@ -47,7 +47,9 @@ export function bindAsyncOperatorInput(
     options.initialOperatorMessage,
   );
   if (initialOperatorMessage) {
-    api.submit(initialOperatorMessage);
+    if (!handleLocalRecoveryCommand(api, initialOperatorMessage)) {
+      api.submit(initialOperatorMessage);
+    }
     return () => {};
   }
 
@@ -70,16 +72,7 @@ export function bindAsyncOperatorInput(
   const onLine = (line: string) => {
     const trimmed = line.trim();
     if (trimmed) {
-      const recoveryCommand = executePiAuthRecoveryCommand(api, trimmed, {
-        canDisplaySensitiveContent: stderr.isTTY === true,
-      });
-      if (recoveryCommand.handled) {
-        if (recoveryCommand.inspection) {
-          stderr.write(
-            `\n${recoveryCommand.inspection.title}\n${recoveryCommand.inspection.text}\n\n`,
-          );
-        }
-      } else {
+      if (!handleLocalRecoveryCommand(api, trimmed)) {
         api.submit(trimmed);
       }
     }
@@ -97,4 +90,23 @@ export function bindAsyncOperatorInput(
     rl.off('line', onLine);
     rl.close();
   };
+}
+
+function handleLocalRecoveryCommand(
+  api: OperatorInputBindingApi,
+  inputText: string,
+): boolean {
+  const recoveryCommand = executeRecoveryInboxCommand(api, inputText, {
+    canDisplaySensitiveContent:
+      input.isTTY === true &&
+      output.isTTY === true &&
+      stderr.isTTY === true,
+  });
+  if (!recoveryCommand.handled) return false;
+  if (recoveryCommand.inspection) {
+    stderr.write(
+      `\n${recoveryCommand.inspection.title}\n${recoveryCommand.inspection.text}\n\n`,
+    );
+  }
+  return true;
 }

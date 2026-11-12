@@ -10,6 +10,7 @@ import type {
   OperatorMessageDelivery,
   OperatorMessageEvent,
 } from './session/session-event.js';
+import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from './conductor-recovery-inbox.js';
 
 export interface SubmitOperatorInputInput {
   message: string;
@@ -27,6 +28,8 @@ export interface SubmitOperatorInputInput {
 
 export interface EnqueueOperatorMessageInput {
   message: string;
+  /** Original operator text when `message` includes generated Open Question context. */
+  operatorInput?: string;
   delivery?: OperatorMessageDelivery;
   conductorTurn: number;
   eventQueue: SessionEventQueue;
@@ -44,11 +47,17 @@ export function enqueueOperatorMessage(
   if (!text) {
     return false;
   }
+  const operatorInput = input.operatorInput?.trim() || text;
+  if (!isOperatorInputWithinRecoveryLimit(operatorInput)) {
+    emitOversizedOperatorInputWarning(input.sessionLogger);
+    return false;
+  }
 
   const delivery = input.delivery ?? 'next';
   const event: OperatorMessageEvent = {
     type: 'operator.message',
     text,
+    ...(operatorInput !== text ? { operatorInput } : {}),
     delivery,
     ...(input.openQuestionAnswer ? { openQuestionAnswer: true } : {}),
     ...(input.answerPreview ? { answerPreview: input.answerPreview } : {}),
@@ -68,6 +77,10 @@ export function enqueueOperatorMessage(
 export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
   const trimmed = input.message.trim();
   if (!trimmed) {
+    return false;
+  }
+  if (!isOperatorInputWithinRecoveryLimit(trimmed)) {
+    emitOversizedOperatorInputWarning(input.sessionLogger);
     return false;
   }
 
@@ -98,6 +111,7 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
 
   return enqueueOperatorMessage({
     message: text,
+    ...(text !== trimmed ? { operatorInput: trimmed } : {}),
     delivery: input.delivery,
     conductorTurn: input.conductorTurn,
     eventQueue: input.eventQueue,
@@ -107,5 +121,19 @@ export function submitOperatorInput(input: SubmitOperatorInputInput): boolean {
     answerPreview: applied.answered
       .map((question) => `${question.id}: ${question.answer ?? ''}`)
       .join(' / ') || undefined,
+  });
+}
+
+export function isOperatorInputWithinRecoveryLimit(message: string): boolean {
+  return Buffer.byteLength(message, 'utf8') <= CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT;
+}
+
+function emitOversizedOperatorInputWarning(
+  sessionLogger: Pick<SessionLogger, 'emit'>,
+): void {
+  sessionLogger.emit({
+    type: 'harness.warning',
+    message:
+      'recovery inbox で内容を完全に保持するため、1 MiB を超える入力は受け付けません。短くするか分割してから送信してください。',
   });
 }

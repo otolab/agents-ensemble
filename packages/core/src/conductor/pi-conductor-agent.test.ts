@@ -1683,7 +1683,7 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
-  it('recovers a Pi !command credential after 401 by resuming and retrying the same prompt', async () => {
+  it('resumes after a Pi !command credential 401 without replaying the same prompt', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     await mkdir(projectDir, { recursive: true });
     const keyFile = join(cwd, 'dynamic-key.txt');
@@ -1760,13 +1760,12 @@ describe('PiConductorAgent', () => {
     );
 
     expect(result).toMatchObject({
-      status: 'finished',
-      result: 'Recovered with fresh auth.',
+      status: 'error',
+      error: {
+        message: 'litellm API error (401): Your client does not have permission',
+      },
     });
-    expect(prompts).toEqual([
-      'same prompt after expired credential',
-      'same prompt after expired credential',
-    ]);
+    expect(prompts).toEqual(['same prompt after expired credential']);
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
     expect(mockCreateAgentSession.mock.calls[0]![0].model.headers).toEqual({
       Authorization: 'Bearer expired-key',
