@@ -7,7 +7,9 @@ import {
 } from './acp-preset-bins.js';
 import {
   assertBuiltinPiNodeVersionSupported,
+  resolveBuiltinPiAcpEntrypointPath,
   resolveBuiltinPiAcpWrapperPath,
+  resolveBuiltinPiCliEnvWrapperPath,
   resolveBundledPiCliPath,
 } from './pi-runtime.js';
 import {
@@ -87,19 +89,27 @@ export function formatAcpExternalCliInstallHint(
   );
 }
 
-function formatBuiltinPiInstallHint(): string {
-  return (
-    '[acp] builtin pi runtime: core の upstream `pi-acp` dependency が見つかりません。\n' +
-    '  `@agents-ensemble/core` を依存 package ごと再インストールしてください。'
-  );
-}
-
 function validateBuiltinPreset(
   preset: Exclude<AcpPresetId, 'custom'>,
   piRuntime: ResolvedAcpSpawn['piRuntime'],
   fromModuleUrl?: string | URL,
 ): void {
   const moduleUrl = fromModuleUrl ?? import.meta.url;
+
+  if (preset === 'pi' && piRuntime === 'builtin') {
+    try {
+      resolveBuiltinPiAcpEntrypointPath(moduleUrl);
+      assertBuiltinPiNodeVersionSupported();
+      resolveBundledPiCliPath(moduleUrl);
+      resolveBuiltinPiAcpWrapperPath();
+      resolveBuiltinPiCliEnvWrapperPath(moduleUrl);
+    } catch (error) {
+      throw new AcpPresetPrerequisiteError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    return;
+  }
 
   if (preset === 'cursor') {
     if (!resolveAcpBinFromPath(ACP_PRESET_BIN_NAMES.cursor)) {
@@ -110,22 +120,6 @@ function validateBuiltinPreset(
 
   const bundled = resolveBundledAcpBin(preset, moduleUrl);
   const fromPath = resolveAcpBinFromPath(ACP_PRESET_BIN_NAMES[preset]);
-
-  if (preset === 'pi' && piRuntime === 'builtin') {
-    if (!bundled) {
-      throw new AcpPresetPrerequisiteError(formatBuiltinPiInstallHint());
-    }
-    try {
-      assertBuiltinPiNodeVersionSupported();
-      resolveBundledPiCliPath(moduleUrl);
-      resolveBuiltinPiAcpWrapperPath();
-    } catch (error) {
-      throw new AcpPresetPrerequisiteError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-    return;
-  }
 
   if (!bundled && !fromPath) {
     throw new AcpPresetPrerequisiteError(formatAcpPresetInstallHint(preset));

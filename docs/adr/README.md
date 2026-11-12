@@ -133,7 +133,9 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0060](0060-pi-recovery-operator-inbox.md) |
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | accepted |
 | [0061](0061-builtin-pi-acp-runtime.md) | Pi ACP adapter の内蔵と BYO / builtin runtime | superseded → [0062](0062-pi-acp-upstream-package-wrapper.md) |
-| [0062](0062-pi-acp-upstream-package-wrapper.md) | Pi ACP upstream npm dependency と core wrapper | accepted |
+| [0062](0062-pi-acp-upstream-package-wrapper.md) | Pi ACP upstream npm dependency と core wrapper | superseded in part → [0064](0064-pi-acp-version-split-for-byo-compatibility.md)（dependency version assignment only） |
+| [0063](0063-builtin-pi-home-and-resume-safety.md) | Builtin Pi の shell home と resume 失敗時の安全性 | accepted |
+| [0064](0064-pi-acp-version-split-for-byo-compatibility.md) | BYO / builtin の Pi ACP dependency version を分ける | accepted |
 
 ## 追加するとき
 

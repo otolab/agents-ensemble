@@ -44,7 +44,8 @@
     "@earendil-works/pi-coding-agent": "1.2.0",
     "@modular-prompt/core": "0.3.0",
     "js-yaml": "4.1.0",
-    "pi-acp": "0.0.34"
+    "pi-acp": "0.0.33",
+    "pi-acp-builtin": "npm:pi-acp@0.0.34"
   },
   "optionalDependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.70.0",

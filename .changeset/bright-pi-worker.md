@@ -2,4 +2,4 @@
 "@agents-ensemble/core": minor
 ---
 
-Use the upstream pi-acp package through a core wrapper and add an opt-in builtin Pi worker runtime with isolated user-level settings and session storage.
+Use separate upstream pi-acp versions for BYO compatibility and the builtin Pi worker runtime, with configured Pi resources, worker-scoped session storage, preserved shell home settings, and fail-closed resume behavior.

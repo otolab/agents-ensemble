@@ -193,7 +193,7 @@ tui:
 
 ### Pi worker runtime
 
-Pi worker は `acp.pi.runtime` で実行環境を選びます。省略時と `byo` は従来の動作で、PATH 上の `pi` CLI と Pi の `~/.pi` 設定・認証・session map・transcript を使います。既存の SessionResumeStore に runtime marker がない Pi session も BYO として読み、BYO の既定値や保存済み fingerprint は変えません。
+Pi worker は `acp.pi.runtime` で実行環境を選びます。省略時と `byo` は従来の動作で、upstream `pi-acp@0.0.33`（core 同梱を優先し、なければ PATH 上の adapter）と PATH 上の `pi` CLI を使い、Pi の `~/.pi` 設定・認証・session map・transcript を読み書きします。既存の SessionResumeStore に runtime marker がない Pi session も BYO として読み、BYO の既定値や保存済み fingerprint は変えません。
 
 ```yaml
 acp:
@@ -202,13 +202,15 @@ acp:
     runtime: builtin
 ```
 
-`builtin` は core の通常 dependency `pi-acp@0.0.34` を core 内の wrapper から起動し、core dependency に含まれる Pi CLI を adapter へ渡します。Pi CLI の global install、PATH 設定、`~/.pi` の事前準備は不要です。この runtime は Node.js **22.19.0 以上**を要求します。builtin を選んだときだけ起動前に upstream adapter、Pi CLI、Node.js の版を検証します。
+`builtin` は core に別名 dependency として同梱する upstream `pi-acp@0.0.34` を core 内の wrapper から起動し、core dependency に含まれる Pi CLI を adapter へ渡します。BYO adapter に `0.0.33` を維持するのは、`0.0.34` が追加した `get_available_thinking_levels` RPC を既存の Pi CLI `0.80.6` が提供していないためです。Pi CLI の global install、PATH 設定、`~/.pi` の事前準備は不要です。この runtime は Node.js **22.19.0 以上**を要求します。builtin を選んだときだけ起動前に upstream adapter、Pi CLI、Node.js の版を検証します。
 
 builtin の user settings と認証には、Pi conductor と同じ user resource root を使い、解決順は `conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi/` です。同梱する `defaultThinkingLevel: medium` と `enableSkillCommands: true` は初回のみ `settings.json` へコピーし、既存の設定を上書きしません。認証済み provider がない場合、Pi ACP は `AUTH_REQUIRED` で attach を拒否します。Pi CLI を別途用意する必要はありませんが、provider の認証は必要です。Pi backend が選択されている場合、`ensemble auth login --provider <provider-id>` は同じ user root の `auth.json` に credential を保存します。Cursor backend が選択中なら `--provider` だけでは Pi 認証へ切り替わらず、Pi credential は設定されません。provider 環境変数も利用できます。`acp.env.PI_CODING_AGENT_DIR` ではなく `conductor.pi.agentDir`（または `PI_CODING_AGENT_DIR`）で user root を設定してください。認証手順は [Pi conductor セットアップ](pi-conductor-setup.md)を参照してください。
 
-builtin の Pi session map と transcript は `~/.ensemble/pi/worker/<repoKey>/<workerKey>/` に保存します。`repoKey` は repository root ごとの識別子、`workerKey` は worker 名を安全に符号化した識別子です。upstream adapter の session map は worker `HOME` の `.pi/pi-acp/session-map.json`、transcript は `PI_CODING_AGENT_SESSION_DIR` に置きます。旧 builtin runtime が worker directory 直下へ書いた map は、wrapper 起動時に upstream の場所へコピーします。`ensemble session workers messages` も移行前の旧 map を読み取れます。どちらも Pi ACP JSONL 形式を保ち、BYO と builtin を切り替えて既存 session を resume することはできません。
+builtin Pi ACP adapter の `HOME` / `USERPROFILE` は worker ごとの `~/.ensemble/pi/worker/<repoKey>/<workerKey>/` に設定します。upstream 固定の `$HOME/.pi/pi-acp/session-map.json` を worker 単位に分けるためです。Pi CLI とその shell command には wrapper が起動時の利用者 `HOME` / `USERPROFILE` を戻すので、`~/.gitconfig`、`~/.ssh/config`、SSH key、GitHub CLI の設定などを通常の user home から参照できます。`acp.env.HOME` または `acp.env.USERPROFILE` を指定すると、Pi CLI と shell command に渡す home 環境変数を変更できます。Pi の settings / auth root は別に `conductor.pi.agentDir` で指定します。shell command からその home 配下の設定・credential を利用できるため、worker に許可する操作と併せて管理してください。home の解決方法は子ツールごとに異なります。たとえば macOS の OpenSSH は `HOME` ではなく OS account の home を使うため、alternate home を使う場合は SSH の設定も確認してください。
 
-upstream `pi-acp@0.0.34` の `session/list` は `PI_CODING_AGENT_SESSION_DIR` を参照せず、共有 Pi user root の `settings.json.sessionDir`（未指定なら `agentDir/sessions`）を探索します。通常の builtin session は worker ごとの map から `session/load` でき、Ensemble の reader も worker map を使います。ただし map が失われた場合、upstream の discovery fallback は worker transcript を見つけられないことがあります。これは upstream の `session/list` が worker 用 session directory を指定できない制約です（[ADR 0062](adr/0062-pi-acp-upstream-package-wrapper.md)）。
+worker の session map と transcript は `~/.ensemble/pi/worker/<repoKey>/<workerKey>/` に保存します。`workerKey` は worker 名を安全に符号化した識別子です。transcript は `PI_CODING_AGENT_SESSION_DIR`、旧 builtin runtime が worker directory 直下へ書いた map は wrapper 起動時に upstream の場所へ移行します。`ensemble session workers messages` は新旧 map を読み取ります。BYO と builtin の間で既存 session を切り替えて resume することはできません。
+
+upstream `pi-acp` の `session/list` は `PI_CODING_AGENT_SESSION_DIR` を参照せず、Pi user root の `settings.json.sessionDir`（未指定なら `agentDir/sessions`）を探索します（BYO `0.0.33` / builtin `0.0.34`）。そのため worker map が失われると、transcript が残っていても upstream の discovery fallback からは見つかりません。builtin の保存 session を `session/load` できない場合、resume は worker failure として終了し、新しい session の作成や resume prompt の送信は行いません。ResumeStore の旧 session ID は保持されます。reader も map なしでは transcript を推測せず `unavailable` を返します。map がない場合の自動復旧は行わない、という制約は [ADR 0063](adr/0063-builtin-pi-home-and-resume-safety.md) に記録しています。
 
 ### ACP model tag と model catalog
 

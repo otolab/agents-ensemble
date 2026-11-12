@@ -1,4 +1,4 @@
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, readFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -124,6 +124,16 @@ describe('resolveBundledAcpBin(pi)', () => {
     expect(isAbsolute(bundled!)).toBe(true);
     expect(bundled).toContain('pi-acp');
     accessSync(bundled!, constants.X_OK);
+  });
+
+  it('keeps the default BYO adapter pinned to upstream pi-acp@0.0.33', () => {
+    const manifestPath = packageRequire.resolve('pi-acp/package.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+      name: string;
+      version: string;
+    };
+
+    expect(manifest).toMatchObject({ name: 'pi-acp', version: '0.0.33' });
   });
 
   it.skipIf(process.platform === 'win32')(

@@ -1,6 +1,6 @@
 # ADR 0062: Pi ACP upstream npm dependency と core wrapper
 
-- Status: accepted
+- Status: superseded in part by [ADR 0064](0064-pi-acp-version-split-for-byo-compatibility.md) (dependency version assignment only)
 - Date: 2026-11-12
 - Supersedes: [ADR 0061](0061-builtin-pi-acp-runtime.md)
 - Related: [Issue #670](https://github.com/otolab/agents-ensemble/issues/670)

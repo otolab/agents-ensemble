@@ -1,8 +1,10 @@
 import { chmod, mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AcpBridge } from '../../src/acp/acp-bridge.js';
 import { spawnAcpProcess } from '../../src/acp/acp-process.js';
 import { configurePiWorkerRuntime } from '../../src/acp/pi-runtime.js';
 import {
@@ -12,8 +14,27 @@ import {
 import { finalizeResolvedAcpSpawn } from '../../src/acp/validate-acp-preset-prerequisites.js';
 import { resolveEnsemblePaths } from '../../src/ensemble-paths.js';
 import { resolvePiAcpSessionMapPaths } from '../../src/acp/pi-session-map.js';
+import { attachWorker } from '../../src/dispatch/attach-worker.js';
 
 const require = createRequire(import.meta.url);
+const piByoAdapterManifest = require.resolve('pi-acp/package.json');
+const piBuiltinAdapterManifest = require.resolve(
+  'pi-acp-builtin/package.json',
+);
+
+describe('Pi ACP upstream dependency selection', () => {
+  it('keeps BYO on 0.0.33 and builtin on 0.0.34', () => {
+    const byo = JSON.parse(
+      readFileSync(piByoAdapterManifest, 'utf8'),
+    ) as { name: string; version: string };
+    const builtin = JSON.parse(
+      readFileSync(piBuiltinAdapterManifest, 'utf8'),
+    ) as { name: string; version: string };
+
+    expect(byo).toMatchObject({ name: 'pi-acp', version: '0.0.33' });
+    expect(builtin).toMatchObject({ name: 'pi-acp', version: '0.0.34' });
+  });
+});
 
 function resolveOptionalAdapter(name: string): string | undefined {
   try {
@@ -68,6 +89,7 @@ describe.skipIf(!claudeAdapter)(
     afterEach(async () => {
       await Promise.all([...clients].map((client) => client.close()));
       clients.clear();
+      vi.unstubAllEnvs();
       if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
       tempRoot = '';
     });
@@ -257,6 +279,7 @@ describe.skipIf(process.platform === 'win32')(
     afterEach(async () => {
       await Promise.all([...clients].map((client) => client.close()));
       clients.clear();
+      vi.unstubAllEnvs();
       if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
       tempRoot = '';
     });
@@ -269,16 +292,41 @@ describe.skipIf(process.platform === 'win32')(
         );
         const repoRoot = join(tempRoot, 'repo');
         const userRoot = join(tempRoot, 'ensemble-user');
+        const userHome = join(tempRoot, 'operator-home');
         const customAgentDir = join(tempRoot, 'custom-pi-agent');
         const binDir = join(tempRoot, 'bin');
         const eventsPath = join(tempRoot, 'pi-events.jsonl');
         const fakePiPath = join(tempRoot, 'fake-pi');
         const fakePiSourcePath = join(tempRoot, 'fake-pi.mjs');
         vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
+        vi.stubEnv('HOME', userHome);
+        vi.stubEnv('USERPROFILE', userHome);
         await Promise.all([
           mkdir(repoRoot, { recursive: true }),
+          mkdir(join(userHome, '.ssh'), { recursive: true, mode: 0o700 }),
+          mkdir(join(userHome, '.config', 'gh'), {
+            recursive: true,
+            mode: 0o700,
+          }),
           mkdir(binDir, { recursive: true }),
           mkdir(customAgentDir, { recursive: true }),
+        ]);
+        await Promise.all([
+          writeFile(
+            join(userHome, '.gitconfig'),
+            '[user]\n  name = Fixture Developer\n  email = fixture@example.invalid\n',
+            { mode: 0o600 },
+          ),
+          writeFile(
+            join(userHome, '.ssh', 'config'),
+            'Host ensemble-fixture\n  HostName git.example.invalid\n  User fixture-user\n  Port 2222\n',
+            { mode: 0o600 },
+          ),
+          writeFile(
+            join(userHome, '.config', 'gh', 'config.yml'),
+            'version: 1\ngit_protocol: ssh\n',
+            { mode: 0o600 },
+          ),
         ]);
         await writeFile(
           join(customAgentDir, 'auth.json'),
@@ -288,6 +336,7 @@ describe.skipIf(process.platform === 'win32')(
         await writeFile(
           fakePiSourcePath,
           [
+            "import { spawnSync } from 'node:child_process';",
             "import { appendFileSync, existsSync, writeFileSync } from 'node:fs';",
             "import { join } from 'node:path';",
             'const eventsPath = process.env.PI_ACP_ADAPTER_TEST_EVENTS;',
@@ -302,6 +351,23 @@ describe.skipIf(process.platform === 'win32')(
             'function record(event) {',
             "  appendFileSync(eventsPath, JSON.stringify({ argv: process.argv.slice(2), ...event }) + '\\n');",
             '}',
+            'function runCommand(command, args) {',
+            '  const result = spawnSync(command, args, { encoding: "utf8" });',
+            '  if (result.error || result.status !== 0) {',
+            '    throw new Error(`${command} failed: ${result.error?.message ?? result.stderr ?? result.status}`);',
+            '  }',
+            '  return result.stdout.trim();',
+            '}',
+            'function readShellConfig() {',
+            '  const gitUser = runCommand("git", ["config", "--global", "user.name"]);',
+            '  const sshConfigPath = join(process.env.HOME ?? "", ".ssh", "config");',
+            '  const sshConfig = runCommand("ssh", ["-F", sshConfigPath, "-G", "ensemble-fixture"]);',
+            '  const sshHost = sshConfig.split("\\n").find((line) => line.startsWith("hostname "))?.slice("hostname ".length);',
+            '  const sshPort = sshConfig.split("\\n").find((line) => line.startsWith("port "))?.slice("port ".length);',
+            '  const ghGitProtocol = runCommand("gh", ["config", "get", "git_protocol"]);',
+            '  return { gitUser, sshHost, sshPort, ghGitProtocol };',
+            '}',
+            'record({ type: "shell-config", home: process.env.HOME ?? null, userprofile: process.env.USERPROFILE ?? null, ...readShellConfig() });',
             'function reply(request, data = {}) {',
             '  process.stdout.write(JSON.stringify({ type: "response", id: request.id, success: true, data }) + "\\n");',
             '}',
@@ -392,13 +458,35 @@ describe.skipIf(process.platform === 'win32')(
         const spawnOptions = resolvedAcpSpawnToOptions(
           finalizeResolvedAcpSpawn(resolved),
         );
+        const searchPath = [binDir, process.env.PATH]
+          .filter((entry): entry is string => Boolean(entry))
+          .join(delimiter);
         const isolatedEnv: NodeJS.ProcessEnv = {
-          ...spawnOptions.env,
+          ENSEMBLE_PI_BUILTIN_RUNTIME:
+            spawnOptions.env?.ENSEMBLE_PI_BUILTIN_RUNTIME,
+          ENSEMBLE_PI_CLI_HOME: spawnOptions.env?.ENSEMBLE_PI_CLI_HOME,
+          ENSEMBLE_PI_CLI_USERPROFILE:
+            spawnOptions.env?.ENSEMBLE_PI_CLI_USERPROFILE,
+          ENSEMBLE_PI_CLI_NODE: spawnOptions.env?.ENSEMBLE_PI_CLI_NODE,
+          ENSEMBLE_PI_CLI_EXECUTABLE: fakePiPath,
+          HOME: spawnOptions.env?.HOME,
+          USERPROFILE: spawnOptions.env?.USERPROFILE,
+          PATH: searchPath,
+          PI_CODING_AGENT_DIR: spawnOptions.env?.PI_CODING_AGENT_DIR,
+          PI_CODING_AGENT_SESSION_DIR:
+            spawnOptions.env?.PI_CODING_AGENT_SESSION_DIR,
+          PI_ACP_PI_COMMAND: spawnOptions.env?.PI_ACP_PI_COMMAND,
           ENSEMBLE_USER_ROOT: userRoot,
-          PATH: binDir,
-          PI_ACP_PI_COMMAND: fakePiPath,
+          // Force the normal HOME-based fallback for `gh`; this proves the
+          // wrapper restores HOME instead of relying on a separately pinned
+          // config directory.
+          XDG_CONFIG_HOME: '',
+          GH_CONFIG_DIR: '',
           PI_ACP_ADAPTER_TEST_EVENTS: eventsPath,
           PI_ACP_ADAPTER_TEST_SESSION_FILE: sessionFile,
+          ...(process.platform === 'win32'
+            ? { SystemRoot: process.env.SystemRoot }
+            : {}),
         };
 
         const startClient = async () => {
@@ -429,6 +517,8 @@ describe.skipIf(process.platform === 'win32')(
         expect(resolved.env?.PI_CODING_AGENT_SESSION_DIR).toBe(
           paths.piWorkerSessionsDir('integration'),
         );
+        expect(resolved.env?.ENSEMBLE_PI_CLI_HOME).toBe(userHome);
+        expect(resolved.env?.PI_ACP_PI_COMMAND).not.toBe(fakePiPath);
         expect(resolved.env).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
 
         // The old builtin layout stored its map directly in the worker root.
@@ -510,11 +600,80 @@ describe.skipIf(process.platform === 'win32')(
           .filter((event) => event.type === 'get_state');
         expect(piProcessEvents.length).toBeGreaterThan(0);
         for (const event of piProcessEvents) {
-          expect(event.home).toBe(workerHome);
-          expect(event.userprofile).toBe(workerHome);
+          expect(event.home).toBe(userHome);
+          expect(event.userprofile).toBe(userHome);
           expect(event.piAgentDir).toBe(customAgentDir);
           expect(event.piAuthExists).toBe(true);
         }
+        const shellConfigEvents = events.filter(
+          (event) => event.type === 'shell-config',
+        );
+        expect(shellConfigEvents).toHaveLength(2);
+        for (const event of shellConfigEvents) {
+          expect(event.home).toBe(userHome);
+          expect(event.userprofile).toBe(userHome);
+          expect(event.gitUser).toBe('Fixture Developer');
+          expect(event.sshHost).toBe('git.example.invalid');
+          expect(event.sshPort).toBe('2222');
+          expect(event.ghGitProtocol).toBe('ssh');
+        }
+
+        // Simulate a stopped worker whose session map was lost but transcript
+        // remains. A builtin resume must fail visibly without creating a new
+        // Pi session or changing the saved session identifier.
+        await rm(sessionMapPaths.upstreamPath, { force: true });
+        await rm(sessionMapPaths.legacyPath, { force: true });
+        await expect(readFile(sessionFile, 'utf8')).resolves.toContain(
+          'builtin fixture user message',
+        );
+
+        const issueUrl = 'https://github.com/org/repo/issues/1';
+        await expect(
+          attachWorker({
+            name: 'integration',
+            issueUrl,
+            kind: 'implementer',
+            sessionState: {} as never,
+            worktree: {
+              path: repoRoot,
+              branch: 'ensemble/issue-1',
+              issue: {
+                owner: 'org',
+                repo: 'repo',
+                number: 1,
+                url: issueUrl,
+              },
+              inRepo: false,
+            },
+            resumeAcpSessionId: sessionId,
+            currentAcpSpawn: {
+              preset: 'pi',
+              command: 'pi-acp',
+              args: [],
+              piRuntime: 'builtin',
+            },
+            spawn: {
+              command: spawnOptions.command,
+              args: spawnOptions.args,
+              env: isolatedEnv,
+            },
+            connectAcp: async ({ cwd, spawn }) =>
+              AcpBridge.connect({
+                ...spawn,
+                cwd,
+                env: isolatedEnv,
+              }),
+          }),
+        ).rejects.toThrow(
+          /could not resume builtin Pi ACP session.*Refusing to start a new session without the saved context/u,
+        );
+
+        await expect(
+          readFile(sessionMapPaths.upstreamPath, 'utf8'),
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(
+          readFile(sessionMapPaths.legacyPath, 'utf8'),
+        ).rejects.toMatchObject({ code: 'ENOENT' });
       },
       30_000,
     );

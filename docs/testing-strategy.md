@@ -111,14 +111,14 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | Release workflow tests | `pnpm test:release-workflow` — `.github/scripts` の Node test |
 | Session resume integration | `test/integration/session-resume.integration.test.ts` |
 | Codex model reasoning integration | `test/integration/codex-model-reasoning.integration.test.ts` |
-| Claude and Pi worker ACP adapter integration tests | `test/integration/worker-model-reasoning-adapters.integration.test.ts`（Claude ACP 0.70.0 / upstream `pi-acp@0.0.34` と core wrapper） |
+| Claude and Pi worker ACP adapter integration tests | `test/integration/worker-model-reasoning-adapters.integration.test.ts`（Claude ACP 0.70.0 / BYO `pi-acp@0.0.33` / builtin `pi-acp@0.0.34` と core wrapper） |
 | Operator usage integration | `test/integration/usage-operator.integration.test.ts` |
 | Pi conductor integration | `pi-conductor.integration.test.ts`、`pi-headless-settings.integration.test.ts`、`pi-conductor-agent-registry.integration.test.ts` |
 | CLI TTY e2e | `tty-close-process.e2e.test.ts`、`issue-pi-tty-exit.e2e.test.ts`、`issue-pi-tty-close.e2e.test.ts` |
 
 常時実行の integration / e2e は Fake、ローカル fixture、または隔離された Codex を使い、Cursor / GitHub 認証や `test-acp.yaml` を要求しない。PTY suite には Ubuntu runner 上の Python 3 `pty`、POSIX process group、Git が必要であり、Pi TTY suites は localhost bind も使う。Issue workflow 全体、外部サービスへ接続する実 ACP、実 Cursor SDK の suite は通常 CI の対象外。`.github/scripts` の Node tests は対象だが、`scripts/pi/cached-auth.test.mjs` は対象外である。
 
-Claude / Pi worker adapter suite は、依存関係 install 後に core workspace から Claude の optional adapter `@agentclientprotocol/claude-agent-acp/dist/index.js` と通常 dependency `pi-acp` を解決できることを CI step が確認してから実行する。suite は upstream adapter と fake Claude SDK / Pi CLI を使い、`session/new`・`session/load` 時に model と推論レベル（Claude の `effortLevel` / Pi の `thinkingLevel`）が適用されることを確かめる。Pi は builtin runtime では core wrapper を通り、BYO では upstream bin を直接起動する。fake CLI を使うため provider への認証や実リクエストは不要です。通常利用時の Pi provider 認証条件は [Pi worker runtime](config.md#pi-worker-runtime) を参照してください。CI は Ubuntu / Node.js 22 で両方を実行する。Claude suite は optional adapter がないローカル環境で skip し、Pi suite は Windows で skip する。
+Claude / Pi worker adapter suite は、依存関係 install 後に core workspace から Claude の optional adapter `@agentclientprotocol/claude-agent-acp/dist/index.js` と upstream `pi-acp` の固定版を解決できることを CI step が確認してから実行する。BYO は `0.0.33`、builtin は `0.0.34` を使う。suite は upstream adapter と fake Claude SDK / Pi CLI を使い、`session/new`・`session/load` 時に model と推論レベル（Claude の `effortLevel` / Pi の `thinkingLevel`）が適用されることを確かめる。Pi builtin fixture は worker map がある状態で process を停止・再起動して `session/load` し、map を削除して resume した場合は transcript が残っていても失敗し、新しい session map を作らないことを確認する。さらに fake Pi CLI の shell child から fixture の `~/.gitconfig`、`~/.ssh/config`、GitHub CLI 設定を読み、wrapper が利用者 home を復元することを確認する。BYO fixture は従来の PATH と home-based session map を確認する。Pi は fake CLI のため provider 認証や実リクエストは不要です。通常利用時の Pi provider 認証条件は [Pi worker runtime](config.md#pi-worker-runtime) を参照してください。CI は Ubuntu / Node.js 22 で両方を実行する。Claude suite は optional adapter がないローカル環境で skip し、Pi suite は Windows で skip する。
 
 ## 参照
 

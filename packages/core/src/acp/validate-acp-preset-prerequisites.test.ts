@@ -77,10 +77,15 @@ describe('validate-acp-preset-prerequisites', () => {
   });
 
   it('does not require a PATH pi CLI for the builtin runtime', () => {
-    vi.spyOn(bundledModule, 'resolveBundledAcpBin').mockReturnValue(
-      '/opt/pi-acp/dist/index.js',
-    );
-    vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue(undefined);
+    const resolveByoAdapter = vi
+      .spyOn(bundledModule, 'resolveBundledAcpBin')
+      .mockReturnValue('/opt/pi-acp-v033/dist/index.js');
+    const resolveBuiltinAdapter = vi
+      .spyOn(piRuntimeModule, 'resolveBuiltinPiAcpEntrypointPath')
+      .mockReturnValue('/opt/pi-acp-v034/dist/index.js');
+    const resolveFromPath = vi
+      .spyOn(bundledModule, 'resolveAcpBinFromPath')
+      .mockReturnValue(undefined);
     vi.spyOn(
       piRuntimeModule,
       'assertBuiltinPiNodeVersionSupported',
@@ -97,13 +102,20 @@ describe('validate-acp-preset-prerequisites', () => {
         piRuntime: 'builtin',
       }),
     ).not.toThrow();
+    expect(resolveBuiltinAdapter).toHaveBeenCalledOnce();
+    expect(resolveByoAdapter).not.toHaveBeenCalled();
+    expect(resolveFromPath).not.toHaveBeenCalled();
   });
 
   it('requires the upstream dependency inside core for the builtin wrapper', () => {
-    vi.spyOn(bundledModule, 'resolveBundledAcpBin').mockReturnValue(undefined);
-    vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue(
-      '/usr/local/bin/pi-acp',
-    );
+    vi.spyOn(
+      piRuntimeModule,
+      'resolveBuiltinPiAcpEntrypointPath',
+    ).mockImplementation(() => {
+      throw new Error(
+        '[acp] builtin Pi runtime could not resolve upstream pi-acp@0.0.34',
+      );
+    });
     vi.spyOn(
       piRuntimeModule,
       'assertBuiltinPiNodeVersionSupported',
@@ -119,14 +131,14 @@ describe('validate-acp-preset-prerequisites', () => {
         args: [],
         piRuntime: 'builtin',
       }),
-    ).toThrow(/builtin pi runtime.*core の upstream/u);
+    ).toThrow(/could not resolve upstream pi-acp@0\.0\.34/u);
   });
 
   it('runs the core wrapper for the builtin runtime', () => {
-    vi.spyOn(bundledModule, 'resolveBundledAcpBin').mockReturnValue(
-      '/opt/pi-acp/dist/index.js',
-    );
-    vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue(undefined);
+    vi.spyOn(
+      piRuntimeModule,
+      'resolveBuiltinPiAcpEntrypointPath',
+    ).mockReturnValue('/opt/pi-acp-v034/dist/index.js');
     vi.spyOn(
       piRuntimeModule,
       'assertBuiltinPiNodeVersionSupported',

@@ -103,8 +103,11 @@ importers:
         specifier: 4.1.0
         version: 4.1.0
       pi-acp:
-        specifier: 0.0.34
-        version: 0.0.34
+        specifier: 0.0.33
+        version: 0.0.33
+      pi-acp-builtin:
+        specifier: npm:pi-acp@0.0.34
+        version: pi-acp@0.0.34
     devDependencies:
       '@types/js-yaml':
         specifier: 4.0.9
@@ -1831,6 +1834,11 @@ packages:
   pathval@2.0.1:
     resolution: {integrity: sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ==}
     engines: {node: '>= 14.16'}
+
+  pi-acp@0.0.33:
+    resolution: {integrity: sha512-vX9kY1tK14E72G4dBAx+RGCk/k7XPjTHls6dLUxA8WSkBav6B6JHuSBv3eusp50LCR/GTRsR2kIKsG0Z5jANzw==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   pi-acp@0.0.34:
     resolution: {integrity: sha512-MrCp37UbpUzkTkzTIMJQf1RYrT+kr4fgGDGFoLmBN26UupuCZp0XxVIY+7XYsMo3yDnzDeZUJ0jPyM3Si6Bkkg==}
@@ -4167,6 +4175,11 @@ snapshots:
   pathe@2.0.3: {}
 
   pathval@2.0.1: {}
+
+  pi-acp@0.0.33:
+    dependencies:
+      '@agentclientprotocol/sdk': 0.26.0(zod@3.25.76)
+      zod: 3.25.76
 
   pi-acp@0.0.34:
     dependencies:
