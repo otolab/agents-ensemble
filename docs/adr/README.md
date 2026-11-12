@@ -133,6 +133,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0061](0061-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | superseded → [0061](0061-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
 | [0061](0061-conductor-dispatch-lifecycle-and-recovery-boundary.md) | conductor dispatch lifecycle と recovery 境界 | accepted |
+| [0062](0062-legacy-cursor-bootstrap-unknown.md) | 旧 Cursor bootstrap 状態を unknown として再開する | accepted |
 
 ## 追加するとき
 

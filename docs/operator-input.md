@@ -41,6 +41,10 @@ interface OperatorInputBindingApi {
   clearRecoverySnapshot?: (recoveryId: string) => boolean;
   continueAfterRecovery?: () => boolean;
   recoveryAttentionAttemptId?: () => string | undefined;
+  getCursorBootstrapStatus?: () => 'unknown' | 'saving' | 'complete' | 'incomplete';
+  resolveCursorBootstrapUnknown?: (
+    assumption: 'assume-complete' | 'assume-incomplete',
+  ) => boolean;
 }
 
 type OperatorInputBinding = (
@@ -56,6 +60,7 @@ type OperatorInputBinding = (
 - 受け付けたら `operator.message` をイベントキューへ enqueue（`true`）
 - `/reconnect` / `reconnect` は `operator.reconnect` をイベントキューへ enqueue し、conductor へは送らない（`true`）
 - `/recovery ...` は binding 内で一覧・表示・削除を行い、`submit` や conductor dispatch には渡さない
+- `/recovery bootstrap` は旧 Cursor session の bootstrap 状態を表示し、`assume-complete` / `assume-incomplete` の判断を記録する。対話 TTY でのみ選択できる
 - `/close` / `close` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）。SessionResumeStore を flush して worker / conductor / GitHub monitor を停止し、worktree を残してプロセスを終了する
 - `/exit` / `exit` は専用の終了 signal として扱い、イベントキューへは enqueue しない（`false`）
 - TTY の通常入力は配信モード prefix を付けられる。`/idle ...`、`/next ...`、`/interrupt ...` を本文先頭に置き、prefix 自体は conductor へ送らない。prefix なしは `next`
@@ -63,6 +68,12 @@ type OperatorInputBinding = (
 - 非 TTY では未回答 1 件のときはプレーンテキストをその open question への回答として解釈する
 - `choice` の選択肢は回答を簡潔にするための候補で、オペレータは自由記述でも回答できる。選択肢 ID / 一意な label / 候補順の 1 始まり番号に一意に解決できる入力には `selectedChoice` を記録し、それ以外は回答全文を保存して `selectedChoice` を付けない。重複する label は自由記述として記録し、候補を推測しない。TTY では選択肢を Operator input の候補として表示し、Open questions ペインには表示しない
 - `yes_no` の回答は原文と `assent: yes | no | unclear` を記録する。判定できない回答は否定にせず `unclear` とし、`approved` は permission に関連付けた質問に限って明確な assent から導出する
+
+### 旧 Cursor session の bootstrap 判断
+
+`--continue` した SessionResumeStore に `cursorBootstrapComplete` がなければ、状態は `unknown` です。旧版は bootstrap の成否にかかわらず `cursorBootstrapRunId` を記録し得たため、run ID から完了を推定しません。対話 TTY では `/recovery bootstrap` で状況を確認し、`/recovery bootstrap assume-complete` または `/recovery bootstrap assume-incomplete` を選びます。判断が保存されるまでは queue の dispatch を止めます。
+
+`assume-complete` は compiled prompt を追加送信しない選択です。provider session に必要な文脈がない可能性は残ります。`assume-incomplete` は次に選ばれた新しい event に prompt を添える選択です。どちらも失敗した operator input を再送しません。非 TTY では判断できないため、backend resume 前に案内付きで停止します。保存済みの選択と再開時の prompt 挙動は [conductor send の recovery 契約](conductor-auth-reconnect.md#初回-prompt-と-operator-input-の分離) を参照してください。
 
 ### オペレータメッセージの配信モード
 

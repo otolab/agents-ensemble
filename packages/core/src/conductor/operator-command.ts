@@ -11,7 +11,7 @@ export const OPERATOR_COMMANDS = [
     id: 'recovery',
     name: '/recovery',
     aliases: [],
-    description: 'Pi の失敗 dispatch を確認',
+    description: '失敗 dispatch と Cursor bootstrap を確認',
   },
   {
     id: 'exit',

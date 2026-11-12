@@ -8,6 +8,10 @@ import type {
   ConductorRecoverySnapshot,
   ConductorRecoverySnapshotSummary,
 } from './conductor-recovery-inbox.js';
+import type {
+  CursorBootstrapAssumption,
+  CursorBootstrapStatus,
+} from './cursor-bootstrap-state.js';
 
 export interface RecoveryInboxCommandApi {
   listRecoverySnapshots?: () => ConductorRecoverySnapshotSummary[];
@@ -17,6 +21,10 @@ export interface RecoveryInboxCommandApi {
   clearRecoverySnapshot?: (recoveryId: string) => boolean;
   continueAfterRecovery?: () => boolean;
   recoveryAttentionAttemptId?: () => string | undefined;
+  getCursorBootstrapStatus?: () => CursorBootstrapStatus;
+  resolveCursorBootstrapUnknown?: (
+    assumption: CursorBootstrapAssumption,
+  ) => boolean;
 }
 
 export interface OperatorRecoveryInspection {
@@ -85,6 +93,88 @@ export function executeRecoveryInboxCommand(
     };
   }
 
+  if (command === 'bootstrap') {
+    const status = api?.getCursorBootstrapStatus?.();
+    if (recoveryId === undefined && extraArgs.length === 0) {
+      return {
+        handled: true,
+        inspection: {
+          title: 'Cursor bootstrap',
+          text: formatCursorBootstrapStatus(status),
+        },
+      };
+    }
+
+    const assumption =
+      recoveryId === 'assume-complete' ||
+      recoveryId === 'assume-incomplete'
+        ? recoveryId
+        : undefined;
+    if (!assumption || extraArgs.length > 0) {
+      return {
+        handled: true,
+        inspection: {
+          title: 'Cursor bootstrap',
+          text: [
+            '使い方:',
+            '  /recovery bootstrap',
+            '  /recovery bootstrap assume-complete',
+            '  /recovery bootstrap assume-incomplete',
+            '',
+            'この判断は、状態を記録していない旧 Cursor session でのみ必要です。',
+          ].join('\n'),
+        },
+      };
+    }
+
+    if (!options.canDisplaySensitiveContent) {
+      return {
+        handled: true,
+        inspection: {
+          title: 'Cursor bootstrap',
+          text:
+            '旧 Cursor session の bootstrap 状態は対話 TTY でのみ選択できます。この実行環境では dispatch を開始しません。',
+        },
+      };
+    }
+    if (!status) {
+      return {
+        handled: true,
+        inspection: {
+          title: 'Cursor bootstrap',
+          text: 'この session では旧 Cursor bootstrap の判断は必要ありません。',
+        },
+      };
+    }
+    if (status !== 'unknown') {
+      return {
+        handled: true,
+        inspection: {
+          title: 'Cursor bootstrap',
+          text: formatCursorBootstrapStatus(status),
+        },
+      };
+    }
+
+    const accepted =
+      api?.resolveCursorBootstrapUnknown?.(assumption) ?? false;
+    return {
+      handled: true,
+      inspection: {
+        title: 'Cursor bootstrap',
+        text: accepted
+          ? [
+              `選択 ${assumption} を受け付けました。判断を SessionResumeStore に保存しています。`,
+              '保存が完了するまで queue の dispatch は停止します。',
+              assumption === 'assume-complete'
+                ? '保存後は compiled prompt を再送しません。旧 session に文脈がなかった可能性は残ります。'
+                : '保存後は失敗 input を replay せず、次に選ばれる新しい event に compiled prompt を添えます。',
+            ].join(' ')
+          : 'bootstrap 状態は unknown ではなくなりました。/recovery bootstrap で現在の状態を確認してください。',
+      },
+    };
+  }
+
   if (
     (command === 'show' || command === 'clear') &&
     recoveryId !== undefined &&
@@ -144,11 +234,34 @@ export function executeRecoveryInboxCommand(
         '  /recovery clear <recoveryId>',
         '  /recovery continue',
         '  /recovery hide',
+        '  /recovery bootstrap [assume-complete|assume-incomplete]',
         '',
         'continue は現在の send 結果を確認した後に使ってください。失敗した入力は自動再送されません。',
       ].join('\n'),
     },
   };
+}
+
+function formatCursorBootstrapStatus(
+  status: CursorBootstrapStatus | undefined,
+): string {
+  switch (status) {
+    case 'unknown':
+      return [
+        '旧 Cursor session の compiled prompt が provider に届いたか判定できません。dispatch は選択まで停止しています。',
+        '/recovery bootstrap assume-complete は prompt を再送しませんが、文脈が欠けている可能性を残します。',
+        '/recovery bootstrap assume-incomplete は次の新しい event に prompt を添えます。provider transcript に prompt が重複する可能性があります。',
+        'どちらも失敗 input や旧 queue を復元・再送しません。',
+      ].join('\n');
+    case 'saving':
+      return 'bootstrap の選択を SessionResumeStore に保存中です。完了するまで dispatch は停止しています。';
+    case 'complete':
+      return 'Cursor bootstrap は完了扱いとして記録されています。compiled prompt は追加送信しません。';
+    case 'incomplete':
+      return 'Cursor bootstrap の完了は未確認です。次に選ばれる新しい event に compiled prompt を添えて送ります。';
+    default:
+      return 'この session では旧 Cursor bootstrap の判断は必要ありません。';
+  }
 }
 
 function formatRecoverySnapshotList(

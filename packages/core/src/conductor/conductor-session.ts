@@ -91,6 +91,11 @@ import {
 import { resolvePiConductorProvider } from './conductor-pi-auth.js';
 import { closeConductorAgentOnce } from './conductor-send-reconnect.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
+import { cursorBootstrapCompleteForStore } from './cursor-bootstrap-state.js';
+import type {
+  CursorBootstrapAssumption,
+  CursorBootstrapState,
+} from './cursor-bootstrap-state.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import type {
@@ -528,8 +533,8 @@ async function runConductorSessionWithStartupGuard(
   const pendingGitHubRecoveries: number[] = [];
   const conductorCwd = options.conductorCwd ?? process.cwd();
   let cursorBootstrapRunId: string | undefined;
-  let cursorBootstrapComplete: boolean | undefined =
-    conductorBackend === 'cursor' ? false : undefined;
+  const cursorBootstrapState: CursorBootstrapState | undefined =
+    conductorBackend === 'cursor' ? { status: 'incomplete' } : undefined;
   const mcpServers = await resolveMcpServers(
     options.repoRoot,
     options.mcpConfigOptions,
@@ -602,6 +607,40 @@ async function runConductorSessionWithStartupGuard(
     // acquired resource is released successfully; otherwise keep this record
     // marked unknown/running so it does not claim a possibly active session is
     // closed.
+    cursorBootstrapRunId = loadedResumeStore.cursorBootstrapRunId;
+    if (cursorBootstrapState) {
+      const savedBootstrapComplete =
+        loadedResumeStore.cursorBootstrapComplete;
+      cursorBootstrapState.status =
+        savedBootstrapComplete === undefined
+          ? 'unknown'
+          : savedBootstrapComplete
+            ? 'complete'
+            : 'incomplete';
+      if (cursorBootstrapState.status === 'unknown') {
+        if (
+          options.operatorCanInspectRecovery !== true ||
+          !options.bindOperatorInput
+        ) {
+          throw new Error(
+            [
+              '旧 Cursor session の SessionResumeStore に bootstrap 状態がなく、compiled prompt が provider に届いたか判定できません。',
+              '安全のため backend resume と event dispatch は開始しませんでした。',
+              'stdin / stdout / stderr がすべて対話 TTY の環境で `--continue` し、`/recovery bootstrap assume-complete` または `/recovery bootstrap assume-incomplete` を明示してください。',
+              'complete は prompt を再送せず、incomplete は次の新しい event に prompt を添えます。どちらも失敗 input や旧 queue は再送しません。',
+            ].join('\n'),
+          );
+        }
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message: [
+            '旧 Cursor session の SessionResumeStore に bootstrap 状態がなく、compiled prompt が provider に届いたか判定できません。',
+            'operator が `/recovery bootstrap assume-complete` または `/recovery bootstrap assume-incomplete` を選んで判断を保存するまで、すべての event dispatch を停止します。',
+            'どちらの選択も失敗 input や旧 queue を復元・再送しません。',
+          ].join(' '),
+        });
+      }
+    }
     const resumeStore: SessionResumeStore = {
       ...loadedResumeStore,
       lifecycle: 'unknown',
@@ -610,11 +649,6 @@ async function runConductorSessionWithStartupGuard(
       harnessSocketPath: undefined,
       updatedAt: Date.now(),
     };
-    cursorBootstrapRunId = loadedResumeStore.cursorBootstrapRunId;
-    cursorBootstrapComplete =
-      conductorBackend === 'cursor'
-        ? (loadedResumeStore.cursorBootstrapComplete ?? true)
-        : undefined;
     harnessPhase = 'running';
     harnessModifiedAt = resumeStore.modifiedAt;
     let resumeStoreActivationCommitted = false;
@@ -1452,6 +1486,9 @@ async function runConductorSessionWithStartupGuard(
       (harnessPhase === 'running' || harnessPhase === 'idle'
         ? 'unknown'
         : undefined);
+    const cursorBootstrapComplete = cursorBootstrapState
+      ? cursorBootstrapCompleteForStore(cursorBootstrapState)
+      : undefined;
     return {
       version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: conductorHandle.conductor.agentId,
@@ -1786,6 +1823,39 @@ async function runConductorSessionWithStartupGuard(
   let operatorRequestedExit = false;
   let operatorRequestedClose = false;
   let disposeOperatorInput: (() => void) | undefined;
+  const resolveCursorBootstrapUnknown = (
+    assumption: CursorBootstrapAssumption,
+  ): boolean => {
+    if (
+      !operatorCanInspectRecovery ||
+      !cursorBootstrapState ||
+      cursorBootstrapState.status !== 'unknown'
+    ) {
+      return false;
+    }
+    cursorBootstrapState.status = 'saving';
+    cursorBootstrapState.pendingAssumption = assumption;
+    void flushSessionResumeStore()
+      .then(() => {
+        cursorBootstrapState.status =
+          assumption === 'assume-complete' ? 'complete' : 'incomplete';
+        delete cursorBootstrapState.pendingAssumption;
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            assumption === 'assume-complete'
+              ? 'operator が Cursor bootstrap を complete と仮定する判断を SessionResumeStore に保存しました。compiled prompt は追加送信しません。'
+              : 'operator が Cursor bootstrap を incomplete と仮定する判断を SessionResumeStore に保存しました。次の新しい event に compiled prompt を添えて送ります。',
+        });
+      })
+      .catch((error: unknown) => {
+        cursorBootstrapState.status = 'unknown';
+        delete cursorBootstrapState.pendingAssumption;
+        reportResumeStoreFlushFailure(error);
+      })
+      .finally(() => dispatchLifecycle.wake());
+    return true;
+  };
 
   const onOperatorMessageQueued = (delivery: OperatorMessageDelivery): void => {
     scheduleSessionResumeStoreFlush();
@@ -1913,6 +1983,12 @@ async function runConductorSessionWithStartupGuard(
       clearRecoverySnapshot: (recoveryId) => recoveryInbox.remove(recoveryId),
       continueAfterRecovery: () => dispatchLifecycle.confirmRecovery(),
       recoveryAttentionAttemptId: () => dispatchLifecycle.pendingAttemptId,
+      ...(cursorBootstrapState && operatorCanInspectRecovery
+        ? {
+            getCursorBootstrapStatus: () => cursorBootstrapState.status,
+            resolveCursorBootstrapUnknown,
+          }
+        : {}),
     });
     if (typeof bindingDispose === 'function') {
       disposeOperatorInput = bindingDispose;
@@ -2186,10 +2262,7 @@ async function runConductorSessionWithStartupGuard(
       // permission.pending) must be dispatched without waiting for a new
       // session briefing.
       skipInitialSend: Boolean(options.resumeAgentId),
-      ...(conductorBackend === 'cursor' &&
-      cursorBootstrapComplete !== undefined
-        ? { cursorBootstrapComplete }
-        : {}),
+      ...(cursorBootstrapState ? { cursorBootstrapState } : {}),
       onSendStarted: (info) => {
         reportHarnessActivity('conductor', true);
         sessionLogger.emit({
@@ -2326,11 +2399,11 @@ async function runConductorSessionWithStartupGuard(
         info.status === 'running';
       if (
         conductorBackend === 'cursor' &&
-        cursorBootstrapComplete === false &&
+        cursorBootstrapState?.status === 'incomplete' &&
         issueDispatchCompleted &&
         (info.dispatchSource === 'initial' || info.historyInbound !== undefined)
       ) {
-        cursorBootstrapComplete = true;
+        cursorBootstrapState.status = 'complete';
         scheduleSessionResumeStoreFlush();
       }
       const responseText = info.result?.trim();

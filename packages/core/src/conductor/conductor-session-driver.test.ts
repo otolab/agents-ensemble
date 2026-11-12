@@ -4,6 +4,7 @@ import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { MAX_TURNS_OPEN_QUESTION_TEXT } from '../escalation/enqueue-max-turns-question.js';
 import type { ConductorAgent } from './conductor-agent.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
+import type { CursorBootstrapState } from './cursor-bootstrap-state.js';
 import { ConductorDispatchLifecycle } from './conductor-dispatch-lifecycle.js';
 import { ConductorRecoveryInbox } from './conductor-recovery-inbox.js';
 import { runConductorSessionDriver } from './conductor-session-driver.js';
@@ -1244,6 +1245,178 @@ describe('runConductorSessionDriver', () => {
       shutdown.abort();
       await driverPromise;
       recoveryInbox.dispose();
+    }
+  });
+
+  it('holds a legacy Cursor queue for an explicit saved bootstrap decision and never replays the failed input', async () => {
+    const compiledPrompt = 'compiled Cursor prompt with private config';
+    const firstInput = {
+      type: 'operator.message' as const,
+      text: 'first fresh instruction',
+      operatorInput: 'first fresh instruction',
+    };
+    const laterInputA = {
+      type: 'operator.message' as const,
+      text: 'later instruction A',
+      operatorInput: 'later instruction A',
+    };
+    const laterInputB = {
+      type: 'operator.message' as const,
+      text: 'later instruction B',
+      operatorInput: 'later instruction B',
+    };
+    const eventQueue = new SessionEventQueue();
+    eventQueue.enqueue(firstInput);
+    const conductor = {
+      agentId: 'agent-legacy-cursor',
+      send: vi.fn(),
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    let notifyFirstSendStarted!: () => void;
+    const firstSendStarted = new Promise<void>((resolve) => {
+      notifyFirstSendStarted = resolve;
+    });
+    let finishFirstSend!: (result: {
+      runId: string;
+      status: 'cancelled';
+    }) => void;
+    const firstSendResult = new Promise<{
+      runId: string;
+      status: 'cancelled';
+    }>((resolve) => {
+      finishFirstSend = resolve;
+    });
+    const send = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        notifyFirstSendStarted();
+        return firstSendResult;
+      })
+      .mockResolvedValueOnce({
+        runId: 'run-later-inputs',
+        status: 'finished',
+        result: 'continued',
+      });
+    conductor.send = send;
+    const bootstrapState: CursorBootstrapState = { status: 'unknown' };
+    const lifecycle = new ConductorDispatchLifecycle();
+    const shutdown = new AbortController();
+    const recoveryInbox = new ConductorRecoveryInbox();
+    const onOperatorQueueChanged = vi.fn();
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      initialPrompt: compiledPrompt,
+      skipInitialSend: true,
+      recoveryBackend: 'cursor',
+      cursorBootstrapState: bootstrapState,
+      shutdownSignal: shutdown.signal,
+      continueAfterIssueLoopStop: true,
+      operatorCanInspectRecovery: true,
+      dispatchLifecycle: lifecycle,
+      recoveryInbox,
+      onOperatorQueueChanged,
+    });
+
+    try {
+      await vi.waitFor(() =>
+        expect(onOperatorQueueChanged).toHaveBeenCalledOnce(),
+      );
+      expect(send).not.toHaveBeenCalled();
+      expect(eventQueue.snapshot()).toEqual([firstInput]);
+
+      bootstrapState.status = 'saving';
+      lifecycle.wake();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(send).not.toHaveBeenCalled();
+      expect(eventQueue.snapshot()).toEqual([firstInput]);
+
+      bootstrapState.status = 'incomplete';
+      lifecycle.wake();
+      await firstSendStarted;
+      expect(send).toHaveBeenCalledOnce();
+      const firstMessage = send.mock.calls[0]![0] as string;
+      expect(firstMessage).toContain(compiledPrompt);
+      expect(firstMessage).toContain(firstInput.text);
+
+      eventQueue.enqueue(laterInputA);
+      eventQueue.enqueue(laterInputB);
+      finishFirstSend({
+        runId: 'run-first-fresh-input',
+        status: 'cancelled',
+      });
+      await vi.waitFor(() => expect(lifecycle.confirmationRequired).toBe(true));
+      expect(send).toHaveBeenCalledOnce();
+      const failedSnapshot = recoveryInbox.get(
+        recoveryInbox.list()[0]!.recoveryId,
+      );
+      expect(failedSnapshot?.inputTexts).toEqual([firstInput.text]);
+      expect(eventQueue.snapshot()).toEqual([laterInputA, laterInputB]);
+
+      expect(lifecycle.confirmRecovery()).toBe(true);
+      await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+      const laterMessage = send.mock.calls[1]![0] as string;
+      expect(laterMessage).toContain(compiledPrompt);
+      expect(laterMessage).not.toContain(firstInput.text);
+      expect(laterMessage.indexOf(laterInputA.text)).toBeLessThan(
+        laterMessage.indexOf(laterInputB.text),
+      );
+      expect(eventQueue.isEmpty()).toBe(true);
+    } finally {
+      shutdown.abort();
+      await driverPromise;
+      recoveryInbox.dispose();
+    }
+  });
+
+  it('honors assume-complete without adding the compiled prompt to the next event', async () => {
+    const compiledPrompt = 'compiled Cursor prompt with private config';
+    const inputEvent = {
+      type: 'operator.message' as const,
+      text: 'new instruction after explicit choice',
+      operatorInput: 'new instruction after explicit choice',
+    };
+    const eventQueue = new SessionEventQueue();
+    eventQueue.enqueue(inputEvent);
+    const send = vi.fn().mockResolvedValue({
+      runId: 'run-after-assume-complete',
+      status: 'finished',
+      result: 'continued',
+    });
+    const conductor = {
+      agentId: 'agent-legacy-cursor-complete',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const bootstrapState: CursorBootstrapState = { status: 'unknown' };
+    const lifecycle = new ConductorDispatchLifecycle();
+    const shutdown = new AbortController();
+    const onOperatorQueueChanged = vi.fn();
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      initialPrompt: compiledPrompt,
+      skipInitialSend: true,
+      recoveryBackend: 'cursor',
+      cursorBootstrapState: bootstrapState,
+      shutdownSignal: shutdown.signal,
+      continueAfterIssueLoopStop: true,
+      dispatchLifecycle: lifecycle,
+      onOperatorQueueChanged,
+    });
+
+    try {
+      await vi.waitFor(() =>
+        expect(onOperatorQueueChanged).toHaveBeenCalledOnce(),
+      );
+      expect(send).not.toHaveBeenCalled();
+      bootstrapState.status = 'complete';
+      lifecycle.wake();
+
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+      expect(send.mock.calls[0]![0]).toContain(inputEvent.text);
+      expect(send.mock.calls[0]![0]).not.toContain(compiledPrompt);
+    } finally {
+      shutdown.abort();
+      await driverPromise;
     }
   });
 

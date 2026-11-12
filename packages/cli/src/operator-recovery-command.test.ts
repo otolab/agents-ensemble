@@ -31,6 +31,11 @@ const snapshot: ConductorRecoverySnapshot = {
 };
 
 function createApi(): RecoveryInboxCommandApi {
+  let bootstrapStatus:
+    | 'unknown'
+    | 'saving'
+    | 'complete'
+    | 'incomplete' = 'unknown';
   return {
     listRecoverySnapshots: vi.fn(() => [summary]),
     getRecoverySnapshot: vi.fn((recoveryId) =>
@@ -41,6 +46,12 @@ function createApi(): RecoveryInboxCommandApi {
     ),
     continueAfterRecovery: vi.fn(() => true),
     recoveryAttentionAttemptId: vi.fn(() => '12'),
+    getCursorBootstrapStatus: vi.fn(() => bootstrapStatus),
+    resolveCursorBootstrapUnknown: vi.fn((assumption) => {
+      if (bootstrapStatus !== 'unknown') return false;
+      bootstrapStatus = assumption === 'assume-complete' ? 'complete' : 'incomplete';
+      return true;
+    }),
   };
 }
 
@@ -134,6 +145,65 @@ describe('executeRecoveryInboxCommand', () => {
       { canDisplaySensitiveContent: true },
     );
     expect(hidden).toEqual({ handled: true });
+  });
+
+  it('requires an interactive TTY to choose how an unknown Cursor bootstrap is handled', () => {
+    const api = createApi();
+    const nonTty = executeRecoveryInboxCommand(
+      api,
+      '/recovery bootstrap assume-incomplete',
+    );
+
+    expect(nonTty.inspection?.text).toContain(
+      '対話 TTY でのみ選択できます',
+    );
+    expect(api.resolveCursorBootstrapUnknown).not.toHaveBeenCalled();
+
+    const tty = executeRecoveryInboxCommand(
+      api,
+      '/recovery bootstrap assume-incomplete',
+      { canDisplaySensitiveContent: true },
+    );
+
+    expect(tty.inspection?.text).toContain('SessionResumeStore に保存');
+    expect(tty.inspection?.text).toContain('失敗 input を replay せず');
+    expect(api.resolveCursorBootstrapUnknown).toHaveBeenCalledWith(
+      'assume-incomplete',
+    );
+  });
+
+  it('explains both unknown bootstrap choices without replaying failed input', () => {
+    const statusApi = createApi();
+    const status = executeRecoveryInboxCommand(statusApi, '/recovery bootstrap', {
+      canDisplaySensitiveContent: true,
+    });
+    const assumeCompleteApi = createApi();
+    const assumeComplete = executeRecoveryInboxCommand(
+      assumeCompleteApi,
+      '/recovery bootstrap assume-complete',
+      { canDisplaySensitiveContent: true },
+    );
+    const assumeIncompleteApi = createApi();
+    const assumeIncomplete = executeRecoveryInboxCommand(
+      assumeIncompleteApi,
+      '/recovery bootstrap assume-incomplete',
+      { canDisplaySensitiveContent: true },
+    );
+
+    expect(status.inspection?.text).toContain('dispatch は選択まで停止');
+    expect(status.inspection?.text).toContain('文脈が欠けている可能性');
+    expect(status.inspection?.text).toContain('prompt が重複する可能性');
+    expect(assumeComplete.inspection?.text).toContain('prompt を再送しません');
+    expect(assumeIncomplete.inspection?.text).toContain('新しい event');
+    expect(
+      `${status.inspection?.text}\n${assumeComplete.inspection?.text}\n${assumeIncomplete.inspection?.text}`,
+    ).toContain('失敗 input');
+    expect(
+      assumeCompleteApi.resolveCursorBootstrapUnknown,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      assumeIncompleteApi.resolveCursorBootstrapUnknown,
+    ).toHaveBeenCalledTimes(1);
   });
 
   it('leaves ordinary operator messages on the normal submit path', () => {

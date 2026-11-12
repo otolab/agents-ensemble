@@ -8,6 +8,10 @@ import type {
   PiAuthRecoverySnapshot,
   PiAuthRecoverySnapshotSummary,
 } from './pi-auth-recovery-snapshot-store.js';
+import type {
+  CursorBootstrapAssumption,
+  CursorBootstrapStatus,
+} from './cursor-bootstrap-state.js';
 
 export interface OperatorInputContext {
   /** これから実行する conductor send 番号（1 始まり）。 */
@@ -43,6 +47,10 @@ export interface OperatorInputBindingApi {
   clearRecoverySnapshot?: (recoveryId: string) => boolean;
   continueAfterRecovery?: () => boolean;
   recoveryAttentionAttemptId?: () => string | undefined;
+  getCursorBootstrapStatus?: () => CursorBootstrapStatus;
+  resolveCursorBootstrapUnknown?: (
+    assumption: CursorBootstrapAssumption,
+  ) => boolean;
   /** @deprecated Use the generic recovery inbox methods above. */
   listPiAuthRecoverySnapshots?: () => PiAuthRecoverySnapshotSummary[];
   /** @deprecated Use the generic recovery inbox methods above. */

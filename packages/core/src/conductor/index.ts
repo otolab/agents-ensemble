@@ -105,6 +105,11 @@ export type {
   OperatorInputContext,
   OperatorInputSubmitOptions,
 } from './operator-input-binding.js';
+export type {
+  CursorBootstrapAssumption,
+  CursorBootstrapState,
+  CursorBootstrapStatus,
+} from './cursor-bootstrap-state.js';
 export { ConductorDispatchLifecycle } from './conductor-dispatch-lifecycle.js';
 export type {
   ConductorDispatchLease,

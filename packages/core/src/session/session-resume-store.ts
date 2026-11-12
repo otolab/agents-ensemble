@@ -85,9 +85,9 @@ export interface SessionResumeStore {
   createdHarnessCliVersion?: string;
   /** Conductor SDK session を作成した working directory。 */
   conductorCwd?: string;
-  /** Cursor local run API で bootstrap run を除外するための ID。 */
+  /** Cursor local run API で bootstrap run を除外する ID。bootstrap の成否は示さない。 */
   cursorBootstrapRunId?: string;
-  /** Cursor の compiled prompt が完了したか。本文は保存しない。 */
+  /** Cursor の compiled prompt の完了状態。欠落した旧形式は unknown。本文は保存しない。 */
   cursorBootstrapComplete?: boolean;
   /** 初回 `prompt_worker` まで ACP attach を遅延する。旧形式は eager。 */
   lazyWorkers?: boolean;

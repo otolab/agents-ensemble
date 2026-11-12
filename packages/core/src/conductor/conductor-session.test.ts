@@ -34,7 +34,7 @@ import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { computeMcpConfigDigest } from '../mcp/load-mcp-config.js';
 import {
   loadSessionResumeStore,
-  saveSessionResumeStore,
+  saveSessionResumeStore as writeSessionResumeStore,
   SessionResumeStoreNotFoundError,
   SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
@@ -58,6 +58,7 @@ import {
 } from '../session/open-question-control.js';
 import * as openQuestionControlModule from '../session/open-question-control.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
+import { executeRecoveryInboxCommand } from './recovery-inbox-command.js';
 import { runConductorSession as runConductorSessionImpl } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import * as worktreeModule from '../worktree/worktree.js';
@@ -179,6 +180,22 @@ async function drainAsync(): Promise<void> {
   await Promise.resolve();
 }
 
+async function saveSessionResumeStore(
+  path: string,
+  resumeStore: SessionResumeStore,
+): Promise<void> {
+  // These fixtures cover unrelated resume behavior and model a completed
+  // default-Cursor bootstrap. Unknown legacy-bootstrap tests use the raw writer.
+  const backend = resumeStore.conductorBackend ?? 'cursor';
+  await writeSessionResumeStore(path, {
+    ...resumeStore,
+    ...(backend === 'cursor' &&
+    resumeStore.cursorBootstrapComplete === undefined
+      ? { cursorBootstrapComplete: true }
+      : {}),
+  });
+}
+
 describe('runConductorSession resume / shutdown', () => {
   let repoRoot = '';
   let userEnsembleRoot = '';
@@ -293,6 +310,30 @@ describe('runConductorSession resume / shutdown', () => {
         quiesce: async () => {},
         close: async () => {},
       });
+  }
+
+  async function saveLegacyCursorResumeStore(agentId: string): Promise<string> {
+    const legacyStore = JSON.parse(
+      await readFile(
+        new URL(
+          '../../test/fixtures/session-resume-store-v1-legacy.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as SessionResumeStore;
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await writeSessionResumeStore(resumeStorePath, {
+      ...legacyStore,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      cursorBootstrapRunId: 'legacy-bootstrap-run',
+    });
+    return resumeStorePath;
   }
 
   it('fails fast when resumeAgentId is set but no saved session resume store exists', async () => {
@@ -2211,6 +2252,220 @@ describe('runConductorSession resume / shutdown', () => {
       cursorBootstrapComplete: true,
     });
   });
+
+  it('refuses a non-TTY resume when a legacy Cursor bootstrap result is unknown', async () => {
+    const agentId = 'legacy-cursor-bootstrap-non-tty';
+    const resumeStorePath = await saveLegacyCursorResumeStore(agentId);
+    const factory = {
+      create: vi.fn(),
+      resume: vi.fn(),
+    };
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'cursor' as const,
+      },
+    };
+
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { conductor: { backend: 'cursor' }, workers: [] },
+        ensembleConfig,
+        conductorAgentFactory: factory,
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      }),
+    ).rejects.toThrow(
+      'stdin / stdout / stderr がすべて対話 TTY の環境で `--continue` し',
+    );
+
+    expect(factory.resume).not.toHaveBeenCalled();
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      cursorBootstrapRunId: 'legacy-bootstrap-run',
+    });
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.not.toHaveProperty(
+      'cursorBootstrapComplete',
+    );
+  });
+
+  it.each([
+    {
+      assumption: 'assume-complete',
+      savedValue: true,
+      expectCompiledPrompt: false,
+    },
+    {
+      assumption: 'assume-incomplete',
+      savedValue: false,
+      expectCompiledPrompt: true,
+    },
+  ] as const)(
+    'persists legacy bootstrap choice $assumption and honors it after --continue',
+    async ({ assumption, savedValue, expectCompiledPrompt }) => {
+      stubUnusedControlServer();
+      const agentId = `legacy-cursor-bootstrap-tty-${assumption}`;
+      const resumeStorePath = await saveLegacyCursorResumeStore(agentId);
+      const firstSend = vi.fn();
+      let bootstrapStoredAtDispatch: boolean | undefined;
+      const secondSend = vi.fn().mockImplementation(async () => {
+        bootstrapStoredAtDispatch = (
+          await loadSessionResumeStore(resumeStorePath)
+        )?.cursorBootstrapComplete;
+        return {
+          runId: 'run-after-legacy-bootstrap-choice',
+          status: 'finished',
+          result: 'continued',
+        };
+      });
+      const firstAgent = {
+        agentId,
+        send: firstSend,
+        close: vi.fn().mockResolvedValue(undefined),
+        getUsage: createMockConductorGetUsage(),
+      };
+      const secondAgent = {
+        agentId,
+        send: secondSend,
+        close: vi.fn().mockResolvedValue(undefined),
+        getUsage: createMockConductorGetUsage(),
+      };
+      const factory = {
+        create: vi.fn(),
+        resume: vi
+          .fn()
+          .mockResolvedValueOnce(firstAgent)
+          .mockResolvedValueOnce(secondAgent),
+      };
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'cursor' as const,
+        },
+      };
+      const profile = {
+        conductor: { backend: 'cursor' as const },
+        workers: [],
+      };
+      const firstLog = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      const firstEvents: SessionLogEvent[] = [];
+      firstLog.subscribe((event) => firstEvents.push(event));
+      const firstShutdown = new AbortController();
+      let firstApi: OperatorInputBindingApi | undefined;
+      const firstSession = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        conductorAgentFactory: factory,
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        sessionLogger: firstLog,
+        shutdownSignal: firstShutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        operatorCanInspectRecovery: true,
+        bindOperatorInput: (api) => {
+          firstApi = api;
+        },
+      });
+
+      const secondShutdown = new AbortController();
+      let secondApi: OperatorInputBindingApi | undefined;
+      let secondSession: Promise<unknown> | undefined;
+      try {
+        await vi.waitFor(() => expect(firstApi).toBeDefined());
+        expect(firstApi!.getCursorBootstrapStatus?.()).toBe('unknown');
+        await expect(loadSessionResumeStore(resumeStorePath)).resolves.not.toHaveProperty(
+          'cursorBootstrapComplete',
+        );
+        expect(
+          firstEvents.some(
+            (event) =>
+              event.type === 'harness.warning' &&
+              event.message.includes('compiled prompt が provider に届いたか判定できません'),
+          ),
+        ).toBe(true);
+        const status = executeRecoveryInboxCommand(
+          firstApi,
+          '/recovery bootstrap',
+          { canDisplaySensitiveContent: true },
+        );
+        expect(status.inspection?.text).toContain('dispatch は選択まで停止');
+        expect(firstSend).not.toHaveBeenCalled();
+
+        const choice = executeRecoveryInboxCommand(
+          firstApi,
+          `/recovery bootstrap ${assumption}`,
+          { canDisplaySensitiveContent: true },
+        );
+        expect(choice.inspection?.text).toContain('SessionResumeStore に保存');
+        await vi.waitFor(() =>
+          expect(firstApi!.getCursorBootstrapStatus?.()).toBe(
+            assumption === 'assume-complete' ? 'complete' : 'incomplete',
+          ),
+        );
+        await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+          cursorBootstrapComplete: savedValue,
+        });
+        expect(firstSend).not.toHaveBeenCalled();
+
+        expect(firstApi!.submit('/exit')).toBe(false);
+        await firstSession;
+
+        secondSession = runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile,
+          ensembleConfig,
+          conductorAgentFactory: factory,
+          resumeAgentId: agentId,
+          permissionPipeline: new PermissionPipeline({}),
+          shutdownSignal: secondShutdown.signal,
+          registerProcessSignalHandlers: false,
+          waitForOperatorExit: true,
+          bindOperatorInput: (api) => {
+            secondApi = api;
+            api.submit('fresh input after --continue');
+          },
+        });
+
+        await vi.waitFor(() => expect(secondSend).toHaveBeenCalledOnce());
+        const resumedPrompt = (
+          factory.resume.mock.calls[1]![1] as ConductorAgentCreateOptions
+        ).systemPrompt;
+        const dispatchedMessage = secondSend.mock.calls[0]![0] as string;
+        if (expectCompiledPrompt) {
+          expect(dispatchedMessage).toContain(resumedPrompt);
+        } else {
+          expect(dispatchedMessage).not.toContain(resumedPrompt);
+        }
+        expect(dispatchedMessage).toContain('fresh input after --continue');
+        expect(dispatchedMessage).not.toContain('legacy-bootstrap-run');
+        expect(bootstrapStoredAtDispatch).toBe(savedValue);
+        await vi.waitFor(async () => {
+          await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+            cursorBootstrapComplete: true,
+          });
+        });
+      } finally {
+        firstApi?.submit('/exit');
+        firstShutdown.abort();
+        await firstSession.catch(() => undefined);
+        secondApi?.submit('/exit');
+        secondShutdown.abort();
+        await secondSession?.catch(() => undefined);
+      }
+    },
+  );
 
   it('persists the v2 resume-feasibility digest without config values', async () => {
     mockSend.mockResolvedValue({
