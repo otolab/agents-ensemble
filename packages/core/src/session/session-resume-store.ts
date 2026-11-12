@@ -87,6 +87,8 @@ export interface SessionResumeStore {
   conductorCwd?: string;
   /** Cursor local run API で bootstrap run を除外するための ID。 */
   cursorBootstrapRunId?: string;
+  /** Cursor の compiled prompt が完了したか。本文は保存しない。 */
+  cursorBootstrapComplete?: boolean;
   /** 初回 `prompt_worker` まで ACP attach を遅延する。旧形式は eager。 */
   lazyWorkers?: boolean;
   /** 稼働中 session の local control socket。teardown 時に除去する。 */
@@ -714,6 +716,12 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     throw new Error('Invalid session resume store: cursorBootstrapRunId');
   }
   if (
+    record.cursorBootstrapComplete !== undefined &&
+    typeof record.cursorBootstrapComplete !== 'boolean'
+  ) {
+    throw new Error('Invalid session resume store: cursorBootstrapComplete');
+  }
+  if (
     record.lifecycle !== undefined &&
     record.lifecycle !== 'closed' &&
     record.lifecycle !== 'exited' &&
@@ -779,6 +787,9 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
       : {}),
     ...(typeof record.cursorBootstrapRunId === 'string'
       ? { cursorBootstrapRunId: record.cursorBootstrapRunId }
+      : {}),
+    ...(typeof record.cursorBootstrapComplete === 'boolean'
+      ? { cursorBootstrapComplete: record.cursorBootstrapComplete }
       : {}),
     ...(typeof record.lazyWorkers === 'boolean'
       ? { lazyWorkers: record.lazyWorkers }

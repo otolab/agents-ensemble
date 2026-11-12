@@ -12,6 +12,33 @@ export interface ConductorAgentHandle {
   conductor: ConductorAgent;
 }
 
+const conductorClosePromises = new WeakMap<ConductorAgent, Promise<void>>();
+
+/**
+ * Share one close attempt between reconnect and session teardown.
+ *
+ * A failed reconnect leaves the old agent in the handle after its close was
+ * attempted. Reusing the same promise prevents a finalizer from invoking close
+ * a second time, including while the first close is pending.
+ */
+export function closeConductorAgentOnce(
+  agent: ConductorAgent,
+  options: { forResume?: boolean } = {},
+): Promise<void> {
+  const existing = conductorClosePromises.get(agent);
+  if (existing) return existing;
+
+  const closePromise = Promise.resolve().then(() => {
+    const close =
+      options.forResume && agent.closeForResume
+        ? agent.closeForResume
+        : agent.close;
+    return close.call(agent);
+  });
+  conductorClosePromises.set(agent, closePromise);
+  return closePromise;
+}
+
 export interface ConductorReconnectCompleteInfo {
   agentId: string;
   success: boolean;
@@ -72,10 +99,6 @@ export interface ConductorSendReconnectOptions
   onAutomaticRetry?: (input: ConductorAutomaticRetryInfo) => void;
 }
 
-// resume に失敗した時点で旧 agent は close 済み。次の operator reconnect では
-// 同じ handle を再度 close せず、resume を再試行する。
-const closedForReconnect = new WeakSet<ConductorAgentHandle>();
-
 /** close → factory.resume(sameId) で in-process の agent を差し替える。 */
 export async function reconnectConductorAgent(
   handle: ConductorAgentHandle,
@@ -107,21 +130,17 @@ export async function reconnectConductorAgent(
   }
 
   try {
-    if (!closedForReconnect.has(handle)) {
-      await handle.conductor.close();
-      closedForReconnect.add(handle);
-    }
+    await closeConductorAgentOnce(handle.conductor);
     throwIfReconnectAborted(options.signal);
     const resumedAgent = await conductorAgentFactory.resume(
       agentId,
       conductorOptions,
     );
     if (options.signal?.aborted) {
-      await resumedAgent.close();
+      await closeConductorAgentOnce(resumedAgent);
       throwIfReconnectAborted(options.signal);
     }
     handle.conductor = resumedAgent;
-    closedForReconnect.delete(handle);
     options.onReconnectComplete?.({ agentId, success: true, source });
     return agentId;
   } catch (error) {

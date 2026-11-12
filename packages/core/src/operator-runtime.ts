@@ -36,6 +36,7 @@ export {
 } from './conductor/conductor-auth.js';
 export { resolvePiConductorProvider } from './conductor/conductor-pi-auth.js';
 export {
+  closeConductorAgentOnce,
   reconnectConductorAgent,
   sendConductorWithReconnect,
 } from './conductor/conductor-send-reconnect.js';

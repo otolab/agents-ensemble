@@ -2,6 +2,7 @@ import { clearLine, createInterface, cursorTo } from 'node:readline';
 import { resolve } from 'node:path';
 import { compile, merge } from '@modular-prompt/core';
 import {
+  closeConductorAgentOnce,
   createConductorAgentFactory,
   ConductorDispatchLifecycle,
   ConductorRecoveryInbox,
@@ -293,7 +294,7 @@ export async function runOperatorAgent(
   } finally {
     recoveryInbox.dispose();
     watchPool.close();
-    await agentHandle.conductor.close();
+    await closeConductorAgentOnce(agentHandle.conductor);
   }
 }
 

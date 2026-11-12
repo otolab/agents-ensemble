@@ -89,6 +89,7 @@ import {
   isConductorSendAuthError,
 } from './conductor-auth.js';
 import { resolvePiConductorProvider } from './conductor-pi-auth.js';
+import { closeConductorAgentOnce } from './conductor-send-reconnect.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
@@ -527,6 +528,8 @@ async function runConductorSessionWithStartupGuard(
   const pendingGitHubRecoveries: number[] = [];
   const conductorCwd = options.conductorCwd ?? process.cwd();
   let cursorBootstrapRunId: string | undefined;
+  let cursorBootstrapComplete: boolean | undefined =
+    conductorBackend === 'cursor' ? false : undefined;
   const mcpServers = await resolveMcpServers(
     options.repoRoot,
     options.mcpConfigOptions,
@@ -608,6 +611,10 @@ async function runConductorSessionWithStartupGuard(
       updatedAt: Date.now(),
     };
     cursorBootstrapRunId = loadedResumeStore.cursorBootstrapRunId;
+    cursorBootstrapComplete =
+      conductorBackend === 'cursor'
+        ? (loadedResumeStore.cursorBootstrapComplete ?? true)
+        : undefined;
     harnessPhase = 'running';
     harnessModifiedAt = resumeStore.modifiedAt;
     let resumeStoreActivationCommitted = false;
@@ -1335,11 +1342,9 @@ async function runConductorSessionWithStartupGuard(
     throw error;
   }
   startupCleanup.add(async () => {
-    if (options.resumeAgentId && conductorAgent.closeForResume) {
-      await conductorAgent.closeForResume();
-    } else {
-      await conductorAgent.close();
-    }
+    await closeConductorAgentOnce(conductorAgent, {
+      forResume: Boolean(options.resumeAgentId),
+    });
   });
   // Factories may not be abortable while pending. Register the returned agent
   // before checking shutdown so a late success is still closed by the guard.
@@ -1457,6 +1462,9 @@ async function runConductorSessionWithStartupGuard(
       conductorCwd,
       ...(cursorBootstrapRunId
         ? { cursorBootstrapRunId }
+        : {}),
+      ...(cursorBootstrapComplete !== undefined
+        ? { cursorBootstrapComplete }
         : {}),
       lazyWorkers: activeLazyWorkers,
       ...(harnessSocketPath ? { harnessSocketPath } : {}),
@@ -2178,6 +2186,10 @@ async function runConductorSessionWithStartupGuard(
       // permission.pending) must be dispatched without waiting for a new
       // session briefing.
       skipInitialSend: Boolean(options.resumeAgentId),
+      ...(conductorBackend === 'cursor' &&
+      cursorBootstrapComplete !== undefined
+        ? { cursorBootstrapComplete }
+        : {}),
       onSendStarted: (info) => {
         reportHarnessActivity('conductor', true);
         sessionLogger.emit({
@@ -2306,6 +2318,19 @@ async function runConductorSessionWithStartupGuard(
         cursorBootstrapRunId === undefined
       ) {
         cursorBootstrapRunId = info.runId;
+        scheduleSessionResumeStoreFlush();
+      }
+      const issueDispatchCompleted =
+        info.status === 'finished' ||
+        info.status === 'completed' ||
+        info.status === 'running';
+      if (
+        conductorBackend === 'cursor' &&
+        cursorBootstrapComplete === false &&
+        issueDispatchCompleted &&
+        (info.dispatchSource === 'initial' || info.historyInbound !== undefined)
+      ) {
+        cursorBootstrapComplete = true;
         scheduleSessionResumeStoreFlush();
       }
       const responseText = info.result?.trim();
@@ -2586,11 +2611,9 @@ async function runConductorSessionWithStartupGuard(
       const runConductorClose = async (): Promise<void> => {
         emitTeardownPhase('conductor');
         const phaseStart = Date.now();
-        if (operatorRequestedClose && conductorHandle.conductor.closeForResume) {
-          await conductorHandle.conductor.closeForResume();
-        } else {
-          await conductorHandle.conductor.close();
-        }
+        await closeConductorAgentOnce(conductorHandle.conductor, {
+          forResume: operatorRequestedClose,
+        });
         teardownPhases.conductor = Date.now() - phaseStart;
       };
 

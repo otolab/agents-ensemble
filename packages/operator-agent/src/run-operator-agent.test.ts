@@ -1502,7 +1502,66 @@ describe('runOperatorAgent', () => {
     }
   });
 
-  it('holds user input and watch reports across failed resumes, then dispatches them in order', async () => {
+  it('does not close the old conductor again when finalization follows failed resume', async () => {
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const authFailure = {
+      runId: 'run-auth',
+      status: 'error',
+      error: {
+        code: 'auth',
+        message:
+          'API key auth failed for provider cursor: authentication failed',
+      },
+    };
+    const oldClose = vi.fn().mockResolvedValue(undefined);
+    const oldSend = vi.fn().mockResolvedValue(authFailure);
+    const oldAgent = {
+      ...createFakeAgent({ send: oldSend }),
+      close: oldClose,
+    };
+    const resume = vi
+      .fn()
+      .mockRejectedValue(new Error('resume unavailable'));
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout,
+        stderr,
+        loadConfig: async () => ({
+          profile: { default: 'unused' },
+          conductor: { backend: 'cursor', model: 'cursor-model' },
+        }) as EnsembleConfig,
+        loadProfile: async () => ({
+          profile: { workers: [], agents: {} } as ResolvedProfile,
+          profilePath: 'test-profile',
+        }),
+        agentFactory: {
+          create: async () => oldAgent,
+          resume,
+        },
+      },
+    );
+
+    input.write('request whose result is unknown\n');
+    await vi.waitFor(() => {
+      expect(resume).toHaveBeenCalledOnce();
+      expect(stdout.capturedText()).toContain(
+        'operator send が未完了です (status=error, failure=auth)',
+      );
+    });
+    input.write('/exit\n');
+    await run;
+
+    expect(oldSend).toHaveBeenCalledOnce();
+    expect(oldClose).toHaveBeenCalledOnce();
+    input.end();
+  });
+
+  it('holds user input and watch reports that arrive during automatic resume, then dispatches them in order', async () => {
     let liveSnapshot: SessionObservationSnapshot = {
       sequence: 0,
       openQuestions: [],
@@ -1594,9 +1653,13 @@ describe('runOperatorAgent', () => {
       ...createFakeAgent({ send: resumedSend }),
       close: resumedClose,
     };
+    let rejectAutomaticResume!: (error: Error) => void;
+    const pendingAutomaticResume = new Promise<ConductorAgent>((_resolve, reject) => {
+      rejectAutomaticResume = reject;
+    });
     const resume = vi
       .fn()
-      .mockRejectedValueOnce(new Error('automatic resume unavailable'))
+      .mockReturnValueOnce(pendingAutomaticResume)
       .mockRejectedValueOnce(new Error('manual resume unavailable'))
       .mockResolvedValueOnce(resumedAgent);
     const run = runOperatorAgent(
@@ -1626,12 +1689,7 @@ describe('runOperatorAgent', () => {
         expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
       );
       input.write(`${failedInput}\n`);
-      await vi.waitFor(() => {
-        expect(resume).toHaveBeenCalledOnce();
-        expect(stdout.capturedText()).toContain(
-          'operator send が未完了です (status=error, failure=auth)',
-        );
-      });
+      await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
       expect(firstSend).toHaveBeenCalledOnce();
       expect(sentPrompts[0]).toContain(failedInput);
       expect(resumedSend).not.toHaveBeenCalled();
@@ -1644,6 +1702,14 @@ describe('runOperatorAgent', () => {
         ) as { pendingReports: Array<{ reportId: string }> };
         expect(saved.pendingReports).toHaveLength(1);
       });
+      expect(firstSend).toHaveBeenCalledOnce();
+      expect(resumedSend).not.toHaveBeenCalled();
+      rejectAutomaticResume(new Error('automatic resume unavailable'));
+      await vi.waitFor(() =>
+        expect(stdout.capturedText()).toContain(
+          'operator send が未完了です (status=error, failure=auth)',
+        ),
+      );
 
       input.write('/reconnect\n');
       await vi.waitFor(() => {

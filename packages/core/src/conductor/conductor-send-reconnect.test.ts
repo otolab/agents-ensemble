@@ -15,6 +15,7 @@ function createConductorOptions() {
 }
 
 import {
+  closeConductorAgentOnce,
   isConductorSendTransportError,
   reconnectConductorAgent,
   sendConductorWithReconnect,
@@ -455,6 +456,34 @@ describe('reconnectConductorAgent', () => {
     expect(mockClose).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledTimes(2);
     expect(handle.conductor).toBe(resumed);
+  });
+
+  it('shares the old agent close with finalization after resume fails', async () => {
+    let resolveClose!: () => void;
+    const closePromise = new Promise<void>((resolve) => {
+      resolveClose = resolve;
+    });
+    const oldClose = vi.fn(() => closePromise);
+    const oldAgent = {
+      agentId: 'agent-1',
+      send: vi.fn(),
+      close: oldClose,
+    };
+    const handle = { conductor: oldAgent };
+    mockResume.mockRejectedValueOnce(new Error('resume unavailable'));
+
+    const reconnect = reconnectConductorAgent(handle, {
+      conductorAgentFactory: createFactory(),
+      conductorOptions: createConductorOptions(),
+    });
+    await vi.waitFor(() => expect(oldClose).toHaveBeenCalledOnce());
+    const finalizerClose = closeConductorAgentOnce(oldAgent as never);
+    expect(oldClose).toHaveBeenCalledOnce();
+
+    resolveClose();
+    await expect(reconnect).rejects.toThrow('resume unavailable');
+    await finalizerClose;
+    expect(oldClose).toHaveBeenCalledOnce();
   });
 });
 

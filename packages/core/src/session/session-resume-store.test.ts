@@ -83,6 +83,7 @@ describe('SessionResumeStore', () => {
       conductorCwd: '/repo/.ensemble/worktrees/issue-1',
       createdHarnessCliVersion: '0.19.0',
       cursorBootstrapRunId: 'run-bootstrap-1',
+      cursorBootstrapComplete: false,
       lazyWorkers: true,
       githubMonitor: {
         pullRequests: {},
@@ -519,6 +520,7 @@ describe('SessionResumeStore', () => {
     expect(loaded?.lazyWorkers).toBeUndefined();
     expect(loaded).not.toHaveProperty('conductorCwd');
     expect(loaded).not.toHaveProperty('cursorBootstrapRunId');
+    expect(loaded).not.toHaveProperty('cursorBootstrapComplete');
   });
 
   it('rejects a conductor backend mismatch on resume validation', () => {

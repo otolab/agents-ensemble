@@ -2061,6 +2061,157 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
+  it('does not close the old conductor twice when teardown follows failed reconnect', async () => {
+    stubUnusedControlServer();
+    const oldClose = vi.fn().mockResolvedValue(undefined);
+    const initialSend = vi.fn().mockResolvedValue({
+      runId: 'run-cursor-auth-error',
+      status: 'error',
+      error: { code: 'auth', message: 'Cursor authentication failed' },
+    });
+    const agent = {
+      agentId: 'cursor-reconnect-close-once',
+      send: initialSend,
+      close: oldClose,
+      getUsage: createMockConductorGetUsage(),
+    };
+    const factory = {
+      create: vi.fn().mockResolvedValue(agent),
+      resume: vi.fn().mockRejectedValue(new Error('resume unavailable')),
+    };
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'cursor' as const,
+      },
+    };
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
+      ensembleConfig,
+      conductorAgentFactory: factory,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(initialSend).toHaveBeenCalledOnce();
+    expect(factory.resume).toHaveBeenCalledOnce();
+    expect(oldClose).toHaveBeenCalledOnce();
+  });
+
+  it('restores incomplete Cursor bootstrap state on --continue without replaying the failed prompt', async () => {
+    stubUnusedControlServer();
+    const agentId = 'cursor-bootstrap-incomplete-resume';
+    const initialPromptSend = vi.fn().mockResolvedValue({
+      runId: 'run-cursor-bootstrap-auth-error',
+      status: 'error',
+      error: { code: 'auth', message: 'Cursor authentication failed' },
+    });
+    const initialAgentClose = vi.fn().mockResolvedValue(undefined);
+    const initialAgent = {
+      agentId,
+      send: initialPromptSend,
+      close: initialAgentClose,
+      getUsage: createMockConductorGetUsage(),
+    };
+    const automaticallyResumedSend = vi.fn();
+    const automaticallyResumedClose = vi.fn().mockResolvedValue(undefined);
+    const automaticallyResumedAgent = {
+      agentId,
+      send: automaticallyResumedSend,
+      close: automaticallyResumedClose,
+      getUsage: createMockConductorGetUsage(),
+    };
+    const continuedSend = vi.fn().mockResolvedValue({
+      runId: 'run-after-continue',
+      status: 'finished',
+      result: 'continued',
+    });
+    const continuedAgent = {
+      agentId,
+      send: continuedSend,
+      close: vi.fn().mockResolvedValue(undefined),
+      getUsage: createMockConductorGetUsage(),
+    };
+    const factory = {
+      create: vi.fn().mockResolvedValue(initialAgent),
+      resume: vi
+        .fn()
+        .mockResolvedValueOnce(automaticallyResumedAgent)
+        .mockResolvedValueOnce(continuedAgent),
+    };
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'cursor' as const,
+      },
+    };
+    const profile = {
+      conductor: { backend: 'cursor' as const },
+      workers: [],
+    };
+
+    const firstRun = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile,
+      ensembleConfig,
+      conductorAgentFactory: factory,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(firstRun.stopReason).toBe('error');
+    expect(initialPromptSend).toHaveBeenCalledOnce();
+    expect(factory.resume).toHaveBeenCalledOnce();
+    expect(automaticallyResumedSend).not.toHaveBeenCalled();
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      cursorBootstrapComplete: false,
+    });
+
+    const nextOperatorInput = 'continue with a fresh operator instruction';
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile,
+      ensembleConfig,
+      conductorAgentFactory: factory,
+      resumeAgentId: agentId,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      bindOperatorInput: (api) => {
+        api.submit(nextOperatorInput);
+      },
+    });
+
+    const compiledPrompt = (
+      factory.create.mock.calls[0]![0] as ConductorAgentCreateOptions
+    ).systemPrompt;
+    expect(factory.resume).toHaveBeenCalledTimes(2);
+    expect(continuedSend).toHaveBeenCalledOnce();
+    const continuedPrompt = continuedSend.mock.calls[0]![0] as string;
+    expect(continuedPrompt).toContain(compiledPrompt);
+    expect(continuedPrompt).toContain('## 今回のセッションイベント');
+    expect(continuedPrompt).toContain(nextOperatorInput);
+    expect(continuedPrompt).not.toContain(
+      'Cursor authentication failed',
+    );
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      cursorBootstrapComplete: true,
+    });
+  });
+
   it('persists the v2 resume-feasibility digest without config values', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-config-digest',

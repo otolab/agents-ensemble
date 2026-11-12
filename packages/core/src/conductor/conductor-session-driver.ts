@@ -150,6 +150,8 @@ export interface ConductorSessionDriverOptions {
     ConductorSessionDriverResult,
     'sendCount' | 'autonomousTurns' | 'lastSendResult'
   > & { lastDispatchesThisTurn: number };
+  /** Cursor の compiled prompt が既存 provider session に bootstrap 済みか。 */
+  cursorBootstrapComplete?: boolean;
   /** conductor send 中だけ有効な dispatch 保留状態。SessionResumeStore には保存しない。 */
   dispatchHoldState?: DispatchHoldState;
   /** dispatch 保留の切替・件数変化を TUI/観測へ通知する。 */
@@ -212,7 +214,10 @@ export async function runConductorSessionDriver(
     status: 'finished',
   };
   let cursorBootstrapPending =
-    options.recoveryBackend === 'cursor' && !options.skipInitialSend;
+    options.recoveryBackend === 'cursor' &&
+    (options.cursorBootstrapComplete === undefined
+      ? !options.skipInitialSend
+      : !options.cursorBootstrapComplete);
   let inFlightSend: Promise<ConductorSendResult> | undefined;
   let postLoopWaiting = false;
   const lifecycle =

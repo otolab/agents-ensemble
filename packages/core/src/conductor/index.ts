@@ -169,6 +169,7 @@ export {
 } from './operator-command.js';
 export type { ParsedOperatorMessageDelivery } from './operator-command.js';
 export {
+  closeConductorAgentOnce,
   reconnectConductorAgent,
   sendConductorWithReconnect,
   isConductorSendTransportError,
