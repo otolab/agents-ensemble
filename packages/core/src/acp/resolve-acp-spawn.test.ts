@@ -16,6 +16,10 @@ import {
 } from '../profile/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import {
+  resolveBuiltinPiCliEnvWrapperPath,
+  resolveBundledPiCliPath,
+} from './pi-runtime.js';
 
 describe('resolveDefaultAcpSpawn', () => {
   it('defaults to cursor agent acp', () => {
@@ -762,8 +766,11 @@ describe('profileWorkersToSessionSpecs', () => {
       PI_CODING_AGENT_SESSION_DIR:
         paths.piWorkerSessionsDir('implementer'),
     });
-    expect(implementer?.PI_ACP_PI_COMMAND).toContain(
-      '@earendil-works/pi-coding-agent',
+    expect(implementer?.PI_ACP_PI_COMMAND).toBe(
+      resolveBuiltinPiCliEnvWrapperPath(),
+    );
+    expect(implementer?.ENSEMBLE_PI_CLI_EXECUTABLE).toBe(
+      resolveBundledPiCliPath(),
     );
     expect(implementer?.PI_ACP_PI_COMMAND).not.toBe('/custom/pi.js');
     expect(implementer).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
@@ -777,12 +784,17 @@ describe('profileWorkersToSessionSpecs', () => {
       computeAcpSpawnEnvDigest({
         ...fingerprintEnv,
         ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+        ENSEMBLE_PI_CLI_HOME: implementer?.ENSEMBLE_PI_CLI_HOME ?? '',
+        ENSEMBLE_PI_CLI_USERPROFILE:
+          implementer?.ENSEMBLE_PI_CLI_USERPROFILE ?? '',
+        ENSEMBLE_PI_CLI_NODE: process.execPath,
+        ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
         HOME: paths.piWorkerDir('implementer'),
         USERPROFILE: paths.piWorkerDir('implementer'),
         PI_CODING_AGENT_DIR: paths.piUserDir,
         PI_CODING_AGENT_SESSION_DIR:
           paths.piWorkerSessionsDir('implementer'),
-        PI_ACP_PI_COMMAND: implementer?.PI_ACP_PI_COMMAND ?? '',
+        PI_ACP_PI_COMMAND: resolveBuiltinPiCliEnvWrapperPath(),
       }),
     );
   });
@@ -829,12 +841,17 @@ describe('profileWorkersToSessionSpecs', () => {
       computeAcpSpawnEnvDigest({
         ...fingerprintEnv,
         ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+        ENSEMBLE_PI_CLI_HOME: implementer?.ENSEMBLE_PI_CLI_HOME ?? '',
+        ENSEMBLE_PI_CLI_USERPROFILE:
+          implementer?.ENSEMBLE_PI_CLI_USERPROFILE ?? '',
+        ENSEMBLE_PI_CLI_NODE: process.execPath,
+        ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
         HOME: paths.piWorkerDir('implementer'),
         USERPROFILE: paths.piWorkerDir('implementer'),
         PI_CODING_AGENT_DIR: agentDir,
         PI_CODING_AGENT_SESSION_DIR:
           paths.piWorkerSessionsDir('implementer'),
-        PI_ACP_PI_COMMAND: implementer?.PI_ACP_PI_COMMAND ?? '',
+        PI_ACP_PI_COMMAND: resolveBuiltinPiCliEnvWrapperPath(),
       }),
     );
   });

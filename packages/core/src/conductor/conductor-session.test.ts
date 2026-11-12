@@ -14,6 +14,10 @@ import {
   computeAcpSpawnEnvDigest,
   resolveWorkerAcpSpawn,
 } from '../acp/resolve-acp-spawn.js';
+import {
+  resolveBuiltinPiCliEnvWrapperPath,
+  resolveBundledPiCliPath,
+} from '../acp/pi-runtime.js';
 import * as acpBinModule from '../acp/resolve-bundled-acp-bin.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type { AcpBridge } from '../acp/acp-bridge.js';
@@ -2062,8 +2066,11 @@ describe('runConductorSession resume / shutdown', () => {
         paths.piWorkerSessionsDir('implementer'),
     });
     expect(workerSpawn?.env).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
-    expect(workerSpawn?.env?.PI_ACP_PI_COMMAND).toContain(
-      '@earendil-works/pi-coding-agent',
+    expect(workerSpawn?.env?.PI_ACP_PI_COMMAND).toBe(
+      resolveBuiltinPiCliEnvWrapperPath(),
+    );
+    expect(workerSpawn?.env?.ENSEMBLE_PI_CLI_EXECUTABLE).toBe(
+      resolveBundledPiCliPath(),
     );
   });
 
