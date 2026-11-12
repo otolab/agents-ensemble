@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "conductorAgentId": "session-export-worktree-fixture",
+  "conductorBackend": "pi",
+  "createdHarnessCliVersion": "0.21.0",
+  "conductorCwd": "__CONDUCTOR_CWD__",
+  "issueUrl": "https://github.com/otolab/agents-ensemble/issues/672",
+  "repoRoot": "__REPO_ROOT__",
+  "profile": {
+    "workers": [
+      {
+        "name": "implementer",
+        "kind": "implementer"
+      }
+    ]
+  },
+  "openQuestions": [],
+  "sequence": 0,
+  "workers": {
+    "implementer": {
+      "acpSessionId": "019a4b21-9c0e-7a44-b9ad-6a8df4fa7720",
+      "acpCwd": "__CODEX_WORKER_CWD__",
+      "acpSpawn": {
+        "preset": "codex",
+        "command": "codex-acp",
+        "args": []
+      }
+    }
+  },
+  "lifecycle": "closed",
+  "harnessPhase": "close",
+  "updatedAt": 1800000000000
+}

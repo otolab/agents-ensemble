@@ -136,5 +136,15 @@ export {
   type WorkerSessionHistoryReaderSupport,
   type WorkerSessionHistoryResult,
 } from './session/worker-session-history.js';
+export {
+  exportSessionBundle,
+  type ExportSessionBundleInput,
+  type ExportSessionBundleResult,
+  type SessionBundleFile,
+  type SessionBundleManifest,
+  type SessionBundleSource,
+  type SessionBundleSourceStatus,
+  type SessionBundleStatus,
+} from './session/export-session-bundle.js';
 export { parseIssueUrl } from './issue/issue-ref.js';
 export type { IssueRef } from './issue/issue-ref.js';
