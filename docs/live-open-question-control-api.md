@@ -267,7 +267,7 @@ limit 1 でも単独 response が上限を超える発言に達した場合、�
 
 ### operator-agent の provider history list
 
-operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / cwd を使い、SDK が保存した local session history から最大 100 件を読みます。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。
+operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / `repoRoot` / `conductorCwd` を使い、SDK が保存した local session history から最大 100 件を読みます。Pi は `repoRoot` 基準の user 層 `piSessionsDir` を優先し、対象 session がなければ `conductorCwd/.ensemble/pi/sessions/` を探します。Pi `SessionManager` には引き続き `conductorCwd` を渡します。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。
 
 - **共通 filter:** user inbound と final assistant response だけを返します。system prompt、tool call / result、thinking、その他 provider event は出力しません。bootstrap、失敗・cancelled・running・空 response は対象外です。inbound / final response の本文は保存値のままで、secret redaction は行いません。`ensemble session messages` もこの本文をそのままローカル出力します。秘密値を含む可能性のある生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。既存の同一 OS user access boundary も適用されます。
 - **利用側の sanitizer:** `@agents-ensemble/core/operator-runtime` の `listConductorProviderHistory` は、呼び出しごとに任意の `sanitizer(value, field)` を受け取れます。`field` は自由文の `inbound` または `text` です。provider history の選択とページングの後、返却する各 message のこの2 field だけに適用します。`backend`、`providerId` / `requestId`、`at`、`sendCount` / `dispatchSource`、`hasMore` は変えず、元の message も変更しません。省略時は従来どおり保存値を返します。sanitizer が throw / reject するか文字列以外を返すと、raw 値へフォールバックせず、本文を含まないエラーで呼び出し全体が失敗し、途中までの結果も返しません。ページを分けて読む場合は各呼び出しに sanitizer を渡してください。`session messages` と operator-agent の `list_conductor_messages` は渡さないため、引き続き raw 出力です。
@@ -284,7 +284,8 @@ const sanitizer: ConductorProviderHistorySanitizer = (value, field) =>
 const history = await listConductorProviderHistory({
   backend,
   conductorAgentId,
-  cwd,
+  cwd, // Pi SessionManager に渡す cwd
+  repoRoot, // Pi の user 層 transcript を解決する repo root
   query: { limit: 20, order: 'desc' },
   sanitizer,
 });

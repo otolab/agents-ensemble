@@ -110,6 +110,16 @@ export {
   type WorkerSessionHistoryResult,
 } from './worker-session-history.js';
 export {
+  exportSessionBundle,
+  type ExportSessionBundleInput,
+  type ExportSessionBundleResult,
+  type SessionBundleFile,
+  type SessionBundleManifest,
+  type SessionBundleSource,
+  type SessionBundleSourceStatus,
+  type SessionBundleStatus,
+} from './export-session-bundle.js';
+export {
   buildSessionModelsSummary,
 } from './build-session-models-summary.js';
 export type {

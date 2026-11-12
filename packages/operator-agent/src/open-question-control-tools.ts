@@ -96,6 +96,7 @@ export function createListConductorMessagesTool(
         backend,
         conductorAgentId,
         cwd: resumeStore.conductorCwd ?? resumeStore.repoRoot,
+        repoRoot: resumeStore.repoRoot,
         ...(resumeStore.cursorBootstrapRunId
           ? { cursorBootstrapRunId: resumeStore.cursorBootstrapRunId }
           : {}),

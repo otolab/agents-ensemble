@@ -2,6 +2,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { ENSEMBLE_USER_ROOT_ENV } from '../resolve-user-ensemble-root.js';
 
 const { listRuns, getRun } = vi.hoisted(() => ({
   listRuns: vi.fn(),
@@ -25,16 +27,37 @@ import {
 
 describe('listConductorProviderHistory', () => {
   let tempDir = '';
+  let previousUserRoot: string | undefined;
+  let changedUserRoot = false;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.resetAllMocks();
+    if (changedUserRoot) {
+      if (previousUserRoot === undefined) {
+        delete process.env[ENSEMBLE_USER_ROOT_ENV];
+      } else {
+        process.env[ENSEMBLE_USER_ROOT_ENV] = previousUserRoot;
+      }
+      previousUserRoot = undefined;
+      changedUserRoot = false;
+    }
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
     tempDir = '';
   });
 
+  function setUserRoot(userRoot: string): void {
+    if (!changedUserRoot) {
+      previousUserRoot = process.env[ENSEMBLE_USER_ROOT_ENV];
+      changedUserRoot = true;
+    }
+    process.env[ENSEMBLE_USER_ROOT_ENV] = userRoot;
+  }
+
   it('reads only active Pi branch user/final-response entries after restart', async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-'));
-    const sessionDir = join(tempDir, PI_SESSION_ROOT);
+    setUserRoot(join(tempDir, 'user-ensemble'));
+    const sessionDir = resolveEnsemblePaths({ repoRoot: tempDir }).piSessionsDir;
     const manager = SessionManager.create(tempDir, sessionDir, {
       id: 'pi-history-agent',
     });
@@ -60,6 +83,7 @@ describe('listConductorProviderHistory', () => {
       backend: 'pi',
       conductorAgentId: 'pi-history-agent',
       cwd: tempDir,
+      repoRoot: tempDir,
       query: { limit: 20, order: 'desc' },
     });
 
@@ -116,6 +140,108 @@ describe('listConductorProviderHistory', () => {
           ),
         ),
     ).toBe(false);
+  });
+
+  it('prefers repoRoot user sessions for worktree cwd and opens them with that cwd', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-worktree-'));
+    const repoRoot = join(tempDir, 'repository');
+    const conductorCwd = join(
+      repoRoot,
+      '.ensemble',
+      'worktrees',
+      'issue-671',
+    );
+    setUserRoot(join(tempDir, 'user-ensemble'));
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const userManager = SessionManager.create(
+      conductorCwd,
+      paths.piSessionsDir,
+      { id: 'pi-worktree-history-agent' },
+    );
+    const userTurn = appendPiTurn(userManager, {
+      inbound: 'repo-root user transcript',
+      toolOutput: 'USER_TOOL_SECRET',
+      response: 'repo-root response',
+      sendCount: 1,
+      dispatchSource: 'operator',
+    });
+    const legacyManager = SessionManager.create(
+      conductorCwd,
+      paths.legacyPiSessionsDirForCwd(conductorCwd),
+      { id: 'pi-worktree-history-agent' },
+    );
+    appendPiTurn(legacyManager, {
+      inbound: 'legacy transcript',
+      toolOutput: 'LEGACY_TOOL_SECRET',
+      response: 'legacy response',
+      sendCount: 2,
+      dispatchSource: 'operator',
+    });
+    const openSpy = vi.spyOn(SessionManager, 'open');
+
+    const result = await listConductorProviderHistory({
+      backend: 'pi',
+      conductorAgentId: 'pi-worktree-history-agent',
+      cwd: conductorCwd,
+      repoRoot,
+      query: { limit: 20, order: 'desc' },
+    });
+
+    expect(result.messages).toMatchObject([
+      {
+        providerId: userTurn.responseEntryId,
+        inbound: 'repo-root user transcript',
+        text: 'repo-root response',
+      },
+    ]);
+    expect(openSpy).toHaveBeenCalledWith(
+      userManager.getSessionFile(),
+      paths.piSessionsDir,
+      conductorCwd,
+    );
+    expect(JSON.stringify(result)).not.toContain('legacy transcript');
+  });
+
+  it('falls back to the legacy project session directory under conductor cwd', async () => {
+    tempDir = await mkdtemp(
+      join(tmpdir(), 'ensemble-pi-history-legacy-fallback-'),
+    );
+    const repoRoot = join(tempDir, 'repository');
+    const conductorCwd = join(
+      repoRoot,
+      '.ensemble',
+      'worktrees',
+      'issue-671',
+    );
+    setUserRoot(join(tempDir, 'user-ensemble'));
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const manager = SessionManager.create(
+      conductorCwd,
+      paths.legacyPiSessionsDirForCwd(conductorCwd),
+      { id: 'pi-legacy-fallback-agent' },
+    );
+    appendPiTurn(manager, {
+      inbound: 'legacy project transcript',
+      toolOutput: 'LEGACY_TOOL_SECRET',
+      response: 'legacy project response',
+      sendCount: 1,
+      dispatchSource: 'operator',
+    });
+
+    const result = await listConductorProviderHistory({
+      backend: 'pi',
+      conductorAgentId: 'pi-legacy-fallback-agent',
+      cwd: conductorCwd,
+      repoRoot,
+      query: { limit: 20, order: 'desc' },
+    });
+
+    expect(result.messages).toMatchObject([
+      {
+        inbound: 'legacy project transcript',
+        text: 'legacy project response',
+      },
+    ]);
   });
 
   it('keeps the default result raw and sanitizes only returned text fields when requested', async () => {

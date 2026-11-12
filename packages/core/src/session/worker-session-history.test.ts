@@ -341,9 +341,9 @@ describe('worker session history', () => {
   });
 
   it('reads user and assistant text from the active Pi branch only', async () => {
-    await writePiAcpSessionMap();
+    const transcriptPath = await writePiAcpSessionMap();
 
-    const result = await readHistory();
+    const result = await readHistory({ includeSourceFiles: true });
 
     expect(result).toMatchObject({
       conductorAgentId: CONDUCTOR_AGENT_ID,
@@ -374,6 +374,7 @@ describe('worker session history', () => {
           text: 'Pi ACP fixture assistant reply.',
         },
       ],
+      sourceFiles: [transcriptPath],
     });
     expect(JSON.stringify(result)).not.toContain('Abandoned branch');
     expect(JSON.stringify(result)).not.toContain('TOOL_SECRET');
@@ -383,7 +384,7 @@ describe('worker session history', () => {
   it('reads builtin Pi transcripts from the repo and worker scoped user path', async () => {
     const transcriptPath = await writePiAcpSessionMap({ runtime: 'builtin' });
 
-    const result = await readHistory();
+    const result = await readHistory({ includeSourceFiles: true });
 
     expect(result).toMatchObject({
       preset: 'pi',
@@ -394,6 +395,7 @@ describe('worker session history', () => {
         { role: 'user', text: 'Pi ACP fixture user message.' },
         { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
       ],
+      sourceFiles: [transcriptPath],
     });
     expect(transcriptPath).toBe(
       join(
@@ -409,7 +411,7 @@ describe('worker session history', () => {
       legacyMap: true,
     });
 
-    const result = await readHistory();
+    const result = await readHistory({ includeSourceFiles: true });
 
     expect(result).toMatchObject({
       preset: 'pi',
@@ -420,6 +422,7 @@ describe('worker session history', () => {
         { role: 'user', text: 'Pi ACP fixture user message.' },
         { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
       ],
+      sourceFiles: [transcriptPath],
     });
     expect(transcriptPath).toBe(
       join(
@@ -587,11 +590,14 @@ describe('worker session history', () => {
     });
   });
 
-  async function readHistory() {
+  async function readHistory(
+    options: { includeSourceFiles?: boolean } = {},
+  ) {
     return readWorkerSessionHistory({
       repoRoot,
       conductorAgentId: CONDUCTOR_AGENT_ID,
       workerName: WORKER_NAME,
+      ...options,
     });
   }
 
