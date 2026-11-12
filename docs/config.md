@@ -45,7 +45,12 @@ conductor:
 acp:
   defaultPreset: codex
   env:
-    MODEL_PROVIDER: litellm
+    # worker session だけ provider を切り替える。接続定義は ~/.codex/config.toml の [model_providers.litellm]
+    CODEX_CONFIG: '{"model_provider":"litellm"}'
+  models:
+    worker: YOUR_LITELLM_MODEL_ID
+  tags:
+    default: worker
 ```
 
 ```sh
@@ -65,7 +70,7 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 新しい session は SessionResumeStore に `ensembleConfigDigestScheme: resume-feasibility` と digest を記録します。この digest が比較するのは merge 後の `session.worktree` と `acp.defaultPreset` です（[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)）。
 
-`acpModelConfigDigest` は `acp.env` / `acp.models` / `acp.tags` を hash し、worker の ACP spawn fingerprint は `modelTag`、解決済み model ID、reasoning、明示値の `cursorFast`、spawn env digest と Codex の実効 `MODEL_PROVIDER` digest を記録します。秘密の環境値は平文で保存しません。これらは診断用の記録であり、新しい `resume-feasibility` sidecar の resume 拒否には使いません。fingerprint では preset を照合し、`custom` のときだけ command / args も照合します（[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)）。
+`acpModelConfigDigest` は `acp.env` / `acp.models` / `acp.tags` を hash し、worker の ACP spawn fingerprint は `modelTag`、解決済み model ID、reasoning、明示値の `cursorFast`、spawn env digest（`CODEX_CONFIG` 等）を記録します。秘密の環境値は平文で保存しません。これらは診断用の記録であり、新しい `resume-feasibility` sidecar の resume 拒否には使いません。fingerprint では preset を照合し、`custom` のときだけ command / args も照合します（[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)）。
 
 `conductor.model` と `conductor.reasoning` は `resume-feasibility` digest の対象外です。これらの config 値を変えても resume は拒否されず、再開時に最新の merged config を使います。Issue session の `--model` / `--reasoning` と `CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` は digest に含めず、resume ごとに再解決します。operator-agent は専用 CLI option を持たず、`CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` > merged config の順で解決します。
 
@@ -113,7 +118,7 @@ conductor:
 acp:
   defaultPreset: codex                # ENSEMBLE_DEFAULT_ACP_CLI 相当
   env:                                # codex-acp 子プロセス spawn に渡す env（選択された user config → project deep merge）
-    MODEL_PROVIDER: litellm           # Codex provider ID。接続設定は Codex config 側
+    CODEX_CONFIG: '{"model_provider":"litellm"}'  # worker session の provider。定義は ~/.codex/config.toml
   models:                             # 環境固有の model catalog
     opus:
       model: YOUR_OPUS_MODEL_ID
@@ -246,7 +251,7 @@ Cursor の公式 CLI reference は `--model <model>` を使用モデルの指定
 
 ACP v1 の session config option は Agent が session setup 時に現在値と候補を返し、`session/set_config_option` の response で設定後の option を返します（[ACP v1 仕様](https://agentclientprotocol.com/protocol/v1/session-config-options)）。`claude` / `pi` では harness が候補に指定値があることと、設定後に Agent が報告した `currentValue` が要求値と一致することを確かめてから最初の prompt を許可します。これは ACP adapter が報告する session configuration の確認であり、backend が実際に使う model / effort の attestation ではありません。Cursor の model-only 経路はこの setter を使わず、公式 CLI `--model` option に値を渡す契約です。option 不在、候補不一致、setter error、報告値不一致は対応する ACP config-option 経路の attach error とします。resume 時、通常の `session/load` 失敗なら新しい session に切り替えます。一方、ACP config-option の検証・適用エラーは attach を失敗させ、新しい session への切り替えでは隠しません。
 
-tag mapping がない場合は従来どおり各 preset の native default に委ねるため、段階的に tag を割り当てられます。`codex` の model mapping では、既存の `CODEX_CONFIG` があれば JSON object 文字列である必要があります。`acp.env` の値は親プロセスの同名環境変数より優先されます。Codex ACP では `MODEL_PROVIDER` が `CODEX_CONFIG.model_provider` より優先され、どちらもなければ Codex の設定に委ねられます。harness は `model` と、指定された場合だけ `model_reasoning_effort` を上書きし、他の JSON キーを保持します。catalog に `reasoning` がない場合、既存の `CODEX_CONFIG` にある値も保持し、そこにもなければ Codex の既定に委ねます。`MODEL_PROVIDER` の値そのものは保存せず、resume fingerprint には hash のみを保持します。
+tag mapping がない場合は従来どおり各 preset の native default に委ねるため、段階的に tag を割り当てられます。`codex` の model mapping では、既存の `CODEX_CONFIG` があれば JSON object 文字列である必要があります。`acp.env` の値は親プロセスの同名環境変数より優先されます。harness は tag 解決後に `CODEX_CONFIG` へ `model` と、指定された場合だけ `model_reasoning_effort` を merge し、他の JSON キー（`model_provider` 等）は保持します。catalog に `reasoning` がない場合、既存の `CODEX_CONFIG` にある値も保持し、そこにもなければ Codex の既定に委ねます。worker の provider 切替は `CODEX_CONFIG.model_provider` を正とし、利用者向けの例では `acp.env.MODEL_PROVIDER` を前提にしません。
 
 `reasoning` は空でない文字列として扱い、preset 間で共通の enum は設けません。`claude` / `pi` では advertised option と報告された値を確認し、Codex では `CODEX_CONFIG` に渡します。Cursor の公式 model-only 経路は `model` を `--model` に渡すことです。別 field の `reasoning` / `cursorFast` に対応する安定した公式注入経路は確認できないため、明示時は spawn 前に失敗します。model ID に含まれる suffix は値の一部としてそのまま渡しますが、その suffix が上流で適用されたと主張しません。`custom` は command 任意のため汎用経路を仮定せず、tag が model catalog に解決された場合は [model catalog の設定](#acp-model-tag-と-model-catalog) と [ADR 0052](adr/0052-acp-model-injection-by-preset.md) を示して spawn 前に失敗します。`acp.env` は引き続き custom command に渡せます。
 
@@ -273,28 +278,34 @@ spawn 解決時、子プロセスへ渡す env は次の順でマージされま
 
 #### LiteLLM（OpenAI 互換ゲートウェイ）向け config 例
 
-Codex worker の接続先は Codex の provider 設定で定義し、`acp.env.MODEL_PROVIDER` で使う provider ID を選びます。ensemble はこの環境変数を `codex-acp` に渡すだけで、TOML ファイルを選んだり読み込んだりはしません。
+Codex worker は `codex-acp` から Codex `app-server` を起動します。**CLI の profile overlay（`codex --profile` / `~/.codex/<name>.config.toml`）には対応しません。** harness は profile 名で TOML を選ぶ手段も持ちません。
 
-`@agentclientprotocol/codex-acp` は `packages/core/package.json` で **2.3.0** に pin されています。この版でも、`CODEX_CONFIG` は Codex session config に merge する **JSON オブジェクト文字列**として `JSON.parse` されます。TOML のパスを設定すると JSON parse に失敗します。`MODEL_PROVIDER` は新しい session に渡す **provider ID** で、設定ファイルの選択には使われません。`INITIAL_AGENT_MODE` は初期の承認・sandbox mode を選びます。有効な mode ID は `read-only`、`workspace-write`、`agent`、`agent-full-access` で、空または未知の値は既定の `agent` に戻ります。ensemble はこれらの値を解釈せず、`acp.env` から子プロセスへ渡します。
+接続定義の正本は Codex 標準の `~/.codex/config.toml` の `[model_providers.<id>]` です。worker はこのファイルを読んだうえで、`CODEX_CONFIG` の JSON を **session config に merge** します。ensemble config の `CODEX_CONFIG` は **JSON オブジェクトの文字列**（ファイルパス不可）です。
+
+| 項目 | 設定場所 |
+|------|----------|
+| provider 接続・認証 | 主に `~/.codex/config.toml` の `[model_providers.<id>]`（必要なら JSON の `model_providers`） |
+| worker session の provider ID | `acp.env.CODEX_CONFIG` の **`model_provider`** |
+| model / reasoning | **`acp.models` + `acp.tags` + worker の `modelTag`**（harness が同じ `CODEX_CONFIG` に `model` / `model_reasoning_effort` を merge） |
+
+`@agentclientprotocol/codex-acp` は `packages/core/package.json` で **2.3.0** に pin されています。`INITIAL_AGENT_MODE` は初期の承認・sandbox mode を選びます。有効な mode ID は `read-only`、`workspace-write`、`agent`、`agent-full-access` で、空または未知の値は既定の `agent` に戻ります。ensemble はこれらの値を解釈せず、`acp.env` から子プロセスへ渡します。
 
 2.3.0 の既定 `agent` と明示的な `workspace-write` は、どちらも `approvalPolicy=on-request` かつ `workspaceWrite` sandbox ですが、approval reviewer が異なります。`agent` は `auto_review` で Codex 側が審査し、明示 `workspace-write` は `user` で client 側に判断を求めます。そのため `on-request` だけから、すべての確認が ACP `session/request_permission` として harness に届くとは限りません。`user` reviewer は client に review を委ねますが、ACP permission request が実際に発生するかは個別の操作・審査によります。今回の `workspace-write` 試行では ACP request が届き、`auto_review` の `agent` 試行では届きませんでした。これは approval の振り分けの違いであり、両 mode の sandbox policy はどちらも `workspaceWrite` です。詳細は [codex-acp 2.3.0 の mode 定義](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/AgentMode.ts)を参照してください。
 
 今回の 2.3.0 / ACP v1 harness smoke では、既定 `agent` は ACP permission request なしで tool update 4 件を返し、marker file の作成まで観測しました。session log は `on-request` / `auto_review` / `workspace-write` でした。この request の不在は `auto_review` reviewer の経路と矛盾せず、それ自体は承認処理の bypass を示しません。ただし、個別の auto-review 判断は記録されていません。また probe path が Codex の writable roots 外だったことも確認できていないため、marker 作成が sandbox 境界の内外どちらで起きたかも、この結果だけでは結論づけられません。一方、`INITIAL_AGENT_MODE=workspace-write` を明示した試行では ACP permission request 1 件を受け、harness が `reject_once` を返すと prompt は `cancelled` となり、marker は作成されませんでした。これはその試行で ACP 経由の拒否を確認した結果であり、他 mode・path の sandbox 挙動まで証明するものではありません。
 
-Codex の model ID はトップレベルの `model`、provider は `model_provider` で指定し、provider IDに対応する `[model_providers.<id>]` から接続先・API形式・認証方法を読みます。worker では Codex が通常の設定レイヤー（主に `~/.codex/config.toml`）を読み、必要であれば `CODEX_CONFIG` の JSON が session config に加わります。`MODEL_PROVIDER=litellm` だけでは、Codex は別ファイル `litellm.config.toml` を探さず、model IDも選びません。
-
-`CODEX_CONFIG` の JSON には `model`、`model_provider`、`model_providers` などCodex session configのキーを含められます。ただし `MODEL_PROVIDER` を設定した場合は、codex-acp が新しいsessionの provider IDとしてその値を別途渡し、JSON内の `model_provider` より優先します。model IDとprovider IDに対応する定義は、それぞれCodexの通常configかJSON設定に必要です。model IDはLiteLLM側で提供されるものを指定してください。
+Codex の model ID はトップレベルの `model`、provider は `model_provider` で指定し、provider ID に対応する `[model_providers.<id>]` から接続先・API 形式・認証方法を読みます。TOML のトップレベルが別 provider（例: `openai`）でも、`CODEX_CONFIG` で `model_provider` を上書きすれば worker session だけ切り替えられます。model ID と provider 定義の対応は利用者の責任で、model ID は LiteLLM 側で提供されるものを指定してください。
 
 以下の例では秘密値を記載せず、環境変数名を使います。実際の `LITELLM_API_KEY` はシェル等で設定してください。
 
 #### A. provider 設定を正本 config にまとめる（推奨）
 
-provider 定義を `~/.codex/config.toml` に置き、ensemble config では provider ID だけを指定します。Codex CLI と worker が同じ provider 定義を参照し、worker の接続先は `MODEL_PROVIDER` で切り替えられます。
+provider 定義を `~/.codex/config.toml` に置き、ensemble では worker session 用に `CODEX_CONFIG.model_provider` を指定します。model / reasoning は `acp.models` と tag に任せます。
 
 ```toml
-# ~/.codex/config.toml
-model = "YOUR_LITELLM_MODEL_ID"
-model_provider = "litellm"
+# ~/.codex/config.toml — CLI 既定は openai のままでもよい
+model = "YOUR_DEFAULT_MODEL_ID"
+model_provider = "openai"
 
 [model_providers.litellm]
 name = "LiteLLM"
@@ -308,10 +319,18 @@ env_key = "LITELLM_API_KEY"
 acp:
   defaultPreset: codex
   env:
-    MODEL_PROVIDER: litellm
+    CODEX_CONFIG: '{"model_provider":"litellm"}'
+  models:
+    gateway: YOUR_LITELLM_MODEL_ID
+    gateway-reasoning:
+      model: YOUR_LITELLM_MODEL_ID
+      reasoning: high
+  tags:
+    default: gateway
+    high: gateway-reasoning
 ```
 
-`model` にはLiteLLM側で提供する実際のmodel IDを指定します。Codex CLI とworkerの両方がこのmodel設定を使います。`MODEL_PROVIDER` はworker sessionで使うproviderだけを選び、model IDは変更しません。別providerへ切り替える場合は、そのproviderでも同じmodel IDが利用できることを確認してください。Codex CLIで別の既定providerを使う場合は、`model_provider` をそのprovider IDにします。認証値は設定ファイルに書かず、Codexが参照する環境変数で渡してください。
+harness は tag 解決時に `CODEX_CONFIG` へ `model` と `model_reasoning_effort` を足します。上記では spawn 前の実効 JSON は概ね `{"model_provider":"litellm","model":"..."}` になります。認証値は設定ファイルに平文で書かず、Codex が参照する環境変数や `[model_providers.*.auth]` で渡してください。
 
 #### B. Codex CLI のprofile overlayを使う
 
@@ -329,15 +348,15 @@ wire_api = "responses"
 env_key = "LITELLM_API_KEY"
 ```
 
-このprofile overlayは **Codex CLI 用**です。ensemble worker は `codex-acp` から Codex `app-server` を起動する経路であり、`codex --profile` を指定できません。worker にはAのように provider 定義を `~/.codex/config.toml` に置くか、Cのように `CODEX_CONFIG` でsession設定を渡してください。Codex の `config.toml` に別TOMLを読み込む公式include機能はありません。CLI profileとworkerで別ファイルを正本にする場合、worker側の設定にも同じprovider定義が必要です。手動で同期するか、設定生成で両方を作成してください。
+この profile overlay は **Codex CLI 用**です。ensemble worker は overlay を読みません。定義を profile ファイルだけに置いている場合は、**A と同様にベース `config.toml` へコピーする**か、**C のように JSON で `model_providers` ごと渡す**必要があります。
 
-#### C. worker 用 JSON 設定を別ファイルで管理する
+#### C. TOML に定義が無いとき（worker 専用 JSON）
 
-小規模な設定や検証では、worker 専用の JSON ファイルを用意し、その**内容**を `CODEX_CONFIG` に渡せます。`CODEX_CONFIG` 自体にはファイルパスではなくJSON文字列を設定します。例えば、次のファイルを作成します。
+`~/.codex/config.toml` に provider 定義が無い検証用セットアップでは、JSON に **`model_provider` と `model_providers`** を含めます。model / reasoning は可能なら A と同様に catalog に寄せ、JSON には provider だけ書くこともできます。
 
 ```json
 {
-  "model": "YOUR_LITELLM_MODEL_ID",
+  "model_provider": "litellm",
   "model_providers": {
     "litellm": {
       "name": "LiteLLM",
@@ -349,7 +368,7 @@ env_key = "LITELLM_API_KEY"
 }
 ```
 
-そのファイルの内容を環境変数に読み込み、`acp.env` では `CODEX_CONFIG` を上書きしないで起動します。
+ファイルで管理する場合は**内容**を `acp.env.CODEX_CONFIG` に載せます（パス文字列は不可）。
 
 ```sh
 export CODEX_CONFIG="$(jq -c . "$HOME/.codex/ensemble-worker.json")"
@@ -357,23 +376,25 @@ ensemble issue 123
 ```
 
 ```yaml
-# ~/.ensemble/config.yaml または <repo>/.ensemble/config.yaml
+# jq -c . ensemble-worker.json の1行を CODEX_CONFIG に貼る
 acp:
   defaultPreset: codex
   env:
-    MODEL_PROVIDER: litellm
+    CODEX_CONFIG: '{"model_provider":"litellm","model_providers":{"litellm":{"name":"LiteLLM","base_url":"https://litellm.example/v1","wire_api":"responses","env_key":"LITELLM_API_KEY"}}}'
+  models:
+    gateway: YOUR_LITELLM_MODEL_ID
+  tags:
+    default: gateway
 ```
 
-`jq -c` は JSON を1行に整形して環境変数へ渡します。`acp.env` に `CODEX_CONFIG` を設定した場合は、親プロセスから継承した値より `acp.env` の値が優先されます。設定を別ファイルで保ちたい場合は、ファイル内容を起動前に環境変数へ変換してください。CではCodex CLIのprovider設定は変わらず、JSONはworker sessionにのみ適用されます。
+`acp.env` に書いた `CODEX_CONFIG` は親プロセスの同名変数より優先されます。JSON は worker session にのみ merge され、CLI の `config.toml` 既定は変わりません。
 
 #### Codex CLI と ensemble worker の違い
 
 | 起動方法 | 設定の選択・読み込み | LiteLLM の指定 |
 |----------|--------------------|----------------|
-| `codex --profile litellm` | Codex CLI が `~/.codex/config.toml` に `~/.codex/litellm.config.toml` をoverlay | profileファイルに `model`、`model_provider`、provider 定義を記述 |
-| ensemble の Codex worker | `codex-acp` → Codex `app-server`。`--profile` は渡せない。Codex の通常 config とsession設定を利用 | `MODEL_PROVIDER` でprovider IDを選択し、`model` は通常config（A）または `CODEX_CONFIG` JSON（C）で指定 |
-
-`CODEX_CONFIG_PROFILE` によるprofile名指定は Codex 側で未実装です（[openai/codex#38104](https://github.com/openai/codex/issues/38104)）。したがって worker のprofile選択手段としては使えません。
+| `codex --profile litellm` | Codex CLI が `~/.codex/config.toml` に `~/.codex/litellm.config.toml` を overlay | profile ファイルに `model`、`model_provider`、provider 定義を記述 |
+| ensemble の Codex worker | `~/.codex/config.toml` + `CODEX_CONFIG` JSON merge。profile overlay は使わない | `CODEX_CONFIG.model_provider`。`model` / reasoning は `acp.models` + `modelTag`（または JSON / TOML 既定） |
 
 #### resume と `acp.env` 変更
 
@@ -538,7 +559,7 @@ YAML に未知のキーがあっても **無視する**（警告なし）。将�
 - [settings.md](settings.md) — 全設定層の一覧・解決パターン（本書は config.yaml 詳細）
 - [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) — worker の認証移譲とCodex runtime設定
 - [Codex profiles / custom model providers](https://developers.openai.com/codex/config-advanced#profiles) — Codex CLI profile overlay、`model`、`model_provider` の現行仕様
-- [codex-acp 2.3.0 runtime options](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/README.md#runtime-options) — `INITIAL_AGENT_MODE` / `CODEX_CONFIG` / `MODEL_PROVIDER` などの説明
+- [codex-acp 2.3.0 runtime options](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/README.md#runtime-options) — `INITIAL_AGENT_MODE` / `CODEX_CONFIG` などの説明
 - [codex-acp 2.3.0 起動処理](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/index.ts#L38-L64) — 環境変数の parse と Codex app-server 設定への受け渡し
 - [codex-acp 2.3.0 mode 定義](https://github.com/agentclientprotocol/codex-acp/blob/v2.3.0/src/AgentMode.ts) — reviewer と mode ID ごとの承認・sandbox 設定
 - [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md) — 解決順の設計判断

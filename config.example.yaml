@@ -54,8 +54,8 @@ acp:
   defaultPreset: cursor
   # codex-acp 等 spawn 時の env（user → project deep merge）。LiteLLM 例は docs/config.md
   # env:
-  #   MODEL_PROVIDER: litellm
-  #   CODEX_CONFIG: '{"approval_policy":"on-request"}'
+  #   CODEX_CONFIG: '{"model_provider":"litellm"}'
+  #   # model / reasoning は models + tags（harness が CODEX_CONFIG に merge）
   # model ID は環境ごとに設定し、profile には tier（modelTag）だけを書く
   models:
     # 構造化 entry では preset ごとの経路で reasoning を指定できる。
