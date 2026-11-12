@@ -405,6 +405,24 @@ describe('worker session history', () => {
     );
   });
 
+  it('does not guess a builtin Pi transcript when its map is missing', async () => {
+    const transcriptPath = await writePiAcpSessionMap({ runtime: 'builtin' });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    await rm(paths.piWorkerSessionMapPath(WORKER_NAME), { force: true });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'pi',
+      status: 'unavailable',
+      reason: expect.stringContaining('session map が見つかりません'),
+      messages: [],
+    });
+    await expect(readFile(transcriptPath, 'utf8')).resolves.toContain(
+      'Pi ACP fixture user message.',
+    );
+  });
+
   it('reads a legacy builtin session map before the wrapper migrates it', async () => {
     const transcriptPath = await writePiAcpSessionMap({
       runtime: 'builtin',
