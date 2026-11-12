@@ -135,7 +135,7 @@ class SessionBundleSourceError extends Error {
   }
 }
 
-/** Build a private, read-only bundle without modifying session sources. */
+/** Collect saved session data into a new bundle without modifying sources. */
 export async function exportSessionBundle(
   input: ExportSessionBundleInput,
 ): Promise<ExportSessionBundleResult> {
@@ -375,7 +375,7 @@ async function writeSessionBundle(input: {
     warnings,
   };
   const manifestPath = join(outputDirectory, 'manifest.json');
-  await writePrivateJsonFile(manifestPath, manifest);
+  await writeBundleJsonFile(manifestPath, manifest);
 
   return {
     status: warnings.length === 0 ? 'complete' : 'partial',
@@ -759,7 +759,7 @@ async function writeJsonPayload(input: {
 }): Promise<SessionBundleFile> {
   const contents = Buffer.from(`${JSON.stringify(input.value, null, 2)}\n`);
   const outputPath = bundleFilePath(input.outputDirectory, input.path);
-  await writePrivateJsonFile(outputPath, contents);
+  await writeBundleJsonFile(outputPath, contents);
   return {
     path: input.path,
     kind: 'json',
@@ -769,7 +769,7 @@ async function writeJsonPayload(input: {
   };
 }
 
-async function writePrivateJsonFile(
+async function writeBundleJsonFile(
   path: string,
   value: unknown | Buffer,
 ): Promise<void> {
