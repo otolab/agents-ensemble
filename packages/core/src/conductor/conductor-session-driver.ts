@@ -90,6 +90,8 @@ export interface ConductorSendCompleteInfo {
   status: ConductorSendResult['status'];
   /** Exact user message passed to this agent.send. */
   inbound: string;
+  /** User event text to retain locally when `inbound` also restores Cursor bootstrap context. */
+  historyInbound?: string;
   dispatchSource?: string;
   /** GitHub update IDs included in this send; used to acknowledge the durable outbox. */
   githubUpdateIds?: string[];
@@ -209,6 +211,8 @@ export async function runConductorSessionDriver(
     runId: '',
     status: 'finished',
   };
+  let cursorBootstrapPending =
+    options.recoveryBackend === 'cursor' && !options.skipInitialSend;
   let inFlightSend: Promise<ConductorSendResult> | undefined;
   let postLoopWaiting = false;
   const lifecycle =
@@ -406,6 +410,12 @@ export async function runConductorSessionDriver(
         options.onSendComplete(info);
       },
     }).then((result) => {
+      if (
+        options.recoveryBackend === 'cursor' &&
+        isIssueDispatchCompleted(result)
+      ) {
+        cursorBootstrapPending = false;
+      }
       const explicitInterruptQueued =
         result.status === 'cancelled' &&
         options.eventQueue.snapshot().some(
@@ -663,10 +673,16 @@ export async function runConductorSessionDriver(
       triggers: batch.filter(isTriggerSessionEvent).length,
       sources: uniqueSources(batch, dispatchResult.sourceKey),
     });
-    const message = formatSessionEventsForConductor(batch);
+    const eventMessage = formatSessionEventsForConductor(batch);
+    const restoreCursorBootstrap =
+      cursorBootstrapPending && options.recoveryBackend === 'cursor';
+    const message = restoreCursorBootstrap
+      ? `${options.initialPrompt}\n\n## 今回のセッションイベント\n\n${eventMessage}`
+      : eventMessage;
     let dispatchHadToolCalls = false;
     const dispatchSend = runEventConductorSend({
       message,
+      ...(restoreCursorBootstrap ? { historyInbound: eventMessage } : {}),
       conductorHandle: options.conductorHandle,
       sendReconnect,
       signal: options.shutdownSignal,
@@ -696,6 +712,9 @@ export async function runConductorSessionDriver(
         options.onSendComplete(info);
       },
     }).then((result) => {
+      if (restoreCursorBootstrap && isIssueDispatchCompleted(result)) {
+        cursorBootstrapPending = false;
+      }
       const explicitInterruptQueued =
         result.status === 'cancelled' &&
         options.eventQueue.snapshot().some(
@@ -771,6 +790,7 @@ function withAgentAvailabilityCallbacks(
 
 function runEventConductorSend(input: {
   message: string;
+  historyInbound?: string;
   conductorHandle: ConductorAgentHandle;
   sendReconnect: ConductorSendReconnectOptions;
   signal: AbortSignal;
@@ -835,6 +855,9 @@ function runEventConductorSend(input: {
       runId: sendResult.runId,
       status: sendResult.status,
       inbound: input.message,
+      ...(input.historyInbound !== undefined
+        ? { historyInbound: input.historyInbound }
+        : {}),
       dispatchSource: input.dispatchSource,
       result: sendResult.result,
       error: sendResult.error,
@@ -849,6 +872,14 @@ function runEventConductorSend(input: {
 
     return sendResult;
   });
+}
+
+function isIssueDispatchCompleted(result: ConductorSendResult): boolean {
+  return (
+    result.status === 'finished' ||
+    result.status === 'completed' ||
+    result.status === 'running'
+  );
 }
 
 interface DispatchBatchResult {
@@ -1121,6 +1152,7 @@ async function runOperatorReconnect(
     await reconnectConductorAgent(options.conductorHandle, {
       conductorAgentFactory: options.sendReconnect.conductorAgentFactory,
       conductorOptions: options.sendReconnect.conductorOptions,
+      signal: options.shutdownSignal,
       onReconnectAttempt:
         options.sendReconnect.onTransportReconnectAttempt ??
         options.sendReconnect.onReconnectAttempt,

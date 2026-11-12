@@ -1169,6 +1169,84 @@ describe('runConductorSessionDriver', () => {
     }
   });
 
+  it('restores the Cursor bootstrap with the next confirmed event after initial failure', async () => {
+    const authError = {
+      runId: 'run-initial-auth-failed',
+      status: 'error',
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+    };
+    const compiledPrompt = 'compiled Cursor role prompt with private config';
+    const initialSend = vi.fn().mockResolvedValue(authError);
+    const resumedSend = vi.fn().mockResolvedValue({
+      runId: 'run-after-bootstrap',
+      status: 'finished',
+      result: 'continued',
+    });
+    const conductor = {
+      agentId: 'agent-1',
+      send: initialSend,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const recoveryInbox = new ConductorRecoveryInbox();
+    const lifecycle = new ConductorDispatchLifecycle();
+    const shutdown = new AbortController();
+    const operatorInput = {
+      type: 'operator.message' as const,
+      text: 'initial CLI operator input',
+      operatorInput: 'initial CLI operator input',
+    };
+    eventQueue.enqueue(operatorInput);
+    mockResume.mockResolvedValueOnce({
+      agentId: 'agent-1',
+      send: resumedSend,
+      close: vi.fn(),
+    });
+    const driverOptions = createDriverOptions({ eventQueue, conductor });
+
+    const driverPromise = runConductorSessionDriver({
+      ...driverOptions,
+      initialPrompt: compiledPrompt,
+      recoveryBackend: 'cursor',
+      shutdownSignal: shutdown.signal,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+      operatorCanInspectRecovery: true,
+      recoveryInbox,
+      dispatchLifecycle: lifecycle,
+    });
+
+    try {
+      await vi.waitFor(() => expect(initialSend).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
+      expect(initialSend).toHaveBeenCalledWith(
+        compiledPrompt,
+        expect.any(Object),
+      );
+      expect(eventQueue.snapshot()).toEqual([operatorInput]);
+      expect(recoveryInbox.list()).toEqual([]);
+      expect(resumedSend).not.toHaveBeenCalled();
+      expect(lifecycle.confirmRecovery()).toBe(true);
+
+      await vi.waitFor(() => expect(resumedSend).toHaveBeenCalledOnce());
+      const sentMessage = resumedSend.mock.calls[0]![0] as string;
+      expect(sentMessage).toContain(compiledPrompt);
+      expect(sentMessage).toContain('## 今回のセッションイベント');
+      expect(sentMessage).toContain(operatorInput.text);
+      expect(eventQueue.isEmpty()).toBe(true);
+      expect(recoveryInbox.list()).toEqual([]);
+
+      const completion =
+        driverOptions.onSendComplete.mock.calls.at(-1)?.[0];
+      expect(completion?.inbound).toContain(compiledPrompt);
+      expect(completion?.historyInbound).toBe(operatorInput.text);
+    } finally {
+      shutdown.abort();
+      await driverPromise;
+      recoveryInbox.dispose();
+    }
+  });
+
   it('does not retain recovery content or wait for an unavailable TTY confirmation', async () => {
     const authError = {
       runId: 'run-initial-auth-failed',
@@ -1568,6 +1646,89 @@ describe('runConductorSessionDriver', () => {
       },
     ]);
     recoveryInbox.dispose();
+  });
+
+  it('closes an automatic resume that resolves after Issue shutdown', async () => {
+    const authError = {
+      runId: 'run-auth-error',
+      status: 'error' as const,
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+    };
+    const originalSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runId: 'run-initial',
+        status: 'finished' as const,
+        result: 'ready',
+      })
+      .mockResolvedValueOnce(authError);
+    const originalClose = vi.fn();
+    const conductor = {
+      agentId: 'agent-1',
+      send: originalSend,
+      close: originalClose,
+    } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    const shutdown = new AbortController();
+    const recoveryInbox = new ConductorRecoveryInbox();
+    const driverOptions = createDriverOptions({ eventQueue, conductor });
+    let resolveResume!: (agent: ConductorAgent) => void;
+    const pendingResume = new Promise<ConductorAgent>((resolve) => {
+      resolveResume = resolve;
+    });
+    const lateAgentClose = vi.fn().mockResolvedValue(undefined);
+    const resumedSend = vi.fn();
+    const lateAgent = {
+      agentId: 'agent-1',
+      send: resumedSend,
+      close: lateAgentClose,
+    } as unknown as ConductorAgent;
+    mockResume.mockReturnValueOnce(pendingResume);
+
+    const driverPromise = runConductorSessionDriver({
+      ...driverOptions,
+      shutdownSignal: shutdown.signal,
+      continueOnConductorError: true,
+      continueAfterIssueLoopStop: true,
+      operatorCanInspectRecovery: true,
+      recoveryInbox,
+    });
+
+    try {
+      await vi.waitFor(() => expect(originalSend).toHaveBeenCalledOnce());
+      eventQueue.enqueue({
+        type: 'operator.message',
+        text: 'failed user input',
+      });
+      await vi.waitFor(() => expect(originalSend).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
+      eventQueue.enqueue({
+        type: 'operator.message',
+        text: 'arrived while automatic resume was pending',
+      });
+
+      shutdown.abort();
+      const result = await driverPromise;
+      expect(result.stopReason).toBe('interrupted');
+      expect(eventQueue.snapshot()).toEqual([
+        {
+          type: 'operator.message',
+          text: 'arrived while automatic resume was pending',
+        },
+      ]);
+
+      resolveResume(lateAgent);
+      await vi.waitFor(() =>
+        expect(driverOptions.onSendComplete).toHaveBeenCalledTimes(2),
+      );
+      expect(driverOptions.conductorHandle.conductor).toBe(conductor);
+      expect(lateAgentClose).toHaveBeenCalledOnce();
+      expect(resumedSend).not.toHaveBeenCalled();
+      expect(originalClose).toHaveBeenCalledOnce();
+    } finally {
+      shutdown.abort();
+      recoveryInbox.dispose();
+    }
   });
 
   it('keeps queued input through failed reconnects and requires confirmation after manual recovery', async () => {

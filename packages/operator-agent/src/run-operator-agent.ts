@@ -365,7 +365,7 @@ async function runTtyConversation(options: {
     crlfDelay: Infinity,
   });
   terminal.setPrompt(`${colorize('user>', ANSI_DIM, options.colorEnabled)} `);
-  let firstSend = true;
+  let cursorBootstrapComplete = options.backend !== 'cursor';
   let stop: () => void = () => {};
   let exitContinuity = false;
   let inputEnded = false;
@@ -541,6 +541,7 @@ async function runTtyConversation(options: {
             conductorAgentFactory: options.agentHandle.factory,
             conductorOptions: options.agentHandle.agentOptions,
             source: 'manual',
+            signal: sendSuppression.signal,
             onReconnectAttempt: ({ agentId, source }) => {
               writeChannelLine(
                 'harness',
@@ -559,7 +560,7 @@ async function runTtyConversation(options: {
           options.dispatchLifecycle.settleReconnect(reconnectLease, true);
         } catch {
           options.dispatchLifecycle.settleReconnect(reconnectLease, false);
-          if (!reconnectReported) {
+          if (!reconnectReported && !sendSuppression.signal.aborted) {
             writeChannelLine(
               'harness',
               `conductor の再接続に失敗しました。source=manual failure=${failureClass}`,
@@ -632,7 +633,7 @@ async function runTtyConversation(options: {
       }
 
       const prompt =
-        options.backend === 'cursor' && firstSend
+        options.backend === 'cursor' && !cursorBootstrapComplete
           ? `${options.systemPrompt}\n\n## User message\n\n${formatOperatorDispatchBatch(batch.events)}`
           : formatOperatorDispatchBatch(batch.events);
       writeChannelLine('harness', 'operator: 処理中');
@@ -703,11 +704,11 @@ async function runTtyConversation(options: {
         return exitContinuity;
       }
       sendCount = nextSendCount;
-      firstSend = false;
       dispatchState.lastDispatchedSourceKey = batch.sourceKey;
       dispatchState.continuationConsumed = batch.usedContinuation;
       const sendCompleted =
         result.status === 'finished' || result.status === 'completed';
+      if (sendCompleted) cursorBootstrapComplete = true;
       const settled = settleConductorDispatch({
         lifecycle: options.dispatchLifecycle,
         lease,

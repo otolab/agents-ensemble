@@ -27,6 +27,7 @@ export interface ConductorAutomaticRetryInfo {
 
 export interface ConductorReconnectCallbacks {
   source?: 'automatic' | 'manual';
+  signal?: AbortSignal;
   onReconnectAttempt?: (input: {
     agentId: string;
     source?: 'automatic' | 'manual';
@@ -82,6 +83,7 @@ export async function reconnectConductorAgent(
 ): Promise<string> {
   const agentId = handle.conductor.agentId;
   const source = options.source ?? 'manual';
+  throwIfReconnectAborted(options.signal);
   options.onReconnectAttempt?.({ agentId, source });
   let conductorOptions: ConductorAgentCreateOptions;
   const conductorAgentFactory = options.conductorAgentFactory;
@@ -92,12 +94,14 @@ export async function reconnectConductorAgent(
       onReconnectAttempt,
       onReconnectComplete,
       source: _source,
+      signal: _signal,
       conductorAgentFactory: _conductorAgentFactory,
       ...sdkOptions
     } = options;
     void onReconnectAttempt;
     void onReconnectComplete;
     void _source;
+    void _signal;
     void _conductorAgentFactory;
     conductorOptions = sdkOptions;
   }
@@ -107,14 +111,23 @@ export async function reconnectConductorAgent(
       await handle.conductor.close();
       closedForReconnect.add(handle);
     }
-    handle.conductor = await conductorAgentFactory.resume(
+    throwIfReconnectAborted(options.signal);
+    const resumedAgent = await conductorAgentFactory.resume(
       agentId,
       conductorOptions,
     );
+    if (options.signal?.aborted) {
+      await resumedAgent.close();
+      throwIfReconnectAborted(options.signal);
+    }
+    handle.conductor = resumedAgent;
     closedForReconnect.delete(handle);
     options.onReconnectComplete?.({ agentId, success: true, source });
     return agentId;
   } catch (error) {
+    if (options.signal?.aborted) {
+      throw error;
+    }
     const message = formatReconnectError(error);
     options.onReconnectComplete?.({
       agentId,
@@ -164,10 +177,13 @@ export async function sendConductorWithReconnect(
     : isConductorSendTransportError(result)
       ? 'transport'
       : undefined;
+  const reconnectSignal =
+    options.signal && options.retrySuppressionSignal
+      ? AbortSignal.any([options.signal, options.retrySuppressionSignal])
+      : options.signal ?? options.retrySuppressionSignal;
   if (
     !reconnectReason ||
-    options.signal?.aborted ||
-    options.retrySuppressionSignal?.aborted
+    reconnectSignal?.aborted
   ) {
     return result;
   }
@@ -177,6 +193,7 @@ export async function sendConductorWithReconnect(
       conductorAgentFactory: options.conductorAgentFactory,
       conductorOptions: options.conductorOptions,
       source: 'automatic',
+      signal: reconnectSignal,
       onReconnectAttempt: resolveReconnectAttempt(options, reconnectReason),
       onReconnectComplete: resolveReconnectComplete(options, reconnectReason),
     });
@@ -185,6 +202,14 @@ export async function sendConductorWithReconnect(
   }
 
   return result;
+}
+
+function throwIfReconnectAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  if (signal.reason !== undefined) throw signal.reason;
+  const error = new Error('Conductor reconnect was aborted.');
+  error.name = 'AbortError';
+  throw error;
 }
 
 function resolveReconnectAttempt(

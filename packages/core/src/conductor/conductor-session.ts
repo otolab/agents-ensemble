@@ -2286,6 +2286,7 @@ async function runConductorSessionWithStartupGuard(
       runId: string;
       status: ConductorSendResult['status'];
       inbound: string;
+      historyInbound?: string;
       dispatchSource?: string;
       githubUpdateIds?: string[];
       result?: string;
@@ -2318,7 +2319,7 @@ async function runConductorSessionWithStartupGuard(
         if (info.dispatchSource !== 'initial') {
           conductorMessages.push({
             text: responseText,
-            inbound: info.inbound,
+            inbound: info.historyInbound ?? info.inbound,
             at,
             sendCount: info.sendCount,
             ...(info.dispatchSource

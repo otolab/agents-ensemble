@@ -223,7 +223,7 @@ operator の入力、応答履歴、失敗応答は返しません。状態は�
 
 ### `session.conductor_messages.list`
 
-成功した conductor 応答と、その応答に対応する conductor 向け inbound を一覧します。記録対象は bootstrap の `agent.send` を除く send のうち、`status=finished` かつ trim 後の `result` が空でないものです。`inbound` はその send に渡した `formatSessionEventsForConductor(batch)` の全文です。bootstrap send は compiled `initialPrompt` を送るため対象外です。
+成功した conductor 応答と、その応答に対応する conductor 向け inbound を一覧します。記録対象は bootstrap の `agent.send` を除く send のうち、`status=finished` かつ trim 後の `result` が空でないものです。`inbound` は通常、その send に渡した `formatSessionEventsForConductor(batch)` の全文です。Cursor の初回 bootstrap が未完了のまま後続 dispatch に進む場合、実際の `agent.send` には compiled prompt も付けますが、この UDS record は formatted event text だけを保持します。bootstrap send 自体は対象外です。
 
 稼働中 session ごとに直近 100 件を保持します。これは bounded なプロセス内履歴で、harness 停止時に破棄されます。この UDS method は停止後に YAML / sidecar へ fallback しません。operator-agent tool の `list_conductor_messages` は別の provider history projection であり、停止後の取得方法と出力は次節のとおりです。
 
@@ -270,6 +270,7 @@ limit 1 でも単独 response が上限を超える発言に達した場合、�
 operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / cwd を使い、SDK が保存した local session history から最大 100 件を読みます。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。
 
 - **共通 filter:** user inbound と final assistant response だけを返します。system prompt、tool call / result、thinking、その他 provider event は出力しません。bootstrap、失敗・cancelled・running・空 response は対象外です。inbound / final response の本文は保存値のままで、secret redaction は行いません。`ensemble session messages` もこの本文をそのままローカル出力します。秘密値を含む可能性のある生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。既存の同一 OS user access boundary も適用されます。
+- **Cursor bootstrap context:** Cursor SDK に system-prompt API がないため、初回 bootstrap が未完了の session では、後続 dispatch の user inbound に compiled prompt が再度含まれる場合があります。これは provider に実際に送った内容であり、provider-history list と `ensemble session messages` では user inbound の一部として返ります。recovery inbox と Issue workflow の UDS message list にはこの prompt を複製しません。
 - **利用側の sanitizer:** `@agents-ensemble/core/operator-runtime` の `listConductorProviderHistory` は、呼び出しごとに任意の `sanitizer(value, field)` を受け取れます。`field` は自由文の `inbound` または `text` です。provider history の選択とページングの後、返却する各 message のこの2 field だけに適用します。`backend`、`providerId` / `requestId`、`at`、`sendCount` / `dispatchSource`、`hasMore` は変えず、元の message も変更しません。省略時は従来どおり保存値を返します。sanitizer が throw / reject するか文字列以外を返すと、raw 値へフォールバックせず、本文を含まないエラーで呼び出し全体が失敗し、途中までの結果も返しません。ページを分けて読む場合は各呼び出しに sanitizer を渡してください。`session messages` と operator-agent の `list_conductor_messages` は渡さないため、引き続き raw 出力です。
 - **限界:** callback は未加工の本文を受け取ります。自由文の秘密値を完全に見つける保証はなく、どの値を検出・置換できるかは利用側の実装に依存します。callback 自身が本文をログ・保存・転送すれば、この API の適用境界外です。本文以外の metadata に秘密値が含まれる場合も sanitizer の対象外です。後段で利用する場合は、返却された結果を集計・蓄積へ渡してください。
 

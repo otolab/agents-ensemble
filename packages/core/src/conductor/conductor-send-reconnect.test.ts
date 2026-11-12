@@ -301,6 +301,47 @@ describe('sendConductorWithReconnect', () => {
     expect(mockResume).not.toHaveBeenCalled();
   });
 
+  it('closes an automatic resume that completes after shutdown', async () => {
+    const shutdown = new AbortController();
+    const authError = {
+      runId: 'run-auth-error',
+      status: 'error' as const,
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+    };
+    const send = vi.fn().mockResolvedValue(authError);
+    const handle = createHandle(send);
+    const originalAgent = handle.conductor;
+    const lateAgentClose = vi.fn().mockResolvedValue(undefined);
+    const lateAgent = {
+      agentId: 'agent-1',
+      send: vi.fn(),
+      close: lateAgentClose,
+    };
+    let resolveResume!: (agent: typeof lateAgent) => void;
+    const pendingResume = new Promise<typeof lateAgent>((resolve) => {
+      resolveResume = resolve;
+    });
+    mockResume.mockReturnValueOnce(pendingResume);
+    const onReconnectComplete = vi.fn();
+
+    const sendPromise = sendConductorWithReconnect(handle, 'hello', {
+      conductorAgentFactory: createFactory(),
+      conductorOptions: createConductorOptions(),
+      signal: shutdown.signal,
+      onReconnectComplete,
+    });
+
+    await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
+    shutdown.abort();
+    resolveResume(lateAgent);
+
+    await expect(sendPromise).resolves.toEqual(authError);
+    expect(handle.conductor).toBe(originalAgent);
+    expect(lateAgentClose).toHaveBeenCalledOnce();
+    expect(onReconnectComplete).not.toHaveBeenCalled();
+    expect(mockClose).toHaveBeenCalledOnce();
+  });
+
   it('does not reconnect for unrelated conductor errors', async () => {
     const result = {
       runId: 'run-1',

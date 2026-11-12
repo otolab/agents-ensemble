@@ -1485,6 +1485,10 @@ describe('runOperatorAgent', () => {
       await vi.waitFor(() => expect(manualResumeSend).toHaveBeenCalledOnce());
       expect(sentPrompts).toHaveLength(2);
       expect(sentPrompts[1]).toContain(followupInput);
+      expect(sentPrompts[1]).toContain(
+        'agents-ensemble の operator ロール',
+      );
+      expect(sentPrompts[1]).toContain('## User message');
       expect(sentPrompts[1]).not.toContain(authoredInput);
       expect(stdout.capturedText()).toContain('Follow-up handled.');
 
@@ -1493,6 +1497,291 @@ describe('runOperatorAgent', () => {
       exited = true;
     } finally {
       if (!exited) input.write('/exit\n');
+      input.end();
+      await run.catch(() => {});
+    }
+  });
+
+  it('holds user input and watch reports across failed resumes, then dispatches them in order', async () => {
+    let liveSnapshot: SessionObservationSnapshot = {
+      sequence: 0,
+      openQuestions: [],
+    };
+    const liveServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      observeSession: async () => liveSnapshot,
+      answerOpenQuestion: async () => {
+        throw new Error('unused');
+      },
+    });
+    closeServers.push(() => liveServer.close());
+
+    const resumeStorePath = join(
+      repoRoot,
+      '.ensemble',
+      'sessions',
+      'conductor-one.json',
+    );
+    const resumeStore = JSON.parse(
+      await readFile(resumeStorePath, 'utf8'),
+    ) as Record<string, unknown>;
+    await writeFile(
+      resumeStorePath,
+      JSON.stringify({ ...resumeStore, harnessSocketPath: liveServer.socketPath }),
+    );
+
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const config: EnsembleConfig = {
+      profile: { default: 'unused' },
+      conductor: { backend: 'cursor', model: 'cursor-model' },
+    } as EnsembleConfig;
+    const profile: ResolvedProfile = {
+      workers: [],
+      agents: {},
+    };
+    const failedInput = 'possibly completed operator request';
+    const followupInput = 'inspect current state and continue unfinished work';
+    const reportQuestion = 'Review the queued implementation after recovery?';
+    const authFailure = {
+      runId: 'run-auth',
+      status: 'error',
+      error: {
+        code: 'auth',
+        message:
+          'API key auth failed for provider cursor: authentication failed',
+      },
+    };
+    const sentPrompts: string[] = [];
+    let agentOptions: ConductorAgentCreateOptions | undefined;
+    const oldClose = vi.fn().mockResolvedValue(undefined);
+    const firstSend = vi.fn(async (prompt: string) => {
+      sentPrompts.push(prompt);
+      await agentOptions!.customTools!.register_session_watch!.execute({
+        conductorAgentId: 'conductor-one',
+        pollIntervalMs: 250,
+        debounceMs: 0,
+      });
+      setTimeout(() => {
+        liveSnapshot = {
+          sequence: 1,
+          openQuestions: [
+            {
+              id: 'inq-after-failure',
+              question: reportQuestion,
+              responseType: 'text',
+              source: 'conductor',
+              status: 'open',
+              askedAt: 1,
+            },
+          ],
+        };
+      }, 350);
+      return authFailure;
+    });
+    const resumedSend = vi.fn(async (prompt: string) => {
+      sentPrompts.push(prompt);
+      return {
+        runId: `run-resumed-${resumedSend.mock.calls.length}`,
+        status: 'completed' as const,
+        result: 'received',
+      };
+    });
+    const resumedClose = vi.fn().mockResolvedValue(undefined);
+    const resumedAgent = {
+      ...createFakeAgent({ send: resumedSend }),
+      close: resumedClose,
+    };
+    const resume = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('automatic resume unavailable'))
+      .mockRejectedValueOnce(new Error('manual resume unavailable'))
+      .mockResolvedValueOnce(resumedAgent);
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout,
+        stderr,
+        loadConfig: async () => config,
+        loadProfile: async () => ({ profile, profilePath: 'test-profile' }),
+        agentFactory: {
+          create: async (options) => {
+            agentOptions = options;
+            return {
+              ...createFakeAgent({ send: firstSend }),
+              close: oldClose,
+            };
+          },
+          resume,
+        },
+      },
+    );
+
+    let exited = false;
+    try {
+      await vi.waitFor(() =>
+        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      );
+      input.write(`${failedInput}\n`);
+      await vi.waitFor(() => {
+        expect(resume).toHaveBeenCalledOnce();
+        expect(stdout.capturedText()).toContain(
+          'operator send が未完了です (status=error, failure=auth)',
+        );
+      });
+      expect(firstSend).toHaveBeenCalledOnce();
+      expect(sentPrompts[0]).toContain(failedInput);
+      expect(resumedSend).not.toHaveBeenCalled();
+
+      input.write(`${followupInput}\n`);
+      const watchStatePath = operatorWatchStatePath(repoRoot);
+      await vi.waitFor(async () => {
+        const saved = JSON.parse(
+          await readFile(watchStatePath, 'utf8'),
+        ) as { pendingReports: Array<{ reportId: string }> };
+        expect(saved.pendingReports).toHaveLength(1);
+      });
+
+      input.write('/reconnect\n');
+      await vi.waitFor(() => {
+        expect(resume).toHaveBeenCalledTimes(2);
+        expect(stdout.capturedText()).toContain(
+          'source=manual failure=auth',
+        );
+      });
+      expect(resumedSend).not.toHaveBeenCalled();
+
+      input.write('/reconnect\n');
+      await vi.waitFor(() => {
+        expect(resume).toHaveBeenCalledTimes(3);
+        expect(stdout.capturedText()).toContain(
+          'conductor に再接続しました。',
+        );
+      });
+      expect(resumedSend).not.toHaveBeenCalled();
+
+      input.write('/recovery continue\n');
+      await vi.waitFor(() => expect(resumedSend).toHaveBeenCalledTimes(2));
+      expect(sentPrompts).toHaveLength(3);
+      expect(sentPrompts[1]).toContain(
+        'agents-ensemble の operator ロール',
+      );
+      expect(sentPrompts[1]).toContain(followupInput);
+      expect(sentPrompts[1]).not.toContain(failedInput);
+      expect(sentPrompts[1]).not.toContain(reportQuestion);
+
+      expect(sentPrompts[2]).toContain(reportQuestion);
+      expect(sentPrompts[2]).not.toContain(followupInput);
+      expect(sentPrompts[2]).not.toContain(
+        'agents-ensemble の operator ロール',
+      );
+      await vi.waitFor(async () => {
+        const saved = JSON.parse(
+          await readFile(watchStatePath, 'utf8'),
+        ) as { pendingReports: Array<{ reportId: string }> };
+        expect(saved.pendingReports).toHaveLength(0);
+      });
+
+      input.write('/exit\n');
+      await run;
+      exited = true;
+      expect(firstSend).toHaveBeenCalledOnce();
+      expect(oldClose).toHaveBeenCalledOnce();
+      expect(resumedClose).toHaveBeenCalledOnce();
+    } finally {
+      if (!exited) input.write('/exit\n');
+      input.end();
+      await run.catch(() => {});
+    }
+  });
+
+  it('closes a late automatic resume after SIGTERM instead of installing it', async () => {
+    const previousExitCode = process.exitCode;
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const config: EnsembleConfig = {
+      profile: { default: 'unused' },
+      conductor: { backend: 'cursor', model: 'cursor-model' },
+    } as EnsembleConfig;
+    const profile: ResolvedProfile = {
+      workers: [],
+      agents: {},
+    };
+    const authFailure = {
+      runId: 'run-auth',
+      status: 'error',
+      error: {
+        code: 'auth',
+        message:
+          'API key auth failed for provider cursor: authentication failed',
+      },
+    };
+    const oldClose = vi.fn().mockResolvedValue(undefined);
+    const oldSend = vi.fn().mockResolvedValue(authFailure);
+    const oldAgent = {
+      ...createFakeAgent({ send: oldSend }),
+      close: oldClose,
+    };
+    let resolveResume!: (agent: ConductorAgent) => void;
+    const pendingResume = new Promise<ConductorAgent>((resolve) => {
+      resolveResume = resolve;
+    });
+    const lateClose = vi.fn().mockResolvedValue(undefined);
+    const lateSend = vi.fn();
+    const lateAgent = {
+      ...createFakeAgent({ send: lateSend }),
+      close: lateClose,
+    };
+    const resume = vi.fn(() => pendingResume);
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout,
+        stderr,
+        loadConfig: async () => config,
+        loadProfile: async () => ({ profile, profilePath: 'test-profile' }),
+        agentFactory: {
+          create: async () => oldAgent,
+          resume,
+        },
+      },
+    );
+
+    let resumeResolved = false;
+    let terminationSent = false;
+    try {
+      await vi.waitFor(() =>
+        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      );
+      input.write('input that fails during Cursor bootstrap\n');
+      await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
+
+      expect(process.emit('SIGTERM')).toBe(true);
+      terminationSent = true;
+      expect(process.exitCode).toBe(143);
+      await run;
+
+      resolveResume(lateAgent);
+      resumeResolved = true;
+      await vi.waitFor(() => expect(lateClose).toHaveBeenCalledOnce());
+      expect(oldSend).toHaveBeenCalledOnce();
+      expect(lateSend).not.toHaveBeenCalled();
+      expect(stdout.capturedText()).not.toContain(
+        'conductor に再接続しました。',
+      );
+    } finally {
+      if (!resumeResolved) {
+        if (!terminationSent) process.emit('SIGTERM');
+        resolveResume(lateAgent);
+        await vi.waitFor(() => expect(lateClose).toHaveBeenCalledOnce());
+      }
+      process.exitCode = previousExitCode;
       input.end();
       await run.catch(() => {});
     }
