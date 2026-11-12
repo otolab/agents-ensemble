@@ -137,4 +137,20 @@ describe('readCursorConductorRunSnapshots', () => {
     });
     expect(JSON.stringify(result)).not.toContain('private local error');
   });
+
+  it('marks a completed empty run listing unavailable', async () => {
+    listRuns.mockResolvedValue({ items: [] });
+
+    const result = await readCursorConductorRunSnapshots({
+      conductorAgentId: 'conductor-1',
+      cwd: '/repo',
+    });
+
+    expect(result).toEqual({
+      status: 'unavailable',
+      runs: [],
+      warnings: ['The Cursor provider session has no saved runs.'],
+    });
+    expect(getRun).not.toHaveBeenCalled();
+  });
 });

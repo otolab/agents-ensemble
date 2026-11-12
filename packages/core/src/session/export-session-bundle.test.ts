@@ -315,6 +315,43 @@ describe('exportSessionBundle', () => {
     });
   });
 
+  it('marks an empty Cursor run listing unavailable and keeps the export partial', async () => {
+    await writeResumeStore({ backend: 'cursor' });
+    listRuns.mockResolvedValue({ items: [] });
+    const outputDirectory = join(tempRoot, 'empty-cursor-bundle');
+
+    const result = await exportSessionBundle({
+      repoRoot,
+      conductorAgentId: SESSION_ID,
+      outputDirectory,
+      ensembleVersion: '0.21.0',
+      cliVersion: '0.21.0',
+    });
+    const cursorRuns = JSON.parse(
+      await readFile(
+        join(outputDirectory, 'conductor/cursor-runs.json'),
+        'utf8',
+      ),
+    );
+    const warning = 'The Cursor provider session has no saved runs.';
+
+    expect(cursorRuns).toEqual({
+      status: 'unavailable',
+      runs: [],
+      warnings: [warning],
+    });
+    expect(result.status).toBe('partial');
+    expect(result.warnings).toContain(warning);
+    expect(result.manifest.warnings).toContain(warning);
+    expect(result.manifest.sources).toContainEqual(
+      expect.objectContaining({
+        id: 'conductor.cursorRuns',
+        status: 'unavailable',
+        bundlePaths: ['conductor/cursor-runs.json'],
+      }),
+    );
+  });
+
   it('marks an idle harness session as a partial best-effort snapshot', async () => {
     await writeResumeStore({ harnessPhase: 'idle' });
 

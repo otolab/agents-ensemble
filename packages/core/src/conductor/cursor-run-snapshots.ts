@@ -24,7 +24,8 @@ export interface CursorConductorRunSnapshots {
  *
  * Unlike the paged provider-history API, this export path has no run-count
  * limit. A failed page or run is reported while preserving snapshots already
- * read.
+ * read. A completed listing with no saved runs is unavailable, matching the
+ * provider-history contract.
  */
 export async function readCursorConductorRunSnapshots(input: {
   conductorAgentId: string;
@@ -107,8 +108,8 @@ export async function readCursorConductorRunSnapshots(input: {
       }
       if (nextCursor) seenCursors.add(nextCursor);
       cursor = nextCursor;
+      if (!cursor) listingComplete = true;
     } while (cursor);
-    listingComplete = true;
   } catch {
     partial = true;
     warnings.push(
@@ -116,9 +117,13 @@ export async function readCursorConductorRunSnapshots(input: {
     );
   }
 
+  if (listingComplete && runs.length === 0) {
+    warnings.push('The Cursor provider session has no saved runs.');
+  }
+
   return {
     status:
-      runs.length === 0 && !listingComplete
+      runs.length === 0
         ? 'unavailable'
         : partial || !listingComplete
           ? 'partial'
