@@ -209,9 +209,9 @@ async function writeSessionBundle(input: {
   const harnessPhase =
     resumeStore.harnessPhase ??
     harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle);
-  if (harnessPhase === 'running') {
+  if (harnessPhase === 'running' || harnessPhase === 'idle') {
     warnings.push(
-      'この session は実行中です。export は読み取り専用の best-effort snapshot で、複数ファイル間の完全な同時点性は保証しません。',
+      `この session の harness は稼働中です（phase: ${harnessPhase}）。export は読み取り専用の best-effort snapshot で、複数ファイルが同じ時点の内容であることは保証しません。`,
     );
   }
 

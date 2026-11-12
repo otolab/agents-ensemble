@@ -315,6 +315,25 @@ describe('exportSessionBundle', () => {
     });
   });
 
+  it('marks an idle harness session as a partial best-effort snapshot', async () => {
+    await writeResumeStore({ harnessPhase: 'idle' });
+
+    const result = await exportSessionBundle({
+      repoRoot,
+      conductorAgentId: SESSION_ID,
+      outputDirectory: join(tempRoot, 'idle-bundle'),
+      ensembleVersion: '0.21.0',
+      cliVersion: '0.21.0',
+    });
+
+    const warning =
+      'この session の harness は稼働中です（phase: idle）。export は読み取り専用の best-effort snapshot で、複数ファイルが同じ時点の内容であることは保証しません。';
+    expect(result.status).toBe('partial');
+    expect(result.warnings).toContain(warning);
+    expect(result.manifest.session.harnessPhase).toBe('idle');
+    expect(result.manifest.warnings).toContain(warning);
+  });
+
   it('records missing supplemental data and a running-session best-effort warning', async () => {
     await writeResumeStore({ harnessPhase: 'running' });
     await rm(paths.sessionStatePath(SESSION_ID));
@@ -337,7 +356,7 @@ describe('exportSessionBundle', () => {
 
     expect(result.status).toBe('partial');
     expect(result.warnings).toContain(
-      'この session は実行中です。export は読み取り専用の best-effort snapshot で、複数ファイル間の完全な同時点性は保証しません。',
+      'この session の harness は稼働中です（phase: running）。export は読み取り専用の best-effort snapshot で、複数ファイルが同じ時点の内容であることは保証しません。',
     );
     expect(result.manifest.sources).toContainEqual(
       expect.objectContaining({
@@ -405,42 +424,51 @@ describe('exportSessionBundle', () => {
     await expect(readFile(join(outputDirectory, 'manifest.json'))).rejects.toThrow();
   });
 
-  it.skipIf(process.platform === 'win32')(
-    'does not follow symlink sources for optional inputs',
-    async () => {
-      const rawPath = join(tempRoot, 'raw-summary.json');
-      const summaryPath = join(tempRoot, 'summary-link.json');
-      await writeFile(rawPath, '{"secret":"DO_NOT_COPY"}\n');
+  it('does not follow symlink sources for optional inputs', async (context) => {
+    const rawPath = join(tempRoot, 'raw-summary.json');
+    const summaryPath = join(tempRoot, 'summary-link.json');
+    await writeFile(rawPath, '{"secret":"DO_NOT_COPY"}\n');
+    try {
       await symlink(rawPath, summaryPath);
+    } catch (error) {
+      if (
+        process.platform === 'win32' &&
+        isWindowsSymlinkPrivilegeError(error)
+      ) {
+        context.skip(
+          'Windows symlink creation needs Developer Mode or an account with symlink privilege; enable it and rerun this test.',
+        );
+      }
+      throw error;
+    }
 
-      const outputDirectory = join(tempRoot, 'symlink-bundle');
-      const result = await exportSessionBundle({
-        repoRoot,
-        conductorAgentId: SESSION_ID,
-        outputDirectory,
-        ensembleVersion: '0.21.0',
-        cliVersion: '0.21.0',
-        summaryPath,
-      });
+    const outputDirectory = join(tempRoot, 'symlink-bundle');
+    const result = await exportSessionBundle({
+      repoRoot,
+      conductorAgentId: SESSION_ID,
+      outputDirectory,
+      ensembleVersion: '0.21.0',
+      cliVersion: '0.21.0',
+      summaryPath,
+    });
 
-      expect(
-        result.manifest.sources.find((source) => source.id === 'input.summary'),
-      ).toMatchObject({
-        status: 'unavailable',
-        sourcePaths: [summaryPath],
-      });
-      await expect(
-        readFile(join(outputDirectory, 'inputs/session-summary.json')),
-      ).rejects.toThrow();
-      expect(
-        await readFile(join(outputDirectory, 'manifest.json'), 'utf8'),
-      ).not.toContain('DO_NOT_COPY');
-    },
-  );
+    expect(
+      result.manifest.sources.find((source) => source.id === 'input.summary'),
+    ).toMatchObject({
+      status: 'unavailable',
+      sourcePaths: [summaryPath],
+    });
+    await expect(
+      readFile(join(outputDirectory, 'inputs/session-summary.json')),
+    ).rejects.toThrow();
+    expect(
+      await readFile(join(outputDirectory, 'manifest.json'), 'utf8'),
+    ).not.toContain('DO_NOT_COPY');
+  });
 
   async function writeResumeStore(options: {
     backend?: 'cursor' | 'pi';
-    harnessPhase?: 'running' | 'close';
+    harnessPhase?: 'running' | 'idle' | 'close';
   } = {}): Promise<void> {
     const fixture = JSON.parse(
       await readFile(RESUME_STORE_FIXTURE, 'utf8'),
@@ -451,7 +479,10 @@ describe('exportSessionBundle', () => {
     fixture.conductorCwd = conductorCwd;
     fixture.conductorBackend = options.backend ?? 'pi';
     fixture.harnessPhase = options.harnessPhase ?? 'close';
-    fixture.lifecycle = options.harnessPhase === 'running' ? 'unknown' : 'closed';
+    fixture.lifecycle =
+      options.harnessPhase === 'close' || !options.harnessPhase
+        ? 'closed'
+        : 'unknown';
     fixture.rawFixtureSecret = 'api_key=raw-fixture-secret';
     fixture.workers.implementer!.acpCwd = CODEX_CWD;
     await mkdir(dirname(resumeStorePath), { recursive: true });
@@ -568,4 +599,15 @@ function appendPiTurn(
     sendCount: index + 1,
     dispatchSource: 'operator',
   });
+}
+
+function isWindowsSymlinkPrivilegeError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    ['EACCES', 'EPERM'].includes(
+      (error as NodeJS.ErrnoException).code ?? '',
+    )
+  );
 }
