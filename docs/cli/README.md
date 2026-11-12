@@ -25,7 +25,7 @@ conductor:
   backend: pi
 ```
 
-Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の model catalog を扱う `models remote` / `diff` / `add` と旧 `sync` からの移行も同ガイドを参照してください。Pi の user root は `~/.ensemble/pi/`、project root は `<repoRoot>/.ensemble/pi/` が既定で、`conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。
+Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の model catalog を扱う `models remote` / `diff` / `add` と旧 `sync` からの移行も同ガイドを参照してください。Pi の user root は `conductor.pi.agentDir`、`PI_CODING_AGENT_DIR`、`~/.ensemble/pi/` の順、project root は `conductor.pi.projectDir`、`<repoRoot>/.ensemble/pi/` の順で解決します。
 
 Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
@@ -81,7 +81,7 @@ gh auth login
 
 GitHub API トークンを直接渡す場合は、`gh auth login` の代わりに `GITHUB_TOKEN` または `GH_TOKEN` を設定してください。
 
-Pi builtin worker は `~/.ensemble/pi/auth.json` と Pi の provider 環境変数を使います。`ensemble auth login --provider <id>` は選択中の conductor backend に従うため、既定の Cursor backend で `--provider` だけを付けても Pi worker の credential は作成されません。Pi backend の config を選ぶか、Pi backend を定義した profile を `--profile <name>` で指定して login してください。Pi worker に使える credential がない場合、初回 attach は `AUTH_REQUIRED` で失敗します。
+Pi builtin worker は Pi conductor と同じ user resource root（`conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > 既定 `~/.ensemble/pi/`）にある `auth.json` と Pi の provider 環境変数を使います。worker の session map と transcript は root override にかかわらず `~/.ensemble/pi/worker/<repoKey>/<workerKey>/` に分離されます。`ensemble auth login --provider <id>` は選択中の conductor backend に従うため、既定の Cursor backend で `--provider` だけを付けても Pi worker の credential は作成されません。Pi backend の config を選ぶか、Pi backend を定義した profile を `--profile <name>` で指定して login してください。Cursor conductor のまま使う場合は Pi provider 環境変数を設定するか、同じ user root を `PI_CODING_AGENT_DIR` に指定して Pi CLI から login してください。Pi worker に使える credential がない場合、初回 attach は `AUTH_REQUIRED` で失敗します。
 
 リポジトリを clone したディレクトリで、対象 Issue を指定して起動します。
 

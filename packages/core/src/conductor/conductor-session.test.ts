@@ -1975,6 +1975,96 @@ describe('runConductorSession resume / shutdown', () => {
     );
   });
 
+  it('shares a custom Pi user root with builtin workers and isolates their logs', async () => {
+    stubUnusedControlServer();
+    mockSend.mockResolvedValue({
+      runId: 'run-builtin-pi-root',
+      status: 'finished',
+      result: 'done',
+    });
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'pi' as const,
+        pi: { agentDir: './custom-pi-user' },
+      },
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        defaultPreset: 'pi' as const,
+        pi: { runtime: 'builtin' as const },
+      },
+    };
+    let conductorTools: ConductorAgentCreateOptions['customTools'];
+    mockCreate.mockImplementationOnce(async (agentOptions) => {
+      conductorTools = agentOptions.customTools;
+      return {
+        agentId: 'agent-builtin-pi-root',
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementationOnce(async () => {
+      await conductorTools!.prompt_worker!.execute({
+        worker: 'implementer',
+        instruction: 'verify the builtin Pi worker resource roots',
+      });
+      return {
+        runId: 'run-builtin-pi-root',
+        status: 'finished',
+        result: 'done',
+      };
+    });
+    const bridge = {
+      newSession: vi.fn().mockResolvedValue('builtin-pi-worker-session'),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: vi.fn().mockResolvedValue({
+        stopReason: 'end_turn',
+        responseText: 'ready',
+      }),
+      cancelSession: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi.fn().mockResolvedValue(bridge);
+    const workerPath = join(repoRoot, '.ensemble', 'worktrees', 'issue-1');
+    await mkdir(workerPath, { recursive: true });
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        conductor: { backend: 'pi' },
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      ensembleConfig,
+      defaultAcp: { config: ensembleConfig, env: {} },
+      workerWorktree: {
+        path: workerPath,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+      connectAcp,
+      disableGitHubMonitor: true,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    const workerSpawn = connectAcp.mock.calls[0]?.[0].spawn;
+    const paths = resolveEnsemblePaths({ repoRoot });
+    expect(workerSpawn?.env).toMatchObject({
+      PI_CODING_AGENT_DIR: join(repoRoot, 'custom-pi-user'),
+      PI_CODING_AGENT_SESSION_DIR:
+        paths.piWorkerSessionsDir('implementer'),
+      PI_ACP_SESSION_MAP_PATH: paths.piWorkerSessionMapPath('implementer'),
+    });
+    expect(workerSpawn?.env?.PI_ACP_PI_COMMAND).toContain(
+      '@earendil-works/pi-coding-agent',
+    );
+  });
+
   it('does not fail at backend selection before the Pi agent is created', async () => {
     const resolveWorkerWorkspace = vi
       .spyOn(worktreeModule, 'resolveWorkerWorkspace')

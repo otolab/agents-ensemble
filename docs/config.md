@@ -162,7 +162,7 @@ tui:
 | `conductor.reasoning` | conductor reasoning / thinking level | `ensemble issue --reasoning` | `CONDUCTOR_REASONING` |
 | `conductor.verbose` | harness 詳細 telemetry の表示 | `--verbose` | `CONDUCTOR_VERBOSE` |
 | `conductor.backend` | conductor LLM backend（`cursor` / `pi`） | — | — |
-| `conductor.pi.agentDir` | Pi user resource root のパス上書き | — | — |
+| `conductor.pi.agentDir` | Pi user resource root のパス上書き | `PI_CODING_AGENT_DIR`（config 未指定時） | — |
 | `conductor.pi.projectDir` | Pi project resource root のパス上書き | — | — |
 | `acp.defaultPreset` | worker ACP built-in preset | `--default-acp-cli` 等 | `ENSEMBLE_DEFAULT_ACP_CLI` |
 | `acp.pi.runtime` | Pi worker の runtime（`byo` / `builtin`、既定 `byo`） | — | — |
@@ -204,7 +204,7 @@ acp:
 
 `builtin` は `@agents-ensemble/core` に含まれる `@agents-ensemble/builtin-pi-acp` と、core の依存 package にある Pi CLI を使います。Pi CLI の global install、PATH 設定、`~/.pi` の事前準備は不要です。この runtime は Node.js **22.19.0 以上**を要求します。builtin を選んだときだけ起動前に Pi CLI の存在と Node.js の版を検証します。
 
-builtin の user settings と認証は `~/.ensemble/pi/` に置きます。同梱する `defaultThinkingLevel: medium` と `enableSkillCommands: true` は初回のみ `settings.json` へコピーし、既存の設定を上書きしません。モデル一覧と認証情報は Pi runtime のものを使います。認証済み provider がない場合、Pi ACP は `AUTH_REQUIRED` で attach を拒否します。Pi CLI を別途用意する必要はありませんが、provider の認証は必要です。Pi backend が選択されている場合、`ensemble auth login --provider <provider-id>` は既定 user root の `~/.ensemble/pi/auth.json` に credential を保存します。Cursor backend が選択中なら `--provider` だけでは Pi 認証へ切り替わらず、Pi credential は設定されません。provider 環境変数も利用できます。認証手順は [Pi conductor セットアップ](pi-conductor-setup.md)を参照してください。
+builtin の user settings と認証には、Pi conductor と同じ user resource root を使い、解決順は `conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > `~/.ensemble/pi/` です。同梱する `defaultThinkingLevel: medium` と `enableSkillCommands: true` は初回のみ `settings.json` へコピーし、既存の設定を上書きしません。認証済み provider がない場合、Pi ACP は `AUTH_REQUIRED` で attach を拒否します。Pi CLI を別途用意する必要はありませんが、provider の認証は必要です。Pi backend が選択されている場合、`ensemble auth login --provider <provider-id>` は同じ user root の `auth.json` に credential を保存します。Cursor backend が選択中なら `--provider` だけでは Pi 認証へ切り替わらず、Pi credential は設定されません。provider 環境変数も利用できます。`acp.env.PI_CODING_AGENT_DIR` ではなく `conductor.pi.agentDir`（または `PI_CODING_AGENT_DIR`）で user root を設定してください。認証手順は [Pi conductor セットアップ](pi-conductor-setup.md)を参照してください。
 
 builtin の Pi session map と transcript は `~/.ensemble/pi/worker/<repoKey>/<workerKey>/` に保存します。`repoKey` は repository root ごとの識別子、`workerKey` は worker 名を安全に符号化した識別子です。既存の Pi ACP JSONL 形式を維持し、`ensemble session workers messages` は保存済み runtime marker に応じて builtin または BYO の session map を読みます。BYO と builtin を切り替えて既存 session を resume することはできません。
 

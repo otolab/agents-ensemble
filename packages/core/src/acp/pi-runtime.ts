@@ -100,7 +100,7 @@ export function resolveBundledPiCliPath(
  */
 export function configurePiWorkerRuntime(
   spawn: ResolvedAcpSpawn,
-  input: { repoRoot: string; workerName: string },
+  input: { repoRoot: string; workerName: string; agentDir?: string },
 ): ResolvedAcpSpawn {
   if (spawn.preset !== 'pi' || spawn.piRuntime !== 'builtin') return spawn;
 
@@ -111,7 +111,7 @@ export function configurePiWorkerRuntime(
     env: {
       ...(spawn.env ?? {}),
       ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
-      PI_CODING_AGENT_DIR: paths.piUserDir,
+      PI_CODING_AGENT_DIR: input.agentDir ?? paths.piUserDir,
       PI_CODING_AGENT_SESSION_DIR: paths.piWorkerSessionsDir(
         input.workerName,
       ),

@@ -844,10 +844,15 @@ async function runConductorSessionWithStartupGuard(
       });
     },
   };
+  const piAgentDir = resolveConductorPiResourcePaths({
+    repoRoot: options.repoRoot,
+    config: ensembleConfig,
+  }).agentDir;
   const workers = profileWorkersToSessionSpecs(activeProfile, {
     defaultAcp: options.defaultAcp,
     spawnBase,
     repoRoot: options.repoRoot,
+    ...(piAgentDir ? { piAgentDir } : {}),
   });
   if (workers.length > 0) {
     validateWorkerAcpPrerequisites(
@@ -858,7 +863,12 @@ async function runConductorSessionWithStartupGuard(
         }),
       ),
     );
-    finalizeSessionWorkerSpecs(workers, options.repoRoot, options.defaultAcp);
+    finalizeSessionWorkerSpecs(
+      workers,
+      options.repoRoot,
+      options.defaultAcp,
+      piAgentDir,
+    );
   }
   const workerAcpFingerprints = new Map(
     workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
@@ -2666,7 +2676,16 @@ function finalizeSessionWorkerSpecs(
   workers: SessionWorkerSpec[],
   repoRoot: string,
   defaultAcp?: DefaultAcpResolutionOptions,
+  piAgentDir?: string,
 ): void {
+  const resolvedPiAgentDir =
+    piAgentDir ??
+    resolveConductorPiResourcePaths({
+      repoRoot,
+      config: defaultAcp?.config,
+      env: defaultAcp?.env,
+    }).agentDir;
+
   for (const worker of workers) {
     const resolved = resolveWorkerAcpSpawn({
       defaultOptions: defaultAcp,
@@ -2677,6 +2696,9 @@ function finalizeSessionWorkerSpecs(
         ? configurePiWorkerRuntime(resolved, {
             repoRoot,
             workerName: worker.name,
+            ...(resolvedPiAgentDir
+              ? { agentDir: resolvedPiAgentDir }
+              : {}),
           })
         : resolved;
     const finalized = finalizeResolvedAcpSpawn(sessionSpawn);

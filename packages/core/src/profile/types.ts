@@ -1,5 +1,6 @@
 import type { PromptModule } from '@modular-prompt/core';
 import type { ConductorBackend } from '../config/types.js';
+import { resolveConductorPiResourcePaths } from '../config/resolve-settings.js';
 import type {
   AcpSpawnFingerprint,
   DefaultAcpResolutionOptions,
@@ -267,6 +268,7 @@ export function profileWorkersToSessionSpecs(
     defaultAcp?: DefaultAcpResolutionOptions;
     spawnBase?: SpawnAcpProcessOptions;
     repoRoot?: string;
+    piAgentDir?: string;
   },
 ): SessionWorkerSpec[] {
   return profile.workers.map((worker) => {
@@ -282,9 +284,17 @@ export function profileWorkersToSessionSpecs(
           'repoRoot is required for the builtin Pi worker runtime.',
         );
       }
+      const agentDir =
+        options.piAgentDir ??
+        resolveConductorPiResourcePaths({
+          repoRoot: options.repoRoot,
+          config: options.defaultAcp?.config,
+          env: options.defaultAcp?.env,
+        }).agentDir;
       sessionSpawn = configurePiWorkerRuntime(resolved, {
         repoRoot: options.repoRoot,
         workerName: worker.name,
+        ...(agentDir ? { agentDir } : {}),
       });
     }
     return {

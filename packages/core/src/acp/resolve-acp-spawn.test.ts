@@ -787,6 +787,55 @@ describe('profileWorkersToSessionSpecs', () => {
     );
   });
 
+  it('shares the configured Pi auth root while keeping builtin worker logs isolated', () => {
+    const repoRoot = '/tmp/builtin-pi-runtime-repo';
+    const agentDir = `${repoRoot}/custom-pi-agent`;
+    const config = {
+      conductor: {
+        pi: { agentDir: './custom-pi-agent' },
+      },
+      acp: {
+        defaultPreset: 'pi',
+        pi: { runtime: 'builtin' },
+        env: {
+          PI_CODING_AGENT_DIR: '/acp/env-should-not-win',
+        },
+      },
+    } as import('../config/types.js').EnsembleConfig;
+    const specs = profileWorkersToSessionSpecs(baseProfile, {
+      defaultAcp: { config, env: {} },
+      repoRoot,
+    });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const implementer = specs[0]?.spawn?.env;
+    const reviewer = specs[1]?.spawn?.env;
+
+    expect(implementer).toMatchObject({
+      PI_CODING_AGENT_DIR: agentDir,
+      PI_CODING_AGENT_SESSION_DIR:
+        paths.piWorkerSessionsDir('implementer'),
+      PI_ACP_SESSION_MAP_PATH:
+        paths.piWorkerSessionMapPath('implementer'),
+    });
+    expect(reviewer?.PI_CODING_AGENT_DIR).toBe(agentDir);
+    expect(reviewer?.PI_CODING_AGENT_SESSION_DIR).toBe(
+      paths.piWorkerSessionsDir('reviewer'),
+    );
+    expect(implementer?.PI_ACP_SESSION_MAP_PATH).not.toBe(
+      reviewer?.PI_ACP_SESSION_MAP_PATH,
+    );
+    expect(specs[0]?.acpFingerprint?.envDigest).toBe(
+      computeAcpSpawnEnvDigest({
+        PI_CODING_AGENT_DIR: agentDir,
+        ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+        PI_CODING_AGENT_SESSION_DIR:
+          paths.piWorkerSessionsDir('implementer'),
+        PI_ACP_SESSION_MAP_PATH: paths.piWorkerSessionMapPath('implementer'),
+        PI_ACP_PI_COMMAND: implementer?.PI_ACP_PI_COMMAND ?? '',
+      }),
+    );
+  });
+
   it('resolves different model tiers per worker while shorthand uses default', () => {
     const specs = profileWorkersToSessionSpecs(
       {

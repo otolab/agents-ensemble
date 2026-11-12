@@ -12,16 +12,19 @@ copy is updated manually; see [UPDATING.md](./UPDATING.md).
 - **BYO (default):** runs the `pi` command from `PATH` and keeps Pi's existing
   user settings, auth, session map, and transcript locations.
 - **Builtin (opt in):** uses the Pi CLI already installed as a core dependency,
-  keeps user Pi settings and auth under `~/.ensemble/pi/`, and stores each
-  worker's session map and transcripts under
+  shares the Pi user resource root with the conductor (`conductor.pi.agentDir`,
+  then `PI_CODING_AGENT_DIR`, defaulting to `~/.ensemble/pi/`), and stores
+  each worker's session map and transcripts under
   `~/.ensemble/pi/worker/<repoKey>/<workerKey>/`.
 
 The builtin mode does not require a global Pi CLI installation or a prepared
 `~/.pi` directory. Pi still needs provider credentials. It uses credentials
 already available to the Pi runtime, including supported provider environment
-variables and `~/.ensemble/pi/auth.json`. The existing `ensemble auth login`
-command writes this file when the selected conductor backend is Pi; with the
-default Cursor backend, `--provider` alone does not select Pi authentication.
+variables and `<resolved Pi user root>/auth.json`. The existing `ensemble auth
+login` command writes this file when the selected conductor backend is Pi;
+with the default Cursor backend, `--provider` alone does not select Pi
+authentication. Select a Pi conductor backend/profile, or use provider
+environment variables / a Pi CLI login pointed at the same user root.
 If Pi reports no available models, ACP attach fails with `AUTH_REQUIRED`; this
 package cannot provide a provider account or credential. Builtin mode requires
 Node.js 22.19.0 or later.

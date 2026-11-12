@@ -46,7 +46,7 @@ ensemble operator-agent --config ~/.ensemble/litellm.config.yaml
 
 user 層の差し替えは [ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)、project toggle との組み合わせは [ADR 0043](adr/0043-explicit-user-config-and-project-toggle.md) に記録しています。
 
-`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`profile.conductor.builtinTools` は profile だけで制御し、省略・未指定は有効、`false` のみ built-in coding tools を無効にします。`profile.conductor.piSkills` は Pi backend のみで、Pi 標準の skill discovery を制御し、省略・未指定は有効、`false` で skill 索引を止めます。`config.yaml` や `settings.json.defaultTools` ではこの制御を行いません。`cursor` は Cursor SDK 経路、`pi` は Pi 1.x `createAgentSession` 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、`~/.ensemble/pi` と `<repoRoot>/.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決します。skills は Pi の `DefaultResourceLoader` で索引し、カタログを system prompt に載せて本文は `read` / `/skill:` で読みます。prompts は `/name args` で展開します。themes は headless conductor のため読み込み・project 同名解決のみ行い、TUI 表示には使いません。root は `conductor.pi.agentDir` / `conductor.pi.projectDir` で上書きできます。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は無視します。`ensemble auth login|logout|status` は backend に分岐し、Pi では provider 単位に `ModelRuntime` を使います。API key は TTY の secret prompt から user 層へ保存し、OAuth は Pi の OAuth flow を stderr 対話で実行します（SSH でも URL / device code を利用できます）。MCP HTTP OAuth は Pi 公式 MCP extension が別の credential store で扱います。resume では SessionResumeStore に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
+`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`profile.conductor.builtinTools` は profile だけで制御し、省略・未指定は有効、`false` のみ built-in coding tools を無効にします。`profile.conductor.piSkills` は Pi backend のみで、Pi 標準の skill discovery を制御し、省略・未指定は有効、`false` で skill 索引を止めます。`config.yaml` や `settings.json.defaultTools` ではこの制御を行いません。`cursor` は Cursor SDK 経路、`pi` は Pi 1.x `createAgentSession` 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、`~/.ensemble/pi` と `<repoRoot>/.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決します。skills は Pi の `DefaultResourceLoader` で索引し、カタログを system prompt に載せて本文は `read` / `/skill:` で読みます。prompts は `/name args` で展開します。themes は headless conductor のため読み込み・project 同名解決のみ行い、TUI 表示には使いません。Pi user root は `conductor.pi.agentDir` → `PI_CODING_AGENT_DIR` → `~/.ensemble/pi`、project root は `conductor.pi.projectDir` → `<repoRoot>/.ensemble/pi` の順で解決します。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は無視します。`ensemble auth login|logout|status` は backend に分岐し、Pi では provider 単位に `ModelRuntime` を使います。API key は TTY の secret prompt から user 層へ保存し、OAuth は Pi の OAuth flow を stderr 対話で実行します（SSH でも URL / device code を利用できます）。MCP HTTP OAuth は Pi 公式 MCP extension が別の credential store で扱います。resume では SessionResumeStore に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
 
 ```text
 Session resume state conductorBackend mismatch: pi !== cursor
@@ -109,7 +109,7 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 |------|--------|
 | GitHub API | `GITHUB_TOKEN` > `GH_TOKEN` > （`allowGhAuthTokenFallback: true` 時のみ）`gh auth token` |
 | conductor (cursor) | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
-| conductor (pi) | [Pi conductor セットアップと認証](pi-conductor-setup.md)のとおり、project `auth.json` の読取優先 > user `ModelRuntime`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > `settings.json` fallback / `models.json` provider key > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存し、project OAuth は refresh しない |
+| conductor (pi) | [Pi conductor セットアップと認証](pi-conductor-setup.md)のとおり、project `auth.json` の読取優先 > user `ModelRuntime`（`conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > 既定 `~/.ensemble/pi` の `auth.json`） > `settings.json` fallback / `models.json` provider key > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存し、project OAuth は refresh しない |
 | worker ACP（preset 依存） | **既定は移譲**（harness は ACP `authenticate` を skip）。認証の正本は各 adapter の runtime 設定（Codex: `~/.codex` 等）— [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) / [ADR 0019](adr/0019-worker-acp-cli-presets.md) |
 
 ## 一覧 — Phase 1（config.yaml）
@@ -121,7 +121,7 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 | conductor reasoning | `conductor.reasoning` | `CONDUCTOR_REASONING` | `ensemble issue --reasoning` | backend 既定（明示値なし） | A |
 | conductor 詳細 telemetry | `conductor.verbose` | `CONDUCTOR_VERBOSE` | `--verbose` | `false` | A |
 | conductor backend | `conductor.backend` | — | — | `cursor` | profile > config > default |
-| Pi user resource root | `conductor.pi.agentDir` | — | — | `~/.ensemble/pi` | config |
+| Pi user resource root | `conductor.pi.agentDir` | `PI_CODING_AGENT_DIR` | — | `~/.ensemble/pi` | config > environment > default |
 | Pi project resource root | `conductor.pi.projectDir` | — | — | `<repoRoot>/.ensemble/pi` | config |
 | worker ACP preset（全 worker 共通） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
 | worker ACP spawn env | `acp.env` | — | — | — | 選択された user config → project deep merge |

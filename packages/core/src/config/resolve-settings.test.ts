@@ -316,6 +316,7 @@ describe('resolveConductorPiResourcePaths', () => {
     expect(
       resolveConductorPiResourcePaths({
         repoRoot: '/repo',
+        env: {},
         config: {
           ...projectConfig,
           conductor: {
@@ -332,8 +333,44 @@ describe('resolveConductorPiResourcePaths', () => {
 
   it('defaults the project root to repoRoot/.ensemble/pi', () => {
     expect(
-      resolveConductorPiResourcePaths({ repoRoot: '/repo', config: projectConfig }),
+      resolveConductorPiResourcePaths({
+        repoRoot: '/repo',
+        config: projectConfig,
+        env: {},
+      }),
     ).toEqual({ projectDir: '/repo/.ensemble/pi' });
+  });
+
+  it('uses PI_CODING_AGENT_DIR when no conductor.pi.agentDir is configured', () => {
+    expect(
+      resolveConductorPiResourcePaths({
+        repoRoot: '/repo',
+        config: projectConfig,
+        env: { PI_CODING_AGENT_DIR: '/user/pi-agent' },
+      }),
+    ).toEqual({
+      agentDir: '/user/pi-agent',
+      projectDir: '/repo/.ensemble/pi',
+    });
+  });
+
+  it('prefers conductor.pi.agentDir over PI_CODING_AGENT_DIR', () => {
+    expect(
+      resolveConductorPiResourcePaths({
+        repoRoot: '/repo',
+        config: {
+          ...projectConfig,
+          conductor: {
+            ...projectConfig.conductor,
+            pi: { agentDir: '/configured/pi-agent' },
+          },
+        },
+        env: { PI_CODING_AGENT_DIR: '/environment/pi-agent' },
+      }),
+    ).toEqual({
+      agentDir: '/configured/pi-agent',
+      projectDir: '/repo/.ensemble/pi',
+    });
   });
 });
 

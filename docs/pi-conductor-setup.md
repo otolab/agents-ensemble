@@ -24,7 +24,7 @@ Pi の設定を置く場所は次の 2 層です。
 | user | `~/.ensemble/pi/` | 個人の設定・user credential |
 | project | `<repoRoot>/.ensemble/pi/` | リポジトリ固有の model/resource と project credential |
 
-resource root は `conductor.pi.agentDir`（user）と `conductor.pi.projectDir`（project）で上書きできます。相対パスはリポジトリの root 基準、`~` はユーザ home 基準です。
+user resource root は `conductor.pi.agentDir` → `PI_CODING_AGENT_DIR` → `~/.ensemble/pi/`、project resource root は `conductor.pi.projectDir` → `<repoRoot>/.ensemble/pi/` の順で解決します。config の相対パスはリポジトリ root 基準、`~` はユーザ home 基準です。
 
 ```yaml
 conductor:
@@ -337,9 +337,11 @@ node scripts/pi/bench-cached-auth.mjs
 | API key | `CURSOR_API_KEY` または Cursor SDK の stored login | TTY secret prompt、user `auth.json`、Pi の provider env/fallback |
 | OAuth / 出力 | Cursor SDK の login | TTY の Pi OAuth flow。URL / device code は stderr |
 | model list | Cursor SDK の catalog | 認証済み Pi model のみ。`--provider` で絞り込み |
-| worker の認証 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意。Pi builtin worker は `~/.ensemble/pi/auth.json` または provider 環境変数を使い、Pi backend の login credential と共有できる |
+| worker の認証 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意。Pi builtin worker は Pi conductor と同じ user root の `auth.json` または provider 環境変数を使う |
 
-Pi builtin worker を使う場合、`ensemble auth login --provider <id>` は選択中の conductor backend が Pi のとき `~/.ensemble/pi/auth.json` に保存した credential を worker と共有します。既定の Cursor backend では `--provider` だけで Pi login には切り替わらないため、Pi backend の config / profile を選ぶか、provider 環境変数を設定してください。Pi CLI の global install は不要ですが、provider credential は必要です。
+Pi builtin worker と Pi conductor は同じ Pi user root を使います。既定は `~/.ensemble/pi/` で、`conductor.pi.agentDir` が設定されていればその directory、なければ `PI_CODING_AGENT_DIR` が使われます。builtin worker の session map と transcript はこの設定から独立し、`~/.ensemble/pi/worker/<repoKey>/<workerKey>/` に保存します。
+
+Pi builtin worker を使う場合、`ensemble auth login --provider <id>` は選択中の conductor backend が Pi のとき、解決済み user root の `auth.json` に credential を保存し、worker と共有します。既定の Cursor backend では `--provider` だけで Pi login には切り替わらないため、Pi backend の config / profile を選ぶか、provider 環境変数を設定してください。Cursor backend のまま Pi CLI から login する場合は、同じ directory を `PI_CODING_AGENT_DIR` に指定してください。Pi CLI の global install は不要ですが、provider credential は必要です。
 
 Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalog の挙動は Pi の設定では変更されません。
 
