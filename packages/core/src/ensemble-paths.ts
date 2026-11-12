@@ -93,6 +93,8 @@ export function resolveEnsemblePaths(
     piWorkerSessionsDir: (workerName: string) =>
       join(piWorkerDirectory(workerName), 'sessions'),
     piWorkerSessionMapPath: (workerName: string) =>
+      join(piWorkerDirectory(workerName), '.pi', 'pi-acp', 'session-map.json'),
+    legacyPiWorkerSessionMapPath: (workerName: string) =>
       join(piWorkerDirectory(workerName), 'session-map.json'),
     sessionsRoot,
     sessionsDir,

@@ -2055,11 +2055,13 @@ describe('runConductorSession resume / shutdown', () => {
     const workerSpawn = connectAcp.mock.calls[0]?.[0].spawn;
     const paths = resolveEnsemblePaths({ repoRoot });
     expect(workerSpawn?.env).toMatchObject({
+      HOME: paths.piWorkerDir('implementer'),
+      USERPROFILE: paths.piWorkerDir('implementer'),
       PI_CODING_AGENT_DIR: join(repoRoot, 'custom-pi-user'),
       PI_CODING_AGENT_SESSION_DIR:
         paths.piWorkerSessionsDir('implementer'),
-      PI_ACP_SESSION_MAP_PATH: paths.piWorkerSessionMapPath('implementer'),
     });
+    expect(workerSpawn?.env).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
     expect(workerSpawn?.env?.PI_ACP_PI_COMMAND).toContain(
       '@earendil-works/pi-coding-agent',
     );

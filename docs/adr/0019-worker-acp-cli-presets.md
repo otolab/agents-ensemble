@@ -1,6 +1,6 @@
 # ADR 0019: Worker ACP CLI preset とデフォルト解決
 
-- Status: superseded in part by [ADR 0061](0061-builtin-pi-acp-runtime.md)（Pi ACP の package / runtime 選択のみ。worker ACP `authenticate` の方針の正本は [ADR 0028](0028-authentication-delegation-and-ensemble-auth.md)）
+- Status: superseded in part by [ADR 0062](0062-pi-acp-upstream-package-wrapper.md)（Pi ACP の package / runtime 選択のみ。worker ACP `authenticate` の方針の正本は [ADR 0028](0028-authentication-delegation-and-ensemble-auth.md)）
 - Date: 2026-08-18
 - Related: [ADR 0002](0002-star-topology-sdk-conductor-acp-worker.md), [ADR 0011](0011-session-sidecar-resume.md), [ADR 0028](0028-authentication-delegation-and-ensemble-auth.md)
 

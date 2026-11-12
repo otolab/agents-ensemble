@@ -117,17 +117,17 @@ for (const { preset, packageName, binName } of optionalPresets) {
 }
 
 describe('resolveBundledAcpBin(pi)', () => {
-  it('resolves the workspace Pi adapter as a bundled executable', () => {
+  it('resolves the upstream npm adapter as a bundled executable', () => {
     const bundled = resolveBundledAcpBin('pi');
 
     expect(bundled).toBeDefined();
     expect(isAbsolute(bundled!)).toBe(true);
-    expect(bundled).toContain('builtin-pi-acp');
+    expect(bundled).toContain('pi-acp');
     accessSync(bundled!, constants.X_OK);
   });
 
   it.skipIf(process.platform === 'win32')(
-    'prefers the bundled adapter when another pi-acp is on PATH',
+    'prefers the upstream dependency when another pi-acp is on PATH',
     async () => {
       const binDirectory = await mkdtemp(join(tmpdir(), 'pi-acp-path-'));
       const pathAdapter = join(binDirectory, 'pi-acp');

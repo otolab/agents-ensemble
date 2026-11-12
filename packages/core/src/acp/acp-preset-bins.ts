@@ -14,7 +14,7 @@ export const ACP_PRESET_ADAPTER_PACKAGES: Record<
     binName: 'codex-acp',
   },
   pi: {
-    packageName: '@agents-ensemble/builtin-pi-acp',
+    packageName: 'pi-acp',
     binName: 'pi-acp',
   },
 };

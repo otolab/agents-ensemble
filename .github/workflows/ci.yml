@@ -45,7 +45,7 @@ jobs:
           pnpm --filter @agents-ensemble/core exec node --input-type=module -e '
             for (const adapter of [
               "@agentclientprotocol/claude-agent-acp/dist/index.js",
-              "@agents-ensemble/builtin-pi-acp",
+              "pi-acp",
             ]) {
               await import.meta.resolve(adapter);
             }

@@ -403,6 +403,32 @@ describe('worker session history', () => {
     );
   });
 
+  it('reads a legacy builtin session map before the wrapper migrates it', async () => {
+    const transcriptPath = await writePiAcpSessionMap({
+      runtime: 'builtin',
+      legacyMap: true,
+    });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'pi',
+      status: 'supported',
+      reader: 'pi-acp-jsonl',
+      messages: [
+        { role: 'user', text: 'Earlier worker request remains on the active branch.' },
+        { role: 'user', text: 'Pi ACP fixture user message.' },
+        { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
+      ],
+    });
+    expect(transcriptPath).toBe(
+      join(
+        resolveEnsemblePaths({ repoRoot }).piWorkerSessionsDir(WORKER_NAME),
+        'pi-acp-worker-session.jsonl',
+      ),
+    );
+  });
+
   it('does not change an empty Pi transcript while reading it', async () => {
     const transcriptPath = await writePiAcpSessionMap({
       transcriptContent: '',
@@ -677,6 +703,7 @@ describe('worker session history', () => {
       transcriptContent?: string;
       writeTranscript?: boolean;
       runtime?: 'builtin';
+      legacyMap?: boolean;
     } = {},
   ): Promise<string> {
     if (options.runtime === 'builtin') {
@@ -707,7 +734,9 @@ describe('worker session history', () => {
 
     const mapPath =
       options.runtime === 'builtin'
-        ? paths.piWorkerSessionMapPath(WORKER_NAME)
+        ? options.legacyMap
+          ? paths.legacyPiWorkerSessionMapPath(WORKER_NAME)
+          : paths.piWorkerSessionMapPath(WORKER_NAME)
         : join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
     await mkdir(dirname(mapPath), { recursive: true });
     await writeFile(

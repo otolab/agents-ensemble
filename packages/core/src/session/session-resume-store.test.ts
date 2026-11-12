@@ -340,8 +340,8 @@ describe('SessionResumeStore', () => {
           acpCwd: '/repo/worktree',
           acpSpawn: {
             preset: 'pi',
-            command: '/core/node_modules/builtin-pi-acp/dist/index.js',
-            args: [],
+            command: '/usr/bin/node',
+            args: ['/core/dist/acp/pi-acp-wrapper.js'],
             piRuntime: 'builtin',
           },
         },

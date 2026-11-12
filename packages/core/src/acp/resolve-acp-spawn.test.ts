@@ -751,37 +751,37 @@ describe('profileWorkersToSessionSpecs', () => {
     const paths = resolveEnsemblePaths({ repoRoot });
     const implementer = specs[0]?.spawn?.env;
     const reviewer = specs[1]?.spawn?.env;
+    const fingerprintEnv = { ...config.acp.env };
+    delete fingerprintEnv.PI_ACP_SESSION_MAP_PATH;
 
     expect(implementer).toMatchObject({
       ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+      HOME: paths.piWorkerDir('implementer'),
+      USERPROFILE: paths.piWorkerDir('implementer'),
       PI_CODING_AGENT_DIR: paths.piUserDir,
       PI_CODING_AGENT_SESSION_DIR:
         paths.piWorkerSessionsDir('implementer'),
-      PI_ACP_SESSION_MAP_PATH:
-        paths.piWorkerSessionMapPath('implementer'),
     });
     expect(implementer?.PI_ACP_PI_COMMAND).toContain(
       '@earendil-works/pi-coding-agent',
     );
     expect(implementer?.PI_ACP_PI_COMMAND).not.toBe('/custom/pi.js');
-    expect(reviewer?.PI_ACP_SESSION_MAP_PATH).toBe(
-      paths.piWorkerSessionMapPath('reviewer'),
-    );
-    expect(implementer?.PI_ACP_SESSION_MAP_PATH).not.toBe(
-      reviewer?.PI_ACP_SESSION_MAP_PATH,
-    );
+    expect(implementer).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
+    expect(reviewer?.HOME).toBe(paths.piWorkerDir('reviewer'));
+    expect(reviewer?.HOME).not.toBe(implementer?.HOME);
     expect(specs[0]?.acpFingerprint).toMatchObject({
       preset: 'pi',
       piRuntime: 'builtin',
     });
     expect(specs[0]?.acpFingerprint?.envDigest).toBe(
       computeAcpSpawnEnvDigest({
-        ...config.acp.env,
+        ...fingerprintEnv,
         ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+        HOME: paths.piWorkerDir('implementer'),
+        USERPROFILE: paths.piWorkerDir('implementer'),
         PI_CODING_AGENT_DIR: paths.piUserDir,
         PI_CODING_AGENT_SESSION_DIR:
           paths.piWorkerSessionsDir('implementer'),
-        PI_ACP_SESSION_MAP_PATH: paths.piWorkerSessionMapPath('implementer'),
         PI_ACP_PI_COMMAND: implementer?.PI_ACP_PI_COMMAND ?? '',
       }),
     );
@@ -809,28 +809,31 @@ describe('profileWorkersToSessionSpecs', () => {
     const paths = resolveEnsemblePaths({ repoRoot });
     const implementer = specs[0]?.spawn?.env;
     const reviewer = specs[1]?.spawn?.env;
+    const fingerprintEnv = { ...config.acp.env };
+    delete fingerprintEnv.PI_ACP_SESSION_MAP_PATH;
 
     expect(implementer).toMatchObject({
+      HOME: paths.piWorkerDir('implementer'),
+      USERPROFILE: paths.piWorkerDir('implementer'),
       PI_CODING_AGENT_DIR: agentDir,
       PI_CODING_AGENT_SESSION_DIR:
         paths.piWorkerSessionsDir('implementer'),
-      PI_ACP_SESSION_MAP_PATH:
-        paths.piWorkerSessionMapPath('implementer'),
     });
     expect(reviewer?.PI_CODING_AGENT_DIR).toBe(agentDir);
     expect(reviewer?.PI_CODING_AGENT_SESSION_DIR).toBe(
       paths.piWorkerSessionsDir('reviewer'),
     );
-    expect(implementer?.PI_ACP_SESSION_MAP_PATH).not.toBe(
-      reviewer?.PI_ACP_SESSION_MAP_PATH,
-    );
+    expect(reviewer?.HOME).toBe(paths.piWorkerDir('reviewer'));
+    expect(reviewer?.HOME).not.toBe(implementer?.HOME);
     expect(specs[0]?.acpFingerprint?.envDigest).toBe(
       computeAcpSpawnEnvDigest({
-        PI_CODING_AGENT_DIR: agentDir,
+        ...fingerprintEnv,
         ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+        HOME: paths.piWorkerDir('implementer'),
+        USERPROFILE: paths.piWorkerDir('implementer'),
+        PI_CODING_AGENT_DIR: agentDir,
         PI_CODING_AGENT_SESSION_DIR:
           paths.piWorkerSessionsDir('implementer'),
-        PI_ACP_SESSION_MAP_PATH: paths.piWorkerSessionMapPath('implementer'),
         PI_ACP_PI_COMMAND: implementer?.PI_ACP_PI_COMMAND ?? '',
       }),
     );

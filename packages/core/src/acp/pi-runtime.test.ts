@@ -1,11 +1,12 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertBuiltinPiNodeVersionSupported,
   isBuiltinPiNodeVersionSupported,
+  resolveBuiltinPiAcpWrapperPath,
   resolveBundledPiCliPath,
 } from './pi-runtime.js';
 
@@ -61,5 +62,17 @@ describe('builtin Pi runtime', () => {
     await writeFile(callerPath, '');
 
     expect(resolveBundledPiCliPath(pathToFileURL(callerPath))).toBe(cliPath);
+  });
+
+  it('resolves the core wrapper from the published dist layout', () => {
+    const packageDirectory = resolve(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '..',
+    );
+
+    expect(resolveBuiltinPiAcpWrapperPath()).toBe(
+      join(packageDirectory, 'dist', 'acp', 'pi-acp-wrapper.js'),
+    );
   });
 });

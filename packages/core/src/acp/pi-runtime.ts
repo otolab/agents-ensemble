@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import type { ResolvedAcpSpawn } from './resolve-acp-spawn.js';
 
@@ -94,9 +95,21 @@ export function resolveBundledPiCliPath(
   return binPath;
 }
 
+/** Resolve the core-owned wrapper shipped beside the compiled ACP runtime. */
+export function resolveBuiltinPiAcpWrapperPath(
+  fromModuleUrl: string | URL = import.meta.url,
+): string {
+  const packageDirectory = resolve(
+    dirname(fileURLToPath(fromModuleUrl)),
+    '..',
+    '..',
+  );
+  return join(packageDirectory, 'dist', 'acp', 'pi-acp-wrapper.js');
+}
+
 /**
- * Add per-worker user-layer storage and the bundled Pi CLI to a builtin Pi
- * spawn. Internal paths intentionally override matching values in acp.env.
+ * Add per-worker home / transcript storage and the configured Pi resource
+ * root to a builtin Pi spawn. Internal paths override matching acp.env values.
  */
 export function configurePiWorkerRuntime(
   spawn: ResolvedAcpSpawn,
@@ -106,16 +119,21 @@ export function configurePiWorkerRuntime(
 
   assertBuiltinPiNodeVersionSupported();
   const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
+  const workerHome = paths.piWorkerDir(input.workerName);
+  const env = { ...(spawn.env ?? {}) };
+  // Upstream pi-acp has no map path override; HOME determines its map location.
+  delete env.PI_ACP_SESSION_MAP_PATH;
   return {
     ...spawn,
     env: {
-      ...(spawn.env ?? {}),
+      ...env,
       ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+      HOME: workerHome,
+      USERPROFILE: workerHome,
       PI_CODING_AGENT_DIR: input.agentDir ?? paths.piUserDir,
       PI_CODING_AGENT_SESSION_DIR: paths.piWorkerSessionsDir(
         input.workerName,
       ),
-      PI_ACP_SESSION_MAP_PATH: paths.piWorkerSessionMapPath(input.workerName),
       PI_ACP_PI_COMMAND: resolveBundledPiCliPath(),
     },
   };

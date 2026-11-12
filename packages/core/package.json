@@ -37,20 +37,21 @@
     "vitest": "3.2.4"
   },
   "dependencies": {
-    "@agents-ensemble/builtin-pi-acp": "workspace:*",
     "@cursor/sdk": "1.0.27",
     "@earendil-works/pi-agent-core": "1.2.0",
     "@earendil-works/pi-ai": "1.2.0",
     "@earendil-works/pi-codemode": "1.2.0",
     "@earendil-works/pi-coding-agent": "1.2.0",
     "@modular-prompt/core": "0.3.0",
-    "js-yaml": "4.1.0"
+    "js-yaml": "4.1.0",
+    "pi-acp": "0.0.34"
   },
   "optionalDependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.70.0",
     "@agentclientprotocol/codex-acp": "2.3.0"
   },
   "files": [
+    "assets",
     "dist"
   ],
   "publishConfig": {

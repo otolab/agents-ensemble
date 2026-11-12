@@ -1,6 +1,6 @@
 # リリース手順
 
-> **参照:** `@agents-ensemble/core`、`@agents-ensemble/cli`、`@agents-ensemble/operator-agent`、`@agents-ensemble/builtin-pi-acp` の changeset・Release PR・npm 公開手順。
+> **参照:** `@agents-ensemble/core`、`@agents-ensemble/cli`、`@agents-ensemble/operator-agent` の changeset・Release PR・npm 公開手順。
 
 フローは [modular-prompt](https://github.com/otolab/modular-prompt) を踏襲する。
 
@@ -28,7 +28,7 @@
 pnpm changeset
 ```
 
-`@agents-ensemble/core` と `@agents-ensemble/cli` は **fixed** グループのため、常に同じバージョンでリリースされる。`@agents-ensemble/operator-agent` と `@agents-ensemble/builtin-pi-acp` は独立したバージョンで管理する。新しい public package も `packages/*` を走査する publish step の対象になる。
+`@agents-ensemble/core` と `@agents-ensemble/cli` は **fixed** グループのため、常に同じバージョンでリリースされる。`@agents-ensemble/operator-agent` は独立したバージョンで管理する。新しい public package も `packages/*` を走査する publish step の対象になる。
 
 CI の `changeset-check` が PR に changeset の有無を検証する。ドキュメントのみの変更などでスキップする場合は、コミットメッセージに `[skip-changeset]` を含める。
 
@@ -110,7 +110,7 @@ npm view @agents-ensemble/core version
 
 ## 初回 npm 公開
 
-初回は npm 側の Trusted Publisher 設定が必要。公開する package ごとに次を設定する。`@agents-ensemble/builtin-pi-acp` も個別に設定する。
+初回は npm 側の Trusted Publisher 設定が必要。公開する agents-ensemble package ごとに次を設定する。
 
 1. [npmjs.com](https://www.npmjs.com/) でパッケージを作成（空で可）
 2. Settings → Publishing access → Trusted publishers

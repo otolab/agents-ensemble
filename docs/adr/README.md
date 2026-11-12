@@ -90,7 +90,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0016](0016-bootstrap-permission-conductor-wait.md) | bootstrap 中 permission と conductor 自律待機のデッドロック | accepted |
 | [0017](0017-conductor-send-lifecycle-events.md) | conductor send ライフサイクルイベントと Driver 非同期化 | accepted |
 | [0018](0018-team-profile-four-layer-resolution.md) | team-profile の 4 層配置と名前解決 | accepted |
-| [0019](0019-worker-acp-cli-presets.md) | Worker ACP CLI preset とデフォルト解決 | superseded in part → [0061](0061-builtin-pi-acp-runtime.md)（Pi ACP の package / runtime 選択のみ） |
+| [0019](0019-worker-acp-cli-presets.md) | Worker ACP CLI preset とデフォルト解決 | superseded in part → [0062](0062-pi-acp-upstream-package-wrapper.md)（Pi ACP の package / runtime 選択のみ） |
 | [0020](0020-ensemble-config-setting-resolution.md) | ensemble config.yaml の設定解決順（Phase 1） | accepted |
 | [0021](0021-conductor-mcp-config-resolution.md) | conductor MCP 設定の 2 層解決と inline 配線 | accepted |
 | [0022](0022-tui-resize-workaround.md) | TUI resize workaround と Ink 回帰監視 | superseded → [0024](0024-tui-shrink-coalesce.md) |
@@ -132,7 +132,8 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0058](0058-pi-send-recovery-replay-boundary.md) | Pi send recovery の再送境界 | superseded → [0059](0059-pi-recovery-report-after-manual-reconnect.md) |
 | [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0060](0060-pi-recovery-operator-inbox.md) |
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | accepted |
-| [0061](0061-builtin-pi-acp-runtime.md) | Pi ACP adapter の内蔵と BYO / builtin runtime | accepted |
+| [0061](0061-builtin-pi-acp-runtime.md) | Pi ACP adapter の内蔵と BYO / builtin runtime | superseded → [0062](0062-pi-acp-upstream-package-wrapper.md) |
+| [0062](0062-pi-acp-upstream-package-wrapper.md) | Pi ACP upstream npm dependency と core wrapper | accepted |
 
 ## 追加するとき
 

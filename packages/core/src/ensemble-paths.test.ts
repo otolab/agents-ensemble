@@ -34,6 +34,14 @@ describe('resolveEnsemblePaths', () => {
       join(paths.piWorkerDir('implementer'), 'sessions'),
     );
     expect(paths.piWorkerSessionMapPath('implementer')).toBe(
+      join(
+        paths.piWorkerDir('implementer'),
+        '.pi',
+        'pi-acp',
+        'session-map.json',
+      ),
+    );
+    expect(paths.legacyPiWorkerSessionMapPath('implementer')).toBe(
       join(paths.piWorkerDir('implementer'), 'session-map.json'),
     );
     const unsafeWorkerDirectory = paths.piWorkerDir('../../outside');

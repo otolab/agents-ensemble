@@ -222,11 +222,32 @@ async function readPiAcpSessionHistory(
           input.workerName,
         )
       : join(homedir(), '.pi', 'pi-acp', 'session-map.json');
-  let raw: string;
-  try {
-    raw = await readFile(sessionMapPath, 'utf8');
-  } catch (error) {
-    if (isEnoent(error)) {
+  const sessionMapPaths =
+    input.piRuntime === 'builtin'
+      ? [
+          sessionMapPath,
+          resolveEnsemblePaths({
+            repoRoot: input.repoRoot,
+          }).legacyPiWorkerSessionMapPath(input.workerName),
+        ]
+      : [sessionMapPath];
+  let raw: string | undefined;
+  let lastReadError: unknown;
+  for (const path of sessionMapPaths) {
+    try {
+      raw = await readFile(path, 'utf8');
+      break;
+    } catch (error) {
+      lastReadError = error;
+      if (!isEnoent(error)) {
+        throw new WorkerSessionHistoryUnavailableError(
+          'Pi ACP の session map を読み取れませんでした。',
+        );
+      }
+    }
+  }
+  if (raw === undefined) {
+    if (isEnoent(lastReadError)) {
       throw new WorkerSessionHistoryUnavailableError(
         'Pi ACP の session map が見つかりません。',
       );

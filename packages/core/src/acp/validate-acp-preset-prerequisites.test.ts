@@ -78,7 +78,7 @@ describe('validate-acp-preset-prerequisites', () => {
 
   it('does not require a PATH pi CLI for the builtin runtime', () => {
     vi.spyOn(bundledModule, 'resolveBundledAcpBin').mockReturnValue(
-      '/opt/builtin-pi-acp',
+      '/opt/pi-acp/dist/index.js',
     );
     vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue(undefined);
     vi.spyOn(
@@ -97,6 +97,61 @@ describe('validate-acp-preset-prerequisites', () => {
         piRuntime: 'builtin',
       }),
     ).not.toThrow();
+  });
+
+  it('requires the upstream dependency inside core for the builtin wrapper', () => {
+    vi.spyOn(bundledModule, 'resolveBundledAcpBin').mockReturnValue(undefined);
+    vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue(
+      '/usr/local/bin/pi-acp',
+    );
+    vi.spyOn(
+      piRuntimeModule,
+      'assertBuiltinPiNodeVersionSupported',
+    ).mockImplementation(() => {});
+    vi.spyOn(piRuntimeModule, 'resolveBundledPiCliPath').mockReturnValue(
+      '/opt/pi-coding-agent/dist/cli.js',
+    );
+
+    expect(() =>
+      validateAcpPresetPrerequisites({
+        preset: 'pi',
+        command: 'pi-acp',
+        args: [],
+        piRuntime: 'builtin',
+      }),
+    ).toThrow(/builtin pi runtime.*core の upstream/u);
+  });
+
+  it('runs the core wrapper for the builtin runtime', () => {
+    vi.spyOn(bundledModule, 'resolveBundledAcpBin').mockReturnValue(
+      '/opt/pi-acp/dist/index.js',
+    );
+    vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue(undefined);
+    vi.spyOn(
+      piRuntimeModule,
+      'assertBuiltinPiNodeVersionSupported',
+    ).mockImplementation(() => {});
+    vi.spyOn(piRuntimeModule, 'resolveBundledPiCliPath').mockReturnValue(
+      '/opt/pi/dist/cli.js',
+    );
+    vi.spyOn(
+      piRuntimeModule,
+      'resolveBuiltinPiAcpWrapperPath',
+    ).mockReturnValue('/opt/core/dist/acp/pi-acp-wrapper.js');
+
+    expect(
+      finalizeResolvedAcpSpawn({
+        preset: 'pi',
+        command: 'pi-acp',
+        args: [],
+        piRuntime: 'builtin',
+      }),
+    ).toEqual({
+      preset: 'pi',
+      command: process.execPath,
+      args: ['/opt/core/dist/acp/pi-acp-wrapper.js'],
+      piRuntime: 'builtin',
+    });
   });
 
   it('finalizes spawn to an absolute executable path', () => {
