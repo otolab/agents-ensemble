@@ -54,6 +54,18 @@ export interface WorkerSessionHistoryResult
   worker: string;
   status: WorkerSessionHistoryReaderStatus;
   messages: WorkerSessionHistoryMessage[];
+  /** Absolute source transcript paths, returned only when explicitly requested. */
+  sourceFiles?: string[];
+}
+
+interface WorkerSessionHistoryReaderWithSources
+  extends WorkerSessionHistoryReader {
+  readWithSources(
+    input: WorkerSessionHistoryReaderInput,
+  ): Promise<{
+    messages: WorkerSessionHistoryMessage[];
+    sourceFiles: string[];
+  }>;
 }
 
 const PI_ACP_JSONL_READER_ID = 'pi-acp-jsonl';
@@ -63,14 +75,16 @@ const CODEX_UUID_PATTERN =
 
 const workerSessionHistoryReaders = new Map<
   string,
-  WorkerSessionHistoryReader
+  WorkerSessionHistoryReaderWithSources
 >([
   [
     'pi',
     {
       id: PI_ACP_JSONL_READER_ID,
       preset: 'pi',
-      read: readPiAcpSessionHistory,
+      read: async (input) =>
+        (await readPiAcpSessionHistoryWithSources(input)).messages,
+      readWithSources: readPiAcpSessionHistoryWithSources,
     },
   ],
   [
@@ -78,7 +92,9 @@ const workerSessionHistoryReaders = new Map<
     {
       id: CODEX_CLI_ROLLOUT_READER_ID,
       preset: 'codex',
-      read: readCodexAcpSessionHistory,
+      read: async (input) =>
+        (await readCodexAcpSessionHistoryWithSources(input)).messages,
+      readWithSources: readCodexAcpSessionHistoryWithSources,
     },
   ],
 ]);
@@ -116,6 +132,7 @@ export async function readWorkerSessionHistory(input: {
   repoRoot: string;
   conductorAgentId: string;
   workerName: string;
+  includeSourceFiles?: boolean;
 }): Promise<WorkerSessionHistoryResult> {
   const repoRoot = resolve(input.repoRoot);
   const conductorAgentId = requireNonEmpty(
@@ -147,7 +164,12 @@ export async function readWorkerSessionHistory(input: {
     ...support,
   };
   if (support.status === 'unsupported') {
-    return { ...base, status: 'unsupported', messages: [] };
+    return {
+      ...base,
+      status: 'unsupported',
+      messages: [],
+      ...(input.includeSourceFiles ? { sourceFiles: [] } : {}),
+    };
   }
 
   if (!support.preset) {
@@ -156,6 +178,7 @@ export async function readWorkerSessionHistory(input: {
       status: 'unsupported',
       reason: '対応 reader の ACP preset を解決できません。',
       messages: [],
+      ...(input.includeSourceFiles ? { sourceFiles: [] } : {}),
     };
   }
   const reader = workerSessionHistoryReaders.get(support.preset);
@@ -169,16 +192,30 @@ export async function readWorkerSessionHistory(input: {
       reason:
         'SessionResumeStore に worker ACP cwd がないため、transcript を照合できません。',
       messages: [],
+      ...(input.includeSourceFiles ? { sourceFiles: [] } : {}),
     };
   }
 
   try {
-    const messages = await reader.read({
+    const readerInput = {
       workerName,
       acpSessionId: worker.acpSessionId,
       acpCwd: worker.acpCwd,
-    });
-    return { ...base, status: 'supported', messages };
+    };
+    const result = input.includeSourceFiles
+      ? await reader.readWithSources(readerInput)
+      : {
+          messages: await reader.read(readerInput),
+          sourceFiles: [],
+        };
+    return {
+      ...base,
+      status: 'supported',
+      messages: result.messages,
+      ...(input.includeSourceFiles
+        ? { sourceFiles: result.sourceFiles }
+        : {}),
+    };
   } catch (error) {
     if (!(error instanceof WorkerSessionHistoryUnavailableError)) {
       throw error;
@@ -188,6 +225,7 @@ export async function readWorkerSessionHistory(input: {
       status: 'unavailable',
       reason: error.message,
       messages: [],
+      ...(input.includeSourceFiles ? { sourceFiles: [] } : {}),
     };
   }
 }
@@ -205,9 +243,12 @@ interface PiAcpSessionMapEntry {
   sessionFile: string;
 }
 
-async function readPiAcpSessionHistory(
+async function readPiAcpSessionHistoryWithSources(
   input: WorkerSessionHistoryReaderInput,
-): Promise<WorkerSessionHistoryMessage[]> {
+): Promise<{
+  messages: WorkerSessionHistoryMessage[];
+  sourceFiles: string[];
+}> {
   const sessionMapPath = join(
     homedir(),
     '.pi',
@@ -334,8 +375,8 @@ async function readPiAcpSessionHistory(
     );
   }
 
-  return branch
-    .flatMap((entry): WorkerSessionHistoryMessage[] => {
+  return {
+    messages: branch.flatMap((entry): WorkerSessionHistoryMessage[] => {
       if (!isSessionMessageEntry(entry)) return [];
       const role = entry.message.role;
       if (role !== 'user' && role !== 'assistant') return [];
@@ -351,12 +392,17 @@ async function readPiAcpSessionHistory(
           text,
         },
       ];
-    });
+    }),
+    sourceFiles: [session.sessionFile],
+  };
 }
 
-async function readCodexAcpSessionHistory(
+async function readCodexAcpSessionHistoryWithSources(
   input: WorkerSessionHistoryReaderInput,
-): Promise<WorkerSessionHistoryMessage[]> {
+): Promise<{
+  messages: WorkerSessionHistoryMessage[];
+  sourceFiles: string[];
+}> {
   const sessionId = input.acpSessionId.trim();
   if (!sessionId) {
     throw new WorkerSessionHistoryUnavailableError(
@@ -479,7 +525,10 @@ async function readCodexAcpSessionHistory(
         'Codex CLI rollout に有効な session_meta がありません。',
       );
     }
-    return messages;
+    return {
+      messages,
+      sourceFiles: [rolloutPath],
+    };
   } catch (error) {
     if (error instanceof WorkerSessionHistoryUnavailableError) throw error;
     throw new WorkerSessionHistoryUnavailableError(

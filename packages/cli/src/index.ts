@@ -8,6 +8,10 @@ import {
   listConductorModels,
   resolveIssueUrl,
 } from '@agents-ensemble/core';
+import {
+  exportSessionBundle,
+  type ExportSessionBundleResult,
+} from '@agents-ensemble/core/operator-runtime';
 import { readCliPackageVersion } from './cli-version.js';
 import { executeIssueCommand, issueCommandExitCode } from './issue-command.js';
 import { formatModelsListJson, formatModelsListNote, formatModelsListText } from './format-models-list.js';
@@ -80,6 +84,60 @@ const session = program
   .command('session')
   .description(
     'Read saved conductor and worker session data without starting an agent',
+  );
+
+session
+  .command('export')
+  .description(
+    'Export a raw saved session bundle for offline analysis (may contain secrets)',
+  )
+  .argument('<conductorAgentId>', 'Conductor session id')
+  .requiredOption('--output <dir>', 'Create a new bundle directory at this path')
+  .option(
+    '--repo-root <path>',
+    'Repository root for saved sessions',
+    process.cwd(),
+  )
+  .option(
+    '--include-tool-calls',
+    'Include optional tool-call snapshot history when available',
+  )
+  .option('--summary <path>', 'Copy an existing SessionSummary JSON file')
+  .option('--harness-log <path>', 'Copy a captured harness stderr log')
+  .option('--json', 'Output the bundle result and manifest as JSON')
+  .action(
+    async (
+      conductorAgentId: string,
+      options: {
+        output: string;
+        repoRoot: string;
+        includeToolCalls?: boolean;
+        summary?: string;
+        harnessLog?: string;
+        json?: boolean;
+      },
+    ) => {
+      try {
+        const result = await exportSessionBundle({
+          repoRoot: options.repoRoot,
+          conductorAgentId,
+          outputDirectory: options.output,
+          ensembleVersion: readCliPackageVersion(),
+          cliVersion: readCliPackageVersion(),
+          includeToolCalls: options.includeToolCalls,
+          summaryPath: options.summary,
+          harnessLogPath: options.harnessLog,
+        });
+        console.log(
+          options.json
+            ? JSON.stringify(result, null, 2)
+            : formatSessionExportText(result),
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    },
   );
 
 session
@@ -783,6 +841,20 @@ function parseSessionLimit(value: string): number {
 function parseSessionMessageOrder(value: string): 'asc' | 'desc' {
   if (value === 'asc' || value === 'desc') return value;
   throw new Error('order must be asc or desc.');
+}
+
+function formatSessionExportText(
+  result: ExportSessionBundleResult,
+): string {
+  return [
+    `出力先: ${result.outputDirectory}`,
+    `manifest: ${result.manifestPath}`,
+    `収録ファイル: ${result.fileCount}`,
+    `状態: ${result.status === 'complete' ? '完了' : '一部 source を取得できませんでした'}`,
+    ...(result.warnings.length > 0
+      ? ['警告:', ...result.warnings.map((warning) => `  - ${warning}`)]
+      : []),
+  ].join('\n');
 }
 
 program.parse();
