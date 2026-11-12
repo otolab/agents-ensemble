@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as bundledModule from './resolve-bundled-acp-bin.js';
+import * as piRuntimeModule from './pi-runtime.js';
 import {
   AcpPresetPrerequisiteError,
   finalizeResolvedAcpSpawn,
@@ -58,7 +59,7 @@ describe('validate-acp-preset-prerequisites', () => {
     ).toThrow(/Cursor Agent CLI/);
   });
 
-  it('throws a separate message when pi CLI is missing', () => {
+  it('requires a PATH pi CLI for the default BYO runtime', () => {
     vi.spyOn(bundledModule, 'resolveBundledAcpBin').mockReturnValue(
       '/opt/pi-acp',
     );
@@ -73,6 +74,29 @@ describe('validate-acp-preset-prerequisites', () => {
         args: [],
       }),
     ).toThrow(/`pi` CLI/);
+  });
+
+  it('does not require a PATH pi CLI for the builtin runtime', () => {
+    vi.spyOn(bundledModule, 'resolveBundledAcpBin').mockReturnValue(
+      '/opt/builtin-pi-acp',
+    );
+    vi.spyOn(bundledModule, 'resolveAcpBinFromPath').mockReturnValue(undefined);
+    vi.spyOn(
+      piRuntimeModule,
+      'assertBuiltinPiNodeVersionSupported',
+    ).mockImplementation(() => {});
+    vi.spyOn(piRuntimeModule, 'resolveBundledPiCliPath').mockReturnValue(
+      '/opt/pi-coding-agent/dist/cli.js',
+    );
+
+    expect(() =>
+      validateAcpPresetPrerequisites({
+        preset: 'pi',
+        command: 'pi-acp',
+        args: [],
+        piRuntime: 'builtin',
+      }),
+    ).not.toThrow();
   });
 
   it('finalizes spawn to an absolute executable path', () => {

@@ -884,6 +884,44 @@ describe('ensemble session commands', () => {
     ]);
   });
 
+  it('reads builtin Pi ACP worker messages from the user-scoped path', async () => {
+    await writeResumeStore({
+      preset: 'pi',
+      acpCwd: WORKER_PI_CWD,
+      acpSessionId: WORKER_PI_SESSION_ID,
+      piRuntime: 'builtin',
+    });
+    await writePiAcpWorkerHistory({ runtime: 'builtin' });
+
+    const result = runCli([
+      'session',
+      'workers',
+      'messages',
+      conductorAgentId,
+      '--worker',
+      'implementer',
+      '--repo-root',
+      repoRoot,
+      '--json',
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      worker: 'implementer',
+      preset: 'pi',
+      reader: 'pi-acp-jsonl',
+      status: 'supported',
+      messages: [
+        {
+          role: 'user',
+          text: 'Earlier worker request remains on the active branch.',
+        },
+        { role: 'user', text: 'Pi ACP fixture user message.' },
+        { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
+      ],
+    });
+  });
+
   it('reads Codex ACP worker messages and reports support in session show', async () => {
     await writeResumeStore({
       preset: 'codex',
@@ -1074,6 +1112,7 @@ describe('ensemble session commands', () => {
       preset?: 'pi' | 'codex' | 'custom';
       acpCwd?: string;
       acpSessionId?: string;
+      piRuntime?: 'builtin';
       issueUrl?: string;
     } = {},
   ): Promise<void> {
@@ -1116,6 +1155,9 @@ describe('ensemble session commands', () => {
                       modelProviderDigest: CODEX_MODEL_PROVIDER_DIGEST_SECRET,
                     }
                   : {}),
+                ...(options.piRuntime
+                  ? { piRuntime: options.piRuntime }
+                  : {}),
               },
             },
           },
@@ -1135,14 +1177,26 @@ describe('ensemble session commands', () => {
     );
   }
 
-  async function writePiAcpWorkerHistory(): Promise<void> {
-    const transcriptPath = join(
-      homeRoot,
-      '.pi',
-      'agent',
-      'sessions',
-      'pi-acp-worker-session.jsonl',
-    );
+  async function writePiAcpWorkerHistory(options?: {
+    runtime?: 'builtin';
+  }): Promise<void> {
+    const paths = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+    });
+    const transcriptPath =
+      options?.runtime === 'builtin'
+        ? join(
+            paths.piWorkerSessionsDir('implementer'),
+            'pi-acp-worker-session.jsonl',
+          )
+        : join(
+            homeRoot,
+            '.pi',
+            'agent',
+            'sessions',
+            'pi-acp-worker-session.jsonl',
+          );
     await mkdir(dirname(transcriptPath), { recursive: true });
     await copyFile(
       fileURLToPath(
@@ -1154,7 +1208,10 @@ describe('ensemble session commands', () => {
       transcriptPath,
     );
 
-    const mapPath = join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
+    const mapPath =
+      options?.runtime === 'builtin'
+        ? paths.piWorkerSessionMapPath('implementer')
+        : join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
     await mkdir(dirname(mapPath), { recursive: true });
     await writeFile(
       mapPath,

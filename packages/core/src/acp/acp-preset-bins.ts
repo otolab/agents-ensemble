@@ -1,7 +1,7 @@
 import type { BuiltinAcpPresetId } from './resolve-acp-spawn.js';
 
-/** built-in preset の optionalDependencies と bin 名。cursor は bundled なし。 */
-export const ACP_PRESET_OPTIONAL_PACKAGES: Record<
+/** preset ごとの同梱 adapter package と bin 名。cursor は bundled なし。 */
+export const ACP_PRESET_ADAPTER_PACKAGES: Record<
   Exclude<BuiltinAcpPresetId, 'cursor'>,
   { packageName: string; binName: string }
 > = {
@@ -14,7 +14,7 @@ export const ACP_PRESET_OPTIONAL_PACKAGES: Record<
     binName: 'codex-acp',
   },
   pi: {
-    packageName: 'pi-acp',
+    packageName: '@agents-ensemble/builtin-pi-acp',
     binName: 'pi-acp',
   },
 };
@@ -26,7 +26,7 @@ export const ACP_PRESET_BIN_NAMES: Record<BuiltinAcpPresetId, string> = {
   pi: 'pi-acp',
 };
 
-/** pi preset が spawn 前に PATH 上で必要とする外部 CLI。 */
+/** BYO runtime の pi preset が spawn 前に PATH 上で必要とする外部 CLI。 */
 export const ACP_PRESET_EXTERNAL_CLI: Partial<Record<BuiltinAcpPresetId, string>> = {
   cursor: 'agent',
   pi: 'pi',

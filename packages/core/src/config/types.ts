@@ -16,6 +16,13 @@ export type ConductorBackend = 'cursor' | 'pi';
 /** ACP worker model tiers selected by each team-profile worker entry. */
 export type AcpModelTag = 'high' | 'default' | 'low' | 'fast';
 
+export type AcpPiRuntime = 'byo' | 'builtin';
+
+export interface EnsembleAcpPiConfig {
+  /** `pi` worker の実行・保存先。既定は既存の BYO runtime。 */
+  runtime?: AcpPiRuntime;
+}
+
 /** Model catalog entry after all config layers have been merged. */
 export interface AcpModelDefinition {
   model: string;
@@ -52,6 +59,8 @@ export interface EnsembleConductorConfig {
 export interface EnsembleAcpConfig {
   /** 全 worker に適用する built-in preset。 */
   defaultPreset: BuiltinAcpPresetId;
+  /** Pi worker 専用の runtime 選択。省略時は従来の BYO。 */
+  pi?: EnsembleAcpPiConfig;
   /** codex-acp 等の子プロセス spawn に渡す env（user → project deep merge）。 */
   env?: Record<string, string>;
   /** 環境ごとの ACP model catalog。tag mapping から参照する。 */

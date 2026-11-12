@@ -325,6 +325,47 @@ describe('SessionResumeStore', () => {
     });
   });
 
+  it('persists the builtin Pi runtime marker in worker fingerprints', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-builtin-pi-');
+    const path = sessionResumeStorePath({
+      repoRoot: tempDir,
+      conductorAgentId: 'agent-builtin-pi',
+    });
+    const resumeStore = baseResumeStore({
+      conductorAgentId: 'agent-builtin-pi',
+      repoRoot: tempDir,
+      workers: {
+        implementer: {
+          acpSessionId: 'sess-builtin-pi',
+          acpCwd: '/repo/worktree',
+          acpSpawn: {
+            preset: 'pi',
+            command: '/core/node_modules/builtin-pi-acp/dist/index.js',
+            args: [],
+            piRuntime: 'builtin',
+          },
+        },
+      },
+    });
+
+    await saveSessionResumeStore(path, resumeStore);
+
+    await expect(loadSessionResumeStore(path)).resolves.toMatchObject({
+      workers: {
+        implementer: {
+          acpSpawn: {
+            preset: 'pi',
+            piRuntime: 'builtin',
+          },
+        },
+      },
+    });
+    expect(
+      JSON.parse(await readFile(path, 'utf8')).workers.implementer.acpSpawn
+        .piRuntime,
+    ).toBe('builtin');
+  });
+
   it('round-trips an explicitly configured Cursor fast mode, including false', async () => {
     tempDir = await createHome('ensemble-session-resume-store-cursor-fast-');
     const path = sessionResumeStorePath({

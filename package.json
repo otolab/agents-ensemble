@@ -11,8 +11,8 @@
   "license": "MIT",
   "packageManager": "pnpm@10.33.4",
   "scripts": {
-    "build": "tsc --build",
-    "type-check": "tsc --build --emitDeclarationOnly",
+    "build": "pnpm --filter @agents-ensemble/builtin-pi-acp build && tsc --build",
+    "type-check": "pnpm --filter @agents-ensemble/builtin-pi-acp typecheck && tsc --build --emitDeclarationOnly",
     "ensemble": "node packages/cli/dist/index.js",
     "test": "pnpm --filter @agents-ensemble/core test",
     "test:run": "node --test scripts/migrate-project-ensemble-runtime-to-user.test.mjs && pnpm -r --if-present test:run",

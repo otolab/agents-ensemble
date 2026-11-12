@@ -9,6 +9,8 @@ import {
   parseSessionEntries,
   type SessionMessageEntry,
 } from '@earendil-works/pi-coding-agent';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import type { PiAcpRuntimeMarker } from '../acp/resolve-acp-spawn.js';
 import { findSessionResumeStore } from './session-resume-store.js';
 
 export type WorkerSessionHistoryMessageRole = 'user' | 'assistant';
@@ -34,9 +36,11 @@ export interface WorkerSessionHistoryReaderSupport {
 }
 
 export interface WorkerSessionHistoryReaderInput {
+  repoRoot: string;
   workerName: string;
   acpSessionId: string;
   acpCwd: string;
+  piRuntime?: PiAcpRuntimeMarker;
 }
 
 /** Adapter contract for reading a provider's local worker transcript. */
@@ -174,9 +178,13 @@ export async function readWorkerSessionHistory(input: {
 
   try {
     const messages = await reader.read({
+      repoRoot,
       workerName,
       acpSessionId: worker.acpSessionId,
       acpCwd: worker.acpCwd,
+      ...(worker.acpSpawn?.piRuntime
+        ? { piRuntime: worker.acpSpawn.piRuntime }
+        : {}),
     });
     return { ...base, status: 'supported', messages };
   } catch (error) {
@@ -208,12 +216,12 @@ interface PiAcpSessionMapEntry {
 async function readPiAcpSessionHistory(
   input: WorkerSessionHistoryReaderInput,
 ): Promise<WorkerSessionHistoryMessage[]> {
-  const sessionMapPath = join(
-    homedir(),
-    '.pi',
-    'pi-acp',
-    'session-map.json',
-  );
+  const sessionMapPath =
+    input.piRuntime === 'builtin'
+      ? resolveEnsemblePaths({ repoRoot: input.repoRoot }).piWorkerSessionMapPath(
+          input.workerName,
+        )
+      : join(homedir(), '.pi', 'pi-acp', 'session-map.json');
   let raw: string;
   try {
     raw = await readFile(sessionMapPath, 'utf8');

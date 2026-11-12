@@ -211,6 +211,18 @@ describe('parseEnsembleConfig', () => {
     });
   });
 
+  it('preserves explicit Pi BYO and builtin runtime values while parsing config layers', () => {
+    expect(
+      parseEnsembleConfig({ acp: { pi: { runtime: 'builtin' } } }),
+    ).toEqual({ acp: { pi: { runtime: 'builtin' } } });
+    expect(
+      parseEnsembleConfig({ acp: { pi: { runtime: 'byo' } } }),
+    ).toEqual({ acp: { pi: { runtime: 'byo' } } });
+    expect(() =>
+      parseEnsembleConfig({ acp: { pi: { runtime: 'unknown' } } }),
+    ).toThrow(/acp\.pi\.runtime must be "byo" or "builtin"/);
+  });
+
   it('ignores invalid tui values', () => {
     expect(
       parseEnsembleConfig({
@@ -330,6 +342,33 @@ describe('loadEnsembleConfig', () => {
 
     expect(config.conductor.model).toBe('project-model');
     expect(config.conductor.backend).toBe('pi');
+  });
+
+  it('lets project BYO override user builtin while preserving the default digest', async () => {
+    await writeConfig(userEnsembleRoot, 'acp:\n  pi:\n    runtime: builtin\n');
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      'acp:\n  pi:\n    runtime: byo\n',
+    );
+
+    const config = await loadConfig();
+
+    expect(config.acp.pi).toBeUndefined();
+    expect(computeEnsembleConfigDigest(config)).toBe(
+      computeEnsembleConfigDigest(DEFAULT_ENSEMBLE_CONFIG),
+    );
+  });
+
+  it('lets project builtin override user BYO', async () => {
+    await writeConfig(userEnsembleRoot, 'acp:\n  pi:\n    runtime: byo\n');
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      'acp:\n  pi:\n    runtime: builtin\n',
+    );
+
+    const config = await loadConfig();
+
+    expect(config.acp.pi).toEqual({ runtime: 'builtin' });
   });
 
   it('deep merges acp env across user and project config', async () => {

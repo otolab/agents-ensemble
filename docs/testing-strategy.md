@@ -93,7 +93,7 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | `acp-bridge.integration.test.ts` の `describe.skipIf` | `test-acp.yaml` がない場合、または設定された `agentCommand`（省略時は PATH 上の `agent`）を見つけられない・実行できない場合、実 ACP backend を起動できない。skip 時は不足条件を suite 名に表示する | example からローカル設定を作り、`agentCommand` を PATH 上に用意するか実行可能なパスに設定して、該当 suite を実行 |
 | `issue.e2e.test.ts` の `describe.skipIf` | Issue / repository 設定または conductor 認証がない場合、Issue workflow を実行できない | `test-acp.yaml` と認証を設定して `pnpm test:e2e` を実行 |
 | `cli-version.test.ts` の `describe.skipIf` | package 単独の unit 実行時に build artifact がない場合、dist CLI を起動できない | `pnpm build` 後に再実行。CI は build 済みのためこの skip に入らない |
-| `resolve-bundled-acp-bin.test.ts` の optional preset ごとの `describe.skipIf` | 対応する ACP optional dependency がインストールされていない場合、その package 内の実行ファイル解決だけは確認できない。optional package 不在時の fallback は別テストで検証する | optional dependency を含めて `pnpm install` し、対象 workspace の unit suite を再実行 |
+| `resolve-bundled-acp-bin.test.ts` の Claude / Codex optional preset ごとの `describe.skipIf` | 対応する ACP optional dependency がインストールされていない場合、その package 内の実行ファイル解決だけは確認できない。Pi adapter は通常 dependency のため常時検証する | optional dependency を含めて `pnpm install` し、対象 workspace の unit suite を再実行 |
 | CLI TTY e2e の Windows `skipIf` | Python 標準 `pty` と POSIX process group に依存し、Windows では同じ PTY 条件を提供できない | Python 3 `pty` を備えた POSIX 環境で実行。CI は Ubuntu |
 | `scripts/pi/cached-auth.test.mjs` の Linux 条件 skip | PID namespace / procfs の Linux 挙動を直接検証する2ケース | Linux 上で `node --test scripts/pi/cached-auth.test.mjs` を実行。CI 導入・対応は Issue #475 |
 
@@ -106,18 +106,18 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | CI step | 実行対象 |
 |---------|----------|
 | Build | `pnpm build` |
-| Unit tests | `pnpm test:run` — core / cli / operator-agent の全 unit suite |
+| Unit tests | `pnpm test:run` — core / cli / operator-agent / builtin-pi-acp の全 unit suite |
 | Release workflow tests | `pnpm test:release-workflow` — `.github/scripts` の Node test |
 | Session resume integration | `test/integration/session-resume.integration.test.ts` |
 | Codex model reasoning integration | `test/integration/codex-model-reasoning.integration.test.ts` |
-| Claude and Pi worker ACP adapter integration tests | `test/integration/worker-model-reasoning-adapters.integration.test.ts`（Claude ACP 0.70.0 / `pi-acp` 0.0.33） |
+| Claude and Pi worker ACP adapter integration tests | `test/integration/worker-model-reasoning-adapters.integration.test.ts`（Claude ACP 0.70.0 / 内蔵 `@agents-ensemble/builtin-pi-acp`。上流 `pi-acp` v0.0.33 ベース） |
 | Operator usage integration | `test/integration/usage-operator.integration.test.ts` |
 | Pi conductor integration | `pi-conductor.integration.test.ts`、`pi-headless-settings.integration.test.ts`、`pi-conductor-agent-registry.integration.test.ts` |
 | CLI TTY e2e | `tty-close-process.e2e.test.ts`、`issue-pi-tty-exit.e2e.test.ts`、`issue-pi-tty-close.e2e.test.ts` |
 
 常時実行の integration / e2e は Fake、ローカル fixture、または隔離された Codex を使い、Cursor / GitHub 認証や `test-acp.yaml` を要求しない。PTY suite には Ubuntu runner 上の Python 3 `pty`、POSIX process group、Git が必要であり、Pi TTY suites は localhost bind も使う。Issue workflow 全体、外部サービスへ接続する実 ACP、実 Cursor SDK の suite は通常 CI の対象外。`.github/scripts` の Node tests は対象だが、`scripts/pi/cached-auth.test.mjs` は対象外である。
 
-Claude / Pi worker adapter suite は、依存関係 install 後に core workspace から optional adapter package の `@agentclientprotocol/claude-agent-acp/dist/index.js` と `pi-acp` の両方が `import.meta.resolve` できることを CI step が確認してから実行する。suite は実 adapter と fake Claude SDK / Pi CLI を使い、`session/new`・`session/load` 時に model と推論レベル（Claude の `effortLevel` / Pi の `thinkingLevel`）が適用されることを確かめる。LLM 呼び出しや provider 認証は不要。CI は Ubuntu / Node.js 22 で両方を実行する。ローカルで adapter package がない場合は該当 suite を skip し、Pi suite は Windows でも skip する。
+Claude / Pi worker adapter suite は、依存関係 install 後に core workspace から Claude の optional adapter `@agentclientprotocol/claude-agent-acp/dist/index.js` と通常 dependency の `@agents-ensemble/builtin-pi-acp` を解決できることを CI step が確認してから実行する。suite は実 adapter と fake Claude SDK / Pi CLI を使い、`session/new`・`session/load` 時に model と推論レベル（Claude の `effortLevel` / Pi の `thinkingLevel`）が適用されることを確かめる。Pi は builtin runtime の経路で Pi CLI の PATH 設定なしに起動し、fake CLI を使うため provider への認証や実リクエストは不要です。通常利用時の Pi provider 認証条件は [Pi worker runtime](config.md#pi-worker-runtime) を参照してください。CI は Ubuntu / Node.js 22 で両方を実行する。Claude suite は optional adapter がないローカル環境で skip し、Pi suite は Windows で skip する。
 
 ## 参照
 

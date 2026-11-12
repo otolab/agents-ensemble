@@ -15,6 +15,7 @@ import {
   profileWorkersToSessionSpecs,
 } from '../profile/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
 
 describe('resolveDefaultAcpSpawn', () => {
   it('defaults to cursor agent acp', () => {
@@ -728,6 +729,64 @@ describe('profileWorkersToSessionSpecs', () => {
     });
   });
 
+  it('isolates builtin Pi user settings and worker logs, overriding acp.env paths', () => {
+    const repoRoot = '/tmp/builtin-pi-runtime-repo';
+    const config = {
+      acp: {
+        defaultPreset: 'pi',
+        pi: { runtime: 'builtin' },
+        env: {
+          ENSEMBLE_PI_BUILTIN_RUNTIME: '0',
+          PI_CODING_AGENT_DIR: '/custom/pi',
+          PI_CODING_AGENT_SESSION_DIR: '/custom/sessions',
+          PI_ACP_SESSION_MAP_PATH: '/custom/session-map.json',
+          PI_ACP_PI_COMMAND: '/custom/pi.js',
+        },
+      },
+    } as import('../config/types.js').EnsembleConfig;
+    const specs = profileWorkersToSessionSpecs(baseProfile, {
+      defaultAcp: { config, env: {} },
+      repoRoot,
+    });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const implementer = specs[0]?.spawn?.env;
+    const reviewer = specs[1]?.spawn?.env;
+
+    expect(implementer).toMatchObject({
+      ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+      PI_CODING_AGENT_DIR: paths.piUserDir,
+      PI_CODING_AGENT_SESSION_DIR:
+        paths.piWorkerSessionsDir('implementer'),
+      PI_ACP_SESSION_MAP_PATH:
+        paths.piWorkerSessionMapPath('implementer'),
+    });
+    expect(implementer?.PI_ACP_PI_COMMAND).toContain(
+      '@earendil-works/pi-coding-agent',
+    );
+    expect(implementer?.PI_ACP_PI_COMMAND).not.toBe('/custom/pi.js');
+    expect(reviewer?.PI_ACP_SESSION_MAP_PATH).toBe(
+      paths.piWorkerSessionMapPath('reviewer'),
+    );
+    expect(implementer?.PI_ACP_SESSION_MAP_PATH).not.toBe(
+      reviewer?.PI_ACP_SESSION_MAP_PATH,
+    );
+    expect(specs[0]?.acpFingerprint).toMatchObject({
+      preset: 'pi',
+      piRuntime: 'builtin',
+    });
+    expect(specs[0]?.acpFingerprint?.envDigest).toBe(
+      computeAcpSpawnEnvDigest({
+        ...config.acp.env,
+        ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+        PI_CODING_AGENT_DIR: paths.piUserDir,
+        PI_CODING_AGENT_SESSION_DIR:
+          paths.piWorkerSessionsDir('implementer'),
+        PI_ACP_SESSION_MAP_PATH: paths.piWorkerSessionMapPath('implementer'),
+        PI_ACP_PI_COMMAND: implementer?.PI_ACP_PI_COMMAND ?? '',
+      }),
+    );
+  });
+
   it('resolves different model tiers per worker while shorthand uses default', () => {
     const specs = profileWorkersToSessionSpecs(
       {
@@ -905,6 +964,25 @@ describe('acpSpawnFingerprint', () => {
 });
 
 describe('assertAcpSpawnMatchesResume', () => {
+  it('treats a missing Pi runtime marker as BYO and rejects runtime switches', () => {
+    const byo = {
+      preset: 'pi' as const,
+      command: 'pi-acp',
+      args: [],
+    };
+    const builtin = { ...byo, piRuntime: 'builtin' as const };
+
+    expect(() =>
+      assertAcpSpawnMatchesResume({ expected: byo, actual: byo }),
+    ).not.toThrow();
+    expect(() =>
+      assertAcpSpawnMatchesResume({ expected: byo, actual: builtin }),
+    ).toThrow(/Pi runtime differs/);
+    expect(() =>
+      assertAcpSpawnMatchesResume({ expected: builtin, actual: byo }),
+    ).toThrow(/Pi runtime differs/);
+  });
+
   it('records built-in model and env fields without using them to reject resume', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({

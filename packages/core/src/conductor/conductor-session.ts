@@ -41,6 +41,7 @@ import {
   resolveWorkerAcpSpawn,
   resolvedAcpSpawnToOptions,
 } from '../acp/resolve-acp-spawn.js';
+import { configurePiWorkerRuntime } from '../acp/pi-runtime.js';
 import {
   finalizeResolvedAcpSpawn,
   validateWorkerAcpPrerequisites,
@@ -846,6 +847,7 @@ async function runConductorSessionWithStartupGuard(
   const workers = profileWorkersToSessionSpecs(activeProfile, {
     defaultAcp: options.defaultAcp,
     spawnBase,
+    repoRoot: options.repoRoot,
   });
   if (workers.length > 0) {
     validateWorkerAcpPrerequisites(
@@ -856,7 +858,7 @@ async function runConductorSessionWithStartupGuard(
         }),
       ),
     );
-    finalizeSessionWorkerSpecs(workers, options.defaultAcp);
+    finalizeSessionWorkerSpecs(workers, options.repoRoot, options.defaultAcp);
   }
   const workerAcpFingerprints = new Map(
     workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
@@ -2662,6 +2664,7 @@ function attachLegacySessionCallbacks(
 
 function finalizeSessionWorkerSpecs(
   workers: SessionWorkerSpec[],
+  repoRoot: string,
   defaultAcp?: DefaultAcpResolutionOptions,
 ): void {
   for (const worker of workers) {
@@ -2669,7 +2672,14 @@ function finalizeSessionWorkerSpecs(
       defaultOptions: defaultAcp,
       modelTag: worker.modelTag,
     });
-    const finalized = finalizeResolvedAcpSpawn(resolved);
+    const sessionSpawn =
+      resolved.piRuntime === 'builtin'
+        ? configurePiWorkerRuntime(resolved, {
+            repoRoot,
+            workerName: worker.name,
+          })
+        : resolved;
+    const finalized = finalizeResolvedAcpSpawn(sessionSpawn);
     worker.spawn = resolvedAcpSpawnToOptions(finalized, worker.spawn);
     worker.acpFingerprint = acpSpawnFingerprint(finalized);
   }

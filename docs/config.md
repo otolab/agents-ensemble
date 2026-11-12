@@ -63,9 +63,9 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 #### resume と config 変更
 
-新しい session は SessionResumeStore に `ensembleConfigDigestScheme: resume-feasibility` と digest を記録します。この digest が比較するのは merge 後の `session.worktree` と `acp.defaultPreset` です（[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)）。
+新しい session は SessionResumeStore に `ensembleConfigDigestScheme: resume-feasibility` と digest を記録します。この digest が比較するのは merge 後の `session.worktree`、`acp.defaultPreset`、`acp.pi.runtime` です。BYO は既定値として省略し、従来の設定 digest を変えません。builtin と BYO の切り替えは resume を拒否します（[ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[ADR 0061](adr/0061-builtin-pi-acp-runtime.md)）。
 
-`acpModelConfigDigest` は `acp.env` / `acp.models` / `acp.tags` を hash し、worker の ACP spawn fingerprint は `modelTag`、解決済み model ID、reasoning、明示値の `cursorFast`、spawn env digest と Codex の実効 `MODEL_PROVIDER` digest を記録します。秘密の環境値は平文で保存しません。これらは診断用の記録であり、新しい `resume-feasibility` sidecar の resume 拒否には使いません。fingerprint では preset を照合し、`custom` のときだけ command / args も照合します（[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)）。
+`acpModelConfigDigest` は `acp.env` / `acp.models` / `acp.tags` を hash し、worker の ACP spawn fingerprint は `piRuntime`、`modelTag`、解決済み model ID、reasoning、明示値の `cursorFast`、spawn env digest と Codex の実効 `MODEL_PROVIDER` digest を記録します。秘密の環境値は平文で保存しません。model / reasoning / env の値は診断用で、新しい `resume-feasibility` sidecar の resume 拒否には使いません。fingerprint では preset を照合し、Pi は runtime の切り替えも検出します。`custom` のときは command / args も照合します（[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)、[ADR 0061](adr/0061-builtin-pi-acp-runtime.md)）。
 
 `conductor.model` と `conductor.reasoning` は `resume-feasibility` digest の対象外です。これらの config 値を変えても resume は拒否されず、再開時に最新の merged config を使います。Issue session の `--model` / `--reasoning` と `CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` は digest に含めず、resume ごとに再解決します。operator-agent は専用 CLI option を持たず、`CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` > merged config の順で解決します。
 
@@ -73,7 +73,7 @@ conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId`
 
 resume では model / reasoning を保存値に固定せず、CLI / 環境変数の invocation override と最新の merged config から毎回解決します。新しい `resume-feasibility` digest は `conductor.model` / `conductor.reasoning` を比較しません。scheme のない旧 sidecar と `full` sidecar は従来どおり config 全体を照合するため、変更が resume を拒否することがあります。
 
-ACP spawn fingerprint は model / reasoning / env 情報を記録しますが、その値の差は resume を拒否しません。照合するのは preset と、`custom` の場合の command / args です。sidecar profile の復元と worker `acpCwd` の照合、conductor backend、MCP digest、session identity の検証は引き続き行います。
+ACP spawn fingerprint の model / reasoning / env 情報の差は resume を拒否しません。preset は照合し、Pi は builtin / BYO の runtime marker も照合します。marker のない既存 Pi session は BYO として扱います。`custom` の場合は command / args も照合します。sidecar profile の復元と worker `acpCwd` の照合、conductor backend、MCP digest、session identity の検証は引き続き行います。
 
 scheme がない旧 sidecar と `full` sidecar は、従来の `EnsembleConfig` 全体 hash で比較します。そのため、config に含まれる model / reasoning / env を変えた場合も resume が拒否されることがあります。resume・再保存では旧 scheme と digest の意味を保ち、自動で v2 に読み替えません。scheme 省略 / `full` で digest がない旧 store は warning を出して全体 config の比較を省略し、欠如したまま保存します。旧 `resume-feasibility` store に `acpModelConfigDigest` がない場合は診断情報がない旨を warning で知らせますが、resume は許可し、digest もバックフィルしません。model-related field のない旧 fingerprint もそのまま引き継ぎ、比較に使いません。`resume-feasibility` digest がない sidecar と未知の scheme は不正データとして拒否します。
 
@@ -112,6 +112,8 @@ conductor:
 
 acp:
   defaultPreset: codex                # ENSEMBLE_DEFAULT_ACP_CLI 相当
+  pi:
+    runtime: byo                      # byo（既定）| builtin
   env:                                # codex-acp 子プロセス spawn に渡す env（選択された user config → project deep merge）
     MODEL_PROVIDER: litellm           # Codex provider ID。接続設定は Codex config 側
   models:                             # 環境固有の model catalog
@@ -163,6 +165,7 @@ tui:
 | `conductor.pi.agentDir` | Pi user resource root のパス上書き | — | — |
 | `conductor.pi.projectDir` | Pi project resource root のパス上書き | — | — |
 | `acp.defaultPreset` | worker ACP built-in preset | `--default-acp-cli` 等 | `ENSEMBLE_DEFAULT_ACP_CLI` |
+| `acp.pi.runtime` | Pi worker の runtime（`byo` / `builtin`、既定 `byo`） | — | — |
 | `acp.env` | codex-acp 等 spawn 時の env（string map） | — | — |
 | `acp.models` | model key → model ID または `{ model, reasoning?, cursorFast? }` | — | — |
 | `acp.tags` | model tag → `acp.models` key（全 worker 共通） | — | — |
@@ -187,6 +190,23 @@ tui:
 - **Cursor**: [Cursor SDK の model parameter catalog](https://cursor.com/docs/sdk/typescript#model-parameters) を照会し、選択 model の reasoning / thinking / effort parameter と値を特定して `ModelSelection.params` に渡します。parameter ID と値は model / account ごとに異なるため、catalog 上で一意に対応しない値や候補は agent の create / resume 前にエラーにします。値を省略したときは catalog を照会せず、SDK の既定に任せます。
 
 終了サマリの `sessionModels.conductor.configuredReasoning` は優先順位解決後の指定値です。provider が実際に適用した値を読み戻した結果ではありません。型・表示の詳細は [session-metrics.md](session-metrics.md#231-モデル構成sessionmodels) を参照してください。
+
+### Pi worker runtime
+
+Pi worker は `acp.pi.runtime` で実行環境を選びます。省略時と `byo` は従来の動作で、PATH 上の `pi` CLI と Pi の `~/.pi` 設定・認証・session map・transcript を使います。既存の SessionResumeStore に runtime marker がない Pi session も BYO として読み、BYO の既定値や保存済み fingerprint は変えません。
+
+```yaml
+acp:
+  defaultPreset: pi
+  pi:
+    runtime: builtin
+```
+
+`builtin` は `@agents-ensemble/core` に含まれる `@agents-ensemble/builtin-pi-acp` と、core の依存 package にある Pi CLI を使います。Pi CLI の global install、PATH 設定、`~/.pi` の事前準備は不要です。この runtime は Node.js **22.19.0 以上**を要求します。builtin を選んだときだけ起動前に Pi CLI の存在と Node.js の版を検証します。
+
+builtin の user settings と認証は `~/.ensemble/pi/` に置きます。同梱する `defaultThinkingLevel: medium` と `enableSkillCommands: true` は初回のみ `settings.json` へコピーし、既存の設定を上書きしません。モデル一覧と認証情報は Pi runtime のものを使います。認証済み provider がない場合、Pi ACP は `AUTH_REQUIRED` で attach を拒否します。Pi CLI を別途用意する必要はありませんが、provider の認証は必要です。Pi backend が選択されている場合、`ensemble auth login --provider <provider-id>` は既定 user root の `~/.ensemble/pi/auth.json` に credential を保存します。Cursor backend が選択中なら `--provider` だけでは Pi 認証へ切り替わらず、Pi credential は設定されません。provider 環境変数も利用できます。認証手順は [Pi conductor セットアップ](pi-conductor-setup.md)を参照してください。
+
+builtin の Pi session map と transcript は `~/.ensemble/pi/worker/<repoKey>/<workerKey>/` に保存します。`repoKey` は repository root ごとの識別子、`workerKey` は worker 名を安全に符号化した識別子です。既存の Pi ACP JSONL 形式を維持し、`ensemble session workers messages` は保存済み runtime marker に応じて builtin または BYO の session map を読みます。BYO と builtin を切り替えて既存 session を resume することはできません。
 
 ### ACP model tag と model catalog
 
@@ -242,7 +262,7 @@ Cursor の公式 CLI reference は `--model <model>` を使用モデルの指定
 
 [forum #174835](https://forum.cursor.com/t/cursor-cli-acp-reports-grok-4-6-fast-despite-explicitly-selecting-the-listed-non-fast-model/174835) では、picker capability がない ACP session で non-Fast ID が Fast に置き換わり、実 request も Fast variant になった例を Cursor 担当者が説明しています。picker と setter 後の ACP `currentValue` は session option の報告であり、runtime model の attestation ではありません。[別の報告](https://forum.cursor.com/t/document-and-stabilize-non-fast-model-selection-for-acp-stdio-sessions/165622) にも ACP 応答と内部 session slug の食い違いがあります。これらの報告を踏まえ、現在は別 field の `reasoning` / `cursorFast` を明示した場合は spawn 前に失敗させ、`cursorFast` 省略時は capability / setter を送らず CLI default に委ねます。実際の default variant は未確認です（[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)、[ADR 0055](adr/0055-cursor-model-only-cli-contract.md)）。
 
-`claude` と `pi` の model ID は各 ACP session config option が広告する値を指定します。Pi ACP adapter は `provider/model-id` を広告し、model と thinking level を session 単位で設定します（[`pi-acp` 0.0.33](https://github.com/svkozak/pi-acp/blob/v0.0.33/src/acp/agent.ts)）。この `model` / `thought_level` は worker の Pi ACP session 用で、Pi conductor の `conductor.backend: pi` が読む `settings.json` / `models.json` や `ModelRuntime` の設定とは別経路です。Pi conductor の設定・認証は [専用ガイド](pi-conductor-setup.md)を参照してください。ACP の thinking level は model が対応する範囲に限られます。Pi 0.85.1 の issue #9768 では、`set_thinking_level` が成功を返しても `get_state` が古い値を返し続ける事例が報告されています。投稿では非同期の設定更新を待たずに RPC 応答する実装が原因候補に挙がり、maintainer は model が level を clamp する可能性にも触れています。この issue は completed で閉じられていますが、harness は成功応答だけを信用せず、設定後の値が一致しない場合は最初の prompt より前に attach を失敗させます（[Pi issue #9768](https://github.com/earendil-works/pi/issues/9768)）。Claude は model metadata だけでは SDK 側の設定で値が戻る可能性があるため、session 作成・load 後にも `model` と必要な `effort` を設定します（[`claude-agent-acp` 0.70.0](https://github.com/agentclientprotocol/claude-agent-acp/blob/v0.70.0/src/acp-agent.ts)）。
+`claude` と `pi` の model ID は各 ACP session config option が広告する値を指定します。Pi ACP adapter は `provider/model-id` を広告し、model と thinking level を session 単位で設定します（[同梱 adapter と上流差分](../packages/builtin-pi-acp/README.md)）。この `model` / `thought_level` は worker の Pi ACP session 用で、Pi conductor の `conductor.backend: pi` が読む `settings.json` / `models.json` や `ModelRuntime` の設定とは別経路です。Pi conductor の設定・認証は [専用ガイド](pi-conductor-setup.md)を参照してください。ACP の thinking level は model が対応する範囲に限られます。Pi 0.85.1 の issue #9768 では、`set_thinking_level` が成功を返しても `get_state` が古い値を返し続ける事例が報告されています。投稿では非同期の設定更新を待たずに RPC 応答する実装が原因候補に挙がり、maintainer は model が level を clamp する可能性にも触れています。この issue は completed で閉じられていますが、harness は成功応答だけを信用せず、設定後の値が一致しない場合は最初の prompt より前に attach を失敗させます（[Pi issue #9768](https://github.com/earendil-works/pi/issues/9768)）。Claude は model metadata だけでは SDK 側の設定で値が戻る可能性があるため、session 作成・load 後にも `model` と必要な `effort` を設定します（[`claude-agent-acp` 0.70.0](https://github.com/agentclientprotocol/claude-agent-acp/blob/v0.70.0/src/acp-agent.ts)）。
 
 ACP v1 の session config option は Agent が session setup 時に現在値と候補を返し、`session/set_config_option` の response で設定後の option を返します（[ACP v1 仕様](https://agentclientprotocol.com/protocol/v1/session-config-options)）。`claude` / `pi` では harness が候補に指定値があることと、設定後に Agent が報告した `currentValue` が要求値と一致することを確かめてから最初の prompt を許可します。これは ACP adapter が報告する session configuration の確認であり、backend が実際に使う model / effort の attestation ではありません。Cursor の model-only 経路はこの setter を使わず、公式 CLI `--model` option に値を渡す契約です。option 不在、候補不一致、setter error、報告値不一致は対応する ACP config-option 経路の attach error とします。resume 時、通常の `session/load` 失敗なら新しい session に切り替えます。一方、ACP config-option の検証・適用エラーは attach を失敗させ、新しい session への切り替えでは隠しません。
 
@@ -377,7 +397,7 @@ acp:
 
 #### resume と `acp.env` 変更
 
-新しい `resume-feasibility` sidecar では `acp.env` / `acp.models` / `acp.tags` の変更を resume 拒否に使いません。`acpModelConfigDigest` と ACP spawn fingerprint には診断用の情報として記録します。ACP preset は引き続き照合し、`custom` では command / args の変更も拒否します。scheme のない旧 sidecar / `full` sidecar は従来どおり全 config digest を比較するため、config 上の model / reasoning / env 変更で拒否されることがあります。詳細は [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md) と [ADR 0054](adr/0054-cursor-acp-runtime-verification.md) を参照してください。
+新しい `resume-feasibility` sidecar では `acp.env` / `acp.models` / `acp.tags` の変更を resume 拒否に使いません。`acpModelConfigDigest` と ACP spawn fingerprint には診断用の情報として記録します。ACP preset と `acp.pi.runtime` は引き続き照合し、Pi runtime の切り替えを拒否します。`custom` では command / args の変更も拒否します。scheme のない旧 sidecar / `full` sidecar は従来どおり全 config digest を比較するため、config 上の model / reasoning / env 変更で拒否されることがあります。詳細は [ADR 0048](adr/0048-session-resume-feasibility-config-digest.md)、[ADR 0054](adr/0054-cursor-acp-runtime-verification.md)、[ADR 0061](adr/0061-builtin-pi-acp-runtime.md) を参照してください。
 
 ### Pi resource root
 

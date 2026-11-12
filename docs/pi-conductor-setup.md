@@ -337,7 +337,9 @@ node scripts/pi/bench-cached-auth.mjs
 | API key | `CURSOR_API_KEY` または Cursor SDK の stored login | TTY secret prompt、user `auth.json`、Pi の provider env/fallback |
 | OAuth / 出力 | Cursor SDK の login | TTY の Pi OAuth flow。URL / device code は stderr |
 | model list | Cursor SDK の catalog | 認証済み Pi model のみ。`--provider` で絞り込み |
-| worker の認証 | `agent login` は worker ACP 用 | 同じく `agent login` は worker ACP 用。conductor の Pi login とは別 |
+| worker の認証 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意。Pi builtin worker は `~/.ensemble/pi/auth.json` または provider 環境変数を使い、Pi backend の login credential と共有できる |
+
+Pi builtin worker を使う場合、`ensemble auth login --provider <id>` は選択中の conductor backend が Pi のとき `~/.ensemble/pi/auth.json` に保存した credential を worker と共有します。既定の Cursor backend では `--provider` だけで Pi login には切り替わらないため、Pi backend の config / profile を選ぶか、provider 環境変数を設定してください。Pi CLI の global install は不要ですが、provider credential は必要です。
 
 Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalog の挙動は Pi の設定では変更されません。
 

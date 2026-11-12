@@ -56,6 +56,8 @@ dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer
 | 対象 | 準備 |
 |------|------|
 | worker（既定の Cursor ACP） | `agent login` |
+| worker（Pi BYO） | PATH 上の Pi CLI と、その Pi runtime の provider 認証 |
+| worker（Pi builtin） | `acp.defaultPreset: pi` と `acp.pi.runtime: builtin` を設定。Pi CLI の追加 install は不要。provider credential は Pi user config または provider 環境変数で用意。`ensemble auth login --provider <id>` を使う場合は、選択中の conductor backend / profile も Pi にする |
 | conductor（Cursor SDK、既定） | `ensemble auth login` |
 | conductor（Pi、API key） | `ensemble auth login --provider <id>`（TTY の secret prompt） |
 | conductor（Pi、OAuth） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
@@ -78,6 +80,8 @@ gh auth login
 ```
 
 GitHub API トークンを直接渡す場合は、`gh auth login` の代わりに `GITHUB_TOKEN` または `GH_TOKEN` を設定してください。
+
+Pi builtin worker は `~/.ensemble/pi/auth.json` と Pi の provider 環境変数を使います。`ensemble auth login --provider <id>` は選択中の conductor backend に従うため、既定の Cursor backend で `--provider` だけを付けても Pi worker の credential は作成されません。Pi backend の config を選ぶか、Pi backend を定義した profile を `--profile <name>` で指定して login してください。Pi worker に使える credential がない場合、初回 attach は `AUTH_REQUIRED` で失敗します。
 
 リポジトリを clone したディレクトリで、対象 Issue を指定して起動します。
 
@@ -134,7 +138,9 @@ ensemble session timeline <conductorAgentId> \
 
 `messages` は保存 session の `conductorAgentId` を指定し、operator-agent の `list_conductor_messages` と同じ core provider-history API を使うデバッグ用コマンドです。既定では新しい履歴から20件、最大100件を表示します。`--limit <n>`、`--order asc|desc`、`--cursor <providerId>` でページを指定できます。返すのは user inbound と conductor の最終応答で、tool output や thinking は含みません。本文は保存値のまま出力し、テキスト表示も `--json` もサニタイズしません。API key・token・password などを会話に入力していた場合、その値も出力されます。`messages` は raw debug 経路を保ち、sanitizer の CLI option は設けていません。アプリから core API を使う場合は、返却前に `inbound` / `text` へ利用側の sanitizer を渡せます。適用境界、エラー時の動作、秘密値保護の限界は [provider history list の API 契約](../live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
 
-`workers messages` は保存済み ACP session を `--worker <name>` で指定します。現在オフラインで読めるのは Pi ACP（`pi`）と Codex ACP（`codex`）です。Pi は CLI process の home にある `~/.pi/pi-acp/session-map.json` から保存 session ID に対応する JSONL を解決し、active branch の user / assistant 本文を出します。
+`workers messages` は保存済み ACP session を `--worker <name>` で指定します。現在オフラインで読めるのは Pi ACP（`pi`）と Codex ACP（`codex`）です。Pi は保存 session ID に対応する JSONL transcript を runtime に応じた session map から解決し、active branch の user / assistant 本文を出します。
+
+Pi worker の runtime は SessionResumeStore の fingerprint から判定します。BYO と runtime marker のない旧 session は従来どおり `~/.pi/pi-acp/session-map.json` を読みます。builtin は `~/.ensemble/pi/worker/<repoKey>/<workerKey>/session-map.json` を使い、transcript は同じ worker directory の `sessions/` にあります。両方とも Pi ACP の既存 JSONL 形式と active branch を使うため、CLI から同じ `workers messages` コマンドで閲覧できます。
 
 Codex ACP の `sessionId` は Codex thread ID です。Codex CLI は `$CODEX_HOME`（未設定なら `~/.codex`）の `sessions/YYYY/MM/DD/rollout-<timestamp>-<thread-id>[_<rollout-id>].jsonl` に rollout を保存し、archive 済みの rollout は `archived_sessions/` に置きます。相対 `CODEX_HOME` は Codex ACP process と同じく、SessionResumeStore に保存された worker の `acpCwd` を基準に解決します。reader はファイル名から候補を探し、先頭の `session_meta.payload.id` と `cwd` を SessionResumeStore の session ID / cwd に照合します。同一 basename の `.jsonl` と `.jsonl.zst` がある場合は `.jsonl` を優先します。本文には `response_item` の user / assistant message にある `input_text` / `output_text` だけを出し、tool、reasoning、event などは含めません。revert 等で同じ thread ID の rollout が複数見つかった場合は、履歴を誤選択しないよう `unavailable` にします。`.jsonl.zst` の圧縮 rollout は Node.js 22.15.0 で experimental として追加された `node:zlib.createZstdDecompress()` が使える場合に読めます。ACP process の起動、`session/load`、Codex の state DB 参照は行いません。
 

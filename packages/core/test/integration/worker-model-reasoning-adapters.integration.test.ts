@@ -2,8 +2,9 @@ import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawnAcpProcess } from '../../src/acp/acp-process.js';
+import { configurePiWorkerRuntime } from '../../src/acp/pi-runtime.js';
 import {
   resolveWorkerAcpSpawn,
   resolvedAcpSpawnToOptions,
@@ -25,11 +26,12 @@ function resolveOptionalAdapter(name: string): string | undefined {
 const claudeAdapter = resolveOptionalAdapter(
   '@agentclientprotocol/claude-agent-acp/dist/index.js',
 );
-const piAdapter = resolveOptionalAdapter('pi-acp');
+const piAdapter = require.resolve('@agents-ensemble/builtin-pi-acp');
 
 function resolveSpawn(
   preset: 'claude' | 'pi',
   model: string,
+  piRuntime?: 'byo' | 'builtin',
 ): ReturnType<typeof resolveWorkerAcpSpawn> {
   return resolveWorkerAcpSpawn({
     modelTag: 'integration',
@@ -38,6 +40,7 @@ function resolveSpawn(
       env: {},
       config: {
         acp: {
+          ...(piRuntime ? { pi: { runtime: piRuntime } } : {}),
           models: {
             selected: { model, reasoning: 'high' },
           },
@@ -244,8 +247,8 @@ describe.skipIf(!claudeAdapter)(
   },
 );
 
-describe.skipIf(!piAdapter || process.platform === 'win32')(
-  'pi-acp 0.0.33 worker model reasoning integration',
+describe.skipIf(process.platform === 'win32')(
+  'builtin-pi-acp worker model reasoning integration',
   () => {
     let tempRoot = '';
     const clients = new Set<Awaited<ReturnType<typeof spawnAcpProcess>>>();
@@ -264,15 +267,15 @@ describe.skipIf(!piAdapter || process.platform === 'win32')(
           join(tmpdir(), 'ensemble-pi-acp-model-reasoning-'),
         );
         const repoRoot = join(tempRoot, 'repo');
+        const userRoot = join(tempRoot, 'ensemble-user');
         const binDir = join(tempRoot, 'bin');
         const eventsPath = join(tempRoot, 'pi-events.jsonl');
-        const sessionFile = join(tempRoot, 'pi-sessions', 'test-session.jsonl');
         const fakePiPath = join(tempRoot, 'fake-pi');
         const fakePiSourcePath = join(tempRoot, 'fake-pi.mjs');
+        vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
         await Promise.all([
           mkdir(repoRoot, { recursive: true }),
           mkdir(binDir, { recursive: true }),
-          mkdir(join(tempRoot, 'pi-sessions'), { recursive: true }),
         ]);
         await symlink(process.execPath, join(binDir, 'node'));
         await writeFile(
@@ -343,10 +346,22 @@ describe.skipIf(!piAdapter || process.platform === 'win32')(
         await chmod(fakePiPath, 0o755);
 
         const model = 'openai/target-model';
-        const resolved = resolveSpawn('pi', model);
+        const resolved = configurePiWorkerRuntime(
+          resolveSpawn('pi', model, 'builtin'),
+          { repoRoot, workerName: 'integration' },
+        );
+        const sessionFile = join(
+          resolved.env!.PI_CODING_AGENT_SESSION_DIR!,
+          'test-session.jsonl',
+        );
+        await mkdir(resolved.env!.PI_CODING_AGENT_SESSION_DIR!, {
+          recursive: true,
+        });
         const spawnOptions = resolvedAcpSpawnToOptions(resolved);
         const isolatedEnv: NodeJS.ProcessEnv = {
+          ...spawnOptions.env,
           HOME: tempRoot,
+          ENSEMBLE_USER_ROOT: userRoot,
           PATH: binDir,
           PI_ACP_PI_COMMAND: fakePiPath,
           PI_ACP_ADAPTER_TEST_EVENTS: eventsPath,
@@ -406,6 +421,29 @@ describe.skipIf(!piAdapter || process.platform === 'win32')(
           new Set(resumedPiProcesses.map((event) => JSON.stringify(event.argv)))
             .size,
         ).toBe(1);
+        expect(resolved.env?.PI_CODING_AGENT_DIR).toBe(
+          join(userRoot, 'pi'),
+        );
+        expect(sessionFile).toBe(
+          join(
+            resolved.env!.PI_CODING_AGENT_SESSION_DIR!,
+            'test-session.jsonl',
+          ),
+        );
+        expect(
+          JSON.parse(
+            await readFile(
+              join(resolved.env!.PI_CODING_AGENT_DIR!, 'settings.json'),
+              'utf8',
+            ),
+          ),
+        ).toMatchObject({
+          defaultThinkingLevel: 'medium',
+          enableSkillCommands: true,
+        });
+        expect(resolved.env?.PI_ACP_SESSION_MAP_PATH).toContain(
+          join('pi', 'worker'),
+        );
       },
       30_000,
     );

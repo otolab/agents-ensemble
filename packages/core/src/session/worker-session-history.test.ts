@@ -380,6 +380,29 @@ describe('worker session history', () => {
     expect(JSON.stringify(result)).not.toContain('THINKING_SECRET');
   });
 
+  it('reads builtin Pi transcripts from the repo and worker scoped user path', async () => {
+    const transcriptPath = await writePiAcpSessionMap({ runtime: 'builtin' });
+
+    const result = await readHistory();
+
+    expect(result).toMatchObject({
+      preset: 'pi',
+      status: 'supported',
+      reader: 'pi-acp-jsonl',
+      messages: [
+        { role: 'user', text: 'Earlier worker request remains on the active branch.' },
+        { role: 'user', text: 'Pi ACP fixture user message.' },
+        { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
+      ],
+    });
+    expect(transcriptPath).toBe(
+      join(
+        resolveEnsemblePaths({ repoRoot }).piWorkerSessionsDir(WORKER_NAME),
+        'pi-acp-worker-session.jsonl',
+      ),
+    );
+  });
+
   it('does not change an empty Pi transcript while reading it', async () => {
     const transcriptPath = await writePiAcpSessionMap({
       transcriptContent: '',
@@ -548,7 +571,11 @@ describe('worker session history', () => {
 
   async function writeResumeStore(
     preset: 'pi' | 'codex' | 'custom' | undefined,
-    workerSession: { acpSessionId?: string; acpCwd?: string } = {},
+    workerSession: {
+      acpSessionId?: string;
+      acpCwd?: string;
+      piRuntime?: 'builtin';
+    } = {},
   ): Promise<void> {
     const resumeStore: SessionResumeStore = {
       version: 1,
@@ -575,6 +602,9 @@ describe('worker session history', () => {
                         ? 'codex-acp'
                         : 'fixture-acp',
                   args: [],
+                  ...(workerSession.piRuntime
+                    ? { piRuntime: workerSession.piRuntime }
+                    : {}),
                 },
               }
             : {}),
@@ -646,15 +676,26 @@ describe('worker session history', () => {
       mapCwd?: string;
       transcriptContent?: string;
       writeTranscript?: boolean;
+      runtime?: 'builtin';
     } = {},
   ): Promise<string> {
-    const transcriptPath = join(
-      homeRoot,
-      '.pi',
-      'agent',
-      'sessions',
-      'pi-acp-worker-session.jsonl',
-    );
+    if (options.runtime === 'builtin') {
+      await writeResumeStore('pi', { piRuntime: 'builtin' });
+    }
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const transcriptPath =
+      options.runtime === 'builtin'
+        ? join(
+            paths.piWorkerSessionsDir(WORKER_NAME),
+            'pi-acp-worker-session.jsonl',
+          )
+        : join(
+            homeRoot,
+            '.pi',
+            'agent',
+            'sessions',
+            'pi-acp-worker-session.jsonl',
+          );
     if (options.writeTranscript !== false) {
       await mkdir(dirname(transcriptPath), { recursive: true });
       if (options.transcriptContent === undefined) {
@@ -664,7 +705,10 @@ describe('worker session history', () => {
       }
     }
 
-    const mapPath = join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
+    const mapPath =
+      options.runtime === 'builtin'
+        ? paths.piWorkerSessionMapPath(WORKER_NAME)
+        : join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
     await mkdir(dirname(mapPath), { recursive: true });
     await writeFile(
       mapPath,

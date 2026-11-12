@@ -4,7 +4,7 @@
 
 ## 前提
 
-Node.js 22 と、ルート `package.json` の `packageManager` に指定された pnpm を使用する。Corepack も利用できる。
+Node.js 22 と、ルート `package.json` の `packageManager` に指定された pnpm を使用する。Builtin Pi worker runtime を使う場合は Node.js 22.19.0 以上が必要です。Corepack も利用できます。
 
 ```bash
 corepack enable   # 初回のみ（任意）

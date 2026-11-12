@@ -1,13 +1,16 @@
 import { accessSync, constants } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { ACP_PRESET_OPTIONAL_PACKAGES } from './acp-preset-bins.js';
+import { ACP_PRESET_ADAPTER_PACKAGES } from './acp-preset-bins.js';
 import * as bundledModule from './resolve-bundled-acp-bin.js';
-import { resolveBundledAcpBin } from './resolve-bundled-acp-bin.js';
+import {
+  resolveAcpBin,
+  resolveBundledAcpBin,
+} from './resolve-bundled-acp-bin.js';
 
 const { missingClaudeManifestLookups } = vi.hoisted(() => ({
   missingClaudeManifestLookups: [] as string[],
@@ -25,7 +28,7 @@ vi.mock('node:module', async (importOriginal) => {
         if (
           String(url).includes('acp-bundled-bin-absent-') &&
           specifier ===
-            `${ACP_PRESET_OPTIONAL_PACKAGES.claude.packageName}/package.json`
+            `${ACP_PRESET_ADAPTER_PACKAGES.claude.packageName}/package.json`
         ) {
           missingClaudeManifestLookups.push(String(url));
           const error = new Error(`Cannot find module '${specifier}'`);
@@ -53,11 +56,6 @@ const optionalPresets = [
     preset: 'claude',
     packageName: '@agentclientprotocol/claude-agent-acp',
     binName: 'claude-agent-acp',
-  },
-  {
-    preset: 'pi',
-    packageName: 'pi-acp',
-    binName: 'pi-acp',
   },
 ] as const;
 
@@ -118,6 +116,39 @@ for (const { preset, packageName, binName } of optionalPresets) {
   );
 }
 
+describe('resolveBundledAcpBin(pi)', () => {
+  it('resolves the workspace Pi adapter as a bundled executable', () => {
+    const bundled = resolveBundledAcpBin('pi');
+
+    expect(bundled).toBeDefined();
+    expect(isAbsolute(bundled!)).toBe(true);
+    expect(bundled).toContain('builtin-pi-acp');
+    accessSync(bundled!, constants.X_OK);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'prefers the bundled adapter when another pi-acp is on PATH',
+    async () => {
+      const binDirectory = await mkdtemp(join(tmpdir(), 'pi-acp-path-'));
+      const pathAdapter = join(binDirectory, 'pi-acp');
+      const oldPath = process.env.PATH ?? '';
+      try {
+        await writeFile(pathAdapter, '#!/bin/sh\nexit 0\n');
+        await chmod(pathAdapter, 0o755);
+        vi.stubEnv('PATH', `${binDirectory}${delimiter}${oldPath}`);
+
+        const bundled = resolveBundledAcpBin('pi');
+        expect(bundled).toBeDefined();
+        expect(bundledModule.resolveAcpBinFromPath('pi-acp')).toBe(pathAdapter);
+        expect(resolveAcpBin('pi')).toBe(bundled);
+      } finally {
+        vi.unstubAllEnvs();
+        await rm(binDirectory, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
 describe('resolve-bundled-acp-bin when the optional package is absent', () => {
   it('returns undefined when the optional package cannot be resolved', async () => {
     const fixture = await createCorePackageFixture();
@@ -140,7 +171,7 @@ describe('resolve-bundled-acp-bin with an installed package that declares no bin
   it('returns undefined when the installed optional package declares no bin', async () => {
     const { fixtureRoot, callerModuleUrl } = await createCorePackageFixture();
     const optionalPackage =
-      ACP_PRESET_OPTIONAL_PACKAGES.codex.packageName;
+      ACP_PRESET_ADAPTER_PACKAGES.codex.packageName;
     const optionalPackageDirectory = join(
       fixtureRoot,
       'node_modules',

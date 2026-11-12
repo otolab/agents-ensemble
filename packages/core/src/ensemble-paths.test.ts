@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveEnsemblePaths } from './ensemble-paths.js';
 
@@ -25,6 +25,22 @@ describe('resolveEnsemblePaths', () => {
     expect(paths.sessionsDir).toBe(
       join(tempDir, 'home', '.ensemble', 'sessions', paths.repoKey),
     );
+    expect(paths.piUserDir).toBe(join(tempDir, 'home', '.ensemble', 'pi'));
+    expect(dirname(paths.piWorkerDir('implementer'))).toBe(paths.piWorkerRoot);
+    expect(basename(paths.piWorkerDir('implementer'))).toMatch(
+      /^implementer-[a-f0-9]{12}$/u,
+    );
+    expect(paths.piWorkerSessionsDir('implementer')).toBe(
+      join(paths.piWorkerDir('implementer'), 'sessions'),
+    );
+    expect(paths.piWorkerSessionMapPath('implementer')).toBe(
+      join(paths.piWorkerDir('implementer'), 'session-map.json'),
+    );
+    const unsafeWorkerDirectory = paths.piWorkerDir('../../outside');
+    expect(unsafeWorkerDirectory.startsWith(`${paths.piWorkerRoot}${sep}`)).toBe(
+      true,
+    );
+    expect(unsafeWorkerDirectory).not.toContain(`${sep}..${sep}`);
     expect(paths.sessionResumeStorePath('agent-a')).toBe(
       join(paths.sessionsDir, 'agent-a.json'),
     );

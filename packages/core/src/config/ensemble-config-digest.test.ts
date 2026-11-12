@@ -287,6 +287,7 @@ describe('computeResumeFeasibilityConfigDigest', () => {
 
     expect(criticalPaths.sort()).toEqual([
       'acp.defaultPreset',
+      'acp.pi.runtime',
       'session.worktree',
     ]);
     for (const path of criticalPaths) {
@@ -297,6 +298,25 @@ describe('computeResumeFeasibilityConfigDigest', () => {
         path,
       ).not.toBe(digest);
     }
+  });
+
+  it('rejects resume when the Pi runtime changes between BYO and builtin', () => {
+    const builtin: EnsembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        defaultPreset: 'pi',
+        pi: { runtime: 'builtin' },
+      },
+    };
+    const byo: EnsembleConfig = {
+      ...builtin,
+      acp: { ...builtin.acp, pi: undefined },
+    };
+
+    expect(computeResumeFeasibilityConfigDigest(builtin)).not.toBe(
+      computeResumeFeasibilityConfigDigest(byo),
+    );
   });
 
   it('canonicalizes the critical projection independently of neutral config', () => {

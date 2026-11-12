@@ -36,6 +36,7 @@ export const RESUME_FEASIBILITY_CONFIG_CLASSIFICATION = {
   'conductor.pi.agentDir': 'neutral',
   'conductor.pi.projectDir': 'neutral',
   'acp.defaultPreset': 'critical',
+  'acp.pi.runtime': 'critical',
   'acp.env': 'neutral',
   'acp.models': 'neutral',
   'acp.tags.high': 'neutral',

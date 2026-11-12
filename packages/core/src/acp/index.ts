@@ -36,7 +36,7 @@ export {
 export {
   ACP_PRESET_BIN_NAMES,
   ACP_PRESET_EXTERNAL_CLI,
-  ACP_PRESET_OPTIONAL_PACKAGES,
+  ACP_PRESET_ADAPTER_PACKAGES,
 } from './acp-preset-bins.js';
 export {
   resolveAcpBin,
@@ -79,6 +79,14 @@ export type {
   AcpSpawnFingerprint,
   DefaultAcpResolutionOptions,
 } from './resolve-acp-spawn.js';
+export {
+  assertBuiltinPiNodeVersionSupported,
+  configurePiWorkerRuntime,
+  isBuiltinPiNodeVersionSupported,
+  resolveBundledPiCliPath,
+  BUILTIN_PI_MIN_NODE_VERSION,
+} from './pi-runtime.js';
+export type { PiAcpRuntimeMarker } from './resolve-acp-spawn.js';
 export type {
   SpawnAcpProcessOptions,
   RunAcpSessionOptions,
