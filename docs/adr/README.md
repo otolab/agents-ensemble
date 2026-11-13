@@ -130,15 +130,16 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0056](0056-permission-stall-dispatch-hold.md) | dispatch hold 中の permission stall 回復通知 | accepted |
 | [0057](0057-permission-stall-idle-detection.md) | idle worker 中も pending permission の停滞を検知 | accepted |
 | [0058](0058-pi-send-recovery-replay-boundary.md) | Pi send recovery の再送境界 | superseded → [0059](0059-pi-recovery-report-after-manual-reconnect.md) |
-| [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0065](0065-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
-| [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | superseded → [0065](0065-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
+| [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0066](0066-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
+| [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | superseded → [0066](0066-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
 | [0061](0061-github-slug-session-persistence.md) | Issue session の slug 正本と operator-agent の user profile | proposed |
 | [0062](0062-worker-acp-model-tags.md) | worker ACP modelTag の語彙と未登録時の解決 | superseded in part → [0063](0063-explicit-default-model-tag-warning.md)（明示 `default` と省略時の warning 区別） / [0064](0064-worker-model-tags-allow-empty-strings.md)（空文字・空白のみを含む任意文字列） |
 | [0063](0063-explicit-default-model-tag-warning.md) | 明示された default modelTag の未登録 warning | accepted |
 | [0064](0064-worker-model-tags-allow-empty-strings.md) | worker modelTag に空文字・空白のみの tag を許可 | accepted |
-| [0065](0065-conductor-dispatch-lifecycle-and-recovery-boundary.md) | conductor dispatch lifecycle と recovery 境界 | accepted |
-| [0066](0066-legacy-cursor-bootstrap-unknown.md) | 旧 Cursor bootstrap 状態を unknown として再開する | accepted |
-| [0067](0067-manual-resume-after-close-failure.md) | close failure 後の明示 reconnect | accepted |
+| [0065](0065-conductor-auth-mode-status-contract.md) | Conductor 認証モードと status / 復旧案内の契約 | proposed |
+| [0066](0066-conductor-dispatch-lifecycle-and-recovery-boundary.md) | conductor dispatch lifecycle と recovery 境界 | accepted |
+| [0067](0067-legacy-cursor-bootstrap-unknown.md) | 旧 Cursor bootstrap 状態を unknown として再開する | accepted |
+| [0068](0068-manual-resume-after-close-failure.md) | close failure 後の明示 reconnect | accepted |
 
 ## 追加するとき
 

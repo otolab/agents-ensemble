@@ -1,8 +1,8 @@
-# ADR 0066: 旧 Cursor bootstrap 状態を unknown として再開する
+# ADR 0067: 旧 Cursor bootstrap 状態を unknown として再開する
 
 - Status: accepted
 - Date: 2026-11-12
-- Related: [Issue #668](https://github.com/otolab/agents-ensemble/issues/668), [PR #677](https://github.com/otolab/agents-ensemble/pull/677), [ADR 0065](0065-conductor-dispatch-lifecycle-and-recovery-boundary.md)
+- Related: [Issue #668](https://github.com/otolab/agents-ensemble/issues/668), [PR #677](https://github.com/otolab/agents-ensemble/pull/677), [ADR 0066](0066-conductor-dispatch-lifecycle-and-recovery-boundary.md)
 
 ## Context
 
