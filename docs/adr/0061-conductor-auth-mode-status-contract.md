@@ -10,7 +10,13 @@
 
 Pi の `!command` はすでに Pi resource の API key として実行時に委譲できるが、`ensemble auth` からの登録導線はない。Issue #356 では command 登録を非スコープとした。その後、Epic #679 が複数認証モードの設計と登録 UX を改めて対象にした。#356 の判断を当時の履歴として残しつつ、登録を認める条件をここで整理する。
 
-現行 `PiProviderAuthStatus` には mode / scope がなく、`source` は任意の `string` で、Pi runtime の値をそのまま返す場合もある。Ensemble 側の主な出所ラベルは `stored`、`project_stored`、`settings_json`、`models_json_key`、`environment`、`project_oauth_unsupported`。この値だけでは、たとえば `settings.json` の文字列 key と `!command` を見分けられない。認証エラー時の Pi hint も provider 共通で、effective source に応じた分岐はしない。
+現行 `PiProviderAuthStatus` には mode / scope がなく、`source` は任意の `string` で、Pi runtime の値をそのまま返す場合もある。この PR の base は [`@earendil-works/pi-coding-agent` 1.2.0](../../packages/core/package.json) に固定されている。headless loader は user → project の順に settings を merge し、`settings.json.apiKeys[provider]` の非 command 値を `ModelRuntime.setRuntimeApiKey()` に登録する。Pi 1.2.0 の `RuntimeCredentials.read()` は runtime override を credential store より先に返すため、project `auth.json` entry がない場合、user `auth.json` に同 provider の credential があっても request は `apiKeys[provider]` を使い、status は `source=runtime` となる。両 settings root に値があれば project 側が merge 結果に残る一方、merge 後に root の provenance は失われる。
+
+request では、まず project `auth.json` の API key / command を確認し、project OAuth は拒否する。project entry がなければ Pi `ModelRuntime` が、非 command の `settings.json.apiKeys[provider]` runtime override、user `auth.json` credential、provider 設定、provider の環境・ambient auth の順に解決する。settings 候補は scalar `apiKey` が先で、なければ `apiKeys[provider]` を選ぶが、非 command の `apiKeys[provider]` はすでに runtime override として登録済みである。選ばれた settings `!command` は request 時に provider 設定へ登録されるものの、runtime override と user credential より後、`models.json` provider 設定より前に解決する。したがって同じ provider に runtime `apiKeys` と user credential がある場合は、どちらも settings command より優先される。`models.json` provider の key / command は Pi 1.2.0 の `ModelRuntime.registerProvider()` に渡され、通常の key（環境変数参照を先に展開した値を含む）は status で `fallback`、command は `models_json_command` と表示され得る。Pi が key を返さない場合や `ModelRuntime.getAuth()` が error になった場合、選ばれた command 候補があれば error とし、下位 fallback は行わない。command 候補がなければ Ensemble は追加 fallback として command でない settings 候補（scalar `settings.json.apiKey` が先、なければ `apiKeys[provider]`）、`models.json` provider key、provider 環境変数を順に確認する。
+
+現行 status は project `auth.json` を先に確認し、次に Pi `ModelRuntime.getProviderAuthStatus()`、最後に Ensemble の settings / models / provider-env fallback を調べる。Pi status の順は runtime、stored、provider 設定、provider auth check である。Ensemble fallback の表示値には `settings_json`、`models_json_key`、`environment` がある。settings command は status 時に登録・実行されないため、user `auth.json` や runtime override がない場合、request では settings command が有効でも status が `fallback` / `models_json_command` / `environment` など下位の provider source を示すことがある。Pi の `source=environment` には環境変数以外の ambient auth（AWS profile / ADC 等）が含まれ得る。現行 `source` は status lookup の結果であり、request の実効 credential や成功を常に示すものではない。Pi の [`RuntimeCredentials.read()`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/runtime-credentials.ts#L24-L28)、[`ModelRuntime` status](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/model-runtime.ts#L646-L655)、[`resolveProviderAuth`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/ai/src/auth/resolve.ts#L28-L93)、provider 設定・status の [`provider-composer.ts`](https://github.com/earendil-works/pi/blob/v1.2.0/packages/coding-agent/src/core/provider-composer.ts#L718-L731) と、Ensemble の [`conductor-pi-auth.ts`](../../packages/core/src/conductor/conductor-pi-auth.ts) が根拠である。
+
+この source だけでは、たとえば `settings.json` の通常 key と `!command` を見分けられない。認証エラー時の Pi hint も provider 共通で、effective source に応じた分岐はしない。
 
 ADR 0028 は accepted のため本文を変更しない。本 ADR は、Issue #680 が求める認証方式の分類、status の拡張方針、復旧案内の設計を提案する。以下で「現行」と記す内容は調査時点の実装・docs の説明であり、Decision に記す status / hint / command 登録の契約は実装済みの仕様ではない。後続 Issue の実装がマージされるまで現行動作を変更せず、この ADR も現行動作の安全性を保証するものではない。
 
@@ -35,11 +41,29 @@ Issue #684 と未マージの [PR #689](https://github.com/otolab/agents-ensembl
 
 この表の保存先は Pi backend の設定を中心に示す。Cursor backend の既存 login・保存先・環境変数の挙動は変更しない。
 
-同じ provider でも、保存済み credential の種類と設定層は別の軸である。status は「どこから来たか」と「どの方式か」を別々に示す。OAuth credential の保存形式からは browser と manual のどちらで login したか分からないため、status は `oauth` までを示し、login 時の対話方式を推測しない。
+taxonomy ID と status の `source` / `mode` は別の軸である。`api_key_stored` は user `auth.json` に保存する login 経路を指す一方、`mode=api_key` は `settings.json.apiKeys` の runtime override や provider 設定にも使う。どこから来た key かは `source` と `scope` で示し、`mode=api_key` だけから保存先を推測しない。OAuth credential の保存形式からは browser と manual のどちらで login したか分からないため、status は `oauth` までを示し、login 時の対話方式を推測しない。
 
 ### 2. status の source 互換性
 
-既存の `source` は credential の出所を表す粗い分類として維持し、`settings_json` を `settings_json_command` に置き換えるなど、既存値を mode ごとに改名しない。command / key / OAuth の種別と project / user の scope は、将来の optional metadata で表現する。
+既存の `source` は credential の出所を表す粗い分類として維持し、`settings_json` を `settings_json_command` に置き換えるなど、既存値を mode ごとに改名しない。command / key / OAuth の種別と project / user の scope は、将来の optional metadata で表現する。特に `source=runtime` は既存 Pi SDK source なので維持し、headless conductor では非 command の `settings.json.apiKeys[provider]` runtime override を示す。この override は user `auth.json` より優先される。scalar `settings.json.apiKey` は runtime override ではなく、通常は `source=settings_json` となる Ensemble fallback である。
+
+現行 source の意味と status lookup は次のとおり。これは現在の Pi `ModelRuntime` status と Ensemble fallback を合わせた観測で、将来の型を閉じる定義ではない。project `auth.json` の判定後、Pi status は runtime > stored > provider 設定 > provider auth check の順に返ります。Pi status に configured source がなければ、Ensemble は settings > models > provider 環境変数の順で source を付けます。
+
+| 現行 `source` | 現行の表示内容 |
+|---------------|----------------|
+| `runtime` | Pi runtime API-key override。headless path では通常、非 command の `settings.json.apiKeys[provider]`。user `auth.json` より先に使われるが、user / project settings のどちらから来たかは分からない |
+| `stored` | user `auth.json` の credential。API key / OAuth の種類は区別しない |
+| `project_stored` | project `auth.json` の API key / command entry。entry の種類は区別しない |
+| `fallback` | 現行 headless loader が `ModelRuntime.registerProvider()` に渡した `models.json` provider の通常 key。環境変数参照も登録前に展開するため、ここに含まれ得る |
+| `models_json_command` | Pi provider 設定として登録した `models.json` command |
+| `environment` | Pi の provider auth check、または Ensemble provider-env fallback。Pi の label は AWS profile / ADC など ambient auth を示す場合もある |
+| `settings_json` | Pi status に configured source がなく、Ensemble が settings 候補を検出した場合。scalar `apiKey` が先、なければ `apiKeys[provider]`。通常の非 command `apiKeys` は `runtime` になる。key / command や user / project root は区別しない |
+| `models_json_key` | Pi status に provider source がなく、Ensemble が `models.json` 候補を直接検出した場合。通常の headless `registerProvider()` path では通常 key は `fallback`、command は `models_json_command` が使われる。この直接 fallback source だけでは通常 key と `!command` を区別しない |
+| `project_oauth_unsupported` | project `auth.json` の OAuth entry。未設定扱いで request を拒否する |
+
+request 時にだけ登録する `settings.json` command は status で実行も登録もしません。user credential / runtime override がなければ request ではこの command が provider 設定として選ばれても、status は `models.json` provider key / command や `environment` を表示する場合があります。`source=models_json_key` も直接 fallback された候補が通常 key か `!command` かを示しません。将来の status は、command を実行せずに設定値の種別を判定して `mode` を示せない場合、`mode` を省略して共通案内へ回します。さらに `source=environment` は process 環境変数に限らず ambient auth を表すことがあります。したがって現行 `source` は status lookup の結果であり、request の実効 credential、認証の成功、設定 root を常に示すものではありません。
+
+将来の status は、既存 source の語彙を保ちながら、request resolver の優先順に照らして選ばれる effective source と `mode` / `scope` を示す必要があります。`settings.json.apiKeys[provider]` の runtime override を user `auth.json` より先に扱い、request 時の settings command も実行せずに source / mode へ反映します。user / project settings の provenance も失わない方法を定めます。Pi SDK の `source=environment` だけから `mode=environment` を推定してはいけません。実際の process 環境変数だと確認できない ambient source は、mode を省略して安全な共通案内へ回すか、taxonomy を別途定めます。`source` は既存の任意 `string` 型を保ち、Pi SDK の `models_json_key` など未列挙値も受け入れます。
 
 `oauth_browser` / `oauth_manual` は login 時の対話方式であり、保存された OAuth credential からは区別できない。そのため status の `mode` はどちらも `oauth` とし、対話方式を記録・推測しない。
 
@@ -50,7 +74,7 @@ interface PiProviderAuthStatus {
   source?: string; // 既存の出所ラベルを維持
   mode?: 'oauth' | 'api_key' | 'command' | 'environment';
   scope?: 'user' | 'project';
-  label?: string; // provider 環境変数名など、秘密値を含まない補足
+  label?: string; // 秘密値を含まない provider / auth source の補足
 }
 ```
 
@@ -62,17 +86,20 @@ Issue #682 の status もこの対応を使う。`api_key_stored` は taxonomy �
 
 ### 3. 復旧 hint の対応表
 
-次の表は mode-aware hint の設計案である。現行 Pi hint は source を判別せず、provider login、auth file、環境変数、`/reconnect` または session 再開を共通案内する。
+次の表は mode-aware hint の設計案である。現行 Pi hint は source を判別せず、provider login、auth file、環境変数、`/reconnect` または session 再開を共通案内する。`source=runtime` の settings override や project entry が有効なとき、user login の案内だけでは実効 credential が切り替わらない。また、現行 status が `fallback` / `models_json_command` / `environment` を示しても、request 時だけ登録する settings command が実効 source の場合がある。将来 hint は status の source 名だけでなく、実際の resolver 順で選ばれる effective source、mode、scope を使う。command は実行せず、設定上の出所だけを判定する。
 
-| status mode / scope（taxonomy ID） | 次に案内する操作 |
-|------------------------|------------------|
+| effective status mode / scope / source（taxonomy ID） | 次に案内する操作 |
+|------------------------------------------------------|------------------|
 | `mode=oauth`（`oauth_browser` / `oauth_manual`） | Pi は `ensemble auth login --provider <provider>`、Cursor は `ensemble auth login` を再実行する。provider が提示する browser / URL / device code / manual code の flow を完了する。保存後に flow の違いを判別できないため、両者で同じ案内にする |
-| `mode=api_key`（`api_key_stored`） | TTY では API-key prompt を持つ provider の login で user credential を更新する。OpenAI の現行 `ensemble auth login --provider openai` は OAuth を開始するため、API key の更新先として案内しない。#689 の setup API-key 経路を使う場合は `ensemble setup` で API key を選び直す。非対話時は Issue #682 が定める user 層の入力経路を案内する。操作が確定するまでは flag 名を推測せず、API key を command line や hint に含めない |
-| `mode=command`（`command_delegated`） | 信頼できる resource root の command 設定・認証元を確認する。status / hint で command、stdout、stderr を表示しない |
-| `mode=environment` | Pi は provider の環境変数名、Cursor は `CURSOR_API_KEY` を示し、値の設定・ローテーションを促す。値は表示しない |
-| `scope=project` + API key / command | project 側で選ばれている値を確認・更新する。user `auth login` が effective credential を変えない場合があると伝える |
+| `mode=api_key` + `source=runtime` | 有効な user / project `settings.json.apiKeys[provider]` entry を確認・更新する。project 側の値は user 側より優先され、`auth.json` login だけでは runtime override は置き換わらない。status が `scope` を持たない間は両 root を確認する |
+| `mode=api_key` + `source=stored`（`api_key_stored`） | user `auth.json` の保存 credential を provider の API-key login で更新する。OpenAI の現行 `ensemble auth login --provider openai` は OAuth を開始し、API key は保存しない。OpenAI API key の setup 経路は未マージ PR #689 の提案であり、現行 login の機能として案内しない。非対話時は Issue #682 が決める user 層の入力経路を案内し、確定前の flag 名を推測しない |
+| `mode=api_key` + `source=settings_json` | 有効な settings key を確認・更新する。scalar `apiKey` が先で、なければ `apiKeys[provider]`。この source だけでは user / project root を区別できないため、scope が分からなければ両 root を確認する |
+| `mode=api_key` + `source=fallback` / `models_json_key` | effective source として確認できた場合に限り、`models.json` の provider `apiKey` を確認・更新する。現行 status は settings command を反映しない場合があるため、source 名だけを根拠に下位 key を更新させない。通常の registered provider key は `fallback`、Ensemble の直接 fallback は `models_json_key` と表示される。`models_json_key` だけでは key / command を区別できず、提案する `mode` も判定できない場合は共通案内にする |
+| `mode=command`（`command_delegated`） | `source` / `scope` から信頼済み resource root の command 設定と認証元を確認する。status / hint は command、stdout、stderr を表示せず、command も実行しない |
+| `mode=environment` | 実効 source が process 環境変数だと確認できる場合に限り、Pi は provider の変数名、Cursor は `CURSOR_API_KEY` を示して設定・ローテーションを促す。値は表示しない。Pi の `source=environment` が AWS profile / ADC など ambient auth を示す場合、環境変数だと決めつけず、安全な共通案内にするか別 taxonomy を定める |
+| `scope=project` + API key / command | project 側で実効 source となった値を確認・更新する。user `auth login` が effective credential を変えない場合があると伝える |
 | `scope=project` + OAuth | project OAuth は unsupported と明示し、project entry を除去して user 層で login するよう案内する |
-| source / mode 不明 | credential を削除する操作へ誘導せず、設定層の確認を促す共通 hint にする |
+| effective source / mode 不明 | credential を削除する操作へ誘導せず、現行の resolver 優先順と設定層を確認する共通 hint にする |
 
 この表は hint の判断契約であり、現在の `formatConductorAuthRecoveryHint` の分岐を説明するものではない。復旧後の `/reconnect`、失敗した prompt の再送境界、`--resume` / `--continue` は [conductor-auth-reconnect.md](../conductor-auth-reconnect.md) の現行契約を維持する。
 
