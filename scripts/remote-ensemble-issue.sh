@@ -139,29 +139,85 @@ tmux_command=("$remote_ensemble" issue "$issue_ref")
 if (( extra_args_count > 0 )); then
   tmux_command+=("${extra_args[@]}")
 fi
-remote_new_session="tmux new-session -d -s $(quote_shell_argument "$session_name") -c \"\$PWD\""
-for tmux_arg in "${tmux_command[@]}"; do
-  remote_new_session+=" $(quote_shell_argument "$tmux_arg")"
-done
 
 remote_command="cd $(quote_shell_argument "$remote_dir_for_cd") || exit 1"
+remote_command+=$'\nremote_executable_available() {'
+remote_command+=$'\n  case '
+remote_command+="$(quote_shell_argument "$remote_ensemble")"
+remote_command+=$' in'
+remote_command+=$'\n    */*) [ -f '
+remote_command+="$(quote_shell_argument "$remote_ensemble")"
+remote_command+=' ] && [ -x '
+remote_command+="$(quote_shell_argument "$remote_ensemble")"
+remote_command+=' ] ;;'
+remote_command+=$'\n    *) command -v '
+remote_command+="$(quote_shell_argument "$remote_ensemble")"
+remote_command+=' >/dev/null 2>&1 ;;'
+remote_command+=$'\n  esac'
+remote_command+=$'\n}'
+remote_command+=$'\npane_is_running() {'
+remote_command+=$'\n  pane_states=$(tmux list-panes -t '
+remote_command+="$(quote_shell_argument "$session_target")"
+remote_command+=" -F '#{pane_dead}' 2>/dev/null) || return 1"
+remote_command+=$'\n  case $pane_states in'
+remote_command+=$'\n    *0*) return 0 ;;'
+remote_command+=$'\n    *) return 1 ;;'
+remote_command+=$'\n  esac'
+remote_command+=$'\n}'
 remote_command+=$'\nif tmux has-session -t '
 remote_command+="$(quote_shell_argument "$session_target")"
 remote_command+=' 2>/dev/null; then'
 remote_command+=$'\n  :'
-remote_command+=$'\nelif '
-remote_command+="$remote_new_session"
-remote_command+='; then'
-remote_command+=$'\n  :'
-remote_command+=$'\nelif tmux has-session -t '
+remote_command+=$'\nelse'
+remote_command+=$'\n  if ! remote_executable_available; then'
+remote_command+=$'\n    printf "%s\\n" '
+remote_command+="$(quote_shell_argument "remote executable not found or not executable: $remote_ensemble")"
+remote_command+=' >&2'
+remote_command+=$'\n    exit 127'
+remote_command+=$'\n  fi'
+remote_command+=$'\n  if tmux new-session -d -s '
+remote_command+="$(quote_shell_argument "$session_name")"
+remote_command+=' -c "$PWD"'
+for tmux_arg in "${tmux_command[@]}"; do
+  remote_command+=" $(quote_shell_argument "$tmux_arg")"
+done
+remote_command+=' 2>/dev/null; then'
+remote_command+=$'\n    :'
+remote_command+=$'\n  elif ! tmux has-session -t '
 remote_command+="$(quote_shell_argument "$session_target")"
 remote_command+=' 2>/dev/null; then'
-remote_command+=$'\n  :'
-remote_command+=$'\nelse'
+remote_command+=$'\n    printf "%s\\n" '
+remote_command+="$(quote_shell_argument "could not create tmux session: $session_name")"
+remote_command+=' >&2'
+remote_command+=$'\n    exit 1'
+remote_command+=$'\n  fi'
+remote_command+=$'\nfi'
+# A concurrent invocation can observe a newly created session before its pane
+# command has finished starting. Check after a short grace period on every path.
+remote_command+=$'\nsleep 1'
+remote_command+=$'\nif ! tmux has-session -t '
+remote_command+="$(quote_shell_argument "$session_target")"
+remote_command+=' 2>/dev/null || ! pane_is_running; then'
+remote_command+=$'\n  printf "%s\\n" '
+remote_command+="$(quote_shell_argument "tmux session did not keep a running pane: $session_name")"
+remote_command+=' >&2'
 remote_command+=$'\n  exit 1'
 remote_command+=$'\nfi'
 remote_command+=$'\nprintf "%s\\n" '
 remote_command+="$(quote_shell_argument "tmux session ready: $session_name")"
+remote_command+=' >&2'
+remote_command+=$'\nprintf "%s\\n" '
+remote_command+="$(quote_shell_argument "tmux session: $session_name")"
+remote_command+=' >&2'
+remote_command+=$'\nprintf "%s\\n" '
+remote_command+="$(quote_shell_argument "Reconnect from a TTY with ENSEMBLE_REMOTE_SSH set by running:")"
+remote_command+=' >&2'
+remote_command+=$'\nprintf "%s %s %s\\n" '
+remote_command+="$(quote_shell_argument "$0")"
+remote_command+=' '
+remote_command+="$(quote_shell_argument "$remote_dir")"
+remote_command+=' '
+remote_command+="$(quote_shell_argument "$issue_ref")"
 remote_command+=' >&2'
 
 if [[ -t 0 && -t 1 ]]; then
@@ -178,16 +234,5 @@ for ((index = 0; index < ssh_host_index; index += 1)); do
   ssh_command+=("${ssh_args[$index]}")
 done
 ssh_command+=("$ssh_tty_flag" "$ssh_destination")
-
-{
-  printf 'tmux session: %s\n' "$session_name"
-  printf 'Reconnect from a TTY with ENSEMBLE_REMOTE_SSH set by running: '
-  quote_shell_argument "$0"
-  printf ' '
-  quote_shell_argument "$remote_dir"
-  printf ' '
-  quote_shell_argument "$issue_ref"
-  printf '\n'
-} >&2
 
 exec "${ssh_command[@]}" "$remote_command"

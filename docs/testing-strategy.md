@@ -33,6 +33,8 @@
 | `scripts/remote-ensemble-issue.test.mjs` | 補助 Node test | `node --test scripts/remote-ensemble-issue.test.mjs` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Bash 3.2+、POSIX shell、fake SSH / tmux fixture。実 SSH・tmux・GitHub には接続しない |
 | `scripts/pi` | Node test | `node --test scripts/pi/cached-auth.test.mjs` | いいえ | Node.js。Linux 固有の PID namespace / procfs を検証する2ケースは非Linuxで skip。CI 対応は Issue #475 の範囲 |
 
+`remote-ensemble-issue.test.mjs` は、引数 quoting、session の再利用、同時起動、実行ファイルの欠落・実行権限不足、実行ファイルの起動失敗、pane command の即時終了、tmux が dead pane と報告する状態を確認する。fake tmux は pane command の process 生存を追跡し、起動失敗時に session が残らない動きを模擬する。実 SSH 接続や接続先固有の tmux / TTY 設定の確認は、この suite の範囲外。
+
 Root scripts:
 
 ```bash

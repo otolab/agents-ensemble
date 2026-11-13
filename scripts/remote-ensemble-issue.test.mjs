@@ -4,6 +4,7 @@ import {
   chmod,
   mkdtemp,
   mkdir,
+  readdir,
   readFile,
   realpath,
   rm,
@@ -21,9 +22,26 @@ const temporaryRoots = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryRoots.splice(0).map((path) =>
-      rm(path, { recursive: true, force: true }),
-    ),
+    temporaryRoots.splice(0).map(async (path) => {
+      const stateDir = join(path, 'state');
+      let stateFiles = [];
+      try {
+        stateFiles = await readdir(stateDir);
+      } catch {}
+      await Promise.all(
+        stateFiles
+          .filter((name) => name.endsWith('.session'))
+          .map(async (name) => {
+            try {
+              const state = JSON.parse(
+                await readFile(join(stateDir, name), 'utf8'),
+              );
+              process.kill(state.pid, 'SIGTERM');
+            } catch {}
+          }),
+      );
+      await rm(path, { recursive: true, force: true });
+    }),
   );
 });
 
@@ -51,6 +69,10 @@ test('quotes remote paths and arguments, then reuses the session without startin
     firstRun.stderr,
     /Reconnect from a TTY with ENSEMBLE_REMOTE_SSH set by running:/,
   );
+  const readyMessageIndex = firstRun.stderr.indexOf('tmux session ready:');
+  const reconnectMessageIndex = firstRun.stderr.indexOf('Reconnect from a TTY');
+  assert.ok(readyMessageIndex >= 0);
+  assert.ok(reconnectMessageIndex > readyMessageIndex);
 
   const ensembleCalls = await readJsonLines(fixture.ensembleLog);
   assert.deepEqual(ensembleCalls, [
@@ -113,6 +135,107 @@ test('simultaneous invocations create one ensemble process for the same session'
   );
 });
 
+test('fails before tmux when the remote executable is missing or not executable', async () => {
+  const fixture = await createFixture();
+  const remoteDir = join(fixture.root, 'agents-ensemble');
+  await mkdir(remoteDir);
+  const missingExecutable = join(fixture.root, 'missing ensemble');
+  const nonExecutable = join(fixture.root, 'not executable');
+  const missingPathExecutable = 'ensemble-not-in-path';
+  await writeFile(nonExecutable, '#!/bin/sh\nexit 0\n', 'utf8');
+
+  for (const executable of [
+    missingExecutable,
+    nonExecutable,
+    missingPathExecutable,
+  ]) {
+    const result = runScript([remoteDir, '688'], {
+      ...fixture.env,
+      ENSEMBLE_REMOTE_ENSEMBLE: executable,
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /remote executable not found or not executable/);
+    assertNoStartupSuccess(result);
+  }
+  assert.equal(
+    (await readJsonLines(fixture.tmuxLog)).filter(
+      ([command]) => command === 'new-session',
+    ).length,
+    0,
+  );
+});
+
+test('fails when the tmux pane command exits immediately', async () => {
+  const fixture = await createFixture({ ensembleExitsImmediately: true });
+  const remoteDir = join(fixture.root, 'agents-ensemble');
+  await mkdir(remoteDir);
+
+  const result = runScript([remoteDir, '689'], fixture.env);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /tmux session did not keep a running pane/);
+  assertNoStartupSuccess(result);
+  assert.equal((await readJsonLines(fixture.ensembleLog)).length, 1);
+});
+
+test('fails when an executable file cannot be launched by tmux', async () => {
+  const fixture = await createFixture();
+  const remoteDir = join(fixture.root, 'agents-ensemble');
+  const invalidExecutable = join(fixture.root, 'invalid interpreter');
+  await mkdir(remoteDir);
+  await writeFile(invalidExecutable, '#!/missing/interpreter\n', 'utf8');
+  await chmod(invalidExecutable, 0o755);
+
+  const result = runScript([remoteDir, '690'], {
+    ...fixture.env,
+    ENSEMBLE_REMOTE_ENSEMBLE: invalidExecutable,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /tmux session did not keep a running pane/);
+  assertNoStartupSuccess(result);
+  assert.equal(
+    (await readJsonLines(fixture.tmuxLog)).filter(
+      ([command]) => command === 'new-session',
+    ).length,
+    1,
+  );
+});
+
+test('fails when tmux reports that the session pane is dead', async () => {
+  const fixture = await createFixture({ paneDead: true });
+  const remoteDir = join(fixture.root, 'agents-ensemble');
+  await mkdir(remoteDir);
+
+  const result = runScript([remoteDir, '692'], fixture.env);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /tmux session did not keep a running pane/);
+  assertNoStartupSuccess(result);
+  assert.equal((await readJsonLines(fixture.ensembleLog)).length, 1);
+});
+
+test('concurrent callers report an immediately exiting pane as failed', async () => {
+  const fixture = await createFixture({
+    startBarrier: 2,
+    ensembleExitsImmediately: true,
+  });
+  const remoteDir = join(fixture.root, 'agents-ensemble');
+  await mkdir(remoteDir);
+
+  const results = await Promise.all([
+    runScriptAsync([remoteDir, '691'], fixture.env),
+    runScriptAsync([remoteDir, '691'], fixture.env),
+  ]);
+
+  for (const result of results) {
+    assert.notEqual(result.status, 0);
+    assertNoStartupSuccess(result);
+  }
+  assert.ok((await readJsonLines(fixture.ensembleLog)).length >= 1);
+});
+
 test('missing SSH settings or malformed arguments fail with usage', () => {
   const env = { ...process.env };
   delete env.ENSEMBLE_REMOTE_SSH;
@@ -134,7 +257,11 @@ test('missing SSH settings or malformed arguments fail with usage', () => {
   assert.match(misplacedExtraArgument.stderr, /additional ensemble arguments must follow --/);
 });
 
-async function createFixture({ startBarrier = 0 } = {}) {
+async function createFixture({
+  startBarrier = 0,
+  ensembleExitsImmediately = false,
+  paneDead = false,
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ensemble-remote-issue-'));
   temporaryRoots.push(root);
 
@@ -173,9 +300,9 @@ process.exit(result.status ?? 1);
   await writeFile(
     tmuxPath,
     `#!/usr/bin/env node
-const { existsSync, openSync, closeSync, readdirSync, writeFileSync, appendFileSync } = require('node:fs');
+const { existsSync, openSync, closeSync, readFileSync, readdirSync, unlinkSync, writeFileSync, appendFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 
 const args = process.argv.slice(2);
 const logPath = process.env.ENSEMBLE_TEST_TMUX_LOG;
@@ -183,12 +310,33 @@ appendFileSync(logPath, JSON.stringify(args) + '\\n');
 const stateDir = process.env.ENSEMBLE_TEST_STATE_DIR;
 const targetIndex = args.indexOf('-t') + 1;
 const sessionIndex = args.indexOf('-s') + 1;
-const rawSession = args[args[0] === 'has-session' ? targetIndex : sessionIndex];
+const rawSession = args[args[0] === 'new-session' ? sessionIndex : targetIndex];
 const session = rawSession.startsWith('=') ? rawSession.slice(1) : rawSession;
 const statePath = join(stateDir, session + '.session');
 
+function readSessionState() {
+  if (!existsSync(statePath)) return null;
+  const contents = readFileSync(statePath, 'utf8');
+  if (!contents || contents === 'starting') return { starting: true };
+
+  let state;
+  try {
+    state = JSON.parse(contents);
+  } catch {
+    return { starting: true };
+  }
+  try {
+    process.kill(state.pid, 0);
+    return state;
+  } catch (error) {
+    if (error?.code !== 'ESRCH') return state;
+    unlinkSync(statePath);
+    return null;
+  }
+}
+
 if (args[0] === 'has-session') {
-  const existedBeforeBarrier = existsSync(statePath);
+  const existedBeforeBarrier = readSessionState() !== null;
   const clientId = process.env.ENSEMBLE_TEST_CLIENT_ID ?? 'unknown';
   const markerPath = join(stateDir, 'initial-' + clientId);
   if (!existsSync(markerPath)) {
@@ -212,11 +360,18 @@ if (args[0] === 'has-session') {
   process.exit(existedBeforeBarrier ? 0 : 1);
 }
 
+if (args[0] === 'list-panes') {
+  const state = readSessionState();
+  if (!state) process.exit(1);
+  process.stdout.write(process.env.ENSEMBLE_TEST_PANE_DEAD === '1' ? '1\\n' : '0\\n');
+  process.exit(0);
+}
+
 if (args[0] === 'new-session') {
-  let stateFd;
   try {
-    stateFd = openSync(statePath, 'wx');
+    const stateFd = openSync(statePath, 'wx');
     closeSync(stateFd);
+    writeFileSync(statePath, 'starting');
   } catch (error) {
     if (error?.code === 'EEXIST') {
       process.stderr.write('duplicate session\\n');
@@ -228,19 +383,28 @@ if (args[0] === 'new-session') {
   const directory = args[args.indexOf('-c') + 1];
   const commandIndex = args.indexOf('-c') + 2;
   const program = args[commandIndex];
-  const result = spawnSync(program, args.slice(commandIndex + 1), {
+  const child = spawn(program, args.slice(commandIndex + 1), {
     cwd: directory,
     env: process.env,
-    encoding: 'utf8',
+    detached: true,
+    stdio: 'ignore',
   });
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
-  process.exit(result.status ?? 1);
+  child.once('error', () => {
+    unlinkSync(statePath);
+    process.exit(0);
+  });
+  child.once('spawn', () => {
+    writeFileSync(statePath, JSON.stringify({ pid: child.pid }));
+    child.unref();
+    process.exit(0);
+  });
 }
 
 if (args[0] === 'attach-session') process.exit(0);
-process.stderr.write('unexpected tmux command: ' + args[0] + '\\n');
-process.exit(2);
+if (args[0] !== 'new-session') {
+  process.stderr.write('unexpected tmux command: ' + args[0] + '\\n');
+  process.exit(2);
+}
 `,
     'utf8',
   );
@@ -252,6 +416,10 @@ appendFileSync(
   process.env.ENSEMBLE_TEST_ENSEMBLE_LOG,
   JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }) + '\\n',
 );
+if (process.env.ENSEMBLE_TEST_ENSEMBLE_EXITS_IMMEDIATELY === '1') {
+  process.exit(0);
+}
+setInterval(() => {}, 1000);
 `,
     'utf8',
   );
@@ -268,6 +436,8 @@ appendFileSync(
       ENSEMBLE_REMOTE_SSH: `${sshPath} -J bastion user@remote`,
       ENSEMBLE_REMOTE_ENSEMBLE: ensemblePath,
       ENSEMBLE_TEST_ENSEMBLE_LOG: ensembleLog,
+      ENSEMBLE_TEST_ENSEMBLE_EXITS_IMMEDIATELY: ensembleExitsImmediately ? '1' : '0',
+      ENSEMBLE_TEST_PANE_DEAD: paneDead ? '1' : '0',
       ENSEMBLE_TEST_REMOTE_HOME: remoteHome,
       ENSEMBLE_TEST_SSH_LOG: sshLog,
       ENSEMBLE_TEST_START_BARRIER: String(startBarrier),
@@ -282,6 +452,11 @@ function runScript(args, env) {
     encoding: 'utf8',
     env,
   });
+}
+
+function assertNoStartupSuccess(result) {
+  assert.doesNotMatch(result.stderr, /tmux session ready:/);
+  assert.doesNotMatch(result.stderr, /Reconnect from a TTY/);
 }
 
 function runScriptAsync(args, env) {

@@ -83,9 +83,9 @@ scripts/remote-ensemble-issue.sh /srv/agents-ensemble 687 -- --verbose
 
 Issue は番号、`#番号`、GitHub Issue URL を指定できます。追加の `ensemble issue` 引数は `--` の後に置くと、空白や shell 記号を含めて引数のまま渡されます。`ENSEMBLE_REMOTE_ENSEMBLE` でリモートの実行ファイル path を指定でき、省略時は `ensemble` を PATH から探します。
 
-ローカルの stdin と stdout がどちらも TTY の場合、script は SSH に TTY を要求し、tmux session を作成または再利用して attach します。TTY がない場合は session を detached のまま起動して終了し、stderr に `ENSEMBLE_REMOTE_SSH` を設定した状態で再実行するコマンドを表示します。同じディレクトリと Issue で複数回または同時に実行しても、tmux の session 名を使って二重起動を防ぎます。session 名は basename の英数字・`_`・`-` 以外を `-` に置き換えた値と Issue 番号から作ります。basename が同じ、または置換後の値が同じ別ディレクトリは同じ session 名になります。
+ローカルの stdin と stdout がどちらも TTY の場合、script は SSH に TTY を要求し、tmux session を作成または再利用して attach します。TTY がない場合は session を detached のまま起動して終了し、生存確認に成功した場合だけ stderr に `ENSEMBLE_REMOTE_SSH` を設定した状態で再実行するコマンドを表示します。同じディレクトリと Issue で複数回または同時に実行しても、tmux の session 名を使って二重起動を防ぎます。新規起動前に remote executable の存在と実行権限を確認し、session 作成または再利用後は約1秒待って session と pane の生存を確認します。起動できない、または確認中に終了した場合は非ゼロで終了し、ready とは表示しません。この確認は起動直後の失敗を検出するもので、その後の process の継続までは保証しません。session 名は basename の英数字・`_`・`-` 以外を `-` に置き換えた値と Issue 番号から作ります。basename が同じ、または置換後の値が同じ別ディレクトリは同じ session 名になります。
 
-接続先の非対話 SSH 環境から `ensemble`・`tmux` と必要な認証設定を利用できることを確認してください。SSH 鍵認証など、追加 prompt がない接続を推奨します。mock test は引数の quoting、再実行、同時起動を検証しますが、実 SSH 接続や接続先ごとの tmux / 端末設定は検証しません。利用環境では、TTY から初回起動して tmux を detach し再接続できることと、TTY のない実行が detached session を残すことを手動確認してください。
+接続先の非対話 SSH 環境から `ensemble`・`tmux` と必要な認証設定を利用できることを確認してください。SSH 鍵認証など、追加 prompt がない接続を推奨します。mock test は引数の quoting、再実行、同時起動、executable の欠落・実行不可、起動直後の終了を検証しますが、実 SSH 接続や接続先ごとの tmux / 端末設定は検証しません。利用環境では、TTY から初回起動して tmux を detach し再接続できることと、TTY のない実行が detached session を残すことを手動確認してください。
 
 ## リリース
 
