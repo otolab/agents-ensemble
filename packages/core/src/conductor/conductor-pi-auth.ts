@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
+  chmod,
   lstat,
   mkdir,
   open,
@@ -8,7 +9,7 @@ import {
   rename,
   unlink,
 } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   ModelRegistry,
   ModelRuntime,
@@ -23,7 +24,11 @@ import {
   type OAuthLoginCallbacks,
 } from '@earendil-works/pi-ai/compat';
 import type { AuthInteraction, AuthPrompt, AuthEvent } from '@earendil-works/pi-ai';
-import { canonicalPath, isPathWithinAnyRoot } from './conductor-path-safety.js';
+import {
+  canonicalPath,
+  getProjectWriteBoundaryPaths,
+  isPathWithinAnyRoot,
+} from './conductor-path-safety.js';
 import {
   loadPiResources,
   resolvePiResourceRoots,
@@ -132,7 +137,9 @@ export async function loginPiConductor(
 ): Promise<PiConductorLoginResult> {
   const roots = resolvePiResourceRoots(options);
   const authPath = join(roots.agentDir, 'auth.json');
-  const protectedProjectRoots = getProjectWriteRoots(options.cwd, roots.projectDir);
+  const getProtectedProjectRoots = () =>
+    getProjectWriteBoundaryPaths(options.cwd, [roots.projectDir]);
+  const protectedProjectRoots = await getProtectedProjectRoots();
   const runtimeAuthPath = await resolveSafePiUserAuthPath(authPath, protectedProjectRoots);
 
   const resources = await loadPiResources(options);
@@ -150,15 +157,26 @@ export async function loginPiConductor(
         `Pi provider "${provider}" uses OAuth. Run this command from a TTY so the OAuth login flow can interact with you.`,
       );
     }
+    const settingsPath = join(roots.agentDir, 'settings.json');
+    await ensurePiUserSettingsSafeForOAuth(
+      settingsPath,
+      await getProtectedProjectRoots(),
+    );
     const securedAuthPath = await ensurePrivatePiUserAuthFile(
       context.authPath,
-      protectedProjectRoots,
+      await getProtectedProjectRoots(),
     );
     if (securedAuthPath !== runtimeAuthPath) {
       throw new Error(
         'Pi user auth.json target changed while preparing OAuth login; no credentials were written. Retry login after checking the auth.json symlink.',
       );
     }
+    // Pi's OpenAI OAuth obtains the persistent device ID through this callback.
+    // Re-scan the project tree immediately before starting the OAuth flow.
+    await ensurePiUserSettingsSafeForOAuth(
+      settingsPath,
+      await getProtectedProjectRoots(),
+    );
     await context.modelRuntime.login(
       provider,
       'oauth',
@@ -182,7 +200,12 @@ export async function loginPiConductor(
       `Pi provider "${provider}" requires an API key. Pass a secret API-key prompt value or set ${formatPiProviderEnvHint(provider)}.`,
     );
   }
-  await writePiApiKey(context.authPath, protectedProjectRoots, provider, apiKey);
+  await writePiApiKey(
+    context.authPath,
+    await getProtectedProjectRoots(),
+    provider,
+    apiKey,
+  );
   await context.modelRuntime.setRuntimeApiKey(provider, apiKey);
   return {
     backend: 'pi',
@@ -208,7 +231,9 @@ export async function logoutPiConductor(
 ): Promise<PiConductorLogoutResult> {
   const roots = resolvePiResourceRoots(options);
   const authPath = join(roots.agentDir, 'auth.json');
-  const protectedProjectRoots = getProjectWriteRoots(options.cwd, roots.projectDir);
+  const protectedProjectRoots = await getProjectWriteBoundaryPaths(options.cwd, [
+    roots.projectDir,
+  ]);
   const runtimeAuthPath = await resolveSafePiUserAuthPath(authPath, protectedProjectRoots);
 
   const resources = await loadPiResources(options);
@@ -220,7 +245,7 @@ export async function logoutPiConductor(
   const provider = await resolveConductorProviderOrThrow(options, resources, context);
   const securedAuthPath = await ensurePrivatePiUserAuthFile(
     context.authPath,
-    protectedProjectRoots,
+    await getProjectWriteBoundaryPaths(options.cwd, [roots.projectDir]),
   );
   if (securedAuthPath !== runtimeAuthPath) {
     throw new Error(
@@ -933,7 +958,7 @@ async function writePiApiKey(
     if (!isMissingFile(error)) throw error;
   }
   auth[provider] = { type: 'api_key', key: apiKey };
-  await atomicWritePiAuthFile(targetPath, `${JSON.stringify(auth, null, 2)}\n`);
+  await atomicWritePrivatePiUserFile(targetPath, `${JSON.stringify(auth, null, 2)}\n`);
 }
 
 async function resolveSafePiUserAuthPath(
@@ -942,17 +967,68 @@ async function resolveSafePiUserAuthPath(
 ): Promise<string> {
   if (await isPathWithinAnyRoot(authPath, protectedProjectRoots)) {
     throw new Error(
-      `Refusing to use Pi user auth.json at ${authPath} because its configured path or a symlink target enters the project Pi resource root or project .ensemble layer. Configure a user agentDir outside those project paths.`,
+      `Refusing to use Pi user auth.json at ${authPath} because its configured path or a symlink target enters the project Pi resource root or project .ensemble layer, or resolves to a target linked from either project layer. Configure a user agentDir outside those project paths.`,
     );
   }
   return canonicalPath(authPath);
 }
 
-function getProjectWriteRoots(cwd: string, projectDir: string): string[] {
-  return [join(resolve(cwd), '.ensemble'), projectDir];
+async function resolveSafePiUserSettingsPath(
+  settingsPath: string,
+  protectedProjectRoots: readonly string[],
+): Promise<string> {
+  if (await isPathWithinAnyRoot(settingsPath, protectedProjectRoots)) {
+    throw new Error(
+      `Refusing to use Pi user settings.json at ${settingsPath} because its configured path or a symlink target enters the project Pi resource root or project .ensemble layer, or resolves to a target linked from either project layer. Configure a user agentDir outside those project paths.`,
+    );
+  }
+  return canonicalPath(settingsPath);
 }
 
-async function atomicWritePiAuthFile(path: string, contents: string): Promise<void> {
+async function ensurePiUserSettingsSafeForOAuth(
+  settingsPath: string,
+  protectedProjectRoots: readonly string[],
+): Promise<void> {
+  const targetPath = await resolveSafePiUserSettingsPath(
+    settingsPath,
+    protectedProjectRoots,
+  );
+  let details: Awaited<ReturnType<typeof lstat>>;
+  try {
+    details = await lstat(targetPath);
+  } catch (error) {
+    if (isMissingFile(error)) return;
+    throw error;
+  }
+  if (!details.isFile()) {
+    throw new Error(
+      `Refusing to use Pi user settings.json at ${settingsPath} because it is not a regular file.`,
+    );
+  }
+
+  const needsPrivateModeReset =
+    process.platform !== 'win32' && (details.mode & 0o777) !== 0o600;
+  if (details.nlink > 1) {
+    const contents = await readFile(targetPath, 'utf8');
+    const safeTargetPath = await resolveSafePiUserSettingsPath(
+      settingsPath,
+      protectedProjectRoots,
+    );
+    if (safeTargetPath !== targetPath) {
+      throw new Error(
+        'Pi user settings.json target changed while preparing OAuth login; no credentials were written. Retry login after checking the settings.json symlink.',
+      );
+    }
+    await atomicWritePrivatePiUserFile(targetPath, contents);
+  } else if (needsPrivateModeReset) {
+    await chmod(targetPath, 0o600);
+  }
+}
+
+async function atomicWritePrivatePiUserFile(
+  path: string,
+  contents: string,
+): Promise<void> {
   const directory = dirname(path);
   const temporaryPath = join(directory, `.${basename(path)}.${randomUUID()}.tmp`);
   let file: Awaited<ReturnType<typeof open>> | undefined;
@@ -987,7 +1063,7 @@ async function ensurePrivatePiUserAuthFile(
     details = await lstat(safeTargetPath);
   } catch (error) {
     if (!isMissingFile(error)) throw error;
-    await atomicWritePiAuthFile(safeTargetPath, '{}\n');
+    await atomicWritePrivatePiUserFile(safeTargetPath, '{}\n');
     return safeTargetPath;
   }
   if (!details.isFile()) {
@@ -1003,7 +1079,7 @@ async function ensurePrivatePiUserAuthFile(
     process.platform !== 'win32' && (details.mode & 0o777) !== 0o600;
   if (details.nlink > 1 || needsPrivateModeReset) {
     const contents = await readFile(safeTargetPath, 'utf8');
-    await atomicWritePiAuthFile(safeTargetPath, contents);
+    await atomicWritePrivatePiUserFile(safeTargetPath, contents);
   }
   return safeTargetPath;
 }

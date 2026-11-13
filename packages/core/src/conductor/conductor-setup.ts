@@ -15,7 +15,10 @@ import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { ENSEMBLE_CONFIG_FILE } from '../config/load-ensemble-config.js';
 import { parseEnsembleConfig } from '../config/parse-config.js';
 import type { ConductorBackend } from '../config/types.js';
-import { isPathWithinAnyRoot } from './conductor-path-safety.js';
+import {
+  getProjectWriteBoundaryPaths,
+  isPathWithinAnyRoot,
+} from './conductor-path-safety.js';
 import { resolvePiResourceRoots } from './pi-resource-loader.js';
 
 export interface WriteConductorSetupOptions {
@@ -67,42 +70,66 @@ export async function writeConductorSetupFiles(
     home: options.home,
   });
   const configPath = join(userRoot, ENSEMBLE_CONFIG_FILE);
-  const projectEnsembleDir = join(repoRoot, '.ensemble');
-  if (await isPathWithinAnyRoot(configPath, [repoRoot, projectEnsembleDir])) {
-    throw new Error(
-      'User config resolves inside the project repository; setup did not write project config.',
-    );
-  }
+  const defaultProjectPiDir = resolvePiResourceRoots({
+    cwd: repoRoot,
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.home ? { home: options.home } : {}),
+  }).projectDir;
+  const initialProjectPiDirs = [
+    defaultProjectPiDir,
+    ...(options.readonlyProjectPiDir ? [options.readonlyProjectPiDir] : []),
+  ];
+  const assertConfigPathSafe = async (projectPiDirs: readonly string[]) => {
+    const boundaries = await getProjectWriteBoundaryPaths(repoRoot, projectPiDirs);
+    if (await isPathWithinAnyRoot(configPath, [repoRoot, ...boundaries])) {
+      throw new Error(
+        'User config resolves inside the project repository or aliases a project-owned symlink target; setup did not write project config.',
+      );
+    }
+  };
+  const assertPiSettingsPathSafe = async (
+    settingsPath: string,
+    projectPiDirs: readonly string[],
+  ) => {
+    const boundaries = await getProjectWriteBoundaryPaths(repoRoot, projectPiDirs);
+    if (await isPathWithinAnyRoot(settingsPath, boundaries)) {
+      throw new Error(
+        'User Pi settings resolve inside the project resource root (.ensemble or configured Pi root) or alias a project-owned symlink target; setup did not write project resources.',
+      );
+    }
+  };
+  const assertPiAgentDirSafe = async (agentDir: string, projectPiDirs: readonly string[]) => {
+    const boundaries = await getProjectWriteBoundaryPaths(repoRoot, projectPiDirs);
+    if (await isPathWithinAnyRoot(agentDir, boundaries)) {
+      throw new Error(
+        'User Pi resource root resolves inside the project resource root (.ensemble or configured Pi root) or aliases a project-owned symlink target; setup did not write project resources.',
+      );
+    }
+  };
+  await assertConfigPathSafe(initialProjectPiDirs);
+
   const { document: configDocument, value: userConfigValue } =
     await readYamlDocument(configPath);
   const userConfig = parseEnsembleConfig(userConfigValue);
+  const roots = resolvePiResourceRoots({
+    cwd: repoRoot,
+    pi: userConfig.conductor?.pi,
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.home ? { home: options.home } : {}),
+  });
+  const readonlyProjectPiDir = options.readonlyProjectPiDir ?? roots.projectDir;
+  const projectPiDirs = [
+    roots.projectDir,
+    readonlyProjectPiDir,
+  ];
+  await assertConfigPathSafe(projectPiDirs);
 
   let piFiles: ConductorSetupFiles['pi'];
   let settingsDocument: Record<string, unknown> | undefined;
   if (pi) {
-    const roots = resolvePiResourceRoots({
-      cwd: repoRoot,
-      pi: userConfig.conductor?.pi,
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.home ? { home: options.home } : {}),
-    });
-    const readonlyProjectPiDir = options.readonlyProjectPiDir ?? roots.projectDir;
-    const protectedProjectRoots = [
-      projectEnsembleDir,
-      roots.projectDir,
-      readonlyProjectPiDir,
-    ];
-    if (await isPathWithinAnyRoot(roots.agentDir, protectedProjectRoots)) {
-      throw new Error(
-        'User Pi resource root resolves inside the project resource root (.ensemble or configured Pi root); setup did not write project resources.',
-      );
-    }
+    await assertPiAgentDirSafe(roots.agentDir, projectPiDirs);
     const settingsPath = join(roots.agentDir, 'settings.json');
-    if (await isPathWithinAnyRoot(settingsPath, protectedProjectRoots)) {
-      throw new Error(
-        'User Pi settings resolve inside the project resource root (.ensemble or configured Pi root); setup did not write project resources.',
-      );
-    }
+    await assertPiSettingsPathSafe(settingsPath, projectPiDirs);
     settingsDocument = await readJsonDocument(settingsPath);
     settingsDocument.defaultProvider = pi.provider;
     settingsDocument.defaultModel = pi.modelId;
@@ -124,10 +151,16 @@ export async function writeConductorSetupFiles(
     : undefined;
 
   if (piFiles && settingsContents !== undefined) {
-    await atomicWriteFile(piFiles.settingsPath, settingsContents);
+    const userPiFiles = piFiles;
+    await atomicWriteFile(userPiFiles.settingsPath, settingsContents, async () => {
+      await assertPiAgentDirSafe(userPiFiles.agentDir, projectPiDirs);
+      await assertPiSettingsPathSafe(userPiFiles.settingsPath, projectPiDirs);
+    });
   }
   try {
-    await atomicWriteFile(configPath, configContents);
+    await atomicWriteFile(configPath, configContents, () =>
+      assertConfigPathSafe(projectPiDirs),
+    );
   } catch (error) {
     if (piFiles && settingsContents !== undefined) {
       throw new Error(
@@ -223,7 +256,12 @@ async function readJsonDocument(path: string): Promise<Record<string, unknown>> 
   return parsed;
 }
 
-async function atomicWriteFile(path: string, contents: string): Promise<void> {
+async function atomicWriteFile(
+  path: string,
+  contents: string,
+  beforeReplace?: () => Promise<void>,
+): Promise<void> {
+  await beforeReplace?.();
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const targetPath = await resolveWriteTarget(path);
   const temporaryPath = join(
@@ -240,6 +278,12 @@ async function atomicWriteFile(path: string, contents: string): Promise<void> {
     await file.sync();
     await file.close();
     file = undefined;
+    await beforeReplace?.();
+    if ((await resolveWriteTarget(path)) !== targetPath) {
+      throw new Error(
+        `Write target ${path} changed while preparing setup; refusing to replace a different file.`,
+      );
+    }
     await rename(temporaryPath, targetPath);
     await chmod(targetPath, 0o600);
   } catch (error) {

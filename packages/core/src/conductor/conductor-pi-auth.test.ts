@@ -29,6 +29,17 @@ import {
 } from './conductor-pi-auth.js';
 import { loadPiResources } from './pi-resource-loader.js';
 
+const PROJECT_FILE_ALIAS_CASES = [
+  ['project .ensemble/config.yaml', 'config'],
+  ['project Pi settings.json', 'settings'],
+  ['project Pi auth.json', 'auth'],
+] as const;
+
+const PROJECT_DIRECTORY_ALIAS_CASES = [
+  ['project .ensemble directory', 'ensemble'],
+  ['configured project Pi directory', 'project-pi'],
+] as const;
+
 describe('Pi conductor authentication', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -271,6 +282,224 @@ describe('Pi conductor authentication', () => {
       expect((await lstat(fixture.userAuthPath)).isSymbolicLink()).toBe(true);
       expect(await readlink(fixture.userAuthPath)).toBe(projectConfigPath);
       await expect(readFile(projectConfigPath, 'utf8')).resolves.toBe(originalProjectConfig);
+    },
+  );
+
+  it.each(
+    PROJECT_FILE_ALIAS_CASES.flatMap(([name, kind]) =>
+      (['api-key', 'oauth', 'logout'] as const).map((operation) => [
+        operation,
+        name,
+        kind,
+      ] as const),
+    ),
+  )(
+    'refuses auth write %s when project %s symlinks to the same external file',
+    async (operation, _name, kind) => {
+      const fixture = await createAuthFileFixture(
+        `pi-auth-project-external-file-alias-${kind}-${operation}-`,
+      );
+      const projectFilePath =
+        kind === 'config'
+          ? join(dirname(fixture.projectDir), 'config.yaml')
+          : kind === 'settings'
+            ? join(fixture.projectDir, 'settings.json')
+            : fixture.projectAuthPath;
+      const originalContents = '{"project":"owned"}\n';
+      await writeFile(fixture.externalAuthPath, originalContents);
+      await symlink(fixture.externalAuthPath, projectFilePath);
+      await symlink(fixture.externalAuthPath, fixture.userAuthPath);
+
+      const oauthLogin = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockResolvedValue(undefined);
+      const logout = vi
+        .spyOn(ModelRuntime.prototype, 'logout')
+        .mockResolvedValue(undefined);
+
+      await expect(performAuthWriteOperation(operation, fixture)).rejects.toThrow(
+        /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
+      );
+
+      expect(oauthLogin).not.toHaveBeenCalled();
+      expect(logout).not.toHaveBeenCalled();
+      expect((await lstat(projectFilePath)).isSymbolicLink()).toBe(true);
+      expect((await lstat(fixture.userAuthPath)).isSymbolicLink()).toBe(true);
+      expect(await readlink(projectFilePath)).toBe(fixture.externalAuthPath);
+      expect(await readlink(fixture.userAuthPath)).toBe(fixture.externalAuthPath);
+      await expect(readFile(fixture.externalAuthPath, 'utf8')).resolves.toBe(
+        originalContents,
+      );
+    },
+  );
+
+  it.each(
+    PROJECT_DIRECTORY_ALIAS_CASES.flatMap(([name, projectRootKind]) =>
+      (['api-key', 'oauth', 'logout'] as const).map((operation) => [
+        operation,
+        name,
+        projectRootKind,
+      ] as const),
+    ),
+  )(
+    'refuses auth write %s when %s links to a directory containing the user target',
+    async (operation, _name, projectRootKind) => {
+      const fixture = await createProjectDirectoryAliasFixture(
+        `pi-auth-project-directory-alias-${projectRootKind}-${operation}-`,
+        projectRootKind,
+      );
+      const originalContents = '{"project":"owned"}\n';
+      await writeFile(fixture.externalAuthPath, originalContents);
+      await symlink(dirname(fixture.externalAuthPath), fixture.projectLinkPath);
+      await symlink(fixture.externalAuthPath, fixture.userAuthPath);
+
+      const oauthLogin = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockResolvedValue(undefined);
+      const logout = vi
+        .spyOn(ModelRuntime.prototype, 'logout')
+        .mockResolvedValue(undefined);
+
+      await expect(
+        performAuthWriteOperation(operation, fixture),
+      ).rejects.toThrow(/resolves to a target linked from either project layer/i);
+
+      expect(oauthLogin).not.toHaveBeenCalled();
+      expect(logout).not.toHaveBeenCalled();
+      expect((await lstat(fixture.projectLinkPath)).isSymbolicLink()).toBe(true);
+      expect((await lstat(fixture.userAuthPath)).isSymbolicLink()).toBe(true);
+      expect(await readlink(fixture.projectLinkPath)).toBe(
+        dirname(fixture.externalAuthPath),
+      );
+      expect(await readlink(fixture.userAuthPath)).toBe(fixture.externalAuthPath);
+      await expect(readFile(fixture.externalAuthPath, 'utf8')).resolves.toBe(
+        originalContents,
+      );
+    },
+  );
+
+  it.each(PROJECT_DIRECTORY_ALIAS_CASES)(
+    'rejects OAuth before runtime login when user settings alias a target under %s',
+    async (_name, projectRootKind) => {
+      const fixture = await createProjectDirectoryAliasFixture(
+        `pi-auth-oauth-device-id-directory-alias-${projectRootKind}-`,
+        projectRootKind,
+      );
+      const userSettingsPath = join(fixture.agentDir, 'settings.json');
+      const originalContents = '{"project":"owned"}\n';
+      await writeFile(fixture.externalAuthPath, originalContents);
+      await symlink(dirname(fixture.externalAuthPath), fixture.projectLinkPath);
+      await symlink(fixture.externalAuthPath, userSettingsPath);
+
+      const oauthLogin = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockResolvedValue(undefined);
+
+      await expect(
+        loginPiConductor({
+          cwd: fixture.cwd,
+          pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+          provider: 'openai',
+          modelId: 'gpt-6.1-sol',
+          oauthCallbacks: createOAuthCallbacks(),
+        }),
+      ).rejects.toThrow(
+        /Refusing to use Pi user settings\.json .* resolves to a target linked from either project layer/i,
+      );
+
+      expect(oauthLogin).not.toHaveBeenCalled();
+      expect((await lstat(fixture.projectLinkPath)).isSymbolicLink()).toBe(true);
+      expect((await lstat(userSettingsPath)).isSymbolicLink()).toBe(true);
+      expect(await readlink(userSettingsPath)).toBe(fixture.externalAuthPath);
+      await expect(readFile(fixture.externalAuthPath, 'utf8')).resolves.toBe(
+        originalContents,
+      );
+    },
+  );
+
+  it.each(PROJECT_FILE_ALIAS_CASES)(
+    'rejects OAuth before runtime login when user settings alias the target of %s',
+    async (_name, kind) => {
+      const fixture = await createAuthFileFixture(
+        `pi-auth-oauth-device-id-project-alias-${kind}-`,
+      );
+      const projectFilePath =
+        kind === 'config'
+          ? join(dirname(fixture.projectDir), 'config.yaml')
+          : kind === 'settings'
+            ? join(fixture.projectDir, 'settings.json')
+            : fixture.projectAuthPath;
+      const userSettingsPath = join(fixture.agentDir, 'settings.json');
+      const originalContents = '{"project":"owned"}\n';
+      await writeFile(fixture.externalAuthPath, originalContents);
+      await symlink(fixture.externalAuthPath, projectFilePath);
+      await symlink(fixture.externalAuthPath, userSettingsPath);
+
+      const oauthLogin = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockResolvedValue(undefined);
+
+      await expect(
+        loginPiConductor({
+          cwd: fixture.cwd,
+          pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+          provider: 'openai',
+          modelId: 'gpt-6.1-sol',
+          oauthCallbacks: createOAuthCallbacks(),
+        }),
+      ).rejects.toThrow(
+        /Refusing to use Pi user settings\.json .* project Pi resource root or project \.ensemble layer/i,
+      );
+
+      expect(oauthLogin).not.toHaveBeenCalled();
+      expect((await lstat(projectFilePath)).isSymbolicLink()).toBe(true);
+      expect((await lstat(userSettingsPath)).isSymbolicLink()).toBe(true);
+      expect(await readlink(projectFilePath)).toBe(fixture.externalAuthPath);
+      expect(await readlink(userSettingsPath)).toBe(fixture.externalAuthPath);
+      await expect(readFile(fixture.externalAuthPath, 'utf8')).resolves.toBe(
+        originalContents,
+      );
+    },
+  );
+
+  it.each(['api-key', 'oauth', 'logout'] as const)(
+    'protects an external symlink target under a configured project Pi root during %s',
+    async (operation) => {
+      const fixture = await createAuthFileFixture(
+        `pi-auth-custom-project-root-external-alias-${operation}-`,
+      );
+      const projectDir = join(fixture.cwd, 'project-resources', 'pi');
+      const projectAuthPath = join(projectDir, 'auth.json');
+      const originalContents = '{"project":"owned"}\n';
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(fixture.externalAuthPath, originalContents);
+      await symlink(fixture.externalAuthPath, projectAuthPath);
+      await symlink(fixture.externalAuthPath, fixture.userAuthPath);
+
+      const oauthLogin = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockResolvedValue(undefined);
+      const logout = vi
+        .spyOn(ModelRuntime.prototype, 'logout')
+        .mockResolvedValue(undefined);
+
+      await expect(
+        performAuthWriteOperation(operation, {
+          cwd: fixture.cwd,
+          agentDir: fixture.agentDir,
+          projectDir,
+        }),
+      ).rejects.toThrow(
+        /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
+      );
+
+      expect(oauthLogin).not.toHaveBeenCalled();
+      expect(logout).not.toHaveBeenCalled();
+      expect(await readlink(projectAuthPath)).toBe(fixture.externalAuthPath);
+      expect(await readlink(fixture.userAuthPath)).toBe(fixture.externalAuthPath);
+      await expect(readFile(fixture.externalAuthPath, 'utf8')).resolves.toBe(
+        originalContents,
+      );
     },
   );
 
@@ -732,6 +961,137 @@ describe('Pi conductor authentication', () => {
       await readFile(join(agentDir, 'settings.json'), 'utf8'),
     ) as { deviceId?: string };
     expect(settings.deviceId).toBe(deviceIds[0]);
+  });
+
+  it('preserves an independent external settings.json symlink during OAuth device-ID save', async () => {
+    const fixture = await createAuthFileFixture('pi-auth-device-id-settings-external-link-');
+    const userSettingsPath = join(fixture.agentDir, 'settings.json');
+    const originalSettings =
+      '{"apiKeys":{"openai":"existing-user-key"},"custom":"keep"}\n';
+    await writeFile(fixture.externalAuthPath, originalSettings);
+    await chmod(fixture.externalAuthPath, 0o644);
+    await symlink(fixture.externalAuthPath, userSettingsPath);
+    const login = vi
+      .spyOn(ModelRuntime.prototype, 'login')
+      .mockImplementation(async (_provider, _method, _interaction, loginOptions) => {
+        expect(loginOptions?.getDeviceId?.()).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        );
+      });
+
+    await expect(
+      loginPiConductor({
+        cwd: fixture.cwd,
+        pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        oauthCallbacks: createOAuthCallbacks(),
+      }),
+    ).resolves.toMatchObject({ method: 'oauth', authPath: fixture.userAuthPath });
+
+    expect(login).toHaveBeenCalledOnce();
+    expect((await lstat(userSettingsPath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(userSettingsPath)).toBe(fixture.externalAuthPath);
+    expect(JSON.parse(await readFile(fixture.externalAuthPath, 'utf8'))).toMatchObject({
+      apiKeys: { openai: 'existing-user-key' },
+      custom: 'keep',
+      deviceId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+    });
+    await expectPosixPrivateAuthMode(fixture.externalAuthPath);
+    await expect(readFile(fixture.projectAuthPath, 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('does not replace a single-link settings.json for mode bits in the simulated Windows branch', async () => {
+    const fixture = await createAuthFileFixture('pi-auth-device-id-settings-windows-mode-');
+    const userSettingsPath = join(fixture.agentDir, 'settings.json');
+    await writeFile(userSettingsPath, '{"custom":"keep"}\n');
+    await chmod(userSettingsPath, 0o644);
+    const originalSettings = await stat(userSettingsPath);
+    let settingsInodeAtLogin: number | undefined;
+
+    const login = vi
+      .spyOn(ModelRuntime.prototype, 'login')
+      .mockImplementation(async (_provider, _method, _interaction, loginOptions) => {
+        settingsInodeAtLogin = (await stat(userSettingsPath)).ino;
+        expect(loginOptions?.getDeviceId?.()).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        );
+      });
+
+    await withProcessPlatform('win32', async () => {
+      await expect(
+        loginPiConductor({
+          cwd: fixture.cwd,
+          pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+          provider: 'openai',
+          modelId: 'gpt-6.1-sol',
+          oauthCallbacks: createOAuthCallbacks(),
+        }),
+      ).resolves.toMatchObject({ method: 'oauth' });
+    });
+
+    expect(login).toHaveBeenCalledOnce();
+    expectSameInodes(settingsInodeAtLogin, originalSettings.ino);
+    expectSameInodes((await stat(userSettingsPath)).ino, originalSettings.ino);
+    // This simulates only the process.platform branch; it does not test Windows ACL behavior.
+  });
+
+  it('separates a hard-linked user settings.json before OAuth writes the device ID', async () => {
+    const fixture = await createAuthFileFixture('pi-auth-device-id-settings-hardlink-');
+    const projectSettingsPath = join(fixture.projectDir, 'settings.json');
+    const userSettingsPath = join(fixture.agentDir, 'settings.json');
+    const originalProjectSettings =
+      '{"defaultProvider":"openai","defaultModel":"gpt-6.1-sol","projectMarker":"owned"}\n';
+    await writeFile(projectSettingsPath, originalProjectSettings);
+    await link(projectSettingsPath, userSettingsPath);
+    const originalProjectFile = await stat(projectSettingsPath);
+    expect((await stat(userSettingsPath)).nlink).toBe(2);
+
+    const login = vi
+      .spyOn(ModelRuntime.prototype, 'login')
+      .mockImplementation(async (_provider, _method, _interaction, loginOptions) => {
+        const [userSettings, projectSettings] = await Promise.all([
+          stat(userSettingsPath),
+          stat(projectSettingsPath),
+        ]);
+        expect(userSettings.nlink).toBe(1);
+        expect(projectSettings.nlink).toBe(1);
+        expectDifferentInodes(userSettings.ino, projectSettings.ino);
+        expectDifferentInodes(userSettings.ino, originalProjectFile.ino);
+        expect(projectSettings.ino).toBe(originalProjectFile.ino);
+        expect(await readFile(projectSettingsPath, 'utf8')).toBe(
+          originalProjectSettings,
+        );
+        const deviceId = loginOptions?.getDeviceId?.();
+        expect(deviceId).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        );
+      });
+
+    await expect(
+      loginPiConductor({
+        cwd: fixture.cwd,
+        pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        oauthCallbacks: createOAuthCallbacks(),
+      }),
+    ).resolves.toMatchObject({ method: 'oauth', authPath: fixture.userAuthPath });
+
+    expect(login).toHaveBeenCalledOnce();
+    expect(JSON.parse(await readFile(userSettingsPath, 'utf8'))).toMatchObject({
+      deviceId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+      projectMarker: 'owned',
+    });
+    await expect(readFile(projectSettingsPath, 'utf8')).resolves.toBe(
+      originalProjectSettings,
+    );
   });
 
   it('applies platform-appropriate protection before Pi OAuth can write credentials', async () => {
@@ -1250,6 +1610,13 @@ interface AuthFileFixture extends AuthOperationPaths {
   externalAuthPath: string;
 }
 
+type ProjectDirectoryAliasKind =
+  (typeof PROJECT_DIRECTORY_ALIAS_CASES)[number][1];
+
+interface ProjectDirectoryAliasFixture extends AuthFileFixture {
+  projectLinkPath: string;
+}
+
 function createOAuthCallbacks() {
   return {
     onAuth: vi.fn(),
@@ -1300,6 +1667,23 @@ async function createAuthFileFixture(prefix: string): Promise<AuthFileFixture> {
     userAuthPath,
     externalAuthPath,
   };
+}
+
+async function createProjectDirectoryAliasFixture(
+  prefix: string,
+  projectRootKind: ProjectDirectoryAliasKind,
+): Promise<ProjectDirectoryAliasFixture> {
+  const fixture = await createAuthFileFixture(prefix);
+  const projectDir =
+    projectRootKind === 'project-pi'
+      ? join(fixture.cwd, 'project-resources', 'pi')
+      : fixture.projectDir;
+  const projectLinkPath =
+    projectRootKind === 'project-pi'
+      ? join(projectDir, 'linked-resources')
+      : join(dirname(projectDir), 'linked-resources');
+  await mkdir(dirname(projectLinkPath), { recursive: true });
+  return { ...fixture, projectDir, projectLinkPath };
 }
 
 async function directoryPathIsCaseInsensitive(directory: string): Promise<boolean> {

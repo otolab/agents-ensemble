@@ -1,3 +1,4 @@
+import type { Dirent } from 'node:fs';
 import {
   lstat,
   readdir,
@@ -84,6 +85,110 @@ export async function isPathWithinAnyRoot(
     }
   }
   return false;
+}
+
+/**
+ * Project-owned paths that setup and Pi auth may encounter as write targets.
+ * Include links anywhere under the project roots so external symlink targets
+ * are protected while unrelated user links remain compatible.
+ */
+export async function getProjectWriteBoundaryPaths(
+  cwd: string,
+  projectPiDirs: readonly string[],
+): Promise<string[]> {
+  const projectEnsembleDir = join(resolve(cwd), '.ensemble');
+  const projectPiRoots = [...new Set(projectPiDirs.map((path) => resolve(path)))];
+  const projectRoots = [...new Set([projectEnsembleDir, ...projectPiRoots])];
+  const symlinkPaths = new Set<string>();
+  const visitedDirectories = new Set<string>();
+
+  for (const root of projectRoots) {
+    await collectProjectSymlinkPaths(root, symlinkPaths, visitedDirectories);
+  }
+
+  return [
+    ...projectRoots,
+    join(projectEnsembleDir, 'config.yaml'),
+    ...projectPiRoots.flatMap((root) => [
+      join(root, 'settings.json'),
+      join(root, 'auth.json'),
+    ]),
+    ...symlinkPaths,
+  ];
+}
+
+/**
+ * Find links inside a project resource tree without following them. Each link
+ * becomes a protected root, so a user path that points at the same external
+ * file or directory is rejected while unrelated external user links remain
+ * usable. An unreadable tree cannot be checked safely, so fail closed.
+ */
+async function collectProjectSymlinkPaths(
+  root: string,
+  symlinkPaths: Set<string>,
+  visitedDirectories: Set<string>,
+): Promise<void> {
+  const pendingDirectories = [root];
+
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop()!;
+    let directoryDetails: Awaited<ReturnType<typeof lstat>>;
+    try {
+      directoryDetails = await lstat(directory);
+    } catch (error) {
+      if (isMissingFile(error)) continue;
+      throw new Error(
+        `Could not inspect project write boundary at ${directory}; refusing the write.`,
+        { cause: error },
+      );
+    }
+
+    if (directoryDetails.isSymbolicLink()) {
+      symlinkPaths.add(directory);
+      continue;
+    }
+    if (!directoryDetails.isDirectory()) continue;
+
+    const identity =
+      directoryDetails.ino !== 0
+        ? `${directoryDetails.dev}:${directoryDetails.ino}`
+        : await realpath(directory);
+    if (visitedDirectories.has(identity)) continue;
+    visitedDirectories.add(identity);
+
+    let entries: Dirent[];
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      throw new Error(
+        `Could not inspect project write boundary at ${directory}; refusing the write.`,
+        { cause: error },
+      );
+    }
+
+    for (const entry of entries) {
+      const entryPath = join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        symlinkPaths.add(entryPath);
+      } else if (entry.isDirectory()) {
+        pendingDirectories.push(entryPath);
+      } else if (!entry.isFile()) {
+        // Some filesystems do not report directory entry types. Inspect only
+        // those ambiguous entries so symlinks are not silently missed.
+        let details: Awaited<ReturnType<typeof lstat>>;
+        try {
+          details = await lstat(entryPath);
+        } catch (error) {
+          throw new Error(
+            `Could not inspect project write boundary at ${entryPath}; refusing the write.`,
+            { cause: error },
+          );
+        }
+        if (details.isSymbolicLink()) symlinkPaths.add(entryPath);
+        else if (details.isDirectory()) pendingDirectories.push(entryPath);
+      }
+    }
+  }
 }
 
 async function pathAliases(path: string): Promise<string[]> {

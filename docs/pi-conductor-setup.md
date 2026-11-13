@@ -112,9 +112,15 @@ API-key login は対話的な TTY が必要です。CI や非 TTY では login p
 
 #### 保存先の保護
 
-setup と login / logout は、project の `.ensemble/` 全体と設定された project Pi root を書き込み保護します。user の `settings.json` / `auth.json` が保護対象の中にある場合や、symlink の経路がそこを通る場合は処理を拒否します。リンク先の最終的な実体が project 層の外でも、project file を経由する symlink は許可しません。保護対象の外にある通常の user symlink は利用でき、リンクを保ったままその実体を更新します。case-insensitive volume では大文字・小文字だけ異なる path も同じ project path として扱い、volume の規則を判定できない場合は書き込みを拒否します。既存の hard link は書き込み前に user 側を独立した file に置き換え、project 側の内容を保ちます。
+setup と login / logout は、project の `.ensemble/` 全体と設定された project Pi root を書き込み保護します。両 root 配下の file / directory symlink も調べ、リンク先が root の外でも、その target を project 層の一部として扱います。user 側の書き込み先が project path、または project symlink から path として辿れる target と重なる場合は処理を拒否します。project 層と共有していない外部 user symlink は利用でき、リンクを保ったまま実体を更新します。project root を検査できない場合も、安全を確認できないため書き込みを拒否します。case-insensitive volume では大文字・小文字だけ異なる path も同じ project path として扱い、volume の規則を判定できない場合は書き込みを拒否します。既存の hard link は書き込み前に user 側を独立した file に置き換え、project 側の内容を保ちます。OAuth が device ID を user `settings.json` に保存する場合も、保存前にこの project 境界を確認します。
 
-POSIX では user auth file を mode `0600` で作成・更新します。Windows では Node.js の `fs` mode で変更できるのは書き込み権限だけで、owner / group / others の区別はありません。そのため `0600` を owner-only ACL の保証として扱えません。この実装は Windows ACL を設定・検証しません。OAuth login / logout では、通常の single-link auth file を mode bits の違いだけで置き換えません。hardlink の分離時や API key の保存時など、auth file を新規作成・置換すると保存先 directory の既定 ACL を継承します。その場合、auth file に個別設定した ACL が引き継がれる保証はありません。Windows では意図した利用者だけがアクセスできる ACL を設定した保存先を選び、必要に応じて ACL を確認してください（[Node.js v22 `fs` の file modes](https://nodejs.org/download/release/v22.23.3/docs/api/fs.html#file-modes)、[Windows file security](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)）。
+この境界は path と symlink をたどって照合します。bind mount など別の path 名で同じ file system object を参照する別名や、検査の直後に別 process が symlink を差し替える競合までは保護を保証できません。通常の hard link は setup の atomic replacement、login / logout 前の user file 分離で project 側への変更を防ぎます。
+
+POSIX では setup が user config / Pi settings を、API key login が user auth file を mode `0600` で作成・更新します。Windows では Node.js の `fs` mode で owner / group / others を区別できず、この実装は Windows ACL を設定・検証しません。`settings.json` は `apiKey` / `apiKeys` を保持できるため、`0600` を Windows の owner-only 保証として扱わないでください。
+
+setup は既存 `settings.json` を同じ directory の一時 file に書いてから置き換えます。Windows では一時 file が directory の既定 ACL を受け継ぐため、置換後に元 file 固有の ACL が維持される保証はありません。OAuth device ID の保存は、既存の single-link `settings.json` を直接更新するため、その file の ACL を保ちます。file がまだ無い場合は新規作成となり、directory の既定 ACL を受け継ぎます。hardlink を分離するときは file を置き換えるため、directory の既定 ACL が使われます。
+
+auth file も新規作成・置換時は保存先 directory の既定 ACL を受け継ぎます。既存の single-link auth file を OAuth login / logout で更新するときは file を置き換えないため、その ACL を保ちます。実装は Windows ACL を設定・検証しません。`settings.json` / `auth.json` 自体と、置換時の継承元になる保存先 directory の両方で、意図した利用者だけに読取権限を与えてください。Windows の ACL 継承・置換動作は実機で検証していません（[Node.js v22 `fs` の file modes](https://nodejs.org/download/release/v22.23.3/docs/api/fs.html#file-modes)、[Windows file security](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)、[MoveFileExW の置換動作](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)、[Node.js v22 の Windows `rename` 実装](https://github.com/nodejs/node/blob/v22.23.3/deps/uv/src/win/fs.c#L2109-L2115)）。
 
 #### OAuth provider
 

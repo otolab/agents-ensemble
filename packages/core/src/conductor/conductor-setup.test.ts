@@ -11,10 +11,21 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { writeConductorSetupFiles } from './conductor-setup.js';
 import { resolvePiModelConfig } from './pi-conductor-agent.js';
+
+const PROJECT_FILE_SYMLINK_CASES = [
+  ['project .ensemble/config.yaml', ['.ensemble', 'config.yaml']],
+  ['project Pi settings.json', ['.ensemble', 'pi', 'settings.json']],
+  ['project Pi auth.json', ['.ensemble', 'pi', 'auth.json']],
+] as const;
+
+const PROJECT_DIRECTORY_SYMLINK_CASES = [
+  ['project .ensemble directory', 'ensemble'],
+  ['configured project Pi directory', 'project-pi'],
+] as const;
 
 describe('writeConductorSetupFiles', () => {
   it('creates the first user config and a Pi model that the pinned runtime can resolve', async () => {
@@ -531,6 +542,236 @@ describe('writeConductorSetupFiles', () => {
     });
   });
 
+  it('keeps an independent external user config symlink usable', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-config-external-link-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-config-external-link-user-'));
+    const externalRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-config-external-link-target-'));
+    const projectConfigPath = join(repoRoot, '.ensemble', 'config.yaml');
+    const userConfigPath = join(userRoot, 'config.yaml');
+    const externalConfigPath = join(externalRoot, 'config.yaml');
+    const originalProjectConfig = 'conductor:\n  backend: pi\n  model: project-model\n';
+    const originalExternalConfig =
+      '# user-owned file\nconductor:\n  model: keep-model\ncustom: keep\n';
+    await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
+    await writeFile(projectConfigPath, originalProjectConfig);
+    await writeFile(externalConfigPath, originalExternalConfig);
+    await symlink(externalConfigPath, userConfigPath);
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        backend: 'cursor',
+      }),
+    ).resolves.toMatchObject({ configPath: userConfigPath, backend: 'cursor' });
+
+    const savedConfig = await readFile(externalConfigPath, 'utf8');
+    expect(savedConfig).toContain('# user-owned file');
+    expect(savedConfig).toContain('backend: cursor');
+    expect(savedConfig).toContain('model: keep-model');
+    expect(savedConfig).toContain('custom: keep');
+    expect((await lstat(userConfigPath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(userConfigPath)).toBe(externalConfigPath);
+    expect(await readFile(projectConfigPath, 'utf8')).toBe(originalProjectConfig);
+  });
+
+  it.each(PROJECT_FILE_SYMLINK_CASES)(
+    'refuses a user config that aliases the external target of %s',
+    async (_name, projectFileSegments) => {
+      const fixture = await createProjectFileSymlinkFixture(
+        'ensemble-setup-project-file-config-alias-',
+        projectFileSegments,
+      );
+      const userConfigPath = join(fixture.userRoot, 'config.yaml');
+      await symlink(fixture.externalTargetPath, userConfigPath);
+
+      await expect(
+        writeConductorSetupFiles({
+          repoRoot: fixture.repoRoot,
+          userEnsembleRoot: fixture.userRoot,
+          backend: 'cursor',
+        }),
+      ).rejects.toThrow('User config resolves inside the project repository');
+
+      expect(await readFile(fixture.externalTargetPath, 'utf8')).toBe(
+        fixture.originalContents,
+      );
+      expect(await readlink(fixture.projectFilePath)).toBe(
+        fixture.externalTargetPath,
+      );
+      expect(await readlink(userConfigPath)).toBe(fixture.externalTargetPath);
+    },
+  );
+
+  it.each(PROJECT_FILE_SYMLINK_CASES)(
+    'refuses user Pi settings that alias the external target of %s',
+    async (_name, projectFileSegments) => {
+      const fixture = await createProjectFileSymlinkFixture(
+        'ensemble-setup-project-file-settings-alias-',
+        projectFileSegments,
+      );
+      const agentDir = join(fixture.userRoot, 'pi');
+      const userConfigPath = join(fixture.userRoot, 'config.yaml');
+      const userSettingsPath = join(agentDir, 'settings.json');
+      const originalUserConfig = `conductor:\n  backend: cursor\n  pi:\n    agentDir: ${agentDir}\n`;
+      await mkdir(agentDir, { recursive: true });
+      await writeFile(userConfigPath, originalUserConfig);
+      await symlink(fixture.externalTargetPath, userSettingsPath);
+
+      await expect(
+        writeConductorSetupFiles({
+          repoRoot: fixture.repoRoot,
+          userEnsembleRoot: fixture.userRoot,
+          backend: 'pi',
+          pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+        }),
+      ).rejects.toThrow(
+        /User Pi settings resolve inside the project resource root \(\.ensemble or configured Pi root\)/,
+      );
+
+      expect(await readFile(fixture.externalTargetPath, 'utf8')).toBe(
+        fixture.originalContents,
+      );
+      expect(await readFile(userConfigPath, 'utf8')).toBe(originalUserConfig);
+      expect(await readlink(fixture.projectFilePath)).toBe(
+        fixture.externalTargetPath,
+      );
+      expect(await readlink(userSettingsPath)).toBe(fixture.externalTargetPath);
+    },
+  );
+
+  it('protects a configured project Pi file symlink outside .ensemble', async () => {
+    const fixture = await createProjectFileSymlinkFixture(
+      'ensemble-setup-custom-project-pi-settings-alias-',
+      ['project-resources', 'pi', 'settings.json'],
+    );
+    const agentDir = join(fixture.userRoot, 'pi');
+    const userConfigPath = join(fixture.userRoot, 'config.yaml');
+    const userSettingsPath = join(agentDir, 'settings.json');
+    const originalUserConfig = [
+      'conductor:',
+      '  pi:',
+      `    agentDir: ${agentDir}`,
+      `    projectDir: ${join(fixture.repoRoot, 'project-resources', 'pi')}`,
+      '',
+    ].join('\n');
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(userConfigPath, originalUserConfig);
+    await symlink(fixture.externalTargetPath, userSettingsPath);
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot: fixture.repoRoot,
+        userEnsembleRoot: fixture.userRoot,
+        backend: 'pi',
+        pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+      }),
+    ).rejects.toThrow(
+      /User Pi settings resolve inside the project resource root \(\.ensemble or configured Pi root\)/,
+    );
+
+    expect(await readFile(fixture.externalTargetPath, 'utf8')).toBe(
+      fixture.originalContents,
+    );
+    expect(await readFile(userConfigPath, 'utf8')).toBe(originalUserConfig);
+    expect(await readlink(fixture.projectFilePath)).toBe(
+      fixture.externalTargetPath,
+    );
+    expect(await readlink(userSettingsPath)).toBe(fixture.externalTargetPath);
+  });
+
+  it.each(
+    PROJECT_DIRECTORY_SYMLINK_CASES.flatMap(([name, projectRootKind]) =>
+      (['config', 'settings'] as const).map((targetKind) => [
+        name,
+        projectRootKind,
+        targetKind,
+      ] as const),
+    ),
+  )(
+    'refuses user %s writes that alias a target under a project directory symlink',
+    async (_name, projectRootKind, targetKind) => {
+      const fixture = await createProjectDirectorySymlinkFixture(
+        `ensemble-setup-project-directory-alias-${projectRootKind}-${targetKind}-`,
+        projectRootKind,
+      );
+      const userConfigPath = join(fixture.userRoot, 'config.yaml');
+      const userSettingsPath = join(fixture.userPiDir, 'settings.json');
+      let writePath: string;
+      if (targetKind === 'config') {
+        writePath = userConfigPath;
+        await symlink(fixture.externalTargetPath, userConfigPath);
+      } else {
+        writePath = userSettingsPath;
+        await mkdir(fixture.userPiDir, { recursive: true });
+        const config = [
+          'conductor:',
+          '  pi:',
+          `    agentDir: ${fixture.userPiDir}`,
+          ...(projectRootKind === 'project-pi'
+            ? [`    projectDir: ${fixture.projectPiDir}`]
+            : []),
+          '',
+        ].join('\n');
+        await writeFile(userConfigPath, config);
+        await symlink(fixture.externalTargetPath, userSettingsPath);
+      }
+
+      await expect(
+        writeConductorSetupFiles({
+          repoRoot: fixture.repoRoot,
+          userEnsembleRoot: fixture.userRoot,
+          backend: targetKind === 'config' ? 'cursor' : 'pi',
+          ...(targetKind === 'settings'
+            ? { pi: { provider: 'openai', modelId: 'gpt-6.1-sol' } }
+            : {}),
+          ...(projectRootKind === 'project-pi'
+            ? { readonlyProjectPiDir: fixture.projectPiDir }
+            : {}),
+        }),
+      ).rejects.toThrow(
+        targetKind === 'config'
+          ? /User config resolves inside the project repository/
+          : /User Pi settings resolve inside the project resource root/,
+      );
+
+      expect(await readFile(fixture.externalTargetPath, 'utf8')).toBe(
+        fixture.originalContents,
+      );
+      expect(await readlink(fixture.projectLinkPath)).toBe(fixture.externalRoot);
+      expect(await readlink(writePath)).toBe(fixture.externalTargetPath);
+    },
+  );
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'refuses setup when it cannot inspect the project write boundary',
+    async () => {
+      const repoRoot = await mkdtemp(
+        join(tmpdir(), 'ensemble-setup-unreadable-project-'),
+      );
+      const userRoot = await mkdtemp(
+        join(tmpdir(), 'ensemble-setup-unreadable-user-'),
+      );
+      const unreadableProjectDir = join(repoRoot, '.ensemble', 'unreadable');
+      await mkdir(unreadableProjectDir, { recursive: true });
+      await chmod(unreadableProjectDir, 0);
+
+      try {
+        await expect(
+          writeConductorSetupFiles({
+            repoRoot,
+            userEnsembleRoot: userRoot,
+            backend: 'cursor',
+          }),
+        ).rejects.toThrow(
+          /Could not inspect project write boundary .* refusing the write/,
+        );
+      } finally {
+        await chmod(unreadableProjectDir, 0o700);
+      }
+    },
+  );
+
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'reports when Pi settings were saved but user config could not be saved',
     async () => {
@@ -565,6 +806,76 @@ describe('writeConductorSetupFiles', () => {
     },
   );
 });
+
+async function createProjectFileSymlinkFixture(
+  prefix: string,
+  projectFileSegments: readonly string[],
+): Promise<{
+  repoRoot: string;
+  userRoot: string;
+  projectFilePath: string;
+  externalTargetPath: string;
+  originalContents: string;
+}> {
+  const repoRoot = await mkdtemp(join(tmpdir(), `${prefix}project-`));
+  const userRoot = await mkdtemp(join(tmpdir(), `${prefix}user-`));
+  const externalRoot = await mkdtemp(join(tmpdir(), `${prefix}external-`));
+  const projectFilePath = join(repoRoot, ...projectFileSegments);
+  const externalTargetPath = join(externalRoot, 'shared-resource.json');
+  const originalContents = '{"project":"owned"}\n';
+  await mkdir(dirname(projectFilePath), { recursive: true });
+  await writeFile(externalTargetPath, originalContents);
+  await symlink(externalTargetPath, projectFilePath);
+  return {
+    repoRoot,
+    userRoot,
+    projectFilePath,
+    externalTargetPath,
+    originalContents,
+  };
+}
+
+async function createProjectDirectorySymlinkFixture(
+  prefix: string,
+  projectRootKind: (typeof PROJECT_DIRECTORY_SYMLINK_CASES)[number][1],
+): Promise<{
+  repoRoot: string;
+  userRoot: string;
+  userPiDir: string;
+  projectPiDir: string;
+  projectLinkPath: string;
+  externalRoot: string;
+  externalTargetPath: string;
+  originalContents: string;
+}> {
+  const repoRoot = await mkdtemp(join(tmpdir(), `${prefix}project-`));
+  const userRoot = await mkdtemp(join(tmpdir(), `${prefix}user-`));
+  const userPiDir = join(userRoot, 'pi');
+  const projectPiDir =
+    projectRootKind === 'project-pi'
+      ? join(repoRoot, 'project-resources', 'pi')
+      : join(repoRoot, '.ensemble', 'pi');
+  const projectLinkPath =
+    projectRootKind === 'project-pi'
+      ? join(projectPiDir, 'linked-resources')
+      : join(repoRoot, '.ensemble', 'linked-resources');
+  const externalRoot = await mkdtemp(join(tmpdir(), `${prefix}external-`));
+  const externalTargetPath = join(externalRoot, 'shared-resource.json');
+  const originalContents = '{"project":"owned"}\n';
+  await mkdir(dirname(projectLinkPath), { recursive: true });
+  await writeFile(externalTargetPath, originalContents);
+  await symlink(externalRoot, projectLinkPath);
+  return {
+    repoRoot,
+    userRoot,
+    userPiDir,
+    projectPiDir,
+    projectLinkPath,
+    externalRoot,
+    externalTargetPath,
+    originalContents,
+  };
+}
 
 async function hasCaseInsensitiveDirectoryNames(
   parent: string,
