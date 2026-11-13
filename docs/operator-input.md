@@ -393,6 +393,12 @@ cleanup が dirty worktree のためスキップされた場合や、削除に�
 
 `/close` または `close` を受け付けた直後は `session.operator_close` を同期 emit します。TTY の活動ログには「セッションを保存して閉じています…」と表示し、入力欄を無効化します。teardown 後に終了 JSON を出し、worktree cleanup を行わず exit code 0 でプロセスを終了します。YAML / SessionResumeStore の flush failure は warning として扱い、`/close`・`/exit`・割り込み・通常終了など、どの終了経路でも終了を続けます。`/exit` の cleanup failure を warning のみ・exit 0 とする [#448](https://github.com/otolab/agents-ensemble/issues/448) の契約とは別の条件です。
 
+### operator-agent からの remote close / exit
+
+operator-agent は `shutdown_issue_session` tool で `conductorAgentId` と `mode: close | exit` を指定し、稼働中 harness に終了を要求できます。専用 UDS method `operator.session.shutdown` は TTY と同じ内部経路を通ります。`close` は worktree を残して再開できる状態で終了し、`exit` は通常の teardown と isolated worktree cleanup を試みます。成功応答は要求の受付を示し、teardown 完了は示しません。
+
+終了がすでに始まっている場合や UDS に接続できない場合は error になります。停止中 session への YAML fallback はありません。`send_operator_message({ text: "/close" })` は通常の conductor message として扱われます。終了には専用 tool を使ってください。
+
 #### post-loop 開始直後の `/exit`（#200）
 
 `session.post_loop_wait` の通知後も SessionDriver がイベント待機を継続する。`/close` と `/exit` は専用の終了 signal で Driver の待機を中断するため、通知と待機 API の間に終了入力が失われるレースはない。
