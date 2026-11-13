@@ -15,7 +15,15 @@ export const OPEN_QUESTION_CONTROL_METHODS = {
   conductorMessagesList: 'session.conductor_messages.list',
   observe: 'session.observe',
   sendMessage: 'operator.message.send',
+  shutdownSession: 'operator.session.shutdown',
 } as const;
+
+export type OperatorSessionShutdownMode = 'close' | 'exit';
+
+export interface OperatorSessionShutdownResult {
+  accepted: true;
+  mode: OperatorSessionShutdownMode;
+}
 
 const JSON_RPC_VERSION = '2.0';
 const MAX_MESSAGE_BYTES = 1_048_576;
@@ -99,6 +107,9 @@ export interface OpenQuestionControlServerOptions {
     text: string;
     delivery: OperatorMessageDelivery;
   }) => boolean | Promise<boolean>;
+  requestOperatorShutdown?: (input: {
+    mode: OperatorSessionShutdownMode;
+  }) => boolean;
 }
 
 export interface OpenQuestionControlServer {
@@ -197,7 +208,11 @@ export async function startOpenQuestionControlServer(
           return;
         }
         processingSockets.add(socket);
-        const activeRequest = handleRequest(line, options)
+        // Register before dispatching the handler. Shutdown handlers can
+        // quiesce this server synchronously and must see the request whose
+        // response they are about to drain.
+        const activeRequest = Promise.resolve()
+          .then(() => handleRequest(line, options))
           .catch(() =>
             errorResponse(null, -32603, 'Open Question operation failed.'),
           )
@@ -495,6 +510,37 @@ async function handleRequest(
         }
         return successResponse(requestId, { queued: true, delivery });
       }
+      case OPEN_QUESTION_CONTROL_METHODS.shutdownSession: {
+        if (
+          Object.keys(params).length !== 1 ||
+          !Object.hasOwn(params, 'mode') ||
+          !isOperatorSessionShutdownMode(params.mode)
+        ) {
+          return errorResponse(
+            requestId,
+            -32602,
+            'mode must be close or exit; unknown parameters are not allowed.',
+          );
+        }
+        if (!options.requestOperatorShutdown) {
+          return errorResponse(
+            requestId,
+            -32601,
+            'Issue session shutdown is not available.',
+          );
+        }
+        if (!options.requestOperatorShutdown({ mode: params.mode })) {
+          return errorResponse(
+            requestId,
+            -32000,
+            'The Issue session is already shutting down.',
+          );
+        }
+        return successResponse(requestId, {
+          accepted: true,
+          mode: params.mode,
+        } satisfies OperatorSessionShutdownResult);
+      }
       default:
         return errorResponse(requestId, -32601, 'Method not found.');
     }
@@ -515,6 +561,12 @@ function isOperatorMessageDelivery(
   value: unknown,
 ): value is OperatorMessageDelivery {
   return value === 'idle' || value === 'next' || value === 'interrupt';
+}
+
+function isOperatorSessionShutdownMode(
+  value: unknown,
+): value is OperatorSessionShutdownMode {
+  return value === 'close' || value === 'exit';
 }
 
 function toListItem(question: OpenQuestion): OpenQuestionControlListItem {

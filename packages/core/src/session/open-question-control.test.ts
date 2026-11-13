@@ -427,6 +427,127 @@ describe('Open Question control UDS', () => {
     }
   });
 
+  it('requests session shutdown through a strict method and keeps /close as a message', async () => {
+    expect(OPEN_QUESTION_CONTROL_METHODS.shutdownSession).toBe(
+      'operator.session.shutdown',
+    );
+    const sendOperatorMessage = vi.fn().mockReturnValue(true);
+    const requestOperatorShutdown = vi
+      .fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    let server: Awaited<ReturnType<typeof startOpenQuestionControlServer>>;
+    server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      answerOpenQuestion: async () => {
+        throw new Error('unexpected answer');
+      },
+      sendOperatorMessage,
+      requestOperatorShutdown: (input) => {
+        const accepted = requestOperatorShutdown(input);
+        if (accepted) void server.quiesce();
+        return accepted;
+      },
+    });
+
+    try {
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
+          params: { text: '/close' },
+        }),
+      ).resolves.toEqual({ queued: true, delivery: 'next' });
+      expect(sendOperatorMessage).toHaveBeenCalledWith({
+        text: '/close',
+        delivery: 'next',
+      });
+      expect(requestOperatorShutdown).not.toHaveBeenCalled();
+
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+          params: { mode: 'close' },
+        }),
+      ).resolves.toEqual({ accepted: true, mode: 'close' });
+      await server.quiesce();
+      expect(requestOperatorShutdown).toHaveBeenCalledOnce();
+      expect(requestOperatorShutdown).toHaveBeenCalledWith({ mode: 'close' });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('rejects invalid, repeated, and unavailable session shutdown requests', async () => {
+    const requestOperatorShutdown = vi
+      .fn()
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    const server = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      answerOpenQuestion: async () => {
+        throw new Error('unexpected answer');
+      },
+      requestOperatorShutdown,
+    });
+
+    try {
+      for (const params of [
+        undefined,
+        {},
+        { mode: 'restart' },
+        { mode: 'exit', reason: 'unexpected field' },
+      ]) {
+        await expect(
+          sendOpenQuestionControlRequest(server.socketPath, {
+            method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+            ...(params ? { params } : {}),
+          }),
+        ).rejects.toMatchObject({ rpcCode: -32602 });
+      }
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+          params: { mode: 'exit' },
+        }),
+      ).resolves.toEqual({ accepted: true, mode: 'exit' });
+      await expect(
+        sendOpenQuestionControlRequest(server.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+          params: { mode: 'close' },
+        }),
+      ).rejects.toMatchObject({
+        rpcCode: -32000,
+        message: 'The Issue session is already shutting down.',
+      });
+      expect(requestOperatorShutdown.mock.calls).toEqual([
+        [{ mode: 'exit' }],
+        [{ mode: 'close' }],
+      ]);
+    } finally {
+      await server.close();
+    }
+
+    const unavailableServer = await startOpenQuestionControlServer({
+      listOpenQuestions: () => [],
+      answerOpenQuestion: async () => {
+        throw new Error('unexpected answer');
+      },
+    });
+    try {
+      await expect(
+        sendOpenQuestionControlRequest(unavailableServer.socketPath, {
+          method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+          params: { mode: 'close' },
+        }),
+      ).rejects.toMatchObject({
+        rpcCode: -32601,
+        message: 'Issue session shutdown is not available.',
+      });
+    } finally {
+      await unavailableServer.close();
+    }
+  });
+
   it('removes client socket listeners after receiving a response', async () => {
     const registry = new OpenQuestionRegistry();
     const server = await startOpenQuestionControlServer({

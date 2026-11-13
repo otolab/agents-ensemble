@@ -159,6 +159,7 @@ import {
   type OpenQuestionControlConductorMessage,
   type OpenQuestionControlLastConductorMessage,
   type OpenQuestionControlServer,
+  type OperatorSessionShutdownMode,
 } from '../session/open-question-control.js';
 import type { SessionUsageSummary } from '../usage/types.js';
 import type { PendingPermission } from '../permission/pending-permission.js';
@@ -1833,23 +1834,36 @@ async function runConductorSessionWithStartupGuard(
     return true;
   };
 
+  const requestOperatorShutdown = (
+    mode: OperatorSessionShutdownMode,
+  ): boolean => {
+    if (teardownStarted || operatorRequestedExit || operatorRequestedClose) {
+      return false;
+    }
+
+    if (mode === 'exit') {
+      sessionLogger.emit({ type: 'session.operator_exit' });
+      workerSession.runtime.cancelAllActivePrompts();
+      operatorRequestedExit = true;
+    } else {
+      sessionLogger.emit({ type: 'session.operator_close' });
+      workerSession.runtime.cancelAllActivePrompts();
+      operatorRequestedClose = true;
+    }
+    shutdownIntentController.abort();
+    abortAfterOpenQuestionDrain(operatorTerminationController);
+    return true;
+  };
+
   if (options.bindOperatorInput) {
     const bindingDispose = options.bindOperatorInput({
       submit: (message, submitOptions) => {
         if (isOperatorExitCommand(message)) {
-          sessionLogger.emit({ type: 'session.operator_exit' });
-          workerSession.runtime.cancelAllActivePrompts();
-          operatorRequestedExit = true;
-          shutdownIntentController.abort();
-          abortAfterOpenQuestionDrain(operatorTerminationController);
+          requestOperatorShutdown('exit');
           return false;
         }
         if (isOperatorCloseCommand(message)) {
-          sessionLogger.emit({ type: 'session.operator_close' });
-          workerSession.runtime.cancelAllActivePrompts();
-          operatorRequestedClose = true;
-          shutdownIntentController.abort();
-          abortAfterOpenQuestionDrain(operatorTerminationController);
+          requestOperatorShutdown('close');
           return false;
         }
         if (isOperatorReconnectCommand(message)) {
@@ -1979,6 +1993,8 @@ async function runConductorSessionWithStartupGuard(
         }
         return sendOperatorMessage({ message: text, delivery });
       },
+      requestOperatorShutdown: ({ mode }) =>
+        requestOperatorShutdown(mode),
       answerOpenQuestion: async ({ questionId, answer }) => {
         if (teardownStarted) {
           throw new OpenQuestionControlOperationError(

@@ -77,6 +77,8 @@ export type {
   OversizedConductorMessageErrorData,
   OpenQuestionControlServer,
   OpenQuestionControlServerOptions,
+  OperatorSessionShutdownMode,
+  OperatorSessionShutdownResult,
   SessionObservationSnapshot,
 } from './open-question-control.js';
 export {
