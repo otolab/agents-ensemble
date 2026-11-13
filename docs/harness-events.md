@@ -308,7 +308,7 @@ WorkerDisplayStatus は runtime lifecycle を表示する。`prompt.failed` / `w
 
 `harness.worker.state` と `prompt.started` / `prompt.completed` が Workers ペインの lifecycle status を更新する。`prompt.failed` は診断 event であり status を変更しない。非同期 `worker.failed` notification も WorkerDisplayStatus を変更しない。`harness.worker.acp.update` は **活動ヒント**（例: `running (calling: Shell)`）の更新にのみ使い、chunk 単位では stderr / 活動ログに出さない（#161）。これらのイベントは `SessionLogger.emit()` と Workers ペインの state 投影のために維持し、人間向け活動ログの細行だけを既定で抑制する。
 
-通常の `session/load` 失敗、または保存済み session の `session/load` 成功後に prompt が provider / account の暗号化履歴を読めないと明示して失敗した場合は、一度だけ新しい ACP session に切り替える。所有する bridge は閉じ、共有 bridge は維持したまま、新 session の ID を SessionResumeStore に保存してから bootstrap を実行する。失敗した conductor instruction は bootstrap 成功後に一度だけ再送する。切替を `worker.session.recovered` と operator 向け `harness.warning` で知らせる。通常の prompt error、`AcpSessionConfigOptionError`、cwd / spawn mismatch は fallback しない。復旧中に届いた preempt は閉じた thread へ cancel せず、bootstrap 完了後に最新 instruction を実行する。bootstrap / 再送も失敗した場合は `worker.failed` で知らせ、その worker では二度目の session 切替を試みない。
+通常の `session/load` 失敗、または保存済み session の `session/load` 成功後に prompt が provider / account の暗号化履歴を読めないと明示して失敗した場合は、一度だけ新しい ACP session に切り替える。所有する bridge は閉じ、共有 bridge は維持したまま、新 session の bootstrap を先に実行する。bootstrap 成功後に worker の resume state を新 ID へ更新し、SessionResumeStore の flush を試みてから operator 向け `harness.warning` を出し、conductor 向け `worker.session.recovered` を SessionEventQueue に積む。flush failure でも warning の後に通知を続けるため、保存済み ID が旧 ID のまま残って次回 resume で復旧を繰り返すことがある。失敗した conductor instruction は bootstrap 成功後、復旧 event を queue に積んでから一度だけ再送する。一般的な prompt error、`AcpSessionConfigOptionError`、cwd / spawn mismatch は fallback しない。復旧中に届いた preempt は閉じた thread へ cancel せず、bootstrap 完了後に最新 instruction だけを実行する。セッションを継続中に bootstrap が失敗またはキャンセルされた場合は `worker.failed` として待機中の指示を破棄し、新 ID の保存・復旧通知を行わない。その worker では二度目の session 切替を試みない。`/close` 中の snapshot も復旧 bootstrap 中の置換 session を除外し、以前の保存 ID を維持する。
 
 TUI の terminal `failed` は `harness.worker.state failed` が表す runtime
 `WorkerLifecycleState` に対応する。resident prompt failure は failure event として記録されるが
@@ -384,7 +384,7 @@ attach handshake 中に届いた追加指示は queue に積む。まだ cancel 
 | `operator.reconnect` | オペレータが `/reconnect` / `reconnect` を入力 | **なし** | Driver が `close` → `resume(sameId)` を実行。conductor へ送らず、worker / worktree / プロセスには触れない |
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
-| `worker.session.recovered` | 保存済み ACP thread を復元できず、新 session を開始したとき | `## worker session 復旧` | worker 名・kind・理由（`session_load_failed` / `prompt_history_unreadable`）と新 session 開始を伝える。同じ worker の完了 / 失敗イベントと同じ dispatch 束に載る |
+| `worker.session.recovered` | 保存済み ACP thread を復元できず、新 session の bootstrap が成功したとき | `## worker session 復旧` | bootstrap 成功後に新 ID の保存を試みてから通知する。flush failure でも通知を続ける。worker 名・kind・理由（`session_load_failed` / `prompt_history_unreadable`）を伝え、同じ worker の完了 / 失敗イベントと同じ dispatch 束に載る |
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | conductor 向け YAML に `request.raw`（params 全文）と `brief`（構造化された判断用情報）を含む。補えない必須情報は `brief.missing` に載せる。`operatorSummary` は conductor が質問や context を組み立てる際の参照情報として併記する。`ask_human.relatedPermissionId` は Open Question と permission を関連づける |
 | `permission.stall` | pending permission が既定 300s（`permissionDeadlockStallMs`）継続したとき（worker / attach が idle でも検知） | `## permission 停滞警告` | conductor 向けの低優先度 trigger。同一の連続停滞エピソードでは 1 回だけ。pending の再送ではなく、経過時間・対象 ID・閾値を含み、dispatch hold 中も held buffer を通らず dispatch 候補に残る。request の詳細は含まない。`harness.warning` は従来どおり operator 向けに出す |
 | `harness.connectivity.recovered` | GitHub monitor が抑止中の再試行可能な poll エラー後、エラーなしの poll に復旧したとき | `## 接続復旧` | `source: github_monitor` と `suppressedErrorCount` を YAML で伝える。復旧 poll に GitHub 更新があれば同じ source の inform として更新束に同梱し、更新がなければ単独 trigger。単独 trigger は `permission.stall` より低優先で、GitHub 更新・worker イベントと同じ max-turns 制限に従う |
@@ -478,7 +478,7 @@ GitHub monitor（セッション中は常時。`--no-github-monitor` で無効�
 
 セッション終了
   session.stop ─────────────────────────────► snapshot（異常時のみ既定 stderr、正常は verbose）
-  teardown（worker/ACP・conductor・GitHub monitor の停止）
+  teardown（worker/ACP・conductor・GitHub monitor の停止。`/close` は復旧 bootstrap 中の置換 session を snapshot から除外）
     harness.teardown.phase ─────────────────► verbose 時のみ stderr
     harness.teardown ───────────────────────► stderr（force 時または 1s 超）
 

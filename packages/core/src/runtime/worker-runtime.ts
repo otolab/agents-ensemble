@@ -131,6 +131,16 @@ export class WorkerRuntime {
     return [...this.residents.values()].map((resident) => resident.attached);
   }
 
+  /**
+   * `/close` の resume snapshot に使える attach 済み worker 一覧。
+   * 復旧 bootstrap が終わる前の置換 session は、次回 resume できないため除外する。
+   */
+  listAttachedForResume(): AttachedWorker[] {
+    return [...this.residents.values()]
+      .filter((resident) => !resident.sessionRecoveryInProgress)
+      .map((resident) => resident.attached);
+  }
+
   getAttached(name: string): AttachedWorker | undefined {
     return this.residents.get(name)?.attached;
   }
