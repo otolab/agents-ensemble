@@ -31,6 +31,9 @@ export {
 } from './conductor/conductor-history.js';
 export { isOperatorCommand } from './conductor/operator-command.js';
 export {
+  escapeTerminalControlCharacters,
+} from './representation/escape-terminal-control-characters.js';
+export {
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
 } from './conductor/conductor-auth.js';

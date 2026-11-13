@@ -85,6 +85,36 @@ describe('executeRecoveryInboxCommand', () => {
     expect(text).not.toContain('\u202e');
   });
 
+  it('escapes backend status before listing or showing a recovery snapshot', () => {
+    const api = createApi();
+    const backendStatus = 'error\u001b[2J\u202e\u2066\u2069\nspoof';
+    api.listRecoverySnapshots = vi.fn(() => [
+      { ...summary, status: backendStatus },
+    ]);
+    api.getRecoverySnapshot = vi.fn((recoveryId) =>
+      recoveryId === snapshot.recoveryId
+        ? { ...snapshot, status: backendStatus }
+        : undefined,
+    );
+
+    const list = executeRecoveryInboxCommand(api, '/recovery list');
+    const show = executeRecoveryInboxCommand(
+      api,
+      `/recovery show ${snapshot.recoveryId}`,
+      { canDisplaySensitiveContent: true },
+    );
+    const expectedStatus =
+      'error\\u001b[2J\\u202e\\u2066\\u2069\\u000aspoof';
+
+    for (const text of [list.inspection?.text ?? '', show.inspection?.text ?? '']) {
+      expect(text).toContain(expectedStatus);
+      expect(text).not.toContain('\u001b');
+      expect(text).not.toContain('\u202e');
+      expect(text).not.toContain('\u2066');
+      expect(text).not.toContain('\u2069');
+    }
+  });
+
   it('does not retrieve sensitive content when output is not an interactive TTY', () => {
     const api = createApi();
     const result = executeRecoveryInboxCommand(

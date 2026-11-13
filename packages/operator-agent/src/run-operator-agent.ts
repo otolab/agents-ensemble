@@ -7,6 +7,7 @@ import {
   ConductorDispatchLifecycle,
   ConductorRecoveryInbox,
   executeRecoveryInboxCommand,
+  escapeTerminalControlCharacters,
   filterMaterialsForKind,
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
@@ -749,7 +750,7 @@ async function runTtyConversation(options: {
             : 'この実行環境では recovery 本文を確認できず、同一 process 内でも取得できません。';
           writeChannelLine(
             'harness',
-            `operator send が未完了です (status=${result.status}, failure=${settled.failureClass ?? 'unknown'})。失敗した入力は queue に戻していません。${recoveryDetails}`,
+            `operator send が未完了です (status=${escapeTerminalControlCharacters(result.status)}, failure=${settled.failureClass ?? 'unknown'})。失敗した入力は queue に戻していません。${recoveryDetails}`,
             { color: ANSI_RED },
           );
         }
@@ -791,7 +792,7 @@ async function runTtyConversation(options: {
         } else {
           writeChannelLine(
             'harness',
-            `send not completed (status=${result.status}); watched reports retained for retry.`,
+            `send not completed (status=${escapeTerminalControlCharacters(result.status)}); watched reports retained for retry.`,
           );
         }
       }
@@ -804,7 +805,10 @@ async function runTtyConversation(options: {
         );
         if (promptVisible) terminal.prompt(true);
       } else if (sendCompleted) {
-        writeChannelLine('observation', `completed (status: ${result.status}).`);
+        writeChannelLine(
+          'observation',
+          `completed (status: ${escapeTerminalControlCharacters(result.status)}).`,
+        );
       }
       if (
         sendCompleted &&

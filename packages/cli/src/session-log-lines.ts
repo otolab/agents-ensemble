@@ -1,4 +1,5 @@
 import {
+  escapeTerminalControlCharacters,
   isConductorAuthError,
   renderSessionLogEvent,
   type SessionLogEvent,
@@ -102,7 +103,7 @@ export function formatHarnessLogBody(
     case 'conductor.send.progress':
       return undefined;
     case 'conductor.transport.reconnect': {
-      let line = `conductor.transport.reconnect status=${event.status} agentId=${event.agentId}`;
+      let line = `conductor.transport.reconnect status=${escapeTerminalControlCharacters(event.status)} agentId=${event.agentId}`;
       if (event.source) {
         line += ` source=${event.source}`;
       }
@@ -120,7 +121,7 @@ export function formatHarnessLogBody(
     }
     case 'conductor.send': {
       if (event.status !== 'error' && !verbose) return undefined;
-      let line = `conductor.send n=${event.sendCount} status=${event.status} workerDone=${event.workerDispatches} workerFailed=${event.workerFailures}`;
+      let line = `conductor.send n=${event.sendCount} status=${escapeTerminalControlCharacters(event.status)} workerDone=${event.workerDispatches} workerFailed=${event.workerFailures}`;
       if (event.status === 'error') {
         const detail = event.error?.message ?? 'unknown error';
         const guidance = classifyConductorSendError(

@@ -91,6 +91,7 @@ import {
 import { resolvePiConductorProvider } from './conductor-pi-auth.js';
 import { closeConductorAgentOnce } from './conductor-send-reconnect.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
+import { escapeTerminalControlCharacters } from '../representation/escape-terminal-control-characters.js';
 import { cursorBootstrapCompleteForStore } from './cursor-bootstrap-state.js';
 import type {
   CursorBootstrapAssumption,
@@ -2337,7 +2338,7 @@ async function runConductorSessionWithStartupGuard(
         sessionLogger.emit({
           type: 'harness.warning',
           message: [
-            `conductor send が未完了です (source=${sourceKey}, attempt=${attemptId}, status=${status}, failure=${failureClass}).`,
+            `conductor send が未完了です (source=${escapeTerminalControlCharacters(sourceKey)}, attempt=${attemptId}, status=${escapeTerminalControlCharacters(status)}, failure=${failureClass}).`,
             recoveryAction,
             queueNotice,
             agentAvailable

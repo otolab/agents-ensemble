@@ -1364,6 +1364,86 @@ describe('runOperatorAgent', () => {
     );
   });
 
+  it('escapes backend status controls in operator-agent failure notices', async () => {
+    const input = new PassThrough() as PassThrough & OperatorAgentInput;
+    input.isTTY = true;
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const config: EnsembleConfig = {
+      profile: { default: 'unused' },
+      conductor: { backend: 'cursor', model: 'cursor-model' },
+    } as EnsembleConfig;
+    const profile: ResolvedProfile = {
+      workers: [],
+      agents: {},
+    };
+    const backendStatus = 'error\u001b[2J\u202e\u2066\nspoof';
+    const run = runOperatorAgent(
+      { repoRoot },
+      {
+        stdin: input,
+        stdout,
+        stderr,
+        loadConfig: async () => config,
+        loadProfile: async () => ({ profile, profilePath: 'test-profile' }),
+        agentFactory: {
+          create: async () =>
+            createFakeAgent({
+              send: async () => ({
+                runId: 'run-untrusted-status',
+                status: backendStatus,
+              }),
+            }),
+          resume: async () => {
+            throw new Error('not used');
+          },
+        },
+      },
+    );
+
+    let exited = false;
+    try {
+      await vi.waitFor(() =>
+        expect(stdout.capturedText()).toContain('\u001b[2muser>\u001b[0m '),
+      );
+      input.write('inspect current state\n');
+      await vi.waitFor(() => {
+        const output = stdout.capturedText();
+        expect(output).toContain(
+          'operator send が未完了です (status=error\\u001b[2J\\u202e\\u2066\\u000aspoof',
+        );
+        expect(output).toContain(
+          'send not completed (status=error\\u001b[2J\\u202e\\u2066\\u000aspoof); watched reports retained for retry.',
+        );
+      });
+
+      const escapedStatus =
+        'error\\u001b[2J\\u202e\\u2066\\u000aspoof';
+      const statuses = [
+        ...stdout
+          .capturedText()
+          .matchAll(
+            /(?:operator send が未完了です \(status=|send not completed \(status=)(.*?)(?:, failure=|\);)/gu,
+          ),
+      ].map((match) => match[1]);
+      expect(statuses).toEqual([escapedStatus, escapedStatus]);
+      for (const status of statuses) {
+        expect(status).not.toContain('\u001b');
+        expect(status).not.toContain('\u202e');
+        expect(status).not.toContain('\u2066');
+        expect(status).not.toContain('\n');
+      }
+
+      input.write('/exit\n');
+      await run;
+      exited = true;
+    } finally {
+      if (!exited) input.write('/exit\n');
+      input.end();
+      await run.catch(() => {});
+    }
+  });
+
   it('keeps only authored input after a failed first Cursor send and waits for confirmation', async () => {
     const input = new PassThrough() as PassThrough & OperatorAgentInput;
     input.isTTY = true;

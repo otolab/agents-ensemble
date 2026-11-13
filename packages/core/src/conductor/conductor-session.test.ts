@@ -5515,6 +5515,54 @@ describe('runConductorSession resume / shutdown', () => {
     ).toBe(true);
   });
 
+  it('escapes backend status controls in the Issue recovery warning', async () => {
+    stubUnusedControlServer();
+    const emitted: SessionLogEvent[] = [];
+    const shutdown = new AbortController();
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+      if (
+        event.type === 'harness.warning' &&
+        event.message.includes('conductor send が未完了です')
+      ) {
+        shutdown.abort();
+      }
+    });
+    mockSend.mockResolvedValue({
+      runId: 'run-untrusted-status',
+      status: 'error\u001b[2J\u202e\u2066\nspoof',
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      operatorCanInspectRecovery: true,
+    });
+
+    expect(result.stopReason).toBe('interrupted');
+    const warning = emitted.find(
+      (event): event is Extract<SessionLogEvent, { type: 'harness.warning' }> =>
+        event.type === 'harness.warning' &&
+        event.message.includes('conductor send が未完了です'),
+    );
+    expect(warning?.message).toContain(
+      'status=error\\u001b[2J\\u202e\\u2066\\u000aspoof',
+    );
+    expect(warning?.message).not.toContain('\u001b');
+    expect(warning?.message).not.toContain('\u202e');
+    expect(warning?.message).not.toContain('\u2066');
+    expect(warning?.message).not.toContain('\n');
+  });
+
   it('resumes after an auth failure without replaying the initial prompt', async () => {
     const projectMcpRoot = join(repoRoot, '.agents');
     await mkdir(projectMcpRoot, { recursive: true });

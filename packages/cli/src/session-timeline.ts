@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import chalk, { Chalk } from 'chalk';
 import {
   CONDUCTOR_PROVIDER_HISTORY_LIMIT,
+  escapeTerminalControlCharacters,
   findSessionResumeStore,
   harnessPhaseFromLegacyLifecycle,
   listConductorProviderHistory,
@@ -326,7 +327,7 @@ export function formatSessionTimelineText(
     lines.splice(
       lines.indexOf('Timeline:'),
       0,
-      `  SessionSummary snapshot: started ${formatTimestamp(result.sessionSummary.startedAt)}, duration ${result.sessionSummary.durationMs} ms, sendCount=${result.sessionSummary.sendCount}, lastRunStatus=${result.sessionSummary.lastRunStatus}`,
+      `  SessionSummary snapshot: started ${formatTimestamp(result.sessionSummary.startedAt)}, duration ${result.sessionSummary.durationMs} ms, sendCount=${result.sessionSummary.sendCount}, lastRunStatus=${escapeTerminalControlCharacters(result.sessionSummary.lastRunStatus)}`,
       ...(result.sessionSummary.lastError
         ? [
             `    lastError${result.sessionSummary.lastError.code ? ` (${result.sessionSummary.lastError.code})` : ''}: ${result.sessionSummary.lastError.message}`,
@@ -385,7 +386,7 @@ export function formatSessionTimelineText(
 
     if (send.summary) {
       lines.push(
-        `  SessionSummary: 最新 send status=${send.summary.lastRunStatus}（個々の send 時刻はありません）`,
+        `  SessionSummary: 最新 send status=${escapeTerminalControlCharacters(send.summary.lastRunStatus)}（個々の send 時刻はありません）`,
       );
     }
   }
@@ -566,7 +567,7 @@ function buildTimelineGaps(input: {
       ...send.harnessEvents.map((event) => describeHarnessEvent(event)),
       ...(send.summary
         ? [
-            `SessionSummary: send #${send.sendCount} status=${send.summary.lastRunStatus}`,
+            `SessionSummary: send #${send.sendCount} status=${escapeTerminalControlCharacters(send.summary.lastRunStatus)}`,
           ]
         : []),
     ];
@@ -803,7 +804,7 @@ function parseSessionSummary(
       startedAt,
       durationMs,
       sendCount: sendCount as number,
-      lastRunStatus,
+      lastRunStatus: escapeTerminalControlCharacters(lastRunStatus),
       ...(isRecord(value.lastError)
         ? {
             lastError: {
@@ -893,7 +894,7 @@ function parseCapturedHarnessLog(
         kind: 'conductor.send',
         line: index + 1,
         sendCount,
-        status: sendMatch[2]!,
+        status: escapeTerminalControlCharacters(sendMatch[2]!),
         ...(errorMatch
           ? {
               error: errorMatch[1]!.replace(/\s+code=\S+$/u, '').trim(),
@@ -948,12 +949,12 @@ function formatHarnessEvent(
   switch (event.kind) {
     case 'conductor.send':
       return [
-        `${prefix} conductor.send n=${event.sendCount} status=${event.status}`,
+        `${prefix} conductor.send n=${event.sendCount} status=${escapeTerminalControlCharacters(event.status)}`,
         ...(event.error ? [`    error: ${event.error}`] : []),
       ];
     case 'conductor.transport.reconnect':
       return [
-        `${prefix} conductor.transport.reconnect status=${event.status} agentId=${event.agentId}`,
+        `${prefix} conductor.transport.reconnect status=${escapeTerminalControlCharacters(event.status)} agentId=${event.agentId}`,
         ...(event.error ? [`    error: ${event.error}`] : []),
         ...(event.previousSendCountInLog !== undefined
           ? [
@@ -976,9 +977,9 @@ function formatHarnessEvent(
 function describeHarnessEvent(event: SessionTimelineHarnessEvent): string {
   switch (event.kind) {
     case 'conductor.send':
-      return `harness log line ${event.line}: send #${event.sendCount} status=${event.status}`;
+      return `harness log line ${event.line}: send #${event.sendCount} status=${escapeTerminalControlCharacters(event.status)}`;
     case 'conductor.transport.reconnect':
-      return `harness log line ${event.line}: transport reconnect ${event.status}`;
+      return `harness log line ${event.line}: transport reconnect ${escapeTerminalControlCharacters(event.status)}`;
     case 'conductor.auth.reconnect':
       return `harness log line ${event.line}: auth reconnect attempt`;
   }
