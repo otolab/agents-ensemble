@@ -13,12 +13,22 @@ export function deepMerge<T extends Record<string, unknown>>(
     if (value === undefined) {
       continue;
     }
-    const existing = result[key];
+    const existing = Object.hasOwn(result, key) ? result[key] : undefined;
     if (isPlainObject(existing) && isPlainObject(value)) {
-      result[key] = deepMerge(existing, value);
+      Object.defineProperty(result, key, {
+        value: deepMerge(existing, value),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
       continue;
     }
-    result[key] = value;
+    Object.defineProperty(result, key, {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
 
   return result as T;

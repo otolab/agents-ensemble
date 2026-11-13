@@ -82,7 +82,7 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 - `themes/` は Pi 標準 JSON として読み込み・project 同名解決を行う。ただし conductor は headless `AgentSession` であり、Pi TUI の renderer を持たないため色・表示設定をモデル入出力へ適用しない。
 - Pi 標準の `settings.json` のうち、headless conductor が実際に使うキーは次の範囲に限定する。
   - `defaultProvider` / `defaultModel`（`model` / `modelId` は conductor 互換 alias）: モデル選択。
-  - `apiKey` / `apiKeys`: `auth.json` の provider credential がない場合の認証 fallback。
+  - `apiKey` / `apiKeys`: 同じ fallback 層ではない。非空・非 command の `settings.json.apiKeys[provider]` は Pi `ModelRuntime` の runtime API key として登録され、user `auth.json` より先に使われる。これに対し scalar `settings.json.apiKey` は runtime override ではなく、`ModelRuntime` が API key を返さなかった場合などの Ensemble fallback である。settings 候補から選ばれた `!command` は request 時に provider 設定として登録され、runtime override / user credential より後、`models.json` provider key より前に解決される。空の `apiKeys[provider]` は status と request の扱いが食い違う例外がある。Pi 1.2.0 の根拠と詳しい順序は [Pi conductor セットアップと認証](../pi-conductor-setup.md#認証の解決順) を参照。
   - `extensions` / `skills` / `prompts` / `themes`: 各 resource root 基準の追加 path。
 - `compaction.*` は Pi `AgentSession` の manual / automatic compaction へ、`branchSummary.*` は branch summary へ、`.ensemble/pi` の user → project deep merge 結果を `SettingsManager` 経由で適用する。
 - `defaultThinkingLevel`、`modelThinkingLevels`、`thinkingBudgets`、`enabledModels`、`defaultTools`、`codemode.*`、`packages`、`enableSkillCommands`、`sessionDir`、`theme` / `tuiMode` / `terminal.*` / `images.*` / `markdown.*`、network / retry / shell / update / telemetry 系の Pi settings key は headless conductor では **無視**する。built-in coding tools の制御は `profile.conductor.builtinTools` のみで行う。未掲載の未対応キーも同じく、警告・拒否なしで無視する。`sessionDir` に関係なく transcript は harness の `<repoRoot>/.ensemble/pi/sessions/` が正本である。`enableSkillCommands` は `/skill:<name>` の展開可否を変更せず、`packages` は install・package resource 解決を行わない。
@@ -142,3 +142,4 @@ Pi backend では [`pi-coding-agent` の Configuration](https://github.com/earen
 | 2026-10-05 | #392 reviewer 対応: Cursor placeholder 解決、Pi MCP 接続エラー観測、sidecar の MCP digest による resume 変更検出を追加 |
 | 2026-10-07 | #398: `.ensemble/pi` の user → project `compaction.*` / `branchSummary.*` を Pi `SettingsManager` 経由で headless conductor に適用。`sessionDir` は harness の transcript 保存先を維持 |
 | 2026-10-07 | #403: profile の `conductor.builtinTools` を built-in coding tools の唯一の制御にし、省略・未指定を有効、`false` のみ無効とする |
+| 2026-11-13 | #680 review follow-up: scalar `apiKey` の fallback と `apiKeys[provider]` の runtime override を分け、Pi 1.2.0 の空文字時の status / request 差を setup guide に記録 |

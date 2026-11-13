@@ -120,11 +120,14 @@ acp:
       reasoning: high                 # 任意。対応する ACP preset に渡す
     sonnet: YOUR_SONNET_MODEL_ID
     haiku: YOUR_HAIKU_MODEL_ID
+    sonnet-lite:
+      model: YOUR_SONNET_MODEL_ID
+      reasoning: low
   tags:                               # profile の modelTag → models key
     high: opus
     default: sonnet
-    low: sonnet
-    fast: haiku
+    low: haiku
+    lite: sonnet-lite
 
 session:
   worktree: isolated                  # --worktree 既定（isolated | in-repo）
@@ -201,9 +204,16 @@ acp:
       model: YOUR_OPUS_MODEL_ID
       reasoning: high
     sonnet: YOUR_SONNET_MODEL_ID
+    haiku: YOUR_HAIKU_MODEL_ID
+    lite:
+      model: YOUR_SONNET_MODEL_ID
+      reasoning: low
   tags:
     high: opus
     default: sonnet
+    low: haiku
+    lite: lite
+    urgent: opus
 ```
 
 ```yaml
@@ -215,16 +225,19 @@ workers:
   - name: reviewer
     kind: reviewer
     modelTag: default
-  - researcher # 文字列 shorthand も default tag
+  - name: researcher
+    kind: researcher
+    modelTag: urgent
+  - analyst # 文字列 shorthand も default tag
 ```
 
 model catalog は従来どおり model ID の文字列で指定できます。構造化エントリには `model` と任意の `reasoning` を指定し、Cursor preset 用に任意の `cursorFast` も指定できます。`model` と `reasoning` は空でない文字列、`cursorFast` は boolean です。Codex の `reasoning` には `low`、`medium`、`high`、`xhigh`、`max`、`ultra` などがありますが、対応値は model と client に依存します（[Codex 設定リファレンス](https://developers.openai.com/codex/config-reference/)）。ensemble は値の一覧を固定せず Codex に渡します。設定として受け付けられても、利用する model がその値に対応するとは限りません。
 
 `models` と `tags` は user config → project config の順に deep merge します。構造化エントリの `model`、`reasoning`、`cursorFast` も個別にマージします。例えば user 側の `opus: YOUR_OPUS_MODEL_ID` に対して project 側で `opus: { reasoning: high }` と書くと、model ID を引き継いで reasoning を追加できます。逆に project 側で文字列 shorthand を指定すると、user 側のエントリ全体を置き換え、user 側の属性も消します。`model`、`reasoning`、`cursorFast` のいずれかを指定した構造化エントリの最終結果に `model` がない場合や、指定した値の型が合わない場合はエラーです。Cursor の別設定経路がない `cursorFast` は Cursor 用 field として parse しますが、明示すると spawn 前に fail fast します。model-only の `model` は公式 CLI の `--model` option にそのまま渡します。
 
-config の `tags` に選択した tag がなければ ACP preset の既定 model を使います。tag が存在しても参照先 key が `models` にない場合は起動前にエラーにします。
+profile の `workers[].modelTag` と config の `acp.tags` key は任意の文字列で、空文字や空白だけの文字列もそのまま照合します。YAML では `modelTag: ""` のように書き、空 tag key は `"": blank`、空白 tag key は `"  ": spaced` のように引用符で囲みます。`high` / `default` / `low` / `lite` は組み込み team 向けに意味を定めた推奨 tier で、詳しくは [user team の modelTag](user-teams.md#worker-modeltag-と-tier-の慣習) を参照してください。`lite` は default 相当の model と短めの reasoning などで throughput を優先する tier で、Cursor ACP の fast mode（`cursorFast`）とは別概念です。`default` 以外の選択 tag（空文字・空白のみを含む）の mapping がなければ harness warning を出して `acp.tags.default` を試し、それもなければ model を注入せず ACP preset の既定を使います。`modelTag` を省略した worker が内部で選ぶ `default` は warning なしで preset の既定を使います。`modelTag: default` を明示した worker で mapping がなければ warning を出して preset の既定を使います。mapping があるのに参照先 key が `models` にない場合は起動前にエラーにします。tag mapping と resume digest の判断は [ADR 0062](adr/0062-worker-acp-model-tags.md)、[ADR 0063](adr/0063-explicit-default-model-tag-warning.md)、[ADR 0064](adr/0064-worker-model-tags-allow-empty-strings.md) に記録しています。
 
-worker 名・kind ごとの model 表は設けません。profile へ書ける model 関連の値は固定語彙の `modelTag` のみで、preset・spawn env・model ID は引き続き config 側が正本です。
+worker 名・kind ごとの model 表は設けません。profile の `modelTag` は組み込み語を含む任意の文字列を受け付けます。preset・spawn env・model ID は引き続き config 側が正本です。
 
 model と reasoning の渡し方は preset ごとに異なります。Cursor model-only の ensemble 契約は、公式 CLI option に model ID をそのまま渡すことです。ACP の応答やサマリ値は上流内部の runtime attestation ではありませんが、その attestation を毎回要求しません。
 
@@ -397,7 +410,7 @@ acp:
 - `prompts/`: Markdown template を読み込み、`/name args` の user prompt を Pi 標準の引数置換で展開します。
 - `themes/`: Pi 標準 JSON として読み込み、project 同名を優先します。conductor は headless `AgentSession` のため TUI renderer がなく、theme の色・表示設定はモデル入出力には適用しません。
 
-Pi の初回セットアップ、provider 認証、認証優先順、TTY / stderr の login、project OAuth の制約、`ensemble models list`、missing key / 401 の復旧は [Pi conductor セットアップと認証](pi-conductor-setup.md)を正本とします。この config reference では、headless conductor が `settings.json` の `apiKey` / `apiKeys` を認証 fallback として使い、`models.json` の provider `apiKey` と `!command` も Pi resource として解決することだけを定義します。`!command` は conductor process の shell と OS 権限で実行されるため、信頼できる設定でのみ使用してください。`gcloud auth print-identity-token` 等を連続実行しないためのキャッシュ付きヘルパーは harness では提供せず、[pi-conductor-setup.md の `!command` とトークン取得](pi-conductor-setup.md#command-とトークン取得の連続実行litellm--gcloud-等) と Node 実装の [scripts/pi/cached-auth.mjs](../scripts/pi/cached-auth.mjs) を参照してください。`@agents-ensemble/cli` の配布物には `scripts/pi/cached-auth.mjs` と、これへ委譲する非推奨の `.sh` wrapper が含まれます。既存 `~/.ensemble/pi/cached-auth.sh` コピーからの移行と p50 測定手順も Pi セットアップガイドに記載しています。Pi の MCP HTTP OAuth は provider OAuth とは別に、公式 MCP extension が管理します。
+Pi の初回セットアップ、provider 認証、認証優先順、TTY / stderr の login、project OAuth の制約、`ensemble models list`、missing key / 401 の復旧は [Pi conductor セットアップと認証](pi-conductor-setup.md)を正本とします。この config reference では、headless conductor が `settings.json.apiKeys[provider]` の非 command 値を runtime override として使い、scalar `settings.json.apiKey` は別の fallback 経路で扱うこと、`models.json` の provider `apiKey` と `!command` も Pi resource として解決することを定義します。`!command` は conductor process の shell と OS user / 環境で実行され、worker permission 処理や harness の sandbox を通りません。repository の project resource も実行可能な設定として扱い、信頼できる設定でのみ使用してください。`gcloud auth print-identity-token` 等を連続実行しないためのキャッシュ付きヘルパーは harness では提供せず、[pi-conductor-setup.md の `!command` とトークン取得](pi-conductor-setup.md#command-とトークン取得の連続実行litellm--gcloud-等) と Node 実装の [scripts/pi/cached-auth.mjs](../scripts/pi/cached-auth.mjs) を参照してください。`@agents-ensemble/cli` の配布物には `scripts/pi/cached-auth.mjs` と、これへ委譲する非推奨の `.sh` wrapper が含まれます。既存 `~/.ensemble/pi/cached-auth.sh` コピーからの移行と p50 測定手順も Pi セットアップガイドに記載しています。Pi の MCP HTTP OAuth は provider OAuth とは別に、公式 MCP extension が管理します。
 
 #### `settings.json` の headless 対応範囲
 
@@ -410,7 +423,8 @@ conductor は Pi 1.x の `createAgentSession` / `DefaultResourceLoader` を head
 | キー | 適用チャネル | headless conductor での意味 |
 |------|--------------|----------------------------|
 | `defaultProvider` / `defaultModel` | `model-selection` | 明示的な `provider/model` がない場合のモデル選択。`model` / `modelId` は conductor の互換 alias として同じ選択に使います。 |
-| `apiKey` / `apiKeys` | `auth-fallback` | `auth.json` に provider credential がない場合の認証 fallback。 |
+| `apiKey` | `auth-fallback` | 通常の scalar 値は Pi `ModelRuntime` が key を返さなかった場合の最終 fallback です。`!command` は settings 候補として `apiKeys[provider]` より先に選ばれ、request 用の provider 設定として Pi runtime に登録されます。ただし、非 command の `apiKeys[provider]` がある場合は、その runtime override が先に解決されます。 |
+| `apiKeys` | `auth-fallback` | `apiKeys[provider]` の非 command 値は `ModelRuntime.setRuntimeApiKey` で runtime override として登録し、user `auth.json` より先に使います。`!command` は runtime override ではなく、scalar `apiKey` がない場合に settings 候補として選ばれ、request 用の provider 設定として登録されます。 |
 | `extensions` / `skills` / `prompts` / `themes` | `resource-path` | 各 resource root を基準に追加で読む path。通常の `extensions/` 等の discovery と併用します。 |
 | `compaction.*` | `settings-manager-override` | Pi の `AgentSession` が行う manual / automatic compaction。`enabled`、`reserveTokens`、`keepRecentTokens`、`modelOverrides` だけを user → project の deep merge 結果から `SettingsManager` へ渡します。 |
 | `branchSummary.*` | `settings-manager-override` | Pi の branch summary。`reserveTokens` / `skipPrompt` だけを `compaction.*` と同じ merge 結果から `SettingsManager` へ渡します。 |
