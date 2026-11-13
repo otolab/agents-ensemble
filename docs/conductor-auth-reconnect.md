@@ -82,4 +82,4 @@ inbox に含むのは operator-authored text と failure class、workflow / back
 
 一時ファイルだけでは、local queue の消費、provider request の受理、tool effect を一つの transaction にできません。送信前の durable ack は欠落、送信後の ack は crash window の重複を残します。本文 hash も同じ文章を別の意図で再送したい場合を区別せず、副作用 dedupe を実現しません。現行契約は process-local の確認と安全な再開に留めます。process 間の replay が必要な場合は、stable event identity、atomic な送受信境界、受け手側の副作用 idempotency を別の ADR で設計します。
 
-関連: [ADR 0061](adr/0061-conductor-dispatch-lifecycle-and-recovery-boundary.md)、[operator input](operator-input.md)、[session logging](session-logging.md)。
+関連: [ADR 0062](adr/0062-conductor-dispatch-lifecycle-and-recovery-boundary.md)、[operator input](operator-input.md)、[session logging](session-logging.md)。

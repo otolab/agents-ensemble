@@ -130,10 +130,11 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0056](0056-permission-stall-dispatch-hold.md) | dispatch hold 中の permission stall 回復通知 | accepted |
 | [0057](0057-permission-stall-idle-detection.md) | idle worker 中も pending permission の停滞を検知 | accepted |
 | [0058](0058-pi-send-recovery-replay-boundary.md) | Pi send recovery の再送境界 | superseded → [0059](0059-pi-recovery-report-after-manual-reconnect.md) |
-| [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0061](0061-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
-| [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | superseded → [0061](0061-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
-| [0061](0061-conductor-dispatch-lifecycle-and-recovery-boundary.md) | conductor dispatch lifecycle と recovery 境界 | accepted |
-| [0062](0062-legacy-cursor-bootstrap-unknown.md) | 旧 Cursor bootstrap 状態を unknown として再開する | accepted |
+| [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0062](0062-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
+| [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | superseded → [0062](0062-conductor-dispatch-lifecycle-and-recovery-boundary.md) |
+| [0061](0061-github-slug-session-persistence.md) | Issue session の slug 正本と operator-agent の user profile | proposed |
+| [0062](0062-conductor-dispatch-lifecycle-and-recovery-boundary.md) | conductor dispatch lifecycle と recovery 境界 | accepted |
+| [0063](0063-legacy-cursor-bootstrap-unknown.md) | 旧 Cursor bootstrap 状態を unknown として再開する | accepted |
 
 ## 追加するとき
 
