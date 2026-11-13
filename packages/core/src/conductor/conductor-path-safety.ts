@@ -65,6 +65,77 @@ export async function isPathWithin(parent: string, target: string): Promise<bool
   return isCaseInsensitive;
 }
 
+/**
+ * Check whether the spelling, canonical target, or any symlink-resolution hop
+ * lies within a protected root. This catches a user-layer symlink to a project
+ * file even when that project file is itself a symlink elsewhere.
+ */
+export async function isPathWithinAnyRoot(
+  targetPath: string,
+  roots: readonly string[],
+): Promise<boolean> {
+  const targetAliases = await pathAliases(targetPath);
+  for (const root of roots) {
+    const rootAliases = await pathAliases(root);
+    for (const parent of rootAliases) {
+      for (const target of targetAliases) {
+        if (await isPathWithin(parent, target)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function pathAliases(path: string): Promise<string[]> {
+  const aliases = new Set<string>();
+  const absolutePath = resolve(path);
+  await traceSymlinkPaths(absolutePath, aliases, 0);
+  aliases.add(await canonicalPath(absolutePath));
+  return [...aliases];
+}
+
+async function traceSymlinkPaths(
+  path: string,
+  aliases: Set<string>,
+  depth: number,
+): Promise<void> {
+  const absolutePath = resolve(path);
+  aliases.add(absolutePath);
+  if (depth > 40) {
+    throw new Error(`Too many symlinks while checking path ${absolutePath}.`);
+  }
+
+  const root = parse(absolutePath).root;
+  const segments = absolutePath.slice(root.length).split(sep).filter(Boolean);
+  let current = root;
+  for (let index = 0; index < segments.length; index += 1) {
+    const entryPath = join(current, segments[index]!);
+
+    let details: Awaited<ReturnType<typeof lstat>>;
+    try {
+      details = await lstat(entryPath);
+    } catch (error) {
+      if (!isMissingFile(error)) throw error;
+      const missingPath = join(current, ...segments.slice(index));
+      aliases.add(missingPath);
+      aliases.add(await canonicalPath(missingPath));
+      return;
+    }
+
+    if (!details.isSymbolicLink()) {
+      current = entryPath;
+      continue;
+    }
+
+    const targetPath = resolve(dirname(entryPath), await readlink(entryPath));
+    const replacementPath = join(targetPath, ...segments.slice(index + 1));
+    await traceSymlinkPaths(replacementPath, aliases, depth + 1);
+    aliases.add(replacementPath);
+    return;
+  }
+  aliases.add(current);
+}
+
 function isPathWithinCaseSensitive(parent: string, target: string): boolean {
   const pathFromParent = relative(parent, target);
   return (

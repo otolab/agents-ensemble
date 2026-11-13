@@ -23,7 +23,7 @@ import {
   type OAuthLoginCallbacks,
 } from '@earendil-works/pi-ai/compat';
 import type { AuthInteraction, AuthPrompt, AuthEvent } from '@earendil-works/pi-ai';
-import { canonicalPath, isPathWithin } from './conductor-path-safety.js';
+import { canonicalPath, isPathWithinAnyRoot } from './conductor-path-safety.js';
 import {
   loadPiResources,
   resolvePiResourceRoots,
@@ -132,7 +132,8 @@ export async function loginPiConductor(
 ): Promise<PiConductorLoginResult> {
   const roots = resolvePiResourceRoots(options);
   const authPath = join(roots.agentDir, 'auth.json');
-  const runtimeAuthPath = await resolveSafePiUserAuthPath(authPath, roots.projectDir);
+  const protectedProjectRoots = getProjectWriteRoots(options.cwd, roots.projectDir);
+  const runtimeAuthPath = await resolveSafePiUserAuthPath(authPath, protectedProjectRoots);
 
   const resources = await loadPiResources(options);
   const context = await createPiConductorAuthContextWithAuthPath(
@@ -149,7 +150,10 @@ export async function loginPiConductor(
         `Pi provider "${provider}" uses OAuth. Run this command from a TTY so the OAuth login flow can interact with you.`,
       );
     }
-    const securedAuthPath = await ensurePrivatePiUserAuthFile(context.authPath, roots.projectDir);
+    const securedAuthPath = await ensurePrivatePiUserAuthFile(
+      context.authPath,
+      protectedProjectRoots,
+    );
     if (securedAuthPath !== runtimeAuthPath) {
       throw new Error(
         'Pi user auth.json target changed while preparing OAuth login; no credentials were written. Retry login after checking the auth.json symlink.',
@@ -178,7 +182,7 @@ export async function loginPiConductor(
       `Pi provider "${provider}" requires an API key. Pass a secret API-key prompt value or set ${formatPiProviderEnvHint(provider)}.`,
     );
   }
-  await writePiApiKey(context.authPath, roots.projectDir, provider, apiKey);
+  await writePiApiKey(context.authPath, protectedProjectRoots, provider, apiKey);
   await context.modelRuntime.setRuntimeApiKey(provider, apiKey);
   return {
     backend: 'pi',
@@ -204,7 +208,8 @@ export async function logoutPiConductor(
 ): Promise<PiConductorLogoutResult> {
   const roots = resolvePiResourceRoots(options);
   const authPath = join(roots.agentDir, 'auth.json');
-  const runtimeAuthPath = await resolveSafePiUserAuthPath(authPath, roots.projectDir);
+  const protectedProjectRoots = getProjectWriteRoots(options.cwd, roots.projectDir);
+  const runtimeAuthPath = await resolveSafePiUserAuthPath(authPath, protectedProjectRoots);
 
   const resources = await loadPiResources(options);
   const context = await createPiConductorAuthContextWithAuthPath(
@@ -213,7 +218,10 @@ export async function logoutPiConductor(
     runtimeAuthPath,
   );
   const provider = await resolveConductorProviderOrThrow(options, resources, context);
-  const securedAuthPath = await ensurePrivatePiUserAuthFile(context.authPath, roots.projectDir);
+  const securedAuthPath = await ensurePrivatePiUserAuthFile(
+    context.authPath,
+    protectedProjectRoots,
+  );
   if (securedAuthPath !== runtimeAuthPath) {
     throw new Error(
       'Pi user auth.json target changed while preparing logout; no credentials were written. Retry after checking the auth.json symlink.',
@@ -911,12 +919,12 @@ function toPiRuntimeProviderConfig(
 
 async function writePiApiKey(
   authPath: string,
-  projectDir: string,
+  protectedProjectRoots: readonly string[],
   provider: string,
   apiKey: string,
 ): Promise<void> {
   await mkdir(dirname(authPath), { recursive: true, mode: 0o700 });
-  const targetPath = await resolveSafePiUserAuthPath(authPath, projectDir);
+  const targetPath = await resolveSafePiUserAuthPath(authPath, protectedProjectRoots);
   let auth: Record<string, unknown> = {};
   try {
     const parsed: unknown = JSON.parse(await readFile(targetPath, 'utf8'));
@@ -930,29 +938,18 @@ async function writePiApiKey(
 
 async function resolveSafePiUserAuthPath(
   authPath: string,
-  projectDir: string,
+  protectedProjectRoots: readonly string[],
 ): Promise<string> {
-  const absoluteAuthPath = resolve(authPath);
-  const absoluteProjectDir = resolve(projectDir);
-  const logicalAuthEntryPath = join(
-    await canonicalPath(dirname(absoluteAuthPath)),
-    basename(absoluteAuthPath),
-  );
-  const [targetPath, canonicalProjectDir] = await Promise.all([
-    canonicalPath(absoluteAuthPath),
-    canonicalPath(absoluteProjectDir),
-  ]);
-  if (
-    (await isPathWithin(absoluteProjectDir, absoluteAuthPath)) ||
-    (await isPathWithin(absoluteProjectDir, logicalAuthEntryPath)) ||
-    (await isPathWithin(absoluteProjectDir, targetPath)) ||
-    (await isPathWithin(canonicalProjectDir, targetPath))
-  ) {
+  if (await isPathWithinAnyRoot(authPath, protectedProjectRoots)) {
     throw new Error(
-      `Refusing to use Pi user auth.json at ${authPath} because its configured path or resolved target is inside the project Pi resource root ${projectDir}. Configure a user agentDir outside the project resource root.`,
+      `Refusing to use Pi user auth.json at ${authPath} because its configured path or a symlink target enters the project Pi resource root or project .ensemble layer. Configure a user agentDir outside those project paths.`,
     );
   }
-  return targetPath;
+  return canonicalPath(authPath);
+}
+
+function getProjectWriteRoots(cwd: string, projectDir: string): string[] {
+  return [join(resolve(cwd), '.ensemble'), projectDir];
 }
 
 async function atomicWritePiAuthFile(path: string, contents: string): Promise<void> {
@@ -978,13 +975,13 @@ async function atomicWritePiAuthFile(path: string, contents: string): Promise<vo
 
 async function ensurePrivatePiUserAuthFile(
   authPath: string,
-  projectDir: string,
+  protectedProjectRoots: readonly string[],
 ): Promise<string> {
   // The Pi auth store only applies its mode when creating a file. Replace any
   // permissive or hard-linked user file before OAuth or logout can mutate it.
-  const targetPath = await resolveSafePiUserAuthPath(authPath, projectDir);
+  const targetPath = await resolveSafePiUserAuthPath(authPath, protectedProjectRoots);
   await mkdir(dirname(targetPath), { recursive: true, mode: 0o700 });
-  const safeTargetPath = await resolveSafePiUserAuthPath(authPath, projectDir);
+  const safeTargetPath = await resolveSafePiUserAuthPath(authPath, protectedProjectRoots);
   let details: Awaited<ReturnType<typeof lstat>>;
   try {
     details = await lstat(safeTargetPath);

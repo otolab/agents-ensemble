@@ -1,7 +1,10 @@
 import {
   chmod,
+  link,
+  lstat,
   mkdir,
   mkdtemp,
+  readlink,
   readFile,
   stat,
   symlink,
@@ -324,6 +327,164 @@ describe('writeConductorSetupFiles', () => {
     expect(await readFile(projectSettingsPath, 'utf8')).toBe(originalProjectSettings);
   });
 
+  it('refuses a user Pi settings symlink to project .ensemble/config.yaml', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-project-config-link-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-project-config-user-'));
+    const projectEnsembleDir = join(repoRoot, '.ensemble');
+    const projectConfigPath = join(projectEnsembleDir, 'config.yaml');
+    const agentDir = join(userRoot, 'pi');
+    const settingsPath = join(agentDir, 'settings.json');
+    const userConfigPath = join(userRoot, 'config.yaml');
+    const originalProjectConfig = '{"conductor":{"backend":"cursor","model":"project-model"}}\n';
+    const originalUserConfig = `conductor:\n  backend: cursor\n  pi:\n    agentDir: ${agentDir}\n`;
+    await mkdir(projectEnsembleDir, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(projectConfigPath, originalProjectConfig);
+    await writeFile(userConfigPath, originalUserConfig);
+    await symlink(projectConfigPath, settingsPath);
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        backend: 'pi',
+        pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+      }),
+    ).rejects.toThrow(
+      /User Pi settings resolve inside the project resource root \(\.ensemble or configured Pi root\)/,
+    );
+
+    expect(await readFile(projectConfigPath, 'utf8')).toBe(originalProjectConfig);
+    expect(await readFile(userConfigPath, 'utf8')).toBe(originalUserConfig);
+    expect((await lstat(settingsPath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(settingsPath)).toBe(projectConfigPath);
+  });
+
+  it('keeps an external user Pi settings symlink usable', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-external-link-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-external-link-user-'));
+    const externalRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-external-link-target-'));
+    const projectEnsembleDir = join(repoRoot, '.ensemble');
+    const projectConfigPath = join(projectEnsembleDir, 'config.yaml');
+    const agentDir = join(userRoot, 'pi');
+    const settingsPath = join(agentDir, 'settings.json');
+    const externalSettingsPath = join(externalRoot, 'settings.json');
+    const originalProjectConfig = '{"conductor":{"backend":"cursor"}}\n';
+    const originalExternalSettings = '{"custom":"keep"}\n';
+    await mkdir(projectEnsembleDir, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(projectConfigPath, originalProjectConfig);
+    await writeFile(join(userRoot, 'config.yaml'), `conductor:\n  pi:\n    agentDir: ${agentDir}\n`);
+    await writeFile(externalSettingsPath, originalExternalSettings);
+    await symlink(externalSettingsPath, settingsPath);
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        backend: 'pi',
+        pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+      }),
+    ).resolves.toMatchObject({ pi: { agentDir, settingsPath } });
+
+    expect(JSON.parse(await readFile(externalSettingsPath, 'utf8'))).toMatchObject({
+      custom: 'keep',
+      defaultProvider: 'openai',
+      defaultModel: 'gpt-6.1-sol',
+    });
+    expect((await lstat(settingsPath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(settingsPath)).toBe(externalSettingsPath);
+    expect(await readFile(projectConfigPath, 'utf8')).toBe(originalProjectConfig);
+  });
+
+  it('detaches a user Pi settings hard link from project .ensemble before saving', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-project-hardlink-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-project-hardlink-user-'));
+    const projectEnsembleDir = join(repoRoot, '.ensemble');
+    const projectConfigPath = join(projectEnsembleDir, 'config.yaml');
+    const agentDir = join(userRoot, 'pi');
+    const settingsPath = join(agentDir, 'settings.json');
+    const originalProjectConfig = '{"custom":"project-owned"}\n';
+    await mkdir(projectEnsembleDir, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(projectConfigPath, originalProjectConfig);
+    await writeFile(join(userRoot, 'config.yaml'), `conductor:\n  pi:\n    agentDir: ${agentDir}\n`);
+    await link(projectConfigPath, settingsPath);
+    expect((await stat(settingsPath)).nlink).toBe(2);
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        backend: 'pi',
+        pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+      }),
+    ).resolves.toMatchObject({ pi: { agentDir, settingsPath } });
+
+    const [userSettings, projectConfig] = await Promise.all([
+      stat(settingsPath),
+      stat(projectConfigPath),
+    ]);
+    expect(userSettings.nlink).toBe(1);
+    expect(projectConfig.nlink).toBe(1);
+    if (userSettings.ino !== 0 && projectConfig.ino !== 0) {
+      expect(userSettings.ino).not.toBe(projectConfig.ino);
+    }
+    expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toMatchObject({
+      custom: 'project-owned',
+      defaultProvider: 'openai',
+      defaultModel: 'gpt-6.1-sol',
+    });
+    expect(await readFile(projectConfigPath, 'utf8')).toBe(originalProjectConfig);
+  });
+
+  it('protects project .ensemble when a user Pi root differs only by case', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-case-alias-ensemble-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-case-alias-ensemble-user-'));
+    const projectEnsembleDir = join(repoRoot, '.ensemble');
+    const projectConfigPath = join(projectEnsembleDir, 'config.yaml');
+    const agentDir = join(repoRoot, '.Ensemble', 'user-pi');
+    const settingsPath = join(agentDir, 'settings.json');
+    const originalProjectConfig = '{"conductor":{"backend":"cursor"}}\n';
+    await mkdir(projectEnsembleDir, { recursive: true });
+    await writeFile(projectConfigPath, originalProjectConfig);
+    await writeFile(join(userRoot, 'config.yaml'), `conductor:\n  pi:\n    agentDir: ${agentDir}\n`);
+
+    const caseInsensitiveVolume = await hasCaseInsensitiveDirectoryNames(
+      repoRoot,
+      projectEnsembleDir,
+    );
+    if (caseInsensitiveVolume) {
+      await expect(
+        writeConductorSetupFiles({
+          repoRoot,
+          userEnsembleRoot: userRoot,
+          backend: 'pi',
+          pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+        }),
+      ).rejects.toThrow(
+        /User Pi resource root resolves inside the project resource root \(\.ensemble or configured Pi root\)/,
+      );
+      await expect(stat(settingsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readFile(projectConfigPath, 'utf8')).toBe(originalProjectConfig);
+      return;
+    }
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        backend: 'pi',
+        pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+      }),
+    ).resolves.toMatchObject({ pi: { agentDir, settingsPath } });
+    expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toMatchObject({
+      defaultProvider: 'openai',
+      defaultModel: 'gpt-6.1-sol',
+    });
+    expect(await readFile(projectConfigPath, 'utf8')).toBe(originalProjectConfig);
+  });
+
   it('refuses a user config path inside the project repository', async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-user-config-project-'));
     const userRoot = join(repoRoot, '.ensemble', 'user');
@@ -337,6 +498,34 @@ describe('writeConductorSetupFiles', () => {
     ).rejects.toThrow('User config resolves inside the project repository');
 
     await expect(stat(userRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('refuses a user config symlink to project .ensemble/config.yaml', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-user-config-link-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-user-config-link-user-'));
+    const projectConfigPath = join(repoRoot, '.ensemble', 'config.yaml');
+    const userConfigPath = join(userRoot, 'config.yaml');
+    const originalProjectConfig = 'conductor:\n  backend: cursor\n  model: project-model\n';
+    await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
+    await writeFile(projectConfigPath, originalProjectConfig);
+    await symlink(projectConfigPath, userConfigPath);
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        home: userRoot,
+        backend: 'pi',
+        pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+      }),
+    ).rejects.toThrow('User config resolves inside the project repository');
+
+    expect(await readFile(projectConfigPath, 'utf8')).toBe(originalProjectConfig);
+    expect((await lstat(userConfigPath)).isSymbolicLink()).toBe(true);
+    expect(await readlink(userConfigPath)).toBe(projectConfigPath);
+    await expect(stat(join(userRoot, '.ensemble', 'pi', 'settings.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(

@@ -112,7 +112,7 @@ API-key login は対話的な TTY が必要です。CI や非 TTY では login p
 
 #### 保存先の保護
 
-user `auth.json` が symlink の場合、リンク先が project Pi root の外にあれば、login / logout はリンクを保ったままその実体を使います。設定された auth path が project Pi root 内にある場合、または実体が project Pi root 内にある場合は、project 層を書き換えないよう処理を拒否します。既存の hard link は auth 更新前に user 側を独立した file に置き換え、別名側の内容を保ちます。
+setup と login / logout は、project の `.ensemble/` 全体と設定された project Pi root を書き込み保護します。user の `settings.json` / `auth.json` が保護対象の中にある場合や、symlink の経路がそこを通る場合は処理を拒否します。リンク先の最終的な実体が project 層の外でも、project file を経由する symlink は許可しません。保護対象の外にある通常の user symlink は利用でき、リンクを保ったままその実体を更新します。case-insensitive volume では大文字・小文字だけ異なる path も同じ project path として扱い、volume の規則を判定できない場合は書き込みを拒否します。既存の hard link は書き込み前に user 側を独立した file に置き換え、project 側の内容を保ちます。
 
 POSIX では user auth file を mode `0600` で作成・更新します。Windows では Node.js の `fs` mode で変更できるのは書き込み権限だけで、owner / group / others の区別はありません。そのため `0600` を owner-only ACL の保証として扱えません。この実装は Windows ACL を設定・検証しません。OAuth login / logout では、通常の single-link auth file を mode bits の違いだけで置き換えません。hardlink の分離時や API key の保存時など、auth file を新規作成・置換すると保存先 directory の既定 ACL を継承します。その場合、auth file に個別設定した ACL が引き継がれる保証はありません。Windows では意図した利用者だけがアクセスできる ACL を設定した保存先を選び、必要に応じて ACL を確認してください（[Node.js v22 `fs` の file modes](https://nodejs.org/download/release/v22.23.3/docs/api/fs.html#file-modes)、[Windows file security](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)）。
 

@@ -216,7 +216,9 @@ describe('Pi conductor authentication', () => {
         modelId: 'gpt-6.1-sol',
         apiKey: 'new-user-secret',
       }),
-    ).rejects.toThrow(/configured path or resolved target is inside the project Pi resource root/i);
+    ).rejects.toThrow(
+      /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
+    );
     const oauthLogin = vi.spyOn(ModelRuntime.prototype, 'login');
     await expect(
       loginPiConductor({
@@ -226,7 +228,9 @@ describe('Pi conductor authentication', () => {
         modelId: 'gpt-6.1-sol',
         oauthCallbacks: createOAuthCallbacks(),
       }),
-    ).rejects.toThrow(/configured path or resolved target is inside the project Pi resource root/i);
+    ).rejects.toThrow(
+      /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
+    );
     const logout = vi.spyOn(ModelRuntime.prototype, 'logout');
     await expect(
       logoutPiConductor({
@@ -235,7 +239,9 @@ describe('Pi conductor authentication', () => {
         provider: 'openai',
         modelId: 'gpt-6.1-sol',
       }),
-    ).rejects.toThrow(/configured path or resolved target is inside the project Pi resource root/i);
+    ).rejects.toThrow(
+      /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
+    );
 
     expect(oauthLogin).not.toHaveBeenCalled();
     expect(logout).not.toHaveBeenCalled();
@@ -243,6 +249,116 @@ describe('Pi conductor authentication', () => {
     expect((await lstat(userAuthPath)).isSymbolicLink()).toBe(true);
     await expect(readFile(projectAuthPath, 'utf8')).resolves.toBe(projectAuth);
   });
+
+  it.each(['api-key', 'oauth', 'logout'] as const)(
+    'refuses a user auth.json symlink to project .ensemble/config.yaml for %s',
+    async (operation) => {
+      const fixture = await createAuthFileFixture(`pi-auth-project-config-symlink-${operation}-`);
+      const projectConfigPath = join(dirname(fixture.projectDir), 'config.yaml');
+      const originalProjectConfig = '{"conductor":{"backend":"cursor","model":"project-model"}}\n';
+      await writeFile(projectConfigPath, originalProjectConfig);
+      await symlink(projectConfigPath, fixture.userAuthPath);
+
+      const oauthLogin = vi.spyOn(ModelRuntime.prototype, 'login').mockResolvedValue(undefined);
+      const logout = vi.spyOn(ModelRuntime.prototype, 'logout').mockResolvedValue(undefined);
+
+      await expect(performAuthWriteOperation(operation, fixture)).rejects.toThrow(
+        /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
+      );
+
+      expect(oauthLogin).not.toHaveBeenCalled();
+      expect(logout).not.toHaveBeenCalled();
+      expect((await lstat(fixture.userAuthPath)).isSymbolicLink()).toBe(true);
+      expect(await readlink(fixture.userAuthPath)).toBe(projectConfigPath);
+      await expect(readFile(projectConfigPath, 'utf8')).resolves.toBe(originalProjectConfig);
+    },
+  );
+
+  it.each(['api-key', 'oauth', 'logout'] as const)(
+    'keeps project .ensemble/config.yaml unchanged when user auth is hard-linked to it during %s',
+    async (operation) => {
+      const fixture = await createAuthFileFixture(`pi-auth-project-config-hardlink-${operation}-`);
+      const projectConfigPath = join(dirname(fixture.projectDir), 'config.yaml');
+      const originalProjectConfig =
+        '{"conductor":{"backend":"cursor"},"projectMarker":"project-owned"}\n';
+      await writeFile(projectConfigPath, originalProjectConfig);
+      await link(projectConfigPath, fixture.userAuthPath);
+      const originalProjectFile = await stat(projectConfigPath);
+      expect((await stat(fixture.userAuthPath)).nlink).toBe(2);
+
+      const assertProjectFileDetached = async () => {
+        const [userFile, projectFile] = await Promise.all([
+          stat(fixture.userAuthPath),
+          stat(projectConfigPath),
+        ]);
+        expectSeparatedAuthInodes(userFile, projectFile, originalProjectFile.ino);
+        await expect(readFile(projectConfigPath, 'utf8')).resolves.toBe(originalProjectConfig);
+      };
+      const oauthLogin = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockImplementation(assertProjectFileDetached);
+      const logout = vi
+        .spyOn(ModelRuntime.prototype, 'logout')
+        .mockImplementation(assertProjectFileDetached);
+
+      await expect(performAuthWriteOperation(operation, fixture)).resolves.toBeDefined();
+
+      expect(oauthLogin).toHaveBeenCalledTimes(operation === 'oauth' ? 1 : 0);
+      expect(logout).toHaveBeenCalledTimes(operation === 'logout' ? 1 : 0);
+      await assertProjectFileDetached();
+      if (operation === 'api-key') {
+        expect(JSON.parse(await readFile(fixture.userAuthPath, 'utf8'))).toMatchObject({
+          openai: { type: 'api_key', key: 'case-alias-api-key' },
+        });
+      }
+    },
+  );
+
+  it.each(['api-key', 'oauth', 'logout'] as const)(
+    'protects project .ensemble from a case-only user auth root alias during %s',
+    async (operation) => {
+      const fixture = await createAuthFileFixture(`pi-auth-project-ensemble-case-alias-${operation}-`);
+      const projectEnsembleDir = dirname(fixture.projectDir);
+      const projectConfigPath = join(projectEnsembleDir, 'config.yaml');
+      const agentDir = join(fixture.cwd, '.Ensemble', 'user-pi');
+      const userAuthPath = join(agentDir, 'auth.json');
+      const originalProjectConfig = '{"conductor":{"backend":"cursor"}}\n';
+      await writeFile(projectConfigPath, originalProjectConfig);
+
+      const caseInsensitiveVolume = await directoryPathIsCaseInsensitive(projectEnsembleDir);
+      const oauthLogin = vi.spyOn(ModelRuntime.prototype, 'login').mockResolvedValue(undefined);
+      const logout = vi.spyOn(ModelRuntime.prototype, 'logout').mockResolvedValue(undefined);
+
+      if (caseInsensitiveVolume) {
+        await expect(
+          performAuthWriteOperation(operation, {
+            cwd: fixture.cwd,
+            agentDir,
+            projectDir: fixture.projectDir,
+          }),
+        ).rejects.toThrow(
+          /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
+        );
+        expect(oauthLogin).not.toHaveBeenCalled();
+        expect(logout).not.toHaveBeenCalled();
+        await expect(stat(userAuthPath)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(readFile(projectConfigPath, 'utf8')).resolves.toBe(originalProjectConfig);
+        return;
+      }
+
+      await expect(
+        performAuthWriteOperation(operation, {
+          cwd: fixture.cwd,
+          agentDir,
+          projectDir: fixture.projectDir,
+        }),
+      ).resolves.toBeDefined();
+      await expect(stat(userAuthPath)).resolves.toBeDefined();
+      await expect(readFile(projectConfigPath, 'utf8')).resolves.toBe(originalProjectConfig);
+      expect(oauthLogin).toHaveBeenCalledTimes(operation === 'oauth' ? 1 : 0);
+      expect(logout).toHaveBeenCalledTimes(operation === 'logout' ? 1 : 0);
+    },
+  );
 
   it.each(['api-key', 'oauth', 'logout'] as const)(
     'refuses a project-resident auth.json path that symlinks outward for %s',
@@ -269,7 +385,7 @@ describe('Pi conductor authentication', () => {
       await expect(
         performAuthWriteOperation(operation, { cwd, agentDir, projectDir }),
       ).rejects.toThrow(
-        /configured path or resolved target is inside the project Pi resource root/i,
+        /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
       );
 
       expect(oauthLogin).not.toHaveBeenCalled();
@@ -399,7 +515,9 @@ describe('Pi conductor authentication', () => {
         modelId: 'gpt-6.1-sol',
         apiKey: 'new-user-secret',
       }),
-    ).rejects.toThrow(/inside the project Pi resource root/);
+    ).rejects.toThrow(
+      /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
+    );
 
     await expect(stat(agentDir)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(join(projectDir, 'auth.json'), 'utf8')).rejects.toMatchObject({
@@ -428,7 +546,7 @@ describe('Pi conductor authentication', () => {
         await expect(
           performAuthWriteOperation(operation, { cwd, agentDir, projectDir }),
         ).rejects.toThrow(
-          /configured path or resolved target is inside the project Pi resource root/i,
+          /configured path or a symlink target enters the project Pi resource root or project \.ensemble layer/i,
         );
         expect(oauthLogin).not.toHaveBeenCalled();
         expect(logout).not.toHaveBeenCalled();

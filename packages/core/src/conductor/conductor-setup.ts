@@ -15,7 +15,7 @@ import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { ENSEMBLE_CONFIG_FILE } from '../config/load-ensemble-config.js';
 import { parseEnsembleConfig } from '../config/parse-config.js';
 import type { ConductorBackend } from '../config/types.js';
-import { canonicalPath, isPathWithin } from './conductor-path-safety.js';
+import { isPathWithinAnyRoot } from './conductor-path-safety.js';
 import { resolvePiResourceRoots } from './pi-resource-loader.js';
 
 export interface WriteConductorSetupOptions {
@@ -28,7 +28,7 @@ export interface WriteConductorSetupOptions {
   userEnsembleRoot?: string;
   home?: string;
   env?: NodeJS.ProcessEnv;
-  /** Effective project Pi root; setup refuses to write user settings into it. */
+  /** Effective project Pi root; setup also protects the project .ensemble directory. */
   readonlyProjectPiDir?: string;
 }
 
@@ -67,7 +67,8 @@ export async function writeConductorSetupFiles(
     home: options.home,
   });
   const configPath = join(userRoot, ENSEMBLE_CONFIG_FILE);
-  if (await isPathWithin(await canonicalPath(repoRoot), await canonicalPath(configPath))) {
+  const projectEnsembleDir = join(repoRoot, '.ensemble');
+  if (await isPathWithinAnyRoot(configPath, [repoRoot, projectEnsembleDir])) {
     throw new Error(
       'User config resolves inside the project repository; setup did not write project config.',
     );
@@ -86,23 +87,20 @@ export async function writeConductorSetupFiles(
       ...(options.home ? { home: options.home } : {}),
     });
     const readonlyProjectPiDir = options.readonlyProjectPiDir ?? roots.projectDir;
-    const canonicalProjectPiDir = await canonicalPath(readonlyProjectPiDir);
-    const canonicalAgentDir = await canonicalPath(roots.agentDir);
-    if (
-      (await isPathWithin(readonlyProjectPiDir, roots.agentDir)) ||
-      (await isPathWithin(canonicalProjectPiDir, canonicalAgentDir))
-    ) {
+    const protectedProjectRoots = [
+      projectEnsembleDir,
+      roots.projectDir,
+      readonlyProjectPiDir,
+    ];
+    if (await isPathWithinAnyRoot(roots.agentDir, protectedProjectRoots)) {
       throw new Error(
-        'User Pi resource root resolves inside the project resource root; setup did not write project resources.',
+        'User Pi resource root resolves inside the project resource root (.ensemble or configured Pi root); setup did not write project resources.',
       );
     }
     const settingsPath = join(roots.agentDir, 'settings.json');
-    if (
-      (await isPathWithin(readonlyProjectPiDir, settingsPath)) ||
-      (await isPathWithin(canonicalProjectPiDir, await canonicalPath(settingsPath)))
-    ) {
+    if (await isPathWithinAnyRoot(settingsPath, protectedProjectRoots)) {
       throw new Error(
-        'User Pi settings resolve inside the project resource root; setup did not write project resources.',
+        'User Pi settings resolve inside the project resource root (.ensemble or configured Pi root); setup did not write project resources.',
       );
     }
     settingsDocument = await readJsonDocument(settingsPath);
