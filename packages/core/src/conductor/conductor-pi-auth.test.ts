@@ -529,7 +529,7 @@ describe('Pi conductor authentication', () => {
     'protects a missing project Pi root against a case-only user path alias during %s',
     async (operation) => {
       const cwd = await mkdtemp(join(tmpdir(), `pi-auth-case-alias-${operation}-`));
-      const projectParent = join(cwd, '.ensemble');
+      const projectParent = join(cwd, 'project-resources');
       const projectDir = join(projectParent, 'pi');
       const agentDir = join(projectParent, 'Pi');
       await mkdir(projectParent, { recursive: true });

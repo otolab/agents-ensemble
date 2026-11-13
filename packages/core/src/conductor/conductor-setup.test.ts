@@ -256,12 +256,15 @@ describe('writeConductorSetupFiles', () => {
   it('protects a missing project Pi root when its user path differs only by case', async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-case-alias-project-'));
     const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-case-alias-user-'));
-    const projectParent = join(repoRoot, '.ensemble');
+    const projectParent = join(repoRoot, 'project-resources');
     const projectPiDir = join(projectParent, 'pi');
     const agentDir = join(projectParent, 'Pi');
     const userConfigPath = join(userRoot, 'config.yaml');
     await mkdir(projectParent, { recursive: true });
-    await writeFile(userConfigPath, `conductor:\n  pi:\n    agentDir: ${agentDir}\n`);
+    await writeFile(
+      userConfigPath,
+      `conductor:\n  pi:\n    agentDir: ${agentDir}\n    projectDir: ${projectPiDir}\n`,
+    );
 
     const caseInsensitiveVolume = await hasCaseInsensitiveDirectoryNames(repoRoot, projectParent);
 
