@@ -113,7 +113,20 @@ ensemble models list
 ensemble models list --provider <provider-id>
 ```
 
-`auth status` は Pi の auth file の場所、provider ごとの configured 状態、credential の source を秘密値なしで表示します。`models list` は Pi の `ModelRegistry` と解決済み resource を使い、認証済み provider の model だけを表示します。対象 provider を `--provider` で絞れます。認証済み model が無い場合は Pi 向けの login / auth file / 環境変数の案内を含むエラーになります。
+`auth status` は Pi の auth file の場所、provider ごとの configured 状態、credential の source を表示します。API key、token、環境変数の値は表示しません。`source` は出所を示す現在の粗い分類で、OAuth login の browser/manual 経路や `!command` と通常の文字列 key を必ず区別するものではありません。Ensemble 側で使う代表的な値は次のとおりです。
+
+| `source` | 現行表示が示すもの |
+|----------|-------------------|
+| `stored` | user `auth.json` を Pi `ModelRuntime` が管理する credential |
+| `project_stored` | project `auth.json` の provider entry |
+| `settings_json` | `settings.json` の `apiKey` / `apiKeys` fallback |
+| `models_json_key` | `models.json` の provider `apiKey` |
+| `environment` | provider 固有の環境変数。`label` がある場合は変数名 |
+| `project_oauth_unsupported` | project OAuth entry。`configured=false` となり、実行時に拒否される |
+
+Pi runtime が返す値もあるため、`source` を閉じた enum として扱わないでください。現行 status は mode-aware ではなく、`settings_json` / `models_json_key` の表示から command 登録の有無は分かりません。status は `!command` を実行せず、設定値も表示しません。
+
+`models list` は Pi の `ModelRegistry` と解決済み resource を使い、認証済み provider の model だけを表示します。対象 provider を `--provider` で絞れます。認証済み model が無い場合は Pi 向けの login / auth file / 環境変数の案内を含むエラーになります。
 
 ### OpenAI 互換 provider の catalog を比較・追加する
 
@@ -237,7 +250,9 @@ project → user の優先関係は provider 単位です。project に API-key 
 
 古い Pi API の説明で `AuthStorage` と呼ばれている user credential 層は、現在の Pi 1.0.x 経路では `ModelRuntime` が担います。利用者が意識する保存先と login の挙動は user `auth.json` です。
 
-`settings.json` / `models.json` の `apiKey` は環境変数参照（`$NAME` / `${NAME}`）や `!command` を含められます。`!command` は conductor process の shell と OS 権限で実行されるため、信頼できる設定だけで使ってください。login の保存先や OAuth refresh の user runtime とは別の resource fallback です。詳細は [config.md](config.md#pi-resource-root) を参照してください。
+`settings.json` / `models.json` の `apiKey` は環境変数参照（`$NAME` / `${NAME}`）や `!command` を含められます。project `auth.json` の API key entry にも command を指定できます。`!command` は Pi runtime が credential を解決するときに conductor process の shell / OS user / 環境で実行します。これは LLM が呼ぶ tool ではなく、worker ACP の permission 処理や harness の追加 sandbox は通りません。したがって project の Pi resource を含む設定ファイル自体が実行可能な入力です。未確認の repository から読み込んだ project resource では command を有効にせず、設定と command の両方を確認してください。
+
+`auth status` は `!command` を実行しません。また、`ensemble auth login` は command を登録しません。API key credential は user `auth.json` に保存されます。OpenAI OAuth login では user `settings.json` の device ID も管理します。project `auth.json` の command は user credential より先に選ばれるため、これを有効にしたまま user login しても effective credential は変わりません。command の結果を含む認証値を repository に書かず、Pi resource や project 設定を commit する場合は値・command と `.ensemble/` の ignore 状態を確認してください。詳細は [config.md](config.md#pi-resource-root) を参照してください。
 
 user `auth.json` の credential は CLI が生成・更新するものを使うのが基本です。project resource、`settings.json`、`models.json` に秘密値を置く場合もリポジトリへ commit せず、`.ensemble/` の ignore 方針とアクセス権を確認してください。
 
@@ -356,6 +371,8 @@ Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalo
 ### 実行中の 401 / auth error
 
 Pi の send が missing key、401、unauthorized などの認証エラーを返すと、harness は同じ agent ID で接続を張り直します。同じ send 中に tool call が始まっていなければ同じ prompt を 1 回だけ自動再試行し、tool が始まっていた場合は副作用の重複を避けて再送しません。send の最終結果が auth error の場合は provider 固有の復旧 hint を表示します。
+
+現行の Pi hint は credential source を判別せず、provider login、user auth file、provider 環境変数などを共通案内します。
 
 hint には次の情報が含まれます。
 

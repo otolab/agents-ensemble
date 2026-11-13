@@ -109,8 +109,10 @@ dispatch hold reminder の poll 間隔も `5_000ms`（5s）で、この実行時
 |------|--------|
 | GitHub API | `GITHUB_TOKEN` > `GH_TOKEN` > （`allowGhAuthTokenFallback: true` 時のみ）`gh auth token` |
 | conductor (cursor) | `CURSOR_API_KEY` > `~/.cursor/sdk/auth.json`（`ensemble auth login`） |
-| conductor (pi) | [Pi conductor セットアップと認証](pi-conductor-setup.md)のとおり、project `auth.json` の読取優先 > user `ModelRuntime`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > `settings.json` fallback / `models.json` provider key > provider 環境変数。`ensemble auth` は user 層へ provider 単位で保存し、project OAuth は refresh しない |
+| conductor (pi) | project `auth.json` > user `ModelRuntime`（`~/.ensemble/pi/auth.json`、`conductor.pi.agentDir` で上書き） > Pi `settings.json` fallback > `models.json` provider key > provider 環境変数。`ensemble auth` の保存先は user 層。project OAuth は refresh できないため拒否する。`settings.json` / `models.json` の `!command` は Pi runtime へ委譲する。詳細は [Pi conductor セットアップと認証](pi-conductor-setup.md) |
 | worker ACP（preset 依存） | **既定は移譲**（harness は ACP `authenticate` を skip）。認証の正本は各 adapter の runtime 設定（Codex: `~/.codex` 等）— [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) / [ADR 0019](adr/0019-worker-acp-cli-presets.md) |
+
+Pi の `!command` は conductor process の shell / OS 権限で実行され、worker ACP の permission 処理や追加 sandbox を通りません。project の Pi resource も実行可能な設定として扱い、信頼できる repository でのみ使ってください。
 
 ## 一覧 — Phase 1（config.yaml）
 
