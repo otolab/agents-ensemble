@@ -998,7 +998,13 @@ async function ensurePrivatePiUserAuthFile(
       `Refusing to use Pi user auth.json at ${authPath} because it is not a regular file.`,
     );
   }
-  if (details.nlink > 1 || (details.mode & 0o777) !== 0o600) {
+  // Windows mode bits cannot distinguish owner/group/others ACLs. Treating a
+  // writable Windows file as non-private by mode alone would replace it on
+  // every OAuth login or logout and discard any file-specific ACL. Hardlinks
+  // still require replacement on every platform before runtime mutation.
+  const needsPrivateModeReset =
+    process.platform !== 'win32' && (details.mode & 0o777) !== 0o600;
+  if (details.nlink > 1 || needsPrivateModeReset) {
     const contents = await readFile(safeTargetPath, 'utf8');
     await atomicWritePiAuthFile(safeTargetPath, contents);
   }

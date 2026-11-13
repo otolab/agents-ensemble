@@ -85,6 +85,7 @@ describe('Pi conductor authentication', () => {
     ) + '\n';
     await writeFile(fixture.projectAuthPath, projectAuth);
     await link(fixture.projectAuthPath, fixture.userAuthPath);
+    await chmod(fixture.userAuthPath, 0o600);
     const originalUserFile = await stat(fixture.userAuthPath);
 
     await expect(
@@ -121,6 +122,7 @@ describe('Pi conductor authentication', () => {
     });
     await writeFile(fixture.projectAuthPath, projectAuth);
     await link(fixture.projectAuthPath, fixture.userAuthPath);
+    await chmod(fixture.userAuthPath, 0o600);
     const originalUserFile = await stat(fixture.userAuthPath);
 
     const runtimeAuthPaths: string[] = [];
@@ -171,6 +173,7 @@ describe('Pi conductor authentication', () => {
     ) + '\n';
     await writeFile(fixture.projectAuthPath, projectAuth);
     await link(fixture.projectAuthPath, fixture.userAuthPath);
+    await chmod(fixture.userAuthPath, 0o600);
     const originalUserFile = await stat(fixture.userAuthPath);
 
     await expect(
@@ -613,7 +616,7 @@ describe('Pi conductor authentication', () => {
     expect(settings.deviceId).toBe(deviceIds[0]);
   });
 
-  it('secures an existing auth.json before Pi OAuth can write credentials', async () => {
+  it('applies platform-appropriate protection before Pi OAuth can write credentials', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-oauth-permissions-project-'));
     const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-oauth-permissions-user-'));
     const authPath = join(agentDir, 'auth.json');
@@ -648,11 +651,90 @@ describe('Pi conductor authentication', () => {
       }),
     ).resolves.toMatchObject({ provider: 'openai', method: 'oauth' });
 
-    if (process.platform !== 'win32') expect(modeAtLogin).toBe(0o600);
-    expectDifferentInodes(inodeAtLogin, originalAuthFile.ino);
+    if (process.platform === 'win32') {
+      expectSameInodes(inodeAtLogin, originalAuthFile.ino);
+    } else {
+      expect(modeAtLogin).toBe(0o600);
+      expectDifferentInodes(inodeAtLogin, originalAuthFile.ino);
+    }
     await expectPosixPrivateAuthMode(authPath);
     expect(await readFile(authPath, 'utf8')).toBe(originalAuth);
   });
+
+  it.each(['oauth', 'logout'] as const)(
+    'does not replace an ordinary auth.json for Windows mode bits during %s',
+    async (operation) => {
+      const fixture = await createAuthFileFixture(`pi-auth-win32-mode-${operation}-`);
+      const originalAuth = JSON.stringify({
+        openai: { type: 'api_key', key: 'existing-secret' },
+      });
+      await writeFile(fixture.userAuthPath, originalAuth);
+      await chmod(fixture.userAuthPath, 0o666);
+      const originalAuthFile = await stat(fixture.userAuthPath);
+      expect(originalAuthFile.mode & 0o777).not.toBe(0o600);
+
+      const oauthLogin = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockResolvedValue(undefined);
+      const logout = vi
+        .spyOn(ModelRuntime.prototype, 'logout')
+        .mockResolvedValue(undefined);
+
+      await withProcessPlatform('win32', async () => {
+        await performAuthWriteOperation(operation, fixture);
+      });
+
+      const authFileAfter = await stat(fixture.userAuthPath);
+      expectSameInodes(authFileAfter.ino, originalAuthFile.ino);
+      expect(authFileAfter.nlink).toBe(1);
+      expect(authFileAfter.mode & 0o777).toBe(originalAuthFile.mode & 0o777);
+      expect(await readFile(fixture.userAuthPath, 'utf8')).toBe(originalAuth);
+      if (operation === 'oauth') expect(oauthLogin).toHaveBeenCalledOnce();
+      else expect(logout).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['oauth', 'logout'] as const)(
+    'still separates a project hardlink before Windows-mode %s',
+    async (operation) => {
+      const fixture = await createAuthFileFixture(`pi-auth-win32-hardlink-${operation}-`);
+      const projectAuth = JSON.stringify({
+        openai: { type: 'api_key', key: 'shared-project-secret' },
+      }) + '\n';
+      await writeFile(fixture.projectAuthPath, projectAuth);
+      await link(fixture.projectAuthPath, fixture.userAuthPath);
+      await chmod(fixture.userAuthPath, 0o666);
+      const originalUserFile = await stat(fixture.userAuthPath);
+      const assertSeparated = async () => {
+        const [userFile, projectFile] = await Promise.all([
+          stat(fixture.userAuthPath),
+          stat(fixture.projectAuthPath),
+        ]);
+        expectSeparatedAuthInodes(userFile, projectFile, originalUserFile.ino);
+      };
+      const oauthLogin = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockImplementation(assertSeparated);
+      const logout = vi
+        .spyOn(ModelRuntime.prototype, 'logout')
+        .mockImplementation(assertSeparated);
+
+      await withProcessPlatform('win32', async () => {
+        await performAuthWriteOperation(operation, fixture);
+      });
+
+      const [userFile, projectFile] = await Promise.all([
+        stat(fixture.userAuthPath),
+        stat(fixture.projectAuthPath),
+      ]);
+      expectSeparatedAuthInodes(userFile, projectFile, originalUserFile.ino);
+      expect(await readFile(fixture.userAuthPath, 'utf8')).toBe(projectAuth);
+      await expect(readFile(fixture.projectAuthPath, 'utf8')).resolves.toBe(projectAuth);
+      if (operation === 'oauth') expect(oauthLogin).toHaveBeenCalledOnce();
+      else expect(logout).toHaveBeenCalledOnce();
+      await expectPosixPrivateAuthMode(fixture.userAuthPath);
+    },
+  );
 
   it('asks the Pi runtime for the key at request time so OAuth refresh can take effect', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
@@ -1132,6 +1214,30 @@ function expectSeparatedAuthInodes(
 function expectDifferentInodes(first: number | undefined, second: number): void {
   if (first !== undefined && first !== 0 && second !== 0) {
     expect(first).not.toBe(second);
+  }
+}
+
+function expectSameInodes(first: number | undefined, second: number): void {
+  if (first !== undefined && first !== 0 && second !== 0) {
+    expect(first).toBe(second);
+  }
+}
+
+/** Simulate only the process.platform branch; this does not emulate Windows ACLs. */
+async function withProcessPlatform<T>(
+  platform: NodeJS.Platform,
+  action: () => Promise<T>,
+): Promise<T> {
+  if (process.platform === platform) return action();
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  if (!descriptor?.configurable) {
+    throw new Error(`Cannot simulate process.platform=${platform} in this test process.`);
+  }
+  Object.defineProperty(process, 'platform', { ...descriptor, value: platform });
+  try {
+    return await action();
+  } finally {
+    Object.defineProperty(process, 'platform', descriptor);
   }
 }
 
