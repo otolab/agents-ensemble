@@ -1578,10 +1578,13 @@ describe('runConductorSessionDriver', () => {
       status: 'finished',
       result: 'continued',
     });
+    const oldClose = vi
+      .fn()
+      .mockRejectedValue(new Error('close cleanup failed'));
     const conductor = {
       agentId: 'agent-1',
       send: initialSend,
-      close: vi.fn(),
+      close: oldClose,
     } as unknown as ConductorAgent;
     const eventQueue = new SessionEventQueue();
     const shutdown = new AbortController();
@@ -1635,8 +1638,13 @@ describe('runConductorSessionDriver', () => {
       });
       await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
       expect(reconnectComplete).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true, source: 'manual' }),
+        expect.objectContaining({
+          success: true,
+          source: 'manual',
+          closeFailed: true,
+        }),
       );
+      expect(oldClose).toHaveBeenCalledOnce();
       expect(lifecycle.available).toBe(true);
       expect(lifecycle.confirmationRequired).toBe(true);
       expect(resumedSend).not.toHaveBeenCalled();

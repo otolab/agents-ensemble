@@ -300,9 +300,9 @@ URL が端末幅を超える場合も URL は省略せず、上枠の title / su
 
 ### `/reconnect` — conductor transport の手動再接続
 
-`/reconnect` または `reconnect`（大文字小文字無視・前後空白トリム）は、conductor に送らない control command です。直近 send の後に現在の agent を `close` し、同じ `agentId` で `resume` します。コマンド自体は prompt を送りません。自動 reconnect または手動 reconnect が成功しても、失敗した prompt の再送や recovery report の conductor 送信は行いません。
+`/reconnect` または `reconnect`（大文字小文字無視・前後空白トリム）は、conductor に送らない control command です。通常は現在の agent を一度 `close` してから、同じ `agentId` で `resume` します。close が reject した場合、自動 reconnect はそこで止まります。手動 `/reconnect` は明示的な置き換え操作として `resume` を試み、close を再実行しません。cleanup の完了が確認できない場合はその旨を知らせます。コマンド自体は prompt を送りません。自動 reconnect または手動 reconnect が成功しても、失敗した prompt の再送や recovery report の conductor 送信は行いません。
 
-send の結果が未確定になった後は、agent availability と operator confirmation を別々に扱います。agent が unavailable の場合は `/reconnect` が成功するまで通常 dispatch を止めます。再接続できても後続 dispatch は自動再開せず、operator が現在の状態を確認して `/recovery continue` を実行する必要があります。reconnect 失敗後も既存 queue は保持し、閉じた handle へ送信しません。
+send の結果が未確定になった後は、agent availability と operator confirmation を別々に扱います。agent が unavailable の場合は `/reconnect` が成功するまで通常 dispatch を止めます。resume に失敗した場合、次の `/reconnect` は旧 agent を再 close せず resume を再試行します。再接続できても後続 dispatch は自動再開せず、operator が現在の状態を確認して `/recovery continue` を実行する必要があります。reconnect 失敗後も既存 queue は保持し、旧 handle へ送信しません。
 
 auth / transport の reconnect attempt と成否は、`source=automatic|manual`、failure class とともに operator に表示します。auth failure には既存の backend 固有 hint も表示します。認証を直す方法は [Pi conductor セットアップ](pi-conductor-setup.md) を参照してください。
 

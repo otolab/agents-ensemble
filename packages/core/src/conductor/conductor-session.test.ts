@@ -5915,8 +5915,15 @@ describe('runConductorSession resume / shutdown', () => {
     sessionLogger.subscribe((event) => emitted.push(event));
     const onPostLoopWait = vi.fn();
     const resumedSend = vi.fn();
+    const oldClose = vi.fn().mockRejectedValue(new Error('close cleanup failed'));
     let operatorApi: OperatorInputBindingApi | undefined;
 
+    mockCreate.mockResolvedValueOnce({
+      agentId: 'agent-test',
+      send: mockSend,
+      close: oldClose,
+      getUsage: createMockConductorGetUsage(),
+    });
     mockSend.mockResolvedValue({
       runId: 'run-1',
       status: 'finished',
@@ -5946,7 +5953,17 @@ describe('runConductorSession resume / shutdown', () => {
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
     expect(operatorApi!.submit('/reconnect')).toBe(true);
     await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(
+        emitted.some(
+          (event) =>
+            event.type === 'harness.warning' &&
+            event.message.includes('リソース解放は確認できません'),
+        ),
+      ).toBe(true),
+    );
     expect(mockSend).toHaveBeenCalledOnce();
+    expect(oldClose).toHaveBeenCalledOnce();
     expect(resumedSend).not.toHaveBeenCalled();
 
     expect(operatorApi!.submit('/exit')).toBe(false);

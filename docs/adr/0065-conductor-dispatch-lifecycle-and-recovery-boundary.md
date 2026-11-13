@@ -1,4 +1,4 @@
-# ADR 0062: conductor dispatch lifecycle と recovery 境界
+# ADR 0065: conductor dispatch lifecycle と recovery 境界
 
 - Status: accepted
 - Date: 2026-11-12

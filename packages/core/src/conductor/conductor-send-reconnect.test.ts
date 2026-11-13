@@ -458,6 +458,64 @@ describe('reconnectConductorAgent', () => {
     expect(handle.conductor).toBe(resumed);
   });
 
+  it('requires manual reconnect after close rejects, then resumes without retrying close', async () => {
+    const closeError = new Error('agent cleanup failed');
+    const oldClose = vi.fn().mockRejectedValue(closeError);
+    const oldAgent = {
+      agentId: 'agent-1',
+      send: vi.fn(),
+      close: oldClose,
+    };
+    const handle = { conductor: oldAgent as never };
+    const resumed = {
+      agentId: 'agent-1',
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const automaticComplete = vi.fn();
+    const manualComplete = vi.fn();
+    mockResume.mockResolvedValue(resumed);
+
+    await expect(
+      reconnectConductorAgent(handle, {
+        conductorAgentFactory: createFactory(),
+        conductorOptions: createConductorOptions(),
+        source: 'automatic',
+        onReconnectComplete: automaticComplete,
+      }),
+    ).rejects.toBe(closeError);
+
+    expect(mockResume).not.toHaveBeenCalled();
+    expect(handle.conductor).toBe(oldAgent);
+    expect(automaticComplete).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      success: false,
+      source: 'automatic',
+      error: 'agent cleanup failed',
+      closeFailed: true,
+    });
+
+    await expect(
+      reconnectConductorAgent(handle, {
+        conductorAgentFactory: createFactory(),
+        conductorOptions: createConductorOptions(),
+        source: 'manual',
+        onReconnectComplete: manualComplete,
+      }),
+    ).resolves.toBe('agent-1');
+
+    expect(oldClose).toHaveBeenCalledOnce();
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(mockResume).toHaveBeenCalledWith('agent-1', createConductorOptions());
+    expect(handle.conductor).toBe(resumed);
+    expect(manualComplete).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      success: true,
+      source: 'manual',
+      closeFailed: true,
+    });
+  });
+
   it('shares the old agent close with finalization after resume fails', async () => {
     let resolveClose!: () => void;
     const closePromise = new Promise<void>((resolve) => {

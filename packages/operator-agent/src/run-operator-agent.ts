@@ -550,11 +550,16 @@ async function runTtyConversation(options: {
                 `conductor の再接続を開始します。agentId=${agentId} source=${source} failure=${failureClass}`,
               );
             },
-            onReconnectComplete: ({ agentId, success, source }) => {
+            onReconnectComplete: ({
+              agentId,
+              success,
+              source,
+              closeFailed,
+            }) => {
               reconnectReported = true;
               writeChannelLine(
                 success ? 'observation' : 'harness',
-                `${success ? 'conductor に再接続しました。' : 'conductor の再接続に失敗しました。'}agentId=${agentId} source=${source} failure=${failureClass}`,
+                `${success ? 'conductor に再接続しました。' : 'conductor の再接続に失敗しました。'}agentId=${agentId} source=${source} failure=${failureClass}${closeFailed ? ' 旧 conductor の終了処理に失敗したため、リソース解放は確認できません。' : ''}`,
                 success ? {} : { color: ANSI_RED },
               );
             },
@@ -663,7 +668,7 @@ async function runTtyConversation(options: {
                 `[auth] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
               );
             },
-            onAuthReconnectComplete: ({ success, source }) => {
+            onAuthReconnectComplete: ({ success, source, closeFailed }) => {
               options.dispatchLifecycle.setAgentAvailable(success);
               automaticReconnectResult.current = {
                 reason: 'auth',
@@ -671,7 +676,7 @@ async function runTtyConversation(options: {
               };
               writeChannelLine(
                 success ? 'observation' : 'harness',
-                `[auth] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}`,
+                `[auth] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}${closeFailed ? ' old agent close failed; cleanup is unconfirmed' : ''}`,
                 success ? {} : { color: ANSI_RED },
               );
             },
@@ -681,7 +686,11 @@ async function runTtyConversation(options: {
                 `[transport] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
               );
             },
-            onTransportReconnectComplete: ({ success, source }) => {
+            onTransportReconnectComplete: ({
+              success,
+              source,
+              closeFailed,
+            }) => {
               options.dispatchLifecycle.setAgentAvailable(success);
               automaticReconnectResult.current = {
                 reason: 'transport',
@@ -689,7 +698,7 @@ async function runTtyConversation(options: {
               };
               writeChannelLine(
                 success ? 'observation' : 'harness',
-                `[transport] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}`,
+                `[transport] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}${closeFailed ? ' old agent close failed; cleanup is unconfirmed' : ''}`,
                 success ? {} : { color: ANSI_RED },
               );
             },

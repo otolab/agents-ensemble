@@ -894,6 +894,30 @@ describe('PiConductorAgent', () => {
     expect(fakeSession.dispose).toHaveBeenCalledOnce();
   });
 
+  it('keeps Pi closed and disposes the session when close rejects', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+    const abortError = new Error('Pi abort cleanup failed');
+    fakeSession.abort.mockRejectedValueOnce(abortError);
+
+    await expect(conductor.close()).rejects.toBe(abortError);
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+    await expect(conductor.send('must not reuse after failed close')).resolves
+      .toMatchObject({
+        status: 'error',
+        error: { message: 'Pi conductor agent is closed.' },
+      });
+
+    await expect(conductor.close()).rejects.toBe(abortError);
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+  });
+
   it('rejects SSE before the Pi extension is started', async () => {
     const conductorPromise = PiConductorAgent.create({
       cwd,

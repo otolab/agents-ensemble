@@ -1964,6 +1964,7 @@ describe('runOperatorAgent', () => {
     const resume = vi.fn(async () =>
       createFakeAgent({ send: followupSend }),
     );
+    const oldClose = vi.fn().mockRejectedValue(new Error('cleanup failed'));
 
     const run = runOperatorAgent(
       { repoRoot },
@@ -1974,7 +1975,10 @@ describe('runOperatorAgent', () => {
         loadConfig: async () => config,
         loadProfile: async () => ({ profile, profilePath: 'test-profile' }),
         agentFactory: {
-          create: async () => createFakeAgent({ send: rejectedSend }),
+          create: async () => ({
+            ...createFakeAgent({ send: rejectedSend }),
+            close: oldClose,
+          }),
           resume,
         },
       },
@@ -1994,7 +1998,6 @@ describe('runOperatorAgent', () => {
           '明示的に /reconnect するまで conductor への送信を停止します。',
         );
       });
-
       expect(rejectedSend).toHaveBeenCalledOnce();
       expect(resume).not.toHaveBeenCalled();
       expect(stdout.capturedText()).not.toContain(rawError);
@@ -2010,7 +2013,11 @@ describe('runOperatorAgent', () => {
         expect(stdout.capturedText()).toContain(
           'source=manual failure=send_rejected',
         );
+        expect(stdout.capturedText()).toContain(
+          '旧 conductor の終了処理に失敗したため、リソース解放は確認できません。',
+        );
       });
+      expect(oldClose).toHaveBeenCalledOnce();
       expect(followupSend).not.toHaveBeenCalled();
 
       input.write('/recovery continue\n');

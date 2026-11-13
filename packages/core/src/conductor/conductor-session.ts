@@ -1442,10 +1442,12 @@ async function runConductorSessionWithStartupGuard(
       agentId,
       success,
       source,
+      closeFailed,
     }: {
       agentId: string;
       success: boolean;
       source?: 'automatic' | 'manual';
+      closeFailed?: boolean;
     }) => {
       sessionLogger.emit({
         type: 'conductor.auth.reconnect',
@@ -1453,6 +1455,13 @@ async function runConductorSessionWithStartupGuard(
         status: success ? 'succeeded' : 'failed',
         ...(source ? { source } : {}),
       });
+      if (closeFailed) {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            '旧 conductor の終了処理に失敗したため、リソース解放は確認できません。再接続後の状態を確認してください。',
+        });
+      }
     },
     onTransportReconnectAttempt: ({
       agentId,
@@ -1472,10 +1481,12 @@ async function runConductorSessionWithStartupGuard(
       agentId,
       success,
       source,
+      closeFailed,
     }: {
       agentId: string;
       success: boolean;
       source?: 'automatic' | 'manual';
+      closeFailed?: boolean;
     }) => {
       sessionLogger.emit({
         type: 'conductor.transport.reconnect',
@@ -1483,6 +1494,13 @@ async function runConductorSessionWithStartupGuard(
         status: success ? 'succeeded' : 'failed',
         ...(source ? { source } : {}),
       });
+      if (closeFailed) {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            '旧 conductor の終了処理に失敗したため、リソース解放は確認できません。再接続後の状態を確認してください。',
+        });
+      }
     },
   };
 

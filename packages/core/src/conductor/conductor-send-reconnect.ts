@@ -44,6 +44,8 @@ export interface ConductorReconnectCompleteInfo {
   success: boolean;
   source?: 'automatic' | 'manual';
   error?: string;
+  /** The prior agent's one close attempt rejected; cleanup is unconfirmed. */
+  closeFailed?: boolean;
 }
 
 export interface ConductorAutomaticRetryInfo {
@@ -99,7 +101,11 @@ export interface ConductorSendReconnectOptions
   onAutomaticRetry?: (input: ConductorAutomaticRetryInfo) => void;
 }
 
-/** close → factory.resume(sameId) で in-process の agent を差し替える。 */
+/**
+ * close → factory.resume(sameId) で in-process の agent を差し替える。
+ * automatic reconnect は close reject で停止する。operator の明示操作である
+ * manual reconnect は、close が reject しても同じ ID の resume を試みる。
+ */
 export async function reconnectConductorAgent(
   handle: ConductorAgentHandle,
   options: ConductorReconnectOptions,
@@ -129,8 +135,19 @@ export async function reconnectConductorAgent(
     conductorOptions = sdkOptions;
   }
 
+  let closeFailed = false;
   try {
-    await closeConductorAgentOnce(handle.conductor);
+    try {
+      await closeConductorAgentOnce(handle.conductor);
+    } catch (error) {
+      closeFailed = true;
+      if (source === 'automatic') {
+        throw error;
+      }
+      // Manual reconnect is the operator's explicit decision to replace the
+      // unavailable handle. The settled close attempt is not repeated because
+      // backend cleanup may not be idempotent.
+    }
     throwIfReconnectAborted(options.signal);
     const resumedAgent = await conductorAgentFactory.resume(
       agentId,
@@ -141,7 +158,12 @@ export async function reconnectConductorAgent(
       throwIfReconnectAborted(options.signal);
     }
     handle.conductor = resumedAgent;
-    options.onReconnectComplete?.({ agentId, success: true, source });
+    options.onReconnectComplete?.({
+      agentId,
+      success: true,
+      source,
+      ...(closeFailed ? { closeFailed: true } : {}),
+    });
     return agentId;
   } catch (error) {
     if (options.signal?.aborted) {
@@ -153,6 +175,7 @@ export async function reconnectConductorAgent(
       success: false,
       source,
       error: message,
+      ...(closeFailed ? { closeFailed: true } : {}),
     });
     throw error;
   }

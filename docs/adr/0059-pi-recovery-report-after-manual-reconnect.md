@@ -1,6 +1,6 @@
 # ADR 0059: Pi 手動再接続後の recovery report
 
-- Status: superseded by [0062](0062-conductor-dispatch-lifecycle-and-recovery-boundary.md)
+- Status: superseded by [0065](0065-conductor-dispatch-lifecycle-and-recovery-boundary.md)
 - Date: 2026-11-10
 - Related: [Issue #650](https://github.com/otolab/agents-ensemble/issues/650), [PR #651](https://github.com/otolab/agents-ensemble/pull/651), [ADR 0014](0014-conductor-dispatch-batch-coalescing.md), [ADR 0017](0017-conductor-send-lifecycle-events.md), [ADR 0030](0030-tty-close-lifecycle.md), supersedes [ADR 0058](0058-pi-send-recovery-replay-boundary.md)
 

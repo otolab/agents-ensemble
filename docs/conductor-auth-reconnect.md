@@ -10,6 +10,8 @@ auth-like 判定は `error.code === "auth"`、認証・401 を示す message、�
 
 `agent.send()` が reject した場合は `send_rejected`（結果不明）として扱います。例外本文は recovery data に残さず、auth / transport reconnect を自動実行せず、同じ prompt も再送しません。agent は unavailable とし、operator が明示的に `/reconnect` するまで queue の次の dispatch を止めます。
 
+自動 reconnect は旧 agent の close が reject した場合、resume を試さず失敗として扱います。手動 `/reconnect` は operator の明示操作として、close が reject しても同じ `agentId` の resume を試みます。close は各 agent instance につき一度だけで、reject 後に再実行しません。resume が成功するまでは旧 handle を使わず dispatch を止め、resume が失敗した場合は次の手動 reconnect で resume だけを再試行します。close failure を経て resume した場合は、旧 resource の解放が確認できないことを operator に知らせます。後続 dispatch の confirmation gate と失敗 input の no-replay 契約はそのまま維持します。
+
 ## workflow ごとの queue と共通 lifecycle
 
 Issue session と operator-agent は、それぞれの queue、selector、優先順位、hold、batching を維持します。共通 `ConductorDispatchLifecycle` は一つの send / reconnect だけを lease し、availability、結果の settle、未確定 send 後の confirmation gate を管理します。lease は in-flight attempt の所有権で、第二の scheduling queue ではありません。
@@ -45,7 +47,7 @@ send / reconnect の await 中に届いた入力は既存 queue が保持し、�
 | operator-agent の user batch — 未分類 `status: error`、その他の未完了 status、`cancelled` | auth / transport 判定に該当する場合だけ同じ agent ID で1回 | しない | TTY では user input だけを保存し、confirmation まで後続 dispatch を止める。Cursor の bootstrap が未完了なら、確認後の次の dispatch に compiled operator prompt を添える |
 | operator-agent の user batch — `send()` reject | しない。`send_rejected` として agent を unavailable にする | しない | TTY では user input だけを保存する。手動 `/reconnect` が成功し、operator が状態を確認して `/recovery continue` するまで後続 dispatch を止める。Cursor の bootstrap が未完了なら、続行後の次の dispatch に compiled operator prompt を添える |
 | operator-agent の watch report のみ — 未完了 result | auth / transport に該当すれば1回 | しない | report は既存の report ID を保って5秒後に retry queue へ戻す。user input は同じ batch に入れず、inbox にも保存しない。Cursor の bootstrap が未完了なら、この既存 retry の dispatch に compiled operator prompt を添える。pending report は永続化により restart 後も再配送され得る |
-| いずれかの workflow — 手動 `/reconnect` | 明示操作で同じ agent ID の `resume` を1回 | しない | 成否を `source=manual` と `status` で通知する。成功しても失敗 prompt は送らず、先に立った confirmation gate は `/recovery continue` まで維持する。失敗時は後続 queue を保持して再 reconnect を待つ |
+| いずれかの workflow — 手動 `/reconnect` | 明示操作で同じ agent ID の `resume` を1回。close が reject 済みなら再 close せず resume を試す | しない | 成否を `source=manual` と `status` で通知する。close failure を経た場合は cleanup 未確認も知らせる。成功しても失敗 prompt は送らず、先に立った confirmation gate は `/recovery continue` まで維持する。失敗時は後続 queue を保持して再 reconnect を待つ |
 | いずれかの workflow — shutdown 中 / shutdown intent 後 | shutdown 前に始まった resume は中断できない場合がある。shutdown 後に完了した agent は install せず close する | しない | shutdown 後は queued event を dispatch しない。failure snapshot を作らず、queue / inbox は process teardown で破棄する |
 
 Issue workflow は send の `finished` / `completed` に加えて `running` を dispatch 完了として扱います。operator-agent は `finished` / `completed` だけを完了とし、watch report のその他の status は既存の retry 契約に従います。report retry は at-least-once であり、内容 dedupe や conductor / tool 側の副作用 idempotency は提供しません。
@@ -82,4 +84,4 @@ inbox に含むのは operator-authored text と failure class、workflow / back
 
 一時ファイルだけでは、local queue の消費、provider request の受理、tool effect を一つの transaction にできません。送信前の durable ack は欠落、送信後の ack は crash window の重複を残します。本文 hash も同じ文章を別の意図で再送したい場合を区別せず、副作用 dedupe を実現しません。現行契約は process-local の確認と安全な再開に留めます。process 間の replay が必要な場合は、stable event identity、atomic な送受信境界、受け手側の副作用 idempotency を別の ADR で設計します。
 
-関連: [ADR 0062](adr/0062-conductor-dispatch-lifecycle-and-recovery-boundary.md)、[operator input](operator-input.md)、[session logging](session-logging.md)。
+関連: [ADR 0065](adr/0065-conductor-dispatch-lifecycle-and-recovery-boundary.md)、[ADR 0067](adr/0067-manual-resume-after-close-failure.md)、[operator input](operator-input.md)、[session logging](session-logging.md)。
