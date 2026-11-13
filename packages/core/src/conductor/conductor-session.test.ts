@@ -796,7 +796,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
   });
 
-  it('emits a harness warning when an unmapped custom worker tag falls back to default', async () => {
+  it('emits a harness warning for an explicit default worker tag without a mapping', async () => {
     stubUnusedControlServer();
     vi.spyOn(acpBinModule, 'resolveBundledAcpBin')
       .mockReturnValue(process.execPath);
@@ -819,8 +819,8 @@ describe('runConductorSession resume / shutdown', () => {
       ...DEFAULT_ENSEMBLE_CONFIG,
       acp: {
         ...DEFAULT_ENSEMBLE_CONFIG.acp,
-        models: { standard: 'provider/default-model' },
-        tags: { default: 'standard' },
+        models: {},
+        tags: {},
       },
       session: {
         ...DEFAULT_ENSEMBLE_CONFIG.session,
@@ -832,7 +832,7 @@ describe('runConductorSession resume / shutdown', () => {
       repoRoot,
       profile: {
         workers: [
-          { name: 'researcher', kind: 'researcher', modelTag: 'urgent' },
+          { name: 'researcher', kind: 'researcher', modelTag: 'default' },
         ],
       },
       ensembleConfig,
@@ -851,15 +851,14 @@ describe('runConductorSession resume / shutdown', () => {
     expect(emitted).toContainEqual({
       type: 'harness.warning',
       message:
-        'Worker "researcher": Worker modelTag "urgent" is not registered in acp.tags; resolving through acp.tags.default.',
+        'Worker "researcher": Worker modelTag "default" is not registered in acp.tags; using the ACP preset default model.',
     });
     expect(result.sessionModels.workers).toEqual([
       {
         name: 'researcher',
         kind: 'researcher',
-        modelTag: 'urgent',
+        modelTag: 'default',
         acpPreset: 'cursor',
-        model: 'provider/default-model',
       },
     ]);
   });

@@ -262,7 +262,7 @@ export function profileWorkersToSessionSpecs(
     const modelTag = worker.modelTag ?? 'default';
     const resolved = resolveWorkerAcpSpawn({
       defaultOptions: options?.defaultAcp,
-      modelTag,
+      modelTag: worker.modelTag,
       onWarning: (message) =>
         options?.onWarning?.('Worker "' + worker.name + '": ' + message),
     });

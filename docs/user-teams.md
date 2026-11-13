@@ -63,7 +63,7 @@ ensemble issue 42 --profile my-pair
 | `low` | 軽くて安価な model を選び、速さを優先 |
 | `lite` | default 相当の model に短めの reasoning を指定するなど、throughput を優先。小さい model 専用の名前ではない |
 
-`default` 以外の選択 tag が `acp.tags` にないと harness は warning を出し、`default` の mapping を試します。それも未登録なら model を注入せず、ACP preset の既定 model に委ねます。`default` 自体が未登録の場合は warning を出さず、preset の既定 model を使います。`lite` は worker の tier 名で、Cursor ACP の fast mode（`cursorFast`）を有効にする指定ではありません。Cursor の model / reasoning 設定は [config.md](config.md#acp-model-tag-と-model-catalog) を参照してください。
+`default` 以外の選択 tag が `acp.tags` にないと harness は warning を出し、`default` の mapping を試します。それも未登録なら model を注入せず、ACP preset の既定 model に委ねます。worker が `modelTag` を省略したときは暗黙の `default` から warning なしで preset の既定へ進みます。`modelTag: default` を明示して mapping がない場合は warning を出して preset の既定を使います。`lite` は worker の tier 名で、Cursor ACP の fast mode（`cursorFast`）を有効にする指定ではありません。Cursor の model / reasoning 設定は [config.md](config.md#acp-model-tag-と-model-catalog) を参照してください。
 
 ## 一覧
 

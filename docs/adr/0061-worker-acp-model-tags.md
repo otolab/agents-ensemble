@@ -1,6 +1,6 @@
 # ADR 0061: worker ACP modelTag の語彙と未登録時の解決
 
-- Status: accepted
+- Status: superseded in part by [0062](0062-explicit-default-model-tag-warning.md)（明示された `default` tag の未登録 warning と、省略時の暗黙 `default` の区別）
 - Date: 2026-11-13
 - Related: [ADR 0045](0045-worker-acp-model-tags.md), [ADR 0047](0047-worker-acp-model-reasoning.md), [ADR 0048](0048-session-resume-feasibility-config-digest.md), [ADR 0052](0052-acp-model-injection-by-preset.md), [ADR 0054](0054-cursor-acp-runtime-verification.md), [Issue #701](https://github.com/otolab/agents-ensemble/issues/701)
 

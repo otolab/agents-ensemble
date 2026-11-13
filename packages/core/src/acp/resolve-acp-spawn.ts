@@ -211,7 +211,8 @@ export function resolveWorkerAcpSpawn(input?: {
   modelTag?: AcpModelTag;
   onWarning?: (message: string) => void;
 }): ResolvedAcpSpawn {
-  const modelTag = input?.modelTag ?? 'default';
+  const requestedModelTag = input?.modelTag;
+  const modelTag = requestedModelTag ?? 'default';
   if (typeof modelTag !== 'string' || modelTag.trim() === '') {
     throw new Error('ACP worker modelTag must be a non-empty string');
   }
@@ -233,7 +234,11 @@ export function resolveWorkerAcpSpawn(input?: {
   let modelKey = getOwnRecordValue(tags, modelTag);
   if (!modelKey) {
     if (modelTag === 'default') {
-      // An absent default mapping intentionally means the ACP preset default.
+      if (requestedModelTag !== undefined) {
+        input?.onWarning?.(
+          'Worker modelTag "default" is not registered in acp.tags; using the ACP preset default model.',
+        );
+      }
       return { ...spawnWithProviderFingerprint, modelTag };
     }
 

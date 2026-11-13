@@ -340,10 +340,36 @@ describe('resolveWorkerAcpSpawn', () => {
     ]);
   });
 
-  it('does not warn when the default tag has no configured mapping', () => {
+  it('warns when the explicit default tag has no configured mapping', () => {
     const warnings: string[] = [];
     const resolved = resolveWorkerAcpSpawn({
       modelTag: 'default',
+      onWarning: (message) => warnings.push(message),
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            tags: {},
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      preset: 'cursor',
+      args: ['acp'],
+      modelTag: 'default',
+    });
+    expect(resolved.model).toBeUndefined();
+    expect(warnings).toEqual([
+      'Worker modelTag "default" is not registered in acp.tags; using the ACP preset default model.',
+    ]);
+  });
+
+  it('does not warn when modelTag is omitted and the default mapping is absent', () => {
+    const warnings: string[] = [];
+    const resolved = resolveWorkerAcpSpawn({
       onWarning: (message) => warnings.push(message),
       defaultOptions: {
         defaultAcpCli: 'cursor',
@@ -806,6 +832,28 @@ describe('profileWorkersToSessionSpecs', () => {
       preset: 'codex',
       modelTag: 'default',
     });
+  });
+
+  it('does not warn for an omitted profile modelTag when default has no mapping', () => {
+    const warnings: string[] = [];
+    const specs = profileWorkersToSessionSpecs(
+      {
+        workers: [normalizeProfileWorker('implementer', 'test profile', 0)],
+      },
+      {
+        defaultAcp: {
+          defaultAcpCli: 'cursor',
+          config: {
+            acp: { defaultPreset: 'cursor', tags: {} },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+        onWarning: (message) => warnings.push(message),
+      },
+    );
+
+    expect(specs[0]?.modelTag).toBe('default');
+    expect(specs[0]?.acpFingerprint).toMatchObject({ modelTag: 'default' });
+    expect(warnings).toEqual([]);
   });
 
   it('resolves different model tiers per worker while shorthand uses default', () => {
