@@ -6,7 +6,21 @@
 
 ## 最短セットアップ
 
-### 1. Pi backend を選ぶ
+TTY で初回設定するときは、まず次を実行します。
+
+```bash
+ensemble setup
+```
+
+backend は Pi（OpenAI）または Cursor から選びます。Pi を選ぶと `openai` / `gpt-6.1-sol` を user Pi settings に保存し、OpenAI の OAuth または API key を選べます。Cursor を選ぶと既存の Cursor SDK login に進みます。認証は既存の `ensemble auth login` と同じ core login に委譲します。API key は入力中に表示されず、Pi の user `auth.json` に保存されます。OAuth の URL や device code は stderr に表示します。
+
+設定の書き込み先は user 層だけです。`~/.ensemble/config.yaml` の `conductor.backend` と、Pi を選んだ場合の user `pi/settings.json` に provider / model を保存します。project config、project Pi resource、既存の `conductor.model` は変更しません。project config や選択中 profile が backend を指定している場合はその値が優先されます。Pi の project `settings.json` に provider / model がある場合も user settings より優先されます。setup は検出した競合を表示します。
+
+`ensemble setup` は TTY 専用です。非 TTY では案内を出して終了します。手動設定では user config に backend を、Pi を使う場合は `~/.ensemble/pi/settings.json` に `defaultProvider` と `defaultModel` を設定し、必要に応じて `ensemble auth login` を実行してください。provider 環境変数を使う場合は [認証の解決順](#認証の解決順)も参照してください。
+
+この段階ではコード内 default backend は Cursor のままです。Phase B の切替後に no-config 時の既定値が変わります。
+
+### 1. 手動で Pi backend を選ぶ
 
 リポジトリの `.ensemble/config.yaml`（またはユーザの `~/.ensemble/config.yaml`）に設定します。
 
@@ -67,6 +81,8 @@ ensemble auth login --provider <provider-id>
 
 Pi のログインは Cursor のような全体ログインではなく **provider 単位**です。
 
+OpenAI provider (`openai`) は OAuth と API key の両方に対応します。`ensemble setup` では方式を選び、API key を選んだ場合は TTY の非表示 prompt から user `auth.json` に保存します。既存の `ensemble auth login --provider openai` は引き続き OAuth を選びます。
+
 #### API key provider
 
 ```bash
@@ -91,7 +107,7 @@ ChatGPT OAuth を使わない場合は、次の方法があります。
 
 | 方法 | 手順 |
 |------|------|
-| OpenAI API key | `OPENAI_API_KEY` を設定すると、Pi runtime が request 時に API key として使います。`ensemble auth login --provider openai` は OAuth login を選ぶため、API key を保存する用途には使わないでください。OpenAI 公式の model ID を選びます。 |
+| OpenAI API key | `ensemble setup` で API key を選ぶと user `auth.json` に保存します。`OPENAI_API_KEY` を設定した場合は、Pi runtime が request 時に API key として使います。`ensemble auth login --provider openai` は OAuth login を選びます。OpenAI 公式の model ID を選びます。 |
 | Pi CLI で先に OAuth login | Pi CLI の agent directory を ensemble と同じ `conductor.pi.agentDir` に合わせ、Pi CLI の `/login` から `openai` provider に login します。credential は共有の `auth.json` に保存されるため、ensemble はその credential で request を送れます。 |
 | LiteLLM | 既存の `models.json` にある LiteLLM provider を引き続き使います。ChatGPT OAuth の device ID は不要です。 |
 

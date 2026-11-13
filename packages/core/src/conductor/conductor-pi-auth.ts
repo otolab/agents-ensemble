@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   ModelRegistry,
@@ -114,7 +114,7 @@ export async function loginPiConductor(
   const provider = await resolveConductorProviderOrThrow(options, resources, context);
   const oauthProvider = Boolean(context.modelRuntime.getProvider(provider)?.auth.oauth);
 
-  if (oauthProvider) {
+  if (oauthProvider && options.apiKey === undefined) {
     if (!options.oauthCallbacks) {
       throw new Error(
         `Pi provider "${provider}" uses OAuth. Run this command from a TTY so the OAuth login flow can interact with you.`,
@@ -865,7 +865,7 @@ async function writePiApiKey(
   provider: string,
   apiKey: string,
 ): Promise<void> {
-  await mkdir(dirname(authPath), { recursive: true });
+  await mkdir(dirname(authPath), { recursive: true, mode: 0o700 });
   let auth: Record<string, unknown> = {};
   try {
     const parsed: unknown = JSON.parse(await readFile(authPath, 'utf8'));
@@ -874,7 +874,11 @@ async function writePiApiKey(
     if (!isRecord(error) || error.code !== 'ENOENT') throw error;
   }
   auth[provider] = { type: 'api_key', key: apiKey };
-  await writeFile(authPath, `${JSON.stringify(auth, null, 2)}\n`, 'utf8');
+  await writeFile(authPath, `${JSON.stringify(auth, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  await chmod(authPath, 0o600);
 }
 
 function toPiAuthInteraction(callbacks: OAuthLoginCallbacks): AuthInteraction {

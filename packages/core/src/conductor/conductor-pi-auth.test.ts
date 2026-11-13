@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,7 @@ import {
   getPiConductorAuthStatus,
   hasPiConductorAuth,
   hasPiProviderAuth,
+  isPiConductorOAuthProvider,
   listPiConductorModels,
   loginPiConductor,
   logoutPiConductor,
@@ -30,6 +31,12 @@ describe('Pi conductor authentication', () => {
       join(projectDir, 'settings.json'),
       JSON.stringify({ defaultProvider: 'local' }),
     );
+    const authPath = join(agentDir, 'auth.json');
+    await writeFile(
+      authPath,
+      JSON.stringify({ existing: { type: 'api_key', key: 'existing-secret' } }),
+    );
+    await chmod(authPath, 0o644);
 
     const result = await loginPiConductor({
       cwd,
@@ -41,11 +48,52 @@ describe('Pi conductor authentication', () => {
       backend: 'pi',
       provider: 'local',
       method: 'api_key',
+      authPath,
+    });
+    const savedAuth = JSON.parse(await readFile(authPath, 'utf8'));
+    expect(savedAuth).toMatchObject({
+      existing: { type: 'api_key', key: 'existing-secret' },
+      local: { type: 'api_key', key: 'user-secret' },
+    });
+    expect((await stat(authPath)).mode & 0o777).toBe(0o600);
+    await expect(readFile(join(projectDir, 'auth.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('stores an explicitly selected API key for an OAuth-capable provider', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-openai-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-openai-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'openai', defaultModel: 'gpt-6.1-sol' }),
+    );
+
+    const options = {
+      cwd,
+      pi: { agentDir, projectDir },
+      provider: 'openai',
+      modelId: 'gpt-6.1-sol',
+    };
+    await expect(isPiConductorOAuthProvider(options)).resolves.toBe(true);
+
+    const result = await loginPiConductor({
+      ...options,
+      apiKey: 'openai-user-secret',
+    });
+
+    expect(result).toMatchObject({
+      backend: 'pi',
+      provider: 'openai',
+      method: 'api_key',
       authPath: join(agentDir, 'auth.json'),
     });
     await expect(readFile(join(agentDir, 'auth.json'), 'utf8')).resolves.toContain(
-      'user-secret',
+      'openai-user-secret',
     );
+    expect((await stat(join(agentDir, 'auth.json'))).mode & 0o777).toBe(0o600);
     await expect(readFile(join(projectDir, 'auth.json'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });

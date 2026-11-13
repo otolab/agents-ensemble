@@ -1,0 +1,218 @@
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { writeConductorSetupFiles } from './conductor-setup.js';
+import { resolvePiModelConfig } from './pi-conductor-agent.js';
+
+describe('writeConductorSetupFiles', () => {
+  it('creates the first user config and a Pi model that the pinned runtime can resolve', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-first-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-first-user-'));
+    const home = await mkdtemp(join(tmpdir(), 'ensemble-setup-first-home-'));
+    const agentDir = join(home, '.ensemble', 'pi');
+    const configPath = join(userRoot, 'config.yaml');
+    const settingsPath = join(agentDir, 'settings.json');
+
+    const result = await writeConductorSetupFiles({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+      home,
+      backend: 'pi',
+      pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+    });
+
+    expect(result).toMatchObject({
+      configPath,
+      backend: 'pi',
+      pi: { agentDir, settingsPath, provider: 'openai', modelId: 'gpt-6.1-sol' },
+    });
+    expect(await readFile(configPath, 'utf8')).toContain('backend: pi');
+    expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toMatchObject({
+      defaultProvider: 'openai',
+      defaultModel: 'gpt-6.1-sol',
+    });
+
+    await expect(
+      resolvePiModelConfig({
+        cwd: repoRoot,
+        home,
+        pi: { agentDir, projectDir: join(repoRoot, '.ensemble', 'pi') },
+      }),
+    ).resolves.toMatchObject({
+      provider: 'openai',
+      modelId: 'gpt-6.1-sol',
+    });
+  });
+
+  it('merges Pi defaults into user files and leaves project resources untouched', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-user-'));
+    const agentDir = join(repoRoot, 'user-pi');
+    const projectDir = join(repoRoot, 'project-pi');
+    const projectConfigPath = join(repoRoot, '.ensemble', 'config.yaml');
+    const projectSettingsPath = join(projectDir, 'settings.json');
+    const userConfigPath = join(userRoot, 'config.yaml');
+    const userSettingsPath = join(agentDir, 'settings.json');
+
+    await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      projectConfigPath,
+      'conductor:\n  backend: cursor\n  model: cursor-model\n',
+    );
+    await writeFile(
+      projectSettingsPath,
+      JSON.stringify({ defaultProvider: 'project-provider', custom: true }, null, 2),
+    );
+    await mkdir(userRoot, { recursive: true });
+    await writeFile(
+      userConfigPath,
+      [
+        '# keep this user-owned comment',
+        'conductor:',
+        '  backend: cursor # keep this inline comment',
+        '  model: existing-model',
+        '  pi:',
+        '    agentDir: ./user-pi',
+        '    projectDir: ./project-pi',
+        'session:',
+        '  worktree: isolated',
+        '',
+      ].join('\n'),
+    );
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      userSettingsPath,
+      JSON.stringify(
+        { defaultProvider: 'anthropic', defaultModel: 'old-model', extensions: ['ext.js'] },
+        null,
+        2,
+      ),
+    );
+
+    const result = await writeConductorSetupFiles({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+      backend: 'pi',
+      pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+    });
+
+    expect(result).toMatchObject({
+      configPath: userConfigPath,
+      backend: 'pi',
+      pi: {
+        agentDir,
+        settingsPath: userSettingsPath,
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+      },
+    });
+    const userConfig = await readFile(userConfigPath, 'utf8');
+    expect(userConfig).toContain('# keep this user-owned comment');
+    expect(userConfig).toContain('backend: pi # keep this inline comment');
+    expect(userConfig).toContain('model: existing-model');
+    expect(userConfig).toContain('worktree: isolated');
+    expect(userConfig).not.toContain('cursor-model');
+    expect(await readFile(userSettingsPath, 'utf8')).toContain('"extensions": [\n    "ext.js"\n  ]');
+    expect(JSON.parse(await readFile(userSettingsPath, 'utf8'))).toMatchObject({
+      defaultProvider: 'openai',
+      defaultModel: 'gpt-6.1-sol',
+      extensions: ['ext.js'],
+    });
+    expect(await readFile(projectConfigPath, 'utf8')).toBe(
+      'conductor:\n  backend: cursor\n  model: cursor-model\n',
+    );
+    expect(JSON.parse(await readFile(projectSettingsPath, 'utf8'))).toMatchObject({
+      defaultProvider: 'project-provider',
+      custom: true,
+    });
+    expect((await stat(userConfigPath)).mode & 0o777).toBe(0o600);
+    expect((await stat(userSettingsPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it('changes only the user backend for Cursor and keeps existing Pi files', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-cursor-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-cursor-user-'));
+    const userConfigPath = join(userRoot, 'config.yaml');
+    const settingsPath = join(userRoot, 'pi', 'settings.json');
+    await mkdir(join(userRoot, 'pi'), { recursive: true });
+    await writeFile(userConfigPath, 'conductor:\n  model: existing-model\n');
+    await writeFile(settingsPath, '{"defaultProvider":"openai","defaultModel":"existing"}\n');
+
+    const result = await writeConductorSetupFiles({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+      backend: 'cursor',
+    });
+
+    expect(result).toEqual({ configPath: userConfigPath, backend: 'cursor' });
+    expect(await readFile(userConfigPath, 'utf8')).toContain('backend: cursor');
+    expect(await readFile(userConfigPath, 'utf8')).toContain('model: existing-model');
+    expect(await readFile(settingsPath, 'utf8')).toBe(
+      '{"defaultProvider":"openai","defaultModel":"existing"}\n',
+    );
+  });
+
+  it('does not overwrite malformed user settings or config', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-invalid-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-invalid-user-'));
+    const userConfigPath = join(userRoot, 'config.yaml');
+    const settingsPath = join(userRoot, 'pi', 'settings.json');
+    await mkdir(join(userRoot, 'pi'), { recursive: true });
+    await writeFile(userConfigPath, 'conductor: [not, an, object]\n');
+    await writeFile(settingsPath, '{ invalid json');
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        backend: 'pi',
+        pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+      }),
+    ).rejects.toThrow('setup did not overwrite it');
+
+    expect(await readFile(userConfigPath, 'utf8')).toBe('conductor: [not, an, object]\n');
+    expect(await readFile(settingsPath, 'utf8')).toBe('{ invalid json');
+  });
+
+  it('does not replace a malformed user config when setting Cursor', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-invalid-cursor-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-invalid-cursor-user-'));
+    const userConfigPath = join(userRoot, 'config.yaml');
+    await writeFile(userConfigPath, 'conductor: [\n');
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        backend: 'cursor',
+      }),
+    ).rejects.toThrow('Could not parse user config');
+    expect(await readFile(userConfigPath, 'utf8')).toBe('conductor: [\n');
+  });
+
+  it('refuses to write user Pi settings into the configured project resource root', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-shared-root-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-shared-root-user-'));
+    const projectPiDir = join(repoRoot, '.ensemble', 'pi');
+    const userConfigPath = join(userRoot, 'config.yaml');
+    const projectSettingsPath = join(projectPiDir, 'settings.json');
+    await mkdir(projectPiDir, { recursive: true });
+    await writeFile(
+      userConfigPath,
+      `conductor:\n  pi:\n    agentDir: ${projectPiDir}\n    projectDir: ${projectPiDir}\n`,
+    );
+    await writeFile(projectSettingsPath, '{"custom":"project"}\n');
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        backend: 'pi',
+        pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+      }),
+    ).rejects.toThrow('User and project Pi resource roots resolve to the same directory');
+    expect(await readFile(projectSettingsPath, 'utf8')).toBe('{"custom":"project"}\n');
+  });
+});
