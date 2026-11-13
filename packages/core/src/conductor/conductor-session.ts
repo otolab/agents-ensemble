@@ -852,6 +852,7 @@ async function runConductorSessionWithStartupGuard(
     defaultAcp: options.defaultAcp,
     spawnBase,
     repoRoot: options.repoRoot,
+    issueNumber: issue.number,
     ...(piAgentDir ? { piAgentDir } : {}),
   });
   if (workers.length > 0) {
@@ -866,6 +867,7 @@ async function runConductorSessionWithStartupGuard(
     finalizeSessionWorkerSpecs(
       workers,
       options.repoRoot,
+      issue.number,
       options.defaultAcp,
       piAgentDir,
     );
@@ -2703,6 +2705,7 @@ function attachLegacySessionCallbacks(
 function finalizeSessionWorkerSpecs(
   workers: SessionWorkerSpec[],
   repoRoot: string,
+  issueNumber: number,
   defaultAcp?: DefaultAcpResolutionOptions,
   piAgentDir?: string,
 ): void {
@@ -2723,6 +2726,7 @@ function finalizeSessionWorkerSpecs(
       resolved.piRuntime === 'builtin'
         ? configurePiWorkerRuntime(resolved, {
             repoRoot,
+            issueNumber,
             workerName: worker.name,
             ...(resolvedPiAgentDir
               ? { agentDir: resolvedPiAgentDir }

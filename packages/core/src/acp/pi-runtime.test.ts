@@ -180,20 +180,27 @@ describe('configurePiWorkerRuntime', () => {
     const { hostHome, hostUserProfile, repoRoot } = await setupHome();
     const configured = configurePiWorkerRuntime(builtinSpawn(), {
       repoRoot,
+      issueNumber: 1,
       workerName: 'implementer',
     });
     const workerHome = resolveEnsemblePaths({ repoRoot }).piWorkerDir(
       'implementer',
+      1,
     );
 
     expect(configured.env).toMatchObject({
       HOME: workerHome,
       USERPROFILE: workerHome,
+      ENSEMBLE_PI_LEGACY_WORKER_HOME:
+        resolveEnsemblePaths({ repoRoot }).legacyPiWorkerDir('implementer'),
       ENSEMBLE_PI_CLI_HOME: hostHome,
       ENSEMBLE_PI_CLI_USERPROFILE: hostUserProfile,
       ENSEMBLE_PI_CLI_NODE: process.execPath,
       PI_CODING_AGENT_SESSION_DIR:
-        resolveEnsemblePaths({ repoRoot }).piWorkerSessionsDir('implementer'),
+        resolveEnsemblePaths({ repoRoot }).piWorkerSessionsDir(
+          'implementer',
+          1,
+        ),
     });
     expect(configured.env?.PI_ACP_PI_COMMAND).toBe(
       resolveBuiltinPiCliEnvWrapperPath(),
@@ -212,11 +219,13 @@ describe('configurePiWorkerRuntime', () => {
       },
       {
         repoRoot,
+        issueNumber: 1,
         workerName: 'implementer',
       },
     );
     const workerHome = resolveEnsemblePaths({ repoRoot }).piWorkerDir(
       'implementer',
+      1,
     );
 
     expect(configured.env?.HOME).toBe(workerHome);
@@ -238,15 +247,16 @@ describe('configurePiWorkerRuntime', () => {
       },
       {
         repoRoot,
+        issueNumber: 1,
         workerName: 'implementer',
       },
     );
 
     expect(configured.env?.HOME).toBe(
-      resolveEnsemblePaths({ repoRoot }).piWorkerDir('implementer'),
+      resolveEnsemblePaths({ repoRoot }).piWorkerDir('implementer', 1),
     );
     expect(configured.env?.USERPROFILE).toBe(
-      resolveEnsemblePaths({ repoRoot }).piWorkerDir('implementer'),
+      resolveEnsemblePaths({ repoRoot }).piWorkerDir('implementer', 1),
     );
     expect(configured.env?.ENSEMBLE_PI_CLI_HOME).toBe(
       join(tempRoot, 'acp-profile'),
@@ -268,6 +278,7 @@ describe('configurePiWorkerRuntime', () => {
     expect(
       configurePiWorkerRuntime(byoSpawn, {
         repoRoot,
+        issueNumber: 1,
         workerName: 'implementer',
       }),
     ).toBe(byoSpawn);

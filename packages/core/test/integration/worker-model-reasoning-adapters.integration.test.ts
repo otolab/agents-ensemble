@@ -1,8 +1,18 @@
-import { chmod, mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AcpBridge } from '../../src/acp/acp-bridge.js';
 import { spawnAcpProcess } from '../../src/acp/acp-process.js';
@@ -340,11 +350,15 @@ describe.skipIf(process.platform === 'win32')(
             "import { appendFileSync, existsSync, writeFileSync } from 'node:fs';",
             "import { join } from 'node:path';",
             'const eventsPath = process.env.PI_ACP_ADAPTER_TEST_EVENTS;',
-            'const sessionFile = process.env.PI_ACP_ADAPTER_TEST_SESSION_FILE;',
+            'const sessionFlag = process.argv.indexOf("--session");',
+            'const sessionFile = sessionFlag >= 0',
+            '  ? process.argv[sessionFlag + 1]',
+            '  : process.env.PI_ACP_ADAPTER_TEST_SESSION_FILE;',
+            'const sessionId = process.env.PI_ACP_ADAPTER_TEST_SESSION_ID ?? "pi-acp-integration-session";',
             "let model = { provider: 'openai', id: 'baseline-model' };",
             "let thinkingLevel = 'medium';",
             'if (!existsSync(sessionFile)) writeFileSync(sessionFile, [',
-            '  JSON.stringify({ type: "session", version: 3, id: "pi-acp-integration-session", timestamp: new Date().toISOString(), cwd: process.cwd() }),',
+            '  JSON.stringify({ type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: process.cwd() }),',
             '  JSON.stringify({ type: "message", id: "fixture-user", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "builtin fixture user message" }], timestamp: Date.now() } }),',
             '  JSON.stringify({ type: "message", id: "fixture-assistant", parentId: "fixture-user", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "builtin fixture assistant message" }], timestamp: Date.now() } }),',
             '].join("\\n") + "\\n");',
@@ -393,7 +407,7 @@ describe.skipIf(process.platform === 'win32')(
             '    });',
             '    switch (request.type) {',
             '      case "get_state":',
-            '        reply(request, { sessionId: "pi-acp-integration-session", sessionFile, model, thinkingLevel });',
+            '        reply(request, { sessionId, sessionFile, model, thinkingLevel });',
             '        break;',
             '      case "get_available_models":',
             '        reply(request, { models: [',
@@ -441,22 +455,55 @@ describe.skipIf(process.platform === 'win32')(
           resolveSpawn('pi', model, 'builtin'),
           {
             repoRoot,
+            issueNumber: 1,
             workerName: 'integration',
             agentDir: customAgentDir,
           },
         );
         const paths = resolveEnsemblePaths({ repoRoot });
-        const workerHome = paths.piWorkerDir('integration');
-        const sessionMapPaths = resolvePiAcpSessionMapPaths(workerHome);
+        const workerHome = paths.piWorkerDir('integration', 1);
+        const legacyWorkerHome = paths.legacyPiWorkerDir('integration');
+        const sessionMapPaths = resolvePiAcpSessionMapPaths(
+          workerHome,
+          legacyWorkerHome,
+        );
+        const issueTwoResolved = configurePiWorkerRuntime(
+          resolveSpawn('pi', model, 'builtin'),
+          {
+            repoRoot,
+            issueNumber: 2,
+            workerName: 'integration',
+            agentDir: customAgentDir,
+          },
+        );
+        const issueTwoWorkerHome = paths.piWorkerDir('integration', 2);
+        const issueTwoSessionMapPaths = resolvePiAcpSessionMapPaths(
+          issueTwoWorkerHome,
+          legacyWorkerHome,
+        );
         const sessionFile = join(
           resolved.env!.PI_CODING_AGENT_SESSION_DIR!,
           'test-session.jsonl',
         );
-        await mkdir(resolved.env!.PI_CODING_AGENT_SESSION_DIR!, {
-          recursive: true,
-        });
+        const issueTwoSessionFile = join(
+          issueTwoResolved.env!.PI_CODING_AGENT_SESSION_DIR!,
+          'test-session.jsonl',
+        );
+        const issueTwoCwd = join(tempRoot, 'issue-two-worktree');
+        await Promise.all([
+          mkdir(resolved.env!.PI_CODING_AGENT_SESSION_DIR!, {
+            recursive: true,
+          }),
+          mkdir(issueTwoResolved.env!.PI_CODING_AGENT_SESSION_DIR!, {
+            recursive: true,
+          }),
+          mkdir(issueTwoCwd, { recursive: true }),
+        ]);
         const spawnOptions = resolvedAcpSpawnToOptions(
           finalizeResolvedAcpSpawn(resolved),
+        );
+        const issueTwoSpawnOptions = resolvedAcpSpawnToOptions(
+          finalizeResolvedAcpSpawn(issueTwoResolved),
         );
         const searchPath = [binDir, process.env.PATH]
           .filter((entry): entry is string => Boolean(entry))
@@ -475,6 +522,8 @@ describe.skipIf(process.platform === 'win32')(
           PI_CODING_AGENT_DIR: spawnOptions.env?.PI_CODING_AGENT_DIR,
           PI_CODING_AGENT_SESSION_DIR:
             spawnOptions.env?.PI_CODING_AGENT_SESSION_DIR,
+          ENSEMBLE_PI_LEGACY_WORKER_HOME:
+            spawnOptions.env?.ENSEMBLE_PI_LEGACY_WORKER_HOME,
           PI_ACP_PI_COMMAND: spawnOptions.env?.PI_ACP_PI_COMMAND,
           ENSEMBLE_USER_ROOT: userRoot,
           // Force the normal HOME-based fallback for `gh`; this proves the
@@ -484,42 +533,103 @@ describe.skipIf(process.platform === 'win32')(
           GH_CONFIG_DIR: '',
           PI_ACP_ADAPTER_TEST_EVENTS: eventsPath,
           PI_ACP_ADAPTER_TEST_SESSION_FILE: sessionFile,
+          PI_ACP_ADAPTER_TEST_SESSION_ID:
+            'pi-acp-integration-session-issue-1',
           ...(process.platform === 'win32'
             ? { SystemRoot: process.env.SystemRoot }
             : {}),
         };
+        const issueTwoIsolatedEnv: NodeJS.ProcessEnv = {
+          ...isolatedEnv,
+          HOME: issueTwoSpawnOptions.env?.HOME,
+          USERPROFILE: issueTwoSpawnOptions.env?.USERPROFILE,
+          PI_CODING_AGENT_SESSION_DIR:
+            issueTwoSpawnOptions.env?.PI_CODING_AGENT_SESSION_DIR,
+          ENSEMBLE_PI_LEGACY_WORKER_HOME:
+            issueTwoSpawnOptions.env?.ENSEMBLE_PI_LEGACY_WORKER_HOME,
+          PI_ACP_ADAPTER_TEST_SESSION_FILE: issueTwoSessionFile,
+          PI_ACP_ADAPTER_TEST_SESSION_ID:
+            'pi-acp-integration-session-issue-2',
+        };
 
-        const startClient = async () => {
+        const startClient = async (
+          clientSpawnOptions = spawnOptions,
+          clientEnv = isolatedEnv,
+        ) => {
           const client = await spawnAcpProcess({
-            ...spawnOptions,
+            ...clientSpawnOptions,
             cwd: repoRoot,
-            env: isolatedEnv,
+            env: clientEnv,
           });
           clients.add(client);
           await client.connect();
           return client;
         };
 
-        const createdClient = await startClient();
-        const sessionId = await createdClient.newSession(repoRoot);
-        await createdClient.close();
+        // Different Issues can run same-named workers at the same time. Their
+        // upstream adapters must not read-modify-write the same session map.
+        const [createdClient, issueTwoClient] = await Promise.all([
+          startClient(),
+          startClient(issueTwoSpawnOptions, issueTwoIsolatedEnv),
+        ]);
+        const [sessionId, issueTwoSessionId] = await Promise.all([
+          createdClient.newSession(repoRoot),
+          issueTwoClient.newSession(issueTwoCwd),
+        ]);
+        await Promise.all([
+          createdClient.close(),
+          issueTwoClient.close(),
+        ]);
         clients.delete(createdClient);
+        clients.delete(issueTwoClient);
 
         const createdMap = JSON.parse(
           await readFile(sessionMapPaths.upstreamPath, 'utf8'),
         ) as {
           sessions: Record<string, { sessionFile: string }>;
         };
+        const issueTwoMap = JSON.parse(
+          await readFile(issueTwoSessionMapPaths.upstreamPath, 'utf8'),
+        ) as {
+          sessions: Record<string, { sessionFile: string }>;
+        };
         expect(createdMap.sessions[sessionId]?.sessionFile).toBe(sessionFile);
+        expect(Object.keys(createdMap.sessions)).toEqual([sessionId]);
+        expect(issueTwoMap.sessions[issueTwoSessionId]?.sessionFile).toBe(
+          issueTwoSessionFile,
+        );
+        expect(Object.keys(issueTwoMap.sessions)).toEqual([issueTwoSessionId]);
+        expect(issueTwoSessionMapPaths.upstreamPath).not.toBe(
+          sessionMapPaths.upstreamPath,
+        );
+        expect(issueTwoSessionFile).not.toBe(sessionFile);
         expect(resolved.env?.HOME).toBe(workerHome);
         expect(resolved.env?.USERPROFILE).toBe(workerHome);
         expect(resolved.env?.PI_CODING_AGENT_DIR).toBe(customAgentDir);
         expect(resolved.env?.PI_CODING_AGENT_SESSION_DIR).toBe(
-          paths.piWorkerSessionsDir('integration'),
+          paths.piWorkerSessionsDir('integration', 1),
         );
         expect(resolved.env?.ENSEMBLE_PI_CLI_HOME).toBe(userHome);
         expect(resolved.env?.PI_ACP_PI_COMMAND).not.toBe(fakePiPath);
         expect(resolved.env).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
+
+        for (const [path, expectedMode] of [
+          [paths.piWorkerRoot, 0o700],
+          [workerHome, 0o700],
+          [dirname(workerHome), 0o700],
+          [join(workerHome, 'sessions'), 0o700],
+          [dirname(sessionMapPaths.upstreamPath), 0o700],
+          [issueTwoWorkerHome, 0o700],
+          [dirname(issueTwoWorkerHome), 0o700],
+          [join(issueTwoWorkerHome, 'sessions'), 0o700],
+          [dirname(issueTwoSessionMapPaths.upstreamPath), 0o700],
+          [sessionFile, 0o600],
+          [issueTwoSessionFile, 0o600],
+          [sessionMapPaths.upstreamPath, 0o600],
+          [issueTwoSessionMapPaths.upstreamPath, 0o600],
+        ] as const) {
+          expect((await stat(path)).mode & 0o777, path).toBe(expectedMode);
+        }
 
         // The old builtin layout stored its map directly in the worker root.
         // Exercise wrapper migration before loading the just-created session.
@@ -549,6 +659,70 @@ describe.skipIf(process.platform === 'win32')(
           sessionFile,
         });
 
+        // Sessions created before Issue-scoped storage used one shared map
+        // and transcript directory per repository/worker. Verify that the
+        // wrapper copies that map and can still load its original transcript.
+        const legacySharedMapPaths =
+          resolvePiAcpSessionMapPaths(legacyWorkerHome);
+        const legacyTranscriptPath = join(
+          legacyWorkerHome,
+          'sessions',
+          'legacy-shared-session.jsonl',
+        );
+        await mkdir(dirname(legacyTranscriptPath), { recursive: true });
+        await writeFile(
+          legacyTranscriptPath,
+          await readFile(sessionFile),
+        );
+        const legacySharedMapContents = JSON.stringify({
+          version: 1,
+          sessions: {
+            [sessionId]: {
+              sessionId,
+              cwd: repoRoot,
+              sessionFile: legacyTranscriptPath,
+            },
+          },
+        });
+        await mkdir(dirname(legacySharedMapPaths.upstreamPath), {
+          recursive: true,
+        });
+        await writeFile(
+          legacySharedMapPaths.upstreamPath,
+          legacySharedMapContents,
+        );
+        await rm(sessionMapPaths.upstreamPath, { force: true });
+        await rm(sessionMapPaths.legacyPath, { force: true });
+
+        const preIssueLoadedClient = await startClient();
+        await preIssueLoadedClient.loadSession(sessionId, repoRoot);
+        await preIssueLoadedClient.close();
+        clients.delete(preIssueLoadedClient);
+        await expect(
+          readFile(legacySharedMapPaths.upstreamPath, 'utf8'),
+        ).resolves.toBe(legacySharedMapContents);
+        const preIssueMigratedMap = JSON.parse(
+          await readFile(sessionMapPaths.upstreamPath, 'utf8'),
+        ) as {
+          sessions: Record<
+            string,
+            { sessionId: string; cwd: string; sessionFile: string }
+          >;
+        };
+        expect(preIssueMigratedMap.sessions[sessionId]).toMatchObject({
+          sessionId,
+          cwd: repoRoot,
+          sessionFile: legacyTranscriptPath,
+        });
+
+        const issueTwoLoadedClient = await startClient(
+          issueTwoSpawnOptions,
+          issueTwoIsolatedEnv,
+        );
+        await issueTwoLoadedClient.loadSession(issueTwoSessionId, issueTwoCwd);
+        await issueTwoLoadedClient.close();
+        clients.delete(issueTwoLoadedClient);
+
         const events = parseJsonLines(await readFile(eventsPath, 'utf8'));
         expect(
           events.filter(
@@ -557,14 +731,14 @@ describe.skipIf(process.platform === 'win32')(
               (event.model as Record<string, unknown> | undefined)?.id ===
                 'target-model',
           ),
-        ).toHaveLength(2);
+        ).toHaveLength(5);
         expect(
           events.filter(
             (event) =>
               event.type === 'set_thinking_level_applied' &&
               event.thinkingLevel === 'high',
           ),
-        ).toHaveLength(2);
+        ).toHaveLength(5);
         const resumedPiProcesses = events.filter((event) => {
           const argv = event.argv as string[] | undefined;
           const sessionFlag = argv?.indexOf('--session') ?? -1;
@@ -608,7 +782,7 @@ describe.skipIf(process.platform === 'win32')(
         const shellConfigEvents = events.filter(
           (event) => event.type === 'shell-config',
         );
-        expect(shellConfigEvents).toHaveLength(2);
+        expect(shellConfigEvents).toHaveLength(5);
         for (const event of shellConfigEvents) {
           expect(event.home).toBe(userHome);
           expect(event.userprofile).toBe(userHome);
@@ -621,6 +795,7 @@ describe.skipIf(process.platform === 'win32')(
         // Simulate a stopped worker whose session map was lost but transcript
         // remains. A builtin resume must fail visibly without creating a new
         // Pi session or changing the saved session identifier.
+        await rm(legacySharedMapPaths.upstreamPath, { force: true });
         await rm(sessionMapPaths.upstreamPath, { force: true });
         await rm(sessionMapPaths.legacyPath, { force: true });
         await expect(readFile(sessionFile, 'utf8')).resolves.toContain(

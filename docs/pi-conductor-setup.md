@@ -339,7 +339,7 @@ node scripts/pi/bench-cached-auth.mjs
 | model list | Cursor SDK の catalog | 認証済み Pi model のみ。`--provider` で絞り込み |
 | worker の認証 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意。Pi builtin worker は Pi conductor と同じ user root の `auth.json` または provider 環境変数を使う |
 
-Pi builtin worker と Pi conductor は同じ Pi user root を使います。既定は `~/.ensemble/pi/` で、`conductor.pi.agentDir` が設定されていればその directory、なければ `PI_CODING_AGENT_DIR` が使われます。builtin worker の session map と transcript はこの設定から独立し、`~/.ensemble/pi/worker/<repoKey>/<workerKey>/` に保存します。
+Pi builtin worker と Pi conductor は同じ Pi user root を使います。既定は `~/.ensemble/pi/` で、`conductor.pi.agentDir` が設定されていればその directory、なければ `PI_CODING_AGENT_DIR` が使われます。builtin worker の session map と transcript はこの設定から独立し、Issue と worker ごとの `~/.ensemble/pi/worker/<repoKey>/issue-<issueNumber>/<workerKey>/` に保存します。同じ repository で別 Issue の同名 worker を同時に動かしても map は共有しません。POSIX では wrapper が directory を `0700`、map / transcript を `0600` にします。Windows では wrapper は ACL を設定・検証しないため、owner-only access は保証しません。
 
 Pi builtin worker を使う場合、`ensemble auth login --provider <id>` は選択中の conductor backend が Pi のとき、解決済み user root の `auth.json` に credential を保存し、worker と共有します。既定の Cursor backend では `--provider` だけで Pi login には切り替わらないため、Pi backend の config / profile を選ぶか、provider 環境変数を設定してください。Cursor backend のまま Pi CLI から login する場合は、同じ directory を `PI_CODING_AGENT_DIR` に指定してください。Pi CLI の global install は不要ですが、provider credential は必要です。
 

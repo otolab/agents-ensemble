@@ -1,11 +1,15 @@
 #!/usr/bin/env node
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+import { dirname, join } from 'node:path';
 import { ensureBuiltinPiConfig } from './pi-builtin-config.js';
 import {
-  migrateLegacyPiAcpSessionMap,
+  preparePiAcpSessionStorage,
   resolvePiAcpSessionMapPaths,
+  setPrivatePiSessionStorageUmask,
 } from './pi-session-map.js';
 import { resolveBuiltinPiAcpEntrypointPath } from './pi-runtime.js';
+
+setPrivatePiSessionStorageUmask();
 
 async function main(): Promise<void> {
   const workerHome =
@@ -16,12 +20,23 @@ async function main(): Promise<void> {
     throw new Error('builtin worker HOME was not configured');
   }
 
+  const legacyWorkerHome =
+    process.env.ENSEMBLE_PI_LEGACY_WORKER_HOME || undefined;
+  const sessionDir =
+    process.env.PI_CODING_AGENT_SESSION_DIR ?? join(workerHome, 'sessions');
+  preparePiAcpSessionStorage({
+    workerStorageRoot: dirname(dirname(workerHome)),
+    workerHome,
+    sessionsDir: sessionDir,
+    ...(legacyWorkerHome ? { legacyWorkerHome } : {}),
+    mapPaths: resolvePiAcpSessionMapPaths(workerHome, legacyWorkerHome),
+  });
+
   ensureBuiltinPiConfig({
     ...(process.env.PI_CODING_AGENT_DIR
       ? { agentDir: process.env.PI_CODING_AGENT_DIR }
       : {}),
   });
-  migrateLegacyPiAcpSessionMap(resolvePiAcpSessionMapPaths(workerHome));
 
   await import(pathToFileURL(resolveBuiltinPiAcpEntrypointPath()).href);
 }

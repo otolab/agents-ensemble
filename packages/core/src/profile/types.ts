@@ -268,6 +268,7 @@ export function profileWorkersToSessionSpecs(
     defaultAcp?: DefaultAcpResolutionOptions;
     spawnBase?: SpawnAcpProcessOptions;
     repoRoot?: string;
+    issueNumber?: number;
     piAgentDir?: string;
   },
 ): SessionWorkerSpec[] {
@@ -284,6 +285,11 @@ export function profileWorkersToSessionSpecs(
           'repoRoot is required for the builtin Pi worker runtime.',
         );
       }
+      if (!options.issueNumber) {
+        throw new Error(
+          'issueNumber is required for the builtin Pi worker runtime.',
+        );
+      }
       const agentDir =
         options.piAgentDir ??
         resolveConductorPiResourcePaths({
@@ -293,6 +299,7 @@ export function profileWorkersToSessionSpecs(
         }).agentDir;
       sessionSpawn = configurePiWorkerRuntime(resolved, {
         repoRoot: options.repoRoot,
+        issueNumber: options.issueNumber,
         workerName: worker.name,
         ...(agentDir ? { agentDir } : {}),
       });

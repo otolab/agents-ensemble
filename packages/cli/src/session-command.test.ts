@@ -21,6 +21,7 @@ import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
 
 const PI_HISTORY_ENTRY_TYPE = 'agents-ensemble/conductor-message-history/v1';
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/653';
+const ISSUE_NUMBER = 653;
 const WORKER_PI_SESSION_ID = 'pi-acp-worker-fixture-session';
 const WORKER_PI_CWD = '/tmp/pi-acp-worker-fixture';
 const WORKER_CODEX_SESSION_ID = '019a4b21-9c0e-7a44-b9ad-6a8df4fa7720';
@@ -1300,7 +1301,7 @@ describe('ensemble session commands', () => {
     const transcriptPath =
       options?.runtime === 'builtin'
         ? join(
-            paths.piWorkerSessionsDir('implementer'),
+            paths.piWorkerSessionsDir('implementer', ISSUE_NUMBER),
             'pi-acp-worker-session.jsonl',
           )
         : join(
@@ -1323,7 +1324,7 @@ describe('ensemble session commands', () => {
 
     const mapPath =
       options?.runtime === 'builtin'
-        ? paths.piWorkerSessionMapPath('implementer')
+        ? paths.piWorkerSessionMapPath('implementer', ISSUE_NUMBER)
         : join(homeRoot, '.pi', 'pi-acp', 'session-map.json');
     await mkdir(dirname(mapPath), { recursive: true });
     await writeFile(

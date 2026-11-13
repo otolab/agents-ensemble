@@ -227,13 +227,19 @@ function resolvePiCliHome(spawn: ResolvedAcpSpawn): {
  */
 export function configurePiWorkerRuntime(
   spawn: ResolvedAcpSpawn,
-  input: { repoRoot: string; workerName: string; agentDir?: string },
+  input: {
+    repoRoot: string;
+    issueNumber: number;
+    workerName: string;
+    agentDir?: string;
+  },
 ): ResolvedAcpSpawn {
   if (spawn.preset !== 'pi' || spawn.piRuntime !== 'builtin') return spawn;
 
   assertBuiltinPiNodeVersionSupported();
   const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
-  const workerHome = paths.piWorkerDir(input.workerName);
+  const workerHome = paths.piWorkerDir(input.workerName, input.issueNumber);
+  const legacyWorkerHome = paths.legacyPiWorkerDir(input.workerName);
   const piCliHome = resolvePiCliHome(spawn);
   const env = { ...(spawn.env ?? {}) };
   // Upstream pi-acp has no map path override; HOME determines its map location.
@@ -249,9 +255,11 @@ export function configurePiWorkerRuntime(
       ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
       HOME: workerHome,
       USERPROFILE: workerHome,
+      ENSEMBLE_PI_LEGACY_WORKER_HOME: legacyWorkerHome,
       PI_CODING_AGENT_DIR: input.agentDir ?? paths.piUserDir,
       PI_CODING_AGENT_SESSION_DIR: paths.piWorkerSessionsDir(
         input.workerName,
+        input.issueNumber,
       ),
       PI_ACP_PI_COMMAND: resolveBuiltinPiCliEnvWrapperPath(),
     },

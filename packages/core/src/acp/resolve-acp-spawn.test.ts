@@ -751,6 +751,7 @@ describe('profileWorkersToSessionSpecs', () => {
     const specs = profileWorkersToSessionSpecs(baseProfile, {
       defaultAcp: { config, env: {} },
       repoRoot,
+      issueNumber: 1,
     });
     const paths = resolveEnsemblePaths({ repoRoot });
     const implementer = specs[0]?.spawn?.env;
@@ -760,11 +761,13 @@ describe('profileWorkersToSessionSpecs', () => {
 
     expect(implementer).toMatchObject({
       ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
-      HOME: paths.piWorkerDir('implementer'),
-      USERPROFILE: paths.piWorkerDir('implementer'),
+      HOME: paths.piWorkerDir('implementer', 1),
+      USERPROFILE: paths.piWorkerDir('implementer', 1),
+      ENSEMBLE_PI_LEGACY_WORKER_HOME:
+        paths.legacyPiWorkerDir('implementer'),
       PI_CODING_AGENT_DIR: paths.piUserDir,
       PI_CODING_AGENT_SESSION_DIR:
-        paths.piWorkerSessionsDir('implementer'),
+        paths.piWorkerSessionsDir('implementer', 1),
     });
     expect(implementer?.PI_ACP_PI_COMMAND).toBe(
       resolveBuiltinPiCliEnvWrapperPath(),
@@ -774,7 +777,7 @@ describe('profileWorkersToSessionSpecs', () => {
     );
     expect(implementer?.PI_ACP_PI_COMMAND).not.toBe('/custom/pi.js');
     expect(implementer).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
-    expect(reviewer?.HOME).toBe(paths.piWorkerDir('reviewer'));
+    expect(reviewer?.HOME).toBe(paths.piWorkerDir('reviewer', 1));
     expect(reviewer?.HOME).not.toBe(implementer?.HOME);
     expect(specs[0]?.acpFingerprint).toMatchObject({
       preset: 'pi',
@@ -789,11 +792,13 @@ describe('profileWorkersToSessionSpecs', () => {
           implementer?.ENSEMBLE_PI_CLI_USERPROFILE ?? '',
         ENSEMBLE_PI_CLI_NODE: process.execPath,
         ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
-        HOME: paths.piWorkerDir('implementer'),
-        USERPROFILE: paths.piWorkerDir('implementer'),
+        HOME: paths.piWorkerDir('implementer', 1),
+        USERPROFILE: paths.piWorkerDir('implementer', 1),
+        ENSEMBLE_PI_LEGACY_WORKER_HOME:
+          paths.legacyPiWorkerDir('implementer'),
         PI_CODING_AGENT_DIR: paths.piUserDir,
         PI_CODING_AGENT_SESSION_DIR:
-          paths.piWorkerSessionsDir('implementer'),
+          paths.piWorkerSessionsDir('implementer', 1),
         PI_ACP_PI_COMMAND: resolveBuiltinPiCliEnvWrapperPath(),
       }),
     );
@@ -817,6 +822,7 @@ describe('profileWorkersToSessionSpecs', () => {
     const specs = profileWorkersToSessionSpecs(baseProfile, {
       defaultAcp: { config, env: {} },
       repoRoot,
+      issueNumber: 1,
     });
     const paths = resolveEnsemblePaths({ repoRoot });
     const implementer = specs[0]?.spawn?.env;
@@ -825,17 +831,19 @@ describe('profileWorkersToSessionSpecs', () => {
     delete fingerprintEnv.PI_ACP_SESSION_MAP_PATH;
 
     expect(implementer).toMatchObject({
-      HOME: paths.piWorkerDir('implementer'),
-      USERPROFILE: paths.piWorkerDir('implementer'),
+      HOME: paths.piWorkerDir('implementer', 1),
+      USERPROFILE: paths.piWorkerDir('implementer', 1),
+      ENSEMBLE_PI_LEGACY_WORKER_HOME:
+        paths.legacyPiWorkerDir('implementer'),
       PI_CODING_AGENT_DIR: agentDir,
       PI_CODING_AGENT_SESSION_DIR:
-        paths.piWorkerSessionsDir('implementer'),
+        paths.piWorkerSessionsDir('implementer', 1),
     });
     expect(reviewer?.PI_CODING_AGENT_DIR).toBe(agentDir);
     expect(reviewer?.PI_CODING_AGENT_SESSION_DIR).toBe(
-      paths.piWorkerSessionsDir('reviewer'),
+      paths.piWorkerSessionsDir('reviewer', 1),
     );
-    expect(reviewer?.HOME).toBe(paths.piWorkerDir('reviewer'));
+    expect(reviewer?.HOME).toBe(paths.piWorkerDir('reviewer', 1));
     expect(reviewer?.HOME).not.toBe(implementer?.HOME);
     expect(specs[0]?.acpFingerprint?.envDigest).toBe(
       computeAcpSpawnEnvDigest({
@@ -846,11 +854,13 @@ describe('profileWorkersToSessionSpecs', () => {
           implementer?.ENSEMBLE_PI_CLI_USERPROFILE ?? '',
         ENSEMBLE_PI_CLI_NODE: process.execPath,
         ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
-        HOME: paths.piWorkerDir('implementer'),
-        USERPROFILE: paths.piWorkerDir('implementer'),
+        HOME: paths.piWorkerDir('implementer', 1),
+        USERPROFILE: paths.piWorkerDir('implementer', 1),
+        ENSEMBLE_PI_LEGACY_WORKER_HOME:
+          paths.legacyPiWorkerDir('implementer'),
         PI_CODING_AGENT_DIR: agentDir,
         PI_CODING_AGENT_SESSION_DIR:
-          paths.piWorkerSessionsDir('implementer'),
+          paths.piWorkerSessionsDir('implementer', 1),
         PI_ACP_PI_COMMAND: resolveBuiltinPiCliEnvWrapperPath(),
       }),
     );

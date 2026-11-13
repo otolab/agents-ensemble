@@ -2059,11 +2059,13 @@ describe('runConductorSession resume / shutdown', () => {
     const workerSpawn = connectAcp.mock.calls[0]?.[0].spawn;
     const paths = resolveEnsemblePaths({ repoRoot });
     expect(workerSpawn?.env).toMatchObject({
-      HOME: paths.piWorkerDir('implementer'),
-      USERPROFILE: paths.piWorkerDir('implementer'),
+      HOME: paths.piWorkerDir('implementer', TEST_ISSUE.number),
+      USERPROFILE: paths.piWorkerDir('implementer', TEST_ISSUE.number),
+      ENSEMBLE_PI_LEGACY_WORKER_HOME:
+        paths.legacyPiWorkerDir('implementer'),
       PI_CODING_AGENT_DIR: join(repoRoot, 'custom-pi-user'),
       PI_CODING_AGENT_SESSION_DIR:
-        paths.piWorkerSessionsDir('implementer'),
+        paths.piWorkerSessionsDir('implementer', TEST_ISSUE.number),
     });
     expect(workerSpawn?.env).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
     expect(workerSpawn?.env?.PI_ACP_PI_COMMAND).toBe(

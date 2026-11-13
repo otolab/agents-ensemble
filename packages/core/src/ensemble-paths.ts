@@ -36,14 +36,26 @@ export function resolveEnsemblePaths(
   const sessionsDir = join(sessionsRoot, repoKey);
   const piUserDir = join(userRoot, 'pi');
   const piWorkerRoot = join(piUserDir, 'worker', repoKey);
-  const piWorkerDirectory = (workerName: string) => {
+  const piWorkerDirectoryName = (workerName: string) => {
     const slug = workerName
       .normalize('NFKD')
       .replace(/[^A-Za-z0-9_-]+/gu, '-')
       .replace(/^[.-]+|[.-]+$/gu, '')
       .slice(0, 48);
     const key = createHash('sha256').update(workerName).digest('hex').slice(0, 12);
-    return join(piWorkerRoot, `${slug || 'worker'}-${key}`);
+    return `${slug || 'worker'}-${key}`;
+  };
+  const legacyPiWorkerDirectory = (workerName: string) =>
+    join(piWorkerRoot, piWorkerDirectoryName(workerName));
+  const piWorkerDirectory = (workerName: string, issueNumber: number) => {
+    if (!Number.isSafeInteger(issueNumber) || issueNumber < 1) {
+      throw new Error('Pi worker storage requires a positive Issue number.');
+    }
+    return join(
+      piWorkerRoot,
+      `issue-${issueNumber}`,
+      piWorkerDirectoryName(workerName),
+    );
   };
   const sessionDataDir = (conductorAgentId: string) =>
     join(sessionsDir, conductorAgentId);
@@ -90,12 +102,16 @@ export function resolveEnsemblePaths(
     piUserDir,
     piWorkerRoot,
     piWorkerDir: piWorkerDirectory,
-    piWorkerSessionsDir: (workerName: string) =>
-      join(piWorkerDirectory(workerName), 'sessions'),
-    piWorkerSessionMapPath: (workerName: string) =>
-      join(piWorkerDirectory(workerName), '.pi', 'pi-acp', 'session-map.json'),
-    legacyPiWorkerSessionMapPath: (workerName: string) =>
-      join(piWorkerDirectory(workerName), 'session-map.json'),
+    legacyPiWorkerDir: legacyPiWorkerDirectory,
+    piWorkerSessionsDir: (workerName: string, issueNumber: number) =>
+      join(piWorkerDirectory(workerName, issueNumber), 'sessions'),
+    piWorkerSessionMapPath: (workerName: string, issueNumber: number) =>
+      join(
+        piWorkerDirectory(workerName, issueNumber),
+        '.pi',
+        'pi-acp',
+        'session-map.json',
+      ),
     sessionsRoot,
     sessionsDir,
     canonicalRepoSessionsDir,

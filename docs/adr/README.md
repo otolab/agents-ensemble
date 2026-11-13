@@ -134,9 +134,10 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | accepted |
 | [0061](0061-github-slug-session-persistence.md) | Issue session の slug 正本と operator-agent の user profile | proposed |
 | [0062](0062-builtin-pi-acp-runtime.md) | Pi ACP adapter の内蔵と BYO / builtin runtime | superseded → [0063](0063-pi-acp-upstream-package-wrapper.md) |
-| [0063](0063-pi-acp-upstream-package-wrapper.md) | Pi ACP upstream npm dependency と core wrapper | superseded in part → [0065](0065-pi-acp-version-split-for-byo-compatibility.md)（dependency version assignment only） |
+| [0063](0063-pi-acp-upstream-package-wrapper.md) | Pi ACP upstream npm dependency と core wrapper | superseded in part → [0065](0065-pi-acp-version-split-for-byo-compatibility.md)（dependency version assignment only） / [0066](0066-issue-scoped-builtin-pi-storage.md)（builtin storage scope and permissions） |
 | [0064](0064-builtin-pi-home-and-resume-safety.md) | Builtin Pi の shell home と resume 失敗時の安全性 | accepted |
 | [0065](0065-pi-acp-version-split-for-byo-compatibility.md) | BYO / builtin の Pi ACP dependency version を分ける | accepted |
+| [0066](0066-issue-scoped-builtin-pi-storage.md) | Issue ごとの builtin Pi worker 保存先と権限 | accepted |
 
 ## 追加するとき
 

@@ -20,31 +20,45 @@ describe('resolveEnsemblePaths', () => {
       repoRoot: join(repoRoot, '.', 'src', '..'),
       home: join(tempDir, 'home'),
     });
+    const issueNumber = 42;
+    const workerHome = paths.piWorkerDir('implementer', issueNumber);
 
     expect(paths.repoKey).toMatch(/^[a-f0-9]{64}$/u);
     expect(paths.sessionsDir).toBe(
       join(tempDir, 'home', '.ensemble', 'sessions', paths.repoKey),
     );
     expect(paths.piUserDir).toBe(join(tempDir, 'home', '.ensemble', 'pi'));
-    expect(dirname(paths.piWorkerDir('implementer'))).toBe(paths.piWorkerRoot);
-    expect(basename(paths.piWorkerDir('implementer'))).toMatch(
+    expect(dirname(workerHome)).toBe(join(paths.piWorkerRoot, 'issue-42'));
+    expect(basename(workerHome)).toMatch(
       /^implementer-[a-f0-9]{12}$/u,
     );
-    expect(paths.piWorkerSessionsDir('implementer')).toBe(
-      join(paths.piWorkerDir('implementer'), 'sessions'),
+    expect(paths.piWorkerSessionsDir('implementer', issueNumber)).toBe(
+      join(workerHome, 'sessions'),
     );
-    expect(paths.piWorkerSessionMapPath('implementer')).toBe(
+    expect(paths.piWorkerSessionMapPath('implementer', issueNumber)).toBe(
       join(
-        paths.piWorkerDir('implementer'),
+        workerHome,
         '.pi',
         'pi-acp',
         'session-map.json',
       ),
     );
-    expect(paths.legacyPiWorkerSessionMapPath('implementer')).toBe(
-      join(paths.piWorkerDir('implementer'), 'session-map.json'),
+    expect(paths.legacyPiWorkerDir('implementer')).toBe(
+      join(
+        paths.piWorkerRoot,
+        basename(workerHome),
+      ),
     );
-    const unsafeWorkerDirectory = paths.piWorkerDir('../../outside');
+    expect(paths.piWorkerDir('implementer', 43)).not.toBe(workerHome);
+    expect(() => paths.piWorkerDir('implementer', 0)).toThrow(
+      /positive Issue number/,
+    );
+    const unsafeWorkerDirectory = paths.piWorkerDir('../../outside', issueNumber);
+    expect(
+      unsafeWorkerDirectory.startsWith(
+        `${join(paths.piWorkerRoot, 'issue-42')}${sep}`,
+      ),
+    ).toBe(true);
     expect(unsafeWorkerDirectory.startsWith(`${paths.piWorkerRoot}${sep}`)).toBe(
       true,
     );
