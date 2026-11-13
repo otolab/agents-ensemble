@@ -14,6 +14,8 @@ Pi の `!command` はすでに Pi resource の API key として実行時に委�
 
 ADR 0028 は accepted のため本文を変更しない。本 ADR は、Issue #680 が求める認証方式の分類、status の拡張方針、復旧案内の設計を提案する。以下で「現行」と記す内容は調査時点の実装・docs の説明であり、Decision に記す status / hint / command 登録の契約は実装済みの仕様ではない。後続 Issue の実装がマージされるまで現行動作を変更せず、この ADR も現行動作の安全性を保証するものではない。
 
+現行 CLI では backend を config / profile で選び、選択済み backend に対して `ensemble auth login` を実行する。対話的な backend-first の `ensemble setup` はまだ含まれない。Issue #684 と未マージの [PR #689](https://github.com/otolab/agents-ensemble/pull/689) で扱う setup 案は、最初に Pi（OpenAI）または Cursor を選び、その後に選択先の既存 login flow へ進む。Pi では OAuth / API key を選び、Cursor は既存 SDK login に委譲する。本 ADR は backend 選択や setup を定めるものではなく、その後の認証 mode / status / recovery の語彙を提案する。
+
 ## Decision
 
 ### 1. 認証方式と scope を分ける
