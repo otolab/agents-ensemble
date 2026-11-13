@@ -136,6 +136,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0062](0062-worker-acp-model-tags.md) | worker ACP modelTag の語彙と未登録時の解決 | superseded in part → [0063](0063-explicit-default-model-tag-warning.md)（明示 `default` と省略時の warning 区別） / [0064](0064-worker-model-tags-allow-empty-strings.md)（空文字・空白のみを含む任意文字列） |
 | [0063](0063-explicit-default-model-tag-warning.md) | 明示された default modelTag の未登録 warning | accepted |
 | [0064](0064-worker-model-tags-allow-empty-strings.md) | worker modelTag に空文字・空白のみの tag を許可 | accepted |
+| [0065](0065-conductor-auth-mode-status-contract.md) | Conductor 認証モードと status / 復旧案内の契約 | proposed |
 
 ## 追加するとき
 
