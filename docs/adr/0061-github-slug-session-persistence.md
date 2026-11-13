@@ -31,14 +31,18 @@ ADR 0044 は正規化した `repoRoot` の SHA-256 を repoKey とし、checkout
 ### `repoRoot` は実行コンテキストとして保持する
 
 - SessionResumeStore の `repoRoot`、`conductorCwd`、worker の `acpCwd` は、作成時の実行コンテキストとして引き続き保存する。`repoRoot` は保存先・一覧・索引の分割キーにはしない。
-- `repoRoot` は project config と profile の解決、Pi project resources、worktree の特定、および resume の互換性検証に使う。`<repoRoot>/.ensemble/worktrees/issue-N` の worktree 配置も現行どおり維持する。
-- slug による一覧・読み取りでは Store の `repoRoot` と現在の `repoRoot` の一致を必須条件にしない。実行を伴う resume では次項の検証を行う。
+- `repoRoot` は project config と profile の解決、Pi project resources、現在の worktree の特定に使う。保存値は前回の実行コンテキストを示す情報であり、現在の clone との一致を resume の必須条件にはしない。`<repoRoot>/.ensemble/worktrees/issue-N` の配置規則は維持する。
+- slug による一覧・読み取り・resume 候補の探索では Store の `repoRoot` を除外条件にしない。resume は現在の `repoRoot` を実行先として使い、保存値との違いは復旧判断・診断の材料にする。
 
-### 別 clone からの resume
+### 別 clone / `repoRoot` が変わった状態からの Issue session resume
 
 - 同じ `owner/repo` の session は、別 clone からも slug ベースの一覧と読み取りで確認できる。Store に記録された `repoRoot` は一覧から除外する条件ではなく、現在の checkout との互換性を示す属性として表示・診断に使う。
-- `--resume` と `--continue` は、保存 Store の正規化済み絶対 `repoRoot` と現在の正規化済み絶対 `repoRoot` が一致するときだけ実行する。一致しない Store は backend の resume や状態更新を始める前に拒否し、保存側と現在側の path を示す。`--continue` では同じ Issue の候補を slug 配下から探したうえで、現在の `repoRoot` と一致する session だけを選ぶ。一致する候補がなく、他 clone の候補だけがある場合は、それを誤って再開せず理由を返す。
-- mismatch 時に warning だけで続行したり、現在の clone に worktree を自動再生成したりしない。保存された `conductorCwd` / worker cwd、project config、worktree の状態は clone 間で同じとは限らず、再生成すると既存 provider session を異なる作業環境へ結び付けるおそれがあるためである。記録された clone の場所が変わった場合の明示的な再束縛は、この設計の範囲外とする。
+- `--resume` と `--continue` は Issue URL / canonical slug と `conductorAgentId` で session を選ぶ。保存 Store の `repoRoot` と現在の `repoRoot` が違うことだけを理由に拒否しない。現在の clone の project config、profile、Pi resources、worktree を実行コンテキストとして使い、古い path は conductor へ伝える復旧情報に含める。
+- この方針は `repoRoot` mismatch だけを resume の拒否理由から外す。Issue / conductor ID、backend、MCP / config digest、worker ACP 設定など別の互換性検証を一律に無効化しない。別の検証に失敗した場合は対象と理由を明示する。
+- 現在の clone に対象 Issue の worktree があり、同じ repository / Issue のものと確認できる場合はそれを再利用する。必要な worktree が見つからなければ警告したうえで、Issue 用 branch が利用できる場合はそれを使い、なければ通常の新規 worktree と同じ base 解決規則で再生成する。既存 worktree の強制削除、reset、別 worktree からの branch の強制奪取はしない。予定 path が別 directory や別 worktree に使われている、または branch を安全に使えない場合は、それを上書きしない。識別可能な別 recovery path を使えなければ明示的に失敗させる。
+- worktree の再生成は削除済み worktree 内の未コミット変更や、現在の clone に存在しない未 push commit を復元しない。harness は保存 root と現在 root、worktree の再利用 / 再生成 / 解決失敗を conductor に通知し、conductor が branch・status・利用可能な変更を確認して作業再開の手順を決める。
+- worker の保存 `acpCwd` が旧 clone の path を指していても、その path の不一致だけでは resume を拒否しない。現在解決した worktree を実行先として復元を試みる。harness が worker の ACP session 復元失敗を検出した場合は、どの worker が復元できず fresh session に切り替わったか、または再開不能かを conductor に知らせる。旧 prompt や tool を自動再送せず、conductor が作業状態を確認して必要な指示を出す。ACP 設定など別の互換性検証に失敗した場合は、その理由を明示して止める。
+- conductor 自身の backend session を復元できない場合、または worktree を安全に解決できない場合は、resume 成功と報告しない。復元済み・復旧を伴う継続・復元失敗を区別し、失敗時は既存 Store や他の worktree を成功した新状態で置き換えない。root mismatch に応じた Store 更新は、復旧が成立した後の通常 flush に限る。
 
 ### 索引 API と session CLI
 
@@ -93,32 +97,32 @@ ADR 0046 の本文は履歴として書き換えない。本 ADR の accepted �
 | [live-open-question-control-api.md — Operator-agent watch state](../live-open-question-control-api.md#operator-agent-watch-state-の欠損破損と復旧) と [複数の保存先に同じ SessionResumeStore がある場合](../live-open-question-control-api.md#複数の保存先に同じ-sessionresumestore-がある場合) | watch state と ResumeStore の通常 path を `<repoKey>` とし、slug への昇格条件が session location に依存している。watch は slug group ごとに保存し、migration は SessionResumeStore の一意な Issue URL で確認できる record だけ分割する。 | #693 / #696 / #697 / #698 |
 | [live-open-question-control-api.md — Endpoint discovery と lifecycle](../live-open-question-control-api.md#endpoint-discovery-と-lifecycle)、[Persistence、acknowledgment、errors](../live-open-question-control-api.md#persistenceacknowledgmenterrors)、[Security と privacy](../live-open-question-control-api.md#security-と-privacy) | `harnessSocketPath` の endpoint index 契約は維持する。JSON / YAML の保存先と slug/hash/project legacy の探索・移行順、owner-only 権限を新しい path に合わせる。 | #693 / #696 / #698 / #699 |
 | [cli/README.md](../cli/README.md) — `ensemble session` の read commands と `ensemble operator-agent` | Phase 2 で session read の repository 選択と issue URL 不一致時の fail-fast を記す。Phase 3 で `operator-agent --repo-root` を削除し、全 slug が既定、`--repo-filter`、user-level config と会話選択を説明する。Phase 5 で path-hash fallback の終了と archive recovery を案内する。 | #696 / #697 / #699 |
-| [architecture.md](../architecture.md) と [operator-input.md](../operator-input.md) — operator-agent の scope、state、watch と復旧 | 全 slug group を既定でまとめる scope、slug ごとの watch state、global conversation、`repoRoot` mismatch の resume gate、`--new` の非破壊動作、旧状態の copy/archive と Phase 5 の継続性 gate を記す。 | #697 / #698 / #699 |
+| [architecture.md](../architecture.md) と [operator-input.md](../operator-input.md) — operator-agent の scope、state、watch と復旧 | 全 slug group を既定でまとめる scope、slug ごとの watch state、global conversation、operator-agent の `--new` 非破壊動作、旧状態の copy/archive と Phase 5 の継続性 gate を記す。Issue session については、root mismatch 単独で拒否しないこと、worktree / worker の復旧報告と失敗の扱いを記す。 | #696 / #697 / #698 / #699 |
 | [config.md](../config.md) と [settings.md](../settings.md) — project `.ensemble/` 設定と Pi resource / transcript path | operator-agent 固有設定を `~/.ensemble/operator-agent/config.yaml` に置き、project config/profile/Pi resources を読まない契約と共通 user config の扱いを記す。session migration は config files を対象にしない。 | #697 |
 
 ### Phase 1〜5 の参照先
 
 | Phase | Issue | この ADR で固定する境界 |
 |---|---|---|
-| 1 | [#693](https://github.com/otolab/agents-ensemble/issues/693) | 新規 Store、sidecar、tool-call history は slug にのみ書く。hash は互換 read fallback とし、legacy から resume した場合も slug へ promote して hash へ戻さない。 |
-| 2 | [#696](https://github.com/otolab/agents-ensemble/issues/696) | slug を主走査にし、clone 横断で list/read を行う。`repoRoot` 一致は索引条件から外し、resume 実行時には一致を検証する。CLI と core API は `githubRepo` / `--github-repo` または Issue URL で索引する。 |
-| 3 | [#697](https://github.com/otolab/agents-ensemble/issues/697) | `operator-agent --repo-root` と `repoRoot` 基準のグループ分けを廃止する。全 slug group が既定、`--repo-filter` で絞り、固有設定は `~/.ensemble/operator-agent/` に置く。会話は global、watch state は slug ごと。`--new` は既存会話・transcript を消さず、異なる launch `repoRoot` からの resume は拒否する案を実装・検証する。#698 の移行 tool が利用可能になるまで切り替えない。 |
-| 4 | [#698](https://github.com/otolab/agents-ensemble/issues/698) | user path-hash の session / sidecar / tool-call / Pi data、旧 operator-agent conversation / watch / Pi state、列挙された checkout の project-local session data を inventory 付き copy-only で移す。根拠があるデータだけ slug group または global conversation へ配し、曖昧・衝突データは checksum / recovery 情報付き archive に保全する。source は削除・rename しない。#697 の切替より前に tool を利用可能にする。 |
-| 5 | [#699](https://github.com/otolab/agents-ensemble/issues/699) | machine-readable inventory と SHA-256 検証で hash fallback の撤去を判断する。未計上 source、未検証 copy、未記録 collision、operator が archive-only を受け入れていない watch state があれば削除しない。project-local fallback も、完全な checkout inventory と全 source item の copy/archive 検証が揃った場合だけ削除し、条件不足なら維持する。hash directory は削除しない。 |
+| 1 | [#693](https://github.com/otolab/agents-ensemble/issues/693) | 新規 Store、sidecar、tool-call history は slug にのみ書く。hash は互換 read fallback とし、legacy から resume した場合も slug へ promote して hash へ戻さない。`repoRoot` は実行 context として保持するが、slug lookup / resume candidate の除外条件にしない。 |
+| 2 | [#696](https://github.com/otolab/agents-ensemble/issues/696) | slug を主走査にして clone 横断で list/read/resume 候補を探す。`repoRoot` mismatch 単独では resume を拒否せず、現在の clone で worktree を安全に再利用・再生成する。worktree 衝突や worker ACP restore failure は conductor に通知し、既存 worktree / state を上書きせず、復元不能を成功扱いしない。CLI と core API は `githubRepo` / `--github-repo` または Issue URL で索引する。 |
+| 3 | [#697](https://github.com/otolab/agents-ensemble/issues/697) | `operator-agent --repo-root` と `repoRoot` 基準のグループ分けを廃止する。全 slug group が既定、`--repo-filter` で絞り、固有設定は `~/.ensemble/operator-agent/` に置く。会話は global、watch state は slug ごと。Issue session の clone recovery 方針は operator-agent conversation resume を決めない。後者の launch-root 条件は Phase 3 で別途確認する。`--new` は既存会話・transcript を消さず、#698 の移行 tool が利用可能になるまで切り替えない。 |
+| 4 | [#698](https://github.com/otolab/agents-ensemble/issues/698) | user path-hash の session / sidecar / tool-call / Pi data、旧 operator-agent conversation / watch / Pi state、列挙された checkout の project-local session data を inventory 付き copy-only で移す。Issue session は `issueUrl` で slug を確定し、`repoRoot` mismatch だけでは除外しない。Store の既存情報を上書きせず、worktree は移行・再生成・削除しない。曖昧・衝突データは checksum / recovery 情報付き archive に保全し、source は削除・rename しない。 |
+| 5 | [#699](https://github.com/otolab/agents-ensemble/issues/699) | machine-readable inventory と SHA-256 検証で hash fallback の撤去を判断する。未計上 source、未検証 copy、未記録 collision、operator が archive-only を受け入れていない watch state があれば fallback を外さない。fallback 除去後も root mismatch だけで resume を拒否せず、worktree 再生成・worker restore failure の通知と明示的な失敗を確認する。project-local fallback は完全な checkout inventory と全 source item の検証が揃った場合だけ外す。hash directory は削除しない。 |
 
 ## Consequences
 
 - 同じ GitHub repository の session を clone path ではなく一つの slug から発見できる。hash と slug の二重書き込み・location ごとの保存先分岐がなくなり、operator が古い copy を正本として扱う危険を減らせる。
-- `repoRoot` / `conductorCwd` は session の実行環境として保持される。別 clone から一覧・読み取りはできるが、元の実行環境を誤って再利用しないよう resume は拒否される。
+- `repoRoot` / `conductorCwd` は実行環境の記録として保持される。別 clone からの Issue session resume は path mismatch だけでは拒否せず、現在の clone で必要な worktree / worker を復旧する。復旧の有無と失敗を conductor に伝えるため、作業再開を優先しつつ完全復元を装わない。
 - Phase 1〜4 では旧 path-hash を残したまま読み、slug に無いファイルだけを複製する。既存データを消さず、衝突時には slug を優先するため、移行を再実行しても hash 側の原本と既存 slug 側の状態を自動上書きしない。別 clone にしか残っていない hash-only session は、Phase 4 の scan が済むまで slug 一覧からは見つからない。
 - operator-agent の会話は user scope で維持し、旧 conversation を slug ごとに分割しない。watch state は一意な Issue URL で slug を証明できる単位だけを移す。移行先に通常復元できない曖昧 state は checksum 付きで残るが、watch の再登録後に既存 Open Question が再通知される保証はない。
 - Phase 5 後、user path-hash と project-local fallback が gate を通過して終了した場合、移行先にない session は通常検索・watch 再開から見えなくなる。利用者への告知、移行期間、archive からの recovery 手順を用意し、保存 directory 自体は自動削除しない。
-- clone 間の worktree 再構築・Store の再束縛は自動化しない。これを必要とする場合、branch / commit / config / worker session の整合を定義する別設計が必要になる。
+- 削除された worktree の未コミット変更や、現在の clone にない commit は自動復元できない。worktree 再生成後はその制約を conductor に伝え、状態確認と不足分の修正を促す。別 worktree・既存 Store の上書きや強制 reset は行わない。
 
-## Open decisions for conductor
+## Open decisions and Phase implementation boundaries
 
-- **Issue session の別 clone resume:** Store の `repoRoot` mismatch は拒否し、自動 worktree 再生成をしない案である。保存済み conductor / worker cwd、project config、worktree は clone 固有であり、warning のみで再利用すると別の実行環境へ provider session を結び付けるおそれがある。拒否・再束縛なしを ADR accepted 前に確認する。
-- **operator-agent の別 launch root からの resume:** 会話 scope は user-global のままにし、保存 `repoRoot` は実行 context 属性として保持する。異なる launch `repoRoot` からの resume を Phase 3 で拒否する案は安全側だが、operator-agent の使い勝手に関わる。#697 で `--resume` / `--new` の導線と合わせて確認する。自動再束縛は本 ADR の提案範囲に含めない。
+- **Issue session の別 clone resume:** root mismatch だけでは拒否しない方針は operator が確定した。#696 が active clone での worktree / worker recovery、conductor への通知、衝突時の非破壊停止、復元失敗の明示を実装・検証する。worktree 内の未コミット変更など復元できない内容を復元済みと扱わない。
+- **operator-agent conversation の別 launch root resume:** これは今回確定した Issue session の方針とは別の判断である。会話 scope は user-global のまま、保存 `repoRoot` は実行 context 属性として保持する案だが、異なる launch root での resume 可否は #697 で引き続き確認する。Issue session と同じ扱いだと推定しない。
 - **`--repo-root` 削除の release timing:** operator-agent から flag と repoRoot-based grouping を除く方針は確定した。現在その flag で project config/profile/Pi resources と作業 cwd を選ぶ呼び出しは起動方法を変える必要がある。#697 は removal を major release に合わせるか migration tool と同時に出す別の release boundary を決め、CLI help / release note に変更と移行方法を示す。flag を黙って別の意味に再利用しない。
 - **project 設定の移行:** operator-agent 専用の config root は `~/.ensemble/` とするが、session migration script は config files を自動コピーしない。現在 project config/profile/Pi resources にだけある値を user scope へ手動移行する案を #697 の help / docs に載せる。必要な設定 key と、限定的な自動移行を要するかは #697 で確認する。
 - **operator-agent の旧 state:** `issueUrl` がない、SessionResumeStore と report の URL が不一致、同じ agent ID の Store / cursor が衝突する場合は slug を割り当てず Phase 4 archive に保全する。conversation は `agentId` 単位でコピーするが、別 launch root から resume できない場合は Phase 5 前に archive-only acceptance を得る。watch が archive のみの場合は既存 question の再通知がない制約を明示し、同じ gate 記録を残す。#698 は migration/recovery format、#699 は gate の検証担当。
