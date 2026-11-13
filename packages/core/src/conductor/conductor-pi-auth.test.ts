@@ -1,4 +1,14 @@
-import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readlink,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -37,6 +47,7 @@ describe('Pi conductor authentication', () => {
       JSON.stringify({ existing: { type: 'api_key', key: 'existing-secret' } }),
     );
     await chmod(authPath, 0o644);
+    const originalAuthFile = await stat(authPath);
 
     const result = await loginPiConductor({
       cwd,
@@ -55,7 +66,67 @@ describe('Pi conductor authentication', () => {
       existing: { type: 'api_key', key: 'existing-secret' },
       local: { type: 'api_key', key: 'user-secret' },
     });
-    expect((await stat(authPath)).mode & 0o777).toBe(0o600);
+    const savedAuthFile = await stat(authPath);
+    expect(savedAuthFile.mode & 0o777).toBe(0o600);
+    expect(savedAuthFile.ino).not.toBe(originalAuthFile.ino);
+    await expect(readFile(join(projectDir, 'auth.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('refuses a symlinked user auth.json without changing its project target', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-symlink-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-symlink-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const projectAuthPath = join(projectDir, 'auth.json');
+    const userAuthPath = join(agentDir, 'auth.json');
+    const projectAuth = JSON.stringify({
+      openai: { type: 'api_key', key: 'project-secret' },
+    });
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(projectAuthPath, projectAuth);
+    await symlink(projectAuthPath, userAuthPath);
+
+    await expect(
+      loginPiConductor({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        apiKey: 'new-user-secret',
+      }),
+    ).rejects.toThrow(/user auth\.json.*symbolic link/i);
+    await expect(
+      logoutPiConductor({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+      }),
+    ).rejects.toThrow(/user auth\.json.*symbolic link/i);
+
+    expect(await readlink(userAuthPath)).toBe(projectAuthPath);
+    expect((await lstat(userAuthPath)).isSymbolicLink()).toBe(true);
+    await expect(readFile(projectAuthPath, 'utf8')).resolves.toBe(projectAuth);
+  });
+
+  it('refuses a user auth path inside the project resource root before creating it', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-root-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const agentDir = join(projectDir, 'user');
+    await mkdir(projectDir, { recursive: true });
+
+    await expect(
+      loginPiConductor({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        apiKey: 'new-user-secret',
+      }),
+    ).rejects.toThrow(/inside the project Pi resource root/);
+
+    await expect(stat(agentDir)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(join(projectDir, 'auth.json'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
@@ -224,6 +295,47 @@ describe('Pi conductor authentication', () => {
       await readFile(join(agentDir, 'settings.json'), 'utf8'),
     ) as { deviceId?: string };
     expect(settings.deviceId).toBe(deviceIds[0]);
+  });
+
+  it('secures an existing auth.json before Pi OAuth can write credentials', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-oauth-permissions-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-oauth-permissions-user-'));
+    const authPath = join(agentDir, 'auth.json');
+    const originalAuth = JSON.stringify({
+      openai: { type: 'api_key', key: 'existing-secret' },
+    });
+    await writeFile(authPath, originalAuth);
+    await chmod(authPath, 0o644);
+    const originalAuthFile = await stat(authPath);
+    let modeAtLogin: number | undefined;
+    let inodeAtLogin: number | undefined;
+    const login = vi
+      .spyOn(ModelRuntime.prototype, 'login')
+      .mockImplementation(async () => {
+        const authFile = await stat(authPath);
+        modeAtLogin = authFile.mode & 0o777;
+        inodeAtLogin = authFile.ino;
+      });
+    const callbacks = {
+      onAuth: vi.fn(),
+      onDeviceCode: vi.fn(),
+      onPrompt: vi.fn().mockResolvedValue('answer'),
+      onSelect: vi.fn().mockResolvedValue('option'),
+    };
+
+    await expect(
+      loginPiConductor({
+        cwd,
+        pi: { agentDir },
+        provider: 'openai',
+        oauthCallbacks: callbacks,
+      }),
+    ).resolves.toMatchObject({ provider: 'openai', method: 'oauth' });
+
+    expect(modeAtLogin).toBe(0o600);
+    expect(inodeAtLogin).not.toBe(originalAuthFile.ino);
+    expect((await stat(authPath)).mode & 0o777).toBe(0o600);
+    expect(await readFile(authPath, 'utf8')).toBe(originalAuth);
   });
 
   it('asks the Pi runtime for the key at request time so OAuth refresh can take effect', async () => {

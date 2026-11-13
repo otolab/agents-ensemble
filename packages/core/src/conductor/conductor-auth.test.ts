@@ -3,13 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { mockLogout } = vi.hoisted(() => ({
+const { mockLogin, mockLogout } = vi.hoisted(() => ({
+  mockLogin: vi.fn(),
   mockLogout: vi.fn(),
 }));
 
 vi.mock('@cursor/sdk', () => ({
   Cursor: {
     auth: {
+      login: mockLogin,
       logout: mockLogout,
     },
   },
@@ -23,6 +25,7 @@ import {
   isConductorAuthError,
   isConductorSendAuthError,
   isPiApiKeyResolutionFailure,
+  loginConductor,
   logoutConductor,
 } from './conductor-auth.js';
 
@@ -261,5 +264,18 @@ describe('logoutConductor', () => {
     await logoutConductor();
 
     expect(mockLogout).toHaveBeenCalledOnce();
+  });
+});
+
+describe('loginConductor', () => {
+  it('calls Cursor.auth.login for the Cursor backend', async () => {
+    mockLogin.mockResolvedValue({
+      email: 'operator@example.test',
+      apiKeyExpiresAtMs: 1234,
+    });
+
+    await loginConductor({ backend: 'cursor' });
+
+    expect(mockLogin).toHaveBeenCalledOnce();
   });
 });

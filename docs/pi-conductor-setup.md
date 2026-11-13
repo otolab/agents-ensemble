@@ -12,13 +12,28 @@ TTY で初回設定するときは、まず次を実行します。
 ensemble setup
 ```
 
-backend は Pi（OpenAI）または Cursor から選びます。Pi を選ぶと `openai` / `gpt-6.1-sol` を user Pi settings に保存し、OpenAI の OAuth または API key を選べます。Cursor を選ぶと既存の Cursor SDK login に進みます。認証は既存の `ensemble auth login` と同じ core login に委譲します。API key は入力中に表示されず、Pi の user `auth.json` に保存されます。OAuth の URL や device code は stderr に表示します。
+backend は Pi（OpenAI）または Cursor から選びます。Pi を選ぶと `openai` / `gpt-6.1-sol` を user Pi settings に保存し、OpenAI の OAuth または API key を選べます。Cursor を選ぶと既存の Cursor SDK login に進みます。認証は既存の `ensemble auth login` と同じ core login に委譲します。API key は入力中に表示されず、Pi の user `auth.json` に mode `0600` で保存されます。OAuth の URL や device code は stderr に表示します。
 
 設定の書き込み先は user 層だけです。`~/.ensemble/config.yaml` の `conductor.backend` と、Pi を選んだ場合の user `pi/settings.json` に provider / model を保存します。project config、project Pi resource、既存の `conductor.model` は変更しません。project config や選択中 profile が backend を指定している場合はその値が優先されます。Pi の project `settings.json` に provider / model がある場合も user settings より優先されます。setup は検出した競合を表示します。
 
-`ensemble setup` は TTY 専用です。非 TTY では案内を出して終了します。手動設定では user config に backend を、Pi を使う場合は `~/.ensemble/pi/settings.json` に `defaultProvider` と `defaultModel` を設定し、必要に応じて `ensemble auth login` を実行してください。provider 環境変数を使う場合は [認証の解決順](#認証の解決順)も参照してください。
+`ensemble setup` は TTY 専用です。CI / headless 環境では対話 login を実行せず、user 設定と認証情報を手動で用意してください。
 
-この段階ではコード内 default backend は Cursor のままです。Phase B の切替後に no-config 時の既定値が変わります。
+```yaml
+# ~/.ensemble/config.yaml
+conductor:
+  backend: pi
+```
+
+user Pi の `~/.ensemble/pi/settings.json`:
+
+```json
+{
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-6.1-sol"
+}
+```
+
+Pi の認証には `OPENAI_API_KEY` など provider 固有の環境変数、または user Pi `auth.json` の認証情報を使えます。保存先は既定で `~/.ensemble/pi/auth.json` ですが、`conductor.pi.agentDir` で変更できます。手動で credential を置く場合も、secret manager から注入するなどしてファイルを公開・commit しないでください。Cursor は `CURSOR_API_KEY` を設定できます。Pi の API key / OAuth login と Cursor SDK の対話 login には TTY が必要です。OAuth を使う場合は、対話端末で先に login してください。詳細は[認証の解決順](#認証の解決順)を参照してください。
 
 ### 1. 手動で Pi backend を選ぶ
 

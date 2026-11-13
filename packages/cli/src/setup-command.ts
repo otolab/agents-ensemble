@@ -58,7 +58,7 @@ export async function runSetupCommand(
 
   if (!input.isTTY) {
     throw new Error(
-      '`ensemble setup` requires an interactive TTY. For CI or a headless host, set `conductor.backend` in `~/.ensemble/config.yaml`; for Pi, also set `defaultProvider` and `defaultModel` in `~/.ensemble/pi/settings.json`, then run `ensemble auth login`. See ' +
+      '`ensemble setup` は対話端末（TTY）で実行してください。CI / headless 環境では `~/.ensemble/config.yaml` に `conductor.backend` を設定し、Pi の場合は user Pi `settings.json` に `defaultProvider` / `defaultModel` を設定してください（既定は `~/.ensemble/pi/settings.json`）。認証も手動で用意します。Pi は provider 固有の環境変数または user Pi `auth.json`（既定は `~/.ensemble/pi/auth.json`）、Cursor は `CURSOR_API_KEY` を使えます。`ensemble auth login` の対話 login にも TTY が必要です。詳細: ' +
         SETUP_GUIDE,
     );
   }
@@ -207,10 +207,20 @@ async function collectSetupWarnings(options: {
 
   if (options.backend !== 'pi' || !options.files.pi) return warnings;
 
-  const configuredModel = options.effectiveContext.auth.modelId;
-  if (configuredModel && configuredModel !== options.files.pi.modelId) {
+  const envModel = process.env.CONDUCTOR_MODEL_ID?.trim();
+  const configuredModel =
+    envModel || options.effectiveContext.auth.modelId?.trim();
+  if (
+    configuredModel &&
+    configuredModel !== 'default' &&
+    configuredModel !== 'auto' &&
+    configuredModel !== options.files.pi.modelId &&
+    configuredModel !== `${options.files.pi.provider}/${options.files.pi.modelId}`
+  ) {
     warnings.push(
-      `既存の conductor.model=${configuredModel} が Pi settings の defaultModel より優先されます。user 設定は変更していません。`,
+      envModel
+        ? `CONDUCTOR_MODEL_ID=${configuredModel} が Pi settings の defaultModel より優先されます。user 設定は変更していません。`
+        : `既存の conductor.model=${configuredModel} が Pi settings の defaultModel より優先されます。user 設定は変更していません。`,
     );
   }
 
