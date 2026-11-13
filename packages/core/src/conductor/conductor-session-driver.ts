@@ -1026,8 +1026,13 @@ async function waitForDispatchBatch(input: {
       allowIdleOperatorMessages: input.canDispatchIdleOperatorMessage(),
     });
 
-    if (selected && selected.batch.events.length > 0) {
-      const operatorInputTexts = selected.batch.events.flatMap((event) =>
+    const prepareDispatch = (dispatch: {
+      events: SessionEvent[];
+      sourceKey: string;
+      selected?: NonNullable<ReturnType<typeof selectDispatchBatch>>;
+      fromHeldEvents?: boolean;
+    }): DispatchBatchResult | undefined => {
+      const operatorInputTexts = dispatch.events.flatMap((event) =>
         event.type === 'operator.message'
           ? [event.operatorInput ?? event.text]
           : [],
@@ -1045,16 +1050,30 @@ async function waitForDispatchBatch(input: {
           capacityNoticeSent = true;
           input.onRecoveryCapacityBlocked?.();
         }
-        await waitForDispatchChange(input);
-        continue;
+        return undefined;
       }
       return {
+        events: dispatch.events,
+        sourceKey: dispatch.sourceKey,
+        operatorInputTexts,
+        ...(dispatch.selected ? { selected: dispatch.selected } : {}),
+        ...(reserved.reservation ? { reservation: reserved.reservation } : {}),
+        ...(dispatch.fromHeldEvents ? { fromHeldEvents: true } : {}),
+      };
+    };
+
+    // Operator input, reconnect, and permission decisions retain their
+    // immediate priority. Lower-priority events must wait while a released hold
+    // contains an eligible permission or worker event.
+    if (selected && isImmediateDispatchSource(selected.batch.sourceKey)) {
+      const dispatch = prepareDispatch({
         events: selected.batch.events,
         sourceKey: selected.batch.sourceKey,
-        operatorInputTexts,
         selected,
-        ...(reserved.reservation ? { reservation: reserved.reservation } : {}),
-      };
+      });
+      if (dispatch) return dispatch;
+      await waitForDispatchChange(input);
+      continue;
     }
 
     if (
@@ -1079,40 +1098,39 @@ async function waitForDispatchBatch(input: {
           ? { events: [...heldEvents], sourceKey: 'dispatch-hold' }
           : undefined);
       if (selectedHeldBatch && selectedHeldBatch.events.length > 0) {
-        const operatorInputTexts = selectedHeldBatch.events.flatMap((event) =>
-          event.type === 'operator.message'
-            ? [event.operatorInput ?? event.text]
-            : [],
-        );
-        const reserved = input.operatorCanInspectRecovery
-          ? input.recoveryInbox.reserve(operatorInputTexts)
-          : { ok: true as const, reservation: undefined };
-        if (!reserved.ok) {
-          if (reserved.reason === 'input_too_large') {
-            throw new Error(
-              'An operator input reached dispatch without passing the recovery admission limit.',
-            );
-          }
-          if (!capacityNoticeSent) {
-            capacityNoticeSent = true;
-            input.onRecoveryCapacityBlocked?.();
-          }
-          await waitForDispatchChange(input);
-          continue;
-        }
-        return {
+        const dispatch = prepareDispatch({
           events: selectedHeldBatch.events,
           sourceKey: selectedHeldBatch.sourceKey,
-          operatorInputTexts,
           ...(selectedHeld ? { selected: selectedHeld } : {}),
-          ...(reserved.reservation ? { reservation: reserved.reservation } : {}),
           fromHeldEvents: true,
-        };
+        });
+        if (dispatch) return dispatch;
+        await waitForDispatchChange(input);
+        continue;
       }
+    }
+
+    if (selected && selected.batch.events.length > 0) {
+      const dispatch = prepareDispatch({
+        events: selected.batch.events,
+        sourceKey: selected.batch.sourceKey,
+        selected,
+      });
+      if (dispatch) return dispatch;
+      await waitForDispatchChange(input);
+      continue;
     }
 
     await waitForDispatchChange(input);
   }
+}
+
+function isImmediateDispatchSource(sourceKey: string): boolean {
+  return (
+    sourceKey === 'operator' ||
+    sourceKey === 'operator.reconnect' ||
+    sourceKey === 'permission'
+  );
 }
 
 function waitForDispatchChange(input: {
