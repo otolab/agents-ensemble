@@ -120,11 +120,14 @@ acp:
       reasoning: high                 # 任意。対応する ACP preset に渡す
     sonnet: YOUR_SONNET_MODEL_ID
     haiku: YOUR_HAIKU_MODEL_ID
+    sonnet-lite:
+      model: YOUR_SONNET_MODEL_ID
+      reasoning: low
   tags:                               # profile の modelTag → models key
     high: opus
     default: sonnet
-    low: sonnet
-    fast: haiku
+    low: haiku
+    lite: sonnet-lite
 
 session:
   worktree: isolated                  # --worktree 既定（isolated | in-repo）
@@ -201,9 +204,16 @@ acp:
       model: YOUR_OPUS_MODEL_ID
       reasoning: high
     sonnet: YOUR_SONNET_MODEL_ID
+    haiku: YOUR_HAIKU_MODEL_ID
+    lite:
+      model: YOUR_SONNET_MODEL_ID
+      reasoning: low
   tags:
     high: opus
     default: sonnet
+    low: haiku
+    lite: lite
+    urgent: opus
 ```
 
 ```yaml
@@ -215,16 +225,19 @@ workers:
   - name: reviewer
     kind: reviewer
     modelTag: default
-  - researcher # 文字列 shorthand も default tag
+  - name: researcher
+    kind: researcher
+    modelTag: urgent
+  - analyst # 文字列 shorthand も default tag
 ```
 
 model catalog は従来どおり model ID の文字列で指定できます。構造化エントリには `model` と任意の `reasoning` を指定し、Cursor preset 用に任意の `cursorFast` も指定できます。`model` と `reasoning` は空でない文字列、`cursorFast` は boolean です。Codex の `reasoning` には `low`、`medium`、`high`、`xhigh`、`max`、`ultra` などがありますが、対応値は model と client に依存します（[Codex 設定リファレンス](https://developers.openai.com/codex/config-reference/)）。ensemble は値の一覧を固定せず Codex に渡します。設定として受け付けられても、利用する model がその値に対応するとは限りません。
 
 `models` と `tags` は user config → project config の順に deep merge します。構造化エントリの `model`、`reasoning`、`cursorFast` も個別にマージします。例えば user 側の `opus: YOUR_OPUS_MODEL_ID` に対して project 側で `opus: { reasoning: high }` と書くと、model ID を引き継いで reasoning を追加できます。逆に project 側で文字列 shorthand を指定すると、user 側のエントリ全体を置き換え、user 側の属性も消します。`model`、`reasoning`、`cursorFast` のいずれかを指定した構造化エントリの最終結果に `model` がない場合や、指定した値の型が合わない場合はエラーです。Cursor の別設定経路がない `cursorFast` は Cursor 用 field として parse しますが、明示すると spawn 前に fail fast します。model-only の `model` は公式 CLI の `--model` option にそのまま渡します。
 
-config の `tags` に選択した tag がなければ ACP preset の既定 model を使います。tag が存在しても参照先 key が `models` にない場合は起動前にエラーにします。
+profile の `workers[].modelTag` と config の `acp.tags` key は任意の非空文字列です。`high` / `default` / `low` / `lite` は組み込み team 向けに意味を定めた推奨 tier で、詳しくは [user team の modelTag](user-teams.md#worker-modeltag-と-tier-の慣習) を参照してください。`lite` は default 相当の model と短めの reasoning などで throughput を優先する tier で、Cursor ACP の fast mode（`cursorFast`）とは別概念です。`default` 以外の選択 tag の mapping がなければ harness warning を出して `acp.tags.default` を試し、それもなければ model を注入せず ACP preset の既定を使います。`default` 自体が未登録なら warning なしで preset の既定を使います。mapping があるのに参照先 key が `models` にない場合は起動前にエラーにします。tag mapping と resume digest の判断は [ADR 0061](adr/0061-worker-acp-model-tags.md) に記録しています。
 
-worker 名・kind ごとの model 表は設けません。profile へ書ける model 関連の値は固定語彙の `modelTag` のみで、preset・spawn env・model ID は引き続き config 側が正本です。
+worker 名・kind ごとの model 表は設けません。profile の `modelTag` は組み込み語と任意の非空文字列を受け付けます。preset・spawn env・model ID は引き続き config 側が正本です。
 
 model と reasoning の渡し方は preset ごとに異なります。Cursor model-only の ensemble 契約は、公式 CLI option に model ID をそのまま渡すことです。ACP の応答やサマリ値は上流内部の runtime attestation ではありませんが、その attestation を毎回要求しません。
 

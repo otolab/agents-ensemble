@@ -910,13 +910,9 @@ function parseAcpSpawnFingerprint(
   if (!Array.isArray(record.args) || record.args.some((arg) => typeof arg !== 'string')) {
     throw new Error(`Invalid session resume store worker acpSpawn args: ${workerName}`);
   }
-  const validModelTags: AcpModelTag[] = ['high', 'default', 'low', 'fast'];
   let modelTag: AcpModelTag | undefined;
   if (record.modelTag !== undefined) {
-    if (
-      typeof record.modelTag !== 'string' ||
-      !validModelTags.includes(record.modelTag as AcpModelTag)
-    ) {
+    if (typeof record.modelTag !== 'string' || record.modelTag.trim() === '') {
       throw new Error(
         `Invalid session resume store worker acpSpawn modelTag: ${workerName}`,
       );

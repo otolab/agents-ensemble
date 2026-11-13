@@ -116,10 +116,10 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0042](0042-explicit-config-replaces-user-layer.md) | `--config` による user config 層の差し替え | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest 方針のみ） |
 | [0043](0043-explicit-user-config-and-project-toggle.md) | 明示 user config と project load toggle の併用 | accepted |
 | [0044](0044-user-scoped-runtime-storage.md) | repo 単位のランタイム状態を user 層へ配置 | superseded → [0046](0046-migrated-session-canonical-slug-mirrors.md) |
-| [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning 指定のみ） |
+| [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded in part → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning） / [0061](0061-worker-acp-model-tags.md)（tier 語彙・任意 tag・fallback） |
 | [0046](0046-migrated-session-canonical-slug-mirrors.md) | 移行済みセッションの canonical slug mirror | accepted |
-| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest） / [0052](0052-acp-model-injection-by-preset.md)（worker routing） |
-| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（`conductor.reasoning` の分類のみ） |
+| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded in part → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest） / [0052](0052-acp-model-injection-by-preset.md)（worker routing） / [0061](0061-worker-acp-model-tags.md)（tag 語彙・fallback） |
+| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | superseded in part → [0051](0051-conductor-reasoning-resume-digest.md)（`conductor.reasoning` の分類） / [0061](0061-worker-acp-model-tags.md)（dynamic `acp.tags` の分類） |
 | [0049](0049-conductor-reasoning-backends.md) | conductor reasoning を backend ごとに適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
 | [0050](0050-operator-agent-conductor-reasoning.md) | operator-agent に conductor reasoning を適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
 | [0051](0051-conductor-reasoning-resume-digest.md) | conductor reasoning と resume-feasibility digest | accepted |
@@ -132,6 +132,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0058](0058-pi-send-recovery-replay-boundary.md) | Pi send recovery の再送境界 | superseded → [0059](0059-pi-recovery-report-after-manual-reconnect.md) |
 | [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0060](0060-pi-recovery-operator-inbox.md) |
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | accepted |
+| [0061](0061-worker-acp-model-tags.md) | worker ACP modelTag の語彙と未登録時の解決 | accepted |
 
 ## 追加するとき
 

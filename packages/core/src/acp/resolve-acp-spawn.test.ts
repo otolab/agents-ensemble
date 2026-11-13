@@ -262,9 +262,34 @@ describe('resolveWorkerAcpSpawn', () => {
     ).toThrow(/undefined acp\.models key "missing"/);
   });
 
-  it('leaves the preset default in place when the worker tag has no mapping', () => {
+  it('resolves arbitrary custom model tags through their explicit mapping', () => {
     const resolved = resolveWorkerAcpSpawn({
-      modelTag: 'high',
+      modelTag: 'urgent',
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            models: { priority: 'cursor/priority' },
+            tags: { urgent: 'priority' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      preset: 'cursor',
+      modelTag: 'urgent',
+      model: 'cursor/priority',
+      args: ['--model', 'cursor/priority', 'acp'],
+    });
+  });
+
+  it('warns and resolves an unmapped custom tag through the default mapping', () => {
+    const warnings: string[] = [];
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'urgent',
+      onWarning: (message) => warnings.push(message),
       defaultOptions: {
         defaultAcpCli: 'cursor',
         config: {
@@ -279,10 +304,65 @@ describe('resolveWorkerAcpSpawn', () => {
 
     expect(resolved).toMatchObject({
       preset: 'cursor',
+      args: ['--model', 'cursor/standard', 'acp'],
+      modelTag: 'urgent',
+      model: 'cursor/standard',
+    });
+    expect(warnings).toEqual([
+      'Worker modelTag "urgent" is not registered in acp.tags; resolving through acp.tags.default.',
+    ]);
+  });
+
+  it('warns and uses the preset default when both custom and default tags are missing', () => {
+    const warnings: string[] = [];
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'urgent',
+      onWarning: (message) => warnings.push(message),
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            tags: {},
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      preset: 'cursor',
       args: ['acp'],
-      modelTag: 'high',
+      modelTag: 'urgent',
     });
     expect(resolved.model).toBeUndefined();
+    expect(warnings).toEqual([
+      'Worker modelTag "urgent" is not registered in acp.tags and acp.tags.default is not configured; using the ACP preset default model.',
+    ]);
+  });
+
+  it('does not warn when the default tag has no configured mapping', () => {
+    const warnings: string[] = [];
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'default',
+      onWarning: (message) => warnings.push(message),
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            tags: {},
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      preset: 'cursor',
+      args: ['acp'],
+      modelTag: 'default',
+    });
+    expect(resolved.model).toBeUndefined();
+    expect(warnings).toEqual([]);
   });
 
   it('injects a Pi model through its ACP session config option', () => {

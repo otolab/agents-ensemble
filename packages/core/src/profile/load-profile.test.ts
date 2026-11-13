@@ -43,7 +43,7 @@ describe('normalizeProfileWorker', () => {
     });
   });
 
-  it.each(['high', 'default', 'low', 'fast'] as const)(
+  it.each(['high', 'default', 'low', 'lite', 'urgent'])(
     'accepts modelTag %s on a worker object',
     (modelTag) => {
       expect(
@@ -56,10 +56,10 @@ describe('normalizeProfileWorker', () => {
     },
   );
 
-  it.each(['urgent', '', null, 1])('rejects invalid modelTag %s', (modelTag) => {
+  it.each(['', '  ', null, 1])('rejects invalid modelTag %s', (modelTag) => {
     expect(() =>
       normalizeProfileWorker({ kind: 'worker', modelTag }, 'test', 0),
-    ).toThrow(/modelTag.*high \| default \| low \| fast/);
+    ).toThrow(/modelTag.*non-empty string/);
   });
 });
 

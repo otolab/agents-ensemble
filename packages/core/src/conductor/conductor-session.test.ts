@@ -796,6 +796,74 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend.mock.calls[0]?.[0]).not.toContain('body');
   });
 
+  it('emits a harness warning when an unmapped custom worker tag falls back to default', async () => {
+    stubUnusedControlServer();
+    vi.spyOn(acpBinModule, 'resolveBundledAcpBin')
+      .mockReturnValue(process.execPath);
+    vi.spyOn(acpBinModule, 'resolveAcpBin').mockReturnValue(process.execPath);
+    vi.spyOn(acpBinModule, 'resolveAcpBinFromPath')
+      .mockReturnValue(process.execPath);
+    mockSend.mockResolvedValue({
+      runId: 'run-custom-model-tag',
+      status: 'finished',
+      result: 'started',
+    });
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        models: { standard: 'provider/default-model' },
+        tags: { default: 'standard' },
+      },
+      session: {
+        ...DEFAULT_ENSEMBLE_CONFIG.session,
+        lazyWorkers: true,
+      },
+    };
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        workers: [
+          { name: 'researcher', kind: 'researcher', modelTag: 'urgent' },
+        ],
+      },
+      ensembleConfig,
+      defaultAcp: { config: ensembleConfig, env: {} },
+      workerWorktree: {
+        path: join(repoRoot, 'worker'),
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      sessionLogger,
+    });
+
+    expect(emitted).toContainEqual({
+      type: 'harness.warning',
+      message:
+        'Worker "researcher": Worker modelTag "urgent" is not registered in acp.tags; resolving through acp.tags.default.',
+    });
+    expect(result.sessionModels.workers).toEqual([
+      {
+        name: 'researcher',
+        kind: 'researcher',
+        modelTag: 'urgent',
+        acpPreset: 'cursor',
+        model: 'provider/default-model',
+      },
+    ]);
+  });
+
   it('passes the resolved conductor reasoning to the backend and session summary', async () => {
     vi.stubEnv('CONDUCTOR_REASONING', 'env-level');
     mockSend.mockResolvedValue({
@@ -1234,8 +1302,10 @@ describe('runConductorSession resume / shutdown', () => {
         ...DEFAULT_ENSEMBLE_CONFIG,
         acp: {
           defaultPreset: 'codex' as const,
-          tags: { high: 'strong' },
-          models: { strong: 'worker-model' },
+          tags: { lite: 'lite' },
+          models: {
+            lite: { model: 'worker-model', reasoning: 'low' },
+          },
         },
         session: { ...DEFAULT_ENSEMBLE_CONFIG.session, lazyWorkers },
       };
@@ -1261,7 +1331,7 @@ describe('runConductorSession resume / shutdown', () => {
         repoRoot,
         profile: {
           workers: [
-            { name: 'worker-1', kind: 'implementer', modelTag: 'high' },
+            { name: 'worker-1', kind: 'implementer', modelTag: 'lite' },
             { name: 'reviewer', kind: 'reviewer' },
           ],
         },
@@ -1291,9 +1361,10 @@ describe('runConductorSession resume / shutdown', () => {
           {
             name: 'worker-1',
             kind: 'implementer',
-            modelTag: 'high',
+            modelTag: 'lite',
             acpPreset: 'codex',
             model: 'worker-model',
+            reasoning: 'low',
           },
           {
             name: 'reviewer',
