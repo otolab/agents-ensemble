@@ -9,12 +9,13 @@ import {
   rename,
   unlink,
 } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { isMap, parseDocument } from 'yaml';
 import { resolveUserEnsembleRoot } from '../resolve-user-ensemble-root.js';
 import { ENSEMBLE_CONFIG_FILE } from '../config/load-ensemble-config.js';
 import { parseEnsembleConfig } from '../config/parse-config.js';
 import type { ConductorBackend } from '../config/types.js';
+import { canonicalPath, isPathWithin } from './conductor-path-safety.js';
 import { resolvePiResourceRoots } from './pi-resource-loader.js';
 
 export interface WriteConductorSetupOptions {
@@ -66,7 +67,7 @@ export async function writeConductorSetupFiles(
     home: options.home,
   });
   const configPath = join(userRoot, ENSEMBLE_CONFIG_FILE);
-  if (isPathWithin(await canonicalPath(repoRoot), await canonicalPath(configPath))) {
+  if (await isPathWithin(await canonicalPath(repoRoot), await canonicalPath(configPath))) {
     throw new Error(
       'User config resolves inside the project repository; setup did not write project config.',
     );
@@ -86,13 +87,20 @@ export async function writeConductorSetupFiles(
     });
     const readonlyProjectPiDir = options.readonlyProjectPiDir ?? roots.projectDir;
     const canonicalProjectPiDir = await canonicalPath(readonlyProjectPiDir);
-    if (isPathWithin(canonicalProjectPiDir, await canonicalPath(roots.agentDir))) {
+    const canonicalAgentDir = await canonicalPath(roots.agentDir);
+    if (
+      (await isPathWithin(readonlyProjectPiDir, roots.agentDir)) ||
+      (await isPathWithin(canonicalProjectPiDir, canonicalAgentDir))
+    ) {
       throw new Error(
         'User Pi resource root resolves inside the project resource root; setup did not write project resources.',
       );
     }
     const settingsPath = join(roots.agentDir, 'settings.json');
-    if (isPathWithin(canonicalProjectPiDir, await canonicalPath(settingsPath))) {
+    if (
+      (await isPathWithin(readonlyProjectPiDir, settingsPath)) ||
+      (await isPathWithin(canonicalProjectPiDir, await canonicalPath(settingsPath)))
+    ) {
       throw new Error(
         'User Pi settings resolve inside the project resource root; setup did not write project resources.',
       );
@@ -252,28 +260,6 @@ async function resolveWriteTarget(path: string): Promise<string> {
     throw error;
   }
   return details.isSymbolicLink() ? realpath(path) : path;
-}
-
-async function canonicalPath(path: string): Promise<string> {
-  const absolute = resolve(path);
-  try {
-    return await realpath(absolute);
-  } catch (error) {
-    if (!isMissingFile(error)) throw error;
-    const parent = dirname(absolute);
-    if (parent === absolute) return absolute;
-    return join(await canonicalPath(parent), basename(absolute));
-  }
-}
-
-function isPathWithin(parent: string, target: string): boolean {
-  const pathFromParent = relative(parent, target);
-  return (
-    pathFromParent === '' ||
-    (pathFromParent !== '..' &&
-      !pathFromParent.startsWith(`..${sep}`) &&
-      !isAbsolute(pathFromParent))
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

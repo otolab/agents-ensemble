@@ -250,6 +250,52 @@ describe('writeConductorSetupFiles', () => {
     });
   });
 
+  it('protects a missing project Pi root when its user path differs only by case', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-case-alias-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-case-alias-user-'));
+    const projectParent = join(repoRoot, '.ensemble');
+    const projectPiDir = join(projectParent, 'pi');
+    const agentDir = join(projectParent, 'Pi');
+    const userConfigPath = join(userRoot, 'config.yaml');
+    await mkdir(projectParent, { recursive: true });
+    await writeFile(userConfigPath, `conductor:\n  pi:\n    agentDir: ${agentDir}\n`);
+
+    const caseInsensitiveVolume = await hasCaseInsensitiveDirectoryNames(repoRoot, projectParent);
+
+    if (caseInsensitiveVolume) {
+      await expect(
+        writeConductorSetupFiles({
+          repoRoot,
+          userEnsembleRoot: userRoot,
+          backend: 'pi',
+          pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+        }),
+      ).rejects.toThrow('User Pi resource root resolves inside the project resource root');
+
+      await expect(stat(agentDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(stat(projectPiDir)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(projectPiDir, 'settings.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      return;
+    }
+
+    await expect(
+      writeConductorSetupFiles({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+        backend: 'pi',
+        pi: { provider: 'openai', modelId: 'gpt-6.1-sol' },
+      }),
+    ).resolves.toMatchObject({ pi: { agentDir } });
+
+    expect(JSON.parse(await readFile(join(agentDir, 'settings.json'), 'utf8'))).toMatchObject({
+      defaultProvider: 'openai',
+      defaultModel: 'gpt-6.1-sol',
+    });
+    await expect(stat(projectPiDir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('refuses a user settings symlink that resolves into project resources', async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-link-project-'));
     const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-setup-settings-link-user-'));
@@ -327,3 +373,22 @@ describe('writeConductorSetupFiles', () => {
     },
   );
 });
+
+async function hasCaseInsensitiveDirectoryNames(
+  parent: string,
+  existingDirectory: string,
+): Promise<boolean> {
+  const directoryName = existingDirectory.slice(parent.length + 1);
+  const alternateName = directoryName.replace(/[a-z]/, (letter) => letter.toUpperCase());
+  if (alternateName === directoryName) return false;
+
+  try {
+    const [original, alternate] = await Promise.all([
+      stat(existingDirectory),
+      stat(join(parent, alternateName)),
+    ]);
+    return original.dev === alternate.dev && original.ino === alternate.ino;
+  } catch {
+    return false;
+  }
+}

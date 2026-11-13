@@ -12,7 +12,7 @@ TTY で初回設定するときは、まず次を実行します。
 ensemble setup
 ```
 
-backend は Pi（OpenAI）または Cursor から選びます。Pi を選ぶと `openai` / `gpt-6.1-sol` を user Pi settings に保存し、OpenAI の OAuth または API key を選べます。Cursor を選ぶと既存の Cursor SDK login に進みます。認証は既存の `ensemble auth login` と同じ core login に委譲します。API key は入力中に表示されず、Pi の user `auth.json` に mode `0600` で保存されます。OAuth の URL や device code は stderr に表示します。
+backend は Pi（OpenAI）または Cursor から選びます。Pi を選ぶと `openai` / `gpt-6.1-sol` を user Pi settings に保存し、OpenAI の OAuth または API key を選べます。Cursor を選ぶと既存の Cursor SDK login に進みます。認証は既存の `ensemble auth login` と同じ core login に委譲します。API key は入力中に表示されず、POSIX では Pi の user `auth.json` を mode `0600` で保存します。Windows の ACL については[保存先の保護](#保存先の保護)を確認してください。OAuth の URL や device code は stderr に表示します。
 
 設定の書き込み先は user 層だけです。`~/.ensemble/config.yaml` の `conductor.backend` と、Pi を選んだ場合の user `pi/settings.json` に provider / model を保存します。project config、project Pi resource、既存の `conductor.model` は変更しません。project config や選択中 profile が backend を指定している場合はその値が優先されます。Pi の project `settings.json` に provider / model がある場合も user settings より優先されます。setup は検出した競合を表示します。
 
@@ -109,6 +109,12 @@ ensemble auth login --provider <provider-id>
 TTY の secret prompt に API key を入力します。prompt と入力待ちは stderr に出力され、入力値は表示されません。成功した credential は user resource root の `auth.json`（既定では `~/.ensemble/pi/auth.json`）へ保存されます。`conductor.pi.agentDir` を指定している場合はその配下です。project の `auth.json` はこのコマンドでは書き換えません。
 
 API-key login は対話的な TTY が必要です。CI や非 TTY では login prompt を使わず、下記の provider 環境変数または Pi resource の fallback を設定してください。
+
+#### 保存先の保護
+
+user `auth.json` が symlink の場合、リンク先が project Pi root の外にあれば、login / logout はリンクを保ったままその実体を使います。設定された auth path が project Pi root 内にある場合、または実体が project Pi root 内にある場合は、project 層を書き換えないよう処理を拒否します。既存の hard link は auth 更新前に user 側を独立した file に置き換え、別名側の内容を保ちます。
+
+POSIX では user auth file を mode `0600` で作成・更新します。Windows では Node.js の `fs` mode で変更できるのは書き込み権限だけで、owner / group / others の区別はありません。そのため `0600` を owner-only ACL の保証として扱えません。この実装は Windows ACL を設定・検証しません。Windows で auth file を新規作成または置き換えると、保存先 directory の既定 ACL を継承します。auth file に個別設定した ACL が置き換え後も維持される保証はありません。Windows では意図した利用者だけがアクセスできる ACL を設定した保存先を選び、必要に応じて ACL を確認してください（[Node.js v22 `fs` の file modes](https://nodejs.org/download/release/v22.23.3/docs/api/fs.html#file-modes)、[Windows file security](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)）。
 
 #### OAuth provider
 

@@ -5,11 +5,10 @@ import {
   mkdir,
   open,
   readFile,
-  realpath,
   rename,
   unlink,
 } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   ModelRegistry,
   ModelRuntime,
@@ -24,6 +23,7 @@ import {
   type OAuthLoginCallbacks,
 } from '@earendil-works/pi-ai/compat';
 import type { AuthInteraction, AuthPrompt, AuthEvent } from '@earendil-works/pi-ai';
+import { canonicalPath, isPathWithin } from './conductor-path-safety.js';
 import {
   loadPiResources,
   resolvePiResourceRoots,
@@ -88,11 +88,23 @@ export async function createPiConductorAuthContext(
   options: PiResourceLoaderOptions,
   resources?: PiResources,
 ): Promise<PiConductorAuthContext> {
+  return createPiConductorAuthContextWithAuthPath(options, resources);
+}
+
+async function createPiConductorAuthContextWithAuthPath(
+  options: PiResourceLoaderOptions,
+  resources: PiResources | undefined,
+  runtimeAuthPath?: string,
+): Promise<PiConductorAuthContext> {
   const roots = resolvePiResourceRoots(options);
   const authPath = join(roots.agentDir, 'auth.json');
   const modelsPath = join(roots.agentDir, 'models.json');
   const resolvedResources = resources ?? (await loadPiResources(options));
-  const modelRuntime = await createPiModelRuntime(options, resolvedResources);
+  const modelRuntime = await createPiModelRuntime(
+    options,
+    resolvedResources,
+    runtimeAuthPath ?? authPath,
+  );
   return {
     agentDir: roots.agentDir,
     authPath,
@@ -120,10 +132,14 @@ export async function loginPiConductor(
 ): Promise<PiConductorLoginResult> {
   const roots = resolvePiResourceRoots(options);
   const authPath = join(roots.agentDir, 'auth.json');
-  await resolveSafePiUserAuthPath(authPath, roots.projectDir);
+  const runtimeAuthPath = await resolveSafePiUserAuthPath(authPath, roots.projectDir);
 
   const resources = await loadPiResources(options);
-  const context = await createPiConductorAuthContext(options, resources);
+  const context = await createPiConductorAuthContextWithAuthPath(
+    options,
+    resources,
+    runtimeAuthPath,
+  );
   const provider = await resolveConductorProviderOrThrow(options, resources, context);
   const oauthProvider = Boolean(context.modelRuntime.getProvider(provider)?.auth.oauth);
 
@@ -133,7 +149,12 @@ export async function loginPiConductor(
         `Pi provider "${provider}" uses OAuth. Run this command from a TTY so the OAuth login flow can interact with you.`,
       );
     }
-    await ensurePrivatePiUserAuthFile(context.authPath, roots.projectDir);
+    const securedAuthPath = await ensurePrivatePiUserAuthFile(context.authPath, roots.projectDir);
+    if (securedAuthPath !== runtimeAuthPath) {
+      throw new Error(
+        'Pi user auth.json target changed while preparing OAuth login; no credentials were written. Retry login after checking the auth.json symlink.',
+      );
+    }
     await context.modelRuntime.login(
       provider,
       'oauth',
@@ -182,12 +203,22 @@ export async function logoutPiConductor(
   options: PiConductorAuthOptions,
 ): Promise<PiConductorLogoutResult> {
   const roots = resolvePiResourceRoots(options);
-  await resolveSafePiUserAuthPath(join(roots.agentDir, 'auth.json'), roots.projectDir);
+  const authPath = join(roots.agentDir, 'auth.json');
+  const runtimeAuthPath = await resolveSafePiUserAuthPath(authPath, roots.projectDir);
 
   const resources = await loadPiResources(options);
-  const context = await createPiConductorAuthContext(options, resources);
+  const context = await createPiConductorAuthContextWithAuthPath(
+    options,
+    resources,
+    runtimeAuthPath,
+  );
   const provider = await resolveConductorProviderOrThrow(options, resources, context);
-  await ensurePrivatePiUserAuthFile(context.authPath, roots.projectDir);
+  const securedAuthPath = await ensurePrivatePiUserAuthFile(context.authPath, roots.projectDir);
+  if (securedAuthPath !== runtimeAuthPath) {
+    throw new Error(
+      'Pi user auth.json target changed while preparing logout; no credentials were written. Retry after checking the auth.json symlink.',
+    );
+  }
   await context.modelRuntime.logout(provider);
   return {
     backend: 'pi',
@@ -801,10 +832,11 @@ function toProviderEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 async function createPiModelRuntime(
   options: PiResourceLoaderOptions,
   resources: PiResources,
+  authPath: string,
 ): Promise<ModelRuntime> {
   const roots = resolvePiResourceRoots(options);
   const runtime = await ModelRuntime.create({
-    authPath: join(roots.agentDir, 'auth.json'),
+    authPath,
     // The ensemble resource loader has already merged user and project models.
     // Avoid letting ModelRuntime read an unmerged second view of models.json.
     modelsPath: null,
@@ -900,24 +932,24 @@ async function resolveSafePiUserAuthPath(
   authPath: string,
   projectDir: string,
 ): Promise<string> {
-  try {
-    const details = await lstat(authPath);
-    if (details.isSymbolicLink()) {
-      throw new Error(
-        `Refusing to use Pi user auth.json at ${authPath} because it is a symbolic link.`,
-      );
-    }
-  } catch (error) {
-    if (!isMissingFile(error)) throw error;
-  }
-
+  const absoluteAuthPath = resolve(authPath);
+  const absoluteProjectDir = resolve(projectDir);
+  const logicalAuthEntryPath = join(
+    await canonicalPath(dirname(absoluteAuthPath)),
+    basename(absoluteAuthPath),
+  );
   const [targetPath, canonicalProjectDir] = await Promise.all([
-    canonicalPath(authPath),
-    canonicalPath(projectDir),
+    canonicalPath(absoluteAuthPath),
+    canonicalPath(absoluteProjectDir),
   ]);
-  if (isPathWithin(canonicalProjectDir, targetPath)) {
+  if (
+    (await isPathWithin(absoluteProjectDir, absoluteAuthPath)) ||
+    (await isPathWithin(absoluteProjectDir, logicalAuthEntryPath)) ||
+    (await isPathWithin(absoluteProjectDir, targetPath)) ||
+    (await isPathWithin(canonicalProjectDir, targetPath))
+  ) {
     throw new Error(
-      `Refusing to write Pi user auth.json at ${authPath} because it is inside the project Pi resource root ${projectDir}. Configure a user agentDir outside the project resource root.`,
+      `Refusing to use Pi user auth.json at ${authPath} because its configured path or resolved target is inside the project Pi resource root ${projectDir}. Configure a user agentDir outside the project resource root.`,
     );
   }
   return targetPath;
@@ -947,7 +979,7 @@ async function atomicWritePiAuthFile(path: string, contents: string): Promise<vo
 async function ensurePrivatePiUserAuthFile(
   authPath: string,
   projectDir: string,
-): Promise<void> {
+): Promise<string> {
   // The Pi auth store only applies its mode when creating a file. Replace any
   // permissive or hard-linked user file before OAuth or logout can mutate it.
   const targetPath = await resolveSafePiUserAuthPath(authPath, projectDir);
@@ -959,7 +991,7 @@ async function ensurePrivatePiUserAuthFile(
   } catch (error) {
     if (!isMissingFile(error)) throw error;
     await atomicWritePiAuthFile(safeTargetPath, '{}\n');
-    return;
+    return safeTargetPath;
   }
   if (!details.isFile()) {
     throw new Error(
@@ -970,28 +1002,7 @@ async function ensurePrivatePiUserAuthFile(
     const contents = await readFile(safeTargetPath, 'utf8');
     await atomicWritePiAuthFile(safeTargetPath, contents);
   }
-}
-
-async function canonicalPath(path: string): Promise<string> {
-  const absolute = resolve(path);
-  try {
-    return await realpath(absolute);
-  } catch (error) {
-    if (!isMissingFile(error)) throw error;
-    const parent = dirname(absolute);
-    if (parent === absolute) return absolute;
-    return join(await canonicalPath(parent), basename(absolute));
-  }
-}
-
-function isPathWithin(parent: string, target: string): boolean {
-  const pathFromParent = relative(parent, target);
-  return (
-    pathFromParent === '' ||
-    (pathFromParent !== '..' &&
-      !pathFromParent.startsWith(`..${sep}`) &&
-      !isAbsolute(pathFromParent))
-  );
+  return safeTargetPath;
 }
 
 function isMissingFile(error: unknown): boolean {
