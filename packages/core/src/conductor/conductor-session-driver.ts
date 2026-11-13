@@ -657,6 +657,11 @@ function recoveryEventReference(
         type: event.type,
         reference: `worker:${event.failure.name}:${event.failure.kind}`,
       };
+    case 'worker.session.recovered':
+      return {
+        type: event.type,
+        reference: `worker:${event.name}:${event.kind}`,
+      };
     case 'permission.pending':
       return {
         type: event.type,

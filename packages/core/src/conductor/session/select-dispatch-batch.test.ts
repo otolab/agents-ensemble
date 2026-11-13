@@ -43,6 +43,15 @@ function workerFailed(name: string): SessionEvent {
   };
 }
 
+function workerSessionRecovered(name: string): SessionEvent {
+  return {
+    type: 'worker.session.recovered',
+    name,
+    kind: name,
+    reason: 'prompt_history_unreadable',
+  };
+}
+
 function permission(id: string): SessionEvent {
   return {
     type: 'permission.pending',
@@ -99,6 +108,9 @@ describe('eventSourceKey', () => {
       'worker:implementer',
     );
     expect(eventSourceKey(workerFailed('reviewer'))).toBe('worker:reviewer');
+    expect(eventSourceKey(workerSessionRecovered('implementer'))).toBe(
+      'worker:implementer',
+    );
   });
 });
 
@@ -158,6 +170,21 @@ describe('selectDispatchBatch', () => {
     expect(result?.batch.sourceKey).toBe('worker:implementer');
     expect(result?.batch.events).toHaveLength(2);
     expect(result?.remainingQueue).toEqual([workerCompleted('reviewer')]);
+  });
+
+  it('dispatches worker session recovery with the same worker outcome', () => {
+    const recovery = workerSessionRecovered('implementer');
+    const completed = workerCompleted('implementer');
+    const result = selectDispatchBatch({
+      queue: [recovery, completed],
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+    });
+
+    expect(result?.batch.sourceKey).toBe('worker:implementer');
+    expect(result?.batch.events).toEqual([recovery, completed]);
+    expect(result?.remainingQueue).toEqual([]);
   });
 
   it('prefers operator over worker events', () => {

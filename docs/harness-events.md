@@ -64,7 +64,7 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `worker.failed` | worker attach / prompt 失敗。該当 worker の pending permission は conductor への通知前に deny | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `permission.cleanup` | worker failure / teardown で pending permission を deny・解消した直後 | `[harness] permission.cleanup reason=worker.failed worker=... count=... ids=...` | なし |
-| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) pending permission が閾値まで継続したとき（worker / attach の活動状態は問わない）。GitHub 認証トークン未解決時（#222）。dispatch hold reminder（既定 30 分ごと）。Pi recovery snapshot の保存・FIFO eviction | `[harness] warning: ...`（permission 停滞 / GitHub 認証不足 / dispatch hold reminder / Pi recovery snapshot ID・期限・eviction ID） | なし。permission 停滞時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue。dispatch hold reminder は operator 向けのみ。recovery snapshot warning に event 本文は含めない |
+| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) pending permission が閾値まで継続したとき（worker / attach の活動状態は問わない）。GitHub 認証トークン未解決時（#222）。dispatch hold reminder（既定 30 分ごと）。Pi recovery snapshot の保存・FIFO eviction。worker ACP thread の復旧時 | `[harness] warning: ...`（permission 停滞 / GitHub 認証不足 / dispatch hold reminder / Pi recovery snapshot ID・期限・eviction ID / worker の新 session 開始） | なし。permission 停滞時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue。dispatch hold reminder は operator 向けのみ。recovery snapshot warning に event 本文は含めない |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
 | `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
 | `conductor.auth.recovery` | 最終 `send` 結果が auth error のとき。resume / retry の失敗や、tool 開始後に同一 prompt retry を抑止した場合を含む | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
@@ -308,6 +308,8 @@ WorkerDisplayStatus は runtime lifecycle を表示する。`prompt.failed` / `w
 
 `harness.worker.state` と `prompt.started` / `prompt.completed` が Workers ペインの lifecycle status を更新する。`prompt.failed` は診断 event であり status を変更しない。非同期 `worker.failed` notification も WorkerDisplayStatus を変更しない。`harness.worker.acp.update` は **活動ヒント**（例: `running (calling: Shell)`）の更新にのみ使い、chunk 単位では stderr / 活動ログに出さない（#161）。これらのイベントは `SessionLogger.emit()` と Workers ペインの state 投影のために維持し、人間向け活動ログの細行だけを既定で抑制する。
 
+通常の `session/load` 失敗、または保存済み session の `session/load` 成功後に prompt が provider / account の暗号化履歴を読めないと明示して失敗した場合は、一度だけ新しい ACP session に切り替える。所有する bridge は閉じ、共有 bridge は維持したまま、新 session の bootstrap を先に実行する。bootstrap 成功後に worker の resume state を新 ID へ更新し、SessionResumeStore の flush を試みてから operator 向け `harness.warning` を出し、conductor 向け `worker.session.recovered` を SessionEventQueue に積む。flush failure でも warning の後に通知を続けるため、保存済み ID が旧 ID のまま残って次回 resume で復旧を繰り返すことがある。失敗した conductor instruction は bootstrap 成功後、復旧 event を queue に積んでから一度だけ再送する。一般的な prompt error、`AcpSessionConfigOptionError`、cwd / spawn mismatch は fallback しない。復旧中に届いた preempt は閉じた thread へ cancel せず、bootstrap 完了後に最新 instruction だけを実行する。セッションを継続中に bootstrap が失敗またはキャンセルされた場合は `worker.failed` として待機中の指示を破棄し、新 ID の保存・復旧通知を行わない。その worker では二度目の session 切替を試みない。`/close` 中の snapshot も復旧 bootstrap 中の置換 session を除外し、以前の保存 ID を維持する。
+
 TUI の terminal `failed` は `harness.worker.state failed` が表す runtime
 `WorkerLifecycleState` に対応する。resident prompt failure は failure event として記録されるが
 WorkerDisplayStatus は直接変更せず、queue が空なら `idle`、work が残れば次の `processing` を
@@ -382,6 +384,7 @@ attach handshake 中に届いた追加指示は queue に積む。まだ cancel 
 | `operator.reconnect` | オペレータが `/reconnect` / `reconnect` を入力 | **なし** | Driver が `close` → `resume(sameId)` を実行。conductor へ送らず、worker / worktree / プロセスには触れない |
 | `worker.completed` | worker 1 ラウンド完了 | `## worker ラウンド完了` | `result.source` で harness / conductor を区別（見出しは同型） |
 | `worker.failed` | worker 失敗 | `## worker 失敗` | attach / init prompt / instruction いずれも |
+| `worker.session.recovered` | 保存済み ACP thread を復元できず、新 session の bootstrap が成功したとき | `## worker session 復旧` | bootstrap 成功後に新 ID の保存を試みてから通知する。flush failure でも通知を続ける。worker 名・kind・理由（`session_load_failed` / `prompt_history_unreadable`）を伝え、同じ worker の完了 / 失敗イベントと同じ dispatch 束に載る |
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | conductor 向け YAML に `request.raw`（params 全文）と `brief`（構造化された判断用情報）を含む。補えない必須情報は `brief.missing` に載せる。`operatorSummary` は conductor が質問や context を組み立てる際の参照情報として併記する。`ask_human.relatedPermissionId` は Open Question と permission を関連づける |
 | `permission.stall` | pending permission が既定 300s（`permissionDeadlockStallMs`）継続したとき（worker / attach が idle でも検知） | `## permission 停滞警告` | conductor 向けの低優先度 trigger。同一の連続停滞エピソードでは 1 回だけ。pending の再送ではなく、経過時間・対象 ID・閾値を含み、dispatch hold 中も held buffer を通らず dispatch 候補に残る。request の詳細は含まない。`harness.warning` は従来どおり operator 向けに出す |
 | `harness.connectivity.recovered` | GitHub monitor が抑止中の再試行可能な poll エラー後、エラーなしの poll に復旧したとき | `## 接続復旧` | `source: github_monitor` と `suppressedErrorCount` を YAML で伝える。復旧 poll に GitHub 更新があれば同じ source の inform として更新束に同梱し、更新がなければ単独 trigger。単独 trigger は `permission.stall` より低優先で、GitHub 更新・worker イベントと同じ max-turns 制限に従う |
@@ -475,7 +478,7 @@ GitHub monitor（セッション中は常時。`--no-github-monitor` で無効�
 
 セッション終了
   session.stop ─────────────────────────────► snapshot（異常時のみ既定 stderr、正常は verbose）
-  teardown（worker/ACP・conductor・GitHub monitor の停止）
+  teardown（worker/ACP・conductor・GitHub monitor の停止。`/close` は復旧 bootstrap 中の置換 session を snapshot から除外）
     harness.teardown.phase ─────────────────► verbose 時のみ stderr
     harness.teardown ───────────────────────► stderr（force 時または 1s 超）
 
@@ -629,7 +632,7 @@ TUI reducer はイベント駆動のため lifecycle を直接読まないが、
 | poll 間隔 | **5s**（`permissionDeadlockPollMs`） |
 | 警告回数 | 同一停滞エピソードで **1 回**。pending 解消後に再発した場合のみ再警告 |
 
-`PermissionPipeline.pending` に未解決 permission があり、その最古の作成時刻から閾値に達したら、従来の `harness.warning` を operator 向けに出し、同時に `permission.stall` を `SessionEventQueue` へ 1 回 enqueue する。検知は worker の `processing` 状態や attach 中かどうかに依存しない。連続する pending の間は 1 回だけ通知し、pending がすべて解消した後の再発で再通知する。`permission.stall` は `inform` ではなく trigger のまま、静的優先度を `operator.message` → `permission.pending` → `worker.failed` → `worker.completed` → `github.update` → `permission.stall` → 単独の `harness.connectivity.recovered` の順に定義する。同じ復旧 poll の GitHub 更新に同梱された recovery inform は `github.update` の束に含まれ、その優先度で扱う。優先順位は dispatch 可能なイベント間で適用され、hold 中の `permission.pending` は保留されてまだ dispatch 対象ではないため、stall 通知が先に届く場合がある。stall 自体は hold 中も held buffer に入らず queue に残り、必要なら conductor が hold を解除して pending の詳細を確認する。max-turns 到達後も `operator.message` / `permission.pending` に続く permission 回復用の例外として dispatch できる。CLI は `--permission-deadlock-stall-ms <n>`、API は `RunConductorSessionOptions.permissionDeadlockStallMs` で閾値を上書きできる。`permissionDeadlockPollMs` と worker UI の挙動は変更しない（[ADR 0056](adr/0056-permission-stall-dispatch-hold.md)、[ADR 0057](adr/0057-permission-stall-idle-detection.md)）。
+`PermissionPipeline.pending` に未解決 permission があり、その最古の作成時刻から閾値に達したら、従来の `harness.warning` を operator 向けに出し、同時に `permission.stall` を `SessionEventQueue` へ 1 回 enqueue する。検知は worker の `processing` 状態や attach 中かどうかに依存しない。連続する pending の間は 1 回だけ通知し、pending がすべて解消した後の再発で再通知する。`permission.stall` は `inform` ではなく trigger のまま、静的優先度を `operator.message` → `permission.pending` → `worker.failed` / `worker.session.recovered` → `worker.completed` → `github.update` → `permission.stall` → 単独の `harness.connectivity.recovered` の順に定義する。同じ復旧 poll の GitHub 更新に同梱された recovery inform は `github.update` の束に含まれ、その優先度で扱う。同じ worker の recovery event は worker 完了 / 失敗 event と同じ source key で束ねる。優先順位は dispatch 可能なイベント間で適用され、hold 中の `permission.pending` は保留されてまだ dispatch 対象ではないため、stall 通知が先に届く場合がある。stall 自体は hold 中も held buffer に入らず queue に残り、必要なら conductor が hold を解除して pending の詳細を確認する。max-turns 到達後も `operator.message` / `permission.pending` に続く permission 回復用の例外として dispatch できる。CLI は `--permission-deadlock-stall-ms <n>`、API は `RunConductorSessionOptions.permissionDeadlockStallMs` で閾値を上書きできる。`permissionDeadlockPollMs` と worker UI の挙動は変更しない（[ADR 0056](adr/0056-permission-stall-dispatch-hold.md)、[ADR 0057](adr/0057-permission-stall-idle-detection.md)）。
 
 実装: `packages/core/src/permission/permission-deadlock-monitor.ts`、`packages/core/src/conductor/session/select-dispatch-batch.ts`。`runConductorSession` 起動時に自動開始（`disablePermissionDeadlockMonitor` で無効化可）。
 

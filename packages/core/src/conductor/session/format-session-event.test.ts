@@ -74,6 +74,39 @@ describe('formatSessionEventForConductor', () => {
     expect(message).toContain('source: harness');
   });
 
+  it('formats worker session recovery for standalone and batched notifications', () => {
+    const recovery = {
+      type: 'worker.session.recovered' as const,
+      name: 'implementer',
+      kind: 'implementer',
+      reason: 'prompt_history_unreadable' as const,
+    };
+    const standalone = formatSessionEventForConductor(recovery);
+    const batched = formatSessionEventsForConductor([
+      recovery,
+      {
+        type: 'worker.completed',
+        result: {
+          name: 'implementer',
+          kind: 'implementer',
+          issue: TEST_ISSUE,
+          worktree: TEST_WORKTREE,
+          prompt: 'inspect the issue',
+          promptResult: { stopReason: 'end_turn', responseText: 'done' },
+          source: 'conductor',
+        },
+      },
+    ]);
+
+    expect(standalone).toContain('## worker session 復旧');
+    expect(standalone).toContain('# worker.session.recovered');
+    expect(standalone).toContain('reason: prompt_history_unreadable');
+    expect(standalone).toContain('action: started_new_session');
+    expect(batched).toContain('## worker 通知（implementer・2 件）');
+    expect(batched).toContain('worker.session.recovered');
+    expect(batched).toContain('worker.completed');
+  });
+
   it('formats permission.pending with YAML block', () => {
     const message = formatSessionEventForConductor({
       type: 'permission.pending',

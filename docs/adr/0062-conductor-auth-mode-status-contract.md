@@ -1,4 +1,4 @@
-# ADR 0061: Conductor 認証モードと status / 復旧案内の契約
+# ADR 0062: Conductor 認証モードと status / 復旧案内の契約
 
 - Status: proposed
 - Date: 2026-11-13
