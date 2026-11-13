@@ -29,6 +29,8 @@ function formatSingleSessionEventForConductor(event: SessionEvent): string {
       return ['## worker ラウンド完了', '', formatEventBodyForConductor(event)].join('\n');
     case 'worker.failed':
       return ['## worker 失敗', '', formatEventBodyForConductor(event)].join('\n');
+    case 'worker.session.recovered':
+      return ['## worker session 復旧', '', formatEventBodyForConductor(event)].join('\n');
     case 'permission.pending':
       return [
         '## permission 判断待ち',
@@ -76,6 +78,13 @@ function formatEventBodyForConductor(event: SessionEvent): string {
       return fencedYaml('worker.completed', event.result);
     case 'worker.failed':
       return fencedYaml('worker.failed', event.failure);
+    case 'worker.session.recovered':
+      return fencedYaml('worker.session.recovered', {
+        name: event.name,
+        kind: event.kind,
+        reason: event.reason,
+        action: 'started_new_session',
+      });
     case 'permission.pending': {
       const request = event.permission.request;
       const { id, workerId, createdAt } = event.permission;
@@ -183,19 +192,34 @@ function batchHeadingForEvents(events: SessionEvent[]): string {
   }
 
   const workerEvents = events.filter(
-    (event) => event.type === 'worker.completed' || event.type === 'worker.failed',
+    (event) =>
+      event.type === 'worker.completed' ||
+      event.type === 'worker.failed' ||
+      event.type === 'worker.session.recovered',
   );
   if (workerEvents.length === events.length) {
+    const firstWorkerEvent = workerEvents[0]!;
     const name =
-      workerEvents[0]!.type === 'worker.completed'
-        ? workerEvents[0]!.result.name
-        : workerEvents[0]!.failure.name;
+      firstWorkerEvent.type === 'worker.completed'
+        ? firstWorkerEvent.result.name
+        : firstWorkerEvent.type === 'worker.failed'
+          ? firstWorkerEvent.failure.name
+          : firstWorkerEvent.name;
+    const recoveredCount = workerEvents.filter(
+      (event) => event.type === 'worker.session.recovered',
+    ).length;
+    if (recoveredCount === events.length) {
+      return `## worker session 復旧（${name}・${count} 件）`;
+    }
     const completedCount = workerEvents.filter(
       (event) => event.type === 'worker.completed',
     ).length;
     const failedCount = workerEvents.filter(
       (event) => event.type === 'worker.failed',
     ).length;
+    if (recoveredCount > 0) {
+      return `## worker 通知（${name}・${count} 件）`;
+    }
     if (failedCount > 0 && completedCount > 0) {
       return `## worker 通知（${name}・${count} 件）`;
     }
