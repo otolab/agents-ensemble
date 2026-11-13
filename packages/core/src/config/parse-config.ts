@@ -209,7 +209,7 @@ function parseAcpTags(
   const tags: Record<string, string> = {};
   for (const [tag, rawModelKey] of Object.entries(obj)) {
     const modelKey = readString(rawModelKey);
-    if (tag.trim() !== '' && modelKey) {
+    if (modelKey) {
       setRecordEntry(tags, tag, modelKey);
     }
   }

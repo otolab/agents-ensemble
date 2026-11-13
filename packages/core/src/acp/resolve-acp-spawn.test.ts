@@ -313,6 +313,37 @@ describe('resolveWorkerAcpSpawn', () => {
     ]);
   });
 
+  it.each(['', '  '])(
+    'preserves and warns for an unmapped blank modelTag %j before default fallback',
+    (modelTag) => {
+      const warnings: string[] = [];
+      const resolved = resolveWorkerAcpSpawn({
+        modelTag,
+        onWarning: (message) => warnings.push(message),
+        defaultOptions: {
+          defaultAcpCli: 'cursor',
+          config: {
+            acp: {
+              defaultPreset: 'cursor',
+              models: { standard: 'cursor/standard' },
+              tags: { default: 'standard' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      });
+
+      expect(resolved).toMatchObject({
+        preset: 'cursor',
+        args: ['--model', 'cursor/standard', 'acp'],
+        modelTag,
+        model: 'cursor/standard',
+      });
+      expect(warnings).toEqual([
+        `Worker modelTag "${modelTag}" is not registered in acp.tags; resolving through acp.tags.default.`,
+      ]);
+    },
+  );
+
   it('warns and uses the preset default when both custom and default tags are missing', () => {
     const warnings: string[] = [];
     const resolved = resolveWorkerAcpSpawn({

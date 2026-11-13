@@ -912,7 +912,7 @@ function parseAcpSpawnFingerprint(
   }
   let modelTag: AcpModelTag | undefined;
   if (record.modelTag !== undefined) {
-    if (typeof record.modelTag !== 'string' || record.modelTag.trim() === '') {
+    if (typeof record.modelTag !== 'string') {
       throw new Error(
         `Invalid session resume store worker acpSpawn modelTag: ${workerName}`,
       );

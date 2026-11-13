@@ -18,6 +18,8 @@ import {
   profileWorkersToSessionSpecs,
   resolveAgentPromptModule,
 } from './types.js';
+import { parseEnsembleConfig } from '../config/parse-config.js';
+import type { EnsembleConfig } from '../config/types.js';
 import { compileConductorSystemPrompt } from '../prompt/compile-system-prompt.js';
 import { loadUserInstructions } from '../prompt/load-user-instructions.js';
 
@@ -56,10 +58,19 @@ describe('normalizeProfileWorker', () => {
     },
   );
 
-  it.each(['', '  ', null, 1])('rejects invalid modelTag %s', (modelTag) => {
+  it.each(['', '  '])(
+    'accepts an empty or whitespace-only modelTag %j',
+    (modelTag) => {
+      expect(
+        normalizeProfileWorker({ kind: 'worker', modelTag }, 'test', 0),
+      ).toEqual({ name: 'worker', kind: 'worker', modelTag });
+    },
+  );
+
+  it.each([null, 1])('rejects non-string modelTag %s', (modelTag) => {
     expect(() =>
       normalizeProfileWorker({ kind: 'worker', modelTag }, 'test', 0),
-    ).toThrow(/modelTag.*non-empty string/);
+    ).toThrow(/modelTag.*string/);
   });
 });
 
@@ -98,6 +109,77 @@ materials:
     expect(profile.workers).toEqual([{ name: 'ping-1', kind: 'ping' }]);
     expect(profile.agents?.ping?.prompt?.instructions).toEqual(['pong only']);
     expect(profile.materials?.[0]?.content).toBe('step 1');
+  });
+
+  it('resolves empty and whitespace-only tags from profile YAML through ACP spawn', async () => {
+    const path = join(dir, 'profile.yaml');
+    await writeFile(
+      path,
+      `workers:
+  - name: blank-tag
+    kind: worker
+    modelTag: ""
+  - name: whitespace-tag
+    kind: worker
+    modelTag: "  "
+`,
+    );
+
+    const profile = await loadProfileFromFile(path);
+    const config = parseEnsembleConfig({
+      acp: {
+        defaultPreset: 'cursor',
+        models: {
+          blank: 'cursor/blank-tag-model',
+          spaces: 'cursor/whitespace-tag-model',
+        },
+        tags: {
+          '': 'blank',
+          '  ': 'spaces',
+        },
+      },
+    }) as EnsembleConfig;
+    const specs = profileWorkersToSessionSpecs(profile, {
+      defaultAcp: { defaultAcpCli: 'cursor', config },
+    });
+
+    expect(profile.workers.map((worker) => worker.modelTag)).toEqual([
+      '',
+      '  ',
+    ]);
+    expect(
+      specs.map(({ name, modelTag, spawn, acpFingerprint }) => ({
+        name,
+        modelTag,
+        args: spawn?.args,
+        fingerprint: acpFingerprint,
+      })),
+    ).toEqual([
+      {
+        name: 'blank-tag',
+        modelTag: '',
+        args: ['--model', 'cursor/blank-tag-model', 'acp'],
+        fingerprint: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['--model', 'cursor/blank-tag-model', 'acp'],
+          modelTag: '',
+          model: 'cursor/blank-tag-model',
+        },
+      },
+      {
+        name: 'whitespace-tag',
+        modelTag: '  ',
+        args: ['--model', 'cursor/whitespace-tag-model', 'acp'],
+        fingerprint: {
+          preset: 'cursor',
+          command: 'agent',
+          args: ['--model', 'cursor/whitespace-tag-model', 'acp'],
+          modelTag: '  ',
+          model: 'cursor/whitespace-tag-model',
+        },
+      },
+    ]);
   });
 
   it('accepts kind-only shorthand', async () => {

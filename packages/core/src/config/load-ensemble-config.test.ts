@@ -436,6 +436,24 @@ describe('loadEnsembleConfig', () => {
     });
   });
 
+  it('preserves empty and whitespace-only ACP tag keys across config layers', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      'acp:\n  tags:\n    "": user-model\n    "  ": spaced-model\n',
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      'acp:\n  tags:\n    "": project-model\n',
+    );
+
+    const config = await loadConfig();
+
+    expect(config.acp.tags).toEqual({
+      '': 'project-model',
+      '  ': 'spaced-model',
+    });
+  });
+
   it('merges structured model attributes across layers and lets shorthand replace an entry', async () => {
     await writeConfig(
       userEnsembleRoot,

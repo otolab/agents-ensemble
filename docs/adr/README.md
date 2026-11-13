@@ -132,8 +132,9 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0058](0058-pi-send-recovery-replay-boundary.md) | Pi send recovery の再送境界 | superseded → [0059](0059-pi-recovery-report-after-manual-reconnect.md) |
 | [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0060](0060-pi-recovery-operator-inbox.md) |
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | accepted |
-| [0061](0061-worker-acp-model-tags.md) | worker ACP modelTag の語彙と未登録時の解決 | superseded in part → [0062](0062-explicit-default-model-tag-warning.md)（明示 `default` と省略時の warning 区別） |
+| [0061](0061-worker-acp-model-tags.md) | worker ACP modelTag の語彙と未登録時の解決 | superseded in part → [0062](0062-explicit-default-model-tag-warning.md)（明示 `default` と省略時の warning 区別） / [0063](0063-worker-model-tags-allow-empty-strings.md)（空文字・空白のみを含む任意文字列） |
 | [0062](0062-explicit-default-model-tag-warning.md) | 明示された default modelTag の未登録 warning | accepted |
+| [0063](0063-worker-model-tags-allow-empty-strings.md) | worker modelTag に空文字・空白のみの tag を許可 | accepted |
 
 ## 追加するとき
 

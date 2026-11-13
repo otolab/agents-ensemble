@@ -213,8 +213,8 @@ export function resolveWorkerAcpSpawn(input?: {
 }): ResolvedAcpSpawn {
   const requestedModelTag = input?.modelTag;
   const modelTag = requestedModelTag ?? 'default';
-  if (typeof modelTag !== 'string' || modelTag.trim() === '') {
-    throw new Error('ACP worker modelTag must be a non-empty string');
+  if (typeof modelTag !== 'string') {
+    throw new Error('ACP worker modelTag must be a string');
   }
   const spawn = resolveDefaultAcpSpawn(input?.defaultOptions);
   const processEnv = input?.defaultOptions?.env ?? process.env;

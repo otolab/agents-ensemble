@@ -298,7 +298,7 @@ worker は **agents-ensemble の `.cursor/` を読まない**。Skill 名と起�
 
 ### Worker の前提
 
-profile の worker modelTag は `high` / `default` / `low` / `lite` の推奨 tier 名のほか、任意の非空文字列を受け付ける。`default` 以外の未登録 tag は harness warning を出して `default` mapping を試し、そこにも mapping がなければ model を注入せず ACP preset の既定に委ねる。worker が `modelTag` を省略した場合は暗黙の `default` から warning なしで preset 既定を使う。`modelTag: default` を明示して mapping がない場合は warning を出して preset 既定を使う。`lite` は team tier 名で、Cursor ACP fast mode の `cursorFast` とは別概念である。
+profile の worker modelTag は `high` / `default` / `low` / `lite` の推奨 tier 名のほか、空文字・空白のみを含む任意の文字列を受け付ける。tag は trim せずそのまま照合する。`default` 以外の未登録 tag は harness warning を出して `default` mapping を試し、そこにも mapping がなければ model を注入せず ACP preset の既定に委ねる。worker が `modelTag` を省略した場合は暗黙の `default` から warning なしで preset 既定を使う。`modelTag: default` を明示して mapping がない場合は warning を出して preset 既定を使う。`lite` は team tier 名で、Cursor ACP fast mode の `cursorFast` とは別概念である。
 
 - **自律実行** — session 内では Skill に沿って自走する。worker 同士は直接通信しない
 - **Issue / PR に報告** — 作業報告・状態は Issue コメント / PR に書き、他 worker が読む

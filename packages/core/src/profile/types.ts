@@ -207,9 +207,9 @@ export function normalizeProfileWorker(
     }
     const modelTag =
       worker.modelTag === undefined ? 'default' : worker.modelTag;
-    if (typeof modelTag !== 'string' || modelTag.trim() === '') {
+    if (typeof modelTag !== 'string') {
       throw new Error(
-        `Invalid profile worker[${index}] in ${label}: "modelTag" must be a non-empty string`,
+        `Invalid profile worker[${index}] in ${label}: "modelTag" must be a string`,
       );
     }
     return {
