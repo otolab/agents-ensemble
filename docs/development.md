@@ -123,6 +123,58 @@ export ENSEMBLE_REMOTE_ENSEMBLE='/home/your-user/bin/ensemble-with-node'
 scripts/remote-ensemble-issue.sh /srv/agents-ensemble 687
 ```
 
+#### mise を使う場合
+
+非対話 SSH command や tmux pane では、対話 shell の起動設定に書いた `mise activate` が実行されるとは限りません。wrapper から mise を絶対 path で直接呼び、`mise exec -C` に pane の作業 directory を渡してください。mise はその directory と親 directory の config を読み、選択した tool と環境変数を子 process に設定します。`exec` と `"$@"` により、引数を分割せず mise へ渡し、wrapper の終了 status も引き継ぎます（[mise exec](https://mise.jdx.dev/cli/exec)、[mise config の探索](https://mise.jdx.dev/configuration)）。
+
+まず接続先の対話 shell で mise の実体と directory 設定を確認し、repository の config を確認したうえで必要な Node version を install します。`mise exec` は不足 tool を自動 install する設定が既定なので、pane 起動時に初回 install や network access が起きないよう先に済ませてください。config の trust error が出る場合は、内容を確認して対話 shell から `mise trust` を実行します。paranoid mode では自動 trust されません（[mise trust](https://mise.jdx.dev/cli/trust)）。
+
+```sh
+repo_dir=/home/your-user/otolab/agents-ensemble
+command -v mise
+cd "$repo_dir"
+mise doctor
+unset MISE_NODE_VERSION MISE_ENV
+mise config
+mise ls --current
+mise install
+mise exec -C "$repo_dir" -- sh -c 'node --version; command -v ensemble'
+```
+
+次の wrapper は Linux の mise 標準 directory を使う例です。`mise doctor` と `command -v mise` の結果に合わせて、実際の `HOME`、mise executable、config / data / state / cache directory に置き換えてください。既存 tmux server は後から接続した shell の全 environment を取り込むわけではありません。Node version を repository config に選ばせる場合は、古い server environment から引き継いだ `MISE_NODE_VERSION` を消します。named environment を使う場合は、ここで正しい `MISE_ENV` を設定してください。
+
+```sh
+mkdir -p "$HOME/bin"
+cat > "$HOME/bin/ensemble-with-mise" <<'EOF'
+#!/bin/sh
+set -eu
+
+HOME=/home/your-user
+MISE_CONFIG_DIR="$HOME/.config/mise"
+MISE_DATA_DIR="$HOME/.local/share/mise"
+MISE_STATE_DIR="$HOME/.local/state/mise"
+MISE_CACHE_DIR="$HOME/.cache/mise"
+MISE_INSTALLS_DIR="$HOME/.local/share/mise/installs"
+mise_bin=/home/your-user/.local/bin/mise
+export HOME MISE_CONFIG_DIR MISE_DATA_DIR MISE_STATE_DIR
+export MISE_CACHE_DIR MISE_INSTALLS_DIR
+
+unset MISE_NODE_VERSION MISE_ENV
+repo_dir=$(pwd -P)
+exec "$mise_bin" exec -C "$repo_dir" -- ensemble "$@"
+EOF
+chmod +x "$HOME/bin/ensemble-with-mise"
+```
+
+`unset MISE_ENV` は base config を使う場合の例です。`mise.<env>.toml` などを使う場合は削除し、必要な `MISE_ENV` を wrapper 内で明示してください。選択中の config が Node version を指定しない場合は `unset MISE_NODE_VERSION` を削除し、意図した version を wrapper で設定します。逆に repository config に Node を選ばせる場合は、古い version override を残さないでください。`MISE_NODE_VERSION` は config の指定より優先されます。独自の `MISE_*_DIR` や XDG directory を使う場合も、その値を wrapper に明示してください（[mise の directory 設定](https://mise.jdx.dev/directories.html)、[MISE_* 環境変数](https://mise.jdx.dev/configuration/environment-variables.html)）。
+
+```bash
+export ENSEMBLE_REMOTE_ENSEMBLE='/home/your-user/bin/ensemble-with-mise'
+scripts/remote-ensemble-issue.sh /home/your-user/otolab/agents-ensemble 687
+```
+
+この wrapper は絶対 path の mise から `mise exec` を起動し、Node の bin directory を含む PATH を子 process に設定してから `ensemble` を探します。事前確認の `command -v ensemble` が失敗する場合は、mise の環境から見える `ensemble` の実行 path を調べて、wrapper の `ensemble` をその absolute path に置き換えてください。`ensemble` が `#!/usr/bin/env node` を使う場合も、Node を選ぶ mise の PATH は必要です。wrapper を変更したあと同じ Issue session がすでに存在すると、script は wrapper を再実行せずその session に接続します。再試行時は対象 session の状態を確認してください。
+
 ローカルの stdin と stdout が両方 TTY の場合は OpenSSH に `-t`、gcloud に `--ssh-flag=-t` を渡して tmux に attach します。それ以外は `-T` 相当で detached 起動し、接続成功後に再実行用の command を stderr に表示します。同じ directory と Issue で再実行・同時実行しても、同じ tmux session を使って二重起動を防ぎます。
 
 新規起動前に remote executable の存在と実行権限を確認し、session 作成または再利用後は約1秒待って session と pane の生存を確認します。実行ファイルが見つからない場合は `ENSEMBLE_REMOTE_ENSEMBLE` の設定を案内します。起動できない、または確認中に終了した場合は非ゼロで終了し、ready とは表示しません。この確認は起動直後の失敗を検出するもので、その後の process の継続までは保証しません。session 名は directory の basename の英数字・`_`・`-` 以外を `-` に置き換えた値と Issue 番号から作ります。同じ basename、または置換後の値が一致する別 directory は同じ session 名になります。
