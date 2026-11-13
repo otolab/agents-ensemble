@@ -896,6 +896,8 @@ async function runConductorSessionWithStartupGuard(
   const workers = profileWorkersToSessionSpecs(activeProfile, {
     defaultAcp: options.defaultAcp,
     spawnBase,
+    onWarning: (message) =>
+      sessionLogger.emit({ type: 'harness.warning', message }),
   });
   if (workers.length > 0) {
     validateWorkerAcpPrerequisites(

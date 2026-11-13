@@ -13,8 +13,11 @@ export interface EnsembleConfigControlConfig {
 
 export type ConductorBackend = 'cursor' | 'pi';
 
-/** ACP worker model tiers selected by each team-profile worker entry. */
-export type AcpModelTag = 'high' | 'default' | 'low' | 'fast';
+/** Built-in team tier names; profiles may also use custom model tag strings. */
+export type BuiltinAcpModelTag = 'high' | 'default' | 'low' | 'lite';
+
+/** Open string type that keeps built-in tier names available to TypeScript tooling. */
+export type AcpModelTag = BuiltinAcpModelTag | (string & {});
 
 /** Model catalog entry after all config layers have been merged. */
 export interface AcpModelDefinition {
@@ -57,7 +60,7 @@ export interface EnsembleAcpConfig {
   /** 環境ごとの ACP model catalog。tag mapping から参照する。 */
   models?: Record<string, AcpModelCatalogEntry>;
   /** profile worker の modelTag から models key への共通 mapping。 */
-  tags?: Partial<Record<AcpModelTag, string>>;
+  tags?: Record<string, string>;
 }
 
 export interface EnsembleSessionMaxTurnsConfig {
