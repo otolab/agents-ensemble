@@ -1,13 +1,13 @@
-# ADR 0062: Pi ACP upstream npm dependency と core wrapper
+# ADR 0063: Pi ACP upstream npm dependency と core wrapper
 
-- Status: superseded in part by [ADR 0064](0064-pi-acp-version-split-for-byo-compatibility.md) (dependency version assignment only)
+- Status: superseded in part by [ADR 0065](0065-pi-acp-version-split-for-byo-compatibility.md) (dependency version assignment only)
 - Date: 2026-11-12
-- Supersedes: [ADR 0061](0061-builtin-pi-acp-runtime.md)
+- Supersedes: [ADR 0062](0062-builtin-pi-acp-runtime.md)
 - Related: [Issue #670](https://github.com/otolab/agents-ensemble/issues/670)
 
 ## Context
 
-ADR 0061 は `svkozak/pi-acp` を vendor した独立 package を公開する判断だった。operator は upstream adapter の source を保守する負担を避け、upstream npm package と Ensemble 設定を渡す薄い wrapper で製品要件を満たすよう方針を変更した。
+ADR 0062 は `svkozak/pi-acp` を vendor した独立 package を公開する判断だった。operator は upstream adapter の source を保守する負担を避け、upstream npm package と Ensemble 設定を渡す薄い wrapper で製品要件を満たすよう方針を変更した。
 
 公開済み upstream の `pi-acp@0.0.34` は `pi-acp` bin、`PI_ACP_PI_COMMAND`、model / thinkingLevel の ACP 設定を提供する。一方、session map は `$HOME/.pi/pi-acp/session-map.json` 固定で、session discovery は Pi `settings.json` の `sessionDir` を参照し、`PI_CODING_AGENT_SESSION_DIR` を直接参照しない。
 

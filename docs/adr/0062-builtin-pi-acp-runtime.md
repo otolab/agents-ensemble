@@ -1,6 +1,6 @@
-# ADR 0061: Pi ACP adapter の内蔵と BYO / builtin runtime
+# ADR 0062: Pi ACP adapter の内蔵と BYO / builtin runtime
 
-- Status: superseded by [0062](0062-pi-acp-upstream-package-wrapper.md)
+- Status: superseded by [0063](0063-pi-acp-upstream-package-wrapper.md)
 - Date: 2026-11-12
 - Related: [ADR 0019](0019-worker-acp-cli-presets.md), [ADR 0044](0044-user-scoped-runtime-storage.md), [Issue #670](https://github.com/otolab/agents-ensemble/issues/670)
 
