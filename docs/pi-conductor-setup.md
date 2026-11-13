@@ -16,6 +16,8 @@ backend は Pi（OpenAI）または Cursor から選びます。Pi を選ぶと 
 
 設定の書き込み先は user 層だけです。`~/.ensemble/config.yaml` の `conductor.backend` と、Pi を選んだ場合の user `pi/settings.json` に provider / model を保存します。project config、project Pi resource、既存の `conductor.model` は変更しません。project config や選択中 profile が backend を指定している場合はその値が優先されます。Pi の project `settings.json` に provider / model がある場合も user settings より優先されます。setup は検出した競合を表示します。
 
+config や profile に明示的な指定がない場合、コード上の conductor backend の既定値は現在 Cursor です。
+
 `ensemble setup` は TTY 専用です。CI / headless 環境では対話 login を実行せず、user 設定と認証情報を手動で用意してください。
 
 ```yaml
