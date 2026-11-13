@@ -6,7 +6,7 @@
 
 ## Context
 
-`ensemble auth` は Cursor SDK の保存型 login と、Pi conductor の provider 単位の login / status を提供する。Pi では TTY の API key prompt と OAuth flow が user `auth.json` を使う。実行時には project `auth.json`、user `ModelRuntime`、Pi resource の `settings.json` / `models.json`、provider 環境変数から credential を解決し、project の OAuth entry は refresh できないため拒否する。
+`ensemble auth` は Cursor SDK の保存型 login と、Pi conductor の provider 単位の login / status を提供する。Pi では provider に応じて TTY の API key prompt または OAuth flow が user `auth.json` を使う。OpenAI provider の現行 `ensemble auth login --provider openai` は OAuth を開始し、API key 保存の選択肢は提供しない。実行時には project `auth.json`、user `ModelRuntime`、Pi resource の `settings.json` / `models.json`、provider 環境変数から credential を解決し、project の OAuth entry は refresh できないため拒否する。
 
 Pi の `!command` はすでに Pi resource の API key として実行時に委譲できるが、`ensemble auth` からの登録導線はない。Issue #356 では command 登録を非スコープとした。その後、Epic #679 が複数認証モードの設計と登録 UX を改めて対象にした。#356 の判断を当時の履歴として残しつつ、登録を認める条件をここで整理する。
 
@@ -14,7 +14,9 @@ Pi の `!command` はすでに Pi resource の API key として実行時に委�
 
 ADR 0028 は accepted のため本文を変更しない。本 ADR は、Issue #680 が求める認証方式の分類、status の拡張方針、復旧案内の設計を提案する。以下で「現行」と記す内容は調査時点の実装・docs の説明であり、Decision に記す status / hint / command 登録の契約は実装済みの仕様ではない。後続 Issue の実装がマージされるまで現行動作を変更せず、この ADR も現行動作の安全性を保証するものではない。
 
-現行 CLI では backend を config / profile で選び、選択済み backend に対して `ensemble auth login` を実行する。対話的な backend-first の `ensemble setup` はまだ含まれない。Issue #684 と未マージの [PR #689](https://github.com/otolab/agents-ensemble/pull/689) で扱う setup 案は、最初に Pi（OpenAI）または Cursor を選び、その後に選択先の既存 login flow へ進む。Pi では OAuth / API key を選び、Cursor は既存 SDK login に委譲する。本 ADR は backend 選択や setup を定めるものではなく、その後の認証 mode / status / recovery の語彙を提案する。
+現行 CLI では backend を config / profile で選び、`ensemble auth login` は選択済み backend の login を実行する。Pi の OpenAI provider で `ensemble auth login --provider openai` を実行すると OAuth login になる。OpenAI API key は `OPENAI_API_KEY` や Pi resource から request 時に利用できるが、現行のこの login コマンドには user `auth.json` へ OpenAI API key を登録する選択肢はない。
+
+Issue #684 と未マージの [PR #689](https://github.com/otolab/agents-ensemble/pull/689) が扱う setup では、最初に Pi（OpenAI）または Cursor を選ぶ。Pi を選んだ場合、OAuth は現行の login path に委譲し、OpenAI API key は PR #689 が setup 用に加える `authMethod: 'api_key'` 分岐から既存 core の保存処理を呼ぶ。これは現行 `ensemble auth login --provider openai` の選択肢ではない。Cursor は既存の Cursor SDK login に委譲する。この setup は選んだ backend を user config に保存するが、fallback default は Cursor のままであり、その変更は別の Phase B として扱う。本 ADR は backend 選択や setup を定めるものではなく、その後の認証 mode / status / recovery の語彙を提案する。
 
 ## Decision
 
@@ -26,7 +28,7 @@ ADR 0028 は accepted のため本文を変更しない。本 ADR は、Issue #6
 |----|------|------------------|----------------|
 | `oauth_browser` | OAuth login flow | Pi provider の credential は user `auth.json` / `ModelRuntime` が管理する。Cursor backend は Cursor SDK の user auth store を使う。実際の browser 起動方法は provider による | Pi は `ensemble auth login --provider <provider>`、Cursor は `ensemble auth login` を使って再認証する |
 | `oauth_manual` | OAuth login flow | URL、device code、manual code を使う flow。保存先と refresh は `oauth_browser` と同じ | Pi の provider login を再実行し、表示された URL / code で login を完了する。challenge は認証操作中だけ operator に渡す |
-| `api_key_stored` | 保存型 API key | Pi の TTY secret prompt が user `auth.json` に保存する。project credential や resource fallback が優先される場合は、それらが有効なことがある | user credential を更新する場合は `ensemble auth login --provider <provider>` を使う。値を CLI 引数やログへ書かない |
+| `api_key_stored` | 保存型 API key | Pi の API-key prompt を持つ provider は TTY から user `auth.json` に保存する。OpenAI の現行 login は OAuth のみ。未マージ PR #689 は setup に `authMethod: 'api_key'` 分岐を加え、その経路から既存 core の保存処理を呼ぶ提案だが、これは現行 login の機能ではない | API-key prompt を持つ provider の user credential は、その provider の login で更新する。OpenAI の `ensemble auth login --provider openai` は OAuth に進むため、API key の更新先として案内しない。#689 の setup API-key 経路を使う場合は `ensemble setup` で API key を選び直す。非対話時の案内は #682 の決定に従い、操作が確定するまでは command や flag を推測しない。値を CLI 引数やログへ書かない |
 | `command_delegated` | command による実行時取得 | Pi resource の `settings.json` / `models.json` または project `auth.json` にある `!command` を Pi runtime が実行時に解決する。現行 CLI に command 登録機能はない | command と認証元を信頼できる設定で確認・修正する。これは `ensemble auth login` の保存型 credential ではない |
 | `environment` | process 環境変数 | credential は保存せず、provider が認識する環境変数から取得する | 対応する変数を設定・ローテーションする。login は環境変数を変更しない |
 | `project_override` | scope / 優先順位 | project の `auth.json` または `settings.json` / `models.json` の credential が解決順で選ばれた状態。project `auth.json` の API key / command は user credential より優先される | project 側で選ばれた値を確認・更新する。user login が effective credential を変えない場合がある。project OAuth は拒否されるため user 層へ移す |
@@ -65,7 +67,7 @@ Issue #682 の status もこの対応を使う。`api_key_stored` は taxonomy �
 | status mode / scope（taxonomy ID） | 次に案内する操作 |
 |------------------------|------------------|
 | `mode=oauth`（`oauth_browser` / `oauth_manual`） | Pi は `ensemble auth login --provider <provider>`、Cursor は `ensemble auth login` を再実行する。provider が提示する browser / URL / device code / manual code の flow を完了する。保存後に flow の違いを判別できないため、両者で同じ案内にする |
-| `mode=api_key`（`api_key_stored`） | TTY では `ensemble auth login --provider <provider>` の secret prompt で user credential を更新する。非対話時は Issue #682 が定める user 層の非対話入力経路を案内する。正確な option が決まるまでは flag 名を推測せず、API key を command line や hint に含めない |
+| `mode=api_key`（`api_key_stored`） | TTY では API-key prompt を持つ provider の login で user credential を更新する。OpenAI の現行 `ensemble auth login --provider openai` は OAuth を開始するため、API key の更新先として案内しない。#689 の setup API-key 経路を使う場合は `ensemble setup` で API key を選び直す。非対話時は Issue #682 が定める user 層の入力経路を案内する。操作が確定するまでは flag 名を推測せず、API key を command line や hint に含めない |
 | `mode=command`（`command_delegated`） | 信頼できる resource root の command 設定・認証元を確認する。status / hint で command、stdout、stderr を表示しない |
 | `mode=environment` | Pi は provider の環境変数名、Cursor は `CURSOR_API_KEY` を示し、値の設定・ローテーションを促す。値は表示しない |
 | `scope=project` + API key / command | project 側で選ばれている値を確認・更新する。user `auth login` が effective credential を変えない場合があると伝える |
