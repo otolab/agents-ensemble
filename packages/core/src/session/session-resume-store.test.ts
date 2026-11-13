@@ -283,47 +283,54 @@ describe('SessionResumeStore', () => {
     expect(directoryInfo.mode & 0o777).toBe(0o700);
   });
 
-  it('round-trips worker acpSpawn through save and load', async () => {
-    tempDir = await createHome('ensemble-session-resume-store-');
-    const path = sessionResumeStorePath({
-      repoRoot: tempDir,
-      conductorAgentId: 'agent-acp-spawn',
-    });
-    const resumeStore = baseResumeStore({
-      conductorAgentId: 'agent-acp-spawn',
-      repoRoot: tempDir,
-      workers: {
-        implementer: {
-          acpSessionId: 'sess-1',
-          acpCwd: '/repo/worktree',
-          acpSpawn: {
-            preset: 'codex',
-            command: 'codex-acp',
-            args: [],
-            modelTag: 'high',
-            model: 'provider/opus',
-            reasoning: 'high',
-            modelProviderDigest: 'b'.repeat(64),
-            envDigest: 'a'.repeat(64),
+  it.each([
+    { label: 'custom', modelTag: 'urgent' },
+    { label: 'empty', modelTag: '' },
+    { label: 'whitespace-only', modelTag: '  ' },
+  ])(
+    'round-trips a $label worker modelTag through save and load',
+    async ({ modelTag }) => {
+      tempDir = await createHome('ensemble-session-resume-store-');
+      const path = sessionResumeStorePath({
+        repoRoot: tempDir,
+        conductorAgentId: 'agent-acp-spawn',
+      });
+      const resumeStore = baseResumeStore({
+        conductorAgentId: 'agent-acp-spawn',
+        repoRoot: tempDir,
+        workers: {
+          implementer: {
+            acpSessionId: 'sess-1',
+            acpCwd: '/repo/worktree',
+            acpSpawn: {
+              preset: 'codex',
+              command: 'codex-acp',
+              args: [],
+              modelTag,
+              model: 'provider/opus',
+              reasoning: 'high',
+              modelProviderDigest: 'b'.repeat(64),
+              envDigest: 'a'.repeat(64),
+            },
           },
         },
-      },
-    });
+      });
 
-    await saveSessionResumeStore(path, resumeStore);
-    const loaded = await loadSessionResumeStore(path);
+      await saveSessionResumeStore(path, resumeStore);
+      const loaded = await loadSessionResumeStore(path);
 
-    expect(loaded?.workers.implementer?.acpSpawn).toEqual({
-      preset: 'codex',
-      command: 'codex-acp',
-      args: [],
-      modelTag: 'high',
-      model: 'provider/opus',
-      reasoning: 'high',
-      modelProviderDigest: 'b'.repeat(64),
-      envDigest: 'a'.repeat(64),
-    });
-  });
+      expect(loaded?.workers.implementer?.acpSpawn).toEqual({
+        preset: 'codex',
+        command: 'codex-acp',
+        args: [],
+        modelTag,
+        model: 'provider/opus',
+        reasoning: 'high',
+        modelProviderDigest: 'b'.repeat(64),
+        envDigest: 'a'.repeat(64),
+      });
+    },
+  );
 
   it('round-trips an explicitly configured Cursor fast mode, including false', async () => {
     tempDir = await createHome('ensemble-session-resume-store-cursor-fast-');

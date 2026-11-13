@@ -116,10 +116,10 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0042](0042-explicit-config-replaces-user-layer.md) | `--config` による user config 層の差し替え | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest 方針のみ） |
 | [0043](0043-explicit-user-config-and-project-toggle.md) | 明示 user config と project load toggle の併用 | accepted |
 | [0044](0044-user-scoped-runtime-storage.md) | repo 単位のランタイム状態を user 層へ配置 | superseded → [0046](0046-migrated-session-canonical-slug-mirrors.md) |
-| [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning 指定のみ） |
+| [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded in part → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning） / [0062](0062-worker-acp-model-tags.md)（tier 語彙・任意 tag・fallback） |
 | [0046](0046-migrated-session-canonical-slug-mirrors.md) | 移行済みセッションの canonical slug mirror | accepted |
-| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest） / [0052](0052-acp-model-injection-by-preset.md)（worker routing） |
-| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（`conductor.reasoning` の分類のみ） |
+| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded in part → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest） / [0052](0052-acp-model-injection-by-preset.md)（worker routing） / [0062](0062-worker-acp-model-tags.md)（tag 語彙・fallback） |
+| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | superseded in part → [0051](0051-conductor-reasoning-resume-digest.md)（`conductor.reasoning` の分類） / [0062](0062-worker-acp-model-tags.md)（dynamic `acp.tags` の分類） |
 | [0049](0049-conductor-reasoning-backends.md) | conductor reasoning を backend ごとに適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
 | [0050](0050-operator-agent-conductor-reasoning.md) | operator-agent に conductor reasoning を適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
 | [0051](0051-conductor-reasoning-resume-digest.md) | conductor reasoning と resume-feasibility digest | accepted |
@@ -133,7 +133,10 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0060](0060-pi-recovery-operator-inbox.md) |
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | accepted |
 | [0061](0061-github-slug-session-persistence.md) | Issue session の slug 正本と operator-agent の user profile | proposed |
-| [0062](0062-conductor-auth-mode-status-contract.md) | Conductor 認証モードと status / 復旧案内の契約 | proposed |
+| [0062](0062-worker-acp-model-tags.md) | worker ACP modelTag の語彙と未登録時の解決 | superseded in part → [0063](0063-explicit-default-model-tag-warning.md)（明示 `default` と省略時の warning 区別） / [0064](0064-worker-model-tags-allow-empty-strings.md)（空文字・空白のみを含む任意文字列） |
+| [0063](0063-explicit-default-model-tag-warning.md) | 明示された default modelTag の未登録 warning | accepted |
+| [0064](0064-worker-model-tags-allow-empty-strings.md) | worker modelTag に空文字・空白のみの tag を許可 | accepted |
+| [0065](0065-conductor-auth-mode-status-contract.md) | Conductor 認証モードと status / 復旧案内の契約 | proposed |
 
 ## 追加するとき
 
