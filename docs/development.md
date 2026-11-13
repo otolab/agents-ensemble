@@ -84,8 +84,8 @@ scripts/remote-ensemble-issue.sh /srv/agents-ensemble 687 -- --verbose
 Google Cloud CLI の例:
 
 ```bash
-export ENSEMBLE_REMOTE_SSH='gcloud compute ssh --zone "us-central1-b" "naoto-kato-devbox" --project "plaid-devenv-ai"'
-scripts/remote-ensemble-issue.sh /home/naoto.kato/otolab/agents-ensemble 127
+export ENSEMBLE_REMOTE_SSH='gcloud compute ssh --zone "YOUR_ZONE" "YOUR_INSTANCE" --project "YOUR_PROJECT"'
+scripts/remote-ensemble-issue.sh /home/your-user/otolab/agents-ensemble 127
 ```
 
 `remote-dir` は接続先の SSH login directory からの相対 path、または absolute path です。`~` は展開しないため、home 配下を指定する場合は相対 path か absolute path を使います。
