@@ -5,9 +5,9 @@
 #   ENSEMBLE_REMOTE_SSH='ssh -J bastion user@host' \
 #     scripts/remote-ensemble-issue.sh /path/to/repo 42 -- --profile team
 #
-# ENSEMBLE_REMOTE_SSH is split on whitespace; shell syntax is never evaluated.
-# Put SSH options containing spaces in ~/.ssh/config. The destination must be
-# the final word. The script selects SSH's -t/-T option from the local TTY.
+# ENSEMBLE_REMOTE_SSH uses shell-like quotes for argv grouping, but is never
+# evaluated as shell code. OpenSSH-compatible commands put the destination
+# last; gcloud compute ssh is handled with its --command/--ssh-flag options.
 
 set -euo pipefail
 
@@ -22,8 +22,10 @@ Arguments:
   issue-args   Optional arguments passed to `ensemble issue` after --
 
 Environment:
-  ENSEMBLE_REMOTE_SSH       Required; whitespace-separated SSH command and args.
-                            The destination must be the final word.
+  ENSEMBLE_REMOTE_SSH       Required; SSH command and args. Single/double
+                            quotes group words; shell expansion is not run.
+                            Supports OpenSSH-compatible clients and
+                            `gcloud compute ssh` (including alpha/beta).
   ENSEMBLE_REMOTE_ENSEMBLE  Remote executable path (default: ensemble)
 EOF
 }
@@ -70,24 +72,150 @@ if [[ $ENSEMBLE_REMOTE_SSH == *$'\n'* ]]; then
   fail_usage 'ENSEMBLE_REMOTE_SSH must be a single line'
 fi
 
-ssh_args=()
-IFS=$' \t\n' read -r -a ssh_args <<< "$ENSEMBLE_REMOTE_SSH"
+parse_ssh_arguments() {
+  local input=$1
+  local current='' quote='' char
+  local token_started=0 escaped=0 index=0 input_length=${#1}
+  ssh_args=()
+
+  while (( index < input_length )); do
+    char=${input:index:1}
+    if (( escaped )); then
+      current+=$char
+      token_started=1
+      escaped=0
+    elif [[ $quote == "'" ]]; then
+      if [[ $char == "'" ]]; then
+        quote=''
+      else
+        current+=$char
+      fi
+      token_started=1
+    elif [[ $quote == '"' ]]; then
+      case $char in
+        '"')
+          quote=''
+          ;;
+        \\)
+          index=$((index + 1))
+          if (( index >= input_length )); then
+            return 1
+          fi
+          char=${input:index:1}
+          case $char in
+            '"'|\\|'$'|'`')
+              current+=$char
+              ;;
+            *)
+              current+="\\$char"
+              ;;
+          esac
+          ;;
+        *)
+          current+=$char
+          ;;
+      esac
+      token_started=1
+    else
+      case $char in
+        "'")
+          quote="'"
+          token_started=1
+          ;;
+        '"')
+          quote='"'
+          token_started=1
+          ;;
+        \\)
+          escaped=1
+          token_started=1
+          ;;
+        ' '|$'\t')
+          if (( token_started )); then
+            ssh_args+=("$current")
+            current=''
+            token_started=0
+          fi
+          ;;
+        *)
+          current+=$char
+          token_started=1
+          ;;
+      esac
+    fi
+    index=$((index + 1))
+  done
+
+  if [[ -n $quote ]] || (( escaped )); then
+    return 1
+  fi
+  if (( token_started )); then
+    ssh_args+=("$current")
+  fi
+}
+
+if ! parse_ssh_arguments "$ENSEMBLE_REMOTE_SSH"; then
+  fail_usage 'ENSEMBLE_REMOTE_SSH has unmatched quotes or a trailing backslash'
+fi
+
 if (( ${#ssh_args[@]} < 2 )); then
   fail_usage 'ENSEMBLE_REMOTE_SSH must include an SSH command and destination'
 fi
 
-ssh_destination=${ssh_args[$((${#ssh_args[@]} - 1))]}
-if [[ -z $ssh_destination || $ssh_destination == -* ]]; then
-  fail_usage 'the SSH destination must be the final word in ENSEMBLE_REMOTE_SSH'
+remote_transport=openssh
+ssh_command_name=${ssh_args[0]##*/}
+if [[ $ssh_command_name == gcloud ]]; then
+  case ${ssh_args[1]:-} in
+    compute)
+      if [[ ${ssh_args[2]:-} == ssh ]]; then
+        remote_transport=gcloud
+      else
+        fail_usage 'gcloud command must be `gcloud compute ssh`'
+      fi
+      ;;
+    alpha|beta)
+      if [[ ${ssh_args[2]:-} == compute && ${ssh_args[3]:-} == ssh ]]; then
+        remote_transport=gcloud
+      else
+        fail_usage 'gcloud command must be `gcloud [alpha|beta] compute ssh`'
+      fi
+      ;;
+    *)
+      fail_usage 'gcloud command must be `gcloud compute ssh`'
+      ;;
+  esac
 fi
 
-for ssh_arg in "${ssh_args[@]}"; do
+for ((index = 0; index < ${#ssh_args[@]}; index += 1)); do
+  ssh_arg=${ssh_args[$index]}
   case $ssh_arg in
-    -t|-tt|-ttt|-T)
+    -t|-tt|-ttt|-T|--ssh-flag=-t|--ssh-flag=-tt|--ssh-flag=-ttt|--ssh-flag=-T)
       fail_usage 'do not set SSH -t/-T; TTY allocation is selected automatically'
+      ;;
+    --ssh-flag)
+      next_index=$((index + 1))
+      if (( next_index < ${#ssh_args[@]} )); then
+        case ${ssh_args[$next_index]} in
+          -t|-tt|-ttt|-T)
+            fail_usage 'do not set SSH -t/-T; TTY allocation is selected automatically'
+            ;;
+        esac
+      fi
+      ;;
+    --command|--command=*)
+      if [[ $remote_transport == gcloud ]]; then
+        fail_usage 'do not set gcloud --command; the remote command is supplied by this script'
+      fi
       ;;
   esac
 done
+
+if [[ $remote_transport == openssh ]]; then
+  ssh_destination=${ssh_args[$((${#ssh_args[@]} - 1))]}
+  if [[ -z $ssh_destination || $ssh_destination == -* ]]; then
+    fail_usage 'the SSH destination must be the final word in ENSEMBLE_REMOTE_SSH'
+  fi
+fi
 
 if [[ $issue_ref =~ ^#?([0-9]+)$ ]]; then
   issue_number=${BASH_REMATCH[1]}
@@ -228,11 +356,32 @@ else
   ssh_tty_flag=-T
 fi
 
-ssh_host_index=$((${#ssh_args[@]} - 1))
 ssh_command=()
-for ((index = 0; index < ssh_host_index; index += 1)); do
-  ssh_command+=("${ssh_args[$index]}")
-done
-ssh_command+=("$ssh_tty_flag" "$ssh_destination")
+if [[ $remote_transport == gcloud ]]; then
+  ssh_separator_index=${#ssh_args[@]}
+  for ((index = 0; index < ${#ssh_args[@]}; index += 1)); do
+    if [[ ${ssh_args[$index]} == -- ]]; then
+      ssh_separator_index=$index
+      break
+    fi
+  done
 
-exec "${ssh_command[@]}" "$remote_command"
+  for ((index = 0; index < ssh_separator_index; index += 1)); do
+    ssh_command+=("${ssh_args[$index]}")
+  done
+  ssh_command+=("--command=$remote_command" "--ssh-flag=$ssh_tty_flag")
+  if (( ssh_separator_index < ${#ssh_args[@]} )); then
+    ssh_command+=(--)
+    for ((index = ssh_separator_index + 1; index < ${#ssh_args[@]}; index += 1)); do
+      ssh_command+=("${ssh_args[$index]}")
+    done
+  fi
+else
+  ssh_host_index=$((${#ssh_args[@]} - 1))
+  for ((index = 0; index < ssh_host_index; index += 1)); do
+    ssh_command+=("${ssh_args[$index]}")
+  done
+  ssh_command+=("$ssh_tty_flag" "$ssh_destination" "$remote_command")
+fi
+
+exec "${ssh_command[@]}"

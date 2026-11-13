@@ -72,20 +72,35 @@ ensemble issue <issue-url> --repo-root <path>
 
 ### SSH 先の tmux で Issue session を起動する
 
-ローカル側では Bash 3.2 以降と OpenSSH 互換の SSH client が必要です。`scripts/remote-ensemble-issue.sh` は、接続先に clone・install 済みの repository、`ensemble`、`tmux` がある前提で、指定ディレクトリから `ensemble issue` を起動します。この script は npm package には含めず、repository checkout から実行します。
+ローカル側では Bash 3.2 以降と OpenSSH 互換 client または Google Cloud CLI が必要です。`scripts/remote-ensemble-issue.sh` は、接続先に clone・install 済みの repository、`ensemble`、`tmux` がある前提で、指定ディレクトリから `ensemble issue` を起動します。この script は npm package には含めず、repository checkout から実行します。
+
+OpenSSH 互換 client の例:
 
 ```bash
 export ENSEMBLE_REMOTE_SSH='ssh -J bastion user@dev-host'
 scripts/remote-ensemble-issue.sh /srv/agents-ensemble 687 -- --verbose
 ```
 
-`remote-dir` は接続先の SSH login directory からの相対 path、または absolute path です。`~` は展開しないため、home 配下を指定する場合は相対 path か absolute path を使います。`ENSEMBLE_REMOTE_SSH` は空白で単語分割し、shell としては評価しません。`ssh -J bastion user@dev-host` や `ssh -p 2222 user@dev-host` のように指定し、接続先を最後に置いてください。空白を含む SSH option は `~/.ssh/config` に設定します。TTY の割り当ては script が行うため、ここには `-t` / `-T` を指定しません。
+Google Cloud CLI の例:
 
-Issue は番号、`#番号`、GitHub Issue URL を指定できます。追加の `ensemble issue` 引数は `--` の後に置くと、空白や shell 記号を含めて引数のまま渡されます。`ENSEMBLE_REMOTE_ENSEMBLE` でリモートの実行ファイル path を指定でき、省略時は `ensemble` を PATH から探します。
+```bash
+export ENSEMBLE_REMOTE_SSH='gcloud compute ssh --zone "us-central1-b" "naoto-kato-devbox" --project "plaid-devenv-ai"'
+scripts/remote-ensemble-issue.sh /home/naoto.kato/otolab/agents-ensemble 127
+```
 
-ローカルの stdin と stdout がどちらも TTY の場合、script は SSH に TTY を要求し、tmux session を作成または再利用して attach します。TTY がない場合は session を detached のまま起動して終了し、生存確認に成功した場合だけ stderr に `ENSEMBLE_REMOTE_SSH` を設定した状態で再実行するコマンドを表示します。同じディレクトリと Issue で複数回または同時に実行しても、tmux の session 名を使って二重起動を防ぎます。新規起動前に remote executable の存在と実行権限を確認し、session 作成または再利用後は約1秒待って session と pane の生存を確認します。起動できない、または確認中に終了した場合は非ゼロで終了し、ready とは表示しません。この確認は起動直後の失敗を検出するもので、その後の process の継続までは保証しません。session 名は basename の英数字・`_`・`-` 以外を `-` に置き換えた値と Issue 番号から作ります。basename が同じ、または置換後の値が同じ別ディレクトリは同じ session 名になります。
+`remote-dir` は接続先の SSH login directory からの相対 path、または absolute path です。`~` は展開しないため、home 配下を指定する場合は相対 path か absolute path を使います。
 
-接続先の非対話 SSH 環境から `ensemble`・`tmux` と必要な認証設定を利用できることを確認してください。SSH 鍵認証など、追加 prompt がない接続を推奨します。mock test は引数の quoting、再実行、同時起動、executable の欠落・実行不可、起動直後の終了を検証しますが、実 SSH 接続や接続先ごとの tmux / 端末設定は検証しません。利用環境では、TTY から初回起動して tmux を detach し再接続できることと、TTY のない実行が detached session を残すことを手動確認してください。
+`ENSEMBLE_REMOTE_SSH` には実行ファイルと引数を指定します。空白で引数を分け、引用符と backslash で空白を含む値をまとめられます。これらは argv を組み立てるための構文としてだけ扱います。変数展開や `$(...)` などの command substitution、pipeline は実行しません。shell alias や環境変数代入も使わず、必要な環境変数は script 呼び出し前に設定してください。
+
+OpenSSH 互換 client では接続先を最後に置きます。`ssh -J bastion user@dev-host`、`ssh -p 2222 user@dev-host` のほか、空白を含む option は引用符でまとめるか `~/.ssh/config` に設定できます。Google Cloud CLI は `gcloud compute ssh`、`gcloud alpha compute ssh`、`gcloud beta compute ssh` に対応します。script は gcloud の `--command` と `--ssh-flag` を使い、`--zone` や `--project` の値を接続先と誤認しません。環境変数内に `--` がある場合は、gcloud の追加 SSH 引数との区切りより前に script の option を追加します。詳細は [gcloud compute ssh のリファレンス](https://docs.cloud.google.com/sdk/gcloud/reference/compute/ssh)を参照してください。その他の client wrapper は OpenSSH 互換の「接続先が最後、リモート command を接続先の後に渡す」形式が必要です。
+
+TTY は script が自動で選びます。手動で OpenSSH の `-t` / `-T`、gcloud の `--command`、TTY 用の `--ssh-flag` を指定しないでください。Issue は番号、`#番号`、GitHub Issue URL を指定できます。追加の `ensemble issue` 引数は script 呼び出しの `--` の後に置くと、空白や shell 記号を含めてそのまま渡されます。`ENSEMBLE_REMOTE_ENSEMBLE` でリモートの実行ファイル path を指定でき、省略時は `ensemble` を PATH から探します。
+
+ローカルの stdin と stdout が両方 TTY の場合は OpenSSH に `-t`、gcloud に `--ssh-flag=-t` を渡して tmux に attach します。それ以外は `-T` 相当で detached 起動し、接続成功後に再実行用の command を stderr に表示します。同じ directory と Issue で再実行・同時実行しても、同じ tmux session を使って二重起動を防ぎます。
+
+新規起動前に remote executable の存在と実行権限を確認し、session 作成または再利用後は約1秒待って session と pane の生存を確認します。起動できない、または確認中に終了した場合は非ゼロで終了し、ready とは表示しません。この確認は起動直後の失敗を検出するもので、その後の process の継続までは保証しません。session 名は directory の basename の英数字・`_`・`-` 以外を `-` に置き換えた値と Issue 番号から作ります。同じ basename、または置換後の値が一致する別 directory は同じ session 名になります。
+
+接続先の非対話 SSH 環境から `ensemble`・`tmux` と必要な認証設定を利用できることを確認してください。追加 prompt がない接続を推奨します。mock test は引用符付き gcloud argv、remote command / TTY option の配置、再実行、同時起動、executable の欠落・実行不可、起動直後の終了を確認します。fake gcloud は認証や実接続を行わず、gcloud CLI 自体の option parser や実環境の SSH / tmux / terminal 設定も検証しません。利用環境では、TTY から起動して tmux を detach した後に再接続できることと、TTY のない実行が detached session を残すことを手動確認してください。
 
 ## リリース
 

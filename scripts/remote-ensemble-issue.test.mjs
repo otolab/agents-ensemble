@@ -113,6 +113,99 @@ test('quotes remote paths and arguments, then reuses the session without startin
   assert.equal(tmuxCalls.filter(([command]) => command === 'attach-session').length, 0);
 });
 
+test('parses quoted gcloud arguments and passes the remote command and non-TTY flag', async () => {
+  const fixture = await createFixture();
+  const remoteDir = join(fixture.root, 'agents-ensemble');
+  const marker = join(fixture.root, 'shell-substitution-ran');
+  await mkdir(remoteDir);
+  const env = {
+    ...fixture.env,
+    ENSEMBLE_REMOTE_SSH: gcloudCommand(
+      fixture,
+      ` --configuration "$(touch ${marker})"`,
+    ),
+  };
+
+  const firstRun = runScript([remoteDir, '127'], env);
+  assert.equal(firstRun.status, 0, firstRun.stderr);
+
+  const firstCall = (await readJsonLines(fixture.gcloudLog))[0];
+  assert.deepEqual(firstCall.slice(0, 9), [
+    'compute',
+    'ssh',
+    '--zone',
+    'us-central1-b',
+    'naoto-kato-devbox',
+    '--project',
+    'plaid-devenv-ai',
+    '--configuration',
+    `$(touch ${marker})`,
+  ]);
+  assert.match(firstCall[9], /^--command=cd '/);
+  assert.equal(firstCall[10], '--ssh-flag=-T');
+  assert.equal(firstCall.filter((arg) => arg.startsWith('--command=')).length, 1);
+  assert.equal(await pathExists(marker), false);
+
+  const secondRun = runScript([remoteDir, '127'], env);
+  assert.equal(secondRun.status, 0, secondRun.stderr);
+  assert.equal((await readJsonLines(fixture.gcloudLog)).length, 2);
+  assert.equal((await readJsonLines(fixture.ensembleLog)).length, 1);
+  assert.equal((await readJsonLines(fixture.sshLog)).length, 0);
+});
+
+test('inserts gcloud command and TTY options before the SSH argument separator', async () => {
+  const fixture = await createFixture();
+  const remoteDir = join(fixture.root, 'agents-ensemble');
+  await mkdir(remoteDir);
+  const env = {
+    ...fixture.env,
+    ENSEMBLE_REMOTE_SSH: gcloudCommand(
+      fixture,
+      ' --ssh-flag=-vvv -- -o "ConnectTimeout=5"',
+    ),
+  };
+
+  const result = runScript([remoteDir, '128'], env);
+  assert.equal(result.status, 0, result.stderr);
+
+  const args = (await readJsonLines(fixture.gcloudLog))[0];
+  const separatorIndex = args.indexOf('--');
+  const commandIndex = args.findIndex((arg) => arg.startsWith('--command='));
+  const ttyIndex = args.indexOf('--ssh-flag=-T');
+  assert.ok(commandIndex >= 0 && commandIndex < separatorIndex);
+  assert.ok(ttyIndex >= 0 && ttyIndex < separatorIndex);
+  assert.deepEqual(args.slice(separatorIndex), ['--', '-o', 'ConnectTimeout=5']);
+  assert.ok(args.includes('--ssh-flag=-vvv'));
+});
+
+test('requests a gcloud TTY and attaches when the local input and output are TTYs', async (t) => {
+  const pythonProbe = spawnSync('python3', ['-c', 'import pty'], {
+    encoding: 'utf8',
+  });
+  if (pythonProbe.error || pythonProbe.status !== 0) {
+    t.skip('Python 3 with the standard pty module is unavailable');
+    return;
+  }
+
+  const fixture = await createFixture();
+  const remoteDir = join(fixture.root, 'agents-ensemble');
+  await mkdir(remoteDir);
+  const result = runScriptInTty([remoteDir, '129'], {
+    ...fixture.env,
+    ENSEMBLE_REMOTE_SSH: gcloudCommand(fixture),
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+
+  const args = (await readJsonLines(fixture.gcloudLog))[0];
+  assert.equal(args.at(-1), '--ssh-flag=-t');
+  assert.equal(
+    (await readJsonLines(fixture.tmuxLog)).filter(
+      ([command]) => command === 'attach-session',
+    ).length,
+    1,
+  );
+});
+
 test('simultaneous invocations create one ensemble process for the same session', async () => {
   const fixture = await createFixture({ startBarrier: 2 });
   const remoteDir = join(fixture.root, 'agents-ensemble');
@@ -249,6 +342,13 @@ test('missing SSH settings or malformed arguments fail with usage', () => {
   assert.match(missingSsh.stderr, /ENSEMBLE_REMOTE_SSH is required/);
   assert.match(missingSsh.stderr, /Usage:/);
 
+  const unmatchedQuote = runScript(['/remote/repo', '687'], {
+    ...env,
+    ENSEMBLE_REMOTE_SSH: 'ssh -J "bastion user@remote',
+  });
+  assert.equal(unmatchedQuote.status, 2);
+  assert.match(unmatchedQuote.stderr, /unmatched quotes or a trailing backslash/);
+
   const misplacedExtraArgument = runScript(
     ['/remote/repo', '687', '--profile', 'team'],
     { ...env, ENSEMBLE_REMOTE_SSH: 'ssh user@remote' },
@@ -268,11 +368,19 @@ async function createFixture({
   const binDir = join(root, 'bin');
   const stateDir = join(root, 'state');
   const remoteHome = join(root, 'remote-home');
-  await Promise.all([mkdir(binDir), mkdir(stateDir), mkdir(remoteHome)]);
+  const fakeGcloudDir = join(root, "fake cloud's sdk");
+  await Promise.all([
+    mkdir(binDir),
+    mkdir(stateDir),
+    mkdir(remoteHome),
+    mkdir(fakeGcloudDir),
+  ]);
 
   const sshPath = join(binDir, 'fake-ssh');
+  const gcloudPath = join(fakeGcloudDir, 'gcloud');
   const tmuxPath = join(binDir, 'tmux');
   const ensemblePath = join(root, 'fake ensemble');
+  const gcloudLog = join(root, 'gcloud.jsonl');
   const sshLog = join(root, 'ssh.jsonl');
   const tmuxLog = join(root, 'tmux.jsonl');
   const ensembleLog = join(root, 'ensemble.jsonl');
@@ -289,6 +397,50 @@ const remoteCommand = args.at(-1);
 if (!remoteCommand) process.exit(2);
 
 const result = spawnSync('/bin/sh', ['-c', remoteCommand], {
+  cwd: process.env.ENSEMBLE_TEST_REMOTE_HOME,
+  env: { ...process.env, ENSEMBLE_TEST_CLIENT_ID: String(process.pid) },
+  stdio: 'inherit',
+});
+process.exit(result.status ?? 1);
+`,
+    'utf8',
+  );
+  await writeFile(
+    gcloudPath,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
+
+const args = process.argv.slice(2);
+appendFileSync(process.env.ENSEMBLE_TEST_GCLOUD_LOG, JSON.stringify(args) + '\\n');
+if (args[0] !== 'compute' || args[1] !== 'ssh') {
+  process.stderr.write('expected gcloud compute ssh\\n');
+  process.exit(2);
+}
+
+const separator = args.indexOf('--');
+const gcloudArgs = separator < 0 ? args : args.slice(0, separator);
+for (let index = 0; index < gcloudArgs.length; index += 1) {
+  if (gcloudArgs[index] === '--project' || gcloudArgs[index] === '--zone') {
+    const value = gcloudArgs[index + 1];
+    if (!value || value.startsWith('-')) {
+      process.stderr.write('argument ' + gcloudArgs[index] + ': expected one argument\\n');
+      process.exit(2);
+    }
+  }
+}
+
+const commandArg = gcloudArgs.find((arg) => arg.startsWith('--command='));
+if (!commandArg) {
+  process.stderr.write('missing --command before SSH arguments\\n');
+  process.exit(2);
+}
+if (!gcloudArgs.some((arg) => arg === '--ssh-flag=-t' || arg === '--ssh-flag=-T')) {
+  process.stderr.write('missing SSH TTY flag before SSH arguments\\n');
+  process.exit(2);
+}
+
+const result = spawnSync('/bin/sh', ['-c', commandArg.slice('--command='.length)], {
   cwd: process.env.ENSEMBLE_TEST_REMOTE_HOME,
   env: { ...process.env, ENSEMBLE_TEST_CLIENT_ID: String(process.pid) },
   stdio: 'inherit',
@@ -423,11 +575,17 @@ setInterval(() => {}, 1000);
 `,
     'utf8',
   );
-  await Promise.all([sshPath, tmuxPath, ensemblePath].map((path) => chmod(path, 0o755)));
+  await Promise.all(
+    [sshPath, gcloudPath, tmuxPath, ensemblePath].map((path) =>
+      chmod(path, 0o755),
+    ),
+  );
 
   return {
     root,
     ensembleLog,
+    gcloudLog,
+    gcloudPath,
     sshLog,
     tmuxLog,
     env: {
@@ -437,6 +595,7 @@ setInterval(() => {}, 1000);
       ENSEMBLE_REMOTE_ENSEMBLE: ensemblePath,
       ENSEMBLE_TEST_ENSEMBLE_LOG: ensembleLog,
       ENSEMBLE_TEST_ENSEMBLE_EXITS_IMMEDIATELY: ensembleExitsImmediately ? '1' : '0',
+      ENSEMBLE_TEST_GCLOUD_LOG: gcloudLog,
       ENSEMBLE_TEST_PANE_DEAD: paneDead ? '1' : '0',
       ENSEMBLE_TEST_REMOTE_HOME: remoteHome,
       ENSEMBLE_TEST_SSH_LOG: sshLog,
@@ -447,11 +606,68 @@ setInterval(() => {}, 1000);
   };
 }
 
+function gcloudCommand(fixture, suffix = '') {
+  return `${quoteShell(fixture.gcloudPath)} compute ssh --zone "us-central1-b" "naoto-kato-devbox" --project "plaid-devenv-ai"${suffix}`;
+}
+
+function quoteShell(value) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function runScript(args, env) {
   return spawnSync(scriptPath, args, {
     encoding: 'utf8',
     env,
   });
+}
+
+function runScriptInTty(args, env) {
+  return spawnSync(
+    'python3',
+    [
+      '-c',
+      `
+import errno
+import json
+import os
+import pty
+import subprocess
+import sys
+
+master, slave = pty.openpty()
+try:
+    result = subprocess.run(
+        [sys.argv[1], *json.loads(sys.argv[2])],
+        stdin=slave,
+        stdout=slave,
+        stderr=slave,
+        env=os.environ,
+        timeout=30,
+        check=False,
+    )
+finally:
+    os.close(slave)
+
+try:
+    while True:
+        try:
+            chunk = os.read(master, 65536)
+        except OSError as error:
+            if error.errno == errno.EIO:
+                break
+            raise
+        if not chunk:
+            break
+        sys.stdout.buffer.write(chunk)
+finally:
+    os.close(master)
+sys.exit(result.returncode)
+`,
+      scriptPath,
+      JSON.stringify(args),
+    ],
+    { encoding: 'utf8', env, timeout: 35_000 },
+  );
 }
 
 function assertNoStartupSuccess(result) {
