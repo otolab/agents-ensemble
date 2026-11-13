@@ -15,6 +15,7 @@ describe('list_operator_sessions', () => {
   beforeEach(async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-sessions-'));
     vi.stubEnv('HOME', repoRoot);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(repoRoot, '.user-ensemble'));
     await mkdir(join(repoRoot, '.ensemble', 'sessions'), { recursive: true });
   });
 

@@ -42,6 +42,7 @@ describe('operator-agent live Open Question tools', () => {
 
   it('routes history lists to provider storage and other live controls through the socket', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-live-'));
+    const issueUrl = 'https://github.com/org/repo/issues/1';
     const conductorCwd = join(repoRoot, 'conductor-cwd');
     mockListConductorProviderHistory.mockReset().mockResolvedValue({
       messages: [
@@ -91,7 +92,7 @@ describe('operator-agent live Open Question tools', () => {
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: 'agent-live',
-        issueUrl: 'https://github.com/org/repo/issues/1',
+        issueUrl,
         repoRoot,
         profile: { workers: [] },
         openQuestions: [question],
@@ -162,6 +163,7 @@ describe('operator-agent live Open Question tools', () => {
       conductorAgentId: 'agent-live',
       cwd: conductorCwd,
       repoRoot,
+      issueUrl,
       query: { limit: 1, order: 'asc' },
     });
 
@@ -188,6 +190,7 @@ describe('operator-agent live Open Question tools', () => {
 
   it('reads provider history without a live socket while last-message still requires the socket', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-offline-'));
+    const issueUrl = 'https://github.com/org/repo/issues/2';
     const conductorCwd = join(repoRoot, 'provider-cwd');
     mockListConductorProviderHistory.mockReset().mockResolvedValue({
       messages: [
@@ -208,7 +211,7 @@ describe('operator-agent live Open Question tools', () => {
       {
         version: SESSION_RESUME_STORE_VERSION,
         conductorAgentId: 'agent-offline',
-        issueUrl: 'https://github.com/org/repo/issues/2',
+        issueUrl,
         repoRoot,
         profile: { workers: [] },
         openQuestions: [],
@@ -239,6 +242,7 @@ describe('operator-agent live Open Question tools', () => {
       conductorAgentId: 'agent-offline',
       cwd: conductorCwd,
       repoRoot,
+      issueUrl,
       query: { limit: 20, order: 'desc' },
     });
     await expect(

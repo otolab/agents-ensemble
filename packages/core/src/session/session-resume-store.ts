@@ -1,6 +1,6 @@
 import type { Dirent } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import {
@@ -10,6 +10,7 @@ import {
 import type { AcpModelTag, ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { writeFileIfMissing } from './persisted-file.js';
 
 export const SESSION_RESUME_STORE_VERSION = 1;
 
@@ -147,6 +148,7 @@ export interface LocatedSessionResumeStore {
 
 export interface SessionResumeStoreDuplicateDiagnostic {
   conductorAgentId: string;
+  issueUrl: string;
   selectedPath: string;
   selectedLocation: SessionResumeStoreLocation;
   candidates: Array<{
@@ -179,6 +181,15 @@ export function sessionResumeStorePath(options: SessionResumeStorePathOptions): 
   return resolveEnsemblePaths({
     repoRoot: options.repoRoot,
   }).sessionResumeStorePath(options.conductorAgentId);
+}
+
+export function canonicalSessionResumeStorePath(input: {
+  repoRoot: string;
+  issueUrl: string;
+  conductorAgentId: string;
+}): string {
+  return resolveEnsemblePaths({ repoRoot: input.repoRoot })
+    .canonicalSessionResumeStorePath(input.issueUrl, input.conductorAgentId);
 }
 
 export async function loadSessionResumeStore(
@@ -216,6 +227,7 @@ async function readSessionResumeStore(
 export async function requireSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl?: string;
 }): Promise<SessionResumeStore> {
   const located = await requireLocatedSessionResumeStoreForResume(input);
   return located.resumeStore;
@@ -224,6 +236,7 @@ export async function requireSessionResumeStoreForResume(input: {
 export async function requireLocatedSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl?: string;
   onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
 }): Promise<LocatedSessionResumeStore> {
   const locations = await listSessionResumeStoreLocations(input.repoRoot, {
@@ -231,10 +244,14 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
   });
   const located = locations.find(
     (candidate) =>
-      candidate.resumeStore.conductorAgentId === input.conductorAgentId,
+      candidate.resumeStore.conductorAgentId === input.conductorAgentId &&
+      (input.issueUrl === undefined ||
+        candidate.resumeStore.issueUrl === input.issueUrl),
   );
   if (!located) {
-    const path = sessionResumeStorePath(input);
+    const path = input.issueUrl
+      ? canonicalSessionResumeStorePath({ ...input, issueUrl: input.issueUrl })
+      : sessionResumeStorePath(input);
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
 
@@ -245,24 +262,53 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
       located.path,
     );
   }
-  if (loaded.hasLegacyAcpSpawnEnv) {
-    // Scrub pre-digest env values before resume validation can reject the
-    // session and bypass its normal first write.
-    await writeSessionResumeStoreFile(
-      located.path,
-      redactLegacyAcpSpawnEnv(loaded.rawValue, loaded.resumeStore),
-    );
-  }
-  if (located.location === 'project-legacy') {
-    const migratedPath = sessionResumeStorePath(input);
-    await writeSessionResumeStoreFile(migratedPath, loaded.resumeStore);
+  const persistedValue = loaded.hasLegacyAcpSpawnEnv
+    ? redactLegacyAcpSpawnEnv(loaded.rawValue, loaded.resumeStore)
+    : loaded.resumeStore;
+  const resumeStore = parseSessionResumeStore(persistedValue);
+  if (located.location === 'canonical-slug') {
+    if (loaded.hasLegacyAcpSpawnEnv) {
+      // Scrub canonical data before resume validation can reject the session
+      // and bypass its normal first write.
+      await writeSessionResumeStoreFile(located.path, persistedValue);
+    }
     return {
-      resumeStore: loaded.resumeStore,
-      path: migratedPath,
-      location: 'user-path-hash',
+      ...located,
+      resumeStore,
     };
   }
-  return { ...located, resumeStore: loaded.resumeStore };
+
+  // Promote one legacy Store to its canonical destination. Never update the
+  // source, and never replace a slug file created by another session/process.
+  const migratedPath = canonicalSessionResumeStorePath({
+    repoRoot: input.repoRoot,
+    issueUrl: resumeStore.issueUrl,
+    conductorAgentId: input.conductorAgentId,
+  });
+  await writeFileIfMissing(
+    migratedPath,
+    `${JSON.stringify(resumeStore, null, 2)}\n`,
+  );
+  const migrated = await readSessionResumeStore(migratedPath);
+  if (!migrated) {
+    throw new SessionResumeStoreNotFoundError(
+      input.conductorAgentId,
+      migratedPath,
+    );
+  }
+  if (
+    migrated.resumeStore.conductorAgentId !== input.conductorAgentId ||
+    migrated.resumeStore.issueUrl !== resumeStore.issueUrl
+  ) {
+    throw new Error(
+      `Canonical session resume store collision at ${migratedPath}; the existing slug file belongs to a different session.`,
+    );
+  }
+  return {
+    resumeStore: migrated.resumeStore,
+    path: migratedPath,
+    location: 'canonical-slug',
+  };
 }
 
 /** @deprecated Use requireSessionResumeStoreForResume; supported for one release only. */
@@ -389,8 +435,7 @@ async function listSessionResumeStoreLocations(
       if (!resumeStore) continue;
       if (
         slugRoot &&
-        (resolve(resumeStore.repoRoot) !== paths.repoRoot ||
-          canonicalSessionDirectory(paths, resumeStore.issueUrl) !== slugRoot)
+        canonicalSessionDirectory(paths, resumeStore.issueUrl) !== slugRoot
       ) {
         continue;
       }
@@ -404,7 +449,8 @@ async function listSessionResumeStoreLocations(
   await readDirectory(paths.legacySessionsDir, 'project-legacy');
 
   // Slug stores are keyed by GitHub repository identity. Search only the
-  // host/owner/repository depth and validate repoRoot before accepting a file.
+  // host/owner/repository depth; repoRoot is execution context, not a lookup
+  // filter for canonical records.
   let hosts: Dirent[];
   try {
     hosts = await readdir(paths.sessionsRoot, { withFileTypes: true });
@@ -454,11 +500,15 @@ async function listSessionResumeStoreLocations(
     }
   }
 
-  const byAgentId = new Map<string, LocatedSessionResumeStore[]>();
+  const bySession = new Map<string, LocatedSessionResumeStore[]>();
   for (const candidate of candidates) {
-    const matching = byAgentId.get(candidate.resumeStore.conductorAgentId) ?? [];
+    const sessionKey = JSON.stringify([
+      candidate.resumeStore.issueUrl,
+      candidate.resumeStore.conductorAgentId,
+    ]);
+    const matching = bySession.get(sessionKey) ?? [];
     matching.push(candidate);
-    byAgentId.set(candidate.resumeStore.conductorAgentId, matching);
+    bySession.set(sessionKey, matching);
   }
 
   const locationPriority: Record<SessionResumeStoreLocation, number> = {
@@ -467,7 +517,7 @@ async function listSessionResumeStoreLocations(
     'project-legacy': 2,
   };
   const selected: LocatedSessionResumeStore[] = [];
-  for (const [conductorAgentId, matches] of byAgentId) {
+  for (const matches of bySession.values()) {
     matches.sort(
       (left, right) =>
         locationPriority[left.location] - locationPriority[right.location] ||
@@ -477,7 +527,8 @@ async function listSessionResumeStoreLocations(
     selected.push(chosen);
     if (matches.length > 1) {
       options.onDuplicate?.({
-        conductorAgentId,
+        conductorAgentId: chosen.resumeStore.conductorAgentId,
+        issueUrl: chosen.resumeStore.issueUrl,
         selectedPath: chosen.path,
         selectedLocation: chosen.location,
         candidates: matches.map((candidate) => ({
@@ -516,7 +567,6 @@ export async function findLatestSessionResumeStoreForIssue(
   const matches = (await listSessionResumeStores(input.repoRoot)).filter(
     (resumeStore) =>
       resumeStore.issueUrl === input.issueUrl &&
-      resumeStore.repoRoot === input.repoRoot &&
       (resumeStore.harnessPhase ??
         harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle)) !== 'exit',
   );

@@ -7,18 +7,19 @@ export interface PiConductorSessionFile {
 }
 
 /**
- * Find the Pi transcript using the same repo-root-first lookup used by
- * conductor provider history.
+ * Find the Pi transcript in canonical slug storage before legacy locations.
  */
 export function findPiConductorSessionFile(input: {
   conductorAgentId: string;
   cwd: string;
   repoRoot?: string;
+  issueUrl?: string;
 }): PiConductorSessionFile | undefined {
   const paths = resolveEnsemblePaths({
     repoRoot: input.repoRoot ?? input.cwd,
   });
   for (const sessionDir of new Set([
+    ...(input.issueUrl ? [paths.canonicalPiSessionsDir(input.issueUrl)] : []),
     paths.piSessionsDir,
     paths.legacyPiSessionsDirForCwd(input.cwd),
   ])) {

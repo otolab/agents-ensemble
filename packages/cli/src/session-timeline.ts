@@ -168,6 +168,7 @@ export async function readSavedSessionTimeline(input: {
         conductorAgentId,
         cwd: resumeStore.conductorCwd ?? resumeStore.repoRoot,
         repoRoot: resumeStore.repoRoot,
+        issueUrl: resumeStore.issueUrl,
         ...(resumeStore.cursorBootstrapRunId
           ? { cursorBootstrapRunId: resumeStore.cursorBootstrapRunId }
           : {}),
@@ -602,6 +603,7 @@ async function readProviderHistory(input: {
   conductorAgentId: string;
   cwd: string;
   repoRoot: string;
+  issueUrl: string;
   cursorBootstrapRunId?: string;
 }): Promise<
   | {
@@ -617,6 +619,7 @@ async function readProviderHistory(input: {
       conductorAgentId: input.conductorAgentId,
       cwd: input.cwd,
       repoRoot: input.repoRoot,
+      issueUrl: input.issueUrl,
       ...(input.cursorBootstrapRunId
         ? { cursorBootstrapRunId: input.cursorBootstrapRunId }
         : {}),

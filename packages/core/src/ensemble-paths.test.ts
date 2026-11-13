@@ -46,6 +46,37 @@ describe('resolveEnsemblePaths', () => {
       ),
     );
     expect(
+      paths.canonicalToolCallHistoryPath(
+        'https://github.com/Org/Repo/issues/1',
+        'agent-a',
+      ),
+    ).toBe(
+      join(
+        tempDir,
+        'home',
+        '.ensemble',
+        'sessions',
+        'github.com',
+        'org',
+        'repo',
+        'agent-a.tool-calls',
+      ),
+    );
+    expect(
+      paths.canonicalPiSessionsDir('https://github.com/Org/Repo/issues/1'),
+    ).toBe(
+      join(
+        tempDir,
+        'home',
+        '.ensemble',
+        'sessions',
+        'github.com',
+        'org',
+        'repo',
+        'pi',
+      ),
+    );
+    expect(
       paths.canonicalOperatorAgentSessionPath(
         'https://github.com/org/repo/issues/1',
       ),

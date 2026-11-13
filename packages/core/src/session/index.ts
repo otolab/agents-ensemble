@@ -21,6 +21,7 @@ export type {
 export {
   SESSION_RESUME_STORE_VERSION,
   assertSessionResumeStoreMatches,
+  canonicalSessionResumeStorePath,
   findLatestSessionResumeStoreForIssue,
   findSessionResumeStore,
   harnessPhaseFromLegacyLifecycle,

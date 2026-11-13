@@ -37,18 +37,14 @@ import {
   saveSessionResumeStore,
   SessionResumeStoreNotFoundError,
   SESSION_RESUME_STORE_VERSION,
-  sessionResumeStorePath,
   type SessionResumeStore,
 } from '../session/session-resume-store.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import * as sessionResumeStoreModule from '../session/session-resume-store.js';
-import {
-  loadSessionStateStore,
-  sessionStateStorePath,
-} from '../session/session-state-store.js';
+import { loadSessionStateStore } from '../session/session-state-store.js';
 import {
   loadOpenQuestionsStore,
-  openQuestionsStorePath,
+  openQuestionsStorePath as resolveOpenQuestionsStorePath,
 } from '../session/open-questions-store.js';
 import * as openQuestionsStoreModule from '../session/open-questions-store.js';
 import {
@@ -75,6 +71,30 @@ const TEST_ISSUE = {
   number: 1,
   url: 'https://github.com/org/repo/issues/1',
 };
+
+// Most assertions in this suite inspect the active session store. New Issue
+// sessions write there; legacy hash fixtures use resolveEnsemblePaths directly.
+function sessionResumeStorePath(input: {
+  repoRoot: string;
+  conductorAgentId: string;
+  issueUrl?: string;
+}): string {
+  return resolveEnsemblePaths({ repoRoot: input.repoRoot })
+    .canonicalSessionResumeStorePath(
+      input.issueUrl ?? TEST_ISSUE.url,
+      input.conductorAgentId,
+    );
+}
+
+function openQuestionsStorePath(
+  input: Parameters<typeof resolveOpenQuestionsStorePath>[0],
+): string {
+  return resolveOpenQuestionsStorePath({
+    ...input,
+    issueUrl: input.issueUrl ?? TEST_ISSUE.url,
+    location: input.location ?? 'canonical-slug',
+  });
+}
 
 const {
   mockSend,
@@ -334,13 +354,18 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
     });
-    const resumeStorePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: initial.agentId,
-    });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const resumeStorePath = paths.canonicalSessionResumeStorePath(
+      TEST_ISSUE.url,
+      initial.agentId,
+    );
+    const hashResumeStorePath = paths.sessionResumeStorePath(initial.agentId);
     await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
       version: SESSION_RESUME_STORE_VERSION,
       createdHarnessCliVersion: '0.20.0-created',
+    });
+    await expect(access(hashResumeStorePath)).rejects.toMatchObject({
+      code: 'ENOENT',
     });
     expect(persistedVersions[0]).toBe('0.20.0-created');
 
@@ -375,16 +400,17 @@ describe('runConductorSession resume / shutdown', () => {
         'utf8',
       ),
     ) as SessionResumeStore;
-    const resumeStorePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: agentId,
-    });
+    const resumeStorePath = resolveEnsemblePaths({ repoRoot })
+      .sessionResumeStorePath(agentId);
+    const slugResumeStorePath = resolveEnsemblePaths({ repoRoot })
+      .canonicalSessionResumeStorePath(TEST_ISSUE.url, agentId);
     await saveSessionResumeStore(resumeStorePath, {
       ...legacyStore,
       conductorAgentId: agentId,
       issueUrl: TEST_ISSUE.url,
       repoRoot,
     });
+    const legacySourceBeforeResume = await readFile(resumeStorePath);
     mockSend.mockResolvedValue({
       runId: 'run-legacy-cli-version',
       status: 'finished',
@@ -408,6 +434,12 @@ describe('runConductorSession resume / shutdown', () => {
     expect(result.stopReason).toBe('completed');
     await expect(loadSessionResumeStore(resumeStorePath)).resolves.not.toHaveProperty(
       'createdHarnessCliVersion',
+    );
+    await expect(loadSessionResumeStore(slugResumeStorePath)).resolves.not.toHaveProperty(
+      'createdHarnessCliVersion',
+    );
+    await expect(readFile(resumeStorePath)).resolves.toEqual(
+      legacySourceBeforeResume,
     );
   });
 
@@ -463,7 +495,7 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow('stop after canonical store flush');
   });
 
-  it('resumes a hash-only store with its own YAML and ignores orphan slug snapshots', async () => {
+  it('prefers existing slug sidecars over older hash sidecars without merging or changing either source', async () => {
     const agentId = 'resume-hash-location-snapshot';
     const paths = resolveEnsemblePaths({ repoRoot });
     const hashPath = paths.sessionResumeStorePath(agentId);
@@ -472,12 +504,12 @@ describe('runConductorSession resume / shutdown', () => {
       agentId,
     );
     const hashOpenQuestionsPath = paths.openQuestionsPath(agentId);
-    const slugSessionStatePath = paths.canonicalSessionStatePath(
-      TEST_ISSUE.url,
-      agentId,
-    );
     // The resumed backend reports its provider session ID separately from the
     // harness conductorAgentId used by the ResumeStore and question snapshot.
+    const slugSessionStatePath = paths.canonicalSessionStatePath(
+      TEST_ISSUE.url,
+      'agent-test',
+    );
     const hashSessionStatePath = paths.sessionStatePath('agent-test');
     await saveSessionResumeStore(hashPath, {
       version: SESSION_RESUME_STORE_VERSION,
@@ -490,6 +522,7 @@ describe('runConductorSession resume / shutdown', () => {
       workers: {},
       updatedAt: 1,
     });
+    const hashResumeStoreBeforeResume = await readFile(hashPath);
     const writeQuestionSnapshot = async (path: string, id: string, text: string) => {
       await mkdir(dirname(path), { recursive: true });
       await writeFile(
@@ -534,8 +567,12 @@ describe('runConductorSession resume / shutdown', () => {
         'utf8',
       );
     };
-    await writeSessionState(slugSessionStatePath, 'orphan slug status');
+    await writeSessionState(slugSessionStatePath, 'existing slug status');
     await writeSessionState(hashSessionStatePath, 'selected hash status');
+    const slugQuestionsBeforeResume = await readFile(slugOpenQuestionsPath);
+    const hashQuestionsBeforeResume = await readFile(hashOpenQuestionsPath);
+    const slugStateBeforeResume = await readFile(slugSessionStatePath);
+    const hashStateBeforeResume = await readFile(hashSessionStatePath);
 
     let restoredAtBinding: ReturnType<OperatorInputBindingApi['getContext']>['openQuestions'] = [];
     let observation:
@@ -545,7 +582,9 @@ describe('runConductorSession resume / shutdown', () => {
         }
       | undefined;
     mockSend.mockImplementationOnce(async () => {
-      const selectedStore = await loadSessionResumeStore(hashPath);
+      const selectedStore = await loadSessionResumeStore(
+        paths.canonicalSessionResumeStorePath(TEST_ISSUE.url, agentId),
+      );
       expect(selectedStore?.harnessSocketPath).toBeTruthy();
       observation = await sendOpenQuestionControlRequest<NonNullable<typeof observation>>(
         selectedStore!.harnessSocketPath!,
@@ -573,20 +612,195 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(restoredAtBinding).toEqual([
       expect.objectContaining({
-        id: 'inq-2',
-        question: 'selected hash question',
+        id: 'inq-1',
+        question: 'orphan slug question',
       }),
     ]);
     expect(observation?.openQuestions).toEqual([
       expect.objectContaining({
-        id: 'inq-2',
-        question: 'selected hash question',
+        id: 'inq-1',
+        question: 'orphan slug question',
       }),
     ]);
     expect(observation?.sessionState?.current.statusLine).toBe(
-      'selected hash status',
+      'existing slug status',
+    );
+    await expect(readFile(hashPath)).resolves.toEqual(
+      hashResumeStoreBeforeResume,
+    );
+    await expect(readFile(slugOpenQuestionsPath)).resolves.toEqual(
+      slugQuestionsBeforeResume,
+    );
+    await expect(readFile(hashOpenQuestionsPath)).resolves.toEqual(
+      hashQuestionsBeforeResume,
+    );
+    await expect(readFile(slugSessionStatePath)).resolves.toEqual(
+      slugStateBeforeResume,
+    );
+    await expect(readFile(hashSessionStatePath)).resolves.toEqual(
+      hashStateBeforeResume,
     );
   });
+
+  it.each(['user-path-hash', 'project-legacy'] as const)(
+    'copies missing %s ResumeStore and sidecars to slug on resume without modifying legacy files',
+    async (location) => {
+      const paths = resolveEnsemblePaths({ repoRoot });
+      const agentId = `resume-copy-${location}`;
+      const sourceStorePath =
+        location === 'user-path-hash'
+          ? paths.sessionResumeStorePath(agentId)
+          : paths.legacySessionResumeStorePath(agentId);
+      const slugStorePath = paths.canonicalSessionResumeStorePath(
+        TEST_ISSUE.url,
+        agentId,
+      );
+      const sourceQuestionsPath =
+        location === 'user-path-hash'
+          ? paths.openQuestionsPath(agentId)
+          : paths.legacyOpenQuestionsPath(agentId);
+      const slugQuestionsPath = paths.canonicalOpenQuestionsPath(
+        TEST_ISSUE.url,
+        agentId,
+      );
+      const sourceStatePath =
+        location === 'user-path-hash'
+          ? paths.sessionStatePath(agentId)
+          : paths.legacySessionStatePath(agentId);
+      const slugStatePath = paths.canonicalSessionStatePath(
+        TEST_ISSUE.url,
+        agentId,
+      );
+      await saveSessionResumeStore(sourceStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        lifecycle: 'closed',
+        updatedAt: 1,
+      });
+      const openQuestionsYaml = [
+        'version: 1',
+        'sequence: 2',
+        'openQuestions:',
+        '  - id: inq-legacy',
+        `    question: ${JSON.stringify(`${location} question`)}`,
+        '    responseType: text',
+        '    source: conductor',
+        '    status: open',
+        '    askedAt: 1',
+        '',
+      ].join('\n');
+      const sessionStateYaml = [
+        'version: 2',
+        'current:',
+        `  statusLine: ${JSON.stringify(`${location} status`)}`,
+        '  reportedAt: 2',
+        'history: []',
+        '',
+      ].join('\n');
+      await mkdir(dirname(sourceQuestionsPath), { recursive: true });
+      await writeFile(sourceQuestionsPath, openQuestionsYaml, 'utf8');
+      await mkdir(dirname(sourceStatePath), { recursive: true });
+      await writeFile(sourceStatePath, sessionStateYaml, 'utf8');
+      const sourceStoreBefore = await readFile(sourceStorePath);
+      const sourceQuestionsBefore = await readFile(sourceQuestionsPath);
+      const sourceStateBefore = await readFile(sourceStatePath);
+      let restoredQuestions: Array<{ id: string; question: string }> = [];
+      mockResume.mockImplementationOnce(async () => ({
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      }));
+
+      mockSend.mockImplementation(async () => {
+        await expect(loadOpenQuestionsStore(slugQuestionsPath)).resolves.toMatchObject({
+          sequence: 2,
+          openQuestions: [
+            expect.objectContaining({
+              id: 'inq-legacy',
+              question: `${location} question`,
+              status: 'open',
+            }),
+          ],
+        });
+        await expect(loadSessionStateStore(slugStatePath)).resolves.toMatchObject({
+          current: {
+            statusLine: `${location} status`,
+            reportedAt: 2,
+          },
+        });
+        return {
+          runId: `run-copy-${location}`,
+          status: 'finished',
+          result: 'resumed from copied state',
+        };
+      });
+
+      const resultPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        resumeAgentId: agentId,
+        maxTurns: 1,
+        stopOnUnansweredInput: true,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        bindOperatorInput: (api) => {
+          restoredQuestions = api.getContext().openQuestions;
+          api.submit('inspect the migrated sidecars', {
+            targetOpenQuestionId: 'missing',
+          });
+          return () => {};
+        },
+      });
+      await vi.waitFor(() => expect(mockResume).toHaveBeenCalled(), {
+        timeout: 2_000,
+      });
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalled(), {
+        timeout: 2_000,
+      });
+      const result = await resultPromise;
+
+      expect(result.stopReason).toBe('completed');
+      expect(restoredQuestions).toContainEqual(
+        expect.objectContaining({
+          id: 'inq-legacy',
+          question: `${location} question`,
+        }),
+      );
+      await expect(readFile(sourceStorePath)).resolves.toEqual(sourceStoreBefore);
+      await expect(readFile(sourceQuestionsPath)).resolves.toEqual(
+        sourceQuestionsBefore,
+      );
+      await expect(readFile(sourceStatePath)).resolves.toEqual(sourceStateBefore);
+      await expect(loadOpenQuestionsStore(slugQuestionsPath)).resolves.toMatchObject({
+        sequence: 2,
+        openQuestions: [
+          expect.objectContaining({
+            id: 'inq-legacy',
+            question: `${location} question`,
+          }),
+        ],
+      });
+      await expect(loadSessionStateStore(slugStatePath)).resolves.toMatchObject({
+        current: {
+          statusLine: `${location} status`,
+          reportedAt: 2,
+        },
+      });
+      await expect(loadSessionResumeStore(slugStorePath)).resolves.toMatchObject({
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+      });
+    },
+  );
 
   it('continues a slug resume after its first harness socket flush fails without exposing a stale hash endpoint', async () => {
     const agentId = 'resume-slug-first-socket-flush-failure';
@@ -785,6 +999,9 @@ describe('runConductorSession resume / shutdown', () => {
       expect.objectContaining({
         systemPrompt: expect.stringContaining('body'),
         builtinTools: true,
+        sessionDir: resolveEnsemblePaths({ repoRoot }).canonicalPiSessionsDir(
+          TEST_ISSUE.url,
+        ),
       }),
     );
     expect(mockSend).toHaveBeenCalledWith(
@@ -1817,19 +2034,20 @@ describe('runConductorSession resume / shutdown', () => {
     expect(statusResult?.structuredContent).toEqual({
       statusLine: 'レビュー中：CIテスト待ち',
     });
-    await expect(
-      loadSessionStateStore(
-        sessionStateStorePath({
-          repoRoot,
-          conductorAgentId: 'agent-test',
-        }),
-      ),
-    ).resolves.toMatchObject({
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const slugStatePath = paths.canonicalSessionStatePath(
+      TEST_ISSUE.url,
+      'agent-test',
+    );
+    await expect(loadSessionStateStore(slugStatePath)).resolves.toMatchObject({
       current: {
         statusLine: 'レビュー中：CIテスト待ち',
         reportedAt: expect.any(Number),
       },
       history: [],
+    });
+    await expect(access(paths.sessionStatePath('agent-test'))).rejects.toMatchObject({
+      code: 'ENOENT',
     });
   });
 
@@ -2025,7 +2243,10 @@ describe('runConductorSession resume / shutdown', () => {
     expect(result.sessionUsage).not.toHaveProperty('compactionCount');
 
     const resumeStore = await loadSessionResumeStore(
-      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
+      resolveEnsemblePaths({ repoRoot }).canonicalSessionResumeStorePath(
+        TEST_ISSUE.url,
+        'agent-test',
+      ),
     );
     expect(resumeStore?.conductorBackend).toBe('pi');
   });
@@ -3357,6 +3578,15 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it('answers a live Open Question through UDS, persists it, and dispatches operator.message', async () => {
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const resumeStorePath = paths.canonicalSessionResumeStorePath(
+      TEST_ISSUE.url,
+      'agent-test',
+    );
+    const openQuestionsPath = paths.canonicalOpenQuestionsPath(
+      TEST_ISSUE.url,
+      'agent-test',
+    );
     let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
     let operatorInput: OperatorInputBindingApi | undefined;
     let sendCount = 0;
@@ -3414,14 +3644,8 @@ describe('runConductorSession resume / shutdown', () => {
 
     try {
       await vi.waitFor(async () => {
-        const resumeStore = await loadSessionResumeStore(
-          sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
-        );
+        const resumeStore = await loadSessionResumeStore(resumeStorePath);
         expect(resumeStore?.harnessSocketPath).toBeTruthy();
-      });
-      const resumeStorePath = sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: 'agent-test',
       });
       const resumeStore = await loadSessionResumeStore(resumeStorePath);
       const socketPath = resumeStore?.harnessSocketPath;
@@ -3453,20 +3677,10 @@ describe('runConductorSession resume / shutdown', () => {
       })));
 
       await vi.waitFor(async () => {
-        const store = await loadOpenQuestionsStore(
-          openQuestionsStorePath({
-            repoRoot,
-            conductorAgentId: 'agent-test',
-          }),
-        );
+        const store = await loadOpenQuestionsStore(openQuestionsPath);
         expect(store?.openQuestions).toHaveLength(1);
       });
-      const openQuestionsStore = await loadOpenQuestionsStore(
-        openQuestionsStorePath({
-          repoRoot,
-          conductorAgentId: 'agent-test',
-        }),
-      );
+      const openQuestionsStore = await loadOpenQuestionsStore(openQuestionsPath);
       expect(liveQuestions).toEqual(
         openQuestionsStore?.openQuestions
           .filter(({ status }) => status === 'open')
@@ -3477,12 +3691,7 @@ describe('runConductorSession resume / shutdown', () => {
         params: { questionId: liveList.questions[0]!.id, answer: 'yes' },
       });
 
-      const store = await loadOpenQuestionsStore(
-        openQuestionsStorePath({
-          repoRoot,
-          conductorAgentId: 'agent-test',
-        }),
-      );
+      const store = await loadOpenQuestionsStore(openQuestionsPath);
       expect(store?.openQuestions[0]).toMatchObject({
         status: 'answered',
         answer: 'yes',
@@ -3526,6 +3735,12 @@ describe('runConductorSession resume / shutdown', () => {
       const finalResumeStore = await loadSessionResumeStore(resumeStorePath);
       expect(finalResumeStore?.lifecycle).toBe('closed');
       expect(finalResumeStore?.harnessSocketPath).toBeUndefined();
+      await expect(access(paths.sessionResumeStorePath('agent-test'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(access(paths.openQuestionsPath('agent-test'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
       await expect(stat(socketPath!)).rejects.toMatchObject({
         code: 'ENOENT',
       });

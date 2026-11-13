@@ -17,6 +17,7 @@ import {
   type StoredToolCallSnapshot,
 } from '../runtime/tool-call-snapshot-registry.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { writeFileIfMissing } from './persisted-file.js';
 
 const TOOL_CALL_SNAPSHOT_HISTORY_VERSION = 1;
 const TOOL_CALL_SNAPSHOT_HISTORY_SUFFIX = '.tool-calls';
@@ -36,8 +37,11 @@ export interface PruneToolCallSnapshotHistoryResult {
 export function toolCallSnapshotHistoryPath(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl: string;
 }): string {
-  return resolveEnsemblePaths({ repoRoot: input.repoRoot }).toolCallHistoryPath(
+  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
+  return paths.canonicalToolCallHistoryPath(
+    input.issueUrl,
     input.conductorAgentId,
   );
 }
@@ -49,63 +53,122 @@ export function toolCallSnapshotHistoryPath(input: {
 export async function loadToolCallSnapshotHistory(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl: string;
   now?: number;
 }): Promise<LoadToolCallSnapshotHistoryResult> {
-  const path = toolCallSnapshotHistoryPath(input);
   const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
-  const legacyPath = paths.legacyToolCallHistoryPath(input.conductorAgentId);
-  let sourcePath = path;
-  let raw: string;
-  try {
-    let fileInfo: Awaited<ReturnType<typeof stat>>;
-    try {
-      fileInfo = await stat(path);
-    } catch (error) {
-      if (!isEnoent(error)) throw error;
-      sourcePath = legacyPath;
-      fileInfo = await stat(sourcePath);
+  const canonicalPath = toolCallSnapshotHistoryPath(input);
+  const fallbackPaths = [
+    paths.toolCallHistoryPath(input.conductorAgentId),
+    paths.legacyToolCallHistoryPath(input.conductorAgentId),
+  ].filter((path) => path !== canonicalPath);
+  const now = input.now ?? Date.now();
+  // A present slug file has precedence, even when malformed. Keep it intact
+  // and report the problem instead of deleting it or promoting legacy data.
+  const canonical = await readToolCallHistoryFile(canonicalPath, now);
+  if (canonical.found) return canonical.result;
+
+  for (const fallbackPath of fallbackPaths) {
+    const fallback = await readToolCallHistoryFile(fallbackPath, now);
+    if (!fallback.found) continue;
+    if (fallback.result.entries.length > 0) {
+      try {
+        const created = await writeFileIfMissing(
+          canonicalPath,
+          serializeHistory(fallback.result.entries),
+        );
+        if (!created) {
+          // A slug file appeared after lookup; use it instead of merging the
+          // fallback into or replacing it.
+          const racedCanonical = await readToolCallHistoryFile(
+            canonicalPath,
+            now,
+          );
+          if (racedCanonical.found) return racedCanonical.result;
+        }
+      } catch {
+        // Tool-call history is optional; an unsuccessful migration must not
+        // make the session resume fail.
+      }
     }
-    if (fileInfo.size > TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES) {
-      await removeHistoryFile(sourcePath);
-      return {
+    return fallback.result;
+  }
+
+  return { entries: [], needsRewrite: false };
+}
+
+async function readToolCallHistoryFile(
+  path: string,
+  now: number,
+): Promise<{
+  found: boolean;
+  result: LoadToolCallSnapshotHistoryResult;
+}> {
+  let fileInfo: Awaited<ReturnType<typeof stat>>;
+  try {
+    fileInfo = await stat(path);
+  } catch (error) {
+    if (isEnoent(error)) {
+      return { found: false, result: { entries: [], needsRewrite: false } };
+    }
+    return {
+      found: true,
+      result: {
+        entries: [],
+        needsRewrite: false,
+        warning: 'tool-call snapshot history could not be read and was ignored',
+      },
+    };
+  }
+  if (fileInfo.size > TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES) {
+    return {
+      found: true,
+      result: {
         entries: [],
         needsRewrite: false,
         warning:
           'tool-call snapshot history exceeds the size limit and was discarded',
-      };
-    }
-    raw = await readFile(sourcePath, 'utf8');
-  } catch (error) {
-    if (isEnoent(error)) {
-      return { entries: [], needsRewrite: false };
-    }
-    return {
-      entries: [],
-      needsRewrite: false,
-      warning: 'tool-call snapshot history could not be read and was ignored',
+      },
     };
   }
 
-  if (Buffer.byteLength(raw, 'utf8') > TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES) {
-    await removeHistoryFile(sourcePath);
+  let raw: string;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if (isEnoent(error)) {
+      return { found: false, result: { entries: [], needsRewrite: false } };
+    }
     return {
-      entries: [],
-      needsRewrite: false,
-      warning:
-        'tool-call snapshot history exceeds the size limit and was discarded',
+      found: true,
+      result: {
+        entries: [],
+        needsRewrite: false,
+        warning: 'tool-call snapshot history could not be read and was ignored',
+      },
     };
+  }
+
+  const discard = async (warning: string): Promise<{
+    found: true;
+    result: LoadToolCallSnapshotHistoryResult;
+  }> => {
+    return {
+      found: true,
+      result: { entries: [], needsRewrite: false, warning },
+    };
+  };
+  if (Buffer.byteLength(raw, 'utf8') > TOOL_CALL_SNAPSHOT_HISTORY_MAX_BYTES) {
+    return discard(
+      'tool-call snapshot history exceeds the size limit and was discarded',
+    );
   }
 
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
-    await removeHistoryFile(sourcePath);
-    return {
-      entries: [],
-      needsRewrite: false,
-      warning: 'tool-call snapshot history is invalid and was discarded',
-    };
+    return discard('tool-call snapshot history is invalid and was discarded');
   }
 
   if (
@@ -113,16 +176,11 @@ export async function loadToolCallSnapshotHistory(input: {
     value.version !== TOOL_CALL_SNAPSHOT_HISTORY_VERSION ||
     !Array.isArray(value.snapshots)
   ) {
-    await removeHistoryFile(sourcePath);
-    return {
-      entries: [],
-      needsRewrite: false,
-      warning:
-        'tool-call snapshot history has an unsupported format and was discarded',
-    };
+    return discard(
+      'tool-call snapshot history has an unsupported format and was discarded',
+    );
   }
 
-  const now = input.now ?? Date.now();
   const entries: StoredToolCallSnapshot[] = [];
   let invalidCount = 0;
   for (const candidate of value.snapshots) {
@@ -146,29 +204,31 @@ export async function loadToolCallSnapshotHistory(input: {
 
   const retained = entries.filter(
     (entry) =>
-      entry.updatedAt >
-      now - TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS,
+      entry.updatedAt > now - TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS,
   );
   if (retained.length !== entries.length) needsRewrite = true;
 
-  if (sourcePath !== path && retained.length > 0) {
-    try {
-      await saveToolCallSnapshotHistory(path, retained);
-    } catch {
-      // Legacy history is optional; an unsuccessful migration must not make
-      // the session resume fail.
-    }
-  }
-
   return {
-    entries: retained,
-    needsRewrite,
-    ...(invalidCount > 0
-      ? {
-          warning: `tool-call snapshot history contained ${invalidCount} invalid entr${invalidCount === 1 ? 'y' : 'ies'}; invalid entries were skipped`,
-        }
-      : {}),
+    found: true,
+    result: {
+      entries: retained,
+      needsRewrite,
+      ...(invalidCount > 0
+        ? {
+            warning: `tool-call snapshot history contained ${invalidCount} invalid entr${invalidCount === 1 ? 'y' : 'ies'}; invalid entries were skipped`,
+          }
+        : {}),
+    },
   };
+}
+
+function serializeHistory(
+  snapshots: readonly StoredToolCallSnapshot[],
+): string {
+  return JSON.stringify({
+    version: TOOL_CALL_SNAPSHOT_HISTORY_VERSION,
+    snapshots,
+  });
 }
 
 /** Save atomically; an empty history removes the optional file. */
@@ -187,10 +247,7 @@ export async function saveToolCallSnapshotHistory(
     throw new Error('tool-call snapshot history exceeds its configured limit');
   }
 
-  const serialized = JSON.stringify({
-    version: TOOL_CALL_SNAPSHOT_HISTORY_VERSION,
-    snapshots,
-  });
+  const serialized = serializeHistory(snapshots);
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   await chmod(directory, 0o700);
@@ -210,21 +267,22 @@ export async function saveToolCallSnapshotHistory(
  * prune individual expired snapshots in the registry as new updates arrive.
  */
 export async function pruneExpiredToolCallSnapshotHistoryFiles(
-  repoRoot: string,
+  input: { repoRoot: string; issueUrl: string },
   now = Date.now(),
 ): Promise<PruneToolCallSnapshotHistoryResult> {
   let removedCount = 0;
   let failedCount = 0;
   const cutoff = now - TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS;
-  const paths = resolveEnsemblePaths({ repoRoot });
-  for (const dir of [paths.sessionsDir, paths.legacySessionsDir]) {
+  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
+  const dir = paths.canonicalRepoSessionsDir(input.issueUrl);
+  {
     let entries: string[];
     try {
       entries = await readdir(dir);
     } catch (error) {
-      if (isEnoent(error)) continue;
+      if (isEnoent(error)) return { removedCount, failedCount };
       failedCount += 1;
-      continue;
+      return { removedCount, failedCount };
     }
     for (const entry of entries) {
       if (

@@ -45,6 +45,7 @@ import {
   isWorkerCompletedConductorMessage,
 } from './helpers/conductor-session-assertions.js';
 import { createMockConductorGetUsage } from '../../src/testing/mock-conductor-get-usage.js';
+import { resolveEnsemblePaths } from '../../src/ensemble-paths.js';
 import { toolCallSnapshotHistoryPath } from '../../src/session/tool-call-snapshot-history.js';
 import { TOOL_CALL_SNAPSHOT_HISTORY_TTL_MS } from '../../src/runtime/tool-call-snapshot-registry.js';
 import { permissionRequestFixtures } from '../fixtures/permission-request-fixtures.js';
@@ -211,6 +212,8 @@ describe('session resume integration', () => {
           openQuestionsStorePath({
             repoRoot,
             conductorAgentId: RESUME_AGENT_ID,
+            issueUrl: TEST_ISSUE.url,
+            location: 'canonical-slug',
           }),
           'utf8',
         ),
@@ -277,6 +280,8 @@ describe('session resume integration', () => {
         openQuestionsStorePath({
           repoRoot,
           conductorAgentId: RESUME_AGENT_ID,
+          issueUrl: TEST_ISSUE.url,
+          location: 'canonical-slug',
         }),
       ),
     ).toEqual({
@@ -312,24 +317,26 @@ describe('session resume integration', () => {
         updatedAt: Date.now(),
       },
     );
-    await saveOpenQuestionsStore(
-      openQuestionsStorePath({
-        repoRoot,
-        conductorAgentId: RESUME_AGENT_ID,
-      }),
-      {
-        sequence: 8,
-        openQuestions: [
-          {
-            id: 'inq-yaml-8',
-            status: 'open',
-            question: 'This question came from YAML.',
-            responseType: 'text',
-            source: 'conductor',
-            askedAt: 2,
-          },
-        ],
-      },
+    const legacyOpenQuestionsPath = openQuestionsStorePath({
+      repoRoot,
+      conductorAgentId: RESUME_AGENT_ID,
+    });
+    await saveOpenQuestionsStore(legacyOpenQuestionsPath, {
+      sequence: 8,
+      openQuestions: [
+        {
+          id: 'inq-yaml-8',
+          status: 'open',
+          question: 'This question came from YAML.',
+          responseType: 'text',
+          source: 'conductor',
+          askedAt: 2,
+        },
+      ],
+    });
+    const legacyOpenQuestionsText = await readFile(
+      legacyOpenQuestionsPath,
+      'utf8',
     );
 
     mockSend.mockResolvedValue({
@@ -372,19 +379,24 @@ describe('session resume integration', () => {
         openQuestionsStorePath({
           repoRoot,
           conductorAgentId: RESUME_AGENT_ID,
+          issueUrl: TEST_ISSUE.url,
+          location: 'canonical-slug',
         }),
       ),
     ).toEqual({
       sequence: 8,
       openQuestions: result.openQuestions,
     });
+    await expect(
+      readFile(legacyOpenQuestionsPath, 'utf8'),
+    ).resolves.toBe(legacyOpenQuestionsText);
   });
 
   it('continues resuming when the optional tool-call history is corrupt', async () => {
-    const historyPath = toolCallSnapshotHistoryPath({
-      repoRoot,
-      conductorAgentId: RESUME_AGENT_ID,
-    });
+    const historyPath = resolveEnsemblePaths({ repoRoot }).toolCallHistoryPath(
+      RESUME_AGENT_ID,
+    );
+    const corruptHistory = '{invalid json';
     await saveSessionResumeStore(
       sessionResumeStorePath({
         repoRoot,
@@ -402,7 +414,7 @@ describe('session resume integration', () => {
         updatedAt: Date.now(),
       },
     );
-    await writeFile(historyPath, '{invalid json', 'utf8');
+    await writeFile(historyPath, corruptHistory, 'utf8');
     mockSend.mockResolvedValue({
       runId: 'resume-corrupt-history',
       status: 'finished',
@@ -432,7 +444,7 @@ describe('session resume integration', () => {
         message: expect.stringContaining('history is invalid and was discarded'),
       }),
     );
-    await expect(readFile(historyPath, 'utf8')).rejects.toThrow();
+    await expect(readFile(historyPath, 'utf8')).resolves.toBe(corruptHistory);
   });
 
   it('dispatches permission.pending from a resumed worker without an initial send', async () => {
@@ -744,6 +756,7 @@ describe('session resume integration', () => {
     const historyPath = toolCallSnapshotHistoryPath({
       repoRoot,
       conductorAgentId: RESUME_AGENT_ID,
+      issueUrl: TEST_ISSUE.url,
     });
     const savedHistory = JSON.parse(await readFile(historyPath, 'utf8')) as {
       snapshots: Array<{
