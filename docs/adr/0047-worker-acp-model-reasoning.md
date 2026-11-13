@@ -1,6 +1,6 @@
 # ADR 0047: worker ACP model catalog の reasoning
 
-- Status: superseded in part by [0048](0048-session-resume-feasibility-config-digest.md) (resume digest), [0052](0052-acp-model-injection-by-preset.md) (worker model / reasoning routing), and [0061](0061-worker-acp-model-tags.md) (tag vocabulary and fallback)
+- Status: superseded in part by [0048](0048-session-resume-feasibility-config-digest.md) (resume digest), [0052](0052-acp-model-injection-by-preset.md) (worker model / reasoning routing), and [0062](0062-worker-acp-model-tags.md) (tag vocabulary and fallback)
 - Date: 2026-11-05
 - Related: [ADR 0045](0045-worker-acp-model-tags.md), [ADR 0042](0042-explicit-config-replaces-user-layer.md), [Issue #616](https://github.com/otolab/agents-ensemble/issues/616), [Issue #622](https://github.com/otolab/agents-ensemble/issues/622)
 

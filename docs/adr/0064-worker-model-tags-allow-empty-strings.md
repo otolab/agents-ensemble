@@ -1,8 +1,8 @@
-# ADR 0063: worker modelTag に空文字・空白のみの tag を許可
+# ADR 0064: worker modelTag に空文字・空白のみの tag を許可
 
 - Status: accepted
 - Date: 2026-11-13
-- Related: [ADR 0061](0061-worker-acp-model-tags.md), [ADR 0062](0062-explicit-default-model-tag-warning.md), [Issue #701](https://github.com/otolab/agents-ensemble/issues/701)
+- Related: [ADR 0062](0062-worker-acp-model-tags.md), [ADR 0063](0063-explicit-default-model-tag-warning.md), [Issue #701](https://github.com/otolab/agents-ensemble/issues/701)
 
 ## Context
 
