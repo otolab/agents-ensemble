@@ -2484,7 +2484,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(newBridge.newSession).toHaveBeenCalledOnce();
     expect(newPromptSession).toHaveBeenCalledTimes(2);
     expect(persistedIdsAtPromptStart).toEqual([
-      'fresh-worker-session',
+      'saved-worker-session',
       'fresh-worker-session',
     ]);
     expect(newPromptSession.mock.calls[1]?.[0]).toBe('fresh-worker-session');
@@ -2510,6 +2510,308 @@ describe('runConductorSession resume / shutdown', () => {
           event.message.includes(
             'worker.session.recovered name=implementer',
           ),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not persist an unbootstrapped recovery session and resumes from the prior ID after restart', async () => {
+    const agentId = 'resume-worker-bootstrap-failure';
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await saveSessionResumeStore(resumeStorePath, {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      openQuestions: [],
+      sequence: 0,
+      workers: {
+        implementer: {
+          acpSessionId: 'saved-worker-session',
+          acpCwd: repoRoot,
+        },
+      },
+      updatedAt: 1,
+    });
+
+    const historyError = new Error(
+      "The current provider can't read this thread's earlier reasoning, which another provider encrypted.",
+    );
+    const oldPromptSession = vi
+      .fn()
+      .mockResolvedValueOnce({ stopReason: 'end_turn', responseText: 'resumed' })
+      .mockRejectedValueOnce(historyError);
+    const oldBridge = {
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      newSession: vi.fn(),
+      promptSession: oldPromptSession,
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const failedBootstrapPrompt = vi
+      .fn()
+      .mockRejectedValue(new Error('bootstrap failed'));
+    const failedBootstrapBridge = {
+      loadSession: vi.fn(),
+      newSession: vi.fn().mockResolvedValue('uninitialized-worker-session'),
+      promptSession: failedBootstrapPrompt,
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const firstConnectAcp = vi
+      .fn()
+      .mockResolvedValueOnce(oldBridge)
+      .mockResolvedValueOnce(failedBootstrapBridge);
+
+    let firstConductorTools:
+      | Parameters<typeof mockCreate>[0]['customTools']
+      | undefined;
+    const firstOutboundMessages: string[] = [];
+    let firstSendCount = 0;
+    mockResume.mockImplementationOnce(async (_resumeAgentId, agentOptions) => {
+      firstConductorTools = agentOptions.customTools;
+      return {
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      };
+    });
+    mockSend.mockImplementation(async (message: string) => {
+      firstSendCount++;
+      firstOutboundMessages.push(message);
+      if (firstSendCount === 1) {
+        await firstConductorTools!.prompt_worker!.execute({
+          worker: 'implementer',
+          instruction: 'inspect the current issue',
+        });
+      }
+      return {
+        runId: `first-run-${firstSendCount}`,
+        status: 'finished',
+        result: 'done',
+      };
+    });
+    stubUnusedControlServer();
+
+    const firstResult = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      resumeAgentId: agentId,
+      defaultAcp: { defaultAcpCommand: process.execPath },
+      connectAcp: firstConnectAcp,
+      maxTurns: 10,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(firstResult.stopReason).toBe('completed');
+    expect(oldBridge.loadSession).toHaveBeenCalledWith(
+      'saved-worker-session',
+      repoRoot,
+      expect.any(Function),
+    );
+    expect(failedBootstrapBridge.newSession).toHaveBeenCalledOnce();
+    expect(failedBootstrapPrompt).toHaveBeenCalledOnce();
+    expect(firstOutboundMessages.some((message) => message.includes(
+      'worker.session.recovered',
+    ))).toBe(false);
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      workers: {
+        implementer: { acpSessionId: 'saved-worker-session' },
+      },
+    });
+
+    mockSend.mockReset();
+    mockSend.mockResolvedValue({
+      runId: 'second-run',
+      status: 'finished',
+      result: 'done',
+    });
+    const secondPromptSession = vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      responseText: 'resumed again',
+    });
+    const secondBridge = {
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      newSession: vi.fn(),
+      promptSession: secondPromptSession,
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const secondConnectAcp = vi.fn().mockResolvedValue(secondBridge);
+    mockResume.mockImplementationOnce(async () => ({
+      agentId,
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+
+    const secondResult = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      resumeAgentId: agentId,
+      defaultAcp: { defaultAcpCommand: process.execPath },
+      connectAcp: secondConnectAcp,
+      maxTurns: 10,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(secondResult.stopReason).toBe('completed');
+    expect(secondConnectAcp).toHaveBeenCalledOnce();
+    expect(secondBridge.loadSession).toHaveBeenCalledWith(
+      'saved-worker-session',
+      repoRoot,
+      expect.any(Function),
+    );
+    expect(secondBridge.loadSession).not.toHaveBeenCalledWith(
+      'uninitialized-worker-session',
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(secondPromptSession).toHaveBeenCalledOnce();
+    expect(secondPromptSession.mock.calls[0]?.[0]).toBe('saved-worker-session');
+    expect(secondPromptSession.mock.calls[0]?.[1]).toContain('前回の続き');
+  });
+
+  it('bootstraps and persists a fresh session when the resume init prompt cannot read history', async () => {
+    const agentId = 'resume-worker-init-prompt-history-error';
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await saveSessionResumeStore(resumeStorePath, {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
+      openQuestions: [],
+      sequence: 0,
+      workers: {
+        implementer: {
+          acpSessionId: 'saved-worker-session',
+          acpCwd: repoRoot,
+        },
+      },
+      updatedAt: 1,
+    });
+
+    const historyError = new Error(
+      "The current provider can't read this thread's earlier reasoning, which another provider encrypted.",
+    );
+    const oldBridge = {
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      newSession: vi.fn(),
+      promptSession: vi.fn().mockRejectedValue(historyError),
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const idsAtBootstrap: string[] = [];
+    const newPromptSession = vi.fn(async (_sessionId: string, prompt: string) => {
+      const store = await loadSessionResumeStore(resumeStorePath);
+      idsAtBootstrap.push(
+        store?.workers.implementer?.acpSessionId ?? '',
+      );
+      expect(prompt).toContain('implementer');
+      return { stopReason: 'end_turn', responseText: 'ready' };
+    });
+    const newBridge = {
+      loadSession: vi.fn(),
+      newSession: vi.fn().mockResolvedValue('fresh-worker-session'),
+      promptSession: newPromptSession,
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi
+      .fn()
+      .mockResolvedValueOnce(oldBridge)
+      .mockResolvedValueOnce(newBridge);
+    mockSend.mockResolvedValue({
+      runId: 'init-prompt-recovery',
+      status: 'finished',
+      result: 'done',
+    });
+    mockResume.mockImplementationOnce(async () => ({
+      agentId,
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+    stubUnusedControlServer();
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      workerWorktree: {
+        path: repoRoot,
+        branch: 'ensemble/issue-1',
+        issue: TEST_ISSUE,
+        inRepo: true,
+      },
+      resumeAgentId: agentId,
+      defaultAcp: { defaultAcpCommand: process.execPath },
+      connectAcp,
+      maxTurns: 10,
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      sessionLogger,
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(oldBridge.loadSession).toHaveBeenCalledOnce();
+    expect(oldBridge.promptSession).toHaveBeenCalledOnce();
+    expect(newBridge.newSession).toHaveBeenCalledOnce();
+    expect(newPromptSession).toHaveBeenCalledOnce();
+    expect(idsAtBootstrap).toEqual(['saved-worker-session']);
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      workers: {
+        implementer: { acpSessionId: 'fresh-worker-session' },
+      },
+    });
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes('worker.session.recovered'),
       ),
     ).toBe(true);
   });

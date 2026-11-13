@@ -67,6 +67,10 @@ interface ResidentWorker {
   cancelInFlight: boolean;
   /** resumed thread からの新 session 切替は worker ごとに一度だけ。 */
   sessionRecoveryAttempted: boolean;
+  /** bootstrap 完了後に通知・永続化する復旧情報。 */
+  pendingSessionRecovery?: WorkerSessionRecovery;
+  /** true の間は未初期化 session を通常指示へ使わない。 */
+  sessionRecoveryInProgress: boolean;
   /** 復旧中は閉じた thread への cancel を避け、bootstrap を完了させる。 */
   sessionRecoveryPhase?: 'preparing' | 'bootstrap' | 'replay';
 }
@@ -559,13 +563,14 @@ export class WorkerRuntime {
       previousSessionId,
       newSessionId: replacement.session.sessionId,
     };
-    await this.notifyWorkerSessionRecovered(resident, recovery);
+    resident.pendingSessionRecovery = recovery;
     return recovery;
   }
 
   private async runAttachedPrompt(
     resident: ResidentWorker,
     prompt: string,
+    onToolActivityObserved?: () => void,
   ) {
     return runAttachedWorkerPrompt(resident.attached, prompt, {
       permissionHandler: this.options.inbox.createPermissionHandler(
@@ -574,6 +579,12 @@ export class WorkerRuntime {
       onUpdate: (update) => {
         const sessionUpdate = update.update?.sessionUpdate;
         if (typeof sessionUpdate === 'string' && sessionUpdate.length > 0) {
+          if (
+            sessionUpdate === 'tool_call' ||
+            sessionUpdate === 'tool_call_update'
+          ) {
+            onToolActivityObserved?.();
+          }
           const toolName = extractAcpToolName(update.update);
           this.emitAcpUpdate(
             resident,
@@ -590,14 +601,40 @@ export class WorkerRuntime {
     });
   }
 
+  private async completeWorkerSessionRecovery(
+    resident: ResidentWorker,
+    bootstrapResult: Awaited<ReturnType<typeof this.runAttachedPrompt>>,
+  ): Promise<void> {
+    if (!resident.pendingSessionRecovery) return;
+    if (bootstrapResult.promptResult.stopReason === 'cancelled') {
+      throw new Error(
+        `Worker "${resident.started.name}" recovery bootstrap was cancelled`,
+      );
+    }
+
+    await this.notifyWorkerSessionRecovered(
+      resident,
+      resident.pendingSessionRecovery,
+    );
+    resident.pendingSessionRecovery = undefined;
+    resident.sessionRecoveryInProgress = false;
+  }
+
   private async runPromptWithSessionRecovery(
     resident: ResidentWorker,
     prompt: string,
     source: WorkerPromptSource,
   ) {
+    let toolActivityObserved = false;
     try {
+      const result = await this.runAttachedPrompt(resident, prompt, () => {
+        toolActivityObserved = true;
+      });
+      if (resident.pendingSessionRecovery && !this.forceShutdownRequested) {
+        await this.completeWorkerSessionRecovery(resident, result);
+      }
       return {
-        result: await this.runAttachedPrompt(resident, prompt),
+        result,
         superseded: false,
       };
     } catch (error) {
@@ -610,6 +647,7 @@ export class WorkerRuntime {
         throw error;
       }
 
+      resident.sessionRecoveryInProgress = true;
       resident.sessionRecoveryPhase = 'preparing';
       try {
         const recovery = await this.recoverUnreadableResumedSession(resident);
@@ -627,10 +665,17 @@ export class WorkerRuntime {
         if (this.forceShutdownRequested) {
           return { result: bootstrapResult, superseded: false };
         }
+        await this.completeWorkerSessionRecovery(resident, bootstrapResult);
 
         if (source === 'conductor') {
           if (resident.preemptInstruction) {
             return { result: bootstrapResult, superseded: true };
+          }
+          if (toolActivityObserved) {
+            throw new Error(
+              `Worker "${resident.started.name}" instruction was not replayed because ACP reported tool activity before the session history error; inspect the worktree before sending follow-up work`,
+              { cause: error },
+            );
           }
           resident.sessionRecoveryPhase = 'replay';
           return {
@@ -693,16 +738,13 @@ export class WorkerRuntime {
           : {}),
         cancelInFlight: false,
         sessionRecoveryAttempted: Boolean(attached.session.recovery),
+        ...(attached.session.recovery
+          ? { pendingSessionRecovery: attached.session.recovery }
+          : {}),
+        sessionRecoveryInProgress: Boolean(attached.session.recovery),
       };
       this.residents.set(started.name, resident);
       this.attaching.delete(started.name);
-
-      if (attached.session.recovery) {
-        await this.notifyWorkerSessionRecovered(
-          resident,
-          attached.session.recovery,
-        );
-      }
 
       const prompt = buildWorkerAttachPrompt(
         this.workerAttachOptions(started),
@@ -773,6 +815,7 @@ export class WorkerRuntime {
       source === 'harness' && resident.lazyInitInFlight;
     let initCancelled = false;
     let lazyInitFailed = false;
+    let sessionRecoveryFailed = false;
     try {
       const promptOutcome = await this.runPromptWithSessionRecovery(
         resident,
@@ -842,6 +885,42 @@ export class WorkerRuntime {
           'failed',
         );
         this.options.inbox.publishWorkerFailed(resident.started, failure);
+      } else if (
+        resident.sessionRecoveryInProgress &&
+        !this.forceShutdownRequested
+      ) {
+        const message = error instanceof Error ? error.message : String(error);
+        const failureMessage =
+          `Worker "${resident.started.name}" session recovery did not complete: ${message}`;
+        sessionRecoveryFailed = true;
+        resident.queue.length = 0;
+        resident.preemptInstruction = undefined;
+        this.failedWorkers.set(resident.started.name, {
+          workerId: resident.workerId,
+          name: resident.started.name,
+          kind: resident.started.kind,
+          failureStage: 'init',
+          error: failureMessage,
+        });
+        this.residents.delete(resident.started.name);
+        this.emitPromptTelemetry({
+          phase: 'failed',
+          source,
+          workerId: resident.workerId,
+          name: resident.started.name,
+          kind: resident.started.kind,
+          error: failureMessage,
+        });
+        this.emitWorkerState(
+          resident.workerId,
+          resident.started.name,
+          resident.started.kind,
+          'failed',
+        );
+        this.options.inbox.publishWorkerFailed(
+          resident.started,
+          new Error(failureMessage, { cause: error }),
+        );
       } else if (!this.forceShutdownRequested && !resident.preemptInstruction) {
         const message = error instanceof Error ? error.message : String(error);
         this.emitPromptTelemetry({
@@ -864,7 +943,7 @@ export class WorkerRuntime {
         resident.preemptInstruction = undefined;
         return;
       }
-      if (lazyInitFailed) {
+      if (lazyInitFailed || sessionRecoveryFailed) {
         try {
           await closeWorkerAcpSession(resident.attached.session);
         } catch {
