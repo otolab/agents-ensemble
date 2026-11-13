@@ -15,7 +15,7 @@
     "type-check": "tsc --build --emitDeclarationOnly",
     "ensemble": "node packages/cli/dist/index.js",
     "test": "pnpm --filter @agents-ensemble/core test",
-    "test:run": "node --test scripts/migrate-project-ensemble-runtime-to-user.test.mjs && pnpm -r --if-present test:run",
+    "test:run": "node --test scripts/migrate-project-ensemble-runtime-to-user.test.mjs scripts/remote-ensemble-issue.test.mjs && pnpm -r --if-present test:run",
     "test:release-workflow": "node --test .github/scripts/*.test.mjs",
     "test:integration": "pnpm --filter @agents-ensemble/core test:integration",
     "test:e2e": "pnpm --filter @agents-ensemble/cli test:e2e",

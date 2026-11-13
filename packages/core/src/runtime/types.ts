@@ -4,6 +4,7 @@ import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import type { WorktreeRef } from '../worktree/worktree.js';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import type { WorkerPromptSource } from '../dispatch/worker-dispatch.js';
+import type { WorkerSessionRecoveryReason } from '../dispatch/worker-acp-session.js';
 import type { PermissionRequest } from '../permission/permission-request.js';
 
 import type { EnsembleSessionState } from '../profile/types.js';
@@ -33,6 +34,15 @@ export interface WorkerFailureRecord {
   error: string;
   issueUrl: string;
   kind: string;
+}
+
+export interface WorkerSessionRecoveredNotification {
+  workerId: string;
+  name: string;
+  kind: string;
+  reason: WorkerSessionRecoveryReason;
+  acpSessionId: string;
+  acpCwd: string;
 }
 
 export type InboxMessage =

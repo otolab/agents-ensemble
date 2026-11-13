@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { openWorkerAcpSession } from './worker-acp-session.js';
+import { AcpSessionConfigOptionError } from '../acp/acp-client.js';
+import {
+  isUnrecoverableAcpSessionHistoryError,
+  openWorkerAcpSession,
+} from './worker-acp-session.js';
 
 const TEST_WORKTREE = {
   path: '/tmp/issue-worktree',
@@ -78,5 +82,61 @@ describe('openWorkerAcpSession', () => {
         connectAcp: vi.fn(),
       }),
     ).rejects.toThrow(/resume cwd mismatch/);
+  });
+
+  it('records when a saved session failed to load and a new session was created', async () => {
+    const loadSession = vi.fn().mockRejectedValue(new Error('thread unavailable'));
+    const newSession = vi.fn().mockResolvedValue('sess-new');
+    const session = await openWorkerAcpSession({
+      issueUrl: TEST_WORKTREE.issue.url,
+      worktree: TEST_WORKTREE,
+      resumeAcpSessionId: 'sess-old',
+      bridge: {
+        loadSession,
+        newSession,
+        close: vi.fn(),
+      } as never,
+    });
+
+    expect(session.sessionId).toBe('sess-new');
+    expect(session.resumed).toBe(false);
+    expect(session.recovery).toEqual({
+      reason: 'session_load_failed',
+      previousSessionId: 'sess-old',
+      newSessionId: 'sess-new',
+    });
+    expect(newSession).toHaveBeenCalledWith(TEST_WORKTREE.path);
+  });
+});
+
+describe('isUnrecoverableAcpSessionHistoryError', () => {
+  it('matches the provider-encrypted thread history error narrowly', () => {
+    expect(
+      isUnrecoverableAcpSessionHistoryError(
+        new Error(
+          "The current provider can't read this thread's earlier reasoning, which another provider or account encrypted. Start a new thread.",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isUnrecoverableAcpSessionHistoryError(
+        new Error(
+          "The current provider can’t read this thread’s earlier reasoning, which a different account encrypted.",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not classify generic errors or intentional resume option rejection', () => {
+    const errorMessage =
+      "The current provider can't read this thread's earlier reasoning, which another provider encrypted.";
+    expect(
+      isUnrecoverableAcpSessionHistoryError(new Error('prompt timed out')),
+    ).toBe(false);
+    expect(
+      isUnrecoverableAcpSessionHistoryError(
+        new AcpSessionConfigOptionError(errorMessage),
+      ),
+    ).toBe(false);
   });
 });

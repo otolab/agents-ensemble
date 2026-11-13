@@ -30,7 +30,10 @@
 | `@agents-ensemble/cli` | e2e | `pnpm --filter @agents-ensemble/cli test:e2e` | 一部のみ。PTY suites を個別に実行 | 先に `pnpm build` が必要。PTY suites は POSIX と Python 3 の標準 `pty` モジュールが必要。Pi TTY suites は localhost bind と Git も使う。Issue workflow suite は `test-acp.yaml`、Issue URL、repo、conductor 認証、利用可能な ACP 実行環境が必要 |
 | `@agents-ensemble/operator-agent` | unit | `pnpm --filter @agents-ensemble/operator-agent test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、事前の core build、書き込み可能な repository `.tmp/`、ローカル UDS。外部 agent / service は不要 |
 | `.github/scripts` | Node test | `pnpm test:release-workflow` | はい | Node.js 22 と Git。テスト用の一時 Git repository を使い、GitHub には接続しない |
+| `scripts/remote-ensemble-issue.test.mjs` | 補助 Node test | `node --test scripts/remote-ensemble-issue.test.mjs` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Bash 3.2+、POSIX shell、fake SSH / gcloud / tmux fixture。Python 3 の標準 `pty` module があれば TTY 経路も実行する。実 SSH / gcloud 接続・認証は行わない |
 | `scripts/pi` | Node test | `node --test scripts/pi/cached-auth.test.mjs` | いいえ | Node.js。Linux 固有の PID namespace / procfs を検証する2ケースは非Linuxで skip。CI 対応は Issue #475 の範囲 |
+
+`remote-ensemble-issue.test.mjs` は、引用符付き gcloud argv、`--project` などの値、remote command / TTY option と `--` separator の位置、TTY attach、session の再利用、同時起動、実行ファイルの欠落・実行権限不足、remote PATH に `ensemble` がない場合の失敗、Node が PATH にない tmux pane での起動失敗と runtime PATH を戻す wrapper、pane command の即時終了、tmux が dead pane と報告する状態を確認する。fake gcloud は受け取った argv を検査してから生成された remote command をローカル shell で実行し、認証や SSH 接続を行わない。fake tmux は pane command の process 生存を追跡し、起動失敗時に session が残らない動きを模擬する。実 gcloud の option parser、認証、接続先固有の tmux / TTY 設定の確認は、この suite の範囲外。
 
 Root scripts:
 
