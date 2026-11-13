@@ -5,6 +5,7 @@ export type {
   OperatorReconnectEvent,
   WorkerCompletedEvent,
   WorkerFailedEvent,
+  WorkerSessionRecoveredEvent,
   PermissionPendingEvent,
   PermissionStallEvent,
   HarnessConnectivityRecoveredEvent,

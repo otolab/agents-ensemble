@@ -42,6 +42,7 @@ const STATIC_SOURCE_PRIORITY: Record<string, number> = {
   permission: 0,
   'operator.reconnect': 0,
   'worker.failed': 1,
+  'worker.session.recovered': 1,
   'worker.completed': 2,
   github: 3,
   'permission.stall': 4,
@@ -64,6 +65,8 @@ export function eventSourceKey(event: SessionEvent): DispatchSourceKey {
       return `worker:${event.result.name}`;
     case 'worker.failed':
       return `worker:${event.failure.name}`;
+    case 'worker.session.recovered':
+      return `worker:${event.name}`;
     case 'github.update':
       return 'github';
     case 'harness.connectivity.recovered':
@@ -89,6 +92,8 @@ function staticEventPriority(event: SessionEvent): number {
       return STATIC_SOURCE_PRIORITY['permission.stall'];
     case 'worker.failed':
       return STATIC_SOURCE_PRIORITY['worker.failed'];
+    case 'worker.session.recovered':
+      return STATIC_SOURCE_PRIORITY['worker.session.recovered'];
     case 'worker.completed':
       return STATIC_SOURCE_PRIORITY['worker.completed'];
     case 'github.update':

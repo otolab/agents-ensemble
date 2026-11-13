@@ -95,6 +95,7 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | `cli-version.test.ts` の `describe.skipIf` | package 単独の unit 実行時に build artifact がない場合、dist CLI を起動できない | `pnpm build` 後に再実行。CI は build 済みのためこの skip に入らない |
 | `resolve-bundled-acp-bin.test.ts` の optional preset ごとの `describe.skipIf` | 対応する ACP optional dependency がインストールされていない場合、その package 内の実行ファイル解決だけは確認できない。optional package 不在時の fallback は別テストで検証する | optional dependency を含めて `pnpm install` し、対象 workspace の unit suite を再実行 |
 | CLI TTY e2e の Windows `skipIf` | Python 標準 `pty` と POSIX process group に依存し、Windows では同じ PTY 条件を提供できない | Python 3 `pty` を備えた POSIX 環境で実行。CI は Ubuntu |
+| `export-session-bundle.test.ts` の symlink source test | Windows では file symlink 作成に Developer Mode または symlink privilege が必要な環境がある。権限がない場合は `EPERM` / `EACCES` で fixture を作れず、その場合だけ test が理由付きで skip する | POSIX では `pnpm --filter @agents-ensemble/core exec vitest run src/session/export-session-bundle.test.ts -t "does not follow symlink sources"`。Windows では Developer Mode を有効にするか symlink privilege のある account で同じコマンドを実行 |
 | `scripts/pi/cached-auth.test.mjs` の Linux 条件 skip | PID namespace / procfs の Linux 挙動を直接検証する2ケース | Linux 上で `node --test scripts/pi/cached-auth.test.mjs` を実行。CI 導入・対応は Issue #475 |
 
 棚卸し時点で、前提と再実行方法が上記のように定まった skip は意図的なものだった。不要な skip は見つからなかった。新しい環境 skip を加える場合、理由のない恒久 skip にせず、前提・理由・解除方法と必要なら追跡 Issue を同じ変更で記録する。

@@ -19,7 +19,6 @@ import {
 } from 'vitest';
 import { resolveEnsemblePaths } from '@agents-ensemble/core/operator-runtime';
 
-const PI_SESSION_ROOT = '.ensemble/pi/sessions';
 const PI_HISTORY_ENTRY_TYPE = 'agents-ensemble/conductor-message-history/v1';
 const ISSUE_URL = 'https://github.com/otolab/agents-ensemble/issues/653';
 const WORKER_PI_SESSION_ID = 'pi-acp-worker-fixture-session';
@@ -70,7 +69,98 @@ describe('ensemble session commands', () => {
     expect(result.stdout).toContain('show');
     expect(result.stdout).toContain('messages');
     expect(result.stdout).toContain('workers');
+    expect(result.stdout).toContain('export');
     expect(result.stdout).toContain('without starting an agent');
+  });
+
+  it('documents raw session export options and its secret warning', () => {
+    const result = runCli(['session', 'export', '--help']);
+
+    expect(result.status).toBe(0);
+    const help = result.stdout.replace(/\s+/gu, ' ');
+    expect(help).toContain('--output <dir>');
+    expect(help).toContain('--include-tool-calls');
+    expect(help).toContain('--summary <path>');
+    expect(help).toContain('--harness-log <path>');
+    expect(help).toContain('may contain secrets');
+  });
+
+  it('exports a worktree Pi transcript and Codex worker history with one command', async () => {
+    conductorAgentId = 'session-export-cli-worktree-fixture';
+    conductorCwd = join(
+      repoRoot,
+      '.ensemble',
+      'worktrees',
+      'issue-672',
+    );
+    await mkdir(conductorCwd, { recursive: true });
+    const entries = Array.from({ length: 101 }, (_, index) => ({
+      sendCount: index + 1,
+      dispatchSource: 'operator',
+      completedAt: 1_800_000_000_000 + index,
+      inbound: `turn-${String(index).padStart(3, '0')}-inbound`,
+      response: `turn-${index}-response`,
+    }));
+    await writeResumeStore({
+      preset: 'codex',
+      acpCwd: WORKER_CODEX_CWD,
+      acpSessionId: WORKER_CODEX_SESSION_ID,
+    });
+    await writeRelatedYaml();
+    await writePiHistory(entries);
+    await writeCodexAcpWorkerHistory();
+
+    const outputDirectory = join(tempRoot, 'session-bundle');
+    const result = runCli(
+      [
+        'session',
+        'export',
+        conductorAgentId,
+        '--repo-root',
+        repoRoot,
+        '--output',
+        outputDirectory,
+        '--json',
+      ],
+      { CODEX_HOME: join(homeRoot, '.codex') },
+    );
+
+    expect(result.status).toBe(0);
+    const exported = JSON.parse(result.stdout);
+    expect(exported.status).toBe('complete');
+    expect(exported.manifest.session).toMatchObject({
+      conductorAgentId,
+      repoRoot,
+      conductorCwd,
+      backend: 'pi',
+      workers: [
+        {
+          name: 'implementer',
+          preset: 'codex',
+          acpCwd: WORKER_CODEX_CWD,
+        },
+      ],
+    });
+    const piTranscript = await readFile(
+      join(outputDirectory, 'conductor/pi-transcript.jsonl'),
+      'utf8',
+    );
+    expect(piTranscript).toContain('turn-000-inbound');
+    expect(piTranscript).toContain('turn-100-inbound');
+
+    const workerBundlePath =
+      exported.manifest.session.workers[0].bundlePath;
+    const workerHistory = JSON.parse(
+      await readFile(join(outputDirectory, workerBundlePath), 'utf8'),
+    );
+    expect(workerHistory).toMatchObject({
+      status: 'supported',
+      worker: 'implementer',
+      sourceFiles: expect.arrayContaining([
+        expect.stringContaining('rollout-'),
+      ]),
+    });
+    expect(workerHistory.messages.length).toBeGreaterThan(0);
   });
 
   it('documents the timeline inputs and raw diagnostic output', () => {
@@ -416,10 +506,13 @@ describe('ensemble session commands', () => {
   });
 
   it('reports missing provider, summary, and harness log sources explicitly', async () => {
-    await rm(join(conductorCwd, PI_SESSION_ROOT), {
-      recursive: true,
-      force: true,
-    });
+    await rm(
+      resolveEnsemblePaths({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+      }).piSessionsDir,
+      { recursive: true, force: true },
+    );
     const result = runCli([
       'session',
       'timeline',
@@ -796,6 +889,24 @@ describe('ensemble session commands', () => {
     expect(text.stdout).not.toContain('THINKING_SECRET');
   });
 
+  it.each(['running', 'exit'] as const)(
+    'reads non-empty Pi provider history while the saved session is %s',
+    async (harnessPhase) => {
+      await writeResumeStore({ harnessPhase });
+      const result = runCli([
+        'session',
+        'messages',
+        conductorAgentId,
+        '--repo-root',
+        repoRoot,
+        '--json',
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout).messages).toHaveLength(1);
+    },
+  );
+
   it('reads Pi ACP worker messages from the fixture in JSON and text', async () => {
     await writeResumeStore({
       preset: 'pi',
@@ -1075,6 +1186,8 @@ describe('ensemble session commands', () => {
       acpCwd?: string;
       acpSessionId?: string;
       issueUrl?: string;
+      harnessPhase?: 'running' | 'exit';
+      conductorBackend?: 'pi' | 'cursor';
     } = {},
   ): Promise<void> {
     const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
@@ -1087,7 +1200,7 @@ describe('ensemble session commands', () => {
         {
           version: 1,
           conductorAgentId,
-          conductorBackend: 'pi',
+          conductorBackend: options.conductorBackend ?? 'pi',
           conductorCwd,
           harnessSocketPath: join(tempRoot, 'missing-harness.sock'),
           issueUrl: options.issueUrl ?? ISSUE_URL,
@@ -1124,8 +1237,8 @@ describe('ensemble session commands', () => {
                 acpModelConfigDigest: ACP_MODEL_CONFIG_DIGEST_SECRET,
               }
             : {}),
-          lifecycle: 'closed',
-          harnessPhase: 'close',
+          lifecycle: options.harnessPhase === 'exit' ? 'exited' : 'closed',
+          harnessPhase: options.harnessPhase ?? 'close',
           updatedAt: 1_800_000_000_010,
         },
         null,
@@ -1258,7 +1371,10 @@ describe('ensemble session commands', () => {
       import.meta.url,
     );
     const { SessionManager } = await import(piPackageEntry.href);
-    const sessionDir = join(conductorCwd, PI_SESSION_ROOT);
+    const sessionDir = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+    }).piSessionsDir;
     const manager = SessionManager.create(conductorCwd, sessionDir, {
       id: conductorAgentId,
     });

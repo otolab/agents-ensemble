@@ -161,6 +161,7 @@ describe('operator-agent live Open Question tools', () => {
       backend: 'pi',
       conductorAgentId: 'agent-live',
       cwd: conductorCwd,
+      repoRoot,
       query: { limit: 1, order: 'asc' },
     });
 
@@ -237,6 +238,7 @@ describe('operator-agent live Open Question tools', () => {
       backend: 'pi',
       conductorAgentId: 'agent-offline',
       cwd: conductorCwd,
+      repoRoot,
       query: { limit: 20, order: 'desc' },
     });
     await expect(
