@@ -54,16 +54,18 @@ interface PiProviderAuthStatus {
 
 将来の `mode` は `oauth_browser` / `oauth_manual` を `oauth`、`api_key_stored` を `api_key`、`command_delegated` を `command` として示す。`environment` はそのまま `environment` とする。`project_override` は mode にせず、実際に project 層の credential が選ばれた場合の `scope: 'project'` で表す。process 環境変数など user / project に属さない場合は `scope` を省略する。
 
+Issue #682 の status もこの対応を使う。`api_key_stored` は taxonomy 上の識別子であり、status の機械可読な `mode` 値は `api_key` とする。既存の `source` は出所として引き続き維持する。
+
 ### 3. 復旧 hint の対応表
 
 次の表は mode-aware hint の設計案である。現行 Pi hint は source を判別せず、provider login、auth file、環境変数、`/reconnect` または session 再開を共通案内する。
 
-| effective mode / scope | 次に案内する操作 |
+| status mode / scope（taxonomy ID） | 次に案内する操作 |
 |------------------------|------------------|
-| `oauth_browser` / `oauth_manual`（status 上は `oauth`） | Pi は `ensemble auth login --provider <provider>`、Cursor は `ensemble auth login` を再実行する。provider が提示する browser / URL / device code / manual code の flow を完了する。保存後に flow の違いを判別できないため、両者で同じ案内にする |
-| `api_key_stored` | TTY の secret prompt で user credential を更新する。API key を command line や hint に含めない |
-| `command_delegated` | 信頼できる resource root の command 設定・認証元を確認する。status / hint で command、stdout、stderr を表示しない |
-| `environment` | Pi は provider の環境変数名、Cursor は `CURSOR_API_KEY` を示し、値の設定・ローテーションを促す。値は表示しない |
+| `mode=oauth`（`oauth_browser` / `oauth_manual`） | Pi は `ensemble auth login --provider <provider>`、Cursor は `ensemble auth login` を再実行する。provider が提示する browser / URL / device code / manual code の flow を完了する。保存後に flow の違いを判別できないため、両者で同じ案内にする |
+| `mode=api_key`（`api_key_stored`） | TTY では `ensemble auth login --provider <provider>` の secret prompt で user credential を更新する。非対話時は Issue #682 が定める user 層の非対話入力経路を案内する。正確な option が決まるまでは flag 名を推測せず、API key を command line や hint に含めない |
+| `mode=command`（`command_delegated`） | 信頼できる resource root の command 設定・認証元を確認する。status / hint で command、stdout、stderr を表示しない |
+| `mode=environment` | Pi は provider の環境変数名、Cursor は `CURSOR_API_KEY` を示し、値の設定・ローテーションを促す。値は表示しない |
 | `scope=project` + API key / command | project 側で選ばれている値を確認・更新する。user `auth login` が effective credential を変えない場合があると伝える |
 | `scope=project` + OAuth | project OAuth は unsupported と明示し、project entry を除去して user 層で login するよう案内する |
 | source / mode 不明 | credential を削除する操作へ誘導せず、設定層の確認を促す共通 hint にする |
@@ -84,11 +86,14 @@ status に載せてよいのは provider、configured 状態、source、mode / s
 
 `!command` の stdout は Pi runtime に credential として返すだけにし、失敗時も command 本文・出力・cause の詳細を log に複製しない。
 
+現行の [`formatPiCommandResolutionError`](../../packages/core/src/conductor/conductor-pi-auth.ts) は設定された command と `cause.message` を Error message に含める。設定値や cause に秘密が含まれると、エラーを表示・記録する経路で露出するおそれがある。この PR では実装を変更せず、Issue #683 で command、stdout / stderr、cause、credential を利用者向け error、session / harness log、recovery report、終了 JSON に含めない要件と、synthetic な秘密値を使った非露出テストを追跡する。
+
 ### 5. `!command` 登録を再検討できる条件
 
 ADR 0028 と Issue #356 の移譲・非スコープ方針は、command 登録を常に禁止する判断ではない。Epic #679 で登録導線を再検討するときは、次の条件を満たす設計にする。
 
-- command を登録する操作を明示し、登録時や `auth status` では command を実行しない。実行は provider request に必要なときだけ Pi runtime に委譲する。
+- command を登録する操作を明示し、登録時や `auth status` では command を実行しない。登録時に opt-out 可能な dry-run を既定実行する案も採らない。登録時には command 文字列と書込先など実行を伴わない項目だけを検証し、実行は provider request に必要なときだけ Pi runtime に委譲する。
+- dry-run など明示的な検証操作が将来必要になった場合は、登録フローとは別の設計として扱い、実行権限の警告と秘密値の非出力要件を定めてから提案する。
 - 書込先の scope を利用者に示す。user 層を既定とし、project 層へ書く操作は明示指定を必要とする。通常の `ensemble auth login` は user credential の書込先を保つ。
 - `!command` を単なる token 値として扱わない。command は設定に書かれた実行可能な内容であり、その実行結果も credential として機密扱いする。
 - command は conductor process の shell / OS user / 環境で実行される。harness の worker permission や追加 sandbox が保護境界になるとは扱わない。project の Pi resource を含め、実行対象は operator が信頼した設定でなければならない。
