@@ -96,11 +96,38 @@ OpenSSH 互換 client では接続先を最後に置きます。`ssh -J bastion 
 
 TTY は script が自動で選びます。手動で OpenSSH の `-t` / `-T`、gcloud の `--command`、TTY 用の `--ssh-flag` を指定しないでください。Issue は番号、`#番号`、GitHub Issue URL を指定できます。追加の `ensemble issue` 引数は script 呼び出しの `--` の後に置くと、空白や shell 記号を含めてそのまま渡されます。`ENSEMBLE_REMOTE_ENSEMBLE` でリモートの実行ファイル path を指定でき、省略時は `ensemble` を PATH から探します。
 
+`gcloud compute ssh --command` は通常 non-interactive shell で remote command を実行します。Google の例では、対話環境を使うには `bash -i -c` のように shell 自体を明示し、SSH に `-t` を渡しています。この script は tmux attach 用の PTY を確保するため `-t` を付けますが、対話 shell は起動しません。そのため、nvm などを shell 初期化ファイルで有効にしていると、対話 shell では見つかる `ensemble` が script の起動時には PATH にないことがあります。[gcloud の仕様](https://docs.cloud.google.com/sdk/gcloud/reference/compute/ssh)を参照してください。
+
+新規 session の起動で `remote executable not found or not executable` が出た場合、この script の事前確認が tmux pane を作る前に失敗しています。まず SSH remote command の PATH から `ensemble` が見えるかを確認してください。absolute path を指定してこの確認を通した後も pane がすぐ終了する場合は、Node の shebang interpreter など実行時に必要なものが tmux 側の PATH にあるか確認します。
+
+tmux は server 起動時の global environment と session environment から pane の環境を組み立てます。`update-environment` に含めた変数は client から更新されますが、既定のリストに `PATH` は含まれません。すでに動いている tmux server が古い PATH を持っている場合もあるため、`tmux show-environment -g PATH` と `tmux show-environment -t agents-ensemble-127 PATH` で確認できます（[tmux の環境変数仕様](https://man.openbsd.org/tmux.1#GLOBAL_AND_SESSION_ENVIRONMENT)、[既定の update-environment](https://github.com/tmux/tmux/blob/master/options-table.c#L1242-L1251)）。
+
+Node version manager を使う場合は、リモートで起動する wrapper に必要な Node の bin directory を PATH へ足し、その wrapper を `ENSEMBLE_REMOTE_ENSEMBLE` に指定すると安定します。たとえば nvm 配下に global install した `ensemble` なら、SSH 先で次の wrapper を作ります（Node の version directory は実際の環境に合わせてください）。
+
+```sh
+mkdir -p "$HOME/bin"
+cat > "$HOME/bin/ensemble-with-node" <<'EOF'
+#!/bin/sh
+node_bin="$HOME/.nvm/versions/node/v22.14.0/bin"
+PATH="$node_bin:$PATH"
+export PATH
+exec "$node_bin/ensemble" "$@"
+EOF
+chmod +x "$HOME/bin/ensemble-with-node"
+```
+
+wrapper 自体は `/bin/sh` など固定パスの interpreter で起動し、`node` を必要とする `ensemble` を実行する前に PATH を整えます。nvm の shell 初期化や tmux server が保持している PATH に頼らず、pane 内で実行環境を補えます。`ENSEMBLE_REMOTE_ENSEMBLE` には wrapper のリモート側 absolute path を設定してください。`$HOME` は script が展開しないため、値にはリモートの実 path を使います。実行ファイルがすでに non-interactive SSH と tmux の両方から使えるなら、wrapper は不要です。
+
+```bash
+export ENSEMBLE_REMOTE_ENSEMBLE='/home/your-user/bin/ensemble-with-node'
+scripts/remote-ensemble-issue.sh /srv/agents-ensemble 687
+```
+
 ローカルの stdin と stdout が両方 TTY の場合は OpenSSH に `-t`、gcloud に `--ssh-flag=-t` を渡して tmux に attach します。それ以外は `-T` 相当で detached 起動し、接続成功後に再実行用の command を stderr に表示します。同じ directory と Issue で再実行・同時実行しても、同じ tmux session を使って二重起動を防ぎます。
 
-新規起動前に remote executable の存在と実行権限を確認し、session 作成または再利用後は約1秒待って session と pane の生存を確認します。起動できない、または確認中に終了した場合は非ゼロで終了し、ready とは表示しません。この確認は起動直後の失敗を検出するもので、その後の process の継続までは保証しません。session 名は directory の basename の英数字・`_`・`-` 以外を `-` に置き換えた値と Issue 番号から作ります。同じ basename、または置換後の値が一致する別 directory は同じ session 名になります。
+新規起動前に remote executable の存在と実行権限を確認し、session 作成または再利用後は約1秒待って session と pane の生存を確認します。実行ファイルが見つからない場合は `ENSEMBLE_REMOTE_ENSEMBLE` の設定を案内します。起動できない、または確認中に終了した場合は非ゼロで終了し、ready とは表示しません。この確認は起動直後の失敗を検出するもので、その後の process の継続までは保証しません。session 名は directory の basename の英数字・`_`・`-` 以外を `-` に置き換えた値と Issue 番号から作ります。同じ basename、または置換後の値が一致する別 directory は同じ session 名になります。
 
-接続先の非対話 SSH 環境から `ensemble`・`tmux` と必要な認証設定を利用できることを確認してください。追加 prompt がない接続を推奨します。mock test は引用符付き gcloud argv、remote command / TTY option の配置、再実行、同時起動、executable の欠落・実行不可、起動直後の終了を確認します。fake gcloud は認証や実接続を行わず、gcloud CLI 自体の option parser や実環境の SSH / tmux / terminal 設定も検証しません。利用環境では、TTY から起動して tmux を detach した後に再接続できることと、TTY のない実行が detached session を残すことを手動確認してください。
+接続先の非対話 SSH 環境から `ensemble`・`tmux` と必要な認証設定を利用できることを確認してください。追加 prompt がない接続を推奨します。mock test は引用符付き gcloud argv、remote command / TTY option の配置、再実行、同時起動、remote PATH に `ensemble` がない場合の失敗、Node が PATH にない pane での起動失敗と wrapper による復旧、起動直後の終了を確認します。fake gcloud は認証や実接続を行わず、gcloud CLI 自体の option parser や実環境の SSH / tmux / terminal 設定も検証しません。利用環境では、TTY から起動して tmux を detach した後に再接続できることと、TTY のない実行が detached session を残すことを手動確認してください。
 
 ## リリース
 

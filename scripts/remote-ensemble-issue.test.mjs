@@ -8,6 +8,7 @@ import {
   readFile,
   realpath,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -249,6 +250,7 @@ test('fails before tmux when the remote executable is missing or not executable'
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /remote executable not found or not executable/);
+    assert.match(result.stderr, /Set ENSEMBLE_REMOTE_ENSEMBLE/);
     assertNoStartupSuccess(result);
   }
   assert.equal(
@@ -257,6 +259,74 @@ test('fails before tmux when the remote executable is missing or not executable'
     ).length,
     0,
   );
+});
+
+test('uses a remote launcher to restore the Node PATH for a non-interactive tmux pane', async () => {
+  const fixture = await createFixture();
+  const remoteDir = join(fixture.root, 'agents-ensemble');
+  await mkdir(remoteDir);
+
+  const remoteEnv = {
+    ...fixture.env,
+    ENSEMBLE_TEST_REMOTE_PATH: fixture.remoteBinDir,
+  };
+  delete remoteEnv.ENSEMBLE_REMOTE_ENSEMBLE;
+
+  const missingFromPath = runScript([remoteDir, '693'], remoteEnv);
+  assert.notEqual(missingFromPath.status, 0);
+  assert.match(
+    missingFromPath.stderr,
+    /remote executable not found or not executable: ensemble/,
+  );
+  assert.match(missingFromPath.stderr, /Set ENSEMBLE_REMOTE_ENSEMBLE/);
+  assert.match(
+    missingFromPath.stderr,
+    /make node available in the tmux pane PATH/,
+  );
+  assertNoStartupSuccess(missingFromPath);
+  assert.equal(
+    (await readJsonLines(fixture.tmuxLog)).filter(
+      ([command]) => command === 'new-session',
+    ).length,
+    0,
+  );
+
+  const directExecutable = runScript([remoteDir, '694'], {
+    ...remoteEnv,
+    ENSEMBLE_REMOTE_ENSEMBLE: fixture.ensemblePath,
+  });
+
+  assert.notEqual(directExecutable.status, 0);
+  assert.match(directExecutable.stderr, /tmux session did not keep a running pane/);
+  assert.match(directExecutable.stderr, /runtime interpreter.*tmux pane PATH/);
+  assertNoStartupSuccess(directExecutable);
+  assert.equal((await readJsonLines(fixture.ensembleLog)).length, 0);
+
+  const launcherPath = join(fixture.root, 'ensemble with nvm');
+  await writeFile(
+    launcherPath,
+    [
+      '#!/bin/sh',
+      `PATH=${quoteShell(fixture.nvmBinDir)}:"$PATH"`,
+      'export PATH',
+      `exec ${quoteShell(fixture.ensemblePath)} "$@"`,
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  await chmod(launcherPath, 0o755);
+
+  const launched = runScript([remoteDir, '695'], {
+    ...remoteEnv,
+    ENSEMBLE_REMOTE_ENSEMBLE: launcherPath,
+  });
+  assert.equal(launched.status, 0, launched.stderr);
+  assert.deepEqual(await readJsonLines(fixture.ensembleLog), [
+    {
+      cwd: await realpath(remoteDir),
+      args: ['issue', '695'],
+    },
+  ]);
 });
 
 test('fails when the tmux pane command exits immediately', async () => {
@@ -366,11 +436,15 @@ async function createFixture({
   temporaryRoots.push(root);
 
   const binDir = join(root, 'bin');
+  const nvmBinDir = join(root, 'nvm bin');
+  const remoteBinDir = join(root, 'remote-bin');
   const stateDir = join(root, 'state');
   const remoteHome = join(root, 'remote-home');
   const fakeGcloudDir = join(root, "fake cloud's sdk");
   await Promise.all([
     mkdir(binDir),
+    mkdir(nvmBinDir),
+    mkdir(remoteBinDir),
     mkdir(stateDir),
     mkdir(remoteHome),
     mkdir(fakeGcloudDir),
@@ -379,7 +453,8 @@ async function createFixture({
   const sshPath = join(binDir, 'fake-ssh');
   const gcloudPath = join(fakeGcloudDir, 'gcloud');
   const tmuxPath = join(binDir, 'tmux');
-  const ensemblePath = join(root, 'fake ensemble');
+  const tmuxProgramPath = join(root, 'fake-tmux.cjs');
+  const ensemblePath = join(nvmBinDir, 'ensemble');
   const gcloudLog = join(root, 'gcloud.jsonl');
   const sshLog = join(root, 'ssh.jsonl');
   const tmuxLog = join(root, 'tmux.jsonl');
@@ -398,7 +473,11 @@ if (!remoteCommand) process.exit(2);
 
 const result = spawnSync('/bin/sh', ['-c', remoteCommand], {
   cwd: process.env.ENSEMBLE_TEST_REMOTE_HOME,
-  env: { ...process.env, ENSEMBLE_TEST_CLIENT_ID: String(process.pid) },
+  env: {
+    ...process.env,
+    PATH: process.env.ENSEMBLE_TEST_REMOTE_PATH || process.env.PATH,
+    ENSEMBLE_TEST_CLIENT_ID: String(process.pid),
+  },
   stdio: 'inherit',
 });
 process.exit(result.status ?? 1);
@@ -442,7 +521,11 @@ if (!gcloudArgs.some((arg) => arg === '--ssh-flag=-t' || arg === '--ssh-flag=-T'
 
 const result = spawnSync('/bin/sh', ['-c', commandArg.slice('--command='.length)], {
   cwd: process.env.ENSEMBLE_TEST_REMOTE_HOME,
-  env: { ...process.env, ENSEMBLE_TEST_CLIENT_ID: String(process.pid) },
+  env: {
+    ...process.env,
+    PATH: process.env.ENSEMBLE_TEST_REMOTE_PATH || process.env.PATH,
+    ENSEMBLE_TEST_CLIENT_ID: String(process.pid),
+  },
   stdio: 'inherit',
 });
 process.exit(result.status ?? 1);
@@ -450,9 +533,8 @@ process.exit(result.status ?? 1);
     'utf8',
   );
   await writeFile(
-    tmuxPath,
-    `#!/usr/bin/env node
-const { existsSync, openSync, closeSync, readFileSync, readdirSync, unlinkSync, writeFileSync, appendFileSync } = require('node:fs');
+    tmuxProgramPath,
+    `const { existsSync, openSync, closeSync, readFileSync, readdirSync, unlinkSync, writeFileSync, appendFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { spawn } = require('node:child_process');
 
@@ -462,7 +544,7 @@ appendFileSync(logPath, JSON.stringify(args) + '\\n');
 const stateDir = process.env.ENSEMBLE_TEST_STATE_DIR;
 const targetIndex = args.indexOf('-t') + 1;
 const sessionIndex = args.indexOf('-s') + 1;
-const rawSession = args[args[0] === 'new-session' ? sessionIndex : targetIndex];
+const rawSession = args[0] === 'new-session' ? args[sessionIndex] : args[targetIndex];
 const session = rawSession.startsWith('=') ? rawSession.slice(1) : rawSession;
 const statePath = join(stateDir, session + '.session');
 
@@ -561,6 +643,13 @@ if (args[0] !== 'new-session') {
     'utf8',
   );
   await writeFile(
+    tmuxPath,
+    `#!/bin/sh
+exec ${quoteShell(process.execPath)} ${quoteShell(tmuxProgramPath)} "$@"
+`,
+    'utf8',
+  );
+  await writeFile(
     ensemblePath,
     `#!/usr/bin/env node
 const { appendFileSync } = require('node:fs');
@@ -580,17 +669,29 @@ setInterval(() => {}, 1000);
       chmod(path, 0o755),
     ),
   );
+  await symlink(process.execPath, join(nvmBinDir, 'node'));
+  await Promise.all(
+    [
+      ['tmux', tmuxPath],
+      ['sed', '/usr/bin/sed'],
+      ['tr', '/usr/bin/tr'],
+      ['sleep', '/bin/sleep'],
+    ].map(([name, path]) => symlink(path, join(remoteBinDir, name))),
+  );
 
   return {
     root,
     ensembleLog,
+    ensemblePath,
     gcloudLog,
     gcloudPath,
+    nvmBinDir,
+    remoteBinDir,
     sshLog,
     tmuxLog,
     env: {
       ...process.env,
-      PATH: `${binDir}:${process.env.PATH ?? ''}`,
+      PATH: `${binDir}:${nvmBinDir}:${process.env.PATH ?? ''}`,
       ENSEMBLE_REMOTE_SSH: `${sshPath} -J bastion user@remote`,
       ENSEMBLE_REMOTE_ENSEMBLE: ensemblePath,
       ENSEMBLE_TEST_ENSEMBLE_LOG: ensembleLog,
@@ -602,6 +703,7 @@ setInterval(() => {}, 1000);
       ENSEMBLE_TEST_START_BARRIER: String(startBarrier),
       ENSEMBLE_TEST_STATE_DIR: stateDir,
       ENSEMBLE_TEST_TMUX_LOG: tmuxLog,
+      ENSEMBLE_TEST_REMOTE_PATH: '',
     },
   };
 }
