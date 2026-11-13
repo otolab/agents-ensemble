@@ -68,7 +68,7 @@ harness 横断設定（profile 既定・**ACP（preset・env・model catalog / t
 - `agents.<kind>` … agent の modular-prompt 拡張（`prompt` インライン / `promptFile` 外部 YAML）。未指定時は ensemble base のみ
 - `workers` … セッションに登録する worker（`name` + `kind`）。ACP attach は `session.lazyWorkers` によりセッション開始時または初回指示時に行う。`- ping` は name=kind の省略形
 - `workers[].workspace` … **任意**。その worker の ACP 起動 cwd（`agent acp` の `session/new` / `session/load`）。**Issue worktree（`--repo-root` + Issue から導出）とは別概念**。省略時はセッション共通の Issue worktree を使う。`~` / `~/...` は homedir() で展開。相対パスは profile ディレクトリ（`./` / `../`）または repo-root 基準
-- `workers[].modelTag` … **任意**。その worker インスタンスが使う ACP model tier（`high` / `default` / `low` / `fast`）。省略時と kind 文字列 shorthand は `default`。worker 名や kind ごとの model ID は profile に書かない
+- `workers[].modelTag` … **任意**。その worker インスタンスが使う ACP model tier。組み込み team の推奨語は `high` / `default` / `low` / `lite` で、それ以外の文字列（空文字・空白のみを含む）も使えます。省略時と kind 文字列 shorthand は `default`。worker 名や kind ごとの model ID は profile に書かない
 - team profile に preset / spawn env / model ID の直書きはない。旧 `acp` / `workers[].acp` は引き続きエラー。ACP preset・spawn env・model catalog・tag mapping の正本は [ensemble config](config.md) の `acp` 設定
 - `conductor` … **任意**。`backend`（`cursor` | `pi`）、`builtinTools`、`piSkills`（Pi backend のみ）を指定。`builtinTools` / `piSkills` は省略・未指定は有効、`false` のみ無効。制御の正本は profile であり、`config.yaml` や worker ACP には同キーを設けない
 - Skill は profile に固定しない。materials で自然言語指示し、worker が必要に応じて読み込む

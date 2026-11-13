@@ -174,7 +174,7 @@ describe('computeAcpModelConfigDigest', () => {
             cursorFast: false,
           },
         },
-        tags: { high: 'strong' },
+        tags: { high: 'strong', lite: 'short', urgent: 'priority' },
       },
     };
     const digest = computeAcpModelConfigDigest(config);
@@ -218,7 +218,7 @@ describe('computeAcpModelConfigDigest', () => {
       ...config,
       acp: {
         ...config.acp,
-        tags: { high: 'another-model' },
+        tags: { high: 'strong', lite: 'short', urgent: 'other-model' },
       },
     };
 
@@ -273,6 +273,27 @@ describe('computeResumeFeasibilityConfigDigest', () => {
         path,
       ).toBe(digest);
     }
+  });
+
+  it('keeps arbitrary ACP tag mappings out of the resume feasibility digest', () => {
+    const config: EnsembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      acp: {
+        ...DEFAULT_ENSEMBLE_CONFIG.acp,
+        tags: { lite: 'short', urgent: 'priority' },
+      },
+    };
+    const changed: EnsembleConfig = {
+      ...config,
+      acp: {
+        ...config.acp,
+        tags: { lite: 'shorter', urgent: 'different' },
+      },
+    };
+
+    expect(computeResumeFeasibilityConfigDigest(changed)).toBe(
+      computeResumeFeasibilityConfigDigest(config),
+    );
   });
 
   it('changes when any critical config leaf changes', () => {
