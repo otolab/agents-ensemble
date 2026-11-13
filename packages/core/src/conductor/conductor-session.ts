@@ -994,6 +994,34 @@ async function runConductorSessionWithStartupGuard(
       eventQueue.enqueue({ type: 'worker.completed', result });
       scheduleSessionResumeStoreFlush();
     },
+    onWorkerSessionRecovered: async (notification) => {
+      workerSessions.set(notification.name, {
+        acpSessionId: notification.acpSessionId,
+        acpCwd: notification.acpCwd,
+        ...(workerAcpFingerprints.get(notification.name)
+          ? { acpSpawn: workerAcpFingerprints.get(notification.name) }
+          : {}),
+      });
+      try {
+        await flushSessionResumeStore();
+      } catch (error) {
+        reportResumeStoreFlushFailure(error);
+      }
+      const detail =
+        notification.reason === 'session_load_failed'
+          ? '保存済み ACP session を読み込めなかったため'
+          : '保存済み ACP thread の履歴を読めなかったため';
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: `worker.session.recovered name=${notification.name} kind=${notification.kind}: ${detail}新しい session で再開します。`,
+      });
+      eventQueue.enqueue({
+        type: 'worker.session.recovered',
+        name: notification.name,
+        kind: notification.kind,
+        reason: notification.reason,
+      });
+    },
     onWorkerFailed: (failure) => {
       sessionLogger.emit({ type: 'worker.failed', failure });
       eventQueue.enqueue({ type: 'worker.failed', failure });

@@ -398,6 +398,284 @@ describe('WorkerRuntime', () => {
     expect(runtime.attachedCount).toBe(1);
   });
 
+  it('replaces an unreadable resumed thread, bootstraps, then retries the conductor instruction once', async () => {
+    const inbox = new ConductorInbox();
+    const historyError = new Error(
+      "The current provider can't read this thread's earlier reasoning, which another provider or account encrypted. Start a new thread.",
+    );
+    const oldPromptSession = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stopReason: 'end_turn',
+        responseText: 'resumed',
+      })
+      .mockRejectedValueOnce(historyError);
+    const oldClose = vi.fn().mockResolvedValue(undefined);
+    const oldBridge = {
+      newSession: vi.fn(),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: oldPromptSession,
+      cancelSession: vi.fn(),
+      close: oldClose,
+    } as unknown as AcpBridge;
+    const newPromptSession = vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      responseText: 'ready',
+    });
+    const newSession = vi.fn().mockResolvedValue('sess-new');
+    const newClose = vi.fn().mockResolvedValue(undefined);
+    const newBridge = {
+      newSession,
+      loadSession: vi.fn(),
+      promptSession: newPromptSession,
+      cancelSession: vi.fn(),
+      close: newClose,
+    } as unknown as AcpBridge;
+    const connectAcp = vi
+      .fn()
+      .mockResolvedValueOnce(oldBridge)
+      .mockResolvedValueOnce(newBridge);
+    const onWorkerSessionRecovered = vi.fn();
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp,
+      onWorkerSessionRecovered,
+    });
+    const workerId = runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      prompt: { instructions: ['pong'] },
+      worktree: TEST_WORKTREE,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      resumeAcpSessionId: 'sess-old',
+    });
+
+    await runtime.waitForIdle();
+    await inbox.drain();
+    const resumePrompt = oldPromptSession.mock.calls[0]?.[1];
+
+    expect(runtime.sendWorkerMessage('ping-1', 'inspect the current issue')).toEqual({
+      status: 'sent',
+      worker: 'ping-1',
+    });
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    expect(oldPromptSession).toHaveBeenNthCalledWith(
+      2,
+      'sess-old',
+      'inspect the current issue',
+      expect.any(Object),
+    );
+    expect(oldClose).toHaveBeenCalledOnce();
+    expect(connectAcp).toHaveBeenCalledTimes(2);
+    expect(newSession).toHaveBeenCalledOnce();
+    expect(newSession).toHaveBeenCalledWith(TEST_WORKTREE.path);
+    expect(newPromptSession).toHaveBeenCalledTimes(2);
+    expect(newPromptSession.mock.calls[0]?.[0]).toBe('sess-new');
+    expect(newPromptSession.mock.calls[0]?.[1]).not.toBe(resumePrompt);
+    expect(newPromptSession.mock.calls[0]?.[1]).toContain('pong');
+    expect(newPromptSession.mock.calls[1]?.[0]).toBe('sess-new');
+    expect(newPromptSession.mock.calls[1]?.[1]).toBe(
+      'inspect the current issue',
+    );
+    expect(onWorkerSessionRecovered).toHaveBeenCalledWith({
+      workerId,
+      name: 'ping-1',
+      kind: 'ping',
+      reason: 'prompt_history_unreadable',
+      acpSessionId: 'sess-new',
+      acpCwd: TEST_WORKTREE.path,
+    });
+    expect(runtime.getAttached('ping-1')?.session.sessionId).toBe('sess-new');
+
+    await runtime.shutdown();
+    expect(newClose).toHaveBeenCalledOnce();
+  });
+
+  it('does not replace a resumed thread after a generic prompt error', async () => {
+    const inbox = new ConductorInbox();
+    const oldPromptSession = vi
+      .fn()
+      .mockResolvedValueOnce({ stopReason: 'end_turn' })
+      .mockRejectedValueOnce(new Error('prompt timed out'));
+    const oldBridge = {
+      newSession: vi.fn(),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: oldPromptSession,
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi.fn().mockResolvedValue(oldBridge);
+    const onWorkerSessionRecovered = vi.fn();
+    const runtime = new WorkerRuntime({
+      inbox,
+      connectAcp,
+      onWorkerSessionRecovered,
+    });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      worktree: TEST_WORKTREE,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      resumeAcpSessionId: 'sess-old',
+    });
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    runtime.sendWorkerMessage('ping-1', 'inspect the current issue');
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    expect(connectAcp).toHaveBeenCalledOnce();
+    expect(oldBridge.newSession).not.toHaveBeenCalled();
+    expect(onWorkerSessionRecovered).not.toHaveBeenCalled();
+    expect(runtime.getAttached('ping-1')?.session.sessionId).toBe('sess-old');
+    await runtime.shutdown();
+  });
+
+  it('does not create another replacement session after bootstrap fails', async () => {
+    const inbox = new ConductorInbox();
+    const historyError = new Error(
+      "The current provider can't read this thread's earlier reasoning, which another provider encrypted.",
+    );
+    const oldPromptSession = vi
+      .fn()
+      .mockResolvedValueOnce({ stopReason: 'end_turn' })
+      .mockRejectedValueOnce(historyError);
+    const oldBridge = {
+      newSession: vi.fn(),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: oldPromptSession,
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const newPromptSession = vi.fn().mockRejectedValue(historyError);
+    const newSession = vi.fn().mockResolvedValue('sess-new');
+    const newBridge = {
+      newSession,
+      loadSession: vi.fn(),
+      promptSession: newPromptSession,
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi
+      .fn()
+      .mockResolvedValueOnce(oldBridge)
+      .mockResolvedValueOnce(newBridge);
+    const runtime = new WorkerRuntime({ inbox, connectAcp });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      worktree: TEST_WORKTREE,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      resumeAcpSessionId: 'sess-old',
+    });
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    runtime.sendWorkerMessage('ping-1', 'inspect the current issue');
+    await runtime.waitForIdle();
+    await inbox.drain();
+    runtime.sendWorkerMessage('ping-1', 'try again');
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    expect(connectAcp).toHaveBeenCalledTimes(2);
+    expect(newSession).toHaveBeenCalledOnce();
+    expect(newPromptSession).toHaveBeenCalledTimes(2);
+    await runtime.shutdown();
+  });
+
+  it('lets a preempted instruction wait for recovery bootstrap without cancelling the closed thread', async () => {
+    const inbox = new ConductorInbox();
+    const historyError = new Error(
+      "The current provider can't read this thread's earlier reasoning, which another provider encrypted.",
+    );
+    const oldPromptSession = vi
+      .fn()
+      .mockResolvedValueOnce({ stopReason: 'end_turn' })
+      .mockRejectedValueOnce(historyError);
+    const oldBridge = {
+      newSession: vi.fn(),
+      loadSession: vi.fn().mockResolvedValue(undefined),
+      promptSession: oldPromptSession,
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    let resolveNewBridge!: (bridge: AcpBridge) => void;
+    const pendingBridge = new Promise<AcpBridge>((resolve) => {
+      resolveNewBridge = resolve;
+    });
+    const newPromptSession = vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      responseText: 'ready',
+    });
+    const newBridge = {
+      newSession: vi.fn().mockResolvedValue('sess-new'),
+      loadSession: vi.fn(),
+      promptSession: newPromptSession,
+      cancelSession: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AcpBridge;
+    const connectAcp = vi
+      .fn()
+      .mockResolvedValueOnce(oldBridge)
+      .mockReturnValueOnce(pendingBridge);
+    const runtime = new WorkerRuntime({ inbox, connectAcp });
+
+    runtime.start({
+      name: 'ping-1',
+      issueUrl: TEST_WORKTREE.issue.url,
+      kind: 'ping',
+      worktree: TEST_WORKTREE,
+      sessionState: {
+        workers: [{ name: 'ping-1', kind: 'ping' }],
+        kinds: ['ping'],
+      },
+      resumeAcpSessionId: 'sess-old',
+    });
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    runtime.sendWorkerMessage('ping-1', 'old instruction');
+    await vi.waitFor(() => expect(connectAcp).toHaveBeenCalledTimes(2));
+    expect(
+      runtime.sendWorkerMessage('ping-1', 'urgent instruction', {
+        preempt: true,
+      }),
+    ).toEqual({ status: 'preempted', worker: 'ping-1' });
+    expect(oldBridge.cancelSession).not.toHaveBeenCalled();
+
+    resolveNewBridge(newBridge);
+    await runtime.waitForIdle();
+    await inbox.drain();
+
+    expect(newPromptSession).toHaveBeenCalledTimes(2);
+    expect(newPromptSession.mock.calls[1]?.[0]).toBe('sess-new');
+    expect(newPromptSession.mock.calls[1]?.[1]).toBe('urgent instruction');
+    expect(
+      newPromptSession.mock.calls.some(
+        ([, prompt]) => prompt === 'old instruction',
+      ),
+    ).toBe(false);
+    await runtime.shutdown();
+  });
+
   it('preempts in-flight prompt and runs the new instruction', async () => {
     const inbox = new ConductorInbox();
     const completed: string[] = [];

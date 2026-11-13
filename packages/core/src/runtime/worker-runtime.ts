@@ -6,11 +6,14 @@ import {
   buildWorkerAttachPrompt,
   runAttachedWorkerPrompt,
   type AttachedWorker,
+  type AttachWorkerOptions,
 } from '../dispatch/attach-worker.js';
 import {
   cancelWorkerAcpPrompt,
   closeWorkerAcpSession,
+  isUnrecoverableAcpSessionHistoryError,
   type ConnectWorkerAcpFn,
+  type WorkerSessionRecovery,
 } from '../dispatch/worker-acp-session.js';
 import type { WorkerPromptSource } from '../dispatch/worker-dispatch.js';
 import type { ResolvedProfileMaterial } from '../profile/types.js';
@@ -22,6 +25,7 @@ import type {
 import type {
   WorkerPromptTelemetry,
   WorkerAcpUpdateTelemetry,
+  WorkerSessionRecoveredNotification,
   WorkerStateTelemetry,
   WorkerStartedInfo,
   WorkerStartParams,
@@ -43,6 +47,9 @@ export interface WorkerRuntimeOptions {
   /** integration の共有 bridge 注入時は false。 */
   ownsWorkerAcpConnections?: boolean;
   onPromptTelemetry?: (event: WorkerPromptTelemetry) => void;
+  onWorkerSessionRecovered?: (
+    notification: WorkerSessionRecoveredNotification,
+  ) => void | Promise<void>;
   onAcpUpdate?: (event: WorkerAcpUpdateTelemetry) => void;
   onWorkerState?: (event: WorkerStateTelemetry) => void;
 }
@@ -58,6 +65,10 @@ interface ResidentWorker {
   /** `session/cancel` 応答待ちの新指示。 */
   preemptInstruction?: string;
   cancelInFlight: boolean;
+  /** resumed thread からの新 session 切替は worker ごとに一度だけ。 */
+  sessionRecoveryAttempted: boolean;
+  /** 復旧中は閉じた thread への cancel を避け、bootstrap を完了させる。 */
+  sessionRecoveryPhase?: 'preparing' | 'bootstrap' | 'replay';
 }
 
 interface AttachingWorker {
@@ -291,7 +302,12 @@ export class WorkerRuntime {
         }
         if (!resident.cancelInFlight) {
           resident.cancelInFlight = true;
-          cancelWorkerAcpPrompt(resident.attached.session);
+          if (
+            resident.sessionRecoveryPhase !== 'preparing' &&
+            resident.sessionRecoveryPhase !== 'bootstrap'
+          ) {
+            cancelWorkerAcpPrompt(resident.attached.session);
+          }
         }
         return { status: 'preempted', worker: name };
       }
@@ -459,6 +475,177 @@ export class WorkerRuntime {
     });
   }
 
+  private workerAttachOptions(
+    started: WorkerStartedInfo,
+    resumeSavedSession = true,
+  ): AttachWorkerOptions {
+    return {
+      name: started.name,
+      issueUrl: started.issueUrl,
+      kind: started.kind,
+      prompt: started.prompt,
+      worktree: started.worktree,
+      sessionState: started.sessionState,
+      userInstructions: this.options.userInstructions,
+      resolvedWorkspacePath: started.resolvedWorkspacePath,
+      expectedResumeAcpCwd: started.expectedResumeAcpCwd,
+      expectedResumeAcpSpawn: started.expectedResumeAcpSpawn,
+      currentAcpSpawn: started.acpFingerprint,
+      ...(resumeSavedSession && started.resumeAcpSessionId
+        ? { resumeAcpSessionId: started.resumeAcpSessionId }
+        : {}),
+      connectAcp: this.options.connectAcp,
+      spawn: {
+        ...this.options.spawn,
+        ...started.spawn,
+      },
+      ownsBridge: this.options.ownsWorkerAcpConnections,
+      permissionHandler: this.options.inbox.createPermissionHandler(
+        started.workerId,
+      ),
+    };
+  }
+
+  private async attachStartedWorker(
+    started: WorkerStartedInfo,
+    resumeSavedSession = true,
+  ): Promise<AttachedWorker> {
+    return attachWorker(this.workerAttachOptions(started, resumeSavedSession));
+  }
+
+  private async notifyWorkerSessionRecovered(
+    resident: ResidentWorker,
+    recovery: WorkerSessionRecovery,
+  ): Promise<void> {
+    await this.options.onWorkerSessionRecovered?.({
+      workerId: resident.workerId,
+      name: resident.started.name,
+      kind: resident.started.kind,
+      reason: recovery.reason,
+      acpSessionId: recovery.newSessionId,
+      acpCwd: resident.attached.session.acpCwd,
+    });
+  }
+
+  private async recoverUnreadableResumedSession(
+    resident: ResidentWorker,
+  ): Promise<WorkerSessionRecovery | undefined> {
+    const previousSession = resident.attached.session;
+    if (
+      this.forceShutdownRequested ||
+      !previousSession.resumed ||
+      resident.sessionRecoveryAttempted
+    ) {
+      return undefined;
+    }
+
+    resident.sessionRecoveryAttempted = true;
+    const previousSessionId = previousSession.sessionId;
+    await closeWorkerAcpSession(previousSession);
+    if (this.forceShutdownRequested) return undefined;
+
+    const replacement = await this.attachStartedWorker(
+      resident.started,
+      false,
+    );
+    if (this.forceShutdownRequested) {
+      await closeWorkerAcpSession(replacement.session);
+      return undefined;
+    }
+
+    resident.attached = replacement;
+    const recovery: WorkerSessionRecovery = {
+      reason: 'prompt_history_unreadable',
+      previousSessionId,
+      newSessionId: replacement.session.sessionId,
+    };
+    await this.notifyWorkerSessionRecovered(resident, recovery);
+    return recovery;
+  }
+
+  private async runAttachedPrompt(
+    resident: ResidentWorker,
+    prompt: string,
+  ) {
+    return runAttachedWorkerPrompt(resident.attached, prompt, {
+      permissionHandler: this.options.inbox.createPermissionHandler(
+        resident.workerId,
+      ),
+      onUpdate: (update) => {
+        const sessionUpdate = update.update?.sessionUpdate;
+        if (typeof sessionUpdate === 'string' && sessionUpdate.length > 0) {
+          const toolName = extractAcpToolName(update.update);
+          this.emitAcpUpdate(
+            resident,
+            sessionUpdate,
+            update.sessionId,
+            toolName,
+            sessionUpdate === 'tool_call' ||
+              sessionUpdate === 'tool_call_update'
+              ? update.update
+              : undefined,
+          );
+        }
+      },
+    });
+  }
+
+  private async runPromptWithSessionRecovery(
+    resident: ResidentWorker,
+    prompt: string,
+    source: WorkerPromptSource,
+  ) {
+    try {
+      return {
+        result: await this.runAttachedPrompt(resident, prompt),
+        superseded: false,
+      };
+    } catch (error) {
+      if (
+        !isUnrecoverableAcpSessionHistoryError(error) ||
+        !resident.attached.session.resumed ||
+        resident.sessionRecoveryAttempted ||
+        this.forceShutdownRequested
+      ) {
+        throw error;
+      }
+
+      resident.sessionRecoveryPhase = 'preparing';
+      try {
+        const recovery = await this.recoverUnreadableResumedSession(resident);
+        if (!recovery || this.forceShutdownRequested) throw error;
+
+        resident.sessionRecoveryPhase = 'bootstrap';
+        const bootstrapPrompt = buildWorkerAttachPrompt(
+          this.workerAttachOptions(resident.started, false),
+          resident.attached.session,
+        );
+        const bootstrapResult = await this.runAttachedPrompt(
+          resident,
+          bootstrapPrompt,
+        );
+        if (this.forceShutdownRequested) {
+          return { result: bootstrapResult, superseded: false };
+        }
+
+        if (source === 'conductor') {
+          if (resident.preemptInstruction) {
+            return { result: bootstrapResult, superseded: true };
+          }
+          resident.sessionRecoveryPhase = 'replay';
+          return {
+            result: await this.runAttachedPrompt(resident, prompt),
+            superseded: false,
+          };
+        }
+
+        return { result: bootstrapResult, superseded: false };
+      } finally {
+        resident.sessionRecoveryPhase = undefined;
+      }
+    }
+  }
+
   private async attachAndInit(
     started: WorkerStartedInfo,
     firstInstruction?: string,
@@ -485,28 +672,7 @@ export class WorkerRuntime {
       kind: started.kind,
     });
     try {
-      const attached = await attachWorker({
-        name: started.name,
-        issueUrl: started.issueUrl,
-        kind: started.kind,
-        prompt: started.prompt,
-        worktree: started.worktree,
-        sessionState: started.sessionState,
-        resolvedWorkspacePath: started.resolvedWorkspacePath,
-        expectedResumeAcpCwd: started.expectedResumeAcpCwd,
-        expectedResumeAcpSpawn: started.expectedResumeAcpSpawn,
-        currentAcpSpawn: started.acpFingerprint,
-        resumeAcpSessionId: started.resumeAcpSessionId,
-        connectAcp: this.options.connectAcp,
-        spawn: {
-          ...this.options.spawn,
-          ...started.spawn,
-        },
-        ownsBridge: this.options.ownsWorkerAcpConnections,
-        permissionHandler: this.options.inbox.createPermissionHandler(
-          started.workerId,
-        ),
-      });
+      const attached = await this.attachStartedWorker(started);
 
       if (this.forceShutdownRequested) {
         attaching.queue.length = 0;
@@ -526,23 +692,20 @@ export class WorkerRuntime {
           ? { preemptInstruction: attaching.preemptInstruction }
           : {}),
         cancelInFlight: false,
+        sessionRecoveryAttempted: Boolean(attached.session.recovery),
       };
       this.residents.set(started.name, resident);
       this.attaching.delete(started.name);
 
+      if (attached.session.recovery) {
+        await this.notifyWorkerSessionRecovered(
+          resident,
+          attached.session.recovery,
+        );
+      }
+
       const prompt = buildWorkerAttachPrompt(
-        {
-          name: started.name,
-          issueUrl: started.issueUrl,
-          kind: started.kind,
-          prompt: started.prompt,
-          worktree: started.worktree,
-          sessionState: started.sessionState,
-          userInstructions: this.options.userInstructions,
-          resolvedWorkspacePath: started.resolvedWorkspacePath,
-          expectedResumeAcpCwd: started.expectedResumeAcpCwd,
-          resumeAcpSessionId: started.resumeAcpSessionId,
-        },
+        this.workerAttachOptions(started),
         attached.session,
       );
 
@@ -611,31 +774,12 @@ export class WorkerRuntime {
     let initCancelled = false;
     let lazyInitFailed = false;
     try {
-      const result = await runAttachedWorkerPrompt(
-        resident.attached,
+      const promptOutcome = await this.runPromptWithSessionRecovery(
+        resident,
         prompt,
-        {
-          permissionHandler: this.options.inbox.createPermissionHandler(
-            resident.workerId,
-          ),
-          onUpdate: (update) => {
-            const sessionUpdate = update.update?.sessionUpdate;
-            if (typeof sessionUpdate === 'string' && sessionUpdate.length > 0) {
-              const toolName = extractAcpToolName(update.update);
-              this.emitAcpUpdate(
-                resident,
-                sessionUpdate,
-                update.sessionId,
-                toolName,
-                sessionUpdate === 'tool_call' ||
-                  sessionUpdate === 'tool_call_update'
-                  ? update.update
-                  : undefined,
-              );
-            }
-          },
-        },
+        source,
       );
+      const result = promptOutcome.result;
       if (this.forceShutdownRequested) {
         return;
       }
@@ -645,8 +789,9 @@ export class WorkerRuntime {
       }
       const dispatch = { ...result, source };
       skipCompletion =
-        result.promptResult.stopReason === 'cancelled' &&
-        resident.preemptInstruction !== undefined;
+        promptOutcome.superseded ||
+        (result.promptResult.stopReason === 'cancelled' &&
+          resident.preemptInstruction !== undefined);
       if (!skipCompletion) {
         this.emitPromptTelemetry({
           phase: 'completed',

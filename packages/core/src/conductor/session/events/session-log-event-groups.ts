@@ -66,6 +66,7 @@ export const SESSION_EVENT_TYPES = [
   'operator.reconnect',
   'worker.completed',
   'worker.failed',
+  'worker.session.recovered',
   'permission.pending',
   'permission.stall',
   'harness.connectivity.recovered',
