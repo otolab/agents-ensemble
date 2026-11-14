@@ -960,7 +960,7 @@ describe('runConductorSession resume / shutdown', () => {
     );
   });
 
-  it('fails fast when the startup backend differs from the saved resume store backend', async () => {
+  it('resumes with the current backend and reports a saved backend change', async () => {
     const agentId = 'resume-backend-mismatch';
     await saveSessionResumeStore(
       sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
@@ -974,23 +974,153 @@ describe('runConductorSession resume / shutdown', () => {
         openQuestions: [],
         sequence: 0,
         workers: {},
+        cursorBootstrapComplete: true,
         updatedAt: 0,
       },
     );
 
-    await expect(
-      runConductorSession({
-        issueUrl: TEST_ISSUE.url,
-        repoRoot,
-        profile: { workers: [] },
-        resumeAgentId: agentId,
-        permissionPipeline: new PermissionPipeline({}),
-        registerProcessSignalHandlers: false,
-      }),
-    ).rejects.toThrow(/conductorBackend mismatch/);
+    stubUnusedControlServer();
+    mockResume.mockImplementationOnce(async () => ({
+      agentId,
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+    mockSend.mockResolvedValue({
+      runId: 'run-current-backend-resume',
+      status: 'finished',
+      result: 'resumed',
+    });
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
 
-    expect(mockResume).not.toHaveBeenCalled();
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
+      resumeAgentId: agentId,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      sessionLogger,
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockResume).toHaveBeenCalledOnce();
     expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockCreateCursorSdkConductorAgentFactory).toHaveBeenCalled();
+    expect(mockCreatePiConductorAgentFactory).not.toHaveBeenCalled();
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes('保存時の conductor backend は pi'),
+      ),
+    ).toBe(true);
+  });
+
+  it('resumes a slug session from another clone with current config and reports unrecoverable local state', async () => {
+    const agentId = 'resume-from-another-clone';
+    const originRepoRoot = join(repoRoot, 'origin-clone');
+    const currentConductorCwd = join(repoRoot, 'current-conductor');
+    await mkdir(currentConductorCwd, { recursive: true });
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'pi' as const,
+        model: 'current-clone-model',
+      },
+    };
+    await saveSessionResumeStore(
+      sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
+      {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        conductorBackend: 'pi',
+        conductorCwd: join(originRepoRoot, 'conductor'),
+        issueUrl: TEST_ISSUE.url,
+        repoRoot: originRepoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        ensembleConfigDigest: 'old-config-digest',
+        mcpConfigDigest: 'old-mcp-digest',
+        harnessPhase: 'close',
+        updatedAt: 0,
+      },
+    );
+    mockResume.mockImplementationOnce(async () => ({
+      agentId,
+      send: mockSend,
+      close: mockClose,
+      getUsage: createMockConductorGetUsage(),
+    }));
+    mockSend.mockResolvedValue({
+      runId: 'run-cross-clone-resume',
+      status: 'finished',
+      result: 'resumed from current clone',
+    });
+    stubUnusedControlServer();
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      conductorCwd: currentConductorCwd,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      ensembleConfig,
+      resumeAgentId: agentId,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      sessionLogger,
+    });
+
+    expect(result.stopReason).toBe('completed');
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(mockResume.mock.calls[0]?.[1]).toMatchObject({
+      cwd: currentConductorCwd,
+      modelId: 'current-clone-model',
+      resumeCwds: [
+        join(originRepoRoot, 'conductor'),
+        originRepoRoot,
+      ],
+    });
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes(`保存時の repoRoot ${originRepoRoot}`),
+      ),
+    ).toBe(true);
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes(
+            `保存時の repoRoot ${originRepoRoot} と現在の repoRoot ${repoRoot}`,
+          ),
+      ),
+    ).toBe(true);
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'harness.warning' &&
+          event.message.includes('以前の statusLine と履歴は復元されていません'),
+      ),
+    ).toBe(true);
   });
 
   it.each(['closed', 'exited'] as const)(
@@ -2926,7 +3056,7 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it.each([undefined, 'full'] as const)(
-    'rejects a conductor reasoning change for scheme-less and full sidecars (%s)',
+    'resumes after a conductor reasoning change for scheme-less and full stores (%s)',
     async (ensembleConfigDigestScheme) => {
       const agentId = 'resume-config-mismatch';
       const legacySecretMarker = 'LEGACY_WORKER_ACP_SECRET_MARKER';
@@ -2975,30 +3105,43 @@ describe('runConductorSession resume / shutdown', () => {
       await writeFile(resumeStorePath, JSON.stringify(legacyResumeStore));
       const updatedAtBeforeMigration = legacyResumeStore.updatedAt;
 
-      await expect(
-        runConductorSession({
-          issueUrl: TEST_ISSUE.url,
-          repoRoot,
-          profile: { workers: [] },
-          ensembleConfig: {
-            ...originalConfig,
-            conductor: {
-              ...originalConfig.conductor,
-            reasoning: 'high',
-            },
-          },
-          resumeAgentId: agentId,
-          permissionPipeline: new PermissionPipeline({}),
-          registerProcessSignalHandlers: false,
-        }),
-      ).rejects.toThrow(/ensemble config digest mismatch/);
+      stubUnusedControlServer();
+      mockResume.mockImplementationOnce(async () => ({
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      }));
+      mockSend.mockResolvedValue({
+        runId: `run-config-digest-${ensembleConfigDigestScheme ?? 'legacy'}`,
+        status: 'finished',
+        result: 'resumed with current config',
+      });
 
-      expect(mockResume).not.toHaveBeenCalled();
+      const result = await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        ensembleConfig: {
+          ...originalConfig,
+          conductor: {
+            ...originalConfig.conductor,
+            reasoning: 'high',
+          },
+        },
+        resumeAgentId: agentId,
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+
+      expect(result.stopReason).toBe('completed');
+      expect(mockResume).toHaveBeenCalledOnce();
       expect(mockCreate).not.toHaveBeenCalled();
       const migratedResumeStoreText = await readFile(resumeStorePath, 'utf8');
       expect(migratedResumeStoreText).not.toContain(legacySecretMarker);
       expect(JSON.parse(migratedResumeStoreText)).toMatchObject({
-        updatedAt: updatedAtBeforeMigration,
         ...(ensembleConfigDigestScheme
           ? { ensembleConfigDigestScheme }
           : {}),
@@ -3014,6 +3157,9 @@ describe('runConductorSession resume / shutdown', () => {
           },
         },
       });
+      expect(JSON.parse(migratedResumeStoreText).updatedAt).toBeGreaterThan(
+        updatedAtBeforeMigration,
+      );
     },
   );
 
@@ -3127,7 +3273,11 @@ describe('runConductorSession resume / shutdown', () => {
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [
+          { name: 'implementer', kind: 'implementer', modelTag: 'high' },
+        ],
+      },
       ensembleConfig: changedConfig,
       defaultAcp: { config: changedConfig, env: {} },
       workerWorktree: {
@@ -3173,7 +3323,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
   });
 
-  it('persists and dispatches recovery after a resumed worker thread becomes unreadable', async () => {
+  it('reports recovery after a resumed worker thread becomes unreadable without replaying its instruction', async () => {
     const agentId = 'resume-unreadable-worker-thread';
     const resumeStorePath = sessionResumeStorePath({
       repoRoot,
@@ -3271,7 +3421,9 @@ describe('runConductorSession resume / shutdown', () => {
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
       workerWorktree: {
         path: repoRoot,
         branch: 'ensemble/issue-1',
@@ -3299,13 +3451,10 @@ describe('runConductorSession resume / shutdown', () => {
     expect(oldBridge.close).toHaveBeenCalledOnce();
     expect(connectAcp).toHaveBeenCalledTimes(2);
     expect(newBridge.newSession).toHaveBeenCalledOnce();
-    expect(newPromptSession).toHaveBeenCalledTimes(2);
-    expect(persistedIdsAtPromptStart).toEqual([
-      'saved-worker-session',
-      'fresh-worker-session',
-    ]);
-    expect(newPromptSession.mock.calls[1]?.[0]).toBe('fresh-worker-session');
-    expect(newPromptSession.mock.calls[1]?.[1]).toBe(
+    expect(newPromptSession).toHaveBeenCalledOnce();
+    expect(persistedIdsAtPromptStart).toEqual(['saved-worker-session']);
+    expect(newPromptSession.mock.calls[0]?.[0]).toBe('fresh-worker-session');
+    expect(newPromptSession.mock.calls[0]?.[1]).not.toContain(
       'inspect the current issue',
     );
     const persistedStore = await loadSessionResumeStore(resumeStorePath);
@@ -3313,11 +3462,15 @@ describe('runConductorSession resume / shutdown', () => {
       'fresh-worker-session',
     );
     expect(
-      outboundMessages.some(
-        (message) =>
-          message.includes('worker.session.recovered') &&
-          message.includes('prompt_history_unreadable') &&
-          message.includes('implementer'),
+      outboundMessages.some((message) =>
+        message.includes('inspect the current issue'),
+      ),
+    ).toBe(false);
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'worker.failed' &&
+          event.failure.error.includes('instruction was not replayed'),
       ),
     ).toBe(true);
     expect(
@@ -3415,11 +3568,19 @@ describe('runConductorSession resume / shutdown', () => {
       };
     });
     stubUnusedControlServer();
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
 
     const firstResult = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
       workerWorktree: {
         path: repoRoot,
         branch: 'ensemble/issue-1',
@@ -3435,6 +3596,7 @@ describe('runConductorSession resume / shutdown', () => {
       permissionPipeline: new PermissionPipeline({}),
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
+      sessionLogger,
     });
 
     expect(firstResult.stopReason).toBe('completed');
@@ -3453,6 +3615,13 @@ describe('runConductorSession resume / shutdown', () => {
         implementer: { acpSessionId: 'saved-worker-session' },
       },
     });
+    expect(
+      emitted.some(
+        (event) =>
+          event.type === 'worker.failed' &&
+          event.failure.error.includes('bootstrap'),
+      ),
+    ).toBe(true);
 
     mockSend.mockReset();
     mockSend.mockResolvedValue({
@@ -3482,7 +3651,9 @@ describe('runConductorSession resume / shutdown', () => {
     const secondResult = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
       workerWorktree: {
         path: repoRoot,
         branch: 'ensemble/issue-1',
@@ -3594,7 +3765,9 @@ describe('runConductorSession resume / shutdown', () => {
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
       workerWorktree: {
         path: repoRoot,
         branch: 'ensemble/issue-1',
@@ -3649,15 +3822,22 @@ describe('runConductorSession resume / shutdown', () => {
       }),
     },
   ])(
-    'rejects a resume-feasibility critical change to $path before conductor resume',
+    'resumes with the current config after the $path digest changes',
     async ({ change }) => {
       const agentId = 'resume-feasibility-critical-change';
-      const originalConfig = DEFAULT_ENSEMBLE_CONFIG;
+      const originalConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'pi' as const,
+        },
+      };
       await saveSessionResumeStore(
         sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
         {
           version: SESSION_RESUME_STORE_VERSION,
           conductorAgentId: agentId,
+          conductorBackend: 'pi',
           issueUrl: TEST_ISSUE.url,
           repoRoot,
           profile: { workers: [] },
@@ -3671,18 +3851,31 @@ describe('runConductorSession resume / shutdown', () => {
         },
       );
 
-      await expect(
-        runConductorSession({
-          issueUrl: TEST_ISSUE.url,
-          repoRoot,
-          profile: { workers: [] },
-          ensembleConfig: change(originalConfig),
-          resumeAgentId: agentId,
-          permissionPipeline: new PermissionPipeline({}),
-          registerProcessSignalHandlers: false,
-        }),
-      ).rejects.toThrow(/ensemble config digest mismatch/);
-      expect(mockResume).not.toHaveBeenCalled();
+      mockResume.mockImplementationOnce(async () => ({
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      }));
+      mockSend.mockResolvedValue({
+        runId: `run-resume-config-change-${agentId}`,
+        status: 'finished',
+        result: 'resumed',
+      });
+      stubUnusedControlServer();
+      const result = await runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { conductor: { backend: 'pi' }, workers: [] },
+        ensembleConfig: change(originalConfig),
+        resumeAgentId: agentId,
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      });
+      expect(result.stopReason).toBe('completed');
+      expect(mockResume).toHaveBeenCalledOnce();
       expect(mockCreate).not.toHaveBeenCalled();
     },
   );
@@ -3812,7 +4005,7 @@ describe('runConductorSession resume / shutdown', () => {
         expect.objectContaining({
           type: 'harness.warning',
           message: expect.stringContaining(
-            'SessionResumeStore has no ensemble config digest',
+            'config digest がないため差分を比較できません',
           ),
         }),
       );
@@ -7724,7 +7917,9 @@ describe('runConductorSession resume / shutdown', () => {
     const continuePromise = runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
       resumeAgentId: 'agent-test',
       ensembleConfig,
       defaultAcp: {
@@ -7883,7 +8078,9 @@ describe('runConductorSession resume / shutdown', () => {
     const continuePromise = runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
       resumeAgentId: 'agent-test',
       defaultAcp: { defaultAcpCommand: process.execPath },
       disableGitHubMonitor: true,
@@ -8005,7 +8202,9 @@ describe('runConductorSession resume / shutdown', () => {
     const firstSession = runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
       workerWorktree: {
         path: repoRoot,
         branch: 'ensemble/issue-1',
@@ -8110,7 +8309,9 @@ describe('runConductorSession resume / shutdown', () => {
     const restartResult = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: {
+        workers: [{ name: 'implementer', kind: 'implementer' }],
+      },
       workerWorktree: {
         path: repoRoot,
         branch: 'ensemble/issue-1',

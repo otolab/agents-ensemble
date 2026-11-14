@@ -4,7 +4,7 @@ import chalk, { Chalk } from 'chalk';
 import {
   CONDUCTOR_PROVIDER_HISTORY_LIMIT,
   escapeTerminalControlCharacters,
-  findSessionResumeStore,
+  findSessionResumeStoreBySelector,
   harnessPhaseFromLegacyLifecycle,
   listConductorProviderHistory,
   type ConductorBackend,
@@ -144,6 +144,8 @@ interface MutableSessionTimelineSend {
 export async function readSavedSessionTimeline(input: {
   repoRoot: string;
   conductorAgentId: string;
+  githubRepo?: string;
+  issueUrl?: string;
   summaryPath?: string;
   harnessLogPath?: string;
 }): Promise<SessionTimelineResult> {
@@ -152,11 +154,12 @@ export async function readSavedSessionTimeline(input: {
     input.conductorAgentId,
     'conductorAgentId',
   );
-  const located = await findSessionResumeStore(repoRoot, conductorAgentId);
-  if (
-    !located ||
-    resolve(located.resumeStore.repoRoot) !== repoRoot
-  ) {
+  const located = await findSessionResumeStoreBySelector(repoRoot, {
+    githubRepo: input.githubRepo,
+    issueUrl: input.issueUrl,
+    conductorAgentId,
+  });
+  if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
 
@@ -168,8 +171,17 @@ export async function readSavedSessionTimeline(input: {
         backend,
         conductorAgentId,
         cwd: resumeStore.conductorCwd ?? resumeStore.repoRoot,
-        repoRoot: resumeStore.repoRoot,
+        repoRoot,
         issueUrl: resumeStore.issueUrl,
+        ...(backend === 'pi'
+          ? {
+              fallbackCwds: [
+                resumeStore.conductorCwd,
+                resumeStore.repoRoot,
+              ].filter((cwd): cwd is string => Boolean(cwd)),
+              fallbackRepoRoots: [resumeStore.repoRoot],
+            }
+          : {}),
         ...(resumeStore.cursorBootstrapRunId
           ? { cursorBootstrapRunId: resumeStore.cursorBootstrapRunId }
           : {}),
@@ -605,6 +617,7 @@ async function readProviderHistory(input: {
   cwd: string;
   repoRoot: string;
   issueUrl: string;
+  fallbackCwds?: readonly string[];
   cursorBootstrapRunId?: string;
 }): Promise<
   | {
@@ -621,6 +634,7 @@ async function readProviderHistory(input: {
       cwd: input.cwd,
       repoRoot: input.repoRoot,
       issueUrl: input.issueUrl,
+      fallbackCwds: input.fallbackCwds,
       ...(input.cursorBootstrapRunId
         ? { cursorBootstrapRunId: input.cursorBootstrapRunId }
         : {}),

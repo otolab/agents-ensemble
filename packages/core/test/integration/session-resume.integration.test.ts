@@ -124,7 +124,7 @@ describe('session resume integration', () => {
     vi.unstubAllEnvs();
   });
 
-  it('restores saved resume store profile, open questions, and worker session/load on resume', async () => {
+  it('uses the current profile while restoring open questions and worker session/load', async () => {
     const bridge = await createInProcessAcpBridge();
     const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
     const promptSessionSpy = vi.spyOn(bridge, 'promptSession');
@@ -156,11 +156,13 @@ describe('session resume integration', () => {
     loadSessionSpy.mockClear();
     promptSessionSpy.mockClear();
 
-    const resumeStoreProfile: Profile = {
+    const savedProfile: Profile = {
       ...PING_PROFILE_BASE,
-      // Use a different worker name to prove that the saved resume store profile, not
-      // the profile supplied by the resumed CLI invocation, drives resume.
-      workers: [{ name: 'resumed-ping', kind: 'ping' }],
+      agents: {
+        ping: {
+          prompt: { instructions: ['stale saved worker instructions'] },
+        },
+      },
     };
 
     await saveSessionResumeStore(
@@ -174,7 +176,7 @@ describe('session resume integration', () => {
         issueUrl: TEST_ISSUE.url,
         repoRoot,
         cursorBootstrapComplete: true,
-        profile: resumeStoreProfile,
+        profile: savedProfile,
         openQuestions: [
           {
             id: 'inq-resume-1',
@@ -187,7 +189,7 @@ describe('session resume integration', () => {
         ],
         sequence: 1,
         workers: {
-          'resumed-ping': { acpSessionId: firstDispatch.acpSessionId },
+          'ping-1': { acpSessionId: firstDispatch.acpSessionId },
         },
         updatedAt: Date.now(),
       },
@@ -209,6 +211,12 @@ describe('session resume integration', () => {
       );
       return question ? 'yes, continue' : undefined;
     });
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    const sessionEvents: SessionLogEvent[] = [];
+    sessionLogger.subscribe((event) => sessionEvents.push(event));
     let openQuestionsAtBinding: unknown;
     const bindOperatorInput: OperatorInputBinding = (api) => {
       openQuestionsAtBinding = yaml.load(
@@ -233,6 +241,7 @@ describe('session resume integration', () => {
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
       bindOperatorInput,
       onOpenQuestionEnqueued: operator.onOpenQuestionEnqueued,
       connectAcp: async () => bridge,
@@ -275,9 +284,17 @@ describe('session resume integration', () => {
         ?.status,
     ).toBe('answered');
     expect(result.workerDispatches).toHaveLength(1);
-    expect(result.workerDispatches[0]?.name).toBe('resumed-ping');
+    expect(result.workerDispatches[0]?.name).toBe('ping-1');
     expect(result.workerDispatches[0]?.acpSessionId).toBe(
       firstDispatch.acpSessionId,
+    );
+    expect(sessionEvents).toContainEqual(
+      expect.objectContaining({
+        type: 'harness.warning',
+        message: expect.stringContaining(
+          '保存時の team profile と現在の clone で解決した profile が異なります。以降は現在の profile を使います。',
+        ),
+      }),
     );
     expect(
       await loadOpenQuestionsStore(
@@ -947,10 +964,11 @@ describe('session resume integration', () => {
     );
   });
 
-  it('fails worker attach on resume when saved resume store acpCwd mismatches profile', async () => {
+  it('uses the current workspace and reports a saved resume store acpCwd mismatch', async () => {
     const docsDir = join(repoRoot, 'docs-repo');
     await mkdir(docsDir, { recursive: true });
     const bridge = await createInProcessAcpBridge();
+    const loadSessionSpy = vi.spyOn(bridge, 'loadSession');
 
     const worktree = {
       ...TEST_WORKTREE,
@@ -1014,6 +1032,13 @@ describe('session resume integration', () => {
       },
     );
 
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    const sessionEvents: SessionLogEvent[] = [];
+    sessionLogger.subscribe((event) => sessionEvents.push(event));
+
     mockSend.mockImplementation(async (message: string) => {
       if (message.includes('## worker 失敗')) {
         return {
@@ -1037,13 +1062,27 @@ describe('session resume integration', () => {
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
       connectAcp: async () => bridge,
       ownsWorkerAcpConnections: false,
     });
 
-    expect(result.workerFailures).toHaveLength(1);
-    expect(result.workerFailures[0]?.name).toBe('librarian');
-    expect(result.workerFailures[0]?.error).toMatch(/resume cwd mismatch/);
+    expect(result.workerFailures).toHaveLength(0);
+    expect(loadSessionSpy).toHaveBeenCalledWith(
+      firstDispatch.acpSessionId,
+      docsDir,
+      expect.any(Function),
+    );
+    const warningMessages = sessionEvents
+      .filter((event) => event.type === 'harness.warning')
+      .map((event) => event.message)
+      .join('\n');
+    expect(warningMessages).toContain(
+      `worker「librarian」の保存時 ACP cwd ${join(repoRoot, 'stale-workspace')} と現在の workspace ${docsDir} が異なります。現在の workspace で ACP session/load を試みます。`,
+    );
+    expect(warningMessages).toContain(
+      `worker「librarian」の保存時 ACP cwd ${join(repoRoot, 'stale-workspace')} は見つかりません。そこにだけあった未コミット変更は復元できず、保存 Store に commit SHA がないため欠落 commit の有無も照合できません。`,
+    );
   });
 
   it('keeps the saved builtin Pi session id when resume load fails', async () => {

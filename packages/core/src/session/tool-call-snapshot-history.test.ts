@@ -154,6 +154,51 @@ describe('tool-call snapshot history', () => {
     ).resolves.toEqual({ entries: [slugEntry], needsRewrite: false });
   });
 
+  it('prefers the saved clone project legacy history over the current clone project legacy history', async () => {
+    repoRoot = await createHome();
+    const savedRepoRoot = join(repoRoot, 'saved-clone');
+    const conductorAgentId = 'agent-project-legacy-order';
+    const currentPaths = resolveEnsemblePaths({ repoRoot });
+    const savedPaths = resolveEnsemblePaths({ repoRoot: savedRepoRoot });
+    const currentEntry = {
+      ...ENTRY,
+      snapshot: { ...ENTRY.snapshot, toolCallId: 'current-project-legacy' },
+    };
+    const savedEntry = {
+      ...ENTRY,
+      snapshot: { ...ENTRY.snapshot, toolCallId: 'saved-project-legacy' },
+    };
+    const currentLegacyPath =
+      currentPaths.legacyToolCallHistoryPath(conductorAgentId);
+    const savedLegacyPath =
+      savedPaths.legacyToolCallHistoryPath(conductorAgentId);
+    await Promise.all([
+      mkdir(dirname(currentLegacyPath), { recursive: true }),
+      mkdir(dirname(savedLegacyPath), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        currentLegacyPath,
+        JSON.stringify({ version: 1, snapshots: [currentEntry] }),
+        'utf8',
+      ),
+      writeFile(
+        savedLegacyPath,
+        JSON.stringify({ version: 1, snapshots: [savedEntry] }),
+        'utf8',
+      ),
+    ]);
+
+    await expect(
+      loadToolCallSnapshotHistory({
+        repoRoot,
+        conductorAgentId,
+        issueUrl: ISSUE_URL,
+        fallbackRepoRoots: [savedRepoRoot],
+      }),
+    ).resolves.toEqual({ entries: [savedEntry], needsRewrite: false });
+  });
+
   it('does not delete an invalid legacy history file while reading fallback data', async () => {
     repoRoot = await createHome();
     const conductorAgentId = 'agent-invalid-legacy-history';

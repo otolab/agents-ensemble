@@ -9,6 +9,7 @@ import {
 } from '../acp/resolve-acp-spawn.js';
 import type { AcpModelTag, ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
+import { parseIssueUrl } from '../issue/issue-ref.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { writeFileIfMissing } from './persisted-file.js';
 
@@ -111,11 +112,11 @@ export interface SessionResumeStore {
   workers: Record<string, WorkerSessionResumeStore>;
   /** GitHub 監視カーソルと未配送更新（#39）。 */
   githubMonitor?: GitHubMonitorCursor;
-  /** Harness-resolved MCP map digest used to reject unsafe resume. */
+  /** Harness-resolved MCP map digest retained as diagnostic metadata. */
   mcpConfigDigest?: string;
   /** Config digest comparison scheme; omitted legacy values mean `full`. */
   ensembleConfigDigestScheme?: EnsembleConfigDigestScheme;
-  /** Config digest used to check resume compatibility for its recorded scheme. */
+  /** Config digest retained to explain the configuration used by this session. */
   ensembleConfigDigest?: string;
   /** Original ACP model-routing config digest for diagnostics; never a resume gate. */
   acpModelConfigDigest?: string;
@@ -167,6 +168,29 @@ export interface SessionResumeStoreDuplicateDiagnostic {
     hasHarnessSocketPath: boolean;
   }>;
 }
+
+export interface SessionResumeStoreQuery {
+  githubRepo?: string;
+  issueUrl?: string;
+  conductorAgentId?: string;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface SessionResumeStorePage<T> {
+  sessions: T[];
+  total: number;
+  nextCursor?: string;
+}
+
+export interface SessionResumeStoreSelector {
+  githubRepo?: string;
+  issueUrl?: string;
+  conductorAgentId: string;
+}
+
+const SESSION_RESUME_STORE_PAGE_MAX_LIMIT = 500;
+const SESSION_RESUME_STORE_PAGE_CURSOR_VERSION = 1;
 
 /** @deprecated Use SessionResumeStorePathOptions; supported for one release only. */
 export type SessionSidecarPathOptions = SessionResumeStorePathOptions;
@@ -251,7 +275,7 @@ async function readSessionResumeStore(
 export async function requireSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
-  issueUrl?: string;
+  issueUrl: string;
 }): Promise<SessionResumeStore> {
   const located = await requireLocatedSessionResumeStoreForResume(input);
   return located.resumeStore;
@@ -260,22 +284,26 @@ export async function requireSessionResumeStoreForResume(input: {
 export async function requireLocatedSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
-  issueUrl?: string;
+  issueUrl: string;
   onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
 }): Promise<LocatedSessionResumeStore> {
-  const locations = await listSessionResumeStoreLocations(input.repoRoot, {
-    onDuplicate: input.onDuplicate,
-  });
-  const located = locations.find(
-    (candidate) =>
-      candidate.resumeStore.conductorAgentId === input.conductorAgentId &&
-      (input.issueUrl === undefined ||
-        candidate.resumeStore.issueUrl === input.issueUrl),
+  if (
+    typeof input.issueUrl !== 'string' ||
+    !input.issueUrl.trim()
+  ) {
+    throw new Error('issueUrl is required to resume a session.');
+  }
+  const locations = await listLocatedSessionResumeStoresPage(
+    input.repoRoot,
+    {
+      issueUrl: input.issueUrl,
+      conductorAgentId: input.conductorAgentId,
+    },
+    { onDuplicate: input.onDuplicate },
   );
+  const located = locations.sessions[0];
   if (!located) {
-    const path = input.issueUrl
-      ? canonicalSessionResumeStorePath({ ...input, issueUrl: input.issueUrl })
-      : sessionResumeStorePath(input);
+    const path = canonicalSessionResumeStorePath(input);
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
 
@@ -339,6 +367,7 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
 export async function requireSessionSidecarForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl: string;
 }): Promise<SessionSidecar> {
   try {
     return await requireSessionResumeStoreForResume(input);
@@ -422,10 +451,120 @@ export async function findSessionResumeStore(
     onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
   } = {},
 ): Promise<LocatedSessionResumeStore | undefined> {
-  return (await listLocatedSessionResumeStores(repoRoot, options)).find(
+  const matches = (await listLocatedSessionResumeStores(repoRoot, options)).filter(
     (candidate) =>
       candidate.resumeStore.conductorAgentId === conductorAgentId,
   );
+  if (matches.length > 1) {
+    throw new Error(
+      `Session ${conductorAgentId} is ambiguous across saved Issues; use findSessionResumeStoreBySelector with githubRepo or issueUrl.`,
+    );
+  }
+  return matches[0];
+}
+
+/**
+ * List local sessions using canonical GitHub repository identity.
+ *
+ * With no limit this returns every matching local store. Supplying a limit
+ * enables keyset pagination; no GitHub API repository discovery is performed.
+ */
+export async function listLocatedSessionResumeStoresPage(
+  repoRoot: string,
+  query: SessionResumeStoreQuery = {},
+  options: {
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<SessionResumeStorePage<LocatedSessionResumeStore>> {
+  const scope = resolveSessionResumeStoreScope(query);
+  const stores = (await listSessionResumeStoreLocations(repoRoot, options))
+    .filter(({ resumeStore }) => {
+      const identity = sessionIssueIdentity(resumeStore.issueUrl);
+      return (
+        (!scope.githubRepo || identity.repository === scope.githubRepo) &&
+        (!scope.issueKey || identity.key === scope.issueKey) &&
+        (!query.conductorAgentId ||
+          resumeStore.conductorAgentId === query.conductorAgentId)
+      );
+    })
+    .sort(compareLocatedSessionResumeStores);
+
+  const limit =
+    query.limit === undefined
+      ? query.cursor === undefined
+        ? undefined
+        : SESSION_RESUME_STORE_PAGE_MAX_LIMIT
+      : validateSessionResumeStorePageLimit(query.limit);
+  if (limit === undefined) {
+    return { sessions: stores, total: stores.length };
+  }
+
+  const cursor =
+    query.cursor === undefined
+      ? undefined
+      : decodeSessionResumeStoreCursor(query.cursor);
+  const remaining = cursor
+    ? stores.filter(
+        (store) => compareLocatedSessionResumeStoreToCursor(store, cursor) > 0,
+      )
+    : stores;
+  const sessions = remaining.slice(0, limit);
+  const next = remaining.length > sessions.length ? sessions.at(-1) : undefined;
+  return {
+    sessions,
+    total: stores.length,
+    ...(next ? { nextCursor: encodeSessionResumeStoreCursor(next) } : {}),
+  };
+}
+
+export async function listSessionResumeStoresPage(
+  repoRoot: string,
+  query: SessionResumeStoreQuery = {},
+  options: {
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<SessionResumeStorePage<SessionResumeStore>> {
+  const page = await listLocatedSessionResumeStoresPage(
+    repoRoot,
+    query,
+    options,
+  );
+  return {
+    sessions: page.sessions.map(({ resumeStore }) => resumeStore),
+    total: page.total,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+  };
+}
+
+/** Read a session only inside an explicit GitHub repository / Issue scope. */
+export async function findSessionResumeStoreBySelector(
+  repoRoot: string,
+  selector: SessionResumeStoreSelector,
+  options: {
+    onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
+  } = {},
+): Promise<LocatedSessionResumeStore | undefined> {
+  const conductorAgentId = selector.conductorAgentId.trim();
+  if (!conductorAgentId) {
+    throw new Error('conductorAgentId must be a non-empty string.');
+  }
+  const scope = resolveSessionResumeStoreScope(selector);
+  if (!scope.githubRepo && !scope.issueKey) {
+    throw new Error(
+      'Repository scope is required to read a session; pass --github-repo or --issue-url.',
+    );
+  }
+  const page = await listLocatedSessionResumeStoresPage(
+    repoRoot,
+    { ...selector, conductorAgentId },
+    options,
+  );
+  if (page.sessions.length > 1) {
+    throw new Error(
+      `Session ${conductorAgentId} is ambiguous in this repository; specify --issue-url.`,
+    );
+  }
+  return page.sessions[0];
 }
 
 async function listSessionResumeStoreLocations(
@@ -551,7 +690,7 @@ async function listSessionResumeStoreLocations(
   const bySession = new Map<string, LocatedSessionResumeStore[]>();
   for (const candidate of candidates) {
     const sessionKey = JSON.stringify([
-      candidate.resumeStore.issueUrl,
+      sessionIssueIdentity(candidate.resumeStore.issueUrl).key,
       candidate.resumeStore.conductorAgentId,
     ]);
     const matching = bySession.get(sessionKey) ?? [];
@@ -602,6 +741,159 @@ function canonicalSessionDirectory(
   }
 }
 
+interface SessionResumeStorePageCursor {
+  version: typeof SESSION_RESUME_STORE_PAGE_CURSOR_VERSION;
+  updatedAt: number;
+  issueKey: string;
+  conductorAgentId: string;
+}
+
+function resolveSessionResumeStoreScope(input: {
+  githubRepo?: string;
+  issueUrl?: string;
+}): { githubRepo?: string; issueKey?: string } {
+  const githubRepo =
+    input.githubRepo === undefined
+      ? undefined
+      : normalizeGitHubRepo(input.githubRepo);
+  let issue: ReturnType<typeof sessionIssueIdentity> | undefined;
+  if (input.issueUrl !== undefined) {
+    parseIssueUrl(input.issueUrl);
+    issue = sessionIssueIdentity(input.issueUrl);
+  }
+  if (
+    githubRepo !== undefined &&
+    issue !== undefined &&
+    githubRepo !== issue.repository
+  ) {
+    throw new Error(
+      '--github-repo and --issue-url refer to different GitHub repositories.',
+    );
+  }
+  return {
+    ...(githubRepo ?? issue?.repository
+      ? { githubRepo: githubRepo ?? issue?.repository }
+      : {}),
+    ...(issue ? { issueKey: issue.key } : {}),
+  };
+}
+
+function normalizeGitHubRepo(value: string): string {
+  const segments = value.trim().split('/');
+  if (
+    segments.length !== 2 ||
+    segments.some(
+      (segment) =>
+        !segment ||
+        segment === '.' ||
+        segment === '..' ||
+        !/^[A-Za-z0-9_.-]+$/u.test(segment),
+    )
+  ) {
+    throw new Error(
+      `Invalid GitHub repository "${value}" (expected <owner>/<repo>).`,
+    );
+  }
+  return `${segments[0]!.toLowerCase()}/${segments[1]!.replace(/\.git$/iu, '').toLowerCase()}`;
+}
+
+function sessionIssueIdentity(issueUrl: string): {
+  repository: string;
+  key: string;
+} {
+  try {
+    const issue = parseIssueUrl(issueUrl);
+    const repository = `${issue.owner.toLowerCase()}/${issue.repo.toLowerCase()}`;
+    return {
+      repository,
+      key: `${repository}#${issue.number}`,
+    };
+  } catch {
+    return { repository: '', key: `invalid:${issueUrl.toLowerCase()}` };
+  }
+}
+
+function compareLocatedSessionResumeStores(
+  left: LocatedSessionResumeStore,
+  right: LocatedSessionResumeStore,
+): number {
+  return (
+    right.resumeStore.updatedAt - left.resumeStore.updatedAt ||
+    sessionIssueIdentity(left.resumeStore.issueUrl).key.localeCompare(
+      sessionIssueIdentity(right.resumeStore.issueUrl).key,
+    ) ||
+    left.resumeStore.conductorAgentId.localeCompare(
+      right.resumeStore.conductorAgentId,
+    )
+  );
+}
+
+function compareLocatedSessionResumeStoreToCursor(
+  store: LocatedSessionResumeStore,
+  cursor: SessionResumeStorePageCursor,
+): number {
+  const resumeStore = store.resumeStore;
+  return (
+    cursor.updatedAt - resumeStore.updatedAt ||
+    sessionIssueIdentity(resumeStore.issueUrl).key.localeCompare(
+      cursor.issueKey,
+    ) ||
+    resumeStore.conductorAgentId.localeCompare(cursor.conductorAgentId)
+  );
+}
+
+function validateSessionResumeStorePageLimit(limit: number): number {
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > SESSION_RESUME_STORE_PAGE_MAX_LIMIT
+  ) {
+    throw new Error(
+      `limit must be an integer between 1 and ${SESSION_RESUME_STORE_PAGE_MAX_LIMIT}.`,
+    );
+  }
+  return limit;
+}
+
+function encodeSessionResumeStoreCursor(
+  store: LocatedSessionResumeStore,
+): string {
+  const cursor: SessionResumeStorePageCursor = {
+    version: SESSION_RESUME_STORE_PAGE_CURSOR_VERSION,
+    updatedAt: store.resumeStore.updatedAt,
+    issueKey: sessionIssueIdentity(store.resumeStore.issueUrl).key,
+    conductorAgentId: store.resumeStore.conductorAgentId,
+  };
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
+}
+
+function decodeSessionResumeStoreCursor(
+  value: string,
+): SessionResumeStorePageCursor {
+  let cursor: unknown;
+  try {
+    cursor = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
+  } catch {
+    throw new Error('Invalid session list cursor.');
+  }
+  if (
+    !isRecord(cursor) ||
+    cursor.version !== SESSION_RESUME_STORE_PAGE_CURSOR_VERSION ||
+    typeof cursor.updatedAt !== 'number' ||
+    !Number.isFinite(cursor.updatedAt) ||
+    typeof cursor.issueKey !== 'string' ||
+    typeof cursor.conductorAgentId !== 'string'
+  ) {
+    throw new Error('Invalid session list cursor.');
+  }
+  return {
+    version: cursor.version,
+    updatedAt: cursor.updatedAt,
+    issueKey: cursor.issueKey,
+    conductorAgentId: cursor.conductorAgentId,
+  };
+}
+
 /** @deprecated Use listSessionResumeStores; supported for one release only. */
 export const listSessionSidecars = listSessionResumeStores;
 
@@ -612,12 +904,19 @@ export const listSessionSidecars = listSessionResumeStores;
 export async function findLatestSessionResumeStoreForIssue(
   input: FindLatestSessionResumeStoreInput,
 ): Promise<SessionResumeStore | undefined> {
-  const matches = (await listSessionResumeStores(input.repoRoot)).filter(
-    (resumeStore) =>
-      resumeStore.issueUrl === input.issueUrl &&
-      (resumeStore.harnessPhase ??
-        harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle)) !== 'exit',
-  );
+  const issueKey = sessionIssueIdentity(input.issueUrl).key;
+  const matches = (
+    await listLocatedSessionResumeStoresPage(input.repoRoot, {
+      issueUrl: input.issueUrl,
+    })
+  ).sessions
+    .map(({ resumeStore }) => resumeStore)
+    .filter(
+      (resumeStore) =>
+        sessionIssueIdentity(resumeStore.issueUrl).key === issueKey &&
+        (resumeStore.harnessPhase ??
+          harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle)) !== 'exit',
+    );
   if (matches.length === 0) return undefined;
 
   return matches.reduce((selected, resumeStore) => {
@@ -646,14 +945,16 @@ export function assertSessionResumeStoreMatches(
   resumeStore: SessionResumeStore,
   input: {
     issueUrl: string;
-    repoRoot: string;
     conductorAgentId: string;
+    /** @deprecated Retained for source compatibility; root is not an identity check. */
+    repoRoot?: string;
+    /** @deprecated Retained for source compatibility; backend differences are diagnostic. */
     conductorBackend?: ConductorBackend;
-    /** Current harness-resolved MCP map digest. */
+    /** @deprecated Retained for source compatibility; MCP digest differences are diagnostic. */
     mcpConfigDigest?: string;
-    /** Whether the current resolved map contains at least one server. */
+    /** @deprecated Retained for source compatibility; missing digest is not a gate. */
     mcpConfigConfigured?: boolean;
-    /** Current config digest computed with the resume store's recorded scheme. */
+    /** @deprecated Retained for source compatibility; config digest differences are diagnostic. */
     ensembleConfigDigest?: string;
   },
 ): void {
@@ -662,44 +963,12 @@ export function assertSessionResumeStoreMatches(
       `Session resume store conductorAgentId mismatch: ${resumeStore.conductorAgentId} !== ${input.conductorAgentId}`,
     );
   }
-  if (resumeStore.issueUrl !== input.issueUrl) {
+  if (
+    sessionIssueIdentity(resumeStore.issueUrl).key !==
+    sessionIssueIdentity(input.issueUrl).key
+  ) {
     throw new Error(
       `Session resume store issueUrl mismatch: ${resumeStore.issueUrl} !== ${input.issueUrl}`,
-    );
-  }
-  if (resumeStore.repoRoot !== input.repoRoot) {
-    throw new Error(
-      `Session resume store repoRoot mismatch: ${resumeStore.repoRoot} !== ${input.repoRoot}`,
-    );
-  }
-  if (
-    input.conductorBackend !== undefined &&
-    (resumeStore.conductorBackend ?? 'cursor') !== input.conductorBackend
-  ) {
-    throw new Error(
-      `Session resume store conductorBackend mismatch: ${resumeStore.conductorBackend ?? 'cursor'} !== ${input.conductorBackend}`,
-    );
-  }
-  if (input.mcpConfigDigest !== undefined) {
-    if (resumeStore.mcpConfigDigest === undefined) {
-      if (input.mcpConfigConfigured) {
-        throw new Error(
-          'Session resume store MCP config digest missing; cannot safely resume with MCP configuration.',
-        );
-      }
-    } else if (resumeStore.mcpConfigDigest !== input.mcpConfigDigest) {
-      throw new Error(
-        `Session resume store MCP config digest mismatch: ${resumeStore.mcpConfigDigest} !== ${input.mcpConfigDigest}`,
-      );
-    }
-  }
-  if (
-    input.ensembleConfigDigest !== undefined &&
-    resumeStore.ensembleConfigDigest !== undefined &&
-    resumeStore.ensembleConfigDigest !== input.ensembleConfigDigest
-  ) {
-    throw new Error(
-      `Session resume store ensemble config digest mismatch: ${resumeStore.ensembleConfigDigest} !== ${input.ensembleConfigDigest}`,
     );
   }
 }
@@ -947,6 +1216,10 @@ function parseConductorBackend(value: unknown): ConductorBackend {
     return value;
   }
   throw new Error('Invalid session resume store: conductorBackend');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function isEnoent(error: unknown): boolean {

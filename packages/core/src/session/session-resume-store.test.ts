@@ -11,7 +11,9 @@ import {
   findLatestSessionResumeStoreForIssue,
   findLatestSessionSidecarForIssue,
   findSessionResumeStore,
+  findSessionResumeStoreBySelector,
   legacySessionResumeStoreDir,
+  listLocatedSessionResumeStoresPage,
   listLocatedSessionResumeStores,
   listSessionSidecars,
   loadSessionResumeStore,
@@ -574,7 +576,7 @@ describe('SessionResumeStore', () => {
     expect(loaded).not.toHaveProperty('cursorBootstrapComplete');
   });
 
-  it('rejects a conductor backend mismatch on resume validation', () => {
+  it('allows current backend changes when the Issue identity matches', () => {
     const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-backend',
       conductorBackend: 'pi',
@@ -585,13 +587,11 @@ describe('SessionResumeStore', () => {
       assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-backend',
         issueUrl: resumeStore.issueUrl,
-        repoRoot: '/repo',
-        conductorBackend: 'cursor',
       }),
-    ).toThrow(/conductorBackend mismatch/);
+    ).not.toThrow();
   });
 
-  it('rejects MCP configuration changes on resume', () => {
+  it('allows MCP configuration changes through identity validation', () => {
     const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-mcp-digest',
       mcpConfigDigest: 'old-digest',
@@ -601,28 +601,22 @@ describe('SessionResumeStore', () => {
       assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-mcp-digest',
         issueUrl: resumeStore.issueUrl,
-        repoRoot: resumeStore.repoRoot,
-        mcpConfigDigest: 'new-digest',
-        mcpConfigConfigured: true,
       }),
-    ).toThrow(/MCP config digest mismatch/);
+    ).not.toThrow();
   });
 
-  it('rejects MCP resume when a legacy record has no digest', () => {
+  it('allows legacy stores without an MCP digest through identity validation', () => {
     const resumeStore = baseResumeStore({ conductorAgentId: 'agent-mcp-legacy' });
 
     expect(() =>
       assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-mcp-legacy',
         issueUrl: resumeStore.issueUrl,
-        repoRoot: resumeStore.repoRoot,
-        mcpConfigDigest: 'current-digest',
-        mcpConfigConfigured: true,
       }),
-    ).toThrow(/MCP config digest missing/);
+    ).not.toThrow();
   });
 
-  it('rejects ensemble config changes on resume', () => {
+  it('allows ensemble config changes through identity validation', () => {
     const resumeStore = baseResumeStore({
       conductorAgentId: 'agent-config-digest',
       ensembleConfigDigest: 'old-digest',
@@ -632,10 +626,8 @@ describe('SessionResumeStore', () => {
       assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-config-digest',
         issueUrl: resumeStore.issueUrl,
-        repoRoot: resumeStore.repoRoot,
-        ensembleConfigDigest: 'new-digest',
       }),
-    ).toThrow(/ensemble config digest mismatch/);
+    ).not.toThrow();
   });
 
   it('treats a saved ACP model configuration digest as diagnostic metadata', () => {
@@ -648,7 +640,6 @@ describe('SessionResumeStore', () => {
       assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-acp-model-digest',
         issueUrl: resumeStore.issueUrl,
-        repoRoot: resumeStore.repoRoot,
       }),
     ).not.toThrow();
   });
@@ -662,8 +653,6 @@ describe('SessionResumeStore', () => {
       assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-config-legacy',
         issueUrl: resumeStore.issueUrl,
-        repoRoot: resumeStore.repoRoot,
-        ensembleConfigDigest: 'current-digest',
       }),
     ).not.toThrow();
   });
@@ -678,7 +667,6 @@ describe('SessionResumeStore', () => {
       assertSessionResumeStoreMatches(resumeStore, {
         conductorAgentId: 'agent-1',
         issueUrl: 'https://github.com/org/repo/issues/2',
-        repoRoot: '/repo',
       }),
     ).toThrow(/issueUrl mismatch/);
   });
@@ -690,8 +678,21 @@ describe('SessionResumeStore', () => {
       requireSessionResumeStoreForResume({
         repoRoot: tempDir,
         conductorAgentId: 'missing-agent',
+        issueUrl: 'https://github.com/org/repo/issues/9',
       }),
     ).rejects.toThrow(SessionResumeStoreNotFoundError);
+  });
+
+  it('requires an Issue URL when reading a session for resume', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+
+    await expect(
+      requireLocatedSessionResumeStoreForResume({
+        repoRoot: tempDir,
+        conductorAgentId: 'agent-without-issue-scope',
+        issueUrl: '',
+      }),
+    ).rejects.toThrow('issueUrl is required to resume a session.');
   });
 
   it('prefers the canonical slug store over duplicate hash and project files and reports the selected paths', async () => {
@@ -771,9 +772,21 @@ describe('SessionResumeStore', () => {
       },
     ]);
     await expect(
+      findLatestSessionResumeStoreForIssue({
+        repoRoot: tempDir,
+        issueUrl,
+      }),
+    ).resolves.toMatchObject({
+      conductorAgentId: agentId,
+      harnessSocketPath: '/tmp/ens-oq-live/s.sock',
+      repoRoot: tempDir,
+      updatedAt: 100,
+    });
+    await expect(
       requireSessionResumeStoreForResume({
         repoRoot: tempDir,
         conductorAgentId: agentId,
+        issueUrl,
       }),
     ).resolves.toMatchObject({
       harnessSocketPath: '/tmp/ens-oq-live/s.sock',
@@ -881,6 +894,7 @@ describe('SessionResumeStore', () => {
     async ({ contents }) => {
       tempDir = await createHome('ensemble-session-resume-store-');
       const agentId = `corrupt-hash-only-${contents.length}`;
+      const issueUrl = 'https://github.com/org/repo/issues/9';
       const hashPath = sessionResumeStorePath({
         repoRoot: tempDir,
         conductorAgentId: agentId,
@@ -894,6 +908,7 @@ describe('SessionResumeStore', () => {
         requireLocatedSessionResumeStoreForResume({
           repoRoot: tempDir,
           conductorAgentId: agentId,
+          issueUrl,
         }),
       ).rejects.toThrow(SessionResumeStoreNotFoundError);
       await expect(loadSessionResumeStore(hashPath)).rejects.toThrow(
@@ -969,6 +984,135 @@ describe('SessionResumeStore', () => {
     ).resolves.toMatchObject({
       path: slugPath,
       resumeStore: { harnessSocketPath: '/tmp/ens-oq-live/cross-clone.sock' },
+    });
+  });
+
+  it('rejects an ID-only lookup when the same session id exists in different repositories', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const conductorAgentId = 'shared-session-id';
+    const issueUrls = [
+      'https://github.com/org/first-repo/issues/1',
+      'https://github.com/org/second-repo/issues/2',
+    ];
+    const paths = resolveEnsemblePaths({ repoRoot: tempDir });
+    for (const [index, issueUrl] of issueUrls.entries()) {
+      const path = paths.canonicalSessionResumeStorePath(
+        issueUrl,
+        conductorAgentId,
+      );
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(
+        path,
+        `${JSON.stringify(
+          baseResumeStore({
+            conductorAgentId,
+            issueUrl,
+            repoRoot: `/clone/${index}`,
+            updatedAt: index + 1,
+          }),
+        )}\n`,
+        'utf8',
+      );
+    }
+
+    await expect(
+      findSessionResumeStore(tempDir, conductorAgentId),
+    ).rejects.toThrow(
+      /is ambiguous across saved Issues; use findSessionResumeStoreBySelector/,
+    );
+  });
+
+  it('lists every local slug group with scope filters and keyset pagination', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const currentRepoRoot = join(tempDir, 'current-clone');
+    const originRepoRoot = join(tempDir, 'origin-clone');
+    const paths = resolveEnsemblePaths({ repoRoot: currentRepoRoot });
+    const stores = [
+      baseResumeStore({
+        conductorAgentId: 'same-session-id',
+        issueUrl: 'https://github.com/org/repo/issues/1',
+        repoRoot: originRepoRoot,
+        updatedAt: 300,
+      }),
+      baseResumeStore({
+        conductorAgentId: 'same-session-id',
+        issueUrl: 'https://github.com/org/repo/issues/2',
+        repoRoot: originRepoRoot,
+        updatedAt: 200,
+      }),
+      baseResumeStore({
+        conductorAgentId: 'other-repo-session',
+        issueUrl: 'https://github.com/other/repo/issues/3',
+        repoRoot: originRepoRoot,
+        updatedAt: 100,
+      }),
+    ];
+    for (const [index, store] of stores.entries()) {
+      const canonicalPath = paths.canonicalSessionResumeStorePath(
+        store.issueUrl,
+        store.conductorAgentId,
+      );
+      const path =
+        index === 1
+          ? join(dirname(canonicalPath), 'same-session-id-second.json')
+          : canonicalPath;
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify(store)}\n`, 'utf8');
+    }
+
+    const all = await listLocatedSessionResumeStoresPage(currentRepoRoot);
+    expect(all.total).toBe(3);
+    expect(all.sessions.map(({ resumeStore }) => resumeStore.issueUrl)).toEqual([
+      'https://github.com/org/repo/issues/1',
+      'https://github.com/org/repo/issues/2',
+      'https://github.com/other/repo/issues/3',
+    ]);
+
+    const firstPage = await listLocatedSessionResumeStoresPage(currentRepoRoot, {
+      githubRepo: 'ORG/REPO',
+      limit: 1,
+    });
+    expect(firstPage.total).toBe(2);
+    expect(firstPage.sessions.map(({ resumeStore }) => resumeStore.issueUrl)).toEqual([
+      'https://github.com/org/repo/issues/1',
+    ]);
+    expect(firstPage.nextCursor).toBeDefined();
+    const secondPage = await listLocatedSessionResumeStoresPage(currentRepoRoot, {
+      githubRepo: 'org/repo',
+      limit: 1,
+      cursor: firstPage.nextCursor,
+    });
+    expect(secondPage.sessions.map(({ resumeStore }) => resumeStore.issueUrl)).toEqual([
+      'https://github.com/org/repo/issues/2',
+    ]);
+    expect(secondPage.nextCursor).toBeUndefined();
+    await expect(
+      listLocatedSessionResumeStoresPage(currentRepoRoot, { cursor: '' }),
+    ).rejects.toThrow(/Invalid session list cursor/);
+
+    await expect(
+      findSessionResumeStoreBySelector(currentRepoRoot, {
+        conductorAgentId: 'same-session-id',
+        githubRepo: 'org/repo',
+      }),
+    ).rejects.toThrow(/specify --issue-url/);
+    await expect(
+      findSessionResumeStoreBySelector(currentRepoRoot, {
+        conductorAgentId: 'same-session-id',
+        githubRepo: 'different/repo',
+        issueUrl: 'https://github.com/org/repo/issues/1',
+      }),
+    ).rejects.toThrow(/different GitHub repositories/);
+    await expect(
+      findSessionResumeStoreBySelector(currentRepoRoot, {
+        conductorAgentId: 'same-session-id',
+        issueUrl: 'https://github.com/org/repo/issues/2',
+      }),
+    ).resolves.toMatchObject({
+      resumeStore: {
+        issueUrl: 'https://github.com/org/repo/issues/2',
+        repoRoot: originRepoRoot,
+      },
     });
   });
 
@@ -1210,6 +1354,7 @@ describe('SessionResumeStore', () => {
     const migrated = await requireSessionResumeStoreForResume({
       repoRoot: tempDir,
       conductorAgentId: agentId,
+      issueUrl: 'https://github.com/org/repo/issues/1',
     });
     expect(migrated.updatedAt).toBe(123);
     await expect(
@@ -1240,7 +1385,6 @@ describe('SessionResumeStore', () => {
     assertSessionSidecarMatches(state, {
       conductorAgentId: options.conductorAgentId,
       issueUrl: state.issueUrl,
-      repoRoot: tempDir,
     });
 
     await saveSessionSidecar(path, state);
@@ -1260,6 +1404,7 @@ describe('SessionResumeStore', () => {
       requireSessionSidecarForResume({
         repoRoot: tempDir,
         conductorAgentId: 'missing-agent',
+        issueUrl: state.issueUrl,
       }),
     ).rejects.toMatchObject({
       name: SessionSidecarNotFoundError.name,

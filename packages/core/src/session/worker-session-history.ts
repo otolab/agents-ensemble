@@ -13,7 +13,7 @@ import { parseIssueUrl } from '../issue/issue-ref.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import { resolvePiAcpSessionMapPaths } from '../acp/pi-session-map.js';
 import type { PiAcpRuntimeMarker } from '../acp/resolve-acp-spawn.js';
-import { findSessionResumeStore } from './session-resume-store.js';
+import { findSessionResumeStoreBySelector } from './session-resume-store.js';
 
 export type WorkerSessionHistoryMessageRole = 'user' | 'assistant';
 
@@ -39,6 +39,7 @@ export interface WorkerSessionHistoryReaderSupport {
 
 export interface WorkerSessionHistoryReaderInput {
   repoRoot: string;
+  fallbackRepoRoots?: readonly string[];
   workerName: string;
   acpSessionId: string;
   acpCwd: string;
@@ -139,6 +140,8 @@ export async function readWorkerSessionHistory(input: {
   repoRoot: string;
   conductorAgentId: string;
   workerName: string;
+  githubRepo?: string;
+  issueUrl?: string;
   includeSourceFiles?: boolean;
 }): Promise<WorkerSessionHistoryResult> {
   const repoRoot = resolve(input.repoRoot);
@@ -147,11 +150,12 @@ export async function readWorkerSessionHistory(input: {
     'conductorAgentId',
   );
   const workerName = requireNonEmpty(input.workerName, 'workerName');
-  const located = await findSessionResumeStore(repoRoot, conductorAgentId);
-  if (
-    !located ||
-    resolve(located.resumeStore.repoRoot) !== repoRoot
-  ) {
+  const located = await findSessionResumeStoreBySelector(repoRoot, {
+    githubRepo: input.githubRepo,
+    issueUrl: input.issueUrl,
+    conductorAgentId,
+  });
+  if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
 
@@ -217,6 +221,7 @@ export async function readWorkerSessionHistory(input: {
     }
     const readerInput: WorkerSessionHistoryReaderInput = {
       repoRoot,
+      fallbackRepoRoots: [located.resumeStore.repoRoot],
       workerName,
       acpSessionId: worker.acpSessionId,
       acpCwd: worker.acpCwd,
@@ -291,13 +296,17 @@ async function readPiAcpSessionHistoryWithSources(
         'builtin Pi の Issue number がなく、session map を解決できません。',
       );
     }
-    const mapPaths = resolvePiAcpSessionMapPaths(
-      paths.piWorkerDir(input.workerName, issueNumber),
-      paths.legacyPiWorkerDir(input.workerName),
-    );
     sessionMapPaths = [
-      mapPaths.upstreamPath,
-      ...mapPaths.compatibilityPaths,
+      ...[input.repoRoot, ...(input.fallbackRepoRoots ?? [])].flatMap(
+        (repoRoot) => {
+          const rootPaths = resolveEnsemblePaths({ repoRoot });
+          const mapPaths = resolvePiAcpSessionMapPaths(
+            rootPaths.piWorkerDir(input.workerName, issueNumber),
+            rootPaths.legacyPiWorkerDir(input.workerName),
+          );
+          return [mapPaths.upstreamPath, ...mapPaths.compatibilityPaths];
+        },
+      ),
     ];
   } else {
     sessionMapPaths = [join(homedir(), '.pi', 'pi-acp', 'session-map.json')];

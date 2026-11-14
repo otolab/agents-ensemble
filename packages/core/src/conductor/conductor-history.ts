@@ -52,6 +52,10 @@ export async function listConductorProviderHistory(input: {
   repoRoot?: string;
   /** Issue URL scopes Pi transcripts to their canonical repository slug. */
   issueUrl?: string;
+  /** Saved clone roots whose path-hash stores may contain legacy transcripts. */
+  fallbackRepoRoots?: readonly string[];
+  /** Saved legacy workspaces to check after canonical and current-root paths. */
+  fallbackCwds?: readonly string[];
   cursorBootstrapRunId?: string;
   query: ConductorProviderHistoryQuery;
   /** Optional post-page text transformation; omitted to preserve raw values. */
@@ -136,6 +140,8 @@ function readPiConductorHistory(input: {
   cwd: string;
   repoRoot?: string;
   issueUrl?: string;
+  fallbackRepoRoots?: readonly string[];
+  fallbackCwds?: readonly string[];
 }): ConductorProviderHistoryMessage[] {
   const cwd = input.cwd;
   const location = findPiConductorSessionFile({
@@ -143,6 +149,8 @@ function readPiConductorHistory(input: {
     cwd,
     repoRoot: input.repoRoot,
     issueUrl: input.issueUrl,
+    fallbackRepoRoots: input.fallbackRepoRoots,
+    fallbackCwds: input.fallbackCwds,
   });
   if (!location) {
     throw new Error('The Pi provider session is missing or unreadable.');

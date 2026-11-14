@@ -54,7 +54,7 @@ list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }
 
 ## Operator-agent watch state の欠損・破損と復旧
 
-watch pool は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。旧 project `.ensemble/operator-agent/watch-state.json` は読み込み時に移行します。
+watch pool は、`listLocatedSessionResumeStores(repoRoot)` が返す全選択済み Store を基準に保存先を決めます。1件以上あり、全件が canonical slug 配下で、示す repository slug が一つなら `~/.ensemble/operator-agent/github.com/<owner>/<repo>/watch-state.json`、それ以外は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。この判定は local の全 session discovery に対するもので、watch 登録した session や特定 repository だけには絞りません。旧 project `.ensemble/operator-agent/watch-state.json` は読み込み時に移行します。
 
 - **state file が存在しない場合:** empty state として起動し、watch pool は空です。保存済み watch 登録・cursor・未 dispatch report は復元されません。監視を再開するには対象 session ごとに `register_session_watch` を実行してください。cursor がないため、再登録後の最初の成功した snapshot は既存 Open Question ID の silent baseline になります。その snapshot にすでに含まれる質問（state 欠損中に追加された質問も含む）は新規通知として replay されません。baseline 後に追加された ID は通常どおり通知されます。
 - **JSON または state schema が不正な場合:** operator-agent の初期化は失敗し、empty state へ黙って置き換えません。保存ファイルを退避してから、有効な backup を戻すか、version と必須 field を修復して再起動してください。state を意図的に破棄する場合も、まず必要ならコピーを保全してください。ファイルを取り除いて再起動すると empty state から始まり、上記の再登録と silent baseline が必要です。
@@ -62,17 +62,17 @@ watch pool は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch
 
 ## 複数の保存先に同じ SessionResumeStore がある場合
 
-通常の保存先は [ADR 0046](adr/0046-migrated-session-canonical-slug-mirrors.md) に記録したとおり `~/.ensemble/sessions/<repoKey>/` です。ADR 0044 の path-hash 方針を維持しつつ、project `.ensemble/` からの一括移行では JSON と sidecar をまず path-hash 側へ移し、その後 GitHub Issue URL が有効な ResumeStore と対応する Open Questions / session-state YAML を canonical slug 側へ、宛先が未作成の場合だけ複製します。path-hash 側は削除・退避せず残します。この移行を通った session に限り slug 側を正本として扱い、resume 後の JSON と YAML も slug 側へ更新します。新規 session の通常保存先は引き続き path-hash です。
+Issue session の通常保存先は canonical GitHub slug 配下（`~/.ensemble/sessions/github.com/<owner>/<repo>/`）です。SessionResumeStore、Open Questions / session-state YAML、tool-call snapshot、Pi transcript をこの location に保存します。別 clone からも Issue URL と slug を使って同じ session を見つけられます。
 
-同じ `conductorAgentId` の JSON が複数の場所にある場合、operator / harness は `~/.ensemble/sessions/github.com/<owner>/<repo>/` の slug 側、path-hash 側、project `.ensemble/sessions/` の順で ResumeStore を選びます。sidecar の探索も選択 location に合わせます。slug 選択時は slug → path-hash → project legacy の順、path-hash 選択時は path-hash → project legacy の順、project legacy 選択時は project legacy のみを読みます。hash-only session に残った orphan slug YAML が、選択中の ResumeStore より優先されることはありません。
+ResumeStore の探索は全ローカル canonical slug を `repoRoot` の一致条件なしで調べた後、現在 clone の path-hash、現在 clone の project `.ensemble/sessions/` を調べます。保存時 clone の path-hash は ResumeStore の候補には含めません。同じ Issue と `conductorAgentId` の候補が複数ある場合は canonical slug、現在 clone の path-hash、project legacy の順で選び、同じ保存先種別では `updatedAt` が新しい Store を優先します。slug と hash が重複していれば slug 側を選び、`harnessSocketPath` もその Store から読みます。選択後の Open Questions / session-state YAML、tool-call 履歴、Pi transcript は slug を優先し、現在 clone と保存時 clone の path-hash、該当する project / CWD legacy を fallback として探します。
 
-operator-agent の session / watch state は、対象 repository の選択済み ResumeStore がすべて同じ canonical slug にあり、その slug が一意に決まる場合は slug-keyed state を使います。state がまだなければ path-hash、次に project legacy を読み、読み込んだ値を slug 側へ複製します。それ以外（hash-only、legacy、複数 slug が混在する場合）は path-hash を使い、project legacy を fallback とします。state の読み込み・保存先は ResumeStore location から決め、ディレクトリ列挙順には依存しません。
+operator-agent の session / watch state は、`listLocatedSessionResumeStores(repoRoot)` が返す全件を基準に保存先を決めます。この一覧は全ローカル canonical slug と現在 clone の path-hash / project legacy から見つかった Store を対象にし、同一 Issue・conductor ID の重複候補を保存先優先度で一件に絞った結果です。一件以上あり、全件が canonical slug 配下で、全件の Issue URL が示す repository が一つの場合に限り slug-keyed state を使います。一覧が空、path-hash または project legacy の Store を含む、あるいは複数 repository にまたがる場合は `repoRoot` 由来の path-hash state を使い、project legacy を fallback とします。判定は特定の対象 repository や watch 登録 session には絞られないため、たとえば別 repository の local session が一件あるだけでも hash path になります。slug-keyed state がまだなければ path-hash、次に project legacy を読み、読み込んだ値を slug 側へ複製します。保存先は ResumeStore location から決まり、ディレクトリ列挙順には依存しません。Pi operator transcript は引き続き `~/.ensemble/operator-agent/<repoKey>/pi-sessions/` を使います。
 
-重複を検出すると operator TTY の `[harness]` に、選択した path と各候補の `harnessSocketPath` の有無を表示します。migration は既存の slug JSON / YAML を上書きせず、hash copy も削除・退避しません。`scripts/migrate-project-ensemble-runtime-to-user.mjs` は既に path-hash へ移行済みの session に対して再実行しても slug mirror を作成できます。
+重複を検出すると operator TTY の `[harness]` に、選択した path と各候補の `harnessSocketPath` の有無を表示します。legacy path からの promotion は既存の slug JSON を上書きせず、hash copy も削除・退避しません。
 
 ## Endpoint discovery と lifecycle
 
-operator-agent は `listSessionResumeStores` が選んだ SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。通常は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json` ですが、同じ session の canonical slug 側と重複していれば slug 側を使います。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、選択した SessionResumeStore に記録された値を使ってください。
+operator-agent は `listSessionResumeStores` が選んだ SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。通常は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json` です。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、選択した SessionResumeStore に記録された値を使ってください。
 
 path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら UDS request は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` と発言 listen は直接 live control であり、保存 YAML へ fallback しません。operator-agent tool の `list_conductor_messages` はこの UDS 経路を使わず、SessionResumeStore の session ID / backend / cwd から provider history を読みます。watch pool の `register_session_watch` のみが `session.observe` を試し、UDS が到達不能または method 未対応なら選択した ResumeStore location に対応する保存 snapshot へ切り替えます。発言 listen は UDS が利用できない間も保存値へ切り替えず、次の poll で再接続を試します。
 
@@ -289,7 +289,9 @@ limit 1 でも単独 response が上限を超える発言に達した場合、�
 
 ### operator-agent の provider history list
 
-operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / `repoRoot` / `conductorCwd` を使い、SDK が保存した local session history から最大 100 件を読みます。Pi は `repoRoot` 基準の user 層 `piSessionsDir` を優先し、対象 session がなければ `conductorCwd/.ensemble/pi/sessions/` を探します。Pi `SessionManager` には引き続き `conductorCwd` を渡します。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。
+operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / `issueUrl` / `repoRoot` / `conductorCwd` を使い、SDK が保存した local session history から最大 100 件を読みます。
+
+Pi transcript は canonical slug、保存された `repoRoot` 由来の path-hash、`conductorCwd` 配下の project `.ensemble/pi/sessions/` の順で探します。Pi `SessionManager` には保存済み `conductorCwd` を渡します。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。core API を直接使う場合は、現在 clone と異なる保存時 root / CWD を `fallbackRepoRoots` / `fallbackCwds` で追加できます。
 
 - **共通 filter:** user inbound と final assistant response だけを返します。system prompt、tool call / result、thinking、その他 provider event は出力しません。bootstrap、失敗・cancelled・running・空 response は対象外です。inbound / final response の本文は保存値のままで、secret redaction は行いません。`ensemble session messages` もこの本文をそのままローカル出力します。秘密値を含む可能性のある生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。既存の同一 OS user access boundary も適用されます。
 - **Cursor bootstrap context:** Cursor SDK に system-prompt API がないため、初回 bootstrap が未完了の session では、後続 dispatch の user inbound に compiled prompt が再度含まれる場合があります。これは provider に実際に送った内容であり、provider-history list と `ensemble session messages` では user inbound の一部として返ります。recovery inbox と Issue workflow の UDS message list にはこの prompt を複製しません。
@@ -308,7 +310,10 @@ const history = await listConductorProviderHistory({
   backend,
   conductorAgentId,
   cwd, // Pi SessionManager に渡す cwd
-  repoRoot, // Pi の user 層 transcript を解決する repo root
+  repoRoot, // 現在 clone。canonical slug と現在 clone の fallback を解決する root
+  issueUrl, // canonical slug の repository identity
+  fallbackRepoRoots: [savedRepoRoot], // 保存時 clone の path-hash fallback
+  fallbackCwds: [savedCwd], // 保存時 conductorCwd の project legacy fallback
   query: { limit: 20, order: 'desc' },
   sanitizer,
 });
@@ -326,7 +331,7 @@ await aggregateOrStore(history);
 
 回答候補は Open Questions YAML に atomic save されてから live Registry と event queue に反映されます。YAML は回答永続化・resume の正本で、SessionResumeStore は JSON mirror として更新されます。通常の success response は YAML save と conductor dispatch receipt の成功後に返ります。SessionResumeStore の flush 成功は success 条件ではありません。回答処理で mirror 更新に失敗すると warning を記録し、後続 flush を一度 schedule して再同期を試みます。これは再同期の保証ではなく、その flush も失敗した場合は warning を記録してこの経路での再試行を終えます。
 
-永続化先は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}/open-questions.yaml`、SessionResumeStore は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json` です。SessionResumeStore は `harnessSocketPath` の endpoint index を持ち、Open Question snapshot も互換用 mirror として含みます。
+永続化先は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}/open-questions.yaml`、SessionResumeStore は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json` です。SessionResumeStore は `harnessSocketPath` の endpoint index を持ち、Open Question snapshot も互換用 mirror として含みます。
 
 JSON-RPC error は次の envelope です。`data` は該当する場合だけ付きます。
 
@@ -369,7 +374,7 @@ conductor send の通常時の再接続方針は既存 dispatch policy に従い
 
 ## Security と privacy
 
-- `~/.ensemble/sessions/<repoKey>/` と session data directory、UDS runtime directory は owner-only (`0700`) です。SessionResumeStore の JSON、Open Questions YAML、socket は owner read/write (`0600`) です。
+- user-scoped canonical slug / path-hash session directory と session data directory、UDS runtime directory は owner-only (`0700`) です。SessionResumeStore の JSON、Open Questions YAML、socket は owner read/write (`0600`) です。project legacy location の権限は repository directory の ACL / mode に従います。
 - token 認証はありません。同じ OS user の別 process は socket に接続できる trust boundary です。
 - UDS server は request / response body を access log に出しません。一方、既存 CLI の operator observation は質問本文・回答本文を非 TTY では stderr、TTY では TUI activity log に表示し、SessionResumeStore / YAML にも保存します。最後の conductor 応答 API も同じ OS user の client に本文を返します。
 - API は質問・context・choice を保存値のまま返します。自由文中の secret や repository 外情報を検出する一般的な redaction はありません。機密値を質問・context・回答へ含めないでください。詳細は [session-logging.md](session-logging.md) を参照してください。

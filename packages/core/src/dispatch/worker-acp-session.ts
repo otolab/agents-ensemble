@@ -2,10 +2,7 @@ import { AcpSessionConfigOptionError } from '../acp/acp-client.js';
 import type { SessionUpdateHandler } from '../acp/acp-client.js';
 import { AcpBridge } from '../acp/acp-bridge.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
-import {
-  assertAcpSpawnMatchesResume,
-  type AcpSpawnFingerprint,
-} from '../acp/resolve-acp-spawn.js';
+import type { AcpSpawnFingerprint } from '../acp/resolve-acp-spawn.js';
 import type { PermissionHandler, PromptResult } from '../acp/types.js';
 import type { IssueRef } from '../issue/issue-ref.js';
 import { assertWorkerWorkspaceDirectory } from '../profile/resolve-worker-workspace.js';
@@ -39,11 +36,11 @@ export interface OpenWorkerAcpSessionOptions {
   /** ACP spawn / session cwd。未指定時は `worktree.path`。 */
   acpCwd?: string;
   workerName?: string;
-  /** resume 時に SessionResumeStore に記録した cwd。不一致なら attach 失敗。 */
+  /** resume 時に SessionResumeStore に記録した cwd（診断用）。 */
   expectedResumeAcpCwd?: string;
   /** resume 時に SessionResumeStore に記録した ACP spawn metadata。 */
   expectedResumeAcpSpawn?: AcpSpawnFingerprint;
-  /** 現在の profile / CLI から解決した ACP spawn（resume 検証用）。 */
+  /** 現在の profile / CLI から解決した ACP spawn。 */
   currentAcpSpawn?: AcpSpawnFingerprint;
   resumeAcpSessionId?: string;
   bridge?: AcpBridge;
@@ -93,24 +90,6 @@ export async function openWorkerAcpSession(
   const worktree = options.worktree;
   const issue = worktree.issue;
   const acpCwd = options.acpCwd ?? worktree.path;
-
-  if (
-    options.expectedResumeAcpCwd &&
-    options.expectedResumeAcpCwd !== acpCwd
-  ) {
-    const label = options.workerName ? `Worker "${options.workerName}"` : 'Worker';
-    throw new Error(
-      `${label} resume cwd mismatch: saved resume store has ${options.expectedResumeAcpCwd}, current profile resolves to ${acpCwd}`,
-    );
-  }
-
-  if (options.resumeAcpSessionId && options.currentAcpSpawn) {
-    assertAcpSpawnMatchesResume({
-      expected: options.expectedResumeAcpSpawn,
-      actual: options.currentAcpSpawn,
-      workerName: options.workerName,
-    });
-  }
 
   if (options.acpCwd !== undefined) {
     assertWorkerWorkspaceDirectory(acpCwd, options.workerName);

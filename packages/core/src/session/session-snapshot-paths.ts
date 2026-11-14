@@ -13,18 +13,19 @@ import type {
 
 export type SessionSnapshotKind = 'open-questions' | 'session-state';
 
-/** Return snapshot paths in the same precedence used when resuming a session. */
+/** Return slug-first snapshot paths with local and saved-root legacy fallbacks. */
 export function sessionSnapshotPaths(
   repoRoot: string,
   located: LocatedSessionResumeStore,
   kind: SessionSnapshotKind,
 ): string[] {
-  const { resumeStore, location } = located;
+  const { resumeStore } = located;
   const userPath = (
+    root: string,
     selectedLocation: SessionResumeStoreLocation,
   ): string => {
     const input = {
-      repoRoot,
+      repoRoot: root,
       conductorAgentId: resumeStore.conductorAgentId,
       issueUrl: resumeStore.issueUrl,
       location: selectedLocation,
@@ -33,26 +34,24 @@ export function sessionSnapshotPaths(
       ? openQuestionsStorePath(input)
       : sessionStateStorePath(input);
   };
-  const legacyPath =
+  const legacyPath = (root: string) =>
     kind === 'open-questions'
       ? legacyOpenQuestionsStorePath({
-          repoRoot,
+          repoRoot: root,
           conductorAgentId: resumeStore.conductorAgentId,
         })
       : legacySessionStateStorePath({
-          repoRoot,
+          repoRoot: root,
           conductorAgentId: resumeStore.conductorAgentId,
         });
 
-  if (location === 'canonical-slug') {
-    return [
-      userPath('canonical-slug'),
-      userPath('user-path-hash'),
-      legacyPath,
-    ];
-  }
-  if (location === 'user-path-hash') {
-    return [userPath('user-path-hash'), legacyPath];
-  }
-  return [legacyPath];
+  const savedRepoRoot = resumeStore.repoRoot;
+  const roots = [...new Set([repoRoot, savedRepoRoot])];
+  const currentRoot = roots[0]!;
+  const paths = [
+    userPath(currentRoot!, 'canonical-slug'),
+    ...roots.map((root) => userPath(root, 'user-path-hash')),
+    ...roots.map(legacyPath),
+  ];
+  return [...new Set(paths)];
 }

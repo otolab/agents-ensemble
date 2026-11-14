@@ -113,6 +113,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.1',
@@ -271,6 +272,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -323,6 +325,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -358,6 +361,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory: join(tempRoot, 'idle-bundle'),
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -369,6 +373,50 @@ describe('exportSessionBundle', () => {
     expect(result.warnings).toContain(warning);
     expect(result.manifest.session.harnessPhase).toBe('idle');
     expect(result.manifest.warnings).toContain(warning);
+  });
+
+  it('exports the saved clone project legacy tool-call history before the current clone fallback', async () => {
+    const savedRepoRoot = join(tempRoot, 'saved-repository');
+    const savedPaths = resolveEnsemblePaths({
+      repoRoot: savedRepoRoot,
+      userEnsembleRoot: userRoot,
+    });
+    const currentLegacyPath =
+      paths.legacyToolCallHistoryPath(SESSION_ID);
+    const savedLegacyPath =
+      savedPaths.legacyToolCallHistoryPath(SESSION_ID);
+    await writeResumeStore({ backend: 'cursor', repoRoot: savedRepoRoot });
+    await Promise.all([
+      mkdir(dirname(currentLegacyPath), { recursive: true }),
+      mkdir(dirname(savedLegacyPath), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(currentLegacyPath, '{"source":"current clone"}\n', 'utf8'),
+      writeFile(savedLegacyPath, '{"source":"saved clone"}\n', 'utf8'),
+    ]);
+    const outputDirectory = join(tempRoot, 'legacy-order-bundle');
+
+    const result = await exportSessionBundle({
+      repoRoot,
+      conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
+      outputDirectory,
+      ensembleVersion: '0.21.0',
+      cliVersion: '0.21.1',
+      includeToolCalls: true,
+    });
+
+    expect(
+      result.manifest.sources.find(
+        (source) => source.id === 'harness.toolCallSnapshots',
+      ),
+    ).toMatchObject({
+      status: 'copied',
+      sourcePaths: [savedLegacyPath],
+    });
+    await expect(
+      readFile(join(outputDirectory, 'harness/session.tool-calls'), 'utf8'),
+    ).resolves.toBe('{"source":"saved clone"}\n');
   });
 
   it('records missing supplemental data and a running-session best-effort warning', async () => {
@@ -383,6 +431,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory: join(tempRoot, 'partial-bundle'),
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -437,6 +486,7 @@ describe('exportSessionBundle', () => {
       exportSessionBundle({
         repoRoot,
         conductorAgentId: SESSION_ID,
+        issueUrl: ISSUE_URL,
         outputDirectory,
         ensembleVersion: '0.21.0',
         cliVersion: '0.21.0',
@@ -453,6 +503,7 @@ describe('exportSessionBundle', () => {
       exportSessionBundle({
         repoRoot,
         conductorAgentId: SESSION_ID,
+        issueUrl: ISSUE_URL,
         outputDirectory,
         ensembleVersion: '0.21.0',
         cliVersion: '0.21.0',
@@ -483,6 +534,7 @@ describe('exportSessionBundle', () => {
     const result = await exportSessionBundle({
       repoRoot,
       conductorAgentId: SESSION_ID,
+      issueUrl: ISSUE_URL,
       outputDirectory,
       ensembleVersion: '0.21.0',
       cliVersion: '0.21.0',
@@ -506,13 +558,14 @@ describe('exportSessionBundle', () => {
   async function writeResumeStore(options: {
     backend?: 'cursor' | 'pi';
     harnessPhase?: 'running' | 'idle' | 'close';
+    repoRoot?: string;
   } = {}): Promise<void> {
     const fixture = JSON.parse(
       await readFile(RESUME_STORE_FIXTURE, 'utf8'),
     ) as Record<string, unknown> & {
       workers: Record<string, { acpCwd: string }>;
     };
-    fixture.repoRoot = repoRoot;
+    fixture.repoRoot = options.repoRoot ?? repoRoot;
     fixture.conductorCwd = conductorCwd;
     fixture.conductorBackend = options.backend ?? 'pi';
     fixture.harnessPhase = options.harnessPhase ?? 'close';

@@ -38,6 +38,8 @@ export interface ConductorAgentCreateOptions {
   legacySessionDir?: string;
   /** Additional legacy transcript directories, tried in order on resume. */
   legacySessionDirs?: readonly string[];
+  /** CWDs from the saved session whose Pi transcript may be resumed in this clone. */
+  resumeCwds?: readonly string[];
   customTools?: ConductorToolSet;
   onStreamText?: (text: string) => void;
 }

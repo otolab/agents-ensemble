@@ -111,46 +111,51 @@ ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 --config ~/.ensemb
 
 人間との TTY 対話を operator-agent に委ねる場合は `ensemble operator-agent [--repo-root <path>] [--config <path>]` を使います。Issue セッションとは別の agent session で起動し、backend・model・reasoning・profile・認証は conductor の設定を共有します。reasoning は `conductor.reasoning` または `CONDUCTOR_REASONING` で指定できます。Pi backend ではユーザー／プロジェクト側の Pi extension を operator session に読み込みません。
 
-operator-agent は既定で前回の operator 会話を再開します。初回起動では新しい session を作り、backend 固有の会話履歴は backend の保存先に、再開に使う backend・repoRoot・agentId は `~/.ensemble/operator-agent/<repoKey>/session.json` に保存します。TTY の EOF、Ctrl+C（SIGINT）、SIGTERM など通常の終了では agent を閉じて再開可能な状態を保ちます。`/exit` または `exit` は連続性を明示的に切り、次回起動を新規 session にします。既存の会話を残したまま新しい会話を始める場合は `ensemble operator-agent --new` を使います。強制終了や電源断では終了時の flush は保証されません。
+operator-agent は既定で前回の operator 会話を再開します。初回起動では新しい session を作り、backend 固有の会話履歴は backend の保存先に、再開に使う backend・repoRoot・agentId は保存します。`listLocatedSessionResumeStores(repoRoot)` が返す全選択済み Store が1件以上・全件 canonical slug・同一 repository の場合は `~/.ensemble/operator-agent/github.com/<owner>/<repo>/session.json`、それ以外（0件、path-hash / project legacy を含む、複数 repository）は `~/.ensemble/operator-agent/<repoKey>/session.json` が保存先です。この判定は特定の watch 対象 repository だけには絞りません。TTY の EOF、Ctrl+C（SIGINT）、SIGTERM など通常の終了では agent を閉じて再開可能な状態を保ちます。`/exit` または `exit` は連続性を明示的に切り、次回起動を新規 session にします。既存の会話を残したまま新しい会話を始める場合は `ensemble operator-agent --new` を使います。強制終了や電源断では終了時の flush は保証されません。
 
 ## 保存済み session の閲覧
 
 `ensemble session` は、保存済み conductor / worker session をローカルから読み取る CLI です。agent との会話、harness や ACP の起動、session への再接続は行いません。`operator-agent` が LLM と対話し、複数 session の監視や conductor への操作を担うのに対し、`ensemble session` は保存データを表示するだけです。
 
 ```bash
-# 現在の repository の保存 session を一覧する
+# ローカルに保存された全 repository の session を一覧する
 ensemble session list
 
-# Issue URL で絞り込む
+# repository / Issue で絞り込む（--github-repo も指定可能）
 ensemble session list --issue-url https://github.com/OWNER/REPOSITORY/issues/123
 
-# sidecar と関連 YAML の場所・要約を見る
-ensemble session show <conductorAgentId>
+# session ID で読むコマンドは repository scope を明示する
+ensemble session show <conductorAgentId> --github-repo OWNER/REPOSITORY
+ensemble session show <conductorAgentId> --issue-url https://github.com/OWNER/REPOSITORY/issues/123
 
 # session をまとめてオフライン調査する
-ensemble session export <conductorAgentId> --output ./session-bundle
+ensemble session export <conductorAgentId> --github-repo OWNER/REPOSITORY --output ./session-bundle
 
 # Pi / Cursor の conductor 会話履歴を見る
-ensemble session messages <conductorAgentId>
+ensemble session messages <conductorAgentId> --github-repo OWNER/REPOSITORY
 
 # Pi ACP worker の会話履歴を見る
-ensemble session workers messages <conductorAgentId> --worker implementer
+ensemble session workers messages <conductorAgentId> \
+  --github-repo OWNER/REPOSITORY --worker implementer
 
 # 保存データ・終了サマリ・captured stderr を send 番号で照合する
 ensemble session timeline <conductorAgentId> \
+  --github-repo OWNER/REPOSITORY \
   --summary session-summary.json \
   --harness-log harness.log
 ```
 
-`--repo-root <path>` は各 subcommand で指定できます（既定値は現在のディレクトリ）。各 subcommand の `--json` は JSON を出力します。テキスト表示は `NO_COLOR` が空でない値に設定されていると色を使いません。
+`session list` は省略時に全てのローカル canonical GitHub slug group を対象にし、GitHub API で repository を探索しません。`--github-repo <owner/repo>`、`--issue-url <url>`、`--conductor-agent-id <id>` で絞り込めます。`--limit <n>`（1〜500）と返された `nextCursor` を使ってページを取得できます。session ID を受け取る `show` / `export` / `messages` / `workers messages` / `timeline` は、`--github-repo` または `--issue-url` が必須です。ID だけから repository を推測しません。両方を指定でき、異なる repository slug を指す場合はエラーになります。
 
-`list` は SessionResumeStore の要約を更新時刻の新しい順に返します。`show` は sidecar の許可したメタデータ、sidecar と関連 YAML のパス、Open Questions の件数、session-state の報告時刻・履歴件数を表示します。worker ごとに保存 preset と transcript reader の対応状況も表示します。ここで示すのは preset に対する reader の有無で、transcript file が現在読み取れるかまでは確認しません。
+`--repo-root <path>` は各 subcommand で指定できます（既定値は現在のディレクトリ）。session の canonical slug lookup は clone path に依存しません。`--repo-root` は現在 clone の path-hash / project legacy fallback と、Pi の現在 clone 側 legacy transcript を探すために使います。各 subcommand の `--json` は JSON を出力します。テキスト表示は `NO_COLOR` が空でない値に設定されていると色を使いません。
+
+`list` は SessionResumeStore の要約を更新時刻の新しい順に返します。保存先は canonical GitHub slug を優先し、slug 配下では保存時の `repoRoot` が現在 clone と一致するかを条件にしません。path-hash と project legacy は必要な場合の fallback です。slug と path-hash に同じ session があれば slug 側を選び、その Store に記録された socket path を使います。path-hash 側の新しい `updatedAt` で選び直しません。`show` は sidecar の許可したメタデータ、sidecar と関連 YAML のパス、Open Questions の件数、session-state の報告時刻・履歴件数を表示します。worker ごとに保存 preset と transcript reader の対応状況も表示します。ここで示すのは preset に対する reader の有無で、transcript file が現在読み取れるかまでは確認しません。
 
 長い session の横断調査・共有・スクリプト化では `session export` を使い、bundle をオフライン調査の正本にしてください。`list` / `show` と live の `messages` / `workers messages` / `timeline` は必要な箇所を素早く確かめる quick peek 用です。
 
 `export` は読み取り専用で、`--output <dir>` に新しい bundle directory を作ります。既存の出力先は上書きせず、エラーにします。`manifest.json` は session ID・Issue URL・`repoRoot`・`conductorCwd`・backend・worker / preset・ensemble / CLI version を記録し、入力ごとの状態、bundle 内相対 path、byte size、SHA-256 を一覧します。manifest 自体は自己参照を避けるため hash 一覧から除外します。
 
-bundle には SessionResumeStore の raw JSON、ハーネスの `session-state.yaml` / `open-questions.yaml`、各 worker の全文 reader 結果 JSON（`messages` の 100 件制限なし）を収録します。worker JSON には元 transcript の絶対 path も含まれます。Pi conductor は `repoRoot` 基準の user 層 transcript を優先し、見つからない場合は `conductorCwd` 配下の legacy `.ensemble/pi/sessions/` を探して raw JSONL をコピーします。Cursor conductor は SDK から取得できた run metadata と conversation snapshot を `conductor/cursor-runs.json` に収録します。`--include-tool-calls` を指定すると `.tool-calls` もコピーし、`--summary <path>` / `--harness-log <path>` を指定すると、それぞれの入力を bundle に含めます。これらの相対 path は CLI を実行した directory 基準です。
+bundle には SessionResumeStore の raw JSON、ハーネスの `session-state.yaml` / `open-questions.yaml`、各 worker の全文 reader 結果 JSON（`messages` の 100 件制限なし）を収録します。worker JSON には元 transcript の絶対 path も含まれます。Pi conductor は canonical slug、現在 clone の path-hash、保存時 clone の path-hash、現在または保存済み `conductorCwd` 配下の legacy `.ensemble/pi/sessions/` の順に探して raw JSONL をコピーします。Cursor conductor は SDK から取得できた run metadata と conversation snapshot を `conductor/cursor-runs.json` に収録します。`--include-tool-calls` を指定すると `.tool-calls` もコピーし、`--summary <path>` / `--harness-log <path>` を指定すると、それぞれの入力を bundle に含めます。これらの相対 path は CLI を実行した directory 基準です。
 
 export は raw のままコピーし、API key・token・password、会話中の秘密値や tool 出力を自動 redaction しません。bundle と manifest の絶対 source path は機密情報として扱ってください。Issue / PR・ログ・集計先へ載せる前に利用者側でサニタイズしてください。
 
@@ -158,7 +163,7 @@ export は raw のままコピーし、API key・token・password、会話中の
 
 raw copy では symlink と通常 file 以外の source を追いません。任意 source、補助 YAML、Pi / Cursor / worker transcript が見つからない・読めない場合も bundle は作成し、manifest に status と warning を残します。ResumeStore が見つからない場合は export error です。harness phase が `running` / `idle` の session は process が稼働中の best-effort snapshot として warning を記録し、export 結果の status は `partial` になります。ファイル間の同時点性や Pi JSONL の書き込み競合がないことは保証しません。
 
-`messages` は保存 session の `conductorAgentId` を指定し、operator-agent の `list_conductor_messages` と同じ core provider-history API を使う quick peek 用コマンドです。Pi の transcript は SessionResumeStore の `repoRoot` を基準に user 層 `~/.ensemble/sessions/<repoKey>/pi/`（user root を変更している場合はその配下）を先に探し、対象 session がなければ保存済み `conductorCwd` の `.ensemble/pi/sessions/` を読みます。Pi `SessionManager` の cwd には `conductorCwd` を使います。既定では新しい履歴から20件、最大100件を表示します。`--limit <n>`、`--order asc|desc`、`--cursor <providerId>` でページを指定できます。返すのは user inbound と conductor の最終応答で、tool output や thinking は含みません。本文は保存値のまま出力し、テキスト表示も `--json` もサニタイズしません。API key・token・password などを会話に入力していた場合、その値も出力されます。`messages` は raw debug 経路を保ち、sanitizer の CLI option は設けていません。アプリから core API を使う場合は、返却前に `inbound` / `text` へ利用側の sanitizer を渡せます。適用境界、エラー時の動作、秘密値保護の限界は [provider history list の API 契約](../live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
+`messages` は保存 session の `conductorAgentId` と明示した repository scope を使い、operator-agent の `list_conductor_messages` と同じ core provider-history API を使う quick peek 用コマンドです。Pi の transcript は canonical slug、現在 clone の path-hash、保存時 clone の path-hash、現在または保存済み `conductorCwd` の `.ensemble/pi/sessions/` の順に探します。Pi `SessionManager` の cwd には保存済み `conductorCwd` を使います。既定では新しい履歴から20件、最大100件を表示します。`--limit <n>`、`--order asc|desc`、`--cursor <providerId>` でページを指定できます。返すのは user inbound と conductor の最終応答で、tool output や thinking は含みません。本文は保存値のまま出力し、テキスト表示も `--json` もサニタイズしません。API key・token・password などを会話に入力していた場合、その値も出力されます。`messages` は raw debug 経路を保ち、sanitizer の CLI option は設けていません。アプリから core API を使う場合は、返却前に `inbound` / `text` へ利用側の sanitizer を渡せます。適用境界、エラー時の動作、秘密値保護の限界は [provider history list の API 契約](../live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
 
 `workers messages` は保存済み ACP session を `--worker <name>` で指定します。現在オフラインで読めるのは Pi ACP（`pi`）と Codex ACP（`codex`）です。Pi は保存 session ID に対応する JSONL transcript を runtime に応じた session map から解決し、active branch の user / assistant 本文を出します。
 
@@ -192,7 +197,7 @@ Timeline の provider history は成功した user inbound / final response の�
 
 TTY の表示は `ensemble issue` と同じチャネル規約に沿います。`user>` / `operator>` は対話、`[harness]` は watch・dispatch・hold の状態と障害、`[observation]` は起動・終了・再接続などの運用通知です。`user>` は控えめに、`operator>` はシアンで表示し、operator の本文は次の行から表示します。監視報告 hold は理由と保留件数を `[harness]` の同じ形式で、状態が変わったときに更新します。`NO_COLOR` が設定されている場合は色を使いません。チャネルの詳細は [セッションロギング](../session-logging.md) を参照してください。
 
-`~/.ensemble/sessions/<repoKey>/` の保存済み SessionResumeStore から得られる情報はスナップショットとして読み取り専用です。複数 session の watch は稼働中 harness の `session.observe` を使い、接続不能または未対応時には保存済み Open Questions YAML / session-state YAML / SessionResumeStore を poll して観測元を示します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` は稼働中 session の直接 UDS control であり、停止・接続不能時にエラーとなり snapshot へ fallback しません。`get_last_conductor_message` は最後の応答だけを返します。`list_conductor_messages` は provider session history を直接読み、稼働中・停止後とも user inbound と final response の直近100件を上限に返します。Pi は active branch の entry ID と send 完了時刻を使い、Cursor は SDK run order / run ID / 作成時刻を使います。provider store を読めない場合は error になります。発言を継続受信する場合は `register_conductor_message_listen` / `unregister_conductor_message_listen` を使います。listen は稼働中 UDS の新着通知で、停止後 replay はしません。送った指示の後は `get_last_conductor_message` で最後の conductor 成功応答を確認でき、まだ成功応答がなければ `message: null` です。`send_operator_message` は `next`（既定）・`idle`・`interrupt` を指定できます。成功応答はキュー受理を示し、処理完了の確認ではありません。詳細は [稼働中 harness control API reference](../live-open-question-control-api.md)、セキュリティとログの扱いは [session logging](../session-logging.md#4-sessionresumestore-と-open-question-yaml) を参照してください。
+canonical slug 配下の SessionResumeStore から得られる情報はスナップショットとして読み取り専用です。複数 session の watch は稼働中 harness の `session.observe` を使い、接続不能または未対応時には保存済み Open Questions YAML / session-state YAML / SessionResumeStore を poll して観測元を示します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` は稼働中 session の直接 UDS control であり、停止・接続不能時にエラーとなり snapshot へ fallback しません。`get_last_conductor_message` は最後の応答だけを返します。`list_conductor_messages` は provider session history を直接読み、稼働中・停止後とも user inbound と final response の直近100件を上限に返します。Pi は active branch の entry ID と send 完了時刻を使い、Cursor は SDK run order / run ID / 作成時刻を使います。provider store を読めない場合は error になります。発言を継続受信する場合は `register_conductor_message_listen` / `unregister_conductor_message_listen` を使います。listen は稼働中 UDS の新着通知で、停止後 replay はしません。送った指示の後は `get_last_conductor_message` で最後の conductor 成功応答を確認でき、まだ成功応答がなければ `message: null` です。`send_operator_message` は `next`（既定）・`idle`・`interrupt` を指定できます。成功応答はキュー受理を示し、処理完了の確認ではありません。詳細は [稼働中 harness control API reference](../live-open-question-control-api.md)、セキュリティとログの扱いは [session logging](../session-logging.md#4-sessionresumestore-と-open-question-yaml) を参照してください。
 
 初回の作業指示は、Issue 参照の後ろに CLI 引数として渡せます。複数の引数はスペース 1 つで結合され、前後の空白は除かれます。
 

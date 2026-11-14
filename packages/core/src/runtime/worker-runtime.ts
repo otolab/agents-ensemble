@@ -72,7 +72,7 @@ interface ResidentWorker {
   /** true の間は未初期化 session を通常指示へ使わない。 */
   sessionRecoveryInProgress: boolean;
   /** 復旧中は閉じた thread への cancel を避け、bootstrap を完了させる。 */
-  sessionRecoveryPhase?: 'preparing' | 'bootstrap' | 'replay';
+  sessionRecoveryPhase?: 'preparing' | 'bootstrap';
 }
 
 interface AttachingWorker {
@@ -681,17 +681,13 @@ export class WorkerRuntime {
           if (resident.preemptInstruction) {
             return { result: bootstrapResult, superseded: true };
           }
-          if (toolActivityObserved) {
-            throw new Error(
-              `Worker "${resident.started.name}" instruction was not replayed because ACP reported tool activity before the session history error; inspect the worktree before sending follow-up work`,
-              { cause: error },
-            );
-          }
-          resident.sessionRecoveryPhase = 'replay';
-          return {
-            result: await this.runAttachedPrompt(resident, prompt),
-            superseded: false,
-          };
+          const activityNote = toolActivityObserved
+            ? ' ACP had reported tool activity before the history error.'
+            : '';
+          throw new Error(
+            `Worker "${resident.started.name}" recovered onto a new session, but the interrupted instruction was not replayed.${activityNote} Inspect the worktree before sending follow-up work.`,
+            { cause: error },
+          );
         }
 
         return { result: bootstrapResult, superseded: false };
