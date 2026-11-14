@@ -25,7 +25,7 @@ const TEST_ISSUE = {
 };
 
 const PI_API_KEY_RESOLUTION_ERROR =
-  'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs -- gcloud auth print-identity-token';
+  'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.';
 
 const { mockResume, mockCreate } = vi.hoisted(() => ({
   mockResume: vi.fn(),

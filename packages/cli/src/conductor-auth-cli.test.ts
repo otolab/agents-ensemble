@@ -98,4 +98,199 @@ describe('ensemble auth login CLI', () => {
     expect(status.stderr).not.toContain(secret);
     expect(existsSync(join(userRoot, 'sessions'))).toBe(false);
   });
+
+  it('registers, reports, lists, and clears a Pi settings command without exposing or executing it', async () => {
+    repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-auth-command-project-'));
+    userRoot = await mkdtemp(join(tmpdir(), 'ensemble-auth-command-user-'));
+    const agentDir = join(userRoot, 'pi');
+    const projectDir = join(repoRoot, 'project-pi');
+    const settingsPath = join(agentDir, 'settings.json');
+    const authPath = join(agentDir, 'auth.json');
+    const markerPath = join(userRoot, 'command-ran');
+    const command = `!printf cli-fixture-key; touch ${markerPath}`;
+    await Promise.all([
+      mkdir(join(repoRoot, '.ensemble'), { recursive: true }),
+      mkdir(agentDir, { recursive: true }),
+      mkdir(projectDir, { recursive: true }),
+    ]);
+    await writeFile(
+      join(repoRoot, '.ensemble', 'config.yaml'),
+      [
+        'conductor:',
+        '  backend: pi',
+        '  pi:',
+        `    agentDir: ${JSON.stringify(agentDir)}`,
+        `    projectDir: ${JSON.stringify(projectDir)}`,
+        '',
+      ].join('\n'),
+    );
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'fixture', defaultModel: 'fixture-model' }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            models: [{ id: 'fixture-model', name: 'Fixture model' }],
+          },
+        },
+      }),
+    );
+    await writeFile(
+      settingsPath,
+      JSON.stringify({ apiKeys: { unrelated: 'plain-key-sentinel' } }),
+    );
+
+    const env = {
+      ...process.env,
+      HOME: userRoot,
+      ENSEMBLE_USER_ROOT: userRoot,
+    };
+    const runCli = (args: string[]) =>
+      spawnSync(process.execPath, [cliEntry, ...args], {
+        encoding: 'utf8',
+        env,
+        timeout: 30_000,
+      });
+    const set = runCli([
+      'auth',
+      'set-command',
+      '--repo-root',
+      repoRoot,
+      '--provider',
+      'fixture',
+      '--',
+      command,
+    ]);
+    expect(set.status).toBe(0);
+    expect(set.stdout).toContain('command credential configured for fixture (user)');
+    expect(set.stderr).toContain('Registration and auth status do not execute it.');
+    expect(`${set.stdout}\n${set.stderr}`).not.toContain(command);
+    expect(existsSync(markerPath)).toBe(false);
+    expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toEqual({
+      apiKeys: {
+        unrelated: 'plain-key-sentinel',
+        fixture: command,
+      },
+    });
+    expect(existsSync(authPath)).toBe(false);
+
+    const status = runCli([
+      'auth',
+      'status',
+      '--repo-root',
+      repoRoot,
+    ]);
+    expect(status.status).toBe(0);
+    expect(status.stdout).toContain('source=settings_json; mode=command; scope=user');
+    expect(status.stdout).toContain(`config=${settingsPath}`);
+    expect(`${status.stdout}\n${status.stderr}`).not.toContain(command);
+    expect(existsSync(markerPath)).toBe(false);
+
+    const models = runCli([
+      'models',
+      'list',
+      '--repo-root',
+      repoRoot,
+      '--provider',
+      'fixture',
+    ]);
+    expect(models.status).toBe(0);
+    expect(models.stdout).toContain('fixture/fixture-model');
+    expect(`${models.stdout}\n${models.stderr}`).not.toContain(command);
+    expect(existsSync(markerPath)).toBe(false);
+
+    const clear = runCli([
+      'auth',
+      'clear-command',
+      '--repo-root',
+      repoRoot,
+      '--provider',
+      'fixture',
+    ]);
+    expect(clear.status).toBe(0);
+    expect(clear.stdout).toContain('command credential cleared for fixture (user)');
+    expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toEqual({
+      apiKeys: { unrelated: 'plain-key-sentinel' },
+    });
+
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        apiKeys: {
+          fixture: 'plain-key-sentinel',
+          unrelated: 'keep-this-key',
+        },
+      }),
+    );
+    await writeFile(
+      authPath,
+      JSON.stringify({ fixture: { type: 'api_key', key: 'stored-user-key' } }),
+    );
+    const logout = runCli([
+      'auth',
+      'logout',
+      '--repo-root',
+      repoRoot,
+      '--provider',
+      'fixture',
+    ]);
+    expect(logout.status).toBe(0);
+    expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toEqual({
+      apiKeys: {
+        fixture: 'plain-key-sentinel',
+        unrelated: 'keep-this-key',
+      },
+    });
+
+    const setProject = runCli([
+      'auth',
+      'set-command',
+      '--repo-root',
+      repoRoot,
+      '--provider',
+      'fixture',
+      '--target',
+      'project',
+      '--',
+      '!printf project-cli-fixture',
+    ]);
+    expect(setProject.status).toBe(0);
+    expect(setProject.stdout).toContain('command credential configured for fixture (project)');
+    expect(setProject.stdout).toContain(`settings: ${join(projectDir, 'settings.json')}`);
+    expect(setProject.stderr).toContain('Project Pi settings may be committed');
+    expect(setProject.stderr).toContain('conductor process user and environment');
+    expect(JSON.parse(await readFile(join(projectDir, 'settings.json'), 'utf8'))).toEqual({
+      defaultProvider: 'fixture',
+      defaultModel: 'fixture-model',
+      apiKeys: { fixture: '!printf project-cli-fixture' },
+    });
+    expect(existsSync(markerPath)).toBe(false);
+
+    const clearProject = runCli([
+      'auth',
+      'clear-command',
+      '--repo-root',
+      repoRoot,
+      '--provider',
+      'fixture',
+      '--target',
+      'project',
+    ]);
+    expect(clearProject.status).toBe(0);
+    expect(JSON.parse(await readFile(join(projectDir, 'settings.json'), 'utf8'))).toEqual({
+      defaultProvider: 'fixture',
+      defaultModel: 'fixture-model',
+    });
+    expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toEqual({
+      apiKeys: {
+        fixture: 'plain-key-sentinel',
+        unrelated: 'keep-this-key',
+      },
+    });
+  });
 });

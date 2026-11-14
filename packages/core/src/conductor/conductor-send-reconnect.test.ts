@@ -23,7 +23,7 @@ import {
 } from './conductor-send-reconnect.js';
 
 const PI_API_KEY_RESOLUTION_ERROR =
-  'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs -- gcloud auth print-identity-token';
+  'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.';
 
 function createHandle(send: ReturnType<typeof vi.fn>): ConductorAgentHandle {
   return {

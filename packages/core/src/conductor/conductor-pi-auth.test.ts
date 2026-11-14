@@ -21,6 +21,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import {
   createPiConductorAuthContext,
+  clearPiConductorCommandAuth,
   getPiConductorAuthStatus,
   hasPiConductorAuth,
   hasPiProviderAuth,
@@ -30,6 +31,7 @@ import {
   logoutPiConductor,
   resolvePiConductorApiKey,
   resolvePiConductorProvider,
+  setPiConductorCommandAuth,
 } from './conductor-pi-auth.js';
 import type { PiConductorOAuthLoginCallbacks } from './conductor-pi-auth.js';
 import { loadPiResources } from './pi-resource-loader.js';
@@ -1787,6 +1789,92 @@ describe('Pi conductor authentication', () => {
     ).resolves.toEqual([
       expect.objectContaining({ id: 'fixture/fixture-model', provider: 'fixture' }),
     ]);
+    const modelsStatus = await getPiConductorAuthStatus({
+      ...options,
+      provider: 'fixture',
+    });
+    expect(modelsStatus.providers).toEqual([
+      expect.objectContaining({
+        provider: 'fixture',
+        source: 'models_json_command',
+        mode: 'command',
+        scope: 'project',
+        configurationPath: join(projectDir, 'models.json'),
+      }),
+    ]);
+    expect(JSON.stringify(modelsStatus)).not.toContain('!printf command-key');
+
+    const settingsCommand = '!printf settings-command-sentinel';
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({ apiKeys: { fixture: settingsCommand } }),
+    );
+    const settingsCommandStatus = await getPiConductorAuthStatus({
+      ...options,
+      provider: 'fixture',
+    });
+    expect(settingsCommandStatus.providers).toEqual([
+      expect.objectContaining({
+        provider: 'fixture',
+        source: 'settings_json',
+        mode: 'command',
+        scope: 'user',
+        configurationPath: join(agentDir, 'settings.json'),
+      }),
+    ]);
+    expect(JSON.stringify(settingsCommandStatus)).not.toContain('!printf command-key');
+    expect(JSON.stringify(settingsCommandStatus)).not.toContain(settingsCommand);
+  });
+
+  it('reports the apiKeys runtime source separately from a scalar command setting', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-runtime-source-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-runtime-source-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({ apiKeys: { fixture: 'runtime-fixture-key' } }),
+    );
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({ apiKey: '!printf scalar-command-sentinel' }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            models: [{ id: 'fixture-model' }],
+          },
+        },
+      }),
+    );
+
+    const status = await getPiConductorAuthStatus({
+      cwd,
+      pi: { agentDir, projectDir },
+      provider: 'fixture',
+      env: {},
+    });
+    expect(status.providers).toEqual([
+      expect.objectContaining({
+        provider: 'fixture',
+        source: 'runtime',
+        mode: 'api_key',
+        scope: 'user',
+        configurationPath: join(agentDir, 'settings.json'),
+        commandConfiguration: {
+          source: 'settings_json',
+          scope: 'project',
+          path: join(projectDir, 'settings.json'),
+          effective: false,
+        },
+      }),
+    ]);
+    expect(JSON.stringify(status)).not.toContain('runtime-fixture-key');
+    expect(JSON.stringify(status)).not.toContain('scalar-command-sentinel');
   });
 
   it('resolves a settings.json apiKeys command through the Pi runtime', async () => {
@@ -1848,6 +1936,262 @@ describe('Pi conductor authentication', () => {
     ).resolves.toBe('settings-global-key');
   });
 
+  it('registers a user settings command without executing it or writing auth.json', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-command-registration-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-command-registration-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const command = '!printf fixture-command-key';
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'fixture', defaultModel: 'fixture-model' }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            models: [{ id: 'fixture-model', name: 'Fixture model' }],
+          },
+        },
+      }),
+    );
+
+    const getAuth = vi.spyOn(ModelRuntime.prototype, 'getAuth');
+    const result = await setPiConductorCommandAuth({
+      cwd,
+      pi: { agentDir, projectDir },
+      provider: 'fixture',
+      command,
+      env: {},
+    });
+
+    expect(result).toMatchObject({
+      backend: 'pi',
+      provider: 'fixture',
+      target: 'user',
+      settingsPath: join(agentDir, 'settings.json'),
+    });
+    expect(JSON.parse(await readFile(join(agentDir, 'settings.json'), 'utf8'))).toEqual({
+      apiKeys: { fixture: command },
+    });
+    await expect(readFile(join(agentDir, 'auth.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+
+    const status = await getPiConductorAuthStatus({
+      cwd,
+      pi: { agentDir, projectDir },
+      provider: 'fixture',
+      env: {},
+    });
+    expect(status.providers).toEqual([
+      expect.objectContaining({
+        provider: 'fixture',
+        configured: true,
+        source: 'settings_json',
+        mode: 'command',
+        scope: 'user',
+        configurationPath: join(agentDir, 'settings.json'),
+      }),
+    ]);
+    expect(JSON.stringify(status)).not.toContain(command);
+    expect(getAuth).not.toHaveBeenCalled();
+    getAuth.mockRestore();
+
+    const resources = await loadPiResources({
+      cwd,
+      pi: { agentDir, projectDir },
+      env: {},
+    });
+    const context = await createPiConductorAuthContext(
+      { cwd, pi: { agentDir, projectDir }, env: {} },
+      resources,
+    );
+    await expect(
+      resolvePiConductorApiKey({
+        modelRuntime: context.modelRuntime,
+        resources,
+        provider: 'fixture',
+        env: {},
+      }),
+    ).resolves.toBe('fixture-command-key');
+    await expect(
+      listPiConductorModels({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'fixture',
+        env: {},
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: 'fixture/fixture-model',
+        provider: 'fixture',
+      }),
+    ]);
+  });
+
+  it('lists a settings command in auth status when no provider is selected by default', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-command-status-list-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-command-status-list-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const command = '!printf command-status-list-sentinel';
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({ apiKeys: { fixture: command } }),
+    );
+
+    const status = await getPiConductorAuthStatus({
+      cwd,
+      pi: { agentDir, projectDir },
+      env: {},
+    });
+    expect(status.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: 'fixture',
+          configured: true,
+          source: 'settings_json',
+          mode: 'command',
+          scope: 'user',
+          configurationPath: join(agentDir, 'settings.json'),
+        }),
+      ]),
+    );
+    expect(JSON.stringify(status)).not.toContain(command);
+  });
+
+  it('clears only a command entry and leaves plain API keys and other providers intact', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-command-clear-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-command-clear-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const settingsPath = join(agentDir, 'settings.json');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        apiKeys: {
+          fixture: 'plain-key-sentinel',
+          other: '!printf other-key',
+        },
+        custom: 'keep',
+      }),
+    );
+
+    await expect(
+      clearPiConductorCommandAuth({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'fixture',
+        env: {},
+      }),
+    ).resolves.toMatchObject({ cleared: false, target: 'user' });
+    await expect(readFile(settingsPath, 'utf8')).resolves.toContain(
+      'plain-key-sentinel',
+    );
+
+    await writeFile(
+      settingsPath,
+      JSON.stringify({
+        apiKeys: {
+          fixture: '!printf fixture-key',
+          other: '!printf other-key',
+        },
+        custom: 'keep',
+      }),
+    );
+    await expect(
+      clearPiConductorCommandAuth({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'fixture',
+        env: {},
+      }),
+    ).resolves.toMatchObject({ cleared: true, target: 'user' });
+    expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toEqual({
+      apiKeys: { other: '!printf other-key' },
+      custom: 'keep',
+    });
+    await expect(readFile(join(agentDir, 'auth.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('writes command credentials to project settings only when explicitly targeted', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-command-project-target-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-command-project-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    await mkdir(projectDir, { recursive: true });
+
+    await expect(
+      setPiConductorCommandAuth({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'fixture',
+        command: '!printf project-fixture-key',
+        target: 'project',
+        env: {},
+      }),
+    ).resolves.toMatchObject({
+      target: 'project',
+      settingsPath: join(projectDir, 'settings.json'),
+    });
+    expect(
+      JSON.parse(await readFile(join(projectDir, 'settings.json'), 'utf8')),
+    ).toEqual({ apiKeys: { fixture: '!printf project-fixture-key' } });
+    const status = await getPiConductorAuthStatus({
+      cwd,
+      pi: { agentDir, projectDir },
+      provider: 'fixture',
+      env: {},
+    });
+    expect(status.providers).toEqual([
+      expect.objectContaining({
+        provider: 'fixture',
+        source: 'settings_json',
+        mode: 'command',
+        scope: 'project',
+        configurationPath: join(projectDir, 'settings.json'),
+      }),
+    ]);
+    expect(JSON.stringify(status)).not.toContain('project-fixture-key');
+    await expect(readFile(join(agentDir, 'settings.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('refuses registration when a higher-priority scalar apiKey would shadow the command', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-command-scalar-conflict-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-command-scalar-conflict-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const scalarKey = 'scalar-key-must-not-be-overwritten';
+    const projectSettingsPath = join(projectDir, 'settings.json');
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      projectSettingsPath,
+      JSON.stringify({ apiKey: scalarKey }),
+    );
+
+    await expect(
+      setPiConductorCommandAuth({
+        cwd,
+        pi: { agentDir, projectDir },
+        provider: 'fixture',
+        command: '!printf fixture-command-key',
+        env: {},
+      }),
+    ).rejects.toThrow(
+      'Pi settings apiKey takes precedence over apiKeys[provider]; remove or change the scalar setting before registering a provider command.',
+    );
+    expect(await readFile(projectSettingsPath, 'utf8')).toContain(scalarKey);
+    await expect(readFile(join(agentDir, 'settings.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   it('reports a clear error when a Pi apiKey command cannot be resolved', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-project-'));
     const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-user-'));
@@ -1871,6 +2215,120 @@ describe('Pi conductor authentication', () => {
     const resources = await loadPiResources(options);
     const context = await createPiConductorAuthContext(options, resources);
 
+    const error = await resolvePiConductorApiKey({
+      modelRuntime: context.modelRuntime,
+      resources,
+      provider: 'fixture',
+      env: {},
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
+    );
+    expect((error as Error).cause).toBeUndefined();
+  });
+
+  it('keeps command resolution errors free of command, cause, stdout, and stderr data', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-command-redaction-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-command-redaction-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const commandSentinel = 'COMMAND_SENTINEL_683';
+    const causeSentinel = 'CAUSE_SENTINEL_683';
+    const credentialSentinel = 'CREDENTIAL_SENTINEL_683';
+    const stdoutSentinel = 'STDOUT_SENTINEL_683';
+    const stderrSentinel = 'STDERR_SENTINEL_683';
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({
+        apiKeys: { fixture: `!printf ${commandSentinel}` },
+      }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            models: [{ id: 'fixture-model' }],
+          },
+        },
+      }),
+    );
+
+    const resources = await loadPiResources({
+      cwd,
+      pi: { agentDir, projectDir },
+      env: {},
+    });
+    const context = await createPiConductorAuthContext(
+      { cwd, pi: { agentDir, projectDir }, env: {} },
+      resources,
+    );
+    const rawCause = Object.assign(new Error(causeSentinel), {
+      cause: new Error('NESTED_CAUSE_SENTINEL_683'),
+      credential: credentialSentinel,
+      stdout: Buffer.from(stdoutSentinel),
+      stderr: Buffer.from(stderrSentinel),
+    });
+    vi.spyOn(context.modelRuntime, 'getAuth').mockRejectedValue(rawCause);
+
+    const caught = await resolvePiConductorApiKey({
+      modelRuntime: context.modelRuntime,
+      resources,
+      provider: 'fixture',
+      env: {},
+    }).catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(Error);
+    const errorText = [
+      (caught as Error).message,
+      (caught as Error).stack,
+      (caught as Error).cause,
+      JSON.stringify(caught),
+    ].join('\n');
+    for (const sentinel of [
+      commandSentinel,
+      causeSentinel,
+      credentialSentinel,
+      'NESTED_CAUSE_SENTINEL_683',
+      stdoutSentinel,
+      stderrSentinel,
+    ]) {
+      expect(errorText).not.toContain(sentinel);
+    }
+    expect((caught as Error).message).toBe(
+      'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
+    );
+    expect((caught as Error).cause).toBeUndefined();
+  });
+
+  it('does not report the raw command on a failed settings credential', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-command-safe-error-project-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-command-safe-error-user-'));
+    const projectDir = join(cwd, '.ensemble', 'pi');
+    const commandSentinel = 'COMMAND_FAILURE_SENTINEL_683';
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({ apiKeys: { fixture: `!sh -c '${commandSentinel}'` } }),
+    );
+    await writeFile(
+      join(projectDir, 'models.json'),
+      JSON.stringify({
+        providers: {
+          fixture: {
+            api: 'openai-completions',
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            models: [{ id: 'fixture-model' }],
+          },
+        },
+      }),
+    );
+    const options = { cwd, pi: { agentDir, projectDir }, env: {} };
+    const resources = await loadPiResources(options);
+    const context = await createPiConductorAuthContext(options, resources);
+
     await expect(
       resolvePiConductorApiKey({
         modelRuntime: context.modelRuntime,
@@ -1878,7 +2336,9 @@ describe('Pi conductor authentication', () => {
         provider: 'fixture',
         env: {},
       }),
-    ).rejects.toThrow(/Failed to resolve API key for Pi provider "fixture" from shell command/);
+    ).rejects.toThrow(
+      'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
+    );
   });
 });
 

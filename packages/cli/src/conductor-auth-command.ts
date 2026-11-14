@@ -10,12 +10,16 @@ import {
   resolvePiConductorProvider,
   resolveConductorAuthBackend,
   resolveConductorPiResourcePaths,
+  clearPiConductorCommandAuth,
+  setPiConductorCommandAuth,
   type ConductorAuthOptions,
   type ConductorAuthStatus,
   type ConductorLoginResult,
   type ConductorLogoutResult,
   type ConductorBackend,
   type EnsembleConfig,
+  type PiConductorAuthTarget,
+  type PiConductorCommandAuthResult,
   type ResolvedProfile,
 } from '@agents-ensemble/core';
 import {
@@ -173,6 +177,38 @@ export async function runConductorLogout(
 ): Promise<ConductorLogoutResult> {
   const context = await resolveConductorCommandContext(options);
   return logoutConductor(context.auth);
+}
+
+export async function runConductorSetCommand(
+  options: ConductorCommandOptions & {
+    command: string;
+    target?: PiConductorAuthTarget;
+  },
+): Promise<PiConductorCommandAuthResult> {
+  const context = await resolveConductorCommandContext(options);
+  if (context.auth.backend !== 'pi' || !context.auth.pi) {
+    throw new Error('`ensemble auth set-command` requires the Pi backend.');
+  }
+  return setPiConductorCommandAuth({
+    ...context.auth.pi,
+    provider: options.provider,
+    command: options.command,
+    target: options.target,
+  });
+}
+
+export async function runConductorClearCommand(
+  options: ConductorCommandOptions & { target?: PiConductorAuthTarget },
+): Promise<PiConductorCommandAuthResult> {
+  const context = await resolveConductorCommandContext(options);
+  if (context.auth.backend !== 'pi' || !context.auth.pi) {
+    throw new Error('`ensemble auth clear-command` requires the Pi backend.');
+  }
+  return clearPiConductorCommandAuth({
+    ...context.auth.pi,
+    provider: options.provider,
+    target: options.target,
+  });
 }
 
 export async function runConductorAuthStatus(

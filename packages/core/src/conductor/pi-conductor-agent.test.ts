@@ -181,16 +181,32 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
-  it('preserves Pi ModelsError auth codes and resolver details in send results', async () => {
+  it('redacts Pi command resolution details from ModelsError send results', async () => {
+    const sentinels = {
+      command: 'AGENT_COMMAND_SENTINEL_683',
+      cause: 'AGENT_CAUSE_SENTINEL_683',
+      nestedCause: 'AGENT_NESTED_CAUSE_SENTINEL_683',
+      credential: 'AGENT_CREDENTIAL_SENTINEL_683',
+      stdout: 'AGENT_STDOUT_SENTINEL_683',
+      stderr: 'AGENT_STDERR_SENTINEL_683',
+    };
+    const rawCause = Object.assign(
+      new Error(
+        `Failed to resolve API key for provider "litellm" from shell command: ${sentinels.command}`,
+        { cause: new Error(sentinels.nestedCause) },
+      ),
+      {
+        rawCause: sentinels.cause,
+        credential: sentinels.credential,
+        stdout: Buffer.from(sentinels.stdout),
+        stderr: Buffer.from(sentinels.stderr),
+      },
+    );
     fakeSession.prompt.mockRejectedValueOnce(
       new ModelsError(
         'auth',
         'API key auth failed for provider litellm',
-        {
-          cause: new Error(
-            'Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs',
-          ),
-        },
+        { cause: rawCause },
       ),
     );
     const conductor = await PiConductorAgent.create({
@@ -200,15 +216,20 @@ describe('PiConductorAgent', () => {
       systemPrompt: 'system',
     });
 
-    await expect(conductor.send('kickoff')).resolves.toMatchObject({
+    const result = await conductor.send('kickoff');
+    expect(result).toMatchObject({
       status: 'error',
       error: {
         code: 'auth',
         message:
-          'API key auth failed for provider litellm: Failed to resolve API key for provider "litellm" from shell command: cached-auth.mjs',
+          'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
       },
       modelId: 'model-1',
     });
+    const output = JSON.stringify(result);
+    for (const sentinel of Object.values(sentinels)) {
+      expect(output).not.toContain(sentinel);
+    }
     await conductor.close();
   });
 
@@ -1898,7 +1919,9 @@ describe('PiConductorAgent', () => {
         modelId: 'local/review-model',
         systemPrompt: 'system',
       }),
-    ).rejects.toThrow(/Failed to resolve API key for Pi provider "local" from shell command/);
+    ).rejects.toThrow(
+      'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
+    );
     expect(mockCreateAgentSession).not.toHaveBeenCalled();
   });
 

@@ -100,6 +100,34 @@ describe('formatIssueSessionSummaryJson', () => {
     expect(output).not.toContain('\nspoof');
   });
 
+  it('keeps the fixed Pi command-resolution summary in exit JSON without credential details', () => {
+    const summary = createSummary({
+      stopReason: 'error',
+      lastRunStatus: 'error',
+      lastError: {
+        message:
+          'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
+      },
+    });
+    const output = formatIssueSessionSummaryJson(summary);
+
+    expect(JSON.parse(output)).toMatchObject({
+      stopReason: 'error',
+      lastError: {
+        message:
+          'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
+      },
+    });
+    for (const sentinel of [
+      'COMMAND_SENTINEL_683',
+      'CAUSE_SENTINEL_683',
+      'STDOUT_SENTINEL_683',
+      'STDERR_SENTINEL_683',
+    ]) {
+      expect(output).not.toContain(sentinel);
+    }
+  });
+
   it('includes sessionModels', () => {
     const json = JSON.parse(
       formatIssueSessionSummaryJson(

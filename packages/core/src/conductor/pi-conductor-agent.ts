@@ -267,7 +267,7 @@ export class PiConductorAgent implements ConductorAgent {
         runId,
         status: 'error',
         error: {
-          message: errorMessage(error),
+          message: piConductorErrorMessage(error),
           ...(error instanceof ModelsError ? { code: error.code } : {}),
         },
         modelId: this.modelId,
@@ -1338,6 +1338,58 @@ function isRecord(value: unknown): value is Record<string, any> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function errorMessage(error: unknown): string {
+function piConductorErrorMessage(error: unknown): string {
+  if (isPiCommandResolutionError(error)) {
+    return 'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.';
+  }
   return error instanceof Error ? error.message : String(error);
+}
+
+function isPiCommandResolutionError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  if (error instanceof ModelsError && error.code !== 'auth') return false;
+  const isAuthModelsError = error instanceof ModelsError && error.code === 'auth';
+  const errorMessage =
+    'message' in error && typeof error.message === 'string' ? error.message : '';
+  if (/failed to resolve api key|from shell command/i.test(errorMessage)) {
+    return true;
+  }
+  const topLevelDetails = error as ModelsError & {
+    stdout?: unknown;
+    stderr?: unknown;
+  };
+  if (
+    isAuthModelsError &&
+    (topLevelDetails.stdout !== undefined || topLevelDetails.stderr !== undefined)
+  ) {
+    return true;
+  }
+
+  const pending: unknown[] = [(error as { cause?: unknown }).cause];
+  const seen = new Set<object>();
+  while (pending.length > 0) {
+    const cause = pending.pop();
+    if (!cause || typeof cause !== 'object' || seen.has(cause)) continue;
+    seen.add(cause);
+    const details = cause as {
+      cause?: unknown;
+      message?: unknown;
+      stdout?: unknown;
+      stderr?: unknown;
+    };
+    if (
+      isAuthModelsError &&
+      (details.stdout !== undefined || details.stderr !== undefined)
+    ) {
+      return true;
+    }
+    if (
+      typeof details.message === 'string' &&
+      /failed to resolve api key|from shell command/i.test(details.message)
+    ) {
+      return true;
+    }
+    pending.push(details.cause);
+  }
+  return false;
 }

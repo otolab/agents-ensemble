@@ -126,6 +126,8 @@ export interface PiResourceLoaderOptions {
 export interface PiResources {
   roots: PiResourceRoots;
   settings: PiSettingsFile;
+  /** Unmerged settings layers, in user → project order. */
+  settingsLayers: PiSettingsFile[];
   auth: PiAuthFile;
   /** Unmerged layers, in user → project order, for provider-level precedence. */
   authLayers: PiAuthFile[];
@@ -242,6 +244,7 @@ export async function loadPiResources(
   return {
     roots,
     settings,
+    settingsLayers: layers.map((layer) => layer.settings),
     auth,
     authLayers: layers.map((layer) => layer.auth),
     modelsLayers: layers.map((layer) => layer.models),
@@ -259,6 +262,11 @@ export async function loadPiResources(
     prompts: await loadPromptTemplates(promptPaths),
     themes: await loadThemes(themePaths),
   };
+}
+
+/** Read one Pi settings file using the same JSONC parser as resource loading. */
+export async function readPiSettingsFile(path: string): Promise<PiSettingsFile> {
+  return ((await readOptionalJson(path)) ?? {}) as PiSettingsFile;
 }
 
 interface ResourceLayer {

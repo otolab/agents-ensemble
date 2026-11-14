@@ -3,6 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../config/defaults.js';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import {
   computeAcpModelConfigDigest,
   computeEnsembleConfigDigest,
@@ -35,6 +36,11 @@ import type {
 } from '../github/github-client.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import { PermissionPipeline } from '../permission/permission-pipeline.js';
+import {
+  createPiConductorAuthContext,
+  resolvePiConductorApiKey,
+} from './conductor-pi-auth.js';
+import { loadPiResources } from './pi-resource-loader.js';
 import { computeMcpConfigDigest } from '../mcp/load-mcp-config.js';
 import {
   loadSessionResumeStore,
@@ -6073,7 +6079,7 @@ describe('runConductorSession resume / shutdown', () => {
       error: {
         code: 'auth',
         message:
-          'API key auth failed for provider anthropic: Failed to resolve API key for provider "anthropic" from shell command: cached-auth.mjs -- gcloud auth print-identity-token',
+          'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
       },
     });
 
@@ -6103,6 +6109,100 @@ describe('runConductorSession resume / shutdown', () => {
     expect(recovery?.hint).toContain('ensemble auth login --provider anthropic');
     expect(recovery?.hint).toContain('~/.ensemble/pi/auth.json');
     expect(recovery?.hint).not.toContain('ensemble auth logout');
+  });
+
+  it('keeps Pi command failure details out of harness logs, recovery, and the session result', async () => {
+    const agentDir = join(userEnsembleRoot, '.ensemble', 'pi');
+    const projectDir = join(repoRoot, '.ensemble', 'pi');
+    const commandSentinel = 'SESSION_COMMAND_SENTINEL_683';
+    const causeSentinel = 'SESSION_CAUSE_SENTINEL_683';
+    const credentialSentinel = 'SESSION_CREDENTIAL_SENTINEL_683';
+    const stdoutSentinel = 'SESSION_STDOUT_SENTINEL_683';
+    const stderrSentinel = 'SESSION_STDERR_SENTINEL_683';
+    await Promise.all([
+      mkdir(agentDir, { recursive: true }),
+      mkdir(projectDir, { recursive: true }),
+    ]);
+    await writeFile(
+      join(projectDir, 'settings.json'),
+      JSON.stringify({
+        defaultProvider: 'anthropic',
+        defaultModel: 'claude-test',
+        apiKeys: { anthropic: `!printf ${commandSentinel}` },
+      }),
+    );
+
+    const resources = await loadPiResources({
+      cwd: repoRoot,
+      pi: { agentDir, projectDir },
+      env: {},
+    });
+    const authContext = await createPiConductorAuthContext(
+      { cwd: repoRoot, pi: { agentDir, projectDir }, env: {} },
+      resources,
+    );
+    const rawCommandError = Object.assign(new Error(causeSentinel), {
+      cause: new Error('SESSION_NESTED_CAUSE_SENTINEL_683'),
+      credential: credentialSentinel,
+      stdout: Buffer.from(stdoutSentinel),
+      stderr: Buffer.from(stderrSentinel),
+    });
+    vi.spyOn(authContext.modelRuntime, 'getAuth').mockRejectedValue(rawCommandError);
+    const safeError = await resolvePiConductorApiKey({
+      modelRuntime: authContext.modelRuntime,
+      resources,
+      provider: 'anthropic',
+      env: {},
+    }).catch((error: unknown) => error);
+    expect(safeError).toBeInstanceOf(Error);
+
+    stubUnusedControlServer();
+    const emitted: SessionLogEvent[] = [];
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => emitted.push(event));
+    mockSend.mockResolvedValue({
+      runId: 'run-pi-command-resolution-failure',
+      status: 'error',
+      error: {
+        code: 'auth',
+        message: (safeError as Error).message,
+      },
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'pi' }, workers: [] },
+      ensembleConfig: {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },
+      },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(result.lastError?.message).toBe(
+      'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
+    );
+    expect(
+      emitted.some((event) => event.type === 'conductor.auth.recovery'),
+    ).toBe(true);
+    const serializedOutput = JSON.stringify({ result, emitted });
+    for (const sentinel of [
+      commandSentinel,
+      causeSentinel,
+      credentialSentinel,
+      'SESSION_NESTED_CAUSE_SENTINEL_683',
+      stdoutSentinel,
+      stderrSentinel,
+    ]) {
+      expect(serializedOutput).not.toContain(sentinel);
+    }
   });
 
   it('keeps only operator-authored failed input in the TTY inbox and drops it on /close', async () => {
@@ -6137,7 +6237,7 @@ describe('runConductorSession resume / shutdown', () => {
         error: {
           code: 'auth',
           message:
-            'API key auth failed for provider anthropic: Failed to resolve API key for provider "anthropic" from shell command: /private/secret/cached-auth.mjs',
+            'API key auth failed for provider: failed to resolve API key for Pi provider from the configured command.',
         },
       });
     mockResume.mockResolvedValue({
@@ -6180,9 +6280,7 @@ describe('runConductorSession resume / shutdown', () => {
     );
     expect(retained?.inputTexts).toEqual([privateInstruction]);
     expect(retained?.failureClass).toBe('auth');
-    expect(JSON.stringify(retained)).not.toContain(
-      '/private/secret/cached-auth.mjs',
-    );
+    expect(JSON.stringify(retained)).not.toContain('COMMAND_SENTINEL_683');
     expect(retrySend).not.toHaveBeenCalled();
     expect(
       emitted.find(
@@ -6194,6 +6292,9 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(operatorApi!.submit('/close')).toBe(false);
     const result = await sessionPromise;
+    expect(
+      JSON.stringify({ emitted, result }),
+    ).not.toContain('COMMAND_SENTINEL_683');
     expect(operatorApi!.listRecoverySnapshots?.()).toEqual([]);
     expect(
       operatorApi!.getRecoverySnapshot?.(summary!.recoveryId),
