@@ -181,7 +181,7 @@ describe('list_operator_sessions', () => {
     );
   });
 
-  it('loads status YAML according to the selected ResumeStore location and its fallback', async () => {
+  it('loads status YAML from the canonical slug before hash fallbacks', async () => {
     const paths = resolveEnsemblePaths({ repoRoot });
     const hashIssueUrl = 'https://github.com/example/hash-list/issues/607';
     const slugIssueUrl = 'https://github.com/example/slug-list/issues/607';
@@ -195,7 +195,7 @@ describe('list_operator_sessions', () => {
     await mkdir(dirname(hashSlugYaml), { recursive: true });
     await writeFile(
       hashSlugYaml,
-      'version: 1\nstatusLine: "orphan slug snapshot"\nreportedAt: 11\n',
+      'version: 1\nstatusLine: "canonical slug snapshot"\nreportedAt: 11\n',
       'utf8',
     );
 
@@ -227,7 +227,7 @@ describe('list_operator_sessions', () => {
       expect.arrayContaining([
         expect.objectContaining({
           conductorAgentId: 'hash-selected',
-          statusLine: 'hash snapshot',
+          statusLine: 'canonical slug snapshot',
         }),
         expect.objectContaining({
           conductorAgentId: 'slug-selected',
