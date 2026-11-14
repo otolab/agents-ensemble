@@ -967,6 +967,57 @@ describe('Pi conductor authentication', () => {
     expect(settings.deviceId).toBe(deviceIds[0]);
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'preserves read-only user settings during Anthropic OAuth',
+    async () => {
+      const fixture = await createAuthFileFixture(
+        'pi-auth-anthropic-readonly-settings-',
+      );
+      const userSettingsPath = join(fixture.agentDir, 'settings.json');
+      const externalSettingsPath = join(
+        dirname(fixture.externalAuthPath),
+        'settings.json',
+      );
+      const originalSettings = '{"custom":"keep"}\n';
+      await writeFile(externalSettingsPath, originalSettings);
+      await chmod(externalSettingsPath, 0o400);
+      await symlink(externalSettingsPath, userSettingsPath);
+
+      const createSettingsManager = vi.spyOn(SettingsManager, 'create');
+      const getOrCreateDeviceId = vi.spyOn(
+        SettingsManager.prototype,
+        'getOrCreateDeviceId',
+      );
+      const login = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockResolvedValue(undefined);
+
+      await expect(
+        loginPiConductor({
+          cwd: fixture.cwd,
+          pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+          provider: 'anthropic',
+          oauthCallbacks: createOAuthCallbacks(),
+        }),
+      ).resolves.toMatchObject({
+        backend: 'pi',
+        provider: 'anthropic',
+        method: 'oauth',
+      });
+
+      expect(login).toHaveBeenCalledOnce();
+      expect(login.mock.calls[0]?.[3]?.getDeviceId).toBeUndefined();
+      expect(createSettingsManager).not.toHaveBeenCalled();
+      expect(getOrCreateDeviceId).not.toHaveBeenCalled();
+      expect((await lstat(userSettingsPath)).isSymbolicLink()).toBe(true);
+      expect(await readlink(userSettingsPath)).toBe(externalSettingsPath);
+      expect((await stat(externalSettingsPath)).mode & 0o777).toBe(0o400);
+      await expect(readFile(externalSettingsPath, 'utf8')).resolves.toBe(
+        originalSettings,
+      );
+    },
+  );
+
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'does not report OAuth login success when saving the device ID fails',
     async () => {

@@ -157,11 +157,16 @@ export async function loginPiConductor(
         `Pi provider "${provider}" uses OAuth. Run this command from a TTY so the OAuth login flow can interact with you.`,
       );
     }
+    // Pi 1.2.0's OpenAI ChatGPT OAuth is the only built-in flow that requests
+    // a device ID. Other providers must not depend on user settings being writable.
+    const requiresDeviceId = provider === 'openai';
     const settingsPath = join(roots.agentDir, 'settings.json');
-    await ensurePiUserSettingsSafeForOAuth(
-      settingsPath,
-      await getProtectedProjectRoots(),
-    );
+    if (requiresDeviceId) {
+      await ensurePiUserSettingsSafeForOAuth(
+        settingsPath,
+        await getProtectedProjectRoots(),
+      );
+    }
     const securedAuthPath = await ensurePrivatePiUserAuthFile(
       context.authPath,
       await getProtectedProjectRoots(),
@@ -171,31 +176,34 @@ export async function loginPiConductor(
         'Pi user auth.json target changed while preparing OAuth login; no credentials were written. Retry login after checking the auth.json symlink.',
       );
     }
-    // Pi's OpenAI OAuth obtains the persistent device ID through this callback.
-    // Re-scan the project tree immediately before starting the OAuth flow.
-    await ensurePiUserSettingsSafeForOAuth(
-      settingsPath,
-      await getProtectedProjectRoots(),
-    );
-    const settingsManager = SettingsManager.create(options.cwd, roots.agentDir);
-    const deviceId = settingsManager.getOrCreateDeviceId();
-    await settingsManager.flush();
-    const settingsErrors = settingsManager
-      .drainErrors()
-      .filter(({ scope }) => scope === 'global');
-    if (settingsErrors.length > 0) {
-      const details = settingsErrors.map(({ error }) => error.message).join('; ');
-      throw new Error(
-        `Failed to persist the Pi OAuth device ID to user settings.json; OAuth login was not started: ${details}`,
+    let loginOptions: { getDeviceId: () => string } | undefined;
+    if (requiresDeviceId) {
+      // Re-scan the project tree immediately before the OpenAI device ID write.
+      await ensurePiUserSettingsSafeForOAuth(
+        settingsPath,
+        await getProtectedProjectRoots(),
       );
+      const settingsManager = SettingsManager.create(options.cwd, roots.agentDir);
+      const deviceId = settingsManager.getOrCreateDeviceId();
+      await settingsManager.flush();
+      const settingsErrors = settingsManager
+        .drainErrors()
+        .filter(({ scope }) => scope === 'global');
+      if (settingsErrors.length > 0) {
+        const details = settingsErrors.map(({ error }) => error.message).join('; ');
+        throw new Error(
+          `Failed to persist the Pi OAuth device ID to user settings.json; OAuth login was not started: ${details}`,
+        );
+      }
+      loginOptions = {
+        getDeviceId: () => deviceId,
+      };
     }
     await context.modelRuntime.login(
       provider,
       'oauth',
       toPiAuthInteraction(options.oauthCallbacks),
-      {
-        getDeviceId: () => deviceId,
-      },
+      loginOptions,
     );
     return {
       backend: 'pi',
