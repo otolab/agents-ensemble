@@ -1206,6 +1206,14 @@ test('persistence docs use canonical slug writes and separate legacy fallback fr
   }
 
   assert.match(
+    documents[1],
+    /Pi の provider history は Issue URL がある場合、canonical slug の user transcript、`repoRoot` から導ける user path-hash、`conductorCwd\/\.ensemble\/pi\/sessions\/` の project-local legacy の順に探索します/u,
+  );
+  assert.doesNotMatch(
+    documents[1],
+    /Pi は `repoRoot` 基準の user 層 transcript を優先/u,
+  );
+  assert.match(
     documents[0],
     /resume-time lazy promotion.*一括 migration tool/u,
   );
