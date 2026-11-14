@@ -6,6 +6,7 @@ import { runIssueSession } from '../../src/conductor/issue-session.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import type { Profile } from '../../src/profile/types.js';
 import * as worktreeModule from '../../src/worktree/worktree.js';
+import { formatCursorSdkFailureDiagnostic } from './helpers/cursor-sdk-diagnostics.js';
 import {
   createInProcessAcpBridge,
   PING_SYSTEM_PROMPT,
@@ -68,7 +69,13 @@ describe.skipIf(cursorSdkIntegrationSkipReason !== undefined)(SUITE_NAME, () => 
       ownsWorkerAcpConnections: false,
     });
 
-    expect(result.lastRunStatus).toBe('finished');
+    expect(
+      result.lastRunStatus,
+      formatCursorSdkFailureDiagnostic({
+        status: result.lastRunStatus,
+        error: result.lastError,
+      }),
+    ).toBe('finished');
     expect(result.stopReason).toBe('completed');
     expect(compileSpy).toHaveBeenCalledWith(
       expect.objectContaining({

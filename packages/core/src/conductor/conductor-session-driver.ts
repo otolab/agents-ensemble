@@ -396,6 +396,17 @@ export async function runConductorSessionDriver(
     return false;
   };
 
+  if (options.shutdownSignal.aborted) {
+    stopReason = 'interrupted';
+    return {
+      stopReason,
+      sendCount,
+      lastSendResult,
+      autonomousTurns,
+      lastDispatchesThisTurn,
+    };
+  }
+
   if (options.cursorBootstrapState && !options.skipInitialSend) {
     try {
       await waitForCursorBootstrapDecision({
@@ -419,6 +430,17 @@ export async function runConductorSessionDriver(
   }
 
   if (!options.skipInitialSend) {
+    const initialPrompt = await Promise.resolve(options.initialPrompt);
+    if (options.shutdownSignal.aborted) {
+      stopReason = 'interrupted';
+      return {
+        stopReason,
+        sendCount,
+        lastSendResult,
+        autonomousTurns,
+        lastDispatchesThisTurn,
+      };
+    }
     const initialLease = lifecycle.beginSend({
       events: [],
       sourceKey: 'initial',
@@ -433,10 +455,10 @@ export async function runConductorSessionDriver(
       triggers: 1,
       sources: ['initial'],
     });
-    lastSendResult = await runEventConductorSend({
-      // Keep the initial dispatch asynchronous as it was when the driver
-      // fetched and compiled the prompt itself.
-      message: await Promise.resolve(options.initialPrompt),
+    const initialSend = runEventConductorSend({
+      // The initial result is consumed before the event loop begins, but the
+      // wait still follows the same shutdown interruption contract as sends.
+      message: initialPrompt,
       conductorHandle: options.conductorHandle,
       sendReconnect,
       signal: options.shutdownSignal,
@@ -484,6 +506,21 @@ export async function runConductorSessionDriver(
       });
       return result;
     });
+    const awaitedInitialSend = await awaitWithAbort(
+      initialSend,
+      options.shutdownSignal,
+    );
+    if (awaitedInitialSend.aborted || options.shutdownSignal.aborted) {
+      stopReason = 'interrupted';
+      return {
+        stopReason,
+        sendCount,
+        lastSendResult,
+        autonomousTurns,
+        lastDispatchesThisTurn,
+      };
+    }
+    lastSendResult = awaitedInitialSend.value!;
   }
 
   while (true) {

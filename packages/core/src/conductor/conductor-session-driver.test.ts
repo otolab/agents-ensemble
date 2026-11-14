@@ -3360,6 +3360,66 @@ describe('runConductorSessionDriver', () => {
     });
   });
 
+  it('stops with interrupted when shutdown aborts during the initial conductor send', async () => {
+    let resolveInitialSend!: (value: {
+      runId: string;
+      status: string;
+      result: string;
+    }) => void;
+    const initialSend = new Promise<{
+      runId: string;
+      status: string;
+      result: string;
+    }>((resolve) => {
+      resolveInitialSend = resolve;
+    });
+    const send = vi.fn().mockReturnValue(initialSend);
+    const conductor = {
+      agentId: 'agent-1',
+      send,
+      close: vi.fn(),
+    } as unknown as ConductorAgent;
+    const eventQueue = new SessionEventQueue();
+    eventQueue.enqueue({
+      type: 'operator.message',
+      text: 'must remain queued during bootstrap',
+    });
+    const shutdown = new AbortController();
+    const dispatchLifecycle = new ConductorDispatchLifecycle();
+    const onSendComplete = vi.fn();
+
+    const driverPromise = runConductorSessionDriver({
+      ...createDriverOptions({ eventQueue, conductor }),
+      dispatchLifecycle,
+      shutdownSignal: shutdown.signal,
+      onSendComplete,
+    });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1));
+    shutdown.abort();
+
+    const result = await awaitDriverWithTimeout(driverPromise, shutdown);
+
+    expect(result.stopReason).toBe('interrupted');
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(eventQueue.snapshot()).toEqual([
+      expect.objectContaining({
+        type: 'operator.message',
+        text: 'must remain queued during bootstrap',
+      }),
+    ]);
+    expect(dispatchLifecycle.state).toBe('in_flight');
+
+    resolveInitialSend({
+      runId: 'run-initial',
+      status: 'finished',
+      result: 'late bootstrap completion',
+    });
+    await vi.waitFor(() => expect(dispatchLifecycle.state).toBe('ready'));
+    expect(onSendComplete).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('dispatches worker.completed without limit when maxTurns is unlimited', async () => {
     const send = vi
       .fn()
