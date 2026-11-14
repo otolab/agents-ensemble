@@ -911,6 +911,7 @@ function recordScanFilesystemError(
     type: 'error',
     error: errorDetails,
     reason,
+    provenance,
     recoverable: RECOVERABLE_SCAN_ERROR_CODES.has(errorDetails.code),
   };
 }
@@ -938,7 +939,10 @@ async function inspectScanPath(
 
 function stopOnUnrecoverableScanError(result) {
   if (result.type === 'error' && !result.recoverable) {
-    throw new UnrecoverableScanError(result.error);
+    throw new UnrecoverableScanError({
+      ...result.error,
+      provenance: result.provenance,
+    });
   }
 }
 
@@ -1830,14 +1834,11 @@ async function scanCheckoutRoots({
   linkedTasks,
 }) {
   const seenRoots = new Set();
-  for (const declaredRoot of checkoutRoots) {
-    const rootRecord = {
-      path: declaredRoot,
-      disposition: 'unresolved',
-      reason: null,
-      repoKey: null,
-    };
-    manifest.checkoutInventory.declaredRoots.push(rootRecord);
+  for (const [index, declaredRoot] of checkoutRoots.entries()) {
+    const rootRecord = manifest.checkoutInventory.declaredRoots[index];
+    rootRecord.disposition = 'scanning';
+    delete rootRecord.reason;
+    delete rootRecord.recovery;
 
     const checkoutProvenance = {
       sourceType: 'project-local',
@@ -1861,10 +1862,12 @@ async function scanCheckoutRoots({
     }
     const type = rootInspection.type;
     if (type !== 'directory') {
+      rootRecord.disposition = 'unresolved';
       rootRecord.reason =
         type === 'symlink'
           ? 'Checkout root is a symlink; it was not followed.'
           : 'Checkout root does not exist as a directory.';
+      rootRecord.provenance = checkoutProvenance;
       addUnresolvedRoot(manifest, declaredRoot);
       continue;
     }
@@ -1887,8 +1890,10 @@ async function scanCheckoutRoots({
     }
     const marker = markerInspection.type;
     if (marker !== 'directory' && marker !== 'file') {
+      rootRecord.disposition = 'unresolved';
       rootRecord.reason =
         'Checkout root has no regular .git directory or worktree .git file.';
+      rootRecord.provenance = checkoutProvenance;
       addUnresolvedRoot(manifest, declaredRoot);
       continue;
     }
@@ -1965,6 +1970,7 @@ async function scanCheckoutRoots({
       excludedPiTranscriptIds,
     });
   }
+  manifest.checkoutInventory.scanCompleted = true;
   const inventoryComplete =
     checkoutRootsComplete && checkoutRoots.length > 0;
   manifest.checkoutInventory.complete = inventoryComplete;
@@ -3107,6 +3113,68 @@ function recordRunFailure(manifest, phase, error) {
             : null,
           error,
         );
+  if (phase === 'scan') {
+    const roots = manifest.checkoutInventory.declaredRoots;
+    const failedRootPath = details.provenance?.checkoutRoot;
+    const failedRootIndex = roots.findIndex(
+      (root) => root.path === failedRootPath,
+    );
+    let firstUnscannedIndex;
+    if (failedRootIndex >= 0) {
+      const failedRoot = roots[failedRootIndex];
+      failedRoot.disposition = 'unresolved';
+      failedRoot.reason ??=
+        'Checkout root scan stopped because of a nonrecoverable filesystem error.';
+      failedRoot.error ??= details;
+      failedRoot.provenance ??= {
+        sourceType: 'project-local',
+        checkoutRoot: failedRoot.path,
+      };
+      addUnresolvedRoot(manifest, failedRoot.path);
+      firstUnscannedIndex = failedRootIndex + 1;
+    } else {
+      firstUnscannedIndex = roots.findIndex(
+        (root) =>
+          root.disposition === 'not-scanned' ||
+          root.disposition === 'scanning',
+      );
+      if (firstUnscannedIndex < 0) firstUnscannedIndex = roots.length;
+    }
+
+    for (const root of roots.slice(firstUnscannedIndex)) {
+      if (
+        root.disposition !== 'not-scanned' &&
+        root.disposition !== 'scanning'
+      ) {
+        continue;
+      }
+      root.disposition = 'not-scanned';
+      root.reason =
+        'Checkout root was not scanned because an earlier scan error aborted inventory.';
+      root.notScannedDueTo = {
+        path: details.path,
+        code: details.code,
+        errno: details.errno,
+        syscall: details.syscall,
+      };
+      root.provenance = {
+        sourceType: 'project-local',
+        checkoutRoot: root.path,
+      };
+      root.recovery =
+        'Resolve the earlier scan error and rerun with this checkout root still declared. Do not treat its project-local data as inventoried until a successful scan records it.';
+      addUnresolvedRoot(manifest, root.path);
+    }
+    manifest.checkoutInventory.scanCompleted = false;
+    manifest.checkoutInventory.unconfirmedRoots = [
+      ...new Set([
+        ...manifest.checkoutInventory.unconfirmedRoots,
+        ...roots
+          .filter((root) => root.inventoryConfirmed !== true)
+          .map((root) => root.path),
+      ]),
+    ];
+  }
   manifest.failure = {
     phase,
     disposition: 'aborted',
@@ -3144,10 +3212,23 @@ async function main() {
     checkoutInventory: {
       operatorAssertedComplete: options.checkoutRootsComplete,
       complete: false,
+      scanCompleted: false,
       completeness: 'not-confirmed',
-      declaredRoots: [],
+      declaredRoots: options.checkoutRoots.map((path) => ({
+        path,
+        disposition: 'not-scanned',
+        reason: 'Checkout root has not been scanned yet.',
+        repoKey: null,
+        inventoryConfirmed: false,
+        provenance: {
+          sourceType: 'project-local',
+          checkoutRoot: path,
+        },
+        recovery:
+          'Run the checkout scan before treating its project-local data as inventoried.',
+      })),
       unresolvedRoots: [],
-      unconfirmedRoots: [],
+      unconfirmedRoots: [...options.checkoutRoots],
     },
     entries: [],
     unresolvedSources: [],

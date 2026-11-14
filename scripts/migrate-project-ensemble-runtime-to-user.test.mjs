@@ -130,6 +130,97 @@ test('complete checkout inventory retains failed root and source scan evidence',
   );
 });
 
+test('fatal checkout scan errors retain every later declared root as unscanned', async () => {
+  const root = await makeRoot();
+  const blockedCheckout = join(root.path, 'blocked-checkout');
+  const laterCheckout = join(root.path, 'later-checkout');
+  const blockedMarker = join(blockedCheckout, '.git');
+  await createGitCheckout(blockedCheckout);
+  await createGitCheckout(laterCheckout);
+
+  const sourceId = 'must-not-copy-after-fatal-scan';
+  const sourcePath = join(root.sessionRoot, `${sourceId}.json`);
+  const sourceText = `${JSON.stringify(
+    makeStore(sourceId, issueUrl, '/old/clone'),
+  )}\n`;
+  await mkdir(root.sessionRoot, { recursive: true });
+  await writeFile(sourcePath, sourceText, 'utf8');
+
+  const preloadPath = join(root.path, 'inject-fatal-lstat.mjs');
+  await writeFile(
+    preloadPath,
+    [
+      "import fs from 'node:fs/promises';",
+      "import { syncBuiltinESMExports } from 'node:module';",
+      'const originalLstat = fs.lstat;',
+      `const targetPath = ${JSON.stringify(blockedMarker)};`,
+      'fs.lstat = async (path, ...args) => {',
+      '  if (String(path) === targetPath) {',
+      "    const error = new Error('Injected nonrecoverable scan failure.');",
+      "    Object.assign(error, { code: 'ENXIO', errno: -6, syscall: 'lstat', path: targetPath });",
+      '    throw error;',
+      '  }',
+      '  return originalLstat.call(fs, path, ...args);',
+      '};',
+      'syncBuiltinESMExports();',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
+  const result = runMigration(root, {
+    checkoutRoots: [blockedCheckout, laterCheckout],
+    complete: true,
+    apply: true,
+    preloadPath,
+  });
+  assert.notEqual(result.status, 0, result.stdout);
+
+  const manifest = await readManifest(root);
+  const blockedRecord = manifest.checkoutInventory.declaredRoots.find(
+    (entry) => entry.path === blockedCheckout,
+  );
+  const laterRecord = manifest.checkoutInventory.declaredRoots.find(
+    (entry) => entry.path === laterCheckout,
+  );
+  const destination = join(
+    root.userRoot,
+    'sessions',
+    'github.com',
+    'example',
+    'repo',
+    `${sourceId}.json`,
+  );
+
+  assert.equal(manifest.checkoutInventory.declaredRoots.length, 2);
+  assert.equal(manifest.checkoutInventory.complete, false);
+  assert.equal(manifest.checkoutInventory.scanCompleted, false);
+  assert.deepEqual(
+    manifest.checkoutInventory.declaredRoots.map((entry) => entry.path),
+    [blockedCheckout, laterCheckout],
+  );
+  assert.equal(manifest.failure.phase, 'scan');
+  assert.equal(manifest.failure.error.code, 'ENXIO');
+  assert.equal(manifest.failure.error.syscall, 'lstat');
+  assert.equal(manifest.failure.error.path, blockedMarker);
+  assert.equal(blockedRecord.disposition, 'unresolved');
+  assert.ok(
+    ['ENXIO'].includes(blockedRecord.error.code),
+  );
+  assert.equal(laterRecord.disposition, 'not-scanned');
+  assert.match(laterRecord.reason, /earlier scan error aborted inventory/u);
+  assert.equal(laterRecord.notScannedDueTo.path, blockedMarker);
+  assert.equal(laterRecord.notScannedDueTo.code, 'ENXIO');
+  assert.equal(laterRecord.provenance.checkoutRoot, laterCheckout);
+  assert.ok(laterRecord.recovery);
+  assert.ok(
+    manifest.checkoutInventory.unconfirmedRoots.includes(laterCheckout),
+  );
+  assert.equal(findEntry(manifest, sourcePath).disposition, 'pending');
+  assert.equal(await readFile(sourcePath, 'utf8'), sourceText);
+  await assert.rejects(readFile(destination));
+});
+
 test('recoverable EACCES scan errors persist unresolved root and source evidence before apply', async (t) => {
   const root = await makeRoot();
   const rootBlockedCheckout = join(root.path, 'root-blocked-checkout');
@@ -1116,6 +1207,7 @@ function runMigration(
     complete = false,
     profile,
     apply = false,
+    preloadPath,
   } = {},
 ) {
   root.manifestRun += 1;
@@ -1124,6 +1216,7 @@ function runMigration(
     `migration-manifest-${root.manifestRun}.json`,
   );
   const args = [
+    ...(preloadPath ? ['--import', preloadPath] : []),
     scriptPath,
     '--user-root',
     root.userRoot,
