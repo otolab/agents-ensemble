@@ -1755,16 +1755,23 @@ async function scanCheckoutRoots({
       excludedPiTranscriptIds,
     });
   }
-  manifest.checkoutInventory.complete = checkoutRootsComplete;
+  const inventoryComplete =
+    checkoutRootsComplete && checkoutRoots.length > 0;
+  manifest.checkoutInventory.complete = inventoryComplete;
+  manifest.checkoutInventory.completeness = checkoutRootsComplete
+    ? inventoryComplete
+      ? 'operator-asserted-complete'
+      : 'empty-inventory-unverified'
+    : 'not-confirmed';
   for (const root of manifest.checkoutInventory.declaredRoots) {
-    root.inventoryConfirmed = checkoutRootsComplete;
+    root.inventoryConfirmed = inventoryComplete;
   }
   for (const entry of manifest.entries) {
     if (entry.provenance?.sourceType === 'project-local') {
-      entry.provenance.checkoutInventoryConfirmed = checkoutRootsComplete;
+      entry.provenance.checkoutInventoryConfirmed = inventoryComplete;
     }
   }
-  if (!checkoutRootsComplete) {
+  if (!inventoryComplete) {
     manifest.checkoutInventory.unconfirmedRoots = [...checkoutRoots];
     if (checkoutRoots.length === 0) {
       manifest.checkoutInventory.unconfirmedRoots = ['<no checkout roots declared>'];
@@ -2836,11 +2843,9 @@ async function main() {
     userRoot: options.userRoot,
     operatorSelectedProfile: options.profile ?? null,
     checkoutInventory: {
-      complete: options.checkoutRootsComplete,
-      completeness:
-        options.checkoutRootsComplete
-          ? 'operator-asserted-complete'
-          : 'not-confirmed',
+      operatorAssertedComplete: options.checkoutRootsComplete,
+      complete: false,
+      completeness: 'not-confirmed',
       declaredRoots: [],
       unresolvedRoots: [],
       unconfirmedRoots: [],

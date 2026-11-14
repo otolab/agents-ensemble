@@ -70,6 +70,27 @@ test('dry-run inventories copy candidates, unresolved transcripts, and incomplet
   assert.equal(repoKey.length, 64);
 });
 
+test('an empty checkout list remains unconfirmed despite the complete assertion', async () => {
+  const root = await makeRoot();
+  const result = runMigration(root, { complete: true });
+  assert.equal(result.status, 0, result.stderr);
+
+  const manifest = await readManifest(root);
+  assert.deepEqual(manifest.checkoutInventory.declaredRoots, []);
+  assert.equal(
+    manifest.checkoutInventory.operatorAssertedComplete,
+    true,
+  );
+  assert.equal(manifest.checkoutInventory.complete, false);
+  assert.equal(
+    manifest.checkoutInventory.completeness,
+    'empty-inventory-unverified',
+  );
+  assert.deepEqual(manifest.checkoutInventory.unconfirmedRoots, [
+    '<no checkout roots declared>',
+  ]);
+});
+
 test('invalid Issue Stores and YAML sidecars stay unresolved and are not copied', async () => {
   const root = await makeRoot();
   const { userRoot, sessionRoot } = root;
