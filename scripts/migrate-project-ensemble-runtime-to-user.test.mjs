@@ -91,6 +91,43 @@ test('an empty checkout list remains unconfirmed despite the complete assertion'
   ]);
 });
 
+test('complete checkout inventory retains failed root and source scan evidence', async () => {
+  const root = await makeRoot();
+  const missingCheckoutRoot = join(root.path, 'missing-checkout');
+  const sourceErrorCheckoutRoot = join(root.path, 'source-error-checkout');
+  const sourceDirectory = join(
+    sourceErrorCheckoutRoot,
+    '.ensemble',
+    'sessions',
+  );
+  await createGitCheckout(sourceErrorCheckoutRoot);
+  await writeFile(sourceDirectory, 'blocked-by-file\n', 'utf8');
+
+  const result = runMigration(root, {
+    checkoutRoots: [missingCheckoutRoot, sourceErrorCheckoutRoot],
+    complete: true,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = await readManifest(root);
+  const missingRootRecord = manifest.checkoutInventory.declaredRoots.find(
+    (entry) => entry.path === missingCheckoutRoot,
+  );
+  const sourceError = findEntry(manifest, sourceDirectory);
+
+  assert.equal(manifest.checkoutInventory.complete, true);
+  assert.deepEqual(manifest.checkoutInventory.unresolvedRoots, [
+    missingCheckoutRoot,
+  ]);
+  assert.equal(missingRootRecord.disposition, 'unresolved');
+  assert.match(missingRootRecord.reason, /does not exist as a directory/u);
+  assert.equal(sourceError.disposition, 'unresolved');
+  assert.match(sourceError.reason, /Expected a regular directory/u);
+  assert.equal(
+    sourceError.provenance.checkoutRoot,
+    sourceErrorCheckoutRoot,
+  );
+});
+
 test('invalid Issue Stores and YAML sidecars stay unresolved and are not copied', async () => {
   const root = await makeRoot();
   const { userRoot, sessionRoot } = root;

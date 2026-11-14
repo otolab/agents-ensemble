@@ -24,7 +24,7 @@ export function parseGitHubRemoteUrl(
   return null;
 }
 
-async function resolveGitHubOwnerRepoFromOrigin(
+export async function resolveGitHubRepositoryFromOrigin(
   repoRoot: string,
 ): Promise<{ owner: string; repo: string }> {
   let remoteUrl: string;
@@ -60,7 +60,7 @@ export async function resolveIssueUrl(
   const shorthandMatch = ISSUE_NUMBER_RE.exec(trimmed);
   if (shorthandMatch) {
     const number = Number(shorthandMatch[1]);
-    const { owner, repo } = await resolveGitHubOwnerRepoFromOrigin(repoRoot);
+    const { owner, repo } = await resolveGitHubRepositoryFromOrigin(repoRoot);
     return buildIssueUrl({ owner, repo, number });
   }
 
