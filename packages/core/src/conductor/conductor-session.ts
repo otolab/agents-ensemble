@@ -121,10 +121,10 @@ import { isOperatorReconnectCommand } from './operator-reconnect.js';
 import { parseOperatorMessageDelivery } from './operator-command.js';
 import {
   assertSessionResumeStoreMatches,
+  canonicalSessionResumeStorePath,
   requireLocatedSessionResumeStoreForResume,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
-  sessionResumeStorePath,
   type HarnessPhase,
   type SessionLifecycle,
   type SessionResumeStoreLocation,
@@ -141,6 +141,7 @@ import {
   loadSessionStateStore,
   legacySessionStateStorePath,
 } from '../session/session-state-store.js';
+import { copyFileIfMissing } from '../session/persisted-file.js';
 import {
   loadToolCallSnapshotHistory,
   pruneExpiredToolCallSnapshotHistoryFiles,
@@ -459,7 +460,7 @@ async function runConductorSessionWithStartupGuard(
   });
   attachLegacySessionCallbacks(sessionLogger, options);
   const expiredHistory = await pruneExpiredToolCallSnapshotHistoryFiles(
-    options.repoRoot,
+    { repoRoot: options.repoRoot, issueUrl: options.issueUrl },
   );
   if (expiredHistory.failedCount > 0) {
     sessionLogger.emit({
@@ -516,7 +517,7 @@ async function runConductorSessionWithStartupGuard(
   let githubMonitor: GitHubMonitor | undefined;
   let activeResumeStorePath: string | undefined;
   let createdHarnessCliVersion = options.cliPackageVersion;
-  let activeStoreLocation: SessionResumeStoreLocation = 'user-path-hash';
+  let activeStoreLocation: SessionResumeStoreLocation = 'canonical-slug';
   let drainStartupResumeStoreWrites = async () => {};
   const pendingGitHubRecoveries: number[] = [];
   const conductorCwd = options.conductorCwd ?? process.cwd();
@@ -535,6 +536,7 @@ async function runConductorSessionWithStartupGuard(
       await requireLocatedSessionResumeStoreForResume({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
+      issueUrl: options.issueUrl,
     });
     const loadedResumeStore = locatedResumeStore.resumeStore;
     // A resume keeps its origin version; a legacy store stays without one.
@@ -629,6 +631,7 @@ async function runConductorSessionWithStartupGuard(
     const history = await loadToolCallSnapshotHistory({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
+      issueUrl: options.issueUrl,
     });
     resumeToolCallSnapshots = history.entries;
     toolCallHistoryNeedsRewrite = history.needsRewrite;
@@ -645,6 +648,7 @@ async function runConductorSessionWithStartupGuard(
       location: activeStoreLocation,
     });
     let openQuestionsSnapshot = await loadOpenQuestionsStore(openQuestionsPath);
+    let openQuestionsSourcePath: string | undefined;
     if (!openQuestionsSnapshot) {
       const fallbackPaths = [
         ...(activeStoreLocation === 'canonical-slug'
@@ -663,11 +667,22 @@ async function runConductorSessionWithStartupGuard(
       ];
       for (const fallbackPath of fallbackPaths) {
         openQuestionsSnapshot = await loadOpenQuestionsStore(fallbackPath);
-        if (openQuestionsSnapshot) break;
+        if (openQuestionsSnapshot) {
+          openQuestionsSourcePath = fallbackPath;
+          break;
+        }
       }
-      if (openQuestionsSnapshot) {
+      if (openQuestionsSnapshot && openQuestionsSourcePath) {
         try {
-          await saveOpenQuestionsStore(openQuestionsPath, openQuestionsSnapshot);
+          const copied = await copyFileIfMissing(
+            openQuestionsSourcePath,
+            openQuestionsPath,
+          );
+          if (!copied) {
+            openQuestionsSnapshot =
+              (await loadOpenQuestionsStore(openQuestionsPath)) ??
+              openQuestionsSnapshot;
+          }
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           sessionLogger.emit({
@@ -1332,10 +1347,15 @@ async function runConductorSessionWithStartupGuard(
           }),
           sessionDir: resolveEnsemblePaths({
             repoRoot: options.repoRoot,
-          }).piSessionsDir,
-          legacySessionDir: resolveEnsemblePaths({
-            repoRoot: options.repoRoot,
-          }).legacyPiSessionsDirForCwd(conductorCwd),
+          }).canonicalPiSessionsDir(options.issueUrl),
+          legacySessionDirs: [
+            resolveEnsemblePaths({
+              repoRoot: options.repoRoot,
+            }).piSessionsDir,
+            resolveEnsemblePaths({
+              repoRoot: options.repoRoot,
+            }).legacyPiSessionsDirForCwd(conductorCwd),
+          ],
         }
       : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
@@ -1381,9 +1401,67 @@ async function runConductorSessionWithStartupGuard(
   // Factories may not be abortable while pending. Register the returned agent
   // before checking shutdown so a late success is still closed by the guard.
   shutdownSignal.throwIfAborted();
+  if (options.resumeAgentId) {
+    const currentSessionStatePath = sessionStateStorePath({
+      repoRoot: options.repoRoot,
+      conductorAgentId: conductorAgent.agentId,
+      issueUrl: options.issueUrl,
+      location: activeStoreLocation,
+    });
+    let hasCanonicalState = false;
+    try {
+      hasCanonicalState =
+        (await loadSessionStateStore(currentSessionStatePath)) !== undefined;
+    } catch (error) {
+      hasCanonicalState = true;
+      const detail = error instanceof Error ? error.message : String(error);
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: `slug 保存先の session state を読み込めませんでした。legacy data は優先しません。 error=${detail}`,
+      });
+    }
+    if (!hasCanonicalState) {
+      const fallbackStatePaths = [
+        sessionStateStorePath({
+          repoRoot: options.repoRoot,
+          conductorAgentId: conductorAgent.agentId,
+          location: 'user-path-hash',
+        }),
+        legacySessionStateStorePath({
+          repoRoot: options.repoRoot,
+          conductorAgentId: conductorAgent.agentId,
+        }),
+      ];
+      for (const fallbackPath of fallbackStatePaths) {
+        let fallbackState;
+        try {
+          fallbackState = await loadSessionStateStore(fallbackPath);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message: `旧保存先の session state を読み込めませんでした。 fallback は保持します。 error=${detail}`,
+          });
+          continue;
+        }
+        if (!fallbackState) continue;
+        try {
+          await copyFileIfMissing(fallbackPath, currentSessionStatePath);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message: `旧保存先の session state を slug 保存先へ移せませんでした。旧 YAML を読み込みます。 error=${detail}`,
+          });
+        }
+        break;
+      }
+    }
+  }
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
-  activeResumeStorePath ??= sessionResumeStorePath({
+  activeResumeStorePath ??= canonicalSessionResumeStorePath({
     repoRoot: options.repoRoot,
+    issueUrl: options.issueUrl,
     conductorAgentId: conductorAgent.agentId,
   });
   // Keep auth/transport reconnects on the same backend factory as the session.
@@ -1594,6 +1672,7 @@ async function runConductorSessionWithStartupGuard(
   const toolCallHistoryPath = toolCallSnapshotHistoryPath({
     repoRoot: options.repoRoot,
     conductorAgentId: conductorHandle.conductor.agentId,
+    issueUrl: options.issueUrl,
   });
   let toolCallHistoryFlushTimer:
     | ReturnType<typeof setTimeout>

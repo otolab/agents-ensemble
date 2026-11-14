@@ -7,14 +7,17 @@ import { resolveEnsemblePaths } from '../ensemble-paths.js';
 import {
   assertSessionResumeStoreMatches,
   assertSessionSidecarMatches,
+  canonicalSessionResumeStorePath,
   findLatestSessionResumeStoreForIssue,
   findLatestSessionSidecarForIssue,
   findSessionResumeStore,
   legacySessionResumeStoreDir,
+  listLocatedSessionResumeStores,
   listSessionSidecars,
   loadSessionResumeStore,
   loadSessionSidecar,
   requireSessionResumeStoreForResume,
+  requireLocatedSessionResumeStoreForResume,
   requireSessionSidecarForResume,
   saveSessionSidecar,
   saveSessionResumeStore,
@@ -780,6 +783,284 @@ describe('SessionResumeStore', () => {
     ).resolves.toBe(900);
   });
 
+  it.each([
+    { location: 'user-path-hash' as const, malformed: '{invalid json' },
+    { location: 'project-legacy' as const, malformed: '{invalid json' },
+  ])(
+    'keeps slug and other candidates discoverable when a $location store is malformed',
+    async ({ location, malformed }) => {
+      tempDir = await createHome('ensemble-session-resume-store-');
+      const agentId = `malformed-${location}`;
+      const peerAgentId = `valid-peer-${location}`;
+      const issueUrl = 'https://github.com/org/repo/issues/9';
+      const peerIssueUrl = 'https://github.com/org/other-repo/issues/10';
+      const paths = resolveEnsemblePaths({ repoRoot: tempDir });
+      const malformedPath =
+        location === 'user-path-hash'
+          ? paths.sessionResumeStorePath(agentId)
+          : paths.legacySessionResumeStorePath(agentId);
+      const peerLocation =
+        location === 'user-path-hash' ? 'project-legacy' : 'user-path-hash';
+      const peerPath =
+        peerLocation === 'user-path-hash'
+          ? paths.sessionResumeStorePath(peerAgentId)
+          : paths.legacySessionResumeStorePath(peerAgentId);
+      const slugPath = paths.canonicalSessionResumeStorePath(
+        issueUrl,
+        agentId,
+      );
+      for (const path of [malformedPath, peerPath, slugPath]) {
+        await mkdir(dirname(path), { recursive: true });
+      }
+      await writeFile(malformedPath, `${malformed}\n`, 'utf8');
+      await writeFile(
+        peerPath,
+        `${JSON.stringify(
+          baseResumeStore({
+            conductorAgentId: peerAgentId,
+            issueUrl: peerIssueUrl,
+            repoRoot: tempDir,
+          }),
+        )}\n`,
+        'utf8',
+      );
+      await writeFile(
+        slugPath,
+        `${JSON.stringify(
+          baseResumeStore({
+            conductorAgentId: agentId,
+            issueUrl,
+            repoRoot: tempDir,
+            harnessSocketPath: '/tmp/ens-oq-live/canonical.sock',
+          }),
+        )}\n`,
+        'utf8',
+      );
+
+      const listed = await listLocatedSessionResumeStores(tempDir);
+
+      expect(listed).toHaveLength(2);
+      expect(listed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: slugPath,
+            location: 'canonical-slug',
+          }),
+          expect.objectContaining({ path: peerPath, location: peerLocation }),
+        ]),
+      );
+      await expect(
+        requireLocatedSessionResumeStoreForResume({
+          repoRoot: tempDir,
+          issueUrl,
+          conductorAgentId: agentId,
+        }),
+      ).resolves.toMatchObject({
+        path: slugPath,
+        location: 'canonical-slug',
+        resumeStore: {
+          harnessSocketPath: '/tmp/ens-oq-live/canonical.sock',
+        },
+      });
+      await expect(readFile(malformedPath, 'utf8')).resolves.toBe(
+        `${malformed}\n`,
+      );
+      await expect(loadSessionResumeStore(malformedPath)).rejects.toThrow(
+        /Invalid session resume store/,
+      );
+    },
+  );
+
+  it.each([
+    { reason: 'malformed JSON', contents: '{invalid json' },
+    { reason: 'invalid schema', contents: '{}' },
+  ])(
+    'treats hash-only legacy data with $reason as unavailable without changing it',
+    async ({ contents }) => {
+      tempDir = await createHome('ensemble-session-resume-store-');
+      const agentId = `corrupt-hash-only-${contents.length}`;
+      const hashPath = sessionResumeStorePath({
+        repoRoot: tempDir,
+        conductorAgentId: agentId,
+      });
+      const raw = `${contents}\n`;
+      await mkdir(dirname(hashPath), { recursive: true });
+      await writeFile(hashPath, raw, 'utf8');
+
+      await expect(listLocatedSessionResumeStores(tempDir)).resolves.toEqual([]);
+      await expect(
+        requireLocatedSessionResumeStoreForResume({
+          repoRoot: tempDir,
+          conductorAgentId: agentId,
+        }),
+      ).rejects.toThrow(SessionResumeStoreNotFoundError);
+      await expect(loadSessionResumeStore(hashPath)).rejects.toThrow(
+        /Invalid session resume store/,
+      );
+      await expect(readFile(hashPath, 'utf8')).resolves.toBe(raw);
+    },
+  );
+
+  it('selects a canonical slug Store from another clone over an older hash copy without losing its live socket', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const currentRepoRoot = join(tempDir, 'current-clone');
+    const originRepoRoot = join(tempDir, 'origin-clone');
+    const agentId = 'cross-clone-duplicate-agent';
+    const issueUrl = 'https://github.com/org/repo/issues/9';
+    const paths = resolveEnsemblePaths({ repoRoot: currentRepoRoot });
+    const hashPath = paths.sessionResumeStorePath(agentId);
+    const slugPath = canonicalSessionResumeStorePath({
+      repoRoot: currentRepoRoot,
+      issueUrl,
+      conductorAgentId: agentId,
+    });
+    const hashStore = baseResumeStore({
+      conductorAgentId: agentId,
+      repoRoot: currentRepoRoot,
+      issueUrl,
+      updatedAt: 900,
+    });
+    const slugStore = baseResumeStore({
+      conductorAgentId: agentId,
+      repoRoot: originRepoRoot,
+      issueUrl,
+      harnessSocketPath: '/tmp/ens-oq-live/cross-clone.sock',
+      updatedAt: 100,
+    });
+    for (const [path, store] of [
+      [hashPath, hashStore],
+      [slugPath, slugStore],
+    ] as const) {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, `${JSON.stringify(store)}\n`, 'utf8');
+    }
+    const diagnostics: Array<{
+      selectedPath: string;
+      candidates: Array<{ path: string; hasHarnessSocketPath: boolean }>;
+    }> = [];
+
+    const selected = await findSessionResumeStore(currentRepoRoot, agentId, {
+      onDuplicate: (diagnostic) => diagnostics.push(diagnostic),
+    });
+
+    expect(selected).toMatchObject({
+      path: slugPath,
+      location: 'canonical-slug',
+      resumeStore: {
+        repoRoot: originRepoRoot,
+        harnessSocketPath: '/tmp/ens-oq-live/cross-clone.sock',
+      },
+    });
+    expect(diagnostics[0]).toMatchObject({
+      selectedPath: slugPath,
+      candidates: [
+        { path: slugPath, hasHarnessSocketPath: true },
+        { path: hashPath, hasHarnessSocketPath: false },
+      ],
+    });
+    await expect(
+      requireLocatedSessionResumeStoreForResume({
+        repoRoot: currentRepoRoot,
+        issueUrl,
+        conductorAgentId: agentId,
+      }),
+    ).resolves.toMatchObject({
+      path: slugPath,
+      resumeStore: { harnessSocketPath: '/tmp/ens-oq-live/cross-clone.sock' },
+    });
+  });
+
+  it('keeps sessions with the same conductor id in different slugs separate and resumes the requested issue', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const currentRepoRoot = join(tempDir, 'current-clone');
+    const conductorAgentId = 'shared-conductor-id';
+    const issueUrls = [
+      'https://github.com/org/first-repo/issues/1',
+      'https://github.com/org/second-repo/issues/2',
+    ];
+    const paths = resolveEnsemblePaths({ repoRoot: currentRepoRoot });
+    for (const [index, issueUrl] of issueUrls.entries()) {
+      const path = paths.canonicalSessionResumeStorePath(
+        issueUrl,
+        conductorAgentId,
+      );
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(
+        path,
+        `${JSON.stringify(
+          baseResumeStore({
+            conductorAgentId,
+            issueUrl,
+            repoRoot: `/clone/${index}`,
+            updatedAt: index + 1,
+          }),
+        )}\n`,
+        'utf8',
+      );
+    }
+
+    const listed = await listLocatedSessionResumeStores(currentRepoRoot);
+    expect(listed.map(({ resumeStore }) => resumeStore.issueUrl).sort()).toEqual(
+      [...issueUrls].sort(),
+    );
+    await expect(
+      requireLocatedSessionResumeStoreForResume({
+        repoRoot: currentRepoRoot,
+        issueUrl: issueUrls[0]!,
+        conductorAgentId,
+      }),
+    ).resolves.toMatchObject({
+      location: 'canonical-slug',
+      resumeStore: { issueUrl: issueUrls[0] },
+    });
+  });
+
+  it.each(['user-path-hash', 'project-legacy'] as const)(
+    'promotes a %s ResumeStore to slug without changing its legacy source',
+    async (location) => {
+      tempDir = await createHome('ensemble-session-resume-store-');
+      const repoRoot = join(tempDir, 'repo');
+      const agentId = `promote-${location}`;
+      const issueUrl = 'https://github.com/org/repo/issues/9';
+      const paths = resolveEnsemblePaths({ repoRoot });
+      const sourcePath =
+        location === 'user-path-hash'
+          ? paths.sessionResumeStorePath(agentId)
+          : paths.legacySessionResumeStorePath(agentId);
+      const slugPath = paths.canonicalSessionResumeStorePath(
+        issueUrl,
+        agentId,
+      );
+      const sourceStore = baseResumeStore({
+        conductorAgentId: agentId,
+        repoRoot,
+        issueUrl,
+        updatedAt: 123,
+      });
+      const sourceText = `${JSON.stringify(sourceStore, null, 2)}\n`;
+      await mkdir(dirname(sourcePath), { recursive: true });
+      await writeFile(sourcePath, sourceText, 'utf8');
+
+      const located = await requireLocatedSessionResumeStoreForResume({
+        repoRoot,
+        issueUrl,
+        conductorAgentId: agentId,
+      });
+
+      expect(located).toMatchObject({
+        path: slugPath,
+        location: 'canonical-slug',
+        resumeStore: { updatedAt: 123, repoRoot },
+      });
+      await expect(readFile(sourcePath, 'utf8')).resolves.toBe(sourceText);
+      await expect(loadSessionResumeStore(slugPath)).resolves.toMatchObject({
+        conductorAgentId: agentId,
+        issueUrl,
+        updatedAt: 123,
+      });
+    },
+  );
+
   it('finds the latest session resume store for an issue by updatedAt', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const issueUrl = 'https://github.com/org/repo/issues/9';
@@ -818,6 +1099,37 @@ describe('SessionResumeStore', () => {
     });
 
     expect(latest?.conductorAgentId).toBe('agent-new');
+  });
+
+  it('includes slug resume candidates whose stored repoRoot belongs to another clone', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const issueUrl = 'https://github.com/org/repo/issues/9';
+    const agentId = 'latest-cross-clone-agent';
+    const path = canonicalSessionResumeStorePath({
+      repoRoot: tempDir,
+      issueUrl,
+      conductorAgentId: agentId,
+    });
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      `${JSON.stringify(
+        baseResumeStore({
+          conductorAgentId: agentId,
+          issueUrl,
+          repoRoot: '/another/clone',
+          updatedAt: 500,
+        }),
+      )}\n`,
+      'utf8',
+    );
+
+    await expect(
+      findLatestSessionResumeStoreForIssue({ repoRoot: tempDir, issueUrl }),
+    ).resolves.toMatchObject({
+      conductorAgentId: agentId,
+      repoRoot: '/another/clone',
+    });
   });
 
   it('prefers close or abort candidates and excludes exit for --continue', async () => {
@@ -869,7 +1181,7 @@ describe('SessionResumeStore', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('reads a legacy project SessionResumeStore and migrates it into the user-scoped repo directory', async () => {
+  it('reads a legacy project SessionResumeStore and copies it into the canonical slug directory', async () => {
     tempDir = await createHome('ensemble-session-resume-store-');
     const agentId = 'legacy-project-agent';
     const legacyPath = join(
@@ -877,17 +1189,14 @@ describe('SessionResumeStore', () => {
       `${agentId}.json`,
     );
     await mkdir(legacySessionResumeStoreDir(tempDir), { recursive: true });
-    await writeFile(
-      legacyPath,
-      `${JSON.stringify(
+    const legacyText = `${JSON.stringify(
         baseResumeStore({
           conductorAgentId: agentId,
           repoRoot: tempDir,
           updatedAt: 123,
         }),
-      )}\n`,
-      'utf8',
-    );
+      )}\n`;
+    await writeFile(legacyPath, legacyText, 'utf8');
 
     await expect(
       findLatestSessionResumeStoreForIssue({
@@ -903,13 +1212,14 @@ describe('SessionResumeStore', () => {
     expect(migrated.updatedAt).toBe(123);
     await expect(
       readFile(
-        sessionResumeStorePath({
-          repoRoot: tempDir,
-          conductorAgentId: agentId,
-        }),
+        resolveEnsemblePaths({ repoRoot: tempDir }).canonicalSessionResumeStorePath(
+          'https://github.com/org/repo/issues/1',
+          agentId,
+        ),
         'utf8',
       ),
     ).resolves.toContain(agentId);
+    await expect(readFile(legacyPath, 'utf8')).resolves.toBe(legacyText);
   });
 
   it('keeps deprecated sidecar API aliases compatible through the deprecation period', async () => {

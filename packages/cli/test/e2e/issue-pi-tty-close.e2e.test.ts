@@ -554,21 +554,35 @@ globalThis.fetch = async (input, init) => {
       expect(firstRun.summary.stopReason).toBe('completed');
       expect(model.getRequests()).toBeGreaterThanOrEqual(1);
 
-      const resumeStoreDir = resolveEnsemblePaths({
+      const paths = resolveEnsemblePaths({
         repoRoot,
         home: env.HOME,
-      }).sessionsDir;
+      });
+      const resumeStoreDir = paths.canonicalRepoSessionsDir(ISSUE_URL);
       const resumeStoreNames = (await readdir(resumeStoreDir)).filter((name) =>
         name.endsWith('.json'),
       );
       expect(resumeStoreNames).toEqual([`${firstRun.summary.agentId}.json`]);
       const resumeStore = JSON.parse(
-        await readFile(join(resumeStoreDir, resumeStoreNames[0]!), 'utf8'),
+        await readFile(
+          paths.canonicalSessionResumeStorePath(
+            ISSUE_URL,
+            firstRun.summary.agentId,
+          ),
+          'utf8',
+        ),
       ) as { conductorAgentId: string; conductorBackend: string };
       expect(resumeStore).toMatchObject({
         conductorAgentId: firstRun.summary.agentId,
         conductorBackend: 'pi',
       });
+      expect(
+        existsSync(paths.sessionResumeStorePath(firstRun.summary.agentId)),
+      ).toBe(false);
+      expect(
+        (await readdir(paths.canonicalPiSessionsDir(ISSUE_URL))).length,
+      ).toBeGreaterThan(0);
+      expect(existsSync(paths.piSessionsDir)).toBe(false);
 
       const firstPids = (await readFile(pidFile, 'utf8'))
         .trim()

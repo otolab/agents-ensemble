@@ -14,9 +14,9 @@ export interface ResolveEnsemblePathsOptions {
 /**
  * Resolve user and project paths used by ensemble runtime persistence.
  *
- * Session data is stored under the user root and partitioned by the normalized
- * absolute repository root. Project paths are returned for settings, legacy
- * reads, and the existing repository-local Git worktree layout.
+ * New Issue-session data is stored under the user root and keyed by canonical
+ * GitHub slug. The repository-root hash and project paths remain available for
+ * legacy reads and the existing repository-local Git worktree layout.
  */
 export function resolveEnsemblePaths(
   options: ResolveEnsemblePathsOptions,
@@ -91,6 +91,8 @@ export function resolveEnsemblePaths(
     issueUrl: string,
     conductorAgentId: string,
   ) => join(canonicalRepoSessionsDir(issueUrl), conductorAgentId);
+  const canonicalPiSessionsDir = (issueUrl: string) =>
+    join(canonicalRepoSessionsDir(issueUrl), 'pi');
   const canonicalOperatorAgentDir = (issueUrl: string) =>
     join(userRoot, 'operator-agent', canonicalRepoSlug(issueUrl));
 
@@ -139,6 +141,15 @@ export function resolveEnsemblePaths(
         canonicalSessionDataDir(issueUrl, conductorAgentId),
         'session-state.yaml',
       ),
+    canonicalToolCallHistoryPath: (
+      issueUrl: string,
+      conductorAgentId: string,
+    ) =>
+      join(
+        canonicalRepoSessionsDir(issueUrl),
+        `${conductorAgentId}.tool-calls`,
+      ),
+    canonicalPiSessionsDir,
     canonicalOperatorAgentDir,
     canonicalOperatorAgentSessionPath: (issueUrl: string) =>
       join(canonicalOperatorAgentDir(issueUrl), 'session.json'),

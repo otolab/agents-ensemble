@@ -23,6 +23,7 @@ describe('operator-agent state', () => {
   it('loads a legacy project state and migrates it to the user-scoped path', async () => {
     home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
     vi.stubEnv('HOME', home);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
     repoRoot = join(home, 'repository');
     const paths = resolveEnsemblePaths({ repoRoot });
     const state = {
@@ -52,6 +53,7 @@ describe('operator-agent state', () => {
   it('prefers and continues the canonical slug operator session beside a stale hash copy', async () => {
     home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
     vi.stubEnv('HOME', home);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
     repoRoot = join(home, 'repository');
     const paths = resolveEnsemblePaths({ repoRoot });
     const issueUrl = 'https://github.com/org/repo/issues/12';
@@ -116,6 +118,7 @@ describe('operator-agent state', () => {
   it('migrates hash operator state to the selected slug key without removing the hash copy', async () => {
     home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
     vi.stubEnv('HOME', home);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
     repoRoot = join(home, 'repository');
     const paths = resolveEnsemblePaths({ repoRoot });
     const issueUrl = 'https://github.com/org/repo-migrated/issues/13';
@@ -168,6 +171,7 @@ describe('operator-agent state', () => {
   it('uses the hash operator state when the selected ResumeStore is hash-only despite an orphan slug state', async () => {
     home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
     vi.stubEnv('HOME', home);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
     repoRoot = join(home, 'repository');
     const paths = resolveEnsemblePaths({ repoRoot });
     const issueUrl = 'https://github.com/org/repo-hash-only/issues/14';
@@ -213,6 +217,7 @@ describe('operator-agent state', () => {
   it('uses the hash operator state when selected sessions span multiple canonical slugs', async () => {
     home = await mkdtemp(join(tmpdir(), 'ensemble-operator-state-home-'));
     vi.stubEnv('HOME', home);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(home, '.ensemble'));
     repoRoot = join(home, 'repository');
     const paths = resolveEnsemblePaths({ repoRoot });
     const sessions = [

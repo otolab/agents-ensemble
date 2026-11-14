@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
@@ -35,13 +38,18 @@ const {
 });
 
 let conductorTools: NonNullable<ConductorAgentCreateOptions['customTools']> = {};
+let userEnsembleRoot = '';
 
 vi.mock('./cursor-sdk-conductor-agent.js', () => ({
   createCursorSdkConductorAgentFactory: mockCreateCursorSdkConductorAgentFactory,
 }));
 
 describe('runIssueSession', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    userEnsembleRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-issue-session-user-'),
+    );
+    vi.stubEnv('ENSEMBLE_USER_ROOT', userEnsembleRoot);
     vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
       issue: TEST_ISSUE,
       title: 'Test',
@@ -73,8 +81,11 @@ describe('runIssueSession', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    await rm(userEnsembleRoot, { recursive: true, force: true });
+    userEnsembleRoot = '';
   });
 
   it('enqueues max-turns open question and resumes after operator input', async () => {

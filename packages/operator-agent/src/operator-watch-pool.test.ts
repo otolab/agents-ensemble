@@ -29,6 +29,7 @@ describe('operator watch pool', () => {
   beforeEach(async () => {
     homeRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-home-'));
     vi.stubEnv('HOME', homeRoot);
+    vi.stubEnv('ENSEMBLE_USER_ROOT', join(homeRoot, '.ensemble'));
   });
 
   afterEach(async () => {
