@@ -102,6 +102,9 @@ importers:
       js-yaml:
         specifier: 4.1.0
         version: 4.1.0
+      proper-lockfile:
+        specifier: 4.1.2
+        version: 4.1.2
       yaml:
         specifier: 2.9.1
         version: 2.9.1
@@ -109,6 +112,9 @@ importers:
       '@types/js-yaml':
         specifier: 4.0.9
         version: 4.0.9
+      '@types/proper-lockfile':
+        specifier: 4.1.4
+        version: 4.1.4
       vitest:
         specifier: 3.2.4
         version: 3.2.4(@types/node@26.6.4)(jiti@2.7.0)(yaml@2.9.1)
@@ -951,6 +957,9 @@ packages:
 
   '@types/node@26.6.4':
     resolution: {integrity: sha512-ldVPDCzj7fsaGZrLB0NuHuTvJcsNasysBAqMolr/cgxrLd1xbqxIr3XJiPnHHJUCxj5sNF1vnRj9aWnrVh5Jcg==}
+
+  '@types/proper-lockfile@4.1.4':
+    resolution: {integrity: sha512-uo2ABllncSqg9F1D4nugVl9v93RmjxF6LJzQLMLDdPaXCUIDPeOJ21Gbqi43xNKzBi/WQ0Q0dICqufzQbMjipQ==}
 
   '@types/react@19.2.2':
     resolution: {integrity: sha512-6mDvHUFSjyT2B2yeNx2nUgMxh9LtOWvkhIU3uePn2I2oyNymUAX1NIsdgviM4CH+JSrp2D2hsMvJOkxY+0wNRA==}
@@ -3251,6 +3260,10 @@ snapshots:
       undici-types: 8.9.0
     optional: true
 
+  '@types/proper-lockfile@4.1.4':
+    dependencies:
+      '@types/retry': 0.12.0
+
   '@types/react@19.2.2':
     dependencies:
       csstype: 3.2.3
@@ -4723,8 +4736,7 @@ snapshots:
 
   yaml@2.9.0: {}
 
-  yaml@2.9.1:
-    optional: true
+  yaml@2.9.1: {}
 
   yoga-layout@3.2.1: {}
 

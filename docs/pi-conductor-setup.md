@@ -130,7 +130,7 @@ ensemble auth login --provider <oauth-provider-id>
 
 OAuth login も TTY が必要です。Pi 1.x の `ModelRuntime.login` が認証を行い、URL、device code、進捗、追加 prompt は stderr に出します。SSH では表示された URL / device code を別のブラウザで使えます。OAuth credential は user runtime に保存され、conductor の各 request で runtime が必要に応じて refresh します。
 
-OpenAI provider（`openai`）の ChatGPT OAuth は installation ごとの UUID（device ID）を必要とします。login 時に user resource root の `settings.json` から `deviceId` を取得し、未作成なら生成して保存します。同じ `conductor.pi.agentDir` で login をやり直すと同じ ID が使われ、agentDir を変えると別の installation として ID が作られます。値を手で設定する必要はありません。
+OpenAI provider（`openai`）の ChatGPT OAuth は installation ごとの UUID（device ID）を必要とします。login 時に user resource root の `settings.json` から `deviceId` を取得し、未作成なら生成して保存します。同じ `conductor.pi.agentDir` を使う ensemble の login は、複数の CLI process から同時に実行しても同じ保存済み ID を使います。login をやり直す場合も同じ ID が使われ、agentDir を変えると別の installation として ID が作られます。値を手で設定する必要はありません。Pi CLI など ensemble の同期に参加しない別アプリが、同時に同じ `settings.json` の device ID を変更する競合までは対象に含みません。
 
 ChatGPT OAuth を使わない場合は、次の方法があります。
 

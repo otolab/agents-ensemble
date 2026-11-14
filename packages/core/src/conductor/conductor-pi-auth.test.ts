@@ -967,6 +967,52 @@ describe('Pi conductor authentication', () => {
     expect(settings.deviceId).toBe(deviceIds[0]);
   });
 
+  it('reuses the persisted device ID across concurrent OpenAI OAuth logins', async () => {
+    const fixture = await createAuthFileFixture(
+      'pi-auth-concurrent-device-id-',
+    );
+    const deviceIds: string[] = [];
+    const login = vi
+      .spyOn(ModelRuntime.prototype, 'login')
+      .mockImplementation(async (_provider, _method, _interaction, loginOptions) => {
+        const deviceId = loginOptions?.getDeviceId?.();
+        if (!deviceId) throw new Error('OAuth login did not receive getDeviceId');
+        deviceIds.push(deviceId);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+    const options = {
+      cwd: fixture.cwd,
+      pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+      provider: 'openai',
+      modelId: 'gpt-6.1-sol',
+      oauthCallbacks: createOAuthCallbacks(),
+    };
+
+    const results = await Promise.all([
+      loginPiConductor(options),
+      loginPiConductor(options),
+    ]);
+    expect(results).toHaveLength(2);
+    for (const result of results) {
+      expect(result).toMatchObject({ method: 'oauth', provider: 'openai' });
+    }
+    expect(deviceIds).toHaveLength(2);
+    expect(deviceIds[0]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(deviceIds[1]).toBe(deviceIds[0]);
+
+    await expect(loginPiConductor(options)).resolves.toMatchObject({
+      method: 'oauth',
+      provider: 'openai',
+    });
+    expect(deviceIds[2]).toBe(deviceIds[0]);
+    const settings = JSON.parse(
+      await readFile(join(fixture.agentDir, 'settings.json'), 'utf8'),
+    ) as { deviceId?: string };
+    expect(settings.deviceId).toBe(deviceIds[0]);
+  });
+
   it.skipIf(process.platform === 'win32')(
     'preserves read-only user settings during Anthropic OAuth',
     async () => {

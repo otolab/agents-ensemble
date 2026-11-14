@@ -24,6 +24,7 @@ import {
   type OAuthLoginCallbacks,
 } from '@earendil-works/pi-ai/compat';
 import type { AuthInteraction, AuthPrompt, AuthEvent } from '@earendil-works/pi-ai';
+import { withPiUserRootLock } from './pi-user-root-lock.js';
 import {
   canonicalPath,
   getProjectWriteBoundaryPaths,
@@ -178,23 +179,28 @@ export async function loginPiConductor(
     }
     let loginOptions: { getDeviceId: () => string } | undefined;
     if (requiresDeviceId) {
-      // Re-scan the project tree immediately before the OpenAI device ID write.
-      await ensurePiUserSettingsSafeForOAuth(
-        settingsPath,
-        await getProtectedProjectRoots(),
-      );
-      const settingsManager = SettingsManager.create(options.cwd, roots.agentDir);
-      const deviceId = settingsManager.getOrCreateDeviceId();
-      await settingsManager.flush();
-      const settingsErrors = settingsManager
-        .drainErrors()
-        .filter(({ scope }) => scope === 'global');
-      if (settingsErrors.length > 0) {
-        const details = settingsErrors.map(({ error }) => error.message).join('; ');
-        throw new Error(
-          `Failed to persist the Pi OAuth device ID to user settings.json; OAuth login was not started: ${details}`,
+      const deviceId = await withPiUserRootLock(roots.agentDir, async () => {
+        // Re-scan the project tree immediately before the OpenAI device ID write.
+        await ensurePiUserSettingsSafeForOAuth(
+          settingsPath,
+          await getProtectedProjectRoots(),
         );
-      }
+        const settingsManager = SettingsManager.create(options.cwd, roots.agentDir);
+        const deviceId = settingsManager.getOrCreateDeviceId();
+        await settingsManager.flush();
+        const settingsErrors = settingsManager
+          .drainErrors()
+          .filter(({ scope }) => scope === 'global');
+        if (settingsErrors.length > 0) {
+          const details = settingsErrors
+            .map(({ error }) => error.message)
+            .join('; ');
+          throw new Error(
+            `Failed to persist the Pi OAuth device ID to user settings.json; OAuth login was not started: ${details}`,
+          );
+        }
+        return deviceId;
+      });
       loginOptions = {
         getDeviceId: () => deviceId,
       };
