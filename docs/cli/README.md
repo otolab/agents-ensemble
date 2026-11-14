@@ -27,7 +27,7 @@ conductor:
 
 Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の model catalog を扱う `models remote` / `diff` / `add` と旧 `sync` からの移行も同ガイドを参照してください。Pi の user root は `conductor.pi.agentDir`、`PI_CODING_AGENT_DIR`、`~/.ensemble/pi/` の順、project root は `conductor.pi.projectDir`、`<repoRoot>/.ensemble/pi/` の順で解決します。
 
-clone したら、推奨初回導線として TTY で `ensemble setup` を実行します。Pi（OpenAI）または Cursor を選び、Pi では OAuth / API key も選べます。Pi を選んだ場合、`conductor.model: default` は user Pi settings に保存した provider / model を使います。設定と認証は user 層に保存し、既存 project config・project Pi resource・profile の値は変更しません。user の保存先が project `.ensemble` / Pi resource と重なる場合や、project の symlink から path として辿れる保存先と重なる場合は書き込みを中止します。project/profile が backend を指定している場合は user 設定より優先されます。setup を使わず Pi settings に model がなく、明示 model もない場合は起動前に設定エラーになります。CI / headless では user config・Pi settings・認証情報を手動で用意してください。`ensemble auth login` の対話 login には TTY が必要です。手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
+clone したら、推奨初回導線として TTY で `ensemble setup` を実行します。Pi（OpenAI）または Cursor を選び、Pi では OAuth / API key も選べます。Pi を選んだ場合、`conductor.model: default` は user Pi settings に保存した provider / model を使います。設定と認証は user 層に保存し、既存 project config・project Pi resource・profile の値は変更しません。user の保存先が project `.ensemble` / Pi resource と重なる場合や、project の symlink から path として辿れる保存先と重なる場合は書き込みを中止します。project/profile が backend を指定している場合は user 設定より優先されます。setup を使わず Pi settings に model がなく、明示 model もない場合は起動前に設定エラーになります。CI / headless では user config・Pi settings・認証情報を手動で用意できます。API key は `ensemble auth login --api-key-stdin` から user 層に保存できます。OAuth と TTY prompt には TTY が必要です。手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
 Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
@@ -62,9 +62,9 @@ dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer
 | worker（Pi BYO） | PATH 上の Pi CLI と、その Pi runtime の provider 認証 |
 | worker（Pi builtin） | `acp.defaultPreset: pi` と `acp.pi.runtime: builtin` を設定。Pi CLI の追加 install は不要。provider credential は Pi user config または provider 環境変数で用意。`ensemble auth login --provider <id>` を使う場合は、選択中の conductor backend / profile も Pi にする |
 | conductor（Cursor SDK、明示選択） | `ensemble auth login` |
-| conductor（Pi、OpenAI API key） | `ensemble setup` で API key を選ぶ（TTY の非表示 prompt） |
-| conductor（Pi、他 provider の API key） | `ensemble auth login --provider <id>`（TTY の非表示 prompt） |
-| conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
+| conductor（Pi、OpenAI API key） | TTY: `ensemble auth login --provider openai --api-key-prompt`、非 TTY: `ensemble auth login --provider openai --api-key-stdin`。user `auth.json` に保存し、`ensemble setup` でも選択可能 |
+| conductor（Pi、他 provider の API key） | TTY: API-key-only provider は `ensemble auth login --provider <id>`、OAuth 共存 provider は `ensemble auth login --provider <id> --api-key-prompt`。非 TTY: `ensemble auth login --provider <id> --api-key-stdin` |
+| conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr。OpenAI は既定で OAuth） |
 | GitHub API（gh CLI を使う場合） | `gh auth login` |
 
 ```bash
@@ -77,8 +77,15 @@ ensemble setup
 # conductor（Cursor SDK を選択した場合の再 login）
 ensemble auth login
 
-# conductor（Pi provider を再ログイン。OpenAI は OAuth を選択）
+# conductor（Pi provider を再ログイン。OpenAI は既定で OAuth）
 ensemble auth login --provider <provider-id>
+
+# conductor（OpenAI API key を TTY の非表示 prompt で保存）
+ensemble auth login --provider openai --api-key-prompt
+
+# conductor（API key を stdin から非対話で保存）
+secret-manager read <secret-name> | ensemble auth login --provider <provider-id> --api-key-stdin
+
 ensemble auth status
 ensemble models list
 

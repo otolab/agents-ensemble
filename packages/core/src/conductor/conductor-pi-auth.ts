@@ -55,6 +55,7 @@ export interface PiProviderAuthStatus {
   provider: string;
   configured: boolean;
   source?: string;
+  mode?: 'oauth' | 'api_key' | 'command';
   label?: string;
 }
 
@@ -235,7 +236,7 @@ export async function loginPiConductor(
   const apiKey = options.apiKey?.trim();
   if (!apiKey) {
     throw new Error(
-      `Pi provider "${provider}" requires an API key. Pass a secret API-key prompt value or set ${formatPiProviderEnvHint(provider)}.`,
+      `Pi provider "${provider}" requires an API key. Use --api-key-prompt from a TTY or --api-key-stdin with piped input to store one, or set ${formatPiProviderEnvHint(provider)} for request-time authentication.`,
     );
   }
   await writePiApiKey(
@@ -722,13 +723,23 @@ function getPiProviderAuthStatus(
     }
     const projectKey = resolvePiAuthEntry(projectEntry, env);
     if (projectKey !== undefined) {
-      return { provider, configured: true, source: 'project_stored' };
+      return {
+        provider,
+        configured: true,
+        source: 'project_stored',
+        ...getKnownAuthMode(projectEntry),
+      };
     }
   }
 
   const registryStatus = context.modelRuntime.getProviderAuthStatus(provider);
   if (registryStatus.configured || registryStatus.source === 'stored') {
-    return normalizePiAuthStatus(provider, registryStatus, true);
+    return {
+      ...normalizePiAuthStatus(provider, registryStatus, true),
+      ...(registryStatus.source === 'stored'
+        ? getKnownAuthMode(resources.authLayers[0]?.[provider])
+        : {}),
+    };
   }
 
   const settingsKey = resolvePiSettingsApiKey(resources.settings, provider, env);
@@ -764,6 +775,19 @@ function normalizePiAuthStatus(
     ...(status.source ? { source: status.source } : {}),
     ...(status.label ? { label: status.label } : {}),
   };
+}
+
+function getKnownAuthMode(
+  entry: unknown,
+): Pick<PiProviderAuthStatus, 'mode'> | undefined {
+  if (!isRecord(entry)) return undefined;
+  if (entry.type === 'oauth') return { mode: 'oauth' };
+  if (entry.type === 'api_key') {
+    const key = [entry.key, entry.apiKey, entry.token, entry.accessToken, entry.access]
+      .find((value): value is string => typeof value === 'string');
+    return { mode: key?.startsWith('!') ? 'command' : 'api_key' };
+  }
+  return undefined;
 }
 
 type PiRuntimeAuthStatus = {

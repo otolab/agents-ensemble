@@ -590,7 +590,7 @@ describe('runSetupCommand', () => {
       message: expect.stringContaining('CURSOR_API_KEY'),
     });
     expect(error).toMatchObject({
-      message: expect.stringContaining('login にも TTY が必要'),
+      message: expect.stringContaining('API key は `--api-key-stdin`'),
     });
     expect(writeFiles).not.toHaveBeenCalled();
     expect(login).not.toHaveBeenCalled();

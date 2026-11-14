@@ -64,6 +64,7 @@ describe('conductor auth CLI wiring', () => {
           provider: 'local',
           configured: true,
           source: 'stored',
+          mode: 'api_key',
         }),
       ],
     });
@@ -169,7 +170,7 @@ describe('conductor auth CLI wiring', () => {
         piAgentDir: agentDir,
         provider: 'openai',
         modelId: 'gpt-6.1-sol',
-        authMethod: 'api_key',
+        apiKeyPrompt: true,
       });
 
       expect(result).toMatchObject({
@@ -190,6 +191,146 @@ describe('conductor auth CLI wiring', () => {
       input.destroy();
       stderr.destroy();
       stdout.destroy();
+    }
+  });
+
+  it('reads an API key from non-TTY stdin and keeps OpenAI OAuth as the default', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-auth-stdin-project-'));
+    const userRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-auth-stdin-user-'));
+    const agentDir = join(userRoot, 'pi');
+    const authPath = join(agentDir, 'auth.json');
+    const secret = 'test-stdin-openai-secret';
+    await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      join(repoRoot, '.ensemble', 'config.yaml'),
+      `conductor:\n  backend: pi\n  pi:\n    agentDir: ${agentDir}\n    projectDir: ${join(repoRoot, 'project-pi')}\n`,
+    );
+    await mkdir(join(repoRoot, 'project-pi'), { recursive: true });
+    await writeFile(
+      join(agentDir, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'openai', defaultModel: 'gpt-6.1-sol' }),
+    );
+
+    const originalStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+    const originalStderr = Object.getOwnPropertyDescriptor(process, 'stderr');
+    const originalStdout = Object.getOwnPropertyDescriptor(process, 'stdout');
+    const input = new PassThrough() as PassThrough & { isTTY: boolean };
+    input.isTTY = false;
+    input.end(`${secret}\n`);
+    let stderrText = '';
+    let stdoutText = '';
+    const stderr = new Writable({
+      write(chunk, _encoding, callback) {
+        stderrText += String(chunk);
+        callback();
+      },
+    });
+    const stdout = new Writable({
+      write(chunk, _encoding, callback) {
+        stdoutText += String(chunk);
+        callback();
+      },
+    });
+
+    Object.defineProperty(process, 'stdin', {
+      configurable: true,
+      enumerable: true,
+      value: input,
+    });
+    Object.defineProperty(process, 'stderr', {
+      configurable: true,
+      enumerable: true,
+      value: stderr,
+    });
+    Object.defineProperty(process, 'stdout', {
+      configurable: true,
+      enumerable: true,
+      value: stdout,
+    });
+    vi.stubEnv('ENSEMBLE_USER_ROOT', userRoot);
+
+    try {
+      const result = await runConductorLogin({
+        repoRoot,
+        apiKeyStdin: true,
+      });
+
+      expect(result).toMatchObject({
+        backend: 'pi',
+        provider: 'openai',
+        method: 'api_key',
+        authPath,
+      });
+      expect(stderrText).not.toContain(secret);
+      expect(stdoutText).not.toContain(secret);
+      expect(JSON.stringify(result)).not.toContain(secret);
+      await expect(readFile(authPath, 'utf8')).resolves.toContain(secret);
+    } finally {
+      if (originalStdin) Object.defineProperty(process, 'stdin', originalStdin);
+      if (originalStderr) Object.defineProperty(process, 'stderr', originalStderr);
+      if (originalStdout) Object.defineProperty(process, 'stdout', originalStdout);
+      input.destroy();
+      stderr.destroy();
+      stdout.destroy();
+    }
+  });
+
+  it('does not prompt on non-TTY API-key login and names the supported input route', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-auth-no-tty-'));
+    await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
+    await writeFile(
+      join(repoRoot, '.ensemble', 'config.yaml'),
+      'conductor:\n  backend: pi\n',
+    );
+    const originalStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+    const input = new PassThrough() as PassThrough & { isTTY: boolean };
+    input.isTTY = false;
+    Object.defineProperty(process, 'stdin', {
+      configurable: true,
+      enumerable: true,
+      value: input,
+    });
+
+    try {
+      await expect(
+        runConductorLogin({ repoRoot, provider: 'anthropic' }),
+      ).rejects.toThrow(/requires a TTY.*--api-key-stdin/);
+      expect(input.readableLength).toBe(0);
+    } finally {
+      if (originalStdin) Object.defineProperty(process, 'stdin', originalStdin);
+      input.destroy();
+    }
+  });
+
+  it('requires the explicit API-key prompt selector to use a TTY', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-cli-auth-prompt-no-tty-'));
+    await mkdir(join(repoRoot, '.ensemble'), { recursive: true });
+    await writeFile(
+      join(repoRoot, '.ensemble', 'config.yaml'),
+      'conductor:\n  backend: pi\n',
+    );
+    const originalStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
+    const input = new PassThrough() as PassThrough & { isTTY: boolean };
+    input.isTTY = false;
+    Object.defineProperty(process, 'stdin', {
+      configurable: true,
+      enumerable: true,
+      value: input,
+    });
+
+    try {
+      await expect(
+        runConductorLogin({
+          repoRoot,
+          provider: 'openai',
+          apiKeyPrompt: true,
+        }),
+      ).rejects.toThrow(/--api-key-prompt requires a TTY.*--api-key-stdin/);
+      expect(input.readableLength).toBe(0);
+    } finally {
+      if (originalStdin) Object.defineProperty(process, 'stdin', originalStdin);
+      input.destroy();
     }
   });
 });
