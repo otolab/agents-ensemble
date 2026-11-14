@@ -1,5 +1,5 @@
 import * as readline from 'node:readline/promises';
-import { stdin as input, stdout as output } from 'node:process';
+import { stdin as input, stderr, stdout as output } from 'node:process';
 import type { OperatorInputContext } from '@agents-ensemble/core';
 import { formatIssueReference } from './tui/format-operator-context.js';
 import { resolveInitialOperatorMessage } from './operator-message.js';
@@ -15,6 +15,11 @@ export function isOperatorInputInteractive(initialOperatorMessage?: string): boo
 /** post-loop 待機を有効にできる TTY 入力か（初回メッセージの有無は問わない）。 */
 export function isOperatorInputTty(): boolean {
   return process.stdin.isTTY ?? false;
+}
+
+/** Sensitive recovery content is available only when all operator-facing streams are terminals. */
+export function isOperatorRecoveryInspectionTty(): boolean {
+  return Boolean(input.isTTY && output.isTTY && stderr.isTTY);
 }
 
 function formatMaxTurnsLabel(maxTurns: number | null): string {

@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
-import { chmod, copyFile, mkdir } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import {
   type AgentMessage,
@@ -36,6 +35,7 @@ import {
   type ToolDefinition,
 } from '@earendil-works/pi-coding-agent';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { copyFileIfMissing } from '../session/persisted-file.js';
 import {
   createPiConductorAuthContext,
   resolvePiConductorApiKey,
@@ -633,30 +633,37 @@ async function createPiConductorSession(
   const sessionDir =
     options.sessionDir ??
     resolveEnsemblePaths({ repoRoot: options.cwd }).piSessionsDir;
-  const legacySessionDir =
-    options.legacySessionDir ?? join(options.cwd, PI_SESSION_ROOT);
+  const legacySessionDirs = [
+    ...(options.legacySessionDirs ?? []),
+    ...(options.legacySessionDir
+      ? [options.legacySessionDir]
+      : options.legacySessionDirs
+        ? []
+        : [join(options.cwd, PI_SESSION_ROOT)]),
+  ].filter((directory, index, directories) =>
+    directory !== sessionDir && directories.indexOf(directory) === index,
+  );
   await mkdir(sessionDir, { recursive: true, mode: 0o700 });
   await chmod(sessionDir, 0o700);
   let sessionManager: SessionManager;
   let previousSessionFile: string | undefined;
   if (reason === 'resume') {
     previousSessionFile = SessionManager.findById(options.cwd, agentId, sessionDir);
-    if (!previousSessionFile && legacySessionDir !== sessionDir) {
-      const legacyFile = SessionManager.findById(
-        options.cwd,
-        agentId,
-        legacySessionDir,
-      );
-      if (legacyFile) {
+    if (!previousSessionFile) {
+      for (const legacySessionDir of legacySessionDirs) {
+        const legacyFile = SessionManager.findById(
+          options.cwd,
+          agentId,
+          legacySessionDir,
+        );
+        if (!legacyFile) continue;
         await mkdir(sessionDir, { recursive: true, mode: 0o700 });
         const migratedFile = join(sessionDir, basename(legacyFile));
-        try {
-          await copyFile(legacyFile, migratedFile, constants.COPYFILE_EXCL);
-        } catch (error) {
-          if (!isAlreadyExists(error)) throw error;
-        }
-        await chmod(migratedFile, 0o600);
-        previousSessionFile = migratedFile;
+        const copied = await copyFileIfMissing(legacyFile, migratedFile);
+        previousSessionFile = copied
+          ? migratedFile
+          : SessionManager.findById(options.cwd, agentId, sessionDir);
+        if (previousSessionFile) break;
       }
     }
     if (!previousSessionFile) {

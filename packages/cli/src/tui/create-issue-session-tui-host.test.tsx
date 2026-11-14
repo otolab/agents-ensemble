@@ -358,8 +358,18 @@ describe('createIssueSessionTuiHost', () => {
   });
 
   it('shows a recovery snapshot only in the local inspection view and clears it before a new instruction', () => {
+    const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    const stderrIsTty = Object.getOwnPropertyDescriptor(process.stderr, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
     Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    Object.defineProperty(process.stderr, 'isTTY', {
       configurable: true,
       value: true,
     });
@@ -374,29 +384,27 @@ describe('createIssueSessionTuiHost', () => {
           maxTurns: null,
           openQuestions: [],
         }),
-        listPiAuthRecoverySnapshots: () => [],
-        getPiAuthRecoverySnapshot: vi.fn(() => ({
-          recoveryId: 'pi-auth-recovery-12',
+        listRecoverySnapshots: () => [],
+        getRecoverySnapshot: vi.fn(() => ({
+          recoveryId: 'conductor-recovery-12',
           createdAt: Date.now(),
           expiresAt: Date.now() + 60_000,
-          failedDispatch: {
-            sendCount: 12,
-            runId: 'run-12',
-            sourceKey: 'operator',
-            eventTypes: ['operator.message'],
-            eventCount: 1,
-            eventReferences: [],
-            eventReferencesTruncated: false,
-          },
-          failure: {
-            kind: 'pi_api_key_resolution' as const,
-            automaticRetryAttempts: 1 as const,
-            toolCallStarted: false as const,
-          },
-          content: 'private operator task body',
+          sendCount: 12,
+          workflow: 'issue' as const,
+          backend: 'pi' as const,
+          runId: 'run-12',
+          sourceKey: 'operator',
+          eventTypes: ['operator.message'],
+          status: 'error',
+          failureClass: 'auth' as const,
+          automaticReconnect: { reason: 'auth' as const, succeeded: true },
+          automaticRetryAttempts: 0 as const,
+          toolCallStarted: false as const,
+          inputTexts: ['private operator task body'],
+          inputCount: 1,
           contentBytes: 27,
         })),
-        clearPiAuthRecoverySnapshot: () => false,
+        clearRecoverySnapshot: () => false,
       };
       const renderedElement = mockRender.mock.calls[0]?.[0] as {
         props: {
@@ -411,7 +419,9 @@ describe('createIssueSessionTuiHost', () => {
       };
 
       const dispose = host.bindOperatorInput(api);
-      renderedElement.props.onSubmit('/recovery show pi-auth-recovery-12');
+      renderedElement.props.onSubmit(
+        '/recovery show conductor-recovery-12',
+      );
 
       expect(
         renderedElement.props.viewModel.getSnapshot().recoveryInspection?.text,
@@ -436,10 +446,20 @@ describe('createIssueSessionTuiHost', () => {
       dispose?.();
       host.dispose();
     } finally {
+      if (stdinIsTty) {
+        Object.defineProperty(process.stdin, 'isTTY', stdinIsTty);
+      } else {
+        Reflect.deleteProperty(process.stdin, 'isTTY');
+      }
       if (stdoutIsTty) {
         Object.defineProperty(process.stdout, 'isTTY', stdoutIsTty);
       } else {
         Reflect.deleteProperty(process.stdout, 'isTTY');
+      }
+      if (stderrIsTty) {
+        Object.defineProperty(process.stderr, 'isTTY', stderrIsTty);
+      } else {
+        Reflect.deleteProperty(process.stderr, 'isTTY');
       }
     }
   });
@@ -447,8 +467,18 @@ describe('createIssueSessionTuiHost', () => {
   it('hides the sensitive inspection pane when its snapshot expires or the binding is disposed', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'));
+    const stdinIsTty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     const stdoutIsTty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    const stderrIsTty = Object.getOwnPropertyDescriptor(process.stderr, 'isTTY');
+    Object.defineProperty(process.stdin, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
     Object.defineProperty(process.stdout, 'isTTY', {
+      configurable: true,
+      value: true,
+    });
+    Object.defineProperty(process.stderr, 'isTTY', {
       configurable: true,
       value: true,
     });
@@ -472,32 +502,28 @@ describe('createIssueSessionTuiHost', () => {
           maxTurns: null,
           openQuestions: [],
         }),
-        listPiAuthRecoverySnapshots: () => [],
-        getPiAuthRecoverySnapshot: () => ({
-          recoveryId: 'pi-auth-recovery-1',
+        listRecoverySnapshots: () => [],
+        getRecoverySnapshot: () => ({
+          recoveryId: 'conductor-recovery-1',
           createdAt: Date.now(),
           expiresAt: Date.now() + 100,
-          failedDispatch: {
-            sendCount: 1,
-            runId: 'run-1',
-            sourceKey: 'operator',
-            eventTypes: ['operator.message'],
-            eventCount: 1,
-            eventReferences: [],
-            eventReferencesTruncated: false,
-          },
-          failure: {
-            kind: 'pi_api_key_resolution',
-            automaticRetryAttempts: 0,
-            toolCallStarted: false,
-          },
-          content: 'sensitive content',
+          sendCount: 1,
+          workflow: 'issue' as const,
+          backend: 'cursor' as const,
+          sourceKey: 'operator',
+          eventTypes: ['operator.message'],
+          status: 'send_rejected',
+          failureClass: 'send_rejected' as const,
+          automaticRetryAttempts: 0 as const,
+          toolCallStarted: false,
+          inputTexts: ['sensitive content'],
+          inputCount: 1,
           contentBytes: 17,
         }),
-        clearPiAuthRecoverySnapshot: () => false,
+        clearRecoverySnapshot: () => false,
       });
 
-      renderedElement.props.onSubmit('/recovery show pi-auth-recovery-1');
+      renderedElement.props.onSubmit('/recovery show conductor-recovery-1');
       expect(
         renderedElement.props.viewModel.getSnapshot().recoveryInspection,
       ).toBeDefined();
@@ -506,17 +532,27 @@ describe('createIssueSessionTuiHost', () => {
         renderedElement.props.viewModel.getSnapshot().recoveryInspection,
       ).toBeUndefined();
 
-      renderedElement.props.onSubmit('/recovery show pi-auth-recovery-1');
+      renderedElement.props.onSubmit('/recovery show conductor-recovery-1');
       dispose?.();
       expect(
         renderedElement.props.viewModel.getSnapshot().recoveryInspection,
       ).toBeUndefined();
       host.dispose();
     } finally {
+      if (stdinIsTty) {
+        Object.defineProperty(process.stdin, 'isTTY', stdinIsTty);
+      } else {
+        Reflect.deleteProperty(process.stdin, 'isTTY');
+      }
       if (stdoutIsTty) {
         Object.defineProperty(process.stdout, 'isTTY', stdoutIsTty);
       } else {
         Reflect.deleteProperty(process.stdout, 'isTTY');
+      }
+      if (stderrIsTty) {
+        Object.defineProperty(process.stderr, 'isTTY', stderrIsTty);
+      } else {
+        Reflect.deleteProperty(process.stderr, 'isTTY');
       }
     }
   });

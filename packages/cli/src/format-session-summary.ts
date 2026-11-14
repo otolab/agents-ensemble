@@ -1,6 +1,7 @@
-import type {
-  SessionSummary,
-  SessionUsageCacheStats,
+import {
+  escapeTerminalControlCharacters,
+  type SessionSummary,
+  type SessionUsageCacheStats,
 } from '@agents-ensemble/core';
 
 export const DEFAULT_RESPONSE_PREVIEW_LENGTH = 240;
@@ -39,7 +40,7 @@ export function formatIssueSessionSummaryJson(
       durationMs: summary.durationMs,
       sendCount: summary.sendCount,
       stopReason: summary.stopReason,
-      lastRunStatus: summary.lastRunStatus,
+      lastRunStatus: escapeTerminalControlCharacters(summary.lastRunStatus),
       lastResult: summary.lastResult,
       lastError: summary.lastError,
       workerDispatchCount: summary.workerDispatches.length,

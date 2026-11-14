@@ -66,10 +66,10 @@ conductor が実際に返した応答なので対話チャネル（`conductor>` 
 └─────────────────────────────────────────────────────────────┘
 
   別経路（SessionLogger 外）:
-    SessionResumeStore への flush → ~/.ensemble/sessions/<repoKey>/{agentId}.json
-    tool-call history flush → ~/.ensemble/sessions/<repoKey>/{agentId}.tool-calls
-    question flush → ~/.ensemble/sessions/<repoKey>/{agentId}/open-questions.yaml
-    operator status → ~/.ensemble/sessions/<repoKey>/{agentId}/session-state.yaml
+    SessionResumeStore への flush → ~/.ensemble/sessions/github.com/<owner>/<repo>/{agentId}.json
+    tool-call history flush → ~/.ensemble/sessions/github.com/<owner>/<repo>/{agentId}.tool-calls
+    question flush → ~/.ensemble/sessions/github.com/<owner>/<repo>/{agentId}/open-questions.yaml
+    operator status → ~/.ensemble/sessions/github.com/<owner>/<repo>/{agentId}/session-state.yaml
 ```
 
 ### stdout
@@ -98,7 +98,7 @@ open question の回答観測は回答全文を残し、`yes_no` には `assent=
 
 operator-agent の watch polling 警告には例外本文を含めず、Open Question の質問・context・回答本文をログへ出しません。watch report は新規 open、回答、または一覧からの消失を operator-agent への入力として渡し、観測できた質問・context・回答情報を含む場合があります。未 dispatch report の永続化先は owner-only (`0700` directory / `0600` file) の `~/.ensemble/operator-agent/<repoKey>/watch-state.json` であり、通常のログとは別ですが、一般的な secret redaction は行いません。
 
-`~/.ensemble/sessions/<repoKey>/` とセッション別データ directory は owner-only (`0700`)、SessionResumeStore の JSON / YAML / socket file は owner read/write (`0600`) にします。project `.ensemble/sessions/` にある既存データは読み取り fallback として扱います。`--resume` / `--continue` では SessionResumeStore と open-question YAML を user 側へ移し、tool-call 履歴は読み込み時にコピーします。session-state YAML は operator の読み取り fallback を保ち、次回報告時に履歴を引き継いで user 側へ書きます。operator-agent の session / watch state と Pi transcript も、それぞれの読み込み・再開時に user 側へ移します。旧ファイルは自動削除しません。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
+`~/.ensemble/sessions/github.com/<owner>/<repo>/` と session ごとの data directory は owner-only (`0700`)、SessionResumeStore の JSON / YAML / socket file は owner read/write (`0600`) にします。Issue-session の新規 write は slug 側だけです。user path-hash と project `.ensemble/sessions/` は読み取り fallback とし、`--resume` / `--continue` では slug にない ResumeStore / sidecar / tool-call history / Pi transcript だけをコピーします。slug に既存 file があればそれを優先し、複数 location の内容を統合せず、fallback source は変更・削除しません。operator-agent state は別の保存 path を使います。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
 
 Builtin Pi worker の session map と transcript は、POSIX では専用 parent と worker storage tree の directory を `0700`、既存 file を `0600` にし、wrapper の `umask 077` で upstream adapter / Pi CLI の新規 file も owner read/write に制限します。Windows では wrapper が標準の `icacls.exe` で専用 parent と起動した repository の storage tree を現在の account SID だけに許可する DACL にし、PowerShell の .NET ACL API で owner と ACE を読み戻して検証します。upstream が指定された map / transcript directory 内に通常の方法で作る file / directory は、その ACL を継承します。PowerShell / `icacls.exe` の起動、ACL 設定、検証のいずれかに失敗した場合は adapter を起動しません。対象は builtin worker の map / transcript 保存先であり、共有 Pi settings / auth root や BYO 保存先には適用しません。同じ OS account の別 process、管理者 / SYSTEM / backup privilege、ACL を無視する storage、または将来の upstream が対象 directory の外へ書く・権限を明示的に広げる動作は保護しません。権限を書き換えられない既存データがある場合も起動は失敗します。POSIX の builtin storage 内に symlink / reparse point または特殊 file がある場合は wrapper が起動を拒否します。
 
@@ -177,13 +177,17 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | なし（sink のみ） |
 | `session.stop` | セッション終了直前 | `stopReason` を確定 |
 
-Pi auth recovery の operator-only snapshot は `SessionLogger` と別の process-local store に置きます。
-snapshot 本文を持つ新しい `SessionLogEvent` は発行せず、SessionSummary の専用 field や SessionResumeStore にも
-加えません。failure の `harness.warning` は ID / expiry / eviction ID だけです。これは既存 event の扱いを
-変えるものではありません。`operator.input` / `operator.dispatched` は本文を持つ live event であり、
-`worker.round` の worker result は既存どおり SessionLogger / session summary に蓄積されます。明示的な
-`/recovery show` は TTY に内容を表示するため、terminal capture / recording からは保護されません。
-snapshot の保持条件と確認手順は [operator-input.md](operator-input.md) を参照してください。
+Conductor recovery inbox は `SessionLogger` と別の process-local store です。対話 TTY に限り、失敗した
+dispatch に含まれる operator-authored input を保持します。snapshot 本文を持つ新しい `SessionLogEvent` は
+発行せず、SessionSummary、SessionResumeStore、UDS response、conductor send にも追加しません。未完了 send の
+`harness.warning` は status / failure class / attempt ID / snapshot ID と操作案内だけを示し、本文や raw error
+を含めません。非 TTY では本文を保存せず、同一 process 内でも確認できない旨を本文なしで知らせます。
+
+これは既存 event の扱いを変えるものではありません。`operator.input` / `operator.dispatched` は従来どおり
+operator message の本文を扱い、`worker.round` の worker result は従来どおり SessionLogger / session summary に
+蓄積されます。ここで防ぐのは recovery snapshot を新たな保存先へ複製することです。明示的な
+`/recovery show` は TTY に内容を表示するため、terminal capture / recording からは保護されません。snapshot の
+保持条件と確認手順は [operator-input.md](operator-input.md) を参照してください。
 
 ### 組み込み sink（CLI）
 
@@ -212,15 +216,15 @@ permission の ACP variant と抽出優先順位は
 
 ## 4. SessionResumeStore と open question YAML
 
-SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
+SessionResumeStore は、harness がセッション再開に必要な情報を保存する JSON ファイル（`~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json`）です。会話 transcript の保存先ではなく、記録された socket path だけでは harness の稼働や接続可能性も分かりません。
 
 `ensemble session list/show` は core の SessionResumeStore / YAML 読取 API を使う読み取り専用 CLI です。harness への接続や agent 起動は行わず、sidecar は許可したメタデータだけ、YAML は件数・時刻だけを表示します。旧形式の SessionResumeStore に残る ACP 環境変数の平文値も読取 API が除外します。`show` の `workerReaders` は、保存 preset に対応する transcript reader の有無と未対応理由を worker ごとに示します。transcript の保存先が現在読めるかどうかは、この表示では確認しません。
 
-`ensemble session messages` は operator-agent の `list_conductor_messages` と同じ `listConductorProviderHistory` を使い、provider が保存した user inbound / final response の本文をそのまま返すローカルデバッグ表示です。Pi の transcript は `repoRoot` 基準の user 層 `piSessionsDir`（既定では `~/.ensemble/sessions/<repoKey>/pi/`）を優先し、対象 session がなければ保存済み `conductorCwd` の `.ensemble/pi/sessions/` を探します。Pi `SessionManager` に渡す cwd は引き続き `conductorCwd` です。テキストと JSON の両方で redaction は行いません。会話本文に秘密値や repository 内の非公開情報があれば、そのまま stdout に出ます。pipe / redirect 先も生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。構造化された SessionResumeStore の秘密値保護は、この会話本文には適用されません。core API から後段へ渡す前に sanitizer を適用する契約は [provider history list API](live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
+`ensemble session messages` は operator-agent の `list_conductor_messages` と同じ `listConductorProviderHistory` を使い、provider が保存した user inbound / final response の本文をそのまま返すローカルデバッグ表示です。Pi の transcript は canonical repository slug の `~/.ensemble/sessions/github.com/<owner>/<repo>/pi/` を先に探し、対象 session がなければ現在の `repoRoot` に対応する hash 保存先、次に保存済み `conductorCwd` の `.ensemble/pi/sessions/` を探します。Pi `SessionManager` に渡す cwd は引き続き `conductorCwd` です。テキストと JSON の両方で redaction は行いません。会話本文に秘密値や repository 内の非公開情報があれば、そのまま stdout に出ます。pipe / redirect 先も生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。構造化された SessionResumeStore の秘密値保護は、この会話本文には適用されません。core API から後段へ渡す前に sanitizer を適用する契約は [provider history list API](live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
 
 `ensemble session export <conductorAgentId> --output <dir>` は、保存 session をオフライン調査向けの bundle に読み取り専用でまとめます。出力先は新規 directory に限り、既存 directory や file を上書きしません。`manifest.json` には session の識別情報と ensemble / CLI version、入力 source の状態、bundle 内相対 path、byte size、SHA-256 を記録します。manifest 自身は hash の一覧から除外します。SessionResumeStore は元 JSON を raw copy し、登録 worker ごとに上限なし reader 結果 JSON と元 transcript path を出力します。`session-state.yaml` / `open-questions.yaml`、必要なら `--include-tool-calls` の `.tool-calls` も収録します。指定した `--summary` / `--harness-log` はそのままコピーします。
 
-Pi conductor は `repoRoot` の user 層 `piSessionsDir` を先に探し、見つからない場合に `conductorCwd` 配下の legacy `.ensemble/pi/sessions/` を探して transcript 全体をコピーします。これは `listConductorProviderHistory` と同じ path resolver を使います。Cursor conductor は SDK の local run API から取得できた全ページの metadata と conversation snapshot を JSON に保存します。raw copy は symlink や通常 file 以外を追いません。出力 directory / file には POSIX で `0700` / `0600` の mode bits を設定しますが、Windows では Node.js の `fs` mode で変更できるのは書き込み権限だけで、owner / group / others を区別できません。exporter も Windows ACL を設定・検証しないため、新しい bundle は親 directory から継承される ACL に従い、owner-only は保証されません。Windows では ACL が意図した範囲に制限された保存先を使用してください（詳細は [CLI 利用者向け説明](cli/README.md)を参照）。harness phase が `running` / `idle` の session は harness process が稼働中の best-effort snapshot として扱い、export 結果の status は `partial` になります。warning は manifest と result に記録します。全ファイルが同じ瞬間の状態であることは保証しません。Pi transcript のコピー中に更新を検出した場合も warning を残します。
+Pi conductor history は canonical slug の user 層 transcript を先に探し、見つからない場合は user path-hash、保存済み `conductorCwd` 配下の legacy `.ensemble/pi/sessions/` の順で探します。resume 時に legacy transcript から再開するときは slug 側にない file だけをコピーし、source を残します。`listConductorProviderHistory` と session export は同じ path resolver を使います。Cursor conductor は SDK の local run API から取得できた全ページの metadata と conversation snapshot を JSON に保存します。raw copy は symlink や通常 file 以外を追いません。出力 directory / file には POSIX で `0700` / `0600` の mode bits を設定しますが、Windows では Node.js の `fs` mode で変更できるのは書き込み権限だけで、owner / group / others を区別できません。exporter も Windows ACL を設定・検証しないため、新しい bundle は親 directory から継承される ACL に従い、owner-only は保証されません。Windows では ACL が意図した範囲に制限された保存先を使用してください（詳細は [CLI 利用者向け説明](cli/README.md)を参照）。harness phase が `running` / `idle` の session は harness process が稼働中の best-effort snapshot として扱い、export 結果の status は `partial` になります。warning は manifest と result に記録します。全ファイルが同じ瞬間の状態であることは保証しません。Pi transcript のコピー中に更新を検出した場合も warning を残します。
 
 export は `messages` / `workers messages` と同水準の raw data です。API key・token・password、tool 出力、repository 内の非公開情報を自動 redaction しません。manifest に source の絶対 path が記録される場合もあるため、bundle と manifest を機密情報として扱い、Issue / PR・log・蓄積先へ載せる前に利用者側でサニタイズしてください。任意入力や補助 YAML、各 provider transcript の欠落・読取不能は黙って省かず、manifest の source status と warning に記録します。ResumeStore が見つからない場合は bundle を作らず error にします。
 
@@ -240,10 +244,18 @@ SessionSummary と provider history の時刻だけでは run / process を一�
 
 新規の `ensemble issue` は、初回 flush から `createdHarnessCliVersion` に `@agents-ensemble/cli` の package version を記録します。`--continue` / `--resume` は作成時の値を保持し、旧 Store で値が欠けている場合は欠落したまま扱います。この値は SessionResumeStore の schema version とは別です。
 
-セッション再開用データは `packages/core` の `resolveEnsemblePaths({ repoRoot })` で解決し、repo ごとに user 側へ保存します。`repoKey` は正規化した絶対 `repoRoot` の SHA-256 です。
+Issue session の新規・更新データは `packages/core` の `resolveEnsemblePaths({ repoRoot })` で解決し、GitHub owner/repo の canonical slug ごとに user 側へ保存します。`repoKey` は正規化した絶対 `repoRoot` の SHA-256 で、既存 data の fallback と operator-agent state に引き続き使われます。
 
 ```text
-~/.ensemble/sessions/<repoKey>/
+~/.ensemble/sessions/github.com/<owner>/<repo>/
+  {conductorAgentId}.json
+  {conductorAgentId}/
+    open-questions.yaml
+    session-state.yaml
+  {conductorAgentId}.tool-calls
+  pi/
+
+~/.ensemble/sessions/<repoKey>/  # legacy Issue-session fallback
   {conductorAgentId}.json
   {conductorAgentId}/
     open-questions.yaml
@@ -257,11 +269,11 @@ SessionSummary と provider history の時刻だけでは run / process を一�
   pi-sessions/
 ```
 
-Pi の conductor transcript は `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き `<repoRoot>/.ensemble/pi/` から読みます。operator-agent は保存済み SessionResumeStore と YAML を選択された repository location に沿って読みます。slug が選ばれた session では slug → path-hash → project legacy、hash が選ばれた session では hash → project legacy の順で YAML を探します。hash-only session の orphan slug YAML は参照しません。
+Pi の conductor transcript は slug 配下の `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き `<repoRoot>/.ensemble/pi/` から読みます。operator-agent state は既存の repository location に沿って読みます。Issue session の ResumeStore / YAML / tool-call history / Pi transcript は slug → path-hash → project legacy の順に読み、resume 時は不足している file だけを slug にコピーします。slug file があればその内容を優先し、複数 location のデータは統合しません。legacy source は変更・削除・rename しません。SessionResumeStore の `repoRoot` は作成時の実行 context として保持し、slug discovery の除外条件にはしません。現在の `--resume` 検証は保存値と実行中の `repoRoot` の一致を要求します。
 
-旧 `<repoRoot>/.ensemble/sessions/`、`.ensemble/operator-agent/`、`<conductorCwd>/.ensemble/pi/sessions/` のデータは読み取り fallback します。SessionResumeStore と open-question YAML、tool-call 履歴、operator-agent state / watch state、Pi transcript は利用に応じて user 側へ移します。session-state YAML は fallback で読み、次の status 報告で履歴を引き継いで user 側へ書きます。旧ファイルは自動削除しません。Issue 用 Git worktree は元 repo に登録され、現行の解決・再利用処理が project-local path を前提とするため、例外として `<repoRoot>/.ensemble/worktrees/issue-N` に残します。配置判断の詳細は [ADR 0044](adr/0044-user-scoped-runtime-storage.md) を参照してください。
+旧 `<repoRoot>/.ensemble/sessions/` は Issue-session data の読み取り fallback です。ResumeStore と open-question YAML、session-state YAML、tool-call history、Pi transcript を resume 時に slug 側へコピーし、source はそのまま残します。operator-agent の旧 `.ensemble/operator-agent/` と `<conductorCwd>/.ensemble/pi/sessions/` も読み取り fallback し、operator state は利用時に user 側へ移します。Issue 用 Git worktree は元 repo に登録され、現行の解決・再利用処理が project-local path を前提とするため、例外として `<repoRoot>/.ensemble/worktrees/issue-N` に残します。配置判断の詳細は [ADR 0044](adr/0044-user-scoped-runtime-storage.md) を参照してください。
 
-ADR 0044 の path-hash と canonical slug directory に同じ SessionResumeStore が残っている場合は slug 側を優先します。ADR 0046 のとおり project runtime の一括移行時は、path-hash への移行後に該当する JSON と sidecar を slug 側へ未作成の場合だけ複製します。この移行を通った session に限り slug を正本として扱い、resume 後の SessionResumeStore と YAML flush も slug 側へ続けます。新規 session の通常保存先は path-hash のままです。operator-agent の session / watch state は選択済み ResumeStore が一意の slug に揃う場合に slug 側を使い、path-hash や project legacy から読み込んだ state は slug 側へ複製します。path-hash の重複ファイルは削除・退避せず、operator TTY の `[harness]` 診断には選択 path と socket の有無を出します。
+canonical slug と legacy location に同じ SessionResumeStore が残っている場合は slug 側を優先します。新規 session と resume 後の SessionResumeStore / YAML / tool-call history / Pi transcript の flush は slug 側だけに行います。operator-agent の session / watch state は従来どおり hash location を使います。path-hash の重複ファイルは削除・退避せず、operator TTY の `[harness]` 診断には選択 path と socket の有無を出します。
 
 `session-state.yaml` は `report_session_state` が登録した最新の statusLine と過去の報告をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。`current` が最新値、`history` は過去の値を古い順に並べた一覧です。履歴は最大 50 件、ファイル全体は最大 16 KiB で、上限を超える場合は古い履歴から削除します。
 
@@ -302,6 +314,8 @@ openQuestions:
 
 `--continue` は同じ Issue の候補から `close` / `abort` を優先し、`exit` は候補から除外します。優先候補が複数ある場合は `updatedAt` が新しいものを選びます。候補がなければ `exit` 以外から最新を選びます。旧 SessionResumeStore は `lifecycle` の `closed→close`、`interrupted→abort`、`exited→exit` を読み替えます。`--resume` / `--continue` の復元時は、YAML があれば質問一覧と sequence にその内容を使います。YAML がまだない旧形式のセッションでは SessionResumeStore の `openQuestions` と `sequence` から復元し、YAML をバックフィルします。移行期間中は flush のたびに両方へ同じ質問スナップショットを書きます。YAML が存在していて読み取りまたはスキーマ検証に失敗した場合は resume を中止し、古い可能性がある SessionResumeStore 内の質問一覧へ黙って切り替えません。
 
+Issue の Cursor session は、compiled prompt の bootstrap 完了状態を SessionResumeStore の `cursorBootstrapComplete`（boolean）に記録します。値は prompt や event 本文を含まない文脈メタデータです。`false` の状態で `--continue` した場合、失敗した send を復元せず、workflow selector が次に選んだ新しい event に compiled prompt を添えて送ります。古い Store でこの field が欠落している場合は `unknown` とし、旧版では bootstrap の成否にかかわらず記録され得た `cursorBootstrapRunId` から結果を推定しません。対話 TTY では `/recovery bootstrap assume-complete` または `/recovery bootstrap assume-incomplete` の判断が SessionResumeStore に保存されるまで event dispatch を止めます。前者は prompt を追加送信しないため文脈が欠ける可能性を残し、後者は失敗 input を再送せず次の新しい event に prompt を添えるため provider transcript で prompt が重複する可能性を残します。判断を入力できる対話 TTY がなければ `--continue` は backend resume 前に案内付きで停止します。保存した判断は boolean として次回再開にも引き継ぎます。
+
 `harnessPhase` は harness が最後に保存した位相です。conductor send または worker prompt の in-flight があれば `running`、両方が idle の状態を 250ms 保つと `idle` を保存します。開始時は即時に `running` を flush し、短い作業の間に phase が頻繁に揺れないよう `idle` のみ debounce します。`close` / `abort` / `exit` は teardown 完了後に最終 flush し、terminal phase は後続 flush で上書きしません。通常の非TTY終了は旧 `unknown` 相当として `harnessPhase` / `modifiedAt` を持たず、`lifecycle: unknown` を記録します。新旧クライアントの移行中は JSON に `lifecycle` も書き続け、teardown 区分は `closed` / `exited` / `interrupted` / `unknown` の従来値を保ちます。旧形式の `lifecycle` は `closed→close`、`exited→exit`、`interrupted→abort` と読み替え、`unknown` は位相不明として扱います。
 
 `modifiedAt` は SessionResumeStore を harness が保存するたびに更新し、同じ書き込みの `updatedAt` と同じ Unix ms にします。これにより resume 用状態の flush と phase 遷移の鮮度を表します。`session-state.yaml` の `reportedAt` は conductor が operator 向け statusLine を報告した時刻であり、別の情報です。SessionResumeStore の `modifiedAt` / `updatedAt` は `/close`・`/exit`・signal teardown の最終 flush でも揃います。operator-agent の一覧は毎回 UDS probe をせず、watch pool の直近 10 秒以内の観測がある場合だけ `live.connectivity` に載せます。`live.checkedAt < persisted.modifiedAt` の古い観測は保存phaseとの整合判定に使わず、`coherence: insufficient_data` とします。同じ時刻か新しい観測なら現在のphaseとの判定に使い、terminal phaseと `reachable` は `conflict` です。watch で `running` / `idle` の接続失敗が30秒続く場合も `coherence: conflict`、30秒未満またはlive未観測なら `insufficient_data` とします。通常一覧の `unknown` は未確認を意味し、停止中とは限りません。
@@ -316,7 +330,7 @@ openQuestions:
 | **worker session** | 載せない | `acpSessionId` を保持 |
 | **tool-call snapshot** | 載せない | 別ファイル `.tool-calls` に保持（TTL / サイズ上限あり） |
 
-稼働中 harness の UDS method `session.conductor_messages.list` は、bootstrap send を除く成功応答と対応する formatted inbound を最大 100 件、プロセスメモリ内だけに保持します。これは停止後に参照できない live projection です。operator-agent tool の `list_conductor_messages` は provider session history から user inbound / final assistant response を再構成し、稼働中・停止後とも直近100件を返します。Pi は active branch と entry ID、Cursor は local run history を使い、provider store の retention / deletion を保証しません。最後の応答だけを返す `session.last_conductor_message.get` / `get_last_conductor_message` は従来どおりの単独 projection です。
+稼働中 harness の UDS method `session.conductor_messages.list` は、bootstrap send を除く成功応答と対応する formatted inbound を最大 100 件、プロセスメモリ内だけに保持します。Cursor の初回 bootstrap が未完了のまま後続 dispatch へ進む場合、実際の send には compiled prompt を付けますが、この local projection には event text だけを記録します。停止後は参照できません。operator-agent tool の `list_conductor_messages` は provider session history から user inbound / final assistant response を再構成し、稼働中・停止後とも直近100件を返します。Cursor では compiled prompt を添えた実際の user turn が inbound に含まれる場合があります。Pi は active branch と entry ID、Cursor は local run history を使い、provider store の retention / deletion を保証しません。最後の応答だけを返す `session.last_conductor_message.get` / `get_last_conductor_message` は従来どおりの単独 projection です。
 
 tool-call history は SessionResumeStore とは別に読み書きし、履歴ファイルの欠損や破損で resume を妨げません。
 保持期限・上限・プライバシー上の扱いは [harness-events.md](harness-events.md) を参照してください。

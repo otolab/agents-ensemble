@@ -248,12 +248,16 @@ export interface ConductorAuthRecoveryEvent {
 export interface ConductorAuthReconnectEvent {
   type: 'conductor.auth.reconnect';
   agentId: string;
+  status?: 'attempt' | 'succeeded' | 'failed';
+  source?: 'automatic' | 'manual';
+  error?: string;
 }
 
 export interface ConductorTransportReconnectEvent {
   type: 'conductor.transport.reconnect';
   agentId: string;
   status: 'attempt' | 'succeeded' | 'failed';
+  source?: 'automatic' | 'manual';
   error?: string;
 }
 

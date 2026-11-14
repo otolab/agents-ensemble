@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
@@ -35,13 +38,18 @@ const {
 });
 
 let conductorTools: NonNullable<ConductorAgentCreateOptions['customTools']> = {};
+let userEnsembleRoot = '';
 
 vi.mock('./cursor-sdk-conductor-agent.js', () => ({
   createCursorSdkConductorAgentFactory: mockCreateCursorSdkConductorAgentFactory,
 }));
 
 describe('runIssueSession', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    userEnsembleRoot = await mkdtemp(
+      join(tmpdir(), 'ensemble-issue-session-user-'),
+    );
+    vi.stubEnv('ENSEMBLE_USER_ROOT', userEnsembleRoot);
     vi.spyOn(issueContextModule, 'fetchIssueContext').mockResolvedValue({
       issue: TEST_ISSUE,
       title: 'Test',
@@ -73,8 +81,11 @@ describe('runIssueSession', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    await rm(userEnsembleRoot, { recursive: true, force: true });
+    userEnsembleRoot = '';
   });
 
   it('enqueues max-turns open question and resumes after operator input', async () => {
@@ -181,7 +192,6 @@ describe('runIssueSession', () => {
       status: 'error',
       error: { message: 'Model Blocked' },
     });
-
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
@@ -194,7 +204,7 @@ describe('runIssueSession', () => {
     expect(result.lastError?.message).toBe('Model Blocked');
   });
 
-  it('continues after conductor error when operator input is available', async () => {
+  it('waits for explicit recovery confirmation before dispatching later input', async () => {
     mockSend
       .mockResolvedValueOnce({
         runId: 'run-1',
@@ -211,17 +221,25 @@ describe('runIssueSession', () => {
       () => 'retry with another model',
       { submitOnBind: false },
     );
+    let bindingApi: OperatorInputBindingApi | undefined;
     const sessionPromise = runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
       profile: { conductor: { backend: 'cursor' }, workers: [] },
       permissionPipeline: new PermissionPipeline({}),
       continueOnConductorError: true,
-      bindOperatorInput: operator.bindOperatorInput,
+      operatorCanInspectRecovery: true,
+      bindOperatorInput: (api) => {
+        bindingApi = api;
+        operator.bindOperatorInput(api);
+      },
     });
 
     await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
     expect(operator.trySubmit()).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(bindingApi?.continueAfterRecovery?.()).toBe(true);
 
     const result = await sessionPromise;
     expect(mockSend).toHaveBeenCalledTimes(2);

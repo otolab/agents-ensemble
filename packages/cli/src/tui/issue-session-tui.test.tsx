@@ -436,7 +436,9 @@ describe('IssueSessionTui', () => {
     expect(allCommandsFrame).toContain(`${OPERATOR_INPUT_PROMPT}/`);
     expect(allCommandsFrame).not.toContain('operator> ');
     expect(allCommandsFrame).toContain('/reconnect — conductor を再接続');
-    expect(allCommandsFrame).toContain('/recovery — Pi の失敗 dispatch を確認');
+    expect(allCommandsFrame).toContain(
+      '/recovery — 失敗 dispatch と Cursor bootstrap を確認',
+    );
     expect(allCommandsFrame).toContain('/exit — セッションを終了');
 
     stdin.write('ex');

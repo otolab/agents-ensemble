@@ -1,6 +1,6 @@
 import type { Dirent } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { GitHubMonitorCursor } from '../github/github-monitor-cursor.js';
 import {
@@ -10,6 +10,7 @@ import {
 import type { AcpModelTag, ConductorBackend } from '../config/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
 import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { writeFileIfMissing } from './persisted-file.js';
 
 export const SESSION_RESUME_STORE_VERSION = 1;
 
@@ -55,6 +56,14 @@ export class SessionResumeStoreNotFoundError extends Error {
   }
 }
 
+class InvalidSessionResumeStoreDataError extends Error {
+  constructor(path: string, reason: string, cause: unknown) {
+    const detail = cause instanceof Error ? `: ${cause.message}` : '';
+    super(`Invalid session resume store at ${path} (${reason})${detail}`);
+    this.name = 'InvalidSessionResumeStoreDataError';
+  }
+}
+
 /** @deprecated Use SessionResumeStoreNotFoundError; supported for one release only. */
 export class SessionSidecarNotFoundError extends SessionResumeStoreNotFoundError {
   override readonly code = 'SESSION_SIDECAR_NOT_FOUND';
@@ -85,8 +94,10 @@ export interface SessionResumeStore {
   createdHarnessCliVersion?: string;
   /** Conductor SDK session を作成した working directory。 */
   conductorCwd?: string;
-  /** Cursor local run API で bootstrap run を除外するための ID。 */
+  /** Cursor local run API で bootstrap run を除外する ID。bootstrap の成否は示さない。 */
   cursorBootstrapRunId?: string;
+  /** Cursor の compiled prompt の完了状態。欠落した旧形式は unknown。本文は保存しない。 */
+  cursorBootstrapComplete?: boolean;
   /** 初回 `prompt_worker` まで ACP attach を遅延する。旧形式は eager。 */
   lazyWorkers?: boolean;
   /** 稼働中 session の local control socket。teardown 時に除去する。 */
@@ -147,6 +158,7 @@ export interface LocatedSessionResumeStore {
 
 export interface SessionResumeStoreDuplicateDiagnostic {
   conductorAgentId: string;
+  issueUrl: string;
   selectedPath: string;
   selectedLocation: SessionResumeStoreLocation;
   candidates: Array<{
@@ -181,6 +193,15 @@ export function sessionResumeStorePath(options: SessionResumeStorePathOptions): 
   }).sessionResumeStorePath(options.conductorAgentId);
 }
 
+export function canonicalSessionResumeStorePath(input: {
+  repoRoot: string;
+  issueUrl: string;
+  conductorAgentId: string;
+}): string {
+  return resolveEnsemblePaths({ repoRoot: input.repoRoot })
+    .canonicalSessionResumeStorePath(input.issueUrl, input.conductorAgentId);
+}
+
 export async function loadSessionResumeStore(
   path: string,
 ): Promise<SessionResumeStore | undefined> {
@@ -198,24 +219,39 @@ async function readSessionResumeStore(
     }
   | undefined
 > {
+  let raw: string;
   try {
-    const raw = await readFile(path, 'utf8');
-    const value: unknown = JSON.parse(raw);
-    return {
-      resumeStore: parseSessionResumeStore(value),
-      hasLegacyAcpSpawnEnv: containsLegacyAcpSpawnEnv(value),
-      rawValue: value,
-    };
+    raw = await readFile(path, 'utf8');
   } catch (error) {
     if (isEnoent(error)) return undefined;
     throw error;
   }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    throw new InvalidSessionResumeStoreDataError(path, 'invalid JSON', error);
+  }
+
+  let resumeStore: SessionResumeStore;
+  try {
+    resumeStore = parseSessionResumeStore(value);
+  } catch (error) {
+    throw new InvalidSessionResumeStoreDataError(path, 'invalid schema', error);
+  }
+  return {
+    resumeStore,
+    hasLegacyAcpSpawnEnv: containsLegacyAcpSpawnEnv(value),
+    rawValue: value,
+  };
 }
 
 /** `resumeAgentId` 指定時に SessionResumeStore が無い場合は起動失敗とする。 */
 export async function requireSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl?: string;
 }): Promise<SessionResumeStore> {
   const located = await requireLocatedSessionResumeStoreForResume(input);
   return located.resumeStore;
@@ -224,6 +260,7 @@ export async function requireSessionResumeStoreForResume(input: {
 export async function requireLocatedSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl?: string;
   onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
 }): Promise<LocatedSessionResumeStore> {
   const locations = await listSessionResumeStoreLocations(input.repoRoot, {
@@ -231,10 +268,14 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
   });
   const located = locations.find(
     (candidate) =>
-      candidate.resumeStore.conductorAgentId === input.conductorAgentId,
+      candidate.resumeStore.conductorAgentId === input.conductorAgentId &&
+      (input.issueUrl === undefined ||
+        candidate.resumeStore.issueUrl === input.issueUrl),
   );
   if (!located) {
-    const path = sessionResumeStorePath(input);
+    const path = input.issueUrl
+      ? canonicalSessionResumeStorePath({ ...input, issueUrl: input.issueUrl })
+      : sessionResumeStorePath(input);
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
 
@@ -245,24 +286,53 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
       located.path,
     );
   }
-  if (loaded.hasLegacyAcpSpawnEnv) {
-    // Scrub pre-digest env values before resume validation can reject the
-    // session and bypass its normal first write.
-    await writeSessionResumeStoreFile(
-      located.path,
-      redactLegacyAcpSpawnEnv(loaded.rawValue, loaded.resumeStore),
-    );
-  }
-  if (located.location === 'project-legacy') {
-    const migratedPath = sessionResumeStorePath(input);
-    await writeSessionResumeStoreFile(migratedPath, loaded.resumeStore);
+  const persistedValue = loaded.hasLegacyAcpSpawnEnv
+    ? redactLegacyAcpSpawnEnv(loaded.rawValue, loaded.resumeStore)
+    : loaded.resumeStore;
+  const resumeStore = parseSessionResumeStore(persistedValue);
+  if (located.location === 'canonical-slug') {
+    if (loaded.hasLegacyAcpSpawnEnv) {
+      // Scrub canonical data before resume validation can reject the session
+      // and bypass its normal first write.
+      await writeSessionResumeStoreFile(located.path, persistedValue);
+    }
     return {
-      resumeStore: loaded.resumeStore,
-      path: migratedPath,
-      location: 'user-path-hash',
+      ...located,
+      resumeStore,
     };
   }
-  return { ...located, resumeStore: loaded.resumeStore };
+
+  // Promote one legacy Store to its canonical destination. Never update the
+  // source, and never replace a slug file created by another session/process.
+  const migratedPath = canonicalSessionResumeStorePath({
+    repoRoot: input.repoRoot,
+    issueUrl: resumeStore.issueUrl,
+    conductorAgentId: input.conductorAgentId,
+  });
+  await writeFileIfMissing(
+    migratedPath,
+    `${JSON.stringify(resumeStore, null, 2)}\n`,
+  );
+  const migrated = await readSessionResumeStore(migratedPath);
+  if (!migrated) {
+    throw new SessionResumeStoreNotFoundError(
+      input.conductorAgentId,
+      migratedPath,
+    );
+  }
+  if (
+    migrated.resumeStore.conductorAgentId !== input.conductorAgentId ||
+    migrated.resumeStore.issueUrl !== resumeStore.issueUrl
+  ) {
+    throw new Error(
+      `Canonical session resume store collision at ${migratedPath}; the existing slug file belongs to a different session.`,
+    );
+  }
+  return {
+    resumeStore: migrated.resumeStore,
+    path: migratedPath,
+    location: 'canonical-slug',
+  };
 }
 
 /** @deprecated Use requireSessionResumeStoreForResume; supported for one release only. */
@@ -371,7 +441,13 @@ async function listSessionResumeStoreLocations(
   const readDirectory = async (
     dir: string,
     location: SessionResumeStoreLocation,
-    slugRoot?: string,
+    {
+      slugRoot,
+      skipMalformedStoreData = false,
+    }: {
+      slugRoot?: string;
+      skipMalformedStoreData?: boolean;
+    } = {},
   ) => {
     let entries: Dirent[];
     try {
@@ -385,12 +461,22 @@ async function listSessionResumeStoreLocations(
       const path = join(dir, entry.name);
       if (visited.has(path)) continue;
       visited.add(path);
-      const resumeStore = await loadSessionResumeStore(path);
+      let resumeStore: SessionResumeStore | undefined;
+      try {
+        resumeStore = await loadSessionResumeStore(path);
+      } catch (error) {
+        if (
+          skipMalformedStoreData &&
+          error instanceof InvalidSessionResumeStoreDataError
+        ) {
+          continue;
+        }
+        throw error;
+      }
       if (!resumeStore) continue;
       if (
         slugRoot &&
-        (resolve(resumeStore.repoRoot) !== paths.repoRoot ||
-          canonicalSessionDirectory(paths, resumeStore.issueUrl) !== slugRoot)
+        canonicalSessionDirectory(paths, resumeStore.issueUrl) !== slugRoot
       ) {
         continue;
       }
@@ -398,13 +484,9 @@ async function listSessionResumeStoreLocations(
     }
   };
 
-  // The current path-hash and project-local directories are bounded and remain
-  // the discovery roots for legacy data.
-  await readDirectory(paths.sessionsDir, 'user-path-hash');
-  await readDirectory(paths.legacySessionsDir, 'project-legacy');
-
   // Slug stores are keyed by GitHub repository identity. Search only the
-  // host/owner/repository depth and validate repoRoot before accepting a file.
+  // host/owner/repository depth; repoRoot is execution context, not a lookup
+  // filter for canonical records.
   let hosts: Dirent[];
   try {
     hosts = await readdir(paths.sessionsRoot, { withFileTypes: true });
@@ -449,16 +531,32 @@ async function listSessionResumeStoreLocations(
           owner.name,
           repository.name,
         );
-        await readDirectory(slugRoot, 'canonical-slug', slugRoot);
+        await readDirectory(slugRoot, 'canonical-slug', { slugRoot });
       }
     }
   }
 
-  const byAgentId = new Map<string, LocatedSessionResumeStore[]>();
+  // Inspect canonical data before the legacy fallbacks. Malformed legacy JSON
+  // or schema data is unavailable for resume, but must not hide a usable slug
+  // store or another candidate. Keep the source untouched; direct reads still
+  // surface InvalidSessionResumeStoreDataError. Filesystem errors are not
+  // treated as malformed data and continue to propagate.
+  await readDirectory(paths.sessionsDir, 'user-path-hash', {
+    skipMalformedStoreData: true,
+  });
+  await readDirectory(paths.legacySessionsDir, 'project-legacy', {
+    skipMalformedStoreData: true,
+  });
+
+  const bySession = new Map<string, LocatedSessionResumeStore[]>();
   for (const candidate of candidates) {
-    const matching = byAgentId.get(candidate.resumeStore.conductorAgentId) ?? [];
+    const sessionKey = JSON.stringify([
+      candidate.resumeStore.issueUrl,
+      candidate.resumeStore.conductorAgentId,
+    ]);
+    const matching = bySession.get(sessionKey) ?? [];
     matching.push(candidate);
-    byAgentId.set(candidate.resumeStore.conductorAgentId, matching);
+    bySession.set(sessionKey, matching);
   }
 
   const locationPriority: Record<SessionResumeStoreLocation, number> = {
@@ -467,7 +565,7 @@ async function listSessionResumeStoreLocations(
     'project-legacy': 2,
   };
   const selected: LocatedSessionResumeStore[] = [];
-  for (const [conductorAgentId, matches] of byAgentId) {
+  for (const matches of bySession.values()) {
     matches.sort(
       (left, right) =>
         locationPriority[left.location] - locationPriority[right.location] ||
@@ -477,7 +575,8 @@ async function listSessionResumeStoreLocations(
     selected.push(chosen);
     if (matches.length > 1) {
       options.onDuplicate?.({
-        conductorAgentId,
+        conductorAgentId: chosen.resumeStore.conductorAgentId,
+        issueUrl: chosen.resumeStore.issueUrl,
         selectedPath: chosen.path,
         selectedLocation: chosen.location,
         candidates: matches.map((candidate) => ({
@@ -516,7 +615,6 @@ export async function findLatestSessionResumeStoreForIssue(
   const matches = (await listSessionResumeStores(input.repoRoot)).filter(
     (resumeStore) =>
       resumeStore.issueUrl === input.issueUrl &&
-      resumeStore.repoRoot === input.repoRoot &&
       (resumeStore.harnessPhase ??
         harnessPhaseFromLegacyLifecycle(resumeStore.lifecycle)) !== 'exit',
   );
@@ -714,6 +812,12 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     throw new Error('Invalid session resume store: cursorBootstrapRunId');
   }
   if (
+    record.cursorBootstrapComplete !== undefined &&
+    typeof record.cursorBootstrapComplete !== 'boolean'
+  ) {
+    throw new Error('Invalid session resume store: cursorBootstrapComplete');
+  }
+  if (
     record.lifecycle !== undefined &&
     record.lifecycle !== 'closed' &&
     record.lifecycle !== 'exited' &&
@@ -779,6 +883,9 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
       : {}),
     ...(typeof record.cursorBootstrapRunId === 'string'
       ? { cursorBootstrapRunId: record.cursorBootstrapRunId }
+      : {}),
+    ...(typeof record.cursorBootstrapComplete === 'boolean'
+      ? { cursorBootstrapComplete: record.cursorBootstrapComplete }
       : {}),
     ...(typeof record.lazyWorkers === 'boolean'
       ? { lazyWorkers: record.lazyWorkers }

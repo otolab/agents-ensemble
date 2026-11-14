@@ -24,7 +24,7 @@ ADR 0028 は accepted のため本文を変更しない。本 ADR は、Issue #6
 
 現行 CLI では backend を config / profile で選び、`ensemble auth login` は選択済み backend の login を実行する。Pi の OpenAI provider で `ensemble auth login --provider openai` を実行すると OAuth login になる。OpenAI API key は `OPENAI_API_KEY` や Pi resource から request 時に利用できるが、現行のこの login コマンドには user `auth.json` へ OpenAI API key を登録する選択肢はない。
 
-Issue #684 の [PR #689](https://github.com/otolab/agents-ensemble/pull/689) で追加した setup では、最初に Pi（OpenAI）または Cursor を選ぶ。Pi を選んだ場合、OAuth は現行の login path に委譲し、OpenAI API key は setup 用の `authMethod: 'api_key'` 分岐から既存 core の保存処理を呼ぶ。これは現行 `ensemble auth login --provider openai` の選択肢ではない。Cursor は既存の Cursor SDK login に委譲する。この setup は選んだ backend を user config に保存する。backend 未指定時の既定は Phase B の [ADR 0072](0072-pi-conductor-default-and-model-selection.md) で Pi と定める。本 ADR は backend 選択や setup を定めるものではなく、その後の認証 mode / status / recovery の語彙を提案する。
+Issue #684 の [PR #689](https://github.com/otolab/agents-ensemble/pull/689) で追加した setup では、最初に Pi（OpenAI）または Cursor を選ぶ。Pi を選んだ場合、OAuth は現行の login path に委譲し、OpenAI API key は setup 用の `authMethod: 'api_key'` 分岐から既存 core の保存処理を呼ぶ。これは現行 `ensemble auth login --provider openai` の選択肢ではない。Cursor は既存の Cursor SDK login に委譲する。この setup は選んだ backend を user config に保存する。backend 未指定時の既定は Phase B の [ADR 0075](0075-pi-conductor-default-and-model-selection.md) で Pi と定める。本 ADR は backend 選択や setup を定めるものではなく、その後の認証 mode / status / recovery の語彙を提案する。
 
 ## Decision
 

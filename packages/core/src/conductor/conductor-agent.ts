@@ -36,6 +36,8 @@ export interface ConductorAgentCreateOptions {
   sessionDir?: string;
   /** Pi-only legacy transcript directory used for resume migration. */
   legacySessionDir?: string;
+  /** Additional legacy transcript directories, tried in order on resume. */
+  legacySessionDirs?: readonly string[];
   customTools?: ConductorToolSet;
   onStreamText?: (text: string) => void;
 }

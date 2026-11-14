@@ -50,7 +50,10 @@ export function operatorInputMaxTurns(maxTurns: number): number | null {
 export function shouldStopIssueLoop(input: IssueLoopStopInput): boolean {
   // `cancelled` is a terminal SDK run status, not a retryable conductor error.
   // In particular, one-shot sessions must not fall through to event waiting.
-  if (input.lastStatus === 'cancelled') {
+  if (
+    input.lastStatus === 'cancelled' ||
+    input.lastStatus === 'send_rejected'
+  ) {
     return true;
   }
   if (input.lastStatus === 'error') {
@@ -75,7 +78,9 @@ export function resolveIssueLoopStopReason(
   input: IssueLoopStopInput,
 ): IssueLoopStopReason {
   if (input.lastStatus === 'cancelled') return 'cancelled';
-  if (input.lastStatus === 'error') return 'error';
+  if (input.lastStatus === 'error' || input.lastStatus === 'send_rejected') {
+    return 'error';
+  }
   return 'completed';
 }
 

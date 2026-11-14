@@ -110,15 +110,10 @@ import { writeIssueSessionSummary } from './write-issue-session-summary.js';
 import type { AcpBridge } from '../../core/src/acp/acp-bridge.js';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../../core/src/config/defaults.js';
 import { runIssueSession as runIssueSessionImpl } from '../../core/src/conductor/issue-session.js';
+import { resolveEnsemblePaths } from '../../core/src/ensemble-paths.js';
 import { runGit } from '../../core/src/git/run-git.js';
-import {
-  loadSessionResumeStore,
-  sessionResumeStorePath,
-} from '../../core/src/session/session-resume-store.js';
-import {
-  openQuestionsStorePath,
-  saveOpenQuestionsStore,
-} from '../../core/src/session/open-questions-store.js';
+import { loadSessionResumeStore } from '../../core/src/session/session-resume-store.js';
+import { saveOpenQuestionsStore } from '../../core/src/session/open-questions-store.js';
 import * as worktreeModule from '../../core/src/worktree/worktree.js';
 
 const issueUrl = 'https://github.com/org/repo/issues/1';
@@ -559,18 +554,19 @@ describe('executeIssueCommand with the core session', () => {
     expect(closedTui.telemetrySink).toHaveBeenCalledWith({
       type: 'session.operator_close',
     });
-    const resumeStorePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: 'agent-test',
-    });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const resumeStorePath = paths.canonicalSessionResumeStorePath(
+      issueUrl,
+      'agent-test',
+    );
     const closeResumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8'));
     expect(closeResumeStore.githubMonitor.pendingUpdates).toEqual([pendingUpdate]);
+    await expect(
+      access(paths.sessionResumeStorePath('agent-test')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
     expect(closeAcknowledge).not.toHaveBeenCalled();
     await saveOpenQuestionsStore(
-      openQuestionsStorePath({
-        repoRoot,
-        conductorAgentId: 'agent-test',
-      }),
+      paths.canonicalOpenQuestionsPath(issueUrl, 'agent-test'),
       {
         sequence: 4,
         openQuestions: [
@@ -633,6 +629,9 @@ describe('executeIssueCommand with the core session', () => {
       await readFile(resumeStorePath, 'utf8'),
     );
     expect(continuedResumeStore.githubMonitor.pendingUpdates).toBeUndefined();
+    await expect(
+      access(paths.sessionResumeStorePath('agent-test')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
     await rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -717,9 +716,10 @@ describe('executeIssueCommand with the core session', () => {
       expect(firstBridge.cancelSession).toHaveBeenCalledWith('worker-session');
       expect(firstBridge.close).toHaveBeenCalledOnce();
       await expect(access(worktreePath)).resolves.toBeUndefined();
+      const sessionPaths = resolveEnsemblePaths({ repoRoot });
       await expect(
         loadSessionResumeStore(
-          sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
+          sessionPaths.canonicalSessionResumeStorePath(issueUrl, 'agent-test'),
         ),
       ).resolves.toMatchObject({
         workers: {
@@ -729,6 +729,9 @@ describe('executeIssueCommand with the core session', () => {
           },
         },
       });
+      await expect(
+        access(sessionPaths.sessionResumeStorePath('agent-test')),
+      ).rejects.toMatchObject({ code: 'ENOENT' });
 
       firstPrompt.resolve({ stopReason: 'cancelled', responseText: '' });
       await new Promise<void>((resolve) => setImmediate(resolve));

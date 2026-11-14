@@ -1,4 +1,4 @@
-# ADR 0072: Pi conductor を既定にし、model 選択を Pi settings に委ねる
+# ADR 0075: Pi conductor を既定にし、model 選択を Pi settings に委ねる
 
 - Status: accepted
 - Date: 2026-11-14

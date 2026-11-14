@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -78,6 +79,12 @@ import {
 import * as issueContextModule from '../github/issue-context.js';
 import * as resolveGitHubAuthTokenModule from '../github/resolve-github-auth-token.js';
 import { sendConductorWithReconnect } from './conductor-send-reconnect.js';
+
+const PI_TEST_ISSUE_URL = 'https://github.com/org/repo/issues/1';
+
+function sha256(value: Buffer | string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 describe('PiConductorAgent', () => {
   let cwd = '';
@@ -894,6 +901,30 @@ describe('PiConductorAgent', () => {
     expect(fakeSession.dispose).toHaveBeenCalledOnce();
   });
 
+  it('keeps Pi closed and disposes the session when close rejects', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+    const abortError = new Error('Pi abort cleanup failed');
+    fakeSession.abort.mockRejectedValueOnce(abortError);
+
+    await expect(conductor.close()).rejects.toBe(abortError);
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+    await expect(conductor.send('must not reuse after failed close')).resolves
+      .toMatchObject({
+        status: 'error',
+        error: { message: 'Pi conductor agent is closed.' },
+      });
+
+    await expect(conductor.close()).rejects.toBe(abortError);
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+  });
+
   it('rejects SSE before the Pi extension is started', async () => {
     const conductorPromise = PiConductorAgent.create({
       cwd,
@@ -1083,45 +1114,109 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
-  it('copies a legacy project Pi transcript into the user-scoped session directory before resume', async () => {
-    const legacySessionDir = join(cwd, '.ensemble', 'pi', 'sessions');
-    const userSessionDir = resolveEnsemblePaths({
-      repoRoot: cwd,
-    }).piSessionsDir;
-    const legacySessionFile = join(legacySessionDir, 'legacy-session.jsonl');
-    await mkdir(legacySessionDir, { recursive: true });
-    await writeFile(legacySessionFile, '{"type":"session"}\n', 'utf8');
+  it.each(['user-path-hash', 'project-legacy'] as const)(
+    'copies a legacy %s Pi transcript into the canonical slug directory without changing its source',
+    async (location) => {
+      const paths = resolveEnsemblePaths({ repoRoot: cwd });
+      const slugSessionDir = paths.canonicalPiSessionsDir(PI_TEST_ISSUE_URL);
+      const hashSessionDir = paths.piSessionsDir;
+      const projectSessionDir = join(cwd, '.ensemble', 'pi', 'sessions');
+      const legacySessionDir =
+        location === 'user-path-hash' ? hashSessionDir : projectSessionDir;
+      const legacySessionFile = join(legacySessionDir, 'legacy-session.jsonl');
+      const transcript = Buffer.from(
+        '{"type":"session","id":"legacy-session"}\n',
+        'utf8',
+      );
+      await mkdir(legacySessionDir, { recursive: true });
+      await writeFile(legacySessionFile, transcript);
+      mockSessionManagerFindById.mockImplementation(
+        (_cwd: string, _sessionId: string, sessionDir: string) =>
+          sessionDir === legacySessionDir ? legacySessionFile : undefined,
+      );
+
+      const conductor = await PiConductorAgent.resume('legacy-session', {
+        cwd,
+        pi: { agentDir },
+        modelId: 'anthropic/model-1',
+        sessionDir: slugSessionDir,
+        legacySessionDirs: [hashSessionDir, projectSessionDir],
+        systemPrompt: 'recompiled system prompt',
+      });
+
+      const migratedFile = join(slugSessionDir, 'legacy-session.jsonl');
+      const sourceAfter = await readFile(legacySessionFile);
+      const destination = await readFile(migratedFile);
+      expect(sha256(destination)).toBe(sha256(transcript));
+      expect(sourceAfter).toEqual(transcript);
+      expect(sha256(sourceAfter)).toBe(sha256(transcript));
+      expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
+        1,
+        cwd,
+        'legacy-session',
+        slugSessionDir,
+      );
+      expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
+        2,
+        cwd,
+        'legacy-session',
+        hashSessionDir,
+      );
+      if (location === 'project-legacy') {
+        expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
+          3,
+          cwd,
+          'legacy-session',
+          projectSessionDir,
+        );
+      }
+      expect(mockSessionManagerOpen).toHaveBeenCalledWith(
+        migratedFile,
+        slugSessionDir,
+        cwd,
+      );
+      await conductor.close();
+    },
+  );
+
+  it('keeps an existing canonical Pi transcript ahead of a different legacy copy', async () => {
+    const paths = resolveEnsemblePaths({ repoRoot: cwd });
+    const slugSessionDir = paths.canonicalPiSessionsDir(PI_TEST_ISSUE_URL);
+    const hashSessionDir = paths.piSessionsDir;
+    const slugFile = join(slugSessionDir, 'resume-existing.jsonl');
+    const hashFile = join(hashSessionDir, 'resume-existing.jsonl');
+    const slugBytes = Buffer.from('{"type":"slug-session"}\n', 'utf8');
+    const hashBytes = Buffer.from('{"type":"hash-session"}\n', 'utf8');
+    await mkdir(slugSessionDir, { recursive: true });
+    await mkdir(hashSessionDir, { recursive: true });
+    await writeFile(slugFile, slugBytes);
+    await writeFile(hashFile, hashBytes);
     mockSessionManagerFindById.mockImplementation(
       (_cwd: string, _sessionId: string, sessionDir: string) =>
-        sessionDir === legacySessionDir ? legacySessionFile : undefined,
+        sessionDir === slugSessionDir
+          ? slugFile
+          : sessionDir === hashSessionDir
+            ? hashFile
+            : undefined,
     );
 
-    const conductor = await PiConductorAgent.resume('legacy-session', {
+    const conductor = await PiConductorAgent.resume('resume-existing', {
       cwd,
       pi: { agentDir },
       modelId: 'anthropic/model-1',
+      sessionDir: slugSessionDir,
+      legacySessionDirs: [hashSessionDir],
       systemPrompt: 'recompiled system prompt',
     });
 
-    const migratedFile = join(userSessionDir, 'legacy-session.jsonl');
-    expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
-      1,
-      cwd,
-      'legacy-session',
-      userSessionDir,
-    );
-    expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
-      2,
-      cwd,
-      'legacy-session',
-      legacySessionDir,
-    );
-    expect(await readFile(migratedFile, 'utf8')).toBe('{"type":"session"}\n');
+    expect(mockSessionManagerFindById).toHaveBeenCalledTimes(1);
     expect(mockSessionManagerOpen).toHaveBeenCalledWith(
-      migratedFile,
-      userSessionDir,
+      slugFile,
+      slugSessionDir,
       cwd,
     );
+    expect(await readFile(slugFile)).toEqual(slugBytes);
+    expect(await readFile(hashFile)).toEqual(hashBytes);
     await conductor.close();
   });
 
@@ -1377,10 +1472,12 @@ describe('PiConductorAgent', () => {
         conductor: { backend: 'pi' as const },
         workers: [],
       };
-      const resumeStorePath = sessionResumeStorePath({
+      const hashResumeStorePath = sessionResumeStorePath({
         repoRoot: cwd,
         conductorAgentId: agentId,
       });
+      const resumeStorePath = resolveEnsemblePaths({ repoRoot: cwd })
+        .canonicalSessionResumeStorePath(issueUrl, agentId);
       await mkdir(join(cwd, '.agents'), { recursive: true });
       await writeFile(
         join(cwd, '.agents', 'mcp.json'),
@@ -1388,7 +1485,7 @@ describe('PiConductorAgent', () => {
       );
 
       if (mode === 'resume') {
-        await saveSessionResumeStore(resumeStorePath, {
+        await saveSessionResumeStore(hashResumeStorePath, {
           version: SESSION_RESUME_STORE_VERSION,
           conductorAgentId: agentId,
           conductorBackend: 'pi',
@@ -1683,7 +1780,7 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
-  it('recovers a Pi !command credential after 401 by resuming and retrying the same prompt', async () => {
+  it('resumes after a Pi !command credential 401 without replaying the same prompt', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     await mkdir(projectDir, { recursive: true });
     const keyFile = join(cwd, 'dynamic-key.txt');
@@ -1760,13 +1857,12 @@ describe('PiConductorAgent', () => {
     );
 
     expect(result).toMatchObject({
-      status: 'finished',
-      result: 'Recovered with fresh auth.',
+      status: 'error',
+      error: {
+        message: 'litellm API error (401): Your client does not have permission',
+      },
     });
-    expect(prompts).toEqual([
-      'same prompt after expired credential',
-      'same prompt after expired credential',
-    ]);
+    expect(prompts).toEqual(['same prompt after expired credential']);
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
     expect(mockCreateAgentSession.mock.calls[0]![0].model.headers).toEqual({
       Authorization: 'Bearer expired-key',

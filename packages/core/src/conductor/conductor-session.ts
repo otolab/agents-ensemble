@@ -90,7 +90,14 @@ import {
   isConductorSendAuthError,
 } from './conductor-auth.js';
 import { resolvePiConductorProvider } from './conductor-pi-auth.js';
+import { closeConductorAgentOnce } from './conductor-send-reconnect.js';
 import type { ConductorAgentHandle } from './conductor-send-reconnect.js';
+import { escapeTerminalControlCharacters } from '../representation/escape-terminal-control-characters.js';
+import { cursorBootstrapCompleteForStore } from './cursor-bootstrap-state.js';
+import type {
+  CursorBootstrapAssumption,
+  CursorBootstrapState,
+} from './cursor-bootstrap-state.js';
 import { SessionLogger } from './session/session-logger.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import type {
@@ -114,17 +121,20 @@ import {
   resolveMaxTurns,
   type IssueLoopStopReason,
 } from './session-policy.js';
-import { runConductorSessionDriver } from './conductor-session-driver.js';
+import {
+  runConductorSessionDriver,
+  type ConductorDispatchPayload,
+} from './conductor-session-driver.js';
 import { isOperatorExitCommand } from './operator-exit.js';
 import { isOperatorCloseCommand } from './operator-close.js';
 import { isOperatorReconnectCommand } from './operator-reconnect.js';
 import { parseOperatorMessageDelivery } from './operator-command.js';
 import {
   assertSessionResumeStoreMatches,
+  canonicalSessionResumeStorePath,
   requireLocatedSessionResumeStoreForResume,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
-  sessionResumeStorePath,
   type HarnessPhase,
   type SessionLifecycle,
   type SessionResumeStoreLocation,
@@ -141,6 +151,7 @@ import {
   loadSessionStateStore,
   legacySessionStateStorePath,
 } from '../session/session-state-store.js';
+import { copyFileIfMissing } from '../session/persisted-file.js';
 import {
   loadToolCallSnapshotHistory,
   pruneExpiredToolCallSnapshotHistoryFiles,
@@ -168,7 +179,8 @@ import { formatPermissionSummaryForOperator } from '../permission/format-permiss
 import { enrichSessionUsageWithCost } from '../usage/enrich-session-usage-cost.js';
 import { SessionUsageTracker } from '../usage/session-usage-tracker.js';
 import type { OperatorInputBinding } from './operator-input-binding.js';
-import { PiAuthRecoverySnapshotStore } from './pi-auth-recovery-snapshot-store.js';
+import { ConductorDispatchLifecycle } from './conductor-dispatch-lifecycle.js';
+import { ConductorRecoveryInbox } from './conductor-recovery-inbox.js';
 import {
   enqueueOperatorMessage as enqueueOperatorMessageEvent,
   submitOperatorInput,
@@ -255,6 +267,8 @@ export interface RunConductorSessionOptions {
    * CLI の TTY デフォルト。非 TTY / CI では false。
    */
   waitForOperatorExit?: boolean;
+  /** Sensitive recovery input can be inspected only when an interactive TTY binding is present. */
+  operatorCanInspectRecovery?: boolean;
   /** `waitForOperatorExit` 時、自律ループ停止直後に呼ぶ（CLI の案内表示等）。 */
   onPostLoopWait?: () => void;
   /** integration 等で Fake ACP に差し替える。未指定時は実 `agent acp`。 */
@@ -459,7 +473,7 @@ async function runConductorSessionWithStartupGuard(
   });
   attachLegacySessionCallbacks(sessionLogger, options);
   const expiredHistory = await pruneExpiredToolCallSnapshotHistoryFiles(
-    options.repoRoot,
+    { repoRoot: options.repoRoot, issueUrl: options.issueUrl },
   );
   if (expiredHistory.failedCount > 0) {
     sessionLogger.emit({
@@ -482,8 +496,10 @@ async function runConductorSessionWithStartupGuard(
     null;
   const conductorMessages: OpenQuestionControlConductorMessage[] = [];
   const eventQueue = new SessionEventQueue();
-  const piAuthRecoverySnapshotStore = new PiAuthRecoverySnapshotStore();
-  startupCleanup.add(() => piAuthRecoverySnapshotStore.dispose());
+  const recoveryInbox = new ConductorRecoveryInbox();
+  const dispatchLifecycle =
+    new ConductorDispatchLifecycle<ConductorDispatchPayload>();
+  startupCleanup.add(() => recoveryInbox.dispose());
   const openQuestionDispatchReceipts = new WeakMap<
     SessionEvent,
     { resolve: () => void; reject: (error: Error) => void }
@@ -516,11 +532,13 @@ async function runConductorSessionWithStartupGuard(
   let githubMonitor: GitHubMonitor | undefined;
   let activeResumeStorePath: string | undefined;
   let createdHarnessCliVersion = options.cliPackageVersion;
-  let activeStoreLocation: SessionResumeStoreLocation = 'user-path-hash';
+  let activeStoreLocation: SessionResumeStoreLocation = 'canonical-slug';
   let drainStartupResumeStoreWrites = async () => {};
   const pendingGitHubRecoveries: number[] = [];
   const conductorCwd = options.conductorCwd ?? process.cwd();
   let cursorBootstrapRunId: string | undefined;
+  const cursorBootstrapState: CursorBootstrapState | undefined =
+    conductorBackend === 'cursor' ? { status: 'incomplete' } : undefined;
   const mcpServers = await resolveMcpServers(
     options.repoRoot,
     options.mcpConfigOptions,
@@ -535,6 +553,7 @@ async function runConductorSessionWithStartupGuard(
       await requireLocatedSessionResumeStoreForResume({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
+      issueUrl: options.issueUrl,
     });
     const loadedResumeStore = locatedResumeStore.resumeStore;
     // A resume keeps its origin version; a legacy store stays without one.
@@ -593,6 +612,40 @@ async function runConductorSessionWithStartupGuard(
     // acquired resource is released successfully; otherwise keep this record
     // marked unknown/running so it does not claim a possibly active session is
     // closed.
+    cursorBootstrapRunId = loadedResumeStore.cursorBootstrapRunId;
+    if (cursorBootstrapState) {
+      const savedBootstrapComplete =
+        loadedResumeStore.cursorBootstrapComplete;
+      cursorBootstrapState.status =
+        savedBootstrapComplete === undefined
+          ? 'unknown'
+          : savedBootstrapComplete
+            ? 'complete'
+            : 'incomplete';
+      if (cursorBootstrapState.status === 'unknown') {
+        if (
+          options.operatorCanInspectRecovery !== true ||
+          !options.bindOperatorInput
+        ) {
+          throw new Error(
+            [
+              '旧 Cursor session の SessionResumeStore に bootstrap 状態がなく、compiled prompt が provider に届いたか判定できません。',
+              '安全のため backend resume と event dispatch は開始しませんでした。',
+              'stdin / stdout / stderr がすべて対話 TTY の環境で `--continue` し、`/recovery bootstrap assume-complete` または `/recovery bootstrap assume-incomplete` を明示してください。',
+              'complete は prompt を再送せず、incomplete は次の新しい event に prompt を添えます。どちらも失敗 input や旧 queue は再送しません。',
+            ].join('\n'),
+          );
+        }
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message: [
+            '旧 Cursor session の SessionResumeStore に bootstrap 状態がなく、compiled prompt が provider に届いたか判定できません。',
+            'operator が `/recovery bootstrap assume-complete` または `/recovery bootstrap assume-incomplete` を選んで判断を保存するまで、すべての event dispatch を停止します。',
+            'どちらの選択も失敗 input や旧 queue を復元・再送しません。',
+          ].join(' '),
+        });
+      }
+    }
     const resumeStore: SessionResumeStore = {
       ...loadedResumeStore,
       lifecycle: 'unknown',
@@ -601,7 +654,6 @@ async function runConductorSessionWithStartupGuard(
       harnessSocketPath: undefined,
       updatedAt: Date.now(),
     };
-    cursorBootstrapRunId = loadedResumeStore.cursorBootstrapRunId;
     harnessPhase = 'running';
     harnessModifiedAt = resumeStore.modifiedAt;
     let resumeStoreActivationCommitted = false;
@@ -629,6 +681,7 @@ async function runConductorSessionWithStartupGuard(
     const history = await loadToolCallSnapshotHistory({
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
+      issueUrl: options.issueUrl,
     });
     resumeToolCallSnapshots = history.entries;
     toolCallHistoryNeedsRewrite = history.needsRewrite;
@@ -645,6 +698,7 @@ async function runConductorSessionWithStartupGuard(
       location: activeStoreLocation,
     });
     let openQuestionsSnapshot = await loadOpenQuestionsStore(openQuestionsPath);
+    let openQuestionsSourcePath: string | undefined;
     if (!openQuestionsSnapshot) {
       const fallbackPaths = [
         ...(activeStoreLocation === 'canonical-slug'
@@ -663,11 +717,22 @@ async function runConductorSessionWithStartupGuard(
       ];
       for (const fallbackPath of fallbackPaths) {
         openQuestionsSnapshot = await loadOpenQuestionsStore(fallbackPath);
-        if (openQuestionsSnapshot) break;
+        if (openQuestionsSnapshot) {
+          openQuestionsSourcePath = fallbackPath;
+          break;
+        }
       }
-      if (openQuestionsSnapshot) {
+      if (openQuestionsSnapshot && openQuestionsSourcePath) {
         try {
-          await saveOpenQuestionsStore(openQuestionsPath, openQuestionsSnapshot);
+          const copied = await copyFileIfMissing(
+            openQuestionsSourcePath,
+            openQuestionsPath,
+          );
+          if (!copied) {
+            openQuestionsSnapshot =
+              (await loadOpenQuestionsStore(openQuestionsPath)) ??
+              openQuestionsSnapshot;
+          }
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           sessionLogger.emit({
@@ -1332,10 +1397,15 @@ async function runConductorSessionWithStartupGuard(
           }),
           sessionDir: resolveEnsemblePaths({
             repoRoot: options.repoRoot,
-          }).piSessionsDir,
-          legacySessionDir: resolveEnsemblePaths({
-            repoRoot: options.repoRoot,
-          }).legacyPiSessionsDirForCwd(conductorCwd),
+          }).canonicalPiSessionsDir(options.issueUrl),
+          legacySessionDirs: [
+            resolveEnsemblePaths({
+              repoRoot: options.repoRoot,
+            }).piSessionsDir,
+            resolveEnsemblePaths({
+              repoRoot: options.repoRoot,
+            }).legacyPiSessionsDirForCwd(conductorCwd),
+          ],
         }
       : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
@@ -1372,18 +1442,74 @@ async function runConductorSessionWithStartupGuard(
     throw error;
   }
   startupCleanup.add(async () => {
-    if (options.resumeAgentId && conductorAgent.closeForResume) {
-      await conductorAgent.closeForResume();
-    } else {
-      await conductorAgent.close();
-    }
+    await closeConductorAgentOnce(conductorAgent, {
+      forResume: Boolean(options.resumeAgentId),
+    });
   });
   // Factories may not be abortable while pending. Register the returned agent
   // before checking shutdown so a late success is still closed by the guard.
   shutdownSignal.throwIfAborted();
+  if (options.resumeAgentId) {
+    const currentSessionStatePath = sessionStateStorePath({
+      repoRoot: options.repoRoot,
+      conductorAgentId: conductorAgent.agentId,
+      issueUrl: options.issueUrl,
+      location: activeStoreLocation,
+    });
+    let hasCanonicalState = false;
+    try {
+      hasCanonicalState =
+        (await loadSessionStateStore(currentSessionStatePath)) !== undefined;
+    } catch (error) {
+      hasCanonicalState = true;
+      const detail = error instanceof Error ? error.message : String(error);
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: `slug 保存先の session state を読み込めませんでした。legacy data は優先しません。 error=${detail}`,
+      });
+    }
+    if (!hasCanonicalState) {
+      const fallbackStatePaths = [
+        sessionStateStorePath({
+          repoRoot: options.repoRoot,
+          conductorAgentId: conductorAgent.agentId,
+          location: 'user-path-hash',
+        }),
+        legacySessionStateStorePath({
+          repoRoot: options.repoRoot,
+          conductorAgentId: conductorAgent.agentId,
+        }),
+      ];
+      for (const fallbackPath of fallbackStatePaths) {
+        let fallbackState;
+        try {
+          fallbackState = await loadSessionStateStore(fallbackPath);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message: `旧保存先の session state を読み込めませんでした。 fallback は保持します。 error=${detail}`,
+          });
+          continue;
+        }
+        if (!fallbackState) continue;
+        try {
+          await copyFileIfMissing(fallbackPath, currentSessionStatePath);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          sessionLogger.emit({
+            type: 'harness.warning',
+            message: `旧保存先の session state を slug 保存先へ移せませんでした。旧 YAML を読み込みます。 error=${detail}`,
+          });
+        }
+        break;
+      }
+    }
+  }
   const conductorHandle: ConductorAgentHandle = { conductor: conductorAgent };
-  activeResumeStorePath ??= sessionResumeStorePath({
+  activeResumeStorePath ??= canonicalSessionResumeStorePath({
     repoRoot: options.repoRoot,
+    issueUrl: options.issueUrl,
     conductorAgentId: conductorAgent.agentId,
   });
   // Keep auth/transport reconnects on the same backend factory as the session.
@@ -1391,34 +1517,83 @@ async function runConductorSessionWithStartupGuard(
     conductorAgentFactory,
     conductorOptions,
     retrySuppressionSignal: shutdownIntentController.signal,
-    onAuthReconnectAttempt: ({ agentId }: { agentId: string }) => {
+    onAuthReconnectAttempt: ({
+      agentId,
+      source,
+    }: {
+      agentId: string;
+      source?: 'automatic' | 'manual';
+    }) => {
       sessionLogger.emit({
         type: 'conductor.auth.reconnect',
         agentId,
+        status: 'attempt',
+        ...(source ? { source } : {}),
       });
     },
-    onTransportReconnectAttempt: ({ agentId }: { agentId: string }) => {
+    onAuthReconnectComplete: ({
+      agentId,
+      success,
+      source,
+      closeFailed,
+    }: {
+      agentId: string;
+      success: boolean;
+      source?: 'automatic' | 'manual';
+      closeFailed?: boolean;
+    }) => {
+      sessionLogger.emit({
+        type: 'conductor.auth.reconnect',
+        agentId,
+        status: success ? 'succeeded' : 'failed',
+        ...(source ? { source } : {}),
+      });
+      if (closeFailed) {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            '旧 conductor の終了処理に失敗したため、リソース解放は確認できません。再接続後の状態を確認してください。',
+        });
+      }
+    },
+    onTransportReconnectAttempt: ({
+      agentId,
+      source,
+    }: {
+      agentId: string;
+      source?: 'automatic' | 'manual';
+    }) => {
       sessionLogger.emit({
         type: 'conductor.transport.reconnect',
         agentId,
         status: 'attempt',
+        ...(source ? { source } : {}),
       });
     },
     onTransportReconnectComplete: ({
       agentId,
       success,
-      error,
+      source,
+      closeFailed,
     }: {
       agentId: string;
       success: boolean;
-      error?: string;
+      source?: 'automatic' | 'manual';
+      closeFailed?: boolean;
     }) => {
       sessionLogger.emit({
         type: 'conductor.transport.reconnect',
         agentId,
         status: success ? 'succeeded' : 'failed',
-        ...(error ? { error } : {}),
+        ...(source ? { source } : {}),
       });
+      if (closeFailed) {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            '旧 conductor の終了処理に失敗したため、リソース解放は確認できません。再接続後の状態を確認してください。',
+        });
+      }
     },
   };
 
@@ -1453,6 +1628,9 @@ async function runConductorSessionWithStartupGuard(
       (harnessPhase === 'running' || harnessPhase === 'idle'
         ? 'unknown'
         : undefined);
+    const cursorBootstrapComplete = cursorBootstrapState
+      ? cursorBootstrapCompleteForStore(cursorBootstrapState)
+      : undefined;
     return {
       version: SESSION_RESUME_STORE_VERSION,
       conductorAgentId: conductorHandle.conductor.agentId,
@@ -1463,6 +1641,9 @@ async function runConductorSessionWithStartupGuard(
       conductorCwd,
       ...(cursorBootstrapRunId
         ? { cursorBootstrapRunId }
+        : {}),
+      ...(cursorBootstrapComplete !== undefined
+        ? { cursorBootstrapComplete }
         : {}),
       lazyWorkers: activeLazyWorkers,
       ...(harnessSocketPath ? { harnessSocketPath } : {}),
@@ -1594,6 +1775,7 @@ async function runConductorSessionWithStartupGuard(
   const toolCallHistoryPath = toolCallSnapshotHistoryPath({
     repoRoot: options.repoRoot,
     conductorAgentId: conductorHandle.conductor.agentId,
+    issueUrl: options.issueUrl,
   });
   let toolCallHistoryFlushTimer:
     | ReturnType<typeof setTimeout>
@@ -1779,9 +1961,44 @@ async function runConductorSessionWithStartupGuard(
   let stopReason: IssueLoopStopReason = 'completed';
   const continueOnConductorError = options.continueOnConductorError ?? false;
   const waitForOperatorExit = options.waitForOperatorExit ?? false;
+  const operatorCanInspectRecovery =
+    options.operatorCanInspectRecovery === true;
   let operatorRequestedExit = false;
   let operatorRequestedClose = false;
   let disposeOperatorInput: (() => void) | undefined;
+  const resolveCursorBootstrapUnknown = (
+    assumption: CursorBootstrapAssumption,
+  ): boolean => {
+    if (
+      !operatorCanInspectRecovery ||
+      !cursorBootstrapState ||
+      cursorBootstrapState.status !== 'unknown'
+    ) {
+      return false;
+    }
+    cursorBootstrapState.status = 'saving';
+    cursorBootstrapState.pendingAssumption = assumption;
+    void flushSessionResumeStore()
+      .then(() => {
+        cursorBootstrapState.status =
+          assumption === 'assume-complete' ? 'complete' : 'incomplete';
+        delete cursorBootstrapState.pendingAssumption;
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message:
+            assumption === 'assume-complete'
+              ? 'operator が Cursor bootstrap を complete と仮定する判断を SessionResumeStore に保存しました。compiled prompt は追加送信しません。'
+              : 'operator が Cursor bootstrap を incomplete と仮定する判断を SessionResumeStore に保存しました。次の新しい event に compiled prompt を添えて送ります。',
+        });
+      })
+      .catch((error: unknown) => {
+        cursorBootstrapState.status = 'unknown';
+        delete cursorBootstrapState.pendingAssumption;
+        reportResumeStoreFlushFailure(error);
+      })
+      .finally(() => dispatchLifecycle.wake());
+    return true;
+  };
 
   const onOperatorMessageQueued = (delivery: OperatorMessageDelivery): void => {
     scheduleSessionResumeStoreFlush();
@@ -1912,12 +2129,22 @@ async function runConductorSessionWithStartupGuard(
             : [],
         ),
       }),
-      listPiAuthRecoverySnapshots: () =>
-        piAuthRecoverySnapshotStore.list(),
-      getPiAuthRecoverySnapshot: (recoveryId) =>
-        piAuthRecoverySnapshotStore.get(recoveryId),
-      clearPiAuthRecoverySnapshot: (recoveryId) =>
-        piAuthRecoverySnapshotStore.remove(recoveryId),
+      listRecoverySnapshots: () => recoveryInbox.list(),
+      ...(operatorCanInspectRecovery
+        ? {
+            getRecoverySnapshot: (recoveryId: string) =>
+              recoveryInbox.get(recoveryId),
+          }
+        : {}),
+      clearRecoverySnapshot: (recoveryId) => recoveryInbox.remove(recoveryId),
+      continueAfterRecovery: () => dispatchLifecycle.confirmRecovery(),
+      recoveryAttentionAttemptId: () => dispatchLifecycle.pendingAttemptId,
+      ...(cursorBootstrapState && operatorCanInspectRecovery
+        ? {
+            getCursorBootstrapStatus: () => cursorBootstrapState.status,
+            resolveCursorBootstrapUnknown,
+          }
+        : {}),
     });
     if (typeof bindingDispose === 'function') {
       disposeOperatorInput = bindingDispose;
@@ -2142,7 +2369,10 @@ async function runConductorSessionWithStartupGuard(
       conductorHandle,
       sendReconnect,
       eventQueue,
-      piAuthRecoverySnapshotStore,
+      recoveryInbox,
+      recoveryBackend: conductorBackend,
+      dispatchLifecycle,
+      operatorCanInspectRecovery,
       dispatchHoldState,
       onDispatchHoldChanged,
       resetOutboundDispatchesThisSend: () => {
@@ -2190,6 +2420,7 @@ async function runConductorSessionWithStartupGuard(
       // permission.pending) must be dispatched without waiting for a new
       // session briefing.
       skipInitialSend: Boolean(options.resumeAgentId),
+      ...(cursorBootstrapState ? { cursorBootstrapState } : {}),
       onSendStarted: (info) => {
         reportHarnessActivity('conductor', true);
         sessionLogger.emit({
@@ -2207,13 +2438,53 @@ async function runConductorSessionWithStartupGuard(
         });
       },
       onSendComplete: recordSendComplete,
-      onPiAuthRecoverySnapshotStored: ({ snapshot, evictedRecoveryIds }) => {
+      onRecoveryAttention: ({
+        attemptId,
+        sourceKey,
+        status,
+        failureClass,
+        confirmationRequired,
+        pendingOperatorMessageCount,
+        snapshot,
+        agentAvailable,
+      }) => {
+        const recoveryAction = operatorCanInspectRecovery
+          ? snapshot
+            ? `入力を確認するには /recovery list の後に /recovery show ${snapshot.recoveryId} を実行してください。`
+            : 'この send に operator-authored input は含まれていません。'
+          : 'この実行環境では recovery 本文を確認できません。同一 process 内でも取得できず、process 終了時に破棄されます。';
+        const queueNotice =
+          pendingOperatorMessageCount > 0
+            ? operatorCanInspectRecovery
+              ? `未送信の operator message が ${pendingOperatorMessageCount} 件、既存 queue に残っています。`
+              : `未送信の operator message ${pendingOperatorMessageCount} 件は既存 queue に残っていますが、非 TTY one-shot 終了時に破棄されます。必要なら状態を確認して再実行してください。`
+            : undefined;
+        const confirmationNotice = confirmationRequired
+          ? operatorCanInspectRecovery
+            ? '状態を確認してから必要な続きを新しい指示で送り、後続 dispatch を再開するには /recovery continue を実行してください。'
+            : '失敗した入力は自動再送せず、後続 dispatch も停止しています。非 TTY では本文を確認できないため、状態を確かめてから安全な再開方法を判断してください。'
+          : '明示的な interrupt 入力が queue に残っているため、その入力を次に処理します。/recovery continue は不要です。';
         sessionLogger.emit({
           type: 'harness.warning',
-          message:
-            evictedRecoveryIds.length > 0
-              ? `Pi recovery inbox reached its four-dispatch limit; evicted ${evictedRecoveryIds.join(', ')}. Snapshot ${snapshot.recoveryId} remains available for local TTY inspection until ${new Date(snapshot.expiresAt).toISOString()}.`
-              : `Pi authentication failure snapshot ${snapshot.recoveryId} is available for local TTY inspection until ${new Date(snapshot.expiresAt).toISOString()}. Use /recovery list, then /recovery show <id>.`,
+          message: [
+            `conductor send が未完了です (source=${escapeTerminalControlCharacters(sourceKey)}, attempt=${attemptId}, status=${escapeTerminalControlCharacters(status)}, failure=${failureClass}).`,
+            recoveryAction,
+            queueNotice,
+            agentAvailable
+              ? undefined
+              : 'agent は unavailable です。接続を直した後に /reconnect を実行してください。',
+            confirmationNotice,
+          ]
+            .filter((part): part is string => part !== undefined)
+            .join(' '),
+        });
+      },
+      onRecoveryCapacityBlocked: () => {
+        sessionLogger.emit({
+          type: 'harness.warning',
+          message: operatorCanInspectRecovery
+            ? 'recovery inbox の容量が上限に達しました。入力は queue に残して dispatch を待っています。/recovery clear <id> で空きを作るか、TTL 経過後に続行します。'
+            : 'recovery inbox の容量が上限に達しました。入力を保持したまま dispatch を待っています。この実行環境では本文を確認できません。',
         });
       },
       onDispatchBatchSettled: ({ events, result, error }) => {
@@ -2258,6 +2529,7 @@ async function runConductorSessionWithStartupGuard(
       runId: string;
       status: ConductorSendResult['status'];
       inbound: string;
+      historyInbound?: string;
       dispatchSource?: string;
       githubUpdateIds?: string[];
       result?: string;
@@ -2279,6 +2551,19 @@ async function runConductorSessionWithStartupGuard(
         cursorBootstrapRunId = info.runId;
         scheduleSessionResumeStoreFlush();
       }
+      const issueDispatchCompleted =
+        info.status === 'finished' ||
+        info.status === 'completed' ||
+        info.status === 'running';
+      if (
+        conductorBackend === 'cursor' &&
+        cursorBootstrapState?.status === 'incomplete' &&
+        issueDispatchCompleted &&
+        (info.dispatchSource === 'initial' || info.historyInbound !== undefined)
+      ) {
+        cursorBootstrapState.status = 'complete';
+        scheduleSessionResumeStoreFlush();
+      }
       const responseText = info.result?.trim();
       if (info.status === 'finished' && responseText) {
         const at = Date.now();
@@ -2290,7 +2575,7 @@ async function runConductorSessionWithStartupGuard(
         if (info.dispatchSource !== 'initial') {
           conductorMessages.push({
             text: responseText,
-            inbound: info.inbound,
+            inbound: info.historyInbound ?? info.inbound,
             at,
             sendCount: info.sendCount,
             ...(info.dispatchSource
@@ -2401,7 +2686,7 @@ async function runConductorSessionWithStartupGuard(
   } finally {
     disposeOperatorInput?.();
     disposeOperatorInput = undefined;
-    piAuthRecoverySnapshotStore.dispose();
+    recoveryInbox.dispose();
     const lifecycle: SessionLifecycle = operatorRequestedClose
       ? 'closed'
       : operatorRequestedExit
@@ -2557,11 +2842,9 @@ async function runConductorSessionWithStartupGuard(
       const runConductorClose = async (): Promise<void> => {
         emitTeardownPhase('conductor');
         const phaseStart = Date.now();
-        if (operatorRequestedClose && conductorHandle.conductor.closeForResume) {
-          await conductorHandle.conductor.closeForResume();
-        } else {
-          await conductorHandle.conductor.close();
-        }
+        await closeConductorAgentOnce(conductorHandle.conductor, {
+          forResume: operatorRequestedClose,
+        });
         teardownPhases.conductor = Date.now() - phaseStart;
       };
 

@@ -36,7 +36,7 @@
 
 ### 2. バックエンド選択と resume
 
-- profile または ensemble 設定で `conductor.backend` を **`pi`（既定） | `cursor`** とする。省略時の既定 model は backend ごとに解決し、Pi は Pi resource settings に委ねる（選択の詳細は [ADR 0072](0072-pi-conductor-default-and-model-selection.md)）。
+- profile または ensemble 設定で `conductor.backend` を **`pi`（既定） | `cursor`** とする。省略時の既定 model は backend ごとに解決し、Pi は Pi resource settings に委ねる（選択の詳細は [ADR 0075](0075-pi-conductor-default-and-model-selection.md)）。
 - **セッション途中で backend を切り替えない**。sidecar に `conductorBackend` を保存し、resume 時に起動時解決と不一致なら **fail fast**。
 - Pi と SDK の **セッションログ形式の横断互換**は要求しない（[#348](https://github.com/otolab/agents-ensemble/issues/348) 合意）。
 - [ADR 0011](0011-session-sidecar-resume.md) の harness 状態（open question、worker `acpSessionId` 等）は維持。conductor 側の永続 ID はバックエンドごとにマッピングする（Pi session id 等は実装 Issue で定義）。

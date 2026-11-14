@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionEvent } from './session-event.js';
+import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from '../conductor-recovery-inbox.js';
 import {
   countWorkerOutcomesInBatch,
   dispatchBatchStateAfterSend,
@@ -11,11 +12,13 @@ import {
 function operator(
   text: string,
   delivery?: 'idle' | 'next' | 'interrupt',
+  operatorInput?: string,
 ): SessionEvent {
   return {
     type: 'operator.message',
     text,
     ...(delivery ? { delivery } : {}),
+    ...(operatorInput !== undefined ? { operatorInput } : {}),
   };
 }
 
@@ -127,6 +130,50 @@ describe('selectDispatchBatch', () => {
     expect(result?.batch.sourceKey).toBe('operator');
     expect(result?.batch.events).toHaveLength(3);
     expect(result?.remainingQueue).toEqual([]);
+  });
+
+  it('splits operator input batches by authored UTF-8 bytes and preserves order', () => {
+    const queue = [
+      operator('rendered first with context', 'next', '1234'),
+      operator('rendered second with context', 'next', '56'),
+      workerCompleted('reviewer'),
+    ];
+    const first = selectDispatchBatch({
+      queue,
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+      maxOperatorInputBytes: 5,
+    });
+
+    expect(first?.batch.events).toEqual([queue[0]]);
+    expect(first?.remainingQueue).toEqual([queue[1], queue[2]]);
+
+    const second = selectDispatchBatch({
+      queue: first!.remainingQueue,
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+      maxOperatorInputBytes: 5,
+    });
+    expect(second?.batch.events).toEqual([queue[1]]);
+    expect(second?.remainingQueue).toEqual([queue[2]]);
+  });
+
+  it('rejects a single authored input above the configured byte limit', () => {
+    const oversized = operator(
+      'rendered context',
+      'next',
+      'a'.repeat(CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT + 1),
+    );
+    const result = selectDispatchBatch({
+      queue: [oversized],
+      state: {},
+      autonomousTurns: 0,
+      maxTurns: 5,
+    });
+
+    expect(result).toBeUndefined();
   });
 
   it('keeps idle operator messages queued until they are allowed', () => {

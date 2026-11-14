@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createCursorSdkConductorAgentFactory } from '../../src/conductor/cursor-sdk-conductor-agent.js';
+import { formatCursorSdkFailureDiagnostic } from './helpers/cursor-sdk-diagnostics.js';
 import { cursorSdkIntegrationSkipReason } from './helpers/cursor-sdk-integration-home.js';
 import { getConductorModelId } from './test-config.js';
 
@@ -23,7 +24,10 @@ describe.skipIf(cursorSdkIntegrationSkipReason !== undefined)(SUITE_NAME, () => 
         'これは接続テストです。ファイル編集・調査はせず、応答に conductor-ok とだけ含めて終了してください。',
       );
 
-      expect(result.status).toBe('finished');
+      expect(
+        result.status,
+        formatCursorSdkFailureDiagnostic(result),
+      ).toBe('finished');
       expect(result.result).toContain('conductor-ok');
       expect(result.result).not.toMatch(/プランを更新/i);
       expect(result.error).toBeUndefined();

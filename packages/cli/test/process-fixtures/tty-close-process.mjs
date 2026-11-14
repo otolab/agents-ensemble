@@ -182,11 +182,18 @@ try {
   if (!worktrees.includes(`worktree ${registeredWorktreePath}\n`)) {
     throw new Error('TTY /close removed the Issue worktree registration');
   }
-  const resumeStorePath = resolveEnsemblePaths({
+  const paths = resolveEnsemblePaths({
     repoRoot,
     home: userEnsembleRoot,
-  }).sessionResumeStorePath('close-process-agent');
+  });
+  const resumeStorePath = paths.canonicalSessionResumeStorePath(
+    issueUrl,
+    'close-process-agent',
+  );
   const resumeStore = JSON.parse(await readFile(resumeStorePath, 'utf8'));
+  if (existsSync(paths.sessionResumeStorePath('close-process-agent'))) {
+    throw new Error('TTY /close wrote a new path-hash SessionResumeStore');
+  }
   if (
     resumeStore.workers?.implementer?.acpSessionId !== 'tty-worker-session' ||
     resumeStore.workers?.implementer?.acpCwd !== workerWorktreePath

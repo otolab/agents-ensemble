@@ -215,6 +215,7 @@ export async function listSavedSessionMessages(input: {
     conductorAgentId,
     cwd: resumeStore.conductorCwd ?? resumeStore.repoRoot,
     repoRoot: resumeStore.repoRoot,
+    issueUrl: resumeStore.issueUrl,
     ...(resumeStore.cursorBootstrapRunId
       ? { cursorBootstrapRunId: resumeStore.cursorBootstrapRunId }
       : {}),

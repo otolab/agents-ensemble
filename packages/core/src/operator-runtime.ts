@@ -31,14 +31,52 @@ export {
 } from './conductor/conductor-history.js';
 export { isOperatorCommand } from './conductor/operator-command.js';
 export {
+  escapeTerminalControlCharacters,
+} from './representation/escape-terminal-control-characters.js';
+export {
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
 } from './conductor/conductor-auth.js';
 export { resolvePiConductorProvider } from './conductor/conductor-pi-auth.js';
 export {
+  closeConductorAgentOnce,
   reconnectConductorAgent,
   sendConductorWithReconnect,
 } from './conductor/conductor-send-reconnect.js';
+export {
+  ConductorDispatchLifecycle,
+  settleConductorDispatch,
+} from './conductor/conductor-dispatch-lifecycle.js';
+export { ConductorRecoveryInbox } from './conductor/conductor-recovery-inbox.js';
+export {
+  CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
+  CONDUCTOR_RECOVERY_SNAPSHOT_LIMIT,
+  CONDUCTOR_RECOVERY_SNAPSHOT_TTL_MS,
+  CONDUCTOR_RECOVERY_TOTAL_BYTE_LIMIT,
+} from './conductor/conductor-recovery-inbox.js';
+export { executeRecoveryInboxCommand } from './conductor/recovery-inbox-command.js';
+export type {
+  ConductorDispatchLease,
+  ConductorDispatchState,
+  ConductorReconnectLease,
+} from './conductor/conductor-dispatch-lifecycle.js';
+export type {
+  ConductorRecoveryAttemptMetadata,
+  ConductorRecoveryBackend,
+  ConductorRecoveryFailureClass,
+  ConductorRecoveryReconnect,
+  ConductorRecoveryReservation,
+  ConductorRecoveryReservationResult,
+  ConductorRecoverySnapshot,
+  ConductorRecoverySnapshotSummary,
+  ConductorRecoveryWorkflow,
+} from './conductor/conductor-recovery-inbox.js';
+export type {
+  ExecuteRecoveryInboxCommandOptions,
+  OperatorRecoveryInspection,
+  RecoveryInboxCommandApi,
+  RecoveryInboxCommandResult,
+} from './conductor/recovery-inbox-command.js';
 export type {
   ConductorAgentHandle,
   ConductorReconnectCompleteInfo,

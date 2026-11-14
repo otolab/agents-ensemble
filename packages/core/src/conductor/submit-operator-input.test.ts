@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { OpenQuestionRegistry } from '../escalation/open-question.js';
 import { SessionEventQueue } from './session/session-event-queue.js';
 import { SessionLogger } from './session/session-logger.js';
-import { submitOperatorInput } from './submit-operator-input.js';
+import {
+  isOperatorInputWithinRecoveryLimit,
+  submitOperatorInput,
+} from './submit-operator-input.js';
+import { CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT } from './conductor-recovery-inbox.js';
 
 describe('submitOperatorInput', () => {
   it.each(['/q+', '/q-'])('enqueues %s as ordinary text and as a targeted answer', (message) => {
@@ -64,6 +68,7 @@ describe('submitOperatorInput', () => {
       expect.objectContaining({
         type: 'operator.message',
         text: expect.stringContaining('いいえ'),
+        operatorInput: 'いいえ',
         delivery: 'next',
         openQuestionAnswer: true,
         answerPreview: 'inq-1: いいえ',
@@ -275,5 +280,48 @@ describe('submitOperatorInput', () => {
       }),
     ).toBe(false);
     expect(eventQueue.isEmpty()).toBe(true);
+  });
+
+  it('admits by UTF-8 bytes and rejects oversized input before changing state', () => {
+    const exactLimit =
+      '界'.repeat(Math.floor(CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT / 3)) + 'a';
+    const oversized = `${exactLimit}b`;
+    expect(Buffer.byteLength(exactLimit, 'utf8')).toBe(
+      CONDUCTOR_RECOVERY_INPUT_BYTE_LIMIT,
+    );
+    expect(isOperatorInputWithinRecoveryLimit(exactLimit)).toBe(true);
+    expect(isOperatorInputWithinRecoveryLimit(oversized)).toBe(false);
+
+    const registry = new OpenQuestionRegistry();
+    registry.enqueue({
+      id: 'inq-1',
+      question: 'Should this be answered?',
+      responseType: 'text',
+    });
+    const eventQueue = new SessionEventQueue();
+    const sessionLogger = new SessionLogger({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      repoRoot: '/repo',
+    });
+    const emitSpy = vi.spyOn(sessionLogger, 'emit');
+
+    expect(
+      submitOperatorInput({
+        message: oversized,
+        conductorTurn: 1,
+        openQuestions: registry,
+        escalations: [],
+        eventQueue,
+        sessionLogger,
+      }),
+    ).toBe(false);
+    expect(registry.get('inq-1')?.status).toBe('open');
+    expect(eventQueue.isEmpty()).toBe(true);
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'harness.warning',
+      message:
+        'recovery inbox で内容を完全に保持するため、1 MiB を超える入力は受け付けません。短くするか分割してから送信してください。',
+    });
+    expect(JSON.stringify(emitSpy.mock.calls)).not.toContain(oversized);
   });
 });

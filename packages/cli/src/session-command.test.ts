@@ -198,6 +198,11 @@ describe('ensemble session commands', () => {
       }>;
       harnessLog: string[];
     };
+    const backendStatus = 'error\u202e\u2066';
+    fixture.summary.lastRunStatus = backendStatus;
+    fixture.harnessLog = fixture.harnessLog.map((line) =>
+      line.replace('status=error', `status=${backendStatus}`),
+    );
     conductorAgentId = fixture.summary.agentId;
     await writeResumeStore({ issueUrl: fixture.summary.issueUrl });
     await writePiHistory(fixture.providerHistory);
@@ -271,7 +276,7 @@ describe('ensemble session commands', () => {
           {
             kind: 'conductor.send',
             line: 2,
-            status: 'error',
+            status: 'error\\u202e\\u2066',
           },
           {
             kind: 'conductor.transport.reconnect',
@@ -288,7 +293,7 @@ describe('ensemble session commands', () => {
         ],
         summary: {
           sendCount: 99,
-          lastRunStatus: 'error',
+          lastRunStatus: 'error\\u202e\\u2066',
         },
       },
     ]);
@@ -297,9 +302,9 @@ describe('ensemble session commands', () => {
         missingFromSendCount: 99,
         missingThroughSendCount: 99,
         evidence: expect.arrayContaining([
-          'harness log line 2: send #99 status=error',
+          'harness log line 2: send #99 status=error\\u202e\\u2066',
           'harness log line 3: transport reconnect attempt',
-          'SessionSummary: send #99 status=error',
+          'SessionSummary: send #99 status=error\\u202e\\u2066',
         ]),
         explanation: expect.stringContaining(
           'raw transcript に未対応 entry があるか',
@@ -328,7 +333,12 @@ describe('ensemble session commands', () => {
     expect(text.status).toBe(0);
     expect(text.stdout).toContain('send #98');
     expect(text.stdout).toContain('send #99');
-    expect(text.stdout).toContain('conductor.send n=99 status=error');
+    expect(text.stdout).toContain(
+      'conductor.send n=99 status=error\\u202e\\u2066',
+    );
+    expect(text.stdout).toContain('lastRunStatus=error\\u202e\\u2066');
+    expect(text.stdout).not.toContain('\u202e');
+    expect(text.stdout).not.toContain('\u2066');
     expect(text.stdout).toContain(
       'conductor.transport.reconnect status=succeeded',
     );
@@ -379,7 +389,10 @@ describe('ensemble session commands', () => {
         providerPairStatus: 'not-correlatable',
         providerMessages: [],
         harnessEvents: [
-          { kind: 'conductor.send', status: 'error' },
+          {
+            kind: 'conductor.send',
+            status: 'error\\u202e\\u2066',
+          },
           { kind: 'conductor.transport.reconnect', status: 'attempt' },
           { kind: 'conductor.transport.reconnect', status: 'succeeded' },
         ],

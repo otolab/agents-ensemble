@@ -17,7 +17,7 @@
 | TUI scrollback の検出設計・端末制約 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | native viewport 検出、tmux adapter、A+B の設計境界 |
 | Pi conductor の初回セットアップ・認証 | [pi-conductor-setup.md](pi-conductor-setup.md) | backend、resource root、provider login、復旧の利用者向け正本。全体設定は [settings.md](settings.md)、resource の詳細は [config.md](config.md) |
 | 認証トークンの全体解決 | [settings.md](settings.md) | Pi の利用者向け導線は [pi-conductor-setup.md](pi-conductor-setup.md)、`config.yaml` の認証関連キーは [config.md](config.md) |
-| conductor send の再接続設計 | [conductor-auth-reconnect.md](conductor-auth-reconnect.md) | 認証設定そのものの正本ではない |
+| conductor send の再接続・失敗後の recovery 設計 | [conductor-auth-reconnect.md](conductor-auth-reconnect.md) | 認証設定そのものの正本ではない |
 | 現行の技術構成 | [architecture.md](architecture.md) | 判断の履歴は ADR |
 | テスト分類・実行方針 | [testing-strategy.md](testing-strategy.md) | unittest / integration / e2e |
 | 開発環境・テスト実行 | [development.md](development.md) | worktree・pnpm・ブランチ運用の注意 |
@@ -37,7 +37,7 @@
 | [tui-scrollback-detection.md](tui-scrollback-detection.md) | scrollback 閲覧検出の設計・端末別 C 可否・副作用 |
 | [cli-text-input-keybindings.md](cli-text-input-keybindings.md) | TUI 入力ショートカットの実装階層・対応状況（参照） |
 | [user-teams.md](user-teams.md) | `~/.ensemble/teams/` の user team profile の配置・解決順 |
-| [conductor-auth-reconnect.md](conductor-auth-reconnect.md) | conductor send の認証エラー時の in-process 再接続（設計正本） |
+| [conductor-auth-reconnect.md](conductor-auth-reconnect.md) | reconnect、失敗後の入力確認と再開（設計正本） |
 
 ## 運用・可観測性
 

@@ -64,26 +64,21 @@ stderr 整形: core の SessionLogEvent representation（`packages/core/src/repr
 | `worker.failed` | worker attach / prompt 失敗。該当 worker の pending permission は conductor への通知前に deny | `[harness] worker.failed name=... kind=... error=...` | `workerFailures` に追記 |
 | `permission.pending` | permission が pending 登録直後（`decidePermission`） | `[harness] permission.pending worker=... tool=... cmd=... id=...` | なし |
 | `permission.cleanup` | worker failure / teardown で pending permission を deny・解消した直後 | `[harness] permission.cleanup reason=worker.failed worker=... count=... ids=...` | なし |
-| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) pending permission が閾値まで継続したとき（worker / attach の活動状態は問わない）。GitHub 認証トークン未解決時（#222）。dispatch hold reminder（既定 30 分ごと）。Pi recovery snapshot の保存・FIFO eviction。worker ACP thread の復旧時 | `[harness] warning: ...`（permission 停滞 / GitHub 認証不足 / dispatch hold reminder / Pi recovery snapshot ID・期限・eviction ID / worker の新 session 開始） | なし。permission 停滞時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue。dispatch hold reminder は operator 向けのみ。recovery snapshot warning に event 本文は含めない |
+| `harness.warning` | [#125](https://github.com/otolab/agents-ensemble/issues/125) pending permission が閾値まで継続したとき（worker / attach の活動状態は問わない）。GitHub 認証トークン未解決時（#222）。dispatch hold reminder（既定 30 分ごと）。未完了 conductor send の operator 向け通知、recovery inbox 容量待ち、worker ACP thread の復旧時 | `[harness] warning: ...`（permission 停滞 / GitHub 認証不足 / dispatch hold reminder / send status・failure class・attempt ID・snapshot ID / worker の新 session 開始） | なし。permission 停滞時は同じ検知で conductor 向け `permission.stall` も 1 回 enqueue。dispatch hold reminder と recovery warning は operator 向けのみ。recovery 本文・raw error は含めない |
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | `[harness] worker.stderr name=...` | なし（詳細は [session-logging.md](session-logging.md)） |
-| `conductor.auth.reconnect` | conductor `resume(sameId)` 試行時 | `[auth] reconnect agentId=...` | なし |
-| `conductor.auth.recovery` | 最終 `send` 結果が auth error のとき。resume / retry の失敗や、tool 開始後に同一 prompt retry を抑止した場合を含む | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
-| `conductor.transport.reconnect` | transport 自動再接続、または `/reconnect` の `resume(sameId)` | `[harness] conductor.transport.reconnect status=attempt\|succeeded\|failed agentId=...` / `[transport] ...` | なし（失敗時も auth hint は出さない） |
+| `conductor.auth.reconnect` | auth-like error 後の自動 `resume(sameId)` | `[auth] ...`（status と source を含む） | なし |
+| `conductor.auth.recovery` | 最終 `send` 結果が auth error のとき。resume の成功・失敗を含む | `[auth] ...`（PR #99 互換） | なし（詳細は [conductor-auth-reconnect.md](conductor-auth-reconnect.md)） |
+| `conductor.transport.reconnect` | transport error 後の自動再接続、または `/reconnect` による `resume(sameId)` | `[harness] conductor.transport.reconnect status=attempt\|succeeded\|failed source=automatic\|manual agentId=...` / `[transport] ...` | なし（failure class は recovery warning / metadata を参照） |
 | `session.stop` | セッション終了直前 | 異常終了時は既定でも `[harness] session.stop reason=...`。正常完了は verbose 時のみ | `stopReason` を確定 |
 | `harness.teardown` | `runConductorSession` の worker/ACP・conductor 停止後、isolated worktree 削除前（[#170](https://github.com/otolab/agents-ensemble/issues/170)） | force 時または 1s 超のみ `[harness] teardown force=... total=...ms ...` | なし |
 | `harness.teardown.phase` | teardown 各段階の開始時（[#209](https://github.com/otolab/agents-ensemble/issues/209)） | verbose 時のみ `[harness] teardown.phase <name>` | なし |
 | `conductor.dispatch_hold` | conductor が `set_dispatch_hold` を呼んだとき、または held trigger（`permission.pending` を含み、`permission.stall` を除く）の件数が変化したとき | `dispatch hold enabled` / `released (flushed N events)`（observation） | TUI の保留状態と件数を更新。解除後も未送信の held trigger があれば残数を表示 |
 
-`conductor.transport.reconnect` の payload には発火元がありません。`operator.reconnect` は
-SessionEventQueue 内で扱う control event で、手動入力時にも専用の SessionLogEvent は出しません。
-そのため `status=succeeded` のログだけでは手動 `/reconnect` と transport error 後の自動 reconnect
-を区別できず、prompt 再送の有無も示しません。発火元を特定できないログは unknown として扱います。
+`conductor.auth.reconnect` / `conductor.transport.reconnect` は `source: automatic | manual` と
+`status: attempt | succeeded | failed` で接続操作を区別します。send の failure class は別の
+`harness.warning` と recovery metadata に記録します。reconnect が成功しても失敗 prompt は再送しません。
 
-Pi auth recovery snapshot の本文は SessionLogEvent に載せません。failure 時の `harness.warning` には
-snapshot ID / expiry と eviction ID だけを出し、本文は TTY の `/recovery show <recoveryId>` で明示表示した
-ときだけ terminal output に現れます。元の `operator.input` / `operator.dispatched` や `worker.round`
-イベントの既存 payload とは別の一時 store です。保持の privacy、上限、寿命、process 終了時の破棄は
-[operator-input.md](operator-input.md) を参照してください。
+recovery inbox は `SessionLogger` と別の process-local store です。TTY では実際に dispatch した operator-authored input だけを保持し、未完了 send の `harness.warning` には本文を載せず status / failure class / attempt ID / snapshot ID を通知します。非 TTY では本文を inbox に保存せず、同一 process 内でも確認できない旨を本文なしで知らせます。既存の `operator.input` / `operator.dispatched` / `worker.round` payload は従来契約どおりであり、inbox の追加コピーとは別の経路です。保持の privacy、上限、寿命、process 終了時の破棄は [operator-input.md](operator-input.md) を参照してください。
 
 conductor 発言の live history は SessionLogEvent ではなく UDS control API の別 projection です。bootstrap send を除く成功した `agent.send` について、send 本文と対応する `formatSessionEventsForConductor(batch)` 全文を session ごとの最新 100 件だけメモリに保持します。これは listen の稼働中通知と UDS list method が使う一時履歴です。operator-agent の `list_conductor_messages` は provider session history を別途読み、停止後も直近100件を返します。詳細は [live-open-question-control-api.md](live-open-question-control-api.md) を参照してください。
 
@@ -141,14 +136,19 @@ operatorSummary: <short operator-facing summary>
 
 `tool_call` と `tool_call_update` は `(workerId, ACP sessionId, toolCallId)` ごとに累積する。
 ID は ACP session をまたいで一意とは限らない。累積した履歴は、resume SessionResumeStore 本体とは別の
-`~/.ensemble/sessions/<repoKey>/{conductorAgentId}.tool-calls` に JSON で原子的に保存する。
+`~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.tool-calls` に JSON で原子的に保存する。
+新規作成と通常 flush は canonical slug 側だけに行う。resume 時は slug に file がない場合に限って
+user path-hash、次に現在 checkout の project-local history を read fallback し、slug へ copy する。
+slug file があればその内容を優先し、legacy 側との統合・上書き・削除はしない。
 SessionResumeStore と別にすることで、履歴ファイルの欠損や破損が conductor / worker session の resume を妨げない。
+この file は ACP tool-call snapshot 専用で、すべての `SessionLogEvent` の永続化先ではない。
 
 履歴は最終更新から 30 日で期限切れになり、1 session あたり最大 1,000 件・8 MiB まで保持する。
 上限を超えるときは古い snapshot を単位ごとに削除し、1 件だけでサイズ上限を超える snapshot は保存しない。
 更新時の flush は 100 ms でまとめ、終了時にも最後の flush を行う。予期しないプロセス終了では、
-直近の flush 以降の更新が失われることがある。古い履歴ファイルは session 起動時に削除し、
-snapshot がすべて期限切れになったファイルや、30 日以上残った atomic write 用一時ファイルも削除する。
+直近の flush 以降の更新が失われることがある。canonical slug 側の古い履歴 file は session 起動時に削除し、
+snapshot がすべて期限切れになった file や、30 日以上残った atomic write 用一時 file も削除する。
+legacy fallback source はこの cleanup の対象にせず、変更・削除しない。
 
 `workerId` は harness の起動ごとに変わるため、履歴には worker 名も記録する。resume 時は worker 名から
 現在の `workerId` に結び直し、保存時の ACP `sessionId` は維持する。これにより
@@ -388,8 +388,8 @@ attach handshake 中に届いた追加指示は queue に積む。まだ cancel 
 | `permission.pending` | permission が保留 | `## permission 判断待ち` | conductor 向け YAML に `request.raw`（params 全文）と `brief`（構造化された判断用情報）を含む。補えない必須情報は `brief.missing` に載せる。`operatorSummary` は conductor が質問や context を組み立てる際の参照情報として併記する。`ask_human.relatedPermissionId` は Open Question と permission を関連づける |
 | `permission.stall` | pending permission が既定 300s（`permissionDeadlockStallMs`）継続したとき（worker / attach が idle でも検知） | `## permission 停滞警告` | conductor 向けの低優先度 trigger。同一の連続停滞エピソードでは 1 回だけ。pending の再送ではなく、経過時間・対象 ID・閾値を含み、dispatch hold 中も held buffer を通らず dispatch 候補に残る。request の詳細は含まない。`harness.warning` は従来どおり operator 向けに出す |
 | `harness.connectivity.recovered` | GitHub monitor が抑止中の再試行可能な poll エラー後、エラーなしの poll に復旧したとき | `## 接続復旧` | `source: github_monitor` と `suppressedErrorCount` を YAML で伝える。復旧 poll に GitHub 更新があれば同じ source の inform として更新束に同梱し、更新がなければ単独 trigger。単独 trigger は `permission.stall` より低優先で、GitHub 更新・worker イベントと同じ max-turns 制限に従う |
-| `conductor.recovery.report` | `ensemble issue` の通常 event dispatch が最終 Pi API key resolver failure で終わり、手動 `/reconnect` が成功したとき。SessionDriver が次の dispatch を組み立てる際に一時的に加える（通常 queue へは戻さない） | `## Pi 認証失敗後の復旧報告` | `sendCount` / `runId` / `sourceKey` / event type・count / 最大20件の安全な参照（各 event に 1-based `eventIndex`、超過は `eventReferencesTruncated`） / 自動 retry 回数 / tool 開始 callback の観測有無を載せる。認証 error や元 event 本文は含めず、失敗 batch も再送しない。選択済み input があれば同じ send にまとめ、なければ report 単独を一回送る。send 開始時に消費し、通常の send 内自動 retry 以外は失敗後に redelivery しない。hold 中は単独 send せず、operator message / `permission.stall` など既存規則で送信できる入力に限り report を同梱する。hold 解除後は max-turns で待機中の held worker event が残っていても有限の回復通知として dispatch 可（自律 turn 数は変えない）。この通常 send で model が tool を呼ぶ可能性がある。process 間では保持せず、Pi transcript に元入力が残る保証もない |
-| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が commit SHA 単位の CI 集約状態遷移を検知したときだけ載る（同じ SHA・同じ状態の毎 poll 再送はしない。§2.5）。conductor は payload の SHA / failed check 名を手掛かりに必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` / `permission.stall` / `conductor.recovery.report` は dispatch 可） |
+| `conductor.recovery.report` | 旧 recovery 契約との互換用 event type。組み込み workflow は生成しない | `## Pi 認証失敗後の復旧報告` | 型・formatter・selector 上の扱いは互換性のため残る。外部から明示的に enqueue すれば通常の conductor send になり、model / tool の副作用が起こり得る。組み込みの未完了 send 通知は local `harness.warning` と operator recovery inbox で扱う（[ADR 0072](adr/0072-conductor-dispatch-lifecycle-and-recovery-boundary.md)） |
+| `github.update` | GitHub Issue / 関連 PR の更新検知 | `## GitHub 更新` | **状況把握**（[ADR 0012](adr/0012-conductor-worker-prompt-roundtrip.md)）。**自動 `prompt_worker` はしない**。`ci.completed` は harness が commit SHA 単位の CI 集約状態遷移を検知したときだけ載る（同じ SHA・同じ状態の毎 poll 再送はしない。§2.5）。conductor は payload の SHA / failed check 名を手掛かりに必要時のみ Issue / PR を読んで次の判断をする。`issue.comment` / `pr.review` / `pr.review_comment` / `ci.completed` は同じ `SessionEventQueue` → SessionDriver 経路で、自律中・post-loop 待機中を問わず処理する。ターン残あり（`autonomousTurns < maxTurns` または無制限）なら conductor へ dispatch して状況把握ターンを 1 消費し、max-turns 到達後は enqueue のみ（`operator.message` / `permission.pending` / `permission.stall` / legacy `conductor.recovery.report` は dispatch 可。組み込み recovery は生成しない） |
 
 ### 3.1 SessionLogEvent との対応
 
@@ -526,8 +526,8 @@ init prompt 把握の目安:
 | `## worker 失敗` | attach / prompt 失敗 | 再試行・エスカレーションを検討 |
 | `## permission 判断待ち` | worker の操作許可が保留（**init prompt ラウンド中もありうる**） | `resolve_permission` またはオペレータへ。**init prompt 完了を待たない**（[ADR 0016](adr/0016-bootstrap-permission-conductor-wait.md)） |
 | `## permission 停滞警告` | pending permission が長時間解消されない状態の通知（`harness.warning` と同じ検知で 1 回） | 通知には request の詳細がない。hold 中に届いた場合、pending の判断が必要なら hold を解除して `permission.pending` を受け取り、`resolve_permission` またはオペレータへのエスカレーションを判断する。低優先度だが max-turns 到達後も permission 回復用に dispatch 可 |
-| `## Pi 認証失敗後の復旧報告` | 最終 Pi API key resolver failure 後の手動 `/reconnect` 成功 | 失敗 batch は再送せず、dispatch / event type / 安全な参照 / tool 開始有無を手掛かりに現在状態を確認する。Pi transcript に元入力が残る保証はなく、task や副作用が特定できなければ operator に確認する。report は一回限りで送信失敗後に再投入しない。max-turns 後も単独 dispatch でき、自律 turn 数を変えない |
-| `## GitHub 更新` | Issue コメント / PR レビュー / CI 集約状態遷移等 | 状況把握。**自動 `prompt_worker` はしない**。自律中・post-loop 中とも SessionDriver が処理する。ターン残ありなら dispatch して 1 ターン消費し、max-turns 到達後は `operator.message` / `permission.pending` / `permission.stall` / `conductor.recovery.report` 以外を dispatch しない |
+| `## Pi 認証失敗後の復旧報告` | 旧 recovery 契約との互換用。組み込み workflow は生成しない | custom / legacy caller から届いた場合も失敗 batch の再送指示とは扱わない。この event を使う通常の conductor send は model / tool の副作用を起こし得る |
+| `## GitHub 更新` | Issue コメント / PR レビュー / CI 集約状態遷移等 | 状況把握。**自動 `prompt_worker` はしない**。自律中・post-loop 中とも SessionDriver が処理する。ターン残ありなら dispatch して 1 ターン消費し、max-turns 到達後は `operator.message` / `permission.pending` / `permission.stall` / legacy `conductor.recovery.report` 以外を dispatch しない（組み込み recovery はこの event を生成しない） |
 
 conductor は `list_workers` の `attachInFlight` / `state: processing` 等を **ポーリング・`Await` で待ってはならない**。状態変化は本表の SessionEvent のみが通知する。
 

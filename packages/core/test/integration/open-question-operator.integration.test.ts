@@ -201,6 +201,7 @@ describe('open question / operator flow integration', () => {
       shutdownSignal: shutdown.signal,
       registerProcessSignalHandlers: false,
       waitForOperatorExit: true,
+      operatorCanInspectRecovery: true,
       sessionLogger,
     });
 

@@ -1,9 +1,17 @@
 import type { OpenQuestion } from '../escalation/open-question.js';
 import type { OperatorMessageDelivery } from './session/session-event.js';
 import type {
+  ConductorRecoverySnapshot,
+  ConductorRecoverySnapshotSummary,
+} from './conductor-recovery-inbox.js';
+import type {
   PiAuthRecoverySnapshot,
   PiAuthRecoverySnapshotSummary,
 } from './pi-auth-recovery-snapshot-store.js';
+import type {
+  CursorBootstrapAssumption,
+  CursorBootstrapStatus,
+} from './cursor-bootstrap-state.js';
 
 export interface OperatorInputContext {
   /** これから実行する conductor send 番号（1 始まり）。 */
@@ -32,10 +40,24 @@ export interface OperatorInputBindingApi {
   submit: (message: string, options?: OperatorInputSubmitOptions) => boolean;
   getContext: () => OperatorInputContext;
   /** Process-local recovery payloads; available only to the bound operator UI. */
+  listRecoverySnapshots?: () => ConductorRecoverySnapshotSummary[];
+  getRecoverySnapshot?: (
+    recoveryId: string,
+  ) => ConductorRecoverySnapshot | undefined;
+  clearRecoverySnapshot?: (recoveryId: string) => boolean;
+  continueAfterRecovery?: () => boolean;
+  recoveryAttentionAttemptId?: () => string | undefined;
+  getCursorBootstrapStatus?: () => CursorBootstrapStatus;
+  resolveCursorBootstrapUnknown?: (
+    assumption: CursorBootstrapAssumption,
+  ) => boolean;
+  /** @deprecated Use the generic recovery inbox methods above. */
   listPiAuthRecoverySnapshots?: () => PiAuthRecoverySnapshotSummary[];
+  /** @deprecated Use the generic recovery inbox methods above. */
   getPiAuthRecoverySnapshot?: (
     recoveryId: string,
   ) => PiAuthRecoverySnapshot | undefined;
+  /** @deprecated Use the generic recovery inbox methods above. */
   clearPiAuthRecoverySnapshot?: (recoveryId: string) => boolean;
 }
 

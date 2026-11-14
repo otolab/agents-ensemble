@@ -2,7 +2,12 @@ import { clearLine, createInterface, cursorTo } from 'node:readline';
 import { resolve } from 'node:path';
 import { compile, merge } from '@modular-prompt/core';
 import {
+  closeConductorAgentOnce,
   createConductorAgentFactory,
+  ConductorDispatchLifecycle,
+  ConductorRecoveryInbox,
+  executeRecoveryInboxCommand,
+  escapeTerminalControlCharacters,
   filterMaterialsForKind,
   formatConductorAuthRecoveryHint,
   isConductorSendAuthError,
@@ -19,6 +24,7 @@ import {
   resolveConductorPiResourcePaths,
   resolveConductorReasoning,
   resolveEnsemblePaths,
+  settleConductorDispatch,
   sendConductorWithReconnect,
   sessionStateFromProfile,
   type ConductorAgent,
@@ -26,6 +32,8 @@ import {
   type ConductorAgentHandle,
   type ConductorAgentFactory,
   type ConductorBackend,
+  type ConductorRecoveryReconnect,
+  type ConductorSendResult,
   type EnsembleConfig,
   type ResolvedProfile,
   type SessionResumeStoreDuplicateDiagnostic,
@@ -34,6 +42,7 @@ import { operatorBaseModule } from './operator-base-module.js';
 import {
   createOperatorDispatchQueue,
   formatOperatorDispatchBatch,
+  type OperatorDispatchBatch,
   type OperatorDispatchState,
 } from './operator-dispatch.js';
 import { createListOperatorSessionsTool } from './list-operator-sessions-tool.js';
@@ -99,6 +108,10 @@ interface OperatorRuntime {
 interface OperatorAgentHandle extends ConductorAgentHandle {
   factory: ConductorAgentFactory;
   agentOptions: ConductorAgentCreateOptions;
+}
+
+interface OperatorAgentDispatchPayload {
+  batch: OperatorDispatchBatch;
 }
 
 interface OperatorTtyChannels {
@@ -252,6 +265,12 @@ export async function runOperatorAgent(
     factory,
     agentOptions,
   };
+  const recoveryInbox = new ConductorRecoveryInbox();
+  const dispatchLifecycle =
+    new ConductorDispatchLifecycle<OperatorAgentDispatchPayload>();
+  const operatorCanInspectRecovery = Boolean(
+    stdin.isTTY && stdout.isTTY && stderr.isTTY,
+  );
   try {
     await saveOperatorAgentState(runtime.repoRoot, {
       version: 1,
@@ -269,6 +288,9 @@ export async function runOperatorAgent(
       dispatchQueue,
       watchPool,
       ttyChannels,
+      recoveryInbox,
+      dispatchLifecycle,
+      operatorCanInspectRecovery,
       colorEnabled:
         Boolean(stdin.isTTY && stdout.isTTY) && process.env.NO_COLOR === undefined,
     });
@@ -276,8 +298,9 @@ export async function runOperatorAgent(
       await clearOperatorAgentState(runtime.repoRoot);
     }
   } finally {
+    recoveryInbox.dispose();
     watchPool.close();
-    await agentHandle.conductor.close();
+    await closeConductorAgentOnce(agentHandle.conductor);
   }
 }
 
@@ -337,6 +360,9 @@ async function runTtyConversation(options: {
   dispatchQueue: ReturnType<typeof createOperatorDispatchQueue>;
   watchPool: OperatorWatchPool;
   ttyChannels: OperatorTtyChannels;
+  recoveryInbox: ConductorRecoveryInbox;
+  dispatchLifecycle: ConductorDispatchLifecycle<OperatorAgentDispatchPayload>;
+  operatorCanInspectRecovery: boolean;
   colorEnabled: boolean;
 }): Promise<boolean> {
   const terminal = createInterface({
@@ -346,19 +372,26 @@ async function runTtyConversation(options: {
     crlfDelay: Infinity,
   });
   terminal.setPrompt(`${colorize('user>', ANSI_DIM, options.colorEnabled)} `);
-  let firstSend = true;
+  let cursorBootstrapComplete = options.backend !== 'cursor';
   let stop: () => void = () => {};
   let exitContinuity = false;
   let inputEnded = false;
   let pendingReconnects = 0;
+  let sendCount = 0;
+  const automaticReconnectResult: {
+    current?: ConductorRecoveryReconnect;
+  } = {};
+  let recoveryCapacityNoticeSent = false;
   let promptVisible = false;
   let terminalClosed = false;
   let shownHoldStatus = formatReportHoldStatus(options.dispatchQueue);
   const stopping = new Promise<void>((resolve) => {
     stop = resolve;
   });
+  const sendSuppression = new AbortController();
   const requestStop = (exitCode?: number) => {
     if (exitCode !== undefined) process.exitCode = exitCode;
+    sendSuppression.abort();
     terminal.close();
     stop();
   };
@@ -390,6 +423,40 @@ async function runTtyConversation(options: {
     shownHoldStatus = nextStatus;
     writeChannelLine('harness', nextStatus);
   });
+  const wakeDispatch = () => options.dispatchQueue.wake();
+  const unsubscribeLifecycle = options.dispatchLifecycle.subscribe(wakeDispatch);
+  const unsubscribeRecoveryInbox = options.recoveryInbox.subscribe(wakeDispatch);
+  const recoveryCommandApi = {
+    listRecoverySnapshots: () => options.recoveryInbox.list(),
+    ...(options.operatorCanInspectRecovery
+      ? {
+          getRecoverySnapshot: (recoveryId: string) =>
+            options.recoveryInbox.get(recoveryId),
+        }
+      : {}),
+    clearRecoverySnapshot: (recoveryId: string) =>
+      options.recoveryInbox.remove(recoveryId),
+    continueAfterRecovery: () => options.dispatchLifecycle.confirmRecovery(),
+    recoveryAttentionAttemptId: () =>
+      options.dispatchLifecycle.pendingAttemptId,
+  };
+  const handleRecoveryCommand = (message: string): boolean => {
+    const recoveryCommand = executeRecoveryInboxCommand(
+      recoveryCommandApi,
+      message,
+      {
+        canDisplaySensitiveContent: options.operatorCanInspectRecovery,
+      },
+    );
+    if (!recoveryCommand.handled) return false;
+    if (recoveryCommand.inspection) {
+      writeChannelLine(
+        'harness',
+        `${recoveryCommand.inspection.title}\n${recoveryCommand.inspection.text}`,
+      );
+    }
+    return true;
+  };
   const handleInterrupt = () => requestStop(130);
   const handleTermination = () => requestStop(143);
   terminal.on('SIGINT', handleInterrupt);
@@ -409,6 +476,7 @@ async function runTtyConversation(options: {
       for await (const rawLine of terminal) {
         const message = rawLine.trim();
         if (!message) continue;
+        if (handleRecoveryCommand(message)) continue;
         if (isOperatorCommand(message, 'exit')) {
           exitContinuity = true;
           clearLine(options.stdout, 0);
@@ -427,8 +495,15 @@ async function runTtyConversation(options: {
           options.dispatchQueue.setConversationHold(false);
           continue;
         }
+        if (!options.dispatchQueue.enqueueUser(message)) {
+          writeChannelLine(
+            'harness',
+            'recovery inbox の完全保持に合わせ、1 MiB を超える入力は受け付けません。短くするか分割してから送信してください。',
+            { color: ANSI_RED },
+          );
+          continue;
+        }
         options.dispatchQueue.setConversationHold(true);
-        options.dispatchQueue.enqueueUser(message);
       }
     } finally {
       inputEnded = true;
@@ -455,20 +530,67 @@ async function runTtyConversation(options: {
       }
       if (pendingReconnects > 0) {
         pendingReconnects -= 1;
+        const reconnectLease = options.dispatchLifecycle.beginReconnect();
+        if (!reconnectLease) {
+          pendingReconnects += 1;
+          const didStop = await Promise.race([
+            options.dispatchQueue.waitForChange().then(() => false),
+            stopping.then(() => true),
+          ]);
+          if (didStop) return exitContinuity;
+          continue;
+        }
+        const failureClass =
+          options.dispatchLifecycle.lastFailure ?? 'none';
+        let reconnectReported = false;
         try {
           await reconnectConductorAgent(options.agentHandle, {
             conductorAgentFactory: options.agentHandle.factory,
             conductorOptions: options.agentHandle.agentOptions,
+            source: 'manual',
+            signal: sendSuppression.signal,
+            onReconnectAttempt: ({ agentId, source }) => {
+              writeChannelLine(
+                'harness',
+                `conductor の再接続を開始します。agentId=${agentId} source=${source} failure=${failureClass}`,
+              );
+            },
+            onReconnectComplete: ({
+              agentId,
+              success,
+              source,
+              closeFailed,
+            }) => {
+              reconnectReported = true;
+              writeChannelLine(
+                success ? 'observation' : 'harness',
+                `${success ? 'conductor に再接続しました。' : 'conductor の再接続に失敗しました。'}agentId=${agentId} source=${source} failure=${failureClass}${closeFailed ? ' 旧 conductor の終了処理に失敗したため、リソース解放は確認できません。' : ''}`,
+                success ? {} : { color: ANSI_RED },
+              );
+            },
           });
-          writeChannelLine('observation', 'conductor に再接続しました。');
+          options.dispatchLifecycle.settleReconnect(reconnectLease, true);
         } catch {
-          writeChannelLine('harness', 'conductor の再接続に失敗しました。', {
-            color: ANSI_RED,
-          });
+          options.dispatchLifecycle.settleReconnect(reconnectLease, false);
+          if (!reconnectReported && !sendSuppression.signal.aborted) {
+            writeChannelLine(
+              'harness',
+              `conductor の再接続に失敗しました。source=manual failure=${failureClass}`,
+              { color: ANSI_RED },
+            );
+          }
         }
         continue;
       }
-      const batch = options.dispatchQueue.takeBatch(dispatchState);
+      if (!options.dispatchLifecycle.canDispatch) {
+        const didStop = await Promise.race([
+          options.dispatchQueue.waitForChange().then(() => false),
+          stopping.then(() => true),
+        ]);
+        if (didStop) return exitContinuity;
+        continue;
+      }
+      const batch = options.dispatchQueue.selectBatch(dispatchState);
       if (!batch) {
         const readyAt = options.dispatchQueue.nextReadyAt();
         const waitMs =
@@ -482,11 +604,54 @@ async function runTtyConversation(options: {
         if (didStop) return exitContinuity;
         continue;
       }
+      const operatorInputTexts = batch.events.flatMap((event) =>
+        event.type === 'user' ? [event.text] : [],
+      );
+      const reservationResult = options.operatorCanInspectRecovery
+        ? options.recoveryInbox.reserve(operatorInputTexts)
+        : { ok: true as const, reservation: undefined };
+      if (!reservationResult.ok) {
+        if (reservationResult.reason === 'input_too_large') {
+          writeChannelLine(
+            'harness',
+            '入力が recovery inbox の上限を超えています。選択中の入力は queue に残しています。',
+            { color: ANSI_RED },
+          );
+        } else if (!recoveryCapacityNoticeSent) {
+          recoveryCapacityNoticeSent = true;
+          writeChannelLine(
+            'harness',
+            'recovery inbox の容量が上限です。選択中の入力は queue に残しています。/recovery clear <id> で空きを作るか、30 分後の期限切れを待ちます。',
+          );
+        }
+        const didStop = await Promise.race([
+          options.dispatchQueue.waitForChange().then(() => false),
+          stopping.then(() => true),
+        ]);
+        if (didStop) return exitContinuity;
+        continue;
+      }
+      recoveryCapacityNoticeSent = false;
+      const reservation = reservationResult.reservation;
+      const lease = options.dispatchLifecycle.beginSend({ batch });
+      if (!lease) {
+        if (reservation) options.recoveryInbox.release(reservation);
+        continue;
+      }
+      if (!options.dispatchQueue.commitBatch(batch)) {
+        if (reservation) options.recoveryInbox.release(reservation);
+        options.dispatchLifecycle.settleSend(lease, { completed: true });
+        continue;
+      }
+
       const prompt =
-        options.backend === 'cursor' && firstSend
+        options.backend === 'cursor' && !cursorBootstrapComplete
           ? `${options.systemPrompt}\n\n## User message\n\n${formatOperatorDispatchBatch(batch.events)}`
           : formatOperatorDispatchBatch(batch.events);
       writeChannelLine('harness', 'operator: 処理中');
+      const nextSendCount = sendCount + 1;
+      let toolCallStarted = false;
+      automaticReconnectResult.current = undefined;
       const result = await Promise.race([
         sendConductorWithReconnect(
           options.agentHandle,
@@ -494,27 +659,114 @@ async function runTtyConversation(options: {
           {
             conductorAgentFactory: options.agentHandle.factory,
             conductorOptions: options.agentHandle.agentOptions,
+            signal: sendSuppression.signal,
             onToolCallStarted: ({ tool }) => {
+              toolCallStarted = true;
               writeChannelLine(
                 'harness',
                 `operator: calling ${formatOperatorToolName(tool)}`,
               );
             },
+            onAuthReconnectAttempt: ({ agentId, source }) => {
+              writeChannelLine(
+                'harness',
+                `[auth] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
+              );
+            },
+            onAuthReconnectComplete: ({ success, source, closeFailed }) => {
+              options.dispatchLifecycle.setAgentAvailable(success);
+              automaticReconnectResult.current = {
+                reason: 'auth',
+                succeeded: success,
+              };
+              writeChannelLine(
+                success ? 'observation' : 'harness',
+                `[auth] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}${closeFailed ? ' old agent close failed; cleanup is unconfirmed' : ''}`,
+                success ? {} : { color: ANSI_RED },
+              );
+            },
+            onTransportReconnectAttempt: ({ agentId, source }) => {
+              writeChannelLine(
+                'harness',
+                `[transport] conductor reconnect attempt agentId=${agentId} source=${source ?? 'automatic'}`,
+              );
+            },
+            onTransportReconnectComplete: ({
+              success,
+              source,
+              closeFailed,
+            }) => {
+              options.dispatchLifecycle.setAgentAvailable(success);
+              automaticReconnectResult.current = {
+                reason: 'transport',
+                succeeded: success,
+              };
+              writeChannelLine(
+                success ? 'observation' : 'harness',
+                `[transport] conductor reconnect ${success ? 'succeeded' : 'failed'} source=${source ?? 'automatic'}${closeFailed ? ' old agent close failed; cleanup is unconfirmed' : ''}`,
+                success ? {} : { color: ANSI_RED },
+              );
+            },
           },
-        ),
+        ).catch(() => {
+          // Keep the shared helper's rejected-promise API. This workflow owns
+          // the unknown-outcome transition and omits the raw error.
+          return { runId: '', status: 'send_rejected' } as ConductorSendResult;
+        }),
         stopping.then(() => undefined),
       ]);
-      if (!result) return exitContinuity;
-      firstSend = false;
+      if (!result) {
+        if (reservation) options.recoveryInbox.release(reservation);
+        return exitContinuity;
+      }
+      sendCount = nextSendCount;
       dispatchState.lastDispatchedSourceKey = batch.sourceKey;
       dispatchState.continuationConsumed = batch.usedContinuation;
       const sendCompleted =
         result.status === 'finished' || result.status === 'completed';
+      if (sendCompleted) cursorBootstrapComplete = true;
+      const settled = settleConductorDispatch({
+        lifecycle: options.dispatchLifecycle,
+        lease,
+        inbox: options.recoveryInbox,
+        ...(reservation ? { reservation } : {}),
+        workflow: 'operator-agent',
+        backend: options.backend,
+        sendCount,
+        sourceKey: batch.sourceKey,
+        eventTypes: batch.events.map((event) =>
+          event.type === 'user' ? 'operator.message' : `watch.${event.reportType}`,
+        ),
+        operatorInputTexts,
+        result,
+        ...(automaticReconnectResult.current
+          ? { automaticReconnect: automaticReconnectResult.current }
+          : {}),
+        toolCallStarted,
+        captureFailure: options.operatorCanInspectRecovery,
+        requiresConfirmation: operatorInputTexts.length > 0,
+        ...(result.status === 'send_rejected'
+          ? { agentAvailable: false }
+          : {}),
+      });
+      automaticReconnectResult.current = undefined;
       if (sendCompleted) {
         await options.watchPool.acknowledge(batch.events);
       } else {
         for (const event of batch.events) {
           if (event.type === 'report') options.dispatchQueue.requeue(event, 5_000);
+        }
+        if (operatorInputTexts.length > 0) {
+          const recoveryDetails = options.operatorCanInspectRecovery
+            ? settled.snapshot
+              ? `失敗した入力は ${settled.snapshot.recoveryId} として保持しています。/recovery show ${settled.snapshot.recoveryId} で確認し、状態確認後に /recovery continue を実行してください。`
+              : 'この入力の recovery snapshot は作成されていません。'
+            : 'この実行環境では recovery 本文を確認できず、同一 process 内でも取得できません。';
+          writeChannelLine(
+            'harness',
+            `operator send が未完了です (status=${escapeTerminalControlCharacters(result.status)}, failure=${settled.failureClass ?? 'unknown'})。失敗した入力は queue に戻していません。${recoveryDetails}`,
+            { color: ANSI_RED },
+          );
         }
         if (result.status === 'error') {
           writeChannelLine(
@@ -540,15 +792,21 @@ async function runTtyConversation(options: {
                   provider,
                   pi: options.agentHandle.agentOptions.pi,
                   resumeInstruction:
-                    '認証設定を直した後に `ensemble operator-agent` を再起動してください。',
+                    '認証設定を直した後に `ensemble operator-agent` で /reconnect を実行してください。',
                 },
               )}\n`,
             );
           }
+        } else if (result.status === 'send_rejected') {
+          writeChannelLine(
+            'harness',
+            'send() が reject されました。provider 側の結果は不明です。明示的に /reconnect するまで conductor への送信を停止します。',
+            { color: ANSI_RED },
+          );
         } else {
           writeChannelLine(
             'harness',
-            `send not completed (status=${result.status}); watched reports retained for retry.`,
+            `send not completed (status=${escapeTerminalControlCharacters(result.status)}); watched reports retained for retry.`,
           );
         }
       }
@@ -561,7 +819,10 @@ async function runTtyConversation(options: {
         );
         if (promptVisible) terminal.prompt(true);
       } else if (sendCompleted) {
-        writeChannelLine('observation', `completed (status: ${result.status}).`);
+        writeChannelLine(
+          'observation',
+          `completed (status: ${escapeTerminalControlCharacters(result.status)}).`,
+        );
       }
       if (
         sendCompleted &&
@@ -580,6 +841,8 @@ async function runTtyConversation(options: {
     terminal.close();
     promptVisible = false;
     unsubscribeHoldChanges();
+    unsubscribeLifecycle();
+    unsubscribeRecoveryInbox();
   }
 }
 

@@ -38,21 +38,17 @@ import { PermissionPipeline } from '../permission/permission-pipeline.js';
 import { computeMcpConfigDigest } from '../mcp/load-mcp-config.js';
 import {
   loadSessionResumeStore,
-  saveSessionResumeStore,
+  saveSessionResumeStore as writeSessionResumeStore,
   SessionResumeStoreNotFoundError,
   SESSION_RESUME_STORE_VERSION,
-  sessionResumeStorePath,
   type SessionResumeStore,
 } from '../session/session-resume-store.js';
 import { WorkerSession } from '../runtime/worker-session.js';
 import * as sessionResumeStoreModule from '../session/session-resume-store.js';
-import {
-  loadSessionStateStore,
-  sessionStateStorePath,
-} from '../session/session-state-store.js';
+import { loadSessionStateStore } from '../session/session-state-store.js';
 import {
   loadOpenQuestionsStore,
-  openQuestionsStorePath,
+  openQuestionsStorePath as resolveOpenQuestionsStorePath,
 } from '../session/open-questions-store.js';
 import * as openQuestionsStoreModule from '../session/open-questions-store.js';
 import {
@@ -62,6 +58,7 @@ import {
 } from '../session/open-question-control.js';
 import * as openQuestionControlModule from '../session/open-question-control.js';
 import { SessionLogger, type SessionLogEvent } from './session/session-logger.js';
+import { executeRecoveryInboxCommand } from './recovery-inbox-command.js';
 import { runConductorSession as runConductorSessionImpl } from './conductor-session.js';
 import type { OperatorInputBindingApi } from './operator-input-binding.js';
 import * as worktreeModule from '../worktree/worktree.js';
@@ -79,6 +76,30 @@ const TEST_ISSUE = {
   number: 1,
   url: 'https://github.com/org/repo/issues/1',
 };
+
+// Most assertions in this suite inspect the active session store. New Issue
+// sessions write there; legacy hash fixtures use resolveEnsemblePaths directly.
+function sessionResumeStorePath(input: {
+  repoRoot: string;
+  conductorAgentId: string;
+  issueUrl?: string;
+}): string {
+  return resolveEnsemblePaths({ repoRoot: input.repoRoot })
+    .canonicalSessionResumeStorePath(
+      input.issueUrl ?? TEST_ISSUE.url,
+      input.conductorAgentId,
+    );
+}
+
+function openQuestionsStorePath(
+  input: Parameters<typeof resolveOpenQuestionsStorePath>[0],
+): string {
+  return resolveOpenQuestionsStorePath({
+    ...input,
+    issueUrl: input.issueUrl ?? TEST_ISSUE.url,
+    location: input.location ?? 'canonical-slug',
+  });
+}
 
 const {
   mockSend,
@@ -181,6 +202,22 @@ async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<
 async function drainAsync(): Promise<void> {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function saveSessionResumeStore(
+  path: string,
+  resumeStore: SessionResumeStore,
+): Promise<void> {
+  // These fixtures cover unrelated resume behavior and model a completed
+  // default-Cursor bootstrap. Unknown legacy-bootstrap tests use the raw writer.
+  const backend = resumeStore.conductorBackend ?? 'cursor';
+  await writeSessionResumeStore(path, {
+    ...resumeStore,
+    ...(backend === 'cursor' &&
+    resumeStore.cursorBootstrapComplete === undefined
+      ? { cursorBootstrapComplete: true }
+      : {}),
+  });
 }
 
 describe('runConductorSession resume / shutdown', () => {
@@ -321,6 +358,30 @@ describe('runConductorSession resume / shutdown', () => {
       });
   }
 
+  async function saveLegacyCursorResumeStore(agentId: string): Promise<string> {
+    const legacyStore = JSON.parse(
+      await readFile(
+        new URL(
+          '../../test/fixtures/session-resume-store-v1-legacy.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as SessionResumeStore;
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await writeSessionResumeStore(resumeStorePath, {
+      ...legacyStore,
+      conductorAgentId: agentId,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      cursorBootstrapRunId: 'legacy-bootstrap-run',
+    });
+    return resumeStorePath;
+  }
+
   it('fails fast when resumeAgentId is set but no saved session resume store exists', async () => {
     await expect(
       runConductorSession({
@@ -360,13 +421,18 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
     });
-    const resumeStorePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: initial.agentId,
-    });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const resumeStorePath = paths.canonicalSessionResumeStorePath(
+      TEST_ISSUE.url,
+      initial.agentId,
+    );
+    const hashResumeStorePath = paths.sessionResumeStorePath(initial.agentId);
     await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
       version: SESSION_RESUME_STORE_VERSION,
       createdHarnessCliVersion: '0.20.0-created',
+    });
+    await expect(access(hashResumeStorePath)).rejects.toMatchObject({
+      code: 'ENOENT',
     });
     expect(persistedVersions[0]).toBe('0.20.0-created');
 
@@ -401,16 +467,17 @@ describe('runConductorSession resume / shutdown', () => {
         'utf8',
       ),
     ) as SessionResumeStore;
-    const resumeStorePath = sessionResumeStorePath({
-      repoRoot,
-      conductorAgentId: agentId,
-    });
+    const resumeStorePath = resolveEnsemblePaths({ repoRoot })
+      .sessionResumeStorePath(agentId);
+    const slugResumeStorePath = resolveEnsemblePaths({ repoRoot })
+      .canonicalSessionResumeStorePath(TEST_ISSUE.url, agentId);
     await saveSessionResumeStore(resumeStorePath, {
       ...legacyStore,
       conductorAgentId: agentId,
       issueUrl: TEST_ISSUE.url,
       repoRoot,
     });
+    const legacySourceBeforeResume = await readFile(resumeStorePath);
     mockSend.mockResolvedValue({
       runId: 'run-legacy-cli-version',
       status: 'finished',
@@ -434,6 +501,12 @@ describe('runConductorSession resume / shutdown', () => {
     expect(result.stopReason).toBe('completed');
     await expect(loadSessionResumeStore(resumeStorePath)).resolves.not.toHaveProperty(
       'createdHarnessCliVersion',
+    );
+    await expect(loadSessionResumeStore(slugResumeStorePath)).resolves.not.toHaveProperty(
+      'createdHarnessCliVersion',
+    );
+    await expect(readFile(resumeStorePath)).resolves.toEqual(
+      legacySourceBeforeResume,
     );
   });
 
@@ -489,7 +562,7 @@ describe('runConductorSession resume / shutdown', () => {
     ).rejects.toThrow('stop after canonical store flush');
   });
 
-  it('resumes a hash-only store with its own YAML and ignores orphan slug snapshots', async () => {
+  it('prefers existing slug sidecars over older hash sidecars without merging or changing either source', async () => {
     const agentId = 'resume-hash-location-snapshot';
     const paths = resolveEnsemblePaths({ repoRoot });
     const hashPath = paths.sessionResumeStorePath(agentId);
@@ -498,12 +571,12 @@ describe('runConductorSession resume / shutdown', () => {
       agentId,
     );
     const hashOpenQuestionsPath = paths.openQuestionsPath(agentId);
-    const slugSessionStatePath = paths.canonicalSessionStatePath(
-      TEST_ISSUE.url,
-      agentId,
-    );
     // The resumed backend reports its provider session ID separately from the
     // harness conductorAgentId used by the ResumeStore and question snapshot.
+    const slugSessionStatePath = paths.canonicalSessionStatePath(
+      TEST_ISSUE.url,
+      'agent-test',
+    );
     const hashSessionStatePath = paths.sessionStatePath('agent-test');
     await saveSessionResumeStore(hashPath, {
       version: SESSION_RESUME_STORE_VERSION,
@@ -516,6 +589,7 @@ describe('runConductorSession resume / shutdown', () => {
       workers: {},
       updatedAt: 1,
     });
+    const hashResumeStoreBeforeResume = await readFile(hashPath);
     const writeQuestionSnapshot = async (path: string, id: string, text: string) => {
       await mkdir(dirname(path), { recursive: true });
       await writeFile(
@@ -560,8 +634,12 @@ describe('runConductorSession resume / shutdown', () => {
         'utf8',
       );
     };
-    await writeSessionState(slugSessionStatePath, 'orphan slug status');
+    await writeSessionState(slugSessionStatePath, 'existing slug status');
     await writeSessionState(hashSessionStatePath, 'selected hash status');
+    const slugQuestionsBeforeResume = await readFile(slugOpenQuestionsPath);
+    const hashQuestionsBeforeResume = await readFile(hashOpenQuestionsPath);
+    const slugStateBeforeResume = await readFile(slugSessionStatePath);
+    const hashStateBeforeResume = await readFile(hashSessionStatePath);
 
     let restoredAtBinding: ReturnType<OperatorInputBindingApi['getContext']>['openQuestions'] = [];
     let observation:
@@ -571,7 +649,9 @@ describe('runConductorSession resume / shutdown', () => {
         }
       | undefined;
     mockSend.mockImplementationOnce(async () => {
-      const selectedStore = await loadSessionResumeStore(hashPath);
+      const selectedStore = await loadSessionResumeStore(
+        paths.canonicalSessionResumeStorePath(TEST_ISSUE.url, agentId),
+      );
       expect(selectedStore?.harnessSocketPath).toBeTruthy();
       observation = await sendOpenQuestionControlRequest<NonNullable<typeof observation>>(
         selectedStore!.harnessSocketPath!,
@@ -599,20 +679,195 @@ describe('runConductorSession resume / shutdown', () => {
 
     expect(restoredAtBinding).toEqual([
       expect.objectContaining({
-        id: 'inq-2',
-        question: 'selected hash question',
+        id: 'inq-1',
+        question: 'orphan slug question',
       }),
     ]);
     expect(observation?.openQuestions).toEqual([
       expect.objectContaining({
-        id: 'inq-2',
-        question: 'selected hash question',
+        id: 'inq-1',
+        question: 'orphan slug question',
       }),
     ]);
     expect(observation?.sessionState?.current.statusLine).toBe(
-      'selected hash status',
+      'existing slug status',
+    );
+    await expect(readFile(hashPath)).resolves.toEqual(
+      hashResumeStoreBeforeResume,
+    );
+    await expect(readFile(slugOpenQuestionsPath)).resolves.toEqual(
+      slugQuestionsBeforeResume,
+    );
+    await expect(readFile(hashOpenQuestionsPath)).resolves.toEqual(
+      hashQuestionsBeforeResume,
+    );
+    await expect(readFile(slugSessionStatePath)).resolves.toEqual(
+      slugStateBeforeResume,
+    );
+    await expect(readFile(hashSessionStatePath)).resolves.toEqual(
+      hashStateBeforeResume,
     );
   });
+
+  it.each(['user-path-hash', 'project-legacy'] as const)(
+    'copies missing %s ResumeStore and sidecars to slug on resume without modifying legacy files',
+    async (location) => {
+      const paths = resolveEnsemblePaths({ repoRoot });
+      const agentId = `resume-copy-${location}`;
+      const sourceStorePath =
+        location === 'user-path-hash'
+          ? paths.sessionResumeStorePath(agentId)
+          : paths.legacySessionResumeStorePath(agentId);
+      const slugStorePath = paths.canonicalSessionResumeStorePath(
+        TEST_ISSUE.url,
+        agentId,
+      );
+      const sourceQuestionsPath =
+        location === 'user-path-hash'
+          ? paths.openQuestionsPath(agentId)
+          : paths.legacyOpenQuestionsPath(agentId);
+      const slugQuestionsPath = paths.canonicalOpenQuestionsPath(
+        TEST_ISSUE.url,
+        agentId,
+      );
+      const sourceStatePath =
+        location === 'user-path-hash'
+          ? paths.sessionStatePath(agentId)
+          : paths.legacySessionStatePath(agentId);
+      const slugStatePath = paths.canonicalSessionStatePath(
+        TEST_ISSUE.url,
+        agentId,
+      );
+      await saveSessionResumeStore(sourceStorePath, {
+        version: SESSION_RESUME_STORE_VERSION,
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        lifecycle: 'closed',
+        updatedAt: 1,
+      });
+      const openQuestionsYaml = [
+        'version: 1',
+        'sequence: 2',
+        'openQuestions:',
+        '  - id: inq-legacy',
+        `    question: ${JSON.stringify(`${location} question`)}`,
+        '    responseType: text',
+        '    source: conductor',
+        '    status: open',
+        '    askedAt: 1',
+        '',
+      ].join('\n');
+      const sessionStateYaml = [
+        'version: 2',
+        'current:',
+        `  statusLine: ${JSON.stringify(`${location} status`)}`,
+        '  reportedAt: 2',
+        'history: []',
+        '',
+      ].join('\n');
+      await mkdir(dirname(sourceQuestionsPath), { recursive: true });
+      await writeFile(sourceQuestionsPath, openQuestionsYaml, 'utf8');
+      await mkdir(dirname(sourceStatePath), { recursive: true });
+      await writeFile(sourceStatePath, sessionStateYaml, 'utf8');
+      const sourceStoreBefore = await readFile(sourceStorePath);
+      const sourceQuestionsBefore = await readFile(sourceQuestionsPath);
+      const sourceStateBefore = await readFile(sourceStatePath);
+      let restoredQuestions: Array<{ id: string; question: string }> = [];
+      mockResume.mockImplementationOnce(async () => ({
+        agentId,
+        send: mockSend,
+        close: mockClose,
+        getUsage: createMockConductorGetUsage(),
+      }));
+
+      mockSend.mockImplementation(async () => {
+        await expect(loadOpenQuestionsStore(slugQuestionsPath)).resolves.toMatchObject({
+          sequence: 2,
+          openQuestions: [
+            expect.objectContaining({
+              id: 'inq-legacy',
+              question: `${location} question`,
+              status: 'open',
+            }),
+          ],
+        });
+        await expect(loadSessionStateStore(slugStatePath)).resolves.toMatchObject({
+          current: {
+            statusLine: `${location} status`,
+            reportedAt: 2,
+          },
+        });
+        return {
+          runId: `run-copy-${location}`,
+          status: 'finished',
+          result: 'resumed from copied state',
+        };
+      });
+
+      const resultPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        resumeAgentId: agentId,
+        maxTurns: 1,
+        stopOnUnansweredInput: true,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+        bindOperatorInput: (api) => {
+          restoredQuestions = api.getContext().openQuestions;
+          api.submit('inspect the migrated sidecars', {
+            targetOpenQuestionId: 'missing',
+          });
+          return () => {};
+        },
+      });
+      await vi.waitFor(() => expect(mockResume).toHaveBeenCalled(), {
+        timeout: 2_000,
+      });
+      await vi.waitFor(() => expect(mockSend).toHaveBeenCalled(), {
+        timeout: 2_000,
+      });
+      const result = await resultPromise;
+
+      expect(result.stopReason).toBe('completed');
+      expect(restoredQuestions).toContainEqual(
+        expect.objectContaining({
+          id: 'inq-legacy',
+          question: `${location} question`,
+        }),
+      );
+      await expect(readFile(sourceStorePath)).resolves.toEqual(sourceStoreBefore);
+      await expect(readFile(sourceQuestionsPath)).resolves.toEqual(
+        sourceQuestionsBefore,
+      );
+      await expect(readFile(sourceStatePath)).resolves.toEqual(sourceStateBefore);
+      await expect(loadOpenQuestionsStore(slugQuestionsPath)).resolves.toMatchObject({
+        sequence: 2,
+        openQuestions: [
+          expect.objectContaining({
+            id: 'inq-legacy',
+            question: `${location} question`,
+          }),
+        ],
+      });
+      await expect(loadSessionStateStore(slugStatePath)).resolves.toMatchObject({
+        current: {
+          statusLine: `${location} status`,
+          reportedAt: 2,
+        },
+      });
+      await expect(loadSessionResumeStore(slugStorePath)).resolves.toMatchObject({
+        conductorAgentId: agentId,
+        issueUrl: TEST_ISSUE.url,
+      });
+    },
+  );
 
   it('continues a slug resume after its first harness socket flush fails without exposing a stale hash endpoint', async () => {
     const agentId = 'resume-slug-first-socket-flush-failure';
@@ -808,6 +1063,9 @@ describe('runConductorSession resume / shutdown', () => {
       expect.objectContaining({
         systemPrompt: expect.stringContaining('body'),
         builtinTools: true,
+        sessionDir: resolveEnsemblePaths({ repoRoot }).canonicalPiSessionsDir(
+          TEST_ISSUE.url,
+        ),
       }),
     );
     expect(mockSend).toHaveBeenCalledWith(
@@ -1910,19 +2168,20 @@ describe('runConductorSession resume / shutdown', () => {
     expect(statusResult?.structuredContent).toEqual({
       statusLine: 'レビュー中：CIテスト待ち',
     });
-    await expect(
-      loadSessionStateStore(
-        sessionStateStorePath({
-          repoRoot,
-          conductorAgentId: 'agent-test',
-        }),
-      ),
-    ).resolves.toMatchObject({
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const slugStatePath = paths.canonicalSessionStatePath(
+      TEST_ISSUE.url,
+      'agent-test',
+    );
+    await expect(loadSessionStateStore(slugStatePath)).resolves.toMatchObject({
       current: {
         statusLine: 'レビュー中：CIテスト待ち',
         reportedAt: expect.any(Number),
       },
       history: [],
+    });
+    await expect(access(paths.sessionStatePath('agent-test'))).rejects.toMatchObject({
+      code: 'ENOENT',
     });
   });
 
@@ -2215,7 +2474,10 @@ describe('runConductorSession resume / shutdown', () => {
     expect(result.sessionUsage).not.toHaveProperty('compactionCount');
 
     const resumeStore = await loadSessionResumeStore(
-      sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
+      resolveEnsemblePaths({ repoRoot }).canonicalSessionResumeStorePath(
+        TEST_ISSUE.url,
+        'agent-test',
+      ),
     );
     expect(resumeStore?.conductorBackend).toBe('pi');
   });
@@ -2250,6 +2512,371 @@ describe('runConductorSession resume / shutdown', () => {
       cursorBootstrapRunId: 'run-cursor-bootstrap',
     });
   });
+
+  it('does not close the old conductor twice when teardown follows failed reconnect', async () => {
+    stubUnusedControlServer();
+    const oldClose = vi.fn().mockResolvedValue(undefined);
+    const initialSend = vi.fn().mockResolvedValue({
+      runId: 'run-cursor-auth-error',
+      status: 'error',
+      error: { code: 'auth', message: 'Cursor authentication failed' },
+    });
+    const agent = {
+      agentId: 'cursor-reconnect-close-once',
+      send: initialSend,
+      close: oldClose,
+      getUsage: createMockConductorGetUsage(),
+    };
+    const factory = {
+      create: vi.fn().mockResolvedValue(agent),
+      resume: vi.fn().mockRejectedValue(new Error('resume unavailable')),
+    };
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'cursor' as const,
+      },
+    };
+
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
+      ensembleConfig,
+      conductorAgentFactory: factory,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(initialSend).toHaveBeenCalledOnce();
+    expect(factory.resume).toHaveBeenCalledOnce();
+    expect(oldClose).toHaveBeenCalledOnce();
+  });
+
+  it('restores incomplete Cursor bootstrap state on --continue without replaying the failed prompt', async () => {
+    stubUnusedControlServer();
+    const agentId = 'cursor-bootstrap-incomplete-resume';
+    const initialPromptSend = vi.fn().mockResolvedValue({
+      runId: 'run-cursor-bootstrap-auth-error',
+      status: 'error',
+      error: { code: 'auth', message: 'Cursor authentication failed' },
+    });
+    const initialAgentClose = vi.fn().mockResolvedValue(undefined);
+    const initialAgent = {
+      agentId,
+      send: initialPromptSend,
+      close: initialAgentClose,
+      getUsage: createMockConductorGetUsage(),
+    };
+    const automaticallyResumedSend = vi.fn();
+    const automaticallyResumedClose = vi.fn().mockResolvedValue(undefined);
+    const automaticallyResumedAgent = {
+      agentId,
+      send: automaticallyResumedSend,
+      close: automaticallyResumedClose,
+      getUsage: createMockConductorGetUsage(),
+    };
+    const continuedSend = vi.fn().mockResolvedValue({
+      runId: 'run-after-continue',
+      status: 'finished',
+      result: 'continued',
+    });
+    const continuedAgent = {
+      agentId,
+      send: continuedSend,
+      close: vi.fn().mockResolvedValue(undefined),
+      getUsage: createMockConductorGetUsage(),
+    };
+    const factory = {
+      create: vi.fn().mockResolvedValue(initialAgent),
+      resume: vi
+        .fn()
+        .mockResolvedValueOnce(automaticallyResumedAgent)
+        .mockResolvedValueOnce(continuedAgent),
+    };
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'cursor' as const,
+      },
+    };
+    const profile = {
+      conductor: { backend: 'cursor' as const },
+      workers: [],
+    };
+
+    const firstRun = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile,
+      ensembleConfig,
+      conductorAgentFactory: factory,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+    });
+
+    expect(firstRun.stopReason).toBe('error');
+    expect(initialPromptSend).toHaveBeenCalledOnce();
+    expect(factory.resume).toHaveBeenCalledOnce();
+    expect(automaticallyResumedSend).not.toHaveBeenCalled();
+    const resumeStorePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: agentId,
+    });
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      cursorBootstrapComplete: false,
+    });
+
+    const nextOperatorInput = 'continue with a fresh operator instruction';
+    await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile,
+      ensembleConfig,
+      conductorAgentFactory: factory,
+      resumeAgentId: agentId,
+      permissionPipeline: new PermissionPipeline({}),
+      registerProcessSignalHandlers: false,
+      waitForOperatorExit: false,
+      bindOperatorInput: (api) => {
+        api.submit(nextOperatorInput);
+      },
+    });
+
+    const compiledPrompt = (
+      factory.create.mock.calls[0]![0] as ConductorAgentCreateOptions
+    ).systemPrompt;
+    expect(factory.resume).toHaveBeenCalledTimes(2);
+    expect(continuedSend).toHaveBeenCalledOnce();
+    const continuedPrompt = continuedSend.mock.calls[0]![0] as string;
+    expect(continuedPrompt).toContain(compiledPrompt);
+    expect(continuedPrompt).toContain('## 今回のセッションイベント');
+    expect(continuedPrompt).toContain(nextOperatorInput);
+    expect(continuedPrompt).not.toContain(
+      'Cursor authentication failed',
+    );
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      cursorBootstrapComplete: true,
+    });
+  });
+
+  it('refuses a non-TTY resume when a legacy Cursor bootstrap result is unknown', async () => {
+    const agentId = 'legacy-cursor-bootstrap-non-tty';
+    const resumeStorePath = await saveLegacyCursorResumeStore(agentId);
+    const factory = {
+      create: vi.fn(),
+      resume: vi.fn(),
+    };
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: {
+        ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+        backend: 'cursor' as const,
+      },
+    };
+
+    await expect(
+      runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { conductor: { backend: 'cursor' }, workers: [] },
+        ensembleConfig,
+        conductorAgentFactory: factory,
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: false,
+      }),
+    ).rejects.toThrow(
+      'stdin / stdout / stderr がすべて対話 TTY の環境で `--continue` し',
+    );
+
+    expect(factory.resume).not.toHaveBeenCalled();
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+      cursorBootstrapRunId: 'legacy-bootstrap-run',
+    });
+    await expect(loadSessionResumeStore(resumeStorePath)).resolves.not.toHaveProperty(
+      'cursorBootstrapComplete',
+    );
+  });
+
+  it.each([
+    {
+      assumption: 'assume-complete',
+      savedValue: true,
+      expectCompiledPrompt: false,
+    },
+    {
+      assumption: 'assume-incomplete',
+      savedValue: false,
+      expectCompiledPrompt: true,
+    },
+  ] as const)(
+    'persists legacy bootstrap choice $assumption and honors it after --continue',
+    async ({ assumption, savedValue, expectCompiledPrompt }) => {
+      stubUnusedControlServer();
+      const agentId = `legacy-cursor-bootstrap-tty-${assumption}`;
+      const resumeStorePath = await saveLegacyCursorResumeStore(agentId);
+      const firstSend = vi.fn();
+      let bootstrapStoredAtDispatch: boolean | undefined;
+      const secondSend = vi.fn().mockImplementation(async () => {
+        bootstrapStoredAtDispatch = (
+          await loadSessionResumeStore(resumeStorePath)
+        )?.cursorBootstrapComplete;
+        return {
+          runId: 'run-after-legacy-bootstrap-choice',
+          status: 'finished',
+          result: 'continued',
+        };
+      });
+      const firstAgent = {
+        agentId,
+        send: firstSend,
+        close: vi.fn().mockResolvedValue(undefined),
+        getUsage: createMockConductorGetUsage(),
+      };
+      const secondAgent = {
+        agentId,
+        send: secondSend,
+        close: vi.fn().mockResolvedValue(undefined),
+        getUsage: createMockConductorGetUsage(),
+      };
+      const factory = {
+        create: vi.fn(),
+        resume: vi
+          .fn()
+          .mockResolvedValueOnce(firstAgent)
+          .mockResolvedValueOnce(secondAgent),
+      };
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: {
+          ...DEFAULT_ENSEMBLE_CONFIG.conductor,
+          backend: 'cursor' as const,
+        },
+      };
+      const profile = {
+        conductor: { backend: 'cursor' as const },
+        workers: [],
+      };
+      const firstLog = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      const firstEvents: SessionLogEvent[] = [];
+      firstLog.subscribe((event) => firstEvents.push(event));
+      const firstShutdown = new AbortController();
+      let firstApi: OperatorInputBindingApi | undefined;
+      const firstSession = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile,
+        ensembleConfig,
+        conductorAgentFactory: factory,
+        resumeAgentId: agentId,
+        permissionPipeline: new PermissionPipeline({}),
+        sessionLogger: firstLog,
+        shutdownSignal: firstShutdown.signal,
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        operatorCanInspectRecovery: true,
+        bindOperatorInput: (api) => {
+          firstApi = api;
+        },
+      });
+
+      const secondShutdown = new AbortController();
+      let secondApi: OperatorInputBindingApi | undefined;
+      let secondSession: Promise<unknown> | undefined;
+      try {
+        await vi.waitFor(() => expect(firstApi).toBeDefined());
+        expect(firstApi!.getCursorBootstrapStatus?.()).toBe('unknown');
+        await expect(loadSessionResumeStore(resumeStorePath)).resolves.not.toHaveProperty(
+          'cursorBootstrapComplete',
+        );
+        expect(
+          firstEvents.some(
+            (event) =>
+              event.type === 'harness.warning' &&
+              event.message.includes('compiled prompt が provider に届いたか判定できません'),
+          ),
+        ).toBe(true);
+        const status = executeRecoveryInboxCommand(
+          firstApi,
+          '/recovery bootstrap',
+          { canDisplaySensitiveContent: true },
+        );
+        expect(status.inspection?.text).toContain('dispatch は選択まで停止');
+        expect(firstSend).not.toHaveBeenCalled();
+
+        const choice = executeRecoveryInboxCommand(
+          firstApi,
+          `/recovery bootstrap ${assumption}`,
+          { canDisplaySensitiveContent: true },
+        );
+        expect(choice.inspection?.text).toContain('SessionResumeStore に保存');
+        await vi.waitFor(() =>
+          expect(firstApi!.getCursorBootstrapStatus?.()).toBe(
+            assumption === 'assume-complete' ? 'complete' : 'incomplete',
+          ),
+        );
+        await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+          cursorBootstrapComplete: savedValue,
+        });
+        expect(firstSend).not.toHaveBeenCalled();
+
+        expect(firstApi!.submit('/exit')).toBe(false);
+        await firstSession;
+
+        secondSession = runConductorSession({
+          issueUrl: TEST_ISSUE.url,
+          repoRoot,
+          profile,
+          ensembleConfig,
+          conductorAgentFactory: factory,
+          resumeAgentId: agentId,
+          permissionPipeline: new PermissionPipeline({}),
+          shutdownSignal: secondShutdown.signal,
+          registerProcessSignalHandlers: false,
+          waitForOperatorExit: true,
+          bindOperatorInput: (api) => {
+            secondApi = api;
+            api.submit('fresh input after --continue');
+          },
+        });
+
+        await vi.waitFor(() => expect(secondSend).toHaveBeenCalledOnce());
+        const resumedPrompt = (
+          factory.resume.mock.calls[1]![1] as ConductorAgentCreateOptions
+        ).systemPrompt;
+        const dispatchedMessage = secondSend.mock.calls[0]![0] as string;
+        if (expectCompiledPrompt) {
+          expect(dispatchedMessage).toContain(resumedPrompt);
+        } else {
+          expect(dispatchedMessage).not.toContain(resumedPrompt);
+        }
+        expect(dispatchedMessage).toContain('fresh input after --continue');
+        expect(dispatchedMessage).not.toContain('legacy-bootstrap-run');
+        expect(bootstrapStoredAtDispatch).toBe(savedValue);
+        await vi.waitFor(async () => {
+          await expect(loadSessionResumeStore(resumeStorePath)).resolves.toMatchObject({
+            cursorBootstrapComplete: true,
+          });
+        });
+      } finally {
+        firstApi?.submit('/exit');
+        firstShutdown.abort();
+        await firstSession.catch(() => undefined);
+        secondApi?.submit('/exit');
+        secondShutdown.abort();
+        await secondSession?.catch(() => undefined);
+      }
+    },
+  );
 
   it('persists the v2 resume-feasibility digest without config values', async () => {
     mockSend.mockResolvedValue({
@@ -3553,6 +4180,15 @@ describe('runConductorSession resume / shutdown', () => {
   });
 
   it('answers a live Open Question through UDS, persists it, and dispatches operator.message', async () => {
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const resumeStorePath = paths.canonicalSessionResumeStorePath(
+      TEST_ISSUE.url,
+      'agent-test',
+    );
+    const openQuestionsPath = paths.canonicalOpenQuestionsPath(
+      TEST_ISSUE.url,
+      'agent-test',
+    );
     let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
     let operatorInput: OperatorInputBindingApi | undefined;
     let sendCount = 0;
@@ -3610,14 +4246,8 @@ describe('runConductorSession resume / shutdown', () => {
 
     try {
       await vi.waitFor(async () => {
-        const resumeStore = await loadSessionResumeStore(
-          sessionResumeStorePath({ repoRoot, conductorAgentId: 'agent-test' }),
-        );
+        const resumeStore = await loadSessionResumeStore(resumeStorePath);
         expect(resumeStore?.harnessSocketPath).toBeTruthy();
-      });
-      const resumeStorePath = sessionResumeStorePath({
-        repoRoot,
-        conductorAgentId: 'agent-test',
       });
       const resumeStore = await loadSessionResumeStore(resumeStorePath);
       const socketPath = resumeStore?.harnessSocketPath;
@@ -3649,20 +4279,10 @@ describe('runConductorSession resume / shutdown', () => {
       })));
 
       await vi.waitFor(async () => {
-        const store = await loadOpenQuestionsStore(
-          openQuestionsStorePath({
-            repoRoot,
-            conductorAgentId: 'agent-test',
-          }),
-        );
+        const store = await loadOpenQuestionsStore(openQuestionsPath);
         expect(store?.openQuestions).toHaveLength(1);
       });
-      const openQuestionsStore = await loadOpenQuestionsStore(
-        openQuestionsStorePath({
-          repoRoot,
-          conductorAgentId: 'agent-test',
-        }),
-      );
+      const openQuestionsStore = await loadOpenQuestionsStore(openQuestionsPath);
       expect(liveQuestions).toEqual(
         openQuestionsStore?.openQuestions
           .filter(({ status }) => status === 'open')
@@ -3673,12 +4293,7 @@ describe('runConductorSession resume / shutdown', () => {
         params: { questionId: liveList.questions[0]!.id, answer: 'yes' },
       });
 
-      const store = await loadOpenQuestionsStore(
-        openQuestionsStorePath({
-          repoRoot,
-          conductorAgentId: 'agent-test',
-        }),
-      );
+      const store = await loadOpenQuestionsStore(openQuestionsPath);
       expect(store?.openQuestions[0]).toMatchObject({
         status: 'answered',
         answer: 'yes',
@@ -3722,6 +4337,12 @@ describe('runConductorSession resume / shutdown', () => {
       const finalResumeStore = await loadSessionResumeStore(resumeStorePath);
       expect(finalResumeStore?.lifecycle).toBe('closed');
       expect(finalResumeStore?.harnessSocketPath).toBeUndefined();
+      await expect(access(paths.sessionResumeStorePath('agent-test'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      await expect(access(paths.openQuestionsPath('agent-test'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
       await expect(stat(socketPath!)).rejects.toMatchObject({
         code: 'ENOENT',
       });
@@ -5305,7 +5926,55 @@ describe('runConductorSession resume / shutdown', () => {
     ).toBe(true);
   });
 
-  it('recovers in-process via resume without auth recovery hint', async () => {
+  it('escapes backend status controls in the Issue recovery warning', async () => {
+    stubUnusedControlServer();
+    const emitted: SessionLogEvent[] = [];
+    const shutdown = new AbortController();
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    sessionLogger.subscribe((event) => {
+      emitted.push(event);
+      if (
+        event.type === 'harness.warning' &&
+        event.message.includes('conductor send が未完了です')
+      ) {
+        shutdown.abort();
+      }
+    });
+    mockSend.mockResolvedValue({
+      runId: 'run-untrusted-status',
+      status: 'error\u001b[2J\u202e\u2066\nspoof',
+    });
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: { workers: [] },
+      permissionPipeline: new PermissionPipeline({}),
+      sessionLogger,
+      shutdownSignal: shutdown.signal,
+      registerProcessSignalHandlers: false,
+      operatorCanInspectRecovery: true,
+    });
+
+    expect(result.stopReason).toBe('interrupted');
+    const warning = emitted.find(
+      (event): event is Extract<SessionLogEvent, { type: 'harness.warning' }> =>
+        event.type === 'harness.warning' &&
+        event.message.includes('conductor send が未完了です'),
+    );
+    expect(warning?.message).toContain(
+      'status=error\\u001b[2J\\u202e\\u2066\\u000aspoof',
+    );
+    expect(warning?.message).not.toContain('\u001b');
+    expect(warning?.message).not.toContain('\u202e');
+    expect(warning?.message).not.toContain('\u2066');
+    expect(warning?.message).not.toContain('\n');
+  });
+
+  it('resumes after an auth failure without replaying the initial prompt', async () => {
     const projectMcpRoot = join(repoRoot, '.agents');
     await mkdir(projectMcpRoot, { recursive: true });
     await writeFile(
@@ -5328,11 +5997,7 @@ describe('runConductorSession resume / shutdown', () => {
       emitted.push(event);
     });
     const shutdown = new AbortController();
-    const mockSendAfterResume = vi.fn().mockResolvedValue({
-      runId: 'run-2',
-      status: 'running',
-      result: 'recovered',
-    });
+    const mockSendAfterResume = vi.fn();
 
     mockSend.mockResolvedValueOnce({
       runId: 'run-1',
@@ -5352,7 +6017,7 @@ describe('runConductorSession resume / shutdown', () => {
       getUsage: createMockConductorGetUsage(),
     }));
 
-    const sessionPromise = runConductorSession({
+    const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
@@ -5363,13 +6028,11 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
     });
 
-    await vi.waitFor(() => expect(mockSendAfterResume).toHaveBeenCalled());
-    shutdown.abort();
-    await sessionPromise;
+    expect(result.stopReason).toBe('error');
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(mockSendAfterResume).not.toHaveBeenCalled();
 
-    expect(
-      emitted.some((event) => event.type === 'conductor.auth.recovery'),
-    ).toBe(false);
+    expect(emitted.some((event) => event.type === 'conductor.auth.recovery')).toBe(true);
     expect(
       emitted.some(
         (event) => event.type === 'conductor.auth.reconnect',
@@ -5388,7 +6051,7 @@ describe('runConductorSession resume / shutdown', () => {
     );
   });
 
-  it('retries a Pi API-key resolution failure once and emits a provider-specific recovery hint', async () => {
+  it('resumes after a Pi API-key resolution failure without replay and emits a provider-specific hint', async () => {
     await mkdir(join(repoRoot, '.ensemble', 'pi'), { recursive: true });
     await writeFile(
       join(repoRoot, '.ensemble', 'pi', 'settings.json'),
@@ -5429,7 +6092,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
 
     expect(result.stopReason).toBe('error');
-    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(mockSend).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledOnce();
 
     const recovery = emitted.find(
@@ -5442,7 +6105,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(recovery?.hint).not.toContain('ensemble auth logout');
   });
 
-  it('keeps failed event content operator-only and drops it when /close ends the process', async () => {
+  it('keeps only operator-authored failed input in the TTY inbox and drops it on /close', async () => {
     await mkdir(join(repoRoot, '.ensemble', 'pi'), { recursive: true });
     await writeFile(
       join(repoRoot, '.ensemble', 'pi', 'settings.json'),
@@ -5458,15 +6121,7 @@ describe('runConductorSession resume / shutdown', () => {
     });
     sessionLogger.subscribe((event) => emitted.push(event));
     const onPostLoopWait = vi.fn();
-    const retrySend = vi.fn().mockResolvedValue({
-      runId: 'run-after-resume',
-      status: 'error',
-      error: {
-        code: 'auth',
-        message:
-          'API key auth failed for provider anthropic: Failed to resolve API key for provider "anthropic" from shell command: /private/secret/cached-auth.mjs',
-      },
-    });
+    const retrySend = vi.fn();
     let operatorApi: OperatorInputBindingApi | undefined;
 
     stubUnusedControlServer();
@@ -5505,6 +6160,7 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
       waitForOperatorExit: true,
       continueOnConductorError: true,
+      operatorCanInspectRecovery: true,
       onPostLoopWait,
       bindOperatorInput: (api) => {
         operatorApi = api;
@@ -5514,34 +6170,38 @@ describe('runConductorSession resume / shutdown', () => {
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalledOnce());
     const privateInstruction = 'private operator recovery instruction';
     expect(operatorApi!.submit(privateInstruction)).toBe(true);
-    await vi.waitFor(() => expect(retrySend).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
-      expect(operatorApi!.listPiAuthRecoverySnapshots?.()).toHaveLength(1),
+      expect(operatorApi!.listRecoverySnapshots?.()).toHaveLength(1),
     );
 
-    const retained = operatorApi!.getPiAuthRecoverySnapshot?.(
-      'pi-auth-recovery-2',
+    const summary = operatorApi!.listRecoverySnapshots?.()[0];
+    const retained = operatorApi!.getRecoverySnapshot?.(
+      summary!.recoveryId,
     );
-    expect(retained?.content).toContain(privateInstruction);
-    expect(retained?.content).not.toContain('/private/secret/cached-auth.mjs');
+    expect(retained?.inputTexts).toEqual([privateInstruction]);
+    expect(retained?.failureClass).toBe('auth');
+    expect(JSON.stringify(retained)).not.toContain(
+      '/private/secret/cached-auth.mjs',
+    );
+    expect(retrySend).not.toHaveBeenCalled();
     expect(
       emitted.find(
         (event) =>
           event.type === 'harness.warning' &&
-          event.message.includes('Pi authentication failure snapshot'),
+          event.message.includes('/recovery continue'),
       )?.message,
     ).not.toContain(privateInstruction);
 
     expect(operatorApi!.submit('/close')).toBe(false);
     const result = await sessionPromise;
-    expect(operatorApi!.listPiAuthRecoverySnapshots?.()).toEqual([]);
+    expect(operatorApi!.listRecoverySnapshots?.()).toEqual([]);
     expect(
-      operatorApi!.getPiAuthRecoverySnapshot?.('pi-auth-recovery-2'),
+      operatorApi!.getRecoverySnapshot?.(summary!.recoveryId),
     ).toBeUndefined();
     expect(JSON.stringify(result)).not.toContain(privateInstruction);
   });
 
-  it('recovers transport stalls without auth reconnect or recovery hints', async () => {
+  it('reconnects after a transport stall without replaying the ambiguous prompt', async () => {
     const emitted: SessionLogEvent[] = [];
     const sessionLogger = new SessionLogger({
       issueUrl: TEST_ISSUE.url,
@@ -5575,12 +6235,9 @@ describe('runConductorSession resume / shutdown', () => {
       registerProcessSignalHandlers: false,
     });
 
-    expect(result.stopReason).toBe('completed');
+    expect(result.stopReason).toBe('error');
     expect(mockSend).toHaveBeenCalledOnce();
-    expect(resumedSend).toHaveBeenCalledWith(
-      expect.stringContaining('作業フローの連鎖'),
-      expect.any(Object),
-    );
+    expect(resumedSend).not.toHaveBeenCalled();
     expect(
       emitted
         .filter((event) => event.type === 'conductor.transport.reconnect')
@@ -5599,8 +6256,15 @@ describe('runConductorSession resume / shutdown', () => {
     sessionLogger.subscribe((event) => emitted.push(event));
     const onPostLoopWait = vi.fn();
     const resumedSend = vi.fn();
+    const oldClose = vi.fn().mockRejectedValue(new Error('close cleanup failed'));
     let operatorApi: OperatorInputBindingApi | undefined;
 
+    mockCreate.mockResolvedValueOnce({
+      agentId: 'agent-test',
+      send: mockSend,
+      close: oldClose,
+      getUsage: createMockConductorGetUsage(),
+    });
     mockSend.mockResolvedValue({
       runId: 'run-1',
       status: 'finished',
@@ -5630,7 +6294,17 @@ describe('runConductorSession resume / shutdown', () => {
     await vi.waitFor(() => expect(onPostLoopWait).toHaveBeenCalled());
     expect(operatorApi!.submit('/reconnect')).toBe(true);
     await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(
+        emitted.some(
+          (event) =>
+            event.type === 'harness.warning' &&
+            event.message.includes('リソース解放は確認できません'),
+        ),
+      ).toBe(true),
+    );
     expect(mockSend).toHaveBeenCalledOnce();
+    expect(oldClose).toHaveBeenCalledOnce();
     expect(resumedSend).not.toHaveBeenCalled();
 
     expect(operatorApi!.submit('/exit')).toBe(false);

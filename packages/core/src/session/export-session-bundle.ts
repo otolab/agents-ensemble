@@ -403,6 +403,7 @@ async function exportPiConductorTranscript(input: {
       conductorAgentId: input.conductorAgentId,
       cwd,
       repoRoot: input.repoRoot,
+      issueUrl: input.resumeStore.issueUrl,
     });
   } catch {
     location = undefined;
