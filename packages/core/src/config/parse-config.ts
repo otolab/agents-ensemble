@@ -1,3 +1,4 @@
+import { validateHeaderName, validateHeaderValue } from 'node:http';
 import {
   isBuiltinAcpPresetId,
   type BuiltinAcpPresetId,
@@ -104,12 +105,14 @@ function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined
   const backend = parseConductorBackend(obj.backend);
   const verbose = readBoolean(obj.verbose);
   const pi = parseConductorPiConfig(obj.pi);
+  const connection = parseConductorConnection(obj.connection);
   if (
     model === undefined &&
     reasoning === undefined &&
     backend === undefined &&
     verbose === undefined &&
-    pi === undefined
+    pi === undefined &&
+    connection === undefined
   ) {
     return undefined;
   }
@@ -119,7 +122,35 @@ function parseConductorConfig(raw: unknown): EnsembleConductorConfig | undefined
     ...(backend !== undefined ? { backend } : {}),
     ...(verbose !== undefined ? { verbose } : {}),
     ...(pi !== undefined ? { pi } : {}),
+    ...(connection !== undefined ? { connection } : {}),
   } as EnsembleConductorConfig;
+}
+
+function parseConductorConnection(raw: unknown): EnsembleConductorConfig['connection'] {
+  if (raw === undefined) return undefined;
+  const obj = readObject(raw);
+  if (!obj) throw new Error('conductor.connection must be an object');
+  if (obj.headers === undefined) return {};
+  const input = readObject(obj.headers);
+  if (!input) throw new Error('conductor.connection.headers must be an object');
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(input)) {
+    if (typeof value !== 'string') {
+      throw new Error('conductor.connection.headers values must be strings');
+    }
+    try {
+      validateHeaderName(name);
+      validateHeaderValue(name, value);
+    } catch {
+      throw new Error('conductor.connection.headers contains an invalid HTTP header');
+    }
+    const normalized = name.toLowerCase();
+    if (Object.hasOwn(headers, normalized)) {
+      throw new Error('conductor.connection.headers contains duplicate header names');
+    }
+    headers[normalized] = value;
+  }
+  return { headers };
 }
 
 function parseConductorPiConfig(raw: unknown): EnsembleConductorPiConfig | undefined {

@@ -186,6 +186,56 @@ describe('Pi headless settings with the real SDK', () => {
     expect(settingsManager.getSettings()).not.toHaveProperty('retry');
   }
 
+  it('sends configured connection headers through the real Pi SDK', async () => {
+    await setupFixture();
+    const requests: Headers[] = [];
+    vi.stubGlobal('fetch', async (_input: unknown, init?: RequestInit) => {
+      requests.push(new Headers(init?.headers));
+      return new Response('data: [DONE]\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+    try {
+      const agent = await PiConductorAgent.create({
+        ...createOptions(),
+        connection: { headers: { originator: 'agents-ensemble', 'user-agent': 'ensemble-test' } },
+      });
+      agents.push(agent);
+      await agent.send('hello');
+      expect(requests.length).toBeGreaterThan(0);
+      expect(requests[0]?.get('originator')).toBe('agents-ensemble');
+      expect(requests[0]?.get('user-agent')).toBe('ensemble-test');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('overrides models.json headers on OpenAI Codex SSE requests', async () => {
+    await setupFixture();
+    await writeJson(join(ensembleProjectDir, 'models.json'), {
+      providers: { 'openai-codex': { api: 'openai-codex-responses', baseUrl: 'https://example.invalid', headers: { originator: 'models-json', 'User-Agent': 'models-agent' }, models: [{ id: 'fixture-codex', name: 'Fixture Codex', contextWindow: 128_000, maxTokens: 4_096 }] } },
+    });
+    const payload = Buffer.from(JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: 'fixture-account' } })).toString('base64url');
+    await writeJson(join(agentDir, 'auth.json'), { 'openai-codex': { type: 'oauth', access: `e30.${payload}.signature`, refresh: 'fixture', expires: Date.now() + 3_600_000 } });
+    const requests: Headers[] = [];
+    vi.stubGlobal('fetch', async (_input: unknown, init?: RequestInit) => {
+      requests.push(new Headers(init?.headers));
+      return new Response('data: [DONE]\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+    try {
+      const agent = await PiConductorAgent.create({
+        ...createOptions(), modelId: 'openai-codex/fixture-codex', apiKey: undefined,
+        connection: { headers: { originator: 'ensemble', 'user-agent': 'ensemble-test' } },
+      });
+      agents.push(agent);
+      getSession(agent).settingsManager.setTransport('sse');
+      const result = await agent.send('hello');
+      expect(requests.length, JSON.stringify(result)).toBeGreaterThan(0);
+      expect(requests[0]?.get('originator')).toBe('ensemble');
+      expect(requests[0]?.get('user-agent')).toBe('ensemble-test');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps create, reload, and resume on the ensemble snapshot across real SDK sessions', async () => {
     await setupFixture();
 

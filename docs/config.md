@@ -105,6 +105,9 @@ conductor:
   model: default                      # CONDUCTOR_MODEL_ID 相当
   # reasoning: high                  # 任意。選択した backend / model により対応値が異なる
   verbose: false                      # CONDUCTOR_VERBOSE / --verbose 相当
+  # connection:
+  #   headers:                        # Pi provider 共通の HTTP header（任意）
+  #     originator: agents-ensemble
   pi:
     # 任意。省略時は ~/.ensemble/pi と <repoRoot>/.ensemble/pi
     agentDir: ~/.ensemble/pi
@@ -437,6 +440,27 @@ acp:
 - `themes/`: Pi 標準 JSON として読み込み、project 同名を優先します。conductor は headless `AgentSession` のため TUI renderer がなく、theme の色・表示設定はモデル入出力には適用しません。
 
 Pi の初回セットアップ、provider 認証、認証優先順、TTY / stderr の login、project OAuth の制約、`ensemble models list`、missing key / 401 の復旧は [Pi conductor セットアップと認証](pi-conductor-setup.md)を正本とします。この config reference では、headless conductor が `settings.json.apiKeys[provider]` の非 command 値を runtime override として使い、scalar `settings.json.apiKey` は別の fallback 経路で扱うこと、`models.json` の provider `apiKey` と `!command` も Pi resource として解決することを定義します。`!command` は conductor process の shell と OS user / 環境で実行され、worker permission 処理や harness の sandbox を通りません。repository の project resource も実行可能な設定として扱い、信頼できる設定でのみ使用してください。`gcloud auth print-identity-token` 等を連続実行しないためのキャッシュ付きヘルパーは harness では提供せず、[pi-conductor-setup.md の `!command` とトークン取得](pi-conductor-setup.md#command-とトークン取得の連続実行litellm--gcloud-等) と Node 実装の [scripts/pi/cached-auth.mjs](../scripts/pi/cached-auth.mjs) を参照してください。`@agents-ensemble/cli` の配布物には `scripts/pi/cached-auth.mjs` と、これへ委譲する非推奨の `.sh` wrapper が含まれます。既存 `~/.ensemble/pi/cached-auth.sh` コピーからの移行と p50 測定手順も Pi セットアップガイドに記載しています。Pi の MCP HTTP OAuth は provider OAuth とは別に、公式 MCP extension が管理します。
+
+#### provider リクエストのヘッダー
+
+`conductor.connection.headers` に文字列の HTTP ヘッダーを指定すると、Pi conductor と operator-agent のモデルプロバイダーへのリクエストに適用します。名前は大文字小文字を区別せず、同じヘッダーは project config が user config を上書きし、その他はマージします。Pi の既定値と `models.json` の同名値より優先します。未指定時は Pi の動作を維持します。名前・値が HTTP ヘッダーとして不正な場合、または値が文字列でない場合は設定読み込み時にエラーになります。同一設定層で大文字小文字だけが異なる重複名もエラーです。
+
+この設定は Pi の provider request hook を通るリクエストに適用され、OpenAI Codex の SSE / WebSocket でも共通です。Pi SDK が認証や transport 用として後から設定するヘッダーは上書きできない場合があります。OAuth ログイン自体や MCP 接続には適用されません。Cursor backend では無視します。秘密情報は config に平文で置かず、provider の認証ストアや環境変数を利用してください。
+
+provider ごとの設定には従来どおり `models.json` の `providers.<provider>.headers` も使えます。例えば `openai-codex` にだけ設定する場合は次のようにします。
+
+```json
+{
+  "providers": {
+    "openai-codex": {
+      "headers": {
+        "originator": "agents-ensemble",
+        "User-Agent": "agents-ensemble"
+      }
+    }
+  }
+}
+```
 
 #### `settings.json` の headless 対応範囲
 

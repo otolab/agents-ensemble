@@ -180,6 +180,15 @@ describe('parseEnsembleConfig', () => {
     },
   );
 
+  it('validates and normalizes conductor connection headers without exposing values', () => {
+    expect(parseEnsembleConfig({ conductor: { connection: { headers: { 'User-Agent': 'ensemble', originator: 'test' } } } }))
+      .toEqual({ conductor: { connection: { headers: { 'user-agent': 'ensemble', originator: 'test' } } } });
+    for (const headers of [null, [], { foo: 1 }, { 'bad name': 'secret' }, { foo: 'secret\nvalue' }, { Foo: 'a', foo: 'b' }]) {
+      expect(() => parseEnsembleConfig({ conductor: { connection: { headers } } })).toThrow(/conductor\.connection\.headers/);
+    }
+    expect(() => parseEnsembleConfig({ conductor: { connection: { headers: { foo: 'secret\nvalue' } } } })).toThrowError(/invalid HTTP header/);
+  });
+
   it('rejects an invalid model ID inside a structured entry', () => {
     expect(() =>
       parseEnsembleConfig({ acp: { models: { high: { model: '', reasoning: 'high' } } } }),
@@ -375,6 +384,13 @@ describe('loadEnsembleConfig', () => {
     const config = await loadConfig();
 
     expect(config.github.auth.allowGhAuthTokenFallback).toBe(true);
+  });
+
+  it('merges connection headers case-insensitively across config layers', async () => {
+    await writeConfig(userEnsembleRoot, 'conductor:\n  connection:\n    headers:\n      User-Agent: user\n      X-Keep: yes-value\n');
+    await writeConfig(join(repoRoot, '.ensemble'), 'conductor:\n  connection:\n    headers:\n      user-agent: project\n');
+    const config = await loadEnsembleConfig(repoRoot, { userEnsembleRoot, writeStderr: () => {} });
+    expect(config.conductor.connection?.headers).toEqual({ 'user-agent': 'project', 'x-keep': 'yes-value' });
   });
 
   it('deep merges conductor backend across user and project config', async () => {

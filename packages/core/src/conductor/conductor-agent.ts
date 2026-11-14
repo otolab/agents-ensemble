@@ -30,6 +30,8 @@ export interface ConductorAgentCreateOptions {
   /** Resolved conductor reasoning / thinking level; each backend validates its own support. */
   reasoning?: string;
   mcpServers?: McpServerConfigMap;
+  /** Pi provider request headers; ignored by other backends. */
+  connection?: { headers?: Record<string, string> };
   /** Pi-only resource root overrides; ignored by other backends. */
   pi?: ConductorPiResourceOptions;
   /** Pi-only session transcript directory resolved by the harness. */
