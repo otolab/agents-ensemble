@@ -12,6 +12,7 @@ import {
   loadSessionStateStore,
   parseIssueUrl,
   readWorkerSessionHistory,
+  resolveGitHubRepositoryFromOrigin,
   sessionSnapshotPaths,
   type ConductorBackend,
   type ConductorProviderHistoryMessage,
@@ -89,8 +90,15 @@ export async function listSavedSessions(input: {
   const repoRoot = resolve(input.repoRoot);
   const issueFilter = input.issueUrl ? issueKey(input.issueUrl) : undefined;
   const locatedStores = await listLocatedSessionResumeStores(repoRoot);
+  const repoIdentity = await repositoryIdentityForRoot(repoRoot);
   const sessions = locatedStores
-    .filter(({ resumeStore }) => resolve(resumeStore.repoRoot) === repoRoot)
+    .filter(
+      ({ resumeStore }) =>
+        resolve(resumeStore.repoRoot) === repoRoot ||
+        (repoIdentity !== undefined &&
+          issueRepositoryKeyOrUndefined(resumeStore.issueUrl) ===
+            repoIdentity),
+    )
     .filter(
       ({ resumeStore }) =>
         issueFilter === undefined ||
@@ -122,11 +130,32 @@ export async function showSavedSession(input: {
     input.conductorAgentId,
     'conductorAgentId',
   );
-  const located = await findSessionResumeStore(repoRoot, conductorAgentId);
-  if (
-    !located ||
-    resolve(located.resumeStore.repoRoot) !== repoRoot
-  ) {
+  const candidates = await listLocatedSessionResumeStores(repoRoot);
+  const sessionCandidates = candidates.filter(
+    ({ resumeStore }) =>
+      resumeStore.conductorAgentId === conductorAgentId,
+  );
+  let located = sessionCandidates.find(
+    ({ resumeStore }) => resolve(resumeStore.repoRoot) === repoRoot,
+  );
+  if (!located) {
+    const repoIdentity = await repositoryIdentityForRoot(repoRoot);
+    const matchingCanonical = repoIdentity
+      ? sessionCandidates.filter(
+          ({ resumeStore, location }) =>
+            location === 'canonical-slug' &&
+            issueRepositoryKeyOrUndefined(resumeStore.issueUrl) ===
+              repoIdentity,
+        )
+      : [];
+    if (matchingCanonical.length > 1) {
+      throw new Error(
+        `Multiple saved sessions found for ${conductorAgentId} in ${repoRoot}.`,
+      );
+    }
+    located = matchingCanonical[0];
+  }
+  if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
 
@@ -441,6 +470,30 @@ async function loadSessionStateSummary(
 function issueKey(issueUrl: string): string {
   const issue = parseIssueUrl(issueUrl);
   return `${issue.owner.toLowerCase()}/${issue.repo.toLowerCase()}#${issue.number}`;
+}
+
+function issueRepositoryKey(issueUrl: string): string {
+  const issue = parseIssueUrl(issueUrl);
+  return `${issue.owner.toLowerCase()}/${issue.repo.toLowerCase()}`;
+}
+
+function issueRepositoryKeyOrUndefined(issueUrl: string): string | undefined {
+  try {
+    return issueRepositoryKey(issueUrl);
+  } catch {
+    return undefined;
+  }
+}
+
+async function repositoryIdentityForRoot(
+  repoRoot: string,
+): Promise<string | undefined> {
+  try {
+    const repository = await resolveGitHubRepositoryFromOrigin(repoRoot);
+    return `${repository.owner.toLowerCase()}/${repository.repo.toLowerCase()}`;
+  } catch {
+    return undefined;
+  }
 }
 
 function issueKeyOrUndefined(issueUrl: string): string | undefined {

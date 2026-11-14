@@ -55,8 +55,17 @@ function createInput(answers: string[]) {
 function createProcessTerminal(secret?: string) {
   const originalStdin = Object.getOwnPropertyDescriptor(process, 'stdin');
   const originalStderr = Object.getOwnPropertyDescriptor(process, 'stderr');
-  const input = new PassThrough() as PassThrough & { isTTY: boolean };
+  const input = new PassThrough() as PassThrough & {
+    isTTY: boolean;
+    isRaw: boolean;
+    setRawMode(mode: boolean): PassThrough;
+  };
   input.isTTY = true;
+  input.isRaw = false;
+  input.setRawMode = (mode) => {
+    input.isRaw = mode;
+    return input;
+  };
   let stderrText = '';
   const stderr = new Writable({
     write(chunk, _encoding, callback) {

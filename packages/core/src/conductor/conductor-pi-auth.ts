@@ -90,6 +90,31 @@ export interface PiConductorAuthOptions extends PiResourceLoaderOptions {
   modelId?: string;
 }
 
+type PiOAuthPrompt = Parameters<OAuthLoginCallbacks['onPrompt']>[0] & {
+  type: 'text' | 'secret' | 'manual_code';
+  signal?: AbortSignal;
+};
+
+type PiOAuthManualCodePrompt = {
+  message?: string;
+  placeholder?: string;
+  signal?: AbortSignal;
+};
+
+type PiOAuthSelectPrompt = Parameters<OAuthLoginCallbacks['onSelect']>[0] & {
+  signal?: AbortSignal;
+};
+
+/** Pi prompts carry per-prompt cancellation signals through the CLI callbacks. */
+export type PiConductorOAuthLoginCallbacks = Omit<
+  OAuthLoginCallbacks,
+  'onPrompt' | 'onManualCodeInput' | 'onSelect'
+> & {
+  onPrompt(prompt: PiOAuthPrompt): Promise<string>;
+  onManualCodeInput?(prompt?: PiOAuthManualCodePrompt): Promise<string>;
+  onSelect(prompt: PiOAuthSelectPrompt): Promise<string | undefined>;
+};
+
 /** Create the Pi 1.x model runtime and registry for the resolved resource roots. */
 export async function createPiConductorAuthContext(
   options: PiResourceLoaderOptions,
@@ -134,7 +159,7 @@ export async function resolvePiConductorProvider(
 export async function loginPiConductor(
   options: PiConductorAuthOptions & {
     apiKey?: string;
-    oauthCallbacks?: OAuthLoginCallbacks;
+    oauthCallbacks?: PiConductorOAuthLoginCallbacks;
   },
 ): Promise<PiConductorLoginResult> {
   const roots = resolvePiResourceRoots(options);
@@ -1155,7 +1180,9 @@ function isMissingFile(error: unknown): boolean {
   );
 }
 
-function toPiAuthInteraction(callbacks: OAuthLoginCallbacks): AuthInteraction {
+function toPiAuthInteraction(
+  callbacks: PiConductorOAuthLoginCallbacks,
+): AuthInteraction {
   return {
     signal: callbacks.signal,
     prompt: async (prompt: AuthPrompt) => {
@@ -1166,16 +1193,23 @@ function toPiAuthInteraction(callbacks: OAuthLoginCallbacks): AuthInteraction {
             id: option.id,
             label: option.label,
           })),
+          ...(prompt.signal ? { signal: prompt.signal } : {}),
         });
         if (selected === undefined) throw new Error('OAuth login was cancelled.');
         return selected;
       }
       if (prompt.type === 'manual_code' && callbacks.onManualCodeInput) {
-        return callbacks.onManualCodeInput();
+        return callbacks.onManualCodeInput({
+          message: prompt.message,
+          ...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
+          ...(prompt.signal ? { signal: prompt.signal } : {}),
+        });
       }
       return callbacks.onPrompt({
         message: prompt.message,
+        type: prompt.type,
         ...(prompt.placeholder ? { placeholder: prompt.placeholder } : {}),
+        ...(prompt.signal ? { signal: prompt.signal } : {}),
       });
     },
     notify: (event: AuthEvent) => {

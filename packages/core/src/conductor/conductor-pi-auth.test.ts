@@ -31,6 +31,7 @@ import {
   resolvePiConductorApiKey,
   resolvePiConductorProvider,
 } from './conductor-pi-auth.js';
+import type { PiConductorOAuthLoginCallbacks } from './conductor-pi-auth.js';
 import { loadPiResources } from './pi-resource-loader.js';
 
 const PROJECT_FILE_ALIAS_CASES = [
@@ -965,6 +966,115 @@ describe('Pi conductor authentication', () => {
       await readFile(join(agentDir, 'settings.json'), 'utf8'),
     ) as { deviceId?: string };
     expect(settings.deviceId).toBe(deviceIds[0]);
+  });
+
+  it('bridges Pi OAuth URL, device-code, manual-code, secret, and selection prompts', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'pi-auth-interaction-'));
+    const agentDir = await mkdtemp(join(tmpdir(), 'pi-auth-interaction-user-'));
+    const manualCodeSignal = new AbortController().signal;
+    const secretSignal = new AbortController().signal;
+    const selectSignal = new AbortController().signal;
+    const promptResponses: unknown[] = [];
+    const callbacks: PiConductorOAuthLoginCallbacks = {
+      onAuth: vi.fn(),
+      onDeviceCode: vi.fn(),
+      onProgress: vi.fn(),
+      onManualCodeInput: vi.fn().mockResolvedValue('pasted-authorization-code'),
+      onPrompt: vi.fn().mockResolvedValue('provider-secret'),
+      onSelect: vi.fn().mockResolvedValue('chatgpt'),
+    };
+    const login = vi
+      .spyOn(ModelRuntime.prototype, 'login')
+      .mockImplementation(async (_provider, _method, interaction) => {
+        interaction.notify({
+          type: 'auth_url',
+          url: 'https://auth.example.test/authorize?state=copyable',
+          instructions: 'Open this URL on a device with a browser.',
+        });
+        interaction.notify({
+          type: 'device_code',
+          userCode: 'ABCD-EFGH',
+          verificationUri: 'https://auth.example.test/device',
+          intervalSeconds: 5,
+          expiresInSeconds: 300,
+        });
+        interaction.notify({ type: 'progress', message: 'Waiting for authorization.' });
+
+        promptResponses.push(
+          await interaction.prompt({
+            type: 'manual_code',
+            message: 'Paste the authorization code',
+            placeholder: 'authorization code',
+            signal: manualCodeSignal,
+          }),
+          await interaction.prompt({
+            type: 'secret',
+            message: 'Enter provider secret',
+            placeholder: 'secret',
+            signal: secretSignal,
+          }),
+          await interaction.prompt({
+            type: 'select',
+            message: 'Choose a login method',
+            options: [
+              { id: 'chatgpt', label: 'ChatGPT account' },
+              { id: 'api-key', label: 'API key' },
+            ],
+            signal: selectSignal,
+          }),
+        );
+      });
+
+    await expect(
+      loginPiConductor({
+        cwd,
+        pi: { agentDir },
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        oauthCallbacks: callbacks,
+      }),
+    ).resolves.toMatchObject({
+      backend: 'pi',
+      provider: 'openai',
+      method: 'oauth',
+    });
+
+    expect(callbacks.onAuth).toHaveBeenCalledWith({
+      url: 'https://auth.example.test/authorize?state=copyable',
+      instructions: 'Open this URL on a device with a browser.',
+    });
+    expect(callbacks.onDeviceCode).toHaveBeenCalledWith({
+      userCode: 'ABCD-EFGH',
+      verificationUri: 'https://auth.example.test/device',
+      intervalSeconds: 5,
+      expiresInSeconds: 300,
+    });
+    expect(callbacks.onProgress).toHaveBeenCalledWith('Waiting for authorization.');
+    expect(callbacks.onManualCodeInput).toHaveBeenCalledWith({
+      message: 'Paste the authorization code',
+      placeholder: 'authorization code',
+      signal: manualCodeSignal,
+    });
+    expect(callbacks.onPrompt).toHaveBeenCalledWith({
+      type: 'secret',
+      message: 'Enter provider secret',
+      placeholder: 'secret',
+      signal: secretSignal,
+    });
+    expect(callbacks.onSelect).toHaveBeenCalledWith({
+      message: 'Choose a login method',
+      options: [
+        { id: 'chatgpt', label: 'ChatGPT account' },
+        { id: 'api-key', label: 'API key' },
+      ],
+      signal: selectSignal,
+    });
+    expect(promptResponses).toEqual([
+      'pasted-authorization-code',
+      'provider-secret',
+      'chatgpt',
+    ]);
+    expect(login).toHaveBeenCalledOnce();
   });
 
   it('reuses the persisted device ID across concurrent OpenAI OAuth logins', async () => {
