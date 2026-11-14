@@ -408,6 +408,27 @@ describe('worker session history', () => {
     );
   });
 
+  it('reads builtin Pi worker history from the saved clone path-hash', async () => {
+    const savedRepoRoot = join(tempRoot, 'saved-clone');
+    await mkdir(savedRepoRoot, { recursive: true });
+    const transcriptPath = await writePiAcpSessionMap({
+      runtime: 'builtin',
+      repoRoot: savedRepoRoot,
+    });
+
+    const result = await readHistory({ includeSourceFiles: true });
+
+    expect(result).toMatchObject({
+      status: 'supported',
+      messages: [
+        { role: 'user', text: 'Earlier worker request remains on the active branch.' },
+        { role: 'user', text: 'Pi ACP fixture user message.' },
+        { role: 'assistant', text: 'Pi ACP fixture assistant reply.' },
+      ],
+      sourceFiles: [transcriptPath],
+    });
+  });
+
   it('reads same-named builtin workers from their separate Issue maps', async () => {
     const issueOne = 654;
     const issueTwo = 655;
@@ -759,6 +780,7 @@ describe('worker session history', () => {
   async function readHistory(
     options: {
       conductorAgentId?: string;
+      githubRepo?: string;
       includeSourceFiles?: boolean;
       workerName?: string;
     } = {},
@@ -767,6 +789,7 @@ describe('worker session history', () => {
       repoRoot,
       conductorAgentId: options.conductorAgentId ?? CONDUCTOR_AGENT_ID,
       workerName: options.workerName ?? WORKER_NAME,
+      githubRepo: 'otolab/agents-ensemble',
       ...options,
     });
   }
@@ -779,6 +802,7 @@ describe('worker session history', () => {
       conductorAgentId?: string;
       issueNumber?: number;
       piRuntime?: 'builtin';
+      repoRoot?: string;
       workerName?: string;
     } = {},
   ): Promise<void> {
@@ -790,7 +814,7 @@ describe('worker session history', () => {
       version: 1,
       conductorAgentId,
       issueUrl: `https://github.com/otolab/agents-ensemble/issues/${issueNumber}`,
-      repoRoot,
+      repoRoot: workerSession.repoRoot ?? repoRoot,
       profile: {
         workers: [{ name: workerName, kind: 'implementer' }],
       },
@@ -821,9 +845,13 @@ describe('worker session history', () => {
       },
       updatedAt: 1_800_000_000_000,
     };
-    const path = resolveEnsemblePaths({ repoRoot }).sessionResumeStorePath(
-      conductorAgentId,
-    );
+    const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
+    const path = workerSession.repoRoot
+      ? paths.canonicalSessionResumeStorePath(
+          `https://github.com/otolab/agents-ensemble/issues/${issueNumber}`,
+          conductorAgentId,
+        )
+      : paths.sessionResumeStorePath(conductorAgentId);
     await mkdir(dirname(path), { recursive: true });
     await saveSessionResumeStore(path, resumeStore);
   }
@@ -892,6 +920,7 @@ describe('worker session history', () => {
       writeTranscript?: boolean;
       runtime?: 'builtin';
       legacyMap?: boolean;
+      repoRoot?: string;
     } = {},
   ): Promise<string> {
     const issueNumber = options.issueNumber ?? ISSUE_NUMBER;
@@ -906,9 +935,12 @@ describe('worker session history', () => {
         acpSessionId: sessionId,
         acpCwd,
         piRuntime: 'builtin',
+        ...(options.repoRoot ? { repoRoot: options.repoRoot } : {}),
       });
     }
-    const paths = resolveEnsemblePaths({ repoRoot });
+    const paths = resolveEnsemblePaths({
+      repoRoot: options.repoRoot ?? repoRoot,
+    });
     const transcriptPath =
       options.runtime === 'builtin'
         ? join(

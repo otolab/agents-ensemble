@@ -3,14 +3,13 @@ import chalk, { Chalk } from 'chalk';
 import {
   CONDUCTOR_MESSAGE_PAGE_DEFAULT_LIMIT,
   CONDUCTOR_PROVIDER_HISTORY_LIMIT,
-  findSessionResumeStore,
+  findSessionResumeStoreBySelector,
   getWorkerSessionHistoryReaderSupport,
   harnessPhaseFromLegacyLifecycle,
   listConductorProviderHistory,
-  listLocatedSessionResumeStores,
+  listLocatedSessionResumeStoresPage,
   loadOpenQuestionsStore,
   loadSessionStateStore,
-  parseIssueUrl,
   readWorkerSessionHistory,
   sessionSnapshotPaths,
   type ConductorBackend,
@@ -40,6 +39,7 @@ export interface SessionListResult {
   dataAsOf: string;
   total: number;
   sessions: SessionListEntry[];
+  nextCursor?: string;
 }
 
 export interface SessionShowResult {
@@ -84,49 +84,50 @@ export type SessionWorkerMessagesResult = WorkerSessionHistoryResult;
 
 export async function listSavedSessions(input: {
   repoRoot: string;
+  githubRepo?: string;
   issueUrl?: string;
+  conductorAgentId?: string;
+  limit?: number;
+  cursor?: string;
 }): Promise<SessionListResult> {
   const repoRoot = resolve(input.repoRoot);
-  const issueFilter = input.issueUrl ? issueKey(input.issueUrl) : undefined;
-  const locatedStores = await listLocatedSessionResumeStores(repoRoot);
-  const sessions = locatedStores
-    .filter(({ resumeStore }) => resolve(resumeStore.repoRoot) === repoRoot)
-    .filter(
-      ({ resumeStore }) =>
-        issueFilter === undefined ||
-        issueKeyOrUndefined(resumeStore.issueUrl) === issueFilter,
-    )
-    .map(({ resumeStore, location }) =>
-      summarizeSession(resumeStore, location),
-    )
-    .sort(
-      (left, right) =>
-        right.updatedAt - left.updatedAt ||
-        left.conductorAgentId.localeCompare(right.conductorAgentId),
-    );
+  const page = await listLocatedSessionResumeStoresPage(repoRoot, {
+    githubRepo: input.githubRepo,
+    issueUrl: input.issueUrl,
+    conductorAgentId: input.conductorAgentId,
+    limit: input.limit,
+    cursor: input.cursor,
+  });
+  const sessions = page.sessions.map(({ resumeStore, location }) =>
+    summarizeSession(resumeStore, location),
+  );
 
   return {
     repoRoot,
     dataAsOf: new Date().toISOString(),
-    total: sessions.length,
+    total: page.total,
     sessions,
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
   };
 }
 
 export async function showSavedSession(input: {
   repoRoot: string;
   conductorAgentId: string;
+  githubRepo?: string;
+  issueUrl?: string;
 }): Promise<SessionShowResult> {
   const repoRoot = resolve(input.repoRoot);
   const conductorAgentId = requireNonEmpty(
     input.conductorAgentId,
     'conductorAgentId',
   );
-  const located = await findSessionResumeStore(repoRoot, conductorAgentId);
-  if (
-    !located ||
-    resolve(located.resumeStore.repoRoot) !== repoRoot
-  ) {
+  const located = await findSessionResumeStoreBySelector(repoRoot, {
+    githubRepo: input.githubRepo,
+    issueUrl: input.issueUrl,
+    conductorAgentId,
+  });
+  if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
 
@@ -161,17 +162,23 @@ export async function readSavedSessionWorkerMessages(input: {
   repoRoot: string;
   conductorAgentId: string;
   workerName: string;
+  githubRepo?: string;
+  issueUrl?: string;
 }): Promise<SessionWorkerMessagesResult> {
   return readWorkerSessionHistory({
     repoRoot: input.repoRoot,
     conductorAgentId: input.conductorAgentId,
     workerName: input.workerName,
+    githubRepo: input.githubRepo,
+    issueUrl: input.issueUrl,
   });
 }
 
 export async function listSavedSessionMessages(input: {
   repoRoot: string;
   conductorAgentId: string;
+  githubRepo?: string;
+  issueUrl?: string;
   limit?: number;
   order?: 'asc' | 'desc';
   cursor?: string;
@@ -200,11 +207,12 @@ export async function listSavedSessionMessages(input: {
       ? undefined
       : requireNonEmpty(input.cursor, 'cursor');
 
-  const located = await findSessionResumeStore(repoRoot, conductorAgentId);
-  if (
-    !located ||
-    resolve(located.resumeStore.repoRoot) !== repoRoot
-  ) {
+  const located = await findSessionResumeStoreBySelector(repoRoot, {
+    githubRepo: input.githubRepo,
+    issueUrl: input.issueUrl,
+    conductorAgentId,
+  });
+  if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
 
@@ -214,8 +222,17 @@ export async function listSavedSessionMessages(input: {
     backend,
     conductorAgentId,
     cwd: resumeStore.conductorCwd ?? resumeStore.repoRoot,
-    repoRoot: resumeStore.repoRoot,
+    repoRoot,
     issueUrl: resumeStore.issueUrl,
+    ...(backend === 'pi'
+      ? {
+          fallbackCwds: [
+            resumeStore.conductorCwd,
+            resumeStore.repoRoot,
+          ].filter((cwd): cwd is string => Boolean(cwd)),
+          fallbackRepoRoots: [resumeStore.repoRoot],
+        }
+      : {}),
     ...(resumeStore.cursorBootstrapRunId
       ? { cursorBootstrapRunId: resumeStore.cursorBootstrapRunId }
       : {}),
@@ -239,7 +256,7 @@ export function formatSessionListText(result: SessionListResult): string {
   }
 
   const color = outputChalk();
-  return result.sessions
+  const text = result.sessions
     .map((session) =>
       [
         `${color.bold(session.conductorAgentId)} (${color.cyan(session.conductorBackend)})`,
@@ -252,6 +269,9 @@ export function formatSessionListText(result: SessionListResult): string {
       ].join('\n'),
     )
     .join('\n\n');
+  return result.nextCursor
+    ? `${text}\n\n次のページ: --cursor ${result.nextCursor}`
+    : text;
 }
 
 export function formatSessionShowText(result: SessionShowResult): string {
@@ -436,19 +456,6 @@ async function loadSessionStateSummary(
     found: false,
     summary: null,
   };
-}
-
-function issueKey(issueUrl: string): string {
-  const issue = parseIssueUrl(issueUrl);
-  return `${issue.owner.toLowerCase()}/${issue.repo.toLowerCase()}#${issue.number}`;
-}
-
-function issueKeyOrUndefined(issueUrl: string): string | undefined {
-  try {
-    return issueKey(issueUrl);
-  } catch {
-    return undefined;
-  }
 }
 
 function requireNonEmpty(value: string, name: string): string {

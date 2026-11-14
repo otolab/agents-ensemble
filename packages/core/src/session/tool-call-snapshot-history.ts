@@ -54,12 +54,20 @@ export async function loadToolCallSnapshotHistory(input: {
   repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
+  fallbackRepoRoots?: readonly string[];
   now?: number;
 }): Promise<LoadToolCallSnapshotHistoryResult> {
   const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
   const canonicalPath = toolCallSnapshotHistoryPath(input);
   const fallbackPaths = [
     paths.toolCallHistoryPath(input.conductorAgentId),
+    ...(input.fallbackRepoRoots ?? []).flatMap((repoRoot) => {
+      const fallback = resolveEnsemblePaths({ repoRoot });
+      return [
+        fallback.toolCallHistoryPath(input.conductorAgentId),
+        fallback.legacyToolCallHistoryPath(input.conductorAgentId),
+      ];
+    }),
     paths.legacyToolCallHistoryPath(input.conductorAgentId),
   ].filter((path) => path !== canonicalPath);
   const now = input.now ?? Date.now();
@@ -68,7 +76,7 @@ export async function loadToolCallSnapshotHistory(input: {
   const canonical = await readToolCallHistoryFile(canonicalPath, now);
   if (canonical.found) return canonical.result;
 
-  for (const fallbackPath of fallbackPaths) {
+  for (const fallbackPath of new Set(fallbackPaths)) {
     const fallback = await readToolCallHistoryFile(fallbackPath, now);
     if (!fallback.found) continue;
     if (fallback.result.entries.length > 0) {

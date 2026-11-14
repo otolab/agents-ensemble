@@ -18,7 +18,7 @@ import {
   type EnsemblePaths,
 } from '../ensemble-paths.js';
 import {
-  findSessionResumeStore,
+  findSessionResumeStoreBySelector,
   harnessPhaseFromLegacyLifecycle,
   type LocatedSessionResumeStore,
   type SessionResumeStore,
@@ -105,6 +105,8 @@ export interface ExportSessionBundleResult {
 export interface ExportSessionBundleInput {
   repoRoot: string;
   conductorAgentId: string;
+  githubRepo?: string;
+  issueUrl?: string;
   outputDirectory: string;
   ensembleVersion: string;
   cliVersion: string;
@@ -152,11 +154,12 @@ export async function exportSessionBundle(
     throw new Error('ensembleVersion and cliVersion must be non-empty.');
   }
 
-  const located = await findSessionResumeStore(repoRoot, conductorAgentId);
-  if (
-    !located ||
-    resolve(located.resumeStore.repoRoot) !== repoRoot
-  ) {
+  const located = await findSessionResumeStoreBySelector(repoRoot, {
+    githubRepo: input.githubRepo,
+    issueUrl: input.issueUrl,
+    conductorAgentId,
+  });
+  if (!located) {
     throw new Error(`No saved session found for ${conductorAgentId}.`);
   }
 
@@ -254,6 +257,8 @@ async function writeSessionBundle(input: {
         repoRoot,
         conductorAgentId,
         workerName: name,
+        githubRepo: options.githubRepo,
+        issueUrl: options.issueUrl,
         includeSourceFiles: true,
       });
     } catch {
@@ -323,6 +328,8 @@ async function writeSessionBundle(input: {
   await exportToolCallHistory({
     paths,
     conductorAgentId,
+    issueUrl: resumeStore.issueUrl,
+    fallbackRepoRoot: resumeStore.repoRoot,
     include: options.includeToolCalls ?? false,
     outputDirectory,
     files,
@@ -404,6 +411,11 @@ async function exportPiConductorTranscript(input: {
       cwd,
       repoRoot: input.repoRoot,
       issueUrl: input.resumeStore.issueUrl,
+      fallbackRepoRoots: [input.resumeStore.repoRoot],
+      fallbackCwds: [
+        input.resumeStore.conductorCwd,
+        input.resumeStore.repoRoot,
+      ].filter((savedCwd): savedCwd is string => Boolean(savedCwd)),
     });
   } catch {
     location = undefined;
@@ -510,6 +522,8 @@ async function exportSnapshotFile(input: {
 async function exportToolCallHistory(input: {
   paths: EnsemblePaths;
   conductorAgentId: string;
+  issueUrl: string;
+  fallbackRepoRoot: string;
   include: boolean;
   outputDirectory: string;
   files: SessionBundleFile[];
@@ -525,11 +539,20 @@ async function exportToolCallHistory(input: {
     });
     return;
   }
+  const fallbackPaths = resolveEnsemblePaths({
+    repoRoot: input.fallbackRepoRoot,
+  });
   await exportSnapshotFile({
     id: 'harness.toolCallSnapshots',
     candidates: [
+      input.paths.canonicalToolCallHistoryPath(
+        input.issueUrl,
+        input.conductorAgentId,
+      ),
       input.paths.toolCallHistoryPath(input.conductorAgentId),
+      fallbackPaths.toolCallHistoryPath(input.conductorAgentId),
       input.paths.legacyToolCallHistoryPath(input.conductorAgentId),
+      fallbackPaths.legacyToolCallHistoryPath(input.conductorAgentId),
     ],
     outputDirectory: input.outputDirectory,
     bundlePath: 'harness/session.tool-calls',

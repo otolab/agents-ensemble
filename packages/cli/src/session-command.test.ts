@@ -74,6 +74,36 @@ describe('ensemble session commands', () => {
     expect(result.stdout).toContain('without starting an agent');
   });
 
+  it('requires an explicit repository scope for id-based session reads', () => {
+    const missingScope = runCliExact([
+      'session',
+      'show',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+    ]);
+    expect(missingScope.status).toBe(1);
+    expect(missingScope.stderr).toContain(
+      'pass --github-repo or --issue-url',
+    );
+
+    const conflictingScope = runCliExact([
+      'session',
+      'show',
+      conductorAgentId,
+      '--repo-root',
+      repoRoot,
+      '--github-repo',
+      'other/repository',
+      '--issue-url',
+      ISSUE_URL,
+    ]);
+    expect(conflictingScope.status).toBe(1);
+    expect(conflictingScope.stderr).toContain(
+      'refer to different GitHub repositories',
+    );
+  });
+
   it('documents raw session export options and its secret warning', () => {
     const result = runCli(['session', 'export', '--help']);
 
@@ -527,6 +557,13 @@ describe('ensemble session commands', () => {
       }).piSessionsDir,
       { recursive: true, force: true },
     );
+    await rm(
+      resolveEnsemblePaths({
+        repoRoot,
+        userEnsembleRoot: userRoot,
+      }).canonicalPiSessionsDir(ISSUE_URL),
+      { recursive: true, force: true },
+    );
     const result = runCli([
       'session',
       'timeline',
@@ -750,7 +787,35 @@ describe('ensemble session commands', () => {
     expect(help).toContain('may contain secrets');
   });
 
-  it('lists and filters local session fixtures without exposing stored secrets', () => {
+  it('lists and filters local session fixtures without exposing stored secrets', async () => {
+    const secondAgentId = 'session-fixture-654';
+    const secondIssueUrl =
+      'https://github.com/otolab/agents-ensemble/issues/654';
+    const paths = resolveEnsemblePaths({
+      repoRoot,
+      userEnsembleRoot: userRoot,
+    });
+    const secondPath = paths.canonicalSessionResumeStorePath(
+      secondIssueUrl,
+      secondAgentId,
+    );
+    await mkdir(dirname(secondPath), { recursive: true });
+    await writeFile(
+      secondPath,
+      `${JSON.stringify({
+        version: 1,
+        conductorAgentId: secondAgentId,
+        issueUrl: secondIssueUrl,
+        repoRoot: join(tempRoot, 'another-clone'),
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        updatedAt: 1_800_000_000_010,
+      })}\n`,
+      'utf8',
+    );
+
     const result = runCli([
       'session',
       'list',
@@ -780,6 +845,40 @@ describe('ensemble session commands', () => {
     expect(result.stdout).not.toContain('SESSION_ENV_SECRET');
     expect(result.stdout).not.toContain('ACP_SESSION_SECRET');
 
+    const firstPage = runCli([
+      'session',
+      'list',
+      '--repo-root',
+      repoRoot,
+      '--github-repo',
+      'otolab/agents-ensemble',
+      '--limit',
+      '1',
+      '--json',
+    ]);
+    expect(firstPage.status).toBe(0);
+    const firstPageResult = JSON.parse(firstPage.stdout);
+    expect(firstPageResult.total).toBe(2);
+    expect(firstPageResult.sessions).toHaveLength(1);
+    expect(firstPageResult.nextCursor).toBeDefined();
+    const secondPage = runCli([
+      'session',
+      'list',
+      '--repo-root',
+      repoRoot,
+      '--github-repo',
+      'otolab/agents-ensemble',
+      '--limit',
+      '1',
+      '--cursor',
+      firstPageResult.nextCursor,
+      '--json',
+    ]);
+    expect(secondPage.status).toBe(0);
+    expect(JSON.parse(secondPage.stdout).sessions).toMatchObject([
+      { conductorAgentId: secondAgentId, issueUrl: secondIssueUrl },
+    ]);
+
     const unmatched = runCli([
       'session',
       'list',
@@ -791,6 +890,82 @@ describe('ensemble session commands', () => {
     ]);
     expect(unmatched.status).toBe(0);
     expect(JSON.parse(unmatched.stdout).total).toBe(0);
+  });
+
+  it('lists and reads canonical session data from another clone', async () => {
+    const otherClone = join(tempRoot, 'other-clone');
+    await mkdir(otherClone, { recursive: true });
+    const listed = runCli([
+      'session',
+      'list',
+      '--repo-root',
+      otherClone,
+      '--github-repo',
+      'otolab/agents-ensemble',
+      '--json',
+    ]);
+    expect(listed.status).toBe(0);
+    expect(JSON.parse(listed.stdout).sessions).toMatchObject([
+      {
+        conductorAgentId,
+        issueUrl: ISSUE_URL,
+        location: 'canonical-slug',
+      },
+    ]);
+
+    const shown = runCli([
+      'session',
+      'show',
+      conductorAgentId,
+      '--repo-root',
+      otherClone,
+      '--github-repo',
+      'otolab/agents-ensemble',
+      '--json',
+    ]);
+    expect(shown.status).toBe(0);
+    expect(JSON.parse(shown.stdout).session.conductorAgentId).toBe(
+      conductorAgentId,
+    );
+
+    const messages = runCli([
+      'session',
+      'messages',
+      conductorAgentId,
+      '--repo-root',
+      otherClone,
+      '--issue-url',
+      ISSUE_URL,
+      '--json',
+    ]);
+    expect(messages.status).toBe(0);
+    expect(JSON.parse(messages.stdout).messages).toHaveLength(1);
+
+    await writeResumeStore({
+      preset: 'pi',
+      acpCwd: WORKER_PI_CWD,
+      acpSessionId: WORKER_PI_SESSION_ID,
+      piRuntime: 'builtin',
+    });
+    await writePiAcpWorkerHistory({ runtime: 'builtin' });
+    const workerMessages = runCli([
+      'session',
+      'workers',
+      'messages',
+      conductorAgentId,
+      '--worker',
+      'implementer',
+      '--repo-root',
+      otherClone,
+      '--github-repo',
+      'otolab/agents-ensemble',
+      '--json',
+    ]);
+    expect(workerMessages.status).toBe(0);
+    expect(JSON.parse(workerMessages.stdout)).toMatchObject({
+      status: 'supported',
+      worker: 'implementer',
+    });
   });
 
   it('shows YAML paths and counts without printing free-text values', () => {
@@ -1244,7 +1419,11 @@ describe('ensemble session commands', () => {
     } = {},
   ): Promise<void> {
     const paths = resolveEnsemblePaths({ repoRoot, userEnsembleRoot: userRoot });
-    const path = paths.sessionResumeStorePath(conductorAgentId);
+    const issueUrl = options.issueUrl ?? ISSUE_URL;
+    const path = paths.canonicalSessionResumeStorePath(
+      issueUrl,
+      conductorAgentId,
+    );
     const preset = options.preset ?? 'custom';
     await mkdir(dirname(path), { recursive: true });
     await writeFile(
@@ -1256,7 +1435,7 @@ describe('ensemble session commands', () => {
           conductorBackend: options.conductorBackend ?? 'pi',
           conductorCwd,
           harnessSocketPath: join(tempRoot, 'missing-harness.sock'),
-          issueUrl: options.issueUrl ?? ISSUE_URL,
+          issueUrl,
           repoRoot,
           profile: {
             workers: [{ name: 'implementer', kind: 'implementer' }],
@@ -1445,7 +1624,7 @@ describe('ensemble session commands', () => {
     const sessionDir = resolveEnsemblePaths({
       repoRoot,
       userEnsembleRoot: userRoot,
-    }).piSessionsDir;
+    }).canonicalPiSessionsDir(ISSUE_URL);
     const manager = SessionManager.create(conductorCwd, sessionDir, {
       id: conductorAgentId,
     });
@@ -1538,6 +1717,23 @@ describe('ensemble session commands', () => {
   }
 
   function runCli(
+    args: string[],
+    extraEnv: Record<string, string> = {},
+  ) {
+    const idRead =
+      args[0] === 'session' &&
+      (['export', 'show', 'messages', 'timeline'].includes(args[1] ?? '') ||
+        (args[1] === 'workers' && args[2] === 'messages'));
+    const hasScope =
+      args.includes('--github-repo') || args.includes('--issue-url');
+    const argsWithScope =
+      idRead && !hasScope && !args.includes('--help')
+        ? [...args, '--github-repo', 'otolab/agents-ensemble']
+        : args;
+    return runCliExact(argsWithScope, extraEnv);
+  }
+
+  function runCliExact(
     args: string[],
     extraEnv: Record<string, string> = {},
   ) {
