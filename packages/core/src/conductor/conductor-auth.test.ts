@@ -170,7 +170,7 @@ describe('formatConductorAuthRecoveryHint', () => {
     expect(hint).not.toMatch(/ensemble auth logout →/);
   });
 
-  it('gives Pi users a provider-specific login and auth-file hint', () => {
+  it('gives Pi API-key users explicit TTY and non-TTY login routes', () => {
     const hint = formatConductorAuthRecoveryHint('agent-1', {
       backend: 'pi',
       provider: 'anthropic',
@@ -178,12 +178,38 @@ describe('formatConductorAuthRecoveryHint', () => {
     });
 
     expect(hint).toContain('provider=anthropic');
-    expect(hint).toContain('ensemble auth login --provider anthropic');
+    expect(hint).toContain(
+      'API key を使う場合は、TTY で `ensemble auth login --provider anthropic --api-key-prompt`',
+    );
+    expect(hint).toContain(
+      '非 TTY では `ensemble auth login --provider anthropic --api-key-stdin`',
+    );
+    expect(hint).toContain(
+      'OAuth を使う場合は TTY で `ensemble auth login --provider anthropic`',
+    );
     expect(hint).toContain('/tmp/ensemble-pi/auth.json');
     expect(hint).toContain('--resume agent-1');
     expect(hint).toContain('/reconnect');
     expect(hint).toContain('新しい operator message');
+    expect(hint).not.toContain('secret-value');
     expect(hint).not.toContain('ensemble auth logout');
+  });
+
+  it('does not send OpenAI API-key users to its default OAuth login route', () => {
+    const hint = formatConductorAuthRecoveryHint('agent-1', {
+      backend: 'pi',
+      provider: 'openai',
+    });
+
+    expect(hint).toContain(
+      'API key を使う場合は、TTY で `ensemble auth login --provider openai --api-key-prompt`',
+    );
+    expect(hint).toContain(
+      '非 TTY では `ensemble auth login --provider openai --api-key-stdin`',
+    );
+    expect(hint).toContain(
+      'OAuth を使う場合は TTY で `ensemble auth login --provider openai`',
+    );
   });
 
   it('allows a caller to replace the default issue resume instruction', () => {

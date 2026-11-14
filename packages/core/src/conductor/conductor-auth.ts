@@ -137,8 +137,11 @@ export function formatConductorAuthRecoveryHint(
       `認証設定を直した後、同じ TTY では /reconnect を試してください。再送されない場合や tool が始まっていた場合は状態を確認し、新しい operator message で未完了分を伝えてください。process 終了後は ensemble issue ... ${resume} で session を再開できます。`;
     return (
       `[auth] Pi 認証エラー（provider=${provider}）。` +
-      `ensemble auth login --provider ${provider} を実行するか、${agentDir}/auth.json または ` +
-      `環境変数 ${formatPiProviderEnvHint(provider)} を確認してください。` +
+      `API key を使う場合は、TTY で \`ensemble auth login --provider ${provider} --api-key-prompt\` ` +
+      `（非表示 prompt）を実行してください。非 TTY では \`ensemble auth login --provider ${provider} --api-key-stdin\` ` +
+      `に stdin から key を渡します。key を command line や hint に含めないでください。` +
+      `OAuth を使う場合は TTY で \`ensemble auth login --provider ${provider}\` を実行してください。` +
+      `${agentDir}/auth.json または request 時に使う環境変数 ${formatPiProviderEnvHint(provider)} も確認してください。` +
       resumeInstruction
     );
   }

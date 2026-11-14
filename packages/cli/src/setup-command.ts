@@ -58,7 +58,7 @@ export async function runSetupCommand(
 
   if (!input.isTTY) {
     throw new Error(
-      '`ensemble setup` は対話端末（TTY）で実行してください。CI / headless 環境では Pi が conductor の既定 backend です。user Pi `settings.json` に `defaultProvider` / `defaultModel` を設定してください（既定は `~/.ensemble/pi/settings.json`）。Cursor SDK を使う場合は `~/.ensemble/config.yaml` に `conductor.backend: cursor` を設定します。認証も手動で用意します。Pi は provider 固有の環境変数または user Pi `auth.json`（既定は `~/.ensemble/pi/auth.json`）、Cursor は `CURSOR_API_KEY` を使えます。`ensemble auth login` の対話 login にも TTY が必要です。詳細: ' +
+      '`ensemble setup` は対話端末（TTY）で実行してください。CI / headless 環境では Pi が conductor の既定 backend です。user Pi `settings.json` に `defaultProvider` / `defaultModel` を設定してください（既定は `~/.ensemble/pi/settings.json`）。Cursor SDK を使う場合は `~/.ensemble/config.yaml` に `conductor.backend: cursor` を設定します。認証も手動で用意します。Pi は provider 固有の環境変数または user Pi `auth.json`（既定は `~/.ensemble/pi/auth.json`）、Cursor は `CURSOR_API_KEY` を使えます。`ensemble auth login` の OAuth と TTY prompt には TTY が必要ですが、API key は `--api-key-stdin` から非対話で user `auth.json` に保存できます。詳細: ' +
         SETUP_GUIDE,
     );
   }
