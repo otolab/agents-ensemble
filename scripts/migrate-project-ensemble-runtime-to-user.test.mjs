@@ -70,6 +70,106 @@ test('dry-run inventories copy candidates, unresolved transcripts, and incomplet
   assert.equal(repoKey.length, 64);
 });
 
+test('invalid Issue Stores and YAML sidecars stay unresolved and are not copied', async () => {
+  const root = await makeRoot();
+  const { userRoot, sessionRoot } = root;
+  const invalidStoreId = 'invalid-store';
+  const invalidStorePath = join(sessionRoot, `${invalidStoreId}.json`);
+  const invalidStoreText = `${JSON.stringify({
+    conductorAgentId: invalidStoreId,
+    issueUrl,
+  })}\n`;
+  const sidecarId = 'invalid-sidecars';
+  const validStorePath = join(sessionRoot, `${sidecarId}.json`);
+  const validStoreText = `${JSON.stringify(
+    makeStore(sidecarId, issueUrl, '/old/clone'),
+  )}\n`;
+  const invalidQuestionsPath = join(
+    sessionRoot,
+    sidecarId,
+    'open-questions.yaml',
+  );
+  const invalidQuestionsText =
+    'version: 1\nsequence: 1\nopenQuestions:\n  - id: inq-1\n';
+  const invalidStatePath = join(
+    sessionRoot,
+    sidecarId,
+    'session-state.yaml',
+  );
+  const invalidStateText =
+    'version: 2\ncurrent:\n  statusLine: ""\n  reportedAt: 1\nhistory: []\n';
+
+  await mkdir(join(sessionRoot, sidecarId), { recursive: true });
+  await writeFile(invalidStorePath, invalidStoreText, 'utf8');
+  await writeFile(validStorePath, validStoreText, 'utf8');
+  await writeFile(invalidQuestionsPath, invalidQuestionsText, 'utf8');
+  await writeFile(invalidStatePath, invalidStateText, 'utf8');
+
+  const result = runMigration(root, { apply: true });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = await readManifest(root);
+  const storeEntry = findEntry(manifest, invalidStorePath);
+  const questionsEntry = findEntry(manifest, invalidQuestionsPath);
+  const stateEntry = findEntry(manifest, invalidStatePath);
+
+  assert.equal(storeEntry.disposition, 'unresolved');
+  assert.match(storeEntry.reason, /version/u);
+  assert.equal(questionsEntry.disposition, 'unresolved');
+  assert.match(questionsEntry.reason, /openQuestions\[0\]\.question/u);
+  assert.equal(stateEntry.disposition, 'unresolved');
+  assert.match(stateEntry.reason, /statusLine/u);
+  assert.ok(storeEntry.sourceSha256);
+  assert.ok(questionsEntry.sourceSha256);
+  assert.ok(stateEntry.sourceSha256);
+  assert.equal(
+    await readFile(invalidStorePath, 'utf8'),
+    invalidStoreText,
+  );
+  assert.equal(
+    await readFile(invalidQuestionsPath, 'utf8'),
+    invalidQuestionsText,
+  );
+  assert.equal(await readFile(invalidStatePath, 'utf8'), invalidStateText);
+  await assert.rejects(
+    readFile(
+      join(
+        userRoot,
+        'sessions',
+        'github.com',
+        'example',
+        'repo',
+        `${invalidStoreId}.json`,
+      ),
+    ),
+  );
+  await assert.rejects(
+    readFile(
+      join(
+        userRoot,
+        'sessions',
+        'github.com',
+        'example',
+        'repo',
+        sidecarId,
+        'open-questions.yaml',
+      ),
+    ),
+  );
+  await assert.rejects(
+    readFile(
+      join(
+        userRoot,
+        'sessions',
+        'github.com',
+        'example',
+        'repo',
+        sidecarId,
+        'session-state.yaml',
+      ),
+    ),
+  );
+});
+
 test('apply copies hash and checkout Issue data plus eligible watch bundles, then reruns as no-op', async () => {
   const root = await makeRoot();
   const { checkoutRoot, userRoot, repoKey, sessionRoot, operatorRoot } = root;
@@ -116,7 +216,7 @@ test('apply copies hash and checkout Issue data plus eligible watch bundles, the
   )}\n`;
   const hashSidecarText = 'version: 1\nsequence: 2\nopenQuestions: []\n';
   const projectSidecarText =
-    'version: 2\ncurrent:\n  statusLine: Migrated\nhistory: []\n';
+    'version: 2\ncurrent:\n  statusLine: Migrated\n  reportedAt: 10\nhistory: []\n';
   const projectToolCallsText = '{"worker":"project"}\n';
   const hashToolCallsText = '{"worker":"hash"}\n';
   const hashPiText = `${JSON.stringify({

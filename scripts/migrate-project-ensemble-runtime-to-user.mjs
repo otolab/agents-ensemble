@@ -36,6 +36,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import {
   basename,
@@ -57,6 +58,10 @@ const SESSION_SIDECARS = new Set([
   'session-state.yaml',
 ]);
 const WATCH_STATE_VERSION = 1;
+const coreRequire = createRequire(
+  new URL('../packages/core/package.json', import.meta.url),
+);
+let yamlParser;
 
 function usage() {
   process.stdout.write(
@@ -202,6 +207,371 @@ function parseIssueUrl(value) {
     slug: join('github.com', owner, repository),
     canonicalUrl: `https://github.com/${owner}/${repository}/issues/${number}`,
   };
+}
+
+function validateSessionResumeStore(value, expectedConductorAgentId) {
+  if (!value || typeof value !== 'object') {
+    return 'SessionResumeStore is not an object.';
+  }
+  const record = value;
+  if (record.version !== 1) {
+    return `Unsupported SessionResumeStore version: ${String(record.version)}.`;
+  }
+  if (
+    typeof record.conductorAgentId !== 'string' ||
+    record.conductorAgentId !== expectedConductorAgentId ||
+    !isSafePathSegment(record.conductorAgentId)
+  ) {
+    return 'SessionResumeStore conductorAgentId does not match its filename.';
+  }
+  if (
+    record.conductorBackend !== undefined &&
+    record.conductorBackend !== 'cursor' &&
+    record.conductorBackend !== 'pi'
+  ) {
+    return 'SessionResumeStore conductorBackend is invalid.';
+  }
+  if (
+    record.createdHarnessCliVersion !== undefined &&
+    typeof record.createdHarnessCliVersion !== 'string'
+  ) {
+    return 'SessionResumeStore createdHarnessCliVersion is invalid.';
+  }
+  if (typeof record.issueUrl !== 'string' || !parseIssueUrl(record.issueUrl)) {
+    return 'SessionResumeStore issueUrl is not a valid GitHub Issue URL.';
+  }
+  if (typeof record.repoRoot !== 'string') {
+    return 'SessionResumeStore repoRoot is invalid.';
+  }
+  if (!record.profile || typeof record.profile !== 'object') {
+    return 'SessionResumeStore profile is invalid.';
+  }
+  if (!Array.isArray(record.openQuestions)) {
+    return 'SessionResumeStore openQuestions is invalid.';
+  }
+  if (typeof record.sequence !== 'number') {
+    return 'SessionResumeStore sequence is invalid.';
+  }
+  if (!record.workers || typeof record.workers !== 'object') {
+    return 'SessionResumeStore workers is invalid.';
+  }
+  if (
+    record.mcpConfigDigest !== undefined &&
+    typeof record.mcpConfigDigest !== 'string'
+  ) {
+    return 'SessionResumeStore mcpConfigDigest is invalid.';
+  }
+  if (
+    record.ensembleConfigDigest !== undefined &&
+    typeof record.ensembleConfigDigest !== 'string'
+  ) {
+    return 'SessionResumeStore ensembleConfigDigest is invalid.';
+  }
+  if (
+    record.acpModelConfigDigest !== undefined &&
+    (typeof record.acpModelConfigDigest !== 'string' ||
+      !/^[a-f0-9]{64}$/u.test(record.acpModelConfigDigest))
+  ) {
+    return 'SessionResumeStore acpModelConfigDigest is invalid.';
+  }
+  if (
+    record.ensembleConfigDigestScheme !== undefined &&
+    record.ensembleConfigDigestScheme !== 'full' &&
+    record.ensembleConfigDigestScheme !== 'resume-feasibility'
+  ) {
+    return 'SessionResumeStore ensembleConfigDigestScheme is invalid.';
+  }
+  if (
+    record.ensembleConfigDigestScheme === 'resume-feasibility' &&
+    record.ensembleConfigDigest === undefined
+  ) {
+    return 'SessionResumeStore resume-feasibility scheme requires ensembleConfigDigest.';
+  }
+  for (const [field, expectedType] of [
+    ['lazyWorkers', 'boolean'],
+    ['cursorBootstrapComplete', 'boolean'],
+  ]) {
+    if (
+      record[field] !== undefined &&
+      typeof record[field] !== expectedType
+    ) {
+      return `SessionResumeStore ${field} is invalid.`;
+    }
+  }
+  for (const field of [
+    'harnessSocketPath',
+    'conductorCwd',
+    'cursorBootstrapRunId',
+  ]) {
+    if (
+      record[field] !== undefined &&
+      (typeof record[field] !== 'string' ||
+        record[field].trim() === '')
+    ) {
+      return `SessionResumeStore ${field} is invalid.`;
+    }
+  }
+  if (
+    record.lifecycle !== undefined &&
+    !['closed', 'exited', 'interrupted', 'unknown'].includes(record.lifecycle)
+  ) {
+    return 'SessionResumeStore lifecycle is invalid.';
+  }
+  if (
+    record.harnessPhase !== undefined &&
+    !['running', 'idle', 'close', 'abort', 'exit'].includes(
+      record.harnessPhase,
+    )
+  ) {
+    return 'SessionResumeStore harnessPhase is invalid.';
+  }
+  if (
+    record.modifiedAt !== undefined &&
+    (typeof record.modifiedAt !== 'number' ||
+      !Number.isFinite(record.modifiedAt))
+  ) {
+    return 'SessionResumeStore modifiedAt is invalid.';
+  }
+  for (const [name, worker] of Object.entries(record.workers)) {
+    if (!worker || typeof worker !== 'object') {
+      return `SessionResumeStore worker ${name} is invalid.`;
+    }
+    if (typeof worker.acpSessionId !== 'string') {
+      return `SessionResumeStore worker ${name} acpSessionId is invalid.`;
+    }
+    const acpSpawn = worker.acpSpawn;
+    if (acpSpawn === undefined || acpSpawn === null) continue;
+    if (
+      typeof acpSpawn !== 'object' ||
+      typeof acpSpawn.preset !== 'string' ||
+      typeof acpSpawn.command !== 'string' ||
+      !Array.isArray(acpSpawn.args) ||
+      acpSpawn.args.some((arg) => typeof arg !== 'string')
+    ) {
+      return `SessionResumeStore worker ${name} acpSpawn is invalid.`;
+    }
+    if (
+      (acpSpawn.piRuntime !== undefined &&
+        acpSpawn.piRuntime !== 'builtin' &&
+        acpSpawn.piRuntime !== 'byo') ||
+      (acpSpawn.modelTag !== undefined &&
+        typeof acpSpawn.modelTag !== 'string') ||
+      (acpSpawn.model !== undefined &&
+        (typeof acpSpawn.model !== 'string' || acpSpawn.model.length === 0)) ||
+      (acpSpawn.reasoning !== undefined &&
+        (typeof acpSpawn.reasoning !== 'string' ||
+          acpSpawn.reasoning.length === 0)) ||
+      (acpSpawn.cursorFast !== undefined &&
+        typeof acpSpawn.cursorFast !== 'boolean')
+    ) {
+      return `SessionResumeStore worker ${name} acpSpawn options are invalid.`;
+    }
+    for (const field of ['modelProviderDigest', 'envDigest']) {
+      if (
+        acpSpawn[field] !== undefined &&
+        (typeof acpSpawn[field] !== 'string' ||
+          !/^[a-f0-9]{64}$/u.test(acpSpawn[field]))
+      ) {
+        return `SessionResumeStore worker ${name} acpSpawn ${field} is invalid.`;
+      }
+    }
+    if (acpSpawn.env !== undefined) {
+      if (
+        !isRecord(acpSpawn.env) ||
+        Object.values(acpSpawn.env).some((entry) => typeof entry !== 'string')
+      ) {
+        return `SessionResumeStore worker ${name} acpSpawn env is invalid.`;
+      }
+      if (
+        Object.keys(acpSpawn.env).length > 0 &&
+        acpSpawn.envDigest !== undefined
+      ) {
+        return `SessionResumeStore worker ${name} acpSpawn has both env and envDigest.`;
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseYamlDocument(source) {
+  yamlParser ??= coreRequire('js-yaml');
+  return yamlParser.load(source);
+}
+
+function validateSessionSidecar(name, source) {
+  let value;
+  try {
+    value = parseYamlDocument(source);
+  } catch (error) {
+    return `YAML parse failed: ${error.message}`;
+  }
+  try {
+    if (name === 'open-questions.yaml') {
+      validateOpenQuestionsDocument(value);
+    } else {
+      validateSessionStateDocument(value);
+    }
+  } catch (error) {
+    return error.message;
+  }
+  return undefined;
+}
+
+function validateOpenQuestionsDocument(value) {
+  const record = requireRecord(value, 'open questions document');
+  if (record.version !== 1) {
+    throw new Error(`Unsupported open questions YAML version: ${record.version}`);
+  }
+  if (!Number.isSafeInteger(record.sequence) || record.sequence < 0) {
+    throw new Error('Invalid open questions YAML sequence.');
+  }
+  if (!Array.isArray(record.openQuestions)) {
+    throw new Error('Invalid open questions YAML openQuestions.');
+  }
+  const ids = new Set();
+  let highestSequence = 0;
+  for (const [index, question] of record.openQuestions.entries()) {
+    const prefix = `openQuestions[${index}]`;
+    const item = requireRecord(question, prefix);
+    requireString(item.id, `${prefix}.id`);
+    const sequenceMatch = /^inq-([1-9]\d*)$/u.exec(item.id);
+    const sequence = sequenceMatch ? Number(sequenceMatch[1]) : undefined;
+    if (sequence !== undefined && !Number.isSafeInteger(sequence)) {
+      throw new Error(`Invalid open questions YAML ${prefix}.id.`);
+    }
+    if (ids.has(item.id)) {
+      throw new Error(`Invalid open questions YAML duplicate id ${item.id}.`);
+    }
+    ids.add(item.id);
+    if (sequence !== undefined) highestSequence = Math.max(highestSequence, sequence);
+    requireString(item.question, `${prefix}.question`);
+    if (!['yes_no', 'text', 'choice'].includes(item.responseType)) {
+      throw new Error(`Invalid open questions YAML ${prefix}.responseType.`);
+    }
+    if (!['open', 'answered'].includes(item.status)) {
+      throw new Error(`Invalid open questions YAML ${prefix}.status.`);
+    }
+    if (!['conductor', 'max_turns'].includes(item.source)) {
+      throw new Error(`Invalid open questions YAML ${prefix}.source.`);
+    }
+    if (typeof item.askedAt !== 'number' || !Number.isFinite(item.askedAt)) {
+      throw new Error(`Invalid open questions YAML ${prefix}.askedAt.`);
+    }
+    for (const field of [
+      'context',
+      'answer',
+      'selectedChoice',
+      'sourceMessage',
+      'rationale',
+      'relatedPermissionId',
+    ]) {
+      if (item[field] !== undefined && typeof item[field] !== 'string') {
+        throw new Error(`Invalid open questions YAML ${prefix}.${field}.`);
+      }
+    }
+    if (
+      item.assent !== undefined &&
+      !['yes', 'no', 'unclear'].includes(item.assent)
+    ) {
+      throw new Error(`Invalid open questions YAML ${prefix}.assent.`);
+    }
+    if (
+      item.approved !== undefined &&
+      typeof item.approved !== 'boolean'
+    ) {
+      throw new Error(`Invalid open questions YAML ${prefix}.approved.`);
+    }
+    if (
+      item.answeredAt !== undefined &&
+      (typeof item.answeredAt !== 'number' ||
+        !Number.isFinite(item.answeredAt))
+    ) {
+      throw new Error(`Invalid open questions YAML ${prefix}.answeredAt.`);
+    }
+    if (
+      item.answeredBy !== undefined &&
+      !['operator', 'conductor'].includes(item.answeredBy)
+    ) {
+      throw new Error(`Invalid open questions YAML ${prefix}.answeredBy.`);
+    }
+    if (item.choices !== undefined) {
+      if (!Array.isArray(item.choices)) {
+        throw new Error(`Invalid open questions YAML ${prefix}.choices.`);
+      }
+      for (const [choiceIndex, choice] of item.choices.entries()) {
+        const choiceRecord = requireRecord(
+          choice,
+          `${prefix}.choices[${choiceIndex}]`,
+        );
+        requireString(choiceRecord.id, `${prefix}.choices[${choiceIndex}].id`);
+        requireString(
+          choiceRecord.label,
+          `${prefix}.choices[${choiceIndex}].label`,
+        );
+      }
+    }
+  }
+  if (highestSequence > record.sequence) {
+    throw new Error('Invalid open questions YAML sequence is behind its question IDs.');
+  }
+}
+
+function validateSessionStateDocument(value) {
+  const record = requireRecord(value, 'session state document');
+  if (record.version === 1) {
+    validateSessionStatusLine(record, 'session state');
+    return;
+  }
+  if (record.version !== 2) {
+    throw new Error(`Unsupported session state YAML version: ${record.version}`);
+  }
+  const current = validateSessionStatusLine(record.current, 'session state current');
+  if (!Array.isArray(record.history)) {
+    throw new Error('Invalid session state YAML history.');
+  }
+  if (record.history.length > 50) {
+    throw new Error('Invalid session state YAML history exceeds count limit.');
+  }
+  const history = record.history.map((line, index) =>
+    validateSessionStatusLine(line, `session state history[${index}]`),
+  );
+  const normalized = { current, history };
+  const yaml = coreRequire('js-yaml');
+  const serialized = `${yaml.dump(
+    { version: 2, ...normalized },
+    { lineWidth: 120 },
+  )}\n`;
+  if (Buffer.byteLength(serialized, 'utf8') > 16 * 1024) {
+    throw new Error('Invalid session state YAML document exceeds size limit.');
+  }
+}
+
+function validateSessionStatusLine(value, field) {
+  const record = requireRecord(value, field);
+  if (typeof record.statusLine !== 'string') {
+    throw new Error(`Invalid ${field} statusLine.`);
+  }
+  const statusLine = record.statusLine.trim();
+  if (
+    !statusLine ||
+    /[\r\n]/u.test(statusLine) ||
+    Array.from(statusLine).length > 80
+  ) {
+    throw new Error(`Invalid ${field} statusLine.`);
+  }
+  if (typeof record.reportedAt !== 'number' || !Number.isFinite(record.reportedAt)) {
+    throw new Error(`Invalid ${field} reportedAt.`);
+  }
+  return { statusLine, reportedAt: record.reportedAt };
+}
+
+function requireRecord(value, field) {
+  if (!isRecord(value)) throw new Error(`Invalid ${field}.`);
+  return value;
+}
+
+function requireString(value, field) {
+  if (typeof value !== 'string') throw new Error(`Invalid ${field}.`);
 }
 
 function sha256(bytes) {
@@ -663,16 +1033,18 @@ async function scanSessionDirectory({
           });
           continue;
         }
-        const issue =
-          isRecord(value) &&
-          value.conductorAgentId === conductorAgentId &&
-          isSafePathSegment(conductorAgentId)
-            ? parseIssueUrl(value.issueUrl)
-            : undefined;
+        const schemaError = validateSessionResumeStore(
+          value,
+          conductorAgentId,
+        );
+        const issue = schemaError
+          ? undefined
+          : parseIssueUrl(value.issueUrl);
         addStoreCandidate(storeIndex, repoKey, conductorAgentId, {
           issue,
           source,
           sourceSha256: sourceInfo.sha,
+          reason: schemaError,
         });
         if (!issue) {
           addManifestEntry(manifest, {
@@ -680,10 +1052,13 @@ async function scanSessionDirectory({
             kind: 'session-resume-store',
             disposition: 'unresolved',
             reason:
-              'A matching conductorAgentId and valid GitHub Issue URL are required to prove the destination slug.',
+              schemaError ??
+              'A valid GitHub Issue URL is required to prove the destination slug.',
             sourceSha256: sourceInfo.sha,
             recovery:
-              'Keep the source unchanged. Supply a valid Store whose issueUrl identifies one canonical GitHub repository, then rerun.',
+              schemaError
+                ? 'Keep the source unchanged. Repair the SessionResumeStore schema, then rerun the migration.'
+                : 'Keep the source unchanged. Supply a valid Store whose issueUrl identifies one canonical GitHub repository, then rerun.',
             provenance,
             evidence: {
               conductorAgentId,
@@ -904,6 +1279,28 @@ async function processLinkedSessionData({
         provenance,
       );
       if (!sourceInfo) continue;
+      const validationError = validateSessionSidecar(
+        sidecar.name,
+        sourceInfo.bytes.toString('utf8'),
+      );
+      if (validationError) {
+        addManifestEntry(manifest, {
+          source: sidecarPath,
+          kind: sidecar.name,
+          disposition: 'unresolved',
+          reason: validationError,
+          sourceSha256: sourceInfo.sha,
+          recovery:
+            'Keep the source unchanged. Repair the YAML document to match its session sidecar schema, then rerun the migration.',
+          provenance: { ...provenance, conductorAgentId },
+          evidence: {
+            conductorAgentId,
+            canonicalSlug: evidence.slug,
+            sessionStoreSources: evidence.storeSources,
+          },
+        });
+        continue;
+      }
       const destination = join(
         userRoot,
         'sessions',
@@ -1364,27 +1761,48 @@ async function scanCanonicalSessionStoreEvidence({
         } catch {
           value = undefined;
         }
-        const issue =
-          isRecord(value) &&
-          value.conductorAgentId === conductorAgentId &&
-          isSafePathSegment(conductorAgentId)
-            ? parseIssueUrl(value.issueUrl)
-            : undefined;
+        const schemaError = validateSessionResumeStore(
+          value,
+          conductorAgentId,
+        );
+        const parsedIssue = schemaError
+          ? undefined
+          : parseIssueUrl(value.issueUrl);
         const expectedSlug = join(
           'github.com',
           ownerEntry.name.toLowerCase(),
           repositoryEntry.name.toLowerCase(),
         );
+        const pathMatchesIssue =
+          ownerEntry.name === ownerEntry.name.toLowerCase() &&
+          repositoryEntry.name === repositoryEntry.name.toLowerCase() &&
+          parsedIssue?.slug === expectedSlug;
+        const issue = pathMatchesIssue ? parsedIssue : undefined;
+        const reason =
+          schemaError ??
+          (pathMatchesIssue
+            ? undefined
+            : 'Canonical SessionResumeStore path does not match its Issue URL.');
         addStoreCandidate(storeIndex, '*', conductorAgentId, {
-          issue:
-            ownerEntry.name === ownerEntry.name.toLowerCase() &&
-            repositoryEntry.name === repositoryEntry.name.toLowerCase() &&
-            issue?.slug === expectedSlug
-              ? issue
-              : undefined,
+          issue,
           source,
           sourceSha256: sourceInfo.sha,
+          reason,
         });
+        if (reason) {
+          unresolvedEntry(
+            manifest,
+            source,
+            'canonical-session-store-evidence',
+            reason,
+            {
+              sourceType: 'canonical-slug-evidence',
+              conductorAgentId,
+              canonicalSlug: expectedSlug,
+            },
+          );
+          manifest.entries.at(-1).sourceSha256 = sourceInfo.sha;
+        }
       }
     }
   }
