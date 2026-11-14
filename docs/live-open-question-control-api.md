@@ -54,7 +54,7 @@ list tool の `structuredContent` は UDS の `result`（`{ "questions": [...] }
 
 ## Operator-agent watch state の欠損・破損と復旧
 
-watch pool は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。旧 project `.ensemble/operator-agent/watch-state.json` は読み込み時に移行します。
+watch pool は、選択した SessionResumeStore がすべて canonical slug にあり repository slug が一意に決まる場合は `~/.ensemble/operator-agent/github.com/<owner>/<repo>/watch-state.json`、それ以外は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch 登録、session ごとの cursor、未 dispatch report を atomic に保存します。旧 project `.ensemble/operator-agent/watch-state.json` は読み込み時に移行します。
 
 - **state file が存在しない場合:** empty state として起動し、watch pool は空です。保存済み watch 登録・cursor・未 dispatch report は復元されません。監視を再開するには対象 session ごとに `register_session_watch` を実行してください。cursor がないため、再登録後の最初の成功した snapshot は既存 Open Question ID の silent baseline になります。その snapshot にすでに含まれる質問（state 欠損中に追加された質問も含む）は新規通知として replay されません。baseline 後に追加された ID は通常どおり通知されます。
 - **JSON または state schema が不正な場合:** operator-agent の初期化は失敗し、empty state へ黙って置き換えません。保存ファイルを退避してから、有効な backup を戻すか、version と必須 field を修復して再起動してください。state を意図的に破棄する場合も、まず必要ならコピーを保全してください。ファイルを取り除いて再起動すると empty state から始まり、上記の再登録と silent baseline が必要です。
@@ -62,11 +62,11 @@ watch pool は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch
 
 ## 複数の保存先に同じ SessionResumeStore がある場合
 
-Issue session の通常保存先は canonical GitHub slug 配下（`~/.ensemble/sessions/github.com/<owner>/<repo>/`）です。SessionResumeStore、Open Questions / session-state YAML、tool-call snapshot、Pi transcript をこの location に保存します。clone ごとに異なる path-hash location と project `.ensemble/sessions/` は、slug 側に対象データがない場合の読み取り fallback です。別 clone からも Issue URL と slug を使って同じ session を見つけられます。
+Issue session の通常保存先は canonical GitHub slug 配下（`~/.ensemble/sessions/github.com/<owner>/<repo>/`）です。SessionResumeStore、Open Questions / session-state YAML、tool-call snapshot、Pi transcript をこの location に保存します。別 clone からも Issue URL と slug を使って同じ session を見つけられます。
 
-同じ `conductorAgentId` の ResumeStore が複数 location にある場合は canonical slug、現在 clone の path-hash、保存時 clone の path-hash、project `.ensemble/sessions/` の順で候補を選びます。`repoRoot` の一致は slug 側の選択条件にしません。slug と hash が重複していれば slug 側を選び、`harnessSocketPath` もその Store から読みます。Open Questions / session-state YAML、tool-call 履歴、Pi transcript も slug を優先して読み、clone-local hash と legacy CWD は fallback として探します。
+ResumeStore の探索は全ローカル canonical slug を `repoRoot` の一致条件なしで調べた後、現在 clone の path-hash、現在 clone の project `.ensemble/sessions/` を調べます。保存時 clone の path-hash は ResumeStore の候補には含めません。同じ Issue と `conductorAgentId` の候補が複数ある場合は canonical slug、現在 clone の path-hash、project legacy の順で選び、同じ保存先種別では `updatedAt` が新しい Store を優先します。slug と hash が重複していれば slug 側を選び、`harnessSocketPath` もその Store から読みます。選択後の Open Questions / session-state YAML、tool-call 履歴、Pi transcript は slug を優先し、現在 clone と保存時 clone の path-hash、該当する project / CWD legacy を fallback として探します。
 
-operator-agent の session / watch state は、対象 repository の選択済み ResumeStore がすべて同じ canonical slug にあり、その slug が一意に決まる場合は slug-keyed state を使います。state がまだなければ path-hash、次に project legacy を読み、読み込んだ値を slug 側へ複製します。それ以外（hash-only、legacy、複数 slug が混在する場合）は path-hash を使い、project legacy を fallback とします。state の読み込み・保存先は ResumeStore location から決め、ディレクトリ列挙順には依存しません。
+operator-agent の session / watch state は、対象 repository の選択済み ResumeStore がすべて同じ canonical slug にあり、その slug が一意に決まる場合は slug-keyed state を使います。state がまだなければ path-hash、次に project legacy を読み、読み込んだ値を slug 側へ複製します。それ以外（hash-only、legacy、複数 slug が混在する場合）は path-hash を使い、project legacy を fallback とします。state の読み込み・保存先は ResumeStore location から決め、ディレクトリ列挙順には依存しません。Pi operator transcript は引き続き `~/.ensemble/operator-agent/<repoKey>/pi-sessions/` を使います。
 
 重複を検出すると operator TTY の `[harness]` に、選択した path と各候補の `harnessSocketPath` の有無を表示します。legacy path からの promotion は既存の slug JSON を上書きせず、hash copy も削除・退避しません。
 
@@ -289,7 +289,9 @@ limit 1 でも単独 response が上限を超える発言に達した場合、�
 
 ### operator-agent の provider history list
 
-operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / `repoRoot` / `conductorCwd` を使い、SDK が保存した local session history から最大 100 件を読みます。Pi は `repoRoot` 基準の user 層 `piSessionsDir` を優先し、対象 session がなければ `conductorCwd/.ensemble/pi/sessions/` を探します。Pi `SessionManager` には引き続き `conductorCwd` を渡します。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。
+operator-agent tool の `list_conductor_messages` は稼働中・停止後とも SessionResumeStore の conductor ID / backend / `issueUrl` / `repoRoot` / `conductorCwd` を使い、SDK が保存した local session history から最大 100 件を読みます。
+
+Pi transcript は canonical slug、保存された `repoRoot` 由来の path-hash、`conductorCwd` 配下の project `.ensemble/pi/sessions/` の順で探します。Pi `SessionManager` には保存済み `conductorCwd` を渡します。provider store が見つからない、破損している、または読み出せない場合は session ID と backend を含む error を返します。Cursor で保存 run が0件の場合も取得不能として error になります。保存済み bootstrap run だけが存在する場合は、正常な空一覧です。core API を直接使う場合は、現在 clone と異なる保存時 root / CWD を `fallbackRepoRoots` / `fallbackCwds` で追加できます。
 
 - **共通 filter:** user inbound と final assistant response だけを返します。system prompt、tool call / result、thinking、その他 provider event は出力しません。bootstrap、失敗・cancelled・running・空 response は対象外です。inbound / final response の本文は保存値のままで、secret redaction は行いません。`ensemble session messages` もこの本文をそのままローカル出力します。秘密値を含む可能性のある生データとして扱い、集計・蓄積・共有する前に利用側でサニタイズしてください。既存の同一 OS user access boundary も適用されます。
 - **Cursor bootstrap context:** Cursor SDK に system-prompt API がないため、初回 bootstrap が未完了の session では、後続 dispatch の user inbound に compiled prompt が再度含まれる場合があります。これは provider に実際に送った内容であり、provider-history list と `ensemble session messages` では user inbound の一部として返ります。recovery inbox と Issue workflow の UDS message list にはこの prompt を複製しません。
@@ -308,7 +310,10 @@ const history = await listConductorProviderHistory({
   backend,
   conductorAgentId,
   cwd, // Pi SessionManager に渡す cwd
-  repoRoot, // Pi の user 層 transcript を解決する repo root
+  repoRoot, // 現在 clone。canonical slug と現在 clone の fallback を解決する root
+  issueUrl, // canonical slug の repository identity
+  fallbackRepoRoots: [savedRepoRoot], // 保存時 clone の path-hash fallback
+  fallbackCwds: [savedCwd], // 保存時 conductorCwd の project legacy fallback
   query: { limit: 20, order: 'desc' },
   sanitizer,
 });

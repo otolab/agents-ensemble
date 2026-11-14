@@ -111,7 +111,7 @@ ensemble issue https://github.com/OWNER/REPOSITORY/issues/123 --config ~/.ensemb
 
 人間との TTY 対話を operator-agent に委ねる場合は `ensemble operator-agent [--repo-root <path>] [--config <path>]` を使います。Issue セッションとは別の agent session で起動し、backend・model・reasoning・profile・認証は conductor の設定を共有します。reasoning は `conductor.reasoning` または `CONDUCTOR_REASONING` で指定できます。Pi backend ではユーザー／プロジェクト側の Pi extension を operator session に読み込みません。
 
-operator-agent は既定で前回の operator 会話を再開します。初回起動では新しい session を作り、backend 固有の会話履歴は backend の保存先に、再開に使う backend・repoRoot・agentId は `~/.ensemble/operator-agent/<repoKey>/session.json` に保存します。TTY の EOF、Ctrl+C（SIGINT）、SIGTERM など通常の終了では agent を閉じて再開可能な状態を保ちます。`/exit` または `exit` は連続性を明示的に切り、次回起動を新規 session にします。既存の会話を残したまま新しい会話を始める場合は `ensemble operator-agent --new` を使います。強制終了や電源断では終了時の flush は保証されません。
+operator-agent は既定で前回の operator 会話を再開します。初回起動では新しい session を作り、backend 固有の会話履歴は backend の保存先に、再開に使う backend・repoRoot・agentId は保存します。選択した SessionResumeStore がすべて canonical slug にあり repository slug が一意に決まる場合は `~/.ensemble/operator-agent/github.com/<owner>/<repo>/session.json`、それ以外は `~/.ensemble/operator-agent/<repoKey>/session.json` が保存先です。TTY の EOF、Ctrl+C（SIGINT）、SIGTERM など通常の終了では agent を閉じて再開可能な状態を保ちます。`/exit` または `exit` は連続性を明示的に切り、次回起動を新規 session にします。既存の会話を残したまま新しい会話を始める場合は `ensemble operator-agent --new` を使います。強制終了や電源断では終了時の flush は保証されません。
 
 ## 保存済み session の閲覧
 

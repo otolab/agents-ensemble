@@ -96,7 +96,7 @@ open question の回答観測は回答全文を残し、`yes_no` には `assent=
 
 稼働中 UDS control server は JSON-RPC request / response body をアクセスログへ書きません。ただし回答・operator message は既存の operator 入力経路を通るため、CLI observation は従来どおり質問本文・回答本文・メッセージ本文を stderr または TUI 活動ログに表示します。配信モード（`idle` / `next` / `interrupt`）は `operator.input` と TTY の未 dispatch キューに表示します。TTY 活動ログには dispatch 時に本文のみを表示します。質問・context・回答は SessionResumeStore と YAML にも保存され、UDS list response では保存値のまま返します。任意文面の secret や repository 外情報を確実に検出する redaction はありません。機密値を質問・context・回答・メッセージに含めない運用としてください。
 
-operator-agent の watch polling 警告には例外本文を含めず、Open Question の質問・context・回答本文をログへ出しません。watch report は新規 open、回答、または一覧からの消失を operator-agent への入力として渡し、観測できた質問・context・回答情報を含む場合があります。未 dispatch report の永続化先は owner-only (`0700` directory / `0600` file) の `~/.ensemble/operator-agent/<repoKey>/watch-state.json` であり、通常のログとは別ですが、一般的な secret redaction は行いません。
+operator-agent の watch polling 警告には例外本文を含めず、Open Question の質問・context・回答本文をログへ出しません。watch report は新規 open、回答、または一覧からの消失を operator-agent への入力として渡し、観測できた質問・context・回答情報を含む場合があります。未 dispatch report の永続化先は owner-only (`0700` directory / `0600` file) です。選択した ResumeStore から一意の canonical slug が決まる場合は `~/.ensemble/operator-agent/github.com/<owner>/<repo>/watch-state.json`、それ以外は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` を使います。通常のログとは別ですが、一般的な secret redaction は行いません。
 
 `~/.ensemble/sessions/github.com/<owner>/<repo>/` と session ごとの data directory は owner-only (`0700`)、SessionResumeStore の JSON / YAML / socket file は owner read/write (`0600`) にします。Issue-session の新規 write は slug 側だけです。user path-hash と project `.ensemble/sessions/` は読み取り fallback とし、`--resume` / `--continue` では slug にない ResumeStore / sidecar / tool-call history / Pi transcript だけをコピーします。slug に既存 file があればそれを優先し、複数 location の内容を統合せず、fallback source は変更・削除しません。operator-agent state は別の保存 path を使います。UDS socket は短い owner-only runtime directory (`0700`) に置き、同じ OS user のプロセスからのみ利用できます。token 認証は行わないため、同じ OS user の別プロセスも接続可能です。path の記録だけでは listener の稼働を保証せず、停止後の接続はエラーになります。
 
@@ -263,17 +263,31 @@ Issue session の新規・更新データは `packages/core` の `resolveEnsembl
   {conductorAgentId}.tool-calls
   pi/
 
-~/.ensemble/operator-agent/<repoKey>/
+~/.ensemble/operator-agent/github.com/<owner>/<repo>/  # 選択した ResumeStore から slug が一意に決まる場合
+  session.json
+  watch-state.json
+
+~/.ensemble/operator-agent/<repoKey>/  # slug を一意に決められない場合。Pi operator transcript もここ
   session.json
   watch-state.json
   pi-sessions/
 ```
 
-Pi の conductor transcript は slug 配下の `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き現在 clone の `<repoRoot>/.ensemble/pi/` から読みます。operator-agent state は既存の repository location に沿って読みます。Issue session の ResumeStore / YAML / tool-call history / Pi transcript は canonical slug → 現在 clone の path-hash → 保存時 clone の path-hash → project legacy の順に読み、resume 時は不足している file だけを slug にコピーします。同じ session の slug と path-hash が重複した場合は slug 側を優先し、slug に記録された socket path もそのまま引き継ぎます。path-hash 側の新しい `updatedAt` を理由に選び直しません。slug file があればその内容を優先し、複数 location のデータは統合しません。legacy source は変更・削除・rename しません。SessionResumeStore の `repoRoot` は作成時の実行 context として記録し、slug discovery の除外条件にはしません。
+Pi の conductor transcript は slug 配下の `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き現在 clone の `<repoRoot>/.ensemble/pi/` から読みます。operator-agent の session / watch state は、選択した ResumeStore がすべて canonical slug にあり、その repository slug が一意に決まる場合は slug 配下、それ以外は repoKey 配下を使います。
+
+ResumeStore 自体は全ローカル canonical slug（`repoRoot` 一致を条件にしない）、現在 clone の path-hash、現在 clone の project legacy の順に探索します。同じ Issue / conductor ID の候補では canonical slug を優先し、同じ保存先種別では `updatedAt` が新しい Store を選びます。保存時 clone の path-hash は ResumeStore の探索先ではありません。SessionResumeStore の `repoRoot` は作成時の実行 context として記録し、slug discovery の除外条件にはしません。
+
+Store 選択後の関連データは、種類ごとに次の順で読みます。
+
+- Open Questions / session-state YAML: canonical slug → 現在 clone の path-hash → 保存時 clone の path-hash → 現在 clone の project legacy → 保存時 clone の project legacy
+- tool-call history: canonical slug → 現在 clone の path-hash → 保存時 clone の path-hash → 保存時 clone の project legacy → 現在 clone の project legacy
+- Pi transcript: canonical slug → `repoRoot` 由来の path-hash → 指定された saved-root path-hash → 現在・保存済み `conductorCwd` と保存時 `repoRoot` など該当 CWD の project `.ensemble/pi/sessions/`
+
+slug と path-hash に同じ session があれば slug 側の `harnessSocketPath` を使います。resume 時は slug にない関連 file だけを slug 側へコピーします。複数 location のデータは統合せず、legacy source は変更・削除・rename しません。
 
 旧 `<repoRoot>/.ensemble/sessions/` は Issue-session data の読み取り fallback です。ResumeStore と open-question YAML、session-state YAML、tool-call history、Pi transcript を resume 時に slug 側へコピーし、source はそのまま残します。operator-agent の旧 `.ensemble/operator-agent/` と現在または保存済み `conductorCwd` 配下の `.ensemble/pi/sessions/` も読み取り fallback し、operator state は利用時に user 側へ移します。Issue 用 Git worktree は clone ごとの `<repoRoot>/.ensemble/worktrees/issue-N` を使います。現在 clone に resume 対象 worktree がない場合は警告して、安全な branch/base から再生成を試みます。使用中 branch や占有 directory を移動・削除・reset・上書きせず、安全な path / branch を確保できない場合は理由を示して失敗します。配置判断の詳細は [ADR 0044](adr/0044-user-scoped-runtime-storage.md) を参照してください。
 
-canonical slug と legacy location に同じ SessionResumeStore が残っている場合は slug 側を優先します。新規 session と resume 後の SessionResumeStore / YAML / tool-call history / Pi transcript の flush は slug 側だけに行います。operator-agent の session / watch state は従来どおり hash location を使います。path-hash の重複ファイルは削除・退避せず、operator TTY の `[harness]` 診断には選択 path と socket の有無を出します。
+canonical slug と legacy location に同じ SessionResumeStore が残っている場合は slug 側を優先します。新規 session と resume 後の SessionResumeStore / YAML / tool-call history / Pi transcript の flush は slug 側だけに行います。operator-agent の session / watch state は ResumeStore の保存先が一意の slug を示す場合に slug-keyed path を使い、それ以外は hash location を使います。path-hash の重複ファイルは削除・退避せず、operator TTY の `[harness]` 診断には選択 path と socket の有無を出します。
 
 `session-state.yaml` は `report_session_state` が登録した最新の statusLine と過去の報告をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。`current` が最新値、`history` は過去の値を古い順に並べた一覧です。履歴は最大 50 件、ファイル全体は最大 16 KiB で、上限を超える場合は古い履歴から削除します。
 
