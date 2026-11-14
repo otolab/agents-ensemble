@@ -2009,14 +2009,9 @@ function refreshCheckoutInventory(manifest, scanCompleted) {
       rootConfirmation.get(provenance.checkoutRoot) === true;
   }
 
-  const unconfirmedRoots = inventory.complete
-    ? roots
-        .filter((root) => !root.inventoryConfirmed)
-        .map((root) => root.path)
-    : roots.map((root) => root.path);
-  inventory.unconfirmedRoots = [
-    ...new Set([...unconfirmedRoots, ...inventory.unresolvedRoots]),
-  ];
+  inventory.unconfirmedRoots = roots
+    .filter((root) => !root.inventoryConfirmed)
+    .map((root) => root.path);
   if (roots.length === 0) {
     inventory.unconfirmedRoots = ['<no checkout roots declared>'];
   }
@@ -3149,6 +3144,8 @@ function recordRunFailure(manifest, phase, error) {
         sourceType: 'project-local',
         checkoutRoot: failedRoot.path,
       };
+      failedRoot.recovery =
+        'Resolve this nonrecoverable scan error and rerun with this checkout root still declared. No copy was attempted after the scan failure.';
       addUnresolvedRoot(manifest, failedRoot.path);
       firstUnscannedIndex = failedRootIndex + 1;
     } else {

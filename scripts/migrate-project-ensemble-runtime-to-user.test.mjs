@@ -134,9 +134,11 @@ test('complete checkout inventory retains failed root and source scan evidence',
 
 test('fatal checkout scan errors retain every later declared root as unscanned', async () => {
   const root = await makeRoot();
+  const completedCheckout = join(root.path, 'completed-checkout');
   const blockedCheckout = join(root.path, 'blocked-checkout');
   const laterCheckout = join(root.path, 'later-checkout');
   const blockedMarker = join(blockedCheckout, '.git');
+  await createGitCheckout(completedCheckout);
   await createGitCheckout(blockedCheckout);
   await createGitCheckout(laterCheckout);
 
@@ -171,7 +173,7 @@ test('fatal checkout scan errors retain every later declared root as unscanned',
   );
 
   const result = runMigration(root, {
-    checkoutRoots: [blockedCheckout, laterCheckout],
+    checkoutRoots: [completedCheckout, blockedCheckout, laterCheckout],
     complete: true,
     apply: true,
     preloadPath,
@@ -179,6 +181,9 @@ test('fatal checkout scan errors retain every later declared root as unscanned',
   assert.notEqual(result.status, 0, result.stdout);
 
   const manifest = await readManifest(root);
+  const completedRecord = manifest.checkoutInventory.declaredRoots.find(
+    (entry) => entry.path === completedCheckout,
+  );
   const blockedRecord = manifest.checkoutInventory.declaredRoots.find(
     (entry) => entry.path === blockedCheckout,
   );
@@ -194,30 +199,52 @@ test('fatal checkout scan errors retain every later declared root as unscanned',
     `${sourceId}.json`,
   );
 
-  assert.equal(manifest.checkoutInventory.declaredRoots.length, 2);
+  assert.equal(manifest.checkoutInventory.declaredRoots.length, 3);
   assert.equal(manifest.checkoutInventory.complete, false);
   assert.equal(manifest.checkoutInventory.scanCompleted, false);
+  assert.equal(
+    manifest.checkoutInventory.completeness,
+    'operator-asserted-scan-incomplete',
+  );
   assert.deepEqual(
     manifest.checkoutInventory.declaredRoots.map((entry) => entry.path),
-    [blockedCheckout, laterCheckout],
+    [completedCheckout, blockedCheckout, laterCheckout],
   );
   assert.equal(manifest.failure.phase, 'scan');
   assert.equal(manifest.failure.error.code, 'ENXIO');
   assert.equal(manifest.failure.error.syscall, 'lstat');
   assert.equal(manifest.failure.error.path, blockedMarker);
-  assert.equal(blockedRecord.disposition, 'unresolved');
-  assert.ok(
-    ['ENXIO'].includes(blockedRecord.error.code),
+  assert.equal(completedRecord.disposition, 'scanned');
+  assert.equal(completedRecord.inventoryConfirmed, true);
+  assert.equal(
+    manifest.checkoutInventory.unconfirmedRoots.includes(completedCheckout),
+    false,
   );
+  assert.equal(blockedRecord.disposition, 'unresolved');
+  assert.equal(blockedRecord.inventoryConfirmed, false);
+  assert.equal(blockedRecord.error.code, 'ENXIO');
+  assert.equal(blockedRecord.error.syscall, 'lstat');
+  assert.equal(blockedRecord.error.path, blockedMarker);
+  assert.equal(
+    blockedRecord.provenance.checkoutRoot,
+    blockedCheckout,
+  );
+  assert.ok(blockedRecord.recovery);
   assert.equal(laterRecord.disposition, 'not-scanned');
+  assert.equal(laterRecord.inventoryConfirmed, false);
   assert.match(laterRecord.reason, /earlier scan error aborted inventory/u);
   assert.equal(laterRecord.notScannedDueTo.path, blockedMarker);
   assert.equal(laterRecord.notScannedDueTo.code, 'ENXIO');
   assert.equal(laterRecord.provenance.checkoutRoot, laterCheckout);
   assert.ok(laterRecord.recovery);
-  assert.ok(
-    manifest.checkoutInventory.unconfirmedRoots.includes(laterCheckout),
+  assert.deepEqual(
+    manifest.checkoutInventory.unconfirmedRoots,
+    [blockedCheckout, laterCheckout],
   );
+  assert.deepEqual(manifest.checkoutInventory.unresolvedRoots, [
+    blockedCheckout,
+    laterCheckout,
+  ]);
   assert.equal(findEntry(manifest, sourcePath).disposition, 'pending');
   assert.equal(await readFile(sourcePath, 'utf8'), sourceText);
   await assert.rejects(readFile(destination));
@@ -1086,6 +1113,10 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
   assert.match(
     sessionLogging,
     /`provenance\.checkoutRootInventoryConfirmed` は、関連 root の `inventoryConfirmed` と同じ値/u,
+  );
+  assert.match(
+    sessionLogging,
+    /`unconfirmedRoots` は `inventoryConfirmed: false` の declared root だけを列挙し、global の `scanCompleted` \/ `complete` とは別/u,
   );
   assert.match(
     liveControl,
