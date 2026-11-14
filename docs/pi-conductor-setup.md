@@ -446,7 +446,7 @@ Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalo
 3. `source` を設定場所の手掛かりとして使い、次の優先順と照合する。
    - `runtime`: user → project に merge された `settings.json.apiKeys[provider]` の非 command 値。project 側が両方に設定した値を上書きします。値が非空なら user `auth.json` より先に request で使われます。ただし空文字も runtime と表示される一方、Pi request resolver はその値を使わず user `auth.json` など下位 source の読取りへ進みます。空 entry の場合は `source` だけで実効 credential を判断せず、下位の設定層も確認してください。
    - `project_stored` / `project_oauth_unsupported`: project `auth.json` の entry。API key / command は user 層より先に使われ、project OAuth は拒否されます。後者は project OAuth entry を除去して user 層で login します。
-   - `stored`: user `auth.json` の credential。status は API key と OAuth を区別しません。
+   - `stored`: user `auth.json` の credential。既知の entry は `mode=api_key` / `mode=oauth`（または `mode=command`）で種類を示します。`source=stored` は出所として維持されます。
    - `settings_json`: Pi status が configured source を返さず Ensemble が検出した settings 候補です。scalar `apiKey` が先で、なければ `apiKeys[provider]` を見ます。key / command と user / project の別は分かりません。
    - `fallback`: Pi runtime に登録された `models.json` provider の通常 key。環境変数参照は登録前に展開されています。
    - `models_json_command`: Pi runtime に登録された `models.json` provider の `!command`。
@@ -460,11 +460,12 @@ Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalo
 
 Pi の auth-like error では harness が同じ agent ID の reconnect を一度試みます。transport failure も既知の transport signal に限って同じ reconnect を行います。**失敗した prompt は自動再送しません。** `send()` 自体が reject した場合は結果不明として扱い、raw error の本文を保存せず、手動 reconnect まで後続 dispatch を止めます。認証の解決方法は上記の `ensemble auth status` / `ensemble auth login` と、表示される provider 固有 hint を確認してください。
 
-現行の Pi hint は credential source を判別せず、provider login、user auth file、provider 環境変数などを共通案内します。
+現行の Pi hint は credential source を判別しませんが、API key と OAuth の login 方法を分けて案内します。API key なら TTY の非表示 prompt または非 TTY の stdin 経路を選べます。
 
 hint には次の情報が含まれます。
 
-- `ensemble auth login --provider <provider-id>`
+- API key: TTY では `ensemble auth login --provider <provider-id> --api-key-prompt`、非 TTY では `ensemble auth login --provider <provider-id> --api-key-stdin`。前者は TTY 専用、後者は非 TTY 専用で、secret は stdin から渡します。command line や hint に値を含めません。
+- OAuth: TTY で `ensemble auth login --provider <provider-id>` を実行します。OpenAI のこの login は既定で OAuth を選びます。
 - `agentDir/auth.json`（既定 `~/.ensemble/pi/auth.json`）
 - Pi が認識する provider 固有の環境変数名（例: Anthropic は `ANTHROPIC_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`、OpenAI は `OPENAI_API_KEY`、GitHub Copilot は `COPILOT_GITHUB_TOKEN`）
 - 稼働中の対話 TTY では `/reconnect` で接続を回復し、`/recovery list` / `/recovery show <recoveryId>` で未完了になった operator input を確認します。失敗した内容は再送せず、現在の状態と副作用を確認してから必要な続きを新しい operator message として送ります。`/recovery continue` は後続 queue の gate を解放するだけです。

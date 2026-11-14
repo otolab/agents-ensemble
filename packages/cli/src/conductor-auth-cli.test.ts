@@ -18,7 +18,7 @@ describe('ensemble auth login CLI', () => {
     userRoot = undefined;
   });
 
-  it('stores stdin API keys in user auth.json without exposing them or creating session logs', async () => {
+  it('stores stdin API keys without exposing them or emitting harness/session artifacts', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-auth-cli-project-'));
     userRoot = await mkdtemp(join(tmpdir(), 'ensemble-auth-cli-user-'));
     const agentDir = join(userRoot, 'pi');
@@ -72,9 +72,11 @@ describe('ensemble auth login CLI', () => {
     expect(login.stdout).not.toContain(secret);
     expect(login.stderr).not.toContain(secret);
     expect(JSON.stringify({ stdout: login.stdout, stderr: login.stderr })).not.toContain(secret);
+    expect(() => JSON.parse(login.stdout)).toThrow();
     await expect(readFile(authPath, 'utf8')).resolves.toContain(secret);
     await expect(readdir(join(repoRoot, '.ensemble'))).resolves.toEqual(['config.yaml']);
     expect(existsSync(join(projectDir, 'auth.json'))).toBe(false);
+    expect(existsSync(join(repoRoot, '.ensemble', 'sessions'))).toBe(false);
     expect(existsSync(join(userRoot, 'sessions'))).toBe(false);
 
     const status = spawnSync(
