@@ -84,6 +84,22 @@ function createSummary(
 }
 
 describe('formatIssueSessionSummaryJson', () => {
+  it('escapes backend status controls in the exit JSON', () => {
+    const status = 'error\u001b[2J\u202e\u2066\nspoof';
+    const output = formatIssueSessionSummaryJson(
+      createSummary({ lastRunStatus: status }),
+    );
+    const json = JSON.parse(output) as { lastRunStatus: string };
+
+    expect(json.lastRunStatus).toBe(
+      'error\\u001b[2J\\u202e\\u2066\\u000aspoof',
+    );
+    expect(output).not.toContain('\u001b');
+    expect(output).not.toContain('\u202e');
+    expect(output).not.toContain('\u2066');
+    expect(output).not.toContain('\nspoof');
+  });
+
   it('includes sessionModels', () => {
     const json = JSON.parse(
       formatIssueSessionSummaryJson(

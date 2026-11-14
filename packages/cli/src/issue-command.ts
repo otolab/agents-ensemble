@@ -17,7 +17,11 @@ import {
   type EnsembleConfig,
 } from '@agents-ensemble/core';
 import { bindAsyncOperatorInput, notifyOperatorInputReprompt } from './async-operator-input.js';
-import { isOperatorInputInteractive, isOperatorInputTty } from './prompt-operator-input.js';
+import {
+  isOperatorInputInteractive,
+  isOperatorInputTty,
+  isOperatorRecoveryInspectionTty,
+} from './prompt-operator-input.js';
 import { parseWorktreeMode } from './parse-worktree-mode.js';
 import { createSessionDisplaySink } from './display/create-session-display-sink.js';
 import { selectSessionDisplayBackend } from './display/select-session-display-backend.js';
@@ -60,6 +64,7 @@ export interface IssueCommandOptions {
 export interface IssueCommandDeps {
   isOperatorInputInteractive?: typeof isOperatorInputInteractive;
   isOperatorInputTty?: typeof isOperatorInputTty;
+  isOperatorRecoveryInspectionTty?: typeof isOperatorRecoveryInspectionTty;
   runIssueSession?: typeof runIssueSession;
   loadProfile?: typeof loadProfile;
   loadEnsembleConfig?: typeof loadEnsembleConfig;
@@ -136,6 +141,8 @@ export async function executeIssueCommand(
   const isInteractive =
     deps.isOperatorInputInteractive ?? isOperatorInputInteractive;
   const isTty = deps.isOperatorInputTty ?? isOperatorInputTty;
+  const canInspectRecovery =
+    deps.isOperatorRecoveryInspectionTty ?? isOperatorRecoveryInspectionTty;
   const runSession = deps.runIssueSession ?? runIssueSession;
   const loadProfileFn = deps.loadProfile ?? loadProfile;
   const loadConfig = deps.loadEnsembleConfig ?? loadEnsembleConfig;
@@ -192,6 +199,7 @@ export async function executeIssueCommand(
   const interactive = isInteractive(initialOperatorMessageForBinding);
   const hasOneShotOperatorMessage = Boolean(resolvedInitialOperatorMessageForBinding);
   const tty = isTty();
+  const operatorCanInspectRecovery = canInspectRecovery();
   const useTui = interactive && tty;
   const tuiHost = useTui
     ? createIssueSessionTuiHost(issueUrl, {
@@ -306,6 +314,7 @@ export async function executeIssueCommand(
                   waitForOperatorExit: true,
                 }
               : {}),
+            operatorCanInspectRecovery,
           }
         : {}),
     });

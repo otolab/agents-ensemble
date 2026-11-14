@@ -177,13 +177,17 @@ await runIssueSession({ sessionLogger: logger, ... });
 | `worker.process.stderr` | worker 子プロセス（`agent acp`）の stderr 1 行 | なし（sink のみ） |
 | `session.stop` | セッション終了直前 | `stopReason` を確定 |
 
-Pi auth recovery の operator-only snapshot は `SessionLogger` と別の process-local store に置きます。
-snapshot 本文を持つ新しい `SessionLogEvent` は発行せず、SessionSummary の専用 field や SessionResumeStore にも
-加えません。failure の `harness.warning` は ID / expiry / eviction ID だけです。これは既存 event の扱いを
-変えるものではありません。`operator.input` / `operator.dispatched` は本文を持つ live event であり、
-`worker.round` の worker result は既存どおり SessionLogger / session summary に蓄積されます。明示的な
-`/recovery show` は TTY に内容を表示するため、terminal capture / recording からは保護されません。
-snapshot の保持条件と確認手順は [operator-input.md](operator-input.md) を参照してください。
+Conductor recovery inbox は `SessionLogger` と別の process-local store です。対話 TTY に限り、失敗した
+dispatch に含まれる operator-authored input を保持します。snapshot 本文を持つ新しい `SessionLogEvent` は
+発行せず、SessionSummary、SessionResumeStore、UDS response、conductor send にも追加しません。未完了 send の
+`harness.warning` は status / failure class / attempt ID / snapshot ID と操作案内だけを示し、本文や raw error
+を含めません。非 TTY では本文を保存せず、同一 process 内でも確認できない旨を本文なしで知らせます。
+
+これは既存 event の扱いを変えるものではありません。`operator.input` / `operator.dispatched` は従来どおり
+operator message の本文を扱い、`worker.round` の worker result は従来どおり SessionLogger / session summary に
+蓄積されます。ここで防ぐのは recovery snapshot を新たな保存先へ複製することです。明示的な
+`/recovery show` は TTY に内容を表示するため、terminal capture / recording からは保護されません。snapshot の
+保持条件と確認手順は [operator-input.md](operator-input.md) を参照してください。
 
 ### 組み込み sink（CLI）
 
@@ -310,6 +314,8 @@ openQuestions:
 
 `--continue` は同じ Issue の候補から `close` / `abort` を優先し、`exit` は候補から除外します。優先候補が複数ある場合は `updatedAt` が新しいものを選びます。候補がなければ `exit` 以外から最新を選びます。旧 SessionResumeStore は `lifecycle` の `closed→close`、`interrupted→abort`、`exited→exit` を読み替えます。`--resume` / `--continue` の復元時は、YAML があれば質問一覧と sequence にその内容を使います。YAML がまだない旧形式のセッションでは SessionResumeStore の `openQuestions` と `sequence` から復元し、YAML をバックフィルします。移行期間中は flush のたびに両方へ同じ質問スナップショットを書きます。YAML が存在していて読み取りまたはスキーマ検証に失敗した場合は resume を中止し、古い可能性がある SessionResumeStore 内の質問一覧へ黙って切り替えません。
 
+Issue の Cursor session は、compiled prompt の bootstrap 完了状態を SessionResumeStore の `cursorBootstrapComplete`（boolean）に記録します。値は prompt や event 本文を含まない文脈メタデータです。`false` の状態で `--continue` した場合、失敗した send を復元せず、workflow selector が次に選んだ新しい event に compiled prompt を添えて送ります。古い Store でこの field が欠落している場合は `unknown` とし、旧版では bootstrap の成否にかかわらず記録され得た `cursorBootstrapRunId` から結果を推定しません。対話 TTY では `/recovery bootstrap assume-complete` または `/recovery bootstrap assume-incomplete` の判断が SessionResumeStore に保存されるまで event dispatch を止めます。前者は prompt を追加送信しないため文脈が欠ける可能性を残し、後者は失敗 input を再送せず次の新しい event に prompt を添えるため provider transcript で prompt が重複する可能性を残します。判断を入力できる対話 TTY がなければ `--continue` は backend resume 前に案内付きで停止します。保存した判断は boolean として次回再開にも引き継ぎます。
+
 `harnessPhase` は harness が最後に保存した位相です。conductor send または worker prompt の in-flight があれば `running`、両方が idle の状態を 250ms 保つと `idle` を保存します。開始時は即時に `running` を flush し、短い作業の間に phase が頻繁に揺れないよう `idle` のみ debounce します。`close` / `abort` / `exit` は teardown 完了後に最終 flush し、terminal phase は後続 flush で上書きしません。通常の非TTY終了は旧 `unknown` 相当として `harnessPhase` / `modifiedAt` を持たず、`lifecycle: unknown` を記録します。新旧クライアントの移行中は JSON に `lifecycle` も書き続け、teardown 区分は `closed` / `exited` / `interrupted` / `unknown` の従来値を保ちます。旧形式の `lifecycle` は `closed→close`、`exited→exit`、`interrupted→abort` と読み替え、`unknown` は位相不明として扱います。
 
 `modifiedAt` は SessionResumeStore を harness が保存するたびに更新し、同じ書き込みの `updatedAt` と同じ Unix ms にします。これにより resume 用状態の flush と phase 遷移の鮮度を表します。`session-state.yaml` の `reportedAt` は conductor が operator 向け statusLine を報告した時刻であり、別の情報です。SessionResumeStore の `modifiedAt` / `updatedAt` は `/close`・`/exit`・signal teardown の最終 flush でも揃います。operator-agent の一覧は毎回 UDS probe をせず、watch pool の直近 10 秒以内の観測がある場合だけ `live.connectivity` に載せます。`live.checkedAt < persisted.modifiedAt` の古い観測は保存phaseとの整合判定に使わず、`coherence: insufficient_data` とします。同じ時刻か新しい観測なら現在のphaseとの判定に使い、terminal phaseと `reachable` は `conflict` です。watch で `running` / `idle` の接続失敗が30秒続く場合も `coherence: conflict`、30秒未満またはlive未観測なら `insufficient_data` とします。通常一覧の `unknown` は未確認を意味し、停止中とは限りません。
@@ -324,7 +330,7 @@ openQuestions:
 | **worker session** | 載せない | `acpSessionId` を保持 |
 | **tool-call snapshot** | 載せない | 別ファイル `.tool-calls` に保持（TTL / サイズ上限あり） |
 
-稼働中 harness の UDS method `session.conductor_messages.list` は、bootstrap send を除く成功応答と対応する formatted inbound を最大 100 件、プロセスメモリ内だけに保持します。これは停止後に参照できない live projection です。operator-agent tool の `list_conductor_messages` は provider session history から user inbound / final assistant response を再構成し、稼働中・停止後とも直近100件を返します。Pi は active branch と entry ID、Cursor は local run history を使い、provider store の retention / deletion を保証しません。最後の応答だけを返す `session.last_conductor_message.get` / `get_last_conductor_message` は従来どおりの単独 projection です。
+稼働中 harness の UDS method `session.conductor_messages.list` は、bootstrap send を除く成功応答と対応する formatted inbound を最大 100 件、プロセスメモリ内だけに保持します。Cursor の初回 bootstrap が未完了のまま後続 dispatch へ進む場合、実際の send には compiled prompt を付けますが、この local projection には event text だけを記録します。停止後は参照できません。operator-agent tool の `list_conductor_messages` は provider session history から user inbound / final assistant response を再構成し、稼働中・停止後とも直近100件を返します。Cursor では compiled prompt を添えた実際の user turn が inbound に含まれる場合があります。Pi は active branch と entry ID、Cursor は local run history を使い、provider store の retention / deletion を保証しません。最後の応答だけを返す `session.last_conductor_message.get` / `get_last_conductor_message` は従来どおりの単独 projection です。
 
 tool-call history は SessionResumeStore とは別に読み書きし、履歴ファイルの欠損や破損で resume を妨げません。
 保持期限・上限・プライバシー上の扱いは [harness-events.md](harness-events.md) を参照してください。

@@ -3,6 +3,7 @@ import type { SessionEvent } from './session-event.js';
 /** ConductorSession の単一イベント列（旧 inbox + conductor Queue の統合）。 */
 export class SessionEventQueue {
   private readonly queue: SessionEvent[] = [];
+  private readonly changeListeners = new Set<() => void>();
   private readonly waiters: Array<{
     accept: (event: SessionEvent) => boolean;
     resolve: (event: SessionEvent) => void;
@@ -24,13 +25,22 @@ export class SessionEventQueue {
     if (waiterIndex >= 0) {
       const [waiter] = this.waiters.splice(waiterIndex, 1);
       waiter!.resolve(event);
+      this.notifyChanged();
       return;
     }
     this.queue.push(event);
+    this.notifyChanged();
   }
 
   dequeue(): SessionEvent | undefined {
-    return this.queue.shift();
+    const event = this.queue.shift();
+    if (event) this.notifyChanged();
+    return event;
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
   }
 
   /** キュー内容のスナップショット（到着順）。 */
@@ -42,6 +52,21 @@ export class SessionEventQueue {
   replaceQueue(next: SessionEvent[]): void {
     this.queue.length = 0;
     this.queue.push(...next);
+    this.notifyChanged();
+  }
+
+  /** Remove only the selected event objects, preserving events enqueued meanwhile. */
+  removeEvents(events: readonly SessionEvent[]): number {
+    if (events.length === 0) return 0;
+    const selected = new Set(events);
+    const retained = this.queue.filter((event) => !selected.has(event));
+    const removed = this.queue.length - retained.length;
+    if (removed > 0) {
+      this.queue.length = 0;
+      this.queue.push(...retained);
+      this.notifyChanged();
+    }
+    return removed;
   }
 
   /**
@@ -50,6 +75,7 @@ export class SessionEventQueue {
    */
   prependSilent(event: SessionEvent): void {
     this.queue.unshift(event);
+    this.notifyChanged();
   }
 
   /** 述語に合う最初の send イベントを取り出す（キュー順は維持）。 */
@@ -60,7 +86,9 @@ export class SessionEventQueue {
     if (index < 0) {
       return undefined;
     }
-    return this.queue.splice(index, 1)[0];
+    const event = this.queue.splice(index, 1)[0];
+    this.notifyChanged();
+    return event;
   }
 
   /** 条件に合う send event をすべて取り出し、残りの順序を保つ。 */
@@ -70,7 +98,7 @@ export class SessionEventQueue {
     for (const event of this.queue) {
       (accept(event) ? matched : retained).push(event);
     }
-    this.replaceQueue(retained);
+    if (matched.length > 0) this.replaceQueue(retained);
     return matched;
   }
 
@@ -127,7 +155,9 @@ export class SessionEventQueue {
   ): Promise<SessionEvent> {
     const index = this.queue.findIndex(accept);
     if (index >= 0) {
-      return this.queue.splice(index, 1)[0]!;
+      const event = this.queue.splice(index, 1)[0]!;
+      this.notifyChanged();
+      return event;
     }
     return this.waitForIncomingEvent(accept, signal);
   }
@@ -163,10 +193,17 @@ export class SessionEventQueue {
       const originalResolve = waiter.resolve;
       waiter.resolve = (event) => {
         cleanup();
+        this.notifyChanged();
         originalResolve(event);
       };
       signal?.addEventListener('abort', onAbort);
       this.waiters.push(waiter);
     });
+  }
+
+  private notifyChanged(): void {
+    for (const listener of [...this.changeListeners]) {
+      listener();
+    }
   }
 }

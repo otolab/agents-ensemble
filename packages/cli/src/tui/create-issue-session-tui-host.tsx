@@ -23,7 +23,7 @@ import {
 import { createTuiResizeRecovery } from './tui-resize-recovery.js';
 import { resolveInitialOperatorMessage } from '../operator-message.js';
 import {
-  executePiAuthRecoveryCommand,
+  executeRecoveryInboxCommand,
   type OperatorRecoveryInspection,
 } from '../operator-recovery-command.js';
 
@@ -81,7 +81,18 @@ function createBindTuiOperatorInput(
     const operatorMessage = resolveInitialOperatorMessage(initialOperatorMessage);
     if (!process.stdin.isTTY) {
       if (operatorMessage) {
-        api.submit(operatorMessage);
+        const recoveryCommand = executeRecoveryInboxCommand(api, operatorMessage, {
+          canDisplaySensitiveContent: false,
+        });
+        if (recoveryCommand.handled) {
+          if (recoveryCommand.inspection) {
+            process.stderr.write(
+              `\n${recoveryCommand.inspection.title}\n${recoveryCommand.inspection.text}\n\n`,
+            );
+          }
+        } else {
+          api.submit(operatorMessage);
+        }
       }
       return () => {};
     }
@@ -90,8 +101,11 @@ function createBindTuiOperatorInput(
     onSubmitRef.current = (text: string, options?: OperatorInputSubmitOptions) => {
       const trimmed = trimBlankLinesOnly(text);
       if (trimmed) {
-        const recoveryCommand = executePiAuthRecoveryCommand(api, trimmed, {
-          canDisplaySensitiveContent: process.stdout.isTTY === true,
+        const recoveryCommand = executeRecoveryInboxCommand(api, trimmed, {
+          canDisplaySensitiveContent:
+            process.stdin.isTTY === true &&
+            process.stdout.isTTY === true &&
+            process.stderr.isTTY === true,
         });
         if (recoveryCommand.handled) {
           setRecoveryInspection(recoveryCommand.inspection);
@@ -107,7 +121,17 @@ function createBindTuiOperatorInput(
     // Dispatch the initial message once, but keep the normal TTY binding alive
     // so post-loop input (including /close and /exit) still reaches the session.
     if (operatorMessage) {
-      api.submit(operatorMessage);
+      const recoveryCommand = executeRecoveryInboxCommand(api, operatorMessage, {
+        canDisplaySensitiveContent:
+          process.stdin.isTTY === true &&
+          process.stdout.isTTY === true &&
+          process.stderr.isTTY === true,
+      });
+      if (recoveryCommand.handled) {
+        setRecoveryInspection(recoveryCommand.inspection);
+      } else {
+        api.submit(operatorMessage);
+      }
     }
 
     return () => {

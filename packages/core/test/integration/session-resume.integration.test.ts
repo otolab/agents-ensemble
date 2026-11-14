@@ -172,6 +172,7 @@ describe('session resume integration', () => {
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
+        cursorBootstrapComplete: true,
         profile: resumeStoreProfile,
         openQuestions: [
           {
@@ -303,6 +304,7 @@ describe('session resume integration', () => {
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
+        cursorBootstrapComplete: true,
         profile: { workers: [] },
         openQuestions: [
           {
@@ -409,6 +411,7 @@ describe('session resume integration', () => {
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
+        cursorBootstrapComplete: true,
         profile: { workers: [] },
         openQuestions: [],
         sequence: 0,
@@ -490,6 +493,7 @@ describe('session resume integration', () => {
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
+        cursorBootstrapComplete: true,
         profile: PING_PROFILE_BASE,
         openQuestions: [],
         sequence: 0,
@@ -893,6 +897,7 @@ describe('session resume integration', () => {
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
+        cursorBootstrapComplete: true,
         profile: workspaceProfile,
         openQuestions: [],
         sequence: 0,
@@ -992,6 +997,7 @@ describe('session resume integration', () => {
         conductorAgentId: RESUME_AGENT_ID,
         issueUrl: TEST_ISSUE.url,
         repoRoot,
+        cursorBootstrapComplete: true,
         profile: workspaceProfile,
         openQuestions: [],
         sequence: 0,
@@ -1068,6 +1074,7 @@ describe('session resume integration', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: piProfile as never,
+      cursorBootstrapComplete: true,
       openQuestions: [],
       sequence: 0,
       workers: {

@@ -111,7 +111,7 @@ describe('runIssueSession', () => {
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 1,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: operator.bindOperatorInput,
@@ -163,7 +163,7 @@ describe('runIssueSession', () => {
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: operator.bindOperatorInput,
@@ -192,11 +192,10 @@ describe('runIssueSession', () => {
       status: 'error',
       error: { message: 'Model Blocked' },
     });
-
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       permissionPipeline: new PermissionPipeline({}),
     });
 
@@ -205,7 +204,7 @@ describe('runIssueSession', () => {
     expect(result.lastError?.message).toBe('Model Blocked');
   });
 
-  it('continues after conductor error when operator input is available', async () => {
+  it('waits for explicit recovery confirmation before dispatching later input', async () => {
     mockSend
       .mockResolvedValueOnce({
         runId: 'run-1',
@@ -222,17 +221,25 @@ describe('runIssueSession', () => {
       () => 'retry with another model',
       { submitOnBind: false },
     );
+    let bindingApi: OperatorInputBindingApi | undefined;
     const sessionPromise = runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       permissionPipeline: new PermissionPipeline({}),
       continueOnConductorError: true,
-      bindOperatorInput: operator.bindOperatorInput,
+      operatorCanInspectRecovery: true,
+      bindOperatorInput: (api) => {
+        bindingApi = api;
+        operator.bindOperatorInput(api);
+      },
     });
 
     await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1));
     expect(operator.trySubmit()).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockSend).toHaveBeenCalledOnce();
+    expect(bindingApi?.continueAfterRecovery?.()).toBe(true);
 
     const result = await sessionPromise;
     expect(mockSend).toHaveBeenCalledTimes(2);
@@ -252,7 +259,7 @@ describe('runIssueSession', () => {
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: operator.bindOperatorInput,
     });
@@ -276,7 +283,7 @@ describe('runIssueSession', () => {
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 0,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: () => {},
@@ -318,7 +325,7 @@ describe('runIssueSession', () => {
     const sessionPromise = runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: (api) => {
@@ -361,7 +368,7 @@ describe('runIssueSession', () => {
     const sessionPromise = runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 1,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: (api) => {

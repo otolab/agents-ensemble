@@ -94,8 +94,10 @@ export interface SessionResumeStore {
   createdHarnessCliVersion?: string;
   /** Conductor SDK session を作成した working directory。 */
   conductorCwd?: string;
-  /** Cursor local run API で bootstrap run を除外するための ID。 */
+  /** Cursor local run API で bootstrap run を除外する ID。bootstrap の成否は示さない。 */
   cursorBootstrapRunId?: string;
+  /** Cursor の compiled prompt の完了状態。欠落した旧形式は unknown。本文は保存しない。 */
+  cursorBootstrapComplete?: boolean;
   /** 初回 `prompt_worker` まで ACP attach を遅延する。旧形式は eager。 */
   lazyWorkers?: boolean;
   /** 稼働中 session の local control socket。teardown 時に除去する。 */
@@ -810,6 +812,12 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
     throw new Error('Invalid session resume store: cursorBootstrapRunId');
   }
   if (
+    record.cursorBootstrapComplete !== undefined &&
+    typeof record.cursorBootstrapComplete !== 'boolean'
+  ) {
+    throw new Error('Invalid session resume store: cursorBootstrapComplete');
+  }
+  if (
     record.lifecycle !== undefined &&
     record.lifecycle !== 'closed' &&
     record.lifecycle !== 'exited' &&
@@ -875,6 +883,9 @@ function parseSessionResumeStore(value: unknown): SessionResumeStore {
       : {}),
     ...(typeof record.cursorBootstrapRunId === 'string'
       ? { cursorBootstrapRunId: record.cursorBootstrapRunId }
+      : {}),
+    ...(typeof record.cursorBootstrapComplete === 'boolean'
+      ? { cursorBootstrapComplete: record.cursorBootstrapComplete }
       : {}),
     ...(typeof record.lazyWorkers === 'boolean'
       ? { lazyWorkers: record.lazyWorkers }

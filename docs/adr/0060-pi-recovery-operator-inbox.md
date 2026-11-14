@@ -1,6 +1,6 @@
 # ADR 0060: Pi 失敗 dispatch の operator 専用 inbox
 
-- Status: accepted
+- Status: superseded by [0072](0072-conductor-dispatch-lifecycle-and-recovery-boundary.md)
 - Date: 2026-11-10
 - Related: [Issue #650](https://github.com/otolab/agents-ensemble/issues/650#issuecomment-6762502118), [PR #651](https://github.com/otolab/agents-ensemble/pull/651), supersedes [ADR 0059](0059-pi-recovery-report-after-manual-reconnect.md)
 

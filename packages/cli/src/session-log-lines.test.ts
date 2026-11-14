@@ -195,6 +195,28 @@ describe('session-log-lines', () => {
     ).toBe('conductor.send n=1 status=finished workerDone=0 workerFailed=0');
   });
 
+  it('escapes backend status controls in the harness log', () => {
+    const line = formatHarnessLogBody(
+      {
+        type: 'conductor.send',
+        sendCount: 2,
+        runId: 'run-2',
+        status: 'error\u001b[2J\u202e\u2066\nspoof',
+        workerDispatches: 0,
+        workerFailures: 0,
+      },
+      { verbose: true },
+    );
+
+    expect(line).toContain(
+      'status=error\\u001b[2J\\u202e\\u2066\\u000aspoof',
+    );
+    expect(line).not.toContain('\u001b');
+    expect(line).not.toContain('\u202e');
+    expect(line).not.toContain('\u2066');
+    expect(line).not.toContain('\n');
+  });
+
   it('classifies a known conductor connection error for the harness channel', () => {
     expect(
       formatHarnessLogBody({
@@ -360,7 +382,7 @@ describe('session-log-lines', () => {
         type: 'conductor.auth.reconnect',
         agentId: 'agent-1',
       }),
-    ).toBe('[auth] conductor 再接続を試行 agentId=agent-1');
+    ).toBe('[auth] conductor 再接続試行 agentId=agent-1');
   });
 
   it('formats transport reconnect without an auth hint', () => {
@@ -375,10 +397,10 @@ describe('session-log-lines', () => {
       'conductor.transport.reconnect status=failed agentId=agent-1 error=resume unavailable',
     );
     expect(formatObservationLogBody(event)).toBe(
-      '[transport] conductor 再接続失敗 agentId=agent-1 error=resume unavailable',
+      '[transport] conductor 再接続失敗 agentId=agent-1 source=automatic error=resume unavailable',
     );
     expect(formatObservationStderrLine(event)).toBe(
-      '[transport] conductor 再接続失敗 agentId=agent-1 error=resume unavailable',
+      '[transport] conductor 再接続失敗 agentId=agent-1 source=automatic error=resume unavailable',
     );
     expect(formatObservationStderrLine(event)).not.toContain('[auth]');
   });

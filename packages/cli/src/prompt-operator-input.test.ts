@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   isOperatorInputInteractive,
+  isOperatorRecoveryInspectionTty,
   isOperatorInputTty,
   promptOperatorInput,
 } from './prompt-operator-input.js';
@@ -63,6 +64,31 @@ describe('isOperatorInputTty', () => {
     } finally {
       stdin.isTTY = original;
       vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('isOperatorRecoveryInspectionTty', () => {
+  it('requires interactive input and both output streams to be terminals', () => {
+    const streams = [
+      process.stdin as NodeJS.ReadStream & { isTTY?: boolean },
+      process.stdout as NodeJS.WriteStream & { isTTY?: boolean },
+      process.stderr as NodeJS.WriteStream & { isTTY?: boolean },
+    ];
+    const originals = streams.map((stream) => stream.isTTY);
+
+    try {
+      for (const stream of streams) stream.isTTY = true;
+      expect(isOperatorRecoveryInspectionTty()).toBe(true);
+      for (const stream of streams) {
+        stream.isTTY = false;
+        expect(isOperatorRecoveryInspectionTty()).toBe(false);
+        stream.isTTY = true;
+      }
+    } finally {
+      streams.forEach((stream, index) => {
+        stream.isTTY = originals[index];
+      });
     }
   });
 });

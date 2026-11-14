@@ -901,6 +901,30 @@ describe('PiConductorAgent', () => {
     expect(fakeSession.dispose).toHaveBeenCalledOnce();
   });
 
+  it('keeps Pi closed and disposes the session when close rejects', async () => {
+    const conductor = await PiConductorAgent.create({
+      cwd,
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      systemPrompt: 'system',
+    });
+    const abortError = new Error('Pi abort cleanup failed');
+    fakeSession.abort.mockRejectedValueOnce(abortError);
+
+    await expect(conductor.close()).rejects.toBe(abortError);
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+    await expect(conductor.send('must not reuse after failed close')).resolves
+      .toMatchObject({
+        status: 'error',
+        error: { message: 'Pi conductor agent is closed.' },
+      });
+
+    await expect(conductor.close()).rejects.toBe(abortError);
+    expect(fakeSession.abort).toHaveBeenCalledOnce();
+    expect(fakeSession.dispose).toHaveBeenCalledOnce();
+  });
+
   it('rejects SSE before the Pi extension is started', async () => {
     const conductorPromise = PiConductorAgent.create({
       cwd,
@@ -1756,7 +1780,7 @@ describe('PiConductorAgent', () => {
     await conductor.close();
   });
 
-  it('recovers a Pi !command credential after 401 by resuming and retrying the same prompt', async () => {
+  it('resumes after a Pi !command credential 401 without replaying the same prompt', async () => {
     const projectDir = join(cwd, '.ensemble', 'pi');
     await mkdir(projectDir, { recursive: true });
     const keyFile = join(cwd, 'dynamic-key.txt');
@@ -1833,13 +1857,12 @@ describe('PiConductorAgent', () => {
     );
 
     expect(result).toMatchObject({
-      status: 'finished',
-      result: 'Recovered with fresh auth.',
+      status: 'error',
+      error: {
+        message: 'litellm API error (401): Your client does not have permission',
+      },
     });
-    expect(prompts).toEqual([
-      'same prompt after expired credential',
-      'same prompt after expired credential',
-    ]);
+    expect(prompts).toEqual(['same prompt after expired credential']);
     expect(mockCreateAgentSession).toHaveBeenCalledTimes(2);
     expect(mockCreateAgentSession.mock.calls[0]![0].model.headers).toEqual({
       Authorization: 'Bearer expired-key',

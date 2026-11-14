@@ -15,6 +15,7 @@ function createConductorOptions() {
 }
 
 import {
+  closeConductorAgentOnce,
   isConductorSendTransportError,
   reconnectConductorAgent,
   sendConductorWithReconnect,
@@ -57,7 +58,7 @@ describe('sendConductorWithReconnect', () => {
     expect(mockResume).not.toHaveBeenCalled();
   });
 
-  it('resumes same agentId and retries once on auth-like error', async () => {
+  it('resumes the same agentId but does not replay an auth-failed prompt', async () => {
     const firstSend = vi.fn().mockResolvedValue({
       runId: '',
       status: 'error',
@@ -94,7 +95,7 @@ describe('sendConductorWithReconnect', () => {
     expect(mockClose).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledOnce();
     expect(firstSend).toHaveBeenCalledOnce();
-    expect(secondSend).toHaveBeenCalledOnce();
+    expect(secondSend).not.toHaveBeenCalled();
     expect(mockResume).toHaveBeenCalledWith('agent-1', {
       cwd: '/repo',
       systemPrompt: 'system prompt',
@@ -103,13 +104,12 @@ describe('sendConductorWithReconnect', () => {
         docs: { type: 'http', url: 'https://example.test/mcp' },
       },
     });
-    expect(secondSend).toHaveBeenCalledWith('hello', expect.any(Object));
-    expect(onReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
-    expect(onAutomaticRetry).toHaveBeenCalledWith({
-      attempt: 1,
-      reason: 'auth',
+    expect(onReconnectAttempt).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      source: 'automatic',
     });
-    expect(result.status).toBe('finished');
+    expect(onAutomaticRetry).not.toHaveBeenCalled();
+    expect(result.status).toBe('error');
     expect(handle.conductor.send).toBe(secondSend);
   });
 
@@ -183,7 +183,7 @@ describe('sendConductorWithReconnect', () => {
     },
   );
 
-  it('returns auth error after resume retry fails', async () => {
+  it('returns auth error after resume without retrying the prompt', async () => {
     const failingSend = vi.fn().mockResolvedValue({
       runId: '',
       status: 'error',
@@ -204,15 +204,12 @@ describe('sendConductorWithReconnect', () => {
     });
 
     expect(mockResume).toHaveBeenCalledOnce();
-    expect(failingSend).toHaveBeenCalledTimes(2);
-    expect(onAutomaticRetry).toHaveBeenCalledWith({
-      attempt: 1,
-      reason: 'auth',
-    });
+    expect(failingSend).toHaveBeenCalledOnce();
+    expect(onAutomaticRetry).not.toHaveBeenCalled();
     expect(result.status).toBe('error');
   });
 
-  it('reconnects and retries once on a transport stall', async () => {
+  it('reconnects on a transport stall without replaying the prompt', async () => {
     const firstSend = vi.fn().mockResolvedValue({
       runId: 'run-1',
       status: 'error',
@@ -241,18 +238,23 @@ describe('sendConductorWithReconnect', () => {
       onTransportReconnectComplete,
     });
 
-    expect(result.status).toBe('finished');
+    expect(result.status).toBe('error');
     expect(mockClose).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledWith('agent-1', {
       cwd: '/repo',
       systemPrompt: 'system prompt',
     });
-    expect(secondSend).toHaveBeenCalledWith('same prompt', expect.any(Object));
+    expect(firstSend).toHaveBeenCalledOnce();
+    expect(secondSend).not.toHaveBeenCalled();
     expect(onAuthReconnectAttempt).not.toHaveBeenCalled();
-    expect(onTransportReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
+    expect(onTransportReconnectAttempt).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      source: 'automatic',
+    });
     expect(onTransportReconnectComplete).toHaveBeenCalledWith({
       agentId: 'agent-1',
       success: true,
+      source: 'automatic',
     });
   });
 
@@ -300,6 +302,47 @@ describe('sendConductorWithReconnect', () => {
     expect(mockResume).not.toHaveBeenCalled();
   });
 
+  it('closes an automatic resume that completes after shutdown', async () => {
+    const shutdown = new AbortController();
+    const authError = {
+      runId: 'run-auth-error',
+      status: 'error' as const,
+      error: { code: 'auth', message: PI_API_KEY_RESOLUTION_ERROR },
+    };
+    const send = vi.fn().mockResolvedValue(authError);
+    const handle = createHandle(send);
+    const originalAgent = handle.conductor;
+    const lateAgentClose = vi.fn().mockResolvedValue(undefined);
+    const lateAgent = {
+      agentId: 'agent-1',
+      send: vi.fn(),
+      close: lateAgentClose,
+    };
+    let resolveResume!: (agent: typeof lateAgent) => void;
+    const pendingResume = new Promise<typeof lateAgent>((resolve) => {
+      resolveResume = resolve;
+    });
+    mockResume.mockReturnValueOnce(pendingResume);
+    const onReconnectComplete = vi.fn();
+
+    const sendPromise = sendConductorWithReconnect(handle, 'hello', {
+      conductorAgentFactory: createFactory(),
+      conductorOptions: createConductorOptions(),
+      signal: shutdown.signal,
+      onReconnectComplete,
+    });
+
+    await vi.waitFor(() => expect(mockResume).toHaveBeenCalledOnce());
+    shutdown.abort();
+    resolveResume(lateAgent);
+
+    await expect(sendPromise).resolves.toEqual(authError);
+    expect(handle.conductor).toBe(originalAgent);
+    expect(lateAgentClose).toHaveBeenCalledOnce();
+    expect(onReconnectComplete).not.toHaveBeenCalled();
+    expect(mockClose).toHaveBeenCalledOnce();
+  });
+
   it('does not reconnect for unrelated conductor errors', async () => {
     const result = {
       runId: 'run-1',
@@ -341,6 +384,7 @@ describe('sendConductorWithReconnect', () => {
     expect(onTransportReconnectComplete).toHaveBeenCalledWith({
       agentId: 'agent-1',
       success: false,
+      source: 'automatic',
       error: 'resume unavailable',
     });
   });
@@ -372,7 +416,10 @@ describe('reconnectConductorAgent', () => {
       }),
     ).resolves.toBe('agent-1');
 
-    expect(onReconnectAttempt).toHaveBeenCalledWith({ agentId: 'agent-1' });
+    expect(onReconnectAttempt).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      source: 'manual',
+    });
     expect(mockClose).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledWith('agent-1', {
       cwd: '/repo',
@@ -409,6 +456,92 @@ describe('reconnectConductorAgent', () => {
     expect(mockClose).toHaveBeenCalledOnce();
     expect(mockResume).toHaveBeenCalledTimes(2);
     expect(handle.conductor).toBe(resumed);
+  });
+
+  it('requires manual reconnect after close rejects, then resumes without retrying close', async () => {
+    const closeError = new Error('agent cleanup failed');
+    const oldClose = vi.fn().mockRejectedValue(closeError);
+    const oldAgent = {
+      agentId: 'agent-1',
+      send: vi.fn(),
+      close: oldClose,
+    };
+    const handle = { conductor: oldAgent as never };
+    const resumed = {
+      agentId: 'agent-1',
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const automaticComplete = vi.fn();
+    const manualComplete = vi.fn();
+    mockResume.mockResolvedValue(resumed);
+
+    await expect(
+      reconnectConductorAgent(handle, {
+        conductorAgentFactory: createFactory(),
+        conductorOptions: createConductorOptions(),
+        source: 'automatic',
+        onReconnectComplete: automaticComplete,
+      }),
+    ).rejects.toBe(closeError);
+
+    expect(mockResume).not.toHaveBeenCalled();
+    expect(handle.conductor).toBe(oldAgent);
+    expect(automaticComplete).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      success: false,
+      source: 'automatic',
+      error: 'agent cleanup failed',
+      closeFailed: true,
+    });
+
+    await expect(
+      reconnectConductorAgent(handle, {
+        conductorAgentFactory: createFactory(),
+        conductorOptions: createConductorOptions(),
+        source: 'manual',
+        onReconnectComplete: manualComplete,
+      }),
+    ).resolves.toBe('agent-1');
+
+    expect(oldClose).toHaveBeenCalledOnce();
+    expect(mockResume).toHaveBeenCalledOnce();
+    expect(mockResume).toHaveBeenCalledWith('agent-1', createConductorOptions());
+    expect(handle.conductor).toBe(resumed);
+    expect(manualComplete).toHaveBeenCalledWith({
+      agentId: 'agent-1',
+      success: true,
+      source: 'manual',
+      closeFailed: true,
+    });
+  });
+
+  it('shares the old agent close with finalization after resume fails', async () => {
+    let resolveClose!: () => void;
+    const closePromise = new Promise<void>((resolve) => {
+      resolveClose = resolve;
+    });
+    const oldClose = vi.fn(() => closePromise);
+    const oldAgent = {
+      agentId: 'agent-1',
+      send: vi.fn(),
+      close: oldClose,
+    };
+    const handle = { conductor: oldAgent };
+    mockResume.mockRejectedValueOnce(new Error('resume unavailable'));
+
+    const reconnect = reconnectConductorAgent(handle, {
+      conductorAgentFactory: createFactory(),
+      conductorOptions: createConductorOptions(),
+    });
+    await vi.waitFor(() => expect(oldClose).toHaveBeenCalledOnce());
+    const finalizerClose = closeConductorAgentOnce(oldAgent as never);
+    expect(oldClose).toHaveBeenCalledOnce();
+
+    resolveClose();
+    await expect(reconnect).rejects.toThrow('resume unavailable');
+    await finalizerClose;
+    expect(oldClose).toHaveBeenCalledOnce();
   });
 });
 
