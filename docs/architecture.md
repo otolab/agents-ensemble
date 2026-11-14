@@ -109,7 +109,7 @@ operator ロールは人間が Issue TTY / TUI で直接担う場合と、user �
 
 現行の `ensemble issue` では、人間が TTY / CLI 経由で conductor を監督する（プロンプト terms の「オペレータ」）。operator-agent はその **代替・補助の実行者**として足す。Open Question の外部連携（[#481](https://github.com/otolab/agents-ensemble/issues/481)）は operator 層の入出力として扱う。
 
-**Phase 1 の設定・ランタイム**: LLM は **worker の ACP ではなく** `createConductorAgentFactory` 経路（`conductor.backend` / `conductor.model`、認証は [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の conductor 席と同経路）。config も conductor 解決を流用。別 `agentId`・operator 用プロンプト／ツール。`ensemble operator-agent` は、選択した SessionResumeStore がすべて canonical slug にあり repository slug が一意に決まる場合は `~/.ensemble/operator-agent/github.com/<owner>/<repo>/session.json`、それ以外は `~/.ensemble/operator-agent/<repoKey>/session.json` の agent ID を既定で resume し、`/exit` で ID を破棄して次回を新規 session にする。通常の TTY EOF / SIGINT / SIGTERM では backend session を閉じ、ID を保持して再開可能にする。詳細は [ADR 0031](adr/0031-operator-agent-layer.md)。
+**Phase 1 の設定・ランタイム**: LLM は **worker の ACP ではなく** `createConductorAgentFactory` 経路（`conductor.backend` / `conductor.model`、認証は [ADR 0028](adr/0028-authentication-delegation-and-ensemble-auth.md) の conductor 席と同経路）。config も conductor 解決を流用。別 `agentId`・operator 用プロンプト／ツール。`ensemble operator-agent` は、`listLocatedSessionResumeStores(repoRoot)` が返す全選択済み Store が1件以上・全件 canonical slug・同一 repository の場合に `~/.ensemble/operator-agent/github.com/<owner>/<repo>/session.json`、それ以外は `~/.ensemble/operator-agent/<repoKey>/session.json` の agent ID を既定で resume します。この一覧は watch 対象に絞らず、local の全 session discovery を対象にします。`/exit` で ID を破棄して次回を新規 session にします。通常の TTY EOF / SIGINT / SIGTERM では backend session を閉じ、ID を保持して再開可能にします。詳細は [ADR 0031](adr/0031-operator-agent-layer.md)。
 
 ### レイヤー
 
@@ -132,7 +132,7 @@ operator-agent は ADR 0014 の dispatch 原則を operator 側の報告に適�
 | 対象 | 1 Issue の worker・permission・GitHub event | watch pool に登録した複数 conductor session |
 | 入力と queue | `SessionEventQueue` が `SessionEvent` を保持 | operator-agent queue が TTY user input と session / Open Question report を保持 |
 | 観測入口 | worker runtime、permission pipeline、GitHub monitor | 稼働中は session UDS `session.observe`、到達不能時は Open Questions YAML・session-state YAML・SessionResumeStore に保存した情報 |
-| cursor / 永続化 | session sequence、GitHub monitor cursor、SessionResumeStore | 選択した ResumeStore から一意の slug が決まる場合は `~/.ensemble/operator-agent/github.com/<owner>/<repo>/watch-state.json`、それ以外は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch 設定・per-session cursor・未 dispatch report を保存 |
+| cursor / 永続化 | session sequence、GitHub monitor cursor、SessionResumeStore | `listLocatedSessionResumeStores(repoRoot)` の全選択済み Store が1件以上・全件 canonical slug・同一 repository の場合は `~/.ensemble/operator-agent/github.com/<owner>/<repo>/watch-state.json`、それ以外は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch 設定・per-session cursor・未 dispatch report を保存 |
 | 束ね dispatch | [ADR 0014](adr/0014-conductor-dispatch-batch-coalescing.md) の source key・到着順・優先度で 1 束を 1 `agent.send` | user を最優先、Open Question report、直前 session の一回継続、残り session の到着順で束ねて 1 `agent.send` |
 | hold | `set_dispatch_hold` が conductor 向け trigger を保留し `operator.message` を通す。閾値後の低優先度 `permission.stall` は回復通知として hold 中も届く | 会話 hold と `set_report_hold` による手動 hold の OR で自動 report を保留し、TTY user input と `operator.message.send` を通す |
 | 通信方向 | harness queue から conductor へ送る | harness の UDS から operator-agent へ snapshot を報告し、逆方向の `operator.message.send` は既存 conductor queue に enqueue |
@@ -152,7 +152,7 @@ Issue session の SessionResumeStore、Open Questions / session-state YAML、too
 
 ResumeStore の探索は `repoRoot` の一致を条件にせず全ローカル slug を調べ、次に現在 clone の path-hash、現在 clone の project legacy を候補にします。同じ session の候補が複数ある場合は canonical slug、現在 clone の path-hash、project legacy の順で選び、同じ保存先種別では `updatedAt` が新しいものを優先します。保存時 clone の path-hash は ResumeStore 探索先には含めません。slug と path-hash に同じ session があれば slug 側を選び、保存済み socket もそこから読みます。
 
-選択後の YAML・tool-call・Pi transcript は canonical slug を優先し、現在 clone と保存時 clone の path-hash、該当する project / CWD legacy を fallback として探します。operator-agent の session / watch state は、選択済み ResumeStore がすべて canonical slug にあり repository slug が一意に決まる場合だけ `~/.ensemble/operator-agent/github.com/<owner>/<repo>/` を使い、それ以外は `~/.ensemble/operator-agent/<repoKey>/` に保存します。project `.ensemble/` には team profile、repo config、Pi project resources が残ります。isolated Git worktree は元 repo に登録され、`.ensemble/worktrees/issue-N` に置きます（[ADR 0044](adr/0044-user-scoped-runtime-storage.md)）。
+選択後の YAML・tool-call・Pi transcript は canonical slug を優先し、現在 clone と保存時 clone の path-hash、該当する project / CWD legacy を fallback として探します。operator-agent の session / watch state の判定対象は `listLocatedSessionResumeStores(repoRoot)` が返す全選択済み Store です。1件以上あり、全件 canonical slug で repository が一つの場合だけ `~/.ensemble/operator-agent/github.com/<owner>/<repo>/` を使い、0件・path-hash / project legacy を含む場合や複数 repository にまたがる場合は `~/.ensemble/operator-agent/<repoKey>/` に保存します。判定は特定の watch 対象に絞りません。project `.ensemble/` には team profile、repo config、Pi project resources が残ります。isolated Git worktree は元 repo に登録され、`.ensemble/worktrees/issue-N` に置きます（[ADR 0044](adr/0044-user-scoped-runtime-storage.md)）。
 
 ---
 
