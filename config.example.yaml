@@ -52,6 +52,9 @@ conductor:
 acp:
   # 全 worker に適用する built-in preset。profile の acp 指定は受け付けない
   defaultPreset: cursor
+  # Pi worker: byo（既定、PATH 上の pi と ~/.pi を使用）| builtin（同梱 Pi CLI と ~/.ensemble/pi を使用）
+  # pi:
+  #   runtime: builtin
   # codex-acp 等 spawn 時の env（user → project deep merge）。LiteLLM 例は docs/config.md
   # env:
   #   MODEL_PROVIDER: litellm

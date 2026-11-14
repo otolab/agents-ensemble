@@ -41,6 +41,7 @@ import {
   resolveWorkerAcpSpawn,
   resolvedAcpSpawnToOptions,
 } from '../acp/resolve-acp-spawn.js';
+import { configurePiWorkerRuntime } from '../acp/pi-runtime.js';
 import {
   finalizeResolvedAcpSpawn,
   validateWorkerAcpPrerequisites,
@@ -169,6 +170,7 @@ import {
   type OpenQuestionControlConductorMessage,
   type OpenQuestionControlLastConductorMessage,
   type OpenQuestionControlServer,
+  type OperatorSessionShutdownMode,
 } from '../session/open-question-control.js';
 import type { SessionUsageSummary } from '../usage/types.js';
 import type { PendingPermission } from '../permission/pending-permission.js';
@@ -893,9 +895,16 @@ async function runConductorSessionWithStartupGuard(
       });
     },
   };
+  const piAgentDir = resolveConductorPiResourcePaths({
+    repoRoot: options.repoRoot,
+    config: ensembleConfig,
+  }).agentDir;
   const workers = profileWorkersToSessionSpecs(activeProfile, {
     defaultAcp: options.defaultAcp,
     spawnBase,
+    repoRoot: options.repoRoot,
+    issueNumber: issue.number,
+    ...(piAgentDir ? { piAgentDir } : {}),
     onWarning: (message) =>
       sessionLogger.emit({ type: 'harness.warning', message }),
   });
@@ -908,7 +917,13 @@ async function runConductorSessionWithStartupGuard(
         }),
       ),
     );
-    finalizeSessionWorkerSpecs(workers, options.defaultAcp);
+    finalizeSessionWorkerSpecs(
+      workers,
+      options.repoRoot,
+      issue.number,
+      options.defaultAcp,
+      piAgentDir,
+    );
   }
   const workerAcpFingerprints = new Map(
     workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
@@ -1971,23 +1986,36 @@ async function runConductorSessionWithStartupGuard(
     return true;
   };
 
+  const requestOperatorShutdown = (
+    mode: OperatorSessionShutdownMode,
+  ): boolean => {
+    if (teardownStarted || operatorRequestedExit || operatorRequestedClose) {
+      return false;
+    }
+
+    if (mode === 'exit') {
+      sessionLogger.emit({ type: 'session.operator_exit' });
+      workerSession.runtime.cancelAllActivePrompts();
+      operatorRequestedExit = true;
+    } else {
+      sessionLogger.emit({ type: 'session.operator_close' });
+      workerSession.runtime.cancelAllActivePrompts();
+      operatorRequestedClose = true;
+    }
+    shutdownIntentController.abort();
+    abortAfterOpenQuestionDrain(operatorTerminationController);
+    return true;
+  };
+
   if (options.bindOperatorInput) {
     const bindingDispose = options.bindOperatorInput({
       submit: (message, submitOptions) => {
         if (isOperatorExitCommand(message)) {
-          sessionLogger.emit({ type: 'session.operator_exit' });
-          workerSession.runtime.cancelAllActivePrompts();
-          operatorRequestedExit = true;
-          shutdownIntentController.abort();
-          abortAfterOpenQuestionDrain(operatorTerminationController);
+          requestOperatorShutdown('exit');
           return false;
         }
         if (isOperatorCloseCommand(message)) {
-          sessionLogger.emit({ type: 'session.operator_close' });
-          workerSession.runtime.cancelAllActivePrompts();
-          operatorRequestedClose = true;
-          shutdownIntentController.abort();
-          abortAfterOpenQuestionDrain(operatorTerminationController);
+          requestOperatorShutdown('close');
           return false;
         }
         if (isOperatorReconnectCommand(message)) {
@@ -2127,6 +2155,8 @@ async function runConductorSessionWithStartupGuard(
         }
         return sendOperatorMessage({ message: text, delivery });
       },
+      requestOperatorShutdown: ({ mode }) =>
+        requestOperatorShutdown(mode),
       answerOpenQuestion: async ({ questionId, answer }) => {
         if (teardownStarted) {
           throw new OpenQuestionControlOperationError(
@@ -2896,14 +2926,36 @@ function attachLegacySessionCallbacks(
 
 function finalizeSessionWorkerSpecs(
   workers: SessionWorkerSpec[],
+  repoRoot: string,
+  issueNumber: number,
   defaultAcp?: DefaultAcpResolutionOptions,
+  piAgentDir?: string,
 ): void {
+  const resolvedPiAgentDir =
+    piAgentDir ??
+    resolveConductorPiResourcePaths({
+      repoRoot,
+      config: defaultAcp?.config,
+      env: defaultAcp?.env,
+    }).agentDir;
+
   for (const worker of workers) {
     const resolved = resolveWorkerAcpSpawn({
       defaultOptions: defaultAcp,
       modelTag: worker.modelTag,
     });
-    const finalized = finalizeResolvedAcpSpawn(resolved);
+    const sessionSpawn =
+      resolved.piRuntime === 'builtin'
+        ? configurePiWorkerRuntime(resolved, {
+            repoRoot,
+            issueNumber,
+            workerName: worker.name,
+            ...(resolvedPiAgentDir
+              ? { agentDir: resolvedPiAgentDir }
+              : {}),
+          })
+        : resolved;
+    const finalized = finalizeResolvedAcpSpawn(sessionSpawn);
     worker.spawn = resolvedAcpSpawnToOptions(finalized, worker.spawn);
     worker.acpFingerprint = acpSpawnFingerprint(finalized);
   }

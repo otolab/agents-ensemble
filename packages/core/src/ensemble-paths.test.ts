@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveEnsemblePaths } from './ensemble-paths.js';
 
@@ -20,11 +20,49 @@ describe('resolveEnsemblePaths', () => {
       repoRoot: join(repoRoot, '.', 'src', '..'),
       home: join(tempDir, 'home'),
     });
+    const issueNumber = 42;
+    const workerHome = paths.piWorkerDir('implementer', issueNumber);
 
     expect(paths.repoKey).toMatch(/^[a-f0-9]{64}$/u);
     expect(paths.sessionsDir).toBe(
       join(tempDir, 'home', '.ensemble', 'sessions', paths.repoKey),
     );
+    expect(paths.piUserDir).toBe(join(tempDir, 'home', '.ensemble', 'pi'));
+    expect(dirname(workerHome)).toBe(join(paths.piWorkerRoot, 'issue-42'));
+    expect(basename(workerHome)).toMatch(
+      /^implementer-[a-f0-9]{12}$/u,
+    );
+    expect(paths.piWorkerSessionsDir('implementer', issueNumber)).toBe(
+      join(workerHome, 'sessions'),
+    );
+    expect(paths.piWorkerSessionMapPath('implementer', issueNumber)).toBe(
+      join(
+        workerHome,
+        '.pi',
+        'pi-acp',
+        'session-map.json',
+      ),
+    );
+    expect(paths.legacyPiWorkerDir('implementer')).toBe(
+      join(
+        paths.piWorkerRoot,
+        basename(workerHome),
+      ),
+    );
+    expect(paths.piWorkerDir('implementer', 43)).not.toBe(workerHome);
+    expect(() => paths.piWorkerDir('implementer', 0)).toThrow(
+      /positive Issue number/,
+    );
+    const unsafeWorkerDirectory = paths.piWorkerDir('../../outside', issueNumber);
+    expect(
+      unsafeWorkerDirectory.startsWith(
+        `${join(paths.piWorkerRoot, 'issue-42')}${sep}`,
+      ),
+    ).toBe(true);
+    expect(unsafeWorkerDirectory.startsWith(`${paths.piWorkerRoot}${sep}`)).toBe(
+      true,
+    );
+    expect(unsafeWorkerDirectory).not.toContain(`${sep}..${sep}`);
     expect(paths.sessionResumeStorePath('agent-a')).toBe(
       join(paths.sessionsDir, 'agent-a.json'),
     );

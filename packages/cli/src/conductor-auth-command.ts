@@ -14,6 +14,7 @@ import {
   type ConductorAuthStatus,
   type ConductorLoginResult,
   type ConductorLogoutResult,
+  type ConductorBackend,
   type EnsembleConfig,
   type ResolvedProfile,
 } from '@agents-ensemble/core';
@@ -25,6 +26,12 @@ export interface ConductorCommandOptions {
   profile?: string;
   provider?: string;
   modelId?: string;
+  /** Internal override used by setup to log in to the backend just selected. */
+  backend?: ConductorBackend;
+  /** User Pi root selected by setup, kept separate from project Pi resources. */
+  piAgentDir?: string;
+  /** Explicit Pi login choice used by setup; ordinary auth login keeps its current default. */
+  authMethod?: 'api_key' | 'oauth';
 }
 
 export interface ResolvedConductorCommandContext {
@@ -46,7 +53,8 @@ export async function resolveConductorCommandContext(
       config,
     })
   ).profile;
-  const backend = resolveConductorAuthBackend({ profile, config });
+  const backend =
+    options.backend ?? resolveConductorAuthBackend({ profile, config });
   const configuredModel =
     config.conductor.model !== 'default' && config.conductor.model !== 'auto'
       ? config.conductor.model
@@ -55,7 +63,10 @@ export async function resolveConductorCommandContext(
     backend === 'pi'
       ? {
           cwd: repoRoot,
-          pi: resolveConductorPiResourcePaths({ repoRoot, config }),
+          pi: {
+            ...resolveConductorPiResourcePaths({ repoRoot, config }),
+            ...(options.piAgentDir ? { agentDir: options.piAgentDir } : {}),
+          },
         }
       : undefined;
 
@@ -92,7 +103,12 @@ export async function runConductorLogin(
     ...(options.modelId ? { modelId: options.modelId } : {}),
   };
   const oauth = await isPiConductorOAuthProvider(providerOptions);
-  if (oauth) {
+  if (options.authMethod === 'oauth' && !oauth) {
+    throw new Error(
+      `Pi provider does not support OAuth. Choose API key or another provider.`,
+    );
+  }
+  if (oauth && options.authMethod !== 'api_key') {
     requireInteractiveTty('Pi OAuth login');
     return loginConductor({
       ...context.auth,
@@ -102,11 +118,15 @@ export async function runConductorLogin(
 
   const provider = options.provider ?? (await resolvePiConductorProvider(providerOptions));
   const apiKey = await promptSecret(`Pi API key for ${provider}: `);
-  return loginConductor({
-    ...context.auth,
-    provider,
-    apiKey,
-  });
+  try {
+    return await loginConductor({
+      ...context.auth,
+      provider,
+      apiKey,
+    });
+  } catch (error) {
+    throw new Error(redactSecret(error, apiKey));
+  }
 }
 
 export async function runConductorLogout(
@@ -216,4 +236,9 @@ async function promptLine(prompt: string): Promise<string> {
   } finally {
     readline.close();
   }
+}
+
+function redactSecret(error: unknown, secret: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return secret ? message.replaceAll(secret, '[redacted]') : message;
 }

@@ -1,8 +1,8 @@
-# ADR 0068: close failure 後の明示 reconnect
+# ADR 0074: close failure 後の明示 reconnect
 
 - Status: accepted
 - Date: 2026-11-13
-- Related: [Issue #668](https://github.com/otolab/agents-ensemble/issues/668), [PR #677](https://github.com/otolab/agents-ensemble/pull/677), [ADR 0066](0066-conductor-dispatch-lifecycle-and-recovery-boundary.md)
+- Related: [Issue #668](https://github.com/otolab/agents-ensemble/issues/668), [PR #677](https://github.com/otolab/agents-ensemble/pull/677), [ADR 0072](0072-conductor-dispatch-lifecycle-and-recovery-boundary.md)
 
 ## Context
 

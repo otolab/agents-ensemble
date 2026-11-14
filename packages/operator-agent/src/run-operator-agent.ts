@@ -64,6 +64,7 @@ import {
   createListConductorMessagesTool,
   createListLiveOpenQuestionsTool,
   createSendOperatorMessageTool,
+  createShutdownIssueSessionTool,
 } from './open-question-control-tools.js';
 import {
   clearOperatorAgentState,
@@ -240,6 +241,10 @@ export async function runOperatorAgent(
       set_report_hold: createSetReportHoldTool(dispatchQueue),
       release_reports: createReleaseReportsTool(dispatchQueue),
       send_operator_message: createSendOperatorMessageTool(
+        runtime.repoRoot,
+        reportResumeStoreDuplicate,
+      ),
+      shutdown_issue_session: createShutdownIssueSessionTool(
         runtime.repoRoot,
         reportResumeStoreDuplicate,
       ),

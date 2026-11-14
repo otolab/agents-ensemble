@@ -20,7 +20,9 @@ import { closeWorkerAcpSession } from '../../src/dispatch/worker-acp-session.js'
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import type { Profile } from '../../src/profile/types.js';
+import type { EnsembleConfig } from '../../src/config/types.js';
 import {
+  loadSessionResumeStore,
   saveSessionResumeStore,
   SESSION_RESUME_STORE_VERSION,
   sessionResumeStorePath,
@@ -1026,5 +1028,103 @@ describe('session resume integration', () => {
     expect(result.workerFailures).toHaveLength(1);
     expect(result.workerFailures[0]?.name).toBe('librarian');
     expect(result.workerFailures[0]?.error).toMatch(/resume cwd mismatch/);
+  });
+
+  it('keeps the saved builtin Pi session id when resume load fails', async () => {
+    const worktree = {
+      ...TEST_WORKTREE,
+      path: join(repoRoot, 'worktree'),
+    };
+    const piProfile: Profile = {
+      agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
+      workers: [{ name: 'pi-worker', kind: 'ping' }],
+    };
+    const loadSession = vi
+      .fn()
+      .mockRejectedValue(new Error('Unknown sessionId: saved-pi-session'));
+    const newSession = vi.fn().mockResolvedValue('fresh-pi-session');
+    const promptSession = vi.fn();
+    const bridge = {
+      loadSession,
+      newSession,
+      promptSession,
+      close: vi.fn(),
+    };
+    const resumePath = sessionResumeStorePath({
+      repoRoot,
+      conductorAgentId: RESUME_AGENT_ID,
+    });
+
+    await saveSessionResumeStore(resumePath, {
+      version: SESSION_RESUME_STORE_VERSION,
+      conductorAgentId: RESUME_AGENT_ID,
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: piProfile as never,
+      cursorBootstrapComplete: true,
+      openQuestions: [],
+      sequence: 0,
+      workers: {
+        'pi-worker': {
+          acpSessionId: 'saved-pi-session',
+          acpCwd: worktree.path,
+          acpSpawn: {
+            preset: 'pi',
+            command: 'node',
+            args: [],
+            piRuntime: 'builtin',
+          },
+        },
+      },
+      updatedAt: Date.now(),
+    });
+
+    let sendCount = 0;
+    mockSend.mockImplementation(async () => ({
+      runId: `run-pi-resume-failure-${sendCount++}`,
+      status: 'finished',
+      result: 'conductor-ok',
+    }));
+
+    const result = await runConductorSession({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+      profile: piProfile,
+      defaultAcp: {
+        defaultAcpCli: 'pi',
+        config: {
+          acp: {
+            defaultPreset: 'pi',
+            pi: { runtime: 'builtin' },
+          },
+        } as EnsembleConfig,
+      },
+      resumeAgentId: RESUME_AGENT_ID,
+      maxTurns: 5,
+      permissionPipeline: new PermissionPipeline({}),
+      disableGitHubMonitor: true,
+      disablePermissionDeadlockMonitor: true,
+      connectAcp: async () => bridge as never,
+      ownsWorkerAcpConnections: false,
+      workerWorktree: worktree,
+    });
+
+    expect(result.workerFailures).toHaveLength(1);
+    expect(result.workerFailures[0]?.name).toBe('pi-worker');
+    expect(result.workerFailures[0]?.error).toMatch(
+      /could not resume builtin Pi ACP session "saved-pi-session".*Refusing to start a new session without the saved context.*Unknown sessionId/u,
+    );
+    expect(loadSession).toHaveBeenCalledWith(
+      'saved-pi-session',
+      worktree.path,
+      expect.any(Function),
+    );
+    expect(newSession).not.toHaveBeenCalled();
+    expect(promptSession).not.toHaveBeenCalled();
+
+    const savedAfterResume = await loadSessionResumeStore(resumePath);
+    expect(savedAfterResume?.workers['pi-worker']?.acpSessionId).toBe(
+      'saved-pi-session',
+    );
   });
 });

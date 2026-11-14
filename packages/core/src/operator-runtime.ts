@@ -144,6 +144,8 @@ export type {
   OpenQuestionControlListItem,
   OpenQuestionControlRemoteErrorData,
   OversizedConductorMessageErrorData,
+  OperatorSessionShutdownMode,
+  OperatorSessionShutdownResult,
   SessionObservationSnapshot,
 } from './session/open-question-control.js';
 export {
