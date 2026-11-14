@@ -6294,7 +6294,7 @@ describe('runConductorSession resume / shutdown', () => {
     expect(mockSend).toHaveBeenCalledTimes(2);
   });
 
-  it('exposes a UDS message while queued and emits dispatch only when the send starts', async () => {
+  it('keeps a UDS /close message in the ordinary queue', async () => {
     const initial = createDeferred<{ runId: string; status: string; result: string }>();
     mockSend.mockReturnValueOnce(initial.promise).mockResolvedValue({
       runId: 'operator-run', status: 'finished', result: 'done',
@@ -6392,21 +6392,19 @@ describe('runConductorSession resume / shutdown', () => {
           {
             method: OPEN_QUESTION_CONTROL_METHODS.sendMessage,
             params: {
-              text: 'inspect the new operator control path',
+              text: '/close',
               delivery: 'idle',
             },
           },
         ),
       ).resolves.toEqual({ queued: true, delivery: 'idle' });
       await vi.waitFor(() => expect(mockSend).toHaveBeenCalledTimes(2));
-      expect(mockSend.mock.calls[1]?.[0]).toBe(
-        'inspect the new operator control path',
-      );
+      expect(mockSend.mock.calls[1]?.[0]).toBe('/close');
       expect(
         emitted.find(
           (event) =>
             event.type === 'operator.input' &&
-            event.text === 'inspect the new operator control path',
+            event.text === '/close',
         ),
       ).toMatchObject({ delivery: 'idle' });
       expect(operatorApi!.submit('/exit')).toBe(false);
@@ -6416,6 +6414,160 @@ describe('runConductorSession resume / shutdown', () => {
       await sessionPromise.catch(() => {});
     }
   });
+
+  it.each([
+    ['close', 'session.operator_close', 'closed', 'close'],
+    ['exit', 'session.operator_exit', 'exited', 'exit'],
+  ] as const)(
+    'uses the TTY %s lifecycle when UDS shutdown arrives during post-loop wait',
+    async (mode, eventType, lifecycle, harnessPhase) => {
+      mockSend.mockResolvedValue({
+        runId: `run-post-loop-${mode}`,
+        status: 'finished',
+        result: 'done',
+      });
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+      const onPostLoopWait = vi.fn();
+      let operatorApi: OperatorInputBindingApi | undefined;
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        waitForOperatorExit: true,
+        onPostLoopWait,
+        sessionLogger,
+        bindOperatorInput: (api) => {
+          operatorApi = api;
+        },
+      });
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      let completed = false;
+
+      try {
+        await vi.waitFor(async () => {
+          expect(onPostLoopWait).toHaveBeenCalledOnce();
+          expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath)
+            .toBeTruthy();
+        });
+        const socketPath = (await loadSessionResumeStore(resumeStorePath))
+          ?.harnessSocketPath;
+        const response = await sendOpenQuestionControlRequest<{
+          accepted: true;
+          mode: 'close' | 'exit';
+        }>(socketPath!, {
+          method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+          params: { mode },
+        });
+        expect(response).toEqual({ accepted: true, mode });
+
+        const result = await sessionPromise;
+        completed = true;
+        expect(result.stopReason).toBe('completed');
+        expect(mockSend).toHaveBeenCalledOnce();
+        expect(emitted.filter((event) => event.type === eventType)).toHaveLength(1);
+        expect(
+          emitted.some(
+            (event) =>
+              event.type === 'harness.teardown' && event.force === true,
+          ),
+        ).toBe(true);
+        expect(await loadSessionResumeStore(resumeStorePath)).toMatchObject({
+          harnessPhase,
+          lifecycle,
+        });
+      } finally {
+        if (!completed) operatorApi?.submit('/exit');
+        await sessionPromise.catch(() => {});
+      }
+    },
+  );
+
+  it.each([
+    ['close', 'session.operator_close', 'closed', 'close'],
+    ['exit', 'session.operator_exit', 'exited', 'exit'],
+  ] as const)(
+    'accepts UDS %s during the autonomous loop and tears down',
+    async (mode, eventType, lifecycle, harnessPhase) => {
+      mockSend.mockResolvedValueOnce({
+        runId: 'run-autonomous',
+        status: 'running',
+        result: 'still active',
+      });
+      const emitted: SessionLogEvent[] = [];
+      const sessionLogger = new SessionLogger({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+      });
+      sessionLogger.subscribe((event) => emitted.push(event));
+      let operatorApi: OperatorInputBindingApi | undefined;
+      const sessionPromise = runConductorSession({
+        issueUrl: TEST_ISSUE.url,
+        repoRoot,
+        profile: { workers: [] },
+        maxTurns: 5,
+        permissionPipeline: new PermissionPipeline({}),
+        registerProcessSignalHandlers: false,
+        sessionLogger,
+        bindOperatorInput: (api) => {
+          operatorApi = api;
+        },
+      });
+      const resumeStorePath = sessionResumeStorePath({
+        repoRoot,
+        conductorAgentId: 'agent-test',
+      });
+      let completed = false;
+
+      try {
+        await vi.waitFor(async () => {
+          expect(mockSend).toHaveBeenCalledOnce();
+          expect((await loadSessionResumeStore(resumeStorePath))?.harnessPhase)
+            .toBe('running');
+          expect((await loadSessionResumeStore(resumeStorePath))?.harnessSocketPath)
+            .toBeTruthy();
+        });
+        const socketPath = (await loadSessionResumeStore(resumeStorePath))
+          ?.harnessSocketPath;
+        await expect(
+          sendOpenQuestionControlRequest(socketPath!, {
+            method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+            params: { mode },
+          }),
+        ).resolves.toEqual({ accepted: true, mode });
+
+        const result = await sessionPromise;
+        completed = true;
+        expect(result.stopReason).toBe('completed');
+        expect(mockClose).toHaveBeenCalled();
+        expect(emitted.filter((event) => event.type === eventType))
+          .toHaveLength(1);
+        expect(
+          emitted.some(
+            (event) =>
+              event.type === 'harness.teardown' && event.force === true,
+          ),
+        ).toBe(true);
+        expect(await loadSessionResumeStore(resumeStorePath)).toMatchObject({
+          harnessPhase,
+          lifecycle,
+        });
+      } finally {
+        if (!completed) operatorApi?.submit('/exit');
+        await sessionPromise.catch(() => {});
+      }
+    },
+  );
 
   it('keeps generic UDS messages separate from a single Open Question answer path', async () => {
     let conductorTools: Parameters<typeof mockCreate>[0]['customTools'];
