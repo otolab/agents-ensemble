@@ -275,7 +275,7 @@ async function readSessionResumeStore(
 export async function requireSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
-  issueUrl?: string;
+  issueUrl: string;
 }): Promise<SessionResumeStore> {
   const located = await requireLocatedSessionResumeStoreForResume(input);
   return located.resumeStore;
@@ -284,31 +284,26 @@ export async function requireSessionResumeStoreForResume(input: {
 export async function requireLocatedSessionResumeStoreForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
-  issueUrl?: string;
+  issueUrl: string;
   onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
 }): Promise<LocatedSessionResumeStore> {
-  const locations = input.issueUrl
-    ? await listLocatedSessionResumeStoresPage(
-        input.repoRoot,
-        {
-          issueUrl: input.issueUrl,
-          conductorAgentId: input.conductorAgentId,
-        },
-        { onDuplicate: input.onDuplicate },
-      )
-    : {
-        sessions: await listSessionResumeStoreLocations(input.repoRoot, {
-          onDuplicate: input.onDuplicate,
-        }),
-      };
-  const located = locations.sessions.find(
-    (candidate) =>
-      candidate.resumeStore.conductorAgentId === input.conductorAgentId,
+  if (
+    typeof input.issueUrl !== 'string' ||
+    !input.issueUrl.trim()
+  ) {
+    throw new Error('issueUrl is required to resume a session.');
+  }
+  const locations = await listLocatedSessionResumeStoresPage(
+    input.repoRoot,
+    {
+      issueUrl: input.issueUrl,
+      conductorAgentId: input.conductorAgentId,
+    },
+    { onDuplicate: input.onDuplicate },
   );
+  const located = locations.sessions[0];
   if (!located) {
-    const path = input.issueUrl
-      ? canonicalSessionResumeStorePath({ ...input, issueUrl: input.issueUrl })
-      : sessionResumeStorePath(input);
+    const path = canonicalSessionResumeStorePath(input);
     throw new SessionResumeStoreNotFoundError(input.conductorAgentId, path);
   }
 
@@ -372,6 +367,7 @@ export async function requireLocatedSessionResumeStoreForResume(input: {
 export async function requireSessionSidecarForResume(input: {
   repoRoot: string;
   conductorAgentId: string;
+  issueUrl: string;
 }): Promise<SessionSidecar> {
   try {
     return await requireSessionResumeStoreForResume(input);
@@ -455,10 +451,16 @@ export async function findSessionResumeStore(
     onDuplicate?: (diagnostic: SessionResumeStoreDuplicateDiagnostic) => void;
   } = {},
 ): Promise<LocatedSessionResumeStore | undefined> {
-  return (await listLocatedSessionResumeStores(repoRoot, options)).find(
+  const matches = (await listLocatedSessionResumeStores(repoRoot, options)).filter(
     (candidate) =>
       candidate.resumeStore.conductorAgentId === conductorAgentId,
   );
+  if (matches.length > 1) {
+    throw new Error(
+      `Session ${conductorAgentId} is ambiguous across saved Issues; use findSessionResumeStoreBySelector with githubRepo or issueUrl.`,
+    );
+  }
+  return matches[0];
 }
 
 /**

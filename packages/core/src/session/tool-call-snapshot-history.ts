@@ -46,6 +46,30 @@ export function toolCallSnapshotHistoryPath(input: {
   );
 }
 
+/** Canonical slug first, then current/saved clone fallbacks in one shared order. */
+export function toolCallSnapshotHistoryReadPaths(input: {
+  repoRoot: string;
+  conductorAgentId: string;
+  issueUrl: string;
+  fallbackRepoRoots?: readonly string[];
+}): string[] {
+  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
+  return [
+    ...new Set([
+      toolCallSnapshotHistoryPath(input),
+      paths.toolCallHistoryPath(input.conductorAgentId),
+      ...(input.fallbackRepoRoots ?? []).flatMap((repoRoot) => {
+        const fallback = resolveEnsemblePaths({ repoRoot });
+        return [
+          fallback.toolCallHistoryPath(input.conductorAgentId),
+          fallback.legacyToolCallHistoryPath(input.conductorAgentId),
+        ];
+      }),
+      paths.legacyToolCallHistoryPath(input.conductorAgentId),
+    ]),
+  ];
+}
+
 /**
  * Read the optional history independently from the required session resume store.
  * Invalid history is discarded locally so it cannot prevent session resume.
@@ -57,19 +81,9 @@ export async function loadToolCallSnapshotHistory(input: {
   fallbackRepoRoots?: readonly string[];
   now?: number;
 }): Promise<LoadToolCallSnapshotHistoryResult> {
-  const paths = resolveEnsemblePaths({ repoRoot: input.repoRoot });
-  const canonicalPath = toolCallSnapshotHistoryPath(input);
-  const fallbackPaths = [
-    paths.toolCallHistoryPath(input.conductorAgentId),
-    ...(input.fallbackRepoRoots ?? []).flatMap((repoRoot) => {
-      const fallback = resolveEnsemblePaths({ repoRoot });
-      return [
-        fallback.toolCallHistoryPath(input.conductorAgentId),
-        fallback.legacyToolCallHistoryPath(input.conductorAgentId),
-      ];
-    }),
-    paths.legacyToolCallHistoryPath(input.conductorAgentId),
-  ].filter((path) => path !== canonicalPath);
+  const readPaths = toolCallSnapshotHistoryReadPaths(input);
+  const canonicalPath = readPaths[0]!;
+  const fallbackPaths = readPaths.slice(1);
   const now = input.now ?? Date.now();
   // A present slug file has precedence, even when malformed. Keep it intact
   // and report the problem instead of deleting it or promoting legacy data.

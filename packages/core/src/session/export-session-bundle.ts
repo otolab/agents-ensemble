@@ -29,6 +29,7 @@ import {
   readWorkerSessionHistory,
   type WorkerSessionHistoryResult,
 } from './worker-session-history.js';
+import { toolCallSnapshotHistoryReadPaths } from './tool-call-snapshot-history.js';
 
 export type SessionBundleStatus = 'complete' | 'partial';
 
@@ -326,7 +327,7 @@ async function writeSessionBundle(input: {
     warnings,
   });
   await exportToolCallHistory({
-    paths,
+    repoRoot,
     conductorAgentId,
     issueUrl: resumeStore.issueUrl,
     fallbackRepoRoot: resumeStore.repoRoot,
@@ -520,7 +521,7 @@ async function exportSnapshotFile(input: {
 }
 
 async function exportToolCallHistory(input: {
-  paths: EnsemblePaths;
+  repoRoot: string;
   conductorAgentId: string;
   issueUrl: string;
   fallbackRepoRoot: string;
@@ -539,21 +540,14 @@ async function exportToolCallHistory(input: {
     });
     return;
   }
-  const fallbackPaths = resolveEnsemblePaths({
-    repoRoot: input.fallbackRepoRoot,
-  });
   await exportSnapshotFile({
     id: 'harness.toolCallSnapshots',
-    candidates: [
-      input.paths.canonicalToolCallHistoryPath(
-        input.issueUrl,
-        input.conductorAgentId,
-      ),
-      input.paths.toolCallHistoryPath(input.conductorAgentId),
-      fallbackPaths.toolCallHistoryPath(input.conductorAgentId),
-      input.paths.legacyToolCallHistoryPath(input.conductorAgentId),
-      fallbackPaths.legacyToolCallHistoryPath(input.conductorAgentId),
-    ],
+    candidates: toolCallSnapshotHistoryReadPaths({
+      repoRoot: input.repoRoot,
+      conductorAgentId: input.conductorAgentId,
+      issueUrl: input.issueUrl,
+      fallbackRepoRoots: [input.fallbackRepoRoot],
+    }),
     outputDirectory: input.outputDirectory,
     bundlePath: 'harness/session.tool-calls',
     files: input.files,

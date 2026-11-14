@@ -678,8 +678,21 @@ describe('SessionResumeStore', () => {
       requireSessionResumeStoreForResume({
         repoRoot: tempDir,
         conductorAgentId: 'missing-agent',
+        issueUrl: 'https://github.com/org/repo/issues/9',
       }),
     ).rejects.toThrow(SessionResumeStoreNotFoundError);
+  });
+
+  it('requires an Issue URL when reading a session for resume', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+
+    await expect(
+      requireLocatedSessionResumeStoreForResume({
+        repoRoot: tempDir,
+        conductorAgentId: 'agent-without-issue-scope',
+        issueUrl: '',
+      }),
+    ).rejects.toThrow('issueUrl is required to resume a session.');
   });
 
   it('prefers the canonical slug store over duplicate hash and project files and reports the selected paths', async () => {
@@ -773,6 +786,7 @@ describe('SessionResumeStore', () => {
       requireSessionResumeStoreForResume({
         repoRoot: tempDir,
         conductorAgentId: agentId,
+        issueUrl,
       }),
     ).resolves.toMatchObject({
       harnessSocketPath: '/tmp/ens-oq-live/s.sock',
@@ -880,6 +894,7 @@ describe('SessionResumeStore', () => {
     async ({ contents }) => {
       tempDir = await createHome('ensemble-session-resume-store-');
       const agentId = `corrupt-hash-only-${contents.length}`;
+      const issueUrl = 'https://github.com/org/repo/issues/9';
       const hashPath = sessionResumeStorePath({
         repoRoot: tempDir,
         conductorAgentId: agentId,
@@ -893,6 +908,7 @@ describe('SessionResumeStore', () => {
         requireLocatedSessionResumeStoreForResume({
           repoRoot: tempDir,
           conductorAgentId: agentId,
+          issueUrl,
         }),
       ).rejects.toThrow(SessionResumeStoreNotFoundError);
       await expect(loadSessionResumeStore(hashPath)).rejects.toThrow(
@@ -969,6 +985,41 @@ describe('SessionResumeStore', () => {
       path: slugPath,
       resumeStore: { harnessSocketPath: '/tmp/ens-oq-live/cross-clone.sock' },
     });
+  });
+
+  it('rejects an ID-only lookup when the same session id exists in different repositories', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-');
+    const conductorAgentId = 'shared-session-id';
+    const issueUrls = [
+      'https://github.com/org/first-repo/issues/1',
+      'https://github.com/org/second-repo/issues/2',
+    ];
+    const paths = resolveEnsemblePaths({ repoRoot: tempDir });
+    for (const [index, issueUrl] of issueUrls.entries()) {
+      const path = paths.canonicalSessionResumeStorePath(
+        issueUrl,
+        conductorAgentId,
+      );
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(
+        path,
+        `${JSON.stringify(
+          baseResumeStore({
+            conductorAgentId,
+            issueUrl,
+            repoRoot: `/clone/${index}`,
+            updatedAt: index + 1,
+          }),
+        )}\n`,
+        'utf8',
+      );
+    }
+
+    await expect(
+      findSessionResumeStore(tempDir, conductorAgentId),
+    ).rejects.toThrow(
+      /is ambiguous across saved Issues; use findSessionResumeStoreBySelector/,
+    );
   });
 
   it('lists every local slug group with scope filters and keyset pagination', async () => {
@@ -1303,6 +1354,7 @@ describe('SessionResumeStore', () => {
     const migrated = await requireSessionResumeStoreForResume({
       repoRoot: tempDir,
       conductorAgentId: agentId,
+      issueUrl: 'https://github.com/org/repo/issues/1',
     });
     expect(migrated.updatedAt).toBe(123);
     await expect(
@@ -1352,6 +1404,7 @@ describe('SessionResumeStore', () => {
       requireSessionSidecarForResume({
         repoRoot: tempDir,
         conductorAgentId: 'missing-agent',
+        issueUrl: state.issueUrl,
       }),
     ).rejects.toMatchObject({
       name: SessionSidecarNotFoundError.name,
