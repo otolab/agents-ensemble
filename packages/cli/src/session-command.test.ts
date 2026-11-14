@@ -793,6 +793,121 @@ describe('ensemble session commands', () => {
     expect(JSON.parse(unmatched.stdout).total).toBe(0);
   });
 
+  it('shows and lists a session after migration from another clone', async () => {
+    const migratedAgentId = 'session-migrated-from-another-clone';
+    const migratedIssueUrl =
+      'https://github.com/otolab/agents-ensemble/issues/698';
+    const oldRepoRoot = join(tempRoot, 'old-clone');
+    await mkdir(oldRepoRoot, { recursive: true });
+    const init = spawnSync('git', ['init', '--quiet', repoRoot], {
+      encoding: 'utf8',
+    });
+    expect(init.status).toBe(0);
+    const remote = spawnSync(
+      'git',
+      [
+        '-C',
+        repoRoot,
+        'remote',
+        'add',
+        'origin',
+        'git@github.com:otolab/agents-ensemble.git',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(remote.status).toBe(0);
+
+    const oldPaths = resolveEnsemblePaths({
+      repoRoot: oldRepoRoot,
+      userEnsembleRoot: userRoot,
+    });
+    const sourcePath = oldPaths.sessionResumeStorePath(migratedAgentId);
+    await mkdir(dirname(sourcePath), { recursive: true });
+    await writeFile(
+      sourcePath,
+      `${JSON.stringify({
+        version: 1,
+        conductorAgentId: migratedAgentId,
+        issueUrl: migratedIssueUrl,
+        repoRoot: oldRepoRoot,
+        profile: { workers: [] },
+        openQuestions: [],
+        sequence: 0,
+        workers: {},
+        updatedAt: 1_800_000_000_698,
+      }, null, 2)}\n`,
+      'utf8',
+    );
+
+    const migrationScript = fileURLToPath(
+      new URL(
+        '../../../scripts/migrate-project-ensemble-runtime-to-user.mjs',
+        import.meta.url,
+      ),
+    );
+    const manifestPath = join(tempRoot, 'migration-manifest.json');
+    const migration = spawnSync(
+      process.execPath,
+      [
+        migrationScript,
+        '--user-root',
+        userRoot,
+        '--manifest',
+        manifestPath,
+        '--apply',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(migration.status).toBe(0, migration.stderr);
+
+    const slugStorePath = join(
+      userRoot,
+      'sessions',
+      'github.com',
+      'otolab',
+      'agents-ensemble',
+      `${migratedAgentId}.json`,
+    );
+    const migratedStore = JSON.parse(await readFile(slugStorePath, 'utf8'));
+    expect(migratedStore.repoRoot).toBe(oldRepoRoot);
+    expect(await readFile(sourcePath, 'utf8')).toContain(migratedAgentId);
+
+    const show = runCli([
+      'session',
+      'show',
+      migratedAgentId,
+      '--repo-root',
+      repoRoot,
+      '--json',
+    ]);
+    expect(show.status).toBe(0);
+    expect(JSON.parse(show.stdout)).toMatchObject({
+      repoRoot,
+      session: {
+        conductorAgentId: migratedAgentId,
+        issueUrl: migratedIssueUrl,
+        location: 'canonical-slug',
+      },
+      paths: { sessionResumeStore: slugStorePath },
+    });
+
+    const list = runCli([
+      'session',
+      'list',
+      '--repo-root',
+      repoRoot,
+      '--json',
+    ]);
+    expect(list.status).toBe(0);
+    expect(JSON.parse(list.stdout).sessions).toContainEqual(
+      expect.objectContaining({
+        conductorAgentId: migratedAgentId,
+        issueUrl: migratedIssueUrl,
+        location: 'canonical-slug',
+      }),
+    );
+  });
+
   it('shows YAML paths and counts without printing free-text values', () => {
     const result = runCli([
       'session',

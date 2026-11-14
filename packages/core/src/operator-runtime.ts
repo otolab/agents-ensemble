@@ -188,3 +188,6 @@ export {
 } from './session/export-session-bundle.js';
 export { parseIssueUrl } from './issue/issue-ref.js';
 export type { IssueRef } from './issue/issue-ref.js';
+export {
+  resolveGitHubRepositoryFromOrigin,
+} from './issue/resolve-issue-url.js';

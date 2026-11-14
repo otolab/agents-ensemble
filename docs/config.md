@@ -476,7 +476,7 @@ Pi の `settings.md` にあるが headless conductor / operator-agent が適用�
 | `defaultTools` / `codemode.*` | `defaultTools` は headless conductor では無視します。built-in coding tools は profile の `conductor.builtinTools`（省略・未指定は有効、`false` のみ無効）で制御し、`config.yaml` には同キーを設けません。 |
 | `packages` | Pi package の install・解決。package が提供する resource は自動導入しません。 |
 | `enableSkillCommands` | skill command の登録 toggle。読み込んだ skill の `/skill:<name>` 展開可否はこのキーで変更できません。 |
-| `sessionDir` | Pi の settings にある session 保存先は conductor では変更できません。transcript は `~/.ensemble/sessions/<repoKey>/pi/` に保存し、旧 `<conductorCwd>/.ensemble/pi/sessions/` から再開時に移行します。 |
+| `sessionDir` | Pi の settings にある session 保存先は conductor では変更できません。Issue transcript は `~/.ensemble/sessions/github.com/<owner>/<repo>/pi/` に保存します。互換期間は slug にない transcript に限り、現在の `repoRoot` から導ける user path-hash と旧 `<conductorCwd>/.ensemble/pi/sessions/` を read fallback として使い、resume 時に対象 file を slug 側へ copy します。これは再開対象の lazy promotion で、全 path-hash と列挙 checkout の project-local data は migration tool の一括 inventory / copy で扱います。 |
 | `theme` / `quietStartup` / `tuiMode` / `fullscreen*` / `terminal.*` / `images.*` / `markdown.*` | headless conductor の TUI・terminal 表示 |
 | `transport` / `httpProxy` / `httpIdleTimeoutMs` / `websocketConnectTimeoutMs` / `retry.*` / `shellPath` / `shellCommandPrefix` / `npmCommand` | Pi coding-agent の network、shell、package runtime |
 | `collapseChangelog` / `enableInstallTelemetry` / `enableAnalytics` / `warnings.*` | coding-agent の update、telemetry、UI warning |
