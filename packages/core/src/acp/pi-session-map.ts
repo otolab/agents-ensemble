@@ -50,33 +50,41 @@ try {
       throw 'Builtin Pi storage cannot contain a reparse point.'
     }
 
-    $acl = $item.GetAccessControl()
-    $acl.SetAccessRuleProtection($true, $false)
-    foreach ($existingRule in @($acl.Access)) {
-      [void]$acl.RemoveAccessRuleSpecific($existingRule)
+    $ownerSid = '*' + $sid.Value
+    $icacls = Join-Path (Join-Path $env:SystemRoot 'System32') 'icacls.exe'
+    & $icacls $path /reset /Q
+    if ($LASTEXITCODE -ne 0) {
+      throw 'Could not reset the builtin Pi storage ACL.'
     }
-    $acl.SetOwner($sid)
+    & $icacls $path /setowner $ownerSid /Q
+    if ($LASTEXITCODE -ne 0) {
+      throw 'Could not set the builtin Pi storage owner.'
+    }
+    & $icacls $path /inheritance:r /Q
+    if ($LASTEXITCODE -ne 0) {
+      throw 'Could not remove inherited builtin Pi storage ACL entries.'
+    }
 
+    $permission = if ($item.PSIsContainer) {
+      '{0}:(OI)(CI)F' -f $ownerSid
+    } else {
+      '{0}:F' -f $ownerSid
+    }
+    & $icacls $path /grant:r $permission /Q
+    if ($LASTEXITCODE -ne 0) {
+      throw 'Could not grant owner-only access to builtin Pi storage.'
+    }
+
+    $actual = $item.GetAccessControl()
+    $actualOwner = $actual.GetOwner(
+      [System.Security.Principal.SecurityIdentifier]
+    ).Value
     $inheritance = [System.Security.AccessControl.InheritanceFlags]::None
     if ($item.PSIsContainer) {
       $inheritance =
         [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
         [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
     }
-    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-      $sid,
-      [System.Security.AccessControl.FileSystemRights]::FullControl,
-      $inheritance,
-      [System.Security.AccessControl.PropagationFlags]::None,
-      [System.Security.AccessControl.AccessControlType]::Allow
-    )
-    $acl.AddAccessRule($rule)
-    $item.SetAccessControl($acl)
-
-    $actual = $item.GetAccessControl()
-    $actualOwner = $actual.GetOwner(
-      [System.Security.Principal.SecurityIdentifier]
-    ).Value
     $actualRules = @(
       $actual.GetAccessRules(
         $true,

@@ -350,7 +350,11 @@ try {
       $rules[0].InheritanceFlags -ne $inheritance -or
       -not $rules[0].IsInherited
     ) {
-      throw 'New builtin Pi data did not inherit the owner-only ACL.'
+      throw (
+        "New builtin Pi data at '$path' did not inherit the owner-only ACL. " +
+        "Owner=$($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value); " +
+        "Protected=$($acl.AreAccessRulesProtected); Rules=$($rules | Out-String)"
+      )
     }
   }
 } catch {

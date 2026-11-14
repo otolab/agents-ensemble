@@ -11,9 +11,9 @@ ADR 0070 は POSIX の mode と `umask 077` を定めたが、Windows では Nod
 
 ## Decision
 
-- Windows では wrapper が標準の Windows PowerShell と .NET の filesystem ACL API を使い、`~/.ensemble/pi/worker` と現在の repository storage tree の DACL を制限する。各対象の owner を現在の Windows account SID に揃え、継承 ACE と既存の明示 ACE を外し、現在の account にだけ Full Control を許可する。
+- Windows では wrapper が標準の `icacls.exe` で `~/.ensemble/pi/worker` と現在の repository storage tree の DACL を設定する。各対象の ACL を reset してから owner を現在の Windows account SID に揃え、継承 ACE を外し、現在の account にだけ Full Control を許可する。PowerShell の .NET filesystem ACL API で owner と ACE を読み戻して検証する。PowerShell Security module の `Get-Acl` / `Set-Acl` には依存しない。
 - Directory の ACE は child file / directory に継承させる。upstream `pi-acp@0.0.34` の map と同梱 Pi CLI の transcript は wrapper が指定した専用 directory 内に作られるため、新規ファイルにもこの DACL が継承される。既存の repository storage tree 内も再帰的に設定し、読み戻した ACL が owner・ACE 数・identity・権限・継承設定の条件を満たすことを確認する。
-- PowerShell が起動できない、ACL を変更できない、または検証に失敗した場合は、upstream adapter を起動せず builtin attach を失敗させる。
+- PowerShell / `icacls.exe` が起動できない、ACL を変更できない、または検証に失敗した場合は、upstream adapter を起動せず builtin attach を失敗させる。
 - ACL の対象は builtin worker の専用保存先と session map / transcript である。Pi の共有 settings / auth root、BYO の保存先、その他の利用者データは変更しない。upstream 更新時は map / transcript の作成先と permission の振る舞いを確認する。
 
 ## Consequences
