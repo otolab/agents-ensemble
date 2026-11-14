@@ -824,6 +824,31 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
     liveControl,
     /旧 `~\/\.ensemble\/operator-agent\/<repoKey>\/watch-state\.json`.*#698 の一括 migration/u,
   );
+  assert.ok(
+    liveControl.includes(
+      '通常の永続化先は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}/open-questions.yaml`',
+    ),
+  );
+  assert.ok(
+    liveControl.includes(
+      'SessionResumeStore は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json`',
+    ),
+  );
+  assert.ok(
+    liveControl.includes(
+      '`~/.ensemble/sessions/<repoKey>/` は互換読取用の fallback に限り',
+    ),
+  );
+  assert.ok(
+    !liveControl.includes(
+      '永続化先は `~/.ensemble/sessions/<repoKey>/',
+    ),
+  );
+  assert.ok(
+    !liveControl.includes(
+      '- `~/.ensemble/sessions/<repoKey>/` と session data directory',
+    ),
+  );
 
   for (const document of [sessionLogging, liveControl]) {
     assert.doesNotMatch(

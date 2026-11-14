@@ -324,7 +324,7 @@ await aggregateOrStore(history);
 
 回答候補は Open Questions YAML に atomic save されてから live Registry と event queue に反映されます。YAML は回答永続化・resume の正本で、SessionResumeStore は JSON mirror として更新されます。通常の success response は YAML save と conductor dispatch receipt の成功後に返ります。SessionResumeStore の flush 成功は success 条件ではありません。回答処理で mirror 更新に失敗すると warning を記録し、後続 flush を一度 schedule して再同期を試みます。これは再同期の保証ではなく、その flush も失敗した場合は warning を記録してこの経路での再試行を終えます。
 
-永続化先は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}/open-questions.yaml`、SessionResumeStore は `~/.ensemble/sessions/<repoKey>/{conductorAgentId}.json` です。SessionResumeStore は `harnessSocketPath` の endpoint index を持ち、Open Question snapshot も互換用 mirror として含みます。
+通常の永続化先は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}/open-questions.yaml`、SessionResumeStore は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json` です。`~/.ensemble/sessions/<repoKey>/` は互換読取用の fallback に限り、新規保存や通常 flush の書き込み先ではありません。SessionResumeStore は `harnessSocketPath` の endpoint index を持ち、Open Question snapshot も互換用 mirror として含みます。
 
 JSON-RPC error は次の envelope です。`data` は該当する場合だけ付きます。
 
@@ -367,7 +367,7 @@ conductor send の通常時の再接続方針は既存 dispatch policy に従い
 
 ## Security と privacy
 
-- `~/.ensemble/sessions/<repoKey>/` と session data directory、UDS runtime directory は owner-only (`0700`) です。SessionResumeStore の JSON、Open Questions YAML、socket は owner read/write (`0600`) です。
+- `~/.ensemble/sessions/github.com/<owner>/<repo>/` と session data directory、UDS runtime directory は owner-only (`0700`) です。保持している user path-hash fallback directory も同様に owner-only とします。SessionResumeStore の JSON、Open Questions YAML、socket は owner read/write (`0600`) です。
 - token 認証はありません。同じ OS user の別 process は socket に接続できる trust boundary です。
 - UDS server は request / response body を access log に出しません。一方、既存 CLI の operator observation は質問本文・回答本文を非 TTY では stderr、TTY では TUI activity log に表示し、SessionResumeStore / YAML にも保存します。最後の conductor 応答 API も同じ OS user の client に本文を返します。
 - API は質問・context・choice を保存値のまま返します。自由文中の secret や repository 外情報を検出する一般的な redaction はありません。機密値を質問・context・回答へ含めないでください。詳細は [session-logging.md](session-logging.md) を参照してください。
