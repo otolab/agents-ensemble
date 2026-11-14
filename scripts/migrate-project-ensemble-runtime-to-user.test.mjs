@@ -83,6 +83,7 @@ test('an empty checkout list remains unconfirmed despite the complete assertion'
     manifest.checkoutInventory.operatorAssertedComplete,
     true,
   );
+  assert.equal(manifest.checkoutInventory.scanCompleted, true);
   assert.equal(manifest.checkoutInventory.complete, false);
   assert.equal(
     manifest.checkoutInventory.completeness,
@@ -117,6 +118,7 @@ test('complete checkout inventory retains failed root and source scan evidence',
   const sourceError = findEntry(manifest, sourceDirectory);
 
   assert.equal(manifest.checkoutInventory.complete, true);
+  assert.equal(manifest.checkoutInventory.scanCompleted, true);
   assert.deepEqual(manifest.checkoutInventory.unresolvedRoots, [
     missingCheckoutRoot,
   ]);
@@ -306,6 +308,7 @@ test('recoverable EACCES scan errors persist unresolved root and source evidence
   );
 
   assert.equal(manifest.checkoutInventory.complete, true);
+  assert.equal(manifest.checkoutInventory.scanCompleted, true);
   assert.ok(
     manifest.checkoutInventory.unresolvedRoots.includes(rootBlockedCheckout),
   );
@@ -323,6 +326,7 @@ test('recoverable EACCES scan errors persist unresolved root and source evidence
     ),
   );
   assert.equal(rootMarkerRecord.disposition, 'unresolved');
+  assert.equal(rootMarkerRecord.inventoryConfirmed, false);
   assert.ok(['EACCES', 'EPERM'].includes(rootMarkerRecord.error.code));
   assert.equal(rootMarkerRecord.provenance.checkoutRoot, rootBlockedCheckout);
   assert.equal(rootMarkerEntry.disposition, 'unresolved');
@@ -330,6 +334,10 @@ test('recoverable EACCES scan errors persist unresolved root and source evidence
   assert.equal(rootMarkerEntry.error.syscall, 'lstat');
   assert.ok(Number.isInteger(rootMarkerEntry.error.errno));
   assert.equal(rootMarkerEntry.provenance.checkoutRoot, rootBlockedCheckout);
+  assert.equal(
+    rootMarkerEntry.provenance.checkoutRootInventoryConfirmed,
+    false,
+  );
   assert.ok(rootMarkerEntry.recovery);
 
   assert.equal(sourceRootRecord.disposition, 'scanned');
@@ -346,6 +354,11 @@ test('recoverable EACCES scan errors persist unresolved root and source evidence
   assert.equal(sourceEntry.error.syscall, 'lstat');
   assert.ok(Number.isInteger(sourceEntry.error.errno));
   assert.equal(sourceEntry.provenance.checkoutRoot, sourceBlockedCheckout);
+  assert.equal(sourceEntry.provenance.checkoutRootInventoryConfirmed, false);
+  assert.equal(
+    Object.hasOwn(sourceEntry.provenance, 'checkoutInventoryConfirmed'),
+    false,
+  );
   assert.ok(sourceEntry.recovery);
   assert.ok(
     manifest.unresolvedSources.some(
@@ -1066,7 +1079,13 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
   );
   assert.match(
     sessionLogging,
-    /consumer はこの値だけで判断せず unresolved fields も確認/u,
+    /`complete` だけで個々の root \/ source の確認済みとは判断できません/u,
+  );
+  assert.match(sessionLogging, /`operatorAssertedComplete` は/u);
+  assert.match(sessionLogging, /`scanCompleted` は/u);
+  assert.match(
+    sessionLogging,
+    /`provenance\.checkoutRootInventoryConfirmed` は、関連 root の `inventoryConfirmed` と同じ値/u,
   );
   assert.match(
     liveControl,

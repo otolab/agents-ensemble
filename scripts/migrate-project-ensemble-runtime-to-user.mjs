@@ -1826,7 +1826,6 @@ async function scanHashSessionRoots({
 
 async function scanCheckoutRoots({
   checkoutRoots,
-  checkoutRootsComplete,
   userRoot,
   manifest,
   storeIndex,
@@ -1970,36 +1969,56 @@ async function scanCheckoutRoots({
       excludedPiTranscriptIds,
     });
   }
-  manifest.checkoutInventory.scanCompleted = true;
-  const inventoryComplete =
-    checkoutRootsComplete && checkoutRoots.length > 0;
-  manifest.checkoutInventory.complete = inventoryComplete;
-  manifest.checkoutInventory.completeness = checkoutRootsComplete
-    ? inventoryComplete
-      ? 'operator-asserted-complete'
-      : 'empty-inventory-unverified'
-    : 'not-confirmed';
-  for (const root of manifest.checkoutInventory.declaredRoots) {
+}
+
+function refreshCheckoutInventory(manifest, scanCompleted) {
+  const inventory = manifest.checkoutInventory;
+  const roots = inventory.declaredRoots;
+  const operatorAssertedComplete =
+    inventory.operatorAssertedComplete && roots.length > 0;
+  inventory.scanCompleted = scanCompleted;
+  inventory.completeness =
+    roots.length === 0
+      ? 'empty-inventory-unverified'
+      : !inventory.operatorAssertedComplete
+        ? 'not-confirmed'
+        : scanCompleted
+          ? 'operator-asserted-complete'
+          : 'operator-asserted-scan-incomplete';
+  inventory.complete = operatorAssertedComplete && scanCompleted;
+
+  for (const root of roots) {
     root.inventoryConfirmed =
-      inventoryComplete &&
-      root.disposition !== 'unresolved' &&
+      operatorAssertedComplete &&
+      (root.disposition === 'scanned' || root.disposition === 'duplicate') &&
       !root.scanErrors?.length;
   }
+  const rootConfirmation = new Map(
+    roots.map((root) => [root.path, root.inventoryConfirmed]),
+  );
   for (const entry of manifest.entries) {
-    if (entry.provenance?.sourceType === 'project-local') {
-      entry.provenance.checkoutInventoryConfirmed = inventoryComplete;
+    const provenance = entry.provenance;
+    if (
+      provenance?.sourceType !== 'project-local' ||
+      typeof provenance.checkoutRoot !== 'string'
+    ) {
+      continue;
     }
+    delete provenance.checkoutInventoryConfirmed;
+    provenance.checkoutRootInventoryConfirmed =
+      rootConfirmation.get(provenance.checkoutRoot) === true;
   }
-  manifest.checkoutInventory.unconfirmedRoots = [
-    ...new Set([
-      ...(inventoryComplete ? [] : checkoutRoots),
-      ...manifest.checkoutInventory.unresolvedRoots,
-    ]),
+
+  const unconfirmedRoots = inventory.complete
+    ? roots
+        .filter((root) => !root.inventoryConfirmed)
+        .map((root) => root.path)
+    : roots.map((root) => root.path);
+  inventory.unconfirmedRoots = [
+    ...new Set([...unconfirmedRoots, ...inventory.unresolvedRoots]),
   ];
-  if (!inventoryComplete && checkoutRoots.length === 0) {
-    manifest.checkoutInventory.unconfirmedRoots = [
-      '<no checkout roots declared>',
-    ];
+  if (roots.length === 0) {
+    inventory.unconfirmedRoots = ['<no checkout roots declared>'];
   }
 }
 
@@ -3165,15 +3184,6 @@ function recordRunFailure(manifest, phase, error) {
         'Resolve the earlier scan error and rerun with this checkout root still declared. Do not treat its project-local data as inventoried until a successful scan records it.';
       addUnresolvedRoot(manifest, root.path);
     }
-    manifest.checkoutInventory.scanCompleted = false;
-    manifest.checkoutInventory.unconfirmedRoots = [
-      ...new Set([
-        ...manifest.checkoutInventory.unconfirmedRoots,
-        ...roots
-          .filter((root) => root.inventoryConfirmed !== true)
-          .map((root) => root.path),
-      ]),
-    ];
   }
   manifest.failure = {
     phase,
@@ -3251,7 +3261,6 @@ async function main() {
     });
     await scanCheckoutRoots({
       checkoutRoots: options.checkoutRoots,
-      checkoutRootsComplete: options.checkoutRootsComplete,
       userRoot: options.userRoot,
       manifest,
       storeIndex,
@@ -3289,8 +3298,10 @@ async function main() {
       watchGroups,
       archiveCandidates,
     });
+    refreshCheckoutInventory(manifest, true);
   } catch (error) {
     recordRunFailure(manifest, 'scan', error);
+    refreshCheckoutInventory(manifest, false);
     finalizeManifest(manifest);
     await writeManifest(options.manifest, manifest);
     throw error;
