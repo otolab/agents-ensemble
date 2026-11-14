@@ -189,7 +189,6 @@ async function promptHiddenInput(
         // Preserve the prompt result while still attempting to restore the TTY.
       }
       input.pause();
-      output.write('\n');
     };
     const finish = (error?: Error) => {
       if (settled) return;

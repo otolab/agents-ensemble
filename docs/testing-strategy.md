@@ -76,11 +76,12 @@ integration / e2e は副作用のあるプロセスや共有状態を避ける�
 | `codex-model-reasoning.integration.test.ts` | integration | 固定版 codex-acp と Codex 本体を一時 HOME で起動する。ダミー認証と接続不能なローカル provider を使い、モデルへの問い合わせは行わない。optional dependency がない場合は理由付きで skip。CI でも実行 |
 | `acp-bridge.integration.test.ts` | integration | `test-acp.yaml` と、そこに指定する実行可能な `agentCommand` / ACP backend が必要。設定ファイルがない場合、または agent command が見つからない・実行できない場合は理由を表示して suite を skip。前提が揃った状態で backend 接続に失敗した場合は失敗として扱う |
 | `conductor-agent.integration.test.ts`、`issue-session.integration.test.ts` | integration | 実 Cursor SDK、認証（`CURSOR_API_KEY` または SDK login）、ネットワーク、隔離 HOME 用の一時書き込み領域が必要。認証がない、または隔離 HOME を準備できない場合は suite を skip |
+| `packages/cli/test/e2e/conductor-auth-login.e2e.test.ts` | e2e | 実 `ensemble auth login` CLI を起動し、Pi login は PTY と fake Pi runtime、Cursor login は fake SDK login を使う。外部認証・ネットワークは不要。Pi TTY ケースには POSIX と Python 3 の標準 `pty` が必要 |
 | `packages/cli/test/e2e/issue.e2e.test.ts` | e2e | `packages/core/test/integration/test-acp.yaml` に有効な `issueUrl` と `repoRoot` があり、conductor 認証と GitHub API 認証（`GITHUB_TOKEN` / `GH_TOKEN` または設定済み `gh` fallback）が使える場合に実行。agent / ACP backend とネットワークも必要 |
 | CLI の TTY process / Pi TTY e2e | e2e | Python 3 の標準 `pty`、POSIX process group、localhost bind、Git が必要。PTY 非対応の Windows では該当テストを skip。PR / main のUbuntu runnerでは実行 |
 | `scripts/pi/cached-auth.test.mjs` | 補助 Node test | Linux PID namespace と procfs に関する2ケースだけ非Linuxで skip。スクリプト suite 自体は明示コマンドで実行し、CI では実行しない（Issue #475 の範囲） |
 
-PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites はモデル応答と GitHub API に localhost の fixture server を使い、Git で一時 repository を用意する。`tty-close-process.e2e.test.ts` は fake GitHub / ACP 応答と一時 Git repository を使う。いずれも Python 3 の `pty` と POSIX process group が必要。`issue-pi-tty-exit.e2e.test.ts` は `/exit` 後の自然終了と stdio MCP child 回収、`issue-pi-tty-close.e2e.test.ts` は `/close`・child 回収・保存済み Pi session の `--continue`、`tty-close-process.e2e.test.ts` は CLI session teardown・worker child 終了・worktree 保持を確認する。
+PTY e2e は外部認証や `test-acp.yaml` を必要としない。`conductor-auth-login.e2e.test.ts` は実 CLI を起動し、Pi の `ModelRuntime.login` と Cursor の `Cursor.auth.login` だけを preload fixture で置き換える。Pi 経路では表示された OAuth URL を確認してから PTY に authorization code を入力し、fake runtime が受け取った値と CLI の完了表示を検証する。Cursor 経路は非TTYで CLI の既存 SDK login dispatch を通し、credential-free な戻り値を確認する。どちらもネットワークを使わない。Pi TTY ケースには Python 3 の `pty` と POSIX process group が必要。既存の Pi TTY suites はモデル応答と GitHub API に localhost の fixture server を使い、Git で一時 repository を用意する。`tty-close-process.e2e.test.ts` は fake GitHub / ACP 応答と一時 Git repository を使う。`issue-pi-tty-exit.e2e.test.ts` は `/exit` 後の自然終了と stdio MCP child 回収、`issue-pi-tty-close.e2e.test.ts` は `/close`・child 回収・保存済み Pi session の `--continue`、`tty-close-process.e2e.test.ts` は CLI session teardown・worker child 終了・worktree 保持を確認する。
 
 ## 明示的な skip の記録
 
@@ -96,6 +97,7 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | `codex-model-reasoning.integration.test.ts` の `describe.skipIf` | codex-acp または Codex の optional dependency がなければ、実 adapter と app-server への設定適用を確認できない | optional dependency を含めて `pnpm install` し、対象 suite を再実行 |
 | `acp-bridge.integration.test.ts` の `describe.skipIf` | `test-acp.yaml` がない場合、または設定された `agentCommand`（省略時は PATH 上の `agent`）を見つけられない・実行できない場合、実 ACP backend を起動できない。skip 時は不足条件を suite 名に表示する | example からローカル設定を作り、`agentCommand` を PATH 上に用意するか実行可能なパスに設定して、該当 suite を実行 |
 | `issue.e2e.test.ts` の `describe.skipIf` | Issue / repository 設定または conductor 認証がない場合、Issue workflow を実行できない | `test-acp.yaml` と認証を設定して `pnpm test:e2e` を実行 |
+| `conductor-auth-login.e2e.test.ts` の Pi PTY test | Python 3 の標準 `pty` と POSIX process group を使えない Windows では Pi の hidden input を実端末上で確認できない。Cursor mock test は全OSで実行する | Python 3 `pty` を備えた POSIX 環境で実行。CI は Ubuntu |
 | `cli-version.test.ts` の `describe.skipIf` | package 単独の unit 実行時に build artifact がない場合、dist CLI を起動できない | `pnpm build` 後に再実行。CI は build 済みのためこの skip に入らない |
 | `resolve-bundled-acp-bin.test.ts` の Claude / Codex optional preset ごとの `describe.skipIf` | 対応する ACP optional dependency がインストールされていない場合、その package 内の実行ファイル解決だけは確認できない。Pi adapter は通常 dependency のため常時検証する | optional dependency を含めて `pnpm install` し、対象 workspace の unit suite を再実行 |
 | CLI TTY e2e の Windows `skipIf` | Python 標準 `pty` と POSIX process group に依存し、Windows では同じ PTY 条件を提供できない | Python 3 `pty` を備えた POSIX 環境で実行。CI は Ubuntu |
@@ -117,6 +119,7 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | Codex model reasoning integration | `test/integration/codex-model-reasoning.integration.test.ts` |
 | Claude and Pi worker ACP adapter integration tests | `test/integration/worker-model-reasoning-adapters.integration.test.ts`（Claude ACP 0.70.0 / BYO `pi-acp@0.0.33` / builtin `pi-acp@0.0.34` と core wrapper） |
 | Operator usage integration | `test/integration/usage-operator.integration.test.ts` |
+| Conductor auth login e2e | `test/e2e/conductor-auth-login.e2e.test.ts` — 実 CLI から Pi OAuth URL / hidden manual-code 入力 / login 完了までを fake runtime で検証し、Cursor login SDK dispatch も credential-free fake で確認 |
 | Pi conductor integration | `pi-conductor.integration.test.ts`、`pi-headless-settings.integration.test.ts`、`pi-conductor-agent-registry.integration.test.ts` |
 | CLI TTY e2e | `tty-close-process.e2e.test.ts`、`issue-pi-tty-exit.e2e.test.ts`、`issue-pi-tty-close.e2e.test.ts` |
 
