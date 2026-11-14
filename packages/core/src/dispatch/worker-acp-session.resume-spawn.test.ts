@@ -3,38 +3,56 @@ import { AcpSessionConfigOptionError } from '../acp/acp-client.js';
 import { openWorkerAcpSession } from './worker-acp-session.js';
 
 describe('openWorkerAcpSession resume spawn validation', () => {
-  it('fails attach when saved resume store acpSpawn mismatches current profile', async () => {
-    await expect(
-      openWorkerAcpSession({
-        issueUrl: 'https://github.com/org/repo/issues/1',
-        worktree: {
-          path: '/tmp/worktree',
-          branch: 'ensemble/issue-1',
-          issue: {
-            owner: 'org',
-            repo: 'repo',
-            number: 1,
-            url: 'https://github.com/org/repo/issues/1',
-          },
-          inRepo: false,
+  it('attempts session/load with the current preset when saved spawn differs', async () => {
+    const loadSession = vi.fn().mockResolvedValue(undefined);
+    const newSession = vi.fn();
+    const opened = await openWorkerAcpSession({
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      worktree: {
+        path: '/tmp/worktree',
+        branch: 'ensemble/issue-1',
+        issue: {
+          owner: 'org',
+          repo: 'repo',
+          number: 1,
+          url: 'https://github.com/org/repo/issues/1',
         },
-        workerName: 'implementer',
-        resumeAcpSessionId: 'session-1',
-        expectedResumeAcpSpawn: {
-          preset: 'cursor',
-          command: 'agent',
-          args: ['acp'],
-        },
-        currentAcpSpawn: {
-          preset: 'claude',
-          command: 'claude-agent-acp',
-          args: [],
-        },
-      }),
-    ).rejects.toThrow(/resume ACP spawn mismatch/);
+        inRepo: false,
+      },
+      workerName: 'implementer',
+      resumeAcpSessionId: 'session-1',
+      expectedResumeAcpSpawn: {
+        preset: 'cursor',
+        command: 'agent',
+        args: ['acp'],
+      },
+      currentAcpSpawn: {
+        preset: 'claude',
+        command: 'claude-agent-acp',
+        args: [],
+      },
+      bridge: {
+        loadSession,
+        newSession,
+        close: vi.fn(),
+      } as never,
+    });
+
+    expect(opened.sessionId).toBe('session-1');
+    expect(opened.resumed).toBe(true);
+    expect(loadSession).toHaveBeenCalledWith(
+      'session-1',
+      '/tmp/worktree',
+      undefined,
+    );
+    expect(newSession).not.toHaveBeenCalled();
   });
 
-  it('fails attach when saved Pi ACP spawn data mismatches the current profile', async () => {
+  it('does not treat builtin Pi restore failure as a new session success', async () => {
+    const loadSession = vi
+      .fn()
+      .mockRejectedValue(new Error('saved Pi session is unavailable'));
+    const newSession = vi.fn().mockResolvedValue('unexpected-new-session');
     await expect(
       openWorkerAcpSession({
         issueUrl: 'https://github.com/org/repo/issues/1',
@@ -53,6 +71,7 @@ describe('openWorkerAcpSession resume spawn validation', () => {
         resumeAcpSessionId: 'session-1',
         expectedResumeAcpSpawn: {
           preset: 'pi',
+          piRuntime: 'builtin',
           command: 'pi-acp',
           args: [],
         },
@@ -61,50 +80,57 @@ describe('openWorkerAcpSession resume spawn validation', () => {
           command: 'agent',
           args: ['acp'],
         },
+        bridge: {
+          loadSession,
+          newSession,
+          close: vi.fn(),
+        } as never,
       }),
-    ).rejects.toThrow(/resume ACP spawn mismatch/);
+    ).rejects.toThrow(/could not resume builtin Pi ACP session/);
+    expect(loadSession).toHaveBeenCalledOnce();
+    expect(newSession).not.toHaveBeenCalled();
   });
 
   it('loads the saved session when its model reasoning metadata differs', async () => {
     const loadSession = vi.fn().mockResolvedValue(undefined);
     const newSession = vi.fn().mockResolvedValue('unexpected-new-session');
     const opened = await openWorkerAcpSession({
-        issueUrl: 'https://github.com/org/repo/issues/1',
-        worktree: {
-          path: '/tmp/worktree',
-          branch: 'ensemble/issue-1',
-          issue: {
-            owner: 'org',
-            repo: 'repo',
-            number: 1,
-            url: 'https://github.com/org/repo/issues/1',
-          },
-          inRepo: false,
+      issueUrl: 'https://github.com/org/repo/issues/1',
+      worktree: {
+        path: '/tmp/worktree',
+        branch: 'ensemble/issue-1',
+        issue: {
+          owner: 'org',
+          repo: 'repo',
+          number: 1,
+          url: 'https://github.com/org/repo/issues/1',
         },
-        workerName: 'implementer',
-        resumeAcpSessionId: 'session-1',
-        expectedResumeAcpSpawn: {
-          preset: 'claude',
-          command: 'claude-agent-acp',
-          args: [],
-          modelTag: 'high',
-          model: 'provider/opus',
-          reasoning: 'low',
-        },
-        currentAcpSpawn: {
-          preset: 'claude',
-          command: 'claude-agent-acp',
-          args: [],
-          modelTag: 'high',
-          model: 'provider/opus',
-          reasoning: 'high',
-        },
-        bridge: {
-          loadSession,
-          newSession,
-          close: vi.fn(),
-        } as never,
-      });
+        inRepo: false,
+      },
+      workerName: 'implementer',
+      resumeAcpSessionId: 'session-1',
+      expectedResumeAcpSpawn: {
+        preset: 'claude',
+        command: 'claude-agent-acp',
+        args: [],
+        modelTag: 'high',
+        model: 'provider/opus',
+        reasoning: 'low',
+      },
+      currentAcpSpawn: {
+        preset: 'claude',
+        command: 'claude-agent-acp',
+        args: [],
+        modelTag: 'high',
+        model: 'provider/opus',
+        reasoning: 'high',
+      },
+      bridge: {
+        loadSession,
+        newSession,
+        close: vi.fn(),
+      } as never,
+    });
 
     expect(opened.sessionId).toBe('session-1');
     expect(loadSession).toHaveBeenCalledOnce();

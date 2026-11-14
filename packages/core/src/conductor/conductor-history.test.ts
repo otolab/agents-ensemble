@@ -202,6 +202,46 @@ describe('listConductorProviderHistory', () => {
     expect(JSON.stringify(result)).not.toContain('legacy transcript');
   });
 
+  it('finds a Pi transcript in the saved clone path-hash from another clone', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-history-cross-clone-'));
+    const currentRepoRoot = join(tempDir, 'current-clone');
+    const savedRepoRoot = join(tempDir, 'saved-clone');
+    const savedCwd = join(savedRepoRoot, '.ensemble', 'worktrees', 'issue-696');
+    setUserRoot(join(tempDir, 'user-ensemble'));
+    const savedPaths = resolveEnsemblePaths({ repoRoot: savedRepoRoot });
+    const savedManager = SessionManager.create(
+      savedCwd,
+      savedPaths.piSessionsDir,
+      { id: 'pi-cross-clone-agent' },
+    );
+    const turn = appendPiTurn(savedManager, {
+      inbound: 'saved clone transcript',
+      toolOutput: 'SAVED_CLONE_TOOL_SECRET',
+      response: 'saved clone response',
+      sendCount: 1,
+      dispatchSource: 'operator',
+    });
+
+    const result = await listConductorProviderHistory({
+      backend: 'pi',
+      conductorAgentId: 'pi-cross-clone-agent',
+      cwd: join(currentRepoRoot, '.ensemble', 'worktrees', 'issue-696'),
+      repoRoot: currentRepoRoot,
+      fallbackRepoRoots: [savedRepoRoot],
+      fallbackCwds: [savedCwd],
+      query: { limit: 20, order: 'desc' },
+    });
+
+    expect(result.messages).toMatchObject([
+      {
+        providerId: turn.responseEntryId,
+        inbound: 'saved clone transcript',
+        text: 'saved clone response',
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('SAVED_CLONE_TOOL_SECRET');
+  });
+
   it('falls back to the legacy project session directory under conductor cwd', async () => {
     tempDir = await mkdtemp(
       join(tmpdir(), 'ensemble-pi-history-legacy-fallback-'),

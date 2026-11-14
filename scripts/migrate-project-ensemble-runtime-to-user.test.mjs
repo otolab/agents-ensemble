@@ -1195,19 +1195,26 @@ test('persistence docs use canonical slug writes and separate legacy fallback fr
     );
     assert.doesNotMatch(
       document,
-      /~\/\.ensemble\/operator-agent\/<repoKey>\/session\.json/u,
-      `${documentPaths[index]} must not describe the old repoKey conversation destination`,
-    );
-    assert.doesNotMatch(
-      document,
       /移行期間中は両方に同一内容を保存/u,
       `${documentPaths[index]} must not claim path-hash and slug dual-write`,
     );
   }
 
+  // #696 defers operator-agent state-path migration to #697/#698. This
+  // copy-only migration's docs must not imply that the runtime path has already
+  // moved from its current repoKey fallback.
+  assert.match(
+    documents[0],
+    /全選択済み Store.*~\/\.ensemble\/operator-agent\/<repoKey>\//u,
+  );
   assert.match(
     documents[1],
-    /Pi の provider history は Issue URL がある場合、canonical slug の user transcript、`repoRoot` から導ける user path-hash、`conductorCwd\/\.ensemble\/pi\/sessions\/` の project-local legacy の順に探索します/u,
+    /全選択済み Store.*~\/\.ensemble\/operator-agent\/<repoKey>\//u,
+  );
+
+  assert.match(
+    documents[1],
+    /Issue URL がある Pi session は canonical slug の user transcript、現在 clone の `repoRoot` 由来 path-hash、指定された saved-root path-hash の順に探し、その後で現在・保存済み `conductorCwd` の project `\.ensemble\/pi\/sessions\/` を調べます/u,
   );
   assert.doesNotMatch(
     documents[1],
@@ -1215,23 +1222,23 @@ test('persistence docs use canonical slug writes and separate legacy fallback fr
   );
   assert.match(
     documents[0],
-    /resume-time lazy promotion.*一括 migration tool/u,
+    /lazy promotion は選択した session に限られます.*#698 migration tool/u,
   );
   assert.match(
     documents[1],
-    /旧 operator-agent watch state も.*一括 migration/u,
+    /全 path-hash と operator が列挙した checkout の session \/ watch data は #698 の一括 inventory \/ copy tool/u,
   );
   assert.match(
     documents[2],
-    /この lazy promotion は選択した session の範囲.*一括 migration/u,
+    /resume 時は不足 file だけを slug 側へ copy.*#698 migration tool の範囲/u,
   );
   assert.match(
     documents[3],
-    /閲覧時の fallback.*lazy promotion.*一括 inventory/u,
+    /閲覧時の fallback は read-only.*resume 時の lazy promotion.*inventory と copy は #698 migration tool/u,
   );
   assert.match(
     documents[4],
-    /resume 時に対象 file.*一括 inventory \/ copy/u,
+    /resume 時は slug 側にない対象 file だけを copy.*inventory \/ copy は #698 migration tool/u,
   );
 });
 

@@ -648,21 +648,27 @@ async function createPiConductorSession(
   let sessionManager: SessionManager;
   let previousSessionFile: string | undefined;
   if (reason === 'resume') {
-    previousSessionFile = SessionManager.findById(options.cwd, agentId, sessionDir);
+    const resumeCwds = [
+      ...new Set([options.cwd, ...(options.resumeCwds ?? [])]),
+    ];
+    const findSessionFile = (directory: string) => {
+      for (const cwd of resumeCwds) {
+        const sessionFile = SessionManager.findById(cwd, agentId, directory);
+        if (sessionFile) return sessionFile;
+      }
+      return undefined;
+    };
+    previousSessionFile = findSessionFile(sessionDir);
     if (!previousSessionFile) {
       for (const legacySessionDir of legacySessionDirs) {
-        const legacyFile = SessionManager.findById(
-          options.cwd,
-          agentId,
-          legacySessionDir,
-        );
+        const legacyFile = findSessionFile(legacySessionDir);
         if (!legacyFile) continue;
         await mkdir(sessionDir, { recursive: true, mode: 0o700 });
         const migratedFile = join(sessionDir, basename(legacyFile));
         const copied = await copyFileIfMissing(legacyFile, migratedFile);
         previousSessionFile = copied
           ? migratedFile
-          : SessionManager.findById(options.cwd, agentId, sessionDir);
+          : findSessionFile(sessionDir);
         if (previousSessionFile) break;
       }
     }

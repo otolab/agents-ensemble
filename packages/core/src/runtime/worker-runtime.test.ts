@@ -412,7 +412,7 @@ describe('WorkerRuntime', () => {
     expect(runtime.attachedCount).toBe(1);
   });
 
-  it('replaces an unreadable resumed thread, bootstraps, then retries the conductor instruction once', async () => {
+  it('replaces an unreadable resumed thread and does not replay the interrupted conductor instruction', async () => {
     const inbox = new ConductorInbox();
     const historyError = new Error(
       "The current provider can't read this thread's earlier reasoning, which another provider or account encrypted. Start a new thread.",
@@ -489,14 +489,10 @@ describe('WorkerRuntime', () => {
     expect(connectAcp).toHaveBeenCalledTimes(2);
     expect(newSession).toHaveBeenCalledOnce();
     expect(newSession).toHaveBeenCalledWith(TEST_WORKTREE.path);
-    expect(newPromptSession).toHaveBeenCalledTimes(2);
+    expect(newPromptSession).toHaveBeenCalledOnce();
     expect(newPromptSession.mock.calls[0]?.[0]).toBe('sess-new');
     expect(newPromptSession.mock.calls[0]?.[1]).not.toBe(resumePrompt);
     expect(newPromptSession.mock.calls[0]?.[1]).toContain('pong');
-    expect(newPromptSession.mock.calls[1]?.[0]).toBe('sess-new');
-    expect(newPromptSession.mock.calls[1]?.[1]).toBe(
-      'inspect the current issue',
-    );
     expect(onWorkerSessionRecovered).toHaveBeenCalledWith({
       workerId,
       name: 'ping-1',
@@ -575,7 +571,9 @@ describe('WorkerRuntime', () => {
     await runtime.shutdown();
   });
 
-  it('does not replay an instruction after ACP reports tool activity before history failure', async () => {
+  it.each([false, true])(
+    'does not replay an interrupted instruction after history failure (tool activity: %s)',
+    async (toolActivityObserved) => {
     const inbox = new ConductorInbox();
     const failures: string[] = [];
     inbox.subscribe((message) => {
@@ -595,14 +593,16 @@ describe('WorkerRuntime', () => {
         if (oldPromptCount === 1) {
           return { stopReason: 'end_turn' };
         }
-        options?.onUpdate?.({
-          sessionId: 'sess-old',
-          update: {
-            sessionUpdate: 'tool_call',
-            toolCallId: 'call-1',
-            title: 'write_file',
-          },
-        });
+        if (toolActivityObserved) {
+          options?.onUpdate?.({
+            sessionId: 'sess-old',
+            update: {
+              sessionUpdate: 'tool_call',
+              toolCallId: 'call-1',
+              title: 'write_file',
+            },
+          });
+        }
         throw historyError;
       },
     );
@@ -658,7 +658,7 @@ describe('WorkerRuntime', () => {
     expect(newPromptSession.mock.calls[0]?.[1]).toContain('pong');
     expect(onWorkerSessionRecovered).toHaveBeenCalledOnce();
     expect(failures).toHaveLength(1);
-    expect(failures[0]).toContain('was not replayed');
+    expect(failures[0]).toContain('instruction was not replayed');
 
     expect(runtime.sendWorkerMessage('ping-1', 'inspect current state')).toEqual({
       status: 'sent',
@@ -674,7 +674,8 @@ describe('WorkerRuntime', () => {
       ),
     ).toBe(false);
     await runtime.shutdown();
-  });
+    },
+  );
 
   it('does not replace a resumed thread after a generic prompt error', async () => {
     const inbox = new ConductorInbox();
@@ -1183,7 +1184,14 @@ describe('WorkerRuntime', () => {
 
     expect(connectAcp).toHaveBeenCalledTimes(3);
     expect(sharedBridge.newSession).toHaveBeenCalledOnce();
-    expect(promptSession.mock.calls).toHaveLength(5);
+    expect(promptSession.mock.calls).toHaveLength(4);
+    expect(
+      promptSession.mock.calls.some(
+        ([sessionId, prompt]) =>
+          sessionId === 'sess-new' &&
+          prompt === 'inspect the current issue',
+      ),
+    ).toBe(false);
     expect(sharedClose).not.toHaveBeenCalled();
     expect(runtime.getAttached('ping-1')?.session.sessionId).toBe('sess-new');
     expect(runtime.getAttached('ping-2')?.session.sessionId).toBe('sess-other');

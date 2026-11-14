@@ -1,3 +1,5 @@
+import { stat } from 'node:fs/promises';
+import { resolve as resolvePath } from 'node:path';
 import type { WorkerDispatchResult } from '../dispatch/worker-dispatch.js';
 import {
   computeAcpModelConfigDigest,
@@ -140,6 +142,7 @@ import {
   type SessionResumeStoreLocation,
   type EnsembleConfigDigestScheme,
   type SessionResumeStore,
+  type LocatedSessionResumeStore,
 } from '../session/session-resume-store.js';
 import {
   buildSessionModelsSummary,
@@ -164,6 +167,7 @@ import {
   openQuestionsStorePath,
   saveOpenQuestionsStore,
 } from '../session/open-questions-store.js';
+import { sessionSnapshotPaths } from '../session/session-snapshot-paths.js';
 import {
   CONDUCTOR_MESSAGE_HISTORY_MAX_ENTRIES,
   OpenQuestionControlOperationError,
@@ -496,6 +500,12 @@ async function runConductorSessionWithStartupGuard(
     null;
   const conductorMessages: OpenQuestionControlConductorMessage[] = [];
   const eventQueue = new SessionEventQueue();
+  const resumeNoticeDetails = new Set<string>();
+  const reportResumeNotice = (message: string): void => {
+    if (resumeNoticeDetails.has(message)) return;
+    resumeNoticeDetails.add(message);
+    sessionLogger.emit({ type: 'harness.warning', message });
+  };
   const recoveryInbox = new ConductorRecoveryInbox();
   const dispatchLifecycle =
     new ConductorDispatchLifecycle<ConductorDispatchPayload>();
@@ -531,6 +541,7 @@ async function runConductorSessionWithStartupGuard(
   let githubMonitorCursor: GitHubMonitorCursor | undefined;
   let githubMonitor: GitHubMonitor | undefined;
   let activeResumeStorePath: string | undefined;
+  let activeLocatedResumeStore: LocatedSessionResumeStore | undefined;
   let createdHarnessCliVersion = options.cliPackageVersion;
   let activeStoreLocation: SessionResumeStoreLocation = 'canonical-slug';
   let drainStartupResumeStoreWrites = async () => {};
@@ -556,6 +567,7 @@ async function runConductorSessionWithStartupGuard(
       issueUrl: options.issueUrl,
     });
     const loadedResumeStore = locatedResumeStore.resumeStore;
+    activeLocatedResumeStore = locatedResumeStore;
     // A resume keeps its origin version; a legacy store stays without one.
     createdHarnessCliVersion = loadedResumeStore.createdHarnessCliVersion;
     activeResumeStorePath = locatedResumeStore.path;
@@ -570,18 +582,64 @@ async function runConductorSessionWithStartupGuard(
     assertSessionResumeStoreMatches(loadedResumeStore, {
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
-      repoRoot: options.repoRoot,
-      conductorBackend,
-      mcpConfigDigest,
-      mcpConfigConfigured,
-      ensembleConfigDigest: currentEnsembleConfigDigest,
     });
-    if (loadedResumeStore.ensembleConfigDigest === undefined) {
-      sessionLogger.emit({
-        type: 'harness.warning',
-        message:
-          'SessionResumeStore has no ensemble config digest; config consistency cannot be verified for this legacy session.',
-      });
+    if (resolvePath(loadedResumeStore.repoRoot) !== resolvePath(options.repoRoot)) {
+      reportResumeNotice(
+        `保存時の repoRoot ${loadedResumeStore.repoRoot} と現在の repoRoot ${options.repoRoot} が異なります。現在の clone を使って再開します。Store に commit SHA がないため、保存時 clone にだけある local commit / 未コミット変更は照合・復元できません。`,
+      );
+      if (!(await pathExists(loadedResumeStore.repoRoot))) {
+        reportResumeNotice(
+          `保存時の clone ${loadedResumeStore.repoRoot} は現在参照できません。そこにだけあった未コミット変更は復元できず、Store に commit SHA がないため欠落した commit の有無も照合できません。`,
+        );
+      }
+    }
+    if (
+      loadedResumeStore.conductorCwd !== undefined &&
+      resolvePath(loadedResumeStore.conductorCwd) !== resolvePath(conductorCwd)
+    ) {
+      reportResumeNotice(
+        `保存時の conductor cwd ${loadedResumeStore.conductorCwd} は現在の cwd ${conductorCwd} とは異なります。現在の cwd で backend resume を試みます。以前の cwd にだけある local state は引き継がれず、Store に commit SHA がないため commit の差も照合できません。`,
+      );
+      if (!(await pathExists(loadedResumeStore.conductorCwd))) {
+        reportResumeNotice(
+          `保存時の conductor cwd ${loadedResumeStore.conductorCwd} は見つからないため、以前の workspace のローカル状態は復元できません。`,
+        );
+      }
+    }
+    const savedBackend = loadedResumeStore.conductorBackend ?? 'cursor';
+    if (savedBackend !== conductorBackend) {
+      reportResumeNotice(
+        `保存時の conductor backend は ${savedBackend}、現在の設定は ${conductorBackend} です。現在の backend で復元を試みます。復元できなければ session は失敗として扱います。`,
+      );
+    }
+    if (
+      loadedResumeStore.ensembleConfigDigest !== undefined &&
+      loadedResumeStore.ensembleConfigDigest !== currentEnsembleConfigDigest
+    ) {
+      reportResumeNotice(
+        '保存時と現在の Ensemble config が異なります。保存時の設定には戻さず、現在の clone の config で復元を試みます。',
+      );
+    } else if (loadedResumeStore.ensembleConfigDigest === undefined) {
+      reportResumeNotice(
+        'SessionResumeStore に config digest がないため差分を比較できません。現在の clone の config で復元します。',
+      );
+    }
+    if (
+      loadedResumeStore.mcpConfigDigest === undefined
+        ? mcpConfigConfigured
+        : loadedResumeStore.mcpConfigDigest !== mcpConfigDigest
+    ) {
+      reportResumeNotice(
+        '保存時と現在の MCP config が異なるか、保存時の digest がありません。現在の clone の MCP config を使って復元を試みます。',
+      );
+    }
+    if (
+      JSON.stringify(loadedResumeStore.profile) !==
+      JSON.stringify(options.profile)
+    ) {
+      reportResumeNotice(
+        '保存時の team profile と現在の clone で解決した profile が異なります。以降は現在の profile を使います。',
+      );
     }
     const hasComparableLegacyFullDigest =
       effectiveConfigDigestScheme === 'full' &&
@@ -682,6 +740,7 @@ async function runConductorSessionWithStartupGuard(
       repoRoot: options.repoRoot,
       conductorAgentId: options.resumeAgentId,
       issueUrl: options.issueUrl,
+      fallbackRepoRoots: [loadedResumeStore.repoRoot],
     });
     resumeToolCallSnapshots = history.entries;
     toolCallHistoryNeedsRewrite = history.needsRewrite;
@@ -691,30 +750,16 @@ async function runConductorSessionWithStartupGuard(
         message: `${history.warning}; the session will continue without affected history`,
       });
     }
-    const openQuestionsPath = openQuestionsStorePath({
-      repoRoot: options.repoRoot,
-      conductorAgentId: options.resumeAgentId,
-      issueUrl: options.issueUrl,
-      location: activeStoreLocation,
-    });
+    const openQuestionPaths = sessionSnapshotPaths(
+      options.repoRoot,
+      locatedResumeStore,
+      'open-questions',
+    );
+    const openQuestionsPath = openQuestionPaths[0]!;
     let openQuestionsSnapshot = await loadOpenQuestionsStore(openQuestionsPath);
     let openQuestionsSourcePath: string | undefined;
     if (!openQuestionsSnapshot) {
-      const fallbackPaths = [
-        ...(activeStoreLocation === 'canonical-slug'
-          ? [
-              openQuestionsStorePath({
-                repoRoot: options.repoRoot,
-                conductorAgentId: options.resumeAgentId,
-                location: 'user-path-hash',
-              }),
-            ]
-          : []),
-        legacyOpenQuestionsStorePath({
-          repoRoot: options.repoRoot,
-          conductorAgentId: options.resumeAgentId,
-        }),
-      ];
+      const fallbackPaths = openQuestionPaths.slice(1);
       for (const fallbackPath of fallbackPaths) {
         openQuestionsSnapshot = await loadOpenQuestionsStore(fallbackPath);
         if (openQuestionsSnapshot) {
@@ -762,9 +807,6 @@ async function runConductorSessionWithStartupGuard(
         });
       }
     }
-    activeProfile = resumeStore.profile;
-    // ResumeStores written before this setting always started every worker eagerly.
-    activeLazyWorkers = resumeStore.lazyWorkers ?? false;
     githubMonitorCursor = resumeStore.githubMonitor;
     for (const [name, worker] of Object.entries(resumeStore.workers)) {
       workerSessions.set(name, {
@@ -951,8 +993,63 @@ async function runConductorSessionWithStartupGuard(
           options.repoRoot,
           issue,
           options.workerWorktreeMode ?? 'isolated',
+          {
+            resume: Boolean(options.resumeAgentId),
+            onNotice: reportResumeNotice,
+          },
         )
       : undefined);
+
+  if (options.resumeAgentId) {
+    const currentWorkers = new Map(
+      workers.map((worker) => [worker.name, worker] as const),
+    );
+    for (const [name, savedWorker] of workerSessions) {
+      if (!currentWorkers.has(name)) {
+        reportResumeNotice(
+          `保存 session に worker「${name}」がありますが、現在の profile には定義がありません。この worker session は復元対象から外れます。`,
+        );
+        continue;
+      }
+      const currentWorker = currentWorkers.get(name)!;
+      const savedAcpSpawn = savedWorker.acpSpawn;
+      const currentAcpSpawn = currentWorker.acpFingerprint;
+      if (
+        savedAcpSpawn &&
+        currentAcpSpawn &&
+        (savedAcpSpawn.preset !== currentAcpSpawn.preset ||
+          (savedAcpSpawn.preset === 'pi' &&
+            currentAcpSpawn.preset === 'pi' &&
+            (savedAcpSpawn.piRuntime ?? 'byo') !==
+              (currentAcpSpawn.piRuntime ?? 'byo')) ||
+          (savedAcpSpawn.preset === 'custom' &&
+            currentAcpSpawn.preset === 'custom' &&
+            (savedAcpSpawn.command !== currentAcpSpawn.command ||
+              JSON.stringify(savedAcpSpawn.args) !==
+                JSON.stringify(currentAcpSpawn.args))))
+      ) {
+        reportResumeNotice(
+          `worker「${name}」の保存時 ACP preset/runtime と現在の設定が異なります。現在の設定で ACP session/load を試みます。`,
+        );
+      }
+      if (!savedWorker.acpCwd) continue;
+      const currentCwd =
+        currentWorker.resolvedWorkspacePath ?? workerWorktree?.path;
+      if (
+        currentCwd &&
+        resolvePath(savedWorker.acpCwd) !== resolvePath(currentCwd)
+      ) {
+        reportResumeNotice(
+          `worker「${name}」の保存時 ACP cwd ${savedWorker.acpCwd} と現在の workspace ${currentCwd} が異なります。現在の workspace で ACP session/load を試みます。以前の cwd にだけある local changes はコピーされず、Store に commit SHA がないため commit の差も照合できません。`,
+        );
+        if (!(await pathExists(savedWorker.acpCwd))) {
+          reportResumeNotice(
+            `worker「${name}」の保存時 ACP cwd ${savedWorker.acpCwd} は見つかりません。そこにだけあった未コミット変更は復元できず、保存 Store に commit SHA がないため欠落 commit の有無も照合できません。`,
+          );
+        }
+      }
+    }
+  }
 
   if (workerWorktree) {
     sessionLogger.emit({
@@ -1402,10 +1499,43 @@ async function runConductorSessionWithStartupGuard(
             resolveEnsemblePaths({
               repoRoot: options.repoRoot,
             }).piSessionsDir,
+            ...(activeLocatedResumeStore?.resumeStore.repoRoot
+              ? [
+                  resolveEnsemblePaths({
+                    repoRoot: activeLocatedResumeStore.resumeStore.repoRoot,
+                  }).piSessionsDir,
+                ]
+              : []),
             resolveEnsemblePaths({
               repoRoot: options.repoRoot,
             }).legacyPiSessionsDirForCwd(conductorCwd),
+            ...(activeLocatedResumeStore?.resumeStore.conductorCwd
+              ? [
+                  resolveEnsemblePaths({
+                    repoRoot: options.repoRoot,
+                  }).legacyPiSessionsDirForCwd(
+                    activeLocatedResumeStore.resumeStore.conductorCwd,
+                  ),
+                ]
+              : []),
+            ...(activeLocatedResumeStore?.resumeStore.repoRoot
+              ? [
+                  resolveEnsemblePaths({
+                    repoRoot: options.repoRoot,
+                  }).legacyPiSessionsDirForCwd(
+                    activeLocatedResumeStore.resumeStore.repoRoot,
+                  ),
+                ]
+              : []),
           ],
+          ...(activeLocatedResumeStore
+            ? {
+                resumeCwds: [
+                  activeLocatedResumeStore.resumeStore.conductorCwd,
+                  activeLocatedResumeStore.resumeStore.repoRoot,
+                ].filter((cwd): cwd is string => Boolean(cwd)),
+              }
+            : {}),
         }
       : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
@@ -1467,19 +1597,29 @@ async function runConductorSessionWithStartupGuard(
         type: 'harness.warning',
         message: `slug 保存先の session state を読み込めませんでした。legacy data は優先しません。 error=${detail}`,
       });
+      reportResumeNotice(
+        `slug 保存先の session-state YAML を読み込めず、優先順位に従って legacy data への切り替えは行いません。原因: ${detail}`,
+      );
     }
     if (!hasCanonicalState) {
-      const fallbackStatePaths = [
-        sessionStateStorePath({
-          repoRoot: options.repoRoot,
-          conductorAgentId: conductorAgent.agentId,
-          location: 'user-path-hash',
-        }),
-        legacySessionStateStorePath({
-          repoRoot: options.repoRoot,
-          conductorAgentId: conductorAgent.agentId,
-        }),
-      ];
+      const fallbackStatePaths = activeLocatedResumeStore
+        ? sessionSnapshotPaths(
+            options.repoRoot,
+            activeLocatedResumeStore,
+            'session-state',
+          ).slice(1)
+        : [
+            sessionStateStorePath({
+              repoRoot: options.repoRoot,
+              conductorAgentId: conductorAgent.agentId,
+              location: 'user-path-hash',
+            }),
+            legacySessionStateStorePath({
+              repoRoot: options.repoRoot,
+              conductorAgentId: conductorAgent.agentId,
+            }),
+          ];
+      let restoredFallbackState = false;
       for (const fallbackPath of fallbackStatePaths) {
         let fallbackState;
         try {
@@ -1490,9 +1630,13 @@ async function runConductorSessionWithStartupGuard(
             type: 'harness.warning',
             message: `旧保存先の session state を読み込めませんでした。 fallback は保持します。 error=${detail}`,
           });
+          reportResumeNotice(
+            `session-state fallback ${fallbackPath} を読み込めず、その保存状態は復元できません。原因: ${detail}`,
+          );
           continue;
         }
         if (!fallbackState) continue;
+        restoredFallbackState = true;
         try {
           await copyFileIfMissing(fallbackPath, currentSessionStatePath);
         } catch (error) {
@@ -1501,8 +1645,21 @@ async function runConductorSessionWithStartupGuard(
             type: 'harness.warning',
             message: `旧保存先の session state を slug 保存先へ移せませんでした。旧 YAML を読み込みます。 error=${detail}`,
           });
+          reportResumeNotice(
+            `session-state fallback ${fallbackPath} は読み込みましたが slug 保存先へ移せませんでした。今回の実行では読み込んだ状態を使います。原因: ${detail}`,
+          );
         }
         break;
+      }
+      if (
+        activeLocatedResumeStore &&
+        resolvePath(activeLocatedResumeStore.resumeStore.repoRoot) !==
+          resolvePath(options.repoRoot) &&
+        !restoredFallbackState
+      ) {
+        reportResumeNotice(
+          '保存時 clone の fallback を含めても session-state YAML を読み込めませんでした。以前の statusLine と履歴は復元されていません。',
+        );
       }
     }
   }
@@ -2200,21 +2357,27 @@ async function runConductorSessionWithStartupGuard(
           issueUrl: options.issueUrl,
           location: activeStoreLocation,
         });
-        const fallbackStatePaths = [
-          ...(activeStoreLocation === 'canonical-slug'
-            ? [
-                sessionStateStorePath({
-                  repoRoot: options.repoRoot,
-                  conductorAgentId: conductorAgent.agentId,
-                  location: 'user-path-hash',
-                }),
-              ]
-            : []),
-          legacySessionStateStorePath({
-            repoRoot: options.repoRoot,
-            conductorAgentId: conductorAgent.agentId,
-          }),
-        ];
+        const fallbackStatePaths = activeLocatedResumeStore
+          ? sessionSnapshotPaths(
+              options.repoRoot,
+              activeLocatedResumeStore,
+              'session-state',
+            ).slice(1)
+          : [
+              ...(activeStoreLocation === 'canonical-slug'
+                ? [
+                    sessionStateStorePath({
+                      repoRoot: options.repoRoot,
+                      conductorAgentId: conductorAgent.agentId,
+                      location: 'user-path-hash',
+                    }),
+                  ]
+                : []),
+              legacySessionStateStorePath({
+                repoRoot: options.repoRoot,
+                conductorAgentId: conductorAgent.agentId,
+              }),
+            ];
         let sessionState = await loadSessionStateStore(currentStatePath);
         for (const fallbackPath of fallbackStatePaths) {
           if (sessionState) break;
@@ -3037,5 +3200,22 @@ function finalizeSessionWorkerSpecs(
     const finalized = finalizeResolvedAcpSpawn(sessionSpawn);
     worker.spawn = resolvedAcpSpawnToOptions(finalized, worker.spawn);
     worker.acpFingerprint = acpSpawnFingerprint(finalized);
+  }
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as NodeJS.ErrnoException).code === 'ENOENT'
+    ) {
+      return false;
+    }
+    throw error;
   }
 }

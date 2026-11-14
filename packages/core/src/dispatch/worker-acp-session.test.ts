@@ -68,20 +68,36 @@ describe('openWorkerAcpSession', () => {
     ).rejects.toThrow(/does not exist/);
   });
 
-  it('fails on resume cwd mismatch', async () => {
+  it('attempts session/load with the current cwd when saved cwd differs', async () => {
     workspaceDir = mkdtempSync(join(tmpdir(), 'ensemble-acp-cwd-'));
+    const loadSession = vi.fn().mockResolvedValue(undefined);
+    const newSession = vi.fn();
 
-    await expect(
-      openWorkerAcpSession({
+    const session = await openWorkerAcpSession({
         issueUrl: TEST_WORKTREE.issue.url,
         worktree: TEST_WORKTREE,
         acpCwd: workspaceDir,
         workerName: 'librarian',
         expectedResumeAcpCwd: '/other/cwd',
         resumeAcpSessionId: 'sess-old',
-        connectAcp: vi.fn(),
-      }),
-    ).rejects.toThrow(/resume cwd mismatch/);
+        bridge: {
+          loadSession,
+          newSession,
+          close: vi.fn(),
+        } as never,
+      });
+
+    expect(loadSession).toHaveBeenCalledWith(
+      'sess-old',
+      workspaceDir,
+      undefined,
+    );
+    expect(session).toMatchObject({
+      sessionId: 'sess-old',
+      resumed: true,
+      acpCwd: workspaceDir,
+    });
+    expect(newSession).not.toHaveBeenCalled();
   });
 
   it('records when a saved session failed to load and a new session was created', async () => {

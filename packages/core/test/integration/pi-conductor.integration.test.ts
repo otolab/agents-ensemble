@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_ENSEMBLE_CONFIG } from '../../src/config/defaults.js';
 import { runConductorSession } from '../../src/conductor/conductor-session.js';
+import { SessionLogger } from '../../src/conductor/session/session-logger.js';
 import * as issueContextModule from '../../src/github/issue-context.js';
 import { PermissionPipeline } from '../../src/permission/permission-pipeline.js';
 import { createTestOperatorInputBinding } from '../../src/conductor/testing/test-operator-input-binding.js';
@@ -363,7 +364,7 @@ describe('Pi conductor backend integration', () => {
     );
   });
 
-  it('resumes an MCP session only when the resolved configuration is unchanged', async () => {
+  it('resumes an MCP session when the resolved configuration has changed', async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-pi-mcp-resume-'));
     const userEnsembleRoot = await mkdtemp(
       join(tmpdir(), 'ensemble-pi-mcp-user-'),
@@ -421,12 +422,28 @@ describe('Pi conductor backend integration', () => {
     expect(resumed.lastResult).toBe('conductor-resumed');
 
     await writeMcpConfig(1);
-    await expect(
-      runConductorSession({
-        ...sessionOptions,
-        resumeAgentId: first.agentId,
+    const sessionLogger = new SessionLogger({
+      issueUrl: TEST_ISSUE.url,
+      repoRoot,
+    });
+    const emitted = vi.fn();
+    sessionLogger.subscribe(emitted);
+    const resumedWithChangedConfig = await runConductorSession({
+      ...sessionOptions,
+      resumeAgentId: first.agentId,
+      bindOperatorInput:
+        createTestOperatorInputBinding(() => 'continue').bindOperatorInput,
+      sessionLogger,
+    });
+
+    expect(resumedWithChangedConfig.lastResult).toBe('conductor-resumed');
+    expect(fakeSessions).toHaveLength(3);
+    expect(fakeSessions[2]?.sessionId).toBe(first.agentId);
+    expect(emitted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'harness.warning',
+        message: expect.stringContaining('保存時と現在の MCP config が異なる'),
       }),
-    ).rejects.toThrow(/MCP config digest mismatch/);
-    expect(fakeSessions).toHaveLength(2);
+    );
   });
 });

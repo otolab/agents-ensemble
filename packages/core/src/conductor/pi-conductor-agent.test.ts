@@ -1179,6 +1179,58 @@ describe('PiConductorAgent', () => {
     },
   );
 
+  it('finds a canonical transcript by its saved cwd and resumes it in the current cwd', async () => {
+    const paths = resolveEnsemblePaths({ repoRoot: cwd });
+    const sessionDir = paths.canonicalPiSessionsDir(PI_TEST_ISSUE_URL);
+    const savedCwd = join(cwd, 'previous-clone', '.ensemble', 'worktrees', 'issue-1');
+    const sessionFile = join(sessionDir, 'cross-clone-session.jsonl');
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: 'session',
+        id: 'cross-clone-session',
+        cwd: savedCwd,
+      })}\n`,
+    );
+    mockSessionManagerFindById.mockImplementation(
+      (candidateCwd: string, sessionId: string, candidateDir: string) =>
+        candidateCwd === savedCwd &&
+        sessionId === 'cross-clone-session' &&
+        candidateDir === sessionDir
+          ? sessionFile
+          : undefined,
+    );
+
+    const conductor = await PiConductorAgent.resume('cross-clone-session', {
+      cwd,
+      resumeCwds: [savedCwd],
+      pi: { agentDir },
+      modelId: 'anthropic/model-1',
+      sessionDir,
+      systemPrompt: 'recompiled system prompt',
+    });
+
+    expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
+      1,
+      cwd,
+      'cross-clone-session',
+      sessionDir,
+    );
+    expect(mockSessionManagerFindById).toHaveBeenNthCalledWith(
+      2,
+      savedCwd,
+      'cross-clone-session',
+      sessionDir,
+    );
+    expect(mockSessionManagerOpen).toHaveBeenCalledWith(
+      sessionFile,
+      sessionDir,
+      cwd,
+    );
+    await conductor.close();
+  });
+
   it('keeps an existing canonical Pi transcript ahead of a different legacy copy', async () => {
     const paths = resolveEnsemblePaths({ repoRoot: cwd });
     const slugSessionDir = paths.canonicalPiSessionsDir(PI_TEST_ISSUE_URL);

@@ -1,6 +1,13 @@
-import { mkdtemp, readFile, rm, realpath, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  realpath,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runGit } from '../git/run-git.js';
 import { parseIssueUrl } from '../issue/issue-ref.js';
@@ -9,6 +16,7 @@ import {
   listWorktrees,
   removeWorkerWorktree,
   resolveInRepoWorkspace,
+  resolveWorkerWorkspace,
   resolveWorkerWorktree,
   workerBranchName,
   workerWorktreePath,
@@ -148,6 +156,149 @@ describe('createWorkerWorktree', () => {
     );
 
     warnSpy.mockRestore();
+  });
+
+  it('warns and recreates a missing resume worktree from the current clone base', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/43');
+    const notices: string[] = [];
+
+    const worktree = await resolveWorkerWorkspace(
+      repoRoot,
+      issue,
+      'isolated',
+      {
+        resume: true,
+        onNotice: (message) => notices.push(message),
+      },
+    );
+
+    expect(worktree).toMatchObject({
+      path: resolve(workerWorktreePath(repoRoot, issue)),
+      branch: workerBranchName(issue),
+    });
+    expect(notices).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('この clone に Issue #43'),
+        expect.stringContaining('再生成しました'),
+      ]),
+    );
+    await expect(resolveWorkerWorktree(repoRoot, issue)).resolves.toMatchObject({
+      branch: workerBranchName(issue),
+    });
+  });
+
+  it('preserves an occupied resume path and uses a separate recovery path', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/44');
+    const occupiedPath = workerWorktreePath(repoRoot, issue);
+    await mkdir(occupiedPath, { recursive: true });
+    const marker = join(occupiedPath, 'keep.txt');
+    await writeFile(marker, 'keep this directory\n');
+    const notices: string[] = [];
+
+    const worktree = await resolveWorkerWorkspace(
+      repoRoot,
+      issue,
+      'isolated',
+      {
+        resume: true,
+        onNotice: (message) => notices.push(message),
+      },
+    );
+
+    expect(worktree.path).not.toBe(resolve(occupiedPath));
+    expect(worktree.branch).toBe(workerBranchName(issue));
+    expect(await readFile(marker, 'utf8')).toBe('keep this directory\n');
+    expect(notices).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('この clone に Issue #44'),
+        expect.stringContaining('再生成しました'),
+      ]),
+    );
+  });
+
+  it('keeps an Issue branch attached elsewhere and resumes on a fresh branch', async () => {
+    const issue = parseIssueUrl('https://github.com/org/repo/issues/46');
+    const occupiedBranch = workerBranchName(issue);
+    const otherPath = join(
+      repoRoot,
+      '.ensemble',
+      'worktrees',
+      'issue-46-already-open',
+    );
+    await mkdir(dirname(otherPath), { recursive: true });
+    await runGit(
+      ['worktree', 'add', '-b', occupiedBranch, otherPath, 'HEAD'],
+      repoRoot,
+    );
+    const marker = join(otherPath, 'keep.txt');
+    await writeFile(marker, 'keep this worktree\n');
+    const originalHead = await runGit(['rev-parse', 'HEAD'], otherPath);
+    const notices: string[] = [];
+
+    const recovered = await resolveWorkerWorkspace(
+      repoRoot,
+      issue,
+      'isolated',
+      {
+        resume: true,
+        onNotice: (message) => notices.push(message),
+      },
+    );
+
+    expect(recovered.path).toBe(resolve(workerWorktreePath(repoRoot, issue)));
+    expect(recovered.branch).not.toBe(occupiedBranch);
+    expect(recovered.branch).toMatch(
+      /^ensemble\/issue-46-resume-[0-9a-f]{8}$/u,
+    );
+    expect(await readFile(marker, 'utf8')).toBe('keep this worktree\n');
+    await expect(
+      runGit(['branch', '--show-current'], otherPath),
+    ).resolves.toMatchObject({ stdout: `${occupiedBranch}\n` });
+    await expect(runGit(['rev-parse', 'HEAD'], otherPath)).resolves.toMatchObject({
+      stdout: originalHead.stdout,
+    });
+    expect(notices).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('この clone に Issue #46'),
+        expect.stringContaining('再生成しました'),
+      ]),
+    );
+  });
+
+  it('fails with a reason when an occupied path has no valid base and leaves it intact', async () => {
+    const emptyRepo = await mkdtemp(join(tmpdir(), 'ensemble-worktree-empty-'));
+    try {
+      await runGit(['init', '-b', 'ensemble/issue-45'], emptyRepo);
+      await runGit(['config', 'user.email', 'test@example.com'], emptyRepo);
+      await runGit(['config', 'user.name', 'test'], emptyRepo);
+      const issue = parseIssueUrl('https://github.com/org/repo/issues/45');
+      const occupiedPath = workerWorktreePath(emptyRepo, issue);
+      await mkdir(occupiedPath, { recursive: true });
+      const marker = join(occupiedPath, 'keep.txt');
+      await writeFile(marker, 'unmodified\n');
+      const branchesBefore = await runGit(
+        ['for-each-ref', '--format=%(refname:short)', 'refs/heads'],
+        emptyRepo,
+      );
+
+      await expect(
+        resolveWorkerWorkspace(emptyRepo, issue, 'isolated', {
+          resume: true,
+        }),
+      ).rejects.toThrow(
+        /could not safely|安全な worktree base|安全に復旧できません/iu,
+      );
+
+      expect(await readFile(marker, 'utf8')).toBe('unmodified\n');
+      await expect(
+        runGit(
+          ['for-each-ref', '--format=%(refname:short)', 'refs/heads'],
+          emptyRepo,
+        ),
+      ).resolves.toMatchObject({ stdout: branchesBefore.stdout });
+    } finally {
+      await rm(emptyRepo, { recursive: true, force: true });
+    }
   });
 });
 

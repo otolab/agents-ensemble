@@ -574,7 +574,7 @@ describe('operator watch pool', () => {
     }
   });
 
-  it('uses only snapshot fallbacks consistent with the selected ResumeStore location', async () => {
+  it('reads canonical slug snapshots before clone-local hash fallbacks', async () => {
     repoRoot = await mkdtemp(join(tmpdir(), 'ensemble-operator-watch-location-yaml-'));
     const paths = resolveEnsemblePaths({ repoRoot });
     const slugIssueUrl = 'https://github.com/example/slug-fallback/issues/607';
@@ -642,7 +642,7 @@ describe('operator watch pool', () => {
     await writeStore(hashStorePath, hashAgentId, hashIssueUrl);
     await writeQuestions(
       paths.canonicalOpenQuestionsPath(hashIssueUrl, hashAgentId),
-      [{ id: 'inq-1', question: 'orphan slug must be ignored for selected hash' }],
+      [{ id: 'inq-1', question: 'canonical slug for hash-selected session' }],
     );
     await writeQuestions(
       paths.openQuestionsPath(hashAgentId),
@@ -671,6 +671,17 @@ describe('operator watch pool', () => {
         ],
       );
       await expect(pool.pollOnce(slugAgentId)).resolves.toBe(1);
+      await expect(pool.pollOnce(hashAgentId)).resolves.toBe(0);
+      await writeQuestions(
+        paths.canonicalOpenQuestionsPath(hashIssueUrl, hashAgentId),
+        [
+          { id: 'inq-1', question: 'canonical slug for hash-selected session' },
+          {
+            id: 'inq-2',
+            question: 'new canonical slug snapshot for hash-selected session',
+          },
+        ],
+      );
       await expect(pool.pollOnce(hashAgentId)).resolves.toBe(1);
       const reports = [0, 1]
         .flatMap(() =>
@@ -684,11 +695,13 @@ describe('operator watch pool', () => {
       expect(reports).toEqual(
         expect.arrayContaining([
           expect.stringContaining('new hash fallback for selected slug'),
-          expect.stringContaining('new hash snapshot for selected hash'),
+          expect.stringContaining(
+            'new canonical slug snapshot for hash-selected session',
+          ),
         ]),
       );
       expect(reports?.join('\n')).not.toContain(
-        'orphan slug must be ignored for selected hash',
+        'new hash snapshot for selected hash',
       );
     } finally {
       pool.close();
@@ -1368,7 +1381,7 @@ describe('operator watch pool', () => {
       )!;
       expect(batch.events.map((event) => event.sendCount)).toEqual([5, 6]);
       expect(formatOperatorDispatchBatch(batch.events)).toContain(
-        '### 1/2\n\n対象: https://github.com/example/repo/issues/message-listen-one (message-listen-one)\nsendCount: 5',
+        '### 1/2\n\n対象: https://github.com/example/repo/issues/1 (message-listen-one)\nsendCount: 5',
       );
       const formatted = formatOperatorDispatchBatch(batch.events);
       expect(formatted.indexOf('sendCount: 5')).toBeLessThan(
@@ -2024,7 +2037,7 @@ describe('operator watch pool', () => {
     agentId: string,
     updatedAt: number,
     harnessSocketPath?: string,
-    issueUrl = `https://github.com/example/repo/issues/${agentId}`,
+    issueUrl = 'https://github.com/example/repo/issues/1',
   ) {
     await writeFile(
       join(repoRoot, '.ensemble', 'sessions', `${agentId}.json`),
