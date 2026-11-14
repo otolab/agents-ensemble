@@ -275,6 +275,34 @@ Pi の conductor transcript は slug 配下の `pi/` に保存します。Pi の
 
 canonical slug と legacy location に同じ SessionResumeStore が残っている場合は slug 側を優先します。新規 session と resume 後の SessionResumeStore / YAML / tool-call history / Pi transcript の flush は slug 側だけに行います。operator-agent の session / watch state は従来どおり hash location を使います。path-hash の重複ファイルは削除・退避せず、operator TTY の `[harness]` 診断には選択 path と socket の有無を出します。
 
+### legacy data の一括 inventory / copy
+
+`scripts/migrate-project-ensemble-runtime-to-user.mjs` は、user path-hash に残る Issue session data と旧 operator watch state、operator が列挙した checkout の `.ensemble/sessions/`・`.ensemble/pi/sessions/`・`.ensemble/operator-agent/watch-state.json` を棚卸しします。既定は dry-run で、`--apply` を付けた場合だけ data を copy します。
+
+```bash
+node scripts/migrate-project-ensemble-runtime-to-user.mjs \
+  --checkout-root /path/to/checkout \
+  --checkout-root /path/to/another-clone \
+  --checkout-roots-complete \
+  --profile personal \
+  --dry-run
+
+node scripts/migrate-project-ensemble-runtime-to-user.mjs \
+  --checkout-root /path/to/checkout \
+  --checkout-root /path/to/another-clone \
+  --checkout-roots-complete \
+  --profile personal \
+  --apply
+```
+
+`--checkout-root` は対象 checkout ごとに指定し、`--checkout-roots-complete` は列挙が完了していることを operator が明示します。完全性を確認できない場合はこの flag を付けず、manifest に未確認 root として残してください。各実行は `~/.ensemble/migration/issue-session-migration-<timestamp>-<id>.json` を新規作成します。`--manifest <path>` で出力先を指定できますが、既存 file は上書きしません。
+
+Issue session data は、同じ `conductorAgentId` の SessionResumeStore にある有効な `issueUrl` が canonical slug を証明する場合だけ割り当てます。`repoRoot` の一致は条件にしません。Pi transcript は transcript header の session ID が Store と対応する場合だけ copy し、対応を確認できない共有 transcript は source を保全したまま未解決として記録します。
+
+watch state は conductor ごとに cursor・message listener・pending report を bundle 化します。Store の `issueUrl` が一意で、pending report の Issue URL も一致し、`--profile` で operator が移行先 profile を選んだ場合だけ profile / slug 配下へ copy します。根拠不足、破損、または移行先との衝突がある bundle は checksum 付きで `~/.ensemble/operator-agents/legacy/watch/` に保全します。profile を指定しない場合も watch bundle は同じ archive に保全します。
+
+manifest は source / destination、data kind、disposition、source / destination SHA-256、collision / archive の理由、recovery 手順、checkout inventory の完全性と unresolved source を記録します。同じ checksum の destination は no-op とし、異なる destination は上書きしません。source の削除・rename は行いません。旧 operator conversation record とそれに一意に結び付く provider transcript は inventory と migration の対象外です。
+
 `session-state.yaml` は `report_session_state` が登録した最新の statusLine と過去の報告をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。`current` が最新値、`history` は過去の値を古い順に並べた一覧です。履歴は最大 50 件、ファイル全体は最大 16 KiB で、上限を超える場合は古い履歴から削除します。
 
 ```yaml

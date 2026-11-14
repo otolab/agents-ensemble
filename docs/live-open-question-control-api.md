@@ -68,7 +68,7 @@ watch pool は `~/.ensemble/operator-agent/<repoKey>/watch-state.json` に watch
 
 operator-agent の session / watch state は、対象 repository の選択済み ResumeStore がすべて同じ canonical slug にあり、その slug が一意に決まる場合は slug-keyed state を使います。state がまだなければ path-hash、次に project legacy を読み、読み込んだ値を slug 側へ複製します。それ以外（hash-only、legacy、複数 slug が混在する場合）は path-hash を使い、project legacy を fallback とします。state の読み込み・保存先は ResumeStore location から決め、ディレクトリ列挙順には依存しません。
 
-重複を検出すると operator TTY の `[harness]` に、選択した path と各候補の `harnessSocketPath` の有無を表示します。migration は既存の slug JSON / YAML を上書きせず、hash copy も削除・退避しません。`scripts/migrate-project-ensemble-runtime-to-user.mjs` は既に path-hash へ移行済みの session に対して再実行しても slug mirror を作成できます。
+重複を検出すると operator TTY の `[harness]` に、選択した path と各候補の `harnessSocketPath` の有無を表示します。`scripts/migrate-project-ensemble-runtime-to-user.mjs` は user path-hash と operator が列挙した checkout の Issue session / watch data を inventory 付きで copy します。既定は dry-run で、`--apply` を指定した場合だけ適用します。source は削除・rename せず、destination は上書きしません。同一 checksum は no-op、異なる内容の destination は manifest に collision と recovery を記録します。watch は cursor・listener・pending report を conductor ごとにまとめ、Store の Issue URL と pending report URL が一致し、`--profile` が選ばれている場合だけ profile / slug 配下へ移します。それ以外の watch bundle は checksum 付きで `~/.ensemble/operator-agents/legacy/watch/` に保全します。共有 Pi transcript の所属を Store から確認できない場合は source を保全して unresolved とし、旧 operator conversation record とそれに一意に対応する provider transcript は inventory 対象外です。実行時の引数・manifest・checkout root の完全性は [session logging の migration 手順](session-logging.md#legacy-data-の一括-inventory-copy) を参照してください。
 
 ## Endpoint discovery と lifecycle
 
