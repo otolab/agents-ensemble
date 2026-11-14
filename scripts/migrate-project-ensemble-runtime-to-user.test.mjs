@@ -755,6 +755,55 @@ test('a canonical slug Store can prove an old hash watch bundle destination', as
   );
 });
 
+test('user docs distinguish bulk inventory from resume-time lazy promotion', async () => {
+  const repositoryRoot = resolve(dirname(scriptPath), '..');
+  const sessionLogging = await readFile(
+    join(repositoryRoot, 'docs', 'session-logging.md'),
+    'utf8',
+  );
+  const liveControl = await readFile(
+    join(repositoryRoot, 'docs', 'live-open-question-control-api.md'),
+    'utf8',
+  );
+
+  assert.match(sessionLogging, /resume 時の \*\*lazy promotion\*\*/u);
+  assert.match(
+    sessionLogging,
+    /user path-hash に残る Issue session data.*operator が列挙した全 checkout/u,
+  );
+  assert.match(
+    sessionLogging,
+    /operator watch state の profile \/ slug 移行も担いません/u,
+  );
+  assert.match(
+    sessionLogging,
+    /root が 0 件の場合.*`complete: false`/u,
+  );
+  assert.match(
+    liveControl,
+    /この lazy promotion を置き換えるものではなく/u,
+  );
+  assert.match(
+    liveControl,
+    /旧 `~\/\.ensemble\/operator-agent\/<repoKey>\/watch-state\.json`.*#698 の一括 migration/u,
+  );
+
+  for (const document of [sessionLogging, liveControl]) {
+    assert.doesNotMatch(
+      document,
+      /新規 session の通常保存先は引き続き path-hash/u,
+    );
+    assert.doesNotMatch(
+      document,
+      /現在の `--resume` 検証は保存値と実行中の `repoRoot` の一致を要求/u,
+    );
+    assert.doesNotMatch(
+      document,
+      /operator-agent の session \/ watch state は従来どおり hash location/u,
+    );
+  }
+});
+
 function makeStore(conductorAgentId, storeIssueUrl, repoRoot) {
   return {
     version: 1,
