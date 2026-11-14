@@ -60,7 +60,7 @@ watch pool は、`listLocatedSessionResumeStores(repoRoot)` が返す全選択�
 - **JSON または state schema が不正な場合:** operator-agent の初期化は失敗し、empty state へ黙って置き換えません。保存ファイルを退避してから、有効な backup を戻すか、version と必須 field を修復して再起動してください。state を意図的に破棄する場合も、まず必要ならコピーを保全してください。ファイルを取り除いて再起動すると empty state から始まり、上記の再登録と silent baseline が必要です。
 - **report hold:** hold は watch state には保存されない会話中の状態です。再起動後は解除状態で始まります。
 
-## 複数の保存先に同じ SessionResumeStore がある場合
+## SessionResumeStore の選択と legacy data の migration
 
 Issue session の通常保存先は canonical GitHub slug 配下（`~/.ensemble/sessions/github.com/<owner>/<repo>/`）です。SessionResumeStore、Open Questions / session-state YAML、tool-call snapshot、Pi transcript をこの location に保存します。別 clone からも Issue URL と slug を使って同じ session を見つけられます。
 
@@ -70,9 +70,11 @@ operator-agent の session / watch state は、`listLocatedSessionResumeStores(r
 
 重複を検出すると operator TTY の `[harness]` に、選択した path と各候補の `harnessSocketPath` の有無を表示します。legacy path からの promotion は既存の slug JSON を上書きせず、hash copy も削除・退避しません。
 
+`scripts/migrate-project-ensemble-runtime-to-user.mjs` はこの lazy promotion を置き換えるものではなく、#697 の cutover 前に使う一括 inventory / copy tool です。user path-hash 全体と operator が列挙した checkout の Issue session / watch data を対象にし、現在再開されない session や別 clone の data も棚卸しします。旧 `~/.ensemble/operator-agent/<repoKey>/watch-state.json` と project-local watch state は #698 の一括 migration で copy 候補として扱います。既定は dry-run で、`--apply` を指定した場合だけ copy します。source は削除・rename せず、destination は上書きしません。同一 checksum は no-op、異なる内容の collision は manifest に理由と recovery を記録します。Issue data は有効かつ一意な Store の `issueUrl` が slug を証明する場合だけ割り当てます。watch は cursor・listener・pending report を conductor ごとにまとめ、Store と pending report の Issue URL が一致し、operator が `--profile` を選んだ場合だけ profile / slug 配下へ移します。割当根拠が足りない bundle は checksum 付きで `~/.ensemble/operator-agents/legacy/watch/` に保全します。共有 Pi transcript の所属が確認できない場合は source を保全して unresolved とし、旧 operator conversation record とそれに一意に対応する provider transcript は inventory 対象外です。引数・manifest・checkout inventory の完全性は [session logging の migration 手順](session-logging.md#legacy-data-の一括-inventory-copy) を参照してください。
+
 ## Endpoint discovery と lifecycle
 
-operator-agent は `listSessionResumeStores` が選んだ SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。通常は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json` です。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、選択した SessionResumeStore に記録された値を使ってください。
+operator-agent は `listSessionResumeStores` が選んだ SessionResumeStore から `harnessSocketPath` を読み、接続先を得ます。通常は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json` を選び、互換期間中に限って user path-hash や project-local Store を fallback として読みます。socket は OS の一時 directory 内の `ens-oq-*` runtime directory に作成されます。socket path を推測せず、選択した SessionResumeStore に記録された値を使ってください。
 
 path の記録は listener の稼働確認ではありません。session が停止中、終了処理中、または接続不能なら UDS request は失敗します。`list_live_open_questions`、`answer_live_open_question`、`send_operator_message`、`get_last_conductor_message` と発言 listen は直接 live control であり、保存 YAML へ fallback しません。operator-agent tool の `list_conductor_messages` はこの UDS 経路を使わず、SessionResumeStore の session ID / backend / cwd から provider history を読みます。watch pool の `register_session_watch` のみが `session.observe` を試し、UDS が到達不能または method 未対応なら選択した ResumeStore location に対応する保存 snapshot へ切り替えます。発言 listen は UDS が利用できない間も保存値へ切り替えず、次の poll で再接続を試します。
 
@@ -331,7 +333,7 @@ await aggregateOrStore(history);
 
 回答候補は Open Questions YAML に atomic save されてから live Registry と event queue に反映されます。YAML は回答永続化・resume の正本で、SessionResumeStore は JSON mirror として更新されます。通常の success response は YAML save と conductor dispatch receipt の成功後に返ります。SessionResumeStore の flush 成功は success 条件ではありません。回答処理で mirror 更新に失敗すると warning を記録し、後続 flush を一度 schedule して再同期を試みます。これは再同期の保証ではなく、その flush も失敗した場合は warning を記録してこの経路での再試行を終えます。
 
-永続化先は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}/open-questions.yaml`、SessionResumeStore は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json` です。SessionResumeStore は `harnessSocketPath` の endpoint index を持ち、Open Question snapshot も互換用 mirror として含みます。
+通常の永続化先は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}/open-questions.yaml`、SessionResumeStore は `~/.ensemble/sessions/github.com/<owner>/<repo>/{conductorAgentId}.json` です。`~/.ensemble/sessions/<repoKey>/` は互換読取用の fallback に限り、新規保存や通常 flush の書き込み先ではありません。SessionResumeStore は `harnessSocketPath` の endpoint index を持ち、Open Question snapshot も互換用 mirror として含みます。
 
 JSON-RPC error は次の envelope です。`data` は該当する場合だけ付きます。
 

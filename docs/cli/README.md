@@ -29,7 +29,7 @@ Pi backend の初回セットアップ、resource root、provider 認証、`ense
 
 clone したら、推奨初回導線として TTY で `ensemble setup` を実行します。Pi（OpenAI）または Cursor を選び、Pi では OAuth / API key も選べます。Pi を選んだ場合、`conductor.model: default` は user Pi settings に保存した provider / model を使います。設定と認証は user 層に保存し、既存 project config・project Pi resource・profile の値は変更しません。user の保存先が project `.ensemble` / Pi resource と重なる場合や、project の symlink から path として辿れる保存先と重なる場合は書き込みを中止します。project/profile が backend を指定している場合は user 設定より優先されます。setup を使わず Pi settings に model がなく、明示 model もない場合は起動前に設定エラーになります。CI / headless では user config・Pi settings・認証情報を手動で用意してください。`ensemble auth login` の対話 login には TTY が必要です。手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
-Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
+Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。Pi OAuth は SSH / tmux の TTY から進められ、URL は OSC 8 非対応端末でもコピーできる形で表示します。貼り付ける authorization code は入力中に表示しません。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
 Pi は headless の `createAgentSession` を使い、Pi CLI の `<cwd>/.pi/` 設定とは独立しています。resource discovery、`settings.json` の headless 対応範囲、`models.json`、MCP の制約は [config.md](https://github.com/otolab/agents-ensemble/blob/main/docs/config.md) と [ADR 0025](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0025-conductor-agent-backend-sdk-and-pi.md) を参照してください。
 
@@ -64,7 +64,7 @@ dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer
 | conductor（Cursor SDK、明示選択） | `ensemble auth login` |
 | conductor（Pi、OpenAI API key） | `ensemble setup` で API key を選ぶ（TTY の非表示 prompt） |
 | conductor（Pi、他 provider の API key） | `ensemble auth login --provider <id>`（TTY の非表示 prompt） |
-| conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
+| conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr、authorization code は非表示 prompt） |
 | GitHub API（gh CLI を使う場合） | `gh auth login` |
 
 ```bash
@@ -163,7 +163,7 @@ export は raw のままコピーし、API key・token・password、会話中の
 
 raw copy では symlink と通常 file 以外の source を追いません。任意 source、補助 YAML、Pi / Cursor / worker transcript が見つからない・読めない場合も bundle は作成し、manifest に status と warning を残します。ResumeStore が見つからない場合は export error です。harness phase が `running` / `idle` の session は process が稼働中の best-effort snapshot として warning を記録し、export 結果の status は `partial` になります。ファイル間の同時点性や Pi JSONL の書き込み競合がないことは保証しません。
 
-`messages` は保存 session の `conductorAgentId` と明示した repository scope を使い、operator-agent の `list_conductor_messages` と同じ core provider-history API を使う quick peek 用コマンドです。Pi の transcript は canonical slug、現在 clone の path-hash、保存時 clone の path-hash、現在または保存済み `conductorCwd` の `.ensemble/pi/sessions/` の順に探します。Pi `SessionManager` の cwd には保存済み `conductorCwd` を使います。既定では新しい履歴から20件、最大100件を表示します。`--limit <n>`、`--order asc|desc`、`--cursor <providerId>` でページを指定できます。返すのは user inbound と conductor の最終応答で、tool output や thinking は含みません。本文は保存値のまま出力し、テキスト表示も `--json` もサニタイズしません。API key・token・password などを会話に入力していた場合、その値も出力されます。`messages` は raw debug 経路を保ち、sanitizer の CLI option は設けていません。アプリから core API を使う場合は、返却前に `inbound` / `text` へ利用側の sanitizer を渡せます。適用境界、エラー時の動作、秘密値保護の限界は [provider history list の API 契約](../live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
+`messages` は保存 session の `conductorAgentId` と明示した repository scope を使い、operator-agent の `list_conductor_messages` と同じ core provider-history API を使う quick peek 用コマンドです。Pi transcript は canonical slug の user 層 `~/.ensemble/sessions/github.com/<owner>/<repo>/pi/`（user root を変更している場合はその配下）を先に探し、見つからない場合は現在 clone の path-hash、保存時 clone の path-hash、現在または保存済み `conductorCwd` の `.ensemble/pi/sessions/` の順に探します。Pi `SessionManager` の cwd には保存済み `conductorCwd` を使います。閲覧時の fallback は read-only です。resume 時の lazy promotion は選択 session の slug にない file だけを copy し、全 path-hash / checkout data の inventory と copy は #698 migration tool が担います。既定では新しい履歴から20件、最大100件を表示します。`--limit <n>`、`--order asc|desc`、`--cursor <providerId>` でページを指定できます。返すのは user inbound と conductor の最終応答で、tool output や thinking は含みません。本文は保存値のまま出力し、テキスト表示も `--json` もサニタイズしません。API key・token・password などを会話に入力していた場合、その値も出力されます。`messages` は raw debug 経路を保ち、sanitizer の CLI option は設けていません。アプリから core API を使う場合は、返却前に `inbound` / `text` へ利用側の sanitizer を渡せます。適用境界、エラー時の動作、秘密値保護の限界は [provider history list の API 契約](../live-open-question-control-api.md#operator-agent-の-provider-history-list)を参照してください。
 
 `workers messages` は保存済み ACP session を `--worker <name>` で指定します。現在オフラインで読めるのは Pi ACP（`pi`）と Codex ACP（`codex`）です。Pi は保存 session ID に対応する JSONL transcript を runtime に応じた session map から解決し、active branch の user / assistant 本文を出します。
 

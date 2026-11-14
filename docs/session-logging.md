@@ -244,7 +244,7 @@ SessionSummary と provider history の時刻だけでは run / process を一�
 
 新規の `ensemble issue` は、初回 flush から `createdHarnessCliVersion` に `@agents-ensemble/cli` の package version を記録します。`--continue` / `--resume` は作成時の値を保持し、旧 Store で値が欠けている場合は欠落したまま扱います。この値は SessionResumeStore の schema version とは別です。
 
-Issue session の新規・更新データは `packages/core` の `resolveEnsemblePaths({ repoRoot })` で解決し、GitHub owner/repo の canonical slug ごとに user 側へ保存します。`repoKey` は正規化した絶対 `repoRoot` の SHA-256 で、既存 data の fallback と operator-agent state に引き続き使われます。
+Issue session の新規・更新データは `packages/core` の `resolveEnsemblePaths({ repoRoot })` で解決し、GitHub owner/repo の canonical slug ごとに user 側へ保存します。`repoKey` は正規化した絶対 `repoRoot` の SHA-256 で、既存 Issue data を探す fallback key として残ります。operator-agent の新しい watch state は profile と repository slug で分け、旧 `repoKey` state は一括 migration の source として扱います。
 
 ```text
 ~/.ensemble/sessions/github.com/<owner>/<repo>/
@@ -270,7 +270,13 @@ Issue session の新規・更新データは `packages/core` の `resolveEnsembl
 ~/.ensemble/operator-agent/<repoKey>/  # slug を一意に決められない場合。Pi operator transcript もここ
   session.json
   watch-state.json
-  pi-sessions/
+
+~/.ensemble/operator-agents/<profile>/watch/github.com/<owner>/<repo>/  # #698 の copy 先。runtime の切替は #697 の範囲
+  watch-state.json
+
+<repoRoot>/.ensemble/sessions/  # project-local Issue-session fallback
+<repoRoot>/.ensemble/operator-agent/watch-state.json  # 旧 watch state source
+<repoRoot>/.ensemble/pi/sessions/  # Issue data の可能性がある transcript source
 ```
 
 Pi の conductor transcript は slug 配下の `pi/` に保存します。Pi の project settings や skills などの project resources は引き続き現在 clone の `<repoRoot>/.ensemble/pi/` から読みます。operator-agent の session / watch state は、`listLocatedSessionResumeStores(repoRoot)` が返す全選択済み Store（同一 Issue・conductor ID の重複選択後）を判定対象にします。1件以上あり、全件 canonical slug で repository が一つの場合は slug 配下、それ以外（空、path-hash / project legacy を含む、複数 repository）は repoKey 配下です。特定の watch 対象だけには絞りません。
@@ -288,6 +294,38 @@ slug と path-hash に同じ session があれば slug 側の `harnessSocketPath
 旧 `<repoRoot>/.ensemble/sessions/` は Issue-session data の読み取り fallback です。ResumeStore と open-question YAML、session-state YAML、tool-call history、Pi transcript を resume 時に slug 側へコピーし、source はそのまま残します。operator-agent の旧 `.ensemble/operator-agent/` と現在または保存済み `conductorCwd` 配下の `.ensemble/pi/sessions/` も読み取り fallback し、operator state は利用時に user 側へ移します。Issue 用 Git worktree は clone ごとの `<repoRoot>/.ensemble/worktrees/issue-N` を使います。現在 clone に resume 対象 worktree がない場合は警告して、安全な branch/base から再生成を試みます。使用中 branch や占有 directory を移動・削除・reset・上書きせず、安全な path / branch を確保できない場合は理由を示して失敗します。配置判断の詳細は [ADR 0044](adr/0044-user-scoped-runtime-storage.md) を参照してください。
 
 canonical slug と legacy location に同じ SessionResumeStore が残っている場合は slug 側を優先します。新規 session と resume 後の SessionResumeStore / YAML / tool-call history / Pi transcript の flush は slug 側だけに行います。operator-agent の session / watch state は `listLocatedSessionResumeStores(repoRoot)` の全選択済み Store を基準にし、1件以上・全件 canonical slug・同一 repository の場合に slug-keyed path、それ以外は hash location を使います。判定は特定の watch 対象に絞りません。path-hash の重複ファイルは削除・退避せず、operator TTY の `[harness]` 診断には選択 path と socket の有無を出します。
+
+### legacy data の一括 inventory / copy
+
+`scripts/migrate-project-ensemble-runtime-to-user.mjs` は、#697 の storage cutover 前に一度実行する一括 migration です。user path-hash に残る Issue session data と旧 operator watch state に加え、operator が列挙した全 checkout の `.ensemble/sessions/`・`.ensemble/pi/sessions/`・`.ensemble/operator-agent/watch-state.json` を inventory にします。resume 時の **lazy promotion** では届かない別 clone の hash data や、現在再開されない session も対象にできます。lazy promotion が対象にするのはその resume で選択した session と不足 file だけで、全 path-hash / checkout の inventory ではなく、operator watch state の profile / slug 移行も担いません。既定は dry-run で、manifest を確認してから `--apply` で copy します。
+
+```bash
+node scripts/migrate-project-ensemble-runtime-to-user.mjs \
+  --checkout-root /path/to/checkout \
+  --checkout-root /path/to/another-clone \
+  --checkout-roots-complete \
+  --profile personal \
+  --dry-run
+
+node scripts/migrate-project-ensemble-runtime-to-user.mjs \
+  --checkout-root /path/to/checkout \
+  --checkout-root /path/to/another-clone \
+  --checkout-roots-complete \
+  --profile personal \
+  --apply
+```
+
+`--checkout-root` は対象 checkout ごとに指定し、`--checkout-roots-complete` は列挙が完了していることを operator が明示します。root が 0 件の場合、この flag だけでは完全 inventory とみなされず、manifest に `complete: false` と `<no checkout roots declared>` が残ります。root の網羅性を確認できない場合も flag を付けず、未確認 root を manifest に残してください。各実行は `~/.ensemble/migration/issue-session-migration-<timestamp>-<id>.json` を新規作成します。`--manifest <path>` で出力先を指定できますが、既存 file は上書きしません。
+
+Issue session data は、有効な schema の SessionResumeStore にある `issueUrl` が canonical slug を一意に証明する場合だけ割り当てます。同じ `conductorAgentId` から異なる Issue URL が見つかった場合や、Store / sidecar の schema が不正な場合は成功扱いにせず、source を保全して manifest に unresolved と recovery を記録します。`repoRoot` の一致は条件にしません。Pi transcript は transcript header の session ID と一意な Store evidence が対応する場合だけ copy し、Issue data の可能性を排除できない共有 transcript は source を保全したまま未解決として記録します。
+
+watch state は conductor ごとに cursor・message listener・pending report を bundle 化します。Store の `issueUrl` が一意で、pending report の Issue URL も一致し、`--profile` で operator が移行先 profile を選んだ場合だけ profile / slug 配下へ copy します。根拠不足、破損、または移行先との衝突がある bundle は checksum 付きで `~/.ensemble/operator-agents/legacy/watch/` に保全します。profile を指定しない場合も watch bundle は同じ archive に保全します。
+
+manifest は source / destination、data kind、disposition、source / destination SHA-256、collision / archive の理由、recovery 手順、checkout inventory の完全性と unresolved source を記録します。scan 中に `lstat` / `readdir` などの filesystem error が起きた場合は、`error` に `code`・`errno`・`syscall`・path・message を含め、reason・provenance・recovery とともに `unresolvedSources` に残します。operator が指定した全 root は scan 前に `declaredRoots` へ記録され、未走査 root も abort の原因と recovery を示して残ります。
+
+checkout inventory の `operatorAssertedComplete` は、operator が root 一覧を網羅的と申告したかを示します。`scanCompleted` は migration inventory の scan が最後まで完了したかを示し、`complete` は root が 1 件以上あり、この申告と scan 完了の両方が揃った場合だけ `true` になります。これは全 inventory の状態です。一方、root の `inventoryConfirmed` は operator の網羅申告に加え、その root 自身の scan が unresolved error なく完了したことを表します。したがって scan が途中で fatal error になっても、先に scan を完了した root は確認済みのままです。`unconfirmedRoots` は `inventoryConfirmed: false` の declared root だけを列挙し、global の `scanCompleted` / `complete` とは別です。fatal error の root と未走査 root は未確認として残ります。recoverable filesystem error があって全 scan が終わった場合は `complete: true` になり得ますが、その root は未確認のまま `unconfirmedRoots` に残ります。`unresolvedRoots` / `unresolvedSources` は個別の問題を示すため、あわせて確認してください。project-local source の `provenance.checkoutRootInventoryConfirmed` は、関連 root の `inventoryConfirmed` と同じ値です。`complete` だけで個々の root / source の確認済みとは判断できません。
+
+同じ checksum の destination は no-op とし、異なる destination は上書きしません。source の削除・rename は行いません。旧 operator conversation record とそれに一意に結び付く provider transcript は inventory と migration の対象外です。
 
 `session-state.yaml` は `report_session_state` が登録した最新の statusLine と過去の報告をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。`current` が最新値、`history` は過去の値を古い順に並べた一覧です。履歴は最大 50 件、ファイル全体は最大 16 KiB で、上限を超える場合は古い履歴から削除します。
 

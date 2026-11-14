@@ -25,6 +25,8 @@ ResumeStore の探索は全ローカル slug を `repoRoot` の一致条件な�
 
 operator-agent の session / watch state は、`listLocatedSessionResumeStores(repoRoot)` が返す全選択済み Store を対象にし、1件以上・全件 canonical slug・repository slug が一つの場合に限って `~/.ensemble/operator-agent/github.com/<owner>/<repo>/` に保存します。これは特定の watch 対象 repository だけの判定ではありません。Store が0件、path-hash / project legacy を含む、または複数 repository にまたがる場合は `~/.ensemble/operator-agent/<repoKey>/` を使います。`repoKey` は正規化した絶対 `repoRoot` の SHA-256 で、Pi operator transcript と builtin worker の session map / transcript も引き続きこの hash を使います。project `.ensemble/` は team profile と repo 固有 config / Pi resources を置く層です。isolated worktree は Git の repo 登録に加え、現行の解決・再利用処理が project-local path を前提とするため `<repoRoot>/.ensemble/worktrees/issue-N` に残します。[ADR 0044](adr/0044-user-scoped-runtime-storage.md) は以前の path-hash 配置を記録しています。
 
+互換期間中の `ensemble issue --resume` / `--continue` は、slug にない file だけを現在 clone の path-hash または project-local legacy から読み、対象 session の不足 file を slug 側へ copy します。source は保持し、この lazy promotion は選択した session に限られます。全 user path-hash と列挙 checkout の data は、#698 migration tool が inventory 付きの copy-only 処理で扱います。
+
 ## 解決パターン
 
 すべての項目が同じ順序ではない。実装は `packages/core/src/config/resolve-settings.ts` の `resolve*Setting` か、各機能の専用解決関数に従う。
@@ -155,7 +157,7 @@ Pi の `!command` は conductor process の shell / OS 権限で実行され、w
 | 設定 | 環境変数 | config | CLI | コード default | 解決 |
 |------|----------|--------|-----|----------------|------|
 | TTY レイアウト | `ENSEMBLE_TUI_LAYOUT` | `tui.layout` | — | `stream` | A |
-| OSC 8 ハイパーリンク | `FORCE_HYPERLINK`（`1`/`0`） | `tui.forceHyperlink`（`auto`/`on`/`off`） | — | `auto` | A |
+| TUI / Pi OAuth URL の OSC 8 ハイパーリンク | `FORCE_HYPERLINK`（`1`/`0`） | `tui.forceHyperlink`（`auto`/`on`/`off`） | — | `auto` | A |
 | オペレータ 1 回注入 | `ENSEMBLE_OPERATOR_MESSAGE` | — | `ensemble issue <ref> [message...]` | — | D |
 
 TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡して解決する。Issue リンク表示の詳細は [operator-input.md](https://github.com/otolab/agents-ensemble/blob/main/docs/operator-input.md)。

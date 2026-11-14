@@ -119,7 +119,7 @@ export type TuiForceHyperlinkMode = 'auto' | 'on' | 'off';
 export interface EnsembleTuiConfig {
   /** TTY レイアウト（非 TTY では `pane` にフォールバック）。 */
   layout: TuiLayoutMode;
-  /** Issue リンクの OSC 8 強制 on/off / 自動。 */
+  /** TUI / Pi OAuth URL の OSC 8 強制 on/off / 自動。 */
   forceHyperlink: TuiForceHyperlinkMode;
 }
 

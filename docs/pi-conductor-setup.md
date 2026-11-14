@@ -18,7 +18,22 @@ backend は Pi（OpenAI）または Cursor から選びます。Pi を選ぶと 
 
 config や profile に明示的な指定がなければ、Pi conductor が使われます。Pi の `settings.json` に既定 provider / model が必要です。clone 後は `ensemble setup` を実行すると backend、Pi model、認証をまとめて用意できます。Cursor SDK を使う場合は setup で Cursor を選ぶか、config / profile に `conductor.backend: cursor` を設定してください。
 
-`ensemble setup` は TTY 専用です。CI / headless 環境では対話 login を実行せず、user 設定と認証情報を手動で用意してください。
+`ensemble setup` は TTY 専用です。CI / headless 環境では対話 login を実行せず、user 設定と認証情報を手動で用意してください。Pi OAuth はサーバー上でブラウザを自動起動しなくても進められます。SSH / tmux では、表示された URL を手元のブラウザで開くか、device code を別端末で入力してください。
+
+#### SSH / tmux でブラウザを自動起動しない場合
+
+SSH 先の TTY（必要なら tmux pane）で login を開始します。
+
+```bash
+ssh user@host
+tmux new -As ensemble
+cd /path/to/agents-ensemble
+ensemble auth login --provider openai
+```
+
+画面に出た OAuth URL は、そのままコピーして手元のブラウザで開けます。OSC 8 対応端末では URL をクリックできる場合もありますが、非対応端末でも URL 全体を文字列で表示します。device code が出た場合は、表示された verification URL をブラウザのある端末で開き、コードを入力します。authorization code の貼り付けを求められた場合、入力中のコードは端末に表示されません。Ctrl+C / Ctrl+D / Esc で入力をキャンセルできます。ログイン方式の選択が出た場合は番号で選び、Enter でキャンセルできます。
+
+リンク表示は TUI と同じ設定を使います。既知の端末では自動判定し、`tui.forceHyperlink: on` または `FORCE_HYPERLINK=1` で OSC 8 を強制できます。`tui.forceHyperlink: off` または `FORCE_HYPERLINK=0` で無効化でき、環境変数の指定は config より優先されます。
 
 ```yaml
 # ~/.ensemble/config.yaml
@@ -98,7 +113,7 @@ ensemble auth login --provider <provider-id>
 
 Pi のログインは Cursor のような全体ログインではなく **provider 単位**です。
 
-OpenAI provider (`openai`) は OAuth と API key の両方に対応します。`ensemble setup` では方式を選び、API key を選んだ場合は TTY の非表示 prompt から user `auth.json` に保存します。既存の `ensemble auth login --provider openai` は引き続き OAuth を選びます。
+OpenAI provider (`openai`) は OAuth と API key の両方に対応します。`ensemble setup` では方式を選び、API key を選んだ場合は TTY の非表示 prompt から user `auth.json` に保存します。既存の `ensemble auth login --provider openai` は引き続き OAuth を選びます。OAuth provider が複数のログイン方式を提示する場合は、番号で選択できます。SSH / tmux からの手順は上記を参照してください。
 
 #### API key provider
 
