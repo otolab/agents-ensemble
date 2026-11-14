@@ -27,6 +27,7 @@ import {
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 const ONE_WORKER_PROFILE: Profile = {
+  conductor: { backend: 'cursor' },
   agents: {
     ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },

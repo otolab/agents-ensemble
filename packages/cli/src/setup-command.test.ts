@@ -581,6 +581,12 @@ describe('runSetupCommand', () => {
       message: expect.stringContaining('~/.ensemble/config.yaml'),
     });
     expect(error).toMatchObject({
+      message: expect.stringContaining('Pi が conductor の既定 backend'),
+    });
+    expect(error).toMatchObject({
+      message: expect.stringContaining('conductor.backend: cursor'),
+    });
+    expect(error).toMatchObject({
       message: expect.stringContaining('CURSOR_API_KEY'),
     });
     expect(error).toMatchObject({

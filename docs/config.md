@@ -57,7 +57,7 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 `loadEnsembleConfig(repoRoot, { configPath })` はコード内 default → 選択された user config → project config（読み込み有効時）の順で merge した `EnsembleConfig` を返します。`configPath` がなければ標準 user config を user 層として使います。明示指定ファイルにない項目はコード内 default から引き継ぐため、標準 user config の値は漏れません。`config.loadProjectConfig` は選択された user config から解決し、明示ファイルにも指定できます。project config 内の同名キーは無視されます。各 `resolve*Setting` はその merged config を **config 層**として参照します。
 
-`conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > merged config（project > 選択された user config）> `cursor` の順で解決します。
+`conductor.backend` はこの共通順序の例外です。CLI / 環境変数による上書きはなく、選択した profile の `profile.conductor.backend` > merged config（project > 選択された user config）> `pi` の順で解決します。Cursor SDK を使う場合は config または profile に `backend: cursor` を指定してください。
 
 `ensemble issue` は GitHub monitor / Issue コンテキスト取得より前に config を読み込みます。`ensemble operator-agent` も `--config` を指定でき、同じ default → 選択された user config → project config（読み込み有効時）の loader を使います。`--config` は team profile の `--profile` とは別系統で、profile 名から config ファイルを推測しません。
 
@@ -69,7 +69,7 @@ token などの秘密情報はこのファイルへ平文で書かず、provider
 
 `conductor.model` と `conductor.reasoning` は `resume-feasibility` digest の対象外です。これらの config 値を変えても resume は拒否されず、再開時に最新の merged config を使います。Issue session の `--model` / `--reasoning` と `CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` は digest に含めず、resume ごとに再解決します。operator-agent は専用 CLI option を持たず、`CONDUCTOR_MODEL_ID` / `CONDUCTOR_REASONING` > merged config の順で解決します。
 
-conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default です。直接 API でも同じ優先順で選択し、Cursor / Pi の組み込み factory には解決値を create / resume 時に渡します。custom factory では互換性を保つため、config または code default から `default` が選ばれた場合は `modelId: undefined` を渡し、factory 自身の既定値に委ねます。一方、CLI / API の明示値または `CONDUCTOR_MODEL_ID` が `default` / `auto` を選んだ場合は `'default'` を渡し、その invocation override を保ちます。詳しくは[設定全体の解決順](settings.md)を参照してください。
+conductor model の優先順は `--model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default です。直接 API でも同じ優先順で選択し、Cursor / Pi の組み込み factory には解決値を create / resume 時に渡します。既定の `model: default` は Pi では特別なモデル ID として送らず、Pi resource settings の `defaultProvider` / `defaultModel`（`model` / `modelId` alias も可）に選択を委ねます。設定がなければ明示 model を指定するか、初回導線の `ensemble setup` で Pi model settings を用意してください。custom factory では互換性を保つため、config または code default から `default` が選ばれた場合は `modelId: undefined` を渡し、factory 自身の既定値に委ねます。一方、CLI / API の明示値または `CONDUCTOR_MODEL_ID` が `default` / `auto` を選んだ場合は `'default'` を渡し、その invocation override を保ちます。詳しくは[設定全体の解決順](settings.md)を参照してください。
 
 resume では model / reasoning を保存値に固定せず、CLI / 環境変数の invocation override と最新の merged config から毎回解決します。新しい `resume-feasibility` digest は `conductor.model` / `conductor.reasoning` を比較しません。scheme のない旧 sidecar と `full` sidecar は従来どおり config 全体を照合するため、変更が resume を拒否することがあります。
 
@@ -101,7 +101,7 @@ config:
   loadProjectConfig: true              # 選択された user config で制御。false で project config を無視
 
 conductor:
-  backend: pi                        # cursor（既定） | pi
+  backend: pi                        # pi（既定） | cursor
   model: default                      # CONDUCTOR_MODEL_ID 相当
   # reasoning: high                  # 任意。選択した backend / model により対応値が異なる
   verbose: false                      # CONDUCTOR_VERBOSE / --verbose 相当

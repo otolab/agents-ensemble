@@ -58,6 +58,7 @@ const RESUME_AGENT_ID = 'agent-resume-test';
 // validates the resolved ACP spawn before attaching workers. Use a real,
 // always-available executable so the test does not require Cursor Agent CLI.
 const PING_PROFILE_BASE: Profile = {
+  conductor: { backend: 'cursor' },
   agents: {
     ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } },
   },
@@ -305,7 +306,7 @@ describe('session resume integration', () => {
         issueUrl: TEST_ISSUE.url,
         repoRoot,
         cursorBootstrapComplete: true,
-        profile: { workers: [] },
+        profile: { conductor: { backend: 'cursor' }, workers: [] },
         openQuestions: [
           {
             id: 'inq-json-1',
@@ -357,7 +358,7 @@ describe('session resume integration', () => {
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       resumeAgentId: RESUME_AGENT_ID,
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
@@ -412,7 +413,7 @@ describe('session resume integration', () => {
         issueUrl: TEST_ISSUE.url,
         repoRoot,
         cursorBootstrapComplete: true,
-        profile: { workers: [] },
+        profile: { conductor: { backend: 'cursor' }, workers: [] },
         openQuestions: [],
         sequence: 0,
         workers: {},
@@ -435,7 +436,7 @@ describe('session resume integration', () => {
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       resumeAgentId: RESUME_AGENT_ID,
       disableGitHubMonitor: true,
       disablePermissionDeadlockMonitor: true,
@@ -854,6 +855,7 @@ describe('session resume integration', () => {
       path: join(repoRoot, 'worktree'),
     };
     const workspaceProfile: Profile = {
+      conductor: { backend: 'cursor' },
       agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
       workers: [
         {
@@ -955,6 +957,7 @@ describe('session resume integration', () => {
       path: join(repoRoot, 'worktree'),
     };
     const workspaceProfile: Profile = {
+      conductor: { backend: 'cursor' },
       agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
       workers: [
         {
@@ -1049,6 +1052,7 @@ describe('session resume integration', () => {
       path: join(repoRoot, 'worktree'),
     };
     const piProfile: Profile = {
+      conductor: { backend: 'cursor' },
       agents: { ping: { prompt: { instructions: [PING_SYSTEM_PROMPT] } } },
       workers: [{ name: 'pi-worker', kind: 'ping' }],
     };

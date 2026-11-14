@@ -320,6 +320,11 @@ describe('loadEnsembleConfig', () => {
     const config = await loadConfig();
 
     expect(config).toEqual(DEFAULT_ENSEMBLE_CONFIG);
+    expect(config.conductor).toMatchObject({
+      backend: 'pi',
+      model: 'default',
+    });
+    expect(config.acp.defaultPreset).toBe('cursor');
     expect(output).toEqual([]);
   });
 

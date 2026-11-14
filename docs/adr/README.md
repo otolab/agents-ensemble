@@ -146,6 +146,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0072](0072-conductor-dispatch-lifecycle-and-recovery-boundary.md) | conductor dispatch lifecycle と recovery 境界 | accepted |
 | [0073](0073-legacy-cursor-bootstrap-unknown.md) | 旧 Cursor bootstrap 状態を unknown として再開する | accepted |
 | [0074](0074-manual-resume-after-close-failure.md) | close failure 後の明示 reconnect | accepted |
+| [0075](0075-pi-conductor-default-and-model-selection.md) | Pi conductor の既定化と model 選択 | accepted |
 
 ## 追加するとき
 

@@ -89,7 +89,10 @@ vi.mock('@agents-ensemble/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agents-ensemble/core')>();
   return {
     ...actual,
-    loadEnsembleConfig: vi.fn(async () => actual.DEFAULT_ENSEMBLE_CONFIG),
+    loadEnsembleConfig: vi.fn(async () => ({
+      ...actual.DEFAULT_ENSEMBLE_CONFIG,
+      conductor: { ...actual.DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'cursor' },
+    })),
     loadProfile: vi.fn(async () => ({
       profile: { workers: [] },
       profilePath: '/tmp/profile.yaml',
@@ -246,6 +249,7 @@ describe('executeIssueCommand with the core session', () => {
     vi.stubEnv('CONDUCTOR_MODEL_ID', '');
     const config = {
       ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'cursor' },
       session: { ...DEFAULT_ENSEMBLE_CONFIG.session, lazyWorkers: true },
     };
     const connectAcp = vi.fn(async () => {

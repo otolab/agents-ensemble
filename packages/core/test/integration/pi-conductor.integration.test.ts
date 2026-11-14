@@ -245,6 +245,13 @@ describe('Pi conductor backend integration', () => {
     const bridge = await createInProcessAcpBridge();
     const piAgentDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-agent-'));
     const piProjectDir = await mkdtemp(join(tmpdir(), 'ensemble-pi-project-'));
+    await writeFile(
+      join(piAgentDir, 'settings.json'),
+      JSON.stringify({
+        defaultProvider: 'anthropic',
+        defaultModel: 'claude-sonnet-4-5',
+      }),
+    );
     await mkdir(join(piProjectDir, 'extensions'), { recursive: true });
     await writeFile(
       join(piProjectDir, 'extensions', 'integration-extension.mjs'),
@@ -265,11 +272,9 @@ describe('Pi conductor backend integration', () => {
         ...DEFAULT_ENSEMBLE_CONFIG,
         conductor: {
           ...DEFAULT_ENSEMBLE_CONFIG.conductor,
-          backend: 'pi',
           pi: { agentDir: piAgentDir, projectDir: piProjectDir },
         },
       },
-      modelId: 'anthropic/claude-sonnet-4-5',
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
       connectAcp: async () => bridge,
@@ -291,6 +296,7 @@ describe('Pi conductor backend integration', () => {
     const [session] = fakeSessions;
     expect(session).toBeDefined();
     expect(session?.state.systemPrompt).toContain('PI_COMPILED_SYSTEM_MARKER');
+    expect(session?.state.model.id).toBe('claude-sonnet-4-5');
     const toolNames = session?.state.tools.map((tool) => tool.name) ?? [];
     expect(toolNames).toContain('prompt_worker');
     expect(toolNames).toContain('integration_extension');
