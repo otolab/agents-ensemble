@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
+  chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -126,6 +128,157 @@ test('complete checkout inventory retains failed root and source scan evidence',
     sourceError.provenance.checkoutRoot,
     sourceErrorCheckoutRoot,
   );
+});
+
+test('recoverable EACCES scan errors persist unresolved root and source evidence before apply', async (t) => {
+  const root = await makeRoot();
+  const rootBlockedCheckout = join(root.path, 'root-blocked-checkout');
+  const sourceBlockedCheckout = join(root.path, 'source-blocked-checkout');
+  const sourceDirectory = join(
+    sourceBlockedCheckout,
+    '.ensemble',
+    'sessions',
+  );
+  await createGitCheckout(rootBlockedCheckout);
+  await createGitCheckout(sourceBlockedCheckout);
+
+  const sourceId = 'permission-blocked-session';
+  const blockedStorePath = join(sourceDirectory, `${sourceId}.json`);
+  await mkdir(sourceDirectory, { recursive: true });
+  const blockedStoreText = `${JSON.stringify(
+    makeStore(sourceId, issueUrl, '/old/clone'),
+  )}\n`;
+  await writeFile(blockedStorePath, blockedStoreText, 'utf8');
+
+  const knownSourceId = 'known-readable-session';
+  const knownSourcePath = join(root.sessionRoot, `${knownSourceId}.json`);
+  const knownSourceText = `${JSON.stringify(
+    makeStore(knownSourceId, issueUrl, '/old/clone'),
+  )}\n`;
+  await mkdir(root.sessionRoot, { recursive: true });
+  await writeFile(knownSourcePath, knownSourceText, 'utf8');
+
+  await chmod(rootBlockedCheckout, 0);
+  await chmod(join(sourceBlockedCheckout, '.ensemble'), 0);
+  const deniedPaths = await Promise.all(
+    [
+      join(rootBlockedCheckout, '.git'),
+      sourceDirectory,
+    ].map(async (path) => {
+      try {
+        await lstat(path);
+        return false;
+      } catch (error) {
+        return ['EACCES', 'EPERM'].includes(error?.code);
+      }
+    }),
+  );
+  if (deniedPaths.some((denied) => !denied)) {
+    await chmod(rootBlockedCheckout, 0o700);
+    await chmod(join(sourceBlockedCheckout, '.ensemble'), 0o700);
+    t.skip('filesystem permissions do not deny lstat for this process');
+    return;
+  }
+
+  let result;
+  try {
+    result = runMigration(root, {
+      checkoutRoots: [rootBlockedCheckout, sourceBlockedCheckout],
+      complete: true,
+      apply: true,
+    });
+  } finally {
+    await chmod(rootBlockedCheckout, 0o700);
+    await chmod(join(sourceBlockedCheckout, '.ensemble'), 0o700);
+  }
+
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = await readManifest(root);
+  const rootMarkerEntry = findEntry(
+    manifest,
+    join(rootBlockedCheckout, '.git'),
+  );
+  const sourceEntry = findEntry(manifest, sourceDirectory);
+  const rootMarkerRecord = manifest.checkoutInventory.declaredRoots.find(
+    (entry) => entry.path === rootBlockedCheckout,
+  );
+  const sourceRootRecord = manifest.checkoutInventory.declaredRoots.find(
+    (entry) => entry.path === sourceBlockedCheckout,
+  );
+  const knownDestination = join(
+    root.userRoot,
+    'sessions',
+    'github.com',
+    'example',
+    'repo',
+    `${knownSourceId}.json`,
+  );
+
+  assert.equal(manifest.checkoutInventory.complete, true);
+  assert.ok(
+    manifest.checkoutInventory.unresolvedRoots.includes(rootBlockedCheckout),
+  );
+  assert.ok(
+    manifest.checkoutInventory.unresolvedRoots.includes(
+      sourceBlockedCheckout,
+    ),
+  );
+  assert.ok(
+    manifest.checkoutInventory.unconfirmedRoots.includes(rootBlockedCheckout),
+  );
+  assert.ok(
+    manifest.checkoutInventory.unconfirmedRoots.includes(
+      sourceBlockedCheckout,
+    ),
+  );
+  assert.equal(rootMarkerRecord.disposition, 'unresolved');
+  assert.ok(['EACCES', 'EPERM'].includes(rootMarkerRecord.error.code));
+  assert.equal(rootMarkerRecord.provenance.checkoutRoot, rootBlockedCheckout);
+  assert.equal(rootMarkerEntry.disposition, 'unresolved');
+  assert.ok(['EACCES', 'EPERM'].includes(rootMarkerEntry.error.code));
+  assert.equal(rootMarkerEntry.error.syscall, 'lstat');
+  assert.ok(Number.isInteger(rootMarkerEntry.error.errno));
+  assert.equal(rootMarkerEntry.provenance.checkoutRoot, rootBlockedCheckout);
+  assert.ok(rootMarkerEntry.recovery);
+
+  assert.equal(sourceRootRecord.disposition, 'scanned');
+  assert.equal(sourceRootRecord.inventoryConfirmed, false);
+  assert.ok(
+    sourceRootRecord.scanErrors.some(
+      (error) =>
+        ['EACCES', 'EPERM'].includes(error.code) &&
+        error.path === sourceDirectory,
+    ),
+  );
+  assert.equal(sourceEntry.disposition, 'unresolved');
+  assert.ok(['EACCES', 'EPERM'].includes(sourceEntry.error.code));
+  assert.equal(sourceEntry.error.syscall, 'lstat');
+  assert.ok(Number.isInteger(sourceEntry.error.errno));
+  assert.equal(sourceEntry.provenance.checkoutRoot, sourceBlockedCheckout);
+  assert.ok(sourceEntry.recovery);
+  assert.ok(
+    manifest.unresolvedSources.some(
+      (entry) =>
+        entry.source === sourceDirectory &&
+        ['EACCES', 'EPERM'].includes(entry.error.code) &&
+        entry.provenance.checkoutRoot === sourceBlockedCheckout,
+    ),
+  );
+
+  assert.equal(await readFile(blockedStorePath, 'utf8'), blockedStoreText);
+  assert.equal(await readFile(knownSourcePath, 'utf8'), knownSourceText);
+  assert.equal(
+    await readFile(knownDestination, 'utf8'),
+    knownSourceText,
+  );
+  await assert.rejects(readFile(join(
+    root.userRoot,
+    'sessions',
+    'github.com',
+    'example',
+    'repo',
+    `${sourceId}.json`,
+  )));
 });
 
 test('invalid Issue Stores and YAML sidecars stay unresolved and are not copied', async () => {
@@ -815,6 +968,14 @@ test('user docs distinguish bulk inventory from resume-time lazy promotion', asy
   assert.match(
     sessionLogging,
     /root が 0 件の場合.*`complete: false`/u,
+  );
+  assert.match(
+    sessionLogging,
+    /filesystem error が起きた場合.*`errno`.*`unresolvedSources`/u,
+  );
+  assert.match(
+    sessionLogging,
+    /consumer はこの値だけで判断せず unresolved fields も確認/u,
   );
   assert.match(
     liveControl,

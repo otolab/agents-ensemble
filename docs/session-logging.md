@@ -311,7 +311,7 @@ Issue session data は、有効な schema の SessionResumeStore にある `issu
 
 watch state は conductor ごとに cursor・message listener・pending report を bundle 化します。Store の `issueUrl` が一意で、pending report の Issue URL も一致し、`--profile` で operator が移行先 profile を選んだ場合だけ profile / slug 配下へ copy します。根拠不足、破損、または移行先との衝突がある bundle は checksum 付きで `~/.ensemble/operator-agents/legacy/watch/` に保全します。profile を指定しない場合も watch bundle は同じ archive に保全します。
 
-manifest は source / destination、data kind、disposition、source / destination SHA-256、collision / archive の理由、recovery 手順、checkout inventory の完全性と unresolved source を記録します。同じ checksum の destination は no-op とし、異なる destination は上書きしません。source の削除・rename は行いません。旧 operator conversation record とそれに一意に結び付く provider transcript は inventory と migration の対象外です。
+manifest は source / destination、data kind、disposition、source / destination SHA-256、collision / archive の理由、recovery 手順、checkout inventory の完全性と unresolved source を記録します。scan 中に `lstat` / `readdir` などの filesystem error が起きた場合は、`error` に `code`・`errno`・`syscall`・path・message を含め、reason・provenance・recovery とともに `unresolvedSources` に残します。checkout 内で起きた error は該当 root も `unresolvedRoots` / `unconfirmedRoots` に記録します。`complete` は operator が root 一覧を完全と申告したことを示すため、#699 などの consumer はこの値だけで判断せず unresolved fields も確認してください。同じ checksum の destination は no-op とし、異なる destination は上書きしません。source の削除・rename は行いません。旧 operator conversation record とそれに一意に結び付く provider transcript は inventory と migration の対象外です。
 
 `session-state.yaml` は `report_session_state` が登録した最新の statusLine と過去の報告をセッションインスタンスごとに保存します。statusLine（80 文字以内）を報告するたびに YAML を同じディレクトリ内の一時ファイルから atomic rename で更新します。`current` が最新値、`history` は過去の値を古い順に並べた一覧です。履歴は最大 50 件、ファイル全体は最大 16 KiB で、上限を超える場合は古い履歴から削除します。
 

@@ -57,11 +57,35 @@ const SESSION_SIDECARS = new Set([
   'open-questions.yaml',
   'session-state.yaml',
 ]);
+const RECOVERABLE_SCAN_ERROR_CODES = new Set([
+  'EACCES',
+  'EAGAIN',
+  'EBUSY',
+  'EIO',
+  'EINTR',
+  'ELOOP',
+  'ENAMETOOLONG',
+  'ENOTDIR',
+  'EPERM',
+  'EREMOTEIO',
+  'ESTALE',
+  'ETIMEDOUT',
+]);
 const WATCH_STATE_VERSION = 1;
 const coreRequire = createRequire(
   new URL('../packages/core/package.json', import.meta.url),
 );
 let yamlParser;
+
+class UnrecoverableScanError extends Error {
+  constructor(details) {
+    super(
+      `Unrecoverable filesystem error while scanning ${details.path}: ${details.message}`,
+    );
+    this.name = 'UnrecoverableScanError';
+    this.details = details;
+  }
+}
 
 function usage() {
   process.stdout.write(
@@ -776,6 +800,7 @@ function addManifestEntry(manifest, entry) {
     collisionReason: entry.collisionReason ?? null,
     archiveReason: entry.archiveReason ?? null,
     recovery: entry.recovery ?? null,
+    error: entry.error ?? null,
     provenance: entry.provenance ?? {},
     evidence: entry.evidence ?? {},
     ...(entry.intendedDestination
@@ -805,8 +830,116 @@ function unresolvedEntry(
       details.recovery ??
       'Keep the source unchanged. Resolve its provenance or restore a valid Issue session Store, then rerun the inventory.',
     provenance,
+    error: details.error,
     evidence: details.evidence,
   });
+}
+
+function filesystemErrorDetails(path, error) {
+  return {
+    code:
+      error && typeof error === 'object' && typeof error.code === 'string'
+        ? error.code
+        : null,
+    errno:
+      error && typeof error === 'object' && Number.isInteger(error.errno)
+        ? error.errno
+        : null,
+    syscall:
+      error && typeof error === 'object' && typeof error.syscall === 'string'
+        ? error.syscall
+        : null,
+    path,
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+function addUnresolvedRoot(manifest, checkoutRoot) {
+  if (!manifest.checkoutInventory.unresolvedRoots.includes(checkoutRoot)) {
+    manifest.checkoutInventory.unresolvedRoots.push(checkoutRoot);
+  }
+}
+
+function noteCheckoutScanError(
+  manifest,
+  checkoutRoot,
+  errorDetails,
+  reason,
+) {
+  const rootRecord = manifest.checkoutInventory.declaredRoots.find(
+    (root) => root.path === checkoutRoot,
+  );
+  if (rootRecord) {
+    rootRecord.reason ??= reason;
+    rootRecord.error ??= errorDetails;
+    rootRecord.provenance ??= {
+      sourceType: 'project-local',
+      ...(rootRecord.repoKey ? { repoKey: rootRecord.repoKey } : {}),
+      checkoutRoot,
+    };
+    rootRecord.scanErrors ??= [];
+    rootRecord.scanErrors.push(errorDetails);
+  }
+  addUnresolvedRoot(manifest, checkoutRoot);
+}
+
+function recordScanFilesystemError(
+  manifest,
+  path,
+  kind,
+  provenance,
+  error,
+  operation,
+) {
+  const errorDetails = filesystemErrorDetails(path, error);
+  const reason = `Could not ${operation}: ${errorDetails.message}`;
+  const recovery =
+    'Keep the source unchanged. Resolve the filesystem error, then rerun the inventory before treating this root or source as migrated.';
+  unresolvedEntry(manifest, path, kind, reason, provenance, {
+    error: errorDetails,
+    recovery,
+  });
+  if (provenance.checkoutRoot) {
+    noteCheckoutScanError(
+      manifest,
+      provenance.checkoutRoot,
+      errorDetails,
+      reason,
+    );
+  }
+  return {
+    type: 'error',
+    error: errorDetails,
+    reason,
+    recoverable: RECOVERABLE_SCAN_ERROR_CODES.has(errorDetails.code),
+  };
+}
+
+async function inspectScanPath(
+  path,
+  manifest,
+  kind,
+  provenance = {},
+  operation = 'inspect source path',
+) {
+  try {
+    return { type: await pathKind(path) };
+  } catch (error) {
+    return recordScanFilesystemError(
+      manifest,
+      path,
+      kind,
+      provenance,
+      error,
+      operation,
+    );
+  }
+}
+
+function stopOnUnrecoverableScanError(result) {
+  if (result.type === 'error' && !result.recoverable) {
+    throw new UnrecoverableScanError(result.error);
+  }
 }
 
 async function pathKind(path) {
@@ -825,7 +958,15 @@ async function pathKind(path) {
 }
 
 async function listDirectory(path, manifest, kind, provenance = {}) {
-  const type = await pathKind(path);
+  const inspection = await inspectScanPath(
+    path,
+    manifest,
+    kind,
+    provenance,
+  );
+  stopOnUnrecoverableScanError(inspection);
+  const type = inspection.type;
+  if (type === 'error') return [];
   if (type === 'missing') return [];
   if (type !== 'directory') {
     unresolvedEntry(
@@ -842,13 +983,15 @@ async function listDirectory(path, manifest, kind, provenance = {}) {
   try {
     return await readdir(path, { withFileTypes: true });
   } catch (error) {
-    unresolvedEntry(
+    const result = recordScanFilesystemError(
       manifest,
       path,
       kind,
-      `Could not enumerate source directory: ${error.message}`,
       provenance,
+      error,
+      'enumerate source directory',
     );
+    stopOnUnrecoverableScanError(result);
     return [];
   }
 }
@@ -868,7 +1011,15 @@ async function readSource(
   provenance = {},
   { loadBytes = true } = {},
 ) {
-  const type = await pathKind(path);
+  const inspection = await inspectScanPath(
+    path,
+    manifest,
+    kind,
+    provenance,
+  );
+  stopOnUnrecoverableScanError(inspection);
+  const type = inspection.type;
+  if (type === 'error') return undefined;
   if (type !== 'file') {
     unresolvedEntry(
       manifest,
@@ -888,13 +1039,15 @@ async function readSource(
     const bytes = await readFile(path);
     return { bytes, sha: sha256(bytes) };
   } catch (error) {
-    unresolvedEntry(
+    const result = recordScanFilesystemError(
       manifest,
       path,
       kind,
-      `Could not read source file: ${error.message}`,
       provenance,
+      error,
+      'read source file',
     );
+    stopOnUnrecoverableScanError(result);
     return undefined;
   }
 }
@@ -1686,20 +1839,57 @@ async function scanCheckoutRoots({
     };
     manifest.checkoutInventory.declaredRoots.push(rootRecord);
 
-    const type = await pathKind(declaredRoot);
+    const checkoutProvenance = {
+      sourceType: 'project-local',
+      checkoutRoot: declaredRoot,
+    };
+    const rootInspection = await inspectScanPath(
+      declaredRoot,
+      manifest,
+      'checkout-root',
+      checkoutProvenance,
+      'inspect checkout root',
+    );
+    if (rootInspection.type === 'error') {
+      rootRecord.disposition = 'unresolved';
+      rootRecord.reason = rootInspection.reason;
+      rootRecord.error = rootInspection.error;
+      rootRecord.provenance = checkoutProvenance;
+      addUnresolvedRoot(manifest, declaredRoot);
+      stopOnUnrecoverableScanError(rootInspection);
+      continue;
+    }
+    const type = rootInspection.type;
     if (type !== 'directory') {
       rootRecord.reason =
         type === 'symlink'
           ? 'Checkout root is a symlink; it was not followed.'
           : 'Checkout root does not exist as a directory.';
-      manifest.checkoutInventory.unresolvedRoots.push(declaredRoot);
+      addUnresolvedRoot(manifest, declaredRoot);
       continue;
     }
-    const marker = await pathKind(join(declaredRoot, '.git'));
+    const markerPath = join(declaredRoot, '.git');
+    const markerInspection = await inspectScanPath(
+      markerPath,
+      manifest,
+      'checkout-root-marker',
+      checkoutProvenance,
+      'inspect checkout root marker',
+    );
+    if (markerInspection.type === 'error') {
+      rootRecord.disposition = 'unresolved';
+      rootRecord.reason = markerInspection.reason;
+      rootRecord.error = markerInspection.error;
+      rootRecord.provenance = checkoutProvenance;
+      addUnresolvedRoot(manifest, declaredRoot);
+      stopOnUnrecoverableScanError(markerInspection);
+      continue;
+    }
+    const marker = markerInspection.type;
     if (marker !== 'directory' && marker !== 'file') {
       rootRecord.reason =
         'Checkout root has no regular .git directory or worktree .git file.';
-      manifest.checkoutInventory.unresolvedRoots.push(declaredRoot);
+      addUnresolvedRoot(manifest, declaredRoot);
       continue;
     }
     const rootIdentity = normalize(resolve(declaredRoot));
@@ -1714,7 +1904,27 @@ async function scanCheckoutRoots({
     rootRecord.repoKey = repoKey;
     rootRecord.disposition = 'scanned';
     const projectRoot = join(declaredRoot, '.ensemble');
-    const projectType = await pathKind(projectRoot);
+    const projectInspection = await inspectScanPath(
+      projectRoot,
+      manifest,
+      'project-local-runtime-root',
+      makeProvenance('project-local', repoKey, declaredRoot),
+      'inspect project-local runtime root',
+    );
+    if (projectInspection.type === 'error') {
+      rootRecord.disposition = 'unresolved';
+      rootRecord.reason = projectInspection.reason;
+      rootRecord.error = projectInspection.error;
+      rootRecord.provenance = makeProvenance(
+        'project-local',
+        repoKey,
+        declaredRoot,
+      );
+      addUnresolvedRoot(manifest, declaredRoot);
+      stopOnUnrecoverableScanError(projectInspection);
+      continue;
+    }
+    const projectType = projectInspection.type;
     if (projectType === 'missing') {
       rootRecord.reason = 'No project-local .ensemble directory was present.';
       continue;
@@ -1725,7 +1935,7 @@ async function scanCheckoutRoots({
         projectType === 'symlink'
           ? 'Project-local .ensemble is a symlink and was not followed.'
           : 'Project-local .ensemble is not a regular directory.';
-      manifest.checkoutInventory.unresolvedRoots.push(declaredRoot);
+      addUnresolvedRoot(manifest, declaredRoot);
       continue;
     }
     const excludedPiTranscriptIds = await legacyPiOperatorSessionIds({
@@ -1764,18 +1974,26 @@ async function scanCheckoutRoots({
       : 'empty-inventory-unverified'
     : 'not-confirmed';
   for (const root of manifest.checkoutInventory.declaredRoots) {
-    root.inventoryConfirmed = inventoryComplete;
+    root.inventoryConfirmed =
+      inventoryComplete &&
+      root.disposition !== 'unresolved' &&
+      !root.scanErrors?.length;
   }
   for (const entry of manifest.entries) {
     if (entry.provenance?.sourceType === 'project-local') {
       entry.provenance.checkoutInventoryConfirmed = inventoryComplete;
     }
   }
-  if (!inventoryComplete) {
-    manifest.checkoutInventory.unconfirmedRoots = [...checkoutRoots];
-    if (checkoutRoots.length === 0) {
-      manifest.checkoutInventory.unconfirmedRoots = ['<no checkout roots declared>'];
-    }
+  manifest.checkoutInventory.unconfirmedRoots = [
+    ...new Set([
+      ...(inventoryComplete ? [] : checkoutRoots),
+      ...manifest.checkoutInventory.unresolvedRoots,
+    ]),
+  ];
+  if (!inventoryComplete && checkoutRoots.length === 0) {
+    manifest.checkoutInventory.unconfirmedRoots = [
+      '<no checkout roots declared>',
+    ];
   }
 }
 
@@ -2164,7 +2382,19 @@ async function scanHashWatchSources({
       continue;
     }
     const source = join(directory, 'watch-state.json');
-    if ((await pathKind(source)) === 'missing') continue;
+    const sourceInspection = await inspectScanPath(
+      source,
+      manifest,
+      'legacy-operator-watch-source',
+      { sourceType: 'user-path-hash', repoKey: entry.name },
+    );
+    stopOnUnrecoverableScanError(sourceInspection);
+    if (
+      sourceInspection.type === 'missing' ||
+      sourceInspection.type === 'error'
+    ) {
+      continue;
+    }
     await scanWatchSource({
       source,
       repoKey: entry.name,
@@ -2191,7 +2421,24 @@ async function scanProjectWatchSources({
   for (const root of checkoutInventory.declaredRoots) {
     if (root.disposition !== 'scanned') continue;
     const source = join(root.path, '.ensemble', 'operator-agent', 'watch-state.json');
-    if ((await pathKind(source)) === 'missing') continue;
+    const provenance = makeProvenance(
+      'project-local',
+      root.repoKey,
+      root.path,
+    );
+    const sourceInspection = await inspectScanPath(
+      source,
+      manifest,
+      'operator-watch-source',
+      provenance,
+    );
+    stopOnUnrecoverableScanError(sourceInspection);
+    if (
+      sourceInspection.type === 'missing' ||
+      sourceInspection.type === 'error'
+    ) {
+      continue;
+    }
     await scanWatchSource({
       source,
       repoKey: root.repoKey,
@@ -2807,15 +3054,67 @@ async function assertManifestPathSafe(manifestPath, userRoot, checkoutRoots) {
   }
 }
 
-async function writeManifest(path, manifest) {
+async function writeManifest(path, manifest, { create = false } = {}) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await chmod(dirname(path), 0o700).catch(() => {});
   await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, {
     encoding: 'utf8',
-    flag: 'wx',
+    flag: create ? 'wx' : 'w',
     mode: 0o600,
   });
   await chmod(path, 0o600).catch(() => {});
+}
+
+function finalizeManifest(manifest) {
+  manifest.unresolvedSources = manifest.entries
+    .filter((entry) =>
+      [
+        'unresolved',
+        'copy-unverified',
+        'copy-failed',
+      ].includes(entry.disposition),
+    )
+    .map((entry) => ({
+      source: entry.source,
+      destination: entry.destination,
+      kind: entry.kind,
+      disposition: entry.disposition,
+      reason: entry.reason,
+      sourceSha256: entry.sourceSha256,
+      destinationSha256: entry.destinationSha256,
+      recovery: entry.recovery,
+      error: entry.error,
+      provenance: entry.provenance,
+    }));
+  manifest.summary = manifest.entries.reduce(
+    (summary, entry) => {
+      summary.total += 1;
+      summary[entry.disposition] =
+        (summary[entry.disposition] ?? 0) + 1;
+      return summary;
+    },
+    { total: 0 },
+  );
+}
+
+function recordRunFailure(manifest, phase, error) {
+  const details =
+    error instanceof UnrecoverableScanError
+      ? error.details
+      : filesystemErrorDetails(
+          error && typeof error === 'object' && typeof error.path === 'string'
+            ? error.path
+            : null,
+          error,
+        );
+  manifest.failure = {
+    phase,
+    disposition: 'aborted',
+    reason: error instanceof Error ? error.message : String(error),
+    error: details,
+    recovery:
+      'No further copy operations were attempted. Resolve the reported failure and rerun with a new manifest path; already copied destinations remain copy-only and sources are retained.',
+  };
 }
 
 async function main() {
@@ -2853,102 +3152,95 @@ async function main() {
     entries: [],
     unresolvedSources: [],
   };
+  await writeManifest(options.manifest, manifest, { create: true });
+
   const storeIndex = new Map();
   const copyCandidates = [];
   const linkedTasks = [];
   const watchGroups = new Map();
   const archiveCandidates = [];
 
-  await scanHashSessionRoots({
-    userRoot: options.userRoot,
-    manifest,
-    storeIndex,
-    copyCandidates,
-    linkedTasks,
-  });
-  await scanCheckoutRoots({
-    checkoutRoots: options.checkoutRoots,
-    checkoutRootsComplete: options.checkoutRootsComplete,
-    userRoot: options.userRoot,
-    manifest,
-    storeIndex,
-    copyCandidates,
-    linkedTasks,
-  });
-  await scanCanonicalSessionStoreEvidence({
-    userRoot: options.userRoot,
-    manifest,
-    storeIndex,
-  });
-  for (const task of linkedTasks) {
-    await processLinkedSessionData({
-      task,
+  try {
+    await scanHashSessionRoots({
+      userRoot: options.userRoot,
       manifest,
       storeIndex,
       copyCandidates,
+      linkedTasks,
     });
-  }
-  rejectAmbiguousSessionStoreCopies(copyCandidates, storeIndex);
-  await scanHashWatchSources({
-    userRoot: options.userRoot,
-    profile: options.profile,
-    manifest,
-    storeIndex,
-    watchGroups,
-    archiveCandidates,
-  });
-  await scanProjectWatchSources({
-    checkoutInventory: manifest.checkoutInventory,
-    profile: options.profile,
-    userRoot: options.userRoot,
-    manifest,
-    storeIndex,
-    watchGroups,
-    archiveCandidates,
-  });
-
-  for (const candidate of copyCandidates) {
-    await applyFileCopy(candidate, options.mode, options.userRoot);
-  }
-  for (const group of watchGroups.values()) {
-    await executeWatchGroup(group, {
-      mode: options.mode,
+    await scanCheckoutRoots({
+      checkoutRoots: options.checkoutRoots,
+      checkoutRootsComplete: options.checkoutRootsComplete,
       userRoot: options.userRoot,
       manifest,
+      storeIndex,
+      copyCandidates,
+      linkedTasks,
+    });
+    await scanCanonicalSessionStoreEvidence({
+      userRoot: options.userRoot,
+      manifest,
+      storeIndex,
+    });
+    for (const task of linkedTasks) {
+      await processLinkedSessionData({
+        task,
+        manifest,
+        storeIndex,
+        copyCandidates,
+      });
+    }
+    rejectAmbiguousSessionStoreCopies(copyCandidates, storeIndex);
+    await scanHashWatchSources({
+      userRoot: options.userRoot,
+      profile: options.profile,
+      manifest,
+      storeIndex,
+      watchGroups,
       archiveCandidates,
     });
-  }
-  for (const candidate of archiveCandidates) {
-    await applyArchiveCandidate(candidate, options.mode, options.userRoot);
+    await scanProjectWatchSources({
+      checkoutInventory: manifest.checkoutInventory,
+      profile: options.profile,
+      userRoot: options.userRoot,
+      manifest,
+      storeIndex,
+      watchGroups,
+      archiveCandidates,
+    });
+  } catch (error) {
+    recordRunFailure(manifest, 'scan', error);
+    finalizeManifest(manifest);
+    await writeManifest(options.manifest, manifest);
+    throw error;
   }
 
-  manifest.unresolvedSources = manifest.entries
-    .filter((entry) =>
-      [
-        'unresolved',
-        'copy-unverified',
-        'copy-failed',
-      ].includes(entry.disposition),
-    )
-    .map((entry) => ({
-      source: entry.source,
-      destination: entry.destination,
-      kind: entry.kind,
-      disposition: entry.disposition,
-      reason: entry.reason,
-      sourceSha256: entry.sourceSha256,
-      destinationSha256: entry.destinationSha256,
-      recovery: entry.recovery,
-    }));
-  manifest.summary = manifest.entries.reduce(
-    (summary, entry) => {
-      summary.total += 1;
-      summary[entry.disposition] =
-        (summary[entry.disposition] ?? 0) + 1;
-      return summary;
-    },
-    { total: 0 },
-  );
+  finalizeManifest(manifest);
+  await writeManifest(options.manifest, manifest);
+
+  try {
+    for (const candidate of copyCandidates) {
+      await applyFileCopy(candidate, options.mode, options.userRoot);
+    }
+    for (const group of watchGroups.values()) {
+      await executeWatchGroup(group, {
+        mode: options.mode,
+        userRoot: options.userRoot,
+        manifest,
+        archiveCandidates,
+      });
+    }
+    for (const candidate of archiveCandidates) {
+      await applyArchiveCandidate(candidate, options.mode, options.userRoot);
+    }
+  } catch (error) {
+    recordRunFailure(manifest, 'apply', error);
+    finalizeManifest(manifest);
+    await writeManifest(options.manifest, manifest);
+    throw error;
+  }
+
+  finalizeManifest(manifest);
   await writeManifest(options.manifest, manifest);
   process.stdout.write(
     `${options.mode}: ${manifest.summary.total} source entries; manifest ${options.manifest}\n`,
