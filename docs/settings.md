@@ -37,9 +37,11 @@ CLI > 環境変数 > project config（読み込み有効時） > 選択された
 
 `profile.default` / `conductor.model` / `conductor.reasoning` / `acp.defaultPreset` など。設計判断は [ADR 0020](https://github.com/otolab/agents-ensemble/blob/main/docs/adr/0020-ensemble-config-setting-resolution.md)。
 
+`conductor.backend` はこの順序の例外で、profile > merged config > `pi` の順に解決します。clone 後の初回利用では `ensemble setup` を実行すると、conductor の backend と Pi の model / 認証をまとめて用意できます。worker の ACP preset は別設定で、既定の Cursor ACP と各 worker CLI の認証をそのまま使います。
+
 `conductor.reasoning` は `ensemble issue` で `--reasoning` > `CONDUCTOR_REASONING` > merged config、`ensemble operator-agent` で `CONDUCTOR_REASONING` > merged config の順に解決します。両方のコマンドが同じ config / env 値を使い、値がなければ reasoning を渡さず Pi / Cursor の既定に任せます。Pi は選択 model が対応する native thinking level を検証し、Cursor は SDK model catalog から対応 parameter を一意に特定できる場合に適用します。値・未対応時の扱いは [config.md § Conductor reasoning](config.md#conductor-reasoning) を参照してください。
 
-conductor model は `ensemble issue --model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default の順で解決します。`runConductorSession` の直接呼び出しでも同じ選択値を conductor factory の create / resume に渡します。既定値は Cursor では Auto、Pi では Pi resource の `settings.json` にある既定モデルです。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を使います。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、その優先順位を保てるようにします。
+conductor model は `ensemble issue --model` / `RunConductorSessionOptions.modelId` > `CONDUCTOR_MODEL_ID` > merged config の `conductor.model` > backend default の順で解決します。`runConductorSession` の直接呼び出しでも同じ選択値を conductor factory の create / resume に渡します。コード既定の `conductor.model: default` は Pi では選択値を上書きせず、Pi resource の `settings.json` にある `defaultProvider` / `defaultModel`（互換 alias の `model` / `modelId` を含む）からモデルを選びます。したがって config がない初回利用では `ensemble setup` で保存した Pi settings が推奨経路です。Pi settings と明示 model のどちらにも選択できるモデルがない場合は、Pi が起動前に設定方法を示すエラーを返します。Cursor では `default` は Auto を表します。custom factory では config またはコード上の既定値だけで `default` になった場合、従来どおり `modelId: undefined` を渡して factory 自身の既定値を使います。API の明示値または環境変数が `default` / `auto` を選んだ場合は `'default'` を渡し、その優先順位を保てるようにします。
 
 `ensemble issue` と `ensemble operator-agent` は `--config <path>` を受け付けます。指定したファイルが user config 層を置き換え、標準 user config は読み込みません。project config の読み込みは独立して `config.loadProjectConfig` で制御し、同一キーでは project config が優先されます。明示ファイルに toggle がなければ default の `true` が使われます。team profile の `--profile` とは別系統です。
 
@@ -50,7 +52,7 @@ ensemble operator-agent --config ~/.ensemble/litellm.config.yaml
 
 user 層の差し替えは [ADR 0042](adr/0042-explicit-config-replaces-user-layer.md)、project toggle との組み合わせは [ADR 0043](adr/0043-explicit-user-config-and-project-toggle.md) に記録しています。
 
-`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `cursor` を使います。`profile.conductor.builtinTools` は profile だけで制御し、省略・未指定は有効、`false` のみ built-in coding tools を無効にします。`profile.conductor.piSkills` は Pi backend のみで、Pi 標準の skill discovery を制御し、省略・未指定は有効、`false` で skill 索引を止めます。`config.yaml` や `settings.json.defaultTools` ではこの制御を行いません。`cursor` は Cursor SDK 経路、`pi` は Pi 1.x `createAgentSession` 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、`~/.ensemble/pi` と `<repoRoot>/.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決します。skills は Pi の `DefaultResourceLoader` で索引し、カタログを system prompt に載せて本文は `read` / `/skill:` で読みます。prompts は `/name args` で展開します。themes は headless conductor のため読み込み・project 同名解決のみ行い、TUI 表示には使いません。Pi user root は `conductor.pi.agentDir` → `PI_CODING_AGENT_DIR` → `~/.ensemble/pi`、project root は `conductor.pi.projectDir` → `<repoRoot>/.ensemble/pi` の順で解決します。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は無視します。`ensemble auth login|logout|status` は backend に分岐し、Pi では provider 単位に `ModelRuntime` を使います。API key は TTY の secret prompt から user 層へ保存し、OAuth は Pi の OAuth flow を stderr 対話で実行します（SSH でも URL / device code を利用できます）。MCP HTTP OAuth は Pi 公式 MCP extension が別の credential store で扱います。resume では現在の profile / config から backend を解決して復元を試みます。保存時と backend が異なる場合は warning を出し、現在の backend で復元できなければ理由を示して起動を失敗させます。
+`conductor.backend` は、選択した profile の `conductor.backend` を project/user の deep merge 済み config より優先し、どちらも未指定なら `pi` を使います。Cursor SDK を使う場合は config または profile に `cursor` を指定します。`profile.conductor.builtinTools` は profile だけで制御し、省略・未指定は有効、`false` のみ built-in coding tools を無効にします。`profile.conductor.piSkills` は Pi backend のみで、Pi 標準の skill discovery を制御し、省略・未指定は有効、`false` で skill 索引を止めます。`config.yaml` や `settings.json.defaultTools` ではこの制御を行いません。`cursor` は Cursor SDK 経路、`pi` は Pi 1.x `createAgentSession` 経路を選びます。Pi は compiled conductor instructions を native system prompt に載せ、`~/.ensemble/pi` と `<repoRoot>/.ensemble/pi` の `settings.json` / `auth.json` / `models.json` / `extensions/` / `skills/` / `prompts/` / `themes/` を解決します。skills は Pi の `DefaultResourceLoader` で索引し、カタログを system prompt に載せて本文は `read` / `/skill:` で読みます。prompts は `/name args` で展開します。themes は headless conductor のため読み込み・project 同名解決のみ行い、TUI 表示には使いません。Pi user root は `conductor.pi.agentDir` → `PI_CODING_AGENT_DIR` → `~/.ensemble/pi`、project root は `conductor.pi.projectDir` → `<repoRoot>/.ensemble/pi` の順で解決します。`.ensemble/pi/SYSTEM.md` / `APPEND_SYSTEM.md` は無視します。`ensemble auth login|logout|status` は backend に分岐し、Pi では provider 単位に `ModelRuntime` を使います。API key は TTY の secret prompt から user 層へ保存し、OAuth は Pi の OAuth flow を stderr 対話で実行します（SSH でも URL / device code を利用できます）。MCP HTTP OAuth は Pi 公式 MCP extension が別の credential store で扱います。resume では SessionResumeStore に保存した backend と起動時の解決結果が一致しない場合、次のエラーで conductor を起動せず失敗します。
 
 旧 SessionResumeStore に `conductorBackend` がない場合は、従来どおり `cursor` として扱います。Pi の `conductorAgentId` は Pi の session id としても使われ、transcript は `~/.ensemble/sessions/github.com/<owner>/<repo>/pi/` に保存されます。現在 clone の path-hash、保存時 clone の path-hash、現在または保存済み CWD の legacy `.ensemble/pi/sessions/` は読み取り fallback です。`--continue` / `--resume` では Issue context から compiled `systemPrompt` を毎回再コンパイルし、現在 clone の設定を使って復元を試みます。
 
@@ -130,7 +132,7 @@ Pi の `!command` は conductor process の shell / OS 権限で実行され、w
 | conductor モデル | `conductor.model` | `CONDUCTOR_MODEL_ID` | `ensemble issue --model` | `default` | A |
 | conductor reasoning | `conductor.reasoning` | `CONDUCTOR_REASONING` | `ensemble issue --reasoning` | backend 既定（明示値なし） | A |
 | conductor 詳細 telemetry | `conductor.verbose` | `CONDUCTOR_VERBOSE` | `--verbose` | `false` | A |
-| conductor backend | `conductor.backend` | — | — | `cursor` | profile > config > default |
+| conductor backend | `conductor.backend` | — | — | `pi` | profile > config > default |
 | Pi user resource root | `conductor.pi.agentDir` | `PI_CODING_AGENT_DIR` | — | `~/.ensemble/pi` | config > environment > default |
 | Pi project resource root | `conductor.pi.projectDir` | — | — | `<repoRoot>/.ensemble/pi` | config |
 | worker ACP preset（全 worker 共通） | `acp.defaultPreset` | `ENSEMBLE_DEFAULT_ACP_CLI` | `--default-acp-cli` 等 | `cursor` | C |
@@ -198,8 +200,9 @@ TUI 設定は `loadEnsembleConfig` 結果を `createIssueSessionTuiHost` へ渡�
 
 | やりたいこと | 推奨 |
 |--------------|------|
+| clone 後の初回設定（conductor backend / Pi model / 認証） | TTY で `ensemble setup` |
 | 複数 repo で conductor と worker に共有する短い運用前提 | `~/.ensemble/AGENTS.md`（[modular-prompt の文書の役割](modular-prompt.md)を参照） |
-| チーム / 個人の恒久既定（モデル、worktree、monitor） | `~/.ensemble/config.yaml` または project `.ensemble/config.yaml` |
+| チーム / 個人の恒久既定（モデル、worktree、monitor） | `~/.ensemble/config.yaml` または project `.ensemble/config.yaml`。conductor は Pi、worker は各自の CLI / runtime を使う |
 | CI で 1 ジョブだけ上書き | 環境変数（`CONDUCTOR_MODEL_ID` 等） |
 | 1 回限りの実行 | CLI フラグ（初回メッセージは `ensemble issue <ref> [message...]`） |
 | token | Cursor: 環境変数 or `ensemble auth login`、Pi: `ensemble auth login --provider <id>` / Pi `auth.json` / provider 環境変数、GitHub: `gh auth login`（いずれも config に書かない） |

@@ -301,13 +301,13 @@ describe('resolveConductorBackendSetting', () => {
     ).toBe('pi');
   });
 
-  it('defaults to cursor when both profile and config omit backend', () => {
+  it('defaults to Pi when both profile and config omit backend', () => {
     expect(
       resolveConductorBackendSetting({
         profile: { conductor: {} },
         config: { ...projectConfig, conductor: { model: 'default' } },
       }),
-    ).toBe('cursor');
+    ).toBe('pi');
   });
 });
 

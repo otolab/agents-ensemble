@@ -8,7 +8,7 @@ import type { ConductorBackend, EnsembleConfig } from './types.js';
 
 /** `packages/cli` の `NON_INTERACTIVE_DEFAULT_MAX_TURNS` と同期。 */
 export const DEFAULT_SESSION_MAX_TURNS_NON_TTY = 5;
-export const DEFAULT_CONDUCTOR_BACKEND: ConductorBackend = 'cursor';
+export const DEFAULT_CONDUCTOR_BACKEND: ConductorBackend = 'pi';
 
 export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = {
   config: {

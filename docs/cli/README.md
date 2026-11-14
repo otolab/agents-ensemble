@@ -2,7 +2,7 @@
 
 > **正本:** npm の `@agents-ensemble/cli` と GitHub の CLI 利用者向け入口。インストール・最小クイックスタート・doc 索引を掲載します。
 
-`@agents-ensemble/cli` は、GitHub Issue を起点に conductor が worker を起動・制御する CLI です。conductor は Cursor SDK（既定）または Pi（opt-in）を選べます。
+`@agents-ensemble/cli` は、GitHub Issue を起点に conductor が worker を起動・制御する CLI です。conductor は Pi（既定）または Cursor SDK を使います。worker は ACP preset に従って、それぞれの CLI / runtime と認証を使います。
 
 ## インストール
 
@@ -18,16 +18,16 @@ ensemble --help
 
 ## Conductor backend の選択
 
-既定の backend は `cursor`（Cursor SDK）です。Pi を使う場合は、リポジトリの `.ensemble/config.yaml` またはユーザ設定の `~/.ensemble/config.yaml` で `conductor.backend` を `pi` にします。
+既定の backend は Pi です。clone 後、TTY で `ensemble setup` を実行すると conductor の backend、Pi の既定 model、認証をまとめて設定できます。Cursor SDK を使う場合は setup で Cursor を選ぶか、config / profile で `conductor.backend: cursor` を指定します。
 
 ```yaml
 conductor:
-  backend: pi
+  backend: cursor
 ```
 
 Pi backend の初回セットアップ、resource root、provider 認証、`ensemble auth` / `ensemble models list`、missing key / 401 からの復旧は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) が正本です。Pi の model catalog を扱う `models remote` / `diff` / `add` と旧 `sync` からの移行も同ガイドを参照してください。Pi の user root は `conductor.pi.agentDir`、`PI_CODING_AGENT_DIR`、`~/.ensemble/pi/` の順、project root は `conductor.pi.projectDir`、`<repoRoot>/.ensemble/pi/` の順で解決します。
 
-clone 後に TTY で初期設定する場合は `ensemble setup` を実行します。Pi（OpenAI）または Cursor を選び、Pi では OAuth / API key も選べます。設定は user 層に保存し、既存 project config・project Pi resource・profile の値は変更しません。user の保存先が project `.ensemble` / Pi resource と重なる場合や、project の symlink から path として辿れる保存先と重なる場合は書き込みを中止します。project と共有していない外部 user symlink は利用できます。project/profile が backend を指定している場合は user 設定より優先されます。CI / headless では user config・Pi settings・認証情報を手動で設定してください。`ensemble auth login` の対話 login には TTY が必要です。手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
+clone したら、推奨初回導線として TTY で `ensemble setup` を実行します。Pi（OpenAI）または Cursor を選び、Pi では OAuth / API key も選べます。Pi を選んだ場合、`conductor.model: default` は user Pi settings に保存した provider / model を使います。設定と認証は user 層に保存し、既存 project config・project Pi resource・profile の値は変更しません。user の保存先が project `.ensemble` / Pi resource と重なる場合や、project の symlink から path として辿れる保存先と重なる場合は書き込みを中止します。project/profile が backend を指定している場合は user 設定より優先されます。setup を使わず Pi settings に model がなく、明示 model もない場合は起動前に設定エラーになります。CI / headless では user config・Pi settings・認証情報を手動で用意してください。`ensemble auth login` の対話 login には TTY が必要です。手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
 Pi の認証 CLI は backend に分岐します。Cursor は Cursor SDK のログイン、Pi は provider 単位のログインです。TTY の動作、OAuth の stderr 出力、project OAuth の制約、認証優先順、復旧手順は [Pi conductor セットアップと認証](https://github.com/otolab/agents-ensemble/blob/main/docs/pi-conductor-setup.md) を参照してください。
 
@@ -53,28 +53,28 @@ dispatch hold が続く間、harness は既定 **30 分ごと**に、held buffer
 
 初回だけ、worker・選択した conductor backend・GitHub API の認証を準備します。
 
-既定の `cursor` preset は、npm パッケージに含まれない Cursor Agent CLI の `agent` コマンドを使用します。先に [Cursor Agent CLI の公式インストール手順](https://cursor.com/docs/cli) に従ってインストールしてください。
+既定の worker ACP preset は引き続き `cursor` です。npm パッケージに含まれない Cursor Agent CLI の `agent` コマンドを使うため、先に [Cursor Agent CLI の公式インストール手順](https://cursor.com/docs/cli) に従ってインストールしてください。これは conductor の既定 backend Pi とは別の設定です。
 
 | 対象 | 準備 |
 |------|------|
-| conductor の初期設定と login | `ensemble setup`（TTY で Pi/OpenAI または Cursor を選択。Pi では OAuth / API key も選択） |
+| conductor（Pi、既定。clone 後の初期設定） | `ensemble setup`（TTY で Pi/OpenAI または Cursor を選択。Pi では OAuth / API key も選択） |
 | worker（既定の Cursor ACP） | `agent login` |
 | worker（Pi BYO） | PATH 上の Pi CLI と、その Pi runtime の provider 認証 |
 | worker（Pi builtin） | `acp.defaultPreset: pi` と `acp.pi.runtime: builtin` を設定。Pi CLI の追加 install は不要。provider credential は Pi user config または provider 環境変数で用意。`ensemble auth login --provider <id>` を使う場合は、選択中の conductor backend / profile も Pi にする |
-| conductor（Cursor SDK、既定） | `ensemble auth login` |
+| conductor（Cursor SDK、明示選択） | `ensemble auth login` |
 | conductor（Pi、OpenAI API key） | `ensemble setup` で API key を選ぶ（TTY の非表示 prompt） |
 | conductor（Pi、他 provider の API key） | `ensemble auth login --provider <id>`（TTY の非表示 prompt） |
 | conductor（Pi、OAuth の再 login） | `ensemble auth login --provider <id>`（TTY。URL / device code は stderr） |
 | GitHub API（gh CLI を使う場合） | `gh auth login` |
 
 ```bash
-# worker（既定の Cursor ACP）
+# worker（既定の Cursor ACP。conductor backend とは独立）
 agent login
 
-# conductor 初期設定（TTY。Pi/OpenAI または Cursor を選択）
+# clone 後の conductor 初期設定（TTY。Pi/OpenAI または Cursor を選択）
 ensemble setup
 
-# conductor（Cursor SDK の再 login）
+# conductor（Cursor SDK を選択した場合の再 login）
 ensemble auth login
 
 # conductor（Pi provider を再ログイン。OpenAI は OAuth を選択）
@@ -88,7 +88,7 @@ gh auth login
 
 GitHub API トークンを直接渡す場合は、`gh auth login` の代わりに `GITHUB_TOKEN` または `GH_TOKEN` を設定してください。
 
-Pi builtin worker は Pi conductor と同じ user resource root（`conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > 既定 `~/.ensemble/pi/`）にある `auth.json` と Pi の provider 環境変数を使います。worker の session map と transcript は root override にかかわらず `~/.ensemble/pi/worker/<repoKey>/issue-<issueNumber>/<workerKey>/` に分離されます。同じ repository で別 Issue の同名 worker を同時に動かしても、session map と transcript は共有しません。Pi CLI とその shell command には利用者の `HOME` / `USERPROFILE` が渡るため、Git identity、SSH 設定・key、GitHub CLI 設定などは通常の user home から読み込まれます。別の home を使う場合は `acp.env.HOME` または `acp.env.USERPROFILE` を指定してください。`ensemble auth login --provider <id>` は選択中の conductor backend に従うため、既定の Cursor backend で `--provider` だけを付けても Pi worker の credential は作成されません。Pi backend の config を選ぶか、Pi backend を定義した profile を `--profile <name>` で指定して login してください。Cursor conductor のまま使う場合は Pi provider 環境変数を設定するか、同じ user root を `PI_CODING_AGENT_DIR` に指定して Pi CLI から login してください。Pi worker に使える credential がない場合、初回 attach は `AUTH_REQUIRED` で失敗します。
+Pi builtin worker は Pi conductor と同じ user resource root（`conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > 既定 `~/.ensemble/pi/`）にある `auth.json` と Pi の provider 環境変数を使います。worker の session map と transcript は root override にかかわらず `~/.ensemble/pi/worker/<repoKey>/issue-<issueNumber>/<workerKey>/` に分離されます。同じ repository で別 Issue の同名 worker を同時に動かしても、session map と transcript は共有しません。Pi CLI とその shell command には利用者の `HOME` / `USERPROFILE` が渡るため、Git identity、SSH 設定・key、GitHub CLI 設定などは通常の user home から読み込まれます。別の home を使う場合は `acp.env.HOME` または `acp.env.USERPROFILE` を指定してください。`ensemble auth login --provider <id>` は選択中の conductor backend に従います。Cursor を config / profile で選んでいる場合、`--provider` だけでは Pi login に切り替わらないため、Pi backend を選ぶか Pi CLI の provider 環境変数を設定してください。Pi worker に使える credential がない場合、初回 attach は `AUTH_REQUIRED` で失敗します。
 
 リポジトリを clone したディレクトリで、対象 Issue を指定して起動します。
 

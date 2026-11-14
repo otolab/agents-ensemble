@@ -313,11 +313,33 @@ describe('runConductorSession resume / shutdown', () => {
   async function runConductorSession(
     options: Parameters<typeof runConductorSessionImpl>[0],
   ) {
-    const ensembleConfig =
+    const loadedConfig =
       options.ensembleConfig ??
       (await loadEnsembleConfig(options.repoRoot, { userEnsembleRoot }));
+    // This suite's legacy fixtures model Cursor unless they explicitly select
+    // Pi. The default-backend contract test passes DEFAULT_ENSEMBLE_CONFIG by
+    // identity so it exercises the actual code default.
+    const usePi =
+      options.profile.conductor?.backend === 'pi' ||
+      options.ensembleConfig === DEFAULT_ENSEMBLE_CONFIG;
+    const ensembleConfig = usePi
+      ? loadedConfig
+      : {
+          ...loadedConfig,
+          conductor: { ...loadedConfig.conductor, backend: 'cursor' as const },
+        };
+    const profile = usePi
+      ? options.profile
+      : {
+          ...options.profile,
+          conductor: {
+            ...options.profile.conductor,
+            backend: 'cursor' as const,
+          },
+        };
     return runConductorSessionImpl({
       ...options,
+      profile,
       ensembleConfig,
       mcpConfigOptions: {
         ...options.mcpConfigOptions,
@@ -1147,7 +1169,7 @@ describe('runConductorSession resume / shutdown', () => {
     },
   );
 
-  it('selects the Pi factory and sends a short kickoff instead of the compiled prompt', async () => {
+  it('selects the default Pi factory and sends a short kickoff instead of the compiled prompt', async () => {
     mockSend.mockResolvedValue({
       runId: 'run-pi-kickoff',
       status: 'finished',
@@ -1158,10 +1180,7 @@ describe('runConductorSession resume / shutdown', () => {
       issueUrl: TEST_ISSUE.url,
       repoRoot,
       profile: { workers: [] },
-      ensembleConfig: {
-        ...DEFAULT_ENSEMBLE_CONFIG,
-        conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },
-      },
+      ensembleConfig: DEFAULT_ENSEMBLE_CONFIG,
       permissionPipeline: new PermissionPipeline({}),
       registerProcessSignalHandlers: false,
       waitForOperatorExit: false,
@@ -2411,7 +2430,7 @@ describe('runConductorSession resume / shutdown', () => {
     await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'pi' }, workers: [] },
       ensembleConfig: {
         ...DEFAULT_ENSEMBLE_CONFIG,
         conductor: {
@@ -3865,7 +3884,10 @@ describe('runConductorSession resume / shutdown', () => {
     'preserves the legacy whole-config digest when scheme is %s and the session resumes',
     async (ensembleConfigDigestScheme) => {
       const agentId = 'resume-full-digest-preserved';
-      const ensembleConfig = DEFAULT_ENSEMBLE_CONFIG;
+      const ensembleConfig = {
+        ...DEFAULT_ENSEMBLE_CONFIG,
+        conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'cursor' as const },
+      };
       const ensembleConfigDigest = computeEnsembleConfigDigest(ensembleConfig);
       await saveSessionResumeStore(
         sessionResumeStorePath({ repoRoot, conductorAgentId: agentId }),
@@ -3999,7 +4021,10 @@ describe('runConductorSession resume / shutdown', () => {
 
   it('warns and preserves a missing ACP model digest without blocking or backfilling resume', async () => {
     const agentId = 'resume-without-acp-model-digest';
-    const ensembleConfig = DEFAULT_ENSEMBLE_CONFIG;
+    const ensembleConfig = {
+      ...DEFAULT_ENSEMBLE_CONFIG,
+      conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'cursor' as const },
+    };
     const ensembleConfigDigest =
       computeResumeFeasibilityConfigDigest(ensembleConfig);
     await saveSessionResumeStore(
@@ -6248,7 +6273,7 @@ describe('runConductorSession resume / shutdown', () => {
     const result = await runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'pi' }, workers: [] },
       ensembleConfig: {
         ...DEFAULT_ENSEMBLE_CONFIG,
         conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },
@@ -6318,7 +6343,7 @@ describe('runConductorSession resume / shutdown', () => {
     const sessionPromise = runConductorSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot,
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'pi' }, workers: [] },
       ensembleConfig: {
         ...DEFAULT_ENSEMBLE_CONFIG,
         conductor: { ...DEFAULT_ENSEMBLE_CONFIG.conductor, backend: 'pi' },

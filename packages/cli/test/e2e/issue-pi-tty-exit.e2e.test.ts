@@ -296,7 +296,6 @@ describe('Pi conductor TTY /exit process lifecycle', () => {
         join(repoRoot, '.ensemble', 'config.yaml'),
         [
           'conductor:',
-          '  backend: pi',
           `  pi:\n    agentDir: ${JSON.stringify(agentDir)}`,
           `    projectDir: ${JSON.stringify(projectDir)}`,
           'github:',
@@ -552,7 +551,6 @@ globalThis.fetch = async (input, init) => {
         join(repoRoot, '.ensemble', 'config.yaml'),
         [
           'conductor:',
-          '  backend: pi',
           `  pi:\n    agentDir: ${JSON.stringify(agentDir)}`,
           `    projectDir: ${JSON.stringify(projectDir)}`,
           'github:',
