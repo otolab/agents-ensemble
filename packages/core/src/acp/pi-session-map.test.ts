@@ -324,7 +324,7 @@ try {
   $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
   foreach ($path in $paths) {
     $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
-    $acl = Get-Acl -LiteralPath $path -ErrorAction Stop
+    $acl = $item.GetAccessControl()
     $rules = @(
       $acl.GetAccessRules(
         $true,

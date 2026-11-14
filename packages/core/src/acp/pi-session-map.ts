@@ -50,7 +50,7 @@ try {
       throw 'Builtin Pi storage cannot contain a reparse point.'
     }
 
-    $acl = Get-Acl -LiteralPath $path -ErrorAction Stop
+    $acl = $item.GetAccessControl()
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($existingRule in @($acl.Access)) {
       [void]$acl.RemoveAccessRuleSpecific($existingRule)
@@ -71,9 +71,9 @@ try {
       [System.Security.AccessControl.AccessControlType]::Allow
     )
     $acl.AddAccessRule($rule)
-    Set-Acl -LiteralPath $path -AclObject $acl -ErrorAction Stop | Out-Null
+    $item.SetAccessControl($acl)
 
-    $actual = Get-Acl -LiteralPath $path -ErrorAction Stop
+    $actual = $item.GetAccessControl()
     $actualOwner = $actual.GetOwner(
       [System.Security.Principal.SecurityIdentifier]
     ).Value
