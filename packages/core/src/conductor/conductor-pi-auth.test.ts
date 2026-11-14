@@ -1,3 +1,4 @@
+import { chmodSync } from 'node:fs';
 import {
   chmod,
   link,
@@ -14,7 +15,10 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import {
+  ModelRuntime,
+  SettingsManager,
+} from '@earendil-works/pi-coding-agent';
 import {
   createPiConductorAuthContext,
   getPiConductorAuthStatus,
@@ -962,6 +966,80 @@ describe('Pi conductor authentication', () => {
     ) as { deviceId?: string };
     expect(settings.deviceId).toBe(deviceIds[0]);
   });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'does not report OAuth login success when saving the device ID fails',
+    async () => {
+      const fixture = await createAuthFileFixture('pi-auth-device-id-save-failure-');
+      const userSettingsPath = join(fixture.agentDir, 'settings.json');
+      const originalSettings = JSON.stringify({
+        defaultProvider: 'openai',
+        defaultModel: 'gpt-6.1-sol',
+      }, null, 2) + '\n';
+      await writeFile(userSettingsPath, originalSettings);
+      await chmod(userSettingsPath, 0o600);
+
+      const originalGetOrCreateDeviceId =
+        SettingsManager.prototype.getOrCreateDeviceId;
+      const failDeviceIdWrite = vi
+        .spyOn(SettingsManager.prototype, 'getOrCreateDeviceId')
+        .mockImplementation(function (this: SettingsManager) {
+          // The OAuth path safety check has already run. Make the queued Pi write
+          // fail so this exercises SettingsManager.flush()/drainErrors().
+          chmodSync(userSettingsPath, 0o400);
+          return originalGetOrCreateDeviceId.call(this);
+        });
+      const deviceIds: string[] = [];
+      const login = vi
+        .spyOn(ModelRuntime.prototype, 'login')
+        .mockImplementation(async (_provider, _method, _interaction, loginOptions) => {
+          const getDeviceId = loginOptions?.getDeviceId;
+          if (!getDeviceId) throw new Error('OAuth login did not receive getDeviceId');
+          deviceIds.push(await getDeviceId());
+        });
+      const options = {
+        cwd: fixture.cwd,
+        pi: { agentDir: fixture.agentDir, projectDir: fixture.projectDir },
+        provider: 'openai',
+        modelId: 'gpt-6.1-sol',
+        oauthCallbacks: createOAuthCallbacks(),
+      };
+
+      try {
+        await expect(loginPiConductor(options)).rejects.toThrow(
+          /Failed to persist the Pi OAuth device ID.*login was not started/i,
+        );
+      } finally {
+        await chmod(userSettingsPath, 0o600);
+        failDeviceIdWrite.mockRestore();
+      }
+
+      expect(login).not.toHaveBeenCalled();
+      expect(deviceIds).toEqual([]);
+      await expect(readFile(userSettingsPath, 'utf8')).resolves.toBe(originalSettings);
+
+      await expect(loginPiConductor(options)).resolves.toMatchObject({
+        method: 'oauth',
+        authPath: fixture.userAuthPath,
+      });
+      await expect(loginPiConductor(options)).resolves.toMatchObject({
+        method: 'oauth',
+        authPath: fixture.userAuthPath,
+      });
+
+      expect(login).toHaveBeenCalledTimes(2);
+      expect(deviceIds).toHaveLength(2);
+      expect(deviceIds[0]).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
+      expect(deviceIds[1]).toBe(deviceIds[0]);
+      expect(JSON.parse(await readFile(userSettingsPath, 'utf8'))).toMatchObject({
+        defaultProvider: 'openai',
+        defaultModel: 'gpt-6.1-sol',
+        deviceId: deviceIds[0],
+      });
+    },
+  );
 
   it('preserves an independent external settings.json symlink during OAuth device-ID save', async () => {
     const fixture = await createAuthFileFixture('pi-auth-device-id-settings-external-link-');

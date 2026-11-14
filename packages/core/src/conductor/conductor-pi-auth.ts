@@ -177,13 +177,24 @@ export async function loginPiConductor(
       settingsPath,
       await getProtectedProjectRoots(),
     );
+    const settingsManager = SettingsManager.create(options.cwd, roots.agentDir);
+    const deviceId = settingsManager.getOrCreateDeviceId();
+    await settingsManager.flush();
+    const settingsErrors = settingsManager
+      .drainErrors()
+      .filter(({ scope }) => scope === 'global');
+    if (settingsErrors.length > 0) {
+      const details = settingsErrors.map(({ error }) => error.message).join('; ');
+      throw new Error(
+        `Failed to persist the Pi OAuth device ID to user settings.json; OAuth login was not started: ${details}`,
+      );
+    }
     await context.modelRuntime.login(
       provider,
       'oauth',
       toPiAuthInteraction(options.oauthCallbacks),
       {
-        getDeviceId: () =>
-          SettingsManager.create(options.cwd, roots.agentDir).getOrCreateDeviceId(),
+        getDeviceId: () => deviceId,
       },
     );
     return {
