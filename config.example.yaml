@@ -17,7 +17,7 @@ profile:
 
 conductor:
   # conductor backend（profile で指定した場合は profile が優先。cursor | pi）
-  # この例は Pi resource 配線を示すため pi。既定 backend は cursor。
+  # Pi がコード上の既定。Cursor SDK を使う場合は cursor を指定。
   backend: pi
   # conductor モデル id（ensemble issue --model / CONDUCTOR_MODEL_ID より優先度低）
   model: default

@@ -2,7 +2,7 @@
 
 > **正本:** `ensemble` の現行技術構成（operator-agent、Cursor SDK / Pi conductor + ACP worker）。利用者向け CLI の入口は [cli/README.md](cli/README.md)、設定の正本は [settings.md](settings.md) と [config.md](config.md) です。
 
-`ensemble` の技術構成。conductor は Cursor SDK（既定）または Pi を選択し、worker は **ACP** で接続する。operator-agent は同じ埋め込み backend を使う独立プロセスで、複数の Issue session を watch pool で監督する。watch は稼働中 harness の UDS snapshot を使い、observe 不能時は SessionResumeStore と YAML に保存された情報を読む。最後の conductor 応答取得など個別の live control は稼働中 harness の UDS を直接使い、停止・接続不能時に保存 snapshot へ fallback しない。複数 worker は **conductor を中心とするスター型**で接続する。
+`ensemble` の技術構成。conductor は Pi（既定）または Cursor SDK を選択し、worker は **ACP** で接続する。operator-agent は同じ埋め込み backend を使う独立プロセスで、複数の Issue session を watch pool で監督する。watch は稼働中 harness の UDS snapshot を使い、observe 不能時は SessionResumeStore と YAML に保存された情報を読む。最後の conductor 応答取得など個別の live control は稼働中 harness の UDS を直接使い、停止・接続不能時に保存 snapshot へ fallback しない。複数 worker は **conductor を中心とするスター型**で接続する。
 
 設計の大原則（スター型・Issue 紐づけ・遷移の非機械化など）は [design.md](design.md) を正本とする。本文はプロセス分離と通信経路を記述する。
 
@@ -17,7 +17,7 @@
 手順が明確な GitHub Issue を起点に、**conductor が演奏せず** worker を起動・制御し、作業を進める CLI（`ensemble`）。作業とプロセスは **1 Issue + worktree** に紐づく。
 
 - **最小ユースケース**: `ensemble issue <url>` → worker 起動 → Issue / PR 上で作業
-- **backend 選択**: `conductor.backend` は `cursor`（既定）または `pi`。backend によって system prompt・認証・resume の扱いは異なるが、選択後も harness → worker ACP の経路と `ensemble issue <url>` の利用フローは共通（詳細は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)、設定は [settings.md](settings.md)）。
+- **backend 選択**: `conductor.backend` は `pi`（既定）または `cursor`。backend によって system prompt・認証・resume の扱いは異なるが、選択後も harness → worker ACP の経路と `ensemble issue <url>` の利用フローは共通（詳細は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md) / [ADR 0072](adr/0072-pi-conductor-default-and-model-selection.md)、設定は [settings.md](settings.md)）。
 - **スコープ**: 小さな作業単位の Issue ベースフロー
 - **対象外（初期）**: 汎用タスクオーケ、IDE 内 Agent の代替
 
@@ -154,7 +154,7 @@ repo 単位のランタイム状態は `resolveEnsemblePaths({ repoRoot })` が�
 
 ## 3. Conductor（SDK / Pi）
 
-conductor の LLM backend は Cursor SDK と Pi 1.x (`createAgentSession`) から起動時に選択できます。既定は Cursor SDK で、両 backend とも同じ harness / worker ACP 経路を使います。方針の記録は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)（**proposed**）を参照してください。
+conductor の LLM backend は Cursor SDK と Pi 1.x (`createAgentSession`) から起動時に選択できます。既定は Pi で、Cursor SDK は config / profile で選べます。両 backend とも同じ harness / worker ACP 経路を使います。方針の記録は [ADR 0025](adr/0025-conductor-agent-backend-sdk-and-pi.md)（**proposed**）と [ADR 0072](adr/0072-pi-conductor-default-and-model-selection.md) を参照してください。
 
 ### 責務
 
@@ -220,7 +220,7 @@ await conductor.send(workerStatusUpdate);
 
 `stream` の settled columns shrink は端末の physical reflow と Ink の論理フレームを再同期するため、保持済み activity history を replay する recovery transaction を持つ（[ADR 0026](adr/0026-tui-stream-shrink-recovery.md)）。通常の native scrollback / `alternateScreen: false` モデルと `pane` の bounded activity window は維持する。
 
-Cursor conductor の初回セットアップは `ensemble auth login`（`Cursor.auth.login()` 相当）です。Pi conductor も同じ CLI を backend 分岐付きで使え、`ensemble auth login --provider <id>` は Pi 1.x の `ModelRuntime` に API key または OAuth credential を保存します。Pi の project `auth.json` は読取専用の優先層で、login の書込み先は user root（`conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > 既定 `~/.ensemble/pi`）の `auth.json` です。project 層の明示的な OAuth credential は refresh 経路を持たないため実行時に拒否し、OAuth は user 層の runtime へ保存します。MCP HTTP OAuth は Pi の MCP extension が別の credential store と対話フローで管理します。`ensemble auth status` / `ensemble models list` は選択 backend の認証・モデルを表示します。Pi builtin worker は Pi conductor と同じ user resource root（`conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > 既定 `~/.ensemble/pi`）にある `auth.json` と Pi provider 環境変数を使い、Pi conductor の login credential と共有できます。BYO は従来互換の `pi-acp@0.0.33` と PATH 上の Pi CLI を使い、builtin は core wrapper から `pi-acp@0.0.34` と同梱 Pi CLI を起動します。Pi ACP adapter process の `HOME` / `USERPROFILE` は worker ごとの session map を分離するために使い、Pi CLI と shell child process には利用者の home を戻します。これにより shell 内の Git identity、SSH、GitHub CLI 設定を利用できます。`acp.env.HOME` / `USERPROFILE` は Pi CLI と shell child process の home を変更し、Pi 固有の settings / auth root は `conductor.pi.agentDir` で解決します。builtin `session/load` が失敗したときは新規 session に切り替えず、worker failure として返して保存済み session ID を保持します。`ensemble auth` は選択中の conductor backend に従うため、Cursor backend では `--provider` だけで Pi login には切り替わりません。Cursor worker の ACP 認証は `agent login` を使います。
+clone 後の初回利用では `ensemble setup` が conductor backend、Pi model、認証を user 層にまとめて用意します。以後の個別 login は選択中 backend を使い、Cursor conductor は `ensemble auth login`（`Cursor.auth.login()` 相当）、Pi conductor は `ensemble auth login --provider <id>` から Pi 1.x の `ModelRuntime` に API key または OAuth credential を保存します。Pi の project `auth.json` は読取専用の優先層で、login の書込み先は user root（`conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > 既定 `~/.ensemble/pi`）の `auth.json` です。project 層の明示的な OAuth credential は refresh 経路を持たないため実行時に拒否し、OAuth は user 層の runtime へ保存します。MCP HTTP OAuth は Pi の MCP extension が別の credential store と対話フローで管理します。`ensemble auth status` / `ensemble models list` は選択 backend の認証・モデルを表示します。Pi builtin worker は Pi conductor と同じ user resource root（`conductor.pi.agentDir` > `PI_CODING_AGENT_DIR` > 既定 `~/.ensemble/pi`）にある `auth.json` と Pi provider 環境変数を使い、Pi conductor の login credential と共有できます。BYO は従来互換の `pi-acp@0.0.33` と PATH 上の Pi CLI を使い、builtin は core wrapper から `pi-acp@0.0.34` と同梱 Pi CLI を起動します。Pi ACP adapter process の `HOME` / `USERPROFILE` は worker ごとの session map を分離するために使い、Pi CLI と shell child process には利用者の home を戻します。これにより shell 内の Git identity、SSH、GitHub CLI 設定を利用できます。`acp.env.HOME` / `USERPROFILE` は Pi CLI と shell child process の home を変更し、Pi 固有の settings / auth root は `conductor.pi.agentDir` で解決します。builtin `session/load` が失敗したときは新規 session に切り替えず、worker failure として返して保存済み session ID を保持します。`ensemble auth` は選択中の conductor backend に従うため、Cursor backend では `--provider` だけで Pi login には切り替わりません。Cursor worker の ACP 認証は `agent login` を使います。
 
 Pi builtin worker の ACP adapter `HOME` と transcript 保存先には Issue 番号を含め、`~/.ensemble/pi/worker/<repoKey>/issue-<issueNumber>/<workerKey>/` ごとに map と transcript を分離します。これにより同じ repository の別 Issue で同名 worker が同時に session を作っても、upstream の map read-modify-write が交差しません。POSIX では wrapper が専用 parent `~/.ensemble/pi/worker` と、起動した repository の storage tree 内の既存 directory を `0700`、map / transcript file を `0600` にし、新規 file は `umask 077` で制限します。Windows では wrapper が同じ専用 parent と repository storage tree の DACL を現在の account SID のみに制限して読み戻し検証し、upstream が指定先内に作る file / directory にも ACL を継承させます。設定または検証に失敗した場合、builtin adapter は起動しません。対象は worker の map / transcript 保存先で、Pi settings / auth root と BYO は含みません。同じ OS account の別 process、管理者 / SYSTEM / backup privilege、ACL 非対応の storage、指定先の外への書込みや upstream による明示的な権限拡大までは防ぎません（[ADR 0070](adr/0070-issue-scoped-builtin-pi-storage.md)、[ADR 0071](adr/0071-builtin-pi-storage-windows-acl.md)）。
 
@@ -488,7 +488,7 @@ CLI は薄く、オーケストレーション本体は core に集約する。
 
 ```
 ensemble issue https://github.com/org/repo/issues/123
-  → conductor 起動（Cursor SDK 既定 / Pi opt-in）
+  → conductor 起動（Pi 既定 / Cursor SDK は設定で選択）
   → Issue / Skill を読む
   → dispatch implementer（ACP, worktree 作成）
   → implementer: 実装 → Issue 更新 → PR 作成

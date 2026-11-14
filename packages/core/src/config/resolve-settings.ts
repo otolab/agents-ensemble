@@ -168,7 +168,7 @@ export function resolveConductorVerboseSetting(options: {
   });
 }
 
-/** profile の明示設定 > config（project/user merge 済み） > cursor。 */
+/** profile の明示設定 > config（project/user merge 済み） > pi。 */
 export function resolveConductorBackendSetting(options: {
   profile?: { conductor?: { backend?: ConductorBackend } };
   config?: EnsembleConfig;

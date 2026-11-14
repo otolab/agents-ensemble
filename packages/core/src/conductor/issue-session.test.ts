@@ -100,7 +100,7 @@ describe('runIssueSession', () => {
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 1,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: operator.bindOperatorInput,
@@ -152,7 +152,7 @@ describe('runIssueSession', () => {
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: operator.bindOperatorInput,
@@ -185,7 +185,7 @@ describe('runIssueSession', () => {
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       permissionPipeline: new PermissionPipeline({}),
     });
 
@@ -214,7 +214,7 @@ describe('runIssueSession', () => {
     const sessionPromise = runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       permissionPipeline: new PermissionPipeline({}),
       continueOnConductorError: true,
       bindOperatorInput: operator.bindOperatorInput,
@@ -241,7 +241,7 @@ describe('runIssueSession', () => {
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: operator.bindOperatorInput,
     });
@@ -265,7 +265,7 @@ describe('runIssueSession', () => {
     const result = await runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 0,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: () => {},
@@ -307,7 +307,7 @@ describe('runIssueSession', () => {
     const sessionPromise = runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 5,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: (api) => {
@@ -350,7 +350,7 @@ describe('runIssueSession', () => {
     const sessionPromise = runIssueSession({
       issueUrl: TEST_ISSUE.url,
       repoRoot: '/repo',
-      profile: { workers: [] },
+      profile: { conductor: { backend: 'cursor' }, workers: [] },
       maxTurns: 1,
       permissionPipeline: new PermissionPipeline({}),
       bindOperatorInput: (api) => {

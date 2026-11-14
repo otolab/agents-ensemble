@@ -143,6 +143,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0069](0069-pi-acp-version-split-for-byo-compatibility.md) | BYO / builtin の Pi ACP dependency version を分ける | accepted |
 | [0070](0070-issue-scoped-builtin-pi-storage.md) | Issue ごとの builtin Pi worker 保存先と権限 | superseded in part → [0071](0071-builtin-pi-storage-windows-acl.md)（Windows の owner-only ACL のみ） |
 | [0071](0071-builtin-pi-storage-windows-acl.md) | Windows builtin Pi worker 保存先の owner-only ACL | accepted |
+| [0072](0072-pi-conductor-default-and-model-selection.md) | Pi conductor の既定化と model 選択 | accepted |
 
 ## 追加するとき
 
