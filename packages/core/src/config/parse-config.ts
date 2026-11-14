@@ -6,6 +6,8 @@ import type { WorkerWorktreeMode } from '../worktree/worktree.js';
 import type {
   ConductorBackend,
   AcpModelCatalogLayerEntry,
+  AcpModelTag,
+  EnsembleAcpPiConfig,
   EnsembleConfigControlConfig,
   EnsembleConductorConfig,
   EnsembleConfig,
@@ -216,6 +218,24 @@ function parseAcpTags(
   return Object.keys(tags).length > 0 ? tags : undefined;
 }
 
+function parseAcpPiConfig(raw: unknown): EnsembleAcpPiConfig | undefined {
+  const obj = readObject(raw);
+  if (!obj) return undefined;
+
+  const runtime = readString(obj.runtime);
+  if (
+    obj.runtime !== undefined &&
+    runtime !== 'byo' &&
+    runtime !== 'builtin'
+  ) {
+    throw new Error('acp.pi.runtime must be "byo" or "builtin"');
+  }
+
+  // Keep an explicit `byo` while merging layers so it can override a lower
+  // layer's `builtin`. loadEnsembleConfig removes the default after merging.
+  return runtime === 'byo' || runtime === 'builtin' ? { runtime } : undefined;
+}
+
 function parseAcpConfig(raw: unknown): EnsembleConfigLayer['acp'] {
   const obj = readObject(raw);
   if (!obj) {
@@ -225,13 +245,15 @@ function parseAcpConfig(raw: unknown): EnsembleConfigLayer['acp'] {
   const env = parseStringMap(obj.env, 'acp.env');
   const models = parseAcpModels(obj.models);
   const tags = parseAcpTags(obj.tags);
+  const pi = parseAcpPiConfig(obj.pi);
   const validPreset =
     preset && isBuiltinAcpPresetId(preset) ? (preset as BuiltinAcpPresetId) : undefined;
   if (
     validPreset === undefined &&
     env === undefined &&
     models === undefined &&
-    tags === undefined
+    tags === undefined &&
+    pi === undefined
   ) {
     return undefined;
   }
@@ -240,6 +262,7 @@ function parseAcpConfig(raw: unknown): EnsembleConfigLayer['acp'] {
     ...(env !== undefined ? { env } : {}),
     ...(models !== undefined ? { models } : {}),
     ...(tags !== undefined ? { tags } : {}),
+    ...(pi !== undefined ? { pi } : {}),
   };
 }
 

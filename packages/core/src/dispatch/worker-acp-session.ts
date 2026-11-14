@@ -79,6 +79,14 @@ export interface WorkerAcpSession {
   acpCwd: string;
 }
 
+function isBuiltinPiResume(
+  options: OpenWorkerAcpSessionOptions,
+): boolean {
+  return [options.currentAcpSpawn, options.expectedResumeAcpSpawn].some(
+    (spawn) => spawn?.preset === 'pi' && spawn.piRuntime === 'builtin',
+  );
+}
+
 export async function openWorkerAcpSession(
   options: OpenWorkerAcpSessionOptions,
 ): Promise<WorkerAcpSession> {
@@ -143,6 +151,18 @@ export async function openWorkerAcpSession(
         resumed = true;
       } catch (error) {
         if (error instanceof AcpSessionConfigOptionError) throw error;
+        if (isBuiltinPiResume(options)) {
+          const label = options.workerName
+            ? `Worker "${options.workerName}"`
+            : 'Worker';
+          const detail = error instanceof Error ? error.message : String(error);
+          // The upstream Pi adapter can lose its map-backed session lookup.
+          // Starting a fresh session here would silently discard saved context.
+          throw new Error(
+            `${label} could not resume builtin Pi ACP session "${sessionId}". Refusing to start a new session without the saved context. Cause: ${detail}`,
+            { cause: error },
+          );
+        }
         recoveryReason = 'session_load_failed';
         sessionId = undefined;
       }

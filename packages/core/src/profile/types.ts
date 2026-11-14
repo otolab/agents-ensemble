@@ -1,9 +1,11 @@
 import type { PromptModule } from '@modular-prompt/core';
 import type { ConductorBackend } from '../config/types.js';
+import { resolveConductorPiResourcePaths } from '../config/resolve-settings.js';
 import type {
   AcpSpawnFingerprint,
   DefaultAcpResolutionOptions,
 } from '../acp/resolve-acp-spawn.js';
+import { configurePiWorkerRuntime } from '../acp/pi-runtime.js';
 import type { SpawnAcpProcessOptions } from '../acp/acp-process.js';
 import type { AcpModelTag } from '../config/types.js';
 import {
@@ -255,6 +257,9 @@ export function profileWorkersToSessionSpecs(
   options?: {
     defaultAcp?: DefaultAcpResolutionOptions;
     spawnBase?: SpawnAcpProcessOptions;
+    repoRoot?: string;
+    issueNumber?: number;
+    piAgentDir?: string;
     onWarning?: (message: string) => void;
   },
 ): SessionWorkerSpec[] {
@@ -266,6 +271,32 @@ export function profileWorkersToSessionSpecs(
       onWarning: (message) =>
         options?.onWarning?.('Worker "' + worker.name + '": ' + message),
     });
+    let sessionSpawn = resolved;
+    if (resolved.piRuntime === 'builtin') {
+      if (!options?.repoRoot) {
+        throw new Error(
+          'repoRoot is required for the builtin Pi worker runtime.',
+        );
+      }
+      if (!options.issueNumber) {
+        throw new Error(
+          'issueNumber is required for the builtin Pi worker runtime.',
+        );
+      }
+      const agentDir =
+        options.piAgentDir ??
+        resolveConductorPiResourcePaths({
+          repoRoot: options.repoRoot,
+          config: options.defaultAcp?.config,
+          env: options.defaultAcp?.env,
+        }).agentDir;
+      sessionSpawn = configurePiWorkerRuntime(resolved, {
+        repoRoot: options.repoRoot,
+        issueNumber: options.issueNumber,
+        workerName: worker.name,
+        ...(agentDir ? { agentDir } : {}),
+      });
+    }
     return {
       name: worker.name,
       kind: worker.kind,
@@ -274,8 +305,8 @@ export function profileWorkersToSessionSpecs(
       ...(worker.resolvedWorkspacePath
         ? { resolvedWorkspacePath: worker.resolvedWorkspacePath }
         : {}),
-      spawn: resolvedAcpSpawnToOptions(resolved, options?.spawnBase),
-      acpFingerprint: acpSpawnFingerprint(resolved),
+      spawn: resolvedAcpSpawnToOptions(sessionSpawn, options?.spawnBase),
+      acpFingerprint: acpSpawnFingerprint(sessionSpawn),
     };
   });
 }

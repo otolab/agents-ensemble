@@ -183,6 +183,7 @@ export function resolveConductorBackendSetting(options: {
 
 /**
  * Resolve the Pi resource roots from the merged ensemble config.
+ * `conductor.pi.agentDir` takes precedence over Pi's `PI_CODING_AGENT_DIR`.
  *
  * The project root is always anchored at repoRoot so a different conductor
  * cwd cannot accidentally select another repository's `.ensemble/pi`.
@@ -192,11 +193,15 @@ export function resolveConductorBackendSetting(options: {
 export function resolveConductorPiResourcePaths(options: {
   repoRoot: string;
   config?: EnsembleConfig;
+  env?: NodeJS.ProcessEnv;
 }): { agentDir?: string; projectDir: string } {
-  const configured = options.config?.conductor.pi;
+  const configured = options.config?.conductor?.pi;
+  const agentDir =
+    configured?.agentDir ??
+    (options.env ?? process.env).PI_CODING_AGENT_DIR;
   return {
-    ...(configured?.agentDir
-      ? { agentDir: resolveConfiguredPath(configured.agentDir, options.repoRoot) }
+    ...(agentDir
+      ? { agentDir: resolveConfiguredPath(agentDir, options.repoRoot) }
       : {}),
     projectDir: configured?.projectDir
       ? resolveConfiguredPath(configured.projectDir, options.repoRoot)

@@ -24,7 +24,7 @@ Pi の設定を置く場所は次の 2 層です。
 | user | `~/.ensemble/pi/` | 個人の設定・user credential |
 | project | `<repoRoot>/.ensemble/pi/` | リポジトリ固有の model/resource と project credential |
 
-resource root は `conductor.pi.agentDir`（user）と `conductor.pi.projectDir`（project）で上書きできます。相対パスはリポジトリの root 基準、`~` はユーザ home 基準です。
+user resource root は `conductor.pi.agentDir` → `PI_CODING_AGENT_DIR` → `~/.ensemble/pi/`、project resource root は `conductor.pi.projectDir` → `<repoRoot>/.ensemble/pi/` の順で解決します。config の相対パスはリポジトリ root 基準、`~` はユーザ home 基準です。
 
 ```yaml
 conductor:
@@ -364,7 +364,11 @@ node scripts/pi/bench-cached-auth.mjs
 | API key | `CURSOR_API_KEY` または Cursor SDK の stored login | TTY secret prompt は user `auth.json` に保存します。request 時は project auth、`settings.json.apiKeys`、Pi provider 設定や環境・ambient auth が優先される場合があります（上記の解決順を参照） |
 | OAuth / 出力 | Cursor SDK の login | TTY の Pi OAuth flow。URL / device code は stderr |
 | model list | Cursor SDK の catalog | 認証済み Pi model のみ。`--provider` で絞り込み |
-| worker の認証 | `agent login` は worker ACP 用 | 同じく `agent login` は worker ACP 用。conductor の Pi login とは別 |
+| worker の認証 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意 | Cursor worker は `agent login`。Pi BYO は Pi CLI が使う provider credential を用意。Pi builtin worker は Pi conductor と同じ user root の `auth.json` または provider 環境変数を使う |
+
+Pi builtin worker と Pi conductor は同じ Pi user root を使います。既定は `~/.ensemble/pi/` で、`conductor.pi.agentDir` が設定されていればその directory、なければ `PI_CODING_AGENT_DIR` が使われます。builtin worker の session map と transcript はこの設定から独立し、Issue と worker ごとの `~/.ensemble/pi/worker/<repoKey>/issue-<issueNumber>/<workerKey>/` に保存します。同じ repository で別 Issue の同名 worker を同時に動かしても map は共有しません。POSIX では wrapper が directory を `0700`、map / transcript を `0600` にし、新規 file は `umask 077` で制限します。Windows では wrapper が `icacls.exe` で専用 parent と repository storage tree を現在の account SID のみに許可し、PowerShell の .NET ACL API で owner と DACL を読み戻して検証します。ACL を設定・検証できない場合は builtin worker を起動しません。この制限は worker の map / transcript 用であり、共有 Pi settings / auth root には適用されません。同じ OS account の process、管理者 / SYSTEM / backup privilege、ACL を無視する storage、指定先外への書込みや upstream の権限拡大までは保護しません。詳細は [ADR 0070](adr/0070-issue-scoped-builtin-pi-storage.md) と [ADR 0071](adr/0071-builtin-pi-storage-windows-acl.md) を参照してください。
+
+Pi builtin worker を使う場合、`ensemble auth login --provider <id>` は選択中の conductor backend が Pi のとき、解決済み user root の `auth.json` に credential を保存し、worker と共有します。既定の Cursor backend では `--provider` だけで Pi login には切り替わらないため、Pi backend の config / profile を選ぶか、provider 環境変数を設定してください。Cursor backend のまま Pi CLI から login する場合は、同じ directory を `PI_CODING_AGENT_DIR` に指定してください。Pi CLI の global install は不要ですが、provider credential は必要です。
 
 Cursor backend の既存 `ensemble auth login`、`CURSOR_API_KEY`、model catalog の挙動は Pi の設定では変更されません。
 

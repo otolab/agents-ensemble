@@ -3,8 +3,15 @@ import { isBuiltinAcpPresetId } from './resolve-acp-spawn.js';
 import {
   ACP_PRESET_BIN_NAMES,
   ACP_PRESET_EXTERNAL_CLI,
-  ACP_PRESET_OPTIONAL_PACKAGES,
+  ACP_PRESET_ADAPTER_PACKAGES,
 } from './acp-preset-bins.js';
+import {
+  assertBuiltinPiNodeVersionSupported,
+  resolveBuiltinPiAcpEntrypointPath,
+  resolveBuiltinPiAcpWrapperPath,
+  resolveBuiltinPiCliEnvWrapperPath,
+  resolveBundledPiCliPath,
+} from './pi-runtime.js';
 import {
   resolveAcpBin,
   resolveAcpBinFromPath,
@@ -27,7 +34,7 @@ export function formatAcpPresetInstallHint(preset: AcpPresetId): string {
         '  https://cursor.com/docs/cli を参照してインストールし、`agent login` を実行してください。'
       );
     case 'claude': {
-      const { packageName, binName } = ACP_PRESET_OPTIONAL_PACKAGES.claude;
+      const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES.claude;
       return (
         `[acp] claude preset: ACP adapter \`${binName}\` が見つかりません。\n` +
         '  開発: リポジトリルートで `pnpm install`（optional 再試行）\n' +
@@ -37,7 +44,7 @@ export function formatAcpPresetInstallHint(preset: AcpPresetId): string {
       );
     }
     case 'codex': {
-      const { packageName, binName } = ACP_PRESET_OPTIONAL_PACKAGES.codex;
+      const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES.codex;
       return (
         `[acp] codex preset: ACP adapter \`${binName}\` が見つかりません。\n` +
         '  開発: リポジトリルートで `pnpm install`（optional 再試行）\n' +
@@ -47,12 +54,11 @@ export function formatAcpPresetInstallHint(preset: AcpPresetId): string {
       );
     }
     case 'pi': {
-      const { packageName, binName } = ACP_PRESET_OPTIONAL_PACKAGES.pi;
+      const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES.pi;
       return (
         `[acp] pi preset: ACP adapter \`${binName}\` が見つかりません。\n` +
-        '  開発: リポジトリルートで `pnpm install`（optional 再試行）\n' +
-        `  利用者: \`npm i -g ${packageName}\`\n` +
-        `  または PATH 上に \`${binName}\` を配置してください。`
+        `  \`@agents-ensemble/core\` の依存を再インストールするか、\`npm i -g ${packageName}\` を実行してください。\n` +
+        `  PATH 上の \`${binName}\` も fallback として使えます。`
       );
     }
     case 'custom':
@@ -85,9 +91,25 @@ export function formatAcpExternalCliInstallHint(
 
 function validateBuiltinPreset(
   preset: Exclude<AcpPresetId, 'custom'>,
+  piRuntime: ResolvedAcpSpawn['piRuntime'],
   fromModuleUrl?: string | URL,
 ): void {
   const moduleUrl = fromModuleUrl ?? import.meta.url;
+
+  if (preset === 'pi' && piRuntime === 'builtin') {
+    try {
+      resolveBuiltinPiAcpEntrypointPath(moduleUrl);
+      assertBuiltinPiNodeVersionSupported();
+      resolveBundledPiCliPath(moduleUrl);
+      resolveBuiltinPiAcpWrapperPath();
+      resolveBuiltinPiCliEnvWrapperPath(moduleUrl);
+    } catch (error) {
+      throw new AcpPresetPrerequisiteError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    return;
+  }
 
   if (preset === 'cursor') {
     if (!resolveAcpBinFromPath(ACP_PRESET_BIN_NAMES.cursor)) {
@@ -98,6 +120,7 @@ function validateBuiltinPreset(
 
   const bundled = resolveBundledAcpBin(preset, moduleUrl);
   const fromPath = resolveAcpBinFromPath(ACP_PRESET_BIN_NAMES[preset]);
+
   if (!bundled && !fromPath) {
     throw new AcpPresetPrerequisiteError(formatAcpPresetInstallHint(preset));
   }
@@ -110,7 +133,7 @@ function validateBuiltinPreset(
   }
 }
 
-/** spawn 前に preset 前提（optional bin / 外部 CLI）を検証する。不足時は throw。 */
+/** spawn 前に preset 前提（同梱または PATH adapter / 外部 CLI）を検証する。 */
 export function validateAcpPresetPrerequisites(
   spawn: ResolvedAcpSpawn,
   options?: { fromModuleUrl?: string | URL },
@@ -130,7 +153,11 @@ export function validateAcpPresetPrerequisites(
     );
   }
 
-  validateBuiltinPreset(spawn.preset, options?.fromModuleUrl);
+  validateBuiltinPreset(
+    spawn.preset,
+    spawn.piRuntime,
+    options?.fromModuleUrl,
+  );
 }
 
 /** 検証済み spawn の command を bundled / PATH 解決後の絶対パスへ置き換える。 */
@@ -145,6 +172,14 @@ export function resolveAcpSpawnExecutable(
 
   if (!isBuiltinAcpPresetId(spawn.preset)) {
     throw new Error(`Unknown ACP preset "${spawn.preset}"`);
+  }
+
+  if (spawn.preset === 'pi' && spawn.piRuntime === 'builtin') {
+    return {
+      ...spawn,
+      command: process.execPath,
+      args: [resolveBuiltinPiAcpWrapperPath(), ...spawn.args],
+    };
   }
 
   const resolved = resolveAcpBin(spawn.preset, options?.fromModuleUrl ?? import.meta.url);
