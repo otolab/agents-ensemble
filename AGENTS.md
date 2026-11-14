@@ -27,4 +27,4 @@
 
 ## PR 完結性と認証統合
 
-PR は受け入れ条件だけでなく、変更が及ぶ利用者向け文書・運用導線まで完結させる。今回の Pi backend の認証統合はスコープ外だが、`ensemble auth` と Pi provider 認証を統合する作業は既存の [Issue #356](https://github.com/otolab/agents-ensemble/issues/356) に明示的に引き継ぐ。レビュー時の判断基準は [PR レビュー手順](docs/prompts/pr-review.md) を参照する。
+PR は受け入れ条件だけでなく、変更が及ぶ利用者向け文書・運用導線まで完結させる。Pi backend の `ensemble auth` 統合は [Issue #356](https://github.com/otolab/agents-ensemble/issues/356) で実装済みであり、この PR は既存の backend 分岐を再利用する。builtin Pi worker の認証 root は `conductor.pi.agentDir` と揃える。レビュー時の判断基準は [PR レビュー手順](docs/prompts/pr-review.md) を参照する。

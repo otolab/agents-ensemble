@@ -48,6 +48,23 @@ describe('deepMerge', () => {
   });
 });
 
+describe('deepMerge with arbitrary keys', () => {
+  it('preserves arbitrary map keys as own properties while merging', () => {
+    const base = { tags: { default: 'standard' } };
+    const customKeys = Object.fromEntries([
+      ['__proto__', { selected: true }],
+      ['constructor', 'custom-model'],
+    ]);
+
+    const merged = deepMerge(base, { tags: customKeys });
+
+    expect(Object.getPrototypeOf(merged.tags)).toBe(Object.prototype);
+    expect(Object.hasOwn(merged.tags, '__proto__')).toBe(true);
+    expect(merged.tags.__proto__).toEqual({ selected: true });
+    expect(merged.tags.constructor).toBe('custom-model');
+  });
+});
+
 describe('parseEnsembleConfig', () => {
   it('ignores unknown top-level keys', () => {
     expect(
@@ -103,6 +120,32 @@ describe('parseEnsembleConfig', () => {
           fast: 'provider/fast',
           high: { model: 'provider/large', reasoning: 'high' },
           override: { reasoning: 'low', cursorFast: false },
+        },
+      },
+    });
+  });
+
+  it('parses built-in and custom ACP model tag keys', () => {
+    expect(
+      parseEnsembleConfig({
+        acp: {
+          tags: {
+            high: 'opus',
+            default: 'sonnet',
+            low: 'budget',
+            lite: 'short-reasoning',
+            urgent: 'priority',
+          },
+        },
+      }),
+    ).toEqual({
+      acp: {
+        tags: {
+          high: 'opus',
+          default: 'sonnet',
+          low: 'budget',
+          lite: 'short-reasoning',
+          urgent: 'priority',
         },
       },
     });
@@ -209,6 +252,18 @@ describe('parseEnsembleConfig', () => {
         forceHyperlink: 'on',
       },
     });
+  });
+
+  it('preserves explicit Pi BYO and builtin runtime values while parsing config layers', () => {
+    expect(
+      parseEnsembleConfig({ acp: { pi: { runtime: 'builtin' } } }),
+    ).toEqual({ acp: { pi: { runtime: 'builtin' } } });
+    expect(
+      parseEnsembleConfig({ acp: { pi: { runtime: 'byo' } } }),
+    ).toEqual({ acp: { pi: { runtime: 'byo' } } });
+    expect(() =>
+      parseEnsembleConfig({ acp: { pi: { runtime: 'unknown' } } }),
+    ).toThrow(/acp\.pi\.runtime must be "byo" or "builtin"/);
   });
 
   it('ignores invalid tui values', () => {
@@ -332,6 +387,33 @@ describe('loadEnsembleConfig', () => {
     expect(config.conductor.backend).toBe('pi');
   });
 
+  it('lets project BYO override user builtin while preserving the default digest', async () => {
+    await writeConfig(userEnsembleRoot, 'acp:\n  pi:\n    runtime: builtin\n');
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      'acp:\n  pi:\n    runtime: byo\n',
+    );
+
+    const config = await loadConfig();
+
+    expect(config.acp.pi).toBeUndefined();
+    expect(computeEnsembleConfigDigest(config)).toBe(
+      computeEnsembleConfigDigest(DEFAULT_ENSEMBLE_CONFIG),
+    );
+  });
+
+  it('lets project builtin override user BYO', async () => {
+    await writeConfig(userEnsembleRoot, 'acp:\n  pi:\n    runtime: byo\n');
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      'acp:\n  pi:\n    runtime: builtin\n',
+    );
+
+    const config = await loadConfig();
+
+    expect(config.acp.pi).toEqual({ runtime: 'builtin' });
+  });
+
   it('deep merges acp env across user and project config', async () => {
     await writeConfig(
       userEnsembleRoot,
@@ -371,6 +453,43 @@ describe('loadEnsembleConfig', () => {
       high: 'opus',
       default: 'sonnet',
       low: 'sonnet',
+    });
+  });
+
+  it('deep merges arbitrary ACP tag keys across user and project config', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      'acp:\n  models:\n    standard: provider/model\n  tags:\n    default: standard\n    urgent: standard\n',
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      'acp:\n  tags:\n    lite: standard\n    urgent: project-model\n',
+    );
+
+    const config = await loadConfig();
+
+    expect(config.acp.tags).toEqual({
+      default: 'standard',
+      lite: 'standard',
+      urgent: 'project-model',
+    });
+  });
+
+  it('preserves empty and whitespace-only ACP tag keys across config layers', async () => {
+    await writeConfig(
+      userEnsembleRoot,
+      'acp:\n  tags:\n    "": user-model\n    "  ": spaced-model\n',
+    );
+    await writeConfig(
+      join(repoRoot, '.ensemble'),
+      'acp:\n  tags:\n    "": project-model\n',
+    );
+
+    const config = await loadConfig();
+
+    expect(config.acp.tags).toEqual({
+      '': 'project-model',
+      '  ': 'spaced-model',
     });
   });
 

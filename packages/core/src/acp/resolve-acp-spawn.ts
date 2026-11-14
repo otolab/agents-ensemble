@@ -13,6 +13,7 @@ import type {
 
 /** Built-in ACP preset id（Phase 1）。拡張時は adapter / capability を別途追加可能。 */
 export type BuiltinAcpPresetId = 'cursor' | 'claude' | 'codex' | 'pi';
+export type PiAcpRuntimeMarker = 'builtin';
 
 export type AcpPresetId = BuiltinAcpPresetId | 'custom';
 
@@ -31,8 +32,10 @@ export interface ResolvedAcpSpawn {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** Omitted means the legacy BYO Pi runtime. */
+  piRuntime?: PiAcpRuntimeMarker;
   authenticate?: AcpAuthenticateStrategy;
-  /** Effective profile tier and environment-specific model ID. */
+  /** Effective worker modelTag and environment-specific model ID. */
   modelTag?: AcpModelTag;
   model?: string;
   reasoning?: string;
@@ -49,15 +52,17 @@ export interface ResolvedAcpSpawn {
 
 /**
  * Resume metadata. Model and environment fields are retained for diagnostics;
- * compatibility checks compare the preset and, for custom, command and args.
+ * compatibility checks also compare Pi runtime and, for custom, command/args.
  */
 export interface AcpSpawnFingerprint {
   preset: AcpPresetId;
   command: string;
   args: string[];
+  /** Omitted means BYO, including fingerprints written before this field existed. */
+  piRuntime?: PiAcpRuntimeMarker;
   /** spawn env の canonical SHA-256。値そのものは保存しない。 */
   envDigest?: string;
-  /** Worker tier used to resolve this process. */
+  /** Worker modelTag used to resolve this process. */
   modelTag?: AcpModelTag;
   /** Resolved ACP model ID (model IDs are not credentials). */
   model?: string;
@@ -209,30 +214,63 @@ export function resolveDefaultAcpSpawn(
 export function resolveWorkerAcpSpawn(input?: {
   defaultOptions?: DefaultAcpResolutionOptions;
   modelTag?: AcpModelTag;
+  onWarning?: (message: string) => void;
 }): ResolvedAcpSpawn {
-  const modelTag = input?.modelTag ?? 'default';
+  const requestedModelTag = input?.modelTag;
+  const modelTag = requestedModelTag ?? 'default';
+  if (typeof modelTag !== 'string') {
+    throw new Error('ACP worker modelTag must be a string');
+  }
   const spawn = resolveDefaultAcpSpawn(input?.defaultOptions);
   const processEnv = input?.defaultOptions?.env ?? process.env;
   const modelProvider =
     spawn.preset === 'codex'
       ? spawn.env?.MODEL_PROVIDER ?? processEnv.MODEL_PROVIDER
       : undefined;
+  const spawnWithRuntime =
+    spawn.preset === 'pi' &&
+    input?.defaultOptions?.config?.acp.pi?.runtime === 'builtin'
+      ? { ...spawn, piRuntime: 'builtin' as const }
+      : spawn;
   const spawnWithProviderFingerprint =
-    spawn.preset === 'codex'
+    spawnWithRuntime.preset === 'codex'
       ? {
-          ...spawn,
+          ...spawnWithRuntime,
           modelProviderDigest: computeCodexModelProviderDigest(modelProvider),
         }
-      : spawn;
-  const modelKey = input?.defaultOptions?.config?.acp.tags?.[modelTag];
+      : spawnWithRuntime;
+  const tags = input?.defaultOptions?.config?.acp.tags;
+  let mappingTag = modelTag;
+  let modelKey = getOwnRecordValue(tags, modelTag);
   if (!modelKey) {
-    return { ...spawnWithProviderFingerprint, modelTag };
+    if (modelTag === 'default') {
+      if (requestedModelTag !== undefined) {
+        input?.onWarning?.(
+          'Worker modelTag "default" is not registered in acp.tags; using the ACP preset default model.',
+        );
+      }
+      return { ...spawnWithProviderFingerprint, modelTag };
+    }
+
+    modelKey = getOwnRecordValue(tags, 'default');
+    input?.onWarning?.(
+      modelKey
+        ? `Worker modelTag "${modelTag}" is not registered in acp.tags; resolving through acp.tags.default.`
+        : `Worker modelTag "${modelTag}" is not registered in acp.tags and acp.tags.default is not configured; using the ACP preset default model.`,
+    );
+    if (!modelKey) {
+      return { ...spawnWithProviderFingerprint, modelTag };
+    }
+    mappingTag = 'default';
   }
 
-  const entry = input?.defaultOptions?.config?.acp.models?.[modelKey];
+  const entry = getOwnRecordValue(
+    input?.defaultOptions?.config?.acp.models,
+    modelKey,
+  );
   if (!entry) {
     throw new Error(
-      `ACP model tag "${modelTag}" references undefined acp.models key "${modelKey}"`,
+      `ACP model tag "${mappingTag}" references undefined acp.models key "${modelKey}"`,
     );
   }
   const definition = typeof entry === 'string' ? { model: entry } : entry;
@@ -246,6 +284,13 @@ export function resolveWorkerAcpSpawn(input?: {
     definition,
     processEnv,
   );
+}
+
+function getOwnRecordValue<T>(
+  record: Record<string, T> | undefined,
+  key: string,
+): T | undefined {
+  return record && Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
 export function resolveWorkerAcpSpawns(input: {
@@ -270,6 +315,7 @@ export function acpSpawnFingerprint(spawn: ResolvedAcpSpawn): AcpSpawnFingerprin
     preset: spawn.preset,
     command: spawn.command,
     args: [...spawn.args],
+    ...(spawn.piRuntime !== undefined ? { piRuntime: spawn.piRuntime } : {}),
     ...(spawn.modelTag !== undefined ? { modelTag: spawn.modelTag } : {}),
     ...(spawn.model !== undefined ? { model: spawn.model } : {}),
     ...(spawn.reasoning !== undefined ? { reasoning: spawn.reasoning } : {}),
@@ -302,6 +348,7 @@ function computeCodexModelProviderDigest(modelProvider: string | undefined): str
 export function formatAcpSpawnFingerprint(spawn: AcpSpawnFingerprint): string {
   const args = spawn.args.length > 0 ? ` ${spawn.args.join(' ')}` : '';
   const details = [
+    ...(spawn.piRuntime !== undefined ? [`piRuntime=${spawn.piRuntime}`] : []),
     ...(spawn.modelTag !== undefined ? [`modelTag=${spawn.modelTag}`] : []),
     ...(spawn.model !== undefined ? [`model=${spawn.model}`] : []),
     ...(spawn.reasoning !== undefined ? [`reasoning=${spawn.reasoning}`] : []),
@@ -319,16 +366,21 @@ export function assertAcpSpawnMatchesResume(input: {
 
   const actual = input.actual;
   const presetMismatch = input.expected.preset !== actual.preset;
+  const piRuntimeMismatch =
+    input.expected.preset === 'pi' &&
+    actual.preset === 'pi' &&
+    (input.expected.piRuntime ?? 'byo') !== (actual.piRuntime ?? 'byo');
   const customSpawnMismatch =
     input.expected.preset === 'custom' &&
     (input.expected.command !== actual.command ||
       !arraysEqual(input.expected.args, actual.args));
 
-  if (!presetMismatch && !customSpawnMismatch) return;
+  if (!presetMismatch && !piRuntimeMismatch && !customSpawnMismatch) return;
 
   const label = input.workerName ? `Worker "${input.workerName}"` : 'Worker';
   const mismatchDetails = [
     ...(presetMismatch ? ['ACP preset differs'] : []),
+    ...(piRuntimeMismatch ? ['Pi runtime differs'] : []),
     ...(customSpawnMismatch ? ['custom ACP command or arguments differ'] : []),
   ];
   throw new Error(

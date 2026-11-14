@@ -54,15 +54,37 @@ export interface OpenWorkerAcpSessionOptions {
   ownsBridge?: boolean;
 }
 
+export type WorkerSessionRecoveryReason =
+  | 'session_load_failed'
+  | 'prompt_history_unreadable';
+
+export interface WorkerSessionRecovery {
+  reason: WorkerSessionRecoveryReason;
+  previousSessionId: string;
+  newSessionId: string;
+}
+
 /** ensemble 存続中に維持する worker の ACP 接続。 */
 export interface WorkerAcpSession {
   bridge: AcpBridge;
   ownsBridge: boolean;
   sessionId: string;
+  /** 保存済み session の `session/load` が成功したか。 */
+  resumed: boolean;
+  /** 保存済み thread から新しい thread に切り替えた場合の情報。 */
+  recovery?: WorkerSessionRecovery;
   worktree: WorktreeRef;
   issue: IssueRef;
   /** 実際に ACP に渡した cwd（`session/new` / `session/load`）。 */
   acpCwd: string;
+}
+
+function isBuiltinPiResume(
+  options: OpenWorkerAcpSessionOptions,
+): boolean {
+  return [options.currentAcpSpawn, options.expectedResumeAcpSpawn].some(
+    (spawn) => spawn?.preset === 'pi' && spawn.piRuntime === 'builtin',
+  );
 }
 
 export async function openWorkerAcpSession(
@@ -115,6 +137,9 @@ export async function openWorkerAcpSession(
   }
 
   let sessionId = options.resumeAcpSessionId;
+  let resumed = false;
+  let recoveryReason: WorkerSessionRecoveryReason | undefined;
+  const previousSessionId = sessionId;
   try {
     if (sessionId) {
       try {
@@ -123,8 +148,22 @@ export async function openWorkerAcpSession(
           acpCwd,
           options.permissionHandler,
         );
+        resumed = true;
       } catch (error) {
         if (error instanceof AcpSessionConfigOptionError) throw error;
+        if (isBuiltinPiResume(options)) {
+          const label = options.workerName
+            ? `Worker "${options.workerName}"`
+            : 'Worker';
+          const detail = error instanceof Error ? error.message : String(error);
+          // The upstream Pi adapter can lose its map-backed session lookup.
+          // Starting a fresh session here would silently discard saved context.
+          throw new Error(
+            `${label} could not resume builtin Pi ACP session "${sessionId}". Refusing to start a new session without the saved context. Cause: ${detail}`,
+            { cause: error },
+          );
+        }
+        recoveryReason = 'session_load_failed';
         sessionId = undefined;
       }
     }
@@ -146,10 +185,49 @@ export async function openWorkerAcpSession(
     bridge,
     ownsBridge,
     sessionId,
+    resumed,
+    ...(recoveryReason && previousSessionId
+      ? {
+          recovery: {
+            reason: recoveryReason,
+            previousSessionId,
+            newSessionId: sessionId,
+          },
+        }
+      : {}),
     worktree,
     issue,
     acpCwd,
   };
+}
+
+/**
+ * Cursor / Codex ACP prompt error emitted when the active provider cannot read
+ * the thread history encrypted by a different provider or account.
+ *
+ * Keep this deliberately specific: ordinary prompt failures are not evidence
+ * that replaying the instruction in a new thread is safe.
+ */
+export function isUnrecoverableAcpSessionHistoryError(
+  error: unknown,
+): boolean {
+  if (error instanceof AcpSessionConfigOptionError) return false;
+  const rawMessage =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : '';
+  const message = rawMessage
+    .toLowerCase()
+    .replace(/[’‘]/g, "'");
+
+  const cannotReadEarlierReasoning =
+    /(?:can't|cannot) read this thread's earlier reasoning/.test(message);
+  const mentionsEncryption =
+    message.includes('encrypt') &&
+    /(another|different|previous|old) (?:provider|account)/.test(message);
+  return cannotReadEarlierReasoning && mentionsEncryption;
 }
 
 export async function runWorkerAcpPrompt(

@@ -4,18 +4,18 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join } from 'node:path';
 import type { BuiltinAcpPresetId } from './resolve-acp-spawn.js';
 import {
+  ACP_PRESET_ADAPTER_PACKAGES,
   ACP_PRESET_BIN_NAMES,
-  ACP_PRESET_OPTIONAL_PACKAGES,
 } from './acp-preset-bins.js';
 
-/** `@agents-ensemble/core` の optionalDependencies 同梱 bin を解決。 */
+/** `@agents-ensemble/core` dependency として同梱した adapter bin を解決。 */
 export function resolveBundledAcpBin(
   preset: Exclude<BuiltinAcpPresetId, 'cursor'>,
   fromModuleUrl: string | URL = import.meta.url,
 ): string | undefined {
   try {
     const require = createRequire(fromModuleUrl);
-    const { packageName, binName } = ACP_PRESET_OPTIONAL_PACKAGES[preset];
+    const { packageName, binName } = ACP_PRESET_ADAPTER_PACKAGES[preset];
     const coreSearchPaths = require.resolve.paths('@agents-ensemble/core');
     const corePackageDirectory = coreSearchPaths
       ?.map((nodeModulesPath) =>
@@ -67,7 +67,7 @@ export function resolveAcpBinFromPath(binName: string): string | undefined {
 
 /**
  * built-in preset の ACP bin を解決する。
- * 順: optionalDependencies 同梱 bin → PATH 上の同名 bin。
+ * 順: core dependency の同梱 bin → PATH 上の同名 bin。
  */
 export function resolveAcpBin(
   preset: BuiltinAcpPresetId,

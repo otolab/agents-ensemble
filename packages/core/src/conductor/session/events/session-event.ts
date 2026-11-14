@@ -1,5 +1,6 @@
 import type { GitHubUpdateItem } from '../../../github/github-update-types.js';
 import type { WorkerDispatchResult } from '../../../dispatch/worker-dispatch.js';
+import type { WorkerSessionRecoveryReason } from '../../../dispatch/worker-acp-session.js';
 import type { SessionEventDispatchFields } from './shared/dispatch-fields.js';
 import type { PermissionPendingConductorPayload } from './shared/permission-pending.js';
 import type { WorkerFailureOutcome } from './shared/worker-outcome.js';
@@ -12,6 +13,7 @@ export type SessionEvent =
   | OperatorReconnectEvent
   | WorkerCompletedEvent
   | WorkerFailedEvent
+  | WorkerSessionRecoveredEvent
   | PermissionPendingEvent
   | PermissionStallEvent
   | HarnessConnectivityRecoveredEvent
@@ -43,6 +45,15 @@ export interface WorkerCompletedEvent extends SessionEventDispatchFields {
 export interface WorkerFailedEvent extends SessionEventDispatchFields {
   type: 'worker.failed';
   failure: WorkerFailureOutcome;
+}
+
+/** worker が保存済み ACP thread を復元できず、新しい thread に切り替えた通知。 */
+export interface WorkerSessionRecoveredEvent
+  extends SessionEventDispatchFields {
+  type: 'worker.session.recovered';
+  name: string;
+  kind: string;
+  reason: WorkerSessionRecoveryReason;
 }
 
 export interface PermissionPendingEvent

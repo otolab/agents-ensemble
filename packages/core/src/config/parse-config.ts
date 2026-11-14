@@ -7,6 +7,7 @@ import type {
   ConductorBackend,
   AcpModelCatalogLayerEntry,
   AcpModelTag,
+  EnsembleAcpPiConfig,
   EnsembleConfigControlConfig,
   EnsembleConductorConfig,
   EnsembleConfig,
@@ -40,6 +41,19 @@ function readObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function setRecordEntry<T>(
+  record: Record<string, T>,
+  key: string,
+  value: T,
+): void {
+  Object.defineProperty(record, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
 }
 
 function parseWorktreeMode(value: unknown): WorkerWorktreeMode | undefined {
@@ -149,13 +163,6 @@ function parseStringMap(
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
-const ACP_MODEL_TAGS: readonly AcpModelTag[] = [
-  'high',
-  'default',
-  'low',
-  'fast',
-];
-
 function parseAcpModels(
   raw: unknown,
 ): Record<string, AcpModelCatalogLayerEntry> | undefined {
@@ -167,7 +174,7 @@ function parseAcpModels(
     if (!modelKey) continue;
     const modelId = readString(value);
     if (modelId) {
-      models[modelKey] = modelId;
+      setRecordEntry(models, modelKey, modelId);
       continue;
     }
 
@@ -186,11 +193,11 @@ function parseAcpModels(
       throw new Error(`acp.models.${modelKey}.cursorFast must be a boolean`);
     }
     if (model || reasoning || cursorFast !== undefined) {
-      models[modelKey] = {
+      setRecordEntry(models, modelKey, {
         ...(model ? { model } : {}),
         ...(reasoning ? { reasoning } : {}),
         ...(cursorFast !== undefined ? { cursorFast } : {}),
-      };
+      });
     }
   }
   return Object.keys(models).length > 0 ? models : undefined;
@@ -198,15 +205,35 @@ function parseAcpModels(
 
 function parseAcpTags(
   raw: unknown,
-): Partial<Record<AcpModelTag, string>> | undefined {
+): Record<string, string> | undefined {
   const obj = readObject(raw);
   if (!obj) return undefined;
-  const tags: Partial<Record<AcpModelTag, string>> = {};
-  for (const tag of ACP_MODEL_TAGS) {
-    const modelKey = readString(obj[tag]);
-    if (modelKey) tags[tag] = modelKey;
+  const tags: Record<string, string> = {};
+  for (const [tag, rawModelKey] of Object.entries(obj)) {
+    const modelKey = readString(rawModelKey);
+    if (modelKey) {
+      setRecordEntry(tags, tag, modelKey);
+    }
   }
   return Object.keys(tags).length > 0 ? tags : undefined;
+}
+
+function parseAcpPiConfig(raw: unknown): EnsembleAcpPiConfig | undefined {
+  const obj = readObject(raw);
+  if (!obj) return undefined;
+
+  const runtime = readString(obj.runtime);
+  if (
+    obj.runtime !== undefined &&
+    runtime !== 'byo' &&
+    runtime !== 'builtin'
+  ) {
+    throw new Error('acp.pi.runtime must be "byo" or "builtin"');
+  }
+
+  // Keep an explicit `byo` while merging layers so it can override a lower
+  // layer's `builtin`. loadEnsembleConfig removes the default after merging.
+  return runtime === 'byo' || runtime === 'builtin' ? { runtime } : undefined;
 }
 
 function parseAcpConfig(raw: unknown): EnsembleConfigLayer['acp'] {
@@ -218,13 +245,15 @@ function parseAcpConfig(raw: unknown): EnsembleConfigLayer['acp'] {
   const env = parseStringMap(obj.env, 'acp.env');
   const models = parseAcpModels(obj.models);
   const tags = parseAcpTags(obj.tags);
+  const pi = parseAcpPiConfig(obj.pi);
   const validPreset =
     preset && isBuiltinAcpPresetId(preset) ? (preset as BuiltinAcpPresetId) : undefined;
   if (
     validPreset === undefined &&
     env === undefined &&
     models === undefined &&
-    tags === undefined
+    tags === undefined &&
+    pi === undefined
   ) {
     return undefined;
   }
@@ -233,6 +262,7 @@ function parseAcpConfig(raw: unknown): EnsembleConfigLayer['acp'] {
     ...(env !== undefined ? { env } : {}),
     ...(models !== undefined ? { models } : {}),
     ...(tags !== undefined ? { tags } : {}),
+    ...(pi !== undefined ? { pi } : {}),
   };
 }
 

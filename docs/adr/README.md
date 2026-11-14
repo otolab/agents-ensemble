@@ -90,7 +90,7 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0016](0016-bootstrap-permission-conductor-wait.md) | bootstrap 中 permission と conductor 自律待機のデッドロック | accepted |
 | [0017](0017-conductor-send-lifecycle-events.md) | conductor send ライフサイクルイベントと Driver 非同期化 | accepted |
 | [0018](0018-team-profile-four-layer-resolution.md) | team-profile の 4 層配置と名前解決 | accepted |
-| [0019](0019-worker-acp-cli-presets.md) | Worker ACP CLI preset とデフォルト解決 | accepted |
+| [0019](0019-worker-acp-cli-presets.md) | Worker ACP CLI preset とデフォルト解決 | superseded in part → [0067](0067-pi-acp-upstream-package-wrapper.md)（Pi ACP の package / runtime 選択のみ） |
 | [0020](0020-ensemble-config-setting-resolution.md) | ensemble config.yaml の設定解決順（Phase 1） | accepted |
 | [0021](0021-conductor-mcp-config-resolution.md) | conductor MCP 設定の 2 層解決と inline 配線 | accepted |
 | [0022](0022-tui-resize-workaround.md) | TUI resize workaround と Ink 回帰監視 | superseded → [0024](0024-tui-shrink-coalesce.md) |
@@ -116,10 +116,10 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0042](0042-explicit-config-replaces-user-layer.md) | `--config` による user config 層の差し替え | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest 方針のみ） |
 | [0043](0043-explicit-user-config-and-project-toggle.md) | 明示 user config と project load toggle の併用 | accepted |
 | [0044](0044-user-scoped-runtime-storage.md) | repo 単位のランタイム状態を user 層へ配置 | superseded → [0046](0046-migrated-session-canonical-slug-mirrors.md) |
-| [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning 指定のみ） |
+| [0045](0045-worker-acp-model-tags.md) | worker ACP model tag と環境別 model catalog | superseded in part → [0047](0047-worker-acp-model-reasoning.md)（model catalog の値と reasoning） / [0062](0062-worker-acp-model-tags.md)（tier 語彙・任意 tag・fallback） |
 | [0046](0046-migrated-session-canonical-slug-mirrors.md) | 移行済みセッションの canonical slug mirror | accepted |
-| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest） / [0052](0052-acp-model-injection-by-preset.md)（worker routing） |
-| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（`conductor.reasoning` の分類のみ） |
+| [0047](0047-worker-acp-model-reasoning.md) | worker ACP model catalog の reasoning | superseded in part → [0048](0048-session-resume-feasibility-config-digest.md)（resume digest） / [0052](0052-acp-model-injection-by-preset.md)（worker routing） / [0062](0062-worker-acp-model-tags.md)（tag 語彙・fallback） |
+| [0048](0048-session-resume-feasibility-config-digest.md) | Session resume feasibility と config digest | superseded in part → [0051](0051-conductor-reasoning-resume-digest.md)（`conductor.reasoning` の分類） / [0062](0062-worker-acp-model-tags.md)（dynamic `acp.tags` の分類） |
 | [0049](0049-conductor-reasoning-backends.md) | conductor reasoning を backend ごとに適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
 | [0050](0050-operator-agent-conductor-reasoning.md) | operator-agent に conductor reasoning を適用する | superseded → [0051](0051-conductor-reasoning-resume-digest.md)（resume digest 方針のみ） |
 | [0051](0051-conductor-reasoning-resume-digest.md) | conductor reasoning と resume-feasibility digest | accepted |
@@ -132,6 +132,17 @@ ADR は**合意された設計判断の履歴**を残すもの。一度 `accepte
 | [0058](0058-pi-send-recovery-replay-boundary.md) | Pi send recovery の再送境界 | superseded → [0059](0059-pi-recovery-report-after-manual-reconnect.md) |
 | [0059](0059-pi-recovery-report-after-manual-reconnect.md) | Pi 手動再接続後の recovery report | superseded → [0060](0060-pi-recovery-operator-inbox.md) |
 | [0060](0060-pi-recovery-operator-inbox.md) | Pi 失敗 dispatch の operator 専用 inbox | accepted |
+| [0061](0061-github-slug-session-persistence.md) | Issue session の slug 正本と operator-agent の user profile | proposed |
+| [0062](0062-worker-acp-model-tags.md) | worker ACP modelTag の語彙と未登録時の解決 | superseded in part → [0063](0063-explicit-default-model-tag-warning.md)（明示 `default` と省略時の warning 区別） / [0064](0064-worker-model-tags-allow-empty-strings.md)（空文字・空白のみを含む任意文字列） |
+| [0063](0063-explicit-default-model-tag-warning.md) | 明示された default modelTag の未登録 warning | accepted |
+| [0064](0064-worker-model-tags-allow-empty-strings.md) | worker modelTag に空文字・空白のみの tag を許可 | accepted |
+| [0065](0065-conductor-auth-mode-status-contract.md) | Conductor 認証モードと status / 復旧案内の契約 | proposed |
+| [0066](0066-builtin-pi-acp-runtime.md) | Pi ACP adapter の内蔵と BYO / builtin runtime | superseded → [0067](0067-pi-acp-upstream-package-wrapper.md) |
+| [0067](0067-pi-acp-upstream-package-wrapper.md) | Pi ACP upstream npm dependency と core wrapper | superseded in part → [0069](0069-pi-acp-version-split-for-byo-compatibility.md)（dependency version assignment only） / [0070](0070-issue-scoped-builtin-pi-storage.md)（builtin storage scope and permissions） |
+| [0068](0068-builtin-pi-home-and-resume-safety.md) | Builtin Pi の shell home と resume 失敗時の安全性 | accepted |
+| [0069](0069-pi-acp-version-split-for-byo-compatibility.md) | BYO / builtin の Pi ACP dependency version を分ける | accepted |
+| [0070](0070-issue-scoped-builtin-pi-storage.md) | Issue ごとの builtin Pi worker 保存先と権限 | superseded in part → [0071](0071-builtin-pi-storage-windows-acl.md)（Windows の owner-only ACL のみ） |
+| [0071](0071-builtin-pi-storage-windows-acl.md) | Windows builtin Pi worker 保存先の owner-only ACL | accepted |
 
 ## 追加するとき
 

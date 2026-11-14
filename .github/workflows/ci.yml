@@ -10,6 +10,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  windows-pi-storage:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify builtin Pi storage ACLs
+        run: pnpm --filter @agents-ensemble/core exec vitest run src/acp/pi-session-map.test.ts
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:

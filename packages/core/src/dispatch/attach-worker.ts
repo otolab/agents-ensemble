@@ -79,7 +79,7 @@ export function buildWorkerAttachPrompt(
   options: AttachWorkerOptions,
   session: WorkerAcpSession,
 ): string {
-  if (options.resumeAcpSessionId) {
+  if (session.resumed) {
     return WORKER_RESUME_PROMPT;
   }
   return compileWorkerAttachPrompt({

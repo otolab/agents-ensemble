@@ -8,6 +8,8 @@ import {
   type OpenQuestionControlAnswerResult,
   type OpenQuestionControlLastConductorMessage,
   type OpenQuestionControlListItem,
+  type OperatorSessionShutdownMode,
+  type OperatorSessionShutdownResult,
   type ConductorJsonValue,
   type ConductorTool,
   type SessionResumeStoreDuplicateDiagnostic,
@@ -24,6 +26,7 @@ export const ANSWER_LIVE_OPEN_QUESTION_TOOL = 'answer_live_open_question';
 export const GET_LAST_CONDUCTOR_MESSAGE_TOOL = 'get_last_conductor_message';
 export const LIST_CONDUCTOR_MESSAGES_TOOL = 'list_conductor_messages';
 export const SEND_OPERATOR_MESSAGE_TOOL = 'send_operator_message';
+export const SHUTDOWN_ISSUE_SESSION_TOOL = 'shutdown_issue_session';
 
 interface LiveOpenQuestionsResult {
   questions: OpenQuestionControlListItem[];
@@ -322,6 +325,58 @@ export function createSendOperatorMessageTool(
   };
 }
 
+/** Request close or exit for a running Issue harness over its live UDS. */
+export function createShutdownIssueSessionTool(
+  repoRoot: string,
+  onDuplicate?: SessionResumeStoreDiagnosticHandler,
+): ConductorTool {
+  const root = resolve(repoRoot);
+  return {
+    name: SHUTDOWN_ISSUE_SESSION_TOOL,
+    description:
+      'Request shutdown of a running Issue session. Use mode close to preserve the worktree for resume, or exit to request normal teardown and isolated worktree cleanup. This uses only the live session socket; it does not control stopped sessions. Use this dedicated tool to end a session: send_operator_message with text /close remains an ordinary conductor message.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        conductorAgentId: {
+          type: 'string',
+          description: 'Session id from list_operator_sessions.',
+        },
+        mode: {
+          type: 'string',
+          enum: ['close', 'exit'],
+          description: 'close preserves the worktree for resume; exit requests normal teardown.',
+        },
+      },
+      required: ['conductorAgentId', 'mode'],
+      additionalProperties: false,
+    },
+    execute: async (args) => {
+      const conductorAgentId = requireString(
+        args.conductorAgentId,
+        'conductorAgentId',
+      );
+      const mode = requireShutdownMode(args.mode);
+      const resumeStore = await requireSession(
+        root,
+        conductorAgentId,
+        onDuplicate,
+      );
+      const result = await sendOpenQuestionControlRequest<OperatorSessionShutdownResult>(
+        requireSocketPath(resumeStore),
+        {
+          method: OPEN_QUESTION_CONTROL_METHODS.shutdownSession,
+          params: { mode },
+        },
+      );
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, ConductorJsonValue>,
+      };
+    },
+  };
+}
+
 async function requireSession(
   repoRoot: string,
   value: ConductorJsonValue | undefined,
@@ -356,6 +411,15 @@ function requireString(
     throw new Error(`${name} must be a non-empty string.`);
   }
   return value.trim();
+}
+
+function requireShutdownMode(
+  value: ConductorJsonValue | undefined,
+): OperatorSessionShutdownMode {
+  if (value !== 'close' && value !== 'exit') {
+    throw new Error('mode must be close or exit.');
+  }
+  return value;
 }
 
 function requireDelivery(

@@ -15,6 +15,11 @@ import {
   profileWorkersToSessionSpecs,
 } from '../profile/types.js';
 import type { ResolvedProfile } from '../profile/types.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import {
+  resolveBuiltinPiCliEnvWrapperPath,
+  resolveBundledPiCliPath,
+} from './pi-runtime.js';
 
 describe('resolveDefaultAcpSpawn', () => {
   it('defaults to cursor agent acp', () => {
@@ -262,9 +267,34 @@ describe('resolveWorkerAcpSpawn', () => {
     ).toThrow(/undefined acp\.models key "missing"/);
   });
 
-  it('leaves the preset default in place when the worker tag has no mapping', () => {
+  it('resolves arbitrary custom model tags through their explicit mapping', () => {
     const resolved = resolveWorkerAcpSpawn({
-      modelTag: 'high',
+      modelTag: 'urgent',
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            models: { priority: 'cursor/priority' },
+            tags: { urgent: 'priority' },
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      preset: 'cursor',
+      modelTag: 'urgent',
+      model: 'cursor/priority',
+      args: ['--model', 'cursor/priority', 'acp'],
+    });
+  });
+
+  it('warns and resolves an unmapped custom tag through the default mapping', () => {
+    const warnings: string[] = [];
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'urgent',
+      onWarning: (message) => warnings.push(message),
       defaultOptions: {
         defaultAcpCli: 'cursor',
         config: {
@@ -279,10 +309,122 @@ describe('resolveWorkerAcpSpawn', () => {
 
     expect(resolved).toMatchObject({
       preset: 'cursor',
+      args: ['--model', 'cursor/standard', 'acp'],
+      modelTag: 'urgent',
+      model: 'cursor/standard',
+    });
+    expect(warnings).toEqual([
+      'Worker modelTag "urgent" is not registered in acp.tags; resolving through acp.tags.default.',
+    ]);
+  });
+
+  it.each(['', '  '])(
+    'preserves and warns for an unmapped blank modelTag %j before default fallback',
+    (modelTag) => {
+      const warnings: string[] = [];
+      const resolved = resolveWorkerAcpSpawn({
+        modelTag,
+        onWarning: (message) => warnings.push(message),
+        defaultOptions: {
+          defaultAcpCli: 'cursor',
+          config: {
+            acp: {
+              defaultPreset: 'cursor',
+              models: { standard: 'cursor/standard' },
+              tags: { default: 'standard' },
+            },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+      });
+
+      expect(resolved).toMatchObject({
+        preset: 'cursor',
+        args: ['--model', 'cursor/standard', 'acp'],
+        modelTag,
+        model: 'cursor/standard',
+      });
+      expect(warnings).toEqual([
+        `Worker modelTag "${modelTag}" is not registered in acp.tags; resolving through acp.tags.default.`,
+      ]);
+    },
+  );
+
+  it('warns and uses the preset default when both custom and default tags are missing', () => {
+    const warnings: string[] = [];
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'urgent',
+      onWarning: (message) => warnings.push(message),
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            tags: {},
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      preset: 'cursor',
       args: ['acp'],
-      modelTag: 'high',
+      modelTag: 'urgent',
     });
     expect(resolved.model).toBeUndefined();
+    expect(warnings).toEqual([
+      'Worker modelTag "urgent" is not registered in acp.tags and acp.tags.default is not configured; using the ACP preset default model.',
+    ]);
+  });
+
+  it('warns when the explicit default tag has no configured mapping', () => {
+    const warnings: string[] = [];
+    const resolved = resolveWorkerAcpSpawn({
+      modelTag: 'default',
+      onWarning: (message) => warnings.push(message),
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            tags: {},
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      preset: 'cursor',
+      args: ['acp'],
+      modelTag: 'default',
+    });
+    expect(resolved.model).toBeUndefined();
+    expect(warnings).toEqual([
+      'Worker modelTag "default" is not registered in acp.tags; using the ACP preset default model.',
+    ]);
+  });
+
+  it('does not warn when modelTag is omitted and the default mapping is absent', () => {
+    const warnings: string[] = [];
+    const resolved = resolveWorkerAcpSpawn({
+      onWarning: (message) => warnings.push(message),
+      defaultOptions: {
+        defaultAcpCli: 'cursor',
+        config: {
+          acp: {
+            defaultPreset: 'cursor',
+            tags: {},
+          },
+        } as import('../config/types.js').EnsembleConfig,
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      preset: 'cursor',
+      args: ['acp'],
+      modelTag: 'default',
+    });
+    expect(resolved.model).toBeUndefined();
+    expect(warnings).toEqual([]);
   });
 
   it('injects a Pi model through its ACP session config option', () => {
@@ -728,6 +870,161 @@ describe('profileWorkersToSessionSpecs', () => {
     });
   });
 
+  it('isolates builtin Pi user settings and worker logs, overriding acp.env paths', () => {
+    const repoRoot = '/tmp/builtin-pi-runtime-repo';
+    const config = {
+      acp: {
+        defaultPreset: 'pi',
+        pi: { runtime: 'builtin' },
+        env: {
+          ENSEMBLE_PI_BUILTIN_RUNTIME: '0',
+          PI_CODING_AGENT_DIR: '/custom/pi',
+          PI_CODING_AGENT_SESSION_DIR: '/custom/sessions',
+          PI_ACP_SESSION_MAP_PATH: '/custom/session-map.json',
+          PI_ACP_PI_COMMAND: '/custom/pi.js',
+        },
+      },
+    } as import('../config/types.js').EnsembleConfig;
+    const specs = profileWorkersToSessionSpecs(baseProfile, {
+      defaultAcp: { config, env: {} },
+      repoRoot,
+      issueNumber: 1,
+    });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const implementer = specs[0]?.spawn?.env;
+    const reviewer = specs[1]?.spawn?.env;
+    const fingerprintEnv = { ...config.acp.env };
+    delete fingerprintEnv.PI_ACP_SESSION_MAP_PATH;
+
+    expect(implementer).toMatchObject({
+      ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+      HOME: paths.piWorkerDir('implementer', 1),
+      USERPROFILE: paths.piWorkerDir('implementer', 1),
+      ENSEMBLE_PI_LEGACY_WORKER_HOME:
+        paths.legacyPiWorkerDir('implementer'),
+      PI_CODING_AGENT_DIR: paths.piUserDir,
+      PI_CODING_AGENT_SESSION_DIR:
+        paths.piWorkerSessionsDir('implementer', 1),
+    });
+    expect(implementer?.PI_ACP_PI_COMMAND).toBe(
+      resolveBuiltinPiCliEnvWrapperPath(),
+    );
+    expect(implementer?.ENSEMBLE_PI_CLI_EXECUTABLE).toBe(
+      resolveBundledPiCliPath(),
+    );
+    expect(implementer?.PI_ACP_PI_COMMAND).not.toBe('/custom/pi.js');
+    expect(implementer).not.toHaveProperty('PI_ACP_SESSION_MAP_PATH');
+    expect(reviewer?.HOME).toBe(paths.piWorkerDir('reviewer', 1));
+    expect(reviewer?.HOME).not.toBe(implementer?.HOME);
+    expect(specs[0]?.acpFingerprint).toMatchObject({
+      preset: 'pi',
+      piRuntime: 'builtin',
+    });
+    expect(specs[0]?.acpFingerprint?.envDigest).toBe(
+      computeAcpSpawnEnvDigest({
+        ...fingerprintEnv,
+        ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+        ENSEMBLE_PI_CLI_HOME: implementer?.ENSEMBLE_PI_CLI_HOME ?? '',
+        ENSEMBLE_PI_CLI_USERPROFILE:
+          implementer?.ENSEMBLE_PI_CLI_USERPROFILE ?? '',
+        ENSEMBLE_PI_CLI_NODE: process.execPath,
+        ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
+        HOME: paths.piWorkerDir('implementer', 1),
+        USERPROFILE: paths.piWorkerDir('implementer', 1),
+        ENSEMBLE_PI_LEGACY_WORKER_HOME:
+          paths.legacyPiWorkerDir('implementer'),
+        PI_CODING_AGENT_DIR: paths.piUserDir,
+        PI_CODING_AGENT_SESSION_DIR:
+          paths.piWorkerSessionsDir('implementer', 1),
+        PI_ACP_PI_COMMAND: resolveBuiltinPiCliEnvWrapperPath(),
+      }),
+    );
+  });
+
+  it('shares the configured Pi auth root while keeping builtin worker logs isolated', () => {
+    const repoRoot = '/tmp/builtin-pi-runtime-repo';
+    const agentDir = `${repoRoot}/custom-pi-agent`;
+    const config = {
+      conductor: {
+        pi: { agentDir: './custom-pi-agent' },
+      },
+      acp: {
+        defaultPreset: 'pi',
+        pi: { runtime: 'builtin' },
+        env: {
+          PI_CODING_AGENT_DIR: '/acp/env-should-not-win',
+        },
+      },
+    } as import('../config/types.js').EnsembleConfig;
+    const specs = profileWorkersToSessionSpecs(baseProfile, {
+      defaultAcp: { config, env: {} },
+      repoRoot,
+      issueNumber: 1,
+    });
+    const paths = resolveEnsemblePaths({ repoRoot });
+    const implementer = specs[0]?.spawn?.env;
+    const reviewer = specs[1]?.spawn?.env;
+    const fingerprintEnv = { ...config.acp.env };
+    delete fingerprintEnv.PI_ACP_SESSION_MAP_PATH;
+
+    expect(implementer).toMatchObject({
+      HOME: paths.piWorkerDir('implementer', 1),
+      USERPROFILE: paths.piWorkerDir('implementer', 1),
+      ENSEMBLE_PI_LEGACY_WORKER_HOME:
+        paths.legacyPiWorkerDir('implementer'),
+      PI_CODING_AGENT_DIR: agentDir,
+      PI_CODING_AGENT_SESSION_DIR:
+        paths.piWorkerSessionsDir('implementer', 1),
+    });
+    expect(reviewer?.PI_CODING_AGENT_DIR).toBe(agentDir);
+    expect(reviewer?.PI_CODING_AGENT_SESSION_DIR).toBe(
+      paths.piWorkerSessionsDir('reviewer', 1),
+    );
+    expect(reviewer?.HOME).toBe(paths.piWorkerDir('reviewer', 1));
+    expect(reviewer?.HOME).not.toBe(implementer?.HOME);
+    expect(specs[0]?.acpFingerprint?.envDigest).toBe(
+      computeAcpSpawnEnvDigest({
+        ...fingerprintEnv,
+        ENSEMBLE_PI_BUILTIN_RUNTIME: '1',
+        ENSEMBLE_PI_CLI_HOME: implementer?.ENSEMBLE_PI_CLI_HOME ?? '',
+        ENSEMBLE_PI_CLI_USERPROFILE:
+          implementer?.ENSEMBLE_PI_CLI_USERPROFILE ?? '',
+        ENSEMBLE_PI_CLI_NODE: process.execPath,
+        ENSEMBLE_PI_CLI_EXECUTABLE: resolveBundledPiCliPath(),
+        HOME: paths.piWorkerDir('implementer', 1),
+        USERPROFILE: paths.piWorkerDir('implementer', 1),
+        ENSEMBLE_PI_LEGACY_WORKER_HOME:
+          paths.legacyPiWorkerDir('implementer'),
+        PI_CODING_AGENT_DIR: agentDir,
+        PI_CODING_AGENT_SESSION_DIR:
+          paths.piWorkerSessionsDir('implementer', 1),
+        PI_ACP_PI_COMMAND: resolveBuiltinPiCliEnvWrapperPath(),
+      }),
+    );
+  });
+
+  it('does not warn for an omitted profile modelTag when default has no mapping', () => {
+    const warnings: string[] = [];
+    const specs = profileWorkersToSessionSpecs(
+      {
+        workers: [normalizeProfileWorker('implementer', 'test profile', 0)],
+      },
+      {
+        defaultAcp: {
+          defaultAcpCli: 'cursor',
+          config: {
+            acp: { defaultPreset: 'cursor', tags: {} },
+          } as import('../config/types.js').EnsembleConfig,
+        },
+        onWarning: (message) => warnings.push(message),
+      },
+    );
+
+    expect(specs[0]?.modelTag).toBe('default');
+    expect(specs[0]?.acpFingerprint).toMatchObject({ modelTag: 'default' });
+    expect(warnings).toEqual([]);
+  });
+
   it('resolves different model tiers per worker while shorthand uses default', () => {
     const specs = profileWorkersToSessionSpecs(
       {
@@ -905,6 +1202,25 @@ describe('acpSpawnFingerprint', () => {
 });
 
 describe('assertAcpSpawnMatchesResume', () => {
+  it('treats a missing Pi runtime marker as BYO and rejects runtime switches', () => {
+    const byo = {
+      preset: 'pi' as const,
+      command: 'pi-acp',
+      args: [],
+    };
+    const builtin = { ...byo, piRuntime: 'builtin' as const };
+
+    expect(() =>
+      assertAcpSpawnMatchesResume({ expected: byo, actual: byo }),
+    ).not.toThrow();
+    expect(() =>
+      assertAcpSpawnMatchesResume({ expected: byo, actual: builtin }),
+    ).toThrow(/Pi runtime differs/);
+    expect(() =>
+      assertAcpSpawnMatchesResume({ expected: builtin, actual: byo }),
+    ).toThrow(/Pi runtime differs/);
+  });
+
   it('records built-in model and env fields without using them to reject resume', () => {
     expect(() =>
       assertAcpSpawnMatchesResume({

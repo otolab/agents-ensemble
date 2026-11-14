@@ -138,5 +138,12 @@ export async function loadEnsembleConfig(
   }
 
   assertCompleteModels(merged);
-  return merged;
+  const resolved = merged as EnsembleConfig;
+  // The default BYO runtime is represented by omission so pre-existing
+  // resolved-config digests remain stable. Keep explicit BYO values through
+  // layer merging above so they can override a lower layer's builtin choice.
+  if (resolved.acp.pi?.runtime === 'byo') {
+    delete resolved.acp.pi;
+  }
+  return resolved;
 }

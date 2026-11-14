@@ -10,7 +10,10 @@ import type { PermissionRequest } from '../permission/permission-request.js';
 import type { PendingPermission } from '../permission/pending-permission.js';
 import { ConductorInbox } from './conductor-inbox.js';
 import { startInboxProcessor } from './inbox-processor.js';
-import type { WorkerFailureRecord } from './types.js';
+import type {
+  WorkerFailureRecord,
+  WorkerSessionRecoveredNotification,
+} from './types.js';
 import { WorkerRuntime } from './worker-runtime.js';
 import type {
   EnsembleSessionState,
@@ -51,6 +54,9 @@ export interface WorkerSessionOptions {
     requestId: string,
   ) => PermissionDecision | null | Promise<PermissionDecision | null>;
   onWorkerCompleted?: (result: WorkerDispatchResult) => void;
+  onWorkerSessionRecovered?: (
+    notification: WorkerSessionRecoveredNotification,
+  ) => void | Promise<void>;
   onPermissionCleanup?: (event: {
     workerId: string;
     entries: PendingPermission[];
@@ -101,6 +107,7 @@ export class WorkerSession {
       ...(options.ownsWorkerAcpConnections !== undefined
         ? { ownsWorkerAcpConnections: options.ownsWorkerAcpConnections }
         : {}),
+      onWorkerSessionRecovered: options.onWorkerSessionRecovered,
       ...(options.onPromptTelemetry
         ? { onPromptTelemetry: options.onPromptTelemetry }
         : {}),

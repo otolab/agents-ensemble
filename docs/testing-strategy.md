@@ -29,8 +29,12 @@
 | `@agents-ensemble/cli` | unit | `pnpm --filter @agents-ensemble/cli test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Git、一時ディレクトリ、ローカル UDS。ビルド済み CLI を起動するテストがあるため、単独実行前に `pnpm build` が必要 |
 | `@agents-ensemble/cli` | e2e | `pnpm --filter @agents-ensemble/cli test:e2e` | 一部のみ。PTY suites を個別に実行 | 先に `pnpm build` が必要。PTY suites は POSIX と Python 3 の標準 `pty` モジュールが必要。Pi TTY suites は localhost bind と Git も使う。Issue workflow suite は `test-acp.yaml`、Issue URL、repo、conductor 認証、利用可能な ACP 実行環境が必要 |
 | `@agents-ensemble/operator-agent` | unit | `pnpm --filter @agents-ensemble/operator-agent test:run` | はい。root の `pnpm test:run` に含まれる | Node.js 22、事前の core build、書き込み可能な repository `.tmp/`、ローカル UDS。外部 agent / service は不要 |
+| Builtin Pi storage ACL (Windows) | unit / filesystem smoke | `pnpm --filter @agents-ensemble/core exec vitest run src/acp/pi-session-map.test.ts` | はい。`windows-latest` の専用 job | `icacls.exe` による現在の account の ACL 更新と .NET での読み戻し、temp directory。実 Pi CLI / provider は起動しない |
 | `.github/scripts` | Node test | `pnpm test:release-workflow` | はい | Node.js 22 と Git。テスト用の一時 Git repository を使い、GitHub には接続しない |
+| `scripts/remote-ensemble-issue.test.mjs` | 補助 Node test | `node --test scripts/remote-ensemble-issue.test.mjs` | はい。root の `pnpm test:run` に含まれる | Node.js 22、Bash 3.2+、POSIX shell、fake SSH / gcloud / tmux fixture。Python 3 の標準 `pty` module があれば TTY 経路も実行する。実 SSH / gcloud 接続・認証は行わない |
 | `scripts/pi` | Node test | `node --test scripts/pi/cached-auth.test.mjs` | いいえ | Node.js。Linux 固有の PID namespace / procfs を検証する2ケースは非Linuxで skip。CI 対応は Issue #475 の範囲 |
+
+`remote-ensemble-issue.test.mjs` は、引用符付き gcloud argv、`--project` などの値、remote command / TTY option と `--` separator の位置、TTY attach、session の再利用、同時起動、実行ファイルの欠落・実行権限不足、remote PATH に `ensemble` がない場合の失敗、Node が PATH にない tmux pane での起動失敗と runtime PATH を戻す wrapper、pane command の即時終了、tmux が dead pane と報告する状態を確認する。fake gcloud は受け取った argv を検査してから生成された remote command をローカル shell で実行し、認証や SSH 接続を行わない。fake tmux は pane command の process 生存を追跡し、起動失敗時に session が残らない動きを模擬する。実 gcloud の option parser、認証、接続先固有の tmux / TTY 設定の確認は、この suite の範囲外。
 
 Root scripts:
 
@@ -93,7 +97,7 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | `acp-bridge.integration.test.ts` の `describe.skipIf` | `test-acp.yaml` がない場合、または設定された `agentCommand`（省略時は PATH 上の `agent`）を見つけられない・実行できない場合、実 ACP backend を起動できない。skip 時は不足条件を suite 名に表示する | example からローカル設定を作り、`agentCommand` を PATH 上に用意するか実行可能なパスに設定して、該当 suite を実行 |
 | `issue.e2e.test.ts` の `describe.skipIf` | Issue / repository 設定または conductor 認証がない場合、Issue workflow を実行できない | `test-acp.yaml` と認証を設定して `pnpm test:e2e` を実行 |
 | `cli-version.test.ts` の `describe.skipIf` | package 単独の unit 実行時に build artifact がない場合、dist CLI を起動できない | `pnpm build` 後に再実行。CI は build 済みのためこの skip に入らない |
-| `resolve-bundled-acp-bin.test.ts` の optional preset ごとの `describe.skipIf` | 対応する ACP optional dependency がインストールされていない場合、その package 内の実行ファイル解決だけは確認できない。optional package 不在時の fallback は別テストで検証する | optional dependency を含めて `pnpm install` し、対象 workspace の unit suite を再実行 |
+| `resolve-bundled-acp-bin.test.ts` の Claude / Codex optional preset ごとの `describe.skipIf` | 対応する ACP optional dependency がインストールされていない場合、その package 内の実行ファイル解決だけは確認できない。Pi adapter は通常 dependency のため常時検証する | optional dependency を含めて `pnpm install` し、対象 workspace の unit suite を再実行 |
 | CLI TTY e2e の Windows `skipIf` | Python 標準 `pty` と POSIX process group に依存し、Windows では同じ PTY 条件を提供できない | Python 3 `pty` を備えた POSIX 環境で実行。CI は Ubuntu |
 | `export-session-bundle.test.ts` の symlink source test | Windows では file symlink 作成に Developer Mode または symlink privilege が必要な環境がある。権限がない場合は `EPERM` / `EACCES` で fixture を作れず、その場合だけ test が理由付きで skip する | POSIX では `pnpm --filter @agents-ensemble/core exec vitest run src/session/export-session-bundle.test.ts -t "does not follow symlink sources"`。Windows では Developer Mode を有効にするか symlink privilege のある account で同じコマンドを実行 |
 | `scripts/pi/cached-auth.test.mjs` の Linux 条件 skip | PID namespace / procfs の Linux 挙動を直接検証する2ケース | Linux 上で `node --test scripts/pi/cached-auth.test.mjs` を実行。CI 導入・対応は Issue #475 |
@@ -111,14 +115,14 @@ PTY e2e は外部認証や `test-acp.yaml` を必要としない。Pi TTY suites
 | Release workflow tests | `pnpm test:release-workflow` — `.github/scripts` の Node test |
 | Session resume integration | `test/integration/session-resume.integration.test.ts` |
 | Codex model reasoning integration | `test/integration/codex-model-reasoning.integration.test.ts` |
-| Claude and Pi worker ACP adapter integration tests | `test/integration/worker-model-reasoning-adapters.integration.test.ts`（Claude ACP 0.70.0 / `pi-acp` 0.0.33） |
+| Claude and Pi worker ACP adapter integration tests | `test/integration/worker-model-reasoning-adapters.integration.test.ts`（Claude ACP 0.70.0 / BYO `pi-acp@0.0.33` / builtin `pi-acp@0.0.34` と core wrapper） |
 | Operator usage integration | `test/integration/usage-operator.integration.test.ts` |
 | Pi conductor integration | `pi-conductor.integration.test.ts`、`pi-headless-settings.integration.test.ts`、`pi-conductor-agent-registry.integration.test.ts` |
 | CLI TTY e2e | `tty-close-process.e2e.test.ts`、`issue-pi-tty-exit.e2e.test.ts`、`issue-pi-tty-close.e2e.test.ts` |
 
 常時実行の integration / e2e は Fake、ローカル fixture、または隔離された Codex を使い、Cursor / GitHub 認証や `test-acp.yaml` を要求しない。PTY suite には Ubuntu runner 上の Python 3 `pty`、POSIX process group、Git が必要であり、Pi TTY suites は localhost bind も使う。Issue workflow 全体、外部サービスへ接続する実 ACP、実 Cursor SDK の suite は通常 CI の対象外。`.github/scripts` の Node tests は対象だが、`scripts/pi/cached-auth.test.mjs` は対象外である。
 
-Claude / Pi worker adapter suite は、依存関係 install 後に core workspace から optional adapter package の `@agentclientprotocol/claude-agent-acp/dist/index.js` と `pi-acp` の両方が `import.meta.resolve` できることを CI step が確認してから実行する。suite は実 adapter と fake Claude SDK / Pi CLI を使い、`session/new`・`session/load` 時に model と推論レベル（Claude の `effortLevel` / Pi の `thinkingLevel`）が適用されることを確かめる。LLM 呼び出しや provider 認証は不要。CI は Ubuntu / Node.js 22 で両方を実行する。ローカルで adapter package がない場合は該当 suite を skip し、Pi suite は Windows でも skip する。
+Claude / Pi worker adapter suite は、依存関係 install 後に core workspace から Claude の optional adapter `@agentclientprotocol/claude-agent-acp/dist/index.js` と upstream `pi-acp` の固定版を解決できることを CI step が確認してから実行する。BYO は `0.0.33`、builtin は `0.0.34` を使う。suite は upstream adapter と fake Claude SDK / Pi CLI を使い、`session/new`・`session/load` 時に model と推論レベル（Claude の `effortLevel` / Pi の `thinkingLevel`）が適用されることを確かめる。Pi builtin fixture は別 Issue の同名 worker を同時に起動し、それぞれの map entry が残って `session/load` できることを確認する。map と transcript の POSIX mode が directory `0700` / file `0600` になること、worker map がある状態で process を停止・再起動して `session/load` できること、map を削除して resume した場合は transcript が残っていても失敗し新しい session map を作らないことも検証する。さらに fake Pi CLI の shell child から fixture の `~/.gitconfig`、`~/.ssh/config`、GitHub CLI 設定を読み、wrapper が利用者 home を復元することを確認する。BYO fixture は従来の PATH と home-based session map を確認する。Pi は fake CLI のため provider 認証や実リクエストは不要です。通常利用時の Pi provider 認証条件は [Pi worker runtime](config.md#pi-worker-runtime) を参照してください。CI は Ubuntu / Node.js 22 で adapter / POSIX tests を、Windows の専用 job で実 ACL tests を実行します。Windows ACL test は DACL を設定した後に owner・ACE 数・identity・権限・inheritance を読み戻して確認します。Claude suite は optional adapter がないローカル環境で skip し、実 adapter integration suite は Windows で skip します。
 
 ## 参照
 

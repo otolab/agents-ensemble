@@ -41,6 +41,7 @@ import {
   resolveWorkerAcpSpawn,
   resolvedAcpSpawnToOptions,
 } from '../acp/resolve-acp-spawn.js';
+import { configurePiWorkerRuntime } from '../acp/pi-runtime.js';
 import {
   finalizeResolvedAcpSpawn,
   validateWorkerAcpPrerequisites,
@@ -159,6 +160,7 @@ import {
   type OpenQuestionControlConductorMessage,
   type OpenQuestionControlLastConductorMessage,
   type OpenQuestionControlServer,
+  type OperatorSessionShutdownMode,
 } from '../session/open-question-control.js';
 import type { SessionUsageSummary } from '../usage/types.js';
 import type { PendingPermission } from '../permission/pending-permission.js';
@@ -843,9 +845,18 @@ async function runConductorSessionWithStartupGuard(
       });
     },
   };
+  const piAgentDir = resolveConductorPiResourcePaths({
+    repoRoot: options.repoRoot,
+    config: ensembleConfig,
+  }).agentDir;
   const workers = profileWorkersToSessionSpecs(activeProfile, {
     defaultAcp: options.defaultAcp,
     spawnBase,
+    repoRoot: options.repoRoot,
+    issueNumber: issue.number,
+    ...(piAgentDir ? { piAgentDir } : {}),
+    onWarning: (message) =>
+      sessionLogger.emit({ type: 'harness.warning', message }),
   });
   if (workers.length > 0) {
     validateWorkerAcpPrerequisites(
@@ -856,7 +867,13 @@ async function runConductorSessionWithStartupGuard(
         }),
       ),
     );
-    finalizeSessionWorkerSpecs(workers, options.defaultAcp);
+    finalizeSessionWorkerSpecs(
+      workers,
+      options.repoRoot,
+      issue.number,
+      options.defaultAcp,
+      piAgentDir,
+    );
   }
   const workerAcpFingerprints = new Map(
     workers.map((worker) => [worker.name, worker.acpFingerprint] as const),
@@ -993,6 +1010,34 @@ async function runConductorSessionWithStartupGuard(
       });
       eventQueue.enqueue({ type: 'worker.completed', result });
       scheduleSessionResumeStoreFlush();
+    },
+    onWorkerSessionRecovered: async (notification) => {
+      workerSessions.set(notification.name, {
+        acpSessionId: notification.acpSessionId,
+        acpCwd: notification.acpCwd,
+        ...(workerAcpFingerprints.get(notification.name)
+          ? { acpSpawn: workerAcpFingerprints.get(notification.name) }
+          : {}),
+      });
+      try {
+        await flushSessionResumeStore();
+      } catch (error) {
+        reportResumeStoreFlushFailure(error);
+      }
+      const detail =
+        notification.reason === 'session_load_failed'
+          ? '保存済み ACP session を読み込めなかったため'
+          : '保存済み ACP thread の履歴を読めなかったため';
+      sessionLogger.emit({
+        type: 'harness.warning',
+        message: `worker.session.recovered name=${notification.name} kind=${notification.kind}: ${detail}新しい session で再開します。`,
+      });
+      eventQueue.enqueue({
+        type: 'worker.session.recovered',
+        name: notification.name,
+        kind: notification.kind,
+        reason: notification.reason,
+      });
     },
     onWorkerFailed: (failure) => {
       sessionLogger.emit({ type: 'worker.failed', failure });
@@ -1803,23 +1848,36 @@ async function runConductorSessionWithStartupGuard(
     return true;
   };
 
+  const requestOperatorShutdown = (
+    mode: OperatorSessionShutdownMode,
+  ): boolean => {
+    if (teardownStarted || operatorRequestedExit || operatorRequestedClose) {
+      return false;
+    }
+
+    if (mode === 'exit') {
+      sessionLogger.emit({ type: 'session.operator_exit' });
+      workerSession.runtime.cancelAllActivePrompts();
+      operatorRequestedExit = true;
+    } else {
+      sessionLogger.emit({ type: 'session.operator_close' });
+      workerSession.runtime.cancelAllActivePrompts();
+      operatorRequestedClose = true;
+    }
+    shutdownIntentController.abort();
+    abortAfterOpenQuestionDrain(operatorTerminationController);
+    return true;
+  };
+
   if (options.bindOperatorInput) {
     const bindingDispose = options.bindOperatorInput({
       submit: (message, submitOptions) => {
         if (isOperatorExitCommand(message)) {
-          sessionLogger.emit({ type: 'session.operator_exit' });
-          workerSession.runtime.cancelAllActivePrompts();
-          operatorRequestedExit = true;
-          shutdownIntentController.abort();
-          abortAfterOpenQuestionDrain(operatorTerminationController);
+          requestOperatorShutdown('exit');
           return false;
         }
         if (isOperatorCloseCommand(message)) {
-          sessionLogger.emit({ type: 'session.operator_close' });
-          workerSession.runtime.cancelAllActivePrompts();
-          operatorRequestedClose = true;
-          shutdownIntentController.abort();
-          abortAfterOpenQuestionDrain(operatorTerminationController);
+          requestOperatorShutdown('close');
           return false;
         }
         if (isOperatorReconnectCommand(message)) {
@@ -1949,6 +2007,8 @@ async function runConductorSessionWithStartupGuard(
         }
         return sendOperatorMessage({ message: text, delivery });
       },
+      requestOperatorShutdown: ({ mode }) =>
+        requestOperatorShutdown(mode),
       answerOpenQuestion: async ({ questionId, answer }) => {
         if (teardownStarted) {
           throw new OpenQuestionControlOperationError(
@@ -2427,11 +2487,11 @@ async function runConductorSessionWithStartupGuard(
       // after this point are rejected by the teardown guard above.
       workerSession.runtime.cancelAllActivePrompts();
       if (operatorRequestedClose) {
-        // A worker's ACP session exists before its first prompt completes, but
-        // workerSessions is normally updated by onWorkerCompleted. Snapshot
-        // attached sessions now so force shutdown cannot discard the only
-        // completion event that would have persisted a resumable session ID.
-        for (const attached of workerSession.runtime.listAttached()) {
+        // A worker's ACP session exists before its first prompt completes, so
+        // snapshot resumable attached sessions before force shutdown. Recovery
+        // bootstrap replacements are excluded until initialized; their prior
+        // workerSessions entry remains available for the next resume.
+        for (const attached of workerSession.runtime.listAttachedForResume()) {
           workerSessions.set(attached.name, {
             acpSessionId: attached.session.sessionId,
             acpCwd: attached.session.acpCwd,
@@ -2662,14 +2722,36 @@ function attachLegacySessionCallbacks(
 
 function finalizeSessionWorkerSpecs(
   workers: SessionWorkerSpec[],
+  repoRoot: string,
+  issueNumber: number,
   defaultAcp?: DefaultAcpResolutionOptions,
+  piAgentDir?: string,
 ): void {
+  const resolvedPiAgentDir =
+    piAgentDir ??
+    resolveConductorPiResourcePaths({
+      repoRoot,
+      config: defaultAcp?.config,
+      env: defaultAcp?.env,
+    }).agentDir;
+
   for (const worker of workers) {
     const resolved = resolveWorkerAcpSpawn({
       defaultOptions: defaultAcp,
       modelTag: worker.modelTag,
     });
-    const finalized = finalizeResolvedAcpSpawn(resolved);
+    const sessionSpawn =
+      resolved.piRuntime === 'builtin'
+        ? configurePiWorkerRuntime(resolved, {
+            repoRoot,
+            issueNumber,
+            workerName: worker.name,
+            ...(resolvedPiAgentDir
+              ? { agentDir: resolvedPiAgentDir }
+              : {}),
+          })
+        : resolved;
+    const finalized = finalizeResolvedAcpSpawn(sessionSpawn);
     worker.spawn = resolvedAcpSpawnToOptions(finalized, worker.spawn);
     worker.acpFingerprint = acpSpawnFingerprint(finalized);
   }

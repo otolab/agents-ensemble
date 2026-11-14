@@ -283,46 +283,94 @@ describe('SessionResumeStore', () => {
     expect(directoryInfo.mode & 0o777).toBe(0o700);
   });
 
-  it('round-trips worker acpSpawn through save and load', async () => {
-    tempDir = await createHome('ensemble-session-resume-store-');
+  it.each([
+    { label: 'custom', modelTag: 'urgent' },
+    { label: 'empty', modelTag: '' },
+    { label: 'whitespace-only', modelTag: '  ' },
+  ])(
+    'round-trips a $label worker modelTag through save and load',
+    async ({ modelTag }) => {
+      tempDir = await createHome('ensemble-session-resume-store-');
+      const path = sessionResumeStorePath({
+        repoRoot: tempDir,
+        conductorAgentId: 'agent-acp-spawn',
+      });
+      const resumeStore = baseResumeStore({
+        conductorAgentId: 'agent-acp-spawn',
+        repoRoot: tempDir,
+        workers: {
+          implementer: {
+            acpSessionId: 'sess-1',
+            acpCwd: '/repo/worktree',
+            acpSpawn: {
+              preset: 'codex',
+              command: 'codex-acp',
+              args: [],
+              modelTag,
+              model: 'provider/opus',
+              reasoning: 'high',
+              modelProviderDigest: 'b'.repeat(64),
+              envDigest: 'a'.repeat(64),
+            },
+          },
+        },
+      });
+
+      await saveSessionResumeStore(path, resumeStore);
+      const loaded = await loadSessionResumeStore(path);
+
+      expect(loaded?.workers.implementer?.acpSpawn).toEqual({
+        preset: 'codex',
+        command: 'codex-acp',
+        args: [],
+        modelTag,
+        model: 'provider/opus',
+        reasoning: 'high',
+        modelProviderDigest: 'b'.repeat(64),
+        envDigest: 'a'.repeat(64),
+      });
+    },
+  );
+
+  it('persists the builtin Pi runtime marker in worker fingerprints', async () => {
+    tempDir = await createHome('ensemble-session-resume-store-builtin-pi-');
     const path = sessionResumeStorePath({
       repoRoot: tempDir,
-      conductorAgentId: 'agent-acp-spawn',
+      conductorAgentId: 'agent-builtin-pi',
     });
     const resumeStore = baseResumeStore({
-      conductorAgentId: 'agent-acp-spawn',
+      conductorAgentId: 'agent-builtin-pi',
       repoRoot: tempDir,
       workers: {
         implementer: {
-          acpSessionId: 'sess-1',
+          acpSessionId: 'sess-builtin-pi',
           acpCwd: '/repo/worktree',
           acpSpawn: {
-            preset: 'codex',
-            command: 'codex-acp',
-            args: [],
-            modelTag: 'high',
-            model: 'provider/opus',
-            reasoning: 'high',
-            modelProviderDigest: 'b'.repeat(64),
-            envDigest: 'a'.repeat(64),
+            preset: 'pi',
+            command: '/usr/bin/node',
+            args: ['/core/dist/acp/pi-acp-wrapper.js'],
+            piRuntime: 'builtin',
           },
         },
       },
     });
 
     await saveSessionResumeStore(path, resumeStore);
-    const loaded = await loadSessionResumeStore(path);
 
-    expect(loaded?.workers.implementer?.acpSpawn).toEqual({
-      preset: 'codex',
-      command: 'codex-acp',
-      args: [],
-      modelTag: 'high',
-      model: 'provider/opus',
-      reasoning: 'high',
-      modelProviderDigest: 'b'.repeat(64),
-      envDigest: 'a'.repeat(64),
+    await expect(loadSessionResumeStore(path)).resolves.toMatchObject({
+      workers: {
+        implementer: {
+          acpSpawn: {
+            preset: 'pi',
+            piRuntime: 'builtin',
+          },
+        },
+      },
     });
+    expect(
+      JSON.parse(await readFile(path, 'utf8')).workers.implementer.acpSpawn
+        .piRuntime,
+    ).toBe('builtin');
   });
 
   it('round-trips an explicitly configured Cursor fast mode, including false', async () => {

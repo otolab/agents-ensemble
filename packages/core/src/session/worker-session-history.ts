@@ -9,6 +9,10 @@ import {
   parseSessionEntries,
   type SessionMessageEntry,
 } from '@earendil-works/pi-coding-agent';
+import { parseIssueUrl } from '../issue/issue-ref.js';
+import { resolveEnsemblePaths } from '../ensemble-paths.js';
+import { resolvePiAcpSessionMapPaths } from '../acp/pi-session-map.js';
+import type { PiAcpRuntimeMarker } from '../acp/resolve-acp-spawn.js';
 import { findSessionResumeStore } from './session-resume-store.js';
 
 export type WorkerSessionHistoryMessageRole = 'user' | 'assistant';
@@ -34,9 +38,12 @@ export interface WorkerSessionHistoryReaderSupport {
 }
 
 export interface WorkerSessionHistoryReaderInput {
+  repoRoot: string;
   workerName: string;
   acpSessionId: string;
   acpCwd: string;
+  piRuntime?: PiAcpRuntimeMarker;
+  issueNumber?: number;
 }
 
 /** Adapter contract for reading a provider's local worker transcript. */
@@ -197,10 +204,26 @@ export async function readWorkerSessionHistory(input: {
   }
 
   try {
-    const readerInput = {
+    const piRuntime = worker.acpSpawn?.piRuntime;
+    let issueNumber: number | undefined;
+    if (piRuntime === 'builtin') {
+      try {
+        issueNumber = parseIssueUrl(located.resumeStore.issueUrl).number;
+      } catch {
+        throw new WorkerSessionHistoryUnavailableError(
+          'SessionResumeStore に有効な Issue URL がないため、builtin Pi の保存先を解決できません。',
+        );
+      }
+    }
+    const readerInput: WorkerSessionHistoryReaderInput = {
+      repoRoot,
       workerName,
       acpSessionId: worker.acpSessionId,
       acpCwd: worker.acpCwd,
+      ...(piRuntime
+        ? { piRuntime }
+        : {}),
+      ...(issueNumber !== undefined ? { issueNumber } : {}),
     };
     const result = input.includeSourceFiles
       ? await reader.readWithSources(readerInput)
@@ -249,40 +272,76 @@ async function readPiAcpSessionHistoryWithSources(
   messages: WorkerSessionHistoryMessage[];
   sourceFiles: string[];
 }> {
-  const sessionMapPath = join(
-    homedir(),
-    '.pi',
-    'pi-acp',
-    'session-map.json',
-  );
-  let raw: string;
-  try {
-    raw = await readFile(sessionMapPath, 'utf8');
-  } catch (error) {
-    if (isEnoent(error)) {
+  const paths =
+    input.piRuntime === 'builtin'
+      ? resolveEnsemblePaths({ repoRoot: input.repoRoot })
+      : undefined;
+  let session: PiAcpSessionMapEntry | undefined;
+  let foundMap = false;
+  let malformedMap = false;
+  let sessionMapPaths: string[];
+  if (paths) {
+    const issueNumber = input.issueNumber;
+    if (
+      issueNumber === undefined ||
+      !Number.isSafeInteger(issueNumber) ||
+      issueNumber < 1
+    ) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'builtin Pi の Issue number がなく、session map を解決できません。',
+      );
+    }
+    const mapPaths = resolvePiAcpSessionMapPaths(
+      paths.piWorkerDir(input.workerName, issueNumber),
+      paths.legacyPiWorkerDir(input.workerName),
+    );
+    sessionMapPaths = [
+      mapPaths.upstreamPath,
+      ...mapPaths.compatibilityPaths,
+    ];
+  } else {
+    sessionMapPaths = [join(homedir(), '.pi', 'pi-acp', 'session-map.json')];
+  }
+
+  for (const path of new Set(sessionMapPaths)) {
+    let raw: string;
+    try {
+      raw = await readFile(path, 'utf8');
+      foundMap = true;
+    } catch (error) {
+      if (isEnoent(error)) continue;
+      throw new WorkerSessionHistoryUnavailableError(
+        'Pi ACP の session map を読み取れませんでした。',
+      );
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      malformedMap = true;
+      continue;
+    }
+
+    session = findPiAcpSessionMapEntry(parsed, input.acpSessionId);
+    if (session) break;
+  }
+  if (!session) {
+    if (!foundMap) {
       throw new WorkerSessionHistoryUnavailableError(
         'Pi ACP の session map が見つかりません。',
       );
     }
-    throw new WorkerSessionHistoryUnavailableError(
-      'Pi ACP の session map を読み取れませんでした。',
-    );
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new WorkerSessionHistoryUnavailableError(
-      'Pi ACP の session map が不正な JSON です。',
-    );
-  }
-  const session = findPiAcpSessionMapEntry(parsed, input.acpSessionId);
-  if (!session) {
+    if (malformedMap) {
+      throw new WorkerSessionHistoryUnavailableError(
+        'Pi ACP の session map が不正な JSON です。',
+      );
+    }
     throw new WorkerSessionHistoryUnavailableError(
       'Pi ACP の session map に対象 session がありません。',
     );
   }
+
   if (!isAbsolute(session.cwd) || resolve(session.cwd) !== resolve(input.acpCwd)) {
     throw new WorkerSessionHistoryUnavailableError(
       'Pi ACP session map の cwd が SessionResumeStore と一致しません。',
