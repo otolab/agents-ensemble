@@ -785,15 +785,27 @@ function addManifestEntry(manifest, entry) {
   return manifest.entries.at(-1);
 }
 
-function unresolvedEntry(manifest, source, kind, reason, provenance = {}) {
+function unresolvedEntry(
+  manifest,
+  source,
+  kind,
+  reason,
+  provenance = {},
+  details = {},
+) {
   return addManifestEntry(manifest, {
     source,
     kind,
     disposition: 'unresolved',
     reason,
+    ...(details.sourceSha256
+      ? { sourceSha256: details.sourceSha256 }
+      : {}),
     recovery:
+      details.recovery ??
       'Keep the source unchanged. Resolve its provenance or restore a valid Issue session Store, then rerun the inventory.',
     provenance,
+    evidence: details.evidence,
   });
 }
 
@@ -906,12 +918,10 @@ function addStoreCandidate(
 }
 
 function storeEvidence(storeIndex, repoKey, conductorAgentId) {
-  const scopedCandidates =
-    storeIndex.get(storeKey(repoKey, conductorAgentId)) ?? [];
   const candidates =
-    scopedCandidates.length > 0
-      ? scopedCandidates
-      : storeIndex.get(storeKey('*', conductorAgentId)) ?? [];
+    storeIndex.get(storeKey('*', conductorAgentId)) ??
+    storeIndex.get(storeKey(repoKey, conductorAgentId)) ??
+    [];
   const valid = candidates.filter((candidate) => candidate.issue);
   const hasInvalid = candidates.some((candidate) => !candidate.issue);
   const slugs = new Set(valid.map((candidate) => candidate.issue.slug));
@@ -927,6 +937,67 @@ function storeEvidence(storeIndex, repoKey, conductorAgentId) {
     issue: valid.length > 0 && slugs.size === 1 ? valid[0].issue : undefined,
     storeSources: valid.map((candidate) => candidate.source).sort(),
   };
+}
+
+function storeEvidenceDetails(evidence) {
+  return {
+    issueUrls: [...evidence.issueUrls].sort(),
+    sessionStoreSources: evidence.candidates
+      .map((candidate) => candidate.source)
+      .sort(),
+    hasInvalidStore: evidence.hasInvalid,
+  };
+}
+
+function storeEvidenceProblem(evidence) {
+  if (evidence.candidates.length === 0) {
+    return 'No matching SessionResumeStore proves the destination slug.';
+  }
+  if (evidence.hasInvalid) {
+    return 'At least one matching SessionResumeStore is invalid or does not prove its canonical path.';
+  }
+  if (evidence.issueUrls.size > 1) {
+    return `Matching SessionResumeStores have conflicting Issue URLs: ${[...evidence.issueUrls].sort().join(', ')}.`;
+  }
+  if (evidence.slugs.size > 1) {
+    return 'Matching SessionResumeStores do not prove one unambiguous canonical slug.';
+  }
+  if (!evidence.slug || !evidence.issueUrl) {
+    return 'Matching SessionResumeStores do not prove one unique Issue URL and canonical slug.';
+  }
+  return undefined;
+}
+
+function rejectAmbiguousSessionStoreCopies(copyCandidates, storeIndex) {
+  const retained = [];
+  for (const candidate of copyCandidates) {
+    if (candidate.kind !== 'session-resume-store') {
+      retained.push(candidate);
+      continue;
+    }
+    const conductorAgentId = candidate.evidence.conductorAgentId;
+    const evidence = storeEvidence(storeIndex, '*', conductorAgentId);
+    const problem = storeEvidenceProblem(evidence);
+    candidate.manifestEntry.evidence = {
+      conductorAgentId,
+      candidateIssueUrl: candidate.evidence.issueUrl,
+      candidateSlug: candidate.evidence.canonicalSlug,
+      canonicalSlug: candidate.evidence.canonicalSlug,
+      ...storeEvidenceDetails(evidence),
+    };
+    if (!problem) {
+      retained.push(candidate);
+      continue;
+    }
+    candidate.manifestEntry.intendedDestination = candidate.destination;
+    candidate.manifestEntry.destination = null;
+    setDisposition(candidate.manifestEntry, 'unresolved', {
+      reason: problem,
+      recovery:
+        'Keep this Store and all matching Store sources unchanged. Resolve the Issue URL conflict or invalid record, then rerun the migration.',
+    });
+  }
+  copyCandidates.splice(0, copyCandidates.length, ...retained);
 }
 
 function makeProvenance(sourceType, repoKey, checkoutRoot) {
@@ -1172,19 +1243,6 @@ async function processLinkedSessionData({
     excludedPiTranscriptIds,
   } = task;
   for (const { source, conductorAgentId } of toolCallFiles) {
-    const evidence = storeEvidence(storeIndex, repoKey, conductorAgentId);
-    if (evidence.hasInvalid || !evidence.slug) {
-      unresolvedEntry(
-        manifest,
-        source,
-        'tool-call-history',
-        evidence.candidates.length === 0
-          ? 'No matching SessionResumeStore proves the destination slug.'
-          : 'Matching Stores do not prove one unambiguous destination slug.',
-        { ...provenance, conductorAgentId },
-      );
-      continue;
-    }
     const sourceInfo = await readSource(
       source,
       manifest,
@@ -1193,6 +1251,25 @@ async function processLinkedSessionData({
       { loadBytes: false },
     );
     if (!sourceInfo) continue;
+    const evidence = storeEvidence(storeIndex, repoKey, conductorAgentId);
+    const problem = storeEvidenceProblem(evidence);
+    if (problem) {
+      unresolvedEntry(
+        manifest,
+        source,
+        'tool-call-history',
+        problem,
+        { ...provenance, conductorAgentId },
+        {
+          sourceSha256: sourceInfo.sha,
+          evidence: {
+            conductorAgentId,
+            ...storeEvidenceDetails(evidence),
+          },
+        },
+      );
+      continue;
+    }
     const destination = join(
       userRoot,
       'sessions',
@@ -1208,8 +1285,7 @@ async function processLinkedSessionData({
       evidence: {
         conductorAgentId,
         canonicalSlug: evidence.slug,
-        issueUrls: [...evidence.issueUrls].sort(),
-        sessionStoreSources: evidence.storeSources,
+        ...storeEvidenceDetails(evidence),
       },
       manifestEntry: addManifestEntry(manifest, {
         source,
@@ -1223,8 +1299,7 @@ async function processLinkedSessionData({
         evidence: {
           conductorAgentId,
           canonicalSlug: evidence.slug,
-          issueUrls: [...evidence.issueUrls].sort(),
-          sessionStoreSources: evidence.storeSources,
+          ...storeEvidenceDetails(evidence),
         },
       }),
     });
@@ -1259,19 +1334,6 @@ async function processLinkedSessionData({
         );
         continue;
       }
-      const evidence = storeEvidence(storeIndex, repoKey, conductorAgentId);
-      if (evidence.hasInvalid || !evidence.slug) {
-        unresolvedEntry(
-          manifest,
-          sidecarPath,
-          'issue-session-sidecar',
-          evidence.candidates.length === 0
-            ? 'No matching SessionResumeStore proves the destination slug.'
-            : 'Matching Stores do not prove one unambiguous destination slug.',
-          { ...provenance, conductorAgentId },
-        );
-        continue;
-      }
       const sourceInfo = await readSource(
         sidecarPath,
         manifest,
@@ -1279,6 +1341,25 @@ async function processLinkedSessionData({
         provenance,
       );
       if (!sourceInfo) continue;
+      const evidence = storeEvidence(storeIndex, repoKey, conductorAgentId);
+      const problem = storeEvidenceProblem(evidence);
+      if (problem) {
+        unresolvedEntry(
+          manifest,
+          sidecarPath,
+          'issue-session-sidecar',
+          problem,
+          { ...provenance, conductorAgentId },
+          {
+            sourceSha256: sourceInfo.sha,
+            evidence: {
+              conductorAgentId,
+              ...storeEvidenceDetails(evidence),
+            },
+          },
+        );
+        continue;
+      }
       const validationError = validateSessionSidecar(
         sidecar.name,
         sourceInfo.bytes.toString('utf8'),
@@ -1296,7 +1377,7 @@ async function processLinkedSessionData({
           evidence: {
             conductorAgentId,
             canonicalSlug: evidence.slug,
-            sessionStoreSources: evidence.storeSources,
+            ...storeEvidenceDetails(evidence),
           },
         });
         continue;
@@ -1317,8 +1398,7 @@ async function processLinkedSessionData({
         evidence: {
           conductorAgentId,
           canonicalSlug: evidence.slug,
-          issueUrls: [...evidence.issueUrls].sort(),
-          sessionStoreSources: evidence.storeSources,
+          ...storeEvidenceDetails(evidence),
         },
         manifestEntry: addManifestEntry(manifest, {
           source: sidecarPath,
@@ -1332,8 +1412,7 @@ async function processLinkedSessionData({
           evidence: {
             conductorAgentId,
             canonicalSlug: evidence.slug,
-            issueUrls: [...evidence.issueUrls].sort(),
-            sessionStoreSources: evidence.storeSources,
+            ...storeEvidenceDetails(evidence),
           },
         }),
       });
@@ -1416,21 +1495,28 @@ async function scanPiTranscriptDirectory({
         'issue-pi-transcript-candidate',
         'Transcript id matches a legacy Pi operator conversation and a SessionResumeStore; ownership is ambiguous.',
         { ...provenance, conductorAgentId: transcriptId },
+        {
+          sourceSha256: sourceInfo.sha,
+          evidence: {
+            conductorAgentId: transcriptId,
+            ...storeEvidenceDetails(possibleIssueStore),
+          },
+        },
       );
-      const unresolved = manifest.entries.at(-1);
-      unresolved.sourceSha256 = sourceInfo.sha;
-      unresolved.recovery =
+      manifest.entries.at(-1).recovery =
         'Keep the shared transcript in place. Resolve whether it is an Issue session; do not copy or archive it as an operator conversation.';
       continue;
     }
     const evidence = transcriptId
       ? storeEvidence(storeIndex, repoKey, transcriptId)
       : undefined;
+    const evidenceProblem = evidence
+      ? storeEvidenceProblem(evidence)
+      : undefined;
     if (
       !transcriptId ||
       !evidence ||
-      evidence.hasInvalid ||
-      !evidence.slug
+      evidenceProblem
     ) {
       unresolvedEntry(
         manifest,
@@ -1438,18 +1524,25 @@ async function scanPiTranscriptDirectory({
         'issue-pi-transcript-candidate',
         !transcriptId
           ? 'Pi transcript has no readable session id; its Issue-session ownership is unresolved.'
-          : evidence?.candidates.length === 0
-            ? 'No matching SessionResumeStore proves this transcript belongs to an Issue session.'
-            : 'Matching Stores do not prove one unambiguous destination slug.',
+          : evidenceProblem,
         {
           ...provenance,
           ...(transcriptId ? { conductorAgentId: transcriptId } : {}),
         },
+        {
+          sourceSha256: sourceInfo.sha,
+          ...(evidence
+            ? {
+                evidence: {
+                  conductorAgentId: transcriptId,
+                  ...storeEvidenceDetails(evidence),
+                },
+              }
+            : {}),
+          recovery:
+            'Keep this shared transcript in place. Resolve whether it belongs to an Issue session; do not discard or archive it as an operator conversation.',
+        },
       );
-      const unresolved = manifest.entries.at(-1);
-      unresolved.sourceSha256 = sourceInfo.sha;
-      unresolved.recovery =
-        'Keep this shared transcript in place. Resolve whether it belongs to an Issue session; do not discard or archive it as an operator conversation.';
       continue;
     }
     const destination = join(
@@ -1468,8 +1561,7 @@ async function scanPiTranscriptDirectory({
       evidence: {
         conductorAgentId: transcriptId,
         canonicalSlug: evidence.slug,
-        issueUrls: [...evidence.issueUrls].sort(),
-        sessionStoreSources: evidence.storeSources,
+        ...storeEvidenceDetails(evidence),
       },
       manifestEntry: addManifestEntry(manifest, {
         source,
@@ -1483,8 +1575,7 @@ async function scanPiTranscriptDirectory({
         evidence: {
           conductorAgentId: transcriptId,
           canonicalSlug: evidence.slug,
-          issueUrls: [...evidence.issueUrls].sort(),
-          sessionStoreSources: evidence.storeSources,
+          ...storeEvidenceDetails(evidence),
         },
       }),
     });
@@ -1951,13 +2042,10 @@ async function scanWatchSource({
       parseIssueUrl(report.issueUrl),
     );
     let reason;
-    if (
-      evidence.hasInvalid ||
-      evidence.candidates.length === 0 ||
-      evidence.issueUrls.size !== 1 ||
-      !evidence.issue
-    ) {
+    const evidenceProblem = storeEvidenceProblem(evidence);
+    if (evidenceProblem || !evidence.issue) {
       reason =
+        evidenceProblem ??
         'A unique valid SessionResumeStore issueUrl is required to prove the watch bundle slug.';
     } else if (
       reportIssues.some(
@@ -1986,8 +2074,8 @@ async function scanWatchSource({
       conductorAgentId,
       ...(evidence.issueUrl ? { issueUrl: evidence.issueUrl } : {}),
       ...(evidence.slug ? { canonicalSlug: evidence.slug } : {}),
+      ...storeEvidenceDetails(evidence),
       ...(profile ? { operatorSelectedProfile: profile } : {}),
-      sessionStoreSources: evidence.storeSources,
       pendingReportIssueUrls: reports.map((report) => report.issueUrl),
     };
     if (reason) {
@@ -2795,6 +2883,7 @@ async function main() {
       copyCandidates,
     });
   }
+  rejectAmbiguousSessionStoreCopies(copyCandidates, storeIndex);
   await scanHashWatchSources({
     userRoot: options.userRoot,
     profile: options.profile,

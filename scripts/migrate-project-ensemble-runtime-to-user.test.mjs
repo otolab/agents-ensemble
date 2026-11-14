@@ -170,6 +170,138 @@ test('invalid Issue Stores and YAML sidecars stay unresolved and are not copied'
   );
 });
 
+test('conflicting Issue URLs for one conductor ID block related session and watch migration', async () => {
+  const root = await makeRoot();
+  const { userRoot, sessionRoot, operatorRoot } = root;
+  const conductorAgentId = 'conflicting-issue-identity';
+  const canonicalSlugRoot = join(
+    userRoot,
+    'sessions',
+    'github.com',
+    'example',
+    'repo',
+  );
+  const hashStorePath = join(
+    sessionRoot,
+    `${conductorAgentId}.json`,
+  );
+  const hashStoreText = `${JSON.stringify(
+    makeStore(conductorAgentId, issueUrl, '/hash/checkout'),
+  )}\n`;
+  const canonicalStorePath = join(
+    canonicalSlugRoot,
+    `${conductorAgentId}.json`,
+  );
+  const canonicalIssueUrl = issueUrl.toLowerCase();
+  const alternateIssueUrl = 'https://github.com/example/repo/issues/999';
+  const canonicalStoreText = `${JSON.stringify(
+    makeStore(conductorAgentId, alternateIssueUrl, '/other/checkout'),
+  )}\n`;
+  const sidecarPath = join(
+    sessionRoot,
+    conductorAgentId,
+    'open-questions.yaml',
+  );
+  const sidecarText = 'version: 1\nsequence: 0\nopenQuestions: []\n';
+  const toolCallsPath = join(
+    sessionRoot,
+    `${conductorAgentId}.tool-calls`,
+  );
+  const toolCallsText = '{"worker":"preserve"}\n';
+  const transcriptPath = join(
+    sessionRoot,
+    'pi',
+    'conflicting-issue.jsonl',
+  );
+  const transcriptText = `${JSON.stringify({
+    type: 'session',
+    id: conductorAgentId,
+  })}\n{"type":"message"}\n`;
+  const watchPath = join(operatorRoot, 'watch-state.json');
+  const watchState = makeWatchState(conductorAgentId, issueUrl, 4);
+
+  await mkdir(join(sessionRoot, conductorAgentId), { recursive: true });
+  await mkdir(join(sessionRoot, 'pi'), { recursive: true });
+  await mkdir(canonicalSlugRoot, { recursive: true });
+  await mkdir(operatorRoot, { recursive: true });
+  await writeFile(hashStorePath, hashStoreText, 'utf8');
+  await writeFile(canonicalStorePath, canonicalStoreText, 'utf8');
+  await writeFile(sidecarPath, sidecarText, 'utf8');
+  await writeFile(toolCallsPath, toolCallsText, 'utf8');
+  await writeFile(transcriptPath, transcriptText, 'utf8');
+  await writeJson(watchPath, watchState);
+
+  const result = runMigration(root, {
+    profile: 'personal',
+    apply: true,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = await readManifest(root);
+  const storeEntry = findEntry(manifest, hashStorePath);
+  const sidecarEntry = findEntry(manifest, sidecarPath);
+  const toolCallsEntry = findEntry(manifest, toolCallsPath);
+  const transcriptEntry = findEntry(manifest, transcriptPath);
+  const watchEntry = findEntry(manifest, watchPath);
+
+  for (const entry of [
+    storeEntry,
+    sidecarEntry,
+    toolCallsEntry,
+    transcriptEntry,
+  ]) {
+    assert.equal(entry.disposition, 'unresolved');
+    assert.match(entry.reason, /conflicting Issue URLs/u);
+    assert.ok(entry.recovery);
+    assert.match(entry.sourceSha256, /^[a-f0-9]{64}$/u);
+    assert.ok(entry.evidence.issueUrls.includes(canonicalIssueUrl));
+    assert.ok(entry.evidence.issueUrls.includes(alternateIssueUrl));
+    assert.deepEqual(
+      entry.evidence.sessionStoreSources,
+      [canonicalStorePath, hashStorePath].sort(),
+    );
+  }
+  assert.equal(storeEntry.destination, null);
+  assert.equal(storeEntry.intendedDestination, canonicalStorePath);
+  assert.equal(watchEntry.disposition, 'archived');
+  assert.match(watchEntry.archiveReason, /conflicting Issue URLs/u);
+  assert.deepEqual(watchEntry.evidence.issueUrls, [
+    canonicalIssueUrl,
+    alternateIssueUrl,
+  ].sort());
+  assert.deepEqual(
+    watchEntry.evidence.sessionStoreSources,
+    [canonicalStorePath, hashStorePath].sort(),
+  );
+  assert.equal(
+    await readFile(canonicalStorePath, 'utf8'),
+    canonicalStoreText,
+  );
+  assert.equal(await readFile(hashStorePath, 'utf8'), hashStoreText);
+  assert.equal(await readFile(sidecarPath, 'utf8'), sidecarText);
+  assert.equal(await readFile(toolCallsPath, 'utf8'), toolCallsText);
+  assert.equal(await readFile(transcriptPath, 'utf8'), transcriptText);
+  assert.equal(
+    await fileExists(
+      join(
+        canonicalSlugRoot,
+        conductorAgentId,
+        'open-questions.yaml',
+      ),
+    ),
+    false,
+  );
+  assert.equal(
+    await fileExists(
+      join(canonicalSlugRoot, `${conductorAgentId}.tool-calls`),
+    ),
+    false,
+  );
+  assert.equal(
+    await fileExists(join(canonicalSlugRoot, 'pi', 'conflicting-issue.jsonl')),
+    false,
+  );
+});
+
 test('apply copies hash and checkout Issue data plus eligible watch bundles, then reruns as no-op', async () => {
   const root = await makeRoot();
   const { checkoutRoot, userRoot, repoKey, sessionRoot, operatorRoot } = root;
